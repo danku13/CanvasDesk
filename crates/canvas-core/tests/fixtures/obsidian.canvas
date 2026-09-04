@@ -1,0 +1,48 @@
+{
+  "nodes": [
+    {
+      "id": "6f0c",
+      "type": "file",
+      "file": "notes/вложения/отчёт.md",
+      "subpath": "#Итоги",
+      "x": -400,
+      "y": -120,
+      "width": 400,
+      "height": 300,
+      "color": "#c084fc",
+      "styleAttributes": { "border": "dashed" }
+    },
+    {
+      "id": "a1b2",
+      "type": "link",
+      "url": "https://jsoncanvas.org",
+      "x": 100,
+      "y": 100,
+      "width": 320,
+      "height": 200
+    },
+    {
+      "id": "e77a",
+      "type": "timeline",
+      "payload": { "lanes": 3 },
+      "x": 600,
+      "y": -200,
+      "width": 500,
+      "height": 260
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "fromNode": "6f0c",
+      "fromSide": "bottom",
+      "fromEnd": "none",
+      "toNode": "a1b2",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "5",
+      "label": "источник"
+    }
+  ],
+  "metadata": { "plugin": "obsidian-canvas", "version": 3 }
+}

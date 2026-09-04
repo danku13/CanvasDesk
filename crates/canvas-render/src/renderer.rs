@@ -1,4 +1,4 @@
-//! Оконный рендер: surface, конфигурация, clear-проход (T1).
+//! Оконный рендер: surface, конфигурация, сетка поверх clear-прохода (T1, T2).
 
 use std::sync::Arc;
 
@@ -6,10 +6,12 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::camera::Camera;
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
 };
 use crate::gpu::GpuContext;
+use crate::grid::GridPipeline;
 
 /// Рендерер окна: владеет surface и выполняет кадр по запросу (`request_redraw`).
 pub struct Renderer {
@@ -17,6 +19,8 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
+    grid: GridPipeline,
+    scale_factor: f32,
 }
 
 impl Renderer {
@@ -24,6 +28,7 @@ impl Renderer {
     /// (блокирующе, через `pollster` в canvas-app).
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
+        let scale_factor = window.scale_factor();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let surface = instance
             .create_surface(window)
@@ -61,12 +66,20 @@ impl Renderer {
             ?present_mode,
             "рендер инициализирован"
         );
+        let grid = GridPipeline::new(&gpu.device, format);
         Ok(Self {
             gpu,
             surface,
             config,
             size,
+            grid,
+            scale_factor: scale_factor as f32,
         })
+    }
+
+    /// Обновить scale factor окна (перенос между мониторами с разным DPI, SPEC §6.5).
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor as f32;
     }
 
     /// Переконфигурировать surface под новый размер окна.
@@ -81,8 +94,8 @@ impl Renderer {
         self.surface.configure(&self.gpu.device, &self.config);
     }
 
-    /// Отрисовать кадр (пока — очистка фоном #1e1e22, T1).
-    pub fn render(&mut self) -> anyhow::Result<()> {
+    /// Отрисовать кадр: фон #1e1e22 + бесконечная сетка по камере (T2).
+    pub fn render(&mut self, camera: &Camera) -> anyhow::Result<()> {
         if !surface_size_valid(self.size.width, self.size.height) {
             return Ok(());
         }
@@ -102,6 +115,13 @@ impl Renderer {
             }
         };
 
+        self.grid.update_camera(
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+        );
+
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -112,8 +132,8 @@ impl Renderer {
                 label: Some("frame"),
             });
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear"),
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("grid"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -125,6 +145,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
+            self.grid.draw(&mut pass);
         }
         self.gpu.queue.submit([encoder.finish()]);
         frame.present();
