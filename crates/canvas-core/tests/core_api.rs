@@ -12,18 +12,14 @@ use canvas_core::{
 #[test]
 fn canvas_round_trip() {
     let canvas = Canvas {
-        nodes: vec![Node {
-            id: "n1".into(),
-            node_type: "file".into(),
-            file: Some("C:/Projects/alpha/spec.pdf".into()),
-            text: None,
-            label: None,
-            color: None,
-            x: 120.0,
-            y: 80.0,
-            width: 340.0,
-            height: 440.0,
-        }],
+        nodes: vec![Node::file(
+            "n1",
+            "C:/Projects/alpha/spec.pdf",
+            120.0,
+            80.0,
+            340.0,
+            440.0,
+        )],
         edges: vec![Edge {
             id: "e1".into(),
             from_node: "n1".into(),
@@ -31,7 +27,10 @@ fn canvas_round_trip() {
             to_node: "n2".into(),
             to_side: Some(Side::Top),
             label: Some("блокирует".into()),
+            color: None,
+            extra: Default::default(),
         }],
+        extra: Default::default(),
     };
 
     let json = serde_json::to_string_pretty(&canvas).expect("сериализация");
@@ -42,18 +41,10 @@ fn canvas_round_trip() {
 /// Имена полей в JSON соответствуют JSON Canvas spec, а не rust-идентификаторам.
 #[test]
 fn uses_json_canvas_field_names() {
-    let node = Node {
-        id: "n1".into(),
-        node_type: "text".into(),
-        file: None,
-        text: Some("заметка".into()),
-        label: None,
-        color: Some("3".into()),
-        x: 0.0,
-        y: 0.0,
-        width: 100.0,
-        height: 50.0,
-    };
+    let mut node = Node::text("n1", "заметка", 0.0, 0.0);
+    node.width = 100.0;
+    node.height = 50.0;
+    node.color = Some("3".into());
     let value = serde_json::to_value(&node).expect("сериализация ноды");
     let obj = value.as_object().expect("нода — JSON-объект");
     for key in ["id", "type", "x", "y", "width", "height", "text", "color"] {
@@ -68,6 +59,8 @@ fn uses_json_canvas_field_names() {
         to_node: "n2".into(),
         to_side: None,
         label: None,
+        color: None,
+        extra: Default::default(),
     };
     let value = serde_json::to_value(&edge).expect("сериализация связи");
     let obj = value.as_object().expect("связь — JSON-объект");
@@ -91,6 +84,10 @@ fn optional_fields_omitted_when_none() {
         y: 0.0,
         width: 10.0,
         height: 10.0,
+        broken_link: None,
+        preview_state: None,
+        canvasdesk: None,
+        extra: Default::default(),
     };
     let json = serde_json::to_string(&node).expect("сериализация");
     for key in ["file", "text", "label", "color"] {
