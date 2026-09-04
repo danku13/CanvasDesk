@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+# Единая точка версий зависимостей (SPEC §3)
+[workspace.dependencies]
+# внутренние crates
+canvas-core = { path = "crates/canvas-core", version = "0.1.0" }
+canvas-render = { path = "crates/canvas-render", version = "0.1.0" }
+canvas-shell = { path = "crates/canvas-shell", version = "0.1.0" }
+# модель и сериализация
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+# логирование
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# окно, рендер, текст (версии по SPEC §3)
+winit = "0.30"
+wgpu = "22"
+glyphon = "0.6" # совместим с wgpu 22
+pollster = "0.3"
+# Win32/COM (только canvas-shell / canvas-widgets, под cfg(windows))
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Dwm",
+    "Win32_System_Com",
+] }
