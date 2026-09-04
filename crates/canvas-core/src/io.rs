@@ -43,4 +43,15 @@ impl Canvas {
         std::fs::write(path, self.to_json()?)?;
         Ok(())
     }
+
+    /// Сохранить с бэкапом: прежняя версия переименовывается в `<name>.canvas.bak` (SPEC §9).
+    pub fn save_with_backup(&self, path: &Path) -> Result<(), CoreError> {
+        let json = self.to_json()?;
+        if path.exists() {
+            let backup = path.with_extension("canvas.bak");
+            std::fs::rename(path, &backup)?;
+        }
+        std::fs::write(path, json)?;
+        Ok(())
+    }
 }

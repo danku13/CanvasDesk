@@ -179,4 +179,19 @@ impl Canvas {
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|node| node.id == id)
     }
+
+    /// Индекс верхней ноды под world-точкой (AABB; поздняя нода в массиве — выше по z).
+    pub fn hit_test(&self, point: [f32; 2]) -> Option<usize> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, node)| {
+                point[0] >= node.x
+                    && point[0] <= node.x + node.width
+                    && point[1] >= node.y
+                    && point[1] <= node.y + node.height
+            })
+            .map(|(index, _)| index)
+    }
 }

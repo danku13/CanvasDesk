@@ -6,12 +6,22 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use canvas_core::Canvas;
+
 use crate::camera::Camera;
+use crate::cards::{build_instances, CardsPipeline};
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
 };
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
+use crate::text::TextSystem;
+
+/// Сцена кадра: модель канваса + состояние выделения (T4).
+pub struct SceneView<'a> {
+    pub canvas: &'a Canvas,
+    pub selected: Option<usize>,
+}
 
 /// Рендерер окна: владеет surface и выполняет кадр по запросу (`request_redraw`).
 pub struct Renderer {
@@ -20,6 +30,8 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     grid: GridPipeline,
+    cards: CardsPipeline,
+    text: TextSystem,
     scale_factor: f32,
 }
 
@@ -67,12 +79,16 @@ impl Renderer {
             "рендер инициализирован"
         );
         let grid = GridPipeline::new(&gpu.device, format);
+        let cards = CardsPipeline::new(&gpu.device, format);
+        let text = TextSystem::new(&gpu.device, &gpu.queue, format);
         Ok(Self {
             gpu,
             surface,
             config,
             size,
             grid,
+            cards,
+            text,
             scale_factor: scale_factor as f32,
         })
     }
@@ -94,8 +110,8 @@ impl Renderer {
         self.surface.configure(&self.gpu.device, &self.config);
     }
 
-    /// Отрисовать кадр: фон #1e1e22 + бесконечная сетка по камере (T2).
-    pub fn render(&mut self, camera: &Camera) -> anyhow::Result<()> {
+    /// Отрисовать кадр: фон, сетка, карточки нод, заголовки (T2/T4).
+    pub fn render(&mut self, camera: &Camera, scene: &SceneView) -> anyhow::Result<()> {
         if !surface_size_valid(self.size.width, self.size.height) {
             return Ok(());
         }
@@ -121,6 +137,25 @@ impl Renderer {
             [self.size.width as f32, self.size.height as f32],
             self.scale_factor,
         );
+        let instances = build_instances(scene.canvas, scene.selected);
+        let instance_count = self.cards.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+            &instances,
+        );
+        if let Err(err) = self.text.prepare_titles(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width, self.size.height],
+            self.scale_factor,
+            scene.canvas,
+        ) {
+            tracing::warn!(?err, "подготовка текста пропущена");
+        }
 
         let view = frame
             .texture
@@ -146,6 +181,10 @@ impl Renderer {
                 ..Default::default()
             });
             self.grid.draw(&mut pass);
+            self.cards.draw(&mut pass, instance_count);
+            if let Err(err) = self.text.draw(&mut pass) {
+                tracing::warn!(?err, "отрисовка текста пропущена");
+            }
         }
         self.gpu.queue.submit([encoder.finish()]);
         frame.present();

@@ -3,10 +3,12 @@
 //! T2: камера (screen↔world), бесконечная сетка.
 
 pub mod camera;
+pub mod cards;
 pub mod config;
 pub mod gpu;
 pub mod grid;
 pub mod renderer;
+pub mod text;
 
 pub use camera::Camera;
-pub use renderer::Renderer;
+pub use renderer::{Renderer, SceneView};

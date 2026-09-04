@@ -1,3 +1,4 @@
 /target
 *.bak
 .vscode/
+default.canvas
