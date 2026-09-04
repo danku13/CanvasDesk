@@ -249,8 +249,10 @@ version = "0.1.0"
 name = "canvas-render"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "canvas-core",
  "glyphon",
+ "pollster",
  "tracing",
  "wgpu",
  "winit",

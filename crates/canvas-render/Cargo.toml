@@ -6,7 +6,11 @@ rust-version.workspace = true
 
 [dependencies]
 canvas-core.workspace = true
+anyhow.workspace = true
 winit.workspace = true
 wgpu.workspace = true
 glyphon.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
