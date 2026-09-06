@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 canvas-core.workspace = true
 canvas-render.workspace = true
+canvas-shell.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -20,6 +20,8 @@ thiserror = "2"
 anyhow = "1"
 # spatial index (R-tree) для canvas-core (SPEC §4)
 rstar = "0.12"
+# тамбнейл-кэш SQLite (SPEC §5.2) — bundled, без системного SQLite
+rusqlite = { version = "0.32", features = ["bundled"] }
 # логирование
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -33,5 +35,6 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_System_Com",
 ] }

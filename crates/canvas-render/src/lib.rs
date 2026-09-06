@@ -3,6 +3,7 @@
 //! T2: камера (screen↔world), бесконечная сетка.
 //! T5: culling видимых нод по spatial index, замер кадра (HUD).
 
+pub mod atlas;
 pub mod camera;
 pub mod cards;
 pub mod config;
@@ -11,6 +12,7 @@ pub mod grid;
 pub mod renderer;
 pub mod stats;
 pub mod text;
+pub mod thumbs;
 
 pub use camera::Camera;
 pub use renderer::{FrameStats, Renderer, SceneView};

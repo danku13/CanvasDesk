@@ -4,13 +4,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use canvas_core::{Canvas, Node, SpatialIndex};
+use canvas_core::{Canvas, Node, SpatialIndex, ThumbnailProvider};
 use canvas_render::camera::Vec2;
 use canvas_render::{Camera, FrameMeter, FrameStats, SceneView};
+use canvas_shell::{Priority, ThumbService};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -100,6 +101,28 @@ impl SceneState {
         }
     }
 
+    /// Абсолютный путь файловой ноды: относительные резолвятся от каталога
+    /// .canvas-файла (конвенция JSON Canvas); shell-API требуют абсолютных путей
+    /// (SHCreateItemFromParsingName возвращает E_INVALIDARG на относительных).
+    fn resolve_file_path(&self, file: &str) -> PathBuf {
+        let path = PathBuf::from(file);
+        if path.is_absolute() {
+            return path;
+        }
+        let joined = match self.path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.join(&path),
+            _ => path,
+        };
+        // Абсолютизируем без canonicalize — он падает на битых ссылках
+        if joined.is_absolute() {
+            joined
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&joined))
+                .unwrap_or(joined)
+        }
+    }
+
     fn mark_dirty(&mut self) {
         self.dirty_since = Some(Instant::now());
     }
@@ -130,6 +153,13 @@ impl SceneState {
     }
 }
 
+/// Пользовательские события event loop (T6): worker-потоки ThumbService
+/// будят цикл через EventLoopProxy, когда готовы тамбнейлы.
+enum AppEvent {
+    /// В канале ThumbService появились результаты — забрать и перерисовать.
+    ThumbsReady,
+}
+
 /// Состояние приложения: окно и рендерер создаются в `resumed`
 /// (идиома winit 0.30 — окно создаётся только на активном event loop).
 struct App {
@@ -137,6 +167,8 @@ struct App {
     renderer: Option<canvas_render::Renderer>,
     camera: Camera,
     scene: SceneState,
+    /// Пул системных тамбнейлов (T6): заказы по видимым нодам, ответы в канал.
+    thumbs: ThumbService,
     modifiers: ModifiersState,
     /// Позиция курсора в логических пикселях.
     cursor: Vec2,
@@ -151,15 +183,19 @@ struct App {
     last_frame: Option<Instant>,
     /// Счётчики последнего кадра (для HUD).
     last_stats: FrameStats,
+    /// Ноды, чей тамбнейл не удалось получить (битая ссылка и т.п.) —
+    /// не перезаказывать каждый кадр; ретрай — при перезапуске (вотчер — T14).
+    thumbs_failed: std::collections::HashSet<usize>,
 }
 
 impl App {
-    fn new(scene: SceneState) -> Self {
+    fn new(scene: SceneState, thumbs: ThumbService) -> Self {
         Self {
             window: None,
             renderer: None,
             camera: Camera::default(),
             scene,
+            thumbs,
             modifiers: ModifiersState::empty(),
             cursor: [0.0, 0.0],
             middle_pressed: false,
@@ -169,6 +205,7 @@ impl App {
             frame_meter: FrameMeter::new(),
             last_frame: None,
             last_stats: FrameStats::default(),
+            thumbs_failed: std::collections::HashSet::new(),
         }
     }
 
@@ -218,17 +255,48 @@ impl App {
             .p95_ms()
             .map(|v| format!("{v:.1}"))
             .unwrap_or_else(|| "—".into());
+        let thumbs = self
+            .renderer
+            .as_ref()
+            .map(|r| r.thumbnail_count())
+            .unwrap_or(0);
         Some(format!(
-            "{fps} fps | p95 {p95} мс | кадр {:.1} мс | нод видно {}/{} | инстансов {}",
+            "{fps} fps | p95 {p95} мс | кадр {:.1} мс | нод видно {}/{} | инстансов {} | тамбнейлов {} (очередь {})",
             self.last_stats.cpu_ms,
             self.last_stats.visible_nodes,
             self.last_stats.total_nodes,
-            self.last_stats.instances
+            self.last_stats.instances,
+            thumbs,
+            self.thumbs.queue_len()
         ))
+    }
+
+    /// Заказать тамбнейлы видимых файловых нод (T6): приоритет High,
+    /// дедупликация — в ThumbService, по наличию в атласе и по негативному кэшу.
+    fn order_thumbnails(&self) {
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return;
+        }
+        let visible = self.camera.visible_world_rect(viewport);
+        for index in self.scene.spatial.query_rect(visible) {
+            let node = &self.scene.canvas.nodes[index];
+            let Some(file) = node.file.as_deref() else {
+                continue;
+            };
+            if renderer.has_thumbnail(index) || self.thumbs_failed.contains(&index) {
+                continue;
+            }
+            let path = self.scene.resolve_file_path(file);
+            self.thumbs.request(Priority::High, index, path);
+        }
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -316,8 +384,37 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+                // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
+                // уже установилась; ответы придут через AppEvent::ThumbsReady
+                self.order_thumbnails();
             }
             _ => {}
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::ThumbsReady => {
+                // Забрать готовые тамбнейлы из канала и загрузить в атлас;
+                // ошибки — в негативный кэш (не перезаказывать каждый кадр)
+                let mut arrived = 0usize;
+                for (node, result) in self.thumbs.drain() {
+                    match result {
+                        Some(thumb) => {
+                            if let Some(renderer) = self.renderer.as_mut() {
+                                renderer.set_thumbnail(node, &thumb);
+                                arrived += 1;
+                            }
+                        }
+                        None => {
+                            self.thumbs_failed.insert(node);
+                        }
+                    }
+                }
+                if arrived > 0 {
+                    self.request_redraw();
+                }
+            }
         }
     }
 
@@ -554,8 +651,34 @@ fn main() -> anyhow::Result<()> {
         }
         None => SceneState::load_or_seed(args.path),
     };
-    let event_loop = EventLoop::new()?;
-    event_loop.run_app(&mut App::new(scene))?;
+    let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
+    // Пул тамбнейлов (T6): провайдер Windows + SQLite-кэш; worker'ы будят
+    // event loop через proxy — иначе при ControlFlow::Wait результаты
+    // лежали бы в канале до следующего ввода
+    let proxy: EventLoopProxy<AppEvent> = event_loop.create_proxy();
+    #[cfg(windows)]
+    let provider: Arc<dyn ThumbnailProvider + Send + Sync> =
+        Arc::new(canvas_shell::ShellThumbnailProvider);
+    #[cfg(not(windows))]
+    let provider: Arc<dyn ThumbnailProvider + Send + Sync> =
+        Arc::new(canvas_shell::NoopThumbnailProvider);
+    let cache = canvas_shell::default_cache_dir().and_then(|dir| {
+        match canvas_shell::ThumbCache::open(&dir) {
+            Ok(cache) => Some(cache),
+            Err(err) => {
+                tracing::warn!(%err, "тамбнейл-кэш недоступен, работаем без него");
+                None
+            }
+        }
+    });
+    let thumbs = ThumbService::new(
+        provider,
+        cache,
+        Some(Arc::new(move || {
+            let _ = proxy.send_event(AppEvent::ThumbsReady);
+        })),
+    );
+    event_loop.run_app(&mut App::new(scene, thumbs))?;
     Ok(())
 }
 
@@ -601,6 +724,21 @@ mod tests {
             assert_eq!(node.kind(), canvas_core::NodeKind::Text);
             assert!(node.id.starts_with("stress-"));
         }
+    }
+
+    /// Резолв путей файловых нод (T6): относительные — от каталога канваса,
+    /// результат всегда абсолютный (shell-API иначе отказывает).
+    #[test]
+    fn resolve_file_path_is_absolute() {
+        let scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/thumbs.canvas"));
+        let abs = scene.resolve_file_path("C:/abs/photo.png");
+        assert_eq!(abs, PathBuf::from("C:/abs/photo.png"));
+        let rel = scene.resolve_file_path("thumbtest/photo1.png");
+        assert!(
+            rel.is_absolute(),
+            "относительный путь не абсолютизирован: {rel:?}"
+        );
+        assert!(rel.ends_with(PathBuf::from("target/tmp/thumbtest/photo1.png")));
     }
 
     /// Парсинг аргументов: --stress N, --stress=N, путь, дефолты.

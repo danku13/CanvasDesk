@@ -6,7 +6,7 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::{Canvas, SpatialIndex};
+use canvas_core::{Canvas, SpatialIndex, Thumbnail};
 
 use crate::camera::Camera;
 use crate::cards::{build_instances, CardsPipeline};
@@ -16,6 +16,7 @@ use crate::config::{
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
 use crate::text::TextSystem;
+use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
 
 /// Сцена кадра: модель канваса, spatial index (culling, T5) и выделение.
 pub struct SceneView<'a> {
@@ -45,6 +46,8 @@ pub struct Renderer {
     size: PhysicalSize<u32>,
     grid: GridPipeline,
     cards: CardsPipeline,
+    /// Атлас тамбнейлов + их пайплайн (T6).
+    thumbs: ThumbsPipeline,
     text: TextSystem,
     scale_factor: f32,
 }
@@ -94,6 +97,7 @@ impl Renderer {
         );
         let grid = GridPipeline::new(&gpu.device, format);
         let cards = CardsPipeline::new(&gpu.device, format);
+        let thumbs = ThumbsPipeline::new(&gpu.device, format);
         let text = TextSystem::new(&gpu.device, &gpu.queue, format);
         Ok(Self {
             gpu,
@@ -102,6 +106,7 @@ impl Renderer {
             size,
             grid,
             cards,
+            thumbs,
             text,
             scale_factor: scale_factor as f32,
         })
@@ -110,6 +115,22 @@ impl Renderer {
     /// Обновить scale factor окна (перенос между мониторами с разным DPI, SPEC §6.5).
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor as f32;
+    }
+
+    /// Загрузить готовый тамбнейл ноды в атлас (T6). Вызывается из app
+    /// по результатам ThumbService; аплоад идёт в write_texture до кадра.
+    pub fn set_thumbnail(&mut self, node: usize, thumb: &Thumbnail) {
+        self.thumbs.insert(&self.gpu.queue, node, thumb);
+    }
+
+    /// Есть ли у ноды тамбнейл в атласе — дедупликация заказов в app (T6).
+    pub fn has_thumbnail(&self, node: usize) -> bool {
+        self.thumbs.contains(node)
+    }
+
+    /// Число тамбнейлов в атласе (HUD, T6).
+    pub fn thumbnail_count(&self) -> usize {
+        self.thumbs.len()
     }
 
     /// Переконфигурировать surface под новый размер окна.
@@ -175,6 +196,21 @@ impl Renderer {
             self.scale_factor,
             &instances,
         );
+        // Тамбнейлы (T6): тот же набор видимых нод, LOD по zoom внутри build
+        let thumb_instances = build_thumb_instances(
+            scene.canvas,
+            &indices,
+            self.thumbs.slots_mut(),
+            camera.zoom(),
+        );
+        let thumb_count = self.thumbs.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+            &thumb_instances,
+        );
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
             &self.gpu.queue,
@@ -215,6 +251,7 @@ impl Renderer {
             });
             self.grid.draw(&mut pass);
             self.cards.draw(&mut pass, instance_count);
+            self.thumbs.draw(&mut pass, thumb_count);
             if let Err(err) = self.text.draw(&mut pass) {
                 tracing::warn!(?err, "отрисовка текста пропущена");
             }

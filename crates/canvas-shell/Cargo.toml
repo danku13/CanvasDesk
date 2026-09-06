@@ -6,6 +6,9 @@ rust-version.workspace = true
 
 [dependencies]
 canvas-core.workspace = true
+tracing.workspace = true
+# тамбнейл-кэш SQLite (SPEC §5.2)
+rusqlite.workspace = true
 
 # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (SPEC §4)
 [target.'cfg(windows)'.dependencies]
