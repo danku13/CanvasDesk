@@ -6,7 +6,7 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::Canvas;
+use canvas_core::{Canvas, SpatialIndex};
 
 use crate::camera::Camera;
 use crate::cards::{build_instances, CardsPipeline};
@@ -17,10 +17,22 @@ use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
 use crate::text::TextSystem;
 
-/// Сцена кадра: модель канваса + состояние выделения (T4).
+/// Сцена кадра: модель канваса, spatial index (culling, T5) и выделение.
 pub struct SceneView<'a> {
     pub canvas: &'a Canvas,
+    pub spatial: &'a SpatialIndex,
     pub selected: Option<usize>,
+}
+
+/// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FrameStats {
+    /// Всего нод в сцене.
+    pub total_nodes: usize,
+    /// Нод попало в viewport (прошли culling).
+    pub visible_nodes: usize,
+    /// Инстансов карточек ушло в draw.
+    pub instances: u32,
 }
 
 /// Рендерер окна: владеет surface и выполняет кадр по запросу (`request_redraw`).
@@ -110,26 +122,40 @@ impl Renderer {
         self.surface.configure(&self.gpu.device, &self.config);
     }
 
-    /// Отрисовать кадр: фон, сетка, карточки нод, заголовки (T2/T4).
-    pub fn render(&mut self, camera: &Camera, scene: &SceneView) -> anyhow::Result<()> {
+    /// Отрисовать кадр: фон, сетка, карточки видимых нод, заголовки, HUD (T2/T4/T5).
+    /// `hud` — строка оверлея (F3), None — без оверлея. Возвращает счётчики кадра.
+    pub fn render(
+        &mut self,
+        camera: &Camera,
+        scene: &SceneView,
+        hud: Option<&str>,
+    ) -> anyhow::Result<FrameStats> {
         if !surface_size_valid(self.size.width, self.size.height) {
-            return Ok(());
+            return Ok(FrameStats::default());
         }
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 // surface потерян/устарел (например, после смены DPI) — переконфигурация
                 self.surface.configure(&self.gpu.device, &self.config);
-                return Ok(());
+                return Ok(FrameStats::default());
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
                 anyhow::bail!("GPU: нехватка памяти под surface");
             }
             Err(err) => {
                 tracing::warn!(?err, "кадр пропущен");
-                return Ok(());
+                return Ok(FrameStats::default());
             }
         };
+
+        // Culling (T5): видимый world-rect → индексы видимых нод из spatial index
+        let viewport_logical = [
+            self.size.width as f32 / self.scale_factor,
+            self.size.height as f32 / self.scale_factor,
+        ];
+        let visible = camera.visible_world_rect(viewport_logical);
+        let indices = scene.spatial.query_rect(visible);
 
         self.grid.update_camera(
             &self.gpu.queue,
@@ -137,7 +163,7 @@ impl Renderer {
             [self.size.width as f32, self.size.height as f32],
             self.scale_factor,
         );
-        let instances = build_instances(scene.canvas, scene.selected);
+        let instances = build_instances(scene.canvas, &indices, scene.selected);
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -149,10 +175,14 @@ impl Renderer {
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
             &self.gpu.queue,
-            camera,
-            [self.size.width, self.size.height],
-            self.scale_factor,
-            scene.canvas,
+            &crate::text::TitleFrame {
+                camera,
+                viewport_physical: [self.size.width, self.size.height],
+                scale_factor: self.scale_factor,
+                canvas: scene.canvas,
+                indices: &indices,
+                hud,
+            },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
         }
@@ -188,6 +218,10 @@ impl Renderer {
         }
         self.gpu.queue.submit([encoder.finish()]);
         frame.present();
-        Ok(())
+        Ok(FrameStats {
+            total_nodes: scene.canvas.nodes.len(),
+            visible_nodes: indices.len(),
+            instances: instance_count,
+        })
     }
 }

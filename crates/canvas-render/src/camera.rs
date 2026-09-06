@@ -61,6 +61,20 @@ impl Camera {
         self.position[1] -= delta_screen[1] / self.zoom;
     }
 
+    /// Видимый прямоугольник в world-координатах: [min_x, min_y, max_x, max_y].
+    /// Используется для culling по spatial index (T5). Нулевой viewport
+    /// (свёрнутое окно) даёт вырожденный rect вокруг центра — без паники.
+    pub fn visible_world_rect(&self, viewport: Vec2) -> [f32; 4] {
+        let top_left = self.screen_to_world([0.0, 0.0], viewport);
+        let bottom_right = self.screen_to_world(viewport, viewport);
+        [
+            top_left[0].min(bottom_right[0]),
+            top_left[1].min(bottom_right[1]),
+            top_left[0].max(bottom_right[0]),
+            top_left[1].max(bottom_right[1]),
+        ]
+    }
+
     /// Зум множителем к screen-точке `anchor`: мировая точка под курсором неподвижна.
     /// Результат клампится в [MIN_ZOOM, MAX_ZOOM].
     pub fn zoom_at(&mut self, factor: f32, anchor: Vec2, viewport: Vec2) {
@@ -183,5 +197,45 @@ mod tests {
         let world = camera.screen_to_world([10.0, 10.0], [0.0, 0.0]);
         let back = camera.world_to_screen(world, [0.0, 0.0]);
         assert_vec2_close(back, [10.0, 10.0], EPS);
+    }
+
+    /// visible_world_rect: при zoom=1 rect = viewport вокруг центра камеры;
+    /// при других zoom границы совпадают с проекциями углов экрана.
+    #[test]
+    fn visible_world_rect_matches_screen_corners() {
+        let viewport = [1280.0, 720.0];
+        for zoom in [MIN_ZOOM, 0.5, 1.0, 2.5, MAX_ZOOM] {
+            let mut camera = Camera::default();
+            camera.set_zoom_at(zoom, [640.0, 360.0], viewport);
+            camera.pan([55.0, -30.0]);
+
+            let rect = camera.visible_world_rect(viewport);
+            let eps = if zoom <= 0.1 { 0.5 } else { EPS };
+            assert_vec2_close(
+                [rect[0], rect[1]],
+                camera.screen_to_world([0.0, 0.0], viewport),
+                eps,
+            );
+            assert_vec2_close(
+                [rect[2], rect[3]],
+                camera.screen_to_world(viewport, viewport),
+                eps,
+            );
+            assert!(
+                rect[0] <= rect[2] && rect[1] <= rect[3],
+                "min <= max: {rect:?}"
+            );
+        }
+
+        // zoom=1, камера в начале координат: rect = [-w/2, -h/2, w/2, h/2]
+        let camera = Camera::default();
+        assert_eq!(
+            camera.visible_world_rect(viewport),
+            [-640.0, -360.0, 640.0, 360.0]
+        );
+
+        // Нулевой viewport — вырожденный rect в центре, без паники
+        let rect = Camera::default().visible_world_rect([0.0, 0.0]);
+        assert_eq!(rect, [0.0, 0.0, 0.0, 0.0]);
     }
 }

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use canvas_core::{Canvas, Node};
+use canvas_core::{Canvas, Node, SpatialIndex};
 use canvas_render::camera::Vec2;
-use canvas_render::{Camera, SceneView};
+use canvas_render::{Camera, FrameMeter, FrameStats, SceneView};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -47,9 +47,11 @@ fn seed_canvas() -> Canvas {
     canvas
 }
 
-/// Состояние сцены: модель, файл, выделение и перетаскивание.
+/// Состояние сцены: модель, spatial index (T5), файл, выделение и перетаскивание.
 struct SceneState {
     canvas: Canvas,
+    /// R-tree над AABB нод; синхронизируется при каждом изменении геометрии.
+    spatial: SpatialIndex,
     path: PathBuf,
     selected: Option<usize>,
     /// (индекс ноды, смещение от курсора до левого верхнего угла ноды в world).
@@ -58,6 +60,19 @@ struct SceneState {
 }
 
 impl SceneState {
+    /// Обернуть готовую модель: построить spatial index.
+    fn new(canvas: Canvas, path: PathBuf) -> Self {
+        let spatial = SpatialIndex::build(&canvas);
+        Self {
+            canvas,
+            spatial,
+            path,
+            selected: None,
+            dragging: None,
+            dirty_since: None,
+        }
+    }
+
     fn load_or_seed(path: PathBuf) -> Self {
         let canvas = match Canvas::load(&path) {
             Ok(canvas) => {
@@ -73,12 +88,15 @@ impl SceneState {
                 canvas
             }
         };
-        Self {
-            canvas,
-            path,
-            selected: None,
-            dragging: None,
-            dirty_since: None,
+        Self::new(canvas, path)
+    }
+
+    /// Переместить ноду: модель + инкрементальное обновление spatial index (T5).
+    fn move_node(&mut self, index: usize, x: f32, y: f32) {
+        if let Some(node) = self.canvas.nodes.get_mut(index) {
+            node.x = x;
+            node.y = y;
+            self.spatial.update(index, node);
         }
     }
 
@@ -125,20 +143,32 @@ struct App {
     middle_pressed: bool,
     space_pressed: bool,
     left_pressed: bool,
+    /// HUD с fps/p95/счётчиком видимых нод (F3, T5).
+    hud_visible: bool,
+    /// Замер интервалов между кадрами (окно 300 кадров).
+    frame_meter: FrameMeter,
+    /// Момент предыдущего отрисованного кадра.
+    last_frame: Option<Instant>,
+    /// Счётчики последнего кадра (для HUD).
+    last_stats: FrameStats,
 }
 
 impl App {
-    fn new(canvas_path: PathBuf) -> Self {
+    fn new(scene: SceneState) -> Self {
         Self {
             window: None,
             renderer: None,
             camera: Camera::default(),
-            scene: SceneState::load_or_seed(canvas_path),
+            scene,
             modifiers: ModifiersState::empty(),
             cursor: [0.0, 0.0],
             middle_pressed: false,
             space_pressed: false,
             left_pressed: false,
+            hud_visible: false,
+            frame_meter: FrameMeter::new(),
+            last_frame: None,
+            last_stats: FrameStats::default(),
         }
     }
 
@@ -169,6 +199,29 @@ impl App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    /// Строка HUD (F3): fps, p95 frame time, счётчик culling последнего кадра.
+    /// Рендер идёт по request_redraw, поэтому fps осмыслен во время активного
+    /// пан/зума; в простое кадры не рисуются и замер не обновляется.
+    fn hud_text(&self) -> Option<String> {
+        if !self.hud_visible {
+            return None;
+        }
+        let fps = self
+            .frame_meter
+            .fps()
+            .map(|v| format!("{v:.0}"))
+            .unwrap_or_else(|| "—".into());
+        let p95 = self
+            .frame_meter
+            .p95_ms()
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "—".into());
+        Some(format!(
+            "{fps} fps | p95 {p95} мс | нод видно {}/{} | инстансов {}",
+            self.last_stats.visible_nodes, self.last_stats.total_nodes, self.last_stats.instances
+        ))
     }
 }
 
@@ -239,14 +292,25 @@ impl ApplicationHandler for App {
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
             WindowEvent::RedrawRequested => {
+                // Замер интервала между кадрами для HUD (T5)
+                let now = Instant::now();
+                if let Some(prev) = self.last_frame {
+                    self.frame_meter.push(now - prev);
+                }
+                self.last_frame = Some(now);
+                let hud = self.hud_text();
                 if let Some(renderer) = self.renderer.as_mut() {
                     let scene = SceneView {
                         canvas: &self.scene.canvas,
+                        spatial: &self.scene.spatial,
                         selected: self.scene.selected,
                     };
-                    if let Err(err) = renderer.render(&self.camera, &scene) {
-                        tracing::error!(%err, "ошибка рендера, завершение");
-                        event_loop.exit();
+                    match renderer.render(&self.camera, &scene, hud.as_deref()) {
+                        Ok(stats) => self.last_stats = stats,
+                        Err(err) => {
+                            tracing::error!(%err, "ошибка рендера, завершение");
+                            event_loop.exit();
+                        }
                     }
                 }
             }
@@ -268,6 +332,14 @@ impl App {
                 self.scene.dragging = None;
             }
         }
+        // F3 — переключить HUD с fps/p95/счётчиком видимых нод (T5)
+        if event.logical_key == Key::Named(NamedKey::F3)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            self.hud_visible = !self.hud_visible;
+            self.request_redraw();
+        }
     }
 
     fn on_left_button(&mut self, state: ElementState) {
@@ -278,7 +350,8 @@ impl App {
         match state {
             ElementState::Pressed => {
                 let world = self.cursor_world();
-                match self.scene.canvas.hit_test(world) {
+                // Hit-test через spatial index (T5): O(log n) вместо линейного обхода
+                match self.scene.spatial.hit_test(world) {
                     Some(index) => {
                         self.scene.selected = Some(index);
                         let node = &self.scene.canvas.nodes[index];
@@ -310,9 +383,9 @@ impl App {
         if !self.space_pressed {
             if let Some((index, offset)) = self.scene.dragging {
                 let world = self.cursor_world();
-                let node = &mut self.scene.canvas.nodes[index];
-                node.x = world[0] + offset[0];
-                node.y = world[1] + offset[1];
+                // Модель + инкрементальное обновление spatial index (T5)
+                self.scene
+                    .move_node(index, world[0] + offset[0], world[1] + offset[1]);
                 self.scene.mark_dirty();
                 self.request_redraw();
             }
@@ -353,18 +426,133 @@ impl App {
     }
 }
 
+/// Аргументы командной строки: `canvasdesk [--stress N] [path]`.
+struct CliArgs {
+    /// Нагрузочный режим (T5): сцена из N случайных нод вместо загрузки файла.
+    stress: Option<usize>,
+    path: PathBuf,
+}
+
+/// Разбор аргументов вручную — две опции не оправдывают зависимость от clap.
+fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
+    let mut stress = None;
+    let mut path = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--stress" {
+            let value = iter
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("--stress требует число нод"))?;
+            stress = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("--stress: не число: {value}"))?,
+            );
+        } else if let Some(value) = arg.strip_prefix("--stress=") {
+            stress = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("--stress: не число: {value}"))?,
+            );
+        } else if arg == "--help" || arg == "-h" {
+            println!("Использование: canvasdesk [--stress N] [путь к .canvas]");
+            std::process::exit(0);
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
+        } else {
+            anyhow::bail!("лишний аргумент: {arg}");
+        }
+    }
+    // В stress-режиме по умолчанию пишем в stress.canvas, чтобы не затирать default.canvas
+    let default_path = if stress.is_some() {
+        "stress.canvas"
+    } else {
+        "default.canvas"
+    };
+    Ok(CliArgs {
+        stress,
+        path: path.unwrap_or_else(|| PathBuf::from(default_path)),
+    })
+}
+
+/// Детерминированный PRNG (xorshift32) — генератор стресс-сцены без зависимостей.
+struct Xorshift(u32);
+
+impl Xorshift {
+    fn next(&mut self) -> u32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        self.0
+    }
+
+    /// Случайное f32 в [0, 1).
+    fn unit(&mut self) -> f32 {
+        (self.next() % 10_000) as f32 / 10_000.0
+    }
+}
+
+/// Слова для правдоподобных заголовков стресс-нод.
+const STRESS_WORDS: [&str; 8] = [
+    "отчёт",
+    "смета",
+    "презентация",
+    "договор",
+    "спецификация",
+    "заметка",
+    "план",
+    "архив",
+];
+
+/// Нагрузочная сцена (T5): N текстовых нод со случайными rect/цветом/заголовком,
+/// раскиданных по области, растущей как sqrt(N) — плотность стабильна.
+/// Детерминирована: один и тот же N даёт одну и ту же сцену.
+fn stress_canvas(n: usize) -> Canvas {
+    let mut canvas = Canvas::default();
+    let mut rng = Xorshift(0x9E37_79B9);
+    let extent = (n.max(1) as f32).sqrt() * 400.0;
+    for i in 0..n {
+        let x = rng.unit() * extent * 2.0 - extent;
+        let y = rng.unit() * extent * 2.0 - extent;
+        let width = 120.0 + rng.unit() * 300.0;
+        let height = 80.0 + rng.unit() * 220.0;
+        let word = STRESS_WORDS[i % STRESS_WORDS.len()];
+        let mut node = Node::text(
+            format!("stress-{i}"),
+            format!("{word} #{i}\nнагрузочный тест"),
+            x,
+            y,
+        );
+        node.width = width;
+        node.height = height;
+        if rng.unit() < 0.3 {
+            node.color = Some((1 + rng.next() % 6).to_string());
+        }
+        canvas.nodes.push(node);
+    }
+    canvas
+}
+
 fn main() -> anyhow::Result<()> {
     // По умолчанию info, но без спама внутренних крейтов wgpu; переопределяется через RUST_LOG
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("info,wgpu_hal=warn,wgpu_core=warn")
     });
     tracing_subscriber::fmt().with_env_filter(filter).init();
-    let canvas_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("default.canvas"));
+    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let scene = match args.stress {
+        Some(n) => {
+            tracing::info!(nodes = n, path = %args.path.display(), "нагрузочный режим --stress");
+            let canvas = stress_canvas(n);
+            if let Err(err) = canvas.save(&args.path) {
+                tracing::warn!(%err, "не удалось сохранить стресс-сцену");
+            }
+            SceneState::new(canvas, args.path)
+        }
+        None => SceneState::load_or_seed(args.path),
+    };
     let event_loop = EventLoop::new()?;
-    event_loop.run_app(&mut App::new(canvas_path))?;
+    event_loop.run_app(&mut App::new(scene))?;
     Ok(())
 }
 
@@ -395,5 +583,41 @@ mod tests {
         let json = canvas.to_json().expect("сериализация seed");
         let restored = Canvas::from_str(&json).expect("seed парсится обратно");
         assert_eq!(canvas, restored);
+    }
+
+    /// Стресс-генератор (T5): ровно N нод, детерминизм, размеры в пределах.
+    #[test]
+    fn stress_canvas_is_deterministic_and_bounded() {
+        let a = stress_canvas(5000);
+        let b = stress_canvas(5000);
+        assert_eq!(a.nodes.len(), 5000);
+        assert_eq!(a, b, "одинаковый N должен давать одинаковую сцену");
+        for node in &a.nodes {
+            assert!((120.0..=420.0).contains(&node.width));
+            assert!((80.0..=300.0).contains(&node.height));
+            assert_eq!(node.kind(), canvas_core::NodeKind::Text);
+            assert!(node.id.starts_with("stress-"));
+        }
+    }
+
+    /// Парсинг аргументов: --stress N, --stress=N, путь, дефолты.
+    #[test]
+    fn cli_args_parsing() {
+        let args = parse_args(&[]).expect("пустые аргументы");
+        assert_eq!(args.stress, None);
+        assert_eq!(args.path, PathBuf::from("default.canvas"));
+
+        let args = parse_args(&["--stress".into(), "5000".into()]).expect("--stress N");
+        assert_eq!(args.stress, Some(5000));
+        assert_eq!(args.path, PathBuf::from("stress.canvas"));
+
+        let args =
+            parse_args(&["--stress=100".into(), "my.canvas".into()]).expect("--stress=N path");
+        assert_eq!(args.stress, Some(100));
+        assert_eq!(args.path, PathBuf::from("my.canvas"));
+
+        assert!(parse_args(&["--stress".into()]).is_err());
+        assert!(parse_args(&["--stress".into(), "abc".into()]).is_err());
+        assert!(parse_args(&["a.canvas".into(), "b.canvas".into()]).is_err());
     }
 }

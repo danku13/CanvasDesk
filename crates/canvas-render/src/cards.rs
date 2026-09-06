@@ -114,13 +114,18 @@ impl CardInstance {
     }
 }
 
-/// Собрать инстансы кадра из модели (все ноды; culling — T5).
-pub fn build_instances(canvas: &canvas_core::Canvas, selected: Option<usize>) -> Vec<CardInstance> {
-    canvas
-        .nodes
+/// Собрать инстансы кадра по видимым нодам (culling, T5): `indices` —
+/// результат `SpatialIndex::query_rect` по viewport, отсортирован по возрастанию
+/// (z-порядок = порядок нод в массиве).
+pub fn build_instances(
+    canvas: &canvas_core::Canvas,
+    indices: &[usize],
+    selected: Option<usize>,
+) -> Vec<CardInstance> {
+    indices
         .iter()
-        .enumerate()
-        .map(|(index, node)| {
+        .filter_map(|&index| {
+            let node = canvas.nodes.get(index)?;
             let selected = selected == Some(index);
             let broken = node.broken_link == Some(true);
             let border = if selected {
@@ -130,13 +135,13 @@ pub fn build_instances(canvas: &canvas_core::Canvas, selected: Option<usize>) ->
             } else {
                 [0.0; 4]
             };
-            CardInstance {
+            Some(CardInstance {
                 pos: [node.x, node.y],
                 size: [node.width, node.height],
                 fill: card_color(node),
                 border,
                 params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
-            }
+            })
         })
         .collect()
 }
@@ -396,7 +401,7 @@ mod tests {
         assert_eq!(extension_letter(&text), None);
     }
 
-    /// Инстансы: рамка выделения/битой ссылки, z-порядок = порядок нод.
+    /// Инстансы: рамка выделения/битой ссылки, z-порядок = порядок индексов.
     #[test]
     fn instances_reflect_selection_and_broken() {
         let mut canvas = Canvas::default();
@@ -407,12 +412,38 @@ mod tests {
         broken.broken_link = Some(true);
         canvas.nodes.push(broken);
 
-        let instances = build_instances(&canvas, Some(1));
+        let instances = build_instances(&canvas, &[0, 1], Some(1));
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0].params[1], 0.0);
         assert_eq!(instances[1].params[1], 1.0);
         assert_eq!(instances[1].params[2], 1.0);
         assert_eq!(instances[1].border, SELECTION_BORDER);
+    }
+
+    /// Culling (T5): ноды вне переданных индексов не попадают в батч,
+    /// порядок инстансов следует порядку индексов.
+    #[test]
+    fn instances_only_for_given_indices() {
+        let mut canvas = Canvas::default();
+        for i in 0..5 {
+            canvas.nodes.push(Node::file(
+                format!("n{i}"),
+                "C:/f.png",
+                i as f32 * 100.0,
+                0.0,
+                10.0,
+                10.0,
+            ));
+        }
+        // Видимы только ноды 1 и 3 (выдача spatial index отсортирована)
+        let instances = build_instances(&canvas, &[1, 3], None);
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].pos, [100.0, 0.0]);
+        assert_eq!(instances[1].pos, [300.0, 0.0]);
+        // Пустой список — пустой батч
+        assert!(build_instances(&canvas, &[], None).is_empty());
+        // Невалидный индекс пропускается без паники
+        assert_eq!(build_instances(&canvas, &[99], None).len(), 0);
     }
 
     /// Сериализация инстанса совпадает с vertex buffer stride (FLOATS * 4 байта).
