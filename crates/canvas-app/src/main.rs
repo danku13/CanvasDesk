@@ -219,8 +219,11 @@ impl App {
             .map(|v| format!("{v:.1}"))
             .unwrap_or_else(|| "—".into());
         Some(format!(
-            "{fps} fps | p95 {p95} мс | нод видно {}/{} | инстансов {}",
-            self.last_stats.visible_nodes, self.last_stats.total_nodes, self.last_stats.instances
+            "{fps} fps | p95 {p95} мс | кадр {:.1} мс | нод видно {}/{} | инстансов {}",
+            self.last_stats.cpu_ms,
+            self.last_stats.visible_nodes,
+            self.last_stats.total_nodes,
+            self.last_stats.instances
         ))
     }
 }

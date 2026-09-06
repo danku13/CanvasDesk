@@ -33,6 +33,8 @@ pub struct FrameStats {
     pub visible_nodes: usize,
     /// Инстансов карточек ушло в draw.
     pub instances: u32,
+    /// CPU-время подготовки и кодирования кадра, мс.
+    pub cpu_ms: f32,
 }
 
 /// Рендерер окна: владеет surface и выполняет кадр по запросу (`request_redraw`).
@@ -130,6 +132,7 @@ impl Renderer {
         scene: &SceneView,
         hud: Option<&str>,
     ) -> anyhow::Result<FrameStats> {
+        let cpu_start = std::time::Instant::now();
         if !surface_size_valid(self.size.width, self.size.height) {
             return Ok(FrameStats::default());
         }
@@ -222,6 +225,7 @@ impl Renderer {
             total_nodes: scene.canvas.nodes.len(),
             visible_nodes: indices.len(),
             instances: instance_count,
+            cpu_ms: cpu_start.elapsed().as_secs_f32() * 1000.0,
         })
     }
 }
