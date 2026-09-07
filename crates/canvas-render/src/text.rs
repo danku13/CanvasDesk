@@ -168,6 +168,19 @@ pub struct OverlayText<'a> {
     pub width: f32,
 }
 
+/// Оверлей-текст в screen-space (панель настроек): константный размер
+/// при любом зуме, координаты — логические px от левого верхнего угла окна.
+pub struct ScreenText<'a> {
+    pub text: &'a str,
+    /// Логические px от левого верхнего угла окна.
+    pub origin: [f32; 2],
+    /// Ширина области в логических px (bounds клипа).
+    pub width: f32,
+    /// Размер шрифта в логических px (умножается на scale_factor).
+    pub font_size: f32,
+    pub color: Color,
+}
+
 /// Параметры кадра для подготовки текста (группировка аргументов prepare_titles).
 pub struct TitleFrame<'a> {
     pub camera: &'a Camera,
@@ -187,6 +200,8 @@ pub struct TitleFrame<'a> {
     pub editing_buffer: Option<(&'a Buffer, [f32; 2])>,
     /// Оверлей-тексты кадра (контекстное меню, T7).
     pub overlay_texts: &'a [OverlayText<'a>],
+    /// Screen-space тексты (панель настроек): константный размер при зуме.
+    pub screen_texts: &'a [ScreenText<'a>],
 }
 
 /// Зашейпленные буферы заголовка и тела ноды: валидны, пока не изменились
@@ -524,6 +539,29 @@ impl TextSystem {
             overlay_buffers.push((buffer, overlay.origin, overlay.width));
         }
 
+        // Screen-space тексты (панель настроек): константный физический
+        // размер, позиции — логические px от угла окна, без камеры
+        let mut screen_buffers: Vec<Buffer> = Vec::with_capacity(frame.screen_texts.len());
+        for st in frame.screen_texts {
+            let font = st.font_size * scale_factor;
+            let line_height = font * 1.3;
+            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
+            buffer.set_wrap(&mut self.font_system, Wrap::None);
+            buffer.set_size(
+                &mut self.font_system,
+                Some(st.width * scale_factor),
+                Some(line_height),
+            );
+            buffer.set_text(
+                &mut self.font_system,
+                st.text,
+                Attrs::new(),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            screen_buffers.push(buffer);
+        }
+
         // Текст активной сессии редактирования (T7): буфер редактора поверх
         // карточки (тело ноды из кэша для неё исключено в фазе 1)
         if let Some((buffer, origin)) = frame.editing_buffer {
@@ -558,6 +596,26 @@ impl TextSystem {
                     bottom: (pos[1] + line_height) as i32,
                 },
                 default_color: TITLE_COLOR,
+                custom_glyphs: &[],
+            });
+        }
+        // Screen-space тексты (панель настроек) — поверх всего, до HUD
+        for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
+            let left = st.origin[0] * scale_factor;
+            let top = st.origin[1] * scale_factor;
+            let line_height = st.font_size * scale_factor * 1.3;
+            areas.push(TextArea {
+                buffer,
+                left,
+                top,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: left as i32,
+                    top: top as i32,
+                    right: (left + st.width * scale_factor) as i32,
+                    bottom: (top + line_height) as i32,
+                },
+                default_color: st.color,
                 custom_glyphs: &[],
             });
         }

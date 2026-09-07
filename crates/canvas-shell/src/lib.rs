@@ -7,7 +7,7 @@ pub mod service;
 #[cfg(windows)]
 pub mod thumbs;
 
-pub use cache::{default_cache_dir, ThumbCache, SIZE_CLASS};
+pub use cache::{default_cache_dir, default_config_path, ThumbCache, SIZE_CLASS};
 pub use service::{downscale_to_fit, Priority, ThumbService};
 #[cfg(windows)]
 pub use thumbs::ShellThumbnailProvider;

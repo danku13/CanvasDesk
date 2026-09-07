@@ -45,6 +45,7 @@ fn headless_note_body_draws() {
             editing: None,
             editing_buffer: None,
             overlay_texts: &[],
+            screen_texts: &[],
         },
     )
     .expect("prepare текста");

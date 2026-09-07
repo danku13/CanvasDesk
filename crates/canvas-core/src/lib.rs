@@ -5,9 +5,11 @@ mod error;
 mod io;
 mod model;
 mod providers;
+mod settings;
 mod spatial;
 
 pub use error::CoreError;
 pub use model::{Canvas, CanvasdeskExt, Edge, Node, NodeKind, PreviewState, Side};
 pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
+pub use settings::{Corner, Settings};
 pub use spatial::{SpatialIndex, WorldRect};

@@ -17,5 +17,6 @@ pub mod text;
 pub mod thumbs;
 
 pub use camera::Camera;
+pub use glyphon::Color;
 pub use renderer::{FrameOverlay, FrameStats, Renderer, SceneView};
 pub use stats::FrameMeter;

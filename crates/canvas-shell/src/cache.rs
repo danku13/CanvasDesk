@@ -39,6 +39,14 @@ pub fn default_cache_dir() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".canvasdesk"))
 }
 
+/// Путь конфига приложения: `~/.canvasdesk/config.toml` — рядом с кэшем
+/// (T19 планирует %APPDATA%/canvasdesk/ — при переезде мигрировать оба).
+/// None (нет домашнего каталога) — конфиг не сохраняется, приложение
+/// работает на дефолтах.
+pub fn default_config_path() -> Option<PathBuf> {
+    default_cache_dir().map(|dir| dir.join("config.toml"))
+}
+
 /// Тамбнейл-кэш: таблица thumb_cache + блобы файлами.
 pub struct ThumbCache {
     conn: rusqlite::Connection,

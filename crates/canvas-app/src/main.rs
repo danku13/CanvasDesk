@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use canvas_core::{Canvas, Node, NodeKind, SpatialIndex, ThumbnailProvider};
+use canvas_core::{Canvas, Corner, Node, NodeKind, Settings, SpatialIndex, ThumbnailProvider};
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
 use canvas_render::edit::{map_key, EditingSession, KeyCommand};
-use canvas_render::text::{body_area, OverlayText, BODY_PADDING, BODY_TOP_GAP};
-use canvas_render::{Camera, FrameMeter, FrameOverlay, FrameStats, SceneView};
+use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
+use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView};
 use canvas_shell::{Priority, ThumbService};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
@@ -58,6 +58,115 @@ const MAX_NOTE_WIDTH: f32 = 600.0;
 /// Зона захвата в правом нижнем углу ноды для ручного resize (world-px, T7).
 const RESIZE_HANDLE: f32 = 16.0;
 
+/// Сторона летающей кнопки настроек (логические px).
+const SETTINGS_BUTTON: f32 = 36.0;
+/// Отступ кнопки и панели настроек от краёв окна (логические px).
+const SETTINGS_MARGIN: f32 = 12.0;
+/// Зазор между кнопкой и панелью настроек.
+const SETTINGS_GAP: f32 = 8.0;
+/// Ширина панели настроек.
+const PANEL_WIDTH: f32 = 300.0;
+/// Высота строки настройки.
+const PANEL_ROW_HEIGHT: f32 = 28.0;
+/// Высота заголовка панели.
+const PANEL_HEADER_HEIGHT: f32 = 30.0;
+/// Высота строки-подсказки внизу панели.
+const PANEL_HINT_HEIGHT: f32 = 24.0;
+/// Внутренний отступ панели.
+const PANEL_PADDING: f32 = 10.0;
+
+/// Строки панели настроек (порядок = порядок отображения).
+const SETTINGS_ROWS: [SettingsRow; 3] = [
+    SettingsRow::ButtonCorner,
+    SettingsRow::Grid,
+    SettingsRow::HudOnStart,
+];
+
+/// Строка-переключатель панели настроек.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsRow {
+    /// Угол летающей кнопки (цикл по 4 углам).
+    ButtonCorner,
+    /// Сетка канваса вкл/выкл.
+    Grid,
+    /// HUD (F3) включён при старте.
+    HudOnStart,
+}
+
+impl SettingsRow {
+    /// Подпись строки с текущим значением.
+    fn label(self, settings: &Settings) -> String {
+        let on_off = |v: bool| if v { "вкл" } else { "выкл" };
+        match self {
+            SettingsRow::ButtonCorner => {
+                format!("Угол кнопки: {}", settings.button_corner.label())
+            }
+            SettingsRow::Grid => format!("Сетка: {}", on_off(settings.grid_visible)),
+            SettingsRow::HudOnStart => {
+                format!("HUD при запуске: {}", on_off(settings.hud_on_start))
+            }
+        }
+    }
+}
+
+/// Точка в rect [x, y, w, h]? (логические px, границы включительны)
+fn point_in_rect(rect: [f32; 4], point: Vec2) -> bool {
+    point[0] >= rect[0]
+        && point[0] <= rect[0] + rect[2]
+        && point[1] >= rect[1]
+        && point[1] <= rect[1] + rect[3]
+}
+
+/// Rect летающей кнопки настроек в логических px от угла окна.
+fn button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
+    let x = match corner {
+        Corner::TopLeft | Corner::BottomLeft => SETTINGS_MARGIN,
+        _ => viewport[0] - SETTINGS_MARGIN - SETTINGS_BUTTON,
+    };
+    let y = match corner {
+        Corner::TopLeft | Corner::TopRight => SETTINGS_MARGIN,
+        _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON,
+    };
+    [x, y, SETTINGS_BUTTON, SETTINGS_BUTTON]
+}
+
+/// Высота панели настроек: паддинги + заголовок + строки + подсказка.
+fn panel_height() -> f32 {
+    PANEL_PADDING * 2.0
+        + PANEL_HEADER_HEIGHT
+        + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT
+        + PANEL_HINT_HEIGHT
+}
+
+/// Rect панели настроек: прижата к кнопке (с зазором), в том же углу.
+fn panel_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
+    let height = panel_height();
+    let x = match corner {
+        Corner::TopLeft | Corner::BottomLeft => SETTINGS_MARGIN,
+        _ => viewport[0] - SETTINGS_MARGIN - PANEL_WIDTH,
+    };
+    let y = match corner {
+        Corner::TopLeft | Corner::TopRight => SETTINGS_MARGIN + SETTINGS_BUTTON + SETTINGS_GAP,
+        _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON - SETTINGS_GAP - height,
+    };
+    [x, y, PANEL_WIDTH, height]
+}
+
+/// Hit-test строки панели: индекс в SETTINGS_ROWS или None
+/// (заголовок/подсказка/паддинги не кликабельны).
+fn panel_row_at(panel: [f32; 4], point: Vec2) -> Option<usize> {
+    let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
+    if point[0] < panel[0]
+        || point[0] > panel[0] + panel[2]
+        || point[1] < rows_top
+        || point[1] > rows_top + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT
+    {
+        return None;
+    }
+    let i = ((point[1] - rows_top) / PANEL_ROW_HEIGHT) as usize;
+    (i < SETTINGS_ROWS.len()).then_some(i)
+}
+
 /// Точка в зоне resize (правый нижний угол ноды)? Чистая функция для тестов.
 fn in_resize_corner(node: &Node, point: Vec2) -> bool {
     let right = node.x + node.width;
@@ -72,6 +181,16 @@ fn in_resize_corner(node: &Node, point: Vec2) -> bool {
 struct ContextMenu {
     node: usize,
     origin: Vec2,
+}
+
+/// Screen-space текст с владеемой строкой (панель настроек): промежуточное
+/// представление, конвертируется в `ScreenText` на кадр рендера.
+struct OwnedScreenText {
+    text: String,
+    origin: [f32; 2],
+    width: f32,
+    font_size: f32,
+    color: Color,
 }
 
 /// Rect пункта меню в world-координатах: [x, y, w, h].
@@ -362,10 +481,21 @@ struct App {
     menu: Option<ContextMenu>,
     /// Ручной resize ноды за правый нижний угол (T7): индекс ноды.
     resizing: Option<usize>,
+    /// Настройки приложения (config.toml).
+    settings: Settings,
+    /// Путь конфига (None — не сохраняем, работаем на дефолтах).
+    config_path: Option<PathBuf>,
+    /// Панель настроек открыта.
+    settings_open: bool,
 }
 
 impl App {
-    fn new(scene: SceneState, thumbs: ThumbService) -> Self {
+    fn new(
+        scene: SceneState,
+        thumbs: ThumbService,
+        settings: Settings,
+        config_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             window: None,
             renderer: None,
@@ -377,7 +507,7 @@ impl App {
             middle_pressed: false,
             space_pressed: false,
             left_pressed: false,
-            hud_visible: false,
+            hud_visible: settings.hud_on_start,
             frame_meter: FrameMeter::new(),
             last_frame: None,
             last_stats: FrameStats::default(),
@@ -388,6 +518,9 @@ impl App {
             clipboard: Clipboard::new(),
             menu: None,
             resizing: None,
+            settings,
+            config_path,
+            settings_open: false,
         }
     }
 
@@ -594,6 +727,99 @@ impl App {
         (instances, labels, label_pos)
     }
 
+    /// Применить переключение строки панели настроек и сохранить конфиг.
+    fn apply_settings_row(&mut self, row: usize) {
+        match SETTINGS_ROWS[row] {
+            SettingsRow::ButtonCorner => {
+                self.settings.button_corner = self.settings.button_corner.next();
+            }
+            SettingsRow::Grid => {
+                self.settings.grid_visible = !self.settings.grid_visible;
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_grid_visible(self.settings.grid_visible);
+                }
+            }
+            SettingsRow::HudOnStart => {
+                self.settings.hud_on_start = !self.settings.hud_on_start;
+                // Мгновенная обратная связь: HUD переключается сразу
+                self.hud_visible = self.settings.hud_on_start;
+            }
+        }
+        if let Some(path) = &self.config_path {
+            if let Err(err) = self.settings.save(path) {
+                tracing::warn!(%err, "не удалось сохранить конфиг");
+            }
+        }
+    }
+
+    /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
+    /// открыта. Координаты — логические px от левого верхнего угла окна.
+    fn settings_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let button = button_rect(self.settings.button_corner, viewport);
+        instances.push(CardInstance {
+            pos: [button[0], button[1]],
+            size: [button[2], button[3]],
+            fill: [0.11, 0.11, 0.13, 0.9],
+            border: [0.0; 4],
+            // params.y = рамка выделения: подсветка кнопки при открытой панели
+            params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "⚙".to_owned(),
+            origin: [button[0] + 9.0, button[1] + 7.0],
+            width: button[2],
+            font_size: 18.0,
+            color: Color::rgb(0xe6, 0xe6, 0xe6),
+        });
+        if !self.settings_open {
+            return (instances, texts);
+        }
+        let panel = panel_rect(self.settings.button_corner, viewport);
+        instances.push(CardInstance {
+            pos: [panel[0], panel[1]],
+            size: [panel[2], panel[3]],
+            fill: MENU_FILL,
+            border: [0.0; 4],
+            params: [8.0, 0.0, 0.0, 0.0],
+        });
+        let text_x = panel[0] + PANEL_PADDING + 4.0;
+        let text_w = panel[2] - PANEL_PADDING * 2.0 - 8.0;
+        texts.push(OwnedScreenText {
+            text: "Настройки".to_owned(),
+            origin: [text_x, panel[1] + PANEL_PADDING + 5.0],
+            width: text_w,
+            font_size: 15.0,
+            color: Color::rgb(0xe6, 0xe6, 0xe6),
+        });
+        let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
+        for (i, row) in SETTINGS_ROWS.iter().enumerate() {
+            texts.push(OwnedScreenText {
+                text: row.label(&self.settings),
+                origin: [text_x, rows_top + i as f32 * PANEL_ROW_HEIGHT + 5.0],
+                width: text_w,
+                font_size: 13.0,
+                color: Color::rgb(0xd4, 0xd4, 0xd4),
+            });
+        }
+        texts.push(OwnedScreenText {
+            text: "Ctrl+, — открыть/закрыть".to_owned(),
+            origin: [
+                text_x,
+                rows_top + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT + 4.0,
+            ],
+            width: text_w,
+            font_size: 11.0,
+            color: Color::rgb(0x8a, 0x8a, 0x92),
+        });
+        (instances, texts)
+    }
+
     /// Заказать тамбнейлы видимых файловых нод (T6): приоритет High,
     /// дедупликация — в ThumbService, по наличию в атласе и по негативному кэшу.
     fn order_thumbnails(&self) {
@@ -635,7 +861,8 @@ impl ApplicationHandler<AppEvent> for App {
         };
         // GPU-инициализация блокирующая, один раз при старте (SPEC §6.3: холодный старт < 2 с)
         match pollster::block_on(canvas_render::Renderer::new(window.clone())) {
-            Ok(renderer) => {
+            Ok(mut renderer) => {
+                renderer.set_grid_visible(self.settings.grid_visible);
                 tracing::info!(
                     width = window.inner_size().width,
                     height = window.inner_size().height,
@@ -705,9 +932,23 @@ impl ApplicationHandler<AppEvent> for App {
                         width: MENU_WIDTH - MENU_LABEL_X - MENU_PADDING,
                     })
                     .collect();
+                // Панель настроек (screen-space): кнопка + строки переключателей
+                let (screen_instances, owned_texts) = self.settings_overlay();
+                let screen_texts: Vec<ScreenText> = owned_texts
+                    .iter()
+                    .map(|t| ScreenText {
+                        text: &t.text,
+                        origin: t.origin,
+                        width: t.width,
+                        font_size: t.font_size,
+                        color: t.color,
+                    })
+                    .collect();
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
+                    screen_instances: &screen_instances,
+                    screen_texts: &screen_texts,
                 };
                 if let Some(renderer) = self.renderer.as_mut() {
                     let scene = SceneView {
@@ -834,13 +1075,31 @@ impl App {
             }
             return;
         }
-        // Esc закрывает контекстное меню (T7)
+        // Esc закрывает контекстное меню (T7), затем — панель настроек
         if event.logical_key == Key::Named(NamedKey::Escape)
             && event.state == ElementState::Pressed
             && !event.repeat
-            && self.menu.take().is_some()
         {
+            if self.menu.take().is_some() {
+                self.request_redraw();
+                return;
+            }
+            if self.settings_open {
+                self.settings_open = false;
+                self.request_redraw();
+                return;
+            }
+        }
+        // Ctrl+, — toggle панели настроек (кириллическая «б» — та же клавиша;
+        // во время редактирования сюда не доходим — там Ctrl+Б это Bold)
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c) if c == "," || c == "б" || c == "Б")
+        {
+            self.settings_open = !self.settings_open;
             self.request_redraw();
+            return;
         }
         if event.logical_key == Key::Named(NamedKey::Space) && !event.repeat {
             self.space_pressed = event.state == ElementState::Pressed;
@@ -866,6 +1125,29 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // Панель настроек (screen-space): клики обрабатываются до
+                // канваса — кнопка/панель поверх и «прозрачности» не дают
+                let viewport = self.viewport_logical();
+                if point_in_rect(
+                    button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    self.settings_open = !self.settings_open;
+                    self.request_redraw();
+                    return;
+                }
+                if self.settings_open {
+                    let panel = panel_rect(self.settings.button_corner, viewport);
+                    if let Some(row) = panel_row_at(panel, self.cursor) {
+                        self.apply_settings_row(row);
+                    } else if !point_in_rect(panel, self.cursor) {
+                        // Клик мимо панели — закрыть; канвасу клик не достаётся
+                        // (иначе двойной клик мимо создал бы заметку)
+                        self.settings_open = false;
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 let world = self.cursor_world();
                 // Hit-test через spatial index (T5): O(log n) вместо линейного обхода
                 let hit = self.scene.spatial.hit_test(world);
@@ -1164,6 +1446,16 @@ fn main() -> anyhow::Result<()> {
     });
     tracing_subscriber::fmt().with_env_filter(filter).init();
     let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    // Настройки приложения (~/.canvasdesk/config.toml); битый/отсутствующий
+    // файл — дефолты + warn, приложение не падает
+    let config_path = canvas_shell::default_config_path();
+    let (settings, config_warn) = match &config_path {
+        Some(path) => Settings::load(path),
+        None => (Settings::default(), None),
+    };
+    if let Some(warn) = config_warn {
+        tracing::warn!(%warn, "конфиг не применён, дефолты");
+    }
     let scene = match args.stress {
         Some(n) => {
             tracing::info!(nodes = n, path = %args.path.display(), "нагрузочный режим --stress");
@@ -1202,7 +1494,7 @@ fn main() -> anyhow::Result<()> {
             let _ = proxy.send_event(AppEvent::ThumbsReady);
         })),
     );
-    event_loop.run_app(&mut App::new(scene, thumbs))?;
+    event_loop.run_app(&mut App::new(scene, thumbs, settings, config_path))?;
     Ok(())
 }
 
@@ -1357,5 +1649,86 @@ mod tests {
         assert!(parse_args(&["--stress".into()]).is_err());
         assert!(parse_args(&["--stress".into(), "abc".into()]).is_err());
         assert!(parse_args(&["a.canvas".into(), "b.canvas".into()]).is_err());
+    }
+
+    /// Кнопка настроек: rect в каждом из 4 углов viewport (панель настроек).
+    #[test]
+    fn settings_button_corners() {
+        let viewport = [1600.0, 900.0];
+        let tl = button_rect(Corner::TopLeft, viewport);
+        assert_eq!(
+            tl,
+            [
+                SETTINGS_MARGIN,
+                SETTINGS_MARGIN,
+                SETTINGS_BUTTON,
+                SETTINGS_BUTTON
+            ]
+        );
+        let tr = button_rect(Corner::TopRight, viewport);
+        assert_eq!(tr[0], 1600.0 - SETTINGS_MARGIN - SETTINGS_BUTTON);
+        assert_eq!(tr[1], SETTINGS_MARGIN);
+        let br = button_rect(Corner::BottomRight, viewport);
+        assert_eq!(br[0], 1600.0 - SETTINGS_MARGIN - SETTINGS_BUTTON);
+        assert_eq!(br[1], 900.0 - SETTINGS_MARGIN - SETTINGS_BUTTON);
+        let bl = button_rect(Corner::BottomLeft, viewport);
+        assert_eq!(bl[0], SETTINGS_MARGIN);
+        assert_eq!(bl[1], 900.0 - SETTINGS_MARGIN - SETTINGS_BUTTON);
+        // Точка кнопки попадает в hit-test, соседняя — нет
+        assert!(point_in_rect(tr, [tr[0] + 2.0, tr[1] + 2.0]));
+        assert!(!point_in_rect(tr, [tr[0] - 1.0, tr[1] + 2.0]));
+    }
+
+    /// Панель настроек: прижата к углу кнопки, целиком в viewport.
+    #[test]
+    fn settings_panel_placement() {
+        let viewport = [1600.0, 900.0];
+        for corner in [
+            Corner::TopLeft,
+            Corner::TopRight,
+            Corner::BottomLeft,
+            Corner::BottomRight,
+        ] {
+            let panel = panel_rect(corner, viewport);
+            assert!(
+                panel[0] >= 0.0 && panel[0] + panel[2] <= viewport[0],
+                "{corner:?}"
+            );
+            assert!(
+                panel[1] >= 0.0 && panel[1] + panel[3] <= viewport[1],
+                "{corner:?}"
+            );
+            let button = button_rect(corner, viewport);
+            // Панель по горизонтали на той же стороне, что и кнопка
+            let same_side = (panel[0] - button[0]).abs() < 1.0
+                || ((panel[0] + panel[2]) - (button[0] + button[2])).abs() < 1.0;
+            assert!(same_side, "{corner:?}: панель не под кнопкой");
+        }
+    }
+
+    /// Hit-test строк панели: строки кликабельны, заголовок/подсказка/паддинги — нет.
+    #[test]
+    fn settings_panel_row_hit_test() {
+        let viewport = [1600.0, 900.0];
+        let panel = panel_rect(Corner::TopRight, viewport);
+        let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
+        // Первая и последняя строки
+        assert_eq!(
+            panel_row_at(panel, [panel[0] + 20.0, rows_top + 3.0]),
+            Some(0)
+        );
+        let last = SETTINGS_ROWS.len() - 1;
+        let last_y = rows_top + last as f32 * PANEL_ROW_HEIGHT + 3.0;
+        assert_eq!(panel_row_at(panel, [panel[0] + 20.0, last_y]), Some(last));
+        // Заголовок и подсказка не кликабельны
+        assert_eq!(
+            panel_row_at(panel, [panel[0] + 20.0, panel[1] + PANEL_PADDING + 3.0]),
+            None
+        );
+        let hint_y = rows_top + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT + 3.0;
+        assert_eq!(panel_row_at(panel, [panel[0] + 20.0, hint_y]), None);
+        // Мимо панели
+        assert_eq!(panel_row_at(panel, [panel[0] - 5.0, last_y]), None);
+        assert_eq!(panel_row_at(panel, [panel[0] + 20.0, panel[1] - 5.0]), None);
     }
 }

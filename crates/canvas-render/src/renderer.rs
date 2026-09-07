@@ -8,7 +8,7 @@ use winit::window::Window;
 
 use canvas_core::{Canvas, SpatialIndex, Thumbnail};
 
-use crate::camera::Camera;
+use crate::camera::{Camera, Vec2};
 use crate::cards::{build_instances, CardInstance, CardsPipeline, SELECTION_BORDER};
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
@@ -16,7 +16,7 @@ use crate::config::{
 use crate::edit::EditingSession;
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
-use crate::text::{body_area, OverlayText, TextSystem};
+use crate::text::{body_area, OverlayText, ScreenText, TextSystem};
 use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
 
 /// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
@@ -24,11 +24,28 @@ const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
 /// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
 const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
 
-/// Оверлеи кадра от приложения (контекстное меню, T7): дополнительные
-/// инстансы квадов (рисуются поверх карточек, под текстом) и их подписи.
+/// Screen-space инстанс (логические px от левого верхнего угла окна) →
+/// world-инстанс текущей камеры: на экране размер константен при любом зуме.
+fn screen_instance_to_world(camera: &Camera, viewport: Vec2, inst: &CardInstance) -> CardInstance {
+    let zoom = camera.zoom();
+    let mut out = *inst;
+    out.pos = camera.screen_to_world(inst.pos, viewport);
+    out.size = [inst.size[0] / zoom, inst.size[1] / zoom];
+    // Радиус скругления (params.x) тоже задан в логических px
+    out.params[0] /= zoom;
+    out
+}
+
+/// Оверлеи кадра от приложения (контекстное меню T7, панель настроек):
+/// дополнительные инстансы квадов (поверх карточек, под текстом) и подписи.
+/// `instances`/`texts` — world-координаты (масштабируются зумом);
+/// `screen_instances`/`screen_texts` — логические px от угла окна,
+/// константный размер при любом зуме.
 pub struct FrameOverlay<'a> {
     pub instances: &'a [CardInstance],
     pub texts: &'a [OverlayText<'a>],
+    pub screen_instances: &'a [CardInstance],
+    pub screen_texts: &'a [ScreenText<'a>],
 }
 
 impl FrameOverlay<'_> {
@@ -36,6 +53,8 @@ impl FrameOverlay<'_> {
     pub const EMPTY: FrameOverlay<'static> = FrameOverlay {
         instances: &[],
         texts: &[],
+        screen_instances: &[],
+        screen_texts: &[],
     };
 }
 
@@ -71,6 +90,8 @@ pub struct Renderer {
     thumbs: ThumbsPipeline,
     text: TextSystem,
     scale_factor: f32,
+    /// Рисовать сетку канваса (настройки, панель из post-T7).
+    grid_visible: bool,
 }
 
 impl Renderer {
@@ -130,7 +151,13 @@ impl Renderer {
             thumbs,
             text,
             scale_factor: scale_factor as f32,
+            grid_visible: true,
         })
+    }
+
+    /// Включить/выключить сетку канваса (настройки).
+    pub fn set_grid_visible(&mut self, visible: bool) {
+        self.grid_visible = visible;
     }
 
     /// Обновить scale factor окна (перенос между мониторами с разным DPI, SPEC §6.5).
@@ -244,12 +271,14 @@ impl Renderer {
             }
         }
 
-        self.grid.update_camera(
-            &self.gpu.queue,
-            camera,
-            [self.size.width as f32, self.size.height as f32],
-            self.scale_factor,
-        );
+        if self.grid_visible {
+            self.grid.update_camera(
+                &self.gpu.queue,
+                camera,
+                [self.size.width as f32, self.size.height as f32],
+                self.scale_factor,
+            );
+        }
         let instances = {
             let mut instances = build_instances(scene.canvas, &indices, scene.selected);
             // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
@@ -290,6 +319,11 @@ impl Renderer {
             }
             // Оверлеи приложения (контекстное меню, T7)
             instances.extend_from_slice(overlay.instances);
+            // Screen-space оверлеи (панель настроек): конверсия в world —
+            // размер на экране константен при любом зуме и панорамировании
+            for inst in overlay.screen_instances {
+                instances.push(screen_instance_to_world(camera, viewport_logical, inst));
+            }
             instances
         };
         let instance_count = self.cards.update(
@@ -338,6 +372,7 @@ impl Renderer {
                 editing: editing_index,
                 editing_buffer,
                 overlay_texts: overlay.texts,
+                screen_texts: overlay.screen_texts,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
@@ -366,7 +401,9 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
-            self.grid.draw(&mut pass);
+            if self.grid_visible {
+                self.grid.draw(&mut pass);
+            }
             self.cards.draw(&mut pass, instance_count);
             self.thumbs.draw(&mut pass, thumb_count);
             if let Err(err) = self.text.draw(&mut pass) {
@@ -381,5 +418,50 @@ impl Renderer {
             instances: instance_count,
             cpu_ms: cpu_start.elapsed().as_secs_f32() * 1000.0,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inst() -> CardInstance {
+        CardInstance {
+            pos: [100.0, 50.0],
+            size: [200.0, 120.0],
+            fill: [0.1, 0.1, 0.1, 1.0],
+            border: [0.0; 4],
+            params: [8.0, 0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Screen→world конверсия оверлея: обратное преобразование камерой
+    /// возвращает исходные логические px при любом зуме и позиции камеры.
+    #[test]
+    fn screen_overlay_round_trip() {
+        let viewport = [1600.0, 900.0];
+        for zoom in [0.05, 0.5, 1.0, 2.5, 4.0] {
+            let mut camera = Camera::default();
+            camera.set_zoom_at(zoom, [400.0, 300.0], viewport);
+            camera.pan([33.0, -71.0]);
+            let world = screen_instance_to_world(&camera, viewport, &inst());
+            // Обратно на экран: позиция совпадает с исходной
+            let screen = camera.world_to_screen(world.pos, viewport);
+            assert!(
+                (screen[0] - 100.0).abs() < 0.01,
+                "zoom {zoom}: x={}",
+                screen[0]
+            );
+            assert!(
+                (screen[1] - 50.0).abs() < 0.01,
+                "zoom {zoom}: y={}",
+                screen[1]
+            );
+            // Размер на экране константен: world-размер * zoom = исходный
+            assert!((world.size[0] * camera.zoom() - 200.0).abs() < 0.01);
+            assert!((world.size[1] * camera.zoom() - 120.0).abs() < 0.01);
+            // Радиус скругления тоже константен на экране
+            assert!((world.params[0] * camera.zoom() - 8.0).abs() < 0.01);
+        }
     }
 }
