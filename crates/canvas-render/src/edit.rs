@@ -341,12 +341,25 @@ impl EditingSession {
         })
     }
 
-    /// Высота контента в пикселях буфера (T7): число видимых строк layout
-    /// (с учётом wrap) × высоту строки. Для автороста заметки под текст.
-    pub fn content_height_px(&mut self, font_system: &mut FontSystem) -> f32 {
+    /// Размер контента (ширина самой длинной строки, высота всех строк) в
+    /// пикселях буфера (T7). Для автороста заметки под текст.
+    ///
+    /// Буфер ограничен высотой тела карточки, и при переполнении layout
+    /// обрезается — измеряем со снятым ограничением высоты, затем размер
+    /// буфера восстанавливается (иначе set_layout не заметит разницы).
+    pub fn content_size_px(&mut self, font_system: &mut FontSystem) -> (f32, f32) {
+        let (width, height, _) = self.layout;
+        self.buffer.set_size(font_system, Some(width), None);
         self.buffer.shape_until_scroll(font_system, false);
-        let lines = self.buffer.layout_runs().count().max(1) as f32;
-        lines * self.line_height_px
+        let mut lines = 0usize;
+        let mut max_width = 0.0f32;
+        for run in self.buffer.layout_runs() {
+            lines += 1;
+            max_width = max_width.max(run.line_w);
+        }
+        let size = (max_width, lines.max(1) as f32 * self.line_height_px);
+        self.buffer.set_size(font_system, Some(width), Some(height));
+        size
     }
 
     /// Буфер для рендера (TextArea в TextSystem).
@@ -491,22 +504,43 @@ mod tests {
         assert_eq!(caret[3], BODY_LINE_HEIGHT * 2.0);
     }
 
-    /// Высота контента (T7): по строкам текста, wrap увеличивает счёт.
+    /// Размер контента (T7): высота по строкам, wrap увеличивает счёт;
+    /// переполнение измеряется даже когда буфер по высоте меньше контента.
     #[test]
-    fn content_height_tracks_lines() {
+    fn content_size_tracks_lines() {
         let (mut fs, mut s) = session("одна строка");
-        assert_eq!(s.content_height_px(&mut fs), BODY_LINE_HEIGHT);
+        assert_eq!(s.content_size_px(&mut fs).1, BODY_LINE_HEIGHT);
         // Две строки — двойная высота
         let (mut fs, mut s) = session("один\nдва");
-        assert_eq!(s.content_height_px(&mut fs), BODY_LINE_HEIGHT * 2.0);
+        assert_eq!(s.content_size_px(&mut fs).1, BODY_LINE_HEIGHT * 2.0);
         // Длинная строка wrap'ится: в буфере 100px шириной строк больше одной
         let mut fs2 = FontSystem::new();
         let mut s =
             EditingSession::new(&mut fs2, 0, &"длинное слово ".repeat(30), 100.0, 500.0, 1.0);
         assert!(
-            s.content_height_px(&mut fs2) > BODY_LINE_HEIGHT,
+            s.content_size_px(&mut fs2).1 > BODY_LINE_HEIGHT,
             "wrap должен дать больше одной строки"
         );
+        // Контент выше буфера: высота измеряется полностью, без clip
+        let mut fs3 = FontSystem::new();
+        let mut s = EditingSession::new(&mut fs3, 0, "1\n2\n3\n4\n5\n6\n7\n8", 200.0, 40.0, 1.0);
+        assert_eq!(
+            s.content_size_px(&mut fs3).1,
+            BODY_LINE_HEIGHT * 8.0,
+            "переполнение должно измеряться целиком"
+        );
+        // Ширина — самая длинная строка layout
+        let mut fs4 = FontSystem::new();
+        let mut s = EditingSession::new(
+            &mut fs4,
+            0,
+            "короткая\nочень очень длинная строка",
+            600.0,
+            200.0,
+            1.0,
+        );
+        let (w, _) = s.content_size_px(&mut fs4);
+        assert!(w > 100.0, "ширина длинной строки: {w}");
     }
 
     /// Маппинг клавиш: Enter — commit, Shift+Enter — новая строка, Esc — cancel,

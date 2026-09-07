@@ -50,6 +50,24 @@ const MENU_ITEMS: [Option<&str>; 7] = [
 /// Фон меню — тёмный, почти непрозрачный.
 const MENU_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.97];
 
+/// Минимальные размеры ноды (ручной resize, T7).
+const MIN_NODE_WIDTH: f32 = 160.0;
+const MIN_NODE_HEIGHT: f32 = 64.0;
+/// Потолок автороста ширины заметки под контент (T7).
+const MAX_NOTE_WIDTH: f32 = 600.0;
+/// Зона захвата в правом нижнем углу ноды для ручного resize (world-px, T7).
+const RESIZE_HANDLE: f32 = 16.0;
+
+/// Точка в зоне resize (правый нижний угол ноды)? Чистая функция для тестов.
+fn in_resize_corner(node: &Node, point: Vec2) -> bool {
+    let right = node.x + node.width;
+    let bottom = node.y + node.height;
+    point[0] >= right - RESIZE_HANDLE
+        && point[0] <= right
+        && point[1] >= bottom - RESIZE_HANDLE
+        && point[1] <= bottom
+}
+
 /// Контекстное меню ноды (T7): палитра цветов в world-точке клика ПКМ.
 struct ContextMenu {
     node: usize,
@@ -342,6 +360,8 @@ struct App {
     clipboard: Clipboard,
     /// Открытое контекстное меню ноды (ПКМ, T7).
     menu: Option<ContextMenu>,
+    /// Ручной resize ноды за правый нижний угол (T7): индекс ноды.
+    resizing: Option<usize>,
 }
 
 impl App {
@@ -367,6 +387,7 @@ impl App {
             double_click: DoubleClick::new(),
             clipboard: Clipboard::new(),
             menu: None,
+            resizing: None,
         }
     }
 
@@ -409,27 +430,37 @@ impl App {
         self.scene.selected = Some(index);
         self.scene.dragging = None;
         // Давняя заметка могла переполниться до нас (загрузка из файла) —
-        // подгоняем высоту сразу при входе в редактирование
-        self.fit_note_height();
+        // подгоняем размер сразу при входе в редактирование
+        self.fit_note_size();
         self.request_redraw();
     }
 
-    /// Подрастить редактируемую заметку по высоте контента (T7): текст не
-    /// должен уходить за границы карточки. Только рост — ужатие не делаем.
-    fn fit_note_height(&mut self) {
+    /// Подрастить редактируемую заметку под контент (T7): текст не должен
+    /// уходить за границы карточки. Высота — по числу строк layout, ширина —
+    /// по самой длинной строке (с потолком MAX_NOTE_WIDTH). Только рост.
+    fn fit_note_size(&mut self) {
         let zoom_px = self.zoom_px();
         let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
         else {
             return;
         };
-        let content_px = session.content_height_px(renderer.font_system_mut());
+        let (content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
         let index = session.node();
-        let needed = HEADER_HEIGHT + BODY_TOP_GAP + content_px / zoom_px + BODY_PADDING;
+        let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING;
+        let needed_w = (content_w_px / zoom_px + BODY_PADDING * 2.0).min(MAX_NOTE_WIDTH);
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
             return;
         };
-        if needed > node.height + 0.5 {
-            node.height = needed;
+        let mut changed = false;
+        if needed_h > node.height + 0.5 {
+            node.height = needed_h;
+            changed = true;
+        }
+        if needed_w > node.width + 0.5 {
+            node.width = needed_w;
+            changed = true;
+        }
+        if changed {
             self.scene.spatial.update(index, node);
             self.scene.mark_dirty();
         }
@@ -780,7 +811,7 @@ impl App {
                         false
                     };
                     if pasted {
-                        self.fit_note_height();
+                        self.fit_note_size();
                         self.request_redraw();
                     }
                 }
@@ -796,7 +827,7 @@ impl App {
                     if applied {
                         // Текст мог вырасти (wrap/новые строки) — подгоняем
                         // высоту заметки под контент прямо во время набора
-                        self.fit_note_height();
+                        self.fit_note_size();
                         self.request_redraw();
                     }
                 }
@@ -883,6 +914,15 @@ impl App {
                     self.request_redraw();
                     return;
                 }
+                // Ручной resize (T7): захват за правый нижний угол ноды
+                if let Some(index) = hit {
+                    if in_resize_corner(&self.scene.canvas.nodes[index], world) {
+                        self.scene.selected = Some(index);
+                        self.resizing = Some(index);
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 match hit {
                     Some(index) => {
                         self.scene.selected = Some(index);
@@ -896,6 +936,7 @@ impl App {
             ElementState::Released => {
                 self.scene.dragging = None;
                 self.editor_dragging = false;
+                self.resizing = None;
             }
         }
     }
@@ -953,7 +994,18 @@ impl App {
             self.request_redraw();
         }
         if !self.space_pressed {
-            if let Some((index, offset)) = self.scene.dragging {
+            // Ручной resize за правый нижний угол (T7): размеры клампятся
+            // минимумом, spatial index обновляется инкрементально
+            if let Some(index) = self.resizing {
+                let world = self.cursor_world();
+                if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                    node.width = (world[0] - node.x).max(MIN_NODE_WIDTH);
+                    node.height = (world[1] - node.y).max(MIN_NODE_HEIGHT);
+                    self.scene.spatial.update(index, node);
+                    self.scene.mark_dirty();
+                }
+                self.request_redraw();
+            } else if let Some((index, offset)) = self.scene.dragging {
                 let world = self.cursor_world();
                 // Модель + инкрементальное обновление spatial index (T5)
                 self.scene
@@ -1267,6 +1319,23 @@ mod tests {
         );
         // Вертикальный паддинг между рамкой и первым пунктом — промах
         assert_eq!(menu_item_at(origin, [110.0, 51.0]), None);
+    }
+
+    /// Зона resize (T7): правый нижний угол ноды, границы включительны.
+    #[test]
+    fn resize_corner_hit_zone() {
+        let mut node = Node::text("n", "t", 100.0, 100.0);
+        node.width = 260.0;
+        node.height = 120.0;
+        // Угол (360, 220): внутри зоны
+        assert!(in_resize_corner(&node, [355.0, 215.0]));
+        assert!(in_resize_corner(&node, [360.0, 220.0]));
+        // Снаружи: левее/выше зоны, за пределами ноды
+        assert!(!in_resize_corner(&node, [340.0, 215.0]));
+        assert!(!in_resize_corner(&node, [355.0, 200.0]));
+        assert!(!in_resize_corner(&node, [365.0, 220.0]));
+        // Противоположный угол — не resize
+        assert!(!in_resize_corner(&node, [105.0, 105.0]));
     }
 
     /// Парсинг аргументов: --stress N, --stress=N, путь, дефолты.
