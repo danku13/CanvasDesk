@@ -21,6 +21,8 @@ use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
 
 /// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
 const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
+/// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
+const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
 
 /// Оверлеи кадра от приложения (контекстное меню, T7): дополнительные
 /// инстансы квадов (рисуются поверх карточек, под текстом) и их подписи.
@@ -250,6 +252,23 @@ impl Renderer {
         );
         let instances = {
             let mut instances = build_instances(scene.canvas, &indices, scene.selected);
+            // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
+            // шейпинга (при промахе появятся на следующий кадр), под текстом
+            for &index in &indices {
+                if let Some((entry_zoom, rects)) = self.text.highlight_rects(index) {
+                    if let Some(node) = scene.canvas.nodes.get(index) {
+                        let (origin, _, _) = body_area(node);
+                        for rect in rects {
+                            instances.push(Self::overlay_quad(
+                                origin,
+                                *rect,
+                                entry_zoom,
+                                HIGHLIGHT_FILL,
+                            ));
+                        }
+                    }
+                }
+            }
             // Оверлеи редактирования (T7): выделение и каретка — квады поверх
             // карточки редактируемой ноды, под текстом (текст рисуется позже)
             if let Some(session) = editing.as_deref_mut() {

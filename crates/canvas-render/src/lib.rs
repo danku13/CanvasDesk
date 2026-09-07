@@ -10,6 +10,7 @@ pub mod config;
 pub mod edit;
 pub mod gpu;
 pub mod grid;
+pub mod markdown;
 pub mod renderer;
 pub mod stats;
 pub mod text;

@@ -6,6 +6,7 @@
 use canvas_core::Node;
 
 use crate::camera::Camera;
+use crate::markdown;
 
 /// Высота заголовка карточки в world-пикселях.
 pub const HEADER_HEIGHT: f32 = 28.0;
@@ -74,7 +75,8 @@ pub fn title_for(node: &Node) -> String {
     }
     if let Some(text) = &node.text {
         if let Some(line) = text.lines().next().filter(|line| !line.is_empty()) {
-            return line.to_owned();
+            // Маркеры форматирования (**...**, ==...==) в заголовке не показываем
+            return markdown::strip(line);
         }
     }
     if let Some(label) = &node.label {
@@ -388,6 +390,9 @@ mod tests {
         assert_eq!(title_for(&unix), "SPEC.md");
         let text = Node::text("n", "Первая строка\nвторая", 0.0, 0.0);
         assert_eq!(title_for(&text), "Первая строка");
+        // Маркеры форматирования в заголовке стрипятся
+        let styled = Node::text("n", "**Важно** и ==срочно==", 0.0, 0.0);
+        assert_eq!(title_for(&styled), "Важно и срочно");
         let mut group = Node::text("n", "", 0.0, 0.0);
         group.text = None;
         group.label = Some("Группа".into());

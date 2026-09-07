@@ -10,12 +10,13 @@ use std::collections::HashMap;
 
 use canvas_core::{Canvas, Node, NodeKind};
 use glyphon::{
-    Attrs, Buffer, Cache, Color, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport, Wrap,
+    Attrs, Buffer, Cache, Color, Cursor, FontSystem, Metrics, Resolution, Shaping, Style,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
 };
 
 use crate::camera::Camera;
 use crate::cards::{extension_letter, title_for, HEADER_HEIGHT};
+use crate::markdown;
 
 /// Встроенный шрифт (assets/fonts/Inter.ttf, SIL OFL — см. assets/fonts/OFL.txt).
 const FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
@@ -79,6 +80,67 @@ pub fn body_area(node: &Node) -> ([f32; 2], f32, f32) {
     (origin, width, height)
 }
 
+/// Байтовый offset в тексте → курсор (строка, байтовый индекс в строке).
+/// Offset за концом текста клампится в конец последней строки.
+pub fn offset_to_cursor(text: &str, offset: usize) -> Cursor {
+    let mut rest = offset.min(text.len());
+    for (line_i, line) in text.split('\n').enumerate() {
+        if rest <= line.len() {
+            return Cursor::new(line_i, rest);
+        }
+        rest -= line.len() + 1;
+    }
+    let last = text.split('\n').count().saturating_sub(1);
+    let last_len = text.rsplit('\n').next().map(str::len).unwrap_or(0);
+    Cursor::new(last, last_len)
+}
+
+/// Спаны стилей (markdown.rs) → непрерывное покрытие текста парами
+/// (&str, Attrs) для set_rich_text: bold → Weight::BOLD, italic → Style::Italic.
+/// Highlight здесь не применяется — это фон-подложка (highlight_rects).
+fn rich_spans<'a>(plain: &'a str, spans: &[markdown::StyleSpan]) -> Vec<(&'a str, Attrs<'a>)> {
+    let mut out = Vec::with_capacity(spans.len() * 2 + 1);
+    let mut pos = 0usize;
+    for span in spans {
+        if span.start > pos {
+            out.push((&plain[pos..span.start], Attrs::new()));
+        }
+        let mut attrs = Attrs::new();
+        if span.bold {
+            attrs = attrs.weight(Weight::BOLD);
+        }
+        if span.italic {
+            attrs = attrs.style(Style::Italic);
+        }
+        out.push((&plain[span.start..span.end], attrs));
+        pos = span.end;
+    }
+    if pos < plain.len() {
+        out.push((&plain[pos..], Attrs::new()));
+    }
+    // Пустой текст (например, "****" без контента) — один пустой спан
+    if out.is_empty() {
+        out.push(("", Attrs::new()));
+    }
+    out
+}
+
+/// Прямоугольники фон-подсветки `==…==` в пикселях буфера: диапазоны спанов →
+/// квады по layout runs (та же механика, что у выделения в редакторе, edit.rs).
+fn highlight_rects(buffer: &Buffer, plain: &str, spans: &[markdown::StyleSpan]) -> Vec<[f32; 4]> {
+    let mut rects = Vec::new();
+    for span in spans.iter().filter(|s| s.highlight) {
+        let start = offset_to_cursor(plain, span.start);
+        let end = offset_to_cursor(plain, span.end);
+        for run in buffer.layout_runs() {
+            if let Some((x, width)) = run.highlight(start, end) {
+                rects.push([x, run.line_top, width.max(1.0), run.line_height]);
+            }
+        }
+    }
+    rects
+}
+
 /// Ключ свежести кэша текста ноды: зум, ширина заголовка, заголовок и тело.
 #[derive(Debug, Clone, Copy)]
 struct CacheKey<'a> {
@@ -134,6 +196,9 @@ struct CachedTitle {
     icon: Option<Buffer>,
     /// Тело заметки (T7) — только у text-нод с непустым текстом.
     body: Option<Buffer>,
+    /// Прямоугольники фон-подсветки `==…==` в px буфера тела (форматирование).
+    /// Считаются при шейпинге тела; рендер конвертирует в world через zoom_px.
+    highlight_rects: Vec<[f32; 4]>,
     zoom_px: f32,
     width_px: f32,
     title_text: String,
@@ -282,7 +347,10 @@ impl TextSystem {
                         icon
                     });
 
-                    // Тело заметки (T7): wrap по ширине карточки, многострочное
+                    // Тело заметки (T7): wrap по ширине карточки, многострочное.
+                    // Маркеры форматирования (**...**, *...*, ==...==) —
+                    // в спаны стилей (set_rich_text), подсветка — в квады-фон.
+                    let mut highlight_quads = Vec::new();
                     let body = if body_text.is_empty() {
                         None
                     } else {
@@ -297,13 +365,15 @@ impl TextSystem {
                             Some(body_width * zoom_px),
                             Some(body_height * zoom_px),
                         );
-                        body.set_text(
+                        let (plain, spans) = markdown::parse(&body_text);
+                        body.set_rich_text(
                             &mut self.font_system,
-                            &body_text,
+                            rich_spans(&plain, &spans),
                             Attrs::new(),
                             Shaping::Advanced,
                         );
                         body.shape_until_scroll(&mut self.font_system, false);
+                        highlight_quads = highlight_rects(&body, &plain, &spans);
                         Some(body)
                     };
 
@@ -313,6 +383,7 @@ impl TextSystem {
                             title,
                             icon,
                             body,
+                            highlight_rects: highlight_quads,
                             zoom_px,
                             width_px,
                             title_text,
@@ -533,6 +604,17 @@ impl TextSystem {
     pub fn font_system_mut(&mut self) -> &mut FontSystem {
         &mut self.font_system
     }
+
+    /// Прямоугольники фон-подсветки `==…==` ноды: (zoom_px записи кэша, квады
+    /// в px буфера тела). None — подсветки нет или тело не в кэше (промах —
+    /// квады появятся со следующего кадра, после шейпинга в prepare_titles).
+    pub fn highlight_rects(&self, index: usize) -> Option<(f32, &[[f32; 4]])> {
+        let entry = self.cache.get(&index)?;
+        if entry.highlight_rects.is_empty() {
+            return None;
+        }
+        Some((entry.zoom_px, entry.highlight_rects.as_slice()))
+    }
 }
 
 #[cfg(test)]
@@ -642,5 +724,87 @@ mod tests {
         });
         assert_eq!(width, 0.0);
         assert_eq!(height, 0.0);
+    }
+
+    /// offset_to_cursor: байтовый offset → (строка, индекс в строке),
+    /// кириллица (2 байта/символ), границы строк, кламп за концом.
+    #[test]
+    fn offset_to_cursor_maps_bytes() {
+        let text = "аб\nвгд"; // строки по 4 и 6 байт
+        assert_eq!(offset_to_cursor(text, 0), Cursor::new(0, 0));
+        assert_eq!(offset_to_cursor(text, 2), Cursor::new(0, 2));
+        // Конец первой строки — курсор в конец её, а не в начало следующей
+        assert_eq!(offset_to_cursor(text, 4), Cursor::new(0, 4));
+        // '\n' (offset 4..5) пропускается: offset 5 — начало второй строки
+        assert_eq!(offset_to_cursor(text, 5), Cursor::new(1, 0));
+        assert_eq!(offset_to_cursor(text, 11), Cursor::new(1, 6));
+        // За концом — кламп в конец последней строки
+        assert_eq!(offset_to_cursor(text, 100), Cursor::new(1, 6));
+        // Текст с trailing newline: offset '\n' — конец предыдущей строки
+        assert_eq!(offset_to_cursor("а\n", 2), Cursor::new(0, 2));
+    }
+
+    /// rich_spans: непрерывное покрытие текста, стили на спанах, зазоры — дефолт.
+    #[test]
+    fn rich_spans_cover_text() {
+        let (plain, spans) = markdown::parse("а **б** в *г*");
+        let rich = rich_spans(&plain, &spans);
+        // Склейка спанов возвращает исходный текст
+        let joined: String = rich.iter().map(|(s, _)| *s).collect();
+        assert_eq!(joined, plain);
+        // 5 кусков: дефолт, bold, дефолт, italic, дефолт(пустой хвост — нет)
+        assert_eq!(rich.len(), 4);
+        assert_eq!(rich[1].0, "б");
+        assert_eq!(rich[1].1.weight, Weight::BOLD);
+        assert_eq!(rich[3].0, "г");
+        assert_eq!(rich[3].1.style, Style::Italic);
+        assert_eq!(rich[0].1.weight, Weight::NORMAL);
+    }
+
+    /// Пустой чистый текст (только маркеры) — один пустой спан, без паники.
+    #[test]
+    fn rich_spans_empty() {
+        let (plain, spans) = markdown::parse("****");
+        let rich = rich_spans(&plain, &spans);
+        assert_eq!(rich.len(), 1);
+        assert_eq!(rich[0].0, "");
+    }
+
+    /// highlight_rects: квады подсветки по layout runs реального буфера;
+    /// количество квадов = числу видимых строк спана.
+    #[test]
+    fn highlight_rects_follow_layout() {
+        let mut fs = FontSystem::new();
+        let (plain, spans) = markdown::parse("==раз два==\nтри ==четыре==");
+        let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
+        buffer.set_wrap(&mut fs, Wrap::Word);
+        buffer.set_size(&mut fs, Some(400.0), Some(200.0));
+        buffer.set_rich_text(
+            &mut fs,
+            rich_spans(&plain, &spans),
+            Attrs::new(),
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let rects = highlight_rects(&buffer, &plain, &spans);
+        assert_eq!(rects.len(), 2, "по одному кваду на строку спана: {rects:?}");
+        // Первый спан — с начала строки, второй — после слова "три "
+        assert_eq!(rects[0][0], 0.0);
+        assert!(rects[1][0] > 0.0, "второй спан не с края: {rects:?}");
+        assert_eq!(rects[0][3], 20.0, "высота квада = высоте строки");
+        assert!(rects[1][1] > rects[0][1], "вторая строка ниже первой");
+
+        // Без маркеров — без квадов
+        let (plain, spans) = markdown::parse("без подсветки");
+        let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
+        buffer.set_size(&mut fs, Some(400.0), Some(200.0));
+        buffer.set_rich_text(
+            &mut fs,
+            rich_spans(&plain, &spans),
+            Attrs::new(),
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        assert!(highlight_rects(&buffer, &plain, &spans).is_empty());
     }
 }

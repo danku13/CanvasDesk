@@ -15,7 +15,103 @@ use cosmic_text::{Action, Buffer, Cursor, Edit, Editor, FontSystem, Metrics, Mot
 use glyphon::{Attrs, Shaping, Wrap};
 use winit::keyboard::{Key, NamedKey};
 
-use crate::text::{BODY_FONT_SIZE, BODY_LINE_HEIGHT};
+use crate::text::{offset_to_cursor, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
+
+/// Маркер форматирования текста заметки (пост-T7): markdown-подмножество,
+/// см. markdown.rs. Хоткеи Ctrl+B/I/H тогглят маркер на выделении.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marker {
+    /// `**жирный**` (Ctrl+B).
+    Bold,
+    /// `*курсив*` (Ctrl+I).
+    Italic,
+    /// `==подсветка==` (Ctrl+H).
+    Highlight,
+}
+
+impl Marker {
+    fn as_str(self) -> &'static str {
+        match self {
+            Marker::Bold => "**",
+            Marker::Italic => "*",
+            Marker::Highlight => "==",
+        }
+    }
+}
+
+/// Курсор (строка, байтовый индекс) → линейный байтовый offset в тексте,
+/// где строки соединены '\n' (формат `EditingSession::text()`).
+fn cursor_to_offset(text: &str, cursor: Cursor) -> usize {
+    let mut offset = 0usize;
+    for (i, line) in text.split('\n').enumerate() {
+        if i == cursor.line {
+            return offset + cursor.index.min(line.len());
+        }
+        offset += line.len() + 1;
+    }
+    text.len()
+}
+
+/// Тоггл маркера форматирования на выделении (чистая функция, TDD):
+/// - выделение уже обёрнуто этим маркером — маркеры снимаются;
+/// - выделение есть — оборачивается, выделение смещается на контент;
+/// - выделения нет — пара маркеров вставляется в позицию курсора,
+///   курсор оказывается между ними.
+///
+/// `selection`/`cursor` и результат — линейные байтовые offsets.
+/// Возвращает (новый текст, курсор, выделение).
+pub fn toggle_marker_text(
+    text: &str,
+    cursor: usize,
+    selection: Option<(usize, usize)>,
+    marker: &str,
+) -> (String, usize, Option<(usize, usize)>) {
+    let cursor = cursor.min(text.len());
+    let m = marker.len();
+    match selection {
+        Some((start, end)) if start < end && end <= text.len() => {
+            let before = &text[..start];
+            let after = &text[end..];
+            // Снятие засчитывается, только если вокруг выделения именно этот
+            // маркер: одиночная '*' не должна совпасть с частью '**'
+            let wrapped = if marker == "*" {
+                before.ends_with('*')
+                    && !before.ends_with("**")
+                    && after.starts_with('*')
+                    && !after.starts_with("**")
+            } else {
+                before.ends_with(marker) && after.starts_with(marker)
+            };
+            if wrapped {
+                // Снятие: маркеры вокруг выделения удаляются
+                let mut new = String::with_capacity(text.len() - 2 * m);
+                new.push_str(&before[..before.len() - m]);
+                new.push_str(&text[start..end]);
+                new.push_str(&after[m..]);
+                let sel = (start - m, end - m);
+                (new, sel.1, Some(sel))
+            } else {
+                // Оборачивание: выделение смещается на контент без маркеров
+                let mut new = String::with_capacity(text.len() + 2 * m);
+                new.push_str(before);
+                new.push_str(marker);
+                new.push_str(&text[start..end]);
+                new.push_str(marker);
+                new.push_str(after);
+                let sel = (start + m, end + m);
+                (new, sel.1, Some(sel))
+            }
+        }
+        _ => {
+            let mut new = String::with_capacity(text.len() + 2 * m);
+            new.push_str(&text[..cursor]);
+            new.push_str(marker);
+            new.push_str(marker);
+            new.push_str(&text[cursor..]);
+            (new, cursor + m, None)
+        }
+    }
+}
 
 /// Ширина каретки в пикселях буфера.
 const CARET_WIDTH: f32 = 2.0;
@@ -41,6 +137,8 @@ pub enum KeyCommand {
     Cut,
     Paste,
     SelectAll,
+    /// Тоггл маркера форматирования на выделении (Ctrl+B/I/H).
+    ToggleMarker(Marker),
 }
 
 /// Маппинг клавиши winit в команду редактирования (T7).
@@ -80,6 +178,16 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
                     "x" | "X" | "ч" | "Ч" | "\u{18}" => Some(KeyCommand::Cut),
                     "v" | "V" | "м" | "М" | "\u{16}" => Some(KeyCommand::Paste),
                     "a" | "A" | "ф" | "Ф" | "\u{1}" => Some(KeyCommand::SelectAll),
+                    // Форматирование (Ctrl+B/I/H), латиница и кириллица
+                    "b" | "B" | "и" | "И" | "\u{2}" => {
+                        Some(KeyCommand::ToggleMarker(Marker::Bold))
+                    }
+                    "i" | "I" | "ш" | "Ш" | "\u{9}" => {
+                        Some(KeyCommand::ToggleMarker(Marker::Italic))
+                    }
+                    "h" | "H" | "р" | "Р" | "\u{8}" => {
+                        Some(KeyCommand::ToggleMarker(Marker::Highlight))
+                    }
                     _ => None,
                 };
             }
@@ -250,6 +358,10 @@ impl EditingSession {
                 self.selection = Selection::Normal(Cursor::new(0, 0));
                 self.cursor = Cursor::new(last_line, last_len);
             }
+            KeyCommand::ToggleMarker(marker) => {
+                let marker = *marker;
+                self.toggle_marker(font_system, marker);
+            }
             // Обрабатываются приложением
             _ => {}
         }
@@ -260,6 +372,32 @@ impl EditingSession {
     pub fn insert_text(&mut self, font_system: &mut FontSystem, text: &str) {
         self.with_editor(|editor| editor.insert_string(text, None));
         self.buffer.shape_until_scroll(font_system, false);
+    }
+
+    /// Тоггл маркера форматирования (Ctrl+B/I/H): обернуть выделение, снять
+    /// обёртку либо вставить пару маркеров в позицию курсора. Реализация —
+    /// чистая `toggle_marker_text` над текстом целиком; буфер пересобирается
+    /// (в редакторе стилей нет — маркеры видны как есть, source-режим).
+    pub fn toggle_marker(&mut self, font_system: &mut FontSystem, marker: Marker) {
+        let text = self.text();
+        let cursor = cursor_to_offset(&text, self.cursor);
+        let selection = match self.selection {
+            Selection::Normal(anchor) => {
+                let (a, b) = (cursor_to_offset(&text, anchor), cursor);
+                Some((a.min(b), a.max(b)))
+            }
+            _ => None,
+        };
+        let (new_text, new_cursor, new_selection) =
+            toggle_marker_text(&text, cursor, selection, marker.as_str());
+        self.buffer
+            .set_text(font_system, &new_text, Attrs::new(), Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system, false);
+        self.cursor = offset_to_cursor(&new_text, new_cursor);
+        self.selection = match new_selection {
+            Some((start, _)) => Selection::Normal(offset_to_cursor(&new_text, start)),
+            None => Selection::None,
+        };
     }
 
     /// Вырезать выделение: вернуть текст и удалить его из буфера.
@@ -483,6 +621,57 @@ mod tests {
         assert_eq!(session.text(), "");
     }
 
+    /// Тоггл маркера (чистая функция): обернуть, снять, пара без выделения.
+    #[test]
+    fn toggle_marker_text_wrap_unwrap() {
+        // Оборачивание выделения (кириллица: «два» — байты 7..13)
+        let (text, cursor, sel) = toggle_marker_text("раз два три", 13, Some((7, 13)), "**");
+        assert_eq!(text, "раз **два** три");
+        assert_eq!(sel, Some((9, 15)), "выделение смещается на контент");
+        assert_eq!(cursor, 15);
+        // Повторный тоггл тем же выделением — снятие
+        let (text, cursor, sel) = toggle_marker_text(&text, 15, sel, "**");
+        assert_eq!(text, "раз два три");
+        assert_eq!(sel, Some((7, 13)));
+        assert_eq!(cursor, 13);
+        // Без выделения — пара маркеров, курсор между ними (конец «текст» — байт 10)
+        let (text, cursor, sel) = toggle_marker_text("текст", 10, None, "==");
+        assert_eq!(text, "текст====");
+        assert_eq!(cursor, 12);
+        assert_eq!(sel, None);
+        // Курсор в начале
+        let (text, _, _) = toggle_marker_text("", 0, None, "*");
+        assert_eq!(text, "**");
+        // Разные маркеры независимы: * вокруг ** не снимается тогглом *
+        let (text, _, _) = toggle_marker_text("**x**", 4, Some((2, 3)), "*");
+        assert_eq!(text, "***x***");
+    }
+
+    /// Тоггл маркера в сессии: SelectAll + Ctrl+B оборачивает весь текст,
+    /// кириллица (многобайтовые offsets) корректна, многострочное выделение.
+    #[test]
+    fn toggle_marker_in_session() {
+        let (mut fs, mut s) = session("привет мир");
+        s.apply(&mut fs, KeyCommand::SelectAll);
+        s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Bold));
+        assert_eq!(s.text(), "**привет мир**");
+        // Выделение осталось на контенте: следующий тоггл снимает маркеры
+        s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Bold));
+        assert_eq!(s.text(), "привет мир");
+
+        // Многострочное: выделить всё и обернуть подсветкой
+        let (mut fs, mut s) = session("раз\nдва");
+        s.apply(&mut fs, KeyCommand::SelectAll);
+        s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Highlight));
+        assert_eq!(s.text(), "==раз\nдва==");
+
+        // Без выделения: пара маркеров, ввод попадает между ними
+        let (mut fs, mut s) = session("");
+        s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Italic));
+        s.apply(&mut fs, KeyCommand::Insert("курсив".into()));
+        assert_eq!(s.text(), "*курсив*");
+    }
+
     /// Многострочность через Action::Enter (Shift+Enter на уровне приложения).
     #[test]
     fn shift_enter_newline() {
@@ -574,6 +763,28 @@ mod tests {
         assert_eq!(
             map_key(&Key::Character("ф".into()), true, false),
             Some(KeyCommand::SelectAll)
+        );
+        // Форматирование: Ctrl+B/I/H, латиница и кириллица
+        assert_eq!(
+            map_key(&Key::Character("b".into()), true, false),
+            Some(KeyCommand::ToggleMarker(Marker::Bold))
+        );
+        assert_eq!(
+            map_key(&Key::Character("и".into()), true, false),
+            Some(KeyCommand::ToggleMarker(Marker::Bold))
+        );
+        assert_eq!(
+            map_key(&Key::Character("ш".into()), true, false),
+            Some(KeyCommand::ToggleMarker(Marker::Italic))
+        );
+        assert_eq!(
+            map_key(&Key::Character("р".into()), true, false),
+            Some(KeyCommand::ToggleMarker(Marker::Highlight))
+        );
+        // Без Ctrl эти буквы — обычная вставка
+        assert_eq!(
+            map_key(&Key::Character("b".into()), false, false),
+            Some(KeyCommand::Insert("b".into()))
         );
         assert_eq!(
             map_key(&Key::Character("я".into()), false, false),
