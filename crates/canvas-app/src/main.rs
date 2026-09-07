@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use canvas_core::{Canvas, Node, NodeKind, SpatialIndex, ThumbnailProvider};
 use canvas_render::camera::Vec2;
-use canvas_render::cards::{preset_color, CardInstance};
+use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
 use canvas_render::edit::{map_key, EditingSession, KeyCommand};
-use canvas_render::text::{body_area, OverlayText};
+use canvas_render::text::{body_area, OverlayText, BODY_PADDING, BODY_TOP_GAP};
 use canvas_render::{Camera, FrameMeter, FrameOverlay, FrameStats, SceneView};
 use canvas_shell::{Priority, ThumbService};
 use winit::application::ApplicationHandler;
@@ -408,7 +408,31 @@ impl App {
         self.editing = Some(session);
         self.scene.selected = Some(index);
         self.scene.dragging = None;
+        // Давняя заметка могла переполниться до нас (загрузка из файла) —
+        // подгоняем высоту сразу при входе в редактирование
+        self.fit_note_height();
         self.request_redraw();
+    }
+
+    /// Подрастить редактируемую заметку по высоте контента (T7): текст не
+    /// должен уходить за границы карточки. Только рост — ужатие не делаем.
+    fn fit_note_height(&mut self) {
+        let zoom_px = self.zoom_px();
+        let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
+        else {
+            return;
+        };
+        let content_px = session.content_height_px(renderer.font_system_mut());
+        let index = session.node();
+        let needed = HEADER_HEIGHT + BODY_TOP_GAP + content_px / zoom_px + BODY_PADDING;
+        let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
+            return;
+        };
+        if needed > node.height + 0.5 {
+            node.height = needed;
+            self.scene.spatial.update(index, node);
+            self.scene.mark_dirty();
+        }
     }
 
     /// Завершить редактирование (T7): commit — записать текст в модель и
@@ -747,18 +771,32 @@ impl App {
                 }
                 KeyCommand::Paste => {
                     let text = self.clipboard.get();
-                    if let (Some(text), Some(session), Some(renderer)) =
+                    let pasted = if let (Some(text), Some(session), Some(renderer)) =
                         (text, self.editing.as_mut(), self.renderer.as_mut())
                     {
                         session.insert_text(renderer.font_system_mut(), &text);
+                        true
+                    } else {
+                        false
+                    };
+                    if pasted {
+                        self.fit_note_height();
                         self.request_redraw();
                     }
                 }
                 other => {
-                    if let (Some(session), Some(renderer)) =
+                    let applied = if let (Some(session), Some(renderer)) =
                         (self.editing.as_mut(), self.renderer.as_mut())
                     {
                         session.apply(renderer.font_system_mut(), other);
+                        true
+                    } else {
+                        false
+                    };
+                    if applied {
+                        // Текст мог вырасти (wrap/новые строки) — подгоняем
+                        // высоту заметки под контент прямо во время набора
+                        self.fit_note_height();
                         self.request_redraw();
                     }
                 }

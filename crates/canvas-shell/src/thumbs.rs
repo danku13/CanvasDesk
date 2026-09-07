@@ -213,6 +213,28 @@ mod tests {
         assert_eq!(px, vec![30, 20, 10, 255, 7]);
     }
 
+    /// Интеграционные shell-тесты идут последовательно и с ретраями:
+    /// IShellItemImageFactory на свежесозданном файле изредка возвращает
+    /// transient-ошибку, когда тесты бегут параллельно.
+    static SHELL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn thumbnail_with_retry(path: &std::path::Path) -> Thumbnail {
+        let _guard = SHELL_TEST_LOCK.lock().expect("shell test lock");
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            match ShellThumbnailProvider.thumbnail(path, 256) {
+                Ok(thumb) => return thumb,
+                Err(err) => {
+                    last_err = err.to_string();
+                    if attempt < 2 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                }
+            }
+        }
+        panic!("shell thumbnail не получен после 3 попыток: {last_err}");
+    }
+
     /// Интеграционный (Windows): реальный файл → непустой RGBA8.
     /// Для .txt нет thumbnail-handler'а — срабатывает фолбэк SIIGBF_ICONONLY.
     #[test]
@@ -222,9 +244,7 @@ mod tests {
         let file = dir.join("note.txt");
         std::fs::write(&file, b"canvasdesk").expect("write");
 
-        let thumb = ShellThumbnailProvider
-            .thumbnail(&file, 256)
-            .expect("тамбнейл или иконка");
+        let thumb = thumbnail_with_retry(&file);
         assert!(thumb.width > 0 && thumb.height > 0);
         assert_eq!(thumb.rgba.len(), (thumb.width * thumb.height * 4) as usize);
 
@@ -243,9 +263,7 @@ mod tests {
         let mixed = format!("{}/note.txt", dir.display());
         assert!(mixed.contains('/') && mixed.contains('\\'));
 
-        ShellThumbnailProvider
-            .thumbnail(std::path::Path::new(&mixed), 256)
-            .expect("путь с прямыми слэшами");
+        thumbnail_with_retry(std::path::Path::new(&mixed));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
