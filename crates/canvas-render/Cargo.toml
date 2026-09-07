@@ -10,6 +10,7 @@ anyhow.workspace = true
 winit.workspace = true
 wgpu.workspace = true
 glyphon.workspace = true
+cosmic-text.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

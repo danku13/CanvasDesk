@@ -4,9 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use canvas_core::{Canvas, Node, SpatialIndex, ThumbnailProvider};
+use canvas_core::{Canvas, Node, NodeKind, SpatialIndex, ThumbnailProvider};
 use canvas_render::camera::Vec2;
-use canvas_render::{Camera, FrameMeter, FrameStats, SceneView};
+use canvas_render::cards::{preset_color, CardInstance};
+use canvas_render::edit::{map_key, EditingSession, KeyCommand};
+use canvas_render::text::{body_area, OverlayText};
+use canvas_render::{Camera, FrameMeter, FrameOverlay, FrameStats, SceneView};
 use canvas_shell::{Priority, ThumbService};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
@@ -21,6 +24,149 @@ const ZOOM_STEP_PER_LINE: f32 = 1.1;
 const PAN_PX_PER_LINE: f32 = 40.0;
 /// Debounce автосейва (SPEC §9).
 const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(2);
+/// Максимальный интервал между кликами двойного клика (winit его не даёт, T7).
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
+/// Максимальный сдвиг курсора между кликами двойного клика (логические px).
+const DOUBLE_CLICK_DIST: f64 = 5.0;
+
+/// Ширина контекстного меню в world-px (T7).
+const MENU_WIDTH: f32 = 170.0;
+/// Высота пункта меню в world-px.
+const MENU_ITEM_HEIGHT: f32 = 26.0;
+/// Внутренний отступ меню в world-px.
+const MENU_PADDING: f32 = 6.0;
+/// Сдвиг подписи пункта: слева место под образец цвета.
+const MENU_LABEL_X: f32 = 26.0;
+/// Пункты палитры (T7): пресеты "1".."6" + None — сброс цвета.
+const MENU_ITEMS: [Option<&str>; 7] = [
+    Some("1"),
+    Some("2"),
+    Some("3"),
+    Some("4"),
+    Some("5"),
+    Some("6"),
+    None,
+];
+/// Фон меню — тёмный, почти непрозрачный.
+const MENU_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.97];
+
+/// Контекстное меню ноды (T7): палитра цветов в world-точке клика ПКМ.
+struct ContextMenu {
+    node: usize,
+    origin: Vec2,
+}
+
+/// Rect пункта меню в world-координатах: [x, y, w, h].
+fn menu_item_rect(origin: Vec2, i: usize) -> [f32; 4] {
+    [
+        origin[0] + MENU_PADDING,
+        origin[1] + MENU_PADDING + i as f32 * MENU_ITEM_HEIGHT,
+        MENU_WIDTH - MENU_PADDING * 2.0,
+        MENU_ITEM_HEIGHT,
+    ]
+}
+
+/// Полный rect меню: [x, y, w, h].
+fn menu_rect(origin: Vec2) -> [f32; 4] {
+    [
+        origin[0],
+        origin[1],
+        MENU_WIDTH,
+        MENU_PADDING * 2.0 + MENU_ITEMS.len() as f32 * MENU_ITEM_HEIGHT,
+    ]
+}
+
+/// Hit-test пункта меню по world-точке (T7).
+fn menu_item_at(origin: Vec2, point: Vec2) -> Option<usize> {
+    let [x, y, w, h] = menu_rect(origin);
+    if point[0] < x
+        || point[0] > x + w
+        || point[1] < y + MENU_PADDING
+        || point[1] > y + h - MENU_PADDING
+    {
+        return None;
+    }
+    let i = ((point[1] - y - MENU_PADDING) / MENU_ITEM_HEIGHT) as usize;
+    (i < MENU_ITEMS.len()).then_some(i)
+}
+
+/// Подпись пункта меню.
+fn menu_label(item: Option<&str>) -> String {
+    match item {
+        Some(preset) => format!("Цвет {preset}"),
+        None => "Без цвета".to_owned(),
+    }
+}
+
+/// Детектор двойного клика (T7): интервал и сдвиг между нажатиями ЛКМ.
+struct DoubleClick {
+    last: Option<(Instant, Vec2)>,
+}
+
+impl DoubleClick {
+    fn new() -> Self {
+        Self { last: None }
+    }
+
+    /// Зарегистрировать нажатие; true — это второй клик пары.
+    fn register(&mut self, at: Instant, pos: Vec2) -> bool {
+        let double = self.last.is_some_and(|(time, prev)| {
+            at.duration_since(time) <= DOUBLE_CLICK_INTERVAL
+                && (pos[0] as f64 - prev[0] as f64).abs() <= DOUBLE_CLICK_DIST
+                && (pos[1] as f64 - prev[1] as f64).abs() <= DOUBLE_CLICK_DIST
+        });
+        self.last = Some((at, pos));
+        double
+    }
+}
+
+/// Первый свободный id заметки вида `note-N` (T7).
+fn next_note_id(canvas: &Canvas) -> String {
+    let mut n = 1u32;
+    while canvas
+        .nodes
+        .iter()
+        .any(|node| node.id == format!("note-{n}"))
+    {
+        n += 1;
+    }
+    format!("note-{n}")
+}
+
+/// Буфер обмена ОС (T7, arboard): ошибки — warn, редактирование не ломается.
+struct Clipboard(Option<arboard::Clipboard>);
+
+impl Clipboard {
+    fn new() -> Self {
+        match arboard::Clipboard::new() {
+            Ok(clipboard) => Self(Some(clipboard)),
+            Err(err) => {
+                tracing::warn!(%err, "буфер обмена недоступен");
+                Self(None)
+            }
+        }
+    }
+
+    fn set(&mut self, text: String) {
+        if let Some(clipboard) = &mut self.0 {
+            if let Err(err) = clipboard.set_text(text) {
+                tracing::warn!(%err, "не удалось записать в буфер обмена");
+            }
+        }
+    }
+
+    fn get(&mut self) -> Option<String> {
+        self.0
+            .as_mut()
+            .and_then(|clipboard| match clipboard.get_text() {
+                Ok(text) => Some(text),
+                Err(err) => {
+                    tracing::warn!(%err, "не удалось прочитать буфер обмена");
+                    None
+                }
+            })
+    }
+}
 
 /// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
 fn seed_canvas() -> Canvas {
@@ -186,6 +332,16 @@ struct App {
     /// Ноды, чей тамбнейл не удалось получить (битая ссылка и т.п.) —
     /// не перезаказывать каждый кадр; ретрай — при перезапуске (вотчер — T14).
     thumbs_failed: std::collections::HashSet<usize>,
+    /// Активная сессия инлайн-редактирования заметки (T7).
+    editing: Option<EditingSession>,
+    /// Драг внутри редактора (расширение выделения мышью, T7).
+    editor_dragging: bool,
+    /// Детектор двойного клика ЛКМ (T7).
+    double_click: DoubleClick,
+    /// Буфер обмена ОС (T7).
+    clipboard: Clipboard,
+    /// Открытое контекстное меню ноды (ПКМ, T7).
+    menu: Option<ContextMenu>,
 }
 
 impl App {
@@ -206,7 +362,85 @@ impl App {
             last_frame: None,
             last_stats: FrameStats::default(),
             thumbs_failed: std::collections::HashSet::new(),
+            editing: None,
+            editor_dragging: false,
+            double_click: DoubleClick::new(),
+            clipboard: Clipboard::new(),
+            menu: None,
         }
+    }
+
+    /// Scale factor окна (1.0 до создания окна).
+    fn scale_factor(&self) -> f32 {
+        self.window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0)
+    }
+
+    /// zoom * scale_factor — перевод world-px в физические (для буфера редактора).
+    fn zoom_px(&self) -> f32 {
+        self.camera.zoom() * self.scale_factor()
+    }
+
+    /// Начать редактирование текстовой ноды (T7). Не-text ноды игнорируются.
+    fn begin_editing(&mut self, index: usize) {
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return;
+        };
+        if node.kind() != NodeKind::Text {
+            return;
+        }
+        let text = node.text.clone().unwrap_or_default();
+        let (_, width, height) = body_area(node);
+        let zoom_px = self.zoom_px();
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let session = EditingSession::new(
+            renderer.font_system_mut(),
+            index,
+            &text,
+            width * zoom_px,
+            height * zoom_px,
+            zoom_px,
+        );
+        self.editing = Some(session);
+        self.scene.selected = Some(index);
+        self.scene.dragging = None;
+        self.request_redraw();
+    }
+
+    /// Завершить редактирование (T7): commit — записать текст в модель и
+    /// пометить канвас грязным (автосейв); cancel — откат, модель не менялась.
+    fn finish_editing(&mut self, commit: bool) {
+        let Some(session) = self.editing.take() else {
+            return;
+        };
+        self.editor_dragging = false;
+        if commit && session.changed() {
+            if let Some(node) = self.scene.canvas.nodes.get_mut(session.node()) {
+                node.text = Some(session.text());
+            }
+            self.scene.mark_dirty();
+        }
+        self.request_redraw();
+    }
+
+    /// Создать пустую заметку в world-точке (T7): модель + spatial index.
+    /// Возвращает индекс новой ноды.
+    fn create_note_at(&mut self, world: Vec2) -> usize {
+        let id = next_note_id(&self.scene.canvas);
+        self.scene
+            .canvas
+            .nodes
+            .push(Node::text(id, "", world[0], world[1]));
+        let index = self.scene.canvas.nodes.len() - 1;
+        let node = &self.scene.canvas.nodes[index];
+        self.scene.spatial.insert(index, node);
+        self.scene.selected = Some(index);
+        self.scene.mark_dirty();
+        index
     }
 
     /// Активно ли панорамирование (средняя кнопка или Space+drag, SPEC §8).
@@ -269,6 +503,40 @@ impl App {
             thumbs,
             self.thumbs.queue_len()
         ))
+    }
+
+    /// Оверлей контекстного меню (T7): фон, образцы цветов, подписи пунктов.
+    /// Возвращает (квады, подписи, world-позиции подписей).
+    fn menu_overlay(&self) -> (Vec<CardInstance>, Vec<String>, Vec<Vec2>) {
+        let mut instances = Vec::new();
+        let mut labels = Vec::new();
+        let mut label_pos = Vec::new();
+        if let Some(menu) = &self.menu {
+            let [x, y, w, h] = menu_rect(menu.origin);
+            instances.push(CardInstance {
+                pos: [x, y],
+                size: [w, h],
+                fill: MENU_FILL,
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 0.0],
+            });
+            for (i, item) in MENU_ITEMS.iter().enumerate() {
+                let rect = menu_item_rect(menu.origin, i);
+                if let Some(color) = item.and_then(preset_color) {
+                    // Образец цвета слева от подписи
+                    instances.push(CardInstance {
+                        pos: [rect[0] + 7.0, rect[1] + 7.0],
+                        size: [12.0, 12.0],
+                        fill: color,
+                        border: [0.0; 4],
+                        params: [2.0, 0.0, 0.0, 0.0],
+                    });
+                }
+                labels.push(menu_label(*item));
+                label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+            }
+        }
+        (instances, labels, label_pos)
     }
 
     /// Заказать тамбнейлы видимых файловых нод (T6): приоритет High,
@@ -357,6 +625,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseInput { state, button, .. } => match button {
                 MouseButton::Middle => self.middle_pressed = state == ElementState::Pressed,
                 MouseButton::Left => self.on_left_button(state),
+                MouseButton::Right => self.on_right_button(state),
                 _ => {}
             },
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
@@ -370,13 +639,34 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 self.last_frame = Some(now);
                 let hud = self.hud_text();
+                // Оверлей контекстного меню (T7): квады + подписи пунктов
+                let (overlay_instances, overlay_labels, overlay_label_pos) = self.menu_overlay();
+                let overlay_texts: Vec<OverlayText> = overlay_labels
+                    .iter()
+                    .zip(&overlay_label_pos)
+                    .map(|(label, pos)| OverlayText {
+                        text: label,
+                        origin: *pos,
+                        width: MENU_WIDTH - MENU_LABEL_X - MENU_PADDING,
+                    })
+                    .collect();
+                let overlay = FrameOverlay {
+                    instances: &overlay_instances,
+                    texts: &overlay_texts,
+                };
                 if let Some(renderer) = self.renderer.as_mut() {
                     let scene = SceneView {
                         canvas: &self.scene.canvas,
                         spatial: &self.scene.spatial,
                         selected: self.scene.selected,
                     };
-                    match renderer.render(&self.camera, &scene, hud.as_deref()) {
+                    match renderer.render(
+                        &self.camera,
+                        &scene,
+                        hud.as_deref(),
+                        self.editing.as_mut(),
+                        &overlay,
+                    ) {
                         Ok(stats) => self.last_stats = stats,
                         Err(err) => {
                             tracing::error!(%err, "ошибка рендера, завершение");
@@ -425,6 +715,64 @@ impl ApplicationHandler<AppEvent> for App {
 
 impl App {
     fn on_key(&mut self, event: &KeyEvent) {
+        // Активное редактирование (T7): клавиатура уходит в редактор
+        if self.editing.is_some() {
+            if event.state != ElementState::Pressed {
+                return;
+            }
+            let ctrl = self.modifiers.control_key();
+            let shift = self.modifiers.shift_key();
+            let Some(command) = map_key(&event.logical_key, ctrl, shift) else {
+                return;
+            };
+            match command {
+                KeyCommand::Commit => self.finish_editing(true),
+                KeyCommand::Cancel => self.finish_editing(false),
+                KeyCommand::Copy => {
+                    if let Some(text) = self.editing.as_ref().and_then(|s| s.copy_selection()) {
+                        self.clipboard.set(text);
+                    }
+                }
+                KeyCommand::Cut => {
+                    let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
+                        (Some(session), Some(renderer)) => {
+                            session.cut_selection(renderer.font_system_mut())
+                        }
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        self.clipboard.set(text);
+                        self.request_redraw();
+                    }
+                }
+                KeyCommand::Paste => {
+                    let text = self.clipboard.get();
+                    if let (Some(text), Some(session), Some(renderer)) =
+                        (text, self.editing.as_mut(), self.renderer.as_mut())
+                    {
+                        session.insert_text(renderer.font_system_mut(), &text);
+                        self.request_redraw();
+                    }
+                }
+                other => {
+                    if let (Some(session), Some(renderer)) =
+                        (self.editing.as_mut(), self.renderer.as_mut())
+                    {
+                        session.apply(renderer.font_system_mut(), other);
+                        self.request_redraw();
+                    }
+                }
+            }
+            return;
+        }
+        // Esc закрывает контекстное меню (T7)
+        if event.logical_key == Key::Named(NamedKey::Escape)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+            && self.menu.take().is_some()
+        {
+            self.request_redraw();
+        }
         if event.logical_key == Key::Named(NamedKey::Space) && !event.repeat {
             self.space_pressed = event.state == ElementState::Pressed;
             if !self.space_pressed {
@@ -451,7 +799,53 @@ impl App {
             ElementState::Pressed => {
                 let world = self.cursor_world();
                 // Hit-test через spatial index (T5): O(log n) вместо линейного обхода
-                match self.scene.spatial.hit_test(world) {
+                let hit = self.scene.spatial.hit_test(world);
+                // Открытое меню (T7): клик по пункту — применить цвет, мимо — закрыть
+                if let Some(menu) = self.menu.take() {
+                    if let Some(i) = menu_item_at(menu.origin, world) {
+                        if let Some(node) = self.scene.canvas.nodes.get_mut(menu.node) {
+                            node.color = MENU_ITEMS[i].map(str::to_owned);
+                        }
+                        self.scene.mark_dirty();
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                // Активное редактирование (T7): клик внутри ноды — в курсор,
+                // клик снаружи — commit и обычная обработка
+                if let Some(editing_node) = self.editing.as_ref().map(EditingSession::node) {
+                    if hit == Some(editing_node) {
+                        let zoom_px = self.zoom_px();
+                        if let (Some(node), Some(session), Some(renderer)) = (
+                            self.scene.canvas.nodes.get(editing_node),
+                            self.editing.as_mut(),
+                            self.renderer.as_mut(),
+                        ) {
+                            let (origin, _, _) = body_area(node);
+                            let x = ((world[0] - origin[0]) * zoom_px) as i32;
+                            let y = ((world[1] - origin[1]) * zoom_px) as i32;
+                            session.click(renderer.font_system_mut(), x, y);
+                            self.editor_dragging = true;
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                    self.finish_editing(true);
+                }
+                // Двойной клик (winit его не даёт — свой детектор, T7):
+                // по пустому месту — новая заметка, по text-ноде — редактирование
+                if self.double_click.register(Instant::now(), self.cursor) {
+                    match hit {
+                        None => {
+                            let index = self.create_note_at(world);
+                            self.begin_editing(index);
+                        }
+                        Some(index) => self.begin_editing(index),
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                match hit {
                     Some(index) => {
                         self.scene.selected = Some(index);
                         let node = &self.scene.canvas.nodes[index];
@@ -463,8 +857,32 @@ impl App {
             }
             ElementState::Released => {
                 self.scene.dragging = None;
+                self.editor_dragging = false;
             }
         }
+    }
+
+    fn on_right_button(&mut self, state: ElementState) {
+        if state != ElementState::Pressed {
+            return;
+        }
+        // ПКМ во время редактирования — сначала commit (T7)
+        if self.editing.is_some() {
+            self.finish_editing(true);
+        }
+        let world = self.cursor_world();
+        match self.scene.spatial.hit_test(world) {
+            // Меню ноды (T7): палитра цветов в точке клика
+            Some(index) => {
+                self.scene.selected = Some(index);
+                self.menu = Some(ContextMenu {
+                    node: index,
+                    origin: world,
+                });
+            }
+            None => self.menu = None,
+        }
+        self.request_redraw();
     }
 
     fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
@@ -480,6 +898,22 @@ impl App {
             self.request_redraw();
         }
         self.cursor = logical;
+        // Драг внутри редактора — расширение выделения мышью (T7)
+        if self.editor_dragging && !self.space_pressed {
+            let world = self.cursor_world();
+            let zoom_px = self.zoom_px();
+            if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
+            {
+                let editing_node = session.node();
+                if let Some(node) = self.scene.canvas.nodes.get(editing_node) {
+                    let (origin, _, _) = body_area(node);
+                    let x = ((world[0] - origin[0]) * zoom_px) as i32;
+                    let y = ((world[1] - origin[1]) * zoom_px) as i32;
+                    session.drag(renderer.font_system_mut(), x, y);
+                }
+            }
+            self.request_redraw();
+        }
         if !self.space_pressed {
             if let Some((index, offset)) = self.scene.dragging {
                 let world = self.cursor_world();
@@ -739,6 +1173,62 @@ mod tests {
             "относительный путь не абсолютизирован: {rel:?}"
         );
         assert!(rel.ends_with(PathBuf::from("target/tmp/thumbtest/photo1.png")));
+    }
+
+    /// Детектор двойного клика (T7): пара кликов в интервале — double,
+    /// далёкие по времени или позиции — нет.
+    #[test]
+    fn double_click_detection() {
+        let t0 = Instant::now();
+        let mut detector = DoubleClick::new();
+        assert!(!detector.register(t0, [100.0, 100.0]), "первый клик");
+        assert!(detector.register(t0 + Duration::from_millis(200), [102.0, 99.0]));
+        // Третий клик сразу после — тоже double (считаем парами)
+        assert!(detector.register(t0 + Duration::from_millis(300), [100.0, 100.0]));
+
+        let mut detector = DoubleClick::new();
+        assert!(!detector.register(t0, [0.0, 0.0]));
+        // Интервал превышен
+        assert!(!detector.register(t0 + Duration::from_millis(600), [0.0, 0.0]));
+
+        let mut detector = DoubleClick::new();
+        assert!(!detector.register(t0, [0.0, 0.0]));
+        // Курсор ушёл дальше порога
+        assert!(!detector.register(t0 + Duration::from_millis(100), [50.0, 0.0]));
+    }
+
+    /// Генератор id заметок (T7): первый свободный note-N.
+    #[test]
+    fn note_id_first_free() {
+        let canvas = Canvas::default();
+        assert_eq!(next_note_id(&canvas), "note-1");
+        let mut canvas = seed_canvas();
+        assert_eq!(next_note_id(&canvas), "note-2");
+        canvas.nodes.push(Node::text("note-2", "", 0.0, 0.0));
+        assert_eq!(next_note_id(&canvas), "note-3");
+    }
+
+    /// Hit-test меню (T7): пункты палитры, края, промахи.
+    #[test]
+    fn menu_hit_test() {
+        let origin = [100.0, 50.0];
+        // Первый пункт (цвет "1")
+        assert_eq!(
+            menu_item_at(origin, [110.0, 50.0 + MENU_PADDING + 3.0]),
+            Some(0)
+        );
+        // Последний пункт (сброс цвета)
+        let last_y = 50.0 + MENU_PADDING + 6.0 * MENU_ITEM_HEIGHT + 3.0;
+        assert_eq!(menu_item_at(origin, [110.0, last_y]), Some(6));
+        // Правее меню, выше, ниже — промах
+        assert_eq!(menu_item_at(origin, [100.0 + MENU_WIDTH + 1.0, 60.0]), None);
+        assert_eq!(menu_item_at(origin, [110.0, 49.0]), None);
+        assert_eq!(
+            menu_item_at(origin, [110.0, 50.0 + menu_rect(origin)[3] + 1.0]),
+            None
+        );
+        // Вертикальный паддинг между рамкой и первым пунктом — промах
+        assert_eq!(menu_item_at(origin, [110.0, 51.0]), None);
     }
 
     /// Парсинг аргументов: --stress N, --stress=N, путь, дефолты.

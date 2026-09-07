@@ -54,6 +54,14 @@ pub fn card_color(node: &Node) -> [f32; 4] {
     }
 }
 
+/// Цвет пресета палитры JSON Canvas ("1".."6") — для меню выбора цвета (T7).
+pub fn preset_color(preset: &str) -> Option<[f32; 4]> {
+    PRESET_COLORS
+        .iter()
+        .find(|(key, _)| *key == preset)
+        .map(|(_, rgba)| *rgba)
+}
+
 /// Заголовок карточки: имя файла из пути / первая строка текста / label группы.
 pub fn title_for(node: &Node) -> String {
     if let Some(file) = &node.file {

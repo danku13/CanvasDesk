@@ -7,6 +7,7 @@ pub mod atlas;
 pub mod camera;
 pub mod cards;
 pub mod config;
+pub mod edit;
 pub mod gpu;
 pub mod grid;
 pub mod renderer;
@@ -15,5 +16,5 @@ pub mod text;
 pub mod thumbs;
 
 pub use camera::Camera;
-pub use renderer::{FrameStats, Renderer, SceneView};
+pub use renderer::{FrameOverlay, FrameStats, Renderer, SceneView};
 pub use stats::FrameMeter;

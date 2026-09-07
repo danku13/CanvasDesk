@@ -29,6 +29,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 winit = "0.30"
 wgpu = "22"
 glyphon = "0.6" # совместим с wgpu 22
+# инлайн-редактирование текста (T7): та же версия, что тянет glyphon 0.6
+cosmic-text = "0.12"
+# буфер обмена (T7): без ручного unsafe Win32 clipboard-кода
+arboard = "3"
 pollster = "0.3"
 # Win32/COM (только canvas-shell / canvas-widgets, под cfg(windows))
 windows = { version = "0.62", features = [

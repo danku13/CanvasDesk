@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use canvas_core::Canvas;
+use canvas_core::{Canvas, Node, NodeKind};
 use glyphon::{
     Attrs, Buffer, Cache, Color, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer, Viewport, Wrap,
@@ -35,6 +35,16 @@ const MIN_TITLE_PX: f32 = 4.0;
 const TITLE_COLOR: Color = Color::rgb(0xe6, 0xe6, 0xe6);
 const ICON_COLOR: Color = Color::rgb(0x9a, 0xaa, 0xbf);
 
+/// Размер тела заметки в world-px (T7).
+pub const BODY_FONT_SIZE: f32 = 14.0;
+/// Высота строки тела заметки.
+pub const BODY_LINE_HEIGHT: f32 = 20.0;
+/// Внутренний отступ тела заметки по горизонтали и снизу в world-px.
+pub const BODY_PADDING: f32 = 10.0;
+/// Зазор между заголовком и телом заметки в world-px.
+pub const BODY_TOP_GAP: f32 = 4.0;
+const BODY_COLOR: Color = Color::rgb(0xd4, 0xd4, 0xd4);
+
 /// Размер шрифта HUD в физических px (не масштабируется зумом).
 const HUD_FONT_SIZE: f32 = 14.0;
 /// Высота строки HUD.
@@ -54,16 +64,46 @@ fn titles_visible(zoom_px: f32) -> bool {
     TITLE_FONT_SIZE * zoom_px >= MIN_TITLE_PX
 }
 
-/// Кэшированный заголовок свеж, если зум, ширина и текст не изменились.
-fn cache_fresh(
-    entry_zoom: f32,
-    entry_width: f32,
-    entry_text: &str,
+/// Тело рисуется только у текстовых нод с непустым текстом и при читаемом зуме (T7).
+fn body_visible(node: &Node, zoom_px: f32) -> bool {
+    node.kind() == NodeKind::Text
+        && node.text.as_deref().is_some_and(|text| !text.is_empty())
+        && titles_visible(zoom_px)
+}
+
+/// Область тела заметки: world-координаты левого верхнего угла и (ширина, высота).
+pub fn body_area(node: &Node) -> ([f32; 2], f32, f32) {
+    let origin = [node.x + BODY_PADDING, node.y + HEADER_HEIGHT + BODY_TOP_GAP];
+    let width = (node.width - BODY_PADDING * 2.0).max(0.0);
+    let height = (node.height - HEADER_HEIGHT - BODY_TOP_GAP - BODY_PADDING).max(0.0);
+    (origin, width, height)
+}
+
+/// Ключ свежести кэша текста ноды: зум, ширина заголовка, заголовок и тело.
+#[derive(Debug, Clone, Copy)]
+struct CacheKey<'a> {
     zoom: f32,
     width: f32,
-    text: &str,
-) -> bool {
-    (entry_zoom - zoom).abs() < 1e-3 && (entry_width - width).abs() < 0.5 && entry_text == text
+    title: &'a str,
+    body: &'a str,
+}
+
+/// Запись кэша свежа, если зум, ширина, заголовок и тело не изменились.
+fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
+    (entry.zoom - current.zoom).abs() < 1e-3
+        && (entry.width - current.width).abs() < 0.5
+        && entry.title == current.title
+        && entry.body == current.body
+}
+
+/// Оверлей-текст в world-координатах (контекстное меню, T7): шейпится
+/// покадрово без кэша — меню открыто редко.
+pub struct OverlayText<'a> {
+    pub text: &'a str,
+    /// World-координаты левого верхнего угла.
+    pub origin: [f32; 2],
+    /// Ширина области в world-px (bounds клипа).
+    pub width: f32,
 }
 
 /// Параметры кадра для подготовки текста (группировка аргументов prepare_titles).
@@ -77,16 +117,27 @@ pub struct TitleFrame<'a> {
     pub indices: &'a [usize],
     /// Строка HUD-оверлея (F3), None — без оверлея.
     pub hud: Option<&'a str>,
+    /// Индекс редактируемой ноды (T7): её тело рисует EditingSession, из кэша
+    /// тела и из выдачи она исключается.
+    pub editing: Option<usize>,
+    /// Буфер активной EditingSession (T7) и world-позиция левого верхнего
+    /// угла области тела — текст редактора рисуется поверх карточки.
+    pub editing_buffer: Option<(&'a Buffer, [f32; 2])>,
+    /// Оверлей-тексты кадра (контекстное меню, T7).
+    pub overlay_texts: &'a [OverlayText<'a>],
 }
 
-/// Зашейпленные буферы заголовка ноды: валидны, пока не изменились
-/// зум, ширина или текст (см. cache_fresh).
+/// Зашейпленные буферы заголовка и тела ноды: валидны, пока не изменились
+/// зум, ширина или тексты (см. cache_fresh).
 struct CachedTitle {
     title: Buffer,
     icon: Option<Buffer>,
+    /// Тело заметки (T7) — только у text-нод с непустым текстом.
+    body: Option<Buffer>,
     zoom_px: f32,
     width_px: f32,
-    text: String,
+    title_text: String,
+    body_text: String,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
 }
@@ -169,10 +220,29 @@ impl TextSystem {
                     (node.width - TITLE_PADDING * 2.0 - if has_icon { ICON_WIDTH } else { 0.0 })
                         .max(0.0);
                 let width_px = title_width * zoom_px;
-                let text = title_for(node);
+                let title_text = title_for(node);
+                // Тело редактируемой ноды рисует EditingSession — не шейпим дубль
+                let body_text = if frame.editing == Some(index) || !body_visible(node, zoom_px) {
+                    String::new()
+                } else {
+                    node.text.clone().unwrap_or_default()
+                };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
-                    cache_fresh(e.zoom_px, e.width_px, &e.text, zoom_px, width_px, &text)
+                    cache_fresh(
+                        CacheKey {
+                            zoom: e.zoom_px,
+                            width: e.width_px,
+                            title: &e.title_text,
+                            body: &e.body_text,
+                        },
+                        CacheKey {
+                            zoom: zoom_px,
+                            width: width_px,
+                            title: &title_text,
+                            body: &body_text,
+                        },
+                    )
                 });
                 if !fresh {
                     let mut title =
@@ -185,7 +255,7 @@ impl TextSystem {
                     );
                     title.set_text(
                         &mut self.font_system,
-                        &text,
+                        &title_text,
                         Attrs::new(),
                         Shaping::Advanced,
                     );
@@ -212,14 +282,41 @@ impl TextSystem {
                         icon
                     });
 
+                    // Тело заметки (T7): wrap по ширине карточки, многострочное
+                    let body = if body_text.is_empty() {
+                        None
+                    } else {
+                        let (_, body_width, body_height) = body_area(node);
+                        let mut body = Buffer::new(
+                            &mut self.font_system,
+                            Metrics::new(BODY_FONT_SIZE * zoom_px, BODY_LINE_HEIGHT * zoom_px),
+                        );
+                        body.set_wrap(&mut self.font_system, Wrap::Word);
+                        body.set_size(
+                            &mut self.font_system,
+                            Some(body_width * zoom_px),
+                            Some(body_height * zoom_px),
+                        );
+                        body.set_text(
+                            &mut self.font_system,
+                            &body_text,
+                            Attrs::new(),
+                            Shaping::Advanced,
+                        );
+                        body.shape_until_scroll(&mut self.font_system, false);
+                        Some(body)
+                    };
+
                     self.cache.insert(
                         index,
                         CachedTitle {
                             title,
                             icon,
+                            body,
                             zoom_px,
                             width_px,
-                            text,
+                            title_text,
+                            body_text,
                             last_used: self.tick,
                         },
                     );
@@ -313,7 +410,85 @@ impl TextSystem {
                         custom_glyphs: &[],
                     });
                 }
+                // Тело заметки (T7): у редактируемой ноды body нет — рисует
+                // EditingSession
+                if let Some(body) = &entry.body {
+                    let (origin, body_width, body_height) = body_area(node);
+                    let pos = to_physical(origin);
+                    areas.push(TextArea {
+                        buffer: body,
+                        left: pos[0],
+                        top: pos[1],
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: pos[0] as i32,
+                            top: pos[1] as i32,
+                            right: (pos[0] + body_width * zoom_px) as i32,
+                            bottom: (pos[1] + body_height * zoom_px) as i32,
+                        },
+                        default_color: BODY_COLOR,
+                        custom_glyphs: &[],
+                    });
+                }
             }
+        }
+        // Оверлей-тексты (контекстное меню, T7): шейпинг покадрово, без кэша
+        let mut overlay_buffers: Vec<(Buffer, [f32; 2], f32)> = Vec::new();
+        for overlay in frame.overlay_texts {
+            let mut buffer =
+                Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
+            buffer.set_wrap(&mut self.font_system, Wrap::None);
+            buffer.set_size(
+                &mut self.font_system,
+                Some(overlay.width * zoom_px),
+                Some(line_height),
+            );
+            buffer.set_text(
+                &mut self.font_system,
+                overlay.text,
+                Attrs::new(),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            overlay_buffers.push((buffer, overlay.origin, overlay.width));
+        }
+
+        // Текст активной сессии редактирования (T7): буфер редактора поверх
+        // карточки (тело ноды из кэша для неё исключено в фазе 1)
+        if let Some((buffer, origin)) = frame.editing_buffer {
+            let pos = to_physical(origin);
+            areas.push(TextArea {
+                buffer,
+                left: pos[0],
+                top: pos[1],
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: pos[0] as i32,
+                    top: pos[1] as i32,
+                    right: viewport_physical[0] as i32,
+                    bottom: viewport_physical[1] as i32,
+                },
+                default_color: BODY_COLOR,
+                custom_glyphs: &[],
+            });
+        }
+        // Оверлей-тексты меню (T7) — после текста редактора, до HUD
+        for (buffer, origin, width) in &overlay_buffers {
+            let pos = to_physical(*origin);
+            areas.push(TextArea {
+                buffer,
+                left: pos[0],
+                top: pos[1],
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: pos[0] as i32,
+                    top: pos[1] as i32,
+                    right: (pos[0] + width * zoom_px) as i32,
+                    bottom: (pos[1] + line_height) as i32,
+                },
+                default_color: TITLE_COLOR,
+                custom_glyphs: &[],
+            });
         }
         areas.extend(
             hud_buffers
@@ -352,6 +527,12 @@ impl TextSystem {
     ) -> Result<(), glyphon::RenderError> {
         self.renderer.render(&self.atlas, &self.viewport, pass)
     }
+
+    /// Доступ к FontSystem для операций EditingSession (T7): ввод, каретка,
+    /// выделение шейпятся через тот же FontSystem, что и вся сцена.
+    pub fn font_system_mut(&mut self) -> &mut FontSystem {
+        &mut self.font_system
+    }
 }
 
 #[cfg(test)]
@@ -367,23 +548,99 @@ mod tests {
         assert!(titles_visible(1.0));
     }
 
-    /// Свежесть кэша: тот же зум/ширина/текст — свежий; любое изменение — нет.
+    /// Свежесть кэша: тот же зум/ширина/тексты — свежий; любое изменение — нет.
     #[test]
     fn cache_freshness() {
-        assert!(cache_fresh(1.0, 300.0, "отчёт", 1.0, 300.0, "отчёт"));
+        let entry = CacheKey {
+            zoom: 1.0,
+            width: 300.0,
+            title: "отчёт",
+            body: "тело",
+        };
+        let same = CacheKey { ..entry };
+        assert!(cache_fresh(entry, same));
         assert!(
-            !cache_fresh(1.0, 300.0, "отчёт", 1.5, 300.0, "отчёт"),
+            !cache_fresh(entry, CacheKey { zoom: 1.5, ..same }),
             "зум изменился"
         );
         assert!(
-            !cache_fresh(1.0, 300.0, "отчёт", 1.0, 250.0, "отчёт"),
+            !cache_fresh(
+                entry,
+                CacheKey {
+                    width: 250.0,
+                    ..same
+                }
+            ),
             "ширина изменилась"
         );
         assert!(
-            !cache_fresh(1.0, 300.0, "отчёт", 1.0, 300.0, "смета"),
-            "текст изменился"
+            !cache_fresh(
+                entry,
+                CacheKey {
+                    title: "смета",
+                    ..same
+                }
+            ),
+            "заголовок изменился"
+        );
+        assert!(
+            !cache_fresh(
+                entry,
+                CacheKey {
+                    body: "иное",
+                    ..same
+                }
+            ),
+            "тело изменилось"
         );
         // Допуски: микродрейф зума и субпиксельная ширина не инвалидируют
-        assert!(cache_fresh(1.0, 300.0, "отчёт", 1.0005, 300.3, "отчёт"));
+        assert!(cache_fresh(
+            entry,
+            CacheKey {
+                zoom: 1.0005,
+                width: 300.3,
+                ..same
+            }
+        ));
+    }
+
+    /// Тело (T7): только у text-нод с непустым текстом и при читаемом зуме.
+    #[test]
+    fn body_visibility_rules() {
+        let note = Node::text("n", "текст заметки", 0.0, 0.0);
+        assert!(body_visible(&note, 1.0));
+        // Ниже LOD-порога — не рисуем
+        assert!(!body_visible(&note, 0.0));
+        // Пустой текст — тела нет
+        let mut empty = Node::text("n", "t", 0.0, 0.0);
+        empty.text = Some(String::new());
+        assert!(!body_visible(&empty, 1.0));
+        // Файловые ноды тела не имеют
+        let file = Node::file("n", "C:/a.png", 0.0, 0.0, 10.0, 10.0);
+        assert!(!body_visible(&file, 1.0));
+    }
+
+    /// Область тела (T7): внутри карточки, под заголовком, с отступами.
+    #[test]
+    fn body_area_inside_card() {
+        let mut note = Node::text("n", "t", 100.0, 50.0);
+        note.width = 300.0;
+        note.height = 200.0;
+        let (origin, width, height) = body_area(&note);
+        assert_eq!(
+            origin,
+            [100.0 + BODY_PADDING, 50.0 + HEADER_HEIGHT + BODY_TOP_GAP]
+        );
+        assert_eq!(width, 300.0 - BODY_PADDING * 2.0);
+        assert_eq!(height, 200.0 - HEADER_HEIGHT - BODY_TOP_GAP - BODY_PADDING);
+        // Нода меньше заголовка — размеры клампятся в ноль, без отрицательных
+        let tiny = Node::text("n", "t", 0.0, 0.0);
+        let (_, width, height) = body_area(&Node {
+            width: 5.0,
+            height: 5.0,
+            ..tiny
+        });
+        assert_eq!(width, 0.0);
+        assert_eq!(height, 0.0);
     }
 }

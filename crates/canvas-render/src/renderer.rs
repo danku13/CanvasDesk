@@ -9,14 +9,33 @@ use winit::window::Window;
 use canvas_core::{Canvas, SpatialIndex, Thumbnail};
 
 use crate::camera::Camera;
-use crate::cards::{build_instances, CardsPipeline};
+use crate::cards::{build_instances, CardInstance, CardsPipeline, SELECTION_BORDER};
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
 };
+use crate::edit::EditingSession;
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
-use crate::text::TextSystem;
+use crate::text::{body_area, OverlayText, TextSystem};
 use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
+
+/// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
+const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
+
+/// Оверлеи кадра от приложения (контекстное меню, T7): дополнительные
+/// инстансы квадов (рисуются поверх карточек, под текстом) и их подписи.
+pub struct FrameOverlay<'a> {
+    pub instances: &'a [CardInstance],
+    pub texts: &'a [OverlayText<'a>],
+}
+
+impl FrameOverlay<'_> {
+    /// Пустой оверлей.
+    pub const EMPTY: FrameOverlay<'static> = FrameOverlay {
+        instances: &[],
+        texts: &[],
+    };
+}
 
 /// Сцена кадра: модель канваса, spatial index (culling, T5) и выделение.
 pub struct SceneView<'a> {
@@ -133,6 +152,29 @@ impl Renderer {
         self.thumbs.len()
     }
 
+    /// Доступ к FontSystem для операций EditingSession (T7) из приложения:
+    /// ввод, клики, копирование — все шейпинг-операции идут через него.
+    pub fn font_system_mut(&mut self) -> &mut glyphon::FontSystem {
+        self.text.font_system_mut()
+    }
+
+    /// Оверлей-квад (каретка/выделение, T7): rect в пикселях буфера редактора
+    /// → world-координаты относительно `origin` (левый верхний угол области).
+    fn overlay_quad(
+        origin: [f32; 2],
+        rect: [f32; 4],
+        zoom_px: f32,
+        fill: [f32; 4],
+    ) -> CardInstance {
+        CardInstance {
+            pos: [origin[0] + rect[0] / zoom_px, origin[1] + rect[1] / zoom_px],
+            size: [rect[2] / zoom_px, rect[3] / zoom_px],
+            fill,
+            border: [0.0; 4],
+            params: [0.0, 0.0, 0.0, 0.0],
+        }
+    }
+
     /// Переконфигурировать surface под новый размер окна.
     /// Нулевой размер (свёрнутое окно) игнорируется — кадр пропускается.
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -147,11 +189,15 @@ impl Renderer {
 
     /// Отрисовать кадр: фон, сетка, карточки видимых нод, заголовки, HUD (T2/T4/T5).
     /// `hud` — строка оверлея (F3), None — без оверлея. Возвращает счётчики кадра.
+    /// `editing` — активная сессия редактирования (T7): её буфер рисуется вместо
+    /// кэшированного тела ноды, поверх карточки — каретка и выделение.
     pub fn render(
         &mut self,
         camera: &Camera,
         scene: &SceneView,
         hud: Option<&str>,
+        mut editing: Option<&mut EditingSession>,
+        overlay: &FrameOverlay,
     ) -> anyhow::Result<FrameStats> {
         let cpu_start = std::time::Instant::now();
         if !surface_size_valid(self.size.width, self.size.height) {
@@ -181,13 +227,52 @@ impl Renderer {
         let visible = camera.visible_world_rect(viewport_logical);
         let indices = scene.spatial.query_rect(visible);
 
+        // Актуальные метрики буфера редактирования под текущий зум (T7) —
+        // до вычисления каретки/выделения ниже
+        if let Some(session) = editing.as_deref_mut() {
+            if let Some(node) = scene.canvas.nodes.get(session.node()) {
+                let zoom_px = camera.zoom() * self.scale_factor;
+                let (_, width, height) = body_area(node);
+                session.set_layout(
+                    self.text.font_system_mut(),
+                    width * zoom_px,
+                    height * zoom_px,
+                    zoom_px,
+                );
+            }
+        }
+
         self.grid.update_camera(
             &self.gpu.queue,
             camera,
             [self.size.width as f32, self.size.height as f32],
             self.scale_factor,
         );
-        let instances = build_instances(scene.canvas, &indices, scene.selected);
+        let instances = {
+            let mut instances = build_instances(scene.canvas, &indices, scene.selected);
+            // Оверлеи редактирования (T7): выделение и каретка — квады поверх
+            // карточки редактируемой ноды, под текстом (текст рисуется позже)
+            if let Some(session) = editing.as_deref_mut() {
+                if let Some(node) = scene.canvas.nodes.get(session.node()) {
+                    let zoom_px = camera.zoom() * self.scale_factor;
+                    let (origin, _, _) = body_area(node);
+                    for rect in session.selection_rects(self.text.font_system_mut()) {
+                        instances.push(Self::overlay_quad(
+                            origin,
+                            rect,
+                            zoom_px,
+                            TEXT_SELECTION_FILL,
+                        ));
+                    }
+                    if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
+                        instances.push(Self::overlay_quad(origin, rect, zoom_px, SELECTION_BORDER));
+                    }
+                }
+            }
+            // Оверлеи приложения (контекстное меню, T7)
+            instances.extend_from_slice(overlay.instances);
+            instances
+        };
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -211,6 +296,16 @@ impl Renderer {
             self.scale_factor,
             &thumb_instances,
         );
+        // Актуальные метрики уже выставлены выше (до сборки оверлеев)
+        let editing_ref = editing.as_deref();
+        let editing_index = editing_ref.map(EditingSession::node);
+        let editing_buffer = editing_ref.and_then(|session| {
+            scene
+                .canvas
+                .nodes
+                .get(session.node())
+                .map(|node| (session.buffer(), body_area(node).0))
+        });
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
             &self.gpu.queue,
@@ -221,6 +316,9 @@ impl Renderer {
                 canvas: scene.canvas,
                 indices: &indices,
                 hud,
+                editing: editing_index,
+                editing_buffer,
+                overlay_texts: overlay.texts,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
