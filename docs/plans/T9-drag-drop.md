@@ -205,3 +205,42 @@ SPEC §7.3 упоминает, критерий T9 — нет. Реализов�
   event loop (STA), чтение HGLOBAL копией байтов быстро; тяжёлой
   работы (IStream FileContents) — выносить в worker (не нужно для
   CF_HDROP).
+
+## 8. Отклонения при реализации
+
+Зафиксировано при интеграции (все — следствие реалий API, не меняют
+критерии приёмки):
+
+- **Кроссплатформенные типы в shell, парсинг в ui (арка без цикла).**
+  План §4 хотел `DragItem::Path(PathBuf)` в `dragdrop.rs`, но
+  `canvas-shell` не может зависеть от `canvas-app` (обратное уже есть —
+  вышел бы цикл). Поэтому shell несёт СЫРЫЕ данные: `DragData::
+  HdropBytes(Vec<u8>)` — CF_HDROP целиком с DROPFILES-заголовком,
+  `DragData::Text(String)`, `DragData::None`; парсинг/раскладку делает
+  `canvas_app::ui::parse_hdrop_bytes` (чистая функция, тестируется
+  синтетикой на любой ОС).
+- **`parse_hdrop_bytes` парсит CF_HDROP ЦЕЛИКОМ** (DROPFILES-заголовок:
+  `pFiles`-офсет + `fWide`-флаг + UTF-16 список с DOUBLE null), а не
+  «массив &[u16]» как в §4: с IDataObject снимается HGLOBAL копией байтов,
+  заголовок валидируется на месте (битые pFiles/ANSI → пусто).
+- **Локальная msvc-проверка cfg(windows)-кода** — scratch-крейт
+  `/home/z/my-project/win-check` (вне репозитория): подключает реальный
+  `dragdrop/mod.rs` через `#[path]`, `cargo check/clippy --target
+  x86_64-pc-windows-msvc` верифицирует COM-код без rusqlite (который для
+  msvc-таргета не собирается без MSVC-линкера). В CI (windows-latest)
+  компилируется само собой.
+- **windows-фичи:** потребовались сверх §2 — `Win32_System_SystemServices`
+  (MODIFIERKEYS_FLAGS в сигнатурах IDropTarget_Impl) и
+  `Win32_System_Com_StructuredStorage` (STGMEDIUM/GetData).
+- **Прямая зависимость `windows-core` у canvas-shell** (cfg(windows)):
+  макрос `#[implement]` генерирует пути `::windows_core::…` — re-export
+  `windows::core` не резолвится.
+- **`install` принимает HWND как `isize`**, а не windows-HWND: winit 0.30
+  публично отдаёт HWND только через raw-window-handle
+  (`Win32WindowHandle::hwnd.get()`), а тащить зависимость `windows` в
+  canvas-app нельзя (AGENTS — Win32 только в canvas-shell). Конвертация в
+  типизированный HWND — внутри `install`.
+- **Тонкость windows-rs 0.62:** `#[implement]` генерирует тип-обёртку
+  `DropTargetHandler_Impl`; трейт `IDropTarget_Impl` реализуется на этой
+  обёртке (Deref к исходной структуре с полями) — иначе supertrait
+  IUnknownImpl не удовлетворяется.

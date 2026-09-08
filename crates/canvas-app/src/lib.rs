@@ -30,6 +30,8 @@ pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
 pub mod ui {
     use super::*;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     /// Ширина контекстного меню в world-px (T7).
@@ -60,6 +62,19 @@ pub mod ui {
     pub const MAX_NOTE_WIDTH: f32 = 600.0;
     /// Зона захвата в правом нижнем углу ноды для ручного resize (world-px, T7).
     pub const RESIZE_HANDLE: f32 = 16.0;
+
+    // --- Drag-drop из Explorer (T9, план docs/plans/T9-drag-drop.md) ---
+
+    /// Ширина карточки дропа в world-px (как seed-карточки файлов).
+    pub const DROP_CARD_W: f32 = 320.0;
+    /// Высота карточки дропа в world-px.
+    pub const DROP_CARD_H: f32 = 220.0;
+    /// Зазор сетки дропа (шаг = карточка + зазор, критерий T9).
+    pub const DROP_GRID_GAP: f32 = 24.0;
+    /// Колонок в ряду сетки дропа (перенос строки после 5 карточек).
+    pub const DROP_GRID_COLS: usize = 5;
+    /// Призраков на превью зоны дропа не больше (дёшево рисовать, план §5).
+    pub const DROP_PREVIEW_MAX: usize = 50;
 
     /// Сторона летающей кнопки настроек (логические px).
     pub const SETTINGS_BUTTON: f32 = 36.0;
@@ -225,17 +240,239 @@ pub mod ui {
         }
     }
 
-    /// Первый свободный id заметки вида `note-N` (T7).
-    pub fn next_note_id(canvas: &Canvas) -> String {
+    /// Первый свободный id вида `{prefix}-N` (T9): N от 1, занятые в канвасе
+    /// пропускаются. Обобщение генератора id заметок на `file-N`/`note-N`
+    /// (вызовы с "note" — заметки, с "file" — ноды дропа).
+    pub fn next_free_id(canvas: &Canvas, prefix: &str) -> String {
         let mut n = 1u32;
         while canvas
             .nodes
             .iter()
-            .any(|node| node.id == format!("note-{n}"))
+            .any(|node| node.id == format!("{prefix}-{n}"))
         {
             n += 1;
         }
-        format!("note-{n}")
+        format!("{prefix}-{n}")
+    }
+
+    // --- Парсинг CF_HDROP и раскладка дропа (T9) ---
+
+    /// Разобрать содержимое CF_HDROP ЦЕЛИКОМ: DROPFILES-заголовок (20 байт:
+    /// pFiles-офсет LE, pt, fNC, fWide) + UTF-16 null-terminated строки +
+    /// DOUBLE null в конце. Чистая функция от байтов — тестируется синтетикой
+    /// на любой ОС (снимает shell байты с IDataObject как есть).
+    ///
+    /// Толерантность: нечётный хвостовой байт игнорируется; без терминатора
+    /// отдаём что накопили. ANSI-вариант (fWide=0) не поддерживаем — Explorer
+    /// всегда кладёт UTF-16.
+    pub fn parse_hdrop_bytes(bytes: &[u8]) -> Vec<PathBuf> {
+        // DROPFILES-заголовок = 20 байт; меньше — битый формат
+        if bytes.len() < 20 {
+            return Vec::new();
+        }
+        let p_files = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        if p_files > bytes.len() {
+            return Vec::new();
+        }
+        let f_wide = i32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) != 0;
+        if !f_wide {
+            return Vec::new();
+        }
+        let mut paths = Vec::new();
+        let mut segment: Vec<u16> = Vec::new();
+        // Пары u16; хвостовый нечётный байт (remainder) игнорируем
+        for chunk in bytes[p_files..].chunks_exact(2) {
+            let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if unit == 0 {
+                if segment.is_empty() {
+                    // Пустой сегмент = терминатор списка (DOUBLE null)
+                    return paths;
+                }
+                paths.push(PathBuf::from(String::from_utf16_lossy(&segment)));
+                segment.clear();
+            } else {
+                segment.push(unit);
+            }
+        }
+        // Терминатора не было — отдаём что накопили
+        if !segment.is_empty() {
+            paths.push(PathBuf::from(String::from_utf16_lossy(&segment)));
+        }
+        paths
+    }
+
+    /// Разворачивает пути дропа: каталог — его дети (глубина 1, подпапки-дети
+    /// НЕ разворачиваются — сами станут нодами); симлинки пропускаются (не
+    /// следуем — защита от циклов); обычные файлы — как есть. Детей каталога
+    /// сортируем по имени (предсказуемость сетки), скрытые/системные — мимо.
+    pub fn expand_drop_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for path in paths {
+            // symlink_metadata не следует по ссылке: симлинки видны сразу
+            let Ok(meta) = std::fs::symlink_metadata(path) else {
+                continue; // путь исчез/недоступен — пропускаем
+            };
+            let file_type = meta.file_type();
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let Ok(entries) = std::fs::read_dir(path) else {
+                    continue; // нечитаемый каталог — пропускаем целиком
+                };
+                let mut children: Vec<(std::ffi::OsString, PathBuf)> = Vec::new();
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if !child_is_hidden(&name, &entry) {
+                        children.push((name, entry.path()));
+                    }
+                }
+                // Сортировка по имени: порядок сетки не зависит от выдачи FS
+                children.sort_by(|a, b| a.0.cmp(&b.0));
+                out.extend(children.into_iter().map(|(_, child)| child));
+            } else {
+                out.push(path.clone()); // обычный файл — порядок входа сохраняем
+            }
+        }
+        out
+    }
+
+    /// Скрытый/системный ребёнок каталога? Unix — имя с ведущей точкой;
+    /// Windows — FILE_ATTRIBUTE_HIDDEN (0x2) | FILE_ATTRIBUTE_SYSTEM (0x4).
+    #[cfg(not(windows))]
+    fn child_is_hidden(name: &std::ffi::OsStr, _entry: &std::fs::DirEntry) -> bool {
+        name.to_string_lossy().starts_with('.')
+    }
+
+    /// Скрытый/системный ребёнок каталога (Windows): читаем атрибуты
+    /// метаданных записи каталога, битые — считаем скрытыми (не показываем).
+    #[cfg(windows)]
+    fn child_is_hidden(_name: &std::ffi::OsStr, entry: &std::fs::DirEntry) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+        entry
+            .metadata()
+            .map(|meta| {
+                meta.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0
+            })
+            .unwrap_or(true)
+    }
+
+    /// Позиции сетки дропа от origin (row-major): `count` карточек,
+    /// перенос строки после DROP_GRID_COLS колонок, шаг = карточка + зазор.
+    pub fn drop_grid(origin: Vec2, count: usize) -> Vec<Vec2> {
+        (0..count)
+            .map(|i| {
+                let col = i % DROP_GRID_COLS;
+                let row = i / DROP_GRID_COLS;
+                [
+                    origin[0] + col as f32 * (DROP_CARD_W + DROP_GRID_GAP),
+                    origin[1] + row as f32 * (DROP_CARD_H + DROP_GRID_GAP),
+                ]
+            })
+            .collect()
+    }
+
+    /// Вид текста из CF_UNICODETEXT: URL или обычный текст.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum DropTextKind {
+        /// Начинается (после trim) с `http://`/`https://` — без учёта регистра.
+        Url,
+        /// Всё остальное.
+        Plain,
+    }
+
+    /// Классификация текста дропа: префикс `http://`/`https://` (case-
+    /// insensitive, после trim) — Url, иначе Plain.
+    pub fn drop_text_kind(text: &str) -> DropTextKind {
+        let trimmed = text.trim();
+        let head: String = trimmed
+            .chars()
+            .take("https://".len())
+            .flat_map(char::to_lowercase)
+            .collect();
+        if head.starts_with("http://") || head == "https://" {
+            DropTextKind::Url
+        } else {
+            DropTextKind::Plain
+        }
+    }
+
+    /// Тип вставки из дропа (T9): файловая нода или заметка с текстом.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum DropInsertKind {
+        /// Файловая нода (путь как дал Explorer, абсолютный).
+        File(PathBuf),
+        /// Текстовая нода: URL или произвольный текст (критерий T9 — URL
+        /// становится заметкой с текстом ссылки; Plain-текст — бонус).
+        Note(String),
+    }
+
+    /// Одна вставка дропа: id, тип и позиция в world-координатах.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct DropInsert {
+        pub id: String,
+        pub kind: DropInsertKind,
+        pub pos: Vec2,
+    }
+
+    /// Спланировать вставку дропа (T9): сырые данные из shell -> готовые
+    /// ноды с id и позициями. CF_HDROP разбирается и разворачивается
+    /// (каталоги — глубина 1), позиции даёт сетка от origin; текст — единая
+    /// заметка в origin. Канвас не мутируется — вставку делает приложение.
+    pub fn plan_drop(
+        canvas: &Canvas,
+        data: &canvas_shell::dragdrop::DragData,
+        origin: Vec2,
+    ) -> Vec<DropInsert> {
+        let occupied: HashSet<&str> = canvas.nodes.iter().map(|node| node.id.as_str()).collect();
+        let mut issued: HashSet<String> = HashSet::new();
+        match data {
+            canvas_shell::dragdrop::DragData::HdropBytes(bytes) => {
+                let paths = expand_drop_paths(&parse_hdrop_bytes(bytes));
+                let positions = drop_grid(origin, paths.len());
+                paths
+                    .into_iter()
+                    .zip(positions)
+                    .map(|(path, pos)| DropInsert {
+                        id: next_free_plan_id(&occupied, &mut issued, "file"),
+                        kind: DropInsertKind::File(path),
+                        pos,
+                    })
+                    .collect()
+            }
+            canvas_shell::dragdrop::DragData::Text(text) => {
+                // И Url, и Plain -> единая заметка с полным текстом
+                let kind = match drop_text_kind(text) {
+                    DropTextKind::Url | DropTextKind::Plain => DropInsertKind::Note(text.clone()),
+                };
+                vec![DropInsert {
+                    id: next_free_plan_id(&occupied, &mut issued, "note"),
+                    kind,
+                    pos: origin,
+                }]
+            }
+            canvas_shell::dragdrop::DragData::None => Vec::new(),
+        }
+    }
+
+    /// Следующий свободный `{prefix}-N` внутри плана: избегаем и занятых в
+    /// канвасе, и уже выданных в этом плане (несколько файлов подряд).
+    fn next_free_plan_id(
+        occupied: &HashSet<&str>,
+        issued: &mut HashSet<String>,
+        prefix: &str,
+    ) -> String {
+        let mut n = 1u32;
+        loop {
+            let id = format!("{prefix}-{n}");
+            if !occupied.contains(id.as_str()) && !issued.contains(&id) {
+                issued.insert(id.clone());
+                return id;
+            }
+            n += 1;
+        }
     }
 
     /// Rect пункта меню в world-координатах: [x, y, w, h].
@@ -306,16 +543,244 @@ pub mod ui {
             assert!(!detector.register(t0 + Duration::from_millis(100), [50.0, 0.0]));
         }
 
-        /// Генератор id заметок (T7): первый свободный note-N.
+        /// Генератор id (T7/T9): первый свободный по префиксу.
         #[test]
         fn note_id_first_free() {
             let canvas = Canvas::default();
-            assert_eq!(next_note_id(&canvas), "note-1");
+            assert_eq!(next_free_id(&canvas, "note"), "note-1");
             let mut canvas = Canvas::default();
             canvas.nodes.push(Node::text("note-1", "", 0.0, 0.0));
-            assert_eq!(next_note_id(&canvas), "note-2");
+            assert_eq!(next_free_id(&canvas, "note"), "note-2");
             canvas.nodes.push(Node::text("note-2", "", 0.0, 0.0));
-            assert_eq!(next_note_id(&canvas), "note-3");
+            assert_eq!(next_free_id(&canvas, "note"), "note-3");
+        }
+
+        // --- Drag-drop (T9) ---
+
+        /// Синтетический CF_HDROP: DROPFILES-заголовок {pFiles=20, pt=0,
+        /// fNC=0, fWide=1} + UTF-16 строки с \0 каждая + финальный \0.
+        fn hdrop(paths: &[&str]) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&20u32.to_le_bytes()); // pFiles — офсет строк
+            bytes.extend_from_slice(&0i32.to_le_bytes()); // pt.x
+            bytes.extend_from_slice(&0i32.to_le_bytes()); // pt.y
+            bytes.extend_from_slice(&0i32.to_le_bytes()); // fNC
+            bytes.extend_from_slice(&1i32.to_le_bytes()); // fWide
+            for path in paths {
+                for unit in path.encode_utf16() {
+                    bytes.extend_from_slice(&unit.to_le_bytes());
+                }
+                bytes.extend_from_slice(&0u16.to_le_bytes());
+            }
+            bytes.extend_from_slice(&0u16.to_le_bytes()); // DOUBLE null — конец списка
+            bytes
+        }
+
+        /// CF_HDROP: два пути, пустой список.
+        #[test]
+        fn parse_hdrop_paths_and_empty() {
+            let paths = parse_hdrop_bytes(&hdrop(&["C:/a.txt", "C:/dir/b.jpg"]));
+            assert_eq!(
+                paths,
+                vec![PathBuf::from("C:/a.txt"), PathBuf::from("C:/dir/b.jpg")]
+            );
+            assert!(parse_hdrop_bytes(&hdrop(&[])).is_empty());
+        }
+
+        /// Битый CF_HDROP: короткий буфер, pFiles больше длины, ANSI-вариант.
+        #[test]
+        fn parse_hdrop_malformed() {
+            // len < 20 — вообще не DROPFILES
+            assert!(parse_hdrop_bytes(&[0u8; 19]).is_empty());
+            // pFiles указывает за конец буфера
+            let mut bytes = hdrop(&["C:/a.txt"]);
+            bytes[0..4].copy_from_slice(&100u32.to_le_bytes());
+            assert!(parse_hdrop_bytes(&bytes).is_empty());
+            // fWide = 0 — ANSI не поддерживаем (Explorer всегда UTF-16)
+            let mut bytes = hdrop(&["C:/a.txt"]);
+            bytes[16..20].copy_from_slice(&0i32.to_le_bytes());
+            assert!(parse_hdrop_bytes(&bytes).is_empty());
+        }
+
+        /// Нет терминатора списка — отдаём что накопили; нечётный хвост — мимо.
+        #[test]
+        fn parse_hdrop_without_terminator() {
+            // header + "a.txt\0" + "b.txt" (без \0 и без DOUBLE null) + мусорный байт
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&20u32.to_le_bytes());
+            bytes.extend_from_slice(&[0u8; 12]);
+            bytes.extend_from_slice(&1i32.to_le_bytes());
+            for path in ["a.txt", "b.txt"] {
+                for unit in path.encode_utf16() {
+                    bytes.extend_from_slice(&unit.to_le_bytes());
+                }
+                if path == "a.txt" {
+                    bytes.extend_from_slice(&0u16.to_le_bytes());
+                }
+            }
+            bytes.push(0xff); // нечётный хвостовой байт — игнорируется
+            let paths = parse_hdrop_bytes(&bytes);
+            assert_eq!(paths, vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]);
+        }
+
+        /// Уникальный temp-каталог теста (без новых зависимостей).
+        fn temp_dir(name: &str) -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("canvasdesk-t9-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("tempdir");
+            dir
+        }
+
+        /// Каталог -> дети глубины 1 (подпапка сама нода), скрытый skip,
+        /// сортировка по имени.
+        #[test]
+        fn expand_drop_folder_depth_one() {
+            let dir = temp_dir("folder");
+            std::fs::write(dir.join("b.txt"), b"1").unwrap();
+            std::fs::write(dir.join("a.txt"), b"2").unwrap();
+            std::fs::write(dir.join(".hidden"), b"3").unwrap();
+            std::fs::create_dir_all(dir.join("sub")).unwrap();
+            let paths = expand_drop_paths(std::slice::from_ref(&dir));
+            assert_eq!(
+                paths,
+                vec![dir.join("a.txt"), dir.join("b.txt"), dir.join("sub")]
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// Файл -> сам; порядок входа сохраняется (не сортируется).
+        #[test]
+        fn expand_drop_files_keep_order() {
+            let dir = temp_dir("files");
+            let z = dir.join("z.txt");
+            let a = dir.join("a.txt");
+            std::fs::write(&z, b"1").unwrap();
+            std::fs::write(&a, b"2").unwrap();
+            let paths = expand_drop_paths(&[z.clone(), a.clone()]);
+            assert_eq!(paths, vec![z, a]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// Симлинк пропускается (не следуем — защита от циклов). Unix-only.
+        #[cfg(unix)]
+        #[test]
+        fn expand_drop_symlink_skipped() {
+            let dir = temp_dir("symlink");
+            std::fs::write(dir.join("real.txt"), b"x").unwrap();
+            std::os::unix::fs::symlink(dir.join("real.txt"), dir.join("link.txt")).unwrap();
+            let paths = expand_drop_paths(&[dir.join("link.txt")]);
+            assert!(paths.is_empty(), "симлинк должен быть пропущен: {paths:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// Сетка дропа: 0/1/5/6/11 позиций, шаг карточка+зазор, перенос
+        /// строки после 5 колонок (критерий T9 — предсказуемость).
+        #[test]
+        fn drop_grid_layout() {
+            assert!(drop_grid([0.0, 0.0], 0).is_empty());
+            assert_eq!(drop_grid([10.0, 20.0], 1), vec![[10.0, 20.0]]);
+            let five = drop_grid([0.0, 0.0], 5);
+            assert_eq!(five.len(), 5);
+            assert_eq!(five[1][0], DROP_CARD_W + DROP_GRID_GAP);
+            assert_eq!(five[4][0], 4.0 * (DROP_CARD_W + DROP_GRID_GAP));
+            // 6-я — вторая строка, с origin.x
+            let six = drop_grid([7.0, 11.0], 6);
+            assert_eq!(six[5], [7.0, 11.0 + DROP_CARD_H + DROP_GRID_GAP]);
+            // 11-я — третья строка
+            let eleven = drop_grid([0.0, 0.0], 11);
+            assert_eq!(eleven[10][1], 2.0 * (DROP_CARD_H + DROP_GRID_GAP));
+        }
+
+        /// next_free_id: первый свободный по префиксу, чужие префиксы не мешают.
+        #[test]
+        fn next_free_id_prefixes() {
+            let canvas = Canvas::default();
+            assert_eq!(next_free_id(&canvas, "note"), "note-1");
+            let mut canvas = Canvas::default();
+            canvas.nodes.push(Node::text("note-1", "", 0.0, 0.0));
+            assert_eq!(next_free_id(&canvas, "note"), "note-2");
+            canvas
+                .nodes
+                .push(Node::file("file-1", "a", 0.0, 0.0, 1.0, 1.0));
+            canvas
+                .nodes
+                .push(Node::file("file-2", "b", 0.0, 0.0, 1.0, 1.0));
+            assert_eq!(next_free_id(&canvas, "file"), "file-3");
+            // Чистый префикс — с 1
+            assert_eq!(next_free_id(&canvas, "link"), "link-1");
+        }
+
+        /// Классификация текста: http/https без учёта регистра — Url.
+        #[test]
+        fn drop_text_kind_detection() {
+            assert_eq!(drop_text_kind("http://example.com"), DropTextKind::Url);
+            assert_eq!(drop_text_kind("https://example.com"), DropTextKind::Url);
+            assert_eq!(drop_text_kind("  HTTPs://Example.COM "), DropTextKind::Url);
+            assert_eq!(drop_text_kind("привет"), DropTextKind::Plain);
+            assert_eq!(drop_text_kind(""), DropTextKind::Plain);
+        }
+
+        /// План дропа файлов: свободные id с учётом занятых, сетка от origin,
+        /// канвас не мутируется. Пути — реальные temp-файлы: expand их
+        /// проверяет на ФС (несуществующие пропускаются).
+        #[test]
+        fn plan_drop_files_grid_and_ids() {
+            let dir = temp_dir("plan");
+            std::fs::write(dir.join("a.png"), b"1").unwrap();
+            std::fs::write(dir.join("b.png"), b"2").unwrap();
+            std::fs::write(dir.join("c.png"), b"3").unwrap();
+            let a = dir.join("a.png").to_string_lossy().into_owned();
+            let b = dir.join("b.png").to_string_lossy().into_owned();
+            let c = dir.join("c.png").to_string_lossy().into_owned();
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::file("file-1", "old.png", 0.0, 0.0, 10.0, 10.0));
+            let plan = plan_drop(
+                &canvas,
+                &canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[&a, &b, &c])),
+                [100.0, 200.0],
+            );
+            assert_eq!(plan.len(), 3);
+            // file-1 занят в канвасе — нумерация со свободных
+            assert_eq!(plan[0].id, "file-2");
+            assert_eq!(plan[1].id, "file-3");
+            assert_eq!(plan[2].id, "file-4");
+            assert_eq!(plan[0].pos, [100.0, 200.0]);
+            assert_eq!(plan[1].pos, [100.0 + DROP_CARD_W + DROP_GRID_GAP, 200.0]);
+            assert_eq!(plan[0].kind, DropInsertKind::File(PathBuf::from(&a)));
+            // Канвас не мутирован
+            assert_eq!(canvas.nodes.len(), 1);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// План дропа текста: одна заметка в origin с полным текстом.
+        #[test]
+        fn plan_drop_text_single_note() {
+            let plan = plan_drop(
+                &Canvas::default(),
+                &canvas_shell::dragdrop::DragData::Text("https://example.com".into()),
+                [5.0, 6.0],
+            );
+            assert_eq!(plan.len(), 1);
+            assert_eq!(plan[0].id, "note-1");
+            assert_eq!(plan[0].pos, [5.0, 6.0]);
+            assert_eq!(
+                plan[0].kind,
+                DropInsertKind::Note("https://example.com".into())
+            );
+        }
+
+        /// Нет поддерживаемых форматов — план пуст.
+        #[test]
+        fn plan_drop_none_is_empty() {
+            assert!(plan_drop(
+                &Canvas::default(),
+                &canvas_shell::dragdrop::DragData::None,
+                [0.0, 0.0]
+            )
+            .is_empty());
         }
 
         /// Hit-test меню (T7): пункты палитры, края, промахи.

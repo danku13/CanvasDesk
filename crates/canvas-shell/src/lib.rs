@@ -3,6 +3,7 @@
 //! Весь unsafe — только здесь, с SAFETY-комментариями.
 
 pub mod cache;
+pub mod dragdrop;
 pub mod service;
 #[cfg(windows)]
 pub mod thumbs;

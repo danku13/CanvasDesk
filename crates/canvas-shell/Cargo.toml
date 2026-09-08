@@ -13,3 +13,5 @@ rusqlite.workspace = true
 # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (SPEC §4)
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+# прямой путь ::windows_core в коде, сгенерированном #[implement] (T9)
+windows-core.workspace = true

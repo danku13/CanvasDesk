@@ -6,6 +6,7 @@
 use canvas_core::Node;
 
 use crate::camera::Camera;
+use crate::camera::Vec2;
 use crate::markdown;
 
 /// Высота заголовка карточки в world-пикселях.
@@ -293,6 +294,67 @@ pub fn build_draft_instances(
         .into_iter()
         .map(|point| dot(point, EDGE_DOT, DRAFT_COLOR))
         .collect()
+}
+
+// --- Призраки зоны дропа (T9) ---
+//
+// Квады-«призраки» сетки вставки на время DragOver: полупрозрачный
+// акцент (та же гамма, что SELECTION_BORDER/DRAFT_COLOR), без тени —
+// это мелкие overlay-квады в FrameOverlay.instances (world-space).
+
+/// Заливка призрака карточки дропа — акцент, полупрозрачный.
+pub const DROP_GHOST_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.10];
+/// Рамка призрака карточки дропа — акцент заметнее заливки.
+pub const DROP_GHOST_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 0.7];
+/// Рамка зоны дропа (bbox сетки) — акцент, средняя прозрачность.
+pub const DROP_ZONE_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 0.5];
+
+/// Призрак одной карточки дропа: pos/size заданы сеткой, заливка и рамка
+/// дропа, без тени (params.w = 1 — малые квады не отбрасывают).
+pub fn drop_ghost(pos: Vec2, card_size: [f32; 2]) -> CardInstance {
+    CardInstance {
+        pos,
+        size: card_size,
+        fill: DROP_GHOST_FILL,
+        border: DROP_GHOST_BORDER,
+        params: [CORNER_RADIUS, 0.0, 0.0, 1.0],
+    }
+}
+
+/// Призраки сетки дропа по позициям (не длиннее `cap` — превью дешёвое,
+/// DROP_PREVIEW_MAX обрезает гигантские выборки из Explorer).
+pub fn drop_ghosts(positions: &[Vec2], card_size: [f32; 2], cap: usize) -> Vec<CardInstance> {
+    positions
+        .iter()
+        .take(cap)
+        .map(|&pos| drop_ghost(pos, card_size))
+        .collect()
+}
+
+/// Рамка зоны дропа: bbox сетки призраков (pos_i..pos_i+card_size),
+/// расширенный на gap/2 со всех сторон; заливка полностью прозрачная
+/// (только рамка), без тени. Пустые позиции — None (рисовать нечего).
+pub fn drop_zone_frame(positions: &[Vec2], card_size: [f32; 2], gap: f32) -> Option<CardInstance> {
+    let first = *positions.first()?;
+    let margin = gap / 2.0;
+    let mut min = [first[0], first[1]];
+    let mut max = [first[0] + card_size[0], first[1] + card_size[1]];
+    for &pos in &positions[1..] {
+        min[0] = min[0].min(pos[0]);
+        min[1] = min[1].min(pos[1]);
+        max[0] = max[0].max(pos[0] + card_size[0]);
+        max[1] = max[1].max(pos[1] + card_size[1]);
+    }
+    Some(CardInstance {
+        pos: [min[0] - margin, min[1] - margin],
+        size: [
+            (max[0] - min[0]) + margin * 2.0,
+            (max[1] - min[1]) + margin * 2.0,
+        ],
+        fill: [0.0; 4],
+        border: DROP_ZONE_BORDER,
+        params: [CORNER_RADIUS, 0.0, 0.0, 1.0],
+    })
 }
 
 /// Uniform камеры — тот же layout, что у сетки (grid.rs).
@@ -666,6 +728,57 @@ mod tests {
             ],
             [400.0, 200.0]
         );
+    }
+
+    /// Призраки зоны дропа (T9): пустые позиции, cap обрезает гигантскую выборку.
+    #[test]
+    fn drop_ghosts_empty_and_capped() {
+        assert!(drop_ghosts(&[], [320.0, 220.0], 50).is_empty());
+        assert!(drop_zone_frame(&[], [320.0, 220.0], 24.0).is_none());
+        // 10 позиций, cap 3 — только 3 призрака (превью дешёвое)
+        let positions: Vec<[f32; 2]> = (0..10).map(|i| [i as f32 * 100.0, 0.0]).collect();
+        assert_eq!(drop_ghosts(&positions, [320.0, 220.0], 3).len(), 3);
+    }
+
+    /// Призрак карточки дропа: pos/size, полупрозрачные цвета, без тени.
+    #[test]
+    fn drop_ghost_instance_shape() {
+        let ghost = drop_ghost([7.0, 11.0], [320.0, 220.0]);
+        assert_eq!(ghost.pos, [7.0, 11.0]);
+        assert_eq!(ghost.size, [320.0, 220.0]);
+        assert_eq!(ghost.fill, DROP_GHOST_FILL);
+        assert_eq!(ghost.border, DROP_GHOST_BORDER);
+        assert!(
+            ghost.fill[3] > 0.0 && ghost.fill[3] < 1.0,
+            "заливка полупрозрачна"
+        );
+        assert!(
+            ghost.border[3] > 0.0 && ghost.border[3] < 1.0,
+            "рамка полупрозрачна"
+        );
+        assert_eq!(ghost.params, [CORNER_RADIUS, 0.0, 0.0, 1.0]);
+    }
+
+    /// Рамка зоны дропа: bbox сетки + gap/2 со всех сторон, заливка пустая.
+    #[test]
+    fn drop_zone_frame_bbox() {
+        let card = [320.0, 220.0];
+        let gap = 24.0;
+        let m = gap / 2.0;
+        // Одна позиция: x = pos - m, y = pos - m, size = card + 2m
+        let frame = drop_zone_frame(&[[10.0, 20.0]], card, gap).expect("рамка одной позиции");
+        assert_eq!(frame.pos, [10.0 - m, 20.0 - m]);
+        assert_eq!(frame.size, [card[0] + 2.0 * m, card[1] + 2.0 * m]);
+        assert_eq!(frame.fill, [0.0; 4], "заливка полностью прозрачна");
+        assert_eq!(frame.border, DROP_ZONE_BORDER);
+        assert_eq!(frame.params[3], 1.0, "без тени");
+        // Две позиции в ряд: ширина = 2*card + gap + 2m
+        let step = card[0] + gap;
+        let frame =
+            drop_zone_frame(&[[0.0, 0.0], [step, 0.0]], card, gap).expect("рамка двух позиций");
+        assert_eq!(frame.size[0], 2.0 * card[0] + gap + 2.0 * m);
+        assert_eq!(frame.size[1], card[1] + 2.0 * m);
+        assert_eq!(frame.pos, [-m, -m]);
     }
 
     /// Инстансы: рамка выделения/битой ссылки, z-порядок = порядок индексов.

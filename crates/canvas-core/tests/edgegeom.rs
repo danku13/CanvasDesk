@@ -306,9 +306,11 @@ fn all_16_side_combinations() {
             let edge_id = format!("e-{from_side:?}-{to_side:?}");
             test_canvas.add_edge(Edge::new(edge_id, "a", Some(from_side), "b", Some(to_side)));
 
-            let curve = edge_curve(&test_canvas, &test_canvas.edges[0]).expect(&format!(
-                "комбинация {from_side:?} -> {to_side:?} должна резолвиться"
-            ));
+            // expect(&format!()) строит сообщение на каждой итерации —
+            // clippy expect_fun_call: ленивый panic! только при провале
+            let curve = edge_curve(&test_canvas, &test_canvas.edges[0]).unwrap_or_else(|| {
+                panic!("комбинация {from_side:?} -> {to_side:?} должна резолвиться")
+            });
 
             // Концы в правильных портах
             assert_eq!(curve.p0, port_point(&test_canvas.nodes[0], from_side));

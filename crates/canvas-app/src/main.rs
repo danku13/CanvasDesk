@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::ui::{
     button_rect, in_resize_corner, menu_item_at, menu_item_rect, menu_label, menu_rect,
-    next_note_id, panel_rect, panel_row_at, point_in_rect, ContextMenu, DoubleClick, EdgeDrag,
+    next_free_id, panel_rect, panel_row_at, point_in_rect, ContextMenu, DoubleClick, EdgeDrag,
     SettingsRow, MAX_NOTE_WIDTH, MENU_FILL, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
     MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
     SETTINGS_ROWS,
@@ -31,6 +31,9 @@ use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, Window
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
+// Атрибуты окна Windows: отключение своего IDropTarget у winit (T9, план §3)
+#[cfg(windows)]
+use winit::platform::windows::WindowAttributesExtWindows;
 
 /// Множитель зума на одну строку колеса мыши (Ctrl+колесо, SPEC §8).
 const ZOOM_STEP_PER_LINE: f32 = 1.1;
@@ -217,10 +220,22 @@ impl SceneState {
 }
 
 /// Пользовательские события event loop (T6): worker-потоки ThumbService
-/// будят цикл через EventLoopProxy, когда готовы тамбнейлы.
+/// будят цикл через EventLoopProxy, когда готовы тамбнейлы; shell шлёт
+/// события drag-drop (T9).
 enum AppEvent {
     /// В канале ThumbService появились результаты — забрать и перерисовать.
     ThumbsReady,
+    /// Событие drag-drop из IDropTarget (T9): Enter/Over/Leave/Drop.
+    Drag(canvas_shell::dragdrop::DragEvent),
+}
+
+/// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
+/// курсором на DragOver; живёт до Leave/Drop.
+struct DropPreview {
+    /// Текущий origin сетки призраков в world-координатах.
+    origin: Vec2,
+    /// План вставки (id/тип/позиция) — переживает без изменений до Drop.
+    plan: Vec<canvas_app::ui::DropInsert>,
 }
 
 /// Состояние приложения: окно и рендерер создаются в `resumed`
@@ -271,6 +286,16 @@ struct App {
     config_path: Option<PathBuf>,
     /// Панель настроек открыта.
     settings_open: bool,
+    /// Превью зоны дропа (T9): план вставки на время DragOver.
+    drop_preview: Option<DropPreview>,
+    /// Регистрация IDropTarget (T9), Windows.
+    #[cfg(windows)]
+    drag_watcher: Option<canvas_shell::dragdrop::DropWatcher>,
+    /// Отправитель drag-событий в event loop (T9). Читается только в
+    /// cfg(windows)-ветке resumed(): единственный источник drag-событий —
+    /// Windows IDropTarget (SPEC §7.3), на других ОС не читается.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
 }
 
 impl App {
@@ -279,6 +304,7 @@ impl App {
         thumbs: ThumbService,
         settings: Settings,
         config_path: Option<PathBuf>,
+        drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
     ) -> Self {
         Self {
             window: None,
@@ -307,6 +333,10 @@ impl App {
             settings,
             config_path,
             settings_open: false,
+            drop_preview: None,
+            #[cfg(windows)]
+            drag_watcher: None,
+            drag_sender,
         }
     }
 
@@ -493,7 +523,7 @@ impl App {
     /// Создать пустую заметку в world-точке (T7): модель + spatial index.
     /// Возвращает индекс новой ноды.
     fn create_note_at(&mut self, world: Vec2) -> usize {
-        let id = next_note_id(&self.scene.canvas);
+        let id = next_free_id(&self.scene.canvas, "note");
         self.scene
             .canvas
             .nodes
@@ -527,6 +557,80 @@ impl App {
     fn cursor_world(&self) -> Vec2 {
         self.camera
             .screen_to_world(self.cursor, self.viewport_logical())
+    }
+
+    /// Клиентские ФИЗИЧЕСКИЕ px от shell (DragEvent) -> world-координаты:
+    /// делим на scale_factor (масштаб учтён), затем через камеру (T9).
+    fn drag_world_pt(&self, pt: (f32, f32)) -> Vec2 {
+        let scale = self.scale_factor();
+        let logical = [pt.0 / scale, pt.1 / scale];
+        self.camera
+            .screen_to_world(logical, self.viewport_logical())
+    }
+
+    /// События drag-drop (T9): превью зоны на Enter/Over, вставка нод на
+    /// Drop. Данные приходят сырыми из shell, план строит canvas_app::ui.
+    fn on_drag_event(&mut self, drag: canvas_shell::dragdrop::DragEvent) {
+        use canvas_app::ui::{plan_drop, DropInsertKind};
+        match drag {
+            canvas_shell::dragdrop::DragEvent::Enter { data, client_pt } => {
+                let world = self.drag_world_pt(client_pt);
+                let plan = plan_drop(&self.scene.canvas, &data, world);
+                // Пустой план (нет поддерживаемых форматов) — не подсвечиваем
+                self.drop_preview = if plan.is_empty() {
+                    None
+                } else {
+                    Some(DropPreview {
+                        origin: world,
+                        plan,
+                    })
+                };
+            }
+            canvas_shell::dragdrop::DragEvent::Over { client_pt } => {
+                // Сетка призраков следует за курсором, сам план не меняется
+                let world = self.drag_world_pt(client_pt);
+                if let Some(preview) = self.drop_preview.as_mut() {
+                    preview.origin = world;
+                }
+            }
+            canvas_shell::dragdrop::DragEvent::Leave => self.drop_preview = None,
+            canvas_shell::dragdrop::DragEvent::Drop { data, client_pt } => {
+                let world = self.drag_world_pt(client_pt);
+                // План пересчитываем по СВЕЖИМ данным Drop (не из превью,
+                // план T9 §5): источник мог обновить содержимое
+                let plan = plan_drop(&self.scene.canvas, &data, world);
+                let mut last: Option<usize> = None;
+                for ins in plan {
+                    let node = match ins.kind {
+                        DropInsertKind::File(path) => Node::file(
+                            ins.id,
+                            path.to_string_lossy().into_owned(),
+                            ins.pos[0],
+                            ins.pos[1],
+                            canvas_app::ui::DROP_CARD_W,
+                            canvas_app::ui::DROP_CARD_H,
+                        ),
+                        DropInsertKind::Note(text) => {
+                            Node::text(ins.id, text, ins.pos[0], ins.pos[1])
+                        }
+                    };
+                    // Вставка как в create_note_at: модель + spatial index
+                    self.scene.canvas.nodes.push(node);
+                    let index = self.scene.canvas.nodes.len() - 1;
+                    let node_ref = &self.scene.canvas.nodes[index];
+                    self.scene.spatial.insert(index, node_ref);
+                    last = Some(index);
+                }
+                if let Some(index) = last {
+                    // Выделяем последнюю ноду группы; тамбнейлы закажет
+                    // order_thumbnails в ближайшем кадре, автосейв — сам
+                    self.scene.selected = Some(Selection::Node(index));
+                    self.scene.mark_dirty();
+                }
+                self.drop_preview = None;
+            }
+        }
+        self.request_redraw();
     }
 
     fn request_redraw(&self) {
@@ -728,6 +832,10 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         }
         let attrs = Window::default_attributes().with_title("CanvasDesk");
+        // winit сам ставит свой IDropTarget (RegisterDragDrop с assert S_OK) —
+        // отключаем и ставим свой в canvas-shell (план T9 §3)
+        #[cfg(windows)]
+        let attrs = attrs.with_drag_and_drop(false);
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
             Err(err) => {
@@ -747,7 +855,38 @@ impl ApplicationHandler<AppEvent> for App {
                     "окно создано"
                 );
                 self.renderer = Some(renderer);
-                self.window = Some(window);
+                self.window = Some(window.clone());
+                // Регистрация своего IDropTarget (T9): HWND достаём через
+                // raw-window-handle (winit 0.30 публично Win32-HWND не отдаёт);
+                // ошибка — warn и живём без drag-drop (graceful degradation)
+                #[cfg(windows)]
+                {
+                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    // HWND через raw-window-handle: winit 0.30 публично
+                    // Win32-HWND не отдаёт (внутренний windows-sys); окно
+                    // создано на этом потоке, handle доступен
+                    match window.window_handle() {
+                        Ok(handle) => match handle.as_raw() {
+                            RawWindowHandle::Win32(win32) => {
+                                match canvas_shell::dragdrop::install(
+                                    win32.hwnd.get(),
+                                    self.drag_sender.clone(),
+                                ) {
+                                    Ok(watcher) => self.drag_watcher = Some(watcher),
+                                    Err(err) => tracing::warn!(
+                                        %err,
+                                        "drag-drop недоступен, приложение работает без него"
+                                    ),
+                                }
+                            }
+                            // На Windows бывает только Win32-handle
+                            _ => tracing::warn!("неожидаемый handle окна — drag-drop выключен"),
+                        },
+                        Err(err) => {
+                            tracing::warn!(%err, "handle окна недоступен — drag-drop выключен")
+                        }
+                    }
+                }
                 self.request_redraw();
             }
             Err(err) => {
@@ -799,7 +938,9 @@ impl ApplicationHandler<AppEvent> for App {
                 self.last_frame = Some(now);
                 let hud = self.hud_text();
                 // Оверлей контекстного меню (T7): квады + подписи пунктов
-                let (overlay_instances, overlay_labels, overlay_label_pos) = self.menu_overlay();
+                // Т9 добавляет в конец призраков дропа — mutable
+                let (mut overlay_instances, overlay_labels, overlay_label_pos) =
+                    self.menu_overlay();
                 let overlay_texts: Vec<OverlayText> = overlay_labels
                     .iter()
                     .zip(&overlay_label_pos)
@@ -821,6 +962,24 @@ impl ApplicationHandler<AppEvent> for App {
                         color: t.color,
                     })
                     .collect();
+                // Призраки зоны дропа (T9): рамка bbox сетки + квады-призраки.
+                // Кладём В КОНЕЦ оверлея: порядок инстансов = порядок рисования,
+                // depth-теста нет — призраки поверх всего
+                if let Some(preview) = &self.drop_preview {
+                    let positions = canvas_app::ui::drop_grid(preview.origin, preview.plan.len());
+                    if let Some(frame) = canvas_render::cards::drop_zone_frame(
+                        &positions,
+                        [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
+                        canvas_app::ui::DROP_GRID_GAP,
+                    ) {
+                        overlay_instances.push(frame);
+                    }
+                    overlay_instances.extend(canvas_render::cards::drop_ghosts(
+                        &positions,
+                        [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
+                        canvas_app::ui::DROP_PREVIEW_MAX,
+                    ));
+                }
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
@@ -889,6 +1048,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.request_redraw();
                 }
             }
+            AppEvent::Drag(event) => self.on_drag_event(event),
         }
     }
 
@@ -1441,6 +1601,14 @@ fn main() -> anyhow::Result<()> {
     // event loop через proxy — иначе при ControlFlow::Wait результаты
     // лежали бы в канале до следующего ввода
     let proxy: EventLoopProxy<AppEvent> = event_loop.create_proxy();
+    // Отправитель drag-событий в event loop (T9): тот же паттерн, что и
+    // ThumbService-вокер — IDropTarget (shell) шлёт AppEvent::Drag через proxy
+    let drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync> = {
+        let proxy = proxy.clone();
+        Arc::new(move |event| {
+            let _ = proxy.send_event(AppEvent::Drag(event));
+        })
+    };
     #[cfg(windows)]
     let provider: Arc<dyn ThumbnailProvider + Send + Sync> =
         Arc::new(canvas_shell::ShellThumbnailProvider);
@@ -1463,7 +1631,13 @@ fn main() -> anyhow::Result<()> {
             let _ = proxy.send_event(AppEvent::ThumbsReady);
         })),
     );
-    event_loop.run_app(&mut App::new(scene, thumbs, settings, config_path))?;
+    event_loop.run_app(&mut App::new(
+        scene,
+        thumbs,
+        settings,
+        config_path,
+        drag_sender,
+    ))?;
     Ok(())
 }
 
