@@ -640,6 +640,19 @@ pub mod ui {
             std::fs::write(dir.join("b.txt"), b"1").unwrap();
             std::fs::write(dir.join("a.txt"), b"2").unwrap();
             std::fs::write(dir.join(".hidden"), b"3").unwrap();
+            // На Windows «скрытый» — атрибут файла, а не точка в имени:
+            // выставляем attrib +h (встроенная команда), иначе фильтр
+            // FILE_ATTRIBUTE_HIDDEN не имеет что фильтровать (урок CI fa1ca0b).
+            // На Unix достаточно имени с ведущей точкой.
+            #[cfg(windows)]
+            {
+                let status = std::process::Command::new("attrib")
+                    .arg("+h")
+                    .arg(dir.join(".hidden").as_os_str())
+                    .status()
+                    .expect("запуск attrib");
+                assert!(status.success(), "attrib +h не смог скрыть файл");
+            }
             std::fs::create_dir_all(dir.join("sub")).unwrap();
             let paths = expand_drop_paths(std::slice::from_ref(&dir));
             assert_eq!(
