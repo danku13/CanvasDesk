@@ -576,7 +576,7 @@ impl App {
                 }
             }
             canvas_shell::DesktopEvent::DpiChanged { dpi } => {
-                let scale = canvas_shell::dpi_to_scale(dpi) as f32;
+                let scale = canvas_shell::dpi_to_scale(dpi);
                 tracing::info!(dpi, scale, "DPI десктоп-окна изменился (поллинг R10)");
                 if let Some(renderer) = self.renderer.as_mut() {
                     // Пересоздание surface не нужно: размер HWND не менялся;
