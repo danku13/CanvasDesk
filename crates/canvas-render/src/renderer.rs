@@ -10,8 +10,8 @@ use canvas_core::{curve_point, edge_curve, Canvas, Side, SpatialIndex, Thumbnail
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
-    build_draft_instances, build_edge_instances, build_instances, build_port_instances,
-    CardInstance, CardsPipeline, SELECTION_BORDER,
+    build_draft_instances, build_edge_instances, build_port_instances, card_instance, CardInstance,
+    CardsPipeline, SELECTION_BORDER,
 };
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
@@ -19,8 +19,11 @@ use crate::config::{
 use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
-use crate::text::{titles_visible, EdgeLabel, OverlayText, ScreenText, TextSystem};
-use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
+use crate::text::{
+    body_area, titles_visible, EdgeLabel, OverlayText, ScreenText, TextSystem, TitleFrame,
+};
+use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
+use crate::zorder;
 
 /// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
 const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
@@ -32,6 +35,10 @@ const EDGE_LABEL_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.85];
 const EDGE_LABEL_PADDING: [f32; 2] = [6.0, 3.0];
 /// Фон бокса редактирования лейбла связи (T8) — у связи нет карточки.
 const EDGE_EDIT_FILL: [f32; 4] = [0.13, 0.13, 0.16, 0.95];
+/// Потолок текст-групп кадра (включая финальную): сегменты сверх потолка
+/// теряют свою группу — их тексты рисуются в финальной поверх всего.
+/// Защита от патологически глубоких каскадов перекрытий.
+const MAX_TEXT_GROUPS: usize = 16;
 
 /// Screen-space инстанс (логические px от левого верхнего угла окна) →
 /// world-инстанс текущей камеры: на экране размер константен при любом зуме.
@@ -360,75 +367,186 @@ impl Renderer {
                 self.scale_factor,
             );
         }
-        let instances = {
-            // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
-            // в общем буфере = порядок рисования
-            let mut instances = build_edge_instances(scene.canvas, selected_edge);
-            let mut instances_cards = build_instances(scene.canvas, &indices, selected_node);
-            instances.append(&mut instances_cards);
-            // Порты hover-ноды (T8) — поверх карточек
-            if let Some(hovered) = scene.hovered {
-                instances.extend(build_port_instances(scene.canvas, hovered));
-            }
-            // Резиновая линия новой связи (T8) — поверх всего world-space
-            if let Some((port, side, cursor)) = scene.edge_draft {
-                instances.extend(build_draft_instances(port, side, cursor));
-            }
-            // Подложки лейблов связей — над линиями, под их текстом
-            instances.extend_from_slice(&label_backdrops);
-            // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
-            // шейпинга (при промахе появятся на следующий кадр), под текстом
-            for &index in &indices {
-                if let Some((entry_zoom, rects)) = self.text.highlight_rects(index) {
-                    if let Some(node) = scene.canvas.nodes.get(index) {
-                        let (origin, _, _) = crate::text::body_area(node);
-                        for rect in rects {
-                            instances.push(Self::overlay_quad(
+        // Редакторские оверлеи (T7/T8): выделение и каретка. У ноды — квады на её
+        // z-позиции (в z-проходе ниже: над её карточкой, под её текстом и под
+        // перекрывающими карточками). У лейбла связи (T8) ноды нет — бокс и
+        // квады идут в оверлей-регион поверх карточек, под текстом лейбла.
+        let editing_node = editing.as_deref().and_then(EditingSession::node_index);
+        let mut editing_quads: Vec<CardInstance> = Vec::new();
+        let mut edge_edit_quads: Vec<CardInstance> = Vec::new();
+        if let Some(session) = editing.as_deref_mut() {
+            match session.target() {
+                EditTarget::Node(_) => {
+                    if let Some(node) = scene
+                        .canvas
+                        .nodes
+                        .get(session.node_index().unwrap_or(usize::MAX))
+                    {
+                        let zoom_px = camera.zoom() * self.scale_factor;
+                        let (origin, _, _) = body_area(node);
+                        for rect in session.selection_rects(self.text.font_system_mut()) {
+                            editing_quads.push(Self::overlay_quad(
                                 origin,
-                                *rect,
-                                entry_zoom,
-                                HIGHLIGHT_FILL,
+                                rect,
+                                zoom_px,
+                                TEXT_SELECTION_FILL,
+                            ));
+                        }
+                        if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
+                            editing_quads.push(Self::overlay_quad(
+                                origin,
+                                rect,
+                                zoom_px,
+                                SELECTION_BORDER,
                             ));
                         }
                     }
                 }
-            }
-            // Оверлеи редактирования (T7/T8): выделение и каретка — квады поверх
-            // области редактирования, под текстом (текст рисуется позже)
-            if let Some(session) = editing.as_deref_mut() {
-                if let Some((origin, width, height)) = session_area(scene.canvas, session) {
-                    // У лейбла связи нет карточки — бокс-подложка с рамкой (T8)
-                    if let EditTarget::Edge(_) = session.target() {
-                        instances.push(CardInstance {
+                EditTarget::Edge(_) => {
+                    if let Some((origin, width, height)) = session_area(scene.canvas, session) {
+                        // У лейбла связи нет карточки — бокс-подложка с рамкой
+                        edge_edit_quads.push(CardInstance {
                             pos: origin,
                             size: [width, height],
                             fill: EDGE_EDIT_FILL,
                             border: SELECTION_BORDER,
                             params: [6.0, 1.0, 0.0, 0.0],
                         });
-                    }
-                    for rect in session.selection_rects(self.text.font_system_mut()) {
-                        instances.push(Self::overlay_quad(
-                            origin,
-                            rect,
-                            zoom_px,
-                            TEXT_SELECTION_FILL,
-                        ));
-                    }
-                    if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
-                        instances.push(Self::overlay_quad(origin, rect, zoom_px, SELECTION_BORDER));
+                        let zoom_px = camera.zoom() * self.scale_factor;
+                        for rect in session.selection_rects(self.text.font_system_mut()) {
+                            edge_edit_quads.push(Self::overlay_quad(
+                                origin,
+                                rect,
+                                zoom_px,
+                                TEXT_SELECTION_FILL,
+                            ));
+                        }
+                        if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
+                            edge_edit_quads.push(Self::overlay_quad(
+                                origin,
+                                rect,
+                                zoom_px,
+                                SELECTION_BORDER,
+                            ));
+                        }
                     }
                 }
             }
-            // Оверлеи приложения (контекстное меню, T7)
-            instances.extend_from_slice(overlay.instances);
-            // Screen-space оверлеи (панель настроек): конверсия в world —
-            // размер на экране константен при любом зуме и панорамировании
-            for inst in overlay.screen_instances {
-                instances.push(screen_instance_to_world(camera, viewport_logical, inst));
+        }
+
+        // Z-план кадра (zorder.rs): видимые ноды (z-порядок = порядок в
+        // Canvas.nodes) бьются на сегменты так, чтобы текст и тамбнейл ноды
+        // рисовались после её карточки, но до перекрывающих её карточек.
+        // Фикс наложения: раньше тамбнейлы и текст рисовались сплошными
+        // проходами поверх всех карточек — иконка Word фоновой карточки
+        // перекрывала заметки переднего плана, текст фоновой заметки лёг
+        // поверх чужих карточек и текста.
+        let zoom = camera.zoom();
+        let show_titles = titles_visible(zoom * self.scale_factor);
+        let rects: Vec<[f32; 4]> = indices
+            .iter()
+            .map(|&index| {
+                scene
+                    .canvas
+                    .nodes
+                    .get(index)
+                    .map(|n| [n.x, n.y, n.x + n.width, n.y + n.height])
+                    .unwrap_or([0.0, 0.0, 0.0, 0.0])
+            })
+            .collect();
+        let has_thumb: Vec<bool> = indices
+            .iter()
+            .map(|&index| {
+                zoom >= THUMB_MIN_ZOOM
+                    && scene
+                        .canvas
+                        .nodes
+                        .get(index)
+                        .is_some_and(|n| n.file.is_some())
+                    && self.thumbs.contains(index)
+            })
+            .collect();
+        let has_text: Vec<bool> = indices
+            .iter()
+            .map(|&index| show_titles || editing_node == Some(index))
+            .collect();
+        let zplan = zorder::plan_z_order(&rects, &has_text, &has_thumb, MAX_TEXT_GROUPS);
+
+        // Z-проход: инстансы карточек (карточка + квады подсветки/каретки на
+        // z-позициях нод) и тамбнейлы, посегментно с границами для draw_range.
+        let mut instances: Vec<CardInstance> = Vec::with_capacity(indices.len() + 8);
+        let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
+        // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
+        // в общем буфере = порядок рисования; рисуются диапазоном до сегментов
+        instances.extend(build_edge_instances(scene.canvas, selected_edge));
+        let edges_end = instances.len() as u32;
+        // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
+        let mut draw_ranges: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
+            Vec::new();
+        for seg in &zplan.segments {
+            let cards_start = instances.len() as u32;
+            let thumbs_start = thumb_instances.len() as u32;
+            for pos in seg.nodes.clone() {
+                let Some(&index) = indices.get(pos) else {
+                    continue;
+                };
+                let Some(node) = scene.canvas.nodes.get(index) else {
+                    continue;
+                };
+                // Карточка ноды
+                instances.push(card_instance(node, selected_node == Some(index)));
+                // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
+                // шейпинга (при промахе появятся на следующий кадре) —
+                // на z-позиции ноды, под её текстом и перекрывающими карточками
+                if let Some((entry_zoom, highlight)) = self.text.highlight_rects(index) {
+                    let (origin, _, _) = body_area(node);
+                    for rect in highlight {
+                        instances.push(Self::overlay_quad(
+                            origin,
+                            *rect,
+                            entry_zoom,
+                            HIGHLIGHT_FILL,
+                        ));
+                    }
+                }
+                // Выделение/каретка редактора (T7) — на z-позиции редактируемой ноды
+                if editing_node == Some(index) {
+                    instances.extend_from_slice(&editing_quads);
+                }
+                // Тамбнейл (T6): в сегменте своей ноды — под перекрывающими карточками
+                if let Some(inst) =
+                    thumb_instance(scene.canvas, index, self.thumbs.slots_mut(), zoom)
+                {
+                    thumb_instances.push(inst);
+                }
             }
-            instances
-        };
+            draw_ranges.push((
+                cards_start..instances.len() as u32,
+                thumbs_start..thumb_instances.len() as u32,
+                seg.group,
+            ));
+        }
+        // T8: порты hover-ноды, резиновая линия новой связи, подложки лейблов и
+        // бокс редактирования лейбла — поверх карточек всех сегментов, под их
+        // текстом (лейблы рисуются финальной текст-группой ниже)
+        if let Some(hovered) = scene.hovered {
+            instances.extend(build_port_instances(scene.canvas, hovered));
+        }
+        if let Some((port, side, cursor)) = scene.edge_draft {
+            instances.extend(build_draft_instances(port, side, cursor));
+        }
+        instances.extend_from_slice(&label_backdrops);
+        instances.extend_from_slice(&edge_edit_quads);
+        // Оверлеи приложения (контекстное меню, панель настроек) — поверх всех
+        // карточек: расширяют диапазон карточек финального сегмента; их тексты
+        // (подписи меню, строки панели) рисуются финальной текст-группой.
+        instances.extend_from_slice(overlay.instances);
+        for inst in overlay.screen_instances {
+            instances.push(screen_instance_to_world(camera, viewport_logical, inst));
+        }
+        if let Some(last) = draw_ranges.last_mut() {
+            last.0 = last.0.start..instances.len() as u32;
+        }
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -437,14 +555,9 @@ impl Renderer {
             self.scale_factor,
             &instances,
         );
-        // Тамбнейлы (T6): тот же набор видимых нод, LOD по zoom внутри build
-        let thumb_instances = build_thumb_instances(
-            scene.canvas,
-            &indices,
-            self.thumbs.slots_mut(),
-            camera.zoom(),
-        );
-        let thumb_count = self.thumbs.update(
+        // Тамбнейлы (T6): инстансы загружены в z-проходе; диапазоны
+        // рисуются посегментно между карточками (draw_ranges)
+        self.thumbs.update(
             &self.gpu.device,
             &self.gpu.queue,
             camera,
@@ -463,7 +576,7 @@ impl Renderer {
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
             &self.gpu.queue,
-            &crate::text::TitleFrame {
+            &TitleFrame {
                 camera,
                 viewport_physical: [self.size.width, self.size.height],
                 scale_factor: self.scale_factor,
@@ -474,6 +587,7 @@ impl Renderer {
                 editing_buffer,
                 overlay_texts: overlay.texts,
                 screen_texts: overlay.screen_texts,
+                zplan: &zplan,
                 edge_labels: &edge_labels,
             },
         ) {
@@ -506,10 +620,21 @@ impl Renderer {
             if self.grid_visible {
                 self.grid.draw(&mut pass);
             }
-            self.cards.draw(&mut pass, instance_count);
-            self.thumbs.draw(&mut pass, thumb_count);
-            if let Err(err) = self.text.draw(&mut pass) {
-                tracing::warn!(?err, "отрисовка текста пропущена");
+            // Сегменты z-порядка: карточки сегмента → тамбнейлы сегмента →
+            // тексты сегмента. Следующий сегмент (перекрывающие карточки)
+            // рисуется поверх текстов предыдущего — наложений нет.
+            // Связи (T8) — под карточками всех сегментов, затем сегменты z-порядка
+            if edges_end > 0 {
+                self.cards.draw_range(&mut pass, 0..edges_end);
+            }
+            for (cards_range, thumbs_range, group) in &draw_ranges {
+                self.cards.draw_range(&mut pass, cards_range.clone());
+                self.thumbs.draw_range(&mut pass, thumbs_range.clone());
+                if let Some(g) = group {
+                    if let Err(err) = self.text.draw_group(&mut pass, *g) {
+                        tracing::warn!(?err, "отрисовка текста пропущена");
+                    }
+                }
             }
         }
         self.gpu.queue.submit([encoder.finish()]);

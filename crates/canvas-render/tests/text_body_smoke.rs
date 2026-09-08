@@ -5,6 +5,7 @@
 use canvas_core::{Canvas, Node};
 use canvas_render::gpu::GpuContext;
 use canvas_render::text::{TextSystem, TitleFrame};
+use canvas_render::zorder;
 use canvas_render::Camera;
 
 /// После кадра область тела карточки содержит нарисованные глифы (не clear),
@@ -32,6 +33,8 @@ fn headless_note_body_draws() {
     canvas.nodes.push(note);
 
     let camera = Camera::default();
+    // Одна нода без перекрытий — один сегмент, одна (финальная) группа
+    let zplan = zorder::plan_z_order(&[[-190.0, -140.0, 190.0, 120.0]], &[true], &[false], 16);
     text.prepare_titles(
         &gpu.device,
         &gpu.queue,
@@ -46,6 +49,7 @@ fn headless_note_body_draws() {
             editing_buffer: None,
             overlay_texts: &[],
             screen_texts: &[],
+            zplan: &zplan,
             edge_labels: &[],
         },
     )
@@ -88,7 +92,7 @@ fn headless_note_body_draws() {
             depth_stencil_attachment: None,
             ..Default::default()
         });
-        text.draw(&mut pass).expect("draw текста");
+        text.draw_group(&mut pass, 0).expect("draw текста");
     }
 
     let unpadded_row = width * 4;

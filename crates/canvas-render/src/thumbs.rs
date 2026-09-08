@@ -52,13 +52,26 @@ pub fn build_thumb_instances(
     }
     indices
         .iter()
-        .filter_map(|&index| {
-            let node = canvas.nodes.get(index)?;
-            node.file.as_ref()?;
-            let slot = slots.touch(index)?;
-            Some(fit_instance(node.x, node.y, node.width, node.height, slot))
-        })
+        .filter_map(|&index| thumb_instance(canvas, index, slots, zoom))
         .collect()
+}
+
+/// Инстанс тамбнейла одной ноды (z-проход рендера): file-нода со слотом
+/// в атласе при zoom ≥ THUMB_MIN_ZOOM; обращение обновляет LRU слота.
+/// None — тамбнейла в этом кадре нет.
+pub fn thumb_instance(
+    canvas: &Canvas,
+    index: usize,
+    slots: &mut ThumbSlots,
+    zoom: f32,
+) -> Option<ThumbInstance> {
+    if zoom < THUMB_MIN_ZOOM {
+        return None;
+    }
+    let node = canvas.nodes.get(index)?;
+    node.file.as_ref()?;
+    let slot = slots.touch(index)?;
+    Some(fit_instance(node.x, node.y, node.width, node.height, slot))
 }
 
 /// Вписать тамбнейл в тело карточки (rect минус заголовок) с сохранением
@@ -364,10 +377,23 @@ impl ThumbsPipeline {
         if count == 0 {
             return;
         }
+        self.draw_range(pass, 0..count);
+    }
+
+    /// Нарисовать инстансы тамбнейлов диапазона `range`: сегменты кадра
+    /// рисуют свои диапазоны между карточками (z-порядок).
+    pub fn draw_range<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        range: std::ops::Range<u32>,
+    ) {
+        if range.is_empty() {
+            return;
+        }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        pass.draw(0..6, 0..count);
+        pass.draw(0..6, range);
     }
 }
 

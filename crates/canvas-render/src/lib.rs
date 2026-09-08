@@ -15,6 +15,7 @@ pub mod renderer;
 pub mod stats;
 pub mod text;
 pub mod thumbs;
+pub mod zorder;
 
 pub use camera::Camera;
 pub use glyphon::Color;

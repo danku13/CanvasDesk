@@ -128,6 +128,26 @@ impl CardInstance {
     }
 }
 
+/// Инстанс карточки одной ноды: заливка по цвету, рамка выделения/битой
+/// ссылки, параметры SDF. Чистая функция для z-прохода рендера.
+pub fn card_instance(node: &Node, selected: bool) -> CardInstance {
+    let broken = node.broken_link == Some(true);
+    let border = if selected {
+        SELECTION_BORDER
+    } else if broken {
+        BROKEN_BORDER
+    } else {
+        [0.0; 4]
+    };
+    CardInstance {
+        pos: [node.x, node.y],
+        size: [node.width, node.height],
+        fill: card_color(node),
+        border,
+        params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
+    }
+}
+
 /// Собрать инстансы кадра по видимым нодам (culling, T5): `indices` —
 /// результат `SpatialIndex::query_rect` по viewport, отсортирован по возрастанию
 /// (z-порядок = порядок нод в массиве).
@@ -140,22 +160,7 @@ pub fn build_instances(
         .iter()
         .filter_map(|&index| {
             let node = canvas.nodes.get(index)?;
-            let selected = selected == Some(index);
-            let broken = node.broken_link == Some(true);
-            let border = if selected {
-                SELECTION_BORDER
-            } else if broken {
-                BROKEN_BORDER
-            } else {
-                [0.0; 4]
-            };
-            Some(CardInstance {
-                pos: [node.x, node.y],
-                size: [node.width, node.height],
-                fill: card_color(node),
-                border,
-                params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
-            })
+            Some(card_instance(node, selected == Some(index)))
         })
         .collect()
 }
@@ -468,10 +473,23 @@ impl CardsPipeline {
         if count == 0 {
             return;
         }
+        self.draw_range(pass, 0..count);
+    }
+
+    /// Нарисовать инстансы карточек диапазона `range` (z-порядок: сегменты
+    /// кадра рисуют свои диапазоны, тамбнейлы и текст между ними).
+    pub fn draw_range<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        range: std::ops::Range<u32>,
+    ) {
+        if range.is_empty() {
+            return;
+        }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        pass.draw(0..6, 0..count);
+        pass.draw(0..6, range);
     }
 }
 
