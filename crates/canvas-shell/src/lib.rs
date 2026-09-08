@@ -7,11 +7,13 @@ pub mod dragdrop;
 pub mod service;
 #[cfg(windows)]
 pub mod thumbs;
+pub mod watcher;
 
 pub use cache::{default_cache_dir, default_config_path, ThumbCache, SIZE_CLASS};
 pub use service::{downscale_to_fit, Priority, ThumbService};
 #[cfg(windows)]
 pub use thumbs::ShellThumbnailProvider;
+pub use watcher::{FileEventSender, WatchService, DEBOUNCE};
 
 use canvas_core::{CoreError, Thumbnail};
 

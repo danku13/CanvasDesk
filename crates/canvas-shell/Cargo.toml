@@ -9,6 +9,9 @@ canvas-core.workspace = true
 tracing.workspace = true
 # тамбнейл-кэш SQLite (SPEC §5.2)
 rusqlite.workspace = true
+# файловый вотчер (T10, SPEC §7.5): кроссплатформенный (inotify/RDCW),
+# чтобы интеграционные тесты гонялись и на Linux CI/dev
+notify.workspace = true
 
 # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (SPEC §4)
 [target.'cfg(windows)'.dependencies]

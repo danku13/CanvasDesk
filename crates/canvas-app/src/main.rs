@@ -1,6 +1,6 @@
 //! canvas-app — приложение: event loop, команды, UI-состояние, main().
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,8 +14,8 @@ use canvas_app::ui::{
     SETTINGS_ROWS,
 };
 use canvas_core::{
-    edge_at, nearest_side, port_at, port_point, Canvas, Edge, Node, NodeKind, Settings,
-    SpatialIndex, ThumbnailProvider,
+    apply_file_events, edge_at, nearest_side, port_at, port_point, watched_dirs, Canvas, Edge,
+    FileEvent, Node, NodeChange, NodeKind, Settings, SpatialIndex, ThumbnailProvider,
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
@@ -24,7 +24,7 @@ use canvas_render::edit::{
 };
 use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
-use canvas_shell::{Priority, ThumbService};
+use canvas_shell::{Priority, ThumbService, WatchService};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -41,6 +41,9 @@ const ZOOM_STEP_PER_LINE: f32 = 1.1;
 const PAN_PX_PER_LINE: f32 = 40.0;
 /// Debounce автосейва (SPEC §9).
 const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(2);
+/// Ширина клип-бокса тултипа битой ссылки (T10): длинный путь переносится
+/// на границы этой области, экран не покидает.
+const TOOLTIP_WIDTH: f32 = 380.0;
 
 /// Screen-space текст с владеемой строкой (панель настроек): промежуточное
 /// представление, конвертируется в `ScreenText` на кадр рендера.
@@ -167,26 +170,21 @@ impl SceneState {
         }
     }
 
+    /// Каталог .canvas-файла: база для относительных путей нод (конвенция
+    /// JSON Canvas) и для директорий вотчера (T10).
+    fn canvas_dir(&self) -> PathBuf {
+        self.path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    }
+
     /// Абсолютный путь файловой ноды: относительные резолвятся от каталога
     /// .canvas-файла (конвенция JSON Canvas); shell-API требуют абсолютных путей
     /// (SHCreateItemFromParsingName возвращает E_INVALIDARG на относительных).
+    /// Логика — в canvas_core::resolve_node_path (единый источник, T10).
     fn resolve_file_path(&self, file: &str) -> PathBuf {
-        let path = PathBuf::from(file);
-        if path.is_absolute() {
-            return path;
-        }
-        let joined = match self.path.parent() {
-            Some(dir) if !dir.as_os_str().is_empty() => dir.join(&path),
-            _ => path,
-        };
-        // Абсолютизируем без canonicalize — он падает на битых ссылках
-        if joined.is_absolute() {
-            joined
-        } else {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&joined))
-                .unwrap_or(joined)
-        }
+        canvas_core::resolve_node_path(file, &self.canvas_dir())
     }
 
     fn mark_dirty(&mut self) {
@@ -221,12 +219,15 @@ impl SceneState {
 
 /// Пользовательские события event loop (T6): worker-потоки ThumbService
 /// будят цикл через EventLoopProxy, когда готовы тамбнейлы; shell шлёт
-/// события drag-drop (T9).
+/// события drag-drop (T9) и файлового вотчера (T10).
 enum AppEvent {
     /// В канале ThumbService появились результаты — забрать и перерисовать.
     ThumbsReady,
     /// Событие drag-drop из IDropTarget (T9): Enter/Over/Leave/Drop.
     Drag(canvas_shell::dragdrop::DragEvent),
+    /// Батч событий файловой системы от WatchService (T10): debounce 300 мс
+    /// уже отработан в shell, здесь — применение к модели и кэшам.
+    FileEvents(Vec<FileEvent>),
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -262,7 +263,7 @@ struct App {
     /// Счётчики последнего кадра (для HUD).
     last_stats: FrameStats,
     /// Ноды, чей тамбнейл не удалось получить (битая ссылка и т.п.) —
-    /// не перезаказывать каждый кадр; ретрай — при перезапуске (вотчер — T14).
+    /// не перезаказывать каждый кадр; ретрай — при изменении файла вотчером (T10).
     thumbs_failed: std::collections::HashSet<usize>,
     /// Активная сессия инлайн-редактирования заметки (T7).
     editing: Option<EditingSession>,
@@ -288,6 +289,9 @@ struct App {
     settings_open: bool,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
+    /// Файловый вотчер (T10): события ФС → AppEvent::FileEvents;
+    /// набор директорий синхронизируется с моделью (sync_watch_dirs).
+    watcher: WatchService,
     /// Регистрация IDropTarget (T9), Windows.
     #[cfg(windows)]
     drag_watcher: Option<canvas_shell::dragdrop::DropWatcher>,
@@ -305,6 +309,7 @@ impl App {
         settings: Settings,
         config_path: Option<PathBuf>,
         drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
+        watcher: WatchService,
     ) -> Self {
         Self {
             window: None,
@@ -334,6 +339,7 @@ impl App {
             config_path,
             settings_open: false,
             drop_preview: None,
+            watcher,
             #[cfg(windows)]
             drag_watcher: None,
             drag_sender,
@@ -514,6 +520,8 @@ impl App {
                 self.hovered = None;
                 self.edge_drag = None;
                 self.scene.mark_dirty();
+                // Директории удалённых нод больше не нужны вотчеру (T10)
+                self.sync_watch_dirs();
                 self.request_redraw();
             }
             None => {}
@@ -627,8 +635,76 @@ impl App {
                     self.scene.selected = Some(Selection::Node(index));
                     self.scene.mark_dirty();
                 }
+                // Дроп мог добавить файловые ноды в новые директории —
+                // синхронизируем вотчер (T10)
+                self.sync_watch_dirs();
                 self.drop_preview = None;
             }
+        }
+        self.request_redraw();
+    }
+
+    /// Синхронизировать вотчер с моделью (T10): родительские директории всех
+    /// файловых нод → WatchService::sync_dirs (diff, повторный вызов — no-op).
+    /// Вызывается после загрузки, дропа (T9), удаления нод и rename-событий.
+    fn sync_watch_dirs(&mut self) {
+        let dirs = watched_dirs(&self.scene.canvas, &self.scene.canvas_dir());
+        self.watcher.sync_dirs(&dirs);
+    }
+
+    /// Батч событий файловой системы (T10): применение к модели — в чистой
+    /// canvas_core::apply_file_events, здесь — платформенные реакции: сброс
+    /// тамбнейл-кэшей и негативного кэша, автосейв, пересборка вотчеров.
+    fn on_file_events(&mut self, events: Vec<FileEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        let canvas_dir = self.scene.canvas_dir();
+        let changes = apply_file_events(&mut self.scene.canvas, &canvas_dir, &events);
+        if changes.is_empty() {
+            return; // чужие файлы в наблюдаемых папках — частый случай
+        }
+        tracing::debug!(
+            events = events.len(),
+            changes = changes.len(),
+            "события файловой системы применены"
+        );
+        let mut invalidate_thumbs = false;
+        let mut dirty = false;
+        let mut resync = false;
+        for change in changes {
+            match change {
+                // Modify (и atomic-save): атлас и SQLite-кэш перезапросятся,
+                // неудавшийся тамбнейл — перезапросить
+                NodeChange::ThumbStale(index) => {
+                    invalidate_thumbs = true;
+                    self.thumbs_failed.remove(&index);
+                }
+                // Путь обновлён: автосейв + возможно новая директория вотчинга
+                NodeChange::PathUpdated(_) => {
+                    dirty = true;
+                    resync = true;
+                }
+                NodeChange::Broken(_) => {}
+                // Восстановление: неудавшийся тамбнейл можно перезапросить
+                NodeChange::Restored(index) => {
+                    invalidate_thumbs = true;
+                    self.thumbs_failed.remove(&index);
+                }
+            }
+        }
+        if invalidate_thumbs {
+            if let Some(renderer) = self.renderer.as_mut() {
+                // Полный сброс: ключ атласа — индекс ноды, точечного удаления
+                // нет; SQLite промахнётся по mtime сам (ключ — путь+mtime)
+                renderer.invalidate_node_caches();
+            }
+        }
+        if dirty {
+            self.scene.mark_dirty();
+        }
+        if resync {
+            self.sync_watch_dirs();
         }
         self.request_redraw();
     }
@@ -951,7 +1027,29 @@ impl ApplicationHandler<AppEvent> for App {
                     })
                     .collect();
                 // Панель настроек (screen-space): кнопка + строки переключателей
-                let (screen_instances, owned_texts) = self.settings_overlay();
+                let (screen_instances, mut owned_texts) = self.settings_overlay();
+                // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
+                // файла; screen-space, константный размер при любом зуме
+                if let Some(file) = self.hovered.and_then(|index| {
+                    self.scene.canvas.nodes.get(index).and_then(|node| {
+                        (node.broken_link == Some(true))
+                            .then(|| node.file.clone())
+                            .flatten()
+                    })
+                }) {
+                    // Ограничиваем правым краём окна, чтобы длинный путь
+                    // не вылез за экран (width — только клип-бounds)
+                    let viewport = self.viewport_logical();
+                    let origin_x =
+                        (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                    owned_texts.push(OwnedScreenText {
+                        text: format!("Файл недоступен: {file}"),
+                        origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                        width: TOOLTIP_WIDTH,
+                        font_size: 13.0,
+                        color: Color::rgb(0xd4, 0xd4, 0xd4),
+                    });
+                }
                 let screen_texts: Vec<ScreenText> = owned_texts
                     .iter()
                     .map(|t| ScreenText {
@@ -1049,6 +1147,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             AppEvent::Drag(event) => self.on_drag_event(event),
+            AppEvent::FileEvents(events) => self.on_file_events(events),
         }
     }
 
@@ -1609,6 +1708,17 @@ fn main() -> anyhow::Result<()> {
             let _ = proxy.send_event(AppEvent::Drag(event));
         })
     };
+    // Файловый вотчер (T10): агрегатор shell шлёт батчи FileEvent через proxy;
+    // первичный набор директорий — сразу после загрузки сцены, дальше —
+    // sync_watch_dirs по событиям модели (дроп/удаление/rename)
+    let file_sender: canvas_shell::FileEventSender = {
+        let proxy = proxy.clone();
+        Arc::new(move |events| {
+            let _ = proxy.send_event(AppEvent::FileEvents(events));
+        })
+    };
+    let mut watcher = WatchService::new(file_sender);
+    watcher.sync_dirs(&watched_dirs(&scene.canvas, &scene.canvas_dir()));
     #[cfg(windows)]
     let provider: Arc<dyn ThumbnailProvider + Send + Sync> =
         Arc::new(canvas_shell::ShellThumbnailProvider);
@@ -1637,6 +1747,7 @@ fn main() -> anyhow::Result<()> {
         settings,
         config_path,
         drag_sender,
+        watcher,
     ))?;
     Ok(())
 }

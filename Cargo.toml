@@ -26,6 +26,9 @@ rstar = "0.12"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # логирование
 tracing = "0.1"
+# файловый вотчер (T10, SPEC §7.5): ReadDirectoryChangesW на Windows,
+# inotify на Linux — кроссплатформенные интеграционные тесты
+notify = "8.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # окно, рендер, текст (версии по SPEC §3)
 winit = "0.30"
