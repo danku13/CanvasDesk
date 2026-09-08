@@ -18,3 +18,6 @@ notify.workspace = true
 windows.workspace = true
 # прямой путь ::windows_core в коде, сгенерированном #[implement] (T9)
 windows-core.workspace = true
+# ошибки AttachError/HierarchyError модуля desktop (T15; cfg(windows)-код —
+# на Linux не компилируется, поэтому вне общей секции)
+thiserror.workspace = true
