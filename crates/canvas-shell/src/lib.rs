@@ -3,7 +3,9 @@
 //! Весь unsafe — только здесь, с SAFETY-комментариями.
 
 pub mod cache;
-#[cfg(windows)]
+// Режим десктопа (T15): чистое ядро (desktop/mod.rs) кроссплатформенно —
+// тесты гоняются в CI на Linux; Win32-механика (hierarchy/attach/monitor)
+// — cfg(windows) внутри mod.rs (рекомендация воркера T15-A).
 pub mod desktop;
 pub mod dragdrop;
 pub mod search;
@@ -11,9 +13,6 @@ pub mod service;
 #[cfg(windows)]
 pub mod thumbs;
 pub mod watcher;
-// Режим десктопа (T15): чистое ядро кроссплатформенно (модуль desktop
-// объявлен в src/desktop/mod.rs только для windows — его чистая часть
-// нужна приложению только на windows), Win32-механика — cfg(windows).
 #[cfg(windows)]
 pub use desktop::{
     dpi_to_scale, plan_style_scrub, recovery_action, union_rects, verify_styles, DesktopEvent,

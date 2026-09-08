@@ -288,6 +288,10 @@ enum AppEvent {
     /// События поискового индекса (T14): ответы worker-потока FTS5
     /// (результаты запроса / завершение индексации).
     Search(SearchEvent),
+    /// События shell-монитора режима десктопа (T15): разрушение WorkerW
+    /// (WinEventHook/поллинг) и смена DPI после репарентинга (R10).
+    #[cfg(windows)]
+    Desktop(canvas_shell::DesktopEvent),
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -383,9 +387,32 @@ struct App {
     flight: Option<(Flight, Instant)>,
     /// Пульс подсветки ноды-результата (T14): (нода, старт).
     pulse: Option<(usize, Instant)>,
+    /// Режим десктопа (T15, флаг --desktop): окно встраивается в WorkerW
+    /// (Windows; на других ОС — warn и обычный оконный режим, SPEC §9).
+    desktop_mode: bool,
+    /// Найденная иерархия десктопа (T15) после успешного attach: хэндлы
+    /// Progman/DefView/WorkerW + стратегия. None — не встроены/фолбэк.
+    #[cfg(windows)]
+    desktop_hierarchy: Option<canvas_shell::desktop::hierarchy::DesktopHierarchy>,
+    /// Shell-монитор (T15): WinEventHook на WorkerW + DPI-поллинг; события —
+    /// AppEvent::Desktop через proxy. Спавнится в main() при --desktop,
+    /// слежка (Watch) устанавливается в resumed() после attach.
+    #[cfg(windows)]
+    desktop_monitor: Option<canvas_shell::desktop::monitor::DesktopMonitorService>,
+    /// Счётчик подряд неудач re-attach (T15): ≥3 — стоп автоматики + warn
+    /// (анти-флуд упрощённый; полный по PID Shell_TrayWnd — T17).
+    #[cfg(windows)]
+    desktop_recover_failures: u32,
+    /// WS_EX_NOACTIVATE уже снят первым кликом (T15, идемпотентный флаг).
+    #[cfg(windows)]
+    desktop_activation_enabled: bool,
 }
 
 impl App {
+    // 8 аргументов — гейт-конфигурация сессии (сцена, сервисы, флаги);
+    // группировать в структуру ради clippy — лишний слой на единственном
+    // месте создания (main)
+    #[allow(clippy::too_many_arguments)]
     fn new(
         scene: SceneState,
         thumbs: ThumbService,
@@ -394,6 +421,7 @@ impl App {
         drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
         watcher: WatchService,
         search_service: SearchService,
+        desktop_mode: bool,
     ) -> Self {
         Self {
             window: None,
@@ -436,6 +464,180 @@ impl App {
             search_pending: None,
             flight: None,
             pulse: None,
+            desktop_mode,
+            #[cfg(windows)]
+            desktop_hierarchy: None,
+            #[cfg(windows)]
+            desktop_monitor: None,
+            #[cfg(windows)]
+            desktop_recover_failures: 0,
+            #[cfg(windows)]
+            desktop_activation_enabled: false,
+        }
+    }
+
+    /// Подключить shell-монитор десктопа (T15): спавнится в main() при
+    /// --desktop (responder через EventLoopProxy), слежка — в resumed().
+    #[cfg(windows)]
+    fn set_desktop_monitor(
+        &mut self,
+        monitor: canvas_shell::desktop::monitor::DesktopMonitorService,
+    ) {
+        self.desktop_monitor = Some(monitor);
+    }
+
+    /// HWND окна приложения через raw-window-handle (T15; тот же приём,
+    /// что dragdrop::install в T9: winit 0.30 публично HWND не отдаёт).
+    #[cfg(windows)]
+    fn window_hwnd(&self) -> Option<isize> {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let window = self.window.as_ref()?;
+        match window.window_handle() {
+            Ok(handle) => match handle.as_raw() {
+                RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+                _ => None,
+            },
+            Err(_) => None,
+        }
+    }
+
+    /// Конвертация raw-window-handle → HWND (идиома dragdrop/com.rs:
+    /// Win32 HWND — указатель без внутренней структуры).
+    #[cfg(windows)]
+    fn hwnd(raw: isize) -> canvas_shell::desktop::HWND {
+        canvas_shell::desktop::HWND(raw as *mut core::ffi::c_void)
+    }
+
+    /// Встройка в десктоп (T15, resumed): детект иерархии → идемпотентный
+    /// спавн WorkerW → attach с верификацией стилей → слежка монитора.
+    /// Любая ошибка — warn + MessageBox + фолбэк: окно остаётся обычным
+    /// borderless top-level (R14; это и есть «обычное окно» — пересоздавать
+    /// после winit-инициализации нельзя).
+    #[cfg(windows)]
+    fn attach_desktop(&mut self, raw: isize) {
+        use canvas_shell::desktop::{attach, hierarchy};
+        let hwnd = Self::hwnd(raw);
+        let screen = hierarchy::virtual_screen_rect().unwrap_or_else(|| {
+            tracing::warn!("виртуальный экран недоступен — экран 1280x720");
+            canvas_shell::ScreenRect::from_ltrb(0, 0, 1280, 720)
+        });
+        let result = (|| -> Result<(hierarchy::DesktopHierarchy, ()), attach::AttachError> {
+            let progman = hierarchy::find_progman()?;
+            let hier = hierarchy::ensure_worker_w(progman)?;
+            attach::attach(hwnd, &hier, screen).map(|_| (hier, ()))
+        })();
+        match result {
+            Ok((hier, _)) => {
+                tracing::info!(
+                    strategy = ?hier.strategy,
+                    screen = ?(screen.left, screen.top, screen.right, screen.bottom),
+                    "канвас встроен в рабочий стол (T15)"
+                );
+                self.desktop_hierarchy = Some(hier);
+                self.watch_worker_w(hwnd, &hier);
+            }
+            Err(err) => {
+                tracing::warn!(%err, "встройка в десктоп не удалась — оконный режим");
+                attach::fallback_message_box(&err.to_string());
+            }
+        }
+    }
+
+    /// Установить/перенавесить слежку монитора на иерархию (T15):
+    /// WinEventHook на поток WorkerW + DPI-поллинг нашего окна.
+    #[cfg(windows)]
+    fn watch_worker_w(
+        &self,
+        ours: canvas_shell::desktop::HWND,
+        hier: &canvas_shell::desktop::hierarchy::DesktopHierarchy,
+    ) {
+        if let Some(monitor) = &self.desktop_monitor {
+            monitor.command(canvas_shell::desktop::monitor::MonitorCommand::Watch {
+                progman: hier.progman,
+                worker_w: hier.worker_w,
+                ours,
+            });
+        }
+    }
+
+    /// Обработка событий shell-монитора (T15): разрушение WorkerW →
+    /// recovery по стратегии (R2-симметрия); смена DPI → переградуировка
+    /// рендера (R10: winit-события после репарентинга не приходят).
+    #[cfg(windows)]
+    fn on_desktop_event(&mut self, event: canvas_shell::DesktopEvent) {
+        match event {
+            canvas_shell::DesktopEvent::WorkerWDestroyed => {
+                let action =
+                    canvas_shell::recovery_action(self.desktop_hierarchy.map(|h| h.strategy));
+                match action {
+                    canvas_shell::RecoveryAction::None => {}
+                    canvas_shell::RecoveryAction::ReZOrder
+                    | canvas_shell::RecoveryAction::FullReattach => self.recover_desktop(action),
+                }
+            }
+            canvas_shell::DesktopEvent::DpiChanged { dpi } => {
+                let scale = canvas_shell::dpi_to_scale(dpi) as f32;
+                tracing::info!(dpi, scale, "DPI десктоп-окна изменился (поллинг R10)");
+                if let Some(renderer) = self.renderer.as_mut() {
+                    // Пересоздание surface не нужно: размер HWND не менялся;
+                    // минимап пересоберётся по сигнатуре кадра
+                    renderer.set_scale_factor(scale);
+                }
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Восстановление встройки после разрушения WorkerW (T15): ReZOrder —
+    /// перевыполнить только Z-order (raised, R2); FullReattach — полный
+    /// re-attach (classic: SetParent на новый WorkerW). Анти-флуд:
+    /// 3 подряд неудачи → стоп автоматики (полный анти-флуд — T17).
+    #[cfg(windows)]
+    fn recover_desktop(&mut self, action: canvas_shell::RecoveryAction) {
+        use canvas_shell::desktop::{attach, hierarchy};
+        if self.desktop_recover_failures >= 3 {
+            // уже остановлены: не логировать спам — события могут идти потоком
+            return;
+        }
+        let Some(raw) = self.window_hwnd() else {
+            return;
+        };
+        let hwnd = Self::hwnd(raw);
+        let result = (|| -> Result<(hierarchy::DesktopHierarchy, ()), attach::AttachError> {
+            let progman = hierarchy::find_progman()?;
+            let hier = hierarchy::ensure_worker_w(progman)?;
+            match action {
+                canvas_shell::RecoveryAction::ReZOrder => {
+                    attach::refresh_z_order(hwnd, &hier).map(|_| (hier, ()))
+                }
+                canvas_shell::RecoveryAction::FullReattach => {
+                    let screen = hierarchy::virtual_screen_rect()
+                        .unwrap_or_else(|| canvas_shell::ScreenRect::from_ltrb(0, 0, 1280, 720));
+                    attach::attach(hwnd, &hier, screen).map(|_| (hier, ()))
+                }
+                canvas_shell::RecoveryAction::None => Ok((hier, ())),
+            }
+        })();
+        match result {
+            Ok((hier, _)) => {
+                tracing::info!(?action, strategy = ?hier.strategy, "встройка восстановлена");
+                self.desktop_recover_failures = 0;
+                self.desktop_hierarchy = Some(hier);
+                self.watch_worker_w(hwnd, &hier);
+            }
+            Err(err) => {
+                self.desktop_recover_failures += 1;
+                if self.desktop_recover_failures >= 3 {
+                    tracing::warn!(
+                        %err,
+                        failures = self.desktop_recover_failures,
+                        "re-attach не удаётся — автоматика восстановления остановлена"
+                    );
+                    self.desktop_hierarchy = None;
+                } else {
+                    tracing::warn!(%err, failures = self.desktop_recover_failures, "re-attach не удался");
+                }
+            }
         }
     }
 
@@ -1396,10 +1598,41 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         }
         let attrs = Window::default_attributes().with_title("CanvasDesk");
+        // Режим десктопа (T15): borderless-окно на весь виртуальный экран
+        // без активации при создании (WS_EX_NOACTIVATE до первого клика —
+        // TASKS T15; winit with_active(false)). Это же окно — фолбэк-режим,
+        // если встройка не удастся (R14: не пересоздаём после winit-инициализации).
+        // После attach winit-API окна НЕ трогаем — стили перезапишет
+        // библиотека (R3-урок tao/Seelen); размеры — только SetWindowPos.
+        let attrs = if self.desktop_mode {
+            attrs
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_active(false)
+        } else {
+            attrs
+        };
         // winit сам ставит свой IDropTarget (RegisterDragDrop с assert S_OK) —
         // отключаем и ставим свой в canvas-shell (план T9 §3)
         #[cfg(windows)]
         let attrs = attrs.with_drag_and_drop(false);
+        // Точная геометрия десктоп-окна (физ. px) — только на Windows:
+        // виртуальный экран из EnumDisplayMonitors; до attach — стартовый
+        // размер по экрану (потом attach растянет SetWindowPos'ом).
+        #[cfg(windows)]
+        let attrs = if self.desktop_mode {
+            let screen = canvas_shell::desktop::hierarchy::virtual_screen_rect().unwrap_or(
+                canvas_shell::desktop::ScreenRect::from_ltrb(0, 0, 1280, 720),
+            );
+            attrs
+                .with_position(winit::dpi::PhysicalPosition::new(screen.left, screen.top))
+                .with_inner_size(winit::dpi::PhysicalSize::new(
+                    screen.width().max(1) as u32,
+                    screen.height().max(1) as u32,
+                ))
+        } else {
+            attrs
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
             Err(err) => {
@@ -1441,6 +1674,13 @@ impl ApplicationHandler<AppEvent> for App {
                                         %err,
                                         "drag-drop недоступен, приложение работает без него"
                                     ),
+                                }
+                                // Встройка в десктоп (T15): ПОСЛЕДНИМ шагом
+                                // после всей winit-настройки (R3-урок: сначала
+                                // окно настраивается библиотекой, репарентинг —
+                                // последним, с верификацией стилей в attach)
+                                if self.desktop_mode {
+                                    self.attach_desktop(win32.hwnd.get());
                                 }
                             }
                             // На Windows бывает только Win32-handle
@@ -1679,6 +1919,8 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Drag(event) => self.on_drag_event(event),
             AppEvent::FileEvents(events) => self.on_file_events(events),
             AppEvent::Search(event) => self.on_search_event(event),
+            #[cfg(windows)]
+            AppEvent::Desktop(event) => self.on_desktop_event(event),
         }
     }
 
@@ -1851,6 +2093,24 @@ impl App {
 
     fn on_left_button(&mut self, state: ElementState) {
         self.left_pressed = state == ElementState::Pressed;
+        // T15: первый клик по канвасу снимает WS_EX_NOACTIVATE — с этого
+        // момента окно может получать фокус («WS_EX_NOACTIVATE до первого
+        // клика», TASKS T15); ошибки не критичны, флаг ставим до вызова
+        // (повторные клики не ретраят)
+        #[cfg(windows)]
+        if self.desktop_mode
+            && state == ElementState::Pressed
+            && !self.desktop_activation_enabled
+            && self.desktop_hierarchy.is_some()
+        {
+            self.desktop_activation_enabled = true;
+            if let Some(raw) = self.window_hwnd() {
+                let hwnd = Self::hwnd(raw);
+                if let Err(err) = canvas_shell::desktop::attach::enable_activation(hwnd) {
+                    tracing::warn!(%err, "не удалось снять WS_EX_NOACTIVATE");
+                }
+            }
+        }
         if self.space_pressed {
             return; // Space+drag — панорамирование (SPEC §8)
         }
@@ -2186,12 +2446,16 @@ impl App {
 struct CliArgs {
     /// Нагрузочный режим (T5): сцена из N случайных нод вместо загрузки файла.
     stress: Option<usize>,
+    /// Режим десктопа (T15, SPEC §7.4): встройка канваса в WorkerW за
+    /// иконками рабочего стола. На не-Windows — warn и оконный режим.
+    desktop: bool,
     path: PathBuf,
 }
 
 /// Разбор аргументов вручную — две опции не оправдывают зависимость от clap.
 fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     let mut stress = None;
+    let mut desktop = false;
     let mut path = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -2210,8 +2474,11 @@ fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
                     .parse::<usize>()
                     .map_err(|_| anyhow::anyhow!("--stress: не число: {value}"))?,
             );
+        } else if arg == "--desktop" {
+            // Булев флаг: повтор допустим (идемпотентен)
+            desktop = true;
         } else if arg == "--help" || arg == "-h" {
-            println!("Использование: canvasdesk [--stress N] [путь к .canvas]");
+            println!("Использование: canvasdesk [--stress N] [--desktop] [путь к .canvas]");
             std::process::exit(0);
         } else if path.is_none() {
             path = Some(PathBuf::from(arg));
@@ -2227,6 +2494,7 @@ fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     };
     Ok(CliArgs {
         stress,
+        desktop,
         path: path.unwrap_or_else(|| PathBuf::from(default_path)),
     })
 }
@@ -2394,15 +2662,40 @@ fn main() -> anyhow::Result<()> {
             .collect();
         search_service.command(SearchCommand::ReplaceAll { entries });
     }
-    event_loop.run_app(&mut App::new(
-        scene,
-        thumbs,
-        settings,
-        config_path,
-        drag_sender,
-        watcher,
-        search_service,
-    ))?;
+    event_loop.run_app(&mut {
+        let mut app = App::new(
+            scene,
+            thumbs,
+            settings,
+            config_path,
+            drag_sender,
+            watcher,
+            search_service,
+            args.desktop,
+        );
+        // Shell-монитор десктопа (T15): поток WinEventHook + DPI-поллинг;
+        // слежка (Watch) устанавливается в resumed() после attach.
+        // Спавним при --desktop до attach — событие WorkerWDestroyed может
+        // прийти раньше, чем приложение дойдёт до recovery-логики
+        #[cfg(windows)]
+        if args.desktop {
+            let proxy = proxy.clone();
+            let responder: canvas_shell::desktop::monitor::DesktopResponder =
+                Arc::new(move |event| {
+                    let _ = proxy.send_event(AppEvent::Desktop(event));
+                });
+            app.set_desktop_monitor(
+                canvas_shell::desktop::monitor::DesktopMonitorService::spawn(responder),
+            );
+        }
+        // Не-Windows: режим десктопа недоступен — предупреждение и обычный
+        // оконный режим (деградация, SPEC §9; ядро приложения то же)
+        #[cfg(not(windows))]
+        if args.desktop {
+            tracing::warn!("--desktop поддерживается только на Windows — оконный режим");
+        }
+        app
+    })?;
     Ok(())
 }
 
@@ -2454,21 +2747,39 @@ mod tests {
         assert!(rel.ends_with(PathBuf::from("target/tmp/thumbtest/photo1.png")));
     }
 
-    /// Парсинг аргументов: --stress N, --stress=N, путь, дефолты.
+    /// Парсинг аргументов: --stress N, --stress=N, --desktop, путь, дефолты.
     #[test]
     fn cli_args_parsing() {
         let args = parse_args(&[]).expect("пустые аргументы");
         assert_eq!(args.stress, None);
+        assert!(!args.desktop);
         assert_eq!(args.path, PathBuf::from("default.canvas"));
 
         let args = parse_args(&["--stress".into(), "5000".into()]).expect("--stress N");
         assert_eq!(args.stress, Some(5000));
+        assert!(!args.desktop);
         assert_eq!(args.path, PathBuf::from("stress.canvas"));
 
         let args =
             parse_args(&["--stress=100".into(), "my.canvas".into()]).expect("--stress=N path");
         assert_eq!(args.stress, Some(100));
         assert_eq!(args.path, PathBuf::from("my.canvas"));
+
+        // T15: флаг --desktop (булев, повтор идемпотентен, порядок любой)
+        let args = parse_args(&["--desktop".into()]).expect("--desktop");
+        assert!(args.desktop);
+        assert_eq!(args.path, PathBuf::from("default.canvas"));
+
+        let args =
+            parse_args(&["--desktop".into(), "board.canvas".into()]).expect("--desktop path");
+        assert!(args.desktop);
+        assert_eq!(args.path, PathBuf::from("board.canvas"));
+
+        let args = parse_args(&["--stress=7".into(), "--desktop".into(), "--desktop".into()])
+            .expect("--stress + двойной --desktop");
+        assert_eq!(args.stress, Some(7));
+        assert!(args.desktop);
+        assert_eq!(args.path, PathBuf::from("stress.canvas"));
 
         assert!(parse_args(&["--stress".into()]).is_err());
         assert!(parse_args(&["--stress".into(), "abc".into()]).is_err());

@@ -65,7 +65,17 @@ impl ScreenRect {
 /// Объединение прямоугольников мониторов (EnumDisplayMonitors → union).
 /// Пустой список → None.
 pub fn union_rects(rects: &[ScreenRect]) -> Option<ScreenRect> {
-    todo!("T15-A: fold по max/min сторонам; пусто -> None")
+    // fold по внешним границам: min левого/верхнего, max правого/нижнего;
+    // дегенерированные/перевёрнутые rect'ы участвуют той же арифметикой.
+    let (first, rest) = rects.split_first()?;
+    Some(rest.iter().fold(*first, |acc, &rect| {
+        ScreenRect::from_ltrb(
+            acc.left.min(rect.left),
+            acc.top.min(rect.top),
+            acc.right.max(rect.right),
+            acc.bottom.max(rect.bottom),
+        )
+    }))
 }
 
 // Win32-константы стилей — локальные копии значений WinUser.h: этот чистый
@@ -114,13 +124,39 @@ pub struct StyleMismatch {
 /// Для Raised дополнительно `exstyle |= WS_EX_LAYERED` (R2 шаг 2).
 /// Идемпотентен; посторонние биты не трогает.
 pub fn plan_style_scrub(style: u32, exstyle: u32, raised: bool) -> StylePlan {
-    todo!("T15-A")
+    // Точечные бит-операции: посторонние биты не задеты, повторное
+    // применение меняет только уже выставленные биты (идемпотентность).
+    let style = (style | WS_CHILDWINDOW) & !WS_CLIPSIBLINGS;
+    let exstyle =
+        (exstyle & !(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_ACCEPTFILES)) | WS_EX_NOACTIVATE;
+    let exstyle = if raised {
+        exstyle | WS_EX_LAYERED
+    } else {
+        exstyle
+    };
+    StylePlan { style, exstyle }
 }
 
 /// Верификация: фактические (перечитанные GWL_STYLE/GWL_EXSTYLE) стили
 /// обязаны точно совпадать с планом. Отличие → StyleMismatch с полем.
 pub fn verify_styles(style: u32, exstyle: u32, plan: &StylePlan) -> Result<(), StyleMismatch> {
-    todo!("T15-A")
+    // точное сравнение обеих полей; style проверяется первым — он чаще
+    // перезаписывается библиотекой (урок tao, R3)
+    if style != plan.style {
+        return Err(StyleMismatch {
+            field: StyleField::Style,
+            expected: plan.style,
+            actual: style,
+        });
+    }
+    if exstyle != plan.exstyle {
+        return Err(StyleMismatch {
+            field: StyleField::ExStyle,
+            expected: plan.exstyle,
+            actual: exstyle,
+        });
+    }
+    Ok(())
 }
 
 /// Действие по разрушению WorkerW (RECIPES R2, симметрия восстановления).
@@ -138,12 +174,16 @@ pub enum RecoveryAction {
 /// Выбор действия по текущей стратегии. R2: raised → ReZOrder,
 /// classic → FullReattach, не встроены → None.
 pub fn recovery_action(attached: Option<EmbedStrategy>) -> RecoveryAction {
-    todo!("T15-A")
+    match attached {
+        None => RecoveryAction::None,
+        Some(EmbedStrategy::Raised) => RecoveryAction::ReZOrder,
+        Some(EmbedStrategy::Classic) => RecoveryAction::FullReattach,
+    }
 }
 
 /// DPI (96 = 100%) → winit-scale (f64, как window.scale_factor()).
 pub fn dpi_to_scale(dpi: u32) -> f64 {
-    todo!("T15-A: dpi / 96.0")
+    f64::from(dpi) / 96.0
 }
 
 /// Детект WorkerW после 0x052C: retry 10 × 100 мс (RECIPES R1, Seelen).
@@ -161,11 +201,289 @@ pub mod hierarchy;
 #[cfg(windows)]
 pub mod monitor;
 
+/// Реэкспорт HWND (координаторская интеграционная точка T15-E):
+/// canvas-app не зависит от windows-crate, но конвертирует raw-window-handle
+/// (`NonZeroIsize`) в HWND для вызовов attach/monitor. Win32 HWND —
+/// указатель без внутренней структуры, конвертация тривиальна (идиома
+/// dragdrop/com.rs).
+#[cfg(windows)]
+pub use windows::Win32::Foundation::HWND;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // TODO(T15-A): тесты по плану docs/plans/T15-desktop-embed.md §4.1:
-    // union_rects, plan_style_scrub, verify_styles, recovery_action,
-    // dpi_to_scale, инварианты констант.
+    /// Эпсилон сравнения f64-шкал (таблица 96/120/144/192).
+    const EPS: f64 = 1e-9;
+
+    // ---------- union_rects ----------
+
+    /// Пустой список → None; единственный rect → он же без изменений.
+    #[test]
+    fn union_rects_empty_and_single() {
+        assert_eq!(union_rects(&[]), None);
+        let single = ScreenRect::from_ltrb(-5, -7, 42, 9);
+        assert_eq!(union_rects(&[single]), Some(single));
+    }
+
+    /// Пересекающиеся прямоугольники: внешние границы пары.
+    #[test]
+    fn union_rects_intersecting() {
+        let a = ScreenRect::from_ltrb(0, 0, 200, 100);
+        let b = ScreenRect::from_ltrb(100, 50, 300, 150);
+        assert_eq!(
+            union_rects(&[a, b]),
+            Some(ScreenRect::from_ltrb(0, 0, 300, 150))
+        );
+    }
+
+    /// Разрозненные: union — охватывающий оба прямоугольник (не сумма
+    /// площадей); порядок аргументов не влияет (min/max коммутативны).
+    #[test]
+    fn union_rects_disjoint_span() {
+        let a = ScreenRect::from_ltrb(0, 0, 100, 50);
+        let b = ScreenRect::from_ltrb(500, 200, 600, 250);
+        let expected = ScreenRect::from_ltrb(0, 0, 600, 250);
+        assert_eq!(union_rects(&[a, b]), Some(expected));
+        assert_eq!(union_rects(&[b, a]), Some(expected));
+        // охват проверяется и в width/height (виртуальный экран)
+        assert_eq!((expected.width(), expected.height()), (600, 250));
+    }
+
+    /// Дегенерированные rect'ы участвуют как есть (нулевая ширина
+    /// left == right влияет только на top/bottom; перевёрнутый left > right
+    /// — чистая min/max-арифметика, без паник и спец-обработки).
+    #[test]
+    fn union_rects_degenerate_participates() {
+        let normal = ScreenRect::from_ltrb(0, 0, 100, 100);
+        let zero_width = ScreenRect::from_ltrb(50, 0, 50, 200);
+        assert_eq!(
+            union_rects(&[normal, zero_width]),
+            Some(ScreenRect::from_ltrb(0, 0, 100, 200))
+        );
+        let flipped = ScreenRect::from_ltrb(100, 0, 50, 100);
+        assert_eq!(
+            union_rects(&[ScreenRect::from_ltrb(0, 0, 10, 10), flipped]),
+            Some(ScreenRect::from_ltrb(0, 0, 50, 100))
+        );
+    }
+
+    /// 3+ мониторов — классика виртуального экрана: FHD слева от origin,
+    /// основной QHD, правый приподнят; итог — охват всех трёх.
+    #[test]
+    fn union_rects_virtual_screen_three_monitors() {
+        let monitors = [
+            ScreenRect::from_ltrb(-1920, 0, 0, 1080),
+            ScreenRect::from_ltrb(0, 0, 2560, 1440),
+            ScreenRect::from_ltrb(2560, -500, 5120, 1000),
+        ];
+        let expected = ScreenRect::from_ltrb(-1920, -500, 5120, 1440);
+        assert_eq!(union_rects(&monitors), Some(expected));
+        assert_eq!((expected.width(), expected.height()), (7040, 1940));
+    }
+
+    // ---------- plan_style_scrub ----------
+
+    /// WS_CHILDWINDOW устанавливается при отсутствии и сохраняется, если
+    /// уже стоит; WS_CLIPSIBLINGS снимается в обоих случаях.
+    #[test]
+    fn plan_scrub_childwindow_set_clipsiblings_cleared() {
+        let plan = plan_style_scrub(WS_CLIPSIBLINGS, 0, false);
+        assert_eq!(plan.style, WS_CHILDWINDOW);
+        let plan = plan_style_scrub(WS_CHILDWINDOW | WS_CLIPSIBLINGS, 0, false);
+        assert_eq!(plan.style, WS_CHILDWINDOW);
+    }
+
+    /// Каждый из трёх shell-EX-битов (APPWINDOW/WINDOWEDGE/ACCEPTFILES)
+    /// снимается и по отдельности, и все вместе (R3-маска).
+    #[test]
+    fn plan_scrub_clears_each_shell_ex_bit() {
+        for bit in [WS_EX_APPWINDOW, WS_EX_WINDOWEDGE, WS_EX_ACCEPTFILES] {
+            let plan = plan_style_scrub(0, bit, false);
+            assert_eq!(plan.exstyle, WS_EX_NOACTIVATE, "бит {bit:#010x} не снят");
+        }
+        let all = WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_ACCEPTFILES;
+        let plan = plan_style_scrub(0, all, false);
+        assert_eq!(plan.exstyle, WS_EX_NOACTIVATE);
+    }
+
+    /// Посторонние биты обоих полей сохраняются (скраббинг точечный, R3):
+    /// 0x00FF_0001 — WS_POPUP-подобный набор без наших масок,
+    /// 0x0002_0000 — WS_EX_TOOLWINDOW.
+    #[test]
+    fn plan_scrub_preserves_foreign_bits() {
+        let style_in: u32 = 0x00FF_0001;
+        let ex_in: u32 = 0x0002_0000 | WS_EX_APPWINDOW;
+        let plan = plan_style_scrub(style_in, ex_in, false);
+        assert_eq!(plan.style, style_in | WS_CHILDWINDOW);
+        assert_eq!(plan.exstyle, 0x0002_0000 | WS_EX_NOACTIVATE);
+    }
+
+    /// Идемпотентность: применение плана к его же результату ничего не
+    /// меняет (грязный вход со всеми снимаемыми битами, Raised).
+    #[test]
+    fn plan_scrub_idempotent() {
+        let dirty_style = 0x00CF_0000 | WS_CLIPSIBLINGS; // WS_CAPTION-набор
+        let dirty_ex = WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_ACCEPTFILES | 0x0001_0000;
+        let once = plan_style_scrub(dirty_style, dirty_ex, true);
+        let twice = plan_style_scrub(once.style, once.exstyle, true);
+        assert_eq!(once, twice);
+        // и для Classic тоже (LAYERED не расставляется повторно)
+        let once = plan_style_scrub(dirty_style, dirty_ex, false);
+        let twice = plan_style_scrub(once.style, once.exstyle, false);
+        assert_eq!(once, twice);
+    }
+
+    /// Нулевые входы: минимальный план — WS_CHILDWINDOW и NOACTIVATE (+
+    /// LAYERED для Raised).
+    #[test]
+    fn plan_scrub_zero_inputs() {
+        let plan = plan_style_scrub(0, 0, false);
+        assert_eq!(plan.style, WS_CHILDWINDOW);
+        assert_eq!(plan.exstyle, WS_EX_NOACTIVATE);
+        let raised = plan_style_scrub(0, 0, true);
+        assert_eq!(raised.style, WS_CHILDWINDOW);
+        assert_eq!(raised.exstyle, WS_EX_NOACTIVATE | WS_EX_LAYERED);
+    }
+
+    /// NOACTIVATE ставится всегда (до первого клика, TASKS T15); LAYERED —
+    /// только Raised (R2 шаг 2), Classic — без него; снятые shell-биты не
+    /// возвращаются ни в одной стратегии.
+    #[test]
+    fn plan_scrub_strategy_ex_bits() {
+        let classic = plan_style_scrub(0, 0, false);
+        assert_eq!(classic.exstyle & WS_EX_NOACTIVATE, WS_EX_NOACTIVATE);
+        assert_eq!(classic.exstyle & WS_EX_LAYERED, 0);
+        let raised = plan_style_scrub(0, 0, true);
+        assert_eq!(raised.exstyle & WS_EX_NOACTIVATE, WS_EX_NOACTIVATE);
+        assert_eq!(raised.exstyle & WS_EX_LAYERED, WS_EX_LAYERED);
+        let dirty = WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_ACCEPTFILES;
+        assert_eq!(plan_style_scrub(0, dirty, true).exstyle & dirty, 0);
+    }
+
+    // ---------- verify_styles ----------
+
+    /// Полное совпадение обеих полей → Ok.
+    #[test]
+    fn verify_styles_exact_match_ok() {
+        let plan = plan_style_scrub(0x00CF_0000, 0x0003_0000, true);
+        assert_eq!(verify_styles(plan.style, plan.exstyle, &plan), Ok(()));
+    }
+
+    /// Расхождение style → Err с полем Style и значениями expected/actual;
+    /// при расхождении обоих полей первым сообщается Style.
+    #[test]
+    fn verify_styles_style_mismatch_reports_field() {
+        let plan = plan_style_scrub(WS_CLIPSIBLINGS, 0, false);
+        // tao/winit пере-поставил CLIPSIBLINGS после репарентинга (R3)
+        let actual = plan.style | WS_CLIPSIBLINGS;
+        assert_eq!(
+            verify_styles(actual, plan.exstyle, &plan),
+            Err(StyleMismatch {
+                field: StyleField::Style,
+                expected: plan.style,
+                actual,
+            })
+        );
+        // оба поля разошлись — приоритет Style
+        assert_eq!(
+            verify_styles(actual, plan.exstyle | WS_EX_APPWINDOW, &plan),
+            Err(StyleMismatch {
+                field: StyleField::Style,
+                expected: plan.style,
+                actual,
+            })
+        );
+    }
+
+    /// Расхождение exstyle (style совпал) → Err с полем ExStyle.
+    #[test]
+    fn verify_styles_exstyle_mismatch_reports_field() {
+        let plan = plan_style_scrub(0, WS_EX_APPWINDOW, false);
+        // APPWINDOW вернулся — окно снова в Alt+Tab, фолбэк (R14)
+        let actual = plan.exstyle | WS_EX_APPWINDOW;
+        assert_eq!(
+            verify_styles(plan.style, actual, &plan),
+            Err(StyleMismatch {
+                field: StyleField::ExStyle,
+                expected: plan.exstyle,
+                actual,
+            })
+        );
+    }
+
+    // ---------- recovery_action ----------
+
+    /// R2: не встроены → None; Raised → только Z-order (шаги 4–5);
+    /// Classic → полный re-attach.
+    #[test]
+    fn recovery_action_branches() {
+        assert_eq!(recovery_action(None), RecoveryAction::None);
+        assert_eq!(
+            recovery_action(Some(EmbedStrategy::Raised)),
+            RecoveryAction::ReZOrder
+        );
+        assert_eq!(
+            recovery_action(Some(EmbedStrategy::Classic)),
+            RecoveryAction::FullReattach
+        );
+    }
+
+    // ---------- dpi_to_scale ----------
+
+    /// Таблица стандартных DPI (SPEC §6.5): 96/120/144/192 → 1.0/1.25/1.5/2.0.
+    #[test]
+    fn dpi_to_scale_standard_table() {
+        for (dpi, scale) in [(96u32, 1.0), (120, 1.25), (144, 1.5), (192, 2.0)] {
+            let got = dpi_to_scale(dpi);
+            assert!((got - scale).abs() < EPS, "dpi {dpi}: {got} != {scale}");
+        }
+    }
+
+    // ---------- константы ----------
+
+    /// Точные значения WinUser.h: модуль — локальные копии без windows-crate,
+    /// сверка гарантирует их совпадение с реальными Win32-константами
+    /// (windows-crate сверяется debug_assert'ами в cfg(windows)-модулях).
+    #[test]
+    fn constants_exact_winuser_values() {
+        assert_eq!(WS_CHILDWINDOW, 0x4000_0000);
+        assert_eq!(WS_CLIPSIBLINGS, 0x0400_0000);
+        assert_eq!(WS_EX_ACCEPTFILES, 0x0000_0010);
+        assert_eq!(WS_EX_APPWINDOW, 0x0004_0000);
+        assert_eq!(WS_EX_WINDOWEDGE, 0x0000_0100);
+        assert_eq!(WS_EX_NOACTIVATE, 0x0800_0000);
+        assert_eq!(WS_EX_LAYERED, 0x0008_0000);
+        assert_eq!(WS_EX_NOREDIRECTIONBITMAP, 0x0200_0000);
+    }
+
+    /// Битовые инварианты: WS_CHILDWINDOW не пересекается с WS_CLIPSIBLINGS;
+    /// весь WS_EX_*-набор попарно дизъюнктен и не задевает оба WS-флага —
+    /// маски scrub'а меняют ровно заявленные биты.
+    #[test]
+    fn constants_bit_disjointness() {
+        let ex_bits = [
+            WS_EX_ACCEPTFILES,
+            WS_EX_APPWINDOW,
+            WS_EX_WINDOWEDGE,
+            WS_EX_NOACTIVATE,
+            WS_EX_LAYERED,
+            WS_EX_NOREDIRECTIONBITMAP,
+        ];
+        assert_eq!(WS_CHILDWINDOW & WS_CLIPSIBLINGS, 0);
+        for &ex in &ex_bits {
+            assert_eq!(ex & WS_CHILDWINDOW, 0, "{ex:#010x} задевает WS_CHILDWINDOW");
+            assert_eq!(
+                ex & WS_CLIPSIBLINGS,
+                0,
+                "{ex:#010x} задевает WS_CLIPSIBLINGS"
+            );
+        }
+        // попарная дизъюнктность WS_EX_*-набора
+        for (i, &a) in ex_bits.iter().enumerate() {
+            for &b in &ex_bits[i + 1..] {
+                assert_eq!(a & b, 0, "пересечение {a:#010x} и {b:#010x}");
+            }
+        }
+    }
 }
