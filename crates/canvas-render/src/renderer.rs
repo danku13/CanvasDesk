@@ -19,6 +19,8 @@ use crate::config::{
 use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
+use crate::minimap::MinimapImage;
+use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::text::{
     body_area, titles_visible, EdgeLabel, OverlayText, ScreenText, TextSystem, TitleFrame,
 };
@@ -121,6 +123,9 @@ pub struct Renderer {
     /// Атлас тамбнейлов + их пайплайн (T6).
     thumbs: ThumbsPipeline,
     text: TextSystem,
+    /// Пайплайн миникарты (T13-B) + текущий кадр (None — не задан).
+    minimap_pipeline: MinimapPipeline,
+    minimap: Option<MinimapTexture>,
     scale_factor: f32,
     /// Рисовать сетку канваса (настройки, панель из post-T7).
     grid_visible: bool,
@@ -172,6 +177,7 @@ impl Renderer {
         let grid = GridPipeline::new(&gpu.device, format);
         let cards = CardsPipeline::new(&gpu.device, format);
         let thumbs = ThumbsPipeline::new(&gpu.device, format);
+        let minimap_pipeline = MinimapPipeline::new(&gpu.device, format);
         let text = TextSystem::new(&gpu.device, &gpu.queue, format);
         Ok(Self {
             gpu,
@@ -182,6 +188,8 @@ impl Renderer {
             cards,
             thumbs,
             text,
+            minimap_pipeline,
+            minimap: None,
             scale_factor: scale_factor as f32,
             grid_visible: true,
         })
@@ -211,6 +219,45 @@ impl Renderer {
     /// Число тамбнейлов в атласе (HUD, T6).
     pub fn thumbnail_count(&self) -> usize {
         self.thumbs.len()
+    }
+
+    /// Загрузить кадр миникарты (T13-B): растеризация T13-A передаётся в
+    /// текстуру RGBA8 с bind group; при смене размера текстура пересоздаётся.
+    /// Кадр 0×0 (MinimapImage::EMPTY) сбрасывает миникарту. При resize/DPI-смене
+    /// текстура НЕ очищается — квад сам уедет за too-small-границу, а при
+    /// смене scale_factor приложение перезагрузит кадр этим же методом.
+    pub fn set_minimap(&mut self, image: &MinimapImage) {
+        if image.width == 0 || image.height == 0 {
+            self.minimap = None;
+            return;
+        }
+        let expected = image.width as usize * image.height as usize * 4;
+        if image.rgba.len() != expected {
+            tracing::warn!(
+                w = image.width,
+                h = image.height,
+                len = image.rgba.len(),
+                "миникарта: буфер не совпадает с width×height×4 — кадр пропущен"
+            );
+            return;
+        }
+        let current = self.minimap.take();
+        let texture =
+            self.minimap_pipeline
+                .upload(&self.gpu.device, &self.gpu.queue, current, image);
+        self.minimap = Some(texture);
+    }
+
+    /// Прямоугольник миникарты в ЛОГИЧЕСКИХ px — hit-test приложения
+    /// (T13-C): координаты курсора winit — логические. None — миникарта не
+    /// задана или окно меньше 252×172 логических px (миникарта скрыта).
+    pub fn minimap_rect_logical(&self) -> Option<[f32; 4]> {
+        self.minimap.as_ref().and_then(|_| {
+            quad_rect_logical(
+                self.size.width as f32 / self.scale_factor,
+                self.size.height as f32 / self.scale_factor,
+            )
+        })
     }
 
     /// Полная инвалидация кэшей по индексам нод (T8): после удаления ноды
@@ -597,6 +644,22 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // Миникарта (T13-B): прямоугольник квада в физических px (None —
+        // миникарта не задана или окно меньше 252×172 логических). Вычисляется
+        // один раз — он же гейтит и загрузку uniform, и draw
+        let minimap_quad = self
+            .minimap
+            .as_ref()
+            .and_then(|_| quad_rect(self.size.width, self.size.height, self.scale_factor));
+        // Uniform квада пишется до submit: write_buffer упорядочен раньше
+        // команд кодировщика, создаваемого ниже
+        if let Some(rect) = minimap_quad {
+            self.minimap_pipeline.update_quad(
+                &self.gpu.queue,
+                rect,
+                [self.size.width as f32, self.size.height as f32],
+            );
+        }
         let mut encoder = self
             .gpu
             .device
@@ -635,6 +698,13 @@ impl Renderer {
                         tracing::warn!(?err, "отрисовка текста пропущена");
                     }
                 }
+            }
+            // Миникарта (T13-B): последний квад кадра — после карточек,
+            // тамбнейлов и ВСЕХ текст-групп (HUD и оверлеи приложения —
+            // финальная группа, уже нарисована выше). Правый нижний угол
+            // против HUD слева сверху — пересечений по площади нет
+            if let (Some(texture), Some(_)) = (self.minimap.as_ref(), minimap_quad) {
+                self.minimap_pipeline.draw(&mut pass, texture);
             }
         }
         self.gpu.queue.submit([encoder.finish()]);

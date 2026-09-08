@@ -33,6 +33,18 @@ impl Camera {
         self.position
     }
 
+    /// Установить центр viewport в world-координатах (T14: полёт камеры к
+    /// результату поиска, центрирование по клику на миникарте T13).
+    pub fn set_center(&mut self, world: Vec2) {
+        self.position = world;
+    }
+
+    /// Установить абсолютный зум (кламп [MIN_ZOOM, MAX_ZOOM]) без якоря —
+    /// анимация полёта (T14) интерполирует зум по кадрам, якорь не нужен.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    }
+
     /// Текущий зум (1.0 — 1 world-px = 1 screen-px).
     pub fn zoom(&self) -> f32 {
         self.zoom
@@ -237,5 +249,41 @@ mod tests {
         // Нулевой viewport — вырожденный rect в центре, без паники
         let rect = Camera::default().visible_world_rect([0.0, 0.0]);
         assert_eq!(rect, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    /// set_center перемещает центр viewport (T14: полёт камеры к результату
+    /// поиска, T13: клик по миникарте), зум не задет.
+    #[test]
+    fn set_center_moves_position() {
+        let viewport = [1280.0, 720.0];
+        let mut camera = Camera::default();
+        camera.set_center([100.0, -50.0]);
+        assert_eq!(camera.position(), [100.0, -50.0]);
+        // зум не задет
+        assert!((camera.zoom() - 1.0).abs() < EPS);
+        // position — центр viewport (согласовано с screen_to_world)
+        let center = camera.screen_to_world([640.0, 360.0], viewport);
+        assert_vec2_close(center, camera.position(), EPS);
+        // повторная установка перезаписывает
+        camera.set_center([0.0, 0.0]);
+        assert_eq!(camera.position(), [0.0, 0.0]);
+    }
+
+    /// set_zoom клампится в [MIN_ZOOM, MAX_ZOOM] (T14: анимация полёта
+    /// интерполирует зум по кадрам) и не смещает позицию — якорь не нужен.
+    #[test]
+    fn set_zoom_clamps_into_range() {
+        let mut camera = Camera::default();
+        camera.set_center([10.0, 20.0]);
+        camera.set_zoom(100.0);
+        assert_eq!(camera.zoom(), MAX_ZOOM);
+        camera.set_zoom(0.0001);
+        assert_eq!(camera.zoom(), MIN_ZOOM);
+        camera.set_zoom(-3.0);
+        assert_eq!(camera.zoom(), MIN_ZOOM);
+        camera.set_zoom(1.25);
+        assert!((camera.zoom() - 1.25).abs() < EPS);
+        // set_zoom без якоря не двигает центр
+        assert_eq!(camera.position(), [10.0, 20.0]);
     }
 }

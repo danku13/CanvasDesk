@@ -22,6 +22,7 @@ use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
+use canvas_render::minimap::{Minimap, MINIMAP_H, MINIMAP_W};
 use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
 use canvas_shell::{Priority, ThumbService, WatchService};
@@ -300,6 +301,15 @@ struct App {
     /// Windows IDropTarget (SPEC §7.3), на других ОС не читается.
     #[cfg_attr(not(windows), allow(dead_code))]
     drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
+    /// Миникарта (T13): снимок сцены + подгонка (CPU, SPEC §6.1).
+    minimap: Option<Minimap>,
+    /// Сигнатура состояния последней растеризации миникарты:
+    /// (центр камеры, зум, размер буфера). Сцена отслеживается через
+    /// dirty_since — правки/перемещения пересобирают снимок.
+    minimap_sig: Option<([f32; 2], f32, u32, u32)>,
+    /// Drag по миникарте (T13): world-точка под курсором следует за ним
+    /// (клик без движения = мгновенное центрирование).
+    minimap_drag: bool,
 }
 
 impl App {
@@ -343,6 +353,9 @@ impl App {
             #[cfg(windows)]
             drag_watcher: None,
             drag_sender,
+            minimap: None,
+            minimap_sig: None,
+            minimap_drag: false,
         }
     }
 
@@ -650,6 +663,83 @@ impl App {
     fn sync_watch_dirs(&mut self) {
         let dirs = watched_dirs(&self.scene.canvas, &self.scene.canvas_dir());
         self.watcher.sync_dirs(&dirs);
+    }
+
+    /// Пересобрать/обновить миникарту (T13, SPEC §6.1): не каждый кадр, а по
+    /// dirty-условиям — правки сцены (dirty_until save), движение камеры
+    /// (пан/зум двигают рамку viewport) или смена размера буфера (DPI/resize).
+    fn update_minimap(&mut self) {
+        // Вычисления (immutable) — до mutable borrow рендерера
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return;
+        }
+        let scale = self.scale_factor();
+        let width_px = (MINIMAP_W as f32 * scale).round().max(1.0) as u32;
+        let height_px = (MINIMAP_H as f32 * scale).round().max(1.0) as u32;
+        let sig = (
+            self.camera.position(),
+            self.camera.zoom(),
+            width_px,
+            height_px,
+        );
+        let size_changed = self
+            .minimap_sig
+            .is_some_and(|prev| prev.2 != width_px || prev.3 != height_px);
+        // dirty_until-автосейва: правки сцены пересобирают снимок; между
+        // правкой и сейвом (2 с debounce) каждый запрошенный кадр обновляет
+        // миникарту — это и есть видимость перемещений в реальном времени
+        let scene_dirty = self.scene.dirty_since.is_some();
+        if self.minimap.is_some() && self.minimap_sig == Some(sig) && !scene_dirty {
+            return;
+        }
+        let viewport_world = self.camera.visible_world_rect(viewport);
+        if self.minimap.is_none() || scene_dirty || size_changed {
+            // сцена/размер изменились — полный снимок (T13-A)
+            self.minimap = Some(Minimap::capture(
+                &self.scene.canvas,
+                viewport_world,
+                width_px,
+                height_px,
+            ));
+        } else if let Some(minimap) = self.minimap.as_mut() {
+            // только камера — пересчёт подгонки и рамки (дешевле снимка)
+            minimap.set_viewport(viewport_world);
+        }
+        self.minimap_sig = Some(sig);
+        // Загрузка текстуры (mutable borrow) — кадр растеризован заранее
+        if let Some(minimap) = self.minimap.as_ref() {
+            let image = minimap.render();
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_minimap(&image);
+            }
+        }
+    }
+
+    /// Прямоугольник миникарты в логических px (T13): None — не задана или
+    /// окно меньше 252×172 (квад скрыт).
+    fn minimap_rect(&self) -> Option<[f32; 4]> {
+        self.renderer
+            .as_ref()
+            .and_then(|renderer| renderer.minimap_rect_logical())
+    }
+
+    /// Центрировать камеру на world-точке под курсором мыши в миникарте
+    /// (T13): клик — прыжок, drag — world-точка следует за курсором.
+    fn center_camera_on_minimap_cursor(&mut self) {
+        let Some(minimap) = self.minimap.as_ref() else {
+            return;
+        };
+        let Some(rect) = self.minimap_rect() else {
+            return;
+        };
+        // rect — логические px, маппинг минимапы — в физических буфера
+        let scale = self.scale_factor();
+        let px = [
+            (self.cursor[0] - rect[0]) * scale,
+            (self.cursor[1] - rect[1]) * scale,
+        ];
+        self.camera.set_center(minimap.map_to_world(px));
     }
 
     /// Батч событий файловой системы (T10): применение к модели — в чистой
@@ -991,6 +1081,9 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.set_scale_factor(scale_factor);
                 }
+                // Миникарта (T13): буфер растеризован в физических px —
+                // пересоберётся на ближайшем кадре (размер в сигнатуре)
+                self.request_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
@@ -1012,6 +1105,9 @@ impl ApplicationHandler<AppEvent> for App {
                     self.frame_meter.push(now - prev);
                 }
                 self.last_frame = Some(now);
+                // Миникарта (T13): пересборка по dirty-условиям ДО отрисовки
+                // (текстура должна быть готова к проходу кадра)
+                self.update_minimap();
                 let hud = self.hud_text();
                 // Оверлей контекстного меню (T7): квады + подписи пунктов
                 // Т9 добавляет в конец призраков дропа — mutable
@@ -1303,6 +1399,20 @@ impl App {
                     self.request_redraw();
                     return;
                 }
+                // Миникарта (T13, SPEC §6.1): клик — центрирование камеры,
+                // drag — world-точка под курсором следует за ним. Квад
+                // рисуется поверх всего — проверка до канвас-хит-тестов
+                if let Some(rect) = self.minimap_rect() {
+                    if point_in_rect(
+                        [rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]],
+                        self.cursor,
+                    ) {
+                        self.center_camera_on_minimap_cursor();
+                        self.minimap_drag = true;
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 let world = self.cursor_world();
                 // Hit-test через spatial index (T5): O(log n) вместо линейного обхода
                 let hit = self.scene.spatial.hit_test(world);
@@ -1436,6 +1546,7 @@ impl App {
                 self.scene.dragging = None;
                 self.editor_dragging = false;
                 self.resizing = None;
+                self.minimap_drag = false;
             }
         }
     }
@@ -1470,6 +1581,14 @@ impl App {
             .map(|w| w.scale_factor() as f32)
             .unwrap_or(1.0);
         let logical = [position.x as f32 / scale, position.y as f32 / scale];
+        // Drag по миникарте (T13): пан следует за курсором — раньше
+        // канвас-панорамирования, дрги не конкурируют (нажатие перехвачено)
+        if self.minimap_drag {
+            self.cursor = logical;
+            self.center_camera_on_minimap_cursor();
+            self.request_redraw();
+            return;
+        }
         if self.panning() {
             let delta = [logical[0] - self.cursor[0], logical[1] - self.cursor[1]];
             self.camera.pan(delta);
