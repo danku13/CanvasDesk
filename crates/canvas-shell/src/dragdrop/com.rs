@@ -175,10 +175,9 @@ fn extract(data_obj: &IDataObject) -> DragData {
             // from_utf16_lossy — битые суррогаты не роняют приложение.
             // Хвостовой нечётный байт (remainder) игнорируется.
             let units: Vec<u16> = bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| u16::from_le_bytes(*pair))
+                // chunks_exact (а не as_chunks) — MSRV 1.80 рабочей области
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .take_while(|&unit| unit != 0)
                 .collect();
             return DragData::Text(String::from_utf16_lossy(&units));
