@@ -14,18 +14,26 @@ use canvas_app::ui::{
     SETTINGS_ROWS,
 };
 use canvas_core::{
-    apply_file_events, edge_at, nearest_side, port_at, port_point, watched_dirs, Canvas, Edge,
-    FileEvent, Node, NodeChange, NodeKind, Settings, SpatialIndex, ThumbnailProvider,
+    apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
+    watched_dirs, Canvas, Edge, FileEvent, Node, NodeChange, NodeKind, Settings, SpatialIndex,
+    ThumbnailProvider,
 };
+use canvas_render::animate::{pulse_alpha, Flight, FLIGHT_DURATION_MS};
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
 use canvas_render::minimap::{Minimap, MINIMAP_H, MINIMAP_W};
+use canvas_render::search_ui::{
+    layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
+    SearchRow,
+};
 use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
-use canvas_shell::{Priority, ThumbService, WatchService};
+use canvas_shell::{
+    Priority, SearchCommand, SearchEvent, SearchHit, SearchService, ThumbService, WatchService,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -45,6 +53,11 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(2);
 /// Ширина клип-бокса тултипа битой ссылки (T10): длинный путь переносится
 /// на границы этой области, экран не покидает.
 const TOOLTIP_WIDTH: f32 = 380.0;
+
+/// Debounce запроса поиска (T14, план §3).
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
+/// Лимит строк FTS-запроса (T14): в 2 р больше видимых — запас под скролл.
+const SEARCH_RESULTS_LIMIT: usize = 16;
 
 /// Screen-space текст с владеемой строкой (панель настроек): промежуточное
 /// представление, конвертируется в `ScreenText` на кадр рендера.
@@ -89,6 +102,49 @@ impl Clipboard {
                 }
             })
     }
+}
+
+/// Преобразование [x0, y0, x1, y1] → [x, y, w, h] (point_in_rect-конвенция).
+fn rect_xywh(rect: [f32; 4]) -> [f32; 4] {
+    [
+        rect[0],
+        rect[1],
+        (rect[2] - rect[0]).max(0.0),
+        (rect[3] - rect[1]).max(0.0),
+    ]
+}
+
+/// Заголовок ноды для поиска/результатов (T14): имя файла или текст заметки.
+fn node_title(node: &Node) -> &str {
+    if let Some(file) = node.file.as_ref() {
+        return Path::new(file)
+            .file_name()
+            .map(|name| name.to_str().unwrap_or(file))
+            .unwrap_or(file);
+    }
+    node.text.as_deref().unwrap_or("Заметка")
+}
+
+/// Полный текст ноды для in-memory поиска (T14): содержимое заметки.
+fn node_text(node: &Node) -> &str {
+    node.text.as_deref().unwrap_or("")
+}
+
+/// Подзаголовок строки результата (T14): «заметка» или родительский каталог.
+fn node_subtitle(node: &Node) -> &str {
+    if node.file.is_some() {
+        "файл"
+    } else {
+        "заметка"
+    }
+}
+
+/// Подзаголовок FTS-хита (T14): имя родительского каталога пути.
+fn hit_subtitle(path: &Path) -> String {
+    path.parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "файл".to_owned())
 }
 
 /// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
@@ -229,6 +285,9 @@ enum AppEvent {
     /// Батч событий файловой системы от WatchService (T10): debounce 300 мс
     /// уже отработан в shell, здесь — применение к модели и кэшам.
     FileEvents(Vec<FileEvent>),
+    /// События поискового индекса (T14): ответы worker-потока FTS5
+    /// (результаты запроса / завершение индексации).
+    Search(SearchEvent),
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -310,6 +369,20 @@ struct App {
     /// Drag по миникарте (T13): world-точка под курсором следует за ним
     /// (клик без движения = мгновенное центрирование).
     minimap_drag: bool,
+    /// Панель поиска (T14): поле, строки, выбор, скролл.
+    search: SearchPanel,
+    /// Сервис FTS-индекса (T14): команды в worker-поток, ответы —
+    /// AppEvent::Search через proxy.
+    search_service: SearchService,
+    /// Ноды результатов поиска — параллельно search.rows (T14).
+    search_nodes: Vec<usize>,
+    /// Debounce запроса (T14): (текст, момент последней правки) — отправка
+    /// через 200 мс покоя в about_to_wait.
+    search_pending: Option<(String, Instant)>,
+    /// Полёт камеры к результату поиска (T14): (полёт, старт).
+    flight: Option<(Flight, Instant)>,
+    /// Пульс подсветки ноды-результата (T14): (нода, старт).
+    pulse: Option<(usize, Instant)>,
 }
 
 impl App {
@@ -320,6 +393,7 @@ impl App {
         config_path: Option<PathBuf>,
         drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
         watcher: WatchService,
+        search_service: SearchService,
     ) -> Self {
         Self {
             window: None,
@@ -356,6 +430,12 @@ impl App {
             minimap: None,
             minimap_sig: None,
             minimap_drag: false,
+            search: SearchPanel::default(),
+            search_service,
+            search_nodes: Vec::new(),
+            search_pending: None,
+            flight: None,
+            pulse: None,
         }
     }
 
@@ -648,6 +728,20 @@ impl App {
                     self.scene.selected = Some(Selection::Node(index));
                     self.scene.mark_dirty();
                 }
+                // Поисковый индекс (T14): сброшенные файлы — сразу в FTS
+                let canvas_dir = self.scene.canvas_dir();
+                for node in &self.scene.canvas.nodes {
+                    let Some(file) = node.file.as_ref() else {
+                        continue;
+                    };
+                    self.search_service.command(SearchCommand::IndexFile {
+                        path: resolve_node_path(file, &canvas_dir),
+                        display_name: Path::new(file)
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| file.clone()),
+                    });
+                }
                 // Дроп мог добавить файловые ноды в новые директории —
                 // синхронизируем вотчер (T10)
                 self.sync_watch_dirs();
@@ -742,6 +836,264 @@ impl App {
         self.camera.set_center(minimap.map_to_world(px));
     }
 
+    /// Ответ поискового индекса (T14): результаты FTS + заметки → строки.
+    fn on_search_event(&mut self, event: SearchEvent) {
+        match event {
+            SearchEvent::Ready(hits) => self.apply_search_hits(hits),
+            SearchEvent::Indexed(count) => tracing::debug!(count, "поисковый индекс обновлён"),
+        }
+    }
+
+    /// Склейка результатов (T14): FTS-хиты (bm25, путь → нода через
+    /// path_matches) + in-memory substring по заметкам и именам нод
+    /// (заметок без файла в индексе нет). Дедуп — по ноде.
+    fn apply_search_hits(&mut self, hits: Vec<SearchHit>) {
+        let canvas_dir = self.scene.canvas_dir();
+        let mut nodes: Vec<usize> = Vec::new();
+        let mut rows: Vec<SearchRow> = Vec::new();
+        for hit in &hits {
+            let index = self.scene.canvas.nodes.iter().position(|node| {
+                node.file
+                    .as_ref()
+                    .is_some_and(|file| path_matches(file, &canvas_dir, &hit.path))
+            });
+            let Some(index) = index else {
+                continue; // файл не на канвасе — строка не показывается
+            };
+            if nodes.contains(&index) {
+                continue;
+            }
+            nodes.push(index);
+            rows.push(SearchRow {
+                title: hit.display_name.clone(),
+                subtitle: hit_subtitle(&hit.path),
+            });
+        }
+        // In-memory: заметки и имена нод вне FTS-индекса (T14 §3)
+        let query = self.search.input.query().to_owned();
+        if !query.is_empty() {
+            let entries: Vec<SceneEntry<'_>> = self
+                .scene
+                .canvas
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !nodes.contains(index))
+                .map(|(index, node)| SceneEntry {
+                    node: index,
+                    title: node_title(node),
+                    text: node_text(node),
+                })
+                .collect();
+            for hit in scan_scene(&query, &entries) {
+                let Some(node) = self.scene.canvas.nodes.get(hit) else {
+                    continue;
+                };
+                nodes.push(hit);
+                rows.push(SearchRow {
+                    title: node_title(node).to_owned(),
+                    subtitle: node_subtitle(node).to_owned(),
+                });
+            }
+        }
+        self.search.set_results(rows);
+        self.search_nodes = nodes;
+        self.request_redraw();
+    }
+
+    /// Правка поля запроса (T14): любое изменение перезапускает debounce.
+    fn edit_search_input(&mut self, apply: impl FnOnce(&mut SearchInput) -> bool) {
+        let changed = apply(&mut self.search.input);
+        if changed {
+            self.search_pending = Some((self.search.input.query().to_owned(), Instant::now()));
+            self.request_redraw();
+        }
+    }
+
+    /// Клавиатура открытой панели поиска (T14): ввод, каретка, выбор, прыжок.
+    fn on_search_key(&mut self, event: &KeyEvent) {
+        let ctrl = self.modifiers.control_key();
+        let shift = self.modifiers.shift_key();
+        // Повторное Ctrl+F — очистить поле (первое — открытие с прошлым
+        // запросом, ввод замещает его только после очистки)
+        if ctrl
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("f") || c.eq_ignore_ascii_case("а"))
+        {
+            self.search.input.set_query("");
+            self.search_pending = Some((String::new(), Instant::now()));
+            self.request_redraw();
+            return;
+        }
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.search.close();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::Enter) => {
+                if let Some(PanelAction::Jump(row)) = self.search.confirm() {
+                    self.jump_to_search_row(row);
+                }
+            }
+            Key::Named(NamedKey::F3) => {
+                self.cycle_search(if shift { -1 } else { 1 });
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.search.move_selection(-1);
+                self.search.ensure_selection_visible();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.search.move_selection(1);
+                self.search.ensure_selection_visible();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.edit_search_input(|input| input.backspace(ctrl));
+            }
+            Key::Named(NamedKey::Delete) => {
+                self.edit_search_input(SearchInput::delete);
+            }
+            Key::Named(NamedKey::ArrowLeft) if !ctrl => {
+                self.search.input.move_left();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::ArrowRight) if !ctrl => {
+                self.search.input.move_right();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::Home) => {
+                self.search.input.move_to_start();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::End) => {
+                self.search.input.move_to_end();
+                self.request_redraw();
+            }
+            Key::Character(text) => {
+                self.edit_search_input(|input| {
+                    input.insert_str(text);
+                    true
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// F3/Shift+F3 (T14): цикл по результатам с прыжком; работает и после
+    /// закрытия панели (rows сохранены).
+    fn cycle_search(&mut self, delta: i32) {
+        if self.search.rows.is_empty() {
+            return;
+        }
+        self.search.move_selection(delta);
+        self.search.ensure_selection_visible();
+        if let Some(PanelAction::Jump(row)) = self.search.confirm() {
+            self.jump_to_search_row(row);
+        } else {
+            self.request_redraw();
+        }
+    }
+
+    /// Прыжок к строке результата (T14): полёт камеры 300 мс ease-out,
+    /// целевой зум не ниже 0.8 (нода читаема), пульс подсветки.
+    fn jump_to_search_row(&mut self, row: usize) {
+        let Some(&node) = self.search_nodes.get(row) else {
+            return;
+        };
+        let Some(target) = self.scene.canvas.nodes.get(node) else {
+            return;
+        };
+        let center = [
+            target.x + target.width / 2.0,
+            target.y + target.height / 2.0,
+        ];
+        let target_zoom = self.camera.zoom().max(0.8);
+        self.flight = Some((
+            Flight::new(
+                self.camera.position(),
+                self.camera.zoom(),
+                center,
+                target_zoom,
+                FLIGHT_DURATION_MS,
+            ),
+            Instant::now(),
+        ));
+        self.pulse = Some((node, Instant::now()));
+        self.request_redraw();
+    }
+
+    /// Оверлей панели поиска (T14): квады + тексты в screen-space
+    /// (FrameOverlay), геометрия — search_ui::layout.
+    fn search_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let viewport = self.viewport_logical();
+        if !self.search.is_open() || viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let lay = search_layout(viewport[0], viewport[1], &self.search);
+        let panel = rect_xywh(lay.panel_rect);
+        instances.push(CardInstance {
+            pos: [panel[0], panel[1]],
+            size: [panel[2], panel[3]],
+            fill: [0.11, 0.11, 0.13, 0.97],
+            border: [0.22, 0.24, 0.30, 0.9],
+            params: [8.0, 0.0, 0.0, 1.0],
+        });
+        let input = rect_xywh(lay.input_rect);
+        instances.push(CardInstance {
+            pos: [input[0], input[1]],
+            size: [input[2], input[3]],
+            fill: [0.16, 0.17, 0.20, 1.0],
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        // Каретка — литерал «|» в конце текста (MVP, без мерцания)
+        let query_with_caret = format!("{}|", self.search.input.query());
+        texts.push(OwnedScreenText {
+            text: query_with_caret,
+            origin: [input[0] + 10.0, input[1] + 9.0],
+            width: (input[2] - 20.0).max(10.0),
+            font_size: 14.0,
+            color: Color::rgb(0xe6, 0xe6, 0xe6),
+        });
+        for (visible, rect) in lay.row_rects.iter().enumerate() {
+            let row = self.search.scroll_top + visible;
+            let Some(entry) = self.search.rows.get(row) else {
+                break;
+            };
+            let selected = self.search.selected == Some(row);
+            let row_rect = rect_xywh(*rect);
+            instances.push(CardInstance {
+                pos: [row_rect[0], row_rect[1]],
+                size: [row_rect[2], row_rect[3]],
+                fill: if selected {
+                    [0.18, 0.29, 0.48, 0.95]
+                } else {
+                    [0.13, 0.14, 0.17, 0.55]
+                },
+                border: [0.0; 4],
+                params: [4.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: entry.title.clone(),
+                origin: [row_rect[0] + 10.0, row_rect[1] + 4.0],
+                width: (row_rect[2] - 20.0).max(10.0),
+                font_size: 13.0,
+                color: Color::rgb(0xe6, 0xe6, 0xe6),
+            });
+            texts.push(OwnedScreenText {
+                text: entry.subtitle.clone(),
+                origin: [row_rect[0] + 10.0, row_rect[1] + 18.0],
+                width: (row_rect[2] - 20.0).max(10.0),
+                font_size: 11.0,
+                color: Color::rgb(0x8a, 0x8a, 0x92),
+            });
+        }
+        (instances, texts)
+    }
+
     /// Батч событий файловой системы (T10): применение к модели — в чистой
     /// canvas_core::apply_file_events, здесь — платформенные реакции: сброс
     /// тамбнейл-кэшей и негативного кэша, автосейв, пересборка вотчеров.
@@ -795,6 +1147,52 @@ impl App {
         }
         if resync {
             self.sync_watch_dirs();
+        }
+        // Поисковый индекс (T14): события ФС — только по путям нод канваса
+        // (чужие файлы в наблюдаемых папках в индекс не попадают)
+        {
+            let canvas_dir = self.scene.canvas_dir();
+            let node_path_matches = |path: &Path| {
+                self.scene.canvas.nodes.iter().any(|node| {
+                    node.file
+                        .as_ref()
+                        .is_some_and(|file| path_matches(file, &canvas_dir, path))
+                })
+            };
+            for event in &events {
+                match event {
+                    FileEvent::Create(path) | FileEvent::Modify(path) => {
+                        if node_path_matches(path) {
+                            self.search_service.command(SearchCommand::IndexFile {
+                                path: path.clone(),
+                                display_name: Path::new(path)
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                            });
+                        }
+                    }
+                    FileEvent::Rename(from, to) => {
+                        if node_path_matches(from) || node_path_matches(to) {
+                            self.search_service
+                                .command(SearchCommand::RemoveFile { path: from.clone() });
+                            self.search_service.command(SearchCommand::IndexFile {
+                                path: to.clone(),
+                                display_name: Path::new(to)
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                            });
+                        }
+                    }
+                    FileEvent::Remove(path) => {
+                        if node_path_matches(path) {
+                            self.search_service
+                                .command(SearchCommand::RemoveFile { path: path.clone() });
+                        }
+                    }
+                }
+            }
         }
         self.request_redraw();
     }
@@ -1105,6 +1503,17 @@ impl ApplicationHandler<AppEvent> for App {
                     self.frame_meter.push(now - prev);
                 }
                 self.last_frame = Some(now);
+                // Полёт камеры к результату поиска (T14): семпл ease-out —
+                // пока полёт активен, about_to_wait держит кадры идущими
+                if let Some((flight, start)) = self.flight.take() {
+                    let elapsed = start.elapsed().as_millis() as u32;
+                    let (center, zoom) = flight.sample(elapsed);
+                    self.camera.set_center(center);
+                    self.camera.set_zoom(zoom);
+                    if !flight.is_finished(elapsed) {
+                        self.flight = Some((flight, start));
+                    }
+                }
                 // Миникарта (T13): пересборка по dirty-условиям ДО отрисовки
                 // (текстура должна быть готова к проходу кадра)
                 self.update_minimap();
@@ -1123,7 +1532,13 @@ impl ApplicationHandler<AppEvent> for App {
                     })
                     .collect();
                 // Панель настроек (screen-space): кнопка + строки переключателей
-                let (screen_instances, mut owned_texts) = self.settings_overlay();
+                let (mut screen_instances, mut owned_texts) = self.settings_overlay();
+                // Панель поиска (T14): квады/тексты поверх всего канваса
+                {
+                    let (search_instances, search_texts) = self.search_overlay();
+                    screen_instances.extend(search_instances);
+                    owned_texts.extend(search_texts);
+                }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме
                 if let Some(file) = self.hovered.and_then(|index| {
@@ -1173,6 +1588,25 @@ impl ApplicationHandler<AppEvent> for App {
                         [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
                         canvas_app::ui::DROP_PREVIEW_MAX,
                     ));
+                }
+                // Пульс подсветки ноды-результата (T14): world-квад с рамкой,
+                // затухающей по pulse_alpha; за вырожденный — сброс (рамка
+                // оверлейная — border.a, заливка прозрачна после фикса
+                // cards.wgsl)
+                if let Some((node, start)) = self.pulse {
+                    let alpha = pulse_alpha(start.elapsed().as_millis() as u32);
+                    if alpha <= 0.0 {
+                        self.pulse = None;
+                    } else if let Some(target) = self.scene.canvas.nodes.get(node) {
+                        let grow = (1.0 - alpha) * 8.0;
+                        overlay_instances.push(CardInstance {
+                            pos: [target.x - grow, target.y - grow],
+                            size: [target.width + grow * 2.0, target.height + grow * 2.0],
+                            fill: [0.0; 4],
+                            border: [1.0, 0.85, 0.35, alpha],
+                            params: [6.0, 0.0, 0.0, 1.0],
+                        });
+                    }
                 }
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
@@ -1244,11 +1678,29 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::Drag(event) => self.on_drag_event(event),
             AppEvent::FileEvents(events) => self.on_file_events(events),
+            AppEvent::Search(event) => self.on_search_event(event),
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.scene.autosave_if_due();
+        // Debounce запроса поиска (T14): 200 мс покоя после правки — отправка.
+        // Панель/анимации держат цикл красным через request_redraw ниже,
+        // иначе ControlFlow::Wait уснул бы до следующего события
+        if let Some((query, edited_at)) = self.search_pending.take() {
+            if edited_at.elapsed() < SEARCH_DEBOUNCE {
+                self.search_pending = Some((query, edited_at));
+            } else {
+                self.search_service.command(SearchCommand::Query {
+                    query,
+                    limit: SEARCH_RESULTS_LIMIT,
+                });
+            }
+        }
+        // Полёт камеры и пульс (T14): непрерывные кадры до завершения
+        if self.search_pending.is_some() || self.flight.is_some() || self.pulse.is_some() {
+            self.request_redraw();
+        }
     }
 }
 
@@ -1318,6 +1770,29 @@ impl App {
             }
             return;
         }
+        // Панель поиска (T14): открыта — клавиатура уходит в панель
+        // (ввод/каретка/Enter/Esc/F3), канвас-хоткеи приглушены
+        if self.search.is_open() {
+            if event.state == ElementState::Pressed {
+                self.on_search_key(event);
+            }
+            return;
+        }
+        // Ctrl+F — открыть панель поиска (T14; кириллическая раскладка — «а»);
+        // активное редактирование сначала фиксируется
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("f") || c.eq_ignore_ascii_case("а"))
+        {
+            if self.editing.is_some() {
+                self.finish_editing(true);
+            }
+            self.search.open();
+            self.request_redraw();
+            return;
+        }
         // Esc закрывает контекстное меню (T7), затем — панель настроек
         if event.logical_key == Key::Named(NamedKey::Escape)
             && event.state == ElementState::Pressed
@@ -1351,13 +1826,18 @@ impl App {
                 self.scene.dragging = None;
             }
         }
-        // F3 — переключить HUD с fps/p95/счётчиком видимых нод (T5)
+        // F3 — цикл по результатам поиска (T14), если они есть (в т.ч. после
+        // закрытия панели — rows сохранены); иначе — HUD с fps/p95 (T5)
         if event.logical_key == Key::Named(NamedKey::F3)
             && event.state == ElementState::Pressed
             && !event.repeat
         {
-            self.hud_visible = !self.hud_visible;
-            self.request_redraw();
+            if !self.search.rows.is_empty() {
+                self.cycle_search(if self.modifiers.shift_key() { -1 } else { 1 });
+            } else {
+                self.hud_visible = !self.hud_visible;
+                self.request_redraw();
+            }
         }
         // Del — удалить выделенную ноду (каскадно со связями) или связь (T8).
         // Во время редактирования сюда не доходим — там Delete работает в тексте
@@ -1376,6 +1856,29 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // Панель поиска (T14): клик по строке — прыжок, мимо панели —
+                // закрыть; канвасу клик не достаётся. Проверяется первой —
+                // панель висит поверх всех оверлеев
+                if self.search.is_open() {
+                    let viewport = self.viewport_logical();
+                    let lay = search_layout(viewport[0], viewport[1], &self.search);
+                    let mut handled = false;
+                    for (visible, rect) in lay.row_rects.iter().enumerate() {
+                        let row_rect = rect_xywh(*rect);
+                        if point_in_rect(row_rect, self.cursor) {
+                            let row = self.search.scroll_top + visible;
+                            self.search.selected = Some(row);
+                            self.jump_to_search_row(row);
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled && !point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+                        self.search.close();
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Панель настроек (screen-space): клики обрабатываются до
                 // канваса — кнопка/панель поверх и «прозрачности» не дают
                 let viewport = self.viewport_logical();
@@ -1853,13 +2356,44 @@ fn main() -> anyhow::Result<()> {
             }
         }
     });
-    let thumbs = ThumbService::new(
-        provider,
-        cache,
+    let thumbs = ThumbService::new(provider, cache, {
+        let proxy = proxy.clone();
         Some(Arc::new(move || {
             let _ = proxy.send_event(AppEvent::ThumbsReady);
-        })),
-    );
+        }))
+    });
+    // Поисковый индекс (T14): worker-поток FTS5 в общем cache.db; ответы —
+    // AppEvent::Search через proxy (паттерн ThumbService/Watcher). Ошибка
+    // открытия БД — деградация: warn внутри, пустые результаты (SPEC §5.3)
+    let search_responder: canvas_shell::SearchResponder = {
+        let proxy = proxy.clone();
+        Arc::new(move |event| {
+            let _ = proxy.send_event(AppEvent::Search(event));
+        })
+    };
+    let search_cache_dir = canvas_shell::default_cache_dir().unwrap_or_else(|| PathBuf::from("."));
+    let search_service = SearchService::spawn(search_cache_dir, search_responder);
+    // Первичная индексация file-нод загруженного канваса (T14): полный
+    // пересбор таблицы, лишние записи удаляются (ReplaceAll)
+    {
+        let canvas_dir = scene.canvas_dir();
+        let entries: Vec<canvas_shell::IndexEntry> = scene
+            .canvas
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let file = node.file.as_ref()?;
+                Some(canvas_shell::IndexEntry {
+                    path: resolve_node_path(file, &canvas_dir),
+                    display_name: Path::new(file)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| file.clone()),
+                })
+            })
+            .collect();
+        search_service.command(SearchCommand::ReplaceAll { entries });
+    }
     event_loop.run_app(&mut App::new(
         scene,
         thumbs,
@@ -1867,6 +2401,7 @@ fn main() -> anyhow::Result<()> {
         config_path,
         drag_sender,
         watcher,
+        search_service,
     ))?;
     Ok(())
 }
