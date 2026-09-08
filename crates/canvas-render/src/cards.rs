@@ -42,17 +42,20 @@ fn parse_hex(color: &str) -> Option<[f32; 4]> {
     Some([channel(0)?, channel(2)?, channel(4)?, 1.0])
 }
 
+/// Цвет по JSON Canvas spec: пресет "1".."6" или "#RRGGBB".
+/// None — цвет не задан или не парсится (вызывающий подставляет свой дефолт).
+pub fn named_color(color: Option<&str>) -> Option<[f32; 4]> {
+    let value = color?;
+    PRESET_COLORS
+        .iter()
+        .find(|(key, _)| *key == value)
+        .map(|(_, rgba)| *rgba)
+        .or_else(|| parse_hex(value))
+}
+
 /// Цвет заливки карточки: пресет "1".."6" или "#RRGGBB" по JSON Canvas spec, иначе дефолт.
 pub fn card_color(node: &Node) -> [f32; 4] {
-    match node.color.as_deref() {
-        Some(preset) => PRESET_COLORS
-            .iter()
-            .find(|(key, _)| *key == preset)
-            .map(|(_, rgba)| *rgba)
-            .or_else(|| parse_hex(preset))
-            .unwrap_or(DEFAULT_FILL),
-        None => DEFAULT_FILL,
-    }
+    named_color(node.color.as_deref()).unwrap_or(DEFAULT_FILL)
 }
 
 /// Цвет пресета палитры JSON Canvas ("1".."6") — для меню выбора цвета (T7).
@@ -102,7 +105,8 @@ pub struct CardInstance {
     pub size: [f32; 2],
     pub fill: [f32; 4],
     pub border: [f32; 4],
-    /// x — радиус (world px), y — selected (0/1), z — broken (0/1).
+    /// x — радиус (world px), y — selected (0/1), z — broken (0/1),
+    /// w — без тени (0/1, мелкие квады связей/портов, T8).
     pub params: [f32; 4],
 }
 
@@ -153,6 +157,136 @@ pub fn build_instances(
                 params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
             })
         })
+        .collect()
+}
+
+// --- Связи (T8) ---
+//
+// Поворотов в пайплайне нет, поэтому кривые и стрелки рисуются цепочками
+// маленьких кружков (квад d×d с radius = d/2): при плотной тесселяции
+// соседние кружки перекрываются и дают гладкую линию без полигонов.
+
+/// Точек тесселяции кривой связи при рендере (плотнее hit-test'а — гладкость).
+pub const EDGE_RENDER_SEGMENTS: usize = 48;
+/// Диаметр кружка линии связи в world-px.
+pub const EDGE_DOT: f32 = 2.5;
+/// Диаметр кружка выделенной связи (толще, T8).
+pub const EDGE_DOT_SELECTED: f32 = 3.5;
+/// Диаметр кружка порта ноды при hover в world-px.
+pub const PORT_DOT: f32 = 10.0;
+/// Цвет связи по умолчанию — нейтральный серо-голубой.
+pub const EDGE_COLOR: [f32; 4] = [0.52, 0.58, 0.66, 1.0];
+/// Цвет резиновой линии (drag новой связи) — акцент с прозрачностью.
+const DRAFT_COLOR: [f32; 4] = [0.396, 0.612, 0.969, 0.7];
+/// Длина уса стрелки в world-px.
+const ARROW_LEN: f32 = 10.0;
+/// Угол уса стрелки от обратного направления касательной.
+const ARROW_ANGLE: f32 = std::f32::consts::FRAC_PI_6; // 30°
+/// Кружков на ус стрелки.
+const ARROW_DOTS: usize = 4;
+
+/// Кружок диаметром `d` с центром в `center` (params.w = 1 — без тени).
+fn dot(center: [f32; 2], d: f32, fill: [f32; 4]) -> CardInstance {
+    CardInstance {
+        pos: [center[0] - d / 2.0, center[1] - d / 2.0],
+        size: [d, d],
+        fill,
+        border: [0.0; 4],
+        params: [d / 2.0, 0.0, 0.0, 1.0],
+    }
+}
+
+/// Кружки вдоль кривой (полилиния тесселяции) + стрелка на конце.
+/// Стрелка — два «уса» из кружков от конца кривой назад по касательной ±30°.
+fn curve_dots(
+    curve: &canvas_core::CubicBezier,
+    d: f32,
+    fill: [f32; 4],
+    out: &mut Vec<CardInstance>,
+) {
+    for point in canvas_core::tessellate(curve, EDGE_RENDER_SEGMENTS) {
+        out.push(dot(point, d, fill));
+    }
+    let tangent = canvas_core::curve_tangent(curve, 1.0);
+    let back = [-tangent[0], -tangent[1]];
+    let (sin, cos) = ARROW_ANGLE.sin_cos();
+    for sign in [1.0f32, -1.0] {
+        // Поворот вектора back на ±ARROW_ANGLE
+        let dir = [
+            back[0] * cos - back[1] * sin * sign,
+            back[0] * sin * sign + back[1] * cos,
+        ];
+        for i in 1..=ARROW_DOTS {
+            let dist = ARROW_LEN * i as f32 / ARROW_DOTS as f32;
+            out.push(dot(
+                [curve.p1[0] + dir[0] * dist, curve.p1[1] + dir[1] * dist],
+                d,
+                fill,
+            ));
+        }
+    }
+}
+
+/// Инстансы всех связей канваса (T8): кривые-«чётки» и стрелки.
+/// Выделенная связь (`selected` — индекс в `canvas.edges`) ярче и толще.
+/// Висячие связи (без ноды) пропускаются. Добавлять ПЕРЕД инстансами
+/// карточек — связи под нодами (порядок в буфере = порядок рисования).
+pub fn build_edge_instances(
+    canvas: &canvas_core::Canvas,
+    selected: Option<usize>,
+) -> Vec<CardInstance> {
+    let mut out = Vec::new();
+    for (index, edge) in canvas.edges.iter().enumerate() {
+        let Some(curve) = canvas_core::edge_curve(canvas, edge) else {
+            continue;
+        };
+        let is_selected = selected == Some(index);
+        let fill = if is_selected {
+            SELECTION_BORDER
+        } else {
+            named_color(edge.color.as_deref()).unwrap_or(EDGE_COLOR)
+        };
+        let d = if is_selected {
+            EDGE_DOT_SELECTED
+        } else {
+            EDGE_DOT
+        };
+        curve_dots(&curve, d, fill, &mut out);
+    }
+    out
+}
+
+/// Порты ноды при hover (T8): 4 кружка по центрам сторон, поверх карточек.
+pub fn build_port_instances(canvas: &canvas_core::Canvas, node: usize) -> Vec<CardInstance> {
+    let mut out = Vec::with_capacity(4);
+    if let Some(node) = canvas.nodes.get(node) {
+        for side in [
+            canvas_core::Side::Top,
+            canvas_core::Side::Right,
+            canvas_core::Side::Bottom,
+            canvas_core::Side::Left,
+        ] {
+            out.push(dot(
+                canvas_core::port_point(node, side),
+                PORT_DOT,
+                SELECTION_BORDER,
+            ));
+        }
+    }
+    out
+}
+
+/// Резиновая линия новой связи (T8): кривая от порта до курсора,
+/// полупрозрачная, без стрелки.
+pub fn build_draft_instances(
+    port: [f32; 2],
+    side: canvas_core::Side,
+    cursor: [f32; 2],
+) -> Vec<CardInstance> {
+    let curve = canvas_core::draft_curve(port, side, cursor);
+    canvas_core::tessellate(&curve, EDGE_RENDER_SEGMENTS)
+        .into_iter()
+        .map(|point| dot(point, EDGE_DOT, DRAFT_COLOR))
         .collect()
 }
 
@@ -412,6 +546,108 @@ mod tests {
         assert_eq!(extension_letter(&no_ext), None);
         let text = Node::text("n", "t", 0.0, 0.0);
         assert_eq!(extension_letter(&text), None);
+    }
+
+    /// named_color: пресеты и hex парсятся, мусор и None — None (дефолт на вызывающем).
+    #[test]
+    fn named_color_parsing() {
+        assert_eq!(named_color(None), None);
+        assert_eq!(named_color(Some("1")), Some(PRESET_COLORS[0].1));
+        assert_eq!(named_color(Some("#ff8000")).map(|c| c[0]), Some(1.0));
+        assert_eq!(named_color(Some("9")), None);
+        assert_eq!(named_color(Some("#zzz")), None);
+    }
+
+    /// Инстансы связей (T8): кружки тесселяции + усы стрелки; выделенная —
+    /// акцентом и толще; цвет из edge.color; висячая связь пропускается.
+    #[test]
+    fn edge_instances_chain_and_arrow() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("b", "C:/b.png", 500.0, 0.0, 100.0, 100.0));
+        let mut edge = canvas_core::Edge::new("e1", "a", None, "b", None);
+        edge.color = Some("2".into());
+        canvas.add_edge(edge);
+        canvas.add_edge(canvas_core::Edge::new("e2", "a", None, "missing", None));
+
+        let per_edge = EDGE_RENDER_SEGMENTS + 1 + ARROW_DOTS * 2;
+        let instances = build_edge_instances(&canvas, None);
+        assert_eq!(instances.len(), per_edge, "висячая e2 пропущена");
+        // Все инстансы — кружки без тени цвета пресета "2"
+        let expected = named_color(Some("2")).expect("пресет");
+        for inst in &instances {
+            assert_eq!(inst.params[0], inst.size[0] / 2.0, "круг: radius = d/2");
+            assert_eq!(inst.params[3], 1.0, "без тени");
+            assert_eq!(inst.fill, expected);
+            assert_eq!(inst.size[0], EDGE_DOT);
+        }
+        // Первая и последняя точки кривой — в портах
+        assert_eq!(
+            instances[0].pos,
+            [100.0 - EDGE_DOT / 2.0, 50.0 - EDGE_DOT / 2.0]
+        );
+
+        // Выделенная связь — акцент и толще
+        let selected = build_edge_instances(&canvas, Some(0));
+        assert_eq!(selected.len(), per_edge);
+        assert_eq!(selected[0].fill, SELECTION_BORDER);
+        assert_eq!(selected[0].size[0], EDGE_DOT_SELECTED);
+    }
+
+    /// Порты hover-ноды: 4 кружка по центрам сторон, акцентный цвет.
+    #[test]
+    fn port_instances_at_side_centers() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 100.0, 200.0, 300.0, 120.0));
+        let ports = build_port_instances(&canvas, 0);
+        assert_eq!(ports.len(), 4);
+        let centers: Vec<[f32; 2]> = ports
+            .iter()
+            .map(|inst| {
+                [
+                    inst.pos[0] + inst.size[0] / 2.0,
+                    inst.pos[1] + inst.size[1] / 2.0,
+                ]
+            })
+            .collect();
+        assert_eq!(centers[0], [250.0, 200.0]); // top
+        assert_eq!(centers[1], [400.0, 260.0]); // right
+        assert_eq!(centers[2], [250.0, 320.0]); // bottom
+        assert_eq!(centers[3], [100.0, 260.0]); // left
+        assert!(ports.iter().all(|inst| inst.size == [PORT_DOT, PORT_DOT]));
+        // Невалидный индекс — пусто
+        assert!(build_port_instances(&canvas, 9).is_empty());
+    }
+
+    /// Резиновая линия (T8): цепочка кружков от порта к курсору.
+    #[test]
+    fn draft_instances_from_port_to_cursor() {
+        let instances =
+            build_draft_instances([100.0, 50.0], canvas_core::Side::Right, [400.0, 200.0]);
+        assert_eq!(instances.len(), EDGE_RENDER_SEGMENTS + 1);
+        // Первый кружок — в порте, последний — у курсора
+        let first = instances[0];
+        assert_eq!(
+            [
+                first.pos[0] + first.size[0] / 2.0,
+                first.pos[1] + first.size[1] / 2.0
+            ],
+            [100.0, 50.0]
+        );
+        let last = instances[instances.len() - 1];
+        assert_eq!(
+            [
+                last.pos[0] + last.size[0] / 2.0,
+                last.pos[1] + last.size[1] / 2.0
+            ],
+            [400.0, 200.0]
+        );
     }
 
     /// Инстансы: рамка выделения/битой ссылки, z-порядок = порядок индексов.

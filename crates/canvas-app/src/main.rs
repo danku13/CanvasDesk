@@ -4,12 +4,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use canvas_core::{Canvas, Corner, Node, NodeKind, Settings, SpatialIndex, ThumbnailProvider};
+use canvas_core::{
+    edge_at, nearest_side, port_at, port_point, Canvas, Corner, Edge, Node, NodeKind, Settings,
+    Side, SpatialIndex, ThumbnailProvider,
+};
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
-use canvas_render::edit::{map_key, EditingSession, KeyCommand};
+use canvas_render::edit::{
+    edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
+};
 use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
-use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView};
+use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
 use canvas_shell::{Priority, ThumbService};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
@@ -183,6 +188,12 @@ struct ContextMenu {
     origin: Vec2,
 }
 
+/// Активный drag резиновой линии новой связи (T8): от порта ноды к курсору.
+struct EdgeDrag {
+    from_node: String,
+    from_side: Side,
+}
+
 /// Screen-space текст с владеемой строкой (панель настроек): промежуточное
 /// представление, конвертируется в `ScreenText` на кадр рендера.
 struct OwnedScreenText {
@@ -337,7 +348,8 @@ struct SceneState {
     /// R-tree над AABB нод; синхронизируется при каждом изменении геометрии.
     spatial: SpatialIndex,
     path: PathBuf,
-    selected: Option<usize>,
+    /// Выделение: нода или связь (T8).
+    selected: Option<Selection>,
     /// (индекс ноды, смещение от курсора до левого верхнего угла ноды в world).
     dragging: Option<(usize, Vec2)>,
     dirty_since: Option<Instant>,
@@ -481,6 +493,10 @@ struct App {
     menu: Option<ContextMenu>,
     /// Ручной resize ноды за правый нижний угол (T7): индекс ноды.
     resizing: Option<usize>,
+    /// Нода под курсором (T8): показываются порты для начала drag связи.
+    hovered: Option<usize>,
+    /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
+    edge_drag: Option<EdgeDrag>,
     /// Настройки приложения (config.toml).
     settings: Settings,
     /// Путь конфига (None — не сохраняем, работаем на дефолтах).
@@ -518,6 +534,8 @@ impl App {
             clipboard: Clipboard::new(),
             menu: None,
             resizing: None,
+            hovered: None,
+            edge_drag: None,
             settings,
             config_path,
             settings_open: false,
@@ -553,14 +571,14 @@ impl App {
         };
         let session = EditingSession::new(
             renderer.font_system_mut(),
-            index,
+            EditTarget::Node(index),
             &text,
             width * zoom_px,
             height * zoom_px,
             zoom_px,
         );
         self.editing = Some(session);
-        self.scene.selected = Some(index);
+        self.scene.selected = Some(Selection::Node(index));
         self.scene.dragging = None;
         // Давняя заметка могла переполниться до нас (загрузка из файла) —
         // подгоняем размер сразу при входе в редактирование
@@ -568,17 +586,48 @@ impl App {
         self.request_redraw();
     }
 
+    /// Начать редактирование лейбла связи (T8): двойной клик по линии.
+    /// Бокс редактирования — по центру кривой (edge_edit_area).
+    fn begin_editing_edge(&mut self, index: usize) {
+        let Some(edge) = self.scene.canvas.edges.get(index) else {
+            return;
+        };
+        let text = edge.label.clone().unwrap_or_default();
+        let Some((_, width, height)) = edge_edit_area(&self.scene.canvas, index) else {
+            return;
+        };
+        let zoom_px = self.zoom_px();
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let session = EditingSession::new(
+            renderer.font_system_mut(),
+            EditTarget::Edge(index),
+            &text,
+            width * zoom_px,
+            height * zoom_px,
+            zoom_px,
+        );
+        self.editing = Some(session);
+        self.scene.selected = Some(Selection::Edge(index));
+        self.scene.dragging = None;
+        self.request_redraw();
+    }
+
     /// Подрастить редактируемую заметку под контент (T7): текст не должен
     /// уходить за границы карточки. Высота — по числу строк layout, ширина —
     /// по самой длинной строке (с потолком MAX_NOTE_WIDTH). Только рост.
+    /// Для лейблов связей (T8) не применяется — бокс фиксированный.
     fn fit_note_size(&mut self) {
         let zoom_px = self.zoom_px();
         let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
         else {
             return;
         };
+        let EditTarget::Node(index) = session.target() else {
+            return;
+        };
         let (content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
-        let index = session.node();
         let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING;
         let needed_w = (content_w_px / zoom_px + BODY_PADDING * 2.0).min(MAX_NOTE_WIDTH);
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
@@ -599,20 +648,78 @@ impl App {
         }
     }
 
-    /// Завершить редактирование (T7): commit — записать текст в модель и
+    /// Завершить редактирование (T7/T8): commit — записать текст в модель и
     /// пометить канвас грязным (автосейв); cancel — откат, модель не менялась.
+    /// Для связи (T8) пустой лейбл при commit сбрасывается в None.
     fn finish_editing(&mut self, commit: bool) {
         let Some(session) = self.editing.take() else {
             return;
         };
         self.editor_dragging = false;
         if commit && session.changed() {
-            if let Some(node) = self.scene.canvas.nodes.get_mut(session.node()) {
-                node.text = Some(session.text());
+            match session.target() {
+                EditTarget::Node(index) => {
+                    if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                        node.text = Some(session.text());
+                    }
+                }
+                EditTarget::Edge(index) => {
+                    if let Some(edge) = self.scene.canvas.edges.get_mut(index) {
+                        let text = session.text();
+                        let text = text.trim();
+                        edge.label = if text.is_empty() {
+                            None
+                        } else {
+                            Some(text.to_owned())
+                        };
+                        // Кэш лейблов в TextSystem перешейпится сам:
+                        // ключ свежести — равенство текста (text.rs)
+                    }
+                }
             }
             self.scene.mark_dirty();
         }
         self.request_redraw();
+    }
+
+    /// Удалить выделенное (T8, Del): связь — по id; ноду — каскадно со
+    /// связями (canvas-core). После удаления ноды индексы в canvas.nodes
+    /// сдвигаются, поэтому spatial index перестраивается, а все кэши,
+    /// ключованные usize (текст, атлас тамбнейлов, негативный кэш),
+    /// сбрасываются полностью.
+    fn delete_selected(&mut self) {
+        match self.scene.selected {
+            Some(Selection::Edge(index)) => {
+                let Some(edge) = self.scene.canvas.edges.get(index) else {
+                    return;
+                };
+                let id = edge.id.clone();
+                self.scene.canvas.remove_edge(&id);
+                self.scene.selected = None;
+                self.scene.mark_dirty();
+                self.request_redraw();
+            }
+            Some(Selection::Node(index)) => {
+                if self.scene.canvas.remove_node(index).is_none() {
+                    return;
+                }
+                self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.invalidate_node_caches();
+                }
+                self.thumbs_failed.clear();
+                self.scene.selected = None;
+                self.scene.dragging = None;
+                self.resizing = None;
+                self.editing = None;
+                self.menu = None;
+                self.hovered = None;
+                self.edge_drag = None;
+                self.scene.mark_dirty();
+                self.request_redraw();
+            }
+            None => {}
+        }
     }
 
     /// Создать пустую заметку в world-точке (T7): модель + spatial index.
@@ -626,7 +733,7 @@ impl App {
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
-        self.scene.selected = Some(index);
+        self.scene.selected = Some(Selection::Node(index));
         self.scene.mark_dirty();
         index
     }
@@ -683,10 +790,12 @@ impl App {
             .map(|r| r.thumbnail_count())
             .unwrap_or(0);
         Some(format!(
-            "{fps} fps | p95 {p95} мс | кадр {:.1} мс | нод видно {}/{} | инстансов {} | тамбнейлов {} (очередь {})",
+            "{fps} fps | p95 {p95} мс | кадр {:.1} мс | нод видно {}/{} | связей видно {}/{} | инстансов {} | тамбнейлов {} (очередь {})",
             self.last_stats.cpu_ms,
             self.last_stats.visible_nodes,
             self.last_stats.total_nodes,
+            self.last_stats.visible_edges,
+            self.last_stats.total_edges,
             self.last_stats.instances,
             thumbs,
             self.thumbs.queue_len()
@@ -950,11 +1059,22 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_instances: &screen_instances,
                     screen_texts: &screen_texts,
                 };
+                // Резиновая линия новой связи (T8): от порта к курсору
+                let edge_draft = self.edge_drag.as_ref().and_then(|drag| {
+                    let node = self.scene.canvas.node(&drag.from_node)?;
+                    Some((
+                        port_point(node, drag.from_side),
+                        drag.from_side,
+                        self.cursor_world(),
+                    ))
+                });
                 if let Some(renderer) = self.renderer.as_mut() {
                     let scene = SceneView {
                         canvas: &self.scene.canvas,
                         spatial: &self.scene.spatial,
                         selected: self.scene.selected,
+                        hovered: self.hovered,
+                        edge_draft,
                     };
                     match renderer.render(
                         &self.camera,
@@ -1116,6 +1236,14 @@ impl App {
             self.hud_visible = !self.hud_visible;
             self.request_redraw();
         }
+        // Del — удалить выделенную ноду (каскадно со связями) или связь (T8).
+        // Во время редактирования сюда не доходим — там Delete работает в тексте
+        if event.logical_key == Key::Named(NamedKey::Delete)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            self.delete_selected();
+        }
     }
 
     fn on_left_button(&mut self, state: ElementState) {
@@ -1162,35 +1290,69 @@ impl App {
                     self.request_redraw();
                     return;
                 }
-                // Активное редактирование (T7): клик внутри ноды — в курсор,
-                // клик снаружи — commit и обычная обработка
-                if let Some(editing_node) = self.editing.as_ref().map(EditingSession::node) {
-                    if hit == Some(editing_node) {
+                // Активное редактирование (T7/T8): клик внутри области
+                // редактирования — в курсор, клик снаружи — commit и обычная
+                // обработка
+                if let Some(target) = self.editing.as_ref().map(EditingSession::target) {
+                    let inside = match target {
+                        EditTarget::Node(index) => hit == Some(index),
+                        EditTarget::Edge(index) => edge_edit_area(&self.scene.canvas, index)
+                            .is_some_and(|(origin, width, height)| {
+                                world[0] >= origin[0]
+                                    && world[0] <= origin[0] + width
+                                    && world[1] >= origin[1]
+                                    && world[1] <= origin[1] + height
+                            }),
+                    };
+                    if inside {
                         let zoom_px = self.zoom_px();
-                        if let (Some(node), Some(session), Some(renderer)) = (
-                            self.scene.canvas.nodes.get(editing_node),
-                            self.editing.as_mut(),
-                            self.renderer.as_mut(),
-                        ) {
-                            let (origin, _, _) = body_area(node);
-                            let x = ((world[0] - origin[0]) * zoom_px) as i32;
-                            let y = ((world[1] - origin[1]) * zoom_px) as i32;
-                            session.click(renderer.font_system_mut(), x, y);
-                            self.editor_dragging = true;
+                        if let (Some(session), Some(renderer)) =
+                            (self.editing.as_mut(), self.renderer.as_mut())
+                        {
+                            if let Some((origin, _, _)) = session_area(&self.scene.canvas, session)
+                            {
+                                let x = ((world[0] - origin[0]) * zoom_px) as i32;
+                                let y = ((world[1] - origin[1]) * zoom_px) as i32;
+                                session.click(renderer.font_system_mut(), x, y);
+                                self.editor_dragging = true;
+                            }
                         }
                         self.request_redraw();
                         return;
                     }
                     self.finish_editing(true);
                 }
+                // Порт hover-ноды (T8): начало drag резиновой линии новой
+                // связи — drag ноды/resize/двойной клик не начинаются
+                if let Some(node_index) = self.hovered {
+                    let port = self
+                        .scene
+                        .canvas
+                        .nodes
+                        .get(node_index)
+                        .and_then(|node| port_at(node, world, self.camera.zoom()));
+                    if let Some(side) = port {
+                        let from_node = self.scene.canvas.nodes[node_index].id.clone();
+                        self.edge_drag = Some(EdgeDrag {
+                            from_node,
+                            from_side: side,
+                        });
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 // Двойной клик (winit его не даёт — свой детектор, T7):
-                // по пустому месту — новая заметка, по text-ноде — редактирование
+                // по пустому месту — новая заметка, по text-ноде —
+                // редактирование, по линии связи — лейбл связи (T8)
                 if self.double_click.register(Instant::now(), self.cursor) {
                     match hit {
-                        None => {
-                            let index = self.create_note_at(world);
-                            self.begin_editing(index);
-                        }
+                        None => match edge_at(&self.scene.canvas, world) {
+                            Some(edge_index) => self.begin_editing_edge(edge_index),
+                            None => {
+                                let index = self.create_note_at(world);
+                                self.begin_editing(index);
+                            }
+                        },
                         Some(index) => self.begin_editing(index),
                     }
                     self.request_redraw();
@@ -1199,7 +1361,7 @@ impl App {
                 // Ручной resize (T7): захват за правый нижний угол ноды
                 if let Some(index) = hit {
                     if in_resize_corner(&self.scene.canvas.nodes[index], world) {
-                        self.scene.selected = Some(index);
+                        self.scene.selected = Some(Selection::Node(index));
                         self.resizing = Some(index);
                         self.request_redraw();
                         return;
@@ -1207,15 +1369,43 @@ impl App {
                 }
                 match hit {
                     Some(index) => {
-                        self.scene.selected = Some(index);
+                        self.scene.selected = Some(Selection::Node(index));
                         let node = &self.scene.canvas.nodes[index];
                         self.scene.dragging = Some((index, [node.x - world[0], node.y - world[1]]));
                     }
-                    None => self.scene.selected = None,
+                    // Промах по нодам: hit-test связей (T8) — ближайшая
+                    // в допуске EDGE_HIT_TOLERANCE, иначе сброс выделения
+                    None => {
+                        self.scene.selected =
+                            edge_at(&self.scene.canvas, world).map(Selection::Edge);
+                    }
                 }
                 self.request_redraw();
             }
             ElementState::Released => {
+                // Drop резиновой линии (T8): на другую ноду — создать связь
+                // (to_side — ближайшая к курсору сторона), в пустоту или на
+                // ту же ноду — отмена
+                if let Some(drag) = self.edge_drag.take() {
+                    let world = self.cursor_world();
+                    if let Some(target) = self.scene.spatial.hit_test(world) {
+                        let to_node = &self.scene.canvas.nodes[target];
+                        let to_id = to_node.id.clone();
+                        if to_id != drag.from_node {
+                            let to_side = nearest_side(to_node, world);
+                            let edge = Edge::new(
+                                self.scene.canvas.next_edge_id(),
+                                drag.from_node,
+                                Some(drag.from_side),
+                                to_id,
+                                Some(to_side),
+                            );
+                            self.scene.canvas.add_edge(edge);
+                            self.scene.mark_dirty();
+                        }
+                    }
+                    self.request_redraw();
+                }
                 self.scene.dragging = None;
                 self.editor_dragging = false;
                 self.resizing = None;
@@ -1235,7 +1425,7 @@ impl App {
         match self.scene.spatial.hit_test(world) {
             // Меню ноды (T7): палитра цветов в точке клика
             Some(index) => {
-                self.scene.selected = Some(index);
+                self.scene.selected = Some(Selection::Node(index));
                 self.menu = Some(ContextMenu {
                     node: index,
                     origin: world,
@@ -1259,15 +1449,13 @@ impl App {
             self.request_redraw();
         }
         self.cursor = logical;
-        // Драг внутри редактора — расширение выделения мышью (T7)
+        // Драг внутри редактора — расширение выделения мышью (T7/T8)
         if self.editor_dragging && !self.space_pressed {
             let world = self.cursor_world();
             let zoom_px = self.zoom_px();
             if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
             {
-                let editing_node = session.node();
-                if let Some(node) = self.scene.canvas.nodes.get(editing_node) {
-                    let (origin, _, _) = body_area(node);
+                if let Some((origin, _, _)) = session_area(&self.scene.canvas, session) {
                     let x = ((world[0] - origin[0]) * zoom_px) as i32;
                     let y = ((world[1] - origin[1]) * zoom_px) as i32;
                     session.drag(renderer.font_system_mut(), x, y);
@@ -1294,6 +1482,19 @@ impl App {
                     .move_node(index, world[0] + offset[0], world[1] + offset[1]);
                 self.scene.mark_dirty();
                 self.request_redraw();
+            } else if self.edge_drag.is_some() {
+                // Резиновая линия (T8) следует за курсором — курсор уже
+                // обновлён выше, нужна только перерисовка
+                self.request_redraw();
+            } else if !self.panning() && !self.editor_dragging && self.editing.is_none() {
+                // Hover (T8): порты ноды под курсором; перерисовка — только
+                // при смене ноды, чтобы не крутить кадры на каждый пиксель
+                let world = self.cursor_world();
+                let hovered = self.scene.spatial.hit_test(world);
+                if hovered != self.hovered {
+                    self.hovered = hovered;
+                    self.request_redraw();
+                }
             }
         }
     }

@@ -9,13 +9,14 @@
 //! без unsafe, а курсор/выделение сохраняются полями сессии между операциями.
 //!
 //! Координаты клика/каретки/выделения — в пикселях буфера редактора
-//! (физические px относительно левого верхнего угла тела карточки).
+//! (физические px относительно левого верхнего угла области редактирования).
 
+use canvas_core::{curve_point, edge_curve, Canvas};
 use cosmic_text::{Action, Buffer, Cursor, Edit, Editor, FontSystem, Metrics, Motion, Selection};
 use glyphon::{Attrs, Shaping, Wrap};
 use winit::keyboard::{Key, NamedKey};
 
-use crate::text::{offset_to_cursor, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
+use crate::text::{body_area, offset_to_cursor, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
 
 /// Маркер форматирования текста заметки (пост-T7): markdown-подмножество,
 /// см. markdown.rs. Хоткеи Ctrl+B/I/H тогглят маркер на выделении.
@@ -113,6 +114,42 @@ pub fn toggle_marker_text(
     }
 }
 
+/// Цель инлайн-редактирования: тело текстовой ноды (T7) или лейбл связи (T8).
+/// Индексы — позиции в `canvas.nodes` / `canvas.edges`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditTarget {
+    Node(usize),
+    Edge(usize),
+}
+
+/// Ширина бокса редактирования лейбла связи в world-px (T8).
+pub const EDGE_EDIT_WIDTH: f32 = 240.0;
+/// Высота бокса редактирования лейбла связи в world-px (строка + отступы).
+pub const EDGE_EDIT_HEIGHT: f32 = BODY_LINE_HEIGHT + 8.0;
+
+/// Область редактирования лейбла связи: бокс EDGE_EDIT_WIDTH × EDGE_EDIT_HEIGHT
+/// по центру кривой (t = 0.5). None — связи нет или она висячая.
+pub fn edge_edit_area(canvas: &Canvas, edge_index: usize) -> Option<([f32; 2], f32, f32)> {
+    let edge = canvas.edges.get(edge_index)?;
+    let curve = edge_curve(canvas, edge)?;
+    let mid = curve_point(&curve, 0.5);
+    let origin = [
+        mid[0] - EDGE_EDIT_WIDTH / 2.0,
+        mid[1] - EDGE_EDIT_HEIGHT / 2.0,
+    ];
+    Some((origin, EDGE_EDIT_WIDTH, EDGE_EDIT_HEIGHT))
+}
+
+/// Область редактирования сессии в world-координатах (левый верхний угол,
+/// ширина, высота): тело карточки для ноды, бокс у середины кривой — для
+/// лейбла связи (T8).
+pub fn session_area(canvas: &Canvas, session: &EditingSession) -> Option<([f32; 2], f32, f32)> {
+    match session.target() {
+        EditTarget::Node(index) => canvas.nodes.get(index).map(body_area),
+        EditTarget::Edge(index) => edge_edit_area(canvas, index),
+    }
+}
+
 /// Ширина каретки в пикселях буфера.
 const CARET_WIDTH: f32 = 2.0;
 /// Минимальная ширина прямоугольника выделения (визуализация пустого фрагмента).
@@ -201,13 +238,13 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
     }
 }
 
-/// Сессия инлайн-редактирования одной текстовой ноды (T7).
+/// Сессия инлайн-редактирования (T7 — тело текстовой ноды, T8 — лейбл связи).
 pub struct EditingSession {
     buffer: Buffer,
     cursor: Cursor,
     selection: Selection,
-    /// Индекс редактируемой ноды в `canvas.nodes`.
-    node: usize,
+    /// Что редактируется: нода или лейбл связи (индекс в модели).
+    target: EditTarget,
     /// Исходный текст — для отката по Esc.
     original: String,
     /// Высота строки текущего кадра (физ. px) — для каретки.
@@ -218,12 +255,12 @@ pub struct EditingSession {
 }
 
 impl EditingSession {
-    /// Начать редактирование: буфер с текстом ноды, курсор в конец.
-    /// `width_px`/`height_px` — область тела карточки в физических пикселях,
+    /// Начать редактирование: буфер с текстом цели, курсор в конец.
+    /// `width_px`/`height_px` — область редактирования в физических пикселях,
     /// `zoom_px` — zoom * scale_factor (перевод world-px в физические).
     pub fn new(
         font_system: &mut FontSystem,
-        node: usize,
+        target: EditTarget,
         text: &str,
         width_px: f32,
         height_px: f32,
@@ -245,7 +282,7 @@ impl EditingSession {
             buffer,
             cursor: Cursor::new(last_line, last_len),
             selection: Selection::None,
-            node,
+            target,
             original: text.to_owned(),
             line_height_px: line_height,
             layout: (width_px, height_px, zoom_px),
@@ -264,9 +301,17 @@ impl EditingSession {
         result
     }
 
-    /// Индекс редактируемой ноды.
-    pub fn node(&self) -> usize {
-        self.node
+    /// Цель редактирования (нода или лейбл связи).
+    pub fn target(&self) -> EditTarget {
+        self.target
+    }
+
+    /// Индекс ноды, если редактируется нода; None для лейбла связи.
+    pub fn node_index(&self) -> Option<usize> {
+        match self.target {
+            EditTarget::Node(index) => Some(index),
+            EditTarget::Edge(_) => None,
+        }
     }
 
     /// Текущий текст (строки через '\n').
@@ -527,10 +572,18 @@ impl EditingSessionScratch<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use canvas_core::{Edge, Node, Side};
 
     fn session(text: &str) -> (FontSystem, EditingSession) {
         let mut font_system = FontSystem::new();
-        let session = EditingSession::new(&mut font_system, 0, text, 300.0, 200.0, 1.0);
+        let session = EditingSession::new(
+            &mut font_system,
+            EditTarget::Node(0),
+            text,
+            300.0,
+            200.0,
+            1.0,
+        );
         (font_system, session)
     }
 
@@ -704,15 +757,28 @@ mod tests {
         assert_eq!(s.content_size_px(&mut fs).1, BODY_LINE_HEIGHT * 2.0);
         // Длинная строка wrap'ится: в буфере 100px шириной строк больше одной
         let mut fs2 = FontSystem::new();
-        let mut s =
-            EditingSession::new(&mut fs2, 0, &"длинное слово ".repeat(30), 100.0, 500.0, 1.0);
+        let mut s = EditingSession::new(
+            &mut fs2,
+            EditTarget::Node(0),
+            &"длинное слово ".repeat(30),
+            100.0,
+            500.0,
+            1.0,
+        );
         assert!(
             s.content_size_px(&mut fs2).1 > BODY_LINE_HEIGHT,
             "wrap должен дать больше одной строки"
         );
         // Контент выше буфера: высота измеряется полностью, без clip
         let mut fs3 = FontSystem::new();
-        let mut s = EditingSession::new(&mut fs3, 0, "1\n2\n3\n4\n5\n6\n7\n8", 200.0, 40.0, 1.0);
+        let mut s = EditingSession::new(
+            &mut fs3,
+            EditTarget::Node(0),
+            "1\n2\n3\n4\n5\n6\n7\n8",
+            200.0,
+            40.0,
+            1.0,
+        );
         assert_eq!(
             s.content_size_px(&mut fs3).1,
             BODY_LINE_HEIGHT * 8.0,
@@ -722,7 +788,7 @@ mod tests {
         let mut fs4 = FontSystem::new();
         let mut s = EditingSession::new(
             &mut fs4,
-            0,
+            EditTarget::Node(0),
             "короткая\nочень очень длинная строка",
             600.0,
             200.0,
@@ -730,6 +796,41 @@ mod tests {
         );
         let (w, _) = s.content_size_px(&mut fs4);
         assert!(w > 100.0, "ширина длинной строки: {w}");
+    }
+
+    /// Область редактирования (T8): нода — тело карточки, связь — бокс
+    /// по центру кривой; невалидный индекс — None.
+    #[test]
+    fn session_area_targets() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "t", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "t", 500.0, 0.0));
+        canvas.edges.push(Edge::new(
+            "e1",
+            "a",
+            Some(Side::Right),
+            "b",
+            Some(Side::Left),
+        ));
+        let mut fs = FontSystem::new();
+        let node_session = EditingSession::new(&mut fs, EditTarget::Node(0), "", 100.0, 50.0, 1.0);
+        let area = session_area(&canvas, &node_session).expect("нода есть");
+        assert_eq!(area, {
+            let (origin, w, h) = body_area(&canvas.nodes[0]);
+            (origin, w, h)
+        });
+        assert_eq!(node_session.node_index(), Some(0));
+
+        let edge_session = EditingSession::new(&mut fs, EditTarget::Edge(0), "", 100.0, 50.0, 1.0);
+        let (origin, w, h) = session_area(&canvas, &edge_session).expect("связь есть");
+        assert_eq!((w, h), (EDGE_EDIT_WIDTH, EDGE_EDIT_HEIGHT));
+        // Центр бокса — середина кривой (Node::text высотой 120: порты на y = 60)
+        assert!((origin[1] + h / 2.0 - 60.0).abs() < 1e-3);
+        assert_eq!(edge_session.node_index(), None);
+
+        // Висячая/несуществующая связь — None
+        let dangling = EditingSession::new(&mut fs, EditTarget::Edge(9), "", 100.0, 50.0, 1.0);
+        assert!(session_area(&canvas, &dangling).is_none());
     }
 
     /// Маппинг клавиш: Enter — commit, Shift+Enter — новая строка, Esc — cancel,

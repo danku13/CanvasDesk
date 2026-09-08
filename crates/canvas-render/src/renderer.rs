@@ -6,23 +6,32 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::{Canvas, SpatialIndex, Thumbnail};
+use canvas_core::{curve_point, edge_curve, Canvas, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
-use crate::cards::{build_instances, CardInstance, CardsPipeline, SELECTION_BORDER};
+use crate::cards::{
+    build_draft_instances, build_edge_instances, build_instances, build_port_instances,
+    CardInstance, CardsPipeline, SELECTION_BORDER,
+};
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
 };
-use crate::edit::EditingSession;
+use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
-use crate::text::{body_area, OverlayText, ScreenText, TextSystem};
+use crate::text::{titles_visible, EdgeLabel, OverlayText, ScreenText, TextSystem};
 use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
 
 /// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
 const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
 /// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
 const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
+/// Фон-подложка лейбла связи (T8) — тёмный, полупрозрачный.
+const EDGE_LABEL_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.85];
+/// Отступы подложки лейбла связи вокруг текста (world-px, по осям x и y).
+const EDGE_LABEL_PADDING: [f32; 2] = [6.0, 3.0];
+/// Фон бокса редактирования лейбла связи (T8) — у связи нет карточки.
+const EDGE_EDIT_FILL: [f32; 4] = [0.13, 0.13, 0.16, 0.95];
 
 /// Screen-space инстанс (логические px от левого верхнего угла окна) →
 /// world-инстанс текущей камеры: на экране размер константен при любом зуме.
@@ -58,11 +67,23 @@ impl FrameOverlay<'_> {
     };
 }
 
-/// Сцена кадра: модель канваса, spatial index (culling, T5) и выделение.
+/// Выделение на канвасе (T8): нода или связь (индексы в canvas.nodes/edges).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Selection {
+    Node(usize),
+    Edge(usize),
+}
+
+/// Сцена кадра: модель канваса, spatial index (culling, T5), выделение
+/// и интерактивные состояния связей (T8).
 pub struct SceneView<'a> {
     pub canvas: &'a Canvas,
     pub spatial: &'a SpatialIndex,
-    pub selected: Option<usize>,
+    pub selected: Option<Selection>,
+    /// Нода под курсором (hover, T8): рисуются порты для начала drag связи.
+    pub hovered: Option<usize>,
+    /// Резиновая линия новой связи (T8): (точка порта, сторона, курсор world).
+    pub edge_draft: Option<([f32; 2], Side, [f32; 2])>,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -72,6 +93,10 @@ pub struct FrameStats {
     pub total_nodes: usize,
     /// Нод попало в viewport (прошли culling).
     pub visible_nodes: usize,
+    /// Всего связей в сцене.
+    pub total_edges: usize,
+    /// Связей, чьи ноды видны (принадлежат видимым нодам).
+    pub visible_edges: usize,
     /// Инстансов карточек ушло в draw.
     pub instances: u32,
     /// CPU-время подготовки и кодирования кадра, мс.
@@ -181,6 +206,14 @@ impl Renderer {
         self.thumbs.len()
     }
 
+    /// Полная инвалидация кэшей по индексам нод (T8): после удаления ноды
+    /// индексы сдвигаются — текстовый кэш и атлас тамбнейлов сбрасываются;
+    /// тамбнейлы перезапросятся лениво из ThumbService/SQLite (SPEC §6.4).
+    pub fn invalidate_node_caches(&mut self) {
+        self.text.invalidate_all();
+        self.thumbs.clear();
+    }
+
     /// Доступ к FontSystem для операций EditingSession (T7) из приложения:
     /// ввод, клики, копирование — все шейпинг-операции идут через него.
     pub fn font_system_mut(&mut self) -> &mut glyphon::FontSystem {
@@ -216,10 +249,11 @@ impl Renderer {
         self.surface.configure(&self.gpu.device, &self.config);
     }
 
-    /// Отрисовать кадр: фон, сетка, карточки видимых нод, заголовки, HUD (T2/T4/T5).
+    /// Отрисовать кадр: фон, сетка, связи (T8), карточки видимых нод,
+    /// заголовки, лейблы связей, HUD (T2/T4/T5).
     /// `hud` — строка оверлея (F3), None — без оверлея. Возвращает счётчики кадра.
-    /// `editing` — активная сессия редактирования (T7): её буфер рисуется вместо
-    /// кэшированного тела ноды, поверх карточки — каретка и выделение.
+    /// `editing` — активная сессия редактирования (T7/T8): её буфер рисуется
+    /// вместо кэшированного тела ноды/лейбла, поверх — каретка и выделение.
     pub fn render(
         &mut self,
         camera: &Camera,
@@ -256,18 +290,65 @@ impl Renderer {
         let visible = camera.visible_world_rect(viewport_logical);
         let indices = scene.spatial.query_rect(visible);
 
-        // Актуальные метрики буфера редактирования под текущий зум (T7) —
+        // Актуальные метрики буфера редактирования под текущий зум (T7/T8) —
         // до вычисления каретки/выделения ниже
+        let zoom_px = camera.zoom() * self.scale_factor;
         if let Some(session) = editing.as_deref_mut() {
-            if let Some(node) = scene.canvas.nodes.get(session.node()) {
-                let zoom_px = camera.zoom() * self.scale_factor;
-                let (_, width, height) = body_area(node);
+            if let Some((_, width, height)) = session_area(scene.canvas, session) {
                 session.set_layout(
                     self.text.font_system_mut(),
                     width * zoom_px,
                     height * zoom_px,
                     zoom_px,
                 );
+            }
+        }
+
+        // Разложить выделение по видам целей (T8)
+        let (selected_node, selected_edge) = match scene.selected {
+            Some(Selection::Node(index)) => (Some(index), None),
+            Some(Selection::Edge(index)) => (None, Some(index)),
+            None => (None, None),
+        };
+        // Лейбл редактируемой связи рисует сессия — из обычной выдачи исключён
+        let editing_edge = editing
+            .as_deref()
+            .and_then(|session| match session.target() {
+                EditTarget::Edge(index) => Some(index),
+                EditTarget::Node(_) => None,
+            });
+
+        // Лейблы связей (T8): центр — середина кривой; подложка — квадом под
+        // текстом по размеру из кэша шейпинга (перешейп при смене текста/зума)
+        let mut edge_labels: Vec<EdgeLabel> = Vec::new();
+        let mut label_backdrops: Vec<CardInstance> = Vec::new();
+        if titles_visible(zoom_px) {
+            for (index, edge) in scene.canvas.edges.iter().enumerate() {
+                if editing_edge == Some(index) {
+                    continue;
+                }
+                let Some(text) = edge.label.as_deref().filter(|text| !text.is_empty()) else {
+                    continue;
+                };
+                let Some(curve) = edge_curve(scene.canvas, edge) else {
+                    continue;
+                };
+                let center = curve_point(&curve, 0.5);
+                let size = self.text.edge_label_size(&edge.id, text, zoom_px);
+                let w = size[0] + EDGE_LABEL_PADDING[0] * 2.0;
+                let h = size[1] + EDGE_LABEL_PADDING[1] * 2.0;
+                label_backdrops.push(CardInstance {
+                    pos: [center[0] - w / 2.0, center[1] - h / 2.0],
+                    size: [w, h],
+                    fill: EDGE_LABEL_FILL,
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+                edge_labels.push(EdgeLabel {
+                    id: &edge.id,
+                    text,
+                    center,
+                });
             }
         }
 
@@ -280,13 +361,27 @@ impl Renderer {
             );
         }
         let instances = {
-            let mut instances = build_instances(scene.canvas, &indices, scene.selected);
+            // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
+            // в общем буфере = порядок рисования
+            let mut instances = build_edge_instances(scene.canvas, selected_edge);
+            let mut instances_cards = build_instances(scene.canvas, &indices, selected_node);
+            instances.append(&mut instances_cards);
+            // Порты hover-ноды (T8) — поверх карточек
+            if let Some(hovered) = scene.hovered {
+                instances.extend(build_port_instances(scene.canvas, hovered));
+            }
+            // Резиновая линия новой связи (T8) — поверх всего world-space
+            if let Some((port, side, cursor)) = scene.edge_draft {
+                instances.extend(build_draft_instances(port, side, cursor));
+            }
+            // Подложки лейблов связей — над линиями, под их текстом
+            instances.extend_from_slice(&label_backdrops);
             // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
             // шейпинга (при промахе появятся на следующий кадр), под текстом
             for &index in &indices {
                 if let Some((entry_zoom, rects)) = self.text.highlight_rects(index) {
                     if let Some(node) = scene.canvas.nodes.get(index) {
-                        let (origin, _, _) = body_area(node);
+                        let (origin, _, _) = crate::text::body_area(node);
                         for rect in rects {
                             instances.push(Self::overlay_quad(
                                 origin,
@@ -298,12 +393,20 @@ impl Renderer {
                     }
                 }
             }
-            // Оверлеи редактирования (T7): выделение и каретка — квады поверх
-            // карточки редактируемой ноды, под текстом (текст рисуется позже)
+            // Оверлеи редактирования (T7/T8): выделение и каретка — квады поверх
+            // области редактирования, под текстом (текст рисуется позже)
             if let Some(session) = editing.as_deref_mut() {
-                if let Some(node) = scene.canvas.nodes.get(session.node()) {
-                    let zoom_px = camera.zoom() * self.scale_factor;
-                    let (origin, _, _) = body_area(node);
+                if let Some((origin, width, height)) = session_area(scene.canvas, session) {
+                    // У лейбла связи нет карточки — бокс-подложка с рамкой (T8)
+                    if let EditTarget::Edge(_) = session.target() {
+                        instances.push(CardInstance {
+                            pos: origin,
+                            size: [width, height],
+                            fill: EDGE_EDIT_FILL,
+                            border: SELECTION_BORDER,
+                            params: [6.0, 1.0, 0.0, 0.0],
+                        });
+                    }
                     for rect in session.selection_rects(self.text.font_system_mut()) {
                         instances.push(Self::overlay_quad(
                             origin,
@@ -351,13 +454,11 @@ impl Renderer {
         );
         // Актуальные метрики уже выставлены выше (до сборки оверлеев)
         let editing_ref = editing.as_deref();
-        let editing_index = editing_ref.map(EditingSession::node);
+        // Из кэша тела исключается только редактируемая НОДА; у лейбла связи
+        // (T8) кэшированного тела нет — исключать нечего
+        let editing_index = editing_ref.and_then(EditingSession::node_index);
         let editing_buffer = editing_ref.and_then(|session| {
-            scene
-                .canvas
-                .nodes
-                .get(session.node())
-                .map(|node| (session.buffer(), body_area(node).0))
+            session_area(scene.canvas, session).map(|(origin, _, _)| (session.buffer(), origin))
         });
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
@@ -373,6 +474,7 @@ impl Renderer {
                 editing_buffer,
                 overlay_texts: overlay.texts,
                 screen_texts: overlay.screen_texts,
+                edge_labels: &edge_labels,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
@@ -412,9 +514,35 @@ impl Renderer {
         }
         self.gpu.queue.submit([encoder.finish()]);
         frame.present();
+        // Считаем связи, у которых хотя бы одна нода видна
+        let visible_node_set: std::collections::HashSet<usize> = indices.iter().copied().collect();
+        let visible_edges = scene
+            .canvas
+            .edges
+            .iter()
+            .filter(|e| {
+                visible_node_set.contains(
+                    &scene
+                        .canvas
+                        .nodes
+                        .iter()
+                        .position(|n| n.id == e.from_node)
+                        .unwrap_or(usize::MAX),
+                ) || visible_node_set.contains(
+                    &scene
+                        .canvas
+                        .nodes
+                        .iter()
+                        .position(|n| n.id == e.to_node)
+                        .unwrap_or(usize::MAX),
+                )
+            })
+            .count();
         Ok(FrameStats {
             total_nodes: scene.canvas.nodes.len(),
             visible_nodes: indices.len(),
+            total_edges: scene.canvas.edges.len(),
+            visible_edges,
             instances: instance_count,
             cpu_ms: cpu_start.elapsed().as_secs_f32() * 1000.0,
         })

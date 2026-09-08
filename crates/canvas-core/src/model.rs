@@ -162,6 +162,29 @@ pub struct Edge {
     pub extra: Map<String, Value>,
 }
 
+impl Edge {
+    /// Новая связь между нодами по id. Стороны могут быть None — тогда
+    /// выводятся из взаимного положения нод (см. `edgegeom::edge_curve`).
+    pub fn new(
+        id: impl Into<String>,
+        from_node: impl Into<String>,
+        from_side: Option<Side>,
+        to_node: impl Into<String>,
+        to_side: Option<Side>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            from_node: from_node.into(),
+            from_side,
+            to_node: to_node.into(),
+            to_side,
+            label: None,
+            color: None,
+            extra: Map::new(),
+        }
+    }
+}
+
 /// Корень `.canvas`-файла.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Canvas {
@@ -193,5 +216,52 @@ impl Canvas {
                     && point[1] <= node.y + node.height
             })
             .map(|(index, _)| index)
+    }
+
+    /// Добавить связь.
+    pub fn add_edge(&mut self, edge: Edge) {
+        self.edges.push(edge);
+    }
+
+    /// Удалить связь по id. Возвращает true, если связь найдена.
+    pub fn remove_edge(&mut self, id: &str) -> bool {
+        let before = self.edges.len();
+        self.edges.retain(|edge| edge.id != id);
+        self.edges.len() != before
+    }
+
+    /// Индексы связей, инцидентных ноде (в любом направлении).
+    pub fn edges_of(&self, node_id: &str) -> Vec<usize> {
+        self.edges
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| edge.from_node == node_id || edge.to_node == node_id)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Следующий свободный id вида `edge-N` (суффиксы существующих не переиспользуются).
+    pub fn next_edge_id(&self) -> String {
+        let max_suffix = self
+            .edges
+            .iter()
+            .filter_map(|edge| edge.id.strip_prefix("edge-"))
+            .filter_map(|suffix| suffix.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("edge-{}", max_suffix + 1)
+    }
+
+    /// Удалить ноду по индексу вместе со всеми её связями (каскад, T8).
+    /// Возвращает удалённую ноду; None, если индекс вне диапазона.
+    pub fn remove_node(&mut self, index: usize) -> Option<Node> {
+        if index >= self.nodes.len() {
+            return None;
+        }
+        let node = self.nodes.remove(index);
+        let id = node.id.clone();
+        self.edges
+            .retain(|edge| edge.from_node != id && edge.to_node != id);
+        Some(node)
     }
 }

@@ -266,6 +266,7 @@ dependencies = [
  "canvas-core",
  "canvas-render",
  "canvas-shell",
+ "cosmic-text",
  "pollster",
  "tracing",
  "tracing-subscriber",

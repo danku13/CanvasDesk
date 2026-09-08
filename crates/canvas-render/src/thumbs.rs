@@ -318,6 +318,12 @@ impl ThumbsPipeline {
         self.slots.is_empty()
     }
 
+    /// Полный сброс слотов (T8): индексы нод сдвинулись после удаления;
+    /// тамбнейлы перезакажутся лениво из ThumbService/SQLite.
+    pub fn clear(&mut self) {
+        self.slots.clear();
+    }
+
     /// Доступ к размещению для сборки инстансов кадра.
     pub fn slots_mut(&mut self) -> &mut ThumbSlots {
         &mut self.slots

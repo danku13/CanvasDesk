@@ -18,7 +18,7 @@ struct VertexInput {
     @location(1) size: vec2<f32>,
     @location(2) fill: vec4<f32>,
     @location(3) border: vec4<f32>,
-    @location(4) params: vec4<f32>, // x: radius (world), y: selected, z: broken
+    @location(4) params: vec4<f32>, // x: radius (world), y: selected, z: broken, w: без тени
 };
 
 struct VertexOutput {
@@ -82,10 +82,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa = max(fwidth(sd), 1.0);
     let fill_alpha = 1.0 - smoothstep(-aa, aa, sd);
 
-    // Мягкая тень: тот же SDF со смещением и размытием
+    // Мягкая тень: тот же SDF со смещением и размытием; params.w = 1 — без тени
+    // (мелкие кружки связей/портов, T8: тень крупнее самого кружка)
     let shadow_offset = vec2<f32>(0.0, 4.0);
     let shadow_sd = sd_rounded_box(p - shadow_offset, half_size, radius) - 6.0;
-    let shadow_alpha = (1.0 - smoothstep(-4.0, 6.0, shadow_sd)) * 0.35;
+    let shadow_alpha = (1.0 - smoothstep(-4.0, 6.0, shadow_sd)) * 0.35 * (1.0 - in.params.w);
 
     // Рамка: выделение (2px) или broken (1px серая)
     var border_alpha = 0.0;

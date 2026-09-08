@@ -119,6 +119,14 @@ impl ThumbSlots {
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
+
+    /// Полный сброс атласа (T8): после удаления ноды индексы сдвигаются,
+    /// слоты по usize невалидны. Тамбнейлы перезапросятся лениво — CPU-копии
+    /// остаются в SQLite-кэше (SPEC §6.4).
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.free = (0..SLOT_COUNT).rev().collect();
+    }
 }
 
 #[cfg(test)]

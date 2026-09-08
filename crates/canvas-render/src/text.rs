@@ -46,6 +46,13 @@ pub const BODY_PADDING: f32 = 10.0;
 pub const BODY_TOP_GAP: f32 = 4.0;
 const BODY_COLOR: Color = Color::rgb(0xd4, 0xd4, 0xd4);
 
+/// Размер шрифта лейбла связи в world-px (T8).
+const EDGE_LABEL_FONT_SIZE: f32 = 12.0;
+/// Высота строки лейбла связи.
+const EDGE_LABEL_LINE_HEIGHT: f32 = 16.0;
+/// Цвет лейбла связи — светлый серо-голубой.
+const EDGE_LABEL_COLOR: Color = Color::rgb(0xcf, 0xd8, 0xe3);
+
 /// Размер шрифта HUD в физических px (не масштабируется зумом).
 const HUD_FONT_SIZE: f32 = 14.0;
 /// Высота строки HUD.
@@ -61,7 +68,8 @@ const CACHE_SWEEP_INTERVAL: u64 = 128;
 const CACHE_MAX_AGE: u64 = 600;
 
 /// Заголовок ноды читаем только если он крупнее MIN_TITLE_PX физических px.
-fn titles_visible(zoom_px: f32) -> bool {
+/// Тот же LOD-порог действует для лейблов связей (T8).
+pub fn titles_visible(zoom_px: f32) -> bool {
     TITLE_FONT_SIZE * zoom_px >= MIN_TITLE_PX
 }
 
@@ -181,6 +189,16 @@ pub struct ScreenText<'a> {
     pub color: Color,
 }
 
+/// Лейбл связи для кадра (T8): текст по центру кривой, шейпится с кэшем
+/// по id связи (перешейп при смене текста или зума).
+pub struct EdgeLabel<'a> {
+    /// id связи — ключ кэша шейпинга.
+    pub id: &'a str,
+    pub text: &'a str,
+    /// Центр лейбла в world-координатах (середина кривой, t = 0.5).
+    pub center: [f32; 2],
+}
+
 /// Параметры кадра для подготовки текста (группировка аргументов prepare_titles).
 pub struct TitleFrame<'a> {
     pub camera: &'a Camera,
@@ -202,6 +220,9 @@ pub struct TitleFrame<'a> {
     pub overlay_texts: &'a [OverlayText<'a>],
     /// Screen-space тексты (панель настроек): константный размер при зуме.
     pub screen_texts: &'a [ScreenText<'a>],
+    /// Лейблы связей (T8): по центрам кривых; лейбл редактируемой связи
+    /// сюда не передаётся — его рисует EditingSession.
+    pub edge_labels: &'a [EdgeLabel<'a>],
 }
 
 /// Зашейпленные буферы заголовка и тела ноды: валидны, пока не изменились
@@ -222,6 +243,16 @@ struct CachedTitle {
     last_used: u64,
 }
 
+/// Зашейпленный лейбл связи (T8): валиден при том же тексте и зуме.
+struct CachedEdgeLabel {
+    buffer: Buffer,
+    text: String,
+    zoom_px: f32,
+    /// Размер контента в px буфера (ширина строки × высота) — для центрирования
+    /// и подложки.
+    size_px: [f32; 2],
+}
+
 /// Текстовая система сцены: шрифты, атлас глифов, рендерер, кэш заголовков.
 pub struct TextSystem {
     font_system: FontSystem,
@@ -231,6 +262,8 @@ pub struct TextSystem {
     renderer: TextRenderer,
     /// Кэш Buffer'ов по индексу ноды (T5: не шейпить 1500 заголовков каждый кадр).
     cache: HashMap<usize, CachedTitle>,
+    /// Кэш лейблов связей по id связи (T8).
+    label_cache: HashMap<String, CachedEdgeLabel>,
     /// Номер кадра для LRU-вытеснения кэша.
     tick: u64,
 }
@@ -253,8 +286,60 @@ impl TextSystem {
             viewport,
             renderer,
             cache: HashMap::new(),
+            label_cache: HashMap::new(),
             tick: 0,
         }
+    }
+
+    /// Зашейпить/обновить запись лейбла связи (T8). Ширина буфера не
+    /// ограничена — измеряем фактическую для центрирования и подложки.
+    fn shape_edge_label(&mut self, id: &str, text: &str, zoom_px: f32) {
+        let line_height = EDGE_LABEL_LINE_HEIGHT * zoom_px;
+        let mut buffer = Buffer::new(
+            &mut self.font_system,
+            Metrics::new(EDGE_LABEL_FONT_SIZE * zoom_px, line_height),
+        );
+        buffer.set_wrap(&mut self.font_system, Wrap::None);
+        buffer.set_size(&mut self.font_system, None, Some(line_height));
+        buffer.set_text(&mut self.font_system, text, Attrs::new(), Shaping::Advanced);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        let width = buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0f32, f32::max);
+        self.label_cache.insert(
+            id.to_owned(),
+            CachedEdgeLabel {
+                buffer,
+                text: text.to_owned(),
+                zoom_px,
+                size_px: [width, line_height],
+            },
+        );
+    }
+
+    /// Размер лейбла связи в world-px (T8): шейпинг кэшируется по id связи,
+    /// перешейп — при смене текста или зума. Рендер вызывает это при сборке
+    /// подложки, до prepare_titles того же кадра — там запись уже свежая.
+    pub fn edge_label_size(&mut self, id: &str, text: &str, zoom_px: f32) -> [f32; 2] {
+        let fresh = self
+            .label_cache
+            .get(id)
+            .is_some_and(|entry| entry.text == text && (entry.zoom_px - zoom_px).abs() < 1e-3);
+        if !fresh {
+            self.shape_edge_label(id, text, zoom_px);
+        }
+        self.label_cache
+            .get(id)
+            .map(|entry| [entry.size_px[0] / zoom_px, entry.size_px[1] / zoom_px])
+            .unwrap_or([0.0, 0.0])
+    }
+
+    /// Полная инвалидация кэшей, ключованных индексами нод (T8): после
+    /// удаления ноды индексы сдвигаются. Лейблы связей ключованы id (String) —
+    /// удаление нод их не ломает, не трогаем.
+    pub fn invalidate_all(&mut self) {
+        self.cache.clear();
     }
 
     /// Подготовить заголовки видимых нод кадра (culling, T5: `frame.indices` —
@@ -419,6 +504,21 @@ impl TextSystem {
             self.cache.retain(|_, entry| entry.last_used >= horizon);
         }
 
+        // Лейблы связей (T8): вытеснение удалённых из модели, перешейп
+        // изменённых (текст/зум). Мутации кэша — до сборки TextArea ниже.
+        self.label_cache
+            .retain(|id, _| frame.edge_labels.iter().any(|label| label.id == id));
+        if show_titles {
+            for label in frame.edge_labels {
+                let fresh = self.label_cache.get(label.id).is_some_and(|entry| {
+                    entry.text == label.text && (entry.zoom_px - zoom_px).abs() < 1e-3
+                });
+                if !fresh {
+                    self.shape_edge_label(label.id, label.text, zoom_px);
+                }
+            }
+        }
+
         // HUD-оверлей (F3): фиксированный физический размер шрифта, левый верхний
         // угол; тень смещением на 1px для читаемости на светлых карточках.
         // Буферы живут до конца prepare — дальше в атлас не попадают.
@@ -516,6 +616,32 @@ impl TextSystem {
                         custom_glyphs: &[],
                     });
                 }
+            }
+        }
+        // Лейблы связей (T8): по центру кривой, поверх текста нод,
+        // до оверлеев меню и HUD
+        if show_titles {
+            for label in frame.edge_labels {
+                let Some(entry) = self.label_cache.get(label.id) else {
+                    continue;
+                };
+                let pos = to_physical(label.center);
+                let left = pos[0] - entry.size_px[0] / 2.0;
+                let top = pos[1] - entry.size_px[1] / 2.0;
+                areas.push(TextArea {
+                    buffer: &entry.buffer,
+                    left,
+                    top,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: left as i32,
+                        top: top as i32,
+                        right: (left + entry.size_px[0] + 1.0) as i32,
+                        bottom: (top + entry.size_px[1]) as i32,
+                    },
+                    default_color: EDGE_LABEL_COLOR,
+                    custom_glyphs: &[],
+                });
             }
         }
         // Оверлей-тексты (контекстное меню, T7): шейпинг покадрово, без кэша
