@@ -4,12 +4,8 @@
 //   лейбла двойным кликом, удаление связи Del, каскадное удаление при удалении ноды.
 
 use canvas_app::{
-    body_area, edge_edit_area, map_key, session_area,
-    test_helpers::{
-        in_resize_corner, menu_item_at, menu_label, menu_rect, next_note_id, point_in_rect,
-    },
-    EditTarget, EditingSession, KeyCommand, Marker, Selection, BODY_LINE_HEIGHT, EDGE_EDIT_HEIGHT,
-    EDGE_EDIT_WIDTH,
+    edge_edit_area, map_key, EditTarget, EditingSession, KeyCommand, Marker, Selection,
+    BODY_LINE_HEIGHT, EDGE_EDIT_HEIGHT, EDGE_EDIT_WIDTH,
 };
 use canvas_core::{
     edge_at, edge_curve, nearest_side, port_at, port_point, Canvas, Edge, Node, Side, SpatialIndex,
@@ -315,9 +311,9 @@ fn test_all_16_side_combinations() {
             let edge_id = format!("e-{from_side:?}-{to_side:?}");
             test_canvas.add_edge(Edge::new(edge_id, "a", Some(from_side), "b", Some(to_side)));
 
-            let curve = edge_curve(&test_canvas, &test_canvas.edges[0]).expect(&format!(
-                "комбинация {from_side:?} -> {to_side:?} должна резолвиться"
-            ));
+            let curve = edge_curve(&test_canvas, &test_canvas.edges[0]).unwrap_or_else(|| {
+                panic!("комбинация {from_side:?} -> {to_side:?} должна резолвиться")
+            });
 
             // Концы в правильных портах
             assert_eq!(curve.p0, port_point(&test_canvas.nodes[0], from_side));
