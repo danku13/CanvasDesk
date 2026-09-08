@@ -9,20 +9,25 @@ use winit::window::Window;
 use canvas_core::{Canvas, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
-use crate::cards::{build_instances, CardInstance, CardsPipeline, SELECTION_BORDER};
+use crate::cards::{card_instance, CardInstance, CardsPipeline, SELECTION_BORDER};
 use crate::config::{
     background_color, choose_present_mode, choose_surface_format, surface_size_valid,
 };
 use crate::edit::EditingSession;
 use crate::gpu::GpuContext;
 use crate::grid::GridPipeline;
-use crate::text::{body_area, OverlayText, ScreenText, TextSystem};
-use crate::thumbs::{build_thumb_instances, ThumbsPipeline};
+use crate::text::{body_area, titles_visible, OverlayText, ScreenText, TextSystem, TitleFrame};
+use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
+use crate::zorder;
 
 /// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
 const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
 /// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
 const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
+/// Потолок текст-групп кадра (включая финальную): сегменты сверх потолка
+/// теряют свою группу — их тексты рисуются в финальной поверх всего.
+/// Защита от патологически глубоких каскадов перекрытий.
+const MAX_TEXT_GROUPS: usize = 16;
 
 /// Screen-space инстанс (логические px от левого верхнего угла окна) →
 /// world-инстанс текущей камеры: на экране размер константен при любом зуме.
@@ -279,53 +284,128 @@ impl Renderer {
                 self.scale_factor,
             );
         }
-        let instances = {
-            let mut instances = build_instances(scene.canvas, &indices, scene.selected);
-            // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
-            // шейпинга (при промахе появятся на следующий кадр), под текстом
-            for &index in &indices {
-                if let Some((entry_zoom, rects)) = self.text.highlight_rects(index) {
-                    if let Some(node) = scene.canvas.nodes.get(index) {
-                        let (origin, _, _) = body_area(node);
-                        for rect in rects {
-                            instances.push(Self::overlay_quad(
-                                origin,
-                                *rect,
-                                entry_zoom,
-                                HIGHLIGHT_FILL,
-                            ));
-                        }
-                    }
+        // Редакторские оверлеи (T7): выделение и каретка — квады на z-позиции
+        // редактируемой ноды (над её карточкой, под её текстом и под
+        // перекрывающими карточками). Метрики считаются до z-прохода:
+        // session-операции требуют FontSystem.
+        let editing_node = editing.as_deref().map(EditingSession::node);
+        let mut editing_quads: Vec<CardInstance> = Vec::new();
+        if let Some(session) = editing.as_deref_mut() {
+            if let Some(node) = scene.canvas.nodes.get(session.node()) {
+                let zoom_px = camera.zoom() * self.scale_factor;
+                let (origin, _, _) = body_area(node);
+                for rect in session.selection_rects(self.text.font_system_mut()) {
+                    editing_quads.push(Self::overlay_quad(
+                        origin,
+                        rect,
+                        zoom_px,
+                        TEXT_SELECTION_FILL,
+                    ));
+                }
+                if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
+                    editing_quads.push(Self::overlay_quad(origin, rect, zoom_px, SELECTION_BORDER));
                 }
             }
-            // Оверлеи редактирования (T7): выделение и каретка — квады поверх
-            // карточки редактируемой ноды, под текстом (текст рисуется позже)
-            if let Some(session) = editing.as_deref_mut() {
-                if let Some(node) = scene.canvas.nodes.get(session.node()) {
-                    let zoom_px = camera.zoom() * self.scale_factor;
+        }
+
+        // Z-план кадра (zorder.rs): видимые ноды (z-порядок = порядок в
+        // Canvas.nodes) бьются на сегменты так, чтобы текст и тамбнейл ноды
+        // рисовались после её карточки, но до перекрывающих её карточек.
+        // Фикс наложения: раньше тамбнейлы и текст рисовались сплошными
+        // проходами поверх всех карточек — иконка Word фоновой карточки
+        // перекрывала заметки переднего плана, текст фоновой заметки лёг
+        // поверх чужих карточек и текста.
+        let zoom = camera.zoom();
+        let show_titles = titles_visible(zoom * self.scale_factor);
+        let rects: Vec<[f32; 4]> = indices
+            .iter()
+            .map(|&index| {
+                scene
+                    .canvas
+                    .nodes
+                    .get(index)
+                    .map(|n| [n.x, n.y, n.x + n.width, n.y + n.height])
+                    .unwrap_or([0.0, 0.0, 0.0, 0.0])
+            })
+            .collect();
+        let has_thumb: Vec<bool> = indices
+            .iter()
+            .map(|&index| {
+                zoom >= THUMB_MIN_ZOOM
+                    && scene
+                        .canvas
+                        .nodes
+                        .get(index)
+                        .is_some_and(|n| n.file.is_some())
+                    && self.thumbs.contains(index)
+            })
+            .collect();
+        let has_text: Vec<bool> = indices
+            .iter()
+            .map(|&index| show_titles || editing_node == Some(index))
+            .collect();
+        let zplan = zorder::plan_z_order(&rects, &has_text, &has_thumb, MAX_TEXT_GROUPS);
+
+        // Z-проход: инстансы карточек (карточка + квады подсветки/каретки на
+        // z-позициях нод) и тамбнейлы, посегментно с границами для draw_range.
+        let mut instances: Vec<CardInstance> = Vec::with_capacity(indices.len() + 8);
+        let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
+        // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
+        let mut draw_ranges: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
+            Vec::new();
+        for seg in &zplan.segments {
+            let cards_start = instances.len() as u32;
+            let thumbs_start = thumb_instances.len() as u32;
+            for pos in seg.nodes.clone() {
+                let Some(&index) = indices.get(pos) else {
+                    continue;
+                };
+                let Some(node) = scene.canvas.nodes.get(index) else {
+                    continue;
+                };
+                // Карточка ноды
+                instances.push(card_instance(node, scene.selected == Some(index)));
+                // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
+                // шейпинга (при промахе появятся на следующий кадре) —
+                // на z-позиции ноды, под её текстом и перекрывающими карточками
+                if let Some((entry_zoom, highlight)) = self.text.highlight_rects(index) {
                     let (origin, _, _) = body_area(node);
-                    for rect in session.selection_rects(self.text.font_system_mut()) {
+                    for rect in highlight {
                         instances.push(Self::overlay_quad(
                             origin,
-                            rect,
-                            zoom_px,
-                            TEXT_SELECTION_FILL,
+                            *rect,
+                            entry_zoom,
+                            HIGHLIGHT_FILL,
                         ));
                     }
-                    if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
-                        instances.push(Self::overlay_quad(origin, rect, zoom_px, SELECTION_BORDER));
-                    }
+                }
+                // Выделение/каретка редактора (T7) — на z-позиции редактируемой ноды
+                if editing_node == Some(index) {
+                    instances.extend_from_slice(&editing_quads);
+                }
+                // Тамбнейл (T6): в сегменте своей ноды — под перекрывающими карточками
+                if let Some(inst) =
+                    thumb_instance(scene.canvas, index, self.thumbs.slots_mut(), zoom)
+                {
+                    thumb_instances.push(inst);
                 }
             }
-            // Оверлеи приложения (контекстное меню, T7)
-            instances.extend_from_slice(overlay.instances);
-            // Screen-space оверлеи (панель настроек): конверсия в world —
-            // размер на экране константен при любом зуме и панорамировании
-            for inst in overlay.screen_instances {
-                instances.push(screen_instance_to_world(camera, viewport_logical, inst));
-            }
-            instances
-        };
+            draw_ranges.push((
+                cards_start..instances.len() as u32,
+                thumbs_start..thumb_instances.len() as u32,
+                seg.group,
+            ));
+        }
+        // Оверлеи приложения (контекстное меню, панель настроек) — поверх всех
+        // карточек: расширяют диапазон карточек финального сегмента; их тексты
+        // (подписи меню, строки панели) рисуются финальной текст-группой.
+        instances.extend_from_slice(overlay.instances);
+        for inst in overlay.screen_instances {
+            instances.push(screen_instance_to_world(camera, viewport_logical, inst));
+        }
+        if let Some(last) = draw_ranges.last_mut() {
+            last.0 = last.0.start..instances.len() as u32;
+        }
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -334,14 +414,9 @@ impl Renderer {
             self.scale_factor,
             &instances,
         );
-        // Тамбнейлы (T6): тот же набор видимых нод, LOD по zoom внутри build
-        let thumb_instances = build_thumb_instances(
-            scene.canvas,
-            &indices,
-            self.thumbs.slots_mut(),
-            camera.zoom(),
-        );
-        let thumb_count = self.thumbs.update(
+        // Тамбнейлы (T6): инстансы загружены в z-проходе; диапазоны
+        // рисуются посегментно между карточками (draw_ranges)
+        self.thumbs.update(
             &self.gpu.device,
             &self.gpu.queue,
             camera,
@@ -362,7 +437,7 @@ impl Renderer {
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
             &self.gpu.queue,
-            &crate::text::TitleFrame {
+            &TitleFrame {
                 camera,
                 viewport_physical: [self.size.width, self.size.height],
                 scale_factor: self.scale_factor,
@@ -373,6 +448,7 @@ impl Renderer {
                 editing_buffer,
                 overlay_texts: overlay.texts,
                 screen_texts: overlay.screen_texts,
+                zplan: &zplan,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
@@ -404,10 +480,17 @@ impl Renderer {
             if self.grid_visible {
                 self.grid.draw(&mut pass);
             }
-            self.cards.draw(&mut pass, instance_count);
-            self.thumbs.draw(&mut pass, thumb_count);
-            if let Err(err) = self.text.draw(&mut pass) {
-                tracing::warn!(?err, "отрисовка текста пропущена");
+            // Сегменты z-порядка: карточки сегмента → тамбнейлы сегмента →
+            // тексты сегмента. Следующий сегмент (перекрывающие карточки)
+            // рисуется поверх текстов предыдущего — наложений нет.
+            for (cards_range, thumbs_range, group) in &draw_ranges {
+                self.cards.draw_range(&mut pass, cards_range.clone());
+                self.thumbs.draw_range(&mut pass, thumbs_range.clone());
+                if let Some(g) = group {
+                    if let Err(err) = self.text.draw_group(&mut pass, *g) {
+                        tracing::warn!(?err, "отрисовка текста пропущена");
+                    }
+                }
             }
         }
         self.gpu.queue.submit([encoder.finish()]);

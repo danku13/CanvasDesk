@@ -17,6 +17,7 @@ use glyphon::{
 use crate::camera::Camera;
 use crate::cards::{extension_letter, title_for, HEADER_HEIGHT};
 use crate::markdown;
+use crate::zorder::ZPlan;
 
 /// Встроенный шрифт (assets/fonts/Inter.ttf, SIL OFL — см. assets/fonts/OFL.txt).
 const FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
@@ -61,7 +62,7 @@ const CACHE_SWEEP_INTERVAL: u64 = 128;
 const CACHE_MAX_AGE: u64 = 600;
 
 /// Заголовок ноды читаем только если он крупнее MIN_TITLE_PX физических px.
-fn titles_visible(zoom_px: f32) -> bool {
+pub fn titles_visible(zoom_px: f32) -> bool {
     TITLE_FONT_SIZE * zoom_px >= MIN_TITLE_PX
 }
 
@@ -202,6 +203,10 @@ pub struct TitleFrame<'a> {
     pub overlay_texts: &'a [OverlayText<'a>],
     /// Screen-space тексты (панель настроек): константный размер при зуме.
     pub screen_texts: &'a [ScreenText<'a>],
+    /// Z-план кадра (zorder.rs): текст-группы — тексты нод рисуются
+    /// сегментами между карточками, чтобы текст фоновой ноды не ложился
+    /// поверх карточек переднего плана. Финальная группа — оверлеи и HUD.
+    pub zplan: &'a ZPlan,
 }
 
 /// Зашейпленные буферы заголовка и тела ноды: валидны, пока не изменились
@@ -222,13 +227,18 @@ struct CachedTitle {
     last_used: u64,
 }
 
-/// Текстовая система сцены: шрифты, атлас глифов, рендерер, кэш заголовков.
+/// Текстовая система сцены: шрифты, атлас глифов, пул рендереров (по одному
+/// на текст-группу кадра — z-порядок), кэш заголовков.
 pub struct TextSystem {
     font_system: FontSystem,
     swash_cache: SwashCache,
     atlas: TextAtlas,
     viewport: Viewport,
-    renderer: TextRenderer,
+    /// Пул TextRenderer: glyphon рисует все подготовленные одним `prepare`
+    /// области одним draw-вызовом, поэтому сегменты кадра со своим текстом
+    /// требуют отдельных рендереров (каждому — свой vertex buffer).
+    /// Атлас общий — переиспользуется группами и кадрами.
+    renderers: Vec<TextRenderer>,
     /// Кэш Buffer'ов по индексу ноды (T5: не шейпить 1500 заголовков каждый кадр).
     cache: HashMap<usize, CachedTitle>,
     /// Номер кадра для LRU-вытеснения кэша.
@@ -251,14 +261,18 @@ impl TextSystem {
             swash_cache,
             atlas,
             viewport,
-            renderer,
+            renderers: vec![renderer],
             cache: HashMap::new(),
             tick: 0,
         }
     }
 
-    /// Подготовить заголовки видимых нод кадра (culling, T5: `frame.indices` —
-    /// выдача spatial index по viewport) и, при `frame.hud`, HUD-оверлей (F3).
+    /// Подготовить тексты кадра по текст-группам z-плана (zorder.rs):
+    /// заголовки/тела видимых нод (culling, T5: `frame.indices` — выдача
+    /// spatial index по viewport), буфер редактора (T7) на z-позиции
+    /// редактируемой ноды, оверлеи и HUD — в финальной группе. Каждая
+    /// группа готовится своим TextRenderer из пула и рисуется одним
+    /// draw-вызовом (`draw_group`) между сегментами карточек.
     pub fn prepare_titles(
         &mut self,
         device: &wgpu::Device,
@@ -451,73 +465,22 @@ impl TextSystem {
             ));
         }
 
-        // Фаза 2: TextArea из кэша — позиции пересчитываются каждый кадр (пан),
-        // а вот шейпинг уже нет.
-        let mut areas: Vec<TextArea> =
-            Vec::with_capacity(frame.indices.len() * 2 + hud_buffers.len());
-        if show_titles {
-            for &index in frame.indices {
-                let (Some(node), Some(entry)) =
-                    (frame.canvas.nodes.get(index), self.cache.get(&index))
-                else {
-                    continue;
-                };
-                let has_icon = entry.icon.is_some();
-                let title_x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
-                let pos = to_physical([title_x, node.y]);
-                areas.push(TextArea {
-                    buffer: &entry.title,
-                    left: pos[0],
-                    top: pos[1],
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: pos[0] as i32,
-                        top: pos[1] as i32,
-                        right: (pos[0] + entry.width_px) as i32,
-                        bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
-                    },
-                    default_color: TITLE_COLOR,
-                    custom_glyphs: &[],
-                });
-                if let Some(icon) = &entry.icon {
-                    let pos = to_physical([node.x + TITLE_PADDING, node.y]);
-                    areas.push(TextArea {
-                        buffer: icon,
-                        left: pos[0],
-                        top: pos[1],
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: pos[0] as i32,
-                            top: pos[1] as i32,
-                            right: (pos[0] + ICON_WIDTH * zoom_px) as i32,
-                            bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
-                        },
-                        default_color: ICON_COLOR,
-                        custom_glyphs: &[],
-                    });
-                }
-                // Тело заметки (T7): у редактируемой ноды body нет — рисует
-                // EditingSession
-                if let Some(body) = &entry.body {
-                    let (origin, body_width, body_height) = body_area(node);
-                    let pos = to_physical(origin);
-                    areas.push(TextArea {
-                        buffer: body,
-                        left: pos[0],
-                        top: pos[1],
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: pos[0] as i32,
-                            top: pos[1] as i32,
-                            right: (pos[0] + body_width * zoom_px) as i32,
-                            bottom: (pos[1] + body_height * zoom_px) as i32,
-                        },
-                        default_color: BODY_COLOR,
-                        custom_glyphs: &[],
-                    });
-                }
-            }
+        // Фаза 2: TextArea из кэша — по текст-группам z-плана (позиции
+        // пересчитываются каждый кадр при пан, шейпинг — нет). Группа =
+        // тексты одного сегмента кадра: рисуются после карточек сегмента
+        // и до карточек, перекрывающих его ноды (z-порядок, zorder.rs).
+        let group_count = frame.zplan.group_count();
+        let final_group = frame.zplan.final_group();
+        while self.renderers.len() < group_count {
+            let renderer = TextRenderer::new(
+                &mut self.atlas,
+                device,
+                wgpu::MultisampleState::default(),
+                None,
+            );
+            self.renderers.push(renderer);
         }
+
         // Оверлей-тексты (контекстное меню, T7): шейпинг покадрово, без кэша
         let mut overlay_buffers: Vec<(Buffer, [f32; 2], f32)> = Vec::new();
         for overlay in frame.overlay_texts {
@@ -562,99 +525,183 @@ impl TextSystem {
             screen_buffers.push(buffer);
         }
 
-        // Текст активной сессии редактирования (T7): буфер редактора поверх
-        // карточки (тело ноды из кэша для неё исключено в фазе 1)
-        if let Some((buffer, origin)) = frame.editing_buffer {
-            let pos = to_physical(origin);
-            areas.push(TextArea {
-                buffer,
-                left: pos[0],
-                top: pos[1],
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: pos[0] as i32,
-                    top: pos[1] as i32,
-                    right: viewport_physical[0] as i32,
-                    bottom: viewport_physical[1] as i32,
-                },
-                default_color: BODY_COLOR,
-                custom_glyphs: &[],
-            });
+        for (g, group) in frame.zplan.text_groups.iter().enumerate() {
+            let mut areas: Vec<TextArea> = Vec::with_capacity(group.len() * 3 + 4);
+            if show_titles {
+                for &index in group {
+                    let (Some(node), Some(entry)) =
+                        (frame.canvas.nodes.get(index), self.cache.get(&index))
+                    else {
+                        continue;
+                    };
+                    let has_icon = entry.icon.is_some();
+                    let title_x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
+                    let pos = to_physical([title_x, node.y]);
+                    areas.push(TextArea {
+                        buffer: &entry.title,
+                        left: pos[0],
+                        top: pos[1],
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: pos[0] as i32,
+                            top: pos[1] as i32,
+                            right: (pos[0] + entry.width_px) as i32,
+                            bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
+                        },
+                        default_color: TITLE_COLOR,
+                        custom_glyphs: &[],
+                    });
+                    if let Some(icon) = &entry.icon {
+                        let pos = to_physical([node.x + TITLE_PADDING, node.y]);
+                        areas.push(TextArea {
+                            buffer: icon,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + ICON_WIDTH * zoom_px) as i32,
+                                bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
+                            },
+                            default_color: ICON_COLOR,
+                            custom_glyphs: &[],
+                        });
+                    }
+                    // Тело заметки (T7): у редактируемой ноды body нет —
+                    // его рисует буфер EditingSession (блок ниже)
+                    if let Some(body) = &entry.body {
+                        let (origin, body_width, body_height) = body_area(node);
+                        let pos = to_physical(origin);
+                        areas.push(TextArea {
+                            buffer: body,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + body_width * zoom_px) as i32,
+                                bottom: (pos[1] + body_height * zoom_px) as i32,
+                            },
+                            default_color: BODY_COLOR,
+                            custom_glyphs: &[],
+                        });
+                    }
+                }
+            }
+            // Текст активной сессии редактирования (T7): буфер редактора на
+            // z-позиции редактируемой ноды; клип — область тела карточки,
+            // текст не выходит за пределы заметки (авторост — в fit_note_size).
+            if let (Some((buffer, origin)), Some(editing_index)) =
+                (frame.editing_buffer, frame.editing)
+            {
+                if group.contains(&editing_index) {
+                    if let Some(node) = frame.canvas.nodes.get(editing_index) {
+                        let pos = to_physical(origin);
+                        let (_, body_width, body_height) = body_area(node);
+                        areas.push(TextArea {
+                            buffer,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + body_width * zoom_px) as i32,
+                                bottom: (pos[1] + body_height * zoom_px) as i32,
+                            },
+                            default_color: BODY_COLOR,
+                            custom_glyphs: &[],
+                        });
+                    }
+                }
+            }
+            // Финальная группа поверх всего кадра: подписи меню (T7),
+            // screen-тексты панели настроек и HUD (F3)
+            if g == final_group {
+                for (buffer, origin, width) in &overlay_buffers {
+                    let pos = to_physical(*origin);
+                    areas.push(TextArea {
+                        buffer,
+                        left: pos[0],
+                        top: pos[1],
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: pos[0] as i32,
+                            top: pos[1] as i32,
+                            right: (pos[0] + width * zoom_px) as i32,
+                            bottom: (pos[1] + line_height) as i32,
+                        },
+                        default_color: TITLE_COLOR,
+                        custom_glyphs: &[],
+                    });
+                }
+                for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
+                    let left = st.origin[0] * scale_factor;
+                    let top = st.origin[1] * scale_factor;
+                    let line_height = st.font_size * scale_factor * 1.3;
+                    areas.push(TextArea {
+                        buffer,
+                        left,
+                        top,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: left as i32,
+                            top: top as i32,
+                            right: (left + st.width * scale_factor) as i32,
+                            bottom: (top + line_height) as i32,
+                        },
+                        default_color: st.color,
+                        custom_glyphs: &[],
+                    });
+                }
+                areas.extend(
+                    hud_buffers
+                        .iter()
+                        .map(|(buffer, pos, width, height, color)| TextArea {
+                            buffer,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + width) as i32,
+                                bottom: (pos[1] + height) as i32,
+                            },
+                            default_color: *color,
+                            custom_glyphs: &[],
+                        }),
+                );
+            }
+            if let Some(renderer) = self.renderers.get_mut(g) {
+                renderer.prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    areas,
+                    &mut self.swash_cache,
+                )?;
+            }
         }
-        // Оверлей-тексты меню (T7) — после текста редактора, до HUD
-        for (buffer, origin, width) in &overlay_buffers {
-            let pos = to_physical(*origin);
-            areas.push(TextArea {
-                buffer,
-                left: pos[0],
-                top: pos[1],
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: pos[0] as i32,
-                    top: pos[1] as i32,
-                    right: (pos[0] + width * zoom_px) as i32,
-                    bottom: (pos[1] + line_height) as i32,
-                },
-                default_color: TITLE_COLOR,
-                custom_glyphs: &[],
-            });
-        }
-        // Screen-space тексты (панель настроек) — поверх всего, до HUD
-        for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
-            let left = st.origin[0] * scale_factor;
-            let top = st.origin[1] * scale_factor;
-            let line_height = st.font_size * scale_factor * 1.3;
-            areas.push(TextArea {
-                buffer,
-                left,
-                top,
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: left as i32,
-                    top: top as i32,
-                    right: (left + st.width * scale_factor) as i32,
-                    bottom: (top + line_height) as i32,
-                },
-                default_color: st.color,
-                custom_glyphs: &[],
-            });
-        }
-        areas.extend(
-            hud_buffers
-                .iter()
-                .map(|(buffer, pos, width, height, color)| TextArea {
-                    buffer,
-                    left: pos[0],
-                    top: pos[1],
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: pos[0] as i32,
-                        top: pos[1] as i32,
-                        right: (pos[0] + width) as i32,
-                        bottom: (pos[1] + height) as i32,
-                    },
-                    default_color: *color,
-                    custom_glyphs: &[],
-                }),
-        );
-
-        self.renderer.prepare(
-            device,
-            queue,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
-            areas,
-            &mut self.swash_cache,
-        )
+        Ok(())
     }
 
-    /// Нарисовать подготовленный текст в активном render pass.
-    pub fn draw<'pass>(
+    /// Нарисовать текст-группу `group` в активном render pass. Группы
+    /// рисуются сегментами кадра между диапазонами карточек и тамбнейлов
+    /// (z-порядок, см. zorder.rs и Renderer::render).
+    pub fn draw_group<'pass>(
         &'pass self,
         pass: &mut wgpu::RenderPass<'pass>,
+        group: usize,
     ) -> Result<(), glyphon::RenderError> {
-        self.renderer.render(&self.atlas, &self.viewport, pass)
+        match self.renderers.get(group) {
+            Some(renderer) => renderer.render(&self.atlas, &self.viewport, pass),
+            None => Ok(()),
+        }
     }
 
     /// Доступ к FontSystem для операций EditingSession (T7): ввод, каретка,
