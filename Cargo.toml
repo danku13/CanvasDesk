@@ -56,6 +56,10 @@ windows = { version = "0.62", features = [
     "Win32_System_Memory",
     # T9 drag-drop: резерв под оконные сообщения (ScreenToClient в 0.62 — Gdi)
     "Win32_UI_WindowsAndMessaging",
+    # T15: GetDpiForWindow (DPI-поллинг после репарентинга, R10)
+    "Win32_UI_HiDpi",
+    # T15: SetWinEventHook/UnhookWinEvent (watch WorkerW, R6)
+    "Win32_UI_Accessibility",
 ] }
 # #[implement] (T9 COM IDropTarget) генерирует пути ::windows_core —
 # нужен прямой dep, re-export windows::core не резолвится
