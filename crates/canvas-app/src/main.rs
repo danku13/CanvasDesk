@@ -2610,7 +2610,7 @@ impl App {
         let id = next_free_id(&self.scene.canvas, "file");
         let node = Node::file(
             id,
-            name,
+            &name,
             world[0],
             world[1],
             canvas_app::ui::DROP_CARD_W,
