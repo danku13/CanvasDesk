@@ -61,7 +61,9 @@
     только чтение.
   - `ShellExecuteExW(*mut SHELLEXECUTEINFOW) -> Result<()>`;
     SEE_MASK_INVOKEIDLIST = 12.
-  - Registry: RegCreateKeyExW/RegOpenKeyExW/RegSetValueExW/
+  - Registry: RegCreateKeyW (legacy — СОЗДАЁТ/открывает ключ, НЕ
+    требует фичи Win32_Security; RegCreateKeyExW гейтован ею —
+    координаторская проверка реестром)/RegOpenKeyExW/RegSetValueExW/
     RegQueryValueExW/RegDeleteValueW/RegCloseKey,
     HKEY_CURRENT_USER — фича Win32_System_Registry.
   - `TrackPopupMenu(...) -> BOOL` — с TPM_RETURNCMD возвращает id
@@ -182,7 +184,7 @@ T15-A «чистое ядро + cfg-блоки»; файлы объявляют�
   (HKCU, KEY_READ) → RegQueryValueExW(CanvasDesk) → есть и непусто;
   любые WIN32_ERROR≠0 → false (кроме DELETE-кейсов — просто false).
   `pub fn set_autostart(enable: bool) -> Result<(), String>`: enable →
-  RegCreateKeyExW + RegSetValueExW(REG_SZ, autostart_command(current_
+  RegCreateKeyW + RegSetValueExW(REG_SZ, autostart_command(current_
   exe)); disable → RegOpenKeyExW + RegDeleteValueW (ERROR_SUCCESS;
   VALUE_NOT_EXIST → Ok — идемпотентность). RegCloseKey — Drop-гуард.
   Отказы — Err(строка) → warn (R14).

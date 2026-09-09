@@ -60,10 +60,12 @@ pub fn autostart_enabled() -> bool {
     todo!("T17-D")
 }
 
-/// Установить/снять автозапуск (идемпотентно): enable → RegCreateKeyExW
-/// + RegSetValueExW(REG_SZ, autostart_command(current_exe)); disable →
-/// RegDeleteValueW (отсутствие значения — успех, не ошибка). Отказы —
-/// Err(строка) → warn (R14). RegCloseKey — Drop-гуард на всех путях.
+/// Установить/снять автозапуск (идемпотентно): enable → RegCreateKeyW
+/// (legacy-API — создаёт/открывает ключ, не тянет фичу Win32_Security,
+/// в отличие от гейтованного RegCreateKeyExW) + RegSetValueExW(REG_SZ,
+/// autostart_command(current_exe)); disable → RegDeleteValueW
+/// (отсутствие значения — успех, не ошибка). Отказы — Err(строка) →
+/// warn (R14). RegCloseKey — Drop-гуард на всех путях.
 #[cfg(windows)]
 pub fn set_autostart(enable: bool) -> Result<(), String> {
     todo!("T17-D")
