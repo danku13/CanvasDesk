@@ -9,7 +9,10 @@ pub mod cache;
 pub mod desktop;
 pub mod dragdrop;
 pub mod search;
+// Шина системных событий (T16, RECIPES R11): чистое ядро (shell_events/mod.rs)
+// кроссплатформенно — тесты на Linux; окно/регистрации/декод — cfg(windows).
 pub mod service;
+pub mod shell_events;
 #[cfg(windows)]
 pub mod thumbs;
 pub mod watcher;

@@ -62,6 +62,15 @@ windows = { version = "0.62", features = [
     "Win32_UI_Accessibility",
     # T15: GetCurrentThreadId (monitor-поток, координатор вместо link!-декларации воркера D)
     "Win32_System_Threading",
+    # T16: WTSRegisterSessionNotification/ProcessIdToSessionId (шина shell_events, R8)
+    "Win32_System_RemoteDesktop",
+    # T16: RegisterSuspendResumeNotification (suspend/resume перед сном, R11)
+    "Win32_System_Power",
+    # T16: AddClipboardFormatListener (clipboard-канал шины, R11)
+    "Win32_System_DataExchange",
+    # T16: SHChangeNotifyRegister/Lock, SHGetPathFromIDListW, SHParseDisplayName
+    # (SHCNE-мост R12: типы Common::ITEMIDLIST)
+    "Win32_UI_Shell_Common",
 ] }
 # #[implement] (T9 COM IDropTarget) генерирует пути ::windows_core —
 # нужен прямой dep, re-export windows::core не резолвится
