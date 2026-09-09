@@ -63,6 +63,7 @@ pub struct ShellRegs {
 ///    (UIPI-фильтр ОБЯЗАТЕЛЕН);
 /// 6) SHChangeNotify-подписки — отдельно через [`FileNotifySync::sync`]
 ///    (динамический набор директорий модели).
+///
 /// Возвращает (реестр снятия, MsgRouter с динамическими id).
 pub fn register_all(hwnd: HWND) -> (ShellRegs, MsgRouter) {
     // Сверка локальных констант ядра (mod.rs не зависит от windows-crate)
