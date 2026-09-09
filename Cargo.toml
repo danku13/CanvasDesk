@@ -71,6 +71,9 @@ windows = { version = "0.62", features = [
     # T16: SHChangeNotifyRegister/Lock, SHGetPathFromIDListW, SHParseDisplayName
     # (SHCNE-мост R12: типы Common::ITEMIDLIST)
     "Win32_UI_Shell_Common",
+    # T16: GetModuleHandleW (HINSTANCE окна шины — RegisterClassW/CreateWindowExW;
+    # координатор вместо link!-декларации воркера B — тот же путь, что T15-D)
+    "Win32_System_LibraryLoader",
 ] }
 # #[implement] (T9 COM IDropTarget) генерирует пути ::windows_core —
 # нужен прямой dep, re-export windows::core не резолвится

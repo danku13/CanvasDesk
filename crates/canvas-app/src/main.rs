@@ -292,6 +292,12 @@ enum AppEvent {
     /// (WinEventHook/поллинг) и смена DPI после репарентинга (R10).
     #[cfg(windows)]
     Desktop(canvas_shell::DesktopEvent),
+    /// События шины системных событий (T16): сессия (lock/unlock, R8),
+    /// suspend/resume, ExplorerStarted (TaskbarCreated, R7/R11),
+    /// shell-hook/clipboard (потребители T18/будущее), SHCNE-мост в
+    /// конвейер T10 (корзина → brokenLink, R12).
+    #[cfg(windows)]
+    Shell(canvas_shell::shell_events::ShellEvent),
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -406,6 +412,16 @@ struct App {
     /// WS_EX_NOACTIVATE уже снят первым кликом (T15, идемпотентный флаг).
     #[cfg(windows)]
     desktop_activation_enabled: bool,
+    /// Шина системных событий (T16): message-only окно на отдельном потоке;
+    /// события — AppEvent::Shell через proxy. Спавнится в main()
+    /// без привязки к --desktop (события сессии/сна/shell-файлы полезны в
+    /// любом режиме, план §8.7); провал — warn + деградация (R14).
+    #[cfg(windows)]
+    shell_events: Option<canvas_shell::shell_events::window::ShellEventService>,
+    /// Последнее известное состояние гейта интерактивной сессии (T16, R8):
+    /// лог/диагностика; потребление — T18. Старт true (как и атомик в шине).
+    #[cfg(windows)]
+    session_interactive: bool,
 }
 
 impl App {
@@ -473,6 +489,13 @@ impl App {
             desktop_recover_failures: 0,
             #[cfg(windows)]
             desktop_activation_enabled: false,
+            #[cfg(windows)]
+            shell_events: None,
+            // Старт true — зеркалит атомик IS_INTERACTIVE_SESSION в шине
+            // (T16-A, план §8.3): залоченная до старта сессия события не
+            // пришлёт до unlock
+            #[cfg(windows)]
+            session_interactive: true,
         }
     }
 
@@ -484,6 +507,13 @@ impl App {
         monitor: canvas_shell::desktop::monitor::DesktopMonitorService,
     ) {
         self.desktop_monitor = Some(monitor);
+    }
+
+    /// Подключить шину системных событий (T16; сеттер-паттерн T15 —
+    /// сервис спавнится в main() до входа в event loop).
+    #[cfg(windows)]
+    fn set_shell_events(&mut self, service: canvas_shell::shell_events::window::ShellEventService) {
+        self.shell_events = Some(service);
     }
 
     /// HWND окна приложения через raw-window-handle (T15; тот же приём,
@@ -585,6 +615,59 @@ impl App {
                 }
                 self.request_redraw();
             }
+        }
+    }
+
+    /// Обработка событий шины системных событий (T16, план §3): сессия —
+    /// гейт интерактивности (лог/диагностика, R8; потребление — T18),
+    /// Suspending — форс-сейв .canvas ДО ухода системы в сон (критерий
+    /// TASKS T16; бэкап — внутри save_with_backup, SPEC §9), Resumed —
+    /// прогрев кадра, файл-события SHCNE-моста (R12) — конвейер T10.
+    #[cfg(windows)]
+    fn on_shell_event(&mut self, event: canvas_shell::shell_events::ShellEvent) {
+        use canvas_shell::shell_events::ShellEvent;
+        match event {
+            // classify_wts в шине уже отсёк чужие сессии (R8): дошли только
+            // свои — гейт актуален; атомик шины обновлён там же (wndproc)
+            ShellEvent::Session { event, session_id } => {
+                if let Some(value) = event.gate_value() {
+                    self.session_interactive = value;
+                }
+                tracing::info!(
+                    ?event,
+                    session_id,
+                    interactive = self.session_interactive,
+                    "событие сессии (R8)"
+                );
+            }
+            // Безусловно (не только dirty): дебаунс-сейв может не успеть —
+            // запись ДО сна обязательна (критерий TASKS T16)
+            ShellEvent::Suspending => {
+                tracing::info!("система уходит в сон — форс-сейв канваса");
+                self.scene.save_now();
+            }
+            // Прогрев кадра: после сна первый кадр мог не прийти от winit
+            ShellEvent::Resumed { kind } => {
+                tracing::info!(?kind, "система проснулась");
+                self.request_redraw();
+            }
+            // Потребитель — T17 (PID Shell_TrayWnd, анти-флуд): T16 только
+            // доставляет событие (план §3)
+            ShellEvent::ExplorerStarted => {
+                tracing::info!("Explorer перезапущен (TaskbarCreated)");
+            }
+            // Декод HSHELL_* — T18 (план §3); лог не спамим — debug
+            ShellEvent::ShellHook { code, hwnd } => {
+                tracing::debug!(code, hwnd, "shell-hook (декод — T18)");
+            }
+            // Задел «вставить как ноду» (SPEC §7.6) — потребитель будущего
+            ShellEvent::ClipboardUpdated => {
+                tracing::debug!("буфер обмена обновлён");
+            }
+            // SHCNE-мост (R12): тот же конвейер, что у вотчера T10 —
+            // идемпотентен к дублям notify (§8.8); коалессер шины уже
+            // сгладил шквал (150 мс, WM_TIMER-флаш)
+            ShellEvent::FileEvents(events) => self.on_file_events(events),
         }
     }
 
@@ -954,11 +1037,20 @@ impl App {
     }
 
     /// Синхронизировать вотчер с моделью (T10): родительские директории всех
-    /// файловых нод → WatchService::sync_dirs (diff, повторный вызов — no-op).
-    /// Вызывается после загрузки, дропа (T9), удаления нод и rename-событий.
+    /// файловых нод → WatchService::sync_dirs (diff, повторный вызов — no-op),
+    /// а на Windows — зеркало того же набора в SHChangeNotify-подписки шины
+    /// T16 (R12). Вызывается после загрузки, дропа (T9), удаления нод и
+    /// rename-событий.
     fn sync_watch_dirs(&mut self) {
         let dirs = watched_dirs(&self.scene.canvas, &self.scene.canvas_dir());
         self.watcher.sync_dirs(&dirs);
+        // T16 (R12): зеркало того же набора в SHChangeNotify-подписки шины —
+        // ЕДИНАЯ точка зеркалирования (план §3, все вызовы остаются как
+        // есть); деградация шины — команды уходят впустую, молча (R14)
+        #[cfg(windows)]
+        if let Some(service) = &self.shell_events {
+            service.command(canvas_shell::shell_events::window::ShellCommand::SyncFileDirs(dirs));
+        }
     }
 
     /// Пересобрать/обновить миникарту (T13, SPEC §6.1): не каждый кадр, а по
@@ -1921,6 +2013,8 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Search(event) => self.on_search_event(event),
             #[cfg(windows)]
             AppEvent::Desktop(event) => self.on_desktop_event(event),
+            #[cfg(windows)]
+            AppEvent::Shell(event) => self.on_shell_event(event),
         }
     }
 
@@ -2687,6 +2781,26 @@ fn main() -> anyhow::Result<()> {
             app.set_desktop_monitor(
                 canvas_shell::desktop::monitor::DesktopMonitorService::spawn(responder),
             );
+        }
+        // Шина системных событий (T16): message-only окно на отдельном
+        // потоке; спавн БЕЗ привязки к --desktop — события сессии/сна/
+        // shell-файлов полезны в любом режиме (план §8.7); провал — warn
+        // внутри spawn + деградация (R14). Паттерн спавна — T15-монитор.
+        #[cfg(windows)]
+        {
+            let proxy = proxy.clone();
+            let responder: canvas_shell::shell_events::window::ShellResponder =
+                Arc::new(move |event| {
+                    let _ = proxy.send_event(AppEvent::Shell(event));
+                });
+            app.set_shell_events(
+                canvas_shell::shell_events::window::ShellEventService::spawn(responder),
+            );
+            // Первичный набор SHChangeNotify-подписок — через единую точку
+            // sync_watch_dirs (вотчер уже синхронизирован в main() выше —
+            // дифф-синк идемпотентен; команды лягут в канал шины и дрени-
+            // руются по WM_APP_WAKE после создания окна потоком)
+            app.sync_watch_dirs();
         }
         // Не-Windows: режим десктопа недоступен — предупреждение и обычный
         // оконный режим (деградация, SPEC §9; ядро приложения то же)
