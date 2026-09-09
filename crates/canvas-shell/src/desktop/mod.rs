@@ -200,6 +200,13 @@ pub mod attach;
 pub mod hierarchy;
 #[cfg(windows)]
 pub mod monitor;
+// T17: иконки/меню/выход/краш-сейф — файлы СМЕШАННЫЕ (чистые ядра +
+// cfg(windows)-блоки в одном файле, рекомендация T15-A) — подключение
+// БЕЗ cfg: Linux-тесты чистых частей входят в сборку.
+pub mod explorer;
+pub mod icons;
+pub mod interop;
+pub mod menu;
 
 /// Реэкспорт HWND (координаторская интеграционная точка T15-E):
 /// canvas-app не зависит от windows-crate, но конвертирует raw-window-handle

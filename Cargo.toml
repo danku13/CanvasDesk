@@ -74,6 +74,8 @@ windows = { version = "0.62", features = [
     # T16: GetModuleHandleW (HINSTANCE окна шины — RegisterClassW/CreateWindowExW;
     # координатор вместо link!-декларации воркера B — тот же путь, что T15-D)
     "Win32_System_LibraryLoader",
+    # T17: автозапуск HKCU Run (RegCreateKeyExW/RegSetValueExW/RegDeleteValueW)
+    "Win32_System_Registry",
 ] }
 # #[implement] (T9 COM IDropTarget) генерирует пути ::windows_core —
 # нужен прямой dep, re-export windows::core не резолвится
