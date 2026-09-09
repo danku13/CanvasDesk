@@ -66,4 +66,5 @@ serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 
 Подробности: [docs/SPEC.md](docs/SPEC.md) — спецификация,
 [docs/TASKS.md](docs/TASKS.md) — план задач T0–T22,
-[docs/RECIPES.md](docs/RECIPES.md) — рецепты shell-интеграции Windows.
+[docs/RECIPES.md](docs/RECIPES.md) — рецепты shell-интеграции Windows,
+[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — программа ручной приёмки T8–T17.
