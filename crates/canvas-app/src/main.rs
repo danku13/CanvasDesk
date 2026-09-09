@@ -422,6 +422,15 @@ struct App {
     /// лог/диагностика; потребление — T18. Старт true (как и атомик в шине).
     #[cfg(windows)]
     session_interactive: bool,
+    /// Владелец скрытия системных иконок (T17-A, R5): capture+hide в
+    /// attach_desktop; restore при штатном выходе, Drop-страховка от
+    /// паник, sentinel — краш-сейф kill -9.
+    #[cfg(windows)]
+    icon_guard: Option<canvas_shell::desktop::icons::IconGuard>,
+    /// Детект рестартов Explorer (T17-B, R7): PID Shell_TrayWnd
+    /// до/после TaskbarCreated (из шины T16) + анти-флуд 30 с.
+    #[cfg(windows)]
+    explorer_tracker: canvas_shell::desktop::explorer::RestartTracker,
 }
 
 impl App {
@@ -496,6 +505,10 @@ impl App {
             // пришлёт до unlock
             #[cfg(windows)]
             session_interactive: true,
+            #[cfg(windows)]
+            icon_guard: None,
+            #[cfg(windows)]
+            explorer_tracker: Default::default(),
         }
     }
 
@@ -563,6 +576,13 @@ impl App {
                     screen = ?(screen.left, screen.top, screen.right, screen.bottom),
                     "канвас встроен в рабочий стол (T15)"
                 );
+                // T17 (R5, SPEC §7.4 п.5): скрыть системные иконки — над
+                // канвасом остаётся только слой иконок DefView; guard
+                // перечитывает состояние (идемпотентен — повторный attach
+                // после recovery не мигает иконками)
+                let mut guard = canvas_shell::desktop::icons::IconGuard::capture(hier.def_view);
+                guard.hide();
+                self.icon_guard = Some(guard);
                 self.desktop_hierarchy = Some(hier);
                 self.watch_worker_w(hwnd, &hier);
             }
@@ -587,6 +607,46 @@ impl App {
                 worker_w: hier.worker_w,
                 ours,
             });
+        }
+    }
+
+    /// R7-реакция на TaskbarCreated (T17, план §3): PID Shell_TrayWnd
+    /// до/после; настоящий рестарт Explorer → FullReattach + репоинт
+    /// иконок на новый DefView; DPI-смена/тема → игнор (поллинг T15
+    /// догонит, R10); анти-флуд — crash-loop не утащит в бесконечный
+    /// re-attach (R7 п.3).
+    #[cfg(windows)]
+    fn on_explorer_started(&mut self) {
+        use canvas_shell::desktop::explorer::ExplorerRestart;
+        // PID опрашиваем ДО register (совет T17-B worklog): окна может
+        // не быть в момент события — это не рестарт
+        let Some(pid) = canvas_shell::desktop::explorer::tray_pid() else {
+            tracing::debug!("TaskbarCreated без Shell_TrayWnd — игнор");
+            return;
+        };
+        match self.explorer_tracker.register(pid, Instant::now()) {
+            ExplorerRestart::SameProcess => {
+                tracing::info!(pid, "Explorer жив (TaskbarCreated от DPI/темы)");
+            }
+            ExplorerRestart::Restarted => {
+                tracing::warn!(pid, "Explorer перезапущен — восстановление встройки");
+                if self.explorer_tracker.suppress_automatic() {
+                    // Недостижимо для семантики register (флуд →
+                    // FloodStop), страховка от дрейфа
+                    tracing::warn!("автоматика восстановления остановлена");
+                    return;
+                }
+                self.recover_desktop(canvas_shell::RecoveryAction::FullReattach);
+                // Иерархия пересоздана — guard уже репоинтнут внутри
+                // recover_desktop (Ok-ветка); скрытие до-скрыто там же
+            }
+            ExplorerRestart::FloodStop => {
+                // crash-loop: >1 рестарта за 30 с — автоматика стоп,
+                // сообщение пользователю в лог (R7 п.3)
+                tracing::warn!(
+                    "crash-loop Explorer (>1 рестарта за 30 с) — автоматика восстановления остановлена"
+                );
+            }
         }
     }
 
@@ -651,11 +711,10 @@ impl App {
                 tracing::info!(?kind, "система проснулась");
                 self.request_redraw();
             }
-            // Потребитель — T17 (PID Shell_TrayWnd, анти-флуд): T16 только
-            // доставляет событие (план §3)
-            ShellEvent::ExplorerStarted => {
-                tracing::info!("Explorer перезапущен (TaskbarCreated)");
-            }
+            // Потребитель — T17 (R7): PID Shell_TrayWnd отличает краш
+            // от DPI-смены (TaskbarCreated приходит и на смену темы);
+            // настоящий рестарт → FullReattach, анти-флуд 30 с
+            ShellEvent::ExplorerStarted => self.on_explorer_started(),
             // Декод HSHELL_* — T18 (план §3); лог не спамим — debug
             ShellEvent::ShellHook { code, hwnd } => {
                 tracing::debug!(code, hwnd, "shell-hook (декод — T18)");
@@ -705,6 +764,14 @@ impl App {
             Ok((hier, _)) => {
                 tracing::info!(?action, strategy = ?hier.strategy, "встройка восстановлена");
                 self.desktop_recover_failures = 0;
+                // T17 (R7): DefView мог пересоздаться вместе с WorkerW —
+                // guard репоинтится на живой слой иконок; hide
+                // идемпотентен (SHELLSTATE персистентен) — до-скроет при
+                // расхождении
+                if let Some(guard) = self.icon_guard.as_mut() {
+                    guard.repoint(hier.def_view);
+                    guard.hide();
+                }
                 self.desktop_hierarchy = Some(hier);
                 self.watch_worker_w(hwnd, &hier);
             }
@@ -1795,11 +1862,10 @@ impl ApplicationHandler<AppEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                // Форс-сейв перед выходом — не ждать debounce (SPEC §9)
-                if self.scene.dirty_since.is_some() {
-                    self.scene.save_now();
-                }
-                event_loop.exit();
+                // Штатный выход (T17): форс-сейв (SPEC §9 — не ждать
+                // debounce) + восстановление иконок (R5) — единая точка
+                // с пунктом меню «Выход»
+                self.shutdown(event_loop);
             }
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -1822,7 +1888,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseInput { state, button, .. } => match button {
                 MouseButton::Middle => self.middle_pressed = state == ElementState::Pressed,
                 MouseButton::Left => self.on_left_button(state),
-                MouseButton::Right => self.on_right_button(state),
+                MouseButton::Right => self.on_right_button(state, event_loop),
                 _ => {}
             },
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
@@ -2347,7 +2413,27 @@ impl App {
                                 self.begin_editing(index);
                             }
                         },
-                        Some(index) => self.begin_editing(index),
+                        // T17 (SPEC §7.4 п.7): двойной клик по файловой
+                        // ноде — открыть ассоциацией «как в Explorer»
+                        // (ShellExecuteEx SEE_MASK_INVOKEIDLIST);
+                        // text-ноды — редактирование (T7)
+                        Some(index) => {
+                            #[cfg(windows)]
+                            if let Some(file) = self.scene.canvas.nodes[index].file.clone() {
+                                let path = resolve_node_path(&file, &self.scene.canvas_dir());
+                                if let Err(err) = canvas_shell::desktop::interop::open_file(&path) {
+                                    tracing::warn!(
+                                        %err,
+                                        path = %path.display(),
+                                        "не удалось открыть файл"
+                                    );
+                                }
+                            } else {
+                                self.begin_editing(index);
+                            }
+                            #[cfg(not(windows))]
+                            self.begin_editing(index);
+                        }
                     }
                     self.request_redraw();
                     return;
@@ -2408,7 +2494,11 @@ impl App {
         }
     }
 
-    fn on_right_button(&mut self, state: ElementState) {
+    fn on_right_button(&mut self, state: ElementState, event_loop: &ActiveEventLoop) {
+        // Вне Windows параметр не читается (системное меню T17 — Win32);
+        // явный let вместо underscore-имени: имя остаётся осмысленным
+        #[cfg(not(windows))]
+        let _ = event_loop;
         if state != ElementState::Pressed {
             return;
         }
@@ -2426,9 +2516,136 @@ impl App {
                     origin: world,
                 });
             }
-            None => self.menu = None,
+            None => {
+                self.menu = None;
+                // T17 (SPEC §7.4 п.6): в --desktop ПКМ по пустому месту —
+                // системное меню десктопа (нативное Win32: Открыть
+                // канвас / Новый текстовый файл / иконки / автозапуск /
+                // Выход); вне --desktop поведение прежнее
+                #[cfg(windows)]
+                if self.desktop_mode && self.desktop_hierarchy.is_some() {
+                    self.desktop_menu(event_loop);
+                }
+            }
         }
         self.request_redraw();
+    }
+
+    /// Системное контекстное меню десктопа (T17, план §3): нативное
+    /// Win32-меню через TrackPopupMenu(TPM_RETURNCMD) — команда приходит
+    /// return'ом, воронка WM_COMMAND не строится (отступление §8.1).
+    /// Меню T7 (цвета нод) не затрагивается — зоны не пересекаются
+    /// (§8.2). Отказы всех Win32-шагов — warn + деградация (R14).
+    #[cfg(windows)]
+    fn desktop_menu(&mut self, event_loop: &ActiveEventLoop) {
+        use canvas_shell::desktop::menu::DesktopMenuCommand as Cmd;
+        let Some(raw) = self.window_hwnd() else {
+            return;
+        };
+        let hwnd = Self::hwnd(raw);
+        // Галочки меню: иконки (сейчас скрыты — инверсная семантика
+        // пункта «Показать») и автозапуск (факт реестра HKCU Run)
+        let icons_hidden = self
+            .icon_guard
+            .as_ref()
+            .is_some_and(|guard| guard.hidden_by_us());
+        let autostart_on = canvas_shell::desktop::interop::autostart_enabled();
+        let Some(command) = canvas_shell::desktop::menu::popup(hwnd, icons_hidden, autostart_on)
+        else {
+            return; // отмена — клик мимо/Esc
+        };
+        match command {
+            // Второй экземпляр в оконном режиме с текущим канвасом
+            // (план §8.3): редактирование не ломает десктоп-встройку
+            Cmd::OpenCanvas => {
+                canvas_shell::desktop::interop::spawn_window_instance(&self.scene.path);
+            }
+            // Файл в каталоге канваса + нода в точке ПКМ (план §8.4):
+            // вотчер T10/поиск T14 подхватят автоматически
+            Cmd::NewTextFile => self.create_text_file_node(),
+            // Toggle иконок: show — «показать» независимо от того, кто
+            // скрывал (ПКМ Explorer в --desktop перехвачен канвасом)
+            Cmd::ToggleIcons => {
+                if let Some(guard) = self.icon_guard.as_mut() {
+                    if guard.hidden_by_us() {
+                        guard.show();
+                    } else {
+                        guard.hide();
+                    }
+                }
+            }
+            // Toggle автозапуска (HKCU Run) — галочка перечитается при
+            // следующем открытии меню
+            Cmd::ToggleAutostart => {
+                if let Err(err) = canvas_shell::desktop::interop::set_autostart(!autostart_on) {
+                    tracing::warn!(%err, "не удалось переключить автозапуск");
+                }
+            }
+            // Штатный выход — единая точка с CloseRequested
+            Cmd::Exit => self.shutdown(event_loop),
+        }
+    }
+
+    /// «Новый текстовый файл» из десктоп-меню (T17, план §8.4): файл в
+    /// каталоге канваса (уникальное имя) + file-нода в позиции ПКМ —
+    /// образец вставки дропа T9; вотчер T10 и поиск T14 подхватят
+    /// автоматически.
+    #[cfg(windows)]
+    fn create_text_file_node(&mut self) {
+        let world = self.cursor_world();
+        let dir = self.scene.canvas_dir();
+        // Уникальное имя: «Новая заметка.txt», при коллизии — « 2», « 3»…
+        let base = "Новая заметка";
+        let mut name = format!("{base}.txt");
+        let mut counter = 1u32;
+        while dir.join(&name).exists() {
+            counter += 1;
+            name = format!("{base} {counter}.txt");
+        }
+        let path = dir.join(&name);
+        if let Err(err) = std::fs::write(&path, "") {
+            tracing::warn!(%err, path = %path.display(), "не удалось создать файл");
+            return;
+        }
+        let id = next_free_id(&self.scene.canvas, "file");
+        let node = Node::file(
+            id,
+            name,
+            world[0],
+            world[1],
+            canvas_app::ui::DROP_CARD_W,
+            canvas_app::ui::DROP_CARD_H,
+        );
+        self.scene.canvas.nodes.push(node);
+        let index = self.scene.canvas.nodes.len() - 1;
+        let node_ref = &self.scene.canvas.nodes[index];
+        self.scene.spatial.insert(index, node_ref);
+        self.scene.selected = Some(Selection::Node(index));
+        self.scene.mark_dirty();
+        // Поисковый индекс (T14): новая нода — сразу в FTS
+        self.search_service.command(SearchCommand::IndexFile {
+            path: path.clone(),
+            display_name: name,
+        });
+        // Каталог канваса мог не быть под слежкой (первая file-нода) —
+        // синхронизируем вотчер и SHCNE-подписки (T17-E единая точка)
+        self.sync_watch_dirs();
+        tracing::info!(path = %path.display(), "создан текстовый файл + нода");
+    }
+
+    /// Штатный выход (T17): форс-сейв + восстановление системных иконок
+    /// (R5) + завершение — единая точка для CloseRequested и пункта
+    /// меню «Выход»; Drop-страховка guard'а остаётся на паниках, sentinel
+    /// — на kill -9.
+    fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
+        if self.scene.dirty_since.is_some() {
+            self.scene.save_now();
+        }
+        #[cfg(windows)]
+        if let Some(guard) = self.icon_guard.as_mut() {
+            guard.restore();
+        }
+        event_loop.exit();
     }
 
     fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
@@ -2657,6 +2874,14 @@ fn main() -> anyhow::Result<()> {
         tracing_subscriber::EnvFilter::new("info,wgpu_hal=warn,wgpu_core=warn")
     });
     tracing_subscriber::fmt().with_env_filter(filter).init();
+    // T17 (R5 + краш-сейф): sentinel от прошлой аварийной сессии →
+    // форс-восстановление иконок ДО всего остального, независимо от
+    // режима запуска (TASKS T17: «kill -9 → следующий запуск
+    // восстанавливает»; kill обходит Drop-страховку guard'а)
+    #[cfg(windows)]
+    if canvas_shell::desktop::icons::crash_recovery() {
+        tracing::info!("иконки десктопа восстановлены после аварийной сессии (sentinel)");
+    }
     let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
     // Настройки приложения (~/.canvasdesk/config.toml); битый/отсутствующий
     // файл — дефолты + warn, приложение не падает
