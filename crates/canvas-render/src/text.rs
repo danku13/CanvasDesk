@@ -213,9 +213,10 @@ pub struct TitleFrame<'a> {
     /// Индекс редактируемой ноды (T7): её тело рисует EditingSession, из кэша
     /// тела и из выдачи она исключается.
     pub editing: Option<usize>,
-    /// Буфер активной EditingSession (T7) и world-позиция левого верхнего
-    /// угла области тела — текст редактора рисуется поверх карточки.
-    pub editing_buffer: Option<(&'a Buffer, [f32; 2])>,
+    /// Буфер активной EditingSession (T7) и world-прямоугольник области:
+    /// левый верхний угол, ширина, высота — текст редактора рисуется поверх
+    /// карточки (тело ноды) или бокса по центру кривой (лейбл связи).
+    pub editing_buffer: Option<(&'a Buffer, [f32; 2], f32, f32)>,
     /// Оверлей-тексты кадра (контекстное меню, T7).
     pub overlay_texts: &'a [OverlayText<'a>],
     /// Screen-space тексты (панель настроек): константный размер при зуме.
@@ -228,6 +229,24 @@ pub struct TitleFrame<'a> {
     /// сюда не передаётся — его рисует EditingSession. Рисуются в финальной
     /// группе — поверх карточек, до оверлеев меню и HUD.
     pub edge_labels: &'a [EdgeLabel<'a>],
+}
+
+/// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
+/// (zorder.rs: «text_groups[g] — позиции видимых нод»), тогда как кэш Buffer'ов
+/// ключован индексами нод. Маппинг обязателен: при пане/зуме часть нод уходит
+/// за viewport, позиции и индексы расходятся, и прямое использование позиции
+/// как индекса тихо теряет текст нод (баг приёмки: имена файлов после дропа и
+/// текст нод пропадали при частично видимой сцене).
+fn index_at(indices: &[usize], pos: usize) -> Option<usize> {
+    indices.get(pos).copied()
+}
+
+/// Редактируемая нода состоит в текст-группе? `group` — позиции, `editing`
+/// — индекс ноды (T7): их надо сравнивать через маппинг `indices`.
+fn group_contains_node(indices: &[usize], group: &[usize], editing: usize) -> bool {
+    group
+        .iter()
+        .any(|&pos| index_at(indices, pos) == Some(editing))
 }
 
 /// Зашейпленные буферы заголовка и тела ноды: валидны, пока не изменились
@@ -627,7 +646,10 @@ impl TextSystem {
         for (g, group) in frame.zplan.text_groups.iter().enumerate() {
             let mut areas: Vec<TextArea> = Vec::with_capacity(group.len() * 3 + 4);
             if show_titles {
-                for &index in group {
+                for &pos in group {
+                    let Some(index) = index_at(frame.indices, pos) else {
+                        continue;
+                    };
                     let (Some(node), Some(entry)) =
                         (frame.canvas.nodes.get(index), self.cache.get(&index))
                     else {
@@ -692,28 +714,48 @@ impl TextSystem {
             // Текст активной сессии редактирования (T7): буфер редактора на
             // z-позиции редактируемой ноды; клип — область тела карточки,
             // текст не выходит за пределы заметки (авторост — в fit_note_size).
-            if let (Some((buffer, origin)), Some(editing_index)) =
+            if let (Some((buffer, origin, area_w, area_h)), Some(editing_index)) =
                 (frame.editing_buffer, frame.editing)
             {
-                if group.contains(&editing_index) {
-                    if let Some(node) = frame.canvas.nodes.get(editing_index) {
-                        let pos = to_physical(origin);
-                        let (_, body_width, body_height) = body_area(node);
-                        areas.push(TextArea {
-                            buffer,
-                            left: pos[0],
-                            top: pos[1],
-                            scale: 1.0,
-                            bounds: TextBounds {
-                                left: pos[0] as i32,
-                                top: pos[1] as i32,
-                                right: (pos[0] + body_width * zoom_px) as i32,
-                                bottom: (pos[1] + body_height * zoom_px) as i32,
-                            },
-                            default_color: BODY_COLOR,
-                            custom_glyphs: &[],
-                        });
-                    }
+                if group_contains_node(frame.indices, group, editing_index) {
+                    let pos = to_physical(origin);
+                    areas.push(TextArea {
+                        buffer,
+                        left: pos[0],
+                        top: pos[1],
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: pos[0] as i32,
+                            top: pos[1] as i32,
+                            right: (pos[0] + area_w * zoom_px) as i32,
+                            bottom: (pos[1] + area_h * zoom_px) as i32,
+                        },
+                        default_color: BODY_COLOR,
+                        custom_glyphs: &[],
+                    });
+                }
+            }
+            // Буфер сессии редактирования лейбла связи (T8): для EditTarget::Edge
+            // `frame.editing` = None (индекс ноды нет), поэтому блок выше не
+            // срабатывал и текст лейбла исчезал при входе в редактирование.
+            // Бокс по центру кривой — поверх всего кадра, как его подложка.
+            if frame.editing.is_none() {
+                if let Some((buffer, origin, area_w, area_h)) = frame.editing_buffer {
+                    let pos = to_physical(origin);
+                    areas.push(TextArea {
+                        buffer,
+                        left: pos[0],
+                        top: pos[1],
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: pos[0] as i32,
+                            top: pos[1] as i32,
+                            right: (pos[0] + area_w * zoom_px) as i32,
+                            bottom: (pos[1] + area_h * zoom_px) as i32,
+                        },
+                        default_color: BODY_COLOR,
+                        custom_glyphs: &[],
+                    });
                 }
             }
             // Финальная группа поверх всего кадра: лейблы связей (T8),
@@ -850,6 +892,26 @@ impl TextSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Маппинг позиции z-плана → индекс ноды: позиции — в `frame.indices`
+    /// (culling, T5), индексы — в `Canvas.nodes` и кэше. При частично видимой
+    /// сцене позиции меньше индексов: без маппинга текст нод терялся (баг
+    /// приёмки), включая имена файлов после дропа.
+    #[test]
+    fn group_positions_map_to_node_indices() {
+        // Видимы ноды с индексами 2, 5, 7: позиции 0..3 ≠ индексы
+        let indices = [2, 5, 7];
+        assert_eq!(index_at(&indices, 0), Some(2));
+        assert_eq!(index_at(&indices, 2), Some(7));
+        assert_eq!(index_at(&indices, 3), None, "позиция за выдачей");
+        assert!(group_contains_node(&indices, &[0, 2], 7));
+        assert!(group_contains_node(&indices, &[1], 5));
+        assert!(
+            !group_contains_node(&indices, &[0, 2], 5),
+            "индекс 5 — позиция 1, а не 0/2"
+        );
+        assert!(!group_contains_node(&indices, &[], 2));
+    }
 
     /// LOD-порог: заголовок мельче MIN_TITLE_PX физических px не готовится.
     #[test]

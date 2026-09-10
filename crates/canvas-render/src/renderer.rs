@@ -618,7 +618,10 @@ impl Renderer {
         // (T8) кэшированного тела нет — исключать нечего
         let editing_index = editing_ref.and_then(EditingSession::node_index);
         let editing_buffer = editing_ref.and_then(|session| {
-            session_area(scene.canvas, session).map(|(origin, _, _)| (session.buffer(), origin))
+            // (origin, ширина, высота) — clip тексту редактора: тело ноды
+            // или бокс лейбла связи (оба таргета, T7/T8)
+            session_area(scene.canvas, session)
+                .map(|(origin, w, h)| (session.buffer(), origin, w, h))
         });
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,
