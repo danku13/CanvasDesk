@@ -110,7 +110,7 @@ pub fn decode(lparam: isize, wparam: usize) -> Option<FileEvent> {
     // ранний возврат и unwind (Lock/Unlock — окно доступа к pidl).
     let _unlock = UnlockGuard(lock);
 
-    let (old, new) = pidl_pair_paths(pppidl);
+    let (old, new) = pidl_pair_paths(pppidl, event);
     // Итоговая семантика — чистая функция ядра A (единая точка маппинга
     // SHCNE → FileEvent: приоритет Rename > Delete > Create > Modify).
     super::shell_file_change(event, old.as_deref(), new.as_deref())
@@ -121,8 +121,16 @@ pub fn decode(lparam: isize, wparam: usize) -> Option<FileEvent> {
 /// вызывающего decode) — pidl не переживают Unlock. `pppidl == NULL` или
 /// пустой массив → (None, None): нотификация без путей — легитимный случай
 /// (SHChangeNotify с dwItem1/dwItem2 = NULL, «виртуальные» события).
+///
+/// Второй pidl читается ТОЛЬКО по маске парного события
+/// (`mask_needs_second_pidl`, R12): у однопутевых (DELETE/RMDIR/CREATE/…)
+/// слот [1] shell может не заполнять — чтение мусорного указателя и вызов
+/// SHGetPathFromIDListW по нему дают access violation внутри wndproc
+/// (STATUS_FATAL_USER_CALLBACK_EXCEPTION, 0xC000041D — баг T10: падение
+/// процесса при удалении файла).
 fn pidl_pair_paths(
     pppidl: *mut *mut windows::Win32::UI::Shell::Common::ITEMIDLIST,
+    mask: i32,
 ) -> (Option<PathBuf>, Option<PathBuf>) {
     // Нотификация без путей: Lock оставляет двойной указатель нулевым
     // (SHChangeNotify с dwItem1/dwItem2 = NULL, «виртуальные» события).
@@ -131,14 +139,23 @@ fn pidl_pair_paths(
     }
     // SAFETY: pppidl ненулевой и записан успешным Lock (контракт выше:
     // валиден до Unlock); значение — PIDLIST** из документации Lock:
-    // указатель на массив ровно из двух указателей pidl (dwItem1/dwItem2
-    // нотификации: [0] — старый/целевой путь, [1] — новый; оба могут быть
-    // NULL — проверяет pidl_to_path). Копируем из слайса только два
-    // УКАЗАТЕЛЯ, а не структуры ITEMIDLIST: чтение самих pidl остаётся в
+    // указатель на массив указателей pidl (dwItem1 — [0] всегда, dwItem2 —
+    // [1] только у парных событий, см. mask_needs_second_pidl; оба могут
+    // быть NULL — проверяет pidl_to_path). Копируем только УКАЗАТЕЛИ, а не
+    // структуры ITEMIDLIST: чтение самих pidl остаётся в
     // SHGetPathFromIDListW до Unlock (гвард в кадре decode). Памятью pidl
-    // владеет shell — НИКОГДА не освобождаем (план §3).
-    let pidls = unsafe { std::slice::from_raw_parts(pppidl, 2) };
-    (pidl_to_path(pidls[0]), pidl_to_path(pidls[1]))
+    // владеет shell — НИКОГДА не освобождаем (план §3). Чтение — по одному
+    // указателю (не слайсом из двух): второй слот трогаем только когда маска
+    // гарантирует его заполненность.
+    let first = unsafe { pppidl.read() };
+    let second = if super::mask_needs_second_pidl(mask) {
+        // SAFETY: маска парного события (rename) — Lock-буфер содержит
+        // оба слота (dwItem1/dwItem2 нотификации); pppidl+1 внутри буфера.
+        unsafe { pppidl.add(1).read() }
+    } else {
+        std::ptr::null_mut()
+    };
+    (pidl_to_path(first), pidl_to_path(second))
 }
 
 /// pidl → путь файловой системы (SHGetPathFromIDListW, буфер 260): None

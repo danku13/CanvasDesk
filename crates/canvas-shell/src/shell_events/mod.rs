@@ -424,6 +424,16 @@ pub fn shell_file_change(mask: i32, old: Option<&Path>, new: Option<&Path>) -> O
     None
 }
 
+/// Несёт ли SHCNE-маска пару pidl (чистая функция): второй pidl Lock-буфера
+/// заполнен ТОЛЬКО у парных событий (RENAMEITEM/RENAMEFOLDER). Для
+/// однопутевых (DELETE/RMDIR/CREATE/…) слот [1] может быть незаполненным —
+/// читать его запрещено: мусорный указатель в SHGetPathFromIDListW даёт
+/// access violation внутри wndproc → STATUS_FATAL_USER_CALLBACK_EXCEPTION
+/// (0xC000041D) и смерть процесса (баг T10: падение при удалении файла).
+pub fn mask_needs_second_pidl(mask: i32) -> bool {
+    mask & (shcne::RENAMEITEM | shcne::RENAMEFOLDER) != 0
+}
+
 // cfg(windows)-подмодули: окно-шина (B), регистрации (C), декод
 // SHChangeNotify (D) — зоны воркеров T16-B/C/D (план §3, §10).
 #[cfg(windows)]
@@ -833,6 +843,28 @@ mod tests {
     }
 
     // ---------- константы ----------
+
+    /// Пару pidl несут только rename-события; однопутевые (DELETE и др.) —
+    /// второй слот Lock-буфера читать нельзя (баг T10: AV → 0xC000041D).
+    #[test]
+    fn mask_needs_second_pidl_only_for_renames() {
+        assert!(mask_needs_second_pidl(shcne::RENAMEITEM));
+        assert!(mask_needs_second_pidl(shcne::RENAMEFOLDER));
+        for mask in [
+            shcne::CREATE,
+            shcne::DELETE,
+            shcne::MKDIR,
+            shcne::RMDIR,
+            shcne::UPDATEDIR,
+            shcne::UPDATEITEM,
+            0,
+        ] {
+            assert!(
+                !mask_needs_second_pidl(mask),
+                "однопутевая маска {mask} не должна читать второй pidl"
+            );
+        }
+    }
 
     /// Точные значения WinUser.h/ShlObj.h: локальные копии без
     /// windows-crate (сверка с реальными константами — debug_assert'ы

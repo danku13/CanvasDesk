@@ -515,12 +515,25 @@ unsafe extern "system" fn shell_events_wndproc(
         // Декод T16-D (NewDelivery: lParam — HANDLE нотификации): маска +
         // pidl-пара → FileEvent. Таймер жив → накопитель (WM_TIMER-флаш
         // соберёт батч); нет таймера → фолбэк «поштучно сразу» (план §3).
+        // catch_unwind: паника не должна покидать extern "system" wndproc
+        // (внутри user32-колбэка это 0xC000041D — смерть процесса, баг T10);
+        // decode — &Fn-указателей не держит, UnwindSafe-побочных эффектов
+        // после catch нет (Lock/Unlock спарен RAII-гвардом внутри decode).
         MsgKind::ShellFile => {
-            if let Some(event) = shfiles::decode(lparam.0, wparam.0) {
-                if COALESCE_ON.with(|c| c.get()) {
-                    FILE_BUF.with(|b| b.borrow_mut().push(event));
-                } else {
-                    send_event(ShellEvent::FileEvents(vec![event]));
+            let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                shfiles::decode(lparam.0, wparam.0)
+            }));
+            match decoded {
+                Ok(Some(event)) => {
+                    if COALESCE_ON.with(|c| c.get()) {
+                        FILE_BUF.with(|b| b.borrow_mut().push(event));
+                    } else {
+                        send_event(ShellEvent::FileEvents(vec![event]));
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    tracing::warn!("паника в декоде SHChangeNotify — событие пропущено")
                 }
             }
         }
