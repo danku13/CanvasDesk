@@ -3086,6 +3086,20 @@ fn main() -> anyhow::Result<()> {
         tracing_subscriber::EnvFilter::new("info,wgpu_hal=warn,wgpu_core=warn")
     });
     tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Версия сборки первой строкой лога: version (Cargo.toml) + git-коммит +
+    // флаг «грязной» рабочей копии + профиль — по логу видно, какую именно
+    // сборку запустили (env от build.rs; без git — «unknown»)
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        commit = option_env!("CANVASDESK_GIT_COMMIT").unwrap_or("unknown"),
+        dirty = option_env!("CANVASDESK_GIT_DIRTY").unwrap_or("?"),
+        profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+        "CanvasDesk запускается"
+    );
     // T17 (R5 + краш-сейф): sentinel от прошлой аварийной сессии →
     // форс-восстановление иконок ДО всего остального, независимо от
     // режима запуска (TASKS T17: «kill -9 → следующий запуск
