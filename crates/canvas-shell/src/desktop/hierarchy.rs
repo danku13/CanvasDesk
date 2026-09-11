@@ -88,8 +88,10 @@ pub fn find_progman() -> Result<HWND, HierarchyError> {
 /// WS_EX_NOREDIRECTIONBITMAP. false — классическая схема.
 pub fn is_raised(progman: HWND) -> bool {
     // Сверка локальной копии mod.rs (модуль не зависит от windows-crate)
-    // с реальной константой WinUser.h из windows-crate: 0x0200_0000.
-    // Ловит рассинхрон копий при апгрейде крейта (R1-маркер).
+    // с реальной константой WinUser.h из windows-crate: 0x0020_0000.
+    // Ловит рассинхрон копий при апгрейде крейта (R1-маркер); ошибка в
+    // одном разряде здесь = raised-детект молча всегда возвращает false
+    // (Progman на Win11 24H2+ содержит 0x0020_0000 в GWL_EXSTYLE).
     debug_assert_eq!(
         WS_EX_NOREDIRECTIONBITMAP,
         windows::Win32::UI::WindowsAndMessaging::WS_EX_NOREDIRECTIONBITMAP.0

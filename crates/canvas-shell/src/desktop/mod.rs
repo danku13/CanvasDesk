@@ -89,7 +89,7 @@ pub const WS_EX_APPWINDOW: u32 = 0x0004_0000; // Alt+Tab/таскбар (R3: с�
 pub const WS_EX_WINDOWEDGE: u32 = 0x0000_0100; // окно «исчезает» из WorkerW (R3: снять)
 pub const WS_EX_NOACTIVATE: u32 = 0x0800_0000; // не активируется кликом (до первого клика)
 pub const WS_EX_LAYERED: u32 = 0x0008_0000; // R2 шаг 2: ДО SetParent на Raised
-pub const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x0200_0000; // R1-маркер raised на Progman
+pub const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x0020_0000; // R1-маркер raised на Progman
 
 /// Ожидаемые стили окна после скраббинга (R3): верифицируются ПЕРЕЧИТЫ-
 /// ВАНИЕМ после репарентинга — библиотеки окон перезаписывают стили
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(WS_EX_WINDOWEDGE, 0x0000_0100);
         assert_eq!(WS_EX_NOACTIVATE, 0x0800_0000);
         assert_eq!(WS_EX_LAYERED, 0x0008_0000);
-        assert_eq!(WS_EX_NOREDIRECTIONBITMAP, 0x0200_0000);
+        assert_eq!(WS_EX_NOREDIRECTIONBITMAP, 0x0020_0000);
     }
 
     /// Битовые инварианты: WS_CHILDWINDOW не пересекается с WS_CLIPSIBLINGS;
