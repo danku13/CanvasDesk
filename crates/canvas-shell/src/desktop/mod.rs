@@ -186,9 +186,11 @@ pub fn dpi_to_scale(dpi: u32) -> f64 {
     f64::from(dpi) / 96.0
 }
 
-/// Детект WorkerW после 0x052C: retry 10 × 100 мс (RECIPES R1, Seelen).
-pub const DETECT_RETRIES: u32 = 10;
-pub const DETECT_RETRY_DELAY_MS: u64 = 100;
+/// Детект WorkerW после 0x052C (RECIPES R1, Seelen делал 10 × 100 мс — на
+/// одномониторных машинах Explorer порождает WorkerW медленнее, окно
+/// расширено до ~10 с по наблюдению; ранний выход при успехе сохраняется).
+pub const DETECT_RETRIES: u32 = 50;
+pub const DETECT_RETRY_DELAY_MS: u64 = 200;
 /// Резервный канал watch: поллинг IsWindow(родителей) (RECIPES R6).
 pub const PARENT_POLL_MS: u32 = 2000;
 /// DPI-поллинг после репарентинга (RECIPES R10: 500–1000 мс).
@@ -448,6 +450,18 @@ mod tests {
     }
 
     // ---------- константы ----------
+
+    /// Окно ожидания WorkerW после 0x052C — не меньше 10 с: регрессия на
+    /// сброс к Seelen-значению 1 с (на одномониторных машинах Explorer
+    /// спавнит WorkerW медленнее → ложный фолбэк R14, баг ручной приёмки).
+    #[test]
+    fn detect_retry_window_at_least_10s() {
+        let window_ms = u64::from(DETECT_RETRIES) * DETECT_RETRY_DELAY_MS;
+        assert!(
+            window_ms >= 10_000,
+            "retry-окно {window_ms} мс меньше 10 с — вернётся ложный WorkerWNotSpawned"
+        );
+    }
 
     /// Точные значения WinUser.h: модуль — локальные копии без windows-crate,
     /// сверка гарантирует их совпадение с реальными Win32-константами

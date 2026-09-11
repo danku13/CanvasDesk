@@ -41,7 +41,8 @@ pub enum HierarchyError {
     /// Progman не найден (нет shell? RDP-сессия без десктопа?).
     #[error("Progman не найден — рабочий стол недоступен")]
     ProgmanNotFound,
-    /// 0x052C отправлен, но WorkerW не появился за retry-окно (R1: 10×100 мс).
+    /// 0x052C отправлен, но WorkerW не появился за retry-окно
+    /// (RETRIES × DELAY из mod.rs — ~10 с, RECIPES R1 расширено наблюдением).
     #[error("WorkerW не появился после 0x052C за {0} мс")]
     WorkerWNotSpawned(u64),
     /// SHELLDLL_DefView не найден (неожидаемая иерархия — не описана в
@@ -144,8 +145,9 @@ pub fn ensure_worker_w(progman: HWND) -> Result<DesktopHierarchy, HierarchyError
     }
 }
 
-/// Спавн WorkerW сообщением 0x052C + retry-детект (R1: Seelen 10×100 мс —
-/// окно появляется в очереди shell не мгновенно).
+/// Спавн WorkerW сообщением 0x052C + retry-детект (R1; константы окна —
+/// DETECT_RETRIES × DETECT_RETRY_DELAY_MS в mod.rs, ~10 с: Seelen хватало
+/// 10×100 мс, на медленных Explorer-первых-запусках — нет).
 fn spawn_worker_w(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
     // План §8.1: PostMessageW, НЕ SendMessageTimeout (SPEC §7.4) —
     // асинхронная постановка в очередь Explorer без ожидания обработки:
