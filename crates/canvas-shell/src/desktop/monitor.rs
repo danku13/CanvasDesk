@@ -57,11 +57,14 @@ pub enum MonitorCommand {
     /// Установить/перенавесить слежку: WinEventHook(EVENT_OBJECT_DESTROY,
     /// поток WorkerW через GetWindowThreadProcessId, WINEVENT_OUTOFCONTEXT)
     /// и запомнить хэндлы для поллинга (IsWindow worker_w — резерв R6,
-    /// GetDpiForWindow ours — R10). Повторный Watch → UnhookWinEvent +
-    /// новый hook (WorkerW пересоздан — поток Explorer мог смениться).
+    /// GetDpiForWindow ours — R10). WorkerW=None (фон без обоев): hook не
+    /// вешается, поллинг следит только за Progman (его смерть = рестарт
+    /// Explorer → шина T17 по TaskbarCreated). Повторный Watch →
+    /// UnhookWinEvent + новый hook (WorkerW пересоздан — поток Explorer мог
+    /// смениться).
     Watch {
         progman: HWND,
-        worker_w: HWND,
+        worker_w: Option<HWND>,
         ours: HWND,
     },
     /// Остановить поток (PostThreadMessageW WM_QUIT + UnhookWinEvent).
@@ -86,7 +89,9 @@ struct MonitorTargets {
     /// Progman — корень иерархии: IsWindow-резерв (умер → полный re-attach).
     progman: HWND,
     /// WorkerW — цель hook'а EVENT_OBJECT_DESTROY и основного поллинга.
-    worker_w: HWND,
+    /// None — WorkerW не существует (фон без обоев): слежка только за
+    /// Progman; восстановление иерархии придёт через Explorer/TaskbarCreated.
+    worker_w: Option<HWND>,
     /// Наше окно — DPI-поллинг GetDpiForWindow (R10).
     ours: HWND,
     /// Последний замер DPI; 0 = бейзлайн ещё не снят (первый замер после
@@ -246,8 +251,10 @@ fn monitor_loop(rx: Receiver<MonitorCommand>, ready: Sender<u32>, responder: Des
                         } => {
                             // Перенавесить hook (WorkerW пересоздан — поток
                             // Explorer мог смениться, R6) + обновить цели.
+                            // WorkerW=None — hook не нужен (некого слушать),
+                            // слежка остаётся на поллинге Progman.
                             unhook(&mut hook);
-                            hook = install_hook(worker_w);
+                            hook = worker_w.and_then(install_hook);
                             set_targets(progman, worker_w, ours);
                         }
                     }
@@ -322,7 +329,7 @@ fn unhook(hook: &mut Option<HWINEVENTHOOK>) {
 
 /// Обновить thread_local-цели слежки. Новый Watch = новый WorkerW после
 /// восстановления: анти-дубль destroy и DPI-бейзлайн стартуют заново.
-fn set_targets(progman: HWND, worker_w: HWND, ours: HWND) {
+fn set_targets(progman: HWND, worker_w: Option<HWND>, ours: HWND) {
     TARGETS.with(|t| {
         *t.borrow_mut() = Some(MonitorTargets {
             progman,
@@ -357,7 +364,7 @@ unsafe extern "system" fn win_event_callback(
     // borrow (responder не должен видеть занятый RefCell).
     let destroyed = TARGETS.with(|t| {
         if let Some(targets) = t.borrow_mut().as_mut() {
-            if hwnd == targets.worker_w && !targets.destroyed_sent {
+            if targets.worker_w == Some(hwnd) && !targets.destroyed_sent {
                 targets.destroyed_sent = true;
                 return true;
             }
@@ -412,9 +419,13 @@ fn on_parent_tick() {
         }
         // SAFETY: progman/worker_w — хэндлы-копии из Watch; IsWindow —
         // чистая проверка, невалидный хэндл → false без ошибок.
-        let worker_alive = unsafe { IsWindow(Some(targets.worker_w)) }.as_bool();
-        // SAFETY: то же — progman из того же Watch.
         let progman_alive = unsafe { IsWindow(Some(targets.progman)) }.as_bool();
+        // WorkerW=None (обоев нет) — жизнь иерархии определяется Progman
+        // (его смерть = рестарт Explorer → шина по TaskbarCreated).
+        let worker_alive = targets
+            .worker_w
+            .map(|w| unsafe { IsWindow(Some(w)) }.as_bool())
+            .unwrap_or(true);
         if worker_alive && progman_alive {
             return None;
         }

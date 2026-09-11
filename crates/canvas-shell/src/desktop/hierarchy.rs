@@ -41,10 +41,6 @@ pub enum HierarchyError {
     /// Progman не найден (нет shell? RDP-сессия без десктопа?).
     #[error("Progman не найден — рабочий стол недоступен")]
     ProgmanNotFound,
-    /// 0x052C отправлен, но WorkerW не появился за retry-окно
-    /// (RETRIES × DELAY из mod.rs — ~10 с, RECIPES R1 расширено наблюдением).
-    #[error("WorkerW не появился после 0x052C за {0} мс")]
-    WorkerWNotSpawned(u64),
     /// SHELLDLL_DefView не найден (неожидаемая иерархия — не описана в
     /// RECIPES/SPEC → непроверенная зона, только фолбэк, SPEC §11.5).
     #[error("SHELLDLL_DefView не найден — неизвестная иерархия десктопа")]
@@ -64,7 +60,9 @@ pub struct DesktopHierarchy {
     /// SHELLDLL_DefView — слой иконок: наша Z-order-граница «сверху».
     pub def_view: HWND,
     /// Целевой WorkerW: обои (classic: родитель; raised: нижний сосед).
-    pub worker_w: HWND,
+    /// None — Explorer WorkerW не породил (например, фон «сплошной цвет»):
+    /// встройка идёт под слой иконок без окна обоев, см. attach.
+    pub worker_w: Option<HWND>,
     /// Стратегия по фактической иерархии (не по номеру сборки).
     pub strategy: super::EmbedStrategy,
 }
@@ -119,7 +117,7 @@ pub fn detect(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
         find_classic(progman)
     };
     // ...и ПОСЛЕ: если поиск не удался, а progman по пути умер — честная
-    // причина ProgmanInvalidated, а не DefViewNotFound/WorkerWNotSpawned
+    // причина ProgmanInvalidated, а не DefViewNotFound
     match found {
         Ok(hierarchy) => Ok(hierarchy),
         Err(_) if !window_valid(progman) => Err(HierarchyError::ProgmanInvalidated),
@@ -131,23 +129,24 @@ pub fn detect(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
 /// PostMessageW(progman, 0x052C, 0xD, 0x1) (ТОЛЬКО при отсутствии — иначе
 /// Explorer снесёт существующий, бесконечный цикл create/destroy, Seelen
 /// ловил) → retry-детект DETECT_RETRIES × DETECT_RETRY_DELAY_MS.
-/// Присутствует → детект без отправки.
+/// WorkerW так и не появился — НЕ ошибка: возвращаем иерархию с worker_w=None
+/// (встройка под слой иконок без окна обоев, см. attach); деградация
+/// фиксируется warn'ом. Ошибка — только сломанная иерархия (DefView/Progman).
 pub fn ensure_worker_w(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
-    match detect(progman) {
+    let hierarchy = detect(progman)?;
+    if hierarchy.worker_w.is_some() {
         // WorkerW есть — 0x052C НЕ шлём (R4): повторная отправка заставляет
         // Explorer снести и пересоздать WorkerW → наши дети гибнут →
         // remount → снова 0x052C → бесконечный цикл create/destroy
-        Ok(hierarchy) => Ok(hierarchy),
-        // WorkerW отсутствует (до спавна, поле 0) — идемпотентный spawn
-        Err(HierarchyError::WorkerWNotSpawned(0)) => spawn_worker_w(progman),
-        // Прочее (DefView пропал / progman умер) 0x052C не лечится — наружу
-        Err(err) => Err(err),
+        return Ok(hierarchy);
     }
+    spawn_worker_w(progman)
 }
 
 /// Спавн WorkerW сообщением 0x052C + retry-детект (R1; константы окна —
 /// DETECT_RETRIES × DETECT_RETRY_DELAY_MS в mod.rs, ~10 с: Seelen хватало
-/// 10×100 мс, на медленных Explorer-первых-запусках — нет).
+/// 10×100 мс, на медленных Explorer-первых-запусках — нет). Исчерпание окна
+/// без появления WorkerW (сплошной цвет фона и т.п.) — Ok с worker_w=None.
 fn spawn_worker_w(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
     // План §8.1: PostMessageW, НЕ SendMessageTimeout (SPEC §7.4) —
     // асинхронная постановка в очередь Explorer без ожидания обработки:
@@ -156,35 +155,47 @@ fn spawn_worker_w(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
     // 0x052C (WPARAM=0xD, LPARAM=0x1, R4) — команда породить WorkerW;
     // PostMessageW не блокирует вызывающий поток. Ошибка отправки
     // (переполнение очереди и т.п.) не ветвим: retry-детект ниже сам
-    // разрулит — итог WorkerWNotSpawned за полное retry-окно.
+    // разрулит — итог worker_w=None за полное retry-окно.
     let _ = unsafe { PostMessageW(Some(progman), WM_SPAWN_WORKERW, WPARAM(0xD), LPARAM(0x1)) };
+    // Retry ждёт именно ПОЯВЛЕНИЯ WorkerW: detect Ok без WorkerW (Explorer
+    // пока не отреагировал) — не повод возвращаться, только продолжение
+    // ожидания; последняя такая иерархия запоминается на случай исчерпания
+    // окна (attach без обоев).
+    let mut spawned: Option<DesktopHierarchy> = None;
     for _ in 0..DETECT_RETRIES {
         // R1: пауза перед КАЖДЫМ повтором — Explorer обрабатывает 0x052C
         // асинхронно, мгновенной реакции нет
         thread::sleep(Duration::from_millis(DETECT_RETRY_DELAY_MS));
         match detect(progman) {
-            Ok(hierarchy) => return Ok(hierarchy),
-            // ещё не появился — к следующей попытке
-            Err(HierarchyError::WorkerWNotSpawned(0)) => {}
+            Ok(hierarchy) if hierarchy.worker_w.is_some() => return Ok(hierarchy),
+            Ok(hierarchy) => spawned = Some(hierarchy),
             // серьёзная поломка (DefView пропал, progman умер) — не
             // дожимаем остаток retry-окна
             Err(err) => return Err(err),
         }
     }
-    Err(HierarchyError::WorkerWNotSpawned(
-        DETECT_RETRIES as u64 * DETECT_RETRY_DELAY_MS,
-    ))
+    // WorkerW не появился за всё окно — типично для фона «сплошной цвет»
+    // (Explorer обои не рисует → окна обоев не существует в принципе).
+    // Это не причина фолбэка R14: встраиваемся под слой иконок без обоев.
+    tracing::warn!(
+        window_ms = DETECT_RETRIES as u64 * DETECT_RETRY_DELAY_MS,
+        "WorkerW не появился после 0x052C — встройка под слой иконок без окна обоев"
+    );
+    match spawned {
+        Some(hierarchy) => Ok(hierarchy),
+        // Иерархия не детектилась ни разу за окно (маловероятно: detect
+        // падал бы с серьёзной ошибкой выше) — последний шанс.
+        None => detect(progman),
+    }
 }
 
 /// Raised-иерархия (R1, Spy++-дамп): DefView и WorkerW — прямые дети
-/// Progman, WorkerW ниже DefView в Z-order.
+/// Progman, WorkerW ниже DefView в Z-order. WorkerW может отсутствовать
+/// (Explorer его не породил) — не ошибка детекта, см. spawn_worker_w.
 fn find_raised(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
     let def_view = find_child(Some(progman), None, w!("SHELLDLL_DefView"))
         .ok_or(HierarchyError::DefViewNotFound)?;
-    // WorkerW может ещё не существовать: его порождает 0x052C (R4,
-    // ensure_worker_w); 0 в поле ошибки = «до спавна»
-    let worker_w = find_child(Some(progman), None, w!("WorkerW"))
-        .ok_or(HierarchyError::WorkerWNotSpawned(0))?;
+    let worker_w = find_child(Some(progman), None, w!("WorkerW"));
     Ok(DesktopHierarchy {
         progman,
         def_view,
@@ -195,7 +206,8 @@ fn find_raised(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
 
 /// Классическая иерархия (R1): top-level владелец DefView (обычно WorkerW),
 /// целевой WorkerW — его следующий top-level sibling (FindWindowEx
-/// c child_after=владелец). Обход top-level окон — идиома R13.
+/// c child_after=владелец). Обход top-level окон — идиома R13. WorkerW может
+/// отсутствовать — не ошибка детекта, см. spawn_worker_w.
 fn find_classic(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
     let mut owner_def_view: Option<(HWND, HWND)> = None;
     for_each_top_level(|top| {
@@ -211,8 +223,7 @@ fn find_classic(progman: HWND) -> Result<DesktopHierarchy, HierarchyError> {
     // Целевой WorkerW — следующий sibling ПОСЛЕ владельца DefView:
     // parent=None (топ-уровень), child_after=owner стартует ниже него
     // в Z-order (R1: FindWindowEx(0, owner, "WorkerW", 0))
-    let worker_w =
-        find_child(None, Some(owner), w!("WorkerW")).ok_or(HierarchyError::WorkerWNotSpawned(0))?;
+    let worker_w = find_child(None, Some(owner), w!("WorkerW"));
     Ok(DesktopHierarchy {
         progman,
         def_view,

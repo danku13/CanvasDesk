@@ -15,18 +15,22 @@
 //!
 //! Classic: scrub → SetParent(hwnd, worker_w). Затем (обе схемы): окно на
 //! весь виртуальный экран + верификация стилей перечитыванием (R3).
-//! Любая ошибка шага → AttachError → фолбэк на обычное окно (R14).
-//! Чистая реализация по описанию механики (RECIPES §0).
+//! WorkerW может отсутствовать (фон «сплошной цвет» — Explorer окна обоев
+//! не создаёт): тогда хост = родитель слоя иконок (Progman на Raised,
+//! top-level владелец DefView на Classic — GetAncestor(def_view, GA_PARENT)),
+//! окно ставится в Z-order сразу ПОД DefView (иконки поверх канваса; обоев
+//! просто нет). Любая ошибка шага → AttachError → фолбэк на обычное окно
+//! (R14). Чистая реализация по описанию механики (RECIPES §0).
 
 use super::hierarchy::{DesktopHierarchy, HierarchyError};
 use thiserror::Error;
 use windows::Win32::Foundation::{COLORREF, HWND};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
-    SetWindowPos, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_BOTTOM, LWA_ALPHA,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_LONG_PTR_INDEX, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE,
+    GetAncestor, GetWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetParent,
+    SetWindowLongPtrW, SetWindowPos, GA_PARENT, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT,
+    HWND_BOTTOM, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    WINDOW_LONG_PTR_INDEX, WS_EX_LAYERED, WS_EX_NOACTIVATE,
 };
 
 /// Ошибка встройки — любая ведёт к фолбэку на оконный режим (R14).
@@ -101,13 +105,29 @@ pub fn attach(
     }
 
     // ---- R2 шаг 3: SetParent -------------------------------------------
-    // Raised: parent = Progman (НЕ WorkerW!); Classic: parent = WorkerW.
+    // Raised: parent = Progman (НЕ WorkerW!); Classic: parent = WorkerW,
+    // а при его отсутствии — top-level владелец DefView (GetAncestor
+    // GA_PARENT — хост слоя иконок; обоев нет, канвас встаёт под иконки).
     let parent = if raised {
         hierarchy.progman
     } else {
-        hierarchy.worker_w
+        match hierarchy.worker_w {
+            Some(worker_w) => worker_w,
+            None => {
+                // SAFETY: def_view из детекта (живое окно Explorer);
+                // GetAncestor(GA_PARENT) — чистое чтение иерархии, битый
+                // хэндл даёт NULL → проверяем и уходим в фолбэк R14.
+                let host = unsafe { GetAncestor(hierarchy.def_view, GA_PARENT) };
+                if host.is_invalid() {
+                    tracing::warn!("attach: владелец DefView недоступен — не к чему встраиваться");
+                    return Err(AttachError::SetParentFailed);
+                }
+                tracing::info!("attach: WorkerW нет — хост = владелец DefView (фон без обоев)");
+                host
+            }
+        }
     };
-    // SAFETY: оба хэндла из детекта иерархии (T15-B, валидность
+    // SAFETY: все хэндлы из детекта иерархии (T15-B, валидность
     // перечитывается детектом); смена родителя — единственный необратимый
     // шаг attach, провал уводит в фолбэк R14 (окно остаётся top-level,
     // обрабатывает T15-E). Err от windows-rs покрывает и NULL-возврат.
@@ -117,11 +137,13 @@ pub fn attach(
     }
     tracing::debug!(parent = ?parent, "attach: set_parent");
 
-    // ---- R2 шаги 4–5 (ТОЛЬКО Raised): Z-order --------------------------
-    // Шаг 4: insert-after = def_view — встаём в Z-order сразу ПОД слоем
-    // иконок (DefView поверх нас). Шаг 5 (ensure_worker_w_z_order) —
-    // WorkerW остаётся ПОСЛЕДНИМ ребёнком Progman (обои под нами).
-    if raised {
+    // ---- R2 шаги 4–5: Z-order -------------------------------------------
+    // Шаг 4 (Raised, а также Classic без WorkerW): insert-after = def_view —
+    // встаём в Z-order сразу ПОД слоем иконок (DefView поверх нас). Classic
+    // со WorkerW шаг пропускает: окно — единственный ребёнок WorkerW.
+    // Шаг 5 (ensure_worker_w_z_order) — WorkerW последним ребёнком Progman
+    // (обои под нами); без WorkerW — нечего фиксировать.
+    if raised || hierarchy.worker_w.is_none() {
         // SAFETY: hwnd/def_view валидны (детект T15-B); флаги
         // NOMOVE|NOSIZE|NOACTIVATE — меняется только Z-order, ни позиция,
         // ни размер, ни фокус не затрагиваются.
@@ -145,9 +167,10 @@ pub fn attach(
     }
 
     // ---- Обе схемы: окно на весь виртуальный экран ----------------------
-    // Координаты — экранные: клиентская область WorkerW/Progman совпадает
-    // с виртуальным экраном (план §3). SWP_NOZORDER — Z-order уже выставлен
-    // шагом 4 (Raised) либо не требуется (Classic — единственный ребёнок
+    // Координаты — экранные: клиентская область хоста (WorkerW/Progman/
+    // владелец DefView) совпадает с виртуальным экраном (план §3).
+    // SWP_NOZORDER — Z-order уже выставлен шагом 4 (Raised / Classic без
+    // WorkerW) либо не требуется (Classic со WorkerW — единственный ребёнок
     // top-level WorkerW); при NOZORDER hWndInsertAfter игнорируется (None).
     // SAFETY: hwnd валиден; width/height виртуального экрана (T15-B,
     // EnumDisplayMonitors) неотрицательны; set_parent уже прошёл —
@@ -194,6 +217,12 @@ pub fn attach(
 /// → SetWindowPos(worker_w, HWND_BOTTOM, NOACTIVATE|NOMOVE|NOSIZE).
 /// Вызывается внутри attach и при refresh_z_order.
 pub fn ensure_worker_w_z_order(hierarchy: &DesktopHierarchy) -> Result<(), AttachError> {
+    // WorkerW отсутствует (фон без обоев) — фиксировать Z-order некого:
+    // под нами только фон хоста. Это не ошибка встройки.
+    let Some(worker_w) = hierarchy.worker_w else {
+        tracing::debug!("ensure_worker_w_z_order: WorkerW нет — пропуск (обоев нет)");
+        return Ok(());
+    };
     // SAFETY: progman из детекта (T15-B); GetWindow — чистое чтение
     // родственных связей, состояние окон не меняет.
     let first = unsafe { GetWindow(hierarchy.progman, GW_CHILD) };
@@ -211,7 +240,7 @@ pub fn ensure_worker_w_z_order(hierarchy: &DesktopHierarchy) -> Result<(), Attac
     while let Ok(next) = unsafe { GetWindow(last, GW_HWNDNEXT) } {
         last = next;
     }
-    if last != hierarchy.worker_w {
+    if last != worker_w {
         // Случай реальный (Lively: «Unexpected WorkerW Z-order») — WorkerW
         // оказался не последним ребёнком; принудительно в самый низ, иначе
         // обои перекроют наш канвас.
@@ -220,7 +249,7 @@ pub fn ensure_worker_w_z_order(hierarchy: &DesktopHierarchy) -> Result<(), Attac
         // не владеющий; NOMOVE|NOSIZE|NOACTIVATE — меняется только Z-order.
         if let Err(err) = unsafe {
             SetWindowPos(
-                hierarchy.worker_w,
+                worker_w,
                 Some(HWND_BOTTOM),
                 0,
                 0,

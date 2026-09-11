@@ -1068,7 +1068,7 @@ pub mod ui {
                 assert!(theme[0] >= 0.0 && theme[0] + theme[2] <= viewport[0]);
                 // Зазор ровно SETTINGS_GAP, пересечения нет
                 let gap = (theme[0] - (button[0] + button[2])).abs();
-                let gap_left = ((button[0] - (theme[0] + theme[2])).abs());
+                let gap_left = (button[0] - (theme[0] + theme[2])).abs();
                 assert!(
                     (gap - SETTINGS_GAP).abs() < 1e-3 || (gap_left - SETTINGS_GAP).abs() < 1e-3,
                     "зазор SETTINGS_GAP: theme={theme:?} button={button:?}"

@@ -586,6 +586,7 @@ impl App {
             Ok((hier, _)) => {
                 tracing::info!(
                     strategy = ?hier.strategy,
+                    worker_w = hier.worker_w.is_some(),
                     screen = ?(screen.left, screen.top, screen.right, screen.bottom),
                     "канвас встроен в рабочий стол (T15)"
                 );
@@ -620,7 +621,8 @@ impl App {
     }
 
     /// Установить/перенавесить слежку монитора на иерархию (T15):
-    /// WinEventHook на поток WorkerW + DPI-поллинг нашего окна.
+    /// WinEventHook на поток WorkerW + DPI-поллинг нашего окна. WorkerW=None
+    /// (фон без обоев) — hook не вешается, поллинг следит только за Progman.
     #[cfg(windows)]
     fn watch_worker_w(
         &self,
