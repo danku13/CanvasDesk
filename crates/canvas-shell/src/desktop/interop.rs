@@ -34,7 +34,18 @@ pub fn autostart_command(exe: &str) -> String {
     format!("\"{exe}\" {AUTOSTART_ARG}")
 }
 
-#[cfg(windows)]
+/// Строка пути для ShellExecute: Node.file хранится по конвенции JSON Canvas
+/// с прямыми слешами (`relative_if_inside`), а resolve_node_path отдаёт путь
+/// со смешанными разделителями (`C:\…\docs/TASKS.md`). Большинство Win32-API
+/// это переваривает, но ShellExecuteEx с SEE_MASK_INVOKEIDLIST парсит lpFile
+/// в PIDL (SHParseDisplayName) — прямые слеши не нормализуются →
+/// ERROR_FILE_NOT_FOUND на существующем файле. На Windows '/' не может быть
+/// частью имени файла — замена безопасна. Чистая функция (тесты Linux);
+/// используется только в cfg(windows)-`open_file`.
+pub fn shell_path_string(path: &Path) -> String {
+    path.as_os_str().to_string_lossy().replace('/', "\\")
+}
+
 use std::path::Path;
 
 #[cfg(windows)]
@@ -89,8 +100,9 @@ pub fn open_file(path: &Path) -> Result<(), String> {
     // Путь → нул-terminated UTF-16: HSTRING владеет буфером и живёт до
     // конца кадра — синхронный ShellExecuteExW читает его внутри вызова
     // (не сохраняет: SEE_MASK_NOCLOSEPROCESS не выставлена, hProcess
-    // остаётся нулевым).
-    let file = HSTRING::from(path.as_os_str());
+    // остаётся нулевым). Разделители нормализуем в обратные слеши —
+    // INVOKEIDLIST-парсинг прямые слеши не переваривает (см. shell_path_string).
+    let file = HSTRING::from(shell_path_string(path));
     // Default обнуляет структуру (hwnd = null, lpParameters/lpDirectory =
     // null, Anonymous = нули); заполняем только контракт вызова.
     let mut info = SHELLEXECUTEINFOW {
@@ -370,5 +382,28 @@ mod tests {
             r"Software\Microsoft\Windows\CurrentVersion\Run"
         );
         assert!(AUTOSTART_RUN_KEY.ends_with("Run"));
+    }
+
+    /// Смешанные разделители (после resolve_node_path от Node.file с '/'):
+    /// все прямые слеши становятся обратными — INVOKEIDLIST-парсинг
+    /// ShellExecuteEx иначе падает с ERROR_FILE_NOT_FOUND.
+    #[test]
+    fn shell_path_string_mixed_separators() {
+        let path = Path::new(r"C:\Users\danku\docs/TASKS.md");
+        assert_eq!(shell_path_string(path), r"C:\Users\danku\docs\TASKS.md");
+    }
+
+    /// Относительный путь из Node.file (конвенция JSON Canvas — '/').
+    #[test]
+    fn shell_path_string_relative_forward_slashes() {
+        let path = Path::new("docs/TASKS.md");
+        assert_eq!(shell_path_string(path), r"docs\TASKS.md");
+    }
+
+    /// Путь уже с обратными слешами — замена ничего не портит.
+    #[test]
+    fn shell_path_string_already_backslashes() {
+        let path = Path::new(r"C:\Users\danku\docs\TASKS.md");
+        assert_eq!(shell_path_string(path), r"C:\Users\danku\docs\TASKS.md");
     }
 }
