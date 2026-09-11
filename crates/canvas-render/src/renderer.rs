@@ -606,8 +606,11 @@ impl Renderer {
             ));
         }
         // T8: порты hover-ноды, резиновая линия новой связи, подложки лейблов и
-        // бокс редактирования лейбла — поверх карточек всех сегментов, под их
-        // текстом (лейблы рисуются финальной текст-группой ниже)
+        // бокс редактирования лейбла — мировой «хвост» кадра: расширяют
+        // диапазон карточек ПОСЛЕДНЕГО сегмента (рисуются под его текстом;
+        // лейблы — финальной текст-группой ниже). Регрессия 136e9fb: без
+        // расширения квады не входили ни в один draw-диапазон и исчезали.
+        let world_tail_start = instances.len() as u32;
         if let Some(hovered) = scene.hovered {
             instances.extend(build_port_instances(scene.canvas, hovered));
         }
@@ -617,19 +620,24 @@ impl Renderer {
         instances.extend_from_slice(&label_backdrops);
         instances.extend_from_slice(&edge_edit_quads);
         // World-space оверлеи (контекстное меню, T7; призраки дропа, T9;
-        // пульс результата, T14) — в диапазоне финального сегмента: поверх
-        // его карточек, под его текстом
+        // пульс результата, T14) — там же: в диапазоне финального сегмента,
+        // поверх его карточек, под его текстом
         instances.extend_from_slice(overlay.instances);
+        let world_tail_end = instances.len() as u32;
         // Screen-space оверлеи (панель поиска/настроек, тултип): ОТДЕЛЬНЫЙ
         // диапазон — раньше расширяли диапазон последнего сегмента, и
         // тамбнейлы/тексты его нод перекрывали панель (баг T14). Рисуются
         // финальным проходом после всех сегментов; их тексты — отдельной
         // группой TextSystem после этих квадов (иначе фон закрыл бы строки)
-        let overlay_start = instances.len() as u32;
         for inst in overlay.screen_instances {
             instances.push(screen_instance_to_world(camera, viewport_logical, inst));
         }
-        let overlay_range = overlay_start..instances.len() as u32;
+        let (top_range, overlay_range) = zorder::plan_tail_ranges(
+            &mut draw_ranges,
+            world_tail_start,
+            world_tail_end,
+            instances.len() as u32,
+        );
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -740,6 +748,12 @@ impl Renderer {
             }
             // Screen-space оверлеи (T14): квады панелей поверх всех сегментов,
             // их тексты — отдельной группой после квадов
+            if draw_ranges.is_empty() && !top_range.is_empty() {
+                // Сегментов нет (пустая сцена): мир-хвост не вошёл в диапазон
+                // последнего сегмента — рисуем его отдельным проходом, иначе
+                // квады (меню) не попали бы в кадр
+                self.cards.draw_range(&mut pass, top_range.clone());
+            }
             if !overlay_range.is_empty() {
                 self.cards.draw_range(&mut pass, overlay_range.clone());
             }

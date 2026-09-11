@@ -138,6 +138,33 @@ pub fn plan_z_order(
     }
 }
 
+/// План «хвоста» кадра: разметка диапазонов квадов, рисуемых поверх
+/// z-сегментов. Мировые квады (порты hover-ноды, резиновая линия, подложки
+/// лейблов, бокс редактирования лейбла, world-space оверлеи) расширяют
+/// диапазон карточек ПОСЛЕДНЕГО сегмента — рисуются под его текстом, как до
+/// фикса T14. Screen-оверлеи (панели, тултип) — отдельным диапазоном после
+/// всех сегментов: иначе тамбнейлы и тексты последнего сегмента перекроют
+/// полупрозрачный фон панели (баг T14). Если сегментов нет (не бывает при
+/// плане `plan_z_order`, защита на будущее), мир-хвост возвращается как
+/// отдельный диапазон — квады обязаны попасть в кадр (регрессия 136e9fb:
+/// порты и мировые оверлеи не входили ни в один draw-диапазон и исчезали).
+///
+/// Возвращает `(world, screen)` — диапазоны мир- и screen-хвоста. Мир-диапазон
+/// рисует отдельным проходом только если сегментов не было: при наличии
+/// сегментов его квады уже нарисованы в составе последнего.
+pub fn plan_tail_ranges(
+    segments: &mut [(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)],
+    world_start: u32,
+    world_end: u32,
+    buffer_end: u32,
+) -> (std::ops::Range<u32>, std::ops::Range<u32>) {
+    if let Some(last) = segments.last_mut() {
+        // Мир-хвост — продолжение карточек последнего сегмента.
+        last.0 = last.0.start..world_end;
+    }
+    (world_start..world_end, world_end..buffer_end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +318,48 @@ mod tests {
         let zplan = plan_z_order(&rects, &[false, true, true], &thumbs, 16);
         assert_eq!(zplan.segments, vec![seg(0..1, None), seg(1..3, Some(0))]);
         assert_eq!(zplan.text_groups, vec![vec![1, 2]]);
+    }
+
+    /// Регрессия 136e9fb: мир-хвост кадра (порты hover-ноды, резинка,
+    /// подложки лейблов, world-space оверлеи) обязан попадать в рисуемый
+    /// диапазон — он расширяет карточки последнего сегмента (под его текстом);
+    /// screen-хвост — отдельным диапазоном после всех сегментов (фикс T14).
+    #[test]
+    fn tail_world_extends_last_segment_screen_separate() {
+        let mut segs: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
+            vec![(2..5, 0..1, Some(0)), (5..9, 1..1, Some(1))];
+        // Мир-хвост: 4 квада (9..13), screen-хвост: 2 квада (13..15)
+        let (world, screen) = plan_tail_ranges(&mut segs, 9, 13, 15);
+        assert_eq!(segs[0].0, 2..5, "первый сегмент не тронут");
+        assert_eq!(
+            segs[1].0,
+            5..13,
+            "последний сегмент поглощает мир-хвост (порты/оверлеи рисуются)"
+        );
+        assert_eq!(world, 9..13);
+        assert_eq!(screen, 13..15, "screen-оверлеи — после мир-хвоста");
+    }
+
+    /// Пустой список сегментов (защита на будущее): мир-хвост возвращается
+    /// отдельным диапазоном — иначе его квады не попали бы в кадр вовсе.
+    #[test]
+    fn tail_without_segments_is_standalone() {
+        let mut segs: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> = Vec::new();
+        let (world, screen) = plan_tail_ranges(&mut segs, 0, 3, 4);
+        assert!(segs.is_empty());
+        assert_eq!(world, 0..3);
+        assert_eq!(screen, 3..4);
+    }
+
+    /// Пустые хвосты (нет hover-ноды, меню, панелей): диапазоны пустые,
+    /// сегменты не меняются.
+    #[test]
+    fn empty_tails_leave_segments_untouched() {
+        let mut segs: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
+            vec![(0..4, 0..0, Some(0))];
+        let (world, screen) = plan_tail_ranges(&mut segs, 4, 4, 4);
+        assert_eq!(segs[0].0, 0..4);
+        assert!(world.is_empty());
+        assert!(screen.is_empty());
     }
 }
