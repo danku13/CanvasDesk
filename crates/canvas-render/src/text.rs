@@ -106,7 +106,10 @@ pub fn offset_to_cursor(text: &str, offset: usize) -> Cursor {
 /// Спаны стилей (markdown.rs) → непрерывное покрытие текста парами
 /// (&str, Attrs) для set_rich_text: bold → Weight::BOLD, italic → Style::Italic.
 /// Highlight здесь не применяется — это фон-подложка (highlight_rects).
-fn rich_spans<'a>(plain: &'a str, spans: &[markdown::StyleSpan]) -> Vec<(&'a str, Attrs<'a>)> {
+pub(crate) fn rich_spans<'a>(
+    plain: &'a str,
+    spans: &[markdown::StyleSpan],
+) -> Vec<(&'a str, Attrs<'a>)> {
     let mut out = Vec::with_capacity(spans.len() * 2 + 1);
     let mut pos = 0usize;
     for span in spans {

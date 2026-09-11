@@ -16,10 +16,12 @@ use cosmic_text::{Action, Buffer, Cursor, Edit, Editor, FontSystem, Metrics, Mot
 use glyphon::{Attrs, Shaping, Wrap};
 use winit::keyboard::{Key, NamedKey};
 
-use crate::text::{body_area, offset_to_cursor, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
+use crate::markdown::{self, StyleFlag, StyleSpan};
+use crate::text::{body_area, rich_spans, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
 
 /// Маркер форматирования текста заметки (пост-T7): markdown-подмножество,
-/// см. markdown.rs. Хоткеи Ctrl+B/I/H тогглят маркер на выделении.
+/// см. markdown.rs. Хоткеи Ctrl+B/I/H тогглят стиль выделения (WYSIWYG:
+/// маркеров в буфере редактора нет — только чистый текст + спаны).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Marker {
     /// `**жирный**` (Ctrl+B).
@@ -31,11 +33,11 @@ pub enum Marker {
 }
 
 impl Marker {
-    fn as_str(self) -> &'static str {
+    fn flag(self) -> StyleFlag {
         match self {
-            Marker::Bold => "**",
-            Marker::Italic => "*",
-            Marker::Highlight => "==",
+            Marker::Bold => StyleFlag::Bold,
+            Marker::Italic => StyleFlag::Italic,
+            Marker::Highlight => StyleFlag::Highlight,
         }
     }
 }
@@ -53,63 +55,61 @@ fn cursor_to_offset(text: &str, cursor: Cursor) -> usize {
     text.len()
 }
 
-/// Тоггл маркера форматирования на выделении (чистая функция, TDD):
-/// - выделение уже обёрнуто этим маркером — маркеры снимаются;
-/// - выделение есть — оборачивается, выделение смещается на контент;
-/// - выделения нет — пара маркеров вставляется в позицию курсора,
-///   курсор оказывается между ними.
-///
-/// `selection`/`cursor` и результат — линейные байтовые offsets.
-/// Возвращает (новый текст, курсор, выделение).
-pub fn toggle_marker_text(
-    text: &str,
-    cursor: usize,
-    selection: Option<(usize, usize)>,
-    marker: &str,
-) -> (String, usize, Option<(usize, usize)>) {
-    let cursor = cursor.min(text.len());
-    let m = marker.len();
-    match selection {
-        Some((start, end)) if start < end && end <= text.len() => {
-            let before = &text[..start];
-            let after = &text[end..];
-            // Снятие засчитывается, только если вокруг выделения именно этот
-            // маркер: одиночная '*' не должна совпасть с частью '**'
-            let wrapped = if marker == "*" {
-                before.ends_with('*')
-                    && !before.ends_with("**")
-                    && after.starts_with('*')
-                    && !after.starts_with("**")
-            } else {
-                before.ends_with(marker) && after.starts_with(marker)
-            };
-            if wrapped {
-                // Снятие: маркеры вокруг выделения удаляются
-                let mut new = String::with_capacity(text.len() - 2 * m);
-                new.push_str(&before[..before.len() - m]);
-                new.push_str(&text[start..end]);
-                new.push_str(&after[m..]);
-                let sel = (start - m, end - m);
-                (new, sel.1, Some(sel))
-            } else {
-                // Оборачивание: выделение смещается на контент без маркеров
-                let mut new = String::with_capacity(text.len() + 2 * m);
-                new.push_str(before);
-                new.push_str(marker);
-                new.push_str(&text[start..end]);
-                new.push_str(marker);
-                new.push_str(after);
-                let sel = (start + m, end + m);
-                (new, sel.1, Some(sel))
-            }
+/// Регион правки между старым и новым текстом: (prefix, before, after) —
+/// длина общего префикса, заменённого хвоста старого и нового текста.
+/// Границы корректируются до границ UTF-8 (байтовый diff может разрезать
+/// многобайтовый символ: "а" (D0 B0) vs "п" (D0 BF) имеют общий префикс
+/// длиной 1 байт).
+fn edit_region(old: &str, new: &str) -> (usize, usize, usize) {
+    let (old_b, new_b) = (old.as_bytes(), new.as_bytes());
+    let mut prefix = 0usize;
+    while prefix < old_b.len().min(new_b.len()) && old_b[prefix] == new_b[prefix] {
+        prefix += 1;
+    }
+    while prefix > 0 && !old.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let max_suffix = (old_b.len() - prefix).min(new_b.len() - prefix);
+    let mut suffix = 0usize;
+    while suffix < max_suffix && old_b[old_b.len() - 1 - suffix] == new_b[new_b.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    while suffix > 0 && !old.is_char_boundary(old.len() - suffix) {
+        suffix -= 1;
+    }
+    (
+        prefix,
+        old.len() - prefix - suffix,
+        new.len() - prefix - suffix,
+    )
+}
+
+/// «Липкие» флаги ввода: Ctrl+B без выделения переключает флаг, и
+/// последующий ввод вставляется уже стилизованным (до повторного тогла).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PendingStyle {
+    bold: bool,
+    italic: bool,
+    highlight: bool,
+}
+
+impl PendingStyle {
+    fn toggle(&mut self, flag: StyleFlag) {
+        match flag {
+            StyleFlag::Bold => self.bold = !self.bold,
+            StyleFlag::Italic => self.italic = !self.italic,
+            StyleFlag::Highlight => self.highlight = !self.highlight,
         }
-        _ => {
-            let mut new = String::with_capacity(text.len() + 2 * m);
-            new.push_str(&text[..cursor]);
-            new.push_str(marker);
-            new.push_str(marker);
-            new.push_str(&text[cursor..]);
-            (new, cursor + m, None)
+    }
+    fn any(&self) -> bool {
+        self.bold || self.italic || self.highlight
+    }
+    fn get(self, flag: StyleFlag) -> bool {
+        match flag {
+            StyleFlag::Bold => self.bold,
+            StyleFlag::Italic => self.italic,
+            StyleFlag::Highlight => self.highlight,
         }
     }
 }
@@ -239,14 +239,24 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
 }
 
 /// Сессия инлайн-редактирования (T7 — тело текстовой ноды, T8 — лейбл связи).
+///
+/// WYSIWYG-модель (приёмка п.7): буфер держит ЧИСТЫЙ текст (без маркеров),
+/// стили — спанами (markdown.rs); маркеры появляются только при сериализации
+/// (`text()` → `markdown::emit`). Тоггл стиля на поддиапазоне рана — no-op,
+/// вложенные одинаковые маркеры больше не «съедают» стиль.
 pub struct EditingSession {
     buffer: Buffer,
     cursor: Cursor,
     selection: Selection,
     /// Что редактируется: нода или лейбл связи (индекс в модели).
     target: EditTarget,
-    /// Исходный текст — для отката по Esc.
+    /// Исходный текст с маркерами — для отката по Esc.
     original: String,
+    /// Чистый текст буфера и стили на нём (plain-координаты).
+    plain: String,
+    spans: Vec<StyleSpan>,
+    /// Липкие флаги ввода (Ctrl+B/I/H без выделения).
+    pending: PendingStyle,
     /// Высота строки текущего кадра (физ. px) — для каретки.
     line_height_px: f32,
     /// Последние применённые размеры/зум — set_layout без изменений не
@@ -255,7 +265,8 @@ pub struct EditingSession {
 }
 
 impl EditingSession {
-    /// Начать редактирование: буфер с текстом цели, курсор в конец.
+    /// Начать редактирование: текст цели разбирается на чистый текст и
+    /// спаны (маркеры не показываются), буфер — с rich-атрибутами.
     /// `width_px`/`height_px` — область редактирования в физических пикселях,
     /// `zoom_px` — zoom * scale_factor (перевод world-px в физические).
     pub fn new(
@@ -268,10 +279,16 @@ impl EditingSession {
     ) -> Self {
         let font_size = BODY_FONT_SIZE * zoom_px;
         let line_height = BODY_LINE_HEIGHT * zoom_px;
+        let (plain, spans) = markdown::parse(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
         buffer.set_wrap(font_system, Wrap::Word);
         buffer.set_size(font_system, Some(width_px), Some(height_px));
-        buffer.set_text(font_system, text, Attrs::new(), Shaping::Advanced);
+        buffer.set_rich_text(
+            font_system,
+            rich_spans(&plain, &spans),
+            Attrs::new(),
+            Shaping::Advanced,
+        );
         let last_line = buffer.lines.len().saturating_sub(1);
         let last_len = buffer
             .lines
@@ -284,6 +301,9 @@ impl EditingSession {
             selection: Selection::None,
             target,
             original: text.to_owned(),
+            plain,
+            spans,
+            pending: PendingStyle::default(),
             line_height_px: line_height,
             layout: (width_px, height_px, zoom_px),
         }
@@ -314,14 +334,9 @@ impl EditingSession {
         }
     }
 
-    /// Текущий текст (строки через '\n').
+    /// Текст для сохранения в модель: чистый текст + маркеры (emit).
     pub fn text(&self) -> String {
-        self.buffer
-            .lines
-            .iter()
-            .map(|line| line.text())
-            .collect::<Vec<_>>()
-            .join("\n")
+        markdown::emit(&self.plain, &self.spans)
     }
 
     /// Исходный текст на момент начала редактирования.
@@ -329,9 +344,11 @@ impl EditingSession {
         &self.original
     }
 
-    /// Текст изменился относительно исходного.
+    /// Текст/стили изменились относительно исходного (сравнение в
+    /// plain-координатах — каноническая запись маркеров не считается правкой).
     pub fn changed(&self) -> bool {
-        self.text() != self.original
+        let (plain, spans) = markdown::parse(&self.original);
+        plain != self.plain || spans != self.spans
     }
 
     /// Обновить метрики под текущий зум/размер области (зум во время
@@ -362,6 +379,77 @@ impl EditingSession {
             .set_size(font_system, Some(width_px), Some(height_px));
     }
 
+    /// Текст буфера как чистая строка (строки через '\n').
+    fn buffer_plain(&self) -> String {
+        self.buffer
+            .lines
+            .iter()
+            .map(|line| line.text())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// После мутации буфера Editor'ом: синхронизировать plain/spans с
+    /// текстом буфера (diff по общему префиксу/суффиксу → adjust_spans) и
+    /// обновить атрибуты. Курсор/выделение не трогаем — текст тот же.
+    fn sync_from_buffer(&mut self, font_system: &mut FontSystem) {
+        let new_plain = self.buffer_plain();
+        if new_plain == self.plain {
+            return;
+        }
+        let (prefix, before, after) = edit_region(&self.plain, &new_plain);
+        self.spans = markdown::adjust_spans(&self.spans, prefix, before, after);
+        self.plain = new_plain;
+        self.refresh_styles(font_system);
+    }
+
+    /// Обновить rich-атрибуты буфера по текущим спанам (текст не меняется —
+    /// курсор (строка, индекс) остаётся валидным).
+    fn refresh_styles(&mut self, font_system: &mut FontSystem) {
+        let attrs = rich_spans(&self.plain, &self.spans);
+        self.buffer
+            .set_rich_text(font_system, attrs, Attrs::new(), Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system, false);
+    }
+
+    /// Начало вставки: старт заменяемого выделения или позиция курсора
+    /// (байтовый offset в plain).
+    fn insert_start(&self) -> usize {
+        let cursor = cursor_to_offset(&self.plain, self.cursor);
+        match self.selection {
+            Selection::Normal(anchor) => {
+                let anchor = cursor_to_offset(&self.plain, anchor);
+                anchor.min(cursor)
+            }
+            _ => cursor,
+        }
+    }
+
+    /// Вставить строку (ввод/паста) и синхронизировать спаны; при липких
+    /// флагах вставленный диапазон стилизуется ими.
+    fn insert_and_sync(&mut self, font_system: &mut FontSystem, text: &str) {
+        let start = self.insert_start();
+        self.with_editor(|editor| editor.insert_string(text, None));
+        self.sync_from_buffer(font_system);
+        if self.pending.any() && !text.is_empty() {
+            let mut spans = std::mem::take(&mut self.spans);
+            for flag in [StyleFlag::Bold, StyleFlag::Italic, StyleFlag::Highlight] {
+                if self.pending.get(flag) {
+                    spans = markdown::set_style(
+                        self.plain.len(),
+                        &spans,
+                        start,
+                        start + text.len(),
+                        flag,
+                        true,
+                    );
+                }
+            }
+            self.spans = spans;
+            self.refresh_styles(font_system);
+        }
+    }
+
     /// Выполнить команду клавиатуры. Commit/Cancel/Copy/Cut/Paste сессия
     /// не исполняет — их разбирает приложение (вернёт их же).
     pub fn apply(&mut self, font_system: &mut FontSystem, command: KeyCommand) -> KeyCommand {
@@ -369,7 +457,7 @@ impl EditingSession {
             KeyCommand::Action(action) => {
                 let action = *action;
                 self.with_editor(|editor| editor.action(font_system, action));
-                self.buffer.shape_until_scroll(font_system, false);
+                self.sync_from_buffer(font_system);
             }
             KeyCommand::Motion(motion, extend) => {
                 let (motion, extend) = (*motion, *extend);
@@ -389,8 +477,7 @@ impl EditingSession {
             }
             KeyCommand::Insert(text) => {
                 let text = text.clone();
-                self.with_editor(|editor| editor.insert_string(&text, None));
-                self.buffer.shape_until_scroll(font_system, false);
+                self.insert_and_sync(font_system, &text);
             }
             KeyCommand::SelectAll => {
                 let last_line = self.buffer.lines.len().saturating_sub(1);
@@ -415,34 +502,31 @@ impl EditingSession {
 
     /// Вставить строку (паста из буфера обмена).
     pub fn insert_text(&mut self, font_system: &mut FontSystem, text: &str) {
-        self.with_editor(|editor| editor.insert_string(text, None));
-        self.buffer.shape_until_scroll(font_system, false);
+        self.insert_and_sync(font_system, text);
     }
 
-    /// Тоггл маркера форматирования (Ctrl+B/I/H): обернуть выделение, снять
-    /// обёртку либо вставить пару маркеров в позицию курсора. Реализация —
-    /// чистая `toggle_marker_text` над текстом целиком; буфер пересобирается
-    /// (в редакторе стилей нет — маркеры видны как есть, source-режим).
+    /// Тоггл стиля (Ctrl+B/I/H) на выделении в plain-координатах
+    /// (markdown::toggle_style): поддиапазон рана — no-op, ровно ран —
+    /// снятие, частично стилизованный диапазон — назначение всему.
+    /// Без выделения переключает «липкий» флаг для последующего ввода.
     pub fn toggle_marker(&mut self, font_system: &mut FontSystem, marker: Marker) {
-        let text = self.text();
-        let cursor = cursor_to_offset(&text, self.cursor);
+        let flag = marker.flag();
+        let cursor = cursor_to_offset(&self.plain, self.cursor);
         let selection = match self.selection {
             Selection::Normal(anchor) => {
-                let (a, b) = (cursor_to_offset(&text, anchor), cursor);
+                let (a, b) = (cursor_to_offset(&self.plain, anchor), cursor);
                 Some((a.min(b), a.max(b)))
             }
             _ => None,
         };
-        let (new_text, new_cursor, new_selection) =
-            toggle_marker_text(&text, cursor, selection, marker.as_str());
-        self.buffer
-            .set_text(font_system, &new_text, Attrs::new(), Shaping::Advanced);
-        self.buffer.shape_until_scroll(font_system, false);
-        self.cursor = offset_to_cursor(&new_text, new_cursor);
-        self.selection = match new_selection {
-            Some((start, _)) => Selection::Normal(offset_to_cursor(&new_text, start)),
-            None => Selection::None,
-        };
+        match selection {
+            Some((start, end)) if start < end => {
+                self.spans =
+                    markdown::toggle_style(self.plain.len(), &self.spans, start, end, flag);
+                self.refresh_styles(font_system);
+            }
+            _ => self.pending.toggle(flag),
+        }
     }
 
     /// Вырезать выделение: вернуть текст и удалить его из буфера.
@@ -455,7 +539,7 @@ impl EditingSession {
             copied
         });
         if copied.is_some() {
-            self.buffer.shape_until_scroll(font_system, false);
+            self.sync_from_buffer(font_system);
         }
         copied
     }
@@ -674,55 +758,76 @@ mod tests {
         assert_eq!(session.text(), "");
     }
 
-    /// Тоггл маркера (чистая функция): обернуть, снять, пара без выделения.
-    #[test]
-    fn toggle_marker_text_wrap_unwrap() {
-        // Оборачивание выделения (кириллица: «два» — байты 7..13)
-        let (text, cursor, sel) = toggle_marker_text("раз два три", 13, Some((7, 13)), "**");
-        assert_eq!(text, "раз **два** три");
-        assert_eq!(sel, Some((9, 15)), "выделение смещается на контент");
-        assert_eq!(cursor, 15);
-        // Повторный тоггл тем же выделением — снятие
-        let (text, cursor, sel) = toggle_marker_text(&text, 15, sel, "**");
-        assert_eq!(text, "раз два три");
-        assert_eq!(sel, Some((7, 13)));
-        assert_eq!(cursor, 13);
-        // Без выделения — пара маркеров, курсор между ними (конец «текст» — байт 10)
-        let (text, cursor, sel) = toggle_marker_text("текст", 10, None, "==");
-        assert_eq!(text, "текст====");
-        assert_eq!(cursor, 12);
-        assert_eq!(sel, None);
-        // Курсор в начале
-        let (text, _, _) = toggle_marker_text("", 0, None, "*");
-        assert_eq!(text, "**");
-        // Разные маркеры независимы: * вокруг ** не снимается тогглом *
-        let (text, _, _) = toggle_marker_text("**x**", 4, Some((2, 3)), "*");
-        assert_eq!(text, "***x***");
-    }
-
-    /// Тоггл маркера в сессии: SelectAll + Ctrl+B оборачивает весь текст,
-    /// кириллица (многобайтовые offsets) корректна, многострочное выделение.
+    /// Тоггл стиля в сессии (WYSIWYG): SelectAll + Ctrl+B стилизует весь
+    /// текст (маркеры только в text()), повторный тогл снимает; многострочное
+    /// выделение работает.
     #[test]
     fn toggle_marker_in_session() {
         let (mut fs, mut s) = session("привет мир");
         s.apply(&mut fs, KeyCommand::SelectAll);
         s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Bold));
         assert_eq!(s.text(), "**привет мир**");
-        // Выделение осталось на контенте: следующий тоггл снимает маркеры
+        // Выделение осталось: повторный тогл снимает стиль
         s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Bold));
         assert_eq!(s.text(), "привет мир");
 
-        // Многострочное: выделить всё и обернуть подсветкой
+        // Многострочное: выделить всё и стилизовать подсветкой
         let (mut fs, mut s) = session("раз\nдва");
         s.apply(&mut fs, KeyCommand::SelectAll);
         s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Highlight));
         assert_eq!(s.text(), "==раз\nдва==");
 
-        // Без выделения: пара маркеров, ввод попадает между ними
+        // Без выделения: липкий флаг — ввод вставляется стилизованным
         let (mut fs, mut s) = session("");
         s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Italic));
         s.apply(&mut fs, KeyCommand::Insert("курсив".into()));
         assert_eq!(s.text(), "*курсив*");
+    }
+
+    /// Приёмка п.7: повторный bold подстроки внутри bold-строки — no-op,
+    /// подстрока НЕ теряет стиль (вложенные маркеры больше не тогглят флаг).
+    #[test]
+    fn toggle_marker_substring_inside_bold_is_noop() {
+        let (mut fs, mut s) = session("**привет мир**");
+        assert_eq!(s.text(), "**привет мир**", "буфер чистый, маркеры в text()");
+        // Выделяем "риве" (байты 2..10): Home, шаг вправо, расширение ×3
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Home, false));
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Right, false));
+        for _ in 0..3 {
+            s.apply(&mut fs, KeyCommand::Motion(Motion::Right, true));
+        }
+        s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Bold));
+        assert_eq!(s.text(), "**привет мир**", "подстрока осталась bold");
+    }
+
+    /// Диапазон, частично стилизованный (внутри него уже bold-слово),
+    /// стилизуется целиком — уже стилизованная часть не ломается.
+    #[test]
+    fn toggle_marker_partial_range_sets_all() {
+        let (mut fs, mut s) = session("aa **bb** cc");
+        // Выделяем "a bb c" (символы 1..7): Home, шаг, расширение ×6
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Home, false));
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Right, false));
+        for _ in 0..6 {
+            s.apply(&mut fs, KeyCommand::Motion(Motion::Right, true));
+        }
+        s.apply(&mut fs, KeyCommand::ToggleMarker(Marker::Bold));
+        assert_eq!(s.text(), "a**a bb c**c");
+    }
+
+    /// Набор внутри стилизованного региона продолжает стиль (adjust_spans
+    /// расширяет спан на вставленный текст).
+    #[test]
+    fn typing_inside_bold_extends_style() {
+        let (mut fs, mut s) = session("**жирный**");
+        // Курсор новой сессии — в конце; двигаемся строго внутрь спана
+        // (после «жирн», байт 10; вставка на границе спана — вне его)
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Home, false));
+        for _ in 0.."жирн".chars().count() {
+            s.apply(&mut fs, KeyCommand::Motion(Motion::Right, false));
+        }
+        s.apply(&mut fs, KeyCommand::Insert("!".into()));
+        assert_eq!(s.text(), "**жирн!ый**");
     }
 
     /// Многострочность через Action::Enter (Shift+Enter на уровне приложения).
