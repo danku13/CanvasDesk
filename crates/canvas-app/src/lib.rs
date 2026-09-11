@@ -7,8 +7,8 @@
 //! дублировались в `main.rs` копипастой — теперь источник один.
 
 pub use canvas_core::{
-    edge_at, nearest_side, port_at, port_point, Canvas, Corner, Edge, Node, NodeKind, Settings,
-    Side, SpatialIndex,
+    edge_at, nearest_side, port_at, port_point, Canvas, Corner, Edge, EdgeLineStyle, EdgeThickness,
+    Node, NodeKind, Settings, Side, SpatialIndex,
 };
 pub use canvas_render::camera::Vec2;
 pub use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
@@ -216,9 +216,19 @@ pub mod ui {
     }
 
     /// Контекстное меню ноды (T7): палитра цветов в world-точке клика ПКМ.
+    /// Цель — нода (палитра) или связь (стиль/толщина/цвет линии).
     pub struct ContextMenu {
-        pub node: usize,
+        pub target: MenuTarget,
         pub origin: Vec2,
+    }
+
+    /// Цель контекстного меню (ПКМ по канвасу).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MenuTarget {
+        /// Нода: палитра цветов (индекс в canvas.nodes).
+        Node(usize),
+        /// Связь: стиль линии, толщина, цвет (индекс в canvas.edges).
+        Edge(usize),
     }
 
     /// Активный drag резиновой линии новой связи (T8): от порта ноды к курсору.
@@ -505,19 +515,24 @@ pub mod ui {
         ]
     }
 
-    /// Полный rect меню: [x, y, w, h].
-    pub fn menu_rect(origin: Vec2) -> [f32; 4] {
+    /// Полный rect меню с `items` пунктами: [x, y, w, h].
+    pub fn menu_rect_for(origin: Vec2, items: usize) -> [f32; 4] {
         [
             origin[0],
             origin[1],
             MENU_WIDTH,
-            MENU_PADDING * 2.0 + MENU_ITEMS.len() as f32 * MENU_ITEM_HEIGHT,
+            MENU_PADDING * 2.0 + items as f32 * MENU_ITEM_HEIGHT,
         ]
     }
 
-    /// Hit-test пункта меню по world-точке (T7).
-    pub fn menu_item_at(origin: Vec2, point: Vec2) -> Option<usize> {
-        let [x, y, w, h] = menu_rect(origin);
+    /// Полный rect меню ноды (палитра): [x, y, w, h].
+    pub fn menu_rect(origin: Vec2) -> [f32; 4] {
+        menu_rect_for(origin, MENU_ITEMS.len())
+    }
+
+    /// Hit-test пункта меню из `items` по world-точке.
+    pub fn menu_item_at_for(origin: Vec2, point: Vec2, items: usize) -> Option<usize> {
+        let [x, y, w, h] = menu_rect_for(origin, items);
         if point[0] < x
             || point[0] > x + w
             || point[1] < y + MENU_PADDING
@@ -526,7 +541,12 @@ pub mod ui {
             return None;
         }
         let i = ((point[1] - y - MENU_PADDING) / MENU_ITEM_HEIGHT) as usize;
-        (i < MENU_ITEMS.len()).then_some(i)
+        (i < items).then_some(i)
+    }
+
+    /// Hit-test пункта меню ноды по world-точке (T7).
+    pub fn menu_item_at(origin: Vec2, point: Vec2) -> Option<usize> {
+        menu_item_at_for(origin, point, MENU_ITEMS.len())
     }
 
     /// Подпись пункта меню.
@@ -534,6 +554,59 @@ pub mod ui {
         match item {
             Some(preset) => format!("Цвет {preset}"),
             None => "Без цвета".to_owned(),
+        }
+    }
+
+    /// Пункт контекстного меню связи: стиль линии, толщина или цвет
+    /// (None — сброс цвета на дефолтный).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum EdgeMenuItem {
+        /// Стиль линии (сплошная/пунктир/точки).
+        Style(EdgeLineStyle),
+        /// Толщина линии (тонкая/средняя/толстая).
+        Thickness(EdgeThickness),
+        /// Цвет: пресет "1".."6" или None — сброс.
+        Color(Option<&'static str>),
+    }
+
+    /// Пункты меню связи (ПКМ по линии): 3 стиля, 3 толщины, 6 цветов + сброс.
+    pub const EDGE_MENU_ITEMS: [EdgeMenuItem; 13] = [
+        EdgeMenuItem::Style(EdgeLineStyle::Solid),
+        EdgeMenuItem::Style(EdgeLineStyle::Dashed),
+        EdgeMenuItem::Style(EdgeLineStyle::Dotted),
+        EdgeMenuItem::Thickness(EdgeThickness::Thin),
+        EdgeMenuItem::Thickness(EdgeThickness::Medium),
+        EdgeMenuItem::Thickness(EdgeThickness::Thick),
+        EdgeMenuItem::Color(Some("1")),
+        EdgeMenuItem::Color(Some("2")),
+        EdgeMenuItem::Color(Some("3")),
+        EdgeMenuItem::Color(Some("4")),
+        EdgeMenuItem::Color(Some("5")),
+        EdgeMenuItem::Color(Some("6")),
+        EdgeMenuItem::Color(None),
+    ];
+
+    /// Подпись пункта меню связи с отметкой текущего значения (`✓`).
+    pub fn edge_menu_label(item: EdgeMenuItem, edge: &Edge) -> String {
+        let current = match item {
+            EdgeMenuItem::Style(style) => edge.style.unwrap_or(EdgeLineStyle::Solid) == style,
+            EdgeMenuItem::Thickness(thickness) => edge.thickness.unwrap_or_default() == thickness,
+            EdgeMenuItem::Color(color) => edge.color.as_deref() == color,
+        };
+        let mark = if current { "✓ " } else { "" };
+        match item {
+            EdgeMenuItem::Style(style) => format!("{mark}Линия: {}", style.label()),
+            EdgeMenuItem::Thickness(thickness) => {
+                format!("{mark}Толщина: {}", thickness.label())
+            }
+            EdgeMenuItem::Color(Some(preset)) => format!("{mark}Цвет {preset}"),
+            EdgeMenuItem::Color(None) => {
+                if edge.color.is_none() {
+                    "✓ Без цвета".to_owned()
+                } else {
+                    "Без цвета".to_owned()
+                }
+            }
         }
     }
 
@@ -837,6 +910,62 @@ pub mod ui {
             );
             // Вертикальный паддинг между рамкой и первым пунктом — промах
             assert_eq!(menu_item_at(origin, [110.0, 51.0]), None);
+        }
+
+        /// Hit-test меню связи: 13 пунктов (3 стиля, 3 толщины, 7 цветов),
+        /// границы групп различимы.
+        #[test]
+        fn edge_menu_hit_test() {
+            let origin = [100.0, 50.0];
+            let n = EDGE_MENU_ITEMS.len();
+            assert_eq!(n, 13);
+            // Первый пункт (стиль «сплошная»)
+            assert_eq!(
+                menu_item_at_for(origin, [110.0, 50.0 + MENU_PADDING + 3.0], n),
+                Some(0)
+            );
+            // Граница групп: толщина «тонкая» (индекс 3) и цвет "1" (индекс 6)
+            let y = |i: usize| 50.0 + MENU_PADDING + i as f32 * MENU_ITEM_HEIGHT + 3.0;
+            assert_eq!(menu_item_at_for(origin, [110.0, y(3)], n), Some(3));
+            assert_eq!(menu_item_at_for(origin, [110.0, y(6)], n), Some(6));
+            // Последний пункт — сброс цвета
+            assert_eq!(menu_item_at_for(origin, [110.0, y(12)], n), Some(12));
+            // Промахи: правее, выше, ниже
+            assert_eq!(
+                menu_item_at_for(origin, [100.0 + MENU_WIDTH + 1.0, 60.0], n),
+                None
+            );
+            assert_eq!(menu_item_at_for(origin, [110.0, 49.0], n), None);
+            assert_eq!(
+                menu_item_at_for(origin, [110.0, 50.0 + menu_rect_for(origin, n)[3] + 1.0], n),
+                None
+            );
+        }
+
+        /// Подписи меню связи: отметка `✓` только у текущих значений.
+        #[test]
+        fn edge_menu_labels_mark_current() {
+            let mut edge = Edge::new("e1", "a", None, "b", None);
+            edge.style = Some(EdgeLineStyle::Dashed);
+            edge.thickness = Some(EdgeThickness::Thick);
+            edge.color = Some("3".into());
+
+            let label = |item| edge_menu_label(item, &edge);
+            assert!(!label(EDGE_MENU_ITEMS[0]).starts_with('✓'));
+            assert!(label(EDGE_MENU_ITEMS[1]).starts_with("✓"), "dashed текущий");
+            assert!(!label(EDGE_MENU_ITEMS[2]).starts_with('✓'));
+            assert!(!label(EDGE_MENU_ITEMS[3]).starts_with('✓'));
+            assert!(!label(EDGE_MENU_ITEMS[4]).starts_with('✓'));
+            assert!(label(EDGE_MENU_ITEMS[5]).starts_with('✓'), "thick текущий");
+            assert!(!label(EDGE_MENU_ITEMS[6]).starts_with('✓'));
+            assert!(label(EDGE_MENU_ITEMS[8]).starts_with("✓"), "цвет 3 текущий");
+            assert!(!label(EDGE_MENU_ITEMS[12]).starts_with('✓'));
+
+            // Без стилей: ✓ у дефолтов (solid/medium/без цвета)
+            let plain = Edge::new("e2", "a", None, "b", None);
+            assert!(edge_menu_label(EDGE_MENU_ITEMS[0], &plain).starts_with('✓'));
+            assert!(edge_menu_label(EDGE_MENU_ITEMS[4], &plain).starts_with('✓'));
+            assert!(edge_menu_label(EDGE_MENU_ITEMS[12], &plain).starts_with('✓'));
         }
 
         /// Зона resize (T7): правый нижний угол ноды, границы включительны.

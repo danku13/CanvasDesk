@@ -85,6 +85,16 @@ impl ThemeColors {
         }
     }
 
+    /// Цвет тела текста как [f32; 4] (образцы-толщины в меню связи).
+    pub fn body_fill(&self) -> [f32; 4] {
+        [
+            self.body.r() as f32 / 255.0,
+            self.body.g() as f32 / 255.0,
+            self.body.b() as f32 / 255.0,
+            self.body.a() as f32 / 255.0,
+        ]
+    }
+
     /// Clear-color фона канваса (linear space для wgpu).
     pub fn clear_color(&self) -> wgpu::Color {
         let channel = |i: usize| srgb_to_linear(self.background[i] as f64 / 255.0);

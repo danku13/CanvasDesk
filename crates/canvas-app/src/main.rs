@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::ui::{
-    button_rect, in_resize_corner, menu_item_at, menu_item_rect, menu_label, menu_rect,
-    next_free_id, panel_rect, panel_row_at, point_in_rect, ContextMenu, DoubleClick, EdgeDrag,
-    SettingsRow, MAX_NOTE_WIDTH, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
-    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
-    SETTINGS_ROWS,
+    button_rect, edge_menu_label, in_resize_corner, menu_item_at, menu_item_at_for, menu_item_rect,
+    menu_label, menu_rect, menu_rect_for, next_free_id, panel_rect, panel_row_at, point_in_rect,
+    ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, SettingsRow, EDGE_MENU_ITEMS,
+    MAX_NOTE_WIDTH, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
+    MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
@@ -1603,36 +1603,90 @@ impl App {
         ))
     }
 
-    /// Оверлей контекстного меню (T7): фон, образцы цветов, подписи пунктов.
+    /// Оверлей контекстного меню (T7): фон, образцы, подписи пунктов.
+    /// Нода — палитра цветов; связь — стиль линии, толщина, цвет.
     /// Возвращает (квады, подписи, world-позиции подписей).
     fn menu_overlay(&self) -> (Vec<CardInstance>, Vec<String>, Vec<Vec2>) {
         let mut instances = Vec::new();
         let mut labels = Vec::new();
         let mut label_pos = Vec::new();
-        if let Some(menu) = &self.menu {
-            let palette = ThemeColors::from_theme(self.settings.theme);
-            let [x, y, w, h] = menu_rect(menu.origin);
-            instances.push(CardInstance {
-                pos: [x, y],
-                size: [w, h],
-                fill: palette.menu_fill,
-                border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 0.0],
-            });
-            for (i, item) in MENU_ITEMS.iter().enumerate() {
-                let rect = menu_item_rect(menu.origin, i);
-                if let Some(color) = item.and_then(preset_color) {
-                    // Образец цвета слева от подписи
-                    instances.push(CardInstance {
-                        pos: [rect[0] + 7.0, rect[1] + 7.0],
-                        size: [12.0, 12.0],
-                        fill: color,
-                        border: [0.0; 4],
-                        params: [2.0, 0.0, 0.0, 0.0],
-                    });
+        let Some(menu) = &self.menu else {
+            return (instances, labels, label_pos);
+        };
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        match menu.target {
+            MenuTarget::Node(_) => {
+                let [x, y, w, h] = menu_rect(menu.origin);
+                instances.push(CardInstance {
+                    pos: [x, y],
+                    size: [w, h],
+                    fill: palette.menu_fill,
+                    border: [0.0; 4],
+                    params: [6.0, 0.0, 0.0, 0.0],
+                });
+                for (i, item) in MENU_ITEMS.iter().enumerate() {
+                    let rect = menu_item_rect(menu.origin, i);
+                    if let Some(color) = item.and_then(preset_color) {
+                        // Образец цвета слева от подписи
+                        instances.push(CardInstance {
+                            pos: [rect[0] + 7.0, rect[1] + 7.0],
+                            size: [12.0, 12.0],
+                            fill: color,
+                            border: [0.0; 4],
+                            params: [2.0, 0.0, 0.0, 0.0],
+                        });
+                    }
+                    labels.push(menu_label(*item));
+                    label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                 }
-                labels.push(menu_label(*item));
-                label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+            }
+            MenuTarget::Edge(edge_index) => {
+                let [x, y, w, h] = menu_rect_for(menu.origin, EDGE_MENU_ITEMS.len());
+                instances.push(CardInstance {
+                    pos: [x, y],
+                    size: [w, h],
+                    fill: palette.menu_fill,
+                    border: [0.0; 4],
+                    params: [6.0, 0.0, 0.0, 0.0],
+                });
+                for (i, item) in EDGE_MENU_ITEMS.iter().enumerate() {
+                    let rect = menu_item_rect(menu.origin, i);
+                    match item {
+                        EdgeMenuItem::Color(color) => {
+                            // Образец цвета слева от подписи
+                            if let Some(fill) = color.and_then(preset_color) {
+                                instances.push(CardInstance {
+                                    pos: [rect[0] + 7.0, rect[1] + 7.0],
+                                    size: [12.0, 12.0],
+                                    fill,
+                                    border: [0.0; 4],
+                                    params: [2.0, 0.0, 0.0, 0.0],
+                                });
+                            }
+                        }
+                        EdgeMenuItem::Thickness(thickness) => {
+                            // Образец-толщина: полоска высотой dot()
+                            let line_h = thickness.dot();
+                            instances.push(CardInstance {
+                                pos: [rect[0] + 7.0, rect[1] + (26.0 - line_h) / 2.0],
+                                size: [12.0, line_h],
+                                fill: palette.body_fill(),
+                                border: [0.0; 4],
+                                params: [line_h / 2.0, 0.0, 0.0, 0.0],
+                            });
+                        }
+                        EdgeMenuItem::Style(_) => {}
+                    }
+                    let label = self
+                        .scene
+                        .canvas
+                        .edges
+                        .get(edge_index)
+                        .map(|edge| edge_menu_label(*item, edge))
+                        .unwrap_or_default();
+                    labels.push(label);
+                    label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                }
             }
         }
         (instances, labels, label_pos)
@@ -2372,13 +2426,35 @@ impl App {
                 let world = self.cursor_world();
                 // Hit-test через spatial index (T5): O(log n) вместо линейного обхода
                 let hit = self.scene.spatial.hit_test(world);
-                // Открытое меню (T7): клик по пункту — применить цвет, мимо — закрыть
+                // Открытое меню (T7): клик по пункту — применить, мимо — закрыть
                 if let Some(menu) = self.menu.take() {
-                    if let Some(i) = menu_item_at(menu.origin, world) {
-                        if let Some(node) = self.scene.canvas.nodes.get_mut(menu.node) {
-                            node.color = MENU_ITEMS[i].map(str::to_owned);
+                    match menu.target {
+                        MenuTarget::Node(node_index) => {
+                            if let Some(i) = menu_item_at(menu.origin, world) {
+                                if let Some(node) = self.scene.canvas.nodes.get_mut(node_index) {
+                                    node.color = MENU_ITEMS[i].map(str::to_owned);
+                                }
+                                self.scene.mark_dirty();
+                            }
                         }
-                        self.scene.mark_dirty();
+                        MenuTarget::Edge(edge_index) => {
+                            if let Some(i) =
+                                menu_item_at_for(menu.origin, world, EDGE_MENU_ITEMS.len())
+                            {
+                                if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
+                                    match EDGE_MENU_ITEMS[i] {
+                                        EdgeMenuItem::Style(style) => edge.style = Some(style),
+                                        EdgeMenuItem::Thickness(thickness) => {
+                                            edge.thickness = Some(thickness)
+                                        }
+                                        EdgeMenuItem::Color(color) => {
+                                            edge.color = color.map(str::to_owned)
+                                        }
+                                    }
+                                }
+                                self.scene.mark_dirty();
+                            }
+                        }
                     }
                     self.request_redraw();
                     return;
@@ -2549,19 +2625,33 @@ impl App {
             Some(index) => {
                 self.scene.selected = Some(Selection::Node(index));
                 self.menu = Some(ContextMenu {
-                    node: index,
+                    target: MenuTarget::Node(index),
                     origin: world,
                 });
             }
+            // Промах по нодам: меню связи (стиль/толщина/цвет линии);
+            // мимо связи — закрыть меню (и десктоп-меню T17 в --desktop)
             None => {
-                self.menu = None;
-                // T17 (SPEC §7.4 п.6): в --desktop ПКМ по пустому месту —
-                // системное меню десктопа (нативное Win32: Открыть
-                // канвас / Новый текстовый файл / иконки / автозапуск /
-                // Выход); вне --desktop поведение прежнее
-                #[cfg(windows)]
-                if self.desktop_mode && self.desktop_hierarchy.is_some() {
-                    self.desktop_menu(event_loop);
+                let avoid = self.settings.edges_avoid_nodes;
+                match edge_at(&self.scene.canvas, world, avoid) {
+                    Some(edge_index) => {
+                        self.scene.selected = Some(Selection::Edge(edge_index));
+                        self.menu = Some(ContextMenu {
+                            target: MenuTarget::Edge(edge_index),
+                            origin: world,
+                        });
+                    }
+                    None => {
+                        self.menu = None;
+                        // T17 (SPEC §7.4 п.6): в --desktop ПКМ по пустому месту —
+                        // системное меню десктопа (нативное Win32: Открыть
+                        // канвас / Новый текстовый файл / иконки / автозапуск /
+                        // Выход); вне --desktop поведение прежнее
+                        #[cfg(windows)]
+                        if self.desktop_mode && self.desktop_hierarchy.is_some() {
+                            self.desktop_menu(event_loop);
+                        }
+                    }
                 }
             }
         }

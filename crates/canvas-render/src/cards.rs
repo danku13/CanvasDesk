@@ -191,6 +191,12 @@ const ARROW_LEN: f32 = 10.0;
 const ARROW_ANGLE: f32 = std::f32::consts::FRAC_PI_6; // 30°
 /// Кружков на ус стрелки.
 const ARROW_DOTS: usize = 4;
+/// Период пунктира в единицах диаметра кружка (черта + пропуск).
+const DASH_PERIOD: f32 = 8.0;
+/// Доля периода пунктира, занятая чертой.
+const DASH_DUTY: f32 = 0.6;
+/// Шаг одиночных точек (стиль «точки») в единицах диаметра.
+const DOT_SPACING: f32 = 3.0;
 
 /// Кружок диаметром `d` с центром в `center` (params.w = 1 — без тени).
 fn dot(center: [f32; 2], d: f32, fill: [f32; 4]) -> CardInstance {
@@ -203,43 +209,90 @@ fn dot(center: [f32; 2], d: f32, fill: [f32; 4]) -> CardInstance {
     }
 }
 
-/// Равномерный ресэмплинг полилинии по длине дуги (шаг `step`).
-fn sample_polyline(points: &[[f32; 2]], step: f32) -> Vec<[f32; 2]> {
-    let mut samples = Vec::new();
-    if points.is_empty() {
-        return samples;
-    }
-    samples.push(points[0]);
-    let mut carried = 0.0f32;
+/// Общая длина полилинии по длине дуги.
+fn polyline_length(points: &[[f32; 2]]) -> f32 {
+    points
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum()
+}
+
+/// Точка полилинии на дистанции `s` от начала (по дуге).
+fn polyline_point_at(points: &[[f32; 2]], s: f32) -> Option<[f32; 2]> {
+    let mut acc = 0.0f32;
     for w in points.windows(2) {
         let seg = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
         let len = seg[0].hypot(seg[1]);
         if len < f32::EPSILON {
             continue;
         }
-        let mut dist = step - carried;
-        while dist <= len {
-            let t = dist / len;
-            samples.push([w[0][0] + seg[0] * t, w[0][1] + seg[1] * t]);
-            dist += step;
+        if acc + len >= s {
+            let t = ((s - acc) / len).clamp(0.0, 1.0);
+            return Some([w[0][0] + seg[0] * t, w[0][1] + seg[1] * t]);
         }
-        carried = len - (dist - step);
+        acc += len;
     }
-    if let Some(last) = points.last() {
-        let dup = samples
-            .last()
-            .is_some_and(|s| (s[0] - last[0]).abs() < 1e-3 && (s[1] - last[1]).abs() < 1e-3);
-        if !dup {
-            samples.push(*last);
+    points.last().copied()
+}
+
+/// Позиции центров кружков линии связи по полилинии с учётом стиля
+/// (чистая функция — тестируется без GPU). Сплошная — плотная цепочка,
+/// пунктир — черта/пропуск по периоду, точки — одиночные кружки с шагом.
+pub fn line_pattern_dots(
+    points: &[[f32; 2]],
+    style: canvas_core::EdgeLineStyle,
+    d: f32,
+) -> Vec<[f32; 2]> {
+    let total = polyline_length(points);
+    if total <= f32::EPSILON {
+        return points.first().copied().into_iter().collect();
+    }
+    let step = (d * 0.8).max(0.5);
+    let mut out = Vec::new();
+    let push_at = |s: f32, out: &mut Vec<[f32; 2]>| {
+        if let Some(p) = polyline_point_at(points, s) {
+            out.push(p);
+        }
+    };
+    match style {
+        canvas_core::EdgeLineStyle::Solid => {
+            let mut s = 0.0;
+            while s <= total {
+                push_at(s, &mut out);
+                s += step;
+            }
+        }
+        canvas_core::EdgeLineStyle::Dashed => {
+            let period = d * DASH_PERIOD;
+            let on = period * DASH_DUTY;
+            let mut start = 0.0;
+            while start <= total {
+                let end = (start + on).min(total);
+                let mut s = start;
+                while s <= end {
+                    push_at(s, &mut out);
+                    s += step;
+                }
+                start += period;
+            }
+        }
+        canvas_core::EdgeLineStyle::Dotted => {
+            let spacing = (d * DOT_SPACING).max(1.0);
+            let mut s = 0.0;
+            while s <= total {
+                push_at(s, &mut out);
+                s += spacing;
+            }
         }
     }
-    samples
+    out
 }
 
 /// Кружки вдоль полилинии + опционально стрелка на конце по направлению
 /// последнего сегмента (применяется и к огибающим маршрутам).
 fn polyline_dots(
     points: &[[f32; 2]],
+    style: canvas_core::EdgeLineStyle,
     d: f32,
     fill: [f32; 4],
     arrow: bool,
@@ -248,8 +301,7 @@ fn polyline_dots(
     if points.is_empty() {
         return;
     }
-    let step = (d * 0.8).max(0.5);
-    for point in sample_polyline(points, step) {
+    for point in line_pattern_dots(points, style, d) {
         out.push(dot(point, d, fill));
     }
     if !arrow {
@@ -285,10 +337,11 @@ fn polyline_dots(
 
 /// Инстансы всех связей канваса (T8): кривые-«чётки» и стрелки.
 /// Выделенная связь (`selected` — индекс в `canvas.edges`) ярче и толще.
-/// Висячие связи (без ноды) пропускаются. `avoid` — обход посторонних нод
-/// (глобальная настройка), рендер идёт по огибающей полилинии.
-/// Добавлять ПЕРЕД инстансами карточек — связи под нодами (порядок в буфере
-/// = порядок рисования).
+/// Стиль/толщина — из полей связи `edgeStyle`/`edgeWidth` (дефолты: сплошная,
+/// средняя). Висячие связи (без ноды) пропускаются. `avoid` — обход
+/// посторонних нод (глобальная настройка), рендер идёт по огибающей
+/// полилинии. Добавлять ПЕРЕД инстансами карточек — связи под нодами
+/// (порядок в буфере = порядок рисования).
 pub fn build_edge_instances(
     canvas: &canvas_core::Canvas,
     selected: Option<usize>,
@@ -306,12 +359,15 @@ pub fn build_edge_instances(
         } else {
             named_color(edge.color.as_deref()).unwrap_or(EDGE_COLOR)
         };
+        let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
+        let base_d = edge.thickness.unwrap_or_default().dot();
+        // Выделенная связь толще на 1px относительно своей толщины
         let d = if is_selected {
-            EDGE_DOT_SELECTED
+            base_d + (EDGE_DOT_SELECTED - EDGE_DOT)
         } else {
-            EDGE_DOT
+            base_d
         };
-        polyline_dots(&points, d, fill, true, &mut out);
+        polyline_dots(&points, style, d, fill, true, &mut out);
     }
     out
 }
@@ -943,5 +999,70 @@ mod tests {
         assert_eq!(bytes.len(), CardInstance::FLOATS * 4);
         assert_eq!(&bytes[0..4], &1.0f32.to_ne_bytes());
         assert_eq!(&bytes[48..52], &8.0f32.to_ne_bytes());
+    }
+
+    /// Паттерн «сплошная»: плотная цепочка от начала до конца с шагом 0.8d.
+    #[test]
+    fn pattern_solid_covers_whole_line() {
+        let line = [[0.0, 0.0], [100.0, 0.0]];
+        let dots = line_pattern_dots(&line, canvas_core::EdgeLineStyle::Solid, 2.5);
+        assert_eq!(dots.len(), 51, "шаг 2.0: 0..=100");
+        assert_eq!(dots[0], [0.0, 0.0]);
+        assert_eq!(dots[50], [100.0, 0.0]);
+    }
+
+    /// Паттерн «пунктир»: черта/пропуск по периоду; в пропуске точек нет.
+    #[test]
+    fn pattern_dashed_alternates_runs_and_gaps() {
+        let line = [[0.0, 0.0], [100.0, 0.0]];
+        let dots = line_pattern_dots(&line, canvas_core::EdgeLineStyle::Dashed, 2.5);
+        // Период 20, черта 12: x ∈ {0..=12}, {20..=32}, ...
+        for x in [0.0, 10.0, 12.0, 20.0, 32.0, 80.0, 92.0] {
+            assert!(
+                dots.iter().any(|p| (p[0] - x).abs() < 1e-3),
+                "точка на черте x={x}"
+            );
+        }
+        for x in [14.0, 16.0, 18.0, 34.0, 78.0] {
+            assert!(
+                dots.iter().all(|p| (p[0] - x).abs() > 1e-3),
+                "пропуск без точек x={x}"
+            );
+        }
+    }
+
+    /// Паттерн «точки»: изолированные кружки с шагом 3d.
+    #[test]
+    fn pattern_dotted_spaces_points() {
+        let line = [[0.0, 0.0], [100.0, 0.0]];
+        let dots = line_pattern_dots(&line, canvas_core::EdgeLineStyle::Dotted, 2.5);
+        assert_eq!(dots.len(), 14, "шаг 7.5: 0..97.5");
+        for pair in dots.windows(2) {
+            let dist = (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+            assert!((dist - 7.5).abs() < 1e-3, "равный шаг между точками");
+        }
+    }
+
+    /// Стиль и толщина из полей связи попадают в инстансы.
+    #[test]
+    fn edge_instances_use_style_and_thickness() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("b", "C:/b.png", 500.0, 0.0, 100.0, 100.0));
+        let mut edge = canvas_core::Edge::new("e1", "a", None, "b", None);
+        edge.style = Some(canvas_core::EdgeLineStyle::Dotted);
+        edge.thickness = Some(canvas_core::EdgeThickness::Thin);
+        canvas.add_edge(edge);
+
+        let instances = build_edge_instances(&canvas, None, false);
+        assert!(!instances.is_empty());
+        assert!(
+            instances.iter().all(|inst| inst.size[0] == 1.8),
+            "тонкая линия — кружки 1.8px"
+        );
     }
 }

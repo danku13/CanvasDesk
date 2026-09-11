@@ -28,6 +28,8 @@ fn canvas_round_trip() {
             to_side: Some(Side::Top),
             label: Some("блокирует".into()),
             color: None,
+            style: None,
+            thickness: None,
             extra: Default::default(),
         }],
         extra: Default::default(),
@@ -60,6 +62,8 @@ fn uses_json_canvas_field_names() {
         to_side: None,
         label: None,
         color: None,
+        style: None,
+        thickness: None,
         extra: Default::default(),
     };
     let value = serde_json::to_value(&edge).expect("сериализация связи");

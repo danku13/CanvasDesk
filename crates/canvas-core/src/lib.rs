@@ -21,7 +21,9 @@ pub use fs_events::{
     apply_file_events, normalize_path, path_matches, relative_if_inside, resolve_node_path,
     watched_dirs, FileEvent, NodeChange,
 };
-pub use model::{Canvas, CanvasdeskExt, Edge, Node, NodeKind, PreviewState, Side};
+pub use model::{
+    Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node, NodeKind, PreviewState, Side,
+};
 pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
 pub use settings::{Corner, GridDensity, GridStyle, Settings, Theme};
 pub use spatial::{SpatialIndex, WorldRect};

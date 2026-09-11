@@ -37,6 +37,73 @@ pub enum PreviewState {
     None,
 }
 
+/// Стиль линии связи — расширение `edgeStyle` (не входит в JSON Canvas 1.0,
+/// сохраняется опционально; старые файлы парсятся, поле отсутствует).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeLineStyle {
+    /// Сплошная линия (дефолт при отсутствии поля).
+    Solid,
+    /// Штрихи (черта/пропуск).
+    Dashed,
+    /// Одиночные точки.
+    Dotted,
+}
+
+impl EdgeLineStyle {
+    /// Подпись стиля в контекстном меню связи.
+    pub fn label(self) -> &'static str {
+        match self {
+            EdgeLineStyle::Solid => "сплошная",
+            EdgeLineStyle::Dashed => "пунктир",
+            EdgeLineStyle::Dotted => "точки",
+        }
+    }
+}
+
+/// Толщина линии связи — расширение `edgeWidth` (дефолт Medium ≈ текущие
+/// 2.5 world-px, см. canvas_render::EDGE_DOT).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeThickness {
+    /// Тонкая (1.8 world-px).
+    Thin,
+    /// Средняя (2.5 world-px) — дефолт.
+    #[default]
+    Medium,
+    /// Толстая (3.5 world-px).
+    Thick,
+}
+
+impl EdgeThickness {
+    /// Диаметр кружка линии в world-px.
+    pub fn dot(self) -> f32 {
+        match self {
+            EdgeThickness::Thin => 1.8,
+            EdgeThickness::Medium => 2.5,
+            EdgeThickness::Thick => 3.5,
+        }
+    }
+
+    /// Подпись толщины в контекстном меню связи.
+    pub fn label(self) -> &'static str {
+        match self {
+            EdgeThickness::Thin => "тонкая",
+            EdgeThickness::Medium => "средняя",
+            EdgeThickness::Thick => "толстая",
+        }
+    }
+
+    /// Переключение по циклу (три варианта).
+    pub fn next(self) -> Self {
+        match self {
+            EdgeThickness::Thin => EdgeThickness::Medium,
+            EdgeThickness::Medium => EdgeThickness::Thick,
+            EdgeThickness::Thick => EdgeThickness::Thin,
+        }
+    }
+}
+
 /// Расширение `canvasdesk` ноды-виджета (M5, SPEC §5.1/§7.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CanvasdeskExt {
@@ -157,6 +224,12 @@ pub struct Edge {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Расширение: стиль линии (`edgeStyle`, см. `EdgeLineStyle`).
+    #[serde(rename = "edgeStyle", skip_serializing_if = "Option::is_none")]
+    pub style: Option<EdgeLineStyle>,
+    /// Расширение: толщина линии (`edgeWidth`, см. `EdgeThickness`).
+    #[serde(rename = "edgeWidth", skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<EdgeThickness>,
     /// Неизвестные поля (fromEnd/toEnd и пр.) — сохраняются при round-trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -180,6 +253,8 @@ impl Edge {
             to_side,
             label: None,
             color: None,
+            style: None,
+            thickness: None,
             extra: Map::new(),
         }
     }

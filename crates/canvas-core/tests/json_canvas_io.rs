@@ -40,6 +40,45 @@ fn parse_spec_examples() {
     assert_eq!(edge.label.as_deref(), Some("блокирует"));
 }
 
+/// Расширения связи (`edgeStyle`/`edgeWidth`) сериализуются, парсятся обратно
+/// и не ломают файлы без них; неизвестные поля по-прежнему в `extra`.
+#[test]
+fn edge_style_thickness_round_trip() {
+    use canvas_core::{Edge, EdgeLineStyle, EdgeThickness};
+
+    let mut canvas = Canvas::default();
+    canvas
+        .nodes
+        .push(canvas_core::Node::text("a", "x", 0.0, 0.0));
+    canvas
+        .nodes
+        .push(canvas_core::Node::text("b", "y", 300.0, 0.0));
+    let mut edge = Edge::new("e1", "a", None, "b", None);
+    edge.style = Some(EdgeLineStyle::Dashed);
+    edge.thickness = Some(EdgeThickness::Thick);
+    canvas.add_edge(edge);
+    canvas.add_edge(Edge::new("e2", "a", None, "b", None));
+
+    let serialized = canvas.to_json().expect("сериализация");
+    let compact: String = serialized.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(compact.contains("\"edgeStyle\":\"dashed\""), "{serialized}");
+    assert!(compact.contains("\"edgeWidth\":\"thick\""), "{serialized}");
+    // Поля отсутствуют у связи без стиля (не мусорим в файл)
+    assert!(!compact.contains("edgeStyle\":\"solid"), "{serialized}");
+
+    let parsed = Canvas::from_str(&serialized).expect("парсинг");
+    assert_eq!(parsed.edges[0].style, Some(EdgeLineStyle::Dashed));
+    assert_eq!(parsed.edges[0].thickness, Some(EdgeThickness::Thick));
+    assert_eq!(parsed.edges[1].style, None);
+    assert_eq!(parsed.edges[1].thickness, None);
+    // Полный round-trip без потерь
+    let again = parsed.to_json().expect("повторная сериализация");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&serialized).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&again).unwrap()
+    );
+}
+
 /// Неизвестные поля нод, edges и корня + неизвестные типы нод доезжают без потерь.
 #[test]
 fn round_trip_preserves_unknown_fields() {
