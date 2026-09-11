@@ -94,9 +94,11 @@ pub mod ui {
     pub const PANEL_PADDING: f32 = 10.0;
 
     /// Строки панели настроек (порядок = порядок отображения).
-    pub const SETTINGS_ROWS: [SettingsRow; 3] = [
+    pub const SETTINGS_ROWS: [SettingsRow; 5] = [
         SettingsRow::ButtonCorner,
         SettingsRow::Grid,
+        SettingsRow::GridStyle,
+        SettingsRow::GridDensity,
         SettingsRow::HudOnStart,
     ];
 
@@ -107,6 +109,10 @@ pub mod ui {
         ButtonCorner,
         /// Сетка канваса вкл/выкл.
         Grid,
+        /// Вид сетки: линии или точки.
+        GridStyle,
+        /// Плотность сетки (цикл по 3 вариантам).
+        GridDensity,
         /// HUD (F3) включён при старте.
         HudOnStart,
     }
@@ -120,6 +126,10 @@ pub mod ui {
                     format!("Угол кнопки: {}", settings.button_corner.label())
                 }
                 SettingsRow::Grid => format!("Сетка: {}", on_off(settings.grid_visible)),
+                SettingsRow::GridStyle => format!("Вид сетки: {}", settings.grid_style.label()),
+                SettingsRow::GridDensity => {
+                    format!("Плотность сетки: {}", settings.grid_density.label())
+                }
                 SettingsRow::HudOnStart => {
                     format!("HUD при запуске: {}", on_off(settings.hud_on_start))
                 }

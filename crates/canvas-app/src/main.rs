@@ -15,8 +15,8 @@ use canvas_app::ui::{
 };
 use canvas_core::{
     apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
-    watched_dirs, Canvas, Edge, FileEvent, Node, NodeChange, NodeKind, Settings, SpatialIndex,
-    ThumbnailProvider,
+    watched_dirs, Canvas, Edge, FileEvent, GridStyle, Node, NodeChange, NodeKind, Settings,
+    SpatialIndex, ThumbnailProvider,
 };
 use canvas_render::animate::{pulse_alpha, Flight, FLIGHT_DURATION_MS};
 use canvas_render::camera::Vec2;
@@ -1645,6 +1645,19 @@ impl App {
                     renderer.set_grid_visible(self.settings.grid_visible);
                 }
             }
+            SettingsRow::GridStyle => {
+                self.settings.grid_style = self.settings.grid_style.next();
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
+                }
+            }
+            SettingsRow::GridDensity => {
+                self.settings.grid_density = self.settings.grid_density.next();
+                if let Some(renderer) = self.renderer.as_mut() {
+                    let (minor, major) = self.settings.grid_density.steps();
+                    renderer.set_grid_steps(minor, major);
+                }
+            }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -1804,6 +1817,9 @@ impl ApplicationHandler<AppEvent> for App {
         match pollster::block_on(canvas_render::Renderer::new(window.clone())) {
             Ok(mut renderer) => {
                 renderer.set_grid_visible(self.settings.grid_visible);
+                renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
+                let (minor, major) = self.settings.grid_density.steps();
+                renderer.set_grid_steps(minor, major);
                 tracing::info!(
                     width = window.inner_size().width,
                     height = window.inner_size().height,

@@ -129,6 +129,10 @@ pub struct Renderer {
     scale_factor: f32,
     /// Рисовать сетку канваса (настройки, панель из post-T7).
     grid_visible: bool,
+    /// Вид сетки: точки вместо линий (настройки).
+    grid_dots: bool,
+    /// Шаги сетки (мелкий, крупный) в world-px — плотность из настроек.
+    grid_steps: (f32, f32),
 }
 
 impl Renderer {
@@ -192,12 +196,24 @@ impl Renderer {
             minimap: None,
             scale_factor: scale_factor as f32,
             grid_visible: true,
+            grid_dots: false,
+            grid_steps: (20.0, 100.0),
         })
     }
 
     /// Включить/выключить сетку канваса (настройки).
     pub fn set_grid_visible(&mut self, visible: bool) {
         self.grid_visible = visible;
+    }
+
+    /// Вид сетки канваса (настройки): точки вместо линий.
+    pub fn set_grid_dots(&mut self, dots: bool) {
+        self.grid_dots = dots;
+    }
+
+    /// Плотность сетки канваса (настройки): шаги (мелкий, крупный) в world-px.
+    pub fn set_grid_steps(&mut self, minor: f32, major: f32) {
+        self.grid_steps = (minor, major);
     }
 
     /// Обновить scale factor окна (перенос между мониторами с разным DPI, SPEC §6.5).
@@ -415,6 +431,8 @@ impl Renderer {
                 camera,
                 [self.size.width as f32, self.size.height as f32],
                 self.scale_factor,
+                self.grid_steps,
+                self.grid_dots,
             );
         }
         // Редакторские оверлеи (T7/T8): выделение и каретка. У ноды — квады на её

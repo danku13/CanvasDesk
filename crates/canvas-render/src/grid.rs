@@ -5,11 +5,6 @@
 
 use crate::camera::Camera;
 
-/// Шаг мелкой сетки в world-пикселях (SPEC, T2).
-pub const MINOR_STEP: f32 = 20.0;
-/// Шаг крупной сетки в world-пикселях (SPEC, T2).
-pub const MAJOR_STEP: f32 = 100.0;
-
 /// Видимость линий сетки при данном зуме (альфы для шейдера).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GridAppearance {
@@ -25,16 +20,17 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Альфы линий сетки по зуму.
+/// Альфы линий сетки по зуму и шагам (`minor_step`/`major_step` — в world-px).
 ///
-/// Мелкая сетка (screen-шаг = MINOR_STEP * zoom) гасится, когда линии сливаются
+/// Мелкая сетка (screen-шаг = minor_step * zoom) гасится, когда линии сливаются
 /// (порог ~10 screen-px между линиями) — иначе муар и мерцание при отдалении.
 /// Крупная видна всегда, но при экстремальном отдалении приглушается.
-pub fn grid_appearance(zoom: f32) -> GridAppearance {
-    let minor_screen_step = MINOR_STEP * zoom;
-    // Полная видимость при шаге >= 10 screen-px (zoom >= 0.5), гашение к ~4 px
+pub fn grid_appearance(zoom: f32, minor_step: f32, major_step: f32) -> GridAppearance {
+    let minor_screen_step = minor_step * zoom;
+    // Полная видимость при шаге >= 10 screen-px (zoom >= 0.5 при 20 world-px),
+    // гашение к ~4 px
     let minor_alpha = smoothstep(4.0, 10.0, minor_screen_step);
-    let major_screen_step = MAJOR_STEP * zoom;
+    let major_screen_step = major_step * zoom;
     let major_alpha = smoothstep(4.0, 12.0, major_screen_step).clamp(0.15, 1.0);
     GridAppearance {
         minor_alpha,
@@ -42,7 +38,8 @@ pub fn grid_appearance(zoom: f32) -> GridAppearance {
     }
 }
 
-/// Uniform камеры для шейдера сетки (32 байта, layout по правилам WGSL).
+/// Uniform камеры для шейдера сетки (48 байт, layout по правилам WGSL):
+/// позиция/зум/альфы + шаги линий (плотность) и режим (линии/точки).
 #[derive(Debug, Clone, Copy)]
 struct GridUniform {
     position: [f32; 2],
@@ -50,11 +47,15 @@ struct GridUniform {
     effective_zoom: f32,
     minor_alpha: f32,
     major_alpha: f32,
-    _pad: f32,
+    minor_step: f32,
+    major_step: f32,
+    /// 0 — линии, 1 — точки.
+    mode: f32,
+    _pad: [f32; 2],
 }
 
 impl GridUniform {
-    fn to_bytes(self) -> [u8; 32] {
+    fn to_bytes(self) -> [u8; 48] {
         let floats = [
             self.position[0],
             self.position[1],
@@ -63,9 +64,13 @@ impl GridUniform {
             self.effective_zoom,
             self.minor_alpha,
             self.major_alpha,
-            self._pad,
+            self.minor_step,
+            self.major_step,
+            self.mode,
+            0.0,
+            0.0,
         ];
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0u8; 48];
         for (i, value) in floats.iter().enumerate() {
             bytes[i * 4..i * 4 + 4].copy_from_slice(&value.to_ne_bytes());
         }
@@ -136,7 +141,7 @@ impl GridPipeline {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grid camera"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -161,21 +166,28 @@ impl GridPipeline {
     ///
     /// `viewport` — в физических пикселях (шейдер работает в frag coord);
     /// камера хранит логические координаты, поэтому зум домножается на scale_factor.
+    /// `steps` — (мелкий, крупный) шаг сетки в world-px (плотность);
+    /// `dots` — режим «точки» вместо линий.
     pub fn update_camera(
         &self,
         queue: &wgpu::Queue,
         camera: &Camera,
         viewport: [f32; 2],
         scale_factor: f32,
+        steps: (f32, f32),
+        dots: bool,
     ) {
-        let appearance = grid_appearance(camera.zoom());
+        let appearance = grid_appearance(camera.zoom(), steps.0, steps.1);
         let uniform = GridUniform {
             position: camera.position(),
             viewport,
             effective_zoom: camera.zoom() * scale_factor,
             minor_alpha: appearance.minor_alpha,
             major_alpha: appearance.major_alpha,
-            _pad: 0.0,
+            minor_step: steps.0,
+            major_step: steps.1,
+            mode: if dots { 1.0 } else { 0.0 },
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.uniform_buffer, 0, &uniform.to_bytes());
     }
@@ -193,16 +205,20 @@ mod tests {
     use super::*;
     use crate::camera::MIN_ZOOM;
 
+    /// Базовые шаги (средняя плотность, SPEC T2).
+    const MINOR: f32 = 20.0;
+    const MAJOR: f32 = 100.0;
+
     /// При zoom = 1.0 мелкая сетка полностью видна, при MIN_ZOOM — погашена.
     #[test]
     fn minor_grid_fades_out_when_zoomed_out() {
-        let near = grid_appearance(1.0);
+        let near = grid_appearance(1.0, MINOR, MAJOR);
         assert!(
             (near.minor_alpha - 1.0).abs() < 1e-6,
             "при zoom 1.0 мелкая сетка должна быть видна полностью: {}",
             near.minor_alpha
         );
-        let far = grid_appearance(MIN_ZOOM);
+        let far = grid_appearance(MIN_ZOOM, MINOR, MAJOR);
         assert!(
             far.minor_alpha.abs() < 1e-6,
             "при zoom {MIN_ZOOM} мелкая сетка должна быть погашена: {}",
@@ -214,7 +230,7 @@ mod tests {
     #[test]
     fn major_grid_always_visible() {
         for zoom in [MIN_ZOOM, 0.1, 0.25, 1.0, 4.0] {
-            let appearance = grid_appearance(zoom);
+            let appearance = grid_appearance(zoom, MINOR, MAJOR);
             assert!(
                 appearance.major_alpha >= 0.15,
                 "крупная сетка должна оставаться видимой при zoom {zoom}: {}",
@@ -226,11 +242,11 @@ mod tests {
     /// Альфа мелкой сетки монотонно не убывает с ростом зума (нет дёргания границ).
     #[test]
     fn minor_alpha_monotonic_in_zoom() {
-        let mut previous = grid_appearance(MIN_ZOOM).minor_alpha;
+        let mut previous = grid_appearance(MIN_ZOOM, MINOR, MAJOR).minor_alpha;
         let mut zoom = MIN_ZOOM;
         while zoom < 4.0 {
             zoom *= 1.05;
-            let current = grid_appearance(zoom).minor_alpha;
+            let current = grid_appearance(zoom, MINOR, MAJOR).minor_alpha;
             assert!(
                 current >= previous - 1e-6,
                 "альфа упала с {previous} до {current} при zoom {zoom}"
@@ -239,21 +255,51 @@ mod tests {
         }
     }
 
-    /// Uniform сериализуется в 32 байта — layout WGSL-структуры.
+    /// Альфы зависят от screen-шага (шаг × зум): одинаковый screen-шаг —
+    /// одинаковая альфа независимо от плотности; при отдалении частая сетка
+    /// гаснет раньше редкой (иначе муар).
     #[test]
-    fn uniform_layout_is_32_bytes() {
+    fn alpha_depends_on_screen_step() {
+        // Эквивалентность screen-шага: 10 world-px при zoom 0.6 = 20 при 0.3
+        let dense = grid_appearance(0.6, 10.0, 50.0).minor_alpha;
+        let medium = grid_appearance(0.3, 20.0, 100.0).minor_alpha;
+        assert!(
+            (dense - medium).abs() < 1e-6,
+            "одинаковый screen-шаг → одинаковая альфа: {dense} vs {medium}"
+        );
+        // При отдалении частая гаснет раньше
+        let zoom = 0.3;
+        let dense = grid_appearance(zoom, 10.0, 50.0).minor_alpha;
+        let sparse = grid_appearance(zoom, 40.0, 200.0).minor_alpha;
+        assert!(
+            sparse > dense,
+            "при zoom {zoom} редкая ({sparse}) виднее частой ({dense})"
+        );
+    }
+
+    /// Uniform сериализуется в 48 байт — layout WGSL-структуры
+    /// (позиция, viewport, зум, альфы, шаги, режим, выравнивание).
+    #[test]
+    fn uniform_layout_is_48_bytes() {
         let uniform = GridUniform {
             position: [1.5, -2.5],
             viewport: [1920.0, 1080.0],
             effective_zoom: 2.0,
             minor_alpha: 0.7,
             major_alpha: 1.0,
-            _pad: 0.0,
+            minor_step: 20.0,
+            major_step: 100.0,
+            mode: 1.0,
+            _pad: [0.0; 2],
         };
         let bytes = uniform.to_bytes();
-        assert_eq!(bytes.len(), 32);
+        assert_eq!(bytes.len(), 48);
         assert_eq!(&bytes[0..4], &1.5f32.to_ne_bytes());
         assert_eq!(&bytes[16..20], &2.0f32.to_ne_bytes());
         assert_eq!(&bytes[24..28], &1.0f32.to_ne_bytes());
+        // Шаги: offsets 28 и 32; режим: offset 36
+        assert_eq!(&bytes[28..32], &20.0f32.to_ne_bytes());
+        assert_eq!(&bytes[32..36], &100.0f32.to_ne_bytes());
+        assert_eq!(&bytes[36..40], &1.0f32.to_ne_bytes());
     }
 }

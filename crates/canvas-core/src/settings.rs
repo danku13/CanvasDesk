@@ -41,6 +41,77 @@ impl Corner {
     }
 }
 
+/// Вид сетки канваса: линии или точки (панель настроек).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GridStyle {
+    /// Линии (классическая сетка).
+    #[default]
+    Lines,
+    /// Точки в узлах мелкой сетки.
+    Dots,
+}
+
+impl GridStyle {
+    /// Переключение вида (строка панели настроек).
+    pub fn next(self) -> Self {
+        match self {
+            GridStyle::Lines => GridStyle::Dots,
+            GridStyle::Dots => GridStyle::Lines,
+        }
+    }
+
+    /// Подпись вида в панели настроек.
+    pub fn label(self) -> &'static str {
+        match self {
+            GridStyle::Lines => "линии",
+            GridStyle::Dots => "точки",
+        }
+    }
+}
+
+/// Плотность сетки: шаг линий/точек относительно базового (20/100 world-px).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GridDensity {
+    /// Частая: шаги 10/50 world-px.
+    Dense,
+    /// Средняя: шаги 20/100 world-px (базовая, SPEC T2).
+    #[default]
+    Medium,
+    /// Редкая: шаги 40/200 world-px.
+    Sparse,
+}
+
+impl GridDensity {
+    /// Шаги (мелкий, крупный) в world-пикселях.
+    pub fn steps(self) -> (f32, f32) {
+        match self {
+            GridDensity::Dense => (10.0, 50.0),
+            GridDensity::Medium => (20.0, 100.0),
+            GridDensity::Sparse => (40.0, 200.0),
+        }
+    }
+
+    /// Переключение плотности по циклу (строка панели настроек).
+    pub fn next(self) -> Self {
+        match self {
+            GridDensity::Dense => GridDensity::Medium,
+            GridDensity::Medium => GridDensity::Sparse,
+            GridDensity::Sparse => GridDensity::Dense,
+        }
+    }
+
+    /// Подпись плотности в панели настроек.
+    pub fn label(self) -> &'static str {
+        match self {
+            GridDensity::Dense => "частая",
+            GridDensity::Medium => "средняя",
+            GridDensity::Sparse => "редкая",
+        }
+    }
+}
+
 /// Настройки приложения. Дефолты — через `Default`, десериализация
 /// подставляет их для отсутствующих полей (`#[serde(default)]` на struct).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,6 +121,10 @@ pub struct Settings {
     pub button_corner: Corner,
     /// Рисовать сетку канваса.
     pub grid_visible: bool,
+    /// Вид сетки: линии или точки.
+    pub grid_style: GridStyle,
+    /// Плотность сетки (шаг линий/точек).
+    pub grid_density: GridDensity,
     /// HUD (fps/p95, F3) включён сразу при старте.
     pub hud_on_start: bool,
 }
@@ -59,6 +134,8 @@ impl Default for Settings {
         Self {
             button_corner: Corner::TopRight,
             grid_visible: true,
+            grid_style: GridStyle::Lines,
+            grid_density: GridDensity::Medium,
             hud_on_start: false,
         }
     }
@@ -116,6 +193,8 @@ mod tests {
         let settings = Settings {
             button_corner: Corner::BottomLeft,
             grid_visible: false,
+            grid_style: GridStyle::Dots,
+            grid_density: GridDensity::Sparse,
             hud_on_start: true,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
@@ -151,8 +230,42 @@ mod tests {
         let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
         assert!(!settings.grid_visible);
         assert_eq!(settings.button_corner, Corner::TopRight);
+        assert_eq!(settings.grid_style, GridStyle::Lines);
+        assert_eq!(settings.grid_density, GridDensity::Medium);
         assert!(!settings.hud_on_start);
         assert!(warn.is_none());
+    }
+
+    /// Вид сетки: переключение замкнуто, подписи непустые.
+    #[test]
+    fn grid_style_cycle_and_labels() {
+        assert_eq!(GridStyle::Lines.next(), GridStyle::Dots);
+        assert_eq!(GridStyle::Dots.next(), GridStyle::Lines);
+        for style in [GridStyle::Lines, GridStyle::Dots] {
+            assert!(!style.label().is_empty());
+        }
+    }
+
+    /// Плотность сетки: шаги мелкой/крупной линий, замкнутый цикл, подписи.
+    #[test]
+    fn grid_density_steps_cycle() {
+        // Базовая (SPEC T2) — средняя
+        assert_eq!(GridDensity::Medium.steps(), (20.0, 100.0));
+        assert_eq!(GridDensity::Dense.steps(), (10.0, 50.0));
+        assert_eq!(GridDensity::Sparse.steps(), (40.0, 200.0));
+        // Цикл из 3 без повторов
+        let start = GridDensity::Dense;
+        let mut density = start;
+        let mut seen = vec![density];
+        for _ in 0..2 {
+            density = density.next();
+            assert!(!seen.contains(&density));
+            seen.push(density);
+        }
+        assert_eq!(density.next(), start);
+        for density in seen {
+            assert!(!density.label().is_empty());
+        }
     }
 
     /// Цикл углов замкнут: 4 переключения возвращают в исходный.
@@ -185,6 +298,8 @@ mod tests {
         .expect("сериализация");
         assert!(text.contains("button_corner = \"bottom_right\""), "{text}");
         assert!(text.contains("grid_visible"), "{text}");
+        assert!(text.contains("grid_style"), "{text}");
+        assert!(text.contains("grid_density"), "{text}");
         assert!(text.contains("hud_on_start"), "{text}");
     }
 }
