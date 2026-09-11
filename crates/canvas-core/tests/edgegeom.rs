@@ -3,8 +3,9 @@
 
 use canvas_core::{
     bezier_between, curve_point, curve_tangent, distance_point_to_polyline, distance_to_edge,
-    draft_curve, edge_at, edge_curve, nearest_side, port_at, port_point, side_normal, tessellate,
-    Canvas, Edge, Node, Side, EDGE_HIT_TOLERANCE, PORT_HIT_PX,
+    draft_curve, edge_at, edge_curve, edge_midpoint, edge_polyline, nearest_side, port_at,
+    port_point, route_polyline, side_normal, tessellate, Canvas, Edge, Node, Side, AVOID_MARGIN,
+    EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX,
 };
 
 fn node(id: &str, x: f32, y: f32, w: f32, h: f32) -> Node {
@@ -107,9 +108,9 @@ fn edge_hit_test_tolerance() {
     canvas.nodes.push(node("b", 500.0, 0.0, 100.0, 100.0));
     let edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
     // Середина кривой — y=50.
-    let near = distance_to_edge(&canvas, &edge, [250.0, 54.0]).unwrap();
+    let near = distance_to_edge(&canvas, &edge, [250.0, 54.0], false).unwrap();
     assert!(near < EDGE_HIT_TOLERANCE);
-    let far = distance_to_edge(&canvas, &edge, [250.0, 120.0]).unwrap();
+    let far = distance_to_edge(&canvas, &edge, [250.0, 120.0], false).unwrap();
     assert!(far > EDGE_HIT_TOLERANCE);
 }
 
@@ -233,12 +234,12 @@ fn edge_at_picks_nearest_within_tolerance() {
     // Висячая связь — пропускается без паники
     canvas.add_edge(Edge::new("e3", "a", None, "missing", None));
     // Рядом с горизонтальной кривой e1 (y=50)
-    assert_eq!(edge_at(&canvas, [250.0, 53.0]), Some(0));
+    assert_eq!(edge_at(&canvas, [250.0, 53.0], false), Some(0));
     // Рядом с вертикальной кривой e2 (x=50)
-    assert_eq!(edge_at(&canvas, [47.0, 250.0]), Some(1));
+    assert_eq!(edge_at(&canvas, [47.0, 250.0], false), Some(1));
     // Промах
-    assert_eq!(edge_at(&canvas, [250.0, 250.0]), None);
-    assert_eq!(edge_at(&canvas, [250.0, 120.0]), None);
+    assert_eq!(edge_at(&canvas, [250.0, 250.0], false), None);
+    assert_eq!(edge_at(&canvas, [250.0, 120.0], false), None);
 }
 
 /// Резиновая линия: концы — порт и курсор, контрольная точка у порта по нормали.
@@ -286,7 +287,7 @@ fn self_loop_geometry() {
     assert!(curve.c1[0] < curve.p1[0], "c1 влево от левого порта");
 
     // Hit-test работает
-    let hit = edge_at(&canvas, [200.0, 175.0]); // примерно середина
+    let hit = edge_at(&canvas, [200.0, 175.0], false); // примерно середина
     assert_eq!(hit, Some(0), "самопетля должна быть кликабельна");
 }
 
@@ -379,4 +380,159 @@ fn port_hitzone_at_extreme_zooms() {
 
     let port = port_at(&node, [250.0, 211.0], 1.0);
     assert_eq!(port, None, "за допуском 10px — промах");
+}
+
+// --- Огибание препятствий (обход нод) ---
+
+/// Все точки полилинии строго снаружи инфлированного rect?
+fn all_outside(points: &[[f32; 2]], rect: [f32; 4], margin: f32) -> bool {
+    let inflated = [
+        rect[0] - margin,
+        rect[1] - margin,
+        rect[2] + margin * 2.0,
+        rect[3] + margin * 2.0,
+    ];
+    // Строго внутри (граница допустима — маршрут идёт вдоль неё).
+    let inside = |p: [f32; 2]| {
+        p[0] > inflated[0]
+            && p[0] < inflated[0] + inflated[2]
+            && p[1] > inflated[1]
+            && p[1] < inflated[1] + inflated[3]
+    };
+    // Проверка сегментов, а не только вершин: линия может пересечь rect
+    // между вершинами. Сэмплируем каждый сегмент.
+    points.windows(2).all(|w| {
+        let steps = 32;
+        (0..=steps).all(|i| {
+            let t = i as f32 / steps as f32;
+            let p = [
+                w[0][0] + (w[1][0] - w[0][0]) * t,
+                w[0][1] + (w[1][1] - w[0][1]) * t,
+            ];
+            !inside(p)
+        })
+    })
+}
+
+/// Прямая полилиния через препятствие огибает его: все сэмплы снаружи
+/// инфлированного rect, концы на месте.
+#[test]
+fn route_polyline_detours_around_obstacle() {
+    let points = vec![[0.0, 50.0], [400.0, 50.0]];
+    let obstacle = [170.0, 0.0, 60.0, 100.0]; // пересекает y=50
+    let routed = route_polyline(&points, &[obstacle], AVOID_MARGIN, MAX_DETOURS);
+    assert!(
+        routed.len() > points.len(),
+        "вставлены waypoints: {routed:?}"
+    );
+    approx(routed[0], [0.0, 50.0]);
+    approx(*routed.last().unwrap(), [400.0, 50.0]);
+    assert!(
+        all_outside(&routed, obstacle, AVOID_MARGIN),
+        "огибание не касается инфлированного rect: {routed:?}"
+    );
+}
+
+/// Без препятствий полилиния возвращается без изменений.
+#[test]
+fn route_polyline_without_obstacles_is_identity() {
+    let points = vec![[0.0, 0.0], [100.0, 40.0], [200.0, 0.0]];
+    let routed = route_polyline(&points, &[], AVOID_MARGIN, MAX_DETOURS);
+    assert_eq!(routed, points);
+}
+
+/// Концевая нода не считается препятствием: связь может прилегать к своим нодам.
+#[test]
+fn edge_polyline_endpoint_nodes_are_not_obstacles() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 400.0, 0.0, 100.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_eq!(plain, avoided, "посторонних нод нет — маршруты совпадают");
+}
+
+/// Посторонняя нода на пути связи: avoid-полилиния огибает её, прямая — нет.
+#[test]
+fn edge_polyline_avoids_third_node() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 500.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("wall", 230.0, 0.0, 140.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    let wall = [230.0, 0.0, 140.0, 100.0];
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    assert!(
+        !all_outside(&plain, wall, AVOID_MARGIN),
+        "прямая Безье пересекает ноду: {plain:?}"
+    );
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_ne!(avoided, plain, "маршрут с огибанием отличается от прямой");
+    assert!(
+        all_outside(&avoided, wall, AVOID_MARGIN),
+        "огибание не касается ноды: {avoided:?}"
+    );
+}
+
+/// Hit-test по avoid-полилинии: точка на огибании попадает, прямая внутри
+/// препятствия — уже не на линии.
+#[test]
+fn edge_hit_test_follows_routed_polyline() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 500.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("wall", 230.0, 0.0, 140.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    // Центр «стены» (y=50): при avoid линия там не проходит — промах.
+    assert_eq!(edge_at(&canvas, [300.0, 50.0], true), None);
+    // Прямая Безье там проходит — попадание.
+    assert_eq!(edge_at(&canvas, [300.0, 50.0], false), Some(0));
+    // Середина avoid-линии кликабельна (где-то сверху или снизу стены).
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 48).unwrap();
+    let mid = edge_midpoint(&canvas, &canvas.edges[0], true).unwrap();
+    assert_eq!(
+        edge_at(&canvas, [mid[0], mid[1] + 2.0], true).or_else(|| edge_at(
+            &canvas,
+            [mid[0], mid[1] - 2.0],
+            true
+        )),
+        Some(0),
+        "середина огибания кликабельна: mid={mid:?}, line={avoided:?}"
+    );
+}
+
+/// Лимит detours защищает от зацикливания: маршрут завершается даже когда
+/// препятствия строят «коридор» (две ноды с зазором меньше 2×margin).
+#[test]
+fn route_polyline_terminates_in_tight_corridor() {
+    let points = vec![[0.0, 50.0], [400.0, 50.0]];
+    // Две ноды перекрывают коридор выше и ниже y=50 с зазором 10px
+    // (меньше 2×AVOID_MARGIN=24): коридор непроходим для инфлированных rect.
+    let obstacles = [[150.0, -200.0, 100.0, 245.0], [150.0, 55.0, 100.0, 245.0]];
+    let routed = route_polyline(&points, &obstacles, AVOID_MARGIN, MAX_DETOURS);
+    assert!(
+        routed.len() >= 2,
+        "маршрут построен, не зависли: {routed:?}"
+    );
+    approx(routed[0], [0.0, 50.0]);
+    approx(*routed.last().unwrap(), [400.0, 50.0]);
 }

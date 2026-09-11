@@ -6,7 +6,7 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::{curve_point, edge_curve, Canvas, Side, SpatialIndex, Thumbnail};
+use canvas_core::{edge_midpoint, Canvas, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
@@ -88,6 +88,9 @@ pub struct SceneView<'a> {
     pub hovered: Option<usize>,
     /// Резиновая линия новой связи (T8): (точка порта, сторона, курсор world).
     pub edge_draft: Option<([f32; 2], Side, [f32; 2])>,
+    /// Связи огибают посторонние ноды (глобальная настройка): рендер и
+    /// лейблы идут по огибающей полилинии (см. `canvas_core::edge_polyline`).
+    pub edges_avoid: bool,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -371,7 +374,8 @@ impl Renderer {
         // до вычисления каретки/выделения ниже
         let zoom_px = camera.zoom() * self.scale_factor;
         if let Some(session) = editing.as_deref_mut() {
-            if let Some((_, width, height)) = session_area(scene.canvas, session) {
+            if let Some((_, width, height)) = session_area(scene.canvas, session, scene.edges_avoid)
+            {
                 session.set_layout(
                     self.text.font_system_mut(),
                     width * zoom_px,
@@ -395,8 +399,9 @@ impl Renderer {
                 EditTarget::Node(_) => None,
             });
 
-        // Лейблы связей (T8): центр — середина кривой; подложка — квадом под
-        // текстом по размеру из кэша шейпинга (перешейп при смене текста/зума)
+        // Лейблы связей (T8): центр — середина дуги (при avoid — огибающей
+        // линии); подложка — квадом под текстом по размеру из кэша шейпинга
+        // (перешейп при смене текста/зума)
         let mut edge_labels: Vec<EdgeLabel> = Vec::new();
         let mut label_backdrops: Vec<CardInstance> = Vec::new();
         if titles_visible(zoom_px) {
@@ -407,10 +412,9 @@ impl Renderer {
                 let Some(text) = edge.label.as_deref().filter(|text| !text.is_empty()) else {
                     continue;
                 };
-                let Some(curve) = edge_curve(scene.canvas, edge) else {
+                let Some(center) = edge_midpoint(scene.canvas, edge, scene.edges_avoid) else {
                     continue;
                 };
-                let center = curve_point(&curve, 0.5);
                 let size = self.text.edge_label_size(&edge.id, text, zoom_px);
                 let w = size[0] + EDGE_LABEL_PADDING[0] * 2.0;
                 let h = size[1] + EDGE_LABEL_PADDING[1] * 2.0;
@@ -478,7 +482,9 @@ impl Renderer {
                     }
                 }
                 EditTarget::Edge(_) => {
-                    if let Some((origin, width, height)) = session_area(scene.canvas, session) {
+                    if let Some((origin, width, height)) =
+                        session_area(scene.canvas, session, scene.edges_avoid)
+                    {
                         // У лейбла связи нет карточки — бокс-подложка с рамкой
                         edge_edit_quads.push(CardInstance {
                             pos: origin,
@@ -553,7 +559,11 @@ impl Renderer {
         let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
         // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
         // в общем буфере = порядок рисования; рисуются диапазоном до сегментов
-        instances.extend(build_edge_instances(scene.canvas, selected_edge));
+        instances.extend(build_edge_instances(
+            scene.canvas,
+            selected_edge,
+            scene.edges_avoid,
+        ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
         let mut draw_ranges: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
@@ -664,7 +674,7 @@ impl Renderer {
         let editing_buffer = editing_ref.and_then(|session| {
             // (origin, ширина, высота) — clip тексту редактора: тело ноды
             // или бокс лейбла связи (оба таргета, T7/T8)
-            session_area(scene.canvas, session)
+            session_area(scene.canvas, session, scene.edges_avoid)
                 .map(|(origin, w, h)| (session.buffer(), origin, w, h))
         });
         if let Err(err) = self.text.prepare_titles(

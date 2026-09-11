@@ -19,6 +19,14 @@ pub const TESSELLATION_SEGMENTS: usize = 24;
 /// Минимальное смещение контрольных точек от портов (world-единицы).
 const MIN_CONTROL_OFFSET: f32 = 40.0;
 
+/// Зазор связи при обходе нод: препятствия инфлируются на эту величину
+/// (world-px), чтобы линия не липла к границам нод.
+pub const AVOID_MARGIN: f32 = 12.0;
+
+/// Предел числа огибаний на одну связь: страховка от зацикливания роутинга;
+/// при превышении возвращаем исходную полилинию (не хуже старого поведения).
+pub const MAX_DETOURS: usize = 8;
+
 /// Кубическая кривая Безье: концы в портах, контрольные точки — по нормалям.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CubicBezier {
@@ -159,11 +167,274 @@ pub fn edge_curve(canvas: &Canvas, edge: &Edge) -> Option<CubicBezier> {
 }
 
 /// Расстояние от world-точки до кривой связи; None для висячей связи.
-/// Hit-test: результат < EDGE_HIT_TOLERANCE — попадание.
-pub fn distance_to_edge(canvas: &Canvas, edge: &Edge, point: [f32; 2]) -> Option<f32> {
-    let curve = edge_curve(canvas, edge)?;
-    let points = tessellate(&curve, TESSELLATION_SEGMENTS);
+/// Hit-test: результат < EDGE_HIT_TOLERANCE — попадание. `avoid` — обход
+/// посторонних нод (глобальная настройка): рендер и hit-test ходят по одной
+/// и той же полилинии, чтобы кликабельная область совпадала с нарисованным.
+pub fn distance_to_edge(canvas: &Canvas, edge: &Edge, point: [f32; 2], avoid: bool) -> Option<f32> {
+    let points = edge_polyline(canvas, edge, avoid, TESSELLATION_SEGMENTS)?;
     Some(distance_point_to_polyline(point, &points))
+}
+
+/// Полилиния связи для рендера/hit-test'а: тесселяция Безье; при avoid —
+/// с огибанием посторонних нод (концевые ноды не препятствия).
+pub fn edge_polyline(
+    canvas: &Canvas,
+    edge: &Edge,
+    avoid: bool,
+    segments: usize,
+) -> Option<Vec<[f32; 2]>> {
+    let curve = edge_curve(canvas, edge)?;
+    let points = tessellate(&curve, segments.max(1));
+    if !avoid {
+        return Some(points);
+    }
+    let obstacles: Vec<[f32; 4]> = canvas
+        .nodes
+        .iter()
+        .filter(|node| node.id != edge.from_node && node.id != edge.to_node)
+        .map(|node| [node.x, node.y, node.width, node.height])
+        .collect();
+    Some(route_polyline(
+        &points,
+        &obstacles,
+        AVOID_MARGIN,
+        MAX_DETOURS,
+    ))
+}
+
+/// Середина связи по длине дуги (для лейбла и бокса редактирования):
+/// при avoid совпадает с видимой огибающей линией.
+pub fn edge_midpoint(canvas: &Canvas, edge: &Edge, avoid: bool) -> Option<[f32; 2]> {
+    let points = edge_polyline(canvas, edge, avoid, TESSELLATION_SEGMENTS)?;
+    let total: f32 = points
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum();
+    let half = total / 2.0;
+    let mut acc = 0.0;
+    for w in points.windows(2) {
+        let seg = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
+        if acc + seg >= half {
+            let t = ((half - acc) / seg.max(f32::EPSILON)).clamp(0.0, 1.0);
+            return Some([
+                w[0][0] + (w[1][0] - w[0][0]) * t,
+                w[0][1] + (w[1][1] - w[0][1]) * t,
+            ]);
+        }
+        acc += seg;
+    }
+    points.last().copied().or_else(|| points.first().copied())
+}
+
+// --- Огибание препятствий (обход нод) ---
+
+/// Rect [x, y, w, h], инфлированный на margin.
+fn inflate_rect(rect: [f32; 4], margin: f32) -> [f32; 4] {
+    [
+        rect[0] - margin,
+        rect[1] - margin,
+        rect[2] + margin * 2.0,
+        rect[3] + margin * 2.0,
+    ]
+}
+
+/// Точка внутри rect (граница считается внутренностью).
+fn point_in_rect(p: [f32; 2], rect: [f32; 4]) -> bool {
+    p[0] >= rect[0] && p[0] <= rect[0] + rect[2] && p[1] >= rect[1] && p[1] <= rect[1] + rect[3]
+}
+
+/// Пересекается ли отрезок a–b с прямоугольником (slab-метод).
+fn segment_hits_rect(a: [f32; 2], b: [f32; 2], rect: [f32; 4]) -> bool {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let mut t_enter = 0.0f32;
+    let mut t_exit = 1.0f32;
+    for axis in 0..2 {
+        let (start, dir, lo, hi) = if axis == 0 {
+            (a[0], d[0], rect[0], rect[0] + rect[2])
+        } else {
+            (a[1], d[1], rect[1], rect[1] + rect[3])
+        };
+        if dir.abs() < f32::EPSILON {
+            if start < lo || start > hi {
+                return false;
+            }
+        } else {
+            let (t0, t1) = ((lo - start) / dir, (hi - start) / dir);
+            let (t0, t1) = (t0.min(t1), t0.max(t1));
+            t_enter = t_enter.max(t0);
+            t_exit = t_exit.min(t1);
+            if t_enter > t_exit {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Точка входа отрезка a–b в rect (a снаружи): пересечение с ближней гранью.
+fn rect_entry(a: [f32; 2], b: [f32; 2], rect: [f32; 4]) -> Option<[f32; 2]> {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let mut t_enter = 0.0f32;
+    for axis in 0..2 {
+        let (start, dir, lo, hi) = if axis == 0 {
+            (a[0], d[0], rect[0], rect[0] + rect[2])
+        } else {
+            (a[1], d[1], rect[1], rect[1] + rect[3])
+        };
+        if dir.abs() < f32::EPSILON {
+            continue;
+        }
+        let (t0, t1) = ((lo - start) / dir, (hi - start) / dir);
+        t_enter = t_enter.max(t0.min(t1));
+    }
+    (t_enter > 0.0 && t_enter <= 1.0).then(|| [a[0] + d[0] * t_enter, a[1] + d[1] * t_enter])
+}
+
+/// Параметр точки на границе rect вдоль периметра (по часовой от левого
+/// верхнего угла): верх → право → низ → лево. Углы: TL=0, TR=w, BR=w+h,
+/// BL=2w+h; периметр L = 2(w+h).
+fn boundary_param(p: [f32; 2], rect: [f32; 4]) -> f32 {
+    let (w, h) = (rect[2], rect[3]);
+    let eps = 1e-3;
+    if (p[1] - rect[1]).abs() <= eps {
+        (p[0] - rect[0]).clamp(0.0, w)
+    } else if (p[0] - (rect[0] + w)).abs() <= eps {
+        w + (p[1] - rect[1]).clamp(0.0, h)
+    } else if (p[1] - (rect[1] + h)).abs() <= eps {
+        w + h + (rect[0] + w - p[0]).clamp(0.0, w)
+    } else {
+        2.0 * w + h + (rect[1] + h - p[1]).clamp(0.0, h)
+    }
+}
+
+/// Ближайшая к точке точка границы rect.
+fn nearest_boundary_point(p: [f32; 2], rect: [f32; 4]) -> [f32; 2] {
+    let (l, t, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+    let cx = p[0].clamp(l, l + w);
+    let cy = p[1].clamp(t, t + h);
+    if cx != p[0] || cy != p[1] {
+        return [cx, cy];
+    }
+    // Внутри: ближайшая грань.
+    let candidates = [
+        ([l, cy], cx - l),
+        ([l + w, cy], l + w - cx),
+        ([cx, t], cy - t),
+        ([cx, t + h], t + h - cy),
+    ];
+    candidates
+        .into_iter()
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(point, _)| point)
+        .unwrap_or([cx, cy])
+}
+
+/// Угловые waypoints вдоль более короткого пути по периметру rect от p до q
+/// (обе на границе). Порядок — от p к q, q НЕ включена.
+fn detour_corners(rect: [f32; 4], p: [f32; 2], q: [f32; 2]) -> Vec<[f32; 2]> {
+    let (l, t, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+    let perimeter = 2.0 * (w + h);
+    if perimeter <= f32::EPSILON {
+        return Vec::new();
+    }
+    let s_p = boundary_param(p, rect);
+    let s_q = boundary_param(q, rect);
+    let dist_cw = (s_q - s_p).rem_euclid(perimeter);
+    let dist_ccw = perimeter - dist_cw;
+    let corners = [
+        (0.0f32, [l, t]),
+        (w, [l + w, t]),
+        (w + h, [l + w, t + h]),
+        (2.0 * w + h, [l, t + h]),
+    ];
+    let mut waypoints: Vec<(f32, [f32; 2])> = corners
+        .into_iter()
+        .filter_map(|(s, point)| {
+            if dist_cw <= dist_ccw {
+                let off = (s - s_p).rem_euclid(perimeter);
+                (off > 1e-3 && off < dist_cw - 1e-3).then_some((off, point))
+            } else {
+                let off = (s_p - s).rem_euclid(perimeter);
+                (off > 1e-3 && off < dist_ccw - 1e-3).then_some((off, point))
+            }
+        })
+        .collect();
+    waypoints.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    waypoints.into_iter().map(|(_, point)| point).collect()
+}
+
+/// Огибание препятствий: полилиния обходит инфлированные прямоугольники
+/// нод короткой стороной. Детерминировано; при превышении `max_detours`
+/// возвращается исходная полилиния (деградация к прямой Безье, без петель).
+pub fn route_polyline(
+    points: &[[f32; 2]],
+    obstacles: &[[f32; 4]],
+    margin: f32,
+    max_detours: usize,
+) -> Vec<[f32; 2]> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let rects: Vec<[f32; 4]> = obstacles
+        .iter()
+        .map(|rect| inflate_rect(*rect, margin))
+        .filter(|rect| rect[2] > 0.0 && rect[3] > 0.0)
+        .collect();
+    if rects.is_empty() {
+        return points.to_vec();
+    }
+    let mut path = points.to_vec();
+    for _ in 0..max_detours {
+        // Первое пересечение любого сегмента с любым препятствием.
+        let mut hit: Option<(usize, usize, [f32; 2], usize)> = None;
+        'scan: for i in 0..path.len() - 1 {
+            for (ri, rect) in rects.iter().enumerate() {
+                if !segment_hits_rect(path[i], path[i + 1], *rect) {
+                    continue;
+                }
+                let entry = if point_in_rect(path[i], *rect) {
+                    path[i]
+                } else {
+                    rect_entry(path[i], path[i + 1], *rect).unwrap_or(path[i])
+                };
+                // Индекс первой точки полилинии за пределами rect.
+                let mut k = i + 1;
+                while k < path.len() && point_in_rect(path[k], *rect) {
+                    k += 1;
+                }
+                hit = Some((i, ri, entry, k));
+                break 'scan;
+            }
+        }
+        let Some((i, ri, entry, k)) = hit else {
+            break;
+        };
+        let rect = rects[ri];
+        let target = path.get(k).copied().or_else(|| path.last().copied());
+        let Some(target) = target else { break };
+        let exit = nearest_boundary_point(target, rect);
+        let corners = detour_corners(rect, entry, exit);
+        if (exit[0] - entry[0]).abs() < f32::EPSILON
+            && (exit[1] - entry[1]).abs() < f32::EPSILON
+            && corners.is_empty()
+        {
+            // Касание без огибания — дальше прогресса не будет.
+            break;
+        }
+        // Склейка: путь до входа, угловые waypoints, выход, остаток от k.
+        let mut rerouted = Vec::with_capacity(path.len() + corners.len() + 2);
+        rerouted.extend_from_slice(&path[..=i]);
+        if (entry[0] - path[i][0]).abs() > f32::EPSILON
+            || (entry[1] - path[i][1]).abs() > f32::EPSILON
+        {
+            rerouted.push(entry);
+        }
+        rerouted.extend_from_slice(&corners);
+        rerouted.push(exit);
+        rerouted.extend_from_slice(&path[k.min(path.len())..]);
+        path = rerouted;
+    }
+    path
 }
 
 /// Порт ноды под курсором: сторона, чья точка порта ближе всего к `point`
@@ -184,12 +455,15 @@ pub fn port_at(node: &Node, point: [f32; 2], zoom: f32) -> Option<Side> {
 
 /// Ближайшая к точке связь в допуске EDGE_HIT_TOLERANCE.
 /// Возвращает индекс в `canvas.edges`; None — промах (или все связи висячие).
-pub fn edge_at(canvas: &Canvas, point: [f32; 2]) -> Option<usize> {
+/// `avoid` — обход посторонних нод (см. `edge_polyline`).
+pub fn edge_at(canvas: &Canvas, point: [f32; 2], avoid: bool) -> Option<usize> {
     canvas
         .edges
         .iter()
         .enumerate()
-        .filter_map(|(index, edge)| distance_to_edge(canvas, edge, point).map(|d| (index, d)))
+        .filter_map(|(index, edge)| {
+            distance_to_edge(canvas, edge, point, avoid).map(|d| (index, d))
+        })
         .filter(|(_, dist)| *dist < EDGE_HIT_TOLERANCE)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(index, _)| index)

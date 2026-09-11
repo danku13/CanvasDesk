@@ -11,7 +11,7 @@
 //! Координаты клика/каретки/выделения — в пикселях буфера редактора
 //! (физические px относительно левого верхнего угла области редактирования).
 
-use canvas_core::{curve_point, edge_curve, Canvas};
+use canvas_core::{edge_midpoint, Canvas};
 use cosmic_text::{Action, Buffer, Cursor, Edit, Editor, FontSystem, Metrics, Motion, Selection};
 use glyphon::{Attrs, Shaping, Wrap};
 use winit::keyboard::{Key, NamedKey};
@@ -128,11 +128,15 @@ pub const EDGE_EDIT_WIDTH: f32 = 240.0;
 pub const EDGE_EDIT_HEIGHT: f32 = BODY_LINE_HEIGHT + 8.0;
 
 /// Область редактирования лейбла связи: бокс EDGE_EDIT_WIDTH × EDGE_EDIT_HEIGHT
-/// по центру кривой (t = 0.5). None — связи нет или она висячая.
-pub fn edge_edit_area(canvas: &Canvas, edge_index: usize) -> Option<([f32; 2], f32, f32)> {
+/// по центру связи (середина дуги; при avoid — по видимой огибающей линии).
+/// None — связи нет или она висячая.
+pub fn edge_edit_area(
+    canvas: &Canvas,
+    edge_index: usize,
+    avoid: bool,
+) -> Option<([f32; 2], f32, f32)> {
     let edge = canvas.edges.get(edge_index)?;
-    let curve = edge_curve(canvas, edge)?;
-    let mid = curve_point(&curve, 0.5);
+    let mid = edge_midpoint(canvas, edge, avoid)?;
     let origin = [
         mid[0] - EDGE_EDIT_WIDTH / 2.0,
         mid[1] - EDGE_EDIT_HEIGHT / 2.0,
@@ -141,12 +145,16 @@ pub fn edge_edit_area(canvas: &Canvas, edge_index: usize) -> Option<([f32; 2], f
 }
 
 /// Область редактирования сессии в world-координатах (левый верхний угол,
-/// ширина, высота): тело карточки для ноды, бокс у середины кривой — для
+/// ширина, высота): тело карточки для ноды, бокс у середины связи — для
 /// лейбла связи (T8).
-pub fn session_area(canvas: &Canvas, session: &EditingSession) -> Option<([f32; 2], f32, f32)> {
+pub fn session_area(
+    canvas: &Canvas,
+    session: &EditingSession,
+    avoid: bool,
+) -> Option<([f32; 2], f32, f32)> {
     match session.target() {
         EditTarget::Node(index) => canvas.nodes.get(index).map(body_area),
-        EditTarget::Edge(index) => edge_edit_area(canvas, index),
+        EditTarget::Edge(index) => edge_edit_area(canvas, index, avoid),
     }
 }
 
@@ -919,7 +927,7 @@ mod tests {
         ));
         let mut fs = FontSystem::new();
         let node_session = EditingSession::new(&mut fs, EditTarget::Node(0), "", 100.0, 50.0, 1.0);
-        let area = session_area(&canvas, &node_session).expect("нода есть");
+        let area = session_area(&canvas, &node_session, false).expect("нода есть");
         assert_eq!(area, {
             let (origin, w, h) = body_area(&canvas.nodes[0]);
             (origin, w, h)
@@ -927,7 +935,7 @@ mod tests {
         assert_eq!(node_session.node_index(), Some(0));
 
         let edge_session = EditingSession::new(&mut fs, EditTarget::Edge(0), "", 100.0, 50.0, 1.0);
-        let (origin, w, h) = session_area(&canvas, &edge_session).expect("связь есть");
+        let (origin, w, h) = session_area(&canvas, &edge_session, false).expect("связь есть");
         assert_eq!((w, h), (EDGE_EDIT_WIDTH, EDGE_EDIT_HEIGHT));
         // Центр бокса — середина кривой (Node::text высотой 120: порты на y = 60)
         assert!((origin[1] + h / 2.0 - 60.0).abs() < 1e-3);
@@ -935,7 +943,7 @@ mod tests {
 
         // Висячая/несуществующая связь — None
         let dangling = EditingSession::new(&mut fs, EditTarget::Edge(9), "", 100.0, 50.0, 1.0);
-        assert!(session_area(&canvas, &dangling).is_none());
+        assert!(session_area(&canvas, &dangling, false).is_none());
     }
 
     /// Маппинг клавиш: Enter — commit, Shift+Enter — новая строка, Esc — cancel,

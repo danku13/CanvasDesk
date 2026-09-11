@@ -156,6 +156,8 @@ pub struct Settings {
     pub grid_density: GridDensity,
     /// Тема интерфейса.
     pub theme: Theme,
+    /// Связи огибают посторонние ноды (роутинг полилинией).
+    pub edges_avoid_nodes: bool,
     /// HUD (fps/p95, F3) включён сразу при старте.
     pub hud_on_start: bool,
 }
@@ -168,6 +170,7 @@ impl Default for Settings {
             grid_style: GridStyle::Lines,
             grid_density: GridDensity::Medium,
             theme: Theme::Dark,
+            edges_avoid_nodes: true,
             hud_on_start: false,
         }
     }
@@ -228,6 +231,7 @@ mod tests {
             grid_style: GridStyle::Dots,
             grid_density: GridDensity::Sparse,
             theme: Theme::Light,
+            edges_avoid_nodes: false,
             hud_on_start: true,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
@@ -266,6 +270,7 @@ mod tests {
         assert_eq!(settings.grid_style, GridStyle::Lines);
         assert_eq!(settings.grid_density, GridDensity::Medium);
         assert_eq!(settings.theme, Theme::Dark);
+        assert!(settings.edges_avoid_nodes, "дефолт — огибать ноды");
         assert!(!settings.hud_on_start);
         assert!(warn.is_none());
     }
@@ -346,6 +351,7 @@ mod tests {
         assert!(text.contains("grid_style"), "{text}");
         assert!(text.contains("grid_density"), "{text}");
         assert!(text.contains("theme"), "{text}");
+        assert!(text.contains("edges_avoid_nodes"), "{text}");
         assert!(text.contains("hud_on_start"), "{text}");
     }
 }

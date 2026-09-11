@@ -203,19 +203,68 @@ fn dot(center: [f32; 2], d: f32, fill: [f32; 4]) -> CardInstance {
     }
 }
 
-/// Кружки вдоль кривой (полилиния тесселяции) + стрелка на конце.
-/// Стрелка — два «уса» из кружков от конца кривой назад по касательной ±30°.
-fn curve_dots(
-    curve: &canvas_core::CubicBezier,
+/// Равномерный ресэмплинг полилинии по длине дуги (шаг `step`).
+fn sample_polyline(points: &[[f32; 2]], step: f32) -> Vec<[f32; 2]> {
+    let mut samples = Vec::new();
+    if points.is_empty() {
+        return samples;
+    }
+    samples.push(points[0]);
+    let mut carried = 0.0f32;
+    for w in points.windows(2) {
+        let seg = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+        let len = seg[0].hypot(seg[1]);
+        if len < f32::EPSILON {
+            continue;
+        }
+        let mut dist = step - carried;
+        while dist <= len {
+            let t = dist / len;
+            samples.push([w[0][0] + seg[0] * t, w[0][1] + seg[1] * t]);
+            dist += step;
+        }
+        carried = len - (dist - step);
+    }
+    if let Some(last) = points.last() {
+        let dup = samples
+            .last()
+            .is_some_and(|s| (s[0] - last[0]).abs() < 1e-3 && (s[1] - last[1]).abs() < 1e-3);
+        if !dup {
+            samples.push(*last);
+        }
+    }
+    samples
+}
+
+/// Кружки вдоль полилинии + опционально стрелка на конце по направлению
+/// последнего сегмента (применяется и к огибающим маршрутам).
+fn polyline_dots(
+    points: &[[f32; 2]],
     d: f32,
     fill: [f32; 4],
+    arrow: bool,
     out: &mut Vec<CardInstance>,
 ) {
-    for point in canvas_core::tessellate(curve, EDGE_RENDER_SEGMENTS) {
+    if points.is_empty() {
+        return;
+    }
+    let step = (d * 0.8).max(0.5);
+    for point in sample_polyline(points, step) {
         out.push(dot(point, d, fill));
     }
-    let tangent = canvas_core::curve_tangent(curve, 1.0);
-    let back = [-tangent[0], -tangent[1]];
+    if !arrow {
+        return;
+    }
+    let Some(last) = points.last() else { return };
+    let Some(prev) = points.get(points.len().saturating_sub(2)) else {
+        return;
+    };
+    let tangent = [last[0] - prev[0], last[1] - prev[1]];
+    let len = tangent[0].hypot(tangent[1]);
+    if len < f32::EPSILON {
+        return;
+    }
+    let back = [-tangent[0] / len, -tangent[1] / len];
     let (sin, cos) = ARROW_ANGLE.sin_cos();
     for sign in [1.0f32, -1.0] {
         // Поворот вектора back на ±ARROW_ANGLE
@@ -226,7 +275,7 @@ fn curve_dots(
         for i in 1..=ARROW_DOTS {
             let dist = ARROW_LEN * i as f32 / ARROW_DOTS as f32;
             out.push(dot(
-                [curve.p1[0] + dir[0] * dist, curve.p1[1] + dir[1] * dist],
+                [last[0] + dir[0] * dist, last[1] + dir[1] * dist],
                 d,
                 fill,
             ));
@@ -236,15 +285,19 @@ fn curve_dots(
 
 /// Инстансы всех связей канваса (T8): кривые-«чётки» и стрелки.
 /// Выделенная связь (`selected` — индекс в `canvas.edges`) ярче и толще.
-/// Висячие связи (без ноды) пропускаются. Добавлять ПЕРЕД инстансами
-/// карточек — связи под нодами (порядок в буфере = порядок рисования).
+/// Висячие связи (без ноды) пропускаются. `avoid` — обход посторонних нод
+/// (глобальная настройка), рендер идёт по огибающей полилинии.
+/// Добавлять ПЕРЕД инстансами карточек — связи под нодами (порядок в буфере
+/// = порядок рисования).
 pub fn build_edge_instances(
     canvas: &canvas_core::Canvas,
     selected: Option<usize>,
+    avoid: bool,
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
-        let Some(curve) = canvas_core::edge_curve(canvas, edge) else {
+        let Some(points) = canvas_core::edge_polyline(canvas, edge, avoid, EDGE_RENDER_SEGMENTS)
+        else {
             continue;
         };
         let is_selected = selected == Some(index);
@@ -258,7 +311,7 @@ pub fn build_edge_instances(
         } else {
             EDGE_DOT
         };
-        curve_dots(&curve, d, fill, &mut out);
+        polyline_dots(&points, d, fill, true, &mut out);
     }
     out
 }
@@ -651,7 +704,7 @@ mod tests {
         assert_eq!(named_color(Some("#zzz")), None);
     }
 
-    /// Инстансы связей (T8): кружки тесселяции + усы стрелки; выделенная —
+    /// Инстансы связей (T8): кружки вдоль полилинии + усы стрелки; выделенная —
     /// акцентом и толще; цвет из edge.color; висячая связь пропускается.
     #[test]
     fn edge_instances_chain_and_arrow() {
@@ -667,9 +720,12 @@ mod tests {
         canvas.add_edge(edge);
         canvas.add_edge(canvas_core::Edge::new("e2", "a", None, "missing", None));
 
-        let per_edge = EDGE_RENDER_SEGMENTS + 1 + ARROW_DOTS * 2;
-        let instances = build_edge_instances(&canvas, None);
-        assert_eq!(instances.len(), per_edge, "висячая e2 пропущена");
+        let instances = build_edge_instances(&canvas, None, false);
+        assert!(
+            instances.len() > ARROW_DOTS * 2,
+            "кружки линии + стрелка: {}",
+            instances.len()
+        );
         // Все инстансы — кружки без тени цвета пресета "2"
         let expected = named_color(Some("2")).expect("пресет");
         for inst in &instances {
@@ -678,17 +734,47 @@ mod tests {
             assert_eq!(inst.fill, expected);
             assert_eq!(inst.size[0], EDGE_DOT);
         }
-        // Первая и последняя точки кривой — в портах
+        // Первая точка — в порту from (ресэмплинг начинается с p0)
         assert_eq!(
             instances[0].pos,
             [100.0 - EDGE_DOT / 2.0, 50.0 - EDGE_DOT / 2.0]
         );
 
-        // Выделенная связь — акцент и толще
-        let selected = build_edge_instances(&canvas, Some(0));
-        assert_eq!(selected.len(), per_edge);
+        // Выделенная связь — акцент и толще (шаг ресэмплинга зависит от d,
+        // поэтому число кружков иное — сравниваем только атрибуты)
+        let selected = build_edge_instances(&canvas, Some(0), false);
+        assert!(selected.len() > ARROW_DOTS * 2);
         assert_eq!(selected[0].fill, SELECTION_BORDER);
         assert_eq!(selected[0].size[0], EDGE_DOT_SELECTED);
+    }
+
+    /// Обход нод: при avoid=true инстансы строятся по огибающей полилинии
+    /// (их число отличается от прямой Безье, пропусков нет).
+    #[test]
+    fn edge_instances_avoid_route() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("b", "C:/b.png", 500.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("wall", "C:/w.png", 230.0, 0.0, 140.0, 100.0));
+        canvas.add_edge(canvas_core::Edge::new("e1", "a", None, "b", None));
+        let plain = build_edge_instances(&canvas, None, false);
+        let avoided = build_edge_instances(&canvas, None, true);
+        assert!(
+            avoided.len() > plain.len(),
+            "огибающий маршрут длиннее прямой: {} vs {}",
+            avoided.len(),
+            plain.len()
+        );
+        assert!(
+            avoided.len() != plain.len() || avoided.iter().zip(&plain).any(|(a, b)| a.pos != b.pos),
+            "инстансы огибающего маршрута отличаются от прямой"
+        );
     }
 
     /// Порты hover-ноды: 4 кружка по центрам сторон, акцентный цвет.

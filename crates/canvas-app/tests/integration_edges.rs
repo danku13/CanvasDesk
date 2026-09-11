@@ -86,10 +86,10 @@ fn test_create_edge_via_port_drag() {
     assert_eq!(curve.p1, [400.0, 50.0]); // левый порт b
 
     // 8. Hit-test связи работает
-    let hit = edge_at(&canvas, [250.0, 53.0]); // рядом с кривой
+    let hit = edge_at(&canvas, [250.0, 53.0], false); // рядом с кривой
     assert_eq!(hit, Some(0), "клик рядом с линией должен попадать в edge");
 
-    let miss = edge_at(&canvas, [250.0, 200.0]); // далеко
+    let miss = edge_at(&canvas, [250.0, 200.0], false); // далеко
     assert_eq!(miss, None, "клик далеко от линии не должен попадать");
 }
 
@@ -104,7 +104,8 @@ fn test_edit_edge_label_double_click() {
     assert_eq!(canvas.edges.len(), 1);
 
     // Позиция бокса редактирования — по центру кривой
-    let edit_area = edge_edit_area(&canvas, 0).expect("область редактирования должна существовать");
+    let edit_area =
+        edge_edit_area(&canvas, 0, false).expect("область редактирования должна существовать");
     let (origin, width, height) = edit_area;
 
     // Проверяем размеры бокса
@@ -287,7 +288,7 @@ fn test_self_loop_geometry() {
     assert!(curve.c1[0] < curve.p1[0], "c1 влево от левого порта");
 
     // Hit-test работает
-    let hit = edge_at(&canvas, [200.0, 175.0]); // примерно середина
+    let hit = edge_at(&canvas, [200.0, 175.0], false); // примерно середина
     assert_eq!(hit, Some(0), "самопетля должна быть кликабельна");
 }
 
@@ -396,7 +397,7 @@ fn test_edge_edit_session_zoom() {
         Some(Side::Left),
     ));
 
-    let (_origin, width, height) = edge_edit_area(&canvas, 0).expect("area exists");
+    let (_origin, width, height) = edge_edit_area(&canvas, 0, false).expect("area exists");
 
     let mut font_system = FontSystem::new();
     let mut session = EditingSession::new(

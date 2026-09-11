@@ -837,13 +837,15 @@ impl App {
     }
 
     /// Начать редактирование лейбла связи (T8): двойной клик по линии.
-    /// Бокс редактирования — по центру кривой (edge_edit_area).
+    /// Бокс редактирования — по центру дуги связи (edge_edit_area).
     fn begin_editing_edge(&mut self, index: usize) {
         let Some(edge) = self.scene.canvas.edges.get(index) else {
             return;
         };
         let text = edge.label.clone().unwrap_or_default();
-        let Some((_, width, height)) = edge_edit_area(&self.scene.canvas, index) else {
+        let Some((_, width, height)) =
+            edge_edit_area(&self.scene.canvas, index, self.settings.edges_avoid_nodes)
+        else {
             return;
         };
         let zoom_px = self.zoom_px();
@@ -1667,6 +1669,9 @@ impl App {
                     renderer.set_grid_steps(minor, major);
                 }
             }
+            SettingsRow::EdgesAvoid => {
+                self.settings.edges_avoid_nodes = !self.settings.edges_avoid_nodes;
+            }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -2055,6 +2060,7 @@ impl ApplicationHandler<AppEvent> for App {
                         selected: self.scene.selected,
                         hovered: self.hovered,
                         edge_draft,
+                        edges_avoid: self.settings.edges_avoid_nodes,
                     };
                     match renderer.render(
                         &self.camera,
@@ -2381,9 +2387,10 @@ impl App {
                 // редактирования — в курсор, клик снаружи — commit и обычная
                 // обработка
                 if let Some(target) = self.editing.as_ref().map(EditingSession::target) {
+                    let avoid = self.settings.edges_avoid_nodes;
                     let inside = match target {
                         EditTarget::Node(index) => hit == Some(index),
-                        EditTarget::Edge(index) => edge_edit_area(&self.scene.canvas, index)
+                        EditTarget::Edge(index) => edge_edit_area(&self.scene.canvas, index, avoid)
                             .is_some_and(|(origin, width, height)| {
                                 world[0] >= origin[0]
                                     && world[0] <= origin[0] + width
@@ -2396,7 +2403,8 @@ impl App {
                         if let (Some(session), Some(renderer)) =
                             (self.editing.as_mut(), self.renderer.as_mut())
                         {
-                            if let Some((origin, _, _)) = session_area(&self.scene.canvas, session)
+                            if let Some((origin, _, _)) =
+                                session_area(&self.scene.canvas, session, avoid)
                             {
                                 let x = ((world[0] - origin[0]) * zoom_px) as i32;
                                 let y = ((world[1] - origin[1]) * zoom_px) as i32;
@@ -2432,8 +2440,9 @@ impl App {
                 // по пустому месту — новая заметка, по text-ноде —
                 // редактирование, по линии связи — лейбл связи (T8)
                 if self.double_click.register(Instant::now(), self.cursor) {
+                    let avoid = self.settings.edges_avoid_nodes;
                     match hit {
-                        None => match edge_at(&self.scene.canvas, world) {
+                        None => match edge_at(&self.scene.canvas, world, avoid) {
                             Some(edge_index) => self.begin_editing_edge(edge_index),
                             None => {
                                 let index = self.create_note_at(world);
@@ -2484,7 +2493,8 @@ impl App {
                     // в допуске EDGE_HIT_TOLERANCE, иначе сброс выделения
                     None => {
                         self.scene.selected =
-                            edge_at(&self.scene.canvas, world).map(Selection::Edge);
+                            edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
+                                .map(Selection::Edge);
                     }
                 }
                 self.request_redraw();
@@ -2702,7 +2712,9 @@ impl App {
             let zoom_px = self.zoom_px();
             if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
             {
-                if let Some((origin, _, _)) = session_area(&self.scene.canvas, session) {
+                if let Some((origin, _, _)) =
+                    session_area(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
+                {
                     let x = ((world[0] - origin[0]) * zoom_px) as i32;
                     let y = ((world[1] - origin[1]) * zoom_px) as i32;
                     session.drag(renderer.font_system_mut(), x, y);
