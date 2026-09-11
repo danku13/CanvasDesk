@@ -359,6 +359,35 @@ fn write_style_field(
     Ok(())
 }
 
+/// Ужать окно до рабочей области виртуального экрана (union rcWork мониторов,
+/// т.е. экран без таскбара) — деградация фолбэка R14 при провале attach:
+/// desktop-окно создано на весь виртуальный экран, и как top-level оно иначе
+/// перекрывает Пуск и иконки. Work area недоступна — no-op (оставляем как
+/// есть, деградация уже зафиксирована вызывающим).
+pub fn shrink_to_work_area(hwnd: HWND) {
+    let Some(work) = super::hierarchy::virtual_work_rect() else {
+        tracing::warn!("рабочая область недоступна — фолбэк-окно оставлено fullscreen");
+        return;
+    };
+    // SAFETY: hwnd — живое окно этого процесса (фолбэк вызывается сразу
+    // после attach-провала, окно не пересоздаётся); width/height rcWork
+    // неотрицательны; SWP_NOZORDER — Z-order top-level окна не трогаем,
+    // NOACTIVATE — фокус не забираем.
+    if let Err(err) = unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            work.left,
+            work.top,
+            work.width(),
+            work.height(),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    } {
+        tracing::warn!(%err, "shrink_to_work_area: SetWindowPos провален — окно fullscreen");
+    }
+}
+
 /// Сообщение фолбэка (R14, координаторская интеграционная точка T15-E):
 /// любая ошибка шага встройки → пользователь обязан увидеть, почему
 /// приложение работает в оконном режиме (TASKS T15), а не молчаливый warn.

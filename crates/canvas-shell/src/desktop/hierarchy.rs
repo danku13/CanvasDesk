@@ -236,6 +236,20 @@ pub fn virtual_screen_rect() -> Option<ScreenRect> {
     super::union_rects(&rects)
 }
 
+/// Рабочая область виртуального экрана: union rcWork мониторов (экран БЕЗ
+/// таскбара/панелей). Используется фолбэком R14: при провале attach окно
+/// в desktop-режиме иначе остаётся borderless на весь виртуальный экран и
+/// перекрывает Пуск и иконки. Тот же R13-паттерн, что у virtual_screen_rect,
+/// но трамплин читает rcWork.
+pub fn virtual_work_rect() -> Option<ScreenRect> {
+    let mut rects: Vec<ScreenRect> = Vec::new();
+    let lparam = LPARAM(&mut rects as *mut Vec<ScreenRect> as isize);
+    // SAFETY: зеркально virtual_screen_rect выше (синхронное перечисление,
+    // rects на этом же стеке живёт всё время вызова).
+    let _ = unsafe { EnumDisplayMonitors(None, None, Some(enum_work_monitors_proc), lparam) };
+    super::union_rects(&rects)
+}
+
 // ---------------------------------------------------------------------------
 // Приватные Win32-хелперы (SAFETY на каждый unsafe, AGENTS.md правило 6)
 // ---------------------------------------------------------------------------
@@ -361,6 +375,35 @@ extern "system" fn enum_monitors_proc(
     let ok = unsafe { GetMonitorInfoW(hmonitor, &mut info) }.as_bool();
     if ok {
         let rc = info.rcMonitor;
+        rects.push(ScreenRect::from_ltrb(rc.left, rc.top, rc.right, rc.bottom));
+    }
+    true.into()
+}
+
+/// Трамплин EnumDisplayMonitors для virtual_work_rect (R13): то же, что
+/// enum_monitors_proc, но в union идёт rcWork (рабочая область — экран
+/// минус таскбар/панели монитора). Ошибка монитора — пропуск; всегда TRUE.
+extern "system" fn enum_work_monitors_proc(
+    hmonitor: HMONITOR,
+    _hdc: HDC,
+    _clip: *mut RECT,
+    lparam: LPARAM,
+) -> BOOL {
+    // SAFETY: lparam — &mut Vec<ScreenRect> со стека virtual_work_rect
+    // (того же потока/стека — см. SAFETY там); перечисление синхронно,
+    // Vec жив всю итерацию.
+    let rects = unsafe { &mut *(lparam.0 as *mut Vec<ScreenRect>) };
+    // cbSize — тот же MONITORINFO (rcWork входит в базовую структуру,
+    // MONITORINFOEXW не нужен).
+    let mut info = MONITORINFO {
+        cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: info корректно инициализирована (cbSize = sizeof); hmonitor
+    // выдан перечислителем в этом же вызове; FALSE — пропуск монитора.
+    let ok = unsafe { GetMonitorInfoW(hmonitor, &mut info) }.as_bool();
+    if ok {
+        let rc = info.rcWork;
         rects.push(ScreenRect::from_ltrb(rc.left, rc.top, rc.right, rc.bottom));
     }
     true.into()

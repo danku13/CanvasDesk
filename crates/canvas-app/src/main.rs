@@ -611,6 +611,10 @@ impl App {
             Err(err) => {
                 tracing::warn!(%err, "встройка в десктоп не удалась — оконный режим");
                 attach::fallback_message_box(&err.to_string());
+                // R14-деградация: desktop-окно создано borderless на весь
+                // виртуальный экран — как top-level оно перекрывает Пуск и
+                // иконки. Ужимаем до рабочей области (экран без таскбара).
+                attach::shrink_to_work_area(hwnd);
             }
         }
     }
