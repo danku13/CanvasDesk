@@ -587,16 +587,20 @@ impl Renderer {
         }
         instances.extend_from_slice(&label_backdrops);
         instances.extend_from_slice(&edge_edit_quads);
-        // Оверлеи приложения (контекстное меню, панель настроек) — поверх всех
-        // карточек: расширяют диапазон карточек финального сегмента; их тексты
-        // (подписи меню, строки панели) рисуются финальной текст-группой.
+        // World-space оверлеи (контекстное меню, T7; призраки дропа, T9;
+        // пульс результата, T14) — в диапазоне финального сегмента: поверх
+        // его карточек, под его текстом
         instances.extend_from_slice(overlay.instances);
+        // Screen-space оверлеи (панель поиска/настроек, тултип): ОТДЕЛЬНЫЙ
+        // диапазон — раньше расширяли диапазон последнего сегмента, и
+        // тамбнейлы/тексты его нод перекрывали панель (баг T14). Рисуются
+        // финальным проходом после всех сегментов; их тексты — отдельной
+        // группой TextSystem после этих квадов (иначе фон закрыл бы строки)
+        let overlay_start = instances.len() as u32;
         for inst in overlay.screen_instances {
             instances.push(screen_instance_to_world(camera, viewport_logical, inst));
         }
-        if let Some(last) = draw_ranges.last_mut() {
-            last.0 = last.0.start..instances.len() as u32;
-        }
+        let overlay_range = overlay_start..instances.len() as u32;
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -704,6 +708,17 @@ impl Renderer {
                         tracing::warn!(?err, "отрисовка текста пропущена");
                     }
                 }
+            }
+            // Screen-space оверлеи (T14): квады панелей поверх всех сегментов,
+            // их тексты — отдельной группой после квадов
+            if !overlay_range.is_empty() {
+                self.cards.draw_range(&mut pass, overlay_range.clone());
+            }
+            if let Err(err) = self
+                .text
+                .draw_group(&mut pass, TextSystem::overlay_group(&zplan))
+            {
+                tracing::warn!(?err, "отрисовка оверлейных текстов пропущена");
             }
             // Миникарта (T13-B): последний квад кадра — после карточек,
             // тамбнейлов и ВСЕХ текст-групп (HUD и оверлеи приложения —

@@ -223,7 +223,8 @@ pub struct TitleFrame<'a> {
     pub screen_texts: &'a [ScreenText<'a>],
     /// Z-план кадра (zorder.rs): текст-группы — тексты нод рисуются
     /// сегментами между карточками, чтобы текст фоновой ноды не ложился
-    /// поверх карточек переднего плана. Финальная группа — оверлеи и HUD.
+    /// поверх карточек переднего плана. Финальная группа — лейблы связей,
+    /// подписи меню и HUD; screen-тексты панелей — в `TextSystem::overlay_group`.
     pub zplan: &'a ZPlan,
     /// Лейблы связей (T8): по центрам кривых; лейбл редактируемой связи
     /// сюда не передаётся — его рисует EditingSession. Рисуются в финальной
@@ -590,7 +591,13 @@ impl TextSystem {
         // и до карточек, перекрывающих его ноды (z-порядок, zorder.rs).
         let group_count = frame.zplan.group_count();
         let final_group = frame.zplan.final_group();
-        while self.renderers.len() < group_count {
+        // Группа screen-space оверлеев (панель поиска/настроек, тултип):
+        // индекс за пределами z-плана — её квады рисует рендерер финальным
+        // проходом ПОСЛЕ всех сегментов, тексты — этой группой после квадов.
+        // Раньше квады оверлея расширяли диапазон последнего сегмента, и
+        // тамбнейлы/тексты его нод перекрывали панель (баг T14).
+        let overlay_group = group_count;
+        while self.renderers.len() <= overlay_group {
             let renderer = TextRenderer::new(
                 &mut self.atlas,
                 device,
@@ -759,7 +766,8 @@ impl TextSystem {
                 }
             }
             // Финальная группа поверх всего кадра: лейблы связей (T8),
-            // подписи меню (T7), screen-тексты панели настроек и HUD (F3)
+            // подписи меню (T7) и HUD (F3). Screen-тексты панелей — в
+            // overlay_group (после квадов оверлея, см. ниже)
             if g == final_group {
                 // Лейблы связей (T8): текст по центру кривой — кэш обновлён
                 // в фазе 1, подложка лейбла уходит в карточки оверлей-региона
@@ -804,25 +812,6 @@ impl TextSystem {
                         custom_glyphs: &[],
                     });
                 }
-                for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
-                    let left = st.origin[0] * scale_factor;
-                    let top = st.origin[1] * scale_factor;
-                    let line_height = st.font_size * scale_factor * 1.3;
-                    areas.push(TextArea {
-                        buffer,
-                        left,
-                        top,
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: left as i32,
-                            top: top as i32,
-                            right: (left + st.width * scale_factor) as i32,
-                            bottom: (top + line_height) as i32,
-                        },
-                        default_color: st.color,
-                        custom_glyphs: &[],
-                    });
-                }
                 areas.extend(
                     hud_buffers
                         .iter()
@@ -854,6 +843,40 @@ impl TextSystem {
                 )?;
             }
         }
+        // Screen-тексты (панель поиска/настроек, тултип): отдельная группа
+        // ПОСЛЕ квадов оверлея — иначе их фон (квады) рисовался бы после
+        // текстов и закрывал собственные строки панели
+        let mut overlay_areas: Vec<TextArea> = Vec::with_capacity(screen_buffers.len());
+        for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
+            let left = st.origin[0] * scale_factor;
+            let top = st.origin[1] * scale_factor;
+            let line_height = st.font_size * scale_factor * 1.3;
+            overlay_areas.push(TextArea {
+                buffer,
+                left,
+                top,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: left as i32,
+                    top: top as i32,
+                    right: (left + st.width * scale_factor) as i32,
+                    bottom: (top + line_height) as i32,
+                },
+                default_color: st.color,
+                custom_glyphs: &[],
+            });
+        }
+        if let Some(renderer) = self.renderers.get_mut(overlay_group) {
+            renderer.prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                overlay_areas,
+                &mut self.swash_cache,
+            )?;
+        }
         Ok(())
     }
 
@@ -869,6 +892,15 @@ impl TextSystem {
             Some(renderer) => renderer.render(&self.atlas, &self.viewport, pass),
             None => Ok(()),
         }
+    }
+
+    /// Индекс группы screen-space оверлеев (панель поиска/настроек, тултип):
+    /// на один больше всех групп z-плана — её тексты рисуются ПОСЛЕ квадов
+    /// оверлея, которые рендерер выводит финальным проходом после всех
+    /// сегментов (иначе тамбнейлы/тексты последнего сегмента перекрывали
+    /// панель, баг T14).
+    pub fn overlay_group(zplan: &crate::zorder::ZPlan) -> usize {
+        zplan.group_count()
     }
 
     /// Доступ к FontSystem для операций EditingSession (T7): ввод, каретка,
