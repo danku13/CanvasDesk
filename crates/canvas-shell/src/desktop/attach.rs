@@ -7,8 +7,14 @@
 //!    репарентинга; bAlpha=255 — полная непрозрачность, требование
 //!    Microsoft для DX blt present);
 //! 3. SetParent(hwnd, progman) — parent = Progman, НЕ WorkerW;
-//! 4. SetWindowPos(hwnd, hWndInsertAfter = def_view, NOMOVE|NOSIZE|
-//!    NOACTIVATE) — встаём в Z-order сразу ПОД слоем иконок;
+//! 4. SetWindowPos(hwnd, HWND_TOP, NOMOVE|NOSIZE|NOACTIVATE) — встаём
+//!    в Z-order НАД слоем иконок (DefView). Отступление от R2 (там —
+//!    под DefView, позиция обоев): CanvasDesk — ЗАМЕНА десктопа (M4),
+//!    ему нужен ввод, а DefView непрозрачен для hit-test ДАЖЕ со
+//!    скрытыми иконками 0x7402 (наблюдение пробником WindowFromPoint:
+//!    точка возвращает DefView, канвас «виден, но мёртв»). Иконки
+//!    скрываются (T17) на обеих стратегиях — слой под нами всё равно
+//!    перекрыт опаком;
 //! 5. ensure_worker_w_z_order — WorkerW обязан остаться ПОСЛЕДНИМ
 //!    ребёнком Progman (иначе обои перекроют нас; Lively: «Unexpected
 //!    WorkerW Z-order» — случай реальный).
@@ -17,11 +23,11 @@
 //! весь виртуальный экран + верификация стилей перечитыванием (R3).
 //! WorkerW может отсутствовать (Explorer его не породил): тогда хост = Progman
 //! на обеих схемах — подложка Progman (фон десктопа) рисуется под детьми,
-//! владелец DefView с иконками остаётся top-level над канвасом. Владелец
-//! DefView как хост НЕ подходит: он рисует обои опаком, дочернее окно под
-//! DefView перекрывается («видно только обои», наблюдение на фоне-картинке).
-//! Любая ошибка шага → AttachError → фолбэк на обычное окно (R14).
-//! Чистая реализация по описанию механики (RECIPES §0).
+//! а слой иконок перекрыт нами (Z-order выше) и скрыт 0x7402 (T17).
+//! Владелец DefView как хост НЕ подходит: он рисует обои опаком, дочернее
+//! окно под DefView перекрывается («видно только обои», наблюдение на
+//! фоне-картинке). Любая ошибка шага → AttachError → фолбэк на обычное
+//! окно (R14). Чистая реализация по описанию механики (RECIPES §0).
 
 use super::hierarchy::{DesktopHierarchy, HierarchyError};
 use thiserror::Error;
@@ -30,7 +36,7 @@ use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
-    SetWindowPos, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_BOTTOM, LWA_ALPHA,
+    SetWindowPos, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_BOTTOM, HWND_TOP, LWA_ALPHA,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_LONG_PTR_INDEX, WS_EX_LAYERED,
     WS_EX_NOACTIVATE,
 };
@@ -137,21 +143,23 @@ pub fn attach(
     tracing::debug!(parent = ?parent, "attach: set_parent");
 
     // ---- R2 шаги 4–5: Z-order (ТОЛЬКО Raised) ---------------------------
-    // Шаг 4: insert-after = def_view — встаём в Z-order сразу ПОД слоем
-    // иконок (DefView поверх нас). Classic шаг пропускает: со WorkerW окно
-    // — единственный ребёнок WorkerW, без WorkerW (хост Progman) DefView —
-    // не наш sibling (он в другом top-level), вставать «под» него некуда —
-    // иконки и так top-level НАД Progman.
+    // Шаг 4: HWND_TOP — встаём в Z-order НАД слоем иконок (отступление от
+    // R2, обоснование в доке модуля: DefView непрозрачен для hit-test даже
+    // со скрытыми иконками, интерактивному канвасу нужен ввод). Classic шаг
+    // пропускает: со WorkerW окно — единственный ребёнок WorkerW (соседей
+    // в Z-order нет); без WorkerW (хост Progman) владелец DefView — top-level
+    // из другой sibling-группы, Z-order детей Progman на него не влияет —
+    // там ввод обеспечивает скрытие иконок 0x7402 (T17).
     // Шаг 5 (ensure_worker_w_z_order) — WorkerW последним ребёнком Progman
     // (обои под нами); без WorkerW — нечего фиксировать.
     if raised {
-        // SAFETY: hwnd/def_view валидны (детект T15-B); флаги
-        // NOMOVE|NOSIZE|NOACTIVATE — меняется только Z-order, ни позиция,
-        // ни размер, ни фокус не затрагиваются.
+        // SAFETY: hwnd валиден (детект T15-B); флаги NOMOVE|NOSIZE|
+        // NOACTIVATE — меняется только Z-order, ни позиция, ни размер,
+        // ни фокус не затрагиваются; HWND_TOP — псевдо-хэндл (HWND(0)).
         if let Err(err) = unsafe {
             SetWindowPos(
                 hwnd,
-                Some(hierarchy.def_view),
+                Some(HWND_TOP),
                 0,
                 0,
                 0,
@@ -162,7 +170,7 @@ pub fn attach(
             tracing::warn!(%err, "attach: SetWindowPos Z-order провален (R2 шаг 4)");
             return Err(AttachError::SetWindowPosFailed);
         }
-        tracing::debug!("attach: z_order под DefView");
+        tracing::debug!("attach: z_order НАД DefView");
         // R2 шаг 5 — WorkerW последним ребёнком Progman.
         ensure_worker_w_z_order(hierarchy)?;
     }
@@ -331,13 +339,16 @@ pub fn refresh_z_order(hwnd: HWND, hierarchy: &DesktopHierarchy) -> Result<(), A
         tracing::warn!("refresh_z_order на Classic пропущен — нужен полный re-attach (R2)");
         return Ok(());
     }
-    // R2 шаг 4: снова под DefView (WorkerW пересоздан мог сдвинуть нас).
-    // SAFETY: hwnd — наше окно (живо, иначе recovery не дошёл бы),
-    // def_view из детекта; NOMOVE|NOSIZE|NOACTIVATE — только Z-order.
+    // R2 шаг 4 (адаптация CanvasDesk, см. док модуля): снова НАД DefView
+    // (пересозданный WorkerW мог сдвинуть нас ниже слоя иконок — а ниже
+    // DefView канвас мёртв для ввода: DefView непрозрачен для hit-test).
+    // SAFETY: hwnd — наше окно (живо, иначе recovery не дошёл бы);
+    // HWND_TOP — псевдо-хэндл (HWND(0)); NOMOVE|NOSIZE|NOACTIVATE —
+    // меняется только Z-order.
     if let Err(err) = unsafe {
         SetWindowPos(
             hwnd,
-            Some(hierarchy.def_view),
+            Some(HWND_TOP),
             0,
             0,
             0,
@@ -348,7 +359,7 @@ pub fn refresh_z_order(hwnd: HWND, hierarchy: &DesktopHierarchy) -> Result<(), A
         tracing::warn!(%err, "refresh_z_order: SetWindowPos Z-order провален");
         return Err(AttachError::SetWindowPosFailed);
     }
-    tracing::debug!("refresh_z_order: окно под DefView");
+    tracing::debug!("refresh_z_order: окно НАД DefView");
     // R2 шаг 5: WorkerW — последний ребёнок Progman.
     ensure_worker_w_z_order(hierarchy)?;
     Ok(())

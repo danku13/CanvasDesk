@@ -590,16 +590,18 @@ impl App {
                     screen = ?(screen.left, screen.top, screen.right, screen.bottom),
                     "канвас встроен в рабочий стол (T15)"
                 );
-                // T17 (R5, SPEC §7.4 п.5): скрыть системные иконки — ТОЛЬКО
-                // на Classic, где канвас встал НА МЕСТО слоя иконок и они
-                // иначе остались бы невидимыми, но кликабельными. На Raised
-                // DefView с иконками — sibling НАД нашим окном (Z-order
-                // attach): иконки видны поверх канваса, скрывать не нужно.
-                if matches!(hier.strategy, canvas_shell::desktop::EmbedStrategy::Classic) {
-                    let mut guard = canvas_shell::desktop::icons::IconGuard::capture(hier.def_view);
-                    guard.hide();
-                    self.icon_guard = Some(guard);
-                }
+                // T17 (R5, SPEC §7.4 п.5): скрыть системные иконки — на
+                // ОБЕИХ стратегиях. На Classic канвас встал НА МЕСТО слоя
+                // иконок (без скрытия они невидимы, но кликабельны). На
+                // Raised DefView непрозрачен для hit-test даже со скрытыми
+                // иконками (проверено WindowFromPoint), поэтому канвас
+                // поднят Z-order НАД DefView (attach шаг 4) и перекрывает
+                // иконки опаком — скрытие 0x7402 держит поведение стратегий
+                // одинаковым (канвас заменяет десктоп, M4) и синхронизирует
+                // пункт меню «показать иконки» с фактом.
+                let mut guard = canvas_shell::desktop::icons::IconGuard::capture(hier.def_view);
+                guard.hide();
+                self.icon_guard = Some(guard);
                 // R10: зафиксировать достоверный DPI ДО первого тика
                 // монитора (его первый замер — молчаливый бейзлайн): без
                 // этого viewport_logical()/кнопки ещё один тик (500 мс) и
