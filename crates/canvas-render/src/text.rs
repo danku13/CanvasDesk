@@ -17,6 +17,7 @@ use glyphon::{
 use crate::camera::Camera;
 use crate::cards::{extension_letter, title_for, HEADER_HEIGHT};
 use crate::markdown;
+use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
 
 /// Встроенный шрифт (assets/fonts/Inter.ttf, SIL OFL — см. assets/fonts/OFL.txt).
@@ -34,9 +35,6 @@ const ICON_WIDTH: f32 = 22.0;
 /// (LOD-порог, уточняется в T11 по SPEC §6.2).
 const MIN_TITLE_PX: f32 = 4.0;
 
-const TITLE_COLOR: Color = Color::rgb(0xe6, 0xe6, 0xe6);
-const ICON_COLOR: Color = Color::rgb(0x9a, 0xaa, 0xbf);
-
 /// Размер тела заметки в world-px (T7).
 pub const BODY_FONT_SIZE: f32 = 14.0;
 /// Высота строки тела заметки.
@@ -45,14 +43,11 @@ pub const BODY_LINE_HEIGHT: f32 = 20.0;
 pub const BODY_PADDING: f32 = 10.0;
 /// Зазор между заголовком и телом заметки в world-px.
 pub const BODY_TOP_GAP: f32 = 4.0;
-const BODY_COLOR: Color = Color::rgb(0xd4, 0xd4, 0xd4);
 
 /// Размер шрифта лейбла связи в world-px (T8).
 const EDGE_LABEL_FONT_SIZE: f32 = 12.0;
 /// Высота строки лейбла связи.
 const EDGE_LABEL_LINE_HEIGHT: f32 = 16.0;
-/// Цвет лейбла связи — светлый серо-голубой.
-const EDGE_LABEL_COLOR: Color = Color::rgb(0xcf, 0xd8, 0xe3);
 
 /// Размер шрифта HUD в физических px (не масштабируется зумом).
 const HUD_FONT_SIZE: f32 = 14.0;
@@ -299,10 +294,12 @@ pub struct TextSystem {
     label_cache: HashMap<String, CachedEdgeLabel>,
     /// Номер кадра для LRU-вытеснения кэша.
     tick: u64,
+    /// Палитра темы: цвета заголовка/иконки/тела/лейбла связи.
+    theme: ThemeColors,
 }
 
 impl TextSystem {
-    /// Создать текстовую систему под формат surface.
+    /// Создать текстовую систему под формат surface (тёмная тема по умолчанию).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
         font_system.db_mut().load_font_data(FONT_DATA.to_vec());
@@ -321,7 +318,15 @@ impl TextSystem {
             cache: HashMap::new(),
             label_cache: HashMap::new(),
             tick: 0,
+            theme: ThemeColors::dark(),
         }
+    }
+
+    /// Применить тему: цвета текста (кэш буферов не инвалидируем —
+    /// default_color копируется в буфер при set_*_text, кэш чистится
+    /// возрастом; смена темы редкая, некоторые квады перекрасятся позже).
+    pub fn set_theme(&mut self, theme: ThemeColors) {
+        self.theme = theme;
     }
 
     /// Зашейпить/обновить запись лейбла связи (T8). Ширина буфера не
@@ -679,7 +684,7 @@ impl TextSystem {
                             right: (pos[0] + entry.width_px) as i32,
                             bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                         },
-                        default_color: TITLE_COLOR,
+                        default_color: self.theme.title,
                         custom_glyphs: &[],
                     });
                     if let Some(icon) = &entry.icon {
@@ -695,7 +700,7 @@ impl TextSystem {
                                 right: (pos[0] + ICON_WIDTH * zoom_px) as i32,
                                 bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                             },
-                            default_color: ICON_COLOR,
+                            default_color: self.theme.icon,
                             custom_glyphs: &[],
                         });
                     }
@@ -715,7 +720,7 @@ impl TextSystem {
                                 right: (pos[0] + body_width * zoom_px) as i32,
                                 bottom: (pos[1] + body_height * zoom_px) as i32,
                             },
-                            default_color: BODY_COLOR,
+                            default_color: self.theme.body,
                             custom_glyphs: &[],
                         });
                     }
@@ -740,7 +745,7 @@ impl TextSystem {
                             right: (pos[0] + area_w * zoom_px) as i32,
                             bottom: (pos[1] + area_h * zoom_px) as i32,
                         },
-                        default_color: BODY_COLOR,
+                        default_color: self.theme.body,
                         custom_glyphs: &[],
                     });
                 }
@@ -763,7 +768,7 @@ impl TextSystem {
                             right: (pos[0] + area_w * zoom_px) as i32,
                             bottom: (pos[1] + area_h * zoom_px) as i32,
                         },
-                        default_color: BODY_COLOR,
+                        default_color: self.theme.body,
                         custom_glyphs: &[],
                     });
                 }
@@ -793,7 +798,7 @@ impl TextSystem {
                                 right: (left + entry.size_px[0] + 1.0) as i32,
                                 bottom: (top + entry.size_px[1]) as i32,
                             },
-                            default_color: EDGE_LABEL_COLOR,
+                            default_color: self.theme.edge_label,
                             custom_glyphs: &[],
                         });
                     }
@@ -811,7 +816,7 @@ impl TextSystem {
                             right: (pos[0] + width * zoom_px) as i32,
                             bottom: (pos[1] + line_height) as i32,
                         },
-                        default_color: TITLE_COLOR,
+                        default_color: self.theme.title,
                         custom_glyphs: &[],
                     });
                 }

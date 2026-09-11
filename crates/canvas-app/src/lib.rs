@@ -94,8 +94,9 @@ pub mod ui {
     pub const PANEL_PADDING: f32 = 10.0;
 
     /// Строки панели настроек (порядок = порядок отображения).
-    pub const SETTINGS_ROWS: [SettingsRow; 5] = [
+    pub const SETTINGS_ROWS: [SettingsRow; 6] = [
         SettingsRow::ButtonCorner,
+        SettingsRow::Theme,
         SettingsRow::Grid,
         SettingsRow::GridStyle,
         SettingsRow::GridDensity,
@@ -107,6 +108,8 @@ pub mod ui {
     pub enum SettingsRow {
         /// Угол летающей кнопки (цикл по 4 углам).
         ButtonCorner,
+        /// Тема интерфейса (тёмная/светлая).
+        Theme,
         /// Сетка канваса вкл/выкл.
         Grid,
         /// Вид сетки: линии или точки.
@@ -125,6 +128,7 @@ pub mod ui {
                 SettingsRow::ButtonCorner => {
                     format!("Угол кнопки: {}", settings.button_corner.label())
                 }
+                SettingsRow::Theme => format!("Тема: {}", settings.theme.label()),
                 SettingsRow::Grid => format!("Сетка: {}", on_off(settings.grid_visible)),
                 SettingsRow::GridStyle => format!("Вид сетки: {}", settings.grid_style.label()),
                 SettingsRow::GridDensity => {

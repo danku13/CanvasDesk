@@ -22,5 +22,5 @@ pub use fs_events::{
 };
 pub use model::{Canvas, CanvasdeskExt, Edge, Node, NodeKind, PreviewState, Side};
 pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
-pub use settings::{Corner, GridDensity, GridStyle, Settings};
+pub use settings::{Corner, GridDensity, GridStyle, Settings, Theme};
 pub use spatial::{SpatialIndex, WorldRect};

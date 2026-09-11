@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use canvas_app::ui::{
     button_rect, in_resize_corner, menu_item_at, menu_item_rect, menu_label, menu_rect,
     next_free_id, panel_rect, panel_row_at, point_in_rect, ContextMenu, DoubleClick, EdgeDrag,
-    SettingsRow, MAX_NOTE_WIDTH, MENU_FILL, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
+    SettingsRow, MAX_NOTE_WIDTH, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
     MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
     SETTINGS_ROWS,
 };
@@ -30,6 +30,7 @@ use canvas_render::search_ui::{
     SearchRow,
 };
 use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
+use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
 use canvas_shell::{
     Priority, SearchCommand, SearchEvent, SearchHit, SearchService, ThumbService, WatchService,
@@ -1394,11 +1395,12 @@ impl App {
             return (instances, texts);
         }
         let lay = search_layout(viewport[0], viewport[1], &self.search);
+        let palette = ThemeColors::from_theme(self.settings.theme);
         let panel = rect_xywh(lay.panel_rect);
         instances.push(CardInstance {
             pos: [panel[0], panel[1]],
             size: [panel[2], panel[3]],
-            fill: [0.11, 0.11, 0.13, 0.97],
+            fill: palette.menu_fill,
             border: [0.22, 0.24, 0.30, 0.9],
             params: [8.0, 0.0, 0.0, 1.0],
         });
@@ -1406,7 +1408,7 @@ impl App {
         instances.push(CardInstance {
             pos: [input[0], input[1]],
             size: [input[2], input[3]],
-            fill: [0.16, 0.17, 0.20, 1.0],
+            fill: palette.search_input_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 1.0],
         });
@@ -1417,7 +1419,7 @@ impl App {
             origin: [input[0] + 10.0, input[1] + 9.0],
             width: (input[2] - 20.0).max(10.0),
             font_size: 14.0,
-            color: Color::rgb(0xe6, 0xe6, 0xe6),
+            color: palette.title,
         });
         for (visible, rect) in lay.row_rects.iter().enumerate() {
             let row = self.search.scroll_top + visible;
@@ -1432,7 +1434,7 @@ impl App {
                 fill: if selected {
                     [0.18, 0.29, 0.48, 0.95]
                 } else {
-                    [0.13, 0.14, 0.17, 0.55]
+                    palette.search_row_fill
                 },
                 border: [0.0; 4],
                 params: [4.0, 0.0, 0.0, 1.0],
@@ -1442,14 +1444,14 @@ impl App {
                 origin: [row_rect[0] + 10.0, row_rect[1] + 4.0],
                 width: (row_rect[2] - 20.0).max(10.0),
                 font_size: 13.0,
-                color: Color::rgb(0xe6, 0xe6, 0xe6),
+                color: palette.title,
             });
             texts.push(OwnedScreenText {
                 text: entry.subtitle.clone(),
                 origin: [row_rect[0] + 10.0, row_rect[1] + 18.0],
                 width: (row_rect[2] - 20.0).max(10.0),
                 font_size: 11.0,
-                color: Color::rgb(0x8a, 0x8a, 0x92),
+                color: palette.body,
             });
         }
         (instances, texts)
@@ -1606,11 +1608,12 @@ impl App {
         let mut labels = Vec::new();
         let mut label_pos = Vec::new();
         if let Some(menu) = &self.menu {
+            let palette = ThemeColors::from_theme(self.settings.theme);
             let [x, y, w, h] = menu_rect(menu.origin);
             instances.push(CardInstance {
                 pos: [x, y],
                 size: [w, h],
-                fill: MENU_FILL,
+                fill: palette.menu_fill,
                 border: [0.0; 4],
                 params: [6.0, 0.0, 0.0, 0.0],
             });
@@ -1638,6 +1641,12 @@ impl App {
         match SETTINGS_ROWS[row] {
             SettingsRow::ButtonCorner => {
                 self.settings.button_corner = self.settings.button_corner.next();
+            }
+            SettingsRow::Theme => {
+                self.settings.theme = self.settings.theme.next();
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
+                }
             }
             SettingsRow::Grid => {
                 self.settings.grid_visible = !self.settings.grid_visible;
@@ -1680,11 +1689,12 @@ impl App {
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return (instances, texts);
         }
+        let palette = ThemeColors::from_theme(self.settings.theme);
         let button = button_rect(self.settings.button_corner, viewport);
         instances.push(CardInstance {
             pos: [button[0], button[1]],
             size: [button[2], button[3]],
-            fill: [0.11, 0.11, 0.13, 0.9],
+            fill: palette.menu_fill,
             border: [0.0; 4],
             // params.y = рамка выделения: подсветка кнопки при открытой панели
             params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
@@ -1694,7 +1704,7 @@ impl App {
             origin: [button[0] + 9.0, button[1] + 7.0],
             width: button[2],
             font_size: 18.0,
-            color: Color::rgb(0xe6, 0xe6, 0xe6),
+            color: palette.title,
         });
         if !self.settings_open {
             return (instances, texts);
@@ -1703,7 +1713,7 @@ impl App {
         instances.push(CardInstance {
             pos: [panel[0], panel[1]],
             size: [panel[2], panel[3]],
-            fill: MENU_FILL,
+            fill: palette.menu_fill,
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
         });
@@ -1714,7 +1724,7 @@ impl App {
             origin: [text_x, panel[1] + PANEL_PADDING + 5.0],
             width: text_w,
             font_size: 15.0,
-            color: Color::rgb(0xe6, 0xe6, 0xe6),
+            color: palette.title,
         });
         let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
         for (i, row) in SETTINGS_ROWS.iter().enumerate() {
@@ -1723,7 +1733,7 @@ impl App {
                 origin: [text_x, rows_top + i as f32 * PANEL_ROW_HEIGHT + 5.0],
                 width: text_w,
                 font_size: 13.0,
-                color: Color::rgb(0xd4, 0xd4, 0xd4),
+                color: palette.body,
             });
         }
         texts.push(OwnedScreenText {
@@ -1734,7 +1744,7 @@ impl App {
             ],
             width: text_w,
             font_size: 11.0,
-            color: Color::rgb(0x8a, 0x8a, 0x92),
+            color: palette.icon,
         });
         (instances, texts)
     }
@@ -1820,6 +1830,7 @@ impl ApplicationHandler<AppEvent> for App {
                 renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
                 let (minor, major) = self.settings.grid_density.steps();
                 renderer.set_grid_steps(minor, major);
+                renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
                 tracing::info!(
                     width = window.inner_size().width,
                     height = window.inner_size().height,

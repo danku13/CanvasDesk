@@ -13,17 +13,16 @@ use crate::cards::{
     build_draft_instances, build_edge_instances, build_port_instances, card_instance, CardInstance,
     CardsPipeline, SELECTION_BORDER,
 };
-use crate::config::{
-    background_color, choose_present_mode, choose_surface_format, surface_size_valid,
-};
+use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
-use crate::grid::GridPipeline;
+use crate::grid::{GridLook, GridPipeline};
 use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::text::{
     body_area, titles_visible, EdgeLabel, OverlayText, ScreenText, TextSystem, TitleFrame,
 };
+use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
 use crate::zorder;
 
@@ -31,12 +30,8 @@ use crate::zorder;
 const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
 /// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
 const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
-/// Фон-подложка лейбла связи (T8) — тёмный, полупрозрачный.
-const EDGE_LABEL_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.85];
 /// Отступы подложки лейбла связи вокруг текста (world-px, по осям x и y).
 const EDGE_LABEL_PADDING: [f32; 2] = [6.0, 3.0];
-/// Фон бокса редактирования лейбла связи (T8) — у связи нет карточки.
-const EDGE_EDIT_FILL: [f32; 4] = [0.13, 0.13, 0.16, 0.95];
 /// Потолок текст-групп кадра (включая финальную): сегменты сверх потолка
 /// теряют свою группу — их тексты рисуются в финальной поверх всего.
 /// Защита от патологически глубоких каскадов перекрытий.
@@ -133,6 +128,8 @@ pub struct Renderer {
     grid_dots: bool,
     /// Шаги сетки (мелкий, крупный) в world-px — плотность из настроек.
     grid_steps: (f32, f32),
+    /// Палитра темы (фон, сетка, карточки, текст).
+    theme: ThemeColors,
 }
 
 impl Renderer {
@@ -198,7 +195,14 @@ impl Renderer {
             grid_visible: true,
             grid_dots: false,
             grid_steps: (20.0, 100.0),
+            theme: ThemeColors::dark(),
         })
+    }
+
+    /// Применить тему (палитру): фон, сетка, заливка карточек, цвета текста.
+    pub fn set_theme(&mut self, theme: ThemeColors) {
+        self.theme = theme;
+        self.text.set_theme(theme);
     }
 
     /// Включить/выключить сетку канваса (настройки).
@@ -413,7 +417,7 @@ impl Renderer {
                 label_backdrops.push(CardInstance {
                     pos: [center[0] - w / 2.0, center[1] - h / 2.0],
                     size: [w, h],
-                    fill: EDGE_LABEL_FILL,
+                    fill: self.theme.edge_label_fill,
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
                 });
@@ -431,8 +435,11 @@ impl Renderer {
                 camera,
                 [self.size.width as f32, self.size.height as f32],
                 self.scale_factor,
-                self.grid_steps,
-                self.grid_dots,
+                GridLook {
+                    steps: self.grid_steps,
+                    dots: self.grid_dots,
+                    colors: (self.theme.grid_minor, self.theme.grid_major),
+                },
             );
         }
         // Редакторские оверлеи (T7/T8): выделение и каретка. У ноды — квады на её
@@ -476,7 +483,7 @@ impl Renderer {
                         edge_edit_quads.push(CardInstance {
                             pos: origin,
                             size: [width, height],
-                            fill: EDGE_EDIT_FILL,
+                            fill: self.theme.edge_edit_fill,
                             border: SELECTION_BORDER,
                             params: [6.0, 1.0, 0.0, 0.0],
                         });
@@ -562,7 +569,11 @@ impl Renderer {
                     continue;
                 };
                 // Карточка ноды
-                instances.push(card_instance(node, selected_node == Some(index)));
+                instances.push(card_instance(
+                    node,
+                    selected_node == Some(index),
+                    &self.theme,
+                ));
                 // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
                 // шейпинга (при промахе появятся на следующий кадре) —
                 // на z-позиции ноды, под её текстом и перекрывающими карточками
@@ -701,7 +712,7 @@ impl Renderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(background_color()),
+                        load: wgpu::LoadOp::Clear(self.theme.clear_color()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

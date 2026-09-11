@@ -8,14 +8,13 @@ use canvas_core::Node;
 use crate::camera::Camera;
 use crate::camera::Vec2;
 use crate::markdown;
+use crate::theme::ThemeColors;
 
 /// Высота заголовка карточки в world-пикселях.
 pub const HEADER_HEIGHT: f32 = 28.0;
 /// Радиус скругления в world-пикселях.
 pub const CORNER_RADIUS: f32 = 8.0;
 
-/// Цвет заливки карточки по умолчанию (#26262c).
-const DEFAULT_FILL: [f32; 4] = [0.149, 0.149, 0.173, 1.0];
 /// Рамка выделения (акцент).
 pub const SELECTION_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 1.0];
 /// Рамка битой ссылки (brokenLink) — серая.
@@ -54,9 +53,10 @@ pub fn named_color(color: Option<&str>) -> Option<[f32; 4]> {
         .or_else(|| parse_hex(value))
 }
 
-/// Цвет заливки карточки: пресет "1".."6" или "#RRGGBB" по JSON Canvas spec, иначе дефолт.
-pub fn card_color(node: &Node) -> [f32; 4] {
-    named_color(node.color.as_deref()).unwrap_or(DEFAULT_FILL)
+/// Цвет заливки карточки: пресет "1".."6" или "#RRGGBB" по JSON Canvas spec,
+/// иначе заливка по умолчанию из темы.
+pub fn card_color(node: &Node, theme: &ThemeColors) -> [f32; 4] {
+    named_color(node.color.as_deref()).unwrap_or(theme.card_fill)
 }
 
 /// Цвет пресета палитры JSON Canvas ("1".."6") — для меню выбора цвета (T7).
@@ -131,7 +131,7 @@ impl CardInstance {
 
 /// Инстанс карточки одной ноды: заливка по цвету, рамка выделения/битой
 /// ссылки, параметры SDF. Чистая функция для z-прохода рендера.
-pub fn card_instance(node: &Node, selected: bool) -> CardInstance {
+pub fn card_instance(node: &Node, selected: bool, theme: &ThemeColors) -> CardInstance {
     let broken = node.broken_link == Some(true);
     let border = if selected {
         SELECTION_BORDER
@@ -143,7 +143,7 @@ pub fn card_instance(node: &Node, selected: bool) -> CardInstance {
     CardInstance {
         pos: [node.x, node.y],
         size: [node.width, node.height],
-        fill: card_color(node),
+        fill: card_color(node, theme),
         border,
         params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
     }
@@ -156,12 +156,13 @@ pub fn build_instances(
     canvas: &canvas_core::Canvas,
     indices: &[usize],
     selected: Option<usize>,
+    theme: &ThemeColors,
 ) -> Vec<CardInstance> {
     indices
         .iter()
         .filter_map(|&index| {
             let node = canvas.nodes.get(index)?;
-            Some(card_instance(node, selected == Some(index)))
+            Some(card_instance(node, selected == Some(index), theme))
         })
         .collect()
 }
@@ -563,29 +564,41 @@ mod tests {
     /// Пресеты "1".."6" отличаются от дефолта и друг от друга.
     #[test]
     fn color_presets() {
+        let theme = ThemeColors::dark();
         let mut node = Node::text("n", "t", 0.0, 0.0);
-        assert_eq!(card_color(&node), DEFAULT_FILL);
+        assert_eq!(card_color(&node, &theme), theme.card_fill);
         node.color = Some("3".into());
-        assert_eq!(card_color(&node), PRESET_COLORS[2].1);
+        assert_eq!(card_color(&node, &theme), PRESET_COLORS[2].1);
         node.color = Some("6".into());
-        assert_eq!(card_color(&node), PRESET_COLORS[5].1);
+        assert_eq!(card_color(&node, &theme), PRESET_COLORS[5].1);
         node.color = Some("9".into());
-        assert_eq!(card_color(&node), DEFAULT_FILL);
+        assert_eq!(card_color(&node, &theme), theme.card_fill);
     }
 
-    /// Hex-цвет "#RRGGBB" парсится; битый — дефолт.
+    /// Hex-цвет "#RRGGBB" парсится; битый — дефолт темы.
     #[test]
     fn color_hex() {
+        let theme = ThemeColors::dark();
         let mut node = Node::text("n", "t", 0.0, 0.0);
         node.color = Some("#ff8000".into());
-        let rgba = card_color(&node);
+        let rgba = card_color(&node, &theme);
         assert!((rgba[0] - 1.0).abs() < 1e-3);
         assert!((rgba[1] - 128.0 / 255.0).abs() < 1e-3);
         assert!((rgba[2] - 0.0).abs() < 1e-3);
         node.color = Some("#zzz".into());
-        assert_eq!(card_color(&node), DEFAULT_FILL);
+        assert_eq!(card_color(&node, &theme), theme.card_fill);
         node.color = Some("#12345".into());
-        assert_eq!(card_color(&node), DEFAULT_FILL);
+        assert_eq!(card_color(&node, &theme), theme.card_fill);
+    }
+
+    /// Заливка по умолчанию зависит от темы (светлая ≠ тёмная).
+    #[test]
+    fn default_fill_follows_theme() {
+        let node = Node::text("n", "t", 0.0, 0.0);
+        let dark = card_color(&node, &ThemeColors::dark());
+        let light = card_color(&node, &ThemeColors::light());
+        assert_eq!(dark, ThemeColors::dark().card_fill);
+        assert_ne!(dark, light);
     }
 
     /// Заголовок: имя файла из Windows/Unix-пути, первая строка текста, label группы.
@@ -792,7 +805,7 @@ mod tests {
         broken.broken_link = Some(true);
         canvas.nodes.push(broken);
 
-        let instances = build_instances(&canvas, &[0, 1], Some(1));
+        let instances = build_instances(&canvas, &[0, 1], Some(1), &ThemeColors::dark());
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0].params[1], 0.0);
         assert_eq!(instances[1].params[1], 1.0);
@@ -816,14 +829,17 @@ mod tests {
             ));
         }
         // Видимы только ноды 1 и 3 (выдача spatial index отсортирована)
-        let instances = build_instances(&canvas, &[1, 3], None);
+        let instances = build_instances(&canvas, &[1, 3], None, &ThemeColors::dark());
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0].pos, [100.0, 0.0]);
         assert_eq!(instances[1].pos, [300.0, 0.0]);
         // Пустой список — пустой батч
-        assert!(build_instances(&canvas, &[], None).is_empty());
+        assert!(build_instances(&canvas, &[], None, &ThemeColors::dark()).is_empty());
         // Невалидный индекс пропускается без паники
-        assert_eq!(build_instances(&canvas, &[99], None).len(), 0);
+        assert_eq!(
+            build_instances(&canvas, &[99], None, &ThemeColors::dark()).len(),
+            0
+        );
     }
 
     /// Сериализация инстанса совпадает с vertex buffer stride (FLOATS * 4 байта).

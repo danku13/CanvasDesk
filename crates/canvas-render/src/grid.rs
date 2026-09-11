@@ -38,8 +38,8 @@ pub fn grid_appearance(zoom: f32, minor_step: f32, major_step: f32) -> GridAppea
     }
 }
 
-/// Uniform камеры для шейдера сетки (48 байт, layout по правилам WGSL):
-/// позиция/зум/альфы + шаги линий (плотность) и режим (линии/точки).
+/// Uniform камеры для шейдера сетки (80 байт, layout по правилам WGSL):
+/// позиция/зум/альфы + шаги линий (плотность), режим (линии/точки) и цвета.
 #[derive(Debug, Clone, Copy)]
 struct GridUniform {
     position: [f32; 2],
@@ -52,10 +52,13 @@ struct GridUniform {
     /// 0 — линии, 1 — точки.
     mode: f32,
     _pad: [f32; 2],
+    /// Цвета сетки (sRGB 0..1, w — не используется).
+    minor_color: [f32; 4],
+    major_color: [f32; 4],
 }
 
 impl GridUniform {
-    fn to_bytes(self) -> [u8; 48] {
+    fn to_bytes(self) -> [u8; 80] {
         let floats = [
             self.position[0],
             self.position[1],
@@ -69,13 +72,32 @@ impl GridUniform {
             self.mode,
             0.0,
             0.0,
+            self.minor_color[0],
+            self.minor_color[1],
+            self.minor_color[2],
+            self.minor_color[3],
+            self.major_color[0],
+            self.major_color[1],
+            self.major_color[2],
+            self.major_color[3],
         ];
-        let mut bytes = [0u8; 48];
+        let mut bytes = [0u8; 80];
         for (i, value) in floats.iter().enumerate() {
             bytes[i * 4..i * 4 + 4].copy_from_slice(&value.to_ne_bytes());
         }
         bytes
     }
+}
+
+/// Внешний вид сетки кадра (плотность, режим, цвета) — параметр update_camera.
+#[derive(Debug, Clone, Copy)]
+pub struct GridLook {
+    /// (мелкий, крупный) шаг сетки в world-px (плотность).
+    pub steps: (f32, f32),
+    /// Режим «точки» вместо линий.
+    pub dots: bool,
+    /// (мелкий, крупный) цвета линий (тема).
+    pub colors: ([f32; 3], [f32; 3]),
 }
 
 /// Пайплайн сетки: fullscreen-треугольник, линии считаются во фрагментном шейдере.
@@ -141,7 +163,7 @@ impl GridPipeline {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grid camera"),
-            size: 48,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -166,28 +188,28 @@ impl GridPipeline {
     ///
     /// `viewport` — в физических пикселях (шейдер работает в frag coord);
     /// камера хранит логические координаты, поэтому зум домножается на scale_factor.
-    /// `steps` — (мелкий, крупный) шаг сетки в world-px (плотность);
-    /// `dots` — режим «точки» вместо линий.
+    /// `look` — внешний вид сетки (шаги/плотность, режим точек, цвета темы).
     pub fn update_camera(
         &self,
         queue: &wgpu::Queue,
         camera: &Camera,
         viewport: [f32; 2],
         scale_factor: f32,
-        steps: (f32, f32),
-        dots: bool,
+        look: GridLook,
     ) {
-        let appearance = grid_appearance(camera.zoom(), steps.0, steps.1);
+        let appearance = grid_appearance(camera.zoom(), look.steps.0, look.steps.1);
         let uniform = GridUniform {
             position: camera.position(),
             viewport,
             effective_zoom: camera.zoom() * scale_factor,
             minor_alpha: appearance.minor_alpha,
             major_alpha: appearance.major_alpha,
-            minor_step: steps.0,
-            major_step: steps.1,
-            mode: if dots { 1.0 } else { 0.0 },
+            minor_step: look.steps.0,
+            major_step: look.steps.1,
+            mode: if look.dots { 1.0 } else { 0.0 },
             _pad: [0.0; 2],
+            minor_color: [look.colors.0[0], look.colors.0[1], look.colors.0[2], 1.0],
+            major_color: [look.colors.1[0], look.colors.1[1], look.colors.1[2], 1.0],
         };
         queue.write_buffer(&self.uniform_buffer, 0, &uniform.to_bytes());
     }
@@ -277,10 +299,10 @@ mod tests {
         );
     }
 
-    /// Uniform сериализуется в 48 байт — layout WGSL-структуры
-    /// (позиция, viewport, зум, альфы, шаги, режим, выравнивание).
+    /// Uniform сериализуется в 80 байт — layout WGSL-структуры
+    /// (позиция, viewport, зум, альфы, шаги, режим, выравнивание, цвета).
     #[test]
-    fn uniform_layout_is_48_bytes() {
+    fn uniform_layout_is_80_bytes() {
         let uniform = GridUniform {
             position: [1.5, -2.5],
             viewport: [1920.0, 1080.0],
@@ -291,9 +313,11 @@ mod tests {
             major_step: 100.0,
             mode: 1.0,
             _pad: [0.0; 2],
+            minor_color: [0.1, 0.2, 0.3, 1.0],
+            major_color: [0.4, 0.5, 0.6, 1.0],
         };
         let bytes = uniform.to_bytes();
-        assert_eq!(bytes.len(), 48);
+        assert_eq!(bytes.len(), 80);
         assert_eq!(&bytes[0..4], &1.5f32.to_ne_bytes());
         assert_eq!(&bytes[16..20], &2.0f32.to_ne_bytes());
         assert_eq!(&bytes[24..28], &1.0f32.to_ne_bytes());
@@ -301,5 +325,8 @@ mod tests {
         assert_eq!(&bytes[28..32], &20.0f32.to_ne_bytes());
         assert_eq!(&bytes[32..36], &100.0f32.to_ne_bytes());
         assert_eq!(&bytes[36..40], &1.0f32.to_ne_bytes());
+        // Цвета: minor 48..64, major 64..80
+        assert_eq!(&bytes[48..52], &0.1f32.to_ne_bytes());
+        assert_eq!(&bytes[64..68], &0.4f32.to_ne_bytes());
     }
 }

@@ -19,6 +19,7 @@ pub mod renderer;
 pub mod search_ui;
 pub mod stats;
 pub mod text;
+pub mod theme;
 pub mod thumbs;
 pub mod zorder;
 
@@ -26,3 +27,4 @@ pub use camera::Camera;
 pub use glyphon::Color;
 pub use renderer::{FrameOverlay, FrameStats, Renderer, SceneView, Selection};
 pub use stats::FrameMeter;
+pub use theme::ThemeColors;

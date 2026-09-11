@@ -41,6 +41,35 @@ impl Corner {
     }
 }
 
+/// Тема интерфейса: тёмная (по умолчанию) или светлая (панель настроек).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    /// Тёмная (базовая, SPEC T1: фон #1e1e22).
+    #[default]
+    Dark,
+    /// Светлая.
+    Light,
+}
+
+impl Theme {
+    /// Переключение темы (строка панели настроек).
+    pub fn next(self) -> Self {
+        match self {
+            Theme::Dark => Theme::Light,
+            Theme::Light => Theme::Dark,
+        }
+    }
+
+    /// Подпись темы в панели настроек.
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "тёмная",
+            Theme::Light => "светлая",
+        }
+    }
+}
+
 /// Вид сетки канваса: линии или точки (панель настроек).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -125,6 +154,8 @@ pub struct Settings {
     pub grid_style: GridStyle,
     /// Плотность сетки (шаг линий/точек).
     pub grid_density: GridDensity,
+    /// Тема интерфейса.
+    pub theme: Theme,
     /// HUD (fps/p95, F3) включён сразу при старте.
     pub hud_on_start: bool,
 }
@@ -136,6 +167,7 @@ impl Default for Settings {
             grid_visible: true,
             grid_style: GridStyle::Lines,
             grid_density: GridDensity::Medium,
+            theme: Theme::Dark,
             hud_on_start: false,
         }
     }
@@ -195,6 +227,7 @@ mod tests {
             grid_visible: false,
             grid_style: GridStyle::Dots,
             grid_density: GridDensity::Sparse,
+            theme: Theme::Light,
             hud_on_start: true,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
@@ -232,8 +265,20 @@ mod tests {
         assert_eq!(settings.button_corner, Corner::TopRight);
         assert_eq!(settings.grid_style, GridStyle::Lines);
         assert_eq!(settings.grid_density, GridDensity::Medium);
+        assert_eq!(settings.theme, Theme::Dark);
         assert!(!settings.hud_on_start);
         assert!(warn.is_none());
+    }
+
+    /// Тема: переключение замкнуто, подписи непустые, дефолт — тёмная.
+    #[test]
+    fn theme_cycle_and_labels() {
+        assert_eq!(Theme::Dark.next(), Theme::Light);
+        assert_eq!(Theme::Light.next(), Theme::Dark);
+        assert_eq!(Settings::default().theme, Theme::Dark);
+        for theme in [Theme::Dark, Theme::Light] {
+            assert!(!theme.label().is_empty());
+        }
     }
 
     /// Вид сетки: переключение замкнуто, подписи непустые.
@@ -300,6 +345,7 @@ mod tests {
         assert!(text.contains("grid_visible"), "{text}");
         assert!(text.contains("grid_style"), "{text}");
         assert!(text.contains("grid_density"), "{text}");
+        assert!(text.contains("theme"), "{text}");
         assert!(text.contains("hud_on_start"), "{text}");
     }
 }

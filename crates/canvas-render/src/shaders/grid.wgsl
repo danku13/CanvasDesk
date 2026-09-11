@@ -1,10 +1,8 @@
 // Бесконечная сетка в world-space (T2).
 // Линии рисуются во фрагментном шейдере через fwidth — толщина ~1 физический px
-// независимо от зума, без мерцания при масштабировании. Шаги и режим
-// (линии/точки) приходят из uniform — плотность и вид настраиваются.
-//
-// Контраст сетки приглушён на 50% относительно фона канваса (#1e1e22):
-// цвет = фон + (исходный − фон) * 0.5.
+// независимо от зума, без мерцания при масштабировании. Шаги, режим
+// (линии/точки) и цвета приходят из uniform — плотность, вид и тема
+// настраиваются. Контраст цветов — ~50% к фону канваса.
 
 struct GridUniform {
     position: vec2<f32>,        // мировая точка в центре viewport
@@ -16,14 +14,11 @@ struct GridUniform {
     major_step: f32,            // шаг крупной сетки, world px
     mode: f32,                  // 0 — линии, 1 — точки
     _pad: vec2<f32>,
+    minor_color: vec4<f32>,     // sRGB 0..1
+    major_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> grid: GridUniform;
-
-// Фон #1e1e22; цвета — середина между фоном и исходными
-// (#2a2a30 и #38383f → #242429 и #2b2b30).
-const MINOR_COLOR: vec3<f32> = vec3<f32>(0.141, 0.141, 0.161);
-const MAJOR_COLOR: vec3<f32> = vec3<f32>(0.169, 0.169, 0.190);
 
 /// Радиус точки в физических px (режим «точки»).
 const DOT_RADIUS: f32 = 1.5;
@@ -85,7 +80,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     // Крупная линия перекрывает мелкую в точках совпадения
-    let color = MINOR_COLOR * minor + MAJOR_COLOR * major * (1.0 - minor);
+    let color = grid.minor_color.rgb * minor + grid.major_color.rgb * major * (1.0 - minor);
     let alpha = max(minor, major);
     return vec4<f32>(color, alpha);
 }

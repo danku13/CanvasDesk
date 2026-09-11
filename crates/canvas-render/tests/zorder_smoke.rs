@@ -56,9 +56,10 @@ fn headless_text_under_covering_card() {
     assert_eq!(zplan.text_groups.len(), 2);
 
     // Инстансы карточек в z-порядке + границы сегментов (как в Renderer).
+    let theme = canvas_render::ThemeColors::dark();
     let instances = vec![
-        card_instance(&canvas.nodes[0], false),
-        card_instance(&canvas.nodes[1], false),
+        card_instance(&canvas.nodes[0], false, &theme),
+        card_instance(&canvas.nodes[1], false, &theme),
     ];
     let instance_count = cards.update(
         &gpu.device,
