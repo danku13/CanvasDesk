@@ -590,13 +590,16 @@ impl App {
                     screen = ?(screen.left, screen.top, screen.right, screen.bottom),
                     "канвас встроен в рабочий стол (T15)"
                 );
-                // T17 (R5, SPEC §7.4 п.5): скрыть системные иконки — над
-                // канвасом остаётся только слой иконок DefView; guard
-                // перечитывает состояние (идемпотентен — повторный attach
-                // после recovery не мигает иконками)
-                let mut guard = canvas_shell::desktop::icons::IconGuard::capture(hier.def_view);
-                guard.hide();
-                self.icon_guard = Some(guard);
+                // T17 (R5, SPEC §7.4 п.5): скрыть системные иконки — ТОЛЬКО
+                // на Classic, где канвас встал НА МЕСТО слоя иконок и они
+                // иначе остались бы невидимыми, но кликабельными. На Raised
+                // DefView с иконками — sibling НАД нашим окном (Z-order
+                // attach): иконки видны поверх канваса, скрывать не нужно.
+                if matches!(hier.strategy, canvas_shell::desktop::EmbedStrategy::Classic) {
+                    let mut guard = canvas_shell::desktop::icons::IconGuard::capture(hier.def_view);
+                    guard.hide();
+                    self.icon_guard = Some(guard);
+                }
                 // R10: зафиксировать достоверный DPI ДО первого тика
                 // монитора (его первый замер — молчаливый бейзлайн): без
                 // этого viewport_logical()/кнопки ещё один тик (500 мс) и
@@ -1964,8 +1967,57 @@ impl ApplicationHandler<AppEvent> for App {
                 return;
             }
         };
-        // GPU-инициализация блокирующая, один раз при старте (SPEC §6.3: холодный старт < 2 с)
-        match pollster::block_on(canvas_render::Renderer::new(window.clone())) {
+        self.window = Some(window.clone());
+        // Регистрация своего IDropTarget (T9) и встройка в десктоп (T15) — ДО
+        // создания GPU-surface: так attach (SetParent/scrub) не конфликтует
+        // с живым swapchain. Сама по себе невидимость встроенного окна
+        // порядком не лечилась (проверено экспериментом): Vulkan-swapchain
+        // не презентует в ребёнка Progman вне зависимости от момента
+        // создания surface — лечится выбором DX12 для desktop-режима
+        // (Renderer::new, prefer_dx12). HWND достаём через raw-window-handle
+        // (winit 0.30 публично Win32-HWND не отдаёт); ошибка drag-drop —
+        // warn и живём без него (graceful degradation).
+        #[cfg(windows)]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            // HWND через raw-window-handle: winit 0.30 публично
+            // Win32-HWND не отдаёт (внутренний windows-sys); окно
+            // создано на этом потоке, handle доступен
+            match window.window_handle() {
+                Ok(handle) => match handle.as_raw() {
+                    RawWindowHandle::Win32(win32) => {
+                        match canvas_shell::dragdrop::install(
+                            win32.hwnd.get(),
+                            self.drag_sender.clone(),
+                        ) {
+                            Ok(watcher) => self.drag_watcher = Some(watcher),
+                            Err(err) => {
+                                tracing::warn!(%err, "drag-drop недоступен, приложение работает без него")
+                            }
+                        }
+                        // Встройка в десктоп (T15): после всей winit-настройки
+                        // окна (R3-урок: сначала окно настраивается библиотекой,
+                        // репарентинг — последним, с верификацией стилей в
+                        // attach), но ДО создания GPU-surface (см. выше).
+                        if self.desktop_mode {
+                            self.attach_desktop(win32.hwnd.get());
+                        }
+                    }
+                    // На Windows бывает только Win32-handle
+                    _ => tracing::warn!("неожиданный handle окна — drag-drop выключен"),
+                },
+                Err(err) => {
+                    tracing::warn!(%err, "handle окна недоступен — drag-drop выключен")
+                }
+            }
+        }
+        // GPU-инициализация блокирующая, один раз при старте (SPEC §6.3:
+        // холодный старт < 2 с). prefer_dx12 = desktop-режим: Vulkan не
+        // презентует в ребёнка Progman (подробности — в Renderer::new).
+        match pollster::block_on(canvas_render::Renderer::new(
+            window.clone(),
+            self.desktop_mode,
+        )) {
             Ok(mut renderer) => {
                 renderer.set_grid_visible(self.settings.grid_visible);
                 renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
@@ -1979,45 +2031,6 @@ impl ApplicationHandler<AppEvent> for App {
                     "окно создано"
                 );
                 self.renderer = Some(renderer);
-                self.window = Some(window.clone());
-                // Регистрация своего IDropTarget (T9): HWND достаём через
-                // raw-window-handle (winit 0.30 публично Win32-HWND не отдаёт);
-                // ошибка — warn и живём без drag-drop (graceful degradation)
-                #[cfg(windows)]
-                {
-                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                    // HWND через raw-window-handle: winit 0.30 публично
-                    // Win32-HWND не отдаёт (внутренний windows-sys); окно
-                    // создано на этом потоке, handle доступен
-                    match window.window_handle() {
-                        Ok(handle) => match handle.as_raw() {
-                            RawWindowHandle::Win32(win32) => {
-                                match canvas_shell::dragdrop::install(
-                                    win32.hwnd.get(),
-                                    self.drag_sender.clone(),
-                                ) {
-                                    Ok(watcher) => self.drag_watcher = Some(watcher),
-                                    Err(err) => tracing::warn!(
-                                        %err,
-                                        "drag-drop недоступен, приложение работает без него"
-                                    ),
-                                }
-                                // Встройка в десктоп (T15): ПОСЛЕДНИМ шагом
-                                // после всей winit-настройки (R3-урок: сначала
-                                // окно настраивается библиотекой, репарентинг —
-                                // последним, с верификацией стилей в attach)
-                                if self.desktop_mode {
-                                    self.attach_desktop(win32.hwnd.get());
-                                }
-                            }
-                            // На Windows бывает только Win32-handle
-                            _ => tracing::warn!("неожидаемый handle окна — drag-drop выключен"),
-                        },
-                        Err(err) => {
-                            tracing::warn!(%err, "handle окна недоступен — drag-drop выключен")
-                        }
-                    }
-                }
                 self.request_redraw();
             }
             Err(err) => {

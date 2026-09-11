@@ -138,10 +138,37 @@ pub struct Renderer {
 impl Renderer {
     /// Создать рендерер для окна. Вызывается один раз при старте
     /// (блокирующе, через `pollster` в canvas-app).
-    pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
+    /// `prefer_dx12` — desktop-режим (T15): наблюдение на raised Win11 24H2
+    /// (Intel Arc) — Vulkan-swapchain не презентует в окно, репарентнутое
+    /// ребёнком в Progman: окно полностью прозрачно при корректном Z-order
+    /// («видно только обои»); DX12 презентует нормально. В оконном режиме
+    /// Vulkan работает, поэтому выбор только для desktop-режима.
+    /// WGPU_BACKEND (vulkan/dx12/gl) переопределяет оба случая (wgpu 22 сам
+    /// env не читает — разбор здесь); неизвестное значение — warn и
+    /// бэкенды по умолчанию.
+    pub async fn new(window: Arc<Window>, prefer_dx12: bool) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let scale_factor = window.scale_factor();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let backends = match std::env::var("WGPU_BACKEND") {
+            Ok(name) => match name.to_ascii_lowercase().as_str() {
+                "vulkan" => wgpu::Backends::VULKAN,
+                "dx12" => wgpu::Backends::DX12,
+                "gl" => wgpu::Backends::GL,
+                other => {
+                    tracing::warn!(
+                        backend = other,
+                        "неизвестный WGPU_BACKEND — бэкенды по умолчанию"
+                    );
+                    wgpu::Backends::all()
+                }
+            },
+            Err(_) if prefer_dx12 => wgpu::Backends::DX12,
+            Err(_) => wgpu::Backends::all(),
+        };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
         let surface = instance
             .create_surface(window)
             .context("создание surface")?;
