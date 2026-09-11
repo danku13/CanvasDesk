@@ -9,14 +9,15 @@ use std::time::{Duration, Instant};
 use canvas_app::ui::{
     button_rect, edge_menu_label, in_resize_corner, menu_item_at, menu_item_at_for, menu_item_rect,
     menu_label, menu_rect, menu_rect_for, next_free_id, panel_rect, panel_row_at, point_in_rect,
-    ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, SettingsRow, EDGE_MENU_ITEMS,
-    MAX_NOTE_WIDTH, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
-    MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
+    theme_button_rect, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, SettingsRow,
+    EDGE_MENU_ITEMS, MAX_NOTE_WIDTH, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
+    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
+    SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
     watched_dirs, Canvas, Edge, FileEvent, GridStyle, Node, NodeChange, NodeKind, Settings,
-    SpatialIndex, ThumbnailProvider,
+    SpatialIndex, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{pulse_alpha, Flight, FLIGHT_DURATION_MS};
 use canvas_render::camera::Vec2;
@@ -29,7 +30,9 @@ use canvas_render::search_ui::{
     layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
     SearchRow,
 };
-use canvas_render::text::{body_area, OverlayText, ScreenText, BODY_PADDING, BODY_TOP_GAP};
+use canvas_render::text::{
+    body_area, OverlayText, ScreenText, TextAlign, BODY_PADDING, BODY_TOP_GAP,
+};
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
 use canvas_shell::{
@@ -68,6 +71,8 @@ struct OwnedScreenText {
     width: f32,
     font_size: f32,
     color: Color,
+    /// Выравнивание в области `width` (иконки кнопок — по центру).
+    align: TextAlign,
 }
 
 /// Буфер обмена ОС (T7, arboard): ошибки — warn, редактирование не ломается.
@@ -1422,6 +1427,7 @@ impl App {
             width: (input[2] - 20.0).max(10.0),
             font_size: 14.0,
             color: palette.title,
+            align: TextAlign::Left,
         });
         for (visible, rect) in lay.row_rects.iter().enumerate() {
             let row = self.search.scroll_top + visible;
@@ -1447,6 +1453,7 @@ impl App {
                 width: (row_rect[2] - 20.0).max(10.0),
                 font_size: 13.0,
                 color: palette.title,
+                align: TextAlign::Left,
             });
             texts.push(OwnedScreenText {
                 text: entry.subtitle.clone(),
@@ -1454,6 +1461,7 @@ impl App {
                 width: (row_rect[2] - 20.0).max(10.0),
                 font_size: 11.0,
                 color: palette.body,
+                align: TextAlign::Left,
             });
         }
         (instances, texts)
@@ -1692,17 +1700,24 @@ impl App {
         (instances, labels, label_pos)
     }
 
+    /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
+    fn toggle_theme(&mut self) {
+        self.settings.theme = self.settings.theme.next();
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
+        }
+        if let Some(path) = &self.config_path {
+            if let Err(err) = self.settings.save(path) {
+                tracing::warn!(%err, "не удалось сохранить конфиг");
+            }
+        }
+    }
+
     /// Применить переключение строки панели настроек и сохранить конфиг.
     fn apply_settings_row(&mut self, row: usize) {
         match SETTINGS_ROWS[row] {
             SettingsRow::ButtonCorner => {
                 self.settings.button_corner = self.settings.button_corner.next();
-            }
-            SettingsRow::Theme => {
-                self.settings.theme = self.settings.theme.next();
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
-                }
             }
             SettingsRow::Grid => {
                 self.settings.grid_visible = !self.settings.grid_visible;
@@ -1749,6 +1764,9 @@ impl App {
             return (instances, texts);
         }
         let palette = ThemeColors::from_theme(self.settings.theme);
+        // Вертикальная центровка иконки: лайн-бокс высотой font*1.3 по центру
+        // кнопки (так же считает рендер screen-текстов).
+        let icon_top = |rect: [f32; 4], font_size: f32| rect[1] + (rect[3] - font_size * 1.3) / 2.0;
         let button = button_rect(self.settings.button_corner, viewport);
         instances.push(CardInstance {
             pos: [button[0], button[1]],
@@ -1758,12 +1776,37 @@ impl App {
             // params.y = рамка выделения: подсветка кнопки при открытой панели
             params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
         });
+        // Иконка-шестерёнка: горизонтально по центру кнопки (Align::Center
+        // в области width = ширине кнопки) — не зависит от метрик глифа.
         texts.push(OwnedScreenText {
             text: "⚙".to_owned(),
-            origin: [button[0] + 9.0, button[1] + 7.0],
+            origin: [button[0], icon_top(button, 18.0)],
             width: button[2],
             font_size: 18.0,
             color: palette.title,
+            align: TextAlign::Center,
+        });
+        // Кнопка переключения темы — рядом с кнопкой настроек (в тот же угол).
+        // Иконка показывает ЦЕЛЬ: в тёмной теме «солнце» (клик — светлая).
+        let theme_button = theme_button_rect(self.settings.button_corner, viewport);
+        instances.push(CardInstance {
+            pos: [theme_button[0], theme_button[1]],
+            size: [theme_button[2], theme_button[3]],
+            fill: palette.menu_fill,
+            border: [0.0; 4],
+            params: [8.0, 0.0, 0.0, 0.0],
+        });
+        let theme_icon = match self.settings.theme {
+            Theme::Dark => "☀",
+            Theme::Light => "🌙",
+        };
+        texts.push(OwnedScreenText {
+            text: theme_icon.to_owned(),
+            origin: [theme_button[0], icon_top(theme_button, 16.0)],
+            width: theme_button[2],
+            font_size: 16.0,
+            color: palette.title,
+            align: TextAlign::Center,
         });
         if !self.settings_open {
             return (instances, texts);
@@ -1784,6 +1827,7 @@ impl App {
             width: text_w,
             font_size: 15.0,
             color: palette.title,
+            align: TextAlign::Left,
         });
         let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
         for (i, row) in SETTINGS_ROWS.iter().enumerate() {
@@ -1793,6 +1837,7 @@ impl App {
                 width: text_w,
                 font_size: 13.0,
                 color: palette.body,
+                align: TextAlign::Left,
             });
         }
         texts.push(OwnedScreenText {
@@ -1804,6 +1849,7 @@ impl App {
             width: text_w,
             font_size: 11.0,
             color: palette.icon,
+            align: TextAlign::Left,
         });
         (instances, texts)
     }
@@ -2043,6 +2089,7 @@ impl ApplicationHandler<AppEvent> for App {
                         width: TOOLTIP_WIDTH,
                         font_size: 13.0,
                         color: Color::rgb(0xd4, 0xd4, 0xd4),
+                        align: TextAlign::Left,
                     });
                 }
                 let screen_texts: Vec<ScreenText> = owned_texts
@@ -2053,6 +2100,7 @@ impl ApplicationHandler<AppEvent> for App {
                         width: t.width,
                         font_size: t.font_size,
                         color: t.color,
+                        align: t.align,
                     })
                     .collect();
                 // Призраки зоны дропа (T9): рамка bbox сетки + квады-призраки.
@@ -2389,6 +2437,15 @@ impl App {
                 // Панель настроек (screen-space): клики обрабатываются до
                 // канваса — кнопка/панель поверх и «прозрачности» не дают
                 let viewport = self.viewport_logical();
+                // Кнопка переключения темы — рядом с кнопкой настроек
+                if point_in_rect(
+                    theme_button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    self.toggle_theme();
+                    self.request_redraw();
+                    return;
+                }
                 if point_in_rect(
                     button_rect(self.settings.button_corner, viewport),
                     self.cursor,

@@ -93,10 +93,10 @@ pub mod ui {
     /// Внутренний отступ панели.
     pub const PANEL_PADDING: f32 = 10.0;
 
-    /// Строки панели настроек (порядок = порядок отображения).
-    pub const SETTINGS_ROWS: [SettingsRow; 7] = [
+    /// Строки панели настроек (порядок = порядок отображения). Тема вынесена
+    /// в отдельную кнопку-переключатель рядом с кнопкой настроек.
+    pub const SETTINGS_ROWS: [SettingsRow; 6] = [
         SettingsRow::ButtonCorner,
-        SettingsRow::Theme,
         SettingsRow::Grid,
         SettingsRow::GridStyle,
         SettingsRow::GridDensity,
@@ -109,8 +109,6 @@ pub mod ui {
     pub enum SettingsRow {
         /// Угол летающей кнопки (цикл по 4 углам).
         ButtonCorner,
-        /// Тема интерфейса (тёмная/светлая).
-        Theme,
         /// Сетка канваса вкл/выкл.
         Grid,
         /// Вид сетки: линии или точки.
@@ -131,7 +129,6 @@ pub mod ui {
                 SettingsRow::ButtonCorner => {
                     format!("Угол кнопки: {}", settings.button_corner.label())
                 }
-                SettingsRow::Theme => format!("Тема: {}", settings.theme.label()),
                 SettingsRow::Grid => format!("Сетка: {}", on_off(settings.grid_visible)),
                 SettingsRow::GridStyle => format!("Вид сетки: {}", settings.grid_style.label()),
                 SettingsRow::GridDensity => {
@@ -166,6 +163,17 @@ pub mod ui {
             _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON,
         };
         [x, y, SETTINGS_BUTTON, SETTINGS_BUTTON]
+    }
+
+    /// Rect кнопки переключения темы: тот же угол, вплотную к кнопке
+    /// настроек (внутрь экрана по горизонтали через SETTINGS_GAP).
+    pub fn theme_button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
+        let button = button_rect(corner, viewport);
+        let x = match corner {
+            Corner::TopLeft | Corner::BottomLeft => button[0] + SETTINGS_BUTTON + SETTINGS_GAP,
+            _ => button[0] - SETTINGS_GAP - SETTINGS_BUTTON,
+        };
+        [x, button[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
     }
 
     /// Высота панели настроек: паддинги + заголовок + строки + подсказка.
@@ -1011,6 +1019,41 @@ pub mod ui {
             // Точка кнопки попадает в hit-test, соседняя — нет
             assert!(point_in_rect(tr, [tr[0] + 2.0, tr[1] + 2.0]));
             assert!(!point_in_rect(tr, [tr[0] - 1.0, tr[1] + 2.0]));
+        }
+
+        /// Кнопка темы: тот же угол/ряд, что кнопка настроек, зазор
+        /// SETTINGS_GAP, вся кнопка в viewport, пересечений с кнопкой нет.
+        #[test]
+        fn theme_button_next_to_settings_button() {
+            let viewport = [1600.0, 900.0];
+            for corner in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let button = button_rect(corner, viewport);
+                let theme = theme_button_rect(corner, viewport);
+                // Та же строка по вертикали
+                assert_eq!(theme[1], button[1]);
+                assert_eq!(theme[3], SETTINGS_BUTTON);
+                // Вся кнопка в viewport
+                assert!(theme[0] >= 0.0 && theme[0] + theme[2] <= viewport[0]);
+                // Зазор ровно SETTINGS_GAP, пересечения нет
+                let gap = (theme[0] - (button[0] + button[2])).abs();
+                let gap_left = ((button[0] - (theme[0] + theme[2])).abs());
+                assert!(
+                    (gap - SETTINGS_GAP).abs() < 1e-3 || (gap_left - SETTINGS_GAP).abs() < 1e-3,
+                    "зазор SETTINGS_GAP: theme={theme:?} button={button:?}"
+                );
+            }
+            // Правый угол: тема левее настроек; левый — правее
+            let tr_theme = theme_button_rect(Corner::TopRight, viewport);
+            let tr = button_rect(Corner::TopRight, viewport);
+            assert!(tr_theme[0] + tr_theme[2] < tr[0]);
+            let tl_theme = theme_button_rect(Corner::TopLeft, viewport);
+            let tl = button_rect(Corner::TopLeft, viewport);
+            assert!(tl_theme[0] > tl[0] + tl[2]);
         }
 
         /// Панель настроек: прижата к углу кнопки, целиком в viewport.

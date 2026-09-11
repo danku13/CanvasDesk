@@ -174,17 +174,30 @@ pub struct OverlayText<'a> {
     pub width: f32,
 }
 
+/// Выравнивание screen-текста в области `width` (центровка иконок кнопок;
+/// glyphon 0.6 / cosmic-text 0.11 не имеют set_align — центрируем по
+/// измеренной ширине строки, см. `TextEngine::prepare`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    /// Левый край в `origin` (подписи панелей, поиск).
+    Left,
+    /// Строка по центру области [`ScreenText::width`].
+    Center,
+}
+
 /// Оверлей-текст в screen-space (панель настроек): константный размер
 /// при любом зуме, координаты — логические px от левого верхнего угла окна.
 pub struct ScreenText<'a> {
     pub text: &'a str,
     /// Логические px от левого верхнего угла окна.
     pub origin: [f32; 2],
-    /// Ширина области в логических px (bounds клипа).
+    /// Ширина области в логических px (bounds клипа и опора выравнивания).
     pub width: f32,
     /// Размер шрифта в логических px (умножается на scale_factor).
     pub font_size: f32,
     pub color: Color,
+    /// Выравнивание строки в области `width`.
+    pub align: TextAlign,
 }
 
 /// Лейбл связи для кадра (T8): текст по центру кривой, шейпится с кэшем
@@ -856,7 +869,17 @@ impl TextSystem {
         // текстов и закрывал собственные строки панели
         let mut overlay_areas: Vec<TextArea> = Vec::with_capacity(screen_buffers.len());
         for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
-            let left = st.origin[0] * scale_factor;
+            let mut left = st.origin[0] * scale_factor;
+            // Центровка: glyphon 0.6 (cosmic-text 0.11) не имеет set_align —
+            // сдвигаем левый край на половину разницы ширин областей.
+            if st.align == TextAlign::Center {
+                let line_w = buffer
+                    .layout_runs()
+                    .next()
+                    .map(|run| run.line_w)
+                    .unwrap_or(0.0);
+                left += ((st.width * scale_factor) - line_w).max(0.0) / 2.0;
+            }
             let top = st.origin[1] * scale_factor;
             let line_height = st.font_size * scale_factor * 1.3;
             overlay_areas.push(TextArea {
