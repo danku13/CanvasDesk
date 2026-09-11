@@ -57,6 +57,14 @@ const EDGE_CLAMP_MARGIN_PX: i32 = 64;
 /// Минимальная половина контента по оси (world): защита от деления на ноль
 /// при вычислении масштаба (точечный/линейный контент).
 const MIN_CONTENT_HALF: f32 = 1e-3;
+/// Нижний порог охвата миникарты в единицах viewport (приёмка T13): карта
+/// показывает не меньше ~MIN_VIEWPORT_COVERAGE вьюпортов по каждой оси —
+/// базовый масштаб ~1/10 от видимого. Меньше масштаб становится только
+/// когда union(ноды ∪ viewport) превышает этот охват (отлёт камеры дальше).
+/// Без порога отлёт растягивал union пустотой между нодами и камерой:
+/// ноды мельчали пропорционально расстоянию, а драг «убегал» (set_viewport
+/// пересчитывал fit на каждый кадр, курсор мапился в другую world-точку).
+const MIN_VIEWPORT_COVERAGE: f32 = 10.0;
 /// Минимальный равномерный масштаб (px/world): обратное преобразование
 /// не делит на ноль даже при испорченных вручную полях.
 const MIN_SCALE: f32 = 1e-6;
@@ -236,13 +244,24 @@ impl MinimapMapping {
                 padding_px: CONTENT_PADDING_PX,
             };
         };
+        // Полуразмеры viewport — основа нижнего порога охвата (T13): порог
+        // не применяется к вырожденному viewport (свёрнутое окно).
+        let vp_half = sanitize_rect(viewport_world)
+            .filter(|r| r[2] > r[0] && r[3] > r[1])
+            .map_or([0.0, 0.0], |r| [(r[2] - r[0]) * 0.5, (r[3] - r[1]) * 0.5]);
         Self {
             content_center: [(min_x + max_x) * 0.5, (min_y + max_y) * 0.5],
             // Вырожденная ось (точка/линия контента) — минимум MIN_CONTENT_HALF,
-            // чтобы масштаб в `scale` оставался конечным.
+            // чтобы масштаб в `scale` оставался конечным; далее — нижний порог
+            // охвата MIN_VIEWPORT_COVERAGE вьюпортов (приёмка T13): пока сцена
+            // влезает в него, масштаб стабилен и двигается только рамка.
             content_half: [
-                ((max_x - min_x) * 0.5).max(MIN_CONTENT_HALF),
-                ((max_y - min_y) * 0.5).max(MIN_CONTENT_HALF),
+                ((max_x - min_x) * 0.5)
+                    .max(MIN_CONTENT_HALF)
+                    .max(vp_half[0] * MIN_VIEWPORT_COVERAGE),
+                ((max_y - min_y) * 0.5)
+                    .max(MIN_CONTENT_HALF)
+                    .max(vp_half[1] * MIN_VIEWPORT_COVERAGE),
             ],
             size_px,
             padding_px: CONTENT_PADDING_PX,
@@ -679,28 +698,55 @@ mod tests {
         image.rgba.chunks_exact(4).any(|px| px == color.as_slice())
     }
 
-    /// Контент 100×100 в буфере 220×140: ограничивает ось Y (124/100 < 204/100),
-    /// масштаб 1.24 — по Y контент прижат к padding, по X центрирован.
+    /// Нижний порог охвата (приёмка T13): контент, влезающий в
+    /// MIN_VIEWPORT_COVERAGE вьюпортов, не растягивает карту — масштаб ~1/10
+    /// от видимого, стабилен; центр viewport — в центре буфера. Viewport
+    /// 100×100 в буфере 220×140: half = 500 (10 вьюпортов), scale = 124/1000.
     #[test]
-    fn fit_scales_uniformly_and_centers_content() {
+    fn fit_viewport_coverage_floor() {
         let mapping = MinimapMapping::fit(&[], [0.0, 0.0, 100.0, 100.0], 220, 140);
         assert_close(
             mapping.world_to_map([50.0, 50.0]),
             [110.0, 70.0],
             EPS,
-            "центр контента в центре буфера",
+            "центр viewport в центре буфера",
+        );
+        assert_close(
+            mapping.world_to_map([0.0, 0.0]),
+            [103.8, 63.8],
+            EPS,
+            "min-угол: 1/10 буфера от центра",
+        );
+        assert_close(
+            mapping.world_to_map([100.0, 100.0]),
+            [116.2, 76.2],
+            EPS,
+            "max-угол: рамка viewport — 12.4 px карты",
+        );
+    }
+
+    /// Сцена шире порога охвата: масштаб меньше базового (1/10) — карта
+    /// уменьшается, только когда union нод превышает MIN_VIEWPORT_COVERAGE
+    /// вьюпортов (отлёт дальше).
+    #[test]
+    fn fit_scene_beyond_coverage_shrinks() {
+        let nodes = [MinimapNode {
+            rect: [0.0, 0.0, 4000.0, 4000.0],
+            kind: MinimapNodeKind::Text,
+        }];
+        let mapping = MinimapMapping::fit(&nodes, [0.0, 0.0, 100.0, 100.0], 220, 140);
+        // half = 2000 > 500 (порог) → scale = 124/4000 = 0.031 < базового
+        assert_close(
+            mapping.world_to_map([2000.0, 2000.0]),
+            [110.0, 70.0],
+            EPS,
+            "центр сцены в центре буфера",
         );
         assert_close(
             mapping.world_to_map([0.0, 0.0]),
             [48.0, 8.0],
             EPS,
-            "min-угол: y прижат к padding",
-        );
-        assert_close(
-            mapping.world_to_map([100.0, 100.0]),
-            [172.0, 132.0],
-            EPS,
-            "max-угол: y у нижнего padding",
+            "края сцены в padding (масштаб уменьшился)",
         );
     }
 
@@ -946,18 +992,19 @@ mod tests {
         assert_eq!(image.height, 140);
         assert_eq!(image.rgba.len(), 220 * 140 * 4);
         assert_eq!(pixel(&image, 110, 70), BG_COLOR, "центр — фон");
-        // Рамка = map-прямоугольник контента [48, 8, 172, 132] (± округление)
+        // Рамка viewport: порог охвата ×10 — viewport (100 мир.) это 1/10
+        // буфера, прямоугольник map ≈ [103.8, 63.8, 116.2, 76.2] (± округление)
         assert_eq!(
-            pixel(&image, 110, 8),
+            pixel(&image, 110, 64),
             VIEWPORT_COLOR,
             "верхняя полоса рамки"
         );
         assert_eq!(
-            pixel(&image, 110, 131),
+            pixel(&image, 110, 76),
             VIEWPORT_COLOR,
             "нижняя полоса рамки"
         );
-        assert_eq!(pixel(&image, 48, 70), VIEWPORT_COLOR, "левая полоса рамки");
+        assert_eq!(pixel(&image, 104, 70), VIEWPORT_COLOR, "левая полоса рамки");
         for (x, y) in [(0, 0), (219, 0), (0, 139), (219, 139)] {
             assert_eq!(
                 pixel(&image, x, y)[3],
@@ -1047,17 +1094,28 @@ mod tests {
     /// (верхний ряд совпал бы с её верхней полосой).
     #[test]
     fn render_edges_hidden_at_threshold() {
-        // Ноды 45-й колонки строк 4 и 5: центры (13550,1250) и (13550,1550) —
-        // вертикальная линия в map ≈ x=192, y 67..71, пиксель (192,69) вне нод.
+        // Ноды 45-й колонки строк 4 и 5: центры (13550,1250) и (13550,1550).
+        // Порог охвата ×10 → half = [75000, 15000], scale = min(204/150000,
+        // 124/30000) = 0.00136 (uniform по X): линия субпиксельная — точки
+        // нод её перекрывают, поэтому ищем EDGE_COLOR 3×3 вокруг середины
+        // линии между центрами n245 (13550,1350) и n295 (13550,1650).
         let edges = vec![Edge::new("e1", "n245", None, "n295", None)];
         let viewport = [0.0, 0.0, 15_000.0, 3_000.0];
         let below = Minimap::capture(&canvas(grid_nodes(499), edges.clone()), viewport, 220, 140);
         let below_image = below.render();
-        assert_eq!(
-            pixel(&below_image, 192, 69),
-            EDGE_COLOR,
-            "пиксель на линии между n245 и n295"
-        );
+        let mid = below.world_to_map([13550.0, 1500.0]);
+        let mut line_hit = false;
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let px = pixel(
+                    &below_image,
+                    (mid[0] as i32 + dx) as u32,
+                    (mid[1] as i32 + dy) as u32,
+                );
+                line_hit |= px == EDGE_COLOR;
+            }
+        }
+        assert!(line_hit, "пиксель на линии между n245 и n295 (mid {mid:?})");
         assert!(
             contains_color(&below_image, EDGE_COLOR),
             "при 499 нодах edges видны"
@@ -1127,11 +1185,13 @@ mod tests {
             EPS,
             "клик в центр миникарты",
         );
+        // Порог охвата ×10: контент — 10 вьюпортов (half=500, scale=0.124),
+        // min-угол viewport [0,0] — в map-точке [103.8, 63.8]
         assert_close(
-            minimap.map_to_world([48.0, 8.0]),
+            minimap.map_to_world([103.8, 63.8]),
             [0.0, 0.0],
             0.5,
-            "клик в min-угол контента",
+            "клик в min-угол viewport",
         );
     }
 
@@ -1156,10 +1216,11 @@ mod tests {
             EPS,
             "центр карты → новый центр контента",
         );
-        // half = 150 → scale = 124/300; min-угол: x центрирован (48), y = 8
+        // half: union = 150, но порог охвата ×10 → 1500; scale = 124/3000;
+        // min-угол viewport в map [103.8, 63.8] (рамка — 1/10 буфера)
         assert_close(
             minimap.world_to_map([-100.0, -100.0]),
-            [48.0, 8.0],
+            [103.8, 63.8],
             EPS,
             "новый min-угол контента",
         );
