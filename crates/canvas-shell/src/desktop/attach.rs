@@ -193,23 +193,41 @@ pub fn attach(
 
     // ---- R3: верификация стилей перечитыванием ПОСЛЕ репарентинга ------
     // winit/tao восстанавливают стили асинхронно, «не зная» о репарентинге
-    // (урок Seelen) — перечитать ОБА поля и сверить с планом; расхождение
-    // → фолбэк-причина (R14: повторный scrub НЕ ретраится в T15, план §7).
-    let fact_style = read_style_field(hwnd, GWL_STYLE);
-    let fact_exstyle = read_style_field(hwnd, GWL_EXSTYLE);
-    if let Err(mismatch) = super::verify_styles(fact_style, fact_exstyle, &plan) {
-        tracing::warn!(
-            ?mismatch,
-            "attach: стили после репарентинга не совпали (R3)"
-        );
-        return Err(AttachError::StyleMismatch(mismatch));
+    // (урок Seelen): на части машин (наблюдено при хосте = владелец DefView)
+    // winit возвращает WS_CLIPSIBLINGS во время наших SetWindowPos. План §7
+    // не ретраил scrub, но R3-урок прямо предписывает «повторять скраббинг»
+    // при перезаписи библиотекой — делаем ограниченный повтор: перечитать,
+    // сверить, при расхождении перезаписать планом и сверить снова.
+    const VERIFY_ATTEMPTS: u32 = 3;
+    for attempt in 1..=VERIFY_ATTEMPTS {
+        let fact_style = read_style_field(hwnd, GWL_STYLE);
+        let fact_exstyle = read_style_field(hwnd, GWL_EXSTYLE);
+        if let Err(mismatch) = super::verify_styles(fact_style, fact_exstyle, raised) {
+            if attempt == VERIFY_ATTEMPTS {
+                tracing::warn!(
+                    ?mismatch,
+                    attempts = VERIFY_ATTEMPTS,
+                    "attach: стили после репарентинга не совпали (R3)"
+                );
+                return Err(AttachError::StyleMismatch(mismatch));
+            }
+            // Библиотека перезаписала значимые биты — повторный scrub текущих
+            // полей (идемпотентен: план точечный, посторонние биты не трогает).
+            tracing::warn!(
+                attempt,
+                "attach: значимые стили перезаписаны библиотекой — повторный scrub (R3)"
+            );
+            write_style_field(hwnd, GWL_STYLE, plan.style, super::StyleField::Style)?;
+            write_style_field(hwnd, GWL_EXSTYLE, plan.exstyle, super::StyleField::ExStyle)?;
+        } else {
+            tracing::debug!(attempt, "attach: verify_ok");
+            return Ok(AttachOutcome {
+                strategy: hierarchy.strategy,
+                screen,
+            });
+        }
     }
-    tracing::debug!("attach: verify_ok");
-
-    Ok(AttachOutcome {
-        strategy: hierarchy.strategy,
-        screen,
-    })
+    unreachable!("цикл выше возвращает на каждой итерации");
 }
 
 /// WorkerW — последний ребёнок Progman (R2 шаг 5): GetWindow(progman,

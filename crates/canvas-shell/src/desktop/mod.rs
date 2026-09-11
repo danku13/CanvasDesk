@@ -137,23 +137,47 @@ pub fn plan_style_scrub(style: u32, exstyle: u32, raised: bool) -> StylePlan {
     StylePlan { style, exstyle }
 }
 
-/// Верификация: фактические (перечитанные GWL_STYLE/GWL_EXSTYLE) стили
-/// обязаны точно совпадать с планом. Отличие → StyleMismatch с полем.
-pub fn verify_styles(style: u32, exstyle: u32, plan: &StylePlan) -> Result<(), StyleMismatch> {
-    // точное сравнение обеих полей; style проверяется первым — он чаще
-    // перезаписывается библиотекой (урок tao, R3)
-    if style != plan.style {
+/// Верификация стилей после репарентинга (R3): проверяются только биты,
+/// значимые для встройки:
+/// - `style`: WS_CHILDWINDOW обязан стоять, WS_CLIPSIBLINGS — снят;
+/// - `exstyle`: WS_EX_NOACTIVATE обязан стоять (до первого клика), для
+///   Raised дополнительно WS_EX_LAYERED (R2 шаг 2), WS_EX_APPWINDOW и
+///   WS_EX_ACCEPTFILES — сняты.
+///
+/// Точного равенства с планом НЕ требуем: winit асинхронно возвращает
+/// посторонние биты (наблюдено WS_EX_WINDOWEDGE, который библиотека
+/// вставляет обратно после наших записей) — бороться с этим точечными
+/// перезаписями бесполезно (R3-урок: «перехватывать и повторять», но бит
+/// не влияет на встройку). Отличие → StyleMismatch с полем.
+pub fn verify_styles(style: u32, exstyle: u32, raised: bool) -> Result<(), StyleMismatch> {
+    if style & WS_CHILDWINDOW != WS_CHILDWINDOW {
         return Err(StyleMismatch {
             field: StyleField::Style,
-            expected: plan.style,
-            actual: style,
+            expected: WS_CHILDWINDOW,
+            actual: style & WS_CHILDWINDOW,
         });
     }
-    if exstyle != plan.exstyle {
+    if style & WS_CLIPSIBLINGS != 0 {
+        return Err(StyleMismatch {
+            field: StyleField::Style,
+            expected: 0,
+            actual: style & WS_CLIPSIBLINGS,
+        });
+    }
+    let required_ex = WS_EX_NOACTIVATE | if raised { WS_EX_LAYERED } else { 0 };
+    if exstyle & required_ex != required_ex {
         return Err(StyleMismatch {
             field: StyleField::ExStyle,
-            expected: plan.exstyle,
-            actual: exstyle,
+            expected: required_ex,
+            actual: exstyle & required_ex,
+        });
+    }
+    let forbidden_ex = WS_EX_APPWINDOW | WS_EX_ACCEPTFILES;
+    if exstyle & forbidden_ex != 0 {
+        return Err(StyleMismatch {
+            field: StyleField::ExStyle,
+            expected: 0,
+            actual: exstyle & forbidden_ex,
         });
     }
     Ok(())
@@ -372,51 +396,88 @@ mod tests {
 
     // ---------- verify_styles ----------
 
-    /// Полное совпадение обеих полей → Ok.
+    /// Все значимые биты на месте (посторонние биты допустимы) → Ok.
     #[test]
-    fn verify_styles_exact_match_ok() {
-        let plan = plan_style_scrub(0x00CF_0000, 0x0003_0000, true);
-        assert_eq!(verify_styles(plan.style, plan.exstyle, &plan), Ok(()));
+    fn verify_styles_required_bits_ok() {
+        let style = WS_CHILDWINDOW | 0x00CF_0000; // чужие биты — не мешают
+        let exstyle = WS_EX_NOACTIVATE | 0x0002_0000; // WS_EX_TOOLWINDOW — ок
+        assert_eq!(verify_styles(style, exstyle, false), Ok(()));
+        // Raised требует ещё и LAYERED
+        assert_eq!(verify_styles(style, exstyle | WS_EX_LAYERED, true), Ok(()));
     }
 
-    /// Расхождение style → Err с полем Style и значениями expected/actual;
-    /// при расхождении обоих полей первым сообщается Style.
+    /// Посторонний бит, который библиотека возвращает асинхронно
+    /// (наблюдено: WS_EX_WINDOWEDGE), — НЕ причина расхождения.
+    #[test]
+    fn verify_styles_tolerates_library_readded_foreign_bits() {
+        let style = WS_CHILDWINDOW | WS_CLIPSIBLINGS & !WS_CLIPSIBLINGS; // ровно CHILDWINDOW
+        let exstyle = WS_EX_NOACTIVATE | WS_EX_WINDOWEDGE;
+        assert_eq!(verify_styles(style, exstyle, false), Ok(()));
+    }
+
+    /// Расхождение style (нет WS_CHILDWINDOW / вернулся WS_CLIPSIBLINGS) →
+    /// Err с полем Style; при расхождении обоих полей первым — Style.
     #[test]
     fn verify_styles_style_mismatch_reports_field() {
-        let plan = plan_style_scrub(WS_CLIPSIBLINGS, 0, false);
-        // tao/winit пере-поставил CLIPSIBLINGS после репарентинга (R3)
-        let actual = plan.style | WS_CLIPSIBLINGS;
+        // нет WS_CHILDWINDOW
         assert_eq!(
-            verify_styles(actual, plan.exstyle, &plan),
+            verify_styles(0, WS_EX_NOACTIVATE, false),
             Err(StyleMismatch {
                 field: StyleField::Style,
-                expected: plan.style,
-                actual,
+                expected: WS_CHILDWINDOW,
+                actual: 0,
+            })
+        );
+        // tao/winit пере-поставил CLIPSIBLINGS после репарентинга (R3)
+        let actual = WS_CHILDWINDOW | WS_CLIPSIBLINGS;
+        assert_eq!(
+            verify_styles(actual, WS_EX_NOACTIVATE, false),
+            Err(StyleMismatch {
+                field: StyleField::Style,
+                expected: 0,
+                actual: WS_CLIPSIBLINGS,
             })
         );
         // оба поля разошлись — приоритет Style
         assert_eq!(
-            verify_styles(actual, plan.exstyle | WS_EX_APPWINDOW, &plan),
+            verify_styles(actual, WS_EX_APPWINDOW, false),
             Err(StyleMismatch {
                 field: StyleField::Style,
-                expected: plan.style,
-                actual,
+                expected: 0,
+                actual: WS_CLIPSIBLINGS,
             })
         );
     }
 
-    /// Расхождение exstyle (style совпал) → Err с полем ExStyle.
+    /// Расхождение exstyle: вернулся APPWINDOW (Alt+Tab — фолбэк R14),
+    /// нет NOACTIVATE, на Raised нет LAYERED → Err с полем ExStyle.
     #[test]
     fn verify_styles_exstyle_mismatch_reports_field() {
-        let plan = plan_style_scrub(0, WS_EX_APPWINDOW, false);
         // APPWINDOW вернулся — окно снова в Alt+Tab, фолбэк (R14)
-        let actual = plan.exstyle | WS_EX_APPWINDOW;
         assert_eq!(
-            verify_styles(plan.style, actual, &plan),
+            verify_styles(WS_CHILDWINDOW, WS_EX_NOACTIVATE | WS_EX_APPWINDOW, false),
             Err(StyleMismatch {
                 field: StyleField::ExStyle,
-                expected: plan.exstyle,
-                actual,
+                expected: 0,
+                actual: WS_EX_APPWINDOW,
+            })
+        );
+        // NOACTIVATE пропал
+        assert_eq!(
+            verify_styles(WS_CHILDWINDOW, 0, false),
+            Err(StyleMismatch {
+                field: StyleField::ExStyle,
+                expected: WS_EX_NOACTIVATE,
+                actual: 0,
+            })
+        );
+        // Raised без LAYERED (R2 шаг 2)
+        assert_eq!(
+            verify_styles(WS_CHILDWINDOW, WS_EX_NOACTIVATE, true),
+            Err(StyleMismatch {
+                field: StyleField::ExStyle,
+                expected: WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                actual: WS_EX_NOACTIVATE,
             })
         );
     }
