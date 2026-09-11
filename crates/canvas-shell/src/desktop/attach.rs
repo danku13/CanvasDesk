@@ -15,22 +15,24 @@
 //!
 //! Classic: scrub → SetParent(hwnd, worker_w). Затем (обе схемы): окно на
 //! весь виртуальный экран + верификация стилей перечитыванием (R3).
-//! WorkerW может отсутствовать (фон «сплошной цвет» — Explorer окна обоев
-//! не создаёт): тогда хост = родитель слоя иконок (Progman на Raised,
-//! top-level владелец DefView на Classic — GetAncestor(def_view, GA_PARENT)),
-//! окно ставится в Z-order сразу ПОД DefView (иконки поверх канваса; обоев
-//! просто нет). Любая ошибка шага → AttachError → фолбэк на обычное окно
-//! (R14). Чистая реализация по описанию механики (RECIPES §0).
+//! WorkerW может отсутствовать (Explorer его не породил): тогда хост = Progman
+//! на обеих схемах — подложка Progman (фон десктопа) рисуется под детьми,
+//! владелец DefView с иконками остаётся top-level над канвасом. Владелец
+//! DefView как хост НЕ подходит: он рисует обои опаком, дочернее окно под
+//! DefView перекрывается («видно только обои», наблюдение на фоне-картинке).
+//! Любая ошибка шага → AttachError → фолбэк на обычное окно (R14).
+//! Чистая реализация по описанию механики (RECIPES §0).
 
 use super::hierarchy::{DesktopHierarchy, HierarchyError};
 use thiserror::Error;
-use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Foundation::{COLORREF, HWND, POINT};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetParent,
-    SetWindowLongPtrW, SetWindowPos, GA_PARENT, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT,
-    HWND_BOTTOM, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    WINDOW_LONG_PTR_INDEX, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    GetWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
+    SetWindowPos, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_BOTTOM, LWA_ALPHA,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_LONG_PTR_INDEX, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE,
 };
 
 /// Ошибка встройки — любая ведёт к фолбэку на оконный режим (R14).
@@ -106,24 +108,21 @@ pub fn attach(
 
     // ---- R2 шаг 3: SetParent -------------------------------------------
     // Raised: parent = Progman (НЕ WorkerW!); Classic: parent = WorkerW,
-    // а при его отсутствии — top-level владелец DefView (GetAncestor
-    // GA_PARENT — хост слоя иконок; обоев нет, канвас встаёт под иконки).
+    // а при его отсутствии — ТОЖЕ Progman: владелец DefView рисует обои
+    // опаком поверх всей клиентской области, дочернее окно под DefView
+    // оказалось полностью перекрытым его отрисовкой («видно только обои»,
+    // наблюдение на машине с фоном-картинкой и без WorkerW). Progman —
+    // нижний слой иерархии: его подложка (фон десктопа) рисуется под
+    // детьми, прозрачный владелец DefView с иконками остаётся top-level
+    // НАД нами — канвас между фоном и иконками.
     let parent = if raised {
         hierarchy.progman
     } else {
         match hierarchy.worker_w {
             Some(worker_w) => worker_w,
             None => {
-                // SAFETY: def_view из детекта (живое окно Explorer);
-                // GetAncestor(GA_PARENT) — чистое чтение иерархии, битый
-                // хэндл даёт NULL → проверяем и уходим в фолбэк R14.
-                let host = unsafe { GetAncestor(hierarchy.def_view, GA_PARENT) };
-                if host.is_invalid() {
-                    tracing::warn!("attach: владелец DefView недоступен — не к чему встраиваться");
-                    return Err(AttachError::SetParentFailed);
-                }
-                tracing::info!("attach: WorkerW нет — хост = владелец DefView (фон без обоев)");
-                host
+                tracing::info!("attach: WorkerW нет — хост = Progman (фон под, иконки над)");
+                hierarchy.progman
             }
         }
     };
@@ -137,13 +136,15 @@ pub fn attach(
     }
     tracing::debug!(parent = ?parent, "attach: set_parent");
 
-    // ---- R2 шаги 4–5: Z-order -------------------------------------------
-    // Шаг 4 (Raised, а также Classic без WorkerW): insert-after = def_view —
-    // встаём в Z-order сразу ПОД слоем иконок (DefView поверх нас). Classic
-    // со WorkerW шаг пропускает: окно — единственный ребёнок WorkerW.
+    // ---- R2 шаги 4–5: Z-order (ТОЛЬКО Raised) ---------------------------
+    // Шаг 4: insert-after = def_view — встаём в Z-order сразу ПОД слоем
+    // иконок (DefView поверх нас). Classic шаг пропускает: со WorkerW окно
+    // — единственный ребёнок WorkerW, без WorkerW (хост Progman) DefView —
+    // не наш sibling (он в другом top-level), вставать «под» него некуда —
+    // иконки и так top-level НАД Progman.
     // Шаг 5 (ensure_worker_w_z_order) — WorkerW последним ребёнком Progman
     // (обои под нами); без WorkerW — нечего фиксировать.
-    if raised || hierarchy.worker_w.is_none() {
+    if raised {
         // SAFETY: hwnd/def_view валидны (детект T15-B); флаги
         // NOMOVE|NOSIZE|NOACTIVATE — меняется только Z-order, ни позиция,
         // ни размер, ни фокус не затрагиваются.
@@ -167,20 +168,37 @@ pub fn attach(
     }
 
     // ---- Обе схемы: окно на весь виртуальный экран ----------------------
-    // Координаты — экранные: клиентская область хоста (WorkerW/Progman/
-    // владелец DefView) совпадает с виртуальным экраном (план §3).
+    // Координаты дочернего окна — ОТНОСИТЕЛЬНО клиентской области родителя
+    // (после SetParent SetWindowPos их так и трактует). Клиентское начало
+    // хоста в экранных координатах снимаем ClientToScreen(host, (0,0)) и
+    // вычитаем из экранного rect виртуального экрана — передавать
+    // screen.left/top напрямую верно только пока клиент хоста начинается
+    // в (0,0) (наблюдение: владелец DefView на multimonitor — не так,
+    // канвас улетал за пределы родителя и клиппился → «видно только обои»).
     // SWP_NOZORDER — Z-order уже выставлен шагом 4 (Raised / Classic без
     // WorkerW) либо не требуется (Classic со WorkerW — единственный ребёнок
     // top-level WorkerW); при NOZORDER hWndInsertAfter игнорируется (None).
-    // SAFETY: hwnd валиден; width/height виртуального экрана (T15-B,
-    // EnumDisplayMonitors) неотрицательны; set_parent уже прошёл —
-    // координаты интерпретируются относительно нового родителя.
+    // SAFETY: parent — хэндл из детекта/шага SetParent (живой: окно только
+    // что приняло нашего ребёнка); pt — локальный out-буфер; ClientToScreen
+    // читает координаты без побочных эффектов.
+    let mut client_origin = POINT { x: 0, y: 0 };
+    // BOOL: FALSE — провал перевода (координаты не заполнены) — уходим в
+    // фолбэк R14, встраиваться вслепую негде.
+    if !unsafe { ClientToScreen(parent, &mut client_origin) }.as_bool() {
+        tracing::warn!("attach: ClientToScreen провален — координаты хоста неизвестны");
+        return Err(AttachError::SetWindowPosFailed);
+    }
+    let left = screen.left - client_origin.x;
+    let top = screen.top - client_origin.y;
+    // SAFETY: hwnd валиден; размеры виртуального экрана (T15-B,
+    // EnumDisplayMonitors) неотрицательны; left/top переведены в систему
+    // координат клиента родителя; set_parent уже прошёл.
     if let Err(err) = unsafe {
         SetWindowPos(
             hwnd,
             None,
-            screen.left,
-            screen.top,
+            left,
+            top,
             screen.width(),
             screen.height(),
             SWP_NOZORDER | SWP_NOACTIVATE,
@@ -189,7 +207,24 @@ pub fn attach(
         tracing::warn!(%err, "attach: SetWindowPos (виртуальный экран) провален");
         return Err(AttachError::SetWindowPosFailed);
     }
-    tracing::debug!(w = screen.width(), h = screen.height(), "attach: screen");
+    tracing::info!(
+        left,
+        top,
+        w = screen.width(),
+        h = screen.height(),
+        client_origin = ?(client_origin.x, client_origin.y),
+        "attach: геометрия окна (система координат клиента хоста)"
+    );
+    // Диагностика встройки: итоговый экранный rect окна — по логу видно,
+    // куда реально встало окно (проверка ручной приёмки «канвас не видно»).
+    // SAFETY: hwnd валиден; rect — локальный out-буфер.
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    if unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rect) }.is_ok() {
+        tracing::info!(
+            rect = ?(rect.left, rect.top, rect.right, rect.bottom),
+            "attach: итоговый rect окна (экранные координаты)"
+        );
+    }
 
     // ---- R3: верификация стилей перечитыванием ПОСЛЕ репарентинга ------
     // winit/tao восстанавливают стили асинхронно, «не зная» о репарентинге
