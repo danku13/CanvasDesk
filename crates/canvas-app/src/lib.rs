@@ -152,6 +152,18 @@ pub mod ui {
             && point[1] <= rect[1] + rect[3]
     }
 
+    /// Эффективный scale factor для экранного ввода/раскладки (R10):
+    /// в desktop-режиме после репарентинга `window.scale_factor()` врёт
+    /// (winit не получает корректный DPI на детях Progman/WorkerW) — берём
+    /// DPI из GetDpiForWindow (поллинг монитора T15-D + снятие сразу после
+    /// attach); в оконном режиме — scale_factor окна.
+    pub fn effective_scale(window_scale: f32, desktop_dpi: Option<u32>) -> f32 {
+        (match desktop_dpi {
+            Some(dpi) => dpi as f64 / 96.0,
+            None => f64::from(window_scale),
+        }) as f32
+    }
+
     /// Rect летающей кнопки настроек в логических px от угла окна.
     pub fn button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
         let x = match corner {
@@ -991,6 +1003,21 @@ pub mod ui {
             assert!(!in_resize_corner(&node, [365.0, 220.0]));
             // Противоположный угол — не resize
             assert!(!in_resize_corner(&node, [105.0, 105.0]));
+        }
+
+        /// effective_scale (R10): desktop DPI побеждает враньё scale_factor
+        /// окна после репарентинга; без desktop DPI — scale_factor окна.
+        #[test]
+        fn effective_scale_prefers_desktop_dpi() {
+            // dpi 120 = 125% — desktop-режим: берём его, а не 1.0 из winit
+            let s = effective_scale(1.0, Some(120));
+            assert!((s - 1.25).abs() < 1e-6);
+            // dpi 96 = 100% — даже если winit врёт 1.25
+            let s = effective_scale(1.25, Some(96));
+            assert!((s - 1.0).abs() < 1e-6);
+            // нет desktop DPI — оконный режим: scale_factor окна как есть
+            let s = effective_scale(1.5, None);
+            assert!((s - 1.5).abs() < 1e-6);
         }
 
         /// Кнопка настроек: rect в каждом из 4 углов viewport (панель настроек).

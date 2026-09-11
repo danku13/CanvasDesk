@@ -406,6 +406,11 @@ struct App {
     /// Progman/DefView/WorkerW + стратегия. None — не встроены/фолбэк.
     #[cfg(windows)]
     desktop_hierarchy: Option<canvas_shell::desktop::hierarchy::DesktopHierarchy>,
+    /// Последний достоверный DPI окна в desktop-режиме (T15, R10): снят
+    /// GetDpiForWindow сразу после attach и обновляется поллингом монитора.
+    /// None — оконный режим/до attach: scale берётся из window.scale_factor().
+    #[cfg(windows)]
+    desktop_dpi: Option<u32>,
     /// Shell-монитор (T15): WinEventHook на WorkerW + DPI-поллинг; события —
     /// AppEvent::Desktop через proxy. Спавнится в main() при --desktop,
     /// слежка (Watch) устанавливается в resumed() после attach.
@@ -499,6 +504,8 @@ impl App {
             #[cfg(windows)]
             desktop_hierarchy: None,
             #[cfg(windows)]
+            desktop_dpi: None,
+            #[cfg(windows)]
             desktop_monitor: None,
             #[cfg(windows)]
             desktop_recover_failures: 0,
@@ -589,6 +596,15 @@ impl App {
                 let mut guard = canvas_shell::desktop::icons::IconGuard::capture(hier.def_view);
                 guard.hide();
                 self.icon_guard = Some(guard);
+                // R10: зафиксировать достоверный DPI ДО первого тика
+                // монитора (его первый замер — молчаливый бейзлайн): без
+                // этого viewport_logical()/кнопки ещё один тик (500 мс) и
+                // дольше — при стабильном DPI навсегда — считались бы от
+                // врущего window.scale_factor() после репарентинга.
+                let dpi = attach::window_dpi(hwnd);
+                if dpi != 0 {
+                    self.desktop_dpi = Some(dpi);
+                }
                 self.desktop_hierarchy = Some(hier);
                 self.watch_worker_w(hwnd, &hier);
             }
@@ -674,6 +690,7 @@ impl App {
             canvas_shell::DesktopEvent::DpiChanged { dpi } => {
                 let scale = canvas_shell::dpi_to_scale(dpi);
                 tracing::info!(dpi, scale, "DPI десктоп-окна изменился (поллинг R10)");
+                self.desktop_dpi = Some(dpi);
                 if let Some(renderer) = self.renderer.as_mut() {
                     // Пересоздание surface не нужно: размер HWND не менялся;
                     // минимап пересоберётся по сигнатуре кадра
@@ -797,12 +814,23 @@ impl App {
         }
     }
 
-    /// Scale factor окна (1.0 до создания окна).
+    /// Scale factor окна (1.0 до создания окна). В desktop-режиме после
+    /// attach — из desktop_dpi (GetDpiForWindow, R10: winit врёт после
+    /// репарентинга), иначе — scale_factor окна.
     fn scale_factor(&self) -> f32 {
-        self.window
+        let window_scale = self
+            .window
             .as_ref()
             .map(|w| w.scale_factor() as f32)
-            .unwrap_or(1.0)
+            .unwrap_or(1.0);
+        #[cfg(windows)]
+        {
+            canvas_app::ui::effective_scale(window_scale, self.desktop_dpi)
+        }
+        #[cfg(not(windows))]
+        {
+            window_scale
+        }
     }
 
     /// zoom * scale_factor — перевод world-px в физические (для буфера редактора).
@@ -1002,12 +1030,14 @@ impl App {
         self.middle_pressed || (self.space_pressed && self.left_pressed)
     }
 
-    /// Размер viewport в логических пикселях.
+    /// Размер viewport в логических пикселях. Делитель — effective scale
+    /// (R10: в desktop-режиме window.scale_factor() после репарентинга
+    /// недостоверен — кнопки улетали за видимую область).
     fn viewport_logical(&self) -> Vec2 {
         match &self.window {
             Some(window) => {
                 let size = window.inner_size();
-                let scale = window.scale_factor() as f32;
+                let scale = self.scale_factor();
                 [size.width as f32 / scale, size.height as f32 / scale]
             }
             None => [0.0, 0.0],
@@ -2833,11 +2863,7 @@ impl App {
     }
 
     fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let scale = self
-            .window
-            .as_ref()
-            .map(|w| w.scale_factor() as f32)
-            .unwrap_or(1.0);
+        let scale = self.scale_factor();
         let logical = [position.x as f32 / scale, position.y as f32 / scale];
         // Drag по миникарте (T13): пан следует за курсором — раньше
         // канвас-панорамирования, дрги не конкурируют (нажатие перехвачено)
@@ -2907,11 +2933,7 @@ impl App {
 
     fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
         // Тачпады шлют PixelDelta (физические px), колёсики мышей — LineDelta
-        let scale = self
-            .window
-            .as_ref()
-            .map(|w| w.scale_factor() as f32)
-            .unwrap_or(1.0);
+        let scale = self.scale_factor();
         let (dx, dy) = match delta {
             MouseScrollDelta::LineDelta(x, y) => (x * PAN_PX_PER_LINE, y * PAN_PX_PER_LINE),
             MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / scale, pos.y as f32 / scale),
