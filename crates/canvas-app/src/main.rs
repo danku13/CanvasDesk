@@ -2442,18 +2442,26 @@ impl App {
         // T15: первый клик по канвасу снимает WS_EX_NOACTIVATE — с этого
         // момента окно может получать фокус («WS_EX_NOACTIVATE до первого
         // клика», TASKS T15); ошибки не критичны, флаг ставим до вызова
-        // (повторные клики не ретраят)
+        // (повторные клики не ретраят). Клавиатурный фокус ставим явно на
+        // КАЖДОМ нажатии: в ребёнке Progman клик активирует top-level-предка,
+        // а фокус ввода нашему окну системой не передаётся — без SetFocus
+        // WM_KEYDOWN не доходят и текст в нодах не редактируется
+        // (attach::focus_window, идемпотентен — внутри GetFocus-проверка)
         #[cfg(windows)]
-        if self.desktop_mode
-            && state == ElementState::Pressed
-            && !self.desktop_activation_enabled
-            && self.desktop_hierarchy.is_some()
-        {
-            self.desktop_activation_enabled = true;
+        if self.desktop_mode && state == ElementState::Pressed && self.desktop_hierarchy.is_some() {
+            if !self.desktop_activation_enabled {
+                self.desktop_activation_enabled = true;
+                if let Some(raw) = self.window_hwnd() {
+                    let hwnd = Self::hwnd(raw);
+                    if let Err(err) = canvas_shell::desktop::attach::enable_activation(hwnd) {
+                        tracing::warn!(%err, "не удалось снять WS_EX_NOACTIVATE");
+                    }
+                }
+            }
             if let Some(raw) = self.window_hwnd() {
                 let hwnd = Self::hwnd(raw);
-                if let Err(err) = canvas_shell::desktop::attach::enable_activation(hwnd) {
-                    tracing::warn!(%err, "не удалось снять WS_EX_NOACTIVATE");
+                if let Err(err) = canvas_shell::desktop::attach::focus_window(hwnd) {
+                    tracing::warn!(%err, "не удалось передать клавиатурный фокус");
                 }
             }
         }

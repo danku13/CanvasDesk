@@ -34,6 +34,7 @@ use thiserror::Error;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
     SetWindowPos, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_BOTTOM, HWND_TOP, LWA_ALPHA,
@@ -58,6 +59,10 @@ pub enum AttachError {
     /// Перечитанные стили != план (R3: библиотека перезаписала — Seelen/tao).
     #[error("стили после репарентинга не совпали: {0:?}")]
     StyleMismatch(super::StyleMismatch),
+    /// SetFocus отказал — встроенное окно не получает клавиатуру
+    /// (не фатально для встройки: мышь и рендер сохраняются).
+    #[error("SetFocus не удался — клавиатурный фокус недоступен")]
+    SetFocusFailed,
 }
 
 /// Результат успешной встройки.
@@ -395,6 +400,36 @@ pub fn enable_activation(hwnd: HWND) -> Result<(), AttachError> {
         return Ok(());
     }
     tracing::debug!("enable_activation: WS_EX_NOACTIVATE снят");
+    Ok(())
+}
+
+/// Передать клавиатурный фокус встроенному окну (T15). В ребёнке Progman
+/// клик активирует top-level-предка (Progman), а фокус ввода Windows кладёт
+/// в очередь ПРЕДКА: наше окно WM_KEYDOWN/WM_CHAR не получает и текст в
+/// нодах не редактируется («канвас виден, но мёртв для клавиатуры» —
+/// наблюдение на Win11 24H2). Фокус ставим явно: после cross-thread
+/// SetParent потоки ввода приаттачены автоматически (AttachThreadInput
+/// системой), поэтому SetFocus из нашего потока разрешён. Идемпотентен:
+/// GetFocus == hwnd → no-op. Не ошибка встройки: провал лишь оставляет
+/// клавиатуру недоступной (мышь и рендер сохраняются), фолбэк R14 не нужен.
+pub fn focus_window(hwnd: HWND) -> Result<(), AttachError> {
+    // SAFETY: hwnd — живое окно этого процесса (вызывается по клику
+    // пользователя); GetFocus — чистое чтение фокуса очереди текущего
+    // потока, состояние окон не меняет.
+    if unsafe { GetFocus() } == hwnd {
+        return Ok(());
+    }
+    // SAFETY: hwnd валиден; потоки ввода приаттачены (см. док-блок);
+    // SetFocus меняет только фокус ввода текущей очереди.
+    if let Err(err) = unsafe { SetFocus(Some(hwnd)) } {
+        // NULL-возврат с пустым GetLastError — легальный случай «фокуса
+        // не было ни у кого»; настоящий провал смотрим по коду ошибки.
+        if !err.code().is_ok() {
+            tracing::warn!(%err, "focus_window: SetFocus провален — клавиатура недоступна");
+            return Err(AttachError::SetFocusFailed);
+        }
+    }
+    tracing::debug!("focus_window: клавиатурный фокус передан канвасу");
     Ok(())
 }
 
