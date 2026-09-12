@@ -525,6 +525,34 @@ pub mod ui {
         }
     }
 
+    /// Максимальная длина подписи призрака дропа (в символах) — длинные имена
+    /// файлов обрезаются многоточием, чтобы не вылезать за призрак карточки.
+    pub const DROP_GHOST_LABEL_MAX: usize = 40;
+
+    /// Подпись призрака дропа (Т9): имя файла из пути / первая строка заметки.
+    /// Чистая функция — тестируется без GPU; вызывается из оверлей-прохода
+    /// для каждого пункта плана при перетаскивании.
+    pub fn drop_ghost_label(kind: &DropInsertKind) -> String {
+        let raw = match kind {
+            DropInsertKind::File(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+            DropInsertKind::Note(text) => text.lines().next().unwrap_or("").to_owned(),
+        };
+        let mut chars = raw.chars();
+        let head: String = chars.by_ref().take(DROP_GHOST_LABEL_MAX).collect();
+        if chars.next().is_some() {
+            format!("{head}…")
+        } else {
+            head
+        }
+    }
+
+    /// Ширина подписи призрака дропа в world-px: ширина карточки призрака
+    /// минус боковые отступы.
+    pub const DROP_GHOST_LABEL_PAD: f32 = 12.0;
+
     /// Rect пункта меню в world-координатах: [x, y, w, h].
     pub fn menu_item_rect(origin: Vec2, i: usize) -> [f32; 4] {
         [
@@ -907,6 +935,32 @@ pub mod ui {
                 [0.0, 0.0]
             )
             .is_empty());
+        }
+
+        /// Подпись призрака дропа (Т9): имя файла из пути (Windows-разделитель).
+        #[test]
+        fn drop_ghost_label_file_name() {
+            let kind = DropInsertKind::File(PathBuf::from("C:\\Users\\danku\\Downloads\\SPEC.md"));
+            assert_eq!(drop_ghost_label(&kind), "SPEC.md");
+            // Unix-путь для кроссплатформенности теста
+            let kind = DropInsertKind::File(PathBuf::from("docs/TASKS.md"));
+            assert_eq!(drop_ghost_label(&kind), "TASKS.md");
+        }
+
+        /// Подпись заметки — первая строка; длинные строки обрезаются.
+        #[test]
+        fn drop_ghost_label_note_first_line_and_truncation() {
+            let kind = DropInsertKind::Note("первая строка\nвторая".into());
+            assert_eq!(drop_ghost_label(&kind), "первая строка");
+            let long = "а".repeat(DROP_GHOST_LABEL_MAX + 10);
+            let kind = DropInsertKind::Note(long.clone());
+            let label = drop_ghost_label(&kind);
+            assert!(label.ends_with('…'), "обрезка с многоточием: {label}");
+            assert_eq!(label.chars().count(), DROP_GHOST_LABEL_MAX + 1);
+            // Ровно лимит — без многоточия
+            let exact = "б".repeat(DROP_GHOST_LABEL_MAX);
+            let kind = DropInsertKind::Note(exact.clone());
+            assert_eq!(drop_ghost_label(&kind), exact);
         }
 
         /// Hit-test меню (T7): пункты палитры, края, промахи.

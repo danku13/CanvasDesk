@@ -2093,16 +2093,13 @@ impl ApplicationHandler<AppEvent> for App {
                 let hud = self.hud_text();
                 // Оверлей контекстного меню (T7): квады + подписи пунктов
                 // Т9 добавляет в конец призраков дропа — mutable
-                let (mut overlay_instances, overlay_labels, overlay_label_pos) =
+                let (mut overlay_instances, mut overlay_labels, mut overlay_label_pos) =
                     self.menu_overlay();
-                let overlay_texts: Vec<OverlayText> = overlay_labels
+                // Ширины подписей оверлея: меню — от констант, призраки дропа —
+                // по ширине карточки-призрака (Т9)
+                let mut overlay_widths: Vec<f32> = overlay_labels
                     .iter()
-                    .zip(&overlay_label_pos)
-                    .map(|(label, pos)| OverlayText {
-                        text: label,
-                        origin: *pos,
-                        width: MENU_WIDTH - MENU_LABEL_X - MENU_PADDING,
-                    })
+                    .map(|_| MENU_WIDTH - MENU_LABEL_X - MENU_PADDING)
                     .collect();
                 // Панель настроек (screen-space): кнопка + строки переключателей
                 let (mut screen_instances, mut owned_texts) = self.settings_overlay();
@@ -2163,7 +2160,26 @@ impl ApplicationHandler<AppEvent> for App {
                         [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
                         canvas_app::ui::DROP_PREVIEW_MAX,
                     ));
+                    // Подписи призраков (Т9): во время перетаскивания имена
+                    // файлов/первая строка заметки видны до самого дропа —
+                    // раньше призраки были пустыми рамками
+                    let pad = canvas_app::ui::DROP_GHOST_LABEL_PAD;
+                    for (ins, pos) in preview.plan.iter().zip(&positions) {
+                        overlay_labels.push(canvas_app::ui::drop_ghost_label(&ins.kind));
+                        overlay_label_pos.push([pos[0] + pad, pos[1] + 6.0]);
+                        overlay_widths.push(canvas_app::ui::DROP_CARD_W - pad * 2.0);
+                    }
                 }
+                let overlay_texts: Vec<OverlayText> = overlay_labels
+                    .iter()
+                    .zip(&overlay_label_pos)
+                    .zip(&overlay_widths)
+                    .map(|((label, pos), width)| OverlayText {
+                        text: label,
+                        origin: *pos,
+                        width: *width,
+                    })
+                    .collect();
                 // Пульс подсветки ноды-результата (T14): world-квад с рамкой,
                 // затухающей по pulse_alpha; за вырожденный — сброс (рамка
                 // оверлейная — border.a, заливка прозрачна после фикса
