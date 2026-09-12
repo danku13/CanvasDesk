@@ -79,8 +79,9 @@ pub fn title_for(node: &Node) -> String {
     }
     if let Some(text) = &node.text {
         if let Some(line) = text.lines().next().filter(|line| !line.is_empty()) {
-            // Маркеры форматирования (**...**, ==...==) в заголовке не показываем
-            return markdown::strip(line);
+            // Маркеры форматирования (**...**, ==...==) и ATX-заголовок (# ...)
+            // в заголовке карточки не показываем
+            return markdown::strip(crate::gfm::strip_atx(line));
         }
     }
     if let Some(label) = &node.label {
@@ -729,6 +730,11 @@ mod tests {
         // Маркеры форматирования в заголовке стрипятся
         let styled = Node::text("n", "**Важно** и ==срочно==", 0.0, 0.0);
         assert_eq!(title_for(&styled), "Важно и срочно");
+        // ATX-маркер заголовка не показываем буквально
+        let heading = Node::text("n", "## Заголовок заметки\nтело", 0.0, 0.0);
+        assert_eq!(title_for(&heading), "Заголовок заметки");
+        let no_space = Node::text("n", "#заголовок", 0.0, 0.0);
+        assert_eq!(title_for(&no_space), "#заголовок");
         let mut group = Node::text("n", "", 0.0, 0.0);
         group.text = None;
         group.label = Some("Группа".into());

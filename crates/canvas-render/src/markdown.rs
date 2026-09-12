@@ -1,13 +1,13 @@
 //! Парсер markdown-подмножества для текста заметок (форматирование, пост-T7).
 //!
-//! Хранение — прямо в поле `text` ноды: `**жирный**`, `*курсив*`, `==подсветка==`.
-//! Формат `.canvas` не меняется, Obsidian рендерит те же маркеры.
+//! Хранение — прямо в поле `text` ноды: `**жирный**`, `*курсив*`, `==подсветка==`,
+//! `~~зачёркнутый~~`. Формат `.canvas` не меняется, Obsidian рендерит те же маркеры.
 //!
 //! Сознательные ограничения подмножества (не CommonMark):
 //! - маркеры — тоггл флагов одним проходом; патологические вложения вида
 //!   `**a*b**` не гарантируют результат CommonMark;
 //! - незакрытый маркер остаётся литералом (проверка «есть ли закрывающий»);
-//! - экранирование — `\*` и `\=`.
+//! - экранирование — `\*`, `\=` и `\~`.
 //!
 //! Модуль — чистая CPU-логика (без GPU), offsets спанов — байтовые, в системе
 //! координат «чистого» текста (без маркеров) — так их принимает set_rich_text.
@@ -21,6 +21,7 @@ pub struct StyleSpan {
     pub bold: bool,
     pub italic: bool,
     pub highlight: bool,
+    pub strike: bool,
 }
 
 /// Текущее состояние флагов сканера.
@@ -29,11 +30,12 @@ struct Style {
     bold: bool,
     italic: bool,
     highlight: bool,
+    strike: bool,
 }
 
 impl Style {
     fn any(&self) -> bool {
-        self.bold || self.italic || self.highlight
+        self.bold || self.italic || self.highlight || self.strike
     }
 }
 
@@ -63,16 +65,17 @@ pub fn parse(text: &str) -> (String, Vec<StyleSpan>) {
                     bold: style.bold,
                     italic: style.italic,
                     highlight: style.highlight,
+                    strike: style.strike,
                 });
             }
         };
     }
 
     while i < bytes.len() {
-        // Экранирование: \* и \= — литералы
+        // Экранирование: \*, \= и \~ — литералы
         if bytes[i] == b'\\'
             && i + 1 < bytes.len()
-            && (bytes[i + 1] == b'*' || bytes[i + 1] == b'=')
+            && (bytes[i + 1] == b'*' || bytes[i + 1] == b'=' || bytes[i + 1] == b'~')
         {
             plain.push(bytes[i + 1] as char);
             i += 2;
@@ -108,6 +111,18 @@ pub fn parse(text: &str) -> (String, Vec<StyleSpan>) {
             i += 2;
             continue;
         }
+        // Маркер ~~ (strike) — тоггл; незакрытый — литерал
+        if bytes[i] == b'~'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'~'
+            && (style.strike || has_marker_ahead(text, i + 2, "~~"))
+        {
+            flush!();
+            style.strike = !style.strike;
+            span_start = plain.len();
+            i += 2;
+            continue;
+        }
         // Обычный символ (маркеры выше — ASCII, граница UTF-8 сохранена)
         let Some(ch) = text.get(i..).and_then(|rest| rest.chars().next()) else {
             break;
@@ -130,6 +145,7 @@ pub enum StyleFlag {
     Bold,
     Italic,
     Highlight,
+    Strike,
 }
 
 impl StyleFlag {
@@ -138,6 +154,7 @@ impl StyleFlag {
             StyleFlag::Bold => span.bold,
             StyleFlag::Italic => span.italic,
             StyleFlag::Highlight => span.highlight,
+            StyleFlag::Strike => span.strike,
         }
     }
     /// Значение флага в покрытии (Style — внутреннее представление).
@@ -146,6 +163,7 @@ impl StyleFlag {
             StyleFlag::Bold => style.bold,
             StyleFlag::Italic => style.italic,
             StyleFlag::Highlight => style.highlight,
+            StyleFlag::Strike => style.strike,
         }
     }
     fn set_style(self, style: &mut Style, value: bool) {
@@ -153,6 +171,7 @@ impl StyleFlag {
             StyleFlag::Bold => style.bold = value,
             StyleFlag::Italic => style.italic = value,
             StyleFlag::Highlight => style.highlight = value,
+            StyleFlag::Strike => style.strike = value,
         }
     }
     fn marker(self) -> &'static str {
@@ -160,6 +179,7 @@ impl StyleFlag {
             StyleFlag::Bold => "**",
             StyleFlag::Italic => "*",
             StyleFlag::Highlight => "==",
+            StyleFlag::Strike => "~~",
         }
     }
 }
@@ -177,6 +197,7 @@ fn build_coverage(plain_len: usize, spans: &[StyleSpan]) -> Vec<Style> {
             slot.bold |= span.bold;
             slot.italic |= span.italic;
             slot.highlight |= span.highlight;
+            slot.strike |= span.strike;
         }
     }
     coverage
@@ -201,6 +222,7 @@ fn spans_from_coverage(plain_len: usize, coverage: &[Style]) -> Vec<StyleSpan> {
                 bold: style.bold,
                 italic: style.italic,
                 highlight: style.highlight,
+                strike: style.strike,
             });
         }
         start = end;
@@ -338,7 +360,8 @@ pub fn adjust_spans(
         if let Some(last) = merged.last_mut() {
             let same_flags = last.bold == span.bold
                 && last.italic == span.italic
-                && last.highlight == span.highlight;
+                && last.highlight == span.highlight
+                && last.strike == span.strike;
             if same_flags && span.start <= last.end {
                 last.end = last.end.max(span.end);
                 continue;
@@ -350,14 +373,19 @@ pub fn adjust_spans(
 }
 
 /// Сериализация спанов обратно в markdown-текст для хранения в поле
-/// `text` ноды (формат `.canvas` не меняется). Литеральные `*` и `=`
-/// чистого текста экранируются (`\*`, `\=` — тот же диалект, что парсит
+/// `text` ноды (формат `.canvas` не меняется). Литеральные `*`, `=` и `~`
+/// чистого текста экранируются (`\*`, `\=`, `\~` — тот же диалект, что парсит
 /// `parse`), маркеры эмитятся на границах изменения флагов.
 pub fn emit(plain: &str, spans: &[StyleSpan]) -> String {
     let plain_len = plain.len();
     // Границы изменения каждого флага (байтовые offsets чистого текста)
     let mut events: Vec<(usize, StyleFlag, bool)> = Vec::new();
-    for &flag in &[StyleFlag::Bold, StyleFlag::Italic, StyleFlag::Highlight] {
+    for &flag in &[
+        StyleFlag::Bold,
+        StyleFlag::Italic,
+        StyleFlag::Highlight,
+        StyleFlag::Strike,
+    ] {
         let mut prev = false;
         for pos in 0..=plain_len {
             let cur = pos < plain_len
@@ -387,10 +415,10 @@ pub fn emit(plain: &str, spans: &[StyleSpan]) -> String {
     out
 }
 
-/// Экранирование литеральных маркеров диалекта (`*` и `\=`-пары в plain).
+/// Экранирование литеральных маркеров диалекта (`*`, `\=`- и `\~~`-пары в plain).
 fn push_escaped(out: &mut String, text: &str) {
     for ch in text.chars() {
-        if ch == '*' || ch == '=' {
+        if ch == '*' || ch == '=' || ch == '~' {
             out.push('\\');
         }
         out.push(ch);
@@ -422,6 +450,7 @@ mod tests {
                 bold: true,
                 italic: false,
                 highlight: false,
+                strike: false,
             }]
         );
 
@@ -565,6 +594,7 @@ mod tests {
             bold: true,
             italic: false,
             highlight: false,
+            strike: false,
         }
     }
 
@@ -637,6 +667,7 @@ mod tests {
             bold: false,
             italic: true,
             highlight: false,
+            strike: false,
         };
         // Назначаем bold на "жирный" (13..len): italic сохраняется везде
         let spans = toggle_style(plain.len(), &[italic], 13, plain.len(), StyleFlag::Bold);
@@ -677,6 +708,7 @@ mod tests {
                 bold: true,
                 italic: false,
                 highlight: false,
+                strike: false,
             },
             StyleSpan {
                 start: 7,
@@ -684,6 +716,7 @@ mod tests {
                 bold: false,
                 italic: true,
                 highlight: false,
+                strike: false,
             },
             StyleSpan {
                 start: 14,
@@ -691,6 +724,7 @@ mod tests {
                 bold: false,
                 italic: false,
                 highlight: true,
+                strike: false,
             },
         ];
         let text = emit(plain, &spans);
@@ -706,6 +740,82 @@ mod tests {
         let plain = "a*b=c";
         let text = emit(plain, &[]);
         assert_eq!(text, r"a\*b\=c");
+        let (back, spans) = parse(&text);
+        assert_eq!(back, plain);
+        assert!(spans.is_empty());
+    }
+
+    // --- strike (~~…~~) ---
+
+    /// Парный маркер ~~ — спан со strike.
+    #[test]
+    fn strike_marker() {
+        let (plain, spans) = parse("~~зачёркнуто~~");
+        assert_eq!(plain, "зачёркнуто");
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].strike && !spans[0].bold && !spans[0].italic && !spans[0].highlight);
+    }
+
+    /// Незакрытый ~~ — литерал, флаг не включается.
+    #[test]
+    fn unterminated_strike_is_literal() {
+        let (plain, spans) = parse("а ~~ не закрыто");
+        assert_eq!(plain, "а ~~ не закрыто");
+        assert!(spans.is_empty());
+
+        let (plain, spans) = parse("текст~~");
+        assert_eq!(plain, "текст~~");
+        assert!(spans.is_empty());
+    }
+
+    /// Экранирование \~ — литерал, маркером не считается.
+    #[test]
+    fn escaped_tilde_is_literal() {
+        let (plain, spans) = parse(r"\~не strike\~");
+        assert_eq!(plain, "~не strike~");
+        assert!(spans.is_empty());
+
+        // Экранированный маркер внутри спана — обычный текст
+        let (plain, spans) = parse(r"**жирный \~\~ текст**");
+        assert_eq!(plain, "жирный ~~ текст");
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].bold);
+    }
+
+    /// Комбинация с bold: **~~ж~~** — один спан bold + strike.
+    #[test]
+    fn strike_combines_with_bold() {
+        let (plain, spans) = parse("**~~ж~~**");
+        assert_eq!(plain, "ж");
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].bold && spans[0].strike);
+    }
+
+    /// emit со strike: round-trip спанов и текста.
+    #[test]
+    fn emit_strike_round_trip() {
+        let plain = "раз два";
+        let spans = vec![StyleSpan {
+            start: 0,
+            end: "раз".len(),
+            bold: false,
+            italic: false,
+            highlight: false,
+            strike: true,
+        }];
+        let text = emit(plain, &spans);
+        assert_eq!(text, "~~раз~~ два");
+        let (back_plain, back_spans) = parse(&text);
+        assert_eq!(back_plain, plain, "текст: {text}");
+        assert_eq!(back_spans, spans, "спаны: {text}");
+    }
+
+    /// emit экранирует литеральную ~ в plain.
+    #[test]
+    fn emit_escapes_literal_tilde() {
+        let plain = "a~b";
+        let text = emit(plain, &[]);
+        assert_eq!(text, r"a\~b");
         let (back, spans) = parse(&text);
         assert_eq!(back, plain);
         assert!(spans.is_empty());

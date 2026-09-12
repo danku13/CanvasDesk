@@ -10,12 +10,13 @@ use std::collections::HashMap;
 
 use canvas_core::{Canvas, Node, NodeKind};
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Cursor, FontSystem, Metrics, Resolution, Shaping, Style,
+    Attrs, Buffer, Cache, Color, Cursor, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
 };
 
 use crate::camera::Camera;
 use crate::cards::{extension_letter, title_for, HEADER_HEIGHT};
+use crate::gfm;
 use crate::markdown;
 use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
@@ -100,18 +101,20 @@ pub fn offset_to_cursor(text: &str, offset: usize) -> Cursor {
 
 /// Спаны стилей (markdown.rs) → непрерывное покрытие текста парами
 /// (&str, Attrs) для set_rich_text: bold → Weight::BOLD, italic → Style::Italic.
-/// Highlight здесь не применяется — это фон-подложка (highlight_rects).
-pub(crate) fn rich_spans<'a>(
+/// Highlight/strike здесь не применяются — это фон-подложка (квады, gfm.rs).
+/// `base` — базовые атрибуты блока (моноширинный фенс, жирный заголовок).
+pub(crate) fn rich_spans<'a, 'r>(
     plain: &'a str,
     spans: &[markdown::StyleSpan],
-) -> Vec<(&'a str, Attrs<'a>)> {
+    base: Attrs<'r>,
+) -> Vec<(&'a str, Attrs<'r>)> {
     let mut out = Vec::with_capacity(spans.len() * 2 + 1);
     let mut pos = 0usize;
     for span in spans {
         if span.start > pos {
-            out.push((&plain[pos..span.start], Attrs::new()));
+            out.push((&plain[pos..span.start], base));
         }
-        let mut attrs = Attrs::new();
+        let mut attrs = base;
         if span.bold {
             attrs = attrs.weight(Weight::BOLD);
         }
@@ -122,29 +125,508 @@ pub(crate) fn rich_spans<'a>(
         pos = span.end;
     }
     if pos < plain.len() {
-        out.push((&plain[pos..], Attrs::new()));
+        out.push((&plain[pos..], base));
     }
     // Пустой текст (например, "****" без контента) — один пустой спан
     if out.is_empty() {
-        out.push(("", Attrs::new()));
+        out.push(("", base));
     }
     out
 }
 
-/// Прямоугольники фон-подсветки `==…==` в пикселях буфера: диапазоны спанов →
-/// квады по layout runs (та же механика, что у выделения в редакторе, edit.rs).
-fn highlight_rects(buffer: &Buffer, plain: &str, spans: &[markdown::StyleSpan]) -> Vec<[f32; 4]> {
-    let mut rects = Vec::new();
-    for span in spans.iter().filter(|s| s.highlight) {
+/// Декоративные квады текстового блока (подсветка `==…==` и зачёркивание
+/// `~~…~~`) в px буфера блока: диапазоны спанов → квады по layout runs
+/// (та же механика, что у выделения в редакторе, edit.rs).
+fn decoration_quads(
+    buffer: &Buffer,
+    plain: &str,
+    spans: &[markdown::StyleSpan],
+    zoom_px: f32,
+) -> Vec<([f32; 4], BodyQuadKind)> {
+    let mut quads = Vec::new();
+    for span in spans.iter().filter(|s| s.highlight || s.strike) {
         let start = offset_to_cursor(plain, span.start);
         let end = offset_to_cursor(plain, span.end);
         for run in buffer.layout_runs() {
             if let Some((x, width)) = run.highlight(start, end) {
-                rects.push([x, run.line_top, width.max(1.0), run.line_height]);
+                if span.highlight {
+                    quads.push((
+                        [x, run.line_top, width.max(1.0), run.line_height],
+                        BodyQuadKind::Highlight,
+                    ));
+                }
+                if span.strike {
+                    // Зачёркивание — тонкая линия чуть ниже середины строки
+                    let y = run.line_top + run.line_height * 0.55;
+                    quads.push((
+                        [x, y, width.max(1.0), (zoom_px * 1.2).max(1.0)],
+                        BodyQuadKind::Strike,
+                    ));
+                }
             }
         }
     }
-    rects
+    quads
+}
+
+/// Вид декоративного квада тела заметки (GFM) — рендерер маппит его на
+/// заливку темы (HIGHLIGHT_FILL / gfm_muted_fill / gfm_quote_fill / …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyQuadKind {
+    /// Фон-подсветка `==…==` (форматирование, как раньше).
+    Highlight,
+    /// Линия зачёркивания `~~…~~`.
+    Strike,
+    /// Маркер пункта маркированного списка.
+    Bullet,
+    /// Рамка чекбокса `[ ]` / `[x]`.
+    CheckboxBox,
+    /// Галочка чекбокса `[x]` (тонкие квады).
+    CheckboxTick,
+    /// Бар цитаты `> …` у левого края.
+    QuoteBar,
+    /// Фон фенса кода.
+    CodeBg,
+    /// Горизонтальная линия `---`.
+    Rule,
+}
+
+/// Декоративный квад тела заметки: rect — [x, y, w, h] в px виртуального
+/// буфера всего тела (block-local px + offset блока, умноженный на zoom).
+#[derive(Debug, Clone, Copy)]
+pub struct BodyQuad {
+    pub rect: [f32; 4],
+    pub kind: BodyQuadKind,
+}
+
+/// Один отрисованный блок тела заметки (свой Buffer со своими метриками).
+struct BodyBlock {
+    buffer: Buffer,
+    /// Смещение левого верхнего угла блока от левого верхнего угла области
+    /// тела (world-px).
+    offset: [f32; 2],
+    /// Ширина области блока (world-px) — для bounds.
+    width: f32,
+    /// Высота блока (world-px), по layout_runs.
+    height: f32,
+    /// Цвет текста блока (цитата/код приглушены/акцентные).
+    color: Color,
+}
+
+/// Отрисованное тело заметки: вертикальный стек блоков (GFM).
+struct BodyLayout {
+    /// Блоки по порядку сверху вниз.
+    blocks: Vec<BodyBlock>,
+    /// Все декоративные квады блоков в px виртуального буфера тела —
+    /// рендерер делит на zoom и кладёт от origin области тела.
+    quads: Vec<BodyQuad>,
+}
+
+/// Вид декорации пункта списка.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemDeco {
+    None,
+    Bullet,
+    Checkbox(bool),
+}
+
+/// Плоское описание одного размещаемого элемента тела (блок или линия).
+struct BodyItem {
+    /// Зазор перед элементом (world-px), первый — 0.
+    gap: f32,
+    /// Горизонтальная линия (нет текста, высота 12).
+    rule: bool,
+    text: String,
+    font_size: f32,
+    line_height: f32,
+    color: Color,
+    /// Левый отступ текста блока (world-px).
+    indent: f32,
+    mono: bool,
+    bold: bool,
+    deco: ItemDeco,
+}
+
+/// Метрики заголовка по уровню ATX: 1–3 крупно, 4–6 как bold body.
+fn heading_metrics(level: u8) -> (f32, f32) {
+    match level {
+        1 => (22.0, 28.0),
+        2 => (19.0, 25.0),
+        3 => (16.0, 22.0),
+        _ => (BODY_FONT_SIZE, BODY_LINE_HEIGHT),
+    }
+}
+
+/// Зазор перед элементом тела: после заголовка и вокруг линии — 8, между
+/// пунктами одного списка — 2, иначе 6; первый элемент — без зазора.
+fn body_gap(
+    prev: Option<(bool, bool, Option<usize>)>,
+    curr_heading: bool,
+    curr_rule: bool,
+    curr_list: Option<usize>,
+) -> f32 {
+    match prev {
+        None => 0.0,
+        Some((prev_heading, prev_rule, prev_list)) => {
+            if prev_rule || curr_rule || prev_heading || curr_heading {
+                8.0
+            } else if let (Some(p), Some(c)) = (prev_list, curr_list) {
+                if p == c {
+                    2.0
+                } else {
+                    6.0
+                }
+            } else {
+                6.0
+            }
+        }
+    }
+}
+
+/// Добавить элемент тела: зазор перед ним считается по предыдущему блоку,
+/// затем признак предыдущего обновляется (`kind` = (heading, rule, list)).
+fn push_item(
+    out: &mut Vec<BodyItem>,
+    prev: &mut Option<(bool, bool, Option<usize>)>,
+    kind: (bool, bool, Option<usize>),
+    mut item: BodyItem,
+) {
+    item.gap = body_gap(*prev, kind.0, kind.1, kind.2);
+    out.push(item);
+    *prev = Some(kind);
+}
+
+/// Развернуть GFM-блоки в плоский список элементов тела с зазорами.
+fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
+    let mut out = Vec::new();
+    let mut prev: Option<(bool, bool, Option<usize>)> = None;
+    let mut list_id = 0usize;
+    for block in gfm::parse_blocks(body_text) {
+        match block {
+            gfm::Block::Heading { level, text } => {
+                let (font_size, line_height) = heading_metrics(level);
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (true, false, None),
+                    BodyItem {
+                        gap: 0.0,
+                        rule: false,
+                        text,
+                        font_size,
+                        line_height,
+                        color: theme.body,
+                        indent: 0.0,
+                        mono: false,
+                        bold: true,
+                        deco: ItemDeco::None,
+                    },
+                );
+            }
+            gfm::Block::Paragraph { text } => {
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (false, false, None),
+                    BodyItem {
+                        gap: 0.0,
+                        rule: false,
+                        text,
+                        font_size: BODY_FONT_SIZE,
+                        line_height: BODY_LINE_HEIGHT,
+                        color: theme.body,
+                        indent: 0.0,
+                        mono: false,
+                        bold: false,
+                        deco: ItemDeco::None,
+                    },
+                );
+            }
+            gfm::Block::Quote { text } => {
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (false, false, None),
+                    BodyItem {
+                        gap: 0.0,
+                        rule: false,
+                        text,
+                        font_size: BODY_FONT_SIZE,
+                        line_height: BODY_LINE_HEIGHT,
+                        color: theme.quote,
+                        indent: 10.0,
+                        mono: false,
+                        bold: false,
+                        deco: ItemDeco::None,
+                    },
+                );
+            }
+            gfm::Block::Code { text } => {
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (false, false, None),
+                    BodyItem {
+                        gap: 0.0,
+                        rule: false,
+                        text,
+                        font_size: 13.0,
+                        line_height: 18.0,
+                        color: theme.code_text,
+                        indent: 6.0,
+                        mono: true,
+                        bold: false,
+                        deco: ItemDeco::None,
+                    },
+                );
+            }
+            gfm::Block::Rule => {
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (false, true, None),
+                    BodyItem {
+                        gap: 0.0,
+                        rule: true,
+                        text: String::new(),
+                        font_size: BODY_FONT_SIZE,
+                        line_height: BODY_LINE_HEIGHT,
+                        color: theme.body,
+                        indent: 0.0,
+                        mono: false,
+                        bold: false,
+                        deco: ItemDeco::None,
+                    },
+                );
+            }
+            gfm::Block::List { ordered, items } => {
+                list_id += 1;
+                for (n, item) in items.into_iter().enumerate() {
+                    // Нумерация рендерится по порядку 1,2,3…; чекбокс вместо номера
+                    let text = if ordered && item.checkbox.is_none() {
+                        format!("{}. {}", n + 1, item.text)
+                    } else {
+                        item.text
+                    };
+                    let deco = match item.checkbox {
+                        Some(checked) => ItemDeco::Checkbox(checked),
+                        None if !ordered => ItemDeco::Bullet,
+                        None => ItemDeco::None,
+                    };
+                    push_item(
+                        &mut out,
+                        &mut prev,
+                        (false, false, Some(list_id)),
+                        BodyItem {
+                            gap: 0.0,
+                            rule: false,
+                            text,
+                            font_size: BODY_FONT_SIZE,
+                            line_height: BODY_LINE_HEIGHT,
+                            color: theme.body,
+                            indent: 16.0,
+                            mono: false,
+                            bold: false,
+                            deco,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Зашейпить один текстовый блок тела: буфер с переносами по ширине области
+/// блока (px), высота по layout_runs (px буфера). Квады подсветки/
+/// зачёркивания — в px буфера блока; буллиты/чекбоксы позиционируются по
+/// первой строке снаружи.
+#[allow(clippy::too_many_arguments)]
+fn shape_text_block(
+    font_system: &mut FontSystem,
+    theme: &ThemeColors,
+    text: &str,
+    font_size: f32,
+    line_height: f32,
+    width_px: f32,
+    zoom_px: f32,
+    base: Attrs,
+) -> (Buffer, f32, Vec<([f32; 4], BodyQuadKind)>) {
+    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
+    // WordOrGlyph: перенос по словам; слишком длинное слово рвётся по глифам,
+    // а не вылезает за карточку. Высота None — shape_until_scroll зашейпит
+    // ВСЕ строки (scroll_end = бесконечность, buffer.rs cosmic-text).
+    buffer.set_wrap(font_system, Wrap::WordOrGlyph);
+    buffer.set_size(font_system, Some(width_px), None);
+    // Инлайн-разбор: ссылки (gfm) → сегменты, маркеры (** * == ~~) → спаны.
+    let mut plain = String::with_capacity(text.len());
+    let mut spans_all: Vec<markdown::StyleSpan> = Vec::new();
+    let mut rich: Vec<(String, Attrs)> = Vec::new();
+    for seg in gfm::inline_segments(text) {
+        let seg_attrs = if seg.link {
+            // Ссылка: текст label акцентным цветом, URL не показываем
+            base.color(theme.link)
+        } else {
+            base
+        };
+        let (seg_plain, seg_spans) = markdown::parse(&seg.text);
+        let offset = plain.len();
+        spans_all.extend(seg_spans.iter().map(|span| markdown::StyleSpan {
+            start: span.start + offset,
+            end: span.end + offset,
+            ..*span
+        }));
+        plain.push_str(&seg_plain);
+        rich.extend(
+            rich_spans(&seg_plain, &seg_spans, seg_attrs)
+                .into_iter()
+                .map(|(s, attrs)| (s.to_owned(), attrs)),
+        );
+    }
+    buffer.set_rich_text(
+        font_system,
+        rich.iter().map(|(s, attrs)| (s.as_str(), *attrs)),
+        base,
+        Shaping::Advanced,
+    );
+    buffer.shape_until_scroll(font_system, false);
+    let height_px = buffer
+        .layout_runs()
+        .last()
+        .map_or(0.0, |run| run.line_top + run.line_height);
+    let quads = decoration_quads(&buffer, &plain, &spans_all, zoom_px);
+    (buffer, height_px, quads)
+}
+
+/// Зашейпить тело заметки: GFM-блоки → вертикальный стек буферов со своими
+/// метриками/цветами + декоративные квады (в px виртуального буфера тела).
+/// `body_width` — world-px, `zoom_px` — физический зум. GPU не нужен —
+/// функция тестируема с настоящим FontSystem.
+fn shape_body(
+    font_system: &mut FontSystem,
+    theme: &ThemeColors,
+    body_text: &str,
+    body_width: f32,
+    zoom_px: f32,
+) -> BodyLayout {
+    let mut layout = BodyLayout {
+        blocks: Vec::new(),
+        quads: Vec::new(),
+    };
+    let mut cursor_y = 0.0f32; // world-px, верх текущего элемента
+    for item in body_items(theme, body_text) {
+        cursor_y += item.gap;
+        if item.rule {
+            // Линия: высота блока 12, квад толщиной 2 по центру
+            layout.quads.push(BodyQuad {
+                rect: [
+                    0.0,
+                    (cursor_y + 5.0) * zoom_px,
+                    body_width * zoom_px,
+                    2.0 * zoom_px,
+                ],
+                kind: BodyQuadKind::Rule,
+            });
+            cursor_y += 12.0;
+            continue;
+        }
+        let block_width = (body_width - item.indent).max(0.0);
+        let mut base = Attrs::new();
+        if item.mono {
+            base = base.family(Family::Monospace);
+        }
+        if item.bold {
+            base = base.weight(Weight::BOLD);
+        }
+        let (buffer, height_px, quads) = shape_text_block(
+            font_system,
+            theme,
+            &item.text,
+            item.font_size * zoom_px,
+            item.line_height * zoom_px,
+            block_width * zoom_px,
+            zoom_px,
+            base,
+        );
+        let height = height_px / zoom_px;
+        // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
+        // x задаётся в px виртуального буфера ТЕЛА (0..16), без смещения
+        // блока по x; y — на первой строке блока (block-local + offset блока)
+        let first = buffer.layout_runs().next();
+        let oy = cursor_y * zoom_px;
+        match item.deco {
+            ItemDeco::Bullet => {
+                let line_top = first.as_ref().map_or(0.0, |run| run.line_top);
+                let line_h = first
+                    .as_ref()
+                    .map_or(item.line_height * zoom_px, |run| run.line_height);
+                let z = zoom_px;
+                layout.quads.push(BodyQuad {
+                    rect: [
+                        4.0 * z,
+                        line_top + line_h / 2.0 - 2.5 * z + oy,
+                        5.0 * z,
+                        5.0 * z,
+                    ],
+                    kind: BodyQuadKind::Bullet,
+                });
+            }
+            ItemDeco::Checkbox(checked) => {
+                let line_top = first.as_ref().map_or(0.0, |run| run.line_top);
+                let z = zoom_px;
+                let y = line_top + 2.0 * z + oy;
+                layout.quads.push(BodyQuad {
+                    rect: [0.0, y, 11.0 * z, 11.0 * z],
+                    kind: BodyQuadKind::CheckboxBox,
+                });
+                if checked {
+                    // Галочка: квады без вращения, аппроксимация двумя
+                    // перпендикулярными тонкими полосками (v1)
+                    let y0 = line_top + 2.0 * z + oy;
+                    layout.quads.push(BodyQuad {
+                        rect: [2.2 * z, y0 + 6.0 * z, 3.4 * z, 1.6 * z],
+                        kind: BodyQuadKind::CheckboxTick,
+                    });
+                    layout.quads.push(BodyQuad {
+                        rect: [4.6 * z, y0 + 3.0 * z, 1.6 * z, 4.4 * z],
+                        kind: BodyQuadKind::CheckboxTick,
+                    });
+                }
+            }
+            ItemDeco::None => {}
+        }
+        // Квады строк блока (подсветка/зачёркивание) → px виртуального буфера
+        // тела: block-local px + offset блока по обеим осям
+        let ox = item.indent * zoom_px;
+        layout
+            .quads
+            .extend(quads.into_iter().map(|(rect, kind)| BodyQuad {
+                rect: [rect[0] + ox, rect[1] + oy, rect[2], rect[3]],
+                kind,
+            }));
+        // Бар цитаты / фон фенса — на всю высоту блока
+        if item.color == theme.quote {
+            layout.quads.push(BodyQuad {
+                rect: [0.0, oy, 3.0 * zoom_px, height_px],
+                kind: BodyQuadKind::QuoteBar,
+            });
+        }
+        if item.mono {
+            layout.quads.push(BodyQuad {
+                rect: [0.0, oy, body_width * zoom_px, height_px],
+                kind: BodyQuadKind::CodeBg,
+            });
+        }
+        layout.blocks.push(BodyBlock {
+            buffer,
+            offset: [item.indent, cursor_y],
+            width: block_width,
+            height,
+            color: item.color,
+        });
+        cursor_y += height;
+    }
+    layout
 }
 
 /// Ключ свежести кэша текста ноды: зум, ширина заголовка, заголовок и тело.
@@ -266,11 +748,9 @@ fn group_contains_node(indices: &[usize], group: &[usize], editing: usize) -> bo
 struct CachedTitle {
     title: Buffer,
     icon: Option<Buffer>,
-    /// Тело заметки (T7) — только у text-нод с непустым текстом.
-    body: Option<Buffer>,
-    /// Прямоугольники фон-подсветки `==…==` в px буфера тела (форматирование).
-    /// Считаются при шейпинге тела; рендер конвертирует в world через zoom_px.
-    highlight_rects: Vec<[f32; 4]>,
+    /// Тело заметки (T7, GFM) — вертикальный стек блоков: только у text-нод
+    /// с непустым текстом.
+    body: Option<BodyLayout>,
     zoom_px: f32,
     width_px: f32,
     title_text: String,
@@ -502,36 +982,20 @@ impl TextSystem {
                         icon
                     });
 
-                    // Тело заметки (T7): wrap по ширине карточки, многострочное.
-                    // Маркеры форматирования (**...**, *...*, ==...==) —
-                    // в спаны стилей (set_rich_text), подсветка — в квады-фон.
-                    let mut highlight_quads = Vec::new();
+                    // Тело заметки (T7, GFM): вертикальный стек блоков —
+                    // заголовки/списки/цитаты/фенсы/линии со своими метриками
+                    // и квадами (подсветка, зачёркивание, буллиты, бары).
                     let body = if body_text.is_empty() {
                         None
                     } else {
-                        let (_, body_width, body_height) = body_area(node);
-                        let mut body = Buffer::new(
+                        let (_, body_width, _) = body_area(node);
+                        Some(shape_body(
                             &mut self.font_system,
-                            Metrics::new(BODY_FONT_SIZE * zoom_px, BODY_LINE_HEIGHT * zoom_px),
-                        );
-                        // WordOrGlyph: перенос по словам; слишком длинное
-                        // слово рвётся по глифам, а не вылезает за карточку
-                        body.set_wrap(&mut self.font_system, Wrap::WordOrGlyph);
-                        body.set_size(
-                            &mut self.font_system,
-                            Some(body_width * zoom_px),
-                            Some(body_height * zoom_px),
-                        );
-                        let (plain, spans) = markdown::parse(&body_text);
-                        body.set_rich_text(
-                            &mut self.font_system,
-                            rich_spans(&plain, &spans),
-                            Attrs::new(),
-                            Shaping::Advanced,
-                        );
-                        body.shape_until_scroll(&mut self.font_system, false);
-                        highlight_quads = highlight_rects(&body, &plain, &spans);
-                        Some(body)
+                            &self.theme,
+                            &body_text,
+                            body_width,
+                            zoom_px,
+                        ))
                     };
 
                     self.cache.insert(
@@ -540,7 +1004,6 @@ impl TextSystem {
                             title,
                             icon,
                             body,
-                            highlight_rects: highlight_quads,
                             zoom_px,
                             width_px,
                             title_text,
@@ -719,25 +1182,34 @@ impl TextSystem {
                             custom_glyphs: &[],
                         });
                     }
-                    // Тело заметки (T7): у редактируемой ноды body нет —
-                    // его рисует буфер EditingSession (блок ниже)
-                    if let Some(body) = &entry.body {
-                        let (origin, body_width, body_height) = body_area(node);
-                        let pos = to_physical(origin);
-                        areas.push(TextArea {
-                            buffer: body,
-                            left: pos[0],
-                            top: pos[1],
-                            scale: 1.0,
-                            bounds: TextBounds {
-                                left: pos[0] as i32,
-                                top: pos[1] as i32,
-                                right: (pos[0] + body_width * zoom_px) as i32,
-                                bottom: (pos[1] + body_height * zoom_px) as i32,
-                            },
-                            default_color: self.theme.body,
-                            custom_glyphs: &[],
-                        });
+                    // Тело заметки (T7, GFM): вертикальный стек блоков —
+                    // у редактируемой ноды body нет, его рисует буфер
+                    // EditingSession (блок ниже). Клип блока: нижняя граница
+                    // не ниже нижней границы области тела — текст нижнего
+                    // блока не вылезает за карточку.
+                    if let Some(layout) = &entry.body {
+                        let (origin, _, body_height) = body_area(node);
+                        let origin = to_physical(origin);
+                        let body_bottom = origin[1] + body_height * zoom_px;
+                        for block in &layout.blocks {
+                            let left = origin[0] + block.offset[0] * zoom_px;
+                            let top = origin[1] + block.offset[1] * zoom_px;
+                            let bottom = (top + block.height * zoom_px).min(body_bottom);
+                            areas.push(TextArea {
+                                buffer: &block.buffer,
+                                left,
+                                top,
+                                scale: 1.0,
+                                bounds: TextBounds {
+                                    left: left as i32,
+                                    top: top as i32,
+                                    right: (left + block.width * zoom_px) as i32,
+                                    bottom: bottom as i32,
+                                },
+                                default_color: block.color,
+                                custom_glyphs: &[],
+                            });
+                        }
                     }
                 }
             }
@@ -942,15 +1414,17 @@ impl TextSystem {
         &mut self.font_system
     }
 
-    /// Прямоугольники фон-подсветки `==…==` ноды: (zoom_px записи кэша, квады
-    /// в px буфера тела). None — подсветки нет или тело не в кэше (промах —
-    /// квады появятся со следующего кадра, после шейпинга в prepare_titles).
-    pub fn highlight_rects(&self, index: usize) -> Option<(f32, &[[f32; 4]])> {
+    /// Декоративные квады тела ноды (GFM): (zoom_px записи кэша, квады в px
+    /// виртуального буфера тела). None — квадов нет или тело не в кэше
+    /// (промах — квады появятся со следующего кадра, после шейпинга в
+    /// prepare_titles). Рендерер маппит BodyQuadKind на заливки темы.
+    pub fn body_quads(&self, index: usize) -> Option<(f32, &[BodyQuad])> {
         let entry = self.cache.get(&index)?;
-        if entry.highlight_rects.is_empty() {
+        let body = entry.body.as_ref()?;
+        if body.quads.is_empty() {
             return None;
         }
-        Some((entry.zoom_px, entry.highlight_rects.as_slice()))
+        Some((entry.zoom_px, body.quads.as_slice()))
     }
 }
 
@@ -1101,11 +1575,11 @@ mod tests {
         assert_eq!(offset_to_cursor("а\n", 2), Cursor::new(0, 2));
     }
 
-    /// rich_spans: непрерывное покрытие текста, стили на спанах, зазоры — дефолт.
+    /// rich_spans: непрерывное покрытие текста, стили на спанах, зазоры — base.
     #[test]
     fn rich_spans_cover_text() {
         let (plain, spans) = markdown::parse("а **б** в *г*");
-        let rich = rich_spans(&plain, &spans);
+        let rich = rich_spans(&plain, &spans, Attrs::new());
         // Склейка спанов возвращает исходный текст
         let joined: String = rich.iter().map(|(s, _)| *s).collect();
         assert_eq!(joined, plain);
@@ -1118,19 +1592,32 @@ mod tests {
         assert_eq!(rich[0].1.weight, Weight::NORMAL);
     }
 
+    /// rich_spans: базовые атрибуты (моноширинный фенс) — на всех кусках.
+    #[test]
+    fn rich_spans_base_attrs_on_gaps() {
+        let (plain, spans) = markdown::parse("**ж** и обычный");
+        let base = Attrs::new().family(Family::Monospace);
+        let rich = rich_spans(&plain, &spans, base);
+        // rich[0] — "ж" (bold-спан), rich[1] — зазор " и обычный" (base)
+        assert_eq!(rich[0].1.family, Family::Monospace, "base на спане");
+        assert_eq!(rich[0].1.weight, Weight::BOLD);
+        assert_eq!(rich[1].1.family, Family::Monospace, "base на зазоре");
+        assert_eq!(rich[1].1.weight, Weight::NORMAL);
+    }
+
     /// Пустой чистый текст (только маркеры) — один пустой спан, без паники.
     #[test]
     fn rich_spans_empty() {
         let (plain, spans) = markdown::parse("****");
-        let rich = rich_spans(&plain, &spans);
+        let rich = rich_spans(&plain, &spans, Attrs::new());
         assert_eq!(rich.len(), 1);
         assert_eq!(rich[0].0, "");
     }
 
-    /// highlight_rects: квады подсветки по layout runs реального буфера;
-    /// количество квадов = числу видимых строк спана.
+    /// decoration_quads: квады подсветки по layout runs реального буфера;
+    /// количество квадов = числу видимых строк спана; зачёркивание — Strike.
     #[test]
-    fn highlight_rects_follow_layout() {
+    fn decoration_quads_follow_layout() {
         let mut fs = FontSystem::new();
         let (plain, spans) = markdown::parse("==раз два==\nтри ==четыре==");
         let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
@@ -1138,18 +1625,41 @@ mod tests {
         buffer.set_size(&mut fs, Some(400.0), Some(200.0));
         buffer.set_rich_text(
             &mut fs,
-            rich_spans(&plain, &spans),
+            rich_spans(&plain, &spans, Attrs::new()),
             Attrs::new(),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut fs, false);
-        let rects = highlight_rects(&buffer, &plain, &spans);
-        assert_eq!(rects.len(), 2, "по одному кваду на строку спана: {rects:?}");
+        let quads = decoration_quads(&buffer, &plain, &spans, 1.0);
+        assert_eq!(quads.len(), 2, "по одному кваду на строку спана: {quads:?}");
         // Первый спан — с начала строки, второй — после слова "три "
-        assert_eq!(rects[0][0], 0.0);
-        assert!(rects[1][0] > 0.0, "второй спан не с края: {rects:?}");
-        assert_eq!(rects[0][3], 20.0, "высота квада = высоте строки");
-        assert!(rects[1][1] > rects[0][1], "вторая строка ниже первой");
+        assert_eq!(quads[0].0[0], 0.0);
+        assert!(quads[1].0[0] > 0.0, "второй спан не с края: {quads:?}");
+        assert_eq!(quads[0].0[3], 20.0, "высота квада = высоте строки");
+        assert!(quads[1].0[1] > quads[0].0[1], "вторая строка ниже первой");
+        assert!(quads
+            .iter()
+            .all(|(_, kind)| *kind == BodyQuadKind::Highlight));
+
+        // Зачёркивание — отдельный квад Strike
+        let (plain, spans) = markdown::parse("~~весь текст~~");
+        let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
+        buffer.set_size(&mut fs, Some(400.0), Some(200.0));
+        buffer.set_rich_text(
+            &mut fs,
+            rich_spans(&plain, &spans, Attrs::new()),
+            Attrs::new(),
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let quads = decoration_quads(&buffer, &plain, &spans, 1.0);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].1, BodyQuadKind::Strike);
+        assert!(
+            quads[0].0[1] > 0.0 && quads[0].0[1] < 20.0,
+            "линия внутри строки: {:?}",
+            quads[0]
+        );
 
         // Без маркеров — без квадов
         let (plain, spans) = markdown::parse("без подсветки");
@@ -1157,11 +1667,316 @@ mod tests {
         buffer.set_size(&mut fs, Some(400.0), Some(200.0));
         buffer.set_rich_text(
             &mut fs,
-            rich_spans(&plain, &spans),
+            rich_spans(&plain, &spans, Attrs::new()),
             Attrs::new(),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut fs, false);
-        assert!(highlight_rects(&buffer, &plain, &spans).is_empty());
+        assert!(decoration_quads(&buffer, &plain, &spans, 1.0).is_empty());
+    }
+
+    // --- shape_body: вертикальный стек GFM-блоков ---
+
+    fn shaped(text: &str) -> BodyLayout {
+        let mut fs = FontSystem::new();
+        shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0)
+    }
+
+    /// Обычный текст — один блок Paragraph с метриками тела 14/20, offset [0,0].
+    #[test]
+    fn shape_body_plain_paragraph() {
+        let layout = shaped("просто текст");
+        assert_eq!(layout.blocks.len(), 1);
+        let block = &layout.blocks[0];
+        assert_eq!(block.offset, [0.0, 0.0]);
+        assert_eq!(block.width, 300.0);
+        assert_eq!(block.height, BODY_LINE_HEIGHT);
+        assert_eq!(block.color, ThemeColors::dark().body);
+        assert!(layout.quads.is_empty());
+    }
+
+    /// Заголовок + параграф: два блока, второй ниже на высоту заголовка + зазор 8.
+    #[test]
+    fn shape_body_heading_then_paragraph() {
+        let layout = shaped("# Заголовок\nтекст");
+        assert_eq!(layout.blocks.len(), 2);
+        // H1: 22/28
+        assert_eq!(layout.blocks[0].height, 28.0);
+        assert_eq!(layout.blocks[1].offset[1], 28.0 + 8.0);
+        // H4–H6 — как bold body (14/20)
+        let layout = shaped("#### H4");
+        assert_eq!(layout.blocks[0].height, BODY_LINE_HEIGHT);
+    }
+
+    /// Список: два пункта — два блока, зазор между ними 2, буллиты — квады.
+    #[test]
+    fn shape_body_list_items() {
+        let layout = shaped("- a\n- b");
+        assert_eq!(layout.blocks.len(), 2);
+        assert_eq!(layout.blocks[0].offset[1], 0.0);
+        assert_eq!(
+            layout.blocks[1].offset[1],
+            BODY_LINE_HEIGHT + 2.0,
+            "зазор между пунктами — 2"
+        );
+        // Текст пункта с отступом 16
+        assert_eq!(layout.blocks[0].offset[0], 16.0);
+        assert_eq!(layout.blocks[0].width, 300.0 - 16.0);
+        assert_eq!(
+            layout
+                .quads
+                .iter()
+                .filter(|quad| quad.kind == BodyQuadKind::Bullet)
+                .count(),
+            2,
+            "по буллиту на пункт: {:?}",
+            layout.quads
+        );
+    }
+
+    /// Чекбоксы: рамка + галочка у отмеченного пункта, только рамка у пустого.
+    #[test]
+    fn shape_body_checkboxes() {
+        let layout = shaped("- [x] done\n- [ ] todo");
+        let boxes = layout
+            .quads
+            .iter()
+            .filter(|quad| quad.kind == BodyQuadKind::CheckboxBox)
+            .count();
+        let ticks = layout
+            .quads
+            .iter()
+            .filter(|quad| quad.kind == BodyQuadKind::CheckboxTick)
+            .count();
+        assert_eq!(boxes, 2, "рамка у обоих пунктов");
+        assert!(
+            ticks >= 2,
+            "галочка у отмеченного (2 тонких квада): {ticks}"
+        );
+    }
+
+    /// Позиции квадов списка: маркеры — в колонке-gutter слева от текста
+    /// (x от левого края области тела, меньше indent=16), y — на первой
+    /// строке своего блока. Регрессия: маркеры не должны уезжать к тексту
+    /// или к правому краю ноды.
+    #[test]
+    fn shape_body_list_quad_positions() {
+        let layout =
+            shaped("- [ ] невыполненная задача\n- [x] выполненная задача\n- пункт маркированный");
+        let boxes: Vec<[f32; 4]> = layout
+            .quads
+            .iter()
+            .filter(|quad| quad.kind == BodyQuadKind::CheckboxBox)
+            .map(|quad| quad.rect)
+            .collect();
+        assert_eq!(
+            boxes.len(),
+            2,
+            "по рамке на чекбокс-пункт: {:?}",
+            layout.quads
+        );
+        // Рамка у левого края области тела (колонка 0..16), не у текста (16+)
+        // и не у правого края ноды
+        for rect in &boxes {
+            assert!(
+                (rect[0] - 0.0).abs() < 1e-3,
+                "x рамки = 0 (gutter): {rect:?}"
+            );
+            assert!((rect[2] - 11.0).abs() < 1e-3, "ширина рамки 11: {rect:?}");
+            assert!(
+                rect[0] + rect[2] <= 16.0,
+                "рамка в колонке-gutter: {rect:?}"
+            );
+        }
+        // Первая рамка — на первой строке первого блока, вторая — второго
+        // (высота строки 20, зазор между пунктами 2)
+        assert!(
+            (boxes[0][1] - 2.0).abs() < 1e-3,
+            "первая строка блока 0: {:?}",
+            boxes[0]
+        );
+        assert!(
+            (boxes[1][1] - (20.0 + 2.0 + 2.0)).abs() < 1e-3,
+            "первая строка блока 1: {:?}",
+            boxes[1]
+        );
+        // Галочки внутри своей рамки
+        for rect in layout
+            .quads
+            .iter()
+            .filter(|quad| quad.kind == BodyQuadKind::CheckboxTick)
+            .map(|quad| quad.rect)
+        {
+            let host = boxes[1];
+            assert!(
+                rect[0] >= host[0] && rect[0] + rect[2] <= host[0] + host[2],
+                "галочка внутри рамки: {rect:?} в {host:?}"
+            );
+        }
+        // Буллит: x = 4, размер 5×5, на первой строке третьего блока
+        let bullet = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::Bullet)
+            .expect("буллит есть");
+        assert!(
+            (bullet.rect[0] - 4.0).abs() < 1e-3,
+            "x буллита = 4 (gutter): {:?}",
+            bullet.rect
+        );
+        assert!((bullet.rect[2] - 5.0).abs() < 1e-3 && (bullet.rect[3] - 5.0).abs() < 1e-3);
+    }
+
+    /// Незакрытый фенс — код до конца текста: моноширинный блок 13/18, фон-квад.
+    #[test]
+    fn shape_body_unclosed_fence() {
+        let layout = shaped("```\nlet a = 1;\nlet b = 2;");
+        assert_eq!(layout.blocks.len(), 1);
+        let block = &layout.blocks[0];
+        assert_eq!(block.height, 18.0 * 2.0, "две строки по 18");
+        assert_eq!(block.color, ThemeColors::dark().code_text);
+        assert_eq!(block.offset[0], 6.0, "padding фенса");
+        assert!(
+            layout
+                .quads
+                .iter()
+                .any(|quad| quad.kind == BodyQuadKind::CodeBg),
+            "фон фенса: {:?}",
+            layout.quads
+        );
+    }
+
+    /// Цитата: приглушённый цвет, отступ текста 10, бар слева на всю высоту.
+    #[test]
+    fn shape_body_quote() {
+        let layout = shaped("> цитата");
+        assert_eq!(layout.blocks.len(), 1);
+        let block = &layout.blocks[0];
+        assert_eq!(block.color, ThemeColors::dark().quote);
+        assert_eq!(block.offset[0], 10.0);
+        let bar = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::QuoteBar)
+            .expect("бар цитаты есть");
+        assert_eq!(bar.rect[0], 0.0);
+        assert!(
+            (bar.rect[3] - block.height).abs() < 1e-3,
+            "бар на всю высоту"
+        );
+    }
+
+    /// Горизонтальная линия: квад Rule, блоков текста нет.
+    #[test]
+    fn shape_body_rule() {
+        let layout = shaped("а\n\n---\n\nб");
+        assert_eq!(layout.blocks.len(), 2, "два параграфа вокруг линии");
+        let rule = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::Rule)
+            .expect("квад линии есть");
+        assert_eq!(rule.rect[2], 300.0, "линия на всю ширину тела");
+        assert_eq!(rule.rect[3], 2.0, "толщина 2px");
+    }
+
+    /// Подсветка и зачёркивание в теле дают квады Highlight/Strike; квад
+    /// страйка — посередине строки с шириной глифов слова (не всей строки).
+    #[test]
+    fn shape_body_highlight_and_strike_quads() {
+        let layout = shaped("==важно== и ~~вычеркнуто~~");
+        let highlight = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::Highlight)
+            .expect("квад подсветки");
+        assert!(
+            highlight.rect[2] < 300.0 / 2.0,
+            "подсветка — ширина слова, не строки: {:?}",
+            highlight.rect
+        );
+        let strike = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::Strike)
+            .expect("квад зачёркивания");
+        // Слово «вычеркнуто» — после «==важно== и », занимает меньше половины
+        // тела: квад со смещением и реальной шириной глифов, не всей строки
+        assert!(
+            strike.rect[0] > 20.0,
+            "страйк после префикса «==важно== и »: {:?}",
+            strike.rect
+        );
+        assert!(
+            strike.rect[2] > 20.0 && strike.rect[2] < 300.0 / 2.0,
+            "страйк — реальная ширина глифов слова: {:?}",
+            strike.rect
+        );
+        assert!(
+            strike.rect[1] > BODY_LINE_HEIGHT * 0.4 && strike.rect[1] < BODY_LINE_HEIGHT * 0.7,
+            "страйк посередине строки: {:?}",
+            strike.rect
+        );
+        // Один блок: оба маркера в одном параграфе
+        assert_eq!(layout.blocks.len(), 1);
+
+        // Страйк слова в начале строки: x = 0, ширина = глифы слова
+        let layout = shaped("~~вычеркнуто~~ хвост");
+        let strike = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::Strike)
+            .expect("квад зачёркивания");
+        assert!(
+            strike.rect[0] < 1e-3,
+            "страйк с начала слова (слово — в начале строки): {:?}",
+            strike.rect
+        );
+        assert!(
+            strike.rect[2] > 20.0 && strike.rect[2] < 300.0 / 2.0,
+            "страйк — реальная ширина глифов слова: {:?}",
+            strike.rect
+        );
+        assert!(
+            strike.rect[1] > BODY_LINE_HEIGHT * 0.4 && strike.rect[1] < BODY_LINE_HEIGHT * 0.7,
+            "страйк посередине строки: {:?}",
+            strike.rect
+        );
+    }
+
+    /// Ссылка `[a](b)` рендерится без паники и без URL в тексте: label —
+    /// единственная строка буфера.
+    #[test]
+    fn shape_body_link_label_without_url() {
+        let layout = shaped("см. [документацию](https://example.com)");
+        assert_eq!(layout.blocks.len(), 1);
+        let line = layout.blocks[0]
+            .buffer
+            .layout_runs()
+            .next()
+            .expect("строка есть");
+        let text = line.text;
+        assert!(text.contains("документацию"), "label в строке: {text}");
+        assert!(!text.contains("example.com"), "URL не показываем: {text}");
+    }
+
+    /// Стек при зуме 2: квады в px виртуального буфера масштабируются.
+    /// Буллит — в колонке-gutter: x = 4*zoom (без indent, он для текста).
+    #[test]
+    fn shape_body_quads_scale_with_zoom() {
+        let mut fs = FontSystem::new();
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), "- a", 300.0, 2.0);
+        let bullet = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::Bullet)
+            .expect("буллит есть");
+        assert_eq!(bullet.rect[0], 4.0 * 2.0, "x буллита = 4 * zoom (gutter)");
+        assert_eq!(bullet.rect[2], 5.0 * 2.0, "размер буллита * zoom");
+        assert!(
+            bullet.rect[0] + bullet.rect[2] <= 16.0 * 2.0,
+            "буллит в колонке-gutter: {:?}",
+            bullet.rect
+        );
     }
 }

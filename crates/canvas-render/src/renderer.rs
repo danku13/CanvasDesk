@@ -20,7 +20,8 @@ use crate::grid::{GridLook, GridPipeline};
 use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::text::{
-    body_area, titles_visible, EdgeLabel, OverlayText, ScreenText, TextSystem, TitleFrame,
+    body_area, titles_visible, BodyQuad, BodyQuadKind, EdgeLabel, OverlayText, ScreenText,
+    TextSystem, TitleFrame,
 };
 use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
@@ -36,6 +37,45 @@ const EDGE_LABEL_PADDING: [f32; 2] = [6.0, 3.0];
 /// теряют свою группу — их тексты рисуются в финальной поверх всего.
 /// Защита от патологически глубоких каскадов перекрытий.
 const MAX_TEXT_GROUPS: usize = 16;
+
+/// Заливка декоративного квада тела (GFM) по его виду — палитра темы.
+/// Чистая функция (юнит-тест на маппинг): подсветка — прежняя константа,
+/// буллиты/чекбоксы/зачёркивание/линия — приглушённый gfm_muted_fill.
+pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
+    match kind {
+        BodyQuadKind::Highlight => HIGHLIGHT_FILL,
+        BodyQuadKind::Strike
+        | BodyQuadKind::Bullet
+        | BodyQuadKind::CheckboxBox
+        | BodyQuadKind::CheckboxTick
+        | BodyQuadKind::Rule => theme.gfm_muted_fill,
+        BodyQuadKind::QuoteBar => theme.gfm_quote_fill,
+        BodyQuadKind::CodeBg => theme.gfm_code_fill,
+    }
+}
+
+/// Декоративный квад тела ноды (GFM) → инстанс карточного пайплайна:
+/// rect в px виртуального буфера тела (при зуме записи кэша) → world-координаты
+/// относительно `origin` (левый верхний угол области тела, см. text::body_area).
+/// params.w = 1 — без тени (мелкие квады). Чистая функция — единая формула
+/// конвертации для рендера и проверок.
+pub fn body_quad_instance(
+    origin: [f32; 2],
+    quad: &BodyQuad,
+    entry_zoom: f32,
+    theme: &ThemeColors,
+) -> CardInstance {
+    CardInstance {
+        pos: [
+            origin[0] + quad.rect[0] / entry_zoom,
+            origin[1] + quad.rect[1] / entry_zoom,
+        ],
+        size: [quad.rect[2] / entry_zoom, quad.rect[3] / entry_zoom],
+        fill: body_quad_fill(quad.kind, theme),
+        border: [0.0; 4],
+        params: [0.0, 0.0, 0.0, 1.0],
+    }
+}
 
 /// Screen-space инстанс (логические px от левого верхнего угла окна) →
 /// world-инстанс текущей камеры: на экране размер константен при любом зуме.
@@ -611,18 +651,15 @@ impl Renderer {
                     selected_node == Some(index),
                     &self.theme,
                 ));
-                // Фон-подсветка ==…== (форматирование): квады из кэша прошлого
-                // шейпинга (при промахе появятся на следующий кадре) —
-                // на z-позиции ноды, под её текстом и перекрывающими карточками
-                if let Some((entry_zoom, highlight)) = self.text.highlight_rects(index) {
+                // Декоративные квады тела (GFM): подсветка ==…==, зачёркивание
+                // ~~…~~, буллиты/чекбоксы списков, бар цитаты, фон фенса,
+                // линия `---` — из кэша прошлого шейпинга (при промахе
+                // появятся на следующий кадр) — на z-позиции ноды, под её
+                // текстом и перекрывающими карточками
+                if let Some((entry_zoom, body_quads)) = self.text.body_quads(index) {
                     let (origin, _, _) = body_area(node);
-                    for rect in highlight {
-                        instances.push(Self::overlay_quad(
-                            origin,
-                            *rect,
-                            entry_zoom,
-                            HIGHLIGHT_FILL,
-                        ));
+                    for quad in body_quads {
+                        instances.push(body_quad_instance(origin, quad, entry_zoom, &self.theme));
                     }
                 }
                 // Выделение/каретка редактора (T7) — на z-позиции редактируемой ноды
@@ -857,6 +894,77 @@ mod tests {
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
         }
+    }
+
+    /// Маппинг вида квада тела на заливку: чекбоксы/буллиты/страйк/линия —
+    /// gfm_muted_fill (светло-серый в тёмной теме), бар цитаты и фон фенса —
+    /// свои заливки, подсветка — прежняя константа. Регрессия «тёмных»
+    /// маркеров: fill обязан приходить из палитры темы, не из дефолтов.
+    #[test]
+    fn body_quad_fill_uses_theme_palette() {
+        let dark = ThemeColors::dark();
+        let muted = dark.gfm_muted_fill;
+        assert!(muted[0] > 0.4, "тёмная тема: muted светло-серый: {muted:?}");
+        for kind in [
+            BodyQuadKind::Strike,
+            BodyQuadKind::Bullet,
+            BodyQuadKind::CheckboxBox,
+            BodyQuadKind::CheckboxTick,
+            BodyQuadKind::Rule,
+        ] {
+            assert_eq!(
+                body_quad_fill(kind, &dark),
+                muted,
+                "kind {kind:?} → gfm_muted_fill"
+            );
+        }
+        assert_eq!(
+            body_quad_fill(BodyQuadKind::QuoteBar, &dark),
+            dark.gfm_quote_fill
+        );
+        assert_eq!(
+            body_quad_fill(BodyQuadKind::CodeBg, &dark),
+            dark.gfm_code_fill
+        );
+        // Подсветка — жёлтая константа (как до GFM)
+        assert_eq!(
+            body_quad_fill(BodyQuadKind::Highlight, &dark),
+            HIGHLIGHT_FILL
+        );
+        // Светлая тема: свои значения (не тёмные)
+        let light = ThemeColors::light();
+        assert!(light.gfm_muted_fill[0] > dark.gfm_muted_fill[0]);
+        assert_eq!(
+            body_quad_fill(BodyQuadKind::CheckboxBox, &light),
+            light.gfm_muted_fill
+        );
+    }
+
+    /// Конвертация квада тела в инстанс: формула pos = origin + rect/zoom,
+    /// size = rect/zoom, params.w = 1 (без тени) для всех видов.
+    #[test]
+    fn body_quad_instance_converts_coords() {
+        let theme = ThemeColors::dark();
+        let origin = [-180.0, -108.0];
+        // Чекбокс в колонке-gutter: x=0..11 px буфера тела
+        let quad = BodyQuad {
+            rect: [0.0, 2.0, 11.0, 11.0],
+            kind: BodyQuadKind::CheckboxBox,
+        };
+        let inst = body_quad_instance(origin, &quad, 1.0, &theme);
+        assert_eq!(inst.pos, [-180.0, -106.0]);
+        assert_eq!(inst.size, [11.0, 11.0]);
+        assert_eq!(inst.fill, theme.gfm_muted_fill);
+        assert_eq!(inst.params, [0.0, 0.0, 0.0, 1.0], "без тени");
+        assert_eq!(inst.border, [0.0; 4]);
+        // Зум 2: rect в px буфера при зуме 2 → world делим на 2
+        let quad = BodyQuad {
+            rect: [0.0, 4.0, 22.0, 22.0],
+            kind: BodyQuadKind::CheckboxBox,
+        };
+        let inst = body_quad_instance(origin, &quad, 2.0, &theme);
+        assert_eq!(inst.pos, [-180.0, -106.0]);
+        assert_eq!(inst.size, [11.0, 11.0]);
     }
 
     /// Screen→world конверсия оверлея: обратное преобразование камерой

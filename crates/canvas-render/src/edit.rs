@@ -100,6 +100,8 @@ impl PendingStyle {
             StyleFlag::Bold => self.bold = !self.bold,
             StyleFlag::Italic => self.italic = !self.italic,
             StyleFlag::Highlight => self.highlight = !self.highlight,
+            // Тоггла strike в редакторе нет — инлайн-маркер только для рендера
+            StyleFlag::Strike => {}
         }
     }
     fn any(&self) -> bool {
@@ -110,6 +112,7 @@ impl PendingStyle {
             StyleFlag::Bold => self.bold,
             StyleFlag::Italic => self.italic,
             StyleFlag::Highlight => self.highlight,
+            StyleFlag::Strike => false,
         }
     }
 }
@@ -306,7 +309,7 @@ impl EditingSession {
         buffer.set_size(font_system, Some(width_px), Some(height_px));
         buffer.set_rich_text(
             font_system,
-            rich_spans(&plain, &spans),
+            rich_spans(&plain, &spans, Attrs::new()),
             Attrs::new(),
             Shaping::Advanced,
         );
@@ -427,7 +430,7 @@ impl EditingSession {
     /// Обновить rich-атрибуты буфера по текущим спанам (текст не меняется —
     /// курсор (строка, индекс) остаётся валидным).
     fn refresh_styles(&mut self, font_system: &mut FontSystem) {
-        let attrs = rich_spans(&self.plain, &self.spans);
+        let attrs = rich_spans(&self.plain, &self.spans, Attrs::new());
         self.buffer
             .set_rich_text(font_system, attrs, Attrs::new(), Shaping::Advanced);
         self.buffer.shape_until_scroll(font_system, false);

@@ -10,6 +10,7 @@ pub mod camera;
 pub mod cards;
 pub mod config;
 pub mod edit;
+pub mod gfm;
 pub mod gpu;
 pub mod grid;
 pub mod markdown;

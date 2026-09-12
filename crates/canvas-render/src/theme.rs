@@ -35,6 +35,18 @@ pub struct ThemeColors {
     pub body: Color,
     /// Цвет лейбла связи.
     pub edge_label: Color,
+    /// Акцентный цвет ссылок `[text](url)` в теле заметки (GFM).
+    pub link: Color,
+    /// Цвет текста цитаты (`> …`) в теле заметки (GFM).
+    pub quote: Color,
+    /// Цвет текста фенса кода в теле заметки (GFM).
+    pub code_text: Color,
+    /// Фон фенса кода, sRGB 0..1 (GFM).
+    pub gfm_code_fill: [f32; 4],
+    /// Бар цитаты, sRGB 0..1 (GFM).
+    pub gfm_quote_fill: [f32; 4],
+    /// Буллиты списков, зачёркивание, чекбоксы и линия `---`, sRGB 0..1 (GFM).
+    pub gfm_muted_fill: [f32; 4],
 }
 
 impl ThemeColors {
@@ -54,6 +66,12 @@ impl ThemeColors {
             icon: Color::rgb(0x9a, 0xaa, 0xbf),
             body: Color::rgb(0xd4, 0xd4, 0xd4),
             edge_label: Color::rgb(0xcf, 0xd8, 0xe3),
+            link: Color::rgb(0x6c, 0xb6, 0xff),
+            quote: Color::rgb(0x9a, 0x9a, 0xa2),
+            code_text: Color::rgb(0xa5, 0xd6, 0xff),
+            gfm_code_fill: [0.22, 0.23, 0.27, 1.0],
+            gfm_quote_fill: [0.45, 0.48, 0.55, 1.0],
+            gfm_muted_fill: [0.55, 0.57, 0.62, 1.0],
         }
     }
 
@@ -74,6 +92,12 @@ impl ThemeColors {
             icon: Color::rgb(0x6a, 0x7a, 0x8f),
             body: Color::rgb(0x38, 0x38, 0x3e),
             edge_label: Color::rgb(0x2a, 0x35, 0x42),
+            link: Color::rgb(0x09, 0x69, 0xda),
+            quote: Color::rgb(0x59, 0x63, 0x6e),
+            code_text: Color::rgb(0x05, 0x50, 0xae),
+            gfm_code_fill: [0.93, 0.94, 0.96, 1.0],
+            gfm_quote_fill: [0.65, 0.69, 0.76, 1.0],
+            gfm_muted_fill: [0.60, 0.63, 0.68, 1.0],
         }
     }
 
