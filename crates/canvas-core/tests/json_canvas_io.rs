@@ -177,3 +177,44 @@ fn empty_canvas_with_unknown_root_fields() {
     let value: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
     assert_eq!(value["pluginData"]["a"], 1);
 }
+
+/// Группа (node_type = "group", подпись в `label`) сериализуется и парсится
+/// обратно без потерь — формат `.canvas` группы не расширяем.
+#[test]
+fn group_node_round_trip() {
+    use canvas_core::Node;
+
+    let mut canvas = Canvas::default();
+    let mut group = Node::group("g1", 10.0, 20.0, 400.0, 300.0);
+    group.label = Some("Спринт 1".to_owned());
+    canvas.nodes.push(group);
+    canvas.nodes.push(Node::text("n1", "заметка", 50.0, 60.0));
+
+    let serialized = canvas.to_json().expect("сериализация");
+    assert!(serialized.contains("\"type\": \"group\""), "{serialized}");
+    assert!(
+        serialized.contains("\"label\": \"Спринт 1\""),
+        "{serialized}"
+    );
+    // У группы нет file/text — в файл они не пишутся (проверяем её объект)
+    let value: serde_json::Value = serde_json::from_str(&serialized).expect("валидный JSON");
+    let group_json = &value["nodes"][0];
+    assert!(group_json.get("file").is_none(), "{serialized}");
+    assert!(group_json.get("text").is_none(), "{serialized}");
+
+    let parsed = Canvas::from_str(&serialized).expect("парсинг");
+    assert_eq!(parsed.nodes.len(), 2);
+    let group = &parsed.nodes[0];
+    assert_eq!(group.kind(), NodeKind::Group);
+    assert_eq!(group.label.as_deref(), Some("Спринт 1"));
+    assert_eq!(
+        (group.x, group.y, group.width, group.height),
+        (10.0, 20.0, 400.0, 300.0)
+    );
+    // Полный round-trip без потерь
+    let again = parsed.to_json().expect("повторная сериализация");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&serialized).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&again).unwrap()
+    );
+}

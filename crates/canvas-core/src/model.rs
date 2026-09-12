@@ -180,6 +180,28 @@ impl Node {
         }
     }
 
+    /// Нода-группа: рамка с подписью (`label`). Дети определяются геометрией
+    /// (центр ноды внутри rect группы, см. `group_children`) — формат
+    /// `.canvas` родительские связи не хранит.
+    pub fn group(id: impl Into<String>, x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            id: id.into(),
+            node_type: "group".to_owned(),
+            file: None,
+            text: None,
+            label: None,
+            color: None,
+            x,
+            y,
+            width,
+            height,
+            broken_link: None,
+            preview_state: None,
+            canvasdesk: None,
+            extra: Map::new(),
+        }
+    }
+
     /// Файловая нода.
     pub fn file(
         id: impl Into<String>,
@@ -338,5 +360,147 @@ impl Canvas {
         self.edges
             .retain(|edge| edge.from_node != id && edge.to_node != id);
         Some(node)
+    }
+
+    /// Сдвинуть группу и всех её детей на (dx, dy): каждая нода сдвигается
+    /// ровно один раз (вложенные группы — как обычные ноды, рекурсии нет).
+    /// Возвращает индексы сдвинутых нод (группа — первой); пусто, если
+    /// индекс группы невалиден.
+    pub fn translate_group(&mut self, group_index: usize, dx: f32, dy: f32) -> Vec<usize> {
+        if self.nodes.get(group_index).is_none() {
+            return Vec::new();
+        }
+        let children = group_children(self, group_index);
+        for index in std::iter::once(group_index).chain(children.iter().copied()) {
+            if let Some(node) = self.nodes.get_mut(index) {
+                node.x += dx;
+                node.y += dy;
+            }
+        }
+        let mut moved = vec![group_index];
+        moved.extend(children);
+        moved
+    }
+}
+
+/// Индексы детей группы: ноды (кроме самой группы), чей центр лежит внутри
+/// rect группы (границы включительно). Вложенные группы считаются обычными
+/// нодами — рекурсии нет (v1 групп). Чистая функция — тестируется без GPU.
+pub fn group_children(canvas: &Canvas, group_index: usize) -> Vec<usize> {
+    let Some(group) = canvas.nodes.get(group_index) else {
+        return Vec::new();
+    };
+    let (gx, gy) = (group.x, group.y);
+    let (gx1, gy1) = (group.x + group.width, group.y + group.height);
+    canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(index, node)| {
+            if *index == group_index {
+                return false;
+            }
+            let cx = node.x + node.width / 2.0;
+            let cy = node.y + node.height / 2.0;
+            cx >= gx && cx <= gx1 && cy >= gy && cy <= gy1
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group_scene() -> Canvas {
+        // Группа 0..400 × 0..300; дети: внутри, на границе (центр), снаружи,
+        // вложенная группа. Индекс группы — 0.
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::group("g", 0.0, 0.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::file("in", "C:/in.png", 100.0, 100.0, 50.0, 50.0));
+        // Центр на правой границе (x = 400): центр 400..350 — включительно
+        canvas
+            .nodes
+            .push(Node::file("edge", "C:/edge.png", 375.0, 100.0, 50.0, 50.0));
+        canvas
+            .nodes
+            .push(Node::file("out", "C:/out.png", 500.0, 100.0, 50.0, 50.0));
+        canvas
+            .nodes
+            .push(Node::group("nested", 50.0, 50.0, 100.0, 80.0));
+        canvas
+    }
+
+    /// Дети группы: центр внутри rect (границы включительно), снаружи — нет,
+    /// сама группа не считается своим ребёнком; вложенная группа — дитя.
+    #[test]
+    fn group_children_membership() {
+        let canvas = group_scene();
+        let children = group_children(&canvas, 0);
+        assert_eq!(
+            children,
+            vec![1, 2, 4],
+            "in + edge(центр на границе) + nested"
+        );
+        // Невалидный индекс — пусто, без паники
+        assert!(group_children(&canvas, 99).is_empty());
+    }
+
+    /// Вложенная группа сдвигается как обычная нода; её собственные дети
+    /// при сдвиге НЕ перевычисляются рекурсивно — каждая нода сдвигается
+    /// ровно один раз (двойной сдвиг был бы виден по величине дельты).
+    #[test]
+    fn translate_group_moves_children_once() {
+        let mut canvas = group_scene();
+        // deep лежит внутри nested, а nested внутри g — deep дитя обеих,
+        // но translate_group(g) обязан сдвинуть его ровно один раз
+        canvas
+            .nodes
+            .push(Node::file("deep", "C:/deep.png", 60.0, 60.0, 20.0, 20.0));
+
+        let moved = canvas.translate_group(0, 10.0, -5.0);
+        // Группа + in + edge + nested + deep (deep — тоже дитя g: центр внутри)
+        assert_eq!(moved, vec![0, 1, 2, 4, 5]);
+        assert_eq!((canvas.nodes[0].x, canvas.nodes[0].y), (10.0, -5.0));
+        assert_eq!((canvas.nodes[1].x, canvas.nodes[1].y), (110.0, 95.0));
+        assert_eq!((canvas.nodes[2].x, canvas.nodes[2].y), (385.0, 95.0));
+        // Снаружи — на месте
+        assert_eq!((canvas.nodes[3].x, canvas.nodes[3].y), (500.0, 100.0));
+        // Вложенная группа сдвинулась как нода
+        assert_eq!((canvas.nodes[4].x, canvas.nodes[4].y), (60.0, 45.0));
+        // deep сдвинут РОВНО ОДИН раз: (60+10, 60-5), а не дважды
+        assert_eq!((canvas.nodes[5].x, canvas.nodes[5].y), (70.0, 55.0));
+
+        // Невалидный индекс — ничего не сдвигается
+        assert!(canvas.translate_group(99, 1.0, 1.0).is_empty());
+        assert_eq!((canvas.nodes[0].x, canvas.nodes[0].y), (10.0, -5.0));
+    }
+
+    /// Удаление группы детей не удаляет (как Obsidian): remove_node каскадит
+    /// только связи удаляемой ноды.
+    #[test]
+    fn removing_group_keeps_children() {
+        let mut canvas = group_scene();
+        let removed = canvas.remove_node(0).expect("группа удалена");
+        assert_eq!(removed.id, "g");
+        assert_eq!(canvas.nodes.len(), 4);
+        assert!(canvas.nodes.iter().all(|node| node.id != "g"));
+    }
+
+    /// Node::group: тип, отсутствие file/text, координаты как заданы.
+    #[test]
+    fn group_constructor_fields() {
+        let group = Node::group("g1", 10.0, 20.0, 400.0, 300.0);
+        assert_eq!(group.kind(), NodeKind::Group);
+        assert_eq!(group.node_type, "group");
+        assert_eq!(group.file, None);
+        assert_eq!(group.text, None);
+        assert_eq!(group.label, None);
+        assert_eq!(
+            (group.x, group.y, group.width, group.height),
+            (10.0, 20.0, 400.0, 300.0)
+        );
     }
 }

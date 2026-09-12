@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::ui::{
-    button_rect, edge_menu_label, in_resize_corner, menu_item_at, menu_item_at_for, menu_item_rect,
-    menu_label, menu_rect, menu_rect_for, next_free_id, panel_rect, panel_row_at, point_in_rect,
-    theme_button_rect, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, SettingsRow,
-    EDGE_MENU_ITEMS, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
-    MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
+    button_rect, canvas_menu_label, edge_menu_label, in_resize_corner, menu_item_at_for,
+    menu_item_rect, menu_rect_for, next_free_id, node_menu_label, panel_rect, panel_row_at,
+    plan_group_around, plan_group_at, point_in_rect, select_node_hit, theme_button_rect,
+    CanvasMenuItem, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem,
+    SettingsRow, CANVAS_MENU_ITEMS, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING,
+    MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS, PANEL_HEADER_HEIGHT,
+    PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
@@ -848,15 +850,22 @@ impl App {
         self.camera.zoom() * self.scale_factor()
     }
 
-    /// Начать редактирование текстовой ноды (T7). Не-text ноды игнорируются.
+    /// Начать редактирование текстовой ноды (T7) или подписи группы:
+    /// text-нода редактирует `text`, группа — `label` (двойной клик).
+    /// Прочие ноды игнорируются.
     fn begin_editing(&mut self, index: usize) {
         let Some(node) = self.scene.canvas.nodes.get(index) else {
             return;
         };
-        if node.kind() != NodeKind::Text {
+        let is_group = node.kind() == NodeKind::Group;
+        if node.kind() != NodeKind::Text && !is_group {
             return;
         }
-        let text = node.text.clone().unwrap_or_default();
+        let text = if is_group {
+            node.label.clone().unwrap_or_default()
+        } else {
+            node.text.clone().unwrap_or_default()
+        };
         let (_, width, height) = body_area(node);
         let zoom_px = self.zoom_px();
         let Some(renderer) = self.renderer.as_mut() else {
@@ -874,8 +883,11 @@ impl App {
         self.scene.selected = Some(Selection::Node(index));
         self.scene.dragging = None;
         // Давняя заметка могла переполниться до нас (загрузка из файла) —
-        // подгоняем размер сразу при входе в редактирование
-        self.fit_note_size();
+        // подгоняем размер сразу при входе в редактирование. Группу под
+        // текст не подгоняем: рамку ресайзит только пользователь.
+        if !is_group {
+            self.fit_note_size();
+        }
         self.request_redraw();
     }
 
@@ -914,7 +926,8 @@ impl App {
     /// уходит — растёт только высота (по числу строк layout). Ширина
     /// карточки за пользователем: авто-растягивание по самой длинной
     /// строке убрано (правило «перенос даже одной строки»). Только рост.
-    /// Для лейблов связей (T8) не применяется — бокс фиксированный.
+    /// Только text-ноды: группы под текст не подгоняются (рамку ресайзит
+    /// пользователь). Для лейблов связей (T8) не применяется — бокс фиксированный.
     fn fit_note_size(&mut self) {
         let zoom_px = self.zoom_px();
         let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
@@ -924,6 +937,12 @@ impl App {
         let EditTarget::Node(index) = session.target() else {
             return;
         };
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return;
+        };
+        if node.kind() != NodeKind::Text {
+            return;
+        }
         let (_content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
         let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING;
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
@@ -938,7 +957,8 @@ impl App {
 
     /// Завершить редактирование (T7/T8): commit — записать текст в модель и
     /// пометить канвас грязным (автосейв); cancel — откат, модель не менялась.
-    /// Для связи (T8) пустой лейбл при commit сбрасывается в None.
+    /// Для связи (T8) и подписи группы пустой лейбл при commit сбрасывается
+    /// в None.
     fn finish_editing(&mut self, commit: bool) {
         let Some(session) = self.editing.take() else {
             return;
@@ -948,7 +968,18 @@ impl App {
             match session.target() {
                 EditTarget::Node(index) => {
                     if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
-                        node.text = Some(session.text());
+                        if node.kind() == NodeKind::Group {
+                            // Подпись группы: пустая — сброс в None
+                            let text = session.text();
+                            let text = text.trim();
+                            node.label = if text.is_empty() {
+                                None
+                            } else {
+                                Some(text.to_owned())
+                            };
+                        } else {
+                            node.text = Some(session.text());
+                        }
                     }
                 }
                 EditTarget::Edge(index) => {
@@ -1020,6 +1051,35 @@ impl App {
             .canvas
             .nodes
             .push(Node::text(id, "", world[0], world[1]));
+        let index = self.scene.canvas.nodes.len() - 1;
+        let node = &self.scene.canvas.nodes[index];
+        self.scene.spatial.insert(index, node);
+        self.scene.selected = Some(Selection::Node(index));
+        self.scene.mark_dirty();
+        index
+    }
+
+    /// Выборочный hit-test под world-точкой: сначала не-group ноды
+    /// (меньшая площадь в приоритете — ребёнок группы раньше группы),
+    /// затем группы. Кандидаты — точечный запрос spatial index.
+    fn selective_hit(&self, world: Vec2) -> Option<usize> {
+        let candidates = self
+            .scene
+            .spatial
+            .query_rect([world[0], world[1], world[0], world[1]]);
+        select_node_hit(&self.scene.canvas, &candidates)
+    }
+
+    /// Центр видимого мира (мировые координаты) — для «Создать группу».
+    fn viewport_center_world(&self) -> Vec2 {
+        let rect = self.camera.visible_world_rect(self.viewport_logical());
+        [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0]
+    }
+
+    /// Вставить готовую ноду-группу в модель (паттерн create_note_at):
+    /// spatial index + выделение новой группы. Возвращает индекс.
+    fn insert_group(&mut self, group: Node) -> usize {
+        self.scene.canvas.nodes.push(group);
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
@@ -1645,7 +1705,8 @@ impl App {
     }
 
     /// Оверлей контекстного меню (T7): фон, образцы, подписи пунктов.
-    /// Нода — палитра цветов; связь — стиль линии, толщина, цвет.
+    /// Нода — палитра цветов + действия; связь — стиль линии, толщина, цвет;
+    /// пустое место — действия канваса.
     /// Возвращает (квады, подписи, world-позиции подписей).
     fn menu_overlay(&self) -> (Vec<CardInstance>, Vec<String>, Vec<Vec2>) {
         let mut instances = Vec::new();
@@ -1657,7 +1718,8 @@ impl App {
         let palette = ThemeColors::from_theme(self.settings.theme);
         match menu.target {
             MenuTarget::Node(_) => {
-                let [x, y, w, h] = menu_rect(menu.origin);
+                let items = NODE_MENU_ITEMS.len();
+                let [x, y, w, h] = menu_rect_for(menu.origin, items);
                 instances.push(CardInstance {
                     pos: [x, y],
                     size: [w, h],
@@ -1665,20 +1727,39 @@ impl App {
                     border: [0.0; 4],
                     params: [6.0, 0.0, 0.0, 0.0],
                 });
-                for (i, item) in MENU_ITEMS.iter().enumerate() {
+                for (i, item) in NODE_MENU_ITEMS.iter().enumerate() {
                     let rect = menu_item_rect(menu.origin, i);
-                    if let Some(color) = item.and_then(preset_color) {
-                        // Образец цвета слева от подписи
-                        instances.push(CardInstance {
-                            pos: [rect[0] + 7.0, rect[1] + 7.0],
-                            size: [12.0, 12.0],
-                            fill: color,
-                            border: [0.0; 4],
-                            params: [2.0, 0.0, 0.0, 0.0],
-                        });
+                    match item {
+                        NodeMenuItem::Color(color) => {
+                            if let Some(color) = color.and_then(preset_color) {
+                                // Образец цвета слева от подписи
+                                instances.push(CardInstance {
+                                    pos: [rect[0] + 7.0, rect[1] + 7.0],
+                                    size: [12.0, 12.0],
+                                    fill: color,
+                                    border: [0.0; 4],
+                                    params: [2.0, 0.0, 0.0, 0.0],
+                                });
+                            }
+                            labels.push(node_menu_label(*item).unwrap_or_default());
+                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                        }
+                        // Разделитель палитры и действий: тонкая линия
+                        NodeMenuItem::Separator => {
+                            let line_y = rect[1] + MENU_ITEM_HEIGHT / 2.0;
+                            instances.push(CardInstance {
+                                pos: [rect[0] + 4.0, line_y],
+                                size: [rect[2] - 8.0, 1.0],
+                                fill: palette.body_fill(),
+                                border: [0.0; 4],
+                                params: [0.0, 0.0, 0.0, 1.0],
+                            });
+                        }
+                        NodeMenuItem::Group => {
+                            labels.push(node_menu_label(*item).unwrap_or_default());
+                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                        }
                     }
-                    labels.push(menu_label(*item));
-                    label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                 }
             }
             MenuTarget::Edge(edge_index) => {
@@ -1726,6 +1807,21 @@ impl App {
                         .map(|edge| edge_menu_label(*item, edge))
                         .unwrap_or_default();
                     labels.push(label);
+                    label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                }
+            }
+            MenuTarget::Canvas => {
+                let [x, y, w, h] = menu_rect_for(menu.origin, CANVAS_MENU_ITEMS.len());
+                instances.push(CardInstance {
+                    pos: [x, y],
+                    size: [w, h],
+                    fill: palette.menu_fill,
+                    border: [0.0; 4],
+                    params: [6.0, 0.0, 0.0, 0.0],
+                });
+                for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
+                    let rect = menu_item_rect(menu.origin, i);
+                    labels.push(canvas_menu_label(*item));
                     label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                 }
             }
@@ -2548,17 +2644,38 @@ impl App {
                     }
                 }
                 let world = self.cursor_world();
-                // Hit-test через spatial index (T5): O(log n) вместо линейного обхода
-                let hit = self.scene.spatial.hit_test(world);
+                // Выборочный hit-test (T5 + группы): ребёнок группы раньше
+                // самой группы, не-group с меньшей площадью в приоритете
+                let hit = self.selective_hit(world);
                 // Открытое меню (T7): клик по пункту — применить, мимо — закрыть
                 if let Some(menu) = self.menu.take() {
                     match menu.target {
                         MenuTarget::Node(node_index) => {
-                            if let Some(i) = menu_item_at(menu.origin, world) {
-                                if let Some(node) = self.scene.canvas.nodes.get_mut(node_index) {
-                                    node.color = MENU_ITEMS[i].map(str::to_owned);
+                            if let Some(i) =
+                                menu_item_at_for(menu.origin, world, NODE_MENU_ITEMS.len())
+                            {
+                                match NODE_MENU_ITEMS[i] {
+                                    NodeMenuItem::Color(color) => {
+                                        if let Some(node) =
+                                            self.scene.canvas.nodes.get_mut(node_index)
+                                        {
+                                            node.color = color.map(str::to_owned);
+                                        }
+                                        self.scene.mark_dirty();
+                                    }
+                                    // Разделитель не кликабелен — меню просто закрывается
+                                    NodeMenuItem::Separator => {}
+                                    // Обернуть ноду в группу (bbox = нода + padding)
+                                    NodeMenuItem::Group => {
+                                        if let Some(group) = plan_group_around(
+                                            &self.scene.canvas,
+                                            node_index,
+                                            canvas_app::ui::GROUP_PADDING,
+                                        ) {
+                                            self.insert_group(group);
+                                        }
+                                    }
                                 }
-                                self.scene.mark_dirty();
                             }
                         }
                         MenuTarget::Edge(edge_index) => {
@@ -2577,6 +2694,19 @@ impl App {
                                     }
                                 }
                                 self.scene.mark_dirty();
+                            }
+                        }
+                        MenuTarget::Canvas => {
+                            if let Some(i) =
+                                menu_item_at_for(menu.origin, world, CANVAS_MENU_ITEMS.len())
+                            {
+                                match CANVAS_MENU_ITEMS[i] {
+                                    CanvasMenuItem::NewGroup => {
+                                        let center = self.viewport_center_world();
+                                        let group = plan_group_at(&self.scene.canvas, center);
+                                        self.insert_group(group);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2618,13 +2748,15 @@ impl App {
                     self.finish_editing(true);
                 }
                 // Порт hover-ноды (T8): начало drag резиновой линии новой
-                // связи — drag ноды/resize/двойной клик не начинаются
+                // связи — drag ноды/resize/двойной клик не начинаются.
+                // У групп портов нет: edge-drag с группы не начинается.
                 if let Some(node_index) = self.hovered {
                     let port = self
                         .scene
                         .canvas
                         .nodes
                         .get(node_index)
+                        .filter(|node| node.kind() != NodeKind::Group)
                         .and_then(|node| port_at(node, world, self.camera.zoom()));
                     if let Some(side) = port {
                         let from_node = self.scene.canvas.nodes[node_index].id.clone();
@@ -2705,7 +2837,7 @@ impl App {
                 // ту же ноду — отмена
                 if let Some(drag) = self.edge_drag.take() {
                     let world = self.cursor_world();
-                    if let Some(target) = self.scene.spatial.hit_test(world) {
+                    if let Some(target) = self.selective_hit(world) {
                         let to_node = &self.scene.canvas.nodes[target];
                         let to_id = to_node.id.clone();
                         if to_id != drag.from_node {
@@ -2744,8 +2876,8 @@ impl App {
             self.finish_editing(true);
         }
         let world = self.cursor_world();
-        match self.scene.spatial.hit_test(world) {
-            // Меню ноды (T7): палитра цветов в точке клика
+        match self.selective_hit(world) {
+            // Меню ноды (T7): палитра цветов + действия в точке клика
             Some(index) => {
                 self.scene.selected = Some(Selection::Node(index));
                 self.menu = Some(ContextMenu {
@@ -2754,7 +2886,8 @@ impl App {
                 });
             }
             // Промах по нодам: меню связи (стиль/толщина/цвет линии);
-            // мимо связи — закрыть меню (и десктоп-меню T17 в --desktop)
+            // мимо связи — меню пустого канваса (создание группы) или
+            // закрытие меню (и десктоп-меню T17 в --desktop)
             None => {
                 let avoid = self.settings.edges_avoid_nodes;
                 match edge_at(&self.scene.canvas, world, avoid) {
@@ -2766,14 +2899,32 @@ impl App {
                         });
                     }
                     None => {
-                        self.menu = None;
                         // T17 (SPEC §7.4 п.6): в --desktop ПКМ по пустому месту —
                         // системное меню десктопа (нативное Win32: Открыть
                         // канвас / Новый текстовый файл / иконки / автозапуск /
-                        // Выход); вне --desktop поведение прежнее
+                        // Выход); вне --desktop — меню пустого канваса
+                        // (создание группы), повторный ПКМ мимо закрывает его
                         #[cfg(windows)]
-                        if self.desktop_mode && self.desktop_hierarchy.is_some() {
+                        let desktop_menu = self.desktop_mode && self.desktop_hierarchy.is_some();
+                        #[cfg(not(windows))]
+                        let desktop_menu = false;
+                        if desktop_menu {
+                            self.menu = None;
+                            #[cfg(windows)]
                             self.desktop_menu(event_loop);
+                        } else {
+                            self.menu = match self.menu.take() {
+                                // Повторный ПКМ по тому же пустому месту —
+                                // закрыть (тоггл, как у ноды/связи)
+                                Some(ContextMenu {
+                                    target: MenuTarget::Canvas,
+                                    ..
+                                }) => None,
+                                _ => Some(ContextMenu {
+                                    target: MenuTarget::Canvas,
+                                    origin: world,
+                                }),
+                            };
                         }
                     }
                 }
@@ -2946,9 +3097,37 @@ impl App {
                 self.request_redraw();
             } else if let Some((index, offset)) = self.scene.dragging {
                 let world = self.cursor_world();
-                // Модель + инкрементальное обновление spatial index (T5)
-                self.scene
-                    .move_node(index, world[0] + offset[0], world[1] + offset[1]);
+                let new_x = world[0] + offset[0];
+                let new_y = world[1] + offset[1];
+                // Drag группы: сдвигаем группу И всех её детей на тот же
+                // дельта-вектор (ровно один раз; вложенные группы — как
+                // обычные ноды, рекурсии нет — canvas-core translate_group)
+                let is_group = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(index)
+                    .is_some_and(|node| node.kind() == NodeKind::Group);
+                if is_group {
+                    let (old_x, old_y) = self
+                        .scene
+                        .canvas
+                        .nodes
+                        .get(index)
+                        .map(|node| (node.x, node.y))
+                        .unwrap_or((new_x, new_y));
+                    let moved =
+                        self.scene
+                            .canvas
+                            .translate_group(index, new_x - old_x, new_y - old_y);
+                    for moved_index in moved {
+                        let node_ref = &self.scene.canvas.nodes[moved_index];
+                        self.scene.spatial.update(moved_index, node_ref);
+                    }
+                } else {
+                    // Модель + инкрементальное обновление spatial index (T5)
+                    self.scene.move_node(index, new_x, new_y);
+                }
                 self.scene.mark_dirty();
                 self.request_redraw();
             } else if self.edge_drag.is_some() {
@@ -2957,9 +3136,11 @@ impl App {
                 self.request_redraw();
             } else if !self.panning() && !self.editor_dragging && self.editing.is_none() {
                 // Hover (T8): порты ноды под курсором; перерисовка — только
-                // при смене ноды, чтобы не крутить кадры на каждый пиксель
+                // при смене ноды, чтобы не крутить кадры на каждый пиксель.
+                // Выборочный hit: над ребёнком группы hover уходит ему,
+                // а не группе (порты групп не рисуются — cards.rs)
                 let world = self.cursor_world();
-                let hovered = self.scene.spatial.hit_test(world);
+                let hovered = self.selective_hit(world);
                 if hovered != self.hovered {
                     self.hovered = hovered;
                     self.request_redraw();

@@ -4,6 +4,7 @@
 //! шейдере (shaders/cards.wgsl); все карточки кадра — один instanced draw.
 
 use canvas_core::Node;
+use canvas_core::NodeKind;
 
 use crate::camera::Camera;
 use crate::camera::Vec2;
@@ -67,7 +68,9 @@ pub fn preset_color(preset: &str) -> Option<[f32; 4]> {
         .map(|(_, rgba)| *rgba)
 }
 
-/// Заголовок карточки: имя файла из пути / первая строка текста / label группы.
+/// Заголовок карточки: имя файла из пути / подпись группы / первая строка
+/// текста / label. Подпись группы — как есть: markdown-стриппинг к label
+/// не применяется (это заголовок, а не тело заметки).
 pub fn title_for(node: &Node) -> String {
     if let Some(file) = &node.file {
         let name = file
@@ -76,6 +79,14 @@ pub fn title_for(node: &Node) -> String {
             .filter(|name| !name.is_empty())
             .unwrap_or(file.as_str());
         return name.to_owned();
+    }
+    // Группа: подпись в label; без неё — нейтральный дефолт
+    if node.kind() == NodeKind::Group {
+        return node
+            .label
+            .clone()
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| "Группа".to_owned());
     }
     if let Some(text) = &node.text {
         if let Some(line) = text.lines().next().filter(|line| !line.is_empty()) {
@@ -132,19 +143,28 @@ impl CardInstance {
 
 /// Инстанс карточки одной ноды: заливка по цвету, рамка выделения/битой
 /// ссылки, параметры SDF. Чистая функция для z-прохода рендера.
+/// Группа рисуется рамкой с полупрозрачной заливкой (theme.group_*) —
+/// карточкой-контейнером, а не содержимым.
 pub fn card_instance(node: &Node, selected: bool, theme: &ThemeColors) -> CardInstance {
     let broken = node.broken_link == Some(true);
+    let group = node.kind() == NodeKind::Group;
     let border = if selected {
         SELECTION_BORDER
     } else if broken {
         BROKEN_BORDER
+    } else if group {
+        theme.group_border
     } else {
         [0.0; 4]
     };
     CardInstance {
         pos: [node.x, node.y],
         size: [node.width, node.height],
-        fill: card_color(node, theme),
+        fill: if group {
+            theme.group_fill
+        } else {
+            card_color(node, theme)
+        },
         border,
         params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
     }
@@ -374,9 +394,14 @@ pub fn build_edge_instances(
 }
 
 /// Порты ноды при hover (T8): 4 кружка по центрам сторон, поверх карточек.
+/// У групп портов нет: edge-drag с группы не начинается (группа —
+/// контейнер, не конечная точка связи).
 pub fn build_port_instances(canvas: &canvas_core::Canvas, node: usize) -> Vec<CardInstance> {
     let mut out = Vec::with_capacity(4);
     if let Some(node) = canvas.nodes.get(node) {
+        if node.kind() == NodeKind::Group {
+            return out;
+        }
         for side in [
             canvas_core::Side::Top,
             canvas_core::Side::Right,
@@ -988,6 +1013,65 @@ mod tests {
             build_instances(&canvas, &[99], None, &ThemeColors::dark()).len(),
             0
         );
+    }
+
+    /// Группа: полупрозрачная заливка и рамка из темы; выделенная —
+    /// акцентной рамкой (как обычные ноды). Битая группа — серой.
+    #[test]
+    fn group_instance_uses_theme_frame() {
+        let dark = ThemeColors::dark();
+        let mut group = Node::group("g", 10.0, 20.0, 400.0, 300.0);
+        let plain = card_instance(&group, false, &dark);
+        assert_eq!(plain.fill, dark.group_fill, "заливка группы из темы");
+        assert_eq!(plain.border, dark.group_border, "рамка группы из темы");
+        assert!(
+            plain.fill[3] > 0.0 && plain.fill[3] < 1.0,
+            "заливка полупрозрачна"
+        );
+        assert_eq!(plain.params[1], 0.0, "не выделена");
+        // Выделенная — акцентной рамкой выделения
+        let selected = card_instance(&group, true, &dark);
+        assert_eq!(selected.border, SELECTION_BORDER);
+        assert_eq!(selected.params[1], 1.0);
+        // Битая — серой рамкой (приоритет над рамкой группы)
+        group.broken_link = Some(true);
+        let broken = card_instance(&group, false, &dark);
+        assert_eq!(broken.border, BROKEN_BORDER);
+        assert_eq!(broken.params[2], 1.0);
+        // Светлая тема даёт свои цвета
+        let light = ThemeColors::light();
+        assert_ne!(card_instance(&group, false, &light).fill, dark.group_fill);
+    }
+
+    /// Заголовок группы: label как есть (markdown не трогаем), без label —
+    /// «Группа»; пустой label — тоже «Группа».
+    #[test]
+    fn group_title_defaults() {
+        let mut group = Node::group("g", 0.0, 0.0, 400.0, 300.0);
+        assert_eq!(title_for(&group), "Группа", "без label — дефолт");
+        group.label = Some("**Спринт**".to_owned());
+        assert_eq!(
+            title_for(&group),
+            "**Спринт**",
+            "markdown к label не применяется"
+        );
+        group.label = Some(String::new());
+        assert_eq!(title_for(&group), "Группа", "пустой label — дефолт");
+    }
+
+    /// Порты hover-ноды: у групп пусто (edge-drag с группы не начинается).
+    #[test]
+    fn port_instances_skip_groups() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::group("g", 0.0, 0.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 100.0, 200.0, 300.0, 120.0));
+        assert!(
+            build_port_instances(&canvas, 0).is_empty(),
+            "у группы портов нет"
+        );
+        assert_eq!(build_port_instances(&canvas, 1).len(), 4);
     }
 
     /// Сериализация инстанса совпадает с vertex buffer stride (FLOATS * 4 байта).

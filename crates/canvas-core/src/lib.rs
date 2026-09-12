@@ -22,7 +22,8 @@ pub use fs_events::{
     watched_dirs, FileEvent, NodeChange,
 };
 pub use model::{
-    Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node, NodeKind, PreviewState, Side,
+    group_children, Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node, NodeKind,
+    PreviewState, Side,
 };
 pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
 pub use settings::{Corner, GridDensity, GridStyle, Settings, Theme};

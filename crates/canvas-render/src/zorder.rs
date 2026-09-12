@@ -15,6 +15,23 @@
 //!
 //! Модуль — чистая логика без GPU: тестируется юнит-тестами.
 
+/// Стабильно выносит group-ноды в начало выдачи видимых нод: группа —
+/// контейнер и рисуется под своими детьми, даже если в `Canvas.nodes`
+/// она идёт после них (создание «Сгруппировать» дописывает группу в конец).
+/// Порядок внутри классов (группы между собой, не-group между собой)
+/// сохраняется — сортировка стабильна.
+pub fn groups_first(indices: &[usize], canvas: &canvas_core::Canvas) -> Vec<usize> {
+    let is_group = |&index: &usize| {
+        canvas
+            .nodes
+            .get(index)
+            .is_some_and(|node| node.kind() == canvas_core::NodeKind::Group)
+    };
+    let mut sorted: Vec<usize> = indices.iter().copied().filter(is_group).collect();
+    sorted.extend(indices.iter().copied().filter(|index| !is_group(index)));
+    sorted
+}
+
 /// Прямоугольники пересекаются (строгое перекрытие площадью > 0;
 /// касание краями перекрытием не считается).
 fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
@@ -191,6 +208,36 @@ mod tests {
         assert_eq!(zplan.segments, vec![seg(0..2, Some(0))]);
         assert_eq!(zplan.text_groups, vec![vec![0, 1]]);
         assert_eq!(zplan.final_group(), 0);
+    }
+
+    /// groups_first: группа (даже идущая в массиве после ребёнка) уходит
+    /// в начало выдачи — рисуется под детьми; порядок внутри классов стабилен.
+    #[test]
+    fn groups_first_sorts_groups_under_children() {
+        use canvas_core::Node;
+        let mut canvas = canvas_core::Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("child", "C:/c.png", 0.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::group("g", -50.0, -50.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::file("other", "C:/o.png", 500.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::group("g2", 900.0, 0.0, 200.0, 200.0));
+
+        // Выдача spatial index — по возрастанию индекса
+        let sorted = groups_first(&[0, 1, 2, 3], &canvas);
+        assert_eq!(sorted, vec![1, 3, 0, 2], "группы первыми, порядок стабилен");
+
+        // Групп нет — выдача не меняется
+        let no_groups = groups_first(&[2, 0], &canvas);
+        assert_eq!(no_groups, vec![2, 0]);
+        // Пустая выдача — пусто
+        assert!(groups_first(&[], &canvas).is_empty());
     }
 
     /// B перекрывает A, обе с текстом: текст A — в группе ДО карточки B

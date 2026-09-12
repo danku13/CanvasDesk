@@ -47,6 +47,10 @@ pub struct ThemeColors {
     pub gfm_quote_fill: [f32; 4],
     /// Буллиты списков, зачёркивание, чекбоксы и линия `---`, sRGB 0..1 (GFM).
     pub gfm_muted_fill: [f32; 4],
+    /// Заливка рамки группы — акцент, слабая прозрачность.
+    pub group_fill: [f32; 4],
+    /// Рамка группы — акцент, средняя прозрачность.
+    pub group_border: [f32; 4],
 }
 
 impl ThemeColors {
@@ -72,6 +76,8 @@ impl ThemeColors {
             gfm_code_fill: [0.22, 0.23, 0.27, 1.0],
             gfm_quote_fill: [0.45, 0.48, 0.55, 1.0],
             gfm_muted_fill: [0.55, 0.57, 0.62, 1.0],
+            group_fill: [0.396, 0.612, 0.969, 0.08],
+            group_border: [0.396, 0.612, 0.969, 0.40],
         }
     }
 
@@ -98,6 +104,8 @@ impl ThemeColors {
             gfm_code_fill: [0.93, 0.94, 0.96, 1.0],
             gfm_quote_fill: [0.65, 0.69, 0.76, 1.0],
             gfm_muted_fill: [0.60, 0.63, 0.68, 1.0],
+            group_fill: [0.396, 0.612, 0.969, 0.10],
+            group_border: [0.36, 0.55, 0.90, 0.50],
         }
     }
 
@@ -153,6 +161,20 @@ mod tests {
         assert_ne!(dark.card_fill, light.card_fill);
         assert_ne!(dark.title, light.title);
         assert_ne!(dark.body, light.body);
+        // Рамки групп в обеих темах полупрозрачны и различимы
+        for theme in [dark, light] {
+            assert!(
+                theme.group_fill[3] > 0.0 && theme.group_fill[3] < 1.0,
+                "заливка группы полупрозрачна: {:?}",
+                theme.group_fill
+            );
+            assert!(
+                theme.group_border[3] > 0.0 && theme.group_border[3] < 1.0,
+                "рамка группы полупрозрачна: {:?}",
+                theme.group_border
+            );
+        }
+        assert_ne!(dark.group_border, light.group_border);
         // Светлый фон ярче тёмного по каждому каналу
         for i in 0..3 {
             assert!(light.background[i] > dark.background[i]);

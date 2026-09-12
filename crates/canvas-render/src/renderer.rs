@@ -435,7 +435,10 @@ impl Renderer {
             self.size.height as f32 / self.scale_factor,
         ];
         let visible = camera.visible_world_rect(viewport_logical);
-        let indices = scene.spatial.query_rect(visible);
+        // Группы — контейнеры: стабильно уносим их в начало выдачи, чтобы
+        // рамка группы рисовалась под своими детьми независимо от порядка
+        // нод в Canvas.nodes (zorder::groups_first)
+        let indices = zorder::groups_first(&scene.spatial.query_rect(visible), scene.canvas);
 
         // Актуальные метрики буфера редактирования под текущий зум (T7/T8) —
         // до вычисления каретки/выделения ниже
