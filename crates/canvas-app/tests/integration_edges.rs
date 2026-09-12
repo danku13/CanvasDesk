@@ -439,10 +439,10 @@ fn test_key_mapping_for_edge_editing() {
         Some(KeyCommand::Cancel)
     );
 
-    // Ctrl+Enter — тоже Commit
+    // Ctrl+Enter — новая строка (как Shift+Enter; Т9-UX)
     assert_eq!(
         map_key(&Key::Named(NamedKey::Enter), true, false),
-        Some(KeyCommand::Commit)
+        Some(KeyCommand::Action(cosmic_text::Action::Enter))
     );
 
     // Backspace/Delete

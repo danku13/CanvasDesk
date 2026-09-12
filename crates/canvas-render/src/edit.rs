@@ -190,7 +190,9 @@ pub enum KeyCommand {
 /// `ctrl`/`shift` — состояние модификаторов. None — клавиша не для редактора.
 pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
     match key {
-        Key::Named(NamedKey::Enter) => Some(if shift {
+        // Enter — завершить редактирование; Shift+Enter и Ctrl+Enter —
+        // новая строка (карточка растёт по высоте через fit_note_size)
+        Key::Named(NamedKey::Enter) => Some(if shift || ctrl {
             KeyCommand::Action(Action::Enter)
         } else {
             KeyCommand::Commit
@@ -1010,14 +1012,19 @@ mod tests {
         assert!(session_area(&canvas, &dangling, false).is_none());
     }
 
-    /// Маппинг клавиш: Enter — commit, Shift+Enter — новая строка, Esc — cancel,
-    /// Ctrl+C/X/V/A на латинице и кириллице, символы — вставка.
+    /// Маппинг клавиш: Enter — commit, Shift+Enter/Ctrl+Enter — новая строка,
+    /// Esc — cancel, Ctrl+C/X/V/A на латинице и кириллице, символы — вставка.
     #[test]
     fn key_mapping() {
         let enter = Key::Named(NamedKey::Enter);
         assert_eq!(map_key(&enter, false, false), Some(KeyCommand::Commit));
         assert_eq!(
             map_key(&enter, false, true),
+            Some(KeyCommand::Action(Action::Enter))
+        );
+        // Ctrl+Enter — тоже новая строка (Т9-UX): привычный жест из мессенджеров
+        assert_eq!(
+            map_key(&enter, true, false),
             Some(KeyCommand::Action(Action::Enter))
         );
         assert_eq!(
