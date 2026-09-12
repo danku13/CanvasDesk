@@ -2,3 +2,6 @@
 *.bak
 .vscode/
 default.canvas
+
+# Локальные материалы для статей и devlog — не публиковать в GitHub
+marketing/
