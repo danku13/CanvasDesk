@@ -195,6 +195,15 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
         } else {
             KeyCommand::Commit
         }),
+        // Пробел приходит как Named(Space), а не Character(" ") — без
+        // отдельного руки в текст не вставлялся (заметка «не дышит»)
+        Key::Named(NamedKey::Space) => {
+            if ctrl {
+                None
+            } else {
+                Some(KeyCommand::Insert(" ".to_string()))
+            }
+        }
         Key::Named(NamedKey::Escape) => Some(KeyCommand::Cancel),
         Key::Named(NamedKey::Backspace) => Some(KeyCommand::Action(Action::Backspace)),
         Key::Named(NamedKey::Delete) => Some(KeyCommand::Action(Action::Delete)),
@@ -289,7 +298,9 @@ impl EditingSession {
         let line_height = BODY_LINE_HEIGHT * zoom_px;
         let (plain, spans) = markdown::parse(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-        buffer.set_wrap(font_system, Wrap::Word);
+        // WordOrGlyph: перенос по словам, но одно длинное слово, не
+        // влезающее в карточку, рвётся по глифам, а не уходит за край
+        buffer.set_wrap(font_system, Wrap::WordOrGlyph);
         buffer.set_size(font_system, Some(width_px), Some(height_px));
         buffer.set_rich_text(
             font_system,
@@ -700,6 +711,59 @@ mod tests {
         let (mut fs, mut session) = session("строка");
         session.apply(&mut fs, KeyCommand::Insert("!".into()));
         assert_eq!(session.text(), "строка!");
+    }
+
+    /// Пробел идёт как Named(Space), не Character: без руки в map_key
+    /// пробел молча глотался — текст вставлялся сплошным. Ctrl+Space —
+    /// не вставка (резерв под хоткеи).
+    #[test]
+    fn space_inserts_gap() {
+        let (mut fs, mut session) = session("слово");
+        let cmd = map_key(&Key::Named(NamedKey::Space), false, false);
+        assert_eq!(cmd, Some(KeyCommand::Insert(" ".to_string())));
+        session.apply(&mut fs, cmd.unwrap());
+        session.insert_text(&mut fs, "два");
+        assert_eq!(session.text(), "слово два");
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Space), true, false),
+            None,
+            "Ctrl+Space не вставляет пробел"
+        );
+    }
+
+    /// Длинная ОДНА строка переносится по ширине карточки: контент
+    /// занимает ≥2 строки и не шире области редактирования (правило
+    /// «перенос даже одной строки», рост ширины карточки убран).
+    #[test]
+    fn long_single_line_wraps_at_width() {
+        let (mut fs, mut session) = session("");
+        session.insert_text(&mut fs, &"слово ".repeat(30));
+        let (w, h) = session.content_size_px(&mut fs);
+        assert!(
+            h >= BODY_LINE_HEIGHT * 2.0 - 0.5,
+            "высота должна отражать перенос: {h}"
+        );
+        assert!(
+            w <= 300.0 + 0.5,
+            "контент не шире области редактирования: {w}"
+        );
+    }
+
+    /// Одно длинное слово (пробелов нет) рвётся по глифам (WordOrGlyph),
+    /// а не вылезает за край карточки одной строкой.
+    #[test]
+    fn single_word_wraps_glyph_fallback() {
+        let (mut fs, mut session) = session("");
+        session.insert_text(&mut fs, &"а".repeat(300));
+        let (w, h) = session.content_size_px(&mut fs);
+        assert!(
+            h >= BODY_LINE_HEIGHT * 2.0 - 0.5,
+            "длинное слово должно переноситься по глифам: {h}"
+        );
+        assert!(
+            w <= 300.0 + 0.5,
+            "длинное слово не шире области редактирования: {w}"
+        );
     }
 
     /// Backspace/Delete со/без выделения.

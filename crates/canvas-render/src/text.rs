@@ -514,7 +514,9 @@ impl TextSystem {
                             &mut self.font_system,
                             Metrics::new(BODY_FONT_SIZE * zoom_px, BODY_LINE_HEIGHT * zoom_px),
                         );
-                        body.set_wrap(&mut self.font_system, Wrap::Word);
+                        // WordOrGlyph: перенос по словам; слишком длинное
+                        // слово рвётся по глифам, а не вылезает за карточку
+                        body.set_wrap(&mut self.font_system, Wrap::WordOrGlyph);
                         body.set_size(
                             &mut self.font_system,
                             Some(body_width * zoom_px),

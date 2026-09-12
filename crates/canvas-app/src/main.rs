@@ -10,9 +10,8 @@ use canvas_app::ui::{
     button_rect, edge_menu_label, in_resize_corner, menu_item_at, menu_item_at_for, menu_item_rect,
     menu_label, menu_rect, menu_rect_for, next_free_id, panel_rect, panel_row_at, point_in_rect,
     theme_button_rect, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, SettingsRow,
-    EDGE_MENU_ITEMS, MAX_NOTE_WIDTH, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
-    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
-    SETTINGS_ROWS,
+    EDGE_MENU_ITEMS, MENU_ITEMS, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
+    MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
@@ -910,9 +909,11 @@ impl App {
         self.request_redraw();
     }
 
-    /// Подрастить редактируемую заметку под контент (T7): текст не должен
-    /// уходить за границы карточки. Высота — по числу строк layout, ширина —
-    /// по самой длинной строке (с потолком MAX_NOTE_WIDTH). Только рост.
+    /// Подрастить высоту редактируемой заметки под контент (T7): текст
+    /// переносится по ширине карточки (Wrap::WordOrGlyph), за край не
+    /// уходит — растёт только высота (по числу строк layout). Ширина
+    /// карточки за пользователем: авто-растягивание по самой длинной
+    /// строке убрано (правило «перенос даже одной строки»). Только рост.
     /// Для лейблов связей (T8) не применяется — бокс фиксированный.
     fn fit_note_size(&mut self) {
         let zoom_px = self.zoom_px();
@@ -923,22 +924,13 @@ impl App {
         let EditTarget::Node(index) = session.target() else {
             return;
         };
-        let (content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
+        let (_content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
         let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING;
-        let needed_w = (content_w_px / zoom_px + BODY_PADDING * 2.0).min(MAX_NOTE_WIDTH);
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
             return;
         };
-        let mut changed = false;
         if needed_h > node.height + 0.5 {
             node.height = needed_h;
-            changed = true;
-        }
-        if needed_w > node.width + 0.5 {
-            node.width = needed_w;
-            changed = true;
-        }
-        if changed {
             self.scene.spatial.update(index, node);
             self.scene.mark_dirty();
         }
