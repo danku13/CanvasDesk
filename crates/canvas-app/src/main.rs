@@ -17,7 +17,7 @@ use canvas_app::ui::{
 };
 use canvas_core::{
     apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
-    watched_dirs, Canvas, Edge, FileEvent, GridStyle, Node, NodeChange, NodeKind, Settings,
+    watched_dirs, Canvas, Edge, FileEvent, GridStyle, Node, NodeChange, NodeKind, Settings, Side,
     SpatialIndex, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{pulse_alpha, Flight, FLIGHT_DURATION_MS};
@@ -305,6 +305,10 @@ enum AppEvent {
     /// конвейер T10 (корзина → brokenLink, R12).
     #[cfg(windows)]
     Shell(canvas_shell::shell_events::ShellEvent),
+    /// В канале MCP pipe-сервера появились запросы (MCP-интеграция):
+    /// забрать через `take_request`, ответить через responder.
+    #[cfg(windows)]
+    McpWake,
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -443,6 +447,10 @@ struct App {
     /// до/после TaskbarCreated (из шины T16) + анти-флуд 30 с.
     #[cfg(windows)]
     explorer_tracker: canvas_shell::desktop::explorer::RestartTracker,
+    /// MCP pipe-сервер (MCP-интеграция): worker-поток \\.\pipe\canvasdesk;
+    /// запросы забираются по AppEvent::McpWake. None — MCP недоступен (деградация).
+    #[cfg(windows)]
+    mcp_server: Option<canvas_shell::mcp_pipe::McpPipeServer>,
 }
 
 impl App {
@@ -523,6 +531,8 @@ impl App {
             icon_guard: None,
             #[cfg(windows)]
             explorer_tracker: Default::default(),
+            #[cfg(windows)]
+            mcp_server: None,
         }
     }
 
@@ -541,6 +551,12 @@ impl App {
     #[cfg(windows)]
     fn set_shell_events(&mut self, service: canvas_shell::shell_events::window::ShellEventService) {
         self.shell_events = Some(service);
+    }
+
+    /// Подключить MCP pipe-сервер (MCP-интеграция; сеттер-паттерн T15/T16).
+    #[cfg(windows)]
+    fn set_mcp_server(&mut self, server: Option<canvas_shell::mcp_pipe::McpPipeServer>) {
+        self.mcp_server = server;
     }
 
     /// HWND окна приложения через raw-window-handle (T15; тот же приём,
@@ -2371,6 +2387,8 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Desktop(event) => self.on_desktop_event(event),
             #[cfg(windows)]
             AppEvent::Shell(event) => self.on_shell_event(event),
+            #[cfg(windows)]
+            AppEvent::McpWake => self.on_mcp_wake(),
         }
     }
 
@@ -2393,6 +2411,346 @@ impl ApplicationHandler<AppEvent> for App {
         if self.search_pending.is_some() || self.flight.is_some() || self.pulse.is_some() {
             self.request_redraw();
         }
+    }
+}
+
+impl App {
+    /// Забрать накопившиеся MCP-запросы из pipe-сервера и ответить на каждый
+    /// (MCP-интеграция): tools/call → `mcp_dispatch`, ошибки валидации и
+    /// «не найдено» — в MCP-идиоме isError (не JSON-RPC error); битый
+    /// конверт — JSON-RPC error с null-id. Красим окно при любом обращении.
+    #[cfg(windows)]
+    fn on_mcp_wake(&mut self) {
+        let Some(server) = self.mcp_server.as_ref() else {
+            return;
+        };
+        let mut handled = false;
+        while let Some((line, respond)) = server.take_request() {
+            handled = true;
+            let reply = match canvas_mcp::parse_envelope(&line) {
+                // Notification (id == None) — отвечать нечему
+                Ok(request) if request.id.is_none() => continue,
+                Ok(request) => {
+                    let id = request.id.unwrap_or(serde_json::Value::Null);
+                    let (method, params) = mcp_unwrap_call(&request.method, &request.params);
+                    match mcp_dispatch(&mut self.scene, &mut self.camera, &method, &params) {
+                        Ok(value) => canvas_mcp::build_result(&id, &value),
+                        Err(message) => canvas_mcp::build_call_error(&id, &message),
+                    }
+                }
+                Err(err) => canvas_mcp::build_error(err.id.as_ref(), err.code, &err.message),
+            };
+            respond(reply);
+        }
+        if handled {
+            self.request_redraw();
+        }
+    }
+}
+
+/// Распаковка MCP-конверта, пришедшего по pipe: `tools/call` несёт имя
+/// инструмента и аргументы внутри params (`name`/`arguments`) — посредник
+/// форвардит конверт как есть; прочие методы проходят без изменений.
+/// Чистая функция — тестируется без pipe.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_unwrap_call(method: &str, params: &serde_json::Value) -> (String, serde_json::Value) {
+    if method == "tools/call" {
+        let name = params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default();
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        (name, args)
+    } else {
+        (method.to_owned(), params.clone())
+    }
+}
+
+/// Обязательный строковый параметр MCP-инструмента.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_req_str<'v>(params: &'v serde_json::Value, name: &str) -> Result<&'v str, String> {
+    params
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("отсутствует параметр '{name}'"))
+}
+
+/// Обязательный числовой параметр MCP-инструмента.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_req_f32(params: &serde_json::Value, name: &str) -> Result<f32, String> {
+    params
+        .get(name)
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value as f32)
+        .ok_or_else(|| format!("отсутствует числовой параметр '{name}'"))
+}
+
+/// Опциональный числовой параметр MCP-инструмента.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_opt_f32(params: &serde_json::Value, name: &str) -> Option<f32> {
+    params
+        .get(name)
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value as f32)
+}
+
+/// Индекс ноды по строковому id (MCP-инструменты адресуют ноды id).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_node_index(canvas: &Canvas, id: &str) -> Result<usize, String> {
+    canvas
+        .nodes
+        .iter()
+        .position(|node| node.id == id)
+        .ok_or_else(|| format!("нода не найдена: {id}"))
+}
+
+/// Сводка ноды для списков; поле text — только по запросу (can be большим).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_node_summary(node: &Node, with_text: bool) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "id": node.id,
+        "type": node.node_type,
+        "x": node.x,
+        "y": node.y,
+        "width": node.width,
+        "height": node.height,
+        "label": node.label,
+        "file": node.file,
+        "color": node.color,
+    });
+    if with_text {
+        value["text"] = serde_json::Value::from(node.text.clone());
+    }
+    value
+}
+
+/// Сторона связи MCP: "any"/отсутствие → None (автовывод из геометрии).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_side(params: &serde_json::Value, name: &str) -> Result<Option<Side>, String> {
+    match params.get(name).and_then(serde_json::Value::as_str) {
+        None | Some("any") => Ok(None),
+        Some(text) => serde_json::from_value(serde_json::Value::String(text.to_owned()))
+            .map(Some)
+            .map_err(|_| format!("неверная сторона '{name}': {text}")),
+    }
+}
+
+/// Выполнить MCP-инструмент над сценой/камерой: 15 инструментов канваса
+/// (tools/list — в canvas-mcp). Чистая функция над SceneState + Camera —
+/// тестируется без окна и pipe; каждая мутирующая ветка обновляет spatial
+/// index и помечает канвас грязным (автосейв). Ошибки — строки, посредник
+/// заворачивает их в isError.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_dispatch(
+    scene: &mut SceneState,
+    camera: &mut Camera,
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match method {
+        "canvas_info" => Ok(serde_json::json!({
+            "path": scene.path.to_string_lossy(),
+            "nodes": scene.canvas.nodes.len(),
+            "edges": scene.canvas.edges.len(),
+        })),
+        "nodes_list" => {
+            let with_text = params
+                .get("text")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let nodes = scene
+                .canvas
+                .nodes
+                .iter()
+                .map(|node| mcp_node_summary(node, with_text))
+                .collect();
+            Ok(serde_json::Value::Array(nodes))
+        }
+        "node_get" => {
+            let id = mcp_req_str(params, "id")?;
+            let node = scene
+                .canvas
+                .node(id)
+                .ok_or_else(|| format!("нода не найдена: {id}"))?;
+            serde_json::to_value(node).map_err(|err| err.to_string())
+        }
+        "nodes_search" => {
+            let query = mcp_req_str(params, "query")?.to_lowercase();
+            let nodes = scene
+                .canvas
+                .nodes
+                .iter()
+                .filter(|node| {
+                    [
+                        node.text.as_deref(),
+                        node.label.as_deref(),
+                        node.file.as_deref(),
+                    ]
+                    .into_iter()
+                    .any(|field| field.is_some_and(|text| text.to_lowercase().contains(&query)))
+                })
+                .map(|node| mcp_node_summary(node, true))
+                .collect();
+            Ok(serde_json::Value::Array(nodes))
+        }
+        "node_create_note" => {
+            let x = mcp_req_f32(params, "x")?;
+            let y = mcp_req_f32(params, "y")?;
+            let text = params
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let mut node = Node::text(next_free_id(&scene.canvas, "note"), text, x, y);
+            if let Some(width) = mcp_opt_f32(params, "width") {
+                node.width = width;
+            }
+            if let Some(height) = mcp_opt_f32(params, "height") {
+                node.height = height;
+            }
+            let index = scene.canvas.nodes.len();
+            scene.canvas.nodes.push(node);
+            scene.spatial.insert(index, &scene.canvas.nodes[index]);
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
+        }
+        "node_create_file" => {
+            let path = mcp_req_str(params, "path")?;
+            let x = mcp_req_f32(params, "x")?;
+            let y = mcp_req_f32(params, "y")?;
+            // Файл на диске НЕ создаём — только карточка в модели
+            let node = Node::file(
+                next_free_id(&scene.canvas, "file"),
+                path,
+                x,
+                y,
+                mcp_opt_f32(params, "width").unwrap_or(canvas_app::ui::DROP_CARD_W),
+                mcp_opt_f32(params, "height").unwrap_or(canvas_app::ui::DROP_CARD_H),
+            );
+            let index = scene.canvas.nodes.len();
+            scene.canvas.nodes.push(node);
+            scene.spatial.insert(index, &scene.canvas.nodes[index]);
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
+        }
+        "node_update_text" => {
+            let id = mcp_req_str(params, "id")?;
+            let text = mcp_req_str(params, "text")?;
+            let index = mcp_node_index(&scene.canvas, id)?;
+            scene.canvas.nodes[index].text = Some(text.to_owned());
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "node_move" => {
+            let id = mcp_req_str(params, "id")?;
+            let x = mcp_req_f32(params, "x")?;
+            let y = mcp_req_f32(params, "y")?;
+            let index = mcp_node_index(&scene.canvas, id)?;
+            scene.move_node(index, x, y);
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "node_resize" => {
+            let id = mcp_req_str(params, "id")?;
+            let width = mcp_req_f32(params, "width")?;
+            let height = mcp_req_f32(params, "height")?;
+            let index = mcp_node_index(&scene.canvas, id)?;
+            let node = &mut scene.canvas.nodes[index];
+            node.width = width;
+            node.height = height;
+            scene.spatial.update(index, node);
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "node_delete" => {
+            let id = mcp_req_str(params, "id")?;
+            let index = mcp_node_index(&scene.canvas, id)?;
+            let removed = scene
+                .canvas
+                .remove_node(index)
+                .ok_or_else(|| format!("нода не найдена: {id}"))?;
+            // Индексы сдвинулись — spatial перестраивается (паттерн delete_selected)
+            scene.spatial = SpatialIndex::build(&scene.canvas);
+            scene.selected = None;
+            scene.dragging = None;
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": removed.id }))
+        }
+        "node_set_color" => {
+            let id = mcp_req_str(params, "id")?;
+            let color = match params
+                .get("color")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+            {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(preset)
+                    if matches!(preset.as_str(), "1" | "2" | "3" | "4" | "5" | "6") =>
+                {
+                    Some(preset)
+                }
+                other => {
+                    return Err(format!(
+                        "color должен быть пресетом \"1\"..\"6\" или null, получено {other}"
+                    ));
+                }
+            };
+            let index = mcp_node_index(&scene.canvas, id)?;
+            scene.canvas.nodes[index].color = color;
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "edge_create" => {
+            let from = mcp_req_str(params, "from")?.to_owned();
+            let to = mcp_req_str(params, "to")?.to_owned();
+            mcp_node_index(&scene.canvas, &from)?;
+            mcp_node_index(&scene.canvas, &to)?;
+            let edge = Edge::new(
+                scene.canvas.next_edge_id(),
+                &from,
+                mcp_side(params, "fromSide")?,
+                &to,
+                mcp_side(params, "toSide")?,
+            );
+            let id = edge.id.clone();
+            scene.canvas.add_edge(edge);
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "edge_delete" => {
+            let id = mcp_req_str(params, "id")?;
+            if !scene.canvas.remove_edge(id) {
+                return Err(format!("связь не найдена: {id}"));
+            }
+            scene.mark_dirty();
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "viewport_get" => {
+            let position = camera.position();
+            Ok(serde_json::json!({
+                "x": position[0],
+                "y": position[1],
+                "zoom": camera.zoom(),
+            }))
+        }
+        "viewport_set" => {
+            let x = mcp_req_f32(params, "x")?;
+            let y = mcp_req_f32(params, "y")?;
+            camera.set_center([x, y]);
+            if let Some(zoom) = mcp_opt_f32(params, "zoom") {
+                camera.set_zoom(zoom);
+            }
+            let position = camera.position();
+            Ok(serde_json::json!({
+                "x": position[0],
+                "y": position[1],
+                "zoom": camera.zoom(),
+            }))
+        }
+        other => Err(format!("неизвестный инструмент: {other}")),
     }
 }
 
@@ -3467,6 +3825,21 @@ fn main() -> anyhow::Result<()> {
             // руются по WM_APP_WAKE после создания окна потоком)
             app.sync_watch_dirs();
         }
+        // MCP named pipe (MCP-интеграция): worker-поток \\.\pipe\canvasdesk
+        // принимает JSON-RPC от canvas-mcp-посредника; waker — тот же паттерн,
+        // что ThumbService (worker будит event loop через proxy). Провал spawn —
+        // warn внутри + None: MCP недоступен, приложение работает как обычно.
+        #[cfg(windows)]
+        {
+            let proxy = proxy.clone();
+            let mcp_waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                let _ = proxy.send_event(AppEvent::McpWake);
+            });
+            app.set_mcp_server(canvas_shell::mcp_pipe::McpPipeServer::spawn(
+                canvas_mcp::PIPE_NAME,
+                mcp_waker,
+            ));
+        }
         // Не-Windows: режим десктопа недоступен — предупреждение и обычный
         // оконный режим (деградация, SPEC §9; ядро приложения то же)
         #[cfg(not(windows))]
@@ -3563,5 +3936,421 @@ mod tests {
         assert!(parse_args(&["--stress".into()]).is_err());
         assert!(parse_args(&["--stress".into(), "abc".into()]).is_err());
         assert!(parse_args(&["a.canvas".into(), "b.canvas".into()]).is_err());
+    }
+
+    // --- MCP-интеграция: mcp_dispatch (15 инструментов) ---
+
+    /// Тестовая сцена: заметка, файл, группа со связью (MCP-тесты).
+    fn mcp_scene() -> SceneState {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("n1", "Привет Мир", 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("f1", "docs/SPEC.md", 500.0, 100.0, 320.0, 220.0));
+        let mut group = Node::group("g1", 0.0, 0.0, 900.0, 600.0);
+        group.label = Some("Зона работы".to_owned());
+        canvas.nodes.push(group);
+        canvas.add_edge(Edge::new("edge-1", "n1", None, "f1", Some(Side::Right)));
+        SceneState::new(canvas, PathBuf::from("target/tmp/mcp.canvas"))
+    }
+
+    fn dispatch(
+        scene: &mut SceneState,
+        camera: &mut Camera,
+        method: &str,
+        params: &str,
+    ) -> Result<serde_json::Value, String> {
+        let params: serde_json::Value = serde_json::from_str(params).expect("params — JSON");
+        mcp_dispatch(scene, camera, method, &params)
+    }
+
+    /// canvas_info: счётчики нод/связей и путь к файлу.
+    #[test]
+    fn mcp_canvas_info_counts() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let info = dispatch(&mut scene, &mut camera, "canvas_info", "{}").expect("canvas_info");
+        assert_eq!(info["nodes"], 3);
+        assert_eq!(info["edges"], 1);
+        assert_eq!(info["path"], "target/tmp/mcp.canvas");
+    }
+
+    /// nodes_list: сводки без text по умолчанию, с text по флагу; node_get —
+    /// полная нода.
+    #[test]
+    fn mcp_nodes_list_and_get() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let list = dispatch(&mut scene, &mut camera, "nodes_list", "{}").expect("nodes_list");
+        let first = &list[0];
+        assert_eq!(first["id"], "n1");
+        assert_eq!(first["type"], "text");
+        assert!(
+            !first.as_object().unwrap().contains_key("text"),
+            "text скрыт"
+        );
+        let list = dispatch(&mut scene, &mut camera, "nodes_list", r#"{"text":true}"#)
+            .expect("nodes_list с text");
+        assert_eq!(list[0]["text"], "Привет Мир");
+
+        let node =
+            dispatch(&mut scene, &mut camera, "node_get", r#"{"id":"f1"}"#).expect("node_get");
+        assert_eq!(node["file"], "docs/SPEC.md");
+        assert_eq!(node["width"], 320.0);
+        let err = dispatch(&mut scene, &mut camera, "node_get", r#"{"id":"ghost"}"#)
+            .expect_err("нет такой ноды");
+        assert!(err.contains("не найдена"));
+    }
+
+    /// nodes_search: подстрока без учёта регистра по text/label/file.
+    #[test]
+    fn mcp_nodes_search_case_insensitive() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let hits = dispatch(
+            &mut scene,
+            &mut camera,
+            "nodes_search",
+            r#"{"query":"привет"}"#,
+        )
+        .expect("search");
+        assert_eq!(hits.as_array().expect("массив").len(), 1);
+        assert_eq!(hits[0]["id"], "n1");
+        // по label группы
+        let hits = dispatch(
+            &mut scene,
+            &mut camera,
+            "nodes_search",
+            r#"{"query":"ЗОНА"}"#,
+        )
+        .expect("search по label");
+        assert_eq!(hits[0]["id"], "g1");
+        // по file
+        let hits = dispatch(
+            &mut scene,
+            &mut camera,
+            "nodes_search",
+            r#"{"query":"spec.md"}"#,
+        )
+        .expect("search по file");
+        assert_eq!(hits[0]["id"], "f1");
+        // мимо
+        let hits = dispatch(
+            &mut scene,
+            &mut camera,
+            "nodes_search",
+            r#"{"query":"zzz"}"#,
+        )
+        .expect("search пусто");
+        assert!(hits.as_array().expect("массив").is_empty());
+    }
+
+    /// node_create_note: дефолтные размеры 260×120, переопределение, id
+    /// со свободным суффиксом, spatial index обновлён, канвас грязный.
+    #[test]
+    fn mcp_node_create_note() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let created = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"x":50.0,"y":900.0}"#,
+        )
+        .expect("create_note");
+        assert_eq!(created["id"], "note-1");
+        let index = scene.canvas.nodes.len() - 1;
+        let node = &scene.canvas.nodes[index];
+        assert_eq!((node.x, node.y), (50.0, 900.0));
+        assert_eq!((node.width, node.height), (260.0, 120.0));
+        assert!(scene.dirty_since.is_some(), "канвас грязный");
+        // spatial видит новую ноду
+        let hits = scene.spatial.query_rect([50.0, 900.0, 60.0, 910.0]);
+        assert!(hits.contains(&index), "новая нода в spatial");
+
+        let created = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"x":0.0,"y":0.0,"text":"abc","width":400.0,"height":300.0}"#,
+        )
+        .expect("create_note с размерами");
+        assert_eq!(created["id"], "note-2");
+        let node = scene.canvas.nodes.last().expect("нода");
+        assert_eq!((node.width, node.height), (400.0, 300.0));
+        assert_eq!(node.text.as_deref(), Some("abc"));
+
+        // x обязателен
+        assert!(dispatch(&mut scene, &mut camera, "node_create_note", r#"{"y":1.0}"#).is_err());
+    }
+
+    /// node_create_file: карточка по пути, файл на диске НЕ создаётся,
+    /// дефолтные размеры DROP_CARD.
+    #[test]
+    fn mcp_node_create_file_no_disk_write() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let disk_path = PathBuf::from("target/tmp/mcp_never_created.txt");
+        let _ = std::fs::remove_file(&disk_path);
+        let params = format!(r#"{{"path":"{}","x":10.0,"y":20.0}}"#, disk_path.display());
+        let created =
+            dispatch(&mut scene, &mut camera, "node_create_file", &params).expect("create_file");
+        assert_eq!(created["id"], "file-1");
+        let node = scene.canvas.nodes.last().expect("нода");
+        assert_eq!(node.kind(), NodeKind::File);
+        assert_eq!(
+            (node.width, node.height),
+            (canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H)
+        );
+        assert!(!disk_path.exists(), "MCP не создаёт файл на диске");
+    }
+
+    /// node_update_text / node_move / node_resize: модель + spatial + dirty.
+    #[test]
+    fn mcp_node_update_move_resize() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"Новый текст"}"#,
+        )
+        .expect("update_text");
+        assert_eq!(scene.canvas.nodes[0].text.as_deref(), Some("Новый текст"));
+
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_move",
+            r#"{"id":"n1","x":-50.0,"y":42.0}"#,
+        )
+        .expect("move");
+        assert_eq!(
+            (scene.canvas.nodes[0].x, scene.canvas.nodes[0].y),
+            (-50.0, 42.0)
+        );
+        let hits = scene.spatial.query_rect([-50.0, 42.0, -40.0, 52.0]);
+        assert!(hits.contains(&0), "spatial обновлён после move");
+
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_resize",
+            r#"{"id":"n1","width":500.0,"height":400.0}"#,
+        )
+        .expect("resize");
+        assert_eq!(
+            (scene.canvas.nodes[0].width, scene.canvas.nodes[0].height),
+            (500.0, 400.0)
+        );
+
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_move",
+            r#"{"id":"ghost","x":0.0,"y":0.0}"#
+        )
+        .is_err());
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_resize",
+            r#"{"id":"n1","width":1.0}"#
+        )
+        .is_err());
+    }
+
+    /// node_delete: каскад связей, spatial перестроен, дети группы живы.
+    #[test]
+    fn mcp_node_delete_cascades_edges() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // n1 связана с f1 — удаление n1 рвёт edge-1; дети группы g1 остаются
+        dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"n1"}"#).expect("delete");
+        assert_eq!(scene.canvas.nodes.len(), 2);
+        assert!(scene.canvas.edges.is_empty(), "связь каскадно удалена");
+        assert!(scene.canvas.node("g1").is_some(), "группа на месте");
+        assert!(scene.canvas.node("f1").is_some(), "дети не удалены");
+        // spatial консистентен с моделью: индексы пересчитаны (f1=0, g1=1)
+        assert_eq!(
+            scene
+                .spatial
+                .query_rect([-1000.0, -1000.0, 1000.0, 1000.0])
+                .len(),
+            2
+        );
+        // бывшее место n1 теперь покрывает группа (дети остались внутри)
+        assert_eq!(scene.spatial.hit_test([110.0, 110.0]), Some(1));
+        assert!(
+            dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"n1"}"#).is_err(),
+            "повторное удаление — ошибка"
+        );
+    }
+
+    /// node_set_color: пресет, сброс null, отказ на мусоре.
+    #[test]
+    fn mcp_node_set_color_validation() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_set_color",
+            r#"{"id":"n1","color":"4"}"#,
+        )
+        .expect("set_color");
+        assert_eq!(scene.canvas.nodes[0].color.as_deref(), Some("4"));
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_set_color",
+            r#"{"id":"n1","color":null}"#,
+        )
+        .expect("сброс цвета");
+        assert_eq!(scene.canvas.nodes[0].color, None);
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_set_color",
+            r#"{"id":"n1","color":"red"}"#,
+        )
+        .expect_err("не пресет");
+        assert!(err.contains("\"1\"..\"6\""));
+    }
+
+    /// edge_create: id вида edge-N, стороны any→None / явные, валидация нод
+    /// и сторон; edge_delete по id и ошибка на отсутствующую связь.
+    #[test]
+    fn mcp_edge_create_delete() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // дефолт any → стороны не заданы
+        let created = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            r#"{"from":"n1","to":"g1"}"#,
+        )
+        .expect("edge_create");
+        assert_eq!(created["id"], "edge-2");
+        let edge = scene.canvas.edges.last().expect("связь");
+        assert_eq!(edge.from_side, None);
+        assert_eq!(edge.to_side, None);
+        // явные стороны
+        let created = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            r#"{"from":"f1","to":"n1","fromSide":"left","toSide":"bottom"}"#,
+        )
+        .expect("edge_create со сторонами");
+        assert_eq!(created["id"], "edge-3");
+        let edge = scene.canvas.edges.last().expect("связь");
+        assert_eq!(edge.from_side, Some(Side::Left));
+        assert_eq!(edge.to_side, Some(Side::Bottom));
+
+        // несуществующая нода — ошибка, связь не создана
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            r#"{"from":"n1","to":"ghost"}"#
+        )
+        .is_err());
+        // мусорная сторона — ошибка
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            r#"{"from":"n1","to":"f1","fromSide":"diagonal"}"#
+        )
+        .is_err());
+        assert_eq!(scene.canvas.edges.len(), 3, "валидные связи остались");
+
+        dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#)
+            .expect("edge_delete");
+        assert_eq!(scene.canvas.edges.len(), 2);
+        assert!(
+            dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#).is_err(),
+            "повторное удаление — ошибка"
+        );
+    }
+
+    /// viewport_get/set: центр и зум, кламп зума камерой.
+    #[test]
+    fn mcp_viewport_get_set() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let view = dispatch(&mut scene, &mut camera, "viewport_get", "{}").expect("viewport_get");
+        assert_eq!(view["x"], 0.0);
+        assert_eq!(view["zoom"], 1.0);
+
+        let view = dispatch(
+            &mut scene,
+            &mut camera,
+            "viewport_set",
+            r#"{"x":100.0,"y":-50.0,"zoom":2.5}"#,
+        )
+        .expect("viewport_set");
+        assert_eq!(view["x"].as_f64().expect("x"), 100.0);
+        assert_eq!(view["y"].as_f64().expect("y"), -50.0);
+        assert_eq!(view["zoom"], 2.5);
+        // зум клампится
+        let view = dispatch(
+            &mut scene,
+            &mut camera,
+            "viewport_set",
+            r#"{"x":0.0,"y":0.0,"zoom":100.0}"#,
+        )
+        .expect("viewport_set зум");
+        assert_eq!(view["zoom"], canvas_render::camera::MAX_ZOOM);
+        // zoom опционален
+        let view = dispatch(
+            &mut scene,
+            &mut camera,
+            "viewport_set",
+            r#"{"x":1.0,"y":2.0}"#,
+        )
+        .expect("viewport_set без зума");
+        assert_eq!(
+            view["zoom"],
+            canvas_render::camera::MAX_ZOOM,
+            "зум не задет"
+        );
+    }
+
+    /// mcp_unwrap_call: tools/call → (name, arguments); прочие методы как есть.
+    #[test]
+    fn mcp_unwrap_call_passthrough_and_tool_name() {
+        let params: serde_json::Value =
+            serde_json::json!({"name": "node_move", "arguments": {"id": "n1", "x": 1.0, "y": 2.0}});
+        let (method, args) = mcp_unwrap_call("tools/call", &params);
+        assert_eq!(method, "node_move");
+        assert_eq!(args, serde_json::json!({"id": "n1", "x": 1.0, "y": 2.0}));
+
+        // метод напрямую (тесты dispatch) — без изменений
+        let params = serde_json::json!({"id": "n1"});
+        let (method, args) = mcp_unwrap_call("node_get", &params);
+        assert_eq!(method, "node_get");
+        assert_eq!(args, params);
+
+        // arguments отсутствует → Null, не паника
+        let params = serde_json::json!({"name": "canvas_info"});
+        let (method, args) = mcp_unwrap_call("tools/call", &params);
+        assert_eq!(method, "canvas_info");
+        assert_eq!(args, serde_json::Value::Null);
+    }
+
+    /// Неизвестный инструмент и кривые параметры — Err (посредник сделает isError).
+    #[test]
+    fn mcp_unknown_tool_and_bad_params() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        assert!(dispatch(&mut scene, &mut camera, "canvas_destroy", "{}").is_err());
+        assert!(dispatch(&mut scene, &mut camera, "node_get", "{}").is_err());
+        assert!(dispatch(&mut scene, &mut camera, "nodes_search", r#"{"query":42}"#).is_err());
     }
 }

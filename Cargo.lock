@@ -264,10 +264,12 @@ dependencies = [
  "anyhow",
  "arboard",
  "canvas-core",
+ "canvas-mcp",
  "canvas-render",
  "canvas-shell",
  "cosmic-text",
  "pollster",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "winit",
@@ -282,6 +284,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "toml",
+]
+
+[[package]]
+name = "canvas-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "windows 0.62.2",
 ]
 
 [[package]]

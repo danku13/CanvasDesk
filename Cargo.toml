@@ -13,6 +13,8 @@ rust-version = "1.80"
 canvas-core = { path = "crates/canvas-core", version = "0.1.0" }
 canvas-render = { path = "crates/canvas-render", version = "0.1.0" }
 canvas-shell = { path = "crates/canvas-shell", version = "0.1.0" }
+# MCP-посредник: stdio ↔ named pipe (крейт появился в MCP-задаче)
+canvas-mcp = { path = "crates/canvas-mcp", version = "0.1.0" }
 # модель и сериализация
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -78,6 +80,14 @@ windows = { version = "0.62", features = [
     "Win32_System_LibraryLoader",
     # T17: автозапуск HKCU Run (RegCreateKeyExW/RegSetValueExW/RegDeleteValueW)
     "Win32_System_Registry",
+    # MCP: named pipe сервер в canvas-app (CreateNamedPipeW/CreateFileW за
+    # Win32_Security, ReadFile/WriteFile — Win32_System_IO) — транспорт
+    # канала canvasdesk-mcp → приложение
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
+    # MCP: ConnectNamedPipe/DisconnectNamedPipe/WaitNamedPipeW
+    "Win32_System_Pipes",
 ] }
 # #[implement] (T9 COM IDropTarget) генерирует пути ::windows_core —
 # нужен прямой dep, re-export windows::core не резолвится

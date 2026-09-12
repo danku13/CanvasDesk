@@ -8,6 +8,8 @@ pub mod cache;
 // — cfg(windows) внутри mod.rs (рекомендация воркера T15-A).
 pub mod desktop;
 pub mod dragdrop;
+#[cfg(windows)]
+pub mod mcp_pipe;
 pub mod search;
 // Шина системных событий (T16, RECIPES R11): чистое ядро (shell_events/mod.rs)
 // кроссплатформенно — тесты на Linux; окно/регистрации/декод — cfg(windows).
