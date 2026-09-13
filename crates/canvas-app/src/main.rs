@@ -1300,6 +1300,19 @@ impl App {
         self.insert_nodes(nodes, true);
     }
 
+    /// Вырезать выделенные ноды (FR-007, Ctrl+X): копирование в буфер
+    /// (FR-003) + удаление (undo-шаг — внутри delete_selected, FR-006).
+    /// Вставка — обычным Ctrl+V: копии с новыми id (правила FR-003).
+    fn cut_selection(&mut self) {
+        let indices = self.selection_node_indices();
+        if indices.is_empty() {
+            return;
+        }
+        self.copy_selection();
+        self.delete_selected();
+        tracing::debug!(count = self.node_clipboard.len(), "ноды вырезаны в буфер");
+    }
+
     /// Удалить выделенное (T8, Del; CR-001 — мультивыделение): набор нод —
     /// пачкой (canvas-core remove_nodes); связь — по id; одиночную ноду —
     /// каскадно со связями. После удаления нод индексы в canvas.nodes
@@ -3523,16 +3536,17 @@ impl App {
             self.request_redraw();
             return;
         }
-        // Ctrl+C/V/D — буфер нодов (FR-003; кириллица: с/м/в — те же
-        // физические клавиши). Ctrl+Z/Y — undo/redo (FR-006; кириллица:
-        // я/н). Внутри редактора эти клавиши — текстовые (выше return),
-        // во время поиска — панель (выше return)
+        // Ctrl+C/V/D/X — буфер нодов (FR-003/FR-007; кириллица: с/м/в/ч —
+        // те же физические клавиши). Ctrl+Z/Y — undo/redo (FR-006;
+        // кириллица: я/н). Внутри редактора эти клавиши — текстовые (выше
+        // return: Ctrl+X там — вырезание текста), во время поиска — панель
         if event.state == ElementState::Pressed && !event.repeat && self.modifiers.control_key() {
             if let Key::Character(c) = &event.logical_key {
                 match c.to_lowercase().as_str() {
                     "c" | "с" => self.copy_selection(),
                     "v" | "м" => self.paste_clipboard(),
                     "d" | "в" => self.duplicate_selection(),
+                    "x" | "ч" => self.cut_selection(),
                     "z" | "я" => {
                         // Ctrl+Shift+Z — общепринятый синоним redo
                         if self.modifiers.shift_key() {

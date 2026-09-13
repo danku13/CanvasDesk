@@ -378,6 +378,7 @@ pub mod ui {
         ("Ctrl+Z", "отменить действие"),
         ("Ctrl+Y", "вернуть отменённое"),
         ("Ctrl+C", "копировать ноды"),
+        ("Ctrl+X", "вырезать ноды"),
         ("Ctrl+V", "вставить ноды"),
         ("Ctrl+D", "дублировать ноды"),
         ("Ctrl+клик", "добавить к выделению"),
@@ -1516,6 +1517,11 @@ pub mod ui {
             for (key, description) in HOTKEYS {
                 assert!(!key.is_empty(), "пустая клавиша");
                 assert!(!description.is_empty(), "пустое описание: {key}");
+            }
+            // FR-006/FR-007: новые операции в списке (undo/redo/cut)
+            let keys: Vec<&str> = HOTKEYS.iter().map(|(key, _)| *key).collect();
+            for required in ["Ctrl+Z", "Ctrl+Y", "Ctrl+X"] {
+                assert!(keys.contains(&required), "в списке нет {required}");
             }
         }
 
