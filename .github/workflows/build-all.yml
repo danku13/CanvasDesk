@@ -9,7 +9,7 @@ on:
   workflow_dispatch: # ручной запуск из UI при необходимости
 
 env:
-  BIN_NAME: canvasdesk # <-- замени на реальное имя из Cargo.toml ([package].name или [[bin]].name)
+  BIN_NAME: canvas-app # <-- замени на реальное имя из Cargo.toml ([package].name или [[bin]].name)
 
 jobs:
   build:
