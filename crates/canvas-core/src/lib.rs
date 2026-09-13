@@ -28,5 +28,8 @@ pub use model::{
     PreviewState, Side,
 };
 pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
-pub use settings::{Corner, GridDensity, GridStyle, Settings, Theme};
+pub use settings::{
+    clamp_port_zone, next_port_zone, Corner, GridDensity, GridStyle, Settings, Theme,
+    PORT_ZONE_MAX, PORT_ZONE_MIN, PORT_ZONE_PRESETS,
+};
 pub use spatial::{SpatialIndex, WorldRect};

@@ -201,8 +201,18 @@ pub const EDGE_RENDER_SEGMENTS: usize = 48;
 pub const EDGE_DOT: f32 = 2.5;
 /// Диаметр кружка выделенной связи (толще, T8).
 pub const EDGE_DOT_SELECTED: f32 = 3.5;
-/// Диаметр кружка порта ноды при hover в world-px.
+/// Диаметр кружка порта ноды при hover в world-px (минимум).
 pub const PORT_DOT: f32 = 10.0;
+/// Диаметр кружка порта по зоне захвата (CR-003): зона больше — кружок
+/// заметно больше (визуальный отклик настройки), но не гигантский.
+pub const PORT_DOT_MAX: f32 = 26.0;
+
+/// Диаметр кружка порта для заданной зоны захвата (CR-003), world-px.
+/// Зона в экранных px == world-px при zoom 1 — соответствие наглядно;
+/// сверху кламп, чтобы крупные зоны не рисовали монетки.
+pub fn port_dot_diameter(zone_px: f32) -> f32 {
+    zone_px.clamp(PORT_DOT, PORT_DOT_MAX)
+}
 /// Цвет связи по умолчанию — нейтральный серо-голубой.
 pub const EDGE_COLOR: [f32; 4] = [0.52, 0.58, 0.66, 1.0];
 /// Цвет резиновой линии (drag новой связи) — акцент с прозрачностью.
@@ -490,9 +500,15 @@ pub fn build_edge_instances(
 }
 
 /// Порты ноды при hover (T8): 4 кружка по центрам сторон, поверх карточек.
-/// У групп портов нет: edge-drag с группы не начинается (группа —
-/// контейнер, не конечная точка связи).
-pub fn build_port_instances(canvas: &canvas_core::Canvas, node: usize) -> Vec<CardInstance> {
+/// `zone_px` — зона захвата из настроек (CR-003): диаметр кружка следует
+/// за зоной (`port_dot_diameter`). У групп портов нет: edge-drag с группы
+/// не начинается (группа — контейнер, не конечная точка связи).
+pub fn build_port_instances(
+    canvas: &canvas_core::Canvas,
+    node: usize,
+    zone_px: f32,
+) -> Vec<CardInstance> {
+    let dot_d = port_dot_diameter(zone_px);
     let mut out = Vec::with_capacity(4);
     if let Some(node) = canvas.nodes.get(node) {
         if node.kind() == NodeKind::Group {
@@ -506,7 +522,7 @@ pub fn build_port_instances(canvas: &canvas_core::Canvas, node: usize) -> Vec<Ca
         ] {
             out.push(dot(
                 canvas_core::port_point(node, side),
-                PORT_DOT,
+                dot_d,
                 SELECTION_BORDER,
             ));
         }
@@ -1091,13 +1107,15 @@ mod tests {
     }
 
     /// Порты hover-ноды: 4 кружка по центрам сторон, акцентный цвет.
+    /// CR-003: диаметр кружков следует за зоной захвата (кламп 10..26).
     #[test]
     fn port_instances_at_side_centers() {
         let mut canvas = Canvas::default();
         canvas
             .nodes
             .push(Node::file("a", "C:/a.png", 100.0, 200.0, 300.0, 120.0));
-        let ports = build_port_instances(&canvas, 0);
+        let zone = 14.0;
+        let ports = build_port_instances(&canvas, 0, zone);
         assert_eq!(ports.len(), 4);
         let centers: Vec<[f32; 2]> = ports
             .iter()
@@ -1112,9 +1130,16 @@ mod tests {
         assert_eq!(centers[1], [400.0, 260.0]); // right
         assert_eq!(centers[2], [250.0, 320.0]); // bottom
         assert_eq!(centers[3], [100.0, 260.0]); // left
-        assert!(ports.iter().all(|inst| inst.size == [PORT_DOT, PORT_DOT]));
+        assert!(ports
+            .iter()
+            .all(|inst| inst.size == [port_dot_diameter(zone); 2]));
+        // Дефолтная зона — прежний размер, крупная зона — кламп сверху,
+        // зона ниже минимума — кламп снизу (CR-003)
+        assert_eq!(port_dot_diameter(10.0), PORT_DOT);
+        assert_eq!(port_dot_diameter(40.0), PORT_DOT_MAX);
+        assert_eq!(port_dot_diameter(2.0), PORT_DOT);
         // Невалидный индекс — пусто
-        assert!(build_port_instances(&canvas, 9).is_empty());
+        assert!(build_port_instances(&canvas, 9, zone).is_empty());
     }
 
     /// Резиновая линия (T8): цепочка кружков от порта к курсору.
@@ -1294,10 +1319,10 @@ mod tests {
             .nodes
             .push(Node::file("a", "C:/a.png", 100.0, 200.0, 300.0, 120.0));
         assert!(
-            build_port_instances(&canvas, 0).is_empty(),
+            build_port_instances(&canvas, 0, 10.0).is_empty(),
             "у группы портов нет"
         );
-        assert_eq!(build_port_instances(&canvas, 1).len(), 4);
+        assert_eq!(build_port_instances(&canvas, 1, 10.0).len(), 4);
     }
 
     /// Сериализация инстанса совпадает с vertex buffer stride (FLOATS * 4 байта).

@@ -191,23 +191,58 @@ fn edge_serialization_matches_spec() {
 fn port_at_hits_side_centers() {
     let n = node("a", 100.0, 200.0, 300.0, 120.0);
     // Точно в портах при zoom 1.0
-    assert_eq!(port_at(&n, [250.0, 200.0], 1.0), Some(Side::Top));
-    assert_eq!(port_at(&n, [400.0, 260.0], 1.0), Some(Side::Right));
-    assert_eq!(port_at(&n, [250.0, 320.0], 1.0), Some(Side::Bottom));
-    assert_eq!(port_at(&n, [100.0, 260.0], 1.0), Some(Side::Left));
+    assert_eq!(
+        port_at(&n, [250.0, 200.0], 1.0, PORT_HIT_PX),
+        Some(Side::Top)
+    );
+    assert_eq!(
+        port_at(&n, [400.0, 260.0], 1.0, PORT_HIT_PX),
+        Some(Side::Right)
+    );
+    assert_eq!(
+        port_at(&n, [250.0, 320.0], 1.0, PORT_HIT_PX),
+        Some(Side::Bottom)
+    );
+    assert_eq!(
+        port_at(&n, [100.0, 260.0], 1.0, PORT_HIT_PX),
+        Some(Side::Left)
+    );
     // В допуске PORT_HIT_PX экранных px
-    assert_eq!(port_at(&n, [250.0, 209.0], 1.0), Some(Side::Top));
+    assert_eq!(
+        port_at(&n, [250.0, 209.0], 1.0, PORT_HIT_PX),
+        Some(Side::Top)
+    );
     // За допуском — промах
-    assert_eq!(port_at(&n, [250.0, 211.0], 1.0), None);
+    assert_eq!(port_at(&n, [250.0, 211.0], 1.0, PORT_HIT_PX), None);
     // Центр ноды — не порт
-    assert_eq!(port_at(&n, [250.0, 260.0], 1.0), None);
+    assert_eq!(port_at(&n, [250.0, 260.0], 1.0, PORT_HIT_PX), None);
     // zoom 2.0: world-допуск = PORT_HIT_PX / 2
     let half = PORT_HIT_PX / 2.0;
     assert_eq!(
-        port_at(&n, [250.0, 200.0 + half - 0.5], 2.0),
+        port_at(&n, [250.0, 200.0 + half - 0.5], 2.0, PORT_HIT_PX),
         Some(Side::Top)
     );
-    assert_eq!(port_at(&n, [250.0, 200.0 + half + 0.5], 2.0), None);
+    assert_eq!(
+        port_at(&n, [250.0, 200.0 + half + 0.5], 2.0, PORT_HIT_PX),
+        None
+    );
+}
+
+/// CR-003: настраиваемый допуск зоны портов — увеличенная зона ловит
+/// курсор дальше от центра порта (не нужно целиться), уменьшенная — точнее.
+#[test]
+fn port_at_custom_tolerance_zone() {
+    let n = node("a", 100.0, 200.0, 300.0, 120.0);
+    // 30 px над верхним портом: дефолтная зона (10) — промах,
+    // расширенная (40) — попадание
+    assert_eq!(port_at(&n, [250.0, 170.0], 1.0, PORT_HIT_PX), None);
+    assert_eq!(port_at(&n, [250.0, 170.0], 1.0, 40.0), Some(Side::Top));
+    // 30 px при zoom 2: world-допуск = 40/2 = 20 — промах (30 > 20)
+    assert_eq!(port_at(&n, [250.0, 170.0], 2.0, 40.0), None);
+    // 15 px при zoom 2 — попадание (15 < 20)
+    assert_eq!(port_at(&n, [250.0, 185.0], 2.0, 40.0), Some(Side::Top));
+    // Между портами соседних сторон ближе к верхнему
+    assert_eq!(port_at(&n, [255.0, 205.0], 1.0, 20.0), Some(Side::Top));
 }
 
 /// edge_at: ближайшая связь в допуске, промах — None; висячие связи не мешают.
@@ -345,7 +380,7 @@ fn port_hitzone_at_extreme_zooms() {
     let node = node("a", 100.0, 200.0, 300.0, 120.0);
 
     // Zoom 0.05 (минимальный) — world-допуск = PORT_HIT_PX / 0.05 = 200px
-    let port = port_at(&node, [250.0, 200.0], 0.05); // точно в top порту
+    let port = port_at(&node, [250.0, 200.0], 0.05, PORT_HIT_PX); // точно в top порту
     assert_eq!(
         port,
         Some(Side::Top),
@@ -353,32 +388,32 @@ fn port_hitzone_at_extreme_zooms() {
     );
 
     // В допуске 200px — ближайший порт (bottom на y=320, расстояние 30px)
-    let port = port_at(&node, [250.0, 350.0], 0.05); // 150px ниже top, 30px ниже bottom
+    let port = port_at(&node, [250.0, 350.0], 0.05, PORT_HIT_PX); // 150px ниже top, 30px ниже bottom
     assert_eq!(port, Some(Side::Bottom), "при zoom 0.05 ближайший — bottom");
 
     // За допуском
-    let port = port_at(&node, [250.0, 550.0], 0.05); // 350px ниже top, 230px ниже bottom
+    let port = port_at(&node, [250.0, 550.0], 0.05, PORT_HIT_PX); // 350px ниже top, 230px ниже bottom
     assert_eq!(port, None, "за допуском 200px — промах");
 
     // Zoom 4.0 (максимальный) — world-допуск = PORT_HIT_PX / 4.0 = 2.5px
-    let port = port_at(&node, [250.0, 200.0], 4.0);
+    let port = port_at(&node, [250.0, 200.0], 4.0, PORT_HIT_PX);
     assert_eq!(
         port,
         Some(Side::Top),
         "при zoom 4.0 порт top должен находиться"
     );
 
-    let port = port_at(&node, [250.0, 202.0], 4.0); // 2px ниже
+    let port = port_at(&node, [250.0, 202.0], 4.0, PORT_HIT_PX); // 2px ниже
     assert_eq!(port, Some(Side::Top), "в допуске 2.5px");
 
-    let port = port_at(&node, [250.0, 203.0], 4.0); // 3px ниже
+    let port = port_at(&node, [250.0, 203.0], 4.0, PORT_HIT_PX); // 3px ниже
     assert_eq!(port, None, "за допуском 2.5px — промах");
 
     // Zoom 1.0 — стандартный допуск 10px
-    let port = port_at(&node, [250.0, 209.0], 1.0);
+    let port = port_at(&node, [250.0, 209.0], 1.0, PORT_HIT_PX);
     assert_eq!(port, Some(Side::Top), "в допуске 10px");
 
-    let port = port_at(&node, [250.0, 211.0], 1.0);
+    let port = port_at(&node, [250.0, 211.0], 1.0, PORT_HIT_PX);
     assert_eq!(port, None, "за допуском 10px — промах");
 }
 

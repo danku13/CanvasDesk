@@ -7,8 +7,9 @@
 //! дублировались в `main.rs` копипастой — теперь источник один.
 
 pub use canvas_core::{
-    edge_at, focus_set, nearest_side, port_at, port_point, Canvas, Corner, Edge, EdgeLineStyle,
-    EdgeThickness, FocusSeed, FocusSet, Node, NodeKind, Settings, Side, SpatialIndex,
+    edge_at, focus_set, nearest_side, next_port_zone, port_at, port_point, Canvas, Corner, Edge,
+    EdgeLineStyle, EdgeThickness, FocusSeed, FocusSet, Node, NodeKind, Settings, Side,
+    SpatialIndex,
 };
 pub use canvas_render::camera::Vec2;
 pub use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
@@ -95,12 +96,13 @@ pub mod ui {
 
     /// Строки панели настроек (порядок = порядок отображения). Тема вынесена
     /// в отдельную кнопку-переключатель рядом с кнопкой настроек.
-    pub const SETTINGS_ROWS: [SettingsRow; 7] = [
+    pub const SETTINGS_ROWS: [SettingsRow; 8] = [
         SettingsRow::ButtonCorner,
         SettingsRow::Grid,
         SettingsRow::GridStyle,
         SettingsRow::GridDensity,
         SettingsRow::EdgesAvoid,
+        SettingsRow::PortZone,
         SettingsRow::FocusMode,
         SettingsRow::HudOnStart,
     ];
@@ -118,6 +120,8 @@ pub mod ui {
         GridDensity,
         /// Связи огибают посторонние ноды.
         EdgesAvoid,
+        /// Зона захвата портов для drag связи (CR-003): цикл по пресетам.
+        PortZone,
         /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
         FocusMode,
         /// HUD (F3) включён при старте.
@@ -139,6 +143,9 @@ pub mod ui {
                 }
                 SettingsRow::EdgesAvoid => {
                     format!("Связи огибают ноды: {}", on_off(settings.edges_avoid_nodes))
+                }
+                SettingsRow::PortZone => {
+                    format!("Зона портов: {} px", settings.port_zone_px as i32)
                 }
                 SettingsRow::FocusMode => {
                     format!("Фокус на связях: {}", on_off(settings.focus_mode))

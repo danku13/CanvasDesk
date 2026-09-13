@@ -164,6 +164,33 @@ pub struct Settings {
     /// подсвечивает её связи и соседей, остальное притемняется.
     /// Старые конфиги без поля грузятся как false (serde default).
     pub focus_mode: bool,
+    /// Зона захвата портов ноды для старта drag связи (CR-003): в экранных
+    /// px. Больше зона — не нужно целиться при протягивании связей. Дефолт —
+    /// первый пресет; значения клампятся в `[PORT_ZONE_MIN, PORT_ZONE_MAX]`.
+    pub port_zone_px: f32,
+}
+
+/// Пресеты зоны портов для строки панели настроек (CR-003): клик циклит.
+pub const PORT_ZONE_PRESETS: [f32; 5] = [10.0, 14.0, 20.0, 28.0, 40.0];
+/// Минимальная зона портов (экранные px, CR-003).
+pub const PORT_ZONE_MIN: f32 = 10.0;
+/// Максимальная зона портов (экранные px, CR-003).
+pub const PORT_ZONE_MAX: f32 = 40.0;
+
+/// Следующий пресет зоны портов по циклу (CR-003, панель настроек).
+/// Значение вне пресетов округляется к ближайшему меньшему пресету.
+pub fn next_port_zone(value: f32) -> f32 {
+    let current = PORT_ZONE_PRESETS
+        .iter()
+        .rposition(|preset| *preset <= value)
+        .unwrap_or(0);
+    PORT_ZONE_PRESETS[(current + 1) % PORT_ZONE_PRESETS.len()]
+}
+
+/// Кламп значения зоны портов в допустимые границы (CR-003): защита от
+/// ручной правки config.toml (0/отрицательные/гигантские значения).
+pub fn clamp_port_zone(value: f32) -> f32 {
+    value.clamp(PORT_ZONE_MIN, PORT_ZONE_MAX)
 }
 
 impl Default for Settings {
@@ -177,6 +204,7 @@ impl Default for Settings {
             edges_avoid_nodes: true,
             hud_on_start: false,
             focus_mode: false,
+            port_zone_px: PORT_ZONE_PRESETS[0],
         }
     }
 }
@@ -184,6 +212,7 @@ impl Default for Settings {
 impl Settings {
     /// Загрузить настройки; отсутствующий или битый файл — дефолты
     /// (ошибка разбора возвращается для лога, приложение не падает).
+    /// Зона портов клампится в границы (CR-003) — ручные правки не роняют UX.
     pub fn load(path: &Path) -> (Self, Option<String>) {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -194,8 +223,11 @@ impl Settings {
                 return (Self::default(), Some(format!("чтение конфига: {err}")));
             }
         };
-        match toml::from_str(&text) {
-            Ok(settings) => (settings, None),
+        match toml::from_str::<Self>(&text) {
+            Ok(mut settings) => {
+                settings.port_zone_px = clamp_port_zone(settings.port_zone_px);
+                (settings, None)
+            }
             Err(err) => (
                 Self::default(),
                 Some(format!("разбор конфига (используются дефолты): {err}")),
@@ -213,11 +245,14 @@ impl Settings {
         std::fs::write(path, text)
     }
 
-    /// Разбор из строки (тесты; логика общая с load).
+    /// Разбор из строки (тесты; логика общая с load, включая кламп CR-003).
     #[cfg(test)]
     fn load_toml_str(text: &str) -> (Self, Option<String>) {
-        match toml::from_str(text) {
-            Ok(settings) => (settings, None),
+        match toml::from_str::<Self>(text) {
+            Ok(mut settings) => {
+                settings.port_zone_px = clamp_port_zone(settings.port_zone_px);
+                (settings, None)
+            }
             Err(err) => (Self::default(), Some(err.to_string())),
         }
     }
@@ -239,6 +274,7 @@ mod tests {
             edges_avoid_nodes: false,
             hud_on_start: true,
             focus_mode: true,
+            port_zone_px: 28.0,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
         let path = dir.join("config.toml");
@@ -247,6 +283,44 @@ mod tests {
         assert_eq!(loaded, settings);
         assert!(warn.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CR-003: зона портов — пресеты, цикл замкнут, кламп ручных значений.
+    #[test]
+    fn port_zone_cycle_and_clamp() {
+        // Цикл по пресетам замкнут и без повторов на витке
+        let mut zone = PORT_ZONE_PRESETS[0];
+        let first = zone;
+        let mut seen = vec![zone];
+        for _ in 0..PORT_ZONE_PRESETS.len() - 1 {
+            zone = next_port_zone(zone);
+            assert!(!seen.contains(&zone), "повтор в цикле: {zone}");
+            seen.push(zone);
+        }
+        assert_eq!(next_port_zone(zone), first);
+        // Вне пресетов — ближайший меньший, затем следующий по циклу
+        assert_eq!(next_port_zone(25.0), PORT_ZONE_PRESETS[3]);
+        // Кламп: нижняя/верхняя границы, отрицательные и гигантские
+        assert_eq!(clamp_port_zone(3.0), PORT_ZONE_MIN);
+        assert_eq!(clamp_port_zone(-1.0), PORT_ZONE_MIN);
+        assert_eq!(clamp_port_zone(999.0), PORT_ZONE_MAX);
+        assert_eq!(clamp_port_zone(22.0), 22.0);
+        // Дефолт — первый пресет
+        assert_eq!(Settings::default().port_zone_px, PORT_ZONE_PRESETS[0]);
+    }
+
+    /// CR-003: кламп зоны портов при загрузке конфига — ручная правка
+    /// config.toml не даёт нулевую/гигантскую зону.
+    #[test]
+    fn port_zone_clamped_on_load() {
+        let (settings, warn) = Settings::load_toml_str("port_zone_px = 5.0\n");
+        assert_eq!(settings.port_zone_px, PORT_ZONE_MIN);
+        assert!(warn.is_none(), "кламп молчалив — значение валидно числово");
+        let (settings, _) = Settings::load_toml_str("port_zone_px = 500.0\n");
+        assert_eq!(settings.port_zone_px, PORT_ZONE_MAX);
+        // Отсутствие поля — дефолт
+        let (settings, _) = Settings::load_toml_str("grid_visible = false\n");
+        assert_eq!(settings.port_zone_px, PORT_ZONE_PRESETS[0]);
     }
 
     /// Отсутствующий/битый файл — дефолты, без паники; битый — с предупреждением.
@@ -359,5 +433,6 @@ mod tests {
         assert!(text.contains("theme"), "{text}");
         assert!(text.contains("edges_avoid_nodes"), "{text}");
         assert!(text.contains("hud_on_start"), "{text}");
+        assert!(text.contains("port_zone_px"), "{text}");
     }
 }

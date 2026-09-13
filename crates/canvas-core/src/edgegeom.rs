@@ -11,6 +11,8 @@ pub const EDGE_HIT_TOLERANCE: f32 = 6.0;
 
 /// Допуск попадания курсора в порт ноды — в экранных пикселях
 /// (переводится в world-единицы делением на zoom).
+/// Дефолт зоны; пользователь настраивает величину в настройках приложения
+/// (CR-003, `Settings::port_zone_px`) — она пробрасывается в `port_at`.
 pub const PORT_HIT_PX: f32 = 10.0;
 
 /// Число сегментов полилинии при тесселяции кривой.
@@ -438,9 +440,10 @@ pub fn route_polyline(
 }
 
 /// Порт ноды под курсором: сторона, чья точка порта ближе всего к `point`
-/// в пределах допуска PORT_HIT_PX экранных пикселей (zoom — camera.zoom()).
-pub fn port_at(node: &Node, point: [f32; 2], zoom: f32) -> Option<Side> {
-    let tolerance = PORT_HIT_PX / zoom.max(1e-3);
+/// в пределах допуска `tolerance_px` экранных пикселей (zoom — camera.zoom();
+/// CR-003: допуск — параметр, дефолт — `PORT_HIT_PX`).
+pub fn port_at(node: &Node, point: [f32; 2], zoom: f32, tolerance_px: f32) -> Option<Side> {
+    let tolerance = tolerance_px / zoom.max(1e-3);
     [Side::Top, Side::Right, Side::Bottom, Side::Left]
         .into_iter()
         .map(|side| {

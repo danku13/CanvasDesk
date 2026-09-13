@@ -131,6 +131,9 @@ pub struct SceneView<'a> {
     /// Связи огибают посторонние ноды (глобальная настройка): рендер и
     /// лейблы идут по огибающей полилинии (см. `canvas_core::edge_polyline`).
     pub edges_avoid: bool,
+    /// Зона захвата портов (CR-003, экранные px): диаметр кружков портов
+    /// при hover следует за ней (`cards::port_dot_diameter`).
+    pub port_zone_px: f32,
     /// Режим фокуса (T23, brainstorm-focus): подсвеченные ноды/связи и
     /// степень затемнения остального. Данные принадлежат приложению
     /// (пересчёт на кадр); `FocusView::EMPTY` — режим выключен.
@@ -723,7 +726,11 @@ impl Renderer {
         // расширения квады не входили ни в один draw-диапазон и исчезали.
         let world_tail_start = instances.len() as u32;
         if let Some(hovered) = scene.hovered {
-            instances.extend(build_port_instances(scene.canvas, hovered));
+            instances.extend(build_port_instances(
+                scene.canvas,
+                hovered,
+                scene.port_zone_px,
+            ));
         }
         if let Some((port, side, cursor)) = scene.edge_draft {
             instances.extend(build_draft_instances(port, side, cursor));

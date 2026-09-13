@@ -16,9 +16,9 @@ use canvas_app::ui::{
     PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
 };
 use canvas_core::{
-    apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at, port_point,
-    resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node,
-    NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
+    apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
+    port_point, resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle,
+    Node, NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{
     focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS, FOCUS_FADE_MS, FOCUS_PULSE_MS,
@@ -2006,6 +2006,11 @@ impl App {
             SettingsRow::EdgesAvoid => {
                 self.settings.edges_avoid_nodes = !self.settings.edges_avoid_nodes;
             }
+            // CR-003: зона портов — цикл по пресетам, радиус кружков портов
+            // следует за значением автоматически (рендер читает настройки)
+            SettingsRow::PortZone => {
+                self.settings.port_zone_px = next_port_zone(self.settings.port_zone_px);
+            }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
             SettingsRow::HudOnStart => {
@@ -2469,6 +2474,7 @@ impl ApplicationHandler<AppEvent> for App {
                         hovered: self.hovered,
                         edge_draft,
                         edges_avoid: self.settings.edges_avoid_nodes,
+                        port_zone_px: self.settings.port_zone_px,
                         focus,
                     };
                     match renderer.render(
@@ -3263,6 +3269,7 @@ impl App {
                 // Порт hover-ноды (T8): начало drag резиновой линии новой
                 // связи — drag ноды/resize/двойной клик не начинаются.
                 // У групп портов нет: edge-drag с группы не начинается.
+                // Зона захвата — из настроек (CR-003).
                 if let Some(node_index) = self.hovered {
                     let port = self
                         .scene
@@ -3270,7 +3277,9 @@ impl App {
                         .nodes
                         .get(node_index)
                         .filter(|node| node.kind() != NodeKind::Group)
-                        .and_then(|node| port_at(node, world, self.camera.zoom()));
+                        .and_then(|node| {
+                            port_at(node, world, self.camera.zoom(), self.settings.port_zone_px)
+                        });
                     if let Some(side) = port {
                         let from_node = self.scene.canvas.nodes[node_index].id.clone();
                         self.edge_drag = Some(EdgeDrag {
