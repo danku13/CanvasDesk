@@ -461,6 +461,32 @@ pub mod ui {
         }
     }
 
+    /// Ctrl/Shift+клик по ноде (CR-001.3, ревью 2026-09-14): уже выделенное
+    /// ОСТАЁТСЯ выделенным, клик-нутая нода тоглится. Одиночное выделение
+    /// (якорь `primary`, набор пуст) сначала переносится в набор — иначе
+    /// прежняя нода теряла подсветку при тогле. Клик по уже выбранной
+    /// (якорем или в наборе) — снятие выделения с неё. Возвращает новый
+    /// якорь: `Some(index)` — нода добавлена; `None` — снята (набор без
+    /// якоря, как после рамки).
+    pub fn toggle_selection_with_primary(
+        primary: Option<usize>,
+        selected_nodes: &mut Vec<usize>,
+        index: usize,
+    ) -> Option<usize> {
+        // Якорь без дубля входит в набор: якорь == index → тогл ниже снимет
+        // его (клик по уже выбранной); якорь != index → сохранится
+        if let Some(prev) = primary {
+            if !selected_nodes.contains(&prev) {
+                selected_nodes.push(prev);
+            }
+        }
+        if toggle_selected_node(selected_nodes, index) {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
     /// Исходные позиции нод для drag (CR-001): тянем захваченную ноду;
     /// если она в наборе выделения — тянем весь набор. Дети выделенных
     /// ГРУПП включаются автоматически (паттерн translate_group: каждая
@@ -1305,6 +1331,43 @@ pub mod ui {
             assert_eq!(selected, vec![7]);
             assert!(toggle_selected_node(&mut selected, 3), "снова 3");
             assert_eq!(selected, vec![7, 3]);
+        }
+
+        /// CR-001.3 (ревью 2026-09-14): Ctrl+клик при одиночном якоре —
+        /// якорь сохраняется, клик-нутая добавляется; клик по уже
+        /// выбранной (якорю/в наборе) — снятие; якорь = Edge не участвует.
+        #[test]
+        fn toggle_with_primary_promotes_and_toggles() {
+            // Одиночный якорь 0, набор пуст, Ctrl+клик по 1: обе выделены
+            let mut selected = Vec::new();
+            let anchor = toggle_selection_with_primary(Some(0), &mut selected, 1);
+            assert_eq!(selected, vec![0, 1], "якорь вошёл в набор, 1 добавлена");
+            assert_eq!(anchor, Some(1));
+
+            // Ctrl+клик по якорю 0 (уже в наборе после прошлого шага):
+            // снятие, якорь None
+            let anchor = toggle_selection_with_primary(Some(0), &mut selected, 0);
+            assert_eq!(selected, vec![1], "0 снята");
+            assert_eq!(anchor, None, "якорь снят");
+
+            // Одиночный якорь 5, набор пуст, Ctrl+клик по 5: пуш и тогл —
+            // выделение снято (клик по уже выбранной)
+            let mut selected = Vec::new();
+            let anchor = toggle_selection_with_primary(Some(5), &mut selected, 5);
+            assert!(selected.is_empty(), "5 добавлена и тут же снята");
+            assert_eq!(anchor, None);
+
+            // Якорь 2 при наборе {2, 9}: дубликата нет, клик по 4 — набор
+            let mut selected = vec![2, 9];
+            let anchor = toggle_selection_with_primary(Some(2), &mut selected, 4);
+            assert_eq!(selected, vec![2, 9, 4]);
+            assert_eq!(anchor, Some(4));
+
+            // Якорь None (Edge/ничего), набор {1}: прежнее поведение — тогл
+            let mut selected = vec![1];
+            let anchor = toggle_selection_with_primary(None, &mut selected, 1);
+            assert!(selected.is_empty());
+            assert_eq!(anchor, None);
         }
 
         /// drag_origins: одна нода; нода из набора — весь набор; дети

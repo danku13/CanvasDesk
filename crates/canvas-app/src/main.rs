@@ -11,7 +11,7 @@ use canvas_app::ui::{
     hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
     next_free_id, node_menu_label, nodes_in_rect, panel_rect, panel_row_at, paste_nodes,
     plan_group_around, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
-    select_node_hit, theme_button_rect, toggle_selected_node, CanvasMenuItem, ContextMenu,
+    select_node_hit, theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu,
     DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem, PastePlacement,
     SettingsRow, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT,
     MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
@@ -3690,12 +3690,22 @@ impl App {
                 }
                 match hit {
                     Some(index) => {
-                        // Ctrl/Shift + клик (CR-001): тогл в набор выделения —
-                        // drag с модификатором не начинается (это правка
-                        // выделения, не перемещение)
+                        // Ctrl/Shift + клик (CR-001.3): уже выделенное
+                        // (в т.ч. одиночный якорь) остаётся, клик-нутая
+                        // тоглится; drag с модификатором не начинается
+                        // (это правка выделения, не перемещение)
                         if self.modifiers.control_key() || self.modifiers.shift_key() {
-                            toggle_selected_node(&mut self.scene.selected_nodes, index);
-                            self.scene.selected = Some(Selection::Node(index));
+                            let primary =
+                                self.scene.selected.and_then(|selection| match selection {
+                                    Selection::Node(index) => Some(index),
+                                    Selection::Edge(_) => None,
+                                });
+                            let anchor = toggle_selection_with_primary(
+                                primary,
+                                &mut self.scene.selected_nodes,
+                                index,
+                            );
+                            self.scene.selected = anchor.map(Selection::Node);
                             self.request_redraw();
                             return;
                         }
