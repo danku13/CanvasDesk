@@ -27,7 +27,8 @@ use std::thread::JoinHandle;
 
 use tracing::{debug, warn};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_IO_PENDING, ERROR_PIPE_LISTENING, HANDLE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, HANDLE,
+    WAIT_OBJECT_0,
 };
 use windows::Win32::Storage::FileSystem::{
     ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
@@ -180,9 +181,16 @@ fn wait_for_client(handle: HANDLE) -> bool {
             }
         }
         Err(err) => {
-            // ERROR_PIPE_LISTENING — клиент подключился между CreateNamedPipeW
-            // и ConnectNamedPipe: соединение валидно
-            err.code() == ERROR_PIPE_LISTENING.to_hresult()
+            // ERROR_PIPE_CONNECTED — клиент подключился между CreateNamedPipeW
+            // и ConnectNamedPipe (гонка): соединение УЖЕ валидно — так говорит
+            // документация ConnectNamedPipe; ранее проверялся только
+            // ERROR_PIPE_LISTENING (другой код, 536) — валидное соединение
+            // закрывалось, клиент получал broken pipe (краш CI-теста
+            // pipe_round_trip_two_lines и продакшен-гонка с canvasdesk-mcp).
+            // ERROR_PIPE_LISTENING оставлен в паре на всякий случай — тоже
+            // означает живой ожидающий инстанс.
+            err.code() == ERROR_PIPE_CONNECTED.to_hresult()
+                || err.code() == ERROR_PIPE_LISTENING.to_hresult()
         }
     };
     close_event(event);
@@ -511,5 +519,29 @@ mod tests {
             .expect("клиент завершился за 10 с");
         client.join().expect("join клиента");
         assert_eq!(responses, vec!["{\"ok\":1}", "{\"ok\":2}"]);
+    }
+
+    /// Регрессия ERROR_PIPE_CONNECTED (гонка ConnectNamedPipe): клиент
+    /// подключился МЕЖДУ create_pipe и wait_for_client — соединение обязано
+    /// признаваться валидным, а не закрываться. До фикса wait_for_client
+    /// проверял только ERROR_PIPE_LISTENING (другой код) и закрывал
+    /// живой инстанс: клиент ловил broken pipe, сервер — 0 запросов
+    /// (тайминговый краш pipe_round_trip_two_lines на CI; та же гонка
+    /// существует и с реальным canvasdesk-mcp при быстром старте).
+    /// Тест детерминированный: подключение ДО вызова wait_for_client.
+    #[test]
+    fn pipe_client_connected_before_wait() {
+        let name = unique_pipe_name();
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let handle = create_pipe(&wide).expect("pipe создан");
+        // Клиент подключается к ожидающему инстансу ДО ConnectNamedPipe
+        let client = connect_with_retry(&name);
+        // До фикса: false → инстанс закрыт бы и клиент получил broken pipe
+        assert!(
+            wait_for_client(handle),
+            "клиент до ConnectNamedPipe — соединение валидно (ERROR_PIPE_CONNECTED)"
+        );
+        close_pipe(client);
+        close_pipe(handle);
     }
 }
