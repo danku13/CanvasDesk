@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, edge_menu_label, focus_seed_of, in_resize_corner,
     menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, node_menu_label, nodes_in_rect,
-    panel_rect, panel_row_at, plan_group_around, plan_group_at, point_in_rect, rubber_band_rect,
-    select_node_hit, theme_button_rect, toggle_selected_node, CanvasMenuItem, ContextMenu,
-    DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem, SettingsRow,
-    CANVAS_MENU_ITEMS, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
-    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS, PANEL_HEADER_HEIGHT, PANEL_PADDING,
-    PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
+    panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_at, point_in_rect,
+    reassign_ids, rubber_band_rect, select_node_hit, theme_button_rect, toggle_selected_node,
+    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget,
+    NodeMenuItem, PastePlacement, SettingsRow, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET,
+    EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
+    MIN_NODE_WIDTH, NODE_MENU_ITEMS, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
+    SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
@@ -374,6 +375,9 @@ struct App {
     /// Рамка выделения (CR-001): (start world, current world, press screen)
     /// — тянется от пустого места; отпускание > порога = выделение.
     select_rect: Option<(Vec2, Vec2, Vec2)>,
+    /// Буфер нодов (FR-003, Ctrl+C/Ctrl+V): внутренний, НЕ системный
+    /// clipboard (там текст редактора); вставка — с новыми id.
+    node_clipboard: Vec<Node>,
     /// Настройки приложения (config.toml).
     settings: Settings,
     /// Путь конфига (None — не сохраняем, работаем на дефолтах).
@@ -518,6 +522,7 @@ impl App {
             hovered: None,
             edge_drag: None,
             select_rect: None,
+            node_clipboard: Vec::new(),
             settings,
             config_path,
             settings_open: false,
@@ -1052,6 +1057,92 @@ impl App {
             self.scene.mark_dirty();
         }
         self.request_redraw();
+    }
+
+    /// Вставить готовые ноды в модель (FR-003, паттерн insert_group):
+    /// push + spatial index; `select` — выделить вставленные пачкой
+    /// (CR-001). Возвращает индексы вставленных (порядок сохранён).
+    fn insert_nodes(&mut self, nodes: Vec<Node>, select: bool) -> Vec<usize> {
+        let mut indices = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            self.scene.canvas.nodes.push(node);
+            let index = self.scene.canvas.nodes.len() - 1;
+            let node_ref = &self.scene.canvas.nodes[index];
+            self.scene.spatial.insert(index, node_ref);
+            indices.push(index);
+        }
+        if select {
+            self.scene.selected = None;
+            self.scene.selected_nodes = indices.clone();
+        }
+        self.scene.mark_dirty();
+        // Файловые копии — вотчер/поиск должны увидеть директории (T10)
+        self.sync_watch_dirs();
+        self.request_redraw();
+        indices
+    }
+
+    /// Индексы выделенных нод (FR-003): набор мультивыделения ∪ primary,
+    /// по возрастанию без дубликатов; пусто — ничего не выделено.
+    fn selection_node_indices(&self) -> Vec<usize> {
+        let mut indices = self.scene.selected_nodes.clone();
+        if let Some(Selection::Node(index)) = self.scene.selected {
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    }
+
+    /// Скопировать выделенные ноды в буфер (FR-003, Ctrl+C): первичное
+    /// взаимное расположение сохраняется — вставка центром bbox на курсор.
+    fn copy_selection(&mut self) {
+        let indices = self.selection_node_indices();
+        if indices.is_empty() {
+            return;
+        }
+        self.node_clipboard = indices
+            .into_iter()
+            .filter_map(|index| self.scene.canvas.nodes.get(index).cloned())
+            .collect();
+        tracing::debug!(
+            count = self.node_clipboard.len(),
+            "ноды скопированы в буфер"
+        );
+    }
+
+    /// Вставить буфер (FR-003, Ctrl+V): копии с новыми id — центром bbox
+    /// в позицию курсора; вставленное становится мультивыделением (CR-001).
+    fn paste_clipboard(&mut self) {
+        if self.node_clipboard.is_empty() {
+            return;
+        }
+        let copies = reassign_ids(&self.scene.canvas, &self.node_clipboard);
+        let placement = PastePlacement::AtCursor(self.cursor_world());
+        let nodes = paste_nodes(&copies, placement);
+        self.insert_nodes(nodes, true);
+    }
+
+    /// Дублировать выделение (FR-003, Ctrl+D): копии с новыми id со
+    /// сдвигом DUPLICATE_OFFSET; копии становятся мультивыделением.
+    fn duplicate_selection(&mut self) {
+        let indices = self.selection_node_indices();
+        if indices.is_empty() {
+            return;
+        }
+        let originals = indices
+            .iter()
+            .filter_map(|&index| self.scene.canvas.nodes.get(index))
+            .cloned()
+            .collect::<Vec<Node>>();
+        let copies = reassign_ids(&self.scene.canvas, &originals);
+        let nodes = paste_nodes(
+            &copies,
+            PastePlacement::Offset([DUPLICATE_OFFSET, DUPLICATE_OFFSET]),
+        );
+        self.insert_nodes(nodes, true);
     }
 
     /// Удалить выделенное (T8, Del; CR-001 — мультивыделение): набор нод —
@@ -3091,6 +3182,19 @@ impl App {
                 self.settings_open = false;
                 self.request_redraw();
                 return;
+            }
+        }
+        // Ctrl+C/V/D — буфер нодов (FR-003; кириллица: с/м/в — те же
+        // физические клавиши). Внутри редактора эти клавиши — текстовые
+        // (выше return), во время поиска — панель (выше return)
+        if event.state == ElementState::Pressed && !event.repeat && self.modifiers.control_key() {
+            if let Key::Character(c) = &event.logical_key {
+                match c.to_lowercase().as_str() {
+                    "c" | "с" => self.copy_selection(),
+                    "v" | "м" => self.paste_clipboard(),
+                    "d" | "в" => self.duplicate_selection(),
+                    _ => {}
+                }
             }
         }
         // Ctrl+, — toggle панели настроек (кириллическая «б» — та же клавиша;

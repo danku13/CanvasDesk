@@ -454,6 +454,97 @@ pub mod ui {
         pub origins: Vec<(usize, Vec2)>,
     }
 
+    // --- Буфер нодов: дублирование и копипаст (FR-003) ---
+
+    /// Сдвиг дубликата от оригинала (FR-003, Ctrl+D): world-px по обеим осям.
+    pub const DUPLICATE_OFFSET: f32 = 32.0;
+
+    /// Префикс для нового id копии ноды (FR-003): по типу ноды —
+    /// `next_free_id` даст уникальный `note-N`/`file-N`/….
+    pub fn node_prefix(node: &Node) -> &'static str {
+        match node.kind() {
+            NodeKind::Text => "note",
+            NodeKind::File => "file",
+            NodeKind::Link => "link",
+            NodeKind::Group | NodeKind::Unknown => "node",
+        }
+    }
+
+    /// Копии нодов с новыми уникальными id (FR-003): содержимое (текст,
+    /// файл, размеры, цвет, extra) переносится как есть; id — как у
+    /// свежесозданных. Уникальность — не только против канваса, но и
+    /// против уже назначенных в этом вызове (два `note-*` в буфере не
+    /// должны получить один id: копии ещё не в канвасе).
+    pub fn reassign_ids(canvas: &Canvas, nodes: &[Node]) -> Vec<Node> {
+        let mut taken: Vec<String> = Vec::with_capacity(nodes.len());
+        let mut out = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let prefix = node_prefix(node);
+            let id = std::iter::successors(Some(1u32), |n| Some(n + 1))
+                .map(|n| format!("{prefix}-{n}"))
+                .find(|id| !canvas.nodes.iter().any(|node| node.id == *id) && !taken.contains(id))
+                .expect("счётчик найдёт свободный id");
+            taken.push(id.clone());
+            let mut copy = node.clone();
+            copy.id = id;
+            out.push(copy);
+        }
+        out
+    }
+
+    /// bbox набора нодов (FR-003): [x, y, w, h] по extremes; пустой
+    /// набор — нулевой квад в [0,0].
+    pub fn nodes_bbox(nodes: &[Node]) -> [f32; 4] {
+        if nodes.is_empty() {
+            return [0.0; 4];
+        }
+        let mut x0 = f32::MAX;
+        let mut y0 = f32::MAX;
+        let mut x1 = f32::MIN;
+        let mut y1 = f32::MIN;
+        for node in nodes {
+            x0 = x0.min(node.x);
+            y0 = y0.min(node.y);
+            x1 = x1.max(node.x + node.width);
+            y1 = y1.max(node.y + node.height);
+        }
+        [x0, y0, x1 - x0, y1 - y0]
+    }
+
+    /// Размещение вставки буфера нодов (FR-003).
+    pub enum PastePlacement {
+        /// Центр bbox набора — в world-точку курсора: взаимное расположение
+        /// копий сохраняется (Ctrl+V).
+        AtCursor(Vec2),
+        /// Сдвиг всех копий на (dx, dy) от оригиналов (Ctrl+D).
+        Offset(Vec2),
+    }
+
+    /// Вставить копии буфера с размещением (FR-003): id уже переназначены
+    /// (`reassign_ids` — ДО вызова), позиции — по placement. Чистая
+    /// функция: возвращает готовые к push ноды, модель не трогает.
+    pub fn paste_nodes(nodes: &[Node], placement: PastePlacement) -> Vec<Node> {
+        let delta = match placement {
+            PastePlacement::AtCursor(cursor) => {
+                let bbox = nodes_bbox(nodes);
+                [
+                    cursor[0] - bbox[0] - bbox[2] / 2.0,
+                    cursor[1] - bbox[1] - bbox[3] / 2.0,
+                ]
+            }
+            PastePlacement::Offset(delta) => delta,
+        };
+        nodes
+            .iter()
+            .map(|node| {
+                let mut copy = node.clone();
+                copy.x += delta[0];
+                copy.y += delta[1];
+                copy
+            })
+            .collect()
+    }
+
     // --- Парсинг CF_HDROP и раскладка дропа (T9) ---
 
     /// Разобрать содержимое CF_HDROP ЦЕЛИКОМ: DROPFILES-заголовок (20 байт:
@@ -1189,6 +1280,72 @@ pub mod ui {
             );
             // Невалидный индекс — пусто (filter_map)
             assert!(drag_origins(&canvas, 9, &[]).is_empty());
+        }
+
+        // --- Буфер нодов (FR-003) ---
+
+        /// reassign_ids: уникальные id даже для нескольких нодов одного
+        /// типа (копии ещё не в канвасе), префиксы по типу, контент как есть.
+        #[test]
+        fn reassign_ids_unique_per_type() {
+            let mut canvas = Canvas::default();
+            canvas.nodes.push(Node::text("note-1", "текст", 0.0, 0.0));
+            // Две заметки в буфере: note-2 и note-3, не два одинаковых
+            let buffer = vec![
+                Node::text("note-1", "текст", 0.0, 0.0),
+                Node::text("x", "другая", 100.0, 100.0),
+            ];
+            let copies = reassign_ids(&canvas, &buffer);
+            assert_eq!(
+                copies
+                    .iter()
+                    .map(|node| node.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["note-2", "note-3"],
+                "разные id для нодов одного типа"
+            );
+            assert_eq!(copies[0].text.as_deref(), Some("текст"), "контент как есть");
+            // Префиксы по типу
+            let mut canvas = Canvas::default();
+            canvas.nodes.push(Node::text("note-1", "", 0.0, 0.0));
+            let buffer = vec![
+                Node::text("a", "", 0.0, 0.0),
+                Node::file("b", "C:/x.png", 0.0, 0.0, 100.0, 100.0),
+                Node::group("g", 0.0, 0.0, 100.0, 100.0),
+            ];
+            let copies = reassign_ids(&canvas, &buffer);
+            assert_eq!(node_prefix(&copies[0]), "note");
+            assert_eq!(node_prefix(&copies[1]), "file");
+            assert_eq!(node_prefix(&copies[2]), "node", "группа — префикс node");
+            assert_eq!(copies[1].id, "file-1");
+            assert_eq!(copies[2].id, "node-1");
+            // Пустой буфер — пусто
+            assert!(reassign_ids(&canvas, &[]).is_empty());
+        }
+
+        /// nodes_bbox + paste_nodes: AtCursor — центр bbox на курсор с
+        /// сохранением взаимного расположения; Offset — сдвиг всех.
+        #[test]
+        fn paste_nodes_placement_and_bbox() {
+            // Две ноды: (0,0,100,100) и (300,0,100,100) → bbox [0,0,400,100]
+            let buffer = vec![
+                Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0),
+                Node::file("b", "C:/b.png", 300.0, 0.0, 100.0, 100.0),
+            ];
+            assert_eq!(nodes_bbox(&buffer), [0.0, 0.0, 400.0, 100.0]);
+            assert_eq!(nodes_bbox(&[]), [0.0; 4]);
+            // Вставка центром на (1000, 500): центр bbox (200, 50) →
+            // сдвиг (800, 450); взаимные позиции сохранены
+            let pasted = paste_nodes(&buffer, PastePlacement::AtCursor([1000.0, 500.0]));
+            assert_eq!((pasted[0].x, pasted[0].y), (800.0, 450.0));
+            assert_eq!((pasted[1].x, pasted[1].y), (1100.0, 450.0));
+            assert_eq!(pasted[1].x - pasted[0].x, 300.0, "взаимное расположение");
+            // Offset — простой сдвиг
+            let pasted = paste_nodes(&buffer, PastePlacement::Offset([32.0, 32.0]));
+            assert_eq!((pasted[0].x, pasted[0].y), (32.0, 32.0));
+            assert_eq!((pasted[1].x, pasted[1].y), (332.0, 32.0));
+            // Контент не меняется (id/файлы при переносе — как заданы)
+            assert_eq!(pasted[0].file.as_deref(), Some("C:/a.png"));
         }
 
         // --- Drag-drop (T9) ---
