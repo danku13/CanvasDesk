@@ -297,6 +297,11 @@ MSI через cargo-wix: canvas-app.exe + canvas-preview-host.exe + pdfium bina
 
 ## M5. Движок виджетов (JS/HTML-микрофронтенды)
 
+> **План волны M5:** `docs/plans/M5-widgets.md` — детальная архитектура,
+> продуктовые решения (П1–П11), зоны файлов и тесты T20–T22. Ранние ссылки на
+> `%APPDATA%/canvasdesk/widgets` уточнены: фактический корень пакетов —
+> `~/.canvasdesk/widgets` (SPEC §7.6, «Уточнения v1.1»).
+
 ### T20. Widget runtime (WebView2-хост)
 
 **Промпт:**
