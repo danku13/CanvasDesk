@@ -10,8 +10,8 @@ use canvas_core::{edge_midpoint, Canvas, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
-    build_draft_instances, build_edge_instances, build_port_instances, card_instance, dim_instance,
-    CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
+    build_draft_instances, build_edge_handle_instances, build_edge_instances, build_port_instances,
+    card_instance, dim_instance, CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -126,8 +126,11 @@ pub struct SceneView<'a> {
     pub selected: Option<Selection>,
     /// Нода под курсором (hover, T8): рисуются порты для начала drag связи.
     pub hovered: Option<usize>,
-    /// Резиновая линия новой связи (T8): (точка порта, сторона, курсор world).
+    /// Резиновая линия (T8): (точка порта, сторона, курсор world).
     pub edge_draft: Option<([f32; 2], Side, [f32; 2])>,
+    /// Связь, скрытая на время drag перепривязки (CR-002): линия не
+    /// рисуется (резиновая линия заменяет её), лейбл тоже скрыт.
+    pub hidden_edge: Option<usize>,
     /// Связи огибают посторонние ноды (глобальная настройка): рендер и
     /// лейблы идут по огибающей полилинии (см. `canvas_core::edge_polyline`).
     pub edges_avoid: bool,
@@ -486,7 +489,7 @@ impl Renderer {
         let mut label_backdrops: Vec<CardInstance> = Vec::new();
         if titles_visible(zoom_px) {
             for (index, edge) in scene.canvas.edges.iter().enumerate() {
-                if editing_edge == Some(index) {
+                if editing_edge == Some(index) || scene.hidden_edge == Some(index) {
                     continue;
                 }
                 let Some(text) = edge.label.as_deref().filter(|text| !text.is_empty()) else {
@@ -649,12 +652,14 @@ impl Renderer {
         let mut instances: Vec<CardInstance> = Vec::with_capacity(indices.len() + 8);
         let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
         // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
-        // в общем буфере = порядок рисования; рисуются диапазоном до сегментов
+        // в общем буфере = порядок рисования; рисуются диапазоном до сегментов.
+        // CR-002: перепривязываемая связь скрыта — её играет резиновая линия
         instances.extend(build_edge_instances(
             scene.canvas,
             selected_edge,
             scene.edges_avoid,
             &scene.focus,
+            scene.hidden_edge,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
@@ -729,6 +734,15 @@ impl Renderer {
             instances.extend(build_port_instances(
                 scene.canvas,
                 hovered,
+                scene.port_zone_px,
+            ));
+        }
+        // CR-002: хэндлы концов выделенной связи — кружки на обоих концах
+        // (захват = drag перепривязки); размер — как у портов (зона CR-003)
+        if let Some(edge_index) = selected_edge {
+            instances.extend(build_edge_handle_instances(
+                scene.canvas,
+                edge_index,
                 scene.port_zone_px,
             ));
         }

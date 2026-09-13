@@ -266,10 +266,43 @@ pub mod ui {
         Canvas,
     }
 
-    /// Активный drag резиновой линии новой связи (T8): от порта ноды к курсору.
-    pub struct EdgeDrag {
-        pub from_node: String,
-        pub from_side: Side,
+    /// Активный drag резиновой линии (T8 + CR-002): от порта ноды к курсору —
+    /// новая связь; или перепривязка конца существующей связи.
+    pub enum EdgeDrag {
+        /// Новая связь: тянем от порта `from_node` (T8).
+        New { from_node: String, from_side: Side },
+        /// Перепривязка конца существующей связи (CR-002): тянем хэндл
+        /// конца `end` связи `edge_index` к новой ноде — без удаления.
+        Rebind {
+            edge_index: usize,
+            end: canvas_core::EdgeEnd,
+        },
+    }
+
+    impl EdgeDrag {
+        /// Исток резиновой линии в world-координатах и его сторона:
+        /// для новой связи — порт ноды-истока; для перепривязки —
+        /// НЕПОДВИЖНЫЙ (противоположный) конец связи. None — данных нет
+        /// (нода удалена/связь висячая) — линию не рисуем.
+        pub fn draft_origin(&self, canvas: &Canvas) -> Option<([f32; 2], Side)> {
+            match self {
+                EdgeDrag::New {
+                    from_node,
+                    from_side,
+                } => {
+                    let node = canvas.node(from_node)?;
+                    Some((port_point(node, *from_side), *from_side))
+                }
+                EdgeDrag::Rebind { edge_index, end } => {
+                    let opposite = match end {
+                        canvas_core::EdgeEnd::From => canvas_core::EdgeEnd::To,
+                        canvas_core::EdgeEnd::To => canvas_core::EdgeEnd::From,
+                    };
+                    let (side, point) = canvas_core::edge_endpoint(canvas, *edge_index, opposite)?;
+                    Some((point, side))
+                }
+            }
+        }
     }
 
     /// Максимальный интервал между кликами двойного клика (winit его не даёт, T7).
@@ -863,6 +896,103 @@ pub mod ui {
             assert_eq!(next_free_id(&canvas, "note"), "note-2");
             canvas.nodes.push(Node::text("note-2", "", 0.0, 0.0));
             assert_eq!(next_free_id(&canvas, "note"), "note-3");
+        }
+
+        // --- CR-002: перепривязка связей ---
+
+        /// Сцена: a(0,0,100,100) → b(400,0,100,100), явные стороны
+        /// Right/Left, порты [100,50] и [400,50].
+        fn rebind_canvas() -> Canvas {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0));
+            canvas
+                .nodes
+                .push(Node::file("b", "C:/b.png", 400.0, 0.0, 100.0, 100.0));
+            canvas.add_edge(Edge::new(
+                "e1",
+                "a",
+                Some(Side::Right),
+                "b",
+                Some(Side::Left),
+            ));
+            canvas
+        }
+
+        fn approx(a: [f32; 2], b: [f32; 2]) {
+            assert!(
+                (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4,
+                "ожидалось {b:?}, получено {a:?}"
+            );
+        }
+
+        /// Исток резиновой линии: новая связь — порт истока; перепривязка —
+        /// НЕПОДВИЖНЫЙ (противоположный тянущемуся) конец; висячая — None.
+        #[test]
+        fn edge_drag_draft_origin() {
+            let canvas = rebind_canvas();
+            // Новая связь от right-порта a
+            let drag = EdgeDrag::New {
+                from_node: "a".to_owned(),
+                from_side: Side::Right,
+            };
+            let (point, side) = drag.draft_origin(&canvas).expect("порт истока");
+            assert_eq!(side, Side::Right);
+            approx(point, [100.0, 50.0]);
+            // Перепривязка ИСТОКА: резинка от СТОКА (left-порт b)
+            let drag = EdgeDrag::Rebind {
+                edge_index: 0,
+                end: canvas_core::EdgeEnd::From,
+            };
+            let (point, side) = drag.draft_origin(&canvas).expect("неподвижный конец");
+            assert_eq!(side, Side::Left, "неподвижный — противоположный конец");
+            approx(point, [400.0, 50.0]);
+            // Перепривязка СТОКА: резинка от ИСТОКА (right-порт a)
+            let drag = EdgeDrag::Rebind {
+                edge_index: 0,
+                end: canvas_core::EdgeEnd::To,
+            };
+            let (point, side) = drag.draft_origin(&canvas).expect("неподвижный конец");
+            assert_eq!(side, Side::Right);
+            approx(point, [100.0, 50.0]);
+            // Несуществующая нода/индекс — None (линию не рисуем)
+            let drag = EdgeDrag::New {
+                from_node: "ghost".to_owned(),
+                from_side: Side::Right,
+            };
+            assert!(drag.draft_origin(&canvas).is_none());
+            let drag = EdgeDrag::Rebind {
+                edge_index: 9,
+                end: canvas_core::EdgeEnd::To,
+            };
+            assert!(drag.draft_origin(&canvas).is_none());
+        }
+
+        /// Хэндлы концов выделенной связи (CR-002, рендер): кружки в портах
+        /// обоих концов; висячая связь — пусто.
+        #[test]
+        fn edge_handle_instances_at_endpoints() {
+            let canvas = rebind_canvas();
+            let handles = canvas_render::cards::build_edge_handle_instances(&canvas, 0, 14.0);
+            assert_eq!(handles.len(), 2, "хэндлы обоих концов");
+            let centers: Vec<[f32; 2]> = handles
+                .iter()
+                .map(|inst| {
+                    [
+                        inst.pos[0] + inst.size[0] / 2.0,
+                        inst.pos[1] + inst.size[1] / 2.0,
+                    ]
+                })
+                .collect();
+            approx(centers[0], [100.0, 50.0]);
+            approx(centers[1], [400.0, 50.0]);
+            // Висячая связь — пусто
+            let mut dangling = rebind_canvas();
+            dangling.nodes.remove(1);
+            assert!(
+                canvas_render::cards::build_edge_handle_instances(&dangling, 0, 14.0).is_empty()
+            );
         }
 
         // --- Drag-drop (T9) ---

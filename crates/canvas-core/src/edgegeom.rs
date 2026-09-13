@@ -168,6 +168,89 @@ pub fn edge_curve(canvas: &Canvas, edge: &Edge) -> Option<CubicBezier> {
     Some(bezier_between(from, from_side, to, to_side))
 }
 
+/// Конец связи для перепривязки (CR-002).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeEnd {
+    /// Исток (`fromNode`).
+    From,
+    /// Сток (`toNode`).
+    To,
+}
+
+/// Разрешённый конец связи: сторона и точка порта. None-сторона выводится
+/// из взаимного положения нод (резолв как в `edge_curve`) — хэндл перепривязки
+/// рисуется/ловится там же, где линия фактически начинается. None — связь
+/// висячая (ноды нет) или индекс невалиден.
+pub fn edge_endpoint(canvas: &Canvas, edge_index: usize, end: EdgeEnd) -> Option<(Side, [f32; 2])> {
+    let edge = canvas.edges.get(edge_index)?;
+    let from = canvas.node(&edge.from_node)?;
+    let to = canvas.node(&edge.to_node)?;
+    let (node, opposite, side) = match end {
+        EdgeEnd::From => (
+            from,
+            [to.x + to.width / 2.0, to.y + to.height / 2.0],
+            edge.from_side,
+        ),
+        EdgeEnd::To => (
+            to,
+            [from.x + from.width / 2.0, from.y + from.height / 2.0],
+            edge.to_side,
+        ),
+    };
+    let side = side.unwrap_or_else(|| nearest_side(node, opposite));
+    Some((side, port_point(node, side)))
+}
+
+/// Перепривязать конец связи к ноде `target_node_id` со стороной `side`
+/// (CR-002). Чистая функция над моделью: id и настройки связи (лейбл,
+/// цвет, стиль, толщина) сохраняются. Отказ (false):
+///
+/// - связь/индекс невалидны (висячая);
+/// - целевая нода не найдена;
+/// - цель — противоположный конец (петля или слияние концов).
+///
+/// Успех — true (поля обновлены на месте).
+pub fn retarget_edge(
+    canvas: &mut Canvas,
+    edge_index: usize,
+    end: EdgeEnd,
+    target_node_id: &str,
+    side: Side,
+) -> bool {
+    // Проверки ДО mutable-заимствования: цель существует и не противоположный
+    // конец (immutable-чтения не конфликтуют друг с другом)
+    let opposite = {
+        let Some(edge) = canvas.edges.get(edge_index) else {
+            return false;
+        };
+        match end {
+            EdgeEnd::From => edge.to_node.clone(),
+            EdgeEnd::To => edge.from_node.clone(),
+        }
+    };
+    if opposite == target_node_id {
+        return false;
+    }
+    if canvas.node(target_node_id).is_none() {
+        return false;
+    }
+    let Some(edge) = canvas.edges.get_mut(edge_index) else {
+        return false;
+    };
+    let target = target_node_id.to_owned();
+    match end {
+        EdgeEnd::From => {
+            edge.from_node = target;
+            edge.from_side = Some(side);
+        }
+        EdgeEnd::To => {
+            edge.to_node = target;
+            edge.to_side = Some(side);
+        }
+    }
+    true
+}
+
 /// Расстояние от world-точки до кривой связи; None для висячей связи.
 /// Hit-test: результат < EDGE_HIT_TOLERANCE — попадание. `avoid` — обход
 /// посторонних нод (глобальная настройка): рендер и hit-test ходят по одной

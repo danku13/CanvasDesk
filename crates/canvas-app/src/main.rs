@@ -17,8 +17,8 @@ use canvas_app::ui::{
 };
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
-    port_point, resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle,
-    Node, NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
+    resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node,
+    NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{
     focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS, FOCUS_FADE_MS, FOCUS_PULSE_MS,
@@ -1110,6 +1110,23 @@ impl App {
             .spatial
             .query_rect([world[0], world[1], world[0], world[1]]);
         select_node_hit(&self.scene.canvas, &candidates)
+    }
+
+    /// Хэндл конца выделенной связи под world-точкой (CR-002): конец, чей
+    /// порт ближе к курсору в допуске зоны портов (CR-003, экранные px →
+    /// world делением на zoom). None — мимо обоих концов/связь висячая.
+    fn edge_handle_at(&self, edge_index: usize, world: Vec2) -> Option<canvas_core::EdgeEnd> {
+        let tolerance = self.settings.port_zone_px / self.camera.zoom().max(1e-3);
+        let dist = |p: &[f32; 2]| ((p[0] - world[0]).powi(2) + (p[1] - world[1]).powi(2)).sqrt();
+        [canvas_core::EdgeEnd::From, canvas_core::EdgeEnd::To]
+            .into_iter()
+            .filter_map(|end| {
+                canvas_core::edge_endpoint(&self.scene.canvas, edge_index, end)
+                    .map(|(_, point)| (end, dist(&point)))
+            })
+            .filter(|(_, distance)| *distance <= tolerance)
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(end, _)| end)
     }
 
     /// Центр видимого мира (мировые координаты) — для «Создать группу».
@@ -2444,15 +2461,16 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_instances: &screen_instances,
                     screen_texts: &screen_texts,
                 };
-                // Резиновая линия новой связи (T8): от порта к курсору
+                // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
+                // курсору; исходная линия перепривязываемой связи скрыта
                 let edge_draft = self.edge_drag.as_ref().and_then(|drag| {
-                    let node = self.scene.canvas.node(&drag.from_node)?;
-                    Some((
-                        port_point(node, drag.from_side),
-                        drag.from_side,
-                        self.cursor_world(),
-                    ))
+                    let (port, side) = drag.draft_origin(&self.scene.canvas)?;
+                    Some((port, side, self.cursor_world()))
                 });
+                let hidden_edge = match self.edge_drag.as_ref() {
+                    Some(EdgeDrag::Rebind { edge_index, .. }) => Some(*edge_index),
+                    _ => None,
+                };
                 // T23 (brainstorm-focus): пересчёт анимации и окрестности
                 // семени ДО сборки сцены — FocusView заимствует поля App
                 self.update_focus_state();
@@ -2473,6 +2491,7 @@ impl ApplicationHandler<AppEvent> for App {
                         selected: self.scene.selected,
                         hovered: self.hovered,
                         edge_draft,
+                        hidden_edge,
                         edges_avoid: self.settings.edges_avoid_nodes,
                         port_zone_px: self.settings.port_zone_px,
                         focus,
@@ -3266,6 +3285,17 @@ impl App {
                     }
                     self.finish_editing(true);
                 }
+                // Хэндлы концов выделенной связи (CR-002): захват хэндла —
+                // drag перепривязки без удаления. Проверка ДО портов: хэндл
+                // сидит на порту, занятом существующей связью. Зона — та же,
+                // что у портов (CR-003, из настроек).
+                if let Some(Selection::Edge(edge_index)) = self.scene.selected {
+                    if let Some(end) = self.edge_handle_at(edge_index, world) {
+                        self.edge_drag = Some(EdgeDrag::Rebind { edge_index, end });
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 // Порт hover-ноды (T8): начало drag резиновой линии новой
                 // связи — drag ноды/resize/двойной клик не начинаются.
                 // У групп портов нет: edge-drag с группы не начинается.
@@ -3282,7 +3312,7 @@ impl App {
                         });
                     if let Some(side) = port {
                         let from_node = self.scene.canvas.nodes[node_index].id.clone();
-                        self.edge_drag = Some(EdgeDrag {
+                        self.edge_drag = Some(EdgeDrag::New {
                             from_node,
                             from_side: side,
                         });
@@ -3354,25 +3384,51 @@ impl App {
                 self.request_redraw();
             }
             ElementState::Released => {
-                // Drop резиновой линии (T8): на другую ноду — создать связь
-                // (to_side — ближайшая к курсору сторона), в пустоту или на
-                // ту же ноду — отмена
+                // Drop резиновой линии: новая связь (T8) или перепривязка
+                // конца существующей (CR-002). На другую ноду — применяем,
+                // в пустоту/на ту же ноду/на зеркальный конец — отмена
                 if let Some(drag) = self.edge_drag.take() {
                     let world = self.cursor_world();
-                    if let Some(target) = self.selective_hit(world) {
-                        let to_node = &self.scene.canvas.nodes[target];
-                        let to_id = to_node.id.clone();
-                        if to_id != drag.from_node {
-                            let to_side = nearest_side(to_node, world);
-                            let edge = Edge::new(
-                                self.scene.canvas.next_edge_id(),
-                                drag.from_node,
-                                Some(drag.from_side),
-                                to_id,
-                                Some(to_side),
-                            );
-                            self.scene.canvas.add_edge(edge);
-                            self.scene.mark_dirty();
+                    match drag {
+                        EdgeDrag::New {
+                            from_node,
+                            from_side,
+                        } => {
+                            if let Some(target) = self.selective_hit(world) {
+                                let to_node = &self.scene.canvas.nodes[target];
+                                let to_id = to_node.id.clone();
+                                if to_id != from_node {
+                                    let to_side = nearest_side(to_node, world);
+                                    let edge = Edge::new(
+                                        self.scene.canvas.next_edge_id(),
+                                        from_node,
+                                        Some(from_side),
+                                        to_id,
+                                        Some(to_side),
+                                    );
+                                    self.scene.canvas.add_edge(edge);
+                                    self.scene.mark_dirty();
+                                }
+                            }
+                        }
+                        // CR-002: перепривязка конца — id/лейбл/цвет/стиль
+                        // сохраняются (retarget_edge), сторона — ближайшая
+                        // к курсору сторона целевой ноды
+                        EdgeDrag::Rebind { edge_index, end } => {
+                            if let Some(target) = self.selective_hit(world) {
+                                let target_node = &self.scene.canvas.nodes[target];
+                                let target_id = target_node.id.clone();
+                                let side = nearest_side(target_node, world);
+                                if canvas_core::retarget_edge(
+                                    &mut self.scene.canvas,
+                                    edge_index,
+                                    end,
+                                    &target_id,
+                                    side,
+                                ) {
+                                    self.scene.mark_dirty();
+                                }
+                            }
                         }
                     }
                     self.request_redraw();

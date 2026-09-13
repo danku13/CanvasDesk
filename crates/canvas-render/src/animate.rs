@@ -220,7 +220,10 @@ mod tests {
         // Без перелётов и отрицательных значений
         for t in (0..=FOCUS_PULSE_MS).step_by(40) {
             let v = focus_pulse(t);
-            assert!(v >= 0.0 && v <= 1.0 + EPS, "выход за [0,1] при t={t}: {v}");
+            assert!(
+                (0.0..=1.0 + EPS).contains(&v),
+                "выход за [0,1] при t={t}: {v}"
+            );
         }
     }
 }

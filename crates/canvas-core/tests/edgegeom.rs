@@ -3,9 +3,9 @@
 
 use canvas_core::{
     bezier_between, curve_point, curve_tangent, distance_point_to_polyline, distance_to_edge,
-    draft_curve, edge_at, edge_curve, edge_midpoint, edge_polyline, nearest_side, port_at,
-    port_point, route_polyline, side_normal, tessellate, Canvas, Edge, Node, Side, AVOID_MARGIN,
-    EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX,
+    draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint, edge_polyline, nearest_side,
+    port_at, port_point, retarget_edge, route_polyline, side_normal, tessellate, Canvas, Edge,
+    EdgeEnd, Node, Side, AVOID_MARGIN, EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX,
 };
 
 fn node(id: &str, x: f32, y: f32, w: f32, h: f32) -> Node {
@@ -570,4 +570,117 @@ fn route_polyline_terminates_in_tight_corridor() {
     );
     approx(routed[0], [0.0, 50.0]);
     approx(*routed.last().unwrap(), [400.0, 50.0]);
+}
+
+// --- CR-002: перепривязка связей без удаления ---
+
+/// Сцена для перепривязки: три ноды в ряд, связь a→b с явными сторонами.
+fn rebind_scene() -> Canvas {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 400.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("c", 400.0, 400.0, 100.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    canvas
+}
+
+/// edge_endpoint: явная сторона даёт её порт; None-сторона резолвится
+/// геометрией (как edge_curve); висячая связь — None.
+#[test]
+fn edge_endpoint_resolves_sides() {
+    let canvas = rebind_scene();
+    // Явные стороны: right-порт a, left-порт b
+    let (side, point) = edge_endpoint(&canvas, 0, EdgeEnd::From).expect("конец From");
+    assert_eq!(side, Side::Right);
+    approx(point, [100.0, 50.0]);
+    let (side, point) = edge_endpoint(&canvas, 0, EdgeEnd::To).expect("конец To");
+    assert_eq!(side, Side::Left);
+    approx(point, [400.0, 50.0]);
+    // None-стороны: c правее и ниже a → авто-стороны Right/Left по геометрии
+    let mut auto = Canvas::default();
+    auto.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    auto.nodes.push(node("c", 400.0, 400.0, 100.0, 100.0));
+    auto.add_edge(Edge::new("e2", "a", None, "c", None));
+    let (side, _) = edge_endpoint(&auto, 0, EdgeEnd::From).expect("конец From");
+    assert_eq!(side, Side::Right, "резолв как в edge_curve");
+    let (side, _) = edge_endpoint(&auto, 0, EdgeEnd::To).expect("конец To");
+    assert_eq!(side, Side::Left);
+    // Висячая связь (ноды нет) — None; невалидный индекс — None
+    let mut dangling = Canvas::default();
+    dangling.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    dangling.add_edge(Edge::new("e3", "a", None, "ghost", None));
+    assert!(edge_endpoint(&dangling, 0, EdgeEnd::To).is_none());
+    assert!(edge_endpoint(&canvas, 9, EdgeEnd::From).is_none());
+}
+
+/// retarget_edge: успех — поля обновлены, id/лейбл/стиль сохранены;
+/// петля/несуществующая нода/невалидный индекс — отказ без изменений.
+#[test]
+fn retarget_edge_updates_and_refuses() {
+    let mut canvas = rebind_scene();
+    // Успех: исток a → c
+    assert!(retarget_edge(&mut canvas, 0, EdgeEnd::From, "c", Side::Top));
+    let edge = &canvas.edges[0];
+    assert_eq!(edge.id, "e1", "id сохраняется");
+    assert_eq!(
+        (edge.from_node.as_str(), edge.from_side),
+        ("c", Some(Side::Top))
+    );
+    assert_eq!(
+        (edge.to_node.as_str(), edge.to_side),
+        ("b", Some(Side::Left))
+    );
+    // Успех: сток b → a
+    assert!(retarget_edge(
+        &mut canvas,
+        0,
+        EdgeEnd::To,
+        "a",
+        Side::Bottom
+    ));
+    assert_eq!(canvas.edges[0].to_node, "a");
+    assert_eq!(canvas.edges[0].to_side, Some(Side::Bottom));
+    // Отказ: цель — противоположный конец (петля)
+    let before = canvas.edges[0].clone();
+    assert!(!retarget_edge(
+        &mut canvas,
+        0,
+        EdgeEnd::From,
+        "a",
+        Side::Left
+    ));
+    assert_eq!(canvas.edges[0], before, "отказ не меняет связь");
+    // Отказ: несуществующая нода
+    assert!(!retarget_edge(
+        &mut canvas,
+        0,
+        EdgeEnd::From,
+        "ghost",
+        Side::Left
+    ));
+    assert_eq!(canvas.edges[0], before);
+    // Отказ: невалидный индекс
+    assert!(!retarget_edge(
+        &mut canvas,
+        9,
+        EdgeEnd::From,
+        "a",
+        Side::Left
+    ));
+    // Настройки связи сохраняются при перепривязке
+    let mut styled = rebind_scene();
+    styled.edges[0].label = Some("важно".to_owned());
+    styled.edges[0].style = Some(canvas_core::EdgeLineStyle::Dashed);
+    assert!(retarget_edge(&mut styled, 0, EdgeEnd::To, "c", Side::Left));
+    assert_eq!(styled.edges[0].label.as_deref(), Some("важно"));
+    assert_eq!(
+        styled.edges[0].style,
+        Some(canvas_core::EdgeLineStyle::Dashed)
+    );
 }
