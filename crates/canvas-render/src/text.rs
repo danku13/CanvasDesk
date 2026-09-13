@@ -64,6 +64,60 @@ const CACHE_SWEEP_INTERVAL: u64 = 128;
 /// Записи старше этого возраста (в кадрах) вытесняются при чистке.
 const CACHE_MAX_AGE: u64 = 600;
 
+/// Снап экранной позиции к целым физическим пикселям: без него дробные
+/// позиции при панораме порождают новый subpixel-бин глифа каждый кадр
+/// (cosmic-text SubpixelBin — до 16 вариантов на глиф) и раздувают атлас.
+fn snap_to_pixel(screen: [f32; 2], scale_factor: f32) -> [f32; 2] {
+    [
+        (screen[0] * scale_factor).round(),
+        (screen[1] * scale_factor).round(),
+    ]
+}
+
+/// Подготовить текст-группу с одним повтором после trim атласа: при
+/// AtlasFull trim() освобождает место — повтор почти всегда успешен;
+/// повторная ошибка уходит вызывающему (рендерер логирует и рисует stale).
+#[allow(clippy::too_many_arguments)]
+fn prepare_group<'a>(
+    renderer: &mut TextRenderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    font_system: &mut FontSystem,
+    atlas: &mut TextAtlas,
+    viewport: &Viewport,
+    areas: &[TextArea<'a>],
+    swash_cache: &mut SwashCache,
+) -> Result<(), glyphon::PrepareError> {
+    let result = renderer.prepare(
+        device,
+        queue,
+        font_system,
+        atlas,
+        viewport,
+        areas.iter().cloned(),
+        swash_cache,
+    );
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                "prepare текст-группы не удался — trim атласа и повтор"
+            );
+            atlas.trim();
+            renderer.prepare(
+                device,
+                queue,
+                font_system,
+                atlas,
+                viewport,
+                areas.iter().cloned(),
+                swash_cache,
+            )
+        }
+    }
+}
+
 /// Заголовок ноды читаем только если он крупнее MIN_TITLE_PX физических px.
 pub fn titles_visible(zoom_px: f32) -> bool {
     TITLE_FONT_SIZE * zoom_px >= MIN_TITLE_PX
@@ -904,8 +958,10 @@ impl TextSystem {
             viewport_physical[1] as f32 / scale_factor,
         ];
         let to_physical = |world: [f32; 2]| {
-            let screen = frame.camera.world_to_screen(world, viewport_logical);
-            [screen[0] * scale_factor, screen[1] * scale_factor]
+            snap_to_pixel(
+                frame.camera.world_to_screen(world, viewport_logical),
+                scale_factor,
+            )
         };
 
         // Фаза 1: актуализация кэша — шейпинг только новых/изменившихся заголовков.
@@ -1192,9 +1248,11 @@ impl TextSystem {
                         let origin = to_physical(origin);
                         let body_bottom = origin[1] + body_height * zoom_px;
                         for block in &layout.blocks {
-                            let left = origin[0] + block.offset[0] * zoom_px;
-                            let top = origin[1] + block.offset[1] * zoom_px;
-                            let bottom = (top + block.height * zoom_px).min(body_bottom);
+                            // Снап к целым физическим px — иначе каждый кадр
+                            // панорамы даёт новый subpixel-бин глифа (см. snap_to_pixel)
+                            let left = (origin[0] + block.offset[0] * zoom_px).round();
+                            let top = (origin[1] + block.offset[1] * zoom_px).round();
+                            let bottom = ((top + block.height * zoom_px).min(body_bottom)).round();
                             areas.push(TextArea {
                                 buffer: &block.buffer,
                                 left,
@@ -1272,8 +1330,8 @@ impl TextSystem {
                             continue;
                         };
                         let pos = to_physical(label.center);
-                        let left = pos[0] - entry.size_px[0] / 2.0;
-                        let top = pos[1] - entry.size_px[1] / 2.0;
+                        let left = (pos[0] - entry.size_px[0] / 2.0).round();
+                        let top = (pos[1] - entry.size_px[1] / 2.0).round();
                         areas.push(TextArea {
                             buffer: &entry.buffer,
                             left,
@@ -1327,13 +1385,14 @@ impl TextSystem {
                 );
             }
             if let Some(renderer) = self.renderers.get_mut(g) {
-                renderer.prepare(
+                prepare_group(
+                    renderer,
                     device,
                     queue,
                     &mut self.font_system,
                     &mut self.atlas,
                     &self.viewport,
-                    areas,
+                    &areas,
                     &mut self.swash_cache,
                 )?;
             }
@@ -1354,7 +1413,9 @@ impl TextSystem {
                     .unwrap_or(0.0);
                 left += ((st.width * scale_factor) - line_w).max(0.0) / 2.0;
             }
-            let top = st.origin[1] * scale_factor;
+            // Снап к целым физическим px — единообразно с мировыми текстами
+            let left = left.round();
+            let top = (st.origin[1] * scale_factor).round();
             let line_height = st.font_size * scale_factor * 1.3;
             overlay_areas.push(TextArea {
                 buffer,
@@ -1372,16 +1433,21 @@ impl TextSystem {
             });
         }
         if let Some(renderer) = self.renderers.get_mut(overlay_group) {
-            renderer.prepare(
+            prepare_group(
+                renderer,
                 device,
                 queue,
                 &mut self.font_system,
                 &mut self.atlas,
                 &self.viewport,
-                overlay_areas,
+                &overlay_areas,
                 &mut self.swash_cache,
             )?;
         }
+        // Восстановление LRU-эвикшна атласа: без trim() glyphs_in_use не
+        // сбрасывается (glyphon 0.6) — атлас монотонно заполняется при
+        // пан/зуме и prepare падает с AtlasFull.
+        self.atlas.trim();
         Ok(())
     }
 
@@ -1459,6 +1525,20 @@ mod tests {
         assert!(!titles_visible(MIN_TITLE_PX / TITLE_FONT_SIZE - 0.001));
         assert!(titles_visible(MIN_TITLE_PX / TITLE_FONT_SIZE));
         assert!(titles_visible(1.0));
+    }
+
+    /// Снап к целым физическим пикселям: дробные экранные позиции дают
+    /// целые физические, уже целые не меняются (защита от раздувания атласа
+    /// subpixel-бинами cosmic-text при панораме).
+    #[test]
+    fn snap_to_pixel_rounds_to_physical_pixels() {
+        let snapped = snap_to_pixel([10.4, 20.6], 2.0);
+        assert_eq!(snapped, [21.0, 41.0]);
+        assert_eq!(snapped[0].fract(), 0.0);
+        assert_eq!(snapped[1].fract(), 0.0);
+        // Уже целые физические пиксели — точно те же значения
+        assert_eq!(snap_to_pixel([6.0, 4.5], 2.0), [12.0, 9.0]);
+        assert_eq!(snap_to_pixel([0.0, 0.0], 1.5), [0.0, 0.0]);
     }
 
     /// Свежесть кэша: тот же зум/ширина/тексты — свежий; любое изменение — нет.

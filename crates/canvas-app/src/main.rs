@@ -627,6 +627,12 @@ impl App {
                 let dpi = attach::window_dpi(hwnd);
                 if dpi != 0 {
                     self.desktop_dpi = Some(dpi);
+                    // R10: рендерер продолжает считать от врущего
+                    // window.scale_factor() после репарентинга — передаём
+                    // достоверный DPI из поллинга (как в DpiChanged ниже)
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_scale_factor(canvas_shell::dpi_to_scale(dpi));
+                    }
                 }
                 self.desktop_hierarchy = Some(hier);
                 self.watch_worker_w(hwnd, &hier);
