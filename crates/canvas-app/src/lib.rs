@@ -862,10 +862,19 @@ pub mod ui {
     /// для каждого пункта плана при перетаскивании.
     pub fn drop_ghost_label(kind: &DropInsertKind) -> String {
         let raw = match kind {
-            DropInsertKind::File(path) => path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+            DropInsertKind::File(path) => {
+                let from_path = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty());
+                from_path.unwrap_or_else(|| {
+                    let s = path.to_string_lossy();
+                    s.rsplit(|c| c == '\\' || c == '/')
+                        .next()
+                        .unwrap_or(&s)
+                        .to_string()
+                })
+            }
             DropInsertKind::Note(text) => text.lines().next().unwrap_or("").to_owned(),
         };
         let mut chars = raw.chars();
