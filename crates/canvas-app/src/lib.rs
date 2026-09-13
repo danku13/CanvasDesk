@@ -26,6 +26,10 @@ pub use canvas_render::{
 };
 pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 
+/// Менеджер виджетов (M5 T20-F): реестр + LOD + host-обёртки. Модуль
+/// кроссплатформен (host — cfg(windows) внутри), юнит-тесты — на Linux.
+pub mod widgets;
+
 /// Чистая UI-логика приложения: геометрия оверлеев (контекстное меню,
 /// панель настроек), hit-тесты, генератор id заметок, детектор двойного
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
@@ -253,6 +257,27 @@ pub mod ui {
     pub struct ContextMenu {
         pub target: MenuTarget,
         pub origin: Vec2,
+        /// Подменю «Виджеты ▸» (T20-F): открывается кликом по пункту Widgets
+        /// базового меню; пусто/None — подменю не открыто.
+        pub submenu: Option<Submenu>,
+    }
+
+    /// Подменю контекстного меню (T20-F): список пакетов виджетов.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Submenu {
+        /// Позиция (world) левого верхнего угла колонки подменю.
+        pub origin: Vec2,
+        /// Пункты: установка ноды виджета (id пакета + подпись).
+        pub entries: Vec<SubmenuEntry>,
+    }
+
+    /// Пункт подменю виджетов.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SubmenuEntry {
+        /// id пакета (`com.canvasdesk.clock`).
+        pub widget_id: String,
+        /// Подпись (имя пакета из манифеста).
+        pub label: String,
     }
 
     /// Цель контекстного меню (ПКМ по канвасу).
@@ -554,6 +579,9 @@ pub mod ui {
             NodeKind::Text => "note",
             NodeKind::File => "file",
             NodeKind::Link => "link",
+            // Виджет-копия (M5): общий префикс «widget-» — как у созданных
+            // из меню (менеджер ведёт свой счётчик next_node_id)
+            NodeKind::Widget => "widget",
             NodeKind::Group | NodeKind::Unknown => "node",
         }
     }
@@ -1007,13 +1035,17 @@ pub mod ui {
         /// FR-004.1: «Горячие клавиши (F1)» — переключатель видимости
         /// оверлея хоткеев (галочка — панель открыта).
         Hotkeys,
+        /// M5 (T20-F): «Виджеты ▸» — подменю установки виджет-нод
+        /// (список пакетов реестра).
+        Widgets,
     }
 
     /// Меню пустого канваса.
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 3] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 4] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
+        CanvasMenuItem::Widgets,
     ];
 
     /// Подпись пункта меню ноды. Разделитель подписи не имеет.
@@ -1039,7 +1071,25 @@ pub mod ui {
                 "{}Горячие клавиши (F1)",
                 if hotkeys_open { "✓ " } else { "" }
             ),
+            CanvasMenuItem::Widgets => "Виджеты ▸…".to_owned(),
         }
+    }
+
+    /// Rect колонки подменю (world): [x, y, w, h]. Высота — по числу пунктов
+    /// (пустой список — 1 строка «(нет установленных)»).
+    pub fn submenu_rect(submenu: &Submenu) -> [f32; 4] {
+        menu_rect_for(submenu.origin, submenu.entries.len().max(1))
+    }
+
+    /// Hit-test пункта подменю по world-точке.
+    pub fn submenu_item_at(submenu: &Submenu, point: Vec2) -> Option<usize> {
+        menu_item_at_for(submenu.origin, point, submenu.entries.len().max(1))
+            .filter(|&i| i < submenu.entries.len())
+    }
+
+    /// Origin подменю справа от базового меню: колонка со сдвигом на ширину.
+    pub fn submenu_origin_next_to(menu_origin: Vec2) -> Vec2 {
+        [menu_origin[0] + MENU_WIDTH + 2.0, menu_origin[1]]
     }
 
     /// Семя фокуса (T23) из интерактивных состояний: приоритет — нода под
@@ -1854,6 +1904,95 @@ pub mod ui {
             );
         }
 
+        /// M5 (T20-F): подменю «Виджеты ▸» — геометрия колонки справа от
+        /// базового меню, hit-test пунктов, пустой список, origin-хелпер.
+        #[test]
+        fn widgets_submenu_geometry_and_hit_test() {
+            let menu_origin: Vec2 = [100.0, 50.0];
+            let sub_origin = submenu_origin_next_to(menu_origin);
+            // Колонка начинается за шириной меню (+2 px зазор)
+            assert_eq!(sub_origin[0], menu_origin[0] + MENU_WIDTH + 2.0);
+            assert_eq!(sub_origin[1], menu_origin[1]);
+
+            let entries = vec![
+                SubmenuEntry {
+                    widget_id: "com.canvasdesk.clock".to_owned(),
+                    label: "Clock".to_owned(),
+                },
+                SubmenuEntry {
+                    widget_id: "com.canvasdesk.calendar".to_owned(),
+                    label: "Calendar".to_owned(),
+                },
+            ];
+            let submenu = Submenu {
+                origin: sub_origin,
+                entries,
+            };
+            let [_, y, w, h] = submenu_rect(&submenu);
+            assert_eq!(w, MENU_WIDTH);
+            assert_eq!(h, MENU_PADDING * 2.0 + 2.0 * MENU_ITEM_HEIGHT);
+            // Пункт 0/1 накликиваются, мимо — None
+            assert_eq!(
+                submenu_item_at(&submenu, [sub_origin[0] + 10.0, y + MENU_PADDING + 3.0]),
+                Some(0)
+            );
+            assert_eq!(
+                submenu_item_at(
+                    &submenu,
+                    [
+                        sub_origin[0] + 10.0,
+                        y + MENU_PADDING + MENU_ITEM_HEIGHT + 3.0
+                    ]
+                ),
+                Some(1)
+            );
+            assert_eq!(submenu_item_at(&submenu, [500.0, 500.0]), None);
+            // Пустое подменю: rect не вырожден (1 строка), хит-тест — None
+            let empty = Submenu {
+                origin: sub_origin,
+                entries: Vec::new(),
+            };
+            assert_eq!(
+                submenu_rect(&empty)[3],
+                MENU_PADDING * 2.0 + MENU_ITEM_HEIGHT
+            );
+            assert_eq!(
+                submenu_item_at(&empty, [sub_origin[0] + 10.0, y + 20.0]),
+                None
+            );
+            // Клик по колонке подменю НЕ попадает в базовое меню (правее)
+            assert_eq!(
+                menu_item_at_for(menu_origin, [sub_origin[0] + 10.0, y + 20.0], 4),
+                None
+            );
+        }
+
+        /// M5: подменю в ContextMenu — тогл черезWidgets-пункт открывает,
+        /// повторный ПКМ закрывает всё меню (submenu не переживает take).
+        #[test]
+        fn context_menu_with_submenu_composes() {
+            let menu = ContextMenu {
+                target: MenuTarget::Canvas,
+                origin: [0.0, 0.0],
+                submenu: Some(Submenu {
+                    origin: submenu_origin_next_to([0.0, 0.0]),
+                    entries: vec![SubmenuEntry {
+                        widget_id: "com.canvasdesk.clock".to_owned(),
+                        label: "Clock".to_owned(),
+                    }],
+                }),
+            };
+            assert!(menu.submenu.is_some());
+            assert_eq!(menu.submenu.as_ref().unwrap().entries.len(), 1);
+            // Дефолтное меню — без подменю
+            let plain = ContextMenu {
+                target: MenuTarget::Canvas,
+                origin: [0.0, 0.0],
+                submenu: None,
+            };
+            assert!(plain.submenu.is_none());
+        }
+
         /// Подписи меню связи: отметка `✓` только у текущих значений.
         #[test]
         fn edge_menu_labels_mark_current() {
@@ -1926,7 +2065,13 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 3);
+            assert_eq!(n, 4);
+            // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
+            assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false),
+                "Виджеты ▸…"
+            );
             assert_eq!(
                 canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false),
                 "Создать группу"

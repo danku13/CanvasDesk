@@ -5,3 +5,25 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+canvas-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Декод PNG-снапшотов виджетов (CapturePreview отдаёт PNG) — M5, SPEC §7.6.
+# Только png-декодер, без остальных форматов и simd.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Встраивание встроенных виджетов assets/widgets/ в бинарник (T20-C):
+# материализация в ~/.canvasdesk/widgets при старте.
+include_dir = "0.7"
+
+# Windows-only: WebView2-хост (T20-E). webview2-com 0.39 выровнен с windows
+# 0.62 (та же версия, что у воркспейса) — типы HWND/COM совместимы; все
+# нужные фичи (Foundation/Com/WindowsAndMessaging/Gdi/KeyboardAndMouse)
+# уже объявлены в корневом Cargo.toml.
+# rusqlite ЗАПРЕЩЁН в этом крейте: bundled C рвёт локальный win-чек
+# `cargo check --target x86_64-pc-windows-msvc` (нет lib.exe);
+# widget_state живёт в canvas-shell.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows.workspace = true

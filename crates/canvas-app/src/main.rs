@@ -12,10 +12,11 @@ use canvas_app::ui::{
     hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
     next_free_id, node_menu_label, nodes_in_rect, panel_rect, panel_row_at, paste_nodes,
     plan_group_around, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
-    select_node_hit, theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu,
-    DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem, PastePlacement,
-    SettingsRow, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT,
-    MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
+    select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
+    toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
+    EdgeMenuItem, MenuTarget, NodeMenuItem, PastePlacement, SettingsRow, Submenu, SubmenuEntry,
+    CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X,
+    MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
     PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::{
@@ -348,6 +349,11 @@ enum AppEvent {
     /// (WinEventHook/поллинг) и смена DPI после репарентинга (R10).
     #[cfg(windows)]
     Desktop(canvas_shell::DesktopEvent),
+    /// M5 (T20-F): события виджетов — WebView2-колбэки через proxy
+    /// (EnvironmentReady/ControllerReady/SnapshotReady/Message) + тик
+    /// таймера refresh-снапшотов. Тип кроссплатформенный: на Linux
+    /// события не приходят (host нет), матчинг единообразен.
+    Widget(canvas_widgets::WidgetEvent),
     /// События шины системных событий (T16): сессия (lock/unlock, R8),
     /// suspend/resume, ExplorerStarted (TaskbarCreated, R7/R11),
     /// shell-hook/clipboard (потребители T18/будущее), SHCNE-мост в
@@ -451,6 +457,8 @@ struct App {
     /// Drag по миникарте (T13): world-точка под курсором следует за ним
     /// (клик без движения = мгновенное центрирование).
     minimap_drag: bool,
+    /// M5 (T20-F): менеджер виджетов — реестр пакетов, LOD-план, host.
+    widgets: canvas_app::widgets::WidgetManager,
     /// Панель поиска (T14): поле, строки, выбор, скролл.
     search: SearchPanel,
     /// Сервис FTS-индекса (T14): команды в worker-поток, ответы —
@@ -542,7 +550,16 @@ impl App {
         search_service: SearchService,
         desktop_mode: bool,
     ) -> Self {
+        // M5 (T20-F): менеджер виджетов; реестр инициализируется в
+        // main() (init_widgets) после настройки трейсинга
+        let widgets = canvas_app::widgets::WidgetManager::new(
+            canvas_shell::default_cache_dir()
+                .unwrap_or_default()
+                .join("widgets"),
+            settings.theme == Theme::Dark,
+        );
         Self {
+            widgets,
             window: None,
             renderer: None,
             camera: Camera::default(),
@@ -2204,6 +2221,30 @@ impl App {
                     ));
                     label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                 }
+                // M5 (T20-F): колонка подменю «Виджеты ▸» — справа от меню
+                if let Some(submenu) = &menu.submenu {
+                    let [sx, sy, sw, sh] = submenu_rect(submenu);
+                    instances.push(CardInstance {
+                        pos: [sx, sy],
+                        size: [sw, sh],
+                        fill: palette.menu_fill,
+                        border: [0.0; 4],
+                        params: [6.0, 0.0, 0.0, 0.0],
+                    });
+                    if submenu.entries.is_empty() {
+                        labels.push("(нет установленных)".to_owned());
+                        label_pos.push([
+                            submenu.origin[0] + MENU_PADDING + 4.0,
+                            submenu.origin[1] + MENU_PADDING + 6.0,
+                        ]);
+                    } else {
+                        for (i, entry) in submenu.entries.iter().enumerate() {
+                            let rect = menu_item_rect(submenu.origin, i);
+                            labels.push(entry.label.clone());
+                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                        }
+                    }
+                }
             }
         }
         (instances, labels, label_pos)
@@ -2212,6 +2253,9 @@ impl App {
     /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
     fn toggle_theme(&mut self) {
         self.settings.theme = self.settings.theme.next();
+        // M5: смена темы уходит виджетам (themeChanged — T21 доведёт
+        // рассылку до инстансов, пока обновляется init-данные будущих нод)
+        self.widgets.set_theme(self.settings.theme == Theme::Dark);
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
         }
@@ -2551,431 +2595,6 @@ impl App {
             }
             let path = self.scene.resolve_file_path(file);
             self.thumbs.request(Priority::High, index, path);
-        }
-    }
-}
-
-impl ApplicationHandler<AppEvent> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-        let attrs = Window::default_attributes().with_title("CanvasDesk");
-        // Режим десктопа (T15): borderless-окно на весь виртуальный экран
-        // без активации при создании (WS_EX_NOACTIVATE до первого клика —
-        // TASKS T15; winit with_active(false)). Это же окно — фолбэк-режим,
-        // если встройка не удастся (R14: не пересоздаём после winit-инициализации).
-        // После attach winit-API окна НЕ трогаем — стили перезапишет
-        // библиотека (R3-урок tao/Seelen); размеры — только SetWindowPos.
-        let attrs = if self.desktop_mode {
-            attrs
-                .with_decorations(false)
-                .with_resizable(false)
-                .with_active(false)
-        } else {
-            attrs
-        };
-        // winit сам ставит свой IDropTarget (RegisterDragDrop с assert S_OK) —
-        // отключаем и ставим свой в canvas-shell (план T9 §3)
-        #[cfg(windows)]
-        let attrs = attrs.with_drag_and_drop(false);
-        // Точная геометрия десктоп-окна (физ. px) — только на Windows:
-        // виртуальный экран из EnumDisplayMonitors; до attach — стартовый
-        // размер по экрану (потом attach растянет SetWindowPos'ом).
-        #[cfg(windows)]
-        let attrs = if self.desktop_mode {
-            let screen = canvas_shell::desktop::hierarchy::virtual_screen_rect().unwrap_or(
-                canvas_shell::desktop::ScreenRect::from_ltrb(0, 0, 1280, 720),
-            );
-            attrs
-                .with_position(winit::dpi::PhysicalPosition::new(screen.left, screen.top))
-                .with_inner_size(winit::dpi::PhysicalSize::new(
-                    screen.width().max(1) as u32,
-                    screen.height().max(1) as u32,
-                ))
-        } else {
-            attrs
-        };
-        let window = match event_loop.create_window(attrs) {
-            Ok(window) => Arc::new(window),
-            Err(err) => {
-                tracing::error!(%err, "не удалось создать окно");
-                event_loop.exit();
-                return;
-            }
-        };
-        self.window = Some(window.clone());
-        // Регистрация своего IDropTarget (T9) и встройка в десктоп (T15) — ДО
-        // создания GPU-surface: так attach (SetParent/scrub) не конфликтует
-        // с живым swapchain. Сама по себе невидимость встроенного окна
-        // порядком не лечилась (проверено экспериментом): Vulkan-swapchain
-        // не презентует в ребёнка Progman вне зависимости от момента
-        // создания surface — лечится выбором DX12 для desktop-режима
-        // (Renderer::new, prefer_dx12). HWND достаём через raw-window-handle
-        // (winit 0.30 публично Win32-HWND не отдаёт); ошибка drag-drop —
-        // warn и живём без него (graceful degradation).
-        #[cfg(windows)]
-        {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            // HWND через raw-window-handle: winit 0.30 публично
-            // Win32-HWND не отдаёт (внутренний windows-sys); окно
-            // создано на этом потоке, handle доступен
-            match window.window_handle() {
-                Ok(handle) => match handle.as_raw() {
-                    RawWindowHandle::Win32(win32) => {
-                        match canvas_shell::dragdrop::install(
-                            win32.hwnd.get(),
-                            self.drag_sender.clone(),
-                        ) {
-                            Ok(watcher) => self.drag_watcher = Some(watcher),
-                            Err(err) => {
-                                tracing::warn!(%err, "drag-drop недоступен, приложение работает без него")
-                            }
-                        }
-                        // Встройка в десктоп (T15): после всей winit-настройки
-                        // окна (R3-урок: сначала окно настраивается библиотекой,
-                        // репарентинг — последним, с верификацией стилей в
-                        // attach), но ДО создания GPU-surface (см. выше).
-                        if self.desktop_mode {
-                            self.attach_desktop(win32.hwnd.get());
-                        }
-                    }
-                    // На Windows бывает только Win32-handle
-                    _ => tracing::warn!("неожиданный handle окна — drag-drop выключен"),
-                },
-                Err(err) => {
-                    tracing::warn!(%err, "handle окна недоступен — drag-drop выключен")
-                }
-            }
-        }
-        // GPU-инициализация блокирующая, один раз при старте (SPEC §6.3:
-        // холодный старт < 2 с). prefer_dx12 = desktop-режим: Vulkan не
-        // презентует в ребёнка Progman (подробности — в Renderer::new).
-        match pollster::block_on(canvas_render::Renderer::new(
-            window.clone(),
-            self.desktop_mode,
-        )) {
-            Ok(mut renderer) => {
-                renderer.set_grid_visible(self.settings.grid_visible);
-                renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
-                let (minor, major) = self.settings.grid_density.steps();
-                renderer.set_grid_steps(minor, major);
-                renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
-                tracing::info!(
-                    width = window.inner_size().width,
-                    height = window.inner_size().height,
-                    scale_factor = window.scale_factor(),
-                    "окно создано"
-                );
-                self.renderer = Some(renderer);
-                self.request_redraw();
-            }
-            Err(err) => {
-                tracing::error!(%err, "не удалось инициализировать рендер");
-                event_loop.exit();
-            }
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => {
-                // Штатный выход (T17): форс-сейв (SPEC §9 — не ждать
-                // debounce) + восстановление иконок (R5) — единая точка
-                // с пунктом меню «Выход»
-                self.shutdown(event_loop);
-            }
-            WindowEvent::Resized(size) => {
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.resize(size.width, size.height);
-                }
-                self.request_redraw();
-            }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.set_scale_factor(scale_factor);
-                }
-                // Миникарта (T13): буфер растеризован в физических px —
-                // пересоберётся на ближайшем кадре (размер в сигнатуре)
-                self.request_redraw();
-            }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
-            }
-            WindowEvent::KeyboardInput { event, .. } => self.on_key(&event),
-            WindowEvent::MouseInput { state, button, .. } => match button {
-                MouseButton::Middle => self.middle_pressed = state == ElementState::Pressed,
-                MouseButton::Left => self.on_left_button(state),
-                MouseButton::Right => self.on_right_button(state, event_loop),
-                _ => {}
-            },
-            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
-            WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
-            WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
-            WindowEvent::RedrawRequested => {
-                // Замер интервала между кадрами для HUD (T5)
-                let now = Instant::now();
-                if let Some(prev) = self.last_frame {
-                    self.frame_meter.push(now - prev);
-                }
-                self.last_frame = Some(now);
-                // Полёт камеры к результату поиска (T14): семпл ease-out —
-                // пока полёт активен, about_to_wait держит кадры идущими
-                if let Some((flight, start)) = self.flight.take() {
-                    let elapsed = start.elapsed().as_millis() as u32;
-                    let (center, zoom) = flight.sample(elapsed);
-                    self.camera.set_center(center);
-                    self.camera.set_zoom(zoom);
-                    if !flight.is_finished(elapsed) {
-                        self.flight = Some((flight, start));
-                    }
-                }
-                // Миникарта (T13): пересборка по dirty-условиям ДО отрисовки
-                // (текстура должна быть готова к проходу кадра)
-                self.update_minimap();
-                let hud = self.hud_text();
-                // Оверлей контекстного меню (T7): квады + подписи пунктов
-                // Т9 добавляет в конец призраков дропа — mutable
-                let (mut overlay_instances, mut overlay_labels, mut overlay_label_pos) =
-                    self.menu_overlay();
-                // Ширины подписей оверлея: меню — от констант, призраки дропа —
-                // по ширине карточки-призрака (Т9)
-                let mut overlay_widths: Vec<f32> = overlay_labels
-                    .iter()
-                    .map(|_| MENU_WIDTH - MENU_LABEL_X - MENU_PADDING)
-                    .collect();
-                // Панель настроек (screen-space): кнопка + строки переключателей
-                let (mut screen_instances, mut owned_texts) = self.settings_overlay();
-                // Панель поиска (T14): квады/тексты поверх всего канваса
-                {
-                    let (search_instances, search_texts) = self.search_overlay();
-                    screen_instances.extend(search_instances);
-                    owned_texts.extend(search_texts);
-                }
-                // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
-                // файла; screen-space, константный размер при любом зуме
-                if let Some(file) = self.hovered.and_then(|index| {
-                    self.scene.canvas.nodes.get(index).and_then(|node| {
-                        (node.broken_link == Some(true))
-                            .then(|| node.file.clone())
-                            .flatten()
-                    })
-                }) {
-                    // Ограничиваем правым краём окна, чтобы длинный путь
-                    // не вылез за экран (width — только клип-бounds)
-                    let viewport = self.viewport_logical();
-                    let origin_x =
-                        (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                    owned_texts.push(OwnedScreenText {
-                        text: format!("Файл недоступен: {file}"),
-                        origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                        width: TOOLTIP_WIDTH,
-                        font_size: 13.0,
-                        color: Color::rgb(0xd4, 0xd4, 0xd4),
-                        align: TextAlign::Left,
-                    });
-                }
-                let screen_texts: Vec<ScreenText> = owned_texts
-                    .iter()
-                    .map(|t| ScreenText {
-                        text: &t.text,
-                        origin: t.origin,
-                        width: t.width,
-                        font_size: t.font_size,
-                        color: t.color,
-                        align: t.align,
-                    })
-                    .collect();
-                // Призраки зоны дропа (T9): рамка bbox сетки + квады-призраки.
-                // Кладём В КОНЕЦ оверлея: порядок инстансов = порядок рисования,
-                // depth-теста нет — призраки поверх всего
-                if let Some(preview) = &self.drop_preview {
-                    let positions = canvas_app::ui::drop_grid(preview.origin, preview.plan.len());
-                    if let Some(frame) = canvas_render::cards::drop_zone_frame(
-                        &positions,
-                        [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
-                        canvas_app::ui::DROP_GRID_GAP,
-                    ) {
-                        overlay_instances.push(frame);
-                    }
-                    overlay_instances.extend(canvas_render::cards::drop_ghosts(
-                        &positions,
-                        [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
-                        canvas_app::ui::DROP_PREVIEW_MAX,
-                    ));
-                    // Подписи призраков (Т9): во время перетаскивания имена
-                    // файлов/первая строка заметки видны до самого дропа —
-                    // раньше призраки были пустыми рамками
-                    let pad = canvas_app::ui::DROP_GHOST_LABEL_PAD;
-                    for (ins, pos) in preview.plan.iter().zip(&positions) {
-                        overlay_labels.push(canvas_app::ui::drop_ghost_label(&ins.kind));
-                        overlay_label_pos.push([pos[0] + pad, pos[1] + 6.0]);
-                        overlay_widths.push(canvas_app::ui::DROP_CARD_W - pad * 2.0);
-                    }
-                }
-                let overlay_texts: Vec<OverlayText> = overlay_labels
-                    .iter()
-                    .zip(&overlay_label_pos)
-                    .zip(&overlay_widths)
-                    .map(|((label, pos), width)| OverlayText {
-                        text: label,
-                        origin: *pos,
-                        width: *width,
-                    })
-                    .collect();
-                // Пульс подсветки ноды-результата (T14): world-квад с рамкой,
-                // затухающей по pulse_alpha; за вырожденный — сброс (рамка
-                // оверлейная — border.a, заливка прозрачна после фикса
-                // cards.wgsl)
-                if let Some((node, start)) = self.pulse {
-                    let alpha = pulse_alpha(start.elapsed().as_millis() as u32);
-                    if alpha <= 0.0 {
-                        self.pulse = None;
-                    } else if let Some(target) = self.scene.canvas.nodes.get(node) {
-                        let grow = (1.0 - alpha) * 8.0;
-                        overlay_instances.push(CardInstance {
-                            pos: [target.x - grow, target.y - grow],
-                            size: [target.width + grow * 2.0, target.height + grow * 2.0],
-                            fill: [0.0; 4],
-                            border: [1.0, 0.85, 0.35, alpha],
-                            params: [6.0, 0.0, 0.0, 1.0],
-                        });
-                    }
-                }
-                // Рамка выделения (CR-001): полупрозрачный world-квад с
-                // акцентной рамкой (стиль зоны дропа T9), без тени
-                if let Some((start, current, _)) = self.select_rect {
-                    let rect = rubber_band_rect(start, current);
-                    overlay_instances.push(CardInstance {
-                        pos: [rect[0], rect[1]],
-                        size: [rect[2], rect[3]],
-                        fill: canvas_app::ui::SELECT_RECT_FILL,
-                        border: canvas_app::ui::SELECT_RECT_BORDER,
-                        params: [4.0, 0.0, 0.0, 1.0],
-                    });
-                }
-                let overlay = FrameOverlay {
-                    instances: &overlay_instances,
-                    texts: &overlay_texts,
-                    screen_instances: &screen_instances,
-                    screen_texts: &screen_texts,
-                };
-                // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
-                // курсору; исходная линия перепривязываемой связи скрыта
-                let edge_draft = self.edge_drag.as_ref().and_then(|drag| {
-                    let (port, side) = drag.draft_origin(&self.scene.canvas)?;
-                    Some((port, side, self.cursor_world()))
-                });
-                let hidden_edge = match self.edge_drag.as_ref() {
-                    Some(EdgeDrag::Rebind { edge_index, .. }) => Some(*edge_index),
-                    _ => None,
-                };
-                // T23 (brainstorm-focus): пересчёт анимации и окрестности
-                // семени ДО сборки сцены — FocusView заимствует поля App
-                self.update_focus_state();
-                let focus = FocusView {
-                    nodes: &self.focus_nodes,
-                    edges: &self.focus_edges,
-                    dim: self.focus_dim,
-                    pulse: self
-                        .focus_pulse
-                        .as_ref()
-                        .map(|(_, start)| focus_pulse(start.elapsed().as_millis() as u32))
-                        .unwrap_or(0.0),
-                };
-                if let Some(renderer) = self.renderer.as_mut() {
-                    let scene = SceneView {
-                        canvas: &self.scene.canvas,
-                        spatial: &self.scene.spatial,
-                        selected: self.scene.selected,
-                        selected_nodes: &self.scene.selected_nodes,
-                        hovered: self.hovered,
-                        edge_draft,
-                        hidden_edge,
-                        edges_avoid: self.settings.edges_avoid_nodes,
-                        port_zone_px: self.settings.port_zone_px,
-                        focus,
-                    };
-                    match renderer.render(
-                        &self.camera,
-                        &scene,
-                        hud.as_deref(),
-                        self.editing.as_mut(),
-                        &overlay,
-                    ) {
-                        Ok(stats) => self.last_stats = stats,
-                        Err(err) => {
-                            tracing::error!(%err, "ошибка рендера, завершение");
-                            event_loop.exit();
-                        }
-                    }
-                }
-                // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
-                // уже установилась; ответы придут через AppEvent::ThumbsReady
-                self.order_thumbnails();
-            }
-            _ => {}
-        }
-    }
-
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
-        match event {
-            AppEvent::ThumbsReady => {
-                // Забрать готовые тамбнейлы из канала и загрузить в атлас;
-                // ошибки — в негативный кэш (не перезаказывать каждый кадр)
-                let mut arrived = 0usize;
-                for (node, result) in self.thumbs.drain() {
-                    match result {
-                        Some(thumb) => {
-                            if let Some(renderer) = self.renderer.as_mut() {
-                                renderer.set_thumbnail(node, &thumb);
-                                arrived += 1;
-                            }
-                        }
-                        None => {
-                            self.thumbs_failed.insert(node);
-                        }
-                    }
-                }
-                if arrived > 0 {
-                    self.request_redraw();
-                }
-            }
-            AppEvent::Drag(event) => self.on_drag_event(event),
-            AppEvent::FileEvents(events) => self.on_file_events(events),
-            AppEvent::Search(event) => self.on_search_event(event),
-            #[cfg(windows)]
-            AppEvent::Desktop(event) => self.on_desktop_event(event),
-            #[cfg(windows)]
-            AppEvent::Shell(event) => self.on_shell_event(event),
-            #[cfg(windows)]
-            AppEvent::McpWake => self.on_mcp_wake(),
-        }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.scene.autosave_if_due();
-        // Debounce запроса поиска (T14): 200 мс покоя после правки — отправка.
-        // Панель/анимации держат цикл красным через request_redraw ниже,
-        // иначе ControlFlow::Wait уснул бы до следующего события
-        if let Some((query, edited_at)) = self.search_pending.take() {
-            if edited_at.elapsed() < SEARCH_DEBOUNCE {
-                self.search_pending = Some((query, edited_at));
-            } else {
-                self.search_service.command(SearchCommand::Query {
-                    query,
-                    limit: SEARCH_RESULTS_LIMIT,
-                });
-            }
-        }
-        // Полёт камеры и пульс (T14) + фокус (T23): непрерывные кадры
-        // до завершения анимаций
-        if self.search_pending.is_some()
-            || self.flight.is_some()
-            || self.pulse.is_some()
-            || self.focus_animating()
-        {
-            self.request_redraw();
         }
     }
 }
@@ -3731,7 +3350,18 @@ impl App {
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
-                // Открытое меню (T7): клик по пункту — применить, мимо — закрыть
+                // Открытое меню (T7): клик по пункту — применить, мимо — закрыть.
+                // M5: открытое подменю виджетов проверяется ПЕРВЫМ — его
+                // колонка правее базового меню (клик там не попадает в base)
+                if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
+                    if let Some(i) = submenu_item_at(submenu, world) {
+                        let widget_id = submenu.entries[i].widget_id.clone();
+                        self.menu = None;
+                        self.insert_widget_from_menu(&widget_id);
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 if let Some(menu) = self.menu.take() {
                     match menu.target {
                         MenuTarget::Node(node_index) => {
@@ -3810,6 +3440,29 @@ impl App {
                                     // (панель «видно/не видно», галочка ✓)
                                     CanvasMenuItem::Hotkeys => {
                                         self.hotkeys_open = !self.hotkeys_open;
+                                    }
+                                    // M5 (T20-F): открыть подменю пакетов
+                                    // (план П2); пустой список — честная
+                                    // строка «(нет установленных)»
+                                    CanvasMenuItem::Widgets => {
+                                        let submenu_origin = submenu_origin_next_to(menu.origin);
+                                        let entries = self
+                                            .widgets
+                                            .menu_entries()
+                                            .into_iter()
+                                            .map(|(widget_id, label)| SubmenuEntry {
+                                                widget_id,
+                                                label,
+                                            })
+                                            .collect();
+                                        self.menu = Some(ContextMenu {
+                                            target: MenuTarget::Canvas,
+                                            origin: menu.origin,
+                                            submenu: Some(Submenu {
+                                                origin: submenu_origin,
+                                                entries,
+                                            }),
+                                        });
                                     }
                                 }
                             }
@@ -4095,6 +3748,7 @@ impl App {
                 self.menu = Some(ContextMenu {
                     target: MenuTarget::Node(index),
                     origin: world,
+                    submenu: None,
                 });
             }
             // Промах по нодам: меню связи (стиль/толщина/цвет линии);
@@ -4108,6 +3762,7 @@ impl App {
                         self.menu = Some(ContextMenu {
                             target: MenuTarget::Edge(edge_index),
                             origin: world,
+                            submenu: None,
                         });
                     }
                     None => {
@@ -4135,6 +3790,7 @@ impl App {
                                 _ => Some(ContextMenu {
                                     target: MenuTarget::Canvas,
                                     origin: world,
+                                    submenu: None,
                                 }),
                             };
                         }
@@ -4385,6 +4041,9 @@ impl App {
 struct CliArgs {
     /// Нагрузочный режим (T5): сцена из N случайных нод вместо загрузки файла.
     stress: Option<usize>,
+    /// M5 (T20): добавить N виджет-нод (встроенные часы) в открытую сцену —
+    /// нагрузочная приёмка «10 виджетов не роняют fps» (SPEC §10 M5).
+    stress_widgets: Option<usize>,
     /// Режим десктопа (T15, SPEC §7.4): встройка канваса в WorkerW за
     /// иконками рабочего стола. На не-Windows — warn и оконный режим.
     desktop: bool,
@@ -4394,6 +4053,7 @@ struct CliArgs {
 /// Разбор аргументов вручную — две опции не оправдывают зависимость от clap.
 fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     let mut stress = None;
+    let mut stress_widgets = None;
     let mut desktop = false;
     let mut path = None;
     let mut iter = args.iter();
@@ -4413,13 +4073,29 @@ fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
                     .parse::<usize>()
                     .map_err(|_| anyhow::anyhow!("--stress: не число: {value}"))?,
             );
+        } else if arg == "--stress-widgets" {
+            let value = iter
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("--stress-widgets требует число виджетов"))?;
+            stress_widgets = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("--stress-widgets: не число: {value}"))?,
+            );
+        } else if let Some(value) = arg.strip_prefix("--stress-widgets=") {
+            stress_widgets = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("--stress-widgets: не число: {value}"))?,
+            );
         } else if arg == "--desktop" {
             // Булев флаг: повтор допустим (идемпотентен)
             desktop = true;
         } else if arg == "--help" || arg == "-h" {
             println!(
-                "Использование: canvasdesk [mcp [--no-spawn]] [--stress N] [--desktop] [путь к .canvas]\n\
-                 \x20 mcp — режим MCP-посредника (stdio; автостарт сервиса, --no-spawn — отключить)"
+                "Использование: canvasdesk [mcp [--no-spawn]] [--stress N] [--stress-widgets N] [--desktop] [путь к .canvas]\n\
+                 \x20 mcp — режим MCP-посредника (stdio; автостарт сервиса, --no-spawn — отключить)\n\
+                 \x20 --stress-widgets N — добавить N виджет-нод (нагрузочная приёмка M5)"
             );
             std::process::exit(0);
         } else if path.is_none() {
@@ -4436,6 +4112,7 @@ fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     };
     Ok(CliArgs {
         stress,
+        stress_widgets,
         desktop,
         path: path.unwrap_or_else(|| PathBuf::from(default_path)),
     })
@@ -4473,6 +4150,39 @@ const STRESS_WORDS: [&str; 8] = [
 /// Нагрузочная сцена (T5): N текстовых нод со случайными rect/цветом/заголовком,
 /// раскиданных по области, растущей как sqrt(N) — плотность стабильна.
 /// Детерминирована: один и тот же N даёт одну и ту же сцену.
+/// M5 (T20-F): добавить N виджет-нод (встроенные часы) детерминированной
+/// сеткой — нагрузочная приёмка SPEC §10 («10 виджетов не роняют fps»).
+/// Id — `widget-N` по порядку; возвращается число добавленных.
+fn add_stress_widgets(canvas: &mut Canvas, n: usize) -> usize {
+    let mut existing = 0u32;
+    for node in &canvas.nodes {
+        if let Some(tail) = node.id.strip_prefix("widget-") {
+            if let Ok(k) = tail.parse::<u32>() {
+                existing = existing.max(k);
+            }
+        }
+    }
+    let cols = 5;
+    for i in 0..n {
+        let col = (i % cols) as f32;
+        let row = (i / cols) as f32;
+        let ext = canvas_core::CanvasdeskExt {
+            widget_id: "com.canvasdesk.clock".to_owned(),
+            props: serde_json::Map::new(),
+        };
+        canvas.nodes.push(Node::widget(
+            format!("widget-{}", existing + i as u32 + 1),
+            ext,
+            "Clock",
+            400.0 + col * 360.0,
+            400.0 + row * 260.0,
+            320.0,
+            200.0,
+        ));
+    }
+    n
+}
+
 fn stress_canvas(n: usize) -> Canvas {
     let mut canvas = Canvas::default();
     let mut rng = Xorshift(0x9E37_79B9);
@@ -4558,6 +4268,13 @@ fn main() -> anyhow::Result<()> {
         }
         None => SceneState::load_or_seed(args.path),
     };
+    // M5: --stress-widgets N — детерминированная сетка виджет-нод (часы)
+    let mut scene = scene;
+    if let Some(k) = args.stress_widgets {
+        let added = add_stress_widgets(&mut scene.canvas, k);
+        tracing::info!(widgets = added, "нагрузочные виджеты добавлены");
+        scene.mark_dirty();
+    }
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     // Пул тамбнейлов (T6): провайдер Windows + SQLite-кэш; worker'ы будят
     // event loop через proxy — иначе при ControlFlow::Wait результаты
@@ -4646,6 +4363,21 @@ fn main() -> anyhow::Result<()> {
             search_service,
             args.desktop,
         );
+        // M5 (T20-F): реестр виджетов (материализация встроенных + скан)
+        app.init_widgets();
+        // M5: тик-поток host'а (1 c) — будит цикл для refresh-снапшотов
+        // (LOD-расписание считает менеджер по времени, тик — только побудка;
+        // паттерн — сервисы T15/T16, sender через EventLoopProxy)
+        {
+            let proxy = proxy.clone();
+            std::thread::Builder::new()
+                .name("widget-tick".to_owned())
+                .spawn(move || loop {
+                    std::thread::sleep(Duration::from_secs(1));
+                    let _ = proxy.send_event(AppEvent::Widget(canvas_widgets::WidgetEvent::Tick));
+                })
+                .ok();
+        }
         // Shell-монитор десктопа (T15): поток WinEventHook + DPI-поллинг;
         // слежка (Watch) устанавливается в resumed() после attach.
         // Спавним при --desktop до attach — событие WorkerWDestroyed может
@@ -4705,6 +4437,576 @@ fn main() -> anyhow::Result<()> {
         app
     })?;
     Ok(())
+}
+
+impl App {
+    /// M5 (T20-F): стартовая инициализация виджетов (реестр + встроенные).
+    /// Отдельно от App::new — после настройки трейсинга в main().
+    fn init_widgets(&mut self) {
+        self.widgets.set_theme(self.settings.theme == Theme::Dark);
+        self.widgets.init_registry();
+    }
+
+    /// M5: события host'а виджетов (из user_event).
+    fn on_widget_event(&mut self, event: canvas_widgets::WidgetEvent) {
+        self.widgets.on_event(&event);
+        match event {
+            canvas_widgets::WidgetEvent::SnapshotReady { node_id, snapshot } => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_widget_snapshot(
+                        &node_id,
+                        snapshot.width,
+                        snapshot.height,
+                        &snapshot.rgba,
+                    );
+                }
+                self.request_redraw();
+            }
+            canvas_widgets::WidgetEvent::Message { node_id, message } => {
+                self.on_widget_message(&node_id, message);
+            }
+            canvas_widgets::WidgetEvent::EnvironmentReady { ok } => {
+                tracing::info!(ok, "виджеты: {}", self.widgets.runtime_status());
+                self.request_redraw();
+            }
+            canvas_widgets::WidgetEvent::ControllerReady { .. } => {
+                self.request_redraw();
+            }
+            canvas_widgets::WidgetEvent::Tick => {
+                // refresh-расписание вычисляется в update_frame по времени;
+                // тик только будит цикл
+            }
+        }
+    }
+
+    /// M5: сообщения моста. T20 — рукопожатие Ready→init; полный
+    /// enforcement (permissions/undo/фс) — волна T21.
+    fn on_widget_message(&mut self, node_id: &str, message: canvas_widgets::WidgetToHost) {
+        match message {
+            canvas_widgets::WidgetToHost::Ready => {
+                let init = self
+                    .scene
+                    .canvas
+                    .node(node_id)
+                    .and_then(|node| self.widgets.init_message(node));
+                if let Some(init) = init {
+                    self.widgets.post_message(node_id, &init);
+                }
+            }
+            other => {
+                tracing::info!(node_id, msg = ?other, "bridge-сообщение (enforcement — T21)");
+            }
+        }
+    }
+
+    /// M5: установка виджет-ноды из подменю (центр viewport, defaultSize).
+    fn insert_widget_from_menu(&mut self, widget_id: &str) {
+        let center = self.viewport_center_world();
+        let id = self.widgets.next_node_id(&self.scene.canvas);
+        let Some(node) = self.widgets.build_widget_node(widget_id, id, center) else {
+            tracing::warn!(widget_id, "пакет виджета не найден");
+            return;
+        };
+        self.insert_nodes(vec![node], true);
+    }
+
+    /// M5: rect открытого меню (airspace П7): по цели — количество пунктов.
+    fn menu_open_rect(&self) -> Option<[f32; 4]> {
+        let menu = self.menu.as_ref()?;
+        let items = match menu.target {
+            MenuTarget::Node(_) => NODE_MENU_ITEMS.len(),
+            MenuTarget::Edge(_) => EDGE_MENU_ITEMS.len(),
+            MenuTarget::Canvas => CANVAS_MENU_ITEMS.len(),
+        };
+        Some(menu_rect_for(menu.origin, items))
+    }
+}
+
+impl ApplicationHandler<AppEvent> for App {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                // Штатный выход (T17): форс-сейв (SPEC §9 — не ждать
+                // debounce) + восстановление иконок (R5) — единая точка
+                // с пунктом меню «Выход»
+                self.shutdown(event_loop);
+            }
+            WindowEvent::Resized(size) => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size.width, size.height);
+                }
+                self.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_scale_factor(scale_factor);
+                }
+                // Миникарта (T13): буфер растеризован в физических px —
+                // пересоберётся на ближайшем кадре (размер в сигнатуре)
+                self.request_redraw();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
+            WindowEvent::KeyboardInput { event, .. } => self.on_key(&event),
+            WindowEvent::MouseInput { state, button, .. } => match button {
+                MouseButton::Middle => self.middle_pressed = state == ElementState::Pressed,
+                MouseButton::Left => self.on_left_button(state),
+                MouseButton::Right => self.on_right_button(state, event_loop),
+                _ => {}
+            },
+            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
+            WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
+            WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
+            WindowEvent::RedrawRequested => {
+                // Замер интервала между кадрами для HUD (T5)
+                let now = Instant::now();
+                if let Some(prev) = self.last_frame {
+                    self.frame_meter.push(now - prev);
+                }
+                self.last_frame = Some(now);
+                // Полёт камеры к результату поиска (T14): семпл ease-out —
+                // пока полёт активен, about_to_wait держит кадры идущими
+                if let Some((flight, start)) = self.flight.take() {
+                    let elapsed = start.elapsed().as_millis() as u32;
+                    let (center, zoom) = flight.sample(elapsed);
+                    self.camera.set_center(center);
+                    self.camera.set_zoom(zoom);
+                    if !flight.is_finished(elapsed) {
+                        self.flight = Some((flight, start));
+                    }
+                }
+                // Миникарта (T13): пересборка по dirty-условиям ДО отрисовки
+                // (текстура должна быть готова к проходу кадра)
+                self.update_minimap();
+                let hud = self.hud_text();
+                // Оверлей контекстного меню (T7): квады + подписи пунктов
+                // Т9 добавляет в конец призраков дропа — mutable
+                let (mut overlay_instances, mut overlay_labels, mut overlay_label_pos) =
+                    self.menu_overlay();
+                // Ширины подписей оверлея: меню — от констант, призраки дропа —
+                // по ширине карточки-призрака (Т9)
+                let mut overlay_widths: Vec<f32> = overlay_labels
+                    .iter()
+                    .map(|_| MENU_WIDTH - MENU_LABEL_X - MENU_PADDING)
+                    .collect();
+                // Панель настроек (screen-space): кнопка + строки переключателей
+                let (mut screen_instances, mut owned_texts) = self.settings_overlay();
+                // Панель поиска (T14): квады/тексты поверх всего канваса
+                {
+                    let (search_instances, search_texts) = self.search_overlay();
+                    screen_instances.extend(search_instances);
+                    owned_texts.extend(search_texts);
+                }
+                // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
+                // файла; screen-space, константный размер при любом зуме
+                if let Some(file) = self.hovered.and_then(|index| {
+                    self.scene.canvas.nodes.get(index).and_then(|node| {
+                        (node.broken_link == Some(true))
+                            .then(|| node.file.clone())
+                            .flatten()
+                    })
+                }) {
+                    // Ограничиваем правым краём окна, чтобы длинный путь
+                    // не вылез за экран (width — только клип-бounds)
+                    let viewport = self.viewport_logical();
+                    let origin_x =
+                        (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                    owned_texts.push(OwnedScreenText {
+                        text: format!("Файл недоступен: {file}"),
+                        origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                        width: TOOLTIP_WIDTH,
+                        font_size: 13.0,
+                        color: Color::rgb(0xd4, 0xd4, 0xd4),
+                        align: TextAlign::Left,
+                    });
+                }
+                let screen_texts: Vec<ScreenText> = owned_texts
+                    .iter()
+                    .map(|t| ScreenText {
+                        text: &t.text,
+                        origin: t.origin,
+                        width: t.width,
+                        font_size: t.font_size,
+                        color: t.color,
+                        align: t.align,
+                    })
+                    .collect();
+                // Призраки зоны дропа (T9): рамка bbox сетки + квады-призраки.
+                // Кладём В КОНЕЦ оверлея: порядок инстансов = порядок рисования,
+                // depth-теста нет — призраки поверх всего
+                if let Some(preview) = &self.drop_preview {
+                    let positions = canvas_app::ui::drop_grid(preview.origin, preview.plan.len());
+                    if let Some(frame) = canvas_render::cards::drop_zone_frame(
+                        &positions,
+                        [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
+                        canvas_app::ui::DROP_GRID_GAP,
+                    ) {
+                        overlay_instances.push(frame);
+                    }
+                    overlay_instances.extend(canvas_render::cards::drop_ghosts(
+                        &positions,
+                        [canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H],
+                        canvas_app::ui::DROP_PREVIEW_MAX,
+                    ));
+                    // Подписи призраков (Т9): во время перетаскивания имена
+                    // файлов/первая строка заметки видны до самого дропа —
+                    // раньше призраки были пустыми рамками
+                    let pad = canvas_app::ui::DROP_GHOST_LABEL_PAD;
+                    for (ins, pos) in preview.plan.iter().zip(&positions) {
+                        overlay_labels.push(canvas_app::ui::drop_ghost_label(&ins.kind));
+                        overlay_label_pos.push([pos[0] + pad, pos[1] + 6.0]);
+                        overlay_widths.push(canvas_app::ui::DROP_CARD_W - pad * 2.0);
+                    }
+                }
+                let overlay_texts: Vec<OverlayText> = overlay_labels
+                    .iter()
+                    .zip(&overlay_label_pos)
+                    .zip(&overlay_widths)
+                    .map(|((label, pos), width)| OverlayText {
+                        text: label,
+                        origin: *pos,
+                        width: *width,
+                    })
+                    .collect();
+                // Пульс подсветки ноды-результата (T14): world-квад с рамкой,
+                // затухающей по pulse_alpha; за вырожденный — сброс (рамка
+                // оверлейная — border.a, заливка прозрачна после фикса
+                // cards.wgsl)
+                if let Some((node, start)) = self.pulse {
+                    let alpha = pulse_alpha(start.elapsed().as_millis() as u32);
+                    if alpha <= 0.0 {
+                        self.pulse = None;
+                    } else if let Some(target) = self.scene.canvas.nodes.get(node) {
+                        let grow = (1.0 - alpha) * 8.0;
+                        overlay_instances.push(CardInstance {
+                            pos: [target.x - grow, target.y - grow],
+                            size: [target.width + grow * 2.0, target.height + grow * 2.0],
+                            fill: [0.0; 4],
+                            border: [1.0, 0.85, 0.35, alpha],
+                            params: [6.0, 0.0, 0.0, 1.0],
+                        });
+                    }
+                }
+                // Рамка выделения (CR-001): полупрозрачный world-квад с
+                // акцентной рамкой (стиль зоны дропа T9), без тени
+                if let Some((start, current, _)) = self.select_rect {
+                    let rect = rubber_band_rect(start, current);
+                    overlay_instances.push(CardInstance {
+                        pos: [rect[0], rect[1]],
+                        size: [rect[2], rect[3]],
+                        fill: canvas_app::ui::SELECT_RECT_FILL,
+                        border: canvas_app::ui::SELECT_RECT_BORDER,
+                        params: [4.0, 0.0, 0.0, 1.0],
+                    });
+                }
+                // M5 (T20-F): airspace-прямоугольники оверлеев (план П7) —
+                // до LOD-кадра виджетов; большие панели (поиск/настройки)
+                // упрощённо гасят все live (транзиентно), точные rect'ы —
+                // меню/подменю/хоткеи/миникарта
+                let mut widget_airspace: Vec<[f32; 4]> = Vec::new();
+                if let Some(rect) = self.menu_open_rect() {
+                    widget_airspace.push(rect);
+                    if let Some(menu) = self.menu.as_ref() {
+                        if let Some(submenu) = &menu.submenu {
+                            widget_airspace.push(submenu_rect(submenu));
+                        }
+                    }
+                }
+                if self.hotkeys_open {
+                    widget_airspace.push(hotkeys_panel_rect(self.viewport_logical()));
+                }
+                if let Some(renderer) = self.renderer.as_ref() {
+                    if let Some(rect) = renderer.minimap_rect_logical() {
+                        widget_airspace.push(rect);
+                    }
+                }
+                let widget_overlay_active = self.select_rect.is_some()
+                    || self.edge_drag.is_some()
+                    || self.drop_preview.is_some()
+                    || self.settings_open
+                    || self.search.is_open();
+                let widget_frame = self.widgets.update_frame(
+                    &self.scene.canvas,
+                    &self.camera,
+                    self.viewport_logical(),
+                    self.scale_factor(),
+                    &widget_airspace,
+                    widget_overlay_active,
+                );
+                // Owned-квады → ссылки для FrameOverlay (локально: заём
+                // живёт до конца кадра, конфликтов с &mut self нет)
+                let widget_quad_refs: Vec<canvas_render::WidgetQuad> = widget_frame
+                    .quads
+                    .iter()
+                    .map(|q| canvas_render::WidgetQuad {
+                        node_id: q.node_id.as_str(),
+                        pos: q.pos,
+                        size: q.size,
+                    })
+                    .collect();
+                let overlay = FrameOverlay {
+                    instances: &overlay_instances,
+                    texts: &overlay_texts,
+                    screen_instances: &screen_instances,
+                    screen_texts: &screen_texts,
+                    widget_quads: &widget_quad_refs,
+                };
+                // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
+                // курсору; исходная линия перепривязываемой связи скрыта
+                let edge_draft = self.edge_drag.as_ref().and_then(|drag| {
+                    let (port, side) = drag.draft_origin(&self.scene.canvas)?;
+                    Some((port, side, self.cursor_world()))
+                });
+                let hidden_edge = match self.edge_drag.as_ref() {
+                    Some(EdgeDrag::Rebind { edge_index, .. }) => Some(*edge_index),
+                    _ => None,
+                };
+                // T23 (brainstorm-focus): пересчёт анимации и окрестности
+                // семени ДО сборки сцены — FocusView заимствует поля App
+                self.update_focus_state();
+                let focus = FocusView {
+                    nodes: &self.focus_nodes,
+                    edges: &self.focus_edges,
+                    dim: self.focus_dim,
+                    pulse: self
+                        .focus_pulse
+                        .as_ref()
+                        .map(|(_, start)| focus_pulse(start.elapsed().as_millis() as u32))
+                        .unwrap_or(0.0),
+                };
+                if let Some(renderer) = self.renderer.as_mut() {
+                    let scene = SceneView {
+                        canvas: &self.scene.canvas,
+                        spatial: &self.scene.spatial,
+                        selected: self.scene.selected,
+                        selected_nodes: &self.scene.selected_nodes,
+                        hovered: self.hovered,
+                        edge_draft,
+                        hidden_edge,
+                        edges_avoid: self.settings.edges_avoid_nodes,
+                        port_zone_px: self.settings.port_zone_px,
+                        focus,
+                    };
+                    match renderer.render(
+                        &self.camera,
+                        &scene,
+                        hud.as_deref(),
+                        self.editing.as_mut(),
+                        &overlay,
+                    ) {
+                        Ok(stats) => self.last_stats = stats,
+                        Err(err) => {
+                            tracing::error!(%err, "ошибка рендера, завершение");
+                            event_loop.exit();
+                        }
+                    }
+                }
+                // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
+                // уже установилась; ответы придут через AppEvent::ThumbsReady
+                self.order_thumbnails();
+            }
+            _ => {}
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::ThumbsReady => {
+                // Забрать готовые тамбнейлы из канала и загрузить в атлас;
+                // ошибки — в негативный кэш (не перезаказывать каждый кадр)
+                let mut arrived = 0usize;
+                for (node, result) in self.thumbs.drain() {
+                    match result {
+                        Some(thumb) => {
+                            if let Some(renderer) = self.renderer.as_mut() {
+                                renderer.set_thumbnail(node, &thumb);
+                                arrived += 1;
+                            }
+                        }
+                        None => {
+                            self.thumbs_failed.insert(node);
+                        }
+                    }
+                }
+                if arrived > 0 {
+                    self.request_redraw();
+                }
+            }
+            AppEvent::Drag(event) => self.on_drag_event(event),
+            AppEvent::FileEvents(events) => self.on_file_events(events),
+            AppEvent::Search(event) => self.on_search_event(event),
+            #[cfg(windows)]
+            AppEvent::Desktop(event) => self.on_desktop_event(event),
+            #[cfg(windows)]
+            AppEvent::Shell(event) => self.on_shell_event(event),
+            #[cfg(windows)]
+            AppEvent::McpWake => self.on_mcp_wake(),
+            AppEvent::Widget(event) => self.on_widget_event(event),
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.scene.autosave_if_due();
+        // Debounce запроса поиска (T14): 200 мс покоя после правки — отправка.
+        // Панель/анимации держат цикл красным через request_redraw ниже,
+        // иначе ControlFlow::Wait уснул бы до следующего события
+        if let Some((query, edited_at)) = self.search_pending.take() {
+            if edited_at.elapsed() < SEARCH_DEBOUNCE {
+                self.search_pending = Some((query, edited_at));
+            } else {
+                self.search_service.command(SearchCommand::Query {
+                    query,
+                    limit: SEARCH_RESULTS_LIMIT,
+                });
+            }
+        }
+        // Полёт камеры и пульс (T14) + фокус (T23): непрерывные кадры
+        // до завершения анимаций
+        if self.search_pending.is_some()
+            || self.flight.is_some()
+            || self.pulse.is_some()
+            || self.focus_animating()
+        {
+            self.request_redraw();
+        }
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes().with_title("CanvasDesk");
+        // Режим десктопа (T15): borderless-окно на весь виртуальный экран
+        // без активации при создании (WS_EX_NOACTIVATE до первого клика —
+        // TASKS T15; winit with_active(false)). Это же окно — фолбэк-режим,
+        // если встройка не удастся (R14: не пересоздаём после winit-инициализации).
+        // После attach winit-API окна НЕ трогаем — стили перезапишет
+        // библиотека (R3-урок tao/Seelen); размеры — только SetWindowPos.
+        let attrs = if self.desktop_mode {
+            attrs
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_active(false)
+        } else {
+            attrs
+        };
+        // winit сам ставит свой IDropTarget (RegisterDragDrop с assert S_OK) —
+        // отключаем и ставим свой в canvas-shell (план T9 §3)
+        #[cfg(windows)]
+        let attrs = attrs.with_drag_and_drop(false);
+        // Точная геометрия десктоп-окна (физ. px) — только на Windows:
+        // виртуальный экран из EnumDisplayMonitors; до attach — стартовый
+        // размер по экрану (потом attach растянет SetWindowPos'ом).
+        #[cfg(windows)]
+        let attrs = if self.desktop_mode {
+            let screen = canvas_shell::desktop::hierarchy::virtual_screen_rect().unwrap_or(
+                canvas_shell::desktop::ScreenRect::from_ltrb(0, 0, 1280, 720),
+            );
+            attrs
+                .with_position(winit::dpi::PhysicalPosition::new(screen.left, screen.top))
+                .with_inner_size(winit::dpi::PhysicalSize::new(
+                    screen.width().max(1) as u32,
+                    screen.height().max(1) as u32,
+                ))
+        } else {
+            attrs
+        };
+        let window = match event_loop.create_window(attrs) {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                tracing::error!(%err, "не удалось создать окно");
+                event_loop.exit();
+                return;
+            }
+        };
+        self.window = Some(window.clone());
+        // Регистрация своего IDropTarget (T9) и встройка в десктоп (T15) — ДО
+        // создания GPU-surface: так attach (SetParent/scrub) не конфликтует
+        // с живым swapchain. Сама по себе невидимость встроенного окна
+        // порядком не лечилась (проверено экспериментом): Vulkan-swapchain
+        // не презентует в ребёнка Progman вне зависимости от момента
+        // создания surface — лечится выбором DX12 для desktop-режима
+        // (Renderer::new, prefer_dx12). HWND достаём через raw-window-handle
+        // (winit 0.30 публично Win32-HWND не отдаёт); ошибка drag-drop —
+        // warn и живём без него (graceful degradation).
+        #[cfg(windows)]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            // HWND через raw-window-handle: winit 0.30 публично
+            // Win32-HWND не отдаёт (внутренний windows-sys); окно
+            // создано на этом потоке, handle доступен
+            match window.window_handle() {
+                Ok(handle) => match handle.as_raw() {
+                    RawWindowHandle::Win32(win32) => {
+                        match canvas_shell::dragdrop::install(
+                            win32.hwnd.get(),
+                            self.drag_sender.clone(),
+                        ) {
+                            Ok(watcher) => self.drag_watcher = Some(watcher),
+                            Err(err) => {
+                                tracing::warn!(%err, "drag-drop недоступен, приложение работает без него")
+                            }
+                        }
+                        // Встройка в десктоп (T15): после всей winit-настройки
+                        // окна (R3-урок: сначала окно настраивается библиотекой,
+                        // репарентинг — последним, с верификацией стилей в
+                        // attach), но ДО создания GPU-surface (см. выше).
+                        if self.desktop_mode {
+                            self.attach_desktop(win32.hwnd.get());
+                        }
+                        // M5 (T20-F): WebView2-хост виджетов — ребёнок окна
+                        // канваса; события хоста идут через proxy. User-data
+                        // — единый корень приложения (~/.canvasdesk/webview2)
+                        {
+                            let proxy = event_loop.create_proxy();
+                            let sender: canvas_widgets::WidgetEventSender =
+                                Arc::new(move |event| {
+                                    let _ = proxy.send_event(AppEvent::Widget(event));
+                                });
+                            let user_data = canvas_shell::default_cache_dir()
+                                .unwrap_or_default()
+                                .join("webview2");
+                            self.widgets
+                                .attach_host(win32.hwnd.get() as isize, user_data, sender);
+                        }
+                    }
+                    // На Windows бывает только Win32-handle
+                    _ => tracing::warn!("неожиданный handle окна — drag-drop выключен"),
+                },
+                Err(err) => {
+                    tracing::warn!(%err, "handle окна недоступен — drag-drop выключен")
+                }
+            }
+        }
+        // GPU-инициализация блокирующая, один раз при старте (SPEC §6.3:
+        // холодный старт < 2 с). prefer_dx12 = desktop-режим: Vulkan не
+        // презентует в ребёнка Progman (подробности — в Renderer::new).
+        match pollster::block_on(canvas_render::Renderer::new(
+            window.clone(),
+            self.desktop_mode,
+        )) {
+            Ok(mut renderer) => {
+                renderer.set_grid_visible(self.settings.grid_visible);
+                renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
+                let (minor, major) = self.settings.grid_density.steps();
+                renderer.set_grid_steps(minor, major);
+                renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
+                tracing::info!(
+                    width = window.inner_size().width,
+                    height = window.inner_size().height,
+                    scale_factor = window.scale_factor(),
+                    "окно создано"
+                );
+                self.renderer = Some(renderer);
+                self.request_redraw();
+            }
+            Err(err) => {
+                tracing::error!(%err, "не удалось инициализировать рендер");
+                event_loop.exit();
+            }
+        }
+    }
 }
 
 #[cfg(test)]

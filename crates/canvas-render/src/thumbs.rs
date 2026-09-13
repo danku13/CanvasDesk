@@ -23,9 +23,26 @@ pub struct ThumbInstance {
 }
 
 impl ThumbInstance {
-    const FLOATS: usize = 8;
+    pub(crate) const FLOATS: usize = 8;
 
-    fn write_to(&self, out: &mut Vec<u8>) {
+    /// Vertex-лейаут инстанса (общий для thumbs и widget_pass — один шейдер).
+    pub(crate) fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+        // const-массив: vertex_attr_array! сам не даёт 'static (известная
+        // особенность макроса), const-связывание делает срез статическим
+        const ATTRS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+            0 => Float32x2, // pos
+            1 => Float32x2, // size
+            2 => Float32x2, // uv_min
+            3 => Float32x2, // uv_max
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: (Self::FLOATS * 4) as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &ATTRS,
+        }
+    }
+
+    pub(crate) fn write_to(&self, out: &mut Vec<u8>) {
         for group in [
             &self.pos[..],
             &self.size[..],
@@ -204,17 +221,6 @@ impl ThumbsPipeline {
             push_constant_ranges: &[],
         });
 
-        let instance_layout = wgpu::VertexBufferLayout {
-            array_stride: (ThumbInstance::FLOATS * 4) as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![
-                0 => Float32x2, // pos
-                1 => Float32x2, // size
-                2 => Float32x2, // uv_min
-                3 => Float32x2, // uv_max
-            ],
-        };
-
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("thumbs"),
             layout: Some(&pipeline_layout),
@@ -222,7 +228,7 @@ impl ThumbsPipeline {
                 module: &shader,
                 entry_point: "vs_main",
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[instance_layout],
+                buffers: &[ThumbInstance::vertex_buffer_layout()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,

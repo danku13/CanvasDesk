@@ -1,0 +1,8 @@
+{
+  "id": "com.canvasdesk.clock",
+  "name": "Clock",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "defaultSize": [320, 200],
+  "permissions": []
+}

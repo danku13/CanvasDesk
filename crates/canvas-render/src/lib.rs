@@ -22,6 +22,7 @@ pub mod stats;
 pub mod text;
 pub mod theme;
 pub mod thumbs;
+pub mod widget_pass;
 pub mod zorder;
 
 pub use camera::Camera;
@@ -29,3 +30,4 @@ pub use glyphon::Color;
 pub use renderer::{FrameOverlay, FrameStats, Renderer, SceneView, Selection};
 pub use stats::FrameMeter;
 pub use theme::ThemeColors;
+pub use widget_pass::{WidgetPass, WidgetQuad, WIDGET_SNAPSHOT_MAX};

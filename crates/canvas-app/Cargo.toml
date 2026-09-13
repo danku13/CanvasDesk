@@ -17,6 +17,8 @@ canvas-core.workspace = true
 canvas-render.workspace = true
 canvas-shell.workspace = true
 canvas-mcp.workspace = true
+# M5 (T20): менеджер виджетов — реестр/LOD/host над canvas-widgets
+canvas-widgets.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

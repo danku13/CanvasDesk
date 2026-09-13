@@ -123,7 +123,9 @@ fn typed_extensions_round_trip() {
     assert_eq!(file.broken_link, None);
 
     let widget = &canvas.nodes[3];
-    assert_eq!(widget.kind(), NodeKind::Unknown);
+    // M5: «widget» распознаётся как собственный тип (NodeKind::Widget);
+    // для сторонних редакторов строка типа сохраняется как есть.
+    assert_eq!(widget.kind(), NodeKind::Widget);
     assert_eq!(widget.broken_link, Some(true));
     let ext = widget.canvasdesk.as_ref().expect("объект canvasdesk");
     assert_eq!(ext.widget_id, "com.example.clock");

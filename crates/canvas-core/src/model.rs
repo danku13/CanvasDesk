@@ -24,7 +24,12 @@ pub enum NodeKind {
     Text,
     Link,
     Group,
-    /// Неизвестный тип (например, `widget` из M5) — нода сохраняется как есть.
+    /// Виджет-нода M5 (SPEC §5.1/§7.6): `canvasdesk: { widgetId, props }`,
+    /// рендерится через WebView2. В отличие от `Unknown` — распознаётся
+    /// приложением (LOD-менеджер, меню виджетов), но для сторонних редакторов
+    /// остаётся просто нодой с неизвестным типом (round-trip без потерь).
+    Widget,
+    /// Неизвестный тип (например, из будущих версий spec) — нода сохраняется как есть.
     Unknown,
 }
 
@@ -156,6 +161,7 @@ impl Node {
             "text" => NodeKind::Text,
             "link" => NodeKind::Link,
             "group" => NodeKind::Group,
+            "widget" => NodeKind::Widget,
             _ => NodeKind::Unknown,
         }
     }
@@ -225,6 +231,36 @@ impl Node {
             broken_link: None,
             preview_state: None,
             canvasdesk: None,
+            extra: Map::new(),
+        }
+    }
+
+    /// Виджет-нода (M5, SPEC §5.1/§7.6): расширение `canvasdesk`
+    /// (widgetId + props), `label` — человекочитаемое имя пакета из
+    /// манифеста (заголовок карточки).
+    pub fn widget(
+        id: impl Into<String>,
+        ext: CanvasdeskExt,
+        label: impl Into<String>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            node_type: "widget".to_owned(),
+            file: None,
+            text: None,
+            label: Some(label.into()),
+            color: None,
+            x,
+            y,
+            width,
+            height,
+            broken_link: None,
+            preview_state: None,
+            canvasdesk: Some(ext),
             extra: Map::new(),
         }
     }
@@ -552,6 +588,80 @@ mod tests {
         assert_eq!(
             (group.x, group.y, group.width, group.height),
             (10.0, 20.0, 400.0, 300.0)
+        );
+    }
+
+    /// Node::widget (M5): kind/Widget, canvasdesk-расширение с props, label —
+    /// имя пакета; прочие поля пусты.
+    #[test]
+    fn widget_constructor_fields() {
+        let mut props = Map::new();
+        props.insert("city".to_owned(), Value::String("Moscow".to_owned()));
+        let ext = CanvasdeskExt {
+            widget_id: "com.canvasdesk.clock".to_owned(),
+            props,
+        };
+        let widget = Node::widget("w1", ext, "Clock", 5.0, 6.0, 320.0, 200.0);
+        assert_eq!(widget.kind(), NodeKind::Widget);
+        assert_eq!(widget.node_type, "widget");
+        let ext = widget.canvasdesk.as_ref().expect("canvasdesk задан");
+        assert_eq!(ext.widget_id, "com.canvasdesk.clock");
+        assert_eq!(
+            ext.props.get("city"),
+            Some(&Value::String("Moscow".to_owned()))
+        );
+        assert_eq!(widget.label.as_deref(), Some("Clock"));
+        assert_eq!(widget.file, None);
+        assert_eq!(widget.text, None);
+        assert_eq!(
+            (widget.x, widget.y, widget.width, widget.height),
+            (5.0, 6.0, 320.0, 200.0)
+        );
+    }
+
+    /// Round-trip виджет-ноды (M5): тип, canvasdesk-расширение и соседние
+    /// unknown-поля переживают сериализацию без потерь (SPEC §5.1 — файл
+    /// остаётся валидным для сторонних редакторов).
+    #[test]
+    fn widget_node_round_trip() {
+        let mut props = Map::new();
+        props.insert("text".to_owned(), Value::String("покупки".to_owned()));
+        let ext = CanvasdeskExt {
+            widget_id: "com.example.clock".to_owned(),
+            props,
+        };
+        let mut widget = Node::widget("w9", ext, "Clock", 0.0, 0.0, 320.0, 200.0);
+        // Стороннее поле уровня ноды — сохраняется как unknown
+        widget
+            .extra
+            .insert("futureField".to_owned(), Value::Bool(true));
+
+        let json = serde_json::to_string(&widget).expect("сериализация");
+        let back: Node = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back, widget, "round-trip без потерь");
+        assert_eq!(back.kind(), NodeKind::Widget);
+        assert_eq!(
+            back.extra.get("futureField"),
+            Some(&Value::Bool(true)),
+            "unknown-поле рядом с canvasdesk не потеряно"
+        );
+    }
+
+    /// Виджет-строка из JSON-сырца: парсинг поля `canvasdesk` и строки
+    /// `type: "widget"` (формат SPEC §5.1).
+    #[test]
+    fn widget_node_parsed_from_spec_json() {
+        let raw = r#"{
+            "id": "n1", "type": "widget", "x": 10, "y": 20, "width": 300, "height": 180,
+            "canvasdesk": { "widgetId": "com.canvasdesk.sticker", "props": { "text": "привет" } }
+        }"#;
+        let node: Node = serde_json::from_str(raw).expect("парсинг SPEC-примера");
+        assert_eq!(node.kind(), NodeKind::Widget);
+        let ext = node.canvasdesk.as_ref().expect("canvasdesk");
+        assert_eq!(ext.widget_id, "com.canvasdesk.sticker");
+        assert_eq!(
+            ext.props.get("text").and_then(Value::as_str),
+            Some("привет")
         );
     }
 }

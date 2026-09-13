@@ -99,6 +99,9 @@ pub struct FrameOverlay<'a> {
     pub texts: &'a [OverlayText<'a>],
     pub screen_instances: &'a [CardInstance],
     pub screen_texts: &'a [ScreenText<'a>],
+    /// Квады снапшотов виджетов (M5 T20-D): id ноды + область контента
+    /// (world). Рисуются поверх карточек, под screen-оверлеями.
+    pub widget_quads: &'a [crate::widget_pass::WidgetQuad<'a>],
 }
 
 impl FrameOverlay<'_> {
@@ -108,6 +111,7 @@ impl FrameOverlay<'_> {
         texts: &[],
         screen_instances: &[],
         screen_texts: &[],
+        widget_quads: &[],
     };
 }
 
@@ -176,6 +180,8 @@ pub struct Renderer {
     /// Пайплайн миникарты (T13-B) + текущий кадр (None — не задан).
     minimap_pipeline: MinimapPipeline,
     minimap: Option<MinimapTexture>,
+    /// Проход снапшотов виджетов (M5 T20-D): текстуры по node_id, LRU-кэп.
+    widget_pass: crate::widget_pass::WidgetPass,
     scale_factor: f32,
     /// Рисовать сетку канваса (настройки, панель из post-T7).
     grid_visible: bool,
@@ -261,6 +267,7 @@ impl Renderer {
         let cards = CardsPipeline::new(&gpu.device, format);
         let thumbs = ThumbsPipeline::new(&gpu.device, format);
         let minimap_pipeline = MinimapPipeline::new(&gpu.device, format);
+        let widget_pass = crate::widget_pass::WidgetPass::new(&gpu.device, format);
         let text = TextSystem::new(&gpu.device, &gpu.queue, format);
         Ok(Self {
             gpu,
@@ -273,6 +280,7 @@ impl Renderer {
             text,
             minimap_pipeline,
             minimap: None,
+            widget_pass,
             scale_factor: scale_factor as f32,
             grid_visible: true,
             grid_dots: false,
@@ -348,6 +356,29 @@ impl Renderer {
             self.minimap_pipeline
                 .upload(&self.gpu.device, &self.gpu.queue, current, image);
         self.minimap = Some(texture);
+    }
+
+    /// Загрузить/заменить снапшот виджета (M5): RGBA + размеры; текстура
+    /// живёт под строковым id ноды (переживает сдвиги индексов/undo).
+    pub fn set_widget_snapshot(&mut self, node_id: &str, width: u32, height: u32, rgba: &[u8]) {
+        self.widget_pass.set_snapshot(
+            &self.gpu.device,
+            &self.gpu.queue,
+            node_id,
+            width,
+            height,
+            rgba,
+        );
+    }
+
+    /// Удалить текстуру снапшота (нода удалена).
+    pub fn clear_widget_snapshot(&mut self, node_id: &str) {
+        self.widget_pass.clear_snapshot(node_id);
+    }
+
+    /// Есть ли снапшот у ноды (для LOD-решений приложения).
+    pub fn has_widget_snapshot(&self, node_id: &str) -> bool {
+        self.widget_pass.has_snapshot(node_id)
     }
 
     /// Прямоугольник миникарты в ЛОГИЧЕСКИХ px — hit-test приложения
@@ -840,6 +871,16 @@ impl Renderer {
                 [self.size.width as f32, self.size.height as f32],
             );
         }
+        // Снапшоты виджетов (M5 T20-D): uniform + инстансы ДО encoder
+        // (пересоздание instance-буфера требует device без активного pass)
+        let widget_quad_count = self.widget_pass.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+            overlay.widget_quads,
+        );
         let mut encoder = self
             .gpu
             .device
@@ -886,6 +927,12 @@ impl Renderer {
                 // последнего сегмента — рисуем его отдельным проходом, иначе
                 // квады (меню) не попали бы в кадр
                 self.cards.draw_range(&mut pass, top_range.clone());
+            }
+            // Снапшоты виджетов (M5): поверх карточек — заместитель live-HWND
+            // (SPEC §7.6 airspace), но ПОД screen-панелями (меню поверх
+            // снапшота — airspace-политика П7 плана M5)
+            if widget_quad_count > 0 {
+                self.widget_pass.draw(&mut pass, widget_quad_count);
             }
             if !overlay_range.is_empty() {
                 self.cards.draw_range(&mut pass, overlay_range.clone());
