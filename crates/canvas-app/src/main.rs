@@ -2013,7 +2013,11 @@ impl App {
                 });
                 for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
                     let rect = menu_item_rect(menu.origin, i);
-                    labels.push(canvas_menu_label(*item, self.settings.focus_mode));
+                    labels.push(canvas_menu_label(
+                        *item,
+                        self.settings.focus_mode,
+                        self.hotkeys_open,
+                    ));
                     label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                 }
             }
@@ -3474,16 +3478,16 @@ impl App {
                     self.request_redraw();
                     return;
                 }
-                // Панель хоткеев (FR-004): клик мимо — закрыть, клик по
-                // панели — проглотить (строки не интерактивны); канвасу
-                // клик не достаётся (паттерн панели настроек)
+                // Панель хоткеев (FR-004.1, тогл): панель «видно/не видно»
+                // устойчива — клик мимо НЕ закрывает (переключение: F1,
+                // пункт меню канваса, Esc) и проходит в канвас; клик по
+                // самой панели — глотается (строки не интерактивны)
                 if self.hotkeys_open {
                     let panel = hotkeys_panel_rect(viewport);
-                    if !point_in_rect(panel, self.cursor) {
-                        self.hotkeys_open = false;
+                    if point_in_rect(panel, self.cursor) {
+                        self.request_redraw();
+                        return;
                     }
-                    self.request_redraw();
-                    return;
                 }
                 // Миникарта (T13, SPEC §6.1): клик — центрирование камеры,
                 // drag — world-точка под курсором следует за ним. Квад
@@ -3565,6 +3569,11 @@ impl App {
                                     // T23: переключение из меню — рантайм,
                                     // без записи конфига (как и хоткей F)
                                     CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
+                                    // FR-004.1: тогл оверлея хоткеев из меню
+                                    // (панель «видно/не видно», галочка ✓)
+                                    CanvasMenuItem::Hotkeys => {
+                                        self.hotkeys_open = !self.hotkeys_open;
+                                    }
                                 }
                             }
                         }

@@ -992,11 +992,17 @@ pub mod ui {
         /// T23: «Фокус на связях» — переключатель режима brainstorm-focus
         /// (галочка отражает текущее состояние).
         FocusMode,
+        /// FR-004.1: «Горячие клавиши (F1)» — переключатель видимости
+        /// оверлея хоткеев (галочка — панель открыта).
+        Hotkeys,
     }
 
     /// Меню пустого канваса.
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 2] =
-        [CanvasMenuItem::NewGroup, CanvasMenuItem::FocusMode];
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 3] = [
+        CanvasMenuItem::NewGroup,
+        CanvasMenuItem::FocusMode,
+        CanvasMenuItem::Hotkeys,
+    ];
 
     /// Подпись пункта меню ноды. Разделитель подписи не имеет.
     pub fn node_menu_label(item: NodeMenuItem) -> Option<String> {
@@ -1008,13 +1014,19 @@ pub mod ui {
     }
 
     /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
-    /// фокуса для ✓-галочки пункта `FocusMode` (T23, паттерн edge_menu_label).
-    pub fn canvas_menu_label(item: CanvasMenuItem, focus_on: bool) -> String {
+    /// фокуса, `hotkeys_open` — состояние оверлея хоткеев: для пунктов-
+    /// переключателей рисуется ✓-галочка (паттерн edge_menu_label,
+    /// FR-004.1 — Hotkeys).
+    pub fn canvas_menu_label(item: CanvasMenuItem, focus_on: bool, hotkeys_open: bool) -> String {
         match item {
             CanvasMenuItem::NewGroup => "Создать группу".to_owned(),
             CanvasMenuItem::FocusMode => {
                 format!("{}Фокус на связях", if focus_on { "✓ " } else { "" })
             }
+            CanvasMenuItem::Hotkeys => format!(
+                "{}Горячие клавиши (F1)",
+                if hotkeys_open { "✓ " } else { "" }
+            ),
         }
     }
 
@@ -1891,25 +1903,36 @@ pub mod ui {
             );
         }
 
-        /// Меню пустого канваса: «Создать группу» + «Фокус на связях» (T23).
+        /// Меню пустого канваса: «Создать группу» + «Фокус на связях» (T23)
+        /// + «Горячие клавиши (F1)» (FR-004.1).
         #[test]
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 2);
+            assert_eq!(n, 3);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[0], false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false),
                 "Создать группу"
             );
             // T23: второй пункт — переключатель фокуса с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], true),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false),
                 "✓ Фокус на связях"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false),
                 "Фокус на связях"
+            );
+            // FR-004.1: третий пункт — переключатель оверлея хоткеев
+            assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true),
+                "✓ Горячие клавиши (F1)"
+            );
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false),
+                "Горячие клавиши (F1)"
             );
             let y = 50.0 + MENU_PADDING + 3.0;
             assert_eq!(menu_item_at_for(origin, [110.0, y], n), Some(0));
