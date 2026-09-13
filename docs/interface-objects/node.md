@@ -157,18 +157,21 @@
 
 ---
 
-## 10. Реализованные расширения через CR/FR (2026-09-13)
+## 10. Реализованные расширения через CR/FR (2026-09-13..14)
 
 | Запрос | Реализация | Код |
 |---|---|---|
-| CR-001 — мультивыделение | Рамка drag от пустого места, `Ctrl`/`Shift`+клик тогл, групповой drag, `remove_nodes` пачкой | `main.rs` (SceneState.selected_nodes), `model.rs` (remove_nodes), `lib.rs` ui (rubber_band_rect/nodes_in_rect/drag_origins) |
-| CR-002 — перепривязка связей | Хэндлы концов выделенной связи, drag → `retarget_edge`, линия скрыта на время drag | `edgegeom.rs` (EdgeEnd/edge_endpoint/retarget_edge), `cards.rs` (build_edge_handle_instances) |
+| CR-001 — мультивыделение | Рамка drag от пустого места, `Ctrl`/`Shift`+клик тогл (якорь переносится в набор — CR-001.3, ревью 2026-09-14), групповой drag, `remove_nodes` пачкой | `main.rs` (SceneState.selected_nodes), `model.rs` (remove_nodes), `lib.rs` ui (rubber_band_rect/nodes_in_rect/drag_origins/toggle_selection_with_primary) |
+| CR-002 — перепривязка связей | Хэндлы концов выделенной связи, drag → `retarget_edge`, линия скрыта на время drag; перепривязка отменяема (FR-006) | `edgegeom.rs` (EdgeEnd/edge_endpoint/retarget_edge), `cards.rs` (build_edge_handle_instances) |
 | CR-003 — зона портов | `Settings.port_zone_px` 10/14/20/28/40 px (панель настроек), `port_at` с параметром | `settings.rs`, `edgegeom.rs` (port_at), `cards.rs` (port_dot_diameter) |
 | FR-003 — копипаст/дублирование | `Ctrl+C/V/D` (кир. с/м/в), буфер нодов, новые id, вставка центром bbox на курсор | `lib.rs` ui (reassign_ids/paste_nodes), `main.rs` (node_clipboard) |
-| FR-004 — хоткеи | `F1` — панель слева по центру, 19 записей, Esc/клик мимо | `lib.rs` ui (HOTKEYS/hotkeys_panel_rect), `main.rs` (settings_overlay) |
-| FR-005 — MCP node_edit | Инструмент `node_edit`: только переданные поля, label/color null — сброс | `canvas-mcp/src/lib.rs` (TOOLS), `main.rs` (mcp_dispatch) |
+| FR-004 — хоткеи | `F1`/пункт меню канваса (✓) — тогл панели слева по центру (22 записи; клик мимо не закрывает — FR-004.1, ревью 2026-09-14), Esc | `lib.rs` ui (HOTKEYS/hotkeys_panel_rect), `main.rs` (settings_overlay, меню канваса) |
+| FR-005 — MCP node_edit | Инструмент `node_edit`: только переданные поля, label/color null — сброс; ручная приёмка — тест-долг | `canvas-mcp/src/lib.rs` (TOOLS), `main.rs` (mcp_dispatch) |
+| FR-006 — undo/redo | `Ctrl+Z`/`Ctrl+Y`/`Ctrl+Shift+Z` (кир. я/н): снапшоты Canvas, стек 50, redo-ветка, все мутации (UI+MCP) отменяемы; отложенные шаги drag/resize/правки — только при фактическом изменении | `main.rs` (SceneState.undo_stack/redo_stack, App::restore_canvas/pending_undo) |
+| FR-007 — вырезание | `Ctrl+X` (кир. «ч») = копирование в буфер + удаление; `Ctrl+V` — вставка; `Ctrl+Z` возвращает | `main.rs` (cut_selection) |
+| FR-008 — один exe | Подкоманда `canvasdesk mcp` (stdio ↔ pipe) + автостарт сервиса; `--no-spawn` | `canvas-mcp/src/lib.rs` (run_stdio), `main.rs` (перехват подкоманды) |
 
-Статусы и история — в `docs/change-requests/*.md` (CR-001..003, FR-003..005).
+Статусы и история — в `docs/change-requests/*.md` (CR-001..003, FR-003..008).
 
 ---
 

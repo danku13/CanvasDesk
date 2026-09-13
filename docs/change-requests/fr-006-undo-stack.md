@@ -93,6 +93,17 @@
 
 ## История изменений (Changelog)
 
+- `2026-09-14` — агент: реализация (коммит feat(core,app): FR-006) —
+  SceneState::undo_stack (VecDeque, UNDO_LIMIT=50, вытеснение) +
+  redo_stack (новое действие обнуляет); App::restore_canvas (spatial
+  rebuild + invalidate_node_caches + сброс интеракций); push-точки: все
+  UI-мутации (создание/вставка/удаление/drop/edge-drag/rebind/меню) + 11
+  MCP-веток (после валидации; no-op не шаг — сравнение PartialEq);
+  pending_undo для drag/resize/редактирования (шаг только при фактическом
+  изменении; Space-прерывание тоже закрывает шаг); хоткеи Ctrl+Z/Я,
+  Ctrl+Y/Н, Ctrl+Shift+Z; HOTKEYS +2. Тесты: лимит 50,
+  delete→undo→redo roundtrip (каскад связей), redo-сброс, no-op шаги.
+  Статус `в работе` (до ручной приёмки — ACCEPTANCE §14 FR-006.1–6).
 - `2026-09-14` — агент: документ создан по запросу пользователя, статус `в работе` (анализ и план готовы).
 
 ## Источники истины (References)

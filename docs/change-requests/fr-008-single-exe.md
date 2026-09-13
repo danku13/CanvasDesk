@@ -89,6 +89,15 @@
 
 ## История изменений (Changelog)
 
+- `2026-09-14` — агент: реализация (коммит feat(mcp,app): FR-008) —
+  canvas_mcp::run_stdio(args): stdio-цикл + PipeTransport/read_loop
+  перенесены из bin в lib; автостарт (current_exe spawn + ожидание pipe до
+  15 с, флаг --no-spawn); canvasdesk-mcp — тонкая совместимая обёртка;
+  canvas-app main(): перехват «mcp» до трейсинга (stdout чист для
+  протокола), --help дополнен; README/BYOK — конфиг клиентов
+  (command=canvasdesk.exe, args=[mcp]). Смоук на Linux: initialize без
+  pipe → JSON-RPC -32002 + exit 2 с обоих входов. Статус `в работе` (до
+  ручной приёмки на Windows — ACCEPTANCE §14 FR-008.1–5).
 - `2026-09-14` — агент: документ создан по запросу пользователя («понять
   как» — анализ дал решение: подкоманда одного exe + автостарт; переносы
   stdio-процесса в GUI-процесс отвергнуты архитектурно), статус `в работе`.
