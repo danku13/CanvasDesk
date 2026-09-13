@@ -863,17 +863,17 @@ pub mod ui {
     pub fn drop_ghost_label(kind: &DropInsertKind) -> String {
         let raw = match kind {
             DropInsertKind::File(path) => {
-                let from_path = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .filter(|s| !s.is_empty());
-                from_path.unwrap_or_else(|| {
-                    let s = path.to_string_lossy();
-                    s.rsplit(|c| c == '\\' || c == '/')
-                        .next()
-                        .unwrap_or(&s)
-                        .to_string()
-                })
+                // Имя файла из пути с разделителями любого стиля: CF_HDROP
+                // даёт Windows-пути (обратный слеш), а функция работает и на
+                // Linux-сборке (тесты, планировщик дропа) — Path::file_name()
+                // распознаёт только нативный разделитель (на Linux вернул бы
+                // весь «C:\…\SPEC.md» как один компонент), поэтому делим
+                // строку по обоим разделителям и берём последний непустой.
+                let s = path.to_string_lossy();
+                s.rsplit(['\\', '/'])
+                    .find(|part| !part.is_empty())
+                    .unwrap_or_default()
+                    .to_string()
             }
             DropInsertKind::Note(text) => text.lines().next().unwrap_or("").to_owned(),
         };
