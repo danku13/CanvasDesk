@@ -171,7 +171,7 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 15 инструментов канваса (сигнатуры — план MCP-задачи).
+/// 16 инструментов канваса (сигнатуры — план MCP-задачи; FR-005 — node_edit).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -214,6 +214,21 @@ const TOOLS: &[ToolSpec] = &[
         description: "Заменить текст ноды-заметки",
         required: &["id", "text"],
         properties: &[("id", STR), ("text", STR)],
+    },
+    ToolSpec {
+        name: "node_edit",
+        description: "Редактировать ноду одним вызовом: обновляет ТОЛЬКО переданные поля (text, label, color, x, y, width, height); label/color = null — сброс; возвращает обновлённую ноду",
+        required: &["id"],
+        properties: &[
+            ("id", STR),
+            ("text", STR),
+            ("label", r#"{"type":["string","null"]}"#),
+            ("color", COLOR_PROP),
+            ("x", NUM),
+            ("y", NUM),
+            ("width", NUM),
+            ("height", NUM),
+        ],
     },
     ToolSpec {
         name: "node_move",
@@ -505,12 +520,12 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 15 инструментов, у каждого inputSchema с required.
+    /// tools/list: ровно 16 инструментов, у каждого inputSchema с required.
     #[test]
-    fn tools_list_has_all_fifteen_with_schemas() {
+    fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 15, "ровно 15 инструментов");
+        assert_eq!(tools.len(), 16, "ровно 16 инструментов");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -520,6 +535,7 @@ mod tests {
             "node_create_note",
             "node_create_file",
             "node_update_text",
+            "node_edit",
             "node_move",
             "node_resize",
             "node_delete",
@@ -556,6 +572,14 @@ mod tests {
             json!(["1", "2", "3", "4", "5", "6", null])
         );
         assert_eq!(
+            by_name("node_edit")["inputSchema"]["required"],
+            json!(["id"])
+        );
+        assert_eq!(
+            by_name("node_edit")["inputSchema"]["properties"]["label"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
             by_name("edge_create")["inputSchema"]["properties"]["fromSide"]["enum"],
             json!(["any", "top", "right", "bottom", "left"])
         );
@@ -590,7 +614,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            15
+            16
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

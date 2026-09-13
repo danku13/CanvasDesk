@@ -9,7 +9,10 @@
 
 use std::io::{Read, Write};
 
-use canvas_mcp::{handle_line, AppTransport, HandleOutcome};
+use canvas_mcp::{handle_line, HandleOutcome};
+// Трейт нужен только windows-ветке PipeTransport; без gate — unused на Linux
+#[cfg(windows)]
+use canvas_mcp::AppTransport;
 
 fn main() -> anyhow::Result<()> {
     // Транспорт к приложению: None, если canvas-app не запущен (нет pipe) —

@@ -3022,6 +3022,73 @@ fn mcp_dispatch(
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": id }))
         }
+        // FR-005: редактирование ноды одним вызовом — обновляются ТОЛЬКО
+        // переданные поля; label/color = null — сброс; геометрия — с
+        // обновлением spatial index; ответ — сводка с текстом
+        "node_edit" => {
+            let id = mcp_req_str(params, "id")?;
+            let index = mcp_node_index(&scene.canvas, id)?;
+            let mut geometry = false;
+            if let Some(text) = params.get("text").and_then(serde_json::Value::as_str) {
+                scene.canvas.nodes[index].text = Some(text.to_owned());
+            }
+            match params.get("label") {
+                None => {}
+                Some(serde_json::Value::Null) => scene.canvas.nodes[index].label = None,
+                Some(serde_json::Value::String(label)) => {
+                    scene.canvas.nodes[index].label = Some(label.clone());
+                }
+                Some(other) => return Err(format!("label должен быть строкой или null: {other}")),
+            }
+            if params.get("color").is_some() {
+                let color = match params
+                    .get("color")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+                {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(preset)
+                        if matches!(preset.as_str(), "1" | "2" | "3" | "4" | "5" | "6") =>
+                    {
+                        Some(preset)
+                    }
+                    other => {
+                        return Err(format!(
+                            "color должен быть пресетом \"1\"..\"6\" или null, получено {other}"
+                        ));
+                    }
+                };
+                scene.canvas.nodes[index].color = color;
+            }
+            if let Some(x) = mcp_opt_f32(params, "x") {
+                scene.canvas.nodes[index].x = x;
+                geometry = true;
+            }
+            if let Some(y) = mcp_opt_f32(params, "y") {
+                scene.canvas.nodes[index].y = y;
+                geometry = true;
+            }
+            for (name, field) in [("width", 0), ("height", 1)] {
+                if let Some(value) = mcp_opt_f32(params, name) {
+                    if value <= 0.0 {
+                        return Err(format!("{name} должен быть > 0, получено {value}"));
+                    }
+                    if field == 0 {
+                        scene.canvas.nodes[index].width = value;
+                    } else {
+                        scene.canvas.nodes[index].height = value;
+                    }
+                    geometry = true;
+                }
+            }
+            if geometry {
+                let node = &scene.canvas.nodes[index];
+                scene.spatial.update(index, node);
+            }
+            scene.mark_dirty();
+            let node = &scene.canvas.nodes[index];
+            Ok(mcp_node_summary(node, true))
+        }
         "node_move" => {
             let id = mcp_req_str(params, "id")?;
             let x = mcp_req_f32(params, "x")?;
@@ -4662,6 +4729,127 @@ mod tests {
             r#"{"id":"n1","width":1.0}"#
         )
         .is_err());
+    }
+
+    /// FR-005 node_edit: обновляются ТОЛЬКО переданные поля; label/color
+    /// null — сброс; геометрия — с обновлением spatial; ответ — сводка.
+    #[test]
+    fn mcp_node_edit_updates_only_given_fields() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // Только text: координаты/размеры/подпись не тронуты
+        let summary = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","text":"Отредактировано"}"#,
+        )
+        .expect("node_edit text");
+        assert_eq!(summary["id"], "n1");
+        assert_eq!(summary["text"], "Отредактировано");
+        assert_eq!(
+            (scene.canvas.nodes[0].x, scene.canvas.nodes[0].y),
+            (100.0, 100.0)
+        );
+        assert_eq!(
+            (scene.canvas.nodes[0].width, scene.canvas.nodes[0].height),
+            (260.0, 120.0)
+        );
+        assert_eq!(scene.canvas.nodes[0].label, None);
+        // Только геометрия: text не тронут
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","x":500.0,"y":600.0,"width":300.0,"height":200.0}"#,
+        )
+        .expect("node_edit geometry");
+        assert_eq!(
+            scene.canvas.nodes[0].text.as_deref(),
+            Some("Отредактировано")
+        );
+        let hits = scene.spatial.query_rect([500.0, 600.0, 510.0, 610.0]);
+        assert!(hits.contains(&0), "spatial обновлён после node_edit");
+        // label: строка — задан, null — сброс
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"g1","label":"Моя зона"}"#,
+        )
+        .expect("node_edit label");
+        assert_eq!(scene.canvas.nodes[2].label.as_deref(), Some("Моя зона"));
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"g1","label":null}"#,
+        )
+        .expect("node_edit label null");
+        assert_eq!(scene.canvas.nodes[2].label, None);
+        // color: пресет и сброс
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","color":"3"}"#,
+        )
+        .expect("node_edit color");
+        assert_eq!(scene.canvas.nodes[0].color.as_deref(), Some("3"));
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","color":null}"#,
+        )
+        .expect("node_edit color null");
+        assert_eq!(scene.canvas.nodes[0].color, None);
+    }
+
+    /// FR-005 node_edit: валидация — несуществующая нода, плохой color,
+    /// неположительные размеры, label не-строкой; сцена при ошибках
+    /// не меняется.
+    #[test]
+    fn mcp_node_edit_validation() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        assert!(dispatch(&mut scene, &mut camera, "node_edit", r#"{"id":"ghost"}"#).is_err());
+        let before = scene.canvas.nodes[0].clone();
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","color":"9"}"#
+        )
+        .is_err());
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","width":-5.0}"#
+        )
+        .is_err());
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","height":0.0}"#
+        )
+        .is_err());
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","label":42}"#
+        )
+        .is_err());
+        assert_eq!(scene.canvas.nodes[0], before, "ошибки не меняют ноду");
+        // Пустой вызов (только id) — валиден: ничего не изменилось, но
+        // сводка возвращена (дешёвая «проверка связи»)
+        let summary =
+            dispatch(&mut scene, &mut camera, "node_edit", r#"{"id":"n1"}"#).expect("no-op");
+        assert_eq!(summary["id"], "n1");
+        assert_eq!(scene.canvas.nodes[0], before);
     }
 
     /// node_delete: каскад связей, spatial перестроен, дети группы живы.
