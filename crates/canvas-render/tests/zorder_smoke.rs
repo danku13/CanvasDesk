@@ -87,6 +87,7 @@ fn headless_text_under_covering_card() {
             screen_texts: &[],
             zplan: &zplan,
             edge_labels: &[],
+            focus: canvas_render::cards::FocusView::EMPTY,
         },
     )
     .expect("prepare текста");

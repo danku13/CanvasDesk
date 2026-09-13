@@ -15,7 +15,7 @@ use glyphon::{
 };
 
 use crate::camera::Camera;
-use crate::cards::{extension_letter, title_for, HEADER_HEIGHT};
+use crate::cards::{dim_color, extension_letter, title_for, FocusView, HEADER_HEIGHT};
 use crate::gfm;
 use crate::markdown;
 use crate::theme::ThemeColors;
@@ -738,12 +738,17 @@ pub struct ScreenText<'a> {
 
 /// Лейбл связи для кадра (T8): текст по центру кривой, шейпится с кэшем
 /// по id связи (перешейп при смене текста или зума).
+/// `factor` — множитель яркости (T23: не-фокусные лейблы затемняются
+/// вместе со своими связями; 1.0 — полная яркость).
+#[derive(Debug, Clone, Copy)]
 pub struct EdgeLabel<'a> {
     /// id связи — ключ кэша шейпинга.
     pub id: &'a str,
     pub text: &'a str,
     /// Центр лейбла в world-координатах (середина кривой, t = 0.5).
     pub center: [f32; 2],
+    /// T23: множитель альфы текста лейбла (1.0 — не затемнён).
+    pub factor: f32,
 }
 
 /// Параметры кадра для подготовки текста (группировка аргументов prepare_titles).
@@ -777,6 +782,9 @@ pub struct TitleFrame<'a> {
     /// сюда не передаётся — его рисует EditingSession. Рисуются в финальной
     /// группе — поверх карточек, до оверлеев меню и HUD.
     pub edge_labels: &'a [EdgeLabel<'a>],
+    /// Режим фокуса (T23, brainstorm-focus): не-фокусные ноды затемняются
+    /// (цвет заголовка/иконки/тела — альфа × dim_factor). EMPTY — выключен.
+    pub focus: FocusView<'a>,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -1205,6 +1213,14 @@ impl TextSystem {
                         continue;
                     };
                     let has_icon = entry.icon.is_some();
+                    // T23 (brainstorm-focus): тексты не-фокусной ноды гаснут
+                    // вместе с карточкой (фокусная и выделенная — полная
+                    // яркость: приложение включает выделенную в набор)
+                    let text_factor = if frame.focus.dim > 0.0 && !frame.focus.has_node(index) {
+                        frame.focus.dim_factor()
+                    } else {
+                        1.0
+                    };
                     let title_x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
                     let pos = to_physical([title_x, node.y]);
                     areas.push(TextArea {
@@ -1218,7 +1234,7 @@ impl TextSystem {
                             right: (pos[0] + entry.width_px) as i32,
                             bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                         },
-                        default_color: self.theme.title,
+                        default_color: dim_color(self.theme.title, text_factor),
                         custom_glyphs: &[],
                     });
                     if let Some(icon) = &entry.icon {
@@ -1234,7 +1250,7 @@ impl TextSystem {
                                 right: (pos[0] + ICON_WIDTH * zoom_px) as i32,
                                 bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                             },
-                            default_color: self.theme.icon,
+                            default_color: dim_color(self.theme.icon, text_factor),
                             custom_glyphs: &[],
                         });
                     }
@@ -1264,7 +1280,7 @@ impl TextSystem {
                                     right: (left + block.width * zoom_px) as i32,
                                     bottom: bottom as i32,
                                 },
-                                default_color: block.color,
+                                default_color: dim_color(block.color, text_factor),
                                 custom_glyphs: &[],
                             });
                         }
@@ -1343,7 +1359,8 @@ impl TextSystem {
                                 right: (left + entry.size_px[0] + 1.0) as i32,
                                 bottom: (top + entry.size_px[1]) as i32,
                             },
-                            default_color: self.theme.edge_label,
+                            // T23: не-фокусные лейблы гаснут вместе со связями
+                            default_color: dim_color(self.theme.edge_label, label.factor),
                             custom_glyphs: &[],
                         });
                     }

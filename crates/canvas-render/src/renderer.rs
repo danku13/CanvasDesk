@@ -10,8 +10,8 @@ use canvas_core::{edge_midpoint, Canvas, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
-    build_draft_instances, build_edge_instances, build_port_instances, card_instance, CardInstance,
-    CardsPipeline, SELECTION_BORDER,
+    build_draft_instances, build_edge_instances, build_port_instances, card_instance, dim_instance,
+    CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -131,6 +131,10 @@ pub struct SceneView<'a> {
     /// Связи огибают посторонние ноды (глобальная настройка): рендер и
     /// лейблы идут по огибающей полилинии (см. `canvas_core::edge_polyline`).
     pub edges_avoid: bool,
+    /// Режим фокуса (T23, brainstorm-focus): подсвеченные ноды/связи и
+    /// степень затемнения остального. Данные принадлежат приложению
+    /// (пересчёт на кадр); `FocusView::EMPTY` — режим выключен.
+    pub focus: FocusView<'a>,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -471,7 +475,10 @@ impl Renderer {
 
         // Лейблы связей (T8): центр — середина дуги (при avoid — огибающей
         // линии); подложка — квадом под текстом по размеру из кэша шейпинга
-        // (перешейп при смене текста/зума)
+        // (перешейп при смене текста/зума).
+        // T23: не-фокусные лейблы затемняются вместе со своими связями
+        // (подложка здесь, текст — factor в EdgeLabel для prepare_titles);
+        // лейбл выделенной связи остаётся полной яркости.
         let mut edge_labels: Vec<EdgeLabel> = Vec::new();
         let mut label_backdrops: Vec<CardInstance> = Vec::new();
         if titles_visible(zoom_px) {
@@ -485,20 +492,31 @@ impl Renderer {
                 let Some(center) = edge_midpoint(scene.canvas, edge, scene.edges_avoid) else {
                     continue;
                 };
+                let label_dimmed = scene.focus.dim > 0.0
+                    && !scene.focus.has_edge(index)
+                    && selected_edge != Some(index);
+                let label_factor = if label_dimmed {
+                    scene.focus.dim_factor()
+                } else {
+                    1.0
+                };
                 let size = self.text.edge_label_size(&edge.id, text, zoom_px);
                 let w = size[0] + EDGE_LABEL_PADDING[0] * 2.0;
                 let h = size[1] + EDGE_LABEL_PADDING[1] * 2.0;
-                label_backdrops.push(CardInstance {
+                let mut backdrop = CardInstance {
                     pos: [center[0] - w / 2.0, center[1] - h / 2.0],
                     size: [w, h],
                     fill: self.theme.edge_label_fill,
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
-                });
+                };
+                dim_instance(&mut backdrop, label_factor);
+                label_backdrops.push(backdrop);
                 edge_labels.push(EdgeLabel {
                     id: &edge.id,
                     text,
                     center,
+                    factor: label_factor,
                 });
             }
         }
@@ -633,6 +651,7 @@ impl Renderer {
             scene.canvas,
             selected_edge,
             scene.edges_avoid,
+            &scene.focus,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
@@ -654,15 +673,30 @@ impl Renderer {
                     selected_node == Some(index),
                     &self.theme,
                 ));
+                // T23 (brainstorm-focus): не-фокусные ноды затемняются
+                // (альфа заливки/рамки × dim_factor); фокусные и выделенная
+                // (приложение включает её в набор) — полной яркости
+                if scene.focus.dim > 0.0 && !scene.focus.has_node(index) {
+                    let factor = scene.focus.dim_factor();
+                    if let Some(inst) = instances.last_mut() {
+                        dim_instance(inst, factor);
+                    }
+                }
                 // Декоративные квады тела (GFM): подсветка ==…==, зачёркивание
                 // ~~…~~, буллиты/чекбоксы списков, бар цитаты, фон фенса,
                 // линия `---` — из кэша прошлого шейпинга (при промахе
                 // появятся на следующий кадр) — на z-позиции ноды, под её
-                // текстом и перекрывающими карточками
+                // текстом и перекрывающими карточками; не-фокусные гаснут
+                // вместе с карточкой (T23)
                 if let Some((entry_zoom, body_quads)) = self.text.body_quads(index) {
                     let (origin, _, _) = body_area(node);
                     for quad in body_quads {
-                        instances.push(body_quad_instance(origin, quad, entry_zoom, &self.theme));
+                        let mut instance =
+                            body_quad_instance(origin, quad, entry_zoom, &self.theme);
+                        if scene.focus.dim > 0.0 && !scene.focus.has_node(index) {
+                            dim_instance(&mut instance, scene.focus.dim_factor());
+                        }
+                        instances.push(instance);
                     }
                 }
                 // Выделение/каретка редактора (T7) — на z-позиции редактируемой ноды
@@ -760,6 +794,7 @@ impl Renderer {
                 screen_texts: overlay.screen_texts,
                 zplan: &zplan,
                 edge_labels: &edge_labels,
+                focus: scene.focus,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

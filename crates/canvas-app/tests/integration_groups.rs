@@ -84,9 +84,10 @@ fn test_group_via_node_menu() {
 fn test_create_group_at_viewport_center() {
     let (canvas, _spatial) = group_scene();
 
-    // Меню пустого канваса: один пункт
-    assert_eq!(CANVAS_MENU_ITEMS.len(), 1);
+    // Меню пустого канваса: «Создать группу» + «Фокус на связях» (T23)
+    assert_eq!(CANVAS_MENU_ITEMS.len(), 2);
     assert_eq!(CANVAS_MENU_ITEMS[0], CanvasMenuItem::NewGroup);
+    assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
 
     // Центр viewport в мировых координатах (паттерн App::viewport_center_world)
     let viewport = [1600.0, 900.0];

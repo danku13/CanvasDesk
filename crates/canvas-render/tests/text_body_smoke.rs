@@ -51,6 +51,7 @@ fn headless_note_body_draws() {
             screen_texts: &[],
             zplan: &zplan,
             edge_labels: &[],
+            focus: canvas_render::cards::FocusView::EMPTY,
         },
     )
     .expect("prepare текста");

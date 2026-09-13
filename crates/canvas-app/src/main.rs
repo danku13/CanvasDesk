@@ -7,22 +7,24 @@ use std::time::{Duration, Instant};
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::ui::{
-    button_rect, canvas_menu_label, edge_menu_label, in_resize_corner, menu_item_at_for,
-    menu_item_rect, menu_rect_for, next_free_id, node_menu_label, panel_rect, panel_row_at,
-    plan_group_around, plan_group_at, point_in_rect, select_node_hit, theme_button_rect,
-    CanvasMenuItem, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem,
-    SettingsRow, CANVAS_MENU_ITEMS, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING,
-    MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS, PANEL_HEADER_HEIGHT,
-    PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
+    button_rect, canvas_menu_label, edge_menu_label, focus_seed_of, in_resize_corner,
+    menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, node_menu_label, panel_rect,
+    panel_row_at, plan_group_around, plan_group_at, point_in_rect, select_node_hit,
+    theme_button_rect, CanvasMenuItem, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem,
+    MenuTarget, NodeMenuItem, SettingsRow, CANVAS_MENU_ITEMS, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT,
+    MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
+    PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
 };
 use canvas_core::{
-    apply_file_events, edge_at, nearest_side, path_matches, port_at, port_point, resolve_node_path,
-    watched_dirs, Canvas, Edge, FileEvent, GridStyle, Node, NodeChange, NodeKind, Settings, Side,
-    SpatialIndex, Theme, ThumbnailProvider,
+    apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at, port_point,
+    resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node,
+    NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
 };
-use canvas_render::animate::{pulse_alpha, Flight, FLIGHT_DURATION_MS};
+use canvas_render::animate::{
+    focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS, FOCUS_FADE_MS, FOCUS_PULSE_MS,
+};
 use canvas_render::camera::Vec2;
-use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
+use canvas_render::cards::{preset_color, CardInstance, FocusView, HEADER_HEIGHT};
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
@@ -404,6 +406,19 @@ struct App {
     flight: Option<(Flight, Instant)>,
     /// Пульс подсветки ноды-результата (T14): (нода, старт).
     pulse: Option<(usize, Instant)>,
+    /// T23 (brainstorm-focus): затемнение сцены 0..1 (анимируется фейдом
+    /// 150 мс при вкл/выкл и при появлении/исчезновении семени).
+    focus_dim: f32,
+    /// T23: активный фейд затемнения (от, к, старт).
+    focus_fade: Option<(f32, f32, Instant)>,
+    /// T23: «дыхание» подсвеченных связей: (семя, старт) — рестарт при
+    /// смене семени, один цикл FOCUS_PULSE_MS, затем статика.
+    focus_pulse: Option<(FocusSeed, Instant)>,
+    /// T23: подсвеченные ноды (семя + соседи + выделенная) — данные
+    /// FocusView кадра (пересчёт в update_focus_state).
+    focus_nodes: Vec<usize>,
+    /// T23: подсвеченные связи (инцидентные семени).
+    focus_edges: Vec<usize>,
     /// Режим десктопа (T15, флаг --desktop): окно встраивается в WorkerW
     /// (Windows; на других ОС — warn и обычный оконный режим, SPEC §9).
     desktop_mode: bool,
@@ -509,6 +524,11 @@ impl App {
             search_pending: None,
             flight: None,
             pulse: None,
+            focus_dim: 0.0,
+            focus_fade: None,
+            focus_pulse: None,
+            focus_nodes: Vec::new(),
+            focus_edges: Vec::new(),
             desktop_mode,
             #[cfg(windows)]
             desktop_hierarchy: None,
@@ -1843,7 +1863,7 @@ impl App {
                 });
                 for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
                     let rect = menu_item_rect(menu.origin, i);
-                    labels.push(canvas_menu_label(*item));
+                    labels.push(canvas_menu_label(*item, self.settings.focus_mode));
                     label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                 }
             }
@@ -1862,6 +1882,104 @@ impl App {
                 tracing::warn!(%err, "не удалось сохранить конфиг");
             }
         }
+    }
+
+    /// T23 (brainstorm-focus): пересчёт состояния фокуса на кадр —
+    /// фейд затемнения, пульс «дыхания» и окрестность семени
+    /// (hover → выделенная нода → выделенная связь; O(V+E) — на 5k нод
+    /// ~0.3–0.5 мс, кадры вне изменений не генерируются). Выделенная нода
+    /// добавляется в яркий набор: выделение не гаснет (приоритет над фокусом).
+    fn update_focus_state(&mut self) {
+        let seed = focus_seed_of(self.hovered, self.scene.selected);
+        let focus_on = self.settings.focus_mode;
+        // Цель затемнения: 1 — режим включён и семя есть; иначе всё гаснет
+        let target = f32::from(focus_on && seed.is_some());
+        // Фейд к новой цели (перезапуск при смене цели, продолжение — к той же)
+        let needs_new_fade = match self.focus_fade {
+            Some((_, to, _)) => (to - target).abs() > 1e-3,
+            None => (self.focus_dim - target).abs() > 1e-3,
+        };
+        if needs_new_fade {
+            self.focus_fade = Some((self.focus_dim, target, Instant::now()));
+        }
+        if let Some((from, to, start)) = self.focus_fade {
+            let elapsed = start.elapsed().as_millis() as u32;
+            if elapsed >= FOCUS_FADE_MS {
+                self.focus_dim = to;
+                self.focus_fade = None;
+            } else {
+                self.focus_dim = from + (to - from) * focus_fade(elapsed);
+            }
+        }
+        // «Дыхание»: рестарт при смене семени (режим включён), один цикл,
+        // затем поле очищается — кадры для статики не нужны
+        if focus_on {
+            if let Some(seed) = seed {
+                // is_some_and (не is_none_or): MSRV проекта 1.80
+                if !self
+                    .focus_pulse
+                    .as_ref()
+                    .is_some_and(|(s, _)| *s == seed)
+                {
+                    self.focus_pulse = Some((seed, Instant::now()));
+                }
+                if let Some((_, start)) = self.focus_pulse {
+                    if start.elapsed().as_millis() as u32 >= FOCUS_PULSE_MS {
+                        self.focus_pulse = None;
+                    }
+                }
+            } else {
+                self.focus_pulse = None;
+            }
+        } else {
+            self.focus_pulse = None;
+        }
+        // Окрестность: пересчёт только при включённом режиме (иначе пусто)
+        if focus_on {
+            if let Some(seed) = seed {
+                let mut set = focus_set(&self.scene.canvas, seed);
+                // Выделенная нода (кроме семени-связи — у неё свои концы)
+                // не гаснет вместе с остальными (план T23 §7)
+                if let (Some(Selection::Node(index)), false) =
+                    (self.scene.selected, matches!(seed, FocusSeed::Edge(_)))
+                {
+                    if !set.contains_node(index) {
+                        set.nodes.push(index);
+                        set.nodes.sort_unstable();
+                        set.nodes.dedup();
+                    }
+                }
+                self.focus_nodes = set.nodes;
+                self.focus_edges = set.edges;
+            } else {
+                self.focus_nodes.clear();
+                self.focus_edges.clear();
+            }
+        } else if !self.focus_nodes.is_empty() || !self.focus_edges.is_empty() {
+            self.focus_nodes.clear();
+            self.focus_edges.clear();
+        }
+    }
+
+    /// T23: анимации фокуса ещё идут (кадры держит about_to_wait)?
+    fn focus_animating(&self) -> bool {
+        self.focus_fade.is_some()
+            || self
+                .focus_pulse
+                .as_ref()
+                .is_some_and(|(_, start)| start.elapsed().as_millis() < u128::from(FOCUS_PULSE_MS))
+    }
+
+    /// T23: переключить режим фокуса связей (хоткей F / ПКМ-меню / панель
+    /// настроек — панель сохраняет конфиг общим хвостом apply_settings_row,
+    /// хоткей и меню — рантайм-переключение без записи).
+    fn toggle_focus_mode(&mut self) {
+        self.settings.focus_mode = !self.settings.focus_mode;
+        tracing::info!(
+            вкл = self.settings.focus_mode,
+            "режим фокуса связей (brainstorm-focus)"
+        );
+        self.request_redraw();
     }
 
     /// Применить переключение строки панели настроек и сохранить конфиг.
@@ -1892,6 +2010,8 @@ impl App {
             SettingsRow::EdgesAvoid => {
                 self.settings.edges_avoid_nodes = !self.settings.edges_avoid_nodes;
             }
+            // T23: состояние синхронно с settings — сохранение общим хвостом
+            SettingsRow::FocusMode => self.toggle_focus_mode(),
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -2332,6 +2452,19 @@ impl ApplicationHandler<AppEvent> for App {
                         self.cursor_world(),
                     ))
                 });
+                // T23 (brainstorm-focus): пересчёт анимации и окрестности
+                // семени ДО сборки сцены — FocusView заимствует поля App
+                self.update_focus_state();
+                let focus = FocusView {
+                    nodes: &self.focus_nodes,
+                    edges: &self.focus_edges,
+                    dim: self.focus_dim,
+                    pulse: self
+                        .focus_pulse
+                        .as_ref()
+                        .map(|(_, start)| focus_pulse(start.elapsed().as_millis() as u32))
+                        .unwrap_or(0.0),
+                };
                 if let Some(renderer) = self.renderer.as_mut() {
                     let scene = SceneView {
                         canvas: &self.scene.canvas,
@@ -2340,6 +2473,7 @@ impl ApplicationHandler<AppEvent> for App {
                         hovered: self.hovered,
                         edge_draft,
                         edges_avoid: self.settings.edges_avoid_nodes,
+                        focus,
                     };
                     match renderer.render(
                         &self.camera,
@@ -2413,8 +2547,13 @@ impl ApplicationHandler<AppEvent> for App {
                 });
             }
         }
-        // Полёт камеры и пульс (T14): непрерывные кадры до завершения
-        if self.search_pending.is_some() || self.flight.is_some() || self.pulse.is_some() {
+        // Полёт камеры и пульс (T14) + фокус (T23): непрерывные кадры
+        // до завершения анимаций
+        if self.search_pending.is_some()
+            || self.flight.is_some()
+            || self.pulse.is_some()
+            || self.focus_animating()
+        {
             self.request_redraw();
         }
     }
@@ -2882,6 +3021,17 @@ impl App {
                 self.scene.dragging = None;
             }
         }
+        // T23 (brainstorm-focus): F (русская раскладка — «А») — переключить
+        // режим фокуса связей. Конфликтов нет: Ctrl+F — поиск (обработан
+        // выше с модификатором), F3 — HUD/цикл поиска (функциональная клавиша)
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("f") || c == "а" || c == "А")
+        {
+            self.toggle_focus_mode();
+            return;
+        }
         // F3 — цикл по результатам поиска (T14), если они есть (в т.ч. после
         // закрытия панели — rows сохранены); иначе — HUD с fps/p95 (T5)
         if event.logical_key == Key::Named(NamedKey::F3)
@@ -3070,6 +3220,9 @@ impl App {
                                         let group = plan_group_at(&self.scene.canvas, center);
                                         self.insert_group(group);
                                     }
+                                    // T23: переключение из меню — рантайм,
+                                    // без записи конфига (как и хоткей F)
+                                    CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
                                 }
                             }
                         }

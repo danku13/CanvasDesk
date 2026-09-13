@@ -160,6 +160,10 @@ pub struct Settings {
     pub edges_avoid_nodes: bool,
     /// HUD (fps/p95, F3) включён сразу при старте.
     pub hud_on_start: bool,
+    /// Режим фокуса связей (T23, brainstorm-focus): hover/выделение ноды
+    /// подсвечивает её связи и соседей, остальное притемняется.
+    /// Старые конфиги без поля грузятся как false (serde default).
+    pub focus_mode: bool,
 }
 
 impl Default for Settings {
@@ -172,6 +176,7 @@ impl Default for Settings {
             theme: Theme::Dark,
             edges_avoid_nodes: true,
             hud_on_start: false,
+            focus_mode: false,
         }
     }
 }
@@ -233,6 +238,7 @@ mod tests {
             theme: Theme::Light,
             edges_avoid_nodes: false,
             hud_on_start: true,
+            focus_mode: true,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
         let path = dir.join("config.toml");

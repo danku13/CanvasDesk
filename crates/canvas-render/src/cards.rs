@@ -10,6 +10,7 @@ use crate::camera::Camera;
 use crate::camera::Vec2;
 use crate::markdown;
 use crate::theme::ThemeColors;
+use crate::Color;
 
 /// Высота заголовка карточки в world-пикселях.
 pub const HEADER_HEIGHT: f32 = 28.0;
@@ -219,6 +220,87 @@ const DASH_DUTY: f32 = 0.6;
 /// Шаг одиночных точек (стиль «точки») в единицах диаметра.
 const DOT_SPACING: f32 = 3.0;
 
+// --- Режим фокуса (T23, brainstorm-focus) ---
+
+/// Цвет подсвеченной фокусом связи — акцент (един для тёмной/светлой
+/// темы, как рамка выделения и группы; альфа модулируется пульсом).
+pub const FOCUS_EDGE_COLOR: [f32; 4] = [0.396, 0.612, 0.969, 1.0];
+/// Доля яркости, остающаяся у НЕ-фокусных элементов при dim = 1
+/// (план T23 §1: «~35% яркости»).
+pub const FOCUS_DIM_FLOOR: f32 = 0.35;
+/// Прибавка толщины фокусной связи в world-px (без пульса).
+pub const FOCUS_EDGE_BOOST: f32 = 1.2;
+/// Амплитуда «дыхания» толщины фокусной связи в world-px.
+pub const FOCUS_EDGE_PULSE_BOOST: f32 = 0.8;
+
+/// Вид фокуса для кадра (T23): подсвеченные ноды/связи (отсортированные
+/// индексы из `canvas_core::FocusSet`), степень затемнения прочего и фаза
+/// «дыхания» подсвеченных связей. Данные живёт в приложении — рендер
+/// получает только срезы; вычисляется на каждый кадр (динамика без
+/// инвалидаций: драги/удаления подхватываются сами).
+///
+/// `dim = 0` (EMPTY) — режим выключен: кадр идентичен прежнему поведению.
+#[derive(Debug, Clone, Copy)]
+pub struct FocusView<'a> {
+    /// Подсвеченные ноды (семя + соседи, может включать выделенную —
+    /// её добавляет приложение, приоритет выделения над фокусом).
+    pub nodes: &'a [usize],
+    /// Подсвеченные связи (инцидентные семени).
+    pub edges: &'a [usize],
+    /// Степень затемнения прочих элементов: 0 — выключено, 1 — полное.
+    pub dim: f32,
+    /// Фаза «дыхания» подсвеченных связей 0..1 (0 — нет).
+    pub pulse: f32,
+}
+
+impl FocusView<'_> {
+    /// Выключенный фокус: пустые срезы, dim = 0 — ничего не меняется.
+    pub const EMPTY: FocusView<'static> = FocusView {
+        nodes: &[],
+        edges: &[],
+        dim: 0.0,
+        pulse: 0.0,
+    };
+
+    /// Нода подсвечена? (бинарный поиск — срез отсортирован)
+    pub fn has_node(&self, index: usize) -> bool {
+        self.nodes.binary_search(&index).is_ok()
+    }
+
+    /// Связь подсвечена?
+    pub fn has_edge(&self, index: usize) -> bool {
+        self.edges.binary_search(&index).is_ok()
+    }
+
+    /// Множитель альфы НЕ-фокусных элементов при текущем dim
+    /// (1.0 — не трогать; dim=1 → FOCUS_DIM_FLOOR).
+    pub fn dim_factor(&self) -> f32 {
+        1.0 - self.dim * (1.0 - FOCUS_DIM_FLOOR)
+    }
+}
+
+/// Затемнение инстанса карточки (T23): альфа заливки и рамки × фактор.
+/// Выделенные/фокусные инстансы не затемняются — вызов только для прочих
+/// (приоритет выделения над фокусом, план T23 §7).
+pub fn dim_instance(inst: &mut CardInstance, factor: f32) {
+    if factor >= 1.0 {
+        return;
+    }
+    inst.fill[3] *= factor;
+    inst.border[3] *= factor;
+}
+
+/// Затемнение цвета текста glyphon (T23): альфа × фактор с клампом.
+/// Применяется к `TextArea::default_color` заголовков/иконок/тел/лейблов
+/// не-фокусных элементов.
+pub fn dim_color(color: Color, factor: f32) -> Color {
+    if factor >= 1.0 {
+        return color;
+    }
+    let alpha = (color.a() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+    Color::rgba(color.r(), color.g(), color.b(), alpha)
+}
+
 /// Кружок диаметром `d` с центром в `center` (params.w = 1 — без тени).
 fn dot(center: [f32; 2], d: f32, fill: [f32; 4]) -> CardInstance {
     CardInstance {
@@ -363,10 +445,15 @@ fn polyline_dots(
 /// посторонних нод (глобальная настройка), рендер идёт по огибающей
 /// полилинии. Добавлять ПЕРЕД инстансами карточек — связи под нодами
 /// (порядок в буфере = порядок рисования).
+///
+/// T23: связи из `focus.edges` — акцентным цветом (альфа дышит пульсом)
+/// и толще (`FOCUS_EDGE_BOOST` + пульс); прочие при dim > 0 — затемнены.
+/// Выделенная связь рисуется как раньше (приоритет выделения).
 pub fn build_edge_instances(
     canvas: &canvas_core::Canvas,
     selected: Option<usize>,
     avoid: bool,
+    focus: &FocusView,
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
@@ -375,19 +462,28 @@ pub fn build_edge_instances(
             continue;
         };
         let is_selected = selected == Some(index);
-        let fill = if is_selected {
-            SELECTION_BORDER
+        let in_focus = focus.has_edge(index);
+        let (fill, d) = if is_selected {
+            (
+                SELECTION_BORDER,
+                edge.thickness.unwrap_or_default().dot() + (EDGE_DOT_SELECTED - EDGE_DOT),
+            )
+        } else if in_focus {
+            // Альфа дышит вместе с толщиной: статика 0.75, пик 1.0
+            let mut fill = FOCUS_EDGE_COLOR;
+            fill[3] = 0.75 + 0.25 * focus.pulse;
+            let d = edge.thickness.unwrap_or_default().dot()
+                + FOCUS_EDGE_BOOST
+                + focus.pulse * FOCUS_EDGE_PULSE_BOOST;
+            (fill, d)
         } else {
-            named_color(edge.color.as_deref()).unwrap_or(EDGE_COLOR)
+            let mut fill = named_color(edge.color.as_deref()).unwrap_or(EDGE_COLOR);
+            if focus.dim > 0.0 {
+                fill[3] *= focus.dim_factor();
+            }
+            (fill, edge.thickness.unwrap_or_default().dot())
         };
         let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
-        let base_d = edge.thickness.unwrap_or_default().dot();
-        // Выделенная связь толще на 1px относительно своей толщины
-        let d = if is_selected {
-            base_d + (EDGE_DOT_SELECTED - EDGE_DOT)
-        } else {
-            base_d
-        };
         polyline_dots(&points, style, d, fill, true, &mut out);
     }
     out
@@ -807,7 +903,7 @@ mod tests {
         canvas.add_edge(edge);
         canvas.add_edge(canvas_core::Edge::new("e2", "a", None, "missing", None));
 
-        let instances = build_edge_instances(&canvas, None, false);
+        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY);
         assert!(
             instances.len() > ARROW_DOTS * 2,
             "кружки линии + стрелка: {}",
@@ -829,10 +925,140 @@ mod tests {
 
         // Выделенная связь — акцент и толще (шаг ресэмплинга зависит от d,
         // поэтому число кружков иное — сравниваем только атрибуты)
-        let selected = build_edge_instances(&canvas, Some(0), false);
+        let selected = build_edge_instances(&canvas, Some(0), false, &FocusView::EMPTY);
         assert!(selected.len() > ARROW_DOTS * 2);
         assert_eq!(selected[0].fill, SELECTION_BORDER);
         assert_eq!(selected[0].size[0], EDGE_DOT_SELECTED);
+    }
+
+    /// T23: фокусная связь — акцентный цвет (альфа дышит пульсом), толщина
+    /// больше базовой на FOCUS_EDGE_BOOST (+пульс); при dim>0 прочие связи
+    /// затемнены до dim_factor; выделенная связь приоритетнее фокуса.
+    #[test]
+    fn edge_instances_focus_highlight_and_dim() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("b", "C:/b.png", 500.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("c", "C:/c.png", 0.0, 500.0, 100.0, 100.0));
+        canvas.add_edge(canvas_core::Edge::new("e1", "a", None, "b", None));
+        canvas.add_edge(canvas_core::Edge::new("e2", "b", None, "c", None));
+
+        let dim_view = FocusView {
+            nodes: &[0, 1],
+            edges: &[0],
+            dim: 1.0,
+            pulse: 0.5,
+        };
+        let inst = build_edge_instances(&canvas, None, false, &dim_view);
+        // Фокусная e1 (первая в буфере): акцент, альфа 0.75 + 0.25·пульс,
+        // толщина базовая + буст + пульс
+        let base_d = canvas_core::EdgeThickness::Medium.dot();
+        assert_eq!(
+            inst[0].fill,
+            [
+                FOCUS_EDGE_COLOR[0],
+                FOCUS_EDGE_COLOR[1],
+                FOCUS_EDGE_COLOR[2],
+                0.875
+            ]
+        );
+        assert!(
+            (inst[0].size[0] - (base_d + FOCUS_EDGE_BOOST + 0.5 * FOCUS_EDGE_PULSE_BOOST)).abs()
+                < 1e-3,
+            "толщина фокусной: {}",
+            inst[0].size[0]
+        );
+        // Не-фокусная e2: цвет дефолтный, альфа × dim_factor, толщина базовая
+        // (фактор — через ту же формулу dim_factor: бит-точное сравнение)
+        let factor = dim_view.dim_factor();
+        let dimmed_color = [
+            EDGE_COLOR[0],
+            EDGE_COLOR[1],
+            EDGE_COLOR[2],
+            EDGE_COLOR[3] * factor,
+        ];
+        let e2_first = inst
+            .iter()
+            .position(|i| i.fill == dimmed_color)
+            .expect("e2 затемнена");
+        assert!((inst[e2_first].size[0] - base_d).abs() < 1e-3);
+
+        // Выделенная e2 при том же фокусе — как раньше: акцент выделения,
+        // НЕ затемнена
+        let sel = build_edge_instances(&canvas, Some(1), false, &dim_view);
+        let sel_e2 = sel
+            .iter()
+            .find(|i| i.fill == SELECTION_BORDER)
+            .expect("выделенная не затемнена");
+        assert_eq!(sel_e2.size[0], base_d + (EDGE_DOT_SELECTED - EDGE_DOT));
+
+        // dim = 0 — выключено: все связи обычной яркости
+        let off = FocusView {
+            nodes: &[0],
+            edges: &[],
+            dim: 0.0,
+            pulse: 0.0,
+        };
+        let plain = build_edge_instances(&canvas, None, false, &off);
+        assert!(plain.iter().any(|i| i.fill == EDGE_COLOR));
+    }
+
+    /// T23: FocusView::dim_factor линейно мапит dim в [1, FLOOR];
+    /// dim_instance/dim_color гасят альфу, фактор ≥ 1 — нетронуто.
+    #[test]
+    fn focus_dim_helpers() {
+        let mut view = FocusView::EMPTY;
+        assert_eq!(view.dim_factor(), 1.0);
+        view.dim = 1.0;
+        assert!((view.dim_factor() - FOCUS_DIM_FLOOR).abs() < 1e-4);
+        view.dim = 0.5;
+        assert!((view.dim_factor() - (1.0 + FOCUS_DIM_FLOOR) / 2.0).abs() < 1e-4);
+
+        let mut inst = CardInstance {
+            pos: [0.0; 2],
+            size: [10.0; 2],
+            fill: [1.0, 0.5, 0.25, 1.0],
+            border: [1.0, 1.0, 1.0, 0.5],
+            params: [5.0, 0.0, 0.0, 1.0],
+        };
+        dim_instance(&mut inst, 1.0);
+        assert_eq!(inst.fill[3], 1.0, "фактор 1 — нет изменений");
+        dim_instance(&mut inst, 0.5);
+        assert!((inst.fill[3] - 0.5).abs() < 1e-4);
+        assert!((inst.border[3] - 0.25).abs() < 1e-4);
+
+        let color = Color::rgba(0xe6, 0xe6, 0xe6, 200);
+        let dimmed = dim_color(color, 0.35);
+        assert_eq!(dimmed.a(), 70, "200 × 0.35 = 70");
+        assert_eq!(dimmed.r(), 0xe6);
+        assert_eq!(dim_color(color, 1.0), color);
+        // Кламп: альфа не уходит за 255
+        let bright = dim_color(Color::rgba(1, 1, 1, 255), 0.999);
+        assert_eq!(bright.a(), 255);
+    }
+
+    /// T23: has_node/has_edge — бинарный поиск по отсортированным срезам;
+    /// EMPTY всё возвращает false.
+    #[test]
+    fn focus_view_membership() {
+        let view = FocusView {
+            nodes: &[1, 3, 5],
+            edges: &[2, 4],
+            dim: 1.0,
+            pulse: 0.0,
+        };
+        assert!(view.has_node(1) && view.has_node(3) && view.has_node(5));
+        assert!(!view.has_node(0) && !view.has_node(2) && !view.has_node(4));
+        assert!(view.has_edge(2) && view.has_edge(4));
+        assert!(!view.has_edge(0) && !view.has_edge(3));
+        assert!(!FocusView::EMPTY.has_node(0));
+        assert!(!FocusView::EMPTY.has_edge(0));
     }
 
     /// Обход нод: при avoid=true инстансы строятся по огибающей полилинии
@@ -850,8 +1076,8 @@ mod tests {
             .nodes
             .push(Node::file("wall", "C:/w.png", 230.0, 0.0, 140.0, 100.0));
         canvas.add_edge(canvas_core::Edge::new("e1", "a", None, "b", None));
-        let plain = build_edge_instances(&canvas, None, false);
-        let avoided = build_edge_instances(&canvas, None, true);
+        let plain = build_edge_instances(&canvas, None, false, &FocusView::EMPTY);
+        let avoided = build_edge_instances(&canvas, None, true, &FocusView::EMPTY);
         assert!(
             avoided.len() > plain.len(),
             "огибающий маршрут длиннее прямой: {} vs {}",
@@ -1148,7 +1374,7 @@ mod tests {
         edge.thickness = Some(canvas_core::EdgeThickness::Thin);
         canvas.add_edge(edge);
 
-        let instances = build_edge_instances(&canvas, None, false);
+        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY);
         assert!(!instances.is_empty());
         assert!(
             instances.iter().all(|inst| inst.size[0] == 1.8),

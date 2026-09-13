@@ -61,6 +61,7 @@ fn headless_gfm_body_quads_draw() {
             screen_texts: &[],
             zplan: &zplan,
             edge_labels: &[],
+            focus: canvas_render::cards::FocusView::EMPTY,
         },
     )
     .expect("prepare текста");

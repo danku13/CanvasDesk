@@ -3,6 +3,7 @@
 
 mod edgegeom;
 mod error;
+mod focus;
 mod fs_events;
 mod io;
 mod model;
@@ -17,6 +18,7 @@ pub use edgegeom::{
     EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
 };
 pub use error::CoreError;
+pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{
     apply_file_events, normalize_path, path_matches, relative_if_inside, resolve_node_path,
     watched_dirs, FileEvent, NodeChange,

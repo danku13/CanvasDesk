@@ -1,11 +1,18 @@
 //! Анимации приложения (T14): полёт камеры к результату поиска (300 мс,
 //! ease-out) и пульс подсветки ноды. Чистая математика времени — без wgpu/winit,
 //! покрывается юнит-тестами.
+//!
+//! T23 (brainstorm-focus): fade затемнения сцены и «дыхание» подсвеченных
+//! связей — те же инварианты (кламп, монотонность, затухание).
 
 /// Длительность полёта камеры к ноде (TASKS T14).
 pub const FLIGHT_DURATION_MS: u32 = 300;
 /// Длительность пульса подсветки ноды (план T14 §3).
 pub const PULSE_TOTAL_MS: u32 = 1200;
+/// Fade затемнения сцены в режиме фокуса (план T23 §3, зона B).
+pub const FOCUS_FADE_MS: u32 = 150;
+/// «Дыхание» подсвеченных связей — один цикл (план T23 §3, зона B).
+pub const FOCUS_PULSE_MS: u32 = 1600;
 
 /// Ease-out cubic: быстрый старт, плавное докатывание. t клампится в [0, 1].
 pub fn ease_out_cubic(t: f32) -> f32 {
@@ -78,6 +85,26 @@ pub fn pulse_alpha(elapsed_ms: u32) -> f32 {
         0.0
     } else {
         1.0 - elapsed_ms as f32 / PULSE_TOTAL_MS as f32
+    }
+}
+
+/// Fade затемнения сцены (T23): 0 → 1 за `FOCUS_FADE_MS`, ease-out
+/// (быстрое включение, плавное «до затемнения»); за пределами — 1.0.
+/// Приложение интерпретирует как степень затемнения не-фокусных элементов
+/// и линеино маппит в множитель альфы (см. `canvas_render::cards`).
+pub fn focus_fade(elapsed_ms: u32) -> f32 {
+    ease_out_cubic(elapsed_ms as f32 / FOCUS_FADE_MS as f32)
+}
+
+/// «Дыхание» подсвеченных связей (T23): синус-полуволна 0 → 1 → 0 за
+/// `FOCUS_PULSE_MS` (утолщение/яркость нарастают и отпускают);
+/// после — 0.0 (статичная подсветка без постоянных кадров).
+pub fn focus_pulse(elapsed_ms: u32) -> f32 {
+    if elapsed_ms >= FOCUS_PULSE_MS {
+        0.0
+    } else {
+        // sin(pi·t): 0 в t=0, 1 в t=0.5, 0 в t=1
+        (std::f32::consts::PI * elapsed_ms as f32 / FOCUS_PULSE_MS as f32).sin()
     }
 }
 
@@ -163,5 +190,37 @@ mod tests {
             prev = alpha;
         }
         assert_eq!(pulse_alpha(PULSE_TOTAL_MS + 100), 0.0);
+    }
+
+    /// Fade фокуса: ноль в старте, монотонный рост, 1.0 за пределами
+    /// длительности (план T23 §6).
+    #[test]
+    fn focus_fade_monotonic_to_one() {
+        assert!((focus_fade(0) - 0.0).abs() < EPS);
+        let mut prev = focus_fade(0);
+        for t in (0..=FOCUS_FADE_MS).step_by(10) {
+            let alpha = focus_fade(t);
+            assert!(alpha >= prev - EPS, "откат fade при t={t}: {alpha}");
+            assert!(alpha <= 1.0 + EPS, "перелёт за 1 при t={t}: {alpha}");
+            prev = alpha;
+        }
+        assert_eq!(focus_fade(FOCUS_FADE_MS), 1.0);
+        assert_eq!(focus_fade(FOCUS_FADE_MS + 5000), 1.0);
+    }
+
+    /// Дыхание связей: 0 на концах цикла, максимум в середине, после
+    /// цикла — 0 (статика, кадры не нужны).
+    #[test]
+    fn focus_pulse_half_wave() {
+        assert!((focus_pulse(0) - 0.0).abs() < EPS);
+        assert!((focus_pulse(FOCUS_PULSE_MS) - 0.0).abs() < EPS);
+        assert_eq!(focus_pulse(FOCUS_PULSE_MS + 1), 0.0);
+        let mid = focus_pulse(FOCUS_PULSE_MS / 2);
+        assert!((mid - 1.0).abs() < EPS, "максимум в середине: {mid}");
+        // Без перелётов и отрицательных значений
+        for t in (0..=FOCUS_PULSE_MS).step_by(40) {
+            let v = focus_pulse(t);
+            assert!(v >= 0.0 && v <= 1.0 + EPS, "выход за [0,1] при t={t}: {v}");
+        }
     }
 }

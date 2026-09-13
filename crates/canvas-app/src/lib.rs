@@ -7,8 +7,8 @@
 //! дублировались в `main.rs` копипастой — теперь источник один.
 
 pub use canvas_core::{
-    edge_at, nearest_side, port_at, port_point, Canvas, Corner, Edge, EdgeLineStyle, EdgeThickness,
-    Node, NodeKind, Settings, Side, SpatialIndex,
+    edge_at, focus_set, nearest_side, port_at, port_point, Canvas, Corner, Edge, EdgeLineStyle,
+    EdgeThickness, FocusSeed, FocusSet, Node, NodeKind, Settings, Side, SpatialIndex,
 };
 pub use canvas_render::camera::Vec2;
 pub use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
@@ -95,12 +95,13 @@ pub mod ui {
 
     /// Строки панели настроек (порядок = порядок отображения). Тема вынесена
     /// в отдельную кнопку-переключатель рядом с кнопкой настроек.
-    pub const SETTINGS_ROWS: [SettingsRow; 6] = [
+    pub const SETTINGS_ROWS: [SettingsRow; 7] = [
         SettingsRow::ButtonCorner,
         SettingsRow::Grid,
         SettingsRow::GridStyle,
         SettingsRow::GridDensity,
         SettingsRow::EdgesAvoid,
+        SettingsRow::FocusMode,
         SettingsRow::HudOnStart,
     ];
 
@@ -117,6 +118,8 @@ pub mod ui {
         GridDensity,
         /// Связи огибают посторонние ноды.
         EdgesAvoid,
+        /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
+        FocusMode,
         /// HUD (F3) включён при старте.
         HudOnStart,
     }
@@ -136,6 +139,9 @@ pub mod ui {
                 }
                 SettingsRow::EdgesAvoid => {
                     format!("Связи огибают ноды: {}", on_off(settings.edges_avoid_nodes))
+                }
+                SettingsRow::FocusMode => {
+                    format!("Фокус на связях: {}", on_off(settings.focus_mode))
                 }
                 SettingsRow::HudOnStart => {
                     format!("HUD при запуске: {}", on_off(settings.hud_on_start))
@@ -666,10 +672,14 @@ pub mod ui {
     pub enum CanvasMenuItem {
         /// «Создать группу» в центре текущего viewport.
         NewGroup,
+        /// T23: «Фокус на связях» — переключатель режима brainstorm-focus
+        /// (галочка отражает текущее состояние).
+        FocusMode,
     }
 
     /// Меню пустого канваса.
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 1] = [CanvasMenuItem::NewGroup];
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 2] =
+        [CanvasMenuItem::NewGroup, CanvasMenuItem::FocusMode];
 
     /// Подпись пункта меню ноды. Разделитель подписи не имеет.
     pub fn node_menu_label(item: NodeMenuItem) -> Option<String> {
@@ -680,10 +690,29 @@ pub mod ui {
         }
     }
 
-    /// Подпись пункта меню пустого канваса.
-    pub fn canvas_menu_label(item: CanvasMenuItem) -> String {
+    /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
+    /// фокуса для ✓-галочки пункта `FocusMode` (T23, паттерн edge_menu_label).
+    pub fn canvas_menu_label(item: CanvasMenuItem, focus_on: bool) -> String {
         match item {
             CanvasMenuItem::NewGroup => "Создать группу".to_owned(),
+            CanvasMenuItem::FocusMode => {
+                format!("{}Фокус на связях", if focus_on { "✓ " } else { "" })
+            }
+        }
+    }
+
+    /// Семя фокуса (T23) из интерактивных состояний: приоритет — нода под
+    /// курсором (живое «прощупывание» графа), затем выделенная нода (фокус
+    /// держится после ухода курсора), затем выделенная связь (линия + оба
+    /// конца). Ничего нет — None (затемнение плавно уходит).
+    pub fn focus_seed_of(hovered: Option<usize>, selected: Option<Selection>) -> Option<FocusSeed> {
+        if let Some(index) = hovered {
+            return Some(FocusSeed::Node(index));
+        }
+        match selected {
+            Some(Selection::Node(index)) => Some(FocusSeed::Node(index)),
+            Some(Selection::Edge(index)) => Some(FocusSeed::Edge(index)),
+            None => None,
         }
     }
 
@@ -1215,18 +1244,58 @@ pub mod ui {
             );
         }
 
-        /// Меню пустого канваса: один пункт «Создать группу».
+        /// Меню пустого канваса: «Создать группу» + «Фокус на связях» (T23).
         #[test]
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 1);
-            assert_eq!(canvas_menu_label(CANVAS_MENU_ITEMS[0]), "Создать группу");
+            assert_eq!(n, 2);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[0], false),
+                "Создать группу"
+            );
+            // T23: второй пункт — переключатель фокуса с ✓-галочкой
+            assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], true),
+                "✓ Фокус на связях"
+            );
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], false),
+                "Фокус на связях"
+            );
             let y = 50.0 + MENU_PADDING + 3.0;
             assert_eq!(menu_item_at_for(origin, [110.0, y], n), Some(0));
+            // Хит-test второго пункта
+            let y1 = 50.0 + MENU_PADDING + MENU_ITEM_HEIGHT + 3.0;
+            assert_eq!(menu_item_at_for(origin, [110.0, y1], n), Some(1));
             assert_eq!(
                 menu_item_at_for(origin, [110.0, 50.0 + menu_rect_for(origin, n)[3] + 1.0], n),
                 None
+            );
+        }
+
+        /// T23: приоритет семени фокуса — hover > выделенная нода >
+        /// выделенная связь > ничего.
+        #[test]
+        fn focus_seed_priority() {
+            assert_eq!(focus_seed_of(None, None), None);
+            assert_eq!(
+                focus_seed_of(None, Some(Selection::Node(3))),
+                Some(FocusSeed::Node(3))
+            );
+            assert_eq!(
+                focus_seed_of(None, Some(Selection::Edge(7))),
+                Some(FocusSeed::Edge(7))
+            );
+            // Hover побеждает выделение — «живое» прошупывание графа
+            assert_eq!(
+                focus_seed_of(Some(1), Some(Selection::Node(3))),
+                Some(FocusSeed::Node(1))
+            );
+            assert_eq!(
+                focus_seed_of(Some(2), Some(Selection::Edge(9))),
+                Some(FocusSeed::Node(2))
             );
         }
 
