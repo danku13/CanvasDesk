@@ -1,5 +1,6 @@
 //! canvas-app — приложение: event loop, команды, UI-состояние, main().
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -59,6 +60,9 @@ const ZOOM_STEP_PER_LINE: f32 = 1.1;
 const PAN_PX_PER_LINE: f32 = 40.0;
 /// Debounce автосейва (SPEC §9).
 const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(2);
+/// Глубина истории undo (FR-006): не менее 50 последних действий (запрос
+/// пользователя «не менее 50»); старейшие шаги вытесняются.
+const UNDO_LIMIT: usize = 50;
 /// Ширина клип-бокса тултипа битой ссылки (T10): длинный путь переносится
 /// на границы этой области, экран не покидает.
 const TOOLTIP_WIDTH: f32 = 380.0;
@@ -200,6 +204,12 @@ struct SceneState {
     /// перемещаемых (выделение или одна + дети групп).
     dragging: Option<DragState>,
     dirty_since: Option<Instant>,
+    /// История undo (FR-006): снапшоты Canvas «до» действий (push ДО
+    /// мутации). VecDeque — O(1) вытеснение старейшего при переполнении.
+    undo_stack: VecDeque<Canvas>,
+    /// Отменённые состояния (FR-006): текущее уходит сюда при undo; новое
+    /// действие обнуляет ветку redo.
+    redo_stack: Vec<Canvas>,
 }
 
 impl SceneState {
@@ -214,6 +224,8 @@ impl SceneState {
             selected_nodes: Vec::new(),
             dragging: None,
             dirty_since: None,
+            undo_stack: VecDeque::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -288,6 +300,33 @@ impl SceneState {
                 false
             }
         }
+    }
+
+    /// Зафиксировать снапшот «до» действия (FR-006): вызывать ДО мутации.
+    /// Новое действие обнуляет ветку redo; глубина — UNDO_LIMIT с
+    /// вытеснением старейшего.
+    fn push_undo(&mut self, snapshot: Canvas) {
+        self.redo_stack.clear();
+        self.undo_stack.push_back(snapshot);
+        while self.undo_stack.len() > UNDO_LIMIT {
+            self.undo_stack.pop_front();
+        }
+    }
+
+    /// Состояние «до» последнего действия (FR-006, Ctrl+Z): pop undo-стека,
+    /// текущая модель уходит в redo. None — история пуста.
+    fn take_undo(&mut self) -> Option<Canvas> {
+        let before = self.undo_stack.pop_back()?;
+        self.redo_stack.push(self.canvas.clone());
+        Some(before)
+    }
+
+    /// Отменённое состояние (FR-006, Ctrl+Y / Ctrl+Shift+Z): pop redo-стека,
+    /// текущая модель возвращается в undo. None — возвратить нечего.
+    fn take_redo(&mut self) -> Option<Canvas> {
+        let after = self.redo_stack.pop()?;
+        self.undo_stack.push_back(self.canvas.clone());
+        Some(after)
     }
 }
 
@@ -380,6 +419,10 @@ struct App {
     node_clipboard: Vec<Node>,
     /// Панель горячих клавиш открыта (FR-004, F1): слева по центру.
     hotkeys_open: bool,
+    /// Отложенный undo-снапшот (FR-006): «до» растянутого действия —
+    /// drag/resize/редактирование. Ставится на старте, пушится в историю
+    /// при фактическом изменении (клик без движения шага не создаёт).
+    pending_undo: Option<Canvas>,
     /// Настройки приложения (config.toml).
     settings: Settings,
     /// Путь конфига (None — не сохраняем, работаем на дефолтах).
@@ -526,6 +569,7 @@ impl App {
             select_rect: None,
             node_clipboard: Vec::new(),
             hotkeys_open: false,
+            pending_undo: None,
             settings,
             config_path,
             settings_open: false,
@@ -928,6 +972,9 @@ impl App {
             node.text.clone().unwrap_or_default()
         };
         let (_, width, height) = body_area(node);
+        // FR-006: отложенный снапшот «до» правки — шаг закроется на commit
+        // с фактическим изменением текста (finish_editing)
+        self.begin_pending_undo();
         let zoom_px = self.zoom_px();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -964,6 +1011,8 @@ impl App {
         else {
             return;
         };
+        // FR-006: отложенный снапшот «до» правки лейбла (паттерн begin_editing)
+        self.begin_pending_undo();
         let zoom_px = self.zoom_px();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -1026,6 +1075,11 @@ impl App {
         };
         self.editor_dragging = false;
         if commit && session.changed() {
+            // FR-006: правка состоялась — отложенный снапшот «до» в историю
+            // (мутация ниже); cancel-ветка дропнет его
+            if let Some(snapshot) = self.pending_undo.take() {
+                self.scene.push_undo(snapshot);
+            }
             match session.target() {
                 EditTarget::Node(index) => {
                     if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
@@ -1058,6 +1112,10 @@ impl App {
                 }
             }
             self.scene.mark_dirty();
+        } else {
+            // FR-006: отмена правки — модель не менялась, отложенный
+            // снапшот «до» дропается (no-op шагов в истории нет)
+            self.pending_undo = None;
         }
         self.request_redraw();
     }
@@ -1066,6 +1124,8 @@ impl App {
     /// push + spatial index; `select` — выделить вставленные пачкой
     /// (CR-001). Возвращает индексы вставленных (порядок сохранён).
     fn insert_nodes(&mut self, nodes: Vec<Node>, select: bool) -> Vec<usize> {
+        // FR-006: вставка (paste/duplicate/drop-планы) — undo-шаг
+        self.push_undo();
         let mut indices = Vec::with_capacity(nodes.len());
         for node in nodes {
             self.scene.canvas.nodes.push(node);
@@ -1083,6 +1143,98 @@ impl App {
         self.sync_watch_dirs();
         self.request_redraw();
         indices
+    }
+
+    /// Push undo-снапшота текущего состояния (FR-006): вызывать
+    /// непосредственно ПЕРЕД мутацией модели.
+    fn push_undo(&mut self) {
+        let snapshot = self.scene.canvas.clone();
+        self.scene.push_undo(snapshot);
+    }
+
+    /// Начать отложенное действие (FR-006): drag/resize/редактирование —
+    /// снапшот «до» запоминается на старте; пуш в историю только при
+    /// фактическом изменении (см. finish_interaction_undo / finish_editing).
+    fn begin_pending_undo(&mut self) {
+        self.pending_undo = Some(self.scene.canvas.clone());
+    }
+
+    /// Закрыть отложенное действие drag/resize (FR-006): вызывается на
+    /// отпускании ЛКМ и при прерывании drag отпусканием Space. Push только
+    /// если геометрия реально изменилась — клик без движения не шаг.
+    fn finish_interaction_undo(&mut self) {
+        let Some(snapshot) = self.pending_undo.take() else {
+            return;
+        };
+        // Drag: позиции нод отличаются от исходных (origins хранит «до»)
+        let moved = self.scene.dragging.as_ref().is_some_and(|drag| {
+            drag.origins.iter().any(|(index, origin)| {
+                self.scene
+                    .canvas
+                    .nodes
+                    .get(*index)
+                    .is_some_and(|node| node.x != origin[0] || node.y != origin[1])
+            })
+        });
+        // Resize: размеры отличаются от снапшотных (кламп мог дать те же)
+        let resized = self.resizing.is_some_and(|index| {
+            self.scene
+                .canvas
+                .nodes
+                .get(index)
+                .zip(snapshot.nodes.get(index))
+                .is_some_and(|(now, before)| {
+                    now.width != before.width || now.height != before.height
+                })
+        });
+        if moved || resized {
+            self.scene.push_undo(snapshot);
+        }
+    }
+
+    /// Отменить последнее действие (FR-006, Ctrl+Z): модель «до» из
+    /// undo-стека, текущее состояние — в redo.
+    fn undo_action(&mut self) {
+        if let Some(before) = self.scene.take_undo() {
+            self.restore_canvas(before);
+            tracing::debug!(depth = self.scene.undo_stack.len(), "undo");
+        }
+    }
+
+    /// Вернуть отменённое (FR-006, Ctrl+Y / Ctrl+Shift+Z).
+    fn redo_action(&mut self) {
+        if let Some(after) = self.scene.take_redo() {
+            self.restore_canvas(after);
+            tracing::debug!(depth = self.scene.redo_stack.len(), "redo");
+        }
+    }
+
+    /// Восстановить снапшот (FR-006): модель + spatial + сброс кэшей
+    /// (индексы из прошлых состояний недостоверны — паттерн
+    /// delete_selected). Интеракции и редактирование прерываются без
+    /// коммита; автосейв следует за mark_dirty.
+    fn restore_canvas(&mut self, canvas: Canvas) {
+        self.pending_undo = None;
+        self.editing = None;
+        self.editor_dragging = false;
+        self.scene.canvas = canvas;
+        self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.invalidate_node_caches();
+        }
+        self.thumbs_failed.clear();
+        self.scene.selected = None;
+        self.scene.selected_nodes.clear();
+        self.scene.dragging = None;
+        self.resizing = None;
+        self.menu = None;
+        self.hovered = None;
+        self.edge_drag = None;
+        self.select_rect = None;
+        self.scene.mark_dirty();
+        // Файловый состав мог измениться — вотчер и SHCNE-подписки (T10)
+        self.sync_watch_dirs();
+        self.request_redraw();
     }
 
     /// Индексы выделенных нод (FR-003): набор мультивыделения ∪ primary,
@@ -1157,6 +1309,8 @@ impl App {
     fn delete_selected(&mut self) {
         // CR-001: мультивыделение — удаляем весь набор (рамка/Ctrl+клик)
         if !self.scene.selected_nodes.is_empty() {
+            // FR-006: удаление набора — undo-шаг
+            self.push_undo();
             let indices = std::mem::take(&mut self.scene.selected_nodes);
             let removed = self.scene.canvas.remove_nodes(&indices);
             if removed.is_empty() {
@@ -1177,6 +1331,9 @@ impl App {
             self.scene.mark_dirty();
             self.sync_watch_dirs();
             self.request_redraw();
+            // Редактирование прервано удалением — отложенный снапшот (FR-006)
+            // больше не актуален: правки умрут вместе с нодой
+            self.pending_undo = None;
             return;
         }
         match self.scene.selected {
@@ -1185,12 +1342,18 @@ impl App {
                     return;
                 };
                 let id = edge.id.clone();
+                // FR-006: удаление связи — undo-шаг
+                self.push_undo();
                 self.scene.canvas.remove_edge(&id);
                 self.scene.selected = None;
                 self.scene.mark_dirty();
                 self.request_redraw();
             }
             Some(Selection::Node(index)) => {
+                // FR-006: удаление ноды — undo-шаг (снапшот ДО мутации)
+                if self.scene.canvas.nodes.get(index).is_some() {
+                    self.push_undo();
+                }
                 if self.scene.canvas.remove_node(index).is_none() {
                     return;
                 }
@@ -1219,6 +1382,8 @@ impl App {
     /// Создать пустую заметку в world-точке (T7): модель + spatial index.
     /// Возвращает индекс новой ноды.
     fn create_note_at(&mut self, world: Vec2) -> usize {
+        // FR-006: создание заметки — undo-шаг
+        self.push_undo();
         let id = next_free_id(&self.scene.canvas, "note");
         self.scene
             .canvas
@@ -1270,6 +1435,8 @@ impl App {
     /// Вставить готовую ноду-группу в модель (паттерн create_note_at):
     /// spatial index + выделение новой группы. Возвращает индекс.
     fn insert_group(&mut self, group: Node) -> usize {
+        // FR-006: создание группы — undo-шаг
+        self.push_undo();
         self.scene.canvas.nodes.push(group);
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
@@ -1345,6 +1512,10 @@ impl App {
                 // План пересчитываем по СВЕЖИМ данным Drop (не из превью,
                 // план T9 §5): источник мог обновить содержимое
                 let plan = plan_drop(&self.scene.canvas, &data, world);
+                if !plan.is_empty() {
+                    // FR-006: дроп файлов/заметок — undo-шаг
+                    self.push_undo();
+                }
                 let mut last: Option<usize> = None;
                 for ins in plan {
                     let node = match ins.kind {
@@ -2994,6 +3165,8 @@ fn mcp_dispatch(
                 node.height = height;
             }
             let index = scene.canvas.nodes.len();
+            // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
+            scene.push_undo(scene.canvas.clone());
             scene.canvas.nodes.push(node);
             scene.spatial.insert(index, &scene.canvas.nodes[index]);
             scene.mark_dirty();
@@ -3013,6 +3186,8 @@ fn mcp_dispatch(
                 mcp_opt_f32(params, "height").unwrap_or(canvas_app::ui::DROP_CARD_H),
             );
             let index = scene.canvas.nodes.len();
+            // FR-006: MCP-мутация — undo-шаг
+            scene.push_undo(scene.canvas.clone());
             scene.canvas.nodes.push(node);
             scene.spatial.insert(index, &scene.canvas.nodes[index]);
             scene.mark_dirty();
@@ -3022,6 +3197,8 @@ fn mcp_dispatch(
             let id = mcp_req_str(params, "id")?;
             let text = mcp_req_str(params, "text")?;
             let index = mcp_node_index(&scene.canvas, id)?;
+            // FR-006: MCP-мутация — undo-шаг
+            scene.push_undo(scene.canvas.clone());
             scene.canvas.nodes[index].text = Some(text.to_owned());
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": id }))
@@ -3033,6 +3210,10 @@ fn mcp_dispatch(
             let id = mcp_req_str(params, "id")?;
             let index = mcp_node_index(&scene.canvas, id)?;
             let mut geometry = false;
+            // FR-006: MCP-мутация — undo-шаг. Пушим до мутаций: валидация
+            // отдельных полей переплетена с применением остальных (частичные
+            // применения при Err тоже должны быть отменяемы)
+            scene.push_undo(scene.canvas.clone());
             if let Some(text) = params.get("text").and_then(serde_json::Value::as_str) {
                 scene.canvas.nodes[index].text = Some(text.to_owned());
             }
@@ -3098,6 +3279,8 @@ fn mcp_dispatch(
             let x = mcp_req_f32(params, "x")?;
             let y = mcp_req_f32(params, "y")?;
             let index = mcp_node_index(&scene.canvas, id)?;
+            // FR-006: MCP-мутация — undo-шаг
+            scene.push_undo(scene.canvas.clone());
             scene.move_node(index, x, y);
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": id }))
@@ -3107,6 +3290,8 @@ fn mcp_dispatch(
             let width = mcp_req_f32(params, "width")?;
             let height = mcp_req_f32(params, "height")?;
             let index = mcp_node_index(&scene.canvas, id)?;
+            // FR-006: MCP-мутация — undo-шаг
+            scene.push_undo(scene.canvas.clone());
             let node = &mut scene.canvas.nodes[index];
             node.width = width;
             node.height = height;
@@ -3117,6 +3302,8 @@ fn mcp_dispatch(
         "node_delete" => {
             let id = mcp_req_str(params, "id")?;
             let index = mcp_node_index(&scene.canvas, id)?;
+            // FR-006: MCP-мутация — undo-шаг
+            scene.push_undo(scene.canvas.clone());
             let removed = scene
                 .canvas
                 .remove_node(index)
@@ -3149,6 +3336,8 @@ fn mcp_dispatch(
                 }
             };
             let index = mcp_node_index(&scene.canvas, id)?;
+            // FR-006: MCP-мутация — undo-шаг (валидация цвета прошла выше)
+            scene.push_undo(scene.canvas.clone());
             scene.canvas.nodes[index].color = color;
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": id }))
@@ -3165,6 +3354,8 @@ fn mcp_dispatch(
                 &to,
                 mcp_side(params, "toSide")?,
             );
+            // FR-006: MCP-мутация — undo-шаг (все валидации прошли)
+            scene.push_undo(scene.canvas.clone());
             let id = edge.id.clone();
             scene.canvas.add_edge(edge);
             scene.mark_dirty();
@@ -3172,8 +3363,15 @@ fn mcp_dispatch(
         }
         "edge_delete" => {
             let id = mcp_req_str(params, "id")?;
+            // FR-006: MCP-мутация — undo-шаг (проверка существования связи
+            // идёт в remove — неудача шага не оставит: снапшот не изменится,
+            // а лишний пуш свернётся сравнением ниже)
+            let snapshot = scene.canvas.clone();
             if !scene.canvas.remove_edge(id) {
                 return Err(format!("связь не найдена: {id}"));
+            }
+            if scene.canvas != snapshot {
+                scene.push_undo(snapshot);
             }
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": id }))
@@ -3326,14 +3524,24 @@ impl App {
             return;
         }
         // Ctrl+C/V/D — буфер нодов (FR-003; кириллица: с/м/в — те же
-        // физические клавиши). Внутри редактора эти клавиши — текстовые
-        // (выше return), во время поиска — панель (выше return)
+        // физические клавиши). Ctrl+Z/Y — undo/redo (FR-006; кириллица:
+        // я/н). Внутри редактора эти клавиши — текстовые (выше return),
+        // во время поиска — панель (выше return)
         if event.state == ElementState::Pressed && !event.repeat && self.modifiers.control_key() {
             if let Key::Character(c) = &event.logical_key {
                 match c.to_lowercase().as_str() {
                     "c" | "с" => self.copy_selection(),
                     "v" | "м" => self.paste_clipboard(),
                     "d" | "в" => self.duplicate_selection(),
+                    "z" | "я" => {
+                        // Ctrl+Shift+Z — общепринятый синоним redo
+                        if self.modifiers.shift_key() {
+                            self.redo_action();
+                        } else {
+                            self.undo_action();
+                        }
+                    }
+                    "y" | "н" => self.redo_action(),
                     _ => {}
                 }
             }
@@ -3353,6 +3561,8 @@ impl App {
             self.space_pressed = event.state == ElementState::Pressed;
             if !self.space_pressed {
                 // Отпускание Space во время drag не должно оставлять ноду "прилипшей"
+                // FR-006: применённое движение — undo-шаг; далее drag прерывается
+                self.finish_interaction_undo();
                 self.scene.dragging = None;
             }
         }
@@ -3516,10 +3726,17 @@ impl App {
                             {
                                 match NODE_MENU_ITEMS[i] {
                                     NodeMenuItem::Color(color) => {
+                                        // FR-006: смена цвета — undo-шаг;
+                                        // повторный клик того же цвета (no-op)
+                                        // шага не создаёт — сравнение после
+                                        let snapshot = self.scene.canvas.clone();
                                         if let Some(node) =
                                             self.scene.canvas.nodes.get_mut(node_index)
                                         {
                                             node.color = color.map(str::to_owned);
+                                        }
+                                        if self.scene.canvas != snapshot {
+                                            self.scene.push_undo(snapshot);
                                         }
                                         self.scene.mark_dirty();
                                     }
@@ -3542,6 +3759,9 @@ impl App {
                             if let Some(i) =
                                 menu_item_at_for(menu.origin, world, EDGE_MENU_ITEMS.len())
                             {
+                                // FR-006: смена стиля/толщины/цвета связи —
+                                // undo-шаг (no-op клик шага не создаёт)
+                                let snapshot = self.scene.canvas.clone();
                                 if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
                                     match EDGE_MENU_ITEMS[i] {
                                         EdgeMenuItem::Style(style) => edge.style = Some(style),
@@ -3552,6 +3772,9 @@ impl App {
                                             edge.color = color.map(str::to_owned)
                                         }
                                     }
+                                }
+                                if self.scene.canvas != snapshot {
+                                    self.scene.push_undo(snapshot);
                                 }
                                 self.scene.mark_dirty();
                             }
@@ -3693,6 +3916,9 @@ impl App {
                     if in_resize_corner(&self.scene.canvas.nodes[index], world) {
                         self.scene.selected = Some(Selection::Node(index));
                         self.resizing = Some(index);
+                        // FR-006: отложенный снапшот «до» resize — шаг
+                        // закроется на отпускании при изменении размеров
+                        self.begin_pending_undo();
                         self.request_redraw();
                         return;
                     }
@@ -3729,6 +3955,9 @@ impl App {
                         // весь набор (+ дети групп); на движении delta к всем
                         let origins =
                             drag_origins(&self.scene.canvas, index, &self.scene.selected_nodes);
+                        // FR-006: отложенный снапшот «до» перемещения — шаг
+                        // закроется на отпускании при фактическом сдвиге
+                        self.begin_pending_undo();
                         self.scene.dragging = Some(DragState {
                             primary: index,
                             grab_world: world,
@@ -3786,6 +4015,8 @@ impl App {
                                         to_id,
                                         Some(to_side),
                                     );
+                                    // FR-006: новая связь — undo-шаг
+                                    self.push_undo();
                                     self.scene.canvas.add_edge(edge);
                                     self.scene.mark_dirty();
                                 }
@@ -3799,6 +4030,10 @@ impl App {
                                 let target_node = &self.scene.canvas.nodes[target];
                                 let target_id = target_node.id.clone();
                                 let side = nearest_side(target_node, world);
+                                // FR-006: перепривязка — undo-шаг ДО мутации;
+                                // retarget сам отклонит бесполезный перенос —
+                                // тогда шаг снимается (no-op клики не копятся)
+                                self.push_undo();
                                 if canvas_core::retarget_edge(
                                     &mut self.scene.canvas,
                                     edge_index,
@@ -3807,12 +4042,17 @@ impl App {
                                     side,
                                 ) {
                                     self.scene.mark_dirty();
+                                } else {
+                                    self.scene.undo_stack.pop_back();
                                 }
                             }
                         }
                     }
                     self.request_redraw();
                 }
+                // FR-006: закрытие отложенного drag/resize — undo-шаг при
+                // фактическом изменении (клик без движения не шаг)
+                self.finish_interaction_undo();
                 self.scene.dragging = None;
                 self.editor_dragging = false;
                 self.resizing = None;
@@ -3967,6 +4207,9 @@ impl App {
             tracing::warn!(%err, path = %path.display(), "не удалось создать файл");
             return;
         }
+        // FR-006: файловая нода из десктоп-меню — undo-шаг (снапшот до —
+        // файл на диске остаётся, откатывается только карточка)
+        self.push_undo();
         let id = next_free_id(&self.scene.canvas, "file");
         let node = Node::file(
             id,
@@ -5060,5 +5303,129 @@ mod tests {
         assert!(dispatch(&mut scene, &mut camera, "canvas_destroy", "{}").is_err());
         assert!(dispatch(&mut scene, &mut camera, "node_get", "{}").is_err());
         assert!(dispatch(&mut scene, &mut camera, "nodes_search", r#"{"query":42}"#).is_err());
+    }
+
+    // --- FR-006: undo/redo ---
+
+    /// Лимит истории — ровно 50 (запрос «не менее 50»): 55 шагов → 50,
+    /// старейший вытеснен, 50-й отменяем.
+    #[test]
+    fn undo_stack_limit_is_fifty() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        for i in 0..55 {
+            dispatch(
+                &mut scene,
+                &mut camera,
+                "node_create_note",
+                &format!(r#"{{"x": {i}.0, "y": 0.0}}"#),
+            )
+            .expect("node_create_note");
+        }
+        assert_eq!(scene.undo_stack.len(), 55.min(UNDO_LIMIT));
+        assert_eq!(scene.undo_stack.len(), 50, "глубина ровно 50");
+        // 55 созданий, отменяем 50: первые 5 созданий вне истории
+        // (вытеснены) — в сцене 3 исходных + 5 = 8 нод
+        for _ in 0..50 {
+            let Some(before) = scene.take_undo() else {
+                panic!("история не должна кончиться раньше 50 шагов");
+            };
+            scene.canvas = before;
+            scene.spatial = SpatialIndex::build(&scene.canvas);
+        }
+        assert_eq!(
+            scene.canvas.nodes.len(),
+            8,
+            "3 исходных + 5 вытеснённых из истории созданий"
+        );
+    }
+
+    /// Удаление ноды через MCP → undo восстанавливает ноду И каскадную
+    /// связь; redo возвращает удаление.
+    #[test]
+    fn mcp_delete_undo_redo_roundtrip() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let before = scene.canvas.clone();
+        dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"n1"}"#).expect("node_delete");
+        // n1 удалена, edge-1 оборвана каскадом
+        assert_eq!(scene.canvas.nodes.len(), 2);
+        assert!(scene.canvas.edges.is_empty());
+        // undo: сцена «до» возвращается целиком
+        let snapshot = scene.take_undo().expect("шаг undo есть");
+        assert_eq!(snapshot, before, "снапшот — состояние до удаления");
+        scene.canvas = snapshot;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        assert_eq!(scene.canvas.nodes.len(), 3);
+        assert_eq!(scene.canvas.edges.len(), 1);
+        // redo: удаление возвращается
+        let after = scene.take_redo().expect("шаг redo есть");
+        assert_eq!(after.nodes.len(), 2);
+        assert!(after.edges.is_empty());
+    }
+
+    /// push нового шага обнуляет ветку redo (стандарт undo-модели).
+    #[test]
+    fn new_action_clears_redo_branch() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_move",
+            r#"{"id":"n1","x":10.0,"y":10.0}"#,
+        )
+        .expect("node_move");
+        let _ = scene.take_undo().expect("undo доступен");
+        assert_eq!(scene.redo_stack.len(), 1);
+        // новое действие после undo — redo ветка сброшена
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_set_color",
+            r#"{"id":"n1","color":"3"}"#,
+        )
+        .expect("node_set_color");
+        assert!(scene.redo_stack.is_empty(), "redo обнулён новым шагом");
+        assert_eq!(scene.undo_stack.len(), 1, "в истории только новый шаг");
+    }
+
+    /// Валидационные ошибки MCP не оставляют пустых шагов: node_get /
+    /// неизвестный id / кривой color — история пуста.
+    #[test]
+    fn mcp_validation_errors_leave_no_steps() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // чтение — не мутация
+        dispatch(&mut scene, &mut camera, "nodes_list", "{}").expect("nodes_list");
+        assert!(scene.undo_stack.is_empty(), "чтение не шаг");
+        // несуществующий id — Err до мутации, шага нет
+        assert!(dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"нет"}"#).is_err());
+        assert!(scene.undo_stack.is_empty(), "ошибка валидации не шаг");
+        // node_edit с невалидным width — Err
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","width":-5.0}"#
+        )
+        .is_err());
+        assert_eq!(scene.undo_stack.len(), 1, "node_edit пушит до мутаций");
+        // этот шаг откатывает частично применённые поля (text/label)
+        let snapshot = scene.take_undo().expect("шаг есть");
+        assert_eq!(snapshot, mcp_scene().canvas, "снапшот — исходная сцена");
+    }
+
+    /// edge_delete отсутствующей связи — Err без шага (сравнение после).
+    #[test]
+    fn mcp_edge_delete_missing_no_step() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        assert!(dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"нет"}"#).is_err());
+        assert!(scene.undo_stack.is_empty(), "no-op удаления — не шаг");
+        // существующая связь — шаг есть
+        dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#)
+            .expect("edge_delete");
+        assert_eq!(scene.undo_stack.len(), 1);
     }
 }
