@@ -7,15 +7,15 @@ use std::time::{Duration, Instant};
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::ui::{
-    button_rect, canvas_menu_label, drag_origins, edge_menu_label, focus_seed_of, in_resize_corner,
-    menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, node_menu_label, nodes_in_rect,
-    panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_at, point_in_rect,
-    reassign_ids, rubber_band_rect, select_node_hit, theme_button_rect, toggle_selected_node,
-    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget,
-    NodeMenuItem, PastePlacement, SettingsRow, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET,
-    EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
-    MIN_NODE_WIDTH, NODE_MENU_ITEMS, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
-    SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
+    button_rect, canvas_menu_label, drag_origins, edge_menu_label, focus_seed_of,
+    hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
+    next_free_id, node_menu_label, nodes_in_rect, panel_rect, panel_row_at, paste_nodes,
+    plan_group_around, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
+    select_node_hit, theme_button_rect, toggle_selected_node, CanvasMenuItem, ContextMenu,
+    DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem, PastePlacement,
+    SettingsRow, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT,
+    MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
+    PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
@@ -378,6 +378,8 @@ struct App {
     /// Буфер нодов (FR-003, Ctrl+C/Ctrl+V): внутренний, НЕ системный
     /// clipboard (там текст редактора); вставка — с новыми id.
     node_clipboard: Vec<Node>,
+    /// Панель горячих клавиш открыта (FR-004, F1): слева по центру.
+    hotkeys_open: bool,
     /// Настройки приложения (config.toml).
     settings: Settings,
     /// Путь конфига (None — не сохраняем, работаем на дефолтах).
@@ -523,6 +525,7 @@ impl App {
             edge_drag: None,
             select_rect: None,
             node_clipboard: Vec::new(),
+            hotkeys_open: false,
             settings,
             config_path,
             settings_open: false,
@@ -2243,6 +2246,56 @@ impl App {
             color: palette.title,
             align: TextAlign::Center,
         });
+        // Панель горячих клавиш (FR-004): у левого края, по центру;
+        // рендерится независимо от панели настроек
+        if self.hotkeys_open {
+            let panel = hotkeys_panel_rect(viewport);
+            instances.push(CardInstance {
+                pos: [panel[0], panel[1]],
+                size: [panel[2], panel[3]],
+                fill: palette.menu_fill,
+                border: [0.0; 4],
+                params: [8.0, 0.0, 0.0, 0.0],
+            });
+            let pad = canvas_app::ui::HOTKEYS_PADDING;
+            let header_h = canvas_app::ui::HOTKEYS_HEADER_HEIGHT;
+            let row_h = canvas_app::ui::HOTKEYS_ROW_HEIGHT;
+            let key_w = canvas_app::ui::HOTKEYS_KEY_COLUMN;
+            let key_x = panel[0] + pad;
+            let desc_x = panel[0] + pad + key_w;
+            let desc_w = (panel[2] - pad * 2.0 - key_w).max(10.0);
+            texts.push(OwnedScreenText {
+                text: "Горячие клавиши".to_owned(),
+                origin: [key_x, panel[1] + pad + 7.0],
+                width: panel[2] - pad * 2.0,
+                font_size: 15.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            for (i, (key, description)) in canvas_app::ui::HOTKEYS.iter().enumerate() {
+                let y = panel[1] + pad + header_h + i as f32 * row_h + 3.0;
+                // Строки ниже кромки панели (кламп высоты) не рисуем
+                if y + row_h > panel[1] + panel[3] - 2.0 {
+                    break;
+                }
+                texts.push(OwnedScreenText {
+                    text: (*key).to_owned(),
+                    origin: [key_x, y],
+                    width: key_w,
+                    font_size: 12.0,
+                    color: palette.link,
+                    align: TextAlign::Left,
+                });
+                texts.push(OwnedScreenText {
+                    text: (*description).to_owned(),
+                    origin: [desc_x, y],
+                    width: desc_w,
+                    font_size: 12.0,
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
+        }
         if !self.settings_open {
             return (instances, texts);
         }
@@ -3169,7 +3222,8 @@ impl App {
             self.request_redraw();
             return;
         }
-        // Esc закрывает контекстное меню (T7), затем — панель настроек
+        // Esc закрывает контекстное меню (T7), затем — панель настроек,
+        // затем — панель хоткеев (FR-004)
         if event.logical_key == Key::Named(NamedKey::Escape)
             && event.state == ElementState::Pressed
             && !event.repeat
@@ -3183,6 +3237,22 @@ impl App {
                 self.request_redraw();
                 return;
             }
+            if self.hotkeys_open {
+                self.hotkeys_open = false;
+                self.request_redraw();
+                return;
+            }
+        }
+        // F1 — панель горячих клавиш (FR-004): раскладконезависимая
+        // функциональная клавиша; внутри редактора/поиска не работает
+        // (клавиатура ушла туда раньше — return выше)
+        if event.logical_key == Key::Named(NamedKey::F1)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            self.hotkeys_open = !self.hotkeys_open;
+            self.request_redraw();
+            return;
         }
         // Ctrl+C/V/D — буфер нодов (FR-003; кириллица: с/м/в — те же
         // физические клавиши). Внутри редактора эти клавиши — текстовые
@@ -3333,6 +3403,17 @@ impl App {
                         // Клик мимо панели — закрыть; канвасу клик не достаётся
                         // (иначе двойной клик мимо создал бы заметку)
                         self.settings_open = false;
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                // Панель хоткеев (FR-004): клик мимо — закрыть, клик по
+                // панели — проглотить (строки не интерактивны); канвасу
+                // клик не достаётся (паттерн панели настроек)
+                if self.hotkeys_open {
+                    let panel = hotkeys_panel_rect(viewport);
+                    if !point_in_rect(panel, self.cursor) {
+                        self.hotkeys_open = false;
                     }
                     self.request_redraw();
                     return;

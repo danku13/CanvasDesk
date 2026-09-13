@@ -353,6 +353,65 @@ pub mod ui {
         format!("{prefix}-{n}")
     }
 
+    // --- Оверлей горячих клавиш (FR-004) ---
+
+    /// Ширина панели хоткеев (логические px).
+    pub const HOTKEYS_PANEL_WIDTH: f32 = 340.0;
+    /// Высота строки хоткея (логические px).
+    pub const HOTKEYS_ROW_HEIGHT: f32 = 22.0;
+    /// Внутренний отступ панели хоткеев.
+    pub const HOTKEYS_PADDING: f32 = 10.0;
+    /// Высота заголовка панели хоткеев.
+    pub const HOTKEYS_HEADER_HEIGHT: f32 = 30.0;
+    /// Ширина колонки клавиши (выравнивание описаний).
+    pub const HOTKEYS_KEY_COLUMN: f32 = 118.0;
+
+    /// Список горячих клавиш (FR-004): (клавиша, описание) — единый
+    /// источник для оверлея F1. Порядок = порядок отображения; обновлять
+    /// при изменении хоткеев (ввод — main.rs on_key).
+    pub const HOTKEYS: &[(&str, &str)] = &[
+        ("F1", "список горячих клавиш"),
+        ("Ctrl+F", "поиск по канвасу"),
+        ("F3", "HUD / следующий результат"),
+        ("Esc", "закрыть меню и панели"),
+        ("Del", "удалить выделенное"),
+        ("Ctrl+C", "копировать ноды"),
+        ("Ctrl+V", "вставить ноды"),
+        ("Ctrl+D", "дублировать ноды"),
+        ("Ctrl+клик", "добавить к выделению"),
+        ("ЛКМ + drag", "рамка выделения"),
+        ("ЛКМ от порта", "протянуть связь"),
+        ("ЛКМ за хэндл", "перепривязать связь"),
+        ("2× клик", "заметка / открыть файл"),
+        ("ПКМ", "меню объекта"),
+        ("Space+drag", "панорамирование"),
+        ("Ctrl+колесо", "масштаб"),
+        ("Ctrl+Enter", "зафиксировать заметку"),
+        ("Ctrl+,", "настройки"),
+        ("F", "фокус на связях"),
+    ];
+
+    /// Полная высота панели хоткеев (FR-004): паддинги + заголовок +
+    /// строки. Клампится к высоте окна в `hotkeys_panel_rect`.
+    pub fn hotkeys_panel_height() -> f32 {
+        HOTKEYS_PADDING * 2.0 + HOTKEYS_HEADER_HEIGHT + HOTKEYS.len() as f32 * HOTKEYS_ROW_HEIGHT
+    }
+
+    /// Rect панели хоткеев (FR-004): у ЛЕВОГО края окна, вертикально по
+    /// центру (запрос пользователя: «посередине слева экрана»). Высота
+    /// клампится к окну (низ не вылезает), минимум отступа сверху.
+    pub fn hotkeys_panel_rect(viewport: Vec2) -> [f32; 4] {
+        let max_h = (viewport[1] - SETTINGS_MARGIN * 2.0).max(0.0);
+        let height = hotkeys_panel_height().min(max_h);
+        let y = ((viewport[1] - height) / 2.0).max(SETTINGS_MARGIN);
+        [
+            SETTINGS_MARGIN,
+            y,
+            HOTKEYS_PANEL_WIDTH.min(viewport[0]),
+            height,
+        ]
+    }
+
     // --- Множественное выделение (CR-001) ---
 
     /// Порог «клик vs drag» рамки выделения: логические px (CR-001).
@@ -1346,6 +1405,41 @@ pub mod ui {
             assert_eq!((pasted[1].x, pasted[1].y), (332.0, 32.0));
             // Контент не меняется (id/файлы при переносе — как заданы)
             assert_eq!(pasted[0].file.as_deref(), Some("C:/a.png"));
+        }
+
+        // --- Оверлей горячих клавиш (FR-004) ---
+
+        /// Панель хоткеев: слева, вертикально по центру; высота клампится
+        /// к окну (малые экраны), ширина — к окну.
+        #[test]
+        fn hotkeys_panel_rect_centered_left() {
+            // Высокое окно: полная высота, центр по вертикали
+            let full = hotkeys_panel_height();
+            let rect = hotkeys_panel_rect([1600.0, 900.0]);
+            assert_eq!(rect[0], SETTINGS_MARGIN, "у левого края");
+            assert_eq!(rect[2], HOTKEYS_PANEL_WIDTH);
+            assert_eq!(rect[3], full, "высокое окно — без клампа");
+            assert!(
+                (rect[1] - (900.0 - full) / 2.0).abs() < 1e-3,
+                "вертикальный центр: {}",
+                rect[1]
+            );
+            // Низ не вылезает
+            assert!(rect[1] + rect[3] <= 900.0 - SETTINGS_MARGIN + 1e-3);
+            // Малое окно: высота клампнута, отступ сверху сохранён
+            let rect = hotkeys_panel_rect([1600.0, 300.0]);
+            assert_eq!(rect[3], 300.0 - SETTINGS_MARGIN * 2.0, "кламп к окну");
+            assert!(rect[1] >= SETTINGS_MARGIN);
+            assert!(rect[1] + rect[3] <= 300.0 - SETTINGS_MARGIN + 1e-3);
+            // Узкое окно: ширина клампнута
+            let rect = hotkeys_panel_rect([200.0, 900.0]);
+            assert!(rect[2] <= 200.0);
+            // Данные хоткеев: непустые пары, колонка клавиш влезает
+            assert!(!HOTKEYS.is_empty());
+            for (key, description) in HOTKEYS {
+                assert!(!key.is_empty(), "пустая клавиша");
+                assert!(!description.is_empty(), "пустое описание: {key}");
+            }
         }
 
         // --- Drag-drop (T9) ---
