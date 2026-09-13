@@ -60,7 +60,17 @@ BYOK — это расширение формата `.canvas` (или отдел
 
 ## 3. Интеграция с MCP (Model Context Protocol)
 
-MCP-сервер (`canvas-mcp`) слушает команды в формате JSON-RPC и возвращает `.canvas`-совместимый JSON.
+MCP-посредник (stdio ↔ named pipe `\\.\pipe\canvasdesk` приложения) слушает
+команды в формате JSON-RPC и возвращает `.canvas`-совместимый JSON.
+
+### Подключение AI-клиента (один exe, FR-008)
+
+Один бинарник покрывает весь стек: `canvasdesk.exe` — GUI-сервис,
+`canvasdesk.exe mcp` — MCP-посредник. Конфиг MCP-клиента (Claude Desktop и
+т.п.): `command` = путь к `canvasdesk.exe`, `args` = `["mcp"]`. Если сервис
+не запущен, посредник поднимет его сам (автостарт; `--no-spawn` отключает) —
+весь стек стартует одной командой. Отдельный `canvasdesk-mcp.exe`
+сохраняется для совместимости старых конфигов.
 
 ### Команды агента (Hermes Agent → MCP)
 

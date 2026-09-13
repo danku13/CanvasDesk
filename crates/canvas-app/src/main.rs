@@ -4417,7 +4417,10 @@ fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
             // Булев флаг: повтор допустим (идемпотентен)
             desktop = true;
         } else if arg == "--help" || arg == "-h" {
-            println!("Использование: canvasdesk [--stress N] [--desktop] [путь к .canvas]");
+            println!(
+                "Использование: canvasdesk [mcp [--no-spawn]] [--stress N] [--desktop] [путь к .canvas]\n\
+                 \x20 mcp — режим MCP-посредника (stdio; автостарт сервиса, --no-spawn — отключить)"
+            );
             std::process::exit(0);
         } else if path.is_none() {
             path = Some(PathBuf::from(arg));
@@ -4497,6 +4500,15 @@ fn stress_canvas(n: usize) -> Canvas {
 }
 
 fn main() -> anyhow::Result<()> {
+    // FR-008: подкоманда `mcp` — режим MCP-посредника (stdio ↔ pipe) того
+    // же бинарника: один exe на весь стек. Перехват ДО инициализации
+    // трейсинга и parse_args: tracing пишет в stdout, а в mcp-режиме stdout
+    // занят протоколом (run_stdio молчалив, диагностика — в stderr).
+    // Файл с именем «mcp» открывается как ./mcp (путь с префиксом).
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("mcp") {
+        return canvas_mcp::run_stdio(&argv[1..]);
+    }
     // По умолчанию info, но без спама внутренних крейтов wgpu; переопределяется через RUST_LOG
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("info,wgpu_hal=warn,wgpu_core=warn")

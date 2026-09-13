@@ -49,8 +49,15 @@ Obsidian Canvas / Miro, где карточки — это ваши настоя
 cargo build --workspace --release
 cargo run -p canvas-app --release -- path\to\file.canvas   # без аргумента — default.canvas
 cargo run -p canvas-app --release -- --stress 5000         # нагрузочная сцена
+canvasdesk.exe mcp                                        # MCP-посредник (stdio; автостарт сервиса)
 cargo test --workspace                                     # тесты
 ```
+
+Один exe — весь стек (FR-008): `canvasdesk.exe` — GUI-сервис; `canvasdesk.exe mcp` —
+MCP-посредник для AI-клиентов (конфиг клиента: command = `canvasdesk.exe`,
+args = `["mcp"]`); при недоступном pipe посредник сам поднимает сервис — весь
+стек одной командой (`--no-spawn` — отключить). Отдельный `canvasdesk-mcp.exe`
+сохраняется для совместимости.
 
 ## Горячие клавиши
 
@@ -65,6 +72,9 @@ cargo test --workspace                                     # тесты
 | ЛКМ за правый нижний угол | Ручной resize карточки |
 | F3 | HUD (fps, p95, счётчики) |
 | Ctrl+, | Панель настроек |
+| F1 / ПКМ по канвасу → «Горячие клавиши» | Оверлей списка хоткеев (тогл) |
+| Ctrl+Z / Ctrl+Y | Отмена / возврат (глубина 50) |
+| Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D | Копировать / вырезать / вставить / дублировать ноды |
 
 ## Стек
 
