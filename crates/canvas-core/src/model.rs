@@ -362,6 +362,26 @@ impl Canvas {
         Some(node)
     }
 
+    /// Удалить несколько нод каскадно со связями (CR-001, мультивыделение).
+    /// Индексы валидны ДО вызова; удаление идёт от больших индексов к
+    /// меньшим (сдвиги от удалений не затрагивают ещё не удалённые),
+    /// дубликаты игнорируются. Возвращает удалённые ноды в порядке
+    /// возрастания индексов; пусто — невалидный набор.
+    pub fn remove_nodes(&mut self, indices: &[usize]) -> Vec<Node> {
+        let mut sorted: Vec<usize> = indices.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut removed: Vec<Node> = Vec::with_capacity(sorted.len());
+        // remove_node каскадит связи по id — id не зависят от индексов
+        for index in sorted.iter().rev() {
+            if let Some(node) = self.remove_node(*index) {
+                removed.push(node);
+            }
+        }
+        removed.reverse();
+        removed
+    }
+
     /// Сдвинуть группу и всех её детей на (dx, dy): каждая нода сдвигается
     /// ровно один раз (вложенные группы — как обычные ноды, рекурсии нет).
     /// Возвращает индексы сдвинутых нод (группа — первой); пусто, если
@@ -487,6 +507,37 @@ mod tests {
         assert_eq!(removed.id, "g");
         assert_eq!(canvas.nodes.len(), 4);
         assert!(canvas.nodes.iter().all(|node| node.id != "g"));
+    }
+
+    /// CR-001: remove_nodes — порядок удаления от больших индексов к
+    /// меньшим (сдвиги не ломают адресацию), каскад связей по всем
+    /// удалённым, дубликаты и невалидные индексы игнорируются.
+    #[test]
+    fn remove_nodes_bulk_cascades_and_orders() {
+        let mut canvas = group_scene();
+        // in(1) → out(3), edge(2) → out(3): связи затрагивают удаляемые
+        canvas.add_edge(Edge::new("edge-1", "in", None, "out", None));
+        canvas.add_edge(Edge::new("edge-2", "edge", None, "out", None));
+        // Удаляем in(1), edge(2) — c дубликатом; out(3) остаётся
+        let removed = canvas.remove_nodes(&[1, 2, 1]);
+        assert_eq!(
+            removed
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["in", "edge"],
+            "удалены по возрастанию индексов, дубликат один раз"
+        );
+        assert_eq!(canvas.nodes.len(), 3, "остались g, out, nested");
+        // Связи удалённых нод ушли каскадно, инцидентные out-уцелевшие — нет:
+        // edge-1 (in→out) и edge-2 (edge→out) оба касаются удалённых — их нет
+        assert!(canvas.edges.is_empty(), "обе связи инцидентны удалённым");
+        // Уцелевшая нода доступна по id
+        assert!(canvas.node("out").is_some());
+        // Невалидные индексы — пусто, без паники
+        assert!(canvas.remove_nodes(&[99, 100]).is_empty());
+        // Пустой набор — пусто
+        assert!(canvas.remove_nodes(&[]).is_empty());
     }
 
     /// Node::group: тип, отсутствие file/text, координаты как заданы.

@@ -7,13 +7,14 @@ use std::time::{Duration, Instant};
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::ui::{
-    button_rect, canvas_menu_label, edge_menu_label, focus_seed_of, in_resize_corner,
-    menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, node_menu_label, panel_rect,
-    panel_row_at, plan_group_around, plan_group_at, point_in_rect, select_node_hit,
-    theme_button_rect, CanvasMenuItem, ContextMenu, DoubleClick, EdgeDrag, EdgeMenuItem,
-    MenuTarget, NodeMenuItem, SettingsRow, CANVAS_MENU_ITEMS, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT,
-    MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
-    PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SETTINGS_ROWS,
+    button_rect, canvas_menu_label, drag_origins, edge_menu_label, focus_seed_of, in_resize_corner,
+    menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, node_menu_label, nodes_in_rect,
+    panel_rect, panel_row_at, plan_group_around, plan_group_at, point_in_rect, rubber_band_rect,
+    select_node_hit, theme_button_rect, toggle_selected_node, CanvasMenuItem, ContextMenu,
+    DoubleClick, DragState, EdgeDrag, EdgeMenuItem, MenuTarget, NodeMenuItem, SettingsRow,
+    CANVAS_MENU_ITEMS, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
+    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS, PANEL_HEADER_HEIGHT, PANEL_PADDING,
+    PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
@@ -188,10 +189,15 @@ struct SceneState {
     /// R-tree над AABB нод; синхронизируется при каждом изменении геометрии.
     spatial: SpatialIndex,
     path: PathBuf,
-    /// Выделение: нода или связь (T8).
+    /// Первичное выделение: нода или связь (T8) — якорь для контекстного
+    /// меню, редактирования, фокуса (T23), перепривязки (CR-002).
     selected: Option<Selection>,
-    /// (индекс ноды, смещение от курсора до левого верхнего угла ноды в world).
-    dragging: Option<(usize, Vec2)>,
+    /// Множественное выделение нод (CR-001): рамка drag или Ctrl/Shift+клик.
+    /// Порядок — порядок добавления (клики) или индексы (рамка).
+    selected_nodes: Vec<usize>,
+    /// Drag ноды (T7/CR-001): захваченная нода + исходные позиции всех
+    /// перемещаемых (выделение или одна + дети групп).
+    dragging: Option<DragState>,
     dirty_since: Option<Instant>,
 }
 
@@ -204,6 +210,7 @@ impl SceneState {
             spatial,
             path,
             selected: None,
+            selected_nodes: Vec::new(),
             dragging: None,
             dirty_since: None,
         }
@@ -364,6 +371,9 @@ struct App {
     hovered: Option<usize>,
     /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
     edge_drag: Option<EdgeDrag>,
+    /// Рамка выделения (CR-001): (start world, current world, press screen)
+    /// — тянется от пустого места; отпускание > порога = выделение.
+    select_rect: Option<(Vec2, Vec2, Vec2)>,
     /// Настройки приложения (config.toml).
     settings: Settings,
     /// Путь конфига (None — не сохраняем, работаем на дефолтах).
@@ -507,6 +517,7 @@ impl App {
             resizing: None,
             hovered: None,
             edge_drag: None,
+            select_rect: None,
             settings,
             config_path,
             settings_open: false,
@@ -1043,12 +1054,37 @@ impl App {
         self.request_redraw();
     }
 
-    /// Удалить выделенное (T8, Del): связь — по id; ноду — каскадно со
-    /// связями (canvas-core). После удаления ноды индексы в canvas.nodes
+    /// Удалить выделенное (T8, Del; CR-001 — мультивыделение): набор нод —
+    /// пачкой (canvas-core remove_nodes); связь — по id; одиночную ноду —
+    /// каскадно со связями. После удаления нод индексы в canvas.nodes
     /// сдвигаются, поэтому spatial index перестраивается, а все кэши,
     /// ключованные usize (текст, атлас тамбнейлов, негативный кэш),
     /// сбрасываются полностью.
     fn delete_selected(&mut self) {
+        // CR-001: мультивыделение — удаляем весь набор (рамка/Ctrl+клик)
+        if !self.scene.selected_nodes.is_empty() {
+            let indices = std::mem::take(&mut self.scene.selected_nodes);
+            let removed = self.scene.canvas.remove_nodes(&indices);
+            if removed.is_empty() {
+                return;
+            }
+            self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.invalidate_node_caches();
+            }
+            self.thumbs_failed.clear();
+            self.scene.selected = None;
+            self.scene.dragging = None;
+            self.resizing = None;
+            self.editing = None;
+            self.menu = None;
+            self.hovered = None;
+            self.edge_drag = None;
+            self.scene.mark_dirty();
+            self.sync_watch_dirs();
+            self.request_redraw();
+            return;
+        }
         match self.scene.selected {
             Some(Selection::Edge(index)) => {
                 let Some(edge) = self.scene.canvas.edges.get(index) else {
@@ -1070,6 +1106,7 @@ impl App {
                 }
                 self.thumbs_failed.clear();
                 self.scene.selected = None;
+                self.scene.selected_nodes.clear();
                 self.scene.dragging = None;
                 self.resizing = None;
                 self.editing = None;
@@ -1097,6 +1134,7 @@ impl App {
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
         self.scene.selected = Some(Selection::Node(index));
+        self.scene.selected_nodes.clear();
         self.scene.mark_dirty();
         index
     }
@@ -1143,6 +1181,7 @@ impl App {
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
         self.scene.selected = Some(Selection::Node(index));
+        self.scene.selected_nodes.clear();
         self.scene.mark_dirty();
         index
     }
@@ -1907,7 +1946,16 @@ impl App {
     /// ~0.3–0.5 мс, кадры вне изменений не генерируются). Выделенная нода
     /// добавляется в яркий набор: выделение не гаснет (приоритет над фокусом).
     fn update_focus_state(&mut self) {
-        let seed = focus_seed_of(self.hovered, self.scene.selected);
+        // CR-001: мультивыделение без primary — семя из первой выделенной
+        // (фокус живёт и после сброса одиночного клика)
+        let selected = self.scene.selected.or_else(|| {
+            self.scene
+                .selected_nodes
+                .first()
+                .copied()
+                .map(Selection::Node)
+        });
+        let seed = focus_seed_of(self.hovered, selected);
         let focus_on = self.settings.focus_mode;
         // Цель затемнения: 1 — режим включён и семя есть; иначе всё гаснет
         let target = f32::from(focus_on && seed.is_some());
@@ -1952,16 +2000,23 @@ impl App {
             if let Some(seed) = seed {
                 let mut set = focus_set(&self.scene.canvas, seed);
                 // Выделенная нода (кроме семени-связи — у неё свои концы)
-                // не гаснет вместе с остальными (план T23 §7)
-                if let (Some(Selection::Node(index)), false) =
-                    (self.scene.selected, matches!(seed, FocusSeed::Edge(_)))
-                {
+                // не гаснет вместе с остальными (план T23 §7); CR-001 —
+                // весь набор мультивыделения тоже остаётся ярким
+                let seed_is_edge = matches!(seed, FocusSeed::Edge(_));
+                if let (Some(Selection::Node(index)), false) = (self.scene.selected, seed_is_edge) {
                     if !set.contains_node(index) {
                         set.nodes.push(index);
-                        set.nodes.sort_unstable();
-                        set.nodes.dedup();
                     }
                 }
+                if !seed_is_edge {
+                    for index in &self.scene.selected_nodes {
+                        if !set.contains_node(*index) {
+                            set.nodes.push(*index);
+                        }
+                    }
+                }
+                set.nodes.sort_unstable();
+                set.nodes.dedup();
                 self.focus_nodes = set.nodes;
                 self.focus_edges = set.edges;
             } else {
@@ -2455,6 +2510,18 @@ impl ApplicationHandler<AppEvent> for App {
                         });
                     }
                 }
+                // Рамка выделения (CR-001): полупрозрачный world-квад с
+                // акцентной рамкой (стиль зоны дропа T9), без тени
+                if let Some((start, current, _)) = self.select_rect {
+                    let rect = rubber_band_rect(start, current);
+                    overlay_instances.push(CardInstance {
+                        pos: [rect[0], rect[1]],
+                        size: [rect[2], rect[3]],
+                        fill: canvas_app::ui::SELECT_RECT_FILL,
+                        border: canvas_app::ui::SELECT_RECT_BORDER,
+                        params: [4.0, 0.0, 0.0, 1.0],
+                    });
+                }
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
@@ -2489,6 +2556,7 @@ impl ApplicationHandler<AppEvent> for App {
                         canvas: &self.scene.canvas,
                         spatial: &self.scene.spatial,
                         selected: self.scene.selected,
+                        selected_nodes: &self.scene.selected_nodes,
                         hovered: self.hovered,
                         edge_draft,
                         hidden_edge,
@@ -2841,6 +2909,7 @@ fn mcp_dispatch(
             // Индексы сдвинулись — spatial перестраивается (паттерн delete_selected)
             scene.spatial = SpatialIndex::build(&scene.canvas);
             scene.selected = None;
+            scene.selected_nodes.clear();
             scene.dragging = None;
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": removed.id }))
@@ -3369,21 +3438,61 @@ impl App {
                 }
                 match hit {
                     Some(index) => {
+                        // Ctrl/Shift + клик (CR-001): тогл в набор выделения —
+                        // drag с модификатором не начинается (это правка
+                        // выделения, не перемещение)
+                        if self.modifiers.control_key() || self.modifiers.shift_key() {
+                            toggle_selected_node(&mut self.scene.selected_nodes, index);
+                            self.scene.selected = Some(Selection::Node(index));
+                            self.request_redraw();
+                            return;
+                        }
+                        // Обычный клик: нода вне набора — набор сбрасывается
+                        // (одиночное выделение); нода В наборе — тянем набор
+                        let in_set = self.scene.selected_nodes.contains(&index);
                         self.scene.selected = Some(Selection::Node(index));
-                        let node = &self.scene.canvas.nodes[index];
-                        self.scene.dragging = Some((index, [node.x - world[0], node.y - world[1]]));
+                        if !in_set {
+                            self.scene.selected_nodes.clear();
+                        }
+                        // Drag (T7/CR-001): исходные позиции — одна нода или
+                        // весь набор (+ дети групп); на движении delta к всем
+                        let origins =
+                            drag_origins(&self.scene.canvas, index, &self.scene.selected_nodes);
+                        self.scene.dragging = Some(DragState {
+                            primary: index,
+                            grab_world: world,
+                            origins,
+                        });
                     }
                     // Промах по нодам: hit-test связей (T8) — ближайшая
-                    // в допуске EDGE_HIT_TOLERANCE, иначе сброс выделения
+                    // в допуске EDGE_HIT_TOLERANCE, иначе сброс выделения.
+                    // Рамка (CR-001): drag с пустого места тянет выделение —
+                    // финал на отпускании (порог клик/драг отсекает клики)
                     None => {
                         self.scene.selected =
                             edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
                                 .map(Selection::Edge);
+                        self.scene.selected_nodes.clear();
+                        self.select_rect = Some((world, world, self.cursor));
                     }
                 }
                 self.request_redraw();
             }
             ElementState::Released => {
+                // Рамка выделения (CR-001): движение больше порога —
+                // выделяем ноды, пересекающие прямоугольник (AABB,
+                // частичное вхождение считается); клик без движения уже
+                // отработал в Pressed (edge/сброс)
+                if let Some((start, _, press)) = self.select_rect.take() {
+                    let moved = (self.cursor[0] - press[0]).abs() > SELECT_DRAG_THRESHOLD
+                        || (self.cursor[1] - press[1]).abs() > SELECT_DRAG_THRESHOLD;
+                    if moved {
+                        let rect = rubber_band_rect(start, self.cursor_world());
+                        self.scene.selected_nodes = nodes_in_rect(&self.scene.canvas, rect);
+                        self.scene.selected = None;
+                    }
+                    self.request_redraw();
+                }
                 // Drop резиновой линии: новая связь (T8) или перепривязка
                 // конца существующей (CR-002). На другую ноду — применяем,
                 // в пустоту/на ту же ноду/на зеркальный конец — отмена
@@ -3662,6 +3771,16 @@ impl App {
             self.request_redraw();
         }
         if !self.space_pressed {
+            // Рамка выделения (CR-001): тянется за курсором (перерисовка на
+            // каждое движение — квад в оверлее); пан во время рамки —
+            // Space недоступен (guard выше), средняя кнопка замораживает
+            if self.select_rect.is_some() {
+                let world = self.cursor_world();
+                if let Some(rect) = self.select_rect.as_mut() {
+                    rect.1 = world;
+                }
+                self.request_redraw();
+            }
             // Ручной resize за правый нижний угол (T7): размеры клампятся
             // минимумом, spatial index обновляется инкрементально
             if let Some(index) = self.resizing {
@@ -3673,38 +3792,15 @@ impl App {
                     self.scene.mark_dirty();
                 }
                 self.request_redraw();
-            } else if let Some((index, offset)) = self.scene.dragging {
+            } else if let Some(drag) = self.scene.dragging.clone() {
+                // Drag (T7/CR-001): каждая перемещаемая нода — в исходную
+                // позицию + дельта курсора от захвата (ровно один сдвиг за
+                // кадр; дети групп — в origins с старта, дубликатов нет)
                 let world = self.cursor_world();
-                let new_x = world[0] + offset[0];
-                let new_y = world[1] + offset[1];
-                // Drag группы: сдвигаем группу И всех её детей на тот же
-                // дельта-вектор (ровно один раз; вложенные группы — как
-                // обычные ноды, рекурсии нет — canvas-core translate_group)
-                let is_group = self
-                    .scene
-                    .canvas
-                    .nodes
-                    .get(index)
-                    .is_some_and(|node| node.kind() == NodeKind::Group);
-                if is_group {
-                    let (old_x, old_y) = self
-                        .scene
-                        .canvas
-                        .nodes
-                        .get(index)
-                        .map(|node| (node.x, node.y))
-                        .unwrap_or((new_x, new_y));
-                    let moved =
-                        self.scene
-                            .canvas
-                            .translate_group(index, new_x - old_x, new_y - old_y);
-                    for moved_index in moved {
-                        let node_ref = &self.scene.canvas.nodes[moved_index];
-                        self.scene.spatial.update(moved_index, node_ref);
-                    }
-                } else {
-                    // Модель + инкрементальное обновление spatial index (T5)
-                    self.scene.move_node(index, new_x, new_y);
+                let delta = [world[0] - drag.grab_world[0], world[1] - drag.grab_world[1]];
+                for (index, origin) in &drag.origins {
+                    self.scene
+                        .move_node(*index, origin[0] + delta[0], origin[1] + delta[1]);
                 }
                 self.scene.mark_dirty();
                 self.request_redraw();

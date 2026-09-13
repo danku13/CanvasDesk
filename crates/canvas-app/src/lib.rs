@@ -353,6 +353,107 @@ pub mod ui {
         format!("{prefix}-{n}")
     }
 
+    // --- Множественное выделение (CR-001) ---
+
+    /// Порог «клик vs drag» рамки выделения: логические px (CR-001).
+    pub const SELECT_DRAG_THRESHOLD: f32 = 4.0;
+    /// Заливка рамки выделения (CR-001): акцент, полупрозрачная (стиль
+    /// призраков зоны дропа T9).
+    pub const SELECT_RECT_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.08];
+    /// Рамка рамки выделения (CR-001): акцент заметнее заливки.
+    pub const SELECT_RECT_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 0.6];
+
+    /// Прямоугольник рамки выделения по двум углам (world, CR-001):
+    /// нормализация min/max — тянуть можно в любую сторону.
+    pub fn rubber_band_rect(a: Vec2, b: Vec2) -> [f32; 4] {
+        let x = a[0].min(b[0]);
+        let y = a[1].min(b[1]);
+        [x, y, (a[0] - b[0]).abs(), (a[1] - b[1]).abs()]
+    }
+
+    /// Ноды, пересекающие прямоугольник рамки (CR-001): AABB-пересечение
+    /// (частичное вхождение считается — как в Obsidian/Miro), включая
+    /// группы. Порядок — индексы модели (стабильный). Доказательство
+    /// простоты: полный перебор — рамка редка (одна на жест), O(V) не
+    /// мешает кадру (поиск стартует на отпускании ЛКМ).
+    pub fn nodes_in_rect(canvas: &Canvas, rect: [f32; 4]) -> Vec<usize> {
+        let (x0, y0, x1, y1) = (rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]);
+        canvas
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                node.x < x1 && node.x + node.width > x0 && node.y < y1 && node.y + node.height > y0
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Тогл ноды в наборе выделения (CR-001): нет — добавить (в конец,
+    /// порядок добавления = порядок кликов), есть — убрать.
+    /// Возвращает true, если нода оказалась в наборе после вызова.
+    pub fn toggle_selected_node(selected: &mut Vec<usize>, index: usize) -> bool {
+        if let Some(pos) = selected.iter().position(|&i| i == index) {
+            selected.remove(pos);
+            false
+        } else {
+            selected.push(index);
+            true
+        }
+    }
+
+    /// Исходные позиции нод для drag (CR-001): тянем захваченную ноду;
+    /// если она в наборе выделения — тянем весь набор. Дети выделенных
+    /// ГРУПП включаются автоматически (паттерн translate_group: каждая
+    /// нода сдвигается ровно один раз, дубликаты схлопываются).
+    /// Возвращает пары (индекс, исходная позиция) по возрастанию индексов.
+    pub fn drag_origins(canvas: &Canvas, grabbed: usize, selected: &[usize]) -> Vec<(usize, Vec2)> {
+        // База: набор (если захваченная в нём) или одна нода
+        let base: Vec<usize> = if selected.contains(&grabbed) {
+            selected.to_vec()
+        } else {
+            vec![grabbed]
+        };
+        // Дети групп из базы; вложенность — без рекурсии: дитя-группа уже
+        // в базе как группа, её дети добавляются этим же проходом (v1)
+        let mut indices: Vec<usize> = base.clone();
+        for index in &base {
+            if canvas
+                .nodes
+                .get(*index)
+                .is_some_and(|node| node.kind() == NodeKind::Group)
+            {
+                indices.extend(canvas_core::group_children(canvas, *index));
+            }
+        }
+        // Каждая нода ровно один раз, порядок стабильный
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+            .into_iter()
+            .filter_map(|index| {
+                canvas
+                    .nodes
+                    .get(index)
+                    .map(|node| (index, [node.x, node.y]))
+            })
+            .collect()
+    }
+
+    /// Состояние drag ноды (CR-001): захваченная нода (primary, как раньше),
+    /// world-якорь курсора в момент захвата и исходные позиции всех
+    /// перемещаемых нод (выделение или одна + дети групп). На движении
+    /// каждая нода ставится в origin + delta — ровно один сдвиг за кадр.
+    #[derive(Debug, Clone)]
+    pub struct DragState {
+        /// Нода, за которую захватили (выделение рамкой не меняет её).
+        pub primary: usize,
+        /// World-позиция курсора при захвате.
+        pub grab_world: Vec2,
+        /// Исходные позиции перемещаемых нод (drag_origins).
+        pub origins: Vec<(usize, Vec2)>,
+    }
+
     // --- Парсинг CF_HDROP и раскладка дропа (T9) ---
 
     /// Разобрать содержимое CF_HDROP ЦЕЛИКОМ: DROPFILES-заголовок (20 байт:
@@ -993,6 +1094,101 @@ pub mod ui {
             assert!(
                 canvas_render::cards::build_edge_handle_instances(&dangling, 0, 14.0).is_empty()
             );
+        }
+
+        // --- CR-001: множественное выделение ---
+
+        /// Сцена: две ноды и группа с ребёнком (индексы 0, 1 — ноды,
+        /// 2 — группа, 3 — дитя группы).
+        fn selection_canvas() -> Canvas {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 100.0));
+            canvas
+                .nodes
+                .push(Node::file("b", "C:/b.png", 300.0, 0.0, 100.0, 100.0));
+            // Группа 200..600 × 200..500, дитя — центром внутри
+            canvas
+                .nodes
+                .push(Node::group("g", 200.0, 200.0, 400.0, 300.0));
+            canvas
+                .nodes
+                .push(Node::file("c", "C:/c.png", 350.0, 300.0, 50.0, 50.0));
+            canvas
+        }
+
+        /// Рамка: нормализация углов (тянуть в любую сторону); nodes_in_rect —
+        /// AABB-пересечение с частичным вхождением, мимо — пусто.
+        #[test]
+        fn rubber_band_selects_intersecting_nodes() {
+            let canvas = selection_canvas();
+            // Прямое направление
+            let rect = rubber_band_rect([0.0, 0.0], [200.0, 100.0]);
+            assert_eq!(rect, [0.0, 0.0, 200.0, 100.0]);
+            // Обратное направление — нормализация
+            let rect = rubber_band_rect([200.0, 100.0], [0.0, 0.0]);
+            assert_eq!(rect, [0.0, 0.0, 200.0, 100.0]);
+            // Рамка 0..200 × 0..100: a целиком; b (300..400) — мимо;
+            // группа (200..600 × 200..500) — краем не заходит
+            assert_eq!(nodes_in_rect(&canvas, rect), vec![0]);
+            // Широкая рамка: a целиком, b частично, группа частично
+            let rect = rubber_band_rect([-50.0, -50.0], [350.0, 250.0]);
+            assert_eq!(nodes_in_rect(&canvas, rect), vec![0, 1, 2]);
+            // Рамка только по дитяти (внутри группы): c и сама группа —
+            // обе пересекают прямоугольник
+            let rect = rubber_band_rect([300.0, 250.0], [400.0, 400.0]);
+            assert_eq!(nodes_in_rect(&canvas, rect), vec![2, 3]);
+            // Вырожденная (клик) — пусто
+            let rect = rubber_band_rect([1000.0, 1000.0], [1000.0, 1000.0]);
+            assert!(nodes_in_rect(&canvas, rect).is_empty());
+        }
+
+        /// Тогл: добавление в конец, снятие, повторное добавление.
+        #[test]
+        fn toggle_selected_node_add_remove() {
+            let mut selected = Vec::new();
+            assert!(toggle_selected_node(&mut selected, 3), "добавили 3");
+            assert!(toggle_selected_node(&mut selected, 7), "добавили 7");
+            assert_eq!(selected, vec![3, 7], "порядок добавления");
+            assert!(!toggle_selected_node(&mut selected, 3), "сняли 3");
+            assert_eq!(selected, vec![7]);
+            assert!(toggle_selected_node(&mut selected, 3), "снова 3");
+            assert_eq!(selected, vec![7, 3]);
+        }
+
+        /// drag_origins: одна нода; нода из набора — весь набор; дети
+        /// выделенных групп — автоматически, дубликаты схлопываются.
+        #[test]
+        fn drag_origins_set_children_and_dedup() {
+            let canvas = selection_canvas();
+            // Захват вне набора — только захваченная нода
+            let origins = drag_origins(&canvas, 0, &[1]);
+            assert_eq!(origins, vec![(0, [0.0, 0.0])]);
+            // Захват группы (2) без набора — группа + дитя (3)
+            let origins = drag_origins(&canvas, 2, &[]);
+            assert_eq!(
+                origins,
+                vec![(2, [200.0, 200.0]), (3, [350.0, 300.0])],
+                "дети группы тянутся вместе"
+            );
+            // Захват b(1) из набора {1, 2}: весь набор + дети группы,
+            // по возрастанию индексов, без дубликатов
+            let origins = drag_origins(&canvas, 1, &[1, 2]);
+            assert_eq!(
+                origins,
+                vec![(1, [300.0, 0.0]), (2, [200.0, 200.0]), (3, [350.0, 300.0])],
+                "набор + дети групп, по возрастанию"
+            );
+            // Дитя (3) в наборе И группа (2) в наборе: 3 один раз
+            let origins = drag_origins(&canvas, 3, &[3, 2]);
+            assert_eq!(
+                origins.len(),
+                2,
+                "дитя в наборе и от группы — ровно один раз"
+            );
+            // Невалидный индекс — пусто (filter_map)
+            assert!(drag_origins(&canvas, 9, &[]).is_empty());
         }
 
         // --- Drag-drop (T9) ---

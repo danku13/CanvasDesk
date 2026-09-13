@@ -124,6 +124,8 @@ pub struct SceneView<'a> {
     pub canvas: &'a Canvas,
     pub spatial: &'a SpatialIndex,
     pub selected: Option<Selection>,
+    /// Множественное выделение нод (CR-001): подсветка рамкой каждой.
+    pub selected_nodes: &'a [usize],
     /// Нода под курсором (hover, T8): рисуются порты для начала drag связи.
     pub hovered: Option<usize>,
     /// Резиновая линия (T8): (точка порта, сторона, курсор world).
@@ -675,12 +677,10 @@ impl Renderer {
                 let Some(node) = scene.canvas.nodes.get(index) else {
                     continue;
                 };
-                // Карточка ноды
-                instances.push(card_instance(
-                    node,
-                    selected_node == Some(index),
-                    &self.theme,
-                ));
+                // Карточка ноды (CR-001: в выделении — рамка как у primary)
+                let is_selected =
+                    selected_node == Some(index) || scene.selected_nodes.contains(&index);
+                instances.push(card_instance(node, is_selected, &self.theme));
                 // T23 (brainstorm-focus): не-фокусные ноды затемняются
                 // (альфа заливки/рамки × dim_factor); фокусные и выделенная
                 // (приложение включает её в набор) — полной яркости
