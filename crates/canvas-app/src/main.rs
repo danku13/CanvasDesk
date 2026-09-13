@@ -1916,11 +1916,7 @@ impl App {
         if focus_on {
             if let Some(seed) = seed {
                 // is_some_and (не is_none_or): MSRV проекта 1.80
-                if !self
-                    .focus_pulse
-                    .as_ref()
-                    .is_some_and(|(s, _)| *s == seed)
-                {
+                if !self.focus_pulse.as_ref().is_some_and(|(s, _)| *s == seed) {
                     self.focus_pulse = Some((seed, Instant::now()));
                 }
                 if let Some((_, start)) = self.focus_pulse {
