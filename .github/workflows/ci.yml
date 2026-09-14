@@ -2,6 +2,8 @@ name: CI
 
 # Авторитетный гейт (AGENTS.md «Сборка и тесты»): fmt/clippy/test/build
 # на всех трёх целевых ОС — кроссплатформенность Win/Linux/macOS (M7).
+# Плюс артефакты: релизные бинари трёх ОС прикладываются к каждому пушу
+# в main — свежую сборку можно скачать из Actions без локальной сборки.
 on:
   push:
     branches: [main]
@@ -33,3 +35,38 @@ jobs:
         run: cargo test --workspace
       - name: build
         run: cargo build --workspace
+
+  # Релизные бинари трёх ОС — только с зелёных гейтов и только на пуш
+  # (PR-ы не тратят минуты на загрузку артефактов). Это же — обходной
+  # путь при локальной ошибке линковки LNK1104 (docs/ENVIRONMENT.md §8).
+  artifacts:
+    name: artifacts (${{ matrix.os }})
+    needs: gates # артефакты собираются только с зелёных гейтов
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build release
+        run: cargo build --release -p canvas-app
+      # Windows добавляет .exe к имени бинарника
+      - name: Resolve binary path (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "BIN_PATH=target/release/canvas-app" >> "$GITHUB_ENV"
+      - name: Resolve binary path (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "BIN_PATH=target/release/canvas-app.exe" >> "$GITHUB_ENV"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: ${{ env.BIN_PATH }}
+          if-no-files-found: error # ошибка не скроется молча
+          retention-days: 14 # чтобы артефакты не копились бесконечно
