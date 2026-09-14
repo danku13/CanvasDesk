@@ -82,7 +82,9 @@ impl WatchService {
         let handler = move |res: Result<notify::Event, notify::Error>| match res {
             Ok(mut event) => {
                 remap_event_paths(&mut event, &handler_roots);
-                let _ = tx.send(event);
+                if !is_root_create_noise(&event, &handler_roots) {
+                    let _ = tx.send(event);
+                }
             }
             Err(err) => tracing::warn!(%err, "событие файлового вотчера потеряно"),
         };
@@ -244,6 +246,28 @@ fn remap_event_paths(event: &mut notify::Event, roots: &Mutex<HashMap<PathBuf, P
             }
         }
     }
+}
+
+/// Стартовый «корневой» шум FSEvents: свежесозданный поток сообщает
+/// собственные корни наблюдения Create-событием — путь корня (у FSEvents
+/// с завершающим слешем; Path-сравнение его игнорирует). Каталог существует
+/// с момента регистрации наблюдения (`SinceNow`), поэтому Create для корня —
+/// определение шума, а не событие файловой системы. На inotify/RDCW не
+/// встречается (фильтр на них не активен). Сравнение — с обеими формами
+/// корня: канонической (ключ карты, до отображения) и наблюдаемой (значение,
+/// после `remap_event_paths`).
+fn is_root_create_noise(event: &notify::Event, roots: &Mutex<HashMap<PathBuf, PathBuf>>) -> bool {
+    if event.paths.len() != 1 {
+        return false; // корневые события FSEvents одно-путевые
+    }
+    if !matches!(event.kind, EventKind::Create(_)) {
+        return false; // Modify/Remove корня — реальный сигнал о каталоге
+    }
+    let Ok(roots) = roots.lock() else {
+        return false; // карта недоступна — событие не дропаем
+    };
+    let path = &event.paths[0];
+    roots.keys().any(|canon| path == canon) || roots.values().any(|watched| path == watched)
 }
 
 /// Разделение половинок переименования из `Modify(Name(Any))`
@@ -759,6 +783,50 @@ mod tests {
             events[1].kind,
             EventKind::Modify(ModifyKind::Name(RenameMode::From))
         );
+    }
+
+    /// Стартовый корневой Create FSEvents — шум: совпадение с корнем в
+    /// канонической и наблюдаемой форме (включая завершающий слеш —
+    /// Path-сравнение его игнорирует).
+    #[test]
+    fn root_create_noise_detected() {
+        let mut roots = HashMap::new();
+        roots.insert(pb("/private/var/t"), pb("/var/t"));
+        let lock = Mutex::new(roots);
+
+        // наблюдаемая форма (после remap), со слешем — как отдаёт FSEvents
+        let root_event = raw(EventKind::Create(CreateKind::Folder), &["/var/t/"]);
+        assert!(is_root_create_noise(&root_event, &lock));
+
+        // каноническая форма (до remap)
+        let canon_event = raw(EventKind::Create(CreateKind::Folder), &["/private/var/t"]);
+        assert!(is_root_create_noise(&canon_event, &lock));
+
+        // ребёнок корня — не шум
+        let child = raw(EventKind::Create(CreateKind::File), &["/var/t/a.txt"]);
+        assert!(!is_root_create_noise(&child, &lock));
+
+        // Modify корня — реальный сигнал (mtime каталога), не фильтруем
+        let modify_root = raw(
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            &["/var/t/"],
+        );
+        assert!(!is_root_create_noise(&modify_root, &lock));
+
+        // много-путевое событие — не корневой шум
+        let multi = raw(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            &["/var/t/a", "/var/t/b"],
+        );
+        assert!(!is_root_create_noise(&multi, &lock));
+    }
+
+    /// Пустая карта — фильтр не срабатывает.
+    #[test]
+    fn root_create_noise_empty_map() {
+        let empty = Mutex::new(HashMap::<PathBuf, PathBuf>::new());
+        let event = raw(EventKind::Create(CreateKind::Folder), &["/any/dir/"]);
+        assert!(!is_root_create_noise(&event, &empty));
     }
 
     // ---------- Интеграционные тесты: реальный notify + tempdir ----------
