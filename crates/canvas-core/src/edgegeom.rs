@@ -261,7 +261,10 @@ pub fn distance_to_edge(canvas: &Canvas, edge: &Edge, point: [f32; 2], avoid: bo
 }
 
 /// Полилиния связи для рендера/hit-test'а: тесселяция Безье; при avoid —
-/// с огибанием посторонних нод (концевые ноды не препятствия).
+/// с огибанием посторонних нод. Не препятствия: концевые ноды и ВСЕ их
+/// группы-предки (транзитивно) — линк к ноде внутри группы свободно
+/// проходит её границу, линк к группе в целом — её конец. Чужие группы
+/// (не содержащие концы) огибаются как обычные ноды.
 pub fn edge_polyline(
     canvas: &Canvas,
     edge: &Edge,
@@ -273,11 +276,21 @@ pub fn edge_polyline(
     if !avoid {
         return Some(points);
     }
+    let mut excluded: Vec<usize> = Vec::new();
+    for id in [&edge.from_node, &edge.to_node] {
+        if let Some(i) = canvas.nodes.iter().position(|node| node.id == *id) {
+            excluded.push(i);
+            excluded.extend(crate::enclosing_group_indices(canvas, i));
+        }
+    }
+    excluded.sort_unstable();
+    excluded.dedup();
     let obstacles: Vec<[f32; 4]> = canvas
         .nodes
         .iter()
-        .filter(|node| node.id != edge.from_node && node.id != edge.to_node)
-        .map(|node| [node.x, node.y, node.width, node.height])
+        .enumerate()
+        .filter(|(index, _)| !excluded.contains(index))
+        .map(|(_, node)| [node.x, node.y, node.width, node.height])
         .collect();
     Some(route_polyline(
         &points,

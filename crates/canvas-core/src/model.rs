@@ -589,6 +589,35 @@ pub fn group_expand_to_children(canvas: &mut Canvas, group_index: usize, padding
     true
 }
 
+/// Все группы, содержащие ноду — явно (список `children`), геометрически
+/// (легаси, центр внутри rect) или транзитивно через вложенные группы.
+/// Роутинг связей использует список как исключение из препятствий: линк
+/// к ноде внутри группы должен свободно проходить её границу (и границы
+/// групп-предков), линк к группе в целом — исключён как конец связи.
+/// Чистая функция; порядок — по возрастанию индексов.
+pub fn enclosing_group_indices(canvas: &Canvas, node_index: usize) -> Vec<usize> {
+    if canvas.nodes.get(node_index).is_none() {
+        return Vec::new();
+    }
+    let mut result: Vec<usize> = Vec::new();
+    // Обход вверх по вложенности: группа, найденная как содержащая текущую
+    // ноду, сама может быть чьим-то ребёнком (вложенные группы)
+    let mut frontier: Vec<usize> = vec![node_index];
+    while let Some(current) = frontier.pop() {
+        for (gi, group) in canvas.nodes.iter().enumerate() {
+            if group.kind() != NodeKind::Group || result.contains(&gi) {
+                continue;
+            }
+            if group_children(canvas, gi).contains(&current) {
+                result.push(gi);
+                frontier.push(gi);
+            }
+        }
+    }
+    result.sort_unstable();
+    result
+}
+
 /// FR-012: план «мягкого раздвигания» — минимальные векторы выталкивания
 /// для bbox'ов, пересекающихся с `rect` (по кратчайшей из четырёх осей
 /// разрешения пересечения). Порядок входа сохранён (детерминизм); ноды без
@@ -718,6 +747,34 @@ mod tests {
         );
         // Невалидный индекс — пусто, без паники
         assert!(group_children(&canvas, 99).is_empty());
+    }
+
+    /// Группы-предки ноды: геометрические (легаси) и через вложенность,
+    /// транзитивно вверх. Нода вне групп — пусто; невалидный индекс — пусто.
+    #[test]
+    fn enclosing_groups_transitive() {
+        let mut canvas = group_scene();
+        // deep внутри nested, nested внутри g: предки deep — обе группы
+        canvas
+            .nodes
+            .push(Node::file("deep", "C:/deep.png", 60.0, 60.0, 20.0, 20.0));
+        assert_eq!(enclosing_group_indices(&canvas, 5), vec![0, 4]);
+        // in — центр (125,125) внутри g И внутри nested [50..150 × 50..130]
+        assert_eq!(enclosing_group_indices(&canvas, 1), vec![0, 4]);
+        // edge — центр (400,125) только в g (nested правее/левее не достаёт)
+        assert_eq!(enclosing_group_indices(&canvas, 2), vec![0]);
+        // out снаружи — ни одной
+        assert_eq!(enclosing_group_indices(&canvas, 3), Vec::<usize>::new());
+        assert_eq!(enclosing_group_indices(&canvas, 99), Vec::<usize>::new());
+        // Явное членство: g.children = [out] — out становится ребёнком g,
+        // а геометрические дети g (in/edge/nested) теряют членство
+        if let Some(group) = canvas.nodes.get_mut(0) {
+            group.children = Some(vec!["out".to_owned()]);
+        }
+        assert_eq!(enclosing_group_indices(&canvas, 3), vec![0]);
+        // in теряет членство в g (явный список), но nested (легаси-геометрия)
+        // по-прежнему содержит его центр
+        assert_eq!(enclosing_group_indices(&canvas, 1), vec![4]);
     }
 
     /// Вложенная группа сдвигается как обычная нода; её собственные дети

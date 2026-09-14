@@ -343,8 +343,11 @@ mod tests {
             "период 5 с не истёк"
         );
         // Снапшот «never» снят: дальше живёт по периоду
-        let mut last = last;
-        last.insert("never".to_owned(), 100);
+        let last = {
+            let mut last = last;
+            last.insert("never".to_owned(), 100);
+            last
+        };
         let plan = plan_frame(&[never, captured], 101, &last);
         let map = decisions(&plan);
         assert!(!by_id(&map, "never").refresh_snapshot, "свежий снапшот");

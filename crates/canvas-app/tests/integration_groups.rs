@@ -9,10 +9,13 @@
 
 use std::str::FromStr;
 
+use canvas_app::palette::{
+    palette_groups, palette_hit, palette_layout, palette_origin, palette_bar_size,
+    palette_open_group, PaletteAction, PaletteHit, PaletteTarget,
+};
 use canvas_app::ui::{
-    menu_item_at_for, plan_group_around, plan_group_at, select_node_hit, CanvasMenuItem,
-    NodeMenuItem, CANVAS_MENU_ITEMS, GROUP_HEIGHT, GROUP_PADDING, GROUP_WIDTH, MENU_ITEM_HEIGHT,
-    MENU_PADDING, NODE_MENU_ITEMS,
+    plan_group_around, plan_group_at, select_node_hit, CanvasMenuItem, CANVAS_MENU_ITEMS,
+    GROUP_HEIGHT, GROUP_PADDING, GROUP_WIDTH,
 };
 use canvas_app::{Camera, EditTarget, EditingSession, KeyCommand, Selection};
 use canvas_core::{group_children, Canvas, Node, NodeKind, SpatialIndex};
@@ -35,24 +38,58 @@ fn group_scene() -> (Canvas, SpatialIndex) {
     (canvas, spatial)
 }
 
-/// Тест 1: «Сгруппировать» из меню ноды — группа с bbox = нода + padding 40
+/// Тест 1: «Сгруппировать» из палитры выделения — группа с bbox = нода +
+/// padding 40 (уточнение владельца: FR-009/FR-010 — палитра под выделением)
 #[test]
 fn test_group_via_node_menu() {
     let (mut canvas, mut spatial) = group_scene();
 
-    // Меню ноды: пункт «Сгруппировать» — предпоследний (после разделителя),
-    // затем FR-009 «Настройки ▸»
-    assert_eq!(NODE_MENU_ITEMS.len(), 10);
-    assert_eq!(NODE_MENU_ITEMS[7], NodeMenuItem::Separator);
-    assert_eq!(NODE_MENU_ITEMS[8], NodeMenuItem::Group);
+    // Палитра выделения для ноды child-1 (индекс 1): группа «Действия»
+    // содержит действие NodeGroup (старое текстовое меню заменено палитрой)
+    let groups = palette_groups(
+        &canvas,
+        &PaletteTarget::Nodes {
+            primary: 1,
+            selected: vec![1],
+        },
+    );
+    let actions = groups
+        .iter()
+        .find(|g| g.label == "Действия")
+        .expect("группа «Действия» в палитре");
+    let group_entry = actions
+        .entries
+        .iter()
+        .find(|e| e.label == "Сгруппировать")
+        .expect("пункт «Сгруппировать»");
+    assert!(matches!(group_entry.action, PaletteAction::NodeGroup(1)));
 
-    // Клик по пункту меню (симуляция: hit-test пункта → Group)
-    let origin = [100.0, 50.0];
-    let group_item_y = 50.0 + MENU_PADDING + 8.0 * MENU_ITEM_HEIGHT + 3.0;
+    // Клик по строке выпадашки группы «Действия» (симуляция: hover на
+    // кнопке группы → открытая колонка → hit-test строки «Сгруппировать»)
+    let viewport = [1600.0, 900.0];
+    let anchor = [800.0, 400.0];
+    let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
+    let lay = palette_layout(origin, &groups, viewport);
+    let ai = groups.iter().position(|g| g.label == "Действия").unwrap();
+    // Hover на кнопке группы открывает колонку
+    let btn = lay.groups[ai].button;
     assert_eq!(
-        menu_item_at_for(origin, [110.0, group_item_y], NODE_MENU_ITEMS.len()),
-        Some(8),
-        "пункт «Сгруппировать» — индекс 8"
+        palette_open_group(&lay, [btn[0] + 5.0, btn[1] + 5.0]),
+        Some(ai)
+    );
+    // Строка «Сгруппировать» (третья: после Переименовать/Дублировать)
+    // кликабельна при ОТКРЫТОЙ группе
+    let ei = actions
+        .entries
+        .iter()
+        .position(|e| e.label == "Сгруппировать")
+        .expect("индекс строки");
+    let row = lay.groups[ai].rows[ei];
+    let hit = palette_hit(&lay, [row[0] + 5.0, row[1] + 5.0], Some(ai));
+    assert_eq!(
+        hit,
+        Some(PaletteHit::Entry { group: ai, entry: ei }),
+        "строка кликабельна"
     );
 
     // План группы вокруг выбранной ноды (child-1, индекс 1)

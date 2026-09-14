@@ -522,6 +522,143 @@ fn edge_polyline_avoids_third_node() {
     );
 }
 
+/// Линк к ноде внутри группы: группа-предок конца — НЕ препятствие,
+/// полилиния свободно проходит границу группы (уточнение владельца:
+/// «огибание не должно влиять на линк, который идёт внутрь группы»).
+#[test]
+fn edge_polyline_entering_group_ignores_group_boundary() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    // Группа-«стена» между a и b, но b — её ребёнок: границу проходим свободно
+    canvas
+        .nodes
+        .push(Node::group("g", 300.0, -100.0, 300.0, 300.0));
+    canvas.nodes.push(node("b", 500.0, 0.0, 100.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_eq!(
+        plain, avoided,
+        "группа-предок конца связи не огибается: {avoided:?}"
+    );
+}
+
+/// Вложенные группы: линк к ноде в самой внутренней игнорирует границы
+/// ВСЕХ групп-предков (транзитивно).
+#[test]
+fn edge_polyline_entering_nested_groups_ignores_all_boundaries() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas
+        .nodes
+        .push(Node::group("outer", 300.0, -200.0, 500.0, 400.0));
+    canvas
+        .nodes
+        .push(Node::group("inner", 380.0, -100.0, 300.0, 200.0));
+    canvas.nodes.push(node("b", 500.0, 0.0, 100.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_eq!(plain, avoided, "обе границы (outer, inner) свободны");
+}
+
+/// Чужая группа (не содержащая концы связи) огибается как обычная нода.
+#[test]
+fn edge_polyline_avoids_foreign_group() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 600.0, 0.0, 100.0, 100.0));
+    canvas
+        .nodes
+        .push(Node::group("wall", 230.0, -100.0, 240.0, 300.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    let wall = [230.0, -100.0, 240.0, 300.0];
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_ne!(avoided, plain, "чужая группа огибается");
+    assert!(
+        all_outside(&avoided, wall, AVOID_MARGIN),
+        "огибание не касается чужой группы: {avoided:?}"
+    );
+}
+
+/// Сиблинг внутри той же группы остаётся препятствием: детур происходит
+/// ВНУТРИ группы, границы группы не пересекаются (y не выходит за
+/// инфлированный диапазон группы).
+#[test]
+fn edge_polyline_avoids_sibling_inside_group() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    // Группа 300..600 × -100..200, сиблинг 350..450 × 0..100 на пути
+    canvas
+        .nodes
+        .push(Node::group("g", 300.0, -100.0, 300.0, 300.0));
+    canvas.nodes.push(node("s", 350.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 480.0, 0.0, 100.0, 100.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_ne!(avoided, plain, "сиблинг внутри группы огибается");
+    assert!(
+        all_outside(&avoided, [350.0, 0.0, 100.0, 100.0], AVOID_MARGIN),
+        "огибание не касается сиблинга: {avoided:?}"
+    );
+    // Детур вокруг сиблинга укладывается в инфлированный rect группы:
+    // граница группы (y = -100 / 200) не была бы пройдена, огибай роутинг
+    // её как препятствие (углы детура оказались бы на y = -112 / 212)
+    assert!(
+        avoided
+            .iter()
+            .all(|p| p[1] > -100.0 - AVOID_MARGIN + 1.0 && p[1] < 200.0 + AVOID_MARGIN - 1.0),
+        "детур не выходит за границы группы: {avoided:?}"
+    );
+}
+
+/// Линк к группе В ЦЕЛОМ (to_node — группа): группа — конец связи,
+/// не препятствие; свободного прохода достаточно.
+#[test]
+fn edge_polyline_group_endpoint_is_not_obstacle() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas
+        .nodes
+        .push(Node::group("g", 300.0, -100.0, 300.0, 300.0));
+    canvas.add_edge(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "g",
+        Some(Side::Left),
+    ));
+    let plain = edge_polyline(&canvas, &canvas.edges[0], false, 24).unwrap();
+    let avoided = edge_polyline(&canvas, &canvas.edges[0], true, 24).unwrap();
+    assert_eq!(plain, avoided, "группа-конец связи не огибается");
+}
+
 /// Hit-test по avoid-полилинии: точка на огибании попадает, прямая внутри
 /// препятствия — уже не на линии.
 #[test]

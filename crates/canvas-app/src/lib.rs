@@ -30,6 +30,11 @@ pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 /// кроссплатформен (host — cfg(windows) внутри), юнит-тесты — на Linux.
 pub mod widgets;
 
+/// Палитра выделения (FR-009/FR-010): screen-space тулбар под выделением —
+/// группы настроек с выпадающими перечнями и иконками. Заменяет текстовые
+/// контекстные меню ноды/связи.
+pub mod palette;
+
 /// Чистая UI-логика приложения: геометрия оверлеев (контекстное меню,
 /// панель настроек), hit-тесты, генератор id заметок, детектор двойного
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
@@ -39,24 +44,15 @@ pub mod ui {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
-    /// Ширина контекстного меню в world-px (T7).
+    /// Ширина контекстного меню в логических px (T7; screen-space —
+    /// константный размер при любом зуме).
     pub const MENU_WIDTH: f32 = 170.0;
-    /// Высота пункта меню в world-px.
+    /// Высота пункта меню в логических px.
     pub const MENU_ITEM_HEIGHT: f32 = 26.0;
-    /// Внутренний отступ меню в world-px.
+    /// Внутренний отступ меню в логических px.
     pub const MENU_PADDING: f32 = 6.0;
     /// Сдвиг подписи пункта: слева место под образец цвета.
     pub const MENU_LABEL_X: f32 = 26.0;
-    /// Пункты палитры (T7): пресеты "1".."6" + None — сброс цвета.
-    pub const MENU_ITEMS: [Option<&str>; 7] = [
-        Some("1"),
-        Some("2"),
-        Some("3"),
-        Some("4"),
-        Some("5"),
-        Some("6"),
-        None,
-    ];
     /// Фон меню — тёмный, почти непрозрачный.
     pub const MENU_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.97];
 
@@ -252,10 +248,13 @@ pub mod ui {
             && point[1] <= bottom
     }
 
-    /// Контекстное меню ноды (T7): палитра цветов в world-точке клика ПКМ.
-    /// Цель — нода (палитра) или связь (стиль/толщина/цвет линии).
+    /// Контекстное меню пустого канваса (ПКМ мимо нод/связей): создание
+    /// группы, фокус, хоткеи, подменю «Виджеты ▸». Screen-space: origin —
+    /// логические px от угла окна, размер константен при любом зуме
+    /// (уточнение владельца). Меню ноды/связи заменены палитрой выделения
+    /// (модуль `palette`).
     pub struct ContextMenu {
-        pub target: MenuTarget,
+        /// Позиция (логические px) левого верхнего угла меню.
         pub origin: Vec2,
         /// Подменю «Виджеты ▸» (T20-F): открывается кликом по пункту Widgets
         /// базового меню; пусто/None — подменю не открыто.
@@ -265,7 +264,7 @@ pub mod ui {
     /// Подменю контекстного меню (T20-F): список пакетов виджетов.
     #[derive(Debug, Clone, PartialEq)]
     pub struct Submenu {
-        /// Позиция (world) левого верхнего угла колонки подменю.
+        /// Позиция (логические px) левого верхнего угла колонки подменю.
         pub origin: Vec2,
         /// Пункты: установка ноды виджета или удаление пакета (T21-C).
         pub entries: Vec<SubmenuEntry>,
@@ -278,8 +277,6 @@ pub mod ui {
         Insert(String),
         /// Удалить пакет (id пакета; с диалогом подтверждения П11).
         Remove(String),
-        /// FR-009/FR-010/FR-011: настройка/действие над нодой.
-        NodeSetting(NodeSetting),
     }
 
     /// Пункт подменю виджетов.
@@ -291,14 +288,11 @@ pub mod ui {
         pub label: String,
     }
 
-    /// FR-009: настройка/действие ноды из подменю «Настройки ▸».
-    /// Состав зависит от типа ноды (`node_settings_entries`).
+    /// FR-009: настройка/действие ноды из палитры выделения (модуль
+    /// `palette`). Состав зависит от типа ноды; авто-раскладка FR-010 —
+    /// отдельное действие палитры (`PaletteAction::Layout`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NodeSetting {
-        // FR-010: авто-раскладка связанных карточек
-        AlignRelatedHorizontal,
-        AlignRelatedVertical,
-        AlignRelatedRadial,
         // FR-009: общие
         Rename,
         Duplicate,
@@ -315,91 +309,6 @@ pub mod ui {
         Ungroup,
         WidgetReload,
         WidgetPermissions,
-    }
-
-    /// FR-009: пункты подменю «Настройки ▸» для ноды заданного типа.
-    /// Общие (переименовать/дублировать/выравнивание) + типовые.
-    /// `is_collapsed` — текущее состояние ветки (галочка/глагол).
-    pub fn node_settings_entries(node: &Node, is_collapsed: bool) -> Vec<SubmenuEntry> {
-        let entry = |action: NodeSetting, label: String| SubmenuEntry {
-            action: SubmenuAction::NodeSetting(action),
-            label,
-        };
-        let mut entries = vec![
-            entry(NodeSetting::Rename, "Переименовать".to_owned()),
-            entry(NodeSetting::Duplicate, "Дублировать".to_owned()),
-            entry(
-                NodeSetting::AlignRelatedHorizontal,
-                "Выровнять связанные: горизонтально".to_owned(),
-            ),
-            entry(
-                NodeSetting::AlignRelatedVertical,
-                "— вертикально".to_owned(),
-            ),
-            entry(NodeSetting::AlignRelatedRadial, "— радиально".to_owned()),
-        ];
-        // FR-011: ветвление mindmap — для text-нод
-        if node.kind() == NodeKind::Text {
-            entries.push(entry(NodeSetting::AddChild, "Добавить дочернюю (Tab)".to_owned()));
-            entries.push(entry(
-                NodeSetting::AddSibling,
-                "Добавить сиблинга (Enter)".to_owned(),
-            ));
-            entries.push(entry(
-                if is_collapsed {
-                    NodeSetting::ExpandBranch
-                } else {
-                    NodeSetting::CollapseBranch
-                },
-                if is_collapsed {
-                    "Развернуть ветку".to_owned()
-                } else {
-                    "Свернуть ветку".to_owned()
-                },
-            ));
-        }
-        match node.kind() {
-            NodeKind::File => {
-                entries.push(entry(NodeSetting::OpenFile, "Открыть файл".to_owned()));
-                entries.push(entry(
-                    NodeSetting::OpenFolder,
-                    "Открыть папку с файлом".to_owned(),
-                ));
-                entries.push(entry(NodeSetting::CopyPath, "Скопировать путь".to_owned()));
-            }
-            NodeKind::Link => {
-                entries.push(entry(NodeSetting::CopyPath, "Скопировать ссылку".to_owned()));
-            }
-            NodeKind::Text => {
-                entries.push(entry(NodeSetting::ClearText, "Очистить текст".to_owned()));
-            }
-            NodeKind::Group => {
-                entries.push(entry(NodeSetting::Ungroup, "Разгруппировать".to_owned()));
-            }
-            NodeKind::Widget => {
-                entries.push(entry(
-                    NodeSetting::WidgetReload,
-                    "Перезагрузить виджет".to_owned(),
-                ));
-                entries.push(entry(
-                    NodeSetting::WidgetPermissions,
-                    "Разрешения виджета…".to_owned(),
-                ));
-            }
-            NodeKind::Unknown => {}
-        }
-        entries
-    }
-
-    /// Цель контекстного меню (ПКМ по канвасу).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum MenuTarget {
-        /// Нода: палитра цветов + действия (индекс в canvas.nodes).
-        Node(usize),
-        /// Связь: стиль линии, толщина, цвет (индекс в canvas.edges).
-        Edge(usize),
-        /// Пустое место: действия канваса (создание группы).
-        Canvas,
     }
 
     /// Активный drag резиновой линии (T8 + CR-002): от порта ноды к курсору —
@@ -1052,7 +961,7 @@ pub mod ui {
     /// минус боковые отступы.
     pub const DROP_GHOST_LABEL_PAD: f32 = 12.0;
 
-    /// Rect пункта меню в world-координатах: [x, y, w, h].
+    /// Rect пункта меню в логических px (screen-space): [x, y, w, h].
     pub fn menu_item_rect(origin: Vec2, i: usize) -> [f32; 4] {
         [
             origin[0] + MENU_PADDING,
@@ -1072,12 +981,7 @@ pub mod ui {
         ]
     }
 
-    /// Полный rect меню ноды (палитра): [x, y, w, h].
-    pub fn menu_rect(origin: Vec2) -> [f32; 4] {
-        menu_rect_for(origin, MENU_ITEMS.len())
-    }
-
-    /// Hit-test пункта меню из `items` по world-точке.
+    /// Hit-test пункта меню из `items` по точке в логических px.
     pub fn menu_item_at_for(origin: Vec2, point: Vec2, items: usize) -> Option<usize> {
         let [x, y, w, h] = menu_rect_for(origin, items);
         if point[0] < x
@@ -1090,77 +994,6 @@ pub mod ui {
         let i = ((point[1] - y - MENU_PADDING) / MENU_ITEM_HEIGHT) as usize;
         (i < items).then_some(i)
     }
-
-    /// Hit-test пункта меню ноды по world-точке (T7).
-    pub fn menu_item_at(origin: Vec2, point: Vec2) -> Option<usize> {
-        menu_item_at_for(origin, point, MENU_ITEMS.len())
-    }
-
-    /// Подпись пункта меню.
-    pub fn menu_label(item: Option<&str>) -> String {
-        match item {
-            Some(preset) => format!("Цвет {preset}"),
-            None => "Без цвета".to_owned(),
-        }
-    }
-
-    /// Пункт контекстного меню связи: стиль линии, толщина или цвет
-    /// (None — сброс цвета на дефолтный).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum EdgeMenuItem {
-        /// Стиль линии (сплошная/пунктир/точки).
-        Style(EdgeLineStyle),
-        /// Толщина линии (тонкая/средняя/толстая).
-        Thickness(EdgeThickness),
-        /// Цвет: пресет "1".."6" или None — сброс.
-        Color(Option<&'static str>),
-    }
-
-    /// Пункты меню связи (ПКМ по линии): 3 стиля, 3 толщины, 6 цветов + сброс.
-    pub const EDGE_MENU_ITEMS: [EdgeMenuItem; 13] = [
-        EdgeMenuItem::Style(EdgeLineStyle::Solid),
-        EdgeMenuItem::Style(EdgeLineStyle::Dashed),
-        EdgeMenuItem::Style(EdgeLineStyle::Dotted),
-        EdgeMenuItem::Thickness(EdgeThickness::Thin),
-        EdgeMenuItem::Thickness(EdgeThickness::Medium),
-        EdgeMenuItem::Thickness(EdgeThickness::Thick),
-        EdgeMenuItem::Color(Some("1")),
-        EdgeMenuItem::Color(Some("2")),
-        EdgeMenuItem::Color(Some("3")),
-        EdgeMenuItem::Color(Some("4")),
-        EdgeMenuItem::Color(Some("5")),
-        EdgeMenuItem::Color(Some("6")),
-        EdgeMenuItem::Color(None),
-    ];
-
-    /// Пункт составного меню ноды (T7 + группы): цвет из палитры,
-    /// разделитель (не кликабелен) или действие.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum NodeMenuItem {
-        /// Цвет: пресет "1".."6" или None — сброс.
-        Color(Option<&'static str>),
-        /// Разделитель палитры и действий (клик игнорируется).
-        Separator,
-        /// «Сгруппировать»: обернуть ноду в группу (bbox = нода + padding).
-        Group,
-        /// FR-009: «Настройки ▸» — подменю настроек/действий по типу ноды
-        /// (включая выравнивание FR-010 и mindmap FR-011).
-        Settings,
-    }
-
-    /// Меню ноды: палитра (7 пунктов) + разделитель + действия.
-    pub const NODE_MENU_ITEMS: [NodeMenuItem; 10] = [
-        NodeMenuItem::Color(Some("1")),
-        NodeMenuItem::Color(Some("2")),
-        NodeMenuItem::Color(Some("3")),
-        NodeMenuItem::Color(Some("4")),
-        NodeMenuItem::Color(Some("5")),
-        NodeMenuItem::Color(Some("6")),
-        NodeMenuItem::Color(None),
-        NodeMenuItem::Separator,
-        NodeMenuItem::Group,
-        NodeMenuItem::Settings,
-    ];
 
     /// Пункт меню пустого канваса (ПКМ мимо нод и связей).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1186,20 +1019,9 @@ pub mod ui {
         CanvasMenuItem::Widgets,
     ];
 
-    /// Подпись пункта меню ноды. Разделитель подписи не имеет.
-    pub fn node_menu_label(item: NodeMenuItem) -> Option<String> {
-        match item {
-            NodeMenuItem::Color(color) => Some(menu_label(color)),
-            NodeMenuItem::Separator => None,
-            NodeMenuItem::Group => Some("Сгруппировать".to_owned()),
-            NodeMenuItem::Settings => Some("Настройки ▸".to_owned()),
-        }
-    }
-
     /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
     /// фокуса, `hotkeys_open` — состояние оверлея хоткеев: для пунктов-
-    /// переключателей рисуется ✓-галочка (паттерн edge_menu_label,
-    /// FR-004.1 — Hotkeys).
+    /// переключателей рисуется ✓-галочка (FR-004.1 — Hotkeys).
     pub fn canvas_menu_label(item: CanvasMenuItem, focus_on: bool, hotkeys_open: bool) -> String {
         match item {
             CanvasMenuItem::NewGroup => "Создать группу".to_owned(),
@@ -1214,13 +1036,13 @@ pub mod ui {
         }
     }
 
-    /// Rect колонки подменю (world): [x, y, w, h]. Высота — по числу пунктов
-    /// (пустой список — 1 строка «(нет установленных)»).
+    /// Rect колонки подменю (логические px): [x, y, w, h]. Высота — по числу
+    /// пунктов (пустой список — 1 строка «(нет установленных)»).
     pub fn submenu_rect(submenu: &Submenu) -> [f32; 4] {
         menu_rect_for(submenu.origin, submenu.entries.len().max(1))
     }
 
-    /// Hit-test пункта подменю по world-точке.
+    /// Hit-test пункта подменю по точке в логических px.
     pub fn submenu_item_at(submenu: &Submenu, point: Vec2) -> Option<usize> {
         menu_item_at_for(submenu.origin, point, submenu.entries.len().max(1))
             .filter(|&i| i < submenu.entries.len())
@@ -1330,30 +1152,6 @@ pub mod ui {
                     .is_some_and(|node| node.kind() == NodeKind::Group)
             })
             .max()
-    }
-
-    /// Подпись пункта меню связи с отметкой текущего значения (`✓`).
-    pub fn edge_menu_label(item: EdgeMenuItem, edge: &Edge) -> String {
-        let current = match item {
-            EdgeMenuItem::Style(style) => edge.style.unwrap_or(EdgeLineStyle::Solid) == style,
-            EdgeMenuItem::Thickness(thickness) => edge.thickness.unwrap_or_default() == thickness,
-            EdgeMenuItem::Color(color) => edge.color.as_deref() == color,
-        };
-        let mark = if current { "✓ " } else { "" };
-        match item {
-            EdgeMenuItem::Style(style) => format!("{mark}Линия: {}", style.label()),
-            EdgeMenuItem::Thickness(thickness) => {
-                format!("{mark}Толщина: {}", thickness.label())
-            }
-            EdgeMenuItem::Color(Some(preset)) => format!("{mark}Цвет {preset}"),
-            EdgeMenuItem::Color(None) => {
-                if edge.color.is_none() {
-                    "✓ Без цвета".to_owned()
-                } else {
-                    "Без цвета".to_owned()
-                }
-            }
-        }
     }
 
     #[cfg(test)]
@@ -2060,59 +1858,6 @@ pub mod ui {
             assert_eq!(drop_ghost_label(&kind), exact);
         }
 
-        /// Hit-test меню (T7): пункты палитры, края, промахи.
-        #[test]
-        fn menu_hit_test() {
-            let origin = [100.0, 50.0];
-            // Первый пункт (цвет "1")
-            assert_eq!(
-                menu_item_at(origin, [110.0, 50.0 + MENU_PADDING + 3.0]),
-                Some(0)
-            );
-            // Последний пункт (сброс цвета)
-            let last_y = 50.0 + MENU_PADDING + 6.0 * MENU_ITEM_HEIGHT + 3.0;
-            assert_eq!(menu_item_at(origin, [110.0, last_y]), Some(6));
-            // Правее меню, выше, ниже — промах
-            assert_eq!(menu_item_at(origin, [100.0 + MENU_WIDTH + 1.0, 60.0]), None);
-            assert_eq!(menu_item_at(origin, [110.0, 49.0]), None);
-            assert_eq!(
-                menu_item_at(origin, [110.0, 50.0 + menu_rect(origin)[3] + 1.0]),
-                None
-            );
-            // Вертикальный паддинг между рамкой и первым пунктом — промах
-            assert_eq!(menu_item_at(origin, [110.0, 51.0]), None);
-        }
-
-        /// Hit-test меню связи: 13 пунктов (3 стиля, 3 толщины, 7 цветов),
-        /// границы групп различимы.
-        #[test]
-        fn edge_menu_hit_test() {
-            let origin = [100.0, 50.0];
-            let n = EDGE_MENU_ITEMS.len();
-            assert_eq!(n, 13);
-            // Первый пункт (стиль «сплошная»)
-            assert_eq!(
-                menu_item_at_for(origin, [110.0, 50.0 + MENU_PADDING + 3.0], n),
-                Some(0)
-            );
-            // Граница групп: толщина «тонкая» (индекс 3) и цвет "1" (индекс 6)
-            let y = |i: usize| 50.0 + MENU_PADDING + i as f32 * MENU_ITEM_HEIGHT + 3.0;
-            assert_eq!(menu_item_at_for(origin, [110.0, y(3)], n), Some(3));
-            assert_eq!(menu_item_at_for(origin, [110.0, y(6)], n), Some(6));
-            // Последний пункт — сброс цвета
-            assert_eq!(menu_item_at_for(origin, [110.0, y(12)], n), Some(12));
-            // Промахи: правее, выше, ниже
-            assert_eq!(
-                menu_item_at_for(origin, [100.0 + MENU_WIDTH + 1.0, 60.0], n),
-                None
-            );
-            assert_eq!(menu_item_at_for(origin, [110.0, 49.0], n), None);
-            assert_eq!(
-                menu_item_at_for(origin, [110.0, 50.0 + menu_rect_for(origin, n)[3] + 1.0], n),
-                None
-            );
-        }
-
         /// M5 (T20-F): подменю «Виджеты ▸» — геометрия колонки справа от
         /// базового меню, hit-test пунктов, пустой список, origin-хелпер.
         #[test]
@@ -2196,7 +1941,6 @@ pub mod ui {
         #[test]
         fn context_menu_with_submenu_composes() {
             let menu = ContextMenu {
-                target: MenuTarget::Canvas,
                 origin: [0.0, 0.0],
                 submenu: Some(Submenu {
                     origin: submenu_origin_next_to([0.0, 0.0]),
@@ -2210,84 +1954,10 @@ pub mod ui {
             assert_eq!(menu.submenu.as_ref().unwrap().entries.len(), 1);
             // Дефолтное меню — без подменю
             let plain = ContextMenu {
-                target: MenuTarget::Canvas,
                 origin: [0.0, 0.0],
                 submenu: None,
             };
             assert!(plain.submenu.is_none());
-        }
-
-        /// Подписи меню связи: отметка `✓` только у текущих значений.
-        #[test]
-        fn edge_menu_labels_mark_current() {
-            let mut edge = Edge::new("e1", "a", None, "b", None);
-            edge.style = Some(EdgeLineStyle::Dashed);
-            edge.thickness = Some(EdgeThickness::Thick);
-            edge.color = Some("3".into());
-
-            let label = |item| edge_menu_label(item, &edge);
-            assert!(!label(EDGE_MENU_ITEMS[0]).starts_with('✓'));
-            assert!(label(EDGE_MENU_ITEMS[1]).starts_with("✓"), "dashed текущий");
-            assert!(!label(EDGE_MENU_ITEMS[2]).starts_with('✓'));
-            assert!(!label(EDGE_MENU_ITEMS[3]).starts_with('✓'));
-            assert!(!label(EDGE_MENU_ITEMS[4]).starts_with('✓'));
-            assert!(label(EDGE_MENU_ITEMS[5]).starts_with('✓'), "thick текущий");
-            assert!(!label(EDGE_MENU_ITEMS[6]).starts_with('✓'));
-            assert!(label(EDGE_MENU_ITEMS[8]).starts_with("✓"), "цвет 3 текущий");
-            assert!(!label(EDGE_MENU_ITEMS[12]).starts_with('✓'));
-
-            // Без стилей: ✓ у дефолтов (solid/medium/без цвета)
-            let plain = Edge::new("e2", "a", None, "b", None);
-            assert!(edge_menu_label(EDGE_MENU_ITEMS[0], &plain).starts_with('✓'));
-            assert!(edge_menu_label(EDGE_MENU_ITEMS[4], &plain).starts_with('✓'));
-            assert!(edge_menu_label(EDGE_MENU_ITEMS[12], &plain).starts_with('✓'));
-        }
-
-        /// Составное меню ноды: 10 пунктов (7 палитра + разделитель +
-        /// «Сгруппировать» + FR-009 «Настройки ▸»), hit-test по длине,
-        /// разделитель без подписи.
-        #[test]
-        fn node_menu_items_and_hit_test() {
-            let origin = [100.0, 50.0];
-            let n = NODE_MENU_ITEMS.len();
-            assert_eq!(n, 10);
-            assert_eq!(NODE_MENU_ITEMS[7], NodeMenuItem::Separator);
-            assert_eq!(NODE_MENU_ITEMS[8], NodeMenuItem::Group);
-            // Подписи: палитра + действие; у разделителя подписи нет
-            assert_eq!(
-                node_menu_label(NODE_MENU_ITEMS[0]),
-                Some("Цвет 1".to_owned())
-            );
-            assert_eq!(
-                node_menu_label(NODE_MENU_ITEMS[6]),
-                Some("Без цвета".to_owned())
-            );
-            assert_eq!(node_menu_label(NODE_MENU_ITEMS[7]), None);
-            assert_eq!(
-                node_menu_label(NODE_MENU_ITEMS[8]),
-                Some("Сгруппировать".to_owned())
-            );
-            // FR-009: последний пункт — вход в подменю настроек
-            assert_eq!(NODE_MENU_ITEMS[9], NodeMenuItem::Settings);
-            assert_eq!(
-                node_menu_label(NODE_MENU_ITEMS[9]),
-                Some("Настройки ▸".to_owned())
-            );
-            // Hit-test: первый пункт, разделитель (индекс 7), действие (8)
-            let y = |i: usize| 50.0 + MENU_PADDING + i as f32 * MENU_ITEM_HEIGHT + 3.0;
-            assert_eq!(menu_item_at_for(origin, [110.0, y(0)], n), Some(0));
-            assert_eq!(menu_item_at_for(origin, [110.0, y(7)], n), Some(7));
-            assert_eq!(menu_item_at_for(origin, [110.0, y(8)], n), Some(8));
-            // Промахи: правее, выше, ниже
-            assert_eq!(
-                menu_item_at_for(origin, [100.0 + MENU_WIDTH + 1.0, 60.0], n),
-                None
-            );
-            assert_eq!(menu_item_at_for(origin, [110.0, 49.0], n), None);
-            assert_eq!(
-                menu_item_at_for(origin, [110.0, 50.0 + menu_rect_for(origin, n)[3] + 1.0], n),
-                None
-            );
         }
 
         /// Меню пустого канваса: «Создать группу» + «Фокус на связях» (T23)

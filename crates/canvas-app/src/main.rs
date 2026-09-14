@@ -7,17 +7,21 @@ use std::time::{Duration, Instant};
 
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
+use canvas_app::palette::{
+    color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
+    palette_layout, palette_open_group, palette_origin, PaletteAction, PaletteHit,
+    PaletteLayout, PaletteTarget, PAL_ICON,
+};
 use canvas_app::ui::{
-    button_rect, canvas_menu_label, drag_origins, edge_menu_label, focus_seed_of,
-    hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
-    next_free_id, node_menu_label, node_settings_entries, nodes_in_rect, panel_rect, panel_row_at,
-    paste_nodes, plan_group_around, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
-    select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
-    toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
-    EdgeMenuItem, MenuTarget, NodeMenuItem, PastePlacement, SettingsRow, Submenu, SubmenuEntry,
-    CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, EDGE_MENU_ITEMS, MENU_ITEM_HEIGHT, MENU_LABEL_X,
-    MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, NODE_MENU_ITEMS,
-    PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
+    button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
+    in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect,
+    panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_at, point_in_rect,
+    reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at, submenu_origin_next_to,
+    submenu_rect, theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu,
+    DoubleClick, DragState, EdgeDrag, PastePlacement, SettingsRow, Submenu,
+    SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
+    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
+    SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
@@ -29,7 +33,7 @@ use canvas_render::animate::{
     FOCUS_FADE_MS, FOCUS_PULSE_MS,
 };
 use canvas_render::camera::Vec2;
-use canvas_render::cards::{preset_color, CardInstance, FocusView, HEADER_HEIGHT};
+use canvas_render::cards::{CardInstance, FocusView, HEADER_HEIGHT};
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
@@ -2298,162 +2302,385 @@ impl App {
         ))
     }
 
-    /// Оверлей контекстного меню (T7): фон, образцы, подписи пунктов.
-    /// Нода — палитра цветов + действия; связь — стиль линии, толщина, цвет;
-    /// пустое место — действия канваса.
-    /// Возвращает (квады, подписи, world-позиции подписей).
-    fn menu_overlay(&self) -> (Vec<CardInstance>, Vec<String>, Vec<Vec2>) {
+    /// Оверлей контекстного меню пустого канваса (T7): фон, подписи.
+    /// Screen-space — логические px, константный читаемый размер при любом
+    /// зуме (уточнение владельца). Меню ноды/связи заменены палитрой.
+    fn canvas_menu_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
-        let mut labels = Vec::new();
-        let mut label_pos = Vec::new();
+        let mut texts = Vec::new();
         let Some(menu) = &self.menu else {
-            return (instances, labels, label_pos);
+            return (instances, texts);
         };
         let palette = ThemeColors::from_theme(self.settings.theme);
-        match menu.target {
-            MenuTarget::Node(_) => {
-                let items = NODE_MENU_ITEMS.len();
-                let [x, y, w, h] = menu_rect_for(menu.origin, items);
-                instances.push(CardInstance {
-                    pos: [x, y],
-                    size: [w, h],
-                    fill: palette.menu_fill,
-                    border: [0.0; 4],
-                    params: [6.0, 0.0, 0.0, 0.0],
+        let [x, y, w, h] = menu_rect_for(menu.origin, CANVAS_MENU_ITEMS.len());
+        instances.push(CardInstance {
+            pos: [x, y],
+            size: [w, h],
+            fill: palette.menu_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 0.0],
+        });
+        for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
+            let rect = menu_item_rect(menu.origin, i);
+            texts.push(OwnedScreenText {
+                text: canvas_menu_label(*item, self.settings.focus_mode, self.hotkeys_open),
+                origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
+                width: rect[2] - MENU_LABEL_X,
+                font_size: 14.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        // M5 (T20-F): колонка подменю «Виджеты ▸» — справа от меню
+        if let Some(submenu) = &menu.submenu {
+            let [sx, sy, sw, sh] = submenu_rect(submenu);
+            instances.push(CardInstance {
+                pos: [sx, sy],
+                size: [sw, sh],
+                fill: palette.menu_fill,
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 0.0],
+            });
+            if submenu.entries.is_empty() {
+                texts.push(OwnedScreenText {
+                    text: "(нет установленных)".to_owned(),
+                    origin: [
+                        submenu.origin[0] + MENU_PADDING + 4.0,
+                        submenu.origin[1] + MENU_PADDING + 5.0,
+                    ],
+                    width: MENU_WIDTH - MENU_PADDING * 2.0 - 8.0,
+                    font_size: 13.0,
+                    color: palette.body,
+                    align: TextAlign::Left,
                 });
-                for (i, item) in NODE_MENU_ITEMS.iter().enumerate() {
-                    let rect = menu_item_rect(menu.origin, i);
-                    match item {
-                        NodeMenuItem::Color(color) => {
-                            if let Some(color) = color.and_then(preset_color) {
-                                // Образец цвета слева от подписи
-                                instances.push(CardInstance {
-                                    pos: [rect[0] + 7.0, rect[1] + 7.0],
-                                    size: [12.0, 12.0],
-                                    fill: color,
-                                    border: [0.0; 4],
-                                    params: [2.0, 0.0, 0.0, 0.0],
-                                });
-                            }
-                            labels.push(node_menu_label(*item).unwrap_or_default());
-                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
-                        }
-                        // Разделитель палитры и действий: тонкая линия
-                        NodeMenuItem::Separator => {
-                            let line_y = rect[1] + MENU_ITEM_HEIGHT / 2.0;
-                            instances.push(CardInstance {
-                                pos: [rect[0] + 4.0, line_y],
-                                size: [rect[2] - 8.0, 1.0],
-                                fill: palette.body_fill(),
-                                border: [0.0; 4],
-                                params: [0.0, 0.0, 0.0, 1.0],
-                            });
-                        }
-                        NodeMenuItem::Group => {
-                            labels.push(node_menu_label(*item).unwrap_or_default());
-                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
-                        }
-                        // FR-009: «Настройки ▸» — как подпись, с маркером ▸
-                        NodeMenuItem::Settings => {
-                            labels.push(node_menu_label(*item).unwrap_or_default());
-                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
-                        }
-                    }
-                }
-            }
-            MenuTarget::Edge(edge_index) => {
-                let [x, y, w, h] = menu_rect_for(menu.origin, EDGE_MENU_ITEMS.len());
-                instances.push(CardInstance {
-                    pos: [x, y],
-                    size: [w, h],
-                    fill: palette.menu_fill,
-                    border: [0.0; 4],
-                    params: [6.0, 0.0, 0.0, 0.0],
-                });
-                for (i, item) in EDGE_MENU_ITEMS.iter().enumerate() {
-                    let rect = menu_item_rect(menu.origin, i);
-                    match item {
-                        EdgeMenuItem::Color(color) => {
-                            // Образец цвета слева от подписи
-                            if let Some(fill) = color.and_then(preset_color) {
-                                instances.push(CardInstance {
-                                    pos: [rect[0] + 7.0, rect[1] + 7.0],
-                                    size: [12.0, 12.0],
-                                    fill,
-                                    border: [0.0; 4],
-                                    params: [2.0, 0.0, 0.0, 0.0],
-                                });
-                            }
-                        }
-                        EdgeMenuItem::Thickness(thickness) => {
-                            // Образец-толщина: полоска высотой dot()
-                            let line_h = thickness.dot();
-                            instances.push(CardInstance {
-                                pos: [rect[0] + 7.0, rect[1] + (26.0 - line_h) / 2.0],
-                                size: [12.0, line_h],
-                                fill: palette.body_fill(),
-                                border: [0.0; 4],
-                                params: [line_h / 2.0, 0.0, 0.0, 0.0],
-                            });
-                        }
-                        EdgeMenuItem::Style(_) => {}
-                    }
-                    let label = self
-                        .scene
-                        .canvas
-                        .edges
-                        .get(edge_index)
-                        .map(|edge| edge_menu_label(*item, edge))
-                        .unwrap_or_default();
-                    labels.push(label);
-                    label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
-                }
-            }
-            MenuTarget::Canvas => {
-                let [x, y, w, h] = menu_rect_for(menu.origin, CANVAS_MENU_ITEMS.len());
-                instances.push(CardInstance {
-                    pos: [x, y],
-                    size: [w, h],
-                    fill: palette.menu_fill,
-                    border: [0.0; 4],
-                    params: [6.0, 0.0, 0.0, 0.0],
-                });
-                for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
-                    let rect = menu_item_rect(menu.origin, i);
-                    labels.push(canvas_menu_label(
-                        *item,
-                        self.settings.focus_mode,
-                        self.hotkeys_open,
-                    ));
-                    label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
-                }
-                // M5 (T20-F): колонка подменю «Виджеты ▸» — справа от меню
-                if let Some(submenu) = &menu.submenu {
-                    let [sx, sy, sw, sh] = submenu_rect(submenu);
-                    instances.push(CardInstance {
-                        pos: [sx, sy],
-                        size: [sw, sh],
-                        fill: palette.menu_fill,
-                        border: [0.0; 4],
-                        params: [6.0, 0.0, 0.0, 0.0],
+            } else {
+                for (i, entry) in submenu.entries.iter().enumerate() {
+                    let rect = menu_item_rect(submenu.origin, i);
+                    texts.push(OwnedScreenText {
+                        text: entry.label.clone(),
+                        origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
+                        width: rect[2] - MENU_LABEL_X,
+                        font_size: 13.0,
+                        color: palette.title,
+                        align: TextAlign::Left,
                     });
-                    if submenu.entries.is_empty() {
-                        labels.push("(нет установленных)".to_owned());
-                        label_pos.push([
-                            submenu.origin[0] + MENU_PADDING + 4.0,
-                            submenu.origin[1] + MENU_PADDING + 6.0,
-                        ]);
+                }
+            }
+        }
+        (instances, texts)
+    }
+
+    // --- Палитра выделения (FR-009/FR-010) ---
+
+    /// Цель палитры из текущего выделения; None — палитра скрыта
+    /// (нет выделения, drag/редактирование/поиск/диалог/рамка выделения).
+    fn palette_target(&self) -> Option<PaletteTarget> {
+        if self.dialog.is_some()
+            || self.search.is_open()
+            || self.editing.is_some()
+            || self.scene.dragging.is_some()
+            || self.edge_drag.is_some()
+            || self.select_rect.is_some()
+        {
+            return None;
+        }
+        // Список выделенных нод: primary — одиночное/составное выделение
+        // или первый из мультивыделения рамкой (CR-001, там selected = None)
+        let selected: Vec<usize> = match self.scene.selected {
+            Some(Selection::Node(primary)) => {
+                let mut selected = vec![primary];
+                for &index in &self.scene.selected_nodes {
+                    if !selected.contains(&index) && self.scene.canvas.nodes.get(index).is_some() {
+                        selected.push(index);
+                    }
+                }
+                selected
+            }
+            None if !self.scene.selected_nodes.is_empty() => self
+                .scene
+                .selected_nodes
+                .iter()
+                .copied()
+                .filter(|&index| self.scene.canvas.nodes.get(index).is_some())
+                .collect(),
+            _ => Vec::new(),
+        };
+        if selected.is_empty() {
+            return match self.scene.selected {
+                Some(Selection::Edge(edge_index))
+                    if self.scene.canvas.edges.get(edge_index).is_some() =>
+                {
+                    Some(PaletteTarget::Edge(edge_index))
+                }
+                _ => None,
+            };
+        }
+        // Primary — первый из списка (для одиночного выделения он и есть
+        // единственный; для рамки — первый по порядку выделения)
+        let primary = selected[0];
+        Some(PaletteTarget::Nodes { primary, selected })
+    }
+
+    /// Screen-якорь палитры: низ bbox выделенных нод (или середина связи),
+    /// в логических px; None — цель без геометрии.
+    fn palette_anchor_screen(&self, target: &PaletteTarget) -> Option<[f32; 2]> {
+        let viewport = self.viewport_logical();
+        let gap = canvas_app::palette::PAL_ANCHOR_GAP;
+        match target {
+            PaletteTarget::Nodes { selected, .. } => {
+                // bbox всех выделенных (первичный + мультивыделение)
+                let mut bbox: Option<[f32; 4]> = None;
+                for index in selected {
+                    let node = self.scene.canvas.nodes.get(*index)?;
+                    let rect = [node.x, node.y, node.width, node.height];
+                    bbox = Some(match bbox {
+                        None => rect,
+                        Some(b) => [
+                            b[0].min(rect[0]),
+                            b[1].min(rect[1]),
+                            (b[0] + b[2]).max(rect[0] + rect[2]) - b[0].min(rect[0]),
+                            (b[1] + b[3]).max(rect[1] + rect[3]) - b[1].min(rect[1]),
+                        ],
+                    });
+                }
+                let b = bbox?;
+                let bottom_center = [b[0] + b[2] / 2.0, b[1] + b[3]];
+                let screen = self.camera.world_to_screen(bottom_center, viewport);
+                Some([screen[0], screen[1] + gap])
+            }
+            PaletteTarget::Edge(edge_index) => {
+                let edge = self.scene.canvas.edges.get(*edge_index)?;
+                let avoid = self.settings.edges_avoid_nodes;
+                let mid = canvas_core::edge_midpoint(&self.scene.canvas, edge, avoid)?;
+                let screen = self.camera.world_to_screen(mid, viewport);
+                Some([screen[0], screen[1] + gap])
+            }
+        }
+    }
+
+    /// Вид палитры на кадр: (layout, группы, открытая hover'ом группа).
+    fn palette_view(
+        &self,
+    ) -> Option<(
+        PaletteLayout,
+        Vec<canvas_app::palette::PaletteGroup>,
+        Option<usize>,
+    )> {
+        let target = self.palette_target()?;
+        let groups = palette_groups(&self.scene.canvas, &target);
+        if groups.is_empty() {
+            return None;
+        }
+        let viewport = self.viewport_logical();
+        let anchor = self.palette_anchor_screen(&target)?;
+        let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
+        let lay = palette_layout(origin, &groups, viewport);
+        let open = palette_open_group(&lay, self.cursor);
+        Some((lay, groups, open))
+    }
+
+    /// Оверлей палитры выделения: бар с кнопками групп (иконка + подпись),
+    /// открытая hover'ом колонка (строки с иконками и подписями).
+    /// Screen-space: константный размер при любом зуме.
+    fn palette_overlay(
+        &self,
+        lay: &PaletteLayout,
+        groups: &[canvas_app::palette::PaletteGroup],
+        open: Option<usize>,
+    ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let tint = color_to_rgba(palette.icon);
+        let title = palette.title;
+        let accent = [0.18, 0.29, 0.48, 0.95];
+        // Фон бара
+        instances.push(CardInstance {
+            pos: [lay.bar[0], lay.bar[1]],
+            size: [lay.bar[2], lay.bar[3]],
+            fill: palette.menu_fill,
+            border: [0.22, 0.24, 0.30, 0.9],
+            params: [8.0, 0.0, 0.0, 1.0],
+        });
+        for (i, group) in groups.iter().enumerate() {
+            let button = lay.groups[i].button;
+            let hovered = open == Some(i);
+            // Кнопка группы: подсветка при наведении (выпадашка открыта)
+            instances.push(CardInstance {
+                pos: [button[0], button[1]],
+                size: [button[2], button[3]],
+                fill: if hovered {
+                    [0.24, 0.30, 0.42, 1.0]
+                } else {
+                    [0.17, 0.18, 0.22, 1.0]
+                },
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            // Иконка группы (текстовый глиф — ScreenText'ом по центру)
+            let icon_rect = [
+                button[0] + (button[2] - PAL_ICON) / 2.0,
+                button[1] + (button[3] - PAL_ICON) / 2.0,
+                PAL_ICON,
+                PAL_ICON,
+            ];
+            instances.extend(icon_quads(group.icon, icon_rect, tint));
+            if let Some(glyph) = icon_text(group.icon) {
+                texts.push(OwnedScreenText {
+                    text: glyph.to_owned(),
+                    origin: [icon_rect[0], icon_rect[1] + 2.0],
+                    width: icon_rect[2],
+                    font_size: 12.0,
+                    color: title,
+                    align: TextAlign::Center,
+                });
+            }
+            // Подпись группы под кнопкой
+            texts.push(OwnedScreenText {
+                text: group.label.clone(),
+                origin: lay.groups[i].caption,
+                width: button[2],
+                font_size: 10.0,
+                color: palette.body,
+                align: TextAlign::Center,
+            });
+            // Открытая колонка (hover): фон + строки
+            if hovered {
+                let drop = lay.groups[i].dropdown;
+                instances.push(CardInstance {
+                    pos: [drop[0], drop[1]],
+                    size: [drop[2], drop[3]],
+                    fill: palette.menu_fill,
+                    border: [0.22, 0.24, 0.30, 0.9],
+                    params: [6.0, 0.0, 0.0, 1.0],
+                });
+                for (k, entry) in group.entries.iter().enumerate() {
+                    let row = lay.groups[i].rows[k];
+                    let row_hovered = point_in_rect(row, self.cursor);
+                    let fill = if row_hovered {
+                        accent
+                    } else if entry.current {
+                        [0.18, 0.29, 0.48, 0.45]
                     } else {
-                        for (i, entry) in submenu.entries.iter().enumerate() {
-                            let rect = menu_item_rect(submenu.origin, i);
-                            labels.push(entry.label.clone());
-                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                        [0.0; 4]
+                    };
+                    if fill[3] > 0.0 {
+                        instances.push(CardInstance {
+                            pos: [row[0], row[1]],
+                            size: [row[2], row[3]],
+                            fill,
+                            border: [0.0; 4],
+                            params: [4.0, 0.0, 0.0, 1.0],
+                        });
+                    }
+                    if let Some(icon) = entry.icon {
+                        let icon_rect = [
+                            row[0] + 5.0,
+                            row[1] + (row[3] - PAL_ICON) / 2.0,
+                            PAL_ICON,
+                            PAL_ICON,
+                        ];
+                        instances.extend(icon_quads(icon, icon_rect, tint));
+                        if let Some(glyph) = icon_text(icon) {
+                            texts.push(OwnedScreenText {
+                                text: glyph.to_owned(),
+                                origin: [icon_rect[0], icon_rect[1] + 2.0],
+                                width: icon_rect[2],
+                                font_size: 13.0,
+                                color: title,
+                                align: TextAlign::Center,
+                            });
                         }
+                        texts.push(OwnedScreenText {
+                            text: entry.label.clone(),
+                            origin: [row[0] + 28.0, row[1] + 5.0],
+                            width: row[2] - 32.0,
+                            font_size: 13.0,
+                            color: title,
+                            align: TextAlign::Left,
+                        });
+                    } else {
+                        // Строка без иконки — текст по всей ширине
+                        texts.push(OwnedScreenText {
+                            text: entry.label.clone(),
+                            origin: [row[0] + 8.0, row[1] + 5.0],
+                            width: row[2] - 12.0,
+                            font_size: 13.0,
+                            color: title,
+                            align: TextAlign::Left,
+                        });
                     }
                 }
             }
         }
-        (instances, labels, label_pos)
+        (instances, texts)
+    }
+
+    /// Действие палитры: клик по строке выпадашки. Мутирующие действия —
+    /// undo-шаг (FR-006); настройки ноды — через apply_node_setting.
+    fn apply_palette_action(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::Node {
+                node_index,
+                setting,
+            } => self.apply_node_setting(node_index, setting),
+            PaletteAction::NodeColor { targets, preset } => {
+                let snapshot = self.scene.canvas.clone();
+                for index in targets {
+                    if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                        node.color = preset.map(str::to_owned);
+                    }
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                }
+                self.scene.mark_dirty();
+            }
+            PaletteAction::NodeGroup(index) => {
+                if let Some(group) =
+                    plan_group_around(&self.scene.canvas, index, canvas_app::ui::GROUP_PADDING)
+                {
+                    self.insert_group(group);
+                }
+            }
+            PaletteAction::Layout { seed, mode } => self.apply_related_layout(seed, mode),
+            PaletteAction::EdgeStyle {
+                edge_index,
+                style,
+            } => {
+                let snapshot = self.scene.canvas.clone();
+                if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
+                    edge.style = Some(style);
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                }
+                self.scene.mark_dirty();
+            }
+            PaletteAction::EdgeThickness {
+                edge_index,
+                thickness,
+            } => {
+                let snapshot = self.scene.canvas.clone();
+                if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
+                    edge.thickness = Some(thickness);
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                }
+                self.scene.mark_dirty();
+            }
+            PaletteAction::EdgeColor { edge_index, preset } => {
+                let snapshot = self.scene.canvas.clone();
+                if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
+                    edge.color = preset.map(str::to_owned);
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                }
+                self.scene.mark_dirty();
+            }
+        }
     }
 
     /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
@@ -3624,14 +3851,31 @@ impl App {
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
-                // Открытое меню (T7): клик по пункту — применить, мимо — закрыть.
-                // M5: открытое подменю виджетов проверяется ПЕРВЫМ — его
-                // колонка правее базового меню (клик там не попадает в base)
+                // Палитра выделения (FR-009/FR-010): клик по строке ОТКРЫТОЙ
+                // hover'ом группы — действие, по бару/кнопке — глотается;
+                // проверяется ДО канваса — тулбар поверх выделения
+                if let Some((lay, groups, open)) = self.palette_view() {
+                    match palette_hit(&lay, self.cursor, open) {
+                        Some(PaletteHit::Entry { group, entry }) => {
+                            let action = groups[group].entries[entry].action.clone();
+                            self.apply_palette_action(action);
+                            self.request_redraw();
+                            return;
+                        }
+                        Some(PaletteHit::Bar) => {
+                            self.request_redraw();
+                            return;
+                        }
+                        None => {}
+                    }
+                }
+                // Открытое меню канваса (T7): клик по пункту — применить,
+                // мимо — закрыть. M5: открытое подменю виджетов проверяется
+                // ПЕРВЫМ — его колонка правее базового меню (клик там не
+                // попадает в base). Hit-test — в логических px (курсор).
                 if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
-                    if let Some(i) = submenu_item_at(submenu, world) {
+                    if let Some(i) = submenu_item_at(submenu, self.cursor) {
                         let action = submenu.entries[i].action.clone();
-                        // Цель меню нужен для NodeSetting (нода, открывшая подменю)
-                        let menu_target = self.menu.as_ref().map(|m| m.target);
                         self.menu = None;
                         match action {
                             canvas_app::ui::SubmenuAction::Insert(widget_id) => {
@@ -3648,156 +3892,63 @@ impl App {
                                     .unwrap_or(widget_id.clone());
                                 self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
                             }
-                            // FR-009/FR-010/FR-011: настройка ноды из «Настройки ▸»
-                            canvas_app::ui::SubmenuAction::NodeSetting(setting) => {
-                                if let Some(MenuTarget::Node(node_index)) = menu_target {
-                                    self.apply_node_setting(node_index, setting);
-                                }
-                            }
                         }
                         self.request_redraw();
                         return;
                     }
                 }
                 if let Some(menu) = self.menu.take() {
-                    match menu.target {
-                        MenuTarget::Node(node_index) => {
-                            if let Some(i) =
-                                menu_item_at_for(menu.origin, world, NODE_MENU_ITEMS.len())
-                            {
-                                match NODE_MENU_ITEMS[i] {
-                                    NodeMenuItem::Color(color) => {
-                                        // FR-006: смена цвета — undo-шаг;
-                                        // повторный клик того же цвета (no-op)
-                                        // шага не создаёт — сравнение после
-                                        let snapshot = self.scene.canvas.clone();
-                                        if let Some(node) =
-                                            self.scene.canvas.nodes.get_mut(node_index)
-                                        {
-                                            node.color = color.map(str::to_owned);
-                                        }
-                                        if self.scene.canvas != snapshot {
-                                            self.scene.push_undo(snapshot);
-                                        }
-                                        self.scene.mark_dirty();
-                                    }
-                                    // Разделитель не кликабелен — меню просто закрывается
-                                    NodeMenuItem::Separator => {}
-                                    // Обернуть ноду в группу (bbox = нода + padding)
-                                    NodeMenuItem::Group => {
-                                        if let Some(group) = plan_group_around(
-                                            &self.scene.canvas,
-                                            node_index,
-                                            canvas_app::ui::GROUP_PADDING,
-                                        ) {
-                                            self.insert_group(group);
-                                        }
-                                    }
-                                    // FR-009: «Настройки ▸» — подменю по типу ноды
-                                    // (общие + выравнивание FR-010 + mindmap FR-011)
-                                    NodeMenuItem::Settings => {
-                                        let entries = self
-                                            .scene
-                                            .canvas
-                                            .nodes
-                                            .get(node_index)
-                                            .map(|node| {
-                                                let collapsed = node.collapsed == Some(true);
-                                                node_settings_entries(node, collapsed)
-                                            })
-                                            .unwrap_or_default();
-                                        self.menu = Some(ContextMenu {
-                                            target: MenuTarget::Node(node_index),
-                                            origin: menu.origin,
-                                            submenu: Some(Submenu {
-                                                origin: submenu_origin_next_to(menu.origin),
-                                                entries,
-                                            }),
-                                        });
-                                    }
-                                }
+                    // Пункты меню канваса (нода/связь — палитра выделения)
+                    if let Some(i) =
+                        menu_item_at_for(menu.origin, self.cursor, CANVAS_MENU_ITEMS.len())
+                    {
+                        match CANVAS_MENU_ITEMS[i] {
+                            CanvasMenuItem::NewGroup => {
+                                let center = self.viewport_center_world();
+                                let group = plan_group_at(&self.scene.canvas, center);
+                                self.insert_group(group);
                             }
-                        }
-                        MenuTarget::Edge(edge_index) => {
-                            if let Some(i) =
-                                menu_item_at_for(menu.origin, world, EDGE_MENU_ITEMS.len())
-                            {
-                                // FR-006: смена стиля/толщины/цвета связи —
-                                // undo-шаг (no-op клик шага не создаёт)
-                                let snapshot = self.scene.canvas.clone();
-                                if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
-                                    match EDGE_MENU_ITEMS[i] {
-                                        EdgeMenuItem::Style(style) => edge.style = Some(style),
-                                        EdgeMenuItem::Thickness(thickness) => {
-                                            edge.thickness = Some(thickness)
-                                        }
-                                        EdgeMenuItem::Color(color) => {
-                                            edge.color = color.map(str::to_owned)
-                                        }
-                                    }
-                                }
-                                if self.scene.canvas != snapshot {
-                                    self.scene.push_undo(snapshot);
-                                }
-                                self.scene.mark_dirty();
+                            // T23: переключение из меню — рантайм,
+                            // без записи конфига (как и хоткей F)
+                            CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
+                            // FR-004.1: тогл оверлея хоткеев из меню
+                            // (панель «видно/не видно», галочка ✓)
+                            CanvasMenuItem::Hotkeys => {
+                                self.hotkeys_open = !self.hotkeys_open;
                             }
-                        }
-                        MenuTarget::Canvas => {
-                            if let Some(i) =
-                                menu_item_at_for(menu.origin, world, CANVAS_MENU_ITEMS.len())
-                            {
-                                match CANVAS_MENU_ITEMS[i] {
-                                    CanvasMenuItem::NewGroup => {
-                                        let center = self.viewport_center_world();
-                                        let group = plan_group_at(&self.scene.canvas, center);
-                                        self.insert_group(group);
-                                    }
-                                    // T23: переключение из меню — рантайм,
-                                    // без записи конфига (как и хоткей F)
-                                    CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
-                                    // FR-004.1: тогл оверлея хоткеев из меню
-                                    // (панель «видно/не видно», галочка ✓)
-                                    CanvasMenuItem::Hotkeys => {
-                                        self.hotkeys_open = !self.hotkeys_open;
-                                    }
-                                    // M5 (T20-F): открыть подменю пакетов
-                                    // (план П2); пустой список — честная
-                                    // строка «(нет установленных)».
-                                    // T21-C: под каждой вставкой — секция
-                                    // удаления пакетов (П11)
-                                    CanvasMenuItem::Widgets => {
-                                        let submenu_origin = submenu_origin_next_to(menu.origin);
-                                        let mut entries: Vec<SubmenuEntry> = self
-                                            .widgets
-                                            .menu_entries()
-                                            .into_iter()
-                                            .map(|(widget_id, label)| SubmenuEntry {
-                                                action: canvas_app::ui::SubmenuAction::Insert(
-                                                    widget_id,
-                                                ),
-                                                label,
-                                            })
-                                            .collect();
-                                        entries.extend(
-                                            self.widgets.menu_entries().into_iter().map(
-                                                |(widget_id, label)| SubmenuEntry {
-                                                    action: canvas_app::ui::SubmenuAction::Remove(
-                                                        widget_id,
-                                                    ),
-                                                    label: format!("— Удалить: {label}"),
-                                                },
+                            // M5 (T20-F): открыть подменю пакетов
+                            // (план П2); пустой список — честная
+                            // строка «(нет установленных)».
+                            // T21-C: под каждой вставкой — секция
+                            // удаления пакетов (П11)
+                            CanvasMenuItem::Widgets => {
+                                let submenu_origin = submenu_origin_next_to(menu.origin);
+                                let mut entries: Vec<SubmenuEntry> = self
+                                    .widgets
+                                    .menu_entries()
+                                    .into_iter()
+                                    .map(|(widget_id, label)| SubmenuEntry {
+                                        action: canvas_app::ui::SubmenuAction::Insert(widget_id),
+                                        label,
+                                    })
+                                    .collect();
+                                entries.extend(
+                                    self.widgets.menu_entries().into_iter().map(
+                                        |(widget_id, label)| SubmenuEntry {
+                                            action: canvas_app::ui::SubmenuAction::Remove(
+                                                widget_id,
                                             ),
-                                        );
-                                        self.menu = Some(ContextMenu {
-                                            target: MenuTarget::Canvas,
-                                            origin: menu.origin,
-                                            submenu: Some(Submenu {
-                                                origin: submenu_origin,
-                                                entries,
-                                            }),
-                                        });
-                                    }
-                                }
+                                            label: format!("— Удалить: {label}"),
+                                        },
+                                    ),
+                                );
+                                self.menu = Some(ContextMenu {
+                                    origin: menu.origin,
+                                    submenu: Some(Submenu {
+                                        origin: submenu_origin,
+                                        entries,
+                                    }),
+                                });
                             }
                         }
                     }
@@ -4115,35 +4266,32 @@ impl App {
         }
         let world = self.cursor_world();
         match self.selective_hit(world) {
-            // Меню ноды (T7): палитра цветов + действия в точке клика
+            // Нода: выделить → палитра выделения под нодой (FR-009/FR-010).
+            // Мультивыделение сохраняется при ПКМ по выделенной ноде
             Some(index) => {
+                if !self.scene.selected_nodes.contains(&index) {
+                    self.scene.selected_nodes.clear();
+                }
                 self.scene.selected = Some(Selection::Node(index));
-                self.menu = Some(ContextMenu {
-                    target: MenuTarget::Node(index),
-                    origin: world,
-                    submenu: None,
-                });
+                self.menu = None;
             }
-            // Промах по нодам: меню связи (стиль/толщина/цвет линии);
-            // мимо связи — меню пустого канваса (создание группы) или
-            // закрытие меню (и десктоп-меню T17 в --desktop)
+            // Связь: выделить → палитра связи (Стиль/Толщина/Цвет);
+            // мимо — меню пустого канваса или закрытие (десктоп-меню T17)
             None => {
                 let avoid = self.settings.edges_avoid_nodes;
                 match edge_at(&self.scene.canvas, world, avoid) {
                     Some(edge_index) => {
                         self.scene.selected = Some(Selection::Edge(edge_index));
-                        self.menu = Some(ContextMenu {
-                            target: MenuTarget::Edge(edge_index),
-                            origin: world,
-                            submenu: None,
-                        });
+                        self.scene.selected_nodes.clear();
+                        self.menu = None;
                     }
                     None => {
                         // T17 (SPEC §7.4 п.6): в --desktop ПКМ по пустому месту —
                         // системное меню десктопа (нативное Win32: Открыть
                         // канвас / Новый текстовый файл / иконки / автозапуск /
                         // Выход); вне --desktop — меню пустого канваса
-                        // (создание группы), повторный ПКМ мимо закрывает его
+                        // (создание группы), повторный ПКМ мимо закрывает его.
+                        // Origin — логические px (screen-space меню)
                         #[cfg(windows)]
                         let desktop_menu = self.desktop_mode && self.desktop_hierarchy.is_some();
                         #[cfg(not(windows))]
@@ -4156,13 +4304,9 @@ impl App {
                             self.menu = match self.menu.take() {
                                 // Повторный ПКМ по тому же пустому месту —
                                 // закрыть (тоггл, как у ноды/связи)
-                                Some(ContextMenu {
-                                    target: MenuTarget::Canvas,
-                                    ..
-                                }) => None,
+                                Some(_) => None,
                                 _ => Some(ContextMenu {
-                                    target: MenuTarget::Canvas,
-                                    origin: world,
+                                    origin: self.cursor,
                                     submenu: None,
                                 }),
                             };
@@ -4379,6 +4523,10 @@ impl App {
                 let hovered = self.selective_hit(world);
                 if hovered != self.hovered {
                     self.hovered = hovered;
+                    self.request_redraw();
+                } else if self.palette_target().is_some() {
+                    // Палитра выделения: подсветка кнопок/строк и открытая
+                    // hover'ом колонка следуют за курсором
                     self.request_redraw();
                 }
             }
@@ -5330,23 +5478,13 @@ impl App {
 
     // --- FR-009: диспетчер «Настройки ▸» ---
 
-    /// Применить настройку/действие ноды из подменю «Настройки ▸»
-    /// (FR-009). Каждая мутирующая настройка — «push_undo → мутация →
-    /// mark_dirty»; переименование входит в редактирование (его undo —
-    /// commit сессии).
+    /// Применить настройку/действие ноды из палитры выделения
+    /// (FR-009; диспетчер для `PaletteAction::Node`). Каждая мутирующая
+    /// настройка — «push_undo → мутация → mark_dirty»; переименование
+    /// входит в редактирование (его undo — commit сессии).
     fn apply_node_setting(&mut self, node_index: usize, setting: canvas_app::ui::NodeSetting) {
         use canvas_app::ui::NodeSetting;
         match setting {
-            // FR-010: выравнивание связанных
-            NodeSetting::AlignRelatedHorizontal => {
-                self.apply_related_layout(node_index, canvas_core::LayoutMode::TreeHorizontal)
-            }
-            NodeSetting::AlignRelatedVertical => {
-                self.apply_related_layout(node_index, canvas_core::LayoutMode::TreeVertical)
-            }
-            NodeSetting::AlignRelatedRadial => {
-                self.apply_related_layout(node_index, canvas_core::LayoutMode::Radial)
-            }
             // FR-009: переименовать = вход в редактирование (двойной клик)
             NodeSetting::Rename => self.begin_editing(node_index),
             NodeSetting::Duplicate => {
@@ -5682,15 +5820,10 @@ impl App {
         self.show_toast("Нода вынесена из группы");
     }
 
-    /// Меню ноды (FR-009): rect открытого меню — по цели.
+    /// Rect открытого меню канваса (логические px) — airspace для виджетов.
     fn menu_open_rect(&self) -> Option<[f32; 4]> {
         let menu = self.menu.as_ref()?;
-        let items = match menu.target {
-            MenuTarget::Node(_) => NODE_MENU_ITEMS.len(),
-            MenuTarget::Edge(_) => EDGE_MENU_ITEMS.len(),
-            MenuTarget::Canvas => CANVAS_MENU_ITEMS.len(),
-        };
-        Some(menu_rect_for(menu.origin, items))
+        Some(menu_rect_for(menu.origin, CANVAS_MENU_ITEMS.len()))
     }
 }
 
@@ -5771,18 +5904,30 @@ impl ApplicationHandler<AppEvent> for App {
                 // (текстура должна быть готова к проходу кадра)
                 self.update_minimap();
                 let hud = self.hud_text();
-                // Оверлей контекстного меню (T7): квады + подписи пунктов
-                // Т9 добавляет в конец призраков дропа — mutable
-                let (mut overlay_instances, mut overlay_labels, mut overlay_label_pos) =
-                    self.menu_overlay();
-                // Ширины подписей оверлея: меню — от констант, призраки дропа —
-                // по ширине карточки-призрака (Т9)
-                let mut overlay_widths: Vec<f32> = overlay_labels
-                    .iter()
-                    .map(|_| MENU_WIDTH - MENU_LABEL_X - MENU_PADDING)
-                    .collect();
+                // World-оверлеи: Т9 призраки дропа добавляются в конец — mutable
+                let mut overlay_instances: Vec<CardInstance> = Vec::new();
+                let mut overlay_labels: Vec<String> = Vec::new();
+                let mut overlay_label_pos: Vec<Vec2> = Vec::new();
+                // Ширины подписей оверлея: призраки дропа — по ширине
+                // карточки-призрака (Т9)
+                let mut overlay_widths: Vec<f32> = Vec::new();
                 // Панель настроек (screen-space): кнопка + строки переключателей
                 let (mut screen_instances, mut owned_texts) = self.settings_overlay();
+                // Меню пустого канваса (T7): screen-space, константный размер
+                {
+                    let (menu_instances, menu_texts) = self.canvas_menu_overlay();
+                    screen_instances.extend(menu_instances);
+                    owned_texts.extend(menu_texts);
+                }
+                // Палитра выделения (FR-009/FR-010): тулбар под выделением;
+                // rect'ы запоминаются для airspace виджетов
+                let palette_view = self.palette_view();
+                if let Some((lay, groups, open)) = &palette_view {
+                    let (pal_instances, pal_texts) =
+                        self.palette_overlay(lay, groups, *open);
+                    screen_instances.extend(pal_instances);
+                    owned_texts.extend(pal_texts);
+                }
                 // Панель поиска (T14): квады/тексты поверх всего канваса
                 {
                     let (search_instances, search_texts) = self.search_overlay();
@@ -5977,7 +6122,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // M5 (T20-F): airspace-прямоугольники оверлеев (план П7) —
                 // до LOD-кадра виджетов; большие панели (поиск/настройки)
                 // упрощённо гасят все live (транзиентно), точные rect'ы —
-                // меню/подменю/хоткеи/миникарта
+                // меню/подменю/палитра/хоткеи/миникарта
                 let mut widget_airspace: Vec<[f32; 4]> = Vec::new();
                 if let Some(rect) = self.menu_open_rect() {
                     widget_airspace.push(rect);
@@ -5985,6 +6130,13 @@ impl ApplicationHandler<AppEvent> for App {
                         if let Some(submenu) = &menu.submenu {
                             widget_airspace.push(submenu_rect(submenu));
                         }
+                    }
+                }
+                // Палитра выделения: бар + открытая колонка (логические px)
+                if let Some((lay, _, open)) = &palette_view {
+                    widget_airspace.push(lay.bar);
+                    if let Some(open) = open {
+                        widget_airspace.push(lay.groups[*open].dropdown);
                     }
                 }
                 if self.hotkeys_open {
