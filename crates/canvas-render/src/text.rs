@@ -789,6 +789,8 @@ pub struct TitleFrame<'a> {
     /// прозрачный хром (hover/выделение); отсортирован. Остальные виджет-ноды
     /// заголовков не имеют вовсе (хром скрыт, имя — в поиске и меню).
     pub widget_title_reveal: &'a [usize],
+    /// FR-011: бейджи «+N» свернутых нод: (индекс, число скрытых потомков).
+    pub collapsed_counts: &'a [(usize, usize)],
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -995,7 +997,17 @@ impl TextSystem {
                     (node.width - TITLE_PADDING * 2.0 - if has_icon { ICON_WIDTH } else { 0.0 })
                         .max(0.0);
                 let width_px = title_width * zoom_px;
-                let title_text = title_for(node);
+                // FR-011: у свернутой ноды в заголовке бейдж «+N» — число
+                // скрытых потомков
+                let collapsed_count = frame
+                    .collapsed_counts
+                    .binary_search_by_key(&index, |(i, _)| *i)
+                    .ok()
+                    .and_then(|pos| frame.collapsed_counts.get(pos).map(|(_, n)| *n));
+                let title_text = match collapsed_count {
+                    Some(count) => format!("{} +{}", title_for(node), count),
+                    None => title_for(node),
+                };
                 // Тело редактируемой ноды рисует EditingSession — не шейпим дубль
                 let body_text = if frame.editing == Some(index) || !body_visible(node, zoom_px) {
                     String::new()

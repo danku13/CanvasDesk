@@ -4,6 +4,8 @@
 //! сохраняются в `extra` (serde flatten) и не теряются при round-trip;
 //! неизвестные типы нод не ломают парсинг (`node_type` — строка).
 
+use std::collections::{HashMap, VecDeque};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -148,6 +150,17 @@ pub struct Node {
     /// Расширение: данные виджет-ноды (M5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canvasdesk: Option<CanvasdeskExt>,
+    /// FR-011: ветвление mindmap — поддерево ноды свернуто. Расширение
+    /// `.canvas` (SPEC §5.1): сериализуется только при Some(true) — чужие
+    /// редакторы сохраняют поле как неизвестное (round-trip без потерь).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<bool>,
+    /// FR-012: ЯВНЫЕ дети группы (id нод; только для kind == Group).
+    /// Расширение `.canvas`: сериализуется только у групп. Membership
+    /// больше не чисто геометрический: нода, случайно занесённая поверх
+    /// группы, ребёнком НЕ становится — только жестом вставки (drag).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<String>>,
     /// Неизвестные поля — сохраняются при round-trip (совместимость с Obsidian).
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -182,13 +195,15 @@ impl Node {
             broken_link: None,
             preview_state: None,
             canvasdesk: None,
+            collapsed: None,
+            children: None,
             extra: Map::new(),
         }
     }
 
-    /// Нода-группа: рамка с подписью (`label`). Дети определяются геометрией
-    /// (центр ноды внутри rect группы, см. `group_children`) — формат
-    /// `.canvas` родительские связи не хранит.
+    /// Нода-группа: рамка с подписью (`label`). Дети — ЯВНЫЙ список `children`
+    /// (FR-012); у групп без списка (легаси-файлы) — геометрический фолбэк
+    /// `group_children` (совместимость, SPEC §5.1).
     pub fn group(id: impl Into<String>, x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
             id: id.into(),
@@ -204,6 +219,8 @@ impl Node {
             broken_link: None,
             preview_state: None,
             canvasdesk: None,
+            collapsed: None,
+            children: None,
             extra: Map::new(),
         }
     }
@@ -231,6 +248,8 @@ impl Node {
             broken_link: None,
             preview_state: None,
             canvasdesk: None,
+            collapsed: None,
+            children: None,
             extra: Map::new(),
         }
     }
@@ -261,6 +280,8 @@ impl Node {
             broken_link: None,
             preview_state: None,
             canvasdesk: Some(ext),
+            collapsed: None,
+            children: None,
             extra: Map::new(),
         }
     }
@@ -439,13 +460,31 @@ impl Canvas {
     }
 }
 
-/// Индексы детей группы: ноды (кроме самой группы), чей центр лежит внутри
-/// rect группы (границы включительно). Вложенные группы считаются обычными
-/// нодами — рекурсии нет (v1 групп). Чистая функция — тестируется без GPU.
+/// Индексы детей группы (FR-012): если у группы явный список `children` —
+/// только он (в порядке возрастания индексов; отсутствующие в модели id
+/// пропускаются). Легаси-фолбэк (списка нет) — геометрия: ноды, чей центр
+/// лежит внутри rect группы (границы включительно). Вложенные группы
+/// считаются обычными нодами — рекурсии нет. Чистая функция.
 pub fn group_children(canvas: &Canvas, group_index: usize) -> Vec<usize> {
     let Some(group) = canvas.nodes.get(group_index) else {
         return Vec::new();
     };
+    if let Some(children) = &group.children {
+        let index_of: HashMap<&str, usize> = canvas
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.as_str(), i))
+            .collect();
+        let mut indices: Vec<usize> = children
+            .iter()
+            .filter_map(|id| index_of.get(id.as_str()).copied())
+            .filter(|&i| i != group_index)
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        return indices;
+    }
     let (gx, gy) = (group.x, group.y);
     let (gx1, gy1) = (group.x + group.width, group.y + group.height);
     canvas
@@ -462,6 +501,183 @@ pub fn group_children(canvas: &Canvas, group_index: usize) -> Vec<usize> {
         })
         .map(|(index, _)| index)
         .collect()
+}
+
+// --- FR-012: явное членство групп (жест «втягивания») ---
+
+/// Материализовать явный список детей группы из текущего membership
+/// (легаси-группа становится группой с `children`). Повторный вызов — no-op.
+pub fn group_materialize_children(canvas: &mut Canvas, group_index: usize) {
+    let Some(group) = canvas.nodes.get(group_index) else {
+        return;
+    };
+    if group.children.is_some() {
+        return;
+    }
+    let ids: Vec<String> = group_children(canvas, group_index)
+        .into_iter()
+        .filter_map(|i| canvas.nodes.get(i).map(|n| n.id.clone()))
+        .collect();
+    if let Some(group) = canvas.nodes.get_mut(group_index) {
+        group.children = Some(ids);
+    }
+}
+
+/// Добавить ноды в группу по id (жест «втягивания», FR-012): список детей
+/// материализуется (легаси — из геометрии) и расширяется новыми id.
+/// Дубликаты и id самой группы игнорируются.
+pub fn group_add_children(canvas: &mut Canvas, group_index: usize, node_ids: &[String]) {
+    group_materialize_children(canvas, group_index);
+    let Some(group) = canvas.nodes.get_mut(group_index) else {
+        return;
+    };
+    let group_id = group.id.clone();
+    let list = group.children.get_or_insert_with(Vec::new);
+    for id in node_ids {
+        if id == &group_id || list.contains(id) {
+            continue;
+        }
+        list.push(id.clone());
+    }
+}
+
+/// Убрать ноду из детей группы (жест «выноса», FR-012). У легаси-группы
+/// список материализуется минус удаляемая нода. true — список изменился.
+pub fn group_remove_child(canvas: &mut Canvas, group_index: usize, node_id: &str) -> bool {
+    group_materialize_children(canvas, group_index);
+    let Some(group) = canvas.nodes.get_mut(group_index) else {
+        return false;
+    };
+    let Some(list) = group.children.as_mut() else {
+        return false;
+    };
+    let before = list.len();
+    list.retain(|id| id != node_id);
+    list.len() != before
+}
+
+/// Расширить rect группы до bbox(дети) + `padding` по всем сторонам
+/// (FR-012: авторасширение при вставке). false — детей нет / индекс невалиден.
+pub fn group_expand_to_children(canvas: &mut Canvas, group_index: usize, padding: f32) -> bool {
+    let children = group_children(canvas, group_index);
+    if children.is_empty() {
+        return false;
+    }
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for index in children {
+        let Some(node) = canvas.nodes.get(index) else {
+            continue;
+        };
+        min_x = min_x.min(node.x);
+        min_y = min_y.min(node.y);
+        max_x = max_x.max(node.x + node.width);
+        max_y = max_y.max(node.y + node.height);
+    }
+    if min_x > max_x {
+        return false;
+    }
+    let Some(group) = canvas.nodes.get_mut(group_index) else {
+        return false;
+    };
+    group.x = min_x - padding;
+    group.y = min_y - padding;
+    group.width = (max_x - min_x) + padding * 2.0;
+    group.height = (max_y - min_y) + padding * 2.0;
+    true
+}
+
+/// FR-012: план «мягкого раздвигания» — минимальные векторы выталкивания
+/// для bbox'ов, пересекающихся с `rect` (по кратчайшей из четырёх осей
+/// разрешения пересечения). Порядок входа сохранён (детерминизм); ноды без
+/// пересечения в план не попадают. Чистая функция — тестируется без GPU.
+pub fn plan_push_out(rect: [f32; 4], others: &[(usize, [f32; 4])]) -> Vec<(usize, [f32; 2])> {
+    let (rx, ry, rw, rh) = (rect[0], rect[1], rect[2], rect[3]);
+    others
+        .iter()
+        .filter_map(|&(index, bbox)| {
+            let (bx, by, bw, bh) = (bbox[0], bbox[1], bbox[2], bbox[3]);
+            // Пересечение (строгое) — иначе ноду не трогаем
+            let overlap_w = (rx + rw).min(bx + bw) - rx.max(bx);
+            let overlap_h = (ry + rh).min(by + bh) - ry.max(by);
+            if overlap_w <= 0.0 || overlap_h <= 0.0 {
+                return None;
+            }
+            // Минимальный выталкивающий вектор из четырёх осевых вариантов:
+            // вправо (за правый край rect), влево, вниз, вверх
+            let right = rx + rw - bx;
+            let left = bx + bw - rx;
+            let down = ry + rh - by;
+            let up = by + bh - ry;
+            let dx = if right <= left { right } else { -left };
+            let dy = if down <= up { down } else { -up };
+            let delta = if dx.abs() <= dy.abs() {
+                [dx, 0.0]
+            } else {
+                [0.0, dy]
+            };
+            Some((index, delta))
+        })
+        .collect()
+}
+
+/// FR-011: индексы потомков ноды по исходящим рёбрам (поддерево mindmap,
+/// корень не включается). Направление — от родителя к ребёнку
+/// (`from_node → to_node`); циклы отсекаются (visited); порядок — BFS от
+/// корня, соседи в порядке следования рёбер. Чистая функция.
+pub fn subtree_ids(canvas: &Canvas, root: usize) -> Vec<usize> {
+    if canvas.nodes.get(root).is_none() {
+        return Vec::new();
+    }
+    let index_of: HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let mut visited: Vec<usize> = Vec::new();
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    queue.push_back(root);
+    while let Some(node) = queue.pop_front() {
+        let Some(node_ref) = canvas.nodes.get(node) else {
+            continue;
+        };
+        let node_id = node_ref.id.as_str();
+        for edge in &canvas.edges {
+            if edge.from_node != node_id {
+                continue;
+            }
+            let Some(&child) = index_of.get(edge.to_node.as_str()) else {
+                continue;
+            };
+            if child == root || visited.contains(&child) {
+                continue;
+            }
+            visited.push(child);
+            queue.push_back(child);
+        }
+    }
+    visited.retain(|&i| i != root);
+    visited
+}
+
+/// FR-011: родитель ноды в поддереве mindmap — from-нода ПЕРВОГО входящего
+/// ребра (детерминизм: порядок рёбер модели). None — корень/нет входящих.
+pub fn parent_index(canvas: &Canvas, node_index: usize) -> Option<usize> {
+    let node = canvas.nodes.get(node_index)?;
+    let index_of: HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    canvas
+        .edges
+        .iter()
+        .find(|edge| edge.to_node == node.id)
+        .and_then(|edge| index_of.get(edge.from_node.as_str()).copied())
 }
 
 #[cfg(test)]
@@ -663,5 +879,158 @@ mod tests {
             ext.props.get("text").and_then(Value::as_str),
             Some("привет")
         );
+    }
+
+    // --- FR-011: mindmap (subtree_ids / parent_index / collapsed) ---
+
+    fn mindmap_scene() -> Canvas {
+        // root → child1, root → child2; child1 → grand; side → root (входящее
+        // ребро из внешней ноды — не часть поддерева root)
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("root", "root", 0.0, 0.0));
+        canvas.nodes.push(Node::text("child1", "c1", 300.0, 0.0));
+        canvas.nodes.push(Node::text("child2", "c2", 300.0, 150.0));
+        canvas.nodes.push(Node::text("grand", "g", 600.0, 0.0));
+        canvas.nodes.push(Node::text("side", "s", -300.0, 0.0));
+        canvas.add_edge(Edge::new("e1", "root", None, "child1", None));
+        canvas.add_edge(Edge::new("e2", "root", None, "child2", None));
+        canvas.add_edge(Edge::new("e3", "child1", None, "grand", None));
+        canvas.add_edge(Edge::new("e4", "side", None, "root", None));
+        canvas
+    }
+
+    #[test]
+    fn subtree_bfs_directional() {
+        let canvas = mindmap_scene();
+        // Поддерево root: child1, child2, grand; side НЕ входит (ребро
+        // направлено В root, а поддерево идёт ТОЛЬКО по исходящим)
+        assert_eq!(subtree_ids(&canvas, 0), vec![1, 2, 3]);
+        // Поддерево child1 — только grand
+        assert_eq!(subtree_ids(&canvas, 1), vec![3]);
+        // Лист — пусто; невалидный индекс — пусто
+        assert!(subtree_ids(&canvas, 3).is_empty());
+        assert!(subtree_ids(&canvas, 99).is_empty());
+    }
+
+    #[test]
+    fn subtree_cycle_terminates() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "b", 100.0, 0.0));
+        canvas.add_edge(Edge::new("e1", "a", None, "b", None));
+        canvas.add_edge(Edge::new("e2", "b", None, "a", None));
+        // Цикл a↔b: обход завершается, b — единственный потомок a
+        assert_eq!(subtree_ids(&canvas, 0), vec![1]);
+    }
+
+    #[test]
+    fn parent_first_incoming_edge() {
+        let canvas = mindmap_scene();
+        // child1: единственное входящее — root (индекс 0)
+        assert_eq!(parent_index(&canvas, 1), Some(0));
+        // root: первое входящее ребро e4 от side (индекс 4)
+        assert_eq!(parent_index(&canvas, 0), Some(4));
+        // side: входящих нет — корень канваса
+        assert_eq!(parent_index(&canvas, 4), None);
+        assert_eq!(parent_index(&canvas, 99), None);
+    }
+
+    #[test]
+    fn collapsed_round_trip() {
+        let mut node = Node::text("n", "ветка", 0.0, 0.0);
+        // None — поле не попадает в JSON (чистый файл для чужих редакторов)
+        let json = serde_json::to_string(&node).expect("сериализация");
+        assert!(!json.contains("collapsed"), "None не сериализуется");
+        // Some(true) — сериализуется и восстанавливается
+        node.collapsed = Some(true);
+        let json = serde_json::to_string(&node).expect("сериализация");
+        assert!(json.contains("collapsed"), "Some(true) сериализуется");
+        let back: Node = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back.collapsed, Some(true));
+        // Чужой файл с "collapsed": true парсится (расширение SPEC §5.1)
+        let raw = r#"{ "id": "x", "type": "text", "x": 0, "y": 0,
+            "width": 10, "height": 10, "collapsed": true }"#;
+        let parsed: Node = serde_json::from_str(raw).expect("парсинг расширения");
+        assert_eq!(parsed.collapsed, Some(true));
+    }
+
+    // --- FR-012: явное членство групп ---
+
+    /// Явный список `children` замещает геометрию: нода, случайно лежащая
+    /// поверх группы, ребёнком НЕ становится (главный регресс FR-012).
+    #[test]
+    fn explicit_children_ignore_random_overlap() {
+        let mut canvas = group_scene();
+        // Легаси-группа: геометрический фолбэк
+        assert_eq!(group_children(&canvas, 0), vec![1, 2, 4]);
+        // Материализуем явный список: те же дети
+        group_materialize_children(&mut canvas, 0);
+        assert_eq!(
+            canvas.nodes[0].children.as_deref(),
+            Some(&["in".to_owned(), "edge".to_owned(), "nested".to_owned()][..])
+        );
+        // Случайно занесённая поверх группы нода ребёнком НЕ становится
+        canvas.nodes.push(Node::file("random", "C:/r.png", 100.0, 100.0, 50.0, 50.0));
+        assert_eq!(group_children(&canvas, 0), vec![1, 2, 4], "random не подвязан");
+        // Явная вставка жестом — теперь ребёнок
+        group_add_children(&mut canvas, 0, &["random".to_owned()]);
+        assert_eq!(group_children(&canvas, 0), vec![1, 2, 4, 5]);
+        // Повторная вставка — дубликат игнорируется
+        group_add_children(&mut canvas, 0, &["random".to_owned()]);
+        assert_eq!(group_children(&canvas, 0), vec![1, 2, 4, 5]);
+    }
+
+    /// Вынос ребёнка: список материализуется минус нода; translate_group
+    /// с явным списком двигает детей ровно один раз.
+    #[test]
+    fn remove_child_and_translate_explicit() {
+        let mut canvas = group_scene();
+        group_materialize_children(&mut canvas, 0);
+        // Вложенная группа nested вышла из состава
+        assert!(group_remove_child(&mut canvas, 0, "nested"));
+        assert!(!group_remove_child(&mut canvas, 0, "nested"), "повтор — no-op");
+        assert_eq!(group_children(&canvas, 0), vec![1, 2]);
+        // Вложенная группа ПОСЛЕ выноса лежит поверх g, но не ребёнок
+        // (геометрия больше не решает) — и nested своих детей не теряет
+        // translate двигает только in/edge + саму группу
+        let moved = canvas.translate_group(0, 10.0, 10.0);
+        assert_eq!(moved, vec![0, 1, 2], "nested и его дети не тронуты");
+    }
+
+    /// Авторасширение: rect группы = bbox(дети) + padding по всем сторонам.
+    #[test]
+    fn expand_to_children_bbox() {
+        let mut canvas = group_scene();
+        group_materialize_children(&mut canvas, 0);
+        // Дети: in (50..150 × 50..130), edge (375..425 × 100..150)
+        assert!(group_expand_to_children(&mut canvas, 0, 40.0));
+        let g = &canvas.nodes[0];
+        assert_eq!((g.x, g.y, g.width, g.height), (10.0, 10.0, 455.0, 180.0));
+        // Без детей — false, rect не меняется
+        let mut empty = Canvas::default();
+        empty.nodes.push(Node::group("g2", 0.0, 0.0, 100.0, 100.0));
+        assert!(!group_expand_to_children(&mut empty, 0, 40.0));
+    }
+
+    /// Мягкое раздвигание: минимальный осевой вектор, отсутствие
+    /// пересечения — нода не в плане, детерминизм.
+    #[test]
+    fn push_out_minimal_axis() {
+        // Нода частично заезжает справа-снизу — вытолкнута по кратчайшей оси
+        let rect = [0.0, 0.0, 400.0, 300.0];
+        let others = vec![
+            (1, [380.0, 100.0, 100.0, 80.0]),  // пересекается справа (20 px)
+            (2, [100.0, 280.0, 100.0, 80.0]),  // пересекается снизу (20 px)
+            (3, [500.0, 500.0, 100.0, 80.0]),  // без пересечения
+        ];
+        let plan = plan_push_out(rect, &others);
+        assert_eq!(plan.len(), 2, "без пересечения — нет в плане");
+        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+        // (1): вправо 20 против вверх 180 → dx = +20
+        assert_eq!(by_id[&1], [20.0, 0.0]);
+        // (2): целиком внутри по x (влево/вправо 200/300 px), вниз — 20 px
+        assert_eq!(by_id[&2], [0.0, 20.0]);
+        // Повтор — детерминизм
+        assert_eq!(plan_push_out(rect, &others), plan);
     }
 }

@@ -240,7 +240,7 @@ impl WidgetManager {
             let changed = self
                 .last_targets
                 .get(&d.node_id)
-                .is_none_or(|prev| *prev != d.target);
+                .map_or(true, |prev| *prev != d.target);
             if changed {
                 let w = inputs.iter().find(|w| w.node_id == d.node_id);
                 tracing::info!(
@@ -420,6 +420,18 @@ impl WidgetManager {
 
     #[cfg(not(windows))]
     fn apply_host(&mut self, _frame: canvas_widgets::FrameApplication) {}
+
+    /// FR-009: перезагрузить виджет (пункт меню «Настройки ▸»): состояние
+    /// LOD, кулдаун и инстанс хоста сбрасываются — следующий кадр
+    /// пересоздаёт контроллер с нуля (свежая загрузка страницы пакета).
+    pub fn reload_widget(&mut self, node_id: &str) {
+        self.states.remove(node_id);
+        self.last_capture.remove(node_id);
+        self.cooldown_until.remove(node_id);
+        self.last_targets.remove(node_id);
+        self.destroy_host_instance(node_id);
+        tracing::info!(node_id, "виджет перезагружен по запросу пользователя");
+    }
 
     /// Обработка события host'а (вызывается из user_event). Управляет
     /// runtime-флагами и кулдаунами; сообщение Ready обрабатывает main

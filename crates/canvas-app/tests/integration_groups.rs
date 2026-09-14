@@ -40,8 +40,9 @@ fn group_scene() -> (Canvas, SpatialIndex) {
 fn test_group_via_node_menu() {
     let (mut canvas, mut spatial) = group_scene();
 
-    // Меню ноды: пункт «Сгруппировать» — последний (после разделителя)
-    assert_eq!(NODE_MENU_ITEMS.len(), 9);
+    // Меню ноды: пункт «Сгруппировать» — предпоследний (после разделителя),
+    // затем FR-009 «Настройки ▸»
+    assert_eq!(NODE_MENU_ITEMS.len(), 10);
     assert_eq!(NODE_MENU_ITEMS[7], NodeMenuItem::Separator);
     assert_eq!(NODE_MENU_ITEMS[8], NodeMenuItem::Group);
 
@@ -296,4 +297,67 @@ fn test_group_round_trip() {
         ),
         (0.0, 0.0, 400.0, 300.0)
     );
+}
+
+// --- FR-012: явное членство групп («втягивание») ---
+
+use canvas_core::{group_add_children, group_expand_to_children, group_remove_child, plan_push_out};
+
+/// FR-012 (главный регресс): случайное перекрытие не подвязывает ноду к
+/// группе с явным списком детей; «Сгруппировать» материализует список.
+#[test]
+fn test_random_overlap_does_not_attach() {
+    let (mut canvas, _spatial) = group_scene();
+    // Новые группы (plan_group_around) создаются с ЯВНЫМ списком:
+    let group = plan_group_around(&canvas, 3, GROUP_PADDING).expect("нода есть");
+    assert_eq!(
+        group.children.as_deref(),
+        Some(&["outside".to_owned()][..]),
+        "оборачиваемая нода — единственный явный ребёнок"
+    );
+    canvas.nodes.push(group);
+    let gi = canvas.nodes.len() - 1;
+    // Нода, случайно лежащая поверх новой группы, ребёнком НЕ становится:
+    // child-1 (центр внутри rect новой группы) не в списке
+    assert_eq!(group_children(&canvas, gi), vec![3]);
+}
+
+/// FR-012: жест втягивания — вставка, авторасширение, вынос; undo одного
+/// шага возвращает membership + rect группы.
+#[test]
+fn test_insert_expand_drag_out() {
+    let (mut canvas, mut spatial) = group_scene();
+    // Легаси-группа материализуется при первой вставке: дети = in + edge
+    group_add_children(&mut canvas, 0, &["outside".to_owned()]);
+    assert_eq!(group_children(&canvas, 0), vec![1, 2, 3], "все трое дети");
+
+    // Авторасширение: rect = bbox(дети) + GROUP_PADDING по всем сторонам.
+    // Дети: in (50..150 × 50..130), edge (200..320 × 150..250), out (600..700 × 0..100)
+    assert!(group_expand_to_children(&mut canvas, 0, GROUP_PADDING));
+    let g = &canvas.nodes[0];
+    assert_eq!(
+        (g.x, g.y, g.width, g.height),
+        (
+            50.0 - GROUP_PADDING,
+            0.0 - GROUP_PADDING,
+            700.0 - 50.0 + GROUP_PADDING * 2.0,
+            250.0 - 0.0 + GROUP_PADDING * 2.0
+        )
+    );
+    spatial.update(0, &canvas.nodes[0]);
+
+    // Вынос: outside покидает группу — ребёнок больше не едет с ней
+    assert!(group_remove_child(&mut canvas, 0, "outside"));
+    assert_eq!(group_children(&canvas, 0), vec![1, 2]);
+}
+
+/// FR-012: мягкое раздвигание — план выталкивания детерминирован и пуст
+/// для нод без пересечения.
+#[test]
+fn test_push_out_plan_deterministic() {
+    let plan = plan_push_out(
+        [0.0, 0.0, 400.0, 300.0],
+        &[(1, [390.0, 10.0, 50.0, 50.0]), (2, [900.0, 900.0, 50.0, 50.0])],
+    );
+    assert_eq!(plan, vec![(1, [10.0, 0.0])], "только пересекающийся сосед");
 }

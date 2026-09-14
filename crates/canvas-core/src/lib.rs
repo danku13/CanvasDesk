@@ -6,6 +6,7 @@ mod error;
 mod focus;
 mod fs_events;
 mod io;
+mod layout;
 mod model;
 mod providers;
 mod settings;
@@ -23,9 +24,13 @@ pub use fs_events::{
     apply_file_events, normalize_path, path_matches, relative_if_inside, resolve_node_path,
     watched_dirs, FileEvent, NodeChange,
 };
+pub use layout::{
+    plan_related_layout, LayoutMode, LayoutPlan, LEVEL_GAP, RADIAL_RING_STEP, SIBLING_GAP,
+};
 pub use model::{
-    group_children, Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node, NodeKind,
-    PreviewState, Side,
+    group_add_children, group_children, group_expand_to_children, group_materialize_children,
+    group_remove_child, parent_index, plan_push_out, subtree_ids, Canvas, CanvasdeskExt, Edge,
+    EdgeLineStyle, EdgeThickness, Node, NodeKind, PreviewState, Side,
 };
 pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
 pub use settings::{

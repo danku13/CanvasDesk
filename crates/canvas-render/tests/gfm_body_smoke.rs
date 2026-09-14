@@ -63,6 +63,7 @@ fn headless_gfm_body_quads_draw() {
             edge_labels: &[],
             focus: canvas_render::cards::FocusView::EMPTY,
             widget_title_reveal: &[],
+            collapsed_counts: &[],
         },
     )
     .expect("prepare текста");

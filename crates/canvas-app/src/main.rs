@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, edge_menu_label, focus_seed_of,
     hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
-    next_free_id, node_menu_label, nodes_in_rect, panel_rect, panel_row_at, paste_nodes,
-    plan_group_around, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
+    next_free_id, node_menu_label, node_settings_entries, nodes_in_rect, panel_rect, panel_row_at,
+    paste_nodes, plan_group_around, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
     select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
     toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
     EdgeMenuItem, MenuTarget, NodeMenuItem, PastePlacement, SettingsRow, Submenu, SubmenuEntry,
@@ -25,7 +25,8 @@ use canvas_core::{
     NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{
-    focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS, FOCUS_FADE_MS, FOCUS_PULSE_MS,
+    ease_out_cubic, focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS,
+    FOCUS_FADE_MS, FOCUS_PULSE_MS,
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{preset_color, CardInstance, FocusView, HEADER_HEIGHT};
@@ -440,6 +441,16 @@ impl AppDialog {
     }
 }
 
+/// FR-012: settle-анимация после вставки в группу — (индекс, из, в) для
+/// группы и раздвинутых соседей; интерполяция ease_out_cubic ~250 мс.
+struct SettleAnim {
+    moves: Vec<(usize, [f32; 2], [f32; 2])>,
+    start: Instant,
+}
+
+/// Длительность settle-анимации вставки в группу (FR-012), мс.
+const SETTLE_ANIM_MS: f32 = 250.0;
+
 /// Состояние приложения: окно и рендерер создаются в `resumed`
 /// (идиома winit 0.30 — окно создаётся только на активном event loop).
 struct App {
@@ -562,6 +573,12 @@ struct App {
     focus_nodes: Vec<usize>,
     /// T23: подсвеченные связи (инцидентные семени).
     focus_edges: Vec<usize>,
+    /// FR-012: цель «втягивания» во время drag — группа под центром
+    /// перетаскиваемой ноды (зона подсвечивается, отпускание — вставка).
+    group_drop_target: Option<usize>,
+    /// FR-012: settle-анимация после вставки в группу — плавный проезд
+    /// группы и раздвинутых соседей к целевым позициям (~250 мс).
+    settle_anim: Option<SettleAnim>,
     /// Режим десктопа (T15, флаг --desktop): окно встраивается в WorkerW
     /// (Windows; на других ОС — warn и обычный оконный режим, SPEC §9).
     desktop_mode: bool,
@@ -689,6 +706,8 @@ impl App {
             focus_pulse: None,
             focus_nodes: Vec::new(),
             focus_edges: Vec::new(),
+            group_drop_target: None,
+            settle_anim: None,
             desktop_mode,
             #[cfg(windows)]
             desktop_hierarchy: None,
@@ -1314,6 +1333,8 @@ impl App {
         self.pending_undo = None;
         self.editing = None;
         self.editor_dragging = false;
+        self.settle_anim = None; // FR-012: анимация не валидна после отката
+        self.group_drop_target = None;
         self.scene.canvas = canvas;
         self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
         if let Some(renderer) = self.renderer.as_mut() {
@@ -1511,12 +1532,18 @@ impl App {
     /// Выборочный hit-test под world-точкой: сначала не-group ноды
     /// (меньшая площадь в приоритете — ребёнок группы раньше группы),
     /// затем группы. Кандидаты — точечный запрос spatial index.
+    /// FR-011: скрытые ноды (свернутые поддеревья) из hit-test исключены.
     fn selective_hit(&self, world: Vec2) -> Option<usize> {
         let candidates = self
             .scene
             .spatial
             .query_rect([world[0], world[1], world[0], world[1]]);
-        select_node_hit(&self.scene.canvas, &candidates)
+        let hidden = self.hidden_subtree_nodes();
+        let visible: Vec<usize> = candidates
+            .into_iter()
+            .filter(|index| hidden.binary_search(index).is_err())
+            .collect();
+        select_node_hit(&self.scene.canvas, &visible)
     }
 
     /// Хэндл конца выделенной связи под world-точкой (CR-002): конец, чей
@@ -1784,8 +1811,34 @@ impl App {
         let viewport_world = self.camera.visible_world_rect(viewport);
         if self.minimap.is_none() || scene_dirty || size_changed {
             // сцена/размер изменились — полный снимок (T13-A)
+            // FR-011: свернутые поддеревья не рисуются на миникарте
+            let hidden = self.hidden_subtree_nodes();
+            let scene_view = if hidden.is_empty() {
+                self.scene.canvas.clone()
+            } else {
+                let mut filtered = self.scene.canvas.clone();
+                filtered.nodes = filtered
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| hidden.binary_search(i).is_err())
+                    .map(|(_, node)| node.clone())
+                    .collect();
+                filtered.edges.retain(|edge| {
+                    let from_exists = filtered
+                        .nodes
+                        .iter()
+                        .any(|node| node.id == edge.from_node);
+                    let to_exists = filtered
+                        .nodes
+                        .iter()
+                        .any(|node| node.id == edge.to_node);
+                    from_exists && to_exists
+                });
+                filtered
+            };
             self.minimap = Some(Minimap::capture(
-                &self.scene.canvas,
+                &scene_view,
                 viewport_world,
                 width_px,
                 height_px,
@@ -1841,8 +1894,10 @@ impl App {
     /// Склейка результатов (T14): FTS-хиты (bm25, путь → нода через
     /// path_matches) + in-memory substring по заметкам и именам нод
     /// (заметок без файла в индексе нет). Дедуп — по ноде.
+    /// FR-011: ноды свернутых поддеревьев из результатов исключены.
     fn apply_search_hits(&mut self, hits: Vec<SearchHit>) {
         let canvas_dir = self.scene.canvas_dir();
+        let hidden = self.hidden_subtree_nodes();
         let mut nodes: Vec<usize> = Vec::new();
         let mut rows: Vec<SearchRow> = Vec::new();
         for hit in &hits {
@@ -1854,6 +1909,9 @@ impl App {
             let Some(index) = index else {
                 continue; // файл не на канвасе — строка не показывается
             };
+            if hidden.binary_search(&index).is_ok() {
+                continue; // FR-011: свернутая ветка не ищется
+            }
             if nodes.contains(&index) {
                 continue;
             }
@@ -1880,6 +1938,10 @@ impl App {
                 })
                 .collect();
             for hit in scan_scene(&query, &entries) {
+                // FR-011: свернутые ветки в поиске не участвуют
+                if hidden.binary_search(&hit).is_ok() {
+                    continue;
+                }
                 let Some(node) = self.scene.canvas.nodes.get(hit) else {
                     continue;
                 };
@@ -2288,6 +2350,11 @@ impl App {
                             });
                         }
                         NodeMenuItem::Group => {
+                            labels.push(node_menu_label(*item).unwrap_or_default());
+                            label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
+                        }
+                        // FR-009: «Настройки ▸» — как подпись, с маркером ▸
+                        NodeMenuItem::Settings => {
                             labels.push(node_menu_label(*item).unwrap_or_default());
                             label_pos.push([rect[0] + MENU_LABEL_X, rect[1] + 6.0]);
                         }
@@ -3382,6 +3449,41 @@ impl App {
         {
             self.delete_selected();
         }
+        // FR-011: mindmap-ветвление — Tab (дочерняя), Enter (сиблинг),
+        // Ctrl+← (свернуть ветку), Ctrl+→ (развернуть). Только при выделенной
+        // text-ноде; редактор/поиск/диалог приглушают канвас-хоткеи (return
+        // выше — клавиатура уходит туда)
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && !self.modifiers.shift_key()
+        {
+            let selected_index = match self.scene.selected {
+                Some(Selection::Node(index)) => Some(index),
+                _ => None,
+            };
+            if let Some(index) = selected_index {
+                let is_text = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(index)
+                    .is_some_and(|node| node.kind() == NodeKind::Text);
+                if is_text {
+                    let ctrl = self.modifiers.control_key();
+                    match &event.logical_key {
+                        Key::Named(NamedKey::Tab) => self.mindmap_add_child(index),
+                        Key::Named(NamedKey::Enter) if !ctrl => self.mindmap_add_sibling(index),
+                        Key::Named(NamedKey::ArrowLeft) if ctrl => {
+                            self.mindmap_set_collapsed(index, true);
+                        }
+                        Key::Named(NamedKey::ArrowRight) if ctrl => {
+                            self.mindmap_set_collapsed(index, false);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     fn on_left_button(&mut self, state: ElementState) {
@@ -3528,6 +3630,8 @@ impl App {
                 if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
                     if let Some(i) = submenu_item_at(submenu, world) {
                         let action = submenu.entries[i].action.clone();
+                        // Цель меню нужен для NodeSetting (нода, открывшая подменю)
+                        let menu_target = self.menu.as_ref().map(|m| m.target);
                         self.menu = None;
                         match action {
                             canvas_app::ui::SubmenuAction::Insert(widget_id) => {
@@ -3543,6 +3647,12 @@ impl App {
                                     .map(|p| p.manifest.name.clone())
                                     .unwrap_or(widget_id.clone());
                                 self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
+                            }
+                            // FR-009/FR-010/FR-011: настройка ноды из «Настройки ▸»
+                            canvas_app::ui::SubmenuAction::NodeSetting(setting) => {
+                                if let Some(MenuTarget::Node(node_index)) = menu_target {
+                                    self.apply_node_setting(node_index, setting);
+                                }
                             }
                         }
                         self.request_redraw();
@@ -3582,6 +3692,28 @@ impl App {
                                         ) {
                                             self.insert_group(group);
                                         }
+                                    }
+                                    // FR-009: «Настройки ▸» — подменю по типу ноды
+                                    // (общие + выравнивание FR-010 + mindmap FR-011)
+                                    NodeMenuItem::Settings => {
+                                        let entries = self
+                                            .scene
+                                            .canvas
+                                            .nodes
+                                            .get(node_index)
+                                            .map(|node| {
+                                                let collapsed = node.collapsed == Some(true);
+                                                node_settings_entries(node, collapsed)
+                                            })
+                                            .unwrap_or_default();
+                                        self.menu = Some(ContextMenu {
+                                            target: MenuTarget::Node(node_index),
+                                            origin: menu.origin,
+                                            submenu: Some(Submenu {
+                                                origin: submenu_origin_next_to(menu.origin),
+                                                entries,
+                                            }),
+                                        });
                                     }
                                 }
                             }
@@ -3853,6 +3985,10 @@ impl App {
                         // FR-006: отложенный снапшот «до» перемещения — шаг
                         // закроется на отпускании при фактическом сдвиге
                         self.begin_pending_undo();
+                        // FR-012: новый drag отменяет settle-анимацию и
+                        // сбрасывает цель втягивания
+                        self.settle_anim = None;
+                        self.group_drop_target = None;
                         self.scene.dragging = Some(DragState {
                             primary: index,
                             grab_world: world,
@@ -3944,6 +4080,15 @@ impl App {
                         }
                     }
                     self.request_redraw();
+                }
+                // FR-012: отпускание drag — втягивание в группу (зона была
+                // подсвечена) или вынос из группы (отпускание вне rect своей
+                // явной группы); каждое — свой undo-шаг membership
+                let drop_target = self.group_drop_target.take();
+                if let Some(group_index) = drop_target {
+                    self.group_insert_dragged(group_index);
+                } else {
+                    self.group_drag_out_released();
                 }
                 // FR-006: закрытие отложенного drag/resize — undo-шаг при
                 // фактическом изменении (клик без движения не шаг)
@@ -4213,6 +4358,11 @@ impl App {
                 for (index, origin) in &drag.origins {
                     self.scene
                         .move_node(*index, origin[0] + delta[0], origin[1] + delta[1]);
+                }
+                // FR-012: зона втягивания — группа под центром первичной ноды
+                let target = self.group_drop_target(&drag);
+                if target != self.group_drop_target {
+                    self.group_drop_target = target;
                 }
                 self.scene.mark_dirty();
                 self.request_redraw();
@@ -5033,7 +5183,506 @@ impl App {
         self.insert_nodes(vec![node], true);
     }
 
-    /// M5: rect открытого меню (airspace П7): по цели — количество пунктов.
+    // --- FR-010: авто-раскладка связанных карточек ---
+
+    /// Применить план авто-раскладки (FR-010) от ноды-семени. Один undo-шаг
+    /// (FR-006); ноды без связи с семенем не трогаются; spatial index
+    /// обновляется точечно (паттерн drag группы).
+    fn apply_related_layout(&mut self, seed: usize, mode: canvas_core::LayoutMode) {
+        let plan = canvas_core::plan_related_layout(&self.scene.canvas, seed, mode);
+        if plan.is_empty() {
+            self.show_toast("Нет связанных карточек для раскладки");
+            return;
+        }
+        // FR-006: раскладка — один undo-шаг
+        self.push_undo();
+        for (index, [x, y]) in plan {
+            if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                node.x = x;
+                node.y = y;
+            }
+            if let Some(node) = self.scene.canvas.nodes.get(index) {
+                self.scene.spatial.update(index, node);
+            }
+        }
+        self.scene.mark_dirty();
+        self.show_toast("Связанные карточки выровнены");
+    }
+
+    // --- FR-011: mindmap (Tab / Enter / сворачивание ветки) ---
+
+    /// Прямые дети ноды по исходящим рёбрам (в порядке рёбер модели).
+    fn mindmap_direct_children(canvas: &Canvas, parent_index: usize) -> Vec<usize> {
+        let Some(parent) = canvas.nodes.get(parent_index) else {
+            return Vec::new();
+        };
+        let parent_id = parent.id.as_str();
+        let index_of: std::collections::HashMap<&str, usize> = canvas
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.as_str(), i))
+            .collect();
+        canvas
+            .edges
+            .iter()
+            .filter(|edge| edge.from_node == parent_id)
+            .filter_map(|edge| index_of.get(edge.to_node.as_str()).copied())
+            .filter(|&i| i != parent_index)
+            .collect()
+    }
+
+    /// Создать дочернюю ветку (FR-011, Tab): text-нода правее родителя
+    /// (под существующими детьми) + ребро родитель→новая + вход в
+    /// редактирование. Один undo-шаг (нода + ребро + разворот свёрнутого).
+    fn mindmap_add_child(&mut self, parent_index: usize) {
+        let canvas = &self.scene.canvas;
+        let Some(parent) = canvas.nodes.get(parent_index) else {
+            return;
+        };
+        let parent_id = parent.id.clone();
+        let x = parent.x + parent.width + canvas_core::LEVEL_GAP;
+        let mut y_bottom: Option<f32> = None;
+        for child in Self::mindmap_direct_children(canvas, parent_index) {
+            if let Some(node) = canvas.nodes.get(child) {
+                y_bottom = Some(y_bottom.map_or(node.y + node.height, |b| b.max(node.y + node.height)));
+            }
+        }
+        let y = match y_bottom {
+            Some(bottom) => bottom + canvas_core::SIBLING_GAP,
+            None => parent.y,
+        };
+        // Один undo-шаг на всю операцию (нода + ребро + возможный разворот)
+        self.push_undo();
+        let id = next_free_id(&self.scene.canvas, "note");
+        self.scene.canvas.nodes.push(Node::text(id, "", x, y));
+        let index = self.scene.canvas.nodes.len() - 1;
+        let node = &self.scene.canvas.nodes[index];
+        self.scene.spatial.insert(index, node);
+        let edge = Edge::new(
+            self.scene.canvas.next_edge_id(),
+            parent_id,
+            Some(Side::Right),
+            self.scene.canvas.nodes[index].id.clone(),
+            Some(Side::Left),
+        );
+        self.scene.canvas.add_edge(edge);
+        // Свёрнутая ветка разворачивается: новая нода должна быть видна
+        if let Some(parent) = self.scene.canvas.nodes.get_mut(parent_index) {
+            if parent.collapsed == Some(true) {
+                parent.collapsed = None;
+            }
+        }
+        self.scene.mark_dirty();
+        self.begin_editing(index);
+    }
+
+    /// Создать сиблинга (FR-011, Enter): та же родительская нода, что у
+    /// текущей. У корня (нет входящих рёбер) — no-op (зафиксировано в
+    /// FR-011). Один undo-шаг.
+    fn mindmap_add_sibling(&mut self, node_index: usize) {
+        let Some(parent) = canvas_core::parent_index(&self.scene.canvas, node_index) else {
+            self.show_toast("У корневой ветки нет уровня — используйте Tab");
+            return;
+        };
+        self.mindmap_add_child(parent);
+    }
+
+    /// Свернуть/развернуть ветку (FR-011): флаг `collapsed` ноды; поддерево
+    /// скрывается из рендера/hit-test/миникарты/поиска (см.
+    /// `hidden_subtree_nodes`). Undo-шаг — как изменение модели.
+    fn mindmap_set_collapsed(&mut self, node_index: usize, collapsed: bool) {
+        let Some(node) = self.scene.canvas.nodes.get(node_index) else {
+            return;
+        };
+        if node.kind() != NodeKind::Text
+            || node.collapsed == Some(collapsed)
+            || canvas_core::subtree_ids(&self.scene.canvas, node_index).is_empty()
+        {
+            return; // нет детей — сворачивать нечего
+        }
+        self.push_undo();
+        if let Some(node) = self.scene.canvas.nodes.get_mut(node_index) {
+            node.collapsed = Some(collapsed);
+        }
+        self.scene.mark_dirty();
+        self.show_toast(if collapsed { "Ветка свёрнута" } else { "Ветка развёрнута" });
+    }
+
+    /// Индексы скрытых нод (свернутые поддеревья, FR-011): объединение
+    /// поддеревьев всех нод с collapsed = Some(true); отсортирован —
+    /// binary_search в горячих путях.
+    fn hidden_subtree_nodes(&self) -> Vec<usize> {
+        let mut hidden: Vec<usize> = Vec::new();
+        for (index, node) in self.scene.canvas.nodes.iter().enumerate() {
+            if node.collapsed == Some(true) {
+                for id in canvas_core::subtree_ids(&self.scene.canvas, index) {
+                    if !hidden.contains(&id) {
+                        hidden.push(id);
+                    }
+                }
+            }
+        }
+        hidden.sort_unstable();
+        hidden.dedup();
+        hidden
+    }
+
+    // --- FR-009: диспетчер «Настройки ▸» ---
+
+    /// Применить настройку/действие ноды из подменю «Настройки ▸»
+    /// (FR-009). Каждая мутирующая настройка — «push_undo → мутация →
+    /// mark_dirty»; переименование входит в редактирование (его undo —
+    /// commit сессии).
+    fn apply_node_setting(&mut self, node_index: usize, setting: canvas_app::ui::NodeSetting) {
+        use canvas_app::ui::NodeSetting;
+        match setting {
+            // FR-010: выравнивание связанных
+            NodeSetting::AlignRelatedHorizontal => {
+                self.apply_related_layout(node_index, canvas_core::LayoutMode::TreeHorizontal)
+            }
+            NodeSetting::AlignRelatedVertical => {
+                self.apply_related_layout(node_index, canvas_core::LayoutMode::TreeVertical)
+            }
+            NodeSetting::AlignRelatedRadial => {
+                self.apply_related_layout(node_index, canvas_core::LayoutMode::Radial)
+            }
+            // FR-009: переименовать = вход в редактирование (двойной клик)
+            NodeSetting::Rename => self.begin_editing(node_index),
+            NodeSetting::Duplicate => {
+                // Дублирование одной ноды (паттерн duplicate_selection)
+                let Some(node) = self.scene.canvas.nodes.get(node_index).cloned() else {
+                    return;
+                };
+                let copies = reassign_ids(&self.scene.canvas, &[node]);
+                let nodes = paste_nodes(
+                    &copies,
+                    PastePlacement::Offset([DUPLICATE_OFFSET, DUPLICATE_OFFSET]),
+                );
+                self.insert_nodes(nodes, true);
+            }
+            // FR-011: mindmap из меню
+            NodeSetting::AddChild => self.mindmap_add_child(node_index),
+            NodeSetting::AddSibling => self.mindmap_add_sibling(node_index),
+            NodeSetting::CollapseBranch => self.mindmap_set_collapsed(node_index, true),
+            NodeSetting::ExpandBranch => self.mindmap_set_collapsed(node_index, false),
+            // FR-009: файловые операции (открытие — Windows, SPEC §7.4)
+            NodeSetting::OpenFile => {
+                #[cfg(windows)]
+                {
+                    let path = self
+                        .scene
+                        .canvas
+                        .nodes
+                        .get(node_index)
+                        .and_then(|node| node.file.clone())
+                        .map(|file| resolve_node_path(&file, &self.scene.canvas_dir()));
+                    if let Some(path) = path {
+                        if let Err(err) = canvas_shell::desktop::interop::open_file(&path) {
+                            tracing::warn!(%err, path = %path.display(), "не удалось открыть файл");
+                        }
+                    }
+                }
+                #[cfg(not(windows))]
+                let _ = node_index;
+            }
+            NodeSetting::OpenFolder => {
+                // Папка файла через ShellExecuteEx на директорию (Win)
+                #[cfg(windows)]
+                {
+                    let dir = self
+                        .scene
+                        .canvas
+                        .nodes
+                        .get(node_index)
+                        .and_then(|node| node.file.clone())
+                        .map(|file| resolve_node_path(&file, &self.scene.canvas_dir()))
+                        .and_then(|path| path.parent().map(|p| p.to_path_buf()));
+                    if let Some(dir) = dir {
+                        if let Err(err) = canvas_shell::desktop::interop::open_file(&dir) {
+                            tracing::warn!(%err, dir = %dir.display(), "не удалось открыть папку");
+                        }
+                    }
+                }
+                #[cfg(not(windows))]
+                let _ = node_index;
+            }
+            NodeSetting::CopyPath => {
+                let text = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(node_index)
+                    .and_then(|node| node.file.clone().or_else(|| node.text.clone()))
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    self.clipboard.set(text);
+                    self.show_toast("Путь скопирован");
+                }
+            }
+            NodeSetting::ClearText => {
+                // FR-006: очистка текста — undo-шаг (no-op на пустой — без шага)
+                let snapshot = self.scene.canvas.clone();
+                if let Some(node) = self.scene.canvas.nodes.get_mut(node_index) {
+                    node.text = Some(String::new());
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                }
+                self.scene.mark_dirty();
+            }
+            NodeSetting::Ungroup => {
+                // Разгруппировать = удалить группу-ноду без каскада по детям
+                // (removing_group_keeps_children); дети остаются на местах
+                let is_group = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(node_index)
+                    .is_some_and(|node| node.kind() == NodeKind::Group);
+                if !is_group {
+                    return;
+                }
+                self.push_undo();
+                self.scene.canvas.remove_node(node_index);
+                // Индексы сдвинулись — spatial/кэши перестраиваются
+                // (паттерн delete_selected)
+                self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+                self.scene.selected = None;
+                self.scene.selected_nodes.clear();
+                self.scene.mark_dirty();
+                self.show_toast("Группа разгруппирована");
+            }
+            NodeSetting::WidgetReload => {
+                let node_id = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(node_index)
+                    .map(|node| node.id.clone());
+                if let Some(node_id) = node_id {
+                    self.widgets.reload_widget(&node_id);
+                    self.show_toast("Виджет перезагружается");
+                }
+            }
+            NodeSetting::WidgetPermissions => {
+                let node_id = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(node_index)
+                    .map(|node| node.id.clone());
+                let summary = node_id
+                    .as_deref()
+                    .and_then(|id| self.widgets.permissions_of_node(&self.scene.canvas, id))
+                    .map(|permissions| {
+                        let list: Vec<&str> = permissions.list().iter().map(|p| p.as_str()).collect();
+                        if list.is_empty() {
+                            "нет особых разрешений".to_owned()
+                        } else {
+                            list.join(", ")
+                        }
+                    })
+                    .unwrap_or_else(|| "пакет не установлен".to_owned());
+                self.show_toast(format!("Разрешения: {summary}"));
+            }
+        }
+    }
+
+    // --- FR-012: жест «втягивания» в группу ---
+
+    /// Цель втягивания при активном drag: верхняя группа (макс. индекс),
+    /// чей rect содержит центр перетаскиваемой первичной ноды, при условии,
+    /// что нода ещё НЕ ребёнок этой группы (иначе жест бессмысленен).
+    fn group_drop_target(&self, dragging: &DragState) -> Option<usize> {
+        let node = self.scene.canvas.nodes.get(dragging.primary)?;
+        let center = [node.x + node.width / 2.0, node.y + node.height / 2.0];
+        let dragged: Vec<usize> = std::iter::once(dragging.primary)
+            .chain(dragging.origins.iter().map(|(i, _)| *i))
+            .collect();
+        let candidates = self.scene.spatial.query_rect([center[0], center[1], center[0], center[1]]);
+        candidates
+            .into_iter()
+            .rev() // верхняя по z — последняя
+            .find(|&index| {
+                self.scene.canvas.nodes.get(index).is_some_and(|group| {
+                    group.kind() == NodeKind::Group
+                        && !dragged.contains(&index)
+                        && center[0] >= group.x
+                        && center[0] <= group.x + group.width
+                        && center[1] >= group.y
+                        && center[1] <= group.y + group.height
+                        // уже ребёнок (явный список) — не «втягиваем» повторно
+                        && !group
+                            .children
+                            .as_ref()
+                            .is_some_and(|list| {
+                                self.scene.canvas.nodes.get(dragging.primary).is_some_and(|n| {
+                                    list.contains(&n.id)
+                                })
+                            })
+                })
+            })
+    }
+
+    /// Вставить перетаскиваемые ноды в группу (FR-012, отпускание над
+    /// зоной): membership + авторасширение rect до bbox+padding + мягкое
+    /// раздвигание пересекаемых соседей (с анимацией). Один undo-шаг.
+    fn group_insert_dragged(&mut self, group_index: usize) {
+        let Some(drag) = self.scene.dragging.as_ref() else {
+            return;
+        };
+        // Вставляются: первичная нода + весь drag-набор (CR-001), кроме
+        // самой группы-цели. Группа в наборе — вставляется ТОЛЬКО она
+        // (вложенная группа едет как нода; её дети — через translate_group)
+        let primary_is_group = self
+            .scene
+            .canvas
+            .nodes
+            .get(drag.primary)
+            .is_some_and(|n| n.kind() == NodeKind::Group);
+        let mut ids: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let dragged: Vec<usize> = if primary_is_group {
+            vec![drag.primary]
+        } else {
+            std::iter::once(drag.primary)
+                .chain(drag.origins.iter().map(|(i, _)| *i))
+                .collect()
+        };
+        for index in dragged {
+            if index == group_index || !seen.insert(index) {
+                continue;
+            }
+            if let Some(node) = self.scene.canvas.nodes.get(index) {
+                ids.push(node.id.clone());
+            }
+        }
+        if ids.is_empty() {
+            return;
+        }
+        self.push_undo();
+        canvas_core::group_add_children(&mut self.scene.canvas, group_index, &ids);
+        // Авторасширение: rect группы = bbox(дети) + GROUP_PADDING
+        let old = self
+            .scene
+            .canvas
+            .nodes
+            .get(group_index)
+            .map(|g| [g.x, g.y])
+            .unwrap_or([0.0, 0.0]);
+        canvas_core::group_expand_to_children(
+            &mut self.scene.canvas,
+            group_index,
+            canvas_app::ui::GROUP_PADDING,
+        );
+        let new_rect = self
+            .scene
+            .canvas
+            .nodes
+            .get(group_index)
+            .map(|g| [g.x, g.y, g.width, g.height])
+            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+        self.scene.spatial.update(group_index, &self.scene.canvas.nodes[group_index]);
+        // Мягкое раздвигание: не-дети, чьи bbox пересеклись с новым rect,
+        // сдвигаются на минимальный осевой вектор; группа и раздвинутые
+        // соседи едут плавно (settle-анимация ~250 мс)
+        let children: Vec<usize> = canvas_core::group_children(&self.scene.canvas, group_index);
+        let others: Vec<(usize, [f32; 4])> = self
+            .scene
+            .canvas
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, node)| {
+                *i != group_index
+                    && !children.contains(i)
+                    && node.kind() != NodeKind::Group
+            })
+            .map(|(i, node)| (i, [node.x, node.y, node.width, node.height]))
+            .collect();
+        let push_plan = canvas_core::plan_push_out(new_rect, &others);
+        let mut moves: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
+        let new_pos = [new_rect[0], new_rect[1]];
+        if (new_pos[0] - old[0]).abs() > f32::EPSILON || (new_pos[1] - old[1]).abs() > f32::EPSILON
+        {
+            moves.push((group_index, old, new_pos));
+        }
+        for (index, [dx, dy]) in push_plan {
+            let (Some(from), Some(to_target)) = (
+                self.scene.canvas.nodes.get(index).map(|n| [n.x, n.y]),
+                self.scene.canvas.nodes.get(index).map(|n| [n.x + dx, n.y + dy]),
+            ) else {
+                continue;
+            };
+            if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                node.x += dx;
+                node.y += dy;
+            }
+            if let Some(node) = self.scene.canvas.nodes.get(index) {
+                self.scene.spatial.update(index, node);
+            }
+            moves.push((index, from, to_target));
+        }
+        if !moves.is_empty() {
+            self.settle_anim = Some(SettleAnim {
+                moves,
+                start: Instant::now(),
+            });
+        }
+        self.scene.mark_dirty();
+        self.show_toast("Нода вставлена в группу");
+    }
+
+    /// Вынос детей из групп после drag (FR-012): нода, отпущенная вне rect
+    /// своей ЯВНОЙ группы, удаляется из её детей. Легаси-группы (без
+    /// списка) не участвуют — их геометрический фолбэк не меняется.
+    fn group_drag_out_released(&mut self) {
+        let Some(drag) = self.scene.dragging.as_ref() else {
+            return;
+        };
+        let dragged: Vec<usize> = std::iter::once(drag.primary)
+            .chain(drag.origins.iter().map(|(i, _)| *i))
+            .collect();
+        // (группа → [id нод к выносу])
+        let mut removals: Vec<(usize, String)> = Vec::new();
+        for index in dragged {
+            let Some(node) = self.scene.canvas.nodes.get(index) else {
+                continue;
+            };
+            let center = [node.x + node.width / 2.0, node.y + node.height / 2.0];
+            for (gi, group) in self.scene.canvas.nodes.iter().enumerate() {
+                if gi == index || group.kind() != NodeKind::Group {
+                    continue;
+                }
+                let Some(children) = &group.children else {
+                    continue; // легаси-группа: геометрия, жеста нет
+                };
+                if !children.contains(&node.id) {
+                    continue;
+                }
+                let outside = center[0] < group.x
+                    || center[0] > group.x + group.width
+                    || center[1] < group.y
+                    || center[1] > group.y + group.height;
+                if outside {
+                    removals.push((gi, node.id.clone()));
+                }
+            }
+        }
+        if removals.is_empty() {
+            return;
+        }
+        // FR-006: вынос — undo-шаг (один на все удаления)
+        self.push_undo();
+        for (gi, id) in removals {
+            canvas_core::group_remove_child(&mut self.scene.canvas, gi, &id);
+        }
+        self.scene.mark_dirty();
+        self.show_toast("Нода вынесена из группы");
+    }
+
+    /// Меню ноды (FR-009): rect открытого меню — по цели.
     fn menu_open_rect(&self) -> Option<[f32; 4]> {
         let menu = self.menu.as_ref()?;
         let items = match menu.target {
@@ -5098,6 +5747,25 @@ impl ApplicationHandler<AppEvent> for App {
                     if !flight.is_finished(elapsed) {
                         self.flight = Some((flight, start));
                     }
+                }
+                // FR-012: settle-анимация вставки в группу — группа и
+                // раздвинутые соседи едут к целевым позициям ease_out_cubic
+                if let Some(anim) = &self.settle_anim {
+                    let t = (anim.start.elapsed().as_millis() as f32 / SETTLE_ANIM_MS).min(1.0);
+                    let k = ease_out_cubic(t);
+                    for (index, from, to) in &anim.moves {
+                        if let Some(node) = self.scene.canvas.nodes.get_mut(*index) {
+                            node.x = from[0] + (to[0] - from[0]) * k;
+                            node.y = from[1] + (to[1] - from[1]) * k;
+                        }
+                        if let Some(node) = self.scene.canvas.nodes.get(*index) {
+                            self.scene.spatial.update(*index, node);
+                        }
+                    }
+                    if t >= 1.0 {
+                        self.settle_anim = None;
+                    }
+                    self.request_redraw();
                 }
                 // Миникарта (T13): пересборка по dirty-условиям ДО отрисовки
                 // (текстура должна быть готова к проходу кадра)
@@ -5294,6 +5962,18 @@ impl ApplicationHandler<AppEvent> for App {
                         params: [4.0, 0.0, 0.0, 1.0],
                     });
                 }
+                // FR-012: подсветка зоны втягивания — группа под drag-нодой
+                if let Some(gi) = self.group_drop_target {
+                    if let Some(group) = self.scene.canvas.nodes.get(gi) {
+                        overlay_instances.push(CardInstance {
+                            pos: [group.x - 4.0, group.y - 4.0],
+                            size: [group.width + 8.0, group.height + 8.0],
+                            fill: [0.396, 0.612, 0.969, 0.10],
+                            border: [0.396, 0.612, 0.969, 0.9],
+                            params: [8.0, 0.0, 0.0, 1.0],
+                        });
+                    }
+                }
                 // M5 (T20-F): airspace-прямоугольники оверлеев (план П7) —
                 // до LOD-кадра виджетов; большие панели (поиск/настройки)
                 // упрощённо гасят все live (транзиентно), точные rect'ы —
@@ -5387,6 +6067,20 @@ impl ApplicationHandler<AppEvent> for App {
                     })
                     .map(|(i, _)| i)
                     .collect();
+                // FR-011: скрытые ноды (свернутые поддеревья) + бейджи «+N»
+                let hidden_nodes = self.hidden_subtree_nodes();
+                let collapsed_counts: Vec<(usize, usize)> = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, node)| node.collapsed == Some(true))
+                    .map(|(i, _)| {
+                        (i, canvas_core::subtree_ids(&self.scene.canvas, i).len())
+                    })
+                    .filter(|(_, count)| *count > 0)
+                    .collect();
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
@@ -5431,6 +6125,8 @@ impl ApplicationHandler<AppEvent> for App {
                         focus,
                         widget_transparent: &widget_transparent,
                         widget_title_reveal: &widget_title_reveal,
+                        hidden_nodes: &hidden_nodes,
+                        collapsed_counts: &collapsed_counts,
                     };
                     match renderer.render(
                         &self.camera,

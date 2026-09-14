@@ -157,6 +157,12 @@ pub struct SceneView<'a> {
     /// на прозрачный хром (hover/выделение — имя пакета видно при
     /// взаимодействии; в покое хром скрыт).
     pub widget_title_reveal: &'a [usize],
+    /// FR-011: скрытые ноды (свернутые поддеревья mindmap) — отсортированы;
+    /// их карточки, тамбнейлы и инцидентные рёбра не рисуются.
+    pub hidden_nodes: &'a [usize],
+    /// FR-011: бейджи «+N» свернутых нод: (индекс ноды, число скрытых
+    /// потомков) — рисуются в заголовке ноды; отсортированы.
+    pub collapsed_counts: &'a [(usize, usize)],
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -514,6 +520,12 @@ impl Renderer {
             Some(Selection::Edge(index)) => (None, Some(index)),
             None => (None, None),
         };
+        // FR-011: id скрытых нод (свернутые поддеревья) — для рёбер и лейблов
+        let hidden_ids: std::collections::HashSet<&str> = scene
+            .hidden_nodes
+            .iter()
+            .filter_map(|&i| scene.canvas.nodes.get(i).map(|n| n.id.as_str()))
+            .collect();
         // Лейбл редактируемой связи рисует сессия — из обычной выдачи исключён
         let editing_edge = editing
             .as_deref()
@@ -533,6 +545,12 @@ impl Renderer {
         if titles_visible(zoom_px) {
             for (index, edge) in scene.canvas.edges.iter().enumerate() {
                 if editing_edge == Some(index) || scene.hidden_edge == Some(index) {
+                    continue;
+                }
+                // FR-011: лейблы связей скрытых нод не рисуются
+                if hidden_ids.contains(edge.from_node.as_str())
+                    || hidden_ids.contains(edge.to_node.as_str())
+                {
                     continue;
                 }
                 let Some(text) = edge.label.as_deref().filter(|text| !text.is_empty()) else {
@@ -702,13 +720,15 @@ impl Renderer {
         let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
         // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
         // в общем буфере = порядок рисования; рисуются диапазоном до сегментов.
-        // CR-002: перепривязываемая связь скрыта — её играет резиновая линия
+        // CR-002: перепривязываемая связь скрыта — её играет резиновая линия.
+        // FR-011: связи, инцидентные скрытым нодам, не рисуются
         instances.extend(build_edge_instances(
             scene.canvas,
             selected_edge,
             scene.edges_avoid,
             &scene.focus,
             scene.hidden_edge,
+            &hidden_ids,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
@@ -724,6 +744,10 @@ impl Renderer {
                 let Some(node) = scene.canvas.nodes.get(index) else {
                     continue;
                 };
+                // FR-011: скрытые ноды (свернутые поддеревья) не рисуются
+                if scene.hidden_nodes.binary_search(&index).is_ok() {
+                    continue;
+                }
                 // Карточка ноды (CR-001: в выделении — рамка как у primary)
                 let is_selected =
                     selected_node == Some(index) || scene.selected_nodes.contains(&index);
@@ -874,6 +898,7 @@ impl Renderer {
                 edge_labels: &edge_labels,
                 focus: scene.focus,
                 widget_title_reveal: scene.widget_title_reveal,
+                collapsed_counts: scene.collapsed_counts,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

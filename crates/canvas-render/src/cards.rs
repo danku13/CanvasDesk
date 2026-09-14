@@ -496,12 +496,20 @@ pub fn build_edge_instances(
     avoid: bool,
     focus: &FocusView,
     hidden_edge: Option<usize>,
+    hidden_ids: &std::collections::HashSet<&str>,
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
         // CR-002: перепривязываемая связь скрыта — её место занимает
         // резиновая линия от неподвижного конца
         if hidden_edge == Some(index) {
+            continue;
+        }
+        // FR-011: связи инцидентные скрытым нодам (свернутые поддеревья)
+        // не рисуются
+        if hidden_ids.contains(edge.from_node.as_str())
+            || hidden_ids.contains(edge.to_node.as_str())
+        {
             continue;
         }
         let Some(points) = canvas_core::edge_polyline(canvas, edge, avoid, EDGE_RENDER_SEGMENTS)
@@ -864,6 +872,11 @@ mod tests {
     use super::*;
     use canvas_core::{Canvas, Node};
 
+    /// FR-011: пустой набор скрытых нод для вызовов build_edge_instances.
+    fn no_hidden() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
     /// Пресеты "1".."6" отличаются от дефолта и друг от друга.
     #[test]
     fn color_presets() {
@@ -1017,7 +1030,7 @@ mod tests {
         canvas.add_edge(edge);
         canvas.add_edge(canvas_core::Edge::new("e2", "a", None, "missing", None));
 
-        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None);
+        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
         assert!(
             instances.len() > ARROW_DOTS * 2,
             "кружки линии + стрелка: {}",
@@ -1039,7 +1052,7 @@ mod tests {
 
         // Выделенная связь — акцент и толще (шаг ресэмплинга зависит от d,
         // поэтому число кружков иное — сравниваем только атрибуты)
-        let selected = build_edge_instances(&canvas, Some(0), false, &FocusView::EMPTY, None);
+        let selected = build_edge_instances(&canvas, Some(0), false, &FocusView::EMPTY, None, &no_hidden());
         assert!(selected.len() > ARROW_DOTS * 2);
         assert_eq!(selected[0].fill, SELECTION_BORDER);
         assert_eq!(selected[0].size[0], EDGE_DOT_SELECTED);
@@ -1069,7 +1082,7 @@ mod tests {
             dim: 1.0,
             pulse: 0.5,
         };
-        let inst = build_edge_instances(&canvas, None, false, &dim_view, None);
+        let inst = build_edge_instances(&canvas, None, false, &dim_view, None, &no_hidden());
         // Фокусная e1 (первая в буфере): акцент, альфа 0.75 + 0.25·пульс,
         // толщина базовая + буст + пульс
         let base_d = canvas_core::EdgeThickness::Medium.dot();
@@ -1105,7 +1118,7 @@ mod tests {
 
         // Выделенная e2 при том же фокусе — как раньше: акцент выделения,
         // НЕ затемнена
-        let sel = build_edge_instances(&canvas, Some(1), false, &dim_view, None);
+        let sel = build_edge_instances(&canvas, Some(1), false, &dim_view, None, &no_hidden());
         let sel_e2 = sel
             .iter()
             .find(|i| i.fill == SELECTION_BORDER)
@@ -1119,7 +1132,7 @@ mod tests {
             dim: 0.0,
             pulse: 0.0,
         };
-        let plain = build_edge_instances(&canvas, None, false, &off, None);
+        let plain = build_edge_instances(&canvas, None, false, &off, None, &no_hidden());
         assert!(plain.iter().any(|i| i.fill == EDGE_COLOR));
     }
 
@@ -1190,8 +1203,8 @@ mod tests {
             .nodes
             .push(Node::file("wall", "C:/w.png", 230.0, 0.0, 140.0, 100.0));
         canvas.add_edge(canvas_core::Edge::new("e1", "a", None, "b", None));
-        let plain = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None);
-        let avoided = build_edge_instances(&canvas, None, true, &FocusView::EMPTY, None);
+        let plain = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
+        let avoided = build_edge_instances(&canvas, None, true, &FocusView::EMPTY, None, &no_hidden());
         assert!(
             avoided.len() > plain.len(),
             "огибающий маршрут длиннее прямой: {} vs {}",
@@ -1497,7 +1510,7 @@ mod tests {
         edge.thickness = Some(canvas_core::EdgeThickness::Thin);
         canvas.add_edge(edge);
 
-        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None);
+        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
         assert!(!instances.is_empty());
         assert!(
             instances.iter().all(|inst| inst.size[0] == 1.8),

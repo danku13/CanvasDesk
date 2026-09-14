@@ -278,6 +278,8 @@ pub mod ui {
         Insert(String),
         /// Удалить пакет (id пакета; с диалогом подтверждения П11).
         Remove(String),
+        /// FR-009/FR-010/FR-011: настройка/действие над нодой.
+        NodeSetting(NodeSetting),
     }
 
     /// Пункт подменю виджетов.
@@ -287,6 +289,106 @@ pub mod ui {
         pub action: SubmenuAction,
         /// Подпись (имя пакета из манифеста).
         pub label: String,
+    }
+
+    /// FR-009: настройка/действие ноды из подменю «Настройки ▸».
+    /// Состав зависит от типа ноды (`node_settings_entries`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NodeSetting {
+        // FR-010: авто-раскладка связанных карточек
+        AlignRelatedHorizontal,
+        AlignRelatedVertical,
+        AlignRelatedRadial,
+        // FR-009: общие
+        Rename,
+        Duplicate,
+        // FR-011: mindmap
+        AddChild,
+        AddSibling,
+        CollapseBranch,
+        ExpandBranch,
+        // FR-009: по типам
+        OpenFile,
+        OpenFolder,
+        CopyPath,
+        ClearText,
+        Ungroup,
+        WidgetReload,
+        WidgetPermissions,
+    }
+
+    /// FR-009: пункты подменю «Настройки ▸» для ноды заданного типа.
+    /// Общие (переименовать/дублировать/выравнивание) + типовые.
+    /// `is_collapsed` — текущее состояние ветки (галочка/глагол).
+    pub fn node_settings_entries(node: &Node, is_collapsed: bool) -> Vec<SubmenuEntry> {
+        let entry = |action: NodeSetting, label: String| SubmenuEntry {
+            action: SubmenuAction::NodeSetting(action),
+            label,
+        };
+        let mut entries = vec![
+            entry(NodeSetting::Rename, "Переименовать".to_owned()),
+            entry(NodeSetting::Duplicate, "Дублировать".to_owned()),
+            entry(
+                NodeSetting::AlignRelatedHorizontal,
+                "Выровнять связанные: горизонтально".to_owned(),
+            ),
+            entry(
+                NodeSetting::AlignRelatedVertical,
+                "— вертикально".to_owned(),
+            ),
+            entry(NodeSetting::AlignRelatedRadial, "— радиально".to_owned()),
+        ];
+        // FR-011: ветвление mindmap — для text-нод
+        if node.kind() == NodeKind::Text {
+            entries.push(entry(NodeSetting::AddChild, "Добавить дочернюю (Tab)".to_owned()));
+            entries.push(entry(
+                NodeSetting::AddSibling,
+                "Добавить сиблинга (Enter)".to_owned(),
+            ));
+            entries.push(entry(
+                if is_collapsed {
+                    NodeSetting::ExpandBranch
+                } else {
+                    NodeSetting::CollapseBranch
+                },
+                if is_collapsed {
+                    "Развернуть ветку".to_owned()
+                } else {
+                    "Свернуть ветку".to_owned()
+                },
+            ));
+        }
+        match node.kind() {
+            NodeKind::File => {
+                entries.push(entry(NodeSetting::OpenFile, "Открыть файл".to_owned()));
+                entries.push(entry(
+                    NodeSetting::OpenFolder,
+                    "Открыть папку с файлом".to_owned(),
+                ));
+                entries.push(entry(NodeSetting::CopyPath, "Скопировать путь".to_owned()));
+            }
+            NodeKind::Link => {
+                entries.push(entry(NodeSetting::CopyPath, "Скопировать ссылку".to_owned()));
+            }
+            NodeKind::Text => {
+                entries.push(entry(NodeSetting::ClearText, "Очистить текст".to_owned()));
+            }
+            NodeKind::Group => {
+                entries.push(entry(NodeSetting::Ungroup, "Разгруппировать".to_owned()));
+            }
+            NodeKind::Widget => {
+                entries.push(entry(
+                    NodeSetting::WidgetReload,
+                    "Перезагрузить виджет".to_owned(),
+                ));
+                entries.push(entry(
+                    NodeSetting::WidgetPermissions,
+                    "Разрешения виджета…".to_owned(),
+                ));
+            }
+            NodeKind::Unknown => {}
+        }
+        entries
     }
 
     /// Цель контекстного меню (ПКМ по канвасу).
@@ -1041,10 +1143,13 @@ pub mod ui {
         Separator,
         /// «Сгруппировать»: обернуть ноду в группу (bbox = нода + padding).
         Group,
+        /// FR-009: «Настройки ▸» — подменю настроек/действий по типу ноды
+        /// (включая выравнивание FR-010 и mindmap FR-011).
+        Settings,
     }
 
     /// Меню ноды: палитра (7 пунктов) + разделитель + действия.
-    pub const NODE_MENU_ITEMS: [NodeMenuItem; 9] = [
+    pub const NODE_MENU_ITEMS: [NodeMenuItem; 10] = [
         NodeMenuItem::Color(Some("1")),
         NodeMenuItem::Color(Some("2")),
         NodeMenuItem::Color(Some("3")),
@@ -1054,6 +1159,7 @@ pub mod ui {
         NodeMenuItem::Color(None),
         NodeMenuItem::Separator,
         NodeMenuItem::Group,
+        NodeMenuItem::Settings,
     ];
 
     /// Пункт меню пустого канваса (ПКМ мимо нод и связей).
@@ -1086,6 +1192,7 @@ pub mod ui {
             NodeMenuItem::Color(color) => Some(menu_label(color)),
             NodeMenuItem::Separator => None,
             NodeMenuItem::Group => Some("Сгруппировать".to_owned()),
+            NodeMenuItem::Settings => Some("Настройки ▸".to_owned()),
         }
     }
 
@@ -1151,7 +1258,9 @@ pub mod ui {
     pub const GROUP_DEFAULT_LABEL: &str = "Группа";
 
     /// План «Сгруппировать»: группа с bbox = rect ноды + padding по всем
-    /// сторонам, подпись по умолчанию, id `group-N`. Канвас не мутируется —
+    /// сторонам, подпись по умолчанию, id `group-N`. FR-012: группа создаётся
+    /// с ЯВНЫМ списком детей (оборачиваемая нода) — случайное перекрытие
+    /// после создания membership не меняет. Канвас не мутируется —
     /// вставку делает приложение (паттерн plan_drop, T9).
     pub fn plan_group_around(canvas: &Canvas, index: usize, padding: f32) -> Option<Node> {
         let node = canvas.nodes.get(index)?;
@@ -1163,11 +1272,14 @@ pub mod ui {
             node.height + padding * 2.0,
         );
         group.label = Some(GROUP_DEFAULT_LABEL.to_owned());
+        group.children = Some(vec![node.id.clone()]);
         Some(group)
     }
 
     /// План «Создать группу»: группа GROUP_WIDTH × GROUP_HEIGHT с центром
     /// в world-точке (центр viewport), подпись по умолчанию, id `group-N`.
+    /// FR-012: явный (пустой) список детей — «случайное» перекрытие не
+    /// подвязывает ноды.
     pub fn plan_group_at(canvas: &Canvas, center: Vec2) -> Node {
         let mut group = Node::group(
             next_free_id(canvas, "group"),
@@ -1177,6 +1289,7 @@ pub mod ui {
             GROUP_HEIGHT,
         );
         group.label = Some(GROUP_DEFAULT_LABEL.to_owned());
+        group.children = Some(Vec::new());
         group
     }
 
@@ -2130,13 +2243,14 @@ pub mod ui {
             assert!(edge_menu_label(EDGE_MENU_ITEMS[12], &plain).starts_with('✓'));
         }
 
-        /// Составное меню ноды: 9 пунктов (7 палитра + разделитель +
-        /// «Сгруппировать»), hit-test по длине, разделитель без подписи.
+        /// Составное меню ноды: 10 пунктов (7 палитра + разделитель +
+        /// «Сгруппировать» + FR-009 «Настройки ▸»), hit-test по длине,
+        /// разделитель без подписи.
         #[test]
         fn node_menu_items_and_hit_test() {
             let origin = [100.0, 50.0];
             let n = NODE_MENU_ITEMS.len();
-            assert_eq!(n, 9);
+            assert_eq!(n, 10);
             assert_eq!(NODE_MENU_ITEMS[7], NodeMenuItem::Separator);
             assert_eq!(NODE_MENU_ITEMS[8], NodeMenuItem::Group);
             // Подписи: палитра + действие; у разделителя подписи нет
@@ -2152,6 +2266,12 @@ pub mod ui {
             assert_eq!(
                 node_menu_label(NODE_MENU_ITEMS[8]),
                 Some("Сгруппировать".to_owned())
+            );
+            // FR-009: последний пункт — вход в подменю настроек
+            assert_eq!(NODE_MENU_ITEMS[9], NodeMenuItem::Settings);
+            assert_eq!(
+                node_menu_label(NODE_MENU_ITEMS[9]),
+                Some("Настройки ▸".to_owned())
             );
             // Hit-test: первый пункт, разделитель (индекс 7), действие (8)
             let y = |i: usize| 50.0 + MENU_PADDING + i as f32 * MENU_ITEM_HEIGHT + 3.0;

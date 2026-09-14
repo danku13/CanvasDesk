@@ -91,6 +91,8 @@ fn optional_fields_omitted_when_none() {
         broken_link: None,
         preview_state: None,
         canvasdesk: None,
+        collapsed: None,
+        children: None,
         extra: Default::default(),
     };
     let json = serde_json::to_string(&node).expect("сериализация");
