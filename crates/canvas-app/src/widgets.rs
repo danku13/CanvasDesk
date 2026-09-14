@@ -116,7 +116,7 @@ impl WidgetManager {
         sender: canvas_widgets::WidgetEventSender,
     ) {
         match canvas_widgets::host::WidgetHost::new(parent_hwnd, sender) {
-            Ok(mut host) => {
+            Ok(host) => {
                 host.set_user_data_folder(&user_data_folder);
                 host.ensure_environment();
                 self.host = Some(host);

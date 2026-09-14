@@ -13,14 +13,32 @@
 //! Ошибки вотчинга (сетевые диски, умерший хендл) — warn и деградация: события
 //! не приходят, приложение продолжает работу (RECIPES R14). Поток-агрегатор
 //! живёт до конца процесса (как worker'ы ThumbService). Кроссплатформенно:
-//! inotify на Linux, ReadDirectoryChangesW на Windows — интеграционные тесты
-//! гоняются на обеих ОС. `collapse` — чистая функция (notify::Event →
-//! FileEvent), тестируется синтетикой без файловой системы (AGENTS.md).
+//! inotify на Linux, ReadDirectoryChangesW на Windows, FSEvents на macOS —
+//! интеграционные тесты гоняются на всех трёх ОС. `collapse` — чистая функция
+//! (notify::Event → FileEvent), тестируется синтетикой без файловой системы
+//! (AGENTS.md).
+//!
+//! Отличия FSEvents от двух других бэкендов нормализуются ДО collapse
+//! (обе совместимости в этом модуле), чтобы свёртка оставалась чистой и
+//! платформонезависимой:
+//! - **Пути**: notify регистрирует FSEvents-наблюдение по каноническому пути
+//!   (fsevent.rs `append_path` → `canonicalize`), поэтому события приходят
+//!   с разрешёнными symlink'ами — macOS tempdir даёт `/private/var/…`, хотя
+//!   наблюдали `/var/…`. Карта корней «канонический → наблюдаемый»
+//!   (`remap_event_paths`) возвращает событиям вид, в котором директория
+//!   наблюдалась (у inotify/RDCW события приходят в зарегистрированном виде,
+//!   там отображение не срабатывает).
+//! - **Rename**: FSEvents не связывает старую и новую сторону переименования
+//!   (notify: «FSEvents provides no mechanism to associate the old and new
+//!   sides of a rename event») — обе приходят как `Modify(Name(Any))`.
+//!   `disambiguate_renames` разделяет их замером файловой системы: путь
+//!   существует — новая сторона, отсутствует — старая; дальше работает
+//!   обычная склейка шага (2) collapse.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use canvas_core::{normalize_path, FileEvent};
@@ -40,6 +58,12 @@ pub struct WatchService {
     watcher: Option<notify::RecommendedWatcher>,
     /// Активные наблюдения (нормализованные пути) — diff-основа sync_dirs.
     watched: HashSet<PathBuf>,
+    /// Карта «канонический корень → наблюдаемый путь» для обратного
+    /// отображения путей FSEvents (macOS, см. шапку модуля). Перестраивается
+    /// в `sync_dirs`; читается callback-потоком notify на каждом событии
+    /// (`remap_event_paths`). На Linux/Windows не срабатывает — поведение
+    /// этих платформ не меняется.
+    roots: Arc<Mutex<HashMap<PathBuf, PathBuf>>>,
 }
 
 impl WatchService {
@@ -47,11 +71,17 @@ impl WatchService {
     /// батч `FileEvent` в `sender`.
     pub fn new(sender: FileEventSender) -> Self {
         let (tx, rx) = mpsc::channel::<notify::Event>();
+        // Карта корней для обратного отображения путей FSEvents (macOS);
+        // заполняется sync_dirs, читается callback-потоком notify.
+        let roots: Arc<Mutex<HashMap<PathBuf, PathBuf>>> = Arc::new(Mutex::new(HashMap::new()));
         // Callback notify выполняется в его внутреннем потоке: ошибки — warn
-        // (деградация, RECIPES R14), события — в канал агрегатора. send-ошибка
-        // означает, что приёмник умер, — молча выбрасываем (агрегатор уже вышел).
+        // (деградация, RECIPES R14), события — сначала через обратное
+        // отображение путей, затем в канал агрегатора. send-ошибка означает,
+        // что приёмник умер, — молча выбрасываем (агрегатор уже вышел).
+        let handler_roots = Arc::clone(&roots);
         let handler = move |res: Result<notify::Event, notify::Error>| match res {
-            Ok(event) => {
+            Ok(mut event) => {
+                remap_event_paths(&mut event, &handler_roots);
                 let _ = tx.send(event);
             }
             Err(err) => tracing::warn!(%err, "событие файлового вотчера потеряно"),
@@ -72,6 +102,7 @@ impl WatchService {
         Self {
             watcher,
             watched: HashSet::new(),
+            roots,
         }
     }
 
@@ -119,6 +150,25 @@ impl WatchService {
         }
         // Снятые покидают учёт даже при ошибке unwatch (см. док-комментарий)
         self.watched.retain(|dir| desired.contains(dir));
+        // Перестроить карту корней для обратного отображения путей FSEvents
+        // (см. поле `roots`): только успешные наблюдения. Канонизация
+        // отсутствующей директории — warn: наблюдение не даст событий, а
+        // следующий sync_dirs его снимет.
+        let mut roots = self
+            .roots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        roots.clear();
+        for dir in &self.watched {
+            match std::fs::canonicalize(dir) {
+                Ok(canon) => {
+                    roots.insert(canon, dir.clone());
+                }
+                Err(err) => {
+                    tracing::warn!(%err, dir = %dir.display(), "корень наблюдения не канонизирован");
+                }
+            }
+        }
     }
 }
 
@@ -148,12 +198,12 @@ fn aggregator_loop(rx: mpsc::Receiver<notify::Event>, sender: FileEventSender) {
                 Ok(event) => raws.push(event),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    deliver(&sender, collapse(raws));
+                    deliver(&sender, collapse(disambiguate_renames(raws)));
                     return;
                 }
             }
         }
-        deliver(&sender, collapse(raws));
+        deliver(&sender, collapse(disambiguate_renames(raws)));
     }
 }
 
@@ -162,6 +212,78 @@ fn deliver(sender: &FileEventSender, batch: Vec<FileEvent>) {
     if !batch.is_empty() {
         sender(batch);
     }
+}
+
+/// Обратное отображение путей события на вид, в котором директория
+/// наблюдалась (совместимость FSEvents/macOS — см. шапку модуля).
+///
+/// Ищется самый длинный корень-префикс из `roots` — корректно для вложенных
+/// наблюдений; заменяется только префикс, относительная часть сохраняется.
+/// На Linux/Windows не срабатывает: inotify/RDCW не канонизируют пути, а
+/// каноническая форма Windows (`\\?\…`) не совпадает с видом событий.
+fn remap_event_paths(event: &mut notify::Event, roots: &Mutex<HashMap<PathBuf, PathBuf>>) {
+    if event.paths.is_empty() {
+        return;
+    }
+    let Ok(roots) = roots.lock() else {
+        return; // отравленный mutex — событие уйдёт как есть (деградация)
+    };
+    if roots.is_empty() {
+        return;
+    }
+    for path in &mut event.paths {
+        let best = roots
+            .iter()
+            .filter(|(canon, _)| path.starts_with(canon))
+            .max_by_key(|(canon, _)| canon.components().count());
+        if let Some((canon, watched)) = best {
+            if canon != watched {
+                if let Ok(rel) = path.strip_prefix(canon) {
+                    *path = watched.join(rel);
+                }
+            }
+        }
+    }
+}
+
+/// Разделение половинок переименования из `Modify(Name(Any))`
+/// (совместимость FSEvents/macOS — см. шапку модуля).
+///
+/// Каждая половинка приходит отдельным событием с путём своей стороны;
+/// замер файловой системы разделяет их: путь существует — новая сторона
+/// (`RenameMode::To`), отсутствует — старая (`From`). Половинки одного окна
+/// выдаются в порядке «From раньше To» — порядок прихода двух событий
+/// одного rename не гарантирован, а склейка collapse (2) ищет To ПОСЛЕ
+/// From. Выполняется в потоке агрегатора (не в рендере — AGENTS.md);
+/// на Linux/Windows события `Name(Any)` не приходят — прохождение без
+/// изменений.
+fn disambiguate_renames(raws: Vec<notify::Event>) -> Vec<notify::Event> {
+    let mut out = Vec::with_capacity(raws.len());
+    let mut froms = Vec::new();
+    let mut tos = Vec::new();
+    for event in raws {
+        if event.kind == EventKind::Modify(ModifyKind::Name(RenameMode::Any)) {
+            for path in event.paths {
+                let is_new_side = path.exists();
+                let kind = if is_new_side {
+                    EventKind::Modify(ModifyKind::Name(RenameMode::To))
+                } else {
+                    EventKind::Modify(ModifyKind::Name(RenameMode::From))
+                };
+                let split = notify::Event::new(kind).add_path(path);
+                if is_new_side {
+                    tos.push(split);
+                } else {
+                    froms.push(split);
+                }
+            }
+        } else {
+            out.push(event);
+        }
+    }
+    out.extend(froms);
+    out.extend(tos);
+    out
 }
 
 /// Промежуточный кандидат свёртки — значение одного raw-события notify
@@ -514,6 +636,131 @@ mod tests {
         assert!(collapse(Vec::new()).is_empty());
     }
 
+    // ---------- Юнит-тесты совместимости FSEvents (macOS) ----------
+
+    /// Карта подставляет исходный префикс вместо канонического
+    /// (/private/var → /var) — обычный случай macOS tempdir.
+    #[test]
+    fn remap_replaces_canonical_prefix() {
+        let mut roots = HashMap::new();
+        roots.insert(pb("/private/var/t"), pb("/var/t"));
+        let lock = Mutex::new(roots);
+        let mut event = raw(
+            EventKind::Create(CreateKind::File),
+            &["/private/var/t/a.txt"],
+        );
+        remap_event_paths(&mut event, &lock);
+        assert_eq!(event.paths, vec![pb("/var/t/a.txt")]);
+    }
+
+    /// Канонический корень == наблюдаемому (Linux/Windows): путь без
+    /// изменений, лишних join нет.
+    #[test]
+    fn remap_identity_when_root_equals_watched() {
+        let mut roots = HashMap::new();
+        roots.insert(pb("/tmp/t"), pb("/tmp/t"));
+        let lock = Mutex::new(roots);
+        let mut event = raw(
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            &["/tmp/t/b.txt"],
+        );
+        remap_event_paths(&mut event, &lock);
+        assert_eq!(event.paths, vec![pb("/tmp/t/b.txt")]);
+    }
+
+    /// Вложенные наблюдения: побеждает самый длинный корень-префикс.
+    #[test]
+    fn remap_longest_root_wins() {
+        let mut roots = HashMap::new();
+        roots.insert(pb("/private/var/t"), pb("/var/t"));
+        roots.insert(pb("/private/var/t/sub"), pb("/var/alias-sub"));
+        let lock = Mutex::new(roots);
+        let mut event = raw(
+            EventKind::Remove(RemoveKind::Any),
+            &["/private/var/t/sub/x.txt"],
+        );
+        remap_event_paths(&mut event, &lock);
+        assert_eq!(event.paths, vec![pb("/var/alias-sub/x.txt")]);
+    }
+
+    /// Путь вне карты и пустая карта — событие не трогается.
+    #[test]
+    fn remap_ignores_unknown_paths_and_empty_map() {
+        let mut roots = HashMap::new();
+        roots.insert(pb("/private/var/t"), pb("/var/t"));
+        let lock = Mutex::new(roots);
+        let mut event = raw(EventKind::Create(CreateKind::File), &["/other/dir/c.txt"]);
+        remap_event_paths(&mut event, &lock);
+        assert_eq!(event.paths, vec![pb("/other/dir/c.txt")]);
+
+        let empty = Mutex::new(HashMap::<PathBuf, PathBuf>::new());
+        let mut other = raw(
+            EventKind::Create(CreateKind::File),
+            &["/private/var/t/y.txt"],
+        );
+        remap_event_paths(&mut other, &empty);
+        assert_eq!(other.paths, vec![pb("/private/var/t/y.txt")]);
+    }
+
+    /// Rename-половинки Name(Any): существующий путь → To, отсутствующий
+    /// → From; порядок прихода не важен — From выдаётся раньше To одного
+    /// окна, склейка collapse даёт Rename (замер ФС — tempdir).
+    #[test]
+    fn disambiguate_splits_any_rename_by_existence() {
+        let dir = temp_dir("disamb");
+        let new_side = dir.join("new.txt");
+        std::fs::write(&new_side, b"v").expect("создание новой стороны");
+        let old_side = dir.join("old.txt"); // отсутствует — старая сторона
+
+        // Половинки приходят в «неудобном» порядке: новая раньше старой
+        let events = disambiguate_renames(vec![
+            raw(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+                &[new_side.to_str().expect("путь новой стороны")],
+            ),
+            raw(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+                &[old_side.to_str().expect("путь старой стороны")],
+            ),
+        ]);
+        // Сортировка окна: From раньше To — независимо от порядка прихода
+        assert_eq!(
+            events[0].kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::From))
+        );
+        assert_eq!(
+            events[1].kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::To))
+        );
+
+        // После сортировки обычная склейка даёт Rename(old, new)
+        let batch = collapse(events);
+        assert_eq!(
+            batch,
+            vec![FileEvent::Rename(old_side.clone(), new_side.clone())]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Не-rename события проходят без изменений.
+    #[test]
+    fn disambiguate_passes_other_events() {
+        let events = disambiguate_renames(vec![
+            raw(EventKind::Create(CreateKind::File), &["/t/a"]),
+            raw(
+                EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+                &["/t/b"],
+            ),
+        ]);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, EventKind::Create(CreateKind::File));
+        assert_eq!(
+            events[1].kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::From))
+        );
+    }
+
     // ---------- Интеграционные тесты: реальный notify + tempdir ----------
 
     /// Уникальный temp-каталог теста (паттерн thumbs.rs).
@@ -747,11 +994,19 @@ mod tests {
             "шквал должен схлопнуться в ≤2 батча, пришло {}",
             batches.len()
         );
+        // FSEvents (macOS) может пометить первую запись в существующий файл
+        // флагом ItemCreated (запись через O_TRUNC) — notify даёт Create и
+        // Modify одного пути. Create для уже существующего пути безвреден
+        // (события приложения идемпотентны по path-ключу), поэтому допускаем
+        // его для самого burst-файла; посторонних ПУТЕЙ и дублей быть не
+        // должно — это и проверяет тест ниже.
+        let file_norm = norm(&file);
         assert!(
-            batches
-                .iter()
-                .flatten()
-                .all(|e| matches!(e, FileEvent::Modify(_))),
+            batches.iter().flatten().all(|e| match e {
+                FileEvent::Modify(path) => path == &file_norm,
+                FileEvent::Create(path) => path == &file_norm,
+                _ => false,
+            }),
             "посторонние события в шквале: {batches:?}"
         );
         let modify_paths: HashSet<PathBuf> = batches
@@ -764,7 +1019,20 @@ mod tests {
             .collect();
         assert_eq!(modify_paths, HashSet::from([norm(&file)]));
         if batches.len() == 1 {
-            assert_eq!(batches[0], vec![FileEvent::Modify(norm(&file))]);
+            let modify_count = batches[0]
+                .iter()
+                .filter(|e| matches!(e, FileEvent::Modify(_)))
+                .count();
+            let create_count = batches[0]
+                .iter()
+                .filter(|e| matches!(e, FileEvent::Create(_)))
+                .count();
+            assert_eq!(modify_count, 1, "ровно один Modify: {:?}", batches[0]);
+            assert!(
+                create_count <= 1,
+                "не более одного Create: {:?}",
+                batches[0]
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
