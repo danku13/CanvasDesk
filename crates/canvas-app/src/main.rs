@@ -448,6 +448,13 @@ struct App {
     /// Windows IDropTarget (SPEC §7.3), на других ОС не читается.
     #[cfg_attr(not(windows), allow(dead_code))]
     drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
+    /// Отправитель событий WebView2-хоста виджетов в event loop (M5/T20).
+    /// Прокси создаётся один раз в main() у `EventLoop` — у доступного в
+    /// resumed() `ActiveEventLoop` метода create_proxy в winit 0.30 нет;
+    /// тот же паттерн, что drag_sender. Читается только в cfg(windows)-ветке
+    /// resumed(), на других ОС не читается.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    widget_sender: canvas_widgets::WidgetEventSender,
     /// Миникарта (T13): снимок сцены + подгонка (CPU, SPEC §6.1).
     minimap: Option<Minimap>,
     /// Сигнатура состояния последней растеризации миникарты:
@@ -546,6 +553,7 @@ impl App {
         settings: Settings,
         config_path: Option<PathBuf>,
         drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
+        widget_sender: canvas_widgets::WidgetEventSender,
         watcher: WatchService,
         search_service: SearchService,
         desktop_mode: bool,
@@ -595,6 +603,7 @@ impl App {
             #[cfg(windows)]
             drag_watcher: None,
             drag_sender,
+            widget_sender,
             minimap: None,
             minimap_sig: None,
             minimap_drag: false,
@@ -4288,6 +4297,16 @@ fn main() -> anyhow::Result<()> {
             let _ = proxy.send_event(AppEvent::Drag(event));
         })
     };
+    // M5 (T20-F): события host'а виджетов (WidgetEvent) — тем же паттерном;
+    // прокси берём ЗДЕСЬ, у EventLoop: у ActiveEventLoop, доступного в
+    // resumed(), нет create_proxy (winit 0.30) — локальный Linux-чек этого
+    // не видит, виндовую компиляцию ловит только CI (урок a9488ae)
+    let widget_sender: canvas_widgets::WidgetEventSender = {
+        let proxy = proxy.clone();
+        Arc::new(move |event| {
+            let _ = proxy.send_event(AppEvent::Widget(event));
+        })
+    };
     // Файловый вотчер (T10): агрегатор shell шлёт батчи FileEvent через proxy;
     // первичный набор директорий — сразу после загрузки сцены, дальше —
     // sync_watch_dirs по событиям модели (дроп/удаление/rename)
@@ -4359,6 +4378,7 @@ fn main() -> anyhow::Result<()> {
             settings,
             config_path,
             drag_sender,
+            widget_sender,
             watcher,
             search_service,
             args.desktop,
@@ -4956,14 +4976,12 @@ impl ApplicationHandler<AppEvent> for App {
                             self.attach_desktop(win32.hwnd.get());
                         }
                         // M5 (T20-F): WebView2-хост виджетов — ребёнок окна
-                        // канваса; события хоста идут через proxy. User-data
-                        // — единый корень приложения (~/.canvasdesk/webview2)
+                        // канваса; события хоста идут через widget_sender
+                        // (прокси из main: у ActiveEventLoop нет create_proxy,
+                        // winit 0.30). User-data — единый корень приложения
+                        // (~/.canvasdesk/webview2)
                         {
-                            let proxy = event_loop.create_proxy();
-                            let sender: canvas_widgets::WidgetEventSender =
-                                Arc::new(move |event| {
-                                    let _ = proxy.send_event(AppEvent::Widget(event));
-                                });
+                            let sender = self.widget_sender.clone();
                             let user_data = canvas_shell::default_cache_dir()
                                 .unwrap_or_default()
                                 .join("webview2");
