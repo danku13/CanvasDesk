@@ -1,5 +1,8 @@
 name: Multi-platform Build
 
+# Артефакты релизной сборки на трёх ОС (Win/Linux/macOS — M7).
+# Гейты качества (fmt/clippy/test) живут в ci.yml и гоняются на каждый
+# пуш; здесь только release-build + артефакт, без дублирования.
 on:
   push:
     branches: ["**"] # публичный pet-проект — сборка бесплатна, можно на все ветки
@@ -9,7 +12,7 @@ on:
   workflow_dispatch: # ручной запуск из UI при необходимости
 
 env:
-  BIN_NAME: canvas-app # <-- замени на реальное имя из Cargo.toml ([package].name или [[bin]].name)
+  BIN_NAME: canvas-app
 
 jobs:
   build:
@@ -26,20 +29,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Run tests
-        run: cargo test --release --all-features
 
       - name: Run cargo build
         run: cargo build --release
@@ -60,5 +52,5 @@ jobs:
         with:
           name: build-${{ matrix.os }}
           path: ${{ env.BIN_PATH }}
-          if-no-files-found: error # теперь ошибка не скроется молча
+          if-no-files-found: error # ошибка не скроется молча
           retention-days: 14 # чтобы артефакты не копились бесконечно

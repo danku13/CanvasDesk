@@ -1,5 +1,7 @@
 name: CI
 
+# Авторитетный гейт (AGENTS.md «Сборка и тесты»): fmt/clippy/test/build
+# на всех трёх целевых ОС — кроссплатформенность Win/Linux/macOS (M7).
 on:
   push:
     branches: [main]
@@ -10,8 +12,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    runs-on: windows-latest
+  gates:
+    name: gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # падение одной ОС не отменяет остальные
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
