@@ -184,9 +184,14 @@ impl WidgetPass {
             multiview: None,
             cache: None,
         });
+        // Размер и ёмкость — из одной формулы (instance_buffer_size):
+        // регрессия 6b8f115 — захардкоженный `size: 64` при capacity 8;
+        // при 3 снапшотах write_buffer 0..96 в буфер 64 → wgpu validation
+        // error → паника (wgpu ошибки фатальны)
+        let instance_capacity = 8usize;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("widget-snapshots instances"),
-            size: 64,
+            size: Self::instance_buffer_size(instance_capacity),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -196,11 +201,19 @@ impl WidgetPass {
             sampler,
             bind_group_layout,
             instance_buffer,
-            instance_capacity: 8,
+            instance_capacity,
             textures: HashMap::new(),
             frame_order: Vec::new(),
             tick: 0,
         }
+    }
+
+    /// Размер instance-буфера для заданной ёмкости. Единственная точка
+    /// расчёта — и для начального создания (`new`), и для роста (`update`):
+    /// буфер обязан вмещать `capacity` инстансов, иначе `write_buffer`
+    /// выйдет за границы (wgpu validation error, фатальная паника).
+    fn instance_buffer_size(capacity: usize) -> wgpu::BufferAddress {
+        (ThumbInstance::FLOATS * 4 * capacity) as wgpu::BufferAddress
     }
 
     /// Загрузить/заменить снапшот виджета. Размер изменился — текстура
@@ -368,7 +381,7 @@ impl WidgetPass {
             self.instance_capacity = visible.len().next_power_of_two();
             self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("widget-snapshots instances"),
-                size: (ThumbInstance::FLOATS * 4 * self.instance_capacity) as wgpu::BufferAddress,
+                size: Self::instance_buffer_size(self.instance_capacity),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -443,5 +456,31 @@ mod tests {
     #[test]
     fn lru_cap_is_sane() {
         assert_eq!(WIDGET_SNAPSHOT_MAX, 16, "план M5 §4.5");
+    }
+
+    #[test]
+    fn instance_buffer_fits_capacity() {
+        // Регрессия крэша при 3 live-виджетах: write_buffer 0..96 в буфер
+        // 64 (захардкоженный размер при capacity 8). Буфер обязан вмещать
+        // заявленную ёмкость — при FLOATS=8 инстанс занимает 32 байта.
+        let stride = ThumbInstance::FLOATS * 4;
+        assert_eq!(
+            stride, 32,
+            "лейаут thumbs.wgsl изменился — проверить паддинг"
+        );
+        for capacity in [8usize, 16, 32] {
+            let size = WidgetPass::instance_buffer_size(capacity) as usize;
+            assert_eq!(
+                size,
+                stride * capacity,
+                "буфер меньше ёмкости → wgpu overrun при {capacity} инстансах"
+            );
+        }
+        // Начальная ёмкость покрывает типичный сеанс до первого роста:
+        // 3 виджета из лога крэша — с запасом в 96..256 байт
+        assert!(
+            WidgetPass::instance_buffer_size(8) as usize >= 3 * stride,
+            "3 снапшота (96 Б) обязаны помещаться в начальный буфер"
+        );
     }
 }
