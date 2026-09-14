@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!-- Пример CanvasDesk «Repo Dashboard» (T22-C): fetch наружу.
+     Требует permission "network" (widget.json) И connect-src в CSP —
+     без permission хост отвечает 403 на внешние WebResourceRequested,
+     виджет показывает понятную ошибку вместо падения. -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<!-- CSP: fetch разрешён только на api.github.com; остальное — 'self' -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self' https://api.github.com; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repo Dashboard</title>
+<style>
+  :root {
+    --bg: #1e2430; --fg: #e8ecf4; --muted: #8a93a6;
+    --accent: #3B82F6; --cell: #262e3d; --cell-hover: #313b4e;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; box-sizing: border-box; padding: 12px;
+    gap: 10px; background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+  }
+  #head { display: flex; align-items: center; justify-content: space-between; }
+  #head b { font-size: 14px; }
+  #refresh {
+    background: var(--cell); color: var(--fg); border: 0; border-radius: 5px;
+    width: 28px; height: 24px; cursor: pointer; font-size: 13px;
+  }
+  #refresh:hover { background: var(--cell-hover); }
+  .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .stat {
+    background: var(--cell); border-radius: 8px; padding: 10px 8px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .stat b { font-size: 22px; color: var(--accent); }
+  .stat span { font-size: 11px; color: var(--muted); }
+  #updated { font-size: 11px; color: var(--muted); }
+  #error {
+    display: none; background: #3a2020; border: 1px solid #7a3535;
+    border-radius: 8px; padding: 10px; font-size: 12px; line-height: 1.5;
+  }
+  #error b { display: block; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+  <div id="head">
+    <b id="repo">danku13/CanvasDesk</b>
+    <button id="refresh" title="Обновить">⟳</button>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="stars">—</b><span>звёзд</span></div>
+    <div class="stat"><b id="forks">—</b><span>форков</span></div>
+    <div class="stat"><b id="issues">—</b><span>issues</span></div>
+  </div>
+  <div id="updated"></div>
+  <div id="error">
+    <b>Сеть недоступна</b>
+    <span id="error-text"></span>
+  </div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

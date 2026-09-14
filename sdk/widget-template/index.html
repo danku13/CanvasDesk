@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!-- Шаблон виджета CanvasDesk (T22-B): Vite + TypeScript.
+     npm run pack → dist-widget/ с widget.json — drag папки на канвас.
+     Демо-логика: счётчик в props + тема + toast. Замените src/main.ts на свою. -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Widget</title>
+<style>
+  :root {
+    --bg: #1e2430; --fg: #e8ecf4; --muted: #8a93a6;
+    --accent: #3B82F6; --cell: #262e3d; --cell-hover: #313b4e;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; box-sizing: border-box;
+    background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+  }
+  #value { font-size: 64px; font-weight: 600; line-height: 1; color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  button {
+    background: var(--cell); color: var(--fg); border: 0; border-radius: 6px;
+    padding: 8px 18px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: var(--cell-hover); }
+  #hint { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <div id="value">0</div>
+  <div class="row">
+    <button id="dec">−1</button>
+    <button id="inc">+1</button>
+    <button id="say">Toast</button>
+  </div>
+  <div id="hint"></div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

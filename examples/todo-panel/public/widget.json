@@ -1,0 +1,8 @@
+{
+  "id": "com.canvasdesk.example.todo",
+  "name": "Todo Panel",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "defaultSize": [360, 420],
+  "permissions": []
+}

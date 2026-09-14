@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<!-- Встроенный виджет CanvasDesk «Стикер» (T21-D): contenteditable-текст
-     -> props.text с debounce 400 мс (undo-коалесценция на стороне хоста).
-     Bridge v0 — прямой postMessage (T22 формализует в sdk/canvasdesk.ts). -->
+<!-- Встроенный виджет CanvasDesk «Стикер» (T21-D, T22 — миграция на SDK):
+     contenteditable-текст -> props.text с debounce 400 мс (undo-коалесценция
+     на стороне хоста). Мост — sdk/canvasdesk.js (глобал CanvasDesk),
+     логика — app.js. Все скрипты внешние: CSP default-src 'self'
+     (inline-<script> блокировался — исправлено в T22). -->
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -28,80 +30,7 @@
 <body>
   <div id="hint">Стикер — текст сохраняется в канвас</div>
   <div id="text" contenteditable="true" data-ph="Пишите здесь…" spellcheck="false"></div>
-<script>
-(function () {
-  "use strict";
-  var elText = document.getElementById("text");
-  var props = { text: "" };
-  var timer = null;
-  var applying = false; // propsChanged из хоста не эхом в setProps
-
-  function applyTheme(theme) {
-    if (!theme) return;
-    var root = document.documentElement.style;
-    root.setProperty("--bg", theme.dark ? "#2a2f1e" : "#f7f4dd");
-    root.setProperty("--fg", theme.dark ? "#f2f0e0" : "#26291a");
-    root.setProperty("--muted", theme.dark ? "#9aa07f" : "#7a7f5c");
-    root.setProperty("--accent", theme.accent || "#3B82F6");
-  }
-
-  function send(method, params) {
-    if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({
-        jsonrpc: "2.0", method: method, params: params || {}
-      });
-    }
-  }
-
-  function commit() {
-    timer = null;
-    if (applying) return;
-    var text = elText.innerText;
-    if (text === (props.text || "")) return;
-    props.text = text;
-    send("setProps", { props: props });
-  }
-
-  elText.addEventListener("input", function () {
-    if (applying) return;
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(commit, 400); // debounce: меньше setProps-потока
-  });
-
-  window.addEventListener("message", function (event) {
-    var msg = event.data;
-    if (!msg || msg.jsonrpc !== "2.0") return;
-    switch (msg.method) {
-      case "init":
-        applyTheme(msg.params && msg.params.theme);
-        if (msg.params && msg.params.props && typeof msg.params.props.text === "string") {
-          applying = true;
-          elText.innerText = msg.params.props.text;
-          applying = false;
-          props.text = msg.params.props.text;
-        }
-        break;
-      case "propsChanged":
-        if (msg.params && msg.params.props && typeof msg.params.props.text === "string"
-            && msg.params.props.text !== elText.innerText) {
-          applying = true;
-          elText.innerText = msg.params.props.text;
-          applying = false;
-          props.text = msg.params.props.text;
-        }
-        break;
-      case "themeChanged":
-        applyTheme(msg.params && msg.params.theme);
-        break;
-      case "visibility":
-        // потеря фокуса при уходе в снапшот — фиксируем черновик
-        if (timer !== null) { clearTimeout(timer); commit(); }
-        break;
-    }
-  });
-
-  send("ready");
-})();
-</script>
+  <script src="canvasdesk.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

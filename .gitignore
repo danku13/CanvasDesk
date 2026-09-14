@@ -5,3 +5,7 @@ default.canvas
 
 # Локальные материалы для статей и devlog — не публиковать в GitHub
 marketing/
+
+# Node-артефакты SDK/примеров (T22): в репо только исходники
+node_modules/
+dist-widget/

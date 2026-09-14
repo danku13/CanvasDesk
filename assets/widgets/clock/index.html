@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<!-- Встроенный виджет CanvasDesk «Часы» (T20, демо рантайма):
+<!-- Встроенный виджет CanvasDesk «Часы» (T20, T22 — миграция на SDK):
      цифровые часы + дата, тикают пока видимы (visibility), тема из init.
-     Bridge v0 — прямой postMessage (T22 формализует в sdk/canvasdesk.ts). -->
+     Мост — sdk/canvasdesk.js (глобал CanvasDesk), логика — app.js.
+     Все скрипты внешние: CSP default-src 'self' их разрешает (раньше
+     inline-<script> блокировался собственной CSP — исправлено в T22). -->
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -28,78 +30,7 @@
 <body>
   <div id="time">--<span>:</span>--<span>:</span>--</div>
   <div id="date">&nbsp;</div>
-<script>
-(function () {
-  "use strict";
-  var elTime = document.getElementById("time");
-  var elDate = document.getElementById("date");
-  var visible = true;
-  var timer = null;
-
-  // Тема (init / themeChanged): { dark: bool, accent: "#hex" }
-  function applyTheme(theme) {
-    if (!theme) return;
-    var root = document.documentElement.style;
-    root.setProperty("--bg", theme.dark ? "#1e2430" : "#f5f7fb");
-    root.setProperty("--fg", theme.dark ? "#e8ecf4" : "#1a2233");
-    root.setProperty("--muted", theme.dark ? "#8a93a6" : "#5b6575");
-    root.setProperty("--accent", theme.accent || "#3B82F6");
-  }
-
-  function render() {
-    var now = new Date();
-    var h = String(now.getHours()).padStart(2, "0");
-    var m = String(now.getMinutes()).padStart(2, "0");
-    var s = String(now.getSeconds()).padStart(2, "0");
-    elTime.innerHTML = h + "<span>:</span>" + m + "<span>:</span>" + s;
-    elDate.textContent = now.toLocaleDateString("ru-RU", {
-      weekday: "long", day: "numeric", month: "long", year: "numeric"
-    });
-  }
-
-  function tickLoop() {
-    if (timer !== null) return;
-    render();
-    timer = setInterval(function () { render(); }, 1000);
-  }
-
-  function tickStop() {
-    if (timer === null) return;
-    clearInterval(timer);
-    timer = null;
-  }
-
-  // Bridge: host → widget
-  window.addEventListener("message", function (event) {
-    var msg = event.data;
-    if (!msg || msg.jsonrpc !== "2.0") return;
-    switch (msg.method) {
-      case "init":
-        applyTheme(msg.params && msg.params.theme);
-        if (msg.params && msg.params.visible === false) { visible = false; tickStop(); }
-        break;
-      case "themeChanged":
-        applyTheme(msg.params && msg.params.theme);
-        break;
-      case "visibility":
-        visible = !!(msg.params && msg.params.visible);
-        if (visible) { tickLoop(); } else { tickStop(); }
-        break;
-    }
-  });
-
-  // Bridge: widget → host (готовность; у часов нет ни permissions, ни props)
-  function send(method, params) {
-    if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage({
-        jsonrpc: "2.0", method: method, params: params || {}
-      });
-    }
-  }
-  send("ready");
-
-  tickLoop();
-})();
-</script>
+  <script src="canvasdesk.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

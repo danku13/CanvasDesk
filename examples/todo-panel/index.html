@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!-- Пример CanvasDesk «Todo Panel» (T22-C): офлайн-микрофронтенд.
+     items живут в props ноды (.canvas): переживают перезапуск, undo и
+     экспорт/импорт сцены. Standalone (npm run dev / обычный браузер) —
+     тот же bundle, фолбэк на localStorage. Permissions не нужны. -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Todo Panel</title>
+<style>
+  :root {
+    --bg: #1e2430; --fg: #e8ecf4; --muted: #8a93a6;
+    --accent: #3B82F6; --cell: #262e3d; --cell-hover: #313b4e; --danger: #b06;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; box-sizing: border-box; padding: 10px;
+    gap: 8px; background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+  }
+  #mode { font-size: 11px; color: var(--muted); }
+  form { display: flex; gap: 6px; }
+  #new {
+    flex: 1; background: var(--cell); color: var(--fg); border: 0;
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: 0;
+  }
+  #add { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  #list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .item {
+    display: flex; align-items: center; gap: 8px; background: var(--cell);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px;
+  }
+  .item.done span { text-decoration: line-through; color: var(--muted); }
+  .item span { flex: 1; overflow-wrap: anywhere; }
+  .item input[type="checkbox"] { accent-color: var(--accent); }
+  .item button {
+    background: 0; border: 0; color: var(--muted); cursor: pointer;
+    font-size: 14px; padding: 0 2px;
+  }
+  .item button:hover { color: var(--danger); }
+  #empty { color: var(--muted); font-size: 12px; text-align: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+  <div id="mode"></div>
+  <form id="form">
+    <input id="new" placeholder="Новая задача, Enter — добавить" autocomplete="off">
+    <button id="add" type="submit">+</button>
+  </form>
+  <div id="list"></div>
+  <div id="empty">Пока пусто</div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
