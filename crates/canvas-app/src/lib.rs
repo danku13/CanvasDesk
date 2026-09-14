@@ -267,15 +267,24 @@ pub mod ui {
     pub struct Submenu {
         /// Позиция (world) левого верхнего угла колонки подменю.
         pub origin: Vec2,
-        /// Пункты: установка ноды виджета (id пакета + подпись).
+        /// Пункты: установка ноды виджета или удаление пакета (T21-C).
         pub entries: Vec<SubmenuEntry>,
+    }
+
+    /// Действие пункта подменю виджетов (T21-C: управление пакетами).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SubmenuAction {
+        /// Добавить ноду виджета на канвас (id пакета).
+        Insert(String),
+        /// Удалить пакет (id пакета; с диалогом подтверждения П11).
+        Remove(String),
     }
 
     /// Пункт подменю виджетов.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct SubmenuEntry {
-        /// id пакета (`com.canvasdesk.clock`).
-        pub widget_id: String,
+        /// Действие пункта.
+        pub action: SubmenuAction,
         /// Подпись (имя пакета из манифеста).
         pub label: String,
     }
@@ -806,6 +815,7 @@ pub mod ui {
     }
 
     /// Тип вставки из дропа (T9): файловая нода или заметка с текстом.
+    /// T21-B добавляет установку виджет-пакета drag-ом папки.
     #[derive(Debug, Clone, PartialEq)]
     pub enum DropInsertKind {
         /// Файловая нода (путь как дал Explorer, абсолютный).
@@ -813,6 +823,10 @@ pub mod ui {
         /// Текстовая нода: URL или произвольный текст (критерий T9 — URL
         /// становится заметкой с текстом ссылки; Plain-текст — бонус).
         Note(String),
+        /// Установка виджет-пакета (T21-B): папка с валидным widget.json;
+        /// после Drop — диалог подтверждения, затем install + нода
+        /// (источник-папка, имя пакета из манифеста).
+        InstallWidget(PathBuf, String),
     }
 
     /// Одна вставка дропа: id, тип и позиция в world-координатах.
@@ -881,6 +895,23 @@ pub mod ui {
         }
     }
 
+    /// T21-B: классификация дропа — папка виджет-пакета? Дроп считается
+    /// установкой пакета, когда в нём РОВНО одна папка с `widget.json`
+    /// в корне (мультидроп с папками/файлами идёт прежним путём — файлы).
+    /// Чистая функция (только fs-проверки), вызывается до plan_drop.
+    pub fn dropped_widget_package(
+        data: &canvas_shell::dragdrop::DragData,
+    ) -> Option<std::path::PathBuf> {
+        let canvas_shell::dragdrop::DragData::HdropBytes(bytes) = data else {
+            return None;
+        };
+        let paths = parse_hdrop_bytes(bytes);
+        let [single] = paths.as_slice() else {
+            return None;
+        };
+        (single.is_dir() && single.join("widget.json").is_file()).then(|| single.to_path_buf())
+    }
+
     /// Максимальная длина подписи призрака дропа (в символах) — длинные имена
     /// файлов обрезаются многоточием, чтобы не вылезать за призрак карточки.
     pub const DROP_GHOST_LABEL_MAX: usize = 40;
@@ -904,6 +935,7 @@ pub mod ui {
                     .to_string()
             }
             DropInsertKind::Note(text) => text.lines().next().unwrap_or("").to_owned(),
+            DropInsertKind::InstallWidget(_, name) => format!("Установить виджет: {name}"),
         };
         let mut chars = raw.chars();
         let head: String = chars.by_ref().take(DROP_GHOST_LABEL_MAX).collect();
@@ -1797,6 +1829,70 @@ pub mod ui {
             let _ = std::fs::remove_dir_all(&dir);
         }
 
+        /// T21-B: классификация дропа — только одиночная папка с widget.json
+        /// в корне считается пакетом виджета; файлы/мультидроп/текст — нет.
+        #[test]
+        fn dropped_widget_package_classification() {
+            let dir = temp_dir("pkgdrop");
+            // Папка-пакет с манифестом
+            let pkg = dir.join("my-widget");
+            std::fs::create_dir_all(&pkg).unwrap();
+            std::fs::write(
+                pkg.join("widget.json"),
+                r#"{"id":"x.test","name":"T","version":"1","entry":"index.html"}"#,
+            )
+            .unwrap();
+            let pkg_s = pkg.to_string_lossy().into_owned();
+            assert_eq!(
+                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                    &pkg_s
+                ]))),
+                Some(pkg.clone())
+            );
+            // Папка БЕЗ манифеста — не пакет (обычная папка файлов)
+            let plain = dir.join("plain-dir");
+            std::fs::create_dir_all(&plain).unwrap();
+            let plain_s = plain.to_string_lossy().into_owned();
+            assert_eq!(
+                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                    &plain_s
+                ]))),
+                None
+            );
+            // Файл (даже widget.json напрямую) — не пакет
+            let file = pkg.join("widget.json");
+            let file_s = file.to_string_lossy().into_owned();
+            assert_eq!(
+                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                    &file_s
+                ]))),
+                None
+            );
+            // Две папки с манифестами — не установка (неоднозначно)
+            let pkg2 = dir.join("my-widget-2");
+            std::fs::create_dir_all(&pkg2).unwrap();
+            std::fs::write(
+                pkg2.join("widget.json"),
+                r#"{"id":"y.test","name":"T","version":"1","entry":"index.html"}"#,
+            )
+            .unwrap();
+            let pkg2_s = pkg2.to_string_lossy().into_owned();
+            assert_eq!(
+                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                    &pkg_s, &pkg2_s
+                ]))),
+                None
+            );
+            // Текст — не пакет
+            assert_eq!(
+                dropped_widget_package(&canvas_shell::dragdrop::DragData::Text(
+                    "привет".to_owned()
+                )),
+                None
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
         /// План дропа текста: одна заметка в origin с полным текстом.
         #[test]
         fn plan_drop_text_single_note() {
@@ -1916,12 +2012,16 @@ pub mod ui {
 
             let entries = vec![
                 SubmenuEntry {
-                    widget_id: "com.canvasdesk.clock".to_owned(),
+                    action: SubmenuAction::Insert("com.canvasdesk.clock".to_owned()),
                     label: "Clock".to_owned(),
                 },
                 SubmenuEntry {
-                    widget_id: "com.canvasdesk.calendar".to_owned(),
+                    action: SubmenuAction::Insert("com.canvasdesk.calendar".to_owned()),
                     label: "Calendar".to_owned(),
+                },
+                SubmenuEntry {
+                    action: SubmenuAction::Remove("com.canvasdesk.clock".to_owned()),
+                    label: "— Удалить: Clock".to_owned(),
                 },
             ];
             let submenu = Submenu {
@@ -1930,7 +2030,8 @@ pub mod ui {
             };
             let [_, y, w, h] = submenu_rect(&submenu);
             assert_eq!(w, MENU_WIDTH);
-            assert_eq!(h, MENU_PADDING * 2.0 + 2.0 * MENU_ITEM_HEIGHT);
+            // 3 пункта (вставка ×2 + удаление T21-C) — высота по всем
+            assert_eq!(h, MENU_PADDING * 2.0 + 3.0 * MENU_ITEM_HEIGHT);
             // Пункт 0/1 накликиваются, мимо — None
             assert_eq!(
                 submenu_item_at(&submenu, [sub_origin[0] + 10.0, y + MENU_PADDING + 3.0]),
@@ -1945,6 +2046,16 @@ pub mod ui {
                     ]
                 ),
                 Some(1)
+            );
+            assert_eq!(
+                submenu_item_at(
+                    &submenu,
+                    [
+                        sub_origin[0] + 10.0,
+                        y + MENU_PADDING + 2.0 * MENU_ITEM_HEIGHT + 3.0
+                    ]
+                ),
+                Some(2)
             );
             assert_eq!(submenu_item_at(&submenu, [500.0, 500.0]), None);
             // Пустое подменю: rect не вырожден (1 строка), хит-тест — None
@@ -1967,7 +2078,7 @@ pub mod ui {
             );
         }
 
-        /// M5: подменю в ContextMenu — тогл черезWidgets-пункт открывает,
+        /// M5: подменю в ContextMenu — тогл через Widgets-пункт открывает,
         /// повторный ПКМ закрывает всё меню (submenu не переживает take).
         #[test]
         fn context_menu_with_submenu_composes() {
@@ -1977,7 +2088,7 @@ pub mod ui {
                 submenu: Some(Submenu {
                     origin: submenu_origin_next_to([0.0, 0.0]),
                     entries: vec![SubmenuEntry {
-                        widget_id: "com.canvasdesk.clock".to_owned(),
+                        action: SubmenuAction::Insert("com.canvasdesk.clock".to_owned()),
                         label: "Clock".to_owned(),
                     }],
                 }),

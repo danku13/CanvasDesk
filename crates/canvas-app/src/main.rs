@@ -375,6 +375,71 @@ struct DropPreview {
     plan: Vec<canvas_app::ui::DropInsert>,
 }
 
+/// Модальный диалог приложения (T21-B/C: П10/П11): подтверждение
+/// установки виджета drag-ом и удаления пакета. Enter — подтвердить,
+/// Esc — отменить, клики по кнопкам; остальной ввод глушится.
+enum AppDialog {
+    /// «Установить виджет <имя> <версия>?»: источник-папка, манифест,
+    /// мировая точка дропа (куда встанет нода после install), признак
+    /// обновления существующего пакета (П5 — другой заголовок).
+    InstallWidget {
+        src: PathBuf,
+        manifest: canvas_widgets::manifest::WidgetManifest,
+        pos: Vec2,
+        updating: bool,
+    },
+    /// «Удалить пакет <имя>? Ноды пакета останутся как заглушки» (П11).
+    RemovePackage { widget_id: String, name: String },
+}
+
+impl AppDialog {
+    /// Кнопки диалога (screen-space rect'ы считаются от центра окна).
+    fn buttons(&self) -> [(&'static str, bool); 2] {
+        // (подпись, confirm?)
+        [("Да", true), ("Нет", false)]
+    }
+
+    /// Заголовок диалога.
+    fn title(&self) -> String {
+        match self {
+            AppDialog::InstallWidget {
+                manifest, updating, ..
+            } => {
+                if *updating {
+                    format!("Обновить виджет {} до {}?", manifest.name, manifest.version)
+                } else {
+                    format!("Установить виджет {} {}?", manifest.name, manifest.version)
+                }
+            }
+            AppDialog::RemovePackage { name, .. } => {
+                format!("Удалить пакет {name}?")
+            }
+        }
+    }
+
+    /// Пояснение под заголовком.
+    fn body(&self) -> String {
+        match self {
+            AppDialog::InstallWidget { manifest, .. } => {
+                let perms = if manifest.permissions.is_empty() {
+                    "без разрешений".to_owned()
+                } else {
+                    manifest
+                        .permissions
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                format!("Пакет скопируется в локальную папку виджетов.\nРазрешения: {perms}.")
+            }
+            AppDialog::RemovePackage { .. } => {
+                "Ноды этого виджета останутся на канвасе как заглушки.\nПакет можно поставить снова перетаскиванием папки.".to_owned()
+            }
+        }
+    }
+}
+
 /// Состояние приложения: окно и рендерер создаются в `resumed`
 /// (идиома winit 0.30 — окно создаётся только на активном event loop).
 struct App {
@@ -437,6 +502,10 @@ struct App {
     settings_open: bool,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
+    /// Модальный диалог T21 (установка/удаление пакета): глушит ввод канваса.
+    dialog: Option<AppDialog>,
+    /// Toast-строка (T21-A: bridge-toast, ошибки установки): живёт 3 с.
+    toast: Option<(String, Instant)>,
     /// Файловый вотчер (T10): события ФС → AppEvent::FileEvents;
     /// набор директорий синхронизируется с моделью (sync_watch_dirs).
     watcher: WatchService,
@@ -599,6 +668,8 @@ impl App {
             config_path,
             settings_open: false,
             drop_preview: None,
+            dialog: None,
+            toast: None,
             watcher,
             #[cfg(windows)]
             drag_watcher: None,
@@ -1527,6 +1598,35 @@ impl App {
         match drag {
             canvas_shell::dragdrop::DragEvent::Enter { data, client_pt } => {
                 let world = self.drag_world_pt(client_pt);
+                // T21-B: дроп одиночной папки с widget.json — призрак
+                // установки виджета (перехват ДО plan_drop файлов)
+                if let Some(src) = canvas_app::ui::dropped_widget_package(&data) {
+                    match canvas_widgets::manifest::WidgetManifest::from_dir(&src) {
+                        Ok(manifest) => {
+                            self.drop_preview = Some(DropPreview {
+                                origin: world,
+                                plan: vec![canvas_app::ui::DropInsert {
+                                    id: "widget-install".to_owned(),
+                                    kind: canvas_app::ui::DropInsertKind::InstallWidget(
+                                        src,
+                                        manifest.name.clone(),
+                                    ),
+                                    pos: world,
+                                }],
+                            });
+                            self.request_redraw();
+                            return;
+                        }
+                        // Битый манифест: честный призрак-ошибка + toast,
+                        // как «файл недоступен» у битых ссылок (SPEC §7.5)
+                        Err(e) => {
+                            self.show_toast(format!("Виджет не установлен: {e}"));
+                            self.drop_preview = None;
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                }
                 let plan = plan_drop(&self.scene.canvas, &data, world);
                 // Пустой план (нет поддерживаемых форматов) — не подсвечиваем
                 self.drop_preview = if plan.is_empty() {
@@ -1548,6 +1648,28 @@ impl App {
             canvas_shell::dragdrop::DragEvent::Leave => self.drop_preview = None,
             canvas_shell::dragdrop::DragEvent::Drop { data, client_pt } => {
                 let world = self.drag_world_pt(client_pt);
+                // T21-B: дроп виджет-пакета — диалог П10 (Да/Нет), установка
+                // и нода только после подтверждения; невалидный манифест —
+                // toast (повторно не парсим успех — уже в призраке)
+                if let Some(src) = canvas_app::ui::dropped_widget_package(&data) {
+                    match canvas_widgets::manifest::WidgetManifest::from_dir(&src) {
+                        Ok(manifest) => {
+                            let updating = self.widgets.registry.contains(&manifest.id);
+                            self.dialog = Some(AppDialog::InstallWidget {
+                                src,
+                                manifest,
+                                pos: world,
+                                updating,
+                            });
+                        }
+                        Err(e) => {
+                            self.show_toast(format!("Виджет не установлен: {e}"));
+                        }
+                    }
+                    self.drop_preview = None;
+                    self.request_redraw();
+                    return;
+                }
                 // План пересчитываем по СВЕЖИМ данным Drop (не из превью,
                 // план T9 §5): источник мог обновить содержимое
                 let plan = plan_drop(&self.scene.canvas, &data, world);
@@ -1568,6 +1690,14 @@ impl App {
                         ),
                         DropInsertKind::Note(text) => {
                             Node::text(ins.id, text, ins.pos[0], ins.pos[1])
+                        }
+                        // Установка виджета перехвачена выше (T21-B: дроп
+                        // открывает диалог, не вставляет ноду напрямую) —
+                        // сюда попасть не можем; рамка на случай будущих
+                        // прямых вставок (MCP widget_add — T22+)
+                        DropInsertKind::InstallWidget(_, _) => {
+                            tracing::warn!("дроп виджета прошёл мимо диалога — пропущен");
+                            continue;
                         }
                     };
                     // Вставка как в create_note_at: модель + spatial index
@@ -3132,6 +3262,18 @@ impl App {
             self.request_redraw();
             return;
         }
+        // T21: модальный диалог глушит весь ввод канваса — Enter/Esc —
+        // подтвердить/отменить, остальное игнорируется (П10/П11)
+        if self.dialog.is_some() && event.state == ElementState::Pressed && !event.repeat {
+            match event.logical_key {
+                Key::Named(NamedKey::Enter) => {
+                    self.confirm_dialog();
+                }
+                Key::Named(NamedKey::Escape) => self.cancel_dialog(),
+                _ => {}
+            }
+            return;
+        }
         // Esc закрывает контекстное меню (T7), затем — панель настроек,
         // затем — панель хоткеев (FR-004)
         if event.logical_key == Key::Named(NamedKey::Escape)
@@ -3356,6 +3498,27 @@ impl App {
                     }
                 }
                 let world = self.cursor_world();
+                // T21: модальный диалог поверх всего — кнопки Да/Нет
+                // (клики мимо панели не закрывают: установка — явный выбор)
+                if self.dialog.is_some() {
+                    for (i, rect) in self.dialog_button_rects().iter().enumerate() {
+                        let [x, y, w, h] = *rect;
+                        if self.cursor[0] >= x
+                            && self.cursor[0] <= x + w
+                            && self.cursor[1] >= y
+                            && self.cursor[1] <= y + h
+                        {
+                            if i == 0 {
+                                self.confirm_dialog();
+                            } else {
+                                self.cancel_dialog();
+                            }
+                            break;
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
@@ -3364,9 +3527,24 @@ impl App {
                 // колонка правее базового меню (клик там не попадает в base)
                 if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
                     if let Some(i) = submenu_item_at(submenu, world) {
-                        let widget_id = submenu.entries[i].widget_id.clone();
+                        let action = submenu.entries[i].action.clone();
                         self.menu = None;
-                        self.insert_widget_from_menu(&widget_id);
+                        match action {
+                            canvas_app::ui::SubmenuAction::Insert(widget_id) => {
+                                self.insert_widget_from_menu(&widget_id);
+                            }
+                            // T21-C (П11): удаление пакета — с подтверждением;
+                            // меню уже закрыто, модальный диалог поверх
+                            canvas_app::ui::SubmenuAction::Remove(widget_id) => {
+                                let name = self
+                                    .widgets
+                                    .registry
+                                    .get(&widget_id)
+                                    .map(|p| p.manifest.name.clone())
+                                    .unwrap_or(widget_id.clone());
+                                self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
+                            }
+                        }
                         self.request_redraw();
                         return;
                     }
@@ -3452,18 +3630,32 @@ impl App {
                                     }
                                     // M5 (T20-F): открыть подменю пакетов
                                     // (план П2); пустой список — честная
-                                    // строка «(нет установленных)»
+                                    // строка «(нет установленных)».
+                                    // T21-C: под каждой вставкой — секция
+                                    // удаления пакетов (П11)
                                     CanvasMenuItem::Widgets => {
                                         let submenu_origin = submenu_origin_next_to(menu.origin);
-                                        let entries = self
+                                        let mut entries: Vec<SubmenuEntry> = self
                                             .widgets
                                             .menu_entries()
                                             .into_iter()
                                             .map(|(widget_id, label)| SubmenuEntry {
-                                                widget_id,
+                                                action: canvas_app::ui::SubmenuAction::Insert(
+                                                    widget_id,
+                                                ),
                                                 label,
                                             })
                                             .collect();
+                                        entries.extend(
+                                            self.widgets.menu_entries().into_iter().map(
+                                                |(widget_id, label)| SubmenuEntry {
+                                                    action: canvas_app::ui::SubmenuAction::Remove(
+                                                        widget_id,
+                                                    ),
+                                                    label: format!("— Удалить: {label}"),
+                                                },
+                                            ),
+                                        );
                                         self.menu = Some(ContextMenu {
                                             target: MenuTarget::Canvas,
                                             origin: menu.origin,
@@ -4127,6 +4319,30 @@ fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     })
 }
 
+/// Открыть файл/путь в системном приложении (T21-A: openFile моста,
+/// permission shell:open). Windows — тот же ShellExecuteEx-путь, что у
+/// файловых нод (interop::open_file); Linux/macOS — xdg-open/open
+/// (M7: мост виджетов кроссплатформенен, host появится на T22+).
+fn open_path_externally(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        canvas_shell::desktop::interop::open_file(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let program = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        std::process::Command::new(program)
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("{program}: {e}"))
+    }
+}
+
 /// Детерминированный PRNG (xorshift32) — генератор стресс-сцены без зависимостей.
 struct Xorshift(u32);
 
@@ -4482,8 +4698,12 @@ impl App {
                 }
                 self.request_redraw();
             }
-            canvas_widgets::WidgetEvent::Message { node_id, message } => {
-                self.on_widget_message(&node_id, message);
+            canvas_widgets::WidgetEvent::Message {
+                node_id,
+                message,
+                id,
+            } => {
+                self.on_widget_message(&node_id, message, id);
             }
             canvas_widgets::WidgetEvent::EnvironmentReady { ok } => {
                 tracing::info!(ok, "виджеты: {}", self.widgets.runtime_status());
@@ -4499,11 +4719,50 @@ impl App {
         }
     }
 
-    /// M5: сообщения моста. T20 — рукопожатие Ready→init; полный
-    /// enforcement (permissions/undo/фс) — волна T21.
-    fn on_widget_message(&mut self, node_id: &str, message: canvas_widgets::WidgetToHost) {
+    /// M5 (T21-A): сообщения моста — enforcement на каждый вызов.
+    /// Разрешения берутся из манифеста ПАКЕТА ноды (не из сообщения!),
+    /// отказ — warn + JSON-RPC error (для запросов с id). `id`
+    /// передаётся из host'а для ответа на запросы readDir/state*.
+    fn on_widget_message(
+        &mut self,
+        node_id: &str,
+        message: canvas_widgets::WidgetToHost,
+        id: Option<serde_json::Value>,
+    ) {
+        use canvas_widgets::WidgetToHost;
+        // Enforcement (П-таблица §4.6): без permission — отказ + лог.
+        // Пакет мог исчезнуть (удалён) — тоже отказ, не паника.
+        let permissions = match self
+            .widgets
+            .permissions_of_node(&self.scene.canvas, node_id)
+        {
+            Some(p) => p,
+            None => {
+                tracing::warn!(
+                    node_id,
+                    msg = message.method(),
+                    "мост: пакет ноды не установлен"
+                );
+                self.reply_err(node_id, id, "пакет виджета не установлен");
+                return;
+            }
+        };
+        if let Err(required) = permissions.check_call(&message) {
+            tracing::warn!(
+                node_id,
+                method = message.method(),
+                required = required.as_str(),
+                "мост: вызов заблокирован — нет permission"
+            );
+            self.reply_err(
+                node_id,
+                id,
+                format!("нет permission: {}", required.as_str()),
+            );
+            return;
+        }
         match message {
-            canvas_widgets::WidgetToHost::Ready => {
+            WidgetToHost::Ready => {
                 let init = self
                     .scene
                     .canvas
@@ -4513,10 +4772,227 @@ impl App {
                     self.widgets.post_message(node_id, &init);
                 }
             }
-            other => {
-                tracing::info!(node_id, msg = ?other, "bridge-сообщение (enforcement — T21)");
+            WidgetToHost::SetProps { props } => {
+                // Undo-шаг до мутации (коалесценция — риски M5 §8)
+                if self.widgets.should_push_props_undo(node_id) {
+                    self.push_undo();
+                }
+                let index = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .iter()
+                    .position(|node| node.id == node_id);
+                let changed = index
+                    .and_then(|i| self.scene.canvas.nodes[i].canvasdesk.as_mut())
+                    .map(|ext| {
+                        let changed = ext.props != props;
+                        ext.props = props.clone();
+                        changed
+                    })
+                    .unwrap_or(false);
+                if changed {
+                    self.scene.mark_dirty();
+                    // Подтверждение виджету (propsChanged) — замкнутый цикл
+                    // без эхо-повтора: повторный setProps тех же props не
+                    // меняет модель (changed=false).
+                    self.widgets.post_message(
+                        node_id,
+                        &canvas_widgets::HostToWidget::PropsChanged { props },
+                    );
+                }
+            }
+            WidgetToHost::OpenFile { path } => {
+                // Путь — как дала нода/канвас: резолв от корня канваса,
+                // произвольные системные пути виджету недоступны (П4-дух).
+                let resolved = self.scene.canvas_dir().join(path.trim_end_matches('/'));
+                if let Err(e) = open_path_externally(&resolved) {
+                    tracing::warn!(node_id, path = %resolved.display(), error = %e, "openFile не удался");
+                    self.show_toast(format!("Виджет: не удалось открыть {}", resolved.display()));
+                }
+            }
+            WidgetToHost::ReadDir { path } => {
+                // Allowlist П4: папки файловых нод + корень канваса
+                let canvas_dir = self.scene.canvas_dir();
+                let roots = canvas_core::watched_dirs(&self.scene.canvas, &canvas_dir);
+                match canvas_widgets::permissions::resolve_fs_request(&path, &canvas_dir, &roots)
+                    .and_then(|dir| canvas_widgets::bridge::read_dir_entries(&dir))
+                {
+                    Ok(entries) => self.widgets.reply(
+                        node_id,
+                        &canvas_widgets::bridge::Reply::ok(
+                            id.clone().unwrap_or(serde_json::Value::Null),
+                            entries,
+                        ),
+                    ),
+                    Err(e) => {
+                        tracing::warn!(node_id, path, error = %e, "readDir отказан");
+                        self.reply_err(node_id, id, e);
+                    }
+                }
+            }
+            WidgetToHost::Toast { text } => {
+                tracing::info!(node_id, %text, "widget toast");
+                self.show_toast(text);
+            }
+            WidgetToHost::Resize { w, h } => {
+                // Кламп манифестных границ (160..2000, SPEC §7.6)
+                let w = w.clamp(160.0, 2000.0);
+                let h = h.clamp(160.0, 2000.0);
+                let index = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .iter()
+                    .position(|node| node.id == node_id);
+                if let Some(node) = index.map(|i| &mut self.scene.canvas.nodes[i]) {
+                    if node.width != w || node.height != h {
+                        node.width = w;
+                        node.height = h;
+                        // Геометрия изменилась — обновляем пространственный индекс
+                        // пересборкой (как при ручном resize)
+                        self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+                        self.scene.mark_dirty();
+                    }
+                }
+            }
+            WidgetToHost::StateGet { key } => {
+                let value = self.widgets.state_get(node_id, &key);
+                let result = serde_json::json!({ "value": value });
+                self.widgets.reply(
+                    node_id,
+                    &canvas_widgets::bridge::Reply::ok(
+                        id.clone().unwrap_or(serde_json::Value::Null),
+                        result,
+                    ),
+                );
+            }
+            WidgetToHost::StateSet { key, value } => {
+                self.widgets.state_set(node_id, &key, &value);
+                self.widgets.reply(
+                    node_id,
+                    &canvas_widgets::bridge::Reply::ok(
+                        id.clone().unwrap_or(serde_json::Value::Null),
+                        serde_json::json!({ "ok": true }),
+                    ),
+                );
             }
         }
+    }
+
+    /// Ответ-ошибка на запрос моста (T21-A): уведомления без id — только warn.
+    fn reply_err(
+        &mut self,
+        node_id: &str,
+        id: Option<serde_json::Value>,
+        message: impl Into<String>,
+    ) {
+        if let Some(id) = id {
+            self.widgets
+                .reply(node_id, &canvas_widgets::bridge::Reply::err(id, message));
+        }
+    }
+
+    /// Toast (T21-A): строка внизу центра на 3 с + перерисовка.
+    fn show_toast(&mut self, text: impl Into<String>) {
+        self.toast = Some((text.into(), Instant::now()));
+        self.request_redraw();
+    }
+
+    /// Rect модального диалога (screen-space, логические px): центр окна.
+    fn dialog_rect(&self) -> [f32; 4] {
+        let viewport = self.viewport_logical();
+        let w = 440.0_f32.min(viewport[0] - 40.0).max(280.0);
+        let h = 150.0;
+        [(viewport[0] - w) / 2.0, (viewport[1] - h) / 2.0, w, h]
+    }
+
+    /// Rect кнопок диалога: [Да][Нет] внизу панели (индексы как в buttons()).
+    fn dialog_button_rects(&self) -> [[f32; 4]; 2] {
+        let [x, y, w, h] = self.dialog_rect();
+        let bw = 110.0;
+        let bh = 30.0;
+        let gap = 16.0;
+        let total = bw * 2.0 + gap;
+        let start = x + (w - total) / 2.0;
+        let by = y + h - bh - 16.0;
+        [[start, by, bw, bh], [start + bw + gap, by, bw, bh]]
+    }
+
+    /// Подтверждение диалога (Enter/клик «Да»): установка или удаление.
+    fn confirm_dialog(&mut self) {
+        let Some(dialog) = self.dialog.take() else {
+            return;
+        };
+        match dialog {
+            AppDialog::InstallWidget {
+                src,
+                manifest,
+                pos,
+                updating,
+            } => {
+                match self.widgets.install_package(&src) {
+                    Ok(canvas_widgets::registry::InstallOutcome::Installed) => {
+                        self.show_toast(format!("Виджет {} установлен", manifest.name));
+                    }
+                    Ok(canvas_widgets::registry::InstallOutcome::Updated) => {
+                        self.show_toast(format!(
+                            "Виджет {} обновлён до {}",
+                            manifest.name, manifest.version
+                        ));
+                    }
+                    Ok(canvas_widgets::registry::InstallOutcome::SameVersion) => {
+                        self.show_toast(format!("Виджет {} уже в этой версии", manifest.name));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "установка виджета не удалась");
+                        self.show_toast(format!("Установка не удалась: {e}"));
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                // Нода в точке дропа (SPEC §10: «виджет ставится на канвас»);
+                // при обновлении — не дублируем (П5: props/ноды сохраняются)
+                if !updating {
+                    self.push_undo();
+                    let id = self.widgets.next_node_id(&self.scene.canvas);
+                    let node = self.widgets.build_widget_node(
+                        &manifest.id,
+                        id,
+                        [pos[0] + 40.0, pos[1] + 30.0],
+                    );
+                    if let Some(node) = node {
+                        self.scene.canvas.nodes.push(node);
+                        let index = self.scene.canvas.nodes.len() - 1;
+                        let node_ref = &self.scene.canvas.nodes[index];
+                        self.scene.spatial.insert(index, node_ref);
+                        self.scene.selected = Some(Selection::Node(index));
+                        self.scene.mark_dirty();
+                    }
+                }
+                self.request_redraw();
+            }
+            AppDialog::RemovePackage { widget_id, name } => {
+                match self.widgets.remove_package(&widget_id) {
+                    Ok(()) => {
+                        self.show_toast(format!("Пакет {name} удалён"));
+                        // Ноды пакета остаются (деградируют в заглушки —
+                        // package_ok=false в LOD); пересборка spatial не нужна
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "удаление пакета не удалось");
+                        self.show_toast(format!("Удаление не удалось: {e}"));
+                    }
+                }
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Отмена диалога (Esc/клик «Нет»): ничего не меняется.
+    fn cancel_dialog(&mut self) {
+        self.dialog = None;
+        self.request_redraw();
     }
 
     /// M5: установка виджет-ноды из подменю (центр viewport, defaultSize).
@@ -4641,6 +5117,77 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Left,
                     });
                 }
+                // T21: модальный диалог (screen-space): панель + тексты +
+                // кнопки; рендер после битой ссылки — поверх всего канваса
+                if let Some(dialog) = &self.dialog {
+                    let [dx, dy, dw, dh] = self.dialog_rect();
+                    screen_instances.push(CardInstance {
+                        pos: [dx, dy],
+                        size: [dw, dh],
+                        fill: [0.09, 0.11, 0.15, 0.97],
+                        border: [0.23, 0.51, 0.96, 1.0],
+                        params: [10.0, 0.0, 0.0, 1.0],
+                    });
+                    let buttons = self.dialog_button_rects();
+                    for (i, (label, _)) in dialog.buttons().iter().enumerate() {
+                        let [bx, by, bw, bh] = buttons[i];
+                        screen_instances.push(CardInstance {
+                            pos: [bx, by],
+                            size: [bw, bh],
+                            fill: if i == 0 {
+                                [0.16, 0.32, 0.60, 1.0]
+                            } else {
+                                [0.20, 0.23, 0.29, 1.0]
+                            },
+                            border: [0.35, 0.40, 0.50, 1.0],
+                            params: [6.0, 0.0, 0.0, 1.0],
+                        });
+                        owned_texts.push(OwnedScreenText {
+                            text: (*label).to_owned(),
+                            origin: [bx + bw / 2.0, by + 7.0],
+                            width: bw - 8.0,
+                            font_size: 14.0,
+                            color: Color::rgb(0xe8, 0xec, 0xf4),
+                            align: TextAlign::Center,
+                        });
+                    }
+                    owned_texts.push(OwnedScreenText {
+                        text: dialog.title(),
+                        origin: [dx + 20.0, dy + 16.0],
+                        width: dw - 40.0,
+                        font_size: 16.0,
+                        color: Color::rgb(0xe8, 0xec, 0xf4),
+                        align: TextAlign::Left,
+                    });
+                    owned_texts.push(OwnedScreenText {
+                        text: dialog.body(),
+                        origin: [dx + 20.0, dy + 46.0],
+                        width: dw - 40.0,
+                        font_size: 13.0,
+                        color: Color::rgb(0xb6, 0xbe, 0xce),
+                        align: TextAlign::Left,
+                    });
+                }
+                // T21: toast — строка внизу центра, живёт 3 с (T21-A).
+                // Истечение проверяем ДО рендера (без borrow-конфликта)
+                let toast_alive = self
+                    .toast
+                    .as_ref()
+                    .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < 3.0);
+                if !toast_alive {
+                    self.toast = None;
+                } else if let Some((text, _)) = &self.toast {
+                    let viewport = self.viewport_logical();
+                    let ty = viewport[1] - 44.0;
+                    owned_texts.push(OwnedScreenText {
+                        text: text.clone(),
+                        origin: [viewport[0] / 2.0, ty],
+                        width: viewport[0] - 80.0,
+                        font_size: 14.0,
+                        color: Color::rgb(0xf0, 0xe6, 0xc2),
+                        align: TextAlign::Center,
+                    });
+                }
                 let screen_texts: Vec<ScreenText> = owned_texts
                     .iter()
                     .map(|t| ScreenText {
@@ -4745,7 +5292,13 @@ impl ApplicationHandler<AppEvent> for App {
                     || self.edge_drag.is_some()
                     || self.drop_preview.is_some()
                     || self.settings_open
+                    || self.dialog.is_some()
                     || self.search.is_open();
+                // T21: модальный диалог — airspace-зона (П7): живые виджеты
+                // под ним гасятся в снапшоты, пока диалог открыт
+                if self.dialog.is_some() {
+                    widget_airspace.push(self.dialog_rect());
+                }
                 let widget_frame = self.widgets.update_frame(
                     &self.scene.canvas,
                     &self.camera,

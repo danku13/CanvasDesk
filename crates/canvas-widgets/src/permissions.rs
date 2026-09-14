@@ -101,6 +101,40 @@ pub fn required_permission(call: &WidgetToHost) -> Option<Permission> {
     }
 }
 
+/// Путь запрошенной директории в контексте allowlist (T21-A, П4): `""`/`"."`
+/// → корень канваса; относительный — от корня канваса (виджет не знает
+/// абсолютных путей — их даёт readDir родителя). Возвращает канонический
+/// абсолютный путь, ЕСЛИ он лежит внутри одного из разрешённых корней
+/// (папки файловых нод + корень канваса). Чистая функция с fs-доступом
+/// только на канонизацию — тестируется на tempdir.
+pub fn resolve_fs_request(
+    requested: &str,
+    canvas_dir: &std::path::Path,
+    allowed_roots: &[std::path::PathBuf],
+) -> Result<std::path::PathBuf, String> {
+    let requested_path = std::path::Path::new(requested.trim());
+    let joined = if requested_path.is_absolute() {
+        requested_path.to_path_buf()
+    } else {
+        canvas_dir.join(requested_path)
+    };
+    // Канонизация защищает от «..», симлинков и смешанных разделителей;
+    // несуществующий путь — ошибка до сравнения с корнями
+    let canonical = joined
+        .canonicalize()
+        .map_err(|e| format!("путь недоступен: {e}"))?;
+    let roots: Vec<std::path::PathBuf> = allowed_roots
+        .iter()
+        .chain(std::iter::once(&canvas_dir.to_path_buf()))
+        .filter_map(|r| r.canonicalize().ok())
+        .collect();
+    if roots.iter().any(|root| canonical.starts_with(root)) {
+        Ok(canonical)
+    } else {
+        Err("путь вне allowlist (доступны только папки канваса и файловых нод)".to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +212,44 @@ mod tests {
             required_permission(&WidgetToHost::Toast { text: "t".into() }),
             None
         );
+    }
+
+    #[test]
+    fn fs_allowlist_resolution() {
+        let tmp = std::env::temp_dir().join(format!("cd_perms_fs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let canvas = tmp.join("canvas");
+        let files = tmp.join("files");
+        let outside = tmp.join("outside");
+        std::fs::create_dir_all(&canvas).unwrap();
+        std::fs::create_dir_all(files.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let roots = vec![files.clone()];
+
+        // "" / "." → корень канваса
+        let got = resolve_fs_request("", &canvas, &roots).expect("корень канваса");
+        assert_eq!(got, canvas.canonicalize().unwrap());
+        assert!(resolve_fs_request(".", &canvas, &roots).is_ok());
+        // Относительный путь внутри файлового корня — но резолвится от
+        // канваса: папка файловых нод как абсолютный — ок
+        let got = resolve_fs_request(&files.join("sub").to_string_lossy(), &canvas, &roots)
+            .expect("файловый корень");
+        assert!(got.ends_with("sub"));
+        // Вне корней — отказ
+        let err = resolve_fs_request(&outside.to_string_lossy(), &canvas, &roots)
+            .expect_err("вне allowlist");
+        assert!(err.contains("allowlist"), "{err}");
+        // Traversal «..» наружу — отказ (канонизация уводит за корни)
+        let err = resolve_fs_request(
+            &canvas.join("../outside").to_string_lossy(),
+            &canvas,
+            &roots,
+        )
+        .expect_err("traversal");
+        assert!(err.contains("allowlist"), "{err}");
+        // Несуществующий путь — отказ с причиной
+        assert!(resolve_fs_request("no/such/dir", &canvas, &roots).is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

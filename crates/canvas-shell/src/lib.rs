@@ -18,6 +18,8 @@ pub mod shell_events;
 #[cfg(windows)]
 pub mod thumbs;
 pub mod watcher;
+// Объёмное состояние виджетов (T21-E): таблица в cache.db, кроссплатформенно
+pub mod widget_state;
 #[cfg(windows)]
 pub use desktop::{
     dpi_to_scale, plan_style_scrub, recovery_action, union_rects, verify_styles, DesktopEvent,
@@ -33,6 +35,7 @@ pub use service::{downscale_to_fit, Priority, ThumbService};
 #[cfg(windows)]
 pub use thumbs::ShellThumbnailProvider;
 pub use watcher::{FileEventSender, WatchService, DEBOUNCE};
+pub use widget_state::WidgetStateStore;
 
 use canvas_core::{CoreError, Thumbnail};
 

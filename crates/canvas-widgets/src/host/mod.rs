@@ -682,15 +682,16 @@ fn build_instance(
             let sender = state.borrow().sender.clone();
             match crate::bridge::parse_widget_message(&text) {
                 Ok(parsed) => {
-                    let call = match parsed {
-                        crate::bridge::Parsed::Notification(call) => call,
-                        // readDir/stateGet/stateSet с id — передаём как есть:
+                    let (call, id) = match parsed {
+                        crate::bridge::Parsed::Notification(call) => (call, None),
+                        // readDir/stateGet/stateSet с id — передаём наверх:
                         // reply уйдёт через WidgetHost::reply с тем же id
-                        crate::bridge::Parsed::Request { call, .. } => call,
+                        crate::bridge::Parsed::Request { call, id } => (call, Some(id)),
                     };
                     sender(WidgetEvent::Message {
                         node_id: node.clone(),
                         message: call,
+                        id,
                     });
                 }
                 Err(e) => {

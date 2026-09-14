@@ -22,7 +22,7 @@ Obsidian Canvas / Miro, где карточки — это ваши настоя
 | T13–T14 (M3) | ✅ | Миникарта, поиск FTS5 |
 | T15–T17 (M4) | ✅ | Desktop-режим (`--desktop`), шина событий, иконки/меню |
 | T18–T19 (M4) | ❌ | Энергосбережение, MSI — не влиты |
-| T20–T22 (M5) | 🔶 | T20 ✅ — рантайм виджетов (WebView2-хост, LOD/снапшоты, меню «Виджеты ▸»); T21/T22 — bridge-манифесты/SDK в очереди |
+| T20–T22 (M5) | 🔶 | T20 ✅, T21 ✅ — bridge/permissions/установка drag-ом, widget_state, календарь+стикер; T22 (SDK) — в очереди |
 | T23 | ❌ | Динамическая подсветка связей — в плане |
 | T24 (M6) | ✅ | MCP / BYOK (`canvas-mcp`) |
 | T25 (M6) | ❌ | SDK BYOK-виджетов — опционально, не выполнено |
@@ -116,8 +116,9 @@ serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 - [x] **M3** (T13–T14) — миникарта ✅, поиск ✅ (T11/T12 отложены после v1.0)
 - [x] **M4** (T15–T17) — встройка в десктоп (`--desktop`) ✅, шина событий ✅, иконки/меню/краш-сейф ✅ (T18/T19 — в разработке)
 - [ ] **M5** (T20–T22) — движок виджетов: T20 ✅ (рантайм, WebView2-хост,
-  LOD/снапшоты, меню); T21 (bridge/permissions/установка) и T22 (SDK) — в
-  очереди, [план](docs/plans/M5-widgets.md)
+  LOD/снапшоты, меню); T21 ✅ (bridge/permissions, установка drag-ом,
+  widget_state, календарь+стикер, RECIPES §8); T22 (SDK) — в очереди,
+  [план](docs/plans/M5-widgets.md)
 - [x] **M6** (T24) — MCP / BYOK (`canvas-mcp`) ✅; T23, T25 — в плане
 - [ ] **M7** (T26–T30) — кроссплатформенность Windows/Linux/macOS: [план](docs/plans/M7-crossplatform.md), аудит зависимостей включён
 

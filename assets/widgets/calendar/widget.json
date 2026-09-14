@@ -1,0 +1,8 @@
+{
+  "id": "com.canvasdesk.calendar",
+  "name": "Calendar",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "defaultSize": [360, 320],
+  "permissions": []
+}

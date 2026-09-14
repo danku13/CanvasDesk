@@ -9,14 +9,21 @@
 use canvas_core::{Canvas, Node, NodeKind};
 use canvas_widgets::layout::{self, CameraArgs};
 use canvas_widgets::lod::{self, Target};
-use canvas_widgets::registry::WidgetRegistry;
+use canvas_widgets::manifest::WidgetManifest;
+use canvas_widgets::permissions::Permissions;
+use canvas_widgets::registry::{InstallOutcome, WidgetRegistry};
 use canvas_widgets::{HostToWidget, ThemeInfo, WidgetEvent, WidgetProps};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::Instant;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Кулдаун пересоздания контроллера после сбоя, с (риски M5 §8).
 pub const CONTROLLER_COOLDOWN_SECS: u64 = 10;
+
+/// Окно коалесценции undo-шагов setProps (риски M5 §8): подряд идущие
+/// setProps одной ноды склеиваются в один шаг, чтобы стикер с debounce
+/// не разрастал глубину undo (как в редактировании текста).
+pub const SETPROPS_UNDO_WINDOW: Duration = Duration::from_millis(1500);
 
 /// Состояние виджета между кадрами (LOD-память).
 #[derive(Debug, Clone, Copy, Default)]
@@ -56,13 +63,27 @@ pub struct WidgetManager {
     /// Среда недоступна (Evergreen не установлен): виджеты деградируют
     /// в placeholder + HUD-сообщение (SPEC §9).
     pub runtime_dead: bool,
+    /// Объёмное состояние виджетов (T21-E): cache.db рядом с корнем пакетов;
+    /// None при сбое открытия — деградация warn + пустые значения.
+    pub state_store: Option<canvas_shell::WidgetStateStore>,
+    /// Коалесценция undo setProps (риски M5 §8): нода и время последнего шага.
+    last_props_undo: Option<(String, Instant)>,
     #[cfg(windows)]
     pub host: Option<canvas_widgets::host::WidgetHost>,
 }
 
 impl WidgetManager {
-    /// Корень пакетов: `~/.canvasdesk/widgets` (план M5 §2 «Пути»).
+    /// Корень пакетов: `~/.canvasdesk/widgets` (план M5 §2 «Пути»);
+    /// cache.db для widget_state — в родителе корня (`~/.canvasdesk`).
     pub fn new(widgets_root: PathBuf, dark: bool) -> Self {
+        let data_dir = widgets_root
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| widgets_root.clone());
+        let state_store = canvas_shell::WidgetStateStore::open(&data_dir).ok();
+        if state_store.is_none() {
+            tracing::warn!(dir = %data_dir.display(), "widget_state недоступен: cache.db не открыт");
+        }
         Self {
             registry: WidgetRegistry::new(widgets_root),
             states: HashMap::new(),
@@ -73,6 +94,8 @@ impl WidgetManager {
             started: Instant::now(),
             runtime_ready: false,
             runtime_dead: false,
+            state_store,
+            last_props_undo: None,
             #[cfg(windows)]
             host: None,
         }
@@ -466,6 +489,97 @@ impl WidgetManager {
             .collect()
     }
 
+    /// Permissions пакета ноды (T21-A): enforcement на каждый вызов моста.
+    /// Owned-клон: сообщения моста редкие (debounce виджетов), аллокация
+    /// на вызов пренебрежима;
+    pub fn permissions_of_node(&self, canvas: &Canvas, node_id: &str) -> Option<Permissions> {
+        let ext = canvas.node(node_id)?.canvasdesk.as_ref()?;
+        let pkg = self.registry.get(&ext.widget_id)?;
+        Some(Permissions::new(pkg.manifest.permissions.iter().copied()))
+    }
+
+    /// Манифест пакета ноды (диалоги, install-контекст).
+    pub fn manifest_of_node<'a>(
+        &'a self,
+        canvas: &'a Canvas,
+        node_id: &str,
+    ) -> Option<&'a WidgetManifest> {
+        let ext = canvas.node(node_id)?.canvasdesk.as_ref()?;
+        Some(&self.registry.get(&ext.widget_id)?.manifest)
+    }
+
+    /// Установка пакета из папки (T21-B: подтверждённый диалогом drag).
+    /// Возвращает исход (Installed/Updated/SameVersion) для toast-сообщения.
+    /// При обновлении уничтожает live-инстансы пакета — следующий кадр
+    /// пересоздаст их с новым манифестом (план M5 §4.8).
+    pub fn install_package(&mut self, src: &Path) -> Result<InstallOutcome, String> {
+        let manifest = WidgetManifest::from_dir(src).map_err(|e| e.to_string())?;
+        let outcome = self.registry.install(src).map_err(|e| e.to_string())?;
+        if matches!(outcome, InstallOutcome::Updated) {
+            self.destroy_instances_of(&manifest.id);
+        }
+        Ok(outcome)
+    }
+
+    /// Удаление пакета (T21-C, П11): registry.remove + уничтожение
+    /// live-инстансов; ноды пакета остаются в модели и деградируют в
+    /// placeholder (package_ok=false в LOD), как битые ссылки файлов.
+    pub fn remove_package(&mut self, widget_id: &str) -> Result<(), String> {
+        self.registry.remove(widget_id).map_err(|e| e.to_string())?;
+        self.destroy_instances_of(widget_id);
+        Ok(())
+    }
+
+    /// Инстансы пакета → destroy + сброс LOD-памяти (обновление/удаление).
+    /// `widget_id` — для трейсинга (destroy идёт по всем известным нодам:
+    /// список нод пакета живёт в сцене, недоступной менеджеру).
+    fn destroy_instances_of(&mut self, widget_id: &str) {
+        tracing::debug!(widget_id, "сброс live-инстансов пакета");
+        // Список нод пакета неизвестен менеджеру без сцены — уничтожаем
+        // все инстансы через host (безопасно: следующий кадр вернёт live)
+        // и чистим кулдауны/снапшот-метки тех нод, чьи состояния есть.
+        #[cfg(windows)]
+        if let Some(host) = &self.host {
+            let mut frame = canvas_widgets::FrameApplication::default();
+            for node_id in self.states.keys() {
+                frame.destroy.push(node_id.clone());
+            }
+            host.apply(&frame);
+        }
+        let ids: Vec<String> = self.states.keys().cloned().collect();
+        for id in ids {
+            self.states.remove(&id);
+            self.cooldown_until.remove(&id);
+        }
+    }
+
+    /// Undo-коалесценция setProps (риски M5 §8): Ok(()) — нужен новый
+    /// undo-шаг; Err(()) — склеиваем с предыдущим (та же нода в окне).
+    /// План намекал на сравнение снапшотов — окно времени проще и не
+    /// держит копии props.
+    pub fn should_push_props_undo(&mut self, node_id: &str) -> bool {
+        let now = Instant::now();
+        let coalesce = self.last_props_undo.as_ref().is_some_and(|(id, at)| {
+            id == node_id && now.duration_since(*at) < SETPROPS_UNDO_WINDOW
+        });
+        if !coalesce {
+            self.last_props_undo = Some((node_id.to_owned(), now));
+        }
+        !coalesce
+    }
+
+    /// stateGet (T21-A): изолированное хранилище ноды.
+    pub fn state_get(&self, node_id: &str, key: &str) -> Option<String> {
+        self.state_store.as_ref()?.get(node_id, key)
+    }
+
+    /// stateSet (T21-A).
+    pub fn state_set(&mut self, node_id: &str, key: &str, value: &str) {
+        if let Some(store) = self.state_store.as_mut() {
+            store.set(node_id, key, value);
+        }
+    }
+
     pub fn runtime_status(&self) -> &'static str {
         if self.runtime_dead {
             "виджеты: WebView2 недоступен"
@@ -566,6 +680,37 @@ mod tests {
         let m = manager("ids");
         let canvas = canvas_with_clock();
         assert_eq!(m.next_node_id(&canvas), "widget-2");
+    }
+
+    #[test]
+    fn setprops_undo_coalesces_within_window() {
+        // T21-A: подряд идущие setProps одной ноды — один undo-шаг;
+        // другая нода — новый шаг
+        let mut m = manager("coalesce");
+        assert!(m.should_push_props_undo("widget-1"), "первый — шаг");
+        assert!(!m.should_push_props_undo("widget-1"), "склейка в окне");
+        assert!(!m.should_push_props_undo("widget-1"), "и ещё раз");
+        assert!(m.should_push_props_undo("widget-2"), "другая нода — шаг");
+        assert!(!m.should_push_props_undo("widget-2"), "склейка второй");
+    }
+
+    #[test]
+    fn widget_state_roundtrip_through_manager() {
+        // T21-E: store в cache.db рядом с корнем пакетов (widgets.parent())
+        let mut m = manager("state");
+        assert_eq!(m.state_get("widget-1", "draft"), None);
+        m.state_set("widget-1", "draft", "текст");
+        assert_eq!(m.state_get("widget-1", "draft"), Some("текст".into()));
+        // Изоляция нод
+        assert_eq!(m.state_get("widget-2", "draft"), None);
+        // cache.db лежит в родителе корня пакетов
+        assert!(m
+            .registry
+            .root()
+            .parent()
+            .unwrap()
+            .join("cache.db")
+            .exists());
     }
 
     #[test]

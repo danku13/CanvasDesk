@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<!-- Встроенный виджет CanvasDesk «Календарь» (T21-D): месяц × дни,
+     клик дня — заметка (props.notes: {"YYYY-MM-DD": "текст"}), тема из init.
+     Bridge v0 — прямой postMessage (T22 формализует в sdk/canvasdesk.ts). -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'">
+<style>
+  :root {
+    --bg: #1e2430; --fg: #e8ecf4; --muted: #8a93a6;
+    --accent: #3B82F6; --cell: #262e3d; --cell-hover: #313b4e;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; box-sizing: border-box;
+    background: var(--bg); color: var(--fg); padding: 10px;
+    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+    border-radius: 6px; user-select: none;
+  }
+  #head { display: flex; align-items: center; justify-content: space-between; }
+  #head b { font-size: 15px; text-transform: capitalize; }
+  #head button {
+    background: var(--cell); color: var(--fg); border: 0; border-radius: 4px;
+    width: 26px; height: 22px; cursor: pointer; font-size: 13px;
+  }
+  #head button:hover { background: var(--cell-hover); }
+  #grid {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px;
+    flex: 1; margin-top: 8px;
+  }
+  .dow { font-size: 10px; color: var(--muted); text-align: center; padding: 2px 0; }
+  .day {
+    background: var(--cell); border-radius: 4px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; position: relative;
+  }
+  .day:hover { background: var(--cell-hover); }
+  .day.today { outline: 1.5px solid var(--accent); }
+  .day.hasnote::after {
+    content: ""; position: absolute; bottom: 4px; left: 50%;
+    width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .day.selected { background: var(--accent); color: #fff; }
+  #note {
+    margin-top: 8px; border: 0; border-radius: 4px; box-sizing: border-box;
+    background: var(--cell); color: var(--fg); padding: 7px 9px;
+    font: 13px "Segoe UI", system-ui, sans-serif; resize: none;
+    height: 52px; display: none;
+  }
+</style>
+</head>
+<body>
+  <div id="head">
+    <button id="prev" title="Предыдущий месяц">&#9664;</button>
+    <b id="month">&nbsp;</b>
+    <button id="next" title="Следующий месяц">&#9654;</button>
+  </div>
+  <div id="grid"></div>
+  <textarea id="note" placeholder="Заметка на день (Enter — сохранить)"></textarea>
+<script>
+(function () {
+  "use strict";
+  var elMonth = document.getElementById("month");
+  var elGrid = document.getElementById("grid");
+  var elNote = document.getElementById("note");
+  var props = { notes: {} };
+  var visible = true;
+  var cursor = new Date(); cursor.setDate(1); // текущий месяц
+  var selected = null; // "YYYY-MM-DD"
+
+  function applyTheme(theme) {
+    if (!theme) return;
+    var root = document.documentElement.style;
+    root.setProperty("--bg", theme.dark ? "#1e2430" : "#f5f7fb");
+    root.setProperty("--fg", theme.dark ? "#e8ecf4" : "#1a2233");
+    root.setProperty("--muted", theme.dark ? "#8a93a6" : "#5b6575");
+    root.setProperty("--cell", theme.dark ? "#262e3d" : "#e8ecf4");
+    root.setProperty("--cell-hover", theme.dark ? "#313b4e" : "#dce4f0");
+    root.setProperty("--accent", theme.accent || "#3B82F6");
+  }
+
+  function iso(d) {
+    return d.getFullYear() + "-" +
+      String(d.getMonth() + 1).padStart(2, "0") + "-" +
+      String(d.getDate()).padStart(2, "0");
+  }
+
+  function render() {
+    elMonth.textContent = cursor.toLocaleDateString("ru-RU", {
+      month: "long", year: "numeric"
+    });
+    elGrid.textContent = "";
+    ["пн", "вт", "ср", "чт", "пт", "сб", "вс"].forEach(function (d) {
+      var cell = document.createElement("div");
+      cell.className = "dow"; cell.textContent = d;
+      elGrid.appendChild(cell);
+    });
+    var first = new Date(cursor);
+    var shift = (first.getDay() + 6) % 7; // пн=0
+    var today = iso(new Date());
+    var days = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+    for (var i = 0; i < shift; i++) elGrid.appendChild(document.createElement("div"));
+    for (var d = 1; d <= days; d++) {
+      (function (d) {
+        var date = new Date(cursor.getFullYear(), cursor.getMonth(), d);
+        var key = iso(date);
+        var cell = document.createElement("div");
+        cell.className = "day";
+        cell.textContent = String(d);
+        if (key === today) cell.classList.add("today");
+        if (props.notes && props.notes[key]) cell.classList.add("hasnote");
+        if (key === selected) cell.classList.add("selected");
+        cell.addEventListener("click", function () {
+          selected = key;
+          elNote.style.display = "block";
+          elNote.value = (props.notes && props.notes[key]) || "";
+          render();
+        });
+        elGrid.appendChild(cell);
+      })(d);
+    }
+  }
+
+  // Bridge: widget → host
+  function send(method, params) {
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage({
+        jsonrpc: "2.0", method: method, params: params || {}
+      });
+    }
+  }
+
+  function saveNote() {
+    if (!selected) return;
+    props.notes = props.notes || {};
+    if (elNote.value.trim()) props.notes[selected] = elNote.value;
+    else delete props.notes[selected];
+    send("setProps", { props: props });
+    render();
+  }
+  elNote.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNote(); }
+  });
+  elNote.addEventListener("blur", saveNote);
+
+  document.getElementById("prev").addEventListener("click", function () {
+    cursor.setMonth(cursor.getMonth() - 1); render();
+  });
+  document.getElementById("next").addEventListener("click", function () {
+    cursor.setMonth(cursor.getMonth() + 1); render();
+  });
+
+  // Bridge: host → widget
+  window.addEventListener("message", function (event) {
+    var msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0") return;
+    switch (msg.method) {
+      case "init":
+        applyTheme(msg.params && msg.params.theme);
+        if (msg.params && msg.params.props && msg.params.props.notes) {
+          props.notes = msg.params.props.notes;
+        }
+        render();
+        break;
+      case "propsChanged":
+        if (msg.params && msg.params.props) {
+          props.notes = (msg.params.props && msg.params.props.notes) || {};
+          render();
+        }
+        break;
+      case "themeChanged":
+        applyTheme(msg.params && msg.params.theme);
+        break;
+      case "visibility":
+        visible = !!(msg.params && msg.params.visible);
+        break;
+    }
+  });
+
+  send("ready");
+  render();
+})();
+</script>
+</body>
+</html>

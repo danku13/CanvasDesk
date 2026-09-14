@@ -1,0 +1,8 @@
+{
+  "id": "com.canvasdesk.sticker",
+  "name": "Sticker",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "defaultSize": [300, 220],
+  "permissions": []
+}

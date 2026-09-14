@@ -37,10 +37,13 @@ pub enum WidgetEvent {
         node_id: String,
         snapshot: snapshot::WidgetSnapshot,
     },
-    /// Сообщение виджета по мосту (WebMessageReceived).
+    /// Сообщение виджета по мосту (WebMessageReceived). `id` — идентификатор
+    /// JSON-RPC-запроса (readDir/stateGet/stateSet): хост обязан ответить
+    /// `Reply` с тем же id; у уведомлений — None (T21-A).
     Message {
         node_id: String,
         message: bridge::WidgetToHost,
+        id: Option<serde_json::Value>,
     },
     /// Тик таймера (1 c): хост проверяет, кому пора освежить снапшот.
     Tick,
