@@ -137,8 +137,8 @@ cargo build --workspace && cargo test --workspace
 `cargo check/clippy --target x86_64-pc-windows-msvc -p canvas-widgets -p
 canvas-core -p canvas-render` работает без линкера (крейты без
 C-зависимостей); canvas-app не покрыт (rusqlite требует lib.exe) — его
-Windows-компиляцию валидирует только CI. Коммиты в .github/workflows/
-делает владелец (PAT агента без scope `workflow`).
+Windows-компиляцию валидирует только CI (гейты на ubuntu/windows/macos).
+Правки `.github/workflows/` агент пушит сам — PAT со scope `workflow`.
 
 ## 7. Замечания
 
@@ -150,3 +150,40 @@ Windows-компиляцию валидирует только CI. Коммит�
   - `cargo install cargo-wix` — сборка MSI, задача T19;
   - бинарник pdfium — PDF-превью, задача T11;
   - WebView2 Evergreen bootstrapper — дистрибуция, задача T19.
+
+## 8. Устранение неполадок
+
+### Windows: LNK1104 «не удается открыть файл …canvas_app.exe»
+
+Симптом: `cargo build/run --release` падает на линковке
+(`link.exe failed with exit code: 1104`) — линкер не может открыть на
+запись `target\release\deps\canvas_app.exe`. Это **не ошибка кода**:
+CI (windows-latest) собирает тот же коммит — выходной файл на машине
+разработчика занят другим процессом. Windows блокирует exe работающего
+процесса, а `deps\canvas_app.exe` — жёсткая ссылка на файл
+`target\release\canvas-app.exe`, который запускает `cargo run`
+(в `deps/` cargo использует имя с подчёркиваниями, это тот же файл).
+
+Причины по частоте и лечение:
+
+1. **CanvasDesk запущен.** Закройте окно приложения. Если окна нет —
+   процесс может жить в фоне: режим `--desktop`, включённый автозапуск
+   (HKCU Run), либо осиротевший после закрытия терминала `cargo run`
+   экземпляр (Ctrl+C в консоли не убивает GUI-процесс — он остаётся в
+   Диспетчере задач). Лечение:
+   ```powershell
+   taskkill /f /im canvas-app.exe
+   ```
+2. **Антивирус (Windows Defender).** Real-time сканирование свежего
+   exe кратко блокирует файл — повторная сборка проходит. Для комфорта
+   добавьте исключение на папку проекта (или хотя бы `target\`):
+   «Параметры → Конфиденциальность и защита → Безопасность Windows →
+   Защита от вирусов и угроз → Управление настройками → Исключения».
+3. **Параллельные сборки.** IDE (rust-analyzer выполняет `cargo check`)
+   и ручная сборка в терминале могут конфликтовать за один выходной
+   файл — не запускайте две сборки одновременно.
+
+Linux/macOS разрешают перезапись запущенных бинарников — проблема
+специфична для Windows. Обходной путь без локальной сборки: свежие
+бинари каждого пуша в main — артефакты `build-<os>` в GitHub Actions
+(workflow CI, job artifacts).
