@@ -43,10 +43,17 @@ pub struct OwnedQuad {
 }
 
 /// Результат кадра для рендера: квады снапшотов (live не рисуем — HWND).
+/// CR-004: `live`/`broken` — id нод для решения о прозрачности карточки:
+/// контент виден (live-HWND или снапшот-текстура) → карточка прозрачна;
+/// битый пакет/рантайм → серый placeholder непрозрачен.
 pub struct FrameQuads {
     pub quads: Vec<OwnedQuad>,
     /// Число live-виджетов (диагностика/HUD).
     pub live_count: usize,
+    /// Id нод, решённых в Target::Live (контент — HWND поверх канваса).
+    pub live: Vec<String>,
+    /// Id нод в RenderMode::Broken (placeholder — карточка остаётся видимой).
+    pub broken: Vec<String>,
 }
 
 /// Менеджер виджетов приложения.
@@ -68,6 +75,9 @@ pub struct WidgetManager {
     pub state_store: Option<canvas_shell::WidgetStateStore>,
     /// Коалесценция undo setProps (риски M5 §8): нода и время последнего шага.
     last_props_undo: Option<(String, Instant)>,
+    /// CR-005 (диагностика): последний LOD-таргет каждой ноды — смена
+    /// логируется с причиной (zoom/visible/overlaid/package/runtime).
+    last_targets: HashMap<String, Target>,
     #[cfg(windows)]
     pub host: Option<canvas_widgets::host::WidgetHost>,
 }
@@ -96,6 +106,7 @@ impl WidgetManager {
             runtime_dead: false,
             state_store,
             last_props_undo: None,
+            last_targets: HashMap::new(),
             #[cfg(windows)]
             host: None,
         }
@@ -222,6 +233,33 @@ impl WidgetManager {
         self.reap_missing(canvas);
 
         let decisions = lod::plan_frame(&inputs, tick, &self.last_capture);
+        // CR-005 (диагностика): лог смены LOD-состояния каждой ноды с
+        // контекстом решения — воспроизводимая причина на машине владельца
+        // (WIDGETS.md §10: «часы не тикают» → видно, где застряла нода)
+        for d in &decisions {
+            let changed = self
+                .last_targets
+                .get(&d.node_id)
+                .is_none_or(|prev| *prev != d.target);
+            if changed {
+                let w = inputs.iter().find(|w| w.node_id == d.node_id);
+                tracing::info!(
+                    node_id = %d.node_id,
+                    target = ?d.target,
+                    final_capture = d.final_capture,
+                    refresh_snapshot = d.refresh_snapshot,
+                    zoom = w.map(|w| w.zoom).unwrap_or(0.0),
+                    visible = w.map(|w| w.visible).unwrap_or(false),
+                    overlaid = w.map(|w| w.overlaid).unwrap_or(false),
+                    package_ok = w.map(|w| w.package_ok).unwrap_or(false),
+                    runtime_ok = w.map(|w| w.runtime_ok).unwrap_or(false),
+                    "виджет: смена LOD-состояния"
+                );
+                if let Some(w) = w {
+                    self.last_targets.insert(w.node_id.clone(), d.target);
+                }
+            }
+        }
 
         // Host-применение (Windows) и обновление состояний
         let mut live = Vec::new();
@@ -230,11 +268,14 @@ impl WidgetManager {
         let mut destroy = Vec::new();
         let mut refresh = Vec::new();
         let mut quads: Vec<OwnedQuad> = Vec::new();
+        let mut live_ids: Vec<String> = Vec::new();
+        let mut broken_ids: Vec<String> = Vec::new();
         let mut live_count = 0usize;
         for d in &decisions {
             match d.target {
                 Target::Live => {
                     live_count += 1;
+                    live_ids.push(d.node_id.clone());
                     let node = canvas
                         .node(&d.node_id)
                         .expect("решение только по существующим нодам");
@@ -300,6 +341,10 @@ impl WidgetManager {
                     });
                 }
             }
+            // CR-004: битые (placeholder) — карточка остаётся непрозрачной
+            if d.render_mode() == lod::RenderMode::Broken {
+                broken_ids.push(d.node_id.clone());
+            }
         }
 
         let frame = canvas_widgets::FrameApplication {
@@ -310,7 +355,12 @@ impl WidgetManager {
             refresh,
         };
         self.apply_host(frame);
-        FrameQuads { quads, live_count }
+        FrameQuads {
+            quads,
+            live_count,
+            live: live_ids,
+            broken: broken_ids,
+        }
     }
 
     /// Рантайм для LOD: на Windows — среда готова или ещё создаётся; на
@@ -344,6 +394,7 @@ impl WidgetManager {
             self.states.remove(&id);
             self.last_capture.remove(&id);
             self.cooldown_until.remove(&id);
+            self.last_targets.remove(&id);
             self.destroy_host_instance(&id);
         }
     }
@@ -393,7 +444,16 @@ impl WidgetManager {
                     self.cooldown_until.remove(node_id);
                 }
             }
-            WidgetEvent::SnapshotReady { node_id, .. } => {
+            WidgetEvent::SnapshotReady { node_id, snapshot } => {
+                // CR-005 (диагностика): маркер захвата — размер и момент;
+                // «часы не тикают» проверяется по частоте этих строк
+                tracing::debug!(
+                    node_id = %node_id,
+                    width = snapshot.width,
+                    height = snapshot.height,
+                    tick = self.tick(),
+                    "снапшот виджета захвачен"
+                );
                 self.last_capture.insert(node_id.clone(), self.tick());
             }
             WidgetEvent::Message { .. } | WidgetEvent::Tick => {}

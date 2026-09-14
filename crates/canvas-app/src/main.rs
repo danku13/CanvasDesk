@@ -3759,6 +3759,13 @@ impl App {
                         // (ShellExecuteEx SEE_MASK_INVOKEIDLIST);
                         // text-ноды — редактирование (T7)
                         Some(index) => {
+                            // CR-006: у виджет-ноды текстового редактора нет —
+                            // двойной клик (по хрому) не открывает его; клики
+                            // по контенту до этой ветки не доходят (guard выше)
+                            if self.scene.canvas.nodes[index].kind() == NodeKind::Widget {
+                                self.request_redraw();
+                                return;
+                            }
                             #[cfg(windows)]
                             if let Some(file) = self.scene.canvas.nodes[index].file.clone() {
                                 let path = resolve_node_path(&file, &self.scene.canvas_dir());
@@ -3793,6 +3800,26 @@ impl App {
                 }
                 match hit {
                     Some(index) => {
+                        // CR-006: ЛКМ по КОНТЕНТУ виджет-ноды — ввод принадлежит
+                        // виджету (WIDGETS.md §8.5). Ни выделения, ни drag,
+                        // ни рамки выделения, ни семени фокуса: в live ввод
+                        // и так уходит в HWND WebView2, в snapshot/placeholder
+                        // клик глотается канвасом без оверлеев. Хром
+                        // (заголовок 28 px / рамка 8 px) — прежнее поведение.
+                        if self.scene.canvas.nodes[index].kind() == NodeKind::Widget {
+                            let node = &self.scene.canvas.nodes[index];
+                            let rect = [node.x, node.y, node.width, node.height];
+                            if canvas_widgets::layout::hit_test(&rect, world)
+                                == canvas_widgets::layout::WidgetHit::Content
+                            {
+                                tracing::debug!(
+                                    node_id = %node.id,
+                                    "клик по контенту виджета — канвас без оверлеев"
+                                );
+                                self.request_redraw();
+                                return;
+                            }
+                        }
                         // Ctrl/Shift + клик (CR-001.3): уже выделенное
                         // (в т.ч. одиночный якорь) остаётся, клик-нутая
                         // тоглится; drag с модификатором не начинается
@@ -5318,6 +5345,48 @@ impl ApplicationHandler<AppEvent> for App {
                         size: q.size,
                     })
                     .collect();
+                // CR-004: прозрачные виджет-ноды — контент реально виден
+                // (live-HWND или снапшот-текстура); placeholder битых
+                // пакетов (broken) остаётся серой карточкой. Виджет без
+                // снапшота и вне live (транзиент первого кадра) — тоже
+                // непрозрачен: иначе нода исчезала бы целиком.
+                let live_ids: std::collections::HashSet<&str> =
+                    widget_frame.live.iter().map(|s| s.as_str()).collect();
+                let broken_ids: std::collections::HashSet<&str> =
+                    widget_frame.broken.iter().map(|s| s.as_str()).collect();
+                let widget_transparent: Vec<usize> = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, node)| node.kind() == NodeKind::Widget)
+                    .filter(|(_, node)| {
+                        let id = node.id.as_str();
+                        !broken_ids.contains(id)
+                            && (live_ids.contains(id)
+                                || self
+                                    .renderer
+                                    .as_ref()
+                                    .is_some_and(|r| r.has_widget_snapshot(id)))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                // CR-004 v1: заголовок виджет-ноды виден при hover/выделении
+                let widget_title_reveal: Vec<usize> = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, node)| {
+                        node.kind() == NodeKind::Widget
+                            && (self.hovered == Some(*i)
+                                || self.scene.selected == Some(Selection::Node(*i))
+                                || self.scene.selected_nodes.contains(i))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
@@ -5360,6 +5429,8 @@ impl ApplicationHandler<AppEvent> for App {
                         edges_avoid: self.settings.edges_avoid_nodes,
                         port_zone_px: self.settings.port_zone_px,
                         focus,
+                        widget_transparent: &widget_transparent,
+                        widget_title_reveal: &widget_title_reveal,
                     };
                     match renderer.render(
                         &self.camera,

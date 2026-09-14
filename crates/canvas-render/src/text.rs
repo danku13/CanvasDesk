@@ -785,6 +785,10 @@ pub struct TitleFrame<'a> {
     /// Режим фокуса (T23, brainstorm-focus): не-фокусные ноды затемняются
     /// (цвет заголовка/иконки/тела — альфа × dim_factor). EMPTY — выключен.
     pub focus: FocusView<'a>,
+    /// CR-004 v1: индексы виджет-нод, чьи заголовки рисуются несмотря на
+    /// прозрачный хром (hover/выделение); отсортирован. Остальные виджет-ноды
+    /// заголовков не имеют вовсе (хром скрыт, имя — в поиске и меню).
+    pub widget_title_reveal: &'a [usize],
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -979,6 +983,13 @@ impl TextSystem {
                 let Some(node) = frame.canvas.nodes.get(index) else {
                     continue;
                 };
+                // CR-004 v1: у виджет-нод хром прозрачен — заголовок шейпится
+                // только для «раскрытых» (hover/выделение); в покое имени нет
+                let revealed_widget = node.kind() == NodeKind::Widget
+                    && frame.widget_title_reveal.binary_search(&index).is_ok();
+                if node.kind() == NodeKind::Widget && !revealed_widget {
+                    continue;
+                }
                 let has_icon = extension_letter(node).is_some();
                 let title_width =
                     (node.width - TITLE_PADDING * 2.0 - if has_icon { ICON_WIDTH } else { 0.0 })
@@ -1212,6 +1223,13 @@ impl TextSystem {
                     else {
                         continue;
                     };
+                    // CR-004 v1: заголовок виджет-ноды рисуется только у
+                    // «раскрытых» (hover/выделение) — хром прозрачен
+                    if node.kind() == NodeKind::Widget
+                        && !frame.widget_title_reveal.binary_search(&index).is_ok()
+                    {
+                        continue;
+                    }
                     let has_icon = entry.icon.is_some();
                     // T23 (brainstorm-focus): тексты не-фокусной ноды гаснут
                     // вместе с карточкой (фокусная и выделенная — полная

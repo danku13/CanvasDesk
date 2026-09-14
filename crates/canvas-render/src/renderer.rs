@@ -6,12 +6,13 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::{edge_midpoint, Canvas, Side, SpatialIndex, Thumbnail};
+use canvas_core::{edge_midpoint, Canvas, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
     build_draft_instances, build_edge_handle_instances, build_edge_instances, build_port_instances,
-    card_instance, dim_instance, CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
+    card_instance, dim_instance, make_widget_transparent, widget_header_hover_instance,
+    CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -147,6 +148,15 @@ pub struct SceneView<'a> {
     /// степень затемнения остального. Данные принадлежат приложению
     /// (пересчёт на кадр); `FocusView::EMPTY` — режим выключен.
     pub focus: FocusView<'a>,
+    /// CR-004: индексы виджет-нод с видимым контентом (live-HWND или
+    /// снапшот-текстура) — их карточка рисуется полностью прозрачной
+    /// (без заливки и тени; рамка выделения сохраняется). Placeholder
+    /// битых пакетов в список не входит — остаётся серой карточкой.
+    pub widget_transparent: &'a [usize],
+    /// CR-004 v1: индексы виджет-нод, чей заголовок показывается несмотря
+    /// на прозрачный хром (hover/выделение — имя пакета видно при
+    /// взаимодействии; в покое хром скрыт).
+    pub widget_title_reveal: &'a [usize],
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -676,7 +686,13 @@ impl Renderer {
             .collect();
         let has_text: Vec<bool> = indices
             .iter()
-            .map(|&index| show_titles || editing_node == Some(index))
+            .map(|&index| {
+                show_titles
+                    || editing_node == Some(index)
+                    // CR-004 v1: заголовок виджет-ноды виден при hover/
+                    // выделении, хотя хром её прозрачен
+                    || scene.widget_title_reveal.binary_search(&index).is_ok()
+            })
             .collect();
         let zplan = zorder::plan_z_order(&rects, &has_text, &has_thumb, MAX_TEXT_GROUPS);
 
@@ -711,22 +727,32 @@ impl Renderer {
                 // Карточка ноды (CR-001: в выделении — рамка как у primary)
                 let is_selected =
                     selected_node == Some(index) || scene.selected_nodes.contains(&index);
-                instances.push(card_instance(node, is_selected, &self.theme));
-                // T23 (brainstorm-focus): не-фокусные ноды затемняются
-                // (альфа заливки/рамки × dim_factor); фокусные и выделенная
-                // (приложение включает её в набор) — полной яркости
-                if scene.focus.dim > 0.0 && !scene.focus.has_node(index) {
-                    let factor = scene.focus.dim_factor();
-                    if let Some(inst) = instances.last_mut() {
-                        dim_instance(inst, factor);
-                    }
+                // CR-004: виджет-нода с видимым контентом (live/снапшот) —
+                // карточка полностью прозрачна; placeholder (битый пакет)
+                // остаётся серой карточкой — его в списке нет
+                let widget_seethrough = node.kind() == NodeKind::Widget
+                    && scene.widget_transparent.binary_search(&index).is_ok();
+                let dim_it = scene.focus.dim > 0.0 && !scene.focus.has_node(index);
+                let dim_factor = scene.focus.dim_factor();
+                let mut card = card_instance(node, is_selected, &self.theme);
+                if widget_seethrough {
+                    make_widget_transparent(&mut card);
                 }
-                // Декоративные квады тела (GFM): подсветка ==…==, зачёркивание
-                // ~~…~~, буллиты/чекбоксы списков, бар цитаты, фон фенса,
-                // линия `---` — из кэша прошлого шейпинга (при промахе
-                // появятся на следующий кадр) — на z-позиции ноды, под её
-                // текстом и перекрывающими карточками; не-фокусные гаснут
-                // вместе с карточкой (T23)
+                if dim_it {
+                    dim_instance(&mut card, dim_factor);
+                }
+                instances.push(card);
+                // CR-004 v1: лёгкая подсветка полосы заголовка при hover —
+                // видимый след хрома drag-зоны (0–28 px); у выделенной —
+                // рамка по контуру уже показывает границы, подсветка лишняя
+                if widget_seethrough && scene.hovered == Some(index) && !is_selected {
+                    let mut hover = widget_header_hover_instance(node);
+                    if dim_it {
+                        dim_instance(&mut hover, dim_factor);
+                    }
+                    instances.push(hover);
+                }
+                // T23: декоративные квады тела гаснут вместе с карточкой
                 if let Some((entry_zoom, body_quads)) = self.text.body_quads(index) {
                     let (origin, _, _) = body_area(node);
                     for quad in body_quads {
@@ -847,6 +873,7 @@ impl Renderer {
                 zplan: &zplan,
                 edge_labels: &edge_labels,
                 focus: scene.focus,
+                widget_title_reveal: scene.widget_title_reveal,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

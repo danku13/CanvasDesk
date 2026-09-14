@@ -189,6 +189,37 @@ pub fn build_instances(
         .collect()
 }
 
+// --- Виджет-ноды (CR-004) ---
+
+/// Подсветка хрома виджет-ноды при hover (CR-004 v1): лёгкая акцентная
+/// полоса заголовка — единственный видимый след «карточки» (заливка и
+/// тень прозрачны); рамка остаётся drag-зоной без визуального хрома.
+pub const WIDGET_CHROME_HOVER_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.10];
+
+/// Сделать инстанс карточки виджет-ноды полностью прозрачным (CR-004):
+/// заливка — нулевая альфа, тень — выключена (params.w). Рамка выделения
+/// (params.y) и битой ссылки сохраняются — согласовано с CR-006
+/// (выделение = рамка по контуру, без заливки). Вызывается приложением
+/// ТОЛЬКО для виджетов с видимым контентом (live-HWND или снапшот):
+/// placeholder битого пакета остаётся серой карточкой (WIDGETS.md §10).
+pub fn make_widget_transparent(inst: &mut CardInstance) {
+    inst.fill = [0.0, 0.0, 0.0, 0.0];
+    inst.params[3] = 1.0;
+}
+
+/// Инстанс подсветки полосы заголовка виджет-ноды при hover (CR-004 v1):
+/// квад высотой HEADER_HEIGHT от верха ноды, без тени, радиус карточки.
+/// Рисуется сразу после прозрачной карточки — под контентом виджета.
+pub fn widget_header_hover_instance(node: &Node) -> CardInstance {
+    CardInstance {
+        pos: [node.x, node.y],
+        size: [node.width, HEADER_HEIGHT.min(node.height)],
+        fill: WIDGET_CHROME_HOVER_FILL,
+        border: [0.0; 4],
+        params: [CORNER_RADIUS, 0.0, 0.0, 1.0],
+    }
+}
+
 // --- Связи (T8) ---
 //
 // Поворотов в пайплайне нет, поэтому кривые и стрелки рисуются цепочками
@@ -916,6 +947,48 @@ mod tests {
         assert_eq!(extension_letter(&no_ext), None);
         let text = Node::text("n", "t", 0.0, 0.0);
         assert_eq!(extension_letter(&text), None);
+    }
+
+    /// CR-004: прозрачность виджет-ноды — заливка нулевая, тень выключена;
+    /// рамка выделения сохраняется; обычные ноды функция не трогает.
+    #[test]
+    fn widget_transparency() {
+        let theme = ThemeColors::dark();
+        let widget = Node::widget(
+            "w",
+            canvas_core::CanvasdeskExt {
+                widget_id: "com.canvasdesk.clock".into(),
+                props: Default::default(),
+            },
+            "Clock",
+            10.0,
+            20.0,
+            320.0,
+            200.0,
+        );
+        // Выделенная виджет-нода: рамка есть, заливки/тени нет
+        let mut inst = card_instance(&widget, true, &theme);
+        assert_eq!(inst.border, SELECTION_BORDER, "рамка выделения сохранена");
+        make_widget_transparent(&mut inst);
+        assert_eq!(inst.fill, [0.0; 4], "заливка полностью прозрачна");
+        assert_eq!(inst.params[3], 1.0, "тень выключена");
+        assert_eq!(inst.params[1], 1.0, "признак выделения не тронут");
+        // Не выделенная: рамки нет, остальное так же
+        let mut inst = card_instance(&widget, false, &theme);
+        make_widget_transparent(&mut inst);
+        assert_eq!(inst.fill, [0.0; 4]);
+        assert_eq!(inst.params[3], 1.0);
+        // Обычная текст-нода: прозрачность не применяется (защита от
+        // случайного вызова не на том типе — просто инвариант функции)
+        let mut text_inst = card_instance(&Node::text("t", "x", 0.0, 0.0), false, &theme);
+        make_widget_transparent(&mut text_inst);
+        assert_eq!(text_inst.fill, [0.0; 4]);
+        // Хром-подсветка hover: полоса заголовка, без тени
+        let hover = widget_header_hover_instance(&widget);
+        assert_eq!(hover.pos, [10.0, 20.0]);
+        assert_eq!(hover.size, [320.0, HEADER_HEIGHT]);
+        assert_eq!(hover.fill, WIDGET_CHROME_HOVER_FILL);
+        assert_eq!(hover.params[3], 1.0, "без тени");
     }
 
     /// named_color: пресеты и hex парсятся, мусор и None — None (дефолт на вызывающем).

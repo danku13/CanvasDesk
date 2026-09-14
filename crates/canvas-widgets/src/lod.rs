@@ -176,13 +176,18 @@ pub fn plan_frame(
             // Уход из live → финальный снимок до скрытия
             let final_capture = w.was_live && !is_live;
 
-            // refresh: suspended, видим, не перекрыт, зум достаточен, протух
+            // refresh: suspended, видим, не перекрыт, зум достаточен, протух.
+            // CR-005: виджет без ЕДИНОГО снапшота (ключа нет в last_capture)
+            // освежается немедленно — раньше он ждал SNAPSHOT_REFRESH_SECS
+            // от старта приложения и всё это время показывал пустую карточку
+            // вместо контента (часы — «--:--:--» или пустота).
+            let never_captured = !last_capture.contains_key(&w.node_id);
             let last = last_capture.get(&w.node_id).copied().unwrap_or(0);
             let refresh_snapshot = target == Target::Suspended
                 && w.visible
                 && !w.overlaid
                 && w.zoom >= SNAPSHOT_MIN_ZOOM
-                && tick.saturating_sub(last) >= SNAPSHOT_REFRESH_SECS;
+                && (never_captured || tick.saturating_sub(last) >= SNAPSHOT_REFRESH_SECS);
 
             WidgetDecision {
                 node_id,
@@ -308,6 +313,41 @@ mod tests {
             !seventh_decision.refresh_snapshot,
             "zoom < 0.25 — refresh не нужен"
         );
+    }
+
+    #[test]
+    fn never_captured_widget_refreshes_immediately() {
+        // CR-005: виджет без единого снапшота не ждёт SNAPSHOT_REFRESH_SECS
+        // от старта приложения — первый захват назначается в первый кадр,
+        // когда он suspended+видим. Виджет с уже снятым снапшотом живёт
+        // по обычному периоду. Зум 0.26 — оба вне live (порог входа 0.27).
+        let mut never = input("never", 1);
+        never.zoom = 0.26;
+        let mut captured = input("captured", 1);
+        captured.zoom = 0.26;
+        captured.has_instance = true;
+        let mut last = HashMap::new();
+        last.insert("captured".to_owned(), 98);
+        // tick 100: снапшоту «captured» всего 2 с — refresh не положен;
+        // «never» ключа не имеет — refresh назначен немедленно
+        let plan = plan_frame(&[never.clone(), captured.clone()], 100, &last);
+        let map = decisions(&plan);
+        assert_eq!(by_id(&map, "never").target, Target::Suspended);
+        assert_eq!(by_id(&map, "captured").target, Target::Suspended);
+        assert!(
+            by_id(&map, "never").refresh_snapshot,
+            "без снапшота — захват сразу"
+        );
+        assert!(
+            !by_id(&map, "captured").refresh_snapshot,
+            "период 5 с не истёк"
+        );
+        // Снапшот «never» снят: дальше живёт по периоду
+        let mut last = last;
+        last.insert("never".to_owned(), 100);
+        let plan = plan_frame(&[never, captured], 101, &last);
+        let map = decisions(&plan);
+        assert!(!by_id(&map, "never").refresh_snapshot, "свежий снапшот");
     }
 
     #[test]
