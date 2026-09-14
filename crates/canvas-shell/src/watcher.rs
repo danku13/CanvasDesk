@@ -1104,13 +1104,25 @@ mod tests {
 
         let batch = normalized(wait_batch(&rx, FIRST).expect("батч не пришёл"));
         assert!(batch.contains(&FileEvent::Create(norm(&file))));
-        assert_eq!(
-            batch
-                .iter()
-                .filter(|e| matches!(e, FileEvent::Create(_)))
-                .count(),
-            1
-        );
+        // Инвариант — «нет фантомных путей и потерянных событий»: множество
+        // путей Create равно {файл}. Строгий счёт ==1 здесь не инвариант
+        // продукта: FSEvents (macOS) может отдать ДВА Create-флага на одну
+        // запись (создание + закрытие), дедуп сворачивает только одинаковые
+        // (kind+path); повторная РЕГИСТРАЦИЯ вотча ловится напрямую —
+        // watched.len()==1 выше. Уникальный Create для самого файла ≤2.
+        let create_paths: HashSet<PathBuf> = batch
+            .iter()
+            .filter_map(|e| match e {
+                FileEvent::Create(path) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(create_paths, HashSet::from([norm(&file)]));
+        let file_creates = batch
+            .iter()
+            .filter(|e| matches!(e, FileEvent::Create(path) if path == &norm(&file)))
+            .count();
+        assert!(file_creates <= 2, "Create файла не больше двух: {batch:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

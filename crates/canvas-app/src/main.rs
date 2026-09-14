@@ -4985,8 +4985,10 @@ impl ApplicationHandler<AppEvent> for App {
                             let user_data = canvas_shell::default_cache_dir()
                                 .unwrap_or_default()
                                 .join("webview2");
+                            // hwnd.get() уже isize (raw-window-handle 0.6):
+                            // без каста — иначе clippy needless_cast на Windows
                             self.widgets
-                                .attach_host(win32.hwnd.get() as isize, user_data, sender);
+                                .attach_host(win32.hwnd.get(), user_data, sender);
                         }
                     }
                     // На Windows бывает только Win32-handle
