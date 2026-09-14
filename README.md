@@ -75,10 +75,10 @@ cargo test --workspace                                     # тесты
 Готовые бинари каждой сборки main — GitHub Actions → CI → артефакты
 `build-<os>` (можно скачать без локальной сборки).
 
-**LNK1104** (`не удается открыть файл …canvas_app.exe`) — не ошибка кода,
+**LNK1104** (`не удается открыть файл …canvasdesk.exe`) — не ошибка кода,
 а занятый бинарник: закройте запущенный CanvasDesk (включая фоновый
 `--desktop`/автозапуск и осиротевшие после Ctrl+C экземпляры) и
-`taskkill /f /im canvas-app.exe`; разбор причин —
+`taskkill /f /im canvasdesk.exe`; разбор причин —
 [docs/ENVIRONMENT.md §8](docs/ENVIRONMENT.md).
 
 Один exe — весь стек (FR-008): `canvasdesk.exe` — GUI-сервис; `canvasdesk.exe mcp` —

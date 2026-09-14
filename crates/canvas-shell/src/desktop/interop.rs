@@ -332,11 +332,11 @@ mod tests {
     /// Run-парсер видит exe одним токеном.
     #[test]
     fn autostart_command_simple_path() {
-        let cmd = autostart_command(r"C:\CanvasDesk\canvas-app.exe");
-        assert_eq!(cmd, r#""C:\CanvasDesk\canvas-app.exe" --desktop"#);
+        let cmd = autostart_command(r"C:\CanvasDesk\canvasdesk.exe");
+        assert_eq!(cmd, r#""C:\CanvasDesk\canvasdesk.exe" --desktop"#);
         // кавычки обрамляют именно путь (первый символ — кавычка,
         // закрывающая — сразу после .exe, до аргумента)
-        assert!(cmd.starts_with(r#""C:\CanvasDesk\canvas-app.exe""#));
+        assert!(cmd.starts_with(r#""C:\CanvasDesk\canvasdesk.exe""#));
         assert!(cmd.ends_with(&format!(" {AUTOSTART_ARG}")));
     }
 
@@ -345,7 +345,7 @@ mod tests {
     /// не искажён.
     #[test]
     fn autostart_command_path_with_spaces() {
-        let exe = r"C:\Program Files\Canvas Desk\canvas-app.exe";
+        let exe = r"C:\Program Files\Canvas Desk\canvasdesk.exe";
         let cmd = autostart_command(exe);
         assert_eq!(cmd, format!("\"{exe}\" {AUTOSTART_ARG}"));
         assert_eq!(cmd.matches('"').count(), 2);

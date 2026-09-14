@@ -58,11 +58,11 @@ jobs:
       - name: Resolve binary path (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: echo "BIN_PATH=target/release/canvas-app" >> "$GITHUB_ENV"
+        run: echo "BIN_PATH=target/release/canvasdesk" >> "$GITHUB_ENV"
       - name: Resolve binary path (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: echo "BIN_PATH=target/release/canvas-app.exe" >> "$GITHUB_ENV"
+        run: echo "BIN_PATH=target/release/canvasdesk.exe" >> "$GITHUB_ENV"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

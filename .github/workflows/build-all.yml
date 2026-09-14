@@ -9,7 +9,7 @@ on:
   workflow_dispatch: # ручной запуск из UI при необходимости
 
 env:
-  BIN_NAME: canvas-app
+  BIN_NAME: canvasdesk
 
 jobs:
   build:

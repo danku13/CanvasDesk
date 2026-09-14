@@ -282,7 +282,7 @@ Pause-контроллер по docs/RECIPES.md R15–R17 и SPEC §9:
 
 **Промпт:**
 ```
-MSI через cargo-wix: canvas-app.exe + canvas-preview-host.exe + pdfium binary + assets (включая assets/widgets/) + WebView2 Evergreen bootstrapper (SPEC §9, офлайн-фолбэк — ссылка на скачивание), ярлык, автозапуск опционально (checkbox).
+MSI через cargo-wix: canvasdesk.exe + canvas-preview-host.exe + pdfium binary + assets (включая assets/widgets/) + WebView2 Evergreen bootstrapper (SPEC §9, офлайн-фолбэк — ссылка на скачивание), ярлык, автозапуск опционально (checkbox).
 Конфиг %APPDATA%/canvasdesk/config.toml: последний канвас, режим (window/desktop), лимиты превью и виджетов.
 Структура %APPDATA%/canvasdesk/widgets/ для пользовательских виджетов (SPEC §7.6).
 Ассоциация .canvas → canvasdesk (ProgID, иконка).

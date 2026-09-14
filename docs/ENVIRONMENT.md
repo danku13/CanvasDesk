@@ -153,15 +153,15 @@ Windows-компиляцию валидирует только CI (гейты н
 
 ## 8. Устранение неполадок
 
-### Windows: LNK1104 «не удается открыть файл …canvas_app.exe»
+### Windows: LNK1104 «не удается открыть файл …canvasdesk.exe»
 
 Симптом: `cargo build/run --release` падает на линковке
 (`link.exe failed with exit code: 1104`) — линкер не может открыть на
-запись `target\release\deps\canvas_app.exe`. Это **не ошибка кода**:
+запись `target\release\deps\canvasdesk.exe`. Это **не ошибка кода**:
 CI (windows-latest) собирает тот же коммит — выходной файл на машине
 разработчика занят другим процессом. Windows блокирует exe работающего
-процесса, а `deps\canvas_app.exe` — жёсткая ссылка на файл
-`target\release\canvas-app.exe`, который запускает `cargo run`
+процесса, а `deps\canvasdesk.exe` — жёсткая ссылка на файл
+`target\release\canvasdesk.exe`, который запускает `cargo run`
 (в `deps/` cargo использует имя с подчёркиваниями, это тот же файл).
 
 Причины по частоте и лечение:
@@ -172,7 +172,7 @@ CI (windows-latest) собирает тот же коммит — выходно
    экземпляр (Ctrl+C в консоли не убивает GUI-процесс — он остаётся в
    Диспетчере задач). Лечение:
    ```powershell
-   taskkill /f /im canvas-app.exe
+   taskkill /f /im canvasdesk.exe
    ```
 2. **Антивирус (Windows Defender).** Real-time сканирование свежего
    exe кратко блокирует файл — повторная сборка проходит. Для комфорта

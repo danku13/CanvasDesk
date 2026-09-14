@@ -9,7 +9,9 @@ name = "canvas_app"
 path = "src/lib.rs"
 
 [[bin]]
-name = "canvas-app"
+# Имя дистрибутива (README/FR-008): canvasdesk / canvasdesk.exe.
+# Пакет остаётся canvas-app (workspace-пути и -p-флаги не меняются).
+name = "canvasdesk"
 path = "src/main.rs"
 
 [dependencies]
