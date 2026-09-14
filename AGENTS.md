@@ -2,14 +2,18 @@
 
 ## Проект
 
-CanvasDesk — десктоп Windows как бесконечный зумируемый канвас с файловыми карточками,
+CanvasDesk — бесконечный зумируемый канвас с файловыми карточками,
 заметками, связями и (с M5) JS/HTML-виджетами. Аналог Obsidian Canvas / Miro поверх
 реальной файловой системы; в режиме M4 — вместо стандартного рабочего стола.
-Реализация только Windows 10/11 x64, язык — Rust stable (1.80+), edition 2021.
+**Кроссплатформенный (M7): Windows 10/11 x64 — полная функциональность;
+Linux (X11/Wayland) и macOS — оконное приложение, платформенные разрывы
+закрываются по плану `docs/plans/M7-crossplatform.md`.** Язык — Rust stable
+(1.80+), edition 2021.
 
-**Текущее состояние репозитория:** стадия планирования. Кода нет — только документация
-в `docs/`. Первой задачей является T0 (инициализация cargo workspace), см. `docs/TASKS.md`.
-Всё ниже описывает целевую архитектуру, к которой код обязан приводиться с первого коммита.
+**Текущее состояние репозитория:** M1–M4 выполнены, M5 — T20 (рантайм
+виджетов) реализован, T21–T22 в очереди; M6 — T24 (MCP) выполнен.
+Кроссплатформенность (M7) — план `docs/plans/M7-crossplatform.md`.
+Статус задач — README.md и `docs/TASKS.md`.
 
 ## Документация — единственные источники истины
 
@@ -54,8 +58,12 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md
    не зависит от ОС и GPU. Платформенная логика — только за трейтами
    (`ThumbnailProvider`, `PreviewProvider`, `ShellIntegration`), чтобы core
    тестировался на любой ОС.
-2. Windows-only код — в `canvas-shell` и `canvas-widgets` под `cfg(windows)`.
-   Core обязан собираться на Linux.
+2. Платформенный код — в `canvas-shell`/`canvas-widgets`/`canvas-mcp` под
+   `cfg(windows)`/`cfg(unix)`, либо за трейтами из canvas-core (паттерн
+   `ThumbnailProvider` + `NoopThumbnailProvider`). Core и render обязаны
+   собираться и тестироваться на всех трёх ОС (CI-матрица M7).
+   Платформенные ветки не расползаются по `canvas-app`: app выбирает
+   реализацию трейта, а не ветвится по cfg на каждом вызове.
 3. Все координаты канваса — в логических пикселях (world-space); рендер — в физических
    (`scale_factor`). DPI awareness — Per-Monitor V2. После репарентинга в десктоп
    (M4) `window.scale_factor()` не доверять — поллинг `GetDpiForWindow` (RECIPES R10).
@@ -117,7 +125,9 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md
 
 ## Сборка и тесты
 
-После T0 в репозитории должны работать (CI на windows-latest, GitHub Actions):
+После T0 в репозитории должны работать (CI на ubuntu/windows/macos — матрица
+M7, ветка `ci-matrix`; до её активации — windows-latest в ci.yml + 3-ОС
+build-all):
 
 ```
 cargo build --workspace
@@ -144,4 +154,8 @@ cargo fmt --check
 - Не блокировать рендер-поток (см. выше).
 - Не слать 0x052C при существующем WorkerW; не использовать SPI_SETDESKWALLPAPER
   на raised desktop.
-- Не заменять shell (таскбар, трей остаются Explorer) и не портировать на другие ОС.
+- Не заменять shell (таскбар, трей остаются Explorer).
+- Не расползаться платформенным кодом по `canvas-app` — только трейты и
+  cfg-секции платформенных крейтов (см. «Правила архитектуры» п.2); юникс-экв
+  ачивенты Win32-приёмов — только по таблице решений `docs/plans/
+  M7-crossplatform.md` §3.2, не по памяти.

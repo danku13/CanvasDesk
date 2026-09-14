@@ -1,9 +1,12 @@
 # Настройка окружения разработки CanvasDesk
 
-Пошаговая инструкция: что установить на чистую Windows-машину, чтобы начать
-разработку (задача T0 из `docs/TASKS.md` и далее).
+Пошаговая инструкция: что установить на чистой машине, чтобы начать
+разработку (задача T0 из `docs/TASKS.md` и далее). Проект
+кроссплатформенный (M7): Windows — полная функциональность, Linux/macOS —
+оконный канвас с платформенными фичами по плану M7.
 
-Проверено на: Windows 11 25H2 (build 26200) — целевая платформа проекта.
+Проверено на: Windows 11 25H2 (build 26200), Ubuntu 24.04 (GitHub Actions
+ubuntu-latest), macOS 14 (GitHub Actions macos-latest).
 
 ---
 
@@ -75,7 +78,7 @@ rustup target add x86_64-pc-windows-msvc
 code --install-extension rust-lang.rust-analyzer
 ```
 
-## 4. Проверка установки (критерий готовности к T0)
+### Шаг 4. Проверка установки (критерий готовности к T0)
 
 В новом терминале:
 
@@ -98,7 +101,46 @@ cargo run           # бинарь собрался и вывел "Hello, world!
 `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`,
 `cargo fmt --check` — все зелёные.
 
-## 5. Замечания
+## 4. Linux (Ubuntu/Debian)
+
+Rust ставится rustup'ом, MSVC не нужен; системные пакеты — только
+для линковки (linker) и тестов SQLite (rusqlite bundled собирает С
+компилятором из системы):
+
+```bash
+sudo apt install build-essential pkg-config curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+# в новом шелле:
+rustup component add clippy rustfmt
+cargo build --workspace && cargo test --workspace
+```
+
+Особенности: тамбнейлы файлов — заглушки до T27 (план M7); drag-drop из
+файлового менеджера — до T28; MCP-транспорт — до T29; `--desktop` —
+Windows-only. Всё остальное (канвас, заметки, связи, вотчер inotify,
+поиск FTS5, минимапа, undo) работает.
+
+## 5. macOS
+
+```bash
+xcode-select --install   # clang для C-зависимостей (rusqlite bundled)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+rustup component add clippy rustfmt
+cargo build --workspace && cargo test --workspace
+```
+
+Особенности: как на Linux, но вотчер — FSEvents (совместимость уже в
+коде, 70783d1); wgpu рендерит через Metal.
+
+## 6. Кросс-чек Windows-кода с Linux (для агента/CI)
+
+`cargo check/clippy --target x86_64-pc-windows-msvc -p canvas-widgets -p
+canvas-core -p canvas-render` работает без линкера (крейты без
+C-зависимостей); canvas-app не покрыт (rusqlite требует lib.exe) — его
+Windows-компиляцию валидирует только CI. Коммиты в .github/workflows/
+делает владелец (PAT агента без scope `workflow`).
+
+## 7. Замечания
 
 - После установки Build Tools и rustup терминал нужно перезапустить —
   иначе `link.exe`/`cargo` не подхватятся из PATH.

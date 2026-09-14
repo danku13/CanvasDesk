@@ -12,10 +12,16 @@
 - M3 — живые превью (изображения, PDF, текст/код, Office через preview handlers), миникарта, поиск
 - M4 — режим встройки в рабочий стол (WorkerW): канвас за иконками, скрытие системных иконок, перехват контекстного меню
 - M5 — движок расширений: виджеты как JS/HTML-микрофронтенды на канвасе (WebView2, манифест, bridge, sandbox)
+- M7 — кроссплатформенность: Windows 10/11, Linux (X11/Wayland), macOS — сборка,
+  гейты CI и платформенные реализации (тамбнейлы, drag-drop, MCP) по плану
+  `docs/plans/M7-crossplatform.md`
 
 **Вне объёма (осознанно):**
 - Замена shell (таскбар, трей остаются Explorer)
-- macOS / Linux (архитектура не должна это блокировать, но реализация — только Windows 10/11 x64)
+- Desktop-режим (встройка в рабочий стол) вне Windows — юникс-эквиваленты
+  (layer-shell и т.п.) отложены до после v1.2; оконный режим — на всех ОС
+- Живые виджеты на Linux/macOS до завершения M5 (T21/T22): вне Windows
+  виджет-нода рендерится снапшотом/плейсхолдером
 - Облачная синхронизация, мультипользовательский режим
 - Редактирование содержимого документов внутри канваса
 - Публичный каталог/маркет виджетов, облачные виджеты, удалённая загрузка JS — виджеты только локальные пакеты, устанавливаемые пользователем явно
@@ -40,8 +46,8 @@
 | Пространственный индекс | `rstar` (R-tree) | Hit-testing, viewport culling на 5–10 тыс. нод |
 | Формат канваса | JSON Canvas spec 1.0 (`serde_json`) | Совместимость с Obsidian, human-readable |
 | Метаданные/кэш | `rusqlite` (bundled) | Тамбнейлы-кэш, индекс поиска, сессии |
-| Файловый вотчер | `notify` 6+ | ReadDirectoryChangesW под капотом |
-| Win32/COM | `windows-rs` (features: Win32_UI_Shell, Win32_Graphics_Dwm, System_Com) | Тамбнейлы, preview handlers, WorkerW |
+| Файловый вотчер | `notify` 6+ | Три бэкенда одним API: ReadDirectoryChangesW (Win), inotify (Linux), FSEvents (macOS); различия нормализуются в canvas-shell |
+| Win32/COM | `windows-rs` (features: Win32_UI_Shell, Win32_Graphics_Dwm, System_Com) | Тамбнейлы, preview handlers, WorkerW — Windows-слой |
 | Тамбнейлы | `IShellItemImageFactory::GetImage` | Системный кэш, совпадает с Explorer |
 | PDF | `pdfium-render` (бинарь pdfium, BSD-лицензия) | Быстрый рендер страниц в битмап |
 | Изображения | `image` | Декод в RGBA → GPU-текстура |

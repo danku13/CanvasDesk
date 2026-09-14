@@ -385,6 +385,74 @@ crate canvas-widgets по SPEC §7.6. Рендер виджет-ноды:
 
 **M6 done → коммит, тег v1.2 (опционально v1.1.1 при M6 без T25).**
 
+## M7. Кроссплатформенность (Windows / Linux / macOS)
+
+> **План волны M7:** `docs/plans/M7-crossplatform.md` — платформенная
+> матрица, архитектура портирования (трейты + cfg, без расползания по
+> canvas-app), полный аудит зависимостей и решения по каждому разрыву
+> (drag-drop через winit-события, FDO-тамбнейлы, UDS-транспорт MCP).
+> Директива владельца (2026-09-14): приложение кроссплатформенное,
+> собирается на Windows, Linux и macOS. Desktop-режим и живые виджеты
+> вне Windows — вне объёма v1.2 (см. план §1).
+
+### T26. Гигиена зависимостей и clippy-проба
+
+**Промпт:**
+```
+По плану M7 §4–§5 (T26):
+- canvas-app: cosmic-text перенести из [dependencies] в [dev-dependencies]
+  (используется только в integration-тестах: FontSystem, Action)
+- локальная win-проба становится clippy-пробой:
+  cargo clippy --target x86_64-pc-windows-msvc -p canvas-widgets -p canvas-core -p canvas-render
+  (урок a9488ae: check без clippy пропустил unused_mut)
+Критерий: поведение не изменилось; fmt/clippy/test зелёные; diff — только Cargo.toml.
+```
+
+### T27. Юникс-тамбнейлы (FDO-кэш + image-декод)
+
+**Промпт:**
+```
+По плану M7 §3.2: UnixThumbnailProvider за трейтом ThumbnailProvider:
+- изображения — декод через image (расширить фичи jpeg/gif/webp с обоснованием)
+- прочее — MIME-тип → заглушка-иконка
+- кэш по спецификации freedesktop thumbnails (~/.cache/thumbnails/{normal,large}),
+  инвалидация mtime, повреждённые записи — игнор с warn
+- выбор реализации в main по cfg (образец Shell/Noop-провайдеров)
+Критерий: на Linux папка с изображениями показывает тамбнейлы (не заглушки); тесты tempdir на чтение/запись/инвалидацию FDO-кэша.
+```
+
+### T28. Юникс-drag-drop (winit-события)
+
+**Промпт:**
+```
+По плану M7 §3.2: на не-Windows принимать WindowEvent::HoveredFile/DroppedFile;
+классификация — существующие plan_drop/expand_drop_paths (чистые функции);
+призрак-план — общий код без Win32-модификаторов. Windows-путь (IDropTarget)
+не трогаем.
+Критерий: drag папки из Nautilus/Dolphin разворачивается в ноды; тесты маршрута событий и ghost-состояний зелёные на Linux.
+```
+
+### T29. MCP на юниксах (Unix domain socket)
+
+**Промпт:**
+```
+По плану M7 §3.2: транспорт ~/.canvasdesk/mcp.sock (UDS) — зеркало mcp_pipe:
+- сервер в canvas-app (cfg(unix)), line-framing JSON без изменений
+- canvasdesk-mcp: детект ОС, коннект к сокету; автостарт сервиса как на Windows
+Критерий: canvasdesk mcp работает с реальным AI-клиентом на Linux; тест round-trip initialize/tools-call на tempdir-сокете.
+```
+
+### T30. Дистрибуция юниксов
+
+**Промпт:**
+```
+По плану M7 §5: rust-toolchain.toml (pin minor), артефакты tar.gz (Linux) +
+zip (macOS) в build-all, ENVIRONMENT.md — секции Linux/macOS.
+Критерий: релизная сборка на трёх ОС одним workflow; свежая машина Linux собирается по ENVIRONMENT.md без дополнительных инструкций.
+```
+
+**M7 done → коммит, тег v1.3. Гейты CI — на трёх ОС (ветка ci-matrix, пуш владельца — C-1).**
+
 
 ---
 

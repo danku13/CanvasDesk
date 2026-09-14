@@ -7,7 +7,10 @@ Obsidian Canvas / Miro, где карточки — это ваши настоя
 Формат хранения — [JSON Canvas](https://jsoncanvas.org) (`.canvas`): раскладку
 можно открыть в Obsidian и наоборот, неизвестные поля переживают round-trip.
 
-> Статус: активная разработка (M2–M4 выполнены частично или полностью; M5 и T18–T19 в работе). Платформа — только Windows 10/11 x64.
+> Статус: активная разработка. **Кроссплатформенный проект (M7): Windows 10/11
+> x64 — полная функциональность; Linux и macOS — оконный канвас, платформенные
+> фичи закрываются по плану
+> [M7](docs/plans/M7-crossplatform.md).** Сборки артефактов CI — на всех трёх ОС.
 
 ## Статус задач (T0–T25)
 
@@ -19,10 +22,11 @@ Obsidian Canvas / Miro, где карточки — это ваши настоя
 | T13–T14 (M3) | ✅ | Миникарта, поиск FTS5 |
 | T15–T17 (M4) | ✅ | Desktop-режим (`--desktop`), шина событий, иконки/меню |
 | T18–T19 (M4) | ❌ | Энергосбережение, MSI — не влиты |
-| T20–T22 (M5) | ❌ | Виджеты — заглушка, SDK/bridge/permissions в работе |
+| T20–T22 (M5) | 🔶 | T20 ✅ — рантайм виджетов (WebView2-хост, LOD/снапшоты, меню «Виджеты ▸»); T21/T22 — bridge-манифесты/SDK в очереди |
 | T23 | ❌ | Динамическая подсветка связей — в плане |
 | T24 (M6) | ✅ | MCP / BYOK (`canvas-mcp`) |
 | T25 (M6) | ❌ | SDK BYOK-виджетов — опционально, не выполнено |
+| T26–T30 (M7) | ❌ | Кроссплатформенность Win/Linux/macOS — [план](docs/plans/M7-crossplatform.md) |
 
 ## Что уже работает
 
@@ -41,9 +45,21 @@ Obsidian Canvas / Miro, где карточки — это ваши настоя
 - Производительность: spatial index (R-tree) + culling — 5000 нод при 60 fps;
   HUD с fps/p95 по F3; нагрузочный режим `--stress N`
 
+## Платформенная матрица (M7)
+
+| Возможность | Windows | Linux | macOS |
+|---|---|---|---|
+| Канвас, заметки, связи, миникарта, поиск, undo | ✅ | ✅ | ✅ |
+| Файловый вотчер | RDCW | inotify | FSEvents |
+| Тамбнейлы файлов | системные | M7 (T27) | M7 (T27) |
+| Drag-drop из файлового менеджера | ✅ | M7 (T28) | M7 (T28) |
+| MCP (AI-клиенты) | named pipe | M7 (T29, UDS) | M7 (T29, UDS) |
+| Режим «вместо рабочего стола» (`--desktop`) | ✅ | — отложено | — отложено |
+| Живые виджеты (M5) | WebView2 | снапшот/плейсхолдер до T22+ | снапшот/плейсхолдер до T22+ |
+
 ## Сборка и запуск
 
-Требования: Rust stable 1.80+ (см. `rust-toolchain.toml`), Windows SDK.
+Требования: Rust stable 1.80+; на Windows — ещё Windows SDK (MSVC).
 
 ```powershell
 cargo build --workspace --release
@@ -52,6 +68,9 @@ cargo run -p canvas-app --release -- --stress 5000         # нагрузочн�
 canvasdesk.exe mcp                                        # MCP-посредник (stdio; автостарт сервиса)
 cargo test --workspace                                     # тесты
 ```
+
+На Linux/macOS те же команды (бинарь без суффикса, пути POSIX);
+инструкции по платформам — [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 Один exe — весь стек (FR-008): `canvasdesk.exe` — GUI-сервис; `canvasdesk.exe mcp` —
 MCP-посредник для AI-клиентов (конфиг клиента: command = `canvasdesk.exe`,
@@ -87,10 +106,16 @@ serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 - [x] **M2** (T7–T10) — заметки ✅, форматирование ✅, настройки ✅, связи ✅, drag-drop ✅, файловый вотчер ✅
 - [x] **M3** (T13–T14) — миникарта ✅, поиск ✅ (T11/T12 отложены после v1.0)
 - [x] **M4** (T15–T17) — встройка в десктоп (`--desktop`) ✅, шина событий ✅, иконки/меню/краш-сейф ✅ (T18/T19 — в разработке)
-- [ ] **M5** (T20–T22) — движок виджетов (частично: `canvas-widgets` заглушка; SDK, bridge, permissions — в работе)
+- [ ] **M5** (T20–T22) — движок виджетов: T20 ✅ (рантайм, WebView2-хост,
+  LOD/снапшоты, меню); T21 (bridge/permissions/установка) и T22 (SDK) — в
+  очереди, [план](docs/plans/M5-widgets.md)
 - [x] **M6** (T24) — MCP / BYOK (`canvas-mcp`) ✅; T23, T25 — в плане
+- [ ] **M7** (T26–T30) — кроссплатформенность Windows/Linux/macOS: [план](docs/plans/M7-crossplatform.md), аудит зависимостей включён
+
+История проектирования волн — [docs/devlog/](docs/devlog/) (M5: как
+строился движок виджетов).
 
 Подробности: [docs/SPEC.md](docs/SPEC.md) — спецификация,
-[docs/TASKS.md](docs/TASKS.md) — план задач T0–T22,
+[docs/TASKS.md](docs/TASKS.md) — план задач T0–T30,
 [docs/RECIPES.md](docs/RECIPES.md) — рецепты shell-интеграции Windows,
-[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — программа ручной приёмки T8–T17.
+[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — программа ручной приёмки.
