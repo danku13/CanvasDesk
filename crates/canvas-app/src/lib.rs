@@ -426,6 +426,7 @@ pub mod ui {
         ("Ctrl+X", "вырезать ноды"),
         ("Ctrl+V", "вставить ноды"),
         ("Ctrl+D", "дублировать ноды"),
+        ("Ctrl+G", "сгруппировать выделенное"),
         ("Ctrl+клик", "добавить к выделению"),
         ("ЛКМ + drag", "рамка выделения"),
         ("ЛКМ от порта", "протянуть связь"),
@@ -1085,16 +1086,39 @@ pub mod ui {
     /// после создания membership не меняет. Канвас не мутируется —
     /// вставку делает приложение (паттерн plan_drop, T9).
     pub fn plan_group_around(canvas: &Canvas, index: usize, padding: f32) -> Option<Node> {
-        let node = canvas.nodes.get(index)?;
+        plan_group_around_nodes(canvas, &[index], padding)
+    }
+
+    /// План группы вокруг НЕСКОЛЬКИХ нод (Ctrl+G): bbox = объединение rect'ов
+    /// всех указанных нод + padding по всем сторонам, подпись по умолчанию,
+    /// id `group-N`. FR-012: группа создаётся с ЯВНЫМ списком детей (id всех
+    /// обёрнутых нод, порядок = порядок индексов) — случайное перекрытие
+    /// после создания membership не меняет. Несуществующие индексы
+    /// пропускаются; пустой набор (все мимо) — None. Канвас не мутируется —
+    /// вставку делает приложение (паттерн plan_drop, T9).
+    pub fn plan_group_around_nodes(
+        canvas: &Canvas,
+        indices: &[usize],
+        padding: f32,
+    ) -> Option<Node> {
+        let wrapped: Vec<Node> = indices
+            .iter()
+            .filter_map(|&index| canvas.nodes.get(index))
+            .cloned()
+            .collect();
+        if wrapped.is_empty() {
+            return None;
+        }
+        let [bx, by, bw, bh] = nodes_bbox(&wrapped);
         let mut group = Node::group(
             next_free_id(canvas, "group"),
-            node.x - padding,
-            node.y - padding,
-            node.width + padding * 2.0,
-            node.height + padding * 2.0,
+            bx - padding,
+            by - padding,
+            bw + padding * 2.0,
+            bh + padding * 2.0,
         );
         group.label = Some(GROUP_DEFAULT_LABEL.to_owned());
-        group.children = Some(vec![node.id.clone()]);
+        group.children = Some(wrapped.iter().map(|node| node.id.clone()).collect());
         Some(group)
     }
 
@@ -2061,6 +2085,68 @@ pub mod ui {
             assert_eq!(canvas.nodes.len(), 2);
             // Невалидный индекс
             assert!(plan_group_around(&canvas, 99, GROUP_PADDING).is_none());
+        }
+
+        /// Ctrl+G: план группы вокруг набора нод — bbox по всем + padding,
+        /// дети — явный список id выделенных (FR-012).
+        #[test]
+        fn plan_group_around_nodes_bbox() {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 80.0));
+            canvas
+                .nodes
+                .push(Node::file("b", "C:/b.png", 300.0, 200.0, 100.0, 100.0));
+            // Третья нода — вне выделения
+            canvas
+                .nodes
+                .push(Node::file("c", "C:/c.png", 1000.0, 1000.0, 50.0, 50.0));
+
+            let group =
+                plan_group_around_nodes(&canvas, &[0, 1], GROUP_PADDING).expect("ноды есть");
+            assert_eq!(group.kind(), NodeKind::Group);
+            assert_eq!(group.id, "group-1");
+            assert_eq!(group.label.as_deref(), Some(GROUP_DEFAULT_LABEL));
+            // bbox набора [0,0..400,300] + padding 40 по всем сторонам
+            assert_eq!(
+                (group.x, group.y, group.width, group.height),
+                (
+                    0.0 - GROUP_PADDING,
+                    0.0 - GROUP_PADDING,
+                    400.0 + GROUP_PADDING * 2.0,
+                    300.0 + GROUP_PADDING * 2.0
+                )
+            );
+            // FR-012: дети — ЯВНЫЙ список id выделенных, порядок = индексы
+            assert_eq!(group.children, Some(vec!["a".to_owned(), "b".to_owned()]));
+            // Канвас не мутирован планом
+            assert_eq!(canvas.nodes.len(), 3);
+        }
+
+        /// Ctrl+G: пустой набор и индексы мимо — None; невалидные индексы
+        /// пропускаются; один индекс — эквивалент plan_group_around.
+        #[test]
+        fn plan_group_around_nodes_empty_and_gaps() {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::file("a", "C:/a.png", 0.0, 0.0, 100.0, 80.0));
+            // Пустой набор — None
+            assert!(plan_group_around_nodes(&canvas, &[], GROUP_PADDING).is_none());
+            // Все индексы мимо — None
+            assert!(plan_group_around_nodes(&canvas, &[7, 9], GROUP_PADDING).is_none());
+            // Несуществующие индексы пропускаются: [5, 0] → группа вокруг «a»
+            let group =
+                plan_group_around_nodes(&canvas, &[5, 0], GROUP_PADDING).expect("валидный есть");
+            assert_eq!(group.children, Some(vec!["a".to_owned()]));
+            // Один индекс — эквивалент plan_group_around
+            let single = plan_group_around(&canvas, 0, GROUP_PADDING).expect("нода есть");
+            assert_eq!(
+                (group.x, group.y, group.width, group.height),
+                (single.x, single.y, single.width, single.height)
+            );
+            assert_eq!(group.id, single.id);
         }
 
         /// План «Создать группу»: 400×300 с центром в точке, label по умолчанию.

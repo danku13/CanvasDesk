@@ -399,3 +399,53 @@ fn test_push_out_plan_deterministic() {
     );
     assert_eq!(plan, vec![(1, [10.0, 0.0])], "только пересекающийся сосед");
 }
+
+// --- Ctrl+G: группировка мультивыделения ---
+
+use canvas_app::ui::{plan_group_around_nodes, HOTKEYS};
+
+/// Ctrl+G: мультивыделение (child-1 + outside) группируется одной группой —
+/// bbox набора + GROUP_PADDING, дети — ЯВНЫЙ список id выделенных
+/// (FR-012); хоткей задокументирован в панели F1 (HOTKEYS).
+#[test]
+fn test_group_selection_hotkey_ctrl_g() {
+    // Хоткей виден в оверлее F1
+    assert!(
+        HOTKEYS.iter().any(|(key, _)| *key == "Ctrl+G"),
+        "Ctrl+G в панели хоткеев"
+    );
+
+    let (mut canvas, mut spatial) = group_scene();
+    // Мультивыделение CR-001: child-1 (индекс 1) и outside (индекс 3);
+    // группа g (индекс 0) — вне выделения и в группу не попадает
+    let selection = [1usize, 3];
+    let group = plan_group_around_nodes(&canvas, &selection, GROUP_PADDING).expect("ноды есть");
+    assert_eq!(group.kind(), NodeKind::Group);
+    assert_eq!(group.id, "group-1");
+    assert_eq!(group.label.as_deref(), Some("Группа"));
+    // bbox набора: child-1 (50..150 × 50..130) ∪ outside (600..700 × 0..100)
+    // = [50,0..700,130] + padding 40 по всем сторонам
+    assert_eq!(
+        (group.x, group.y, group.width, group.height),
+        (
+            50.0 - GROUP_PADDING,
+            0.0 - GROUP_PADDING,
+            700.0 - 50.0 + GROUP_PADDING * 2.0,
+            130.0 - 0.0 + GROUP_PADDING * 2.0
+        )
+    );
+    // FR-012: дети — ЯВНЫЙ список id выделенных, порядок = порядок индексов
+    assert_eq!(
+        group.children.as_deref(),
+        Some(&["child-1".to_owned(), "outside".to_owned()][..])
+    );
+
+    // Вставка (паттерн App::insert_group): модель + spatial
+    canvas.nodes.push(group);
+    let gi = canvas.nodes.len() - 1;
+    spatial.insert(gi, &canvas.nodes[gi]);
+    // Случайно попавшие внутрь rect ноды не в явном списке (FR-012):
+    // геометрически внутри и child-2 (центр внутри), но список — только выделенные
+    let explicit = canvas.nodes[gi].children.clone().expect("список есть");
+    assert_eq!(explicit, vec!["child-1".to_owned(), "outside".to_owned()]);
+}

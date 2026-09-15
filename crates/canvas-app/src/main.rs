@@ -16,6 +16,7 @@ use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
     in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect,
     panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_at, point_in_rect,
+    plan_group_around_nodes,
     reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at, submenu_origin_next_to,
     submenu_rect, theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu,
     DoubleClick, DragState, EdgeDrag, PastePlacement, SettingsRow, Submenu,
@@ -1448,6 +1449,25 @@ impl App {
             PastePlacement::Offset([DUPLICATE_OFFSET, DUPLICATE_OFFSET]),
         );
         self.insert_nodes(nodes, true);
+    }
+
+    /// Сгруппировать выделенные ноды (Ctrl+G): группа с bbox по всему
+    /// набору (мультивыделение ∪ primary, CR-001) + GROUP_PADDING; дети —
+    /// явный список id (FR-012). Пустое выделение — no-op (семантика
+    /// Figma/PowerPoint: группировать нечего — действие не срабатывает).
+    /// Undo-шаг, spatial index и перенос выделения на новую группу —
+    /// внутри insert_group (паттерн «Сгруппировать» палитры).
+    fn group_selection(&mut self) {
+        let indices = self.selection_node_indices();
+        if indices.is_empty() {
+            return;
+        }
+        if let Some(group) =
+            plan_group_around_nodes(&self.scene.canvas, &indices, canvas_app::ui::GROUP_PADDING)
+        {
+            self.insert_group(group);
+            self.request_redraw();
+        }
     }
 
     /// Вырезать выделенные ноды (FR-007, Ctrl+X): копирование в буфер
@@ -3838,6 +3858,7 @@ impl App {
                         }
                     }
                     "y" | "н" => self.redo_action(),
+                    "g" | "п" => self.group_selection(),
                     _ => {}
                 }
             }
