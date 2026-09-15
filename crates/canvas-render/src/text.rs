@@ -847,6 +847,9 @@ struct CachedTitle {
     result: Option<Buffer>,
     /// FR-013: результат — диагностика (красный цвет строки).
     result_error: bool,
+    /// FR-013: ширина зашейпленной строки результата в px буфера — для
+    /// выравнивания по правому краю футера (TextArea.left = right − width).
+    result_width_px: f32,
     zoom_px: f32,
     width_px: f32,
     title_text: String,
@@ -1043,14 +1046,13 @@ impl TextSystem {
                 } else {
                     node.text.clone().unwrap_or_default()
                 };
-                // FR-013: строка результата формулы (футер карточки) — у
-                // text-нод с формулой; без готового outcome — пусто (не
-                // пересчитано, строки нет)
+                // FR-013: строка результата формулы (футер карточки). Единственный
+                // источник истины — expr_results (наполняется только для нод с
+                // формулой: явной «=» или авто-детектом последней строки);
+                // без готового outcome — пусто (не пересчитано, строки нет)
                 let (result_text, result_error) = match frame.expr_results.get(&node.id) {
-                    Some(ExprOutcome::Ok(value)) if node.expr().is_some() => {
-                        (value.to_string(), false)
-                    }
-                    Some(ExprOutcome::Err(msg)) if node.expr().is_some() => (msg.clone(), true),
+                    Some(ExprOutcome::Ok(value)) => (value.to_string(), false),
+                    Some(ExprOutcome::Err(msg)) => (msg.clone(), true),
                     _ => (String::new(), false),
                 };
 
@@ -1127,9 +1129,10 @@ impl TextSystem {
                     };
 
                     // FR-013: строка результата — одна строка в футере
-                    // карточки, шейпится вместе с остальным кэшем ноды
-                    let result = if result_text.is_empty() {
-                        None
+                    // карточки, шейпится вместе с остальным кэшем ноды;
+                    // ширина строки замеряется для правого выравнивания
+                    let (result, result_width_px) = if result_text.is_empty() {
+                        (None, 0.0)
                     } else {
                         let (_, body_width, _) = body_area(node);
                         let mut buffer = Buffer::new(
@@ -1149,7 +1152,12 @@ impl TextSystem {
                             Shaping::Advanced,
                         );
                         buffer.shape_until_scroll(&mut self.font_system, false);
-                        Some(buffer)
+                        let result_width_px = buffer
+                            .layout_runs()
+                            .next()
+                            .map(|run| run.line_w)
+                            .unwrap_or(0.0);
+                        (Some(buffer), result_width_px)
                     };
 
                     self.cache.insert(
@@ -1160,6 +1168,7 @@ impl TextSystem {
                             body,
                             result,
                             result_error,
+                            result_width_px,
                             zoom_px,
                             width_px,
                             title_text,
@@ -1299,11 +1308,9 @@ impl TextSystem {
         let mut badge_buffer: Option<Buffer> = None;
         if !show_titles
             && frame.indices.iter().any(|&index| {
-                frame
-                    .canvas
-                    .nodes
-                    .get(index)
-                    .is_some_and(|node| node.kind() == NodeKind::Text && node.expr().is_some())
+                frame.canvas.nodes.get(index).is_some_and(|node| {
+                    node.kind() == NodeKind::Text && frame.expr_results.contains_key(&node.id)
+                })
             })
         {
             let mut buffer = Buffer::new(
@@ -1423,24 +1430,26 @@ impl TextSystem {
                             });
                         }
                     }
-                    // FR-013: строка результата формулы — футер карточки;
-                    // успех — акцентный цвет, ошибка — красная диагностика
+                    // FR-013 (правка): строка результата формулы — футер
+                    // карточки, выравнивание по ПРАВОМУ краю ноды:
+                    // TextArea.left = правая граница футера − ширина строки.
+                    // Успех — акцентный цвет, ошибка — красная диагностика.
                     if let Some(result) = &entry.result {
-                        let origin = [
-                            node.x + BODY_PADDING,
-                            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
-                        ];
-                        let pos = to_physical(origin);
+                        let top_world = node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT;
+                        let left_world = node.x + BODY_PADDING;
+                        let right_world = node.x + node.width - BODY_PADDING;
+                        let right_phys = to_physical([right_world, top_world])[0];
+                        let pos = to_physical([left_world, top_world]);
+                        let left_phys = (right_phys - entry.result_width_px).round();
                         areas.push(TextArea {
                             buffer: result,
-                            left: pos[0],
+                            left: left_phys,
                             top: pos[1],
                             scale: 1.0,
                             bounds: TextBounds {
-                                left: pos[0] as i32,
+                                left: (pos[0].floor() as i32) - 1,
                                 top: pos[1] as i32,
-                                right: (pos[0] + (node.width - BODY_PADDING * 2.0) * zoom_px)
-                                    as i32,
+                                right: (right_phys.round() as i32) + 1,
                                 bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
                             },
                             default_color: if entry.result_error {

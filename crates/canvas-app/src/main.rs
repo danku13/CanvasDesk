@@ -187,6 +187,26 @@ fn split_formula_lines(text: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+/// FR-013 (правка по фидбеку владельца): Numi-семантика без префикса —
+/// последняя непустая строка текста, содержащая цифру и разбирающаяся
+/// как выражение, считается формулой. Тихий режим: любые ошибки
+/// (синтаксис, вычисление) строки результата не создают — обычный текст
+/// («Встреча в 15:00») не должен внезапно показывать красную диагностику.
+fn auto_formula_line(text: &str) -> Option<String> {
+    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    if !line.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    expr::parse(line).is_ok().then(|| line.to_owned())
+}
+
+/// FR-013: кандидат в формулы — явная формула (`canvasdesk.expr`) или
+/// авто-детект последней строки (Numi-семантика). Дешёвый предикат для
+/// резерва футера (fit_note_size) и выборки нод при массовом пересчёте.
+fn has_formula_candidate(node: &Node) -> bool {
+    node.expr().is_some() || node.text.as_deref().and_then(auto_formula_line).is_some()
+}
+
 /// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
 fn seed_canvas() -> Canvas {
     let mut canvas = Canvas::default();
@@ -267,20 +287,40 @@ impl SceneState {
     /// Формулы нет — запись удаляется. Env пустой: v1 — только локальные
     /// переменные формулы (поток значений — FR-014).
     fn recompute_expr(&mut self, node_id: &str) {
-        let outcome = match self.canvas.node(node_id).and_then(|node| node.expr()) {
+        let outcome = match self.canvas.node(node_id) {
             None => {
                 self.expr_results.remove(node_id);
                 return;
             }
-            Some(formula) => match expr::parse(formula) {
-                Ok(parsed) => match expr::eval(&parsed, &ExprEnv::empty()) {
-                    Ok(value) => ExprOutcome::Ok(value),
-                    Err(err) => ExprOutcome::Err(err.to_string()),
+            Some(node) => match node.expr() {
+                // Явная формула («=»-строки / MCP): ошибки показываются
+                // красной строкой диагностики
+                Some(formula) => match expr::parse(formula) {
+                    Ok(parsed) => match expr::eval(&parsed, &ExprEnv::empty()) {
+                        Ok(value) => Some(ExprOutcome::Ok(value)),
+                        Err(err) => Some(ExprOutcome::Err(err.to_string())),
+                    },
+                    Err(err) => Some(ExprOutcome::Err(err.to_string())),
                 },
-                Err(err) => ExprOutcome::Err(err.to_string()),
+                // FR-013 (правка): авто-детект последней строки (Numi-
+                // семантика) — тихий режим, любые ошибки — результата нет
+                None => node
+                    .text
+                    .as_deref()
+                    .and_then(auto_formula_line)
+                    .and_then(|line| expr::parse(&line).ok())
+                    .and_then(|parsed| expr::eval(&parsed, &ExprEnv::empty()).ok())
+                    .map(ExprOutcome::Ok),
             },
         };
-        self.expr_results.insert(node_id.to_owned(), outcome);
+        match outcome {
+            Some(outcome) => {
+                self.expr_results.insert(node_id.to_owned(), outcome);
+            }
+            None => {
+                self.expr_results.remove(node_id);
+            }
+        }
     }
 
     /// FR-013: пересчитать формулы всех нод (загрузка, undo/redo —
@@ -292,7 +332,7 @@ impl SceneState {
             .canvas
             .nodes
             .iter()
-            .filter(|node| node.expr().is_some())
+            .filter(|node| has_formula_candidate(node))
             .map(|node| node.id.clone())
             .collect();
         for id in ids {
@@ -1389,14 +1429,23 @@ impl App {
         }
         let (_content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
         // FR-013: резерв под строку результата формулы (футер карточки),
-        // чтобы подрезка тела результатом не прятала последнюю строку
+        // чтобы подрезка тела результатом не прятала последнюю строку.
+        // Кандидат — явная формула или последняя строка текста (авто-детект,
+        // Numi-семантика); при активном редактировании — живой текст сессии
+        let live_text = session.text();
         let expr_footer = self
             .scene
             .canvas
             .nodes
             .get(index)
-            .and_then(|node| node.expr())
-            .map(|_| RESULT_LINE_HEIGHT + 2.0)
+            .map(|node| {
+                let is_formula = node.expr().is_some() || auto_formula_line(&live_text).is_some();
+                if is_formula {
+                    RESULT_LINE_HEIGHT + 2.0
+                } else {
+                    0.0
+                }
+            })
             .unwrap_or(0.0);
         let needed_h =
             HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING + expr_footer;
@@ -8039,6 +8088,84 @@ mod tests {
             .expect("результат при загрузке")
         {
             ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
+    }
+
+    /// FR-013 (правка по фидбеку владельца): авто-детект — последняя
+    /// непустая строка текста с цифрой, разбирающаяся как выражение,
+    /// считается формулой без префикса «=» (Numi-семантика). Префиксные
+    /// строки и проза в авто-режиме выражением не являются.
+    #[test]
+    fn auto_formula_line_detects_last_expression() {
+        assert_eq!(auto_formula_line("2+2"), Some("2+2".to_owned()));
+        assert_eq!(
+            auto_formula_line("Заметка\n\n1000 rps"),
+            Some("1000 rps".to_owned())
+        );
+        assert_eq!(
+            auto_formula_line("  5 ms × 200 req/s  "),
+            Some("5 ms × 200 req/s".to_owned())
+        );
+        // Проза без цифр — не формула
+        assert_eq!(auto_formula_line("Просто текст"), None);
+        // Цифры есть, но выражение не парсится — не формула (тихий режим)
+        assert_eq!(auto_formula_line("Встреча в 15:00"), None);
+        // «=»-строка — отдельный (префиксный) путь, в авто-режиме не парсится
+        assert_eq!(auto_formula_line("= 5 ms"), None);
+        // Пустой текст
+        assert_eq!(auto_formula_line(""), None);
+        // Последняя строка пустая — берётся предыдущая непустая
+        assert_eq!(auto_formula_line("2+2\n  \n"), Some("2+2".to_owned()));
+    }
+
+    /// FR-013 (правка): формула без «=» считается при node_update_text и
+    /// при загрузке канваса (recompute_all_expr); проза результата не
+    /// создаёт. Авто-формула — runtime-вывод, canvasdesk.expr не пишется.
+    #[test]
+    fn auto_formula_computes_without_equal_prefix() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // Явной формулы нет, последняя строка — выражение: результат есть
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"Пропускная способность\n1000 rps * 2"}"#,
+        )
+        .expect("node_update_text");
+        assert_eq!(
+            scene.canvas.node("n1").and_then(Node::expr),
+            None,
+            "авто-формула не материализуется в canvasdesk.expr"
+        );
+        match scene.expr_results.get("n1").expect("результат есть") {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "2000 rps"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
+
+        // Проза: цифры в строке есть, но выражение не парсится — результата нет
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"План на 15:00"}"#,
+        )
+        .expect("node_update_text проза");
+        assert!(!scene.expr_results.contains_key("n1"), "проза — не формула");
+
+        // Загрузка канваса с авто-формулой: результат пересчитывается
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("auto", "5 ms × 200 req/s", 0.0, 0.0));
+        let scene = SceneState::new(canvas, PathBuf::from("target/tmp/auto.canvas"));
+        match scene
+            .expr_results
+            .get("auto")
+            .expect("результат при загрузке")
+        {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
             other => panic!("ожидалось значение: {other:?}"),
         }
     }
