@@ -1010,20 +1010,32 @@ pub mod ui {
         /// M5 (T20-F): «Виджеты ▸» — подменю установки виджет-нод
         /// (список пакетов реестра).
         Widgets,
+        /// T15: «Режим десктопа» — переключатель встройки канваса в рабочий
+        /// стол (WorkerW/Progman). На не-Windows — пункт скрыт. Галочка ✓ —
+        /// встройка активна; выбор снимает встройку (detach + восстановление
+        /// иконок + очистка состояния монитора).
+        DesktopMode,
     }
 
     /// Меню пустого канваса.
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 4] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 5] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
         CanvasMenuItem::Widgets,
+        CanvasMenuItem::DesktopMode,
     ];
 
     /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
-    /// фокуса, `hotkeys_open` — состояние оверлея хоткеев: для пунктов-
-    /// переключателей рисуется ✓-галочка (FR-004.1 — Hotkeys).
-    pub fn canvas_menu_label(item: CanvasMenuItem, focus_on: bool, hotkeys_open: bool) -> String {
+    /// фокуса, `hotkeys_open` — состояние оверлея хоткеев, `desktop_on` —
+    /// состояние desktop-встройки: для пунктов-переключателей рисуется
+    /// ✓-галочка (FR-004.1 — Hotkeys, T15 — DesktopMode).
+    pub fn canvas_menu_label(
+        item: CanvasMenuItem,
+        focus_on: bool,
+        hotkeys_open: bool,
+        desktop_on: bool,
+    ) -> String {
         match item {
             CanvasMenuItem::NewGroup => "Создать группу".to_owned(),
             CanvasMenuItem::FocusMode => {
@@ -1034,6 +1046,10 @@ pub mod ui {
                 if hotkeys_open { "✓ " } else { "" }
             ),
             CanvasMenuItem::Widgets => "Виджеты ▸…".to_owned(),
+            CanvasMenuItem::DesktopMode => format!(
+                "{}Режим десктопа",
+                if desktop_on { "✓ " } else { "" }
+            ),
         }
     }
 
@@ -1990,36 +2006,46 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 4);
+            assert_eq!(n, 5);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
             assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false, false),
                 "Виджеты ▸…"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false, false),
                 "Создать группу"
             );
             // T23: второй пункт — переключатель фокуса с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false, false),
                 "✓ Фокус на связях"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false, false),
                 "Фокус на связях"
             );
             // FR-004.1: третий пункт — переключатель оверлея хоткеев
             assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true),
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true, false),
                 "✓ Горячие клавиши (F1)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false, false),
                 "Горячие клавиши (F1)"
+            );
+            // T15: пятый пункт — переключатель desktop-режима с ✓-галочкой
+            assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, true),
+                "✓ Режим десктопа"
+            );
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, false),
+                "Режим десктопа"
             );
             let y = 50.0 + MENU_PADDING + 3.0;
             assert_eq!(menu_item_at_for(origin, [110.0, y], n), Some(0));

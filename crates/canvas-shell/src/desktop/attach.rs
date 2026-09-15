@@ -278,6 +278,71 @@ pub fn attach(
     unreachable!("цикл выше возвращает на каждой итерации");
 }
 
+/// Выход из desktop-встройки (обратная к [`attach`]): SetParent(None) →
+/// top-level, scrub-план «обычного» окна (снять WS_CHILDWINDOW, добавить
+/// WS_OVERLAPPEDWINDOW; снять layered/noactivate, оставленные scrub-планом
+/// desktop-режима), убрать layered-атрибуты, ужать до рабочей области
+/// (если fullscreen).
+///
+/// Не-фатальная деградация (R14, как и в attach): любой провал шага —
+/// warn, окно остаётся в текущем состоянии. Вызывающий (`App::leave_desktop`)
+/// в любом случае сбрасывает внутреннее состояние desktop-режима
+/// (`desktop_hierarchy`, `icon_guard`, монитор) — канвас остаётся
+/// интерактивным, даже если визуально окно уезжает на весь экран или
+/// остаётся дочерним (Win32 не может «отказать» в смене parent, но
+/// `SetParent(None)` на окне, не имеющем parent — no-op).
+pub fn detach(hwnd: HWND) -> Result<(), AttachError> {
+    // ---- Шаг 1: восстановить top-level (SetParent(None)) ---------------
+    // SAFETY: hwnd — живое winit-окно этого процесса; SetParent(None)
+    // делает окно top-level (возвращается прежний parent; NULL при
+    // окне без parent — не ошибка, а идемпотентный no-op).
+    if let Err(err) = unsafe { SetParent(hwnd, None) } {
+        tracing::warn!(%err, "detach: SetParent(None) провален — окно остаётся дочерним");
+        return Err(AttachError::SetParentFailed);
+    }
+    tracing::debug!("detach: SetParent(None) — окно top-level");
+
+    // ---- Шаг 2: scrub — восстановить «обычные» стили окна --------------
+    // План desktop-scrub-а снимал WS_CLIPSIBLINGS / WS_EX_APPWINDOW /
+    // WS_EX_WINDOWEDGE / WS_EX_ACCEPTFILES, добавлял WS_CHILDWINDOW,
+    // WS_EX_NOACTIVATE (и WS_EX_LAYERED на Raised). Обратный план:
+    //   style  |= WS_OVERLAPPEDWINDOW;
+    //   style  &= !WS_CHILDWINDOW;
+    //   exstyle &= !WS_EX_NOACTIVATE;
+    //   exstyle &= !WS_EX_LAYERED;        // снять layered (Raised)
+    // WS_OVERLAPPEDWINDOW = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
+    //                       WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+    // Мы НЕ возвращаем WS_EX_APPWINDOW / WS_EX_WINDOWEDGE явно — winit
+    // восстанавливает их при следующем reset-окна, оставляем только
+    // снятие desktop-флагов; задача — вернуться к интерактивному окну,
+    // не к «нативному неоновому» (это невозможно без пересоздания).
+    const WS_CHILDWINDOW: u32 = 0x4000_0000;
+    const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000; // WS_CAPTION|SYSMENU|THICKFRAME|MINIMIZE|MAXIMIZE
+    // Используем локальные константы модуля (mod.rs), как в plan_style_scrub:
+    // super::WS_EX_NOACTIVATE / super::WS_EX_LAYERED — те же значения, что в WinUser.h.
+    let cur_style = read_style_field(hwnd, GWL_STYLE);
+    let cur_exstyle = read_style_field(hwnd, GWL_EXSTYLE);
+    let new_style = (cur_style | WS_OVERLAPPEDWINDOW) & !WS_CHILDWINDOW;
+    let new_exstyle = cur_exstyle & !(super::WS_EX_NOACTIVATE | super::WS_EX_LAYERED);
+    write_style_field(hwnd, GWL_STYLE, new_style, super::StyleField::Style)?;
+    write_style_field(
+        hwnd,
+        GWL_EXSTYLE,
+        new_exstyle,
+        super::StyleField::ExStyle,
+    )?;
+    tracing::debug!(style = new_style, exstyle = new_exstyle, "detach: scrub ok");
+
+    // ---- Шаг 3: ужать до рабочей области -------------------------------
+    // Канвас после SetParent(None) остаётся fullscreen-размера (виртуальный
+    // экран) — как top-level он перекрывает Пуск/иконки. `shrink_to_work_area`
+    // уже существует и решает ровно эту задачу (R14-деградация attach).
+    shrink_to_work_area(hwnd);
+
+    tracing::info!("канвас вышел из desktop-встройки (T15 detach)");
+    Ok(())
+}
+
 /// WorkerW — последний ребёнок Progman (R2 шаг 5): GetWindow(progman,
 /// GW_CHILD) → обход GW_HWNDNEXT до GW_HWNDLAST; если последний != worker_w
 /// → SetWindowPos(worker_w, HWND_BOTTOM, NOACTIVATE|NOMOVE|NOSIZE).

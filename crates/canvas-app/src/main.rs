@@ -653,6 +653,12 @@ struct App {
     /// запросы забираются по AppEvent::McpWake. None — MCP недоступен (деградация).
     #[cfg(windows)]
     mcp_server: Option<canvas_shell::mcp_pipe::McpPipeServer>,
+    /// EventLoopProxy для спавна runtime-сервисов из методов App (T15:
+    /// `enter_desktop` спавнит desktop-монитор, если он не был поднят при
+    /// старте без --desktop). На других ОС поле не используется (метод
+    /// `enter_desktop` — no-op), но держим кроссплатформенно для uniform
+    /// структуры App.
+    proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
@@ -670,6 +676,7 @@ impl App {
         watcher: WatchService,
         search_service: SearchService,
         desktop_mode: bool,
+        proxy: EventLoopProxy<AppEvent>,
     ) -> Self {
         // M5 (T20-F): менеджер виджетов; реестр инициализируется в
         // main() (init_widgets) после настройки трейсинга
@@ -762,6 +769,7 @@ impl App {
             explorer_tracker: Default::default(),
             #[cfg(windows)]
             mcp_server: None,
+            proxy,
         }
     }
 
@@ -876,6 +884,101 @@ impl App {
             }
         }
     }
+
+    /// Включить desktop-режим в рантайме (T15): вызвать `attach_desktop` и
+    /// выставить `desktop_mode = true`. Если монитор не запущен (не было
+    /// `--desktop` при старте) — запускаем его здесь же, чтобы слежка за
+    /// WorkerW и DPI-поллинг работали сразу после встройки. Повторный вызов
+    /// (уже в desktop-режиме) — no-op.
+    ///
+    /// Любая ошибка в `attach_desktop` — не-фатальная: окно остаётся
+    /// обычным top-level, `desktop_mode` не поднимается (галочка меню не
+    /// встанет). Пользователь может повторить попытку.
+    #[cfg(windows)]
+    fn enter_desktop(&mut self) {
+        if self.desktop_mode && self.desktop_hierarchy.is_some() {
+            tracing::debug!("enter_desktop: уже в desktop-режиме — no-op");
+            return;
+        }
+        // Спавним монитор десктопа (T15), если ещё не запущен: на старте без
+        // --desktop он не поднимался, но для runtime-переключения нужен.
+        if self.desktop_monitor.is_none() {
+            let proxy = self.proxy.clone();
+            let responder: canvas_shell::desktop::monitor::DesktopResponder =
+                Arc::new(move |event| {
+                    let _ = proxy.send_event(AppEvent::Desktop(event));
+                });
+            self.set_desktop_monitor(
+                canvas_shell::desktop::monitor::DesktopMonitorService::spawn(responder),
+            );
+        }
+        let Some(raw) = self.window_hwnd() else {
+            tracing::warn!("enter_desktop: нет HWND — оконный цикл не готов");
+            return;
+        };
+        self.attach_desktop(raw);
+        // attach_desktop выставляет desktop_hierarchy при успехе — по нему
+        // определяем, что встройка удалась, и поднимаем desktop_mode.
+        if self.desktop_hierarchy.is_some() {
+            self.desktop_mode = true;
+            tracing::info!("desktop-режим включён через меню (T15 runtime toggle)");
+        } else {
+            tracing::warn!("enter_desktop: встройка не удалась — оконный режим");
+        }
+    }
+
+    /// На не-Windows — no-op: desktop-режим определяется SPEC §7.4 как
+    /// Windows-only; на Linux/macOS пункт меню скрыт, но defensive guard
+    /// держим (метод м.б. вызван через cfg-uniform код).
+    #[cfg(not(windows))]
+    fn enter_desktop(&mut self) {
+        tracing::warn!("desktop-режим не поддерживается на этой платформе");
+    }
+
+    /// Выключить desktop-режим в рантайме (T15): обратная к `enter_desktop` —
+    /// `attach::detach` (SetParent(None) + scrub-план «обычного» окна +
+    /// shrink_to_work_area), восстановление иконок (IconGuard::restore),
+    /// сброс `desktop_hierarchy` / `desktop_dpi` / `desktop_mode`. Монитор
+    /// НЕ останавливаем (он переживёт повторный enter_desktop без пересоздания
+    /// потока — Watch в resumed()/enter_desktop выставит новые хэндлы).
+    ///
+    /// Любая ошибка detach — не-фатальная: внутреннее состояние всё равно
+    /// сбрасывается (канвас остаётся интерактивным в оконном режиме, даже
+    /// если визуально окно «застряло» fullscreen — пользователь может
+    /// перезапустить приложение).
+    #[cfg(windows)]
+    fn leave_desktop(&mut self) {
+        if !self.desktop_mode {
+            tracing::debug!("leave_desktop: не в desktop-режиме — no-op");
+            return;
+        }
+        if let Some(raw) = self.window_hwnd() {
+            let hwnd = Self::hwnd(raw);
+            if let Err(err) = canvas_shell::desktop::attach::detach(hwnd) {
+                tracing::warn!(%err, "leave_desktop: detach провален — состояние сброшено, окно м.б. некорректным");
+            }
+        } else {
+            tracing::warn!("leave_desktop: нет HWND — только сброс состояния");
+        }
+        // Восстановить системные иконки (T17, R5): IconGuard::drop делает
+        // restore, но мы явно вызываем restore() для ясности и сбрасываем
+        // поле, чтобы Drop не сработал повторно при завершении приложения.
+        if let Some(mut guard) = self.icon_guard.take() {
+            guard.show();
+            // guard тут drop-нется — restore через Drop страховкой не повторяем
+            drop(guard);
+        }
+        // Снять слежку монитора (Watch с пустой иерархией — монитор переходит
+        // в режим «ждать новой иерархии», не падает).
+        self.desktop_hierarchy = None;
+        self.desktop_dpi = None;
+        self.desktop_mode = false;
+        tracing::info!("desktop-режим выключен через меню (T15 runtime toggle)");
+    }
+
+    /// На не-Windows — no-op (см. `enter_desktop`).
+    #[cfg(not(windows))]
+    fn leave_desktop(&mut self) {}
 
     /// Установить/перенавесить слежку монитора на иерархию (T15):
     /// WinEventHook на поток WorkerW + DPI-поллинг нашего окна. WorkerW=None
@@ -2493,7 +2596,12 @@ impl App {
                 });
             }
             texts.push(OwnedScreenText {
-                text: canvas_menu_label(*item, self.settings.focus_mode, self.hotkeys_open),
+                text: canvas_menu_label(
+                    *item,
+                    self.settings.focus_mode,
+                    self.hotkeys_open,
+                    self.desktop_mode && self.desktop_hierarchy.is_some(),
+                ),
                 origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
                 width: rect[2] - MENU_LABEL_X,
                 font_size: 14.0,
@@ -4229,6 +4337,30 @@ impl App {
                                         });
                                     }
                                 }
+                                // T15: переключатель desktop-режима в рантайме.
+                                // Если уже встроены (desktop_mode + иерархия) —
+                                // leave_desktop (detach + восстановление иконок
+                                // + сброс состояния); иначе enter_desktop
+                                // (attach_desktop + спавн монитора). На
+                                // не-Windows — warn (метод no-op).
+                                CanvasMenuItem::DesktopMode => {
+                                    #[cfg(windows)]
+                                    {
+                                        if self.desktop_mode
+                                            && self.desktop_hierarchy.is_some()
+                                        {
+                                            self.leave_desktop();
+                                        } else {
+                                            self.enter_desktop();
+                                        }
+                                    }
+                                    #[cfg(not(windows))]
+                                    {
+                                        tracing::warn!(
+                                            "desktop-режим не поддерживается на этой платформе"
+                                        );
+                                    }
+                                }
                             }
                             self.request_redraw();
                             return;
@@ -4580,12 +4712,17 @@ impl App {
                         // канвас / Новый текстовый файл / иконки / автозапуск /
                         // Выход); вне --desktop — меню пустого канваса
                         // (создание группы), повторный ПКМ мимо закрывает его.
-                        // Origin — логические px (screen-space меню).
+                        // Исключение: Shift+ПКМ в --desktop открывает canvas-меню
+                        // (пункт «✓ Режим десктопа» — выход из встройки без
+                        // выхода из приложения). Origin — логические px
+                        // (screen-space меню).
                         // Взаимоисключение поповеров: открытие меню прячет
                         // палитру и сбрасывает её раскрытие
                         self.palette_hover.reset();
                         #[cfg(windows)]
-                        let desktop_menu = self.desktop_mode && self.desktop_hierarchy.is_some();
+                        let desktop_menu = self.desktop_mode
+                            && self.desktop_hierarchy.is_some()
+                            && !self.modifiers.shift_key();
                         #[cfg(not(windows))]
                         let desktop_menu = false;
                         if desktop_menu {
@@ -5239,6 +5376,7 @@ fn main() -> anyhow::Result<()> {
             watcher,
             search_service,
             args.desktop,
+            proxy.clone(),
         );
         // M5 (T20-F): реестр виджетов (материализация встроенных + скан)
         app.init_widgets();
