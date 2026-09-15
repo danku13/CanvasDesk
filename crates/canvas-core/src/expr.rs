@@ -40,6 +40,12 @@ pub enum ExprOutcome {
 /// Результаты формул по id нод (`SceneState.expr_results`).
 pub type ExprResults = HashMap<String, ExprOutcome>;
 
+/// FR-013 (правка 2, Numi-стиль): построчные результаты текста ноды —
+/// runtime-кэш приложения (инвариант 4: в `.canvas` не сериализуются).
+/// Vec выровнен по строкам текста (`split('\n')`): `None` — строка без
+/// результата (проза, пустая, внутри код-фенса).
+pub type ExprLineResults = HashMap<String, Vec<Option<ExprOutcome>>>;
+
 // --- Размерности и единицы ---
 
 /// Размерность единицы (FR-013; доменные расширения — FR-015).
@@ -879,6 +885,78 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
     }
 }
 
+/// FR-013 (правка 2, Numi-стиль): построчное вычисление текста ноды.
+/// Строки образуют один сценарий с общим окружением — переменные,
+/// объявленные выше, видны ниже (Numi). Строка с префиксом `=` — ЯВНАЯ
+/// формула: ошибки парсинга/вычисления показываются; чистая строка,
+/// парсящаяся как выражение, — авто-формула: любая ошибка строку
+/// результата не создаёт (проза «Встреча в 15:00» не краснеет).
+/// Присваивание (`rps = 1000`) связывает переменную и возвращает
+/// присвоенное значение. Внутри код-фенсов (``` … ```) формулы не
+/// вычисляются — код не калькулятор.
+pub fn eval_lines(source: &str) -> Vec<Option<ExprOutcome>> {
+    let mut env = Env::empty();
+    let mut in_fence = false;
+    source
+        .split('\n')
+        .map(|line| {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+                return None;
+            }
+            if in_fence {
+                return None;
+            }
+            eval_line(line, &mut env)
+        })
+        .collect()
+}
+
+/// Одна строка сценария: результат или None (не формула / тихая ошибка).
+fn eval_line(line: &str, env: &mut Env) -> Option<ExprOutcome> {
+    let trimmed = line.trim();
+    let (statement, explicit) = match trimmed.strip_prefix('=') {
+        Some(rest) => (rest.trim(), true),
+        None => (trimmed, false),
+    };
+    if statement.is_empty() {
+        return None;
+    }
+    match parse(statement) {
+        Ok(parsed) => match eval_statement(&parsed, env) {
+            Ok(value) => Some(ExprOutcome::Ok(value)),
+            // Явная формула показывает ошибку вычисления; авто-строка тиха
+            Err(err) if explicit => Some(ExprOutcome::Err(err.to_string())),
+            Err(_) => None,
+        },
+        // Явная формула показывает ошибку парсинга; проза молчит
+        Err(err) if explicit => Some(ExprOutcome::Err(err.to_string())),
+        Err(_) => None,
+    }
+}
+
+/// Вычислить утверждение со связыванием присваиваний в ПЕРЕДАННОЕ
+/// окружение (в отличие от [`eval`], где Assign вне блока не переживает
+/// вычисление). Блок (`;` в одной строке) разворачивается в общее
+/// окружение сценария — Numi-семантика листа расчёта.
+fn eval_statement(expr: &Expr, env: &mut Env) -> Result<Value, EvalError> {
+    match expr {
+        Expr::Assign { name, rhs } => {
+            let value = eval(rhs, env)?;
+            env.vars.insert(name.clone(), value.clone());
+            Ok(value)
+        }
+        Expr::Block(statements) => {
+            let mut last = Value::scalar(0.0);
+            for statement in statements {
+                last = eval_statement(statement, env)?;
+            }
+            Ok(last)
+        }
+        other => eval(other, env),
+    }
+}
+
 /// Двоичные операции с единицами (см. доку модуля): `+`/`-` — одна
 /// размерность, правый операнд конвертируется к единице левого;
 /// `*`/`/` — символическое слияние/сокращение атомов.
@@ -1310,5 +1388,75 @@ mod tests {
     fn lexer_unicode_diagnostics() {
         let err = parse("5 μs").expect_err("μ не поддержан");
         assert!(err.msg.contains("неподдерживаемый символ"));
+    }
+
+    /// Текст результата строки сценария (для кратких проверок).
+    fn ok_text(outcome: &Option<ExprOutcome>) -> String {
+        match outcome {
+            Some(ExprOutcome::Ok(value)) => value.to_string(),
+            other => panic!("ожидался результат, получено: {other:?}"),
+        }
+    }
+
+    /// Построчное вычисление (Numi-стиль): присваивания возвращают
+    /// значение и связывают переменные, доступные нижним строкам;
+    /// проза и пустые строки — без результата.
+    #[test]
+    fn eval_lines_numi_sheet() {
+        let lines = eval_lines("Gateway\nrps = 1000\n\nlatency = 50 ms\nlatency × rps");
+        assert_eq!(lines.len(), 5, "Vec выровнен по строкам текста");
+        assert_eq!(lines[0], None, "проза — не формула");
+        assert_eq!(
+            ok_text(&lines[1]),
+            "1000",
+            "присваивание возвращает присвоенное значение (скаляр)"
+        );
+        assert_eq!(lines[2], None, "пустая строка");
+        assert_eq!(ok_text(&lines[3]), "50 ms");
+        assert_eq!(
+            ok_text(&lines[4]),
+            "50000 ms",
+            "переменные протекают между строками"
+        );
+    }
+
+    /// Явная («=») строка показывает ошибки парсинга/вычисления,
+    /// авто-строка молчит при любых ошибках.
+    #[test]
+    fn eval_lines_explicit_errors_visible() {
+        let lines = eval_lines("= 5 ms +\n5 ms +\n= 5 ms + 3 rps\n5 ms + 3 rps\n2+2");
+        assert_eq!(lines.len(), 5);
+        assert!(
+            matches!(&lines[0], Some(ExprOutcome::Err(_))),
+            "явная: ошибка парсинга видна"
+        );
+        assert_eq!(lines[1], None, "авто: ошибка парсинга тиха");
+        assert!(
+            matches!(&lines[2], Some(ExprOutcome::Err(_))),
+            "явная: ошибка вычисления видна"
+        );
+        assert_eq!(lines[3], None, "авто: ошибка вычисления тиха");
+        assert_eq!(ok_text(&lines[4]), "4");
+    }
+
+    /// Внутри код-фенсов формулы не вычисляются; после закрытия фенса
+    /// сценарий продолжается.
+    #[test]
+    fn eval_lines_skips_code_fences() {
+        let lines = eval_lines("```\nx = 5\n```\n2+2");
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], None, "открывающий фенс");
+        assert_eq!(lines[1], None, "код — не калькулятор");
+        assert_eq!(lines[2], None, "закрывающий фенс");
+        assert_eq!(ok_text(&lines[3]), "4");
+    }
+
+    /// Авто-строки: выражения с единицами и суффиксами считаются построчно.
+    #[test]
+    fn eval_lines_auto_expressions() {
+        let lines = eval_lines("1000 rps * 2\n5 ms × 200 req/s\n2k");
+        assert_eq!(ok_text(&lines[0]), "2000 rps");
+        assert_eq!(ok_text(&lines[1]), "1000 ms·req/s");
+        assert_eq!(ok_text(&lines[2]), "2000");
     }
 }

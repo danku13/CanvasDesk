@@ -56,6 +56,7 @@ fn headless_note_body_draws() {
             collapsed_counts: &[],
             // FR-013: без формул
             expr_results: &std::collections::HashMap::new(),
+            expr_line_results: &std::collections::HashMap::new(),
         },
     )
     .expect("prepare текста");

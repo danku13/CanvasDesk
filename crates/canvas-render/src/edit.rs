@@ -12,12 +12,40 @@
 //! (физические px относительно левого верхнего угла области редактирования).
 
 use canvas_core::{edge_midpoint, Canvas};
-use cosmic_text::{Action, Buffer, Cursor, Edit, Editor, FontSystem, Metrics, Motion, Selection};
+use cosmic_text::{
+    Action, AttrsList, Buffer, BufferLine, Cursor, Edit, Editor, FontSystem, LineEnding, Metrics,
+    Motion, Selection,
+};
 use glyphon::{Attrs, Shaping, Wrap};
 use winit::keyboard::{Key, NamedKey};
 
 use crate::markdown::{self, StyleFlag, StyleSpan};
 use crate::text::{body_area, rich_spans, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
+
+/// Восстановить хвостовые пустые строки буфера после `set_rich_text`:
+/// cosmic-text дробит текст через BidiParagraphs (параграфы UAX#9) и
+/// ТЕРЯЕТ хвостовой пустой абзац — «текст\n» становится одной линией,
+/// тогда как Editor и `buffer_plain()` хранят «текст\n» как две
+/// («текст», «»). Без восстановления буфер сжимается, а курсор/выделение
+/// ссылаются на несуществующие строки — следующая правка паникует в
+/// `delete_range` (index out of bounds, регресс: удаление всех строк ноды).
+/// Число линий буфера всегда приводится к `plain.split('\n').count()`.
+fn pad_trailing_lines(buffer: &mut Buffer, plain: &str) {
+    let expected = plain.split('\n').count().max(1);
+    while buffer.lines.len() < expected {
+        let defaults = buffer
+            .lines
+            .last()
+            .map(|line| line.attrs_list().defaults())
+            .unwrap_or_else(Attrs::new);
+        buffer.lines.push(BufferLine::new(
+            String::new(),
+            LineEnding::default(),
+            AttrsList::new(defaults),
+            Shaping::Advanced,
+        ));
+    }
+}
 
 /// Маркер форматирования текста заметки (пост-T7): markdown-подмножество,
 /// см. markdown.rs. Хоткеи Ctrl+B/I/H тогглят стиль выделения (WYSIWYG:
@@ -319,6 +347,10 @@ impl EditingSession {
             .last()
             .map(|line| line.text().len())
             .unwrap_or(0);
+        // set_rich_text теряет хвостовую пустую строку («текст\n» → одна
+        // линия) — восстановить до числа строк plain, иначе курсор
+        // (последняя линия, 0) сразу невалиден
+        pad_trailing_lines(&mut buffer, &plain);
         Self {
             buffer,
             cursor: Cursor::new(last_line, last_len),
@@ -433,7 +465,28 @@ impl EditingSession {
         let attrs = rich_spans(&self.plain, &self.spans, Attrs::new());
         self.buffer
             .set_rich_text(font_system, attrs, Attrs::new(), Shaping::Advanced);
+        // set_rich_text теряет хвостовые пустые строки (BidiParagraphs) —
+        // восстановить число линий и валидность курсора/выделения (регресс:
+        // паника delete_range при удалении всех строк ноды)
+        pad_trailing_lines(&mut self.buffer, &self.plain);
+        self.clamp_cursor_to_buffer();
         self.buffer.shape_until_scroll(font_system, false);
+    }
+
+    /// Курсор/выделение — в пределах буфера: линия ≤ последней, индекс ≤
+    /// длины строки. Страховка после пересборки буфера set_rich_text.
+    fn clamp_cursor_to_buffer(&mut self) {
+        let last = self.buffer.lines.len().saturating_sub(1);
+        let clamp = |lines: &[BufferLine], c: Cursor| -> Cursor {
+            let line = c.line.min(last);
+            let len = lines[line].text().len();
+            Cursor::new(line, c.index.min(len))
+        };
+        self.cursor = clamp(&self.buffer.lines, self.cursor);
+        self.selection = match self.selection {
+            Selection::Normal(anchor) => Selection::Normal(clamp(&self.buffer.lines, anchor)),
+            other => other,
+        };
     }
 
     /// Начало вставки: старт заменяемого выделения или позиция курсора
@@ -785,6 +838,50 @@ mod tests {
         // Delete на пустом — без паники и изменений
         session.apply(&mut fs, KeyCommand::Action(Action::Delete));
         assert_eq!(session.text(), "");
+    }
+
+    /// Регресс (владелец): удаление всех строк ноды паниковало в
+    /// cosmic-text delete_range («len is 1 but the index is 1»).
+    /// set_rich_text терял хвостовую пустую линию (BidiParagraphs),
+    /// курсор/выделение устаревали; refresh_styles обязан восстанавливать
+    /// линии буфера и валидность курсора.
+    #[test]
+    fn delete_all_lines_no_panic() {
+        let (mut fs, mut s) = session("раз\nдва");
+        // Выделение второй строки и удаление: остаётся «раз\n» — plain с
+        // хвостовым переносом, буфер после set_rich_text сжимался
+        s.apply(&mut fs, KeyCommand::Motion(Motion::End, false));
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Home, true));
+        s.apply(&mut fs, KeyCommand::Action(Action::Backspace));
+        assert_eq!(
+            s.text(),
+            "раз\n",
+            "хвостовой перенос сохраняется в тексте сессии"
+        );
+        // Продолжение удаления — раньше здесь была паника
+        for _ in 0..6 {
+            s.apply(&mut fs, KeyCommand::Action(Action::Backspace));
+        }
+        assert_eq!(s.text(), "");
+        // Правки после полного удаления — тоже без паники
+        s.apply(&mut fs, KeyCommand::Insert("новый".into()));
+        assert_eq!(s.text(), "новый");
+    }
+
+    /// Регресс: хвостовой \n (Enter/паста) в plain не теряется и не
+    /// приводит к невалидному курсору при последующих правках.
+    #[test]
+    fn trailing_newline_edits_no_panic() {
+        let (mut fs, mut s) = session("текст");
+        s.apply(&mut fs, KeyCommand::Motion(Motion::End, false));
+        s.apply(&mut fs, KeyCommand::Insert("\n".into()));
+        assert_eq!(s.text(), "текст\n", "хвостовой перенос сохраняется");
+        // Правки на строке после хвостового переноса
+        s.apply(&mut fs, KeyCommand::Insert("и ещё".into()));
+        assert_eq!(s.text(), "текст\nи ещё");
+        s.apply(&mut fs, KeyCommand::Action(Action::Backspace));
+        s.apply(&mut fs, KeyCommand::Action(Action::Backspace));
+        assert_eq!(s.text(), "текст\nи е");
     }
 
     /// SelectAll + вставка заменяет весь текст.

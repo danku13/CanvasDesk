@@ -20,7 +20,7 @@ use crate::gfm;
 use crate::markdown;
 use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
-use canvas_core::expr::{ExprOutcome, ExprResults};
+use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
 
 /// Встроенный шрифт (assets/fonts/Inter.ttf, SIL OFL — см. assets/fonts/OFL.txt).
 const FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
@@ -280,6 +280,9 @@ struct BodyBlock {
     height: f32,
     /// Цвет текста блока (цитата/код приглушены/акцентные).
     color: Color,
+    /// FR-013 (правка 2): строка исходного текста — у блоков формульных
+    /// строк (None — обычный блок из сплошного сегмента).
+    source_line: Option<usize>,
 }
 
 /// Отрисованное тело заметки: вертикальный стек блоков (GFM).
@@ -314,6 +317,10 @@ struct BodyItem {
     mono: bool,
     bold: bool,
     deco: ItemDeco,
+    /// FR-013 (правка 2): индекс строки исходного текста — только у
+    /// формульных строк (сегмент из одной строки): привязка результата
+    /// Numi-стиля к своему ряду.
+    source_line: Option<usize>,
 }
 
 /// Метрики заголовка по уровню ATX: 1–3 крупно, 4–6 как bold body.
@@ -366,17 +373,67 @@ fn push_item(
 }
 
 /// Развернуть GFM-блоки в плоский список элементов тела с зазорами.
-fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
+/// FR-013 (правка 2): формульные строки (formula_lines — индексы строк с
+/// готовым результатом) становятся САМОСТОЯТЕЛЬНЫМИ абзацами — своя
+/// строка-блок даёт точный Y-ряд для результата Numi-стиля. Остальные
+/// строки — сплошные сегменты между формульными (структура GFM внутри
+/// сегмента прежняя; формульные строки внутри код-фенса не выбираются —
+/// eval_lines их пропускает, фенс не дробится).
+fn body_items(theme: &ThemeColors, body_text: &str, formula_lines: &[usize]) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
     let mut list_id = 0usize;
-    for block in gfm::parse_blocks(body_text) {
+    let lines: Vec<&str> = body_text.split('\n').collect();
+    let mut segments: Vec<(usize, usize, Option<usize>)> = Vec::new();
+    let mut seg_start = 0usize;
+    let mut in_fence = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+        }
+        if !in_fence && formula_lines.binary_search(&i).is_ok() {
+            if seg_start < i {
+                segments.push((seg_start, i, None));
+            }
+            segments.push((i, i + 1, Some(i)));
+            seg_start = i + 1;
+        }
+    }
+    if seg_start < lines.len() {
+        segments.push((seg_start, lines.len(), None));
+    }
+    for (seg_start, seg_end, source_line) in segments {
+        let seg_text = lines[seg_start..seg_end].join("\n");
+        push_gfm_blocks(
+            theme,
+            &seg_text,
+            source_line,
+            &mut out,
+            &mut prev,
+            &mut list_id,
+        );
+    }
+    out
+}
+
+/// Разобрать сегмент GFM-блоков и допушить элементы тела; `source_line`
+/// проставляется элементам (Some — у однострочного сегмента формульной
+/// строки).
+fn push_gfm_blocks(
+    theme: &ThemeColors,
+    seg_text: &str,
+    source_line: Option<usize>,
+    out: &mut Vec<BodyItem>,
+    prev: &mut Option<(bool, bool, Option<usize>)>,
+    list_id: &mut usize,
+) {
+    for block in gfm::parse_blocks(seg_text) {
         match block {
             gfm::Block::Heading { level, text } => {
                 let (font_size, line_height) = heading_metrics(level);
                 push_item(
-                    &mut out,
-                    &mut prev,
+                    out,
+                    prev,
                     (true, false, None),
                     BodyItem {
                         gap: 0.0,
@@ -389,13 +446,14 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                         mono: false,
                         bold: true,
                         deco: ItemDeco::None,
+                        source_line,
                     },
                 );
             }
             gfm::Block::Paragraph { text } => {
                 push_item(
-                    &mut out,
-                    &mut prev,
+                    out,
+                    prev,
                     (false, false, None),
                     BodyItem {
                         gap: 0.0,
@@ -408,13 +466,14 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                         mono: false,
                         bold: false,
                         deco: ItemDeco::None,
+                        source_line,
                     },
                 );
             }
             gfm::Block::Quote { text } => {
                 push_item(
-                    &mut out,
-                    &mut prev,
+                    out,
+                    prev,
                     (false, false, None),
                     BodyItem {
                         gap: 0.0,
@@ -427,13 +486,14 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                         mono: false,
                         bold: false,
                         deco: ItemDeco::None,
+                        source_line,
                     },
                 );
             }
             gfm::Block::Code { text } => {
                 push_item(
-                    &mut out,
-                    &mut prev,
+                    out,
+                    prev,
                     (false, false, None),
                     BodyItem {
                         gap: 0.0,
@@ -446,13 +506,14 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                         mono: true,
                         bold: false,
                         deco: ItemDeco::None,
+                        source_line,
                     },
                 );
             }
             gfm::Block::Rule => {
                 push_item(
-                    &mut out,
-                    &mut prev,
+                    out,
+                    prev,
                     (false, true, None),
                     BodyItem {
                         gap: 0.0,
@@ -465,11 +526,12 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                         mono: false,
                         bold: false,
                         deco: ItemDeco::None,
+                        source_line,
                     },
                 );
             }
             gfm::Block::List { ordered, items } => {
-                list_id += 1;
+                *list_id += 1;
                 for (n, item) in items.into_iter().enumerate() {
                     // Нумерация рендерится по порядку 1,2,3…; чекбокс вместо номера
                     let text = if ordered && item.checkbox.is_none() {
@@ -483,9 +545,9 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                         None => ItemDeco::None,
                     };
                     push_item(
-                        &mut out,
-                        &mut prev,
-                        (false, false, Some(list_id)),
+                        out,
+                        prev,
+                        (false, false, Some(*list_id)),
                         BodyItem {
                             gap: 0.0,
                             rule: false,
@@ -497,13 +559,13 @@ fn body_items(theme: &ThemeColors, body_text: &str) -> Vec<BodyItem> {
                             mono: false,
                             bold: false,
                             deco,
+                            source_line,
                         },
                     );
                 }
             }
         }
     }
-    out
 }
 
 /// Зашейпить один текстовый блок тела: буфер с переносами по ширине области
@@ -577,13 +639,14 @@ fn shape_body(
     body_text: &str,
     body_width: f32,
     zoom_px: f32,
+    formula_lines: &[usize],
 ) -> BodyLayout {
     let mut layout = BodyLayout {
         blocks: Vec::new(),
         quads: Vec::new(),
     };
     let mut cursor_y = 0.0f32; // world-px, верх текущего элемента
-    for item in body_items(theme, body_text) {
+    for item in body_items(theme, body_text, formula_lines) {
         cursor_y += item.gap;
         if item.rule {
             // Линия: высота блока 12, квад толщиной 2 по центру
@@ -692,31 +755,33 @@ fn shape_body(
             width: block_width,
             height,
             color: item.color,
+            source_line: item.source_line,
         });
         cursor_y += height;
     }
     layout
 }
 
-/// Ключ свежести кэша текста ноды: зум, ширина заголовка, заголовок и тело.
+/// Ключ свежести кэша текста ноды: зум, ширина заголовка, заголовок, тело
+/// и результаты формул (программный итог + построчные, Numi-стиль).
 #[derive(Debug, Clone, Copy)]
 struct CacheKey<'a> {
     zoom: f32,
     width: f32,
     title: &'a str,
     body: &'a str,
-    /// FR-013: строка результата формулы (пустая — результата нет).
-    result: &'a str,
+    /// FR-013: сводка результатов (пустая — результатов нет).
+    results: &'a str,
 }
 
-/// Запись кэша свежа, если зум, ширина, заголовок, тело и результат
-/// формулы не изменились.
+/// Запись кэша свежа, если зум, ширина, заголовок, тело и результаты
+/// формул не изменились.
 fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
     (entry.zoom - current.zoom).abs() < 1e-3
         && (entry.width - current.width).abs() < 0.5
         && entry.title == current.title
         && entry.body == current.body
-        && entry.result == current.result
+        && entry.results == current.results
 }
 
 /// Оверлей-текст в world-координатах (контекстное меню, T7): шейпится
@@ -814,6 +879,8 @@ pub struct TitleFrame<'a> {
     /// результата берётся отсюда (`ExprOutcome::Ok` — значение,
     /// `ExprOutcome::Err` — красная диагностика).
     pub expr_results: &'a ExprResults,
+    /// FR-013 (правка 2): построчные результаты формул (Numi-стиль).
+    pub expr_line_results: &'a ExprLineResults,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -842,21 +909,36 @@ struct CachedTitle {
     /// Тело заметки (T7, GFM) — вертикальный стек блоков: только у text-нод
     /// с непустым текстом.
     body: Option<BodyLayout>,
-    /// FR-013: строка результата формулы под телом (одна строка, футер
-    /// карточки). None — формулы нет или результат ещё не пересчитан.
+    /// FR-013: программный итог формулы в футере карточки (MCP-expr без
+    /// формульных строк в тексте). None — итога нет.
     result: Option<Buffer>,
-    /// FR-013: результат — диагностика (красный цвет строки).
+    /// FR-013: программный итог — диагностика (красный цвет строки).
     result_error: bool,
-    /// FR-013: ширина зашейпленной строки результата в px буфера — для
+    /// FR-013: ширина зашейпленного программного итога в px буфера — для
     /// выравнивания по правому краю футера (TextArea.left = right − width).
     result_width_px: f32,
+    /// FR-013 (правка 2): зашейпленные результаты формульных строк
+    /// (Numi-стиль) — правый край своей строки.
+    line_results: Vec<LineResultBuf>,
     zoom_px: f32,
     width_px: f32,
     title_text: String,
     body_text: String,
-    result_text: String,
+    /// Сводка результатов (см. CacheKey.results) — ключ свежести.
+    results_key: String,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
+}
+
+/// FR-013 (правка 2): зашейпленный результат одной формульной строки.
+struct LineResultBuf {
+    buffer: Buffer,
+    /// Ширина строки результата в px буфера — для правого выравнивания.
+    width_px: f32,
+    /// Индекс строки текста ноды, к которой привязан результат.
+    source_line: usize,
+    /// Ошибка — красный цвет.
+    error: bool,
 }
 
 /// Зашейпленный лейбл связи (T8): валиден при том же тексте и зуме.
@@ -1046,14 +1128,51 @@ impl TextSystem {
                 } else {
                     node.text.clone().unwrap_or_default()
                 };
-                // FR-013: строка результата формулы (футер карточки). Единственный
-                // источник истины — expr_results (наполняется только для нод с
-                // формулой: явной «=» или авто-детектом последней строки);
-                // без готового outcome — пусто (не пересчитано, строки нет)
+                // FR-013: программный итог формулы (футер карточки) — только
+                // для MCP-expr без формульных строк в тексте (построчные
+                // результаты Numi-стиля вытесняют его, см. recompute_expr);
+                // единственный источник истины — expr_results
                 let (result_text, result_error) = match frame.expr_results.get(&node.id) {
                     Some(ExprOutcome::Ok(value)) => (value.to_string(), false),
                     Some(ExprOutcome::Err(msg)) => (msg.clone(), true),
                     _ => (String::new(), false),
+                };
+                // FR-013 (правка 2): формульные строки текста (для сегментации
+                // тела) и сводка построчных результатов — ключ свежести кэша
+                let line_outcomes = frame.expr_line_results.get(&node.id);
+                let formula_lines: Vec<usize> = line_outcomes
+                    .map(|lines| {
+                        lines
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, outcome)| outcome.is_some())
+                            .map(|(i, _)| i)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let line_key = if formula_lines.is_empty() {
+                    String::new()
+                } else {
+                    line_outcomes
+                        .map(|lines| {
+                            lines
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, outcome)| {
+                                    outcome.as_ref().map(|outcome| match outcome {
+                                        ExprOutcome::Ok(value) => format!("{i}={value}"),
+                                        ExprOutcome::Err(msg) => format!("{i}!{msg}"),
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                                .join(";")
+                        })
+                        .unwrap_or_default()
+                };
+                let results_key = if result_text.is_empty() && line_key.is_empty() {
+                    String::new()
+                } else {
+                    format!("P:{result_text}|L:{line_key}")
                 };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
@@ -1063,14 +1182,14 @@ impl TextSystem {
                             width: e.width_px,
                             title: &e.title_text,
                             body: &e.body_text,
-                            result: &e.result_text,
+                            results: &e.results_key,
                         },
                         CacheKey {
                             zoom: zoom_px,
                             width: width_px,
                             title: &title_text,
                             body: &body_text,
-                            result: &result_text,
+                            results: &results_key,
                         },
                     )
                 });
@@ -1125,6 +1244,7 @@ impl TextSystem {
                             &body_text,
                             body_width,
                             zoom_px,
+                            &formula_lines,
                         ))
                     };
 
@@ -1160,6 +1280,60 @@ impl TextSystem {
                         (Some(buffer), result_width_px)
                     };
 
+                    // FR-013 (правка 2): буферы результатов формульных строк
+                    // (Numi-стиль) — шейпятся вместе с кэшем ноды
+                    let line_results = line_outcomes
+                        .map(|lines| {
+                            let (_, body_width, _) = body_area(node);
+                            let area_px = (body_width * zoom_px).max(1.0);
+                            lines
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, outcome)| {
+                                    let outcome = outcome.as_ref()?;
+                                    let text = match outcome {
+                                        ExprOutcome::Ok(value) => value.to_string(),
+                                        ExprOutcome::Err(msg) => msg.clone(),
+                                    };
+                                    if text.is_empty() {
+                                        return None;
+                                    }
+                                    let mut buffer = Buffer::new(
+                                        &mut self.font_system,
+                                        Metrics::new(
+                                            RESULT_FONT_SIZE * zoom_px,
+                                            RESULT_LINE_HEIGHT * zoom_px,
+                                        ),
+                                    );
+                                    buffer.set_wrap(&mut self.font_system, Wrap::None);
+                                    buffer.set_size(
+                                        &mut self.font_system,
+                                        Some(area_px),
+                                        Some(RESULT_LINE_HEIGHT * zoom_px),
+                                    );
+                                    buffer.set_text(
+                                        &mut self.font_system,
+                                        &text,
+                                        Attrs::new(),
+                                        Shaping::Advanced,
+                                    );
+                                    buffer.shape_until_scroll(&mut self.font_system, false);
+                                    let width_px = buffer
+                                        .layout_runs()
+                                        .next()
+                                        .map(|run| run.line_w)
+                                        .unwrap_or(0.0);
+                                    Some(LineResultBuf {
+                                        buffer,
+                                        width_px,
+                                        source_line: i,
+                                        error: matches!(outcome, ExprOutcome::Err(_)),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
                     self.cache.insert(
                         index,
                         CachedTitle {
@@ -1169,11 +1343,12 @@ impl TextSystem {
                             result,
                             result_error,
                             result_width_px,
+                            line_results,
                             zoom_px,
                             width_px,
                             title_text,
                             body_text,
-                            result_text,
+                            results_key,
                             last_used: self.tick,
                         },
                     );
@@ -1309,7 +1484,9 @@ impl TextSystem {
         if !show_titles
             && frame.indices.iter().any(|&index| {
                 frame.canvas.nodes.get(index).is_some_and(|node| {
-                    node.kind() == NodeKind::Text && frame.expr_results.contains_key(&node.id)
+                    node.kind() == NodeKind::Text
+                        && (frame.expr_results.contains_key(&node.id)
+                            || frame.expr_line_results.contains_key(&node.id))
                 })
             })
         {
@@ -1426,6 +1603,50 @@ impl TextSystem {
                                     bottom: bottom as i32,
                                 },
                                 default_color: dim_color(block.color, text_factor),
+                                custom_glyphs: &[],
+                            });
+                        }
+                    }
+                    // FR-013 (правка 2): результат каждой формульной строки —
+                    // ПРАВЫЙ край ЕЁ строки (Numi-стиль). Привязка — блок тела
+                    // с source_line этой строки (формульная строка — отдельный
+                    // блок, см. body_items).
+                    if !entry.line_results.is_empty() {
+                        let (origin, _, _) = body_area(node);
+                        for line_result in &entry.line_results {
+                            let Some(block) = entry.body.as_ref().and_then(|layout| {
+                                layout.blocks.iter().find(|block| {
+                                    block.source_line == Some(line_result.source_line)
+                                })
+                            }) else {
+                                continue;
+                            };
+                            // Вертикальное центрирование результата в ряду
+                            let row_y = origin[1]
+                                + block.offset[1]
+                                + (BODY_LINE_HEIGHT - RESULT_LINE_HEIGHT) / 2.0;
+                            let top_phys = to_physical([origin[0], row_y])[1];
+                            let right_phys =
+                                to_physical([node.x + node.width - BODY_PADDING, row_y])[0];
+                            let left_phys = (right_phys - line_result.width_px).round();
+                            areas.push(TextArea {
+                                buffer: &line_result.buffer,
+                                left: left_phys,
+                                top: top_phys,
+                                scale: 1.0,
+                                bounds: TextBounds {
+                                    left: (to_physical([node.x + BODY_PADDING, row_y])[0].floor()
+                                        as i32)
+                                        - 1,
+                                    top: top_phys as i32,
+                                    right: (right_phys.round() as i32) + 1,
+                                    bottom: (top_phys + RESULT_LINE_HEIGHT * zoom_px) as i32,
+                                },
+                                default_color: if line_result.error {
+                                    dim_color(RESULT_ERROR_COLOR, text_factor)
+                                } else {
+                                    dim_color(self.theme.link, text_factor)
+                                },
                                 custom_glyphs: &[],
                             });
                         }
@@ -1771,7 +1992,7 @@ mod tests {
             width: 300.0,
             title: "отчёт",
             body: "тело",
-            result: "",
+            results: "",
         };
         let same = CacheKey { ..entry };
         assert!(cache_fresh(entry, same));
@@ -1814,7 +2035,7 @@ mod tests {
             !cache_fresh(
                 entry,
                 CacheKey {
-                    result: "1000 ms·req/s",
+                    results: "P:1000 ms·req/s|L:",
                     ..same
                 }
             ),
@@ -1993,7 +2214,34 @@ mod tests {
 
     fn shaped(text: &str) -> BodyLayout {
         let mut fs = FontSystem::new();
-        shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0)
+        shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[])
+    }
+
+    /// FR-013 (правка 2): формульная строка — самостоятельный блок с
+    /// source_line (привязка результата Numi-стиля), проза — обычный абзац.
+    #[test]
+    fn shape_body_formula_lines_own_blocks() {
+        let mut fs = FontSystem::new();
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            "Gateway\nrps = 1000\nlatency = 50 ms",
+            300.0,
+            1.0,
+            &[1, 2],
+        );
+        assert_eq!(
+            layout.blocks.len(),
+            3,
+            "проза + две формульные строки-абзаца"
+        );
+        assert_eq!(layout.blocks[0].source_line, None, "проза");
+        assert_eq!(layout.blocks[1].source_line, Some(1), "формульная строка 1");
+        assert_eq!(layout.blocks[2].source_line, Some(2), "формульная строка 2");
+        assert!(
+            layout.blocks[1].offset[1] < layout.blocks[2].offset[1],
+            "ряды формульных строк идут сверху вниз"
+        );
     }
 
     /// Обычный текст — один блок Paragraph с метриками тела 14/20, offset [0,0].
@@ -2279,7 +2527,7 @@ mod tests {
     #[test]
     fn shape_body_quads_scale_with_zoom() {
         let mut fs = FontSystem::new();
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), "- a", 300.0, 2.0);
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), "- a", 300.0, 2.0, &[]);
         let bullet = layout
             .quads
             .iter()

@@ -6,7 +6,7 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::expr::ExprResults;
+use canvas_core::expr::{ExprLineResults, ExprResults};
 use canvas_core::{edge_midpoint, Canvas, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
@@ -166,8 +166,11 @@ pub struct SceneView<'a> {
     pub collapsed_counts: &'a [(usize, usize)],
     /// FR-013: результаты формул (`canvasdesk.expr`) по id нод —
     /// runtime-кэш приложения (не сериализуется, инвариант FR-013).
-    /// Строка результата под текстом ноды (LOD ≥ порога), бейдж «=» — ниже.
+    /// Программный итог — в футере карточки (MCP-expr), бейдж «=» — ниже.
     pub expr_results: &'a ExprResults,
+    /// FR-013 (правка 2): построчные результаты формул (Numi-стиль) —
+    /// результат каждой формульной строки у правого края её строки.
+    pub expr_line_results: &'a ExprLineResults,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -905,6 +908,7 @@ impl Renderer {
                 widget_title_reveal: scene.widget_title_reveal,
                 collapsed_counts: scene.collapsed_counts,
                 expr_results: scene.expr_results,
+                expr_line_results: scene.expr_line_results,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
