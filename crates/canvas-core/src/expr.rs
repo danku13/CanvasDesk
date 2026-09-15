@@ -485,7 +485,10 @@ impl<'a> Lexer<'a> {
     /// операнда (числа, единицы, `)`, идентификатора) и ПЕРЕД числом/скобкой
     /// — умножение (`35 x 20` = 700, `latency х 3`; Numi); в конце строки,
     /// после оператора или перед идентификатором — переменная (`200 + x`,
-    /// `latency х replicas`).
+    /// `latency х replicas`). СЛИТНОЕ `35x20` (без пробелов) — тоже
+    /// умножение (правка 5): `x`/`х` после операнда с цифрой СРАЗУ за ним
+    /// — знак умножения (`x20` как имя в этой позиции недостижимо:
+    /// слитная запись Numi-листа означает произведение).
     fn lex_ident(&mut self) -> Tok {
         if self.after_number {
             if let Some((name, len)) = self.unit_here() {
@@ -493,6 +496,19 @@ impl<'a> Lexer<'a> {
                 self.after_number = false;
                 self.operand_ended = true;
                 return Tok::Unit(name);
+            }
+        }
+        // Слитное `35x20`/`35х20`: `x` ПОСЛЕ операнда + цифра сразу за ним
+        if self.operand_ended {
+            let mut chars = self.text[self.pos..].chars();
+            let first = chars.next();
+            if matches!(first, Some('x' | 'х'))
+                && matches!(chars.next(), Some(c) if c.is_ascii_digit())
+            {
+                self.pos += first.map(char::len_utf8).unwrap_or(0);
+                self.after_number = false;
+                self.operand_ended = false;
+                return Tok::Star;
             }
         }
         let start = self.pos;
@@ -989,6 +1005,12 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
 /// присвоенное значение. Внутри код-фенсов (``` … ```) формулы не
 /// вычисляются — код не калькулятор.
 pub fn eval_lines(source: &str) -> Vec<Option<ExprOutcome>> {
+    // FR-013 (правка 5): канонический текст заметки экранирует литеральные
+    // `=` (`\=` — от пары `==` подсветки в диалекте CanvasDesk; заметки
+    // прежних сборок содержат `x \= 200` для КАЖДОГО `=`). Расчёт ведётся
+    // по видимому тексту — экранирование снимается; проза и код-фенсы не
+    // меняются (они не считаются).
+    let source = source.replace("\\=", "=");
     let mut env = Env::empty();
     let mut in_fence = false;
     // FR-013 (правка 4): имена, объявленные строками ВЫШЕ (похожими на
@@ -1034,7 +1056,7 @@ fn eval_line(
             // Явная формула показывает ошибку вычисления; авто-строка —
             // только «заслуженную» (auto_error_visible)
             Err(err) if explicit => Some(ExprOutcome::Err(err.to_string())),
-            Err(err) if auto_error_visible(&err, declared) => {
+            Err(err) if auto_error_visible(&err, declared, statement) => {
                 Some(ExprOutcome::Err(err.to_string()))
             }
             Err(_) => None,
@@ -1048,15 +1070,19 @@ fn eval_line(
     }
 }
 
-/// FR-013 (правка 4): видна ли ошибка вычисления АВТО-строки (без префикса
-/// `=`). Numi-принцип: проза никогда не краснеет, но сломанный расчёт — не
-/// проза. «Заслуженные» ошибки: несовместимость единиц, деление на ноль,
-/// битый вызов (строка вычислилась как чистая арифметика) и ссылка на
-/// переменную, ОБЪЯВЛЕННУЮ строкой выше (`x = …` выше, даже если та строка
-/// сама ошибочна). Неизвестное слово вне объявлений (`- 5 яблок`) молчит.
-fn auto_error_visible(err: &EvalError, declared: &HashSet<String>) -> bool {
+/// FR-013 (правка 4/5): видна ли ошибка вычисления АВТО-строки (без
+/// префикса `=`). Numi-принцип: проза никогда не краснеет, но сломанный
+/// расчёт — не проза. «Заслуженные» ошибки: несовместимость единиц,
+/// деление на ноль, битый вызов (строка вычислилась как чистая
+/// арифметика) и ссылка на переменную, ОБЪЯВЛЕННУЮ строкой выше (`x = …`
+/// выше, даже если та строка сама ошибочна). Правка 5: ссылка на
+/// НЕОБЪЯВЛЕННУЮ переменную тоже видна, если строка сама — присваивание
+/// (`c = a + b` при отсутствии `a`) — пользователь явно описал связывание,
+/// это расчёт, а не проза; тишина здесь и была «ошибки не выводятся».
+/// Неизвестное слово вне объявлений (`- 5 яблок`) по-прежнему молчит.
+fn auto_error_visible(err: &EvalError, declared: &HashSet<String>, statement: &str) -> bool {
     match err {
-        EvalError::UnknownVariable(name) => declared.contains(name),
+        EvalError::UnknownVariable(name) => declared.contains(name) || assignment_shaped(statement),
         _ => true,
     }
 }
@@ -1720,6 +1746,16 @@ mod tests {
         let lines = eval_lines("latency = 50 ms\nlatency х 3\nlatency х y");
         assert_eq!(ok_text(&lines[1]), "150 ms");
         assert!(lines[2].is_none(), "y не задан — строка тиха");
+        // СЛИТНОЕ умножение (правка 5): `число x число` без пробелов —
+        // лист владельца `a=25+35x20`; `x20` как имя в этой позиции
+        // недостижимо
+        let lines = eval_lines("25+35x20\n25+35х20\n2x3\n(2)x3\n$5x3\n5msx2");
+        assert_eq!(ok_text(&lines[0]), "725", "слитно латинская x");
+        assert_eq!(ok_text(&lines[1]), "725", "слитно кириллическая х");
+        assert_eq!(ok_text(&lines[2]), "6", "2x3");
+        assert_eq!(ok_text(&lines[3]), "6", "слитно после скобки");
+        assert_eq!(ok_text(&lines[4]), "15 $", "слитно после валюты");
+        assert_eq!(ok_text(&lines[5]), "10 ms", "слитно после единицы");
     }
 
     /// FR-013 (правка 3): имена переменных — буквы Unicode (кириллица):
@@ -1765,5 +1801,46 @@ mod tests {
         assert_eq!(ok_text(&lines[9]), "400");
         assert_eq!(ok_text(&lines[10]), "725");
         assert_eq!(ok_text(&lines[11]), "238");
+    }
+
+    /// FR-013 (правка 5): заметки прежних сборок содержат экранированное
+    /// каноникой `=` (`x \= 200`) — расчёт снимает экранирование и лист
+    /// оживет без пересохранения. Регресс корневого бага «ничего не
+    /// показывают»: emit экранировал КАЖДОЕ `=`, expr-парсер падал на `\`.
+    #[test]
+    fn eval_lines_escaped_equals_from_canonical_text() {
+        // Лист 1 владельца в канонической записи прежних сборок
+        let lines = eval_lines("х \\= 200\nс \\= а + б\n200 + х");
+        assert_eq!(ok_text(&lines[0]), "200", "присваивание с \\= считается");
+        assert_eq!(ok_text(&lines[2]), "400", "ссылка на объявленную x");
+        // Полный лист во «взрослой» форме
+        let lines = eval_lines("123 + 5123 \\= a\n235 + 2323 \\= b\nc \\= a + b");
+        assert_eq!(ok_text(&lines[0]), "5246");
+        assert_eq!(ok_text(&lines[1]), "2558");
+        assert_eq!(ok_text(&lines[2]), "7804");
+    }
+
+    /// FR-013 (правка 5): ссылка на НЕОБЪЯВЛЕННУЮ переменную видна, если
+    /// строка сама — присваивание (`c = a + b`): это расчёт, а не проза;
+    /// требование владельца «ошибки тоже не выводятся». Проза (`- 5
+    /// яблок`, `2 + слово`) молчит, как и раньше.
+    #[test]
+    fn eval_lines_unknown_variable_visible_on_assignment() {
+        let lines = eval_lines("x = 200\nc = a + b\n200 + x");
+        assert_eq!(ok_text(&lines[0]), "200");
+        match &lines[1] {
+            Some(ExprOutcome::Err(msg)) => {
+                assert!(
+                    msg.contains('a'),
+                    "ошибка называет отсутствующее имя: {msg}"
+                )
+            }
+            other => panic!("c = a + b без a — видимая ошибка: {other:?}"),
+        }
+        assert_eq!(ok_text(&lines[2]), "400");
+        // Проза и не-присваивания с неизвестными словами молчат
+        let lines = eval_lines("- 5 яблок\n2 + несуществующая");
+        assert_eq!(lines[0], None);
+        assert_eq!(lines[1], None);
     }
 }

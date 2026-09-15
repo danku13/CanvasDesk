@@ -8401,6 +8401,96 @@ mod tests {
         );
     }
 
+    /// FR-013 (правка 5): РЕАЛЬНЫЙ флоу набора — EditingSession (как
+    /// begin_editing), ввод через insert_text (путь вставки/набора), живые
+    /// результаты — ТОЧНО та же формула, что в RedrawRequested; затем
+    /// commit (текст сессии в модель + recompute_expr). Регресс корневого
+    /// бага «выражения так ничего и не показывают»: emit экранировал
+    /// одиночное `=` (`x = 200` → `x \= 200`), expr-парсер падал на `\`,
+    /// переменные не объявлялись — лист владельца молчал ЦЕЛИКОМ и в
+    /// редакторе, и на карточке. MCP-тесты (node_update_text) этого не
+    /// ловили: они кладут в модель чистый текст, минуя markdown-канонику.
+    #[test]
+    fn live_typing_flow_owner_sheets() {
+        use cosmic_text::FontSystem;
+        fn run_session(text: &str) -> (String, Vec<Option<ExprOutcome>>) {
+            let mut fs = FontSystem::new();
+            let mut session =
+                EditingSession::new(&mut fs, EditTarget::Node(0), "", 360.0, 228.0, 1.0);
+            session.insert_text(&mut fs, text);
+            let canonical = session.text();
+            // Та же формула, что в RedrawRequested для живых результатов
+            let live = expr::eval_lines(&canonical);
+            (canonical, live)
+        }
+        fn expect_ok(line: &Option<ExprOutcome>, expected: &str, context: &str) {
+            match line {
+                Some(ExprOutcome::Ok(value)) => {
+                    assert_eq!(value.to_string(), expected, "{context}")
+                }
+                other => panic!("{context}: ожидалось {expected}, получено {other:?}"),
+            }
+        }
+        fn expect_err(line: &Option<ExprOutcome>, name: &str, context: &str) {
+            match line {
+                Some(ExprOutcome::Err(msg)) => {
+                    assert!(msg.contains(name), "{context}: имя {name} в ошибке: {msg}")
+                }
+                other => panic!("{context}: ожидалась ошибка про {name}: {other:?}"),
+            }
+        }
+
+        // Лист 1 владельца (латиница): c = a + b — ссылки на необъявленные
+        // a/b — ВИДИМАЯ ошибка строки (правка 5), остальные — значения
+        let (canonical, live) = run_session("x = 200\nc = a + b\n200 + x");
+        assert_eq!(canonical, "x = 200\nc = a + b\n200 + x", "emit без \\=");
+        expect_ok(&live[0], "200", "присваивание x");
+        expect_err(&live[1], "a", "необъявленная a в присваивании");
+        expect_ok(&live[2], "400", "ссылка на x");
+
+        // Та же раскладка кириллицей (русская раскладка владельца)
+        let (_, live) = run_session("х = 200\nс = а + б\n200 + х");
+        expect_ok(&live[0], "200", "кириллическое присваивание");
+        expect_err(&live[1], "а", "необъявленная а");
+        expect_ok(&live[2], "400", "ссылка на х");
+
+        // Лист 2 владельца: x-умножение и ссылки
+        let (canonical, live) = run_session("a=25+35x20\nb = 2\na+b");
+        assert_eq!(canonical, "a=25+35x20\nb = 2\na+b");
+        expect_ok(&live[0], "725", "a = 25+35x20");
+        expect_ok(&live[1], "2", "b = 2");
+        expect_ok(&live[2], "727", "a+b");
+
+        // COMMIT: канонический текст сессии попадает в модель, построчные
+        // результаты совпадают с живыми (карточка после клика мимо ноды)
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("n1", "", 0.0, 0.0));
+        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/live-flow.canvas"));
+        let (canonical, live) =
+            run_session("123 + 5123 = a\n235 + 2323 = b\nx = 200\nc = a + b\n200 + x");
+        scene.canvas.nodes[0].text = Some(canonical.clone());
+        scene.recompute_expr("n1");
+        let committed = scene
+            .expr_line_results
+            .get("n1")
+            .expect("построчные результаты после commit");
+        assert_eq!(committed.len(), live.len());
+        expect_ok(&committed[0], "5246", "commit: хвостовое присваивание");
+        expect_ok(&committed[1], "2558", "commit: b");
+        expect_ok(&committed[2], "200", "commit: x");
+        expect_ok(&committed[3], "7804", "commit: c = a + b");
+        expect_ok(&committed[4], "400", "commit: 200 + x");
+        // Совместимость: заметка прежних сборок с `\=` в модели оживает
+        scene.canvas.nodes[0].text = Some("x \\= 200\n200 + x".to_owned());
+        scene.recompute_expr("n1");
+        let committed = scene
+            .expr_line_results
+            .get("n1")
+            .expect("результаты для старой каноники");
+        expect_ok(&committed[0], "200", "старая заметка: присваивание с \\=");
+        expect_ok(&committed[1], "400", "старая заметка: ссылка");
+    }
+
     /// FR-013 (правка 4): hit-тест зон наведения бейджей ошибок.
     #[test]
     fn expr_error_tooltip_hit_test() {

@@ -399,11 +399,14 @@ pub fn emit(plain: &str, spans: &[StyleSpan]) -> String {
         }
     }
     events.sort_by_key(|&(pos, _, _)| pos);
+    // Маска экранирования по ВСЕМУ plain: пара `==`/`~~`, разрезанная
+    // границей спанов (чанки до/после события), экранируется в обоих чанках
+    let escapes = escape_mask(plain);
     let mut out = String::with_capacity(plain.len() + events.len() * 2);
     let mut pos = 0usize;
     for (event_pos, flag, on) in events {
         // Текст до события (экранирование литеральных маркеров)
-        push_escaped(&mut out, &plain[pos..event_pos]);
+        push_escaped(&mut out, &plain[pos..event_pos], &escapes[pos..event_pos]);
         out.push_str(flag.marker());
         // Парный маркер: у одиночного '*' closing-скан parse'а всё равно
         // найдёт; порядок эмита открытий/закрытий на одной позиции — по
@@ -411,14 +414,37 @@ pub fn emit(plain: &str, spans: &[StyleSpan]) -> String {
         let _ = on;
         pos = event_pos;
     }
-    push_escaped(&mut out, &plain[pos..]);
+    push_escaped(&mut out, &plain[pos..], &escapes[pos..]);
     out
 }
 
-/// Экранирование литеральных маркеров диалекта (`*`, `\=`- и `\~~`-пары в plain).
-fn push_escaped(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        if ch == '*' || ch == '=' || ch == '~' {
+/// Байтовая маска экранирования литеральных маркеров диалекта. `*` —
+/// одиночный маркер (italic) — экранируется всегда. `=` и `~` — маркеры
+/// ТОЛЬКО ПАРАМИ (`==` подсветка, `~~` strike), поэтому экранируется пара
+/// целиком; одиночные `=` (`x = 200` Numi-листа, FR-013) остаются живыми —
+/// иначе экранирование ломало expr-парсер (`x \= 200` — «неподдерживаемый
+/// символ») и все строки с присваиваниями молчали (правка 5).
+fn escape_mask(plain: &str) -> Vec<bool> {
+    let bytes = plain.as_bytes();
+    let mut mask = vec![false; bytes.len()];
+    for (i, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'*' => mask[i] = true,
+            b'=' | b'~' if i + 1 < bytes.len() && bytes[i + 1] == byte => {
+                mask[i] = true;
+                mask[i + 1] = true;
+            }
+            _ => {}
+        }
+    }
+    mask
+}
+
+/// Экранирование чанка plain по байтовой маске [`escape_mask`] (срезы
+/// маски выровнены по байтовым границам чанка).
+fn push_escaped(out: &mut String, text: &str, escape: &[bool]) {
+    for (i, ch) in text.char_indices() {
+        if escape.get(i).copied().unwrap_or(false) {
             out.push('\\');
         }
         out.push(ch);
@@ -734,15 +760,73 @@ mod tests {
     }
 
     /// Round-trip: литеральные маркеры в plain экранируются и не
-    /// превращаются в маркеры при повторном parse.
+    /// превращаются в маркеры при повторном parse. `*` — одиночный
+    /// маркер — экранируется всегда; одиночное `=` — НЕ маркер (маркер
+    /// — пара `==`) — остаётся живым (Numi-лист, FR-013 правка 5).
     #[test]
     fn emit_escapes_literal_markers() {
         let plain = "a*b=c";
         let text = emit(plain, &[]);
-        assert_eq!(text, r"a\*b\=c");
+        assert_eq!(text, r"a\*b=c");
         let (back, spans) = parse(&text);
         assert_eq!(back, plain);
         assert!(spans.is_empty());
+    }
+
+    /// FR-013 (правка 5): одиночные `=` в plain НЕ экранируются — строки
+    /// присваиваний Numi-листа (`x = 200`) переживают parse→emit→parse
+    /// без бэкслешей; иначе expr-парсер получал `x \= 200` и молчал.
+    #[test]
+    fn emit_keeps_single_equals_for_expr_lines() {
+        let plain = "x = 200\nc = a + b\n200 + x";
+        let text = emit(plain, &[]);
+        assert_eq!(text, plain, "одиночные = не экранируются: {text}");
+        let (back, spans) = parse(&text);
+        assert_eq!(back, plain);
+        assert!(spans.is_empty());
+    }
+
+    /// Литеральные ПАРЫ (`==`, `~~`) экранируются целиком — подсветка/
+    /// strike не включаются, round-trip точен.
+    #[test]
+    fn emit_escapes_literal_pairs_whole() {
+        for (plain, marker) in [
+            ("a == b", "\\="),
+            ("===", "\\="),
+            ("a ~~ b", "\\~"),
+            ("~~~", "\\~"),
+        ] {
+            let text = emit(plain, &[]);
+            assert!(
+                text.contains(marker),
+                "пара экранирована ({marker}): {text}"
+            );
+            let (back, spans) = parse(&text);
+            assert_eq!(back, plain, "round-trip: {text}");
+            assert!(spans.is_empty());
+        }
+    }
+
+    /// Пара `==`, разрезанная границей спанов, экранируется в ОБОИХ
+    /// чанках (маска по всему plain, а не по чанку). Полный round-trip
+    /// смежных маркеров `**`+`*` парсером не гарантируется (литеральный
+    /// `*` между ними) — проверяем только экранирование пары.
+    #[test]
+    fn emit_escapes_pair_split_across_spans() {
+        let plain = "ab==cd"; // байты: a=0 b=1 ==2 =3 c=4 d=5
+        let spans = vec![StyleSpan {
+            start: 0,
+            end: 3,
+            bold: true,
+            italic: false,
+            highlight: false,
+            strike: false,
+        }];
+        let text = emit(plain, &spans);
+        assert!(
+            text.contains("ab\\=") && text.ends_with("\\=cd"),
+            "пара экранирована в обоих чанках: {text}"
+        );
     }
 
     // --- strike (~~…~~) ---
@@ -810,12 +894,12 @@ mod tests {
         assert_eq!(back_spans, spans, "спаны: {text}");
     }
 
-    /// emit экранирует литеральную ~ в plain.
+    /// emit оставляет одиночную ~ без экранирования (маркер — пара ~~).
     #[test]
     fn emit_escapes_literal_tilde() {
         let plain = "a~b";
         let text = emit(plain, &[]);
-        assert_eq!(text, r"a\~b");
+        assert_eq!(text, "a~b");
         let (back, spans) = parse(&text);
         assert_eq!(back, plain);
         assert!(spans.is_empty());
