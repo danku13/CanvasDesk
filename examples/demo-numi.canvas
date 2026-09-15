@@ -1,0 +1,45 @@
+{
+    "nodes": [
+        {
+            "id": "n_product",
+            "type": "text",
+            "text": "Смета на инфраструктуру\nvm    = 40 $\ndb    = 25 $\ncdn   = 10 $\nитого = vm + db + cdn",
+            "x": 80,
+            "y": 80,
+            "width": 360,
+            "height": 220,
+            "color": "2"
+        },
+        {
+            "id": "n_units",
+            "type": "text",
+            "text": "Единицы измерения\n1 sec + 500 ms\n100 req / 2 sec\n1k rps * 50 ms",
+            "x": 500,
+            "y": 80,
+            "width": 340,
+            "height": 200,
+            "color": "4"
+        },
+        {
+            "id": "n_arch",
+            "type": "text",
+            "text": "x = 200\nc = a + b\n200 + x",
+            "x": 80,
+            "y": 360,
+            "width": 360,
+            "height": 180,
+            "color": "6"
+        },
+        {
+            "id": "n_typing",
+            "type": "text",
+            "text": "",
+            "x": 500,
+            "y": 340,
+            "width": 340,
+            "height": 220,
+            "color": "3"
+        }
+    ],
+    "edges": []
+}
