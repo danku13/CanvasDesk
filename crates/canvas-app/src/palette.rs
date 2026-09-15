@@ -26,6 +26,8 @@ use std::time::{Duration, Instant};
 
 use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, NodeKind};
 
+use canvas_render::ThemeColors;
+
 use crate::ui::{point_in_rect, NodeSetting};
 use crate::{preset_color, CardInstance, Vec2};
 
@@ -821,7 +823,12 @@ fn icon_quad(
 /// Иконка как композиция квадов внутри rect (логические px). `tint` —
 /// цвет штрихов (theme.icon). Чистая функция — тестируется на число квадов
 /// и попадание в границы rect.
-pub fn icon_quads(icon: PaletteIcon, rect: [f32; 4], tint: [f32; 4]) -> Vec<CardInstance> {
+pub fn icon_quads(
+    icon: PaletteIcon,
+    rect: [f32; 4],
+    tint: [f32; 4],
+    theme: &ThemeColors,
+) -> Vec<CardInstance> {
     let [x, y, w, h] = rect;
     let cx = x + w / 2.0;
     let cy = y + h / 2.0;
@@ -834,7 +841,7 @@ pub fn icon_quads(icon: PaletteIcon, rect: [f32; 4], tint: [f32; 4]) -> Vec<Card
         icon_quad(q, pos, size, None, Some(tint), radius);
     };
     match icon {
-        PaletteIcon::Swatch(preset) => match preset.and_then(preset_color) {
+        PaletteIcon::Swatch(preset) => match preset.and_then(|p| preset_color(p, theme)) {
             Some(fill) => icon_quad(
                 &mut quads,
                 [x + 3.0, y + 3.0],
@@ -1432,7 +1439,7 @@ mod tests {
             PaletteIcon::Swatch(None),
         ];
         for icon in quad_icons {
-            let quads = icon_quads(icon, rect, tint);
+            let quads = icon_quads(icon, rect, tint, &ThemeColors::dark());
             assert!(!quads.is_empty(), "{icon:?} — есть квады");
             for q in &quads {
                 assert!(q.pos[0] >= rect[0] - 0.01 && q.pos[1] >= rect[1] - 0.01);
@@ -1447,8 +1454,8 @@ mod tests {
         // Текстовые глифы
         assert_eq!(icon_text(PaletteIcon::Rename), Some("Aa"));
         assert_eq!(icon_text(PaletteIcon::Clear), Some("×"));
-        assert!(icon_quads(PaletteIcon::Rename, rect, tint).is_empty());
-        assert!(icon_quads(PaletteIcon::Clear, rect, tint).is_empty());
+        assert!(icon_quads(PaletteIcon::Rename, rect, tint, &ThemeColors::dark()).is_empty());
+        assert!(icon_quads(PaletteIcon::Clear, rect, tint, &ThemeColors::dark()).is_empty());
         assert_eq!(icon_text(PaletteIcon::LineSolid), None);
     }
 

@@ -9,6 +9,7 @@ pub mod atlas;
 pub mod camera;
 pub mod cards;
 pub mod config;
+pub mod contrast;
 pub mod edit;
 pub mod gfm;
 pub mod gpu;

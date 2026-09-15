@@ -3060,7 +3060,7 @@ impl App {
                 PAL_ICON,
                 PAL_ICON,
             ];
-            instances.extend(icon_quads(group.icon, icon_rect, tint));
+            instances.extend(icon_quads(group.icon, icon_rect, tint, &palette));
             if let Some(glyph) = icon_text(group.icon) {
                 texts.push(OwnedScreenText {
                     text: glyph.to_owned(),
@@ -3116,7 +3116,7 @@ impl App {
                             PAL_ICON,
                             PAL_ICON,
                         ];
-                        instances.extend(icon_quads(icon, icon_rect, tint));
+                        instances.extend(icon_quads(icon, icon_rect, tint, &palette));
                         if let Some(glyph) = icon_text(icon) {
                             texts.push(OwnedScreenText {
                                 text: glyph.to_owned(),

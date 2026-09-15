@@ -1053,11 +1053,14 @@ impl TextSystem {
         }
     }
 
-    /// Применить тему: цвета текста (кэш буферов не инвалидируем —
-    /// default_color копируется в буфер при set_*_text, кэш чистится
-    /// возрастом; смена темы редкая, некоторые квады перекрасятся позже).
+    /// Применить тему: сбросить кэш заголовков/тел (цвета GFM-блоков
+    /// запечены в BodyItem.color) и заменить палитру. Смена темы редкая,
+    /// перешейп дешёвый.
     pub fn set_theme(&mut self, theme: ThemeColors) {
         self.theme = theme;
+        // CR-007: цвета блоков тела запечены в кэше (BodyItem.color) —
+        // без сброса после переключения темы тело остаётся в старых цветах
+        self.cache.clear();
     }
 
     /// Зашейпить/обновить запись лейбла связи (T8). Ширина буфера не
@@ -1649,6 +1652,19 @@ impl TextSystem {
                         continue;
                     }
                     let has_icon = entry.icon.is_some();
+                    // CR-007 (доступность): на окрашенной карточке цвета текста
+                    // темы обязаны читаться на её заливке (WCAG AA ≥ 4.5:1).
+                    // Группы исключены: заливка группы — theme.group_fill,
+                    // а не цвет ноды (cards::card_instance).
+                    let colored_fill = if node.kind() == NodeKind::Group {
+                        None
+                    } else {
+                        crate::cards::named_color(node.color.as_deref(), &self.theme)
+                    };
+                    let on_card = |color: Color| match colored_fill {
+                        Some(fill) => self.theme.readable_on_card(color, fill, true),
+                        None => color,
+                    };
                     // T23 (brainstorm-focus): тексты не-фокусной ноды гаснут
                     // вместе с карточкой (фокусная и выделенная — полная
                     // яркость: приложение включает выделенную в набор)
@@ -1670,7 +1686,7 @@ impl TextSystem {
                             right: (pos[0] + entry.width_px) as i32,
                             bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                         },
-                        default_color: dim_color(self.theme.title, text_factor),
+                        default_color: dim_color(on_card(self.theme.title), text_factor),
                         custom_glyphs: &[],
                     });
                     if let Some(icon) = &entry.icon {
@@ -1686,7 +1702,7 @@ impl TextSystem {
                                 right: (pos[0] + ICON_WIDTH * zoom_px) as i32,
                                 bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                             },
-                            default_color: dim_color(self.theme.icon, text_factor),
+                            default_color: dim_color(on_card(self.theme.icon), text_factor),
                             custom_glyphs: &[],
                         });
                     }
@@ -1726,7 +1742,7 @@ impl TextSystem {
                                     right: (left + block.width * zoom_px) as i32,
                                     bottom: bottom as i32,
                                 },
-                                default_color: dim_color(block.color, text_factor),
+                                default_color: dim_color(on_card(block.color), text_factor),
                                 custom_glyphs: &[],
                             });
                         }
@@ -1767,9 +1783,9 @@ impl TextSystem {
                                     bottom: (top_phys + RESULT_LINE_HEIGHT * zoom_px) as i32,
                                 },
                                 default_color: if line_result.error {
-                                    dim_color(RESULT_ERROR_COLOR, text_factor)
+                                    dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
                                 } else {
-                                    dim_color(self.theme.link, text_factor)
+                                    dim_color(on_card(self.theme.link), text_factor)
                                 },
                                 custom_glyphs: &[],
                             });
@@ -1826,9 +1842,9 @@ impl TextSystem {
                                             bottom: (top_phys + result_h) as i32,
                                         },
                                         default_color: if *error {
-                                            dim_color(RESULT_ERROR_COLOR, text_factor)
+                                            dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
                                         } else {
-                                            dim_color(self.theme.link, text_factor)
+                                            dim_color(on_card(self.theme.link), text_factor)
                                         },
                                         custom_glyphs: &[],
                                     });
@@ -1869,9 +1885,9 @@ impl TextSystem {
                                 bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
                             },
                             default_color: if entry.result_error {
-                                dim_color(RESULT_ERROR_COLOR, text_factor)
+                                dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
                             } else {
-                                dim_color(self.theme.link, text_factor)
+                                dim_color(on_card(self.theme.link), text_factor)
                             },
                             custom_glyphs: &[],
                         });

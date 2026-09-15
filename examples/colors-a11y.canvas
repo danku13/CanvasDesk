@@ -1,0 +1,55 @@
+{
+  "nodes": [
+    {
+      "id": "c1", "type": "text", "color": "1",
+      "text": "Red preset\nvm = 40 $\ndb = 25 $\nvm + db",
+      "x": 60.0, "y": 60.0, "width": 300.0, "height": 150.0
+    },
+    {
+      "id": "c2", "type": "text", "color": "2",
+      "text": "Orange preset\nитого = 2 + 3",
+      "x": 400.0, "y": 60.0, "width": 300.0, "height": 110.0
+    },
+    {
+      "id": "c3", "type": "text", "color": "3",
+      "text": "Yellow preset\n1 sec + 500 ms",
+      "x": 740.0, "y": 60.0, "width": 300.0, "height": 110.0
+    },
+    {
+      "id": "c4", "type": "text", "color": "4",
+      "text": "Green preset\nссылка [site](https://example.com) и > цитата",
+      "x": 60.0, "y": 240.0, "width": 300.0, "height": 130.0
+    },
+    {
+      "id": "c5", "type": "text", "color": "5",
+      "text": "Cyan preset\n```\nlet x = 42;\n```",
+      "x": 400.0, "y": 240.0, "width": 300.0, "height": 140.0
+    },
+    {
+      "id": "c6", "type": "text", "color": "6",
+      "text": "Purple preset\nx = 200\nc = a + b",
+      "x": 740.0, "y": 240.0, "width": 300.0, "height": 120.0
+    },
+    {
+      "id": "hex_light", "type": "text", "color": "#ffff88",
+      "text": "Light hex #ffff88\ndeploy + db / 2",
+      "x": 60.0, "y": 420.0, "width": 300.0, "height": 110.0
+    },
+    {
+      "id": "hex_dark", "type": "text", "color": "#203040",
+      "text": "Dark hex #203040\n100 req / 2 sec",
+      "x": 400.0, "y": 420.0, "width": 300.0, "height": 110.0
+    },
+    {
+      "id": "hex_mid", "type": "text", "color": "#787878",
+      "text": "Mid-grey #787878 (dead zone)\nvm = 40 $",
+      "x": 740.0, "y": 420.0, "width": 300.0, "height": 110.0
+    },
+    {
+      "id": "default", "type": "text",
+      "text": "Default card (no color)\n2 + 2 * 10",
+      "x": 400.0, "y": 570.0, "width": 300.0, "height": 100.0
+    }
+  ],
+  "edges": []
+}

@@ -22,15 +22,38 @@ pub const SELECTION_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 1.0];
 /// Рамка битой ссылки (brokenLink) — серая.
 pub const BROKEN_BORDER: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
 
-/// Пресеты цветов JSON Canvas ("1".."6"), приглушённые тона поверх тёмного фона.
-const PRESET_COLORS: [(&str, [f32; 4]); 6] = [
+/// Пресеты цветов JSON Canvas ("1".."6"), тёмная тема: приглушённые тона
+/// поверх тёмного фона; светлый текст темы даёт ≥ 7:1 (см. тесты contrast).
+pub(crate) const PRESET_COLORS_DARK: [(&str, [f32; 4]); 6] = [
     ("1", [0.42, 0.24, 0.24, 1.0]), // red
     ("2", [0.45, 0.33, 0.20, 1.0]), // orange
-    ("3", [0.45, 0.41, 0.20, 1.0]), // yellow
+    ("3", [0.42, 0.38, 0.19, 1.0]), // yellow (затемнён к AA ≥ 4.5 с текстом темы, CR-007)
     ("4", [0.24, 0.40, 0.26, 1.0]), // green
     ("5", [0.20, 0.38, 0.40, 1.0]), // cyan
     ("6", [0.36, 0.27, 0.45, 1.0]), // purple
 ];
+
+/// Пресеты светлой темы — пастели (практика Obsidian/JSON Canvas: на светлом
+/// канвасе карточки светло-тонированные, текст тёмный). Тот же порядок
+/// оттенков, что у тёмной палитры: red/orange/yellow/green/cyan/purple.
+/// Тёмные «чернила» дают ≥ 10:1 (см. тесты contrast).
+pub(crate) const PRESET_COLORS_LIGHT: [(&str, [f32; 4]); 6] = [
+    ("1", [0.93, 0.76, 0.73, 1.0]), // red
+    ("2", [0.94, 0.83, 0.64, 1.0]), // orange
+    ("3", [0.92, 0.87, 0.66, 1.0]), // yellow
+    ("4", [0.75, 0.84, 0.74, 1.0]), // green
+    ("5", [0.70, 0.82, 0.84, 1.0]), // cyan
+    ("6", [0.82, 0.75, 0.87, 1.0]), // purple
+];
+
+/// Палитра пресетов под тему.
+fn preset_palette(theme: &ThemeColors) -> &'static [(&'static str, [f32; 4]); 6] {
+    if theme.is_dark() {
+        &PRESET_COLORS_DARK
+    } else {
+        &PRESET_COLORS_LIGHT
+    }
+}
 
 /// Парсинг `#RRGGBB` в RGBA 0..1.
 fn parse_hex(color: &str) -> Option<[f32; 4]> {
@@ -44,11 +67,21 @@ fn parse_hex(color: &str) -> Option<[f32; 4]> {
     Some([channel(0)?, channel(2)?, channel(4)?, 1.0])
 }
 
-/// Цвет по JSON Canvas spec: пресет "1".."6" или "#RRGGBB".
-/// None — цвет не задан или не парсится (вызывающий подставляет свой дефолт).
-pub fn named_color(color: Option<&str>) -> Option<[f32; 4]> {
+/// Цвет по JSON Canvas spec: пресет "1".."6" или "#RRGGBB" (без темы —
+/// тёмная палитра пресетов; для заливок карточек используйте [`named_color`]).
+fn parse_color_raw(color: &str) -> Option<[f32; 4]> {
+    PRESET_COLORS_DARK
+        .iter()
+        .find(|(key, _)| *key == color)
+        .map(|(_, rgba)| *rgba)
+        .or_else(|| parse_hex(color))
+}
+
+/// Цвет по JSON Canvas spec с учётом темы: пресет "1".."6" (палитра темы)
+/// или "#RRGGBB". None — не задан или не парсится (вызывающий подставляет дефолт).
+pub fn named_color(color: Option<&str>, theme: &ThemeColors) -> Option<[f32; 4]> {
     let value = color?;
-    PRESET_COLORS
+    preset_palette(theme)
         .iter()
         .find(|(key, _)| *key == value)
         .map(|(_, rgba)| *rgba)
@@ -58,12 +91,13 @@ pub fn named_color(color: Option<&str>) -> Option<[f32; 4]> {
 /// Цвет заливки карточки: пресет "1".."6" или "#RRGGBB" по JSON Canvas spec,
 /// иначе заливка по умолчанию из темы.
 pub fn card_color(node: &Node, theme: &ThemeColors) -> [f32; 4] {
-    named_color(node.color.as_deref()).unwrap_or(theme.card_fill)
+    named_color(node.color.as_deref(), theme).unwrap_or(theme.card_fill)
 }
 
-/// Цвет пресета палитры JSON Canvas ("1".."6") — для меню выбора цвета (T7).
-pub fn preset_color(preset: &str) -> Option<[f32; 4]> {
-    PRESET_COLORS
+/// Цвет пресета палитры JSON Canvas ("1".."6") по теме — для меню выбора
+/// цвета (T7) и свотчей: свотч совпадает с тем, чем зальётся карточка.
+pub fn preset_color(preset: &str, theme: &ThemeColors) -> Option<[f32; 4]> {
+    preset_palette(theme)
         .iter()
         .find(|(key, _)| *key == preset)
         .map(|(_, rgba)| *rgba)
@@ -542,7 +576,8 @@ pub fn build_edge_instances(
             } else {
                 EDGE_COLOR
             };
-            let mut fill = named_color(edge.color.as_deref()).unwrap_or(default_fill);
+            let mut fill =
+                parse_color_raw(edge.color.as_deref().unwrap_or_default()).unwrap_or(default_fill);
             if focus.dim > 0.0 {
                 fill[3] *= focus.dim_factor();
             }
@@ -887,18 +922,25 @@ mod tests {
         std::collections::HashSet::new()
     }
 
-    /// Пресеты "1".."6" отличаются от дефолта и друг от друга.
+    /// Пресеты "1".."6" отличаются от дефолта и друг от друга; палитра зависит
+    /// от темы (тёмные тона в тёмной, пастели в светлой).
     #[test]
     fn color_presets() {
         let theme = ThemeColors::dark();
         let mut node = Node::text("n", "t", 0.0, 0.0);
         assert_eq!(card_color(&node, &theme), theme.card_fill);
         node.color = Some("3".into());
-        assert_eq!(card_color(&node, &theme), PRESET_COLORS[2].1);
+        assert_eq!(card_color(&node, &theme), PRESET_COLORS_DARK[2].1);
         node.color = Some("6".into());
-        assert_eq!(card_color(&node, &theme), PRESET_COLORS[5].1);
+        assert_eq!(card_color(&node, &theme), PRESET_COLORS_DARK[5].1);
         node.color = Some("9".into());
         assert_eq!(card_color(&node, &theme), theme.card_fill);
+        // Светлая тема: тот же пресет — пастель из светлой палитры
+        let light = ThemeColors::light();
+        assert_eq!(card_color(&node, &light), light.card_fill);
+        node.color = Some("3".into());
+        assert_eq!(card_color(&node, &light), PRESET_COLORS_LIGHT[2].1);
+        assert_ne!(PRESET_COLORS_LIGHT[2].1, PRESET_COLORS_DARK[2].1);
     }
 
     /// Hex-цвет "#RRGGBB" парсится; битый — дефолт темы.
@@ -1018,11 +1060,22 @@ mod tests {
     /// named_color: пресеты и hex парсятся, мусор и None — None (дефолт на вызывающем).
     #[test]
     fn named_color_parsing() {
-        assert_eq!(named_color(None), None);
-        assert_eq!(named_color(Some("1")), Some(PRESET_COLORS[0].1));
-        assert_eq!(named_color(Some("#ff8000")).map(|c| c[0]), Some(1.0));
-        assert_eq!(named_color(Some("9")), None);
-        assert_eq!(named_color(Some("#zzz")), None);
+        let theme = ThemeColors::dark();
+        assert_eq!(named_color(None, &theme), None);
+        assert_eq!(
+            named_color(Some("1"), &theme),
+            Some(PRESET_COLORS_DARK[0].1)
+        );
+        assert_eq!(
+            named_color(Some("#ff8000"), &theme).map(|c| c[0]),
+            Some(1.0)
+        );
+        assert_eq!(named_color(Some("9"), &theme), None);
+        assert_eq!(named_color(Some("#zzz"), &theme), None);
+        // Связи: raw-парсинг без темы — прежнее поведение (тёмные пресеты)
+        assert_eq!(parse_color_raw("2"), Some(PRESET_COLORS_DARK[1].1));
+        assert_eq!(parse_color_raw("#ff8000").map(|c| c[0]), Some(1.0));
+        assert_eq!(parse_color_raw("9"), None);
     }
 
     /// Инстансы связей (T8): кружки вдоль полилинии + усы стрелки; выделенная —
@@ -1048,8 +1101,8 @@ mod tests {
             "кружки линии + стрелка: {}",
             instances.len()
         );
-        // Все инстансы — кружки без тени цвета пресета "2"
-        let expected = named_color(Some("2")).expect("пресет");
+        // Все инстансы — кружки без тени цвета пресета "2" (raw-парсинг связей)
+        let expected = parse_color_raw("2").expect("пресет");
         for inst in &instances {
             assert_eq!(inst.params[0], inst.size[0] / 2.0, "круг: radius = d/2");
             assert_eq!(inst.params[3], 1.0, "без тени");

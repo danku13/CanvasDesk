@@ -54,7 +54,13 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
-    /// Тёмная тема (базовая, SPEC T1) — прежние константы рендера.
+    /// Тема тёмная? (по фону: тёмный фон #1e1e22 / светлый #f5f5f7).
+    /// Управляет выбором палитры пресетов и «чернил» авто-контраста.
+    pub fn is_dark(&self) -> bool {
+        self.background.iter().map(|&c| c as u32).sum::<u32>() < 384
+    }
+
+    /// Тёмная палитра (базовая, SPEC T1) — прежние константы рендера.
     pub fn dark() -> Self {
         Self {
             background: [0x1e, 0x1e, 0x22],
@@ -107,6 +113,27 @@ impl ThemeColors {
             group_fill: [0.396, 0.612, 0.969, 0.10],
             group_border: [0.36, 0.55, 0.90, 0.50],
         }
+    }
+
+    /// Пара «чернил» для авто-контраста текста на цветных карточках:
+    /// чистые экстремумы (чёрный/белый). Гарантия WCAG: лучший из пары даёт
+    /// ≥ 4.5:1 с ЛЮБОЙ заливкой (минимум min-max 4.58 на фоне ~#777).
+    /// Вид темы на обычных заливках сохраняет не выбор чернил, а смешение
+    /// исходного цвета к экстремуму внутри `contrast::ensure_contrast` —
+    /// чернила — последний рубеж для мёртвой зоны средне-серых фонов.
+    pub fn ink_candidates(&self) -> [Color; 2] {
+        [Color::rgb(0x00, 0x00, 0x00), Color::rgb(0xff, 0xff, 0xff)]
+    }
+
+    /// Проверка/починка цвета текста на заливке карточки: окрашенные ноды
+    /// обязаны читаться (WCAG AA ≥ 4.5:1), неокрашенные — тема как была.
+    /// См. `contrast::ensure_contrast` — оттенок сохраняется по возможности.
+    pub fn readable_on_card(&self, text: Color, fill: [f32; 4], colored: bool) -> Color {
+        if !colored {
+            return text;
+        }
+        let [ink_a, ink_b] = self.ink_candidates();
+        crate::contrast::ensure_contrast(text, fill, 4.5, ink_a, ink_b)
     }
 
     /// Палитра по enum темы (canvas-core).
@@ -205,5 +232,100 @@ mod tests {
         // Светлый фон в linear ярче тёмного
         let light = ThemeColors::light().clear_color();
         assert!(light.r > clear.r);
+    }
+
+    /// is_dark корректно различает темы (основа выбора палитры пресетов).
+    #[test]
+    fn is_dark_matches_background() {
+        assert!(ThemeColors::dark().is_dark());
+        assert!(!ThemeColors::light().is_dark());
+    }
+
+    /// Гарантия доступности (WCAG AA): readable_on_card возвращает ≥ 4.5:1
+    /// на ЛЮБОЙ заливке — серая шкала, дефолтные заливки, все пресеты обеих
+    /// тем и сетка цветовых шумов (средне-серые фоны спасает смешение к
+    /// экстремуму внутри ensure_contrast, не пара «чернил» как таковая).
+    #[test]
+    fn readable_on_card_guarantees_aa_contrast_everywhere() {
+        use crate::contrast::contrast_text_vs_fill;
+        let dark = ThemeColors::dark();
+        let light = ThemeColors::light();
+        let mut fills: Vec<[f32; 4]> = Vec::new();
+        // Серая шкала 0..255 — худшие случаи для любого авто-выбора
+        for step in (0..=255).step_by(4) {
+            let c = step as f32 / 255.0;
+            fills.push([c, c, c, 1.0]);
+        }
+        // Цветовой шум: покрываем светлые/тёмные/средние тона всех оттенков
+        for r in [0.1f32, 0.35, 0.6, 0.9] {
+            for g in [0.1f32, 0.4, 0.65, 0.95] {
+                for b in [0.1f32, 0.45, 0.7, 0.95] {
+                    fills.push([r, g, b, 1.0]);
+                }
+            }
+        }
+        fills.push(dark.card_fill);
+        fills.push(light.card_fill);
+        for (_, fill) in crate::cards::PRESET_COLORS_DARK {
+            fills.push(fill);
+        }
+        for (_, fill) in crate::cards::PRESET_COLORS_LIGHT {
+            fills.push(fill);
+        }
+        // Проверяем ремонт всех «типовых» цветов текста темы
+        for theme in [dark, light] {
+            let samples = [theme.title, theme.body, theme.icon, theme.link, theme.quote];
+            for fill in &fills {
+                for &sample in &samples {
+                    let fixed = theme.readable_on_card(sample, *fill, true);
+                    let ratio = contrast_text_vs_fill(fixed, *fill);
+                    assert!(
+                        ratio >= 4.5,
+                        "контраст {ratio:.2} < 4.5: text={sample:?}, fill={fill:?}, dark={:?}",
+                        theme.is_dark()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Пресеты читаются цветом заголовка своей темы: тёмная — AA (≥ 4.5,
+    /// приглушённые тона остаются прежними — регрессия вида), светлая —
+    /// AAA (≥ 7: пастели спроектированы под тёмный текст).
+    #[test]
+    fn presets_meet_contrast_with_theme_title() {
+        use crate::contrast::contrast_text_vs_fill;
+        for (_, fill) in crate::cards::PRESET_COLORS_DARK {
+            let ratio = contrast_text_vs_fill(ThemeColors::dark().title, fill);
+            assert!(
+                ratio >= 4.5,
+                "тёмная тема: {ratio:.2} < 4.5 у заливки {fill:?}"
+            );
+        }
+        for (_, fill) in crate::cards::PRESET_COLORS_LIGHT {
+            let ratio = contrast_text_vs_fill(ThemeColors::light().title, fill);
+            assert!(
+                ratio >= 7.0,
+                "светлая тема: {ratio:.2} < 7 у заливки {fill:?}"
+            );
+        }
+    }
+
+    /// readable_on_card: неокрашенная нода — цвет темы без изменений;
+    /// окрашенная — результат читается (≥ 4.5) на её заливке.
+    #[test]
+    fn readable_on_card_remaps_only_colored() {
+        use crate::contrast::contrast_text_vs_fill;
+        let dark = ThemeColors::dark();
+        let light = ThemeColors::light();
+        let title = dark.title;
+        // Неокрашенная: тема не трогается даже на светлом card_fill... —
+        // точнее: флаг colored=false отключает ремап целиком
+        assert_eq!(dark.readable_on_card(title, light.card_fill, false), title);
+        // Окрашенная светлая заливка в тёмной теме → текст сменён и читается
+        let pastel = crate::cards::PRESET_COLORS_LIGHT[2].1; // yellow
+        let fixed = dark.readable_on_card(title, pastel, true);
+        assert_ne!(fixed, title);
+        assert!(contrast_text_vs_fill(fixed, pastel) >= 4.5);
     }
 }
