@@ -44,7 +44,8 @@ use canvas_render::search_ui::{
     SearchRow,
 };
 use canvas_render::text::{
-    body_area, OverlayText, ScreenText, TextAlign, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    body_area, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_PADDING, BODY_TOP_GAP,
+    RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
@@ -184,6 +185,16 @@ fn split_formula_lines(text: &str) -> Option<String> {
         })
         .collect();
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// FR-013 (правка 4): зона наведения бейджа ошибки формульной строки под
+/// курсором (все координаты — логические px окна). Вынесено из App для
+/// прямого unit-тестирования.
+fn expr_error_hit_at(hits: &[LineErrorHit], cursor: [f32; 2]) -> Option<&LineErrorHit> {
+    hits.iter().find(|hit| {
+        let [x, y, w, h] = hit.rect;
+        cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+    })
 }
 
 /// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
@@ -620,6 +631,11 @@ struct App {
     resizing: Option<usize>,
     /// Нода под курсором (T8): показываются порты для начала drag связи.
     hovered: Option<usize>,
+    /// FR-013 (правка 4): зоны наведения бейджей ошибок формульных строк с
+    /// прошлого кадра (логические px + текст ошибки). Заполняется после
+    /// рендера, используется в сборке оверлея кадра (тултип у курсора —
+    /// паттерн тултипа битой ссылки T10). Отставание в кадр незаметно.
+    expr_error_hits: Vec<LineErrorHit>,
     /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
     edge_drag: Option<EdgeDrag>,
     /// Рамка выделения (CR-001): (start world, current world, press screen)
@@ -808,6 +824,7 @@ impl App {
             palette_seen: None,
             resizing: None,
             hovered: None,
+            expr_error_hits: Vec::new(),
             edge_drag: None,
             select_rect: None,
             node_clipboard: Vec::new(),
@@ -1985,6 +2002,13 @@ impl App {
     fn cursor_world(&self) -> Vec2 {
         self.camera
             .screen_to_world(self.cursor, self.viewport_logical())
+    }
+
+    /// FR-013 (правка 4): зона наведения бейджа ошибки формульной строки
+    /// под курсором (логические px окна), None — мимо всех бейджей. Зоны —
+    /// с прошлого кадра (`expr_error_hits`); отставание в кадр незаметно.
+    fn expr_error_hit_at(&self, cursor: [f32; 2]) -> Option<&LineErrorHit> {
+        expr_error_hit_at(&self.expr_error_hits, cursor)
     }
 
     /// Клиентские ФИЗИЧЕСКИЕ px от shell (DragEvent) -> world-координаты:
@@ -6630,6 +6654,22 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Left,
                     });
                 }
+                // Тултип ошибки формульной строки (FR-013, правка 4): курсор
+                // над бейджем «!» (зоны — с прошлого кадра) — сообщение об
+                // ошибке у курсора; так видно, ЧТО именно не так в расчёте
+                if let Some(hit) = self.expr_error_hit_at(self.cursor) {
+                    let viewport = self.viewport_logical();
+                    let origin_x =
+                        (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                    owned_texts.push(OwnedScreenText {
+                        text: hit.message.clone(),
+                        origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                        width: TOOLTIP_WIDTH,
+                        font_size: 13.0,
+                        color: Color::rgb(0xe5, 0x5c, 0x5c),
+                        align: TextAlign::Left,
+                    });
+                }
                 // T21: модальный диалог (screen-space): панель + тексты +
                 // кнопки; рендер после битой ссылки — поверх всего канваса
                 if let Some(dialog) = &self.dialog {
@@ -6935,6 +6975,18 @@ impl ApplicationHandler<AppEvent> for App {
                         .unwrap_or(0.0),
                 };
                 if let Some(renderer) = self.renderer.as_mut() {
+                    // FR-013 (правка 4): живые построчные результаты (Numi —
+                    // результаты по ходу набора): считаем из текста СЕССИИ
+                    // на каждый кадр (дёшево: парсинг только формульных
+                    // строк; fit_note_size уже вызывает eval_lines покадрово)
+                    let editing_line_results: Option<Vec<Option<ExprOutcome>>> =
+                        self.editing.as_ref().and_then(|session| {
+                            let index = session.node_index()?;
+                            let node = self.scene.canvas.nodes.get(index)?;
+                            node.kind()
+                                .eq(&NodeKind::Text)
+                                .then(|| expr::eval_lines(&session.text()))
+                        });
                     let scene = SceneView {
                         canvas: &self.scene.canvas,
                         spatial: &self.scene.spatial,
@@ -6952,6 +7004,7 @@ impl ApplicationHandler<AppEvent> for App {
                         collapsed_counts: &collapsed_counts,
                         expr_results: &self.scene.expr_results,
                         expr_line_results: &self.scene.expr_line_results,
+                        expr_editing_results: editing_line_results.as_deref(),
                     };
                     match renderer.render(
                         &self.camera,
@@ -6966,6 +7019,9 @@ impl ApplicationHandler<AppEvent> for App {
                             event_loop.exit();
                         }
                     }
+                    // FR-013 (правка 4): зоны ошибок кадра — для тултипа в
+                    // оверлее следующего кадра (отставание в кадр незаметно)
+                    self.expr_error_hits = renderer.line_error_hits().to_vec();
                 }
                 // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
                 // уже установилась; ответы придут через AppEvent::ThumbsReady
@@ -8254,5 +8310,130 @@ mod tests {
             ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
             other => panic!("ожидалось значение: {other:?}"),
         }
+    }
+
+    /// FR-013 (правка 4): ТОЧНЫЕ листы владельца из фидбека — присваивания
+    /// (обе формы), ссылки на переменные, кумулятивное окружение. Каждая
+    /// строка показывает результат, присваивания наполняют Env.
+    #[test]
+    fn per_line_results_owner_sheets_v4() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // Нода 1 владельца
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"123 + 5123 = a\n235 + 2323 = b\nx = 200\nc = a + b\n200 + x"}"#,
+        )
+        .expect("node_update_text нода 1");
+        let lines = scene
+            .expr_line_results
+            .get("n1")
+            .expect("построчные результаты ноды 1");
+        assert_eq!(lines.len(), 5);
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|line| match line {
+                Some(ExprOutcome::Ok(value)) => value.to_string(),
+                other => panic!("ожидалось значение: {other:?}"),
+            })
+            .collect();
+        assert_eq!(texts[0], "5246", "хвостовое присваивание a");
+        assert_eq!(texts[1], "2558", "хвостовое присваивание b");
+        assert_eq!(texts[2], "200", "чистое присваивание x");
+        assert_eq!(texts[3], "7804", "ссылки на переменные c = a + b");
+        assert_eq!(texts[4], "400", "ссылка на x");
+
+        // Нода 2 владельца
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"x = 200\n250 + x"}"#,
+        )
+        .expect("node_update_text нода 2");
+        let lines = scene
+            .expr_line_results
+            .get("n1")
+            .expect("построчные результаты ноды 2");
+        assert_eq!(lines.len(), 2);
+        match lines[0].as_ref().expect("x = 200") {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "200"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
+        match lines[1].as_ref().expect("250 + x") {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "450"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
+    }
+
+    /// FR-013 (правка 4): ошибки строк доходят до expr_line_results как
+    /// ExprOutcome::Err (для красного бейджа и тултипа); ссылки на
+    /// объявленную, но не вычислившуюся переменную тоже помечены.
+    #[test]
+    fn per_line_error_outcomes_reach_scene() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"x = 1 sec + 2 req\nx + 1\nитог = 2 + 2"}"#,
+        )
+        .expect("node_update_text ошибки");
+        let lines = scene
+            .expr_line_results
+            .get("n1")
+            .expect("построчные результаты есть");
+        assert_eq!(lines.len(), 3);
+        assert!(
+            matches!(&lines[0], Some(ExprOutcome::Err(_))),
+            "несовместимость единиц видна"
+        );
+        assert!(
+            matches!(&lines[1], Some(ExprOutcome::Err(_))),
+            "ссылка на объявленную, но не вычисленную x видна"
+        );
+        assert!(
+            matches!(&lines[2], Some(ExprOutcome::Ok(_))),
+            "строка ниже по-прежнему вычисляется"
+        );
+    }
+
+    /// FR-013 (правка 4): hit-тест зон наведения бейджей ошибок.
+    #[test]
+    fn expr_error_tooltip_hit_test() {
+        let hits = vec![
+            LineErrorHit {
+                rect: [360.0, 34.0, 25.0, 36.0],
+                message: "единицы не совместимы: 1 sec и 2 req".to_owned(),
+            },
+            LineErrorHit {
+                rect: [360.0, 54.0, 25.0, 36.0],
+                message: "деление на ноль".to_owned(),
+            },
+        ];
+        // Внутри первой зоны
+        assert_eq!(
+            expr_error_hit_at(&hits, [372.0, 40.0]).map(|hit| &*hit.message),
+            Some("единицы не совместимы: 1 sec и 2 req"),
+        );
+        // Внутри второй зоны (первая кончается на y=70 — берём точку ниже)
+        assert_eq!(
+            expr_error_hit_at(&hits, [378.0, 80.0]).map(|hit| &*hit.message),
+            Some("деление на ноль"),
+        );
+        // Мимо всех зон
+        assert!(
+            expr_error_hit_at(&hits, [100.0, 40.0]).is_none(),
+            "мимо по x"
+        );
+        assert!(
+            expr_error_hit_at(&hits, [372.0, 200.0]).is_none(),
+            "мимо по y"
+        );
+        // Пустой набор зон
+        assert!(expr_error_hit_at(&[], [372.0, 40.0]).is_none());
     }
 }

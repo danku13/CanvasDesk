@@ -6,7 +6,7 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use canvas_core::expr::{ExprLineResults, ExprResults};
+use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
 use canvas_core::{edge_midpoint, Canvas, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
@@ -171,6 +171,10 @@ pub struct SceneView<'a> {
     /// FR-013 (правка 2): построчные результаты формул (Numi-стиль) —
     /// результат каждой формульной строки у правого края её строки.
     pub expr_line_results: &'a ExprLineResults,
+    /// FR-013 (правка 4): живые построчные результаты редактируемой ноды
+    /// (вычисляются приложением из текста сессии на каждом кадре). None —
+    /// редактирования нет или оно не текстовой ноды.
+    pub expr_editing_results: Option<&'a [Option<ExprOutcome>]>,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -461,6 +465,13 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.gpu.device, &self.config);
+    }
+
+    /// FR-013 (правка 4): зоны наведения бейджей ошибок формульных строк,
+    /// собранные при подготовке ПОСЛЕДНЕГО кадра (логические px окна) —
+    /// приложение hit-тестит курсор и показывает тултип с текстом ошибки.
+    pub fn line_error_hits(&self) -> &[crate::text::LineErrorHit] {
+        self.text.line_error_hits()
     }
 
     /// Отрисовать кадр: фон, сетка, связи (T8), карточки видимых нод,
@@ -909,6 +920,7 @@ impl Renderer {
                 collapsed_counts: scene.collapsed_counts,
                 expr_results: scene.expr_results,
                 expr_line_results: scene.expr_line_results,
+                editing_line_results: scene.expr_editing_results,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

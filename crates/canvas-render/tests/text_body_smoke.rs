@@ -57,6 +57,7 @@ fn headless_note_body_draws() {
             // FR-013: без формул
             expr_results: &std::collections::HashMap::new(),
             expr_line_results: &std::collections::HashMap::new(),
+            editing_line_results: None,
         },
     )
     .expect("prepare текста");

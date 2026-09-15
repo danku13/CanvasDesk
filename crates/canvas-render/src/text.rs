@@ -59,6 +59,24 @@ pub const RESULT_LINE_HEIGHT: f32 = 16.0;
 /// Цвет строки результата с ОШИБКОЙ (парсинг/вычисление) — красный акцент
 /// (FR-013: «красная строка с тултипом»; согласован с рамкой битой ссылки).
 const RESULT_ERROR_COLOR: Color = Color::rgb(0xe5, 0x5c, 0x5c);
+/// FR-013 (правка 4): текст бейджа ошибки формульной строки — компактный
+/// красный маркер у правого края СВОЕЙ строки; подробности — в тултипе
+/// при наведении (длинные сообщения не влезают в строку ноды).
+const LINE_ERROR_BADGE: &str = "!";
+/// FR-013 (правка 4): расширение зоны наведения бейджа ошибки в логических
+/// px в каждую сторону — один глиф «!» слишком мал для точного попадания
+/// курсора.
+const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
+
+/// FR-013 (правка 4): зона наведения бейджа ошибки формульной строки —
+/// логические px окна (x, y, w, h) и текст ошибки для тултипа. Собирается
+/// при подготовке текста кадра, вычитывается приложением после рендера
+/// (hit-тест курсора → тултип, паттерн тултипа битой ссылки T10).
+#[derive(Debug, Clone)]
+pub struct LineErrorHit {
+    pub rect: [f32; 4],
+    pub message: String,
+}
 /// Размер шрифта бейджа «=» calc-ноды при дальнем зуме (FR-013) —
 /// физические px (не масштабируется зумом, как HUD).
 const BADGE_FONT_SIZE: f32 = 10.0;
@@ -879,8 +897,13 @@ pub struct TitleFrame<'a> {
     /// результата берётся отсюда (`ExprOutcome::Ok` — значение,
     /// `ExprOutcome::Err` — красная диагностика).
     pub expr_results: &'a ExprResults,
-    /// FR-013 (правка 2): построчные результаты формул (Numi-стиль).
+    /// FR-013: построчные результаты формул (Numi-стиль).
     pub expr_line_results: &'a ExprLineResults,
+    /// FR-013 (правка 4): живые построчные результаты редактируемой ноды
+    /// (вычисляются приложением из текста СЕССИИ на каждом кадре — Numi
+    /// показывает результаты по ходу набора). Привязка — к рядам буфера
+    /// редактора (`LayoutRun.line_i`). meaningful при `editing: Some`.
+    pub editing_line_results: Option<&'a [Option<ExprOutcome>]>,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -899,6 +922,31 @@ fn group_contains_node(indices: &[usize], group: &[usize], editing: usize) -> bo
     group
         .iter()
         .any(|&pos| index_at(indices, pos) == Some(editing))
+}
+
+/// FR-013 (правка 4): прямоугольник зоны наведения бейджа ошибки строки
+/// (физические px входа → логические px окна в выходе): расширенный на
+/// LINE_ERROR_HIT_PAD_PX в каждую сторону, чтобы малый глиф «!» легко
+/// попадал под курсор. `message` — текст ошибки для тултипа.
+fn error_hit_rect(
+    left_phys: f32,
+    top_phys: f32,
+    width_px: f32,
+    zoom_px: f32,
+    scale_factor: f32,
+    message: String,
+) -> LineErrorHit {
+    let pad = LINE_ERROR_HIT_PAD_PX * scale_factor;
+    let height = RESULT_LINE_HEIGHT * zoom_px;
+    LineErrorHit {
+        rect: [
+            (left_phys - pad) / scale_factor,
+            (top_phys - pad) / scale_factor,
+            (width_px + 2.0 * pad) / scale_factor,
+            (height + 2.0 * pad) / scale_factor,
+        ],
+        message,
+    }
 }
 
 /// Зашейпленные буферы заголовка и тела ноды: валидны, пока не изменились
@@ -937,8 +985,11 @@ struct LineResultBuf {
     width_px: f32,
     /// Индекс строки текста ноды, к которой привязан результат.
     source_line: usize,
-    /// Ошибка — красный цвет.
+    /// Ошибка — красный бейдж «!» вместо текста (правка 4).
     error: bool,
+    /// FR-013 (правка 4): полный текст ошибки — для тултипа при наведении
+    /// на бейдж (None для успешных строк).
+    message: Option<String>,
 }
 
 /// Зашейпленный лейбл связи (T8): валиден при том же тексте и зуме.
@@ -967,6 +1018,10 @@ pub struct TextSystem {
     cache: HashMap<usize, CachedTitle>,
     /// Кэш лейблов связей по id связи (T8).
     label_cache: HashMap<String, CachedEdgeLabel>,
+    /// FR-013 (правка 4): зоны наведения бейджей ошибок формульных строк
+    /// (логические px) — пересобираются каждый кадр в prepare_titles;
+    /// приложение вычитывает после рендера для тултипа.
+    line_error_hits: Vec<LineErrorHit>,
     /// Номер кадра для LRU-вытеснения кэша.
     tick: u64,
     /// Палитра темы: цвета заголовка/иконки/тела/лейбла связи.
@@ -992,6 +1047,7 @@ impl TextSystem {
             renderers: vec![renderer],
             cache: HashMap::new(),
             label_cache: HashMap::new(),
+            line_error_hits: Vec::new(),
             tick: 0,
             theme: ThemeColors::dark(),
         }
@@ -1055,6 +1111,13 @@ impl TextSystem {
         self.cache.clear();
     }
 
+    /// FR-013 (правка 4): зоны наведения бейджей ошибок формульных строк,
+    /// собранные в последнем prepare_titles (логические px окна). Приложение
+    /// hit-тестит курсор и показывает тултип с текстом ошибки.
+    pub fn line_error_hits(&self) -> &[LineErrorHit] {
+        &self.line_error_hits
+    }
+
     /// Подготовить тексты кадра по текст-группам z-плана (zorder.rs):
     /// заголовки/тела видимых нод (culling, T5: `frame.indices` — выдача
     /// spatial index по viewport), буфер редактора (T7) на z-позиции
@@ -1068,6 +1131,9 @@ impl TextSystem {
         frame: &TitleFrame,
     ) -> Result<(), glyphon::PrepareError> {
         self.tick += 1;
+        // FR-013 (правка 4): зоны ошибок пересобираются заново каждый кадр
+        // (позиции зависят от камеры/зума)
+        let mut error_hits: Vec<LineErrorHit> = Vec::new();
         let viewport_physical = frame.viewport_physical;
         let scale_factor = frame.scale_factor;
         self.viewport.update(
@@ -1281,7 +1347,9 @@ impl TextSystem {
                     };
 
                     // FR-013 (правка 2): буферы результатов формульных строк
-                    // (Numi-стиль) — шейпятся вместе с кэшем ноды
+                    // (Numi-стиль) — шейпятся вместе с кэшем ноды; ошибка —
+                    // красный бейдж «!» (правка 4: полный текст уходит в
+                    // тултип, длинные сообщения не влезают в строку ноды)
                     let line_results = line_outcomes
                         .map(|lines| {
                             let (_, body_width, _) = body_area(node);
@@ -1291,9 +1359,11 @@ impl TextSystem {
                                 .enumerate()
                                 .filter_map(|(i, outcome)| {
                                     let outcome = outcome.as_ref()?;
-                                    let text = match outcome {
-                                        ExprOutcome::Ok(value) => value.to_string(),
-                                        ExprOutcome::Err(msg) => msg.clone(),
+                                    let (text, message) = match outcome {
+                                        ExprOutcome::Ok(value) => (value.to_string(), None),
+                                        ExprOutcome::Err(msg) => {
+                                            (LINE_ERROR_BADGE.to_owned(), Some(msg.clone()))
+                                        }
                                     };
                                     if text.is_empty() {
                                         return None;
@@ -1328,6 +1398,7 @@ impl TextSystem {
                                         width_px,
                                         source_line: i,
                                         error: matches!(outcome, ExprOutcome::Err(_)),
+                                        message,
                                     })
                                 })
                                 .collect()
@@ -1505,6 +1576,52 @@ impl TextSystem {
             badge_buffer = Some(buffer);
         }
 
+        // FR-013 (правка 4): ЖИВЫЕ построчные результаты редактируемой ноды
+        // (Numi показывает результаты по ходу набора) — шейпятся покадрово:
+        // текст сессии меняется при каждой правке, буферы маленькие. Ошибка —
+        // красный бейдж «!», полный текст ошибки — в кортеже для тултипа.
+        let mut live_line_buffers: Vec<(Buffer, f32, usize, bool, String)> = Vec::new();
+        if let (Some(edit_index), Some(outcomes)) = (frame.editing, frame.editing_line_results) {
+            if let Some(node) = frame.canvas.nodes.get(edit_index) {
+                if node.kind() == NodeKind::Text {
+                    let (_, body_width, _) = body_area(node);
+                    let area_px = (body_width * zoom_px).max(1.0);
+                    for (i, outcome) in outcomes.iter().enumerate() {
+                        let Some(outcome) = outcome.as_ref() else {
+                            continue;
+                        };
+                        let (text, message) = match outcome {
+                            ExprOutcome::Ok(value) => (value.to_string(), String::new()),
+                            ExprOutcome::Err(msg) => (LINE_ERROR_BADGE.to_owned(), msg.clone()),
+                        };
+                        let mut buffer = Buffer::new(
+                            &mut self.font_system,
+                            Metrics::new(RESULT_FONT_SIZE * zoom_px, RESULT_LINE_HEIGHT * zoom_px),
+                        );
+                        buffer.set_wrap(&mut self.font_system, Wrap::None);
+                        buffer.set_size(
+                            &mut self.font_system,
+                            Some(area_px),
+                            Some(RESULT_LINE_HEIGHT * zoom_px),
+                        );
+                        buffer.set_text(
+                            &mut self.font_system,
+                            &text,
+                            Attrs::new(),
+                            Shaping::Advanced,
+                        );
+                        buffer.shape_until_scroll(&mut self.font_system, false);
+                        let width_px = buffer
+                            .layout_runs()
+                            .next()
+                            .map(|run| run.line_w)
+                            .unwrap_or(0.0);
+                        live_line_buffers.push((buffer, width_px, i, !message.is_empty(), message));
+                    }
+                }
+            }
+        }
+
         for (g, group) in frame.zplan.text_groups.iter().enumerate() {
             let mut areas: Vec<TextArea> = Vec::with_capacity(group.len() * 3 + 4);
             if show_titles {
@@ -1649,6 +1766,77 @@ impl TextSystem {
                                 },
                                 custom_glyphs: &[],
                             });
+                            // FR-013 (правка 4): ошибка — расширенная зона
+                            // наведения вокруг бейджа для тултипа
+                            if line_result.error {
+                                error_hits.push(error_hit_rect(
+                                    left_phys,
+                                    top_phys,
+                                    line_result.width_px,
+                                    zoom_px,
+                                    scale_factor,
+                                    line_result.message.clone().unwrap_or_default(),
+                                ));
+                            }
+                        }
+                    }
+                    // FR-013 (правка 4): ЖИВЫЕ результаты редактируемой ноды —
+                    // привязка к рядам буфера редактора: LayoutRun.line_i —
+                    // индекс исходной строки, line_top/line_height — позиция
+                    // её ПЕРВОГО визуального ряда (перенос игнорируется).
+                    if frame.editing == Some(index) {
+                        if let Some((edit_buffer, edit_origin, _, _)) = frame.editing_buffer {
+                            if !live_line_buffers.is_empty() {
+                                let mut rows: HashMap<usize, (f32, f32)> = HashMap::new();
+                                for run in edit_buffer.layout_runs() {
+                                    rows.entry(run.line_i)
+                                        .or_insert((run.line_top, run.line_height));
+                                }
+                                let edit_top = to_physical(edit_origin)[1];
+                                for (buffer, width_px, source_line, error, message) in
+                                    &live_line_buffers
+                                {
+                                    let Some((row_top, row_h)) = rows.get(source_line) else {
+                                        continue;
+                                    };
+                                    let result_h = RESULT_LINE_HEIGHT * zoom_px;
+                                    let top_phys = edit_top + row_top + (row_h - result_h) / 2.0;
+                                    let right_phys =
+                                        to_physical([node.x + node.width - BODY_PADDING, 0.0])[0];
+                                    let left_phys = (right_phys - width_px).round();
+                                    areas.push(TextArea {
+                                        buffer,
+                                        left: left_phys,
+                                        top: top_phys,
+                                        scale: 1.0,
+                                        bounds: TextBounds {
+                                            left: (to_physical([node.x + BODY_PADDING, 0.0])[0]
+                                                .floor()
+                                                as i32)
+                                                - 1,
+                                            top: top_phys as i32,
+                                            right: (right_phys.round() as i32) + 1,
+                                            bottom: (top_phys + result_h) as i32,
+                                        },
+                                        default_color: if *error {
+                                            dim_color(RESULT_ERROR_COLOR, text_factor)
+                                        } else {
+                                            dim_color(self.theme.link, text_factor)
+                                        },
+                                        custom_glyphs: &[],
+                                    });
+                                    if *error {
+                                        error_hits.push(error_hit_rect(
+                                            left_phys,
+                                            top_phys,
+                                            *width_px,
+                                            zoom_px,
+                                            scale_factor,
+                                            message.clone(),
+                                        ));
+                                    }
+                                }
+                            }
                         }
                     }
                     // FR-013 (правка): строка результата формулы — футер
@@ -1840,6 +2028,9 @@ impl TextSystem {
                 )?;
             }
         }
+        // FR-013 (правка 4): зоны ошибок кадра собраны — приложение вычитает
+        // их после рендера для hit-теста курсора (тултип ошибки)
+        self.line_error_hits = error_hits;
         // Screen-тексты (панель поиска/настроек, тултип): отдельная группа
         // ПОСЛЕ квадов оверлея — иначе их фон (квады) рисовался бы после
         // текстов и закрывал собственные строки панели

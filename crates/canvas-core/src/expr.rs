@@ -25,7 +25,7 @@
 //! владельца). Поток значений между нодами (`$in`) — FR-014; доменные
 //! функции (`mm1`, `littles_law`) — FR-015.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 /// Результат вычисления формулы ноды — runtime-состояние приложения
@@ -982,31 +982,44 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
 /// Строки образуют один сценарий с общим окружением — переменные,
 /// объявленные выше, видны ниже (Numi). Строка с префиксом `=` — ЯВНАЯ
 /// формула: ошибки парсинга/вычисления показываются; чистая строка,
-/// парсящаяся как выражение, — авто-формула: любая ошибка строку
-/// результата не создаёт (проза «Встреча в 15:00» не краснеет).
+/// парсящаяся как выражение, — авто-формула: показ ошибок выборочный
+/// (см. [`auto_error_visible`]), прочие ошибки строку результата не
+/// создают (проза «Встреча в 15:00» не краснеет).
 /// Присваивание (`rps = 1000`) связывает переменную и возвращает
 /// присвоенное значение. Внутри код-фенсов (``` … ```) формулы не
 /// вычисляются — код не калькулятор.
 pub fn eval_lines(source: &str) -> Vec<Option<ExprOutcome>> {
     let mut env = Env::empty();
     let mut in_fence = false;
-    source
-        .split('\n')
-        .map(|line| {
-            if line.trim_start().starts_with("```") {
-                in_fence = !in_fence;
-                return None;
-            }
-            if in_fence {
-                return None;
-            }
-            eval_line(line, &mut env)
-        })
-        .collect()
+    // FR-013 (правка 4): имена, объявленные строками ВЫШЕ (похожими на
+    // присваивание, даже не парсящимися или не вычислившимися) — контекст
+    // показа ошибок UnknownVariable в ссылках ниже по листу.
+    let mut declared: HashSet<String> = HashSet::new();
+    let mut results = Vec::new();
+    for line in source.split('\n') {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            results.push(None);
+            continue;
+        }
+        if !in_fence {
+            scan_declared_names(line, &mut declared);
+        }
+        results.push(eval_line(line, &mut env, &declared, in_fence));
+    }
+    results
 }
 
 /// Одна строка сценария: результат или None (не формула / тихая ошибка).
-fn eval_line(line: &str, env: &mut Env) -> Option<ExprOutcome> {
+fn eval_line(
+    line: &str,
+    env: &mut Env,
+    declared: &HashSet<String>,
+    in_fence: bool,
+) -> Option<ExprOutcome> {
+    if in_fence {
+        return None;
+    }
     let trimmed = line.trim();
     let (statement, explicit) = match trimmed.strip_prefix('=') {
         Some(rest) => (rest.trim(), true),
@@ -1018,13 +1031,71 @@ fn eval_line(line: &str, env: &mut Env) -> Option<ExprOutcome> {
     match parse(statement) {
         Ok(parsed) => match eval_statement(&parsed, env) {
             Ok(value) => Some(ExprOutcome::Ok(value)),
-            // Явная формула показывает ошибку вычисления; авто-строка тиха
+            // Явная формула показывает ошибку вычисления; авто-строка —
+            // только «заслуженную» (auto_error_visible)
             Err(err) if explicit => Some(ExprOutcome::Err(err.to_string())),
+            Err(err) if auto_error_visible(&err, declared) => {
+                Some(ExprOutcome::Err(err.to_string()))
+            }
             Err(_) => None,
         },
-        // Явная формула показывает ошибку парсинга; проза молчит
+        // Явная формула показывает ошибку парсинга; авто-строка, ПОХОЖАЯ
+        // на присваивание имени, тоже (пользователь явно описал связывание,
+        // опечатка в значении не должна молчать); остальная проза молчит
         Err(err) if explicit => Some(ExprOutcome::Err(err.to_string())),
+        Err(err) if assignment_shaped(statement) => Some(ExprOutcome::Err(err.to_string())),
         Err(_) => None,
+    }
+}
+
+/// FR-013 (правка 4): видна ли ошибка вычисления АВТО-строки (без префикса
+/// `=`). Numi-принцип: проза никогда не краснеет, но сломанный расчёт — не
+/// проза. «Заслуженные» ошибки: несовместимость единиц, деление на ноль,
+/// битый вызов (строка вычислилась как чистая арифметика) и ссылка на
+/// переменную, ОБЪЯВЛЕННУЮ строкой выше (`x = …` выше, даже если та строка
+/// сама ошибочна). Неизвестное слово вне объявлений (`- 5 яблок`) молчит.
+fn auto_error_visible(err: &EvalError, declared: &HashSet<String>) -> bool {
+    match err {
+        EvalError::UnknownVariable(name) => declared.contains(name),
+        _ => true,
+    }
+}
+
+/// Похоже ли утверждение на присваивание имени: `имя = …` слева или
+/// `… = имя` справа от первого `=`. Проза так не выглядит.
+fn assignment_shaped(statement: &str) -> bool {
+    let Some(eq) = statement.find('=') else {
+        return false;
+    };
+    let (left, right) = statement.split_at(eq);
+    single_identifier(left) || single_identifier(&right[1..])
+}
+
+/// Один идентификатор (ничего кроме букв/цифр/`_`, начинается с буквы или
+/// `_`) — имя переменной Numi.
+fn single_identifier(text: &str) -> bool {
+    let text = text.trim();
+    let Some(first) = text.chars().next() else {
+        return false;
+    };
+    (first.is_alphabetic() || first == '_') && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// FR-013 (правка 4): объявления строки — левая часть `имя = …` и хвостовое
+/// `… = имя`; имена запоминаются, даже если строка ошибочна, чтобы ссылки
+/// на них ниже показывали ошибку «переменная объявлена, но не вычислена».
+fn scan_declared_names(line: &str, declared: &mut HashSet<String>) {
+    let trimmed = line.trim();
+    let statement = trimmed.strip_prefix('=').map(str::trim).unwrap_or(trimmed);
+    let Some(eq) = statement.find('=') else {
+        return;
+    };
+    let (left, right) = statement.split_at(eq);
+    if single_identifier(left) {
+        declared.insert(left.trim().to_owned());
+    }
+    if single_identifier(&right[1..]) {
+        declared.insert(right[1..].trim().to_owned());
     }
 }
 
@@ -1518,8 +1589,9 @@ mod tests {
         );
     }
 
-    /// Явная («=») строка показывает ошибки парсинга/вычисления,
-    /// авто-строка молчит при любых ошибках.
+    /// Явная («=») строка показывает любые ошибки парсинга/вычисления.
+    /// Авто-строка показывает «заслуженные» ошибки вычисления (правка 4:
+    /// сломанный расчёт — не проза), но молчит при ошибках парсинга.
     #[test]
     fn eval_lines_explicit_errors_visible() {
         let lines = eval_lines("= 5 ms +\n5 ms +\n= 5 ms + 3 rps\n5 ms + 3 rps\n2+2");
@@ -1533,8 +1605,55 @@ mod tests {
             matches!(&lines[2], Some(ExprOutcome::Err(_))),
             "явная: ошибка вычисления видна"
         );
-        assert_eq!(lines[3], None, "авто: ошибка вычисления тиха");
+        assert!(
+            matches!(&lines[3], Some(ExprOutcome::Err(_))),
+            "авто: несовместимость единиц видна (правка 4)"
+        );
         assert_eq!(ok_text(&lines[4]), "4");
+    }
+
+    /// FR-013 (правка 4): правила видимости ошибок авто-строк.
+    /// Несовместимость единиц/деление на ноль — видны; ссылка на переменную,
+    /// объявленную выше (даже ошибочной строкой), — видна; неизвестное слово
+    /// вне объявлений и проза — молчат.
+    #[test]
+    fn auto_error_visibility_rules() {
+        // Ссылка на переменную, чьё присваивание выше не вычислилось:
+        // обе строки показывают ошибку (объявление x видно ссылке)
+        let lines = eval_lines("x = 1 sec + 2 req\nx + 1");
+        assert!(
+            matches!(&lines[0], Some(ExprOutcome::Err(_))),
+            "несовместимость единиц в присваивании видна"
+        );
+        assert!(
+            matches!(&lines[1], Some(ExprOutcome::Err(_))),
+            "ссылка на объявленную, но не вычисленную переменную видна"
+        );
+        // Незакрытая скобка в присваивании: строка похожа на присваивание —
+        // ошибка парсинга видна; ссылка ниже тоже
+        let lines = eval_lines("x = (2+\n200 + x");
+        assert!(
+            matches!(&lines[0], Some(ExprOutcome::Err(_))),
+            "присваивание с ошибкой парсинга показывает её"
+        );
+        assert!(
+            matches!(&lines[1], Some(ExprOutcome::Err(_))),
+            "ссылка на объявленную переменную видна"
+        );
+        // Деление на ноль в авто-строке видно
+        let lines = eval_lines("a = 5\na / (2 - 2)");
+        assert_eq!(ok_text(&lines[0]), "5");
+        assert!(
+            matches!(&lines[1], Some(ExprOutcome::Err(_))),
+            "деление на ноль в авто-строке видно"
+        );
+        // Неизвестное слово вне объявлений молчит (проза/список с числом)
+        let lines = eval_lines("- 5 яблок\n2 + несуществующая");
+        assert_eq!(lines[0], None, "слово не объявлено — тихо");
+        assert_eq!(lines[1], None, "неизвестное имя вне объявлений — тихо");
+        // Проза с двоеточием не краснеет
+        let lines = eval_lines("Встреча в 15:00");
+        assert_eq!(lines[0], None, "проза тиха");
     }
 
     /// Внутри код-фенсов формулы не вычисляются; после закрытия фенса
