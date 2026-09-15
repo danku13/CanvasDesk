@@ -314,6 +314,8 @@ FR-018 даёт mock-реестр. FR-019 заменяет mock на real built-
   Образец — `WidgetRegistry` tombstone.
 
 ## История изменений (Changelog)
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация не начата — `assets/templates/` нет, ни один из 15 шаблонов не найден, `EMBEDDED_TEMPLATES`/`template_list`/`template_instantiate` отсутствуют (в `assets/` только widgets/ и fonts/). Статус `выявлено` сохранён.
+
 
 - `2026-09-15` — агент: документ создан по запросу пользователя (3 серии
   вопросов). Зафиксированы: 15 шаблонов (10 backend + 5 network) с

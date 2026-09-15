@@ -7,7 +7,7 @@
 - **Источник:** сообщение пользователя (сессия 2026-09-15): «нужно заменить шрифт на Noto Sans Display для обычного текста medium 500, для bold 700 и Noto Sans Mono для строк определённых как Numi-like рассчётов и для результатов рассчёта»
 - **Связанные задачи:** FR-013 (Numi-строки и результаты — моноширинное начертание), CR-007 (читаемость/контраст — шрифт второй фактор читаемости), SPEC.md §6.2 (LOD — метрики текста), docs/interface-objects/node.md (текст ноды)
 - **Создан:** 2026-09-15
-- **Обновлён:** 2026-09-15 (реализация)
+- **Обновлён:** 2026-09-16 (аудит реализации)
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
 
 ---
@@ -86,7 +86,7 @@
 
 ## Проверка (Verification)
 
-- [x] fontdb содержит ровно 4 вшитых лица: Noto Sans Display 500/700, Noto Sans Mono 400/700 (юнит-тест `font_data_registers_four_faces`).
+- [x] fontdb содержит ровно 4 вшитых лица: Noto Sans Display 500/700, Noto Sans Mono 400/700 (юнит-тест `font_data_registers_noto_faces`).
 - [x] `body_items("deploy = 40 $", [0])` → элемент `mono == true` (тест).
 - [x] Атрибуты буфера тела: Numi-строка — `Family::Name("Noto Sans Mono")`, проза — `Family::Name("Noto Sans Display")` + `Weight::MEDIUM` (тест).
 - [x] Редактор: Numi-строка в буфере — mono, соседняя проза — sans medium (тест `editor_formula_lines_use_mono`).
@@ -97,6 +97,8 @@
   - `docs/assets/cr-009-editor.png` — live-редактор: набранные `vm = 40 $`, `db = 25 $`, `sum = vm + db` моноширинные уже при вводе, живые результаты справа (WYSIWYG совпадает с карточкой).
 
 ## История изменений
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация подтверждена — 4 ttf в `assets/fonts/` (Display Medium/Bold, Mono Regular/Bold, OFL), бандл `FONT_DATA` = 4× `include_bytes!` (`text.rs:34-39`), базовые атрибуты `Noto Sans Display` Weight::MEDIUM (500) и `Noto Sans Mono` (`text.rs:49-60`), Bold 700 без смены family (`:724-729`), mono для формульных строк и результатов (`:520,560,1389,1439`); тесты `font_data_registers_noto_faces`, `base_attrs_pin_noto_families`, `body_items_formula_line_is_mono`, `shape_body_fonts_by_line_kind`, `editor_formula_lines_use_mono` — зелёные. Статус `выполнено` подтверждён.
+
 
 - `2026-09-15` — агент: создан документ (`CR-009`), статус `выявлено`, анализ (cosmic-text 0.12.1: family не участвует в `Attrs::matches`, Sans→«Fira Sans», variable-шрифты не инстанцируются), требования.
 - `2026-09-15` — агент: реализация (assets, text.rs, edit.rs, тесты), статус `выполнено` после гейтов и живой верификации.

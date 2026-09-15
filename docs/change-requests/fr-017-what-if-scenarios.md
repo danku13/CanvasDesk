@@ -273,6 +273,8 @@ FR-013..016 дают: формулы → propagator → flow_results → analysi
   Vec<Scenario>`).
 
 ## История изменений (Changelog)
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация не начата — UI-режима нет (`whatif_*`/`freeze`/`scenario` в коде отсутствуют, MCP-инструментов нет). Задел точно по плану дока: `flow::propagate(canvas, overrides)` принимает value-level overrides (FR-014), интеграционный тест `overrides_flow_downstream_what_if` (`integration_flow.rs:163-183`). Расширение сигнатуры (`expr_overrides`) не сделано. Статус `выявлено` сохранён.
+
 
 - `2026-09-15` — агент: документ создан по запросу пользователя (what-if
   сценарии — один из 3 индикаторов v1). Зафиксированы 4 инварианта

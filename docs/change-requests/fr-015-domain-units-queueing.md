@@ -36,7 +36,7 @@ FR-013 даёт базовый Numi-калькулятор: арифметика
     - `littles_law(arrival_rate, response_time)` → `L = λ · W`.
     - `erlang_c(arrival_rate, service_rate, servers)` → доля задержанных
       запросов (для SLA-расчётов).
-  - **Системные метрики (композитные):**
+  - **Системные метрики (композитные) — отложены, вне v1 (v2):**
     - `throughput(rps, replicas)` → `rps × replicas`.
     - `latency_p(p, samples...)` → percentile (алиас `percentile`).
     - `error_budget(sla)` → `1 − SLA` (например, `error_budget(99.9%) = 0.1%`).
@@ -249,6 +249,8 @@ FR-013 вводит `expr::Value { num: f64, unit: Unit }`, где `Unit` — en
   Синонимы (`м/м/1`, `утилизация`) — v2.
 
 ## История изменений (Changelog)
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): v1 подтверждена — `expr/queueing.rs`: `utilization`/`mm1`/`mmc` (Erlang-C, ρ ≥ 1 → `EvalError::Overload`)/`littles_law`/`erlang_c`, `MAX_SERVERS = 1000`; 17 golden-тестов `expr_queueing.rs` — зелёные. Уточнение границ v1: системные метрики `throughput`/`latency_p`/`error_budget`/`mttr` и структурный вывод mm1/mmc — вне v1 (v2; раздел «Границы v1» скорректирован), единицы `hr`/`rpm` в таблице отсутствуют (есть `h`/`hour`), `MB/s` — делением. Статус `выполнено (v1)` подтверждён.
+
 
 - `2026-09-16` — агент: реализация v1 по решению владельца («минимальный
   mm1»): `mm1(λ, μ[, c])`/`mmc(λ, μ, c)` → `Time` (среднее время пребывания

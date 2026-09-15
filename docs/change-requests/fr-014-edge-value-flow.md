@@ -243,6 +243,8 @@
  瓶颈.
 
 ## История изменений (Changelog)
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация подтверждена (правки 1–3 в коде) — `flow.rs`: `topo_sort` (Кан + Тарьян), `propagate` (per-node `Result`, overrides), `inbound_slots`, `creates_value_cycle`; `Edge::flow_kind`/`set_flow_kind` с чистым round-trip; `$in`/`$N` с дизамбигуацией валюты; `SceneState::toggle_edge_flow` (правка 3), `Shift+drag` value-ребро, диалог цикла, MCP `flow_set_kind`/`flow_recalc`/`flow_cycle_check`, value-лейблы «label · значение» + бирюзовый цвет; тесты: 27 `flow.rs`, 4 `palette_flow_toggle_*`, 6 `integration_flow.rs`, round-trip в `json_canvas_io.rs` — зелёные. Статус `выполнено` подтверждён.
+
 
 - `2026-09-15` — агент: документ создан по запросу пользователя (поток значений
   по рёбрам, DAG, live-ревал). Зафиксированы 4 инварианта тестируемости (чистый

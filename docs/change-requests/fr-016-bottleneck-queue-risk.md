@@ -251,6 +251,8 @@ FR-013..015 дают значения `utilization`, `queue_length`, `wait_time`
   `⏱`); v2 — паттерны рамки (пунктир/штрих) как дополнительный сигнал.
 
 ## История изменений (Changelog)
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация не начата — подтверждено grep-обходом (`analyze.rs`/`AnalysisFlags`/severity/badges отсутствуют, MCP-инструментов ровно 20, `analyze_bottlenecks` нет). Заделы: queueing-функции v1 FR-015 (mm1/mmc/utilization/erlang_c) и `EvalError::Overload { rho }`; структурный вывод `Value::Struct` (`utilization`, `queue_length`, `wait_time`) — не готов (v2 FR-015). Статус `выявлено` сохранён.
+
 
 - `2026-09-15` — агент: документ создан по запросу пользователя (bottleneck
   detection + queue risk + визуализация overlay). Зафиксированы 4 инварианта
