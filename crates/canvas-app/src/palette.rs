@@ -103,6 +103,14 @@ pub enum PaletteAction {
         edge_index: usize,
         preset: Option<&'static str>,
     },
+    /// CR-008: закрепить/освободить конец связи (см. `set_edge_port_pin`).
+    EdgePortsPin {
+        edge_index: usize,
+        end: canvas_core::EdgeEnd,
+        pin: bool,
+    },
+    /// CR-008: снять все закрепления — оба конца авто (кратчайший путь).
+    EdgePortsAuto { edge_index: usize },
     /// FR-014: тип потока связи — value (переносит значение) или control
     /// (визуальная связь). Переключение — undo-шаг + пересчёт потока.
     EdgeFlowKind { edge_index: usize, kind: FlowKind },
@@ -144,6 +152,8 @@ pub enum PaletteIcon {
     Clear,
     /// FR-014: стрелка потока (группа «Поток» палитры связи).
     Flow,
+    /// CR-008: линия с точкой порта на конце (группа «Порты»).
+    Pin,
 }
 
 /// Кнопка выпадающего перечня.
@@ -422,6 +432,7 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
     let Some(edge) = canvas.edges.get(edge_index) else {
         return Vec::new();
     };
+    let (pin_from, pin_to) = edge.port_pins();
     let style_entry = |style: EdgeLineStyle, label: &str, icon: PaletteIcon| PaletteEntry {
         action: PaletteAction::EdgeStyle { edge_index, style },
         label: label.to_owned(),
@@ -507,6 +518,49 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
                     label: "Контрольная".to_owned(),
                     icon: None,
                     current: edge.flow_kind() == FlowKind::Control,
+                },
+            ],
+        },
+        // CR-008: стороны подключения. По умолчанию — авто (кратчайший
+        // путь, пересчёт при drag/раскладке); закрепление фиксирует текущую
+        // эффективную сторону конца (WYSIWYG) в файле.
+        PaletteGroup {
+            label: "Порты".to_owned(),
+            icon: PaletteIcon::Pin,
+            entries: vec![
+                PaletteEntry {
+                    action: PaletteAction::EdgePortsAuto { edge_index },
+                    label: "Авто (кратчайший путь)".to_owned(),
+                    icon: Some(PaletteIcon::Pin),
+                    current: !edge.ports_pinned(),
+                },
+                PaletteEntry {
+                    action: PaletteAction::EdgePortsPin {
+                        edge_index,
+                        end: canvas_core::EdgeEnd::From,
+                        pin: !pin_from,
+                    },
+                    label: if pin_from {
+                        "Исток: закреплён".to_owned()
+                    } else {
+                        "Исток: закрепить".to_owned()
+                    },
+                    icon: None,
+                    current: pin_from,
+                },
+                PaletteEntry {
+                    action: PaletteAction::EdgePortsPin {
+                        edge_index,
+                        end: canvas_core::EdgeEnd::To,
+                        pin: !pin_to,
+                    },
+                    label: if pin_to {
+                        "Сток: закреплён".to_owned()
+                    } else {
+                        "Сток: закрепить".to_owned()
+                    },
+                    icon: None,
+                    current: pin_to,
                 },
             ],
         },
@@ -854,6 +908,11 @@ pub fn icon_quads(
             None => outline(&mut quads, [x + 3.0, y + 3.0], [w - 6.0, h - 6.0], 3.0),
         },
         PaletteIcon::LineSolid => solid(&mut quads, [x + 3.0, cy - 1.5], [w - 6.0, 3.0], 1.5),
+        // CR-008: линия связи, у правого конца — точка порта
+        PaletteIcon::Pin => {
+            solid(&mut quads, [x + 3.0, cy - 1.5], [w - 12.0, 3.0], 1.5);
+            solid(&mut quads, [x + w - 8.0, cy - 3.0], [6.0, 6.0], 3.0);
+        }
         PaletteIcon::LineDashed => {
             let seg = (w - 12.0) / 3.0;
             for k in 0..3u8 {
@@ -1138,7 +1197,7 @@ mod tests {
         canvas.edges.push(edge);
         let groups = palette_groups(&canvas, &PaletteTarget::Edge(0));
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
-        assert_eq!(labels, vec!["Стиль", "Толщина", "Цвет", "Поток"]);
+        assert_eq!(labels, vec!["Стиль", "Толщина", "Цвет", "Поток", "Порты"]);
         let style_current: Vec<bool> = groups[0].entries.iter().map(|e| e.current).collect();
         assert_eq!(style_current, vec![false, true, false], "пунктир текущий");
         let thick_current: Vec<bool> = groups[1].entries.iter().map(|e| e.current).collect();
@@ -1467,5 +1526,66 @@ mod tests {
         assert!((rgba[1] - 128.0 / 255.0).abs() < 1e-4);
         assert!((rgba[2] - 0.0).abs() < 1e-4);
         assert!((rgba[3] - 1.0).abs() < 1e-4, "альфа непрозрачна");
+    }
+
+    /// CR-008: группа «Порты» — отметки current по состоянию пинов,
+    /// подписи тоглов и действие повторного клика.
+    #[test]
+    fn edge_groups_ports_marks_pins() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "b", 300.0, 0.0));
+        let mut edge = Edge::new(
+            "e1",
+            "a",
+            Some(canvas_core::Side::Right),
+            "b",
+            Some(canvas_core::Side::Left),
+        );
+        edge.set_port_pin(canvas_core::EdgeEnd::To, true);
+        canvas.edges.push(edge);
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0));
+        let ports = groups
+            .iter()
+            .find(|g| g.label == "Порты")
+            .expect("группа «Порты»");
+        let current: Vec<bool> = ports.entries.iter().map(|e| e.current).collect();
+        assert_eq!(
+            current,
+            vec![false, false, true],
+            "авто не текущий, сток закреплён"
+        );
+        let labels: Vec<&str> = ports.entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Авто (кратчайший путь)",
+                "Исток: закрепить",
+                "Сток: закреплён"
+            ]
+        );
+        // Повторный клик по закреплённому концу — освобождает (pin=false)
+        match &ports.entries[2].action {
+            PaletteAction::EdgePortsPin { pin, .. } => assert!(!pin, "клик снимает пин"),
+            other => panic!("ожидался EdgePortsPin: {other:?}"),
+        }
+        // Полностью закреплённая связь: «Авто» текущий, действие сбрасывает
+        let mut both = Edge::new(
+            "e2",
+            "a",
+            Some(canvas_core::Side::Right),
+            "b",
+            Some(canvas_core::Side::Left),
+        );
+        both.set_port_pin(canvas_core::EdgeEnd::From, true);
+        both.set_port_pin(canvas_core::EdgeEnd::To, true);
+        canvas.edges.push(both);
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(1));
+        let ports = groups.iter().find(|g| g.label == "Порты").expect("группа");
+        assert!(!ports.entries[0].current, "авто не текущий при пинах");
+        match &ports.entries[0].action {
+            PaletteAction::EdgePortsAuto { .. } => {}
+            other => panic!("ожидался EdgePortsAuto: {other:?}"),
+        }
     }
 }

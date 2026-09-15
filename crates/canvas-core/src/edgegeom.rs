@@ -154,17 +154,87 @@ pub fn distance_point_to_polyline(point: [f32; 2], points: &[[f32; 2]]) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
-/// Кривая связи: резолвит ноды по id, None-стороны выводит из взаимного
-/// положения центров. None, если хотя бы одна нода не найдена (висячая связь).
+/// CR-008: штраф стоимости пары портов, когда порт «спиной» к другой ноде
+/// (нормаль смотрит против направления на соседа) — в долях расстояния.
+const BACK_FACING_PENALTY: f32 = 1.5;
+
+/// CR-008: штраф за одинаковые стороны истока и стока (петлеобразная
+/// кривая) — в долях расстояния.
+const SAME_SIDE_PENALTY: f32 = 1.0;
+
+/// Порог «спины» по скалярному произведению нормали и направления на
+/// соседа: |dot| ниже порога — боковой порт, штрафа нет.
+const FACING_DOT_THRESHOLD: f32 = 0.25;
+
+/// CR-008: пара сторон с кратчайшим путём между нодами. Перебор всех 4×4
+/// пар портов; стоимость = расстояние между портами + штрафы за «спинные»
+/// порты (нормаль смотрит от соседа) и за одинаковые стороны. Детерминирован:
+/// при равной стоимости остаётся первая пара в порядке перебора (Top, Right,
+/// Bottom, Left по истоку; внутренний цикл — по стоку).
+pub fn best_sides(from: &Node, to: &Node) -> (Side, Side) {
+    let sides = [Side::Top, Side::Right, Side::Bottom, Side::Left];
+    let mut best = (Side::Top, Side::Top);
+    let mut best_cost = f32::INFINITY;
+    for &sa in &sides {
+        let pa = port_point(from, sa);
+        let na = side_normal(sa);
+        for &sb in &sides {
+            let pb = port_point(to, sb);
+            let dx = pb[0] - pa[0];
+            let dy = pb[1] - pa[1];
+            let dist = dx.hypot(dy).max(1e-3);
+            let ux = dx / dist;
+            let uy = dy / dist;
+            let mut cost = dist;
+            // порт истока «спиной» к получателю
+            if na[0] * ux + na[1] * uy < -FACING_DOT_THRESHOLD {
+                cost += dist * BACK_FACING_PENALTY;
+            }
+            // порт получателя «спиной» к истоку (нормаль по направлению связи)
+            let nb = side_normal(sb);
+            if nb[0] * ux + nb[1] * uy > FACING_DOT_THRESHOLD {
+                cost += dist * BACK_FACING_PENALTY;
+            }
+            if sa == sb {
+                cost += dist * SAME_SIDE_PENALTY;
+            }
+            if cost < best_cost - f32::EPSILON {
+                best_cost = cost;
+                best = (sa, sb);
+            }
+        }
+    }
+    best
+}
+
+/// CR-008: эффективные стороны связи — склейка закреплений и геометрии.
+/// Закреплённый конец (`canvasdesk.pin_ports`) берёт сохранённую сторону
+/// (None — `best_sides` как фолбэк), свободный — сторону кратчайшего пути.
+pub fn effective_sides(edge: &Edge, from: &Node, to: &Node) -> (Side, Side) {
+    let (from_pinned, to_pinned) = edge.port_pins();
+    let (best_from, best_to) = best_sides(from, to);
+    let from_side = if from_pinned {
+        edge.from_side.unwrap_or(best_from)
+    } else {
+        best_from
+    };
+    let to_side = if to_pinned {
+        edge.to_side.unwrap_or(best_to)
+    } else {
+        best_to
+    };
+    (from_side, to_side)
+}
+
+/// Кривая связи: резолвит ноды по id; стороны — эффективные (CR-008):
+/// закреплённый конец — сохранённая сторона, свободный — кратчайший путь
+/// по взаимному положению нод (пересчёт на каждом кадре: drag, автораскладка
+/// и загрузка идут через один путь). None, если хотя бы одна нода не найдена
+/// (висячая связь).
 pub fn edge_curve(canvas: &Canvas, edge: &Edge) -> Option<CubicBezier> {
     let from = canvas.node(&edge.from_node)?;
     let to = canvas.node(&edge.to_node)?;
-    let from_side = edge
-        .from_side
-        .unwrap_or_else(|| nearest_side(from, [to.x + to.width / 2.0, to.y + to.height / 2.0]));
-    let to_side = edge.to_side.unwrap_or_else(|| {
-        nearest_side(to, [from.x + from.width / 2.0, from.y + from.height / 2.0])
-    });
+    let (from_side, to_side) = effective_sides(edge, from, to);
     Some(bezier_between(from, from_side, to, to_side))
 }
 
@@ -185,19 +255,13 @@ pub fn edge_endpoint(canvas: &Canvas, edge_index: usize, end: EdgeEnd) -> Option
     let edge = canvas.edges.get(edge_index)?;
     let from = canvas.node(&edge.from_node)?;
     let to = canvas.node(&edge.to_node)?;
-    let (node, opposite, side) = match end {
-        EdgeEnd::From => (
-            from,
-            [to.x + to.width / 2.0, to.y + to.height / 2.0],
-            edge.from_side,
-        ),
-        EdgeEnd::To => (
-            to,
-            [from.x + from.width / 2.0, from.y + from.height / 2.0],
-            edge.to_side,
-        ),
+    // CR-008: сторона хэндла — та же эффективная сторона, по которой
+    // рисуется линия (пин учитывается, авто следует геометрии)
+    let (eff_from, eff_to) = effective_sides(edge, from, to);
+    let (node, side) = match end {
+        EdgeEnd::From => (from, eff_from),
+        EdgeEnd::To => (to, eff_to),
     };
-    let side = side.unwrap_or_else(|| nearest_side(node, opposite));
     Some((side, port_point(node, side)))
 }
 

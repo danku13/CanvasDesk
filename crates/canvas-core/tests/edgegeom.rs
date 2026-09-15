@@ -303,8 +303,11 @@ fn self_loop_geometry() {
     let node = node("a", 100.0, 100.0, 200.0, 150.0);
     canvas.nodes.push(node);
 
-    // Edge от ноды к самой себе
-    let edge = Edge::new("self", "a", Some(Side::Right), "a", Some(Side::Left));
+    // Edge от ноды к самой себе. Самопетля — намеренная геометрия,
+    // закрепляем концы (CR-008: без пина авто выбрал бы кратчайшую пару)
+    let mut edge = Edge::new("self", "a", Some(Side::Right), "a", Some(Side::Left));
+    edge.set_port_pin(EdgeEnd::From, true);
+    edge.set_port_pin(EdgeEnd::To, true);
     canvas.add_edge(edge);
 
     // Геометрия должна корректно строиться
@@ -340,7 +343,12 @@ fn all_16_side_combinations() {
         for to_side in sides {
             let mut test_canvas = canvas.clone();
             let edge_id = format!("e-{from_side:?}-{to_side:?}");
-            test_canvas.add_edge(Edge::new(edge_id, "a", Some(from_side), "b", Some(to_side)));
+            // CR-008: тест проверяет геометрию конкретной пары портов —
+            // концы закрепляются, чтобы авто-выбор не переопределял стороны
+            let mut edge = Edge::new(edge_id, "a", Some(from_side), "b", Some(to_side));
+            edge.set_port_pin(EdgeEnd::From, true);
+            edge.set_port_pin(EdgeEnd::To, true);
+            test_canvas.add_edge(edge);
 
             // expect(&format!()) строит сообщение на каждой итерации —
             // clippy expect_fun_call: ленивый panic! только при провале
@@ -739,7 +747,8 @@ fn edge_endpoint_resolves_sides() {
     let (side, point) = edge_endpoint(&canvas, 0, EdgeEnd::To).expect("конец To");
     assert_eq!(side, Side::Left);
     approx(point, [400.0, 50.0]);
-    // None-стороны: c правее и ниже a → авто-стороны Right/Left по геометрии
+    // None-стороны: c правее и ниже a → авто-пара кратчайшего пути:
+    // Right (a) → Top (c): диагональ между портами 495 < 500 (Right→Left)
     let mut auto = Canvas::default();
     auto.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
     auto.nodes.push(node("c", 400.0, 400.0, 100.0, 100.0));
@@ -747,7 +756,7 @@ fn edge_endpoint_resolves_sides() {
     let (side, _) = edge_endpoint(&auto, 0, EdgeEnd::From).expect("конец From");
     assert_eq!(side, Side::Right, "резолв как в edge_curve");
     let (side, _) = edge_endpoint(&auto, 0, EdgeEnd::To).expect("конец To");
-    assert_eq!(side, Side::Left);
+    assert_eq!(side, Side::Top, "кратчайшая пара портов (CR-008)");
     // Висячая связь (ноды нет) — None; невалидный индекс — None
     let mut dangling = Canvas::default();
     dangling.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
@@ -820,4 +829,184 @@ fn retarget_edge_updates_and_refuses() {
         styled.edges[0].style,
         Some(canvas_core::EdgeLineStyle::Dashed)
     );
+}
+
+fn approx_msg(a: [f32; 2], b: [f32; 2], what: &str) {
+    assert!(
+        (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4,
+        "{what}: ожидалось {b:?}, получено {a:?}"
+    );
+}
+
+// --- CR-008: умные порты — кратчайший путь и закрепления ---
+
+/// B справа от A: выход Right, вход Left (кратчайший путь, порты лицом).
+#[test]
+fn best_sides_b_right_of_a() {
+    let a = node("a", 0.0, 0.0, 100.0, 100.0);
+    let b = node("b", 400.0, 0.0, 100.0, 100.0);
+    assert_eq!(canvas_core::best_sides(&a, &b), (Side::Right, Side::Left));
+}
+
+/// B слева от A: зеркальная пара.
+#[test]
+fn best_sides_b_left_of_a() {
+    let a = node("a", 400.0, 0.0, 100.0, 100.0);
+    let b = node("b", 0.0, 0.0, 100.0, 100.0);
+    assert_eq!(canvas_core::best_sides(&a, &b), (Side::Left, Side::Right));
+}
+
+/// B ниже/выше A: доминанта по Y — Bottom/Top.
+#[test]
+fn best_sides_vertical() {
+    let a = node("a", 0.0, 0.0, 100.0, 100.0);
+    let below = node("b", 0.0, 500.0, 100.0, 100.0);
+    assert_eq!(
+        canvas_core::best_sides(&a, &below),
+        (Side::Bottom, Side::Top)
+    );
+    let above = node("b", 0.0, -500.0, 100.0, 100.0);
+    assert_eq!(
+        canvas_core::best_sides(&a, &above),
+        (Side::Top, Side::Bottom)
+    );
+}
+
+/// Диагональ: доминирующая ось (dx=400 > dy=100) — горизонтальная пара.
+#[test]
+fn best_sides_diagonal_dominant_axis() {
+    let a = node("a", 0.0, 0.0, 100.0, 100.0);
+    let b = node("b", 400.0, 100.0, 100.0, 100.0);
+    assert_eq!(canvas_core::best_sides(&a, &b), (Side::Right, Side::Left));
+}
+
+/// Пропорции влияют: высокая узкая нода чуть правее и сильно ниже —
+/// вертикальная пара (горизонтальное смещение мало, порты почти над друг другом).
+#[test]
+fn best_sides_tall_thin_geometry() {
+    let a = node("a", 0.0, 0.0, 300.0, 100.0);
+    // B: узкая высокая, центр по X совпадает с A, но ниже
+    let b = node("b", 130.0, 600.0, 40.0, 400.0);
+    assert_eq!(
+        canvas_core::best_sides(&a, &b),
+        (Side::Bottom, Side::Top),
+        "вертикальное смещение доминирует"
+    );
+}
+
+/// Совпадающие ноды: детерминированный результат без паник (перебор 4×4).
+#[test]
+fn best_sides_same_position_deterministic() {
+    let a = node("a", 0.0, 0.0, 100.0, 100.0);
+    let b = node("b", 0.0, 0.0, 100.0, 100.0);
+    let first = canvas_core::best_sides(&a, &b);
+    for _ in 0..10 {
+        assert_eq!(canvas_core::best_sides(&a, &b), first, "детерминизм");
+    }
+}
+
+/// Сохранённые стороны НЕ используются в авто-режиме: линия перепрыгивает
+/// на кратчайшие порты при изменении геометрии (перетаскивание ноды).
+#[test]
+fn edge_curve_auto_ignores_stored_sides_after_move() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 400.0, 0.0, 100.0, 100.0));
+    // «Перепутанная» связь: исток слева, сток справа (спинами)
+    canvas.edges.push(Edge::new(
+        "e",
+        "a",
+        Some(Side::Left),
+        "b",
+        Some(Side::Right),
+    ));
+    // B справа: авто даёт Right→Left, несмотря на сохранённые Left→Right
+    let curve = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+    approx_msg(curve.p0, [100.0, 50.0], "right порт A");
+    approx_msg(curve.p1, [400.0, 50.0], "left порт B");
+    // Перетащили B влево за A — порты зеркалятся
+    canvas.nodes[1].x = -400.0;
+    let curve = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+    approx_msg(curve.p0, [0.0, 50.0], "left порт A");
+    approx_msg(curve.p1, [-300.0, 50.0], "right порт B");
+}
+
+/// Закреплённый конец следует сохранённой стороне даже после переноса ноды.
+#[test]
+fn edge_pin_keeps_stored_side_after_move() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 400.0, 0.0, 100.0, 100.0));
+    canvas
+        .edges
+        .push(Edge::new("e", "a", Some(Side::Top), "b", Some(Side::Left)));
+    canvas.edges[0].set_port_pin(EdgeEnd::From, true);
+    // Исток закреплён за Top — перенос B не меняет порт истока
+    canvas.nodes[1].x = -400.0;
+    let curve = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+    approx_msg(curve.p0, [50.0, 0.0], "top порт A закреплён");
+    // Сток свободен — кратчайший путь (Right стороны B)
+    approx_msg(curve.p1, [-300.0, 50.0], "right порт B авто");
+    // Хэндл перепривязки (CR-002) — на той же закреплённой стороне
+    let (side, point) = edge_endpoint(&canvas, 0, EdgeEnd::From).expect("конец");
+    assert_eq!(side, Side::Top);
+    approx(point, [50.0, 0.0]);
+}
+
+/// Пин при None-стороне (старый файл): фолбэк — сторона кратчайшего пути.
+#[test]
+fn edge_pin_with_none_side_falls_back_to_best() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 400.0, 0.0, 100.0, 100.0));
+    canvas.edges.push(Edge::new("e", "a", None, "b", None));
+    canvas.edges[0].set_port_pin(EdgeEnd::From, true);
+    let curve = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+    // Закреплён None → best_sides: Right; свободный Left
+    approx(curve.p0, [100.0, 50.0]);
+    approx(curve.p1, [400.0, 50.0]);
+}
+
+/// Снятие пина возвращает авто; последний снятый пин удаляет поле из extra
+/// (round-trip: файл без связей-пинов не меняется).
+#[test]
+fn port_pins_round_trip_in_model() {
+    let mut edge = Edge::new("e", "a", Some(Side::Right), "b", Some(Side::Left));
+    assert_eq!(edge.port_pins(), (false, false));
+    assert!(!edge.ports_pinned());
+    edge.set_port_pin(EdgeEnd::To, true);
+    assert_eq!(edge.port_pins(), (false, true));
+    // fromSide/toSide не тронуты пином (фиксация — забота вызывающего)
+    assert_eq!(edge.from_side, Some(Side::Right));
+    assert_eq!(edge.to_side, Some(Side::Left));
+    edge.set_port_pin(EdgeEnd::From, true);
+    assert_eq!(edge.port_pins(), (true, true));
+    edge.set_port_pin(EdgeEnd::From, false);
+    edge.set_port_pin(EdgeEnd::To, false);
+    assert_eq!(edge.port_pins(), (false, false));
+    assert!(
+        edge.extra.get("canvasdesk").is_none(),
+        "пустой canvasdesk удалён"
+    );
+}
+
+/// Перепривязка конца (CR-002) не меняет состояние пинов: явный жест
+/// пишет сторону, пин остаётся как был.
+#[test]
+fn retarget_edge_keeps_pin_state() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(node("a", 0.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("b", 400.0, 0.0, 100.0, 100.0));
+    canvas.nodes.push(node("c", 800.0, 0.0, 100.0, 100.0));
+    canvas.edges.push(Edge::new(
+        "e",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+    canvas.edges[0].set_port_pin(EdgeEnd::From, true);
+    assert!(retarget_edge(&mut canvas, 0, EdgeEnd::To, "c", Side::Left));
+    assert_eq!(canvas.edges[0].port_pins(), (true, false));
+    assert_eq!(canvas.edges[0].to_node, "c");
 }

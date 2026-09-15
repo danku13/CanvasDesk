@@ -17,10 +17,11 @@ mod settings;
 mod spatial;
 
 pub use edgegeom::{
-    bezier_between, curve_point, curve_tangent, distance_point_to_polyline, distance_to_edge,
-    draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint, edge_polyline, nearest_side,
-    port_at, port_point, retarget_edge, route_polyline, side_normal, tessellate, CubicBezier,
-    EdgeEnd, AVOID_MARGIN, EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
+    best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
+    distance_to_edge, draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint,
+    edge_polyline, effective_sides, nearest_side, port_at, port_point, retarget_edge,
+    route_polyline, side_normal, tessellate, CubicBezier, EdgeEnd, AVOID_MARGIN,
+    EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
 };
 pub use error::CoreError;
 pub use expr::{

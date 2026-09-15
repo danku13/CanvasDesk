@@ -294,6 +294,18 @@ const TOOLS: &[ToolSpec] = &[
         properties: &[],
     },
     ToolSpec {
+        name: "edge_ports",
+        description: "CR-008: стороны подключения связи. По умолчанию — авто: кратчайший путь, пересчёт при перетаскивании нод и раскладке. pin: \"auto\" — снять закрепления; \"from\"/\"to\"/\"both\" — закрепить концы, фиксируя текущие эффективные стороны (WYSIWYG). Возвращает {id, pins:{from,to}}",
+        required: &["id", "pin"],
+        properties: &[
+            ("id", STR),
+            (
+                "pin",
+                r#"{"type":"string","enum":["auto","from","to","both"]}"#,
+            ),
+        ],
+    },
+    ToolSpec {
         name: "viewport_get",
         description: "Центр viewport в world-координатах и зум",
         required: &[],
@@ -827,12 +839,12 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 19 инструментов, у каждого inputSchema с required.
+    /// tools/list: ровно 20 инструментов, у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 19, "ровно 19 инструментов");
+        assert_eq!(tools.len(), 20, "ровно 20 инструментов");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -852,6 +864,7 @@ mod tests {
             "flow_set_kind",
             "flow_recalc",
             "flow_cycle_check",
+            "edge_ports",
             "viewport_get",
             "viewport_set",
         ] {
@@ -924,7 +937,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            19
+            20
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

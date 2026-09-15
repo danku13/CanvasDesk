@@ -452,6 +452,88 @@ impl Edge {
             }
         }
     }
+
+    /// CR-008: закреплённые концы связи — чтение
+    /// `extra["canvasdesk"]["pin_ports"]` (массив строк "from"/"to").
+    /// Отсутствие поля или мусор — (false, false): оба конца авто
+    /// (кратчайший путь).
+    pub fn port_pins(&self) -> (bool, bool) {
+        let mut pins = (false, false);
+        let Some(list) = self
+            .extra
+            .get("canvasdesk")
+            .and_then(|ext| ext.get("pin_ports"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return pins;
+        };
+        for pin in list {
+            match pin.as_str() {
+                Some("from") => pins.0 = true,
+                Some("to") => pins.1 = true,
+                _ => {}
+            }
+        }
+        pins
+    }
+
+    /// CR-008: закреплён ли хотя бы один конец связи.
+    pub fn ports_pinned(&self) -> bool {
+        self.port_pins() != (false, false)
+    }
+
+    /// CR-008: закрепить/освободить конец связи (`edgegeom::EdgeEnd`).
+    /// Пин НЕ пишет сам сторону — фиксация текущей эффективной стороны
+    /// (WYSIWYG) — забота вызывающего (палитра/MCP). Снятие последнего пина
+    /// УДАЛЯЕТ поле (и пустой `canvasdesk`) — старые файлы остаются без
+    /// изменений (round-trip чистый); чужие поля `canvasdesk` сохраняются.
+    pub fn set_port_pin(&mut self, end: crate::edgegeom::EdgeEnd, pin: bool) {
+        let (mut pin_from, mut pin_to) = self.port_pins();
+        match end {
+            crate::edgegeom::EdgeEnd::From => pin_from = pin,
+            crate::edgegeom::EdgeEnd::To => pin_to = pin,
+        }
+        if !pin_from && !pin_to {
+            let Some(Value::Object(ext)) = self.extra.get_mut("canvasdesk") else {
+                return;
+            };
+            ext.remove("pin_ports");
+            if ext.is_empty() {
+                self.extra.remove("canvasdesk");
+            }
+            return;
+        }
+        let list: Vec<Value> = pin_from
+            .then(|| Value::from("from"))
+            .into_iter()
+            .chain(pin_to.then(|| Value::from("to")))
+            .collect();
+        let Some(ext) = self
+            .extra
+            .entry("canvasdesk".to_owned())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+        else {
+            // canvasdesk не объект (чужой мусор) — пин не читается и не пишется
+            return;
+        };
+        ext.insert("pin_ports".to_owned(), Value::Array(list));
+    }
+
+    /// CR-008: снять все закрепления концов (стороны `fromSide`/`toSide`
+    /// в файле не трогаются — визуально включается кратчайший путь).
+    pub fn clear_port_pins(&mut self) {
+        if !self.ports_pinned() {
+            return;
+        }
+        let Some(Value::Object(ext)) = self.extra.get_mut("canvasdesk") else {
+            return;
+        };
+        ext.remove("pin_ports");
+        if ext.is_empty() {
+            self.extra.remove("canvasdesk");
+        }
+    }
 }
 
 /// Корень `.canvas`-файла.

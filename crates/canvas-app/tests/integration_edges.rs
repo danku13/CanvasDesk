@@ -8,8 +8,8 @@ use canvas_app::{
     BODY_LINE_HEIGHT, EDGE_EDIT_HEIGHT, EDGE_EDIT_WIDTH,
 };
 use canvas_core::{
-    edge_at, edge_curve, nearest_side, port_at, port_point, Canvas, Edge, Node, Side, SpatialIndex,
-    PORT_HIT_PX,
+    edge_at, edge_curve, edge_midpoint, nearest_side, port_at, port_point, Canvas, Edge, Node,
+    Side, SpatialIndex, PORT_HIT_PX,
 };
 use cosmic_text::FontSystem;
 use winit::keyboard::{Key, NamedKey};
@@ -270,8 +270,11 @@ fn test_self_loop_geometry() {
         .nodes
         .push(Node::file("a", "C:/a.png", 100.0, 100.0, 200.0, 150.0));
 
-    // Edge от ноды к самой себе
-    let edge = Edge::new("self", "a", Some(Side::Right), "a", Some(Side::Left));
+    // Edge от ноды к самой себе. Самопетля — намеренная геометрия,
+    // концы закреплены (CR-008: без пина авто выбрал бы кратчайшую пару)
+    let mut edge = Edge::new("self", "a", Some(Side::Right), "a", Some(Side::Left));
+    edge.set_port_pin(canvas_core::EdgeEnd::From, true);
+    edge.set_port_pin(canvas_core::EdgeEnd::To, true);
     canvas.add_edge(edge);
 
     // Геометрия должна корректно строиться
@@ -311,7 +314,12 @@ fn test_all_16_side_combinations() {
         for to_side in sides {
             let mut test_canvas = canvas.clone();
             let edge_id = format!("e-{from_side:?}-{to_side:?}");
-            test_canvas.add_edge(Edge::new(edge_id, "a", Some(from_side), "b", Some(to_side)));
+            // CR-008: тест проверяет геометрию конкретной пары портов —
+            // концы закрепляются (иначе авто выбрал бы кратчайшую пару)
+            let mut edge = Edge::new(edge_id, "a", Some(from_side), "b", Some(to_side));
+            edge.set_port_pin(canvas_core::EdgeEnd::From, true);
+            edge.set_port_pin(canvas_core::EdgeEnd::To, true);
+            test_canvas.add_edge(edge);
 
             let curve = edge_curve(&test_canvas, &test_canvas.edges[0]).unwrap_or_else(|| {
                 panic!("комбинация {from_side:?} -> {to_side:?} должна резолвиться")
@@ -503,4 +511,54 @@ fn test_node_deletion_rebuilds_spatial() {
 
     let hit = spatial.hit_test([650.0, 50.0]); // нода c (была индекс 2, стала 1)
     assert_eq!(hit, Some(1));
+}
+
+// --- CR-008: умные порты — связь перепрыгивает на кратчайший путь ---
+
+/// Связь создана перетаскиванием (стороны записаны), затем ноду перенесли
+/// на другую сторону: кривая и якорь лейбла (midpoint) перепрыгивают на
+/// кратчайшие порты; после закрепления концов — остаются на месте.
+#[test]
+fn test_smart_ports_reattach_after_node_move() {
+    let (mut canvas, _spatial) = test_scene();
+    // Как create_edge в приложении: стороны зафиксированы в файле
+    canvas.edges.push(Edge::new(
+        "e1",
+        "a",
+        Some(Side::Right),
+        "b",
+        Some(Side::Left),
+    ));
+
+    // Перенесли b влево за a — «перепутанная» связь не петляет:
+    // порты зеркалятся (auto, сохранённые стороны — только в файле)
+    canvas.nodes[1].x = -400.0;
+    let curve = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+    assert_eq!(
+        curve.p0,
+        port_point(&canvas.nodes[0], Side::Left),
+        "исток — левый порт a"
+    );
+    assert_eq!(
+        curve.p1,
+        port_point(&canvas.nodes[1], Side::Right),
+        "сток — правый порт b"
+    );
+    let mid = edge_midpoint(&canvas, &canvas.edges[0], false).expect("середина");
+    assert!(mid[0] < canvas.nodes[0].x, "лейбл уехал вместе со связью");
+
+    // Закрепили исток — сторона отморожена, сток живёт по геометрии
+    canvas.edges[0].set_port_pin(canvas_core::EdgeEnd::From, true);
+    canvas.edges[0].from_side = Some(Side::Top);
+    let curve = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+    assert_eq!(
+        curve.p0,
+        port_point(&canvas.nodes[0], Side::Top),
+        "закреплённый исток на Top"
+    );
+    assert_eq!(
+        curve.p1,
+        port_point(&canvas.nodes[1], Side::Right),
+        "сток по-прежнему авто"
+    );
 }

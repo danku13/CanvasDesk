@@ -3249,7 +3249,80 @@ impl App {
                 }
                 self.request_redraw();
             }
+            // CR-008: закрепить/освободить конец связи. Закрепление —
+            // WYSIWYG: в fromSide/toSide фиксируется текущая эффективная
+            // сторона (что видели — то и закрепили). Undo-шаг (FR-006);
+            // no-op (состояние не изменилось) шаг не копит.
+            PaletteAction::EdgePortsPin {
+                edge_index,
+                end,
+                pin,
+            } => self.set_edge_port_pin(edge_index, end, pin),
+            PaletteAction::EdgePortsAuto { edge_index } => {
+                let Some(edge) = self.scene.canvas.edges.get(edge_index) else {
+                    return;
+                };
+                if !edge.ports_pinned() {
+                    return; // no-op — шаг не копится
+                }
+                let mut snapshot = self.scene.canvas.clone();
+                if let Some(edge) = snapshot.edges.get_mut(edge_index) {
+                    edge.clear_port_pins();
+                }
+                self.scene.push_undo(snapshot);
+                self.scene.mark_dirty();
+                self.show_toast("Порты связи: авто (кратчайший путь)");
+                self.request_redraw();
+            }
         }
+    }
+
+    /// CR-008: закрепить/освободить конец связи. Закрепление фиксирует
+    /// текущую эффективную сторону конца в `fromSide`/`toSide` (файл
+    /// отражает то, что видно на экране); освобождение оставляет
+    /// сохранённую сторону в файле, но визуально возвращает авто.
+    fn set_edge_port_pin(&mut self, edge_index: usize, end: canvas_core::EdgeEnd, pin: bool) {
+        if !pin {
+            let Some(edge) = self.scene.canvas.edges.get(edge_index) else {
+                return;
+            };
+            let (pin_from, pin_to) = edge.port_pins();
+            let currently = match end {
+                canvas_core::EdgeEnd::From => pin_from,
+                canvas_core::EdgeEnd::To => pin_to,
+            };
+            if !currently {
+                return; // no-op — шаг не копится
+            }
+            let mut snapshot = self.scene.canvas.clone();
+            if let Some(edge) = snapshot.edges.get_mut(edge_index) {
+                edge.set_port_pin(end, false);
+            }
+            self.scene.push_undo(snapshot);
+            self.scene.mark_dirty();
+            self.show_toast("Порт освобождён: кратчайший путь");
+            self.request_redraw();
+            return;
+        }
+        // Закрепление: текущая эффективная сторона конца (та же геометрия,
+        // по которой рисуется линия)
+        let Some((side, _)) = canvas_core::edge_endpoint(&self.scene.canvas, edge_index, end)
+        else {
+            return;
+        };
+        let mut snapshot = self.scene.canvas.clone();
+        let Some(edge) = snapshot.edges.get_mut(edge_index) else {
+            return;
+        };
+        match end {
+            canvas_core::EdgeEnd::From => edge.from_side = Some(side),
+            canvas_core::EdgeEnd::To => edge.to_side = Some(side),
+        }
+        edge.set_port_pin(end, true);
+        self.scene.push_undo(snapshot);
+        self.scene.mark_dirty();
+        self.show_toast("Порт связи закреплён");
+        self.request_redraw();
     }
 
     /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
@@ -4138,6 +4211,67 @@ fn mcp_dispatch(
             Ok(_) => Ok(serde_json::json!([])),
             Err(cycle) => Ok(serde_json::json!(cycle.nodes)),
         },
+        // CR-008: стороны подключения связи. "auto" — снять закрепления
+        // (кратчайший путь); "from"/"to"/"both" — закрепить концы, фиксируя
+        // текущие эффективные стороны (WYSIWYG, как в палитре)
+        "edge_ports" => {
+            let id = mcp_req_str(params, "id")?;
+            let pin = params.get("pin").and_then(serde_json::Value::as_str);
+            let edge_index = scene
+                .canvas
+                .edges
+                .iter()
+                .position(|edge| edge.id == id)
+                .ok_or_else(|| format!("связь не найдена: {id}"))?;
+            let snapshot = scene.canvas.clone();
+            match pin {
+                Some("auto") => {
+                    scene.canvas.edges[edge_index].clear_port_pins();
+                }
+                Some("from" | "to" | "both") => {
+                    let pin_from = pin != Some("to");
+                    let pin_to = pin != Some("from");
+                    for (end, do_pin) in [
+                        (canvas_core::EdgeEnd::From, pin_from),
+                        (canvas_core::EdgeEnd::To, pin_to),
+                    ] {
+                        if !do_pin {
+                            continue;
+                        }
+                        // Текущая эффективная сторона конца (геометрия как на экране)
+                        let Some((side, _)) =
+                            canvas_core::edge_endpoint(&scene.canvas, edge_index, end)
+                        else {
+                            return Err("висячая связь (нода не найдена)".to_owned());
+                        };
+                        let edge = &mut scene.canvas.edges[edge_index];
+                        match end {
+                            canvas_core::EdgeEnd::From => edge.from_side = Some(side),
+                            canvas_core::EdgeEnd::To => edge.to_side = Some(side),
+                        }
+                        edge.set_port_pin(end, true);
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "pin должен быть \"auto\", \"from\", \"to\" или \"both\", получено {other:?}"
+                    ));
+                }
+            }
+            let edge = &scene.canvas.edges[edge_index];
+            let (pin_from, pin_to) = edge.port_pins();
+            if scene.canvas != snapshot {
+                scene.push_undo(snapshot);
+            }
+            scene.mark_dirty();
+            Ok(serde_json::json!({
+                "id": id,
+                "pins": {
+                    "from": pin_from,
+                    "to": pin_to,
+                },
+            }))
+        }
         "viewport_get" => {
             let position = camera.position();
             Ok(serde_json::json!({
@@ -9147,5 +9281,96 @@ mod tests {
             Some(&ExprOutcome::Ok(canvas_core::expr::Value::scalar(10.0))),
             "после undo поток восстановлен"
         );
+    }
+
+    // --- CR-008: умные порты связей ---
+
+    /// edge_ports: закрепление обоих концов, авто сбрасывает пины;
+    /// неизвестный id / невалидный pin — ошибка.
+    #[test]
+    fn mcp_edge_ports_pins_and_auto() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_ports",
+            r#"{"id":"edge-1","pin":"both"}"#,
+        )
+        .expect("pin both");
+        assert_eq!(out["pins"]["from"], true);
+        assert_eq!(out["pins"]["to"], true);
+        assert_eq!(scene.canvas.edges[0].port_pins(), (true, true));
+
+        // auto — снятие всех закреплений
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_ports",
+            r#"{"id":"edge-1","pin":"auto"}"#,
+        )
+        .expect("auto");
+        assert_eq!(out["pins"]["from"], false);
+        assert_eq!(out["pins"]["to"], false);
+        assert!(!scene.canvas.edges[0].ports_pinned());
+        assert!(
+            scene.canvas.edges[0].extra.get("canvasdesk").is_none(),
+            "пустое расширение удалено"
+        );
+
+        // Ошибки: неизвестный pin и неизвестный id
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_ports",
+            r#"{"id":"edge-1","pin":"diagonal"}"#
+        )
+        .is_err());
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_ports",
+            r#"{"id":"ghost","pin":"auto"}"#
+        )
+        .is_err());
+    }
+
+    /// edge_ports "from": WYSIWYG — в fromSide фиксируется текущая
+    /// эффективная сторона; свободный конец следует геометрии после
+    /// переноса ноды. Undo возвращает состояние до пина.
+    #[test]
+    fn mcp_edge_ports_pin_freezes_effective_side() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // n1(100,100) → f1(500,100): кратчайшая пара Right → Left
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_ports",
+            r#"{"id":"edge-1","pin":"from"}"#,
+        )
+        .expect("pin from");
+        assert_eq!(out["pins"]["from"], true);
+        assert_eq!(out["pins"]["to"], false);
+        assert_eq!(scene.canvas.edges[0].from_side, Some(Side::Right));
+        assert_eq!(scene.canvas.edges[0].port_pins(), (true, false));
+
+        // Перенос f1 влево за n1: закреплённый исток остаётся Right,
+        // свободный сток переходит на кратчайший порт
+        scene.canvas.nodes[1].x = -500.0;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        let curve = canvas_core::edge_curve(&scene.canvas, &scene.canvas.edges[0]).expect("кривая");
+        assert_eq!(
+            curve.p0,
+            canvas_core::port_point(&scene.canvas.nodes[0], Side::Right),
+            "right порт n1 закреплён"
+        );
+        assert_eq!(curve.p1, [-180.0, 210.0], "сток f1 — правый порт (авто)");
+
+        // Undo: пин снят, снапшот до мутации
+        let before = scene.take_undo().expect("шаг undo");
+        scene.canvas = before;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        assert!(!scene.canvas.edges[0].ports_pinned());
     }
 }

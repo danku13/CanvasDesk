@@ -335,6 +335,58 @@ fn edge_flow_kind_round_trip() {
     );
 }
 
+/// CR-008: `canvasdesk.pin_ports` ребра переживает round-trip; отсутствие
+/// поля (старые файлы) — оба конца авто; снятие последнего пина удаляет
+/// поле, не трогая соседние ключи `canvasdesk` (например, `flow`).
+#[test]
+fn edge_port_pins_round_trip() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+    canvas.nodes.push(Node::text("b", "b", 10.0, 0.0));
+    // Пин истока
+    let mut pinned = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+    pinned.set_port_pin(canvas_core::EdgeEnd::From, true);
+    canvas.add_edge(pinned);
+    // Авто-ребро — поле не пишется вовсе
+    canvas.add_edge(Edge::new("e2", "b", None, "a", None));
+
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(
+        parsed["edges"][0]["canvasdesk"]["pin_ports"],
+        serde_json::json!(["from"]),
+        "pin_ports в файле"
+    );
+    assert!(
+        parsed["edges"][1].get("canvasdesk").is_none(),
+        "авто-ребро без расширения: {json}"
+    );
+
+    let restored = Canvas::from_str(&json).expect("парсинг");
+    assert_eq!(restored.edges[0].port_pins(), (true, false));
+    assert_eq!(restored.edges[1].port_pins(), (false, false));
+    assert!(restored.edges[0].ports_pinned());
+    assert!(!restored.edges[1].ports_pinned());
+
+    // Мусор/неизвестные значения — (false, false), без паник
+    let junk = r#"{
+        "nodes": [
+            { "id": "a", "type": "text", "text": "a", "x": 0, "y": 0, "width": 260, "height": 120 },
+            { "id": "b", "type": "text", "text": "b", "x": 10, "y": 0, "width": 260, "height": 120 }
+        ],
+        "edges": [
+            { "id": "e", "fromNode": "a", "toNode": "b",
+              "canvasdesk": { "pin_ports": ["wtf", 42, {"x": 1}, "to"] } }
+        ]
+    }"#;
+    let restored: Canvas = Canvas::from_str(junk).expect("парсинг мусора");
+    assert_eq!(
+        restored.edges[0].port_pins(),
+        (false, true),
+        "unknown игнорируются, \"to\" распознан"
+    );
+}
+
 /// FR-014: чужой файл с `canvasdesk.flow.kind` ребра читается; чужие
 /// соседи внутри canvasdesk ребра сохраняются при тогле.
 #[test]
