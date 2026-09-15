@@ -89,7 +89,10 @@ pub fn plan_related_layout(canvas: &Canvas, seed: usize, mode: LayoutMode) -> La
         // Дети — на уровень дальше от семени, родители — ближе
         let children = outgoing.get(&node).into_iter().flatten();
         let parents = incoming.get(&node).into_iter().flatten();
-        for (next, next_level) in children.map(|&n| (n, l + 1)).chain(parents.map(|&n| (n, l - 1))) {
+        for (next, next_level) in children
+            .map(|&n| (n, l + 1))
+            .chain(parents.map(|&n| (n, l - 1)))
+        {
             if level.contains_key(&next) {
                 continue;
             }
@@ -276,9 +279,7 @@ mod tests {
         let mut canvas = Canvas::default();
         canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
         canvas.nodes.push(Node::text("b", "b", 300.0, 300.0));
-        canvas
-            .nodes
-            .push(Node::text("c", "c", 900.0, 900.0));
+        canvas.nodes.push(Node::text("c", "c", 900.0, 900.0));
         canvas.nodes.push(Node::text("d", "d", 1200.0, 0.0));
         canvas.nodes.push(Node::text("e", "e", 1500.0, 1500.0));
         canvas.edges.push(Edge::new("e1", "a", None, "b", None));
@@ -291,9 +292,7 @@ mod tests {
     fn overlaps(canvas: &Canvas, plan: &LayoutPlan) -> bool {
         let rects: Vec<[f32; 4]> = plan
             .iter()
-            .filter_map(|(i, [x, y])| {
-                canvas.nodes.get(*i).map(|n| [*x, *y, n.width, n.height])
-            })
+            .filter_map(|(i, [x, y])| canvas.nodes.get(*i).map(|n| [*x, *y, n.width, n.height]))
             .collect();
         for i in 0..rects.len() {
             for j in (i + 1)..rects.len() {
@@ -356,8 +355,14 @@ mod tests {
             ((cx - b_c[0]).powi(2) + (cy - b_c[1]).powi(2)).sqrt()
         };
         let (da, dc, dd) = (center_dist(0), center_dist(2), center_dist(3));
-        assert!((da - RADIAL_RING_STEP).abs() < 1.0, "a на первом кольце: {da}");
-        assert!((dc - da).abs() < 1.0 && (dd - da).abs() < 1.0, "одно кольцо");
+        assert!(
+            (da - RADIAL_RING_STEP).abs() < 1.0,
+            "a на первом кольце: {da}"
+        );
+        assert!(
+            (dc - da).abs() < 1.0 && (dd - da).abs() < 1.0,
+            "одно кольцо"
+        );
         assert!(!overlaps(&canvas, &plan));
     }
 
@@ -393,16 +398,20 @@ mod tests {
         // b — группа с геометрическим ребёнком kid; группа связана с a
         let mut canvas = Canvas::default();
         canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
-        canvas.nodes.push(Node::group("b", 300.0, 300.0, 400.0, 300.0));
         canvas
             .nodes
-            .push(Node::text("kid", "kid", 350.0, 350.0));
+            .push(Node::group("b", 300.0, 300.0, 400.0, 300.0));
+        canvas.nodes.push(Node::text("kid", "kid", 350.0, 350.0));
         canvas.nodes.push(Node::text("far", "far", 2000.0, 2000.0));
         canvas.edges.push(Edge::new("e1", "a", None, "b", None));
         let plan = plan_related_layout(&canvas, 0, LayoutMode::TreeHorizontal);
         let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
         // kid в плане вместе с группой (тот же дельта-вектор)
-        assert_eq!(by_id[&2][0] - 350.0, by_id[&1][0] - 300.0, "kid едет с группой");
+        assert_eq!(
+            by_id[&2][0] - 350.0,
+            by_id[&1][0] - 300.0,
+            "kid едет с группой"
+        );
         assert_eq!(by_id[&2][1] - 350.0, by_id[&1][1] - 300.0);
         assert!(!by_id.contains_key(&3), "far не тронут");
     }

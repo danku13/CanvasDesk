@@ -303,8 +303,16 @@ fn actions_group(index: usize, kind: NodeKind) -> PaletteGroup {
         current: false,
     };
     let mut entries = vec![
-        entry(NodeSetting::Rename, "Переименовать", Some(PaletteIcon::Rename)),
-        entry(NodeSetting::Duplicate, "Дублировать", Some(PaletteIcon::Duplicate)),
+        entry(
+            NodeSetting::Rename,
+            "Переименовать",
+            Some(PaletteIcon::Rename),
+        ),
+        entry(
+            NodeSetting::Duplicate,
+            "Дублировать",
+            Some(PaletteIcon::Duplicate),
+        ),
         PaletteEntry {
             action: PaletteAction::NodeGroup(index),
             label: "Сгруппировать".to_owned(),
@@ -314,7 +322,11 @@ fn actions_group(index: usize, kind: NodeKind) -> PaletteGroup {
     ];
     match kind {
         NodeKind::File => {
-            entries.push(entry(NodeSetting::OpenFile, "Открыть файл", Some(PaletteIcon::Folder)));
+            entries.push(entry(
+                NodeSetting::OpenFile,
+                "Открыть файл",
+                Some(PaletteIcon::Folder),
+            ));
             entries.push(entry(
                 NodeSetting::OpenFolder,
                 "Открыть папку с файлом",
@@ -326,13 +338,21 @@ fn actions_group(index: usize, kind: NodeKind) -> PaletteGroup {
             entries.push(entry(NodeSetting::CopyPath, "Скопировать ссылку", None));
         }
         NodeKind::Text => {
-            entries.push(entry(NodeSetting::ClearText, "Очистить текст", Some(PaletteIcon::Clear)));
+            entries.push(entry(
+                NodeSetting::ClearText,
+                "Очистить текст",
+                Some(PaletteIcon::Clear),
+            ));
         }
         NodeKind::Group => {
             entries.push(entry(NodeSetting::Ungroup, "Разгруппировать", None));
         }
         NodeKind::Widget => {
-            entries.push(entry(NodeSetting::WidgetReload, "Перезагрузить виджет", None));
+            entries.push(entry(
+                NodeSetting::WidgetReload,
+                "Перезагрузить виджет",
+                None,
+            ));
             entries.push(entry(
                 NodeSetting::WidgetPermissions,
                 "Разрешения виджета…",
@@ -363,12 +383,28 @@ fn branch_group(index: usize, collapsed: bool) -> PaletteGroup {
         label: "Ветвление".to_owned(),
         icon: PaletteIcon::AddChild,
         entries: vec![
-            entry(NodeSetting::AddChild, "Добавить дочернюю", PaletteIcon::AddChild),
-            entry(NodeSetting::AddSibling, "Добавить сиблинга", PaletteIcon::AddSibling),
+            entry(
+                NodeSetting::AddChild,
+                "Добавить дочернюю",
+                PaletteIcon::AddChild,
+            ),
+            entry(
+                NodeSetting::AddSibling,
+                "Добавить сиблинга",
+                PaletteIcon::AddSibling,
+            ),
             if collapsed {
-                entry(NodeSetting::ExpandBranch, "Развернуть ветку", PaletteIcon::Expand)
+                entry(
+                    NodeSetting::ExpandBranch,
+                    "Развернуть ветку",
+                    PaletteIcon::Expand,
+                )
             } else {
-                entry(NodeSetting::CollapseBranch, "Свернуть ветку", PaletteIcon::Collapse)
+                entry(
+                    NodeSetting::CollapseBranch,
+                    "Свернуть ветку",
+                    PaletteIcon::Collapse,
+                )
             },
         ],
     }
@@ -386,7 +422,10 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
         current: edge.style.unwrap_or(EdgeLineStyle::Solid) == style,
     };
     let thickness_entry = |thickness: EdgeThickness, label: &str, icon: PaletteIcon| PaletteEntry {
-        action: PaletteAction::EdgeThickness { edge_index, thickness },
+        action: PaletteAction::EdgeThickness {
+            edge_index,
+            thickness,
+        },
         label: label.to_owned(),
         icon: Some(icon),
         current: edge.thickness.unwrap_or(EdgeThickness::Medium) == thickness,
@@ -691,7 +730,10 @@ pub fn palette_hit(lay: &PaletteLayout, point: Vec2, open: Option<usize>) -> Opt
         if let Some(group) = lay.groups.get(gi) {
             for (ei, row) in group.rows.iter().enumerate() {
                 if point_in_rect(*row, point) {
-                    return Some(PaletteHit::Entry { group: gi, entry: ei });
+                    return Some(PaletteHit::Entry {
+                        group: gi,
+                        entry: ei,
+                    });
                 }
             }
         }
@@ -812,7 +854,12 @@ pub fn icon_quads(icon: PaletteIcon, rect: [f32; 4], tint: [f32; 4]) -> Vec<Card
                 0.0,
             );
             // Спина между детьми
-            solid(&mut quads, [spine, ty + 8.0], [2.0, (by - ty).max(1.0)], 0.0);
+            solid(
+                &mut quads,
+                [spine, ty + 8.0],
+                [2.0, (by - ty).max(1.0)],
+                0.0,
+            );
             // Ветки от спины к детям (центры боков квадратов)
             solid(
                 &mut quads,
@@ -842,7 +889,12 @@ pub fn icon_quads(icon: PaletteIcon, rect: [f32; 4], tint: [f32; 4]) -> Vec<Card
                 0.0,
             );
             // Спина между детьми
-            solid(&mut quads, [lx + 8.0, spine], [(rx - lx).max(1.0), 2.0], 0.0);
+            solid(
+                &mut quads,
+                [lx + 8.0, spine],
+                [(rx - lx).max(1.0), 2.0],
+                0.0,
+            );
             // Ветки вниз к детям
             solid(
                 &mut quads,
@@ -859,7 +911,12 @@ pub fn icon_quads(icon: PaletteIcon, rect: [f32; 4], tint: [f32; 4]) -> Vec<Card
         }
         PaletteIcon::Radial => {
             // Кольцо (контур круга) + центр + 4 точки по осям
-            outline(&mut quads, [x + 1.0, y + 1.0], [w - 2.0, h - 2.0], (w - 2.0) / 2.0);
+            outline(
+                &mut quads,
+                [x + 1.0, y + 1.0],
+                [w - 2.0, h - 2.0],
+                (w - 2.0) / 2.0,
+            );
             solid(&mut quads, [cx - 2.5, cy - 2.5], [5.0, 5.0], 2.5);
             solid(&mut quads, [cx - 2.0, y + 2.0], [4.0, 4.0], 2.0);
             solid(&mut quads, [cx - 2.0, y + h - 6.0], [4.0, 4.0], 2.0);
@@ -930,7 +987,9 @@ mod tests {
 
     fn file_scene() -> Canvas {
         let mut canvas = Canvas::default();
-        canvas.nodes.push(Node::file("f", "C:/x.png", 0.0, 0.0, 100.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::file("f", "C:/x.png", 0.0, 0.0, 100.0, 100.0));
         canvas
     }
 
@@ -968,13 +1027,19 @@ mod tests {
         assert_eq!(groups[1].entries.len(), 3);
         assert!(matches!(
             groups[1].entries[0].action,
-            PaletteAction::Layout { mode: canvas_core::LayoutMode::TreeHorizontal, .. }
+            PaletteAction::Layout {
+                mode: canvas_core::LayoutMode::TreeHorizontal,
+                ..
+            }
         ));
         // Ветвление: дочерняя, сиблинг, свернуть
         assert_eq!(groups[3].entries.len(), 3);
         assert!(matches!(
             groups[3].entries[2].action,
-            PaletteAction::Node { setting: NodeSetting::CollapseBranch, .. }
+            PaletteAction::Node {
+                setting: NodeSetting::CollapseBranch,
+                ..
+            }
         ));
     }
 
@@ -1221,7 +1286,11 @@ mod tests {
         );
         // ...и закрывается после PALETTE_CLOSE_DELAY
         assert_eq!(
-            hover.update_at(&lay, far, t0 + Duration::from_secs(10) + Duration::from_millis(350)),
+            hover.update_at(
+                &lay,
+                far,
+                t0 + Duration::from_secs(10) + Duration::from_millis(350)
+            ),
             None
         );
         assert!(!hover.pending());

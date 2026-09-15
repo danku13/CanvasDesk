@@ -1084,8 +1084,14 @@ mod tests {
             Some(&["in".to_owned(), "edge".to_owned(), "nested".to_owned()][..])
         );
         // Случайно занесённая поверх группы нода ребёнком НЕ становится
-        canvas.nodes.push(Node::file("random", "C:/r.png", 100.0, 100.0, 50.0, 50.0));
-        assert_eq!(group_children(&canvas, 0), vec![1, 2, 4], "random не подвязан");
+        canvas
+            .nodes
+            .push(Node::file("random", "C:/r.png", 100.0, 100.0, 50.0, 50.0));
+        assert_eq!(
+            group_children(&canvas, 0),
+            vec![1, 2, 4],
+            "random не подвязан"
+        );
         // Явная вставка жестом — теперь ребёнок
         group_add_children(&mut canvas, 0, &["random".to_owned()]);
         assert_eq!(group_children(&canvas, 0), vec![1, 2, 4, 5]);
@@ -1102,7 +1108,10 @@ mod tests {
         group_materialize_children(&mut canvas, 0);
         // Вложенная группа nested вышла из состава
         assert!(group_remove_child(&mut canvas, 0, "nested"));
-        assert!(!group_remove_child(&mut canvas, 0, "nested"), "повтор — no-op");
+        assert!(
+            !group_remove_child(&mut canvas, 0, "nested"),
+            "повтор — no-op"
+        );
         assert_eq!(group_children(&canvas, 0), vec![1, 2]);
         // Вложенная группа ПОСЛЕ выноса лежит поверх g, но не ребёнок
         // (геометрия больше не решает) — и nested своих детей не теряет
@@ -1133,9 +1142,9 @@ mod tests {
         // Нода частично заезжает справа-снизу — вытолкнута по кратчайшей оси
         let rect = [0.0, 0.0, 400.0, 300.0];
         let others = vec![
-            (1, [380.0, 100.0, 100.0, 80.0]),  // пересекается справа (20 px)
-            (2, [100.0, 280.0, 100.0, 80.0]),  // пересекается снизу (20 px)
-            (3, [500.0, 500.0, 100.0, 80.0]),  // без пересечения
+            (1, [380.0, 100.0, 100.0, 80.0]), // пересекается справа (20 px)
+            (2, [100.0, 280.0, 100.0, 80.0]), // пересекается снизу (20 px)
+            (3, [500.0, 500.0, 100.0, 80.0]), // без пересечения
         ];
         let plan = plan_push_out(rect, &others);
         assert_eq!(plan.len(), 2, "без пересечения — нет в плане");

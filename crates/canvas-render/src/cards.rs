@@ -1031,7 +1031,8 @@ mod tests {
         canvas.add_edge(edge);
         canvas.add_edge(canvas_core::Edge::new("e2", "a", None, "missing", None));
 
-        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
+        let instances =
+            build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
         assert!(
             instances.len() > ARROW_DOTS * 2,
             "кружки линии + стрелка: {}",
@@ -1053,7 +1054,14 @@ mod tests {
 
         // Выделенная связь — акцент и толще (шаг ресэмплинга зависит от d,
         // поэтому число кружков иное — сравниваем только атрибуты)
-        let selected = build_edge_instances(&canvas, Some(0), false, &FocusView::EMPTY, None, &no_hidden());
+        let selected = build_edge_instances(
+            &canvas,
+            Some(0),
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+        );
         assert!(selected.len() > ARROW_DOTS * 2);
         assert_eq!(selected[0].fill, SELECTION_BORDER);
         assert_eq!(selected[0].size[0], EDGE_DOT_SELECTED);
@@ -1204,8 +1212,10 @@ mod tests {
             .nodes
             .push(Node::file("wall", "C:/w.png", 230.0, 0.0, 140.0, 100.0));
         canvas.add_edge(canvas_core::Edge::new("e1", "a", None, "b", None));
-        let plain = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
-        let avoided = build_edge_instances(&canvas, None, true, &FocusView::EMPTY, None, &no_hidden());
+        let plain =
+            build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
+        let avoided =
+            build_edge_instances(&canvas, None, true, &FocusView::EMPTY, None, &no_hidden());
         assert!(
             avoided.len() > plain.len(),
             "огибающий маршрут длиннее прямой: {} vs {}",
@@ -1511,7 +1521,8 @@ mod tests {
         edge.thickness = Some(canvas_core::EdgeThickness::Thin);
         canvas.add_edge(edge);
 
-        let instances = build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
+        let instances =
+            build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
         assert!(!instances.is_empty());
         assert!(
             instances.iter().all(|inst| inst.size[0] == 1.8),

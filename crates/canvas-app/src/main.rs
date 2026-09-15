@@ -15,14 +15,13 @@ use canvas_app::palette::{
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
     in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect,
-    panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_at, point_in_rect,
-    plan_group_around_nodes,
-    reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at, submenu_origin_next_to,
-    submenu_rect, theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu,
-    DoubleClick, DragState, EdgeDrag, PastePlacement, SettingsRow, Submenu,
-    SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
-    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
-    SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
+    panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_around_nodes,
+    plan_group_at, point_in_rect, reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at,
+    submenu_origin_next_to, submenu_rect, theme_button_rect, toggle_selection_with_primary,
+    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, PastePlacement, SettingsRow,
+    Submenu, SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING,
+    MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING,
+    PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults};
 use canvas_core::{
@@ -464,6 +463,15 @@ enum AppEvent {
     /// забрать через `take_request`, ответить через responder.
     #[cfg(windows)]
     McpWake,
+    /// T15-relaunch: работающий инстанс получил exit-сигнал от нового
+    /// запуска (single-instance handoff, desktop/single_instance) —
+    /// штатное завершение: форс-сейв сцены + восстановление иконок
+    /// (shutdown). Событие шлёт exit-листенер (поток в main()) через
+    /// proxy; на Windows сигналит любой повторный запуск, в т.ч.
+    /// перезапуск на --desktop из меню канваса.
+    /// На не-Windows листенера нет — вариант не конструируется (dead_code).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    InstanceExit,
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -747,13 +755,6 @@ struct App {
     /// запросы забираются по AppEvent::McpWake. None — MCP недоступен (деградация).
     #[cfg(windows)]
     mcp_server: Option<canvas_shell::mcp_pipe::McpPipeServer>,
-    /// EventLoopProxy для спавна runtime-сервисов из методов App (T15:
-    /// `enter_desktop` спавнит desktop-монитор, если он не был поднят при
-    /// старте без --desktop). На других ОС поле не используется (метод
-    /// `enter_desktop` — no-op), но держим кроссплатформенно для uniform
-    /// структуры App.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
@@ -771,7 +772,6 @@ impl App {
         watcher: WatchService,
         search_service: SearchService,
         desktop_mode: bool,
-        proxy: EventLoopProxy<AppEvent>,
     ) -> Self {
         // M5 (T20-F): менеджер виджетов; реестр инициализируется в
         // main() (init_widgets) после настройки трейсинга
@@ -864,7 +864,6 @@ impl App {
             explorer_tracker: Default::default(),
             #[cfg(windows)]
             mcp_server: None,
-            proxy,
         }
     }
 
@@ -1002,62 +1001,42 @@ impl App {
         self.desktop_mode
     }
 
-    /// Любая ошибка в `attach_desktop` — не-фатальная: окно остаётся
-    /// обычным top-level, `desktop_mode` не поднимается (галочка меню не
-    /// встанет). Пользователь может повторить попытку.
+    /// Вход в desktop-режим в рантайме (T15-relaunch): перезапуск себя с
+    /// флагом --desktop. In-place встройка (attach_desktop из меню, ee63b7a)
+    /// НЕ работает: рендерер в оконном режиме создан с prefer_dx12=false,
+    /// а Vulkan-swapchain не презентует в ребёнка Progman (проверено
+    /// экспериментом, см. resumed()) — окно растягивается на виртуальный
+    /// экран (Win32-шаги attach проходят), но канвас не рисуется и обои
+    /// остаются видимыми. Новый процесс стартует с чистого листа: окно
+    /// borderless → attach ДО создания GPU-surface → DX12-рендерер.
+    /// Эксклюзивность — single-instance handoff (desktop/single_instance):
+    /// новый инстанс сигналит exit-событие, этот инстанс штатно сохранится
+    /// и выйдет (AppEvent::InstanceExit → shutdown), новый дождётся
+    /// освобождения мьютекса и стартанёт в desktop-режиме. Ошибка спавна —
+    /// строка для MessageBox (фолбэк R14: пользователь запустит вручную).
     #[cfg(windows)]
-    fn enter_desktop(&mut self) {
-        if self.desktop_mode && self.desktop_hierarchy.is_some() {
-            tracing::debug!("enter_desktop: уже в desktop-режиме — no-op");
-            return;
-        }
-        // Спавним монитор десктопа (T15), если ещё не запущен: на старте без
-        // --desktop он не поднимался, но для runtime-переключения нужен.
-        if self.desktop_monitor.is_none() {
-            let proxy = self.proxy.clone();
-            let responder: canvas_shell::desktop::monitor::DesktopResponder =
-                Arc::new(move |event| {
-                    let _ = proxy.send_event(AppEvent::Desktop(event));
-                });
-            self.set_desktop_monitor(
-                canvas_shell::desktop::monitor::DesktopMonitorService::spawn(responder),
-            );
-        }
-        let Some(raw) = self.window_hwnd() else {
-            tracing::warn!("enter_desktop: нет HWND — оконный цикл не готов");
-            return;
-        };
-        self.attach_desktop(raw);
-        // attach_desktop выставляет desktop_hierarchy при успехе — по нему
-        // определяем, что встройка удалась, и поднимаем desktop_mode.
-        if self.desktop_hierarchy.is_some() {
-            self.desktop_mode = true;
-            tracing::info!("desktop-режим включён через меню (T15 runtime toggle)");
-        } else {
-            tracing::warn!("enter_desktop: встройка не удалась — оконный режим");
-        }
+    fn spawn_desktop_relaunch(&self) -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|err| format!("current_exe: {err}"))?;
+        std::process::Command::new(&exe)
+            .arg("--desktop")
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("spawn {:?}: {err}", exe))
     }
 
-    /// На не-Windows — no-op: desktop-режим определяется SPEC §7.4 как
-    /// Windows-only; на Linux/macOS пункт меню скрыт, но defensive guard
-    /// держим (метод м.б. вызван через cfg-uniform код).
-    #[cfg(not(windows))]
-    #[allow(dead_code)]
-    fn enter_desktop(&mut self) {
-        tracing::warn!("desktop-режим не поддерживается на этой платформе");
-    }
-
-    /// Выключить desktop-режим в рантайме (T15): обратная к `enter_desktop` —
+    /// Выключить desktop-режим в рантайме (T15): обратная к встройке —
     /// `attach::detach` (SetParent(None) + scrub-план «обычного» окна +
     /// shrink_to_work_area), восстановление иконок (IconGuard::restore),
     /// сброс `desktop_hierarchy` / `desktop_dpi` / `desktop_mode`. Монитор
-    /// НЕ останавливаем (он переживёт повторный enter_desktop без пересоздания
-    /// потока — Watch в resumed()/enter_desktop выставит новые хэндлы).
+    /// НЕ останавливаем (переживёт выход процесса — поток умрёт вместе с
+    /// процессом при завершении).
     ///
-    /// Любая ошибка detach — не-фатальная: внутреннее состояние всё равно
-    /// сбрасывается (канвас остаётся интерактивным в оконном режиме, даже
-    /// если визуально окно «застряло» fullscreen — пользователь может
-    /// перезапустить приложение).
+    /// Здесь in-place detach корректен (в отличие от входа): рендерер
+    /// создан с prefer_dx12=true и в обычном окне презентует нормально —
+    /// пересоздавать его не нужно. Любая ошибка detach — не-фатальная:
+    /// внутреннее состояние всё равно сбрасывается (канвас остаётся
+    /// интерактивным в оконном режиме, даже если визуально окно «застряло»
+    /// fullscreen — пользователь может перезапустить приложение).
     #[cfg(windows)]
     fn leave_desktop(&mut self) {
         if !self.desktop_mode {
@@ -1087,11 +1066,6 @@ impl App {
         self.desktop_mode = false;
         tracing::info!("desktop-режим выключен через меню (T15 runtime toggle)");
     }
-
-    /// На не-Windows — no-op (см. `enter_desktop`).
-    #[cfg(not(windows))]
-    #[allow(dead_code)]
-    fn leave_desktop(&mut self) {}
 
     /// Установить/перенавесить слежку монитора на иерархию (T15):
     /// WinEventHook на поток WorkerW + DPI-поллинг нашего окна. WorkerW=None
@@ -2229,14 +2203,8 @@ impl App {
                     .map(|(_, node)| node.clone())
                     .collect();
                 filtered.edges.retain(|edge| {
-                    let from_exists = filtered
-                        .nodes
-                        .iter()
-                        .any(|node| node.id == edge.from_node);
-                    let to_exists = filtered
-                        .nodes
-                        .iter()
-                        .any(|node| node.id == edge.to_node);
+                    let from_exists = filtered.nodes.iter().any(|node| node.id == edge.from_node);
+                    let to_exists = filtered.nodes.iter().any(|node| node.id == edge.to_node);
                     from_exists && to_exists
                 });
                 filtered
@@ -3104,10 +3072,7 @@ impl App {
                 }
             }
             PaletteAction::Layout { seed, mode } => self.apply_related_layout(seed, mode),
-            PaletteAction::EdgeStyle {
-                edge_index,
-                style,
-            } => {
+            PaletteAction::EdgeStyle { edge_index, style } => {
                 let snapshot = self.scene.canvas.clone();
                 if let Some(edge) = self.scene.canvas.edges.get_mut(edge_index) {
                     edge.style = Some(style);
@@ -4200,10 +4165,7 @@ impl App {
         // Ctrl+← (свернуть ветку), Ctrl+→ (развернуть). Только при выделенной
         // text-ноде; редактор/поиск/диалог приглушают канвас-хоткеи (return
         // выше — клавиатура уходит туда)
-        if event.state == ElementState::Pressed
-            && !event.repeat
-            && !self.modifiers.shift_key()
-        {
+        if event.state == ElementState::Pressed && !event.repeat && !self.modifiers.shift_key() {
             let selected_index = match self.scene.selected {
                 Some(Selection::Node(index)) => Some(index),
                 _ => None,
@@ -4436,7 +4398,8 @@ impl App {
                                         .get(&widget_id)
                                         .map(|p| p.manifest.name.clone())
                                         .unwrap_or(widget_id.clone());
-                                    self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
+                                    self.dialog =
+                                        Some(AppDialog::RemovePackage { widget_id, name });
                                 }
                             }
                             self.request_redraw();
@@ -4486,7 +4449,9 @@ impl App {
                                             .menu_entries()
                                             .into_iter()
                                             .map(|(widget_id, label)| SubmenuEntry {
-                                                action: canvas_app::ui::SubmenuAction::Insert(widget_id),
+                                                action: canvas_app::ui::SubmenuAction::Insert(
+                                                    widget_id,
+                                                ),
                                                 label,
                                             })
                                             .collect();
@@ -4509,21 +4474,38 @@ impl App {
                                         });
                                     }
                                 }
-                                // T15: переключатель desktop-режима в рантайме.
-                                // Если уже встроены (desktop_mode + иерархия) —
-                                // leave_desktop (detach + восстановление иконок
-                                // + сброс состояния); иначе enter_desktop
-                                // (attach_desktop + спавн монитора). На
-                                // не-Windows — warn (метод no-op).
+                                // T15: переключатель desktop-режима. Вход
+                                // (runtime, без --desktop): перезапуск себя с
+                                // --desktop через single-instance handoff —
+                                // in-place SetParent не работает (Vulkan-swapchain
+                                // не презентует в ребёнка Progman, Renderer
+                                // фиксируется с prefer_dx12 при старте). Выход
+                                // (уже встроены): in-place detach — DX12-рендерер
+                                // в обычном окне презентует, пересоздание не нужно.
+                                // На не-Windows — warn.
                                 CanvasMenuItem::DesktopMode => {
                                     #[cfg(windows)]
                                     {
-                                        if self.desktop_mode
-                                            && self.desktop_hierarchy.is_some()
-                                        {
+                                        if self.desktop_mode && self.desktop_hierarchy.is_some() {
                                             self.leave_desktop();
                                         } else {
-                                            self.enter_desktop();
+                                            match self.spawn_desktop_relaunch() {
+                                                Ok(()) => tracing::info!(
+                                                    "перезапуск на --desktop: новый инстанс \
+                                                     закроет текущий (single-instance handoff)"
+                                                ),
+                                                Err(err) => {
+                                                    tracing::warn!(
+                                                        %err,
+                                                        "перезапуск на --desktop не удался"
+                                                    );
+                                                    canvas_shell::desktop::attach::fallback_message_box(&format!(
+                                                        "Не удалось перезапустить CanvasDesk \
+                                                         в режиме десктопа:\n{err}\n\nЗапустите \
+                                                         приложение вручную с флагом --desktop."
+                                                    ));
+                                                }
+                                            }
                                         }
                                     }
                                     #[cfg(not(windows))]
@@ -5423,6 +5405,28 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("иконки десктопа восстановлены после аварийной сессии (sentinel)");
     }
     let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    // T15-relaunch: single-instance handoff ДО загрузки сцены/конфига —
+    // повторный запуск (в т.ч. перезапуск на --desktop из меню канваса)
+    // сигналит работающему инстансу штатный выход и ждёт смерти предыдущего
+    // владельца мьютекса. Пока ждём — сцена не читается: старый инстанс
+    // успеет сохранить dirty-сцену без гонки записи/чтения default.canvas.
+    #[cfg(windows)]
+    let _instance_guard = {
+        use canvas_shell::desktop::single_instance;
+        if single_instance::signal_exit() {
+            tracing::info!("работающий инстанс получил сигнал завершения — ждём его выхода");
+        }
+        match single_instance::InstanceGuard::acquire(single_instance::SINGLE_INSTANCE_WAIT_MS) {
+            Some(guard) => Some(guard),
+            None => {
+                tracing::warn!(
+                    wait_ms = single_instance::SINGLE_INSTANCE_WAIT_MS,
+                    "предыдущий инстанс не завершился вовремя — запускаемся вторым (деградация R14)"
+                );
+                None
+            }
+        }
+    };
     // Настройки приложения (~/.canvasdesk/config.toml); битый/отсутствующий
     // файл — дефолты + warn, приложение не падает
     let config_path = canvas_shell::default_config_path();
@@ -5456,6 +5460,20 @@ fn main() -> anyhow::Result<()> {
     // event loop через proxy — иначе при ControlFlow::Wait результаты
     // лежали бы в канале до следующего ввода
     let proxy: EventLoopProxy<AppEvent> = event_loop.create_proxy();
+    // Exit-листенер single-instance (T15-relaunch): новый запуск (в т.ч.
+    // перезапуск на --desktop из меню канваса) сигналит событие — поток будит
+    // event loop через AppEvent::InstanceExit, приложение штатно сохраняется
+    // и выходит, освобождая мьютекс для нового инстанса. Провал — warn:
+    // повторные запуски не закроют этот инстанс сигналом (деградация R14).
+    #[cfg(windows)]
+    {
+        let proxy = proxy.clone();
+        if let Err(err) = canvas_shell::desktop::single_instance::spawn_exit_listener(move || {
+            let _ = proxy.send_event(AppEvent::InstanceExit);
+        }) {
+            tracing::warn!(%err, "exit-листенер не запущен — повторный запуск не закроет этот инстанс");
+        }
+    }
     // Отправитель drag-событий в event loop (T9): тот же паттерн, что и
     // ThumbService-вокер — IDropTarget (shell) шлёт AppEvent::Drag через proxy
     let drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync> = {
@@ -5549,7 +5567,6 @@ fn main() -> anyhow::Result<()> {
             watcher,
             search_service,
             args.desktop,
-            proxy.clone(),
         );
         // M5 (T20-F): реестр виджетов (материализация встроенных + скан)
         app.init_widgets();
@@ -6020,7 +6037,8 @@ impl App {
         let mut y_bottom: Option<f32> = None;
         for child in Self::mindmap_direct_children(canvas, parent_index) {
             if let Some(node) = canvas.nodes.get(child) {
-                y_bottom = Some(y_bottom.map_or(node.y + node.height, |b| b.max(node.y + node.height)));
+                y_bottom =
+                    Some(y_bottom.map_or(node.y + node.height, |b| b.max(node.y + node.height)));
             }
         }
         let y = match y_bottom {
@@ -6081,7 +6099,11 @@ impl App {
             node.collapsed = Some(collapsed);
         }
         self.scene.mark_dirty();
-        self.show_toast(if collapsed { "Ветка свёрнута" } else { "Ветка развёрнута" });
+        self.show_toast(if collapsed {
+            "Ветка свёрнута"
+        } else {
+            "Ветка развёрнута"
+        });
     }
 
     /// Индексы скрытых нод (свернутые поддеревья, FR-011): объединение
@@ -6241,7 +6263,8 @@ impl App {
                     .as_deref()
                     .and_then(|id| self.widgets.permissions_of_node(&self.scene.canvas, id))
                     .map(|permissions| {
-                        let list: Vec<&str> = permissions.list().iter().map(|p| p.as_str()).collect();
+                        let list: Vec<&str> =
+                            permissions.list().iter().map(|p| p.as_str()).collect();
                         if list.is_empty() {
                             "нет особых разрешений".to_owned()
                         } else {
@@ -6265,7 +6288,10 @@ impl App {
         let dragged: Vec<usize> = std::iter::once(dragging.primary)
             .chain(dragging.origins.iter().map(|(i, _)| *i))
             .collect();
-        let candidates = self.scene.spatial.query_rect([center[0], center[1], center[0], center[1]]);
+        let candidates = self
+            .scene
+            .spatial
+            .query_rect([center[0], center[1], center[0], center[1]]);
         candidates
             .into_iter()
             .rev() // верхняя по z — последняя
@@ -6348,7 +6374,9 @@ impl App {
             .get(group_index)
             .map(|g| [g.x, g.y, g.width, g.height])
             .unwrap_or([0.0, 0.0, 0.0, 0.0]);
-        self.scene.spatial.update(group_index, &self.scene.canvas.nodes[group_index]);
+        self.scene
+            .spatial
+            .update(group_index, &self.scene.canvas.nodes[group_index]);
         // Мягкое раздвигание: не-дети, чьи bbox пересеклись с новым rect,
         // сдвигаются на минимальный осевой вектор; группа и раздвинутые
         // соседи едут плавно (settle-анимация ~250 мс)
@@ -6360,9 +6388,7 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(i, node)| {
-                *i != group_index
-                    && !children.contains(i)
-                    && node.kind() != NodeKind::Group
+                *i != group_index && !children.contains(i) && node.kind() != NodeKind::Group
             })
             .map(|(i, node)| (i, [node.x, node.y, node.width, node.height]))
             .collect();
@@ -6376,7 +6402,11 @@ impl App {
         for (index, [dx, dy]) in push_plan {
             let (Some(from), Some(to_target)) = (
                 self.scene.canvas.nodes.get(index).map(|n| [n.x, n.y]),
-                self.scene.canvas.nodes.get(index).map(|n| [n.x + dx, n.y + dy]),
+                self.scene
+                    .canvas
+                    .nodes
+                    .get(index)
+                    .map(|n| [n.x + dx, n.y + dy]),
             ) else {
                 continue;
             };
@@ -6567,8 +6597,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // rect'ы запоминаются для airspace виджетов
                 let palette_view = self.palette_view();
                 if let Some((lay, groups, open)) = &palette_view {
-                    let (pal_instances, pal_texts) =
-                        self.palette_overlay(lay, groups, *open);
+                    let (pal_instances, pal_texts) = self.palette_overlay(lay, groups, *open);
                     screen_instances.extend(pal_instances);
                     owned_texts.extend(pal_texts);
                 }
@@ -6872,9 +6901,7 @@ impl ApplicationHandler<AppEvent> for App {
                     .iter()
                     .enumerate()
                     .filter(|(_, node)| node.collapsed == Some(true))
-                    .map(|(i, _)| {
-                        (i, canvas_core::subtree_ids(&self.scene.canvas, i).len())
-                    })
+                    .map(|(i, _)| (i, canvas_core::subtree_ids(&self.scene.canvas, i).len()))
                     .filter(|(_, count)| *count > 0)
                     .collect();
                 let overlay = FrameOverlay {
@@ -6948,7 +6975,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
         match event {
             AppEvent::ThumbsReady => {
                 // Забрать готовые тамбнейлы из канала и загрузить в атлас;
@@ -6981,6 +7008,11 @@ impl ApplicationHandler<AppEvent> for App {
             #[cfg(windows)]
             AppEvent::McpWake => self.on_mcp_wake(),
             AppEvent::Widget(event) => self.on_widget_event(event),
+            // T15-relaunch: exit-сигнал от нового запуска (single-instance
+            // handoff) — штатное завершение: форс-сейв сцены, восстановление
+            // иконок, exit. Мьютекс освободится смертью процесса, новый
+            // инстанс продолжит старт (актуально для перезапуска на --desktop).
+            AppEvent::InstanceExit => self.shutdown(event_loop),
         }
     }
 

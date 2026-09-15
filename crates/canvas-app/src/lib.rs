@@ -1046,10 +1046,9 @@ pub mod ui {
                 if hotkeys_open { "✓ " } else { "" }
             ),
             CanvasMenuItem::Widgets => "Виджеты ▸…".to_owned(),
-            CanvasMenuItem::DesktopMode => format!(
-                "{}Режим десктопа",
-                if desktop_on { "✓ " } else { "" }
-            ),
+            CanvasMenuItem::DesktopMode => {
+                format!("{}Режим десктопа", if desktop_on { "✓ " } else { "" })
+            }
         }
     }
 

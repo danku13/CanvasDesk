@@ -318,19 +318,14 @@ pub fn detach(hwnd: HWND) -> Result<(), AttachError> {
     // не к «нативному неоновому» (это невозможно без пересоздания).
     const WS_CHILDWINDOW: u32 = 0x4000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000; // WS_CAPTION|SYSMENU|THICKFRAME|MINIMIZE|MAXIMIZE
-    // Используем локальные константы модуля (mod.rs), как в plan_style_scrub:
-    // super::WS_EX_NOACTIVATE / super::WS_EX_LAYERED — те же значения, что в WinUser.h.
+                                                  // Используем локальные константы модуля (mod.rs), как в plan_style_scrub:
+                                                  // super::WS_EX_NOACTIVATE / super::WS_EX_LAYERED — те же значения, что в WinUser.h.
     let cur_style = read_style_field(hwnd, GWL_STYLE);
     let cur_exstyle = read_style_field(hwnd, GWL_EXSTYLE);
     let new_style = (cur_style | WS_OVERLAPPEDWINDOW) & !WS_CHILDWINDOW;
     let new_exstyle = cur_exstyle & !(super::WS_EX_NOACTIVATE | super::WS_EX_LAYERED);
     write_style_field(hwnd, GWL_STYLE, new_style, super::StyleField::Style)?;
-    write_style_field(
-        hwnd,
-        GWL_EXSTYLE,
-        new_exstyle,
-        super::StyleField::ExStyle,
-    )?;
+    write_style_field(hwnd, GWL_EXSTYLE, new_exstyle, super::StyleField::ExStyle)?;
     tracing::debug!(style = new_style, exstyle = new_exstyle, "detach: scrub ok");
 
     // ---- Шаг 3: ужать до рабочей области -------------------------------

@@ -89,7 +89,10 @@ fn test_group_via_node_menu() {
     let hit = palette_hit(&lay, [row[0] + 5.0, row[1] + 5.0], Some(ai));
     assert_eq!(
         hit,
-        Some(PaletteHit::Entry { group: ai, entry: ei }),
+        Some(PaletteHit::Entry {
+            group: ai,
+            entry: ei
+        }),
         "строка кликабельна"
     );
 
@@ -341,7 +344,9 @@ fn test_group_round_trip() {
 
 // --- FR-012: явное членство групп («втягивание») ---
 
-use canvas_core::{group_add_children, group_expand_to_children, group_remove_child, plan_push_out};
+use canvas_core::{
+    group_add_children, group_expand_to_children, group_remove_child, plan_push_out,
+};
 
 /// FR-012 (главный регресс): случайное перекрытие не подвязывает ноду к
 /// группе с явным списком детей; «Сгруппировать» материализует список.
@@ -397,7 +402,10 @@ fn test_insert_expand_drag_out() {
 fn test_push_out_plan_deterministic() {
     let plan = plan_push_out(
         [0.0, 0.0, 400.0, 300.0],
-        &[(1, [390.0, 10.0, 50.0, 50.0]), (2, [900.0, 900.0, 50.0, 50.0])],
+        &[
+            (1, [390.0, 10.0, 50.0, 50.0]),
+            (2, [900.0, 900.0, 50.0, 50.0]),
+        ],
     );
     assert_eq!(plan, vec![(1, [10.0, 0.0])], "только пересекающийся сосед");
 }
