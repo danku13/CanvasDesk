@@ -124,12 +124,14 @@ fn test_create_group_at_viewport_center() {
     let (canvas, _spatial) = group_scene();
 
     // Меню пустого канваса: «Создать группу» + «Фокус на связях» (T23) +
-    // «Горячие клавиши (F1)» (FR-004.1) + «Виджеты ▸…» (M5 T20-F)
-    assert_eq!(CANVAS_MENU_ITEMS.len(), 4);
+    // «Горячие клавиши (F1)» (FR-004.1) + «Виджеты ▸…» (M5 T20-F) +
+    // «Режим десктопа» (T15, runtime-переключение)
+    assert_eq!(CANVAS_MENU_ITEMS.len(), 5);
     assert_eq!(CANVAS_MENU_ITEMS[0], CanvasMenuItem::NewGroup);
     assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
     assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
     assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
+    assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
 
     // Центр viewport в мировых координатах (паттерн App::viewport_center_world)
     let viewport = [1600.0, 900.0];

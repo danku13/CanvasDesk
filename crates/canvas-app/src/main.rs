@@ -722,6 +722,7 @@ struct App {
     /// старте без --desktop). На других ОС поле не используется (метод
     /// `enter_desktop` — no-op), но держим кроссплатформенно для uniform
     /// структуры App.
+    #[cfg_attr(not(windows), allow(dead_code))]
     proxy: EventLoopProxy<AppEvent>,
 }
 
@@ -955,6 +956,22 @@ impl App {
     /// WorkerW и DPI-поллинг работали сразу после встройки. Повторный вызов
     /// (уже в desktop-режиме) — no-op.
     ///
+    /// T15: галочка «Режим десктопа» в меню канваса — режим активен И
+    /// встойка удалась (иерархия найдена). Поле `desktop_hierarchy` есть
+    /// только на Windows; на других ОС `desktop_mode` не поднимается
+    /// (attach недоступен), поэтому там достаточно одного флага.
+    #[cfg(windows)]
+    fn desktop_menu_checked(&self) -> bool {
+        self.desktop_mode && self.desktop_hierarchy.is_some()
+    }
+
+    /// Не-Windows вариант (см. windows-версию): attach недоступен —
+    /// `desktop_mode` никогда не поднимается, галочка всегда снята.
+    #[cfg(not(windows))]
+    fn desktop_menu_checked(&self) -> bool {
+        self.desktop_mode
+    }
+
     /// Любая ошибка в `attach_desktop` — не-фатальная: окно остаётся
     /// обычным top-level, `desktop_mode` не поднимается (галочка меню не
     /// встанет). Пользователь может повторить попытку.
@@ -995,6 +1012,7 @@ impl App {
     /// Windows-only; на Linux/macOS пункт меню скрыт, но defensive guard
     /// держим (метод м.б. вызван через cfg-uniform код).
     #[cfg(not(windows))]
+    #[allow(dead_code)]
     fn enter_desktop(&mut self) {
         tracing::warn!("desktop-режим не поддерживается на этой платформе");
     }
@@ -1042,6 +1060,7 @@ impl App {
 
     /// На не-Windows — no-op (см. `enter_desktop`).
     #[cfg(not(windows))]
+    #[allow(dead_code)]
     fn leave_desktop(&mut self) {}
 
     /// Установить/перенавесить слежку монитора на иерархию (T15):
@@ -2688,7 +2707,7 @@ impl App {
                     *item,
                     self.settings.focus_mode,
                     self.hotkeys_open,
-                    self.desktop_mode && self.desktop_hierarchy.is_some(),
+                    self.desktop_menu_checked(),
                 ),
                 origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
                 width: rect[2] - MENU_LABEL_X,
@@ -3721,9 +3740,7 @@ fn mcp_dispatch(
                     Ok(_) => Some(Some(formula.clone())),
                     Err(err) => return Err(format!("expr: {err}")),
                 },
-                Some(other) => {
-                    return Err(format!("expr должен быть строкой или null: {other}"))
-                }
+                Some(other) => return Err(format!("expr должен быть строкой или null: {other}")),
             };
             let mut geometry = false;
             // FR-006: MCP-мутация — undo-шаг. Пушим до мутаций: валидация
