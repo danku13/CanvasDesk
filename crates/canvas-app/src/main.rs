@@ -193,37 +193,112 @@ fn split_formula_lines(text: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// FR-018: параметры шаблона из текста ноды (Numi-лист присваиваний
-/// `rps = 1000 rps`). Каждая строка, вычислившаяся в значение И похожая на
-/// присваивание, — параметр: имя — до `=`, значение — через Numi-eval
-/// (единицы и суффиксы `2k` работают как в заметках). Проза, пустые строки
-/// и код-фенсы пропускаются (`eval_lines` их не вычисляет).
-fn template_params_from_text(
-    text: &str,
-) -> BTreeMap<String, canvas_core::templates::TemplateParam> {
-    let mut params = BTreeMap::new();
-    let outcomes = expr::eval_lines(text);
-    for (line, outcome) in text.split('\n').zip(outcomes) {
-        let Some(ExprOutcome::Ok(value)) = outcome else {
-            continue;
-        };
-        let Some((name, _)) = line.split_once('=') else {
-            continue;
-        };
-        let name = name.trim();
-        if name.is_empty() || name.chars().any(char::is_whitespace) {
+/// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
+/// транслитерация (решение владельца: «Нагрузка» → «nagruzka»).
+/// Прочие символы — дефис; сжатие подряд идущих; обрезка краёв.
+fn slugify(name: &str) -> String {
+    const TRANSLIT: &[(&str, &str)] = &[
+        ("а", "a"),
+        ("б", "b"),
+        ("в", "v"),
+        ("г", "g"),
+        ("д", "d"),
+        ("е", "e"),
+        ("ё", "e"),
+        ("ж", "zh"),
+        ("з", "z"),
+        ("и", "i"),
+        ("й", "y"),
+        ("к", "k"),
+        ("л", "l"),
+        ("м", "m"),
+        ("н", "n"),
+        ("о", "o"),
+        ("п", "p"),
+        ("р", "r"),
+        ("с", "s"),
+        ("т", "t"),
+        ("у", "u"),
+        ("ф", "f"),
+        ("х", "h"),
+        ("ц", "ts"),
+        ("ч", "ch"),
+        ("ш", "sh"),
+        ("щ", "sch"),
+        ("ъ", ""),
+        ("ы", "y"),
+        ("ь", ""),
+        ("э", "e"),
+        ("ю", "yu"),
+        ("я", "ya"),
+    ];
+    let lower = name.to_lowercase();
+    let mut out = String::new();
+    for ch in lower.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else if let Some((_, latin)) = TRANSLIT.iter().find(|(c, _)| *c == ch.to_string()) {
+            out.push_str(latin);
+        } else if ch == ' ' || ch == '_' || ch == '-' || ch == '.' || ch == '/' {
+            out.push('-');
+        }
+        // прочие символы (эмодзи, знаки) — пропускаются
+    }
+    let mut collapsed = String::new();
+    for ch in out.chars() {
+        if ch == '-' && collapsed.ends_with('-') {
             continue;
         }
-        let unit = value.unit.display();
-        params.insert(
-            name.to_owned(),
-            canvas_core::templates::TemplateParam {
-                num: value.num,
-                unit: if unit.is_empty() { None } else { Some(unit) },
-            },
-        );
+        collapsed.push(ch);
     }
-    params
+    let trimmed = collapsed.trim_matches('-');
+    if trimmed.is_empty() {
+        "custom".to_owned()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+/// FR-020: тип параметра по токену единицы (подсказка UI в манифесте).
+fn infer_param_type(unit: Option<&str>) -> canvas_core::templates::ParamType {
+    use canvas_core::templates::ParamType;
+    match unit {
+        Some("rps") | Some("req/s") => ParamType::Rate,
+        Some("ms") | Some("s") | Some("sec") | Some("secs") | Some("min") | Some("h")
+        | Some("hour") => ParamType::Time,
+        Some("B") | Some("KB") | Some("MB") | Some("GB") => ParamType::Bytes,
+        Some("%") => ParamType::Percent,
+        Some("req") | Some("reqs") => ParamType::Count,
+        _ => ParamType::Scalar,
+    }
+}
+
+/// FR-020: уникальный id custom-шаблона: базовый slug; конфликт с
+/// существующим id (реестр или файловая система) — суффикс `-2`, `-3`…
+fn unique_custom_id(
+    base: &str,
+    registry: &canvas_core::templates::TemplateRegistry,
+    root: &std::path::Path,
+) -> String {
+    let base = base.chars().take(48).collect::<String>();
+    let exists = |id: &str| registry.find(id).is_some() || root.join(id).exists();
+    if !exists(&base) {
+        return base;
+    }
+    for n in 2..=1000u32 {
+        let candidate = format!("{base}-{n}");
+        if !exists(&candidate) {
+            return candidate;
+        }
+    }
+    // Практически недостижимо — последний рубеж: метка времени
+    format!(
+        "{base}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default()
+    )
 }
 
 /// FR-013 (правка 4): зона наведения бейджа ошибки формульной строки под
@@ -859,8 +934,11 @@ struct App {
     /// Пульс подсветки ноды-результата (T14): (нода, старт).
     pulse: Option<(usize, Instant)>,
     /// FR-019: реестр шаблонов — built-in библиотека из assets/templates
-    /// (15 шаблонов, include_dir); FR-020 добавит custom из ~/.canvasdesk/templates.
+    /// (15 шаблонов, include_dir) + custom из ~/.canvasdesk/templates
+    /// (FR-020, решение владельца — единый корень с виджетами).
     templates: canvas_core::templates::TemplateRegistry,
+    /// FR-020: корень custom-шаблонов (`~/.canvasdesk/templates`).
+    templates_root: std::path::PathBuf,
     /// FR-018: боковая палитра шаблонов (Ctrl+P): фильтр/категории/выбор.
     template_panel: template_ui::TemplatePanel,
     /// FR-018: радиальное wheel-меню шаблонов (Shift+клик по пустому
@@ -1011,7 +1089,15 @@ impl App {
             search_pending: None,
             flight: None,
             pulse: None,
-            templates: canvas_core::templates::TemplateRegistry::builtin(),
+            templates_root: canvas_shell::default_cache_dir()
+                .unwrap_or_default()
+                .join("templates"),
+            templates: {
+                let root = canvas_shell::default_cache_dir()
+                    .unwrap_or_default()
+                    .join("templates");
+                canvas_core::templates::TemplateRegistry::all_with_custom(&root)
+            },
             template_panel: template_ui::TemplatePanel::new(),
             wheel_menu: None,
             focus_dim: 0.0,
@@ -1644,7 +1730,7 @@ impl App {
                             // сохраняются), propagator пересчитает
                             // формулу шаблона с новыми значениями
                             if node.template().is_some() {
-                                let params = template_params_from_text(&text);
+                                let params = canvas_core::templates::params_from_text(&text);
                                 node.set_template_params(params);
                             }
                         }
@@ -3722,6 +3808,60 @@ impl App {
                 ));
                 self.request_redraw();
             }
+            // FR-020: «Сохранить как шаблон» — снимок template-ссылки ноды
+            // в custom-манифест (~/.canvasdesk/templates/<id>/template.json).
+            // Файловая операция — НЕ undo-able; реестр перечитается.
+            PaletteAction::SaveAsTemplate { node_index } => {
+                let Some(node) = self.scene.canvas.nodes.get(node_index) else {
+                    return;
+                };
+                let Some(template) = node.template() else {
+                    return;
+                };
+                let name = node.label.clone().unwrap_or_else(|| template.id.clone());
+                let id = unique_custom_id(&slugify(&name), &self.templates, &self.templates_root);
+                let params: Vec<canvas_core::templates::ParamSpec> = template
+                    .params
+                    .iter()
+                    .map(|(name_param, value)| canvas_core::templates::ParamSpec {
+                        name: name_param.clone(),
+                        // Тип — подсказка UI: выводим по токену единицы
+                        kind: infer_param_type(value.unit.as_deref()),
+                        default: value.num,
+                        unit: value.unit.clone(),
+                        min: None,
+                        max: None,
+                    })
+                    .collect();
+                let manifest = canvas_core::templates::TemplateManifest {
+                    id: id.clone(),
+                    name: name.clone(),
+                    name_ru: None,
+                    version: "1.0.0".to_owned(),
+                    category: "custom".to_owned(),
+                    description: format!("Сохранено с канваса {}", self.scene.path.display()),
+                    description_en: None,
+                    params,
+                    expr: template.expr.clone(),
+                    color: "#9B9B9B".to_owned(),
+                    icon: "custom".to_owned(),
+                    source: canvas_core::templates::TemplateSource::Custom,
+                };
+                match canvas_core::templates::save_custom(&manifest, &self.templates_root) {
+                    Ok(path) => {
+                        // Перезагрузка реестра: custom появится в
+                        // палитре/wheel и в MCP template_list
+                        self.templates = canvas_core::templates::TemplateRegistry::all_with_custom(
+                            &self.templates_root,
+                        );
+                        self.show_toast(format!("Шаблон «{name}» сохранён: {}", path.display()));
+                    }
+                    Err(err) => {
+                        self.show_toast(format!("Не удалось сохранить шаблон: {err}"));
+                    }
+                }
+                self.request_redraw();
+            }
         }
     }
 
@@ -4765,6 +4905,7 @@ fn mcp_dispatch(
                         "expr": manifest.expr,
                         "icon": manifest.icon,
                         "color": manifest.color,
+                        "source": manifest.source.as_str(),
                         "params": params,
                     })
                 })
@@ -9107,7 +9248,7 @@ mod tests {
     /// пропускаются.
     #[test]
     fn template_params_from_text_parses_assignments() {
-        let params = template_params_from_text(
+        let params = canvas_core::templates::params_from_text(
             "rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2k\nКомментарий-проза\n\nempty = ",
         );
         assert_eq!(params.len(), 3, "проза/пустые — мимо");
@@ -9117,12 +9258,72 @@ mod tests {
         assert_eq!(params["servers"].num, 2000.0, "суффикс k разворачивается");
         assert_eq!(params["servers"].unit, None);
         // Скаляр без единицы
-        let scalar = template_params_from_text("k = 3");
+        let scalar = canvas_core::templates::params_from_text("k = 3");
         assert_eq!(scalar["k"].num, 3.0);
         assert_eq!(scalar["k"].unit, None);
         // Проза с «=» не парсится в значение — мимо
-        let prose = template_params_from_text("Server load = high");
+        let prose = canvas_core::templates::params_from_text("Server load = high");
         assert!(prose.is_empty(), "не-Numi-значение пропущено");
+    }
+
+    /// FR-020: slug имени шаблона — латиница/цифры/дефисы; кириллица
+    /// транслитерируется («Нагрузка» → «nagruzka»).
+    #[test]
+    fn slugify_transliterates_cyrillic() {
+        assert_eq!(slugify("My Custom LB"), "my-custom-lb");
+        assert_eq!(slugify("Нагрузка"), "nagruzka");
+        assert_eq!(slugify("БД SQL (мастер)"), "bd-sql-master");
+        assert_eq!(slugify("  --weird name--  "), "weird-name");
+        assert_eq!(slugify("!!!"), "custom", "нет символов — фолбэк custom");
+    }
+
+    /// FR-020: тип параметра по токену единицы.
+    #[test]
+    fn infer_param_type_maps_units() {
+        use canvas_core::templates::ParamType;
+        assert_eq!(infer_param_type(Some("rps")), ParamType::Rate);
+        assert_eq!(infer_param_type(Some("ms")), ParamType::Time);
+        assert_eq!(infer_param_type(Some("KB")), ParamType::Bytes);
+        assert_eq!(infer_param_type(Some("req")), ParamType::Count);
+        assert_eq!(infer_param_type(Some("%")), ParamType::Percent);
+        assert_eq!(infer_param_type(None), ParamType::Scalar);
+        assert_eq!(infer_param_type(Some("unknown")), ParamType::Scalar);
+    }
+
+    /// FR-020: уникальный id — без конфликтов; конфликт получает суффикс -2.
+    #[test]
+    fn unique_custom_id_avoids_conflicts() {
+        let registry = canvas_core::templates::TemplateRegistry::empty();
+        let root = std::env::temp_dir().join(format!(
+            "canvasdesk-fr20-uid-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let first = unique_custom_id("my-lb", &registry, &root);
+        assert_eq!(first, "my-lb");
+        // «Занято» в реестре → суффикс
+        let manifest = canvas_core::templates::TemplateManifest {
+            id: "my-lb".to_owned(),
+            name: "x".to_owned(),
+            name_ru: None,
+            version: "1.0.0".to_owned(),
+            category: "custom".to_owned(),
+            description: String::new(),
+            description_en: None,
+            params: Vec::new(),
+            expr: "1".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            icon: "custom".to_owned(),
+            source: canvas_core::templates::TemplateSource::Custom,
+        };
+        canvas_core::templates::save_custom(&manifest, &root).expect("save");
+        let registry = canvas_core::templates::TemplateRegistry::all_with_custom(&root);
+        let second = unique_custom_id("my-lb", &registry, &root);
+        assert_eq!(second, "my-lb-2");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// MCP node_edit { expr } — формула сохранена, результат пересчитан
@@ -10200,6 +10401,8 @@ mod tests {
         // Схема для UI: иконка и цвет категории в списке
         assert_eq!(lb["icon"], "lb");
         assert_eq!(lb["color"], "#4A90E2");
+        // FR-020: источник каждого шаблона в списке
+        assert_eq!(lb["source"], "builtin");
         // Категории: 10 backend + 5 network
         let by_cat = |cat: &str| templates.iter().filter(|t| t["category"] == cat).count();
         assert_eq!(by_cat("backend"), 10);

@@ -118,6 +118,10 @@ pub enum PaletteAction {
     /// связь): expr/version/icon/color — из манифеста, params — по именам
     /// (новые — дефолты). Один undo-шаг + пересчёт потока.
     TemplateUpdate { node_index: usize },
+    /// FR-020: сохранить шаблонную ноду как custom-шаблон
+    /// (`~/.canvasdesk/templates/<id>/template.json`). Файловая операция —
+    /// НЕ undo-able.
+    SaveAsTemplate { node_index: usize },
 }
 
 /// Векторная иконка кнопки: композиция квадов (`icon_quads`) и/или
@@ -283,7 +287,13 @@ fn node_groups(canvas: &Canvas, primary: usize, selected: &[usize]) -> Vec<Palet
     // Мультивыделение: настройки конкретной ноды не имеют смысла
     if selected.len() <= 1 {
         if let Some(node) = canvas.nodes.get(primary) {
-            groups.push(actions_group(primary, node.kind()));
+            // FR-020: «Сохранить как шаблон» — только у шаблонных нод
+            let is_template = canvas
+                .nodes
+                .get(primary)
+                .and_then(canvas_core::Node::template)
+                .is_some();
+            groups.push(actions_group(primary, node.kind(), is_template));
             if node.kind() == NodeKind::Text {
                 groups.push(branch_group(primary, node.collapsed == Some(true)));
             }
@@ -347,7 +357,7 @@ fn layout_entry(seed: usize, mode: canvas_core::LayoutMode, label: &str) -> Pale
 
 /// Группа «Действия» (FR-009): общие + типовые. Иконки — где наглядно,
 /// редкие действия — текст.
-fn actions_group(index: usize, kind: NodeKind) -> PaletteGroup {
+fn actions_group(index: usize, kind: NodeKind, is_template: bool) -> PaletteGroup {
     let entry = |setting: NodeSetting, label: &str, icon: Option<PaletteIcon>| PaletteEntry {
         action: PaletteAction::Node {
             node_index: index,
@@ -398,6 +408,15 @@ fn actions_group(index: usize, kind: NodeKind) -> PaletteGroup {
                 "Очистить текст",
                 Some(PaletteIcon::Clear),
             ));
+            if is_template {
+                // FR-020: сохранить как custom-шаблон (шаблонная нода)
+                entries.push(PaletteEntry {
+                    action: PaletteAction::SaveAsTemplate { node_index: index },
+                    label: "Сохранить как шаблон".to_owned(),
+                    icon: Some(PaletteIcon::Template),
+                    current: false,
+                });
+            }
         }
         NodeKind::Group => {
             entries.push(entry(NodeSetting::Ungroup, "Разгруппировать", None));
@@ -1687,5 +1706,71 @@ mod tests {
         let mut plain = Canvas::default();
         plain.nodes.push(Node::text("a", "a", 0.0, 0.0));
         assert!(template_update_group(&plain, 0, &registry).is_none());
+    }
+
+    /// FR-020: у шаблонной text-ноды в «Действиях» есть «Сохранить как
+    /// шаблон»; у обычной — нет.
+    #[test]
+    fn save_as_template_entry_only_for_template_nodes() {
+        use canvas_core::templates::{TemplateParam, TemplateRef};
+
+        let mut template_canvas = Canvas::default();
+        let mut node = Node::text("tpl", "rps = 1000 rps", 0.0, 0.0);
+        node.set_template(Some(TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: [(
+                "rps".to_owned(),
+                TemplateParam {
+                    num: 1000.0,
+                    unit: Some("rps".to_owned()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+        }));
+        template_canvas.nodes.push(node);
+        let groups = palette_groups(
+            &template_canvas,
+            &PaletteTarget::Nodes {
+                primary: 0,
+                selected: vec![0],
+            },
+        );
+        let actions = groups
+            .iter()
+            .find(|g| g.label == "Действия")
+            .expect("действия");
+        assert!(
+            actions
+                .entries
+                .iter()
+                .any(|e| e.label == "Сохранить как шаблон"),
+            "пункт есть у шаблонной ноды"
+        );
+
+        let mut plain_canvas = Canvas::default();
+        plain_canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+        let groups = palette_groups(
+            &plain_canvas,
+            &PaletteTarget::Nodes {
+                primary: 0,
+                selected: vec![0],
+            },
+        );
+        let actions = groups
+            .iter()
+            .find(|g| g.label == "Действия")
+            .expect("действия");
+        assert!(
+            !actions
+                .entries
+                .iter()
+                .any(|e| e.label == "Сохранить как шаблон"),
+            "пункта нет у обычной ноды"
+        );
     }
 }

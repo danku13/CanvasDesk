@@ -22,10 +22,11 @@
 //!    [`InstantiateError::ParamOutOfRange`].
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value as Json};
 
-use crate::expr;
+use crate::expr::{self, ExprOutcome};
 use crate::model::Node;
 
 /// FR-019: built-in библиотека шаблонов (`assets/templates/*/template.json`),
@@ -111,6 +112,9 @@ pub struct TemplateManifest {
     /// Ключ квад-иконки (`lb`, `db`, `cache`, `http`, `queue`, `gateway`,
     /// `worker`, `storage`, `auth`, `grpc`, `graphql`, `custom`).
     pub icon: String,
+    /// Источник манифеста (FR-020): builtin или custom. В JSON не пишется —
+    /// определяется местом хранения (встроенная статика vs ~/.canvasdesk).
+    pub source: TemplateSource,
 }
 
 impl TemplateManifest {
@@ -178,6 +182,7 @@ impl TemplateManifest {
             expr,
             color,
             icon,
+            source: TemplateSource::Builtin,
         })
     }
 
@@ -327,10 +332,36 @@ impl TemplateRef {
 
 // --- Реестр ---
 
+/// Источник манифеста (FR-020): встроенный или пользовательский
+/// (`~/.canvasdesk/templates`). Виден в MCP `template_list` (`source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateSource {
+    Builtin,
+    Custom,
+}
+
+impl TemplateSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 /// Реестр шаблонов: список манифестов (порядок = порядок в UI).
 #[derive(Debug, Clone, Default)]
 pub struct TemplateRegistry {
     templates: Vec<TemplateManifest>,
+}
+
+/// Ошибка файловых операций с custom-шаблонами (FR-020).
+#[derive(Debug, thiserror::Error)]
+pub enum SaveError {
+    #[error("недопустимый id шаблона: {0}")]
+    BadId(String),
+    #[error("ошибка файловой системы: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl TemplateRegistry {
@@ -371,7 +402,10 @@ impl TemplateRegistry {
                     }
                 };
                 match TemplateManifest::from_json(&value) {
-                    Some(manifest) => Some(manifest),
+                    Some(mut manifest) => {
+                        manifest.source = TemplateSource::Builtin;
+                        Some(manifest)
+                    }
                     None => {
                         tracing::warn!(dir = ?pkg.path(), "манифест не валидирован — пропущен");
                         None
@@ -433,6 +467,7 @@ impl TemplateRegistry {
                     expr: "mm1($rps, $service_rate, $servers)".to_owned(),
                     color: "#4A90E2".to_owned(),
                     icon: "lb".to_owned(),
+                    source: TemplateSource::Builtin,
                 },
                 TemplateManifest {
                     id: "mock.db".to_owned(),
@@ -465,6 +500,7 @@ impl TemplateRegistry {
                     expr: "mm1($qps, 1 req / $query_time, $replicas)".to_owned(),
                     color: "#F5A623".to_owned(),
                     icon: "db".to_owned(),
+                    source: TemplateSource::Builtin,
                 },
                 TemplateManifest {
                     id: "mock.cache".to_owned(),
@@ -497,6 +533,7 @@ impl TemplateRegistry {
                     expr: "mm1($qps × $hit_rate, 1 req / $eviction_latency)".to_owned(),
                     color: "#BD10E0".to_owned(),
                     icon: "cache".to_owned(),
+                    source: TemplateSource::Builtin,
                 },
                 TemplateManifest {
                     id: "mock.http".to_owned(),
@@ -529,6 +566,7 @@ impl TemplateRegistry {
                     expr: "mm1($rps, $max_connections req / $timeout)".to_owned(),
                     color: "#7ED321".to_owned(),
                     icon: "http".to_owned(),
+                    source: TemplateSource::Builtin,
                 },
                 TemplateManifest {
                     id: "mock.queue".to_owned(),
@@ -567,6 +605,7 @@ impl TemplateRegistry {
                     expr: "mm1($produce_rate, $partition_consume, $partitions)".to_owned(),
                     color: "#9013FE".to_owned(),
                     icon: "queue".to_owned(),
+                    source: TemplateSource::Builtin,
                 },
             ],
         }
@@ -600,6 +639,133 @@ impl TemplateRegistry {
             .filter(|template| template.category == category)
             .collect()
     }
+
+    /// FR-020: merged-реестр — built-in + custom из `<root>`; при совпадении
+    /// id custom ПЕРЕКРЫВАЕТ built-in (осознанный override, решение FR-020).
+    /// Порядок — по id. `source` каждого манифеста сохраняется.
+    pub fn all_with_custom(custom_root: &Path) -> Self {
+        let mut templates = Self::builtin().templates;
+        let customs = custom(custom_root);
+        for custom_manifest in customs {
+            match templates.iter().position(|m| m.id == custom_manifest.id) {
+                Some(index) => templates[index] = custom_manifest,
+                None => templates.push(custom_manifest),
+            }
+        }
+        templates.sort_by(|a, b| a.id.cmp(&b.id));
+        Self { templates }
+    }
+}
+
+/// Валидация id custom-шаблона (FR-020): 3..64 символа, `[a-z0-9.-]`,
+/// без `..`, не начинается/не кончается точкой или дефисом. Имя папки —
+/// защита от выхода за корень.
+pub fn validate_custom_id(id: &str) -> Result<(), SaveError> {
+    let ok = (3..=64).contains(&id.len())
+        && !id.contains("..")
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+        && !id.starts_with(['.', '-'])
+        && !id.ends_with(['.', '-']);
+    if ok {
+        Ok(())
+    } else {
+        Err(SaveError::BadId(id.to_owned()))
+    }
+}
+
+/// FR-020: скан custom-шаблонов `<root>/*/template.json` (папка плоская:
+/// один уровень — id шаблона). Отсутствующий корень — пустой список.
+/// Манифесты помечены [`TemplateSource::Custom`].
+pub fn custom(root: &Path) -> Vec<TemplateManifest> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(), // нет папки — нет custom (не ошибка)
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path().join("template.json");
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Json>(&raw) else {
+            tracing::warn!(path = %path.display(), "битый custom template.json — пропущен");
+            continue;
+        };
+        match TemplateManifest::from_json(&value) {
+            Some(mut manifest) => {
+                manifest.source = TemplateSource::Custom;
+                out.push(manifest);
+            }
+            None => {
+                tracing::warn!(path = %path.display(), "custom-манифест не валидирован — пропущен");
+            }
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// FR-020: сохранить custom-шаблон — `<root>/<id>/template.json`
+/// (папки создаются; манифест помечается источником Custom).
+pub fn save_custom(manifest: &TemplateManifest, root: &Path) -> Result<PathBuf, SaveError> {
+    validate_custom_id(&manifest.id)?;
+    let dir = root.join(&manifest.id);
+    std::fs::create_dir_all(&dir)?;
+    let mut saved = manifest.clone();
+    saved.source = TemplateSource::Custom;
+    let path = dir.join("template.json");
+    let json = serde_json::to_string_pretty(&saved.to_json()).map_err(|_| {
+        SaveError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "сериализация манифеста",
+        ))
+    })?;
+    std::fs::write(&path, json + "\n")?;
+    Ok(path)
+}
+
+/// FR-020: удалить custom-шаблон (папка `<root>/<id>` целиком).
+/// Отсутствующая папка — Ok (идемпотентность).
+pub fn delete_custom(id: &str, root: &Path) -> Result<(), SaveError> {
+    validate_custom_id(id)?;
+    let dir = root.join(id);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)?;
+    }
+    Ok(())
+}
+
+/// FR-020: параметры из Numi-текста ноды (лист присваиваний
+/// `rps = 1000 rps`): каждая вычислившаяся строка с `=` — параметр
+/// (имя до `=`, значение через Numi-eval). Проза/фенсы/пустые — мимо.
+/// Общая точка для синхронизации правок текста (FR-018) и
+/// «Сохранить как шаблон» (FR-020).
+pub fn params_from_text(text: &str) -> BTreeMap<String, TemplateParam> {
+    let mut params = BTreeMap::new();
+    let outcomes = expr::eval_lines(text);
+    for (line, outcome) in text.split('\n').zip(outcomes) {
+        let Some(ExprOutcome::Ok(value)) = outcome else {
+            continue;
+        };
+        let Some((name, _)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            continue;
+        }
+        let unit = value.unit.display();
+        params.insert(
+            name.to_owned(),
+            TemplateParam {
+                num: value.num,
+                unit: if unit.is_empty() { None } else { Some(unit) },
+            },
+        );
+    }
+    params
 }
 
 // --- Инстанциация ---
@@ -884,5 +1050,154 @@ mod tests {
             color: "#4A90E2".to_owned(),
         };
         assert_eq!(TemplateRef::from_json(&template.to_json()), Some(template));
+    }
+
+    // --- FR-020: custom-шаблоны ---
+
+    /// Временный корень custom-шаблонов (без tempfile — уникальный суффикс
+    /// + ручная уборка).
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "canvasdesk-fr20-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp root");
+        dir
+    }
+
+    fn custom_manifest(id: &str) -> TemplateManifest {
+        TemplateManifest {
+            id: id.to_owned(),
+            name: "My Custom LB".to_owned(),
+            name_ru: Some("Мой LB".to_owned()),
+            version: "1.0.0".to_owned(),
+            category: "custom".to_owned(),
+            description: "тест".to_owned(),
+            description_en: Some("test".to_owned()),
+            params: vec![ParamSpec {
+                name: "rps".to_owned(),
+                kind: ParamType::Rate,
+                default: 1000.0,
+                unit: Some("rps".to_owned()),
+                min: Some(0.0),
+                max: None,
+            }],
+            expr: "mm1($rps, 1200 rps, 2)".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            icon: "custom".to_owned(),
+            source: TemplateSource::Custom,
+        }
+    }
+
+    /// FR-020 (инвариант 2): save_custom → custom(root) — манифест
+    /// идентичен; файл лежит в `<root>/<id>/template.json`.
+    #[test]
+    fn custom_save_scan_round_trip() {
+        let root = temp_root("round-trip");
+        let manifest = custom_manifest("my-lb");
+        let path = save_custom(&manifest, &root).expect("сохранение");
+        assert_eq!(path, root.join("my-lb").join("template.json"));
+        assert!(path.exists());
+
+        let scanned = custom(&root);
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].id, "my-lb");
+        assert_eq!(scanned[0].source, TemplateSource::Custom);
+        assert_eq!(scanned[0].name_ru.as_deref(), Some("Мой LB"));
+        assert_eq!(scanned[0].params[0].default, 1000.0);
+        assert_eq!(scanned[0].expr, "mm1($rps, 1200 rps, 2)");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// FR-020 (инвариант 3): custom с id существующего built-in
+    /// переопределяет его в all_with_custom; остальные built-in на месте.
+    #[test]
+    fn custom_overrides_builtin_in_merged_registry() {
+        let root = temp_root("override");
+        // id встроенного lb + свои поля
+        let mut override_lb = custom_manifest("my-lb");
+        override_lb.id = "com.canvasdesk.lb".to_owned();
+        override_lb.description = "мой override".to_owned();
+        save_custom(&override_lb, &root).expect("сохранение override");
+        let custom_extra = custom_manifest("my-own-template");
+        save_custom(&custom_extra, &root).expect("сохранение custom");
+
+        let merged = TemplateRegistry::all_with_custom(&root);
+        // 15 built-in: один перекрыт + один добавленный custom
+        assert_eq!(merged.list().len(), 16, "15 built-in + 1 custom");
+        let lb = merged.find("com.canvasdesk.lb").expect("lb");
+        assert_eq!(
+            lb.source,
+            TemplateSource::Custom,
+            "custom перекрыл built-in"
+        );
+        assert_eq!(lb.description, "мой override");
+        assert!(merged.find("my-own-template").is_some());
+        // Порядок по id сохранён
+        let ids: Vec<&str> = merged.list().iter().map(|m| m.id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// FR-020: валидация id — выход за корень и мусор отклоняются;
+    /// корректные id проходят.
+    #[test]
+    fn custom_id_validation_rejects_bad_paths() {
+        assert!(validate_custom_id("my-lb").is_ok());
+        assert!(validate_custom_id("com.canvasdesk.my.lb").is_ok());
+        assert!(validate_custom_id("ab").is_err(), "слишком короткий");
+        assert!(validate_custom_id("My-LB").is_err(), "верхний регистр");
+        assert!(validate_custom_id("../escape").is_err(), "выход за корень");
+        assert!(validate_custom_id(".hidden").is_err(), "скрытая папка");
+        assert!(validate_custom_id("с-кириллицей").is_err(), "не ASCII");
+        assert!(validate_custom_id("with space").is_err(), "пробел");
+    }
+
+    /// FR-020: delete_custom удаляет папку; повторный вызов — Ok
+    /// (идемпотентность); несуществующий id после удаления — мимо скана.
+    #[test]
+    fn custom_delete_is_idempotent() {
+        let root = temp_root("delete");
+        save_custom(&custom_manifest("doomed-lb"), &root).expect("сохранение");
+        delete_custom("doomed-lb", &root).expect("удаление");
+        assert!(custom(&root).is_empty());
+        delete_custom("doomed-lb", &root).expect("повторное удаление — Ok");
+        assert!(
+            validate_custom_id("../doomed").is_err(),
+            "id не пробивает корень"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// FR-020: несуществующий корень — пустой список custom, merged-реестр
+    /// == built-in.
+    #[test]
+    fn missing_custom_root_gives_empty_customs() {
+        let root = std::env::temp_dir().join(format!(
+            "canvasdesk-fr20-absent-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        assert!(custom(&root).is_empty(), "нет папки — нет custom");
+        let merged = TemplateRegistry::all_with_custom(&root);
+        assert_eq!(merged.list().len(), 15, "только built-in");
+    }
+
+    /// FR-020: params_from_text — присваивания в TemplateParam.
+    #[test]
+    fn params_from_text_extracts_assignments() {
+        let params = params_from_text("rps = 1000 rps\nservers = 2k\nПроза\n\ntotal = 1 req");
+        assert_eq!(params.len(), 3);
+        assert_eq!(params["rps"].display(), "1000 rps");
+        assert_eq!(params["servers"].num, 2000.0);
+        assert_eq!(params["servers"].unit, None);
+        assert_eq!(params["total"].display(), "1 req");
     }
 }
