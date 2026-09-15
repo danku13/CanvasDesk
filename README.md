@@ -145,3 +145,9 @@ serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 [docs/TASKS.md](docs/TASKS.md) — план задач T0–T30,
 [docs/RECIPES.md](docs/RECIPES.md) — рецепты shell-интеграции Windows,
 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) — программа ручной приёмки.
+
+Пользовательская документация и FAQ — [user-docs/](user-docs/)
+(публикуется на GitHub Pages; инструкция публикации —
+[user-docs/README.md](user-docs/README.md)). Внутренние доки по
+интерфейсным объектам — [docs/interface-objects/](docs/interface-objects/)
+(нода, связь, миникарта, поиск).
