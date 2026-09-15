@@ -8,10 +8,12 @@
 //! Грамматика v1 (Numi-base):
 //! - литералы: числа (`5`, `3.14`, `1k`, `2M`) и единицы (`ms`, `sec`,
 //!   `min`, `h`, `req`, `req/s`, `rps`, `B`, `KB`, `MB`, `GB`, `$`, `%`);
-//! - операторы: `+ - * × · ÷ /`, скобки, унарный минус; неявное умножение
-//!   (`5 ms` = `5 × ms`, `$5` = `5 × $`);
-//! - переменные: `name = expr` (утверждение; результат программы —
-//!   значение последнего утверждения);
+//! - операторы: `+ - * × · ⋅ ✕ ⨯ ÷ /`, скобки, унарный минус; неявное
+//!   умножение (`5 ms` = `5 × ms`, `$5` = `5 × $`); `x`/`х` между
+//!   операндами — тоже умножение (Numi: `35 x 20` = 700);
+//! - переменные: `name = expr` и хвостовое присваивание `expr = name`
+//!   (утверждения; результат программы — значение последнего утверждения);
+//!   имена — буквы Unicode (латиница и кириллица: `х = 200`), цифры, `_`;
 //! - функции v1: `sum`, `avg`, `max`, `min`, `percentile(p, …)`;
 //! - сложение/вычитание требует одной размерности (правый операнд
 //!   конвертируется к единице левого: `1 sec + 500 ms == 1.5 sec`);
@@ -427,6 +429,9 @@ struct Lexer<'a> {
     pos: usize,
     /// Последним значимым токеном было число — контекст распознавания единиц.
     after_number: bool,
+    /// Последним токеном был ОПЕРАНД (число/единица/`)`) — контекст
+    /// `x`-умножения (`35 x 20`); после операторов/в старте строки — false.
+    operand_ended: bool,
     peeked: Option<Option<Tok>>,
 }
 
@@ -436,6 +441,7 @@ impl<'a> Lexer<'a> {
             text,
             pos: 0,
             after_number: false,
+            operand_ended: false,
             peeked: None,
         }
     }
@@ -460,6 +466,52 @@ impl<'a> Lexer<'a> {
             .filter(|(name, _, _)| rest.starts_with(name))
             .max_by_key(|(name, _, _)| name.len())
             .map(|(name, _, _)| (*name, name.len()))
+    }
+
+    /// `x`-умножение (Numi): после считанного `x`/`х` следующий значимый
+    /// байт начинает операнд (цифра, `.`, `(`, `$`)? Пробелы пропускаются.
+    /// `35 x 20` — да (умножение), `200 + x␣` в конце — нет (переменная).
+    fn operand_starts_ahead(&self) -> bool {
+        let rest = self.text[self.pos..].trim_start_matches([' ', '\t']);
+        matches!(
+            rest.as_bytes().first(),
+            Some(b'0'..=b'9' | b'.' | b'(' | b'$')
+        )
+    }
+
+    /// Идентификатор: буквы Unicode (латиница/кириллица — `х = 200`),
+    /// цифры, `_`. Единица распознаётся ТОЛЬКО сразу после числа:
+    /// `1000 rps` — единица, `rps = 1000` — переменная. `x`/`х` ПОСЛЕ
+    /// операнда (числа, единицы, `)`, идентификатора) и ПЕРЕД числом/скобкой
+    /// — умножение (`35 x 20` = 700, `latency х 3`; Numi); в конце строки,
+    /// после оператора или перед идентификатором — переменная (`200 + x`,
+    /// `latency х replicas`).
+    fn lex_ident(&mut self) -> Tok {
+        if self.after_number {
+            if let Some((name, len)) = self.unit_here() {
+                self.pos += len;
+                self.after_number = false;
+                self.operand_ended = true;
+                return Tok::Unit(name);
+            }
+        }
+        let start = self.pos;
+        for ch in self.text[start..].chars() {
+            if ch.is_alphanumeric() || ch == '_' {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let ident = self.text[start..self.pos].to_owned();
+        self.after_number = false;
+        if self.operand_ended && matches!(ident.as_str(), "x" | "х") && self.operand_starts_ahead()
+        {
+            self.operand_ended = false;
+            return Tok::Star;
+        }
+        self.operand_ended = true;
+        Tok::Ident(ident)
     }
 
     fn take_while<F: Fn(u8) -> bool>(&mut self, pred: F) {
@@ -492,91 +544,108 @@ impl<'a> Lexer<'a> {
             b'\n' | b';' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Sep
             }
             b'+' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Plus
             }
             b'-' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Minus
             }
             b'*' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Star
             }
             b'/' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Slash
             }
             b'(' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::LParen
             }
             b')' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = true;
                 Tok::RParen
             }
             b',' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Comma
             }
             b'=' => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Assign
             }
             b'$' => {
                 // `$5` — префикс валюты; `%` — только суффикс (после числа)
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Unit("$")
             }
             b'%' if self.after_number => {
                 self.pos += 1;
                 self.after_number = false;
+                self.operand_ended = true;
                 Tok::Unit("%")
             }
             b'0'..=b'9' | b'.' => self.lex_number()?,
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                // Единица распознаётся ТОЛЬКО сразу после числа: `1000 rps` —
-                // единица, `rps = 1000` — переменная
-                if self.after_number {
-                    if let Some((name, len)) = self.unit_here() {
-                        self.pos += len;
-                        self.after_number = false;
-                        return Ok(Some(Tok::Unit(name)));
-                    }
-                }
-                let start = self.pos;
-                self.take_while(|b| b.is_ascii_alphanumeric() || b == b'_');
-                self.after_number = false;
-                Tok::Ident(self.text[start..self.pos].to_owned())
+            // Идентификатор: ASCII-буквы/`_` и ЛЮБАЯ Unicode-буква
+            // (кириллица: `х = 200`, `с = а + b` — смешанная раскладка)
+            _ if self.text[self.pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_') =>
+            {
+                self.lex_ident()
             }
             _ if self.rest_starts("\u{2212}") => {
                 // Типографский минус − (U+2212)
                 self.pos += 3;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Minus
             }
-            _ if self.rest_starts("\u{00d7}") || self.rest_starts("\u{00b7}") => {
-                // × (U+00D7) и · (U+00B7) — умножение
-                self.pos += 2;
+            _ if self.rest_starts("\u{00d7}")
+                || self.rest_starts("\u{00b7}")
+                || self.rest_starts("\u{22c5}")
+                || self.rest_starts("\u{2715}")
+                || self.rest_starts("\u{2a2f}") =>
+            {
+                // × (U+00D7), · (U+00B7), ⋅ (U+22C5), ✕ (U+2715), ⨯ (U+2A2F) —
+                // умножение
+                self.pos += self.text[self.pos..]
+                    .chars()
+                    .next()
+                    .map_or(1, char::len_utf8);
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Star
             }
             _ if self.rest_starts("\u{00f7}") => {
                 // ÷ (U+00F7) — деление
                 self.pos += 2;
                 self.after_number = false;
+                self.operand_ended = false;
                 Tok::Slash
             }
             other => {
@@ -619,6 +688,7 @@ impl<'a> Lexer<'a> {
             }
         }
         self.after_number = true;
+        self.operand_ended = true;
         Ok(Tok::Num(num))
     }
 
@@ -647,8 +717,31 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
     while let Some(tok) = lexer.next()? {
         match tok {
             Tok::Sep => {} // граница утверждений
-            Tok::Star | Tok::Slash | Tok::RParen | Tok::Comma | Tok::Assign => {
+            Tok::Star | Tok::Slash | Tok::RParen | Tok::Comma => {
                 return Err(lexer.err("неожиданный оператор"));
+            }
+            // FR-013 (правка 3, Numi): хвостовое присваивание —
+            // `выражение = имя` (`123 + 5123 = a`): имя связывается с
+            // результатом последнего утверждения. Повтор то же имени в конце
+            // (`b = 235 + 2323 = b` — форма «в обе стороны») игнорируется.
+            Tok::Assign => {
+                let name = match lexer.next()? {
+                    Some(Tok::Ident(name)) => name,
+                    _ => return Err(lexer.err("ожидалось имя после «=»")),
+                };
+                if !matches!(lexer.peek()?, None | Some(Tok::Sep)) {
+                    return Err(lexer.err("имя после «=» должно завершать утверждение"));
+                }
+                let rhs = statements
+                    .pop()
+                    .ok_or_else(|| lexer.err("неожиданный оператор"))?;
+                match rhs {
+                    Expr::Assign { name: ref same, .. } if *same == name => statements.push(rhs),
+                    other => statements.push(Expr::Assign {
+                        name,
+                        rhs: Box::new(other),
+                    }),
+                }
             }
             // Начала утверждений (в т.ч. унарный знак: `-3 ms`)
             Tok::Num(_) | Tok::Ident(_) | Tok::Unit(_) | Tok::LParen | Tok::Plus | Tok::Minus => {
@@ -1385,9 +1478,14 @@ mod tests {
 
     /// Ввод-вывод без паники на кириллице и незнакомых символах.
     #[test]
+    /// FR-013 (правка 3): буквы Unicode — идентификаторы (`5 μs` — ссылка
+    /// на переменную), диагностика лексера — для небуквенных символов.
     fn lexer_unicode_diagnostics() {
-        let err = parse("5 μs").expect_err("μ не поддержан");
+        let err = parse("5 €").expect_err("€ — не буква, не поддержан");
         assert!(err.msg.contains("неподдерживаемый символ"));
+        let parsed = parse("5 μs").expect("μ — буква Unicode: идентификатор");
+        let err = eval(&parsed, &Env::empty()).expect_err("переменной μs нет");
+        assert!(err.to_string().contains("неизвестная переменная"));
     }
 
     /// Текст результата строки сценария (для кратких проверок).
@@ -1458,5 +1556,95 @@ mod tests {
         assert_eq!(ok_text(&lines[0]), "2000 rps");
         assert_eq!(ok_text(&lines[1]), "1000 ms·req/s");
         assert_eq!(ok_text(&lines[2]), "2000");
+    }
+
+    /// FR-013 (правка 3, Numi): хвостовое присваивание `выражение = имя`
+    /// связывает имя с результатом; форма «в обе стороны»
+    /// (`b = 235 + 2323 = b`) не ломает строку.
+    #[test]
+    fn trailing_assignment_saves_result() {
+        // Парсер: утверждение — Assign с именем-целью
+        match parse("123 + 5123 = a").expect("хвостовое присваивание") {
+            Expr::Assign { name, .. } => assert_eq!(name, "a"),
+            other => panic!("ожидалось присваивание, получено: {other:?}"),
+        }
+        let lines = eval_lines("123 + 5123 = a\n235 + 2323 = b\nc = a + b");
+        assert_eq!(ok_text(&lines[0]), "5246", "результат строки — значение");
+        assert_eq!(ok_text(&lines[1]), "2558");
+        assert_eq!(ok_text(&lines[2]), "7804", "a и b видны ниже");
+        // «В обе стороны»: то же имя в конце игнорируется
+        let lines = eval_lines("b = 235 + 2323 = b");
+        assert_eq!(ok_text(&lines[0]), "2558");
+        // Имя после «=» обязано завершать утверждение; не-имя — тихая ошибка
+        assert_eq!(eval_lines("2 = 3")[0], None);
+        assert_eq!(eval_lines("2 = 3 + 1")[0], None);
+    }
+
+    /// FR-013 (правка 3, Numi): `x`/`х` между операндами — умножение
+    /// (латиница и кириллица, после числа/единицы/скобки/переменной);
+    /// в конце строки, после оператора и в начале — переменная.
+    #[test]
+    fn x_between_operands_is_multiplication() {
+        let lines = eval_lines("25 + 35 x 20\n25 + 35 х 20\n(2+3) x 4\n$5 x 3\n5 ms x 3");
+        assert_eq!(ok_text(&lines[0]), "725", "латинская x");
+        assert_eq!(ok_text(&lines[1]), "725", "кириллическая х");
+        assert_eq!(ok_text(&lines[2]), "20", "после скобки");
+        assert_eq!(ok_text(&lines[3]), "15 $", "после валюты");
+        assert_eq!(ok_text(&lines[4]), "15 ms", "после единицы");
+        // Ссылки на переменную x сохраняются
+        let lines = eval_lines("x = 200\n200 + x\nx 20\n35 x");
+        assert_eq!(ok_text(&lines[0]), "200");
+        assert_eq!(ok_text(&lines[1]), "400", "x в конце строки — переменная");
+        assert_eq!(ok_text(&lines[2]), "4000", "x в начале строки — переменная");
+        assert_eq!(ok_text(&lines[3]), "7000", "x в конце строки — переменная");
+        // После переменной: перед числом — умножение, перед именем — переменная
+        let lines = eval_lines("latency = 50 ms\nlatency х 3\nlatency х y");
+        assert_eq!(ok_text(&lines[1]), "150 ms");
+        assert!(lines[2].is_none(), "y не задан — строка тиха");
+    }
+
+    /// FR-013 (правка 3): имена переменных — буквы Unicode (кириллица):
+    /// смешанная раскладка клавиатуры не ломает лист расчёта.
+    #[test]
+    fn cyrillic_variable_names() {
+        let lines = eval_lines("х = 200\nа = 123 + 5123\nс = а + х\n200 + х");
+        assert_eq!(ok_text(&lines[0]), "200");
+        assert_eq!(ok_text(&lines[1]), "5246");
+        assert_eq!(ok_text(&lines[2]), "5446");
+        assert_eq!(ok_text(&lines[3]), "400");
+    }
+
+    /// Лист владельца (обратная связь по правке 2): все строки сценария
+    /// выдают результат — присваивания в обе стороны, переменные,
+    /// x-умножение, `*`.
+    #[test]
+    fn eval_lines_owner_sheet() {
+        let lines = eval_lines(
+            "123 + 5123 = a\n\
+             235 + 2323 = b\n\
+             \n\
+             x = 200\n\
+             a = 123 + 5123\n\
+             b = 235 + 2323 = b\n\
+             \n\
+             c = a + b\n\
+             \n\
+             200 + x\n\
+             25 + 35 x 20\n\
+             123 + 23 * 5",
+        );
+        assert_eq!(lines.len(), 12, "Vec выровнен по строкам текста");
+        assert_eq!(ok_text(&lines[0]), "5246");
+        assert_eq!(ok_text(&lines[1]), "2558");
+        assert_eq!(lines[2], None, "пустая строка");
+        assert_eq!(ok_text(&lines[3]), "200");
+        assert_eq!(ok_text(&lines[4]), "5246");
+        assert_eq!(ok_text(&lines[5]), "2558", "форма «в обе стороны»");
+        assert_eq!(lines[6], None, "пустая строка");
+        assert_eq!(ok_text(&lines[7]), "7804");
+        assert_eq!(lines[8], None, "пустая строка");
+        assert_eq!(ok_text(&lines[9]), "400");
+        assert_eq!(ok_text(&lines[10]), "725");
+        assert_eq!(ok_text(&lines[11]), "238");
     }
 }
