@@ -330,6 +330,45 @@ impl SceneState {
         }
     }
 
+    /// FR-014: тогл типа потока связи (Value ↔ Control) из палитры
+    /// (ПКМ по связи) — единая точка с MCP `flow_set_kind` по инвариантам:
+    /// undo-шаг «до» (FR-006), mark_dirty, живой пересчёт downstream.
+    /// Возвращает `Ok(true)` — применено; `Ok(false)` — no-op (связи нет
+    /// или тип уже такой, шаг не копится); `Err(участники)` — тогл в Value
+    /// замкнул бы цикл value-рёбер, отклонён (UI показывает toast).
+    /// Правка 3: раньше мутация применялась к клону-снимку, живой канвас
+    /// не менялся — переключатель в интерфейсе не работал (MCP работал).
+    fn toggle_edge_flow(&mut self, edge_index: usize, kind: FlowKind) -> Result<bool, Vec<String>> {
+        let Some(edge) = self.canvas.edges.get(edge_index) else {
+            return Ok(false); // связи нет — no-op
+        };
+        if edge.flow_kind() == kind {
+            return Ok(false); // no-op — шаг не копится
+        }
+        if kind == FlowKind::Value
+            && canvas_core::creates_value_cycle(&self.canvas, &edge.from_node, &edge.to_node)
+        {
+            return Err(
+                canvas_core::value_path(&self.canvas, &edge.to_node, &edge.from_node)
+                    .unwrap_or_default(),
+            );
+        }
+        // Снимок «до» мутации (FR-006), затем мутация ЖИВОГО канваса
+        let snapshot = self.canvas.clone();
+        if let Some(edge) = self.canvas.edges.get_mut(edge_index) {
+            edge.set_flow_kind(kind);
+        }
+        if self.canvas != snapshot {
+            self.push_undo(snapshot);
+            self.mark_dirty();
+            // Downstream мог потерять/обрести входы — живой пересчёт
+            self.recompute_flow();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// FR-013 (правка 2): пересчитать результаты ноды. Текст вычисляется
     /// ПОСТРОЧНО (Numi-стиль, `expr::eval_lines`): общее окружение,
     /// результат каждой формульной строки. Если построчных результатов нет,
@@ -3216,38 +3255,19 @@ impl App {
             // FR-014: тогл типа потока (Value ↔ Control) — undo-шаг +
             // живой пересчёт (downstream может потерять/обрести входы).
             // Тогл в Value, замыкающий цикл, отвергается (isError в MCP;
-            // в палитре — toast с участниками).
+            // в палитре — toast с участниками). Правка 3: логика тогла —
+            // в SceneState::toggle_edge_flow (мутация живого канваса,
+            // тестируемо); палитра только показывает toast при цикле.
             PaletteAction::EdgeFlowKind { edge_index, kind } => {
-                let Some(edge) = self.scene.canvas.edges.get(edge_index) else {
-                    return;
-                };
-                if edge.flow_kind() == kind {
-                    return; // no-op — шаг не копится
+                match self.scene.toggle_edge_flow(edge_index, kind) {
+                    Err(participants) => {
+                        let participants = participants.join(" → ");
+                        self.show_toast(format!("Цикл потока: {participants} — тогл отклонён"));
+                        self.request_redraw();
+                    }
+                    Ok(true) => self.request_redraw(),
+                    Ok(false) => {}
                 }
-                if kind == FlowKind::Value
-                    && canvas_core::creates_value_cycle(
-                        &self.scene.canvas,
-                        &edge.from_node,
-                        &edge.to_node,
-                    )
-                {
-                    let participants =
-                        canvas_core::value_path(&self.scene.canvas, &edge.to_node, &edge.from_node)
-                            .map(|path| path.join(" → "))
-                            .unwrap_or_default();
-                    self.show_toast(format!("Цикл потока: {participants} — тогл отклонён"));
-                    return;
-                }
-                let mut snapshot = self.scene.canvas.clone();
-                if let Some(edge) = snapshot.edges.get_mut(edge_index) {
-                    edge.set_flow_kind(kind);
-                }
-                if self.scene.canvas != snapshot {
-                    self.scene.push_undo(snapshot);
-                    self.scene.mark_dirty();
-                    self.scene.recompute_flow();
-                }
-                self.request_redraw();
             }
             // CR-008: закрепить/освободить конец связи. Закрепление —
             // WYSIWYG: в fromSide/toSide фиксируется текущая эффективная
@@ -8934,6 +8954,126 @@ mod tests {
     }
 
     // --- FR-014: поток значений по рёбрам ---
+
+    /// Сцена потока: A «1200 + 480», B «$in / 3», ребро A→B (control).
+    fn flow_scene() -> SceneState {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("fa", "A\n1200 + 480", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("fb", "B\n$in / 3", 500.0, 0.0));
+        canvas.add_edge(Edge::new("e-ab", "fa", None, "fb", Some(Side::Left)));
+        SceneState::new(canvas, PathBuf::from("target/tmp/flow.canvas"))
+    }
+
+    /// Правка 3 (регрессия UI-переключателя): тогл через палитру
+    /// (SceneState::toggle_edge_flow) применяет flow.kind к ЖИВОМУ канвасу
+    /// (раньше мутировался клон-снимок — переключатель не работал),
+    /// копит undo-шаг «до» и пересчитывает downstream.
+    #[test]
+    fn palette_flow_toggle_applies_to_live_canvas() {
+        let mut scene = flow_scene();
+        // Тогл Control → Value применён к живому канвасу
+        let applied = scene
+            .toggle_edge_flow(0, FlowKind::Value)
+            .expect("тогл без цикла");
+        assert!(applied, "тогл должен примениться");
+        assert_eq!(scene.canvas.edges[0].flow_kind(), FlowKind::Value);
+        // Живой пересчёт: B = 1680 / 3 = 560 (вход пришёл по value-ребру)
+        let b = scene
+            .expr_results
+            .get("fb")
+            .expect("результат B после тогла");
+        match b {
+            ExprOutcome::Ok(value) => assert!((value.num - 560.0).abs() < 1e-9, "{value:?}"),
+            ExprOutcome::Err(err) => panic!("B не должен иметь ошибку: {err}"),
+        }
+        // Undo-шаг «до» тогла (FR-006): снят ДО мутации, а не после
+        assert_eq!(scene.undo_stack.len(), 1, "один undo-шаг");
+        let before = scene.undo_stack[0].clone();
+        assert_eq!(
+            before.edges[0].flow_kind(),
+            FlowKind::Control,
+            "снимок «до» — control"
+        );
+        // Round-trip в файл: kind=value сохраняется
+        let json = scene.canvas.to_json().expect("сериализация");
+        assert!(json.contains("\"value\""), "flow.kind в файле: {json}");
+    }
+
+    /// Правка 3: обратный тогл Value → Control — поле удаляется целиком,
+    /// downstream теряет вход (MissingInbound), undo-шаг копится.
+    #[test]
+    fn palette_flow_toggle_back_removes_field_and_breaks_input() {
+        let mut scene = flow_scene();
+        scene
+            .toggle_edge_flow(0, FlowKind::Value)
+            .expect("первый тогл");
+        let applied = scene
+            .toggle_edge_flow(0, FlowKind::Control)
+            .expect("обратный тогл");
+        assert!(applied);
+        assert_eq!(scene.canvas.edges[0].flow_kind(), FlowKind::Control);
+        assert!(
+            scene.canvas.edges[0].extra.get("canvasdesk").is_none(),
+            "control удаляет расширение целиком (как MCP)"
+        );
+        // Downstream потерял вход — у B ошибка MissingInbound
+        match scene.expr_results.get("fb") {
+            Some(ExprOutcome::Err(msg)) => {
+                assert!(msg.contains("вход"), "ожидался missing inbound: {msg}");
+            }
+            other => panic!("ожидалась ошибка входа у B, получено: {other:?}"),
+        }
+        assert_eq!(scene.undo_stack.len(), 2, "два undo-шага (туда-обратно)");
+    }
+
+    /// Правка 3: no-op-варианты не копят шаг и не меняют модель — связи
+    /// нет, тип уже такой.
+    #[test]
+    fn palette_flow_toggle_noop_cases() {
+        let mut scene = flow_scene();
+        // Несуществующая связь
+        let applied = scene
+            .toggle_edge_flow(7, FlowKind::Value)
+            .expect("нет связи — Ok(false)");
+        assert!(!applied);
+        assert!(scene.undo_stack.is_empty());
+        // Повторный тогл в тот же тип — no-op
+        scene
+            .toggle_edge_flow(0, FlowKind::Value)
+            .expect("первый тогл");
+        let snapshot = scene.canvas.clone();
+        let applied = scene
+            .toggle_edge_flow(0, FlowKind::Value)
+            .expect("уже value — Ok(false)");
+        assert!(!applied);
+        assert_eq!(scene.canvas, snapshot, "модель не изменилась");
+        assert_eq!(scene.undo_stack.len(), 1, "второй шаг не копится");
+    }
+
+    /// Правка 3: тогл в Value, замыкающий цикл, отклонён с участниками
+    /// (Err), модель не меняется (DAG-инвариант в UI-пути).
+    #[test]
+    fn palette_flow_toggle_rejects_cycle() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("fa", "5", 0.0, 0.0));
+        canvas.nodes.push(Node::text("fb", "$in", 500.0, 0.0));
+        // A → B уже value, обратная связь B → A — control
+        canvas.add_edge(Edge::new("e-ab", "fa", None, "fb", Some(Side::Left)));
+        canvas.add_edge(Edge::new("e-ba", "fb", None, "fa", Some(Side::Right)));
+        canvas.edges[0].set_flow_kind(FlowKind::Value);
+        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/flow-cycle.canvas"));
+        // Тогл B → A в value замкнул бы цикл A → B → A
+        let result = scene.toggle_edge_flow(1, FlowKind::Value);
+        let participants = result.expect_err("цикл должен быть отклонён");
+        assert_eq!(participants, vec!["fa".to_owned(), "fb".to_owned()]);
+        // Модель не изменилась
+        assert_eq!(scene.canvas.edges[1].flow_kind(), FlowKind::Control);
+        assert!(scene.undo_stack.is_empty(), "отклонённый тогл без шага");
+    }
 
     /// flow_set_kind: тогл control → value → control; round-trip в extra.
     #[test]
