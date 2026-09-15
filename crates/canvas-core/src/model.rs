@@ -111,13 +111,40 @@ impl EdgeThickness {
     }
 }
 
-/// Расширение `canvasdesk` ноды-виджета (M5, SPEC §5.1/§7.6).
+/// Расширение `canvasdesk` ноды (SPEC §5.1/§7.6): виджет-нода — `widgetId`
+/// + `props`; FR-013: calc-нода (text + формула) — только `expr`.
+///
+/// Поля опциональны, потому что объект один на оба случая; пустой объект
+/// не сериализуется (skip при is_empty в Node).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CanvasdeskExt {
-    #[serde(rename = "widgetId")]
-    pub widget_id: String,
+    #[serde(rename = "widgetId", default, skip_serializing_if = "Option::is_none")]
+    pub widget_id: Option<String>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub props: Map<String, Value>,
+    /// FR-013: Numi-формула text-ноды (Numi-base — модуль `expr`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
+}
+
+impl CanvasdeskExt {
+    /// Пустое расширение (для get_or_insert при set_expr).
+    pub fn empty() -> Self {
+        Self {
+            widget_id: None,
+            props: Map::new(),
+            expr: None,
+        }
+    }
+
+    /// Расширение виджет-ноды: идентификатор пакета + пустые props.
+    pub fn widget(widget_id: impl Into<String>) -> Self {
+        Self {
+            widget_id: Some(widget_id.into()),
+            props: Map::new(),
+            expr: None,
+        }
+    }
 }
 
 /// Нода канваса. `node_type` — строкой, чтобы неизвестные типы (widget и будущие)
@@ -198,6 +225,34 @@ impl Node {
             collapsed: None,
             children: None,
             extra: Map::new(),
+        }
+    }
+
+    /// FR-013: Numi-формула text-ноды — `canvasdesk.expr` (расширение
+    /// `.canvas`; Obsidian сохраняет неизвестное поле без потерь, SPEC
+    /// §5.1). None — calc-режим выключен.
+    pub fn expr(&self) -> Option<&str> {
+        self.canvasdesk.as_ref()?.expr.as_deref()
+    }
+
+    /// FR-013: записать/сбросить формулу (`canvasdesk.expr`). При `None`
+    /// поле удаляется; если в `canvasdesk` больше ничего нет — объект
+    /// целиком (round-trip чистый: пустого расширения в JSON не будет).
+    /// Данные виджета (`widgetId`/`props`) не трогаются.
+    pub fn set_expr(&mut self, expr: Option<String>) {
+        match expr {
+            Some(formula) => {
+                let ext = self.canvasdesk.get_or_insert_with(CanvasdeskExt::empty);
+                ext.expr = Some(formula);
+            }
+            None => {
+                if let Some(ext) = &mut self.canvasdesk {
+                    ext.expr = None;
+                    if ext.widget_id.is_none() && ext.props.is_empty() {
+                        self.canvasdesk = None;
+                    }
+                }
+            }
         }
     }
 
@@ -871,14 +926,15 @@ mod tests {
         let mut props = Map::new();
         props.insert("city".to_owned(), Value::String("Moscow".to_owned()));
         let ext = CanvasdeskExt {
-            widget_id: "com.canvasdesk.clock".to_owned(),
+            widget_id: Some("com.canvasdesk.clock".to_owned()),
             props,
+            expr: None,
         };
         let widget = Node::widget("w1", ext, "Clock", 5.0, 6.0, 320.0, 200.0);
         assert_eq!(widget.kind(), NodeKind::Widget);
         assert_eq!(widget.node_type, "widget");
         let ext = widget.canvasdesk.as_ref().expect("canvasdesk задан");
-        assert_eq!(ext.widget_id, "com.canvasdesk.clock");
+        assert_eq!(ext.widget_id.as_deref(), Some("com.canvasdesk.clock"));
         assert_eq!(
             ext.props.get("city"),
             Some(&Value::String("Moscow".to_owned()))
@@ -900,8 +956,9 @@ mod tests {
         let mut props = Map::new();
         props.insert("text".to_owned(), Value::String("покупки".to_owned()));
         let ext = CanvasdeskExt {
-            widget_id: "com.example.clock".to_owned(),
+            widget_id: Some("com.example.clock".to_owned()),
             props,
+            expr: None,
         };
         let mut widget = Node::widget("w9", ext, "Clock", 0.0, 0.0, 320.0, 200.0);
         // Стороннее поле уровня ноды — сохраняется как unknown
@@ -931,7 +988,7 @@ mod tests {
         let node: Node = serde_json::from_str(raw).expect("парсинг SPEC-примера");
         assert_eq!(node.kind(), NodeKind::Widget);
         let ext = node.canvasdesk.as_ref().expect("canvasdesk");
-        assert_eq!(ext.widget_id, "com.canvasdesk.sticker");
+        assert_eq!(ext.widget_id.as_deref(), Some("com.canvasdesk.sticker"));
         assert_eq!(
             ext.props.get("text").and_then(Value::as_str),
             Some("привет")

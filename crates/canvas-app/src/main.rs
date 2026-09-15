@@ -24,6 +24,7 @@ use canvas_app::ui::{
     MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING, PANEL_ROW_HEIGHT,
     SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
+use canvas_core::expr::{self, Env as ExprEnv, ExprOutcome, ExprResults};
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
     resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node,
@@ -44,7 +45,7 @@ use canvas_render::search_ui::{
     SearchRow,
 };
 use canvas_render::text::{
-    body_area, OverlayText, ScreenText, TextAlign, BODY_PADDING, BODY_TOP_GAP,
+    body_area, OverlayText, ScreenText, TextAlign, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
@@ -169,6 +170,23 @@ fn hit_subtitle(path: &Path) -> String {
         .unwrap_or_else(|| "файл".to_owned())
 }
 
+/// FR-013: извлечь формулу из текста заметки (смешанный редактор — решение
+/// открытого вопроса дизайна): строки, начинающиеся с `=` (после пропуска
+/// пробелов), — утверждения формулы без префикса. Текст ноды остаётся
+/// пользовательским описанием вместе с `=`-строками; результат живёт в
+/// `canvasdesk.expr`. None — формульных строк нет (calc-режим выключен).
+fn split_formula_lines(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let formula = trimmed.strip_prefix('=')?.trim();
+            (!formula.is_empty()).then_some(formula)
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 /// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
 fn seed_canvas() -> Canvas {
     let mut canvas = Canvas::default();
@@ -217,13 +235,17 @@ struct SceneState {
     /// Отменённые состояния (FR-006): текущее уходит сюда при undo; новое
     /// действие обнуляет ветку redo.
     redo_stack: Vec<Canvas>,
+    /// FR-013: результаты формул (`canvasdesk.expr`) по id нод —
+    /// runtime-кэш (инвариант 4 FR-013: НЕ сериализуется, источник
+    /// истины — формула; пересчитывается при загрузке/commit/undo).
+    expr_results: ExprResults,
 }
 
 impl SceneState {
     /// Обернуть готовую модель: построить spatial index.
     fn new(canvas: Canvas, path: PathBuf) -> Self {
         let spatial = SpatialIndex::build(&canvas);
-        Self {
+        let mut scene = Self {
             canvas,
             spatial,
             path,
@@ -233,6 +255,48 @@ impl SceneState {
             dirty_since: None,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
+            expr_results: ExprResults::new(),
+        };
+        // FR-013: первичный пересчёт формул при загрузке (результат не
+        // хранится в .canvas — вычисляется, см. инвариант 4 FR-013)
+        scene.recompute_all_expr();
+        scene
+    }
+
+    /// FR-013: пересчитать результат формулы ноды (commit/загрузка/MCP).
+    /// Формулы нет — запись удаляется. Env пустой: v1 — только локальные
+    /// переменные формулы (поток значений — FR-014).
+    fn recompute_expr(&mut self, node_id: &str) {
+        let outcome = match self.canvas.node(node_id).and_then(|node| node.expr()) {
+            None => {
+                self.expr_results.remove(node_id);
+                return;
+            }
+            Some(formula) => match expr::parse(formula) {
+                Ok(parsed) => match expr::eval(&parsed, &ExprEnv::empty()) {
+                    Ok(value) => ExprOutcome::Ok(value),
+                    Err(err) => ExprOutcome::Err(err.to_string()),
+                },
+                Err(err) => ExprOutcome::Err(err.to_string()),
+            },
+        };
+        self.expr_results.insert(node_id.to_owned(), outcome);
+    }
+
+    /// FR-013: пересчитать формулы всех нод (загрузка, undo/redo —
+    /// снапшот заменяет модель целиком). Дёшево: только calc-ноды,
+    /// только на перечисленных событиях — не на кадр.
+    fn recompute_all_expr(&mut self) {
+        self.expr_results.clear();
+        let ids: Vec<String> = self
+            .canvas
+            .nodes
+            .iter()
+            .filter(|node| node.expr().is_some())
+            .map(|node| node.id.clone())
+            .collect();
+        for id in ids {
+            self.recompute_expr(&id);
         }
     }
 
@@ -1305,7 +1369,18 @@ impl App {
             return;
         }
         let (_content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
-        let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING;
+        // FR-013: резерв под строку результата формулы (футер карточки),
+        // чтобы подрезка тела результатом не прятала последнюю строку
+        let expr_footer = self
+            .scene
+            .canvas
+            .nodes
+            .get(index)
+            .and_then(|node| node.expr())
+            .map(|_| RESULT_LINE_HEIGHT + 2.0)
+            .unwrap_or(0.0);
+        let needed_h =
+            HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING + expr_footer;
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
             return;
         };
@@ -1333,6 +1408,7 @@ impl App {
             }
             match session.target() {
                 EditTarget::Node(index) => {
+                    let node_id = self.scene.canvas.nodes.get(index).map(|n| n.id.clone());
                     if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
                         if node.kind() == NodeKind::Group {
                             // Подпись группы: пустая — сброс в None
@@ -1344,8 +1420,18 @@ impl App {
                                 Some(text.to_owned())
                             };
                         } else {
-                            node.text = Some(session.text());
+                            let text = session.text();
+                            node.text = Some(text.clone());
+                            // FR-013: строки «= …» — формула (смешанный
+                            // редактор); commit выводит canvasdesk.expr и
+                            // пересчитывает строку результата (один undo-шаг
+                            // вместе с текстом — паттерн FR-006 выше)
+                            node.set_expr(split_formula_lines(&text));
                         }
+                    }
+                    // FR-013: пересчёт результата (после мутации модели)
+                    if let Some(id) = node_id {
+                        self.scene.recompute_expr(&id);
                     }
                 }
                 EditTarget::Edge(index) => {
@@ -1473,6 +1559,8 @@ impl App {
         self.group_drop_target = None;
         self.scene.canvas = canvas;
         self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+        // FR-013: снапшот мог изменить формулы — пересчёт результатов
+        self.scene.recompute_all_expr();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.invalidate_node_caches();
         }
@@ -3479,6 +3567,8 @@ fn mcp_node_summary(node: &Node, with_text: bool) -> serde_json::Value {
         "label": node.label,
         "file": node.file,
         "color": node.color,
+        // FR-013: Numi-формула (null — calc-режим выключен)
+        "expr": node.expr(),
     });
     if with_text {
         value["text"] = serde_json::Value::from(node.text.clone());
@@ -3569,12 +3659,16 @@ fn mcp_dispatch(
             if let Some(height) = mcp_opt_f32(params, "height") {
                 node.height = height;
             }
+            // FR-013: строки «= …» в тексте — формула
+            node.set_expr(split_formula_lines(text));
             let index = scene.canvas.nodes.len();
             // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
             scene.push_undo(scene.canvas.clone());
             scene.canvas.nodes.push(node);
             scene.spatial.insert(index, &scene.canvas.nodes[index]);
             scene.mark_dirty();
+            let node_id = scene.canvas.nodes[index].id.clone();
+            scene.recompute_expr(&node_id);
             Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
         }
         "node_create_file" => {
@@ -3605,15 +3699,32 @@ fn mcp_dispatch(
             // FR-006: MCP-мутация — undo-шаг
             scene.push_undo(scene.canvas.clone());
             scene.canvas.nodes[index].text = Some(text.to_owned());
+            // FR-013: строки «= …» в тексте — формула (единая семантика
+            // с редактором); формула нет — сброс
+            scene.canvas.nodes[index].set_expr(split_formula_lines(text));
             scene.mark_dirty();
+            scene.recompute_expr(id);
             Ok(serde_json::json!({ "id": id }))
         }
         // FR-005: редактирование ноды одним вызовом — обновляются ТОЛЬКО
-        // переданные поля; label/color = null — сброс; геометрия — с
+        // переданные поля; label/color/expr = null — сброс; геометрия — с
         // обновлением spatial index; ответ — сводка с текстом
         "node_edit" => {
             let id = mcp_req_str(params, "id")?;
             let index = mcp_node_index(&scene.canvas, id)?;
+            // FR-013: expr валидируется ПЕРЕД undo-шагом — при ошибке
+            // парсинга нода не меняется вовсе (isError с диагностикой)
+            let expr_update = match params.get("expr") {
+                None => None,
+                Some(serde_json::Value::Null) => Some(None),
+                Some(serde_json::Value::String(formula)) => match expr::parse(formula) {
+                    Ok(_) => Some(Some(formula.clone())),
+                    Err(err) => return Err(format!("expr: {err}")),
+                },
+                Some(other) => {
+                    return Err(format!("expr должен быть строкой или null: {other}"))
+                }
+            };
             let mut geometry = false;
             // FR-006: MCP-мутация — undo-шаг. Пушим до мутаций: валидация
             // отдельных полей переплетена с применением остальных (частичные
@@ -3674,6 +3785,13 @@ fn mcp_dispatch(
             if geometry {
                 let node = &scene.canvas.nodes[index];
                 scene.spatial.update(index, node);
+            }
+            // FR-013: формула уже провалидирована — применяем и пересчитываем
+            if let Some(new_expr) = expr_update {
+                scene.canvas.nodes[index].set_expr(new_expr);
+                scene.mark_dirty();
+                let node_id = scene.canvas.nodes[index].id.clone();
+                scene.recompute_expr(&node_id);
             }
             scene.mark_dirty();
             let node = &scene.canvas.nodes[index];
@@ -5170,8 +5288,9 @@ fn add_stress_widgets(canvas: &mut Canvas, n: usize) -> usize {
         let col = (i % cols) as f32;
         let row = (i / cols) as f32;
         let ext = canvas_core::CanvasdeskExt {
-            widget_id: "com.canvasdesk.clock".to_owned(),
+            widget_id: Some("com.canvasdesk.clock".to_owned()),
             props: serde_json::Map::new(),
+            expr: None,
         };
         canvas.nodes.push(Node::widget(
             format!("widget-{}", existing + i as u32 + 1),
@@ -6750,6 +6869,7 @@ impl ApplicationHandler<AppEvent> for App {
                         widget_title_reveal: &widget_title_reveal,
                         hidden_nodes: &hidden_nodes,
                         collapsed_counts: &collapsed_counts,
+                        expr_results: &self.scene.expr_results,
                     };
                     match renderer.render(
                         &self.camera,
@@ -7720,5 +7840,189 @@ mod tests {
         dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#)
             .expect("edge_delete");
         assert_eq!(scene.undo_stack.len(), 1);
+    }
+
+    // --- FR-013: Numi-формулы (canvasdesk.expr) ---
+
+    /// Смешанный редактор: строки «= …» — формула без префикса; пустые
+    /// формульные строки пропускаются; без «=» — None.
+    #[test]
+    fn split_formula_lines_extracts_equal_prefixed() {
+        assert_eq!(split_formula_lines("= 5 ms"), Some("5 ms".to_owned()));
+        assert_eq!(split_formula_lines("=  5 ms  "), Some("5 ms".to_owned()));
+        assert_eq!(
+            split_formula_lines("Gateway\n= rps = 1000\n= latency = 50 ms"),
+            Some("rps = 1000\nlatency = 50 ms".to_owned()),
+            "несколько утверждений соединяются переводом строки"
+        );
+        // Пустая формула («=» без содержимого) — не утверждение
+        assert_eq!(split_formula_lines("=\n= 5 ms"), Some("5 ms".to_owned()));
+        // Нет формульных строк — None
+        assert_eq!(split_formula_lines("Просто текст"), None);
+        assert_eq!(split_formula_lines(""), None);
+        // «=» внутри строки не формула — только начало строки
+        assert_eq!(split_formula_lines("a = b"), None);
+    }
+
+    /// MCP node_edit { expr } — формула сохранена, результат пересчитан
+    /// в expr_results (инвариант 4: runtime, не в .canvas).
+    #[test]
+    fn mcp_node_edit_expr_computes_result() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let summary = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":"5 ms × 200 req/s"}"#,
+        )
+        .expect("node_edit expr");
+        assert_eq!(summary["expr"], "5 ms × 200 req/s", "формула в сводке");
+        // Результат — runtime-кэш, в модели его нет
+        let value = scene.expr_results.get("n1").expect("результат есть");
+        match value {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
+            other => panic!("ожидался результат, получено: {other:?}"),
+        }
+        let json = scene.canvas.to_json().expect("сериализация");
+        assert!(!json.contains("1000 ms"), "результат не сериализуется");
+        assert!(json.contains("5 ms × 200 req/s"), "формула сериализуется");
+    }
+
+    /// MCP node_edit { expr: null } — сброс calc-режима; невалидная
+    /// формула — Err с диагностикой, нода не менялась и шага undo нет
+    /// (валидация ДО push_undo).
+    #[test]
+    fn mcp_node_edit_expr_null_and_invalid() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // Сброс отсутствующей формулы — no-op без ошибки
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":null}"#,
+        )
+        .expect("expr null");
+        assert!(!scene.expr_results.contains_key("n1"));
+
+        // Установка, затем сброс через null
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":"1k rps"}"#,
+        )
+        .expect("expr set");
+        assert!(scene.expr_results.contains_key("n1"));
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":null}"#,
+        )
+        .expect("expr reset");
+        assert!(
+            scene.canvas.node("n1").and_then(Node::expr).is_none(),
+            "формула удалена из модели"
+        );
+        assert!(!scene.expr_results.contains_key("n1"), "результат удалён");
+
+        // Невалидная формула: Err, нода не тронута, undo-шага нет
+        let steps_before = scene.undo_stack.len();
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":"= invalid @#$"}"#,
+        )
+        .expect_err("парсинг формулы");
+        assert!(err.contains("expr"), "диагностика с префиксом поля: {err}");
+        assert_eq!(
+            scene.undo_stack.len(),
+            steps_before,
+            "невалидный expr не пушит шаг"
+        );
+        // Кривой тип expr — тоже Err
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":42}"#
+        )
+        .is_err());
+    }
+
+    /// Формула с ошибкой вычисления сохраняется (парсинг ок), результат —
+    /// красная диагностика в expr_results (MCP отвергает только синтаксис).
+    #[test]
+    fn mcp_node_edit_expr_eval_error_is_stored() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            r#"{"id":"n1","expr":"5 ms + 3 rps"}"#,
+        )
+        .expect("синтаксически корректная формула сохраняется");
+        match scene.expr_results.get("n1").expect("запись есть") {
+            ExprOutcome::Err(msg) => {
+                assert!(msg.contains("не совместимы"), "диагностика: {msg}")
+            }
+            other => panic!("ожидалась ошибка вычисления: {other:?}"),
+        }
+    }
+
+    /// Интеграционный сценарий верификации FR-013: node_update_text со
+    /// строками «= …» выводит формулу; undo восстанавливает пустой expr
+    /// и убирает результат; redo возвращает.
+    #[test]
+    fn expr_undo_redo_restores_formula() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // Заметка с формулой: текст с «=»-строками → формула + результат
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            r#"{"id":"n1","text":"Параметры\n= 1 sec + 500 ms"}"#,
+        )
+        .expect("node_update_text");
+        assert_eq!(
+            scene.canvas.node("n1").and_then(Node::expr),
+            Some("1 sec + 500 ms"),
+            "формула выведена из текста"
+        );
+        match scene.expr_results.get("n1").expect("результат есть") {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1.5 sec"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
+
+        // Undo: expr пуст, результата нет
+        let before = scene.take_undo().expect("шаг есть");
+        scene.canvas = before;
+        scene.recompute_all_expr();
+        assert_eq!(
+            scene.canvas.node("n1").and_then(Node::expr),
+            None,
+            "после undo формула из правки исчезла"
+        );
+        assert!(!scene.expr_results.contains_key("n1"), "результ нет");
+
+        // Загрузка с формулой: recompute_all_expr при SceneState::new
+        let mut canvas = Canvas::default();
+        let mut note = Node::text("calc", "Gateway", 0.0, 0.0);
+        note.set_expr(Some("1k rps".to_owned()));
+        canvas.nodes.push(note);
+        let scene = SceneState::new(canvas, PathBuf::from("target/tmp/expr.canvas"));
+        match scene
+            .expr_results
+            .get("calc")
+            .expect("результат при загрузке")
+        {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
     }
 }

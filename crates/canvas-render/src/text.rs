@@ -20,6 +20,7 @@ use crate::gfm;
 use crate::markdown;
 use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
+use canvas_core::expr::{ExprOutcome, ExprResults};
 
 /// Встроенный шрифт (assets/fonts/Inter.ttf, SIL OFL — см. assets/fonts/OFL.txt).
 const FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
@@ -49,6 +50,20 @@ pub const BODY_TOP_GAP: f32 = 4.0;
 const EDGE_LABEL_FONT_SIZE: f32 = 12.0;
 /// Высота строки лейбла связи.
 const EDGE_LABEL_LINE_HEIGHT: f32 = 16.0;
+
+/// Размер шрифта строки результата формулы в world-px (FR-013).
+const RESULT_FONT_SIZE: f32 = 12.0;
+/// Высота строки результата формулы в world-px (FR-013) — резерв футера
+/// карточки; приложение учитывает в fit_note_size.
+pub const RESULT_LINE_HEIGHT: f32 = 16.0;
+/// Цвет строки результата с ОШИБКОЙ (парсинг/вычисление) — красный акцент
+/// (FR-013: «красная строка с тултипом»; согласован с рамкой битой ссылки).
+const RESULT_ERROR_COLOR: Color = Color::rgb(0xe5, 0x5c, 0x5c);
+/// Размер шрифта бейджа «=» calc-ноды при дальнем зуме (FR-013) —
+/// физические px (не масштабируется зумом, как HUD).
+const BADGE_FONT_SIZE: f32 = 10.0;
+/// Высота строки бейджа «=» в физических px.
+const BADGE_LINE_HEIGHT: f32 = 12.0;
 
 /// Размер шрифта HUD в физических px (не масштабируется зумом).
 const HUD_FONT_SIZE: f32 = 14.0;
@@ -690,14 +705,18 @@ struct CacheKey<'a> {
     width: f32,
     title: &'a str,
     body: &'a str,
+    /// FR-013: строка результата формулы (пустая — результата нет).
+    result: &'a str,
 }
 
-/// Запись кэша свежа, если зум, ширина, заголовок и тело не изменились.
+/// Запись кэша свежа, если зум, ширина, заголовок, тело и результат
+/// формулы не изменились.
 fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
     (entry.zoom - current.zoom).abs() < 1e-3
         && (entry.width - current.width).abs() < 0.5
         && entry.title == current.title
         && entry.body == current.body
+        && entry.result == current.result
 }
 
 /// Оверлей-текст в world-координатах (контекстное меню, T7): шейпится
@@ -791,6 +810,10 @@ pub struct TitleFrame<'a> {
     pub widget_title_reveal: &'a [usize],
     /// FR-011: бейджи «+N» свернутых нод: (индекс, число скрытых потомков).
     pub collapsed_counts: &'a [(usize, usize)],
+    /// FR-013: результаты формул (`canvasdesk.expr`) по id нод — строка
+    /// результата берётся отсюда (`ExprOutcome::Ok` — значение,
+    /// `ExprOutcome::Err` — красная диагностика).
+    pub expr_results: &'a ExprResults,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -819,10 +842,16 @@ struct CachedTitle {
     /// Тело заметки (T7, GFM) — вертикальный стек блоков: только у text-нод
     /// с непустым текстом.
     body: Option<BodyLayout>,
+    /// FR-013: строка результата формулы под телом (одна строка, футер
+    /// карточки). None — формулы нет или результат ещё не пересчитан.
+    result: Option<Buffer>,
+    /// FR-013: результат — диагностика (красный цвет строки).
+    result_error: bool,
     zoom_px: f32,
     width_px: f32,
     title_text: String,
     body_text: String,
+    result_text: String,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
 }
@@ -1014,6 +1043,16 @@ impl TextSystem {
                 } else {
                     node.text.clone().unwrap_or_default()
                 };
+                // FR-013: строка результата формулы (футер карточки) — у
+                // text-нод с формулой; без готового outcome — пусто (не
+                // пересчитано, строки нет)
+                let (result_text, result_error) = match frame.expr_results.get(&node.id) {
+                    Some(ExprOutcome::Ok(value)) if node.expr().is_some() => {
+                        (value.to_string(), false)
+                    }
+                    Some(ExprOutcome::Err(msg)) if node.expr().is_some() => (msg.clone(), true),
+                    _ => (String::new(), false),
+                };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
                     cache_fresh(
@@ -1022,12 +1061,14 @@ impl TextSystem {
                             width: e.width_px,
                             title: &e.title_text,
                             body: &e.body_text,
+                            result: &e.result_text,
                         },
                         CacheKey {
                             zoom: zoom_px,
                             width: width_px,
                             title: &title_text,
                             body: &body_text,
+                            result: &result_text,
                         },
                     )
                 });
@@ -1085,16 +1126,45 @@ impl TextSystem {
                         ))
                     };
 
+                    // FR-013: строка результата — одна строка в футере
+                    // карточки, шейпится вместе с остальным кэшем ноды
+                    let result = if result_text.is_empty() {
+                        None
+                    } else {
+                        let (_, body_width, _) = body_area(node);
+                        let mut buffer = Buffer::new(
+                            &mut self.font_system,
+                            Metrics::new(RESULT_FONT_SIZE * zoom_px, RESULT_LINE_HEIGHT * zoom_px),
+                        );
+                        buffer.set_wrap(&mut self.font_system, Wrap::None);
+                        buffer.set_size(
+                            &mut self.font_system,
+                            Some(body_width * zoom_px),
+                            Some(RESULT_LINE_HEIGHT * zoom_px),
+                        );
+                        buffer.set_text(
+                            &mut self.font_system,
+                            &result_text,
+                            Attrs::new(),
+                            Shaping::Advanced,
+                        );
+                        buffer.shape_until_scroll(&mut self.font_system, false);
+                        Some(buffer)
+                    };
+
                     self.cache.insert(
                         index,
                         CachedTitle {
                             title,
                             icon,
                             body,
+                            result,
+                            result_error,
                             zoom_px,
                             width_px,
                             title_text,
                             body_text,
+                            result_text,
                             last_used: self.tick,
                         },
                     );
@@ -1223,6 +1293,34 @@ impl TextSystem {
             screen_buffers.push(buffer);
         }
 
+        // FR-013: бейдж «=» calc-нод при дальнем зуме (титулы скрыты) —
+        // один общий буфер на кадр, константный физический размер (как HUD);
+        // шейпится ДО цикла групп — TextArea заимствует его до prepare_group
+        let mut badge_buffer: Option<Buffer> = None;
+        if !show_titles
+            && frame.indices.iter().any(|&index| {
+                frame
+                    .canvas
+                    .nodes
+                    .get(index)
+                    .is_some_and(|node| node.kind() == NodeKind::Text && node.expr().is_some())
+            })
+        {
+            let mut buffer = Buffer::new(
+                &mut self.font_system,
+                Metrics::new(BADGE_FONT_SIZE, BADGE_LINE_HEIGHT),
+            );
+            buffer.set_wrap(&mut self.font_system, Wrap::None);
+            buffer.set_size(
+                &mut self.font_system,
+                Some(BADGE_FONT_SIZE * 2.0),
+                Some(BADGE_LINE_HEIGHT),
+            );
+            buffer.set_text(&mut self.font_system, "=", Attrs::new(), Shaping::Advanced);
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            badge_buffer = Some(buffer);
+        }
+
         for (g, group) in frame.zplan.text_groups.iter().enumerate() {
             let mut areas: Vec<TextArea> = Vec::with_capacity(group.len() * 3 + 4);
             if show_titles {
@@ -1288,11 +1386,21 @@ impl TextSystem {
                     // у редактируемой ноды body нет, его рисует буфер
                     // EditingSession (блок ниже). Клип блока: нижняя граница
                     // не ниже нижней границы области тела — текст нижнего
-                    // блока не вылезает за карточку.
+                    // блока не вылезает за карточку. FR-013: при наличии
+                    // строки результата тело подрезается до её верхней
+                    // границы — текст не заходит под футер с результатом.
+                    let result_top_phys = if entry.result.is_some() {
+                        to_physical([
+                            0.0,
+                            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
+                        ])[1]
+                    } else {
+                        f32::MAX
+                    };
                     if let Some(layout) = &entry.body {
                         let (origin, _, body_height) = body_area(node);
                         let origin = to_physical(origin);
-                        let body_bottom = origin[1] + body_height * zoom_px;
+                        let body_bottom = (origin[1] + body_height * zoom_px).min(result_top_phys);
                         for block in &layout.blocks {
                             // Снап к целым физическим px — иначе каждый кадр
                             // панорамы даёт новый subpixel-бин глифа (см. snap_to_pixel)
@@ -1314,6 +1422,34 @@ impl TextSystem {
                                 custom_glyphs: &[],
                             });
                         }
+                    }
+                    // FR-013: строка результата формулы — футер карточки;
+                    // успех — акцентный цвет, ошибка — красная диагностика
+                    if let Some(result) = &entry.result {
+                        let origin = [
+                            node.x + BODY_PADDING,
+                            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
+                        ];
+                        let pos = to_physical(origin);
+                        areas.push(TextArea {
+                            buffer: result,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + (node.width - BODY_PADDING * 2.0) * zoom_px)
+                                    as i32,
+                                bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
+                            },
+                            default_color: if entry.result_error {
+                                dim_color(RESULT_ERROR_COLOR, text_factor)
+                            } else {
+                                dim_color(self.theme.link, text_factor)
+                            },
+                            custom_glyphs: &[],
+                        });
                     }
                 }
             }
@@ -1391,6 +1527,36 @@ impl TextSystem {
                             },
                             // T23: не-фокусные лейблы гаснут вместе со связями
                             default_color: dim_color(self.theme.edge_label, label.factor),
+                            custom_glyphs: &[],
+                        });
+                    }
+                }
+                // FR-013: бейдж «=» в правом верхнем углу каждой видимой
+                // calc-ноды — единственный признак формулы при дальнем зуме
+                if let Some(badge) = &badge_buffer {
+                    for &index in frame.indices {
+                        let Some(node) = frame.canvas.nodes.get(index) else {
+                            continue;
+                        };
+                        if node.kind() != NodeKind::Text || node.expr().is_none() {
+                            continue;
+                        }
+                        let pos = to_physical([
+                            node.x + node.width - BADGE_FONT_SIZE - 2.0,
+                            node.y + 2.0,
+                        ]);
+                        areas.push(TextArea {
+                            buffer: badge,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + BADGE_FONT_SIZE * 2.0) as i32,
+                                bottom: (pos[1] + BADGE_LINE_HEIGHT) as i32,
+                            },
+                            default_color: dim_color(self.theme.title, 0.75),
                             custom_glyphs: &[],
                         });
                     }
@@ -1596,6 +1762,7 @@ mod tests {
             width: 300.0,
             title: "отчёт",
             body: "тело",
+            result: "",
         };
         let same = CacheKey { ..entry };
         assert!(cache_fresh(entry, same));
@@ -1632,6 +1799,17 @@ mod tests {
                 }
             ),
             "тело изменилось"
+        );
+        // FR-013: пересчитанный результат формулы инвалидирует кэш
+        assert!(
+            !cache_fresh(
+                entry,
+                CacheKey {
+                    result: "1000 ms·req/s",
+                    ..same
+                }
+            ),
+            "результат формулы изменился"
         );
         // Допуски: микродрейф зума и субпиксельная ширина не инвалидируют
         assert!(cache_fresh(

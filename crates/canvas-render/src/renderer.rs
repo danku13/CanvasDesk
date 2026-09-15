@@ -6,6 +6,7 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use canvas_core::expr::ExprResults;
 use canvas_core::{edge_midpoint, Canvas, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
@@ -163,6 +164,10 @@ pub struct SceneView<'a> {
     /// FR-011: бейджи «+N» свернутых нод: (индекс ноды, число скрытых
     /// потомков) — рисуются в заголовке ноды; отсортированы.
     pub collapsed_counts: &'a [(usize, usize)],
+    /// FR-013: результаты формул (`canvasdesk.expr`) по id нод —
+    /// runtime-кэш приложения (не сериализуется, инвариант FR-013).
+    /// Строка результата под текстом ноды (LOD ≥ порога), бейдж «=» — ниже.
+    pub expr_results: &'a ExprResults,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -899,6 +904,7 @@ impl Renderer {
                 focus: scene.focus,
                 widget_title_reveal: scene.widget_title_reveal,
                 collapsed_counts: scene.collapsed_counts,
+                expr_results: scene.expr_results,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

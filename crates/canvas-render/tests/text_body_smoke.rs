@@ -54,6 +54,8 @@ fn headless_note_body_draws() {
             focus: canvas_render::cards::FocusView::EMPTY,
             widget_title_reveal: &[],
             collapsed_counts: &[],
+            // FR-013: без формул
+            expr_results: &std::collections::HashMap::new(),
         },
     )
     .expect("prepare текста");

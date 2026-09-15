@@ -90,6 +90,8 @@ fn headless_text_under_covering_card() {
             focus: canvas_render::cards::FocusView::EMPTY,
             widget_title_reveal: &[],
             collapsed_counts: &[],
+            // FR-013: без формул
+            expr_results: &std::collections::HashMap::new(),
         },
     )
     .expect("prepare текста");

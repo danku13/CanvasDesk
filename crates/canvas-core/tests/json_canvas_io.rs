@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use canvas_core::{Canvas, NodeKind, PreviewState, Side};
+use canvas_core::{Canvas, Node, NodeKind, PreviewState, Side};
 
 const SPEC_EXAMPLE: &str = include_str!("fixtures/spec_example.canvas");
 const OBSIDIAN: &str = include_str!("fixtures/obsidian.canvas");
@@ -128,7 +128,7 @@ fn typed_extensions_round_trip() {
     assert_eq!(widget.kind(), NodeKind::Widget);
     assert_eq!(widget.broken_link, Some(true));
     let ext = widget.canvasdesk.as_ref().expect("объект canvasdesk");
-    assert_eq!(ext.widget_id, "com.example.clock");
+    assert_eq!(ext.widget_id.as_deref(), Some("com.example.clock"));
     assert_eq!(
         ext.props.get("timezone").and_then(|v| v.as_str()),
         Some("Europe/Moscow")
@@ -219,4 +219,77 @@ fn group_node_round_trip() {
         serde_json::from_str::<serde_json::Value>(&serialized).unwrap(),
         serde_json::from_str::<serde_json::Value>(&again).unwrap()
     );
+}
+
+// --- FR-013: canvasdesk.expr — Numi-формула text-ноды ---
+
+/// FR-013 (инвариант 3): set_expr → round-trip через `.canvas` — поле
+/// сохранено; set_expr(None) — поле удалено из JSON (round-trip чистый);
+/// чужие ключи внутри `canvasdesk` не теряются.
+#[test]
+fn expr_round_trip_and_reset() {
+    let mut canvas = Canvas::default();
+    let mut note = Node::text("note-1", "Параметры шлюза", 0.0, 0.0);
+    note.set_expr(Some("5 ms × 200 req/s".to_owned()));
+    canvas.nodes.push(note);
+
+    // Сериализация: поле на месте, формат Obsidian-совместимый
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(
+        parsed["nodes"][0]["canvasdesk"]["expr"], "5 ms × 200 req/s",
+        "canvasdesk.expr в JSON"
+    );
+
+    // Обратное чтение: accessor видит формулу
+    let restored = Canvas::from_str(&json).expect("парсинг");
+    assert_eq!(
+        restored.nodes[0].expr(),
+        Some("5 ms × 200 req/s"),
+        "формула пережила round-trip"
+    );
+    assert_eq!(restored.nodes[0].kind(), NodeKind::Text);
+
+    // Сброс: ключ удалён целиком — пустого canvasdesk в JSON нет
+    let mut cleared = restored;
+    cleared.nodes[0].set_expr(None);
+    assert_eq!(cleared.nodes[0].expr(), None, "формула сброшена");
+    let json = cleared.to_json().expect("сериализация после сброса");
+    assert!(
+        !json.contains("canvasdesk"),
+        "пустого расширения в JSON быть не должно: {json}"
+    );
+}
+
+/// FR-013: формула из чужого файла (canvasdesk.expr в extra) читается;
+/// соседние чужие ключи внутри canvasdesk сохраняются при set_expr.
+#[test]
+fn expr_reads_external_file_and_preserves_siblings() {
+    let source = r#"{
+        "nodes": [
+            {
+                "id": "n1",
+                "type": "text",
+                "text": "Gateway",
+                "x": 0,
+                "y": 0,
+                "width": 260,
+                "height": 120,
+                "canvasdesk": { "expr": "1k rps" }
+            }
+        ],
+        "edges": []
+    }"#;
+    let mut canvas = Canvas::from_str(source).expect("чужой файл парсится");
+    assert_eq!(canvas.nodes[0].expr(), Some("1k rps"));
+
+    // Сброс формулы: canvasdesk без других данных исчезает из JSON
+    canvas
+        .nodes
+        .get_mut(0)
+        .expect("нода есть")
+        .set_expr(Some("2k rps".to_owned()));
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(parsed["nodes"][0]["canvasdesk"]["expr"], "2k rps");
 }

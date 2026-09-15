@@ -970,8 +970,9 @@ mod tests {
         let widget = Node::widget(
             "w",
             canvas_core::CanvasdeskExt {
-                widget_id: "com.canvasdesk.clock".into(),
+                widget_id: Some("com.canvasdesk.clock".into()),
                 props: Default::default(),
+                expr: None,
             },
             "Clock",
             10.0,

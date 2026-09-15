@@ -217,13 +217,14 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "node_edit",
-        description: "Редактировать ноду одним вызовом: обновляет ТОЛЬКО переданные поля (text, label, color, x, y, width, height); label/color = null — сброс; возвращает обновлённую ноду",
+        description: "Редактировать ноду одним вызовом: обновляет ТОЛЬКО переданные поля (text, label, color, expr, x, y, width, height); label/color/expr = null — сброс; expr — Numi-style формула, результат рендерится под текстом ноды (невалидная формула — ошибка, нода не меняется); возвращает обновлённую ноду",
         required: &["id"],
         properties: &[
             ("id", STR),
             ("text", STR),
             ("label", r#"{"type":["string","null"]}"#),
             ("color", COLOR_PROP),
+            ("expr", r#"{"type":["string","null"]}"#),
             ("x", NUM),
             ("y", NUM),
             ("width", NUM),

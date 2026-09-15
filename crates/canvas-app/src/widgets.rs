@@ -219,7 +219,11 @@ impl WidgetManager {
                 node_id: node.id.clone(),
                 visible,
                 overlaid,
-                package_ok: !cooldown && self.registry.contains(&ext.widget_id),
+                package_ok: !cooldown
+                    && ext
+                        .widget_id
+                        .as_deref()
+                        .is_some_and(|id| self.registry.contains(id)),
                 runtime_ok,
                 has_instance: state.has_instance,
                 was_live: state.was_live,
@@ -280,7 +284,10 @@ impl WidgetManager {
                         .node(&d.node_id)
                         .expect("решение только по существующим нодам");
                     let ext = node.canvasdesk.as_ref().expect("виджет");
-                    let package = self.registry.get(&ext.widget_id);
+                    let package = ext
+                        .widget_id
+                        .as_deref()
+                        .and_then(|id| self.registry.get(id));
                     if let Some(pkg) = package {
                         let [x, y, w, h] = [node.x, node.y, node.width, node.height];
                         live.push(canvas_widgets::LiveRequest {
@@ -525,8 +532,9 @@ impl WidgetManager {
         let pkg = self.registry.get(widget_id)?;
         let [w, h] = pkg.manifest.default_size;
         let ext = canvas_core::CanvasdeskExt {
-            widget_id: widget_id.to_owned(),
+            widget_id: Some(widget_id.to_owned()),
             props: WidgetProps::new(),
+            expr: None,
         };
         Some(Node::widget(
             node_id,
@@ -566,7 +574,10 @@ impl WidgetManager {
     /// на вызов пренебрежима;
     pub fn permissions_of_node(&self, canvas: &Canvas, node_id: &str) -> Option<Permissions> {
         let ext = canvas.node(node_id)?.canvasdesk.as_ref()?;
-        let pkg = self.registry.get(&ext.widget_id)?;
+        let pkg = ext
+            .widget_id
+            .as_deref()
+            .and_then(|id| self.registry.get(id))?;
         Some(Permissions::new(pkg.manifest.permissions.iter().copied()))
     }
 
@@ -577,7 +588,12 @@ impl WidgetManager {
         node_id: &str,
     ) -> Option<&'a WidgetManifest> {
         let ext = canvas.node(node_id)?.canvasdesk.as_ref()?;
-        Some(&self.registry.get(&ext.widget_id)?.manifest)
+        Some(
+            &ext.widget_id
+                .as_deref()
+                .and_then(|id| self.registry.get(id))?
+                .manifest,
+        )
     }
 
     /// Установка пакета из папки (T21-B: подтверждённый диалогом drag).
@@ -703,8 +719,9 @@ mod tests {
     fn canvas_with_clock() -> Canvas {
         let mut canvas = Canvas::default();
         let ext = canvas_core::CanvasdeskExt {
-            widget_id: "com.canvasdesk.clock".to_owned(),
+            widget_id: Some("com.canvasdesk.clock".to_owned()),
             props: WidgetProps::new(),
+            expr: None,
         };
         canvas.nodes.push(Node::widget(
             "widget-1", ext, "Clock", 0.0, 0.0, 320.0, 200.0,

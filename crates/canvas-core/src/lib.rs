@@ -3,6 +3,8 @@
 
 mod edgegeom;
 mod error;
+/// FR-013: Numi-base формулы text-нод (`canvasdesk.expr`).
+pub mod expr;
 mod focus;
 mod fs_events;
 mod io;
