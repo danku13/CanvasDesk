@@ -10,8 +10,8 @@
 use std::str::FromStr;
 
 use canvas_app::palette::{
-    palette_groups, palette_hit, palette_layout, palette_origin, palette_bar_size,
-    palette_open_group, PaletteAction, PaletteHit, PaletteTarget,
+    palette_bar_size, palette_groups, palette_hit, palette_layout, palette_origin,
+    palette_trigger_at, PaletteAction, PaletteHit, PaletteTarget,
 };
 use canvas_app::ui::{
     plan_group_around, plan_group_at, select_node_hit, CanvasMenuItem, CANVAS_MENU_ITEMS,
@@ -71,10 +71,11 @@ fn test_group_via_node_menu() {
     let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
     let lay = palette_layout(origin, &groups, viewport);
     let ai = groups.iter().position(|g| g.label == "Действия").unwrap();
-    // Hover на кнопке группы открывает колонку
+    // Hover на кнопке группы — триггер раскрытия колонки (раскрытие
+    // срабатывает ТОЛЬКО от кнопки, не от пустой области колонки)
     let btn = lay.groups[ai].button;
     assert_eq!(
-        palette_open_group(&lay, [btn[0] + 5.0, btn[1] + 5.0]),
+        palette_trigger_at(&lay, [btn[0] + 5.0, btn[1] + 5.0]),
         Some(ai)
     );
     // Строка «Сгруппировать» (третья: после Переименовать/Дублировать)

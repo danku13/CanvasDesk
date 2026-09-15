@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
-    palette_layout, palette_open_group, palette_origin, PaletteAction, PaletteHit,
-    PaletteLayout, PaletteTarget, PAL_ICON,
+    palette_layout, palette_origin, PaletteAction, PaletteHit, PaletteHover, PaletteLayout,
+    PaletteTarget, PAL_ICON,
 };
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
@@ -491,6 +491,13 @@ struct App {
     clipboard: Clipboard,
     /// Открытое контекстное меню ноды (ПКМ, T7).
     menu: Option<ContextMenu>,
+    /// Hover-раскрытие групп палитры (FR-009): hover-intent открытие,
+    /// отсрочка закрытия, пин по клику — практики фронтенда для дропдаунов.
+    palette_hover: PaletteHover,
+    /// Цель палитры с прошлого кадра: смена (клик по другой ноде/связи,
+    /// изменение выделения) сбрасывает раскрытие — индекс группы не должен
+    /// переживать смену цели (состав групп у нод и связей разный).
+    palette_seen: Option<PaletteTarget>,
     /// Ручной resize ноды за правый нижний угол (T7): индекс ноды.
     resizing: Option<usize>,
     /// Нода под курсором (T8): показываются порты для начала drag связи.
@@ -678,6 +685,8 @@ impl App {
             double_click: DoubleClick::new(),
             clipboard: Clipboard::new(),
             menu: None,
+            palette_hover: PaletteHover::new(),
+            palette_seen: None,
             resizing: None,
             hovered: None,
             edge_drag: None,
@@ -2459,8 +2468,10 @@ impl App {
     }
 
     /// Вид палитры на кадр: (layout, группы, открытая hover'ом группа).
+    /// Побочно обновляет `palette_hover` (hover-intent/отсрочка закрытия)
+    /// и сбрасывает его при смене цели — вызывается и на кликах, и на кадрах.
     fn palette_view(
-        &self,
+        &mut self,
     ) -> Option<(
         PaletteLayout,
         Vec<canvas_app::palette::PaletteGroup>,
@@ -2475,7 +2486,14 @@ impl App {
         let anchor = self.palette_anchor_screen(&target)?;
         let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
         let lay = palette_layout(origin, &groups, viewport);
-        let open = palette_open_group(&lay, self.cursor);
+        let open = {
+            if self.palette_seen.as_ref() != Some(&target) {
+                // Смена цели: раскрытая группа прежней цели недействительна
+                self.palette_hover.reset();
+                self.palette_seen = Some(target);
+            }
+            self.palette_hover.update(&lay, self.cursor)
+        };
         Some((lay, groups, open))
     }
 
@@ -3852,13 +3870,26 @@ impl App {
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
                 // Палитра выделения (FR-009/FR-010): клик по строке ОТКРЫТОЙ
-                // hover'ом группы — действие, по бару/кнопке — глотается;
+                // группы — действие, по кнопке-триггеру — пин-переключение
+                // раскрытия (WAI-ARIA menu button), по бару — глотается;
                 // проверяется ДО канваса — тулбар поверх выделения
                 if let Some((lay, groups, open)) = self.palette_view() {
                     match palette_hit(&lay, self.cursor, open) {
                         Some(PaletteHit::Entry { group, entry }) => {
                             let action = groups[group].entries[entry].action.clone();
                             self.apply_palette_action(action);
+                            // Действие выполнено — раскрытие закрывается
+                            // (состав групп мог измениться; Radix: закрытие
+                            // меню по выбору пункта)
+                            self.palette_hover.reset();
+                            self.request_redraw();
+                            return;
+                        }
+                        Some(PaletteHit::Trigger(group)) => {
+                            // Пин: клик открывает без задержки / закрывает
+                            // повторным кликом — стабильность для точного
+                            // наведения, как у menu-button в вебе
+                            self.palette_hover.toggle_trigger(group);
                             self.request_redraw();
                             return;
                         }
@@ -6354,11 +6385,13 @@ impl ApplicationHandler<AppEvent> for App {
             }
         }
         // Полёт камеры и пульс (T14) + фокус (T23): непрерывные кадры
-        // до завершения анимаций
+        // до завершения анимаций; hover-ожидание палитры (FR-009):
+        // hover-intent открытие / отсрочка закрытия при неподвижном курсоре
         if self.search_pending.is_some()
             || self.flight.is_some()
             || self.pulse.is_some()
             || self.focus_animating()
+            || self.palette_hover.pending()
         {
             self.request_redraw();
         }

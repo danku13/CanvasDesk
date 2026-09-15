@@ -7,9 +7,13 @@
 //! - **Screen-space**: все координаты — логические px от угла окна; размер
 //!   константен при любом зуме (уточнение владельца: «контекстное меню не
 //!   должно масштабироваться с canvas»).
-//! - **Группы настроек**: кнопки-группы в баре; по наведению на группу
-//!   раскрывается выпадающий перечень кнопок (`palette_open_group` —
-//!   производное от курсора состояние, без явного флага).
+//! - **Группы настроек**: кнопки-триггеры в баре; по наведению на ТРИГГЕР
+//!   раскрывается выпадающий перечень кнопок (`PaletteHover` — hover-intent
+//!   по практикам фронта: открытие только от кнопки, задержка открытия,
+//!   отсрочка закрытия, пин по клику). Пустая область, ГДЕ появилась бы
+//!   выпадашка, ничего не открывает — как в Radix/Bootstrap dropdown.
+//!   Пока выпадашка открыта, её колонка удерживает открытие (переход
+//!   курсора кнопка → колонка не закрывает).
 //! - **Иконки вместо текста там, где наглядно**: тип линии связи —
 //!   сплошная/пунктир/точки, толщина, свотчи цвета, схемы раскладки
 //!   (дерево →/↓, радиально) — иконки; редкие действия — текст.
@@ -17,6 +21,8 @@
 //! Иконки — векторные композиции квадов (`icon_quads`) через тот же
 //! SDF-пайплайн карточек: без SVG-растеризатора и текстур. Геометрия —
 //! чистые функции (тесты без GPU/окна).
+
+use std::time::{Duration, Instant};
 
 use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, NodeKind};
 
@@ -181,7 +187,10 @@ pub struct PaletteLayout {
 pub enum PaletteHit {
     /// Клик по строке выпадашки группы.
     Entry { group: usize, entry: usize },
-    /// Клик по бару/кнопке группы (глотается — выпадашка открыта hover'ом).
+    /// Клик по кнопке-триггеру группы (пин-переключение раскрытия —
+    /// WAI-ARIA menu button: клик открывает/закрывает наряду с hover).
+    Trigger(usize),
+    /// Клик по бару вне кнопок (глотается — не проходит в канвас).
     Bar,
 }
 
@@ -508,19 +517,175 @@ pub fn palette_layout(
     }
 }
 
-/// Открытая группа по наведению (уточнение владельца: «по наведению на
-/// группу настройки показываются как выпадающий перечень кнопок»):
-/// курсор на кнопке группы или в её колонке. None — вне палитры.
-pub fn palette_open_group(lay: &PaletteLayout, point: Vec2) -> Option<usize> {
+/// Кнопка-триггер группы под курсором. ТОЛЬКО кнопки в баре: раскрытие
+/// срабатывает от наведения на кнопку, а не от пустой области колонки
+/// (баг-репорт владельца: «выпадающие меню активируются наведением на
+/// область, где должно появляться выпадающее меню»). Колонка раскрытой
+/// группы учитывается отдельно — в `PaletteHover::update`.
+pub fn palette_trigger_at(lay: &PaletteLayout, point: Vec2) -> Option<usize> {
     lay.groups
         .iter()
         .enumerate()
-        .find(|(_, g)| point_in_rect(g.button, point) || point_in_rect(g.dropdown, point))
+        .find(|(_, g)| point_in_rect(g.button, point))
         .map(|(i, _)| i)
 }
 
-/// Hit-test палитры: строки ТОЛЬКО открытой hover'ом группы (колонки
-/// групп перекрываются по x — кликабельна лишь раскрытая), затем бар.
+/// Задержка открытия по наведению (hover-intent, NN/g «задержка и
+/// триггерная зона»): фильтрует случайные раскрытия при проводе курсора
+/// через бар к канвасу.
+pub const PALETTE_OPEN_DELAY_MS: u64 = 150;
+/// Отсрочка закрытия после ухода курсора с открытой зоны (grace period,
+/// как mouseleave-задержка в Bootstrap-дропдаунах): переживает щели
+/// между баром и колонкой и микросходы с триггера.
+pub const PALETTE_CLOSE_DELAY_MS: u64 = 300;
+
+/// Состояние hover-раскрытия групп палитры (FR-009/FR-010).
+///
+/// Практики фронтенда для выпадающих меню, реализованные здесь:
+///
+/// 1. **Открытие только от триггера** (Radix UI DropdownMenu:
+///    `onPointerEnter` на триггере) — пустая область под баром, где
+///    колонка ПОЯВИТСЯ, ничего не открывает (баг-репорт владельца).
+/// 2. **Hover-intent задержка открытия** (NN/g: задержка перед показом
+///    hover-контента; Bootstrap `.dropdown:hover` + transition-delay) —
+///    [`PALETTE_OPEN_DELAY_MS`].
+/// 3. **Удержание открытой зоны**: пока раскрыто, курсор на колонке,
+///    баре или триггере держит открытие; уход закрывает с отсрочкой
+///    [`PALETTE_CLOSE_DELAY_MS`] (grace period, Amazon safe-triangle
+///    решает то же — движение по диагонали не роняет меню).
+/// 4. **Переключение групп** с задержкой открытия (а не мгновенно):
+///    провод через соседние кнопки не мигает промежуточными колонками.
+/// 5. **Пин по клику** (WAI-ARIA menu button pattern): клик по триггеру
+///    открывает/закрывает раскрытие — стабильность для точного наведения.
+/// 6. **Stale-guard**: смена цели/геометрии сбрасывает состояние —
+///    индекс раскрытой группы не переживает смену выделения.
+#[derive(Debug, Clone)]
+pub struct PaletteHover {
+    /// Раскрытая группа (колонка рисуется и кликабельна только у неё).
+    pub open: Option<usize>,
+    /// (группа, момент входа курсора на её кнопку) — накопление
+    /// hover-intent для задержки открытия.
+    trigger_since: Option<(usize, Instant)>,
+    /// Момент ухода курсора с открытой зоны — отсрочка закрытия.
+    left_since: Option<Instant>,
+}
+
+impl Default for PaletteHover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PaletteHover {
+    pub fn new() -> Self {
+        Self {
+            open: None,
+            trigger_since: None,
+            left_since: None,
+        }
+    }
+
+    /// Идут кадры ожидания (hover-intent открытие / отсрочка закрытия) —
+    /// `about_to_wait` держит цикл перерисовки, иначе задержки не сработают
+    /// при неподвижном курсоре (рендер — по request_redraw, без VSync-цикла).
+    pub fn pending(&self) -> bool {
+        self.trigger_since.is_some() || self.left_since.is_some()
+    }
+
+    /// Кадровое обновление по курсору (вызывается на перерисовке и на
+    /// клике). Возвращает раскрытую группу.
+    pub fn update(&mut self, lay: &PaletteLayout, cursor: Vec2) -> Option<usize> {
+        self.update_at(lay, cursor, Instant::now())
+    }
+
+    /// То же с явным «сейчас» — для тестов без реального времени.
+    pub fn update_at(&mut self, lay: &PaletteLayout, cursor: Vec2, now: Instant) -> Option<usize> {
+        // Stale-guard: цель сменилась — индекс может указывать на чужую
+        // группу (состав групп у нод и связей разный)
+        if let Some(g) = self.open {
+            if lay.groups.get(g).is_none() {
+                self.reset();
+                return None;
+            }
+        }
+        let trigger = palette_trigger_at(lay, cursor);
+        let in_bar = point_in_rect(lay.bar, cursor);
+        let in_open_column = self
+            .open
+            .and_then(|g| lay.groups.get(g))
+            .is_some_and(|g| point_in_rect(g.dropdown, cursor));
+        let open_delay = Duration::from_millis(PALETTE_OPEN_DELAY_MS);
+        let close_delay = Duration::from_millis(PALETTE_CLOSE_DELAY_MS);
+        match trigger {
+            Some(g) if self.open == Some(g) => {
+                // Стабильно: курсор на триггере раскрытой группы
+                self.trigger_since = None;
+                self.left_since = None;
+            }
+            Some(g) => {
+                // Курсор на кнопке другой/закрытой группы — копим hover-intent
+                // (переключение тоже с задержкой: провод через бар не мигает)
+                self.left_since = None;
+                match self.trigger_since {
+                    Some((tg, since)) if tg == g => {
+                        if now.duration_since(since) >= open_delay {
+                            self.open = Some(g);
+                            self.trigger_since = None;
+                        }
+                    }
+                    _ => self.trigger_since = Some((g, now)),
+                }
+            }
+            None if in_open_column || in_bar => {
+                // Внутри палитры, но не на кнопке: колонка раскрытой группы,
+                // подписи, паддинг бара — открытие держится (переход
+                // кнопка → колонка через зазор не закрывает)
+                self.trigger_since = None;
+                self.left_since = None;
+            }
+            None => {
+                // Вне палитры — отсрочка закрытия (диагональные сходы,
+                // зазор между баром и колонкой)
+                self.trigger_since = None;
+                if self.open.is_some() {
+                    match self.left_since {
+                        None => self.left_since = Some(now),
+                        Some(since) => {
+                            if now.duration_since(since) >= close_delay {
+                                self.reset();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.open
+    }
+
+    /// Клик по кнопке-триггеру: пин-переключение раскрытия (WAI-ARIA
+    /// menu button). Клик открывает без задержки — намерение явное.
+    pub fn toggle_trigger(&mut self, group: usize) {
+        if self.open == Some(group) {
+            self.reset();
+        } else {
+            self.open = Some(group);
+            self.trigger_since = None;
+            self.left_since = None;
+        }
+    }
+
+    /// Сброс: действие выполнено, цель сменилась, геометрия исчезла.
+    pub fn reset(&mut self) {
+        self.open = None;
+        self.trigger_since = None;
+        self.left_since = None;
+    }
+}
+
+/// Hit-test палитры: строки ТОЛЬКО раскрытой группы (колонки групп
+/// перекрываются по x — кликабельна лишь раскрытая), затем кнопки-триггеры
+/// (пин-переключение), затем бар. Колонка ЗАКРЫТОЙ группы не ловит — клик
+/// уходит в канвас (у колонок нет «призрачной» зоны).
 pub fn palette_hit(lay: &PaletteLayout, point: Vec2, open: Option<usize>) -> Option<PaletteHit> {
     if let Some(gi) = open {
         if let Some(group) = lay.groups.get(gi) {
@@ -530,6 +695,9 @@ pub fn palette_hit(lay: &PaletteLayout, point: Vec2, open: Option<usize>) -> Opt
                 }
             }
         }
+    }
+    if let Some(g) = palette_trigger_at(lay, point) {
+        return Some(PaletteHit::Trigger(g));
     }
     point_in_rect(lay.bar, point).then_some(PaletteHit::Bar)
 }
@@ -766,6 +934,21 @@ mod tests {
         canvas
     }
 
+    /// Геометрия палитры для одной текстовой ноды в большом вьюпорте.
+    fn laid_out_palette() -> (Canvas, PaletteLayout) {
+        let canvas = text_scene();
+        let groups = palette_groups(
+            &canvas,
+            &PaletteTarget::Nodes {
+                primary: 0,
+                selected: vec![0],
+            },
+        );
+        let viewport = [1200.0, 800.0];
+        let origin = palette_origin([600.0, 300.0], palette_bar_size(&groups), viewport);
+        (canvas, palette_layout(origin, &groups, viewport))
+    }
+
     /// Состав групп для text-ноды: Цвет, Раскладка, Действия, Ветвление —
     /// в этом порядке; у цветовой группы 7 записей (6 пресетов + сброс).
     #[test]
@@ -897,9 +1080,9 @@ mod tests {
     }
 
     /// Layout: кнопки групп в баре, колонки выпадашек под баром; строки
-    /// внутри колонки; hit-test строк и бара; открытая группа — по hover.
+    /// внутри колонки; hit-test: триггеры, строки раскрытой группы, бар.
     #[test]
-    fn layout_hit_and_open_group() {
+    fn layout_hit_and_triggers() {
         let canvas = text_scene();
         let groups = palette_groups(
             &canvas,
@@ -922,23 +1105,31 @@ mod tests {
             assert!(row[0] >= lay.groups[0].dropdown[0]);
             assert!(row[1] >= lay.groups[0].dropdown[1]);
         }
-        // Hover на кнопке группы 0 → открытая группа 0; вне палитры → None
+        // Триггер — ТОЛЬКО кнопка; вне палитры — None
         let center = [
             lay.groups[0].button[0] + PAL_BUTTON / 2.0,
             lay.groups[0].button[1] + PAL_BUTTON / 2.0,
         ];
-        assert_eq!(palette_open_group(&lay, center), Some(0));
-        assert_eq!(palette_open_group(&lay, [1000.0, 700.0]), None);
-        // Hit-test: строка выпадашки ОТКРЫТОЙ группы 0
+        assert_eq!(palette_trigger_at(&lay, center), Some(0));
+        assert_eq!(palette_trigger_at(&lay, [1000.0, 700.0]), None);
+        // БАГ-РЕГРЕССИЯ владельца: пустая область колонки ЗАКРЫТОЙ группы
+        // (где выпадашка ПОЯВИЛАСЬ БЫ) не открывает и не ловит клик
         let row = lay.groups[0].rows[0];
+        let ghost = [row[0] + 2.0, row[1] + 2.0];
+        assert_eq!(palette_trigger_at(&lay, ghost), None);
+        assert_eq!(palette_hit(&lay, ghost, None), None);
+        // Hit-test: строка выпадашки РАСКРЫТОЙ группы 0
         assert_eq!(
-            palette_hit(&lay, [row[0] + 2.0, row[1] + 2.0], Some(0)),
+            palette_hit(&lay, ghost, Some(0)),
             Some(PaletteHit::Entry { group: 0, entry: 0 })
         );
-        // Закрытая группа строк не ловит: клик в зоне чужой колонки
-        // проходит мимо палитры (в канвас)
-        assert_eq!(palette_hit(&lay, [row[0] + 2.0, row[1] + 2.0], Some(1)), None);
-        assert_eq!(palette_hit(&lay, [row[0] + 2.0, row[1] + 2.0], None), None);
+        // Чужая раскрытая группа строк не ловит (колонки перекрываются по x)
+        assert_eq!(palette_hit(&lay, ghost, Some(1)), None);
+        // Клик по кнопке группы — Trigger (пин-переключение)
+        assert_eq!(
+            palette_hit(&lay, center, Some(0)),
+            Some(PaletteHit::Trigger(0))
+        );
         // Клик по бару (вне кнопок) — Bar
         assert_eq!(
             palette_hit(&lay, [origin[0] + 2.0, origin[1] + 2.0], Some(0)),
@@ -946,6 +1137,143 @@ mod tests {
         );
         // Мимо палитры — None
         assert_eq!(palette_hit(&lay, [1100.0, 700.0], Some(0)), None);
+    }
+
+    /// Hover-автомат: открытие только от триггера, с hover-intent задержкой;
+    /// пустая область колонки закрытой группы НЕ открывает (баг-репорт).
+    #[test]
+    fn hover_opens_only_from_trigger_with_delay() {
+        let (_, lay) = laid_out_palette();
+        let mut hover = PaletteHover::new();
+        let t0 = Instant::now();
+        let btn = [
+            lay.groups[0].button[0] + PAL_BUTTON / 2.0,
+            lay.groups[0].button[1] + PAL_BUTTON / 2.0,
+        ];
+        // Первый кадр на триггере — ещё не открыто
+        assert_eq!(hover.update_at(&lay, btn, t0), None);
+        assert!(hover.pending(), "ждём открытия — кадры держатся");
+        // До истечения задержки — закрыто
+        assert_eq!(
+            hover.update_at(&lay, btn, t0 + Duration::from_millis(100)),
+            None
+        );
+        // После PALETTE_OPEN_DELAY — раскрыто
+        assert_eq!(
+            hover.update_at(&lay, btn, t0 + Duration::from_millis(200)),
+            Some(0)
+        );
+        assert!(!hover.pending(), "стабильное состояние — кадры не гоняем");
+        // БАГ-РЕГРЕССИЯ владельца: пустая область колонки (где выпадашка
+        // ПОЯВИЛАСЬ БЫ) при ЗАКРЫТОЙ группе не открывает НИЧЕГО — ни сразу,
+        // ни спустя время, превышающее hover-intent задержку
+        let ghost_row = lay.groups[1].rows[0];
+        let ghost = [ghost_row[0] + 2.0, ghost_row[1] + 2.0];
+        assert_eq!(palette_trigger_at(&lay, ghost), None);
+        let mut fresh = PaletteHover::new();
+        assert_eq!(fresh.update_at(&lay, ghost, t0), None);
+        assert_eq!(
+            fresh.update_at(&lay, ghost, t0 + Duration::from_secs(5)),
+            None,
+            "пустая область колонки не открывает выпадашку"
+        );
+        // Колонки перекрываются по x (ROW_W > шаг кнопок): пока открыта
+        // группа 0, курсор в зоне её колонки удерживает ИМЕННО её —
+        // переключения на группу 1 от «пустой» области не происходит
+        hover.open = Some(0);
+        assert_eq!(
+            hover.update_at(&lay, ghost, t0 + Duration::from_millis(250)),
+            Some(0),
+            "зона удержания открытой группы не переключает группу"
+        );
+    }
+
+    /// Удержание открытой зоны: колонка и бар держат открытие, уход —
+    /// закрытие с отсрочкой PALETTE_CLOSE_DELAY.
+    #[test]
+    fn hover_stays_in_open_zone_and_closes_with_delay() {
+        let (_, lay) = laid_out_palette();
+        let mut hover = PaletteHover::new();
+        hover.open = Some(0);
+        let t0 = Instant::now();
+        // Курсор в колонке раскрытой группы — держится сколько угодно
+        let row = lay.groups[0].rows[0];
+        let in_col = [row[0] + 2.0, row[1] + 2.0];
+        assert_eq!(hover.update_at(&lay, in_col, t0), Some(0));
+        assert_eq!(
+            hover.update_at(&lay, in_col, t0 + Duration::from_secs(10)),
+            Some(0)
+        );
+        // Ушёл с палитры — открытие переживает отсрочку
+        let far = [1100.0, 700.0];
+        assert_eq!(
+            hover.update_at(&lay, far, t0 + Duration::from_secs(10)),
+            Some(0)
+        );
+        assert!(hover.pending());
+        assert_eq!(
+            hover.update_at(
+                &lay,
+                far,
+                t0 + Duration::from_secs(10) + Duration::from_millis(200)
+            ),
+            Some(0)
+        );
+        // ...и закрывается после PALETTE_CLOSE_DELAY
+        assert_eq!(
+            hover.update_at(&lay, far, t0 + Duration::from_secs(10) + Duration::from_millis(350)),
+            None
+        );
+        assert!(!hover.pending());
+    }
+
+    /// Переключение групп — с той же hover-intent задержкой (провод через
+    /// соседние кнопки не мигает промежуточными колонками).
+    #[test]
+    fn hover_switches_groups_with_delay() {
+        let (_, lay) = laid_out_palette();
+        assert!(lay.groups.len() >= 2, "нужны минимум две группы");
+        let mut hover = PaletteHover::new();
+        hover.open = Some(0);
+        let t0 = Instant::now();
+        let btn1 = [
+            lay.groups[1].button[0] + PAL_BUTTON / 2.0,
+            lay.groups[1].button[1] + PAL_BUTTON / 2.0,
+        ];
+        // Сразу после входа на соседний триггер — ещё открыта прежняя
+        assert_eq!(hover.update_at(&lay, btn1, t0), Some(0));
+        // После задержки — переключение
+        assert_eq!(
+            hover.update_at(&lay, btn1, t0 + Duration::from_millis(200)),
+            Some(1)
+        );
+    }
+
+    /// Пин по клику (WAI-ARIA menu button): toggle_trigger открывает без
+    /// задержки и закрывает повторным кликом; сброс по reset.
+    #[test]
+    fn toggle_trigger_pins_and_resets() {
+        let (_, lay) = laid_out_palette();
+        let mut hover = PaletteHover::new();
+        let t0 = Instant::now();
+        let btn = [
+            lay.groups[0].button[0] + PAL_BUTTON / 2.0,
+            lay.groups[0].button[1] + PAL_BUTTON / 2.0,
+        ];
+        // Клик — мгновенное открытие (без hover-задержки)
+        hover.toggle_trigger(0);
+        assert_eq!(hover.update_at(&lay, btn, t0), Some(0));
+        // Повторный клик — закрытие
+        hover.toggle_trigger(0);
+        assert_eq!(hover.open, None);
+        // Stale-guard: индекс вне диапазона геометрии — сброс
+        hover.toggle_trigger(9);
+        assert_eq!(hover.open, Some(9));
+        assert_eq!(
+            hover.update_at(&lay, btn, t0),
+            None,
+            "вне диапазона — сброс"
+        );
     }
 
     /// Колонка, не помещающаяся под баром, раскрывается над ним.
