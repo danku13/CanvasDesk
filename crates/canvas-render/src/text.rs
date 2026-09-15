@@ -1,6 +1,11 @@
 //! Текст на канвасе через glyphon (T4): один TextAtlas на сцену.
 //!
-//! Шрифт Inter (OFL) встроен в бинарь из `assets/fonts` — кириллица поддерживается.
+//! Шрифты (SIL OFL 1.1) встроены в бинарь из `assets/fonts` — кириллица
+//! поддерживается (CR-009): Noto Sans Display — Medium 500 (базовый текст) и
+//! Bold 700 (акценты), Noto Sans Mono — Numi-строки, результаты и код-фенсы.
+//! Семейства задаются ЯВНО (Family::Name) — дефолтный Family::Sans в
+//! cosmic-text резолвится в отсутствующий «Fira Sans» и текст рендерился
+//! системным fallback'ом, а не встроенным шрифтом.
 //!
 //! Производительность (T5): Buffer'ы заголовков кэшируются по ноде — шейпинг
 //! (самая дорогая операция) повторяется только при смене текста, зума или ширины.
@@ -22,8 +27,37 @@ use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
 use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
 
-/// Встроенный шрифт (assets/fonts/Inter.ttf, SIL OFL — см. assets/fonts/OFL.txt).
-const FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter.ttf");
+/// Встроенные шрифты (SIL OFL 1.1 — см. assets/fonts/OFL-NotoSans*.txt).
+/// СТАТИЧЕСКИЕ инстансы (CR-009): cosmic-text 0.12 не инстанцирует вариации
+/// вариативных шрифтов (сваш рендерит дефолт-инстанс), поэтому веса 500/700
+/// обязаны быть отдельными файлами: fontdb выбирает лицо по весу из OS/2.
+const FONT_DATA: &[&[u8]] = &[
+    include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSansDisplay-Bold.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSansMono-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSansMono-Bold.ttf"),
+];
+
+/// Семейство базового текста канваса (CR-009): Noto Sans Display.
+pub(crate) const SANS_FAMILY: &str = "Noto Sans Display";
+/// Семейство Numi-строк, результатов и код-фенсов (CR-009): Noto Sans Mono.
+pub(crate) const MONO_FAMILY: &str = "Noto Sans Mono";
+
+/// Базовые атрибуты текста канваса (CR-009): Noto Sans Display Medium 500.
+/// Явное Family::Name — иначе Family::Sans уходит в несуществующий «Fira Sans»
+/// и рендерится системным fallback'ом (встроенный шрифт не используется).
+pub(crate) fn sans_attrs() -> Attrs<'static> {
+    Attrs::new()
+        .family(Family::Name(SANS_FAMILY))
+        .weight(Weight::MEDIUM)
+}
+
+/// Атрибуты Numi-строк, результатов и код-фенсов (CR-009): Noto Sans Mono
+/// Regular 400. Жирные спаны внутри моно-блоков получают Weight::BOLD —
+/// шрифт остаётся моно (вшито лицо Bold 700).
+pub(crate) fn mono_attrs() -> Attrs<'static> {
+    Attrs::new().family(Family::Name(MONO_FAMILY))
+}
 
 /// Размер заголовка в world-px (масштабируется зумом).
 const TITLE_FONT_SIZE: f32 = 13.0;
@@ -481,7 +515,9 @@ fn push_gfm_blocks(
                         line_height: BODY_LINE_HEIGHT,
                         color: theme.body,
                         indent: 0.0,
-                        mono: false,
+                        // CR-009: сегмент формульной строки (source_line) —
+                        // Numi-расчёт: моноширинное начертание. Проза — sans.
+                        mono: source_line.is_some(),
                         bold: false,
                         deco: ItemDeco::None,
                         source_line,
@@ -681,10 +717,14 @@ fn shape_body(
             continue;
         }
         let block_width = (body_width - item.indent).max(0.0);
-        let mut base = Attrs::new();
-        if item.mono {
-            base = base.family(Family::Monospace);
-        }
+        // CR-009: базис посемейственно — Noto Sans Mono (Numi-строки, фенсы)
+        // или Noto Sans Display Medium (прочее); жирные GFM-заголовки —
+        // Weight::BOLD (700) того же семейства.
+        let mut base = if item.mono {
+            mono_attrs()
+        } else {
+            sans_attrs()
+        };
         if item.bold {
             base = base.weight(Weight::BOLD);
         }
@@ -1032,7 +1072,9 @@ impl TextSystem {
     /// Создать текстовую систему под формат surface (тёмная тема по умолчанию).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
-        font_system.db_mut().load_font_data(FONT_DATA.to_vec());
+        for data in FONT_DATA {
+            font_system.db_mut().load_font_data((*data).to_vec());
+        }
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
@@ -1073,7 +1115,7 @@ impl TextSystem {
         );
         buffer.set_wrap(&mut self.font_system, Wrap::None);
         buffer.set_size(&mut self.font_system, None, Some(line_height));
-        buffer.set_text(&mut self.font_system, text, Attrs::new(), Shaping::Advanced);
+        buffer.set_text(&mut self.font_system, text, sans_attrs(), Shaping::Advanced);
         buffer.shape_until_scroll(&mut self.font_system, false);
         let width = buffer
             .layout_runs()
@@ -1281,7 +1323,7 @@ impl TextSystem {
                     title.set_text(
                         &mut self.font_system,
                         &title_text,
-                        Attrs::new(),
+                        sans_attrs(),
                         Shaping::Advanced,
                     );
                     title.shape_until_scroll(&mut self.font_system, false);
@@ -1300,7 +1342,7 @@ impl TextSystem {
                         icon.set_text(
                             &mut self.font_system,
                             &letter,
-                            Attrs::new(),
+                            sans_attrs(),
                             Shaping::Advanced,
                         );
                         icon.shape_until_scroll(&mut self.font_system, false);
@@ -1344,7 +1386,7 @@ impl TextSystem {
                         buffer.set_text(
                             &mut self.font_system,
                             &result_text,
-                            Attrs::new(),
+                            mono_attrs(),
                             Shaping::Advanced,
                         );
                         buffer.shape_until_scroll(&mut self.font_system, false);
@@ -1394,7 +1436,7 @@ impl TextSystem {
                                     buffer.set_text(
                                         &mut self.font_system,
                                         &text,
-                                        Attrs::new(),
+                                        mono_attrs(),
                                         Shaping::Advanced,
                                     );
                                     buffer.shape_until_scroll(&mut self.font_system, false);
@@ -1472,7 +1514,7 @@ impl TextSystem {
                     Buffer::new(font_system, Metrics::new(HUD_FONT_SIZE, HUD_LINE_HEIGHT));
                 buffer.set_wrap(font_system, Wrap::None);
                 buffer.set_size(font_system, Some(width), Some(HUD_LINE_HEIGHT));
-                buffer.set_text(font_system, hud, Attrs::new(), Shaping::Advanced);
+                buffer.set_text(font_system, hud, sans_attrs(), Shaping::Advanced);
                 buffer.shape_until_scroll(font_system, false);
                 buffer
             };
@@ -1528,7 +1570,7 @@ impl TextSystem {
             buffer.set_text(
                 &mut self.font_system,
                 overlay.text,
-                Attrs::new(),
+                sans_attrs(),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut self.font_system, false);
@@ -1551,7 +1593,7 @@ impl TextSystem {
             buffer.set_text(
                 &mut self.font_system,
                 st.text,
-                Attrs::new(),
+                sans_attrs(),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut self.font_system, false);
@@ -1581,7 +1623,7 @@ impl TextSystem {
                 Some(BADGE_FONT_SIZE * 2.0),
                 Some(BADGE_LINE_HEIGHT),
             );
-            buffer.set_text(&mut self.font_system, "=", Attrs::new(), Shaping::Advanced);
+            buffer.set_text(&mut self.font_system, "=", mono_attrs(), Shaping::Advanced);
             buffer.shape_until_scroll(&mut self.font_system, false);
             badge_buffer = Some(buffer);
         }
@@ -1617,7 +1659,7 @@ impl TextSystem {
                         buffer.set_text(
                             &mut self.font_system,
                             &text,
-                            Attrs::new(),
+                            mono_attrs(),
                             Shaping::Advanced,
                         );
                         buffer.shape_until_scroll(&mut self.font_system, false);
@@ -2456,6 +2498,83 @@ mod tests {
             layout.blocks[1].offset[1] < layout.blocks[2].offset[1],
             "ряды формульных строк идут сверху вниз"
         );
+    }
+
+    // --- CR-009: шрифтовая пара Noto Sans Display / Noto Sans Mono ---
+
+    /// CR-009: FONT_DATA регистрирует лица нужных весов — Noto Sans Display
+    /// 500/700 и Noto Sans Mono 400/700 (статические инстансы: cosmic-text
+    /// 0.12 не инстанцирует вариации вариативных шрифтов).
+    #[test]
+    fn font_data_registers_noto_faces() {
+        let mut fs = FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        for (family, weight) in [
+            (SANS_FAMILY, 500u16),
+            (SANS_FAMILY, 700),
+            (MONO_FAMILY, 400),
+            (MONO_FAMILY, 700),
+        ] {
+            assert!(
+                fs.db().faces().any(|face| {
+                    face.families.iter().any(|(name, _)| name == family) && face.weight.0 == weight
+                }),
+                "нет вшитого лица {family} w{weight}"
+            );
+        }
+    }
+
+    /// CR-009: базовые атрибуты — sans = Noto Sans Display Medium 500,
+    /// mono = Noto Sans Mono (Regular 400). Явное Family::Name: дефолтный
+    /// Family::Sans резолвился в отсутствующий «Fira Sans» и текст уходил
+    /// системному fallback'у.
+    #[test]
+    fn base_attrs_pin_noto_families() {
+        let sans = sans_attrs();
+        assert_eq!(sans.family, Family::Name(SANS_FAMILY));
+        assert_eq!(sans.weight, Weight::MEDIUM);
+        let mono = mono_attrs();
+        assert_eq!(mono.family, Family::Name(MONO_FAMILY));
+        assert_eq!(mono.weight, Weight::NORMAL);
+    }
+
+    /// CR-009: формульная строка (source_line) — Numi-расчёт → mono; проза — sans.
+    #[test]
+    fn body_items_formula_line_is_mono() {
+        let theme = ThemeColors::dark();
+        let items = body_items(&theme, "Gateway\ndeploy = 40 $", &[1]);
+        assert_eq!(items.len(), 2, "проза + формульная строка");
+        assert!(!items[0].mono, "проза — sans");
+        assert!(items[1].mono, "Numi-строка — моно");
+        assert_eq!(items[1].source_line, Some(1));
+    }
+
+    /// CR-009: атрибуты строк буферов тела — Numi-строка Noto Sans Mono,
+    /// проза Noto Sans Display Medium, GFM-заголовок Bold 700 того же
+    /// семейства (family сохраняется, вес — от базы блока).
+    #[test]
+    fn shape_body_fonts_by_line_kind() {
+        let mut fs = FontSystem::new();
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            "# План\nпросто текст\ndeploy = 40 $",
+            300.0,
+            1.0,
+            &[2],
+        );
+        assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
+        let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
+        assert_eq!(head.family, Family::Name(SANS_FAMILY), "заголовок — sans");
+        assert_eq!(head.weight, Weight::BOLD, "заголовок — bold 700");
+        let prose = layout.blocks[1].buffer.lines[0].attrs_list().defaults();
+        assert_eq!(prose.family, Family::Name(SANS_FAMILY), "проза — sans");
+        assert_eq!(prose.weight, Weight::MEDIUM, "проза — medium 500");
+        let mono = layout.blocks[2].buffer.lines[0].attrs_list().defaults();
+        assert_eq!(mono.family, Family::Name(MONO_FAMILY), "формула — mono");
+        assert_eq!(mono.weight, Weight::NORMAL, "формула — regular 400");
     }
 
     /// Обычный текст — один блок Paragraph с метриками тела 14/20, offset [0,0].

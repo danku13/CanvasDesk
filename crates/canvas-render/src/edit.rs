@@ -11,6 +11,7 @@
 //! Координаты клика/каретки/выделения — в пикселях буфера редактора
 //! (физические px относительно левого верхнего угла области редактирования).
 
+use canvas_core::expr;
 use canvas_core::{edge_midpoint, Canvas};
 use cosmic_text::{
     Action, AttrsList, Buffer, BufferLine, Cursor, Edit, Editor, FontSystem, LineEnding, Metrics,
@@ -20,7 +21,9 @@ use glyphon::{Attrs, Shaping, Wrap};
 use winit::keyboard::{Key, NamedKey};
 
 use crate::markdown::{self, StyleFlag, StyleSpan};
-use crate::text::{body_area, rich_spans, BODY_FONT_SIZE, BODY_LINE_HEIGHT};
+use crate::text::{
+    body_area, mono_attrs, rich_spans, sans_attrs, BODY_FONT_SIZE, BODY_LINE_HEIGHT,
+};
 
 /// Восстановить хвостовые пустые строки буфера после `set_rich_text`:
 /// cosmic-text дробит текст через BidiParagraphs (параграфы UAX#9) и
@@ -58,6 +61,62 @@ pub enum Marker {
     Italic,
     /// `==подсветка==` (Ctrl+H).
     Highlight,
+}
+
+/// CR-009: индексы строк, распознанных как Numi-расчёт — `eval_lines` дал
+/// строке результат (Ok, или Err с видимой диагностикой — правила показа
+/// те же, что у результатов на карточке FR-013). Проза/фенсы/пустые строки
+/// в список не попадают. Список отсортирован по возрастанию.
+fn formula_line_indices(plain: &str) -> Vec<usize> {
+    expr::eval_lines(plain)
+        .iter()
+        .enumerate()
+        .filter_map(|(i, outcome)| outcome.as_ref().map(|_| i))
+        .collect()
+}
+
+/// CR-009: rich-спаны буфера редактора с посемейственным базисом:
+/// Numi-строка (есть в `formula_lines`) — Noto Sans Mono, прочие строки —
+/// Noto Sans Display Medium; жирный/курсив внутри строки наследуют
+/// семейство строки (family базы rich_spans). Спаны inline-разметки не
+/// пересекают границы строк — на каждую строку берётся пересечение.
+/// Разделители `\n` отдаются базе СЛЕДУЮЩЕЙ строки (перевод строки глифа
+/// не имеет — атрибут не виден).
+fn editor_rich<'a>(
+    plain: &'a str,
+    spans: &[StyleSpan],
+    formula_lines: &[usize],
+) -> Vec<(&'a str, Attrs<'static>)> {
+    let lines: Vec<&str> = plain.split('\n').collect();
+    let mut out: Vec<(&'a str, Attrs<'static>)> = Vec::new();
+    let mut offset = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        let base = if formula_lines.binary_search(&i).is_ok() {
+            mono_attrs()
+        } else {
+            sans_attrs()
+        };
+        let start = offset;
+        let end = offset + line.len();
+        let line_spans: Vec<StyleSpan> = spans
+            .iter()
+            .filter(|span| span.start < end && span.end > start)
+            .map(|span| StyleSpan {
+                start: span.start.max(start) - start,
+                end: span.end.min(end) - start,
+                ..*span
+            })
+            .collect();
+        out.extend(rich_spans(line, &line_spans, base));
+        if i + 1 < lines.len() {
+            out.push(("\n", base));
+        }
+        offset = end + 1;
+    }
+    if out.is_empty() {
+        out.push(("", sans_attrs()));
+    }
+    out
 }
 
 impl Marker {
@@ -335,10 +394,17 @@ impl EditingSession {
         // влезающее в карточку, рвётся по глифам, а не уходит за край
         buffer.set_wrap(font_system, Wrap::WordOrGlyph);
         buffer.set_size(font_system, Some(width_px), Some(height_px));
+        // CR-009: базис посемейственно — Numi-строки моноширинные (для
+        // лейблов связей mono не применяется), прочее — sans medium.
+        let formula_lines = if matches!(target, EditTarget::Node(_)) {
+            formula_line_indices(&plain)
+        } else {
+            Vec::new()
+        };
         buffer.set_rich_text(
             font_system,
-            rich_spans(&plain, &spans, Attrs::new()),
-            Attrs::new(),
+            editor_rich(&plain, &spans, &formula_lines),
+            sans_attrs(),
             Shaping::Advanced,
         );
         let last_line = buffer.lines.len().saturating_sub(1);
@@ -460,11 +526,21 @@ impl EditingSession {
     }
 
     /// Обновить rich-атрибуты буфера по текущим спанам (текст не меняется —
-    /// курсор (строка, индекс) остаётся валидным).
+    /// курсор (строка, индекс) остаётся валидным). CR-009: Numi-строки —
+    /// моноширинное семейство, прочие — sans medium; пересчёт по каждой
+    /// правке (eval_lines дешёв, тексты нод малы).
     fn refresh_styles(&mut self, font_system: &mut FontSystem) {
-        let attrs = rich_spans(&self.plain, &self.spans, Attrs::new());
-        self.buffer
-            .set_rich_text(font_system, attrs, Attrs::new(), Shaping::Advanced);
+        let formula_lines = if self.node_index().is_some() {
+            formula_line_indices(&self.plain)
+        } else {
+            Vec::new()
+        };
+        self.buffer.set_rich_text(
+            font_system,
+            editor_rich(&self.plain, &self.spans, &formula_lines),
+            sans_attrs(),
+            Shaping::Advanced,
+        );
         // set_rich_text теряет хвостовые пустые строки (BidiParagraphs) —
         // восстановить число линий и валидность курсора/выделения (регресс:
         // паника delete_range при удалении всех строк ноды)
@@ -733,7 +809,9 @@ impl EditingSessionScratch<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::{MONO_FAMILY, SANS_FAMILY};
     use canvas_core::{Edge, Node, Side};
+    use glyphon::{Family, FamilyOwned, Weight};
 
     fn session(text: &str) -> (FontSystem, EditingSession) {
         let mut font_system = FontSystem::new();
@@ -822,6 +900,64 @@ mod tests {
             w <= 300.0 + 0.5,
             "длинное слово не шире области редактирования: {w}"
         );
+    }
+
+    // --- CR-009: посемейственные атрибуты редактора ---
+
+    /// editor_rich: склейка кусков возвращает исходный текст (сплошное
+    /// покрытие строк и разделителей — base заполняет только нулевые зазоры).
+    #[test]
+    fn editor_rich_covers_text() {
+        let (plain, spans) = markdown::parse("просто\n**x = 2**\nещё");
+        let rich = editor_rich(&plain, &spans, &[1]);
+        let joined: String = rich.iter().map(|(s, _)| *s).collect();
+        assert_eq!(joined, plain);
+    }
+
+    /// CR-009: Numi-строки в буфере редактора — Noto Sans Mono, проза —
+    /// Noto Sans Display Medium; bold-спан внутри Numi-строки остаётся
+    /// моно (Noto Sans Mono Bold). WYSIWYG: буфер редактора совпадает по
+    /// шрифтам с отрисованным телом карточки. Эффективные атрибуты читаем
+    /// через get_span: set_rich_text держит defaults линий = базе вызова
+    /// (sans), моно доносится спанами, покрывающими строку целиком.
+    #[test]
+    fn editor_formula_lines_use_mono() {
+        let (_fs, session) = session("просто текст\ndeploy = 40 $\n**x = 2**");
+        // Перешейп после вставки уже прошёл; проверяем атрибуты линий буфера
+        assert_eq!(session.buffer.lines.len(), 3);
+        let a0 = session.buffer.lines[0].attrs_list().get_span(0);
+        let a1 = session.buffer.lines[1].attrs_list().get_span(0);
+        let a2 = session.buffer.lines[2].attrs_list().get_span(0);
+        assert_eq!(a0.family, Family::Name(SANS_FAMILY), "проза — sans");
+        assert_eq!(a0.weight, Weight::MEDIUM, "проза — medium 500");
+        assert_eq!(a1.family, Family::Name(MONO_FAMILY), "Numi-строка — mono");
+        assert_eq!(a2.family, Family::Name(MONO_FAMILY), "bold-формула — mono");
+        // Bold-спан строки 2: Noto Sans Mono + Weight::BOLD
+        let spans2 = session.buffer.lines[2].attrs_list().spans();
+        assert!(
+            spans2.iter().any(|(_, attrs)| attrs.weight == Weight::BOLD
+                && attrs.family_owned == FamilyOwned::new(Family::Name(MONO_FAMILY))),
+            "bold внутри Numi-строки — Noto Sans Mono Bold: {spans2:?}"
+        );
+    }
+
+    /// CR-009: лейбл связи (EditTarget::Edge) не моноширинится, даже если
+    /// текст лейбла сам по себе парсится как величина («100 rps»).
+    #[test]
+    fn editor_edge_label_keeps_sans() {
+        let mut fs = FontSystem::new();
+        let session =
+            EditingSession::new(&mut fs, EditTarget::Edge(0), "100 rps", 300.0, 60.0, 1.0);
+        let a0 = session.buffer.lines[0].attrs_list().get_span(0);
+        assert_eq!(a0.family, Family::Name(SANS_FAMILY), "лейбл связи — sans");
+        assert_eq!(a0.weight, Weight::MEDIUM);
+    }
+
+    /// formula_line_indices: расчёты распознаны, проза и пустые строки — нет.
+    #[test]
+    fn formula_line_indices_select_calcs() {
+        let indices = formula_line_indices("просто текст\nrps = 1000\n\nитог = 1.5 sec");
+        assert_eq!(indices, vec![1, 3], "только строки с результатом");
     }
 
     /// Backspace/Delete со/без выделения.

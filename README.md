@@ -117,6 +117,13 @@ args = `["mcp"]`); при недоступном pipe посредник сам 
 Rust (edition 2021) · winit 0.30 · wgpu 22 · glyphon/cosmic-text · rstar ·
 serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 
+## Шрифты
+
+Встроены в бинарь (SIL Open Font License 1.1, `assets/fonts/OFL-NotoSans*.txt`):
+**Noto Sans Display** — Medium 500 (базовый текст) и Bold 700 (акценты),
+**Noto Sans Mono** — Numi-расчёты, результаты и код-фенсы (CR-009,
+[docs/change-requests/cr-009-noto-font-pairing.md](docs/change-requests/cr-009-noto-font-pairing.md)).
+
 ## Дорожная карта
 
 - [x] **M1** (T0–T6) — ядро: окно, камера, модель `.canvas`, карточки, culling, тамбнейлы ✅
