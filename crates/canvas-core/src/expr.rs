@@ -36,6 +36,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
+mod queueing;
+
 /// Результат вычисления формулы ноды — runtime-состояние приложения
 /// (инвариант 4 FR-013: НЕ сериализуется в `.canvas`, пересчитывается
 /// из формулы при загрузке/правке/undo).
@@ -435,7 +437,9 @@ pub struct ParseError {
 }
 
 /// Ошибка вычисления формулы.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+// Eq снят (FR-015): Overload { rho: f64 } — f64 не реализует Eq;
+// PartialEq (assert_eq! в тестах) сохранён.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EvalError {
     #[error("единицы не совместимы: {lhs} и {rhs}")]
     UnitMismatch { lhs: String, rhs: String },
@@ -459,6 +463,12 @@ pub enum EvalError {
     /// рендере ошибки парсинга ловятся до eval; в графе — часть downstream).
     #[error("{0}")]
     BadFormula(String),
+    /// FR-015: перегрузка системы массового обслуживания — коэффициент
+    /// использования ρ ≥ 1, очередь аналитически не ограничена. Красная
+    /// строка диагностики на карточке (что и требовалось: ρ > 1 — узкое
+    /// место ландшафта, а не тихий неверный расчёт).
+    #[error("перегрузка: ρ = {} ≥ 1 — очередь растёт неограниченно", format_num(*rho))]
+    Overload { rho: f64 },
 }
 
 // --- Лексер ---
@@ -1376,6 +1386,10 @@ fn eval_call(func: &str, args: &[Expr], env: &Env) -> Result<Value, EvalError> {
         "max" => extremes("max", &values, |a, b| a > b),
         "min" => extremes("min", &values, |a, b| a < b),
         "percentile" => eval_percentile(&values),
+        // FR-015: доменные функции теории очередей (чистые, см. queueing.rs)
+        "utilization" | "mm1" | "mmc" | "littles_law" | "erlang_c" => {
+            queueing::dispatch(func, &values)
+        }
         other => Err(EvalError::UnknownFunction(other.to_owned())),
     }
 }
