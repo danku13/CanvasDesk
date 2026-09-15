@@ -11,9 +11,11 @@
 //!   не входят;
 //! - граф value-рёбер обязан быть DAG — цикл это [`CycleError`] со списком
 //!   участников (SCC-поиск поверх алгоритма Кана);
-//! - в пересчёте участвуют ноды с `canvasdesk.expr` (FR-013): значение ноды
-//!   — результат её формулы в окружении со входами (`$in`, `$1..$N`);
-//!   нода без формулы значения не даёт — вход для downstream «отсутствует»;
+//! - в пересчёте участвуют формульные ноды: явная формула `canvasdesk.expr`
+//!   (FR-013, MCP) ИЛИ текст заметки в Numi-стиле — значение text-ноды =
+//!   последняя формульная строка (семантика итога FR-013); проза значения
+//!   не даёт — вход для downstream «отсутствует»;
+//! - значение ноды считается в окружении со входами (`$in`, `$1..$N`);
 //! - входящие value-рёбра ноды нумеруются в порядке `canvas.edges`:
 //!   `$1` — первое, `$N` — N-е; `$in` требует ровно одно входящее ребро;
 //! - `overrides` (what-if, FR-017): подменённое значение ноды используется
@@ -23,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::expr::{self, Env, EvalError, Value};
+use crate::expr::{self, Env, EvalError, ExprOutcome, Value};
 use crate::model::Canvas;
 
 /// Тип потока ребра (FR-014): контрольная связь (по умолчанию — обратная
@@ -228,18 +230,34 @@ pub fn propagate(
             outputs.insert(id.clone(), Ok(value.clone()));
             continue;
         }
-        let Some(formula) = node.expr() else {
-            continue; // не формульная нода — значения нет
-        };
         let slots = inbound_slots(canvas, id, &outputs);
         let env = if slots.is_empty() {
             Env::empty()
         } else {
             Env::with_inbound(slots)
         };
-        let outcome = expr::parse(formula)
-            .map_err(|err| EvalError::BadFormula(err.to_string()))
-            .and_then(|parsed| expr::eval(&parsed, &env));
+        // Значение ноды: явная формула `canvasdesk.expr` (MCP) или — для
+        // обычных заметок — последняя формульная строка Numi-листа (FR-013:
+        // «итог заметки — последняя формульная строка»; живой UI-путь:
+        // пользователь пишет «1200 + 480» в заметке и тянет value-ребро).
+        // Проза/пустой текст значения не дают — нода не участвует в потоке.
+        let outcome = match node.expr() {
+            Some(formula) => expr::parse(formula)
+                .map_err(|err| EvalError::BadFormula(err.to_string()))
+                .and_then(|parsed| expr::eval(&parsed, &env)),
+            None => {
+                let text = node.text.clone().unwrap_or_default();
+                let last = expr::eval_lines_in(&text, &env)
+                    .into_iter()
+                    .flatten()
+                    .last();
+                match last {
+                    Some(ExprOutcome::Ok(value)) => Ok(value),
+                    Some(ExprOutcome::Err(msg)) => Err(EvalError::BadFormula(msg)),
+                    None => continue,
+                }
+            }
+        };
         outputs.insert(id.clone(), outcome);
     }
     Ok(outputs)
@@ -544,6 +562,64 @@ mod tests {
             outputs["B"],
             Err(EvalError::MissingInbound { index: 0 })
         ));
+    }
+
+    /// Живой UI-путь FR-014: заметки с Numi-формулами в тексте (без
+    /// `canvasdesk.expr`) участвуют в потоке — итог = последняя строка.
+    #[test]
+    fn propagate_text_source_line_formula() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("A", "1200 + 480", 0.0, 0.0));
+        canvas.nodes.push(Node::text("B", "$in / 3", 0.0, 1.0));
+        value_edge(&mut canvas, "e1", "A", "B");
+        let outputs = propagate(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(outputs["A"].as_ref().unwrap(), &Value::scalar(1680.0));
+        assert_eq!(outputs["B"].as_ref().unwrap(), &Value::scalar(560.0));
+    }
+
+    /// Многострочный текст: проза не считается, итог — последняя строка.
+    #[test]
+    fn propagate_text_last_formula_line_is_value() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("A", "смета:\n100\n200 × 2", 0.0, 0.0));
+        canvas.nodes.push(Node::text("B", "$in - 30", 0.0, 1.0));
+        value_edge(&mut canvas, "e1", "A", "B");
+        let outputs = propagate(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(outputs["A"].as_ref().unwrap(), &Value::scalar(400.0));
+        assert_eq!(outputs["B"].as_ref().unwrap(), &Value::scalar(370.0));
+    }
+
+    /// Ошибка построчной формулы источника — downstream видит «вход
+    /// отсутствует» (ошибочный слот), а не значение. Построчные ошибки
+    /// обоих нод приходят обёрнутыми в BadFormula (единый вариант графа).
+    #[test]
+    fn propagate_text_error_breaks_downstream() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("A", "1 / 0", 0.0, 0.0));
+        canvas.nodes.push(Node::text("B", "$in × 2", 0.0, 1.0));
+        value_edge(&mut canvas, "e1", "A", "B");
+        let outputs = propagate(&canvas, &HashMap::new()).expect("DAG");
+        assert!(matches!(
+            outputs["A"],
+            Err(EvalError::BadFormula(ref msg)) if msg.contains("деление на ноль")
+        ));
+        assert!(matches!(
+            outputs["B"],
+            Err(EvalError::BadFormula(ref msg)) if msg.contains("вход отсутствует")
+        ));
+    }
+
+    /// Явная формула `canvasdesk.expr` приоритетнее текста (совместимость).
+    #[test]
+    fn propagate_explicit_expr_beats_text() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("A", "1200 + 480", 0.0, 0.0);
+        a.set_expr(Some("7".to_owned()));
+        canvas.nodes.push(a);
+        let outputs = propagate(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(outputs["A"].as_ref().unwrap(), &Value::scalar(7.0));
     }
 
     /// Ошибка формулы источника → downstream «вход отсутствует», остальной
