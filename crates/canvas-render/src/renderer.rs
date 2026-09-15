@@ -1,5 +1,6 @@
 //! Оконный рендер: surface, конфигурация, сетка поверх clear-прохода (T1, T2).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -7,7 +8,7 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
-use canvas_core::{edge_midpoint, Canvas, NodeKind, Side, SpatialIndex, Thumbnail};
+use canvas_core::{edge_midpoint, Canvas, FlowKind, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
@@ -561,6 +562,26 @@ impl Renderer {
         // лейбл выделенной связи остаётся полной яркости.
         let mut edge_labels: Vec<EdgeLabel> = Vec::new();
         let mut label_backdrops: Vec<CardInstance> = Vec::new();
+        // FR-014: составленные тексты value-лейблов (значение источника;
+        // пользовательский label — перед значением) — отдельная карта,
+        // чтобы лейбл-цикл заимствовал без конфликтов мутации. Ошибка
+        // источника не рисуется (красная диагностика — на карточке ноды).
+        let mut flow_texts: HashMap<&str, String> = HashMap::new();
+        if titles_visible(zoom_px) {
+            for edge in scene.canvas.edges.iter() {
+                if edge.flow_kind() != FlowKind::Value {
+                    continue;
+                }
+                let Some(ExprOutcome::Ok(value)) = scene.expr_results.get(&edge.from_node) else {
+                    continue;
+                };
+                let composed = match edge.label.as_deref().filter(|text| !text.is_empty()) {
+                    Some(label) => format!("{label} · {value}"),
+                    None => value.to_string(),
+                };
+                flow_texts.insert(edge.id.as_str(), composed);
+            }
+        }
         if titles_visible(zoom_px) {
             for (index, edge) in scene.canvas.edges.iter().enumerate() {
                 if editing_edge == Some(index) || scene.hidden_edge == Some(index) {
@@ -572,8 +593,14 @@ impl Renderer {
                 {
                     continue;
                 }
-                let Some(text) = edge.label.as_deref().filter(|text| !text.is_empty()) else {
-                    continue;
+                // FR-014: у value-ребра — составленный текст со значением;
+                // у control — пользовательский label (как раньше)
+                let text: &str = match flow_texts.get(edge.id.as_str()) {
+                    Some(composed) => composed.as_str(),
+                    None => match edge.label.as_deref().filter(|text| !text.is_empty()) {
+                        Some(label) => label,
+                        None => continue,
+                    },
                 };
                 let Some(center) = edge_midpoint(scene.canvas, edge, scene.edges_avoid) else {
                     continue;

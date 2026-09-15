@@ -5,6 +5,8 @@ mod edgegeom;
 mod error;
 /// FR-013: Numi-base формулы text-нод (`canvasdesk.expr`).
 pub mod expr;
+/// FR-014: поток значений по рёбрам — DAG-движок и live-ревал.
+pub mod flow;
 mod focus;
 mod fs_events;
 mod io;
@@ -21,6 +23,13 @@ pub use edgegeom::{
     EdgeEnd, AVOID_MARGIN, EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
 };
 pub use error::CoreError;
+pub use expr::{
+    Env, EvalError, Expr, ExprLineResults, ExprOutcome, ExprResults, ParseError, Value,
+};
+pub use flow::{
+    creates_value_cycle, inbound_slots, outputs_display, propagate, topo_sort, value_path,
+    CycleError, FlowKind, FlowOutputs,
+};
 pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{
     apply_file_events, normalize_path, path_matches, relative_if_inside, resolve_node_path,

@@ -314,8 +314,14 @@ pub mod ui {
     /// Активный drag резиновой линии (T8 + CR-002): от порта ноды к курсору —
     /// новая связь; или перепривязка конца существующей связи.
     pub enum EdgeDrag {
-        /// Новая связь: тянем от порта `from_node` (T8).
-        New { from_node: String, from_side: Side },
+        /// Новая связь: тянем от порта `from_node` (T8). FR-014: `value_flow`
+        /// — Shift+drag создаёт value-ребро (поток значений); обычный drag —
+        /// контрольную связь (дефолт, обратная совместимость).
+        New {
+            from_node: String,
+            from_side: Side,
+            value_flow: bool,
+        },
         /// Перепривязка конца существующей связи (CR-002): тянем хэндл
         /// конца `end` связи `edge_index` к новой ноде — без удаления.
         Rebind {
@@ -334,6 +340,7 @@ pub mod ui {
                 EdgeDrag::New {
                     from_node,
                     from_side,
+                    ..
                 } => {
                     let node = canvas.node(from_node)?;
                     Some((port_point(node, *from_side), *from_side))
@@ -1265,10 +1272,11 @@ pub mod ui {
         #[test]
         fn edge_drag_draft_origin() {
             let canvas = rebind_canvas();
-            // Новая связь от right-порта a
+            // Новая связь от right-порта a (контрольная — дефолт drag)
             let drag = EdgeDrag::New {
                 from_node: "a".to_owned(),
                 from_side: Side::Right,
+                value_flow: false,
             };
             let (point, side) = drag.draft_origin(&canvas).expect("порт истока");
             assert_eq!(side, Side::Right);
@@ -1293,6 +1301,7 @@ pub mod ui {
             let drag = EdgeDrag::New {
                 from_node: "ghost".to_owned(),
                 from_side: Side::Right,
+                value_flow: true,
             };
             assert!(drag.draft_origin(&canvas).is_none());
             let drag = EdgeDrag::Rebind {

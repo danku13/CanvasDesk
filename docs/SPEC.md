@@ -105,6 +105,8 @@ canvasdesk/
 - `previewState`: `thumbnail | live | none` — последний уровень детализации ноды
 - `brokenLink: true` — файл недоступен, карточка сохраняется с серой рамкой
 - `type: "widget"` + объект `canvasdesk: { widgetId, props }` — виджет-нода (M5, §7.6); приложения, не знающие тип, пропускают такую ноду, файл остаётся валидным
+- `canvasdesk: { expr }` на text-ноде — Numi-формула calc-ноды (FR-013); результат вычисляется приложением и в файл не пишется (инвариант 4)
+- `canvasdesk: { flow: { kind: "value" | "control" } }` на связи — тип потока (FR-014). `value` — ребро переносит значение источника в `$in`/`$1..$N` формулы downstream; отсутствие поля и `control` — визуальная связь (дефолт, обратная совместимость). Граф value-рёбер — DAG: циклы блокируются при создании (диалог с фолбэком на control в UI, isError в MCP). Результаты пересчёта (live, propagator `canvas-core/src/flow.rs`) в файл не пишутся
 
 ### 5.2. SQLite (`~/.canvasdesk/cache.db`)
 

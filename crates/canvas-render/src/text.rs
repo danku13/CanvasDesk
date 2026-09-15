@@ -1194,18 +1194,25 @@ impl TextSystem {
                 } else {
                     node.text.clone().unwrap_or_default()
                 };
-                // FR-013: программный итог формулы (футер карточки) — только
-                // для MCP-expr без формульных строк в тексте (построчные
-                // результаты Numi-стиля вытесняют его, см. recompute_expr);
-                // единственный источник истины — expr_results
-                let (result_text, result_error) = match frame.expr_results.get(&node.id) {
-                    Some(ExprOutcome::Ok(value)) => (value.to_string(), false),
-                    Some(ExprOutcome::Err(msg)) => (msg.clone(), true),
-                    _ => (String::new(), false),
+                // FR-013: программный итог формулы (футер карточки).
+                // FR-014: expr_results — карта потока значений (пишется
+                // propagator'ом для всех формульных нод), поэтому правило
+                // показа — здесь: построчные результаты Numi-листа
+                // вытесняют программный итог; источник истины — expr_results
+                let line_outcomes = frame.expr_line_results.get(&node.id);
+                let has_line_results =
+                    line_outcomes.is_some_and(|lines| lines.iter().any(Option::is_some));
+                let (result_text, result_error) = if has_line_results {
+                    (String::new(), false)
+                } else {
+                    match frame.expr_results.get(&node.id) {
+                        Some(ExprOutcome::Ok(value)) => (value.to_string(), false),
+                        Some(ExprOutcome::Err(msg)) => (msg.clone(), true),
+                        _ => (String::new(), false),
+                    }
                 };
                 // FR-013 (правка 2): формульные строки текста (для сегментации
                 // тела) и сводка построчных результатов — ключ свежести кэша
-                let line_outcomes = frame.expr_line_results.get(&node.id);
                 let formula_lines: Vec<usize> = line_outcomes
                     .map(|lines| {
                         lines

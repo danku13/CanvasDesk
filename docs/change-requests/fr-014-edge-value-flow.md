@@ -1,13 +1,13 @@
 # FR-014: Поток значений по рёбрам + DAG-движок + live-ревал
 
-- **Статус:** выявлено
+- **Статус:** выполнено
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (анализ)
 - **Источник:** сообщение пользователя (сессия 2026-09-15): «возможность передавать финальное значение от ноды в следующую ноду. в следующей ноде принимать значение прошлой ноды и применять для следующего цикла вычислений». Уточнение владельца (2026-09-15): значение передаётся по рёбрам (edges); граф — DAG, циклы запрещены; пересчёт — live (как таблица); тестируемость — обязательный инвариант.
 - **Связанные задачи:** FR-013 (calc-нода и `expr`), FR-015 (доменные функции для расчёта downstream), FR-016 (анализ bottleneck по результатам FR-014), FR-017 (what-if использует propagator FR-014), FR-005 (MCP), FR-006 (undo), CR-002 (перепривязка рёбер), CR-003 (зона портов), SPEC.md §5.1 (edges), §8 (ввод)
 - **Создан:** 2026-09-15
-- **Обновлён:** 2026-09-15
+- **Обновлён:** 2026-09-15 (реализация)
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
 
 ---
@@ -77,14 +77,22 @@
 1. **`canvas-core/src/flow.rs`** — новый модуль (чистый Rust, без I/O):
    - `pub enum FlowKind { Control, Value }`
    - `pub fn topo_sort(canvas: &Canvas) -> Result<Vec<usize>, CycleError>`
-     (Kahn's algorithm; образец обхода — `focus.rs:56-97`).
-   - `pub fn propagate(canvas: &Canvas, env_overrides: &HashMap<String, Value>) -> HashMap<String, Value>`
-     — для каждой ноды в topo-порядке: собрать `Env::Inbound(values_of_inbound_value_edges)`,
-     вызвать `expr::eval`, сохранить результат. Возвращает карту
-     `node_id → Value` (это и есть `flow_results`).
+     (алгоритм Кана; участники цикла — SCC размера > 1 и петли, итеративный
+     Тарьян; образец обхода — `focus.rs:56-97`).
+   - `pub fn propagate(canvas: &Canvas, overrides: &HashMap<String, Value>) -> Result<FlowOutputs, CycleError>`
+     с `pub type FlowOutputs = HashMap<String, Result<Value, EvalError>>` —
+     для каждой ноды в topo-порядке: собрать слоты входящих value-рёбер,
+     вызвать `expr::eval`, сохранить результат. Сигнатура уточнена при
+     реализации по верификационному списку (ниже, «правка 1»): ошибка
+     вычисления одной ноды — запись `Err` в карте, не падение всего графа;
+     топ-уровень — только `CycleError`. `overrides` — what-if (FR-017):
+     подменённое значение замещает формулу ноды и виден downstream'у.
+   - `pub fn value_path(canvas, start, goal)` / `pub fn creates_value_cycle(canvas, from, to)`
+     — участники цикла при добавлении value-ребра (UI-диалог и MCP).
+   - `pub fn inbound_slots(canvas, node_id, outputs)` — слоты входов ноды
+     для построчных результатов листов (`eval_lines_in`).
    - `pub struct CycleError { pub nodes: Vec<String> /*участники цикла*/ }`
      — пользователю показывается список участников для отладки.
-   - `pub enum PropagateError { Cycle(CycleError), Eval(node_id, EvalError) }`
    - **Тестируемость:** чистые функции, детерминированные; на входе `Canvas`,
      на выходе — `HashMap` (или `Result`). 0 side-эффектов.
 
@@ -95,12 +103,17 @@
    - Round-trip: `extra` сохраняется,Obsidian видит неизвестное поле (как
      `Node.canvasdesk`).
 
-3. **`canvas-core/src/expr.rs`** — расширить `Env`:
-   - `pub enum Env { Local(HashMap<String, Value>), WithInbound { local: HashMap<String, Value>, inbound: Vec<Value> } }`
-   - В парсер: `$in` → `Expr::Inbound(0)` (синоним для `$1`); `$N` (N ≥ 1) →
-     `Expr::Inbound(N-1)`.
-   - `eval(Inbound(i), env) -> env.inbound[i].clone()`, либо
-     `Err(EvalError::MissingInbound { index: i })`.
+3. **`canvas-core/src/expr.rs`** — расширить `Env` (правка 1: полем
+   `inbound: Option<Vec<Option<Value>>>` вместо enum — вся существующая
+   работа с `Env` сохраняется, семантика по верификации та же;
+   `Env::with_inbound(slots)` — конструктор со входами):
+   - `$in` → `Expr::Inbound` (единственный вход; несколько —
+     `Err(AmbiguousInbound)`); целое `$N` (N ≥ 1) → `Expr::DollarAmount(N)` —
+     контекстное разрешение в eval: есть входы — ссылка на N-й вход,
+     нет — валюта (регрессия FR-013 `$5` = 5 долларов; для валюты в ноде
+     потока — `5 usd`). Дробные суммы (`$2.5`) и `$0` — всегда валюта.
+   - `eval` без входа — `Err(EvalError::MissingInbound { index })`;
+     слот «ребро есть, значения нет» — тоже `MissingInbound`.
 
 4. **`canvas-app/src/main.rs`**:
    - `SceneState` (`193`) — добавить `flow_results: HashMap<String, Value>`
@@ -236,6 +249,22 @@
   `topo_sort`, чистый `propagate`, DAG-инвариант с `CycleError`, round-trip
   `flow.kind`). Статус `выявлено`. Зависимости: FR-013 (calc-нода), FR-015
   (доменные функции), FR-017 (what-if использует propagator с overrides).
+- `2026-09-15` — агент: реализация (статус `выполнено`). Правка 1 (по
+  верификационному списку): `propagate` возвращает
+  `Result<FlowOutputs, CycleError>` с per-node `Result<Value, EvalError>`
+  (ошибка части downstream — не падение графа), `Env` расширен полем
+  `inbound` (не enum). Решения открытых вопросов: `$in` требует ровно одно
+  входящее value-ребро — иначе `AmbiguousInbound`; цикл value-рёбер в UI —
+  диалог с фолбэком на control-связь (Да/Нет), в MCP — isError; полный
+  пересчёт (v1), кэш/параллельность — v2. Валюта vs вход: целое `$N` при
+  наличии входов — ссылка на вход, без входов и дробные суммы — валюта
+  (`5 usd` — надёжная форма валюты в ноде потока). Live-ревал: propagator
+  запускается приложением после любой мутации формул/топологии
+  (`SceneState::recompute_flow`), построчные результаты Numi-листов
+  вычисляются со входами ноды (`eval_lines_in`); вытеснение футера
+  построчными результатами — правило рендера (text.rs). Edge-лейбл
+  value-ребра — значение источника (`label · 1000 rps`), цвет value-ребра —
+  бирюзовый (FLOW_EDGE_COLOR), явный цвет пользователя приоритетен.
 
 ## Источники истины (References)
 

@@ -273,6 +273,27 @@ const TOOLS: &[ToolSpec] = &[
         properties: &[("id", STR)],
     },
     ToolSpec {
+        name: "flow_set_kind",
+        description: "FR-014: тип потока связи — \"value\" (переносит значение источника в $in/$1..$N формулы downstream) или \"control\" (визуальная связь, дефолт). Тогл в value, замыкающий цикл, — ошибка с участниками; пересчёт потока — сразу",
+        required: &["id", "kind"],
+        properties: &[
+            ("id", STR),
+            ("kind", r#"{"type":"string","enum":["value","control"]}"#),
+        ],
+    },
+    ToolSpec {
+        name: "flow_recalc",
+        description: "FR-014: пересчитать весь граф потока значений; возвращает карту {node_id: {value, unit}} для формульных нод (ошибки — {error: текст}); downstream учитывает значения upstream",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "flow_cycle_check",
+        description: "FR-014: проверка DAG-инварианта value-рёбер: [] — циклов нет, иначе список id участников цикла",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
         name: "viewport_get",
         description: "Центр viewport в world-координатах и зум",
         required: &[],
@@ -330,7 +351,7 @@ fn not_running_message() -> String {
 ///   недоступен → JSON-RPC ошибка + `Exit(2)` (завершение делает bin);
 /// - `notifications/initialized` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 15 инструментов с inputSchema;
+/// - `tools/list` → 18 инструментов с inputSchema;
 /// - `tools/call` → форвард строки на pipe, ответ приложения — в text-контенте;
 ///   pipe мёртв → isError «не запущен», таймаут ответа (в транспорте) → isError;
 /// - прочее → JSON-RPC -32601.
@@ -806,12 +827,12 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 16 инструментов, у каждого inputSchema с required.
+    /// tools/list: ровно 19 инструментов, у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 16, "ровно 16 инструментов");
+        assert_eq!(tools.len(), 19, "ровно 19 инструментов");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -828,6 +849,9 @@ mod tests {
             "node_set_color",
             "edge_create",
             "edge_delete",
+            "flow_set_kind",
+            "flow_recalc",
+            "flow_cycle_check",
             "viewport_get",
             "viewport_set",
         ] {
@@ -900,7 +924,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            16
+            19
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

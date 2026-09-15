@@ -1,6 +1,6 @@
 //! canvas-app — приложение: event loop, команды, UI-состояние, main().
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +24,7 @@ use canvas_app::ui::{
     PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
 use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults};
+use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
     resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node,
@@ -197,6 +198,21 @@ fn expr_error_hit_at(hits: &[LineErrorHit], cursor: [f32; 2]) -> Option<&LineErr
     })
 }
 
+/// FR-014: карта результатов propagator'а → display-карта приложения
+/// (`expr_results`): типизированные ошибки становятся строками для рендера.
+fn outputs_to_results(outputs: &FlowOutputs) -> ExprResults {
+    outputs
+        .iter()
+        .map(|(id, result)| {
+            let outcome = match result {
+                Ok(value) => ExprOutcome::Ok(value.clone()),
+                Err(err) => ExprOutcome::Err(err.to_string()),
+            };
+            (id.clone(), outcome)
+        })
+        .collect()
+}
+
 /// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
 fn seed_canvas() -> Canvas {
     let mut canvas = Canvas::default();
@@ -273,17 +289,54 @@ impl SceneState {
             expr_line_results: ExprLineResults::new(),
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
-        // хранится в .canvas — вычисляется, см. инвариант 4 FR-013)
-        scene.recompute_all_expr();
+        // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
+        // FR-014: пересчёт — живой propagator графа потока
+        scene.recompute_flow();
         scene
+    }
+
+    /// FR-014: живой пересчёт графа потока значений (инвариант live — в
+    /// пределах одного кадра). Заполняет `expr_results` (результаты формул
+    /// всех expr-нод, с входами value-рёбер) и `expr_line_results`
+    /// (построчные результаты Numi-листов — строки видят входы ноды).
+    /// Запускается после ЛЮБОЙ мутации формул или топологии (правка
+    /// текста/формулы, рёбра, удаление нод, undo) — propagator чистый,
+    /// полный пересчёт ≤1000 нод <10 мс (SPEC §6.3).
+    fn recompute_flow(&mut self) {
+        let outputs = match flow::propagate(&self.canvas, &HashMap::new()) {
+            Ok(outputs) => outputs,
+            Err(cycle) => {
+                // UI и MCP блокируют создание value-циклов; сюда попадаем
+                // только из чужих .canvas-файлов — деградация до изолированного
+                // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
+                tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
+                self.recompute_all_expr();
+                return;
+            }
+        };
+        self.expr_results = outputs_to_results(&outputs);
+        self.expr_line_results.clear();
+        for node in &self.canvas.nodes {
+            let text = node.text.clone().unwrap_or_default();
+            let slots = flow::inbound_slots(&self.canvas, &node.id, &outputs);
+            let line_results = if slots.is_empty() {
+                expr::eval_lines(&text)
+            } else {
+                expr::eval_lines_in(&text, &ExprEnv::with_inbound(slots))
+            };
+            if line_results.iter().any(Option::is_some) {
+                self.expr_line_results.insert(node.id.clone(), line_results);
+            }
+        }
     }
 
     /// FR-013 (правка 2): пересчитать результаты ноды. Текст вычисляется
     /// ПОСТРОЧНО (Numi-стиль, `expr::eval_lines`): общее окружение,
     /// результат каждой формульной строки. Если построчных результатов нет,
     /// а `canvasdesk.expr` задан (MCP) — программный итог в футере карточки.
-    /// Env пустой: v1 — только локальные переменные формулы (поток
-    /// значений — FR-014).
+    /// Env пустой: ИЗОЛИРОВАННЫЙ расчёт — фолбэк recompute_flow при цикле
+    /// value-рёбер из чужих файлов и проверка FR-013-семантики в тестах;
+    /// живой путь приложения — [`SceneState::recompute_flow`].
     fn recompute_expr(&mut self, node_id: &str) {
         let Some(node) = self.canvas.node(node_id) else {
             self.expr_line_results.remove(node_id);
@@ -322,10 +375,8 @@ impl SceneState {
         }
     }
 
-    /// FR-013 (правка 2): пересчитать формулы всех нод (загрузка,
-    /// undo/redo — снапшот заменяет модель целиком). Дёшево: парсинг
-    /// только строк, похожих на формулы; только на перечисленных
-    /// событиях — не на кадр.
+    /// FR-013: изолированный пересчёт формул всех нод (фолбэк при цикле
+    /// value-рёбер; без учёта потока). undo/redo — см. recompute_flow.
     fn recompute_all_expr(&mut self) {
         self.expr_results.clear();
         self.expr_line_results.clear();
@@ -509,6 +560,15 @@ enum AppDialog {
     },
     /// «Удалить пакет <имя>? Ноды пакета останутся как заглушки» (П11).
     RemovePackage { widget_id: String, name: String },
+    /// FR-014: «Обнаружен цикл … Создать как контрольную связь?» —
+    /// value-ребро замкнуло бы цикл потока. Да — создать control-ребро,
+    /// Нет — ничего. Хранит параметры будущего ребра (концы и стороны).
+    EdgeCycle {
+        from_node: String,
+        from_side: Side,
+        to_node: String,
+        to_side: Side,
+    },
 }
 
 impl AppDialog {
@@ -518,8 +578,8 @@ impl AppDialog {
         [("Да", true), ("Нет", false)]
     }
 
-    /// Заголовок диалога.
-    fn title(&self) -> String {
+    /// Заголовок диалога. `canvas` — для имени участников цикла (FR-014).
+    fn title(&self, canvas: &Canvas) -> String {
         match self {
             AppDialog::InstallWidget {
                 manifest, updating, ..
@@ -532,6 +592,19 @@ impl AppDialog {
             }
             AppDialog::RemovePackage { name, .. } => {
                 format!("Удалить пакет {name}?")
+            }
+            // FR-014: участники цикла — путь по value-рёбрам от стока к
+            // истоку + замыкающее ребро (решение открытого вопроса:
+            // диалог с фолбэком на control)
+            AppDialog::EdgeCycle {
+                from_node, to_node, ..
+            } => {
+                let mut chain = canvas_core::value_path(canvas, to_node, from_node)
+                    .unwrap_or_else(|| vec![to_node.clone(), from_node.clone()])
+                    .join(" → ");
+                chain.push_str(" → ");
+                chain.push_str(from_node);
+                format!("Обнаружен цикл: {chain}")
             }
         }
     }
@@ -554,6 +627,9 @@ impl AppDialog {
             }
             AppDialog::RemovePackage { .. } => {
                 "Ноды этого виджета останутся на канвасе как заглушки.\nПакет можно поставить снова перетаскиванием папки.".to_owned()
+            }
+            AppDialog::EdgeCycle { .. } => {
+                "Ребро замкнуло бы цикл потока значений (граф обязан быть DAG).\nСоздать как контрольную связь — без передачи значения?".to_owned()
             }
         }
     }
@@ -1476,9 +1552,10 @@ impl App {
                             node.set_expr(split_formula_lines(&text));
                         }
                     }
-                    // FR-013: пересчёт результата (после мутации модели)
-                    if let Some(id) = node_id {
-                        self.scene.recompute_expr(&id);
+                    // FR-013: пересчёт результата (после мутации модели);
+                    // FR-014: живой пересчёт downstream (весь граф — дёшево)
+                    if node_id.is_some() {
+                        self.scene.recompute_flow();
                     }
                 }
                 EditTarget::Edge(index) => {
@@ -1606,8 +1683,9 @@ impl App {
         self.group_drop_target = None;
         self.scene.canvas = canvas;
         self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
-        // FR-013: снапшот мог изменить формулы — пересчёт результатов
-        self.scene.recompute_all_expr();
+        // FR-013: снапшот мог изменить формулы и топологию — живой
+        // пересчёт графа потока (FR-014)
+        self.scene.recompute_flow();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.invalidate_node_caches();
         }
@@ -1751,6 +1829,8 @@ impl App {
             self.edge_drag = None;
             self.scene.mark_dirty();
             self.sync_watch_dirs();
+            // FR-014: downstream удалённых нод — «вход отсутствует»
+            self.scene.recompute_flow();
             self.request_redraw();
             // Редактирование прервано удалением — отложенный снапшот (FR-006)
             // больше не актуален: правки умрут вместе с нодой
@@ -1768,6 +1848,8 @@ impl App {
                 self.scene.canvas.remove_edge(&id);
                 self.scene.selected = None;
                 self.scene.mark_dirty();
+                // FR-014: downstream этой связи — «вход отсутствует»
+                self.scene.recompute_flow();
                 self.request_redraw();
             }
             Some(Selection::Node(index)) => {
@@ -1794,6 +1876,8 @@ impl App {
                 self.scene.mark_dirty();
                 // Директории удалённых нод больше не нужны вотчеру (T10)
                 self.sync_watch_dirs();
+                // FR-014: downstream удалённой ноды — «вход отсутствует»
+                self.scene.recompute_flow();
                 self.request_redraw();
             }
             None => {}
@@ -3129,6 +3213,42 @@ impl App {
                 }
                 self.scene.mark_dirty();
             }
+            // FR-014: тогл типа потока (Value ↔ Control) — undo-шаг +
+            // живой пересчёт (downstream может потерять/обрести входы).
+            // Тогл в Value, замыкающий цикл, отвергается (isError в MCP;
+            // в палитре — toast с участниками).
+            PaletteAction::EdgeFlowKind { edge_index, kind } => {
+                let Some(edge) = self.scene.canvas.edges.get(edge_index) else {
+                    return;
+                };
+                if edge.flow_kind() == kind {
+                    return; // no-op — шаг не копится
+                }
+                if kind == FlowKind::Value
+                    && canvas_core::creates_value_cycle(
+                        &self.scene.canvas,
+                        &edge.from_node,
+                        &edge.to_node,
+                    )
+                {
+                    let participants =
+                        canvas_core::value_path(&self.scene.canvas, &edge.to_node, &edge.from_node)
+                            .map(|path| path.join(" → "))
+                            .unwrap_or_default();
+                    self.show_toast(format!("Цикл потока: {participants} — тогл отклонён"));
+                    return;
+                }
+                let mut snapshot = self.scene.canvas.clone();
+                if let Some(edge) = snapshot.edges.get_mut(edge_index) {
+                    edge.set_flow_kind(kind);
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                    self.scene.mark_dirty();
+                    self.scene.recompute_flow();
+                }
+                self.request_redraw();
+            }
         }
     }
 
@@ -3712,8 +3832,8 @@ fn mcp_dispatch(
             scene.canvas.nodes.push(node);
             scene.spatial.insert(index, &scene.canvas.nodes[index]);
             scene.mark_dirty();
-            let node_id = scene.canvas.nodes[index].id.clone();
-            scene.recompute_expr(&node_id);
+            // FR-014: живой пересчёт потока после создания expr-ноды
+            scene.recompute_flow();
             Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
         }
         "node_create_file" => {
@@ -3748,7 +3868,7 @@ fn mcp_dispatch(
             // с редактором); формула нет — сброс
             scene.canvas.nodes[index].set_expr(split_formula_lines(text));
             scene.mark_dirty();
-            scene.recompute_expr(id);
+            scene.recompute_flow();
             Ok(serde_json::json!({ "id": id }))
         }
         // FR-005: редактирование ноды одним вызовом — обновляются ТОЛЬКО
@@ -3829,12 +3949,12 @@ fn mcp_dispatch(
                 let node = &scene.canvas.nodes[index];
                 scene.spatial.update(index, node);
             }
-            // FR-013: формула уже провалидирована — применяем и пересчитываем
+            // FR-013: формула уже провалидирована — применяем и пересчитываем;
+            // FR-014: живой пересчёт downstream
             if let Some(new_expr) = expr_update {
                 scene.canvas.nodes[index].set_expr(new_expr);
                 scene.mark_dirty();
-                let node_id = scene.canvas.nodes[index].id.clone();
-                scene.recompute_expr(&node_id);
+                scene.recompute_flow();
             }
             scene.mark_dirty();
             let node = &scene.canvas.nodes[index];
@@ -3880,6 +4000,8 @@ fn mcp_dispatch(
             scene.selected_nodes.clear();
             scene.dragging = None;
             scene.mark_dirty();
+            // FR-014: downstream удалённой ноды — «вход отсутствует»
+            scene.recompute_flow();
             Ok(serde_json::json!({ "id": removed.id }))
         }
         "node_set_color" => {
@@ -3925,6 +4047,8 @@ fn mcp_dispatch(
             let id = edge.id.clone();
             scene.canvas.add_edge(edge);
             scene.mark_dirty();
+            // FR-014: топология изменилась — живой пересчёт потока
+            scene.recompute_flow();
             Ok(serde_json::json!({ "id": id }))
         }
         "edge_delete" => {
@@ -3940,8 +4064,80 @@ fn mcp_dispatch(
                 scene.push_undo(snapshot);
             }
             scene.mark_dirty();
+            // FR-014: топология изменилась — живой пересчёт потока
+            scene.recompute_flow();
             Ok(serde_json::json!({ "id": id }))
         }
+        // FR-014: тогл типа потока. Тогл в Value, замыкающий цикл value-рёбер,
+        // — isError с участниками (пользователю UI показывает диалог, агенту
+        // MCP — явную ошибку)
+        "flow_set_kind" => {
+            let id = mcp_req_str(params, "id")?;
+            let kind = match params.get("kind").and_then(serde_json::Value::as_str) {
+                Some("value") => FlowKind::Value,
+                Some("control") => FlowKind::Control,
+                other => {
+                    return Err(format!(
+                        "kind должен быть \"value\" или \"control\", получено {other:?}"
+                    ));
+                }
+            };
+            let edge_index = scene
+                .canvas
+                .edges
+                .iter()
+                .position(|edge| edge.id == id)
+                .ok_or_else(|| format!("связь не найдена: {id}"))?;
+            let (from, to) = {
+                let edge = &scene.canvas.edges[edge_index];
+                (edge.from_node.clone(), edge.to_node.clone())
+            };
+            if kind == FlowKind::Value
+                && scene.canvas.edges[edge_index].flow_kind() != FlowKind::Value
+                && canvas_core::creates_value_cycle(&scene.canvas, &from, &to)
+            {
+                let participants = canvas_core::value_path(&scene.canvas, &to, &from)
+                    .unwrap_or_default()
+                    .join(" → ");
+                return Err(format!("цикл потока значений: {participants}"));
+            }
+            let snapshot = scene.canvas.clone();
+            scene.canvas.edges[edge_index].set_flow_kind(kind);
+            if scene.canvas != snapshot {
+                scene.push_undo(snapshot);
+            }
+            scene.mark_dirty();
+            scene.recompute_flow();
+            Ok(serde_json::json!({
+                "id": id,
+                "kind": scene.canvas.edges[edge_index].flow_kind().as_str(),
+            }))
+        }
+        // FR-014: форс-пересчёт всего графа — карта значений для агентов,
+        // проверяющих сценарии (ноды без формулы не участвуют)
+        "flow_recalc" => {
+            let outputs = flow::propagate(&scene.canvas, &HashMap::new())
+                .map_err(|cycle| cycle.to_string())?;
+            let nodes: serde_json::Map<String, serde_json::Value> = outputs
+                .iter()
+                .map(|(id, result)| {
+                    let entry = match result {
+                        Ok(value) => serde_json::json!({
+                            "value": value.num,
+                            "unit": value.unit.display(),
+                        }),
+                        Err(err) => serde_json::json!({ "error": err.to_string() }),
+                    };
+                    (id.clone(), entry)
+                })
+                .collect();
+            Ok(serde_json::Value::Object(nodes))
+        }
+        // FR-014: проверка DAG-инварианта — [] или участники цикла
+        "flow_cycle_check" => match flow::topo_sort(&scene.canvas) {
+            Ok(_) => Ok(serde_json::json!([])),
+            Err(cycle) => Ok(serde_json::json!(cycle.nodes)),
+        },
         "viewport_get" => {
             let position = camera.position();
             Ok(serde_json::json!({
@@ -4615,9 +4811,13 @@ impl App {
                         });
                     if let Some(side) = port {
                         let from_node = self.scene.canvas.nodes[node_index].id.clone();
+                        // FR-014: Shift+drag — value-ребро (поток значений),
+                        // обычный drag — контрольная связь (дефолт)
+                        let value_flow = self.modifiers.shift_key();
                         self.edge_drag = Some(EdgeDrag::New {
                             from_node,
                             from_side: side,
+                            value_flow,
                         });
                         self.request_redraw();
                         return;
@@ -4783,23 +4983,46 @@ impl App {
                         EdgeDrag::New {
                             from_node,
                             from_side,
+                            value_flow,
                         } => {
                             if let Some(target) = self.selective_hit(world) {
                                 let to_node = &self.scene.canvas.nodes[target];
                                 let to_id = to_node.id.clone();
                                 if to_id != from_node {
                                     let to_side = nearest_side(to_node, world);
-                                    let edge = Edge::new(
-                                        self.scene.canvas.next_edge_id(),
-                                        from_node,
-                                        Some(from_side),
-                                        to_id,
-                                        Some(to_side),
-                                    );
-                                    // FR-006: новая связь — undo-шаг
-                                    self.push_undo();
-                                    self.scene.canvas.add_edge(edge);
-                                    self.scene.mark_dirty();
+                                    if value_flow {
+                                        // FR-014: value-ребро, замыкающее цикл,
+                                        // — диалог (контрольная связь / отмена);
+                                        // валидное — создаётся сразу
+                                        if canvas_core::creates_value_cycle(
+                                            &self.scene.canvas,
+                                            &from_node,
+                                            &to_id,
+                                        ) {
+                                            self.dialog = Some(AppDialog::EdgeCycle {
+                                                from_node,
+                                                from_side,
+                                                to_node: to_id,
+                                                to_side,
+                                            });
+                                        } else {
+                                            self.create_edge(
+                                                from_node,
+                                                from_side,
+                                                to_id,
+                                                to_side,
+                                                FlowKind::Value,
+                                            );
+                                        }
+                                    } else {
+                                        self.create_edge(
+                                            from_node,
+                                            from_side,
+                                            to_id,
+                                            to_side,
+                                            FlowKind::Control,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -4823,6 +5046,9 @@ impl App {
                                     side,
                                 ) {
                                     self.scene.mark_dirty();
+                                    // FR-014: перепривязка могла изменить
+                                    // топологию value-потока
+                                    self.scene.recompute_flow();
                                 } else {
                                     self.scene.undo_stack.pop_back();
                                 }
@@ -5979,12 +6205,49 @@ impl App {
                 }
                 self.request_redraw();
             }
+            // FR-014: подтверждение цикла — ребро создаётся как
+            // контрольная связь (без потока значений)
+            AppDialog::EdgeCycle {
+                from_node,
+                from_side,
+                to_node,
+                to_side,
+            } => {
+                self.create_edge(from_node, from_side, to_node, to_side, FlowKind::Control);
+            }
         }
     }
 
     /// Отмена диалога (Esc/клик «Нет»): ничего не меняется.
     fn cancel_dialog(&mut self) {
         self.dialog = None;
+        self.request_redraw();
+    }
+
+    /// FR-014: создать связь заданного типа потока (общий путь drop
+    /// резиновой линии и подтверждения диалога цикла). Undo-шаг (FR-006),
+    /// mark_dirty + живой пересчёт потока: value-ребро сразу переносит
+    /// значение в downstream.
+    fn create_edge(
+        &mut self,
+        from_node: String,
+        from_side: Side,
+        to_node: String,
+        to_side: Side,
+        kind: FlowKind,
+    ) {
+        let mut edge = Edge::new(
+            self.scene.canvas.next_edge_id(),
+            from_node,
+            Some(from_side),
+            to_node,
+            Some(to_side),
+        );
+        edge.set_flow_kind(kind);
+        self.push_undo();
+        self.scene.canvas.add_edge(edge);
+        self.scene.mark_dirty();
+        self.scene.recompute_flow();
         self.request_redraw();
     }
 
@@ -6705,7 +6968,7 @@ impl ApplicationHandler<AppEvent> for App {
                         });
                     }
                     owned_texts.push(OwnedScreenText {
-                        text: dialog.title(),
+                        text: dialog.title(&self.scene.canvas),
                         origin: [dx + 20.0, dy + 16.0],
                         width: dw - 40.0,
                         font_size: 16.0,
@@ -8140,9 +8403,12 @@ mod tests {
             Some("1 sec + 500 ms"),
             "формула выведена из текста"
         );
+        // FR-014: expr_results — карта потока значений (запись есть для
+        // любой expr-ноды); вытеснение футера построчными результатами —
+        // правило РЕНДЕРА (text.rs), а не отсутствие записи
         assert!(
-            !scene.expr_results.contains_key("n1"),
-            "программного итога нет — построчные результаты его вытесняют"
+            scene.expr_results.contains_key("n1"),
+            "результат формулы в карте потока"
         );
         let lines = scene
             .expr_line_results
@@ -8525,5 +8791,355 @@ mod tests {
         );
         // Пустой набор зон
         assert!(expr_error_hit_at(&[], [372.0, 40.0]).is_none());
+    }
+
+    // --- FR-014: поток значений по рёбрам ---
+
+    /// flow_set_kind: тогл control → value → control; round-trip в extra.
+    #[test]
+    fn mcp_flow_set_kind_toggles_flow() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            r#"{"id":"edge-1","kind":"value"}"#,
+        )
+        .expect("flow_set_kind value");
+        assert_eq!(out["kind"], "value");
+        assert_eq!(
+            scene.canvas.edges[0].flow_kind(),
+            canvas_core::flow::FlowKind::Value
+        );
+        // Тогл обратно — поле удаляется
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            r#"{"id":"edge-1","kind":"control"}"#,
+        )
+        .expect("flow_set_kind control");
+        assert_eq!(out["kind"], "control");
+        assert!(
+            scene.canvas.edges[0].extra.get("canvasdesk").is_none(),
+            "control удаляет расширение целиком"
+        );
+        // Некорректный kind — ошибка
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            r#"{"id":"edge-1","kind":"поток"}"#,
+        )
+        .expect_err("kind валидируется");
+        assert!(err.contains("kind"), "{err}");
+    }
+
+    /// flow_set_kind при цикле — isError с участниками (DAG-инвариант MCP).
+    #[test]
+    fn mcp_flow_set_kind_rejects_cycle() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // A → B → A из новых нод и value-рёбер
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fa","x":0,"y":0,"text":"A"}"#,
+        )
+        .expect("fa");
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fb","x":300,"y":0,"text":"B"}"#,
+        )
+        .expect("fb");
+        // id создаются автоматически (note-N) — найдём по тексту
+        let id_a = scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref() == Some("A"))
+            .map(|n| n.id.clone())
+            .expect("нода A");
+        let id_b = scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref() == Some("B"))
+            .map(|n| n.id.clone())
+            .expect("нода B");
+        let e1 = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(r#"{{"from":"{id_a}","to":"{id_b}"}}"#),
+        )
+        .expect("edge A→B")["id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            &format!(r#"{{"id":"{e1}","kind":"value"}}"#),
+        )
+        .expect("A→B value");
+        let e2 = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(r#"{{"from":"{id_b}","to":"{id_a}"}}"#),
+        )
+        .expect("edge B→A")["id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            &format!(r#"{{"id":"{e2}","kind":"value"}}"#),
+        )
+        .expect_err("цикл B→A→B отклонён");
+        assert!(err.contains("цикл"), "{err}");
+        // А control — пожалуйста
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            &format!(r#"{{"id":"{e2}","kind":"control"}}"#),
+        )
+        .expect("control допустим");
+    }
+
+    /// flow_recalc: живой пересчёт цепочки A→B→C; правка формулы A меняет
+    /// downstream; удаление ребра — «вход отсутствует».
+    #[test]
+    fn mcp_flow_recalc_chain_live_reval() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // A=5, B=$in × 2, C=$in + 1
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fa","x":0,"y":0,"text":"A\n= 5"}"#,
+        )
+        .expect("fa");
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fb","x":300,"y":0,"text":"B\n= $in × 2"}"#,
+        )
+        .expect("fb");
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fc","x":600,"y":0,"text":"C\n= $in + 1"}"#,
+        )
+        .expect("fc");
+        let id = |scene: &SceneState, text: &str| {
+            scene
+                .canvas
+                .nodes
+                .iter()
+                .find(|n| {
+                    n.text
+                        .as_deref()
+                        .map(|t| t.starts_with(text))
+                        .unwrap_or(false)
+                })
+                .map(|n| n.id.clone())
+                .expect("нода сценария")
+        };
+        let (id_a, id_b, id_c) = (id(&scene, "A"), id(&scene, "B"), id(&scene, "C"));
+        for (from, to) in [(&id_a, &id_b), (&id_b, &id_c)] {
+            let edge_id = dispatch(
+                &mut scene,
+                &mut camera,
+                "edge_create",
+                &format!(r#"{{"from":"{from}","to":"{to}"}}"#),
+            )
+            .expect("edge")["id"]
+                .as_str()
+                .expect("id")
+                .to_owned();
+            dispatch(
+                &mut scene,
+                &mut camera,
+                "flow_set_kind",
+                &format!(r#"{{"id":"{edge_id}","kind":"value"}}"#),
+            )
+            .expect("value-ребро");
+        }
+        // Верификация FR-014: {A: 5, B: 10, C: 11}
+        let map = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
+        assert_eq!(map[&id_a]["value"], 5.0);
+        assert_eq!(map[&id_b]["value"], 10.0);
+        assert_eq!(map[&id_c]["value"], 11.0);
+        assert_eq!(map[&id_a]["unit"], "");
+        // Правка A → downstream пересчитан: {A: 7, B: 14, C: 15}
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            &format!(r#"{{"id":"{id_a}","expr":"7"}}"#),
+        )
+        .expect("node_edit expr");
+        let map = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
+        assert_eq!(map[&id_b]["value"], 14.0, "downstream пересчитан живьём");
+        assert_eq!(map[&id_c]["value"], 15.0);
+        // Удаление value-ребра A→B — у B «вход отсутствует», C тоже
+        let e_ab = scene
+            .canvas
+            .edges
+            .iter()
+            .find(|e| e.from_node == id_a && e.to_node == id_b)
+            .map(|e| e.id.clone())
+            .expect("ребро A→B");
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_delete",
+            &format!(r#"{{"id":"{e_ab}"}}"#),
+        )
+        .expect("edge_delete");
+        let map = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
+        assert!(map[&id_b]["error"]
+            .as_str()
+            .expect("ошибка входа")
+            .contains("вход"));
+        assert!(map[&id_c]["error"].as_str().is_some(), "downstream тоже");
+    }
+
+    /// flow_cycle_check: без value-циклов — []; после value-цикла — участники.
+    #[test]
+    fn mcp_flow_cycle_check_reports_participants() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        assert_eq!(
+            dispatch(&mut scene, &mut camera, "flow_cycle_check", "{}").expect("[]"),
+            serde_json::json!([])
+        );
+        // Контрольный цикл (edge-1 n1→f1 + обратный f1→n1) — НЕ значение
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            r#"{"from":"f1","to":"n1"}"#,
+        )
+        .expect("обратное ребро");
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            r#"{"id":"edge-1","kind":"value"}"#,
+        )
+        .expect("прямое value");
+        assert_eq!(
+            dispatch(&mut scene, &mut camera, "flow_cycle_check", "{}").expect("[]"),
+            serde_json::json!([]),
+            "одно value-ребро цикла не создаёт"
+        );
+        // Обратное тоже value — цикл n1→f1→n1. Через MCP такой тогл
+        // отклоняется (см. mcp_flow_set_kind_rejects_cycle), поэтому строим
+        // чужой-файл сценарий прямой мутацией extra
+        let back_index = scene
+            .canvas
+            .edges
+            .iter()
+            .position(|e| e.from_node == "f1" && e.to_node == "n1")
+            .expect("обратное ребро");
+        scene.canvas.edges[back_index].set_flow_kind(canvas_core::flow::FlowKind::Value);
+        let participants =
+            dispatch(&mut scene, &mut camera, "flow_cycle_check", "{}").expect("участники");
+        // Участники отсортированы по id (лексикографически)
+        assert_eq!(participants, serde_json::json!(["f1", "n1"]));
+    }
+
+    /// FR-014 + FR-006: undo тогла value → control восстанавливает поток
+    /// (формула downstream снова получает вход).
+    #[test]
+    fn mcp_flow_toggle_undo_restores_downstream() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fa","x":0,"y":0,"text":"A\n= 5"}"#,
+        )
+        .expect("fa");
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"id":"fb","x":300,"y":0,"text":"B\n= $in × 2"}"#,
+        )
+        .expect("fb");
+        let id_a = scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref() == Some("A\n= 5"))
+            .map(|n| n.id.clone())
+            .expect("A");
+        let id_b = scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref() == Some("B\n= $in × 2"))
+            .map(|n| n.id.clone())
+            .expect("B");
+        let e1 = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(r#"{{"from":"{id_a}","to":"{id_b}"}}"#),
+        )
+        .expect("edge")["id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            &format!(r#"{{"id":"{e1}","kind":"value"}}"#),
+        )
+        .expect("value");
+        // B = 10
+        assert_eq!(
+            scene.expr_results.get(&id_b),
+            Some(&ExprOutcome::Ok(canvas_core::expr::Value::scalar(10.0)))
+        );
+        // Тогл в control — у B «вход отсутствует»
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "flow_set_kind",
+            &format!(r#"{{"id":"{e1}","kind":"control"}}"#),
+        )
+        .expect("control");
+        match scene.expr_results.get(&id_b).expect("запись") {
+            ExprOutcome::Err(msg) => assert!(msg.contains("вход"), "{msg}"),
+            other => panic!("ожидалась ошибка входа: {other:?}"),
+        }
+        // Undo — снапшот «до тогла» возвращает value-ребро и пересчёт
+        let before = scene.take_undo().expect("шаг undo");
+        scene.canvas = before;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        scene.recompute_flow();
+        assert_eq!(
+            scene.expr_results.get(&id_b),
+            Some(&ExprOutcome::Ok(canvas_core::expr::Value::scalar(10.0))),
+            "после undo поток восстановлен"
+        );
     }
 }

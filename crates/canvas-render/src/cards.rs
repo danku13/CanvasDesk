@@ -246,6 +246,9 @@ pub fn port_dot_diameter(zone_px: f32) -> f32 {
 }
 /// Цвет связи по умолчанию — нейтральный серо-голубой.
 pub const EDGE_COLOR: [f32; 4] = [0.52, 0.58, 0.66, 1.0];
+/// FR-014: цвет value-ребра (поток значений) — бирюзовый, отличим от
+/// обычных связей; явный цвет пользователя имеет приоритет.
+pub const FLOW_EDGE_COLOR: [f32; 4] = [0.13, 0.66, 0.55, 1.0];
 /// Цвет резиновой линии (drag новой связи) — акцент с прозрачностью.
 const DRAFT_COLOR: [f32; 4] = [0.396, 0.612, 0.969, 0.7];
 /// Длина уса стрелки в world-px.
@@ -532,7 +535,14 @@ pub fn build_edge_instances(
                 + focus.pulse * FOCUS_EDGE_PULSE_BOOST;
             (fill, d)
         } else {
-            let mut fill = named_color(edge.color.as_deref()).unwrap_or(EDGE_COLOR);
+            // FR-014: value-ребро — бирюзовый поток значений; явный цвет
+            // пользователя имеет приоритет над семантическим
+            let default_fill = if edge.flow_kind() == canvas_core::FlowKind::Value {
+                FLOW_EDGE_COLOR
+            } else {
+                EDGE_COLOR
+            };
+            let mut fill = named_color(edge.color.as_deref()).unwrap_or(default_fill);
             if focus.dim > 0.0 {
                 fill[3] *= focus.dim_factor();
             }

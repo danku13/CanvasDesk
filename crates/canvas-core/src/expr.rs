@@ -22,8 +22,16 @@
 //!
 //! Единицы распознаются ТОЛЬКО сразу после числа (`1000 rps` — единица),
 //! поэтому переменные могут называться как единицы (`rps = 1000` — пример
-//! владельца). Поток значений между нодами (`$in`) — FR-014; доменные
+//! владельца). Поток значений между нодами — FR-014: входящие значения
+//! value-рёбер доступны как `$in` (ровно одно входящее ребро) или `$1..$N`
+//! (по индексу входящих рёбер в порядке `canvas.edges`); окружение с
+//! входами — [`Env::with_inbound`], рантайм — `flow::propagate`. Доменные
 //! функции (`mm1`, `littles_law`) — FR-015.
+//!
+//! Валюта и ссылки на вход: `$5` — валюта (5 долларов), пока окружение НЕ
+//! содержит входов; в окружении со входами целое `$N` (N ≥ 1) — ссылка на
+//! N-е входящее значение (для валюты в calc-ноде потока пишите `5 usd`).
+//! Дробные суммы (`$2.5`) и `$0` — всегда валюта.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -170,8 +178,9 @@ impl Unit {
     }
 
     /// Отображение единицы: положительные степени через `·` (с˅2/˅3),
-    /// отрицательные — через `/` (`ms·req/s`, `B/s`, `ms²`).
-    fn display(&self) -> String {
+    /// отрицательные — через `/` (`ms·req/s`, `B/s`, `ms²`). Публичный:
+    /// нужен MCP-ответам (`flow_recalc`) и рендеру лейблов value-рёбер.
+    pub fn display(&self) -> String {
         const MIDDLE_DOT: char = '\u{b7}';
         const SUP2: char = '\u{b2}';
         const SUP3: char = '\u{b3}';
@@ -355,18 +364,40 @@ pub enum Expr {
     Assign { name: String, rhs: Box<Expr> },
     /// Программа: последовательность утверждений; результат — последний.
     Block(Vec<Expr>),
+    /// FR-014: `$in` — значение единственного входящего value-ребра.
+    /// При нескольких входах — `EvalError::AmbiguousInbound` (нужны `$1..$N`),
+    /// при нуле — `EvalError::MissingInbound`.
+    Inbound,
+    /// FR-014: `$5` — валюта ИЛИ ссылка на 5-й вход; контекст — наличие
+    /// входов в [`Env`], разрешается в [`eval`]. Целые `N ≥ 1` при наличии
+    /// входов — ссылка на N-е входящее значение; иначе — валюта.
+    DollarAmount(f64),
 }
 
-/// Окружение вычисления: значения переменных (FR-013 — только локальные
-/// переменные формулы; `$in`/`$1` из FR-014 придут как предзаполненный Env).
+/// Окружение вычисления: значения переменных (FR-013) и входящие значения
+/// value-рёбер (FR-014, [`Env::with_inbound`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Env {
     vars: HashMap<String, Value>,
+    /// FR-014: входящие значения по индексам value-рёбер. `None` — входов
+    /// нет (`$N` — валюта, `$in` — ошибка MissingInbound); `Some` — есть:
+    /// `Some(None)` — ребро есть, значения нет (источник без формулы или
+    /// с ошибкой), `Some(Some(v)) — значение источника.
+    inbound: Option<Vec<Option<Value>>>,
 }
 
 impl Env {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// FR-014: окружение со входами value-рёбер (порядок — порядок
+    /// входящих рёбер в `canvas.edges`). `None` — ребро есть, значения нет.
+    pub fn with_inbound(inbound: Vec<Option<Value>>) -> Self {
+        Self {
+            vars: HashMap::new(),
+            inbound: Some(inbound),
+        }
     }
 
     pub fn set(mut self, name: impl Into<String>, value: Value) -> Self {
@@ -376,6 +407,22 @@ impl Env {
 
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.vars.get(name)
+    }
+
+    /// FR-014: входящее значение по индексу (0-based). `None` — индекса нет
+    /// или значения нет (ребро без значения).
+    fn inbound_value(&self, index: usize) -> Option<&Value> {
+        self.inbound.as_ref()?.get(index)?.as_ref()
+    }
+
+    /// Есть ли входы вообще (дискриминатор валюты `$N` vs входа `$N`).
+    fn has_inbound(&self) -> bool {
+        self.inbound.is_some()
+    }
+
+    /// Слоты входов (для проверки неоднозначности `$in`).
+    fn inbound_slots(&self) -> Option<&[Option<Value>]> {
+        self.inbound.as_deref()
     }
 }
 
@@ -400,6 +447,18 @@ pub enum EvalError {
     BadCall { func: String, msg: String },
     #[error("деление на ноль")]
     DivisionByZero,
+    /// FR-014: входящего значения нет (нет value-ребра, источник без
+    /// формулы или источник с ошибкой). `index` — 0-based номер входа
+    /// (`$in` — 0, синоним `$1`).
+    #[error("вход отсутствует: ${}" , index + 1)]
+    MissingInbound { index: usize },
+    /// FR-014: `$in` при нескольких входящих value-рёбрах — неоднозначно.
+    #[error("$in неоднозначен: {count} входящих — используйте $1..${}", count)]
+    AmbiguousInbound { count: usize },
+    /// FR-014 (flow::propagate): формула ноды не парсится (в обычном
+    /// рендере ошибки парсинга ловятся до eval; в графе — часть downstream).
+    #[error("{0}")]
+    BadFormula(String),
 }
 
 // --- Лексер ---
@@ -411,6 +470,11 @@ enum Tok {
     Ident(String),
     /// Единица из таблицы (распознаётся только после числа или `$`-валюта).
     Unit(&'static str),
+    /// FR-014: `$in` — ссылка на единственный вход.
+    DollarIn,
+    /// FR-014: `$N` (целые N ≥ 1 сразу за `$`) — валюта или вход (контекст
+    /// разрешает eval по наличию входов в Env).
+    DollarNum(f64),
     Plus,
     Minus,
     Star,
@@ -612,11 +676,42 @@ impl<'a> Lexer<'a> {
                 Tok::Assign
             }
             b'$' => {
-                // `$5` — префикс валюты; `%` — только суффикс (после числа)
-                self.pos += 1;
-                self.after_number = false;
-                self.operand_ended = false;
-                Tok::Unit("$")
+                // FR-013: `$5` — префикс валюты; `%` — только суффикс
+                // (после числа). FR-014: `$in` и целое `$N` (N ≥ 1) —
+                // ссылки на входящие value-рёбра (контекст — Env).
+                // `$5.5`/`$0`/`$ин` — обычная валюта или валюта × переменная.
+                let rest = &self.text[self.pos + 1..];
+                let in_word = rest.strip_prefix("in").is_some_and(|tail| {
+                    !tail
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                });
+                let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+                let int_amount = digits > 0
+                    && !rest
+                        .as_bytes()
+                        .get(digits)
+                        .is_some_and(|&b| b == b'.' || b.is_ascii_digit());
+                if in_word {
+                    self.pos += 3; // "$in"
+                    self.after_number = false;
+                    self.operand_ended = true;
+                    Tok::DollarIn
+                } else if int_amount {
+                    let num: f64 = rest[..digits]
+                        .parse()
+                        .map_err(|_| self.err("некорректное число"))?;
+                    self.pos += 1 + digits;
+                    self.after_number = false;
+                    self.operand_ended = true;
+                    Tok::DollarNum(num)
+                } else {
+                    self.pos += 1;
+                    self.after_number = false;
+                    self.operand_ended = false;
+                    Tok::Unit("$")
+                }
             }
             b'%' if self.after_number => {
                 self.pos += 1;
@@ -759,8 +854,16 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
                     }),
                 }
             }
-            // Начала утверждений (в т.ч. унарный знак: `-3 ms`)
-            Tok::Num(_) | Tok::Ident(_) | Tok::Unit(_) | Tok::LParen | Tok::Plus | Tok::Minus => {
+            // Начала утверждений (в т.ч. унарный знак: `-3 ms`; FR-014:
+            // `$in`/`$5` — операнды-ссылки)
+            Tok::Num(_)
+            | Tok::Ident(_)
+            | Tok::Unit(_)
+            | Tok::DollarIn
+            | Tok::DollarNum(_)
+            | Tok::LParen
+            | Tok::Plus
+            | Tok::Minus => {
                 statements.push(parse_statement(&mut lexer, tok)?);
             }
         }
@@ -845,10 +948,18 @@ fn parse_mul_tail(lexer: &mut Lexer, mut lhs: Expr) -> Result<Expr, ParseError> 
                 lexer.eat();
                 (BinOp::Div, false)
             }
-            // Сопоставление без знака: число/единица/скобка/переменная
+            // Сопоставление без знака: число/единица/скобка/переменная/вход
             // сразу за операндом (`5 ms`, `3 replicas` из примера владельца,
-            // `(a + b) ms`); Ident `(` уже разобран как вызов на уровне primary
-            Some(Tok::Num(_) | Tok::Unit(_) | Tok::LParen | Tok::Ident(_)) => (BinOp::Mul, true),
+            // `(a + b) ms`, `2 $in`); Ident `(` уже разобран как вызов
+            // на уровне primary
+            Some(
+                Tok::Num(_)
+                | Tok::Unit(_)
+                | Tok::DollarIn
+                | Tok::DollarNum(_)
+                | Tok::LParen
+                | Tok::Ident(_),
+            ) => (BinOp::Mul, true),
             _ => return Ok(lhs),
         };
         // В позиции СОПОСТАВЛЕНИЯ идентификатор с именем из таблицы —
@@ -895,6 +1006,10 @@ fn parse_unary_from(lexer: &mut Lexer, first: Tok) -> Result<Expr, ParseError> {
         }
         Tok::Num(num) => parse_unit_run(lexer, num),
         Tok::Unit(name) => Ok(unit_literal(name)),
+        // FR-014: `$in` — единственный вход; `$N` — валюта или вход
+        // (разрешение — в eval по наличию входов в Env)
+        Tok::DollarIn => Ok(Expr::Inbound),
+        Tok::DollarNum(num) => Ok(Expr::DollarAmount(num)),
         Tok::Ident(name) => {
             // Вызов функции: Ident `(` args `)`; иначе — переменная
             if matches!(lexer.peek()?, Some(Tok::LParen)) {
@@ -948,6 +1063,19 @@ fn unit_literal(name: &str) -> Expr {
 
 // --- Вычисление ---
 
+/// FR-014: `$in` — значение единственного входа.
+fn eval_inbound_auto(env: &Env) -> Result<Value, EvalError> {
+    let Some(slots) = env.inbound_slots() else {
+        return Err(EvalError::MissingInbound { index: 0 });
+    };
+    if slots.len() > 1 {
+        return Err(EvalError::AmbiguousInbound { count: slots.len() });
+    }
+    env.inbound_value(0)
+        .cloned()
+        .ok_or(EvalError::MissingInbound { index: 0 })
+}
+
 /// Вычислить формулу в окружении `env` (чистая функция, инвариант 2 FR-013).
 /// Блок заводит локальную область поверх `env`; результат — значение
 /// последнего утверждения.
@@ -957,6 +1085,23 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
             num: *num,
             unit: unit.clone(),
         }),
+        // FR-014: `$in` и `$N` (см. DollarAmount)
+        Expr::Inbound => eval_inbound_auto(env),
+        Expr::DollarAmount(n) => {
+            if env.has_inbound() && *n >= 1.0 && n.fract() == 0.0 {
+                // Целое $N при наличии входов — ссылка на N-й вход
+                let index = (*n as usize) - 1;
+                env.inbound_value(index)
+                    .cloned()
+                    .ok_or(EvalError::MissingInbound { index })
+            } else {
+                // Валюта (FR-013): без входов, а также $0 и дробные суммы
+                Ok(Value {
+                    num: *n,
+                    unit: Unit::atom(unit_atom("$").expect("валюта в таблице единиц")),
+                })
+            }
+        }
         Expr::Var(name) => env
             .get(name)
             .cloned()
@@ -1005,13 +1150,20 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
 /// присвоенное значение. Внутри код-фенсов (``` … ```) формулы не
 /// вычисляются — код не калькулятор.
 pub fn eval_lines(source: &str) -> Vec<Option<ExprOutcome>> {
+    eval_lines_in(source, &Env::empty())
+}
+
+/// FR-014: [`eval_lines`] с входящими значениями value-рёбер — строки листа
+/// (`= $in × 2`) видят входы ноды. Входы читаются, локальные переменные
+/// листа наслаиваются сверху.
+pub fn eval_lines_in(source: &str, inbound: &Env) -> Vec<Option<ExprOutcome>> {
     // FR-013 (правка 5): канонический текст заметки экранирует литеральные
     // `=` (`\=` — от пары `==` подсветки в диалекте CanvasDesk; заметки
     // прежних сборок содержат `x \= 200` для КАЖДОГО `=`). Расчёт ведётся
     // по видимому тексту — экранирование снимается; проза и код-фенсы не
     // меняются (они не считаются).
     let source = source.replace("\\=", "=");
-    let mut env = Env::empty();
+    let mut env = inbound.clone();
     let mut in_fence = false;
     // FR-013 (правка 4): имена, объявленные строками ВЫШЕ (похожими на
     // присваивание, даже не парсящимися или не вычислившимися) — контекст
@@ -1329,6 +1481,10 @@ mod tests {
 
     fn rps_unit() -> Unit {
         Unit::atom(unit_atom("rps").unwrap())
+    }
+
+    fn req_unit() -> Unit {
+        Unit::atom(unit_atom("req").unwrap())
     }
 
     fn reqps_unit() -> Unit {
@@ -1842,5 +1998,111 @@ mod tests {
         let lines = eval_lines("- 5 яблок\n2 + несуществующая");
         assert_eq!(lines[0], None);
         assert_eq!(lines[1], None);
+    }
+
+    // --- FR-014: входящие значения value-рёбер ($in, $1..$N) ---
+
+    /// Верификация FR-014: `$in × 2` со входом 5 → 10.
+    #[test]
+    fn eval_inbound_single() {
+        let env = Env::with_inbound(vec![Some(Value::scalar(5.0))]);
+        let value = eval(&parse("$in × 2").unwrap(), &env).unwrap();
+        assert_eq!(value, Value::scalar(10.0));
+    }
+
+    /// Верификация FR-014: `$1 + $2` со входами 3 и 7 → 10.
+    #[test]
+    fn eval_inbound_indexed() {
+        let env = Env::with_inbound(vec![Some(Value::scalar(3.0)), Some(Value::scalar(7.0))]);
+        let value = eval(&parse("$1 + $2").unwrap(), &env).unwrap();
+        assert_eq!(value, Value::scalar(10.0));
+    }
+
+    /// Входы с единицами: `$in × 2 ms` — умножение req×ms как обычно.
+    #[test]
+    fn eval_inbound_with_units() {
+        let env = Env::with_inbound(vec![Some(Value::with_unit(100.0, req_unit()))]);
+        let value = eval(&parse("$in × 2 ms").unwrap(), &env).unwrap();
+        assert_eq!(value.to_string(), "200 req·ms");
+    }
+
+    /// `$in` без входов — Err(MissingInbound); `$2` при одном входе — тоже.
+    #[test]
+    fn eval_inbound_missing() {
+        let err = eval(&parse("$in").unwrap(), &Env::empty()).unwrap_err();
+        assert_eq!(err, EvalError::MissingInbound { index: 0 });
+        let env = Env::with_inbound(vec![Some(Value::scalar(5.0))]);
+        let err = eval(&parse("$2").unwrap(), &env).unwrap_err();
+        assert_eq!(err, EvalError::MissingInbound { index: 1 });
+    }
+
+    /// `$in` при двух входах — Err(AmbiguousInbound): нужен явный `$1`/`$2`.
+    #[test]
+    fn eval_inbound_ambiguous() {
+        let env = Env::with_inbound(vec![Some(Value::scalar(3.0)), Some(Value::scalar(7.0))]);
+        let err = eval(&parse("$in + 1").unwrap(), &env).unwrap_err();
+        assert_eq!(err, EvalError::AmbiguousInbound { count: 2 });
+        // Индексные ссылки при этом работают
+        let value = eval(&parse("$1 + $2").unwrap(), &env).unwrap();
+        assert_eq!(value, Value::scalar(10.0));
+    }
+
+    /// Слот «ребро есть, значения нет» — MissingInbound (источник без
+    /// формулы или с ошибкой).
+    #[test]
+    fn eval_inbound_slot_none_is_missing() {
+        let env = Env::with_inbound(vec![None]);
+        let err = eval(&parse("$in + 1").unwrap(), &env).unwrap_err();
+        assert_eq!(err, EvalError::MissingInbound { index: 0 });
+    }
+
+    /// Регрессия FR-013: `$5` без входов — валюта (5 $).
+    #[test]
+    fn eval_dollar_amount_is_currency_without_inbound() {
+        let value = eval(&parse("$5 × 3").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "15 $");
+    }
+
+    /// `$5` при наличии входов — ссылка на 5-й вход (контекстное
+    /// разрешение FR-014); `$2.5` и `$0` — всегда валюта.
+    #[test]
+    fn eval_dollar_amount_is_inbound_reference_with_inbound() {
+        let env = Env::with_inbound(vec![
+            Some(Value::scalar(1.0)),
+            Some(Value::scalar(2.0)),
+            Some(Value::scalar(3.0)),
+            Some(Value::scalar(4.0)),
+            Some(Value::with_unit(10.0, rps_unit())),
+        ]);
+        let value = eval(&parse("$5").unwrap(), &env).unwrap();
+        assert_eq!(value.to_string(), "10 rps");
+        // Дробные суммы и ноль — валюта даже при наличии входов
+        let value = eval(&parse("$2.5").unwrap(), &env).unwrap();
+        assert_eq!(value.to_string(), "2.5 $");
+        let value = eval(&parse("$0").unwrap(), &env).unwrap();
+        assert_eq!(value.to_string(), "0 $");
+    }
+
+    /// FR-014: строки листа видят входы ноды (`eval_lines_in`).
+    #[test]
+    fn eval_lines_see_inbound() {
+        let env = Env::with_inbound(vec![Some(Value::with_unit(1000.0, rps_unit()))]);
+        let lines = eval_lines_in("= $in / 4", &env);
+        assert_eq!(ok_text(&lines[0]), "250 rps");
+        // Без входов та же строка — видимая ошибка отсутствия входа
+        let lines = eval_lines("= $in / 4");
+        match &lines[0] {
+            Some(ExprOutcome::Err(msg)) => assert!(msg.contains("вход"), "{msg}"),
+            other => panic!("без входа — ошибка: {other:?}"),
+        }
+    }
+
+    /// Входы не вытесняются присваиваниями листа и переживают блок.
+    #[test]
+    fn eval_inbound_survives_assignments() {
+        let env = Env::with_inbound(vec![Some(Value::scalar(6.0))]);
+        let program = "half = $in / 2\nhalf × 3";
+        let value = eval(&parse(program).unwrap(), &env).unwrap();
+        assert_eq!(value, Value::scalar(9.0));
     }
 }

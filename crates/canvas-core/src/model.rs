@@ -9,6 +9,8 @@ use std::collections::{HashMap, VecDeque};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::flow::FlowKind;
+
 /// Сторона ноды для привязки связи (JSON Canvas: `top`/`right`/`bottom`/`left`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -390,6 +392,64 @@ impl Edge {
             style: None,
             thickness: None,
             extra: Map::new(),
+        }
+    }
+
+    /// FR-014: тип потока связи — чтение `extra["canvasdesk"]["flow"]
+    /// ["kind"]`. Отсутствие поля (старые `.canvas`) или неизвестное
+    /// значение — [`FlowKind::Control`] (существующее поведение,
+    /// обратная совместимость).
+    pub fn flow_kind(&self) -> FlowKind {
+        self.extra
+            .get("canvasdesk")
+            .and_then(|ext| ext.get("flow"))
+            .and_then(|flow| flow.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            .map(FlowKind::from_kind_str)
+            .unwrap_or(FlowKind::Control)
+    }
+
+    /// FR-014: записать тип потока в `canvasdesk.flow.kind`. Control
+    /// УДАЛЯЕТ поле (и пустые `flow`/`canvasdesk`) — старые файлы остаются
+    /// без изменений (round-trip чистый); чужие поля `canvasdesk`
+    /// сохраняются.
+    pub fn set_flow_kind(&mut self, kind: FlowKind) {
+        match kind {
+            FlowKind::Control => {
+                let Some(Value::Object(ext)) = self.extra.get_mut("canvasdesk") else {
+                    return;
+                };
+                let mut flow_empty = false;
+                if let Some(Value::Object(flow)) = ext.get_mut("flow") {
+                    flow.remove("kind");
+                    flow_empty = flow.is_empty();
+                }
+                if flow_empty {
+                    ext.remove("flow");
+                }
+                if ext.is_empty() {
+                    self.extra.remove("canvasdesk");
+                }
+            }
+            FlowKind::Value => {
+                let Some(ext) = self
+                    .extra
+                    .entry("canvasdesk".to_owned())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                else {
+                    // canvasdesk не объект (чужой мусор) — не трогаем, kind
+                    // останется Control при чтении
+                    return;
+                };
+                if let Some(flow) = ext
+                    .entry("flow".to_owned())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                {
+                    flow.insert("kind".to_owned(), Value::from("value"));
+                }
+            }
         }
     }
 }

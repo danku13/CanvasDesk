@@ -24,7 +24,7 @@
 
 use std::time::{Duration, Instant};
 
-use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, NodeKind};
+use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, NodeKind};
 
 use crate::ui::{point_in_rect, NodeSetting};
 use crate::{preset_color, CardInstance, Vec2};
@@ -101,6 +101,9 @@ pub enum PaletteAction {
         edge_index: usize,
         preset: Option<&'static str>,
     },
+    /// FR-014: тип потока связи — value (переносит значение) или control
+    /// (визуальная связь). Переключение — undo-шаг + пересчёт потока.
+    EdgeFlowKind { edge_index: usize, kind: FlowKind },
 }
 
 /// Векторная иконка кнопки: композиция квадов (`icon_quads`) и/или
@@ -137,6 +140,8 @@ pub enum PaletteIcon {
     Rename,
     /// Текстовый глиф «×» (очистить текст) — только `icon_text`.
     Clear,
+    /// FR-014: стрелка потока (группа «Поток» палитры связи).
+    Flow,
 }
 
 /// Кнопка выпадающего перечня.
@@ -476,6 +481,33 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
             icon: PaletteIcon::Swatch(current),
             entries: color_entries,
         },
+        // FR-014: тип потока — значение идёт в формулы downstream ($in/$N)
+        // как value-ребро; control — визуальная связь. Пометка «(фолбэк при
+        // цикле)» не нужна: цикл блокируется на создании/тогле.
+        PaletteGroup {
+            label: "Поток".to_owned(),
+            icon: PaletteIcon::Flow,
+            entries: vec![
+                PaletteEntry {
+                    action: PaletteAction::EdgeFlowKind {
+                        edge_index,
+                        kind: FlowKind::Value,
+                    },
+                    label: "Значение".to_owned(),
+                    icon: Some(PaletteIcon::Flow),
+                    current: edge.flow_kind() == FlowKind::Value,
+                },
+                PaletteEntry {
+                    action: PaletteAction::EdgeFlowKind {
+                        edge_index,
+                        kind: FlowKind::Control,
+                    },
+                    label: "Контрольная".to_owned(),
+                    icon: None,
+                    current: edge.flow_kind() == FlowKind::Control,
+                },
+            ],
+        },
     ]
 }
 
@@ -757,11 +789,12 @@ pub fn color_to_rgba(color: crate::Color) -> [f32; 4] {
 }
 
 /// Текстовый глиф иконки (для не-квадовых): «Aa» — переименовать,
-/// «×» — очистить. None — иконка только квадами.
+/// «×» — очистить, «→» — поток значений (FR-014). None — иконка только квадами.
 pub fn icon_text(icon: PaletteIcon) -> Option<&'static str> {
     match icon {
         PaletteIcon::Rename => Some("Aa"),
         PaletteIcon::Clear => Some("×"),
+        PaletteIcon::Flow => Some("→"),
         _ => None,
     }
 }
@@ -969,7 +1002,7 @@ pub fn icon_quads(icon: PaletteIcon, rect: [f32; 4], tint: [f32; 4]) -> Vec<Card
             }
         }
         // Текстовые глифы — квадов нет (рисуются ScreenText'ом)
-        PaletteIcon::Rename | PaletteIcon::Clear => {}
+        PaletteIcon::Rename | PaletteIcon::Clear | PaletteIcon::Flow => {}
     }
     quads
 }
@@ -1085,7 +1118,7 @@ mod tests {
         }
     }
 
-    /// Группы связи: Стиль/Толщина/Цвет; текущие значения помечены.
+    /// Группы связи: Стиль/Толщина/Цвет/Поток (FR-014); текущие значения помечены.
     #[test]
     fn edge_groups_mark_current() {
         let mut canvas = Canvas::default();
@@ -1098,7 +1131,7 @@ mod tests {
         canvas.edges.push(edge);
         let groups = palette_groups(&canvas, &PaletteTarget::Edge(0));
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
-        assert_eq!(labels, vec!["Стиль", "Толщина", "Цвет"]);
+        assert_eq!(labels, vec!["Стиль", "Толщина", "Цвет", "Поток"]);
         let style_current: Vec<bool> = groups[0].entries.iter().map(|e| e.current).collect();
         assert_eq!(style_current, vec![false, true, false], "пунктир текущий");
         let thick_current: Vec<bool> = groups[1].entries.iter().map(|e| e.current).collect();

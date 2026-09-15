@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use canvas_core::{Canvas, Node, NodeKind, PreviewState, Side};
+use canvas_core::{Canvas, Edge, Node, NodeKind, PreviewState, Side};
 
 const SPEC_EXAMPLE: &str = include_str!("fixtures/spec_example.canvas");
 const OBSIDIAN: &str = include_str!("fixtures/obsidian.canvas");
@@ -292,4 +292,83 @@ fn expr_reads_external_file_and_preserves_siblings() {
     let json = canvas.to_json().expect("сериализация");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
     assert_eq!(parsed["nodes"][0]["canvasdesk"]["expr"], "2k rps");
+}
+
+/// FR-014: `canvasdesk.flow.kind` ребра переживает round-trip; отсутствие
+/// поля (старые файлы) читается как Control; сброс в Control удаляет поле
+/// целиком, не трогая соседние ключи.
+#[test]
+fn edge_flow_kind_round_trip() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+    canvas.nodes.push(Node::text("b", "b", 10.0, 0.0));
+    // Value-ребро
+    let mut value = Edge::new("e1", "a", None, "b", None);
+    value.set_flow_kind(canvas_core::flow::FlowKind::Value);
+    canvas.add_edge(value);
+    // Control-ребро — поле не пишется вовсе (дефолт)
+    let mut control = Edge::new("e2", "b", None, "a", None);
+    control.set_flow_kind(canvas_core::flow::FlowKind::Control);
+    canvas.add_edge(control);
+
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(
+        parsed["edges"][0]["canvasdesk"]["flow"]["kind"], "value",
+        "kind=value в файле"
+    );
+    assert!(
+        parsed["edges"][1].get("canvasdesk").is_none(),
+        "control-ребро без расширения: {}",
+        json
+    );
+
+    let restored = Canvas::from_str(&json).expect("парсинг");
+    assert_eq!(
+        restored.edges[0].flow_kind(),
+        canvas_core::flow::FlowKind::Value
+    );
+    assert_eq!(
+        restored.edges[1].flow_kind(),
+        canvas_core::flow::FlowKind::Control,
+        "отсутствие поля — control"
+    );
+}
+
+/// FR-014: чужой файл с `canvasdesk.flow.kind` ребра читается; чужие
+/// соседи внутри canvasdesk ребра сохраняются при тогле.
+#[test]
+fn edge_flow_reads_external_file_and_preserves_siblings() {
+    let source = r#"{
+        "nodes": [
+            { "id": "a", "type": "text", "text": "a", "x": 0, "y": 0, "width": 260, "height": 120 },
+            { "id": "b", "type": "text", "text": "b", "x": 10, "y": 0, "width": 260, "height": 120 }
+        ],
+        "edges": [
+            {
+                "id": "e1",
+                "fromNode": "a",
+                "toNode": "b",
+                "canvasdesk": { "note": "моё", "flow": { "kind": "value" } }
+            }
+        ]
+    }"#;
+    let mut canvas = Canvas::from_str(source).expect("чужой файл парсится");
+    assert_eq!(
+        canvas.edges[0].flow_kind(),
+        canvas_core::flow::FlowKind::Value
+    );
+    // Тогл в Control: flow пустой → удаляется, note остаётся
+    canvas
+        .edges
+        .get_mut(0)
+        .expect("ребро есть")
+        .set_flow_kind(canvas_core::flow::FlowKind::Control);
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(parsed["edges"][0]["canvasdesk"]["note"], "моё");
+    assert!(
+        parsed["edges"][0]["canvasdesk"].get("flow").is_none(),
+        "пустой flow удалён"
+    );
 }
