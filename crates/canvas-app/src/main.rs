@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use canvas_app::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
-    palette_layout, palette_origin, PaletteAction, PaletteHit, PaletteHover, PaletteLayout,
-    PaletteTarget, PAL_ICON,
+    palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
+    PaletteLayout, PaletteTarget, PAL_ICON,
 };
 use canvas_app::template_ui;
 use canvas_app::template_ui::{
@@ -858,8 +858,8 @@ struct App {
     flight: Option<(Flight, Instant)>,
     /// Пульс подсветки ноды-результата (T14): (нода, старт).
     pulse: Option<(usize, Instant)>,
-    /// FR-018: реестр шаблонов (v1 — mock из 5; FR-019 — built-in
-    /// библиотека, FR-020 — custom из ~/.canvasdesk/templates).
+    /// FR-019: реестр шаблонов — built-in библиотека из assets/templates
+    /// (15 шаблонов, include_dir); FR-020 добавит custom из ~/.canvasdesk/templates.
     templates: canvas_core::templates::TemplateRegistry,
     /// FR-018: боковая палитра шаблонов (Ctrl+P): фильтр/категории/выбор.
     template_panel: template_ui::TemplatePanel,
@@ -1011,7 +1011,7 @@ impl App {
             search_pending: None,
             flight: None,
             pulse: None,
-            templates: canvas_core::templates::TemplateRegistry::mock(),
+            templates: canvas_core::templates::TemplateRegistry::builtin(),
             template_panel: template_ui::TemplatePanel::new(),
             wheel_menu: None,
             focus_dim: 0.0,
@@ -2932,7 +2932,7 @@ impl App {
                 icon_tint,
             ));
             texts.push(OwnedScreenText {
-                text: manifest.name.clone(),
+                text: manifest.display_name().to_owned(),
                 origin: [icon_rect[0] + icon_rect[2] + 8.0, row_rect[1] + 5.0],
                 width: row_rect[2] - (icon_rect[2] + 24.0),
                 font_size: 13.0,
@@ -3023,7 +3023,7 @@ impl App {
                     icon_tint,
                 ));
                 texts.push(OwnedScreenText {
-                    text: manifest.name.clone(),
+                    text: manifest.display_name().to_owned(),
                     origin: [qx + 2.0, qy + 22.0],
                     width: side - 4.0,
                     font_size: 10.0,
@@ -3391,7 +3391,16 @@ impl App {
         PaletteTarget,
     )> {
         let target = self.palette_target()?;
-        let groups = palette_groups(&self.scene.canvas, &target);
+        let mut groups = palette_groups(&self.scene.canvas, &target);
+        // FR-019: linked-связь с шаблоном — при несовпадении версии ноды
+        // с реестром группа «Шаблон» с ручным update
+        if let PaletteTarget::Nodes { primary, .. } = &target {
+            if let Some(group) =
+                template_update_group(&self.scene.canvas, *primary, &self.templates)
+            {
+                groups.push(group);
+            }
+        }
         if groups.is_empty() {
             return None;
         }
@@ -3662,6 +3671,55 @@ impl App {
                 self.scene.push_undo(snapshot);
                 self.scene.mark_dirty();
                 self.show_toast("Порты связи: авто (кратчайший путь)");
+                self.request_redraw();
+            }
+            // FR-019: ручной update шаблонной ноды (linked-связь):
+            // expr/version/icon/color — из манифеста реестра, params — по
+            // именам (совпавшие сохраняются, новые — дефолты). Один
+            // undo-шаг, пересчёт потока.
+            PaletteAction::TemplateUpdate { node_index } => {
+                let Some(node) = self.scene.canvas.nodes.get(node_index) else {
+                    return;
+                };
+                let Some(template) = node.template() else {
+                    return;
+                };
+                let Some(manifest) = self.templates.find(&template.id) else {
+                    return;
+                };
+                if manifest.version == template.version {
+                    return; // no-op — шаг не копится
+                }
+                let mut updated = template.clone();
+                updated.version = manifest.version.clone();
+                updated.expr = manifest.expr.clone();
+                updated.icon = manifest.icon.clone();
+                updated.color = manifest.color.clone();
+                let mut params = BTreeMap::new();
+                for spec in &manifest.params {
+                    let value = template.params.get(&spec.name).cloned().unwrap_or(
+                        canvas_core::templates::TemplateParam {
+                            num: spec.default,
+                            unit: spec.unit.clone(),
+                        },
+                    );
+                    params.insert(spec.name.clone(), value);
+                }
+                updated.params = params;
+                let snapshot = self.scene.canvas.clone();
+                if let Some(node) = self.scene.canvas.nodes.get_mut(node_index) {
+                    node.set_template(Some(updated));
+                }
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                }
+                self.scene.mark_dirty();
+                self.scene.recompute_flow();
+                self.show_toast(format!(
+                    "Шаблон обновлён: {} → v{}",
+                    manifest.display_name(),
+                    manifest.version
+                ));
                 self.request_redraw();
             }
         }
@@ -4698,10 +4756,12 @@ fn mcp_dispatch(
                         .collect();
                     serde_json::json!({
                         "id": manifest.id,
-                        "name": manifest.name,
+                        "name_en": manifest.name,
+                        "name_ru": manifest.name_ru,
                         "version": manifest.version,
                         "category": manifest.category,
                         "description": manifest.description,
+                        "description_en": manifest.description_en,
                         "expr": manifest.expr,
                         "icon": manifest.icon,
                         "color": manifest.color,
@@ -8383,7 +8443,7 @@ mod tests {
         params: &str,
     ) -> Result<serde_json::Value, String> {
         let params: serde_json::Value = serde_json::from_str(params).expect("params — JSON");
-        let registry = canvas_core::templates::TemplateRegistry::mock();
+        let registry = canvas_core::templates::TemplateRegistry::builtin();
         mcp_dispatch(scene, camera, &registry, method, &params)
     }
 
@@ -10116,19 +10176,21 @@ mod tests {
         .is_err());
     }
 
-    /// FR-018: template_list — реестр отдаёт 5 mock-шаблонов с полной
-    /// схемой (инвариант 4: MCP-видимость эквивалентна UI).
+    /// FR-019: template_list — built-in реестр отдаёт 15 шаблонов с полной
+    /// схемой (инвариант 4: MCP-видимость эквивалентна UI; двуязычные имена).
     #[test]
-    fn mcp_template_list_mock_registry() {
+    fn mcp_template_list_builtin_registry() {
         let mut scene = mcp_scene();
         let mut camera = Camera::default();
         let list = dispatch(&mut scene, &mut camera, "template_list", "{}").expect("list");
         let templates = list.as_array().expect("массив");
-        assert_eq!(templates.len(), 5);
+        assert_eq!(templates.len(), 15, "все built-in шаблоны");
         let lb = templates
             .iter()
-            .find(|t| t["id"] == "mock.lb")
-            .expect("mock.lb");
+            .find(|t| t["id"] == "com.canvasdesk.lb")
+            .expect("com.canvasdesk.lb");
+        assert_eq!(lb["name_en"], "Load Balancer");
+        assert_eq!(lb["name_ru"], "Балансировщик нагрузки");
         assert_eq!(lb["version"], "1.0.0");
         assert_eq!(lb["category"], "backend");
         assert_eq!(lb["expr"], "mm1($rps, $service_rate, $servers)");
@@ -10138,6 +10200,10 @@ mod tests {
         // Схема для UI: иконка и цвет категории в списке
         assert_eq!(lb["icon"], "lb");
         assert_eq!(lb["color"], "#4A90E2");
+        // Категории: 10 backend + 5 network
+        let by_cat = |cat: &str| templates.iter().filter(|t| t["category"] == cat).count();
+        assert_eq!(by_cat("backend"), 10);
+        assert_eq!(by_cat("network"), 5);
     }
 
     /// FR-018: template_instantiate — text-нода с Numi-листом параметров
@@ -10151,7 +10217,7 @@ mod tests {
             &mut scene,
             &mut camera,
             "template_instantiate",
-            r#"{"id":"mock.lb","x":150,"y":250,"params":{"rps":2000}}"#,
+            r#"{"id":"com.canvasdesk.lb","x":150,"y":250,"params":{"rps":2000}}"#,
         )
         .expect("instantiate");
         let id = out["id"].as_str().expect("id").to_owned();
@@ -10169,7 +10235,7 @@ mod tests {
         assert!(text.contains("servers = 2"));
         // Снимок template-ссылки
         let template = node.template().expect("template");
-        assert_eq!(template.id, "mock.lb");
+        assert_eq!(template.id, "com.canvasdesk.lb");
         assert_eq!(template.version, "1.0.0");
         assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
         assert_eq!(template.params["rps"].num, 2000.0);
@@ -10207,7 +10273,7 @@ mod tests {
             &mut scene,
             &mut camera,
             "template_instantiate",
-            r#"{"id":"mock.lb","x":0,"y":0,"params":{"rps":-5}}"#
+            r#"{"id":"com.canvasdesk.lb","x":0,"y":0,"params":{"rps":-5}}"#
         )
         .is_err());
         // Неизвестное имя параметра
@@ -10215,7 +10281,7 @@ mod tests {
             &mut scene,
             &mut camera,
             "template_instantiate",
-            r#"{"id":"mock.lb","x":0,"y":0,"params":{"ghost":1}}"#
+            r#"{"id":"com.canvasdesk.lb","x":0,"y":0,"params":{"ghost":1}}"#
         )
         .is_err());
         // Ни одна ошибочная ветка не мутировала модель

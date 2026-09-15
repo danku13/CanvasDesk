@@ -323,6 +323,60 @@ pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<Ca
                 false,
             );
         }
+        // Арка шлюза: две стойки + перекладина
+        "gateway" => {
+            push([x + 2.0 * u, y + 4.0 * u], [2.5 * u, 11.0 * u], fill, false);
+            push(
+                [x + 11.5 * u, y + 4.0 * u],
+                [2.5 * u, 11.0 * u],
+                fill,
+                false,
+            );
+            push([x + 1.5 * u, y + 1.5 * u], [13.0 * u, 2.5 * u], fill, false);
+        }
+        // Воркер: корпус с ядром и двумя «ножками» потока
+        "worker" => {
+            push([x + 2.0 * u, y + 2.0 * u], [12.0 * u, 12.0 * u], fill, true);
+            push([x + 5.5 * u, y + 5.5 * u], [5.0 * u, 5.0 * u], fill, false);
+            push([x + 0.5 * u, y + 7.2 * u], [1.5 * u, 1.5 * u], fill, false);
+            push([x + 14.0 * u, y + 7.2 * u], [1.5 * u, 1.5 * u], fill, false);
+        }
+        // Ведро хранилища: сужающаяся стопка
+        "storage" => {
+            push([x + 2.0 * u, y + 2.0 * u], [12.0 * u, 3.0 * u], fill, false);
+            push([x + 3.0 * u, y + 6.5 * u], [10.0 * u, 3.0 * u], fill, false);
+            push([x + 4.0 * u, y + 11.0 * u], [8.0 * u, 3.0 * u], fill, false);
+        }
+        // Ключ аутентификации: кольцо + стержень + два зубца
+        "auth" => {
+            push([x + 1.5 * u, y + 3.0 * u], [6.0 * u, 6.0 * u], fill, true);
+            push([x + 7.0 * u, y + 5.2 * u], [7.5 * u, 1.6 * u], fill, false);
+            push([x + 11.0 * u, y + 6.8 * u], [1.6 * u, 3.0 * u], fill, false);
+            push([x + 13.5 * u, y + 6.8 * u], [1.6 * u, 4.0 * u], fill, false);
+        }
+        // RPC-стрелки: две встречные горизонтальные стрелки
+        "grpc" => {
+            push([x + 1.5 * u, y + 4.5 * u], [9.0 * u, 1.6 * u], fill, false);
+            push([x + 10.5 * u, y + 3.0 * u], [1.6 * u, 4.5 * u], fill, false);
+            push([x + 12.0 * u, y + 3.0 * u], [1.6 * u, 1.6 * u], fill, false);
+            push([x + 5.5 * u, y + 9.8 * u], [9.0 * u, 1.6 * u], fill, false);
+            push([x + 3.9 * u, y + 8.3 * u], [1.6 * u, 4.5 * u], fill, false);
+            push([x + 2.4 * u, y + 11.3 * u], [1.6 * u, 1.6 * u], fill, false);
+        }
+        // Граф GraphQL: три вершины + рёбра-связки
+        "graphql" => {
+            push([x + 6.8 * u, y + 1.0 * u], [2.4 * u, 2.4 * u], fill, false);
+            push([x + 1.5 * u, y + 10.5 * u], [2.4 * u, 2.4 * u], fill, false);
+            push(
+                [x + 12.0 * u, y + 10.5 * u],
+                [2.4 * u, 2.4 * u],
+                fill,
+                false,
+            );
+            push([x + 7.4 * u, y + 3.0 * u], [1.2 * u, 8.5 * u], fill, false);
+            push([x + 3.0 * u, y + 8.0 * u], [9.5 * u, 1.2 * u], fill, false);
+            push([x + 3.4 * u, y + 4.0 * u], [4.5 * u, 1.2 * u], fill, false);
+        }
         // Рамка с ядром (custom)
         _ => {
             push([x + 1.5 * u, y + 1.5 * u], [13.0 * u, 13.0 * u], fill, true);

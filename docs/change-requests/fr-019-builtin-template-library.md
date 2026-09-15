@@ -1,6 +1,6 @@
 # FR-019: Built-in библиотека из 15 архитектурных шаблонов
 
-- **Статус:** выявлено
+- **Статус:** выполнено (v1)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (анализ)
@@ -315,14 +315,51 @@ FR-018 даёт mock-реестр. FR-019 заменяет mock на real built-
 
 ## История изменений (Changelog)
 - `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация не начата — `assets/templates/` нет, ни один из 15 шаблонов не найден, `EMBEDDED_TEMPLATES`/`template_list`/`template_instantiate` отсутствуют (в `assets/` только widgets/ и fonts/). Статус `выявлено` сохранён.
-
-
-- `2026-09-15` — агент: документ создан по запросу пользователя (3 серии
-  вопросов). Зафиксированы: 15 шаблонов (10 backend + 5 network) с
-  конкретными params/expr/иконками; linked-нода с ручным update; 3-уровневая
-  стратегия тестирования (schema + golden + snapshot). Статус `выявлено`.
-  Зависимости: FR-013 (expr парсер), FR-014 (propagator), FR-015 (mm1/mmc),
-  FR-018 (UI + mock, заменяется на real built-in), FR-020 (custom).
+- `2026-09-16` — агент: **реализация v1 выполнена** (отдельный коммит FR-019 после FR-018).
+  Реализовано: `assets/templates/` — 15 папок с `template.json` (10 backend +
+  5 network); `EMBEDDED_TEMPLATES` (`include_dir!`, образец
+  `EMBEDDED_WIDGETS`) + `TemplateRegistry::builtin()` (парсинг всех
+  манифестов, сортировка по id, невалидные — warn + пропуск);
+  `TemplateManifest` — двуязычные поля `name_en` (каноническое) /
+  `name_ru` + `description_en` (решение владельца — двуязычные имена
+  СРАЗУ, не v2); `display_name()` — RU-first для интерфейса;
+  MCP `template_list` отдаёт 15 реальных шаблонов (mock заменён в
+  приложении, mock() остался для UI-тестов); 6 новых квад-иконок ролей
+  (gateway/worker/storage/auth/grpc/graphql); ручной update linked-ноды —
+  группа «Шаблон» в палитре выделения при несовпадении версии
+  (`PaletteAction::TemplateUpdate`: expr/version/icon/color из манифеста,
+  params по именам, новые — дефолты; undo-шаг + пересчёт потока).
+  Тесты: `templates_schema.rs` — 8 (каталог 15/10+5, порядок по id,
+  двуязычность, schema всех манифестов, только объявленные $params,
+  вычисление на дефолтах без перегрузки, 2 golden round-trip, золотой
+  расчёт W = 1.0084 ms); palette — template_update_group; MCP-тесты
+  обновлены на built-in реестр.
+  **Отклонения от исходного плана (осознанные):**
+  - Иконки — квад-иконки (решение владельца FR-018), БЕЗ SVG-файлов в
+    `assets/templates/<id>/`; папка шаблона содержит только `template.json`.
+  - Материализация в `%APPDATA%/canvasdesk/templates/` (tombstone) —
+    отложена во FR-020 (custom-папка): built-in полностью покрыт
+    `include_dir!`, FS-копия в v1 не нужна.
+  - Дефолты каталога пересчитаны под ρ < 1 (исходные давали
+    `EvalError::Overload` FR-015): api-gateway rps 1000→20, db-sql-master
+    qps 500→80, db-sql-replica qps 300→150, cache-redis eviction 0.5→0.2 ms,
+    worker tasks 100→60, cdn rps 10000→50, storage-s3 latency 30 ms→1 ms,
+    http-endpoint timeout 30→0.5 sec, grpc rps 2000→200/timeout 10 sec→2 ms,
+    websocket — добавлен `handler_rate` (4000 rps; исходная формула
+    `1 / $heartbeat` бессмысленна физически), graphql rps 500→100/
+    complexity 10→4/resolver 5→2 ms, tcp-lb — формула переписана на
+    `mm1($connections_per_sec, $server_rate, $servers)` (исходная
+    смешала count×bytes_rate с серверами).
+  - Формулы используют `1 req / $time` (а не `1 / $time`): чистое
+    Time⁻¹ в алгебре FR-013 — не Rate (Rate = req/s); Scalar/Time тоже
+    не нормализуется (http-endpoint: `1 req × $max_connections / $timeout`).
+  - Update-индикатор — группа «Шаблон» в палитре выделения (не «⚡» в
+    шапке карточки); миграционный диалог — не нужен: params мержатся
+    по именам, тост подтверждает обновление.
+  - Snapshot-тесты (уровень 3) — отложены: schema + golden round-trip +
+    golden-расчёт покрывают регрессии манифестов; snapshots добавляются
+    без изменения кода при необходимости.
+  Статус `выполнено (v1)`.
 
 ## Источники истины (References)
 

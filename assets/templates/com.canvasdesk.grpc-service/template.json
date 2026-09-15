@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.grpc-service",
+  "name_en": "gRPC Service",
+  "name_ru": "gRPC-сервис",
+  "version": "1.0.0",
+  "category": "network",
+  "description": "gRPC-сервис: латентность вызова, окно стрима — справочное.",
+  "description_en": "gRPC service: call latency, stream window informational.",
+  "params": [
+    {
+      "name": "rps",
+      "type": "rate",
+      "default": 200,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "timeout",
+      "type": "time",
+      "default": 2,
+      "unit": "ms",
+      "min": 0.001
+    },
+    {
+      "name": "stream_window",
+      "type": "bytes",
+      "default": 64,
+      "unit": "KB",
+      "min": 0
+    }
+  ],
+  "expr": "mm1($rps, 1 req / $timeout)",
+  "color": "#7ED321",
+  "icon": "grpc"
+}

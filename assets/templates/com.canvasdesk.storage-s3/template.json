@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.storage-s3",
+  "name_en": "Storage (S3)",
+  "name_ru": "Хранилище (S3)",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Объектное хранилище: латентность запроса, размер объекта — справочный.",
+  "description_en": "Object storage: request latency, object size informational.",
+  "params": [
+    {
+      "name": "requests_per_sec",
+      "type": "rate",
+      "default": 500,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "latency",
+      "type": "time",
+      "default": 1,
+      "unit": "ms",
+      "min": 0.001
+    },
+    {
+      "name": "object_size",
+      "type": "bytes",
+      "default": 8,
+      "unit": "KB",
+      "min": 0
+    }
+  ],
+  "expr": "mm1($requests_per_sec, 1 req / $latency)",
+  "color": "#F5A623",
+  "icon": "storage"
+}

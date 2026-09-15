@@ -114,6 +114,10 @@ pub enum PaletteAction {
     /// FR-014: тип потока связи — value (переносит значение) или control
     /// (визуальная связь). Переключение — undo-шаг + пересчёт потока.
     EdgeFlowKind { edge_index: usize, kind: FlowKind },
+    /// FR-019: ручной update шаблонной ноды до версии реестра (linked-
+    /// связь): expr/version/icon/color — из манифеста, params — по именам
+    /// (новые — дефолты). Один undo-шаг + пересчёт потока.
+    TemplateUpdate { node_index: usize },
 }
 
 /// Векторная иконка кнопки: композиция квадов (`icon_quads`) и/или
@@ -154,6 +158,8 @@ pub enum PaletteIcon {
     Flow,
     /// CR-008: линия с точкой порта на конце (группа «Порты»).
     Pin,
+    /// FR-019: шаблонная нода (рамка с ядром — группа «Шаблон»).
+    Template,
 }
 
 /// Кнопка выпадающего перечня.
@@ -217,6 +223,38 @@ pub enum PaletteHit {
 /// один из пресетов "1".."6"; значение вне пресетов — None (контурный свотч).
 fn static_preset(color: Option<&str>) -> Option<&'static str> {
     color.and_then(|c| ["1", "2", "3", "4", "5", "6"].into_iter().find(|p| *p == c))
+}
+
+/// FR-019: группа «Шаблон» — ручной update при несовпадении версии
+/// шаблонной ноды с реестром (linked-связь с ручным update — решение
+/// владельца). None — нода не шаблонная, шаблона нет в реестре или версия
+/// уже актуальна.
+pub fn template_update_group(
+    canvas: &Canvas,
+    primary: usize,
+    registry: &canvas_core::templates::TemplateRegistry,
+) -> Option<PaletteGroup> {
+    let node = canvas.nodes.get(primary)?;
+    let template = node.template()?;
+    let manifest = registry.find(&template.id)?;
+    if manifest.version == template.version {
+        return None;
+    }
+    Some(PaletteGroup {
+        label: "Шаблон".to_owned(),
+        icon: PaletteIcon::Template,
+        entries: vec![PaletteEntry {
+            action: PaletteAction::TemplateUpdate {
+                node_index: primary,
+            },
+            label: format!(
+                "Обновить до v{} (была v{})",
+                manifest.version, template.version
+            ),
+            icon: None,
+            current: false,
+        }],
+    })
 }
 
 /// Группы палитры для цели. Ноды: [Цвет][Раскладка][Действия][Ветвление?];
@@ -909,6 +947,10 @@ pub fn icon_quads(
         },
         PaletteIcon::LineSolid => solid(&mut quads, [x + 3.0, cy - 1.5], [w - 6.0, 3.0], 1.5),
         // CR-008: линия связи, у правого конца — точка порта
+        PaletteIcon::Template => {
+            outline(&mut quads, [x + 3.0, y + 3.0], [w - 6.0, h - 6.0], 4.0);
+            solid(&mut quads, [cx - 3.0, cy - 3.0], [6.0, 6.0], 1.5);
+        }
         PaletteIcon::Pin => {
             solid(&mut quads, [x + 3.0, cy - 1.5], [w - 12.0, 3.0], 1.5);
             solid(&mut quads, [x + w - 8.0, cy - 3.0], [6.0, 6.0], 3.0);
@@ -1587,5 +1629,63 @@ mod tests {
             PaletteAction::EdgePortsAuto { .. } => {}
             other => panic!("ожидался EdgePortsAuto: {other:?}"),
         }
+    }
+
+    /// FR-019: группа «Шаблон» — появляется при несовпадении версии
+    /// шаблонной ноды с реестром, отсутствует при совпадении и на
+    /// не-шаблонной ноде.
+    #[test]
+    fn template_update_group_on_version_mismatch() {
+        use canvas_core::templates::{TemplateParam, TemplateRef, TemplateRegistry};
+
+        let template = TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: [(
+                "rps".to_owned(),
+                TemplateParam {
+                    num: 1000.0,
+                    unit: Some("rps".to_owned()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+        };
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("tpl", "rps = 1000 rps", 0.0, 0.0);
+        node.set_template(Some(template));
+        canvas.nodes.push(node);
+
+        // Реестр с новой версией манифеста
+        let mut manifest = TemplateRegistry::mock()
+            .find("mock.lb")
+            .cloned()
+            .expect("mock.lb");
+        manifest.version = "1.1.0".to_owned();
+        let registry = TemplateRegistry::from_manifests(vec![manifest]);
+
+        let group = template_update_group(&canvas, 0, &registry).expect("группа update");
+        assert_eq!(group.label, "Шаблон");
+        assert_eq!(group.icon, PaletteIcon::Template);
+        assert!(
+            group.entries[0].label.contains("Обновить до v1.1.0"),
+            "подпись: {}",
+            group.entries[0].label
+        );
+        match &group.entries[0].action {
+            PaletteAction::TemplateUpdate { node_index } => assert_eq!(*node_index, 0),
+            other => panic!("ожидался TemplateUpdate: {other:?}"),
+        }
+
+        // Актуальная версия — группы нет
+        let current = TemplateRegistry::mock();
+        assert!(template_update_group(&canvas, 0, &current).is_none());
+        // Не-шаблонная нода — группы нет
+        let mut plain = Canvas::default();
+        plain.nodes.push(Node::text("a", "a", 0.0, 0.0));
+        assert!(template_update_group(&plain, 0, &registry).is_none());
     }
 }

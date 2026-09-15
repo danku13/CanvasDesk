@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.db-sql-master",
+  "name_en": "DB SQL (master)",
+  "name_ru": "БД SQL (мастер)",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Мастер БД: μ = 1 / query_time.",
+  "description_en": "SQL master DB: μ = 1 / query_time.",
+  "params": [
+    {
+      "name": "qps",
+      "type": "rate",
+      "default": 80,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "query_time",
+      "type": "time",
+      "default": 10,
+      "unit": "ms",
+      "min": 0.001
+    },
+    {
+      "name": "replicas",
+      "type": "count",
+      "default": 1,
+      "min": 1,
+      "max": 100
+    }
+  ],
+  "expr": "mm1($qps, 1 req / $query_time, $replicas)",
+  "color": "#F5A623",
+  "icon": "db"
+}

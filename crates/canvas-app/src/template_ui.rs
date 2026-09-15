@@ -24,7 +24,8 @@ use crate::Vec2;
 /// шапкой карточки).
 pub fn icon_key(manifest: &TemplateManifest) -> &str {
     match manifest.icon.as_str() {
-        "lb" | "db" | "cache" | "http" | "queue" => manifest.icon.as_str(),
+        "lb" | "db" | "cache" | "http" | "queue" | "gateway" | "worker" | "storage" | "auth"
+        | "grpc" | "graphql" => manifest.icon.as_str(),
         _ => "custom",
     }
 }

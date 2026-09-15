@@ -1,0 +1,41 @@
+{
+  "id": "com.canvasdesk.websocket",
+  "name_en": "WebSocket",
+  "name_ru": "WebSocket",
+  "version": "1.0.0",
+  "category": "network",
+  "description": "WebSocket: агрегированный поток сообщений против производительности обработчика.",
+  "description_en": "WebSocket: aggregated message flow against handler capacity.",
+  "params": [
+    {
+      "name": "connections",
+      "type": "count",
+      "default": 5000,
+      "min": 1
+    },
+    {
+      "name": "messages_per_sec",
+      "type": "rate",
+      "default": 0.5,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "handler_rate",
+      "type": "rate",
+      "default": 4000,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "heartbeat",
+      "type": "time",
+      "default": 30,
+      "unit": "sec",
+      "min": 0
+    }
+  ],
+  "expr": "mm1($connections × $messages_per_sec, $handler_rate)",
+  "color": "#7ED321",
+  "icon": "http"
+}

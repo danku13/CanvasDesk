@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.auth-service",
+  "name_en": "Auth Service",
+  "name_ru": "Сервис аутентификации",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Аутентификация: верификация токенов, cache_ttl — справочный.",
+  "description_en": "Auth service: token verification, cache_ttl informational.",
+  "params": [
+    {
+      "name": "rps",
+      "type": "rate",
+      "default": 200,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "token_verify",
+      "type": "time",
+      "default": 2,
+      "unit": "ms",
+      "min": 0.001
+    },
+    {
+      "name": "cache_ttl",
+      "type": "time",
+      "default": 5,
+      "unit": "min",
+      "min": 0
+    }
+  ],
+  "expr": "mm1($rps, 1 req / $token_verify)",
+  "color": "#4A90E2",
+  "icon": "auth"
+}

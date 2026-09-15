@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.tcp-lb",
+  "name_en": "TCP Load Balancer",
+  "name_ru": "TCP-балансировщик",
+  "version": "1.0.0",
+  "category": "network",
+  "description": "L4-балансировщик TCP-соединений по серверам.",
+  "description_en": "L4 balancer distributing TCP connections across servers.",
+  "params": [
+    {
+      "name": "connections_per_sec",
+      "type": "rate",
+      "default": 800,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "server_rate",
+      "type": "rate",
+      "default": 400,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "servers",
+      "type": "count",
+      "default": 3,
+      "min": 1,
+      "max": 100
+    }
+  ],
+  "expr": "mm1($connections_per_sec, $server_rate, $servers)",
+  "color": "#7ED321",
+  "icon": "lb"
+}

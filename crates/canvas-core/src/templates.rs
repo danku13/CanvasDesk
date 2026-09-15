@@ -28,6 +28,11 @@ use serde_json::{json, Map, Value as Json};
 use crate::expr;
 use crate::model::Node;
 
+/// FR-019: built-in библиотека шаблонов (`assets/templates/*/template.json`),
+/// зашитая в бинарник (образец — `EMBEDDED_WIDGETS` в canvas-widgets).
+static EMBEDDED_TEMPLATES: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../assets/templates");
+
 // --- Манифест шаблона ---
 
 /// Тип параметра (FR-018): подсказка UI и валидации; значения в params —
@@ -79,34 +84,54 @@ pub struct ParamSpec {
     pub max: Option<f64>,
 }
 
-/// Манифест шаблона (FR-018; в FR-019 — парсинг из `template.json`).
+/// Манифест шаблона (FR-018/FR-019).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemplateManifest {
-    /// Уникальный id (`mock.lb`; в FR-019 — `com.canvasdesk.lb`).
+    /// Уникальный id (`com.canvasdesk.lb`).
     pub id: String,
+    /// Каноническое (английское) имя; читается из `name_en` (совместимость
+    /// — из `name`).
     pub name: String,
-    /// Semver (`1.0.0`) — для update-индикатора FR-019.
+    /// FR-019: русское имя (решение владельца — двуязычные поля
+    /// `name_en`/`name_ru`); UI показывает [`Self::display_name`].
+    pub name_ru: Option<String>,
+    /// Semver (`1.0.0`) — для ручного update (FR-019, linked-нода).
     pub version: String,
     /// Категория для wheel/палитры (`backend`, `network`, `cache`,
     /// `queue`, `custom`).
     pub category: String,
+    /// Описание (RU); `description_en` — английский вариант (MCP).
     pub description: String,
+    pub description_en: Option<String>,
     pub params: Vec<ParamSpec>,
     /// Numi-формула с `$param`-ссылками (`mm1($rps, $service_rate, $servers)`).
     pub expr: String,
     /// Цвет категории `#RRGGBB` (полоса шапки шаблонной ноды).
     pub color: String,
-    /// Ключ квад-иконки (`lb`, `db`, `cache`, `http`, `queue`, `custom`).
+    /// Ключ квад-иконки (`lb`, `db`, `cache`, `http`, `queue`, `gateway`,
+    /// `worker`, `storage`, `auth`, `grpc`, `graphql`, `custom`).
     pub icon: String,
 }
 
 impl TemplateManifest {
-    /// Парсинг манифеста из JSON (схема FR-019 `template.json`; в FR-018
-    /// используется тестами и mock-набором).
+    /// Имя для интерфейса: русское, если задано (язык приложения), иначе
+    /// каноническое английское.
+    pub fn display_name(&self) -> &str {
+        self.name_ru.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Парсинг манифеста из JSON (схема FR-019 `template.json`).
     pub fn from_json(value: &Json) -> Option<Self> {
         let obj = value.as_object()?;
         let id = obj.get("id")?.as_str()?.to_owned();
-        let name = obj.get("name")?.as_str()?.to_owned();
+        // FR-019: двуязычные имена — `name_en` (каноническое) + `name_ru`;
+        // старые манифесты/моки — `name`.
+        let name = obj
+            .get("name_en")
+            .and_then(Json::as_str)
+            .or_else(|| obj.get("name").and_then(Json::as_str))?
+            .to_owned();
+        let name_ru = obj.get("name_ru").and_then(Json::as_str).map(str::to_owned);
         let version = obj.get("version")?.as_str()?.to_owned();
         let category = obj.get("category")?.as_str()?.to_owned();
         let description = obj
@@ -114,6 +139,10 @@ impl TemplateManifest {
             .and_then(Json::as_str)
             .unwrap_or_default()
             .to_owned();
+        let description_en = obj
+            .get("description_en")
+            .and_then(Json::as_str)
+            .map(str::to_owned);
         let expr = obj.get("expr")?.as_str()?.to_owned();
         let color = obj
             .get("color")
@@ -140,9 +169,11 @@ impl TemplateManifest {
         Some(Self {
             id,
             name,
+            name_ru,
             version,
             category,
             description,
+            description_en,
             params,
             expr,
             color,
@@ -152,9 +183,9 @@ impl TemplateManifest {
 
     /// Сериализация в JSON (схема FR-019; симметрично [`Self::from_json`]).
     pub fn to_json(&self) -> Json {
-        json!({
+        let mut obj = json!({
             "id": self.id,
-            "name": self.name,
+            "name_en": self.name,
             "version": self.version,
             "category": self.category,
             "description": self.description,
@@ -179,7 +210,15 @@ impl TemplateManifest {
             "expr": self.expr,
             "color": self.color,
             "icon": self.icon,
-        })
+        });
+        let map = obj.as_object_mut().expect("json object");
+        if let Some(name_ru) = &self.name_ru {
+            map.insert("name_ru".to_owned(), json!(name_ru));
+        }
+        if let Some(description_en) = &self.description_en {
+            map.insert("description_en".to_owned(), json!(description_en));
+        }
+        obj
     }
 }
 
@@ -305,6 +344,45 @@ impl TemplateRegistry {
         Self { templates }
     }
 
+    /// FR-019: built-in библиотека — все `template.json` из
+    /// `assets/templates/`, зашитые в бинарник (`EMBEDDED_TEMPLATES`).
+    /// Невалидные манифесты пропускаются с warn (schema-тест
+    /// `templates_schema.rs` гарантирует 15 валидных). Порядок — по id
+    /// (детерминизм для UI и MCP).
+    pub fn builtin() -> Self {
+        let mut templates: Vec<TemplateManifest> = EMBEDDED_TEMPLATES
+            .dirs()
+            .filter_map(|pkg| {
+                // include_dir 0.7 хранит пути детей с префиксом корня
+                // статики — ищем template.json по file_name внутри папки
+                // (образец — embedded_manifest в canvas-widgets)
+                let file = pkg.files().find(|f| {
+                    f.path()
+                        .file_name()
+                        .is_some_and(|name| name == "template.json")
+                        && f.path().parent() == Some(pkg.path())
+                })?;
+                let raw = file.contents_utf8()?;
+                let value: Json = match serde_json::from_str(raw) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        tracing::warn!(dir = ?pkg.path(), %err, "битый template.json");
+                        return None;
+                    }
+                };
+                match TemplateManifest::from_json(&value) {
+                    Some(manifest) => Some(manifest),
+                    None => {
+                        tracing::warn!(dir = ?pkg.path(), "манифест не валидирован — пропущен");
+                        None
+                    }
+                }
+            })
+            .collect();
+        templates.sort_by(|a, b| a.id.cmp(&b.id));
+        Self { templates }
+    }
+
     /// FR-018: mock-набор из 5 шаблонов (детерминированный, для UI без
     /// зависимости от FR-019). Формулы используют queueing-функции
     /// FR-015; все параметры — Rate/Count/Time/Scalar (без процентов
@@ -328,9 +406,11 @@ impl TemplateRegistry {
                 TemplateManifest {
                     id: "mock.lb".to_owned(),
                     name: "Load Balancer".to_owned(),
+                    name_ru: Some("Балансировщик нагрузки".to_owned()),
                     version: "1.0.0".to_owned(),
                     category: "backend".to_owned(),
                     description: "L7-балансировщик, модель M/M/c (FR-015).".to_owned(),
+                    description_en: None,
                     params: vec![
                         spec("rps", ParamType::Rate, 1000.0, Some("rps"), Some(0.0), None),
                         spec(
@@ -357,9 +437,11 @@ impl TemplateRegistry {
                 TemplateManifest {
                     id: "mock.db".to_owned(),
                     name: "DB SQL (master)".to_owned(),
+                    name_ru: Some("БД SQL (мастер)".to_owned()),
                     version: "1.0.0".to_owned(),
                     category: "backend".to_owned(),
                     description: "Мастер БД: μ = 1 / query_time.".to_owned(),
+                    description_en: None,
                     params: vec![
                         // ρ = qps × query_time = 80 × 0.01 = 0.8 < 1
                         spec("qps", ParamType::Rate, 80.0, Some("rps"), Some(0.0), None),
@@ -387,9 +469,11 @@ impl TemplateRegistry {
                 TemplateManifest {
                     id: "mock.cache".to_owned(),
                     name: "Cache".to_owned(),
+                    name_ru: Some("Кэш".to_owned()),
                     version: "1.0.0".to_owned(),
                     category: "cache".to_owned(),
                     description: "Кэш: нагрузка с учётом hit rate.".to_owned(),
+                    description_en: None,
                     params: vec![
                         spec("qps", ParamType::Rate, 5000.0, Some("rps"), Some(0.0), None),
                         spec(
@@ -417,9 +501,11 @@ impl TemplateRegistry {
                 TemplateManifest {
                     id: "mock.http".to_owned(),
                     name: "HTTP Endpoint".to_owned(),
+                    name_ru: Some("HTTP-эндпоинт".to_owned()),
                     version: "1.0.0".to_owned(),
                     category: "network".to_owned(),
                     description: "HTTP-эндпоинт с пулом соединений.".to_owned(),
+                    description_en: None,
                     params: vec![
                         spec("rps", ParamType::Rate, 1000.0, Some("rps"), Some(0.0), None),
                         // ρ = rps × timeout / max_connections = 0.5 < 1
@@ -447,9 +533,11 @@ impl TemplateRegistry {
                 TemplateManifest {
                     id: "mock.queue".to_owned(),
                     name: "Queue (Kafka)".to_owned(),
+                    name_ru: Some("Очередь (Kafka)".to_owned()),
                     version: "1.0.0".to_owned(),
                     category: "queue".to_owned(),
                     description: "Очередь: партиции как каналы обслуживания.".to_owned(),
+                    description_en: None,
                     params: vec![
                         spec(
                             "produce_rate",
