@@ -75,6 +75,14 @@ cargo test --workspace                                     # тесты
 Готовые бинари каждой сборки main — GitHub Actions → CI → артефакты
 `build-<os>` (можно скачать без локальной сборки).
 
+macOS: артефакт `build-macos-universal` — universal2 (Apple Silicon +
+Intel) в виде `CanvasDesk.app` + инструкция. Без подписи Apple Developer ID
+macOS ставит карантин на скачанное: распакуйте `.tar.gz` и выполните
+`xattr -cr CanvasDesk.app`, затем откройте приложение (двойной клик или
+`./canvasdesk` из терминала). Каждый пуш в main прогоняет смок-тест
+запуска приложения прямо на macOS-раннере CI (шаг «Smoke» в логе джобы
+`artifacts (macos-latest)`).
+
 **LNK1104** (`не удается открыть файл …canvasdesk.exe`) — не ошибка кода,
 а занятый бинарник: закройте запущенный CanvasDesk (включая фоновый
 `--desktop`/автозапуск и осиротевшие после Ctrl+C экземпляры) и

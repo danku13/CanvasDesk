@@ -3,6 +3,14 @@ name: Multi-platform Build
 # Релизные артефакты по тегам v* и ручной запуск из UI. Артефакты на
 # каждый пуш в main собирает workflow CI (job artifacts) — здесь сборка
 # не дублируется.
+#
+# macOS-ветка (universal2 + .app): голый arm64-бинарник не запускается
+# на Mac — Finder не стартует сырой файл, zip-артефакт теряет exec-бит,
+# карантин Gatekeeper блокирует неподписанное, Intel-Мак не умеет arm64.
+# Решение: оба таргета -> lipo -> CanvasDesk.app + ad-hoc codesign ->
+# tar.gz (сохраняет права и подпись) + инструкция снятия карантина.
+# Смок-тест запускает приложение прямо на раннере (реальный GUI-сеанс
+# с WindowServer) — приёмка macOS без локальной сборки на Mac.
 on:
   push:
     tags: ["v*"] # релизные теги — артефакты версии
@@ -30,12 +38,62 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Run cargo build
-        run: cargo build --release
+      # ---- macOS: таргеты universal2 ---------------------------------
+      - name: Add Apple targets (macOS)
+        if: runner.os == 'MacOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # ---- сборка ------------------------------------------------------
+      # Windows добавляет .exe к имени бинарника; Linux — нативный бинарь;
+      # macOS — оба слайса отдельно (lipo на шаге пакеджинга).
+      - name: Run cargo build (Windows/Linux)
+        if: runner.os != 'MacOS'
+        run: cargo build --release -p canvas-app
+      - name: Run cargo build arm64 (macOS)
+        if: runner.os == 'MacOS'
+        run: cargo build --release -p canvas-app --target aarch64-apple-darwin
+      - name: Run cargo build x86_64 (macOS)
+        if: runner.os == 'MacOS'
+        run: cargo build --release -p canvas-app --target x86_64-apple-darwin
+
+      # ---- macOS: смок-запуск на раннере (реальный GUI + Metal) -------
+      # continue-on-error: гейт информационный — проблемы раннера (GPU/VM)
+      # не должны блокировать раздачу артефактов; падение видно в логе.
+      - name: Smoke — запуск на macOS-раннере (20 с)
+        if: runner.os == 'MacOS'
+        continue-on-error: true
+        shell: bash
+        run: |
+          BIN=target/aarch64-apple-darwin/release/canvasdesk
+          "$BIN" --stress 500 > smoke.log 2>&1 &
+          PID=$!
+          sleep 20
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "smoke OK: процесс жив через 20 с (pid $PID) — старт/инициализация GPU/цикл событий прошли"
+            kill "$PID" 2>/dev/null || true
+            sleep 2
+            kill -9 "$PID" 2>/dev/null || true
+            echo "--- smoke.log (первые 30 строк) ---"
+            head -30 smoke.log || true
+          else
+            echo "::error::CanvasDesk упал при старте на macOS — лог ниже"
+            tail -80 smoke.log || true
+            exit 1
+          fi
+
+      # ---- macOS: универсальный бандл ----------------------------------
+      - name: Package universal2 .app (macOS)
+        if: runner.os == 'MacOS'
+        shell: bash
+        run: |
+          chmod +x scripts/package-macos.sh
+          scripts/package-macos.sh
+          tar -czf dist/CanvasDesk-macos-universal.tar.gz -C dist CanvasDesk.app LAUNCH-macOS.txt
+          ls -la dist/
 
       # Определяем реальный путь к бинарнику: на Windows он с .exe
       - name: Resolve binary path (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         shell: bash
         run: echo "BIN_PATH=target/release/${{ env.BIN_NAME }}" >> "$GITHUB_ENV"
 
@@ -44,10 +102,24 @@ jobs:
         shell: bash
         run: echo "BIN_PATH=target/release/${{ env.BIN_NAME }}.exe" >> "$GITHUB_ENV"
 
-      - name: Upload artifacts
+      - name: Upload artifacts (Linux/Windows)
+        if: runner.os != 'MacOS'
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.os }}
           path: ${{ env.BIN_PATH }}
           if-no-files-found: error # ошибка не скроется молча
           retention-days: 14 # чтобы артефакты не копились бесконечно
+
+      # tar.gz сохраняет exec-биты и ad-hoc подпись (zip от upload-artifact —
+      # нет); рядом сырой universal-бинарь для запуска из терминала.
+      - name: Upload artifacts (macOS universal)
+        if: runner.os == 'MacOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-macos-universal
+          path: |
+            dist/CanvasDesk-macos-universal.tar.gz
+            dist/canvasdesk
+          if-no-files-found: error
+          retention-days: 14
