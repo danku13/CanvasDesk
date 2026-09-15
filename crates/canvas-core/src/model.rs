@@ -4,7 +4,7 @@
 //! сохраняются в `extra` (serde flatten) и не теряются при round-trip;
 //! неизвестные типы нод не ломают парсинг (`node_type` — строка).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -113,11 +113,12 @@ impl EdgeThickness {
     }
 }
 
-/// Расширение `canvasdesk` ноды (SPEC §5.1/§7.6): виджет-нода — `widgetId`
-/// + `props`; FR-013: calc-нода (text + формула) — только `expr`.
+/// Расширение `canvasdesk` ноды (SPEC §5.1/§7.6). Один объект на все
+/// случаи: виджет-нода (`widgetId`, `props`), calc-нода FR-013 (`expr`),
+/// шаблонная нода FR-018 (`template` — снимок ссылки на шаблон).
 ///
-/// Поля опциональны, потому что объект один на оба случая; пустой объект
-/// не сериализуется (skip при is_empty в Node).
+/// Поля опциональны, потому что объект один на все случаи; пустой объект
+/// не сериализуется (canvasdesk — skip при None в Node, поля — при None).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CanvasdeskExt {
     #[serde(rename = "widgetId", default, skip_serializing_if = "Option::is_none")]
@@ -127,16 +128,30 @@ pub struct CanvasdeskExt {
     /// FR-013: Numi-формула text-ноды (Numi-base — модуль `expr`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<String>,
+    /// FR-018: снимок ссылки на шаблон (`canvasdesk.template`: id, version,
+    /// expr, params, icon, color) — сырой JSON (модель не зависит от
+    /// модуля templates; схема — `TemplateRef::from_json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<Value>,
 }
 
 impl CanvasdeskExt {
-    /// Пустое расширение (для get_or_insert при set_expr).
+    /// Пустое расширение (для get_or_insert при set_expr/set_template).
     pub fn empty() -> Self {
         Self {
             widget_id: None,
             props: Map::new(),
             expr: None,
+            template: None,
         }
+    }
+
+    /// Все поля пусты (объект-пустышка не сериализуется).
+    fn is_empty(&self) -> bool {
+        self.widget_id.is_none()
+            && self.props.is_empty()
+            && self.expr.is_none()
+            && self.template.is_none()
     }
 
     /// Расширение виджет-ноды: идентификатор пакета + пустые props.
@@ -145,6 +160,7 @@ impl CanvasdeskExt {
             widget_id: Some(widget_id.into()),
             props: Map::new(),
             expr: None,
+            template: None,
         }
     }
 }
@@ -255,6 +271,53 @@ impl Node {
                     }
                 }
             }
+        }
+    }
+
+    /// FR-018: ссылка на шаблон — чтение `canvasdesk.template` (снимок).
+    /// Отсутствие поля (обычные ноды, старые `.canvas`) — `None`.
+    pub fn template(&self) -> Option<crate::templates::TemplateRef> {
+        crate::templates::TemplateRef::from_json(self.canvasdesk.as_ref()?.template.as_ref()?)
+    }
+
+    /// FR-018: записать/снять ссылку на шаблон (`canvasdesk.template`).
+    /// `None` УДАЛЯЕТ поле (и пустой контейнер `canvasdesk` — как
+    /// [`Node::set_expr`]); чужие поля `canvasdesk` (widgetId/props/expr)
+    /// сохраняются (round-trip с Obsidian чистый).
+    pub fn set_template(&mut self, template: Option<crate::templates::TemplateRef>) {
+        match template {
+            Some(template) => {
+                let ext = self.canvasdesk.get_or_insert_with(CanvasdeskExt::empty);
+                ext.template = Some(template.to_json());
+            }
+            None => {
+                if let Some(ext) = &mut self.canvasdesk {
+                    ext.template = None;
+                    if ext.is_empty() {
+                        self.canvasdesk = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// FR-018: параметры шаблонной ноды (удобный доступ).
+    pub fn template_params(&self) -> BTreeMap<String, crate::templates::TemplateParam> {
+        self.template()
+            .map(|template| template.params)
+            .unwrap_or_default()
+    }
+
+    /// FR-018: обновить параметры шаблона (id/version/expr сохраняются);
+    /// правка текста Numi-листа синхронизирует params через этот метод.
+    /// На ноде без шаблона — no-op.
+    pub fn set_template_params(
+        &mut self,
+        params: BTreeMap<String, crate::templates::TemplateParam>,
+    ) {
+        if let Some(mut template) = self.template() {
+            template.params = params;
+            self.set_template(Some(template));
         }
     }
 
@@ -1071,6 +1134,7 @@ mod tests {
             widget_id: Some("com.canvasdesk.clock".to_owned()),
             props,
             expr: None,
+            template: None,
         };
         let widget = Node::widget("w1", ext, "Clock", 5.0, 6.0, 320.0, 200.0);
         assert_eq!(widget.kind(), NodeKind::Widget);
@@ -1101,6 +1165,7 @@ mod tests {
             widget_id: Some("com.example.clock".to_owned()),
             props,
             expr: None,
+            template: None,
         };
         let mut widget = Node::widget("w9", ext, "Clock", 0.0, 0.0, 320.0, 200.0);
         // Стороннее поле уровня ноды — сохраняется как unknown

@@ -223,6 +223,115 @@ pub fn build_instances(
         .collect()
 }
 
+// --- Шаблонные ноды (FR-018) ---
+
+/// Высота цветной полосы категории вверху шаблонной ноды (world px).
+pub const TEMPLATE_BAND_H: f32 = 6.0;
+/// Сторона квад-иконки роли (world px).
+pub const TEMPLATE_ICON_SIZE: f32 = 16.0;
+/// Отступ иконки от края ноды/полосы (world px).
+pub const TEMPLATE_ICON_MARGIN: f32 = 6.0;
+
+/// Rect квад-иконки роли: правый верхний угол шапки (заголовок слева,
+/// иконка справа — не пересекаются).
+pub fn template_icon_rect(node: &Node) -> [f32; 4] {
+    [
+        node.x + node.width - TEMPLATE_ICON_SIZE - TEMPLATE_ICON_MARGIN,
+        node.y + TEMPLATE_BAND_H + TEMPLATE_ICON_MARGIN,
+        TEMPLATE_ICON_SIZE,
+        TEMPLATE_ICON_SIZE,
+    ]
+}
+
+/// Цветная полоса категории вверху шаблонной ноды: цвет — снимок
+/// `canvasdesk.template.color` (`#RRGGBB` из манифеста категории).
+/// Не-шаблонная нода или битый hex — None (полосы нет).
+pub fn template_band_instance(node: &Node) -> Option<CardInstance> {
+    let template = node.template()?;
+    let fill = parse_hex(&template.color)?;
+    Some(CardInstance {
+        pos: [node.x, node.y],
+        size: [node.width, TEMPLATE_BAND_H.min(node.height)],
+        fill,
+        border: [0.0; 4],
+        params: [0.0, 0.0, 0.0, 1.0], // без скругления и тени
+    })
+}
+
+/// Квад-иконка роли шаблонной ноды (решение владельца FR-018: квад-иконки
+/// без SVG/resvg — как в палитре действий). `icon` — ключ манифеста:
+/// `lb` (весы), `db` (цилиндр), `cache` (микросхема памяти), `http`
+/// (глобус), `queue` (стопка партиций), прочее — `custom` (рамка с ядром).
+/// Композиции из плоских квадов внутри `rect`; tint — цвет штрихов.
+pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<CardInstance> {
+    let [x, y, w, _] = rect;
+    let u = w / 16.0; // единица сетки иконки
+    let mut quads: Vec<CardInstance> = Vec::new();
+    let mut push = |pos: [f32; 2], size: [f32; 2], fill: [f32; 4], outline: bool| {
+        quads.push(CardInstance {
+            pos,
+            size,
+            fill: if outline { [0.0; 4] } else { fill },
+            border: if outline { fill } else { [0.0; 4] },
+            params: [1.0, 0.0, 0.0, 1.0],
+        });
+    };
+    let fill = tint;
+    match icon {
+        // Весы: основание, стойка, перекладина, две чаши
+        "lb" => {
+            push([x + 7.0 * u, y + 12.0 * u], [2.0 * u, 3.0 * u], fill, false);
+            push([x + 7.5 * u, y + 2.0 * u], [1.0 * u, 10.5 * u], fill, false);
+            push([x + 2.0 * u, y + 3.0 * u], [12.0 * u, 1.5 * u], fill, false);
+            push([x + 1.0 * u, y + 6.0 * u], [4.0 * u, 1.5 * u], fill, false);
+            push([x + 11.0 * u, y + 6.0 * u], [4.0 * u, 1.5 * u], fill, false);
+        }
+        // Цилиндр БД: рамка + две «секции»
+        "db" => {
+            push([x + 2.0 * u, y + 1.5 * u], [12.0 * u, 13.0 * u], fill, true);
+            push([x + 2.0 * u, y + 5.5 * u], [12.0 * u, 1.2 * u], fill, false);
+            push([x + 2.0 * u, y + 9.5 * u], [12.0 * u, 1.2 * u], fill, false);
+        }
+        // Микросхема памяти: рамка + ножки + ядро
+        "cache" => {
+            push([x + 3.0 * u, y + 3.0 * u], [10.0 * u, 10.0 * u], fill, true);
+            push([x + 6.0 * u, y + 6.5 * u], [4.0 * u, 4.0 * u], fill, false);
+            push([x + 5.0 * u, y + 0.5 * u], [1.2 * u, 2.5 * u], fill, false);
+            push([x + 10.0 * u, y + 0.5 * u], [1.2 * u, 2.5 * u], fill, false);
+            push([x + 5.0 * u, y + 13.0 * u], [1.2 * u, 2.5 * u], fill, false);
+            push(
+                [x + 10.0 * u, y + 13.0 * u],
+                [1.2 * u, 2.5 * u],
+                fill,
+                false,
+            );
+        }
+        // Глобус: рамка + меридиан + параллель
+        "http" => {
+            push([x + 1.5 * u, y + 1.5 * u], [13.0 * u, 13.0 * u], fill, true);
+            push([x + 1.5 * u, y + 7.4 * u], [13.0 * u, 1.2 * u], fill, false);
+            push([x + 7.4 * u, y + 1.5 * u], [1.2 * u, 13.0 * u], fill, false);
+        }
+        // Стопка партиций: три смещённые плашки
+        "queue" => {
+            push([x + 3.0 * u, y + 2.0 * u], [10.0 * u, 3.0 * u], fill, false);
+            push([x + 2.0 * u, y + 6.5 * u], [10.0 * u, 3.0 * u], fill, false);
+            push(
+                [x + 1.0 * u, y + 11.0 * u],
+                [10.0 * u, 3.0 * u],
+                fill,
+                false,
+            );
+        }
+        // Рамка с ядром (custom)
+        _ => {
+            push([x + 1.5 * u, y + 1.5 * u], [13.0 * u, 13.0 * u], fill, true);
+            push([x + 6.0 * u, y + 6.0 * u], [4.0 * u, 4.0 * u], fill, false);
+        }
+    }
+    quads
+}
+
 // --- Виджет-ноды (CR-004) ---
 
 /// Подсветка хрома виджет-ноды при hover (CR-004 v1): лёгкая акцентная
@@ -1025,6 +1134,7 @@ mod tests {
                 widget_id: Some("com.canvasdesk.clock".into()),
                 props: Default::default(),
                 expr: None,
+                template: None,
             },
             "Clock",
             10.0,

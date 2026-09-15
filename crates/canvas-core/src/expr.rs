@@ -262,6 +262,38 @@ fn unit_atom(token: &str) -> Option<Atom> {
         .map(|(name, dim, scale)| Atom::new(dim.clone(), 1, *scale, name))
 }
 
+/// FR-018: значение с единицей из токена таблицы (`Some("rps")`, `Some("ms")`);
+/// `None` или неизвестный токен — скаляр. Публичный мост для реестра
+/// шаблонов (`templates.rs`) и MCP-инстанциации.
+pub fn unit_value(num: f64, unit: Option<&str>) -> Value {
+    let unit = unit
+        .and_then(unit_atom)
+        .map(Unit::atom)
+        .unwrap_or(Unit::Scalar);
+    Value { num, unit }
+}
+
+/// FR-018: ASCII-идентификатор параметра сразу за `$` (`$rps`):
+/// `[a-zA-Z_][a-zA-Z0-9_]*`; имена с префиксом `in` зарезервированы для
+/// валютной семантики FR-013 (`$inn` — валюта × переменная). Кириллица —
+/// НЕ параметр (`$ин` — валюта, как в FR-013).
+fn dollar_param_ident(rest: &str) -> Option<String> {
+    let bytes = rest.as_bytes();
+    let first = *bytes.first()?;
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return None;
+    }
+    let len = 1 + bytes[1..]
+        .iter()
+        .take_while(|&&b| b.is_ascii_alphanumeric() || b == b'_')
+        .count();
+    let name = &rest[..len];
+    if name.starts_with("in") {
+        return None;
+    }
+    Some(name.to_owned())
+}
+
 // --- Значение ---
 
 /// Значение с единицей: результат вычисления (`Value { num, unit }`).
@@ -374,6 +406,9 @@ pub enum Expr {
     /// входов в [`Env`], разрешается в [`eval`]. Целые `N ≥ 1` при наличии
     /// входов — ссылка на N-е входящее значение; иначе — валюта.
     DollarAmount(f64),
+    /// FR-018: `$rps` — параметр шаблонной ноды; источник значений —
+    /// `Env.params` (заполняется из `canvasdesk.template.params`).
+    Param(String),
 }
 
 /// Окружение вычисления: значения переменных (FR-013) и входящие значения
@@ -381,6 +416,9 @@ pub enum Expr {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Env {
     vars: HashMap<String, Value>,
+    /// FR-018: параметры шаблонной ноды (`$имя`); заполняются из
+    /// `canvasdesk.template.params` (flow) или конструкторами.
+    params: HashMap<String, Value>,
     /// FR-014: входящие значения по индексам value-рёбер. `None` — входов
     /// нет (`$N` — валюта, `$in` — ошибка MissingInbound); `Some` — есть:
     /// `Some(None)` — ребро есть, значения нет (источник без формулы или
@@ -398,8 +436,36 @@ impl Env {
     pub fn with_inbound(inbound: Vec<Option<Value>>) -> Self {
         Self {
             vars: HashMap::new(),
+            params: HashMap::new(),
             inbound: Some(inbound),
         }
+    }
+
+    /// FR-018: окружение с параметрами шаблона (`$имя`).
+    pub fn with_params(params: BTreeMap<String, Value>) -> Self {
+        Self {
+            vars: HashMap::new(),
+            params: params.into_iter().collect(),
+            inbound: None,
+        }
+    }
+
+    /// FR-018: добавить карту параметров к окружению (flow: входы value-
+    /// рёбер + параметры шаблона в одном Env).
+    pub fn with_param_map(mut self, params: BTreeMap<String, Value>) -> Self {
+        self.params.extend(params);
+        self
+    }
+
+    /// FR-018: добавить/заменить параметр (builder — как [`Env::set`]).
+    pub fn set_param(mut self, name: impl Into<String>, value: Value) -> Self {
+        self.params.insert(name.into(), value);
+        self
+    }
+
+    /// FR-018: значение параметра `$name`.
+    pub fn param(&self, name: &str) -> Option<&Value> {
+        self.params.get(name)
     }
 
     pub fn set(mut self, name: impl Into<String>, value: Value) -> Self {
@@ -445,6 +511,9 @@ pub enum EvalError {
     UnitMismatch { lhs: String, rhs: String },
     #[error("неизвестная переменная: {0}")]
     UnknownVariable(String),
+    /// FR-018: ссылка `$имя` не имеет значения в параметрах шаблона.
+    #[error("неизвестный параметр: ${0}")]
+    UnknownParam(String),
     #[error("неизвестная функция: {0}")]
     UnknownFunction(String),
     #[error("{func}: {msg}")]
@@ -485,6 +554,10 @@ enum Tok {
     /// FR-014: `$N` (целые N ≥ 1 сразу за `$`) — валюта или вход (контекст
     /// разрешает eval по наличию входов в Env).
     DollarNum(f64),
+    /// FR-018: `$rps` — ссылка на параметр шаблона (ASCII-имя; имена с
+    /// префиксом `in` зарезервированы — совместимость с валютной семантикой
+    /// `$inn` из FR-013). Разрешается в `Env.params` (шаблонные ноды).
+    DollarIdent(String),
     Plus,
     Minus,
     Star,
@@ -690,6 +763,8 @@ impl<'a> Lexer<'a> {
                 // (после числа). FR-014: `$in` и целое `$N` (N ≥ 1) —
                 // ссылки на входящие value-рёбра (контекст — Env).
                 // `$5.5`/`$0`/`$ин` — обычная валюта или валюта × переменная.
+                // FR-018: `$rps` (ASCII-имя без префикса `in`) — параметр
+                // шаблонной ноды (`Env.params`).
                 let rest = &self.text[self.pos + 1..];
                 let in_word = rest.strip_prefix("in").is_some_and(|tail| {
                     !tail
@@ -716,6 +791,11 @@ impl<'a> Lexer<'a> {
                     self.after_number = false;
                     self.operand_ended = true;
                     Tok::DollarNum(num)
+                } else if let Some(name) = dollar_param_ident(rest) {
+                    self.pos += 1 + name.len();
+                    self.after_number = false;
+                    self.operand_ended = true;
+                    Tok::DollarIdent(name)
                 } else {
                     self.pos += 1;
                     self.after_number = false;
@@ -865,12 +945,13 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
                 }
             }
             // Начала утверждений (в т.ч. унарный знак: `-3 ms`; FR-014:
-            // `$in`/`$5` — операнды-ссылки)
+            // `$in`/`$5` — операнды-ссылки; FR-018: `$rps` — параметр)
             Tok::Num(_)
             | Tok::Ident(_)
             | Tok::Unit(_)
             | Tok::DollarIn
             | Tok::DollarNum(_)
+            | Tok::DollarIdent(_)
             | Tok::LParen
             | Tok::Plus
             | Tok::Minus => {
@@ -967,6 +1048,7 @@ fn parse_mul_tail(lexer: &mut Lexer, mut lhs: Expr) -> Result<Expr, ParseError> 
                 | Tok::Unit(_)
                 | Tok::DollarIn
                 | Tok::DollarNum(_)
+                | Tok::DollarIdent(_)
                 | Tok::LParen
                 | Tok::Ident(_),
             ) => (BinOp::Mul, true),
@@ -1020,6 +1102,8 @@ fn parse_unary_from(lexer: &mut Lexer, first: Tok) -> Result<Expr, ParseError> {
         // (разрешение — в eval по наличию входов в Env)
         Tok::DollarIn => Ok(Expr::Inbound),
         Tok::DollarNum(num) => Ok(Expr::DollarAmount(num)),
+        // FR-018: `$rps` — параметр шаблона
+        Tok::DollarIdent(name) => Ok(Expr::Param(name)),
         Tok::Ident(name) => {
             // Вызов функции: Ident `(` args `)`; иначе — переменная
             if matches!(lexer.peek()?, Some(Tok::LParen)) {
@@ -1116,6 +1200,11 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
             .get(name)
             .cloned()
             .ok_or_else(|| EvalError::UnknownVariable(name.clone())),
+        // FR-018: параметр шаблона — отдельное пространство имён за `$`
+        Expr::Param(name) => env
+            .param(name)
+            .cloned()
+            .ok_or_else(|| EvalError::UnknownParam(name.clone())),
         Expr::Neg(inner) => {
             let value = eval(inner, env)?;
             Ok(Value {
@@ -1245,6 +1334,10 @@ fn eval_line(
 fn auto_error_visible(err: &EvalError, declared: &HashSet<String>, statement: &str) -> bool {
     match err {
         EvalError::UnknownVariable(name) => declared.contains(name) || assignment_shaped(statement),
+        // FR-018: `$param` вне шаблона молчит, как и проза с неизвестным
+        // словом; в шаблонной ноде params приходят из flow — ошибки там
+        // всегда видны
+        EvalError::UnknownParam(_) => assignment_shaped(statement),
         _ => true,
     }
 }
@@ -1338,19 +1431,42 @@ fn eval_bin(op: BinOp, lhs: Value, rhs: Value) -> Result<Value, EvalError> {
                 unit: lhs.unit,
             })
         }
-        BinOp::Mul => Ok(Value {
-            num: lhs.num * rhs.num,
-            unit: lhs.unit.merged(&rhs.unit, 1),
-        }),
+        BinOp::Mul => {
+            let raw = lhs.num * rhs.num;
+            let raw_scale = lhs.unit.scale() * rhs.unit.scale();
+            let unit = lhs.unit.merged(&rhs.unit, 1);
+            Ok(Value {
+                num: rescaled(raw, raw_scale, &unit),
+                unit,
+            })
+        }
         BinOp::Div => {
             if rhs.num == 0.0 {
                 return Err(EvalError::DivisionByZero);
             }
+            let raw = lhs.num / rhs.num;
+            let raw_scale = lhs.unit.scale() / rhs.unit.scale();
+            let unit = lhs.unit.merged(&rhs.unit, -1);
             Ok(Value {
-                num: lhs.num / rhs.num,
-                unit: lhs.unit.merged(&rhs.unit, -1),
+                num: rescaled(raw, raw_scale, &unit),
+                unit,
             })
         }
+    }
+}
+
+/// FR-018: num результата ×/÷ — в масштабе итоговой единицы. `merged`
+/// нормализует `Count¹·Time⁻¹ → Rate¹`; если время было не в базовых sec,
+/// масштаб единицы меняется (`1 req / 10 ms` — это 100 req/s, а не «0.1
+/// req/s» с потерей ×1000 в базе). raw пересчитывается: raw × raw_scale /
+/// new_scale (база сохранена). Если масштаб не сменился — сырой num
+/// операндов (арифметика и точность прежнего поведения).
+fn rescaled(raw: f64, raw_scale: f64, unit: &Unit) -> f64 {
+    let new_scale = unit.scale();
+    if (raw_scale - new_scale).abs() <= raw_scale.abs() * 1e-9 {
+        raw
+    } else {
+        raw * raw_scale / new_scale
     }
 }
 
@@ -1733,6 +1849,25 @@ mod tests {
         assert_eq!(Value::scalar(0.30000000000000004).to_string(), "0.3");
         let rate = eval(&parse("100 req / 2 sec").unwrap(), &Env::empty()).unwrap();
         assert_eq!(rate.to_string(), "50 req/s");
+    }
+
+    /// FR-018: деление/умножение с ненормализованным временем — num в
+    /// масштабе итоговой единицы (`1 req / 10 ms` = 100 req/s, а не 0.1);
+    /// стык с шаблонными формулами `mm1($qps, 1 req / $t, …)`.
+    #[test]
+    fn division_rescales_normalized_rate() {
+        let rate = eval(&parse("1 req / 10 ms").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(rate.to_string(), "100 req/s");
+        // База через rate-путь queueing: utilisation(80 rps, 1 req/10 ms) = 0.8
+        let util = eval(
+            &parse("utilization(80 rps, 1 req / 10 ms)").unwrap(),
+            &Env::empty(),
+        )
+        .unwrap();
+        assert!((util.num - 0.8).abs() < 1e-9, "utilization = {}", util);
+        // Деление в базовых единицах — прежний путь без пересчёта
+        let rate = eval(&parse("1000 req / 4 sec").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(rate.to_string(), "250 req/s");
     }
 
     /// Единицы после числа только в позиции единиц: переменная может

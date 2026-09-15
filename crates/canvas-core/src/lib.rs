@@ -15,6 +15,8 @@ mod model;
 mod providers;
 mod settings;
 mod spatial;
+/// FR-018: реестр шаблонных архитектурных нод.
+pub mod templates;
 
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,

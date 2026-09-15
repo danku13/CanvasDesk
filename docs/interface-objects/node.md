@@ -201,6 +201,7 @@
 | CR-004 — прозрачность виджет-нод | live/снапшот-контент — карточка прозрачна; placeholder — непрозрачная | `canvas-app/src/widgets.rs` |
 | CR-007 — авто-контраст | Цвет текста подбирается по относительной люминанс к заливке (WCAG AA) на окрашенных карточках (светлая/тёмная тема) | `canvas-render/src/contrast.rs`, `cards.rs` |
 | CR-008 — умные порты | Авто-стороны связи = кратчайший путь (пересчёт при drag/раскладке/загрузке); закрепление — палитра «Порты»/MCP `edge_ports` (`canvasdesk.pin_ports`) | `edgegeom.rs` (best_sides/effective_sides), `model.rs` (port_pins) |
+| FR-018 — шаблонные ноды | text-нода из шаблона: текст — Numi-лист параметров (`rps = 1000 rps`), `canvasdesk.template` — снимок `{id, version, expr, params, icon, color}`; шапка — цветная полоса категории + квад-иконка роли, футер — итог формулы шаблона; правка параметров — редактирование текста (синхронизация params, live-ревал потока); выбор — палитра `Ctrl+P` (фильтр/категории) или wheel `Shift+клик` по пустому месту (2 кольца: категории → шаблоны); MCP `template_list`/`template_instantiate` | `canvas-core/src/templates.rs`, `canvas-app/src/template_ui.rs`, рендер — `cards.rs` (template_band_instance, template_icon_quads), `main.rs` (instantiate_template_at) |
 | T23 — фокус-режим | hover/выделение ноды подсвечивает её связи и соседей, остальное притемняется; тогл `F`, пункт меню канваса, настройка `focus_mode` | `settings.rs`, `main.rs` (toggle_focus_mode), рендер затемнения |
 | Настройки (расширение) | Тема (тёмная/светлая), сетка (вид/плотность), `edges_avoid_nodes` (полилиния с обходом нод), `focus_mode`, `port_zone_px`, HUD при старте; конфиг `~/.canvasdesk/config.toml` | `settings.rs`, панель настроек (Ctrl+,) |
 
@@ -212,6 +213,7 @@
 - Модель данных — `crates/canvas-core/src/model.rs` (`Node`, `Edge`, расширения `canvasdesk.*`).
 - Геометрия связей/портов — `crates/canvas-core/src/edgegeom.rs`.
 - Вычисления — `crates/canvas-core/src/expr.rs` (Numi), `crates/canvas-core/src/flow.rs` (поток значений, DAG).
+- Шаблоны — `crates/canvas-core/src/templates.rs` (реестр/инстанциация), `crates/canvas-app/src/template_ui.rs` (панель Ctrl+P, wheel Shift+клик).
 - Раскладка — `crates/canvas-core/src/layout.rs`; палитра — `crates/canvas-app/src/palette.rs`.
 - UI/состояние сцены — `crates/canvas-app/src/main.rs`, `crates/canvas-app/src/lib.rs`.
 - Рендер — `crates/canvas-render/src/` (`cards.rs`, `text.rs`, `contrast.rs`, `renderer.rs`).

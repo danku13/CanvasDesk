@@ -13,8 +13,9 @@ use canvas_core::{edge_midpoint, Canvas, FlowKind, NodeKind, Side, SpatialIndex,
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
     build_draft_instances, build_edge_handle_instances, build_edge_instances, build_port_instances,
-    card_instance, dim_instance, make_widget_transparent, widget_header_hover_instance,
-    CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
+    card_instance, dim_instance, make_widget_transparent, template_band_instance,
+    template_icon_quads, template_icon_rect, widget_header_hover_instance, CardInstance,
+    CardsPipeline, FocusView, SELECTION_BORDER,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -812,6 +813,35 @@ impl Renderer {
                     dim_instance(&mut card, dim_factor);
                 }
                 instances.push(card);
+                // FR-018: шапка шаблонной ноды — цветная полоса категории +
+                // квад-иконка роли (снимки из canvasdesk.template — реестр
+                // рендеру не нужен). Гаснут в фокус-режиме вместе с карточкой.
+                if node.template().is_some() {
+                    if let Some(mut band) = template_band_instance(node) {
+                        if dim_it {
+                            dim_instance(&mut band, dim_factor);
+                        }
+                        instances.push(band);
+                    }
+                    // Tint иконки — theme.icon (glyphon Color → rgba)
+                    let tint = self.theme.icon;
+                    let mut icon = template_icon_quads(
+                        &node.template().map(|t| t.icon).unwrap_or_default(),
+                        template_icon_rect(node),
+                        [
+                            tint.r() as f32 / 255.0,
+                            tint.g() as f32 / 255.0,
+                            tint.b() as f32 / 255.0,
+                            tint.a() as f32 / 255.0,
+                        ],
+                    );
+                    for quad in &mut icon {
+                        if dim_it {
+                            dim_instance(quad, dim_factor);
+                        }
+                    }
+                    instances.extend(icon);
+                }
                 // CR-004 v1: лёгкая подсветка полосы заголовка при hover —
                 // видимый след хрома drag-зоны (0–28 px); у выделенной —
                 // рамка по контуру уже показывает границы, подсветка лишняя

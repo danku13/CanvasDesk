@@ -294,6 +294,116 @@ fn expr_reads_external_file_and_preserves_siblings() {
     assert_eq!(parsed["nodes"][0]["canvasdesk"]["expr"], "2k rps");
 }
 
+// --- FR-018: canvasdesk.template — ссылка шаблонной ноды ---
+
+/// FR-018 (инвариант 2): set_template → round-trip через `.canvas` —
+/// снимок {id, version, expr, params, icon, color} сохранён полностью
+/// (Obsidian-формат валиден: поле живёт в extra); set_template(None)
+/// удаляет ключ, не трогая соседние (паттерн set_expr/set_flow_kind).
+#[test]
+fn template_round_trip_and_reset() {
+    let mut canvas = Canvas::default();
+    let mut node = Node::text("tpl-1", "rps = 1000 rps\nservers = 2", 0.0, 0.0);
+    node.set_template(Some(canvas_core::templates::TemplateRef {
+        id: "mock.lb".to_owned(),
+        version: "1.0.0".to_owned(),
+        expr: "mm1($rps, $service_rate, $servers)".to_owned(),
+        params: [
+            (
+                "rps".to_owned(),
+                canvas_core::templates::TemplateParam {
+                    num: 1000.0,
+                    unit: Some("rps".to_owned()),
+                },
+            ),
+            (
+                "servers".to_owned(),
+                canvas_core::templates::TemplateParam {
+                    num: 2.0,
+                    unit: None,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        icon: "lb".to_owned(),
+        color: "#4A90E2".to_owned(),
+    }));
+    canvas.nodes.push(node);
+
+    // Сериализация: JSON-структура на месте, файл — валидный JSON Canvas
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    let template_json = &parsed["nodes"][0]["canvasdesk"]["template"];
+    assert_eq!(template_json["id"], "mock.lb", "id в JSON");
+    assert_eq!(template_json["version"], "1.0.0");
+    assert_eq!(template_json["expr"], "mm1($rps, $service_rate, $servers)");
+    assert_eq!(template_json["params"]["rps"]["num"], 1000.0);
+    assert_eq!(template_json["params"]["rps"]["unit"], "rps");
+    assert_eq!(template_json["params"]["servers"]["num"], 2.0);
+    assert_eq!(template_json["icon"], "lb");
+    assert_eq!(template_json["color"], "#4A90E2");
+
+    // Обратное чтение: accessor возвращает тот же TemplateRef
+    let restored = Canvas::from_str(&json).expect("парсинг");
+    let template = restored.nodes[0].template().expect("template-ссылка");
+    assert_eq!(template.id, "mock.lb");
+    assert_eq!(template.version, "1.0.0");
+    assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
+    assert_eq!(template.params.len(), 2);
+    assert_eq!(template.params["rps"].display(), "1000 rps");
+    assert_eq!(template.params["servers"].display(), "2");
+    assert_eq!(template.icon, "lb");
+    assert_eq!(template.color, "#4A90E2");
+    assert_eq!(restored.nodes[0].kind(), NodeKind::Text);
+
+    // Сброс: ключ удалён целиком; пустого canvasdesk в JSON нет
+    let mut cleared = restored;
+    cleared.nodes[0].set_template(None);
+    assert!(cleared.nodes[0].template().is_none(), "ссылка сброшена");
+    let json = cleared.to_json().expect("сериализация после сброса");
+    assert!(
+        !json.contains("canvasdesk"),
+        "пустого расширения в JSON быть не должно: {json}"
+    );
+}
+
+/// FR-018: template из чужого файла (без icon/color — старые сборки)
+/// читается с дефолтами; файл с текстом-Numi-листом параметров и
+/// template-ссылкой полностью реконструирует шаблонную ноду.
+#[test]
+fn template_reads_external_file_with_defaults() {
+    let source = r#"{
+        "nodes": [
+            {
+                "id": "tpl-old",
+                "type": "text",
+                "text": "qps = 80 rps",
+                "x": 0,
+                "y": 0,
+                "width": 300,
+                "height": 120,
+                "canvasdesk": {
+                    "template": {
+                        "id": "mock.db",
+                        "version": "1.0.0",
+                        "expr": "mm1($qps, 1 req / $query_time, $replicas)",
+                        "params": { "qps": { "num": 80, "unit": "rps" } }
+                    }
+                }
+            }
+        ],
+        "edges": []
+    }"#;
+    let canvas = Canvas::from_str(source).expect("чужой файл парсится");
+    let template = canvas.nodes[0].template().expect("template-ссылка");
+    assert_eq!(template.id, "mock.db");
+    assert_eq!(template.params["qps"].display(), "80 rps");
+    // Файлы до снапшота иконки/цвета — дефолты, не ошибка парсинга
+    assert_eq!(template.icon, "custom");
+    assert_eq!(template.color, "#9B9B9B");
+}
+
 /// FR-014: `canvasdesk.flow.kind` ребра переживает round-trip; отсутствие
 /// поля (старые файлы) читается как Control; сброс в Control удаляет поле
 /// целиком, не трогая соседние ключи.

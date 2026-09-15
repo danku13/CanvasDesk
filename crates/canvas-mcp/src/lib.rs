@@ -306,6 +306,18 @@ const TOOLS: &[ToolSpec] = &[
         ],
     },
     ToolSpec {
+        name: "template_list",
+        description: "FR-018: список шаблонов реестра — id, name, version, category, description, expr (Numi-формула с $param), icon, color, params ({type, default, unit?, min?, max?}). Те же шаблоны, что видит пользователь в палитре (Ctrl+P) и wheel-меню",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "template_instantiate",
+        description: "FR-018: создать text-ноду из шаблона: текст — Numi-лист параметров (rps = 1000 rps), canvasdesk.template — снимок {id, version, expr, params}; формула считает поток (FR-014). params — переопределения {имя: число (в единице параметра манифеста) или {num, unit}} (значение вне min/max — ошибка). Возвращает {id, index, node}",
+        required: &["id", "x", "y"],
+        properties: &[("id", STR), ("x", NUM), ("y", NUM), ("params", r#"{"type":"object"}"#)],
+    },
+    ToolSpec {
         name: "viewport_get",
         description: "Центр viewport в world-координатах и зум",
         required: &[],
@@ -844,7 +856,7 @@ mod tests {
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 20, "ровно 20 инструментов");
+        assert_eq!(tools.len(), 22, "ровно 22 инструмента");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -865,6 +877,8 @@ mod tests {
             "flow_recalc",
             "flow_cycle_check",
             "edge_ports",
+            "template_list",
+            "template_instantiate",
             "viewport_get",
             "viewport_set",
         ] {
@@ -937,7 +951,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            20
+            22
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

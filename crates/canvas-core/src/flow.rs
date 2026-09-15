@@ -236,27 +236,41 @@ pub fn propagate(
         } else {
             Env::with_inbound(slots)
         };
-        // Значение ноды: явная формула `canvasdesk.expr` (MCP) или — для
-        // обычных заметок — последняя формульная строка Numi-листа (FR-013:
-        // «итог заметки — последняя формульная строка»; живой UI-путь:
-        // пользователь пишет «1200 + 480» в заметке и тянет value-ребро).
-        // Проза/пустой текст значения не дают — нода не участвует в потоке.
-        let outcome = match node.expr() {
-            Some(formula) => expr::parse(formula)
+        // FR-018: у шаблонной ноды параметры (`canvasdesk.template.params`)
+        // входят в окружение как `$имя`; формула — снимок из template-ссылки
+        // (приоритет над `canvasdesk.expr` — шаблон определяет расчёт).
+        let template = node.template();
+        let env = match &template {
+            Some(tpl) => env.with_param_map(tpl.param_values()),
+            None => env,
+        };
+        // Значение ноды: шаблонная формула (FR-018), явная формула
+        // `canvasdesk.expr` (MCP) или — для обычных заметок — последняя
+        // формульная строка Numi-листа (FR-013: «итог заметки — последняя
+        // формульная строка»; живой UI-путь: пользователь пишет
+        // «1200 + 480» в заметке и тянет value-ребро). Проза/пустой текст
+        // значения не дают — нода не участвует в потоке.
+        let outcome = match &template {
+            Some(tpl) => expr::parse(&tpl.expr)
                 .map_err(|err| EvalError::BadFormula(err.to_string()))
                 .and_then(|parsed| expr::eval(&parsed, &env)),
-            None => {
-                let text = node.text.clone().unwrap_or_default();
-                let last = expr::eval_lines_in(&text, &env)
-                    .into_iter()
-                    .flatten()
-                    .last();
-                match last {
-                    Some(ExprOutcome::Ok(value)) => Ok(value),
-                    Some(ExprOutcome::Err(msg)) => Err(EvalError::BadFormula(msg)),
-                    None => continue,
+            None => match node.expr() {
+                Some(formula) => expr::parse(formula)
+                    .map_err(|err| EvalError::BadFormula(err.to_string()))
+                    .and_then(|parsed| expr::eval(&parsed, &env)),
+                None => {
+                    let text = node.text.clone().unwrap_or_default();
+                    let last = expr::eval_lines_in(&text, &env)
+                        .into_iter()
+                        .flatten()
+                        .last();
+                    match last {
+                        Some(ExprOutcome::Ok(value)) => Ok(value),
+                        Some(ExprOutcome::Err(msg)) => Err(EvalError::BadFormula(msg)),
+                        None => continue,
+                    }
                 }
-            }
+            },
         };
         outputs.insert(id.clone(), outcome);
     }

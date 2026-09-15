@@ -1243,11 +1243,16 @@ impl TextSystem {
                 // FR-014: expr_results — карта потока значений (пишется
                 // propagator'ом для всех формульных нод), поэтому правило
                 // показа — здесь: построчные результаты Numi-листа
-                // вытесняют программный итог; источник истины — expr_results
+                // вытесняют программный итог; источник истины — expr_results.
+                // FR-018: у шаблонной ноды программный итог — результат
+                // формулы шаблона (mm1/…) — показывается ВСЕГДА, поверх
+                // построчных результатов параметров (лист параметров —
+                // присваивания; итог шаблона — смысл ноды).
                 let line_outcomes = frame.expr_line_results.get(&node.id);
                 let has_line_results =
                     line_outcomes.is_some_and(|lines| lines.iter().any(Option::is_some));
-                let (result_text, result_error) = if has_line_results {
+                let is_template_node = node.template().is_some();
+                let (result_text, result_error) = if has_line_results && !is_template_node {
                     (String::new(), false)
                 } else {
                     match frame.expr_results.get(&node.id) {

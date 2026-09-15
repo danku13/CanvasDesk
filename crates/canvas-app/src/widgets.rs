@@ -535,6 +535,7 @@ impl WidgetManager {
             widget_id: Some(widget_id.to_owned()),
             props: WidgetProps::new(),
             expr: None,
+            template: None,
         };
         Some(Node::widget(
             node_id,
@@ -722,6 +723,7 @@ mod tests {
             widget_id: Some("com.canvasdesk.clock".to_owned()),
             props: WidgetProps::new(),
             expr: None,
+            template: None,
         };
         canvas.nodes.push(Node::widget(
             "widget-1", ext, "Clock", 0.0, 0.0, 320.0, 200.0,

@@ -1,6 +1,6 @@
 //! canvas-app — приложение: event loop, команды, UI-состояние, main().
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,6 +11,11 @@ use canvas_app::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
     palette_layout, palette_origin, PaletteAction, PaletteHit, PaletteHover, PaletteLayout,
     PaletteTarget, PAL_ICON,
+};
+use canvas_app::template_ui;
+use canvas_app::template_ui::{
+    panel_layout as template_panel_layout, panel_rows as template_panel_rows, sector_center_angle,
+    sector_point, wheel_hit, WheelHit,
 };
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
@@ -35,7 +40,7 @@ use canvas_render::animate::{
     FOCUS_FADE_MS, FOCUS_PULSE_MS,
 };
 use canvas_render::camera::Vec2;
-use canvas_render::cards::{CardInstance, FocusView, HEADER_HEIGHT};
+use canvas_render::cards::{template_icon_quads, CardInstance, FocusView, HEADER_HEIGHT};
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
@@ -186,6 +191,39 @@ fn split_formula_lines(text: &str) -> Option<String> {
         })
         .collect();
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// FR-018: параметры шаблона из текста ноды (Numi-лист присваиваний
+/// `rps = 1000 rps`). Каждая строка, вычислившаяся в значение И похожая на
+/// присваивание, — параметр: имя — до `=`, значение — через Numi-eval
+/// (единицы и суффиксы `2k` работают как в заметках). Проза, пустые строки
+/// и код-фенсы пропускаются (`eval_lines` их не вычисляет).
+fn template_params_from_text(
+    text: &str,
+) -> BTreeMap<String, canvas_core::templates::TemplateParam> {
+    let mut params = BTreeMap::new();
+    let outcomes = expr::eval_lines(text);
+    for (line, outcome) in text.split('\n').zip(outcomes) {
+        let Some(ExprOutcome::Ok(value)) = outcome else {
+            continue;
+        };
+        let Some((name, _)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            continue;
+        }
+        let unit = value.unit.display();
+        params.insert(
+            name.to_owned(),
+            canvas_core::templates::TemplateParam {
+                num: value.num,
+                unit: if unit.is_empty() { None } else { Some(unit) },
+            },
+        );
+    }
+    params
 }
 
 /// FR-013 (правка 4): зона наведения бейджа ошибки формульной строки под
@@ -820,6 +858,14 @@ struct App {
     flight: Option<(Flight, Instant)>,
     /// Пульс подсветки ноды-результата (T14): (нода, старт).
     pulse: Option<(usize, Instant)>,
+    /// FR-018: реестр шаблонов (v1 — mock из 5; FR-019 — built-in
+    /// библиотека, FR-020 — custom из ~/.canvasdesk/templates).
+    templates: canvas_core::templates::TemplateRegistry,
+    /// FR-018: боковая палитра шаблонов (Ctrl+P): фильтр/категории/выбор.
+    template_panel: template_ui::TemplatePanel,
+    /// FR-018: радиальное wheel-меню шаблонов (Shift+клик по пустому
+    /// месту): screen-центр + world-точка инстанциации + категория.
+    wheel_menu: Option<template_ui::WheelMenu>,
     /// T23 (brainstorm-focus): затемнение сцены 0..1 (анимируется фейдом
     /// 150 мс при вкл/выкл и при появлении/исчезновении семени).
     focus_dim: f32,
@@ -965,6 +1011,9 @@ impl App {
             search_pending: None,
             flight: None,
             pulse: None,
+            templates: canvas_core::templates::TemplateRegistry::mock(),
+            template_panel: template_ui::TemplatePanel::new(),
+            wheel_menu: None,
             focus_dim: 0.0,
             focus_fade: None,
             focus_pulse: None,
@@ -1589,6 +1638,15 @@ impl App {
                             // пересчитывает строку результата (один undo-шаг
                             // вместе с текстом — паттерн FR-006 выше)
                             node.set_expr(split_formula_lines(&text));
+                            // FR-018: у шаблонной ноды текст — Numi-лист
+                            // параметров; правка синхронизирует
+                            // canvasdesk.template.params (id/version/expr
+                            // сохраняются), propagator пересчитает
+                            // формулу шаблона с новыми значениями
+                            if node.template().is_some() {
+                                let params = template_params_from_text(&text);
+                                node.set_template_params(params);
+                            }
                         }
                     }
                     // FR-013: пересчёт результата (после мутации модели);
@@ -2678,6 +2736,318 @@ impl App {
         (instances, texts)
     }
 
+    // --- FR-018: шаблоны ---
+
+    /// Инстанцировать шаблон в world-точке (undo-шаг, выделение, пересчёт
+    /// потока). Возвращает индекс новой ноды. Дефолты манифеста всегда в
+    /// границах — Result разворачивается (ошибка границ возможна только для
+    /// переопределений MCP).
+    fn instantiate_template_at(
+        &mut self,
+        manifest: &canvas_core::templates::TemplateManifest,
+        world: Vec2,
+    ) -> usize {
+        self.push_undo();
+        let id = next_free_id(&self.scene.canvas, "tpl");
+        let node =
+            canvas_core::templates::instantiate(manifest, &BTreeMap::new(), id, world[0], world[1])
+                .expect("дефолты манифеста в границах");
+        self.scene.canvas.nodes.push(node);
+        let index = self.scene.canvas.nodes.len() - 1;
+        let node = &self.scene.canvas.nodes[index];
+        self.scene.spatial.insert(index, node);
+        self.scene.selected = Some(Selection::Node(index));
+        self.scene.selected_nodes.clear();
+        self.scene.mark_dirty();
+        self.scene.recompute_flow();
+        index
+    }
+
+    /// Клавиатура открытой палитры шаблонов (Ctrl+P): ввод фильтра,
+    /// стрелки/Enter/Esc. Вызывается из on_key, когда панель открыта.
+    /// true — клавиша потреблена панелью.
+    fn on_template_panel_key(&mut self, event: &KeyEvent) -> bool {
+        if event.state != ElementState::Pressed {
+            return true; // отпускания глотаются — канвасу не достаются
+        }
+        if event.logical_key == Key::Named(NamedKey::Escape) && !event.repeat {
+            self.template_panel.close();
+            self.request_redraw();
+            return true;
+        }
+        if event.logical_key == Key::Named(NamedKey::Enter) && !event.repeat {
+            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            if let Some(&index) = rows.get(self.template_panel.selected) {
+                let manifest = self.templates.list()[index].clone();
+                let center = self.viewport_center_world();
+                self.template_panel.close();
+                self.instantiate_template_at(&manifest, center);
+                self.request_redraw();
+            }
+            return true;
+        }
+        if event.logical_key == Key::Named(NamedKey::ArrowDown) && !event.repeat {
+            let total = template_panel_rows(&self.templates, &self.template_panel).len();
+            self.template_panel.move_selection(1, total);
+            self.request_redraw();
+            return true;
+        }
+        if event.logical_key == Key::Named(NamedKey::ArrowUp) && !event.repeat {
+            let total = template_panel_rows(&self.templates, &self.template_panel).len();
+            self.template_panel.move_selection(-1, total);
+            self.request_redraw();
+            return true;
+        }
+        if event.logical_key == Key::Named(NamedKey::Backspace) && !event.repeat {
+            self.template_panel.backspace();
+            self.template_panel.selected = 0;
+            self.template_panel.scroll_top = 0;
+            self.request_redraw();
+            return true;
+        }
+        if event.logical_key == Key::Named(NamedKey::ArrowLeft) && !event.repeat {
+            self.template_panel.move_left();
+            self.request_redraw();
+            return true;
+        }
+        if event.logical_key == Key::Named(NamedKey::ArrowRight) && !event.repeat {
+            self.template_panel.move_right();
+            self.request_redraw();
+            return true;
+        }
+        // Печатаемый символ (включая кириллицу — logical_key уже раскладка)
+        if let Key::Character(text) = &event.logical_key {
+            if !event.repeat && !self.modifiers.control_key() {
+                self.template_panel.insert_str(text.as_str());
+                self.template_panel.selected = 0;
+                self.template_panel.scroll_top = 0;
+                self.request_redraw();
+                return true;
+            }
+        }
+        true
+    }
+
+    /// Оверлей боковой палитры шаблонов (FR-018, Ctrl+P): панель у правого
+    /// края, поле фильтра, чипы категорий, строки шаблонов с квад-иконками
+    /// и описанием (паттерн search_overlay).
+    fn template_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        if !self.template_panel.open {
+            return (instances, texts);
+        }
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let rows = template_panel_rows(&self.templates, &self.template_panel);
+        let lay = template_panel_layout(
+            viewport[0],
+            viewport[1],
+            &self.templates,
+            &self.template_panel,
+            &rows,
+        );
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let icon_tint = color_to_rgba(palette.icon);
+        let panel = rect_xywh(lay.panel_rect);
+        instances.push(CardInstance {
+            pos: [panel[0], panel[1]],
+            size: [panel[2], panel[3]],
+            fill: palette.menu_fill,
+            border: [0.22, 0.24, 0.30, 0.9],
+            params: [8.0, 0.0, 0.0, 1.0],
+        });
+        // Поле фильтра с кареткой (как в поиске — литерал «|»)
+        let input = rect_xywh(lay.input_rect);
+        instances.push(CardInstance {
+            pos: [input[0], input[1]],
+            size: [input[2], input[3]],
+            fill: palette.search_input_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: format!("{}|", self.template_panel.filter),
+            origin: [input[0] + 10.0, input[1] + 8.0],
+            width: (input[2] - 20.0).max(10.0),
+            font_size: 14.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        // Чипы категорий
+        for (rect, name, active) in &lay.category_rects {
+            instances.push(CardInstance {
+                pos: [rect[0], rect[1]],
+                size: [rect[2], rect[3]],
+                fill: if *active {
+                    [0.18, 0.29, 0.48, 0.95]
+                } else {
+                    [0.17, 0.18, 0.22, 0.8]
+                },
+                border: [0.0; 4],
+                params: [11.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: name.clone(),
+                origin: [rect[0] + 10.0, rect[1] + 6.0],
+                width: rect[2] - 12.0,
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        // Строки шаблонов
+        for (visible, rect) in lay.row_rects.iter().enumerate() {
+            let row = self.template_panel.scroll_top + visible;
+            let Some(&index) = rows.get(row) else { break };
+            let manifest = &self.templates.list()[index];
+            let selected = self.template_panel.selected == row;
+            let row_rect = rect_xywh(*rect);
+            let row_hover = point_in_rect(row_rect, self.cursor);
+            instances.push(CardInstance {
+                pos: [row_rect[0], row_rect[1]],
+                size: [row_rect[2], row_rect[3]],
+                fill: if selected {
+                    [0.18, 0.29, 0.48, 0.95]
+                } else if row_hover {
+                    [0.24, 0.30, 0.42, 0.6]
+                } else {
+                    [0.0; 4]
+                },
+                border: [0.0; 4],
+                params: [4.0, 0.0, 0.0, 1.0],
+            });
+            // Квад-иконка роли (решение владельца — без SVG)
+            let icon_rect = [
+                row_rect[0] + 8.0,
+                row_rect[1] + 8.0,
+                template_ui::TEMPLATE_ROW_ICON,
+                template_ui::TEMPLATE_ROW_ICON,
+            ];
+            instances.extend(template_icon_quads(
+                template_ui::icon_key(manifest),
+                icon_rect,
+                icon_tint,
+            ));
+            texts.push(OwnedScreenText {
+                text: manifest.name.clone(),
+                origin: [icon_rect[0] + icon_rect[2] + 8.0, row_rect[1] + 5.0],
+                width: row_rect[2] - (icon_rect[2] + 24.0),
+                font_size: 13.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: manifest.description.clone(),
+                origin: [icon_rect[0] + icon_rect[2] + 8.0, row_rect[1] + 20.0],
+                width: row_rect[2] - (icon_rect[2] + 24.0),
+                font_size: 11.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        }
+        (instances, texts)
+    }
+
+    /// Оверлей радиального wheel-меню шаблонов (FR-018, Shift+клик):
+    /// внешнее кольцо — категории, внутреннее — шаблоны выбранной
+    /// категории. Пайплайн квадов без поворотов — сектор рисуется
+    /// квадом-плашкой в центре сектора (как кнопка), подсветка hover.
+    fn wheel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let Some(menu) = &self.wheel_menu else {
+            return (instances, texts);
+        };
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let icon_tint = color_to_rgba(palette.icon);
+        let categories = self.templates.categories();
+        let hover = self.cursor;
+        let hit = wheel_hit(menu, &self.templates, hover);
+        for (i, category) in categories.iter().enumerate() {
+            let angle = sector_center_angle(categories.len(), i);
+            let radius = template_ui::WHEEL_INNER_R
+                + (template_ui::WHEEL_OUTER_R - template_ui::WHEEL_INNER_R) / 2.0;
+            let point = sector_point(menu.screen, angle, radius);
+            let hovered = matches!(hit, Some(WheelHit::Category(j)) if j == i);
+            let side = template_ui::WHEEL_SECTOR;
+            let [qx, qy] = [point[0] - side / 2.0, point[1] - side / 2.0];
+            instances.push(CardInstance {
+                pos: [qx, qy],
+                size: [side, side],
+                fill: if hovered {
+                    [0.18, 0.29, 0.48, 0.95]
+                } else {
+                    [0.17, 0.18, 0.22, 0.92]
+                },
+                border: [0.22, 0.24, 0.30, 0.9],
+                params: [8.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: (*category).to_owned(),
+                origin: [qx + 4.0, qy + side / 2.0 - 6.0],
+                width: side - 8.0,
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Center,
+            });
+        }
+        // Внутреннее кольцо: шаблоны выбранной категории
+        if let Some(category) = &menu.category {
+            let templates = self.templates.by_category(category);
+            for (i, manifest) in templates.iter().enumerate() {
+                let angle = sector_center_angle(templates.len(), i);
+                let radius = template_ui::WHEEL_HUB_R
+                    + (template_ui::WHEEL_INNER_R - template_ui::WHEEL_HUB_R) / 2.0;
+                let point = sector_point(menu.screen, angle, radius);
+                let hovered = matches!(hit, Some(WheelHit::Template(j)) if j == i);
+                let side = template_ui::WHEEL_SECTOR_INNER;
+                let [qx, qy] = [point[0] - side / 2.0, point[1] - side / 2.0];
+                instances.push(CardInstance {
+                    pos: [qx, qy],
+                    size: [side, side],
+                    fill: if hovered {
+                        [0.18, 0.29, 0.48, 0.95]
+                    } else {
+                        [0.20, 0.22, 0.27, 0.92]
+                    },
+                    border: [0.22, 0.24, 0.30, 0.9],
+                    params: [8.0, 0.0, 0.0, 1.0],
+                });
+                // Иконка + имя шаблона под иконкой
+                instances.extend(template_icon_quads(
+                    template_ui::icon_key(manifest),
+                    [qx + side / 2.0 - 8.0, qy + 4.0, 16.0, 16.0],
+                    icon_tint,
+                ));
+                texts.push(OwnedScreenText {
+                    text: manifest.name.clone(),
+                    origin: [qx + 2.0, qy + 22.0],
+                    width: side - 4.0,
+                    font_size: 10.0,
+                    color: palette.title,
+                    align: TextAlign::Center,
+                });
+            }
+        }
+        // Хаб: подпись-подсказка
+        texts.push(OwnedScreenText {
+            text: if menu.category.is_some() {
+                "выбрать".to_owned()
+            } else {
+                "категория".to_owned()
+            },
+            origin: [menu.screen[0] - 40.0, menu.screen[1] - 6.0],
+            width: 80.0,
+            font_size: 10.0,
+            color: palette.body,
+            align: TextAlign::Center,
+        });
+        (instances, texts)
+    }
+
     /// Батч событий файловой системы (T10): применение к модели — в чистой
     /// canvas_core::apply_file_events, здесь — платформенные реакции: сброс
     /// тамбнейл-кэшей и негативного кэша, автосейв, пересборка вотчеров.
@@ -3737,7 +4107,13 @@ impl App {
                 Ok(request) => {
                     let id = request.id.unwrap_or(serde_json::Value::Null);
                     let (method, params) = mcp_unwrap_call(&request.method, &request.params);
-                    match mcp_dispatch(&mut self.scene, &mut self.camera, &method, &params) {
+                    match mcp_dispatch(
+                        &mut self.scene,
+                        &mut self.camera,
+                        &self.templates,
+                        &method,
+                        &params,
+                    ) {
                         Ok(value) => canvas_mcp::build_result(&id, &value),
                         Err(message) => canvas_mcp::build_call_error(&id, &message),
                     }
@@ -3854,6 +4230,7 @@ fn mcp_side(params: &serde_json::Value, name: &str) -> Result<Option<Side>, Stri
 fn mcp_dispatch(
     scene: &mut SceneState,
     camera: &mut Camera,
+    templates: &canvas_core::templates::TemplateRegistry,
     method: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -4292,6 +4669,111 @@ fn mcp_dispatch(
                 },
             }))
         }
+        // FR-018: список шаблонов реестра — те же, что в палитре/wheel
+        // (инвариант 4: MCP-видимость эквивалентна UI)
+        "template_list" => {
+            let templates: Vec<serde_json::Value> = templates
+                .list()
+                .iter()
+                .map(|manifest| {
+                    let params: serde_json::Map<String, serde_json::Value> = manifest
+                        .params
+                        .iter()
+                        .map(|spec| {
+                            let mut entry = serde_json::json!({
+                                "type": spec.kind.as_str(),
+                                "default": spec.default,
+                            });
+                            if let Some(unit) = &spec.unit {
+                                entry["unit"] = serde_json::json!(unit);
+                            }
+                            if let Some(min) = spec.min {
+                                entry["min"] = serde_json::json!(min);
+                            }
+                            if let Some(max) = spec.max {
+                                entry["max"] = serde_json::json!(max);
+                            }
+                            (spec.name.clone(), entry)
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "id": manifest.id,
+                        "name": manifest.name,
+                        "version": manifest.version,
+                        "category": manifest.category,
+                        "description": manifest.description,
+                        "expr": manifest.expr,
+                        "icon": manifest.icon,
+                        "color": manifest.color,
+                        "params": params,
+                    })
+                })
+                .collect();
+            Ok(serde_json::Value::Array(templates))
+        }
+        // FR-018: инстанциация шаблона (идентично wheel/палитре): text-нода
+        // с Numi-листом параметров и снимком canvasdesk.template; undo-шаг
+        "template_instantiate" => {
+            let id = mcp_req_str(params, "id")?;
+            let x = mcp_req_f32(params, "x")?;
+            let y = mcp_req_f32(params, "y")?;
+            let manifest = templates
+                .find(id)
+                .ok_or_else(|| format!("шаблон не найден: {id}"))?
+                .clone();
+            let mut overrides: BTreeMap<String, canvas_core::templates::TemplateParam> =
+                BTreeMap::new();
+            if let Some(map) = params.get("params").and_then(serde_json::Value::as_object) {
+                for (name, value) in map {
+                    let param = match value {
+                        serde_json::Value::Number(num) => {
+                            let num = num
+                                .as_f64()
+                                .ok_or_else(|| format!("параметр {name}: число"))?;
+                            // Число без единицы наследует единицу параметра
+                            // манифеста ({"rps": 2000} = 2000 rps)
+                            let unit = manifest
+                                .params
+                                .iter()
+                                .find(|spec| &spec.name == name)
+                                .and_then(|spec| spec.unit.clone());
+                            canvas_core::templates::TemplateParam { num, unit }
+                        }
+                        serde_json::Value::Object(obj) => canvas_core::templates::TemplateParam {
+                            num: obj
+                                .get("num")
+                                .and_then(serde_json::Value::as_f64)
+                                .ok_or_else(|| format!("параметр {name}: num обязателен"))?,
+                            unit: obj
+                                .get("unit")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned),
+                        },
+                        _ => {
+                            return Err(format!("параметр {name}: число или {{num, unit}}"));
+                        }
+                    };
+                    overrides.insert(name.clone(), param);
+                }
+            }
+            let node_id = next_free_id(&scene.canvas, "tpl");
+            let node = canvas_core::templates::instantiate(&manifest, &overrides, node_id, x, y)
+                .map_err(|err| err.to_string())?;
+            let index = scene.canvas.nodes.len();
+            // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
+            scene.push_undo(scene.canvas.clone());
+            scene.canvas.nodes.push(node);
+            scene.spatial.insert(index, &scene.canvas.nodes[index]);
+            scene.mark_dirty();
+            // Формула шаблона с параметрами — в поток (FR-014)
+            scene.recompute_flow();
+            let summary = mcp_node_summary(&scene.canvas.nodes[index], true);
+            Ok(serde_json::json!({
+                "id": scene.canvas.nodes[index].id,
+                "index": index,
+                "node": summary,
+            }))
+        }
         "viewport_get" => {
             let position = camera.position();
             Ok(serde_json::json!({
@@ -4407,6 +4889,28 @@ impl App {
             self.request_redraw();
             return;
         }
+        // FR-018: панель шаблонов открыта — клавиатура уходит в неё
+        // (фильтр, стрелки, Enter, Esc), канвас-хоткеи приглушены
+        if self.template_panel.open && self.on_template_panel_key(event) {
+            return;
+        }
+        // Ctrl+P — палитра шаблонов (FR-018; кириллическая раскладка — «з»).
+        // Взаимоисключающе с wheel-меню: открытие закрывает его
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("p") || c.eq_ignore_ascii_case("з"))
+        {
+            self.wheel_menu = None;
+            if self.template_panel.open {
+                self.template_panel.close();
+            } else {
+                self.template_panel.open();
+            }
+            self.request_redraw();
+            return;
+        }
         // T21: модальный диалог глушит весь ввод канваса — Enter/Esc —
         // подтвердить/отменить, остальное игнорируется (П10/П11)
         if self.dialog.is_some() && event.state == ElementState::Pressed && !event.repeat {
@@ -4442,6 +4946,12 @@ impl App {
             }
             if self.hotkeys_open {
                 self.hotkeys_open = false;
+                self.request_redraw();
+                return;
+            }
+            // FR-018: wheel-меню закрывается Esc (панель шаблонов — раньше,
+            // в on_template_panel_key)
+            if self.wheel_menu.take().is_some() {
                 self.request_redraw();
                 return;
             }
@@ -4621,6 +5131,87 @@ impl App {
                     }
                     if !handled && !point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
                         self.search.close();
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                // FR-018: wheel-меню шаблонов — клики обрабатываются до
+                // канваса (оверлей поверх всего). Сектор категории — выбор
+                // категории (внутреннее кольцо); сектор шаблона —
+                // инстанциация в world-точку открытия; снаружи — закрыть.
+                // Любой клик глотается — dismiss не создаёт заметку.
+                if let Some(menu) = self.wheel_menu.clone() {
+                    match wheel_hit(&menu, &self.templates, self.cursor) {
+                        Some(WheelHit::Category(i)) => {
+                            if let Some(menu_mut) = self.wheel_menu.as_mut() {
+                                menu_mut.category = Some(self.templates.categories()[i].to_owned());
+                            }
+                        }
+                        Some(WheelHit::Template(i)) => {
+                            let category = menu.category.expect("категория выбрана");
+                            let manifest = self.templates.by_category(&category)[i].clone();
+                            let world = menu.world;
+                            self.wheel_menu = None;
+                            self.instantiate_template_at(&manifest, world);
+                        }
+                        None => {
+                            let dx = self.cursor[0] - menu.screen[0];
+                            let dy = self.cursor[1] - menu.screen[1];
+                            let outside =
+                                (dx * dx + dy * dy).sqrt() > template_ui::WHEEL_OUTER_R + 12.0;
+                            if outside {
+                                self.wheel_menu = None;
+                            }
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                // FR-018: палитра шаблонов — клик по чипу категории (тогл
+                // фильтра) или строке шаблона (инстанциация в центр
+                // viewport), мимо панели — закрыть; канвасу клик не достаётся
+                if self.template_panel.open {
+                    let viewport = self.viewport_logical();
+                    let rows = template_panel_rows(&self.templates, &self.template_panel);
+                    let lay = template_panel_layout(
+                        viewport[0],
+                        viewport[1],
+                        &self.templates,
+                        &self.template_panel,
+                        &rows,
+                    );
+                    let mut handled = false;
+                    for (rect, name, _active) in &lay.category_rects {
+                        if point_in_rect(rect_xywh(*rect), self.cursor) {
+                            self.template_panel.category =
+                                if self.template_panel.category.as_deref() == Some(name) {
+                                    None
+                                } else {
+                                    Some(name.clone())
+                                };
+                            self.template_panel.selected = 0;
+                            self.template_panel.scroll_top = 0;
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled {
+                        for (visible, rect) in lay.row_rects.iter().enumerate() {
+                            if point_in_rect(rect_xywh(*rect), self.cursor) {
+                                let row = self.template_panel.scroll_top + visible;
+                                if let Some(&index) = rows.get(row) {
+                                    let manifest = self.templates.list()[index].clone();
+                                    let center = self.viewport_center_world();
+                                    self.template_panel.close();
+                                    self.instantiate_template_at(&manifest, center);
+                                }
+                                handled = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !handled && !point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+                        self.template_panel.close();
                     }
                     self.request_redraw();
                     return;
@@ -4976,6 +5567,21 @@ impl App {
                         self.request_redraw();
                         return;
                     }
+                }
+                // FR-018: Shift+клик по пустому месту — wheel-меню шаблонов
+                // в точке курсора (мишень инстанциации — world-точка).
+                // Нода/связь под курсором — обычная обработка выше.
+                if self.modifiers.shift_key()
+                    && hit.is_none()
+                    && edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes).is_none()
+                {
+                    self.wheel_menu = Some(template_ui::WheelMenu {
+                        screen: self.cursor,
+                        world,
+                        category: None,
+                    });
+                    self.request_redraw();
+                    return;
                 }
                 // Двойной клик (winit его не даёт — свой детектор, T7):
                 // по пустому месту — новая заметка, по text-ноде —
@@ -5731,6 +6337,7 @@ fn add_stress_widgets(canvas: &mut Canvas, n: usize) -> usize {
             widget_id: Some("com.canvasdesk.clock".to_owned()),
             props: serde_json::Map::new(),
             expr: None,
+            template: None,
         };
         canvas.nodes.push(Node::widget(
             format!("widget-{}", existing + i as u32 + 1),
@@ -7048,6 +7655,16 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_instances.extend(search_instances);
                     owned_texts.extend(search_texts);
                 }
+                // FR-018: палитра шаблонов (Ctrl+P) и wheel-меню
+                // (Shift+клик) — поверх канваса
+                {
+                    let (tpl_instances, tpl_texts) = self.template_panel_overlay();
+                    screen_instances.extend(tpl_instances);
+                    owned_texts.extend(tpl_texts);
+                    let (wheel_instances, wheel_texts) = self.wheel_overlay();
+                    screen_instances.extend(wheel_instances);
+                    owned_texts.extend(wheel_texts);
+                }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме
                 if let Some(file) = self.hovered.and_then(|index| {
@@ -7766,7 +8383,8 @@ mod tests {
         params: &str,
     ) -> Result<serde_json::Value, String> {
         let params: serde_json::Value = serde_json::from_str(params).expect("params — JSON");
-        mcp_dispatch(scene, camera, method, &params)
+        let registry = canvas_core::templates::TemplateRegistry::mock();
+        mcp_dispatch(scene, camera, &registry, method, &params)
     }
 
     /// canvas_info: счётчики нод/связей и путь к файлу.
@@ -8422,6 +9040,29 @@ mod tests {
         assert_eq!(split_formula_lines(""), None);
         // «=» внутри строки не формула — только начало строки
         assert_eq!(split_formula_lines("a = b"), None);
+    }
+
+    /// FR-018: параметры шаблона из текста ноды — присваивания вычисляются
+    /// Numi-eval'ом (единицы, суффиксы `2k`); проза и пустые строки
+    /// пропускаются.
+    #[test]
+    fn template_params_from_text_parses_assignments() {
+        let params = template_params_from_text(
+            "rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2k\nКомментарий-проза\n\nempty = ",
+        );
+        assert_eq!(params.len(), 3, "проза/пустые — мимо");
+        assert_eq!(params["rps"].num, 1000.0);
+        assert_eq!(params["rps"].unit.as_deref(), Some("rps"));
+        assert_eq!(params["service_rate"].num, 1200.0);
+        assert_eq!(params["servers"].num, 2000.0, "суффикс k разворачивается");
+        assert_eq!(params["servers"].unit, None);
+        // Скаляр без единицы
+        let scalar = template_params_from_text("k = 3");
+        assert_eq!(scalar["k"].num, 3.0);
+        assert_eq!(scalar["k"].unit, None);
+        // Проза с «=» не парсится в значение — мимо
+        let prose = template_params_from_text("Server load = high");
+        assert!(prose.is_empty(), "не-Numi-значение пропущено");
     }
 
     /// MCP node_edit { expr } — формула сохранена, результат пересчитан
@@ -9473,6 +10114,112 @@ mod tests {
             r#"{"id":"ghost","pin":"auto"}"#
         )
         .is_err());
+    }
+
+    /// FR-018: template_list — реестр отдаёт 5 mock-шаблонов с полной
+    /// схемой (инвариант 4: MCP-видимость эквивалентна UI).
+    #[test]
+    fn mcp_template_list_mock_registry() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let list = dispatch(&mut scene, &mut camera, "template_list", "{}").expect("list");
+        let templates = list.as_array().expect("массив");
+        assert_eq!(templates.len(), 5);
+        let lb = templates
+            .iter()
+            .find(|t| t["id"] == "mock.lb")
+            .expect("mock.lb");
+        assert_eq!(lb["version"], "1.0.0");
+        assert_eq!(lb["category"], "backend");
+        assert_eq!(lb["expr"], "mm1($rps, $service_rate, $servers)");
+        assert_eq!(lb["params"]["rps"]["type"], "rate");
+        assert_eq!(lb["params"]["rps"]["default"], 1000.0);
+        assert_eq!(lb["params"]["rps"]["unit"], "rps");
+        // Схема для UI: иконка и цвет категории в списке
+        assert_eq!(lb["icon"], "lb");
+        assert_eq!(lb["color"], "#4A90E2");
+    }
+
+    /// FR-018: template_instantiate — text-нода с Numi-листом параметров
+    /// и снимком canvasdesk.template; переопределение параметра учитывается
+    /// формулой (пересчёт в потоке); undo возвращает состояние до создания.
+    #[test]
+    fn mcp_template_instantiate_creates_linked_node() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "template_instantiate",
+            r#"{"id":"mock.lb","x":150,"y":250,"params":{"rps":2000}}"#,
+        )
+        .expect("instantiate");
+        let id = out["id"].as_str().expect("id").to_owned();
+        let node = scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .expect("нода создана");
+        assert_eq!(node.kind(), NodeKind::Text);
+        assert_eq!(node.x, 150.0);
+        // Numi-лист параметров с переопределением
+        let text = node.text.as_deref().expect("текст");
+        assert!(text.contains("rps = 2000 rps"), "текст: {text}");
+        assert!(text.contains("servers = 2"));
+        // Снимок template-ссылки
+        let template = node.template().expect("template");
+        assert_eq!(template.id, "mock.lb");
+        assert_eq!(template.version, "1.0.0");
+        assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
+        assert_eq!(template.params["rps"].num, 2000.0);
+        assert_eq!(template.icon, "lb");
+        // Формула в потоке (FR-014-стык): результат пересчитан
+        assert!(
+            scene.expr_results.contains_key(&id),
+            "результат формулы шаблона в потоке"
+        );
+        // Undo: нода исчезает (undo-шаг при создании)
+        let before = scene.canvas.nodes.len();
+        let restored = scene.take_undo().expect("undo-шаг есть");
+        scene.canvas = restored;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        assert_eq!(scene.canvas.nodes.len(), before - 1);
+        assert!(scene.canvas.nodes.iter().all(|n| n.id != id));
+    }
+
+    /// FR-018: template_instantiate — ошибки: неизвестный id, параметр вне
+    /// границ манифеста (min/max), неизвестное имя параметра.
+    #[test]
+    fn mcp_template_instantiate_rejects_bad_input() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // Неизвестный шаблон
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "template_instantiate",
+            r#"{"id":"ghost","x":0,"y":0}"#
+        )
+        .is_err());
+        // rps < min 0
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "template_instantiate",
+            r#"{"id":"mock.lb","x":0,"y":0,"params":{"rps":-5}}"#
+        )
+        .is_err());
+        // Неизвестное имя параметра
+        assert!(dispatch(
+            &mut scene,
+            &mut camera,
+            "template_instantiate",
+            r#"{"id":"mock.lb","x":0,"y":0,"params":{"ghost":1}}"#
+        )
+        .is_err());
+        // Ни одна ошибочная ветка не мутировала модель
+        assert!(scene.undo_stack.is_empty());
     }
 
     /// edge_ports "from": WYSIWYG — в fromSide фиксируется текущая
