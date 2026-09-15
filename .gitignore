@@ -9,3 +9,4 @@ marketing/
 # Node-артефакты SDK/примеров (T22): в репо только исходники
 node_modules/
 dist-widget/
+demo-out/
