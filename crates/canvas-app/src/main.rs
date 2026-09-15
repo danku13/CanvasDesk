@@ -55,7 +55,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 // Атрибуты окна Windows: отключение своего IDropTarget у winit (T9, план §3)
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
@@ -445,6 +445,17 @@ impl AppDialog {
     }
 }
 
+/// Ярление заливки для hover-подсветки (кнопки настроек/темы): практика
+/// аффорданса — интерактивная кнопка отвечает на курсор.
+fn hover_fill(c: [f32; 4]) -> [f32; 4] {
+    [
+        (c[0] * 1.3 + 0.04).min(1.0),
+        (c[1] * 1.3 + 0.04).min(1.0),
+        (c[2] * 1.3 + 0.06).min(1.0),
+        c[3],
+    ]
+}
+
 /// FR-012: settle-анимация после вставки в группу — (индекс, из, в) для
 /// группы и раздвинутых соседей; интерполяция ease_out_cubic ~250 мс.
 struct SettleAnim {
@@ -467,6 +478,10 @@ struct App {
     modifiers: ModifiersState,
     /// Позиция курсора в логических пикселях.
     cursor: Vec2,
+    /// Текущая иконка курсора (аффорданс: пан — Grabbing, редактор — Text,
+    /// resize-угол — NwseResize). Практики UI: форма курсора подсказывает
+    /// жест; хранится, чтобы set_cursor вызывать только при смене.
+    cursor_icon: CursorIcon,
     middle_pressed: bool,
     space_pressed: bool,
     left_pressed: bool,
@@ -672,6 +687,7 @@ impl App {
             thumbs,
             modifiers: ModifiersState::empty(),
             cursor: [0.0, 0.0],
+            cursor_icon: CursorIcon::Default,
             middle_pressed: false,
             space_pressed: false,
             left_pressed: false,
@@ -1125,6 +1141,7 @@ impl App {
         if !is_group {
             self.fit_note_size();
         }
+        self.sync_cursor_icon();
         self.request_redraw();
     }
 
@@ -1157,6 +1174,7 @@ impl App {
         self.editing = Some(session);
         self.scene.selected = Some(Selection::Edge(index));
         self.scene.dragging = None;
+        self.sync_cursor_icon();
         self.request_redraw();
     }
 
@@ -1246,6 +1264,7 @@ impl App {
             // снапшот «до» дропается (no-op шагов в истории нет)
             self.pending_undo = None;
         }
+        self.sync_cursor_icon();
         self.request_redraw();
     }
 
@@ -1600,6 +1619,111 @@ impl App {
     /// Активно ли панорамирование (средняя кнопка или Space+drag, SPEC §8).
     fn panning(&self) -> bool {
         self.middle_pressed || (self.space_pressed && self.left_pressed)
+    }
+
+    /// Аффорданс курсора (практики UI: форма курсора подсказывает жест):
+    /// пан — Grabbing, текстовый редактор — Text, resize-угол ноды —
+    /// NwseResize, иначе Arrow. set_cursor вызывается только при смене.
+    fn sync_cursor_icon(&mut self) {
+        let desired = if self.panning() {
+            CursorIcon::Grabbing
+        } else if self.editing.is_some() {
+            CursorIcon::Text
+        } else {
+            let world = self.cursor_world();
+            let resize = self
+                .hovered
+                .and_then(|i| self.scene.canvas.nodes.get(i))
+                .is_some_and(|node| canvas_app::ui::in_resize_corner(node, world));
+            if resize {
+                CursorIcon::NwseResize
+            } else {
+                CursorIcon::Default
+            }
+        };
+        if self.cursor_icon != desired {
+            self.cursor_icon = desired;
+            if let Some(window) = &self.window {
+                window.set_cursor(desired);
+            }
+        }
+    }
+
+    /// Сброс залипших pointer-transient состояний при потере фокуса окна
+    /// (alt-tab во время drag оставлял «прилипшую» ноду/пан — кнопка
+    /// Released приходит в другое окно). Практики UI: модальные переходы
+    /// гасят активные жесты.
+    fn cancel_pointer_transients(&mut self) {
+        self.space_pressed = false;
+        self.middle_pressed = false;
+        self.left_pressed = false;
+        self.minimap_drag = false;
+        self.editor_dragging = false;
+        self.resizing = None;
+        self.edge_drag = None;
+        self.select_rect = None;
+        self.group_drop_target = None;
+        if self.scene.dragging.is_some() {
+            // FR-006: движение до потери фокуса — undo-шаг
+            self.finish_interaction_undo();
+            self.scene.dragging = None;
+        }
+        self.sync_cursor_icon();
+    }
+
+    /// Курсор над открытой screen-space поверхностью (кнопки/панель
+    /// настроек, поиск, меню+подменю, палитра, хоткеи, миникарта, диалог).
+    /// Практика canvas-приложений (Miro/Figma): колесо/пинч над плавающим
+    /// UI холст не двигают.
+    fn cursor_over_screen_surface(&self) -> bool {
+        let viewport = self.viewport_logical();
+        let over = |rect: [f32; 4]| point_in_rect(rect, self.cursor);
+        if over(button_rect(self.settings.button_corner, viewport))
+            || over(theme_button_rect(self.settings.button_corner, viewport))
+        {
+            return true;
+        }
+        if self.settings_open && over(panel_rect(self.settings.button_corner, viewport)) {
+            return true;
+        }
+        if self.search.is_open() {
+            let lay = search_layout(viewport[0], viewport[1], &self.search);
+            if over(rect_xywh(lay.panel_rect)) {
+                return true;
+            }
+        }
+        if let Some(rect) = self.menu_open_rect() {
+            if over(rect) {
+                return true;
+            }
+            if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
+                if over(submenu_rect(submenu)) {
+                    return true;
+                }
+            }
+        }
+        if let Some((lay, _, _)) = self.palette_geometry() {
+            if over(lay.bar) {
+                return true;
+            }
+            if let Some(group) = self.palette_hover.open.and_then(|g| lay.groups.get(g)) {
+                if over(group.dropdown) {
+                    return true;
+                }
+            }
+        }
+        if self.hotkeys_open && over(hotkeys_panel_rect(viewport)) {
+            return true;
+        }
+        if let Some(rect) = self.minimap_rect() {
+            if over([rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]]) {
+                return true;
+            }
+        }
+        if self.dialog.is_some() && over(self.dialog_rect()) {
+            return true;
+        }
+        false
     }
 
     /// Размер viewport в логических пикселях. Делитель — effective scale
@@ -2136,11 +2260,16 @@ impl App {
             };
             let selected = self.search.selected == Some(row);
             let row_rect = rect_xywh(*rect);
+            // Hover-подсветка результата (не выбранного — выделенный несёт
+            // акцент): практика списков результатов (VS Code)
+            let row_hover = point_in_rect(row_rect, self.cursor);
             instances.push(CardInstance {
                 pos: [row_rect[0], row_rect[1]],
                 size: [row_rect[2], row_rect[3]],
                 fill: if selected {
                     [0.18, 0.29, 0.48, 0.95]
+                } else if row_hover {
+                    [0.24, 0.30, 0.42, 0.6]
                 } else {
                     palette.search_row_fill
                 },
@@ -2329,8 +2458,20 @@ impl App {
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 0.0],
         });
+        // Hover-подсветка пункта (аффорданс — как строки палитры/поиска:
+        // интерактивный элемент отвечает на курсор)
+        let hovered_item = menu_item_at_for(menu.origin, self.cursor, CANVAS_MENU_ITEMS.len());
         for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
             let rect = menu_item_rect(menu.origin, i);
+            if hovered_item == Some(i) {
+                instances.push(CardInstance {
+                    pos: [rect[0], rect[1]],
+                    size: [rect[2], rect[3]],
+                    fill: [0.24, 0.30, 0.42, 0.9],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
             texts.push(OwnedScreenText {
                 text: canvas_menu_label(*item, self.settings.focus_mode, self.hotkeys_open),
                 origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
@@ -2363,8 +2504,18 @@ impl App {
                     align: TextAlign::Left,
                 });
             } else {
+                let hovered_sub = submenu_item_at(submenu, self.cursor);
                 for (i, entry) in submenu.entries.iter().enumerate() {
                     let rect = menu_item_rect(submenu.origin, i);
+                    if hovered_sub == Some(i) {
+                        instances.push(CardInstance {
+                            pos: [rect[0], rect[1]],
+                            size: [rect[2], rect[3]],
+                            fill: [0.24, 0.30, 0.42, 0.9],
+                            border: [0.0; 4],
+                            params: [4.0, 0.0, 0.0, 1.0],
+                        });
+                    }
                     texts.push(OwnedScreenText {
                         text: entry.label.clone(),
                         origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
@@ -2390,6 +2541,10 @@ impl App {
             || self.scene.dragging.is_some()
             || self.edge_drag.is_some()
             || self.select_rect.is_some()
+            // Взаимоисключение поповеров: открытое меню канваса прячет
+            // палитру (практика UI: transient-поповер один за раз;
+            // обратное направление — RMB по ноде закрывает меню)
+            || self.menu.is_some()
         {
             return None;
         }
@@ -2467,15 +2622,16 @@ impl App {
         }
     }
 
-    /// Вид палитры на кадр: (layout, группы, открытая hover'ом группа).
-    /// Побочно обновляет `palette_hover` (hover-intent/отсрочка закрытия)
-    /// и сбрасывает его при смене цели — вызывается и на кликах, и на кадрах.
-    fn palette_view(
-        &mut self,
+    /// Чистая геометрия палитры: (layout, группы, цель). Без обновления
+    /// hover-состояния — используется и для отрисовки, и для проверки
+    /// «курсор над screen-space поверхностью» (колесо над UI холст
+    /// не двигает).
+    fn palette_geometry(
+        &self,
     ) -> Option<(
         PaletteLayout,
         Vec<canvas_app::palette::PaletteGroup>,
-        Option<usize>,
+        PaletteTarget,
     )> {
         let target = self.palette_target()?;
         let groups = palette_groups(&self.scene.canvas, &target);
@@ -2486,6 +2642,20 @@ impl App {
         let anchor = self.palette_anchor_screen(&target)?;
         let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
         let lay = palette_layout(origin, &groups, viewport);
+        Some((lay, groups, target))
+    }
+
+    /// Вид палитры на кадр: (layout, группы, открытая hover'ом группа).
+    /// Побочно обновляет `palette_hover` (hover-intent/отсрочка закрытия)
+    /// и сбрасывает его при смене цели — вызывается и на кликах, и на кадрах.
+    fn palette_view(
+        &mut self,
+    ) -> Option<(
+        PaletteLayout,
+        Vec<canvas_app::palette::PaletteGroup>,
+        Option<usize>,
+    )> {
+        let (lay, groups, target) = self.palette_geometry()?;
         let open = {
             if self.palette_seen.as_ref() != Some(&target) {
                 // Смена цели: раскрытая группа прежней цели недействительна
@@ -2889,10 +3059,16 @@ impl App {
         // кнопки (так же считает рендер screen-текстов).
         let icon_top = |rect: [f32; 4], font_size: f32| rect[1] + (rect[3] - font_size * 1.3) / 2.0;
         let button = button_rect(self.settings.button_corner, viewport);
+        // Hover-аффорданс: курсор над кнопкой — заливка ярче
+        let settings_hovered = point_in_rect(button, self.cursor);
         instances.push(CardInstance {
             pos: [button[0], button[1]],
             size: [button[2], button[3]],
-            fill: palette.menu_fill,
+            fill: if settings_hovered {
+                hover_fill(palette.menu_fill)
+            } else {
+                palette.menu_fill
+            },
             border: [0.0; 4],
             // params.y = рамка выделения: подсветка кнопки при открытой панели
             params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
@@ -2910,10 +3086,15 @@ impl App {
         // Кнопка переключения темы — рядом с кнопкой настроек (в тот же угол).
         // Иконка показывает ЦЕЛЬ: в тёмной теме «солнце» (клик — светлая).
         let theme_button = theme_button_rect(self.settings.button_corner, viewport);
+        let theme_hovered = point_in_rect(theme_button, self.cursor);
         instances.push(CardInstance {
             pos: [theme_button[0], theme_button[1]],
             size: [theme_button[2], theme_button[3]],
-            fill: palette.menu_fill,
+            fill: if theme_hovered {
+                hover_fill(palette.menu_fill)
+            } else {
+                palette.menu_fill
+            },
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
         });
@@ -3001,6 +3182,19 @@ impl App {
             align: TextAlign::Left,
         });
         let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
+        // Hover-подсветка кликабельной строки под курсором (аффорданс)
+        if let Some(row) = panel_row_at(panel, self.cursor) {
+            instances.push(CardInstance {
+                pos: [
+                    panel[0] + PANEL_PADDING,
+                    rows_top + row as f32 * PANEL_ROW_HEIGHT + 1.0,
+                ],
+                size: [panel[2] - PANEL_PADDING * 2.0, PANEL_ROW_HEIGHT - 2.0],
+                fill: [0.24, 0.30, 0.42, 0.6],
+                border: [0.0; 4],
+                params: [4.0, 0.0, 0.0, 1.0],
+            });
+        }
         for (i, row) in SETTINGS_ROWS.iter().enumerate() {
             texts.push(OwnedScreenText {
                 text: row.label(&self.settings),
@@ -3586,12 +3780,18 @@ impl App {
             }
             return;
         }
-        // Esc закрывает контекстное меню (T7), затем — панель настроек,
-        // затем — панель хоткеев (FR-004)
+        // Esc закрывает раскрытие палитры (верхний transient), затем —
+        // контекстное меню (T7), панель настроек, панель хоткеев (FR-004)
         if event.logical_key == Key::Named(NamedKey::Escape)
             && event.state == ElementState::Pressed
             && !event.repeat
         {
+            if self.palette_hover.open.is_some() || self.palette_hover.pending() {
+                // Раскрытая колонка палитры закрывается без снятия выделения
+                self.palette_hover.reset();
+                self.request_redraw();
+                return;
+            }
             if self.menu.take().is_some() {
                 self.request_redraw();
                 return;
@@ -3655,6 +3855,7 @@ impl App {
         }
         if event.logical_key == Key::Named(NamedKey::Space) && !event.repeat {
             self.space_pressed = event.state == ElementState::Pressed;
+            self.sync_cursor_icon();
             if !self.space_pressed {
                 // Отпускание Space во время drag не должно оставлять ноду "прилипшей"
                 // FR-006: применённое движение — undo-шаг; далее drag прерывается
@@ -3900,91 +4101,127 @@ impl App {
                         None => {}
                     }
                 }
-                // Открытое меню канваса (T7): клик по пункту — применить,
-                // мимо — закрыть. M5: открытое подменю виджетов проверяется
-                // ПЕРВЫМ — его колонка правее базового меню (клик там не
-                // попадает в base). Hit-test — в логических px (курсор).
-                if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
-                    if let Some(i) = submenu_item_at(submenu, self.cursor) {
-                        let action = submenu.entries[i].action.clone();
-                        self.menu = None;
-                        match action {
-                            canvas_app::ui::SubmenuAction::Insert(widget_id) => {
-                                self.insert_widget_from_menu(&widget_id);
+                // Открытое меню канваса (T7): клик по пункту — действие,
+                // клик по поверхности меню (паддинг) — глотается, меню
+                // ОСТАЁТСЯ открытым (Radix: клик внутри поверхности меню
+                // не закрывает), клик мимо — закрыть (dismiss-клик в канвас
+                // не проходит). M5: подменю проверяется ПЕРВЫМ — его колонка
+                // правее базового меню. Hit-test — в логических px (курсор).
+                if self.menu.is_some() {
+                    let in_base = self
+                        .menu_open_rect()
+                        .is_some_and(|rect| point_in_rect(rect, self.cursor));
+                    let in_submenu = self
+                        .menu
+                        .as_ref()
+                        .and_then(|m| m.submenu.as_ref())
+                        .map(submenu_rect)
+                        .is_some_and(|rect| point_in_rect(rect, self.cursor));
+                    // 1. Пункт подменю — действие
+                    if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
+                        if let Some(i) = submenu_item_at(submenu, self.cursor) {
+                            let action = submenu.entries[i].action.clone();
+                            self.menu = None;
+                            match action {
+                                canvas_app::ui::SubmenuAction::Insert(widget_id) => {
+                                    self.insert_widget_from_menu(&widget_id);
+                                }
+                                // T21-C (П11): удаление пакета — с подтверждением;
+                                // меню уже закрыто, модальный диалог поверх
+                                canvas_app::ui::SubmenuAction::Remove(widget_id) => {
+                                    let name = self
+                                        .widgets
+                                        .registry
+                                        .get(&widget_id)
+                                        .map(|p| p.manifest.name.clone())
+                                        .unwrap_or(widget_id.clone());
+                                    self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
+                                }
                             }
-                            // T21-C (П11): удаление пакета — с подтверждением;
-                            // меню уже закрыто, модальный диалог поверх
-                            canvas_app::ui::SubmenuAction::Remove(widget_id) => {
-                                let name = self
-                                    .widgets
-                                    .registry
-                                    .get(&widget_id)
-                                    .map(|p| p.manifest.name.clone())
-                                    .unwrap_or(widget_id.clone());
-                                self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
-                            }
+                            self.request_redraw();
+                            return;
                         }
+                    }
+                    // 2. Поверхность подменю без пункта — глотается, не закрывает
+                    if in_submenu {
                         self.request_redraw();
                         return;
                     }
-                }
-                if let Some(menu) = self.menu.take() {
-                    // Пункты меню канваса (нода/связь — палитра выделения)
-                    if let Some(i) =
-                        menu_item_at_for(menu.origin, self.cursor, CANVAS_MENU_ITEMS.len())
-                    {
-                        match CANVAS_MENU_ITEMS[i] {
-                            CanvasMenuItem::NewGroup => {
-                                let center = self.viewport_center_world();
-                                let group = plan_group_at(&self.scene.canvas, center);
-                                self.insert_group(group);
-                            }
-                            // T23: переключение из меню — рантайм,
-                            // без записи конфига (как и хоткей F)
-                            CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
-                            // FR-004.1: тогл оверлея хоткеев из меню
-                            // (панель «видно/не видно», галочка ✓)
-                            CanvasMenuItem::Hotkeys => {
-                                self.hotkeys_open = !self.hotkeys_open;
-                            }
-                            // M5 (T20-F): открыть подменю пакетов
-                            // (план П2); пустой список — честная
-                            // строка «(нет установленных)».
-                            // T21-C: под каждой вставкой — секция
-                            // удаления пакетов (П11)
-                            CanvasMenuItem::Widgets => {
-                                let submenu_origin = submenu_origin_next_to(menu.origin);
-                                let mut entries: Vec<SubmenuEntry> = self
-                                    .widgets
-                                    .menu_entries()
-                                    .into_iter()
-                                    .map(|(widget_id, label)| SubmenuEntry {
-                                        action: canvas_app::ui::SubmenuAction::Insert(widget_id),
-                                        label,
-                                    })
-                                    .collect();
-                                entries.extend(
-                                    self.widgets.menu_entries().into_iter().map(
-                                        |(widget_id, label)| SubmenuEntry {
-                                            action: canvas_app::ui::SubmenuAction::Remove(
-                                                widget_id,
+                    // 3. Пункт или паддинг базового меню
+                    if let Some(menu) = self.menu.take() {
+                        if let Some(i) =
+                            menu_item_at_for(menu.origin, self.cursor, CANVAS_MENU_ITEMS.len())
+                        {
+                            match CANVAS_MENU_ITEMS[i] {
+                                CanvasMenuItem::NewGroup => {
+                                    let center = self.viewport_center_world();
+                                    let group = plan_group_at(&self.scene.canvas, center);
+                                    self.insert_group(group);
+                                }
+                                // T23: переключение из меню — рантайм,
+                                // без записи конфига (как и хоткей F)
+                                CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
+                                // FR-004.1: тогл оверлея хоткеев из меню
+                                // (панель «видно/не видно», галочка ✓)
+                                CanvasMenuItem::Hotkeys => {
+                                    self.hotkeys_open = !self.hotkeys_open;
+                                }
+                                // M5 (T20-F): открыть подменю пакетов;
+                                // повторный клик — тоггл (закрыть). Пустой
+                                // список — честная строка «(нет установленных)».
+                                // T21-C: под каждой вставкой — секция
+                                // удаления пакетов (П11)
+                                CanvasMenuItem::Widgets => {
+                                    if menu.submenu.is_some() {
+                                        // Тоггл: подменю уже открыто — закрыть
+                                        self.menu = Some(ContextMenu {
+                                            origin: menu.origin,
+                                            submenu: None,
+                                        });
+                                    } else {
+                                        let submenu_origin = submenu_origin_next_to(menu.origin);
+                                        let mut entries: Vec<SubmenuEntry> = self
+                                            .widgets
+                                            .menu_entries()
+                                            .into_iter()
+                                            .map(|(widget_id, label)| SubmenuEntry {
+                                                action: canvas_app::ui::SubmenuAction::Insert(widget_id),
+                                                label,
+                                            })
+                                            .collect();
+                                        entries.extend(
+                                            self.widgets.menu_entries().into_iter().map(
+                                                |(widget_id, label)| SubmenuEntry {
+                                                    action: canvas_app::ui::SubmenuAction::Remove(
+                                                        widget_id,
+                                                    ),
+                                                    label: format!("— Удалить: {label}"),
+                                                },
                                             ),
-                                            label: format!("— Удалить: {label}"),
-                                        },
-                                    ),
-                                );
-                                self.menu = Some(ContextMenu {
-                                    origin: menu.origin,
-                                    submenu: Some(Submenu {
-                                        origin: submenu_origin,
-                                        entries,
-                                    }),
-                                });
+                                        );
+                                        self.menu = Some(ContextMenu {
+                                            origin: menu.origin,
+                                            submenu: Some(Submenu {
+                                                origin: submenu_origin,
+                                                entries,
+                                            }),
+                                        });
+                                    }
+                                }
                             }
+                            self.request_redraw();
+                            return;
                         }
+                        if in_base {
+                            // Паддинг базового меню — меню остаётся открытым
+                            self.menu = Some(menu);
+                            self.request_redraw();
+                            return;
+                        }
+                        // Клик мимо — меню закрыто (take выше), клик глотается
+                        self.request_redraw();
+                        return;
                     }
-                    self.request_redraw();
-                    return;
                 }
                 // Активное редактирование (T7/T8): клик внутри области
                 // редактирования — в курсор, клик снаружи — commit и обычная
@@ -4322,7 +4559,10 @@ impl App {
                         // канвас / Новый текстовый файл / иконки / автозапуск /
                         // Выход); вне --desktop — меню пустого канваса
                         // (создание группы), повторный ПКМ мимо закрывает его.
-                        // Origin — логические px (screen-space меню)
+                        // Origin — логические px (screen-space меню).
+                        // Взаимоисключение поповеров: открытие меню прячет
+                        // палитру и сбрасывает её раскрытие
+                        self.palette_hover.reset();
                         #[cfg(windows)]
                         let desktop_menu = self.desktop_mode && self.desktop_hierarchy.is_some();
                         #[cfg(not(windows))]
@@ -4549,22 +4789,42 @@ impl App {
                 // Hover (T8): порты ноды под курсором; перерисовка — только
                 // при смене ноды, чтобы не крутить кадры на каждый пиксель.
                 // Выборочный hit: над ребёнком группы hover уходит ему,
-                // а не группе (порты групп не рисуются — cards.rs)
+                // а не группе (порты групп не рисуются — cards.rs).
+                // Модальность (практики UI): над открытым диалогом/поиском/
+                // меню канваса hover-порты гасятся — сквозь оверлей
+                // не подсвечивают
                 let world = self.cursor_world();
-                let hovered = self.selective_hit(world);
+                let hovered =
+                    if self.dialog.is_some() || self.search.is_open() || self.menu.is_some() {
+                        None
+                    } else {
+                        self.selective_hit(world)
+                    };
                 if hovered != self.hovered {
                     self.hovered = hovered;
                     self.request_redraw();
-                } else if self.palette_target().is_some() {
-                    // Палитра выделения: подсветка кнопок/строк и открытая
-                    // hover'ом колонка следуют за курсором
+                } else if self.palette_target().is_some()
+                    || self.menu.is_some()
+                    || self.search.is_open()
+                    || self.settings_open
+                {
+                    // Палитра/меню/поиск/настройки: hover-подсветка элементов
+                    // следует за курсором
                     self.request_redraw();
                 }
             }
         }
+        // Аффорданс курсора (Grabbing/Text/NwseResize/Arrow) — после всех
+        // смен состояний этого события
+        self.sync_cursor_icon();
     }
 
     fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // Колесо над screen-space UI (панели/меню/палитра/миникарта) холст
+        // не двигает — практика canvas-приложений (Miro/Figma)
+        if self.cursor_over_screen_surface() {
+            return;
+        }
         // Тачпады шлют PixelDelta (физические px), колёсики мышей — LineDelta
         let scale = self.scale_factor();
         let (dx, dy) = match delta {
@@ -4587,6 +4847,10 @@ impl App {
     }
 
     fn on_pinch(&mut self, delta: f64) {
+        // Пинч над screen-space UI — холст не зумит (как колесо выше)
+        if self.cursor_over_screen_surface() {
+            return;
+        }
         let viewport = self.viewport_logical();
         let factor = (delta as f32).exp();
         self.camera.zoom_at(factor, self.cursor, viewport);
@@ -5886,12 +6150,29 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::KeyboardInput { event, .. } => self.on_key(&event),
             WindowEvent::MouseInput { state, button, .. } => match button {
-                MouseButton::Middle => self.middle_pressed = state == ElementState::Pressed,
+                MouseButton::Middle => {
+                    self.middle_pressed = state == ElementState::Pressed;
+                    self.sync_cursor_icon();
+                }
                 MouseButton::Left => self.on_left_button(state),
                 MouseButton::Right => self.on_right_button(state, event_loop),
                 _ => {}
             },
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
+            WindowEvent::CursorLeft { .. } => {
+                // Курсор ушёл из окна: hover-порты гаснут (иначе подсветка
+                // «залипает» до следующего входа)
+                if self.hovered.take().is_some() {
+                    self.request_redraw();
+                }
+            }
+            WindowEvent::Focused(false) => {
+                // Потеря фокуса окна — сброс залипших жестов (alt-tab во
+                // время drag: Released придёт другому окну — нода/пан
+                // оставались «прилипшими»)
+                self.cancel_pointer_transients();
+                self.request_redraw();
+            }
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
             WindowEvent::RedrawRequested => {
