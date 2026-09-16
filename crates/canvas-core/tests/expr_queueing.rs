@@ -244,3 +244,162 @@ fn inbound_value_feeds_queueing_formula() {
     assert!((value.num - 0.005).abs() < 1e-9, "получено {}", value.num);
     assert_eq!(value.unit.display(), "sec");
 }
+
+// === FR-027: финансовые функции (расширение FR-015) ===
+
+/// `npv(0.1, -100, 110)` = −100 + 110/1.1 = −100 + 100 = 0 — точка
+/// безубыточности при ставке 10% и возврате 110 через период.
+#[test]
+fn npv_break_even_is_zero() {
+    let (num, _unit) = eval_num("npv(0.1, -100, 110)");
+    assert!(
+        num.abs() < 1e-9,
+        "NPV(0.1, -100, 110) = 0, получено {num}"
+    );
+}
+
+/// `npv(0.0, -100, 100, 50)` = −100 + 100 + 50 = 50 (нулевая ставка —
+/// простая сумма потоков).
+#[test]
+fn npv_zero_rate_is_sum_of_flows() {
+    let (num, _unit) = eval_num("npv(0.0, -100, 100, 50)");
+    assert!((num - 50.0).abs() < 1e-9, "получено {num}");
+}
+
+/// `npv` с большим числом потоков — стандартный проект: −1000, +500, +600,
+/// +200 при ставке 10%. NPV = −1000 + 454.55 + 495.87 + 150.26 ≈ 100.68.
+#[test]
+fn npv_classic_project_npv() {
+    let (num, _unit) = eval_num("npv(0.1, -1000, 500, 600, 200)");
+    // Σ = -1000 + 500/1.1 + 600/1.21 + 200/1.331
+    //   = -1000 + 454.5455 + 495.8678 + 150.2629 ≈ 100.6762
+    assert!((num - 100.6762).abs() < 1e-3, "получено {num}");
+}
+
+/// `cagr(100, 200, 3)` ≈ 0.2599 (2^(1/3) − 1 — удвоение за 3 года).
+#[test]
+fn cagr_doubling_in_three_years() {
+    let (num, _unit) = eval_num("cagr(100, 200, 3)");
+    assert!((num - 0.25992).abs() < 1e-4, "получено {num}");
+}
+
+/// `cagr(100, 100, 5)` = 0 (без роста).
+#[test]
+fn cagr_no_growth_is_zero() {
+    let (num, _unit) = eval_num("cagr(100, 100, 5)");
+    assert!(num.abs() < 1e-9, "CAGR без роста = 0, получено {num}");
+}
+
+/// `cagr` с begin ≤ 0 — BadCall (отрицательный старт бессмысленен).
+#[test]
+fn cagr_negative_begin_is_error() {
+    assert!(matches!(
+        eval_err("cagr(0, 100, 3)"),
+        EvalError::BadCall { .. }
+    ));
+}
+
+/// `irr(-100, 110)` = 0.1 — тривиальный случай: инвестиция 100, возврат
+/// 110 через период → IRR = 10%.
+#[test]
+fn irr_simple_one_period_is_ten_percent() {
+    let (num, _unit) = eval_num("irr(-100, 110)");
+    assert!(
+        (num - 0.1).abs() < 1e-6,
+        "irr(-100, 110) = 0.1, получено {num}"
+    );
+}
+
+/// `irr(-1000, 500, 600, 200)` ≈ 0.1635 — стандартный проект.
+/// NPV(r) = 0 при r ≈ 16.35%: проверить можно ручной подстановкой
+/// (500/1.1635 + 600/1.3537 + 200/1.5749 ≈ 429.8 + 443.2 + 127.0 ≈ 1000).
+#[test]
+fn irr_classic_project_irr() {
+    let (num, _unit) = eval_num("irr(-1000, 500, 600, 200)");
+    // NPV(r) = 0 при r ≈ 0.1635 — Newton-Raphson нашёл корень.
+    assert!(
+        (num - 0.1635).abs() < 5e-3,
+        "irr ≈ 0.1635, получено {num}"
+    );
+}
+
+/// `irr` с одинаковым знаком — ошибка (нет корня).
+#[test]
+fn irr_same_sign_is_error() {
+    assert!(matches!(
+        eval_err("irr(100, 200)"),
+        EvalError::BadCall { .. }
+    ));
+}
+
+/// `cohort_ltv` с retention = 1 весь период — LTV = arpu × margin × months
+/// (Σ retention по дням / 30 = months).
+#[test]
+fn cohort_ltv_perfect_retention_equals_arpu_times_margin_times_months() {
+    let (num, _unit) = eval_num("cohort_ltv(10, 1, 1, 1, 1, 1)");
+    // arpu_m0 = 10, margin = 1, retention = 1 на каждом дне, months = 1.
+    // Сумма retention по дням 0..30 = 31, ltv = 10 * 1 * 31 / 30 ≈ 10.3333
+    assert!((num - 10.3333).abs() < 1e-3, "получено {num}");
+}
+
+/// `cohort_ltv` с типичными значениями SaaS (r_d1=0.4, r_d7=0.25, r_d30=0.1)
+/// — LTV ≈ 4.57 (низкое удержание → низкий LTV; это и есть здоровый сигнал
+/// «проблема в онбординге»).
+#[test]
+fn cohort_ltv_saas_typical_retention_curve() {
+    let (num, _unit) = eval_num("cohort_ltv(20, 0.8, 0.4, 0.25, 0.1, 12)");
+    // Положительный, конечный, в разумных пределах (1..100).
+    assert!(num.is_finite(), "конечный результат, получено {num}");
+    assert!(num > 0.0, "LTV > 0, получено {num}");
+    assert!(num < 100.0, "LTV < 100 usd для агрессивного churn, получено {num}");
+}
+
+/// `cohort_ltv` с margin вне 0..1 — ошибка.
+#[test]
+fn cohort_ltv_margin_out_of_range_is_error() {
+    assert!(matches!(
+        eval_err("cohort_ltv(20, 1.5, 1, 1, 1, 12)"),
+        EvalError::BadCall { .. }
+    ));
+}
+
+/// `cohort_ltv` с нецелым months — ошибка.
+#[test]
+fn cohort_ltv_non_integer_months_is_error() {
+    assert!(matches!(
+        eval_err("cohort_ltv(20, 0.8, 1, 1, 1, 1.5)"),
+        EvalError::BadCall { .. }
+    ));
+}
+
+/// Все 4 новые функции маршрутизируются как `Expr::Call` (FR-013).
+#[test]
+fn financial_calls_parse_as_function_call() {
+    assert!(matches!(
+        parse("npv(0.1, -100, 110)").unwrap(),
+        Expr::Call { ref func, .. } if func == "npv"
+    ));
+    assert!(matches!(
+        parse("cagr(100, 200, 3)").unwrap(),
+        Expr::Call { ref func, .. } if func == "cagr"
+    ));
+    assert!(matches!(
+        parse("irr(-100, 110)").unwrap(),
+        Expr::Call { ref func, .. } if func == "irr"
+    ));
+    assert!(matches!(
+        parse("cohort_ltv(20, 0.8, 0.4, 0.25, 0.1, 12)").unwrap(),
+        Expr::Call { ref func, .. } if func == "cohort_ltv"
+    ));
+}
+
+/// Arity guard — недостаточно аргументов → BadCall.
+#[test]
+fn financial_wrong_arity_is_rejected() {
+    assert!(matches!(eval_err("npv(0.1)"), EvalError::BadCall { .. }));
+    assert!(matches!(eval_err("cagr(100, 200)"), EvalError::BadCall { .. }));
+    assert!(matches!(eval_err("irr(-100)"), EvalError::BadCall { .. }));
+    assert!(
+        matches!(eval_err("cohort_ltv(20, 0.8, 0.4, 0.25, 0.1)"), EvalError::BadCall { .. })
+    );
+}

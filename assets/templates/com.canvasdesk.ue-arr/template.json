@@ -1,0 +1,21 @@
+{
+  "id": "com.canvasdesk.ue-arr",
+  "name_en": "Annual Recurring Revenue",
+  "name_ru": "ARR (годовая регулярная выручка)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Годовая регулярная выручка: MRR × 12 — run-rate подписочной выручки на ближайший год. Ключевая метрика оценки SaaS-компаний, используется инвесторами для valuation (мультипликатор revenue × ARR-множитель). ARR растёт за счёт new MRR и expansion; падает на churn — каждый процент churn уменьшает ARR прямо пропорционально. Сравнивается с планом и previous year для оценки темпов роста и scale. Метрика CEO и CFO для board meeting, investment pitches и M&A discussions.",
+  "description_en": "Annual recurring revenue: MRR × 12 — forward-looking run-rate of subscription revenue. Key SaaS valuation metric; investors price companies as revenue × ARR multiple. ARR grows via new MRR and expansion; falls on churn — each percentage point of churn cuts ARR proportionally. Compared against plan and prior year to gauge growth velocity and scale. A CEO and CFO metric for board meetings, investment pitches and M&A discussions.",
+  "params": [
+    {
+      "name": "mrr",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$mrr × 12",
+  "color": "#F5A623",
+  "icon": "money"
+}

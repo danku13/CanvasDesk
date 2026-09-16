@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-revenue-churn",
+  "name_en": "Revenue Churn Rate",
+  "name_ru": "Отток выручки (Revenue Churn)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Отток выручки: MRR_lost / MRR_start — доля выручки, потерянной за период из-за отписок и downgrades. Обратная сторона NRR и GRR: показывает только потерю, без expansion. Revenue Churn > 5% в месяц — критично для SaaS; < 2% — здоровый уровень. Используется вместе с user churn для диагностики: если revenue churn > user churn, компания теряет крупных и дорогих клиентов. Метрика Customer Success и CFO в monthly retention review и при приоритизации win-back.",
+  "description_en": "Revenue churn: MRR_lost / MRR_start — share of revenue lost in the period due to cancellations and downgrades. The inverse of NRR and GRR: shows only loss, no expansion. Revenue churn > 5%/month is critical for SaaS; < 2% is healthy. Used together with user churn for diagnosis: if revenue churn > user churn, the company is losing its large, expensive customers. A Customer Success and CFO metric for monthly retention review and win-back prioritisation.",
+  "params": [
+    {
+      "name": "mrr_start",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0.0001
+    },
+    {
+      "name": "mrr_lost",
+      "type": "scalar",
+      "default": 5000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$mrr_lost / $mrr_start",
+  "color": "#F5A623",
+  "icon": "money"
+}

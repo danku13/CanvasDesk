@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.ue-mrr",
+  "name_en": "Monthly Recurring Revenue",
+  "name_ru": "MRR (месячная регулярная выручка)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Месячная регулярная выручка: subscribers × ARPU. Базовая метрика SaaS — подписочная выручка, исключает разовые платежи и overage. MRR растёт за счёт new (новые клиенты) и expansion (up-sell); падает на churn (отписки) и contraction (downgrade). Отслеживается monthly в board deck; используется для расчёта ARR (MRR × 12) и оценки темпов роста. Метрика CEO, CFO и Customer Success в monthly business review и при планировании найма.",
+  "description_en": "Monthly recurring revenue: subscribers × ARPU. Foundational SaaS metric — subscription revenue, excludes one-off payments and overage. MRR grows via new (new customers) and expansion (up-sell); falls on churn (cancellations) and contraction (downgrades). Tracked monthly in the board deck; used to derive ARR (MRR × 12) and gauge growth velocity. A CEO, CFO and Customer Success metric in the monthly business review and hiring plan.",
+  "params": [
+    {
+      "name": "subscribers",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "arpu",
+      "type": "scalar",
+      "default": 20,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$subscribers × $arpu",
+  "color": "#F5A623",
+  "icon": "money"
+}

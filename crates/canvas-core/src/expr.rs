@@ -1502,8 +1502,10 @@ fn eval_call(func: &str, args: &[Expr], env: &Env) -> Result<Value, EvalError> {
         "max" => extremes("max", &values, |a, b| a > b),
         "min" => extremes("min", &values, |a, b| a < b),
         "percentile" => eval_percentile(&values),
-        // FR-015: доменные функции теории очередей (чистые, см. queueing.rs)
-        "utilization" | "mm1" | "mmc" | "littles_law" | "erlang_c" => {
+        // FR-015: доменные функции теории очередей (чистые, см. queueing.rs);
+        // FR-027: расширение — 4 финансовые функции (npv/cagr/irr/cohort_ltv).
+        "utilization" | "mm1" | "mmc" | "littles_law" | "erlang_c"
+        | "npv" | "cagr" | "irr" | "cohort_ltv" => {
             queueing::dispatch(func, &values)
         }
         other => Err(EvalError::UnknownFunction(other.to_owned())),

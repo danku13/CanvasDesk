@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-stickiness",
+  "name_en": "DAU / MAU Stickiness",
+  "name_ru": "Stickiness (DAU / MAU)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Stickiness: DAU / MAU — насколько часто месячные активные пользователи возвращаются в продукт каждый день. Главный индикатор сформированной привычки: > 50% — отлично (WhatsApp, Facebook), 20–50% — хорошо (утилиты, B2B SaaS), < 20% — продукт не сформировал daily habit. Коррелирует с retention: низкий stickiness ведёт к высокому churn в платной базе в следующем периоде. Сравнивается между сегментами (mobile/desktop, free/paid) для оценки engagement-разрыва. Метрика продакт-менеджера для daily engagement review и feature prioritisation.",
+  "description_en": "Stickiness: DAU / MAU — how often monthly active users come back to the product daily. Headline habit indicator: > 50% is excellent (WhatsApp, Facebook); 20–50% is good (utilities, B2B SaaS); < 20% means the product hasn't formed a daily habit. Correlates with retention: low stickiness leads to high churn in the paid base next period. Compared across segments (mobile/desktop, free/paid) to spot engagement gaps. A product-manager metric for daily engagement review and feature prioritisation.",
+  "params": [
+    {
+      "name": "dau",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "mau",
+      "type": "count",
+      "default": 20000,
+      "min": 1
+    }
+  ],
+  "expr": "$dau / $mau",
+  "color": "#4A90E2",
+  "icon": "users"
+}
