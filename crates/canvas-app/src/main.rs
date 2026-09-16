@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
+use canvas_app::docs_ui;
 use canvas_app::hints_ui;
+use canvas_app::onboarding_ui::{self, OnboardingButton, OnboardingState};
 use canvas_app::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
@@ -24,14 +26,15 @@ use canvas_app::template_ui::{
     row_of_ordinal as template_row_of_ordinal, split_two_lines, PanelRow, WheelHit,
 };
 use canvas_app::ui::{
-    button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
-    in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect,
-    panel_rect, paste_nodes, plan_group_around, plan_group_around_nodes, plan_group_at,
-    point_in_rect, reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at,
-    submenu_origin_next_to, submenu_rect, theme_button_rect, toggle_selection_with_primary,
-    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, PastePlacement, Submenu,
-    SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
-    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HINT_HEIGHT, PANEL_PADDING, SELECT_DRAG_THRESHOLD,
+    button_rect, canvas_menu_label, drag_origins, focus_seed_of, help_button_rect,
+    hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
+    next_free_id, nodes_in_rect, panel_rect, paste_nodes, plan_group_around,
+    plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
+    select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
+    toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
+    PastePlacement, Submenu, SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X,
+    MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HINT_HEIGHT, PANEL_PADDING,
+    SELECT_DRAG_THRESHOLD,
 };
 use canvas_core::expr::{
     self, line_kind, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind,
@@ -1067,6 +1070,30 @@ struct SettleAnim {
 /// Длительность settle-анимации вставки в группу (FR-012), мс.
 const SETTLE_ANIM_MS: f32 = 250.0;
 
+/// FR-027: меню помощи кнопки «?» — колонка screen-space у кнопки (кламп
+/// к окну) + флаг раскрытого подменю разделов документации (двухэтапный
+/// Esc: подменю → меню → закрыто — семантика FR-026).
+struct HelpMenuState {
+    /// Origin колонки меню (логические px).
+    origin: Vec2,
+    /// Подменю «Документация ▸» раскрыто.
+    docs_open: bool,
+}
+
+/// FR-027: просмотрщик документации — правый док: индекс страницы, скролл
+/// и раскладка (пересчёт при смене страницы/размера — не на каждый кадр).
+struct DocsViewer {
+    /// Индекс страницы в docs_ui::DOCS_PAGES.
+    page: usize,
+    /// Раскладка страницы (строки/квады/ссылки) под текущую ширину панели.
+    layout: docs_ui::PageLayout,
+    /// Скролл контента (кламп).
+    scroll: docs_ui::ScrollState,
+    /// Ширина контента, под которую собрана раскладка (пересборка при
+    /// изменении — окно resize/миграция между мониторами).
+    layout_width: f32,
+}
+
 /// Состояние приложения: окно и рендерер создаются в `resumed`
 /// (идиома winit 0.30 — окно создаётся только на активном event loop).
 struct App {
@@ -1146,6 +1173,15 @@ struct App {
     /// Выпадающее меню строки настроек (FR-026): какая строка открыта;
     /// пункты вычисляются на кадр, состояние не устаревает.
     settings_dropdown: DropdownState,
+    /// FR-027: меню помощи кнопки «?» (открыто — поверх канваса, клики
+    /// глотаются до закрытия; подменю — двухэтапный Esc).
+    help_menu: Option<HelpMenuState>,
+    /// FR-027: просмотрщик документации (правый док): открыт — колесо над
+    /// панелью скроллит, клики по внутренним ссылкам ведут на страницы.
+    docs: Option<DocsViewer>,
+    /// FR-028: онбординг-тур (автозапуск при первом запуске либо пункт
+    /// «Пройти онбординг» из меню «?»). Открытый тур блокирует ввод канваса.
+    onboarding: Option<OnboardingState>,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
     /// Модальный диалог T21 (установка/удаление пакета): глушит ввод канваса.
@@ -1310,6 +1346,10 @@ impl App {
                 .join("widgets"),
             settings.theme == Theme::Dark,
         );
+        // FR-027/FR-028: помощь/документация закрыты; тур при первом
+        // запуске открывает should_show_onboarding (прецедент
+        // hud_on_start, FR-028) — флаг считается ДО переноса settings в Self
+        let show_onboarding = onboarding_ui::should_show_onboarding(&settings);
         Self {
             widgets,
             window: None,
@@ -1355,6 +1395,12 @@ impl App {
             config_path,
             settings_open: false,
             settings_dropdown: DropdownState::default(),
+            // FR-027/FR-028: помощь/документация закрыты; тур при первом
+            // запуске открывает should_show_onboarding (прецедент
+            // hud_on_start, FR-028)
+            help_menu: None,
+            docs: None,
+            onboarding: show_onboarding.then(OnboardingState::default),
             drop_preview: None,
             dialog: None,
             toast: None,
@@ -2512,8 +2558,32 @@ impl App {
         let over = |rect: [f32; 4]| point_in_rect(rect, self.cursor);
         if over(button_rect(self.settings.button_corner, viewport))
             || over(theme_button_rect(self.settings.button_corner, viewport))
+            || over(help_button_rect(self.settings.button_corner, viewport))
         {
             return true;
+        }
+        // FR-027: меню помощи (+раскрытое подменю разделов) и панель
+        // просмотрщика — тоже screen-поверхности
+        if let Some(menu) = &self.help_menu {
+            if over(docs_ui::help_menu_rect(menu.origin)) {
+                return true;
+            }
+            if menu.docs_open {
+                let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
+                if over(docs_ui::help_submenu_rect(sub)) {
+                    return true;
+                }
+            }
+        }
+        if self.docs.is_some() && over(docs_ui::viewer_rect(viewport)) {
+            return true;
+        }
+        // FR-028: карточка онбординга (открытый тур глушит колесо канваса)
+        if let Some(state) = &self.onboarding {
+            let card = onboarding_ui::card_rect(viewport, state.step);
+            if over(card) {
+                return true;
+            }
         }
         if self.settings_open && over(panel_rect(self.settings.button_corner, viewport)) {
             return true;
@@ -4193,6 +4263,386 @@ impl App {
         (instances, texts)
     }
 
+    /// FR-027: оверлей меню помощи кнопки «?» — колонка у кнопки и
+    /// раскрытое подменю разделов (паттерн контекстного меню T7).
+    fn help_menu_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let Some(menu) = &self.help_menu else {
+            return (instances, texts);
+        };
+        let viewport = self.viewport_logical();
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let [x, y, w, h] = docs_ui::help_menu_rect(menu.origin);
+        instances.push(CardInstance {
+            pos: [x, y],
+            size: [w, h],
+            fill: palette.menu_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 0.0],
+        });
+        let hovered = docs_ui::help_menu_item_at(menu.origin, self.cursor);
+        for (i, item) in docs_ui::HELP_MENU_ITEMS.iter().enumerate() {
+            let rect = docs_ui::help_menu_item_rect(menu.origin, i);
+            if hovered == Some(*item) {
+                instances.push(CardInstance {
+                    pos: [rect[0], rect[1]],
+                    size: [rect[2], rect[3]],
+                    fill: [0.24, 0.30, 0.42, 0.9],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
+            texts.push(OwnedScreenText {
+                text: docs_ui::help_menu_item_label(*item).to_owned(),
+                origin: [rect[0] + 8.0, rect[1] + 6.0],
+                width: rect[2] - 8.0,
+                font_size: 13.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        if menu.docs_open {
+            let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
+            let [sx, sy, sw, sh] = docs_ui::help_submenu_rect(sub);
+            instances.push(CardInstance {
+                pos: [sx, sy],
+                size: [sw, sh],
+                fill: palette.menu_fill,
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 0.0],
+            });
+            let hovered_sub = docs_ui::help_submenu_item_at(sub, self.cursor);
+            for (i, page) in docs_ui::DOCS_PAGES.iter().enumerate() {
+                let rect = docs_ui::help_submenu_item_rect(sub, i);
+                if hovered_sub == Some(i) {
+                    instances.push(CardInstance {
+                        pos: [rect[0], rect[1]],
+                        size: [rect[2], rect[3]],
+                        fill: [0.24, 0.30, 0.42, 0.9],
+                        border: [0.0; 4],
+                        params: [4.0, 0.0, 0.0, 1.0],
+                    });
+                }
+                texts.push(OwnedScreenText {
+                    text: page.label.to_owned(),
+                    origin: [rect[0] + 8.0, rect[1] + 6.0],
+                    width: rect[2] - 8.0,
+                    font_size: 13.0,
+                    color: palette.title,
+                    align: TextAlign::Left,
+                });
+            }
+        }
+        (instances, texts)
+    }
+
+    /// FR-027: оверлей просмотрщика документации — правый док: шапка
+    /// (раздел + ×), скроллируемый контент (кламп строк к видимой зоне),
+    /// внутренние ссылки — акцент + подчёркивание, скроллбар-аффорданс.
+    fn docs_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let Some(viewer) = &self.docs else {
+            return (instances, texts);
+        };
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let panel = docs_ui::viewer_rect(viewport);
+        let content = docs_ui::viewer_content_rect(panel);
+        // Затемнение канваса вокруг панели (паттерн wheel FR-022)
+        if panel[0] > 0.0 {
+            instances.push(CardInstance {
+                pos: [0.0, 0.0],
+                size: [viewport[0], viewport[1]],
+                fill: [0.02, 0.02, 0.04, 0.45],
+                border: [0.0; 4],
+                params: [0.0, 0.0, 0.0, 0.0],
+            });
+        }
+        // Панель
+        instances.push(CardInstance {
+            pos: [panel[0], panel[1]],
+            size: [panel[2], panel[3]],
+            fill: palette.menu_fill,
+            border: [0.0; 4],
+            params: [8.0, 0.0, 0.0, 0.0],
+        });
+        // Шапка: раздел + × (hover-аффорданс)
+        let close = docs_ui::viewer_close_rect(panel);
+        let close_hovered = point_in_rect(close, self.cursor);
+        instances.push(CardInstance {
+            pos: [close[0], close[1]],
+            size: [close[2], close[3]],
+            fill: if close_hovered {
+                hover_fill(palette.menu_fill)
+            } else {
+                palette.menu_fill
+            },
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "×".to_owned(),
+            origin: [close[0], close[1] + (close[3] - 14.0 * 1.3) / 2.0],
+            width: close[2],
+            font_size: 14.0,
+            color: palette.title,
+            align: TextAlign::Center,
+        });
+        let title = docs_ui::DOCS_PAGES
+            .get(viewer.page)
+            .map(|p| p.label.to_owned())
+            .unwrap_or_default();
+        texts.push(OwnedScreenText {
+            text: title,
+            origin: [panel[0] + docs_ui::DOCS_PADDING, panel[1] + 11.0],
+            width: close[0] - panel[0] - docs_ui::DOCS_PADDING * 2.0,
+            font_size: 15.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        // Контент: строки раскладки со сдвигом −offset; строки вне видимой
+        // зоны не рендерим (кламп, длинные страницы дешевле кадра)
+        let view_top = content[1];
+        let view_bottom = content[1] + content[3];
+        for line in &viewer.layout.lines {
+            let (_, line_h) = docs_ui::kind_metrics(line.kind);
+            let y = content[1] + line.y - viewer.scroll.offset;
+            if y + line_h < view_top || y > view_bottom {
+                continue;
+            }
+            let (font, _) = docs_ui::kind_metrics(line.kind);
+            let color = match line.kind {
+                docs_ui::RowKind::Heading(_) => palette.title,
+                docs_ui::RowKind::Quote | docs_ui::RowKind::Code => palette.icon,
+                docs_ui::RowKind::TableCell { header: true } => palette.title,
+                _ => palette.body,
+            };
+            let mut x = content[0] + line.x;
+            for span in &line.spans {
+                // Внутренние ссылки — акцент; внешние — обычный текст
+                // (v1 не кликабельны, FR-027)
+                let span_color = if span.href.as_deref().is_some_and(|href| {
+                    matches!(docs_ui::link_target(href), docs_ui::LinkTarget::Page(_))
+                }) {
+                    palette.link
+                } else {
+                    color
+                };
+                texts.push(OwnedScreenText {
+                    text: span.text.clone(),
+                    origin: [x, y],
+                    width: (content[0] + content[2] - x).max(10.0),
+                    font_size: font,
+                    color: span_color,
+                    align: TextAlign::Left,
+                });
+                x += docs_ui::text_width(&span.text, font);
+            }
+        }
+        // Квады раскладки (линии/подчёркивания шапок таблиц/бары цитат) —
+        // видимые по y
+        for quad in &viewer.layout.quads {
+            let y = content[1] + quad.y - viewer.scroll.offset;
+            if y + quad.height < view_top || y > view_bottom {
+                continue;
+            }
+            instances.push(CardInstance {
+                pos: [content[0] + quad.x, y],
+                size: [quad.width, quad.height.max(1.0)],
+                fill: match quad.kind {
+                    docs_ui::QuadKind::Rule => [0.30, 0.33, 0.40, 0.8],
+                    docs_ui::QuadKind::QuoteBar => color_to_rgba(palette.link),
+                },
+                border: [0.0; 4],
+                params: [0.0, 0.0, 0.0, 0.0],
+            });
+        }
+        // Подчёркивания внутренних ссылок (кликабельный аффорданс)
+        for link in &viewer.layout.links {
+            let y = content[1] + link.rect[1] + link.rect[3] - 2.0 - viewer.scroll.offset;
+            if y < view_top || y > view_bottom {
+                continue;
+            }
+            instances.push(CardInstance {
+                pos: [content[0] + link.rect[0], y],
+                size: [link.rect[2], 1.0],
+                fill: color_to_rgba(palette.link),
+                border: [0.0; 4],
+                params: [0.0, 0.0, 0.0, 0.0],
+            });
+        }
+        // Скроллбар-аффорданс справа (ползунок по пропорции offset/max)
+        if viewer.scroll.max_offset > 0.0 {
+            let track_h = content[3];
+            let thumb_h = (track_h * track_h / viewer.layout.content_height).clamp(24.0, track_h);
+            let free = (track_h - thumb_h).max(0.0);
+            let thumb_y = content[1] + free * viewer.scroll.offset / viewer.scroll.max_offset;
+            instances.push(CardInstance {
+                pos: [
+                    panel[0] + panel[2] - docs_ui::DOCS_SCROLLBAR_W - 2.0,
+                    thumb_y,
+                ],
+                size: [docs_ui::DOCS_SCROLLBAR_W, thumb_h],
+                fill: [0.35, 0.38, 0.46, 0.7],
+                border: [0.0; 4],
+                params: [3.0, 0.0, 0.0, 1.0],
+            });
+        }
+        // Футер-подсказка
+        texts.push(OwnedScreenText {
+            text: "Колесо — прокрутка · ссылки — переход · Esc — закрыть".to_owned(),
+            origin: [panel[0] + docs_ui::DOCS_PADDING, panel[1] + panel[3] - 18.0],
+            width: panel[2] - docs_ui::DOCS_PADDING * 2.0,
+            font_size: 11.0,
+            color: palette.icon,
+            align: TextAlign::Left,
+        });
+        (instances, texts)
+    }
+
+    /// FR-028: оверлей онбординга — затемнение канваса + карточка по центру
+    /// (заголовок, тело, прогресс-точки, кнопки Назад/Далее|Готово/Пропустить).
+    fn onboarding_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let Some(state) = &self.onboarding else {
+            return (instances, texts);
+        };
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let Some(step) = onboarding_ui::ONBOARDING_STEPS.get(state.step) else {
+            return (instances, texts);
+        };
+        // Затемнение (паттерн wheel FR-022): тур поверх неинтерактивного
+        // канваса — фокус на карточке
+        instances.push(CardInstance {
+            pos: [0.0, 0.0],
+            size: [viewport[0], viewport[1]],
+            fill: [0.02, 0.02, 0.04, 0.55],
+            border: [0.0; 4],
+            params: [0.0, 0.0, 0.0, 0.0],
+        });
+        let card = onboarding_ui::card_rect(viewport, state.step);
+        instances.push(CardInstance {
+            pos: [card[0], card[1]],
+            size: [card[2], card[3]],
+            fill: palette.menu_fill,
+            border: [0.0; 4],
+            params: [10.0, 0.0, 0.0, 0.0],
+        });
+        let text_x = card[0] + onboarding_ui::ONBOARDING_PAD;
+        let text_w = card[2] - onboarding_ui::ONBOARDING_PAD * 2.0;
+        // Заголовок
+        texts.push(OwnedScreenText {
+            text: step.title.to_owned(),
+            origin: [text_x, card[1] + onboarding_ui::ONBOARDING_PAD],
+            width: text_w,
+            font_size: onboarding_ui::ONBOARDING_TITLE_FONT,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        // Прогресс-точки: текущая — акцент, остальные — приглушены
+        let (centers, dots_y) = onboarding_ui::progress_dots(card);
+        for (i, cx) in centers.iter().enumerate() {
+            let current = i == state.step;
+            let r = onboarding_ui::ONBOARDING_DOT / 2.0;
+            instances.push(CardInstance {
+                pos: [cx - r, dots_y],
+                size: [r * 2.0, r * 2.0],
+                fill: if current {
+                    color_to_rgba(palette.link)
+                } else {
+                    [0.30, 0.33, 0.40, 0.9]
+                },
+                border: [0.0; 4],
+                params: [r, 0.0, 0.0, 1.0],
+            });
+        }
+        // Тело шага (строки переноса — тот же источник, что высота карточки)
+        let body_top = card[1] + onboarding_ui::body_top_offset();
+        for (i, line) in onboarding_ui::body_lines(state.step, card[2])
+            .iter()
+            .enumerate()
+        {
+            texts.push(OwnedScreenText {
+                text: line.clone(),
+                origin: [
+                    text_x,
+                    body_top + i as f32 * onboarding_ui::ONBOARDING_BODY_LINE_H,
+                ],
+                width: text_w,
+                font_size: onboarding_ui::ONBOARDING_BODY_FONT,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        }
+        // Кнопки: Назад (слева, не на первом шаге), Далее/Готово (справа,
+        // акцент), Пропустить (правый верх — выход виден всегда, NN/g)
+        let buttons = [
+            (
+                OnboardingButton::Prev,
+                state.prev_label().map(str::to_owned),
+            ),
+            (OnboardingButton::Next, Some(state.next_label().to_owned())),
+            (OnboardingButton::Skip, Some("Пропустить".to_owned())),
+        ];
+        for (button, label) in &buttons {
+            let Some(label) = label.clone() else {
+                continue;
+            };
+            let rect = onboarding_ui::button_rect(card, *button);
+            let hovered = point_in_rect(rect, self.cursor);
+            let accent = *button == OnboardingButton::Next;
+            instances.push(CardInstance {
+                pos: [rect[0], rect[1]],
+                size: [rect[2], rect[3]],
+                fill: if hovered {
+                    hover_fill(if accent {
+                        [0.16, 0.32, 0.60, 1.0]
+                    } else {
+                        palette.menu_fill
+                    })
+                } else if accent {
+                    [0.16, 0.32, 0.60, 1.0]
+                } else {
+                    [0.20, 0.23, 0.29, 1.0]
+                },
+                border: [
+                    0.35,
+                    0.40,
+                    0.50,
+                    if *button == OnboardingButton::Skip {
+                        0.7
+                    } else {
+                        1.0
+                    },
+                ],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: label,
+                origin: [rect[0], rect[1] + (rect[3] - 13.0 * 1.3) / 2.0],
+                width: rect[2],
+                font_size: if *button == OnboardingButton::Skip {
+                    11.0
+                } else {
+                    13.0
+                },
+                color: palette.title,
+                align: TextAlign::Center,
+            });
+        }
+        (instances, texts)
+    }
+
     // --- Палитра выделения (FR-009/FR-010) ---
 
     /// Цель палитры из текущего выделения; None — палитра скрыта
@@ -5006,6 +5456,47 @@ impl App {
         }
     }
 
+    /// FR-027: открыть просмотрщик документации на странице (подменю «?»
+    /// или внутренняя ссылка): раскладка собирается под текущую ширину,
+    /// скролл сверху; меню помощи закрывается (одна «панель помощи» активна).
+    fn open_docs_page(&mut self, page: usize) {
+        let viewport = self.viewport_logical();
+        let panel = docs_ui::viewer_rect(viewport);
+        let content = docs_ui::viewer_content_rect(panel);
+        let layout = docs_ui::layout_page(page, content[2]);
+        let scroll = docs_ui::ScrollState::new(layout.content_height, content[3]);
+        self.docs = Some(DocsViewer {
+            page,
+            layout,
+            scroll,
+            layout_width: content[2],
+        });
+        self.help_menu = None;
+        self.request_redraw();
+    }
+
+    /// FR-028: «Готово» на последнем шаге — тур пройден до конца:
+    /// `onboarding_done = true` + сохранение + закрытие (авто-показ молчит
+    /// навсегда, ручной вход из меню «?» остаётся).
+    fn complete_onboarding(&mut self) {
+        self.settings.onboarding_done = true;
+        self.onboarding = None;
+        self.save_settings();
+        self.request_redraw();
+    }
+
+    /// FR-028: «Пропустить»/Esc — отложить тур до следующего запуска:
+    /// инкремент счётчика с клампом 3 (после третьего подряд авто-показ
+    /// замолкает) + сохранение + закрытие. Ручной запуск из меню «?» идёт
+    /// МИМО этого метода — счётчик не трогается (явное намерение).
+    fn defer_onboarding(&mut self) {
+        self.settings.onboarding_defers =
+            canvas_core::clamp_onboarding_defers(self.settings.onboarding_defers.saturating_add(1));
+        self.onboarding = None;
+        self.save_settings();
+        self.request_redraw();
+    }
+
     /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
     /// открыта. Координаты — логические px от левого верхнего угла окна.
     fn settings_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
@@ -5068,6 +5559,29 @@ impl App {
             origin: [theme_button[0], icon_top(theme_button, 16.0)],
             width: theme_button[2],
             font_size: 16.0,
+            color: palette.title,
+            align: TextAlign::Center,
+        });
+        // FR-027: кнопка «?» — третий элемент кластера (настройки/тема/помощь):
+        // вход в меню документации и онбординга; hover-аффорданс как у ⚙
+        let help_button = help_button_rect(self.settings.button_corner, viewport);
+        let help_hovered = point_in_rect(help_button, self.cursor);
+        instances.push(CardInstance {
+            pos: [help_button[0], help_button[1]],
+            size: [help_button[2], help_button[3]],
+            fill: if help_hovered {
+                hover_fill(palette.menu_fill)
+            } else {
+                palette.menu_fill
+            },
+            border: [0.0; 4],
+            params: [8.0, self.help_menu.is_some() as u8 as f32, 0.0, 0.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "?".to_owned(),
+            origin: [help_button[0], icon_top(help_button, 18.0)],
+            width: help_button[2],
+            font_size: 18.0,
             color: palette.title,
             align: TextAlign::Center,
         });
@@ -6022,6 +6536,18 @@ fn mcp_dispatch(
 
 impl App {
     fn on_key(&mut self, event: &KeyEvent) {
+        // FR-028: открытый онбординг глушит канвас-хоткеи (тур модален);
+        // Esc — «Пропустить» (отложить до следующего запуска)
+        if self.onboarding.is_some() {
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && event.logical_key == Key::Named(NamedKey::Escape)
+            {
+                self.defer_onboarding();
+                self.request_redraw();
+            }
+            return;
+        }
         // Активное редактирование (T7): клавиатура уходит в редактор
         if self.editing.is_some() {
             if event.state != ElementState::Pressed {
@@ -6220,6 +6746,23 @@ impl App {
             && event.state == ElementState::Pressed
             && !event.repeat
         {
+            // FR-027: меню помощи — двухэтапный Esc (подменю → меню →
+            // закрыто; семантика FR-026), просмотрщик закрывается одним Esc
+            if let Some(menu) = self.help_menu.take() {
+                // Подменю открыто — первый Esc закрывает только его
+                if menu.docs_open {
+                    self.help_menu = Some(HelpMenuState {
+                        origin: menu.origin,
+                        docs_open: false,
+                    });
+                }
+                self.request_redraw();
+                return;
+            }
+            if self.docs.take().is_some() {
+                self.request_redraw();
+                return;
+            }
             if self.palette_hover.open.is_some() || self.palette_hover.pending() {
                 // Раскрытая колонка палитры закрывается без снятия выделения
                 self.palette_hover.reset();
@@ -6430,6 +6973,32 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // FR-028: онбординг открыт — модальный оверлей: клики по
+                // кнопкам карточки, остальное глотается (канвас не
+                // реагирует; выход виден всегда — «Пропустить» в углу)
+                if let Some(state) = &self.onboarding {
+                    let viewport = self.viewport_logical();
+                    let card = onboarding_ui::card_rect(viewport, state.step);
+                    match onboarding_ui::button_at(card, state, self.cursor) {
+                        Some(OnboardingButton::Next) => {
+                            if state.is_last() {
+                                // «Готово»: тур пройден — флаг + сохранение
+                                self.complete_onboarding();
+                            } else if let Some(state) = self.onboarding.as_mut() {
+                                state.next();
+                            }
+                        }
+                        Some(OnboardingButton::Prev) => {
+                            if let Some(state) = self.onboarding.as_mut() {
+                                state.prev();
+                            }
+                        }
+                        Some(OnboardingButton::Skip) => self.defer_onboarding(),
+                        None => {}
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Панель поиска (T14): клик по строке — прыжок, мимо панели —
                 // закрыть; канвасу клик не достаётся. Проверяется первой —
                 // панель висит поверх всех оверлеев
@@ -6651,6 +7220,87 @@ impl App {
                     // Мимо полосы: flyout закрывается, клик уходит в канвас
                     self.template_hover = None;
                 }
+                // FR-027: меню помощи (кнопка «?») и просмотрщик
+                // документации — поповеры поверх канваса: клики
+                // обрабатываются до кнопок/панели настроек
+                if let Some(menu) = self.help_menu.take() {
+                    let viewport = self.viewport_logical();
+                    // Подменю разделов — ПЕРВЫМ (колонка правее/левее меню):
+                    // выбор открывает просмотрщик, паддинг — глотается
+                    if menu.docs_open {
+                        let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
+                        if let Some(page) = docs_ui::help_submenu_item_at(sub, self.cursor) {
+                            self.open_docs_page(page);
+                            self.request_redraw();
+                            return;
+                        }
+                        if point_in_rect(docs_ui::help_submenu_rect(sub), self.cursor) {
+                            self.help_menu = Some(menu);
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                    match docs_ui::help_menu_item_at(menu.origin, self.cursor) {
+                        // «Документация ▸» — тогл подменю (7 разделов)
+                        Some(docs_ui::HelpMenuItem::Docs) => {
+                            self.help_menu = Some(HelpMenuState {
+                                origin: menu.origin,
+                                docs_open: !menu.docs_open,
+                            });
+                        }
+                        // «Пройти онбординг» (FR-028): явное намерение —
+                        // счётчик откладываний не трогается
+                        Some(docs_ui::HelpMenuItem::Onboarding) => {
+                            self.onboarding = Some(OnboardingState::default());
+                        }
+                        None => {
+                            // Поверхность меню (паддинг) — глотается, меню
+                            // остаётся; мимо — закрыть (клик глотается,
+                            // паттерн контекстного меню T7)
+                            if point_in_rect(docs_ui::help_menu_rect(menu.origin), self.cursor) {
+                                self.help_menu = Some(menu);
+                            }
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                if self.docs.is_some() {
+                    let viewport = self.viewport_logical();
+                    let panel = docs_ui::viewer_rect(viewport);
+                    // × — закрыть
+                    if point_in_rect(docs_ui::viewer_close_rect(panel), self.cursor) {
+                        self.docs = None;
+                        self.request_redraw();
+                        return;
+                    }
+                    if point_in_rect(panel, self.cursor) {
+                        // Внутренняя ссылка — переход на страницу
+                        let content = docs_ui::viewer_content_rect(panel);
+                        let link = self.docs.as_ref().and_then(|viewer| {
+                            docs_ui::link_at(
+                                &viewer.layout,
+                                viewer.scroll,
+                                [content[0], content[1]],
+                                self.cursor,
+                            )
+                            .cloned()
+                        });
+                        if let Some(docs_ui::LinkTarget::Page(id)) = link.map(|l| l.target) {
+                            if let Some(page) = docs_ui::page_index_by_id(id) {
+                                self.open_docs_page(page);
+                                return;
+                            }
+                        }
+                        // Клик по панели без ссылки — глотается
+                        self.request_redraw();
+                        return;
+                    }
+                    // Клик мимо панели — закрыть (клик глотается)
+                    self.docs = None;
+                    self.request_redraw();
+                    return;
+                }
                 // Панель настроек (screen-space): клики обрабатываются до
                 // канваса — кнопка/панель поверх и «прозрачности» не дают
                 let viewport = self.viewport_logical();
@@ -6660,6 +7310,24 @@ impl App {
                     self.cursor,
                 ) {
                     self.toggle_theme();
+                    self.request_redraw();
+                    return;
+                }
+                // FR-027: кнопка «?» — тогл меню помощи (как ⚙ у настроек)
+                if point_in_rect(
+                    help_button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    self.help_menu = match self.help_menu.take() {
+                        Some(_) => None,
+                        None => {
+                            let button = help_button_rect(self.settings.button_corner, viewport);
+                            Some(HelpMenuState {
+                                origin: docs_ui::help_menu_origin(button, viewport),
+                                docs_open: false,
+                            })
+                        }
+                    };
                     self.request_redraw();
                     return;
                 }
@@ -7389,6 +8057,31 @@ impl App {
         if state != ElementState::Pressed {
             return;
         }
+        // FR-028: открытый онбординг модален — ПКМ глотается (меню
+        // канваса/палитра не всплывают под оверлеем)
+        if self.onboarding.is_some() {
+            self.request_redraw();
+            return;
+        }
+        // FR-027: ПКМ над меню помощи/просмотрщиком — не открывает меню
+        // канваса (клик в поповер — его поверхность, паттерн popover)
+        {
+            let viewport = self.viewport_logical();
+            let over_help = self.help_menu.as_ref().is_some_and(|menu| {
+                let in_menu = point_in_rect(docs_ui::help_menu_rect(menu.origin), self.cursor);
+                let in_sub = menu.docs_open && {
+                    let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
+                    point_in_rect(docs_ui::help_submenu_rect(sub), self.cursor)
+                };
+                in_menu || in_sub
+            });
+            let over_docs =
+                self.docs.is_some() && point_in_rect(docs_ui::viewer_rect(viewport), self.cursor);
+            if over_help || over_docs {
+                self.request_redraw();
+                return;
+            }
+        }
         // ПКМ во время редактирования — сначала commit (T7)
         if self.editing.is_some() {
             self.finish_editing(true);
@@ -7716,6 +8409,34 @@ impl App {
                     self.request_redraw();
                     return;
                 }
+            }
+        }
+        // FR-027: просмотрщик документации открыт — колесо над панелью
+        // скроллит его контент (кламп; раскладка пересобирается, если
+        // ширина панели изменилась — окно resize/миграция монитора)
+        if self.docs.is_some() {
+            let viewport = self.viewport_logical();
+            let panel = docs_ui::viewer_rect(viewport);
+            if point_in_rect(panel, self.cursor) {
+                let scale = self.scale_factor();
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / scale,
+                };
+                let content = docs_ui::viewer_content_rect(panel);
+                if let Some(viewer) = self.docs.as_mut() {
+                    if (viewer.layout_width - content[2]).abs() > 0.5 {
+                        viewer.layout = docs_ui::layout_page(viewer.page, content[2]);
+                        viewer.layout_width = content[2];
+                        viewer
+                            .scroll
+                            .resize(viewer.layout.content_height, content[3]);
+                    }
+                    if viewer.scroll.wheel(dy) {
+                        self.request_redraw();
+                    }
+                }
+                return;
             }
         }
         // Колесо над screen-space UI (панели/меню/палитра/миникарта) холст
@@ -9230,6 +9951,24 @@ impl ApplicationHandler<AppEvent> for App {
                     let (menu_instances, menu_texts) = self.canvas_menu_overlay();
                     screen_instances.extend(menu_instances);
                     owned_texts.extend(menu_texts);
+                }
+                // FR-027: меню помощи «?» и просмотрщик документации —
+                // поверх канваса (просмотрщик выше меню: открытие закрывает
+                // меню, но порядок безопасен в любом состоянии)
+                {
+                    let (help_instances, help_texts) = self.help_menu_overlay();
+                    screen_instances.extend(help_instances);
+                    owned_texts.extend(help_texts);
+                    let (docs_instances, docs_texts) = self.docs_overlay();
+                    screen_instances.extend(docs_instances);
+                    owned_texts.extend(docs_texts);
+                }
+                // FR-028: онбординг-карусель — поверх всего канваса
+                // (модальный оверлей первого запуска)
+                {
+                    let (onb_instances, onb_texts) = self.onboarding_overlay();
+                    screen_instances.extend(onb_instances);
+                    owned_texts.extend(onb_texts);
                 }
                 // Палитра выделения (FR-009/FR-010): тулбар под выделением;
                 // rect'ы запоминаются для airspace виджетов
