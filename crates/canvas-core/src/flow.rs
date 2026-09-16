@@ -220,17 +220,47 @@ pub fn propagate(
     canvas: &Canvas,
     overrides: &HashMap<String, Value>,
 ) -> Result<FlowOutputs, CycleError> {
+    propagate_with_lines(canvas, overrides).map(|solutions| solutions.outputs)
+}
+
+/// FR-025: построчные выходы Numi-листов — значение каждой формульной
+/// строки: `(id ноды, индекс строки) → Value`. Заполняется в
+/// [`propagate_with_lines`] (тот же обход и то же окружение, что у
+/// значения ноды — строки видят входы value-рёбер). Ошибки строк и проза
+/// значений не дают (слот деградирует до `None`).
+pub type LineOutputs = HashMap<(String, usize), Value>;
+
+/// FR-025: полный результат пересчёта — значения нод ([`FlowOutputs`])
+/// плюс построчные выходы Numi-листов ([`LineOutputs`]).
+#[derive(Debug, Clone, Default)]
+pub struct FlowSolutions {
+    /// Значения нод (как в [`propagate`]).
+    pub outputs: FlowOutputs,
+    /// Значения формульных строк текстовых нод (FR-025).
+    pub lines: LineOutputs,
+}
+
+/// [`propagate`] с построчными выходами (FR-025): для текстовых Numi-листов
+/// дополнительно собирает значение каждой формульной строки. Нумерация
+/// строк — индекс строки ТЕКСТА ноды (тот же, что в `ExprLineResults`
+/// FR-013 и в бейджах результатов рендера). Шаблонные ноды и ноды с явной
+/// формулой `canvasdesk.expr` построчных выходов не дают — их точка выхода
+/// одна (футер/узловое значение).
+pub fn propagate_with_lines(
+    canvas: &Canvas,
+    overrides: &HashMap<String, Value>,
+) -> Result<FlowSolutions, CycleError> {
     let order = topo_sort(canvas)?;
-    let mut outputs: FlowOutputs = HashMap::new();
+    let mut solutions = FlowSolutions::default();
     for index in order {
         let node = &canvas.nodes[index];
         let id = &node.id;
         // What-if: подменённое значение заменяет формулу целиком
         if let Some(value) = overrides.get(id) {
-            outputs.insert(id.clone(), Ok(value.clone()));
+            solutions.outputs.insert(id.clone(), Ok(value.clone()));
             continue;
         }
-        let slots = inbound_slots(canvas, id, &outputs);
+        let slots = inbound_slots_with_lines(canvas, id, &solutions.outputs, &solutions.lines);
         let env = if slots.is_empty() {
             Env::empty()
         } else {
@@ -260,10 +290,17 @@ pub fn propagate(
                     .and_then(|parsed| expr::eval(&parsed, &env)),
                 None => {
                     let text = node.text.clone().unwrap_or_default();
-                    let last = expr::eval_lines_in(&text, &env)
-                        .into_iter()
-                        .flatten()
-                        .last();
+                    // FR-025: значение КАЖДОЙ формульной строки — кандидаты
+                    // построчных точек выхода; ошибки/проза значения не дают.
+                    let line_outcomes = expr::eval_lines_in(&text, &env);
+                    for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
+                        if let Some(ExprOutcome::Ok(value)) = line_outcome {
+                            solutions
+                                .lines
+                                .insert((id.clone(), line_index), value.clone());
+                        }
+                    }
+                    let last = line_outcomes.into_iter().flatten().last();
                     match last {
                         Some(ExprOutcome::Ok(value)) => Ok(value),
                         Some(ExprOutcome::Err(msg)) => Err(EvalError::BadFormula(msg)),
@@ -272,9 +309,9 @@ pub fn propagate(
                 }
             },
         };
-        outputs.insert(id.clone(), outcome);
+        solutions.outputs.insert(id.clone(), outcome);
     }
-    Ok(outputs)
+    Ok(solutions)
 }
 
 /// Значения входящих value-рёбер ноды (в порядке `canvas.edges`) по карте
@@ -282,15 +319,30 @@ pub fn propagate(
 /// есть, значения нет (источник без формулы, с ошибкой или висячее ребро).
 /// Слоты НЕ схлопываются — индексы `$1..$N` стабильны.
 pub fn inbound_slots(canvas: &Canvas, node_id: &str, outputs: &FlowOutputs) -> Vec<Option<Value>> {
+    inbound_slots_with_lines(canvas, node_id, outputs, &LineOutputs::new())
+}
+
+/// FR-025: [`inbound_slots`] с построчными выходами: ребро с
+/// `from_line = Some(i)` уносит значение строки `i` источника; строка
+/// удалена/стала прозой/ошибка — слот `Some(None)` (тихая деградация,
+/// согласована с принципом тишины прозы Numi). Ребро без `from_line` —
+/// значение ноды целиком (текущее поведение, инвариант флага FR-025).
+pub fn inbound_slots_with_lines(
+    canvas: &Canvas,
+    node_id: &str,
+    outputs: &FlowOutputs,
+    lines: &LineOutputs,
+) -> Vec<Option<Value>> {
     canvas
         .edges
         .iter()
         .filter(|edge| edge.to_node == node_id && edge.flow_kind() == FlowKind::Value)
-        .map(|edge| {
-            outputs
+        .map(|edge| match edge.from_line {
+            Some(line) => lines.get(&(edge.from_node.clone(), line)).cloned(),
+            None => outputs
                 .get(&edge.from_node)
                 .and_then(|result| result.as_ref().ok())
-                .cloned()
+                .cloned(),
         })
         .collect()
 }
@@ -786,5 +838,127 @@ mod tests {
         let display = outputs_display(&outputs);
         assert_eq!(display["A"].as_ref().unwrap(), "5");
         assert!(display["B"].as_ref().unwrap_err().contains("вход"));
+    }
+
+    // --- FR-025: построчные точки выхода (значение строки в потоке) ---
+
+    /// FR-025: propagate_with_lines собирает значение КАЖДОЙ формульной
+    /// строки Numi-листа (присваивания и выражения); проза и ошибки — нет.
+    #[test]
+    fn propagate_collects_line_outputs() {
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("A", "", 0.0, 0.0);
+        node.text = Some("встреча в 15:00\nrps = 1000\nlatency = 50 ms\nrps × latency".to_owned());
+        canvas.nodes.push(node);
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        // Формульные строки 1, 2, 3 — значения есть (индексы ТЕКСТА;
+        // числа сверяем по .num — юниты строк сохраняются: ms у latency)
+        assert_eq!(
+            solutions.lines[&("A".to_owned(), 1)].num,
+            1000.0,
+            "присваивание rps"
+        );
+        assert_eq!(
+            solutions.lines[&("A".to_owned(), 2)].num,
+            50.0,
+            "присваивание latency (юнит ms сохранён)"
+        );
+        assert!(
+            solutions.lines.contains_key(&("A".to_owned(), 3)),
+            "выражение — строка 3"
+        );
+        // Проза (строка 0) значения не даёт
+        assert!(!solutions.lines.contains_key(&("A".to_owned(), 0)));
+        // Значение ноды = последняя формульная строка (инвариант FR-013)
+        assert_eq!(
+            solutions.outputs.get("A"),
+            Some(&Ok(solutions.lines[&("A".to_owned(), 3)].clone()))
+        );
+    }
+
+    /// FR-025: слот value-ребра с `from_line` == значению строки-истока;
+    /// ребро без `from_line` — значение ноды (инвариант флага).
+    #[test]
+    fn inbound_slots_from_line_carries_line_value() {
+        let mut canvas = Canvas::default();
+        let mut sheet = Node::text("A", "", 0.0, 0.0);
+        sheet.text = Some("rps = 1000\ncpu = 4\nrps × cpu".to_owned());
+        canvas.nodes.push(sheet);
+        node_with_expr(&mut canvas, "B", "$in × 2", 1.0);
+        // Ребро 1: значение ноды целиком (последняя строка)
+        value_edge(&mut canvas, "e1", "A", "B");
+        // Ребро 2: построчный исток — строка 0 (rps)
+        let mut line_edge = Edge::new("e2", "A", None, "B", None);
+        line_edge.set_flow_kind(FlowKind::Value);
+        line_edge.from_line = Some(0);
+        canvas.add_edge(line_edge);
+
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
+        assert_eq!(slots.len(), 2, "оба value-ребра");
+        assert_eq!(
+            slots[0],
+            Some(solutions.lines[&("A".to_owned(), 2)].clone()),
+            "без from_line — значение ноды (последняя строка)"
+        );
+        assert_eq!(
+            slots[1].as_ref().map(|value| value.num),
+            Some(1000.0),
+            "from_line 0 — rps"
+        );
+    }
+
+    /// FR-025: тихая деградация слота — строка удалена/ошибка/проза →
+    /// `Some(None)` (как «источник без значения»), индексы `$N` стабильны.
+    #[test]
+    fn inbound_slots_missing_or_error_line_degrade_to_none() {
+        let mut canvas = Canvas::default();
+        let mut sheet = Node::text("A", "", 0.0, 0.0);
+        // Строка 0 — ошибка (деление на ноль), строка 1 — проза
+        sheet.text = Some("x = 1 / 0\nпросто текст".to_owned());
+        canvas.nodes.push(sheet);
+        node_with_expr(&mut canvas, "B", "$in + 1", 1.0);
+        let mut edge0 = Edge::new("e0", "A", None, "B", None);
+        edge0.set_flow_kind(FlowKind::Value);
+        edge0.from_line = Some(0);
+        canvas.add_edge(edge0);
+        let mut edge1 = Edge::new("e1", "A", None, "B", None);
+        edge1.set_flow_kind(FlowKind::Value);
+        edge1.from_line = Some(1);
+        canvas.add_edge(edge1);
+        // Строка 9 не существует вовсе
+        let mut edge9 = Edge::new("e9", "A", None, "B", None);
+        edge9.set_flow_kind(FlowKind::Value);
+        edge9.from_line = Some(9);
+        canvas.add_edge(edge9);
+
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
+        assert_eq!(
+            slots,
+            vec![None, None, None],
+            "ошибка/проза/нет строки — Some(None)"
+        );
+    }
+
+    /// Инвариант флага FR-025: для рёбер БЕЗ `from_line` построчная
+    /// механика ничего не меняет — propagate даёт прежние значения.
+    #[test]
+    fn propagate_without_from_line_matches_legacy() {
+        let mut canvas = Canvas::default();
+        let mut sheet = Node::text("A", "", 0.0, 0.0);
+        sheet.text = Some("rps = 1000\nrps × 2".to_owned());
+        canvas.nodes.push(sheet);
+        node_with_expr(&mut canvas, "B", "$in + 1", 1.0);
+        value_edge(&mut canvas, "e1", "A", "B");
+
+        let legacy = propagate(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(legacy, solutions.outputs, "значения нод совпадают");
+        assert_eq!(
+            legacy.get("A").and_then(|r| r.as_ref().ok()),
+            solutions.lines.get(&("A".to_owned(), 1)),
+            "значение ноды == последняя формульная строка"
+        );
     }
 }

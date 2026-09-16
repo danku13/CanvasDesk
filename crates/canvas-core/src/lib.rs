@@ -21,8 +21,8 @@ pub mod templates;
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
     distance_to_edge, draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint,
-    edge_polyline, effective_sides, nearest_side, port_at, port_point, retarget_edge,
-    route_polyline, side_normal, tessellate, CubicBezier, EdgeEnd, AVOID_MARGIN,
+    edge_polyline, effective_sides, line_port_at, nearest_side, port_at, port_point, retarget_edge,
+    route_polyline, side_normal, tessellate, CubicBezier, EdgeEnd, LinePort, AVOID_MARGIN,
     EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
 };
 pub use error::CoreError;
@@ -30,8 +30,9 @@ pub use expr::{
     Env, EvalError, Expr, ExprLineResults, ExprOutcome, ExprResults, ParseError, Value,
 };
 pub use flow::{
-    creates_value_cycle, inbound_slots, outputs_display, propagate, topo_sort, value_path,
-    CycleError, FlowKind, FlowOutputs,
+    creates_value_cycle, inbound_slots, inbound_slots_with_lines, outputs_display, propagate,
+    propagate_with_lines, topo_sort, value_path, CycleError, FlowKind, FlowOutputs, FlowSolutions,
+    LineOutputs,
 };
 pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{

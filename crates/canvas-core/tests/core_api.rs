@@ -30,6 +30,7 @@ fn canvas_round_trip() {
             color: None,
             style: None,
             thickness: None,
+            from_line: None,
             extra: Default::default(),
         }],
         extra: Default::default(),
@@ -64,6 +65,7 @@ fn uses_json_canvas_field_names() {
         color: None,
         style: None,
         thickness: None,
+        from_line: None,
         extra: Default::default(),
     };
     let value = serde_json::to_value(&edge).expect("сериализация связи");

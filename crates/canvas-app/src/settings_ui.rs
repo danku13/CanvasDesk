@@ -27,12 +27,9 @@ pub const DROPDOWN_ROW_H: f32 = 26.0;
 /// Внутренние поля выпадающего меню.
 pub const DROPDOWN_MARGIN: f32 = 6.0;
 
-// Панель настроек: строки (порядок = прежний плоский список, источник
-// инварианта полноты групп). Тема вынесена в отдельную кнопку-переключатель
-// рядом с кнопкой настроек — вне панели, как раньше.
-//
-// FR-025 (построчные точки выхода) добавит `LinePorts` в группу
-// «Связи и порты» — расширение в двух местах (SETTINGS_ROWS + группа).
+// Панель настроек: строки (порядок = прежний плоский список + LinePorts
+// FR-025, источник инварианта полноты групп). Тема вынесена в отдельную
+// кнопку-переключатель рядом с кнопкой настроек — вне панели, как раньше.
 
 /// Строка-переключатель панели настроек.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,22 +46,25 @@ pub enum SettingsRow {
     EdgesAvoid,
     /// Зона захвата портов для drag связи (CR-003): цикл по пресетам.
     PortZone,
+    /// FR-025: построчные точки выхода на нодах с расчётами вкл/выкл.
+    LinePorts,
     /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
     FocusMode,
     /// HUD (F3) включён при старте.
     HudOnStart,
 }
 
-/// Плоский список всех строк панели (порядок = порядок до FR-026).
-/// Группировка — в [`SETTINGS_GROUPS`]; инвариант полноты (юнит-тест):
-/// union строк групп == этот список без дублей.
-pub const SETTINGS_ROWS: [SettingsRow; 8] = [
+/// Плоский список всех строк панели (порядок: прежний плоский список,
+/// LinePorts FR-025 — после PortZone). Группировка — в [`SETTINGS_GROUPS`];
+/// инвариант полноты (юнит-тест): union строк групп == этот список без дублей.
+pub const SETTINGS_ROWS: [SettingsRow; 9] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
     SettingsRow::GridDensity,
     SettingsRow::EdgesAvoid,
     SettingsRow::PortZone,
+    SettingsRow::LinePorts,
     SettingsRow::FocusMode,
     SettingsRow::HudOnStart,
 ];
@@ -80,7 +80,7 @@ pub struct SettingsGroup {
 
 /// Группы настроек (FR-026): логические секции вместо плоского списка.
 /// Распределение v1: «Канвас» — сетка; «Связи и порты» — связи/порты/фокус
-/// (сюда же войдёт `LinePorts` FR-025); «Приложение» — кнопка и HUD.
+/// + построчные точки выхода FR-025; «Приложение» — кнопка и HUD.
 pub const SETTINGS_GROUPS: [SettingsGroup; 3] = [
     SettingsGroup {
         title: "Канвас",
@@ -95,6 +95,7 @@ pub const SETTINGS_GROUPS: [SettingsGroup; 3] = [
         rows: &[
             SettingsRow::EdgesAvoid,
             SettingsRow::PortZone,
+            SettingsRow::LinePorts,
             SettingsRow::FocusMode,
         ],
     },
@@ -123,6 +124,9 @@ impl SettingsRow {
             }
             SettingsRow::PortZone => {
                 format!("Зона портов: {} px", settings.port_zone_px as i32)
+            }
+            SettingsRow::LinePorts => {
+                format!("Точки выхода строк: {}", on_off(settings.line_ports))
             }
             SettingsRow::FocusMode => {
                 format!("Фокус на связях: {}", on_off(settings.focus_mode))
@@ -155,6 +159,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::PortZone => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
+        | SettingsRow::LinePorts
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => RowKind::Toggle,
     }
@@ -200,6 +205,7 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
+        | SettingsRow::LinePorts
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => Vec::new(),
     }
@@ -240,6 +246,7 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
+        | SettingsRow::LinePorts
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => {}
     }
@@ -455,6 +462,10 @@ mod tests {
                 SettingsRow::EdgesAvoid => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.edges_avoid_nodes;
+                }
+                SettingsRow::LinePorts => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.line_ports;
                 }
                 SettingsRow::FocusMode => {
                     assert_eq!(row_kind(row), RowKind::Toggle);

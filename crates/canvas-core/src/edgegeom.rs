@@ -306,6 +306,10 @@ pub fn retarget_edge(
         EdgeEnd::From => {
             edge.from_node = target;
             edge.from_side = Some(side);
+            // FR-025: перепривязка ИСТОКА на другую ноду сбрасывает
+            // построчный исток (индекс строки мог не существовать у новой
+            // ноды; v1 — деградация до узлового значения)
+            edge.from_line = None;
         }
         EdgeEnd::To => {
             edge.to_node = target;
@@ -616,6 +620,44 @@ pub fn port_at(node: &Node, point: [f32; 2], zoom: f32, tolerance_px: f32) -> Op
         .map(|(_, side)| side)
 }
 
+/// FR-025: построчная точка выхода — порт формульной строки Numi-листа на
+/// правом краю ноды (вертикаль — ряд результата строки, как у бейджа FR-013).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinePort {
+    /// Индекс формульной строки текста ноды. `None` — узловое значение
+    /// (футер шаблонной ноды FR-023: формула и есть финальное значение).
+    pub line: Option<usize>,
+    /// World-точка порта (`node.x + node.width`, Y ряда результата).
+    pub point: [f32; 2],
+    /// Финальная строка (значение ноды) — рендер отличает заполненным
+    /// кружком от промежуточных.
+    pub is_final: bool,
+}
+
+/// FR-025: построчный порт под курсором — ближайший в пределах допуска
+/// `tolerance_px` экранных пикселей (тот же допуск, что у сторонных
+/// портов, CR-003). Приоритет построчного порта над сторонным решает
+/// вызывающий (проверка `line_port_at` ДО `port_at`).
+pub fn line_port_at(
+    ports: &[LinePort],
+    point: [f32; 2],
+    zoom: f32,
+    tolerance_px: f32,
+) -> Option<LinePort> {
+    let tolerance = tolerance_px / zoom.max(1e-3);
+    ports
+        .iter()
+        .copied()
+        .map(|port| {
+            let dist =
+                ((point[0] - port.point[0]).powi(2) + (point[1] - port.point[1]).powi(2)).sqrt();
+            (dist, port)
+        })
+        .filter(|(dist, _)| *dist <= tolerance)
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, port)| port)
+}
+
 /// Ближайшая к точке связь в допуске EDGE_HIT_TOLERANCE.
 /// Возвращает индекс в `canvas.edges`; None — промах (или все связи висячие).
 /// `avoid` — обход посторонних нод (см. `edge_polyline`).
@@ -644,5 +686,80 @@ pub fn draft_curve(port: [f32; 2], side: Side, to: [f32; 2]) -> CubicBezier {
         c0: [port[0] + normal[0] * offset, port[1] + normal[1] * offset],
         c1: to,
         p1: to,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Canvas;
+
+    fn node_a() -> Node {
+        Node::text("a", "a", 0.0, 0.0)
+    }
+
+    /// FR-025: hit-test построчных портов — попадание в зоне допуска,
+    /// промах вне, из двух близких портов берётся ближайший.
+    #[test]
+    fn line_port_at_hit_miss_nearest() {
+        let ports = [
+            LinePort {
+                line: Some(0),
+                point: [200.0, 30.0],
+                is_final: false,
+            },
+            LinePort {
+                line: Some(1),
+                point: [200.0, 50.0],
+                is_final: true,
+            },
+        ];
+        // В зоне (tolerance 10 screen px при zoom 1 → 10 world)
+        let hit = line_port_at(&ports, [206.0, 50.0], 1.0, 10.0).expect("попадание");
+        assert_eq!(hit.line, Some(1));
+        assert!(hit.is_final);
+        // Промах: дальше допуска по вертикали
+        assert!(line_port_at(&ports, [206.0, 90.0], 1.0, 10.0).is_none());
+        // Промах: далеко правее края
+        assert!(line_port_at(&ports, [400.0, 50.0], 1.0, 10.0).is_none());
+        // Между двумя портами — ближайший
+        let hit = line_port_at(&ports, [200.0, 41.0], 1.0, 10.0).expect("попадание");
+        assert_eq!(hit.line, Some(1), "41 ближе к 50, чем к 30");
+        // zoom > 1 ужесточает world-допуск: 10 screen px при zoom 2 —
+        // 5 world px — точка в 6 px от порта уже мимо
+        assert!(line_port_at(&ports, [206.0, 50.0], 2.0, 10.0).is_none());
+    }
+
+    /// FR-025: перепривязка ИСТОКА сбрасывает построчный исток (v1),
+    /// перепривязка СТОКА — сохраняет.
+    #[test]
+    fn retarget_resets_from_line_only_on_from_end() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node_a());
+        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+        canvas.nodes.push(Node::text("c", "c", 800.0, 0.0));
+        canvas.nodes.push(Node::text("d", "d", 1200.0, 0.0));
+        let mut edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        edge.from_line = Some(1);
+        canvas.add_edge(edge);
+
+        // Перепривязка СТОКА (b → c): from_line сохраняется
+        assert!(retarget_edge(&mut canvas, 0, EdgeEnd::To, "c", Side::Left));
+        assert_eq!(canvas.edges[0].to_node, "c");
+        assert_eq!(canvas.edges[0].from_line, Some(1));
+        // Перепривязка ИСТОКА (a → d, цель не противоположный конец):
+        // from_line сбрасывается
+        assert!(retarget_edge(
+            &mut canvas,
+            0,
+            EdgeEnd::From,
+            "d",
+            Side::Right
+        ));
+        assert_eq!(canvas.edges[0].from_node, "d");
+        assert_eq!(
+            canvas.edges[0].from_line, None,
+            "v1: сброс построчного истока"
+        );
     }
 }

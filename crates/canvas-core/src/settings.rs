@@ -173,6 +173,12 @@ pub struct Settings {
     /// FR-025 2026-09-16, дефолт). Старые конфиги без поля грузятся
     /// свёрнутыми (serde default).
     pub template_palette_open: bool,
+    /// FR-025 (построчные точки выхода): у каждой формульной строки Numi-
+    /// листа — свой выходной порт на правом краю ноды; drag от него создаёт
+    /// value-ребро со значением именно этой строки (`Edge::from_line`).
+    /// Дефолт — выкл: поведение в точности прежнее (порты сторон, значение
+    /// ноды целиком). Рендер/hit-тест/drag читают флаг на кадре.
+    pub line_ports: bool,
 }
 
 /// Пресеты зоны портов для строки панели настроек (CR-003): клик циклит.
@@ -212,6 +218,8 @@ impl Default for Settings {
             port_zone_px: PORT_ZONE_PRESETS[0],
             // Ревизия FR-025 (2026-09-16): палитра примарно свёрнута.
             template_palette_open: false,
+            // FR-025 (построчные точки выхода): по умолчанию выключено.
+            line_ports: false,
         }
     }
 }
@@ -283,6 +291,7 @@ mod tests {
             focus_mode: true,
             port_zone_px: 28.0,
             template_palette_open: false,
+            line_ports: true,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
         let path = dir.join("config.toml");
@@ -446,5 +455,18 @@ mod tests {
         assert!(text.contains("edges_avoid_nodes"), "{text}");
         assert!(text.contains("hud_on_start"), "{text}");
         assert!(text.contains("port_zone_px"), "{text}");
+        assert!(text.contains("line_ports"), "{text}");
+    }
+
+    /// FR-025: флаг построчных точек выхода — дефолт false (старые конфиги
+    /// без поля — прежнее поведение).
+    #[test]
+    fn line_ports_defaults_off_and_round_trips() {
+        let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
+        assert!(!settings.line_ports, "дефолт — выкл");
+        assert!(warn.is_none());
+        let (settings, warn) = Settings::load_toml_str("line_ports = true\n");
+        assert!(settings.line_ports, "флаг читается из конфига");
+        assert!(warn.is_none());
     }
 }
