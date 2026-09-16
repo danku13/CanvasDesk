@@ -70,13 +70,19 @@ pub(super) fn dispatch(func: &str, values: &[Value]) -> Result<Value, EvalError>
         "npv" => {
             // npv(rate, *cf): первый аргумент — ставка, дальше ≥ 1 поток.
             if values.len() < 2 {
-                return Err(bad_arity(func, "npv(rate, *cf): ставка и ≥ 1 денежный поток"));
+                return Err(bad_arity(
+                    func,
+                    "npv(rate, *cf): ставка и ≥ 1 денежный поток",
+                ));
             }
             npv(values)
         }
         "cagr" => {
             if values.len() != 3 {
-                return Err(bad_arity(func, "cagr(begin, end, periods): ровно 3 аргумента"));
+                return Err(bad_arity(
+                    func,
+                    "cagr(begin, end, periods): ровно 3 аргумента",
+                ));
             }
             cagr(values)
         }
@@ -294,10 +300,7 @@ fn npv(values: &[Value]) -> Result<Value, EvalError> {
         let factor = (1.0 + rate).powi(t as i32);
         total += cf / factor;
     }
-    Ok(Value {
-        num: total,
-        unit,
-    })
+    Ok(Value { num: total, unit })
 }
 
 /// `cagr(begin, end, periods)` → скаляр (доля, не %): среднегодовой темп
@@ -340,8 +343,7 @@ fn irr(values: &[Value]) -> Result<Value, EvalError> {
     if !has_positive || !has_negative {
         return Err(EvalError::BadCall {
             func: "irr".to_owned(),
-            msg: "потоки должны иметь разный знак (иначе IRR не определён)"
-                .to_owned(),
+            msg: "потоки должны иметь разный знак (иначе IRR не определён)".to_owned(),
         });
     }
     // Newton-Raphson: r_{n+1} = r_n − npv(r_n) / npv'(r_n),
@@ -382,8 +384,7 @@ fn irr(values: &[Value]) -> Result<Value, EvalError> {
     }
     Err(EvalError::BadCall {
         func: "irr".to_owned(),
-        msg: "Newton-Raphson не сошёлся за 100 итераций — проверьте знаки потоков"
-            .to_owned(),
+        msg: "Newton-Raphson не сошёлся за 100 итераций — проверьте знаки потоков".to_owned(),
     })
 }
 
@@ -413,12 +414,7 @@ fn cohort_ltv(values: &[Value]) -> Result<Value, EvalError> {
     }
     let months = months as usize;
     // Опорные точки retention (t, retention).
-    let anchors: [(f64, f64); 4] = [
-        (0.0, 1.0),
-        (1.0, r_d1),
-        (7.0, r_d7),
-        (30.0, r_d30),
-    ];
+    let anchors: [(f64, f64); 4] = [(0.0, 1.0), (1.0, r_d1), (7.0, r_d7), (30.0, r_d30)];
     // Линейная интерполяция между точками; после d30 — экспоненциальное
     // затухание (r_d30^(extra_days/30)).
     let retention_at = |t: f64| -> f64 {
@@ -453,10 +449,7 @@ fn cohort_ltv(values: &[Value]) -> Result<Value, EvalError> {
     } else {
         values[0].unit.clone()
     };
-    Ok(Value {
-        num: ltv,
-        unit,
-    })
+    Ok(Value { num: ltv, unit })
 }
 
 /// Скалярный аргумент: безразмерное значение (Rate/Count/Money/Percent

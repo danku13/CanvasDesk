@@ -404,7 +404,12 @@ pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<Ca
         // малый сверху, остриё вверх).
         "burn" => {
             // Большое пламя: основание внизу, сужение кверху.
-            push([x + 3.0 * u, y + 12.0 * u], [10.0 * u, 2.0 * u], fill, false);
+            push(
+                [x + 3.0 * u, y + 12.0 * u],
+                [10.0 * u, 2.0 * u],
+                fill,
+                false,
+            );
             push([x + 4.0 * u, y + 8.5 * u], [8.0 * u, 3.0 * u], fill, false);
             push([x + 5.5 * u, y + 5.0 * u], [5.0 * u, 3.0 * u], fill, false);
             push([x + 6.8 * u, y + 1.5 * u], [2.4 * u, 3.0 * u], fill, false);
@@ -428,7 +433,12 @@ pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<Ca
             push([x + 2.5 * u, y + 3.5 * u], [3.0 * u, 1.4 * u], fill, false);
             push([x + 5.5 * u, y + 5.5 * u], [3.0 * u, 1.4 * u], fill, false);
             push([x + 8.5 * u, y + 8.5 * u], [3.0 * u, 1.4 * u], fill, false);
-            push([x + 11.0 * u, y + 11.5 * u], [2.5 * u, 1.4 * u], fill, false);
+            push(
+                [x + 11.0 * u, y + 11.5 * u],
+                [2.5 * u, 1.4 * u],
+                fill,
+                false,
+            );
         }
         // FR-027: churn — стрелка вниз (отток, потеря пользователей).
         "churn" => {
@@ -451,7 +461,12 @@ pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<Ca
             push([x + 6.5 * u, y + 4.5 * u], [3.5 * u, 9.5 * u], fill, false);
             push([x + 11.0 * u, y + 6.0 * u], [3.5 * u, 8.0 * u], fill, false);
             // Базовая линия.
-            push([x + 1.5 * u, y + 14.0 * u], [13.0 * u, 1.0 * u], fill, false);
+            push(
+                [x + 1.5 * u, y + 14.0 * u],
+                [13.0 * u, 1.0 * u],
+                fill,
+                false,
+            );
         }
         // Рамка с ядром (custom)
         _ => {
