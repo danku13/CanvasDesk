@@ -6222,6 +6222,16 @@ impl App {
                 self.request_redraw();
                 return;
             }
+            // FR-025 п.3: Esc сворачивает развёрнутый док и БЕЗ
+            // клавиатурного фокуса — мышиный expand() даёт focused=false,
+            // а сфокусированная панель закрывается раньше, в
+            // on_template_panel_key (гейт выше этой цепочки)
+            if self.template_panel.open {
+                self.template_panel.close();
+                self.persist_palette_dock();
+                self.request_redraw();
+                return;
+            }
             if self.menu.take().is_some() {
                 self.request_redraw();
                 return;

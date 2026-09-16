@@ -1194,6 +1194,11 @@ mod tests {
         // Клик по ручке: развернуть без фокуса и без сброса фильтра
         panel.expand();
         assert!(panel.open && !panel.focused && panel.filter == "lb");
+        // FR-025 п.3: Esc по такому (развёрнутому, но БЕЗ фокуса) доку тоже
+        // должен сворачивать — снятие open обязано не зависеть от focused
+        // (ветка общей Esc-цепочки в main.rs, здесь — контракт close())
+        panel.close();
+        assert!(!panel.open && !panel.focused);
     }
 
     #[test]
