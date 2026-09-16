@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-gross-margin",
+  "name_en": "Gross Margin",
+  "name_ru": "Валовая маржа",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Валовая маржа: доля выручки после вычета себестоимости (COGS — инфраструктура, поддержка, лицензии). Формула: (revenue − COGS) / revenue — показывает, сколько выручки остаётся после прямых затрат. SaaS-стандарт: 70–85% gross margin; < 60% — проблема в стоимости инфраструктуры или ручной поддержки. Ключевая метрика для CFO и инвесторов при оценке operational leverage и масштабируемости модели. Используется в P&L на каждом финансовом ревью и как вход в LTV-расчёт.",
+  "description_en": "Gross margin: share of revenue after cost of goods sold (COGS — infrastructure, support, licences). Formula: (revenue − COGS) / revenue — what's left after direct costs. SaaS standard: 70–85% gross margin; < 60% flags infrastructure or manual support cost issues. Key metric for CFO and investors when assessing operational leverage and scalability of the model. Used in P&L at every financial review and as input to LTV calculation.",
+  "params": [
+    {
+      "name": "revenue",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "cogs",
+      "type": "scalar",
+      "default": 40000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "($revenue - $cogs) / $revenue",
+  "color": "#F5A623",
+  "icon": "money"
+}

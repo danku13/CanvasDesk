@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-contribution-margin",
+  "name_en": "Contribution Margin",
+  "name_ru": "Контрибуционная маржа",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Контрибуционная маржа: доля выручки после переменных затрат (переменные COGS + variable S&M). Формула: (revenue − variable costs) / revenue — отличается от gross margin учётом переменных расходов на привлечение и поддержку. Используется для break-even анализа и оценки финансового рычага перед масштабированием. Помогает ответить на вопрос «если наймём ещё 10 сейлзов, останемся ли в плюсе». Метрика CFO и операционного директора при cost-optimization initiatives и scaling decisions.",
+  "description_en": "Contribution margin: share of revenue after variable costs (variable COGS + variable S&M). Formula: (revenue − variable costs) / revenue — differs from gross margin by including variable acquisition and support costs. Used for break-even analysis and assessing financial leverage before scaling. Answers the question: \"if we hire 10 more sales reps, do we stay profitable?\" A CFO and COO metric for cost-optimization and scaling decisions.",
+  "params": [
+    {
+      "name": "revenue",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "variable_costs",
+      "type": "scalar",
+      "default": 60000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "($revenue - $variable_costs) / $revenue",
+  "color": "#F5A623",
+  "icon": "money"
+}

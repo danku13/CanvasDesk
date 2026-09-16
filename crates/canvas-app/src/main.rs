@@ -13,6 +13,11 @@ use canvas_app::palette::{
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
     PaletteLayout, PaletteTarget, PAL_ICON,
 };
+use canvas_app::settings_ui::{
+    apply_dropdown_value, dropdown_item_at, dropdown_layout, dropdown_options, panel_layout,
+    row_at, row_kind, DropdownState, PanelEntry, RowKind, SettingsRow, DROPDOWN_MARGIN,
+    DROPDOWN_ROW_H,
+};
 use canvas_app::template_ui;
 use canvas_app::template_ui::{
     panel_layout as template_panel_layout, panel_rows as template_panel_rows,
@@ -21,22 +26,21 @@ use canvas_app::template_ui::{
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
     in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect,
-    panel_rect, panel_row_at, paste_nodes, plan_group_around, plan_group_around_nodes,
-    plan_group_at, point_in_rect, reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at,
+    panel_rect, paste_nodes, plan_group_around, plan_group_around_nodes, plan_group_at,
+    point_in_rect, reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at,
     submenu_origin_next_to, submenu_rect, theme_button_rect, toggle_selection_with_primary,
-    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, PastePlacement, SettingsRow,
-    Submenu, SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING,
-    MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING,
-    PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
+    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, PastePlacement, Submenu,
+    SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
+    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HINT_HEIGHT, PANEL_PADDING, SELECT_DRAG_THRESHOLD,
 };
 use canvas_core::expr::{
     self, line_kind, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind,
 };
 use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::{
-    apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
-    resolve_node_path, watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node,
-    NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
+    apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at, resolve_node_path,
+    watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node, NodeChange, NodeKind,
+    Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{
     ease_out_cubic, focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS,
@@ -1038,6 +1042,12 @@ fn hover_fill(c: [f32; 4]) -> [f32; 4] {
     ]
 }
 
+/// FR-026: пересекаются ли два rect `[x, y, w, h]` — куллинг текстов строк
+/// панели, перекрытых выпадающим меню (квады рисуются до screen-текстов).
+fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
 /// FR-012: settle-анимация после вставки в группу — (индекс, из, в) для
 /// группы и раздвинутых соседей; интерполяция ease_out_cubic ~250 мс.
 struct SettleAnim {
@@ -1124,6 +1134,9 @@ struct App {
     config_path: Option<PathBuf>,
     /// Панель настроек открыта.
     settings_open: bool,
+    /// Выпадающее меню строки настроек (FR-026): какая строка открыта;
+    /// пункты вычисляются на кадр, состояние не устаревает.
+    settings_dropdown: DropdownState,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
     /// Модальный диалог T21 (установка/удаление пакета): глушит ввод канваса.
@@ -1332,6 +1345,7 @@ impl App {
             settings,
             config_path,
             settings_open: false,
+            settings_dropdown: DropdownState::default(),
             drop_preview: None,
             dialog: None,
             toast: None,
@@ -2494,6 +2508,18 @@ impl App {
         }
         if self.settings_open && over(panel_rect(self.settings.button_corner, viewport)) {
             return true;
+        }
+        // FR-026: открытое выпадающее меню настройки — тоже screen-поверхность
+        // (может выходить за пределы панели, колесо/пинч над ним холст не двигают)
+        if self.settings_open && self.settings_dropdown.is_open() {
+            let layout = panel_layout(self.settings.button_corner, viewport);
+            if let Some(row) = self.settings_dropdown.open_row {
+                let items = dropdown_options(row, &self.settings);
+                let anchor = layout.row_rect(row).unwrap_or([0.0; 4]);
+                if over(dropdown_layout(anchor, viewport, items.len())) {
+                    return true;
+                }
+            }
         }
         if self.search.is_open() {
             let lay = search_layout(viewport[0], viewport[1], &self.search);
@@ -4897,38 +4923,16 @@ impl App {
         self.request_redraw();
     }
 
-    /// Применить переключение строки панели настроек и сохранить конфиг.
-    fn apply_settings_row(&mut self, row: usize) {
-        match SETTINGS_ROWS[row] {
-            SettingsRow::ButtonCorner => {
-                self.settings.button_corner = self.settings.button_corner.next();
-            }
+    /// FR-026: применить переключение булевой строки панели настроек
+    /// (тумблер) и сохранить конфиг. Многозначные строки — через
+    /// выпадающее меню ([`App::apply_dropdown_choice`]).
+    fn apply_toggle_row(&mut self, row: SettingsRow) {
+        match row {
             SettingsRow::Grid => {
                 self.settings.grid_visible = !self.settings.grid_visible;
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.set_grid_visible(self.settings.grid_visible);
-                }
-            }
-            SettingsRow::GridStyle => {
-                self.settings.grid_style = self.settings.grid_style.next();
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
-                }
-            }
-            SettingsRow::GridDensity => {
-                self.settings.grid_density = self.settings.grid_density.next();
-                if let Some(renderer) = self.renderer.as_mut() {
-                    let (minor, major) = self.settings.grid_density.steps();
-                    renderer.set_grid_steps(minor, major);
-                }
             }
             SettingsRow::EdgesAvoid => {
                 self.settings.edges_avoid_nodes = !self.settings.edges_avoid_nodes;
-            }
-            // CR-003: зона портов — цикл по пресетам, радиус кружков портов
-            // следует за значением автоматически (рендер читает настройки)
-            SettingsRow::PortZone => {
-                self.settings.port_zone_px = next_port_zone(self.settings.port_zone_px);
             }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
@@ -4937,7 +4941,50 @@ impl App {
                 // Мгновенная обратная связь: HUD переключается сразу
                 self.hud_visible = self.settings.hud_on_start;
             }
+            SettingsRow::ButtonCorner
+            | SettingsRow::GridStyle
+            | SettingsRow::GridDensity
+            | SettingsRow::PortZone => {
+                debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
+                return;
+            }
         }
+        self.sync_settings_row(row);
+        self.save_settings();
+    }
+
+    /// FR-026: применить выбор значения из выпадающего меню — та же чистая
+    /// функция значений, что в тестах инвариантов; побочные эффекты рендера
+    /// те же, что были в ветках apply_settings_row. Конфиг сохраняется
+    /// общим хвостом. Смена угла кнопки перепривязывает панель — открытое
+    /// меню закрывает вызывающий (состояние привязано к строке, не к точке).
+    fn apply_dropdown_choice(&mut self, row: SettingsRow, index: usize) {
+        apply_dropdown_value(&mut self.settings, row, index);
+        self.sync_settings_row(row);
+        self.save_settings();
+    }
+
+    /// FR-026: синхронизация рендера с настройками после изменения строки
+    /// (то, что раньше делали ветки apply_settings_row по месту).
+    fn sync_settings_row(&mut self, row: SettingsRow) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        match row {
+            SettingsRow::Grid => renderer.set_grid_visible(self.settings.grid_visible),
+            SettingsRow::GridStyle => {
+                renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots)
+            }
+            SettingsRow::GridDensity => {
+                let (minor, major) = self.settings.grid_density.steps();
+                renderer.set_grid_steps(minor, major);
+            }
+            _ => {}
+        }
+    }
+
+    /// FR-026: общий хвост применения настроек — сохранение config.toml.
+    fn save_settings(&self) {
         if let Some(path) = &self.config_path {
             if let Err(err) = self.settings.save(path) {
                 tracing::warn!(%err, "не удалось сохранить конфиг");
@@ -5063,7 +5110,9 @@ impl App {
         if !self.settings_open {
             return (instances, texts);
         }
-        let panel = panel_rect(self.settings.button_corner, viewport);
+        // FR-026: панель по группам — layout несёт rect'ы заголовков и строк
+        let layout = panel_layout(self.settings.button_corner, viewport);
+        let panel = layout.rect;
         instances.push(CardInstance {
             pos: [panel[0], panel[1]],
             size: [panel[2], panel[3]],
@@ -5081,41 +5130,129 @@ impl App {
             color: palette.title,
             align: TextAlign::Left,
         });
-        let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
-        // Hover-подсветка кликабельной строки под курсором (аффорданс)
-        if let Some(row) = panel_row_at(panel, self.cursor) {
-            instances.push(CardInstance {
-                pos: [
-                    panel[0] + PANEL_PADDING,
-                    rows_top + row as f32 * PANEL_ROW_HEIGHT + 1.0,
-                ],
-                size: [panel[2] - PANEL_PADDING * 2.0, PANEL_ROW_HEIGHT - 2.0],
-                fill: [0.24, 0.30, 0.42, 0.6],
-                border: [0.0; 4],
-                params: [4.0, 0.0, 0.0, 1.0],
-            });
+        // FR-026: открытое выпадающее меню — геометрия и пункты (состояние
+        // не хранит список — вычисляется из настроек, устареть не может)
+        let menu = self.settings_dropdown.open_row.map(|row| {
+            let items = dropdown_options(row, &self.settings);
+            let anchor = layout.row_rect(row).unwrap_or([0.0; 4]);
+            let rect = dropdown_layout(anchor, viewport, items.len());
+            (row, items, rect)
+        });
+        // Hover-подсветка кликабельной строки под курсором (аффорданс);
+        // подсветка строки под меню уходит под фон меню — безвредно
+        if let Some(row) = row_at(&layout, self.cursor) {
+            if let Some(rect) = layout.row_rect(row) {
+                instances.push(CardInstance {
+                    pos: [panel[0] + PANEL_PADDING, rect[1] + 1.0],
+                    size: [panel[2] - PANEL_PADDING * 2.0, rect[3] - 2.0],
+                    fill: [0.24, 0.30, 0.42, 0.6],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
         }
-        for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-            texts.push(OwnedScreenText {
-                text: row.label(&self.settings),
-                origin: [text_x, rows_top + i as f32 * PANEL_ROW_HEIGHT + 5.0],
-                width: text_w,
-                font_size: 13.0,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+        for (entry, rect) in &layout.entries {
+            match entry {
+                PanelEntry::Header(title) => {
+                    // Заголовок секции: капс меньшим кеглем, цвет иконок
+                    texts.push(OwnedScreenText {
+                        text: title.to_uppercase(),
+                        origin: [text_x, rect[1] + 4.0],
+                        width: text_w,
+                        font_size: 11.0,
+                        color: palette.icon,
+                        align: TextAlign::Left,
+                    });
+                }
+                PanelEntry::Row(row) => {
+                    // Квады рисуются ДО всех screen-текстов (renderer.rs):
+                    // строки, перекрытые меню, не рисуем — иначе их текст
+                    // проступит сквозь фон меню
+                    if menu
+                        .as_ref()
+                        .is_some_and(|(_, _, menu_rect)| rects_intersect(*menu_rect, *rect))
+                    {
+                        continue;
+                    }
+                    texts.push(OwnedScreenText {
+                        text: row.label(&self.settings),
+                        origin: [text_x, rect[1] + 5.0],
+                        width: text_w,
+                        font_size: 13.0,
+                        color: palette.body,
+                        align: TextAlign::Left,
+                    });
+                    // Аффорданс dropdown: ▾ у правого края строки (тумблерам
+                    // не нужен — их цикл из двух значений виден целиком)
+                    if row_kind(*row) == RowKind::Dropdown {
+                        texts.push(OwnedScreenText {
+                            text: "▾".to_owned(),
+                            origin: [panel[0] + panel[2] - PANEL_PADDING - 12.0, rect[1] + 5.0],
+                            width: 12.0,
+                            font_size: 12.0,
+                            color: palette.icon,
+                            align: TextAlign::Left,
+                        });
+                    }
+                }
+            }
         }
         texts.push(OwnedScreenText {
             text: "Ctrl+, — открыть/закрыть".to_owned(),
             origin: [
                 text_x,
-                rows_top + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT + 4.0,
+                panel[1] + panel[3] - PANEL_PADDING - PANEL_HINT_HEIGHT + 4.0,
             ],
             width: text_w,
             font_size: 11.0,
             color: palette.icon,
             align: TextAlign::Left,
         });
+        // FR-026: выпадающее меню — поверх панели: фон чуть ярче панели,
+        // hover/клавиатурное выделение пункта, галочка у текущего значения
+        if let Some((row, items, menu_rect)) = &menu {
+            instances.push(CardInstance {
+                pos: [menu_rect[0], menu_rect[1]],
+                size: [menu_rect[2], menu_rect[3]],
+                fill: hover_fill(palette.menu_fill),
+                border: [0.0; 4],
+                params: [8.0, 0.0, 0.0, 0.0],
+            });
+            let hovered_item = dropdown_item_at(*menu_rect, items.len(), self.cursor);
+            for (i, (label, current)) in items.iter().enumerate() {
+                let y = menu_rect[1] + DROPDOWN_MARGIN + i as f32 * DROPDOWN_ROW_H;
+                let highlighted = hovered_item == Some(i)
+                    || (self.settings_dropdown.open_row == Some(*row)
+                        && self.settings_dropdown.selected == i);
+                if highlighted {
+                    instances.push(CardInstance {
+                        pos: [menu_rect[0] + 3.0, y + 1.0],
+                        size: [menu_rect[2] - 6.0, DROPDOWN_ROW_H - 2.0],
+                        fill: [0.24, 0.30, 0.42, 0.6],
+                        border: [0.0; 4],
+                        params: [4.0, 0.0, 0.0, 1.0],
+                    });
+                }
+                if *current {
+                    texts.push(OwnedScreenText {
+                        text: "✓".to_owned(),
+                        origin: [menu_rect[0] + 8.0, y + 5.0],
+                        width: 18.0,
+                        font_size: 12.0,
+                        color: palette.link,
+                        align: TextAlign::Left,
+                    });
+                }
+                texts.push(OwnedScreenText {
+                    text: label.clone(),
+                    origin: [menu_rect[0] + MENU_LABEL_X, y + 4.0],
+                    width: menu_rect[2] - MENU_LABEL_X - DROPDOWN_MARGIN,
+                    font_size: 13.0,
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
+        }
         (instances, texts)
     }
 
@@ -6032,6 +6169,37 @@ impl App {
             }
             return;
         }
+        // FR-026: клавиатура выпадающего меню настроек — ↑/↓ сдвигают
+        // выделение, Enter применяет (модель popup FR-021); Esc обрабатывается
+        // ниже — первым делом закрывает меню, панель остаётся открытой
+        if self.settings_open
+            && self.settings_dropdown.is_open()
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            let row = self.settings_dropdown.open_row.expect("меню открыто");
+            let count = dropdown_options(row, &self.settings).len();
+            match &event.logical_key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    self.settings_dropdown.move_selection(1, count);
+                    self.request_redraw();
+                    return;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.settings_dropdown.move_selection(-1, count);
+                    self.request_redraw();
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    let selected = self.settings_dropdown.selected;
+                    self.apply_dropdown_choice(row, selected);
+                    self.settings_dropdown.reset();
+                    self.request_redraw();
+                    return;
+                }
+                _ => {}
+            }
+        }
         // Esc закрывает раскрытие палитры (верхний transient), затем —
         // контекстное меню (T7), панель настроек, панель хоткеев (FR-004)
         if event.logical_key == Key::Named(NamedKey::Escape)
@@ -6059,7 +6227,13 @@ impl App {
                 return;
             }
             if self.settings_open {
-                self.settings_open = false;
+                if self.settings_dropdown.is_open() {
+                    // FR-026: Esc при открытом меню закрывает ТОЛЬКО меню
+                    // (повторный Esc закроет панель — семантика popup FR-021)
+                    self.settings_dropdown.reset();
+                } else {
+                    self.settings_open = false;
+                }
                 self.request_redraw();
                 return;
             }
@@ -6119,6 +6293,7 @@ impl App {
             && matches!(&event.logical_key, Key::Character(c) if c == "," || c == "б" || c == "Б")
         {
             self.settings_open = !self.settings_open;
+            self.settings_dropdown.reset();
             self.request_redraw();
             return;
         }
@@ -6469,17 +6644,61 @@ impl App {
                     self.cursor,
                 ) {
                     self.settings_open = !self.settings_open;
+                    self.settings_dropdown.reset();
                     self.request_redraw();
                     return;
                 }
                 if self.settings_open {
-                    let panel = panel_rect(self.settings.button_corner, viewport);
-                    if let Some(row) = panel_row_at(panel, self.cursor) {
-                        self.apply_settings_row(row);
-                    } else if !point_in_rect(panel, self.cursor) {
+                    // FR-026: layout панели с группами — hit-тесты по строкам
+                    let layout = panel_layout(self.settings.button_corner, viewport);
+                    // Открытое выпадающее меню — первый приоритет: клик по
+                    // пункту применяет значение; клик мимо меню закрывает
+                    // ТОЛЬКО меню (панель остаётся открытой — двухэтапный
+                    // dismiss), клик по другой строке обработается ниже
+                    if let Some(open_row) = self.settings_dropdown.open_row {
+                        let items = dropdown_options(open_row, &self.settings);
+                        let anchor = layout.row_rect(open_row).unwrap_or([0.0; 4]);
+                        let menu_rect = dropdown_layout(anchor, viewport, items.len());
+                        if point_in_rect(menu_rect, self.cursor) {
+                            if let Some(index) =
+                                dropdown_item_at(menu_rect, items.len(), self.cursor)
+                            {
+                                self.apply_dropdown_choice(open_row, index);
+                            }
+                            // Выбор угла кнопки перепривязывает панель —
+                            // меню закрывается в любом случае
+                            self.settings_dropdown.reset();
+                            self.request_redraw();
+                            return;
+                        }
+                        self.settings_dropdown.reset();
+                        if row_at(&layout, self.cursor).is_none() {
+                            // Клик вне меню и не по строке панели: меню
+                            // закрыто, панель осталась, канвасу клик не
+                            // достаётся (иначе создал бы заметку)
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                    if let Some(row) = row_at(&layout, self.cursor) {
+                        match row_kind(row) {
+                            RowKind::Toggle => self.apply_toggle_row(row),
+                            RowKind::Dropdown => {
+                                // Клик по dropdown-строке открывает меню
+                                // значений (НЕ меняет значение); повторный
+                                // клик по той же строке закрывает
+                                if self.settings_dropdown.open_row == Some(row) {
+                                    self.settings_dropdown.reset();
+                                } else {
+                                    self.settings_dropdown.open(row, &self.settings);
+                                }
+                            }
+                        }
+                    } else if !point_in_rect(layout.rect, self.cursor) {
                         // Клик мимо панели — закрыть; канвасу клик не достаётся
                         // (иначе двойной клик мимо создал бы заметку)
                         self.settings_open = false;
+                        self.settings_dropdown.reset();
                     }
                     self.request_redraw();
                     return;
@@ -11756,15 +11975,20 @@ mod tests {
         .is_err());
     }
 
-    /// FR-019: template_list — built-in реестр отдаёт 15 шаблонов с полной
-    /// схемой (инвариант 4: MCP-видимость эквивалентна UI; двуязычные имена).
+    /// FR-019: template_list — built-in реестр отдаёт 45 шаблонов с полной
+    /// схемой (FR-019: 15 + FR-027: 30; инвариант 4: MCP-видимость
+    /// эквивалентна UI; двуязычные имена).
     #[test]
     fn mcp_template_list_builtin_registry() {
         let mut scene = mcp_scene();
         let mut camera = Camera::default();
         let list = dispatch(&mut scene, &mut camera, "template_list", "{}").expect("list");
         let templates = list.as_array().expect("массив");
-        assert_eq!(templates.len(), 15, "все built-in шаблоны");
+        assert_eq!(
+            templates.len(),
+            45,
+            "все built-in шаблоны (FR-019: 15 + FR-027: 30)"
+        );
         let lb = templates
             .iter()
             .find(|t| t["id"] == "com.canvasdesk.lb")

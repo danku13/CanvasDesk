@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-retention-d30",
+  "name_en": "Day 30 Retention",
+  "name_ru": "Удержание D30",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Удержание тридцатого дня: cohort_d30 / cohort_d0 — доля активных пользователей через месяц после установки. Главный показатель health продукта и предиктор платной конверсии: без D30 retention сложно построить устойчивый SaaS. D30 retention ≥ 10% — здорово для consumer apps; ≥ 25% — для B2B SaaS; < 5% — продукт не задерживает пользователей. SaaS benchmark: D30 > 40% означает, что воронка от signup до paid работает и можно масштабировать acquisition. Метрика growth и customer success для cohort analysis и retention initiatives.",
+  "description_en": "Day 30 retention: cohort_d30 / cohort_d0 — share of users still active a month after install. Headline product-health metric and predictor of paid conversion: without D30 retention, sustainable SaaS is hard. D30 retention ≥ 10% is healthy for consumer apps; ≥ 25% for B2B SaaS; < 5% means the product isn't retaining users. SaaS benchmark: D30 > 40% signals the signup-to-paid funnel works and acquisition can be scaled. A growth and customer success metric for cohort analysis and retention initiatives.",
+  "params": [
+    {
+      "name": "cohort_d0",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    },
+    {
+      "name": "cohort_d30",
+      "type": "count",
+      "default": 100,
+      "min": 0
+    }
+  ],
+  "expr": "$cohort_d30 / $cohort_d0",
+  "color": "#4A90E2",
+  "icon": "retention"
+}
