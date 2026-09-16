@@ -252,10 +252,7 @@ fn inbound_value_feeds_queueing_formula() {
 #[test]
 fn npv_break_even_is_zero() {
     let (num, _unit) = eval_num("npv(0.1, -100, 110)");
-    assert!(
-        num.abs() < 1e-9,
-        "NPV(0.1, -100, 110) = 0, получено {num}"
-    );
+    assert!(num.abs() < 1e-9, "NPV(0.1, -100, 110) = 0, получено {num}");
 }
 
 /// `npv(0.0, -100, 100, 50)` = −100 + 100 + 50 = 50 (нулевая ставка —
@@ -317,10 +314,7 @@ fn irr_simple_one_period_is_ten_percent() {
 fn irr_classic_project_irr() {
     let (num, _unit) = eval_num("irr(-1000, 500, 600, 200)");
     // NPV(r) = 0 при r ≈ 0.1635 — Newton-Raphson нашёл корень.
-    assert!(
-        (num - 0.1635).abs() < 5e-3,
-        "irr ≈ 0.1635, получено {num}"
-    );
+    assert!((num - 0.1635).abs() < 5e-3, "irr ≈ 0.1635, получено {num}");
 }
 
 /// `irr` с одинаковым знаком — ошибка (нет корня).
@@ -351,7 +345,10 @@ fn cohort_ltv_saas_typical_retention_curve() {
     // Положительный, конечный, в разумных пределах (1..100).
     assert!(num.is_finite(), "конечный результат, получено {num}");
     assert!(num > 0.0, "LTV > 0, получено {num}");
-    assert!(num < 100.0, "LTV < 100 usd для агрессивного churn, получено {num}");
+    assert!(
+        num < 100.0,
+        "LTV < 100 usd для агрессивного churn, получено {num}"
+    );
 }
 
 /// `cohort_ltv` с margin вне 0..1 — ошибка.
@@ -397,9 +394,13 @@ fn financial_calls_parse_as_function_call() {
 #[test]
 fn financial_wrong_arity_is_rejected() {
     assert!(matches!(eval_err("npv(0.1)"), EvalError::BadCall { .. }));
-    assert!(matches!(eval_err("cagr(100, 200)"), EvalError::BadCall { .. }));
+    assert!(matches!(
+        eval_err("cagr(100, 200)"),
+        EvalError::BadCall { .. }
+    ));
     assert!(matches!(eval_err("irr(-100)"), EvalError::BadCall { .. }));
-    assert!(
-        matches!(eval_err("cohort_ltv(20, 0.8, 0.4, 0.25, 0.1)"), EvalError::BadCall { .. })
-    );
+    assert!(matches!(
+        eval_err("cohort_ltv(20, 0.8, 0.4, 0.25, 0.1)"),
+        EvalError::BadCall { .. }
+    ));
 }
