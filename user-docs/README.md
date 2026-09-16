@@ -11,6 +11,7 @@
 | `interface.md` | Объекты интерфейса (канвас, ноды, связи, группы, миникарта, поиск, настройки) |
 | `hotkeys.md` | Горячие клавиши и жесты |
 | `calculations.md` | Numi-формулы, единицы, value-связи, `$in` |
+| `templates.md` | Шаблоны архитектурных нод: применение, параметры и доменные типы, свой шаблон |
 | `faq.md` | FAQ |
 
 ## Публикация на GitHub Pages (вариант 1 — самый быстрый)
@@ -36,6 +37,7 @@
 | Объекты интерфейса | `https://danku13.github.io/CanvasDesk/user-docs/interface.html` |
 | Горячие клавиши | `https://danku13.github.io/CanvasDesk/user-docs/hotkeys.html` |
 | Расчёты и поток значений | `https://danku13.github.io/CanvasDesk/user-docs/calculations.html` |
+| Шаблоны нод | `https://danku13.github.io/CanvasDesk/user-docs/templates.html` |
 | FAQ | `https://danku13.github.io/CanvasDesk/user-docs/faq.html` |
 
 Рекомендуемые точки подключения в приложении:
