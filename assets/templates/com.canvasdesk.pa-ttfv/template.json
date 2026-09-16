@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-ttfv",
+  "name_en": "Time to First Value",
+  "name_ru": "Время до первой ценности (TTFV)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Время до первой ценности: минуты от регистрации до момента, когда пользователь получил первый value. Главный рычаг активации: чем быстрее TTFV, тем выше D1 retention и платная конверсия. SaaS-стандарт: TTFV < 15 минут для self-serve onboarding; < 1 дня для assisted sales. Длинный TTFV — кандидат на friction-аудит signup flow и first-run experience. Используется для A/B тестов: каждая минута сокращения TTFV коррелирует с ростом retention. Метрика growth и UX-команды для onboarding experiments.",
+  "description_en": "Time to first value: minutes from signup to the moment the user receives the first value. Headline activation lever: faster TTFV drives higher D1 retention and paid conversion. SaaS standard: TTFV < 15 minutes for self-serve onboarding; < 1 day for assisted sales. Long TTFV is a candidate for a friction audit of signup flow and first-run experience. Used for A/B testing: each minute shaved off TTFV correlates with higher retention. A growth and UX-team metric for onboarding experiments.",
+  "params": [
+    {
+      "name": "signup_time_min",
+      "type": "count",
+      "default": 0,
+      "min": 0
+    },
+    {
+      "name": "value_moment_time_min",
+      "type": "count",
+      "default": 15,
+      "min": 0
+    }
+  ],
+  "expr": "$value_moment_time_min - $signup_time_min",
+  "color": "#4A90E2",
+  "icon": "clock"
+}

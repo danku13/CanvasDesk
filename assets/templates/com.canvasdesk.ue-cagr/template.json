@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.ue-cagr",
+  "name_en": "Compound Annual Growth Rate",
+  "name_ru": "CAGR (среднегодовой темп роста)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Среднегодовой темп роста: (end/begin)^(1/years) − 1 — годовая ставка, при которой начальное значение вырастает в конечное за указанное число лет. Сглаживает годовые колебания и показывает устойчивый темп роста — более корректно, чем среднее годовых темпов. Используется для сравнения темпов роста MRR, user base, revenue между периодами и компаниями. CAGR > 50% для SaaS — hypergrowth, привлекающий инвесторов; 20–50% — здоровый рост; < 20% — plateau, требующая new growth levers. Метрика CEO и инвесторов для оценки долгосрочной траектории и benchmarking.",
+  "description_en": "Compound annual growth rate: (end/begin)^(1/years) − 1 — the annual rate at which the starting value grows into the ending value over the given years. Smooths year-on-year fluctuations and shows the steady growth rate — more correct than averaging annual rates. Used to compare MRR, user base and revenue growth across periods and companies. CAGR > 50% for SaaS is hypergrowth attracting investors; 20–50% is healthy; < 20% is a plateau needing new growth levers. A CEO and investor metric for long-term trajectory and benchmarking.",
+  "params": [
+    {
+      "name": "begin_value",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0.0001
+    },
+    {
+      "name": "end_value",
+      "type": "scalar",
+      "default": 200000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "years",
+      "type": "count",
+      "default": 3,
+      "min": 1,
+      "max": 100
+    }
+  ],
+  "expr": "cagr($begin_value, $end_value, $years)",
+  "color": "#F5A623",
+  "icon": "money"
+}

@@ -1,0 +1,32 @@
+{
+  "id": "com.canvasdesk.pa-user-churn",
+  "name_en": "User Churn Rate",
+  "name_ru": "Отток пользователей",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Отток пользователей: (active_t0 − active_t1 + new_t1) / active_t0 — доля потерянных пользователей за период с учётом новых. Отличается от revenue churn: user churn считает головы, revenue churn — деньги; расхождение сигнализирует о потере крупных клиентов. User churn > 10% в месяц — критично для SaaS; < 5% — здорово для устойчивого роста. Коррелирует с retention: низкий D30 → высокий user churn в следующем периоде — это lagging indicator. Метрика customer success и growth для retention initiatives и quarterly goal-setting.",
+  "description_en": "User churn: (active_t0 − active_t1 + new_t1) / active_t0 — share of users lost in the period, net of new signups. Differs from revenue churn: user churn counts heads, revenue churn counts money; divergence signals loss of large customers. User churn > 10%/month is critical for SaaS; < 5% is healthy for sustainable growth. Correlates with retention: low D30 → high user churn next period — a lagging indicator. A customer success and growth metric for retention initiatives and quarterly goal-setting.",
+  "params": [
+    {
+      "name": "active_t0",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "active_t1",
+      "type": "count",
+      "default": 9500,
+      "min": 0
+    },
+    {
+      "name": "new_t1",
+      "type": "count",
+      "default": 500,
+      "min": 0
+    }
+  ],
+  "expr": "($active_t0 - $active_t1 + $new_t1) / $active_t0",
+  "color": "#4A90E2",
+  "icon": "churn"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-feature-adoption",
+  "name_en": "Feature Adoption Rate",
+  "name_ru": "Внедрение фичи",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Внедрение фичи: feature_users / total_users — доля пользователей, попробовавших конкретную функцию. Метрика здоровья фичи и её ценности для пользователей: высокая adoption — фича решает реальную задачу. Feature adoption ≥ 30% — фича востребована и стоит в roadmap; < 10% — проблема в discovery, дизайне или ценности. Используется для приоритизации roadmap и kill-list (фичи с < 5% adoption — кандидаты на удаление или редизайн). Метрика продакт-менеджера для quarterly feature audit и roadmap prioritisation.",
+  "description_en": "Feature adoption: feature_users / total_users — share of users who tried a specific feature. Health and value indicator: high adoption means the feature solves a real problem. Adoption ≥ 30% is in demand and stays on the roadmap; < 10% flags a discovery, design or value problem. Used for roadmap prioritisation and the kill-list (features with < 5% adoption are candidates for removal or redesign). A product-manager metric for the quarterly feature audit and roadmap prioritisation.",
+  "params": [
+    {
+      "name": "total_users",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "feature_users",
+      "type": "count",
+      "default": 2000,
+      "min": 0
+    }
+  ],
+  "expr": "$feature_users / $total_users",
+  "color": "#4A90E2",
+  "icon": "users"
+}

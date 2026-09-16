@@ -44,6 +44,11 @@ pub mod template_ui;
 /// в main.rs, паттерн wheel-оверлея.
 pub mod hints_ui;
 
+/// FR-026: панель настроек — группы и выпадающие меню — чистая модель
+/// (группы/род строки/перечень значений/геометрия с клампом/hit-тесты).
+/// Рендер и ввод — в main.rs; `ui::panel_rect` переиспользует высоту.
+pub mod settings_ui;
+
 /// Чистая UI-логика приложения: геометрия оверлеев (контекстное меню,
 /// панель настроек), hit-тесты, генератор id заметок, детектор двойного
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
@@ -103,69 +108,6 @@ pub mod ui {
     /// Внутренний отступ панели.
     pub const PANEL_PADDING: f32 = 10.0;
 
-    /// Строки панели настроек (порядок = порядок отображения). Тема вынесена
-    /// в отдельную кнопку-переключатель рядом с кнопкой настроек.
-    pub const SETTINGS_ROWS: [SettingsRow; 8] = [
-        SettingsRow::ButtonCorner,
-        SettingsRow::Grid,
-        SettingsRow::GridStyle,
-        SettingsRow::GridDensity,
-        SettingsRow::EdgesAvoid,
-        SettingsRow::PortZone,
-        SettingsRow::FocusMode,
-        SettingsRow::HudOnStart,
-    ];
-
-    /// Строка-переключатель панели настроек.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum SettingsRow {
-        /// Угол летающей кнопки (цикл по 4 углам).
-        ButtonCorner,
-        /// Сетка канваса вкл/выкл.
-        Grid,
-        /// Вид сетки: линии или точки.
-        GridStyle,
-        /// Плотность сетки (цикл по 3 вариантам).
-        GridDensity,
-        /// Связи огибают посторонние ноды.
-        EdgesAvoid,
-        /// Зона захвата портов для drag связи (CR-003): цикл по пресетам.
-        PortZone,
-        /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
-        FocusMode,
-        /// HUD (F3) включён при старте.
-        HudOnStart,
-    }
-
-    impl SettingsRow {
-        /// Подпись строки с текущим значением.
-        pub fn label(self, settings: &Settings) -> String {
-            let on_off = |v: bool| if v { "вкл" } else { "выкл" };
-            match self {
-                SettingsRow::ButtonCorner => {
-                    format!("Угол кнопки: {}", settings.button_corner.label())
-                }
-                SettingsRow::Grid => format!("Сетка: {}", on_off(settings.grid_visible)),
-                SettingsRow::GridStyle => format!("Вид сетки: {}", settings.grid_style.label()),
-                SettingsRow::GridDensity => {
-                    format!("Плотность сетки: {}", settings.grid_density.label())
-                }
-                SettingsRow::EdgesAvoid => {
-                    format!("Связи огибают ноды: {}", on_off(settings.edges_avoid_nodes))
-                }
-                SettingsRow::PortZone => {
-                    format!("Зона портов: {} px", settings.port_zone_px as i32)
-                }
-                SettingsRow::FocusMode => {
-                    format!("Фокус на связях: {}", on_off(settings.focus_mode))
-                }
-                SettingsRow::HudOnStart => {
-                    format!("HUD при запуске: {}", on_off(settings.hud_on_start))
-                }
-            }
-        }
-    }
-
     /// Точка в rect [x, y, w, h]? (логические px, границы включительны)
     pub fn point_in_rect(rect: [f32; 4], point: Vec2) -> bool {
         point[0] >= rect[0]
@@ -210,17 +152,10 @@ pub mod ui {
         [x, button[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
     }
 
-    /// Высота панели настроек: паддинги + заголовок + строки + подсказка.
-    pub fn panel_height() -> f32 {
-        PANEL_PADDING * 2.0
-            + PANEL_HEADER_HEIGHT
-            + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT
-            + PANEL_HINT_HEIGHT
-    }
-
     /// Rect панели настроек: прижата к кнопке (с зазором), в том же углу.
+    /// Высота — из `settings_ui::panel_height` (FR-026: группы + отступы).
     pub fn panel_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
-        let height = panel_height();
+        let height = crate::settings_ui::panel_height();
         let x = match corner {
             Corner::TopLeft | Corner::BottomLeft => SETTINGS_MARGIN,
             _ => viewport[0] - SETTINGS_MARGIN - PANEL_WIDTH,
@@ -230,21 +165,6 @@ pub mod ui {
             _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON - SETTINGS_GAP - height,
         };
         [x, y, PANEL_WIDTH, height]
-    }
-
-    /// Hit-test строки панели: индекс в SETTINGS_ROWS или None
-    /// (заголовок/подсказка/паддинги не кликабельны).
-    pub fn panel_row_at(panel: [f32; 4], point: Vec2) -> Option<usize> {
-        let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
-        if point[0] < panel[0]
-            || point[0] > panel[0] + panel[2]
-            || point[1] < rows_top
-            || point[1] > rows_top + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT
-        {
-            return None;
-        }
-        let i = ((point[1] - rows_top) / PANEL_ROW_HEIGHT) as usize;
-        (i < SETTINGS_ROWS.len()).then_some(i)
     }
 
     /// Точка в зоне resize (правый нижний угол ноды)? Чистая функция для тестов.
@@ -2366,30 +2286,7 @@ pub mod ui {
             }
         }
 
-        /// Hit-test строк панели: строки кликабельны, заголовок/подсказка/паддинги — нет.
-        #[test]
-        fn settings_panel_row_hit_test() {
-            let viewport = [1600.0, 900.0];
-            let panel = panel_rect(Corner::TopRight, viewport);
-            let rows_top = panel[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
-            // Первая и последняя строки
-            assert_eq!(
-                panel_row_at(panel, [panel[0] + 20.0, rows_top + 3.0]),
-                Some(0)
-            );
-            let last = SETTINGS_ROWS.len() - 1;
-            let last_y = rows_top + last as f32 * PANEL_ROW_HEIGHT + 3.0;
-            assert_eq!(panel_row_at(panel, [panel[0] + 20.0, last_y]), Some(last));
-            // Заголовок и подсказка не кликабельны
-            assert_eq!(
-                panel_row_at(panel, [panel[0] + 20.0, panel[1] + PANEL_PADDING + 3.0]),
-                None
-            );
-            let hint_y = rows_top + SETTINGS_ROWS.len() as f32 * PANEL_ROW_HEIGHT + 3.0;
-            assert_eq!(panel_row_at(panel, [panel[0] + 20.0, hint_y]), None);
-            // Мимо панели
-            assert_eq!(panel_row_at(panel, [panel[0] - 5.0, last_y]), None);
-            assert_eq!(panel_row_at(panel, [panel[0] + 20.0, panel[1] - 5.0]), None);
-        }
+        // FR-026: hit-тесты строк панели настроек переехали в
+        // settings_ui (row_at по layout с группами)
     }
 }
