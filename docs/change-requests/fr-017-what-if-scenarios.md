@@ -1,277 +1,659 @@
-# FR-017: What-if режим (override + delta + freeze)
+# FR-017: What-if режим (построчный override + дельты + сценарии с сравнением)
 
-- **Статус:** выявлено
+- **Статус:** выявлено (ревизия концепта 2026-09-17; продуктовые решения НЕ приняты — все вопросы и рабочие гипотезы в разделе «Открытые вопросы дизайна»)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
-- **Владелец:** агент (анализ)
-- **Источник:** сообщение пользователя (сессия 2026-09-15): «эффект сценария что будет, если…». Уточнение владельца (2026-09-15): what-if — один из 3 индикаторов v1 (вместе с bottleneck и queue risk из FR-016); пересчёт live; переопределение входов без изменения `.canvas`.
-- **Связанные задачи:** FR-013 (calc-движок — формулы), FR-014 (propagator — принимает `overrides`), FR-015 (доменные функции — `mm1/mmc` в what-if сценариях), FR-016 (анализ bottleneck — на what-if результатах), FR-006 (undo — what-if сценарий одним шагом), FR-009 (меню — кнопка «Apply scenario»), FR-004 (`Ctrl+W` — тогл what-if), продуктовый роадмап — волна B2/CP6 (`docs/plans/product-roadmap.md` §9), SPEC.md §5.1 (без мутаций `.canvas`), §8 (ввод)
+- **Владелец:** агент (анализ); решения — владелец проекта
+- **Источник:** сообщение пользователя (сессия 2026-09-15): «эффект сценария что будет, если…». Уточнение владельца (2026-09-15): what-if — один из 3 индикаторов v1 (вместе с bottleneck и queue risk из FR-016); пересчёт live; переопределение входов без изменения `.canvas`. Ревизия 2026-09-17 — серия уточняющих вопросов агент→владелец (14 тем): ответы зафиксированы как **рабочие гипотезы**, владелец финальных решений не принимал («сейчас конкретное решение ни по одному из них я не могу тебе дать, нужно глубоко погрузиться»); полный протокол сессии и альтернативы — в «Открытых вопросах дизайна».
+- **Связанные задачи:** FR-013 (Numi-движок, построчные результаты), FR-014 (propagator с overrides), FR-015 (доменные функции/queueing), FR-016 (analyzer + severity overlay — **реализовать первым**, см. «Фазы»), FR-018/019/023 (шаблонные ноды: params, снапшот `canvasdesk.template`, вёрстка), FR-027 (30 шаблонов UE/PA — второй домен сценариев), FR-025 (построчные выходные порты — та же единица «строка»), FR-029 (именованные порты значений — проливание входа в параметр шаблонной ноды, `toParam`; инфраструктура шаблонной ветки what-if), FR-021 (подсказки ввода — в override-поле), FR-026 (паттерн чистого UI-модуля `settings_ui.rs`), FR-006 (undo — Apply одним шагом), FR-009 (контекстное меню — вход в режим), FR-004 (хоткеи), FR-031 (документация в приложении — раздел what-if), FR-028 (онбординг — карточка what-if в v2), продуктовый роадмап — волна B2/CP6 (`docs/plans/product-roadmap.md` §9), SPEC.md §5.1 (схема), §6.2 (LOD), §8 (ввод)
 - **Создан:** 2026-09-15
-- **Обновлён:** 2026-09-18
+- **Обновлён:** 2026-09-18 (синхронизация нумерации FR с main после аудита ADR-0007: построчные порты — FR-025, порты значений — FR-029, документация — FR-031; ревизия концепта — 2026-09-17)
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
 
 ---
 
 ## Описание (What)
 
-Архитектор смотрит на ландшафт сервиса с базовыми параметрами: `rps = 1000`,
-`replicas = 3`, `latency = 50 ms`. Он хочет задать вопрос: «что будет, если RPS
-вырастет в 2 раза?» или «что если выключить одну реплику?». FR-017 вводит
-**what-if режим**:
+**Аудитории и сценарии (два домена, равнозначно — рабочая гипотеза владельца).**
+Архитектор смотрит на ландшафт сервиса из шаблонных нод (FR-018/019): API
+Gateway (`rps = 1000 rps`, `service_rate = 1200 rps`) → Service → Database,
+итоги в футерах карточек. Финдиректор/продакт — на карту юнит-экономики из
+шаблонов FR-027: CAC → LTV → MRR → Runway (`arpu = 20 usd`,
+`monthly_churn = 0.05`). Общий вопрос обоих: «что будет, если поменять X?» —
+`rps × 2`, «выключить реплику», `churn 5% → 7%` — и ответ нужен **без порчи
+базовой модели**, сразу на канвасе, с видимыми последствиями по всей цепочке
+расчёта.
 
-- Пользователь жмёт `Ctrl+W` (или кнопку в панели) → режим what-if активен.
-- В шапке каждой calc-ноды появляется поле override: можно подставить
-  альтернативное значение входа (`rps = 2000`) или множитель (`× 2`).
-- Propagator пересчитывает весь DAG с учётом override-ов — **не меняя `.canvas`**.
-- На канвасе видны **дельты**: рядом с каждым значением — `было → стало`,
-  например `utilization: 50% → 83%`.
-- Overlay из FR-016 пересчитывается на what-if результатах: новые узкие места
-  подсвечиваются; старые — исчезают (или остаются, но с пониженной
-  severity).
-- Кнопка «Apply scenario» — сохраняет what-if в `.canvas` (одним undo-шагом);
-  «Reset» — сбрасывает без изменений.
-- Можно сохранить what-if как отдельный сценарий (v2 — несколько сценариев
-  с переключением).
+**Концепт what-if режима (рабочие гипотезы — см. «Открытые вопросы»).**
 
-**Границы v1 FR-017:**
+- **Вход в режим — явный**: кнопка «What-if» (нижний бар, см. ниже) и хоткей
+  (какой именно — открытый вопрос Q3: `Ctrl+W` из старого плана отклонён по
+  риску мышечной памяти «закрыть вкладку»; кандидаты — `Ctrl+Shift+W`,
+  `Ctrl+I`). Пункт в контекстном меню канваса (FR-009).
+- **Override — построчный** (гипотеза Q1): в what-if режиме клик по строке
+  расчёта (формула или присваивание — и в заметке, и в шаблонной ноде)
+  открывает инлайн-поле подмены. Введённое выражение **замещает исходник
+  этой строки на время сценария** (механика expr-подмены — гипотеза Q2):
+  `rps = 1000 rps` → override `rps = 2000 rps`. Остальные строки, формула
+  шаблона, единицы — не трогаются. Единица «строка» едина с FR-025
+  (построчные выходные порты): у ряда строки живут и результат, и порт, и
+  override.
+- **Пересчёт live**: propagator (FR-014) пересчитывает весь DAG с
+  подменёнными строками в пределах кадра; `.canvas` **не мутируется**
+  (источник истины — persisted-строки/params, не overrides).
+- **Дельты — полный формат** (гипотеза Q4): рядом с каждым изменившимся
+  значением — `50% → 83% (+33пп)`; было — приглушённым, стало — акцентным;
+  Δ со знаком; цвет — открытый под-вопрос Q4b («по направлению» vs
+  «по хуже/лучше»).
+- **Severity-дельты** (после FR-016): overlay пересчитывается на what-if
+  результатах; при росте severity (None → Warn, Warn → Critical) рамка
+  пульсирует; новые узкие места подсвечиваются, исчезнувшие — гаснут.
+- **Сценарии — именованные, с переключением и сравнением** (цель v1 —
+  гипотеза Q5): всегда есть неявная «База» (persisted `.canvas`) плюс
+  пользовательские сценарии (рабочий лимит 2–3, Q5b); хранение — в
+  `canvasdesk.whatif` внутри `.canvas` (гипотеза Q11). Канвас показывает
+  один активный сценарий; **таблица сравнения** «переменная | База | С1 |
+  С2» с дельтами — в v1 (split-view канваса — v2).
+- **UI — нижний бар** (гипотеза Q7): компактная полоса внизу-по-центру:
+  индикатор режима, чипы сценариев `[База][Рост ×2][Отказ реплики]`,
+  счётчик overrides, кнопки «Apply» / «Reset» / «Сравнить»; клик по счётчику
+  разворачивает список overrides (`нода → строка: было → стало`).
+- **Apply — мутирует `.canvas` одним undo-шагом** (гипотеза Q6): override
+  активного сценария записывается в persisted-строки/params; `Ctrl+Z`
+  возвращает. «Reset» — сброс overrides сценария без изменений.
+- **MCP**: `whatif_*` — param/line-aware набор + `whatif_deltas()` (гипотеза
+  Q12) — AI-агент прогоняет сценарии без UI и видит те же дельты, что
+  пользователь.
 
-- Один активный what-if сценарий за раз. Множественные сценарии (с
-  переключением и сравнением) — v2.
-- Override — на уровне **входа** ноды (формула целиком, или отдельная
-  переменная через `name := value` syntax). v1 — формула целиком; точечный
-  override переменных — v2.
-- Дельта-визуализация — `было → стало` рядом со значением. Heatmap
-  дельт — v2.
-- Apply/Reset — обязательно; автосейв не мутирует `.canvas` в режиме what-if
-  (источник истины — persisted-формулы, not override-значения).
+**Границы v1 FR-017 (переработанные):**
+
+- Override — **построчный** (подмена исходника строки). Подмена значения
+  ноды целиком (value-level) остаётся в движке как быстрый путь
+  (унаследован от FR-014, путь MCP). Точечная подмена «именованной
+  переменной без строки» — не вводится (частный случай построчной).
+- Сценарии: именованные, лимит 2–3 (открытый вопрос), переключение,
+  таблица сравнения. Split-view канваса, heatmap дельт, частичный
+  Apply/Reset, сравнение >3 сценариев — v2.
+- Правка базы в what-if режиме — **заблокирована** (двойной клик = override
+  строки; править базу — выйдя из режима) — рабочая гипотеза Q8.
+- Автосейв в what-if не мутирует `.canvas` (overrides — runtime-состояние
+  в `SceneState`; персистентны только именованные сценарии в
+  `canvasdesk.whatif`).
 
 ## Влияние (Impact)
 
 | Объект | Что меняется | Где в документации |
 |---|---|---|
-| `text`-нода (calc) | Поле override в шапке (только в what-if режиме); дельта-строка под результатом | `docs/interface-objects/node.md` §3, §5, §7 |
-| `SceneState` | Новые поля: `whatif_overrides: HashMap<String, Value>`, `whatif_active: bool`, `baseline_results: HashMap<String, Value>` (snapshot для дельты) | `crates/canvas-app/src/main.rs:193-228` |
-| Propagator (FR-014) | `flow::propagate` уже принимает `overrides` (заложено в FR-014); FR-017 использует это | FR-014 |
-| Analyzer (FR-016) | Запускается на what-if результате; overlay показывает новые severity | FR-016 |
-| Рендер | Дельта-строка (`50% → 83%`); изменение цвета severity (было None → Warn — пульсирующая рамка) | `crates/canvas-render/src/cards.rs` |
-| Ввод | `Ctrl+W` — тогл what-if; кнопка «Apply» / «Reset» в панели what-if (отдельный оверлей) | `docs/SPEC.md` §8, FR-004, FR-009 |
-| Undo | Apply сценария — один undo-шаг (как `node_edit`); Reset — не нужен undo | FR-006, `main.rs:311-330` |
-| MCP | `whatif_set_override(node_id, value)`, `whatif_apply()`, `whatif_reset()`, `whatif_baseline()` — инструменты для AI-агентов | `crates/canvas-mcp/src/lib.rs`, `main.rs:2872+` |
-| Автосейв | В what-if режиме — НЕ мутирует `.canvas`; только при Apply | `crates/canvas-app/src/main.rs:277-282` |
+| `text`-нода (заметка-лист) | Override-поле по клику на строку (только в what-if); дельта у изменившихся строк и итога; подсветка подменённых строк | `docs/interface-objects/node.md` §3, §5, §7 |
+| Шаблонная нода (FR-018/023) | Override строки-параметра (`rps = 2000 rps`) поверх снапшота `canvasdesk.template.params`; дельта в футере результата | `docs/interface-objects/node.md` §3, §5; FR-023 |
+| `SceneState` | Runtime-поля what-if: `whatif_active: bool`, `active_scenario: Option<usize>`, `scenarios: Vec<Scenario>` (runtime-копия persisted-сценариев) | `crates/canvas-app/src/main.rs:547` |
+| `Canvas` (схема) | Canvas-level extra `canvasdesk.whatif: { scenarios: [{name, overrides}] }` — персистентность сценариев, round-trip | `crates/canvas-core/src/model.rs:608-615`, SPEC.md §5.1 |
+| Propagator (FR-014) | Сигнатура: `propagate(canvas, whatif: &WhatIfOverrides)` — построчные подмены + value-level слой; пустой `WhatIfOverrides` == текущее поведение | `crates/canvas-core/src/flow.rs:219` |
+| Analyzer (FR-016) | `analyze` запускается на whatif-результатах; severity-дельта → пульсация рамки | FR-016 (реализовать первым — Фаза 0) |
+| Рендер | Дельта-строки `50% → 83% (+33пп)`; подсветка overridden-строк; пульсация рамки при росте severity; дельты на value-лейблах рёбер (открытый вопрос Q15a) | `crates/canvas-render/src/cards.rs`, `text.rs`, `animate.rs` |
+| Ввод | Кнопка «What-if» + хоткей (Q3) + пункт меню (FR-009); нижний бар (новый UI-модуль) | `docs/SPEC.md` §8, FR-004, FR-009 |
+| Undo | Apply активного сценария — один undo-шаг (как `node_edit`, FR-006); правка/переключение сценариев — НЕ undo-able (runtime-state, как выделение) | FR-006, `main.rs:866` |
+| MCP | `whatif_set_override(node_id, line, expr)` + sugar `whatif_set_param(node_id, param, value)`; `whatif_scenario_list/activate`; `whatif_deltas()`; `whatif_apply()`; `whatif_reset()` | `crates/canvas-mcp/src/lib.rs`, `main.rs:5423` |
+| Автосейв | В what-if режиме `.canvas` не меняется от overrides/переключений; мутация — только Apply | `main.rs:834-865` |
+| Подсказки (FR-021) | Override-поле строки получает тот же автокомплит (`hint_items` + `HintContext`) — без правок FR-021 | `crates/canvas-app/src/hints_ui.rs` |
+| Пользовательская докa | Раздел «Что-if сценарии» в `user-docs/calculations.md`; ссылка из help-просмотрщика FR-031; карточка в онбординге FR-028 — v2 | `user-docs/calculations.md`, FR-031, FR-028 |
 
 ## Анализ (Root Cause)
 
-FR-013..016 дают: формулы → propagator → flow_results → analysis. Все эти
-данные — производные от `.canvas` (источник истины). What-if — это **временная
-подмена входов** без мутации источника. Точки встраивания:
+Слой расчётов после FR-013/014/015/018: Numi-лист заметки → построчные
+результаты (`ExprLineResults`, `expr.rs:59`) → propagator по DAG
+(`propagate`, `flow.rs:219`) → значение ноды (шаблон — `tpl.expr` из
+снапшота; заметка — последняя формульная строка `eval_lines_in`,
+`expr.rs:1258`). Все данные — производные `.canvas`. What-if — **временная
+подмена исходников строк** без мутации источника. Чего нет и что есть (актуально после `8e019b4` — реализация
+FR-025 v1):
 
-- **`SceneState` без what-if полей.** Добавить (`193`):
-  - `whatif_active: bool` (тогл режима).
-  - `whatif_overrides: HashMap<String /*node_id*/, Value>` (подмены формул).
-  - `baseline_results: HashMap<String, Value>` (snapshot `flow_results` до
-    применения overrides — для дельты).
-  - `baseline_analysis: HashMap<String, AnalysisFlags>` (snapshot FR-016).
-- **`flow::propagate` уже принимает `overrides`.** FR-014 зафиксировал сигнатуру
-  `propagate(canvas, env_overrides) -> HashMap`. FR-017 использует `overrides`
-  как подмены `expr` целиком (а не переменных env — отличие от FR-014). Решение:
-  расширить сигнатуру — `propagate(canvas, expr_overrides: &HashMap<String, String>, env_overrides: &HashMap<String, Value>)`.
-  v1 FR-014 — `expr_overrides` пустой; v1 FR-017 — заполняется.
-- **`begin_editing` (`main.rs:1058`).** В what-if режиме — двойной клик по
-  ноде открывает override-поле, не редактирование persisted-формулы.
-  Коммит override → `whatif_overrides[id] = Value`; propagator запускается;
-  `baseline_results` НЕ меняется (для дельты).
-- **`mark_dirty` / `autosave_if_due` (`277-282`).** В what-if режиме —
-  `mark_dirty` подавляется: `if !self.whatif_active { self.scene.mark_dirty() }`.
-  Применение сценария (Apply) — мутация `.canvas` одним undo-шагом; тогда
-  `mark_dirty` срабатывает.
-- **Рендер дельты.** `cards.rs` — для ноды с `whatif_overrides[id]`:
-  - Рядом с persisted-результатом — дельта-строка: `50% → 83%` (если
-    baseline ≠ whatif).
-  - Если severity вырос (None → Warn, Warn → Critical) — рамка пульсирует
-    (`animate.rs`, образец `focus` анимации камеры).
-- **MCP.** `whatif_*` — для AI-агентов, проверяющих сценарии без UI.
-  Например, AI-агент задаёт: «что если уронить одну реплику на ноде B?» —
-  MCP `whatif_set_override("B", "replicas = 2")` → `flow_recalc` →
-  `analyze_bottlenecks` → возвращает JSON с новыми severity.
+- **`propagate` умеет только value-level подмену.** Текущая сигнатура
+  `propagate(canvas, overrides: &HashMap<String, Value>)` (`flow.rs:219` —
+  тонкая обёртка над `propagate_with_lines` `flow.rs:249`) подменяет значение
+  ноды целиком — формула не выполняется. «Поменять одну строку, чтобы
+  формула пересчиталась и построчные итоги обновились», — не выражается.
+- **Построчные выходы УЖЕ в потоке (FR-025 v1, `8e019b4`).**
+  `propagate_with_lines` возвращает `FlowSolutions { outputs, lines }`
+  (`flow.rs:236-247`): `lines: HashMap<(node_id, индекс_строки_текста),
+  Value>` — значение каждой формульной строки заметки; слоты рёбер с
+  `from_line` читают их (`inbound_slots_with_lines`, `flow.rs:330`). Это
+  готовая инфраструктура для what-if: **виртуальный исходник** (подмены
+  строк) достаточно подставить до `eval_lines_in` — обновятся и `lines`
+  (построчные порты/дельты), и `outputs` (итоги нод и downstream).
+- **Шаблонные ноды считают params из снапшота, не из текста.** Для
+  template-ноды propagator берёт `tpl.param_values()` (`templates.rs:332`)
+  в `Env::with_param_map` (`expr.rs:455`) и вычисляет `tpl.expr`; текст
+  ноды не вычисляется вовсе (он — редактируемое представление params,
+  синхронизируется в `finish_editing` через `params_from_text`,
+  `templates.rs:752`). Значит построчный override параметра шаблона должен
+  пробрасываться в **виртуальную param-карту**, а не только в текст.
+  Примечание FR-025 v1: построчные выходы для шаблонных нод не строятся
+  (их точка выхода одна — футер) — what-if дельта шаблонной ноды живёт в
+  футере, а не по строкам.
+- **Нет what-if состояния.** `SceneState` (`main.rs:547`) не содержит
+  what-if полей; в коде нет `whatif_*` нигде (аудит 2026-09-16 подтверждён
+  повторным обходом 2026-09-17). MCP-инструментов what-if нет (22
+  инструмента без них).
+- **Нет analyzer (FR-016).** `analyze.rs`/`AnalysisFlags`/severity
+  отсутствуют — severity-дельты и пульсация строятся на FR-016, он же
+  выявляет дефект плана хоткеев: FR-016 резервирует `Ctrl+B`, который уже
+  занят жирным текстом (`README.md` §Горячие клавиши, `Ctrl+B/I/H`) — FR-016
+  нужно перевести на свободную комбинацию (например `Ctrl+Shift+B`) до
+  Фазы 0 FR-017.
+- **Точки опоры для реализации.**
+  - Построчные значения и выходы уже считаются движком (FR-025 v1):
+    `FlowSolutions.lines` + `Edge::from_line`-слоты (`inbound_slots_with_lines`);
+    рендер привязывает бейдж результата и порт строки к одному ряду
+    (`text::result_row_y` — единый источник вертикали, инвариант FR-025) —
+    override-полю остаётся встать на ту же вертикаль.
+  - Чистый UI-модуль-паттерн отработан дважды: `settings_ui.rs` (FR-026),
+    `hints_ui.rs` (FR-021) — what-if бар делается третьим по образцу.
+  - Canvas-level extra с round-trip уже есть: `Canvas.extra` (`model.rs:608`,
+    `#[serde(flatten)]`) — `canvasdesk.whatif` ложится туда без правок I/O;
+    неизвестные поля переживут открытие в Obsidian.
+  - Undo-паттерн: `push_undo` (`main.rs:866`) — снапшот «до» мутации.
+  - Live-пересчёт: `SceneState::recompute_flow` (`main.rs:609`) — точка,
+    куда встаёт what-if пересчёт (база + активный сценарий).
+- **Дрейф ссылок старого документа.** Ревизия 2026-09-15 ссылалась на
+  `main.rs:193-330` (`SceneState`, `mark_dirty`, `push_undo`) и
+  `main.rs:1058` (`begin_editing`) — строки устарели: файл вырос до 12 145
+  строк; актуальные адреса: `SceneState` — `main.rs:547`, `recompute_flow`
+  — `main.rs:609`, `mark_dirty` — `main.rs:834`, `push_undo` —
+  `main.rs:866`, `begin_editing` — `main.rs:1840`, `finish_editing` —
+  `main.rs:1982`, `on_key` — `main.rs:6010`, `mcp_dispatch` —
+  `main.rs:5423`, `HOTKEYS` — `lib.rs:355`. Прежний план «подавления
+  `mark_dirty` в what-if» снимается: overrides не мутируют канвас и не
+  вызывают `mark_dirty`; единственная мутация — Apply.
 
 ## Требуемые изменения (Changes)
 
-1. **`canvas-core/src/flow.rs`** — расширить `propagate`:
-   ```rust
-   pub fn propagate(
-       canvas: &Canvas,
-       expr_overrides: &HashMap<String /*node_id*/, String /*expr*/>,
-       env_overrides: &HashMap<String, Value>,
-   ) -> Result<HashMap<String, Value>, PropagateError>
-   ```
-   - Для ноды с `expr_overrides[id]` — парсить/eval overrides, не
-     `Node::expr()`.
-   - Для остальных — как раньше.
-   - `expr_overrides` пустой → поведение идентично FR-014 (обратная
-     совместимость).
+### Фазы (порядок реализации)
 
-2. **`canvas-app/src/main.rs`**:
-   - `SceneState` (`193`) — добавить `whatif_active: bool`, `whatif_overrides:
-     HashMap<String, String>`, `baseline_results: HashMap<String, Value>`,
-     `baseline_analysis: HashMap<String, AnalysisFlags>`.
-   - `Ctrl+W` handler в `on_key` (`3177+`):
-     - Тогл `whatif_active`.
-     - При включении — snapshot `flow_results` → `baseline_results`;
-       snapshot `analysis_state` → `baseline_analysis`.
-     - При выключении без Apply — сброс `whatif_overrides`, восстановление
-       `flow_results` из `baseline_results`.
-   - `begin_editing` (`1058`): в what-if режиме — открыть override-input
-     вместо редактирования persisted-формулы. Коммит →
-     `whatif_overrides[id] = expr_string` → propagator → обновить
-     `flow_results` (НЕ `baseline`) → `request_redraw`.
-   - `mark_dirty` (`277`): подавление в what-if режиме — `if !self.whatif_active
-     { self.scene.mark_dirty() }`.
-   - Apply сценария (кнопка / хоткей / MCP `whatif_apply`):
-     - `push_undo` (snapshot Canvas) — как у `node_edit` (FR-006).
-     - Для каждой `whatif_overrides[id]` — `Node::set_expr(Some(override))`.
-     - `mark_dirty` → автосейв.
-     - Очистить `whatif_overrides`, `baseline_results`, `baseline_analysis`.
-     - `whatif_active = false`.
-   - Reset сценария (кнопка / MCP `whatif_reset`):
-     - Очистить `whatif_overrides`.
-     - Восстановить `flow_results` из `baseline_results`.
-     - Восстановить `analysis_state` из `baseline_analysis`.
-     - `whatif_active` может остаться true (для следующего сценария) или
-       false — `open question`.
+- **Фаза 0 — FR-016 (prerequisite, отдельный FR):** analyzer +
+  severity-overlay + MCP `analyze_bottlenecks`. Без него what-if получает
+  только числовые дельты. Заодно FR-016 переводит свой хоткей с занятого
+  `Ctrl+B` (жирный текст) на свободный (`Ctrl+Shift+B` — предложение).
+- **Фаза A — движок + один анонимный сценарий:** `WhatIfOverrides` +
+  `propagate` + runtime-состояние + override-поле строки + дельты-рендер +
+  нижний бар (без чипов) + MCP-минимум (`whatif_set_override`,
+  `whatif_deltas`, `whatif_apply`, `whatif_reset`).
+- **Фаза B — именованные сценарии + персистентность:** `canvasdesk.whatif`
+  в `Canvas.extra`, чипы сценариев, переключение, Reset per-сценарий,
+  `whatif_scenario_list/activate`.
+- **Фаза C — сравнение 2-3 сценариев:** таблица сравнения в нижнем баре
+  («переменная | База | С1 | С2» + дельты), полный MCP-набор, ручная
+  приёмка из двух доменов.
 
-3. **`canvas-render/src/cards.rs`** — what-if визуализация:
-   - В what-if режиме — для ноды с `whatif_overrides[id]`:
-     - Override-поле в шапке (показывает формулу-override).
-     - Дельта-строка под результатом: `было: 50% → стало: 83%` (если
-       значения различаются).
-     - Если `baseline_severity != whatif_severity` — пульсирующая рамка
-       (animate.rs, ~1 Гц).
-   - Без what-if — как обычно (FR-013..016).
+Каждая фаза — отдельный коммит + приёмка (паттерн «одна сессия агента =
+один коммит», AGENTS.md). Фазы A→C декомпозируют цель владельца
+«сравнение 2-3 сценариев в v1» (гипотеза Q5) в поставляемые шаги без
+big-bang релиза.
 
-4. **`canvas-render/src/animate.rs`** — пульсация рамки при смене severity
-   (образец — фокус-анимация камеры, ~300 мс; для what-if — зацикленная).
+### 1. `canvas-core/src/flow.rs` — модель и propagator
 
-5. **`canvas-mcp/src/lib.rs`** — 4 новых инструмента:
-   - `whatif_set_override(node_id: str, expr: str)` — задать override.
-   - `whatif_apply()` — применить сценарий к `.canvas` (одним undo-шагом).
-   - `whatif_reset()` — сбросить overrides без изменений.
-   - `whatif_baseline()` — вернуть JSON с baseline-результатами и
-     whatif-результатами для сравнения (для AI-анализа дельт).
+```rust
+/// What-if подмены (FR-017). Пустая — поведение идентично FR-014.
+pub struct WhatIfOverrides {
+    /// Построчные подмены исходников: (node_id, индекс формульной строки)
+    /// → новый исходник строки (механика expr-подмены, Q1+Q2).
+    pub line_exprs: HashMap<(String, usize), String>,
+    /// Value-level подмена значения ноды целиком (задаел FR-014; путь MCP).
+    pub node_values: HashMap<String, Value>,
+}
 
-6. **`canvas-app/src/main.rs` (UI panel)** — панель what-if (отдельный
-   оверлей, как `settings_overlay` `3243+`):
-   - Кнопки «Apply scenario», «Reset», «Close what-if».
-   - Список overrides: `node_id → expr (override)` с кнопкой «✕» для
-     удаления.
+pub fn propagate_with_lines(
+    canvas: &Canvas,
+    whatif: &WhatIfOverrides,
+) -> Result<FlowSolutions, CycleError>
+```
 
-7. **FR-004 (хоткеи)** — добавить `Ctrl+W` в `HOTKEYS` (24-я запись).
+- Точка интеграции — `propagate_with_lines` (`flow.rs:249`, FR-025):
+  сигнатура принимает `WhatIfOverrides` вместо `HashMap<String, Value>`;
+  тонкая обёртка `propagate` (`flow.rs:219`) сохраняется для обратной
+  совместимости (передаёт `WhatIfOverrides::default()` с маппингом старого
+  параметра в `node_values`).
+- Для **заметки** с подменами: собрать виртуальный исходник (строки текста
+  с заменами по `line_exprs[(id, i)]`), вычислить `eval_lines_in` по нему;
+  значение ноды — последняя формульная строка виртуального листа;
+  `FlowSolutions.lines` — построчные значения виртуального листа (порты
+  FR-025 и дельты видят подменённые значения, слоты `from_line`-рёбер —
+  тоже).
+- Для **шаблонной ноды** с подменами: подменённые строки-присваивания
+  распарсить (`params_from_text`-логика) и смержить поверх
+  `tpl.param_values()` → виртуальная param-карта → `tpl.expr` вычисляется
+  с ней (`Env::with_param_map`).
+- `node_values` — прежняя семантика FR-014 (подмена значения ноды,
+  downstream видит её).
+- Миграция сигнатуры: текущий параметр `overrides: &HashMap<String, Value>`
+  переезжает в `whatif.node_values`; места вызова (`recompute_flow`,
+  тесты `integration_flow.rs`) обновляются. Альтернатива (если хотим
+  нулевую поломку API): обёртка `propagate_with(canvas, whatif)` при
+  сохранении старой сигнатуры `propagate` — выбор за реализацией
+  (открытый вопрос Q2b).
+- Индексация строк — **индекс строки ТЕКСТА ноды** (единый с
+  `FlowSolutions.lines`, `ExprLineResults` и `Edge::from_line` FR-025 —
+  реализация `8e019b4` нумерует так); проза-строка подмене не подлежит
+  (клик по ней в what-if — toast), но индекс адресует позицию в тексте;
+  инвариант: индекс override-строки == индекс в `lines` == `from_line`.
 
-8. **FR-009 (меню)** — добавить пункт «What-if режим (Ctrl+W)» и «Apply
-   scenario».
+### 2. `canvas-core/src/whatif.rs` (новый чистый модуль) — сценарии
+
+```rust
+pub struct Scenario {
+    pub name: String,
+    /// Построчные подмены сценария (совпадает по схеме с WhatIfOverrides).
+    pub line_exprs: HashMap<(String, usize), String>,
+}
+```
+
+- Сериализация в `canvas.extra["canvasdesk"]["whatif"]`:
+  `{ "scenarios": [ { "name": "...", "overrides": [ {"node": "...",
+  "line": 2, "expr": "rps = 2000 rps"} ] } ] }` — round-trip тест
+  (байт-в-байт при отсутствии поля; поле выживает после
+  serialize→deserialize и «чужого» редактора).
+- `validate_scenario(canvas, scenario) -> Vec<StaleOverride>` — деградация
+  протухших подмен (строка удалена / стала прозой / нода удалена): тихий
+  пропуск слота (симметрия с политикой FR-025) + видимый маркер в списке
+  overrides панели (когда показывать — открытый вопрос Q5c).
+
+### 3. `canvas-app/src/main.rs` — состояние, вход, Apply/Reset
+
+- `SceneState` (`547`): `whatif_active: bool`,
+  `scenarios: Vec<Scenario>` (загрузка из `Canvas.extra` при открытии),
+  `active_scenario: Option<usize>` (`None` — «База», т.е. overrides пуст).
+- `SceneState::recompute_flow` (`609`): пересчёт **базы** — чистый
+  `propagate(canvas, &empty)` (baseline НЕ снапшотится — гипотеза Q9) и
+  **активного сценария** — `propagate(canvas, &overrides_of_active)`;
+  обе карты хранятся в `SceneState` (например `flow_baseline`,
+  `flow_results`), дельты = разница карт. Стоимость: 2×propagate
+  (<20 мс на 1000 нод, SPEC §6.3).
+- Вход в режим: кнопка нижнего бара / хоткей (Q3) / пункт меню (FR-009);
+  выход — Esc с подтверждением при активных overrides (или без
+  подтверждения — Q3b), кнопка Close.
+- `begin_editing` (`1840`): в what-if режиме клик по строке расчёта
+  открывает **override-поле строки** (не редактирование базы — гипотеза
+  Q8; двойной клик по прозаической строке в режиме — toast «в what-if
+  подменяются только строки расчёта»). Поле получает подсказки FR-021
+  (`hints_ui.rs` — контекст тот же: переменные ноды, `$in`/`$N`, функции).
+  Коммит → `scenarios[active].line_exprs[(id, i)] = expr` →
+  `recompute_flow` → `request_redraw`.
+- Apply активного сценария (кнопка / MCP `whatif_apply`):
+  `push_undo` (`866`, снапшот «до», FR-006) → для каждой подмены:
+  заметке — заменить исходник строки в тексте; шаблону — обновить параметр
+  в снапшоте `canvasdesk.template.params` → `mark_dirty` (`834`) →
+  автосейв. Сценарий после Apply удаляется (его смысл исчерпан) или
+  остаётся «пустым» — открытый вопрос Q6b; остальные сценарии —
+  провалидировать (`validate_scenario`) и пометить протухшие.
+- Reset сценария (кнопка / MCP `whatif_reset`): очистить
+  `line_exprs` сценария → пересчёт. `whatif_active` сохраняется (можно
+  вводить следующий сценарий).
+- Автосейв (`839-865`): без изменений — overrides не мутируют канвас;
+  мутация только на Apply. Персистентность сценариев — отдельный путь:
+  добавление/удаление/переименование сценария мутирует `Canvas.extra` с
+  `push_undo` (сценарии — часть `.canvas`).
+
+### 4. `canvas-app/src/whatif_ui.rs` (новый) — нижний бар
+
+По образцу `settings_ui.rs` (FR-026) / `hints_ui.rs` (FR-021): чистый
+UI-модуль без бизнес-логики. Компоненты:
+
+- Свёрнутый вид (вне режима): кнопка-пилюля «What-if» — низ-центр.
+- Режим: индикатор «WHAT-IF» + чипы сценариев `[База][С1][С2]` (+ «+» —
+  новый сценарий), счётчик overrides активного сценария, кнопки
+  «Apply», «Reset», «Сравнить» (Фаза C), «✕».
+- Раскрытый список (клик по счётчику): строки
+  `нода → строка i: было → стало`, кнопка «✕» у каждой подмены.
+- Таблица сравнения (Фаза C): строки = все подменённые переменные всех
+  сценариев; колонки = База | С1 | С2; в ячейках — значение + Δ к базе.
+- Hit-тест и рендер — свой проход в `canvas-render` (аналог
+  `search_ui.rs`); клампинг к окну (паттерн FR-025 flyout).
+
+### 5. `canvas-render` — дельты и анимация
+
+- `text.rs`: у подменённой строки — подсветка (фон-плашка) и override-
+  маркер; бейдж результата показывает `стало` + под ним дельта-строка
+  `было → стало (+Δ)` (полный формат, Q4). Футер итога — аналогично.
+- `cards.rs`: value-лейблы рёбер — значение активного сценария (+дельта —
+  Q15a); пульсация рамки ноды при `baseline_severity <
+  whatif_severity` (`animate.rs`, лимит 4 Гц — как в старом плане;
+  образец — фокус-анимация).
+- LOD (SPEC §6.2): `zoom < 0.6` — только подсветка подменённых строк без
+  дельт-текстов; `zoom < 0.25` — только пульсация severity.
+
+### 6. `canvas-mcp/src/lib.rs` — инструменты
+
+- `whatif_set_override(node_id, line, expr)` — построчная подмена.
+- `whatif_set_param(node_id, param, value)` — sugar для шаблонных нод
+  (находит строку параметра, строит `param = value`-строку; если строки
+  нет — добавляет виртуальную подмену параметра).
+- `whatif_scenario_list()` / `whatif_scenario_activate(name)` (Фаза B).
+- `whatif_deltas()` — JSON: `{ node: { line: { base, whatif, delta } } }`
+  — то же, что видит пользователь (инвариант 6).
+- `whatif_apply()` / `whatif_reset()`.
+- Stateless-альтернатива `whatif_run(overrides) → deltas` (одношаговый
+  прогон без состояния) — открытый вопрос Q12b.
+
+### 7. Сопутствующие
+
+- **FR-004**: хоткей what-if в `HOTKEYS` (`lib.rs:355`); FR-016 —
+  перевод `Ctrl+B` → `Ctrl+Shift+B` (конфликт с жирным текстом).
+- **FR-009**: пункт «What-if режим (хоткей)» в меню канваса.
+- **user-docs/calculations.md**: раздел «Что-if сценарии» (построчные
+  подмены, дельты, сценарии, Apply/Reset, MCP-пример для AI-клиентов).
+- **docs/ACCEPTANCE.md**: чек-лист FR-017 (двухдоменные примеры).
+- **FR-031** (help-просмотрщик): ссылка на раздел calculations.md.
+- **FR-028** (онбординг v2): карточка «What-if» в тур.
 
 ## Архитектура тестируемости (инварианты FR-017)
 
-1. **`propagate` с overrides — чистая функция.** `expr_overrides` —
-   параметр, не глобальное состояние. Тесты: один и тот же `canvas` с
-   разными `expr_overrides` → разные результаты; `baseline` ≠ `whatif`
-   детерминированно.
-2. **What-if не мутирует `.canvas`.** Тест: до/после what-if без Apply —
-   `.canvas` файл идентичен (хеш-сравнение). После Apply — мутируется
-   одним undo-шагом (undo восстанавливает).
-3. **Дельта — явное значение.** `baseline_results` хранится отдельно от
-   `flow_results`; дельта — `whatif - baseline`. Тест: изменение
-   `expr_overrides` → новая `flow_results`; `baseline` не меняется.
-4. **MCP-видимость эквивалентна UI.** `whatif_baseline()` отдаёт тот же
-   JSON, что видит пользователь в дельтах. Это делает тестирование через
-   AI-клиент проверкой UX: если AI видит дельту, пользователь её видит тоже.
+1. **`propagate` с `WhatIfOverrides` — чистая функция.** Один `canvas` +
+   разные overrides → детерминированно разные `FlowOutputs`. Пустой
+   `WhatIfOverrides` → результат байт-в-байт как `propagate` без overrides
+   (обратная совместимость FR-014).
+2. **What-if не мутирует `.canvas` до Apply.** Хеш файла до/после сессии
+   what-if (подмены, переключения, Reset) — идентичен. После Apply —
+   мутирован; `Ctrl+Z` восстанавливает (один шаг, FR-006).
+3. **База — чистый пересчёт, не снапшот** (гипотеза Q9). Любая мутация
+   канваса (вне режима) → обе карты (`flow_baseline`, `flow_results`)
+   пересчитаны заново; дельты всегда консистентны текущему `.canvas`.
+   Тест: правка формулы → дельты не «врут».
+4. **Инвариант строки.** Подмена `(id, i)` меняет значение только строки
+   `i` (индекс строки текста — единый с `FlowSolutions.lines` и
+   `Edge::from_line` FR-025) и зависящих от неё величин (переменные ниже
+   по листу, итог ноды, downstream по value-рёбрам, слот построчного порта
+   FR-025); остальные строки не затронуты.
+5. **Сценарии переживают round-trip.** `canvasdesk.whatif` в
+   `Canvas.extra` сохраняется при serialize→deserialize; файл, открытый и
+   перезаписанный «чужим» редактором (Obsidian), сценарии не теряет.
+6. **MCP-видимость эквивалентна UI.** `whatif_deltas()` отдаёт те же
+   пары «было → стало», что рендерит канвас — тестирование через
+   AI-клиент эквивалентно ручной приёмке.
 
 ## Точки входа (Entry Points)
 
-- `docs/interface-objects/node.md` §3 (визуальная структура — what-if
-  overlay), §5 (состояние what-if), §7 (точки входа).
-- `docs/SPEC.md` §5.1 (без мутаций в what-if), §6.2 (LOD для дельт), §8
-  (ввод — `Ctrl+W`).
-- `docs/ACCEPTANCE.md` — чек-лист приёмки FR-017.
-- `docs/change-requests/fr-013-text-node-numi-expr.md` — calc-движок.
-- `docs/change-requests/fr-014-edge-value-flow.md` — propagator (с
-  `expr_overrides`).
-- `docs/change-requests/fr-015-domain-units-queueing.md` — доменные функции
-  в сценариях.
-- `docs/change-requests/fr-016-bottleneck-queue-risk.md` — overlay
-  пересчитывается на what-if результатах.
-- `docs/change-requests/fr-004-hotkeys-overlay.md` — `Ctrl+W`.
-- `docs/change-requests/fr-009-node-context-menu-settings.md` — кнопки
-  «Apply scenario» / «Reset».
-- `docs/change-requests/fr-006-undo-stack.md` — Apply — один undo-шаг.
+- `docs/interface-objects/node.md` §3 (override-поле строки, дельты), §5
+  (состояние what-if ноды), §7 (точки входа).
+- `docs/interface-objects/edge.md` — value-лейблы в what-if (Q15a).
+- `docs/SPEC.md` §5.1 (схема `canvasdesk.whatif`), §6.2 (LOD дельт), §8
+  (ввод — хоткей Q3).
+- `docs/ACCEPTANCE.md` — чек-лист приёмки FR-017 (Фазы A/B/C).
+- `user-docs/calculations.md` — раздел «Что-if сценарии».
+- FR-016 (severity на whatif-результатах), FR-025 (общая единица
+  «строка», порядок — Q10), FR-021 (подсказки в override-поле), FR-004,
+  FR-009, FR-006 (Apply — один шаг), FR-031/FR-028 (документация).
 
 ## Проверка (Verification)
 
-### Юнит-тесты
+### Юнит-тесты (`canvas-core`)
 
-- `flow::propagate(canvas, empty_overrides, empty_env)` → `baseline` (как
-  FR-014).
-- `flow::propagate(canvas, {"B": "$in × 3"}, empty_env)` → B пересчитан с
-  множителем 3; A, C — как baseline.
-- `flow::propagate(canvas, {"A": "2000"}, ...)` → A = 2000, B и C —
-  пересчитаны downstream.
-- `apply_scenario(canvas, overrides)` → мутация `Node::expr` для каждой
-  ноды в `overrides`; возвращается новый `Canvas`.
-- `reset_scenario` — `flow_results` восстановлены из `baseline_results`.
+- `propagate(canvas, empty)` == `propagate` прежней сигнатуры (миграция
+  не сломала baseline).
+- Заметка `rps = 1000\nlat = 50 ms\ncpu = $rps × 2`: подмена строки 0 на
+  `rps = 2000` → `cpu` = 4000, `lat` не изменилась; значение ноды — новый
+  итог. Подмена строки 2 → итог ноды = подменённая строка.
+- Шаблонная нода `mm1($rps, $service_rate)`: подмена строки параметра
+  `rps` → формула пересчитана (ρ вырос), `service_rate` не тронут.
+- Каскад: A→B→C (value-рёбра), подмена в A → B, C пересчитаны; подмена в
+  B → A не изменилась, C пересчитан.
+- `node_values`-слой — прежние тесты FR-014 (`overrides_flow_downstream_*`)
+  переносятся на `WhatIfOverrides::node_values`.
+- `Scenario` round-trip: без поля — JSON без `canvasdesk.whatif`; с полем —
+  переживает; `validate_scenario` — протухшая строка/удалённая нода
+  помечены, валидные работают.
 
-### Интеграционные тесты
+### Интеграционные тесты (`canvas-app/tests/integration_whatif.rs`)
 
-- `crates/canvas-app/tests/integration_whatif.rs`:
-  - Создание 3-х calc-нод A→B→C (A=`5`, B=`$in × 2`, C=`$in + 1`).
-  - `flow_recalc` → baseline `{A:5, B:10, C:11}`.
-  - `whatif_set_override("A", "20")` → `flow_recalc` → `{A:20, B:40, C:41}`.
-  - Хеш `.canvas` файла — до и после whatif (без Apply) — идентичен.
-  - `whatif_apply()` → `.canvas` мутирован (`A.expr = "20"`); `Ctrl+Z`
-    восстанавливает исходное состояние.
-  - `whatif_reset()` после нового whatif (без Apply) → `flow_results`
-    восстановлены из `baseline`.
+- 3 calc-ноды A→B→C (`A: 5`, `B: $in × 2`, `C: $in + 1`); MCP
+  `whatif_set_override(A, 0, "20")` → `whatif_deltas()` →
+  `{A: 5→20 (+15), B: 10→40 (+30), C: 11→41 (+30)}`.
+- Хеш `.canvas` до/после what-if сессии (без Apply) — идентичен.
+- `whatif_apply()` → `A`-строка в тексте = `20`; `Ctrl+Z` (undo) — база
+  восстановлена.
+- `whatif_scenario_activate("S2")` → дельты пересчитаны под S2;
+  переключение не мутирует файл.
+- Двухдоменный сценарий: `mm1`-цепочка + UE-цепочка (LTV: подмена
+  `monthly_churn = 0.07` → LTV 320 → 228 usd).
 
-### Ручная приёмка
+### Ручная приёмка (двухдоменная — обе аудитории равнозначно, Q13)
 
-- 5 нод-сервисов с формулами `mm1(...)`. Жмём `Ctrl+W` → в шапке каждой
-  ноды — поле override.
-- Вводим в ноде A: `arrival_rate = 2000 rps` → propagator пересчитывает
-  всю цепочку; рядом с каждым значением — дельта:
-  `utilization: 50% → 83%`, `queue_length: 0.5 → 4.2`, `wait_time: 1 ms
-  → 4.2 ms`.
-- Overlay FR-016 обновляется: нода A теперь `Warn` (была `None`); нода B
-  теперь `Critical` (была `Warn`); рамки пульсируют.
-- Жмём «Reset» → всё возвращается к baseline (дельты пропадают, severity
-  восстанавливается).
-- Вводим новый override + жмём «Apply scenario» → `.canvas` мутирован;
-  `Ctrl+Z` возвращает baseline.
-- MCP: `whatif_set_override("A", "2000 rps")` → `whatif_baseline()` →
-  JSON с `baseline: {A:5, B:10, C:11}, whatif: {A:2000, B:4000, C:4001}`.
-- Автосейв: после whatif без Apply — `.canvas` файл не меняется (хеш
-  идентичен); после Apply — обновляется.
+- **Capacity:** ландшафт 5 шаблонных нод с `mm1(...)`; вход в what-if;
+  подмена `arrival_rate = 2000 rps` → дельты у каждой зависимой строки и
+  футера: `utilization: 50% → 83% (+33пп)`, `queue_length: 0.5 → 4.2`,
+  `wait_time: 1 ms → 4.2 ms`; severity A: None → Warn, B: Warn → Critical
+  (рамки пульсируют — после Фазы 0).
+- **UE:** CAC → LTV → MRR → Runway; подмена `monthly_churn = 0.07` →
+  LTV `320 usd → 228 usd (−92 usd)`, Runway сокращается — в таблице
+  сравнения видно по колонкам.
+- Сценарии: создать «Рост ×2» и «Отказ реплики»; переключение чипами;
+  таблица сравнения 3 колонок; «Сравнить» открывает таблицу.
+- Reset → дельты пропадают, severity восстанавливается; Apply → `.canvas`
+  мутирован, `Ctrl+Z` возвращает; автосейв после what-if-сессии без Apply
+  не меняет файл (хеш).
+- MCP: `whatif_set_param("B", "replicas", "2")` → `whatif_deltas()` →
+  JSON-дельты соответствуют видимым на канвасе.
+- Старый `.canvas` без `canvasdesk.whatif` — грузится, работает, what-if
+  доступен.
 
 ## Открытые вопросы дизайна
 
-- **Override переменных, не всей формулы.** v1 — формула целиком
-  (`arrival_rate = 2000 rps`). v2 — точечный override переменных
-  (`arrival_rate := 2000 rps` syntax, остальная формула сохраняется).
-  Решение зависит от UX-тестинга.
-- **Множественные сценарии.** v1 — один активный. v2 — список сценариев
-  с переключением; v3 — сравнение 2-3 сценариев на одном канвасе
-  (split-view).
-- **Применение частичного сценария.** Apply — все overrides. Reset —
-  все. Частичное (Apply только для ноды A, Reset для ноды B) — v2.
-- **Производительность.** Propagator на 1000 нод с overrides — тот же
-  overhead, что FR-014 (<10 мс). Пульсация рамок (animate.rs) — для 100+
-  пульсирующих нод может дать лишний redraw; решение — ограничить FPS
-  пульсации до 4 Гц (визуально достаточно).
-- **Apply без правки `.canvas`.** Альтернатива — сохранять сценарий как
-  отдельный `.whatif.json` (sidecar), не трогая `.canvas`. v1 — Apply
-  мутирует `.canvas` (простота); v2 — sidecar для сравнения сценариев
-  без committed-мутаций.
-- **Имена сценариев.** v1 — безымянный (`whatif_active: bool`); v2 —
-  `whatif_name: Option<String>` + список (`whatif_scenarios:
-  Vec<Scenario>`).
+**Протокол сессии 2026-09-17 (агент → владелец, 14 тем).** Ответы владельца
+зафиксированы как **рабочие гипотезы** для проработки концепта; цитата
+владельца: «сейчас конкретное решение ни по одному из них я не могу тебе
+дать, нужно глубоко погрузиться». Каждый вопрос хранит альтернативы и
+трейд-оффы — решения принимаются владельцем до/в ходе реализации Фаз.
+Пометка **[Г]** — рабочая гипотеза владельца (выбор в сессии), **[Н]**
+новый вопрос, возникший при ревизии.
+
+- **Q1. Гранулярность override.** [Г] Построчно — подмена результата
+  конкретной строки расчёта (единая единица с FR-025: порт + бейдж +
+  override на одном ряду). Альтернативы: (а) именованные переменные
+  (параметр шаблона / строка-присваивание) — формально то же самое для
+  строк-присваиваний, но не покрывает строки-выражения; (б) формула ноды
+  целиком (старый план) — грубо, теряет построчную семантику; (в) оба
+  уровня — движковая сложность. Трейд-офф: построчный override на
+  строке-выражении меняет итог без имени переменной — в списке overrides
+  и MCP нужна адресация «нода+строка», не «переменная».
+- **Q2. Модель override в движке.** [Г] expr-подмена — замена исходника
+  строки выражением (в синтезе с Q1: построчная expr-подмена). Альтернатива:
+  типизированная структура со слоями `params`/`values` — богаче (точечная
+  подмена параметра без строки), но вводит второй механизм рядом с
+  виртуальным листом. [Н] Q2b: миграция сигнатуры — менять
+  `propagate(canvas, overrides)` на `propagate(canvas, &WhatIfOverrides)`
+  (обновить немногочисленные вызовы) или добавить обёртку
+  `propagate_with` с сохранением старой сигнатуры (нулевая поломка,
+  два входа в движок).
+- **Q3. Вход в режим и хоткей.** [Г] Явный режим, кнопка + хоткей (не
+  безрежимный Excel-паттерн — риски случайных подмен и путаницы undo).
+  [Н] Q3a: конкретная комбинация — `Ctrl+W` из старого плана отклонён
+  (мышечная память «закрыть вкладку» из браузеров); кандидаты:
+  `Ctrl+Shift+W`, `Ctrl+I` («if»), `Ctrl+Shift+I`. [Н] Q3b: выход по Esc —
+  сразу или с подтверждением при активных overrides (предложение: с
+  подтверждением, как незакрытый редактор текста).
+- **Q4. Формат дельт.** [Г] Полный: `50% → 83% (+33пп)` — было
+  приглушённым, стало акцентным. Альтернативы: инлайн-компакт `83% (+66%)`
+  (уже, меньше шума); переключаемый режим compact/full. [Н] Q4b: цвет Δ —
+  «по направлению» (зелёный рост/красный спад) vs «по хуже/лучше»
+  (для `utilization` рост — плохо, для LTV рост — хорошо; предложение —
+  домен-знак через severity FR-016 где возможно, иначе по направлению).
+  [Н] Q4c: формат Δ для величин с единицами — абсолют с единицей
+  (`−92 usd`) или % от базы (`−29%`), или оба (`−92 usd (−29%)`).
+- **Q5. Сценарии в v1.** [Г] Сравнение 2-3 сценариев — цель v1 (исходный
+  запрос владельца упоминал freeze + сравнение; UE-кейсы FR-027
+  усиливают). Декомпозиция — Фазы A/B/C выше. [Н] Q5a: форма сравнения —
+  таблица в панели (v1-предложение) vs split-view канваса (v2 — сложно с
+  камерой/LOD). [Н] Q5b: лимит сценариев — 2-3 (предложение) vs без
+  лимита (риск простыни чипов). [Н] Q5c: протухшие подмены (строка
+  удалена между сессиями) — тихий пропуск (симметрия FR-025) vs видимый
+  маркер в списке overrides (предложение: маркер в списке, молчание на
+  канвасе). [Н] Q5d: «freeze» из исходного запроса — подтвердить смысл:
+  синоним «сохранить сценарий» (персистентность в `.canvas`) или отдельная
+  механика «заморозить базу от правок»?
+- **Q6. Apply.** [Г] Мутирует `.canvas` одним undo-шагом. Альтернатива
+  (отклонена в сессии): немутирующее «Сохранить снимок сценария»;
+  частично возвращается Q5d (freeze). [Н] Q6a: Apply — только активного
+  сценария (предложение) vs «применить все» (опасно). [Н] Q6b: судьба
+  сценария после Apply — удалить (предложение: его смысл исчерпан) vs
+  оставить пустым vs оставить как есть с пометкой «применён». [Н] Q6c:
+  валидация остальных сценариев после Apply (база сдвинулась — подмены
+  могут протухнуть): пересчитать `validate_scenario`, показать маркеры.
+- **Q7. UI — нижний бар.** [Г] Компактный низ-центр: индикатор + чипы
+  сценариев + счётчик + кнопки; список по клику. Альтернативы (отклонены):
+  плавающий оверлей как settings_overlay (тяжелее, перекрывает канвас),
+  правый док как палитра FR-024/025 (what-if — контекст канваса, а не
+  библиотека). [Н] Q7a: конфликт места с HUD/тостами — приоритет и
+  смещение; [Н] Q7b: вид вне режима — пилюля-кнопка всегда видна vs
+  скрыта до первого расчёта на канвасе.
+- **Q8. Правка базы в what-if режиме.** [Н] v1-предложение: заблокирована
+  (двойной клик = override-поле строки) — радикально упрощает семантику
+  undo/автосейва и исключает «что я сейчас редактирую?». Альтернатива:
+  разрешить (база пересчитается, дельты честны благодаря Q9), но растёт
+  путаница и число путей мутации в режиме. Решение на UX-прототипе Фазы A.
+- **Q9. Baseline.** [Г] Пересчёт заново каждый кадр-событие (не снапшот
+  при входе — снапшот лжёт при мутациях; <10 мс на 1000 нод — цена
+  приемлема, 2×propagate на пересчёт).
+- **Q10. Порядок реализации.** [Г] FR-016 первым (Фаза 0) — severity-дельты
+  и пульсация строятся на analyzer. [Н] Q10a: FR-025 (построчные порты) —
+  до Фазы B (предложение: общий ряд строки «порт + бейдж + override-поле»
+  должен получить единую геометрию сразу, иначе редизайн) vs после всего
+  (быстрее выдать what-if, но риск переработки вёрстки строки).
+- **Q11. Хранение сценариев.** [Г] В `.canvas`: canvas-level extra
+  `canvasdesk.whatif` (round-trip с Obsidian сохраняется, сценарии едут с
+  канвасом). Альтернатива (отклонена): sidecar `.whatif.json` — база
+  нетронута, но файл разлучается с канвасом. [Н] Q11a: копирование
+  фрагмента канваса в другой `.canvas` — node_id меняются, подмены
+  протухнут (деградация через `validate_scenario`; вариант —
+  переадресация по имени шаблона+параметра — v2).
+- **Q12. MCP-набор.** [Г] Param/line-aware + дельты:
+  `whatif_set_override` + `whatif_set_param` (sugar) +
+  `whatif_scenario_list/activate` + `whatif_deltas` + `whatif_apply` +
+  `whatif_reset`. [Н] Q12a: `whatif_set_param` для отсутствующего
+  параметра — ошибка vs виртуальная подмена (предложение: виртуальная).
+  [Н] Q12b: stateless `whatif_run(overrides) → deltas` — одношаговый прогон
+  без состояния (удобно агенту; добавить как 7-й инструмент Фазы C).
+- **Q13. Аудитория.** [Г] Обе равнозначно: примеры приёмки и онбординга —
+  из capacity и UE доменов (см. «Проверка»).
+- **Q14. Нумерация CR/FR (смежное, вне FR-017).** Устранено 2026-09-17–18
+  двумя проходами: локальная перенумерация сессии 2026-09-17 (выполненные
+  FR-025-палитра и FR-027-шаблоны сохраняли номера) — отозвана при ребейзе в
+  пользу аудита ADR-0007 из main: `fr-025-persistent-miro-palette-mouse.md`
+  → **FR-030**, `fr-027-help-button-docs-viewer.md` → **FR-031**,
+  `fr-025-line-output-ports.md` сохранил номер, **FR-029** занят новыми
+  «портами значений» (CR-013 R1); конфликт-маркеры в `index-cr-fr.md` сняты,
+  перекрёстные ссылки FR-028 обновлены.
+- **Q15. Новые вопросы ревизии (для погружения владельца).** [Н]
+  - Q15a: value-лейблы рёбер в what-if — показывать значение активного
+    сценария + дельту (предложение: да, дельта мелким рядом).
+  - Q15b: авто-включение severity-overlay FR-016 при входе в what-if
+    (предложение: да, с тостом; выход — вернуть прежнее состояние).
+  - Q15c: миникарта/поиск — учитывают ли what-if-значения (предложение:
+    нет в v1 — только база).
+  - Q15d: экспорт PNG/снимок канваса — с дельтами или базой
+    (предложение: как на экране — с дельтами).
+  - Q15e: undo-гранулярность правки сценариев — правки списка сценариев
+    (создать/удалить/переименовать) undo-able (мутация `.canvas`), правки
+    overrides внутри сценария — нет (runtime) — подтвердить на Фазе B.
+  - Q15f: пустой сценарий «База» редактируем? (подмены на «Базе» = правки
+    базы — предложение: «База» нередактируема, для правок — выход из
+    режима).
 
 ## История изменений (Changelog)
 
 - `2026-09-18` — агент: разметка позицией в критическом пути — волна B2/CP6 продуктового роадмапа (`docs/plans/product-roadmap.md` §9): v1 (override + delta + сценарные сетки №2–№4 синхронно) — до гейта; freeze/сравнение и worker-тред — волна S2 после гейта.
+- `2026-09-17` — агент (ревизия концепта по запросу владельца: «проанализируй
+  FR-017, актуализируй относительно новых FR и контекста проекта»):
+  (1) актуализация контекста — шаблонные ноды FR-018/019/023 (params из
+  снапшота, `params_from_text`, мерж) делают «вход ноды» параметром, а не
+  формулой; FR-027 добавил второй домен (UE/PA, 30 шаблонов) — аудитория
+  what-if расширена; FR-025 (построчные порты) вводит единую
+  единицу «строка», FR-029 (порты значений) — проливание входа в параметр; FR-021/FR-026
+  — новые точки интеграции (подсказки в override-поле, паттерн UI-модуля).
+  (2) устранение дрейфа кода: все ссылки на строки обновлены (SceneState
+  `main.rs:547`, propagate `flow.rs:219`, `recompute_flow` `main.rs:609` и
+  др.); прежний план «подавления mark_dirty» снят (overrides не мутируют
+  канвас). (3) доработка концепта по рабочим гипотезам сессии 2026-09-17:
+  построчный override (expr-подмена исходника строки, включая строки
+  параметров шаблонов через виртуальную param-карту), полный формат дельт
+  «было → стало (+Δ)», именованные сценарии с переключением и таблицей
+  сравнения (Фазы A/B/C), нижний бар (`whatif_ui.rs`), Apply — мутация
+  `.canvas` одним undo-шагом, baseline — чистый пересчёт, хранение
+  сценариев в `canvasdesk.whatif` (canvas-level extra), MCP param-aware +
+  `whatif_deltas`. (4) зафиксирован протокол 15 открытых вопросов с
+  альтернативами (раздел «Открытые вопросы») — финальные решения за
+  владельцем. (5) выявлен конфликт хоткея FR-016 (`Ctrl+B` занят жирным
+  текстом) — предложение `Ctrl+Shift+B` в Фазе 0. Статус `выявлено`
+  сохранён (решения не приняты).
+- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`):
+  реализация не начата — UI-режима нет (`whatif_*`/`freeze`/`scenario` в
+  коде отсутствуют, MCP-инструментов нет). Задел точно по плану дока:
+  `flow::propagate(canvas, overrides)` принимает value-level overrides
+  (FR-014), интеграционный тест `overrides_flow_downstream_what_if`
+  (`integration_flow.rs:163-183`). Расширение сигнатуры (`expr_overrides`)
+  не сделано. Статус `выявлено` сохранён.
+- `2026-09-15` — агент: документ создан по запросу пользователя (what-if
+  сценарии — один из 3 индикаторов v1). Зафиксированы 4 инварианта
+  тестируемости (чистый `propagate` с overrides, без мутаций `.canvas` до
+  Apply, явная дельта, MCP-видимость эквивалентна UI). Статус `выявлено`.
+  Зависимости: FR-013 (calc-движок), FR-014 (propagator с overrides),
+  FR-015 (доменные функции), FR-016 (overlay на what-if результатах).
+
+## Источники истины (References)
+
+- `crates/canvas-core/src/flow.rs:219` — `propagate` (value-level
+  overrides; расширить до `WhatIfOverrides`: построчные + value-слой).
+- `crates/canvas-core/src/expr.rs:59,1258` — `ExprLineResults`,
+  `eval_lines_in` (виртуальный лист с подменами).
+- `crates/canvas-core/src/expr.rs:455` — `Env::with_param_map` (виртуальная
+  param-карта шаблона с override-параметрами).
+- `crates/canvas-core/src/templates.rs:274,332,752` — `TemplateRef`,
+  `param_values` (params из снапшота — куда мержатся override-подмены),
+  `params_from_text` (парсинг строк-присваиваний).
+- `crates/canvas-core/src/model.rs:608-615` — `Canvas.extra` (serde
+  flatten, round-trip) — место `canvasdesk.whatif`.
+- `crates/canvas-core/src/model.rs:123-136` — `CanvasdeskExt`
+  (`expr`, `template` — Apply мутирует).
+- `crates/canvas-app/src/main.rs:547` — `SceneState` (+ `whatif_active`,
+  `scenarios`, `active_scenario`, `flow_baseline`).
+- `crates/canvas-app/src/main.rs:609` — `recompute_flow` (пересчёт базы +
+  активного сценария).
+- `crates/canvas-app/src/main.rs:834-865` — `mark_dirty`/`autosave_if_due`
+  (мутация только на Apply/правке сценариев).
+- `crates/canvas-app/src/main.rs:866` — `push_undo` (Apply — один шаг).
+- `crates/canvas-app/src/main.rs:1840,1982` — `begin_editing` /
+  `finish_editing` (в what-if — override-поле строки).
+- `crates/canvas-app/src/main.rs:6010,5423` — `on_key` (хоткей what-if),
+  `mcp_dispatch` (`whatif_*`).
+- `crates/canvas-app/src/lib.rs:355` — `HOTKEYS` (+what-if, Q3).
+- `crates/canvas-app/src/settings_ui.rs`, `hints_ui.rs` — паттерны чистых
+  UI-модулей для `whatif_ui.rs`; `hints_ui.rs` — подсказки в override-поле.
+- `crates/canvas-render/src/text.rs:1801-1856` — привязка бейджа результата
+  к ряду строки (вертикаль override-поля; инвариант FR-025 п.1).
+- `crates/canvas-render/src/cards.rs`, `animate.rs` — дельты, пульсация
+  severity (лимит 4 Гц).
+- `crates/canvas-mcp/src/lib.rs` — `TOOLS` (+6 `whatif_*`).
+- `crates/canvas-core/src/analyze.rs` (новый, FR-016) — analyzer на
+  whatif-результатах (Фаза 0).
+- `docs/SPEC.md` §5.1 (схема `canvasdesk.whatif`), §6.2 (LOD дельт), §8
+  (ввод).
+- `docs/interface-objects/node.md` §3, §5, §7 — override-поле, состояния.
+- `user-docs/calculations.md` — раздел «Что-if сценарии» (создать).
+- `docs/ACCEPTANCE.md` — чек-лист FR-017 (Фазы A/B/C, два домена).
+- `docs/change-requests/fr-013-text-node-numi-expr.md` — Numi-движок.
+- `docs/change-requests/fr-014-edge-value-flow.md` — propagator, слоты,
+  value-рёбра.
+- `docs/change-requests/fr-015-domain-units-queueing.md` — queueing-функции.
+- `docs/change-requests/fr-016-bottleneck-queue-risk.md` — analyzer +
+  severity (Фаза 0; конфликт `Ctrl+B` — Q10).
+- `docs/change-requests/fr-025-line-output-ports.md` — построчные порты
+  (единая единица «строка», порядок — Q10a).
+- `docs/change-requests/fr-021-numi-input-hints.md` — подсказки ввода.
+- `docs/change-requests/fr-026-settings-groups-dropdowns.md` — паттерн
+  панели настроек.
+- `docs/change-requests/fr-004-hotkeys-overlay.md`, `fr-009-node-context-menu-settings.md`,
+  `fr-006-undo-stack.md` — хоткей, меню, undo.
+- `docs/change-requests/fr-027-templates-ue-pa.md` — 30 шаблонов UE/PA
+  (второй домен what-if).
+- `docs/change-requests/fr-029-value-ports.md` — именованные порты значений
+  (`toParam` — проливание входа в параметр шаблонной ноды; CR-013 R1).
+- `docs/change-requests/fr-031-help-button-docs-viewer.md`,
+  `fr-028-onboarding-carousel.md` — документация и онбординг what-if (v2).
