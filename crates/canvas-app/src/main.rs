@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
+use canvas_app::hints_ui;
 use canvas_app::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
@@ -965,6 +966,8 @@ struct App {
     /// FR-018: радиальное wheel-меню шаблонов (Shift+клик по пустому
     /// месту): screen-центр + world-точка инстанциации + категория.
     wheel_menu: Option<template_ui::WheelMenu>,
+    /// FR-021: popup контекстных подсказок Numi-ввода (состояние + якорь).
+    hints: hints_ui::HintPopup,
     /// T23 (brainstorm-focus): затемнение сцены 0..1 (анимируется фейдом
     /// 150 мс при вкл/выкл и при появлении/исчезновении семени).
     focus_dim: f32,
@@ -1121,6 +1124,7 @@ impl App {
             },
             template_panel: template_ui::TemplatePanel::new(),
             wheel_menu: None,
+            hints: hints_ui::HintPopup::default(),
             focus_dim: 0.0,
             focus_fade: None,
             focus_pulse: None,
@@ -1612,6 +1616,8 @@ impl App {
             zoom_px,
         );
         self.editing = Some(session);
+        // FR-021: popup подсказок — с чистого листа на каждую правку
+        self.hints.reset();
         self.scene.selected = Some(Selection::Node(index));
         self.scene.dragging = None;
         // Давняя заметка могла переполниться до нас (загрузка из файла) —
@@ -1651,6 +1657,7 @@ impl App {
             zoom_px,
         );
         self.editing = Some(session);
+        self.hints.reset();
         self.scene.selected = Some(Selection::Edge(index));
         self.scene.dragging = None;
         self.sync_cursor_icon();
@@ -1730,6 +1737,8 @@ impl App {
         let Some(session) = self.editing.take() else {
             return;
         };
+        // FR-021: сессия закрыта — popup подсказок больше не нужен
+        self.hints.reset();
         self.editor_dragging = false;
         if commit && session.changed() {
             // FR-006: правка состоялась — отложенный снапшот «до» в историю
@@ -2894,6 +2903,180 @@ impl App {
         self.scene.mark_dirty();
         self.scene.recompute_flow();
         index
+    }
+
+    /// FR-021: пересчитать состояние popup подсказок после правки текста.
+    /// Popup открывается только на Numi-строках каретки (вердикт
+    /// `expr::line_kind`, вне код-фенсов) при непустом списке вариантов;
+    /// якорь — низ каретки в логических px окна.
+    fn update_hints(&mut self) {
+        let Some(session) = self.editing.as_ref() else {
+            self.hints.reset();
+            return;
+        };
+        // Подсказки — только в тексте ноды (лейблы связей не Numi-редактор)
+        if session.node_index().is_none() {
+            self.hints.reset();
+            return;
+        }
+        let (line_i, line_text, caret) = session.caret_line();
+        let prefix = &line_text[..caret.min(line_text.len())];
+        // Код-фенсы выше строки каретки (``` toggling, как eval_lines)
+        let full_text = session.text();
+        let in_fence = full_text
+            .split('\n')
+            .take(line_i)
+            .fold(false, |fence, line| {
+                fence ^ line.trim_start().starts_with("```")
+            });
+        if in_fence
+            || !matches!(
+                expr::line_kind(prefix),
+                expr::NumiLineKind::Assignment { .. } | expr::NumiLineKind::Expression
+            )
+        {
+            self.hints.reset();
+            return;
+        }
+        // Контекст ноды: переменные выше, value-входы, параметры шаблона
+        let vars: Vec<String> = full_text
+            .split('\n')
+            .take(line_i)
+            .filter_map(|line| match expr::line_kind(line) {
+                expr::NumiLineKind::Assignment { name } => Some(name),
+                _ => None,
+            })
+            .collect();
+        let ctx = hints_ui::HintContext {
+            vars,
+            inbound: self
+                .scene
+                .canvas
+                .edges
+                .iter()
+                .filter(|edge| {
+                    edge.to_node
+                        == self
+                            .scene
+                            .canvas
+                            .nodes
+                            .get(session.node_index().unwrap_or(usize::MAX))
+                            .map(|node| node.id.clone())
+                            .unwrap_or_default()
+                        && edge.flow_kind() == FlowKind::Value
+                })
+                .count(),
+            params: self
+                .scene
+                .canvas
+                .nodes
+                .get(session.node_index().unwrap_or(usize::MAX))
+                .and_then(|node| node.template())
+                .map(|template| template.params.keys().cloned().collect())
+                .unwrap_or_default(),
+        };
+        let items = hints_ui::hint_items(prefix, &ctx);
+        let token = hints_ui::token_before_caret(prefix, prefix.len()).0;
+        self.hints.sync(token, items);
+        // Якорь — низ каретки (screen logical px): world-область тела ноды
+        // + позиция каретки в буфере (физ. px)
+        if self.hints.open {
+            let caret_rect = if let (Some(session), Some(renderer)) =
+                (self.editing.as_mut(), self.renderer.as_mut())
+            {
+                session.caret_rect(renderer.font_system_mut())
+            } else {
+                None
+            };
+            if let (Some(session), Some(rect)) = (self.editing.as_ref(), caret_rect) {
+                if let Some((origin, _, _)) =
+                    session_area(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
+                {
+                    let screen = self.camera.world_to_screen(origin, self.viewport_logical());
+                    let scale = self.scale_factor();
+                    self.hints.anchor = [
+                        screen[0] + rect[0] / scale,
+                        screen[1] + (rect[1] + rect[3]) / scale,
+                    ];
+                }
+            }
+        }
+    }
+
+    /// FR-021: принять выбранную подсказку — заменить токен слева от
+    /// каретки текстом вставки. НЕ коммитит заметку; после вставки
+    /// пересчитать высоту и список подсказок.
+    fn accept_hint(&mut self) {
+        let Some(item) = self.hints.selected_item().cloned() else {
+            return;
+        };
+        let token = self.hints.token.clone();
+        let applied = if let (Some(session), Some(renderer)) =
+            (self.editing.as_mut(), self.renderer.as_mut())
+        {
+            session.replace_token_before_caret(renderer.font_system_mut(), &token, &item.insert);
+            true
+        } else {
+            false
+        };
+        if applied {
+            self.fit_note_size();
+            self.update_hints();
+            self.request_redraw();
+        }
+    }
+
+    /// FR-021: оверлей popup подсказок — подложка + строки
+    /// (имя + серая деталь), выделение акцентом. Паттерн wheel_overlay.
+    fn hints_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        if !self.hints.open || self.hints.items.is_empty() {
+            return (instances, texts);
+        }
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let viewport = self.viewport_logical();
+        let [px, py, pw, ph] =
+            hints_ui::popup_layout(self.hints.anchor, viewport, self.hints.items.len());
+        if pw <= 0.0 {
+            return (instances, texts);
+        }
+        instances.push(CardInstance {
+            pos: [px, py],
+            size: [pw, ph],
+            fill: palette.menu_fill,
+            border: [0.22, 0.24, 0.30, 0.95],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        for (i, item) in self.hints.items.iter().enumerate() {
+            let row_y = py + hints_ui::HINT_MARGIN + i as f32 * hints_ui::HINT_ROW_H;
+            if i == self.hints.selected {
+                instances.push(CardInstance {
+                    pos: [px + 4.0, row_y],
+                    size: [pw - 8.0, hints_ui::HINT_ROW_H],
+                    fill: [0.18, 0.29, 0.48, 0.95],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
+            texts.push(OwnedScreenText {
+                text: item.label.clone(),
+                origin: [px + 10.0, row_y + 4.0],
+                width: 118.0,
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: item.detail.clone(),
+                origin: [px + 134.0, row_y + 6.0],
+                width: (pw - 142.0).max(20.0),
+                font_size: 10.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        }
+        (instances, texts)
     }
 
     /// Клавиатура открытой палитры шаблонов (Ctrl+P): ввод фильтра,
@@ -5178,6 +5361,34 @@ impl App {
             }
             let ctrl = self.modifiers.control_key();
             let shift = self.modifiers.shift_key();
+            // FR-021: при открытом popup подсказок навигация/выбор
+            // перехватываются ДО команд редактора: Enter/Tab принимают
+            // подсказку (НЕ коммитят заметку), Esc закрывает только popup
+            // (повторный Esc — откат правки, прежнее поведение)
+            if self.hints.open {
+                match &event.logical_key {
+                    Key::Named(NamedKey::ArrowDown) if !event.repeat => {
+                        self.hints.move_selection(1);
+                        self.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowUp) if !event.repeat => {
+                        self.hints.move_selection(-1);
+                        self.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) if !event.repeat => {
+                        self.accept_hint();
+                        return;
+                    }
+                    Key::Named(NamedKey::Escape) if !event.repeat => {
+                        self.hints.reset();
+                        self.request_redraw();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             let Some(command) = map_key(&event.logical_key, ctrl, shift) else {
                 return;
             };
@@ -5213,6 +5424,7 @@ impl App {
                     };
                     if pasted {
                         self.fit_note_size();
+                        self.update_hints();
                         self.request_redraw();
                     }
                 }
@@ -5229,6 +5441,8 @@ impl App {
                         // Текст мог вырасти (wrap/новые строки) — подгоняем
                         // высоту заметки под контент прямо во время набора
                         self.fit_note_size();
+                        // FR-021: popup подсказок — следом за правкой текста
+                        self.update_hints();
                         self.request_redraw();
                     }
                 }
@@ -8060,6 +8274,12 @@ impl ApplicationHandler<AppEvent> for App {
                     let (wheel_instances, wheel_texts) = self.wheel_overlay();
                     screen_instances.extend(wheel_instances);
                     owned_texts.extend(wheel_texts);
+                }
+                // FR-021: popup подсказок Numi-ввода — поверх редактора
+                {
+                    let (hint_instances, hint_texts) = self.hints_overlay();
+                    screen_instances.extend(hint_instances);
+                    owned_texts.extend(hint_texts);
                 }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме

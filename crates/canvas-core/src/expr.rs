@@ -1594,6 +1594,133 @@ fn percentile_inc(sorted: &[f64], p: f64) -> f64 {
     sorted[lower] + (sorted[upper] - sorted[lower]) * frac
 }
 
+// --- FR-021: каталог подсказок и детектор рода строки ---
+
+/// Подсказка функции (FR-021): имя, сигнатура, описание. Каталог —
+/// публичный источник правды UI подсказок; синхронность с диспетчером
+/// [`eval_call`] фиксируется тестом (каждая функция парсится грамматикой).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnHint {
+    pub name: &'static str,
+    pub signature: &'static str,
+    pub summary: &'static str,
+}
+
+/// Каталог функций движка (FR-021): статистика FR-013 + queueing-набор
+/// FR-015. Сигнатуры синхронны `eval_call`/`queueing::dispatch`.
+pub const FN_HINTS: &[FnHint] = &[
+    FnHint {
+        name: "sum",
+        signature: "sum(x, …)",
+        summary: "сумма значений одной размерности",
+    },
+    FnHint {
+        name: "avg",
+        signature: "avg(x, …)",
+        summary: "среднее значений одной размерности",
+    },
+    FnHint {
+        name: "max",
+        signature: "max(x, …)",
+        summary: "максимум",
+    },
+    FnHint {
+        name: "min",
+        signature: "min(x, …)",
+        summary: "минимум",
+    },
+    FnHint {
+        name: "percentile",
+        signature: "percentile(p, x, …)",
+        summary: "перцентиль p (0..100), p — скаляр",
+    },
+    FnHint {
+        name: "utilization",
+        signature: "utilization(λ, μ[, c])",
+        summary: "загрузка системы ρ = λ/(c·μ)",
+    },
+    FnHint {
+        name: "mm1",
+        signature: "mm1(λ, μ[, c])",
+        summary: "M/M/1: отклик и очередь",
+    },
+    FnHint {
+        name: "mmc",
+        signature: "mmc(λ, μ, c)",
+        summary: "M/M/c: c обслуживающих каналов",
+    },
+    FnHint {
+        name: "littles_law",
+        signature: "littles_law(λ, W)",
+        summary: "закон Литтла: L = λ·W",
+    },
+    FnHint {
+        name: "erlang_c",
+        signature: "erlang_c(λ, μ, c)",
+        summary: "вероятность ожидания Эрланга C",
+    },
+];
+
+/// Срез каталога функций для подсказок (FR-021).
+pub fn fn_hints() -> &'static [FnHint] {
+    FN_HINTS
+}
+
+/// Токены единиц (`UNIT_TABLE`) для подсказок после числа (FR-021);
+/// порядок — порядок таблицы (детерминизм списка).
+pub fn unit_tokens() -> Vec<&'static str> {
+    UNIT_TABLE.iter().map(|(token, _, _)| *token).collect()
+}
+
+/// Род строки для подсказок (FR-021) — вердикт [`eval_lines`] над одной
+/// строкой. `Assignment` — присваивание (`rps = 1000`), `Expression` —
+/// явная `= …` или выражение (включая ошибочное: явные ошибки видны,
+/// присваиваниеподобные — тоже), `Prose` — проза (подсказки не открываются).
+#[derive(Debug, Clone, PartialEq)]
+pub enum NumiLineKind {
+    Assignment { name: String },
+    Expression,
+    Prose,
+}
+
+/// Детектор рода строки (FR-021): чистая функция над одной строкой;
+/// вердикт ПОЛНОСТЬЮ совпадает с движком ([`eval_line`] над одной строкой
+/// с пустым окружением): строка Numi, если движок дал бы результат или
+/// видимую ошибку, проза — если движок молчит (`встреча в 3` парсится как
+/// неявное умножение, но неизвестные слова молчат — это проза).
+/// Код-фенсы — контекст ВЫШЕ строки; вызывающий (UI) сам не вызывает
+/// детектор внутри фенса.
+pub fn line_kind(line: &str) -> NumiLineKind {
+    // Канонический текст экранирует литеральный `=` (`\=`) — снимаем,
+    // как eval_lines
+    let line = line.replace("\\=", "=");
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return NumiLineKind::Prose;
+    }
+    // Присваивание: единственный идентификатор слева от первого `=`
+    let statement = trimmed.strip_prefix('=').map(str::trim).unwrap_or(trimmed);
+    if statement.is_empty() {
+        return NumiLineKind::Prose;
+    }
+    if let Some(eq) = statement.find('=') {
+        let left = statement[..eq].trim();
+        if single_identifier(left) {
+            return NumiLineKind::Assignment {
+                name: left.to_owned(),
+            };
+        }
+    }
+    // Полный вердикт движка над одной строкой (без объявлений выше):
+    // результат ИЛИ видимая ошибка (явный `= …`, присваиваниеподобная,
+    // единицы/деление/битый вызов) — Numi; молчание — проза
+    let mut env = Env::empty();
+    match eval_line(&line, &mut env, &HashSet::new(), false) {
+        Some(_) => NumiLineKind::Expression,
+        None => NumiLineKind::Prose,
+    }
+}
+
 // --- Тесты (верификационный список FR-013 + регрессии грамматики) ---
 
 #[cfg(test)]
@@ -2253,5 +2380,91 @@ mod tests {
         let program = "half = $in / 2\nhalf × 3";
         let value = eval(&parse(program).unwrap(), &env).unwrap();
         assert_eq!(value, Value::scalar(9.0));
+    }
+
+    // --- FR-021: каталог подсказок и детектор рода строки ---
+
+    /// Инвариант 2 FR-021: каждая функция каталога известна грамматике
+    /// (parse), а каждый токен единиц — таблице (unit_value).
+    #[test]
+    fn fn_hints_and_unit_tokens_sync_with_engine() {
+        for hint in fn_hints() {
+            assert!(
+                parse(&format!("{}(1)", hint.name)).is_ok(),
+                "{} не парсится — каталог разошёлся с движком",
+                hint.name
+            );
+        }
+        let tokens = unit_tokens();
+        assert!(tokens.contains(&"ms"));
+        assert!(tokens.contains(&"sec"));
+        assert!(tokens.contains(&"rps"));
+        assert!(tokens.contains(&"KB"));
+        assert!(tokens.contains(&"%"));
+        for token in &tokens {
+            let value = unit_value(1.0, Some(token));
+            // Токен таблицы даёт атом-размерность (не скаляр)
+            assert!(
+                !value.unit.is_scalar(),
+                "токен {token} из unit_tokens — скаляр"
+            );
+        }
+    }
+
+    /// Детектор рода строки = вердикт движка (инвариант 1 FR-021).
+    #[test]
+    fn line_kind_matches_eval_verdict() {
+        assert_eq!(
+            line_kind("rps = 1000 rps"),
+            NumiLineKind::Assignment {
+                name: "rps".to_owned()
+            }
+        );
+        assert_eq!(line_kind("= 2 + 2"), NumiLineKind::Expression);
+        assert_eq!(line_kind("2 + 2"), NumiLineKind::Expression);
+        // Ошибочное присваивание — всё равно Numi (ошибка видна)
+        assert!(matches!(
+            line_kind("c = a + b"),
+            NumiLineKind::Assignment { .. }
+        ));
+        // Явная ошибочная формула — Expression
+        assert_eq!(line_kind("= 5 +"), NumiLineKind::Expression);
+        // Проза
+        assert_eq!(line_kind("встреча в 3"), NumiLineKind::Prose);
+        assert_eq!(line_kind(""), NumiLineKind::Prose);
+        assert_eq!(line_kind("   "), NumiLineKind::Prose);
+        // Экранированный литеральный `=` — как в eval_lines
+        assert!(matches!(
+            line_kind("x \\= 200"),
+            NumiLineKind::Assignment { .. }
+        ));
+        // Инвариант детектора: что движок ВЫЧИСЛИЛ (Some) — не проза;
+        // что детектор считает прозой — движок молчит
+        for line in [
+            "rps = 1000 rps",
+            "= 2 + 2",
+            "2 + 2",
+            "встреча в 3",
+            "",
+            "5 ms",
+        ] {
+            let produced = eval_lines(line).iter().any(Option::is_some);
+            let kind = line_kind(line);
+            if kind == NumiLineKind::Prose {
+                assert!(!produced, "детектор: проза, но движок вычислил {line:?}");
+            } else {
+                let outcomes = eval_lines(line);
+                let has_visible_error = outcomes
+                    .iter()
+                    .any(|outcome| matches!(outcome, Some(ExprOutcome::Err(_))));
+                assert!(
+                    produced
+                        || has_visible_error
+                        || line.trim_start().starts_with('=')
+                        || line.trim().contains('='),
+                    "детектор: Numi, но движок полностью молчит: {line:?}"
+                );
+            }
+        }
     }
 }

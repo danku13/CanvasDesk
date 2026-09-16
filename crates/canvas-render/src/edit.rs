@@ -736,6 +736,41 @@ impl EditingSession {
         })
     }
 
+    /// FR-021: контекст каретки для подсказок — `(индекс строки, текст
+    /// строки, байтовая позиция каретки в строке)`. Источник — буфер
+    /// редактора (plain-текст без markdown-маркеров — совпадает с
+    /// видимым текстом Numi-строк).
+    pub fn caret_line(&self) -> (usize, String, usize) {
+        let line_i = self.cursor.line;
+        let text = self
+            .buffer
+            .lines
+            .get(line_i)
+            .map(|line| line.text().to_owned())
+            .unwrap_or_default();
+        (line_i, text, self.cursor.index)
+    }
+
+    /// FR-021: заменить токен слева от каретки — удалить `token` (по
+    /// числу символов, Backspace-семантикой) и вставить `text`
+    /// (подсказка замещает набираемый токен целиком). Выделение
+    /// сбрасывается — принятие подсказки не должно сносить выделение.
+    pub fn replace_token_before_caret(
+        &mut self,
+        font_system: &mut FontSystem,
+        token: &str,
+        text: &str,
+    ) {
+        let chars = token.chars().count();
+        self.with_editor(|editor| {
+            editor.set_selection(Selection::None);
+            for _ in 0..chars {
+                editor.action(font_system, Action::Backspace);
+            }
+        });
+        self.insert_and_sync(font_system, text);
+    }
+
     /// Прямоугольники выделения по строкам в координатах буфера.
     pub fn selection_rects(&mut self, font_system: &mut FontSystem) -> Vec<[f32; 4]> {
         self.buffer.shape_until_scroll(font_system, false);
