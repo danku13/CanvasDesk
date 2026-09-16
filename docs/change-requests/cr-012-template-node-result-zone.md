@@ -12,7 +12,8 @@
   (Numi-формулы, построчные результаты), CR-010 (авто-высота с учётом переносов
   — предшественник; исправление оценки рядов), FR-018 (шаблонные ноды)
 - **Создан:** 2026-09-16
-- **Обновлён:** 2026-09-16 (создан, анализ, реализация)
+- **Обновлён:** 2026-09-16 (создан, анализ, реализация; правка 2 — измерение
+  реальным шейпингом вместо оценки)
 
 ---
 
@@ -100,6 +101,34 @@
 
 ## История изменений (Changelog)
 
+- `2026-09-16` — агент (правка 2): высота под резерв футера считается
+  **реальным шейпингом**, а не оценкой среднего аванса — оценка принципиально
+  хрупка (любое расхождение метрик шрифта возвращает дефект), измерение
+  устраняет класс ошибок. `text.rs`: общий ленивый FontSystem из тех же 4
+  встроенных Noto-шрифтов (`MEASURE_FS`, метрики идентичны рендеру) и
+  `pub fn measure_body_height(text, body_width, formula_lines)` — зеркало
+  `shape_body` при zoom=1.0; общая часть стека блоков вынесена в
+  `with_body_stack` (колбэки на блок/линию) — измерение и рендер делят один
+  код стека и не могут разъехаться. `main.rs`: двухуровневый growth-only
+  refit — дешёвая оценка (`estimated_result_reserve_height`, прежняя
+  `wrapped_body_rows`-метрика) ворота; при заниженности — точная высота
+  `measured_result_reserve_height`, рост ровно до измеренного needed, **без
+  фантомного ряда**. `formula_lines` берутся из тех же источников, что у
+  рендера: `SceneState::ensure_reserve_at` — из `expr_line_results`,
+  `fit_template_node_height` — из `expr::eval_lines`, `fit_note_size` —
+  из живых построчных исходов текста сессии (у шаблонной ноды — все
+  строки-формулы листа); `fit_note_size` рост по измеренной высоте тела
+  вместо `content_size_px` буфера редактора (тот шейпил текст без
+  GFM/mono-разбивки и занижал переносы Numi-строк). Инвариант: высота ноды
+  с футером — ровно по измеренному стеку тела (включая зазоры абзацев и
+  12 px линий `---`), повторные загрузки не растят дальше (нет осцилляций).
+  Тесты: `measure_body_height_*` (text.rs: точный Numi-лист, mono-перенос
+  на 2 ряда, sans/mono-метрики, линия `---`, анти-дрейф против `shape_body`),
+  `recompute_result_reserve_matches_measured_height` (ровно измеренная
+  высота, идемпотентность повторной загрузки), актуализированы
+  `ensure_result_reserve_grows_only`, `fit_template_height_covers_wrapped_lines`,
+  `recompute_grows_result_reserve_for_footer_nodes`; оценочные
+  `wrapped_body_rows_*` сохранены (оценка остаётся воротами).
 - `2026-09-16` — агент: реализовано, статус `выполнено`. `wrapped_body_rows` —
   mono-метрика через `expr::line_kind` (`MONO_AVG_CHAR_W = 0.614 ·
   BODY_FONT_SIZE`); `ensure_result_reserve`/`needed_result_reserve_height`
@@ -117,12 +146,16 @@
 ## Источники истины (References)
 
 - `crates/canvas-app/src/main.rs` — `wrapped_body_rows`, `MONO_AVG_CHAR_W`,
-  `needed_result_reserve_height`, `ensure_result_reserve`,
-  `fit_template_node_height`, `SceneState::{node_shows_result_footer,
-  ensure_reserve_at, apply_result_reserve}`, `recompute_flow`.
-- `crates/canvas-render/src/text.rs` — mono-флаг `source_line` (530-532),
-  правило показа футера (1264-1276), позиционирование футера (1929-1954),
-  клип тела под футер (1776-1787), `BODY_FONT_SIZE` (87).
+  `estimated_result_reserve_height` / `measured_result_reserve_height` /
+  `formula_line_indices`, `ensure_result_reserve` (двухуровневый),
+  `fit_template_node_height`, `fit_note_size` (рост по измерению),
+  `SceneState::{node_shows_result_footer, ensure_reserve_at,
+  apply_result_reserve}`, `recompute_flow`.
+- `crates/canvas-render/src/text.rs` — `measure_body_height` (измерение,
+  правка 2), `with_body_stack` (общий стек рендера и измерения),
+  mono-флаг `source_line` (530-532), правило показа футера (1264-1276),
+  позиционирование футера (1929-1954), клип тела под футер (1776-1787),
+  `BODY_FONT_SIZE` (87).
 - `crates/canvas-core/src/expr.rs` — `line_kind`/`NumiLineKind` (1693+).
 - `docs/change-requests/cr-010-template-node-title-layout.md` — предшественник
   (пропорциональная оценка переносов из CR-010 недооценивала mono-строки).

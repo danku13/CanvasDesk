@@ -12,6 +12,7 @@
 //! Позиция передаётся в TextArea покадрово, поэтому панорамирование кэш не ломает.
 
 use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use canvas_core::{Canvas, Node, NodeKind};
 use glyphon::{
@@ -695,36 +696,43 @@ fn shape_text_block(
     (buffer, height_px, quads)
 }
 
-/// Зашейпить тело заметки: GFM-блоки → вертикальный стек буферов со своими
-/// метриками/цветами + декоративные квады (в px виртуального буфера тела).
-/// `body_width` — world-px, `zoom_px` — физический зум. GPU не нужен —
-/// функция тестируема с настоящим FontSystem.
-fn shape_body(
+/// Общая геометрия вертикального стека тела (CR-012, правка 2): единый
+/// проход `gap → shape → cursor_y += height`, который делят рендер
+/// (`shape_body`) и измерение (`measure_body_height`) — метрики стека
+/// определены в одном месте, измерение и рендер не могут разъехаться.
+/// `on_block` получает элемент, зашейпленный буфер, высоту в px буфера,
+/// высоту в world-px, ширину области блока (world-px), Y верха блока
+/// (world-px, после зазора) и блок-квады для раскладки; `on_rule` — Y верха
+/// линии `---` (world-px, после зазора, до прибавки 12). Декоративные квады
+/// оба колбэка складывают в `quads_out`. Возвращает полную высоту стека
+/// в world-px.
+#[allow(clippy::too_many_arguments)]
+fn with_body_stack(
     font_system: &mut FontSystem,
     theme: &ThemeColors,
     body_text: &str,
     body_width: f32,
     zoom_px: f32,
     formula_lines: &[usize],
-) -> BodyLayout {
-    let mut layout = BodyLayout {
-        blocks: Vec::new(),
-        quads: Vec::new(),
-    };
+    quads_out: &mut Vec<BodyQuad>,
+    mut on_block: impl FnMut(
+        &BodyItem,
+        Buffer,
+        f32,
+        f32,
+        f32,
+        f32,
+        Vec<([f32; 4], BodyQuadKind)>,
+        &mut Vec<BodyQuad>,
+    ),
+    mut on_rule: impl FnMut(f32, &mut Vec<BodyQuad>),
+) -> f32 {
     let mut cursor_y = 0.0f32; // world-px, верх текущего элемента
     for item in body_items(theme, body_text, formula_lines) {
         cursor_y += item.gap;
         if item.rule {
             // Линия: высота блока 12, квад толщиной 2 по центру
-            layout.quads.push(BodyQuad {
-                rect: [
-                    0.0,
-                    (cursor_y + 5.0) * zoom_px,
-                    body_width * zoom_px,
-                    2.0 * zoom_px,
-                ],
-                kind: BodyQuadKind::Rule,
-            });
+            on_rule(cursor_y, quads_out);
             cursor_y += 12.0;
             continue;
         }
@@ -751,85 +759,177 @@ fn shape_body(
             base,
         );
         let height = height_px / zoom_px;
-        // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
-        // x задаётся в px виртуального буфера ТЕЛА (0..16), без смещения
-        // блока по x; y — на первой строке блока (block-local + offset блока)
-        let first = buffer.layout_runs().next();
-        let oy = cursor_y * zoom_px;
-        match item.deco {
-            ItemDeco::Bullet => {
-                let line_top = first.as_ref().map_or(0.0, |run| run.line_top);
-                let line_h = first
-                    .as_ref()
-                    .map_or(item.line_height * zoom_px, |run| run.line_height);
-                let z = zoom_px;
-                layout.quads.push(BodyQuad {
-                    rect: [
-                        4.0 * z,
-                        line_top + line_h / 2.0 - 2.5 * z + oy,
-                        5.0 * z,
-                        5.0 * z,
-                    ],
-                    kind: BodyQuadKind::Bullet,
-                });
-            }
-            ItemDeco::Checkbox(checked) => {
-                let line_top = first.as_ref().map_or(0.0, |run| run.line_top);
-                let z = zoom_px;
-                let y = line_top + 2.0 * z + oy;
-                layout.quads.push(BodyQuad {
-                    rect: [0.0, y, 11.0 * z, 11.0 * z],
-                    kind: BodyQuadKind::CheckboxBox,
-                });
-                if checked {
-                    // Галочка: квады без вращения, аппроксимация двумя
-                    // перпендикулярными тонкими полосками (v1)
-                    let y0 = line_top + 2.0 * z + oy;
-                    layout.quads.push(BodyQuad {
-                        rect: [2.2 * z, y0 + 6.0 * z, 3.4 * z, 1.6 * z],
-                        kind: BodyQuadKind::CheckboxTick,
-                    });
-                    layout.quads.push(BodyQuad {
-                        rect: [4.6 * z, y0 + 3.0 * z, 1.6 * z, 4.4 * z],
-                        kind: BodyQuadKind::CheckboxTick,
+        on_block(
+            &item,
+            buffer,
+            height_px,
+            height,
+            block_width,
+            cursor_y,
+            quads,
+            quads_out,
+        );
+        cursor_y += height;
+    }
+    cursor_y
+}
+
+/// Зашейпить тело заметки: GFM-блоки → вертикальный стек буферов со своими
+/// метриками/цветами + декоративные квады (в px виртуального буфера тела).
+/// `body_width` — world-px, `zoom_px` — физический зум. GPU не нужен —
+/// функция тестируема с настоящим FontSystem. Стек блоков — общий
+/// [`with_body_stack`] (с измерением не разъезжается).
+fn shape_body(
+    font_system: &mut FontSystem,
+    theme: &ThemeColors,
+    body_text: &str,
+    body_width: f32,
+    zoom_px: f32,
+    formula_lines: &[usize],
+) -> BodyLayout {
+    let mut blocks: Vec<BodyBlock> = Vec::new();
+    let mut quads: Vec<BodyQuad> = Vec::new();
+    with_body_stack(
+        font_system,
+        theme,
+        body_text,
+        body_width,
+        zoom_px,
+        formula_lines,
+        &mut quads,
+        |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
+            // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
+            // x задаётся в px виртуального буфера ТЕЛА (0..16), без смещения
+            // блока по x; y — на первой строке блока (block-local + offset блока)
+            let first = buffer.layout_runs().next();
+            let oy = cursor_y * zoom_px;
+            match item.deco {
+                ItemDeco::Bullet => {
+                    let line_top = first.as_ref().map_or(0.0, |run| run.line_top);
+                    let line_h = first
+                        .as_ref()
+                        .map_or(item.line_height * zoom_px, |run| run.line_height);
+                    let z = zoom_px;
+                    quads.push(BodyQuad {
+                        rect: [
+                            4.0 * z,
+                            line_top + line_h / 2.0 - 2.5 * z + oy,
+                            5.0 * z,
+                            5.0 * z,
+                        ],
+                        kind: BodyQuadKind::Bullet,
                     });
                 }
+                ItemDeco::Checkbox(checked) => {
+                    let line_top = first.as_ref().map_or(0.0, |run| run.line_top);
+                    let z = zoom_px;
+                    let y = line_top + 2.0 * z + oy;
+                    quads.push(BodyQuad {
+                        rect: [0.0, y, 11.0 * z, 11.0 * z],
+                        kind: BodyQuadKind::CheckboxBox,
+                    });
+                    if checked {
+                        // Галочка: квады без вращения, аппроксимация двумя
+                        // перпендикулярными тонкими полосками (v1)
+                        let y0 = line_top + 2.0 * z + oy;
+                        quads.push(BodyQuad {
+                            rect: [2.2 * z, y0 + 6.0 * z, 3.4 * z, 1.6 * z],
+                            kind: BodyQuadKind::CheckboxTick,
+                        });
+                        quads.push(BodyQuad {
+                            rect: [4.6 * z, y0 + 3.0 * z, 1.6 * z, 4.4 * z],
+                            kind: BodyQuadKind::CheckboxTick,
+                        });
+                    }
+                }
+                ItemDeco::None => {}
             }
-            ItemDeco::None => {}
-        }
-        // Квады строк блока (подсветка/зачёркивание) → px виртуального буфера
-        // тела: block-local px + offset блока по обеим осям
-        let ox = item.indent * zoom_px;
-        layout
-            .quads
-            .extend(quads.into_iter().map(|(rect, kind)| BodyQuad {
+            // Квады строк блока (подсветка/зачёркивание) → px виртуального буфера
+            // тела: block-local px + offset блока по обеим осям
+            let ox = item.indent * zoom_px;
+            quads.extend(block_quads.into_iter().map(|(rect, kind)| BodyQuad {
                 rect: [rect[0] + ox, rect[1] + oy, rect[2], rect[3]],
                 kind,
             }));
-        // Бар цитаты / фон фенса — на всю высоту блока
-        if item.color == theme.quote {
-            layout.quads.push(BodyQuad {
-                rect: [0.0, oy, 3.0 * zoom_px, height_px],
-                kind: BodyQuadKind::QuoteBar,
+            // Бар цитаты / фон фенса — на всю высоту блока
+            if item.color == theme.quote {
+                quads.push(BodyQuad {
+                    rect: [0.0, oy, 3.0 * zoom_px, height_px],
+                    kind: BodyQuadKind::QuoteBar,
+                });
+            }
+            if item.mono {
+                quads.push(BodyQuad {
+                    rect: [0.0, oy, body_width * zoom_px, height_px],
+                    kind: BodyQuadKind::CodeBg,
+                });
+            }
+            blocks.push(BodyBlock {
+                buffer,
+                offset: [item.indent, cursor_y],
+                width: block_width,
+                height,
+                color: item.color,
+                source_line: item.source_line,
             });
-        }
-        if item.mono {
-            layout.quads.push(BodyQuad {
-                rect: [0.0, oy, body_width * zoom_px, height_px],
-                kind: BodyQuadKind::CodeBg,
+        },
+        |cursor_y, quads| {
+            quads.push(BodyQuad {
+                rect: [
+                    0.0,
+                    (cursor_y + 5.0) * zoom_px,
+                    body_width * zoom_px,
+                    2.0 * zoom_px,
+                ],
+                kind: BodyQuadKind::Rule,
             });
+        },
+    );
+    BodyLayout { blocks, quads }
+}
+
+/// CR-012 (правка 2): общий ленивый FontSystem для измерения высоты тела —
+/// те же 4 встроенных Noto-шрифта, что грузит `TextSystem::new`
+/// (метрики измерения идентичны рендеру).
+static MEASURE_FS: OnceLock<Mutex<FontSystem>> = OnceLock::new();
+
+/// Достать общий FontSystem измерения. Отравленный мьютекс восстанавливаем
+/// через `into_inner`: отравление возможно только при панике внутри
+/// шейпинга, FontSystem после неё консистентен (layout-кэш пересчитывается
+/// заново), поэтому измерение не падает, а продолжает работать.
+fn measure_font_system() -> MutexGuard<'static, FontSystem> {
+    let mutex = MEASURE_FS.get_or_init(|| {
+        let mut font_system = FontSystem::new();
+        for data in FONT_DATA {
+            font_system.db_mut().load_font_data((*data).to_vec());
         }
-        layout.blocks.push(BodyBlock {
-            buffer,
-            offset: [item.indent, cursor_y],
-            width: block_width,
-            height,
-            color: item.color,
-            source_line: item.source_line,
-        });
-        cursor_y += height;
-    }
-    layout
+        Mutex::new(font_system)
+    });
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// CR-012 (правка 2): точная высота тела заметки по реальному шейпингу —
+/// тот же пайплайн, что и рендер ([`with_body_stack`], zoom=1.0; цвета темы
+/// на метрики не влияют, берётся `ThemeColors::dark()`). Зеркало `shape_body`:
+/// сумма высот и зазоров GFM-блоков, включая 12 px линий `---`. GPU не нужен.
+/// `formula_lines` — те же индексы строк с результатом, что получает рендер
+/// из `expr_line_results` (по ним `body_items` ставит mono-флаг).
+pub fn measure_body_height(text: &str, body_width: f32, formula_lines: &[usize]) -> f32 {
+    let mut guard = measure_font_system();
+    with_body_stack(
+        &mut guard,
+        &ThemeColors::dark(),
+        text,
+        body_width.max(0.0),
+        1.0,
+        formula_lines,
+        // Измерению квады и буферы не нужны — нужна только высота стека.
+        &mut Vec::new(),
+        |_, _, _, _, _, _, _, _| {},
+        |_, _| {},
+    )
 }
 
 /// Ключ свежести кэша текста ноды: зум, ширина заголовка, заголовок, тело
@@ -2925,6 +3025,93 @@ mod tests {
         let text = line.text;
         assert!(text.contains("документацию"), "label в строке: {text}");
         assert!(!text.contains("example.com"), "URL не показываем: {text}");
+    }
+
+    // --- CR-012 (правка 2): measure_body_height — точное измерение тела ---
+
+    /// Скриншотный Numi-лист из CR-012: три формульные строки при ширине
+    /// тела 280 — каждая строка свой mono-блок (BODY_LINE_HEIGHT), между
+    /// абзацами зазор 6 (body_gap). Измерение — зеркало shape_body при
+    /// zoom=1.0: ровно 3·BODY_LINE_HEIGHT + 2·6.
+    #[test]
+    fn measure_body_height_numi_list_exact() {
+        let text = "rps = 200 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min";
+        let height = measure_body_height(text, 280.0, &[0, 1, 2]);
+        assert_eq!(
+            height,
+            3.0 * BODY_LINE_HEIGHT + 2.0 * 6.0,
+            "три mono-блока по {BODY_LINE_HEIGHT} с зазорами 6 между абзацами"
+        );
+    }
+
+    /// Длинное mono-значение (~32 символа при ширине тела 240) переносится
+    /// на 2 визуальных ряда — измеренная высота ровно 2·BODY_LINE_HEIGHT
+    /// (один блок, внутренних зазоров нет). Оценка той же строки
+    /// (`wrapped_body_rows`, canvas-app) согласована: тоже 2 ряда.
+    #[test]
+    fn measure_body_height_mono_wraps_to_two_rows() {
+        let line = format!("{} = 5", "a".repeat(28)); // 32 символа
+        let height = measure_body_height(&line, 240.0, &[0]);
+        assert_eq!(
+            height,
+            2.0 * BODY_LINE_HEIGHT,
+            "mono-строка из 32 символов при ширине 240 — ровно 2 ряда"
+        );
+    }
+
+    /// Проза без formula_lines шейпится sans-метрикой (Noto Sans Display):
+    /// строка из 30 «a» при ширине 240 — один ряд (≈7 px/символ), а с
+    /// mono-флагом (formula_lines=[0]) — два (≈8.6 px/символ). Регресс
+    /// CR-012: рендер ставит mono-флаг по formula_lines.
+    #[test]
+    fn measure_body_height_prose_uses_sans_metrics() {
+        let line = "a".repeat(30); // 30 символов — между двумя метриками
+        let sans_height = measure_body_height(&line, 240.0, &[]);
+        let mono_height = measure_body_height(&line, 240.0, &[0]);
+        assert_eq!(
+            sans_height, BODY_LINE_HEIGHT,
+            "sans: 30 символов при ширине 240 — один ряд"
+        );
+        assert_eq!(
+            mono_height,
+            2.0 * BODY_LINE_HEIGHT,
+            "mono: тот же текст — два ряда"
+        );
+    }
+
+    /// Линия `---` — 12 px по тому же стеку: измерение её учитывает
+    /// (зазоры вокруг линии — по 8, как у рендера).
+    #[test]
+    fn measure_body_height_counts_rule() {
+        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[]);
+        assert_eq!(
+            height,
+            BODY_LINE_HEIGHT + 8.0 + 12.0 + 8.0 + BODY_LINE_HEIGHT,
+            "абзац + зазор 8 + линия 12 + зазор 8 + абзац"
+        );
+    }
+
+    /// Анти-дрейф: измерение и рендер делят один код стека (`with_body_stack`)
+    /// — суммарная высота shape_body при zoom=1.0 (offset последнего блока +
+    /// его высота, зазоры уже в offset) совпадает с измерением побайтово.
+    #[test]
+    fn measure_body_height_matches_shape_body_stack() {
+        let text = "# Заголовок\nпроза строка\ndeploy = 40 $";
+        let mut fs = FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[2]);
+        let rendered = layout
+            .blocks
+            .iter()
+            .map(|block| block.offset[1] + block.height)
+            .fold(0.0f32, f32::max);
+        let measured = measure_body_height(text, 300.0, &[2]);
+        assert_eq!(
+            measured, rendered,
+            "измерение = рендер-стек: measured {measured}, rendered {rendered}"
+        );
     }
 
     /// Стек при зуме 2: квады в px виртуального буфера масштабируются.

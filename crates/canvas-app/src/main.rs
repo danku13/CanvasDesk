@@ -56,8 +56,8 @@ use canvas_render::search_ui::{
 };
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_FONT_SIZE, BODY_LINE_HEIGHT,
-    BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign,
+    BODY_FONT_SIZE, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
@@ -305,12 +305,13 @@ fn wrapped_body_rows(text: &str, body_width: f32) -> usize {
 /// вместе с ним. Завышение здесь безопасно: высота только РАСТЁТ.
 const MONO_AVG_CHAR_W: f32 = 0.614 * BODY_FONT_SIZE;
 
-/// CR-012: требуемая высота ноды с учётом резерва футера результата —
-/// та же формула, что и [`fit_template_node_height`] (шапка + тело с
-/// переносами + паддинг + резерв футера).
-fn needed_result_reserve_height(node: &Node) -> f32 {
-    let text = node.text.as_deref().unwrap_or("");
-    let body_width = (node.width - BODY_PADDING * 2.0).max(BODY_PADDING);
+/// CR-012: оценочная требуемая высота ноды с учётом резерва футера
+/// результата (шапка + тело с переносами + паддинг + резерв футера) —
+/// дешевая метрика среднего аванса символа. Оценка только РАСТИТ высоту
+/// (завышение безопасно), поэтому годится воротами двухуровневого refit:
+/// если оценка влезает в текущую высоту, точное измерение не нужно.
+fn estimated_result_reserve_height(text: &str, node_width: f32) -> f32 {
+    let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     let rows = wrapped_body_rows(text, body_width);
     HEADER_HEIGHT
         + BODY_TOP_GAP
@@ -320,25 +321,63 @@ fn needed_result_reserve_height(node: &Node) -> f32 {
         + 2.0
 }
 
-/// CR-012: ленивый refit высоты под резерв футера результата. Growth-only:
-/// растит высоту, только если она занижена; достаточную не трогает —
-/// без осцилляций при частых вызовах из `recompute_flow`.
-fn ensure_result_reserve(node: &mut Node) {
-    let needed = needed_result_reserve_height(node);
+/// CR-012 (правка 2): точная требуемая высота — тело измеряется реальным
+/// шейпингом (`measure_body_height`: те же встроенные Noto-шрифты и
+/// mono-сегментация формульных строк, что у рендера). Оценка среднего
+/// аванса принципиально хрупка — измерение устраняет класс дефектов
+/// «футер налезает на перенос». Формула та же, что и у
+/// [`estimated_result_reserve_height`], с измеренной высотой тела.
+fn measured_result_reserve_height(text: &str, node_width: f32, formula_lines: &[usize]) -> f32 {
+    let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
+    let body = measure_body_height(text, body_width, formula_lines);
+    HEADER_HEIGHT + BODY_TOP_GAP + body + BODY_PADDING + RESULT_LINE_HEIGHT + 2.0
+}
+
+/// CR-012 (правка 2): двухуровневый ленивый refit высоты под резерв футера
+/// результата. Growth-only: растит высоту, только если она занижена;
+/// достаточную не трогает — без осцилляций при частых вызовах из
+/// `recompute_flow`. Уровень 1 — дешёвая оценка (`estimated_result_reserve_height`):
+/// влезает → выход (99 % вызовов, измерение не грузит перф). Уровень 2 —
+/// точное измерение реальным шейпингом: рост ровно до измеренного needed,
+/// без фантомных рядов.
+fn ensure_result_reserve(node: &mut Node, formula_lines: &[usize]) {
+    let text = node.text.as_deref().unwrap_or("");
+    if estimated_result_reserve_height(text, node.width) <= node.height {
+        return;
+    }
+    let needed = measured_result_reserve_height(text, node.width, formula_lines);
     if needed > node.height {
         node.height = needed;
     }
 }
 
-/// FR-023: авто-высота шаблонной ноды — по числу строк листа параметров:
-/// шапка + тело + футер результата. CR-010: строки считаются с переносами
-/// (`wrapped_body_rows`, CR-012 — с моноширинной метрикой Numi-строк) —
-/// длинное значение параметра не вылезает за низ карточки у новой ноды.
-/// Общая для GUI-инстанциации и MCP `template_instantiate`: новая нода
-/// сразу влезает целиком (без «подгонки правкой»). Только рост (не сжимает
-/// пользовательский размер). CR-012: тело — общий refit-резерв.
+/// CR-012 (правка 2): индексы строк с результатом из построчных исходов —
+/// тот же источник, что у рендера (`expr_line_results` → formula_lines,
+/// text.rs): по ним `body_items` ставит mono-флаг `source_line`.
+fn formula_line_indices(line_results: &[Option<ExprOutcome>]) -> Vec<usize> {
+    line_results
+        .iter()
+        .enumerate()
+        .filter(|(_, outcome)| outcome.is_some())
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// FR-023: авто-высота шаблонной ноды — по списку параметров: шапка,
+/// тело и футер результата. CR-010/CR-012: тело — с переносами,
+/// двухуровневый refit `ensure_result_reserve`: длинное значение параметра
+/// не вылезает за низ карточки у новой ноды. formula_lines — из
+/// `expr::eval_lines` текста листа (тот же источник, что пишет
+/// `expr_line_results` при пересчёте). Общая для GUI-инстанциации и MCP
+/// `template_instantiate`: новая нода сразу влезает целиком (без «подгонки
+/// правкой»). Только рост (не сжимает пользовательский размер).
 fn fit_template_node_height(node: &mut Node) {
-    ensure_result_reserve(node);
+    let formula_lines = node
+        .text
+        .as_deref()
+        .map(|text| formula_line_indices(&expr::eval_lines(text)))
+        .unwrap_or_default();
+    ensure_result_reserve(node, &formula_lines);
 }
 
 /// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
@@ -615,13 +654,19 @@ impl SceneState {
 
     /// CR-012: growth-only рост высоты ноды под резерв футера результата
     /// (по [`SceneState::node_shows_result_footer]); spatial index
-    /// обновляется только при реальном росте.
+    /// обновляется только при реальном росте. formula_lines — из построчных
+    /// результатов ноды (тот же источник, что у рендера).
     fn ensure_reserve_at(&mut self, index: usize) {
         if !self.node_shows_result_footer(index) {
             return;
         }
+        let formula_lines = self
+            .expr_line_results
+            .get(&self.canvas.nodes[index].id)
+            .map(|lines| formula_line_indices(lines))
+            .unwrap_or_default();
         let before = self.canvas.nodes[index].height;
-        ensure_result_reserve(&mut self.canvas.nodes[index]);
+        ensure_result_reserve(&mut self.canvas.nodes[index], &formula_lines);
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
             self.spatial.update(index, node);
@@ -1858,15 +1903,17 @@ impl App {
 
     /// Подрастить высоту редактируемой заметки под контент (T7): текст
     /// переносится по ширине карточки (Wrap::WordOrGlyph), за край не
-    /// уходит — растёт только высота (по числу строк layout). Ширина
-    /// карточки за пользователем: авто-растягивание по самой длинной
-    /// строке убрано (правило «перенос даже одной строки»). Только рост.
-    /// Только text-ноды: группы под текст не подгоняются (рамку ресайзит
-    /// пользователь). Для лейблов связей (T8) не применяется — бокс фиксированный.
+    /// уходит — растёт только высота. Ширина карточки за пользователем:
+    /// авто-растягивание по самой длинной строке убрано (правило «перенос
+    /// даже одной строки»). Только рост. Только text-ноды: группы под текст
+    /// не подгоняются (рамку ресайзит пользователь). Для лейблов связей (T8)
+    /// не применяется — бокс фиксированный.
+    /// CR-012 (правка 2): высота тела — измерением (`measure_body_height`) —
+    /// теми же шрифтами и mono-сегментацией формульных строк, что у рендера:
+    /// буфер редактора шейпит текст без GFM-разбивки и mono-флага, переносы
+    /// Numi-строк занижались, футер налезал на тело.
     fn fit_note_size(&mut self) {
-        let zoom_px = self.zoom_px();
-        let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
-        else {
+        let Some(session) = self.editing.as_mut() else {
             return;
         };
         let EditTarget::Node(index) = session.target() else {
@@ -1878,39 +1925,32 @@ impl App {
         if node.kind() != NodeKind::Text {
             return;
         }
-        let (_content_w_px, content_h_px) = session.content_size_px(renderer.font_system_mut());
         // FR-013: резерв под строку результата формулы (футер карточки),
         // чтобы подрезка тела результатом не прятала последнюю строку.
-        // Кандидат — явная формула или последняя строка текста (авто-детект,
-        // Numi-семантика); при активном редактировании — живой текст сессии
+        // При активном редактировании — живой текст сессии.
         let live_text = session.text();
         // FR-013 (правка 2): резерв футера — только для программного итога
         // (MCP-expr без формульных строк в тексте). Построчные результаты
         // Numi-стиля места не требуют — ложатся на свои строки.
         // FR-023: у шаблонной ноды итог формулы шаблона показывается ВСЕГДА
         // (text.rs: правило `is_template_node`), поэтому резерв — всегда,
-        // независимо от построчных результатов листа параметров
-        let has_line_results = expr::eval_lines(&live_text).iter().any(Option::is_some);
-        let is_template = self
-            .scene
-            .canvas
-            .nodes
-            .get(index)
-            .is_some_and(|node| node.kind() == NodeKind::Text && node.template().is_some());
-        let program_footer = self
-            .scene
-            .canvas
-            .nodes
-            .get(index)
-            .is_some_and(|node| node.expr().is_some())
-            && !has_line_results;
+        // независимо от построчных результатов листа параметров.
+        // CR-012 (правка 2): formula_lines — из живых построчных исходов
+        // текста сессии; у шаблонной ноды это все строки-формулы листа
+        // параметров (присваивания дают результат Ok/Err — все Some).
+        let line_results = expr::eval_lines(&live_text);
+        let has_line_results = line_results.iter().any(Option::is_some);
+        let formula_lines = formula_line_indices(&line_results);
+        let is_template = node.template().is_some();
+        let program_footer = node.expr().is_some() && !has_line_results;
         let expr_footer = if is_template || program_footer {
             RESULT_LINE_HEIGHT + 2.0
         } else {
             0.0
         };
-        let needed_h =
-            HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING + expr_footer;
+        let body_width = (node.width - BODY_PADDING * 2.0).max(0.0);
+        let body_h = measure_body_height(&live_text, body_width, &formula_lines);
+        let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + body_h + BODY_PADDING + expr_footer;
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
             return;
         };
@@ -5381,7 +5421,9 @@ fn mcp_dispatch(
             scene.push_undo(scene.canvas.clone());
             if let Some(text) = params.get("text").and_then(serde_json::Value::as_str) {
                 scene.canvas.nodes[index].text = Some(text.to_owned());
-                // CR-012: ленивый резерв футера под переносы нового текста.
+                // CR-012: ленивый резерв футера под переносы нового текста
+                // (двухуровневый refit: оценка-ворота → измерение; formula_lines
+                // ensure_reserve_at берёт из текущих expr_line_results).
                 // expr здесь не пересчитывается — правило футера по текущим
                 // expr_results/expr_line_results; полный пересчёт — в ветке
                 // expr ниже (recompute_flow поднимет резерв сам).
@@ -9593,36 +9635,31 @@ mod tests {
         assert_eq!(wrapped_body_rows(&prose, width), 1);
     }
 
-    /// CR-012: ленивый refit — резерв футера результата. Заниженная
-    /// высота растёт до формулы (шапка + тело с переносами + резерв
-    /// футера), достаточная не трогается; повторный вызов идемпотентен
-    /// (growth-only — без осцилляций при частых пересчётах).
+    /// CR-012: двухуровневый ленивый refit — оценка ворота, рост по
+    /// измеренной высоте. Заниженная высота растёт минимум до измеренного
+    /// резерва футера, достаточная не трогается; повторный вызов
+    /// идемпотентен (growth-only — без осцилляций при частых пересчётах).
     #[test]
     fn ensure_result_reserve_grows_only() {
         let line = format!("{} = 5", "a".repeat(28));
         let mut low = Node::text("n", line.clone(), 0.0, 0.0);
         low.width = 260.0;
         low.height = 80.0; // занижено: 2 ряда тела + резерв футера не влезают
-        ensure_result_reserve(&mut low);
-        let rows = wrapped_body_rows(&line, low.width - BODY_PADDING * 2.0);
-        let needed = HEADER_HEIGHT
-            + BODY_TOP_GAP
-            + rows as f32 * BODY_LINE_HEIGHT
-            + BODY_PADDING
-            + RESULT_LINE_HEIGHT
-            + 2.0;
+                           // CR-012 (правка 2): formula_lines для присваивания — [0].
+        ensure_result_reserve(&mut low, &[0]);
+        let needed = measured_result_reserve_height(&line, low.width, &[0]);
         assert!(
-            low.height >= needed,
-            "высота {} выросла минимум до резерва футера {needed}",
+            low.height >= needed - 1e-3,
+            "высота {} выросла минимум до измеренного резерва футера {needed}",
             low.height
         );
         let grown = low.height;
-        ensure_result_reserve(&mut low);
+        ensure_result_reserve(&mut low, &[0]);
         assert_eq!(low.height, grown, "повторный вызов — no-op (growth-only)");
         let mut tall = Node::text("n2", line, 0.0, 0.0);
         tall.width = 260.0;
         tall.height = 1000.0;
-        ensure_result_reserve(&mut tall);
+        ensure_result_reserve(&mut tall, &[0]);
         assert_eq!(tall.height, 1000.0, "достаточная высота не сжимается");
     }
 
@@ -9631,6 +9668,8 @@ mod tests {
     /// CR-012: строка-присваивание считается моноширинной метрикой:
     /// 32-символьное присваивание при ширине тела 240 рендерится в 2 ряда,
     /// а пропорциональная оценка давала 1 — высота занижалась на ряд.
+    /// CR-012 (правка 2): высота — по измеренной высоте тела (реальный
+    /// шейпинг теми же шрифтами, что у рендера).
     #[test]
     fn fit_template_height_covers_wrapped_lines() {
         let mono_line = format!("{} = 5", "a".repeat(28));
@@ -9643,16 +9682,13 @@ mod tests {
             wrapped_body_rows(&mono_line, body_width) >= 2,
             "моно-строка должна занимать минимум 2 ряда"
         );
-        let rows = wrapped_body_rows(&mono_line, body_width);
-        let needed = HEADER_HEIGHT
-            + BODY_TOP_GAP
-            + rows as f32 * BODY_LINE_HEIGHT
-            + BODY_PADDING
-            + RESULT_LINE_HEIGHT
-            + 2.0;
+        // CR-012 (правка 2): высота покрывает измеренную высоту тела
+        // (formula_lines — из eval_lines, тот же источник, что у refit).
+        let formula_lines = formula_line_indices(&expr::eval_lines(&mono_line));
+        let needed = measured_result_reserve_height(&mono_line, node.width, &formula_lines);
         assert!(
-            node.height >= needed,
-            "высота {} меньше нужной {needed}",
+            node.height >= needed - 1e-3,
+            "высота {} меньше измеренной нужной {needed}",
             node.height
         );
         // Регресс самой заниженной оценки: высота минимум на ряд больше
@@ -9712,19 +9748,20 @@ mod tests {
         plain.height = 120.0;
         canvas.nodes.push(plain);
         let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/cr012.canvas"));
-        let needed_for = |node: &Node| {
+        // CR-012 (правка 2): порог — измеренная высота (реальный шейпинг),
+        // а не оценка рядов: formula_lines — из построчных результатов ноды.
+        let needed_for = |scene: &SceneState, node: &Node| {
             let text = node.text.as_deref().unwrap_or("");
-            let rows = wrapped_body_rows(text, node.width - BODY_PADDING * 2.0);
-            HEADER_HEIGHT
-                + BODY_TOP_GAP
-                + rows as f32 * BODY_LINE_HEIGHT
-                + BODY_PADDING
-                + RESULT_LINE_HEIGHT
-                + 2.0
+            let formula_lines = scene
+                .expr_line_results
+                .get(&node.id)
+                .map(|lines| formula_line_indices(lines))
+                .unwrap_or_default();
+            measured_result_reserve_height(text, node.width, &formula_lines)
         };
         let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
         assert!(
-            tpl_node.height >= needed_for(tpl_node),
+            tpl_node.height >= needed_for(&scene, tpl_node),
             "шаблонная нода выросла под резерв футера"
         );
         match scene.expr_results.get("tpl1").expect("результат tpl1") {
@@ -9749,8 +9786,73 @@ mod tests {
         .expect("node_update_text");
         let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
         assert!(
-            tpl_node.height >= needed_for(tpl_node),
+            tpl_node.height >= needed_for(&scene, tpl_node),
             "после MCP-правки высота покрывает новый резерв футера"
+        );
+    }
+
+    /// CR-012 (правка 2): двухуровневый refit при загрузке — шаблонная нода
+    /// со старым дефолтом высоты (120, как до CR-010) вырастает РОВНО до
+    /// измеренного резерва (реальный шейпинг, без фантомного ряда);
+    /// повторная загрузка с подогнанной высотой не растит дальше
+    /// (нет осцилляций/ползучести).
+    #[test]
+    fn recompute_result_reserve_matches_measured_height() {
+        use canvas_core::templates::{TemplateParam, TemplateRef};
+        let mut canvas = Canvas::default();
+        // Скриншотный Numi-лист из CR-012: три параметра при ширине 280 —
+        // тело 3 mono-ряда, при высоте 120 футер налезал на последнюю строку.
+        let text = "rps = 200 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min".to_owned();
+        let mut tpl = Node::text("tpl1", text.clone(), 0.0, 0.0);
+        tpl.width = 280.0;
+        tpl.height = 120.0;
+        tpl.set_expr(Some("$rps".to_owned()));
+        tpl.set_template(Some(TemplateRef {
+            id: "t".to_owned(),
+            version: "1".to_owned(),
+            expr: "$rps".to_owned(),
+            params: BTreeMap::from([(
+                "rps".to_owned(),
+                TemplateParam {
+                    num: 200.0,
+                    unit: Some("rps".to_owned()),
+                },
+            )]),
+            icon: "custom".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            name: None,
+        }));
+        canvas.nodes.push(tpl);
+        let path = PathBuf::from("target/tmp/cr012-measured.canvas");
+        let scene = SceneState::new(canvas, path.clone());
+        let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
+        let formula_lines = formula_line_indices(
+            scene
+                .expr_line_results
+                .get("tpl1")
+                .expect("построчные результаты tpl1"),
+        );
+        assert_eq!(
+            formula_lines,
+            vec![0, 1, 2],
+            "все три строки-присваивания — формульные"
+        );
+        let needed = measured_result_reserve_height(&text, tpl_node.width, &formula_lines);
+        assert!(
+            (tpl_node.height - needed).abs() < 1e-3,
+            "высота ровно измеренная: {} vs {needed} (growth-only от 120)",
+            tpl_node.height
+        );
+        assert!(
+            tpl_node.height > 120.0,
+            "старый дефолт 120 занижен — нода выросла"
+        );
+        // Повторная загрузка с уже подогнанной высотой — без дальнейшего роста.
+        let scene2 = SceneState::new(scene.canvas.clone(), path);
+        let tpl2 = scene2.canvas.node("tpl1").expect("нода tpl1");
+        assert_eq!(
+            tpl2.height, tpl_node.height,
+            "повторный refit не растит дальше (нет осцилляций)"
         );
     }
 
