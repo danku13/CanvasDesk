@@ -33,26 +33,47 @@ pub fn icon_key(manifest: &TemplateManifest) -> &str {
     }
 }
 
-// --- Панель шаблонов (Ctrl+P) ---
+// --- Панель шаблонов (Ctrl+P, FR-024 — в стиле Miro) ---
 
 /// Ширина панели, логические px (клампится к окну).
 pub const PANEL_WIDTH: f32 = 340.0;
-/// Боковой отступ панели от правого края окна.
+/// Боковой отступ панели от ЛЕВОГО края окна (FR-024: док слева —
+/// паттерн Miro Template picker).
 pub const PANEL_MARGIN: f32 = 12.0;
-/// Отступ от верхнего края окна.
+/// Отступ от верхнего и нижнего края окна (панель — во всю высоту).
 pub const PANEL_TOP_MARGIN: f32 = 12.0;
 /// Внутренний отступ содержимого.
-pub const PANEL_PADDING: f32 = 8.0;
+pub const PANEL_PADDING: f32 = 10.0;
+/// Высота шапки панели («Шаблоны» + счётчик).
+pub const PANEL_HEADER_H: f32 = 30.0;
 /// Высота поля поиска.
 pub const INPUT_HEIGHT: f32 = 32.0;
 /// Высота строки категории (чипы-фильтры).
 pub const CATEGORY_ROW_H: f32 = 26.0;
-/// Высота строки шаблона: имя + описание.
+/// Шаг строки шаблона: карточка + зазор.
 pub const ROW_HEIGHT: f32 = 46.0;
-/// Максимум видимых строк (далее — прокрутка колесом/стрелками).
-pub const MAX_VISIBLE_ROWS: usize = 9;
+/// Высота заголовка секции категории (Miro-стиль группировки).
+pub const SECTION_HEIGHT: f32 = 24.0;
+/// Максимум видимых строк-шаблонов (далее — прокрутка стрелками).
+pub const MAX_VISIBLE_ROWS: usize = 12;
 /// Сторона квад-иконки в строке панели (логические px).
 pub const TEMPLATE_ROW_ICON: f32 = 18.0;
+/// Сторона плитки под иконкой (Miro-стиль: иконка на скруглённом квадрате).
+pub const TEMPLATE_ROW_TILE: f32 = 28.0;
+/// Окно прокрутки в строках (секции+шаблоны вперемешку) — для
+/// следования выделения при клавиатурной навигации.
+pub const SCROLL_WINDOW: usize = 14;
+
+/// Строка панели (FR-024): заголовок секции категории или строка шаблона.
+/// Секции — группировка реестра «как в Miro»; выделение (клавиатура) и
+/// клик-вставка цели только строки шаблонов.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PanelRow {
+    /// Заголовок секции — имя категории.
+    Section(String),
+    /// Строка шаблона — индекс в `registry.list()`.
+    Template(usize),
+}
 
 /// Состояние боковой палитры шаблонов (FR-018, `Ctrl+P`). Поле ввода —
 /// своя лёгкая модель (однострочная, как `SearchInput`), НЕ `EditingSession`.
@@ -65,9 +86,9 @@ pub struct TemplatePanel {
     pub cursor: usize,
     /// Фильтр категории (клик по чипу); None — все категории.
     pub category: Option<String>,
-    /// Индекс выбранной строки в отфильтрованном списке (клавиатура).
+    /// Выбранная строка-шаблон (ординал среди [`PanelRow::Template`]).
     pub selected: usize,
-    /// Верхняя видимая строка (прокрутка).
+    /// Первая видимая строка (индекс в векторе [`PanelRow`], прокрутка).
     pub scroll_top: usize,
 }
 
@@ -142,22 +163,32 @@ impl TemplatePanel {
         }
     }
 
-    /// Сдвиг выделения списка (стрелки); true — было изменение.
-    pub fn move_selection(&mut self, delta: i32, total: usize) -> bool {
+    /// Сдвиг выделения (стрелки): нумеруются ТОЛЬКО строки-шаблоны
+    /// (секции — заголовки, не цели); true — было изменение. Прокрутка
+    /// следует за выделением: окно [`SCROLL_WINDOW`] строк, над первой
+    /// строкой категории показывается её заголовок.
+    pub fn move_selection(&mut self, delta: i32, rows: &[PanelRow]) -> bool {
+        let total = template_row_count(rows);
         if total == 0 {
             return false;
         }
-        let current = self.selected as i32;
-        let next = (current + delta).clamp(0, total as i32 - 1);
-        if next == current {
+        let next = (self.selected as i32 + delta).clamp(0, total as i32 - 1);
+        if next == self.selected as i32 {
             return false;
         }
         self.selected = next as usize;
-        // Прокрутка следует за выделением
-        if self.selected < self.scroll_top {
-            self.scroll_top = self.selected;
-        } else if self.selected >= self.scroll_top + MAX_VISIBLE_ROWS {
-            self.scroll_top = self.selected + 1 - MAX_VISIBLE_ROWS;
+        let Some(row_idx) = row_of_ordinal(rows, self.selected) else {
+            return true;
+        };
+        if row_idx < self.scroll_top {
+            // Заголовок секции над строкой — показать и его
+            self.scroll_top = if row_idx > 0 && matches!(rows[row_idx - 1], PanelRow::Section(_)) {
+                row_idx - 1
+            } else {
+                row_idx
+            };
+        } else if row_idx >= self.scroll_top + SCROLL_WINDOW {
+            self.scroll_top = row_idx + 1 - SCROLL_WINDOW;
         }
         true
     }
@@ -169,39 +200,88 @@ impl Default for TemplatePanel {
     }
 }
 
-/// Отфильтрованные индексы реестра для панели: категория-фильтр + подстрока
-/// (имя/описание/id, регистр не важен). Порядок — порядок реестра.
-pub fn panel_rows(registry: &TemplateRegistry, panel: &TemplatePanel) -> Vec<usize> {
-    let query = panel.filter.to_lowercase();
-    registry
-        .list()
-        .iter()
-        .enumerate()
-        .filter(|(_, manifest)| {
-            if let Some(category) = &panel.category {
-                if &manifest.category != category {
-                    return false;
-                }
-            }
-            query.is_empty()
-                || manifest.name.to_lowercase().contains(&query)
-                || manifest.description.to_lowercase().contains(&query)
-                || manifest.id.to_lowercase().contains(&query)
-        })
-        .map(|(index, _)| index)
-        .collect()
+/// Число строк-шаблонов в наборе строк панели (секции не считаются).
+pub fn template_row_count(rows: &[PanelRow]) -> usize {
+    rows.iter()
+        .filter(|row| matches!(row, PanelRow::Template(_)))
+        .count()
 }
 
-/// Геометрия панели на кадр (логические px). `rows` — параллельно
-/// `row_rects` (индексы реестра из [`panel_rows`]).
+/// Позиция строки-шаблона по ординалу выделения (k-я строка-шаблон →
+/// индекс в `rows`). Секции пропускаются.
+pub fn row_of_ordinal(rows: &[PanelRow], ordinal: usize) -> Option<usize> {
+    let mut seen = 0_usize;
+    for (index, row) in rows.iter().enumerate() {
+        if matches!(row, PanelRow::Template(_)) {
+            if seen == ordinal {
+                return Some(index);
+            }
+            seen += 1;
+        }
+    }
+    None
+}
+
+/// Строки панели (FR-024): при пустом фильтре и без чипа категории —
+/// группировка по категориям с заголовками секций (порядок реестра,
+/// паттерн Miro Template picker); при поиске/фильтре — плоский список
+/// совпадений (секции не имеют смысла в результатах поиска).
+pub fn panel_rows(registry: &TemplateRegistry, panel: &TemplatePanel) -> Vec<PanelRow> {
+    let query = panel.filter.to_lowercase();
+    let matches = |manifest: &TemplateManifest| -> bool {
+        if let Some(category) = &panel.category {
+            if &manifest.category != category {
+                return false;
+            }
+        }
+        query.is_empty()
+            || manifest.name.to_lowercase().contains(&query)
+            || manifest.description.to_lowercase().contains(&query)
+            || manifest.id.to_lowercase().contains(&query)
+    };
+    let grouped = panel.filter.is_empty() && panel.category.is_none();
+    if !grouped {
+        return registry
+            .list()
+            .iter()
+            .enumerate()
+            .filter(|(_, manifest)| matches(manifest))
+            .map(|(index, _)| PanelRow::Template(index))
+            .collect();
+    }
+    let mut rows = Vec::new();
+    for category in registry.categories() {
+        let indexes: Vec<usize> = registry
+            .list()
+            .iter()
+            .enumerate()
+            .filter(|(_, manifest)| manifest.category == *category)
+            .map(|(index, _)| index)
+            .collect();
+        if indexes.is_empty() {
+            continue;
+        }
+        rows.push(PanelRow::Section((*category).to_owned()));
+        rows.extend(indexes.into_iter().map(PanelRow::Template));
+    }
+    rows
+}
+
+/// Геометрия панели на кадр (логические px) — левый док во всю высоту
+/// окна (FR-024). `rows` — результат [`panel_rows`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelLayout {
     pub panel_rect: [f32; 4],
+    /// Шапка панели («Шаблоны» + счётчик).
+    pub header_rect: [f32; 4],
     pub input_rect: [f32; 4],
     /// Чипы категорий: (rect, имя категории, активен).
     pub category_rects: Vec<([f32; 4], String, bool)>,
-    /// Rect'ы строк (параллельно rows); только видимые.
+    /// Rect'ы видимых строк — параллельно [`PanelLayout::rows`]
+    /// (секции и шаблоны в одном списке).
     pub row_rects: Vec<[f32; 4]>,
+    /// Видимые строки (параллельно row_rects).
+    pub rows: Vec<PanelRow>,
 }
 
 pub fn panel_layout(
@@ -209,18 +289,34 @@ pub fn panel_layout(
     window_h: f32,
     registry: &TemplateRegistry,
     panel: &TemplatePanel,
-    rows: &[usize],
+    rows: &[PanelRow],
 ) -> PanelLayout {
     let width = PANEL_WIDTH.min((window_w - PANEL_MARGIN * 2.0).max(0.0));
-    // Правый край (как Miro/Figma — решение владельца)
-    let x = (window_w - width - PANEL_MARGIN).max(PANEL_MARGIN);
+    // FR-024: док у ЛЕВОГО края, во всю высоту окна (как Miro)
+    let x = PANEL_MARGIN;
     let y = PANEL_TOP_MARGIN;
+    let height = (window_h - PANEL_TOP_MARGIN * 2.0).max(0.0);
+    let inner_w = width - PANEL_PADDING * 2.0;
+
+    let header_rect = [
+        x + PANEL_PADDING,
+        y + PANEL_PADDING,
+        inner_w,
+        PANEL_HEADER_H,
+    ];
+    let input_rect = [
+        x + PANEL_PADDING,
+        y + PANEL_PADDING + PANEL_HEADER_H + 6.0,
+        inner_w,
+        INPUT_HEIGHT,
+    ];
 
     // Чипы категорий: одна строка, ширина по имени (+ паддинг), перенос
     // не делаем — в v1 категорий ≤ 6
     let categories = registry.categories();
     let mut category_rects = Vec::with_capacity(categories.len());
     let mut cx = x + PANEL_PADDING;
+    let chips_y = input_rect[1] + INPUT_HEIGHT + 6.0;
     for category in &categories {
         let w = category.len() as f32 * 7.5 + 20.0;
         if cx + w > x + width - PANEL_PADDING {
@@ -228,46 +324,44 @@ pub fn panel_layout(
         }
         let active = panel.category.as_deref() == Some(*category);
         category_rects.push((
-            [
-                cx,
-                y + PANEL_PADDING + INPUT_HEIGHT + 6.0,
-                w,
-                CATEGORY_ROW_H,
-            ],
+            [cx, chips_y, w, CATEGORY_ROW_H],
             (*category).to_owned(),
             active,
         ));
         cx += w + 6.0;
     }
 
-    let rows_top = y + PANEL_PADDING + INPUT_HEIGHT + 6.0 + CATEGORY_ROW_H + 6.0;
-    let visible = rows
-        .len()
-        .saturating_sub(panel.scroll_top)
-        .min(MAX_VISIBLE_ROWS);
-    let mut row_rects = Vec::with_capacity(visible);
-    for i in 0..visible {
-        let row_y = rows_top + i as f32 * ROW_HEIGHT;
-        row_rects.push([
-            x + PANEL_PADDING,
-            row_y,
-            width - PANEL_PADDING * 2.0,
-            ROW_HEIGHT - 4.0,
-        ]);
+    let rows_top = chips_y + CATEGORY_ROW_H + 6.0;
+    let bottom_limit = y + height - PANEL_PADDING;
+    let mut row_rects = Vec::new();
+    let mut visible_rows = Vec::new();
+    let mut cursor_y = rows_top;
+    let mut shown_templates = 0_usize;
+    for row in rows.iter().skip(panel.scroll_top) {
+        if matches!(row, PanelRow::Template(_)) && shown_templates >= MAX_VISIBLE_ROWS {
+            break;
+        }
+        let (step, card_h) = match row {
+            PanelRow::Section(_) => (SECTION_HEIGHT, SECTION_HEIGHT),
+            PanelRow::Template(_) => (ROW_HEIGHT, ROW_HEIGHT - 4.0),
+        };
+        if cursor_y + card_h > bottom_limit {
+            break; // строка не влезает в панель — прокрутка
+        }
+        row_rects.push([x + PANEL_PADDING, cursor_y, inner_w, card_h]);
+        visible_rows.push(row.clone());
+        cursor_y += step;
+        if matches!(row, PanelRow::Template(_)) {
+            shown_templates += 1;
+        }
     }
-    // Высота панели — по контенту, клампится к окну
-    let content_bottom = rows_top + visible as f32 * ROW_HEIGHT + PANEL_PADDING;
-    let height = (content_bottom - y).min((window_h - PANEL_TOP_MARGIN * 2.0).max(0.0));
     PanelLayout {
         panel_rect: [x, y, width, height],
-        input_rect: [
-            x + PANEL_PADDING,
-            y + PANEL_PADDING,
-            width - PANEL_PADDING * 2.0,
-            INPUT_HEIGHT,
-        ],
+        header_rect,
+        input_rect,
         category_rects,
         row_rects,
+        rows: visible_rows,
     }
 }
 
@@ -637,28 +731,46 @@ mod tests {
         TemplateRegistry::mock()
     }
 
-    // --- Панель ---
+    // --- Панель (FR-024: секции, левый док) ---
+
+    fn template_indexes(rows: &[PanelRow]) -> Vec<usize> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PanelRow::Template(index) => Some(*index),
+                PanelRow::Section(_) => None,
+            })
+            .collect()
+    }
 
     #[test]
     fn panel_filter_by_name_and_id() {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        // Пустой фильтр — все 5
-        assert_eq!(panel_rows(&registry, &panel).len(), 5);
-        // По имени (регистр не важен)
+        // Пустой фильтр — секции по категориям + все 5 шаблонов
+        let rows = panel_rows(&registry, &panel);
+        assert_eq!(template_indexes(&rows).len(), 5);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, PanelRow::Section(_)))
+                .count(),
+            4
+        );
+        // По имени (регистр не важен) — плоский список без секций
         panel.insert_str("load");
-        assert_eq!(panel_rows(&registry, &panel), vec![0]);
+        let rows = panel_rows(&registry, &panel);
+        assert_eq!(template_indexes(&rows), vec![0]);
+        assert!(rows.iter().all(|r| matches!(r, PanelRow::Template(_))));
         // По id
         panel.filter.clear();
         panel.cursor = 0;
         panel.insert_str("mock.db");
-        assert_eq!(panel_rows(&registry, &panel), vec![1]);
+        assert_eq!(template_indexes(&panel_rows(&registry, &panel)), vec![1]);
         // По описанию
         panel.filter.clear();
         panel.cursor = 0;
         panel.insert_str("партиции");
-        assert_eq!(panel_rows(&registry, &panel), vec![4]);
+        assert_eq!(template_indexes(&panel_rows(&registry, &panel)), vec![4]);
         // Мимо — пусто
         panel.filter = "ghost".to_owned();
         assert!(panel_rows(&registry, &panel).is_empty());
@@ -671,9 +783,54 @@ mod tests {
         panel.open = true;
         panel.category = Some("backend".to_owned());
         let rows = panel_rows(&registry, &panel);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(registry.list()[rows[0]].category, "backend");
-        assert_eq!(registry.list()[rows[1]].category, "backend");
+        let indexes = template_indexes(&rows);
+        assert_eq!(indexes.len(), 2);
+        assert_eq!(registry.list()[indexes[0]].category, "backend");
+        assert_eq!(registry.list()[indexes[1]].category, "backend");
+    }
+
+    #[test]
+    fn panel_grouping_follows_registry_order() {
+        // Секции — в порядке реестра; шаблоны внутри — свои индексы
+        let registry = registry();
+        let panel = TemplatePanel::new();
+        let rows = panel_rows(&registry, &panel);
+        let categories: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| match row {
+                PanelRow::Section(name) => Some(name.as_str()),
+                PanelRow::Template(_) => None,
+            })
+            .collect();
+        assert_eq!(categories, registry.categories());
+        // Каждый Section предшествует своим Template
+        for (pos, row) in rows.iter().enumerate() {
+            if let PanelRow::Section(name) = row {
+                let next = rows.get(pos + 1).expect("секция не пустая");
+                match next {
+                    PanelRow::Template(index) => {
+                        assert_eq!(registry.list()[*index].category, name.as_str())
+                    }
+                    PanelRow::Section(_) => panic!("секция без шаблонов"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn panel_row_of_ordinal_skips_sections() {
+        let rows = vec![
+            PanelRow::Section("backend".to_owned()),
+            PanelRow::Template(0),
+            PanelRow::Template(1),
+            PanelRow::Section("cache".to_owned()),
+            PanelRow::Template(2),
+        ];
+        assert_eq!(template_row_count(&rows), 3);
+        assert_eq!(row_of_ordinal(&rows, 0), Some(1));
+        assert_eq!(row_of_ordinal(&rows, 1), Some(2));
+        assert_eq!(row_of_ordinal(&rows, 2), Some(4));
+        assert_eq!(row_of_ordinal(&rows, 3), None);
     }
 
     #[test]
@@ -696,23 +853,27 @@ mod tests {
     }
 
     #[test]
-    fn panel_selection_scroll_follows() {
+    fn panel_selection_scroll_follows_with_sections() {
+        let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        assert!(panel.move_selection(1, 20));
+        let rows = panel_rows(&registry, &panel);
+        let total = template_row_count(&rows);
+        assert!(panel.move_selection(1, &rows));
         assert_eq!(panel.selected, 1);
-        panel.move_selection(10, 20);
-        assert_eq!(panel.selected, 11);
-        // Прокрутка догоняет выделение (MAX_VISIBLE_ROWS = 9)
-        assert!(panel.scroll_top + MAX_VISIBLE_ROWS > panel.selected);
-        // Границы
-        panel.move_selection(100, 20);
-        assert_eq!(panel.selected, 19);
-        panel.move_selection(-100, 20);
+        // Границы: вниз до последнего шаблона, вверх до первого
+        panel.move_selection(100, &rows);
+        assert_eq!(panel.selected, total - 1);
+        panel.move_selection(-100, &rows);
         assert_eq!(panel.selected, 0);
         assert_eq!(panel.scroll_top, 0);
+        // Прокрутка догоняет выделение: выделенная строка в окне
+        panel.move_selection(total as i32 - 1, &rows);
+        let row_idx = row_of_ordinal(&rows, panel.selected).expect("строка");
+        assert!(row_idx >= panel.scroll_top);
+        assert!(row_idx < panel.scroll_top + SCROLL_WINDOW);
         // Пустой список — no-op
-        assert!(!panel.move_selection(1, 0));
+        assert!(!panel.move_selection(1, &[]));
     }
 
     #[test]
@@ -722,12 +883,16 @@ mod tests {
         panel.open = true;
         let rows = panel_rows(&registry, &panel);
         let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows);
-        // Панель у правого края
-        assert!((lay.panel_rect[0] + lay.panel_rect[2] - (1280.0 - PANEL_MARGIN)).abs() < 0.01);
-        // Поле ввода внутри панели
+        // FR-024: док у ЛЕВОГО края, во всю высоту окна
+        assert!((lay.panel_rect[0] - PANEL_MARGIN).abs() < 0.01);
+        assert!((lay.panel_rect[1] - PANEL_TOP_MARGIN).abs() < 0.01);
+        assert!((lay.panel_rect[3] - (800.0 - PANEL_TOP_MARGIN * 2.0)).abs() < 0.01);
+        // Шапка и поле ввода внутри панели
+        assert!(lay.header_rect[0] > lay.panel_rect[0]);
         assert!(lay.input_rect[0] > lay.panel_rect[0]);
-        // Строки не вылезают за панель; все 5 видны
-        assert_eq!(lay.row_rects.len(), 5);
+        assert!(lay.input_rect[1] > lay.header_rect[1]);
+        // Строки не вылезают за панель (группировка: секции + 5 шаблонов)
+        assert_eq!(lay.rows.len(), rows.len());
         for rect in &lay.row_rects {
             assert!(rect[0] >= lay.panel_rect[0]);
             assert!(rect[0] + rect[2] <= lay.panel_rect[0] + lay.panel_rect[2] + 0.01);
@@ -735,6 +900,11 @@ mod tests {
         }
         // Чипы категорий — 4 (backend/cache/network/queue)
         assert_eq!(lay.category_rects.len(), 4);
+        // Малое окно: строки обрезаются по высоте панели, без паники
+        let small = panel_layout(400.0, 300.0, &registry, &panel, &rows);
+        for rect in &small.row_rects {
+            assert!(rect[1] + rect[3] <= small.panel_rect[1] + small.panel_rect[3] + 0.01);
+        }
     }
 
     // --- Wheel: геометрия (правка владельца — раскладка от плашек) ---

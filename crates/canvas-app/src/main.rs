@@ -14,8 +14,8 @@ use canvas_app::palette::{
 };
 use canvas_app::template_ui;
 use canvas_app::template_ui::{
-    panel_layout as template_panel_layout, panel_rows as template_panel_rows, split_two_lines,
-    WheelHit,
+    panel_layout as template_panel_layout, panel_rows as template_panel_rows,
+    row_of_ordinal as template_row_of_ordinal, split_two_lines, PanelRow, WheelHit,
 };
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
@@ -2910,24 +2910,28 @@ impl App {
         }
         if event.logical_key == Key::Named(NamedKey::Enter) && !event.repeat {
             let rows = template_panel_rows(&self.templates, &self.template_panel);
-            if let Some(&index) = rows.get(self.template_panel.selected) {
-                let manifest = self.templates.list()[index].clone();
-                let center = self.viewport_center_world();
-                self.template_panel.close();
-                self.instantiate_template_at(&manifest, center);
-                self.request_redraw();
+            // FR-024: выделение — ординал среди строк-шаблонов (секции —
+            // заголовки, не цели)
+            if let Some(row_idx) = template_row_of_ordinal(&rows, self.template_panel.selected) {
+                if let template_ui::PanelRow::Template(index) = rows[row_idx] {
+                    let manifest = self.templates.list()[index].clone();
+                    let center = self.viewport_center_world();
+                    self.template_panel.close();
+                    self.instantiate_template_at(&manifest, center);
+                    self.request_redraw();
+                }
             }
             return true;
         }
         if event.logical_key == Key::Named(NamedKey::ArrowDown) && !event.repeat {
-            let total = template_panel_rows(&self.templates, &self.template_panel).len();
-            self.template_panel.move_selection(1, total);
+            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            self.template_panel.move_selection(1, &rows);
             self.request_redraw();
             return true;
         }
         if event.logical_key == Key::Named(NamedKey::ArrowUp) && !event.repeat {
-            let total = template_panel_rows(&self.templates, &self.template_panel).len();
-            self.template_panel.move_selection(-1, total);
+            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            self.template_panel.move_selection(-1, &rows);
             self.request_redraw();
             return true;
         }
@@ -2964,6 +2968,12 @@ impl App {
     /// Оверлей боковой палитры шаблонов (FR-018, Ctrl+P): панель у правого
     /// края, поле фильтра, чипы категорий, строки шаблонов с квад-иконками
     /// и описанием (паттерн search_overlay).
+    /// Оверлей боковой палитры шаблонов (FR-018, Ctrl+P). FR-024 — стиль
+    /// Miro Template picker: левый док во всю высоту (чистая геометрия —
+    /// `template_ui::panel_layout`), плотная подложка с рамкой, шапка
+    /// «Шаблоны», поиск с placeholder, чипы категорий, секции с
+    /// заголовками, строки-карточки (подложка + плитка иконки + имя +
+    /// описание), hover/выбранное состояние, футер-подсказка.
     fn template_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -2985,6 +2995,7 @@ impl App {
         let palette = ThemeColors::from_theme(self.settings.theme);
         let icon_tint = color_to_rgba(palette.icon);
         let panel = rect_xywh(lay.panel_rect);
+        // Подложка дока: плотная, с рамкой (отделяет панель от канваса)
         instances.push(CardInstance {
             pos: [panel[0], panel[1]],
             size: [panel[2], panel[3]],
@@ -2992,7 +3003,28 @@ impl App {
             border: [0.22, 0.24, 0.30, 0.9],
             params: [8.0, 0.0, 0.0, 1.0],
         });
-        // Поле фильтра с кареткой (как в поиске — литерал «|»)
+        // Шапка: название + счётчик шаблонов
+        let total = template_ui::template_row_count(&rows);
+        texts.push(OwnedScreenText {
+            text: "Шаблоны".to_owned(),
+            origin: [lay.header_rect[0], lay.header_rect[1] + 6.0],
+            width: lay.header_rect[2] * 0.5,
+            font_size: 14.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        texts.push(OwnedScreenText {
+            text: format!("{total}"),
+            origin: [
+                lay.header_rect[0] + lay.header_rect[2] * 0.5,
+                lay.header_rect[1] + 8.0,
+            ],
+            width: lay.header_rect[2] * 0.5 - 4.0,
+            font_size: 11.0,
+            color: palette.body,
+            align: TextAlign::Center,
+        });
+        // Поле фильтра: placeholder при пустом вводе, иначе текст с кареткой
         let input = rect_xywh(lay.input_rect);
         instances.push(CardInstance {
             pos: [input[0], input[1]],
@@ -3002,11 +3034,19 @@ impl App {
             params: [6.0, 0.0, 0.0, 1.0],
         });
         texts.push(OwnedScreenText {
-            text: format!("{}|", self.template_panel.filter),
+            text: if self.template_panel.filter.is_empty() {
+                "Поиск шаблонов…".to_owned()
+            } else {
+                format!("{}|", self.template_panel.filter)
+            },
             origin: [input[0] + 10.0, input[1] + 8.0],
             width: (input[2] - 20.0).max(10.0),
-            font_size: 14.0,
-            color: palette.title,
+            font_size: 13.0,
+            color: if self.template_panel.filter.is_empty() {
+                palette.body
+            } else {
+                palette.title
+            },
             align: TextAlign::Left,
         });
         // Чипы категорий
@@ -3031,56 +3071,104 @@ impl App {
                 align: TextAlign::Left,
             });
         }
-        // Строки шаблонов
-        for (visible, rect) in lay.row_rects.iter().enumerate() {
-            let row = self.template_panel.scroll_top + visible;
-            let Some(&index) = rows.get(row) else { break };
-            let manifest = &self.templates.list()[index];
-            let selected = self.template_panel.selected == row;
-            let row_rect = rect_xywh(*rect);
-            let row_hover = point_in_rect(row_rect, self.cursor);
-            instances.push(CardInstance {
-                pos: [row_rect[0], row_rect[1]],
-                size: [row_rect[2], row_rect[3]],
-                fill: if selected {
-                    [0.18, 0.29, 0.48, 0.95]
-                } else if row_hover {
-                    [0.24, 0.30, 0.42, 0.6]
-                } else {
-                    [0.0; 4]
-                },
-                border: [0.0; 4],
-                params: [4.0, 0.0, 0.0, 1.0],
-            });
-            // Квад-иконка роли (решение владельца — без SVG)
-            let icon_rect = [
-                row_rect[0] + 8.0,
-                row_rect[1] + 8.0,
-                template_ui::TEMPLATE_ROW_ICON,
-                template_ui::TEMPLATE_ROW_ICON,
-            ];
-            instances.extend(template_icon_quads(
-                template_ui::icon_key(manifest),
-                icon_rect,
-                icon_tint,
-            ));
-            texts.push(OwnedScreenText {
-                text: manifest.display_name().to_owned(),
-                origin: [icon_rect[0] + icon_rect[2] + 8.0, row_rect[1] + 5.0],
-                width: row_rect[2] - (icon_rect[2] + 24.0),
-                font_size: 13.0,
-                color: palette.title,
-                align: TextAlign::Left,
-            });
-            texts.push(OwnedScreenText {
-                text: manifest.description.clone(),
-                origin: [icon_rect[0] + icon_rect[2] + 8.0, row_rect[1] + 20.0],
-                width: row_rect[2] - (icon_rect[2] + 24.0),
-                font_size: 11.0,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+        // Строки: секции-заголовки и карточки шаблонов (Miro-стиль)
+        for (row_i, (rect, row)) in lay.row_rects.iter().zip(lay.rows.iter()).enumerate() {
+            match row {
+                PanelRow::Section(name) => {
+                    texts.push(OwnedScreenText {
+                        text: name.clone(),
+                        origin: [rect[0] + 2.0, rect[1] + 5.0],
+                        width: rect[2] - 4.0,
+                        font_size: 11.0,
+                        color: palette.body,
+                        align: TextAlign::Left,
+                    });
+                }
+                PanelRow::Template(index) => {
+                    let Some(manifest) = self.templates.list().get(*index) else {
+                        continue;
+                    };
+                    // Ординал строки среди шаблонов (секции не считаются)
+                    let ordinal = lay.rows[..row_i]
+                        .iter()
+                        .filter(|other| matches!(other, PanelRow::Template(_)))
+                        .count();
+                    let selected = self.template_panel.selected == ordinal;
+                    let row_rect = rect_xywh(*rect);
+                    let row_hover = point_in_rect(row_rect, self.cursor);
+                    // Подложка-карточка строки (Miro: карточка с фоном)
+                    instances.push(CardInstance {
+                        pos: [row_rect[0], row_rect[1]],
+                        size: [row_rect[2], row_rect[3]],
+                        fill: if selected {
+                            [0.18, 0.29, 0.48, 0.95]
+                        } else if row_hover {
+                            [0.24, 0.30, 0.42, 0.6]
+                        } else {
+                            [0.13, 0.14, 0.18, 0.65]
+                        },
+                        border: if selected || row_hover {
+                            [0.30, 0.42, 0.65, 0.9]
+                        } else {
+                            [0.0; 4]
+                        },
+                        params: [6.0, 0.0, 0.0, 1.0],
+                    });
+                    // Плитка иконки (скруглённый квадрат) + квад-иконка роли
+                    let tile = [
+                        row_rect[0] + 8.0,
+                        row_rect[1] + (row_rect[3] - template_ui::TEMPLATE_ROW_TILE) / 2.0,
+                        template_ui::TEMPLATE_ROW_TILE,
+                        template_ui::TEMPLATE_ROW_TILE,
+                    ];
+                    instances.push(CardInstance {
+                        pos: [tile[0], tile[1]],
+                        size: [tile[2], tile[3]],
+                        fill: [0.20, 0.22, 0.28, 0.9],
+                        border: [0.0; 4],
+                        params: [6.0, 0.0, 0.0, 1.0],
+                    });
+                    instances.extend(template_icon_quads(
+                        template_ui::icon_key(manifest),
+                        [
+                            tile[0] + (tile[2] - template_ui::TEMPLATE_ROW_ICON) / 2.0,
+                            tile[1] + (tile[3] - template_ui::TEMPLATE_ROW_ICON) / 2.0,
+                            template_ui::TEMPLATE_ROW_ICON,
+                            template_ui::TEMPLATE_ROW_ICON,
+                        ],
+                        icon_tint,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: manifest.display_name().to_owned(),
+                        origin: [tile[0] + tile[2] + 8.0, row_rect[1] + 5.0],
+                        width: row_rect[2] - (tile[2] + 24.0),
+                        font_size: 13.0,
+                        color: palette.title,
+                        align: TextAlign::Left,
+                    });
+                    texts.push(OwnedScreenText {
+                        text: manifest.description.clone(),
+                        origin: [tile[0] + tile[2] + 8.0, row_rect[1] + 21.0],
+                        width: row_rect[2] - (tile[2] + 24.0),
+                        font_size: 11.0,
+                        color: palette.body,
+                        align: TextAlign::Left,
+                    });
+                }
+            }
         }
+        // Футер-подсказка (низ панели)
+        texts.push(OwnedScreenText {
+            text: "Enter — вставить в центр · Esc — закрыть".to_owned(),
+            origin: [
+                panel[0] + template_ui::PANEL_PADDING,
+                panel[1] + panel[3] - 22.0,
+            ],
+            width: panel[2] - template_ui::PANEL_PADDING * 2.0,
+            font_size: 10.0,
+            color: palette.body,
+            align: TextAlign::Left,
+        });
         (instances, texts)
     }
 
@@ -5503,11 +5591,12 @@ impl App {
                         }
                     }
                     if !handled {
-                        for (visible, rect) in lay.row_rects.iter().enumerate() {
+                        // FR-024: строки панели — секции (заголовки, клик
+                        // глотается) и карточки шаблонов (вставка в центр)
+                        for (rect, row) in lay.row_rects.iter().zip(lay.rows.iter()) {
                             if point_in_rect(rect_xywh(*rect), self.cursor) {
-                                let row = self.template_panel.scroll_top + visible;
-                                if let Some(&index) = rows.get(row) {
-                                    let manifest = self.templates.list()[index].clone();
+                                if let PanelRow::Template(index) = row {
+                                    let manifest = self.templates.list()[*index].clone();
                                     let center = self.viewport_center_world();
                                     self.template_panel.close();
                                     self.instantiate_template_at(&manifest, center);
