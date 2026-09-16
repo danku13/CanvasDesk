@@ -27,6 +27,18 @@ pub struct ThemeColors {
     pub search_input_fill: [f32; 4],
     /// Невыделенная строка результатов поиска (полупрозрачная подложка).
     pub search_row_fill: [f32; 4],
+    /// Невыделенная карточка строки палитры шаблонов (CR-011).
+    pub palette_row_fill: [f32; 4],
+    /// Невыделенный чип категории палитры шаблонов (CR-011).
+    pub palette_chip_fill: [f32; 4],
+    /// Плитка иконки строки палитры шаблонов (CR-011).
+    pub palette_tile_fill: [f32; 4],
+    /// Выбранная строка/чип палитры шаблонов (CR-011).
+    pub palette_selected_fill: [f32; 4],
+    /// Hover строки палитры шаблонов (CR-011).
+    pub palette_hover_fill: [f32; 4],
+    /// Рамка дока палитры шаблонов (CR-011).
+    pub palette_border: [f32; 4],
     /// Цвет заголовка карточки.
     pub title: Color,
     /// Цвет иконки в заголовке.
@@ -72,6 +84,12 @@ impl ThemeColors {
             menu_fill: [0.11, 0.11, 0.13, 0.97],
             search_input_fill: [0.16, 0.17, 0.20, 1.0],
             search_row_fill: [0.13, 0.14, 0.17, 0.55],
+            palette_row_fill: [0.13, 0.14, 0.18, 0.65],
+            palette_chip_fill: [0.17, 0.18, 0.22, 0.8],
+            palette_tile_fill: [0.20, 0.22, 0.28, 0.9],
+            palette_selected_fill: [0.18, 0.29, 0.48, 0.95],
+            palette_hover_fill: [0.24, 0.30, 0.42, 0.6],
+            palette_border: [0.22, 0.24, 0.30, 0.9],
             title: Color::rgb(0xe6, 0xe6, 0xe6),
             icon: Color::rgb(0x9a, 0xaa, 0xbf),
             body: Color::rgb(0xd4, 0xd4, 0xd4),
@@ -100,6 +118,12 @@ impl ThemeColors {
             menu_fill: [0.98, 0.98, 0.99, 0.97],
             search_input_fill: [0.90, 0.90, 0.93, 1.0],
             search_row_fill: [0.88, 0.88, 0.92, 0.55],
+            palette_row_fill: [0.88, 0.88, 0.92, 0.65],
+            palette_chip_fill: [0.90, 0.90, 0.93, 0.9],
+            palette_tile_fill: [0.84, 0.86, 0.90, 1.0],
+            palette_selected_fill: [0.18, 0.29, 0.48, 0.95],
+            palette_hover_fill: [0.75, 0.80, 0.90, 0.6],
+            palette_border: [0.75, 0.77, 0.82, 0.9],
             title: Color::rgb(0x20, 0x20, 0x24),
             icon: Color::rgb(0x6a, 0x7a, 0x8f),
             body: Color::rgb(0x38, 0x38, 0x3e),

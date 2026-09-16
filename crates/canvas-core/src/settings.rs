@@ -168,6 +168,10 @@ pub struct Settings {
     /// px. Больше зона — не нужно целиться при протягивании связей. Дефолт —
     /// первый пресет; значения клампятся в `[PORT_ZONE_MIN, PORT_ZONE_MAX]`.
     pub port_zone_px: f32,
+    /// Палитра шаблонов развёрнута постоянным левым доком (FR-025; false —
+    /// свёрнута в полосу-ручку слева). Старые конфиги без поля грузятся
+    /// как true (serde default).
+    pub template_palette_open: bool,
 }
 
 /// Пресеты зоны портов для строки панели настроек (CR-003): клик циклит.
@@ -205,6 +209,7 @@ impl Default for Settings {
             hud_on_start: false,
             focus_mode: false,
             port_zone_px: PORT_ZONE_PRESETS[0],
+            template_palette_open: true,
         }
     }
 }
@@ -275,6 +280,7 @@ mod tests {
             hud_on_start: true,
             focus_mode: true,
             port_zone_px: 28.0,
+            template_palette_open: false,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
         let path = dir.join("config.toml");

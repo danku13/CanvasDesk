@@ -63,6 +63,16 @@ pub const TEMPLATE_ROW_TILE: f32 = 28.0;
 /// Окно прокрутки в строках (секции+шаблоны вперемешку) — для
 /// следования выделения при клавиатурной навигации.
 pub const SCROLL_WINDOW: usize = 14;
+/// Высота футера-подсказки панели (CR-011): резервируется в геометрии,
+/// строки списка под неё не заходят.
+pub const PANEL_FOOTER_H: f32 = 24.0;
+
+/// Ширина чипа категории по имени (CR-011): считается по СИМВОЛАМ
+/// (`chars().count()`), не по байтам UTF-8 — иначе кириллические категории
+/// получали чип вдвое шире текста и вылезали за панель.
+pub fn category_chip_width(name: &str) -> f32 {
+    name.chars().count() as f32 * 7.5 + 20.0
+}
 
 /// Строка панели (FR-024): заголовок секции категории или строка шаблона.
 /// Секции — группировка реестра «как в Miro»; выделение (клавиатура) и
@@ -75,11 +85,20 @@ pub enum PanelRow {
     Template(usize),
 }
 
-/// Состояние боковой палитры шаблонов (FR-018, `Ctrl+P`). Поле ввода —
-/// своя лёгкая модель (однострочная, как `SearchInput`), НЕ `EditingSession`.
+/// Состояние боковой палитры шаблонов (FR-018, `Ctrl+P`; FR-025 —
+/// постоянный левый док). Поле ввода — своя лёгкая модель (однострочная,
+/// как `SearchInput`), НЕ `EditingSession`.
+///
+/// FR-025: `open` — развёрнут ли док (по умолчанию true — палитра
+/// доступна постоянно, как в Miro); `focused` — принимает ли панель
+/// клавиатуру (фокус в поиске: Ctrl+P или клик по полю фильтра). Клик
+/// по канвасу мимо панели фокус снимает, док не закрывает.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemplatePanel {
     pub open: bool,
+    /// Клавиатурный фокус: true — клавиши уходят в панель (фильтр, стрелки,
+    /// Enter, Esc), false — в канвас (панель видна, но не перехватывает).
+    pub focused: bool,
     /// Строка фильтра (подстрока без учёта регистра по имени/описанию/id).
     pub filter: String,
     /// Байтовая позиция каретки в `filter`.
@@ -93,9 +112,12 @@ pub struct TemplatePanel {
 }
 
 impl TemplatePanel {
+    /// Новая панель — развёрнутый док (FR-025: палитра доступна постоянно),
+    /// клавиатурный фокус снят.
     pub fn new() -> Self {
         Self {
-            open: false,
+            open: true,
+            focused: false,
             filter: String::new(),
             cursor: 0,
             category: None,
@@ -104,9 +126,11 @@ impl TemplatePanel {
         }
     }
 
-    /// Открыть (сброс фильтров — каждый вызов с чистого листа).
+    /// Развернуть док с клавиатурным фокусом в поиске (сброс фильтров —
+    /// каждый вызов с чистого листа). Вызывается по Ctrl+P.
     pub fn open(&mut self) {
         self.open = true;
+        self.focused = true;
         self.filter.clear();
         self.cursor = 0;
         self.category = None;
@@ -114,8 +138,28 @@ impl TemplatePanel {
         self.scroll_top = 0;
     }
 
+    /// Свернуть док в полосу-ручку (FR-025; Esc). Фокус снимается.
     pub fn close(&mut self) {
         self.open = false;
+        self.focused = false;
+    }
+
+    /// Развернуть док без сброса фильтров и без клавиатурного фокуса
+    /// (клик по полосе-ручке свёрнутого дока).
+    pub fn expand(&mut self) {
+        self.open = true;
+    }
+
+    /// Клавиатурный фокус в поиск (Ctrl+P по развёрнутому доку: фильтр
+    /// сохраняется, каретка — в конец строки).
+    pub fn focus_search(&mut self) {
+        self.focused = true;
+        self.cursor = self.filter.len();
+    }
+
+    /// Снять клавиатурный фокус (клик по канвасу): док остаётся развёрнут.
+    pub fn unfocus(&mut self) {
+        self.focused = false;
     }
 
     /// Вставка строки в каретку (печать символа, IME).
@@ -194,9 +238,41 @@ impl TemplatePanel {
     }
 }
 
+/// Default для совместимости (`TemplatePanel::new` — развёрнутый док).
 impl Default for TemplatePanel {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// FR-025: нажатие на строку шаблона палитры — кандидат в drag: без
+/// движения порога это клик (вставка в центр viewport), с движением —
+/// drag с ghost-превью (вставка в точку курсора). Отпускание решает.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelDrag {
+    /// Индекс шаблона в `registry.list()`.
+    pub index: usize,
+    /// Точка нажатия (screen, логические px).
+    pub press: Vec2,
+    /// Порог пройден — идёт drag (ghost-превью, вставка в точку курсора).
+    pub active: bool,
+}
+
+impl PanelDrag {
+    /// Порог перевода нажатия в drag, логические px (как рамка выделения).
+    pub const THRESHOLD: f32 = 4.0;
+
+    /// Обновление по позиции курсора: true — только что перешло в drag.
+    pub fn update(&mut self, cursor: Vec2) -> bool {
+        if self.active {
+            return false;
+        }
+        let moved = (cursor[0] - self.press[0]).abs() > Self::THRESHOLD
+            || (cursor[1] - self.press[1]).abs() > Self::THRESHOLD;
+        if moved {
+            self.active = true;
+        }
+        moved
     }
 }
 
@@ -282,6 +358,28 @@ pub struct PanelLayout {
     pub row_rects: Vec<[f32; 4]>,
     /// Видимые строки (параллельно row_rects).
     pub rows: Vec<PanelRow>,
+    /// Футер-подсказка (CR-011): единый rect для рендера и hit-test —
+    /// строки списка в него не заходят (резерв в `panel_layout`).
+    pub footer_rect: [f32; 4],
+    /// Кнопка сворачивания дока в шапке (FR-025; 22×22 у правого края
+    /// шапки) — единый rect для рендера и hit-test.
+    pub collapse_rect: [f32; 4],
+}
+
+/// Ширина полосы-ручки свёрнутого дока палитры (FR-025), логические px.
+pub const COLLAPSED_STRIP_W: f32 = 28.0;
+/// Высота полосы-ручки свёрнутого дока (кнопка «развернуть»), логические px.
+pub const COLLAPSED_STRIP_H: f32 = 44.0;
+
+/// Полоса-ручка свёрнутого дока палитры (FR-025): у левого края вверху;
+/// клик по ней разворачивает док. Единый источник для рендера и hit-test.
+pub fn collapsed_strip_rect(_window_h: f32) -> [f32; 4] {
+    [
+        PANEL_MARGIN,
+        PANEL_TOP_MARGIN,
+        COLLAPSED_STRIP_W,
+        COLLAPSED_STRIP_H,
+    ]
 }
 
 pub fn panel_layout(
@@ -318,7 +416,7 @@ pub fn panel_layout(
     let mut cx = x + PANEL_PADDING;
     let chips_y = input_rect[1] + INPUT_HEIGHT + 6.0;
     for category in &categories {
-        let w = category.len() as f32 * 7.5 + 20.0;
+        let w = category_chip_width(category);
         if cx + w > x + width - PANEL_PADDING {
             break; // не влезли — остальные доступны прокруткой фильтра
         }
@@ -332,7 +430,14 @@ pub fn panel_layout(
     }
 
     let rows_top = chips_y + CATEGORY_ROW_H + 6.0;
-    let bottom_limit = y + height - PANEL_PADDING;
+    // CR-011: резерв под футер-подсказку — строки в неё не заходят
+    let footer_rect = [
+        x + PANEL_PADDING,
+        y + height - PANEL_PADDING - PANEL_FOOTER_H,
+        inner_w,
+        PANEL_FOOTER_H,
+    ];
+    let bottom_limit = footer_rect[1];
     let mut row_rects = Vec::new();
     let mut visible_rows = Vec::new();
     let mut cursor_y = rows_top;
@@ -362,6 +467,13 @@ pub fn panel_layout(
         category_rects,
         row_rects,
         rows: visible_rows,
+        footer_rect,
+        collapse_rect: [
+            x + width - PANEL_PADDING - 22.0,
+            y + PANEL_PADDING + 4.0,
+            22.0,
+            22.0,
+        ],
     }
 }
 
@@ -834,6 +946,75 @@ mod tests {
     }
 
     #[test]
+    fn panel_dock_mode_focus_lifecycle() {
+        // FR-025: док развёрнут по умолчанию, фокус — только по Ctrl+P
+        // или клику в поиск; Esc сворачивает док; клик по канвасу мимо
+        // панели снимает фокус, не закрывая док
+        let mut panel = TemplatePanel::new();
+        assert!(panel.open, "FR-025: палитра доступна постоянно");
+        assert!(!panel.focused);
+        panel.focus_search();
+        assert!(panel.focused);
+        panel.unfocus();
+        assert!(panel.open);
+        assert!(!panel.focused);
+        // Ctrl+P по свёрнутому: развернуть + фокус + чистый фильтр
+        panel.close();
+        assert!(!panel.open && !panel.focused);
+        panel.open();
+        assert!(panel.open && panel.focused);
+        panel.insert_str("lb");
+        // Ctrl+P по развёрнутому: фокус в поиск, фильтр сохраняется
+        panel.focus_search();
+        assert_eq!(panel.filter, "lb");
+        assert!(panel.focused);
+        assert_eq!(panel.cursor, panel.filter.len());
+        // Esc: свернуть док (фокус снят)
+        panel.close();
+        assert!(!panel.open && !panel.focused);
+        // Клик по ручке: развернуть без фокуса и без сброса фильтра
+        panel.expand();
+        assert!(panel.open && !panel.focused && panel.filter == "lb");
+    }
+
+    #[test]
+    fn panel_collapse_button_and_strip_geometry() {
+        let registry = registry();
+        let panel = TemplatePanel::new();
+        let rows = panel_rows(&registry, &panel);
+        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows);
+        // Кнопка сворачивания — в правой части шапки, внутри панели
+        let c = lay.collapse_rect;
+        assert!(c[0] >= lay.header_rect[0]);
+        assert!(c[0] + c[2] <= lay.panel_rect[0] + lay.panel_rect[2] - PANEL_PADDING + 0.01);
+        assert!(c[1] >= lay.header_rect[1]);
+        assert!(c[1] + c[3] <= lay.header_rect[1] + lay.header_rect[3] + 0.01);
+        // Полоса-ручка свёрнутого дока — у левого края, внутри высоты окна
+        let strip = collapsed_strip_rect(800.0);
+        assert_eq!(strip[0], PANEL_MARGIN);
+        assert_eq!(strip[1], PANEL_TOP_MARGIN);
+        assert_eq!(strip[2], COLLAPSED_STRIP_W);
+        assert_eq!(strip[3], COLLAPSED_STRIP_H);
+    }
+
+    #[test]
+    fn panel_drag_threshold() {
+        // FR-025: до порога — клик, после — drag
+        let mut drag = PanelDrag {
+            index: 0,
+            press: [100.0, 100.0],
+            active: false,
+        };
+        assert!(!drag.update([103.0, 101.0]));
+        assert!(!drag.active, "в пределах порога — это клик");
+        assert!(drag.update([105.0, 100.0]));
+        assert!(drag.active, "порог пройден — drag");
+        // Повторные обновления не переключают состояние
+        assert!(!drag.update([200.0, 200.0]));
+        assert!(drag.active);
+    }
+
+    #[test]
     fn panel_input_caret_edits() {
         let mut panel = TemplatePanel::new();
         panel.insert_str("lb");
@@ -900,11 +1081,31 @@ mod tests {
         }
         // Чипы категорий — 4 (backend/cache/network/queue)
         assert_eq!(lay.category_rects.len(), 4);
+        // CR-011: резерв под футер — ни одна строка не пересекает footer_rect
+        let footer = lay.footer_rect;
+        assert!(footer[1] + footer[3] <= lay.panel_rect[1] + lay.panel_rect[3] + 0.01);
+        for rect in &lay.row_rects {
+            let overlap = footer[0] < rect[0] + rect[2]
+                && rect[0] < footer[0] + footer[2]
+                && footer[1] < rect[1] + rect[3]
+                && rect[1] < footer[1] + footer[3];
+            assert!(!overlap, "строка палитры налезла на футер");
+        }
         // Малое окно: строки обрезаются по высоте панели, без паники
         let small = panel_layout(400.0, 300.0, &registry, &panel, &rows);
         for rect in &small.row_rects {
             assert!(rect[1] + rect[3] <= small.panel_rect[1] + small.panel_rect[3] + 0.01);
         }
+    }
+
+    #[test]
+    fn panel_chip_width_counts_chars_not_bytes() {
+        // CR-011: ширина чипа — по символам, не по байтам UTF-8: кириллица
+        // (2 байта/символ) давала чип вдвое шире текста и чипы вылезали
+        // за панель, остальные категории молча отбрасывались
+        assert!((category_chip_width("db") - (2.0 * 7.5 + 20.0)).abs() < 0.01);
+        assert!((category_chip_width("БД") - (2.0 * 7.5 + 20.0)).abs() < 0.01);
+        assert!((category_chip_width("Очереди") - (7.0 * 7.5 + 20.0)).abs() < 0.01);
     }
 
     // --- Wheel: геометрия (правка владельца — раскладка от плашек) ---

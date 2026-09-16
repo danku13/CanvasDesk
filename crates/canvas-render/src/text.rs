@@ -75,6 +75,14 @@ const ICON_WIDTH: f32 = 22.0;
 /// (LOD-порог, уточняется в T11 по SPEC §6.2).
 const MIN_TITLE_PX: f32 = 4.0;
 
+/// Ширина клипа заголовка (CR-010): резерв под иконку вычитается и для
+/// файловой ноды (буква расширения слева), и для шаблонной (квад-иконка
+/// справа, `cards::template_icon_rect`) — иначе длинное имя шаблона
+/// рисовалось под иконкой. Рендер и шейпинг используют одну формулу.
+pub(crate) fn title_clip_width(node_width: f32, reserves_icon: bool) -> f32 {
+    (node_width - TITLE_PADDING * 2.0 - if reserves_icon { ICON_WIDTH } else { 0.0 }).max(0.0)
+}
+
 /// Размер тела заметки в world-px (T7).
 pub const BODY_FONT_SIZE: f32 = 14.0;
 /// Высота строки тела заметки.
@@ -1221,10 +1229,11 @@ impl TextSystem {
                 if node.kind() == NodeKind::Widget && !revealed_widget {
                     continue;
                 }
-                let has_icon = extension_letter(node).is_some();
-                let title_width =
-                    (node.width - TITLE_PADDING * 2.0 - if has_icon { ICON_WIDTH } else { 0.0 })
-                        .max(0.0);
+                // CR-010: резерв под иконку — и у файловой ноды (буква
+                // расширения), и у шаблонной (квад-иконка справа): без
+                // резерва длинное имя шаблона рисовалось под иконкой
+                let has_icon = extension_letter(node).is_some() || node.template().is_some();
+                let title_width = title_clip_width(node.width, has_icon);
                 let width_px = title_width * zoom_px;
                 // FR-011: у свернутой ноды в заголовке бейдж «+N» — число
                 // скрытых потомков
@@ -2219,6 +2228,45 @@ mod tests {
         // Шапка вмещает строку заголовка с вертикальными полями
         assert!(HEADER_HEIGHT >= TITLE_LINE_HEIGHT + 8.0);
         assert!(TITLE_PADDING >= 10.0, "адекватный отступ заголовка");
+    }
+
+    /// CR-010: клип заголовка шаблонной ноды заканчивается ДО квад-иконки
+    /// (длинное имя не рисуется под иконкой), а горизонтальные поля шапки
+    /// симметричны: TITLE_PADDING слева = TEMPLATE_ICON_MARGIN_H справа.
+    #[test]
+    fn template_title_clip_clears_quad_icon() {
+        use crate::cards::{template_icon_rect, TEMPLATE_ICON_MARGIN_H};
+        let mut node = Node::text("tpl", "rps = 1000 rps", 100.0, 50.0);
+        node.width = 260.0;
+        node.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps, $service_rate)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
+        }));
+        // Ширина клипа — с резервом под иконку (как в фазе шейпинга)
+        let reserves_icon = node.template().is_some();
+        let title_width = title_clip_width(node.width, reserves_icon);
+        let title_right = node.x + TITLE_PADDING + title_width;
+        let icon = template_icon_rect(&node);
+        assert!(
+            title_right <= icon[0] + 0.01,
+            "клип заголовка ({title_right}) залезает под иконку (левый край {})",
+            icon[0]
+        );
+        assert!(
+            (TEMPLATE_ICON_MARGIN_H - TITLE_PADDING).abs() < 0.01,
+            "горизонтальные поля шапки асимметричны"
+        );
+        // У ноды без иконки резерва нет — клип по полям с двух сторон
+        let plain = Node::text("n", "text", 0.0, 0.0);
+        assert!(
+            (title_clip_width(plain.width, false) - (plain.width - TITLE_PADDING * 2.0)).abs()
+                < 0.01
+        );
     }
 
     /// Маппинг позиции z-плана → индекс ноды: позиции — в `frame.indices`

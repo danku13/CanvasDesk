@@ -242,14 +242,18 @@ pub fn build_instances(
 pub const TEMPLATE_BAND_H: f32 = 6.0;
 /// Сторона квад-иконки роли (world px).
 pub const TEMPLATE_ICON_SIZE: f32 = 16.0;
-/// Отступ иконки от края ноды/полосы (world px).
+/// Горизонтальный отступ иконки от края ноды (world px).
+/// CR-010: равен левому полю заголовка (`TITLE_PADDING` в text.rs) — шапка
+/// симметрична; прежние 6 px визуально «уезжали» вправо.
+pub const TEMPLATE_ICON_MARGIN_H: f32 = 12.0;
+/// Вертикальный отступ иконки от полосы категории (world px).
 pub const TEMPLATE_ICON_MARGIN: f32 = 6.0;
 
 /// Rect квад-иконки роли: правый верхний угол шапки (заголовок слева,
-/// иконка справа — не пересекаются).
+/// иконка справа — не пересекаются: клип заголовка резервирует ICON_WIDTH).
 pub fn template_icon_rect(node: &Node) -> [f32; 4] {
     [
-        node.x + node.width - TEMPLATE_ICON_SIZE - TEMPLATE_ICON_MARGIN,
+        node.x + node.width - TEMPLATE_ICON_SIZE - TEMPLATE_ICON_MARGIN_H,
         node.y + TEMPLATE_BAND_H + TEMPLATE_ICON_MARGIN,
         TEMPLATE_ICON_SIZE,
         TEMPLATE_ICON_SIZE,

@@ -41,7 +41,9 @@ use canvas_render::animate::{
     FOCUS_FADE_MS, FOCUS_PULSE_MS,
 };
 use canvas_render::camera::Vec2;
-use canvas_render::cards::{template_icon_quads, CardInstance, FocusView, HEADER_HEIGHT};
+use canvas_render::cards::{
+    drop_ghost, template_icon_quads, CardInstance, FocusView, HEADER_HEIGHT,
+};
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
@@ -194,19 +196,46 @@ fn split_formula_lines(text: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+/// CR-010: оценка числа визуальных рядов тела с учётом переносов. Рендер
+/// шейпит тело с `Wrap::WordOrGlyph` в области шириной `body_width`, поэтому
+/// длинная строка параметра даёт несколько рядов, хотя `\n`-строка одна.
+/// Средняя ширина глифа Noto Sans 14 px (смешанная кириллица/латиница) —
+/// оценка консервативная: функция только РАСТИТ высоту, занижать нельзя.
+/// CJK-идеографы считаются двойными юнитами.
+fn wrapped_body_rows(text: &str, body_width: f32) -> usize {
+    const AVG_CHAR_W: f32 = 7.0;
+    let units_per_line = (body_width / AVG_CHAR_W).floor().max(1.0);
+    let units = |c: char| -> f32 {
+        match c {
+            '\u{2E80}'..='\u{9FFF}'
+            | '\u{AC00}'..='\u{D7AF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FF00}'..='\u{FF60}' => 2.0,
+            _ => 1.0,
+        }
+    };
+    text.lines()
+        .map(|line| {
+            let line_units: f32 = line.chars().map(units).sum();
+            (line_units / units_per_line).ceil().max(1.0) as usize
+        })
+        .sum::<usize>()
+        .max(1)
+}
+
 /// FR-023: авто-высота шаблонной ноды — по числу строк листа параметров:
-/// шапка + тело + футер результата. Общая для GUI-инстанциации и MCP
+/// шапка + тело + футер результата. CR-010: строки считаются с переносами
+/// (`wrapped_body_rows`) — длинное значение параметра не вылезает за низ
+/// карточки у новой ноды. Общая для GUI-инстанциации и MCP
 /// `template_instantiate`: новая нода сразу влезает целиком (без
 /// «подгонки правкой»). Только рост (не сжимает пользовательский размер).
 fn fit_template_node_height(node: &mut Node) {
-    let lines = node
-        .text
-        .as_deref()
-        .map(|text| text.lines().count().max(1))
-        .unwrap_or(1);
+    let text = node.text.as_deref().unwrap_or("");
+    let body_width = (node.width - BODY_PADDING * 2.0).max(BODY_PADDING);
+    let rows = wrapped_body_rows(text, body_width);
     let needed = HEADER_HEIGHT
         + BODY_TOP_GAP
-        + lines as f32 * BODY_LINE_HEIGHT
+        + rows as f32 * BODY_LINE_HEIGHT
         + BODY_PADDING
         + RESULT_LINE_HEIGHT
         + 2.0;
@@ -962,7 +991,13 @@ struct App {
     /// FR-020: корень custom-шаблонов (`~/.canvasdesk/templates`).
     templates_root: std::path::PathBuf,
     /// FR-018: боковая палитра шаблонов (Ctrl+P): фильтр/категории/выбор.
+    /// FR-025 — постоянный левый док (не модальна): open — развёрнутость,
+    /// focused — клавиатурный фокус.
     template_panel: template_ui::TemplatePanel,
+    /// FR-025: drag карточки шаблона из палитры в точку канваса (нажатие
+    /// на строку; отпускание решает — клик: в центр viewport, drag: в
+    /// точку курсора с ghost-превью).
+    template_drag: Option<template_ui::PanelDrag>,
     /// FR-018: радиальное wheel-меню шаблонов (Shift+клик по пустому
     /// месту): screen-центр + world-точка инстанциации + категория.
     wheel_menu: Option<template_ui::WheelMenu>,
@@ -1093,6 +1128,14 @@ impl App {
             node_clipboard: Vec::new(),
             hotkeys_open: false,
             pending_undo: None,
+            // FR-025: палитра — постоянный док; развёрнутость из конфига
+            // (по умолчанию развёрнута). Поле инициализируется до move
+            // `settings` ниже.
+            template_panel: {
+                let mut panel = template_ui::TemplatePanel::new();
+                panel.open = settings.template_palette_open;
+                panel
+            },
             settings,
             config_path,
             settings_open: false,
@@ -1122,7 +1165,7 @@ impl App {
                     .join("templates");
                 canvas_core::templates::TemplateRegistry::all_with_custom(&root)
             },
-            template_panel: template_ui::TemplatePanel::new(),
+            template_drag: None,
             wheel_menu: None,
             hints: hints_ui::HintPopup::default(),
             focus_dim: 0.0,
@@ -3079,15 +3122,26 @@ impl App {
         (instances, texts)
     }
 
-    /// Клавиатура открытой палитры шаблонов (Ctrl+P): ввод фильтра,
-    /// стрелки/Enter/Esc. Вызывается из on_key, когда панель открыта.
-    /// true — клавиша потреблена панелью.
+    /// Клавиатура палитры шаблонов в фокусе (Ctrl+P/клик по поиску):
+    /// ввод фильтра, стрелки/Enter/Esc. Вызывается из on_key, когда панель
+    /// развёрнута и сфокусирована. true — клавиша потреблена панелью.
     fn on_template_panel_key(&mut self, event: &KeyEvent) -> bool {
         if event.state != ElementState::Pressed {
             return true; // отпускания глотаются — канвасу не достаются
         }
+        // Ctrl+P не глотаем: on_key ниже фокусирует поиск развёрнутого
+        // дока (FR-025) или разворачивает свёрнутый
+        if self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("p") || c.eq_ignore_ascii_case("з"))
+        {
+            return false;
+        }
         if event.logical_key == Key::Named(NamedKey::Escape) && !event.repeat {
+            // FR-025: Esc сворачивает постоянный док (не закрывает модал —
+            // док не модален; повторный Ctrl+P или ручка слева развернут)
             self.template_panel.close();
+            self.persist_palette_dock();
             self.request_redraw();
             return true;
         }
@@ -3099,7 +3153,8 @@ impl App {
                 if let template_ui::PanelRow::Template(index) = rows[row_idx] {
                     let manifest = self.templates.list()[index].clone();
                     let center = self.viewport_center_world();
-                    self.template_panel.close();
+                    // FR-025: док остаётся развёрнут — только фокус снят
+                    self.template_panel.unfocus();
                     self.instantiate_template_at(&manifest, center);
                     self.request_redraw();
                 }
@@ -3148,23 +3203,39 @@ impl App {
         true
     }
 
-    /// Оверлей боковой палитры шаблонов (FR-018, Ctrl+P): панель у правого
-    /// края, поле фильтра, чипы категорий, строки шаблонов с квад-иконками
-    /// и описанием (паттерн search_overlay).
-    /// Оверлей боковой палитры шаблонов (FR-018, Ctrl+P). FR-024 — стиль
-    /// Miro Template picker: левый док во всю высоту (чистая геометрия —
-    /// `template_ui::panel_layout`), плотная подложка с рамкой, шапка
-    /// «Шаблоны», поиск с placeholder, чипы категорий, секции с
-    /// заголовками, строки-карточки (подложка + плитка иконки + имя +
-    /// описание), hover/выбранное состояние, футер-подсказка.
+    /// Оверлей палитры шаблонов (FR-018, Ctrl+P; FR-024 — стиль Miro
+    /// Template picker; FR-025 — постоянный док: свёрнутая полоса-ручка,
+    /// кнопка «‹» в шапке, ghost-превью drag): левый док во всю высоту
+    /// (чистая геометрия — `template_ui::panel_layout`), плотная подложка
+    /// с рамкой, шапка «Шаблоны», поиск с placeholder, чипы категорий,
+    /// секции с заголовками, строки-карточки (подложка + плитка иконки +
+    /// имя + описание), hover/выбранное состояние, футер-подсказка.
     fn template_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
-        if !self.template_panel.open {
-            return (instances, texts);
-        }
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        // FR-025: свёрнутый док — полоса-ручка у левого края с кнопкой «»
+        if !self.template_panel.open {
+            let strip = rect_xywh(template_ui::collapsed_strip_rect(viewport[1]));
+            instances.push(CardInstance {
+                pos: [strip[0], strip[1]],
+                size: [strip[2], strip[3]],
+                fill: palette.menu_fill,
+                border: palette.palette_border,
+                params: [8.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: "»".to_owned(),
+                origin: [strip[0], strip[1] + 13.0],
+                width: strip[2],
+                font_size: 14.0,
+                color: palette.title,
+                align: TextAlign::Center,
+            });
             return (instances, texts);
         }
         let rows = template_panel_rows(&self.templates, &self.template_panel);
@@ -3175,15 +3246,16 @@ impl App {
             &self.template_panel,
             &rows,
         );
-        let palette = ThemeColors::from_theme(self.settings.theme);
         let icon_tint = color_to_rgba(palette.icon);
         let panel = rect_xywh(lay.panel_rect);
-        // Подложка дока: плотная, с рамкой (отделяет панель от канваса)
+        // Подложка дока: плотная, с рамкой (отделяет панель от канваса).
+        // CR-011: рамка палитурная (была захардкожена тёмной — ломала
+        // светлую тему).
         instances.push(CardInstance {
             pos: [panel[0], panel[1]],
             size: [panel[2], panel[3]],
             fill: palette.menu_fill,
-            border: [0.22, 0.24, 0.30, 0.9],
+            border: palette.palette_border,
             params: [8.0, 0.0, 0.0, 1.0],
         });
         // Шапка: название + счётчик шаблонов
@@ -3205,6 +3277,23 @@ impl App {
             width: lay.header_rect[2] * 0.5 - 4.0,
             font_size: 11.0,
             color: palette.body,
+            align: TextAlign::Center,
+        });
+        // FR-025: кнопка сворачивания дока («‹» у правого края шапки)
+        let collapse = rect_xywh(lay.collapse_rect);
+        instances.push(CardInstance {
+            pos: [collapse[0], collapse[1]],
+            size: [collapse[2], collapse[3]],
+            fill: palette.palette_chip_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "‹".to_owned(),
+            origin: [collapse[0], collapse[1] + 3.0],
+            width: collapse[2],
+            font_size: 13.0,
+            color: palette.title,
             align: TextAlign::Center,
         });
         // Поле фильтра: placeholder при пустом вводе, иначе текст с кареткой
@@ -3232,15 +3321,15 @@ impl App {
             },
             align: TextAlign::Left,
         });
-        // Чипы категорий
+        // Чипы категорий (CR-011: заливки палитурные, не хардкод)
         for (rect, name, active) in &lay.category_rects {
             instances.push(CardInstance {
                 pos: [rect[0], rect[1]],
                 size: [rect[2], rect[3]],
                 fill: if *active {
-                    [0.18, 0.29, 0.48, 0.95]
+                    palette.palette_selected_fill
                 } else {
-                    [0.17, 0.18, 0.22, 0.8]
+                    palette.palette_chip_fill
                 },
                 border: [0.0; 4],
                 params: [11.0, 0.0, 0.0, 1.0],
@@ -3279,19 +3368,20 @@ impl App {
                     let selected = self.template_panel.selected == ordinal;
                     let row_rect = rect_xywh(*rect);
                     let row_hover = point_in_rect(row_rect, self.cursor);
-                    // Подложка-карточка строки (Miro: карточка с фоном)
+                    // Подложка-карточка строки (Miro: карточка с фоном;
+                    // CR-011: заливки палитурные, не хардкод)
                     instances.push(CardInstance {
                         pos: [row_rect[0], row_rect[1]],
                         size: [row_rect[2], row_rect[3]],
                         fill: if selected {
-                            [0.18, 0.29, 0.48, 0.95]
+                            palette.palette_selected_fill
                         } else if row_hover {
-                            [0.24, 0.30, 0.42, 0.6]
+                            palette.palette_hover_fill
                         } else {
-                            [0.13, 0.14, 0.18, 0.65]
+                            palette.palette_row_fill
                         },
                         border: if selected || row_hover {
-                            [0.30, 0.42, 0.65, 0.9]
+                            palette.palette_border
                         } else {
                             [0.0; 4]
                         },
@@ -3307,7 +3397,7 @@ impl App {
                     instances.push(CardInstance {
                         pos: [tile[0], tile[1]],
                         size: [tile[2], tile[3]],
-                        fill: [0.20, 0.22, 0.28, 0.9],
+                        fill: palette.palette_tile_fill,
                         border: [0.0; 4],
                         params: [6.0, 0.0, 0.0, 1.0],
                     });
@@ -3340,18 +3430,48 @@ impl App {
                 }
             }
         }
-        // Футер-подсказка (низ панели)
+        // Футер-подсказка (CR-011: позиция из footer_rect чистой геометрии —
+        // строки списка в него не заходят; FR-025: Esc сворачивает док)
+        let footer = rect_xywh(lay.footer_rect);
         texts.push(OwnedScreenText {
-            text: "Enter — вставить в центр · Esc — закрыть".to_owned(),
-            origin: [
-                panel[0] + template_ui::PANEL_PADDING,
-                panel[1] + panel[3] - 22.0,
-            ],
-            width: panel[2] - template_ui::PANEL_PADDING * 2.0,
+            text: "Enter — вставить в центр · Esc — свернуть".to_owned(),
+            origin: [footer[0], footer[1] + 7.0],
+            width: footer[2],
             font_size: 10.0,
             color: palette.body,
             align: TextAlign::Left,
         });
+        // FR-025: ghost-превью drag карточки шаблона — призрак дропа
+        // (Т9) в world-точке курсора, отрисованный screen-space поверх
+        if let Some(drag) = &self.template_drag {
+            if drag.active {
+                if let Some(manifest) = self.templates.list().get(drag.index) {
+                    if let Ok(mut preview) = canvas_core::templates::instantiate(
+                        manifest,
+                        &BTreeMap::new(),
+                        "preview".to_owned(),
+                        0.0,
+                        0.0,
+                    ) {
+                        fit_template_node_height(&mut preview);
+                        let world = self.cursor_world();
+                        let top_left = [
+                            world[0] - preview.width / 2.0,
+                            world[1] - preview.height / 2.0,
+                        ];
+                        let ghost = drop_ghost(top_left, [preview.width, preview.height]);
+                        let zoom = self.camera.zoom();
+                        instances.push(CardInstance {
+                            pos: self.camera.world_to_screen(top_left, viewport),
+                            size: [ghost.size[0] * zoom, ghost.size[1] * zoom],
+                            fill: ghost.fill,
+                            border: ghost.border,
+                            params: ghost.params,
+                        });
+                    }
+                }
+            }
+        }
         (instances, texts)
     }
 
@@ -4270,6 +4390,17 @@ impl App {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
         }
+        if let Some(path) = &self.config_path {
+            if let Err(err) = self.settings.save(path) {
+                tracing::warn!(%err, "не удалось сохранить конфиг");
+            }
+        }
+    }
+
+    /// FR-025: сохранить развёрнутость палитры-дока в конфиг
+    /// (сворачивание по Esc/кнопке «‹», разворачивание по ручке/Ctrl+P).
+    fn persist_palette_dock(&mut self) {
+        self.settings.template_palette_open = self.template_panel.open;
         if let Some(path) = &self.config_path {
             if let Err(err) = self.settings.save(path) {
                 tracing::warn!(%err, "не удалось сохранить конфиг");
@@ -5472,13 +5603,20 @@ impl App {
             self.request_redraw();
             return;
         }
-        // FR-018: панель шаблонов открыта — клавиатура уходит в неё
-        // (фильтр, стрелки, Enter, Esc), канвас-хоткеи приглушены
-        if self.template_panel.open && self.on_template_panel_key(event) {
+        // FR-018: панель шаблонов в фокусе — клавиатура уходит в неё
+        // (фильтр, стрелки, Enter, Esc), канвас-хоткеи приглушены.
+        // FR-025: док постоянный — клавиши перехватывает только при
+        // клавиатурном фокусе (Ctrl+P/клик по поиску), иначе — канвас
+        if self.template_panel.open
+            && self.template_panel.focused
+            && self.on_template_panel_key(event)
+        {
             return;
         }
-        // Ctrl+P — палитра шаблонов (FR-018; кириллическая раскладка — «з»).
-        // Взаимоисключающе с wheel-меню: открытие закрывает его
+        // Ctrl+P — фокус в поиск палитры шаблонов (FR-018/FR-025;
+        // кириллическая раскладка — «з»). Палитра — постоянный док:
+        // Ctrl+P её не закрывает, а фокусирует (по свёрнутой — разворачивает
+        // с чистым фильтром). Взаимоисключающе с wheel-меню
         if event.state == ElementState::Pressed
             && !event.repeat
             && self.modifiers.control_key()
@@ -5487,7 +5625,7 @@ impl App {
         {
             self.wheel_menu = None;
             if self.template_panel.open {
-                self.template_panel.close();
+                self.template_panel.focus_search();
             } else {
                 self.template_panel.open();
             }
@@ -5776,9 +5914,10 @@ impl App {
                     self.request_redraw();
                     return;
                 }
-                // FR-018: палитра шаблонов — клик по чипу категории (тогл
-                // фильтра) или строке шаблона (инстанциация в центр
-                // viewport), мимо панели — закрыть; канвасу клик не достаётся
+                // FR-025: палитра — постоянный левый док (не модальна).
+                // Клики по её элементам обрабатываем; мимо панели клик
+                // уходит в канвас (фокус панели снимается, док не закрывается).
+                // Свёрнутый док — полоса-ручка слева: клик по ней разворачивает.
                 if self.template_panel.open {
                     let viewport = self.viewport_logical();
                     let rows = template_panel_rows(&self.templates, &self.template_panel);
@@ -5790,39 +5929,71 @@ impl App {
                         &rows,
                     );
                     let mut handled = false;
-                    for (rect, name, _active) in &lay.category_rects {
-                        if point_in_rect(rect_xywh(*rect), self.cursor) {
-                            self.template_panel.category =
-                                if self.template_panel.category.as_deref() == Some(name) {
-                                    None
-                                } else {
-                                    Some(name.clone())
-                                };
-                            self.template_panel.selected = 0;
-                            self.template_panel.scroll_top = 0;
-                            handled = true;
-                            break;
+                    // Кнопка сворачивания дока («‹» в шапке)
+                    if point_in_rect(rect_xywh(lay.collapse_rect), self.cursor) {
+                        self.template_panel.close();
+                        self.persist_palette_dock();
+                        handled = true;
+                    }
+                    // Клик по полю поиска — клавиатурный фокус в панель
+                    if !handled && point_in_rect(rect_xywh(lay.input_rect), self.cursor) {
+                        self.template_panel.focus_search();
+                        handled = true;
+                    }
+                    if !handled {
+                        for (rect, name, _active) in &lay.category_rects {
+                            if point_in_rect(rect_xywh(*rect), self.cursor) {
+                                self.template_panel.category =
+                                    if self.template_panel.category.as_deref() == Some(name) {
+                                        None
+                                    } else {
+                                        Some(name.clone())
+                                    };
+                                self.template_panel.selected = 0;
+                                self.template_panel.scroll_top = 0;
+                                handled = true;
+                                break;
+                            }
                         }
                     }
                     if !handled {
                         // FR-024: строки панели — секции (заголовки, клик
-                        // глотается) и карточки шаблонов (вставка в центр)
+                        // глотается) и карточки шаблонов (FR-025: нажатие
+                        // — кандидат в drag; вставка — на отпускании: клик —
+                        // в центр viewport, drag — в точку курсора)
                         for (rect, row) in lay.row_rects.iter().zip(lay.rows.iter()) {
                             if point_in_rect(rect_xywh(*rect), self.cursor) {
                                 if let PanelRow::Template(index) = row {
-                                    let manifest = self.templates.list()[*index].clone();
-                                    let center = self.viewport_center_world();
-                                    self.template_panel.close();
-                                    self.instantiate_template_at(&manifest, center);
+                                    self.template_drag = Some(template_ui::PanelDrag {
+                                        index: *index,
+                                        press: self.cursor,
+                                        active: false,
+                                    });
                                 }
                                 handled = true;
                                 break;
                             }
                         }
                     }
-                    if !handled && !point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
-                        self.template_panel.close();
+                    if !handled && point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+                        // Внутри дока, мимо элементов — глотаем
+                        handled = true;
                     }
+                    if handled {
+                        self.request_redraw();
+                        return;
+                    }
+                    // Мимо дока: фокус снимаем, клик проходит в канвас
+                    self.template_panel.unfocus();
+                } else if point_in_rect(
+                    rect_xywh(template_ui::collapsed_strip_rect(
+                        self.viewport_logical()[1],
+                    )),
+                    self.cursor,
+                ) {
+                    // Полоса-ручка свёрнутого дока — развернуть
+                    self.template_panel.expand();
+                    self.persist_palette_dock();
                     self.request_redraw();
                     return;
                 }
@@ -6330,6 +6501,23 @@ impl App {
                 self.request_redraw();
             }
             ElementState::Released => {
+                // FR-025: отпускание нажатия на строке палитры — вставка:
+                // drag (порог пройден) — в world-точку курсора, клик — в
+                // центр viewport. Инстанциация на отпускании, а не на
+                // нажатии, чтобы отличить drag от клика
+                if let Some(drag) = self.template_drag.take() {
+                    let manifest = self.templates.list().get(drag.index).cloned();
+                    if let Some(manifest) = manifest {
+                        if drag.active {
+                            let world = self.cursor_world();
+                            self.instantiate_template_at(&manifest, world);
+                        } else {
+                            let center = self.viewport_center_world();
+                            self.instantiate_template_at(&manifest, center);
+                        }
+                    }
+                    self.request_redraw();
+                }
                 // Рамка выделения (CR-001): движение больше порога —
                 // выделяем ноды, пересекающие прямоугольник (AABB,
                 // частичное вхождение считается); клик без движения уже
@@ -6658,6 +6846,13 @@ impl App {
             self.request_redraw();
         }
         self.cursor = logical;
+        // FR-025: нажатие на строку палитры — порог переводит его в drag
+        // (ghost-превью следует за курсором до отпускания)
+        if let Some(drag) = self.template_drag.as_mut() {
+            if drag.update(logical) || drag.active {
+                self.request_redraw();
+            }
+        }
         // Драг внутри редактора — расширение выделения мышью (T7/T8)
         if self.editor_dragging && !self.space_pressed {
             let world = self.cursor_world();
@@ -8891,6 +9086,50 @@ impl ApplicationHandler<AppEvent> for App {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    /// CR-010: оценка рядов тела с переносами — длинная строка даёт
+    /// несколько визуальных рядов (рендер шейпит Wrap::WordOrGlyph),
+    /// пустой текст — минимум один ряд.
+    #[test]
+    fn wrapped_body_rows_counts_visual_rows() {
+        // Ширина тела 240 (нода 260 − 2·BODY_PADDING): ~34 юнита на ряд
+        let width = 260.0 - BODY_PADDING * 2.0;
+        assert_eq!(wrapped_body_rows("a", width), 1);
+        assert_eq!(wrapped_body_rows("a\nb", width), 2);
+        // 200 символов — больше одного ряда
+        let long = "x".repeat(200);
+        assert!(wrapped_body_rows(&long, width) >= 5, "переносы недооценены");
+        // Короткие строки суммируются по рядам
+        let two = format!("{}\n{}", "y".repeat(100), "z");
+        assert!(wrapped_body_rows(&two, width) >= 4);
+        assert_eq!(wrapped_body_rows("", width), 1);
+    }
+
+    /// CR-010: стартовая высота новой шаблонной ноды покрывает переносы —
+    /// длинное значение параметра не вылезает за низ карточки.
+    #[test]
+    fn fit_template_height_covers_wrapped_lines() {
+        let mut node = Node::text("tpl", "x".repeat(400), 0.0, 0.0);
+        node.width = 260.0;
+        fit_template_node_height(&mut node);
+        let rows = wrapped_body_rows(&"x".repeat(400), node.width - BODY_PADDING * 2.0);
+        let needed = HEADER_HEIGHT
+            + BODY_TOP_GAP
+            + rows as f32 * BODY_LINE_HEIGHT
+            + BODY_PADDING
+            + RESULT_LINE_HEIGHT
+            + 2.0;
+        assert!(
+            node.height >= needed,
+            "высота {} меньше нужной {needed}",
+            node.height
+        );
+        // Короткий лист — высота скромная (рост, не раздувание)
+        let mut short = Node::text("tpl2", "rps = 10 rps", 0.0, 0.0);
+        short.width = 260.0;
+        fit_template_node_height(&mut short);
+        assert!(short.height < node.height);
+    }
 
     /// Стартовый канвас непустой и переживает round-trip.
     #[test]
