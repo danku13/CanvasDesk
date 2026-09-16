@@ -240,16 +240,20 @@ pub mod ui {
         WidgetPermissions,
     }
 
-    /// Активный drag резиновой линии (T8 + CR-002): от порта ноды к курсору —
-    /// новая связь; или перепривязка конца существующей связи.
+    /// Активный drag резиновой линии (T8 + CR-002 + FR-025): от порта ноды
+    /// к курсору — новая связь; или перепривязка конца существующей связи.
     pub enum EdgeDrag {
         /// Новая связь: тянем от порта `from_node` (T8). FR-014: `value_flow`
         /// — Shift+drag создаёт value-ребро (поток значений); обычный drag —
         /// контрольную связь (дефолт, обратная совместимость).
+        /// FR-025: `from_port` — drag от ПОСТРОЧНОЙ точки выхода (сама
+        /// точка несёт строку-исток и world-точку старта); такой drag всегда
+        /// создаёт value-ребро (точка выхода расчёта семантически value).
         New {
             from_node: String,
             from_side: Side,
             value_flow: bool,
+            from_port: Option<canvas_core::LinePort>,
         },
         /// Перепривязка конца существующей связи (CR-002): тянем хэндл
         /// конца `end` связи `edge_index` к новой ноде — без удаления.
@@ -269,8 +273,15 @@ pub mod ui {
                 EdgeDrag::New {
                     from_node,
                     from_side,
+                    from_port,
                     ..
                 } => {
+                    // FR-025: построчный исток — старт резинки от ТОЧКИ
+                    // порта строки (зафиксирована при захвате; world-точки
+                    // не меняются за время drag связи)
+                    if let Some(port) = from_port {
+                        return Some((port.point, Side::Right));
+                    }
                     let node = canvas.node(from_node)?;
                     Some((port_point(node, *from_side), *from_side))
                 }
@@ -1208,10 +1219,25 @@ pub mod ui {
                 from_node: "a".to_owned(),
                 from_side: Side::Right,
                 value_flow: false,
+                from_port: None,
             };
             let (point, side) = drag.draft_origin(&canvas).expect("порт истока");
             assert_eq!(side, Side::Right);
             approx(point, [100.0, 50.0]);
+            // FR-025: построчный исток — резинка от ТОЧКИ порта строки
+            let drag = EdgeDrag::New {
+                from_node: "a".to_owned(),
+                from_side: Side::Right,
+                value_flow: true,
+                from_port: Some(canvas_core::LinePort {
+                    line: Some(2),
+                    point: [100.0, 37.0],
+                    is_final: false,
+                }),
+            };
+            let (point, side) = drag.draft_origin(&canvas).expect("построчный порт");
+            assert_eq!(side, Side::Right, "построчный порт — правый край");
+            approx(point, [100.0, 37.0]);
             // Перепривязка ИСТОКА: резинка от СТОКА (left-порт b)
             let drag = EdgeDrag::Rebind {
                 edge_index: 0,
@@ -1233,6 +1259,7 @@ pub mod ui {
                 from_node: "ghost".to_owned(),
                 from_side: Side::Right,
                 value_flow: true,
+                from_port: None,
             };
             assert!(drag.draft_origin(&canvas).is_none());
             let drag = EdgeDrag::Rebind {

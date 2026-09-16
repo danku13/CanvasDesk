@@ -607,8 +607,10 @@ impl SceneState {
     /// текста/формулы, рёбра, удаление нод, undo) — propagator чистый,
     /// полный пересчёт ≤1000 нод <10 мс (SPEC §6.3).
     fn recompute_flow(&mut self) {
-        let outputs = match flow::propagate(&self.canvas, &HashMap::new()) {
-            Ok(outputs) => outputs,
+        // FR-025: propagate_with_lines — значения нод + построчные выходы
+        // Numi-листов одним обходом (строки видят входы value-рёбер)
+        let solutions = match flow::propagate_with_lines(&self.canvas, &HashMap::new()) {
+            Ok(solutions) => solutions,
             Err(cycle) => {
                 // UI и MCP блокируют создание value-циклов; сюда попадаем
                 // только из чужих .canvas-файлов — деградация до изолированного
@@ -619,11 +621,18 @@ impl SceneState {
                 return;
             }
         };
-        self.expr_results = outputs_to_results(&outputs);
+        self.expr_results = outputs_to_results(&solutions.outputs);
         self.expr_line_results.clear();
         for node in &self.canvas.nodes {
             let text = node.text.clone().unwrap_or_default();
-            let slots = flow::inbound_slots(&self.canvas, &node.id, &outputs);
+            // FR-025: слоты с учётом построчных истоков — строки downstream
+            // нод видят значения строк источников (`= $in × 2` от строки)
+            let slots = flow::inbound_slots_with_lines(
+                &self.canvas,
+                &node.id,
+                &solutions.outputs,
+                &solutions.lines,
+            );
             let line_results = if slots.is_empty() {
                 expr::eval_lines(&text)
             } else {
@@ -956,9 +965,9 @@ enum AppDialog {
     },
     /// «Удалить пакет <имя>? Ноды пакета останутся как заглушки» (П11).
     RemovePackage { widget_id: String, name: String },
-    /// FR-014: «Обнаружен цикл … Создать как контрольную связь?» —
-    /// value-ребро замкнуло бы цикл потока. Да — создать control-ребро,
-    /// Нет — ничего. Хранит параметры будущего ребра (концы и стороны).
+    /// FR-014: диалог подтверждения цикла — параметры будущего ребра
+    /// (концы и стороны). FR-025: control-фолбэк после диалога всегда
+    /// теряет построчную семантику (from_line не сохраняется).
     EdgeCycle {
         from_node: String,
         from_side: Side,
@@ -4934,6 +4943,11 @@ impl App {
             SettingsRow::EdgesAvoid => {
                 self.settings.edges_avoid_nodes = !self.settings.edges_avoid_nodes;
             }
+            // FR-025: построчные точки выхода — рендер/hit-тест читают флаг
+            // на кадре (SceneView.line_ports), синхронизация рендера не нужна
+            SettingsRow::LinePorts => {
+                self.settings.line_ports = !self.settings.line_ports;
+            }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
             SettingsRow::HudOnStart => {
@@ -7005,6 +7019,40 @@ impl App {
                         return;
                     }
                 }
+                // FR-025: ПОСТРОЧНЫЕ точки выхода (флаг line_ports) —
+                // приоритет над сторонными портами в пределах своих рядов:
+                // drag от кружка строки создаёт value-ребро со значением
+                // именно этой строки (from_port, всегда value).
+                if self.settings.line_ports {
+                    let line_port = self.hovered.and_then(|node_index| {
+                        let node = self.scene.canvas.nodes.get(node_index)?;
+                        if node.kind() == NodeKind::Group {
+                            return None;
+                        }
+                        let renderer = self.renderer.as_ref()?;
+                        let ports = renderer.line_ports(node_index, node);
+                        canvas_core::line_port_at(
+                            &ports,
+                            world,
+                            self.camera.zoom(),
+                            self.settings.port_zone_px,
+                        )
+                    });
+                    if let Some(port) = line_port {
+                        let from_node = self.scene.canvas.nodes[self.hovered.unwrap_or_default()]
+                            .id
+                            .clone();
+                        self.edge_drag = Some(EdgeDrag::New {
+                            from_node,
+                            from_side: Side::Right,
+                            // Точка выхода расчёта семантически value
+                            value_flow: true,
+                            from_port: Some(port),
+                        });
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 // Порт hover-ноды (T8): начало drag резиновой линии новой
                 // связи — drag ноды/resize/двойной клик не начинаются.
                 // У групп портов нет: edge-drag с группы не начинается.
@@ -7028,6 +7076,7 @@ impl App {
                             from_node,
                             from_side: side,
                             value_flow,
+                            from_port: None,
                         });
                         self.request_redraw();
                         return;
@@ -7226,12 +7275,20 @@ impl App {
                             from_node,
                             from_side,
                             value_flow,
+                            from_port,
                         } => {
                             if let Some(target) = self.selective_hit(world) {
                                 let to_node = &self.scene.canvas.nodes[target];
                                 let to_id = to_node.id.clone();
                                 if to_id != from_node {
                                     let to_side = nearest_side(to_node, world);
+                                    // FR-025: drag от построчного порта всегда
+                                    // value-ребро (точка выхода расчёта)
+                                    let value_flow = value_flow || from_port.is_some();
+                                    // FR-025: построчный исток — индекс строки
+                                    // (футер шаблонной ноды — None: узловое
+                                    // значение)
+                                    let from_line = from_port.and_then(|port| port.line);
                                     if value_flow {
                                         // FR-014: value-ребро, замыкающее цикл,
                                         // — диалог (контрольная связь / отмена);
@@ -7241,6 +7298,9 @@ impl App {
                                             &from_node,
                                             &to_id,
                                         ) {
+                                            // FR-025: from_line в диалог не
+                                            // попадает — фолбэк (control)
+                                            // построчную семантику отбрасывает
                                             self.dialog = Some(AppDialog::EdgeCycle {
                                                 from_node,
                                                 from_side,
@@ -7254,6 +7314,7 @@ impl App {
                                                 to_id,
                                                 to_side,
                                                 FlowKind::Value,
+                                                from_line,
                                             );
                                         }
                                     } else {
@@ -7263,6 +7324,7 @@ impl App {
                                             to_id,
                                             to_side,
                                             FlowKind::Control,
+                                            None,
                                         );
                                     }
                                 }
@@ -8481,14 +8543,22 @@ impl App {
                 self.request_redraw();
             }
             // FR-014: подтверждение цикла — ребро создаётся как
-            // контрольная связь (без потока значений)
+            // контрольная связь (без потока значений); FR-025: построчный
+            // исток не сохраняется — control-ребро значения не переносит
             AppDialog::EdgeCycle {
                 from_node,
                 from_side,
                 to_node,
                 to_side,
             } => {
-                self.create_edge(from_node, from_side, to_node, to_side, FlowKind::Control);
+                self.create_edge(
+                    from_node,
+                    from_side,
+                    to_node,
+                    to_side,
+                    FlowKind::Control,
+                    None,
+                );
             }
         }
     }
@@ -8502,7 +8572,8 @@ impl App {
     /// FR-014: создать связь заданного типа потока (общий путь drop
     /// резиновой линии и подтверждения диалога цикла). Undo-шаг (FR-006),
     /// mark_dirty + живой пересчёт потока: value-ребро сразу переносит
-    /// значение в downstream.
+    /// значение в downstream. FR-025: `from_line` — построчный исток
+    /// (Some(i) — значение строки i источника; None — значение ноды).
     fn create_edge(
         &mut self,
         from_node: String,
@@ -8510,6 +8581,7 @@ impl App {
         to_node: String,
         to_side: Side,
         kind: FlowKind,
+        from_line: Option<usize>,
     ) {
         let mut edge = Edge::new(
             self.scene.canvas.next_edge_id(),
@@ -8519,6 +8591,7 @@ impl App {
             Some(to_side),
         );
         edge.set_flow_kind(kind);
+        edge.from_line = from_line;
         self.push_undo();
         self.scene.canvas.add_edge(edge);
         self.scene.mark_dirty();
@@ -9556,6 +9629,7 @@ impl ApplicationHandler<AppEvent> for App {
                         hidden_edge,
                         edges_avoid: self.settings.edges_avoid_nodes,
                         port_zone_px: self.settings.port_zone_px,
+                        line_ports: self.settings.line_ports,
                         focus,
                         widget_transparent: &widget_transparent,
                         widget_title_reveal: &widget_title_reveal,

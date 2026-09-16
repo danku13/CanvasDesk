@@ -893,6 +893,42 @@ pub fn build_edge_handle_instances(
     out
 }
 
+/// Диаметр ВСЕГДА видимого кружка построчного порта (FR-025) в world-px:
+/// заметная точка на правом краю у ряда результата, не спорящая с текстом.
+/// Хост-нода под курсором — кружки растут до `port_dot_diameter(zone_px)`
+/// (тот же аффорданс, что у портов сторон).
+pub const LINE_PORT_DOT: f32 = 7.0;
+
+/// Построчные точки выхода (FR-025): кружок на правом краю ноды у ряда
+/// каждой формульной строки с результатом; финальная строка (значение
+/// ноды) — цветом value-ребра (`FLOW_EDGE_COLOR`), промежуточные —
+/// нейтральным (`EDGE_COLOR`). `hovered` — нода под курсором: все её
+/// порты растут до узлового размера (аффорданс drag, как T8).
+pub fn build_line_port_instances(
+    ports: &[canvas_core::LinePort],
+    zone_px: f32,
+    hovered: bool,
+) -> Vec<CardInstance> {
+    let dot_d = if hovered {
+        port_dot_diameter(zone_px)
+    } else {
+        LINE_PORT_DOT
+    };
+    ports
+        .iter()
+        .map(|port| {
+            let fill = if hovered {
+                SELECTION_BORDER
+            } else if port.is_final {
+                FLOW_EDGE_COLOR
+            } else {
+                EDGE_COLOR
+            };
+            dot(port.point, dot_d, fill)
+        })
+        .collect()
+}
+
 /// Резиновая линия новой связи (T8): кривая от порта до курсора,
 /// полупрозрачная, без стрелки.
 pub fn build_draft_instances(

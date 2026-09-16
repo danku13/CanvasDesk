@@ -8,14 +8,14 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
-use canvas_core::{edge_midpoint, Canvas, FlowKind, NodeKind, Side, SpatialIndex, Thumbnail};
+use canvas_core::{edge_midpoint, Canvas, FlowKind, Node, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
-    build_draft_instances, build_edge_handle_instances, build_edge_instances, build_port_instances,
-    card_instance, dim_instance, make_widget_transparent, template_band_instance,
-    template_icon_quads, template_icon_rect, widget_header_hover_instance, CardInstance,
-    CardsPipeline, FocusView, SELECTION_BORDER,
+    build_draft_instances, build_edge_handle_instances, build_edge_instances,
+    build_line_port_instances, build_port_instances, card_instance, dim_instance,
+    make_widget_transparent, template_band_instance, template_icon_quads, template_icon_rect,
+    widget_header_hover_instance, CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -175,6 +175,11 @@ pub struct SceneView<'a> {
     /// Зона захвата портов (CR-003, экранные px): диаметр кружков портов
     /// при hover следует за ней (`cards::port_dot_diameter`).
     pub port_zone_px: f32,
+    /// FR-025: построчные точки выхода включены (настройка `line_ports`):
+    /// у каждой формульной строки с результатом — кружок-порт на правом
+    /// краю ноды. false — ни один путь не рисует построчные порты
+    /// (инвариант флага).
+    pub line_ports: bool,
     /// Режим фокуса (T23, brainstorm-focus): подсвеченные ноды/связи и
     /// степень затемнения остального. Данные принадлежат приложению
     /// (пересчёт на кадр); `FocusView::EMPTY` — режим выключен.
@@ -506,6 +511,14 @@ impl Renderer {
     /// приложение hit-тестит курсор и показывает тултип с текстом ошибки.
     pub fn line_error_hits(&self) -> &[crate::text::LineErrorHit] {
         self.text.line_error_hits()
+    }
+
+    /// FR-025: построчные точки выхода ноды из кэша раскладки текста —
+    /// те же данные, по которым рисуются кружки портов (инвариант
+    /// вертикали с бейджами результатов). Приложение зовёт для hit-теста
+    /// захвата drag от строки (флаг `line_ports`).
+    pub fn line_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::LinePort> {
+        self.text.line_ports(index, node)
     }
 
     /// Отрисовать кадр: фон, сетка, связи (T8), карточки видимых нод,
@@ -925,6 +938,29 @@ impl Renderer {
                 hovered,
                 scene.port_zone_px,
             ));
+        }
+        // FR-025: построчные точки выхода (флаг line_ports) — для ВСЕХ нод
+        // с результатами строк (не только hover — это постоянный аффорданс);
+        // хост под курсором — кружки укрупняются как порты сторон. Идут в
+        // мировой хвост: поверх карточек, под текстами. У скрытых нод
+        // (FR-011) портов нет. Кэш раскладки — единый источник вертикалей
+        // с бейджами результатов (инвариант вертикали FR-025).
+        if scene.line_ports {
+            for (index, node) in scene.canvas.nodes.iter().enumerate() {
+                if node.kind() == NodeKind::Group || scene.hidden_nodes.contains(&index) {
+                    continue;
+                }
+                let ports = self.text.line_ports(index, node);
+                if ports.is_empty() {
+                    continue;
+                }
+                let hovered = scene.hovered == Some(index);
+                instances.extend(build_line_port_instances(
+                    &ports,
+                    scene.port_zone_px,
+                    hovered,
+                ));
+            }
         }
         // CR-002: хэндлы концов выделенной связи — кружки на обоих концах
         // (захват = drag перепривязки); размер — как у портов (зона CR-003)

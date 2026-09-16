@@ -218,6 +218,20 @@ pub fn body_area(node: &Node) -> ([f32; 2], f32, f32) {
     (origin, width, height)
 }
 
+/// FR-025: world-вертикаль ряда результата формульной строки — ЕДИНЫЙ
+/// расчёт для бейджа результата (FR-013) и построчного порта: инвариант
+/// вертикали (порт и бейдж не разъезжаются ни при каком зуме/ширине).
+/// `block_offset_y` — смещение блока тела с `source_line` этой строки.
+pub fn result_row_y(node: &Node, block_offset_y: f32) -> f32 {
+    body_area(node).0[1] + block_offset_y + (BODY_LINE_HEIGHT - RESULT_LINE_HEIGHT) / 2.0
+}
+
+/// FR-025: world-вертикаль ряда результата шаблонной/expr-ноды — центр
+/// футера результата (FR-023): узловое значение сидит в футере карточки.
+pub fn result_footer_y(node: &Node) -> f32 {
+    node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT / 2.0
+}
+
 /// Байтовый offset в тексте → курсор (строка, байтовый индекс в строке).
 /// Offset за концом текста клампится в конец последней строки.
 pub fn offset_to_cursor(text: &str, offset: usize) -> Cursor {
@@ -1275,6 +1289,46 @@ impl TextSystem {
         &self.line_error_hits
     }
 
+    /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
+    /// строки с бейджем результата — [`LinePort`] на правом краю ноды
+    /// (вертикаль — [`result_row_y`] ряда бейджа — инвариант вертикали).
+    /// Шаблонная нода — ОДИН порт у футера результата ([`result_footer_y`],
+    /// `line = None` — узловое значение). Нет кэша/результатов — пусто
+    /// (нода вне экрана, виджет, проза) — портов нет, hit-test промахивается.
+    pub fn line_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::LinePort> {
+        let right = node.x + node.width;
+        // Шаблонная нода: формула и есть финальное значение — порт у футера
+        if node.template().is_some() {
+            return vec![canvas_core::LinePort {
+                line: None,
+                point: [right, result_footer_y(node)],
+                is_final: true,
+            }];
+        }
+        let Some(entry) = self.cache.get(&index) else {
+            return Vec::new();
+        };
+        let total = entry.line_results.len();
+        entry
+            .line_results
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line_result)| {
+                let block = entry
+                    .body
+                    .as_ref()?
+                    .blocks
+                    .iter()
+                    .find(|block| block.source_line == Some(line_result.source_line))?;
+                Some(canvas_core::LinePort {
+                    line: Some(line_result.source_line),
+                    point: [right, result_row_y(node, block.offset[1])],
+                    is_final: i + 1 == total,
+                })
+            })
+            .collect()
+    }
+
     /// Подготовить тексты кадра по текст-группам z-плана (zorder.rs):
     /// заголовки/тела видимых нод (culling, T5: `frame.indices` — выдача
     /// spatial index по viewport), буфер редактора (T7) на z-позиции
@@ -1922,9 +1976,9 @@ impl TextSystem {
                                 continue;
                             };
                             // Вертикальное центрирование результата в ряду
-                            let row_y = origin[1]
-                                + block.offset[1]
-                                + (BODY_LINE_HEIGHT - RESULT_LINE_HEIGHT) / 2.0;
+                            // (FR-025: тот же расчёт, что у построчного порта —
+                            // result_row_y, единый источник вертикали)
+                            let row_y = result_row_y(node, block.offset[1]);
                             let top_phys = to_physical([origin[0], row_y])[1];
                             let right_phys =
                                 to_physical([node.x + node.width - BODY_PADDING, row_y])[0];

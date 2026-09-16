@@ -433,9 +433,35 @@ pub struct Edge {
     /// Расширение: толщина линии (`edgeWidth`, см. `EdgeThickness`).
     #[serde(rename = "edgeWidth", skip_serializing_if = "Option::is_none")]
     pub thickness: Option<EdgeThickness>,
+    /// FR-025: индекс формульной строки-истока (`fromLine`) — value-ребро
+    /// уносит значение ИМЕННО ЭТОЙ строки Numi-листа (построчная точка
+    /// выхода). `None` — значение ноды целиком (последняя формульная
+    /// строка; текущее поведение, старые `.canvas`). Битые значения
+    /// (`-1`, дробные, строки) читаются как `None` — чужие файлы не ломаются.
+    #[serde(
+        rename = "fromLine",
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_lenient_line"
+    )]
+    pub from_line: Option<usize>,
     /// Неизвестные поля (fromEnd/toEnd и пр.) — сохраняются при round-trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// FR-025: мягкое чтение `fromLine`: целое ≥ 0 — `Some(i)`, всё прочее
+/// (отрицательные, дробные, не-числа) — `None`. Ошибка десериализации
+/// поля не роняет разбор всей связи/файла.
+fn deserialize_lenient_line<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    Ok(match raw {
+        Some(Value::Number(number)) => number.as_u64().map(|value| value as usize),
+        _ => None,
+    })
 }
 
 impl Edge {
@@ -458,6 +484,7 @@ impl Edge {
             color: None,
             style: None,
             thickness: None,
+            from_line: None,
             extra: Map::new(),
         }
     }
@@ -1267,6 +1294,46 @@ mod tests {
             ext.props.get("text").and_then(Value::as_str),
             Some("привет")
         );
+    }
+
+    // --- FR-025: построчный исток связи (fromLine) ---
+
+    /// Инвариант схемы FR-025: ребро без `from_line` сериализуется без
+    /// поля (старые `.canvas` байт-в-байт); с `from_line` — поле сохраняется
+    /// в round-trip.
+    #[test]
+    fn edge_from_line_round_trip() {
+        let plain = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        let json = serde_json::to_string(&plain).expect("сериализация");
+        assert!(!json.contains("fromLine"), "нет поля — нет ключа: {json}");
+        let back: Edge = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back, plain);
+        assert_eq!(back.from_line, None);
+
+        let mut line_edge = Edge::new("e2", "a", Some(Side::Right), "b", Some(Side::Left));
+        line_edge.from_line = Some(2);
+        let json = serde_json::to_string(&line_edge).expect("сериализация");
+        assert!(json.contains(r#""fromLine":2"#), "{json}");
+        let back: Edge = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back.from_line, Some(2), "round-trip построчного истока");
+    }
+
+    /// Мягкое чтение `fromLine` (FR-025): битые значения чужих файлов
+    /// (`-1`, дробные, строки, null) — `None`, разбор связи не падает.
+    #[test]
+    fn edge_from_line_lenient_parse() {
+        for (raw, expected) in [
+            (r#""fromLine":-1"#, None),
+            (r#""fromLine":2.5"#, None),
+            (r#""fromLine":"x""#, None),
+            (r#""fromLine":null"#, None),
+            (r#""fromLine":0"#, Some(0)),
+            (r#""fromLine":7"#, Some(7)),
+        ] {
+            let json = format!(r#"{{ "id": "e", "fromNode": "a", "toNode": "b", {raw} }}"#);
+            let edge: Edge = serde_json::from_str(&json).expect("парсинг связи");
+            assert_eq!(edge.from_line, expected, "{json}");
+        }
     }
 
     // --- FR-011: mindmap (subtree_ids / parent_index / collapsed) ---
