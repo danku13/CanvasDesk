@@ -29,7 +29,9 @@ use canvas_app::ui::{
     MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HEADER_HEIGHT, PANEL_PADDING,
     PANEL_ROW_HEIGHT, SELECT_DRAG_THRESHOLD, SETTINGS_ROWS,
 };
-use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults};
+use canvas_core::expr::{
+    self, line_kind, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind,
+};
 use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, next_port_zone, path_matches, port_at,
@@ -52,9 +54,10 @@ use canvas_render::search_ui::{
     layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
     SearchRow,
 };
+use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_LINE_HEIGHT, BODY_PADDING,
-    BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    body_area, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_FONT_SIZE, BODY_LINE_HEIGHT,
+    BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
@@ -146,6 +149,69 @@ fn rect_xywh(rect: [f32; 4]) -> [f32; 4] {
     ]
 }
 
+/// Карточка строки шаблона палитры (FR-024/FR-025): подложка + плитка
+/// квад-иконки + имя + описание. Общий рендер строк развёрнутого дока и
+/// flyout свёрнутой полосы — WYSIWYG: клик по нарисованному. `rect` — xywh.
+#[allow(clippy::too_many_arguments)]
+fn template_card_row(
+    manifest: &canvas_core::templates::TemplateManifest,
+    rect: [f32; 4],
+    fill: [f32; 4],
+    border: [f32; 4],
+    palette: &ThemeColors,
+    icon_tint: [f32; 4],
+    instances: &mut Vec<CardInstance>,
+    texts: &mut Vec<OwnedScreenText>,
+) {
+    instances.push(CardInstance {
+        pos: [rect[0], rect[1]],
+        size: [rect[2], rect[3]],
+        fill,
+        border,
+        params: [6.0, 0.0, 0.0, 1.0],
+    });
+    // Плитка иконки (скруглённый квадрат) + квад-иконка роли
+    let tile = [
+        rect[0] + 8.0,
+        rect[1] + (rect[3] - template_ui::TEMPLATE_ROW_TILE) / 2.0,
+        template_ui::TEMPLATE_ROW_TILE,
+        template_ui::TEMPLATE_ROW_TILE,
+    ];
+    instances.push(CardInstance {
+        pos: [tile[0], tile[1]],
+        size: [tile[2], tile[3]],
+        fill: palette.palette_tile_fill,
+        border: [0.0; 4],
+        params: [6.0, 0.0, 0.0, 1.0],
+    });
+    instances.extend(template_icon_quads(
+        template_ui::icon_key(manifest),
+        [
+            tile[0] + (tile[2] - template_ui::TEMPLATE_ROW_ICON) / 2.0,
+            tile[1] + (tile[3] - template_ui::TEMPLATE_ROW_ICON) / 2.0,
+            template_ui::TEMPLATE_ROW_ICON,
+            template_ui::TEMPLATE_ROW_ICON,
+        ],
+        icon_tint,
+    ));
+    texts.push(OwnedScreenText {
+        text: manifest.display_name().to_owned(),
+        origin: [tile[0] + tile[2] + 8.0, rect[1] + 5.0],
+        width: rect[2] - (tile[2] + 24.0),
+        font_size: 13.0,
+        color: palette.title,
+        align: TextAlign::Left,
+    });
+    texts.push(OwnedScreenText {
+        text: manifest.description.clone(),
+        origin: [tile[0] + tile[2] + 8.0, rect[1] + 21.0],
+        width: rect[2] - (tile[2] + 24.0),
+        font_size: 11.0,
+        color: palette.body,
+        align: TextAlign::Left,
+    });
+}
+
 /// Заголовок ноды для поиска/результатов (T14): имя файла или текст заметки.
 fn node_title(node: &Node) -> &str {
     if let Some(file) = node.file.as_ref() {
@@ -202,9 +268,12 @@ fn split_formula_lines(text: &str) -> Option<String> {
 /// Средняя ширина глифа Noto Sans 14 px (смешанная кириллица/латиница) —
 /// оценка консервативная: функция только РАСТИТ высоту, занижать нельзя.
 /// CJK-идеографы считаются двойными юнитами.
+/// CR-012: строки Numi-листа (присваивания/выражения) рендерятся
+/// моноширинным Noto Sans Mono (mono-флаг source_line, text.rs) — их
+/// аванс шире пропорционального, и считаются они по моноширинной
+/// метрике (`MONO_AVG_CHAR_W`), иначе переносы недооценивались на ряд.
 fn wrapped_body_rows(text: &str, body_width: f32) -> usize {
     const AVG_CHAR_W: f32 = 7.0;
-    let units_per_line = (body_width / AVG_CHAR_W).floor().max(1.0);
     let units = |c: char| -> f32 {
         match c {
             '\u{2E80}'..='\u{9FFF}'
@@ -216,6 +285,12 @@ fn wrapped_body_rows(text: &str, body_width: f32) -> usize {
     };
     text.lines()
         .map(|line| {
+            let char_w = if line_kind(line) == NumiLineKind::Prose {
+                AVG_CHAR_W
+            } else {
+                MONO_AVG_CHAR_W
+            };
+            let units_per_line = (body_width / char_w).floor().max(1.0);
             let line_units: f32 = line.chars().map(units).sum();
             (line_units / units_per_line).ceil().max(1.0) as usize
         })
@@ -223,25 +298,47 @@ fn wrapped_body_rows(text: &str, body_width: f32) -> usize {
         .max(1)
 }
 
-/// FR-023: авто-высота шаблонной ноды — по числу строк листа параметров:
-/// шапка + тело + футер результата. CR-010: строки считаются с переносами
-/// (`wrapped_body_rows`) — длинное значение параметра не вылезает за низ
-/// карточки у новой ноды. Общая для GUI-инстанциации и MCP
-/// `template_instantiate`: новая нода сразу влезает целиком (без
-/// «подгонки правкой»). Только рост (не сжимает пользовательский размер).
-fn fit_template_node_height(node: &mut Node) {
+/// CR-012: аванс Noto Sans Mono на символ в px (≈0.614 em при размере
+/// тела 14 px). Строки Numi-листа рендерятся моноширинным шрифтом —
+/// пропорциональная оценка 7 px/символ занижала число рядов переносов.
+/// Завязана на [`BODY_FONT_SIZE`]: при смене размера тела метрика едет
+/// вместе с ним. Завышение здесь безопасно: высота только РАСТЁТ.
+const MONO_AVG_CHAR_W: f32 = 0.614 * BODY_FONT_SIZE;
+
+/// CR-012: требуемая высота ноды с учётом резерва футера результата —
+/// та же формула, что и [`fit_template_node_height`] (шапка + тело с
+/// переносами + паддинг + резерв футера).
+fn needed_result_reserve_height(node: &Node) -> f32 {
     let text = node.text.as_deref().unwrap_or("");
     let body_width = (node.width - BODY_PADDING * 2.0).max(BODY_PADDING);
     let rows = wrapped_body_rows(text, body_width);
-    let needed = HEADER_HEIGHT
+    HEADER_HEIGHT
         + BODY_TOP_GAP
         + rows as f32 * BODY_LINE_HEIGHT
         + BODY_PADDING
         + RESULT_LINE_HEIGHT
-        + 2.0;
+        + 2.0
+}
+
+/// CR-012: ленивый refit высоты под резерв футера результата. Growth-only:
+/// растит высоту, только если она занижена; достаточную не трогает —
+/// без осцилляций при частых вызовах из `recompute_flow`.
+fn ensure_result_reserve(node: &mut Node) {
+    let needed = needed_result_reserve_height(node);
     if needed > node.height {
         node.height = needed;
     }
+}
+
+/// FR-023: авто-высота шаблонной ноды — по числу строк листа параметров:
+/// шапка + тело + футер результата. CR-010: строки считаются с переносами
+/// (`wrapped_body_rows`, CR-012 — с моноширинной метрикой Numi-строк) —
+/// длинное значение параметра не вылезает за низ карточки у новой ноды.
+/// Общая для GUI-инстанциации и MCP `template_instantiate`: новая нода
+/// сразу влезает целиком (без «подгонки правкой»). Только рост (не сжимает
+/// пользовательский размер). CR-012: тело — общий refit-резерв.
+fn fit_template_node_height(node: &mut Node) {
+    ensure_result_reserve(node);
 }
 
 /// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
@@ -475,6 +572,7 @@ impl SceneState {
                 // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
                 tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
                 self.recompute_all_expr();
+                self.apply_result_reserve();
                 return;
             }
         };
@@ -491,6 +589,52 @@ impl SceneState {
             if line_results.iter().any(Option::is_some) {
                 self.expr_line_results.insert(node.id.clone(), line_results);
             }
+        }
+        // CR-012: ленивый refit высоты — резерв футера результата.
+        self.apply_result_reserve();
+    }
+
+    /// CR-012: нода получит футер результата по правилу рендера
+    /// (text.rs): шаблонные — всегда (итог формулы шаблона поверх
+    /// построчных результатов), обычные — только при отсутствии
+    /// построчных Numi-результатов и наличии итога/ошибки формулы.
+    fn node_shows_result_footer(&self, index: usize) -> bool {
+        let node = &self.canvas.nodes[index];
+        let has_line_results = self
+            .expr_line_results
+            .get(&node.id)
+            .is_some_and(|lines| lines.iter().any(Option::is_some));
+        if has_line_results && node.template().is_none() {
+            return false;
+        }
+        matches!(
+            self.expr_results.get(&node.id),
+            Some(ExprOutcome::Ok(_) | ExprOutcome::Err(_))
+        )
+    }
+
+    /// CR-012: growth-only рост высоты ноды под резерв футера результата
+    /// (по [`SceneState::node_shows_result_footer]); spatial index
+    /// обновляется только при реальном росте.
+    fn ensure_reserve_at(&mut self, index: usize) {
+        if !self.node_shows_result_footer(index) {
+            return;
+        }
+        let before = self.canvas.nodes[index].height;
+        ensure_result_reserve(&mut self.canvas.nodes[index]);
+        if self.canvas.nodes[index].height > before {
+            let node = &self.canvas.nodes[index];
+            self.spatial.update(index, node);
+        }
+    }
+
+    /// CR-012: ленивый refit всех нод канваса — резерв футера результата
+    /// для нод, которым рендер его покажет. Вызывается в конце ЛЮБОГО
+    /// пересчёта (recompute_flow, в т.ч. загрузка .canvas и MCP-мутации) —
+    /// growth-only, поэтому повторные вызовы дёшевы и не осциллируют.
+    fn apply_result_reserve(&mut self) {
+        for index in 0..self.canvas.nodes.len() {
+            self.ensure_reserve_at(index);
         }
     }
 
@@ -998,6 +1142,10 @@ struct App {
     /// на строку; отпускание решает — клик: в центр viewport, drag: в
     /// точку курсора с ghost-превью).
     template_drag: Option<template_ui::PanelDrag>,
+    /// FR-025 (ревизия 2026-09-16): hover-раскрытие категорий свёрнутой
+    /// полосы палитры (hover-intent 150 мс / grace 300 мс, пин по клику,
+    /// прокрутка flyout колесом). None — к полосе ещё не обращались.
+    template_hover: Option<template_ui::StripHover>,
     /// FR-018: радиальное wheel-меню шаблонов (Shift+клик по пустому
     /// месту): screen-центр + world-точка инстанциации + категория.
     wheel_menu: Option<template_ui::WheelMenu>,
@@ -1128,9 +1276,9 @@ impl App {
             node_clipboard: Vec::new(),
             hotkeys_open: false,
             pending_undo: None,
-            // FR-025: палитра — постоянный док; развёрнутость из конфига
-            // (по умолчанию развёрнута). Поле инициализируется до move
-            // `settings` ниже.
+            // FR-025 (ревизия): палитра — постоянная, но примарно СВЁРНУТАЯ
+            // (полоса категорий); развёрнутость из конфига (дефолт —
+            // свёрнута). Поле инициализируется до move `settings` ниже.
             template_panel: {
                 let mut panel = template_ui::TemplatePanel::new();
                 panel.open = settings.template_palette_open;
@@ -1166,6 +1314,7 @@ impl App {
                 canvas_core::templates::TemplateRegistry::all_with_custom(&root)
             },
             template_drag: None,
+            template_hover: None,
             wheel_menu: None,
             hints: hints_ui::HintPopup::default(),
             focus_dim: 0.0,
@@ -2340,6 +2489,20 @@ impl App {
                 return true;
             }
         }
+        // Ревизия FR-025: свёрнутая палитра — полоса категорий и flyout
+        // (колесо/пинч над ними канвас не двигают)
+        if !self.template_panel.open {
+            let categories = self.template_category_names();
+            let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+            if point_in_rect(strip.rect, self.cursor) {
+                return true;
+            }
+            if let Some(fly) = self.template_flyout_geometry(viewport, &strip) {
+                if point_in_rect(fly.rect, self.cursor) {
+                    return true;
+                }
+            }
+        }
         if self.dialog.is_some() && over(self.dialog_rect()) {
             return true;
         }
@@ -3204,12 +3367,13 @@ impl App {
     }
 
     /// Оверлей палитры шаблонов (FR-018, Ctrl+P; FR-024 — стиль Miro
-    /// Template picker; FR-025 — постоянный док: свёрнутая полоса-ручка,
-    /// кнопка «‹» в шапке, ghost-превью drag): левый док во всю высоту
-    /// (чистая геометрия — `template_ui::panel_layout`), плотная подложка
-    /// с рамкой, шапка «Шаблоны», поиск с placeholder, чипы категорий,
-    /// секции с заголовками, строки-карточки (подложка + плитка иконки +
-    /// имя + описание), hover/выбранное состояние, футер-подсказка.
+    /// Template picker; FR-025 — постоянная палитра: ПРИМАРНО свёрнутая
+    /// вертикальная полоса категорий по центру слева, hover раскрывает
+    /// flyout справа; развёрнутый док по Ctrl+P; ghost-превью drag):
+    /// свёрнутый режим — [`template_strip_overlay`]; развёрнутый — левый док
+    /// во всю высоту (чистая геометрия — `template_ui::panel_layout`), шапка
+    /// «Шаблоны», поиск с placeholder, чипы категорий, секции с заголовками,
+    /// строки-карточки, hover/выбранное состояние, футер-подсказка.
     fn template_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -3218,231 +3382,184 @@ impl App {
             return (instances, texts);
         }
         let palette = ThemeColors::from_theme(self.settings.theme);
-        // FR-025: свёрнутый док — полоса-ручка у левого края с кнопкой «»
+        let icon_tint = color_to_rgba(palette.icon);
+        // FR-025 (ревизия): свёрнутый режим — полоса категорий + flyout
         if !self.template_panel.open {
-            let strip = rect_xywh(template_ui::collapsed_strip_rect(viewport[1]));
+            let (mut strip_instances, mut strip_texts) =
+                self.template_strip_overlay(viewport, &palette);
+            instances.append(&mut strip_instances);
+            texts.append(&mut strip_texts);
+        } else {
+            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            let lay = template_panel_layout(
+                viewport[0],
+                viewport[1],
+                &self.templates,
+                &self.template_panel,
+                &rows,
+            );
+            let panel = rect_xywh(lay.panel_rect);
+            // Подложка дока: плотная, с рамкой (отделяет панель от канваса).
+            // CR-011: рамка палитурная (была захардкожена тёмной — ломала
+            // светлую тему).
             instances.push(CardInstance {
-                pos: [strip[0], strip[1]],
-                size: [strip[2], strip[3]],
+                pos: [panel[0], panel[1]],
+                size: [panel[2], panel[3]],
                 fill: palette.menu_fill,
                 border: palette.palette_border,
                 params: [8.0, 0.0, 0.0, 1.0],
             });
+            // Шапка: название + счётчик шаблонов
+            let total = template_ui::template_row_count(&rows);
             texts.push(OwnedScreenText {
-                text: "»".to_owned(),
-                origin: [strip[0], strip[1] + 13.0],
-                width: strip[2],
+                text: "Шаблоны".to_owned(),
+                origin: [lay.header_rect[0], lay.header_rect[1] + 6.0],
+                width: lay.header_rect[2] * 0.5,
                 font_size: 14.0,
-                color: palette.title,
-                align: TextAlign::Center,
-            });
-            return (instances, texts);
-        }
-        let rows = template_panel_rows(&self.templates, &self.template_panel);
-        let lay = template_panel_layout(
-            viewport[0],
-            viewport[1],
-            &self.templates,
-            &self.template_panel,
-            &rows,
-        );
-        let icon_tint = color_to_rgba(palette.icon);
-        let panel = rect_xywh(lay.panel_rect);
-        // Подложка дока: плотная, с рамкой (отделяет панель от канваса).
-        // CR-011: рамка палитурная (была захардкожена тёмной — ломала
-        // светлую тему).
-        instances.push(CardInstance {
-            pos: [panel[0], panel[1]],
-            size: [panel[2], panel[3]],
-            fill: palette.menu_fill,
-            border: palette.palette_border,
-            params: [8.0, 0.0, 0.0, 1.0],
-        });
-        // Шапка: название + счётчик шаблонов
-        let total = template_ui::template_row_count(&rows);
-        texts.push(OwnedScreenText {
-            text: "Шаблоны".to_owned(),
-            origin: [lay.header_rect[0], lay.header_rect[1] + 6.0],
-            width: lay.header_rect[2] * 0.5,
-            font_size: 14.0,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
-        texts.push(OwnedScreenText {
-            text: format!("{total}"),
-            origin: [
-                lay.header_rect[0] + lay.header_rect[2] * 0.5,
-                lay.header_rect[1] + 8.0,
-            ],
-            width: lay.header_rect[2] * 0.5 - 4.0,
-            font_size: 11.0,
-            color: palette.body,
-            align: TextAlign::Center,
-        });
-        // FR-025: кнопка сворачивания дока («‹» у правого края шапки)
-        let collapse = rect_xywh(lay.collapse_rect);
-        instances.push(CardInstance {
-            pos: [collapse[0], collapse[1]],
-            size: [collapse[2], collapse[3]],
-            fill: palette.palette_chip_fill,
-            border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 1.0],
-        });
-        texts.push(OwnedScreenText {
-            text: "‹".to_owned(),
-            origin: [collapse[0], collapse[1] + 3.0],
-            width: collapse[2],
-            font_size: 13.0,
-            color: palette.title,
-            align: TextAlign::Center,
-        });
-        // Поле фильтра: placeholder при пустом вводе, иначе текст с кареткой
-        let input = rect_xywh(lay.input_rect);
-        instances.push(CardInstance {
-            pos: [input[0], input[1]],
-            size: [input[2], input[3]],
-            fill: palette.search_input_fill,
-            border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 1.0],
-        });
-        texts.push(OwnedScreenText {
-            text: if self.template_panel.filter.is_empty() {
-                "Поиск шаблонов…".to_owned()
-            } else {
-                format!("{}|", self.template_panel.filter)
-            },
-            origin: [input[0] + 10.0, input[1] + 8.0],
-            width: (input[2] - 20.0).max(10.0),
-            font_size: 13.0,
-            color: if self.template_panel.filter.is_empty() {
-                palette.body
-            } else {
-                palette.title
-            },
-            align: TextAlign::Left,
-        });
-        // Чипы категорий (CR-011: заливки палитурные, не хардкод)
-        for (rect, name, active) in &lay.category_rects {
-            instances.push(CardInstance {
-                pos: [rect[0], rect[1]],
-                size: [rect[2], rect[3]],
-                fill: if *active {
-                    palette.palette_selected_fill
-                } else {
-                    palette.palette_chip_fill
-                },
-                border: [0.0; 4],
-                params: [11.0, 0.0, 0.0, 1.0],
-            });
-            texts.push(OwnedScreenText {
-                text: name.clone(),
-                origin: [rect[0] + 10.0, rect[1] + 6.0],
-                width: rect[2] - 12.0,
-                font_size: 12.0,
                 color: palette.title,
                 align: TextAlign::Left,
             });
-        }
-        // Строки: секции-заголовки и карточки шаблонов (Miro-стиль)
-        for (row_i, (rect, row)) in lay.row_rects.iter().zip(lay.rows.iter()).enumerate() {
-            match row {
-                PanelRow::Section(name) => {
-                    texts.push(OwnedScreenText {
-                        text: name.clone(),
-                        origin: [rect[0] + 2.0, rect[1] + 5.0],
-                        width: rect[2] - 4.0,
-                        font_size: 11.0,
-                        color: palette.body,
-                        align: TextAlign::Left,
-                    });
-                }
-                PanelRow::Template(index) => {
-                    let Some(manifest) = self.templates.list().get(*index) else {
-                        continue;
-                    };
-                    // Ординал строки среди шаблонов (секции не считаются)
-                    let ordinal = lay.rows[..row_i]
-                        .iter()
-                        .filter(|other| matches!(other, PanelRow::Template(_)))
-                        .count();
-                    let selected = self.template_panel.selected == ordinal;
-                    let row_rect = rect_xywh(*rect);
-                    let row_hover = point_in_rect(row_rect, self.cursor);
-                    // Подложка-карточка строки (Miro: карточка с фоном;
-                    // CR-011: заливки палитурные, не хардкод)
-                    instances.push(CardInstance {
-                        pos: [row_rect[0], row_rect[1]],
-                        size: [row_rect[2], row_rect[3]],
-                        fill: if selected {
+            texts.push(OwnedScreenText {
+                text: format!("{total}"),
+                origin: [
+                    lay.header_rect[0] + lay.header_rect[2] * 0.5,
+                    lay.header_rect[1] + 8.0,
+                ],
+                width: lay.header_rect[2] * 0.5 - 4.0,
+                font_size: 11.0,
+                color: palette.body,
+                align: TextAlign::Center,
+            });
+            // FR-025: кнопка сворачивания дока («‹» у правого края шапки)
+            let collapse = rect_xywh(lay.collapse_rect);
+            instances.push(CardInstance {
+                pos: [collapse[0], collapse[1]],
+                size: [collapse[2], collapse[3]],
+                fill: palette.palette_chip_fill,
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: "‹".to_owned(),
+                origin: [collapse[0], collapse[1] + 3.0],
+                width: collapse[2],
+                font_size: 13.0,
+                color: palette.title,
+                align: TextAlign::Center,
+            });
+            // Поле фильтра: placeholder при пустом вводе, иначе текст с кареткой
+            let input = rect_xywh(lay.input_rect);
+            instances.push(CardInstance {
+                pos: [input[0], input[1]],
+                size: [input[2], input[3]],
+                fill: palette.search_input_fill,
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: if self.template_panel.filter.is_empty() {
+                    "Поиск шаблонов…".to_owned()
+                } else {
+                    format!("{}|", self.template_panel.filter)
+                },
+                origin: [input[0] + 10.0, input[1] + 8.0],
+                width: (input[2] - 20.0).max(10.0),
+                font_size: 13.0,
+                color: if self.template_panel.filter.is_empty() {
+                    palette.body
+                } else {
+                    palette.title
+                },
+                align: TextAlign::Left,
+            });
+            // Чипы категорий (CR-011: заливки палитурные, не хардкод)
+            for (rect, name, active) in &lay.category_rects {
+                instances.push(CardInstance {
+                    pos: [rect[0], rect[1]],
+                    size: [rect[2], rect[3]],
+                    fill: if *active {
+                        palette.palette_selected_fill
+                    } else {
+                        palette.palette_chip_fill
+                    },
+                    border: [0.0; 4],
+                    params: [11.0, 0.0, 0.0, 1.0],
+                });
+                texts.push(OwnedScreenText {
+                    text: name.clone(),
+                    origin: [rect[0] + 10.0, rect[1] + 6.0],
+                    width: rect[2] - 12.0,
+                    font_size: 12.0,
+                    color: palette.title,
+                    align: TextAlign::Left,
+                });
+            }
+            // Строки: секции-заголовки и карточки шаблонов (Miro-стиль)
+            for (row_i, (rect, row)) in lay.row_rects.iter().zip(lay.rows.iter()).enumerate() {
+                match row {
+                    PanelRow::Section(name) => {
+                        texts.push(OwnedScreenText {
+                            text: name.clone(),
+                            origin: [rect[0] + 2.0, rect[1] + 5.0],
+                            width: rect[2] - 4.0,
+                            font_size: 11.0,
+                            color: palette.body,
+                            align: TextAlign::Left,
+                        });
+                    }
+                    PanelRow::Template(index) => {
+                        let Some(manifest) = self.templates.list().get(*index) else {
+                            continue;
+                        };
+                        // Ординал строки среди шаблонов (секции не считаются)
+                        let ordinal = lay.rows[..row_i]
+                            .iter()
+                            .filter(|other| matches!(other, PanelRow::Template(_)))
+                            .count();
+                        let selected = self.template_panel.selected == ordinal;
+                        let row_rect = rect_xywh(*rect);
+                        let row_hover = point_in_rect(row_rect, self.cursor);
+                        // Подложка-карточка строки (Miro: карточка с фоном;
+                        // CR-011: заливки палитурные, не хардкод)
+                        let fill = if selected {
                             palette.palette_selected_fill
                         } else if row_hover {
                             palette.palette_hover_fill
                         } else {
                             palette.palette_row_fill
-                        },
-                        border: if selected || row_hover {
+                        };
+                        let border = if selected || row_hover {
                             palette.palette_border
                         } else {
                             [0.0; 4]
-                        },
-                        params: [6.0, 0.0, 0.0, 1.0],
-                    });
-                    // Плитка иконки (скруглённый квадрат) + квад-иконка роли
-                    let tile = [
-                        row_rect[0] + 8.0,
-                        row_rect[1] + (row_rect[3] - template_ui::TEMPLATE_ROW_TILE) / 2.0,
-                        template_ui::TEMPLATE_ROW_TILE,
-                        template_ui::TEMPLATE_ROW_TILE,
-                    ];
-                    instances.push(CardInstance {
-                        pos: [tile[0], tile[1]],
-                        size: [tile[2], tile[3]],
-                        fill: palette.palette_tile_fill,
-                        border: [0.0; 4],
-                        params: [6.0, 0.0, 0.0, 1.0],
-                    });
-                    instances.extend(template_icon_quads(
-                        template_ui::icon_key(manifest),
-                        [
-                            tile[0] + (tile[2] - template_ui::TEMPLATE_ROW_ICON) / 2.0,
-                            tile[1] + (tile[3] - template_ui::TEMPLATE_ROW_ICON) / 2.0,
-                            template_ui::TEMPLATE_ROW_ICON,
-                            template_ui::TEMPLATE_ROW_ICON,
-                        ],
-                        icon_tint,
-                    ));
-                    texts.push(OwnedScreenText {
-                        text: manifest.display_name().to_owned(),
-                        origin: [tile[0] + tile[2] + 8.0, row_rect[1] + 5.0],
-                        width: row_rect[2] - (tile[2] + 24.0),
-                        font_size: 13.0,
-                        color: palette.title,
-                        align: TextAlign::Left,
-                    });
-                    texts.push(OwnedScreenText {
-                        text: manifest.description.clone(),
-                        origin: [tile[0] + tile[2] + 8.0, row_rect[1] + 21.0],
-                        width: row_rect[2] - (tile[2] + 24.0),
-                        font_size: 11.0,
-                        color: palette.body,
-                        align: TextAlign::Left,
-                    });
+                        };
+                        template_card_row(
+                            manifest,
+                            row_rect,
+                            fill,
+                            border,
+                            &palette,
+                            icon_tint,
+                            &mut instances,
+                            &mut texts,
+                        );
+                    }
                 }
             }
-        }
-        // Футер-подсказка (CR-011: позиция из footer_rect чистой геометрии —
-        // строки списка в него не заходят; FR-025: Esc сворачивает док)
-        let footer = rect_xywh(lay.footer_rect);
-        texts.push(OwnedScreenText {
-            text: "Enter — вставить в центр · Esc — свернуть".to_owned(),
-            origin: [footer[0], footer[1] + 7.0],
-            width: footer[2],
-            font_size: 10.0,
-            color: palette.body,
-            align: TextAlign::Left,
-        });
-        // FR-025: ghost-превью drag карточки шаблона — призрак дропа
-        // (Т9) в world-точке курсора, отрисованный screen-space поверх
+            // Футер-подсказка (CR-011: позиция из footer_rect чистой геометрии —
+            // строки списка в него не заходят; FR-025: Esc сворачивает док)
+            let footer = rect_xywh(lay.footer_rect);
+            texts.push(OwnedScreenText {
+                text: "Enter — вставить в центр · Esc — свернуть".to_owned(),
+                origin: [footer[0], footer[1] + 7.0],
+                width: footer[2],
+                font_size: 10.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        } // else: развёрнутый док
+          // FR-025: ghost-превью drag карточки шаблона — призрак дропа
+          // (Т9) в world-точке курсора, отрисованный screen-space поверх
         if let Some(drag) = &self.template_drag {
             if drag.active {
                 if let Some(manifest) = self.templates.list().get(drag.index) {
@@ -3475,6 +3592,140 @@ impl App {
         (instances, texts)
     }
 
+    /// Оверлей свёрнутой палитры (ревизия FR-025, 2026-09-16): вертикальная
+    /// полоса категорий по центру левого края (подложка + строки с именем и
+    /// счётчиком + шеврон «развернуть док» внизу) и flyout раскрытой
+    /// категории справа — строки шаблонов тем же карточным рендером, что и
+    /// развёрнутый док, плюс индикаторы прокрутки при переполнении.
+    fn template_strip_overlay(
+        &self,
+        viewport: Vec2,
+        palette: &ThemeColors,
+    ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let categories = self.template_category_names();
+        let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+        let icon_tint = color_to_rgba(palette.icon);
+        let open_category = self.template_hover.as_ref().and_then(|h| h.open);
+        // Подложка полосы
+        instances.push(CardInstance {
+            pos: [strip.rect[0], strip.rect[1]],
+            size: [strip.rect[2], strip.rect[3]],
+            fill: palette.menu_fill,
+            border: palette.palette_border,
+            params: [8.0, 0.0, 0.0, 1.0],
+        });
+        // Строки категорий: hover-подсветка под курсором и у раскрытой
+        for (i, (rect, name)) in strip.rows.iter().enumerate() {
+            let row_hover = point_in_rect(*rect, self.cursor) || open_category == Some(i);
+            instances.push(CardInstance {
+                pos: [rect[0], rect[1]],
+                size: [rect[2], rect[3]],
+                fill: if row_hover {
+                    palette.palette_hover_fill
+                } else {
+                    palette.palette_chip_fill
+                },
+                border: [0.0; 4],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            let count = self.templates.by_category(name).len();
+            texts.push(OwnedScreenText {
+                text: format!("{name} · {count}"),
+                origin: [rect[0] + 8.0, rect[1] + 6.0],
+                width: rect[2] - 12.0,
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        // Шеврон «развернуть док» — строка внизу полосы
+        instances.push(CardInstance {
+            pos: [strip.chevron_rect[0], strip.chevron_rect[1]],
+            size: [strip.chevron_rect[2], strip.chevron_rect[3]],
+            fill: palette.palette_chip_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "»".to_owned(),
+            origin: [strip.chevron_rect[0], strip.chevron_rect[1] + 5.0],
+            width: strip.chevron_rect[2],
+            font_size: 13.0,
+            color: palette.title,
+            align: TextAlign::Center,
+        });
+        // Flyout раскрытой категории: строки шаблонов (только видимое окно)
+        if let (Some(cat), Some(fly)) = (
+            open_category,
+            self.template_flyout_geometry(viewport, &strip),
+        ) {
+            let Some((_, name)) = strip.rows.get(cat) else {
+                return (instances, texts);
+            };
+            let items = self.templates.by_category(name);
+            instances.push(CardInstance {
+                pos: [fly.rect[0], fly.rect[1]],
+                size: [fly.rect[2], fly.rect[3]],
+                fill: palette.menu_fill,
+                border: palette.palette_border,
+                params: [8.0, 0.0, 0.0, 1.0],
+            });
+            for (v, rect) in fly.row_rects.iter().enumerate() {
+                let Some(manifest) = items.get(fly.scroll_top + v) else {
+                    break;
+                };
+                let row_hover = point_in_rect(*rect, self.cursor);
+                template_card_row(
+                    manifest,
+                    *rect,
+                    if row_hover {
+                        palette.palette_hover_fill
+                    } else {
+                        palette.palette_row_fill
+                    },
+                    if row_hover {
+                        palette.palette_border
+                    } else {
+                        [0.0; 4]
+                    },
+                    palette,
+                    icon_tint,
+                    &mut instances,
+                    &mut texts,
+                );
+            }
+            // Индикаторы прокрутки: стрелки ▲/▼ у правого края flyout
+            if fly.max_scroll > 0 {
+                if fly.scroll_top > 0 {
+                    texts.push(OwnedScreenText {
+                        text: "▲".to_owned(),
+                        origin: [fly.rect[0] + fly.rect[2] - 20.0, fly.rect[1] + 2.0],
+                        width: 16.0,
+                        font_size: 10.0,
+                        color: palette.body,
+                        align: TextAlign::Center,
+                    });
+                }
+                if fly.scroll_top < fly.max_scroll {
+                    texts.push(OwnedScreenText {
+                        text: "▼".to_owned(),
+                        origin: [
+                            fly.rect[0] + fly.rect[2] - 20.0,
+                            fly.rect[1] + fly.rect[3] - 15.0,
+                        ],
+                        width: 16.0,
+                        font_size: 10.0,
+                        color: palette.body,
+                        align: TextAlign::Center,
+                    });
+                }
+            }
+        }
+        (instances, texts)
+    }
+
     /// Оверлей радиального wheel-меню шаблонов (FR-018, Shift+клик):
     /// плашки-мини-карточки (шаблоны + категории) из чистой геометрии
     /// `template_ui::wheel_geometry` — раскладка отталкивается от размера
@@ -3484,24 +3735,32 @@ impl App {
     /// модальным пикером (паттерн Miro Template picker), круглая кнопка
     ///-хаб «назад/закрыть» (Kurtenbach/Buxton — центр отменяет уровень),
     /// крошки глубины в хабе (выбранная категория).
-    fn wheel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+    /// FR-018/FR-022: wheel-меню шаблонов (Shift+клик) — donut-сектора
+    /// (`SectorsPipeline`, SDF annular-wedge) + квады иконок/хаба + подписи.
+    /// Сектора — screen-space; рендерер конвертирует их в world тем же
+    /// способом, что и screen_instances (центр через screen_to_world,
+    /// радиусы / zoom — `screen_sector_to_world` в renderer.rs). Возвращает
+    /// (сектора, квады, тексты) — квады рисуются ПОВЕРХ секторов.
+    fn wheel_overlay(&self) -> (Vec<SectorInstance>, Vec<CardInstance>, Vec<OwnedScreenText>) {
+        // Цвета wheel-меню. Полноценный ThemeColors для wheel — открытый
+        // вопрос (FR-022): пока именованные константы вместо разрозненных
+        // литералов по коду функции.
+        const FILL_DIM: [f32; 4] = [0.0, 0.0, 0.0, 0.35];
+        const FILL_CATEGORY: [f32; 4] = [0.17, 0.18, 0.22, 0.92];
+        const FILL_TEMPLATE: [f32; 4] = [0.20, 0.22, 0.27, 0.92];
+        const FILL_HOVER: [f32; 4] = [0.18, 0.29, 0.48, 0.95];
+        const FILL_HUB_ACTIVE: [f32; 4] = [0.18, 0.29, 0.48, 0.95];
+        const BORDER: [f32; 4] = [0.22, 0.24, 0.30, 0.9];
+
+        let mut sectors = Vec::new();
         let mut instances = Vec::new();
         let mut texts = Vec::new();
         let Some(menu) = &self.wheel_menu else {
-            return (instances, texts);
+            return (sectors, instances, texts);
         };
         let palette = ThemeColors::from_theme(self.settings.theme);
         let icon_tint = color_to_rgba(palette.icon);
         let [vw, vh] = self.viewport_logical();
-        // Затемнение фона: фокус на выборе, случайный клик по канвасу
-        // исключён (клик мимо wheel закрывает меню — обработчик клика)
-        instances.push(CardInstance {
-            pos: [0.0, 0.0],
-            size: [vw, vh],
-            fill: [0.0, 0.0, 0.0, 0.35],
-            border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 1.0],
-        });
         let categories = self.templates.categories();
         let templates: Vec<_> = menu
             .category
@@ -3511,30 +3770,52 @@ impl App {
         let geo =
             template_ui::wheel_geometry(menu.screen, vw, vh, categories.len(), templates.len());
         let hovered = geo.hit(self.cursor);
-        for plate in &geo.plates {
-            let [qx, qy, w, h] = plate.rect;
-            let active = hovered.as_ref() == Some(&plate.hit);
+        // Затемнение фона — диском-полным-кругом: первый инстанс секторного
+        // прохода, под ним ничего рисовать не нужно; радиус — до дальнего
+        // угла viewport (кламп центра гарантирует покрытие окна)
+        let dim_r = geo.center[0]
+            .max(vw - geo.center[0])
+            .hypot(geo.center[1].max(vh - geo.center[1]))
+            + 4.0;
+        sectors.push(SectorInstance {
+            center: geo.center,
+            r0: 0.0,
+            r1: dim_r,
+            a0: 0.0,
+            a1: std::f32::consts::TAU,
+            fill: FILL_DIM,
+        });
+        // Donut-сектора меню: что нарисовано — по тому и клик (geo.hit —
+        // тот же полярный тест, что и SDF-шейдер)
+        for sector in &geo.sectors {
+            let active = hovered.as_ref() == Some(&sector.hit);
             let fill = if active {
-                [0.18, 0.29, 0.48, 0.95]
+                FILL_HOVER
             } else {
-                match plate.hit {
-                    WheelHit::Category(_) => [0.17, 0.18, 0.22, 0.92],
-                    WheelHit::Template(_) => [0.20, 0.22, 0.27, 0.92],
+                match sector.hit {
+                    WheelHit::Category(_) => FILL_CATEGORY,
+                    WheelHit::Template(_) => FILL_TEMPLATE,
                 }
             };
-            instances.push(CardInstance {
-                pos: [qx, qy],
-                size: [w, h],
+            sectors.push(SectorInstance {
+                center: geo.center,
+                r0: sector.r0,
+                r1: sector.r1,
+                a0: sector.a0,
+                a1: sector.a1,
                 fill,
-                border: [0.22, 0.24, 0.30, 0.9],
-                params: [8.0, 0.0, 0.0, 1.0],
             });
-            match plate.hit {
+            // Иконка + подпись внутри сектора (как circular-menu: вертикально,
+            // иконка выше текста; подпись всегда рисуем — минимальная дуга
+            // сектора 60 px вмещает две строки 11px по ~10 символов)
+            let [px, py] =
+                template_ui::sector_point(geo.center, sector.mid_angle(), sector.mid_radius());
+            match sector.hit {
                 WheelHit::Category(i) => {
                     texts.push(OwnedScreenText {
                         text: categories[i].to_owned(),
-                        origin: [qx + 4.0, qy + h / 2.0 - 7.0],
-                        width: w - 8.0,
+                        origin: [px - 40.0, py - 7.0],
+                        width: 80.0,
                         font_size: 12.0,
                         color: palette.title,
                         align: TextAlign::Center,
@@ -3544,27 +3825,26 @@ impl App {
                     let Some(manifest) = templates.get(i) else {
                         continue;
                     };
-                    // Квад-иконка роли слева, имя справа (1–2 строки)
                     instances.extend(template_icon_quads(
                         template_ui::icon_key(manifest),
-                        [qx + 8.0, qy + h / 2.0 - 8.0, 16.0, 16.0],
+                        [px - 8.0, py - 14.0, 16.0, 16.0],
                         icon_tint,
                     ));
                     let (line1, line2) =
                         split_two_lines(manifest.display_name(), template_ui::WHEEL_TPL_TEXT_CHARS);
                     let push_line = |text: String, dy: f32| OwnedScreenText {
                         text,
-                        origin: [qx + 30.0, qy + h / 2.0 + dy],
-                        width: w - 36.0,
+                        origin: [px - 32.0, py + dy],
+                        width: 64.0,
                         font_size: 11.0,
                         color: palette.title,
-                        align: TextAlign::Left,
+                        align: TextAlign::Center,
                     };
                     match line2 {
-                        None => texts.push(push_line(line1, -7.0)),
+                        None => texts.push(push_line(line1, 4.0)),
                         Some(line2) => {
-                            texts.push(push_line(line1, -14.0));
-                            texts.push(push_line(line2, 0.0));
+                            texts.push(push_line(line1, 2.0));
+                            texts.push(push_line(line2, 15.0));
                         }
                     }
                 }
@@ -3577,11 +3857,11 @@ impl App {
             pos: [hx, hy],
             size: [hw, hh],
             fill: if menu.category.is_some() {
-                [0.18, 0.29, 0.48, 0.95]
+                FILL_HUB_ACTIVE
             } else {
-                [0.17, 0.18, 0.22, 0.92]
+                FILL_CATEGORY
             },
-            border: [0.22, 0.24, 0.30, 0.9],
+            border: BORDER,
             params: [hw / 2.0, 0.0, 0.0, 1.0], // круг — радиус = половина стороны
         });
         texts.push(OwnedScreenText {
@@ -3596,7 +3876,7 @@ impl App {
             color: palette.title,
             align: TextAlign::Center,
         });
-        (instances, texts)
+        (sectors, instances, texts)
     }
 
     /// Батч событий файловой системы (T10): применение к модели — в чистой
@@ -4408,6 +4688,65 @@ impl App {
         }
     }
 
+    /// Ревизия FR-025: имена категорий реестра шаблонов (порядок реестра) —
+    /// вход свёрнутой полосы палитры.
+    fn template_category_names(&self) -> Vec<String> {
+        self.templates
+            .categories()
+            .into_iter()
+            .map(|category| category.to_owned())
+            .collect()
+    }
+
+    /// Ревизия FR-025: геометрия flyout раскрытой категории свёрнутой полосы
+    /// (None — палитра развёрнута/nothing раскрыто/индекс протух). Единый
+    /// источник для рендера, hit-test и прокрутки: расхождений быть не может.
+    fn template_flyout_geometry(
+        &self,
+        viewport: Vec2,
+        strip: &template_ui::StripLayout,
+    ) -> Option<template_ui::FlyoutLayout> {
+        let hover = self.template_hover.as_ref()?;
+        let category = hover.open?;
+        let (row_rect, name) = strip.rows.get(category)?;
+        let count = self.templates.by_category(name).len();
+        Some(template_ui::flyout_layout(
+            *row_rect,
+            count,
+            viewport[0],
+            viewport[1],
+            hover.scroll_top,
+        ))
+    }
+
+    /// Ревизия FR-025: кадровое обновление hover-состояния свёрнутой полосы
+    /// категорий: строка под курсором, удержание внутри flyout, hover-intent
+    /// открытие / grace-закрытие. true — раскрытие или строка под курсором
+    /// изменились (нужна перерисовка); при неподвижном курсоре стабильно
+    /// false — `about_to_wait` не крутит пустые кадры.
+    fn update_template_hover(&mut self) -> bool {
+        if self.template_panel.open {
+            return false;
+        }
+        let viewport = self.viewport_logical();
+        let categories = self.template_category_names();
+        let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+        let hovered = strip
+            .rows
+            .iter()
+            .position(|(rect, _)| point_in_rect(*rect, self.cursor));
+        if hovered.is_none() && self.template_hover.is_none() {
+            return false;
+        }
+        let in_flyout = self
+            .template_flyout_geometry(viewport, &strip)
+            .is_some_and(|fly| point_in_rect(fly.rect, self.cursor));
+        let hover = self
+            .template_hover
+            .get_or_insert_with(template_ui::StripHover::new);
+        hover.update_at(hovered, in_flyout, Instant::now())
+    }
+
     /// T23 (brainstorm-focus): пересчёт состояния фокуса на кадр —
     /// фейд затемнения, пульс «дыхания» и окрестность семени
     /// (hover → выделенная нода → выделенная связь; O(V+E) — на 5k нод
@@ -5042,6 +5381,11 @@ fn mcp_dispatch(
             scene.push_undo(scene.canvas.clone());
             if let Some(text) = params.get("text").and_then(serde_json::Value::as_str) {
                 scene.canvas.nodes[index].text = Some(text.to_owned());
+                // CR-012: ленивый резерв футера под переносы нового текста.
+                // expr здесь не пересчитывается — правило футера по текущим
+                // expr_results/expr_line_results; полный пересчёт — в ветке
+                // expr ниже (recompute_flow поднимет резерв сам).
+                scene.ensure_reserve_at(index);
             }
             match params.get("label") {
                 None => {}
@@ -5624,6 +5968,8 @@ impl App {
                 if c.eq_ignore_ascii_case("p") || c.eq_ignore_ascii_case("з"))
         {
             self.wheel_menu = None;
+            // Ревизия FR-025: развёрнутый док гасит flyout полосы
+            self.template_hover = None;
             if self.template_panel.open {
                 self.template_panel.focus_search();
             } else {
@@ -5653,6 +5999,16 @@ impl App {
             if self.palette_hover.open.is_some() || self.palette_hover.pending() {
                 // Раскрытая колонка палитры закрывается без снятия выделения
                 self.palette_hover.reset();
+                self.request_redraw();
+                return;
+            }
+            // Ревизия FR-025: Esc гасит flyout свёрнутой полосы палитры
+            if self
+                .template_hover
+                .as_ref()
+                .is_some_and(|h| h.open.is_some() || h.pending())
+            {
+                self.template_hover = None;
                 self.request_redraw();
                 return;
             }
@@ -5857,9 +6213,9 @@ impl App {
                     return;
                 }
                 // FR-018: wheel-меню шаблонов — клики обрабатываются до
-                // канваса (оверлей поверх всего). Плашка категории — выбор
-                // категории (растут шаблонные кольца); плашка шаблона —
-                // инстанциация в world-точку открытия; мимо плашек, но
+                // канваса (оверлей поверх всего). Сектор категории — выбор
+                // категории (растут шаблонные кольца); сектор шаблона —
+                // инстанциация в world-точку открытия; мимо секторов, но
                 // рядом — глотаем, заметно дальше — закрыть.
                 // Любой клик глотается — dismiss не создаёт заметку.
                 if let Some(menu) = self.wheel_menu.clone() {
@@ -5985,17 +6341,74 @@ impl App {
                     }
                     // Мимо дока: фокус снимаем, клик проходит в канвас
                     self.template_panel.unfocus();
-                } else if point_in_rect(
-                    rect_xywh(template_ui::collapsed_strip_rect(
-                        self.viewport_logical()[1],
-                    )),
-                    self.cursor,
-                ) {
-                    // Полоса-ручка свёрнутого дока — развернуть
-                    self.template_panel.expand();
-                    self.persist_palette_dock();
-                    self.request_redraw();
-                    return;
+                } else {
+                    // FR-025 (ревизия): свёрнутая палитра — полоса категорий
+                    // по центру слева; hover/pin раскрывает flyout справа.
+                    // Клик по строке flyout — drag-кандидат (инстанциация на
+                    // отпускании); по строке категории — пин-переключение;
+                    // по шеврону или полосе мимо строк — развернуть док;
+                    // мимо полосы — закрыть flyout, клик уходит в канвас.
+                    let viewport = self.viewport_logical();
+                    let categories = self.template_category_names();
+                    let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+                    // Строка flyout: кандидат в drag (тот же пайплайн, что
+                    // и у развёрнутого дока — ghost + вставка на отпускании)
+                    let flyout_hit =
+                        self.template_flyout_geometry(viewport, &strip)
+                            .and_then(|fly| {
+                                self.template_hover.as_ref().and_then(|hover| {
+                                    hover.open.and_then(|cat| {
+                                        strip.rows.get(cat).and_then(|(_, name)| {
+                                            let items = self.templates.by_category(name);
+                                            fly.row_rects
+                                                .iter()
+                                                .enumerate()
+                                                .find(|(_, rect)| {
+                                                    point_in_rect(**rect, self.cursor)
+                                                })
+                                                .and_then(|(v, _)| {
+                                                    items.get(fly.scroll_top + v).and_then(|m| {
+                                                        self.templates
+                                                            .list()
+                                                            .iter()
+                                                            .position(|lm| lm.id == m.id)
+                                                    })
+                                                })
+                                        })
+                                    })
+                                })
+                            });
+                    if let Some(index) = flyout_hit {
+                        self.template_drag = Some(template_ui::PanelDrag {
+                            index,
+                            press: self.cursor,
+                            active: false,
+                        });
+                        self.request_redraw();
+                        return;
+                    }
+                    if let Some(i) = strip
+                        .rows
+                        .iter()
+                        .position(|(rect, _)| point_in_rect(*rect, self.cursor))
+                    {
+                        // Пин-переключение flyout категории (WAI-ARIA)
+                        self.template_hover
+                            .get_or_insert_with(template_ui::StripHover::new)
+                            .toggle_trigger(i);
+                        self.request_redraw();
+                        return;
+                    }
+                    if point_in_rect(strip.rect, self.cursor) {
+                        // Шеврон или полоса мимо строк — развернуть док
+                        self.template_panel.expand();
+                        self.persist_palette_dock();
+                        self.template_hover = None;
+                        self.request_redraw();
+                        return;
+                    }
+                    // Мимо полосы: flyout закрывается, клик уходит в канвас
+                    self.template_hover = None;
                 }
                 // Панель настроек (screen-space): клики обрабатываются до
                 // канваса — кнопка/панель поверх и «прозрачности» не дают
@@ -6853,6 +7266,11 @@ impl App {
                 self.request_redraw();
             }
         }
+        // Ревизия FR-025: hover-раскрытие категорий свёрнутой полосы палитры
+        // (hover-intent / grace; подсветка строки следует за курсором)
+        if self.update_template_hover() {
+            self.request_redraw();
+        }
         // Драг внутри редактора — расширение выделения мышью (T7/T8)
         if self.editor_dragging && !self.space_pressed {
             let world = self.cursor_world();
@@ -6947,6 +7365,26 @@ impl App {
     }
 
     fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // Ревизия FR-025: колесо над flyout свёрнутой палитры прокручивает
+        // список шаблонов, а не панорамирует канвас (знак — как у списков:
+        // колесо от себя, y<0, увеличивает scroll_top)
+        if !self.template_panel.open {
+            let viewport = self.viewport_logical();
+            let categories = self.template_category_names();
+            let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+            let fly = self.template_flyout_geometry(viewport, &strip);
+            if let (Some(hover), Some(fly)) = (self.template_hover.as_mut(), fly) {
+                if fly.max_scroll > 0 && point_in_rect(fly.rect, self.cursor) {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y.round() as i32,
+                        MouseScrollDelta::PixelDelta(pos) => (pos.y / 40.0).round() as i32,
+                    };
+                    hover.scroll_by(-lines, fly.max_scroll);
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         // Колесо над screen-space UI (панели/меню/палитра/миникарта) холст
         // не двигает — практика canvas-приложений (Miro/Figma)
         if self.cursor_over_screen_surface() {
@@ -8433,6 +8871,9 @@ impl ApplicationHandler<AppEvent> for App {
                 let hud = self.hud_text();
                 // World-оверлеи: Т9 призраки дропа добавляются в конец — mutable
                 let mut overlay_instances: Vec<CardInstance> = Vec::new();
+                // FR-022: donut-сектора wheel-меню (screen-space, мирится
+                // рендерером в world)
+                let mut overlay_sectors: Vec<SectorInstance> = Vec::new();
                 let mut overlay_labels: Vec<String> = Vec::new();
                 let mut overlay_label_pos: Vec<Vec2> = Vec::new();
                 // Ширины подписей оверлея: призраки дропа — по ширине
@@ -8466,7 +8907,8 @@ impl ApplicationHandler<AppEvent> for App {
                     let (tpl_instances, tpl_texts) = self.template_panel_overlay();
                     screen_instances.extend(tpl_instances);
                     owned_texts.extend(tpl_texts);
-                    let (wheel_instances, wheel_texts) = self.wheel_overlay();
+                    let (wheel_sectors, wheel_instances, wheel_texts) = self.wheel_overlay();
+                    overlay_sectors.extend(wheel_sectors);
                     screen_instances.extend(wheel_instances);
                     owned_texts.extend(wheel_texts);
                 }
@@ -8794,6 +9236,7 @@ impl ApplicationHandler<AppEvent> for App {
                     texts: &overlay_texts,
                     screen_instances: &screen_instances,
                     screen_texts: &screen_texts,
+                    screen_sectors: &overlay_sectors,
                     widget_quads: &widget_quad_refs,
                 };
                 // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
@@ -8934,12 +9377,24 @@ impl ApplicationHandler<AppEvent> for App {
         }
         // Полёт камеры и пульс (T14) + фокус (T23): непрерывные кадры
         // до завершения анимаций; hover-ожидание палитры (FR-009):
-        // hover-intent открытие / отсрочка закрытия при неподвижном курсоре
+        // hover-intent открытие / отсрочка закрытия при неподвижном курсоре;
+        // ревизия FR-025: то же для flyout свёрнутой полосы шаблонов
+        // (hover-intent 150 мс / grace 300 мс при неподвижном курсоре)
+        if !self.template_panel.open
+            && self.template_hover.is_some()
+            && self.update_template_hover()
+        {
+            self.request_redraw();
+        }
         if self.search_pending.is_some()
             || self.flight.is_some()
             || self.pulse.is_some()
             || self.focus_animating()
             || self.palette_hover.pending()
+            || self
+                .template_hover
+                .as_ref()
+                .is_some_and(|hover| hover.pending())
         {
             self.request_redraw();
         }
@@ -9105,14 +9560,90 @@ mod tests {
         assert_eq!(wrapped_body_rows("", width), 1);
     }
 
-    /// CR-010: стартовая высота новой шаблонной ноды покрывает переносы —
-    /// длинное значение параметра не вылезает за низ карточки.
+    /// CR-012: строки-присваивания Numi-листа рендерятся моноширинным
+    /// Noto Sans Mono (mono-флаг source_line, text.rs) — аванс шире
+    /// пропорциональной оценки 7 px/символ. При ширине тела 240 px
+    /// 32-символьное присваивание старой метрикой давало 1 ряд, рендер
+    /// переносит на 2 — оценка обязана считать mono-строки по метрике
+    /// моноширинного шрифта.
+    #[test]
+    fn wrapped_body_rows_mono_assignment_uses_mono_metric() {
+        let width = 260.0 - BODY_PADDING * 2.0;
+        let line = format!("{} = 5", "a".repeat(28)); // 32 символа
+        assert!(
+            matches!(line_kind(&line), NumiLineKind::Assignment { .. }),
+            "строка должна распознаваться как присваивание Numi"
+        );
+        assert_eq!(
+            wrapped_body_rows(&line, width),
+            2,
+            "моно-строка из 32 символов при ширине 240 переносится на 2 ряда"
+        );
+        // Прекондition регресса: старая метрика (7 px/символ) давала бы 1 ряд.
+        assert!(
+            32.0 / (width / 7.0).floor() <= 1.0,
+            "старая пропорциональная метрика занижала до 1 ряда"
+        );
+        // Длинное значение (~51 символ) — не менее 2 рядов по mono-метрике.
+        let long = format!("{} = 100 rps", "a".repeat(40));
+        assert!(wrapped_body_rows(&long, width) >= 2);
+        // Прозаическая строка той же длины — прежняя метрика (1 ряд).
+        let prose = format!("{} встреча в офисе", "a".repeat(18));
+        assert_eq!(line_kind(&prose), NumiLineKind::Prose);
+        assert_eq!(wrapped_body_rows(&prose, width), 1);
+    }
+
+    /// CR-012: ленивый refit — резерв футера результата. Заниженная
+    /// высота растёт до формулы (шапка + тело с переносами + резерв
+    /// футера), достаточная не трогается; повторный вызов идемпотентен
+    /// (growth-only — без осцилляций при частых пересчётах).
+    #[test]
+    fn ensure_result_reserve_grows_only() {
+        let line = format!("{} = 5", "a".repeat(28));
+        let mut low = Node::text("n", line.clone(), 0.0, 0.0);
+        low.width = 260.0;
+        low.height = 80.0; // занижено: 2 ряда тела + резерв футера не влезают
+        ensure_result_reserve(&mut low);
+        let rows = wrapped_body_rows(&line, low.width - BODY_PADDING * 2.0);
+        let needed = HEADER_HEIGHT
+            + BODY_TOP_GAP
+            + rows as f32 * BODY_LINE_HEIGHT
+            + BODY_PADDING
+            + RESULT_LINE_HEIGHT
+            + 2.0;
+        assert!(
+            low.height >= needed,
+            "высота {} выросла минимум до резерва футера {needed}",
+            low.height
+        );
+        let grown = low.height;
+        ensure_result_reserve(&mut low);
+        assert_eq!(low.height, grown, "повторный вызов — no-op (growth-only)");
+        let mut tall = Node::text("n2", line, 0.0, 0.0);
+        tall.width = 260.0;
+        tall.height = 1000.0;
+        ensure_result_reserve(&mut tall);
+        assert_eq!(tall.height, 1000.0, "достаточная высота не сжимается");
+    }
+
+    /// CR-010/CR-012: стартовая высота новой шаблонной ноды покрывает
+    /// переносы — длинное значение параметра не вылезает за низ карточки.
+    /// CR-012: строка-присваивание считается моноширинной метрикой:
+    /// 32-символьное присваивание при ширине тела 240 рендерится в 2 ряда,
+    /// а пропорциональная оценка давала 1 — высота занижалась на ряд.
     #[test]
     fn fit_template_height_covers_wrapped_lines() {
-        let mut node = Node::text("tpl", "x".repeat(400), 0.0, 0.0);
+        let mono_line = format!("{} = 5", "a".repeat(28));
+        let mut node = Node::text("tpl", mono_line.clone(), 0.0, 0.0);
         node.width = 260.0;
+        node.height = 80.0; // занижено (как дефолт манифеста при длинном листе)
         fit_template_node_height(&mut node);
-        let rows = wrapped_body_rows(&"x".repeat(400), node.width - BODY_PADDING * 2.0);
+        let body_width = node.width - BODY_PADDING * 2.0;
+        assert!(
+            wrapped_body_rows(&mono_line, body_width) >= 2,
+            "моно-строка должна занимать минимум 2 ряда"
+        );
+        let rows = wrapped_body_rows(&mono_line, body_width);
         let needed = HEADER_HEIGHT
             + BODY_TOP_GAP
             + rows as f32 * BODY_LINE_HEIGHT
@@ -9124,11 +9655,103 @@ mod tests {
             "высота {} меньше нужной {needed}",
             node.height
         );
+        // Регресс самой заниженной оценки: высота минимум на ряд больше
+        // «старой» формулы с одним рядом тела.
+        let old_one_row = HEADER_HEIGHT
+            + BODY_TOP_GAP
+            + BODY_LINE_HEIGHT
+            + BODY_PADDING
+            + RESULT_LINE_HEIGHT
+            + 2.0;
+        assert!(
+            node.height >= old_one_row + BODY_LINE_HEIGHT,
+            "высота должна покрывать второй ряд моно-переноса"
+        );
         // Короткий лист — высота скромная (рост, не раздувание)
         let mut short = Node::text("tpl2", "rps = 10 rps", 0.0, 0.0);
         short.width = 260.0;
+        short.height = 80.0;
         fit_template_node_height(&mut short);
         assert!(short.height < node.height);
+    }
+
+    /// CR-012: ленивый refit при пересчёте — ноды, которым рендер покажет
+    /// футер результата (шаблонные всегда; обычные — без построчных
+    /// результатов), получают резерв по высоте; прочие не трогаются.
+    /// Покрывает загрузку .canvas и MCP node_update_text (оба идут через
+    /// recompute_flow).
+    #[test]
+    fn recompute_grows_result_reserve_for_footer_nodes() {
+        use canvas_core::templates::{TemplateParam, TemplateRef};
+        let mut canvas = Canvas::default();
+        // Шаблонная нода: футер результата показывается всегда; высота
+        // занижена, тело — моноширинное присваивание на 2 ряда.
+        let mut tpl = Node::text("tpl1", format!("{} = 5", "a".repeat(28)), 0.0, 0.0);
+        tpl.width = 260.0;
+        tpl.height = 80.0;
+        tpl.set_expr(Some("$rps".to_owned()));
+        tpl.set_template(Some(TemplateRef {
+            id: "t".to_owned(),
+            version: "1".to_owned(),
+            expr: "$rps".to_owned(),
+            params: BTreeMap::from([(
+                "rps".to_owned(),
+                TemplateParam {
+                    num: 1000.0,
+                    unit: Some("rps".to_owned()),
+                },
+            )]),
+            icon: "custom".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            name: None,
+        }));
+        canvas.nodes.push(tpl);
+        // Обычная прозаическая нода — футера нет, высота не трогается.
+        let mut plain = Node::text("p1", "Просто заметка без формул", 0.0, 400.0);
+        plain.width = 260.0;
+        plain.height = 120.0;
+        canvas.nodes.push(plain);
+        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/cr012.canvas"));
+        let needed_for = |node: &Node| {
+            let text = node.text.as_deref().unwrap_or("");
+            let rows = wrapped_body_rows(text, node.width - BODY_PADDING * 2.0);
+            HEADER_HEIGHT
+                + BODY_TOP_GAP
+                + rows as f32 * BODY_LINE_HEIGHT
+                + BODY_PADDING
+                + RESULT_LINE_HEIGHT
+                + 2.0
+        };
+        let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
+        assert!(
+            tpl_node.height >= needed_for(tpl_node),
+            "шаблонная нода выросла под резерв футера"
+        );
+        match scene.expr_results.get("tpl1").expect("результат tpl1") {
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
+            other => panic!("ожидалось значение: {other:?}"),
+        }
+        assert_eq!(
+            scene.canvas.node("p1").expect("нода p1").height,
+            120.0,
+            "прозаическая нода без футера не тронута"
+        );
+        // MCP-мутация текста шаблонной ноды (длиннее — рядов больше):
+        // рост под новый резерв применяется тем же пересчётом.
+        let mut camera = Camera::default();
+        let text = format!("{} = 5\n= $rps", "b".repeat(55));
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            &serde_json::json!({ "id": "tpl1", "text": text }).to_string(),
+        )
+        .expect("node_update_text");
+        let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
+        assert!(
+            tpl_node.height >= needed_for(tpl_node),
+            "после MCP-правки высота покрывает новый резерв футера"
+        );
     }
 
     /// Стартовый канвас непустой и переживает round-trip.

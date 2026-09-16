@@ -169,8 +169,9 @@ pub struct Settings {
     /// первый пресет; значения клампятся в `[PORT_ZONE_MIN, PORT_ZONE_MAX]`.
     pub port_zone_px: f32,
     /// Палитра шаблонов развёрнута постоянным левым доком (FR-025; false —
-    /// свёрнута в полосу-ручку слева). Старые конфиги без поля грузятся
-    /// как true (serde default).
+    /// свёрнута в вертикальную полосу категорий с hover-flyout — ревизия
+    /// FR-025 2026-09-16, дефолт). Старые конфиги без поля грузятся
+    /// свёрнутыми (serde default).
     pub template_palette_open: bool,
 }
 
@@ -209,7 +210,8 @@ impl Default for Settings {
             hud_on_start: false,
             focus_mode: false,
             port_zone_px: PORT_ZONE_PRESETS[0],
-            template_palette_open: true,
+            // Ревизия FR-025 (2026-09-16): палитра примарно свёрнута.
+            template_palette_open: false,
         }
     }
 }
@@ -353,6 +355,10 @@ mod tests {
         let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
         assert!(!settings.grid_visible);
         assert_eq!(settings.button_corner, Corner::TopRight);
+        assert!(
+            !settings.template_palette_open,
+            "ревизия FR-025: дефолт — свёрнутая палитра"
+        );
         assert_eq!(settings.grid_style, GridStyle::Lines);
         assert_eq!(settings.grid_density, GridDensity::Medium);
         assert_eq!(settings.theme, Theme::Dark);

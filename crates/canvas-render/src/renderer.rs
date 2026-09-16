@@ -23,6 +23,7 @@ use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
 use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
+use crate::sectors::{SectorInstance, SectorsPipeline};
 use crate::text::{
     body_area, titles_visible, BodyQuad, BodyQuadKind, EdgeLabel, OverlayText, ScreenText,
     TextSystem, TitleFrame,
@@ -93,6 +94,26 @@ fn screen_instance_to_world(camera: &Camera, viewport: Vec2, inst: &CardInstance
     out
 }
 
+/// Screen-space сектор (центр/радиусы в логических px от угла окна) →
+/// world-сектор текущей камеры: центр — через `screen_to_world`, радиусы —
+/// делим на zoom. При равномерном зуме углы не искажаются (масштаб по осям
+/// одинаков), поэтому a0/a1 переносятся как есть. Единый способ конвертации
+/// для wheel-меню (FR-022): геометрия меню — screen-space (hit-test курсора),
+/// рендер — world-space (общий пайплайн с камерой).
+fn screen_sector_to_world(
+    camera: &Camera,
+    viewport: Vec2,
+    sector: &SectorInstance,
+) -> SectorInstance {
+    let zoom = camera.zoom();
+    SectorInstance {
+        center: camera.screen_to_world(sector.center, viewport),
+        r0: sector.r0 / zoom,
+        r1: sector.r1 / zoom,
+        ..*sector
+    }
+}
+
 /// Оверлеи кадра от приложения (контекстное меню T7, панель настроек):
 /// дополнительные инстансы квадов (поверх карточек, под текстом) и подписи.
 /// `instances`/`texts` — world-координаты (масштабируются зумом);
@@ -103,6 +124,12 @@ pub struct FrameOverlay<'a> {
     pub texts: &'a [OverlayText<'a>],
     pub screen_instances: &'a [CardInstance],
     pub screen_texts: &'a [ScreenText<'a>],
+    /// FR-022 (рестайл 2026-09-16): donut-сектора wheel-меню шаблонов
+    /// (логические px от угла окна — конвертируются в world рендерером,
+    /// см. `screen_sector_to_world`). Рисуются ПЕРЕД screen_instances:
+    /// первым инстансом идёт диск-затемнение, поверх него — сектора меню,
+    /// поверх них — иконки/хаб из `screen_instances` и тексты.
+    pub screen_sectors: &'a [SectorInstance],
     /// Квады снапшотов виджетов (M5 T20-D): id ноды + область контента
     /// (world). Рисуются поверх карточек, под screen-оверлеями.
     pub widget_quads: &'a [crate::widget_pass::WidgetQuad<'a>],
@@ -115,6 +142,7 @@ impl FrameOverlay<'_> {
         texts: &[],
         screen_instances: &[],
         screen_texts: &[],
+        screen_sectors: &[],
         widget_quads: &[],
     };
 }
@@ -204,6 +232,8 @@ pub struct Renderer {
     size: PhysicalSize<u32>,
     grid: GridPipeline,
     cards: CardsPipeline,
+    /// FR-022: donut-сектора wheel-меню (instanced SDF-проход).
+    sectors: SectorsPipeline,
     /// Атлас тамбнейлов + их пайплайн (T6).
     thumbs: ThumbsPipeline,
     text: TextSystem,
@@ -295,6 +325,7 @@ impl Renderer {
         );
         let grid = GridPipeline::new(&gpu.device, format);
         let cards = CardsPipeline::new(&gpu.device, format);
+        let sectors = SectorsPipeline::new(&gpu.device, format);
         let thumbs = ThumbsPipeline::new(&gpu.device, format);
         let minimap_pipeline = MinimapPipeline::new(&gpu.device, format);
         let widget_pass = crate::widget_pass::WidgetPass::new(&gpu.device, format);
@@ -306,6 +337,7 @@ impl Renderer {
             size,
             grid,
             cards,
+            sectors,
             thumbs,
             text,
             minimap_pipeline,
@@ -921,6 +953,13 @@ impl Renderer {
         for inst in overlay.screen_instances {
             instances.push(screen_instance_to_world(camera, viewport_logical, inst));
         }
+        // FR-022: donut-сектора wheel-меню — screen → world той же камерой
+        // (центр через screen_to_world, радиусы / zoom; углы не трогаем)
+        let world_sectors: Vec<SectorInstance> = overlay
+            .screen_sectors
+            .iter()
+            .map(|s| screen_sector_to_world(camera, viewport_logical, s))
+            .collect();
         let (top_range, overlay_range) = zorder::plan_tail_ranges(
             &mut draw_ranges,
             world_tail_start,
@@ -934,6 +973,15 @@ impl Renderer {
             [self.size.width as f32, self.size.height as f32],
             self.scale_factor,
             &instances,
+        );
+        // FR-022: сектора wheel-меню (мирится та же камера/uniform)
+        let sector_count = self.sectors.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+            &world_sectors,
         );
         // Тамбнейлы (T6): инстансы загружены в z-проходе; диапазоны
         // рисуются посегментно между карточками (draw_ranges)
@@ -1064,6 +1112,13 @@ impl Renderer {
             // снапшота — airspace-политика П7 плана M5)
             if widget_quad_count > 0 {
                 self.widget_pass.draw(&mut pass, widget_quad_count);
+            }
+            // FR-022: donut-сектора wheel-меню — поверх мира и снапшотов
+            // виджетов, ПОД screen-квадами оверлея (первый сектор — диск-
+            // затемнение, дальше сектора меню; иконки/хаб — в overlay_range
+            // ниже, поверх секторов)
+            if sector_count > 0 {
+                self.sectors.draw(&mut pass, sector_count);
             }
             if !overlay_range.is_empty() {
                 self.cards.draw_range(&mut pass, overlay_range.clone());

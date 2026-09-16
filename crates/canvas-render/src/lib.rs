@@ -19,6 +19,7 @@ pub mod minimap;
 pub mod minimap_pass;
 pub mod renderer;
 pub mod search_ui;
+pub mod sectors;
 pub mod stats;
 pub mod text;
 pub mod theme;

@@ -8,14 +8,17 @@
 //!
 //! Решения владельца FR-018:
 //! - панель `Ctrl+P` (поиск + категории) И радиальный wheel по `Shift+клику`
-//!   (внешнее кольцо — категории, внутренние — шаблоны категории; при
-//!   переполнении кольца шаблоны уходят в концентрические под-кольца —
-//!   правка владельца 2026-09-16: раскладка отталкивается от размера
-//!   плашек-мини-карточек, зазор между ними гарантирован);
+//!   (donut-сектора в стиле circular-menu: кольца от центрального отверстия
+//!   наружу — шаблоны выбранной категории, внешние кольца — категории;
+//!   при переполнении кольца сектора уходят в концентрические под-кольца —
+//!   рестайл FR-022 2026-09-16 по скриншоту пользователя);
 //! - иконки — квад-иконки (как в палитре действий, без SVG/resvg) —
 //!   геометрия в [`crate::cards`-пайплайне]; здесь — [`icon_key`].
 
 use canvas_core::templates::{TemplateManifest, TemplateRegistry};
+use canvas_render::sectors::{angle_gap, norm_angle};
+
+use std::time::{Duration, Instant};
 
 use crate::Vec2;
 
@@ -86,13 +89,15 @@ pub enum PanelRow {
 }
 
 /// Состояние боковой палитры шаблонов (FR-018, `Ctrl+P`; FR-025 —
-/// постоянный левый док). Поле ввода — своя лёгкая модель (однострочная,
+/// постоянный левый док; ревизия FR-025 2026-09-16 — палитра ПРИМАРНО
+/// свёрнута: вертикальная полоса категорий по центру слева, hover раскрывает
+/// flyout справа). Поле ввода — своя лёгкая модель (однострочная,
 /// как `SearchInput`), НЕ `EditingSession`.
 ///
-/// FR-025: `open` — развёрнут ли док (по умолчанию true — палитра
-/// доступна постоянно, как в Miro); `focused` — принимает ли панель
-/// клавиатуру (фокус в поиске: Ctrl+P или клик по полю фильтра). Клик
-/// по канвасу мимо панели фокус снимает, док не закрывает.
+/// Ревизия FR-025: `open` — развёрнут ли док (по умолчанию false — свёрнута
+/// в полосу категорий); `focused` — принимает ли панель клавиатуру (фокус в
+/// поиске: Ctrl+P или клик по полю фильтра). Клик по канвасу мимо панели
+/// фокус снимает, док не закрывает.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemplatePanel {
     pub open: bool,
@@ -112,11 +117,12 @@ pub struct TemplatePanel {
 }
 
 impl TemplatePanel {
-    /// Новая панель — развёрнутый док (FR-025: палитра доступна постоянно),
+    /// Новая панель — СВЁРНУТАЯ (ревизия FR-025: палитра примарно свёрнута,
+    /// полоса категорий по центру слева; развёрнутый док — по Ctrl+P),
     /// клавиатурный фокус снят.
     pub fn new() -> Self {
         Self {
-            open: true,
+            open: false,
             focused: false,
             filter: String::new(),
             cursor: 0,
@@ -238,7 +244,7 @@ impl TemplatePanel {
     }
 }
 
-/// Default для совместимости (`TemplatePanel::new` — развёрнутый док).
+/// Default для совместимости (`TemplatePanel::new` — свёрнутая полоса).
 impl Default for TemplatePanel {
     fn default() -> Self {
         Self::new()
@@ -366,20 +372,290 @@ pub struct PanelLayout {
     pub collapse_rect: [f32; 4],
 }
 
-/// Ширина полосы-ручки свёрнутого дока палитры (FR-025), логические px.
-pub const COLLAPSED_STRIP_W: f32 = 28.0;
-/// Высота полосы-ручки свёрнутого дока (кнопка «развернуть»), логические px.
-pub const COLLAPSED_STRIP_H: f32 = 44.0;
+/// Ширина полосы категорий свёрнутой палитры (ревизия FR-025, 2026-09-16),
+/// логические px. Ширина полосы — максимум ширин чипов категорий, но не
+/// уже этой границы (впритык под короткие имена не сжимаем).
+pub const STRIP_MIN_W: f32 = 64.0;
+/// Вертикальный внутренний паддинг полосы (над первой строкой и под шевроном).
+pub const STRIP_PAD_V: f32 = 6.0;
+/// Горизонтальный внутренний паддинг полосы.
+pub const STRIP_PAD_H: f32 = 4.0;
+/// Запас ширины полосы под счётчик шаблонов («backend · 10») рядом с именем.
+pub const STRIP_COUNT_SLACK: f32 = 28.0;
+/// Зазор между полосой категорий и flyout, логические px.
+pub const FLYOUT_GAP: f32 = 6.0;
+/// Минимальная ширина flyout, логические px.
+pub const FLYOUT_MIN_W: f32 = 260.0;
+/// Вертикальный внутренний паддинг flyout (над первой/под последней строкой).
+pub const FLYOUT_PAD_V: f32 = 6.0;
+/// Горизонтальный внутренний паддинг flyout.
+pub const FLYOUT_PAD_H: f32 = 8.0;
 
-/// Полоса-ручка свёрнутого дока палитры (FR-025): у левого края вверху;
-/// клик по ней разворачивает док. Единый источник для рендера и hit-test.
-pub fn collapsed_strip_rect(_window_h: f32) -> [f32; 4] {
-    [
-        PANEL_MARGIN,
+/// Ширина flyout: уже дока на 40 px, но не уже [`FLYOUT_MIN_W`].
+pub fn flyout_width() -> f32 {
+    (PANEL_WIDTH - 40.0).max(FLYOUT_MIN_W)
+}
+
+/// Геометрия свёрнутой палитры (ревизия FR-025): вертикальная полоса
+/// категорий у левого края, центрированная по вертикали окна. Все rect'ы —
+/// `[x, y, w, h]` (конвенция `point_in_rect`). Единый источник для рендера
+/// и hit-test: что нарисовано, по тому и клик/наведение.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StripLayout {
+    /// Прямоугольник полосы целиком (включая шеврон).
+    pub rect: [f32; 4],
+    /// Строки категорий: (rect, имя категории), порядок — порядок реестра.
+    pub rows: Vec<([f32; 4], String)>,
+    /// Шеврон «развернуть док» — строка внизу полосы.
+    pub chevron_rect: [f32; 4],
+}
+
+/// Раскладка свёрнутой полосы категорий: ширина — по самому длинному чипу
+/// (+ запас под счётчик), строки по [`CATEGORY_ROW_H`], полоса центрирована
+/// по вертикали окна и клампится отступом [`PANEL_TOP_MARGIN`] сверху/снизу
+/// (в маленьком окне не уходит за края выше верхнего отступа).
+pub fn dock_strip_layout(categories: &[String], window_h: f32) -> StripLayout {
+    let width = categories
+        .iter()
+        .map(|name| category_chip_width(name) + STRIP_COUNT_SLACK)
+        .fold(STRIP_MIN_W, f32::max);
+    let rows_h = categories.len() as f32 * CATEGORY_ROW_H;
+    // + строка шеврона внизу полосы
+    let height = rows_h + STRIP_PAD_V * 2.0 + CATEGORY_ROW_H;
+    let y = ((window_h - height) / 2.0).clamp(
         PANEL_TOP_MARGIN,
-        COLLAPSED_STRIP_W,
-        COLLAPSED_STRIP_H,
-    ]
+        (window_h - height - PANEL_TOP_MARGIN).max(PANEL_TOP_MARGIN),
+    );
+    let x = PANEL_MARGIN;
+    let rows = categories
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            (
+                [
+                    x + STRIP_PAD_H,
+                    y + STRIP_PAD_V + i as f32 * CATEGORY_ROW_H,
+                    width - STRIP_PAD_H * 2.0,
+                    CATEGORY_ROW_H,
+                ],
+                name.clone(),
+            )
+        })
+        .collect();
+    StripLayout {
+        rect: [x, y, width, height],
+        rows,
+        chevron_rect: [
+            x + STRIP_PAD_H,
+            y + STRIP_PAD_V + rows_h,
+            width - STRIP_PAD_H * 2.0,
+            CATEGORY_ROW_H,
+        ],
+    }
+}
+
+/// Геометрия flyout — выпадающего списка шаблонов категории справа от
+/// полосы. Rect'ы — `[x, y, w, h]`. `row_rects` — только видимое окно строк
+/// (обрезка по скроллу как у строк дока); `scroll_top` в раскладке уже
+/// клампнут к `max_scroll`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlyoutLayout {
+    /// Прямоугольник flyout.
+    pub rect: [f32; 4],
+    /// Видимые строки (начиная с клампнутого `scroll_top`).
+    pub row_rects: Vec<[f32; 4]>,
+    /// Клампнутая первая видимая строка.
+    pub scroll_top: usize,
+    /// Максимум прокрутки в строках.
+    pub max_scroll: usize,
+}
+
+/// Раскладка flyout справа от строки-категории (`strip_row_rect`, xywh):
+/// ширина — [`flyout_width`] (кламп к правому краю окна с отступом
+/// [`PANEL_MARGIN`]), высота — по числу items, но не больше окна минус
+/// отступы; вертикально центрирована относительно строки-категории и
+/// клампится в `[PANEL_TOP_MARGIN, window_h − h − PANEL_TOP_MARGIN]`, так что
+/// строки никогда не вылезают за область видимости.
+pub fn flyout_layout(
+    strip_row_rect: [f32; 4],
+    item_count: usize,
+    window_w: f32,
+    window_h: f32,
+    scroll_top: usize,
+) -> FlyoutLayout {
+    let x = strip_row_rect[0] + strip_row_rect[2] + FLYOUT_GAP;
+    let width = flyout_width().min((window_w - x - PANEL_MARGIN).max(FLYOUT_MIN_W));
+    let natural_h = item_count as f32 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
+    let max_h = (window_h - PANEL_TOP_MARGIN * 2.0).max(ROW_HEIGHT + FLYOUT_PAD_V * 2.0);
+    let height = natural_h.min(max_h);
+    let visible_count = if item_count == 0 {
+        0
+    } else {
+        (((height - FLYOUT_PAD_V * 2.0) / ROW_HEIGHT).floor() as usize)
+            .max(1)
+            .min(item_count)
+    };
+    let max_scroll = item_count.saturating_sub(visible_count);
+    let top = scroll_top.min(max_scroll);
+    let row_cy = strip_row_rect[1] + strip_row_rect[3] / 2.0;
+    let y = (row_cy - height / 2.0).clamp(
+        PANEL_TOP_MARGIN,
+        (window_h - PANEL_TOP_MARGIN - height).max(PANEL_TOP_MARGIN),
+    );
+    let row_rects = (0..visible_count.min(item_count - top))
+        .map(|v| {
+            [
+                x + FLYOUT_PAD_H,
+                y + FLYOUT_PAD_V + v as f32 * ROW_HEIGHT,
+                width - FLYOUT_PAD_H * 2.0,
+                ROW_HEIGHT - 4.0,
+            ]
+        })
+        .collect();
+    FlyoutLayout {
+        rect: [x, y, width, height],
+        row_rects,
+        scroll_top: top,
+        max_scroll,
+    }
+}
+
+/// Задержка открытия flyout по наведению (hover-intent, как у
+/// `PaletteHover`): провод курсора через полосу к канвасу не мигает списками.
+pub const STRIP_OPEN_DELAY_MS: u64 = 150;
+/// Отсрочка закрытия после ухода курсора с полосы/flyout (grace period).
+pub const STRIP_CLOSE_DELAY_MS: u64 = 300;
+
+/// Состояние hover-раскрытия категорий свёрнутой полосы палитры (ревизия
+/// FR-025). Механика — как у палитры выделения (`PaletteHover`, FR-009/010):
+/// hover-intent 150 мс на открытие, grace 300 мс на закрытие, пин по клику
+/// (WAI-ARIA menu button), удержание пока курсор внутри flyout. Скролл
+/// flyout — колесом мыши, кламп к `max_scroll` (max_scroll зависит от числа
+/// шаблонов категории — передаётся снаружи).
+#[derive(Debug, Clone)]
+pub struct StripHover {
+    /// Раскрытая категория (индекс строки в `StripLayout::rows`).
+    pub open: Option<usize>,
+    /// Пин по клику: раскрытие держится после ухода курсора до повторного
+    /// клика/Esc.
+    pub pinned: bool,
+    /// Первая видимая строка flyout (прокрутка колесом).
+    pub scroll_top: usize,
+    /// Строка полосы под курсором (None — мимо полосы) — для подсветки;
+    /// смена строки — тоже повод для перерисовки.
+    pub hovered_row: Option<usize>,
+    /// (категория, момент входа курсора) — накопление hover-intent.
+    trigger_since: Option<(usize, Instant)>,
+    /// Момент ухода курсора с открытой зоны — отсрочка закрытия.
+    left_since: Option<Instant>,
+}
+
+impl Default for StripHover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StripHover {
+    pub fn new() -> Self {
+        Self {
+            open: None,
+            pinned: false,
+            scroll_top: 0,
+            hovered_row: None,
+            trigger_since: None,
+            left_since: None,
+        }
+    }
+
+    /// Идут кадры ожидания (hover-intent / grace) — `about_to_wait` держит
+    /// цикл перерисовки, иначе задержки не сработают при неподвижном курсоре.
+    pub fn pending(&self) -> bool {
+        self.trigger_since.is_some() || self.left_since.is_some()
+    }
+
+    /// Кадровое обновление: `hovered` — строка категории под курсором,
+    /// `in_flyout` — курсор внутри rect'а flyout раскрытой категории.
+    /// true — раскрытие или строка под курсором изменились (нужна
+    /// перерисовка); при неподвижном курсоре стабильно false — без
+    /// самоподдерживающегося цикла кадров.
+    pub fn update_at(&mut self, hovered: Option<usize>, in_flyout: bool, now: Instant) -> bool {
+        let open_delay = Duration::from_millis(STRIP_OPEN_DELAY_MS);
+        let close_delay = Duration::from_millis(STRIP_CLOSE_DELAY_MS);
+        let row_changed = self.hovered_row != hovered;
+        self.hovered_row = hovered;
+        let mut changed = false;
+        match hovered {
+            Some(cat) => {
+                self.left_since = None;
+                match self.open {
+                    Some(open) if open == cat => self.trigger_since = None,
+                    _ => {
+                        // Курсор на другой/закрытой категории — копим intent
+                        match self.trigger_since {
+                            Some((target, since)) if target == cat => {
+                                if now.duration_since(since) >= open_delay {
+                                    self.open = Some(cat);
+                                    self.scroll_top = 0;
+                                    self.trigger_since = None;
+                                    changed = true;
+                                }
+                            }
+                            _ => self.trigger_since = Some((cat, now)),
+                        }
+                    }
+                }
+            }
+            None => {
+                self.trigger_since = None;
+                if in_flyout || self.pinned {
+                    // Внутри flyout или закреплено кликом — держим открытым
+                    self.left_since = None;
+                } else if self.open.is_some() {
+                    match self.left_since {
+                        None => self.left_since = Some(now),
+                        Some(since) => {
+                            if now.duration_since(since) >= close_delay {
+                                self.reset();
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        changed || row_changed
+    }
+
+    /// Клик по строке категории: пин-переключение раскрытия (открывает без
+    /// задержки — намерение явное; повторный клик — закрыть).
+    pub fn toggle_trigger(&mut self, category: usize) {
+        if self.open == Some(category) && self.pinned {
+            self.reset();
+        } else {
+            self.open = Some(category);
+            self.pinned = true;
+            self.scroll_top = 0;
+            self.trigger_since = None;
+            self.left_since = None;
+        }
+    }
+
+    /// Прокрутка flyout на `delta` строк с клампом к `[0, max_scroll]`.
+    pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
+        let cur = self.scroll_top as i32;
+        self.scroll_top = (cur + delta).clamp(0, max_scroll as i32) as usize;
+    }
+
+    /// Сброс: flyout закрыт, пин и прокрутка сняты.
+    pub fn reset(&mut self) {
+        self.open = None;
+        self.pinned = false;
+        self.scroll_top = 0;
+        self.hovered_row = None;
+        self.trigger_since = None;
+        self.left_since = None;
+    }
 }
 
 pub fn panel_layout(
@@ -479,27 +755,30 @@ pub fn panel_layout(
 
 // --- Wheel-меню (Shift+клик) ---
 
-// Правка владельца FR-018 (2026-09-16): «отталкивайся от размера карточки
-// и сделай адекватные отступы карточек друг от друга» — раньше 10 плашек
-// 60×60 стояли на кольце радиуса 41 и налезали друг на друга. Теперь
-// радиусы колец ВЫЧИСЛЯЮТСЯ из габаритов плашек-мини-карточек и
-// гарантированного зазора, переполнение уходит в под-кольца, а итоговая
-// раскладка проверяется попарным AABB-тестом — налезание невозможно.
+// Рестайл FR-022 (2026-09-16) по скриншоту пользователя: «прямоугольные
+// плашки на концентрических кольцах» заменены donut-секторами в стиле
+// circular-menu (https://www.npmjs.com/package/circular-menu — ориентир
+// по форме; пакет JS, реализация своя): кольцевые сектора с центральным
+// отверстием, в каждом секторе иконка + короткая подпись, между секторами
+// угловые зазоры. Рендер — instanced SDF-проход `canvas_render::sectors`
+// (`sectors.wgsl`); форма сектора и hit-test считаются одной и той же
+// полярной математикой (`sectors::angle_gap` — Rust-зеркало WGSL), поэтому
+// расхождения «клик мимо нарисованного» нет (раньше угловой тест расходился
+// с AABB плашек — заменён осознанно).
 
-/// Ширина плашки шаблона (мини-карточка: квад-иконка + имя), лог. px.
-pub const WHEEL_TPL_W: f32 = 124.0;
-/// Высота плашки шаблона (1–2 строки имени).
-pub const WHEEL_TPL_H: f32 = 46.0;
-/// Ширина плашки категории.
-pub const WHEEL_CAT_W: f32 = 96.0;
-/// Высота плашки категории.
-pub const WHEEL_CAT_H: f32 = 30.0;
-/// Гарантированный зазор между соседними плашками (по обеим осям).
-pub const WHEEL_GAP: f32 = 12.0;
-/// Максимум плашек в одном кольце; большее — концентрические под-кольца
+/// Толщина кольца wheel (радиальная ширина секторов), лог. px.
+pub const WHEEL_RING_THICKNESS: f32 = 68.0;
+/// Межкольцевой зазор (радиальный), лог. px.
+pub const WHEEL_RING_GAP: f32 = 8.0;
+/// Угловой зазор между соседними секторами кольца, радианы (≈2.5°).
+pub const WHEEL_SECTOR_GAP: f32 = 0.043_633_23;
+/// Минимальная дуга сектора на среднем радиусе кольца, лог. px — из неё
+/// выводится вместимость кольца (окружность / (дуга + угловой зазор в px)).
+pub const WHEEL_MIN_SECTOR_ARC: f32 = 60.0;
+/// Максимум секторов в одном кольце; большее — концентрические под-кольца
 /// (внешние вместительнее — окружность больше).
 pub const WHEEL_RING_CAP: usize = 6;
-/// Радиус центрального хаба (пустая зона — глотает клик).
+/// Радиус центрального отверстия (дырка donut — глотает клик мимо секторов).
 pub const WHEEL_HUB_R: f32 = 24.0;
 /// FR-022: диаметр кнопки-хаба (клик = «назад»/«закрыть»). Крупная цель
 /// ≥ 44 лог. px — гайдлайн сенсорных целей (Big Medium); совпадает с
@@ -507,12 +786,8 @@ pub const WHEEL_HUB_R: f32 = 24.0;
 pub const WHEEL_HUB_D: f32 = 48.0;
 /// Отступ wheel от краёв окна при клампе центра.
 pub const WHEEL_SCREEN_MARGIN: f32 = 8.0;
-/// Предел символов строки имени на плашке (длиннее — перенос по пробелу).
+/// Предел символов строки имени в подписи сектора (длиннее — перенос).
 pub const WHEEL_TPL_TEXT_CHARS: usize = 15;
-/// Шаг роста радиуса в корректирующем цикле раскладки.
-const WHEEL_GROW_STEP: f32 = 4.0;
-/// Предел итераций корректирующего цикла (детерминизм).
-const WHEEL_GROW_ITERS: usize = 256;
 
 /// Состояние радиального меню шаблонов (FR-018, `Shift+клик` по пустому
 /// месту). `screen` — центр в логических px (для рендера/hit-test),
@@ -521,41 +796,59 @@ const WHEEL_GROW_ITERS: usize = 256;
 pub struct WheelMenu {
     pub screen: Vec2,
     pub world: Vec2,
-    /// Выбранная категория (внутреннее кольцо); None — только внешнее.
+    /// Выбранная категория (внутренние кольца — её шаблоны); None — только
+    /// кольца категорий.
     pub category: Option<String>,
 }
 
 /// Цель попадания в wheel.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WheelHit {
-    /// Плашка категории (индекс в `registry.categories()`).
+    /// Сектор категории (индекс в `registry.categories()`).
     Category(usize),
-    /// Плашка шаблона (индекс ВНУТРИ категории — `registry.by_category`;
+    /// Сектор шаблона (индекс ВНУТРИ категории — `registry.by_category`;
     /// сквозной по кольцам, кольца — только план раскладки).
     Template(usize),
 }
 
-/// Плашка wheel: прямоугольник (screen px) + цель попадания. Единый
-/// источник правды рендера и hit-test: что нарисовано — по тому и клик.
+/// Donut-сектор wheel: дуговой интервал [a0, a1] (радианы, 12 часов = -π/2,
+/// по часовой) на кольце [r0, r1] (лог. px от центра). Единый источник
+/// правды рендера (`SectorInstance` в `wheel_overlay`) и hit-test
+/// ([`WheelGeometry::hit`]) — инвариант WYSIWYG.
 #[derive(Debug, Clone, PartialEq)]
-pub struct WheelPlate {
-    pub rect: [f32; 4],
+pub struct WheelSector {
+    pub a0: f32,
+    pub a1: f32,
+    pub r0: f32,
+    pub r1: f32,
     pub hit: WheelHit,
 }
 
-/// Геометрия wheel на кадр: центр (с клампом к окну), плашки, внешний
-/// радиус. Строится чистой функцией [`wheel_geometry`] — и рендер
-/// (`wheel_overlay`), и клики ([`WheelGeometry::hit`]) вызывают её с теми
-/// же аргументами, поэтому расхождений быть не может.
+impl WheelSector {
+    /// Середина дуги сектора (для иконки/подписи и hit-пробы тестов).
+    pub fn mid_angle(&self) -> f32 {
+        (self.a0 + self.a1) / 2.0
+    }
+    /// Средний радиус кольца сектора (для иконки/подписи).
+    pub fn mid_radius(&self) -> f32 {
+        (self.r0 + self.r1) / 2.0
+    }
+}
+
+/// Геометрия wheel на кадр: центр (с клампом к окну), сектора (шаблоны —
+/// внутренние кольца от дырки наружу, категории — внешние), внешний радиус,
+/// квадрат кнопки-хаба. Строится чистой функцией [`wheel_geometry`] — и
+/// рендер (`wheel_overlay`), и клики ([`WheelGeometry::hit`]) вызывают её с
+/// теми же аргументами, поэтому расхождений быть не может.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WheelGeometry {
     /// Центр меню: точка клика, сдвинутая клампом внутрь окна, если wheel
     /// целиком не влезает.
     pub center: Vec2,
-    /// Плашки: шаблоны (изнутри наружу), затем категории.
-    pub plates: Vec<WheelPlate>,
-    /// Радиус описанной окружности плашек (для «клик заметно дальше —
-    /// закрыть»).
+    /// Сектора: шаблоны (изнутри наружу), затем категории.
+    pub sectors: Vec<WheelSector>,
+    /// Внешний радиус (максимальный r1 секторов; для «клик заметно дальше —
+    /// закрыть» и клампа центра).
     pub extent: f32,
     /// FR-022: квадрат кнопки-хаба (`WHEEL_HUB_D × WHEEL_HUB_D`) вокруг
     /// центра — единый источник для рендера круга и клика «назад/закрыть».
@@ -570,38 +863,55 @@ impl WheelGeometry {
         cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
     }
 
-    /// Плашка под курсором (screen px): точный hit-test по прямоугольникам
-    /// плашек (раньше был угловой тест по секторам, не совпадавший с
-    /// квадами рендера).
+    /// Сектор под курсором (screen px): полярный hit-test — кольцо по
+    /// радиусу (r0 ≤ r ≤ r1), угловая принадлежность — знаковое угловое
+    /// расстояние `sectors::angle_gap` (тот же код, что в WGSL-шейдере
+    /// рендера, поэтому клик всегда попадает в нарисованное). В угловом
+    /// зазоре, в дырке (r < WHEEL_HUB_R) и за внешним радиусом — None.
     pub fn hit(&self, cursor: Vec2) -> Option<WheelHit> {
-        self.plates
+        let dx = cursor[0] - self.center[0];
+        let dy = cursor[1] - self.center[1];
+        let r = dx.hypot(dy);
+        let theta = norm_angle(dy.atan2(dx));
+        self.sectors
             .iter()
-            .find(|p| {
-                let [x, y, w, h] = p.rect;
-                cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
-            })
-            .map(|p| p.hit.clone())
+            .find(|s| r >= s.r0 && r <= s.r1 && angle_gap(theta, s.a0, s.a1) <= 0.0)
+            .map(|s| s.hit.clone())
     }
 }
 
-/// Сектора кольца: центр угла i-го из count секторов (от 12 часов, по
-/// часовой). Чистая функция — детерминизм секторов для hit-test и рендера.
-pub fn sector_center_angle(count: usize, index: usize) -> f32 {
-    if count == 0 {
-        return 0.0;
-    }
-    let step = std::f32::consts::TAU / count as f32;
-    -std::f32::consts::FRAC_PI_2 + step * (index as f32 + 0.5)
+/// Радиусы кольца `k` (0 — кольцо у дырки): r0 = HUB_R + k·(толщина+зазор),
+/// r1 = r0 + толщина.
+fn ring_radii(k: usize) -> (f32, f32) {
+    let r0 = WHEEL_HUB_R + k as f32 * (WHEEL_RING_THICKNESS + WHEEL_RING_GAP);
+    (r0, r0 + WHEEL_RING_THICKNESS)
 }
 
-/// План колец шаблонов: `count` плашек по кольцам вместимостью
-/// [`WHEEL_RING_CAP`], сбалансированно, внешние кольца вместительнее
-/// (их окружность больше): 10 → [5, 5], 11 → [5, 6], 7 → [3, 4].
+/// Вместимость кольца `k`: число секторов, чья дуга на среднем радиусе
+/// ≥ [`WHEEL_MIN_SECTOR_ARC`] с учётом углового зазора между соседями.
+/// Гарантированно ≥ 2 (при HUB_R=24/толщине 68 кольцо 0 вмещает 5).
+pub fn ring_capacity(k: usize) -> usize {
+    let (r0, r1) = ring_radii(k);
+    let r_mid = (r0 + r1) / 2.0;
+    let arc_gap = WHEEL_SECTOR_GAP * r_mid;
+    ((std::f32::consts::TAU * r_mid / (WHEEL_MIN_SECTOR_ARC + arc_gap)).floor() as usize)
+        .clamp(2, WHEEL_RING_CAP)
+}
+
+/// План колец: `count` секторов по кольцам вместимости [`ring_capacity`]
+/// (у внешних колец она больше), сбалансированно: 10 → [5, 5], 11 → [5, 6],
+/// 7 → [3, 4], 15 → [5, 5, 5]. Каждая часть ≤ вместимости своего кольца.
 pub fn wheel_ring_plan(count: usize) -> Vec<usize> {
     if count == 0 {
         return Vec::new();
     }
-    let rings = count.div_ceil(WHEEL_RING_CAP);
+    // Минимальное число колец, чья суммарная вместимость покрывает count
+    let mut rings = 0_usize;
+    let mut total = 0_usize;
+    while total < count {
+        total += ring_capacity(rings);
+        rings += 1;
+    }
     let base = count / rings;
     let extra = count % rings;
     (0..rings)
@@ -609,98 +919,34 @@ pub fn wheel_ring_plan(count: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Минимальный радиус кольца из `count` плашек шириной `side_w`
-/// (ось-выровненные прямоугольники): для каждой пары соседей
-/// max(|Δx|, |Δy|) ≥ side_w + [`WHEEL_GAP`] — гарантия отсутствия
-/// налезания при любой ориентации хорды. `min_r` — нижняя граница
-/// (зазор до хаба / соседнего кольца).
-pub fn ring_min_radius(count: usize, side_w: f32, min_r: f32) -> f32 {
-    let mut r = min_r;
-    if count >= 2 {
-        let need = side_w + WHEEL_GAP;
-        for i in 0..count {
-            let a = sector_center_angle(count, i);
-            let b = sector_center_angle(count, (i + 1) % count);
-            let reach = (b.cos() - a.cos()).abs().max((b.sin() - a.sin()).abs());
-            if reach > 1e-6 {
-                r = r.max(need / reach);
-            }
-        }
-    }
-    r
-}
-
-/// Прямоугольники пересекаются ПО ПЛОЩАДИ (касание рёбер — не пересечение).
-fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
-    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
-}
-
-/// Есть ли хоть одна пересекающаяся пара в наборе плашек.
-fn any_overlap(rects: &[[f32; 4]]) -> bool {
-    for i in 0..rects.len() {
-        for j in i + 1..rects.len() {
-            if rects_overlap(rects[i], rects[j]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Максимальное расстояние угла прямоугольника от начала координат
-/// (координаты центр-относительные) — вклад плашки во внешний радиус.
-fn rect_max_extent(rect: [f32; 4]) -> f32 {
-    let [x, y, w, h] = rect;
-    [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
-        .iter()
-        .map(|(cx, cy)| cx.hypot(*cy))
-        .fold(0.0_f32, f32::max)
-}
-
-/// Прямоугольники одного кольца (относительно центра wheel): `count`
-/// плашек `side_w`×`side_h` на радиусе `r`, центры по углам
-/// [`sector_center_angle`] (старт с 12 часов, по часовой).
-fn ring_rects(count: usize, r: f32, side_w: f32, side_h: f32) -> Vec<[f32; 4]> {
+/// Сектора одного кольца: `count` секторов на кольце `k`, цель каждого —
+/// через `hit_of` (нарастающий сквозной индекс — за пределами функции).
+/// Старт — 12 часов, по часовой; между соседними секторами угловой зазор
+/// [`WHEEL_SECTOR_GAP`].
+fn ring_sectors(k: usize, count: usize, hit_of: impl FnMut(usize) -> WheelHit) -> Vec<WheelSector> {
+    let (r0, r1) = ring_radii(k);
+    let step = std::f32::consts::TAU / count as f32;
+    let start = -std::f32::consts::FRAC_PI_2;
+    let mut hit_of = hit_of;
     (0..count)
         .map(|i| {
-            let [x, y] = sector_point([0.0, 0.0], sector_center_angle(count, i), r);
-            [x - side_w / 2.0, y - side_h / 2.0, side_w, side_h]
+            let a0 = start + step * i as f32 + WHEEL_SECTOR_GAP / 2.0;
+            let a1 = start + step * (i + 1) as f32 - WHEEL_SECTOR_GAP / 2.0;
+            WheelSector {
+                a0,
+                a1,
+                r0,
+                r1,
+                hit: hit_of(i),
+            }
         })
         .collect()
 }
 
-/// Разместить кольцо: стартовый радиус — от ширины плашки и зазора
-/// ([`ring_min_radius`]), затем радиус растёт шагом [`WHEEL_GROW_STEP`],
-/// пока хоть одна пара плашек (новых или с уже размещёнными) пересекается
-/// по площади. Гарантия отсутствия налезания — по построению. Возвращает
-/// (радиус, прямоугольники).
-fn place_ring(
-    existing: &[[f32; 4]],
-    count: usize,
-    side_w: f32,
-    side_h: f32,
-    min_r: f32,
-) -> (f32, Vec<[f32; 4]>) {
-    if count == 0 {
-        return (min_r, Vec::new());
-    }
-    let mut r = ring_min_radius(count, side_w, min_r);
-    for _ in 0..WHEEL_GROW_ITERS {
-        let rects = ring_rects(count, r, side_w, side_h);
-        let mut all = existing.to_vec();
-        all.extend_from_slice(&rects);
-        if !any_overlap(&all) {
-            return (r, rects);
-        }
-        r += WHEEL_GROW_STEP;
-    }
-    (r, ring_rects(count, r, side_w, side_h))
-}
-
-/// Перенос имени шаблона на плашке: имя длиннее `max_chars` символов
-/// делится на две строки по самому позднему подходящему разделителю
+/// Перенос имени шаблона в подписи сектора: имя длиннее `max_chars`
+/// символов делится на две строки по самому позднему подходящему разделителю
 /// (пробел или дефис) так, чтобы обе части влезали; не получилось — одна
-/// строка (хвост клипается рендером по ширине плашки).
+/// строка (хвост клипается рендером по ширине подписи).
 pub fn split_two_lines(name: &str, max_chars: usize) -> (String, Option<String>) {
     let chars = |s: &str| s.chars().count();
     if chars(name) <= max_chars {
@@ -731,13 +977,15 @@ pub fn split_two_lines(name: &str, max_chars: usize) -> (String, Option<String>)
     }
 }
 
-/// Геометрия wheel (правка владельца FR-018): раскладка ОТТАЛКИВАЕТСЯ ОТ
-/// РАЗМЕРА ПЛАШЕК — радиусы вычисляются из габаритов мини-карточек и
-/// гарантированного зазора [`WHEEL_GAP`]; переполнение кольца
-/// (>[`WHEEL_RING_CAP`]) уходит в концентрические под-кольца; итог
-/// проверяется попарным AABB-тестом ([`place_ring`]) — налезание плашек
-/// невозможно. `screen` — точка клика; `window_w/h` — размер окна для
-/// клампа центра (клик у края не должен обрезать меню).
+/// Геометрия wheel (рестайл FR-022, donut-сектора): кольца фиксированной
+/// толщины [`WHEEL_RING_THICKNESS`] с межкольцевым зазором
+/// [`WHEEL_RING_GAP`]; вместимость каждого кольца выводится из минимальной
+/// дуги сектора ([`ring_capacity`]), переполнение уходит во внешние
+/// под-кольца ([`wheel_ring_plan`]). Шаблоны — кольца от дырки наружу,
+/// категории — внешние кольца. Угловые зазоры между секторами —
+/// [`WHEEL_SECTOR_GAP`], они же формируют визуальные промежутки рендера.
+/// `screen` — точка клика; `window_w/h` — размер окна для клампа центра
+/// (клик у края не должен обрезать меню).
 pub fn wheel_geometry(
     screen: Vec2,
     window_w: f32,
@@ -745,61 +993,32 @@ pub fn wheel_geometry(
     category_count: usize,
     template_count: usize,
 ) -> WheelGeometry {
-    // 1. Кольца шаблонов — от хаба наружу. Межкольцевой зазор стартует от
-    //    радиуса предыдущего кольца + высоты плашки; угловые налезания
-    //    добирает корректирующий цикл place_ring.
+    // 1. Кольца шаблонов — от дырки наружу. Индекс шаблона — сквозной по
+    //    категории (кольца — только план раскладки).
     let plan = wheel_ring_plan(template_count);
-    let hub_min_r = WHEEL_HUB_R + WHEEL_TPL_H / 2.0 + WHEEL_GAP;
-    let mut rects: Vec<[f32; 4]> = Vec::new();
-    let mut placed_extent = 0.0_f32;
-    let mut prev_r = 0.0_f32;
-    for (k, count) in plan.iter().enumerate() {
-        let min_r = if k == 0 {
-            hub_min_r
-        } else {
-            prev_r + WHEEL_TPL_H + WHEEL_GAP
-        };
-        let (r, placed) = place_ring(&rects, *count, WHEEL_TPL_W, WHEEL_TPL_H, min_r);
-        prev_r = r;
-        for rect in &placed {
-            placed_extent = placed_extent.max(rect_max_extent(*rect));
-        }
-        rects.extend(placed);
-    }
-    // 2. Кольцо категорий — снаружи; без шаблонов — своё расстояние до хаба.
-    let cat_min_r = if prev_r > 0.0 {
-        prev_r + WHEEL_TPL_H / 2.0 + WHEEL_GAP + WHEEL_CAT_H / 2.0
-    } else {
-        WHEEL_HUB_R + WHEEL_CAT_H / 2.0 + WHEEL_GAP
-    };
-    let (_, cat_rects) = place_ring(&rects, category_count, WHEEL_CAT_W, WHEEL_CAT_H, cat_min_r);
-
-    // 3. Плашки: индекс шаблона — сквозной по категории (кольца — только
-    //    план раскладки), категории — по порядку реестра.
-    let mut plates: Vec<WheelPlate> = Vec::with_capacity(rects.len() + cat_rects.len());
+    let mut sectors: Vec<WheelSector> = Vec::new();
     let mut template_index = 0_usize;
-    let mut ring_iter = rects.iter();
-    for count in &plan {
-        for _ in 0..*count {
-            let rect = *ring_iter.next().expect("кольцо размещено");
-            plates.push(WheelPlate {
-                rect,
-                hit: WheelHit::Template(template_index),
-            });
+    for (k, count) in plan.iter().enumerate() {
+        sectors.extend(ring_sectors(k, *count, |_| {
+            let hit = WheelHit::Template(template_index);
             template_index += 1;
-        }
+            hit
+        }));
     }
-    for (i, rect) in cat_rects.iter().enumerate() {
-        plates.push(WheelPlate {
-            rect: *rect,
-            hit: WheelHit::Category(i),
-        });
+    // 2. Кольца категорий — снаружи шаблонных (индексы по порядку реестра).
+    let cat_plan = wheel_ring_plan(category_count);
+    let mut category_index = 0_usize;
+    for (j, count) in cat_plan.iter().enumerate() {
+        let k = plan.len() + j;
+        sectors.extend(ring_sectors(k, *count, |_| {
+            let hit = WheelHit::Category(category_index);
+            category_index += 1;
+            hit
+        }));
     }
 
-    // 4. Внешний радиус, кнопка-хаб (FR-022) и кламп центра к окну.
-    let extent = cat_rects
-        .iter()
-        .fold(placed_extent, |acc, rect| acc.max(rect_max_extent(*rect)));
+    // 3. Внешний радиус, кнопка-хаб (FR-022) и кламп центра к окну.
+    let extent = sectors.iter().map(|s| s.r1).fold(WHEEL_HUB_R, f32::max);
     let lo = extent + WHEEL_SCREEN_MARGIN;
     let center: Vec2 = if window_w >= lo * 2.0 && window_h >= lo * 2.0 {
         [
@@ -815,13 +1034,9 @@ pub fn wheel_geometry(
         WHEEL_HUB_D,
         WHEEL_HUB_D,
     ];
-    for plate in &mut plates {
-        plate.rect[0] += center[0];
-        plate.rect[1] += center[1];
-    }
     WheelGeometry {
         center,
-        plates,
+        sectors,
         extent,
         hub,
     }
@@ -947,12 +1162,16 @@ mod tests {
 
     #[test]
     fn panel_dock_mode_focus_lifecycle() {
-        // FR-025: док развёрнут по умолчанию, фокус — только по Ctrl+P
-        // или клику в поиск; Esc сворачивает док; клик по канвасу мимо
-        // панели снимает фокус, не закрывая док
+        // Ревизия FR-025 (2026-09-16): палитра ПРИМАРНО свёрнута — полоса
+        // категорий по центру слева; развёрнутый док — по Ctrl+P/клику.
+        // Фокус — только по Ctrl+P или клику в поиск; Esc сворачивает док;
+        // клик по канвасу мимо панели снимает фокус, не закрывая док
         let mut panel = TemplatePanel::new();
-        assert!(panel.open, "FR-025: палитра доступна постоянно");
+        assert!(!panel.open, "ревизия FR-025: по умолчанию свёрнута");
         assert!(!panel.focused);
+        // Ctrl+P: развернуть + фокус + чистый фильтр
+        panel.open();
+        assert!(panel.open && panel.focused);
         panel.focus_search();
         assert!(panel.focused);
         panel.unfocus();
@@ -980,7 +1199,8 @@ mod tests {
     #[test]
     fn panel_collapse_button_and_strip_geometry() {
         let registry = registry();
-        let panel = TemplatePanel::new();
+        let mut panel = TemplatePanel::new();
+        panel.open = true;
         let rows = panel_rows(&registry, &panel);
         let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows);
         // Кнопка сворачивания — в правой части шапки, внутри панели
@@ -989,12 +1209,181 @@ mod tests {
         assert!(c[0] + c[2] <= lay.panel_rect[0] + lay.panel_rect[2] - PANEL_PADDING + 0.01);
         assert!(c[1] >= lay.header_rect[1]);
         assert!(c[1] + c[3] <= lay.header_rect[1] + lay.header_rect[3] + 0.01);
-        // Полоса-ручка свёрнутого дока — у левого края, внутри высоты окна
-        let strip = collapsed_strip_rect(800.0);
-        assert_eq!(strip[0], PANEL_MARGIN);
-        assert_eq!(strip[1], PANEL_TOP_MARGIN);
-        assert_eq!(strip[2], COLLAPSED_STRIP_W);
-        assert_eq!(strip[3], COLLAPSED_STRIP_H);
+        // Ревизия FR-025: свёрнутая палитра — вертикальная полоса категорий,
+        // центрированная по вертикали; строки категорий + шеврон внизу
+        let categories: Vec<String> = registry
+            .categories()
+            .into_iter()
+            .map(|c| c.to_owned())
+            .collect();
+        let strip = dock_strip_layout(&categories, 800.0);
+        assert_eq!(strip.rect[0], PANEL_MARGIN);
+        assert!(strip.rect[1] >= PANEL_TOP_MARGIN);
+        let h = strip.rect[3];
+        assert!(
+            (strip.rect[1] - (800.0 - h) / 2.0).abs() < 0.01,
+            "полоса центрирована по вертикали"
+        );
+        assert!(strip.rect[2] >= STRIP_MIN_W);
+        assert_eq!(strip.rows.len(), categories.len());
+        for (i, (rect, name)) in strip.rows.iter().enumerate() {
+            assert_eq!(name, &categories[i]);
+            assert!(rect[1] >= strip.rect[1]);
+            assert!(rect[1] + rect[3] <= strip.rect[1] + strip.rect[3] + 0.01);
+        }
+        // Шеврон — ниже последней строки категории, внутри полосы
+        let last = strip.rows.last().expect("строки есть");
+        assert!(strip.chevron_rect[1] > last.0[1]);
+        assert!(
+            strip.chevron_rect[1] + strip.chevron_rect[3] <= strip.rect[1] + strip.rect[3] + 0.01
+        );
+        // Малое окно: полоса клампится к верхнему отступу, не уходит в минус
+        let small = dock_strip_layout(&categories, 60.0);
+        assert_eq!(small.rect[1], PANEL_TOP_MARGIN);
+    }
+
+    #[test]
+    fn strip_layout_clamps_to_window_bottom() {
+        // Окно, где центровка упирается в нижний отступ — полоса не вылезает
+        let categories: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let h = (categories.len() + 1) as f32 * CATEGORY_ROW_H + STRIP_PAD_V * 2.0;
+        let window_h = h + PANEL_TOP_MARGIN * 2.0 + 10.0;
+        let strip = dock_strip_layout(&categories, window_h);
+        assert!(strip.rect[1] >= PANEL_TOP_MARGIN - 0.01);
+        assert!(
+            strip.rect[1] + strip.rect[3] <= window_h - PANEL_TOP_MARGIN + 0.01,
+            "низ полосы — не ниже нижнего отступа"
+        );
+    }
+
+    #[test]
+    fn flyout_layout_clamps_height_and_scroll() {
+        // 40 шаблонов в окне 600 px высотой: высота клампится к окну, строки
+        // не вылезают ни за прямоугольник flyout, ни за окно
+        let strip_row = [12.0, 300.0, 80.0, CATEGORY_ROW_H];
+        let fly = flyout_layout(strip_row, 40, 1280.0, 600.0, 0);
+        let max_h = 600.0 - PANEL_TOP_MARGIN * 2.0;
+        assert!(fly.rect[3] <= max_h + 0.01, "высота клампится к окну");
+        assert!(fly.rect[1] >= PANEL_TOP_MARGIN - 0.01);
+        assert!(fly.rect[1] + fly.rect[3] <= 600.0 - PANEL_TOP_MARGIN + 0.01);
+        // Справа от строки полосы
+        assert!(fly.rect[0] >= strip_row[0] + strip_row[2] + FLYOUT_GAP - 0.01);
+        let visible = ((fly.rect[3] - FLYOUT_PAD_V * 2.0) / ROW_HEIGHT).floor() as usize;
+        assert_eq!(fly.row_rects.len(), visible);
+        assert_eq!(fly.max_scroll, 40 - visible);
+        for rect in &fly.row_rects {
+            assert!(rect[1] >= fly.rect[1] - 0.01);
+            assert!(rect[1] + rect[3] <= fly.rect[1] + fly.rect[3] + 0.01);
+            assert!(rect[1] + rect[3] <= 600.0 - PANEL_TOP_MARGIN + 0.01);
+            assert!(rect[0] >= fly.rect[0] - 0.01);
+            assert!(rect[0] + rect[2] <= fly.rect[0] + fly.rect[2] + 0.01);
+        }
+        // Скролл клампится к max_scroll
+        let scrolled = flyout_layout(strip_row, 40, 1280.0, 600.0, 100);
+        assert_eq!(scrolled.scroll_top, fly.max_scroll);
+        assert!(!scrolled.row_rects.is_empty());
+        assert!((scrolled.row_rects[0][1] - (scrolled.rect[1] + FLYOUT_PAD_V)).abs() < 0.01);
+    }
+
+    #[test]
+    fn flyout_layout_few_items_centers_on_row() {
+        // Мало items — высота по содержимому, вертикальный центр flyout —
+        // центр строки-категории; скролла нет
+        let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
+        let fly = flyout_layout(strip_row, 3, 1280.0, 800.0, 0);
+        let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
+        assert!((fly.rect[3] - expected_h).abs() < 0.01);
+        let row_cy = strip_row[1] + strip_row[3] / 2.0;
+        assert!(
+            (fly.rect[1] + fly.rect[3] / 2.0 - row_cy).abs() < 0.01,
+            "flyout центрирован относительно строки категории"
+        );
+        assert_eq!(fly.max_scroll, 0);
+        assert_eq!(fly.row_rects.len(), 3);
+    }
+
+    #[test]
+    fn strip_hover_opens_after_intent_and_closes_with_grace() {
+        // Hover-intent: открытие только после 150 мс наведения; grace 300 мс
+        // держит flyout после ухода курсора. true — смена строки/раскрытия.
+        let t0 = Instant::now();
+        let mut hover = StripHover::new();
+        assert!(
+            hover.update_at(Some(0), false, t0),
+            "смена строки под курсором"
+        );
+        assert_eq!(hover.open, None);
+        assert!(!hover.update_at(Some(0), false, t0 + Duration::from_millis(149)));
+        assert_eq!(hover.open, None, "до intent-задержки не открывается");
+        assert!(hover.update_at(Some(0), false, t0 + Duration::from_millis(150)));
+        assert_eq!(hover.open, Some(0));
+        // Уход курсора: в пределах grace — ещё открыто (строка сменилась —
+        // перерисовка нужна)
+        assert!(hover.update_at(None, false, t0 + Duration::from_millis(200)));
+        assert_eq!(hover.open, Some(0));
+        assert!(hover.update_at(None, false, t0 + Duration::from_millis(200 + 300)));
+        assert_eq!(hover.open, None, "после grace-задержки закрывается");
+        assert!(!hover.pending());
+    }
+
+    #[test]
+    fn strip_hover_switches_category_and_resets_scroll() {
+        let t0 = Instant::now();
+        let mut hover = StripHover::new();
+        hover.update_at(Some(0), false, t0);
+        hover.update_at(Some(0), false, t0 + Duration::from_millis(150));
+        assert_eq!(hover.open, Some(0));
+        hover.scroll_by(3, 10);
+        assert_eq!(hover.scroll_top, 3);
+        // Переход на другую категорию — тоже с intent-задержкой, скролл
+        // новой категории сброшен
+        hover.update_at(Some(1), false, t0 + Duration::from_millis(200));
+        assert!(
+            hover.update_at(Some(1), false, t0 + Duration::from_millis(200 + 150)),
+            "переключение категории меняет состояние"
+        );
+        assert_eq!(hover.open, Some(1));
+        assert_eq!(hover.scroll_top, 0);
+    }
+
+    #[test]
+    fn strip_hover_pin_survives_cursor_leave() {
+        // Пин по клику: открыто без задержки и держится после ухода курсора;
+        // повторный клик — закрыть (строка под курсором не менялась — false)
+        let t0 = Instant::now();
+        let mut hover = StripHover::new();
+        hover.toggle_trigger(2);
+        assert_eq!(hover.open, Some(2));
+        assert!(hover.pinned);
+        assert!(!hover.update_at(None, false, t0 + Duration::from_secs(5)));
+        assert_eq!(hover.open, Some(2), "pinned не закрывается по grace");
+        hover.toggle_trigger(2);
+        assert_eq!(hover.open, None);
+        assert!(!hover.pinned);
+    }
+
+    #[test]
+    fn strip_hover_flyout_holds_open_without_pin() {
+        // Курсор со строки ушёл, но внутри flyout — открытие держится
+        // (grace не тикает); смена строки — повод для перерисовки (true)
+        let t0 = Instant::now();
+        let mut hover = StripHover::new();
+        hover.update_at(Some(0), false, t0);
+        hover.update_at(Some(0), false, t0 + Duration::from_millis(150));
+        assert!(hover.update_at(None, true, t0 + Duration::from_secs(10)));
+        assert_eq!(hover.open, Some(0));
+        assert!(!hover.pending(), "внутри flyout grace не копится");
+    }
+
+    #[test]
+    fn strip_hover_scroll_clamps() {
+        let mut hover = StripHover::new();
+        hover.scroll_by(7, 5);
+        assert_eq!(hover.scroll_top, 5, "верхняя граница max_scroll");
+        hover.scroll_by(-99, 5);
+        assert_eq!(hover.scroll_top, 0, "нижняя граница 0");
+        hover.scroll_by(2, 0);
+        assert_eq!(hover.scroll_top, 0, "max_scroll=0 — скролла нет");
     }
 
     #[test]
@@ -1108,148 +1497,189 @@ mod tests {
         assert!((category_chip_width("Очереди") - (7.0 * 7.5 + 20.0)).abs() < 0.01);
     }
 
-    // --- Wheel: геометрия (правка владельца — раскладка от плашек) ---
+    // --- Wheel: геометрия donut-секторов (рестайл FR-022, 2026-09-16) ---
+
+    /// Проба hit-test в mid-углу/радиусе сектора (экранные px).
+    fn sector_probe(geo: &WheelGeometry, sector: &WheelSector) -> Vec2 {
+        sector_point(geo.center, sector.mid_angle(), sector.mid_radius())
+    }
 
     #[test]
     fn wheel_ring_plan_splits_balanced() {
+        // План — как раньше (балансированное дробление), но вместимость колец
+        // выводится из минимальной дуги сектора (ring_capacity)
         assert_eq!(wheel_ring_plan(0), Vec::<usize>::new());
         assert_eq!(wheel_ring_plan(1), vec![1]);
-        assert_eq!(wheel_ring_plan(6), vec![6]);
+        // 6 > вместимости кольца 0 (=5) — балансированное дробление [3, 3]
+        assert_eq!(wheel_ring_plan(6), vec![3, 3]);
         assert_eq!(wheel_ring_plan(7), vec![3, 4]);
         assert_eq!(wheel_ring_plan(10), vec![5, 5]);
         assert_eq!(wheel_ring_plan(11), vec![5, 6]);
         assert_eq!(wheel_ring_plan(13), vec![4, 4, 5]);
-        assert_eq!(wheel_ring_plan(15), vec![5, 5, 5]);
-    }
-
-    #[test]
-    fn wheel_hub_button_geometry() {
-        // FR-022: хаб — квадрат WHEEL_HUB_D вокруг центра, рендер и клик
-        // видят один и тот же прямоугольник; плашки в хаб не заходят
-        let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, 4, 10);
-        assert!((geo.hub[2] - WHEEL_HUB_D).abs() < 0.01);
-        assert!((geo.hub[0] + WHEEL_HUB_D / 2.0 - geo.center[0]).abs() < 0.01);
-        assert!((geo.hub[1] + WHEEL_HUB_D / 2.0 - geo.center[1]).abs() < 0.01);
-        // Клик по центру — хаб; на первой плашке — не хаб
-        assert!(geo.hub_hit(geo.center));
-        assert!(!geo.hub_hit([geo.center[0], geo.center[1] - geo.extent]));
-        for plate in &geo.plates {
-            let [x, y, w, h] = plate.rect;
-            let overlap = geo.hub[0] < x + w
-                && x < geo.hub[0] + geo.hub[2]
-                && geo.hub[1] < y + h
-                && y < geo.hub[1] + geo.hub[3];
-            assert!(!overlap, "плашка налезла на кнопку-хаб");
+        // 15 шаблонов при thickness 68 — минимум 2 кольца (кольцо 0 вмещает 5)
+        let plan = wheel_ring_plan(15);
+        assert!(plan.len() >= 2, "15 шаблонов не влезают в одно кольцо");
+        assert_eq!(plan, vec![5, 5, 5]);
+        // Каждая часть — не больше вместимости своего кольца
+        for (k, count) in plan.iter().enumerate() {
+            assert!(
+                *count <= ring_capacity(k),
+                "кольцо {k}: {count} > вместимости {}",
+                ring_capacity(k)
+            );
         }
     }
 
     #[test]
-    fn wheel_geometry_plates_never_overlap() {
-        // ГЛАВНЫЙ инвариант правки: никакая пара плашек не налезает друг
-        // на друга — ни при 10 шаблонах (backend), ни при 15, ни без
-        // шаблонов (категории одни)
-        for tpl in [0usize, 1, 2, 5, 6, 7, 10, 11, 15] {
-            for cat in [0usize, 2, 4, 6] {
-                let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, cat, tpl);
-                let rects: Vec<[f32; 4]> = geo.plates.iter().map(|p| p.rect).collect();
+    fn wheel_ring_capacity_grows_outward() {
+        // Вместимость кольца 0 при HUB_R=24/thickness=68 — 5 (окружность
+        // 364 px / дугу 62.5 px), дальше не убывает; потолок — WHEEL_RING_CAP
+        assert_eq!(ring_capacity(0), 5);
+        assert!(ring_capacity(1) >= ring_capacity(0));
+        assert!(ring_capacity(2) >= ring_capacity(1));
+        for k in 0..6 {
+            assert!(ring_capacity(k) >= 2, "кольцо {k} вмещает минимум 2");
+            assert!(ring_capacity(k) <= WHEEL_RING_CAP);
+        }
+    }
+
+    #[test]
+    fn wheel_sector_ring_radii_and_angular_gaps() {
+        // Радиусы колец: r0 = HUB_R + k·(thickness+gap), r1 = r0 + thickness
+        let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, 4, 10);
+        assert_eq!(geo.sectors.len(), 14);
+        let (r0_0, r1_0) = ring_radii(0);
+        let (r0_1, r1_1) = ring_radii(1);
+        let (r0_2, r1_2) = ring_radii(2);
+        for s in &geo.sectors {
+            let (er0, er1) = match s.hit {
+                WheelHit::Template(_) => {
+                    // 10 шаблонов → план [5, 5]: кольца 0 и 1
+                    if s.r0 < r0_1 - 0.01 {
+                        (r0_0, r1_0)
+                    } else {
+                        (r0_1, r1_1)
+                    }
+                }
+                WheelHit::Category(_) => (r0_2, r1_2),
+            };
+            assert!((s.r0 - er0).abs() < 0.01, "r0 кольца: {} vs {er0}", s.r0);
+            assert!((s.r1 - er1).abs() < 0.01, "r1 кольца: {} vs {er1}", s.r1);
+        }
+        // Угловые зазоры: между концом сектора и началом следующего в кольце
+        // — ровно WHEEL_SECTOR_GAP (последний → первый через wrap 0/2π)
+        let mut by_ring: Vec<Vec<&WheelSector>> = Vec::new();
+        for s in &geo.sectors {
+            let ring =
+                ((s.r0 - WHEEL_HUB_R) / (WHEEL_RING_THICKNESS + WHEEL_RING_GAP)).round() as usize;
+            while by_ring.len() <= ring {
+                by_ring.push(Vec::new());
+            }
+            by_ring[ring].push(s);
+        }
+        for (ring, ring_secs) in by_ring.iter().enumerate() {
+            let n = ring_secs.len();
+            assert!(n >= 1 && n <= ring_capacity(ring));
+            let mut ordered = ring_secs.clone();
+            ordered.sort_by(|a, b| a.a0.partial_cmp(&b.a0).expect("углы"));
+            for i in 0..n {
+                let cur = ordered[i];
+                let next = ordered[(i + 1) % n];
+                // Развёрнутый угол следующего начала (wrap-around через 0/2π)
+                let next_a0 = if next.a0 <= cur.a0 {
+                    next.a0 + std::f32::consts::TAU
+                } else {
+                    next.a0
+                };
+                let gap = next_a0 - cur.a1;
                 assert!(
-                    !any_overlap(&rects),
-                    "налезание плашек: категорий={cat}, шаблонов={tpl}"
+                    (gap - WHEEL_SECTOR_GAP).abs() < 1e-3,
+                    "кольцо {ring}: зазор {gap} между соседями"
                 );
             }
         }
     }
 
     #[test]
-    fn wheel_geometry_sizes_and_hub_clearance() {
-        let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, 2, 10);
-        assert_eq!(geo.plates.len(), 12);
-        for plate in &geo.plates {
-            let [x, y, w, h] = plate.rect;
-            match plate.hit {
-                WheelHit::Template(_) => {
-                    assert!((w - WHEEL_TPL_W).abs() < 0.01 && (h - WHEEL_TPL_H).abs() < 0.01);
-                }
-                WheelHit::Category(_) => {
-                    assert!((w - WHEEL_CAT_W).abs() < 0.01 && (h - WHEEL_CAT_H).abs() < 0.01);
-                }
-            }
-            // Плашка не заходит в хаб: ближайшая точка прямоугольника к
-            // центру — дальше радиуса хаба
-            let nx = geo.center[0].clamp(x, x + w);
-            let ny = geo.center[1].clamp(y, y + h);
-            let dist = (nx - geo.center[0]).hypot(ny - geo.center[1]);
-            assert!(dist >= WHEEL_HUB_R, "плашка залезла в хаб: dist={dist}");
+    fn wheel_hub_button_and_center_hole() {
+        // Хаб — квадрат WHEEL_HUB_D вокруг центра, рендер и клик видят один
+        // и тот же прямоугольник; дырка donut (r < WHEEL_HUB_R) — не сектор
+        let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, 4, 10);
+        assert!((geo.hub[2] - WHEEL_HUB_D).abs() < 0.01);
+        assert!((geo.hub[0] + WHEEL_HUB_D / 2.0 - geo.center[0]).abs() < 0.01);
+        assert!((geo.hub[1] + WHEEL_HUB_D / 2.0 - geo.center[1]).abs() < 0.01);
+        assert!(geo.hub_hit(geo.center));
+        assert!(!geo.hub_hit([geo.center[0], geo.center[1] - geo.extent]));
+        // Клик в центр — дырка, не сектор (хаб обрабатывается отдельно)
+        assert_eq!(geo.hit(geo.center), None);
+        // Ни один сектор не заходит в дырку
+        for s in &geo.sectors {
+            assert!(s.r0 >= WHEEL_HUB_R, "сектор залез в дырку: r0={}", s.r0);
         }
     }
 
     #[test]
-    fn wheel_hit_by_plate_rects() {
-        let registry = registry(); // mock: 4 категории, в backend 2 шаблона
-        let menu = WheelMenu {
-            screen: [400.0, 300.0],
-            world: [10.0, 20.0],
-            category: None,
-        };
-        let geo = wheel_geometry(menu.screen, 1280.0, 800.0, registry.categories().len(), 0);
-        // Центр плашки категории 0 → Category(0)
-        let plate = geo
-            .plates
-            .iter()
-            .find(|p| p.hit == WheelHit::Category(0))
-            .expect("плашка категории");
-        let center = [
-            plate.rect[0] + plate.rect[2] / 2.0,
-            plate.rect[1] + plate.rect[3] / 2.0,
-        ];
-        assert_eq!(geo.hit(center), Some(WheelHit::Category(0)));
-        // Хаб и дальняя точка — None
+    fn wheel_hit_polar_mid_angles() {
+        // Каждый сектор отвечает по точке в mid-углу на среднем радиусе;
+        // в угловом зазоре, за r1 и в дырке — None
+        let registry = registry(); // mock: 4 категории
+        let geo = wheel_geometry(
+            [400.0, 300.0],
+            1280.0,
+            800.0,
+            registry.categories().len(),
+            0,
+        );
+        assert_eq!(geo.sectors.len(), 4);
+        for s in &geo.sectors {
+            let probe = sector_probe(&geo, s);
+            assert_eq!(geo.hit(probe), Some(s.hit.clone()));
+        }
+        // Угловой зазор между первым и вторым сектором кольца категорий
+        let mut ordered: Vec<&WheelSector> = geo.sectors.iter().collect();
+        ordered.sort_by(|a, b| a.a0.partial_cmp(&b.a0).expect("углы"));
+        let gap_angle = (ordered[0].a1 + ordered[1].a0) / 2.0;
+        let r_mid = ordered[0].mid_radius();
+        let gap_point = sector_point(geo.center, gap_angle, r_mid);
+        assert_eq!(geo.hit(gap_point), None, "угловой зазор — мимо секторов");
+        // За внешним радиусом и в дырке — None
+        let far = sector_point(geo.center, ordered[0].mid_angle(), geo.extent + 20.0);
+        assert_eq!(geo.hit(far), None);
         assert_eq!(geo.hit(geo.center), None);
-        assert_eq!(geo.hit([900.0, 300.0]), None);
-        // Без категории шаблонных плашек нет
+        // Без выбранной категории шаблонных секторов нет
         assert!(geo
-            .plates
+            .sectors
             .iter()
-            .all(|p| !matches!(p.hit, WheelHit::Template(_))));
+            .all(|s| !matches!(s.hit, WheelHit::Template(_))));
     }
 
     #[test]
     fn wheel_hit_templates_flat_index() {
         let registry = registry();
-        let menu = WheelMenu {
-            screen: [400.0, 300.0],
-            world: [10.0, 20.0],
-            category: Some("backend".to_owned()),
-        };
         let geo = wheel_geometry(
-            menu.screen,
+            [400.0, 300.0],
             1280.0,
             800.0,
             registry.categories().len(),
             registry.by_category("backend").len(),
         );
-        // Каждая шаблонная плашка отвечает своим плоским индексом
-        for plate in &geo.plates {
-            let center = [
-                plate.rect[0] + plate.rect[2] / 2.0,
-                plate.rect[1] + plate.rect[3] / 2.0,
-            ];
-            assert_eq!(geo.hit(center), Some(plate.hit.clone()));
+        // Каждый шаблонный сектор отвечает своим плоским индексом
+        for s in &geo.sectors {
+            let probe = sector_probe(&geo, s);
+            assert_eq!(geo.hit(probe), Some(s.hit.clone()));
         }
-        assert!(geo.plates.iter().any(|p| p.hit == WheelHit::Template(0)));
-        assert!(geo.plates.iter().any(|p| p.hit == WheelHit::Template(1)));
+        assert!(geo.sectors.iter().any(|s| s.hit == WheelHit::Template(0)));
+        assert!(geo.sectors.iter().any(|s| s.hit == WheelHit::Template(1)));
         // Категории остаются кликабельными при выбранной категории
         assert!(geo
-            .plates
+            .sectors
             .iter()
-            .any(|p| matches!(p.hit, WheelHit::Category(_))));
+            .any(|s| matches!(s.hit, WheelHit::Category(_))));
     }
 
     #[test]
     fn wheel_geometry_clamps_to_window() {
         // Клик у правого края: центр сдвигается, wheel целиком в окне
-        // (высота 1000 — с запасом под большой wheel 10 шаблонов + 4
-        // категорий)
         let geo = wheel_geometry([1270.0, 500.0], 1280.0, 1000.0, 4, 10);
         assert!(geo.center[0] + geo.extent <= 1280.0 - WHEEL_SCREEN_MARGIN + 0.01);
         assert!(geo.center[0] - geo.extent >= WHEEL_SCREEN_MARGIN - 0.01);
@@ -1262,6 +1692,34 @@ mod tests {
         let small = wheel_geometry([50.0, 50.0], 200.0, 150.0, 4, 10);
         assert!((small.center[0] - 100.0).abs() < 0.01);
         assert!((small.center[1] - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn wheel_geometry_15_templates_multiple_rings() {
+        // Переполнение кольца: 15 шаблонов уходят в под-кольца, сквозные
+        // индексы 0..15 все представлены
+        let geo = wheel_geometry([400.0, 300.0], 1600.0, 1200.0, 4, 15);
+        let templates: Vec<usize> = geo
+            .sectors
+            .iter()
+            .filter_map(|s| match s.hit {
+                WheelHit::Template(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(templates.len(), 15);
+        let mut sorted = templates.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..15).collect::<Vec<_>>());
+        // Кольца шаблонов — минимум два (вместимость кольца 0 — 5)
+        let mut template_r0: Vec<f32> = geo
+            .sectors
+            .iter()
+            .filter_map(|s| matches!(s.hit, WheelHit::Template(_)).then_some(s.r0))
+            .collect();
+        template_r0.sort_by(|a, b| a.partial_cmp(b).expect("радиусы"));
+        template_r0.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        assert!(template_r0.len() >= 2, "15 шаблонов — минимум 2 кольца");
     }
 
     #[test]
@@ -1299,53 +1757,45 @@ mod tests {
 
     #[test]
     fn wheel_categories_then_templates_flow() {
-        // Сценарий: клик по плашке категории выбирает категорию
-        // (появляются шаблонные плашки), клик по плашке шаблона — цель
+        // Сценарий: клик по сектору категории выбирает категорию
+        // (появляются шаблонные кольца), клик по сектору шаблона — цель
         // для инстанциации
         let registry = registry();
-        let menu = WheelMenu {
-            screen: [500.0, 400.0],
-            world: [10.0, 20.0],
-            category: None,
-        };
         let categories = registry.categories();
         let cache_index = categories
             .iter()
             .position(|c| *c == "cache")
             .expect("cache");
-        let geo = wheel_geometry(menu.screen, 1280.0, 800.0, categories.len(), 0);
-        let plate = geo
-            .plates
+        let geo = wheel_geometry([500.0, 400.0], 1280.0, 800.0, categories.len(), 0);
+        let cat = geo
+            .sectors
             .iter()
-            .find(|p| p.hit == WheelHit::Category(cache_index))
-            .expect("плашка cache");
-        let center = [
-            plate.rect[0] + plate.rect[2] / 2.0,
-            plate.rect[1] + plate.rect[3] / 2.0,
-        ];
-        assert_eq!(geo.hit(center), Some(WheelHit::Category(cache_index)));
-        // После выбора категории: 1 шаблон cache на нижнем кольце
-        let menu2 = WheelMenu {
-            screen: menu.screen,
-            world: menu.world,
-            category: Some("cache".to_owned()),
-        };
+            .find(|s| s.hit == WheelHit::Category(cache_index))
+            .expect("сектор cache");
+        assert_eq!(
+            geo.hit(sector_probe(&geo, cat)),
+            Some(WheelHit::Category(cache_index))
+        );
+        // После выбора категории: 1 шаблон cache на кольце у дырки
         let geo2 = wheel_geometry(
-            menu2.screen,
+            [500.0, 400.0],
             1280.0,
             800.0,
             categories.len(),
             registry.by_category("cache").len(),
         );
         let tpl = geo2
-            .plates
+            .sectors
             .iter()
-            .find(|p| p.hit == WheelHit::Template(0))
-            .expect("плашка шаблона");
-        let center = [
-            tpl.rect[0] + tpl.rect[2] / 2.0,
-            tpl.rect[1] + tpl.rect[3] / 2.0,
-        ];
-        assert_eq!(geo2.hit(center), Some(WheelHit::Template(0)));
+            .find(|s| s.hit == WheelHit::Template(0))
+            .expect("сектор шаблона");
+        assert!(
+            (tpl.r0 - WHEEL_HUB_R).abs() < 0.01,
+            "шаблоны — кольцо у дырки"
+        );
+        assert_eq!(
+            geo2.hit(sector_probe(&geo2, tpl)),
+            Some(WheelHit::Template(0))
+        );
     }
 }
