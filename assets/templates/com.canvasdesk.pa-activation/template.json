@@ -4,8 +4,8 @@
   "name_ru": "Активация (процент активированных)",
   "version": "1.0.0",
   "category": "product-analytics",
-  "description": "Activation Rate: activated / signups — доля зарегистрировавшихся, кто достиг первого value-момента.",
-  "description_en": "Activation Rate: activated / signups — share of signups who reached the first value moment.",
+  "description": "Активация: доля зарегистрировавшихся, кто достиг первого value-момента (a-ha moment). Коррелят с D1 retention и платной конверсией: без активации пользователь не возвращается и не платит. Activation ≥ 60% — здорово; < 30% — onboarding не доводит до value, нужны product changes. Определяется через конкретный product event (отправка первого сообщения, создание первого проекта, запуск первого workflow). Метрика growth-команды для onboarding optimization и north-star metric tracking.",
+  "description_en": "Activation: share of signups who reach the first value moment (a-ha moment). Correlates with D1 retention and paid conversion: without activation, users don't return and don't pay. Activation ≥ 60% is healthy; < 30% means onboarding isn't reaching value and needs product changes. Defined by a specific product event (first message sent, first project created, first workflow run). A growth-team metric for onboarding optimisation and north-star metric tracking.",
   "params": [
     {
       "name": "signups",

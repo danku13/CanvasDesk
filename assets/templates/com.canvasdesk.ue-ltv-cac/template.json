@@ -4,8 +4,8 @@
   "name_ru": "Отношение LTV / CAC",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "LTV/CAC: здоровье юнит-экономики; ≥3 — здоровое, <1 — сжигаем деньги на привлечение.",
-  "description_en": "LTV/CAC: unit-economics health; ≥3 is healthy, <1 means burning cash on acquisition.",
+  "description": "Отношение пожизненной ценности клиента к стоимости его привлечения: главный индикатор здоровья юнит-экономики. LTV/CAC ≥ 3 — здоровый уровень, бизнес зарабатывает в 3 раза больше, чем тратит на привлечение. 1–3 — допустимо, но маржа тонкая и ниша для ошибок мала; < 1 — бизнес сжигает деньги на каждом новом клиенте. Используется инвесторами и CEO при оценке готовности к масштабированию и решении о раунде финансирования. Метрика для board meeting и due diligence — первый индикатор, на который смотрит инвестор.",
+  "description_en": "Ratio of customer lifetime value to customer acquisition cost: the headline unit-economics health indicator. LTV/CAC ≥ 3 is healthy — the business earns 3× what it spends on acquisition. 1–3 is workable but margin is thin and error budget small; < 1 means burning cash on every new customer. Used by investors and CEO to judge scaling readiness and funding-round decisions. A board-meeting and due-diligence metric — the first indicator an investor checks.",
   "params": [
     {
       "name": "ltv",

@@ -4,8 +4,8 @@
   "name_ru": "LTV (пожизненная ценность клиента)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "LTV: ARPU × gross margin / monthly churn — пожизненная выручка с клиента.",
-  "description_en": "LTV: ARPU × gross margin / monthly churn — lifetime revenue per customer.",
+  "description": "Пожизненная ценность клиента: сколько выручки приносит один пользователь за весь жизненный цикл в продукте. Базовая модель — ARPU × gross margin / monthly churn: месячная выручка с клиента, умноженная на маржу и делённая на месячный отток. Ключевая метрика устойчивости SaaS-бизнеса и допустимого CAC: LTV определяет, сколько можно тратить на привлечение. LTV ≥ 3 × CAC — здоровый уровень; LTV < CAC — бизнес убыточен на привлечении каждого клиента. Используется финдиректором, продакт-менеджером и инвесторами для оценки quality of revenue.",
+  "description_en": "Lifetime value of a customer: total revenue one user generates over their entire lifecycle in the product. Basic model: ARPU × gross margin / monthly churn. Key metric for SaaS sustainability and the CAC ceiling — LTV sets how much you can spend on acquisition. LTV ≥ 3 × CAC is healthy; LTV < CAC means losing money on every acquired customer. Used by CFO, product manager and investors to assess quality of revenue.",
   "params": [
     {
       "name": "arpu",

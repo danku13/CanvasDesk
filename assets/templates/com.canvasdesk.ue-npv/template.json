@@ -4,8 +4,8 @@
   "name_ru": "NPV (чистая приведённая стоимость)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "NPV: приведённая стоимость денежных потоков при заданной ставке дисконтирования; >0 — проект окупается.",
-  "description_en": "NPV: present value of cash flows at a discount rate; >0 means the project is profitable.",
+  "description": "Чистая приведённая стоимость: текущая стоимость серии будущих денежных потоков, дисконтированных по ставке r. NPV > 0 — проект окупается и приносит прибыль с учётом временной стоимости денег; NPV < 0 — проект убыточен при выбранной ставке дисконтирования. Используется для оценки инвестиционных проектов, M&A и capex-решений, где важна временная стоимость денег. Сравнивается с IRR (внутренней нормой доходности) и payback period для полной оценки. Метрика CFO и инвестиционного комитета для project finance и capital allocation.",
+  "description_en": "Net present value: present value of a series of future cash flows discounted at rate r. NPV > 0 means the project pays off and profits after accounting for the time value of money; NPV < 0 means it loses money at the chosen discount rate. Used to evaluate investment projects, M&A and capex decisions where time value matters. Compared with IRR (internal rate of return) and payback period for a full picture. A CFO and investment committee metric for project finance and capital allocation.",
   "params": [
     {
       "name": "discount_rate",

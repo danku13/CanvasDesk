@@ -4,8 +4,8 @@
   "name_ru": "ARPPU (средняя выручка на платящего)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "ARPPU: MRR / paying users — выручка на одного платящего.",
-  "description_en": "ARPPU: MRR / paying users — revenue per paying customer.",
+  "description": "Средняя выручка на платящего пользователя: MRR / paying users. В отличие от ARPU, считает только платящую базу — реальную монетизацию клиентов. ARPPU растёт при up-sell и премиальных тарифах; падает при демпинге или больших скидках. Важна для freemium-моделей, где большая часть базы — бесплатные пользователи, и ARPU не отражает качество монетизации. Метрика финансового отдела при анализе ценовой эластичности и тарифной сетки.",
+  "description_en": "Average revenue per paying user: MRR / paying users. Unlike ARPU, it counts only the paying base — real monetization quality. ARPPU grows with up-sell and premium plans; drops with discounting or heavy promo codes. Critical for freemium models where most of the base is free and ARPU masks monetization quality. A finance metric for price elasticity and pricing-grid analysis.",
   "params": [
     {
       "name": "mrr",

@@ -4,8 +4,8 @@
   "name_ru": "Скорость сжигания денег (месячный burn)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "Burn Rate: (cash_start − cash_end) / period_months — средний месячный расход денег.",
-  "description_en": "Burn Rate: (cash_start − cash_end) / period_months — average monthly cash consumption.",
+  "description": "Скорость сжигания денег: (cash_start − cash_end) / period_months — средний месячный расход кэша. Главный показатель финансовой устойчивости для pre-profit компаний. Burn Rate определяет, сколько времени компания проживёт до следующего раунда или profitability — это.clock, отсчитывающий время до zero cash. Растёт при найме и маркетинговых расходах; падает при cost optimization и revenue growth. Метрика CFO и CEO на weekly cash review — от неё зависит решение о раунде, найме или сокращении расходов.",
+  "description_en": "Burn rate: (cash_start − cash_end) / period_months — average monthly cash consumption. The key financial-sustainability metric for pre-profit companies. Burn rate dictates how long the company survives before its next round or profitability — it's the clock counting down to zero cash. Rises with hiring and marketing spend; falls with cost optimisation and revenue growth. A CFO and CEO metric for weekly cash review; drives round, hiring and cost-cut decisions.",
   "params": [
     {
       "name": "cash_start",

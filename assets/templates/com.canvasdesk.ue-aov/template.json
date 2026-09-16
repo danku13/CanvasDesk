@@ -4,8 +4,8 @@
   "name_ru": "AOV (средний чек)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "AOV: revenue / orders — средняя стоимость одного заказа.",
-  "description_en": "AOV: revenue / orders — average value per order.",
+  "description": "Средний чек: revenue / orders — средняя стоимость одного заказа в e-commerce. AOV растёт при up-sell, кросс-сейле и премиальных продуктах; падает при скидках, распродажах или росте доли дешёвых SKU. Ключевая метрика для ритейла и маркетплейсов — определяет revenue per transaction и качество корзины. Сравнивается с CAC и margin для оценки прибыльности каналов привлечения: высокий AOV при низком CAC — золотая жила. Метрика e-commerce-менеджера и маркетинга при pricing strategy и merchandising decisions.",
+  "description_en": "Average order value: revenue / orders — the average value of a single order in e-commerce. AOV grows with up-sell, cross-sell and premium products; falls with discounts, promos or rising share of cheap SKUs. A core metric for retail and marketplaces — drives revenue per transaction and basket quality. Compared with CAC and margin to gauge channel profitability: high AOV against low CAC is a goldmine. An e-commerce-manager and marketing metric for pricing strategy and merchandising decisions.",
   "params": [
     {
       "name": "revenue",

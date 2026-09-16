@@ -4,8 +4,8 @@
   "name_ru": "Валовая маржа",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "Gross Margin: (revenue − COGS) / revenue — доля выручки после себестоимости.",
-  "description_en": "Gross Margin: (revenue − COGS) / revenue — revenue share after cost of goods sold.",
+  "description": "Валовая маржа: доля выручки после вычета себестоимости (COGS — инфраструктура, поддержка, лицензии). Формула: (revenue − COGS) / revenue — показывает, сколько выручки остаётся после прямых затрат. SaaS-стандарт: 70–85% gross margin; < 60% — проблема в стоимости инфраструктуры или ручной поддержки. Ключевая метрика для CFO и инвесторов при оценке operational leverage и масштабируемости модели. Используется в P&L на каждом финансовом ревью и как вход в LTV-расчёт.",
+  "description_en": "Gross margin: share of revenue after cost of goods sold (COGS — infrastructure, support, licences). Formula: (revenue − COGS) / revenue — what's left after direct costs. SaaS standard: 70–85% gross margin; < 60% flags infrastructure or manual support cost issues. Key metric for CFO and investors when assessing operational leverage and scalability of the model. Used in P&L at every financial review and as input to LTV calculation.",
   "params": [
     {
       "name": "revenue",

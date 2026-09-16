@@ -4,8 +4,8 @@
   "name_ru": "ARPU (средняя выручка на пользователя)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "ARPU: MRR / total users — средняя выручка на пользователя в месяц.",
-  "description_en": "ARPU: MRR / total users — average monthly revenue per user.",
+  "description": "Средняя выручка на пользователя в месяц: MRR / total users. Показывает монетизацию всей активной базы, включая бесплатные и платящие аккаунты. Растёт при up-sell, cross-sell или смене тарифа; падает при росте бесплатной базы или демпинге. Используется для сравнения тарифных планов, когорт и каналов привлечения между собой. Метрика продакт-менеджера и маркетинга при анализе ценовой стратегии и pricing experiments.",
+  "description_en": "Average revenue per user per month: MRR / total users. Shows monetization across the entire active base, including free and paid accounts. Grows with up-sell, cross-sell or plan upgrades; falls when free base grows or pricing drops. Used to compare plans, cohorts and acquisition channels against one another. A product-management and marketing metric for pricing strategy and pricing experiments.",
   "params": [
     {
       "name": "mrr",

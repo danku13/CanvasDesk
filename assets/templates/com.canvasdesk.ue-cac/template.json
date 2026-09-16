@@ -4,8 +4,8 @@
   "name_ru": "CAC (стоимость привлечения клиента)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "CAC: маркетинговый бюджет на одного нового платящего клиента.",
-  "description_en": "CAC: marketing spend per new paying customer acquired.",
+  "description": "Стоимость привлечения одного нового клиента: маркетинговый бюджет, поделённый на количество новых платящих пользователей за период. Ключевая метрика для оценки эффективности маркетинга и каналов привлечения — без неё нельзя понять, какие каналы работают. Сравнивается с LTV для определения здоровья юнит-экономики: CAC должен окупаться за 12 месяцев. Высокий CAC при низком LTV — сигнал, что бизнес сжигает деньги на привлечение. Используется маркетингом, финансами и CEO на каждом финансовом ревью и при оценке каналов.",
+  "description_en": "Cost to acquire a single new customer: marketing spend divided by number of new paying users in the period. Key metric for evaluating marketing and acquisition channel efficiency. Compared with LTV to gauge unit-economics health: CAC should pay back within 12 months. High CAC against low LTV signals the business is burning money on acquisition. Used by marketing, finance and CEO at every financial review and channel assessment.",
   "params": [
     {
       "name": "marketing_spend",

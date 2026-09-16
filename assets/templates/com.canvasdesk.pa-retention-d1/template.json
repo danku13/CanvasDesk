@@ -4,8 +4,8 @@
   "name_ru": "Удержание D1",
   "version": "1.0.0",
   "category": "product-analytics",
-  "description": "Day 1 Retention: cohort_d1 / cohort_d0 — доля пользователей, вернувшихся на следующий день.",
-  "description_en": "Day 1 Retention: cohort_d1 / cohort_d0 — share of users returning the next day.",
+  "description": "Удержание первого дня: cohort_d1 / cohort_d0 — доля пользователей, вернувшихся на следующий день после установки/регистрации. Ключевой сигнал о первом впечатлении продукта и качестве onboarding flow. D1 retention ≥ 40% — хорошо для consumer apps; ≥ 60% — для B2B SaaS; < 25% — серьёзная проблема с активацией или value proposition. Используется вместе с D7/D30 для построения полной retention curve и оценки здоровья cohorts. Метрика growth-команды для A/B тестов onboarding и first-run experience.",
+  "description_en": "Day 1 retention: cohort_d1 / cohort_d0 — share of users returning the day after install or signup. Key signal of first impression and onboarding flow quality. D1 retention ≥ 40% is good for consumer apps; ≥ 60% for B2B SaaS; < 25% flags a serious activation or value-proposition problem. Used together with D7/D30 to build the full retention curve and assess cohort health. A growth-team metric for onboarding A/B tests and first-run experience design.",
   "params": [
     {
       "name": "cohort_d0",

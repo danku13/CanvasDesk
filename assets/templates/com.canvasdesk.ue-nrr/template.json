@@ -4,8 +4,8 @@
   "name_ru": "NRR (чистое удержание выручки)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "NRR: (start + expansion − contraction − churn + reactivation) / start — удержание выручки с учётом expansion.",
-  "description_en": "NRR: (start + expansion − contraction − churn + reactivation) / start — revenue retention including expansion.",
+  "description": "Чистое удержание выручки: (start + expansion − contraction − churn + reactivation) / start. Показывает, как растёт выручка от существующей базы без учёта новых продаж — expansion может перекрыть отток. NRR > 100% — отлично: существующие клиенты приносят больше, чем уходящие; < 90% — отток превышает expansion, и бизнес нуждается в(Customer Success interventions. SaaS top-quartile: NRR ≥ 120%; < 100% — тревожный сигнал для инвесторов и board. Метрика Customer Success и CEO на quarterly review и CS-стратегии.",
+  "description_en": "Net revenue retention: (start + expansion − contraction − churn + reactivation) / start. Shows how revenue from the existing base grows excluding new sales — expansion can offset churn. NRR > 100% is excellent: existing customers contribute more than leaving ones; < 90% means churn exceeds expansion and Customer Success interventions are needed. SaaS top-quartile: NRR ≥ 120%; < 100% is a red flag for investors and the board. A Customer Success and CEO metric for quarterly review and CS strategy.",
   "params": [
     {
       "name": "mrr_start",

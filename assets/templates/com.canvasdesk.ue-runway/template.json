@@ -4,8 +4,8 @@
   "name_ru": "Запас денег (runway в месяцах)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "Runway: cash / monthly_burn — сколько месяцев до банкротства при текущем burn.",
-  "description_en": "Runway: cash / monthly_burn — months of cash left at current burn rate.",
+  "description": "Запас денег: cash / monthly_burn — сколько месяцев компания проживёт при текущем burn rate. Runway ≥ 18 — комфортно, можно не торопиться с раундом; 12–18 — пора планировать следующий; < 6 — критично, нужен срез костов или bridge round. Минимальный runway для VC-backed компаний — 12 месяцев, иначе инвесторы начинают беспокоиться. Каждое решение о найме или расходах проверяется через impact на runway. Метрика CFO и CEO для board, инвестиционных решений и scenario planning.",
+  "description_en": "Cash runway: cash / monthly_burn — how many months the company survives at current burn. Runway ≥ 18 is comfortable; 12–18 — time to plan the next round; < 6 is critical, needs cost cuts or a bridge round. The minimum runway for VC-backed companies is 12 months — below that, investors get nervous. Every hiring or spend decision is checked against runway impact. A CFO and CEO metric for board, fundraising decisions and scenario planning.",
   "params": [
     {
       "name": "cash",

@@ -4,8 +4,8 @@
   "name_ru": "GRR (валовое удержание выручки)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "GRR: (start − contraction − churn) / start — удержание выручки без учёта expansion; верхняя граница NRR.",
-  "description_en": "GRR: (start − contraction − churn) / start — retention without expansion; caps NRR.",
+  "description": "Валовое удержание выручки: (start − contraction − churn) / start. В отличие от NRR, не учитывает expansion — показывает только потерю выручки. GRR — верхняя граница NRR: если expansion = 0, то GRR = NRR. GRR < 90% — серьёзная проблема с оттоком клиентов; SaaS-стандарт: GRR ≥ 90% для устойчивого бизнеса; < 80% — критическое положение, требующее(Customer Success и product fixes. Метрика Customer Success и CFO при анализе churn в детализации по сегментам.",
+  "description_en": "Gross revenue retention: (start − contraction − churn) / start. Unlike NRR, it excludes expansion — measures pure revenue loss. GRR is the upper bound on NRR: when expansion = 0, GRR = NRR. GRR < 90% signals a serious churn problem; SaaS standard is GRR ≥ 90% for a sustainable business; < 80% is critical and demands Customer Success and product fixes. A Customer Success and CFO metric for detailed segment-level churn analysis.",
   "params": [
     {
       "name": "mrr_start",

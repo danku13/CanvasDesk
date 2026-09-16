@@ -4,8 +4,8 @@
   "name_ru": "Срок окупаемости CAC (месяцы)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "CAC payback: за сколько месяцев окупится стоимость привлечения клиента.",
-  "description_en": "CAC payback: months to recover customer acquisition cost.",
+  "description": "Срок окупаемости стоимости привлечения: за сколько месяцев маркетинговые инвестиции в нового клиента возвращаются через его выручку. Формула: CAC / (ARPA × gross margin) — месячная маржа от клиента покрывает стоимость привлечения. SaaS-стандарт: payback ≤ 12 месяцев для здорового бизнеса; > 24 — тревожный сигнал для инвесторов и board. Коррелирует с runway: длинный payback требует больше кэша на банковском счёте. Метрика CFO и инвестиционного комитета при оценке темпов найма и роста.",
+  "description_en": "Customer acquisition cost payback period: months until marketing investment in a new customer is recovered through their revenue. Formula: CAC / (ARPA × gross margin) — monthly margin per customer covers acquisition cost. SaaS standard: payback ≤ 12 months for healthy growth; > 24 is a red flag for investors and the board. Correlates with runway: longer payback requires more cash on hand. A CFO and investment committee metric for hiring and growth pacing.",
   "params": [
     {
       "name": "cac",

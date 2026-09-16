@@ -4,8 +4,8 @@
   "name_ru": "Удержание D7",
   "version": "1.0.0",
   "category": "product-analytics",
-  "description": "Day 7 Retention: cohort_d7 / cohort_d0 — недельное удержание когорты.",
-  "description_en": "Day 7 Retention: cohort_d7 / cohort_d0 — weekly cohort retention.",
+  "description": "Удержание седьмого дня: cohort_d7 / cohort_d0 — доля пользователей, всё ещё активных через неделю после установки. Показывает, сформировалась ли у пользователя привычка к продукту за первую неделю. D7 retention ≥ 25% — хорошо для consumer apps; ≥ 40% — для B2B SaaS; < 15% — проблема с value delivery или onboarding depth. Сравнивается с D1 для оценки «drop-off» между первым днём и неделей — большая дельта = проблема в привычке. Метрика продакт-менеджера для weekly product review и feature engagement analysis.",
+  "description_en": "Day 7 retention: cohort_d7 / cohort_d0 — share of users still active a week after install. Shows whether the user has formed a product habit during the first week. D7 retention ≥ 25% is good for consumer apps; ≥ 40% for B2B SaaS; < 15% flags a value-delivery or onboarding-depth problem. Compared with D1 to gauge the drop-off between day 1 and week 1 — a big delta signals a habit problem. A product-manager metric for weekly product review and feature-engagement analysis.",
   "params": [
     {
       "name": "cohort_d0",
