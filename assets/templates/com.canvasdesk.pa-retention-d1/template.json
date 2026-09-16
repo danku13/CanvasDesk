@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-retention-d1",
+  "name_en": "Day 1 Retention",
+  "name_ru": "Удержание D1",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Day 1 Retention: cohort_d1 / cohort_d0 — доля пользователей, вернувшихся на следующий день.",
+  "description_en": "Day 1 Retention: cohort_d1 / cohort_d0 — share of users returning the next day.",
+  "params": [
+    {
+      "name": "cohort_d0",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    },
+    {
+      "name": "cohort_d1",
+      "type": "count",
+      "default": 400,
+      "min": 0
+    }
+  ],
+  "expr": "$cohort_d1 / $cohort_d0",
+  "color": "#4A90E2",
+  "icon": "retention"
+}

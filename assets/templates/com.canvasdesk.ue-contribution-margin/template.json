@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-contribution-margin",
+  "name_en": "Contribution Margin",
+  "name_ru": "Контрибуционная маржа",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Contribution Margin: (revenue − variable costs) / revenue — доля выручки на покрытие постоянных расходов.",
+  "description_en": "Contribution Margin: (revenue − variable costs) / revenue — share available to cover fixed costs.",
+  "params": [
+    {
+      "name": "revenue",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "variable_costs",
+      "type": "scalar",
+      "default": 60000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "($revenue - $variable_costs) / $revenue",
+  "color": "#F5A623",
+  "icon": "money"
+}

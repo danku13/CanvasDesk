@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-revenue-churn",
+  "name_en": "Revenue Churn Rate",
+  "name_ru": "Отток выручки (Revenue Churn)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Revenue Churn: MRR_lost / MRR_start — доля потерянной выручки за период.",
+  "description_en": "Revenue Churn: MRR_lost / MRR_start — share of revenue lost in the period.",
+  "params": [
+    {
+      "name": "mrr_start",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0.0001
+    },
+    {
+      "name": "mrr_lost",
+      "type": "scalar",
+      "default": 5000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$mrr_lost / $mrr_start",
+  "color": "#F5A623",
+  "icon": "money"
+}

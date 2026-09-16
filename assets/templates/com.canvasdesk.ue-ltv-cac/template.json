@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-ltv-cac",
+  "name_en": "LTV / CAC Ratio",
+  "name_ru": "Отношение LTV / CAC",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "LTV/CAC: здоровье юнит-экономики; ≥3 — здоровое, <1 — сжигаем деньги на привлечение.",
+  "description_en": "LTV/CAC: unit-economics health; ≥3 is healthy, <1 means burning cash on acquisition.",
+  "params": [
+    {
+      "name": "ltv",
+      "type": "scalar",
+      "default": 320,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "cac",
+      "type": "scalar",
+      "default": 50,
+      "unit": "usd",
+      "min": 0.0001
+    }
+  ],
+  "expr": "$ltv / $cac",
+  "color": "#F5A623",
+  "icon": "money"
+}

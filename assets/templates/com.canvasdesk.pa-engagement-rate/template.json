@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-engagement-rate",
+  "name_en": "Engagement Rate",
+  "name_ru": "Уровень вовлечённости",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Engagement Rate: active_users / total_users — доля активных пользователей от всей базы за период.",
+  "description_en": "Engagement Rate: active_users / total_users — share of active users in the period.",
+  "params": [
+    {
+      "name": "active_users",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "total_users",
+      "type": "count",
+      "default": 20000,
+      "min": 1
+    }
+  ],
+  "expr": "$active_users / $total_users",
+  "color": "#4A90E2",
+  "icon": "users"
+}

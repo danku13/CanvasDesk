@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.ue-cac",
+  "name_en": "Customer Acquisition Cost",
+  "name_ru": "CAC (стоимость привлечения клиента)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "CAC: маркетинговый бюджет на одного нового платящего клиента.",
+  "description_en": "CAC: marketing spend per new paying customer acquired.",
+  "params": [
+    {
+      "name": "marketing_spend",
+      "type": "scalar",
+      "default": 50000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "new_customers",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    }
+  ],
+  "expr": "$marketing_spend / $new_customers",
+  "color": "#F5A623",
+  "icon": "money"
+}

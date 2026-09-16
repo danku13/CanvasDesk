@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-feature-adoption",
+  "name_en": "Feature Adoption Rate",
+  "name_ru": "Внедрение фичи",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Feature Adoption: feature_users / total_users — доля пользователей, использующих конкретную фичу.",
+  "description_en": "Feature Adoption: feature_users / total_users — share of users who used a specific feature.",
+  "params": [
+    {
+      "name": "total_users",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "feature_users",
+      "type": "count",
+      "default": 2000,
+      "min": 0
+    }
+  ],
+  "expr": "$feature_users / $total_users",
+  "color": "#4A90E2",
+  "icon": "users"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "com.canvasdesk.ue-arr",
+  "name_en": "Annual Recurring Revenue",
+  "name_ru": "ARR (годовая регулярная выручка)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "ARR: MRR × 12 — годовая подписочная выручка (run-rate).",
+  "description_en": "ARR: MRR × 12 — annualized subscription run-rate.",
+  "params": [
+    {
+      "name": "mrr",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$mrr × 12",
+  "color": "#F5A623",
+  "icon": "money"
+}

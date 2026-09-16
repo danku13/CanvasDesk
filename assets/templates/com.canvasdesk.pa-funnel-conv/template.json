@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-funnel-conv",
+  "name_en": "Funnel Conversion Rate",
+  "name_ru": "Конверсия воронки",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Funnel Conversion: step_final / step1 — итоговая конверсия из первого шага воронки в последний.",
+  "description_en": "Funnel Conversion: step_final / step1 — overall conversion from the first funnel step to the last.",
+  "params": [
+    {
+      "name": "step1",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "step_final",
+      "type": "count",
+      "default": 500,
+      "min": 0
+    }
+  ],
+  "expr": "$step_final / $step1",
+  "color": "#4A90E2",
+  "icon": "funnel"
+}

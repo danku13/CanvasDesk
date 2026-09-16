@@ -1,0 +1,32 @@
+{
+  "id": "com.canvasdesk.pa-nps",
+  "name_en": "Net Promoter Score",
+  "name_ru": "NPS (индекс лояльности)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "NPS: 100 × (promoters − detractors) / total — индекс лояльности клиентов, от −100 до +100.",
+  "description_en": "NPS: 100 × (promoters − detractors) / total — customer loyalty index, −100 to +100.",
+  "params": [
+    {
+      "name": "promoters",
+      "type": "count",
+      "default": 400,
+      "min": 0
+    },
+    {
+      "name": "detractors",
+      "type": "count",
+      "default": 100,
+      "min": 0
+    },
+    {
+      "name": "total_responses",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    }
+  ],
+  "expr": "100 × ($promoters - $detractors) / $total_responses",
+  "color": "#4A90E2",
+  "icon": "chart"
+}

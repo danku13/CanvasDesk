@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.ue-ltv",
+  "name_en": "Lifetime Value",
+  "name_ru": "LTV (пожизненная ценность клиента)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "LTV: ARPU × gross margin / monthly churn — пожизненная выручка с клиента.",
+  "description_en": "LTV: ARPU × gross margin / monthly churn — lifetime revenue per customer.",
+  "params": [
+    {
+      "name": "arpu",
+      "type": "scalar",
+      "default": 20,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "gross_margin",
+      "type": "scalar",
+      "default": 0.8,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "monthly_churn",
+      "type": "scalar",
+      "default": 0.05,
+      "min": 0.0001,
+      "max": 1
+    }
+  ],
+  "expr": "$arpu × $gross_margin / $monthly_churn",
+  "color": "#F5A623",
+  "icon": "money"
+}

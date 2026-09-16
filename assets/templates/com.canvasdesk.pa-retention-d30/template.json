@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-retention-d30",
+  "name_en": "Day 30 Retention",
+  "name_ru": "Удержание D30",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Day 30 Retention: cohort_d30 / cohort_d0 — месячное удержание когорты; ключевой сигнал здоровья продукта.",
+  "description_en": "Day 30 Retention: cohort_d30 / cohort_d0 — monthly cohort retention; key product health signal.",
+  "params": [
+    {
+      "name": "cohort_d0",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    },
+    {
+      "name": "cohort_d30",
+      "type": "count",
+      "default": 100,
+      "min": 0
+    }
+  ],
+  "expr": "$cohort_d30 / $cohort_d0",
+  "color": "#4A90E2",
+  "icon": "retention"
+}

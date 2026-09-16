@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.ue-aov",
+  "name_en": "Average Order Value",
+  "name_ru": "AOV (средний чек)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "AOV: revenue / orders — средняя стоимость одного заказа.",
+  "description_en": "AOV: revenue / orders — average value per order.",
+  "params": [
+    {
+      "name": "revenue",
+      "type": "scalar",
+      "default": 50000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "orders",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    }
+  ],
+  "expr": "$revenue / $orders",
+  "color": "#F5A623",
+  "icon": "money"
+}

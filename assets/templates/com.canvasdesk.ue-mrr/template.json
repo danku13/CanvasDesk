@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.ue-mrr",
+  "name_en": "Monthly Recurring Revenue",
+  "name_ru": "MRR (месячная регулярная выручка)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "MRR: subscribers × ARPU — месячная подписочная выручка.",
+  "description_en": "MRR: subscribers × ARPU — monthly subscription revenue.",
+  "params": [
+    {
+      "name": "subscribers",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "arpu",
+      "type": "scalar",
+      "default": 20,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$subscribers × $arpu",
+  "color": "#F5A623",
+  "icon": "money"
+}

@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.ue-grr",
+  "name_en": "Gross Revenue Retention",
+  "name_ru": "GRR (валовое удержание выручки)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "GRR: (start − contraction − churn) / start — удержание выручки без учёта expansion; верхняя граница NRR.",
+  "description_en": "GRR: (start − contraction − churn) / start — retention without expansion; caps NRR.",
+  "params": [
+    {
+      "name": "mrr_start",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0.0001
+    },
+    {
+      "name": "contraction",
+      "type": "scalar",
+      "default": 5000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "churn_lost",
+      "type": "scalar",
+      "default": 8000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "($mrr_start - $contraction - $churn_lost) / $mrr_start",
+  "color": "#F5A623",
+  "icon": "money"
+}

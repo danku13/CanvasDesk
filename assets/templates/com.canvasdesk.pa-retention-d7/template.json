@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-retention-d7",
+  "name_en": "Day 7 Retention",
+  "name_ru": "Удержание D7",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Day 7 Retention: cohort_d7 / cohort_d0 — недельное удержание когорты.",
+  "description_en": "Day 7 Retention: cohort_d7 / cohort_d0 — weekly cohort retention.",
+  "params": [
+    {
+      "name": "cohort_d0",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    },
+    {
+      "name": "cohort_d7",
+      "type": "count",
+      "default": 250,
+      "min": 0
+    }
+  ],
+  "expr": "$cohort_d7 / $cohort_d0",
+  "color": "#4A90E2",
+  "icon": "retention"
+}

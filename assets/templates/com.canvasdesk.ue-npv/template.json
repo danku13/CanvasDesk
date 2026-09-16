@@ -1,0 +1,45 @@
+{
+  "id": "com.canvasdesk.ue-npv",
+  "name_en": "Net Present Value",
+  "name_ru": "NPV (чистая приведённая стоимость)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "NPV: приведённая стоимость денежных потоков при заданной ставке дисконтирования; >0 — проект окупается.",
+  "description_en": "NPV: present value of cash flows at a discount rate; >0 means the project is profitable.",
+  "params": [
+    {
+      "name": "discount_rate",
+      "type": "scalar",
+      "default": 0.1,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "cf1",
+      "type": "scalar",
+      "default": -100000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf2",
+      "type": "scalar",
+      "default": 40000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf3",
+      "type": "scalar",
+      "default": 50000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf4",
+      "type": "scalar",
+      "default": 60000,
+      "unit": "usd"
+    }
+  ],
+  "expr": "npv($discount_rate, $cf1, $cf2, $cf3, $cf4)",
+  "color": "#F5A623",
+  "icon": "money"
+}

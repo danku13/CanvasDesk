@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.ue-cac-payback",
+  "name_en": "CAC Payback Period",
+  "name_ru": "Срок окупаемости CAC (месяцы)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "CAC payback: за сколько месяцев окупится стоимость привлечения клиента.",
+  "description_en": "CAC payback: months to recover customer acquisition cost.",
+  "params": [
+    {
+      "name": "cac",
+      "type": "scalar",
+      "default": 50,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "arpa",
+      "type": "scalar",
+      "default": 25,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "gross_margin",
+      "type": "scalar",
+      "default": 0.8,
+      "min": 0,
+      "max": 1
+    }
+  ],
+  "expr": "$cac / ($arpa × $gross_margin)",
+  "color": "#F5A623",
+  "icon": "money"
+}

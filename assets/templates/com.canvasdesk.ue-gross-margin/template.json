@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-gross-margin",
+  "name_en": "Gross Margin",
+  "name_ru": "Валовая маржа",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Gross Margin: (revenue − COGS) / revenue — доля выручки после себестоимости.",
+  "description_en": "Gross Margin: (revenue − COGS) / revenue — revenue share after cost of goods sold.",
+  "params": [
+    {
+      "name": "revenue",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "cogs",
+      "type": "scalar",
+      "default": 40000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "($revenue - $cogs) / $revenue",
+  "color": "#F5A623",
+  "icon": "money"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-ttfv",
+  "name_en": "Time to First Value",
+  "name_ru": "Время до первой ценности (TTFV)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "TTFV: time от регистрации до момента, когда пользователь получил первую ценность продукта.",
+  "description_en": "TTFV: time from signup to the moment the user receives first product value.",
+  "params": [
+    {
+      "name": "signup_time_min",
+      "type": "count",
+      "default": 0,
+      "min": 0
+    },
+    {
+      "name": "value_moment_time_min",
+      "type": "count",
+      "default": 15,
+      "min": 0
+    }
+  ],
+  "expr": "$value_moment_time_min - $signup_time_min",
+  "color": "#4A90E2",
+  "icon": "clock"
+}

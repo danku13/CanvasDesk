@@ -1,0 +1,32 @@
+{
+  "id": "com.canvasdesk.pa-user-churn",
+  "name_en": "User Churn Rate",
+  "name_ru": "Отток пользователей",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "User Churn: (active_t0 − active_t1 + new_t1) / active_t0 — доля потерянных пользователей за период с учётом новых.",
+  "description_en": "User Churn: (active_t0 − active_t1 + new_t1) / active_t0 — share of users lost in the period (net of new signups).",
+  "params": [
+    {
+      "name": "active_t0",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "active_t1",
+      "type": "count",
+      "default": 9500,
+      "min": 0
+    },
+    {
+      "name": "new_t1",
+      "type": "count",
+      "default": 500,
+      "min": 0
+    }
+  ],
+  "expr": "($active_t0 - $active_t1 + $new_t1) / $active_t0",
+  "color": "#4A90E2",
+  "icon": "churn"
+}

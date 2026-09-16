@@ -1,0 +1,49 @@
+{
+  "id": "com.canvasdesk.ue-nrr",
+  "name_en": "Net Revenue Retention",
+  "name_ru": "NRR (чистое удержание выручки)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "NRR: (start + expansion − contraction − churn + reactivation) / start — удержание выручки с учётом expansion.",
+  "description_en": "NRR: (start + expansion − contraction − churn + reactivation) / start — revenue retention including expansion.",
+  "params": [
+    {
+      "name": "mrr_start",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0.0001
+    },
+    {
+      "name": "expansion",
+      "type": "scalar",
+      "default": 15000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "contraction",
+      "type": "scalar",
+      "default": 5000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "churn_lost",
+      "type": "scalar",
+      "default": 8000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "reactivation",
+      "type": "scalar",
+      "default": 2000,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "($mrr_start + $expansion - $contraction - $churn_lost + $reactivation) / $mrr_start",
+  "color": "#F5A623",
+  "icon": "money"
+}

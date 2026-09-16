@@ -1,0 +1,34 @@
+{
+  "id": "com.canvasdesk.ue-burn-rate",
+  "name_en": "Monthly Burn Rate",
+  "name_ru": "Скорость сжигания денег (месячный burn)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Burn Rate: (cash_start − cash_end) / period_months — средний месячный расход денег.",
+  "description_en": "Burn Rate: (cash_start − cash_end) / period_months — average monthly cash consumption.",
+  "params": [
+    {
+      "name": "cash_start",
+      "type": "scalar",
+      "default": 1000000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "cash_end",
+      "type": "scalar",
+      "default": 850000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "period_months",
+      "type": "count",
+      "default": 3,
+      "min": 1
+    }
+  ],
+  "expr": "($cash_start - $cash_end) / $period_months",
+  "color": "#BD10E0",
+  "icon": "burn"
+}

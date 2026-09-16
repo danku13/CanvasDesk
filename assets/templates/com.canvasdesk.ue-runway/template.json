@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-runway",
+  "name_en": "Cash Runway",
+  "name_ru": "Запас денег (runway в месяцах)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Runway: cash / monthly_burn — сколько месяцев до банкротства при текущем burn.",
+  "description_en": "Runway: cash / monthly_burn — months of cash left at current burn rate.",
+  "params": [
+    {
+      "name": "cash",
+      "type": "scalar",
+      "default": 1000000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "monthly_burn",
+      "type": "scalar",
+      "default": 50000,
+      "unit": "usd",
+      "min": 0.0001
+    }
+  ],
+  "expr": "$cash / $monthly_burn",
+  "color": "#BD10E0",
+  "icon": "burn"
+}

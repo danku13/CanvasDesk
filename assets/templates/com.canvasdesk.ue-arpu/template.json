@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.ue-arpu",
+  "name_en": "Average Revenue Per User",
+  "name_ru": "ARPU (средняя выручка на пользователя)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "ARPU: MRR / total users — средняя выручка на пользователя в месяц.",
+  "description_en": "ARPU: MRR / total users — average monthly revenue per user.",
+  "params": [
+    {
+      "name": "mrr",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "total_users",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    }
+  ],
+  "expr": "$mrr / $total_users",
+  "color": "#F5A623",
+  "icon": "money"
+}

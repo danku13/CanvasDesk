@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.ue-arppu",
+  "name_en": "Average Revenue Per Paying User",
+  "name_ru": "ARPPU (средняя выручка на платящего)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "ARPPU: MRR / paying users — выручка на одного платящего.",
+  "description_en": "ARPPU: MRR / paying users — revenue per paying customer.",
+  "params": [
+    {
+      "name": "mrr",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "paying_users",
+      "type": "count",
+      "default": 5000,
+      "min": 1
+    }
+  ],
+  "expr": "$mrr / $paying_users",
+  "color": "#F5A623",
+  "icon": "money"
+}

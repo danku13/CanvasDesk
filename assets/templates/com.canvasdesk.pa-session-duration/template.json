@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.pa-session-duration",
+  "name_en": "Average Session Duration",
+  "name_ru": "Средняя длительность сессии",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Avg Session: total_session_time / sessions — сколько минут пользователь проводит в продукте за сессию.",
+  "description_en": "Avg Session: total_session_time / sessions — minutes a user spends in the product per session.",
+  "params": [
+    {
+      "name": "total_session_time",
+      "type": "time",
+      "default": 50000,
+      "unit": "min",
+      "min": 0
+    },
+    {
+      "name": "sessions",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    }
+  ],
+  "expr": "$total_session_time / $sessions",
+  "color": "#4A90E2",
+  "icon": "clock"
+}

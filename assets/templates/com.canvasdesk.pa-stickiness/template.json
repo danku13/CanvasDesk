@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-stickiness",
+  "name_en": "DAU / MAU Stickiness",
+  "name_ru": "Stickiness (DAU / MAU)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Stickiness: DAU / MAU — насколько часто пользователи возвращаются в течение месяца; >50% — отлично.",
+  "description_en": "Stickiness: DAU / MAU — how often monthly users come back daily; >50% is excellent.",
+  "params": [
+    {
+      "name": "dau",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "mau",
+      "type": "count",
+      "default": 20000,
+      "min": 1
+    }
+  ],
+  "expr": "$dau / $mau",
+  "color": "#4A90E2",
+  "icon": "users"
+}

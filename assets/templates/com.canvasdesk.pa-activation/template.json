@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-activation",
+  "name_en": "Activation Rate",
+  "name_ru": "Активация (процент активированных)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Activation Rate: activated / signups — доля зарегистрировавшихся, кто достиг первого value-момента.",
+  "description_en": "Activation Rate: activated / signups — share of signups who reached the first value moment.",
+  "params": [
+    {
+      "name": "signups",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    },
+    {
+      "name": "activated",
+      "type": "count",
+      "default": 600,
+      "min": 0
+    }
+  ],
+  "expr": "$activated / $signups",
+  "color": "#4A90E2",
+  "icon": "users"
+}
