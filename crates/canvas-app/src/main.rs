@@ -14,8 +14,8 @@ use canvas_app::palette::{
 };
 use canvas_app::template_ui;
 use canvas_app::template_ui::{
-    panel_layout as template_panel_layout, panel_rows as template_panel_rows, sector_center_angle,
-    sector_point, wheel_hit, WheelHit,
+    panel_layout as template_panel_layout, panel_rows as template_panel_rows, split_two_lines,
+    WheelHit,
 };
 use canvas_app::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, hotkeys_panel_rect,
@@ -3038,9 +3038,10 @@ impl App {
     }
 
     /// Оверлей радиального wheel-меню шаблонов (FR-018, Shift+клик):
-    /// внешнее кольцо — категории, внутреннее — шаблоны выбранной
-    /// категории. Пайплайн квадов без поворотов — сектор рисуется
-    /// квадом-плашкой в центре сектора (как кнопка), подсветка hover.
+    /// плашки-мини-карточки (шаблоны + категории) из чистой геометрии
+    /// `template_ui::wheel_geometry` — раскладка отталкивается от размера
+    /// плашек, зазор гарантирован (правка владельца 2026-09-16). Пайплайн
+    /// квадов без поворотов; hover — по тем же плашкам (WYSIWYG).
     fn wheel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -3049,83 +3050,83 @@ impl App {
         };
         let palette = ThemeColors::from_theme(self.settings.theme);
         let icon_tint = color_to_rgba(palette.icon);
+        let [vw, vh] = self.viewport_logical();
         let categories = self.templates.categories();
-        let hover = self.cursor;
-        let hit = wheel_hit(menu, &self.templates, hover);
-        for (i, category) in categories.iter().enumerate() {
-            let angle = sector_center_angle(categories.len(), i);
-            let radius = template_ui::WHEEL_INNER_R
-                + (template_ui::WHEEL_OUTER_R - template_ui::WHEEL_INNER_R) / 2.0;
-            let point = sector_point(menu.screen, angle, radius);
-            let hovered = matches!(hit, Some(WheelHit::Category(j)) if j == i);
-            let side = template_ui::WHEEL_SECTOR;
-            let [qx, qy] = [point[0] - side / 2.0, point[1] - side / 2.0];
+        let templates: Vec<_> = menu
+            .category
+            .as_deref()
+            .map(|c| self.templates.by_category(c))
+            .unwrap_or_default();
+        let geo =
+            template_ui::wheel_geometry(menu.screen, vw, vh, categories.len(), templates.len());
+        let hovered = geo.hit(self.cursor);
+        for plate in &geo.plates {
+            let [qx, qy, w, h] = plate.rect;
+            let active = hovered.as_ref() == Some(&plate.hit);
+            let fill = if active {
+                [0.18, 0.29, 0.48, 0.95]
+            } else {
+                match plate.hit {
+                    WheelHit::Category(_) => [0.17, 0.18, 0.22, 0.92],
+                    WheelHit::Template(_) => [0.20, 0.22, 0.27, 0.92],
+                }
+            };
             instances.push(CardInstance {
                 pos: [qx, qy],
-                size: [side, side],
-                fill: if hovered {
-                    [0.18, 0.29, 0.48, 0.95]
-                } else {
-                    [0.17, 0.18, 0.22, 0.92]
-                },
+                size: [w, h],
+                fill,
                 border: [0.22, 0.24, 0.30, 0.9],
                 params: [8.0, 0.0, 0.0, 1.0],
             });
-            texts.push(OwnedScreenText {
-                text: (*category).to_owned(),
-                origin: [qx + 4.0, qy + side / 2.0 - 6.0],
-                width: side - 8.0,
-                font_size: 12.0,
-                color: palette.title,
-                align: TextAlign::Center,
-            });
-        }
-        // Внутреннее кольцо: шаблоны выбранной категории
-        if let Some(category) = &menu.category {
-            let templates = self.templates.by_category(category);
-            for (i, manifest) in templates.iter().enumerate() {
-                let angle = sector_center_angle(templates.len(), i);
-                let radius = template_ui::WHEEL_HUB_R
-                    + (template_ui::WHEEL_INNER_R - template_ui::WHEEL_HUB_R) / 2.0;
-                let point = sector_point(menu.screen, angle, radius);
-                let hovered = matches!(hit, Some(WheelHit::Template(j)) if j == i);
-                let side = template_ui::WHEEL_SECTOR_INNER;
-                let [qx, qy] = [point[0] - side / 2.0, point[1] - side / 2.0];
-                instances.push(CardInstance {
-                    pos: [qx, qy],
-                    size: [side, side],
-                    fill: if hovered {
-                        [0.18, 0.29, 0.48, 0.95]
-                    } else {
-                        [0.20, 0.22, 0.27, 0.92]
-                    },
-                    border: [0.22, 0.24, 0.30, 0.9],
-                    params: [8.0, 0.0, 0.0, 1.0],
-                });
-                // Иконка + имя шаблона под иконкой
-                instances.extend(template_icon_quads(
-                    template_ui::icon_key(manifest),
-                    [qx + side / 2.0 - 8.0, qy + 4.0, 16.0, 16.0],
-                    icon_tint,
-                ));
-                texts.push(OwnedScreenText {
-                    text: manifest.display_name().to_owned(),
-                    origin: [qx + 2.0, qy + 22.0],
-                    width: side - 4.0,
-                    font_size: 10.0,
-                    color: palette.title,
-                    align: TextAlign::Center,
-                });
+            match plate.hit {
+                WheelHit::Category(i) => {
+                    texts.push(OwnedScreenText {
+                        text: categories[i].to_owned(),
+                        origin: [qx + 4.0, qy + h / 2.0 - 7.0],
+                        width: w - 8.0,
+                        font_size: 12.0,
+                        color: palette.title,
+                        align: TextAlign::Center,
+                    });
+                }
+                WheelHit::Template(i) => {
+                    let Some(manifest) = templates.get(i) else {
+                        continue;
+                    };
+                    // Квад-иконка роли слева, имя справа (1–2 строки)
+                    instances.extend(template_icon_quads(
+                        template_ui::icon_key(manifest),
+                        [qx + 8.0, qy + h / 2.0 - 8.0, 16.0, 16.0],
+                        icon_tint,
+                    ));
+                    let (line1, line2) =
+                        split_two_lines(manifest.display_name(), template_ui::WHEEL_TPL_TEXT_CHARS);
+                    let push_line = |text: String, dy: f32| OwnedScreenText {
+                        text,
+                        origin: [qx + 30.0, qy + h / 2.0 + dy],
+                        width: w - 36.0,
+                        font_size: 11.0,
+                        color: palette.title,
+                        align: TextAlign::Left,
+                    };
+                    match line2 {
+                        None => texts.push(push_line(line1, -7.0)),
+                        Some(line2) => {
+                            texts.push(push_line(line1, -14.0));
+                            texts.push(push_line(line2, 0.0));
+                        }
+                    }
+                }
             }
         }
-        // Хаб: подпись-подсказка
+        // Хаб: подпись-подсказка (клик по хабу ничего не выбирает)
         texts.push(OwnedScreenText {
             text: if menu.category.is_some() {
                 "выбрать".to_owned()
             } else {
                 "категория".to_owned()
             },
-            origin: [menu.screen[0] - 40.0, menu.screen[1] - 6.0],
+            origin: [geo.center[0] - 40.0, geo.center[1] - 6.0],
             width: 80.0,
             font_size: 10.0,
             color: palette.body,
@@ -5337,15 +5338,30 @@ impl App {
                     return;
                 }
                 // FR-018: wheel-меню шаблонов — клики обрабатываются до
-                // канваса (оверлей поверх всего). Сектор категории — выбор
-                // категории (внутреннее кольцо); сектор шаблона —
-                // инстанциация в world-точку открытия; снаружи — закрыть.
+                // канваса (оверлей поверх всего). Плашка категории — выбор
+                // категории (растут шаблонные кольца); плашка шаблона —
+                // инстанциация в world-точку открытия; мимо плашек, но
+                // рядом — глотаем, заметно дальше — закрыть.
                 // Любой клик глотается — dismiss не создаёт заметку.
                 if let Some(menu) = self.wheel_menu.clone() {
-                    match wheel_hit(&menu, &self.templates, self.cursor) {
+                    let [vw, vh] = self.viewport_logical();
+                    let categories = self.templates.categories();
+                    let template_count = menu
+                        .category
+                        .as_deref()
+                        .map(|c| self.templates.by_category(c).len())
+                        .unwrap_or(0);
+                    let geo = template_ui::wheel_geometry(
+                        menu.screen,
+                        vw,
+                        vh,
+                        categories.len(),
+                        template_count,
+                    );
+                    match geo.hit(self.cursor) {
                         Some(WheelHit::Category(i)) => {
                             if let Some(menu_mut) = self.wheel_menu.as_mut() {
-                                menu_mut.category = Some(self.templates.categories()[i].to_owned());
+                                menu_mut.category = Some(categories[i].to_owned());
                             }
                         }
                         Some(WheelHit::Template(i)) => {
@@ -5356,10 +5372,9 @@ impl App {
                             self.instantiate_template_at(&manifest, world);
                         }
                         None => {
-                            let dx = self.cursor[0] - menu.screen[0];
-                            let dy = self.cursor[1] - menu.screen[1];
-                            let outside =
-                                (dx * dx + dy * dy).sqrt() > template_ui::WHEEL_OUTER_R + 12.0;
+                            let dx = self.cursor[0] - geo.center[0];
+                            let dy = self.cursor[1] - geo.center[1];
+                            let outside = (dx * dx + dy * dy).sqrt() > geo.extent + 12.0;
                             if outside {
                                 self.wheel_menu = None;
                             }

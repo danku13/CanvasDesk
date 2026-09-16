@@ -8,7 +8,10 @@
 //!
 //! Решения владельца FR-018:
 //! - панель `Ctrl+P` (поиск + категории) И радиальный wheel по `Shift+клику`
-//!   (2 кольца: внешнее — категории, внутреннее — шаблоны категории);
+//!   (внешнее кольцо — категории, внутренние — шаблоны категории; при
+//!   переполнении кольца шаблоны уходят в концентрические под-кольца —
+//!   правка владельца 2026-09-16: раскладка отталкивается от размера
+//!   плашек-мини-карточек, зазор между ними гарантирован);
 //! - иконки — квад-иконки (как в палитре действий, без SVG/resvg) —
 //!   геометрия в [`crate::cards`-пайплайне]; здесь — [`icon_key`].
 
@@ -270,17 +273,36 @@ pub fn panel_layout(
 
 // --- Wheel-меню (Shift+клик) ---
 
-/// Внешний радиус wheel (категории), логические px.
-pub const WHEEL_OUTER_R: f32 = 118.0;
-/// Внутренний радиус wheel (шаблоны выбранной категории).
-pub const WHEEL_INNER_R: f32 = 58.0;
+// Правка владельца FR-018 (2026-09-16): «отталкивайся от размера карточки
+// и сделай адекватные отступы карточек друг от друга» — раньше 10 плашек
+// 60×60 стояли на кольце радиуса 41 и налезали друг на друга. Теперь
+// радиусы колец ВЫЧИСЛЯЮТСЯ из габаритов плашек-мини-карточек и
+// гарантированного зазора, переполнение уходит в под-кольца, а итоговая
+// раскладка проверяется попарным AABB-тестом — налезание невозможно.
+
+/// Ширина плашки шаблона (мини-карточка: квад-иконка + имя), лог. px.
+pub const WHEEL_TPL_W: f32 = 124.0;
+/// Высота плашки шаблона (1–2 строки имени).
+pub const WHEEL_TPL_H: f32 = 46.0;
+/// Ширина плашки категории.
+pub const WHEEL_CAT_W: f32 = 96.0;
+/// Высота плашки категории.
+pub const WHEEL_CAT_H: f32 = 30.0;
+/// Гарантированный зазор между соседними плашками (по обеим осям).
+pub const WHEEL_GAP: f32 = 12.0;
+/// Максимум плашек в одном кольце; большее — концентрические под-кольца
+/// (внешние вместительнее — окружность больше).
+pub const WHEEL_RING_CAP: usize = 6;
 /// Радиус центрального хаба (пустая зона — глотает клик).
 pub const WHEEL_HUB_R: f32 = 24.0;
-/// Сторона плашки-сектора категории (пайплайн без поворотов — сектор
-/// рисуется квадом в центре сектора).
-pub const WHEEL_SECTOR: f32 = 64.0;
-/// Сторона плашки-сектора шаблона (внутреннее кольцо).
-pub const WHEEL_SECTOR_INNER: f32 = 60.0;
+/// Отступ wheel от краёв окна при клампе центра.
+pub const WHEEL_SCREEN_MARGIN: f32 = 8.0;
+/// Предел символов строки имени на плашке (длиннее — перенос по пробелу).
+pub const WHEEL_TPL_TEXT_CHARS: usize = 15;
+/// Шаг роста радиуса в корректирующем цикле раскладки.
+const WHEEL_GROW_STEP: f32 = 4.0;
+/// Предел итераций корректирующего цикла (детерминизм).
+const WHEEL_GROW_ITERS: usize = 256;
 
 /// Состояние радиального меню шаблонов (FR-018, `Shift+клик` по пустому
 /// месту). `screen` — центр в логических px (для рендера/hit-test),
@@ -296,10 +318,50 @@ pub struct WheelMenu {
 /// Цель попадания в wheel.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WheelHit {
-    /// Сектор категории (индекс в `registry.categories()`).
+    /// Плашка категории (индекс в `registry.categories()`).
     Category(usize),
-    /// Сектор шаблона (индекс ВНУТРИ категории — `registry.by_category`).
+    /// Плашка шаблона (индекс ВНУТРИ категории — `registry.by_category`;
+    /// сквозной по кольцам, кольца — только план раскладки).
     Template(usize),
+}
+
+/// Плашка wheel: прямоугольник (screen px) + цель попадания. Единый
+/// источник правды рендера и hit-test: что нарисовано — по тому и клик.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WheelPlate {
+    pub rect: [f32; 4],
+    pub hit: WheelHit,
+}
+
+/// Геометрия wheel на кадр: центр (с клампом к окну), плашки, внешний
+/// радиус. Строится чистой функцией [`wheel_geometry`] — и рендер
+/// (`wheel_overlay`), и клики ([`WheelGeometry::hit`]) вызывают её с теми
+/// же аргументами, поэтому расхождений быть не может.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WheelGeometry {
+    /// Центр меню: точка клика, сдвинутая клампом внутрь окна, если wheel
+    /// целиком не влезает.
+    pub center: Vec2,
+    /// Плашки: шаблоны (изнутри наружу), затем категории.
+    pub plates: Vec<WheelPlate>,
+    /// Радиус описанной окружности плашек (для «клик заметно дальше —
+    /// закрыть»).
+    pub extent: f32,
+}
+
+impl WheelGeometry {
+    /// Плашка под курсором (screen px): точный hit-test по прямоугольникам
+    /// плашек (раньше был угловой тест по секторам, не совпадавший с
+    /// квадами рендера).
+    pub fn hit(&self, cursor: Vec2) -> Option<WheelHit> {
+        self.plates
+            .iter()
+            .find(|p| {
+                let [x, y, w, h] = p.rect;
+                cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+            })
+            .map(|p| p.hit.clone())
+    }
 }
 
 /// Сектора кольца: центр угла i-го из count секторов (от 12 часов, по
@@ -312,42 +374,229 @@ pub fn sector_center_angle(count: usize, index: usize) -> f32 {
     -std::f32::consts::FRAC_PI_2 + step * (index as f32 + 0.5)
 }
 
-/// Hit-test wheel: точка курсора (логические px) → сектор. Внешнее кольцо —
-/// категории (`WHEEL_INNER_R..WHEEL_OUTER_R`), внутреннее — шаблоны
-/// (`WHEEL_HUB_R..WHEEL_INNER_R`, только когда категория выбрана).
-pub fn wheel_hit(menu: &WheelMenu, registry: &TemplateRegistry, cursor: Vec2) -> Option<WheelHit> {
-    let dx = cursor[0] - menu.screen[0];
-    let dy = cursor[1] - menu.screen[1];
-    let dist = (dx * dx + dy * dy).sqrt();
-    if dist > WHEEL_OUTER_R || dist < WHEEL_HUB_R {
-        return None;
+/// План колец шаблонов: `count` плашек по кольцам вместимостью
+/// [`WHEEL_RING_CAP`], сбалансированно, внешние кольца вместительнее
+/// (их окружность больше): 10 → [5, 5], 11 → [5, 6], 7 → [3, 4].
+pub fn wheel_ring_plan(count: usize) -> Vec<usize> {
+    if count == 0 {
+        return Vec::new();
     }
-    // Угол точки (0 — ось X, по часовой вниз из-за Y-вниз экранных координат)
-    let angle = dy.atan2(dx);
-    let categories = registry.categories();
-    if dist >= WHEEL_INNER_R {
-        // Внешнее кольцо: ближайший по углу сектор категории
-        let count = categories.len();
-        if count == 0 {
-            return None;
+    let rings = count.div_ceil(WHEEL_RING_CAP);
+    let base = count / rings;
+    let extra = count % rings;
+    (0..rings)
+        .map(|i| base + usize::from(i + extra >= rings))
+        .collect()
+}
+
+/// Минимальный радиус кольца из `count` плашек шириной `side_w`
+/// (ось-выровненные прямоугольники): для каждой пары соседей
+/// max(|Δx|, |Δy|) ≥ side_w + [`WHEEL_GAP`] — гарантия отсутствия
+/// налезания при любой ориентации хорды. `min_r` — нижняя граница
+/// (зазор до хаба / соседнего кольца).
+pub fn ring_min_radius(count: usize, side_w: f32, min_r: f32) -> f32 {
+    let mut r = min_r;
+    if count >= 2 {
+        let need = side_w + WHEEL_GAP;
+        for i in 0..count {
+            let a = sector_center_angle(count, i);
+            let b = sector_center_angle(count, (i + 1) % count);
+            let reach = (b.cos() - a.cos()).abs().max((b.sin() - a.sin()).abs());
+            if reach > 1e-6 {
+                r = r.max(need / reach);
+            }
         }
-        let step = std::f32::consts::TAU / count as f32;
-        let offset = angle + std::f32::consts::FRAC_PI_2 + step / 2.0;
-        let index = (offset.rem_euclid(std::f32::consts::TAU) / step) as usize % count;
-        Some(WheelHit::Category(index))
-    } else if let Some(category) = &menu.category {
-        // Внутреннее кольцо: шаблоны выбранной категории
-        let templates = registry.by_category(category);
-        let count = templates.len();
-        if count == 0 {
-            return None;
+    }
+    r
+}
+
+/// Прямоугольники пересекаются ПО ПЛОЩАДИ (касание рёбер — не пересечение).
+fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+/// Есть ли хоть одна пересекающаяся пара в наборе плашек.
+fn any_overlap(rects: &[[f32; 4]]) -> bool {
+    for i in 0..rects.len() {
+        for j in i + 1..rects.len() {
+            if rects_overlap(rects[i], rects[j]) {
+                return true;
+            }
         }
-        let step = std::f32::consts::TAU / count as f32;
-        let offset = angle + std::f32::consts::FRAC_PI_2 + step / 2.0;
-        let index = (offset.rem_euclid(std::f32::consts::TAU) / step) as usize % count;
-        Some(WheelHit::Template(index))
+    }
+    false
+}
+
+/// Максимальное расстояние угла прямоугольника от начала координат
+/// (координаты центр-относительные) — вклад плашки во внешний радиус.
+fn rect_max_extent(rect: [f32; 4]) -> f32 {
+    let [x, y, w, h] = rect;
+    [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+        .iter()
+        .map(|(cx, cy)| cx.hypot(*cy))
+        .fold(0.0_f32, f32::max)
+}
+
+/// Прямоугольники одного кольца (относительно центра wheel): `count`
+/// плашек `side_w`×`side_h` на радиусе `r`, центры по углам
+/// [`sector_center_angle`] (старт с 12 часов, по часовой).
+fn ring_rects(count: usize, r: f32, side_w: f32, side_h: f32) -> Vec<[f32; 4]> {
+    (0..count)
+        .map(|i| {
+            let [x, y] = sector_point([0.0, 0.0], sector_center_angle(count, i), r);
+            [x - side_w / 2.0, y - side_h / 2.0, side_w, side_h]
+        })
+        .collect()
+}
+
+/// Разместить кольцо: стартовый радиус — от ширины плашки и зазора
+/// ([`ring_min_radius`]), затем радиус растёт шагом [`WHEEL_GROW_STEP`],
+/// пока хоть одна пара плашек (новых или с уже размещёнными) пересекается
+/// по площади. Гарантия отсутствия налезания — по построению. Возвращает
+/// (радиус, прямоугольники).
+fn place_ring(
+    existing: &[[f32; 4]],
+    count: usize,
+    side_w: f32,
+    side_h: f32,
+    min_r: f32,
+) -> (f32, Vec<[f32; 4]>) {
+    if count == 0 {
+        return (min_r, Vec::new());
+    }
+    let mut r = ring_min_radius(count, side_w, min_r);
+    for _ in 0..WHEEL_GROW_ITERS {
+        let rects = ring_rects(count, r, side_w, side_h);
+        let mut all = existing.to_vec();
+        all.extend_from_slice(&rects);
+        if !any_overlap(&all) {
+            return (r, rects);
+        }
+        r += WHEEL_GROW_STEP;
+    }
+    (r, ring_rects(count, r, side_w, side_h))
+}
+
+/// Перенос имени шаблона на плашке: имя длиннее `max_chars` символов
+/// делится на две строки по самому позднему подходящему разделителю
+/// (пробел или дефис) так, чтобы обе части влезали; не получилось — одна
+/// строка (хвост клипается рендером по ширине плашки).
+pub fn split_two_lines(name: &str, max_chars: usize) -> (String, Option<String>) {
+    let chars = |s: &str| s.chars().count();
+    if chars(name) <= max_chars {
+        return (name.to_owned(), None);
+    }
+    let mut best: Option<usize> = None; // байт-позиция начала второй строки
+    for (byte, ch) in name.char_indices() {
+        if ch != ' ' && ch != '-' {
+            continue;
+        }
+        let split = byte + ch.len_utf8();
+        let (n1, n2) = (chars(&name[..split]), chars(&name[split..]));
+        if n1 <= max_chars
+            && n2 <= max_chars
+            && n1 >= 2
+            && n2 >= 2
+            && best.map_or(true, |b| split > b)
+        {
+            best = Some(split);
+        }
+    }
+    match best {
+        Some(split) => (
+            name[..split].trim_end().to_owned(),
+            Some(name[split..].to_owned()),
+        ),
+        None => (name.to_owned(), None),
+    }
+}
+
+/// Геометрия wheel (правка владельца FR-018): раскладка ОТТАЛКИВАЕТСЯ ОТ
+/// РАЗМЕРА ПЛАШЕК — радиусы вычисляются из габаритов мини-карточек и
+/// гарантированного зазора [`WHEEL_GAP`]; переполнение кольца
+/// (>[`WHEEL_RING_CAP`]) уходит в концентрические под-кольца; итог
+/// проверяется попарным AABB-тестом ([`place_ring`]) — налезание плашек
+/// невозможно. `screen` — точка клика; `window_w/h` — размер окна для
+/// клампа центра (клик у края не должен обрезать меню).
+pub fn wheel_geometry(
+    screen: Vec2,
+    window_w: f32,
+    window_h: f32,
+    category_count: usize,
+    template_count: usize,
+) -> WheelGeometry {
+    // 1. Кольца шаблонов — от хаба наружу. Межкольцевой зазор стартует от
+    //    радиуса предыдущего кольца + высоты плашки; угловые налезания
+    //    добирает корректирующий цикл place_ring.
+    let plan = wheel_ring_plan(template_count);
+    let hub_min_r = WHEEL_HUB_R + WHEEL_TPL_H / 2.0 + WHEEL_GAP;
+    let mut rects: Vec<[f32; 4]> = Vec::new();
+    let mut placed_extent = 0.0_f32;
+    let mut prev_r = 0.0_f32;
+    for (k, count) in plan.iter().enumerate() {
+        let min_r = if k == 0 {
+            hub_min_r
+        } else {
+            prev_r + WHEEL_TPL_H + WHEEL_GAP
+        };
+        let (r, placed) = place_ring(&rects, *count, WHEEL_TPL_W, WHEEL_TPL_H, min_r);
+        prev_r = r;
+        for rect in &placed {
+            placed_extent = placed_extent.max(rect_max_extent(*rect));
+        }
+        rects.extend(placed);
+    }
+    // 2. Кольцо категорий — снаружи; без шаблонов — своё расстояние до хаба.
+    let cat_min_r = if prev_r > 0.0 {
+        prev_r + WHEEL_TPL_H / 2.0 + WHEEL_GAP + WHEEL_CAT_H / 2.0
     } else {
-        None
+        WHEEL_HUB_R + WHEEL_CAT_H / 2.0 + WHEEL_GAP
+    };
+    let (_, cat_rects) = place_ring(&rects, category_count, WHEEL_CAT_W, WHEEL_CAT_H, cat_min_r);
+
+    // 3. Плашки: индекс шаблона — сквозной по категории (кольца — только
+    //    план раскладки), категории — по порядку реестра.
+    let mut plates: Vec<WheelPlate> = Vec::with_capacity(rects.len() + cat_rects.len());
+    let mut template_index = 0_usize;
+    let mut ring_iter = rects.iter();
+    for count in &plan {
+        for _ in 0..*count {
+            let rect = *ring_iter.next().expect("кольцо размещено");
+            plates.push(WheelPlate {
+                rect,
+                hit: WheelHit::Template(template_index),
+            });
+            template_index += 1;
+        }
+    }
+    for (i, rect) in cat_rects.iter().enumerate() {
+        plates.push(WheelPlate {
+            rect: *rect,
+            hit: WheelHit::Category(i),
+        });
+    }
+
+    // 4. Внешний радиус и кламп центра к окну.
+    let extent = cat_rects
+        .iter()
+        .fold(placed_extent, |acc, rect| acc.max(rect_max_extent(*rect)));
+    let lo = extent + WHEEL_SCREEN_MARGIN;
+    let center: Vec2 = if window_w >= lo * 2.0 && window_h >= lo * 2.0 {
+        [
+            screen[0].clamp(lo, window_w - lo),
+            screen[1].clamp(lo, window_h - lo),
+        ]
+    } else {
+        [window_w / 2.0, window_h / 2.0]
+    };
+    for plate in &mut plates {
+        plate.rect[0] += center[0];
+        plate.rect[1] += center[1];
+    }
+    WheelGeometry {
+        center,
+        plates,
+        extent,
     }
 }
 
@@ -467,112 +716,223 @@ mod tests {
         assert_eq!(lay.category_rects.len(), 4);
     }
 
-    // --- Wheel ---
+    // --- Wheel: геометрия (правка владельца — раскладка от плашек) ---
 
     #[test]
-    fn wheel_categories_hit() {
-        let registry = registry();
-        let menu = WheelMenu {
-            screen: [400.0, 300.0],
-            world: [100.0, 200.0],
-            category: None,
-        };
-        // Мимо радиуса — None
-        assert_eq!(wheel_hit(&menu, &registry, [400.0 + 200.0, 300.0]), None);
-        assert_eq!(wheel_hit(&menu, &registry, [400.0, 300.0]), None); // центр-хаб
-                                                                       // 12 часов — первая категория (backend, порядок реестра)
-        let hit = wheel_hit(&menu, &registry, [400.0, 300.0 - 90.0]);
-        assert_eq!(hit, Some(WheelHit::Category(0)));
-        // Количество категорий: 12 часов + полный оборот — снова backend
-        let count = registry.categories().len();
-        let angle = -std::f32::consts::FRAC_PI_2 + 0.01;
-        let hit = wheel_hit(
-            &menu,
-            &registry,
-            [400.0 + 90.0 * angle.cos(), 300.0 + 90.0 * angle.sin()],
-        );
-        let matched = match hit {
-            Some(WheelHit::Category(0)) => true,
-            Some(WheelHit::Category(i)) => i == count - 1,
-            _ => false,
-        };
-        assert!(matched, "ожидалась категория 0 или {count}-1");
+    fn wheel_ring_plan_splits_balanced() {
+        assert_eq!(wheel_ring_plan(0), Vec::<usize>::new());
+        assert_eq!(wheel_ring_plan(1), vec![1]);
+        assert_eq!(wheel_ring_plan(6), vec![6]);
+        assert_eq!(wheel_ring_plan(7), vec![3, 4]);
+        assert_eq!(wheel_ring_plan(10), vec![5, 5]);
+        assert_eq!(wheel_ring_plan(11), vec![5, 6]);
+        assert_eq!(wheel_ring_plan(13), vec![4, 4, 5]);
+        assert_eq!(wheel_ring_plan(15), vec![5, 5, 5]);
     }
 
     #[test]
-    fn wheel_templates_hit_after_category() {
+    fn wheel_geometry_plates_never_overlap() {
+        // ГЛАВНЫЙ инвариант правки: никакая пара плашек не налезает друг
+        // на друга — ни при 10 шаблонах (backend), ни при 15, ни без
+        // шаблонов (категории одни)
+        for tpl in [0usize, 1, 2, 5, 6, 7, 10, 11, 15] {
+            for cat in [0usize, 2, 4, 6] {
+                let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, cat, tpl);
+                let rects: Vec<[f32; 4]> = geo.plates.iter().map(|p| p.rect).collect();
+                assert!(
+                    !any_overlap(&rects),
+                    "налезание плашек: категорий={cat}, шаблонов={tpl}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wheel_geometry_sizes_and_hub_clearance() {
+        let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, 2, 10);
+        assert_eq!(geo.plates.len(), 12);
+        for plate in &geo.plates {
+            let [x, y, w, h] = plate.rect;
+            match plate.hit {
+                WheelHit::Template(_) => {
+                    assert!((w - WHEEL_TPL_W).abs() < 0.01 && (h - WHEEL_TPL_H).abs() < 0.01);
+                }
+                WheelHit::Category(_) => {
+                    assert!((w - WHEEL_CAT_W).abs() < 0.01 && (h - WHEEL_CAT_H).abs() < 0.01);
+                }
+            }
+            // Плашка не заходит в хаб: ближайшая точка прямоугольника к
+            // центру — дальше радиуса хаба
+            let nx = geo.center[0].clamp(x, x + w);
+            let ny = geo.center[1].clamp(y, y + h);
+            let dist = (nx - geo.center[0]).hypot(ny - geo.center[1]);
+            assert!(dist >= WHEEL_HUB_R, "плашка залезла в хаб: dist={dist}");
+        }
+    }
+
+    #[test]
+    fn wheel_hit_by_plate_rects() {
+        let registry = registry(); // mock: 4 категории, в backend 2 шаблона
+        let menu = WheelMenu {
+            screen: [400.0, 300.0],
+            world: [10.0, 20.0],
+            category: None,
+        };
+        let geo = wheel_geometry(menu.screen, 1280.0, 800.0, registry.categories().len(), 0);
+        // Центр плашки категории 0 → Category(0)
+        let plate = geo
+            .plates
+            .iter()
+            .find(|p| p.hit == WheelHit::Category(0))
+            .expect("плашка категории");
+        let center = [
+            plate.rect[0] + plate.rect[2] / 2.0,
+            plate.rect[1] + plate.rect[3] / 2.0,
+        ];
+        assert_eq!(geo.hit(center), Some(WheelHit::Category(0)));
+        // Хаб и дальняя точка — None
+        assert_eq!(geo.hit(geo.center), None);
+        assert_eq!(geo.hit([900.0, 300.0]), None);
+        // Без категории шаблонных плашек нет
+        assert!(geo
+            .plates
+            .iter()
+            .all(|p| !matches!(p.hit, WheelHit::Template(_))));
+    }
+
+    #[test]
+    fn wheel_hit_templates_flat_index() {
         let registry = registry();
         let menu = WheelMenu {
             screen: [400.0, 300.0],
-            world: [100.0, 200.0],
+            world: [10.0, 20.0],
             category: Some("backend".to_owned()),
         };
-        // Внутреннее кольцо, 12 часов — первый шаблон backend (mock.lb)
-        let hit = wheel_hit(&menu, &registry, [400.0, 300.0 - 40.0]);
-        assert_eq!(hit, Some(WheelHit::Template(0)));
-        // Без категории внутреннее кольцо не отвечает
-        let menu_no_cat = WheelMenu {
-            screen: [400.0, 300.0],
-            world: [100.0, 200.0],
-            category: None,
-        };
-        assert_eq!(
-            wheel_hit(&menu_no_cat, &registry, [400.0, 300.0 - 40.0]),
-            None
+        let geo = wheel_geometry(
+            menu.screen,
+            1280.0,
+            800.0,
+            registry.categories().len(),
+            registry.by_category("backend").len(),
         );
+        // Каждая шаблонная плашка отвечает своим плоским индексом
+        for plate in &geo.plates {
+            let center = [
+                plate.rect[0] + plate.rect[2] / 2.0,
+                plate.rect[1] + plate.rect[3] / 2.0,
+            ];
+            assert_eq!(geo.hit(center), Some(plate.hit.clone()));
+        }
+        assert!(geo.plates.iter().any(|p| p.hit == WheelHit::Template(0)));
+        assert!(geo.plates.iter().any(|p| p.hit == WheelHit::Template(1)));
+        // Категории остаются кликабельными при выбранной категории
+        assert!(geo
+            .plates
+            .iter()
+            .any(|p| matches!(p.hit, WheelHit::Category(_))));
     }
 
     #[test]
-    fn wheel_sector_angles_deterministic() {
-        // 4 категории: сектора по 90°, старт с 12 часов
-        assert!(
-            (sector_center_angle(4, 0)
-                - (-std::f32::consts::FRAC_PI_2 + std::f32::consts::FRAC_PI_4))
-                .abs()
-                < 1e-6
+    fn wheel_geometry_clamps_to_window() {
+        // Клик у правого края: центр сдвигается, wheel целиком в окне
+        // (высота 1000 — с запасом под большой wheel 10 шаблонов + 4
+        // категорий)
+        let geo = wheel_geometry([1270.0, 500.0], 1280.0, 1000.0, 4, 10);
+        assert!(geo.center[0] + geo.extent <= 1280.0 - WHEEL_SCREEN_MARGIN + 0.01);
+        assert!(geo.center[0] - geo.extent >= WHEEL_SCREEN_MARGIN - 0.01);
+        assert!(geo.center[1] + geo.extent <= 1000.0 - WHEEL_SCREEN_MARGIN + 0.01);
+        assert!(geo.center[1] - geo.extent >= WHEEL_SCREEN_MARGIN - 0.01);
+        // Клик в центре окна — центр не двигается
+        let mid = wheel_geometry([640.0, 500.0], 1280.0, 1000.0, 4, 10);
+        assert!((mid.center[0] - 640.0).abs() < 0.01);
+        // Крошечное окно (wheel не влезает) — центр в середине, без паники
+        let small = wheel_geometry([50.0, 50.0], 200.0, 150.0, 4, 10);
+        assert!((small.center[0] - 100.0).abs() < 0.01);
+        assert!((small.center[1] - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn wheel_split_two_lines_names() {
+        // Короткие — одна строка
+        assert_eq!(split_two_lines("Воркер", 15), ("Воркер".to_owned(), None));
+        assert_eq!(
+            split_two_lines("API-шлюз", 15),
+            ("API-шлюз".to_owned(), None)
         );
-        assert!(
-            (sector_center_angle(4, 2)
-                - (-std::f32::consts::FRAC_PI_2 + 2.5 * std::f32::consts::FRAC_PI_2))
-                .abs()
-                < 1e-6
+        // Длинные — перенос по пробелу, обе части влезают
+        assert_eq!(
+            split_two_lines("Балансировщик нагрузки", 15),
+            ("Балансировщик".to_owned(), Some("нагрузки".to_owned()))
         );
-        // 0/1 категорий — без паники; одна категория — сектор 360°,
-        // центр в нижней точке
-        assert!((sector_center_angle(0, 0) - 0.0).abs() < 1e-6);
-        assert!((sector_center_angle(1, 0) - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert_eq!(
+            split_two_lines("БД SQL (реплика)", 15),
+            ("БД SQL".to_owned(), Some("(реплика)".to_owned()))
+        );
+        assert_eq!(
+            split_two_lines("Сервис аутентификации", 15),
+            ("Сервис".to_owned(), Some("аутентификации".to_owned()))
+        );
+        // Нет пробела — дефис
+        assert_eq!(
+            split_two_lines("TCP-балансировщик", 15),
+            ("TCP-".to_owned(), Some("балансировщик".to_owned()))
+        );
+        // Развалить нельзя — одна строка (клип рендером)
+        assert_eq!(
+            split_two_lines("оченьдлинноеслово безпробелов", 8),
+            ("оченьдлинноеслово безпробелов".to_owned(), None)
+        );
     }
 
     #[test]
     fn wheel_categories_then_templates_flow() {
-        // Сценарий: клик по категории перестраивает внутреннее кольцо;
-        // клик по шаблону внутри — цель для инстанциации
+        // Сценарий: клик по плашке категории выбирает категорию
+        // (появляются шаблонные плашки), клик по плашке шаблона — цель
+        // для инстанциации
         let registry = registry();
-        let mut menu = WheelMenu {
+        let menu = WheelMenu {
             screen: [500.0, 400.0],
             world: [10.0, 20.0],
             category: None,
         };
-        // Клик в сектор категории cache (индекс 1 в categories())
         let categories = registry.categories();
         let cache_index = categories
             .iter()
             .position(|c| *c == "cache")
             .expect("cache");
-        let angle = sector_center_angle(categories.len(), cache_index);
-        let point = sector_point(menu.screen, angle, (WHEEL_INNER_R + WHEEL_OUTER_R) / 2.0);
-        match wheel_hit(&menu, &registry, point) {
-            Some(WheelHit::Category(i)) => {
-                menu.category = Some(categories[i].to_owned());
-            }
-            other => panic!("ожидалась категория, получено {other:?}"),
-        }
-        // Внутреннее кольцо теперь отвечает шаблонами cache (1 шт.)
-        let angle = sector_center_angle(1, 0);
-        let point = sector_point(menu.screen, angle, (WHEEL_HUB_R + WHEEL_INNER_R) / 2.0);
-        assert_eq!(
-            wheel_hit(&menu, &registry, point),
-            Some(WheelHit::Template(0))
+        let geo = wheel_geometry(menu.screen, 1280.0, 800.0, categories.len(), 0);
+        let plate = geo
+            .plates
+            .iter()
+            .find(|p| p.hit == WheelHit::Category(cache_index))
+            .expect("плашка cache");
+        let center = [
+            plate.rect[0] + plate.rect[2] / 2.0,
+            plate.rect[1] + plate.rect[3] / 2.0,
+        ];
+        assert_eq!(geo.hit(center), Some(WheelHit::Category(cache_index)));
+        // После выбора категории: 1 шаблон cache на нижнем кольце
+        let menu2 = WheelMenu {
+            screen: menu.screen,
+            world: menu.world,
+            category: Some("cache".to_owned()),
+        };
+        let geo2 = wheel_geometry(
+            menu2.screen,
+            1280.0,
+            800.0,
+            categories.len(),
+            registry.by_category("cache").len(),
         );
+        let tpl = geo2
+            .plates
+            .iter()
+            .find(|p| p.hit == WheelHit::Template(0))
+            .expect("плашка шаблона");
+        let center = [
+            tpl.rect[0] + tpl.rect[2] / 2.0,
+            tpl.rect[1] + tpl.rect[3] / 2.0,
+        ];
+        assert_eq!(geo2.hit(center), Some(WheelHit::Template(0)));
     }
 }
