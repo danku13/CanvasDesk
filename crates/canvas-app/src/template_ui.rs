@@ -295,6 +295,10 @@ pub const WHEEL_GAP: f32 = 12.0;
 pub const WHEEL_RING_CAP: usize = 6;
 /// Радиус центрального хаба (пустая зона — глотает клик).
 pub const WHEEL_HUB_R: f32 = 24.0;
+/// FR-022: диаметр кнопки-хаба (клик = «назад»/«закрыть»). Крупная цель
+/// ≥ 44 лог. px — гайдлайн сенсорных целей (Big Medium); совпадает с
+/// удвоенным [`WHEEL_HUB_R`] — зона хаба и кнопка — одно и то же.
+pub const WHEEL_HUB_D: f32 = 48.0;
 /// Отступ wheel от краёв окна при клампе центра.
 pub const WHEEL_SCREEN_MARGIN: f32 = 8.0;
 /// Предел символов строки имени на плашке (длиннее — перенос по пробелу).
@@ -347,9 +351,19 @@ pub struct WheelGeometry {
     /// Радиус описанной окружности плашек (для «клик заметно дальше —
     /// закрыть»).
     pub extent: f32,
+    /// FR-022: квадрат кнопки-хаба (`WHEEL_HUB_D × WHEEL_HUB_D`) вокруг
+    /// центра — единый источник для рендера круга и клика «назад/закрыть».
+    pub hub: [f32; 4],
 }
 
 impl WheelGeometry {
+    /// FR-022: курсор на кнопке-хабе? Тест по квадрату хаба (визуальный
+    /// круг вписан в него; углы квадрата прощаются — Fitts).
+    pub fn hub_hit(&self, cursor: Vec2) -> bool {
+        let [x, y, w, h] = self.hub;
+        cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+    }
+
     /// Плашка под курсором (screen px): точный hit-test по прямоугольникам
     /// плашек (раньше был угловой тест по секторам, не совпадавший с
     /// квадами рендера).
@@ -576,7 +590,7 @@ pub fn wheel_geometry(
         });
     }
 
-    // 4. Внешний радиус и кламп центра к окну.
+    // 4. Внешний радиус, кнопка-хаб (FR-022) и кламп центра к окну.
     let extent = cat_rects
         .iter()
         .fold(placed_extent, |acc, rect| acc.max(rect_max_extent(*rect)));
@@ -589,6 +603,12 @@ pub fn wheel_geometry(
     } else {
         [window_w / 2.0, window_h / 2.0]
     };
+    let hub = [
+        center[0] - WHEEL_HUB_D / 2.0,
+        center[1] - WHEEL_HUB_D / 2.0,
+        WHEEL_HUB_D,
+        WHEEL_HUB_D,
+    ];
     for plate in &mut plates {
         plate.rect[0] += center[0];
         plate.rect[1] += center[1];
@@ -597,6 +617,7 @@ pub fn wheel_geometry(
         center,
         plates,
         extent,
+        hub,
     }
 }
 
@@ -728,6 +749,27 @@ mod tests {
         assert_eq!(wheel_ring_plan(11), vec![5, 6]);
         assert_eq!(wheel_ring_plan(13), vec![4, 4, 5]);
         assert_eq!(wheel_ring_plan(15), vec![5, 5, 5]);
+    }
+
+    #[test]
+    fn wheel_hub_button_geometry() {
+        // FR-022: хаб — квадрат WHEEL_HUB_D вокруг центра, рендер и клик
+        // видят один и тот же прямоугольник; плашки в хаб не заходят
+        let geo = wheel_geometry([400.0, 300.0], 1280.0, 800.0, 4, 10);
+        assert!((geo.hub[2] - WHEEL_HUB_D).abs() < 0.01);
+        assert!((geo.hub[0] + WHEEL_HUB_D / 2.0 - geo.center[0]).abs() < 0.01);
+        assert!((geo.hub[1] + WHEEL_HUB_D / 2.0 - geo.center[1]).abs() < 0.01);
+        // Клик по центру — хаб; на первой плашке — не хаб
+        assert!(geo.hub_hit(geo.center));
+        assert!(!geo.hub_hit([geo.center[0], geo.center[1] - geo.extent]));
+        for plate in &geo.plates {
+            let [x, y, w, h] = plate.rect;
+            let overlap = geo.hub[0] < x + w
+                && x < geo.hub[0] + geo.hub[2]
+                && geo.hub[1] < y + h
+                && y < geo.hub[1] + geo.hub[3];
+            assert!(!overlap, "плашка налезла на кнопку-хаб");
+        }
     }
 
     #[test]

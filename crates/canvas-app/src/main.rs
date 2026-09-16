@@ -3042,6 +3042,10 @@ impl App {
     /// `template_ui::wheel_geometry` — раскладка отталкивается от размера
     /// плашек, зазор гарантирован (правка владельца 2026-09-16). Пайплайн
     /// квадов без поворотов; hover — по тем же плашкам (WYSIWYG).
+    /// FR-022 (бест-практики радиальных меню): затемнение фона под
+    /// модальным пикером (паттерн Miro Template picker), круглая кнопка
+    ///-хаб «назад/закрыть» (Kurtenbach/Buxton — центр отменяет уровень),
+    /// крошки глубины в хабе (выбранная категория).
     fn wheel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -3051,6 +3055,15 @@ impl App {
         let palette = ThemeColors::from_theme(self.settings.theme);
         let icon_tint = color_to_rgba(palette.icon);
         let [vw, vh] = self.viewport_logical();
+        // Затемнение фона: фокус на выборе, случайный клик по канвасу
+        // исключён (клик мимо wheel закрывает меню — обработчик клика)
+        instances.push(CardInstance {
+            pos: [0.0, 0.0],
+            size: [vw, vh],
+            fill: [0.0, 0.0, 0.0, 0.35],
+            border: [0.0; 4],
+            params: [0.0, 0.0, 0.0, 1.0],
+        });
         let categories = self.templates.categories();
         let templates: Vec<_> = menu
             .category
@@ -3119,17 +3132,30 @@ impl App {
                 }
             }
         }
-        // Хаб: подпись-подсказка (клик по хабу ничего не выбирает)
-        texts.push(OwnedScreenText {
-            text: if menu.category.is_some() {
-                "выбрать".to_owned()
+        // Хаб: круглая кнопка «назад/закрыть» (FR-022). Без категории —
+        // подсказка «закрыть»; с категорией — крошки глубины «← имя»
+        let [hx, hy, hw, hh] = geo.hub;
+        instances.push(CardInstance {
+            pos: [hx, hy],
+            size: [hw, hh],
+            fill: if menu.category.is_some() {
+                [0.18, 0.29, 0.48, 0.95]
             } else {
-                "категория".to_owned()
+                [0.17, 0.18, 0.22, 0.92]
             },
-            origin: [geo.center[0] - 40.0, geo.center[1] - 6.0],
-            width: 80.0,
+            border: [0.22, 0.24, 0.30, 0.9],
+            params: [hw / 2.0, 0.0, 0.0, 1.0], // круг — радиус = половина стороны
+        });
+        texts.push(OwnedScreenText {
+            text: if let Some(category) = &menu.category {
+                format!("← {category}")
+            } else {
+                "закрыть".to_owned()
+            },
+            origin: [geo.center[0] - 44.0, geo.center[1] - 6.0],
+            width: 88.0,
             font_size: 10.0,
-            color: palette.body,
+            color: palette.title,
             align: TextAlign::Center,
         });
         (instances, texts)
@@ -5372,11 +5398,23 @@ impl App {
                             self.instantiate_template_at(&manifest, world);
                         }
                         None => {
-                            let dx = self.cursor[0] - geo.center[0];
-                            let dy = self.cursor[1] - geo.center[1];
-                            let outside = (dx * dx + dy * dy).sqrt() > geo.extent + 12.0;
-                            if outside {
-                                self.wheel_menu = None;
+                            // FR-022: клик по кнопке-хабу — «назад» (сброс
+                            // категории) или «закрыть»; дальше — как раньше:
+                            // рядом глотаем, заметно дальше — закрыть.
+                            if geo.hub_hit(self.cursor) {
+                                if let Some(menu_mut) = self.wheel_menu.as_mut() {
+                                    menu_mut.category = None;
+                                }
+                                if menu.category.is_none() {
+                                    self.wheel_menu = None;
+                                }
+                            } else {
+                                let dx = self.cursor[0] - geo.center[0];
+                                let dy = self.cursor[1] - geo.center[1];
+                                let outside = (dx * dx + dy * dy).sqrt() > geo.extent + 12.0;
+                                if outside {
+                                    self.wheel_menu = None;
+                                }
                             }
                         }
                     }
