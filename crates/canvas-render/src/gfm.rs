@@ -1,11 +1,11 @@
-//! GFM-рендеринг заметок (без таблиц): построчный парсер блоков GitHub
-//! Flavored Markdown + разбиение инлайн-сегментов со ссылками.
+//! GFM-рендеринг заметок: построчный парсер блоков GitHub Flavored
+//! Markdown + разбиение инлайн-сегментов со ссылками.
 //!
 //! Заметка хранит сырую markdown-разметку в поле `text` ноды (формат `.canvas`
 //! не меняется); этот модуль — чистая CPU-логика (без GPU и зависимостей),
 //! рендер потребляет блоки в text.rs (`shape_body`).
 //!
-//! Поддерживаемое подмножество (v1, таблицы GFM не поддерживаем):
+//! Поддерживаемое подмножество (v1):
 //! - ATX-заголовки `#{1,6}` + пробел (без пробела — литерал); закрывающая
 //!   последовательность `###` в конце строки обрезается;
 //! - списки: маркированные (`-`, `*`, `+`), нумерованные (`1.`/`1)`, число
@@ -18,9 +18,12 @@
 //! - вложенность списков не поддерживаем: строка с отступом перед маркером
 //!   (`  - влож.`) маркером не считается — текст пункта/параграфа;
 //! - одиночный `\n` внутри параграфа — перенос строки, пустая строка
-//!   разделяет блоки.
+//!   разделяет блоки;
+//! - таблицы GFM (`| a | b |` + разделитель `| --- |`) — ТОЛЬКО за флагом
+//!   [`parse_blocks_opts`] (FR-027, просмотрщик документации): заметки
+//!   рендерятся без таблиц — [`parse_blocks`] сохраняет прежнее поведение
 
-/// Блок тела заметки (GFM, без таблиц).
+/// Блок тела заметки (GFM; таблицы — за флагом, FR-027).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
     /// ATX-заголовок, уровень 1..=6 (рендерим 1–3 крупно, 4–6 как bold body).
@@ -35,6 +38,14 @@ pub enum Block {
     Code { text: String },
     /// Горизонтальная линия.
     Rule,
+    /// Таблица GFM (FR-027, только флаг `tables`): шапка + строки ячеек;
+    /// выравнивание (`:---:`) v1 не переносится — рендер выравнивает влево.
+    /// Число ячеек строк может быть меньше шапки (хвостовые `|` опущены) —
+    /// недостающие ячейки рендер достраивает пустыми.
+    Table {
+        header: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
 }
 
 /// Пункт списка.
@@ -52,6 +63,15 @@ pub struct ListItem {
 pub struct Segment {
     pub text: String,
     pub link: bool,
+}
+
+/// Инлайн-сегмент с URL (FR-027, просмотрщик документации): как
+/// [`Segment`], но ссылка несёт и `href` — для клика и линк-чека.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSegment {
+    pub text: String,
+    /// URL ссылки (`None` — обычный текст).
+    pub href: Option<String>,
 }
 
 /// Снять ATX-префикс заголовка: если строка после ltrim начинается с 1–6
@@ -221,9 +241,17 @@ fn quote_text(line: &str) -> Option<String> {
     }
 }
 
-/// Разобрать текст заметки на GFM-блоки (без таблиц). Пустой текст —
-/// пустой вектор.
+/// Разобрать текст заметки на GFM-блоки (таблицы ВЫКЛ — поведение заметок
+/// и `.canvas`-текста не меняется, FR-027). Пустой текст — пустой вектор.
 pub fn parse_blocks(text: &str) -> Vec<Block> {
+    parse_blocks_opts(text, false)
+}
+
+/// Разобрать текст на GFM-блоки с флагом таблиц (FR-027): `tables = true`
+/// включает `Block::Table` (шапка `| a | b |` + разделитель `| --- |`) —
+/// просмотрщик документации; `false` — прежнее поведение заметок
+/// (инвариант регрессии: тексты с `|` дают те же блоки, что до флага).
+pub fn parse_blocks_opts(text: &str, tables: bool) -> Vec<Block> {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut blocks = Vec::new();
     let mut i = 0usize;
@@ -231,6 +259,27 @@ pub fn parse_blocks(text: &str) -> Vec<Block> {
         let line = lines[i];
         if line.trim().is_empty() {
             i += 1;
+            continue;
+        }
+        // Таблица GFM (FR-027): строка с `|`, за которой — разделитель
+        // `| --- | :---: |`. Проверяется ДО фенса/заголовка: строка таблицы
+        // не может быть ни тем, ни другим, а разделитель `---` без `|`
+        // остаётся горизонтальной линией (инвариант регрессии заметок).
+        if tables && table_start(line, lines.get(i + 1).copied()).is_some() {
+            let (header, mut rows) =
+                table_start(line, lines.get(i + 1).copied()).expect("проверено выше");
+            i += 2;
+            // Тело таблицы: непустые строки с `|` — до пустой строки
+            // или строки без `|` (другой блок начинается).
+            while i < lines.len() {
+                let row = lines[i];
+                if row.trim().is_empty() || !row.contains('|') {
+                    break;
+                }
+                rows.push(split_table_row(row));
+                i += 1;
+            }
+            blocks.push(Block::Table { header, rows });
             continue;
         }
         // Фенс кода (только top-level)
@@ -321,6 +370,10 @@ pub fn parse_blocks(text: &str) -> Vec<Block> {
         i += 1;
         while i < lines.len() && !lines[i].trim().is_empty() {
             let next = lines[i];
+            // Таблица обрывает параграф (шапка + разделитель впереди)
+            if tables && table_start(next, lines.get(i + 1).copied()).is_some() {
+                break;
+            }
             if fence_marker(next).is_some()
                 || atx_heading(next).is_some()
                 || is_thematic_break(next)
@@ -338,10 +391,72 @@ pub fn parse_blocks(text: &str) -> Vec<Block> {
     blocks
 }
 
+/// Строка ячейки/шапки таблицы: сплит по `|` с тримом; ведущая и
+/// закрывающая `|` дают пустые ячейки — снимаются (GFM).
+fn split_table_row(line: &str) -> Vec<String> {
+    let mut cells: Vec<String> = line
+        .trim()
+        .split('|')
+        .map(|c| c.trim().to_owned())
+        .collect();
+    if cells.first().is_some_and(String::is_empty) {
+        cells.remove(0);
+    }
+    if cells.last().is_some_and(String::is_empty) {
+        cells.pop();
+    }
+    cells
+}
+
+/// Ячейка разделителя: `:?-+:?` (выравнивание v1 игнорируем, валидность —
+/// обязательна: `| x |` — не разделитель, таблица не начинается).
+fn is_delimiter_cell(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    let body = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    let body = body.strip_suffix(':').unwrap_or(body);
+    !body.is_empty() && body.bytes().all(|b| b == b'-')
+}
+
+/// Разделитель таблицы GFM: непустая строка из ячеек `---`/`:---`/`---:`/
+/// `:---:` между `|` (хотя бы одна `|` в строке, хотя бы один `-`).
+fn is_delimiter_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.contains('|') || !trimmed.contains('-') {
+        return false;
+    }
+    let cells = split_table_row(trimmed);
+    !cells.is_empty() && cells.iter().all(|c| is_delimiter_cell(c))
+}
+
+/// Начало таблицы (FR-027): строка с `|` + следующая строка-разделитель
+/// → (шапка, пустые строки-тело). Нет разделителя — не таблица: обычный
+/// параграф (поведение заметок при `tables = false` — то же самое).
+fn table_start(line: &str, next: Option<&str>) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    if !line.contains('|') {
+        return None;
+    }
+    next.filter(|next| is_delimiter_row(next))
+        .map(|_| (split_table_row(line), Vec::new()))
+}
+
 /// Разбить строку на инлайн-сегменты: `[label](url)` → сегмент с
 /// link = true (URL скрывается, показывается label). Непарные `[`/`](` —
 /// литералами; пустой label (`[]()`) — литералом.
 pub fn inline_segments(text: &str) -> Vec<Segment> {
+    inline_segments_links(text)
+        .into_iter()
+        .map(|seg| Segment {
+            text: seg.text,
+            link: seg.href.is_some(),
+        })
+        .collect()
+}
+
+/// Инлайн-сегменты с href (FR-027): `[label](url)` → сегмент с URL — клик
+/// по внутренней ссылке ведёт на страницу, внешние рендер как обычный текст.
+/// Разбор тот же, что у [`inline_segments`] (единый источник — регрессия
+/// заметок исключена), меняется только выходная модель.
+pub fn inline_segments_links(text: &str) -> Vec<LinkSegment> {
     let mut segments = Vec::new();
     let mut literal = String::new();
     let bytes = text.as_bytes();
@@ -355,18 +470,18 @@ pub fn inline_segments(text: &str) -> Vec<Segment> {
                     if let Some(url_close) = text[after + 1..].find(')').map(|pos| after + 1 + pos)
                     {
                         let label = &text[i + 1..close];
-                        let _url = &text[after + 1..url_close];
-                        // Пустой label — не ссылка (литералом)
-                        if !label.is_empty() {
+                        let href = &text[after + 1..url_close];
+                        // Пустой label или пустой URL — не ссылка (литералом)
+                        if !label.is_empty() && !href.is_empty() {
                             if !literal.is_empty() {
-                                segments.push(Segment {
+                                segments.push(LinkSegment {
                                     text: std::mem::take(&mut literal),
-                                    link: false,
+                                    href: None,
                                 });
                             }
-                            segments.push(Segment {
+                            segments.push(LinkSegment {
                                 text: label.to_owned(),
-                                link: true,
+                                href: Some(href.to_owned()),
                             });
                             i = url_close + 1;
                             continue;
@@ -383,9 +498,9 @@ pub fn inline_segments(text: &str) -> Vec<Segment> {
         i += ch.len_utf8();
     }
     if !literal.is_empty() {
-        segments.push(Segment {
+        segments.push(LinkSegment {
             text: literal,
-            link: false,
+            href: None,
         });
     }
     // Текст без сегментов (в т.ч. пустой) — один пустой сегмент не нужен:
@@ -767,5 +882,158 @@ mod tests {
         assert_eq!(strip_atx("#без пробела"), "#без пробела");
         assert_eq!(strip_atx("обычная строка"), "обычная строка");
         assert_eq!(strip_atx("# "), "");
+    }
+
+    /// FR-027: таблица 2×3 за флагом — `Block::Table` с ожидаемыми ячейками;
+    /// ведущая/закрывающая `|` сняты, ячейки тримлены.
+    #[test]
+    fn tables_parse_with_flag() {
+        let src = "| A | B |\n| --- | :--- |\n| 1 | 2 |\n| 3 | четыре |";
+        assert_eq!(
+            parse_blocks_opts(src, true),
+            [Block::Table {
+                header: vec!["A".into(), "B".into()],
+                rows: vec![
+                    vec!["1".into(), "2".into()],
+                    vec!["3".into(), "четыре".into()],
+                ],
+            }]
+        );
+        // Выравнивание `:---:` в разделителе парсится (v1 игнорируется)
+        assert_eq!(
+            parse_blocks_opts("| a | b |\n| :-: | :---: |\n| x | y |", true),
+            [Block::Table {
+                header: vec!["a".into(), "b".into()],
+                rows: vec![vec!["x".into(), "y".into()]],
+            }]
+        );
+        // Пустая строка обрывает тело таблицы; одинокая `| 2 |` без
+        // разделителя — параграф (GFM: таблица требует разделитель)
+        assert_eq!(
+            parse_blocks_opts("| a |\n| - |\n| 1 |\n\n| 2 |", true),
+            [
+                Block::Table {
+                    header: vec!["a".into()],
+                    rows: vec![vec!["1".into()]],
+                },
+                Block::Paragraph {
+                    text: "| 2 |".into()
+                },
+            ]
+        );
+        // Строка без `|` тоже обрывает тело таблицы
+        assert_eq!(
+            parse_blocks_opts("| a |\n| - |\n| 1 |\nхвост", true),
+            [
+                Block::Table {
+                    header: vec!["a".into()],
+                    rows: vec![vec!["1".into()]],
+                },
+                Block::Paragraph {
+                    text: "хвост".into()
+                },
+            ]
+        );
+    }
+
+    /// FR-027: без разделителя `| a | b |` — обычный параграф И за флагом:
+    /// разделитель обязателен (GFM); «разделитель» без `|` после `|`-строки —
+    /// тоже не таблица (`---` остаётся линией).
+    #[test]
+    fn table_requires_delimiter_row() {
+        let no_sep = "| a | b |\n| 1 | 2 |";
+        assert_eq!(
+            parse_blocks_opts(no_sep, true),
+            [Block::Paragraph {
+                text: "| a | b |\n| 1 | 2 |".into()
+            }]
+        );
+        assert_eq!(parse_blocks(no_sep), parse_blocks_opts(no_sep, true));
+        // `|`-строка + `---` без `|` — линия (не разделитель таблицы)
+        assert_eq!(
+            parse_blocks_opts("| a |\n---", true),
+            [
+                Block::Paragraph {
+                    text: "| a |".into()
+                },
+                Block::Rule,
+            ]
+        );
+    }
+
+    /// FR-027: инвариант регрессии заметок — `parse_blocks` (флаг выкл) на
+    /// текстах с `|` даёт те же блоки, что и `parse_blocks_opts(_, false)`;
+    /// таблицы в заметках НЕ парсятся (строки с `|` — параграфы, как раньше).
+    #[test]
+    fn tables_flag_off_keeps_note_behavior() {
+        let table = "| Раздел | Содержание |\n|---|---|\n| База | Навигация, заметки |";
+        let blocks = parse_blocks(table);
+        assert_eq!(
+            blocks,
+            [Block::Paragraph {
+                text: "| Раздел | Содержание |\n|---|---|\n| База | Навигация, заметки |".into()
+            }]
+        );
+        assert_eq!(blocks, parse_blocks_opts(table, false));
+        // Разделитель после текста без `|` — как раньше: `---` линия
+        let mixed = "текст\n| a | b |\n| --- | --- |\nконец";
+        let with_flag_off = parse_blocks(mixed);
+        assert_eq!(with_flag_off, parse_blocks_opts(mixed, false));
+        // За флагом: параграф обрывается перед таблицей
+        let with_flag = parse_blocks_opts(mixed, true);
+        assert_eq!(with_flag.len(), 3);
+        assert_eq!(
+            with_flag[0],
+            Block::Paragraph {
+                text: "текст".into()
+            }
+        );
+        assert!(matches!(with_flag[1], Block::Table { .. }));
+        assert_eq!(
+            with_flag[2],
+            Block::Paragraph {
+                text: "конец".into()
+            }
+        );
+    }
+
+    /// FR-027: инлайн-сегменты с href — тот же разбор, что inline_segments
+    /// (единый источник), плюс URL в выходе; пустой URL — литерал.
+    #[test]
+    fn inline_segments_links_keep_href() {
+        assert_eq!(
+            inline_segments_links("x [a](b.html) y"),
+            [
+                LinkSegment {
+                    text: "x ".into(),
+                    href: None
+                },
+                LinkSegment {
+                    text: "a".into(),
+                    href: Some("b.html".into())
+                },
+                LinkSegment {
+                    text: " y".into(),
+                    href: None
+                },
+            ]
+        );
+        // Пустой URL — литерал (деградация без паники)
+        assert_eq!(
+            inline_segments_links("[a]()"),
+            [LinkSegment {
+                text: "[a]()".into(),
+                href: None
+            }]
+        );
+        // Тождественность с inline_segments (текст/link)
+        let src = "см. [доки](faq.html) и [сайт](https://x.y)";
+        let plain = inline_segments(src);
+        let linked = inline_segments_links(src);
+        assert_eq!(plain.len(), linked.len());
+        for (p, l) in plain.iter().zip(&linked) {
+            assert_eq!(p.text, l.text);
+            assert_eq!(p.link, l.href.is_some());
+        }
     }
 }

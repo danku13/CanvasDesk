@@ -1,6 +1,6 @@
 # FR-027: Доступ к документации из приложения — кнопка «?», меню разделов и встроенный просмотрщик
 
-- **Статус:** выявлено
+- **Статус:** реализовано (v1, 2026-09-17)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (анализ)
@@ -115,6 +115,10 @@ index, quick-start, interface, hotkeys, calculations, templates, faq) — но �
 ## Требуемые изменения (Changes)
 
 ### 1. Чистый модуль `docs_ui.rs` (образец `settings_ui`/`hints_ui`)
+
+> Реализовано: `crates/canvas-app/src/docs_ui.rs`. Путь `include_str!` из
+> `src/docs_ui.rs` — `../../../user-docs/…` (от файла, не от манифеста:
+> src → canvas-app → crates → корень репо).
 
 - Модель страниц: `DOCS_PAGES: &[DocsPage]` — `DocsPage { id: &'static str,
   title: &'static str, body: &'static str }`, значения —
@@ -270,6 +274,18 @@ index, quick-start, interface, hotkeys, calculations, templates, faq) — но �
 
 ## История изменений (Changelog)
 
+- `2026-09-17` — агент: реализация v1 одним коммитом: `docs_ui.rs` (7 вшитых
+  страниц, меню помощи + подменю, правый док 480 px с клампом, раскладка
+  GFM с таблицами и переносом по консервативной оценке ширины глифа,
+  `ScrollState`, линк-чек в CI, hit-тесты), `Block::Table` +
+  `parse_blocks_opts(text, tables)` и `inline_segments_links` в `gfm.rs`
+  (заметки не затронуты — инвариант регрессии в тестах), кнопка «?»
+  (`ui::help_button_rect` + тест смежности на 4 углах), интеграция в
+  `main.rs` (оверлеи, ввод, колесо, двухэтапный Esc, screen-поверхности).
+  Созданы `docs/interface-objects/docs-viewer.md`, чек-лист
+  `docs/ACCEPTANCE.md` §18; `user-docs` обновлены (README: просмотрщик —
+  основной способ, Pages — опциональное зеркало; interface.md: меню «?»;
+  hotkeys.md: Esc). Статус `реализовано`.
 - `2026-09-17` — агент: документ создан по запросу пользователя («встроить
   доступ к пользовательской документации из меню, учитывай FR-026»). По
   уточнениям владельца зафиксированы решения: встроенный просмотрщик вместо

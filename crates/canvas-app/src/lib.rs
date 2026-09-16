@@ -49,6 +49,16 @@ pub mod hints_ui;
 /// Рендер и ввод — в main.rs; `ui::panel_rect` переиспользует высоту.
 pub mod settings_ui;
 
+/// FR-027: доступ к документации — меню помощи кнопки «?» и встроенный
+/// просмотрщик — чистая модель (вшитые страницы `user-docs/`, раскладка
+/// GFM с таблицами, скролл, hit-тесты ссылок). Рендер и ввод — в main.rs.
+pub mod docs_ui;
+
+/// FR-028: онбординг-тур — чистая модель (шаги-карточки, таблица решений
+/// показа, геометрия карточки и кнопок с клампом). Рендер и ввод — в
+/// main.rs; перезапуск — пункт меню «?» (FR-027).
+pub mod onboarding_ui;
+
 /// Чистая UI-логика приложения: геометрия оверлеев (контекстное меню,
 /// панель настроек), hit-тесты, генератор id заметок, детектор двойного
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
@@ -150,6 +160,19 @@ pub mod ui {
             _ => button[0] - SETTINGS_GAP - SETTINGS_BUTTON,
         };
         [x, button[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
+    }
+
+    /// Rect кнопки помощи «?» (FR-027): третий элемент кластера — тот же
+    /// угол/ряд, внутрь экрана от кнопки темы ещё на один шаг
+    /// (SETTINGS_BUTTON + SETTINGS_GAP; зеркально для правых углов).
+    /// Кластер ⚙/тема/«?» целиком переносится настройкой `button_corner`.
+    pub fn help_button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
+        let theme = theme_button_rect(corner, viewport);
+        let x = match corner {
+            Corner::TopLeft | Corner::BottomLeft => theme[0] + SETTINGS_BUTTON + SETTINGS_GAP,
+            _ => theme[0] - SETTINGS_GAP - SETTINGS_BUTTON,
+        };
+        [x, theme[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
     }
 
     /// Rect панели настроек: прижата к кнопке (с зазором), в том же углу.
@@ -2284,6 +2307,53 @@ pub mod ui {
             let tl_theme = theme_button_rect(Corner::TopLeft, viewport);
             let tl = button_rect(Corner::TopLeft, viewport);
             assert!(tl_theme[0] > tl[0] + tl[2]);
+        }
+
+        /// FR-027: кнопка «?» — третий элемент кластера: тот же ряд, зазор
+        /// SETTINGS_GAP от кнопки темы, целиком в viewport на 4 углах
+        /// (образец — theme_button_next_to_settings_button).
+        #[test]
+        fn help_button_next_to_theme_button() {
+            let viewport = [1600.0, 900.0];
+            for corner in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let theme = theme_button_rect(corner, viewport);
+                let help = help_button_rect(corner, viewport);
+                // Тот же ряд и размер
+                assert_eq!(help[1], theme[1]);
+                assert_eq!(help[3], SETTINGS_BUTTON);
+                assert_eq!(help[2], SETTINGS_BUTTON);
+                // Целиком в viewport
+                assert!(help[0] >= 0.0 && help[0] + help[2] <= viewport[0]);
+                // Зазор ровно SETTINGS_GAP, пересечения нет
+                let gap = (help[0] - (theme[0] + theme[2])).abs();
+                let gap_left = (theme[0] - (help[0] + help[2])).abs();
+                assert!(
+                    (gap - SETTINGS_GAP).abs() < 1e-3 || (gap_left - SETTINGS_GAP).abs() < 1e-3,
+                    "зазор SETTINGS_GAP: help={help:?} theme={theme:?}"
+                );
+            }
+            // Правый угол: «?» левее темы; левый — правее
+            let tr_help = help_button_rect(Corner::TopRight, viewport);
+            let tr_theme = theme_button_rect(Corner::TopRight, viewport);
+            assert!(tr_help[0] + tr_help[2] < tr_theme[0]);
+            let tl_help = help_button_rect(Corner::TopLeft, viewport);
+            let tl_theme = theme_button_rect(Corner::TopLeft, viewport);
+            assert!(tl_help[0] > tl_theme[0] + tl_theme[2]);
+            // На узком окне 320×240 кластер не вылезает за экран
+            for corner in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let help = help_button_rect(corner, [320.0, 240.0]);
+                assert!(help[0] >= 0.0 && help[0] + help[2] <= 320.0, "{corner:?}");
+            }
         }
 
         /// Панель настроек: прижата к углу кнопки, целиком в viewport.

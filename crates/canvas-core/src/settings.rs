@@ -179,7 +179,20 @@ pub struct Settings {
     /// Дефолт — выкл: поведение в точности прежнее (порты сторон, значение
     /// ноды целиком). Рендер/hit-тест/drag читают флаг на кадре.
     pub line_ports: bool,
+    /// FR-028: онбординг-тур пройден до конца («Готово» на последнем шаге) —
+    /// авто-показ при старте выключен навсегда; ручной вход из меню «?»
+    /// остаётся. Старые конфиги без поля грузятся как false (serde default).
+    pub onboarding_done: bool,
+    /// FR-028: сколько раз подряд тур отложен «Пропустить»/Esc — авто-показ
+    /// молчит после `ONBOARDING_MAX_DEFERS`. Ручной запуск из меню «?»
+    /// счётчик не трогает. Значения клампятся в `[0, 3]` при загрузке
+    /// (паттерн `port_zone_px` — ручные правки не роняют приложение).
+    pub onboarding_defers: u8,
 }
+
+/// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
+/// авто-показ замолкает (ручной вход из меню «?» живёт вечно).
+pub const ONBOARDING_MAX_DEFERS: u8 = 3;
 
 /// Пресеты зоны портов для строки панели настроек (CR-003): клик циклит.
 pub const PORT_ZONE_PRESETS: [f32; 5] = [10.0, 14.0, 20.0, 28.0, 40.0];
@@ -220,8 +233,16 @@ impl Default for Settings {
             template_palette_open: false,
             // FR-025 (построчные точки выхода): по умолчанию выключено.
             line_ports: false,
+            onboarding_done: false,
+            onboarding_defers: 0,
         }
     }
+}
+
+/// FR-028: кламп счётчика откладываний онбординга в `[0, MAX]` — ручная
+/// правка config.toml (99/200) не ломает таблицу решений показа тура.
+pub fn clamp_onboarding_defers(value: u8) -> u8 {
+    value.min(ONBOARDING_MAX_DEFERS)
 }
 
 impl Settings {
@@ -241,6 +262,7 @@ impl Settings {
         match toml::from_str::<Self>(&text) {
             Ok(mut settings) => {
                 settings.port_zone_px = clamp_port_zone(settings.port_zone_px);
+                settings.onboarding_defers = clamp_onboarding_defers(settings.onboarding_defers);
                 (settings, None)
             }
             Err(err) => (
@@ -260,12 +282,14 @@ impl Settings {
         std::fs::write(path, text)
     }
 
-    /// Разбор из строки (тесты; логика общая с load, включая кламп CR-003).
+    /// Разбор из строки (тесты; логика общая с load, включая кламп CR-003
+    /// и FR-028).
     #[cfg(test)]
     fn load_toml_str(text: &str) -> (Self, Option<String>) {
         match toml::from_str::<Self>(text) {
             Ok(mut settings) => {
                 settings.port_zone_px = clamp_port_zone(settings.port_zone_px);
+                settings.onboarding_defers = clamp_onboarding_defers(settings.onboarding_defers);
                 (settings, None)
             }
             Err(err) => (Self::default(), Some(err.to_string())),
@@ -292,6 +316,8 @@ mod tests {
             port_zone_px: 28.0,
             template_palette_open: false,
             line_ports: true,
+            onboarding_done: true,
+            onboarding_defers: 2,
         };
         let dir = std::env::temp_dir().join("canvasdesk-settings-test");
         let path = dir.join("config.toml");
@@ -376,6 +402,28 @@ mod tests {
         assert!(warn.is_none());
     }
 
+    /// FR-028: онбординг-поля — старый конфиг без них грузится дефолтами
+    /// (`onboarding_done = false`, `onboarding_defers = 0` — тур показать);
+    /// ручная правка `onboarding_defers = 99` клампится к лимиту 3.
+    #[test]
+    fn onboarding_fields_defaults_and_clamp() {
+        let (settings, _) = Settings::load_toml_str("grid_visible = false\n");
+        assert!(!settings.onboarding_done, "старый конфиг — тур не пройден");
+        assert_eq!(
+            settings.onboarding_defers, 0,
+            "старый конфиг — без откладываний"
+        );
+        let (settings, _) = Settings::load_toml_str("onboarding_defers = 99\n");
+        assert_eq!(settings.onboarding_defers, ONBOARDING_MAX_DEFERS);
+        // Значения в диапазоне не трогаются
+        let (settings, _) = Settings::load_toml_str("onboarding_defers = 2\n");
+        assert_eq!(settings.onboarding_defers, 2);
+        // Дефолты
+        let defaults = Settings::default();
+        assert!(!defaults.onboarding_done);
+        assert_eq!(defaults.onboarding_defers, 0);
+    }
+
     /// Тема: переключение замкнуто, подписи непустые, дефолт — тёмная.
     #[test]
     fn theme_cycle_and_labels() {
@@ -456,6 +504,8 @@ mod tests {
         assert!(text.contains("hud_on_start"), "{text}");
         assert!(text.contains("port_zone_px"), "{text}");
         assert!(text.contains("line_ports"), "{text}");
+        assert!(text.contains("onboarding_done"), "{text}");
+        assert!(text.contains("onboarding_defers"), "{text}");
     }
 
     /// FR-025: флаг построчных точек выхода — дефолт false (старые конфиги
