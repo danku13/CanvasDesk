@@ -1,5 +1,6 @@
 //! FR-015: функции теории очередей для доменных расчётов (`mm1`, `mmc`,
-//! `utilization`, `littles_law`, `erlang_c`).
+//! `utilization`, `littles_law`, `erlang_c`) + FR-027 расширение: 4
+//! финансовые функции (`npv`, `cagr`, `irr`, `cohort_ltv`).
 //!
 //! Чистые функции `(&str, &[Value]) -> Result<Value, EvalError>` — без I/O
 //! и состояния (инвариант 1 FR-015); вызываются из [`super::eval_call`]
@@ -15,6 +16,10 @@
 //!   владельца, структура `{utilization, queue_length, ...}` — v2);
 //! - `littles_law` → `Count` (L = λ·W);
 //! - `erlang_c` → `Percent` (доля задержанных заявок).
+//! - FR-027: `npv` → скаляр (серия потоков дисконтируется по ставке);
+//!   `cagr` → скаляр (доля роста за период);
+//!   `irr` → скаляр (внутренняя норма доходности, Newton-Raphson);
+//!   `cohort_ltv` → скаляр (интеграл retention-кривой × arpu × margin).
 //!
 //! Скорости аргументов приводятся к базе размерности Rate (`req/s`, scale
 //! 1.0) через `unit.scale`; время результата — в базовой секунде. Перегрузка
@@ -60,6 +65,36 @@ pub(super) fn dispatch(func: &str, values: &[Value]) -> Result<Value, EvalError>
                 return Err(bad_arity(func, "erlang_c(λ, μ, c): ровно 3 аргумента"));
             }
             erlang_c(values)
+        }
+        // FR-027: 4 финансовые функции (расширение FR-015).
+        "npv" => {
+            // npv(rate, *cf): первый аргумент — ставка, дальше ≥ 1 поток.
+            if values.len() < 2 {
+                return Err(bad_arity(func, "npv(rate, *cf): ставка и ≥ 1 денежный поток"));
+            }
+            npv(values)
+        }
+        "cagr" => {
+            if values.len() != 3 {
+                return Err(bad_arity(func, "cagr(begin, end, periods): ровно 3 аргумента"));
+            }
+            cagr(values)
+        }
+        "irr" => {
+            // irr(*cf): ≥ 2 потока (иначе IRR не определён).
+            if values.len() < 2 {
+                return Err(bad_arity(func, "irr(*cf): ≥ 2 денежных потока"));
+            }
+            irr(values)
+        }
+        "cohort_ltv" => {
+            if values.len() != 6 {
+                return Err(bad_arity(
+                    func,
+                    "cohort_ltv(arpu_m0, margin, r_d1, r_d7, r_d30, months): 6 аргументов",
+                ));
+            }
+            cohort_ltv(values)
         }
         _ => Err(EvalError::UnknownFunction(func.to_owned())),
     }
@@ -236,4 +271,204 @@ fn bad_zero_service(func: &str) -> EvalError {
         func: func.to_owned(),
         msg: "нулевая скорость обслуживания".to_owned(),
     }
+}
+
+// --- FR-027: финансовые функции (расширение FR-015) ---
+
+/// `npv(rate, *cf)` → скаляр (USD/исходная единица потоков): чистая
+/// приведённая стоимость серии денежных потоков. `rate` — ставка
+/// дисконтирования (скаляр, доля 0..1 или > 1 при гиперинфляции).
+/// `cf[0]` дисконтируется при t=0 (cf₀/(1+r)⁰ = cf₀), cf[1] — при t=1 и т.д.
+/// Результат — в размерности первого потока (валюта — Money).
+/// https://en.wikipedia.org/wiki/Net_present_value
+fn npv(values: &[Value]) -> Result<Value, EvalError> {
+    let rate = scalar_arg("npv", &values[0])?;
+    let unit = if values[1].unit.is_scalar() {
+        Unit::Scalar
+    } else {
+        values[1].unit.clone()
+    };
+    let mut total = 0.0f64;
+    for (t, v) in values[1..].iter().enumerate() {
+        let cf = scalar_arg("npv", v)?;
+        let factor = (1.0 + rate).powi(t as i32);
+        total += cf / factor;
+    }
+    Ok(Value {
+        num: total,
+        unit,
+    })
+}
+
+/// `cagr(begin, end, periods)` → скаляр (доля, не %): среднегодовой темп
+/// роста. `(end/begin)^(1/periods) − 1`. Если begin ≤ 0 — ошибка
+/// (отрицательный старт бессмысленен для логарифмической модели).
+/// https://en.wikipedia.org/wiki/Compound_annual_growth_rate
+fn cagr(values: &[Value]) -> Result<Value, EvalError> {
+    let begin = scalar_arg("cagr", &values[0])?;
+    let end = scalar_arg("cagr", &values[1])?;
+    let periods = scalar_arg("cagr", &values[2])?;
+    if begin <= 0.0 {
+        return Err(EvalError::BadCall {
+            func: "cagr".to_owned(),
+            msg: format!("begin должен быть положительным, получено {begin}"),
+        });
+    }
+    if periods <= 0.0 {
+        return Err(EvalError::BadCall {
+            func: "cagr".to_owned(),
+            msg: format!("periods должен быть положительным, получено {periods}"),
+        });
+    }
+    let cagr_value = (end / begin).powf(1.0 / periods) - 1.0;
+    Ok(Value::scalar(cagr_value))
+}
+
+/// `irr(*cf)` → скаляр (доля): внутренняя норма доходности — ставка r,
+/// при которой NPV = 0. Newton-Raphson с начальной догадкой r₀ = 0.1
+/// (10%), шаг ±0.05, лимит 100 итераций. Если не сошёлся — `BadCall`.
+/// Требует, чтобы потоки имели разный знак (иначе нет корня).
+/// https://en.wikipedia.org/wiki/Internal_rate_of_return
+fn irr(values: &[Value]) -> Result<Value, EvalError> {
+    let cashflows: Vec<f64> = values
+        .iter()
+        .map(|v| scalar_arg("irr", v))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Без смены знака IRR не определён (нет корня NPV = 0).
+    let has_positive = cashflows.iter().any(|&v| v > 0.0);
+    let has_negative = cashflows.iter().any(|&v| v < 0.0);
+    if !has_positive || !has_negative {
+        return Err(EvalError::BadCall {
+            func: "irr".to_owned(),
+            msg: "потоки должны иметь разный знак (иначе IRR не определён)"
+                .to_owned(),
+        });
+    }
+    // Newton-Raphson: r_{n+1} = r_n − npv(r_n) / npv'(r_n),
+    // npv'(r) = Σ −t · cf_t / (1+r)^(t+1).
+    let mut r = 0.1f64; // начальная догадка 10%
+    const MAX_ITERS: usize = 100;
+    const TOLERANCE: f64 = 1e-7;
+    for _ in 0..MAX_ITERS {
+        let one_plus_r = 1.0 + r;
+        if one_plus_r.abs() < 1e-12 {
+            break;
+        }
+        let mut npv_value = 0.0f64;
+        let mut d_npv = 0.0f64;
+        for (t, &cf) in cashflows.iter().enumerate() {
+            let t_f = t as f64;
+            let discount = one_plus_r.powi(t as i32);
+            npv_value += cf / discount;
+            d_npv += -t_f * cf / (one_plus_r * discount);
+        }
+        if npv_value.abs() < TOLERANCE {
+            return Ok(Value::scalar(r));
+        }
+        if d_npv.abs() < 1e-12 {
+            break; // производная 0 — невозможно продолжить
+        }
+        let next_r = r - npv_value / d_npv;
+        // Ограничение шага, чтобы не уходить в ±бесконечность.
+        let delta = (next_r - r).clamp(-0.5, 0.5);
+        if delta == 0.0 {
+            break;
+        }
+        r += delta;
+        // Защита от r ≤ −1 (лог бессмысленен).
+        if r <= -0.99 {
+            r = -0.99;
+        }
+    }
+    Err(EvalError::BadCall {
+        func: "irr".to_owned(),
+        msg: "Newton-Raphson не сошёлся за 100 итераций — проверьте знаки потоков"
+            .to_owned(),
+    })
+}
+
+/// `cohort_ltv(arpu_m0, margin, r_d1, r_d7, r_d30, months)` → скаляр
+/// (USD): LTV когорты через интеграл retention-кривой. retention_t —
+/// линейная интерполяция между точками d0=1, d1=r_d1, d7=r_d7, d30=r_d30
+/// (предполагается экспоненциальное затухание после d30).
+/// `arpu_m0 × margin × Σ_{t=0}^{months} retention_t`.
+fn cohort_ltv(values: &[Value]) -> Result<Value, EvalError> {
+    let arpu_m0 = scalar_arg("cohort_ltv", &values[0])?;
+    let margin = scalar_arg("cohort_ltv", &values[1])?;
+    let r_d1 = scalar_arg("cohort_ltv", &values[2])?;
+    let r_d7 = scalar_arg("cohort_ltv", &values[3])?;
+    let r_d30 = scalar_arg("cohort_ltv", &values[4])?;
+    let months = scalar_arg("cohort_ltv", &values[5])?;
+    if margin < 0.0 || margin > 1.0 {
+        return Err(EvalError::BadCall {
+            func: "cohort_ltv".to_owned(),
+            msg: format!("margin должен быть 0..1, получено {margin}"),
+        });
+    }
+    if months < 0.0 || months.fract() != 0.0 {
+        return Err(EvalError::BadCall {
+            func: "cohort_ltv".to_owned(),
+            msg: format!("months должен быть неотрицательным целым, получено {months}"),
+        });
+    }
+    let months = months as usize;
+    // Опорные точки retention (t, retention).
+    let anchors: [(f64, f64); 4] = [
+        (0.0, 1.0),
+        (1.0, r_d1),
+        (7.0, r_d7),
+        (30.0, r_d30),
+    ];
+    // Линейная интерполяция между точками; после d30 — экспоненциальное
+    // затухание (r_d30^(extra_days/30)).
+    let retention_at = |t: f64| -> f64 {
+        if t <= 0.0 {
+            return 1.0;
+        }
+        if t <= 30.0 {
+            // Найти отрезок [anchors[i].0, anchors[i+1].0] с t внутри.
+            for window in anchors.windows(2) {
+                let (t0, r0) = window[0];
+                let (t1, r1) = window[1];
+                if t >= t0 && t <= t1 && t1 > t0 {
+                    return r0 + (r1 - r0) * (t - t0) / (t1 - t0);
+                }
+            }
+            // t == 30 — последний anchor
+            return r_d30;
+        }
+        // t > 30: экспоненциальное затухание от r_d30.
+        r_d30.powf(t / 30.0)
+    };
+    // Сумма retention за `months` месяцев (по дням, 30 дней на месяц).
+    let total_days = months * 30;
+    let mut retention_sum = 0.0f64;
+    for d in 0..=total_days {
+        retention_sum += retention_at(d as f64);
+    }
+    // Перевод в месяцы: сумма retention по дням / 30.
+    let ltv = arpu_m0 * margin * retention_sum / 30.0;
+    let unit = if values[0].unit.is_scalar() {
+        Unit::Scalar
+    } else {
+        values[0].unit.clone()
+    };
+    Ok(Value {
+        num: ltv,
+        unit,
+    })
+}
+
+/// Скалярный аргумент: безразмерное значение (Rate/Count/Money/Percent
+/// приведутся к f64 через `unit.scale()`; скаляр — как есть). Любая
+/// размерность принимается: для финансовых формул единицы — только
+/// семантика (USD для денег, доли для процентов).
+fn scalar_arg(func: &str, value: &Value) -> Result<f64, EvalError> {
+    let _ = func; // для диагностики через panic-сообщение в вызывающем коде
+    if value.unit.is_scalar() {
+        return Ok(value.num);
+    }
+    // Не-скаляр приводим к числу с учётом масштаба единицы (для Money
+    // масштаб = 1.0 для $ и usd, поэтому результат — просто value.num).
+    Ok(value.num * value.unit.scale())
 }

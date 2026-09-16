@@ -1,6 +1,6 @@
 # FR-027: Расширение библиотеки шаблонов — 30 нод для юнит-экономики и продуктовой аналитики
 
-- **Статус:** выявлено
+- **Статус:** выполнено (v1)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (анализ)
@@ -649,6 +649,37 @@ FR-027 — **естественное расширение** FR-019. Точки 
   каком процессе. Скрипт-патчер: `/home/z/my-project/scripts/patch_fr
   027_descriptions.py`. Обновление — на той же ветке
   `feature/fr-027-template-catalog-ue-pa`, дополнительный коммит.
+- `2026-09-17` — агент: **реализация v1 выполнена**. Реализовано:
+  - 4 новые доменные функции в `crates/canvas-core/src/expr/queueing.rs`
+    (расширение FR-015): `npv(rate, *cf)` — NPV серии потоков с
+    дисконтированием; `cagr(begin, end, periods)` — CAGR через корень
+    `(end/begin)^(1/periods) − 1`; `irr(*cf)` — IRR через Newton-Raphson
+    (100 итераций, лимит шага ±0.5, защита от r ≤ −1); `cohort_ltv(arpu,
+    margin, r_d1, r_d7, r_d30, months)` — LTV через интеграл retention-
+    кривой (линейная интерполяция d0/d1/d7/d30 + экспоненциальное
+    затухание после d30). Регистрация в `dispatch()` + маршрутизация в
+    `expr.rs::eval_call` (`"npv" | "cagr" | "irr" | "cohort_ltv" =>
+    queueing::dispatch`).
+  - 7 новых квад-иконок в `crates/canvas-render/src/cards.rs::template_
+    icon_quads`: `money` (монета с перекладиной), `burn` (пламя — 4
+    трапеции), `users` (два силуэта), `retention` (кривая затухания),
+    `churn` (стрелка вниз), `funnel` (воронка из 3 плашек), `chart` (3
+    столбика + базовая линия).
+  - Категории `unit-economics` и `product-analytics` — без изменений
+    в коде: `TemplateManifest.category` — `String`, `TemplateRegistry::
+    categories()` динамически собирает список из манифестов. Wheel/
+    палитра (FR-018/022/024) автоматически показывают 5 категорий
+    (backend/network/unit-economics/product-analytics/custom).
+  - Тесты: `templates_schema.rs` — счётчик 15→45, список категорий
+    расширен; `expr_queueing.rs` — +13 новых тестов (npv 3 кейса +
+    cagr 3 + irr 3 + cohort_ltv 3 + arity guard 1); `templates.rs` — 2
+    теста на merged-реестре обновлены (15→45). canvas-core: 261 тест
+    зелёный; canvas-render: 261; canvas-app: 172; canvas-shell: 129;
+    canvas-mcp: 10. Всего 833+ теста прошли.
+  - User-docs: `templates.md` — +2 секции (Unit-Economics 18 + Product
+    Analytics 12); `calculations.md` — +секция «Финансовые функции
+    (FR-027)» с таблицей 4 функций.
+  Статус `выполнено (v1)`.
 
 ## Источники истины (References)
 

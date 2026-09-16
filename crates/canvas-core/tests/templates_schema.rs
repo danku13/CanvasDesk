@@ -21,16 +21,26 @@ fn builtin() -> TemplateRegistry {
     TemplateRegistry::builtin()
 }
 
-/// Все 15 манифестов каталога загружаются из встроенной статики.
+/// Все манифесты каталога загружаются из встроенной статики:
+/// FR-019 — 15 шаблонов (10 backend + 5 network), FR-027 — 30 шаблонов
+/// (18 unit-economics + 12 product-analytics); итого 45.
 #[test]
-fn builtin_library_has_15_templates() {
+fn builtin_library_has_45_templates() {
     let registry = builtin();
-    assert_eq!(registry.list().len(), 15, "каталог FR-019: 15 шаблонов");
-    // Категории: 10 backend + 5 network
+    assert_eq!(
+        registry.list().len(),
+        45,
+        "каталог FR-019+FR-027: 45 шаблонов (15 + 30)"
+    );
+    // Категории: 10 backend + 5 network + 18 unit-economics + 12 product-analytics.
     let backend = registry.by_category("backend").len();
     let network = registry.by_category("network").len();
+    let unit_econ = registry.by_category("unit-economics").len();
+    let product_analytics = registry.by_category("product-analytics").len();
     assert_eq!(backend, 10, "10 backend-ролей");
     assert_eq!(network, 5, "5 network/transport-ролей");
+    assert_eq!(unit_econ, 18, "18 unit-economics (FR-027)");
+    assert_eq!(product_analytics, 12, "12 product-analytics (FR-027)");
     // Детерминизм: порядок по id
     let ids: Vec<&str> = registry.list().iter().map(|m| m.id.as_str()).collect();
     let mut sorted = ids.clone();
@@ -108,11 +118,18 @@ fn every_builtin_manifest_passes_schema() {
             "{}: version не числовая",
             manifest.id
         );
-        // Категория и цвет
+        // Категория и цвет (FR-019: 5 категорий; FR-027 добавил
+        // "unit-economics" и "product-analytics").
         assert!(
             matches!(
                 manifest.category.as_str(),
-                "backend" | "network" | "cache" | "queue" | "custom"
+                "backend"
+                    | "network"
+                    | "cache"
+                    | "queue"
+                    | "custom"
+                    | "unit-economics"
+                    | "product-analytics"
             ),
             "{}: неизвестная категория {}",
             manifest.id,
