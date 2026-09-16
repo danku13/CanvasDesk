@@ -60,11 +60,15 @@ pub(crate) fn mono_attrs() -> Attrs<'static> {
 }
 
 /// Размер заголовка в world-px (масштабируется зумом).
-const TITLE_FONT_SIZE: f32 = 13.0;
-/// Высота строки заголовка.
-const TITLE_LINE_HEIGHT: f32 = 18.0;
+/// FR-023: 13 → 16 — заголовок иерархически главнее тела и набирается
+/// КРУПНЕЕ основного текста: 16 / 14 ≈ +14 % (вилка владельца 10–20 %).
+const TITLE_FONT_SIZE: f32 = 16.0;
+/// Высота строки заголовка (под кегль 16 + межстрочный воздух).
+const TITLE_LINE_HEIGHT: f32 = 22.0;
 /// Левый отступ заголовка в world-px (без иконки).
-const TITLE_PADDING: f32 = 8.0;
+/// FR-023: 8 → 12 — адекватный отступ заголовка от края карточки
+/// (согласован с BODY_PADDING и визуальным ритмом шапки).
+const TITLE_PADDING: f32 = 12.0;
 /// Ширина зоны иконки-заглушки в world-px.
 const ICON_WIDTH: f32 = 22.0;
 /// Минимальный физический размер заголовка: ниже текст нечитаем — не готовим
@@ -2201,6 +2205,21 @@ impl TextSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FR-023 (вилка владельца): кегль заголовка на 10–20 % больше кегля
+    /// тела. Инвариант не даёт константам разъехаться при правках.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn title_font_size_within_owner_range_over_body() {
+        let ratio = TITLE_FONT_SIZE / BODY_FONT_SIZE;
+        assert!(
+            (1.10..=1.20).contains(&ratio),
+            "заголовок {TITLE_FONT_SIZE} к телу {BODY_FONT_SIZE}: ratio={ratio}, вилка 1.10..1.20"
+        );
+        // Шапка вмещает строку заголовка с вертикальными полями
+        assert!(HEADER_HEIGHT >= TITLE_LINE_HEIGHT + 8.0);
+        assert!(TITLE_PADDING >= 10.0, "адекватный отступ заголовка");
+    }
 
     /// Маппинг позиции z-плана → индекс ноды: позиции — в `frame.indices`
     /// (culling, T5), индексы — в `Canvas.nodes` и кэше. При частично видимой

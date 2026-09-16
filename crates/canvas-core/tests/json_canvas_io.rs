@@ -308,6 +308,7 @@ fn template_round_trip_and_reset() {
         id: "mock.lb".to_owned(),
         version: "1.0.0".to_owned(),
         expr: "mm1($rps, $service_rate, $servers)".to_owned(),
+        name: Some("Балансировщик нагрузки".to_owned()),
         params: [
             (
                 "rps".to_owned(),

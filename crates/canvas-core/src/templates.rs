@@ -267,7 +267,9 @@ impl TemplateParam {
 /// манифеста (переживает удаление шаблона из реестра — FR-019
 /// «expr остаётся (snapshot)»). `icon`/`color` — снимки иконки и цвета
 /// категории (рендер шапки ноды без обращения к реестру; решение
-/// владельца FR-018 — квад-иконки вместо SVG).
+/// владельца FR-018 — квад-иконки вместо SVG). FR-023: `name` — снимок
+/// отображаемого имени (заголовок ноды; переживает переименование
+/// шаблона в реестре и его удаление).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemplateRef {
     pub id: String,
@@ -276,6 +278,7 @@ pub struct TemplateRef {
     pub params: BTreeMap<String, TemplateParam>,
     pub icon: String,
     pub color: String,
+    pub name: Option<String>,
 }
 
 impl TemplateRef {
@@ -292,6 +295,7 @@ impl TemplateRef {
             "params": params,
             "icon": self.icon,
             "color": self.color,
+            "name": self.name,
         })
     }
 
@@ -318,6 +322,9 @@ impl TemplateRef {
                 .and_then(Json::as_str)
                 .unwrap_or("#9B9B9B")
                 .to_owned(),
+            // FR-023: файлы до снапшота имени — None (заголовок по
+            // прежнему фолбэку — первая строка текста)
+            name: obj.get("name").and_then(Json::as_str).map(str::to_owned),
         })
     }
 
@@ -853,8 +860,80 @@ pub fn instantiate(
         params,
         icon: manifest.icon.clone(),
         color: manifest.color.clone(),
+        // FR-023: имя — в заголовок ноды (переживает правки текста)
+        name: Some(manifest.display_name().to_owned()),
     }));
     Ok(node)
+}
+
+/// FR-023: слияние параметров правки текста с прежним снапшотом. Свежие
+/// значения (распознанные присваивания) перекрывают прежние; параметры,
+/// которых в правке нет (строка удалена/переименована/временно сломана),
+/// сохраняются — формула шаблона остаётся вычислимой, итог (единица)
+/// не пропадает. Порядок ключей — BTreeMap (детерминизм).
+pub fn merge_params(
+    base: BTreeMap<String, TemplateParam>,
+    fresh: BTreeMap<String, TemplateParam>,
+) -> BTreeMap<String, TemplateParam> {
+    let mut merged = base;
+    for (name, value) in fresh {
+        merged.insert(name, value);
+    }
+    merged
+}
+
+// --- FR-023: тесты слияния параметров ---
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    /// Свежие значения перекрывают прежние; отсутствующие в правке —
+    /// сохраняются (формула остаётся вычислимой).
+    #[test]
+    fn merge_params_overrides_and_keeps() {
+        let base: BTreeMap<String, TemplateParam> = [
+            (
+                "rps".to_owned(),
+                TemplateParam {
+                    num: 1000.0,
+                    unit: Some("rps".to_owned()),
+                },
+            ),
+            (
+                "servers".to_owned(),
+                TemplateParam {
+                    num: 2.0,
+                    unit: None,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        // Правка: rps изменён, строка servers удалена пользователем
+        let fresh = params_from_text("rps = 2500 rps");
+        let merged = merge_params(base, fresh);
+        assert_eq!(merged["rps"].display(), "2500 rps", "свежее значение");
+        assert_eq!(
+            merged["servers"].num, 2.0,
+            "удалённая строка — прежнее значение"
+        );
+    }
+
+    /// Правка мусорного текста (проза) ничего не перекрывает.
+    #[test]
+    fn merge_params_prose_is_noop() {
+        let base: BTreeMap<String, TemplateParam> = [(
+            "rps".to_owned(),
+            TemplateParam {
+                num: 1000.0,
+                unit: Some("rps".to_owned()),
+            },
+        )]
+        .into_iter()
+        .collect();
+        let merged = merge_params(base.clone(), params_from_text("встреча в 3"));
+        assert_eq!(merged, base);
+    }
 }
 
 /// Маппинг hex-цвета манифеста на пресет JSON Canvas `"1".."6"` (цвет
@@ -917,6 +996,8 @@ mod tests {
         // Снапшоты иконки/цвета — рендер шапки без реестра
         assert_eq!(template.icon, "lb");
         assert_eq!(template.color, "#4A90E2");
+        // FR-023: имя манифеста — в снапшот (заголовок ноды)
+        assert_eq!(template.name.as_deref(), Some(manifest.display_name()));
     }
 
     /// Инстанциация с переопределениями (MCP-путь).
@@ -993,6 +1074,7 @@ mod tests {
                     expr: manifest.expr.clone(),
                     icon: manifest.icon.clone(),
                     color: manifest.color.clone(),
+                    name: Some(manifest.display_name().to_owned()),
                     params: manifest
                         .params
                         .iter()
@@ -1048,8 +1130,18 @@ mod tests {
             .collect(),
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
         };
-        assert_eq!(TemplateRef::from_json(&template.to_json()), Some(template));
+        assert_eq!(
+            TemplateRef::from_json(&template.to_json()),
+            Some(template.clone())
+        );
+        // FR-023: снапшот без имени (старые .canvas) — round-trip тоже
+        let legacy = TemplateRef {
+            name: None,
+            ..TemplateRef::from_json(&template.to_json()).expect("template")
+        };
+        assert_eq!(TemplateRef::from_json(&legacy.to_json()), Some(legacy));
     }
 
     // --- FR-020: custom-шаблоны ---

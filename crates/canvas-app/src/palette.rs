@@ -1661,6 +1661,7 @@ mod tests {
             id: "mock.lb".to_owned(),
             version: "1.0.0".to_owned(),
             expr: "mm1($rps)".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
             params: [(
                 "rps".to_owned(),
                 TemplateParam {
@@ -1720,6 +1721,7 @@ mod tests {
             id: "mock.lb".to_owned(),
             version: "1.0.0".to_owned(),
             expr: "mm1($rps)".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
             params: [(
                 "rps".to_owned(),
                 TemplateParam {

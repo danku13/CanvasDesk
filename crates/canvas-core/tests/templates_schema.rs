@@ -192,6 +192,7 @@ fn every_expr_evaluates_with_defaults_without_overload() {
                 expr: manifest.expr.clone(),
                 icon: manifest.icon.clone(),
                 color: manifest.color.clone(),
+                name: Some(manifest.display_name().to_owned()),
                 params: manifest
                     .params
                     .iter()

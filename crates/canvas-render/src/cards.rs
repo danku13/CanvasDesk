@@ -12,8 +12,10 @@ use crate::markdown;
 use crate::theme::ThemeColors;
 use crate::Color;
 
-/// Высота заголовка карточки в world-пикселях.
-pub const HEADER_HEIGHT: f32 = 28.0;
+/// Высота шапки карточки в world px (полоса-разделитель с заголовком).
+/// FR-023: 28 → 34 — под кегль заголовка 16 (+14 % к телу 14, вилка
+/// владельца 10–20 %) и адекватные вертикальные отступы (по 6 px).
+pub const HEADER_HEIGHT: f32 = 34.0;
 /// Радиус скругления в world-пикселях.
 pub const CORNER_RADIUS: f32 = 8.0;
 
@@ -106,6 +108,10 @@ pub fn preset_color(preset: &str, theme: &ThemeColors) -> Option<[f32; 4]> {
 /// Заголовок карточки: имя файла из пути / подпись группы / первая строка
 /// текста / label. Подпись группы — как есть: markdown-стриппинг к label
 /// не применяется (это заголовок, а не тело заметки).
+/// FR-023: у шаблонной ноды — имя шаблона из снапшота (`name`, снимок
+/// манифеста при инстанциации): лист параметров — не заголовок, а тело;
+/// имя переживает правки текста и переименование шаблона в реестре.
+/// Снапшоты без имени (старые файлы) — прежний фолбэк (первая строка).
 pub fn title_for(node: &Node) -> String {
     if let Some(file) = &node.file {
         let name = file
@@ -122,6 +128,13 @@ pub fn title_for(node: &Node) -> String {
             .clone()
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| "Группа".to_owned());
+    }
+    if let Some(name) = node
+        .template()
+        .and_then(|template| template.name)
+        .filter(|name| !name.is_empty())
+    {
+        return name;
     }
     if let Some(text) = &node.text {
         if let Some(line) = text.lines().next().filter(|line| !line.is_empty()) {
@@ -1079,6 +1092,30 @@ impl CardsPipeline {
 mod tests {
     use super::*;
     use canvas_core::{Canvas, Node};
+
+    /// FR-023: заголовок шаблонной ноды — имя шаблона из снапшота,
+    /// не первая строка листа параметров; у ноды без имени в снапшоте
+    /// (старые файлы) — прежний фолбэк (первая строка текста).
+    #[test]
+    fn title_for_template_node_uses_snapshot_name() {
+        let mut node = Node::text("tpl", "rps = 1000 rps\nservers = 2", 0.0, 0.0);
+        node.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps, $service_rate, $servers)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
+        }));
+        assert_eq!(title_for(&node), "Балансировщик нагрузки");
+        // Старый снапшот без имени — фолбэк на первую строку текста
+        let mut legacy = Node::text("tpl2", "rps = 1000 rps", 0.0, 0.0);
+        let mut template = node.template().expect("template");
+        template.name = None;
+        legacy.set_template(Some(template));
+        assert_eq!(title_for(&legacy), "rps = 1000 rps");
+    }
 
     /// FR-011: пустой набор скрытых нод для вызовов build_edge_instances.
     fn no_hidden() -> std::collections::HashSet<&'static str> {

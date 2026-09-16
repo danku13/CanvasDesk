@@ -257,6 +257,10 @@ impl Node {
     /// поле удаляется; если в `canvasdesk` больше ничего нет — объект
     /// целиком (round-trip чистый: пустого расширения в JSON не будет).
     /// Данные виджета (`widgetId`/`props`) не трогаются.
+    /// FR-023: снимок шаблона (`template`) тоже не трогается — раньше
+    /// ветка `None` учитывала только виджет-поля, и commit-правка
+    /// шаблонной ноды (текст — лист присваиваний, `expr` не заводится)
+    /// стирала весь снапшот: пропадали цвет, иконка и итог формулы.
     pub fn set_expr(&mut self, expr: Option<String>) {
         match expr {
             Some(formula) => {
@@ -266,7 +270,7 @@ impl Node {
             None => {
                 if let Some(ext) = &mut self.canvasdesk {
                     ext.expr = None;
-                    if ext.widget_id.is_none() && ext.props.is_empty() {
+                    if ext.widget_id.is_none() && ext.props.is_empty() && ext.template.is_none() {
                         self.canvasdesk = None;
                     }
                 }
@@ -1007,6 +1011,69 @@ mod tests {
         );
         // Невалидный индекс — пусто, без паники
         assert!(group_children(&canvas, 99).is_empty());
+    }
+
+    /// FR-023 (корень потери свойств): `set_expr(None)` НЕ стирает
+    /// снапшот шаблона. Точная последовательность commit-правки
+    /// шаблонной ноды: set_expr(None) (лист присваиваний без «= …»-строк)
+    /// → template() жив → set_template_params синхронизирует параметры.
+    #[test]
+    fn set_expr_none_preserves_template() {
+        let mut node = Node::text("tpl", "rps = 1000 rps", 0.0, 0.0);
+        node.color = Some("1".to_owned());
+        node.set_template(Some(crate::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: [(
+                "rps".to_owned(),
+                crate::templates::TemplateParam {
+                    num: 1000.0,
+                    unit: Some("rps".to_owned()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик".to_owned()),
+        }));
+        // Как в finish_editing: сначала set_expr, потом синк параметров
+        node.set_expr(None);
+        let template = node.template().expect("снапшот шаблона выжил");
+        assert_eq!(template.id, "mock.lb");
+        assert_eq!(template.icon, "lb");
+        assert_eq!(template.color, "#4A90E2");
+        assert_eq!(template.name.as_deref(), Some("Балансировщик"));
+        node.set_template_params(crate::templates::merge_params(
+            node.template_params(),
+            crate::templates::params_from_text("rps = 2000 rps"),
+        ));
+        let template = node.template().expect("снапшот после синка");
+        assert_eq!(template.params["rps"].display(), "2000 rps");
+        // Пустой canvasdesk (без template) по-прежнему удаляется целиком
+        let mut plain = Node::text("n", "текст", 0.0, 0.0);
+        plain.set_expr(Some("5 ms".to_owned()));
+        plain.set_expr(None);
+        assert!(plain.canvasdesk.is_none(), "чистый round-trip без полей");
+    }
+
+    /// FR-023 (симметрия): `set_template(None)` не стирает `expr`.
+    #[test]
+    fn set_template_none_preserves_expr() {
+        let mut node = Node::text("n", "= 5 ms", 0.0, 0.0);
+        node.set_expr(Some("5 ms".to_owned()));
+        node.set_template(Some(crate::templates::TemplateRef {
+            id: "t".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "1".to_owned(),
+            params: BTreeMap::new(),
+            icon: "custom".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            name: None,
+        }));
+        node.set_template(None);
+        assert_eq!(node.expr(), Some("5 ms"), "expr пережил снятие шаблона");
     }
 
     /// Группы-предки ноды: геометрические (легаси) и через вложенность,

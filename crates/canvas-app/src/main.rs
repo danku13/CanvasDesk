@@ -50,8 +50,8 @@ use canvas_render::search_ui::{
     SearchRow,
 };
 use canvas_render::text::{
-    body_area, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_PADDING, BODY_TOP_GAP,
-    RESULT_LINE_HEIGHT,
+    body_area, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_LINE_HEIGHT, BODY_PADDING,
+    BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
@@ -191,6 +191,27 @@ fn split_formula_lines(text: &str) -> Option<String> {
         })
         .collect();
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// FR-023: авто-высота шаблонной ноды — по числу строк листа параметров:
+/// шапка + тело + футер результата. Общая для GUI-инстанциации и MCP
+/// `template_instantiate`: новая нода сразу влезает целиком (без
+/// «подгонки правкой»). Только рост (не сжимает пользовательский размер).
+fn fit_template_node_height(node: &mut Node) {
+    let lines = node
+        .text
+        .as_deref()
+        .map(|text| text.lines().count().max(1))
+        .unwrap_or(1);
+    let needed = HEADER_HEIGHT
+        + BODY_TOP_GAP
+        + lines as f32 * BODY_LINE_HEIGHT
+        + BODY_PADDING
+        + RESULT_LINE_HEIGHT
+        + 2.0;
+    if needed > node.height {
+        node.height = needed;
+    }
 }
 
 /// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
@@ -1667,15 +1688,28 @@ impl App {
         // FR-013 (правка 2): резерв футера — только для программного итога
         // (MCP-expr без формульных строк в тексте). Построчные результаты
         // Numi-стиля места не требуют — ложатся на свои строки.
+        // FR-023: у шаблонной ноды итог формулы шаблона показывается ВСЕГДА
+        // (text.rs: правило `is_template_node`), поэтому резерв — всегда,
+        // независимо от построчных результатов листа параметров
         let has_line_results = expr::eval_lines(&live_text).iter().any(Option::is_some);
-        let expr_footer = self
+        let is_template = self
             .scene
             .canvas
             .nodes
             .get(index)
-            .filter(|node| node.expr().is_some() && !has_line_results)
-            .map(|_| RESULT_LINE_HEIGHT + 2.0)
-            .unwrap_or(0.0);
+            .is_some_and(|node| node.kind() == NodeKind::Text && node.template().is_some());
+        let program_footer = self
+            .scene
+            .canvas
+            .nodes
+            .get(index)
+            .is_some_and(|node| node.expr().is_some())
+            && !has_line_results;
+        let expr_footer = if is_template || program_footer {
+            RESULT_LINE_HEIGHT + 2.0
+        } else {
+            0.0
+        };
         let needed_h =
             HEADER_HEIGHT + BODY_TOP_GAP + content_h_px / zoom_px + BODY_PADDING + expr_footer;
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
@@ -1728,9 +1762,18 @@ impl App {
                             // параметров; правка синхронизирует
                             // canvasdesk.template.params (id/version/expr
                             // сохраняются), propagator пересчитает
-                            // формулу шаблона с новыми значениями
+                            // формулу шаблона с новыми значениями.
+                            // FR-023: слияние вместо замены — параметры,
+                            // чьих строк нет в правке (удалены/переименованы/
+                            // временно сломаны), сохраняются: формула
+                            // шаблона остаётся вычислимой, итог (единица,
+                            // напр. sec) не пропадает
                             if node.template().is_some() {
-                                let params = canvas_core::templates::params_from_text(&text);
+                                let fresh = canvas_core::templates::params_from_text(&text);
+                                let params = canvas_core::templates::merge_params(
+                                    node.template_params(),
+                                    fresh,
+                                );
                                 node.set_template_params(params);
                             }
                         }
@@ -2835,9 +2878,13 @@ impl App {
     ) -> usize {
         self.push_undo();
         let id = next_free_id(&self.scene.canvas, "tpl");
-        let node =
+        let mut node =
             canvas_core::templates::instantiate(manifest, &BTreeMap::new(), id, world[0], world[1])
                 .expect("дефолты манифеста в границах");
+        // FR-023: авто-высота шаблонной ноды при инстанциации — по числу
+        // строк листа параметров: шапка + тело + футер результата. Новая
+        // нода сразу влезает целиком (без «подгонки правкой»).
+        fit_template_node_height(&mut node);
         self.scene.canvas.nodes.push(node);
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
@@ -3808,6 +3855,9 @@ impl App {
                 updated.expr = manifest.expr.clone();
                 updated.icon = manifest.icon.clone();
                 updated.color = manifest.color.clone();
+                // FR-023: имя шаблона тоже синхронизируется с манифестом
+                // (заголовок ноды — актуальное имя из реестра)
+                updated.name = Some(manifest.display_name().to_owned());
                 let mut params = BTreeMap::new();
                 for spec in &manifest.params {
                     let value = template.params.get(&spec.name).cloned().unwrap_or(
@@ -4985,8 +5035,11 @@ fn mcp_dispatch(
                 }
             }
             let node_id = next_free_id(&scene.canvas, "tpl");
-            let node = canvas_core::templates::instantiate(&manifest, &overrides, node_id, x, y)
-                .map_err(|err| err.to_string())?;
+            let mut node =
+                canvas_core::templates::instantiate(&manifest, &overrides, node_id, x, y)
+                    .map_err(|err| err.to_string())?;
+            // FR-023: авто-высота — единая с GUI-путём (см. комментарий)
+            fit_template_node_height(&mut node);
             let index = scene.canvas.nodes.len();
             // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
             scene.push_undo(scene.canvas.clone());

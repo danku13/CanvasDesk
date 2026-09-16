@@ -416,23 +416,27 @@ mod tests {
     /// Fit: квадратный тамбнейл в широкой карточке — по высоте тела, по центру.
     #[test]
     fn fit_centers_and_preserves_aspect() {
-        // Карточка 200×100, тело 200×72, тамбнейл 256×256 → 72×72 по центру
+        // Карточка 200×100, тело 200×(100−HEADER_HEIGHT), тамбнейл 256×256 —
+        // по высоте тела, по центру (константы символические — FR-023:
+        // HEADER_HEIGHT изменился, тест не должен зависеть от значения)
+        let body_h = 100.0 - HEADER_HEIGHT;
         let inst = fit_instance(10.0, 20.0, 200.0, 100.0, slot(256, 256));
-        assert!((inst.size[0] - 72.0).abs() < 1e-4);
-        assert!((inst.size[1] - 72.0).abs() < 1e-4);
-        assert!((inst.pos[0] - (10.0 + 64.0)).abs() < 1e-4);
+        assert!((inst.size[0] - body_h).abs() < 1e-4);
+        assert!((inst.size[1] - body_h).abs() < 1e-4);
+        assert!((inst.pos[0] - (10.0 + (200.0 - body_h) / 2.0)).abs() < 1e-4);
         assert!((inst.pos[1] - (20.0 + HEADER_HEIGHT)).abs() < 1e-4);
     }
 
     /// Fit: широкий тамбнейл ограничен шириной тела.
     #[test]
     fn fit_wide_thumbnail() {
-        // Карточка 100×300, тело 100×272, тамбнейл 256×128 → 100×50
+        // Карточка 100×300, тело 100×(300−HEADER_HEIGHT), тамбнейл 256×128
+        // → 100×50, центрирование по вертикали тела
+        let body_h = 300.0 - HEADER_HEIGHT;
         let inst = fit_instance(0.0, 0.0, 100.0, 300.0, slot(256, 128));
         assert!((inst.size[0] - 100.0).abs() < 1e-4);
         assert!((inst.size[1] - 50.0).abs() < 1e-4);
-        // Центрирование по вертикали тела
-        assert!((inst.pos[1] - (HEADER_HEIGHT + (272.0 - 50.0) * 0.5)).abs() < 1e-4);
+        assert!((inst.pos[1] - (HEADER_HEIGHT + (body_h - 50.0) * 0.5)).abs() < 1e-4);
     }
 
     /// Нулевая высота тела не паникует и даёт нулевой размер.
