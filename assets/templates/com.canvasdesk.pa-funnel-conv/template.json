@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-funnel-conv",
+  "name_en": "Funnel Conversion Rate",
+  "name_ru": "Конверсия воронки",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Конверсия воронки: step_final / step1 — итоговая доля пользователей, дошедших от первого до последнего шага воронки. Главная метрика для анализа трения в onboarding и checkout — где больше всего потерь. Conversion ≥ 10% — хорошо для free-to-paid воронки; ≥ 30% — для trial-to-paid; < 5% — проблема в одном из промежуточных шагов. Используется для пошаговой диагностики: шаг с наибольшим drop-off — приоритет для оптимизации. Метрика growth-команды для weekly conversion review и A/B testing.",
+  "description_en": "Funnel conversion: step_final / step1 — share of users who reach the final step from the first. Headline metric for onboarding and checkout friction — where most loss happens. Conversion ≥ 10% is good for a free-to-paid funnel; ≥ 30% for trial-to-paid; < 5% flags a problem in one of the intermediate steps. Used for step-by-step diagnosis: the step with the biggest drop-off is the optimisation priority. A growth-team metric for weekly conversion review and A/B testing.",
+  "params": [
+    {
+      "name": "step1",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "step_final",
+      "type": "count",
+      "default": 500,
+      "min": 0
+    }
+  ],
+  "expr": "$step_final / $step1",
+  "color": "#4A90E2",
+  "icon": "funnel"
+}

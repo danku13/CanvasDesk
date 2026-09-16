@@ -1,0 +1,32 @@
+{
+  "id": "com.canvasdesk.pa-nps",
+  "name_en": "Net Promoter Score",
+  "name_ru": "NPS (индекс лояльности)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Индекс лояльности: 100 × (promoters − detractors) / total — от −100 до +100. Главный показатель удовлетворённости и willingness to recommend — proxy для word-of-mouth growth. NPS ≥ 50 — отлично (Apple, Amazon); 0–30 — нормально для зрелого B2B SaaS; < 0 — серьёзная проблема с качеством продукта или сервиса. NPS коррелирует с retention и referral revenue — low NPS предсказывает churn за квартал. Собирается через post-purchase / post-cancel опросы; важен не абсолют, а динамика. Метрика customer experience и CEO для quarterly review.",
+  "description_en": "Net Promoter Score: 100 × (promoters − detractors) / total — from −100 to +100. Headline satisfaction and willingness-to-recommend metric — a proxy for word-of-mouth growth. NPS ≥ 50 is excellent (Apple, Amazon); 0–30 is normal for mature B2B SaaS; < 0 flags a serious product or service quality problem. NPS correlates with retention and referral revenue — low NPS predicts churn a quarter ahead. Collected via post-purchase / post-cancel surveys; the trend matters more than the absolute. A customer experience and CEO metric for quarterly review.",
+  "params": [
+    {
+      "name": "promoters",
+      "type": "count",
+      "default": 400,
+      "min": 0
+    },
+    {
+      "name": "detractors",
+      "type": "count",
+      "default": 100,
+      "min": 0
+    },
+    {
+      "name": "total_responses",
+      "type": "count",
+      "default": 1000,
+      "min": 1
+    }
+  ],
+  "expr": "100 × ($promoters - $detractors) / $total_responses",
+  "color": "#4A90E2",
+  "icon": "chart"
+}

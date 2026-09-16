@@ -11011,15 +11011,20 @@ mod tests {
         .is_err());
     }
 
-    /// FR-019: template_list — built-in реестр отдаёт 15 шаблонов с полной
-    /// схемой (инвариант 4: MCP-видимость эквивалентна UI; двуязычные имена).
+    /// FR-019: template_list — built-in реестр отдаёт 45 шаблонов с полной
+    /// схемой (FR-019: 15 + FR-027: 30; инвариант 4: MCP-видимость
+    /// эквивалентна UI; двуязычные имена).
     #[test]
     fn mcp_template_list_builtin_registry() {
         let mut scene = mcp_scene();
         let mut camera = Camera::default();
         let list = dispatch(&mut scene, &mut camera, "template_list", "{}").expect("list");
         let templates = list.as_array().expect("массив");
-        assert_eq!(templates.len(), 15, "все built-in шаблоны");
+        assert_eq!(
+            templates.len(),
+            45,
+            "все built-in шаблоны (FR-019: 15 + FR-027: 30)"
+        );
         let lb = templates
             .iter()
             .find(|t| t["id"] == "com.canvasdesk.lb")

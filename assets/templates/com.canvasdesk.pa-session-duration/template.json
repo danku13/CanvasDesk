@@ -1,0 +1,27 @@
+{
+  "id": "com.canvasdesk.pa-session-duration",
+  "name_en": "Average Session Duration",
+  "name_ru": "Средняя длительность сессии",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Средняя длительность сессии: total_session_time / sessions — сколько минут пользователь проводит в продукте за визит. Метрика engagement depth: длинные сессии — продукт решает важную задачу, короткие — quick utility. Сравнивается по сегментам (mobile vs desktop, free vs paid) для оценки engagement-разрыва и приоритизации платформы. Длинные сессии в free-tier — кандидат на upsell в paid: пользователь уже получает value, можно требовать денег. Короткие сессии в paid — сигнал, что фичи не используются в полной мере. Метрика продакт-менеджера для engagement analysis и pricing tier design.",
+  "description_en": "Average session duration: total_session_time / sessions — minutes a user spends in the product per visit. Engagement-depth metric: long sessions mean the product solves an important problem; short means quick utility. Compared across segments (mobile vs desktop, free vs paid) to gauge the engagement gap and prioritise platforms. Long sessions in the free tier are an upsell candidate — the user already gets value, you can charge. Short sessions in paid suggest features aren't fully used. A product-manager metric for engagement analysis and pricing-tier design.",
+  "params": [
+    {
+      "name": "total_session_time",
+      "type": "time",
+      "default": 50000,
+      "unit": "min",
+      "min": 0
+    },
+    {
+      "name": "sessions",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    }
+  ],
+  "expr": "$total_session_time / $sessions",
+  "color": "#4A90E2",
+  "icon": "clock"
+}

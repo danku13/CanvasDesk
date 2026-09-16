@@ -1218,8 +1218,13 @@ mod tests {
         save_custom(&custom_extra, &root).expect("сохранение custom");
 
         let merged = TemplateRegistry::all_with_custom(&root);
-        // 15 built-in: один перекрыт + один добавленный custom
-        assert_eq!(merged.list().len(), 16, "15 built-in + 1 custom");
+        // 45 built-in (FR-019: 15 + FR-027: 30): один перекрыт + один
+        // добавленный custom → 46 в merged-реестре.
+        assert_eq!(
+            merged.list().len(),
+            46,
+            "45 built-in + 1 custom (FR-027 расширил built-in с 15 до 45)"
+        );
         let lb = merged.find("com.canvasdesk.lb").expect("lb");
         assert_eq!(
             lb.source,
@@ -1279,7 +1284,11 @@ mod tests {
         ));
         assert!(custom(&root).is_empty(), "нет папки — нет custom");
         let merged = TemplateRegistry::all_with_custom(&root);
-        assert_eq!(merged.list().len(), 15, "только built-in");
+        assert_eq!(
+            merged.list().len(),
+            45,
+            "только built-in (FR-019: 15 + FR-027: 30)"
+        );
     }
 
     /// FR-020: params_from_text — присваивания в TemplateParam.

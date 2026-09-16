@@ -125,6 +125,55 @@ servers = 2
 параметры (lag, retention, keepalive) в формулу не входят — они для
 контекста и what-if прикидок.
 
+### Unit-Economics — 18 шаблонов (FR-027)
+
+Шаблоны для расчёта юнит-экономики SaaS: стоимость привлечения, пожизненная
+ценность клиента, удержание выручки, burn rate и runway. Все параметры —
+скаляры в USD или долях (0..1); формулы — простая арифметика (кроме `npv` и
+`cagr`, которые требуют доменных функций).
+
+| Шаблон | Формула (суть) | Что считается |
+|---|---|---|
+| CAC | `$marketing_spend / $new_customers` | стоимость привлечения клиента |
+| LTV | `$arpu × $gross_margin / $monthly_churn` | пожизненная ценность клиента |
+| ARPU | `$mrr / $total_users` | средняя выручка на пользователя |
+| ARPPU | `$mrr / $paying_users` | средняя выручка на платящего |
+| CAC Payback | `$cac / ($arpa × $gross_margin)` | месяцы окупаемости CAC |
+| LTV/CAC | `$ltv / $cac` | здоровье юнит-экономики (≥3 — здорово) |
+| Gross Margin | `($revenue - $cogs) / $revenue` | доля после COGS |
+| Contribution Margin | `($revenue - $variable_costs) / $revenue` | доля после переменных затрат |
+| MRR | `$subscribers × $arpu` | месячная регулярная выручка |
+| ARR | `$mrr × 12` | годовая регулярная выручка |
+| NRR | `($start + $expansion - $contraction - $churn + $reactivation) / $start` | чистое удержание выручки |
+| GRR | `($start - $contraction - $churn) / $start` | валовое удержание (без expansion) |
+| Revenue Churn | `$mrr_lost / $mrr_start` | отток выручки |
+| Burn Rate | `($cash_start - $cash_end) / $period_months` | месячный расход кэша |
+| Runway | `$cash / $monthly_burn` | месяцы до банкротства |
+| NPV | `npv($rate, $cf1, $cf2, $cf3, $cf4)` | чистая приведённая стоимость |
+| CAGR | `cagr($begin, $end, $years)` | среднегодовой темп роста |
+| AOV | `$revenue / $orders` | средний чек |
+
+### Product Analytics — 12 шаблонов (FR-027)
+
+Метрики здоровья продукта: stickiness, retention, churn, конверсия воронки,
+NPS. Параметры — счётчики (count) активных пользователей и когорт;
+результаты — доли (0..1) или абсолютные числа.
+
+| Шаблон | Формула (суть) | Что считается |
+|---|---|---|
+| DAU/MAU Stickiness | `$dau / $mau` | насколько часто возвращаются (×100 = %) |
+| Retention D1 | `$cohort_d1 / $cohort_d0` | доля вернувшихся на следующий день |
+| Retention D7 | `$cohort_d7 / $cohort_d0` | недельное удержание когорты |
+| Retention D30 | `$cohort_d30 / $cohort_d0` | месячное удержание (ключ здоровья) |
+| User Churn | `($active_t0 - $active_t1 + $new_t1) / $active_t0` | отток пользователей |
+| Funnel Conversion | `$step_final / $step1` | итоговая конверсия воронки |
+| Activation | `$activated / $signups` | доля достигших первого value |
+| Feature Adoption | `$feature_users / $total_users` | внедрение конкретной фичи |
+| TTFV | `$value_moment_time_min - $signup_time_min` | минуты до первой ценности |
+| NPS | `100 × ($promoters - $detractors) / $total_responses` | индекс лояльности (−100..+100) |
+| Avg Session Duration | `$total_session_time / $sessions` | минуты на сессию |
+| Engagement Rate | `$active_users / $total_users` | доля активных в базе |
+
 ## Свой шаблон
 
 1. Создайте ноду из любого шаблона (или обычную Numi-заметку) и доведите

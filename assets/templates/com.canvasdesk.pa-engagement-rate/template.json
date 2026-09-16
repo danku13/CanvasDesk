@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-engagement-rate",
+  "name_en": "Engagement Rate",
+  "name_ru": "Уровень вовлечённости",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Уровень вовлечённости: active_users / total_users — доля активных пользователей в зарегистрированной базе за период. Главный метрик health product: рост базы без роста engagement — growth bubble, которая лопнет при следующей волне churn. Engagement ≥ 50% — здорово; < 20% — много спящих аккаунтов, нужна reactivation campaign. Используется для сегментации базы: активные / спящие / умершие — каждой группе своя стратегия. Метрика growth и CRM для win-back initiatives и email-nurture campaigns.",
+  "description_en": "Engagement rate: active_users / total_users — share of active users in the registered base over the period. Headline product-health metric: base growth without engagement growth is a bubble that pops in the next churn wave. Engagement ≥ 50% is healthy; < 20% means many dormant accounts need a reactivation campaign. Used to segment the base: active / dormant / dead — each group gets its own strategy. A growth and CRM metric for win-back initiatives and email-nurture campaigns.",
+  "params": [
+    {
+      "name": "active_users",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "total_users",
+      "type": "count",
+      "default": 20000,
+      "min": 1
+    }
+  ],
+  "expr": "$active_users / $total_users",
+  "color": "#4A90E2",
+  "icon": "users"
+}
