@@ -171,7 +171,8 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 16 инструментов канваса (сигнатуры — план MCP-задачи; FR-005 — node_edit).
+/// 25 инструментов канваса (сигнатуры — план MCP-задачи; FR-005 — node_edit;
+/// FR-032 — edges_list/edge_get/graph_validate).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -304,6 +305,24 @@ const TOOLS: &[ToolSpec] = &[
                 r#"{"type":"string","enum":["auto","from","to","both"]}"#,
             ),
         ],
+    },
+    ToolSpec {
+        name: "edges_list",
+        description: "FR-032: все связи канваса: {id, from, to, kind (\"value\"|\"control\"), fromLine?, fromSide, toSide} — агент восстанавливает топологию графа (CR-013 G4); fromLine — индекс строки-истока (FR-025)",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "edge_get",
+        description: "FR-032: одна связь по id — схема как у элемента edges_list",
+        required: &["id"],
+        properties: &[("id", STR)],
+    },
+    ToolSpec {
+        name: "graph_validate",
+        description: "FR-032: валидация модели — {valid, issues:[{severity, code, node_id, edge_id, message}]}. Коды (стабильный контракт, docs/change-requests/fr-032-graph-read-validate.md): E-CYCLE (цикл value-рёбер), E-OVERLOAD (ρ ≥ 1), W-AMBIGUOUS-SRC (многолинейный исток без fromLine), W-UNUSED-SLOT (вход $N не читается формулой); E-UNIT/E-PORT-UNKNOWN/E-DOUBLE-INPUT — после FR-029. valid = нет issue с severity \"error\"",
+        required: &[],
+        properties: &[],
     },
     ToolSpec {
         name: "template_list",
@@ -851,12 +870,12 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 20 инструментов, у каждого inputSchema с required.
+    /// tools/list: ровно 25 инструментов, у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 22, "ровно 22 инструмента");
+        assert_eq!(tools.len(), 25, "ровно 25 инструментов");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -877,6 +896,9 @@ mod tests {
             "flow_recalc",
             "flow_cycle_check",
             "edge_ports",
+            "edges_list",
+            "edge_get",
+            "graph_validate",
             "template_list",
             "template_instantiate",
             "viewport_get",
@@ -920,6 +942,16 @@ mod tests {
             by_name("edge_create")["inputSchema"]["properties"]["fromSide"]["enum"],
             json!(["any", "top", "right", "bottom", "left"])
         );
+        // FR-032: новые инструменты чтения/валидации
+        assert_eq!(
+            by_name("edge_get")["inputSchema"]["required"],
+            json!(["id"])
+        );
+        assert_eq!(by_name("edges_list")["inputSchema"]["required"], json!([]));
+        assert_eq!(
+            by_name("graph_validate")["inputSchema"]["required"],
+            json!([])
+        );
     }
 
     /// Автомат: initialize → initialized → tools/list → tools/call форвардит
@@ -951,7 +983,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            22
+            25
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;
