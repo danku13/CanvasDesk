@@ -421,7 +421,8 @@ input → camera update → world-space culling (rstar query по viewport)
    - **Метрика/результат**, если применимо (оценка, если факт неизвестен)
 
 **Триггер «full article»** (не micro-note):
-- закрыт epic/milestone из `roadmap.md`,
+- закрыт epic/milestone из `docs/plans/product-roadmap.md` (волны 0/A/B/V/S)
+  или волн T0–T22/M1–M7,
 - ИЛИ добавлена фича, которая меняет user-facing поведение.
 
 В этом случае агент готовит черновик статьи 800–1200 слов:
