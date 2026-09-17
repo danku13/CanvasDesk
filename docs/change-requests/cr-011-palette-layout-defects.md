@@ -118,5 +118,5 @@ Esc — закрыть» (~12 px) — в геометрии панели нет 
 - `crates/canvas-render/src/theme.rs` — темы (100-101), палитра заливок.
 - `docs/change-requests/fr-024-miro-style-template-panel.md` —
   спецификация вёрстки палитры (сверена).
-- `docs/change-requests/fr-025-persistent-miro-palette-mouse.md` — постоянный
+- `docs/change-requests/fr-030-persistent-miro-palette-mouse.md` — постоянный
   док палитры (этот CR — блокер её приёмки).
