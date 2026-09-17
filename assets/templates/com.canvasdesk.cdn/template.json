@@ -30,6 +30,13 @@
     }
   ],
   "expr": "mm1($rps × (1 - $cache_hit), 1 req / $origin_latency)",
+  "outputs": [
+    {
+      "name": "origin",
+      "unit": "rps",
+      "source": { "expr": "$rps × (1 - $cache_hit)" }
+    }
+  ],
   "color": "#7ED321",
   "icon": "http"
 }

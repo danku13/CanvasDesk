@@ -487,3 +487,24 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-028.6 | Полный проход до «Готово» | `onboarding_done = true` в config.toml; перезапуск — тишина; ручной вход остаётся |
 | FR-028.7 | Окно 320×240 | Карточка целиком в окне, кнопки доступны (инвариант клампа в тестах) |
 | FR-028.8 | Старый config.toml без новых полей | Читается: done = false, defers = 0 → тур показать; `onboarding_defers = 99` клампится к 3 |
+
+## 21. Чек-лист FR-033 (2026-09-18): graph_apply — атомарная батч-композиция (CP3)
+
+> Источник — `docs/change-requests/fr-033-graph-apply-batch.md` (волна A3,
+> CP3 критического пути `docs/plans/product-roadmap.md` §9). Код —
+> `crates/canvas-app/src/main.rs` (`mcp_graph_apply`/`batch_apply_op`),
+> инструмент — `crates/canvas-mcp/src/lib.rs`. Автотесты — `graph_apply_*`
+> в `main.rs` (7) + проливание в `flow.rs` (7).
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-033.1 | Один вызов `graph_apply` (~10 операций) собирает мини-эталон «Нагрузка → CDN → Gateway» (эталон №1 ADR-0006) | `ok: true`; числа в `flow` = oracle ±1 %: peak_rps ≈ 208.33 rps, CDN W ≈ 34.29 ms, CDN.origin ≈ 20.83 rps, Gateway W ≈ 3.20 ms (тест graph_apply_assembles_mini_reference_with_oracle) |
+| FR-033.2 | Проливание живое: правка `dau` в «Нагрузке» одним `node_edit` | Весь downstream пересчитан без правки связей/формул: peak ×2, CDN.origin ×2 (инвариант ADR-0007) |
+| FR-033.3 | Ошибка операции в середине батча (edge на несуществующую ноду) | `{ok: false, op_index: 2, code: "E-NOT-FOUND"}`; сериализация канваса байт-в-байт прежняя; ни одного undo-шага |
+| FR-033.4 | Неизвестный `toParam`/`fromOutput` в edge-операции | `{ok: false, code: "E-PORT-UNKNOWN"}`, канвас прежний (валидация имён по снапшотам шаблонов) |
+| FR-033.5 | Ctrl+Z после успешного батча | Вся сборка исчезает ОДНИМ шагом; Ctrl+Y возвращает целиком (тест graph_apply_undo_reverts_whole_batch) |
+| FR-033.6 | ref-резолв | Ребро на `fromRef` ноды, созданной ранее в том же батче, работает; forward-ref — `E-NOT-FOUND`; дубликат ref — `E-BAD-OP`; смешанная адресация ref + id канваса работает |
+| FR-033.7 | `param_set` | Правит ровно одну строку «param = value unit» (текст + снапшот шаблона), соседние строки нетронуты; единица — из операции/снапшота; параметра нет — `E-PARAM-UNKNOWN` без append |
+| FR-033.8 | Лимиты | 257-я операция и 129-я нода — ошибки уровня вызова (isError), канвас не меняется |
+| FR-033.9 | value-цикл внутри батча | `{ok: false, code: "E-CYCLE"}` с участниками в message; канвас прежний |
+| FR-033.10 | tools/list | 23 инструмента; у `graph_apply` схема `operations` (1..=256, тег op с 6 вариантами) — тест tools_list_has_all_with_schemas |

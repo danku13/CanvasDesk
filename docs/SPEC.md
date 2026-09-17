@@ -87,7 +87,7 @@ canvasdesk/
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 22 инструмента канваса
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 23 инструмента канваса (FR-033: + graph_apply)
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
 ├── assets/                  # шрифты, иконки нод, виджеты (widgets/), шаблоны (templates/)
 ├── docs/                    # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
@@ -427,3 +427,46 @@ input → camera update → world-space culling (rstar query по viewport)
 
 В этом случае агент готовит черновик статьи 800–1200 слов:
 контекст задачи → путь решения → грабли → результат → что дальше.
+
+## 13. MCP-инструменты канваса
+
+Каталог инструментов — `crates/canvas-mcp/src/lib.rs` (константа `TOOLS`,
+канонический источник; `tools/list` отдаёт те же схемы автоматически).
+Раздел фиксирует контракты, критичные для агентной сборки (ADR-0004:
+MCP — единственный канал; CR-013: волна A).
+
+### graph_apply (FR-033) — атомарная батч-композиция
+
+Схема вызова: `graph_apply { operations: [Op; 1..=256] }`. `Op` — объект
+с тегом `op`:
+
+| op | Поля | Примечание |
+|---|---|---|
+| `node_create_note` | `ref?, x, y, text?, width?, height?` | строки «= …» — формулы (FR-013) |
+| `node_create_file` | `ref?, x, y, path, width?, height?` | файл на диске не создаётся |
+| `template_instantiate` | `ref?, template, params?, x, y` | `params` — `{имя: число \| {num, unit}}`; вне min/max — ошибка |
+| `edge_create` | `fromRef\|from, toRef\|to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide?` | `kind`: `"value"\|"control"` (дефолт control); порты — контракт FR-029; `fromLine`/`fromOutput` взаимно исключительны; имена портов валидируются по снапшотам шаблонов |
+| `param_set` | `ref\|id, param, value, unit?` | правит ровно одну строку «param = value unit» (текст + снапшот шаблона); параметра нет — ошибка (без append) |
+| `node_move` | `ref\|id, x, y` | |
+
+**Лимиты:** ≤ 256 операций, ≤ 128 новых нод на батч (защита live-бюджета
+SPEC §6.3). Превышение — ошибка уровня вызова (isError).
+
+**Транзакционная семантика:** операции применяются к клону канваса;
+ошибка ЛЮБОЙ операции → `{ok: false, op_index, code, message}` и канвас
+байт-в-байт прежний (клон отброшен); успех → канвас заменяется, ровно
+**один** undo-шаг на весь батч (Ctrl+Z откатывает сборку целиком),
+полный пересчёт потока, автосейв.
+
+**Ответ (успех):** `{ok: true, created: [{op_index, ref?, node_id?, edge_id?}],
+report: [{op_index, op, id}], flow: {node_id: {value, unit, outputs?,
+lines?, error?}}}` — `flow` в формате flow_recalc v2 (FR-029): узловые
+значения + именованные выходы + построчные значения; второй вызов
+flow_recalc не нужен.
+
+**Коды ошибок операций:** `E-BAD-OP` (форма/поля), `E-NOT-FOUND`
+(ref/id/шаблон), `E-PORT-UNKNOWN` (неизвестный параметр/выход),
+`E-CYCLE` (value-цикл, участники в message), `E-PARAM-UNKNOWN`
+(нет строки параметра), `E-RANGE` (вне min/max). Нумерация
+`op_index` — с 0; ref-ы живут только внутри батча (адресуют ноды,
+созданные ранее в том же вызове).

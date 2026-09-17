@@ -210,6 +210,7 @@ fn every_expr_evaluates_with_defaults_without_overload() {
                 icon: manifest.icon.clone(),
                 color: manifest.color.clone(),
                 name: Some(manifest.display_name().to_owned()),
+                outputs: Vec::new(),
                 params: manifest
                     .params
                     .iter()
