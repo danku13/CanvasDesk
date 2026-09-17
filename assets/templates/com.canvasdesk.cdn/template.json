@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.cdn",
   "name_en": "CDN",
   "name_ru": "CDN",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "backend",
   "description": "CDN: промахи кэша уходят в origin, латентность фетча.",
   "description_en": "CDN: cache misses go to origin, fetch latency.",
@@ -31,5 +31,12 @@
   ],
   "expr": "mm1($rps × (1 - $cache_hit), 1 req / $origin_latency)",
   "color": "#7ED321",
-  "icon": "http"
+  "icon": "http",
+  "outputs": [
+    {
+      "name": "origin_rps",
+      "unit": "rps",
+      "expr": "$rps × (1 - $cache_hit)"
+    }
+  ]
 }

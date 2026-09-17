@@ -63,6 +63,7 @@ fn line_ports_template_and_note() {
         icon: String::new(),
         color: String::new(),
         name: Some("Load Balancer".to_owned()),
+        outputs: Vec::new(),
     }));
     canvas.nodes.push(template);
 

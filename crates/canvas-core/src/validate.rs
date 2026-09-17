@@ -128,7 +128,7 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
 
     // E-UNIT / E-PORT-UNKNOWN / E-DOUBLE-INPUT — контракт портов FR-029
     // (порядок рёбер — canvas.edges, детерминизм для E-DOUBLE-INPUT).
-    issues.extend(port_contract_issues(canvas));
+    issues.extend(port_contract_issues(canvas, &solutions));
 
     {
         // E-OVERLOAD: ноды в перегрузке (порядок — canvas.nodes)
@@ -151,9 +151,10 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
         // шаблона), возможно не то, что имел в виду автор (порядок — edges)
         let line_counts = formula_line_counts(&solutions.lines);
         for edge in &canvas.edges {
-            if edge.flow_kind() != FlowKind::Value || edge.from_line.is_some() {
-                // FR-029 (CP1): ребро с fromOutput тоже адресует исток —
-                // добавить `|| edge.from_output.is_some()` при влитии поля
+            if edge.flow_kind() != FlowKind::Value
+                || edge.from_line.is_some()
+                || edge.from_output.is_some()
+            {
                 continue;
             }
             let lines = line_counts.get(&edge.from_node).copied().unwrap_or(0);
@@ -179,7 +180,13 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
         let slots: Vec<&Edge> = canvas
             .edges
             .iter()
-            .filter(|edge| edge.to_node == node.id && edge.flow_kind() == FlowKind::Value)
+            .filter(|edge| {
+                edge.to_node == node.id
+                    && edge.flow_kind() == FlowKind::Value
+                    // FR-029: рёбра с toParam «проливаются» в параметры —
+                    // позиционных слотов не занимают
+                    && edge.to_param.is_none()
+            })
             .collect();
         if slots.is_empty() {
             continue;
@@ -211,21 +218,156 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
     issues
 }
 
-/// Коды контракта портов FR-029: **E-UNIT / E-PORT-UNKNOWN /
-/// E-DOUBLE-INPUT**. Определены на полях `toParam`/`fromOutput` и
-/// `outputs`-снапшотах шаблонов, которые реализуются шагом CP1 (FR-029).
+/// Контракт портов FR-029 (интеграция CP1 — чек-лист FR-032).
 ///
-/// Точка интеграции CP1: после влития полей сюда добавляются проверки
-/// (контракт — документ FR-032 п.2):
-/// - `E-UNIT` — `OutputSpec.unit` истока против единицы параметра
-///   (`templates::params_from_text`) приёмника;
-/// - `E-PORT-UNKNOWN` — имя `fromOutput`/`toParam` отсутствует в снапшоте
-///   шаблона соответствующего конца;
-/// - `E-DOUBLE-INPUT` — два value-ребра в один `toParam` (оба `edge_id`,
-///   порядок — `canvas.edges`); рёбра с `toParam` исключить из
-///   позиционных слотов в W-UNUSED-SLOT выше.
-fn port_contract_issues(_canvas: &Canvas) -> Vec<ValidationIssue> {
-    Vec::new()
+/// Коды:
+///
+/// - **E-PORT-UNKNOWN** — `fromOutput` ссылается на имя, которого нет у
+///   истока (шаблонная нода — секция `outputs` снимка; текстовая —
+///   переменная Numi-листа), ИЛИ `toParam` ссылается на параметр, которого
+///   нет у шаблонной ноды-приёмника (текстовый приёмник вообще не имеет
+///   параметров). Аналог `fromLine` вне диапазра строк не проверяется —
+///   построчные порты FR-025 деградируют тихо по решению того FR.
+/// - **E-DOUBLE-INPUT** — два и более value-ребра с одинаковым `toParam`
+///   в одну ноду (победитель детерминирован — последний по `canvas.edges`,
+///   но конфликт почти наверняка ошибка композиции агента).
+/// - **E-UNIT** — проливаемое значение и параметр приёмника имеют
+///   несовместимые размерности (например, время в Rate-параметр);
+///   проверяется по мультимножеству размерностей единиц (масштаб
+///   `ms`/`s` не важен). Параметр без единицы (скаляр) и скалярное
+///   значение совместимы; значение с размерностью в скалярный параметр —
+///   ошибка.
+fn port_contract_issues(canvas: &Canvas, solutions: &flow::FlowSolutions) -> Vec<ValidationIssue> {
+    let mut issues = Vec::new();
+    // известные выходы по нодам: шаблонные — снимок outputs; текстовые —
+    // переменные Numi-листа (последнее определение) из именованных выходов
+    // пересчёта (flow уже собрал их — единый источник истины адресации)
+    let mut known_outputs: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (node_id, name) in solutions.named.keys() {
+        known_outputs
+            .entry(node_id.as_str())
+            .or_default()
+            .insert(name.as_str());
+    }
+    // E-DOUBLE-INPUT: toParam -> сколько рёбер уже видели
+    let mut seen_params: HashMap<(&str, &str), usize> = HashMap::new();
+    for edge in &canvas.edges {
+        if edge.flow_kind() != FlowKind::Value {
+            continue;
+        }
+        // E-PORT-UNKNOWN (исток)
+        if let Some(name) = &edge.from_output {
+            let known = known_outputs
+                .get(edge.from_node.as_str())
+                .map(|set| set.contains(name.as_str()))
+                .unwrap_or(false);
+            if !known {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    code: IssueCode::EPortUnknown,
+                    node_id: Some(edge.from_node.clone()),
+                    edge_id: Some(edge.id.clone()),
+                    message: format!(
+                        "fromOutput {name:?}: у истока нет такого именованного выхода \\
+                         (шаблонная нода — секция outputs, текстовая — переменная Numi-листа)"
+                    ),
+                });
+            }
+        }
+        // E-PORT-UNKNOWN (приёмник) + E-DOUBLE-INPUT + E-UNIT
+        if let Some(param) = &edge.to_param {
+            let Some(target) = canvas.node(&edge.to_node) else {
+                continue;
+            };
+            let template = target.template();
+            let Some(tpl) = &template else {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    code: IssueCode::EPortUnknown,
+                    node_id: Some(edge.to_node.clone()),
+                    edge_id: Some(edge.id.clone()),
+                    message: format!(
+                        "toParam {param:?}: приёмник — текстовая нода без параметров \\
+                         (позиционные слоты $1..$N адресуются без toParam)"
+                    ),
+                });
+                continue;
+            };
+            let Some(param_spec) = tpl.params.get(param) else {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    code: IssueCode::EPortUnknown,
+                    node_id: Some(edge.to_node.clone()),
+                    edge_id: Some(edge.id.clone()),
+                    message: format!(
+                        "toParam {param:?}: у шаблона {} нет параметра; доступные: {}",
+                        tpl.id,
+                        tpl.params.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                });
+                continue;
+            };
+            // E-DOUBLE-INPUT: тот же toParam второй раз
+            let count = seen_params
+                .entry((edge.to_node.as_str(), param.as_str()))
+                .or_insert(0);
+            *count += 1;
+            if *count == 2 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    code: IssueCode::EDoubleInput,
+                    node_id: Some(edge.to_node.clone()),
+                    edge_id: Some(edge.id.clone()),
+                    message: format!(
+                        "дубль-вход: несколько value-рёбер в параметр {param:?} \\
+                         (побеждает последнее по canvas.edges — конфликта быть не должно)"
+                    ),
+                });
+            }
+            // E-UNIT: размерность проливаемого значения против параметра
+            if let Some(value) = flow::edge_source_value(
+                edge,
+                &solutions.outputs,
+                &solutions.lines,
+                &solutions.named,
+            ) {
+                let expected = expr::unit_value(0.0, param_spec.unit.as_deref()).unit;
+                if !dimensions_compatible(&value.unit, &expected) {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        code: IssueCode::EUnit,
+                        node_id: Some(edge.to_node.clone()),
+                        edge_id: Some(edge.id.clone()),
+                        message: format!(
+                            "несовместимость единиц: ребро несёт \"{}\", параметр {param:?} \\
+                             ожидает \"{}\" (шаблон {})",
+                            value.unit.display(),
+                            param_spec.unit.as_deref().unwrap_or("скаляр"),
+                            tpl.id
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    issues
+}
+
+/// Мультимножество размерностей единицы (exp атомов по Dimension).
+fn unit_dims(unit: &expr::Unit) -> std::collections::BTreeMap<String, i16> {
+    let mut map = std::collections::BTreeMap::new();
+    for atom in &unit.atoms {
+        let key = format!("{:?}", atom.dim);
+        *map.entry(key).or_insert(0) += atom.exp as i16;
+    }
+    map.retain(|_, exp| *exp != 0);
+    map
+}
+
+/// Совместимы ли единицы значения и параметра: равные мультимножества
+/// размерностей (масштабы ms/s, KB/MB — не важны; имена — не важны).
+fn dimensions_compatible(actual: &expr::Unit, expected: &expr::Unit) -> bool {
+    unit_dims(actual) == unit_dims(expected)
 }
 
 /// Число формульных строк по нодам (из построчных выходов пересчёта FR-025):
@@ -540,5 +682,202 @@ mod tests {
         assert_eq!(json["node_id"], "mm1");
         assert_eq!(json["edge_id"], serde_json::Value::Null);
         assert_eq!(json["message"], "перегрузка");
+    }
+    // --- FR-032 × FR-029: контракт портов (интеграция CP1) ---
+
+    /// Шелпер: шаблонная нода со снимком (params + outputs).
+    fn template_node(
+        canvas: &mut Canvas,
+        id: &str,
+        params: &[(&str, Option<&str>)],
+        outputs: &[(&str, &str)],
+    ) {
+        use crate::templates::{OutputSource, OutputSpec, TemplateParam, TemplateRef};
+        let text = params
+            .iter()
+            .map(|(name, unit)| match unit {
+                Some(unit) => format!("{name} = 1 {unit}"),
+                None => format!("{name} = 1"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut node = Node::text(id, text, 0.0, 0.0);
+        let mut param_map = std::collections::BTreeMap::new();
+        for (name, unit) in params {
+            param_map.insert(
+                (*name).to_owned(),
+                TemplateParam {
+                    num: 1.0,
+                    unit: unit.map(str::to_owned),
+                },
+            );
+        }
+        node.set_template(Some(TemplateRef {
+            id: format!("mock.{id}"),
+            version: "1.1.0".to_owned(),
+            expr: "$rps".to_owned(),
+            params: param_map,
+            icon: "custom".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            name: None,
+            outputs: outputs
+                .iter()
+                .map(|(name, expr)| OutputSpec {
+                    name: (*name).to_owned(),
+                    unit: None,
+                    source: OutputSource::Expr((*expr).to_owned()),
+                })
+                .collect(),
+        }));
+        canvas.nodes.push(node);
+    }
+
+    /// value-ребро с адресацией портов.
+    fn ported_edge(
+        canvas: &mut Canvas,
+        from: &str,
+        to: &str,
+        from_output: Option<&str>,
+        to_param: Option<&str>,
+    ) {
+        let mut edge = Edge::new(canvas.next_edge_id(), from, None, to, None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.from_output = from_output.map(str::to_owned);
+        edge.to_param = to_param.map(str::to_owned);
+        canvas.add_edge(edge);
+    }
+
+    /// E-PORT-UNKNOWN: fromOutput на несуществующее имя — точный код,
+    /// node_id истока, edge_id (гейт A2: «несуществующий порт»).
+    #[test]
+    fn unknown_output_port_is_error() {
+        let mut canvas = Canvas::default();
+        template_node(
+            &mut canvas,
+            "cdn",
+            &[("rps", Some("rps"))],
+            &[("origin_rps", "$rps")],
+        );
+        template_node(
+            &mut canvas,
+            "lb",
+            &[("connections_per_sec", Some("rps"))],
+            &[],
+        );
+        ported_edge(
+            &mut canvas,
+            "cdn",
+            "lb",
+            Some("no_such"),
+            Some("connections_per_sec"),
+        );
+        let issues = validate(&canvas);
+        assert_eq!(codes(&issues), vec!["E-PORT-UNKNOWN"]);
+        assert_eq!(issues[0].node_id.as_deref(), Some("cdn"));
+        assert!(issues[0].edge_id.is_some());
+    }
+
+    /// E-PORT-UNKNOWN: toParam на несуществующий параметр шаблона и на
+    /// текстовую ноду (без параметров вовсе).
+    #[test]
+    fn unknown_param_port_is_error() {
+        let mut canvas = Canvas::default();
+        template_node(
+            &mut canvas,
+            "src",
+            &[("rps", Some("rps"))],
+            &[("out", "$rps")],
+        );
+        template_node(&mut canvas, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas, "src", "gw", Some("out"), Some("no_such_param"));
+        let issues = validate(&canvas);
+        assert_eq!(codes(&issues), vec!["E-PORT-UNKNOWN"]);
+        assert_eq!(issues[0].node_id.as_deref(), Some("gw"));
+
+        // текстовый приёмник: параметров нет вообще
+        let mut canvas2 = Canvas::default();
+        template_node(
+            &mut canvas2,
+            "src",
+            &[("rps", Some("rps"))],
+            &[("out", "$rps")],
+        );
+        sheet(&mut canvas2, "note", "x = 1", 220.0);
+        ported_edge(&mut canvas2, "src", "note", Some("out"), Some("rps"));
+        let issues = validate(&canvas2);
+        assert_eq!(codes(&issues), vec!["E-PORT-UNKNOWN"]);
+    }
+
+    /// E-DOUBLE-INPUT: два value-ребра в один toParam — ошибка на втором
+    /// (порядок canvas.edges; гейт A2: «дубль-вход»).
+    #[test]
+    fn double_input_same_param_is_error() {
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "a", "v = 100 rps", 0.0);
+        sheet(&mut canvas, "b", "v = 200 rps", 110.0);
+        template_node(&mut canvas, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas, "a", "gw", Some("v"), Some("rps"));
+        ported_edge(&mut canvas, "b", "gw", Some("v"), Some("rps"));
+        let issues = validate(&canvas);
+        assert_eq!(codes(&issues), vec!["E-DOUBLE-INPUT"]);
+        assert_eq!(issues[0].node_id.as_deref(), Some("gw"));
+    }
+
+    /// E-UNIT: проливание времени в Rate-параметр — ошибка; совместимые
+    /// размерности (ms в s, rps в rps) — чисто (гейт A2: «единица»).
+    #[test]
+    fn unit_mismatch_on_spill_is_error() {
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "src", "lat = 50 ms", 0.0);
+        template_node(&mut canvas, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas, "src", "gw", Some("lat"), Some("rps"));
+        let issues = validate(&canvas);
+        assert_eq!(codes(&issues), vec!["E-UNIT"]);
+        assert!(issues[0].message.contains("ms"), "{}", issues[0].message);
+
+        // совместимо: rps-выход в rps-параметр — отчёт чист
+        let mut canvas2 = Canvas::default();
+        sheet(&mut canvas2, "src", "v = 100 rps", 0.0);
+        template_node(&mut canvas2, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas2, "src", "gw", Some("v"), Some("rps"));
+        assert_eq!(
+            validate(&canvas2),
+            Vec::new(),
+            "совместимые единицы — чисто"
+        );
+    }
+
+    /// W-AMBIGUOUS-SRC не срабатывает для ребра с fromOutput (адресация
+    /// есть — итог ноды не подставляется вслепую).
+    #[test]
+    fn from_output_silences_ambiguous_source() {
+        let mut canvas = Canvas::default();
+        sheet(
+            &mut canvas,
+            "traffic",
+            "dau = 100000\npeak_rps = 1200 rps",
+            0.0,
+        );
+        template_node(&mut canvas, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas, "traffic", "gw", Some("peak_rps"), Some("rps"));
+        assert_eq!(
+            validate(&canvas),
+            Vec::new(),
+            "адресованный исток — без предупреждения"
+        );
+    }
+
+    /// W-UNUSED-SLOT не срабатывает для рёбер с toParam (они не слоты).
+    #[test]
+    fn to_param_edges_do_not_count_as_slots() {
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "src", "v = 100 rps", 0.0);
+        template_node(&mut canvas, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas, "src", "gw", Some("v"), Some("rps"));
+        assert_eq!(
+            validate(&canvas),
+            Vec::new(),
+            "пролитое ребро — не неиспользуемый слот"
+        );
     }
 }

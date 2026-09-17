@@ -1221,6 +1221,7 @@ mod tests {
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
             name: Some("Балансировщик нагрузки".to_owned()),
+            outputs: Vec::new(),
         }));
         assert_eq!(title_for(&node), "Балансировщик нагрузки");
         // Старый снапшот без имени — фолбэк на первую строку текста

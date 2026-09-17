@@ -105,6 +105,11 @@ pub struct TemplateManifest {
     pub description: String,
     pub description_en: Option<String>,
     pub params: Vec<ParamSpec>,
+    /// FR-029: именованные выходы (схема манифеста 1.1, секция
+    /// `outputs` — опциональна: все 45 builtin-манифестов без неё
+    /// остаются валидными). Пустая секция — выходов нет (только
+    /// узловое значение и построчные порты FR-025).
+    pub outputs: Vec<OutputSpec>,
     /// Numi-формула с `$param`-ссылками (`mm1($rps, $service_rate, $servers)`).
     pub expr: String,
     /// Цвет категории `#RRGGBB` (полоса шапки шаблонной ноды).
@@ -115,6 +120,71 @@ pub struct TemplateManifest {
     /// Источник манифеста (FR-020): builtin или custom. В JSON не пишется —
     /// определяется местом хранения (встроенная статика vs ~/.canvasdesk).
     pub source: TemplateSource,
+}
+
+/// FR-029: источник именованного выхода шаблона.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputSource {
+    /// Индекс строки Numi-листа ноды — значение берётся из
+    /// `FlowSolutions.lines` (построчные выходы FR-025).
+    Line(usize),
+    /// Подвыражение от параметров шаблона (`$rps × (1 - $hit)`) —
+    /// вычисляется в окружении ноды при пересчёте.
+    Expr(String),
+}
+
+/// FR-029: именованный выход шаблона — характеристика, которую другие
+/// сервисы могут потреблять value-рёбрами с `fromOutput`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputSpec {
+    /// Имя порта (адресуется `fromOutput`; snake_case).
+    pub name: String,
+    /// Токен единицы из таблицы FR-013 (`"rps"`, `"ms"`); None — скаляр.
+    pub unit: Option<String>,
+    /// Источник значения: индекс строки листа или подвыражение.
+    pub source: OutputSource,
+}
+
+impl OutputSpec {
+    /// Парсинг секции outputs (схема 1.1): массив объектов с `name` и
+    /// ровно одним из `line` (индекс строки) / `expr` (подвыражение);
+    /// опционально `unit`. Битые элементы пропускаются (мягкое чтение —
+    /// чужой/частично битый манифест не роняет весь шаблон).
+    fn from_json(value: &Json) -> Option<Self> {
+        let obj = value.as_object()?;
+        let name = obj.get("name")?.as_str()?.to_owned();
+        if name.trim().is_empty() {
+            return None;
+        }
+        let unit = obj.get("unit").and_then(Json::as_str).map(str::to_owned);
+        // `line` и `expr` взаимно исключаются; при обоих — приоритет
+        // `line` (симметрия с Edge: fromLine сильнее fromOutput)
+        let line = obj.get("line").and_then(Json::as_u64);
+        let source = if let Some(line) = line {
+            OutputSource::Line(line as usize)
+        } else {
+            let expr = obj.get("expr").and_then(Json::as_str)?;
+            OutputSource::Expr(expr.to_owned())
+        };
+        Some(Self { name, unit, source })
+    }
+
+    fn to_json(&self) -> Json {
+        let mut obj = Map::new();
+        obj.insert("name".to_owned(), Json::from(self.name.clone()));
+        if let Some(unit) = &self.unit {
+            obj.insert("unit".to_owned(), Json::from(unit.clone()));
+        }
+        match &self.source {
+            OutputSource::Line(line) => {
+                obj.insert("line".to_owned(), Json::from(*line as u64));
+            }
+            OutputSource::Expr(expr) => {
+                obj.insert("expr".to_owned(), Json::from(expr.clone()));
+            }
+        }
+        Json::Object(obj)
+    }
 }
 
 impl TemplateManifest {
@@ -170,6 +240,18 @@ impl TemplateManifest {
                 max: spec.get("max").and_then(Json::as_f64),
             });
         }
+        // FR-029 (схема 1.1): секция outputs опциональна; битые элементы
+        // пропускаются (мягкое чтение)
+        let outputs = obj
+            .get("outputs")
+            .and_then(Json::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(OutputSpec::from_json)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         Some(Self {
             id,
             name,
@@ -179,6 +261,7 @@ impl TemplateManifest {
             description,
             description_en,
             params,
+            outputs,
             expr,
             color,
             icon,
@@ -279,6 +362,10 @@ pub struct TemplateRef {
     pub icon: String,
     pub color: String,
     pub name: Option<String>,
+    /// FR-029: снимок именованных выходов манифеста (секция `outputs`):
+    /// переживает удаление шаблона из реестра и правки текста ноды — как
+    /// `expr`/`icon`/`color`. Пусто — выходов нет (старые снапшоты).
+    pub outputs: Vec<OutputSpec>,
 }
 
 impl TemplateRef {
@@ -288,7 +375,7 @@ impl TemplateRef {
             .iter()
             .map(|(name, value)| (name.clone(), value.to_json()))
             .collect();
-        json!({
+        let mut value = json!({
             "id": self.id,
             "version": self.version,
             "expr": self.expr,
@@ -296,7 +383,14 @@ impl TemplateRef {
             "icon": self.icon,
             "color": self.color,
             "name": self.name,
-        })
+        });
+        // FR-029: ключ `outputs` пишется только при непустой секции —
+        // старые снапшоты сериализуются байт-в-байт (инвариант round-trip)
+        if !self.outputs.is_empty() {
+            let outputs: Vec<Json> = self.outputs.iter().map(OutputSpec::to_json).collect();
+            value["outputs"] = Json::Array(outputs);
+        }
+        value
     }
 
     pub fn from_json(value: &Json) -> Option<Self> {
@@ -325,6 +419,18 @@ impl TemplateRef {
             // FR-023: файлы до снапшота имени — None (заголовок по
             // прежнему фолбэку — первая строка текста)
             name: obj.get("name").and_then(Json::as_str).map(str::to_owned),
+            // FR-029: снимок выходов; файлы до FR-029 — пусто (безопасный
+            // round-trip: старые .canvas читаются)
+            outputs: obj
+                .get("outputs")
+                .and_then(Json::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(OutputSpec::from_json)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -471,6 +577,7 @@ impl TemplateRegistry {
                             Some(100.0),
                         ),
                     ],
+                    outputs: Vec::new(),
                     expr: "mm1($rps, $service_rate, $servers)".to_owned(),
                     color: "#4A90E2".to_owned(),
                     icon: "lb".to_owned(),
@@ -504,6 +611,7 @@ impl TemplateRegistry {
                             Some(100.0),
                         ),
                     ],
+                    outputs: Vec::new(),
                     expr: "mm1($qps, 1 req / $query_time, $replicas)".to_owned(),
                     color: "#F5A623".to_owned(),
                     icon: "db".to_owned(),
@@ -537,6 +645,7 @@ impl TemplateRegistry {
                             None,
                         ),
                     ],
+                    outputs: Vec::new(),
                     expr: "mm1($qps × $hit_rate, 1 req / $eviction_latency)".to_owned(),
                     color: "#BD10E0".to_owned(),
                     icon: "cache".to_owned(),
@@ -570,6 +679,7 @@ impl TemplateRegistry {
                             None,
                         ),
                     ],
+                    outputs: Vec::new(),
                     expr: "mm1($rps, $max_connections req / $timeout)".to_owned(),
                     color: "#7ED321".to_owned(),
                     icon: "http".to_owned(),
@@ -609,6 +719,7 @@ impl TemplateRegistry {
                             Some(1000.0),
                         ),
                     ],
+                    outputs: Vec::new(),
                     expr: "mm1($produce_rate, $partition_consume, $partitions)".to_owned(),
                     color: "#9013FE".to_owned(),
                     icon: "queue".to_owned(),
@@ -862,6 +973,9 @@ pub fn instantiate(
         color: manifest.color.clone(),
         // FR-023: имя — в заголовок ноды (переживает правки текста)
         name: Some(manifest.display_name().to_owned()),
+        // FR-029: снимок именованных выходов (переживает удаление шаблона
+        // из реестра — как expr/icon/color)
+        outputs: manifest.outputs.clone(),
     }));
     Ok(node)
 }
@@ -1075,6 +1189,7 @@ mod tests {
                     icon: manifest.icon.clone(),
                     color: manifest.color.clone(),
                     name: Some(manifest.display_name().to_owned()),
+                    outputs: Vec::new(),
                     params: manifest
                         .params
                         .iter()
@@ -1131,6 +1246,7 @@ mod tests {
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
             name: Some("Балансировщик нагрузки".to_owned()),
+            outputs: Vec::new(),
         };
         assert_eq!(
             TemplateRef::from_json(&template.to_json()),
@@ -1177,6 +1293,7 @@ mod tests {
                 min: Some(0.0),
                 max: None,
             }],
+            outputs: Vec::new(),
             expr: "mm1($rps, 1200 rps, 2)".to_owned(),
             color: "#9B9B9B".to_owned(),
             icon: "custom".to_owned(),

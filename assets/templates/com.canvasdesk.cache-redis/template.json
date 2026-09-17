@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.cache-redis",
   "name_en": "Cache (Redis)",
   "name_ru": "Кэш (Redis)",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "backend",
   "description": "Кэш: нагрузка с учётом hit rate, латентность вытеснения.",
   "description_en": "Cache: load with hit rate, eviction latency.",
@@ -31,5 +31,17 @@
   ],
   "expr": "mm1($qps × $hit_rate, 1 req / $eviction_latency)",
   "color": "#BD10E0",
-  "icon": "cache"
+  "icon": "cache",
+  "outputs": [
+    {
+      "name": "hit_qps",
+      "unit": "rps",
+      "expr": "$qps × $hit_rate"
+    },
+    {
+      "name": "miss_qps",
+      "unit": "rps",
+      "expr": "$qps × (1 - $hit_rate)"
+    }
+  ]
 }

@@ -172,7 +172,8 @@ const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
 /// 25 инструментов канваса (сигнатуры — план MCP-задачи; FR-005 — node_edit;
-/// FR-032 — edges_list/edge_get/graph_validate).
+/// FR-025 построчные истоки; FR-029 — адресация портов; FR-032 —
+/// edges_list/edge_get/graph_validate).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -258,13 +259,17 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "edge_create",
-        description: "Создать связь между нодами; стороны any|top|right|bottom|left (дефолт any — авто); возвращает id",
+        description: "Создать связь между нодами; стороны any|top|right|bottom|left (дефолт any — авто); возвращает id. FR-029 v2 — адресация портов для value-связей: kind \"value\" включает поток значений (дефолт \"control\" — визуальная связь); fromLine (int ≥ 0) — построчный исток FR-025; fromOutput (string) — именованный выход истока (секция outputs шаблона или переменная Numi-листа текстовой ноды); toParam (string) — проливание значения в параметр $имя шаблонной ноды приёмника (перекрывает локальное). fromLine и fromOutput взаимно исключаются; toParam только при kind=value; неизвестные имена выходов/параметров (для шаблонных нод) — ошибка вызова",
         required: &["from", "to"],
         properties: &[
             ("from", STR),
             ("to", STR),
             ("fromSide", SIDE_PROP),
             ("toSide", SIDE_PROP),
+            ("kind", r#"{"type":"string","enum":["value","control"]}"#),
+            ("fromLine", NUM),
+            ("fromOutput", STR),
+            ("toParam", STR),
         ],
     },
     ToolSpec {
@@ -284,7 +289,7 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "flow_recalc",
-        description: "FR-014: пересчитать весь граф потока значений; возвращает карту {node_id: {value, unit}} для формульных нод (ошибки — {error: текст}); downstream учитывает значения upstream",
+        description: "FR-029 v2: пересчитать весь граф потока значений; возвращает {node_id: {value, unit, outputs: {имя: {value, unit}} (именованные выходы), lines: [{index, value, unit}] (построчные значения), warnings? (конфликты проливания)}} для формульных нод (ошибки — {error: текст}); downstream учитывает значения upstream и проливание в параметры",
         required: &[],
         properties: &[],
     },
@@ -308,7 +313,7 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "edges_list",
-        description: "FR-032: все связи канваса: {id, from, to, kind (\"value\"|\"control\"), fromLine?, fromSide, toSide} — агент восстанавливает топологию графа (CR-013 G4); fromLine — индекс строки-истока (FR-025)",
+        description: "FR-032/FR-029: все связи канваса: {id, from, to, kind (\"value\"|\"control\"), fromLine?, fromOutput?, toParam?, fromSide, toSide} — агент восстанавливает топологию графа (CR-013 G4); fromLine — индекс строки-истока (FR-025), fromOutput/toParam — адресация портов значений (FR-029)",
         required: &[],
         properties: &[],
     },
@@ -320,13 +325,13 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "graph_validate",
-        description: "FR-032: валидация модели — {valid, issues:[{severity, code, node_id, edge_id, message}]}. Коды (стабильный контракт, docs/change-requests/fr-032-graph-read-validate.md): E-CYCLE (цикл value-рёбер), E-OVERLOAD (ρ ≥ 1), W-AMBIGUOUS-SRC (многолинейный исток без fromLine), W-UNUSED-SLOT (вход $N не читается формулой); E-UNIT/E-PORT-UNKNOWN/E-DOUBLE-INPUT — после FR-029. valid = нет issue с severity \"error\"",
+        description: "FR-032: валидация модели — {valid, issues:[{severity, code, node_id, edge_id, message}]}. Коды (стабильный контракт, docs/change-requests/fr-032-graph-read-validate.md): E-CYCLE (цикл value-рёбер), E-OVERLOAD (ρ ≥ 1), W-AMBIGUOUS-SRC (многолинейный исток без fromLine), W-UNUSED-SLOT (вход $N не читается формулой); E-UNIT/E-PORT-UNKNOWN/E-DOUBLE-INPUT — реализованы поверх FR-029 (адресация портов). valid = нет issue с severity \"error\"",
         required: &[],
         properties: &[],
     },
     ToolSpec {
         name: "template_list",
-        description: "FR-018: список шаблонов реестра — id, name, version, category, description, expr (Numi-формула с $param), icon, color, params ({type, default, unit?, min?, max?}). Те же шаблоны, что видит пользователь в палитре (Ctrl+P) и wheel-меню",
+        description: "FR-018: список шаблонов реестра — id, name, version, category, description, expr (Numi-формула с $param), icon, color, params ({type, default, unit?, min?, max?}), outputs (FR-029: именованные выходы {name, unit?, line?|expr?} — потребляются рёбрами fromOutput). Те же шаблоны, что видит пользователь в палитре (Ctrl+P) и wheel-меню",
         required: &[],
         properties: &[],
     },
@@ -394,7 +399,7 @@ fn not_running_message() -> String {
 ///   недоступен → JSON-RPC ошибка + `Exit(2)` (завершение делает bin);
 /// - `notifications/initialized` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 18 инструментов с inputSchema;
+/// - `tools/list` → 23 инструмента с inputSchema (FR-029: edges_list);
 /// - `tools/call` → форвард строки на pipe, ответ приложения — в text-контенте;
 ///   pipe мёртв → isError «не запущен», таймаут ответа (в транспорте) → isError;
 /// - прочее → JSON-RPC -32601.
@@ -875,7 +880,11 @@ mod tests {
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 25, "ровно 25 инструментов");
+        assert_eq!(
+            tools.len(),
+            25,
+            "22 + edges_list + edge_get + graph_validate"
+        );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -891,6 +900,7 @@ mod tests {
             "node_delete",
             "node_set_color",
             "edge_create",
+            "edges_list",
             "edge_delete",
             "flow_set_kind",
             "flow_recalc",
