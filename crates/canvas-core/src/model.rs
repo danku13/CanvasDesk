@@ -445,6 +445,33 @@ pub struct Edge {
         deserialize_with = "deserialize_lenient_line"
     )]
     pub from_line: Option<usize>,
+    /// FR-029: имя выходного порта истока (`fromOutput`) — именованная
+    /// характеристика ноды-истока: секция `outputs` манифеста шаблона
+    /// (снапшот `canvasdesk.template.outputs`) или переменная Numi-листа
+    /// текстовой ноды (последнее определение — адресация живёт при сдвиге
+    /// строк). `None` — значение ноды целиком (или по `fromLine`).
+    /// Взаимное исключение с `fromLine` проверяется в MCP `edge_create`
+    /// (схема); на уровне модели при обоих полях приоритет — `fromLine`
+    /// (сохранение поведения FR-025 для рукописных файлов).
+    #[serde(
+        rename = "fromOutput",
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_lenient_name"
+    )]
+    pub from_output: Option<String>,
+    /// FR-029: имя входного порта приёмника (`toParam`) — value-ребро
+    /// «проливается» в параметр `$имя` шаблонной ноды приёмника,
+    /// ПЕРЕКРЫВАЯ локальное значение параметра (семантика «проливание
+    /// сильнее дефолта»; `Env::with_param_map` после локальных).
+    /// `None` — позиционный слот `$1..$N` (текущее поведение FR-014).
+    #[serde(
+        rename = "toParam",
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_lenient_name"
+    )]
+    pub to_param: Option<String>,
     /// Неизвестные поля (fromEnd/toEnd и пр.) — сохраняются при round-trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -460,6 +487,20 @@ where
     let raw = Option::<Value>::deserialize(deserializer)?;
     Ok(match raw {
         Some(Value::Number(number)) => number.as_u64().map(|value| value as usize),
+        _ => None,
+    })
+}
+
+/// FR-029: мягкое чтение `fromOutput`/`toParam`: непустая строка —
+/// `Some(имя)`, всё прочее (пустая, числа, объекты, null) — `None`
+/// (чужие файлы не ломаются, round-trip чистый).
+fn deserialize_lenient_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    Ok(match raw {
+        Some(Value::String(name)) if !name.trim().is_empty() => Some(name.trim().to_owned()),
         _ => None,
     })
 }
@@ -485,6 +526,8 @@ impl Edge {
             style: None,
             thickness: None,
             from_line: None,
+            from_output: None,
+            to_param: None,
             extra: Map::new(),
         }
     }
@@ -1064,6 +1107,7 @@ mod tests {
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
             name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
         }));
         // Как в finish_editing: сначала set_expr, потом синк параметров
         node.set_expr(None);
@@ -1098,6 +1142,7 @@ mod tests {
             icon: "custom".to_owned(),
             color: "#9B9B9B".to_owned(),
             name: None,
+            outputs: Vec::new(),
         }));
         node.set_template(None);
         assert_eq!(node.expr(), Some("5 ms"), "expr пережил снятие шаблона");
@@ -1334,6 +1379,59 @@ mod tests {
             let edge: Edge = serde_json::from_str(&json).expect("парсинг связи");
             assert_eq!(edge.from_line, expected, "{json}");
         }
+    }
+
+    // --- FR-029: именованные порты значений (fromOutput / toParam) ---
+
+    /// Инвариант схемы FR-029: ребро без новых полей сериализуется без
+    /// ключей (старые `.canvas` байт-в-байт); с полями — ключи
+    /// `fromOutput`/`toParam` сохраняются в round-trip.
+    #[test]
+    fn edge_value_ports_round_trip() {
+        let plain = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        let json = serde_json::to_string(&plain).expect("сериализация");
+        assert!(
+            !json.contains("fromOutput") && !json.contains("toParam"),
+            "нет полей — нет ключей: {json}"
+        );
+        let back: Edge = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back, plain);
+
+        let mut port_edge = Edge::new("e2", "a", Some(Side::Right), "b", Some(Side::Left));
+        port_edge.from_output = Some("peak_rps".to_owned());
+        port_edge.to_param = Some("rps".to_owned());
+        let json = serde_json::to_string(&port_edge).expect("сериализация");
+        assert!(json.contains("\"fromOutput\":\"peak_rps\""), "{json}");
+        assert!(json.contains("\"toParam\":\"rps\""), "{json}");
+        let back: Edge = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back.from_output.as_deref(), Some("peak_rps"));
+        assert_eq!(back.to_param.as_deref(), Some("rps"));
+    }
+
+    /// Мягкое чтение `fromOutput`/`toParam` (FR-029): пустая строка,
+    /// числа, объекты, null — `None`, разбор связи не падает; имена
+    /// триммятся (пробелы по краям — от рукописных файлов).
+    #[test]
+    fn edge_value_ports_lenient_parse() {
+        for (raw, expected) in [
+            // "fromOutput":""
+            ("\"fromOutput\":\"\"", None),
+            // "fromOutput":"   "
+            ("\"fromOutput\":\"   \"", None),
+            // "fromOutput":42
+            ("\"fromOutput\":42", None),
+            // "fromOutput":null
+            ("\"fromOutput\":null", None),
+            // "fromOutput":"origin_rps"
+            ("\"fromOutput\":\"origin_rps\"", Some("origin_rps")),
+        ] {
+            let json = format!(r#"{{ "id": "e", "fromNode": "a", "toNode": "b", {raw} }}"#);
+            let edge: Edge = serde_json::from_str(&json).expect("парсинг связи");
+            assert_eq!(edge.from_output.as_deref(), expected, "{json}");
+        }
+        let json = r#"{ "id": "e", "fromNode": "a", "toNode": "b", "toParam": " rps " }"#;
+        let edge: Edge = serde_json::from_str(json).expect("парсинг связи");
+        assert_eq!(edge.to_param.as_deref(), Some("rps"), "тримминг имени");
     }
 
     // --- FR-011: mindmap (subtree_ids / parent_index / collapsed) ---

@@ -1,3 +1,85 @@
+## 2026-09-18 — Реализация CP0 (волна 0) + CP1 (FR-029 порты значений)
+
+- **Задача (владелец):** на основании product-roadmap.md реализовать CP0 и CP1.
+- **Сделано:**
+
+  **CP0 (волна 0 — гигиена):**
+  - `deny.toml` (cargo-deny): allowlist §7.2 архдока + `Apache-2.0 WITH
+    LLVM-exception` с обоснованием (строго пермиссивнее Apache-2.0), bans
+    (wildcards deny, множественные версии — warn), sources (только crates.io),
+    advisories: yanked deny, три осознанных ignore unmaintained рендер-стека
+    (RUSTSEC-2024-0436 paste / RUSTSEC-2026-0206 rustybuzz /
+    RUSTSEC-2026-0192 ttf-parser) с планом миграции после гейта Go;
+  - `publish = false` всем 7 workspace-крейтам (закрытый B2B-продукт,
+    защита от случайной публикации; требуется private-ignore в cargo-deny);
+  - CI (ci.yml): джоба `licenses` (EmbarkStudios/cargo-deny-action@v2) на
+    каждый пуш/PR; артефактные сборки — `cargo auditable build`
+    (SBOM-in-binary); build-all.yml: джоба `notices-sbom` — регенерация
+    THIRD-PARTY-NOTICES + дрифт-контроль + артефакт;
+  - `about.toml` + `docs/templates/third-party-notices.hbs` + сгенерированный
+    `THIRD-PARTY-NOTICES.md` (382 крейта, все лицензии пермиссивные);
+  - `docs/DEPENDENCIES.md` — реестр: first-party, 16 прямых прод-зависимостей
+    с лицензиями, кандидаты волны S из архдока §4.2, долг сопровождения
+    (unmaintained), рецепты (notices/SBOM/добавление зависимости);
+  - cargo-фичи `stats`/`parallel` в canvas-core (пустые гейты волны S,
+    archdoc M1); `include_dir`/`image` централизованы в
+    [workspace.dependencies] (SPEC §3);
+  - триаж волны 0: FR-023 → «выполнено (v1)» (`7551e12` + CR-010/CR-012),
+    FR-024 → «выполнено (v1)» (`74b4333`, расширен FR-030), CR-005 →
+    бэклог §7 (точечно по мере боли); changelog-записи в документах +
+    строки index-cr-fr.md.
+
+  **CP1 (FR-029 — порты значений, волна A1):**
+  - `model.rs`: `Edge.from_output`/`to_param` (сериализация `fromOutput`/
+    `toParam`, мягкое чтение как `fromLine`, round-trip старых `.canvas`
+    байт-в-байт — тесты); перепривязка from-конца сбрасывает `from_output`;
+  - `templates.rs`: `OutputSpec { name, unit, source: Line(i)|Expr(s) }`,
+    секция `outputs` манифеста (схема 1.1, опциональна — 45 builtin
+    валидны), снапшот `canvasdesk.template.outputs` (ключ только при
+    непустой секции), перенос outputs в custom-шаблон при «Сохранить
+    как шаблон»;
+  - `flow.rs`: `FlowSolutions.named` + `warnings`; именованные выходы
+    шаблонных нод (Line — из построчных, Expr — в окружении ноды) и
+    текстовых (переменные Numi-листа — адресация живёт при сдвиге строк);
+    проливание `toParam` ПОСЛЕ локальных параметров («проливание сильнее
+    дефолта»), рёбра с `toParam` вне позиционных слотов, конфликты —
+    последнее по `canvas.edges` + предупреждение;
+  - MCP: `edge_create` v2 (kind/fromLine/fromOutput/toParam, взаимные
+    исключения, валидация имён по снапшотам шаблонов/переменным листа),
+    новый `edges_list` (23 инструмента), `flow_recalc` v2 (value + outputs
+    + lines + warnings), `template_list` отдаёт outputs;
+  - манифесты: outputs для cdn, tcp-lb (fan-out auth/feed/media по долям
+    — новые параметры), graphql (db_qps/events), db-sql-master
+    (replica_load), db-sql-replica, queue-kafka (consume_rate),
+    api-gateway, lb, cache-redis;
+  - тесты: round-trip/lenient (model), проливание/перекрытие/совместимость
+    слотов/сдвиг строк/конфликты/тихая деградация (flow), Instagram MVP
+    e2e `mcp_fr029_instagram_mvp_reference` — 12 нод собираются MCP,
+    10 адресованных рёбер, oracle ADR-0005 ±1% (avg 555.6 / peak 1388.9 /
+    origin 555.6 / auth 83.3 / feed 333.3 / media 138.9 / db_qps 80 /
+    events 333.3), правка DAU одним `node_edit` удваивает цепочку;
+  - документация: SPEC §5.1 (поля рёбер + outputs снимка), user-docs/
+    calculations.md («Проливание в параметры»), fr-029 changelog + статус,
+    index, roadmap changelog.
+
+  **Гейты:** `cargo fmt --check` ✓, `cargo clippy --workspace --all-targets
+  -D warnings` ✓, `cargo test --workspace` — 981 passed / 0 failed ✓,
+  `cargo deny check` — licenses/bans/sources/advisories ok ✓.
+- **Коммит:** см. git log — CP0/CP1.
+- **Интеграция с CP2 (FR-032, влит параллельным коммитом `1fb63e6`):**
+  выполнен чек-лист из changelog FR-032 — `port_contract_issues`
+  (E-UNIT/E-PORT-UNKNOWN/E-DOUBLE-INPUT на адресации FR-029),
+  W-AMBIGUOUS-SRC с `fromOutput`, W-UNUSED-SLOT без `toParam`-рёбер,
+  `mcp_edge_json` с полями портов (edges_list/edge_get), дубликат ветки
+  edges_list устранён (TOOLs = 25); гейт A2 — 3 подсаженные ошибки на
+  эталоне Instagram → ровно 3 issue (в составе e2e
+  `mcp_fr029_instagram_mvp_reference`).
+- **Открытые пункты (следующие шаги):** CP3 = FR-033 (graph_apply), CP4 =
+  R5 (рецепт агента user-docs/agent-recipe.md), CP5 = FR-016, CP6 =
+  FR-017 v1.
+
+---
+
 ## 2026-09-18 — CP2: FR-032 v1 — чтение графа + graph_validate (код)
 
 - **Задача (владелец):** реализовать CP2 продуктового роадмапа (`product-roadmap.md`
@@ -40,7 +122,6 @@
   параллельной разработки, не дефект.
 - **Коммит/ветка:** `feature/fr-032-graph-read-validate` (база 433e3fa),
   коммит — см. git log (feat(core,mcp,app): FR-032 v1).
-
 ---
 
 ## 2026-09-18 — Критический путь: детализация + FR-032/FR-033 (разметка FR/CR)

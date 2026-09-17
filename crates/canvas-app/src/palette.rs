@@ -1673,6 +1673,7 @@ mod tests {
             .collect(),
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
+            outputs: Vec::new(),
         };
         let mut canvas = Canvas::default();
         let mut node = Node::text("tpl", "rps = 1000 rps", 0.0, 0.0);
@@ -1733,6 +1734,7 @@ mod tests {
             .collect(),
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
+            outputs: Vec::new(),
         }));
         template_canvas.nodes.push(node);
         let groups = palette_groups(

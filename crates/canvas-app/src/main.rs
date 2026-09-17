@@ -5166,6 +5166,9 @@ impl App {
                     description: format!("Сохранено с канваса {}", self.scene.path.display()),
                     description_en: None,
                     params,
+                    // FR-029: именованные выходы переезжают в custom-шаблон
+                    // вместе со снимком (снапшот переживает пересохранение)
+                    outputs: template.outputs.clone(),
                     expr: template.expr.clone(),
                     color: "#9B9B9B".to_owned(),
                     icon: "custom".to_owned(),
@@ -6011,6 +6014,13 @@ fn mcp_edge_json(edge: &Edge) -> serde_json::Value {
     if let Some(line) = edge.from_line {
         value["fromLine"] = serde_json::json!(line);
     }
+    // FR-029: адресация портов — именованный исток и проливание в параметр
+    if let Some(name) = &edge.from_output {
+        value["fromOutput"] = serde_json::json!(name);
+    }
+    if let Some(name) = &edge.to_param {
+        value["toParam"] = serde_json::json!(name);
+    }
     value
 }
 
@@ -6303,15 +6313,115 @@ fn mcp_dispatch(
         "edge_create" => {
             let from = mcp_req_str(params, "from")?.to_owned();
             let to = mcp_req_str(params, "to")?.to_owned();
-            mcp_node_index(&scene.canvas, &from)?;
-            mcp_node_index(&scene.canvas, &to)?;
-            let edge = Edge::new(
+            let from_index = mcp_node_index(&scene.canvas, &from)?;
+            let to_index = mcp_node_index(&scene.canvas, &to)?;
+            // FR-029 v2: адресация портов. kind — "value" включает поток
+            // значений сразу (раньше требовался flow_set_kind); дефолт
+            // "control" — визуальная связь (обратная совместимость).
+            let kind = match params.get("kind").and_then(serde_json::Value::as_str) {
+                None | Some("control") => FlowKind::Control,
+                Some("value") => FlowKind::Value,
+                Some(other) => {
+                    return Err(format!(
+                        "kind должен быть \"value\" или \"control\", получено {other:?}"
+                    ))
+                }
+            };
+            // Взаимное исключение fromLine/fromOutput — ошибка схемы
+            let from_line = match params.get("fromLine") {
+                None => None,
+                Some(value) => {
+                    let line = value.as_u64().ok_or_else(|| {
+                        "fromLine должен быть целым ≥ 0 (индексом строки)".to_owned()
+                    })?;
+                    Some(line as usize)
+                }
+            };
+            let from_output = params
+                .get("fromOutput")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if from_line.is_some() && from_output.is_some() {
+                return Err(
+                    "fromLine и fromOutput взаимно исключаются: адресуй строку ИЛИ именованный выход"
+                        .to_owned(),
+                );
+            }
+            let to_param = params
+                .get("toParam")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if to_param.is_some() && kind != FlowKind::Value {
+                return Err(
+                    "toParam адресует параметр шаблонной ноды: требуется kind = \"value\""
+                        .to_owned(),
+                );
+            }
+            // Валидация имён по снапшотам (FR-029): неизвестное имя — ошибка
+            // вызова, агент не молчит. Исток: шаблонная нода — секция
+            // outputs снапшота; текстовая — переменные Numi-листа
+            // (присваивания `имя = …`, чтение по списку params_from_text).
+            if let Some(name) = &from_output {
+                let source = &scene.canvas.nodes[from_index];
+                let known = match source.template() {
+                    Some(tpl) => tpl.outputs.iter().any(|spec| &spec.name == name),
+                    None => canvas_core::templates::params_from_text(
+                        &source.text.clone().unwrap_or_default(),
+                    )
+                    .contains_key(name),
+                };
+                if !known {
+                    return Err(format!(
+                        "нода {from} не имеет выхода {name:?}: у шаблонной — секция outputs, у текстовой — переменная Numi-листа"
+                    ));
+                }
+            }
+            // Приёмник: toParam — только параметр шаблонной ноды
+            if let Some(name) = &to_param {
+                let target = &scene.canvas.nodes[to_index];
+                match target.template() {
+                    Some(tpl) if tpl.params.contains_key(name) => {}
+                    Some(_) => {
+                        return Err(format!(
+                            "нода {to} не имеет параметра {name:?}: доступные — {}",
+                            target
+                                .template()
+                                .map(|tpl| tpl
+                                    .params
+                                    .keys()
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join(", "))
+                                .unwrap_or_default()
+                        ))
+                    }
+                    None => {
+                        return Err(format!(
+                            "toParam адресует параметры шаблонных нод: нода {to} — текстовая (позиционные слоты $1..$N без адресации)"
+                        ))
+                    }
+                }
+            }
+            let mut edge = Edge::new(
                 scene.canvas.next_edge_id(),
                 &from,
                 mcp_side(params, "fromSide")?,
                 &to,
                 mcp_side(params, "toSide")?,
             );
+            edge.set_flow_kind(kind);
+            edge.from_line = from_line;
+            edge.from_output = from_output;
+            edge.to_param = to_param;
+            // FR-014: value-ребро не замыкает цикл (DAG-инвариант)
+            if kind == FlowKind::Value
+                && canvas_core::creates_value_cycle(&scene.canvas, &from, &to)
+            {
+                let participants = canvas_core::value_path(&scene.canvas, &to, &from)
+                    .unwrap_or_default()
+                    .join(" → ");
+                return Err(format!("цикл потока значений: {participants}"));
+            }
             // FR-006: MCP-мутация — undo-шаг (все валидации прошли)
             scene.push_undo(scene.canvas.clone());
             let id = edge.id.clone();
@@ -6383,25 +6493,85 @@ fn mcp_dispatch(
                 "kind": scene.canvas.edges[edge_index].flow_kind().as_str(),
             }))
         }
-        // FR-014: форс-пересчёт всего графа — карта значений для агентов,
-        // проверяющих сценарии (ноды без формулы не участвуют)
+        // FR-029 v2: форс-пересчёт всего графа — узловое значение + именованные
+        // выходы + построчные значения + предупреждения проливания; карта
+        // для агентов, проверяющих сценарии (ноды без формулы не участвуют,
+        // но переменные их листов видны в outputs текстовых нод)
         "flow_recalc" => {
-            let outputs = flow::propagate(&scene.canvas, &HashMap::new())
+            let solutions = flow::propagate_with_lines(&scene.canvas, &HashMap::new())
                 .map_err(|cycle| cycle.to_string())?;
-            let nodes: serde_json::Map<String, serde_json::Value> = outputs
+            let nodes: serde_json::Map<String, serde_json::Value> = solutions
+                .outputs
                 .iter()
                 .map(|(id, result)| {
-                    let entry = match result {
+                    let mut entry = match result {
                         Ok(value) => serde_json::json!({
                             "value": value.num,
                             "unit": value.unit.display(),
                         }),
                         Err(err) => serde_json::json!({ "error": err.to_string() }),
                     };
+                    // Именованные выходы ноды (FR-029): шаблонные — секция
+                    // outputs, текстовые — переменные Numi-листа
+                    let named: serde_json::Map<String, serde_json::Value> = solutions
+                        .named
+                        .iter()
+                        .filter(|((node_id, _), _)| node_id == id)
+                        .map(|((_, name), value)| {
+                            (
+                                name.clone(),
+                                serde_json::json!({
+                                    "value": value.num,
+                                    "unit": value.unit.display(),
+                                }),
+                            )
+                        })
+                        .collect();
+                    if !named.is_empty() {
+                        entry["outputs"] = serde_json::Value::Object(named);
+                    }
+                    // Построчные значения (FR-025/FR-029)
+                    let lines: Vec<serde_json::Value> = solutions
+                        .lines
+                        .iter()
+                        .filter(|((node_id, _), _)| node_id == id)
+                        .map(|((_, line), value)| {
+                            serde_json::json!({
+                                "index": line,
+                                "value": value.num,
+                                "unit": value.unit.display(),
+                            })
+                        })
+                        .collect();
+                    if !lines.is_empty() {
+                        entry["lines"] = serde_json::Value::Array(lines);
+                    }
+                    if let Some(warnings) = solutions.warnings.get(id) {
+                        entry["warnings"] = serde_json::json!(warnings);
+                    }
                     (id.clone(), entry)
                 })
                 .collect();
-            Ok(serde_json::Value::Object(nodes))
+            // Текстовые ноды без узлового значения: их именованные
+            // выходы всё равно полезны агенту (проливание в downstream)
+            let mut result = serde_json::Value::Object(nodes);
+            for ((node_id, name), value) in &solutions.named {
+                let entry = result
+                    .as_object_mut()
+                    .expect("карта нод")
+                    .entry(node_id.clone())
+                    .or_insert_with(|| serde_json::json!({}));
+                let outputs = entry
+                    .as_object_mut()
+                    .expect("объект ноды")
+                    .entry("outputs".to_owned())
+                    .or_insert_with(|| serde_json::json!({}));
+                outputs[name] = serde_json::json!({
+                    "value": value.num,
+                    "unit": value.unit.display(),
+                });
+            }
+            Ok(result)
         }
         // FR-014: проверка DAG-инварианта — [] или участники цикла
         "flow_cycle_check" => match flow::topo_sort(&scene.canvas) {
@@ -6528,7 +6698,28 @@ fn mcp_dispatch(
                             (spec.name.clone(), entry)
                         })
                         .collect();
-                    serde_json::json!({
+                    // FR-029: именованные выходы — агент адресует их
+                    // рёбрами fromOutput
+                    let outputs: Vec<serde_json::Value> = manifest
+                        .outputs
+                        .iter()
+                        .map(|spec| {
+                            let mut entry = serde_json::json!({ "name": spec.name });
+                            if let Some(unit) = &spec.unit {
+                                entry["unit"] = serde_json::json!(unit);
+                            }
+                            match &spec.source {
+                                canvas_core::templates::OutputSource::Line(line) => {
+                                    entry["line"] = serde_json::json!(line);
+                                }
+                                canvas_core::templates::OutputSource::Expr(expr) => {
+                                    entry["expr"] = serde_json::json!(expr);
+                                }
+                            }
+                            entry
+                        })
+                        .collect();
+                    let mut entry = serde_json::json!({
                         "id": manifest.id,
                         "name_en": manifest.name,
                         "name_ru": manifest.name_ru,
@@ -6541,7 +6732,11 @@ fn mcp_dispatch(
                         "color": manifest.color,
                         "source": manifest.source.as_str(),
                         "params": params,
-                    })
+                    });
+                    if !outputs.is_empty() {
+                        entry["outputs"] = serde_json::Value::Array(outputs);
+                    }
+                    entry
                 })
                 .collect();
             Ok(serde_json::Value::Array(templates))
@@ -10871,6 +11066,7 @@ mod tests {
             icon: "custom".to_owned(),
             color: "#9B9B9B".to_owned(),
             name: None,
+            outputs: Vec::new(),
         }));
         canvas.nodes.push(tpl);
         // Обычная прозаическая нода — футера нет, высота не трогается.
@@ -10952,6 +11148,7 @@ mod tests {
             icon: "custom".to_owned(),
             color: "#9B9B9B".to_owned(),
             name: None,
+            outputs: Vec::new(),
         }));
         canvas.nodes.push(tpl);
         let path = PathBuf::from("target/tmp/cr012-measured.canvas");
@@ -11948,6 +12145,7 @@ mod tests {
             description: String::new(),
             description_en: None,
             params: Vec::new(),
+            outputs: Vec::new(),
             expr: "1".to_owned(),
             color: "#9B9B9B".to_owned(),
             icon: "custom".to_owned(),
@@ -13031,7 +13229,10 @@ mod tests {
             .expect("com.canvasdesk.lb");
         assert_eq!(lb["name_en"], "Load Balancer");
         assert_eq!(lb["name_ru"], "Балансировщик нагрузки");
-        assert_eq!(lb["version"], "1.0.0");
+        // FR-029: секция outputs — версия схемы 1.1
+        assert_eq!(lb["version"], "1.1.0");
+        let lb_outputs = lb["outputs"].as_array().expect("outputs у lb (FR-029)");
+        assert!(lb_outputs.iter().any(|o| o["name"] == "next_hop_rps"));
         assert_eq!(lb["category"], "backend");
         assert_eq!(lb["expr"], "mm1($rps, $service_rate, $servers)");
         assert_eq!(lb["params"]["rps"]["type"], "rate");
@@ -13078,7 +13279,7 @@ mod tests {
         // Снимок template-ссылки
         let template = node.template().expect("template");
         assert_eq!(template.id, "com.canvasdesk.lb");
-        assert_eq!(template.version, "1.0.0");
+        assert_eq!(template.version, "1.1.0");
         assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
         assert_eq!(template.params["rps"].num, 2000.0);
         assert_eq!(template.icon, "lb");
@@ -13167,5 +13368,285 @@ mod tests {
         scene.canvas = before;
         scene.spatial = SpatialIndex::build(&scene.canvas);
         assert!(!scene.canvas.edges[0].ports_pinned());
+    }
+
+    // --- FR-029: порты значений (CP1, ADR-0005 Instagram MVP) ---
+
+    /// Хелпер: значение в допуске ±1% (гейт эталона ADR-0005).
+    fn close_1pct(actual: f64, oracle: f64) -> bool {
+        (actual - oracle).abs() <= oracle.abs() * 0.01
+    }
+
+    /// CP1 (FR-029, ADR-0005): эталонный сценарий «Instagram MVP» —
+    /// 12 нод, 10 value-рёбер с адресацией портов (fromOutput/toParam).
+    /// Сборка ТОЛЬКО через MCP (агентный путь), числа сходятся с таблицей
+    /// §Эталонные значения в допуске ±1%; правка DAU одним node_edit
+    /// удваивает всю цепочку без правки связей/формул (демо-критерий CP1).
+    #[test]
+    fn mcp_fr029_instagram_mvp_reference() {
+        let mut scene = SceneState::new(
+            Canvas::default(),
+            PathBuf::from("target/tmp/instagram.canvas"),
+        );
+        let mut camera = Camera::default();
+
+        // 1. Текстовая нода «Трафик-профиль» (Numi-лист)
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            r#"{"x": 0, "y": 0, "width": 300, "text": "dau = 1000000\nsess = 4\nreq = 12\npeak = 2.5\nbudget = 45 ms\navg_rps = dau × sess × req × 1 rps / 86400\npeak_rps = avg_rps × peak"}"#,
+        )
+        .expect("traffic");
+        // id ноды — из nodes_list (создана последней)
+        let traffic = scene.canvas.nodes.last().expect("нода").id.clone();
+
+        // 2. Инстанциация 11 шаблонных нод (ADR-0005 §Состав)
+        let mut node_id = |template: &str, x: f32, y: f32, params: &str| {
+            let result = dispatch(
+                &mut scene,
+                &mut camera,
+                "template_instantiate",
+                &format!(r#"{{"id": "{template}", "x": {x}, "y": {y}, "params": {params}}}"#),
+            )
+            .expect(template);
+            result["id"].as_str().expect("id").to_owned()
+        };
+        // Параметры подобраны так, чтобы пик-нагрузка не перегружала сервисы
+        // (E-OVERLOAD — отдельный сценарий; эталон A2 стартует чистым)
+        let cdn = node_id(
+            "com.canvasdesk.cdn",
+            400.0,
+            0.0,
+            r#"{"cache_hit": 0.6, "origin_latency": 1}"#,
+        );
+        let lb = node_id("com.canvasdesk.tcp-lb", 800.0, 0.0, "{}");
+        let gateway = node_id(
+            "com.canvasdesk.api-gateway",
+            1200.0,
+            -200.0,
+            r#"{"latency_budget": 2.5, "auth_overhead": 1}"#,
+        );
+        let auth = node_id("com.canvasdesk.auth-service", 1600.0, -400.0, "{}");
+        let feed = node_id(
+            "com.canvasdesk.graphql",
+            1600.0,
+            0.0,
+            r#"{"resolver_time": 0.5}"#,
+        );
+        let media = node_id("com.canvasdesk.grpc-service", 1600.0, 400.0, "{}");
+        let cache = node_id("com.canvasdesk.cache-redis", 1200.0, 400.0, "{}");
+        let db = node_id("com.canvasdesk.db-sql-master", 2000.0, -100.0, "{}");
+        let replica = node_id("com.canvasdesk.db-sql-replica", 2400.0, -100.0, "{}");
+        let queue = node_id("com.canvasdesk.queue-kafka", 2000.0, 300.0, "{}");
+        let workers = node_id(
+            "com.canvasdesk.worker",
+            2400.0,
+            300.0,
+            r#"{"processing_time": 2}"#,
+        );
+
+        // 3. Value-рёбра с адресацией портов (ADR-0005 §Цепочки проливания)
+        let mut link = |from: &str, to: &str, from_output: &str, to_param: &str| {
+            dispatch(
+                &mut scene,
+                &mut camera,
+                "edge_create",
+                &format!(
+                    r#"{{"from": "{from}", "to": "{to}", "fromOutput": "{from_output}", "toParam": "{to_param}", "kind": "value"}}"#
+                ),
+            )
+            .unwrap_or_else(|err| panic!("ребро {from}.{from_output} → {to}.{to_param}: {err}"));
+        };
+        link(&traffic, &cdn, "peak_rps", "rps");
+        link(&cdn, &lb, "origin_rps", "connections_per_sec");
+        link(&lb, &gateway, "out_gateway", "rps");
+        link(&lb, &auth, "out_auth", "rps");
+        link(&lb, &feed, "out_feed", "rps");
+        link(&lb, &media, "out_media", "rps");
+        link(&feed, &db, "db_qps", "qps");
+        link(&db, &replica, "replica_load", "qps");
+        link(&feed, &queue, "events", "produce_rate");
+        link(&queue, &workers, "consume_rate", "tasks_per_sec");
+
+        // 4. edges_list: агент видит адресацию (CR-013 G4)
+        let edges = dispatch(&mut scene, &mut camera, "edges_list", "{}").expect("edges_list");
+        let edges = edges.as_array().expect("массив");
+        assert_eq!(edges.len(), 10, "10 value-рёбер");
+        let first = &edges[0];
+        assert_eq!(first["fromOutput"], "peak_rps");
+        assert_eq!(first["toParam"], "rps");
+        assert_eq!(first["kind"], "value");
+
+        // 5. flow_recalc v2: значения против oracle ADR-0005 (±1%)
+        let values = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
+        let oracle = |node: &str, output: &str, expected: f64, what: &str| {
+            let actual = values[node]["outputs"][output]["value"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{what}: нет значения — {values}"));
+            assert!(
+                close_1pct(actual, expected),
+                "{what}: {actual} vs oracle {expected} (±1%)"
+            );
+        };
+        oracle(&traffic, "avg_rps", 555.6, "avg_rps = 1e6·4·12/86400");
+        oracle(&traffic, "peak_rps", 1388.9, "peak_rps = 555.6·2.5");
+        oracle(&cdn, "origin_rps", 555.6, "origin = 1389·(1−0.6)");
+        oracle(&lb, "out_gateway", 555.6, "gateway = весь origin");
+        oracle(&lb, "out_auth", 83.3, "auth = 556·0.15");
+        oracle(&lb, "out_feed", 333.3, "feed = 556·0.60");
+        oracle(&lb, "out_media", 138.9, "media = 556·0.25");
+        oracle(&feed, "db_qps", 80.0, "db = 333·0.8·0.3");
+        oracle(&feed, "events", 333.3, "events = feed rps");
+        oracle(&db, "replica_load", 40.0, "replica = 80·0.5");
+        oracle(&queue, "consume_rate", 333.3, "consume = min(333, 2400)");
+
+        // Проливание подтверждено транситивно: db_qps зависит от пролито-
+        // го в feed.rps; upstream_rps шлюза — от пролитого out_gateway
+        oracle(
+            &gateway,
+            "upstream_rps",
+            555.6,
+            "gateway.upstream_rps = пролитый rps",
+        );
+
+        // 6. Гейт A2 (FR-032 × FR-029, интеграция CP1): чистый эталон —
+        // valid; 3 подсаженные ошибки (единица, дубль-вход, несуществующий
+        // порт) → ровно 3 issue с кодом/нодой/ребром; исправление → чисто.
+        // Подсадка — прямой мутацией рёбер (как hand-edited .canvas): MCP
+        // edge_create такие рёбра отклоняет валидацией имён.
+        {
+            let report =
+                dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("graph_validate");
+            assert_eq!(report["valid"], true, "чистый эталон: {report}");
+            assert_eq!(
+                report["issues"].as_array().map(Vec::len),
+                Some(0),
+                "базовая линия без проблем: {report}"
+            );
+
+            // подсадка 1: E-UNIT — время (budget, ms) в Rate-параметр qps
+            // кэша (у кэша нет других входов — ровно одна проблема)
+            let mut unit_edge = Edge::new("planted-unit", &traffic, None, &cache, None);
+            unit_edge.set_flow_kind(FlowKind::Value);
+            unit_edge.from_output = Some("budget".to_owned());
+            unit_edge.to_param = Some("qps".to_owned());
+            scene.canvas.add_edge(unit_edge);
+            // подсадка 2: E-DOUBLE-INPUT — второе ребро в gateway.rps
+            let mut dbl_edge = Edge::new("planted-dbl", &lb, None, &gateway, None);
+            dbl_edge.set_flow_kind(FlowKind::Value);
+            dbl_edge.from_output = Some("out_feed".to_owned());
+            dbl_edge.to_param = Some("rps".to_owned());
+            scene.canvas.add_edge(dbl_edge);
+            // подсадка 3: E-PORT-UNKNOWN — несуществующее имя выхода в
+            // свободный параметр token_verify (без дубль-входа)
+            let mut port_edge = Edge::new("planted-port", &traffic, None, &auth, None);
+            port_edge.set_flow_kind(FlowKind::Value);
+            port_edge.from_output = Some("no_such_output".to_owned());
+            port_edge.to_param = Some("token_verify".to_owned());
+            scene.canvas.add_edge(port_edge);
+
+            let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}")
+                .expect("graph_validate с подсадками");
+            let issues = report["issues"].as_array().expect("issues");
+            assert_eq!(issues.len(), 3, "ровно 3 issue: {report}");
+            let by_code = |code: &str| {
+                issues
+                    .iter()
+                    .find(|i| i["code"] == code)
+                    .unwrap_or_else(|| panic!("нет {code}: {report}"))
+            };
+            let unit_issue = by_code("E-UNIT");
+            assert_eq!(unit_issue["edge_id"], "planted-unit");
+            assert_eq!(unit_issue["node_id"], cache);
+            let dbl_issue = by_code("E-DOUBLE-INPUT");
+            assert_eq!(dbl_issue["edge_id"], "planted-dbl");
+            assert_eq!(dbl_issue["node_id"], gateway);
+            let port_issue = by_code("E-PORT-UNKNOWN");
+            assert_eq!(port_issue["edge_id"], "planted-port");
+
+            // исправление: снять все три подсадки — эталон снова чист
+            scene
+                .canvas
+                .edges
+                .retain(|edge| !edge.id.starts_with("planted-"));
+            let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}")
+                .expect("graph_validate после исправления");
+            assert_eq!(report["valid"], true, "после исправления: {report}");
+            assert_eq!(report["issues"].as_array().map(Vec::len), Some(0));
+        }
+
+        // 7. Демо-критерий CP1: правка DAU одним node_edit удваивает цепочку
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_edit",
+            &format!(
+                r#"{{"id": "{traffic}", "text": "dau = 2000000\nsess = 4\nreq = 12\npeak = 2.5\nbudget = 45 ms\navg_rps = dau × sess × req × 1 rps / 86400\npeak_rps = avg_rps × peak"}}"#
+            ),
+        )
+        .expect("node_edit dau");
+        let doubled = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("recalc");
+        for (node, output, expected, what) in [
+            (&traffic, "peak_rps", 2777.8, "peak_rps ×2"),
+            (&cdn, "origin_rps", 1111.1, "origin ×2"),
+            (&feed, "db_qps", 160.0, "db_qps ×2"),
+            (&queue, "consume_rate", 666.7, "consume ×2"),
+        ] {
+            let actual = doubled[node]["outputs"][output]["value"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{what}: нет значения — {doubled}"));
+            assert!(
+                close_1pct(actual, expected),
+                "{what}: {actual} vs oracle {expected}"
+            );
+        }
+
+        // 7. Валидация имён: неизвестный выход/параметр — ошибка вызова
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(
+                r#"{{"from": "{cdn}", "to": "{gateway}", "fromOutput": "no_such_output", "toParam": "rps", "kind": "value"}}"#
+            ),
+        )
+        .expect_err("неизвестный выход — ошибка");
+        assert!(err.contains("no_such_output"), "ошибка называет имя: {err}");
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(
+                r#"{{"from": "{cdn}", "to": "{gateway}", "fromOutput": "origin_rps", "toParam": "no_such_param", "kind": "value"}}"#
+            ),
+        )
+        .expect_err("неизвестный параметр — ошибка");
+        assert!(
+            err.contains("no_such_param"),
+            "ошибка называет параметр: {err}"
+        );
+        // взаимное исключение fromLine/fromOutput
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(
+                r#"{{"from": "{cdn}", "to": "{gateway}", "fromLine": 0, "fromOutput": "origin_rps", "kind": "value"}}"#
+            ),
+        )
+        .expect_err("fromLine + fromOutput — ошибка схемы");
+        assert!(err.contains("взаимно исключаются"), "{err}");
+        // toParam на текстовой ноде-приёмнике — ошибка (нет параметров)
+        let err = dispatch(
+            &mut scene,
+            &mut camera,
+            "edge_create",
+            &format!(
+                r#"{{"from": "{cdn}", "to": "{traffic}", "fromOutput": "origin_rps", "toParam": "rps", "kind": "value"}}"#
+            ),
+        )
+        .expect_err("toParam на текстовой ноде — ошибка");
+        assert!(err.contains("текстовая"), "{err}");
     }
 }

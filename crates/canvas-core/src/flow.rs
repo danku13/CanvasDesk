@@ -23,10 +23,11 @@
 //! - результат (`FlowOutputs`) — runtime-данные: НЕ сериализуется в
 //!   `.canvas`, источник истины — формулы + топология рёбер.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::expr::{self, Env, EvalError, ExprOutcome, Value};
-use crate::model::Canvas;
+use crate::model::{Canvas, Edge};
+use crate::templates::OutputSource;
 
 /// Тип потока ребра (FR-014): контрольная связь (по умолчанию — обратная
 /// совместимость со старыми `.canvas`) или поток значений.
@@ -230,14 +231,44 @@ pub fn propagate(
 /// значений не дают (слот деградирует до `None`).
 pub type LineOutputs = HashMap<(String, usize), Value>;
 
-/// FR-025: полный результат пересчёта — значения нод ([`FlowOutputs`])
-/// плюс построчные выходы Numi-листов ([`LineOutputs`]).
+/// FR-029: именованные выходы — `(id ноды, имя выхода) → Value`.
+/// Для шаблонных нод — секция `outputs` манифеста (снапшот
+/// `canvasdesk.template.outputs`: строка листа или подвыражение от
+/// параметров); для текстовых — переменные Numi-листа (последнее
+/// определение). Источник адресуется value-рёбрами `fromOutput`.
+pub type NamedOutputs = HashMap<(String, String), Value>;
+
+/// FR-029: полный результат пересчёта — значения нод ([`FlowOutputs`]),
+/// построчные выходы ([`LineOutputs`]), именованные выходы
+/// ([`NamedOutputs`]) и предупреждения по нодам (конфликты проливания).
 #[derive(Debug, Clone, Default)]
 pub struct FlowSolutions {
     /// Значения нод (как в [`propagate`]).
     pub outputs: FlowOutputs,
     /// Значения формульных строк текстовых нод (FR-025).
     pub lines: LineOutputs,
+    /// Именованные выходы нод (FR-029).
+    pub named: NamedOutputs,
+    /// FR-029: предупреждения по нодам — несколько value-рёбер в один
+    /// `toParam` (побеждает последнее по порядку `canvas.edges`).
+    /// Строгая диагностика — `graph_validate` (FR-032).
+    pub warnings: HashMap<String, Vec<String>>,
+}
+
+/// FR-029: входящие value-рёбра ноды, разобранные по адресации.
+/// Позиционные слоты `$1..$N` — рёбра БЕЗ `toParam` (порядок `canvas.edges`;
+/// для канвасов без адресованных рёбер — то же множество, что и раньше,
+/// обратная совместимость FR-014); карта проливания — рёбра С `toParam`
+/// (последнее по `canvas.edges` побеждает, детерминизм).
+#[derive(Debug, Default)]
+struct InboundValues {
+    /// Слоты `$1..$N` (значение ребра или `None` — источник без значения).
+    slots: Vec<Option<Value>>,
+    /// Проливание в параметры: имя параметра → значение (последнее
+    /// по `canvas.edges` ребро с этим `toParam`).
+    spill: BTreeMap<String, Option<Value>>,
+    /// Имена параметров с конфликтом (≥ 2 рёбер в один `toParam`).
+    conflicts: Vec<String>,
 }
 
 /// [`propagate`] с построчными выходами (FR-025): для текстовых Numi-листов
@@ -261,11 +292,31 @@ pub fn propagate_with_lines(
             solutions.outputs.insert(id.clone(), Ok(value.clone()));
             continue;
         }
-        let slots = inbound_slots_with_lines(canvas, id, &solutions.outputs, &solutions.lines);
-        let env = if slots.is_empty() {
+        // FR-029: входы по адресации — позиционные слоты (рёбра без
+        // toParam) и карта проливания в параметры (рёбра с toParam)
+        let inbound = inbound_values(
+            canvas,
+            id,
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+        );
+        if !inbound.conflicts.is_empty() {
+            let warnings = inbound
+                .conflicts
+                .iter()
+                .map(|name| {
+                    format!(
+                        "несколько value-рёбер в параметр {name}: побеждает последнее по canvas.edges"
+                    )
+                })
+                .collect();
+            solutions.warnings.insert(id.clone(), warnings);
+        }
+        let env = if inbound.slots.is_empty() {
             Env::empty()
         } else {
-            Env::with_inbound(slots)
+            Env::with_inbound(inbound.slots.clone())
         };
         // FR-018: у шаблонной ноды параметры (`canvasdesk.template.params`)
         // входят в окружение как `$имя`; формула — снимок из template-ссылки
@@ -275,16 +326,65 @@ pub fn propagate_with_lines(
             Some(tpl) => env.with_param_map(tpl.param_values()),
             None => env,
         };
+        // FR-029: ПРОЛИВАНИЕ — значения рёбер с `toParam` подставляются в
+        // окружение как `$<имя параметра>` ПОСЛЕ локальных параметров:
+        // ребро перекрывает локальное значение («проливание сильнее
+        // дефолта»), без правки формулы шаблона. Ребро без значения —
+        // параметр остаётся локальным (тихая деградация, как у слотов).
+        let env = if inbound.spill.is_empty() {
+            env
+        } else {
+            let resolved: BTreeMap<String, Value> = inbound
+                .spill
+                .into_iter()
+                .filter_map(|(name, value)| value.map(|v| (name, v)))
+                .collect();
+            env.with_param_map(resolved)
+        };
         // FR-025 (правка 2): значение КАЖДОЙ формульной строки текста —
         // кандидат построчной точки выхода, теперь и у шаблонных нод
         // (лист параметров — присваивания со значениями). Ошибки строк
-        // и проза значений не дают.
-        let line_outcomes = expr::eval_lines_in(&node.text.clone().unwrap_or_default(), &env);
+        // и проза значений не дают. FR-029: финальное окружение листа
+        // (переменные) сохраняется — именованные выходы текстовой ноды.
+        let (line_outcomes, sheet_env) =
+            expr::eval_lines_with_env(&node.text.clone().unwrap_or_default(), &env);
         for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
             if let Some(ExprOutcome::Ok(value)) = line_outcome {
                 solutions
                     .lines
                     .insert((id.clone(), line_index), value.clone());
+            }
+        }
+        // FR-029: именованные выходы ноды — адресация `fromOutput`.
+        // Шаблонная нода: снапшот outputs манифеста (Line(i) — из
+        // построчных значений; Expr(s) — вычисление в окружении ноды —
+        // входы + параметры + проливание). Текстовая нода: переменные
+        // Numi-листа (последнее определение имени — «строка сдвинулась,
+        // связь жива").
+        match &template {
+            Some(tpl) => {
+                for spec in &tpl.outputs {
+                    let value = match &spec.source {
+                        OutputSource::Line(line) => {
+                            solutions.lines.get(&(id.clone(), *line)).cloned()
+                        }
+                        OutputSource::Expr(source) => expr::parse(source)
+                            .ok()
+                            .and_then(|parsed| expr::eval(&parsed, &env).ok()),
+                    };
+                    if let Some(value) = value {
+                        solutions
+                            .named
+                            .insert((id.clone(), spec.name.clone()), value);
+                    }
+                }
+            }
+            None => {
+                for (name, value) in sheet_env.vars_iter() {
+                    solutions
+                        .named
+                        .insert((id.clone(), name.clone()), value.clone());
+                }
             }
         }
         // Значение ноды: шаблонная формула (FR-018), явная формула
@@ -329,6 +429,13 @@ pub fn inbound_slots(canvas: &Canvas, node_id: &str, outputs: &FlowOutputs) -> V
 /// удалена/стала прозой/ошибка — слот `Some(None)` (тихая деградация,
 /// согласована с принципом тишины прозы Numi). Ребро без `from_line` —
 /// значение ноды целиком (текущее поведение, инвариант флага FR-025).
+///
+/// FR-029 (семантика адресации рёбер, общая с [`inbound_values`]):
+/// `fromOutput` — именованный выход источника (снапшот `outputs` шаблона
+/// или переменная Numi-листа текстовой ноды), тихая деградация `None`;
+/// приоритет при обоих полях — `fromLine`. Рёбра с `toParam` в слоты
+/// НЕ входят (они «проливаются» в параметры — [`inbound_values`]); в
+/// канвасах без адресованных рёбер поведение идентично прежнему.
 pub fn inbound_slots_with_lines(
     canvas: &Canvas,
     node_id: &str,
@@ -338,15 +445,70 @@ pub fn inbound_slots_with_lines(
     canvas
         .edges
         .iter()
-        .filter(|edge| edge.to_node == node_id && edge.flow_kind() == FlowKind::Value)
-        .map(|edge| match edge.from_line {
-            Some(line) => lines.get(&(edge.from_node.clone(), line)).cloned(),
-            None => outputs
-                .get(&edge.from_node)
-                .and_then(|result| result.as_ref().ok())
-                .cloned(),
+        .filter(|edge| {
+            edge.to_node == node_id
+                && edge.flow_kind() == FlowKind::Value
+                && edge.to_param.is_none()
         })
+        .map(|edge| edge_source_value(edge, outputs, lines, &NamedOutputs::new()))
         .collect()
+}
+
+/// FR-029: значение, которое несёт value-ребро (источник по адресации):
+/// `fromLine` → строка листа; иначе `fromOutput` → именованный выход;
+/// иначе значение ноды целиком. Сломанная адресация — `None` (тихая
+/// деградация: проваленный исток не роняет пересчёт downstream).
+pub(crate) fn edge_source_value(
+    edge: &Edge,
+    outputs: &FlowOutputs,
+    lines: &LineOutputs,
+    named: &NamedOutputs,
+) -> Option<Value> {
+    if let Some(line) = edge.from_line {
+        lines.get(&(edge.from_node.clone(), line)).cloned()
+    } else if let Some(name) = &edge.from_output {
+        named.get(&(edge.from_node.clone(), name.clone())).cloned()
+    } else {
+        outputs
+            .get(&edge.from_node)
+            .and_then(|result| result.as_ref().ok())
+            .cloned()
+    }
+}
+
+/// FR-029: входящие value-рёбра ноды по адресации — позиционные слоты
+/// `$1..$N` (рёбра без `toParam`, порядок `canvas.edges`) и карта
+/// проливания в параметры (рёбра с `toParam`; несколько рёбер в один
+/// параметр — последнее по `canvas.edges` побеждает, имя попадает в
+/// `conflicts` для предупреждения `flow_recalc`/`graph_validate`).
+fn inbound_values(
+    canvas: &Canvas,
+    node_id: &str,
+    outputs: &FlowOutputs,
+    lines: &LineOutputs,
+    named: &NamedOutputs,
+) -> InboundValues {
+    let mut result = InboundValues::default();
+    // параметры, в которые уже приходили рёбра (для детекции конфликтов)
+    let mut seen_params: BTreeMap<String, usize> = BTreeMap::new();
+    for edge in &canvas.edges {
+        if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
+            continue;
+        }
+        let value = edge_source_value(edge, outputs, lines, named);
+        match &edge.to_param {
+            None => result.slots.push(value),
+            Some(name) => {
+                let count = seen_params.entry(name.clone()).or_insert(0);
+                *count += 1;
+                if *count == 2 {
+                    result.conflicts.push(name.clone());
+                }
+                result.spill.insert(name.clone(), value);
+            }
+        }
+    }
+    result
 }
 
 /// Путь по value-рёбрам от `start` до `goal` (включая концы) — участники
@@ -910,6 +1072,7 @@ mod tests {
             icon: String::new(),
             color: String::new(),
             name: None,
+            outputs: Vec::new(),
         }));
         canvas.nodes.push(node);
 
@@ -964,6 +1127,7 @@ mod tests {
             icon: String::new(),
             color: String::new(),
             name: None,
+            outputs: Vec::new(),
         }));
         canvas.nodes.push(node);
         node_with_expr(&mut canvas, "B", "$in × 2", 1.0);
@@ -1071,6 +1235,338 @@ mod tests {
             legacy.get("A").and_then(|r| r.as_ref().ok()),
             solutions.lines.get(&("A".to_owned(), 1)),
             "значение ноды == последняя формульная строка"
+        );
+    }
+
+    // --- FR-029: именованные порты значений (fromOutput / toParam) ---
+
+    /// Хелпер: шаблонная нода со снапшотом (параметры + outputs).
+    /// Параметры — (имя, значение, юнит): Rate-параметры требуют "rps".
+    fn template_node_with_outputs(
+        canvas: &mut Canvas,
+        id: &str,
+        params: &[(&str, f64, Option<&str>)],
+        expr: &str,
+        outputs: &[(&str, &str)],
+    ) {
+        use crate::templates::{OutputSource, OutputSpec, TemplateParam, TemplateRef};
+        let text = params
+            .iter()
+            .map(|(name, value, unit)| match unit {
+                Some(unit) => format!("{name} = {value} {unit}"),
+                None => format!("{name} = {value}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut node = Node::text(id, text, 0.0, 0.0);
+        let mut param_map = std::collections::BTreeMap::new();
+        for (name, value, unit) in params {
+            param_map.insert(
+                (*name).to_owned(),
+                TemplateParam {
+                    num: *value,
+                    unit: unit.map(str::to_owned),
+                },
+            );
+        }
+        node.set_template(Some(TemplateRef {
+            id: format!("mock.{id}"),
+            version: "1.0.0".to_owned(),
+            expr: expr.to_owned(),
+            params: param_map,
+            icon: "custom".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            name: None,
+            outputs: outputs
+                .iter()
+                .map(|(name, expr)| OutputSpec {
+                    name: (*name).to_owned(),
+                    unit: None,
+                    source: OutputSource::Expr((*expr).to_owned()),
+                })
+                .collect(),
+        }));
+        canvas.nodes.push(node);
+    }
+
+    /// value-ребро с адресацией портов (fromOutput / toParam).
+    fn ported_value_edge(
+        canvas: &mut Canvas,
+        id: &str,
+        from: &str,
+        to: &str,
+        from_output: Option<&str>,
+        to_param: Option<&str>,
+    ) {
+        let mut edge = Edge::new(id, from, None, to, None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.from_output = from_output.map(str::to_owned);
+        edge.to_param = to_param.map(str::to_owned);
+        canvas.add_edge(edge);
+    }
+
+    /// FR-029: проливание входа в параметр шаблонной ноды — ребро с
+    /// `toParam` подставляет значение как `$rps`, перекрывая локальное
+    /// значение параметра (семантика «проливание сильнее дефолта»).
+    /// Сценарий ADR-0005: `Трафик.peak_rps → gateway.rps`.
+    #[test]
+    fn spill_overrides_local_param() {
+        let mut canvas = Canvas::default();
+        // Текстовая нода «Трафик»: peak_rps = 2500
+        let traffic = Node::text("traffic", "peak_rps = 2500 rps", 0.0, 0.0);
+        canvas.nodes.push(traffic);
+        // Шаблонная нода: utilization($rps, 1 req / 10 ms) — локальный
+        // rps = 1000 дал бы ρ = 10; проливание 2500 даёт ρ = 25
+        template_node_with_outputs(
+            &mut canvas,
+            "gateway",
+            &[("rps", 1000.0, Some("rps"))],
+            "utilization($rps, 1 req / 10 ms)",
+            &[],
+        );
+        // value-ребро: значение traffic (2500) → параметр rps
+        ported_value_edge(&mut canvas, "e1", "traffic", "gateway", None, Some("rps"));
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        // utilization = 2500 / 100 = 25 — проливание перекрыло локальный 1000
+        let utilization = solutions
+            .outputs
+            .get("gateway")
+            .and_then(|result| result.as_ref().ok())
+            .expect("формула шаблона вычислилась");
+        assert!(
+            (utilization.num - 25.0).abs() < 1e-9,
+            "проливание перекрывает локальный параметр: {utilization:?}"
+        );
+        // Проливание видно и в именованном… нет — в значениях строк листа:
+        // текст gateway (`rps = 1000`) НЕ переписывается (инвариант «без
+        // правки формулы») — перекрытие только в окружении вычисления.
+        let gateway_text = canvas
+            .node("gateway")
+            .and_then(|node| node.text.clone())
+            .unwrap_or_default();
+        assert!(
+            gateway_text.contains("1000"),
+            "текст ноды не мутируется проливанием"
+        );
+    }
+
+    /// FR-029: ребро БЕЗ `toParam` — прежнее поведение FR-014:
+    /// позиционный слот `$1` (обратная совместимость).
+    #[test]
+    fn edge_without_to_param_keeps_positional_slots() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "7", 0.0);
+        node_with_expr(&mut canvas, "B", "$1 × 3", 1.0);
+        value_edge(&mut canvas, "e1", "A", "B");
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("B")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(21.0),
+            "позиционные слоты работают как до FR-029"
+        );
+    }
+
+    /// FR-029: `fromOutput` на шаблонной ноде — именованный выход (Expr
+    /// от параметров) адресуется downstream-ребром.
+    #[test]
+    fn from_output_template_named_output() {
+        let mut canvas = Canvas::default();
+        // CDN: rps = 1000, hit = 60% → выход origin_rps = $rps × (1 - $hit)
+        template_node_with_outputs(
+            &mut canvas,
+            "cdn",
+            &[("rps", 1000.0, Some("rps")), ("hit", 0.6, None)],
+            "mm1($rps × (1 - $hit), 1 req / 200 ms)",
+            &[("origin_rps", "$rps × (1 - $hit)")],
+        );
+        // Шаблонная нода-приёмник: lb с параметром connections_per_sec
+        template_node_with_outputs(
+            &mut canvas,
+            "lb",
+            &[("connections_per_sec", 100.0, Some("rps"))],
+            "$connections_per_sec",
+            &[],
+        );
+        ported_value_edge(
+            &mut canvas,
+            "e1",
+            "cdn",
+            "lb",
+            Some("origin_rps"),
+            Some("connections_per_sec"),
+        );
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        // Именованный выход зарегистрирован
+        assert_eq!(
+            solutions
+                .named
+                .get(&("cdn".to_owned(), "origin_rps".to_owned()))
+                .map(|value| value.num),
+            Some(400.0),
+            "origin_rps = 1000 × 0.4"
+        );
+        // Проливание: lb.connections_per_sec = 400 (не локальные 100)
+        assert_eq!(
+            solutions
+                .outputs
+                .get("lb")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(400.0),
+            "значение lb = пролитый origin_rps"
+        );
+    }
+
+    /// FR-029: `fromOutput` на ТЕКСТОВОЙ ноде — переменная Numi-листа;
+    /// правка текста выше (сдвиг строк) НЕ рвёт связь (имя стабильнее
+    /// индекса — мотивация именованных портов).
+    #[test]
+    fn from_output_text_variable_survives_line_shift() {
+        let mut canvas = Canvas::default();
+        // Текстовая нода: peak_rps объявлен в середине листа
+        let traffic = Node::text(
+            "traffic",
+            "dau = 1000000\npeak_rps = 1389 rps\navg = dau / 86400 s",
+            0.0,
+            0.0,
+        );
+        canvas.nodes.push(traffic);
+        template_node_with_outputs(
+            &mut canvas,
+            "gateway",
+            &[("rps", 1.0, Some("rps"))],
+            "utilization($rps, 1 req / 10 ms)",
+            &[],
+        );
+        ported_value_edge(
+            &mut canvas,
+            "e1",
+            "traffic",
+            "gateway",
+            Some("peak_rps"),
+            Some("rps"),
+        );
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions
+                .named
+                .get(&("traffic".to_owned(), "peak_rps".to_owned()))
+                .map(|value| value.num),
+            Some(1389.0),
+            "переменная листа — именованный выход текстовой ноды"
+        );
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gateway")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(13.89),
+            "проливание peak_rps в параметр rps: ρ = 1389/100"
+        );
+        // Сдвиг строк: комментарий добавлен ВЫШЕ peak_rps — индекс строки
+        // изменился, имя живёт
+        let shifted = canvas
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "traffic")
+            .expect("нода traffic");
+        shifted.text = Some(
+            "# примечание\nX = 1\ndau = 1000000\npeak_rps = 1389 rps\navg = dau / 86400 s"
+                .to_owned(),
+        );
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gateway")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(13.89),
+            "адресация по имени живёт при сдвиге строк: ρ = 1389/100"
+        );
+    }
+
+    /// FR-029: несколько value-рёбер в один `toParam` — побеждает
+    /// последнее по порядку `canvas.edges` (детерминизм) + предупреждение.
+    #[test]
+    fn multiple_spill_edges_last_wins_with_warning() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "100", 0.0);
+        node_with_expr(&mut canvas, "B", "2500", 1.0);
+        template_node_with_outputs(&mut canvas, "gw", &[("rps", 1.0, None)], "$rps", &[]);
+        // Порядок в canvas.edges: e1 (A) раньше e2 (B) — победит B
+        ported_value_edge(&mut canvas, "e1", "A", "gw", None, Some("rps"));
+        ported_value_edge(&mut canvas, "e2", "B", "gw", None, Some("rps"));
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gw")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(2500.0),
+            "последнее ребро по canvas.edges побеждает"
+        );
+        let warnings = solutions
+            .warnings
+            .get("gw")
+            .expect("предупреждение записано");
+        assert!(
+            warnings.iter().any(|w| w.contains("rps")),
+            "предупреждение называет параметр: {warnings:?}"
+        );
+        // Слоты $1..$N не занимаются адресованными рёбрами: позиционная
+        // формула `$1` у gw не видит рёбер с toParam (их нет в слотах)
+    }
+
+    /// FR-029: несуществующий `fromOutput` / `toParam` у рукописного
+    /// файла — тихая деградация: значение не приходит, локальный
+    /// параметр остаётся, пересчёт не падает (симметрия FR-025).
+    #[test]
+    fn broken_port_addressing_degrades_silently() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "100", 0.0);
+        template_node_with_outputs(&mut canvas, "gw", &[("rps", 500.0, None)], "$rps", &[]);
+        // fromOutput указывает на несуществующее имя; toParam — на
+        // несуществующий параметр: формула должна взять локальный rps
+        ported_value_edge(
+            &mut canvas,
+            "e1",
+            "A",
+            "gw",
+            Some("no_such"),
+            Some("also_missing"),
+        );
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gw")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(500.0),
+            "локальный параметр остаётся при провале адресации"
+        );
+        // А точный toParam с провалившимся значением (источник без формулы):
+        // параметр тоже локальный — ребро не «обнуляет» его
+        let mut node = Node::text("prose", "просто проза", 2.0, 0.0);
+        node.set_expr(None);
+        canvas.nodes.push(node);
+        ported_value_edge(&mut canvas, "e2", "prose", "gw", None, Some("rps"));
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gw")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(500.0),
+            "ребро без значения не сбрасывает локальный параметр"
         );
     }
 }

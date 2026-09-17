@@ -468,6 +468,13 @@ impl Env {
         self.params.get(name)
     }
 
+    /// FR-029: итератор переменных листа (именованные выходы текстовой
+    /// ноды для адресации рёбер `fromOutput`). Порядок недетерминирован
+    /// (HashMap) — потребитель собирает в свою карту.
+    pub fn vars_iter(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.vars.iter()
+    }
+
     pub fn set(mut self, name: impl Into<String>, value: Value) -> Self {
         self.vars.insert(name.into(), value);
         self
@@ -1256,6 +1263,15 @@ pub fn eval_lines(source: &str) -> Vec<Option<ExprOutcome>> {
 /// (`= $in × 2`) видят входы ноды. Входы читаются, локальные переменные
 /// листа наслаиваются сверху.
 pub fn eval_lines_in(source: &str, inbound: &Env) -> Vec<Option<ExprOutcome>> {
+    eval_lines_with_env(source, inbound).0
+}
+
+/// FR-029: [`eval_lines_in`] с возвратом ФИНАЛЬНОГО окружения листа —
+/// переменные, объявленные присваиваниями (`peak_rps = avg × 2.5`),
+/// доступны по имени как именованные выходы текстовой ноды (адресация
+/// рёбер `fromOutput` живёт при сдвиге строк: имя стабильнее индекса).
+/// Окружение = база (входы/параметры) + переменные листа.
+pub fn eval_lines_with_env(source: &str, inbound: &Env) -> (Vec<Option<ExprOutcome>>, Env) {
     // FR-013 (правка 5): канонический текст заметки экранирует литеральные
     // `=` (`\=` — от пары `==` подсветки в диалекте CanvasDesk; заметки
     // прежних сборок содержат `x \= 200` для КАЖДОГО `=`). Расчёт ведётся
@@ -1280,7 +1296,7 @@ pub fn eval_lines_in(source: &str, inbound: &Env) -> Vec<Option<ExprOutcome>> {
         }
         results.push(eval_line(line, &mut env, &declared, in_fence));
     }
-    results
+    (results, env)
 }
 
 /// Одна строка сценария: результат или None (не формула / тихая ошибка).

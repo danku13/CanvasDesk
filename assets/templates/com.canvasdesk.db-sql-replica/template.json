@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.db-sql-replica",
   "name_en": "DB SQL (replica)",
   "name_ru": "БД SQL (реплика)",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "backend",
   "description": "Реплика БД: пул читателей, lag — справочный параметр.",
   "description_en": "SQL DB replica: reader pool, lag is informational.",
@@ -38,5 +38,12 @@
   ],
   "expr": "mm1($qps, 1 req / $query_time, $replicas)",
   "color": "#F5A623",
-  "icon": "db"
+  "icon": "db",
+  "outputs": [
+    {
+      "name": "headroom_qps",
+      "unit": "rps",
+      "expr": "1 req / $query_time × $replicas - $qps"
+    }
+  ]
 }
