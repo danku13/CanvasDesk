@@ -5,9 +5,9 @@
 - **Приоритет:** важно
 - **Владелец:** агент (анализ)
 - **Источник:** сообщение пользователя (сессия 2026-09-15): «эффект сценария что будет, если…». Уточнение владельца (2026-09-15): what-if — один из 3 индикаторов v1 (вместе с bottleneck и queue risk из FR-016); пересчёт live; переопределение входов без изменения `.canvas`.
-- **Связанные задачи:** FR-013 (calc-движок — формулы), FR-014 (propagator — принимает `overrides`), FR-015 (доменные функции — `mm1/mmc` в what-if сценариях), FR-016 (анализ bottleneck — на what-if результатах), FR-006 (undo — what-if сценарий одним шагом), FR-009 (меню — кнопка «Apply scenario»), FR-004 (`Ctrl+W` — тогл what-if), SPEC.md §5.1 (без мутаций `.canvas`), §8 (ввод)
+- **Связанные задачи:** FR-013 (calc-движок — формулы), FR-014 (propagator — принимает `overrides`), FR-015 (доменные функции — `mm1/mmc` в what-if сценариях), FR-016 (анализ bottleneck — на what-if результатах), FR-006 (undo — what-if сценарий одним шагом), FR-009 (меню — кнопка «Apply scenario»), FR-004 (`Ctrl+W` — тогл what-if), продуктовый роадмап — волна B2/CP6 (`docs/plans/product-roadmap.md` §9), SPEC.md §5.1 (без мутаций `.canvas`), §8 (ввод)
 - **Создан:** 2026-09-15
-- **Обновлён:** 2026-09-15
+- **Обновлён:** 2026-09-18
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
 
 ---
@@ -273,49 +273,5 @@ FR-013..016 дают: формулы → propagator → flow_results → analysi
   Vec<Scenario>`).
 
 ## История изменений (Changelog)
-- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация не начата — UI-режима нет (`whatif_*`/`freeze`/`scenario` в коде отсутствуют, MCP-инструментов нет). Задел точно по плану дока: `flow::propagate(canvas, overrides)` принимает value-level overrides (FR-014), интеграционный тест `overrides_flow_downstream_what_if` (`integration_flow.rs:163-183`). Расширение сигнатуры (`expr_overrides`) не сделано. Статус `выявлено` сохранён.
 
-
-- `2026-09-15` — агент: документ создан по запросу пользователя (what-if
-  сценарии — один из 3 индикаторов v1). Зафиксированы 4 инварианта
-  тестируемости (чистый `propagate` с overrides, без мутаций `.canvas` до
-  Apply, явная дельта, MCP-видимость эквивалентна UI). Статус `выявлено`.
-  Зависимости: FR-013 (calc-движок), FR-014 (propagator с overrides),
-  FR-015 (доменные функции), FR-016 (overlay на what-if результатах).
-
-## Источники истины (References)
-
-- `crates/canvas-core/src/flow.rs` (FR-014) — `propagate` (расширить
-  `expr_overrides`).
-- `crates/canvas-core/src/analyze.rs` (FR-016) — `analyze` (на what-if
-  результатах).
-- `crates/canvas-core/src/model.rs:121-187` — `Node::expr()` / `set_expr()`
-  (Apply мутирует).
-- `crates/canvas-app/src/main.rs:193-228` — `SceneState` (добавить
-  `whatif_active`, `whatif_overrides`, `baseline_results`,
-  `baseline_analysis`).
-- `crates/canvas-app/src/main.rs:277-282` — `mark_dirty` (подавление в
-  what-if).
-- `crates/canvas-app/src/main.rs:311-330` — `push_undo` (Apply — один
-  undo-шаг).
-- `crates/canvas-app/src/main.rs:1058` — `begin_editing` (в what-if —
-  override-input).
-- `crates/canvas-app/src/main.rs:3177-3269, 3243+` — `on_key` / overlay
-  panel (Ctrl+W, what-if панель).
-- `crates/canvas-app/src/main.rs:2872+` — `mcp_dispatch` (`whatif_*`).
-- `crates/canvas-render/src/cards.rs` — дельта-строка, override-поле.
-- `crates/canvas-render/src/animate.rs` — пульсация рамки.
-- `crates/canvas-mcp/src/lib.rs` — `TOOLS` (+4 инструмента).
-- `docs/SPEC.md` §5.1 (без мутаций в what-if), §6.2 (LOD), §8 (ввод).
-- `docs/interface-objects/node.md` §3 (визуальная структура), §5 (состояние
-  what-if), §7 (точки входа).
-- `docs/change-requests/fr-013-text-node-numi-expr.md` — calc-движок.
-- `docs/change-requests/fr-014-edge-value-flow.md` — propagator с
-  overrides.
-- `docs/change-requests/fr-015-domain-units-queueing.md` — доменные функции.
-- `docs/change-requests/fr-016-bottleneck-queue-risk.md` — overlay на
-  what-if.
-- `docs/change-requests/fr-004-hotkeys-overlay.md` — `Ctrl+W`.
-- `docs/change-requests/fr-009-node-context-menu-settings.md` — Apply /
-  Reset.
-- `docs/change-requests/fr-006-undo-stack.md` — Apply — один undo-шаг.
+- `2026-09-18` — агент: разметка позицией в критическом пути — волна B2/CP6 продуктового роадмапа (`docs/plans/product-roadmap.md` §9): v1 (override + delta + сценарные сетки №2–№4 синхронно) — до гейта; freeze/сравнение и worker-тред — волна S2 после гейта.

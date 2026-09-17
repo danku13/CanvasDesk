@@ -5,9 +5,9 @@
 - **Приоритет:** критично (блокер агентной композиции — CR-013, шаг R1)
 - **Владелец:** агент (оформление по запросу владельца)
 - **Источник:** CR-013 (gap-анализ концепции «агентная сборка архитектур с проливанием значений», сессия 2026-09-17)
-- **Связанные задачи:** CR-013; FR-014 (поток значений), FR-018 (манифест шаблона), FR-025 (построчные точки выхода); `docs/adr/adr-0002-value-flow-composition.md`, `docs/adr/adr-0003-named-value-ports.md`
+- **Связанные задачи:** CR-013; FR-014 (поток значений), FR-018 (манифест шаблона), FR-025 (построчные точки выхода), FR-032 (graph_validate — строгая диагностика дубль-входов и единиц поверх этого FR), FR-033 (graph_apply — батч поверх `edge_create` v2); `docs/adr/adr-0002-value-flow-composition.md`, `docs/adr/adr-0003-named-value-ports.md`
 - **Создан:** 2026-09-17
-- **Обновлён:** 2026-09-17
+- **Обновлён:** 2026-09-18
 
 ## Описание
 
@@ -45,7 +45,7 @@ Value-связь сегодня уносит значение ноды-исто�
 |---|
 | 1. `model.rs` → `Edge`: поля `to_param: Option<String>` (сериализация `toParam`, мягкое чтение — как `fromLine`, `model.rs:453-456`) и `from_output: Option<String>` (сериализация `fromOutput`). Инвариант round-trip: без полей — без ключей (старые `.canvas` байт-в-байт). Перепривязка from-конца (`edgegeom.rs:312`) сбрасывает и `from_line`, и `from_output`. |
 | 2. `templates.rs` → `TemplateManifest`: `outputs: Vec<OutputSpec>` где `OutputSpec { name, unit: Option<String>, source }`, `source` — `Line(usize)` (индекс строки Numi-листа) или `Expr(String)` (подвыражение от параметров). Схема `template.json` 1.1 — поле опциональное (все 45 builtin-манифестов остаются валидными; добавить outputs приоритетно `api-gateway`, `lb`, `cache-redis`, `db-sql-*`). `instantiate`: снапшот outputs в `canvasdesk.template.outputs` (как expr, переживает удаление шаблона). |
-| 3. `flow.rs` → резолв выходов: при пересчёте ребро с `from_output` резолвится по снапшоту outputs ноды-истока → индекс строки/подвыражение → значение (из `FlowSolutions.lines` или отдельным eval). Ребро с `to_param`: значение подставляется в `env.params[to_param]` ПОСЛЕ `with_param_map` (перекрытие локального параметра — семантика «проливание сильнее дефолта»). Позиционные слоты `$1..$N` для рёбер без `to_param` — без изменений (обратная совместимость FR-014). Несколько рёбер в один `to_param`: v1 — побеждает последнее по порядку `canvas.edges` (детерминировано), `flow_recalc` помечает узел warning; строгая ошибка — в `graph_validate` (R2 CR-013). |
+| 3. `flow.rs` → резолв выходов: при пересчёте ребро с `from_output` резолвится по снапшоту outputs ноды-истока → индекс строки/подвыражение → значение (из `FlowSolutions.lines` или отдельным eval). Ребро с `to_param`: значение подставляется в `env.params[to_param]` ПОСЛЕ `with_param_map` (перекрытие локального параметра — семантика «проливание сильнее дефолта»). Позиционные слоты `$1..$N` для рёбер без `to_param` — без изменений (обратная совместимость FR-014). Несколько рёбер в один `to_param`: v1 — побеждает последнее по порядку `canvas.edges` (детерминировано), `flow_recalc` помечает узел warning; строгая ошибка — в `graph_validate` (FR-032, R2 CR-013). |
 | 4. `canvas-mcp/src/lib.rs` → `edge_create`: опциональные `fromLine` (int ≥ 0), `fromOutput` (string), `toParam` (string), `kind` (`"value"|"control"`, дефолт `"control"`); взаимное исключение `fromLine`/`fromOutput` — ошибка схемы. Новый `edges_list`: `{id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide}`. `flow_recalc` v2: `{node_id: {value, unit, outputs: {имя: {value, unit}}, lines: [{index, value, unit}], warnings?}}`. |
 | 5. `main.rs` → `mcp_dispatch`: ветки `edge_create` (валидация имён по снапшоту шаблона истока/приёмника — неизвестное имя выхода/параметра = ошибка вызова), `edges_list`, `flow_recalc` v2 (продолжать использовать `propagate_with_lines`). |
 | 6. Тесты: round-trip `toParam`/`fromOutput` (в духе `model.rs:1299-1335`); flow — проливание в шаблон (`Трафик.peak_rps → gateway.rps` меняет итог `mm1`), перекрытие параметра, ребро без `to_param` — старое поведение; резолв `from_output` при правке текста (строки сдвинулись — связь жива); MCP — схемы `tools_list`, e2e `edges_list`/`edge_create(kind=value, toParam)` (паттерн тестов `mcp_dispatch` в `main.rs`). |
@@ -57,11 +57,12 @@ Value-связь сегодня уносит значение ноды-исто�
 
 - Юнит: round-trip сериализации новых полей; резолв `from_output` устойчив к сдвигу строк; перекрытие `to_param` > локального параметра; несколько рёбер в один `to_param` — детерминизм «последний побеждает»; `edge_create` валидирует имена портов.
 - MCP e2e (чистые тесты `mcp_dispatch`): `template_instantiate` gateway → `edge_create {from: "tpl_1", to: "tpl_2", fromOutput: "peak_rps", toParam: "rps", kind: "value"}` → `flow_recalc` показывает значение gateway, зависящее от upstream, и `outputs` с именованными характеристиками.
-- Ручной мини-сценарий ADR-0005: нода «Трафик» (`peak_rps` ≈ 1389 rps) → CDN (`origin_rps` ≈ 556 rps) → API Gateway (`to_param: rps`) — изменение DAU в «Трафик» одним вызовом `node_edit` меняет все downstream значения без правки связей/формул.
+- **Наглядная проверка (5 минут, демо-критерий этапа A1/CP1):** ручной мини-сценарий ADR-0005 — нода «Трафик» (`peak_rps` ≈ 1389 rps) → CDN (`origin_rps` ≈ 556 rps) → API Gateway (`to_param: rps`) — изменение DAU в «Трафик» одним вызовом `node_edit` меняет все downstream значения без правки связей/формул; числа на канвасе = таблице эталона (наблюдаемо без чтения кода).
 - Гейты: `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace`.
 
 ## История изменений
 
+- `2026-09-18` — агент: разметка связей — R2 оформлен как FR-032 (строгая диагностика дубль-входов/единиц), R3 — как FR-033 (батч поверх `edge_create` v2); позиция в критическом пути — CP1 (`docs/plans/product-roadmap.md` §9).
 - `2026-09-17` — агент: создан из CR-013 (шаг R1 дорожной карты); статус «выявлено»; зафиксированы открытые вопросы по конфликту проливания и ручной правки.
 
 ## Источники истины

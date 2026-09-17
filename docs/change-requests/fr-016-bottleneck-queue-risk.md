@@ -5,9 +5,9 @@
 - **Приоритет:** важно
 - **Владелец:** агент (анализ)
 - **Источник:** сообщение пользователя (сессия 2026-09-15): «CanvasDesk сразу показывает узкое место, риск очереди, SLA и эффект сценария что будет, если…». Уточнение владельца (2026-09-15): индикаторы v1 — bottleneck detection + queue risk + what-if (последний — FR-017); визуализация — поверх существующих нод (overlay), не отдельный объект.
-- **Связанные задачи:** FR-013 (calc-движок — генерирует `Value::Struct` с `utilization`, `queue_length`, `wait_time`), FR-014 (поток значений — propagator обновляет `flow_results` для всех нод), FR-015 (доменные функции — `mm1/mmc` возвращают Struct), FR-017 (what-if — использует те же правила детекции), FR-009 (пункты меню — тогл режима анализа), FR-004 (хоткеи — `Ctrl+B` для тогла bottleneck-overlay), CR-001 (выделение — overlay не конфликтует с `selected_nodes`), SPEC.md §6.2 (LOD), §6.4 (текстуры overlay)
+- **Связанные задачи:** FR-013 (calc-движок — генерирует `Value::Struct` с `utilization`, `queue_length`, `wait_time`), FR-014 (поток значений — propagator обновляет `flow_results` для всех нод), FR-015 (доменные функции — `mm1/mmc` возвращают Struct), FR-017 (what-if — использует те же правила детекции), FR-009 (пункты меню — тогл режима анализа), FR-004 (хоткеи — `Ctrl+B` для тогла bottleneck-overlay), продуктовый роадмап — волна B1/CP5 (`docs/plans/product-roadmap.md` §9), CR-001 (выделение — overlay не конфликтует с `selected_nodes`), SPEC.md §6.2 (LOD), §6.4 (текстуры overlay)
 - **Создан:** 2026-09-15
-- **Обновлён:** 2026-09-15
+- **Обновлён:** 2026-09-18
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
 
 ---
@@ -251,49 +251,5 @@ FR-013..015 дают значения `utilization`, `queue_length`, `wait_time`
   `⏱`); v2 — паттерны рамки (пунктир/штрих) как дополнительный сигнал.
 
 ## История изменений (Changelog)
-- `2026-09-16` — агент (аудит реализации всех CR/FR, main `984ca6b`): реализация не начата — подтверждено grep-обходом (`analyze.rs`/`AnalysisFlags`/severity/badges отсутствуют, MCP-инструментов ровно 20, `analyze_bottlenecks` нет). Заделы: queueing-функции v1 FR-015 (mm1/mmc/utilization/erlang_c) и `EvalError::Overload { rho }`; структурный вывод `Value::Struct` (`utilization`, `queue_length`, `wait_time`) — не готов (v2 FR-015). Статус `выявлено` сохранён.
 
-
-- `2026-09-15` — агент: документ создан по запросу пользователя (bottleneck
-  detection + queue risk + визуализация overlay). Зафиксированы 4 инварианта
-  тестируемости (чистый `analyze`, пороги в config, overlay — отдельный
-  слой, MCP-видимость эквивалентна UI). Статус `выявлено`. Зависимости:
-  FR-013 (calc-движок), FR-014 (propagator), FR-015 (доменные функции
-  `Value::Struct`), FR-017 (what-if — те же правила на override-результатах).
-
-## Источники истины (References)
-
-- `crates/canvas-core/src/analyze.rs` (новый) — чистый analyzer.
-- `crates/canvas-core/src/focus.rs:56-97` — образец чистого модуля с обходом
-  графа.
-- `crates/canvas-core/src/model.rs:121-187` — `Node` (analyzer читает
-  `Node.expr()`, не мутирует).
-- `crates/canvas-app/src/main.rs:193-228` — `SceneState` (добавить
-  `analysis_state`, `analysis_overlay_enabled`).
-- `crates/canvas-app/src/main.rs:277-282` — `mark_dirty` (точка вызова
-  `analyze` после propagator).
-- `crates/canvas-app/src/main.rs:3177-3269` — `on_key` (добавить `Ctrl+B`).
-- `crates/canvas-app/src/main.rs:3243+` — приглушение канвас-хоткеев (образец
-  для overlay-тогла).
-- `crates/canvas-app/src/main.rs:2872+` — `mcp_dispatch` (`analyze_bottlenecks`).
-- `crates/canvas-render/src/cards.rs` — overlay-инстансы + badges.
-- `crates/canvas-render/src/zorder.rs` — порядок слоёв.
-- `crates/canvas-render/tests/render_smoke.rs`, `zorder_smoke.rs` — тесты
-  рендера (дополнить).
-- `crates/canvas-mcp/src/lib.rs` — `TOOLS` (+1 инструмент).
-- `crates/canvas-render/src/theme.rs` — цвета severity.
-- `docs/SPEC.md` §6.2 (LOD для overlay), §6.4 (текстуры — badges в атлас),
-  §8 (ввод — `Ctrl+B`).
-- `docs/interface-objects/node.md` §3 (визуальная структура), §5 (состояние
-  `severity`), §8 (чек-лист расширения).
-- `docs/change-requests/fr-013-text-node-numi-expr.md` — calc-движок.
-- `docs/change-requests/fr-014-edge-value-flow.md` — propagator (источник
-  `flow_results`).
-- `docs/change-requests/fr-015-domain-units-queueing.md` — доменные функции
-  (`Value::Struct`).
-- `docs/change-requests/fr-017-what-if-scenarios.md` — what-if использует те
-  же правила.
-- `docs/change-requests/fr-004-hotkeys-overlay.md` — `Ctrl+B`.
-- `docs/change-requests/fr-009-node-context-menu-settings.md` — пункт меню.
-- `docs/change-requests/cr-001-selection-multi.md` — overlay не конфликтует
-  с `selected_nodes`.
+- `2026-09-18` — агент: разметка позицией в критическом пути — волна B1/CP5 продуктового роадмапа (`docs/plans/product-roadmap.md` §9); требование наглядности: узкие места эталона №1 видны цветом/значком без чтения чисел (демо-критерий этапа).
