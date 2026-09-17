@@ -94,3 +94,8 @@ windows = { version = "0.62", features = [
 # #[implement] (T9 COM IDropTarget) генерирует пути ::windows_core —
 # нужен прямой dep, re-export windows::core не резолвится
 windows-core = "0.62"
+# встраивание каталогов в бинарник (шаблоны/виджеты; SPEC §3 — версии
+# централизованы, CP0: приведение include_dir/image к конвенции)
+include_dir = "0.7"
+# декодирование PNG-тамбнейлов виджетов (без default-фич — только png)
+image = { version = "0.25", default-features = false, features = ["png"] }

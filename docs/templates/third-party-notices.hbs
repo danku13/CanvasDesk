@@ -1,0 +1,49 @@
+{{!
+  Шаблон THIRD-PARTY-NOTICES.md для cargo-about (CP0, волна 0.1;
+  ADR-0008; архдок §7.3 — обязательства по пермиссивным лицензиям).
+
+  Регенерация (см. docs/DEPENDENCIES.md §Рецепты):
+    cargo about generate -c about.toml docs/templates/third-party-notices.hbs \
+      > THIRD-PARTY-NOTICES.md
+
+  Контекст: overview[] (id/name/count), licenses[] (id/name/first_of_kind/
+  used_by[]->crate.name|crate.version, text).
+}}
+# THIRD-PARTY-NOTICES
+
+CanvasDesk использует сторонние Rust-крейты с пермиссивными лицензиями.
+Настоящий файл сгенерирован автоматически инструментом `cargo-about`
+(конфигурация `about.toml`, шаблон `docs/templates/third-party-notices.hbs`)
+и перечисляет лицензии всех зависимостей дистрибутива, включая
+транзитивные и dev-зависимости — в соответствии с обязательствами по
+пермиссивным лицензиям (Apache-2.0 NOTICE-механика, MIT/BSD-уведомления)
+и требованиями заявки в реестр отечественного ПО (SBOM + notices).
+
+- Продукт: CanvasDesk (`canvasdesk`, бинарник `canvasdesk`)
+- Реестр зависимостей с обоснованием выбора: `docs/DEPENDENCIES.md`
+- Лицензионная политика (allowlist/denylist): `deny.toml`,
+  `docs/architecture/math-computing-stack.md` §7
+- Файл перегенерируется релизным пайплайном (`.github/workflows/build-all.yml`,
+  job `notices-sbom`)
+
+## Обзор лицензий
+
+| Лицензия | Крейтов |
+|---|---|
+{{#each overview}}| {{name}} | {{count}} |
+{{/each}}
+
+## Тексты лицензий
+
+{{#each licenses}}
+---
+
+### {{name}}
+
+Используется: {{#each used_by}}`{{crate.name}} {{crate.version}}`, {{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

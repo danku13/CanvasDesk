@@ -1,4 +1,5 @@
 [package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
 name = "canvas-mcp"
 version.workspace = true
 edition.workspace = true

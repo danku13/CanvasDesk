@@ -46,15 +46,19 @@ jobs:
       # ---- сборка ------------------------------------------------------
       # Windows добавляет .exe к имени бинарника; Linux — нативный бинарь;
       # macOS — оба слайса отдельно (lipo на шаге пакеджинга).
+      # cargo auditable build = обычная сборка + встроенный SBOM (CP0,
+      # волна 0.1 роадмапа): бинарник несёт список зависимостей внутри.
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --locked
       - name: Run cargo build (Windows/Linux)
         if: runner.os != 'MacOS'
-        run: cargo build --release -p canvas-app
+        run: cargo auditable build --release -p canvas-app
       - name: Run cargo build arm64 (macOS)
         if: runner.os == 'MacOS'
-        run: cargo build --release -p canvas-app --target aarch64-apple-darwin
+        run: cargo auditable build --release -p canvas-app --target aarch64-apple-darwin
       - name: Run cargo build x86_64 (macOS)
         if: runner.os == 'MacOS'
-        run: cargo build --release -p canvas-app --target x86_64-apple-darwin
+        run: cargo auditable build --release -p canvas-app --target x86_64-apple-darwin
 
       # ---- macOS: смок-запуск на раннере (реальный GUI + Metal) -------
       # continue-on-error: гейт информационный — проблемы раннера (GPU/VM)
@@ -123,3 +127,35 @@ jobs:
             dist/canvasdesk
           if-no-files-found: error
           retention-days: 14
+
+  # CP0 (волна 0.1 роадмапа): THIRD-PARTY-NOTICES пересобирается релизным
+  # пайплайном — «notices пересобираются релизным пайплайном» (§4.1).
+  # cargo-about генерирует файл по about.toml + шаблону из репо; артефакт
+  # прикладывается к релизу рядом с бинарями (требование заявки в реестр:
+  # SBOM + notices в дистрибутиве).
+  notices-sbom:
+    name: THIRD-PARTY-NOTICES (cargo-about)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features=cli
+      - name: Regenerate THIRD-PARTY-NOTICES
+        run: cargo about generate -c about.toml docs/templates/third-party-notices.hbs > THIRD-PARTY-NOTICES.md
+      # Дрифт-контроль: закоммиченный файл должен соответствовать дереву.
+      # Изменение состава зависимостей без перегенерации notices валит
+      # релиз — дисциплина обновления в docs/DEPENDENCIES.md §Рецепты.
+      - name: Check notices drift
+        run: git diff --exit-code THIRD-PARTY-NOTICES.md || (echo "::error::THIRD-PARTY-NOTICES.md устарел — перегенерируйте (docs/DEPENDENCIES.md §Рецепты)" && exit 1)
+      - name: Upload notices artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-notices
+          path: THIRD-PARTY-NOTICES.md
+          if-no-files-found: error
+          retention-days: 90 # документ реестра — храним дольше бинарей

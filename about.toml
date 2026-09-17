@@ -1,0 +1,45 @@
+# cargo-about configuration — генерация THIRD-PARTY-NOTICES.md
+# (CP0 волны 0 продуктового роадмапа, шаг 0.1; ADR-0008;
+#  docs/architecture/math-computing-stack.md §7.3 — обязательства
+#  по пермиссивным лицензиям).
+#
+# Accepted-список синхронизирован с deny.toml [licenses].allow и §7.2
+# архдока. Workspace-крейты CanvasDesk — собственный код закрытого
+# продукта, в notices не входят (first-party в SBOM — сам бинарник +
+# реестр docs/DEPENDENCIES.md).
+#
+# Схема cargo-about 0.9 — плоская (top-level ключи).
+
+# Те же значения, что и в deny.toml [licenses].allow — правки только
+# синхронно в оба файла + §7.2 архдока.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+    "0BSD",
+]
+
+# Целевые платформы продукта (Win/Linux/macOS — M7): фильтр платформо-
+# специфичных зависимостей, чтобы notices не разбухали от мусора чужих
+# таргетов.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+
+# SBOM реестра требует полное дерево: build- и dev-зависимости включаем
+# (denylist §7.2 одинаков для dev — дерево всё равно предъявляется
+# экспертизе).
+ignore-build-dependencies = false
+ignore-dev-dependencies = false
+ignore-transitive-dependencies = false
