@@ -309,6 +309,7 @@ fn template_round_trip_and_reset() {
         version: "1.0.0".to_owned(),
         expr: "mm1($rps, $service_rate, $servers)".to_owned(),
         name: Some("Балансировщик нагрузки".to_owned()),
+        outputs: Vec::new(),
         params: [
             (
                 "rps".to_owned(),

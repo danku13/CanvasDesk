@@ -1,3 +1,42 @@
+## 2026-09-18 — FR-033 graph_apply: атомарная батч-композиция (CP3, ветка feature/fr-033-graph-apply)
+
+- **Задача (владелец):** по `docs/plans/product-roadmap.md` реализовать CP3
+  (FR-033, волна A3) — параллельно: агент_1 ведёт CP0+CP1 (волна 0 + FR-029),
+  агент_2 — CP2 (FR-032). Работа в отдельной ветке для бесконфликтной сборки.
+- **Сделано (код):**
+  - `canvas-mcp`: инструмент `graph_apply` (TOOLS 22 → 23 на ветке) — схема
+    `operations: [Op; 1..=256]`, тег op с 6 вариантами; лимиты в описании;
+  - `canvas-app`: `mcp_graph_apply` (транзакция: клон → apply → commit;
+    ошибка операции → `{ok:false, op_index, code, message}`, канвас байт-в-байт
+    прежний; успех → ровно один undo-шаг + spatial + dirty + recompute_flow),
+    `batch_apply_op` (6 операций: node_create_note/file, template_instantiate,
+    edge_create с портами FR-029 и валидацией имён/циклов, param_set с правкой
+    ровно одной строки и синхронизацией снапшота шаблона, node_move),
+    ref-резолв (дубликат ref — E-BAD-OP), `mcp_flow_v2` (flow_recalc v2:
+    value/unit/outputs/lines/error);
+  - `canvas-core` (минимальный контур FR-029 — необходим гейту CP3, при
+    интеграции уступает полной реализации CP1): `Edge.to_param`/`from_output`
+    (мягкое чтение, round-trip, сброс при перепривязке истока), `OutputSpec`/
+    `OutputSource` в манифесте и снапшоте `TemplateRef`, проливание `to_param`
+    поверх локальных параметров («последнее ребро побеждает»), резолв
+    `from_output` (Line/Expr) в `propagate_with_lines`, `FlowSolutions.named`;
+  - `assets/templates/com.canvasdesk.cdn`: именованный выход `origin` (демо
+    мини-эталона; остальные манифесты — за полной реализацией FR-029).
+- **Тесты:** +14 (7 `graph_apply_*` в main.rs: oracle e2e ±1 % по эталону №1
+  ADR-0006 — 208.33 rps / 34.29 ms / 20.83 rps / 3.20 ms, атомарность,
+  ref-правила, param_set, лимиты, undo/redo, цикл; 7 flow-тестов проливания;
+  2 round-trip порта в model.rs). Гейты зелёные: fmt, clippy -D warnings,
+  test --workspace — 988 тестов, 0 провалов.
+- **Документация:** SPEC §13 «MCP-инструменты канваса» (graph_apply: схема,
+  лимиты, транзакция, коды ошибок) + счётчик 23 в §4; ACCEPTANCE §21
+  (FR-033.1–FR-033.10); fr-033 — статус «реализовано (v1)» + Changelog;
+  index-cr-fr — статус.
+- **Коммит:** ветка `feature/fr-033-graph-apply` (не main — параллельные
+  CP0/CP1/CP2 других агентов; порядок интеграции: CP0/CP1 → CP2 → CP3,
+  контур FR-029 в этой ветке уступить ветке CP1).
+
+---
+
 ## 2026-09-18 — Критический путь: детализация + FR-032/FR-033 (разметка FR/CR)
 
 - **Задача (владелец):** прописать критический путь с обоснованием, разметить

@@ -445,6 +445,28 @@ pub struct Edge {
         deserialize_with = "deserialize_lenient_line"
     )]
     pub from_line: Option<usize>,
+    /// FR-029 (порты значений): имя именованного выхода истока
+    /// (`fromOutput`) — ребро уносит значение этого выхода, а не ноды
+    /// целиком. Резолв — по снапшоту outputs шаблонной ноды (см. `flow`).
+    /// Мягкое чтение: не-строки чужих файлов — `None`.
+    #[serde(
+        rename = "fromOutput",
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_lenient_string"
+    )]
+    pub from_output: Option<String>,
+    /// FR-029 (порты значений): имя параметра приёмника (`toParam`) —
+    /// значение ребра подставляется в окружение как `$<параметр>` приёмника,
+    /// перекрывая локальное значение («проливание сильнее дефолта»). Ребро
+    /// без `to_param` — прежнее позиционное поведение (`$1..$N`, FR-014).
+    #[serde(
+        rename = "toParam",
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_lenient_string"
+    )]
+    pub to_param: Option<String>,
     /// Неизвестные поля (fromEnd/toEnd и пр.) — сохраняются при round-trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -460,6 +482,20 @@ where
     let raw = Option::<Value>::deserialize(deserializer)?;
     Ok(match raw {
         Some(Value::Number(number)) => number.as_u64().map(|value| value as usize),
+        _ => None,
+    })
+}
+
+/// FR-029: мягкое чтение строковых полей портов (`fromOutput`/`toParam`):
+/// строка — `Some(s)`, всё прочее (числа, null, объекты) — `None`. Ошибка
+/// десериализации поля не роняет разбор всей связи/файла.
+fn deserialize_lenient_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    Ok(match raw {
+        Some(Value::String(text)) => Some(text),
         _ => None,
     })
 }
@@ -485,6 +521,8 @@ impl Edge {
             style: None,
             thickness: None,
             from_line: None,
+            from_output: None,
+            to_param: None,
             extra: Map::new(),
         }
     }
@@ -1064,6 +1102,7 @@ mod tests {
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
             name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
         }));
         // Как в finish_editing: сначала set_expr, потом синк параметров
         node.set_expr(None);
@@ -1098,6 +1137,7 @@ mod tests {
             icon: "custom".to_owned(),
             color: "#9B9B9B".to_owned(),
             name: None,
+            outputs: Vec::new(),
         }));
         node.set_template(None);
         assert_eq!(node.expr(), Some("5 ms"), "expr пережил снятие шаблона");
@@ -1333,6 +1373,51 @@ mod tests {
             let json = format!(r#"{{ "id": "e", "fromNode": "a", "toNode": "b", {raw} }}"#);
             let edge: Edge = serde_json::from_str(&json).expect("парсинг связи");
             assert_eq!(edge.from_line, expected, "{json}");
+        }
+    }
+
+    // --- FR-029: адресация портов значений (fromOutput/toParam) ---
+
+    /// Инвариант схемы FR-029: ребро без портов сериализуется без полей
+    /// (старые `.canvas` байт-в-байт); с портами — поля сохраняются в
+    /// round-trip.
+    #[test]
+    fn edge_port_fields_round_trip() {
+        let plain = Edge::new("e1", "a", None, "b", None);
+        let json = serde_json::to_string(&plain).expect("сериализация");
+        assert!(
+            !json.contains("fromOutput") && !json.contains("toParam"),
+            "нет полей — нет ключей: {json}"
+        );
+        let back: Edge = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back, plain);
+
+        let mut ported = Edge::new("e2", "a", None, "b", None);
+        ported.from_output = Some("origin".to_owned());
+        ported.to_param = Some("rps".to_owned());
+        let json = serde_json::to_string(&ported).expect("сериализация");
+        assert!(json.contains(r##""fromOutput":"origin""##), "{json}");
+        assert!(json.contains(r##""toParam":"rps""##), "{json}");
+        let back: Edge = serde_json::from_str(&json).expect("десериализация");
+        assert_eq!(back.from_output.as_deref(), Some("origin"));
+        assert_eq!(back.to_param.as_deref(), Some("rps"));
+    }
+
+    /// Мягкое чтение портов (FR-029): битые значения чужих файлов
+    /// (числа, null, объекты) — `None`, разбор связи не падает.
+    #[test]
+    fn edge_port_fields_lenient_parse() {
+        for (raw, from_output, to_param) in [
+            (r#""fromOutput":42"#, None, None),
+            (r#""toParam":null"#, None, None),
+            (r#""toParam":{"a":1}"#, None, None),
+            (r#""fromOutput":"origin""#, Some("origin"), None),
+            (r#""toParam":"rps""#, None, Some("rps")),
+        ] {
+            let json = format!(r#"{{ "id": "e", "fromNode": "a", "toNode": "b", {raw} }}"#);
+            let edge: Edge = serde_json::from_str(&json).expect("парсинг связи");
+            assert_eq!(edge.from_output.as_deref(), from_output, "{json}");
+            assert_eq!(edge.to_param.as_deref(), to_param, "{json}");
         }
     }
 

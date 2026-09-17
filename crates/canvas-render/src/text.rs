@@ -2411,6 +2411,7 @@ mod tests {
             icon: "lb".to_owned(),
             color: "#4A90E2".to_owned(),
             name: Some("Балансировщик нагрузки".to_owned()),
+            outputs: Vec::new(),
         }));
         // Ширина клипа — с резервом под иконку (как в фазе шейпинга)
         let reserves_icon = node.template().is_some();
