@@ -1,14 +1,30 @@
 [package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
 name = "canvas-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-include_dir = "0.7"
+include_dir.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 rstar.workspace = true
 toml.workspace = true
+
+[features]
+default = []
+
+# CP0 / archdoc M1 (docs/architecture/math-computing-stack.md §9, ADR-0008):
+# гейты будущих слоёв вычислительного стека — пустые до волны S продуктового
+# роадмапа (docs/plans/product-roadmap.md §4.5), чтобы B2B-сборка могла
+# отключать неиспользуемые слои. Подключение зависимостей за фичами:
+#   stats    — S1/M2: statrs + rand/rand_chacha/rand_distr (expr/stats.rs,
+#              распределения, квантили, доверительные интервалы, сид)
+#   parallel — S3/M4-M5: поярусный параллелизм DAG и Monte Carlo
+#              (std::thread::scope -> rayon; Sobol/QMC)
+# Реестр кандидатов и триггеры: docs/DEPENDENCIES.md §3.
+stats = []
+parallel = []

@@ -36,6 +36,20 @@ jobs:
       - name: build
         run: cargo build --workspace
 
+  # CP0 (волна 0.1 продуктового роадмапа, ADR-0008): лицензионная
+  # чистота дерева — гейт на каждый пуш/PR. cargo-deny проверяет
+  # licenses/bans/sources/advisories по deny.toml (allowlist архдока
+  # §7.2). Быстрая линукс-джоба без сборки: работает по Cargo.lock и
+  # метаданным крейтов. Контрольный прогон правила: ветка с запрещённой
+  # (copyleft) лицензией в дереве валит эту джобу — сценарий владельца
+  # из роадмапа §9 CP0.
+  licenses:
+    name: licenses (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   # Релизные бинари трёх ОС — только с зелёных гейтов и только на пуш
   # (PR-ы не тратят минуты на загрузку артефактов). Это же — обходной
   # путь при локальной ошибке линковки LNK1104 (docs/ENVIRONMENT.md §8).
@@ -61,6 +75,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # CP0 (волна 0.1): SBOM-in-binary — релизные бинари несут полный
+      # список зависимостей внутри (cargo-auditable). Извлечение:
+      # auditable-extract (рецепт — docs/DEPENDENCIES.md §Рецепты).
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --locked
+
       # ---- macOS: таргеты universal2 ---------------------------------
       - name: Add Apple targets (macOS)
         if: runner.os == 'MacOS'
@@ -69,15 +89,16 @@ jobs:
       # ---- сборка ------------------------------------------------------
       # Windows добавляет .exe к имени бинарника; Linux — нативный бинарь;
       # macOS — оба слайса отдельно (lipo на шаге пакеджинга).
+      # cargo auditable build = обычная сборка + встроенный SBOM.
       - name: build release (Windows/Linux)
         if: runner.os != 'MacOS'
-        run: cargo build --release -p canvas-app
+        run: cargo auditable build --release -p canvas-app
       - name: build release arm64 (macOS)
         if: runner.os == 'MacOS'
-        run: cargo build --release -p canvas-app --target aarch64-apple-darwin
+        run: cargo auditable build --release -p canvas-app --target aarch64-apple-darwin
       - name: build release x86_64 (macOS)
         if: runner.os == 'MacOS'
-        run: cargo build --release -p canvas-app --target x86_64-apple-darwin
+        run: cargo auditable build --release -p canvas-app --target x86_64-apple-darwin
 
       # ---- macOS: смок-запуск на раннере (реальный GUI + Metal) -------
       # Проверка «приложение стартует и живёт» без Mac у разработчика:

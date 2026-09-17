@@ -1,4 +1,5 @@
 [package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
 name = "canvas-widgets"
 version.workspace = true
 edition.workspace = true
@@ -12,10 +13,10 @@ thiserror.workspace = true
 tracing.workspace = true
 # Декод PNG-снапшотов виджетов (CapturePreview отдаёт PNG) — M5, SPEC §7.6.
 # Только png-декодер, без остальных форматов и simd.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image.workspace = true
 # Встраивание встроенных виджетов assets/widgets/ в бинарник (T20-C):
 # материализация в ~/.canvasdesk/widgets при старте.
-include_dir = "0.7"
+include_dir.workspace = true
 
 # Windows-only: WebView2-хост (T20-E). webview2-com 0.39 выровнен с windows
 # 0.62 (та же версия, что у воркспейса) — типы HWND/COM совместимы; все
