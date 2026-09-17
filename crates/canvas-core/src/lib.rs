@@ -17,6 +17,8 @@ mod settings;
 mod spatial;
 /// FR-018: реестр шаблонных архитектурных нод.
 pub mod templates;
+/// FR-032: валидация модели — чистая функция ядра (коды E-*/W-*).
+pub mod validate;
 
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
@@ -53,3 +55,4 @@ pub use settings::{
     Settings, Theme, ONBOARDING_MAX_DEFERS, PORT_ZONE_MAX, PORT_ZONE_MIN, PORT_ZONE_PRESETS,
 };
 pub use spatial::{SpatialIndex, WorldRect};
+pub use validate::{has_errors, validate, IssueCode, Severity, ValidationIssue};

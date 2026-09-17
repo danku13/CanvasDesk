@@ -5993,7 +5993,28 @@ fn mcp_side(params: &serde_json::Value, name: &str) -> Result<Option<Side>, Stri
     }
 }
 
-/// Выполнить MCP-инструмент над сценой/камерой: 15 инструментов канваса
+/// FR-032: каноническая схема ребра для `edges_list`/`edge_get` — агент
+/// восстанавливает топологию графа (CR-013 G4). FR-029 (CP1): при влитии
+/// полей `toParam`/`fromOutput` добавить их сюда же (опциональные, как
+/// fromLine) — обе ветки читения используют только эту функцию.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_edge_json(edge: &Edge) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "id": edge.id,
+        "from": edge.from_node,
+        "to": edge.to_node,
+        // FR-014: тип потока ("value"/"control") — ключ топологии для агента
+        "kind": edge.flow_kind().as_str(),
+        "fromSide": edge.from_side,
+        "toSide": edge.to_side,
+    });
+    if let Some(line) = edge.from_line {
+        value["fromLine"] = serde_json::json!(line);
+    }
+    value
+}
+
+/// Выполнить MCP-инструмент над сценой/камерой: 25 инструментов канваса
 /// (tools/list — в canvas-mcp). Чистая функция над SceneState + Camera —
 /// тестируется без окна и pipe; каждая мутирующая ветка обновляет spatial
 /// index и помечает канвас грязным (автосейв). Ошибки — строки, посредник
@@ -6446,6 +6467,38 @@ fn mcp_dispatch(
                     "from": pin_from,
                     "to": pin_to,
                 },
+            }))
+        }
+        // FR-032: чтение связей — агент восстанавливает топологию (CR-013
+        // G4: раньше рёбер не было видно вовсе, сборка шла вслепую)
+        "edges_list" => {
+            let edges: Vec<serde_json::Value> =
+                scene.canvas.edges.iter().map(mcp_edge_json).collect();
+            Ok(serde_json::Value::Array(edges))
+        }
+        // FR-032: одно ребро по id — полная каноническая схема
+        "edge_get" => {
+            let id = mcp_req_str(params, "id")?;
+            let edge = scene
+                .canvas
+                .edges
+                .iter()
+                .find(|edge| edge.id == id)
+                .ok_or_else(|| format!("связь не найдена: {id}"))?;
+            Ok(mcp_edge_json(edge))
+        }
+        // FR-032: валидация модели — отчёт ядра (validate.rs) с кодами
+        // E-*/W-*; чтение, не мутация: undo/автосейв не затрагиваются
+        "graph_validate" => {
+            let issues = canvas_core::validate::validate(&scene.canvas);
+            let valid = !canvas_core::validate::has_errors(&issues);
+            let issues: Vec<serde_json::Value> = issues
+                .iter()
+                .map(|issue| serde_json::to_value(issue).map_err(|err| err.to_string()))
+                .collect::<Result<_, _>>()?;
+            Ok(serde_json::json!({
+                "valid": valid,
+                "issues": issues,
             }))
         }
         // FR-018: список шаблонов реестра — те же, что в палитре/wheel
@@ -11477,6 +11530,130 @@ mod tests {
             dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#).is_err(),
             "повторное удаление — ошибка"
         );
+    }
+
+    /// FR-032: edges_list/edge_get — каноническая схема (id/from/to/kind/
+    /// fromLine?/fromSide/toSide), kind отражает тип потока, edge_get
+    /// неизвестного id — ошибка.
+    #[test]
+    fn mcp_edges_list_and_get() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        // value-ребро с построчным истоком (FR-014/FR-025)
+        let mut value_edge = Edge::new("ve-1", "n1", None, "f1", None);
+        value_edge.set_flow_kind(canvas_core::FlowKind::Value);
+        value_edge.from_line = Some(2);
+        scene.canvas.add_edge(value_edge);
+
+        let list = dispatch(&mut scene, &mut camera, "edges_list", "{}").expect("edges_list");
+        let edges = list.as_array().expect("массив рёбер");
+        assert_eq!(edges.len(), 2);
+        let control = &edges[0];
+        assert_eq!(control["id"], "edge-1");
+        assert_eq!(control["from"], "n1");
+        assert_eq!(control["to"], "f1");
+        assert_eq!(control["kind"], "control");
+        assert_eq!(control["toSide"], "right");
+        assert!(
+            !control
+                .as_object()
+                .expect("объект")
+                .contains_key("fromLine"),
+            "fromLine опционален"
+        );
+        let value = &edges[1];
+        assert_eq!(value["id"], "ve-1");
+        assert_eq!(value["kind"], "value");
+        assert_eq!(value["fromLine"], 2);
+
+        let one =
+            dispatch(&mut scene, &mut camera, "edge_get", r#"{"id":"ve-1"}"#).expect("edge_get");
+        assert_eq!(one["id"], "ve-1");
+        assert_eq!(one["kind"], "value");
+        assert_eq!(one["fromLine"], 2);
+
+        let err = dispatch(&mut scene, &mut camera, "edge_get", r#"{"id":"ghost"}"#)
+            .expect_err("нет такой связи");
+        assert!(err.contains("не найдена"));
+    }
+
+    /// FR-032: graph_validate на чистом графе — valid:true, issues:[]; на
+    /// цикле — valid:false, ровно один E-CYCLE с участниками (топология
+    /// строится напрямую: MCP-пути цикл запрещают by design).
+    #[test]
+    fn mcp_graph_validate_clean_and_cycle() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("validate");
+        assert_eq!(report["valid"], true);
+        assert_eq!(report["issues"], serde_json::json!([]));
+
+        // Цикл a→b→a (value): граф ломается — отчёт с кодом и участниками
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "a", 0.0, 0.0);
+        a.set_expr(Some("1".to_owned()));
+        let mut b = Node::text("b", "b", 220.0, 0.0);
+        b.set_expr(Some("$in".to_owned()));
+        canvas.nodes.push(a);
+        canvas.nodes.push(b);
+        let mut e1 = Edge::new("e1", "a", None, "b", None);
+        e1.set_flow_kind(canvas_core::FlowKind::Value);
+        let mut e2 = Edge::new("e2", "b", None, "a", None);
+        e2.set_flow_kind(canvas_core::FlowKind::Value);
+        canvas.add_edge(e1);
+        canvas.add_edge(e2);
+        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp-validate.canvas"));
+        let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("validate");
+        assert_eq!(report["valid"], false);
+        let issues = report["issues"].as_array().expect("issues");
+        assert_eq!(issues.len(), 1, "цикл — единственный issue: {issues:?}");
+        assert_eq!(issues[0]["code"], "E-CYCLE");
+        assert_eq!(issues[0]["severity"], "error");
+        let message = issues[0]["message"].as_str().expect("message");
+        assert!(
+            message.contains('a') && message.contains('b'),
+            "участники: {message}"
+        );
+        // Чтение: undo-стек и dirty не затронуты (валидация не мутирует)
+        assert!(scene.dirty_since.is_none(), "канвас не помечен грязным");
+    }
+
+    /// FR-032: graph_validate ловит E-OVERLOAD и W-UNUSED-SLOT с точными
+    /// node_id/edge_id (нечитаемый — именно второй слот); warning не делает
+    /// модель невалидной.
+    #[test]
+    fn mcp_graph_validate_overload_and_unused_slot() {
+        let mut canvas = Canvas::default();
+        let mut mm1 = Node::text("mm1", "mm1", 0.0, 0.0);
+        mm1.set_expr(Some("mm1(1200 rps, 1000 rps)".to_owned()));
+        let mut a = Node::text("a", "a", 220.0, 0.0);
+        a.set_expr(Some("10".to_owned()));
+        let mut b = Node::text("b", "b", 220.0, 180.0);
+        b.set_expr(Some("20".to_owned()));
+        let mut sum = Node::text("sum", "sum", 440.0, 0.0);
+        sum.set_expr(Some("$1 + 100".to_owned()));
+        canvas.nodes.push(mm1);
+        canvas.nodes.push(a);
+        canvas.nodes.push(b);
+        canvas.nodes.push(sum);
+        let mut e1 = Edge::new("e-a", "a", None, "sum", None);
+        e1.set_flow_kind(canvas_core::FlowKind::Value);
+        let mut e2 = Edge::new("e-b", "b", None, "sum", None);
+        e2.set_flow_kind(canvas_core::FlowKind::Value);
+        canvas.add_edge(e1);
+        canvas.add_edge(e2);
+        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp-validate2.canvas"));
+        let mut camera = Camera::default();
+        let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("validate");
+        assert_eq!(report["valid"], false, "E-OVERLOAD — ошибка");
+        let issues = report["issues"].as_array().expect("issues");
+        assert_eq!(issues.len(), 2, "перегрузка + нечитаемый слот: {issues:?}");
+        assert_eq!(issues[0]["code"], "E-OVERLOAD");
+        assert_eq!(issues[0]["node_id"], "mm1");
+        assert_eq!(issues[1]["code"], "W-UNUSED-SLOT");
+        assert_eq!(issues[1]["node_id"], "sum");
+        // Формула читает только $1 — предупреждение о ребре второго слота
+        assert_eq!(issues[1]["edge_id"], "e-b");
     }
 
     /// viewport_get/set: центр и зум, кламп зума камерой.

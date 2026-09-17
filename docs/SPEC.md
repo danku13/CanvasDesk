@@ -82,12 +82,13 @@ canvasdesk/
 ├── Cargo.toml               # workspace
 ├── crates/
 │   ├── canvas-core/         # модель данных, JSON Canvas I/O, spatial index, Numi-движок (expr/),
-│   │                        #   DAG-поток значений (flow.rs), реестр шаблонов (templates.rs) — без ОС/GPU
+│   │                        #   DAG-поток значений (flow.rs), валидация модели (validate.rs, FR-032),
+│   │                        #   реестр шаблонов (templates.rs) — без ОС/GPU
 │   ├── canvas-render/       # wgpu-рендер: камера, батчинг, текст, текстуры, LOD
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 22 инструмента канваса
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 25 инструментов канваса
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
 ├── assets/                  # шрифты, иконки нод, виджеты (widgets/), шаблоны (templates/)
 ├── docs/                    # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
@@ -129,6 +130,7 @@ canvasdesk/
 - `fromLine: <uint>` на связи — построчный исток (FR-025): value-ребро переносит значение формульной строки `fromLine` Numi-листа источника (а не значение ноды целиком). Отсутствие поля — значение ноды (текущее поведение; старые файлы без изменений); битые значения (`-1`, дробные) читаются как отсутствие. Создаётся drag от построчного порта (фича-флаг `line_ports` в настройках, дефолт выкл); перепривязка from-конца сбрасывает поле
 - `canvasdesk: { pin_ports: ["from", "to"] }` на связи — закреплённые концы подключения (CR-008). Конец без пина подключается к порту кратчайшего пути (`best_sides`, пересчёт при перетаскивании нод и автораскладке — в файл не пишется); закреплённый — следует сохранённым `fromSide`/`toSide`. Массив может содержать один или оба конца; пустой/отсутствующий — оба конца авто. Снятие последнего пина удаляет поле (чистый round-trip)
 - `canvasdesk: { template }` на text-ноде — снимок ссылки на шаблон (FR-018): `{ id, version, expr, params: { имя: { num, unit? } }, icon, color }`. `expr` — Numi-формула с `$param`-ссылками (результат — в футере карточки и в потоке FR-014, в файл не пишется); `icon`/`color` — снапшоты роли/категории (рендер шапки без реестра). Текст ноды — Numi-лист присваиваний параметров; правка текста синхронизирует `params`. Поле переживает round-trip (снимок, не ссылка на реестр)
+- MCP-чтение и валидация графа (FR-032) — runtime, в файл не пишется: `edges_list`/`edge_get` отдают каноническую схему ребра `{id, from, to, kind, fromLine?, fromSide, toSide}`; `graph_validate` — отчёт `{valid, issues: [{severity, code, node_id, edge_id, message}]}` из чистой функции `canvas-core/src/validate.rs`. Коды — стабильный контракт для рецепта агента: `E-CYCLE` (цикл value-рёбер), `E-OVERLOAD` (ρ ≥ 1), `W-AMBIGUOUS-SRC` (многолинейный исток без адресации строки), `W-UNUSED-SLOT` (позиционный вход `$N` не читается формулой); `E-UNIT`/`E-PORT-UNKNOWN`/`E-DOUBLE-INPUT` — контракт портов FR-029 (добавляются после его влития)
 
 ### 5.2. SQLite (`~/.canvasdesk/cache.db`)
 

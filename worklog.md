@@ -1,3 +1,48 @@
+## 2026-09-18 — CP2: FR-032 v1 — чтение графа + graph_validate (код)
+
+- **Задача (владелец):** реализовать CP2 продуктового роадмапа (`product-roadmap.md`
+  §9) — FR-032 (R2, волна A2). Параллельно другой агент ведёт CP0/CP1 (FR-029 —
+  порты значений); работа CP2 — в собственном клоне, ветка
+  `feature/fr-032-graph-read-validate`.
+- **Сделано (v1 — всё, что не зависит от полей FR-029):**
+  - `canvas-core/src/validate.rs` (новый, чистая функция без I/O):
+    `ValidationIssue {severity, code, node_id, edge_id, message}` — сериализация
+    snake_case, коды — стабильный контракт; `validate(&Canvas) ->
+    Vec<ValidationIssue>`; реализованы `E-CYCLE` (при цикле отчёт
+    ограничивается топологией — без шума слот-предупреждений), `E-OVERLOAD`
+    (из `propagate_with_lines`), `W-AMBIGUOUS-SRC` (многолинейный исток без
+    `fromLine`), `W-UNUSED-SLOT` (обход дерева формул приёмника: `$N`/`$in`,
+    фенсы и проза пропускаются; диагностика G5 — позиционное ребро в шаблонную
+    ноду теряется); `E-UNIT`/`E-PORT-UNKNOWN`/`E-DOUBLE-INPUT` — на полях
+    FR-029, точка добавления — `port_contract_issues` (контракт в док-комменте);
+  - `canvas-mcp`: TOOLS 22 → 25 — `edges_list`, `edge_get`, `graph_validate`
+    (схемы + описание контракта кодов); тест схем обновлён;
+  - `canvas-app` `mcp_dispatch`: три ветки чтения (валидация не мутирует:
+    без undo/автосейва/`recompute_flow`); каноническая схема ребра —
+    `mcp_edge_json` (единственное место, куда FR-029 добавит `toParam`/
+    `fromOutput`);
+  - тесты: 10 юнит в `validate.rs` (чистая сцена → `issues == []`, фиксстура
+    на каждый код, `$in`/`$N`-семантика слотов, шаблонная нода, детерминизм,
+    контракт сериализации) + 3 e2e `mcp_dispatch` (`mcp_edges_list_and_get`,
+    `mcp_graph_validate_clean_and_cycle`, `mcp_graph_validate_overload_and_unused_slot`);
+  - дока: SPEC.md §4 (структура: validate.rs, 25 инструментов) + §5.1 (буллет
+    MCP-чтения/валидации), ACCEPTANCE.md §21 (чек-лист, сценарии 10–12 —
+    «после CP1»), interface-objects/edge.md (строка «Чтение топологии»,
+    §6-буллет, источник), FR-032 → «в работе (v1)» + Changelog (включая
+    чек-лист интеграции CP1 из 5 пунктов), index-cr-fr.md.
+- **Гейты:** fmt/clippy(-D warnings, --all-targets)/test --workspace — зелёные
+  (все 36 сюит; ядро 175 тестов, +13 новых).
+- **Интеграция CP1 (для агента, вливающего FR-029):** см. Changelog FR-032 —
+  заполнить `port_contract_issues`, два условия в `validate()`, поля в
+  `mcp_edge_json`, сценарии ACCEPTANCE FR-032.10–12 и гейт A2 «3 подсаженные
+  ошибки → ровно 3 issue». До влития CP1 три из кодов гейта A2 определить не
+  на чем (контракта портов ещё не существует) — это ожидаемое состояние
+  параллельной разработки, не дефект.
+- **Коммит/ветка:** `feature/fr-032-graph-read-validate` (база 433e3fa),
+  коммит — см. git log (feat(core,mcp,app): FR-032 v1).
+
+---
+
 ## 2026-09-18 — Критический путь: детализация + FR-032/FR-033 (разметка FR/CR)
 
 - **Задача (владелец):** прописать критический путь с обоснованием, разметить
