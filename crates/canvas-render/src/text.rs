@@ -1296,41 +1296,48 @@ impl TextSystem {
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
     /// строки с бейджем результата — [`LinePort`] на правом краю ноды
     /// (вертикаль — [`result_row_y`] ряда бейджа — инвариант вертикали).
-    /// Шаблонная нода — ОДИН порт у футера результата ([`result_footer_y`],
-    /// `line = None` — узловое значение). Нет кэша/результатов — пусто
-    /// (нода вне экрана, виджет, проза) — портов нет, hit-test промахивается.
+    /// FR-025 (правка 2, по проверке владельца): шаблонная нода — порты у
+    /// каждой строки листа параметров ПЛЮС порт футера результата
+    /// ([`result_footer_y`], `line = None` — узловое значение, формула
+    /// шаблона FR-023; у построчных портов шаблона `is_final = false`).
+    /// Нет кэша/результатов (нода вне экрана, виджет, проза) — портов нет,
+    /// hit-test промахивается.
     pub fn line_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::LinePort> {
         let right = node.x + node.width;
-        // Шаблонная нода: формула и есть финальное значение — порт у футера
-        if node.template().is_some() {
-            return vec![canvas_core::LinePort {
+        let is_template = node.template().is_some();
+        let mut ports: Vec<canvas_core::LinePort> =
+            match self.cache.get(&index) {
+                Some(entry) => {
+                    let total = entry.line_results.len();
+                    entry
+                        .line_results
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, line_result)| {
+                            let block =
+                                entry.body.as_ref()?.blocks.iter().find(|block| {
+                                    block.source_line == Some(line_result.source_line)
+                                })?;
+                            Some(canvas_core::LinePort {
+                                line: Some(line_result.source_line),
+                                point: [right, result_row_y(node, block.offset[1])],
+                                // У шаблонной ноды «финальный» порт один — футер;
+                                // строки листа параметров всегда промежуточные
+                                is_final: i + 1 == total && !is_template,
+                            })
+                        })
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+        if is_template {
+            ports.push(canvas_core::LinePort {
                 line: None,
                 point: [right, result_footer_y(node)],
                 is_final: true,
-            }];
+            });
         }
-        let Some(entry) = self.cache.get(&index) else {
-            return Vec::new();
-        };
-        let total = entry.line_results.len();
-        entry
-            .line_results
-            .iter()
-            .enumerate()
-            .filter_map(|(i, line_result)| {
-                let block = entry
-                    .body
-                    .as_ref()?
-                    .blocks
-                    .iter()
-                    .find(|block| block.source_line == Some(line_result.source_line))?;
-                Some(canvas_core::LinePort {
-                    line: Some(line_result.source_line),
-                    point: [right, result_row_y(node, block.offset[1])],
-                    is_final: i + 1 == total,
-                })
-            })
-            .collect()
+        ports
     }
 
     /// Подготовить тексты кадра по текст-группам z-плана (zorder.rs):

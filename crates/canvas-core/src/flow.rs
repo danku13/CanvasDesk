@@ -243,9 +243,10 @@ pub struct FlowSolutions {
 /// [`propagate`] с построчными выходами (FR-025): для текстовых Numi-листов
 /// дополнительно собирает значение каждой формульной строки. Нумерация
 /// строк — индекс строки ТЕКСТА ноды (тот же, что в `ExprLineResults`
-/// FR-013 и в бейджах результатов рендера). Шаблонные ноды и ноды с явной
-/// формулой `canvasdesk.expr` построчных выходов не дают — их точка выхода
-/// одна (футер/узловое значение).
+/// FR-013 и в бейджах результатов рендера). FR-025 (правка 2, по проверке
+/// владельца): шаблонные ноды тоже дают построчные выходы — их текст (лист
+/// параметров FR-018) вычисляется наравне с заметками, узловое значение
+/// остаётся у формулы шаблона (футер, `line = None`).
 pub fn propagate_with_lines(
     canvas: &Canvas,
     overrides: &HashMap<String, Value>,
@@ -274,6 +275,18 @@ pub fn propagate_with_lines(
             Some(tpl) => env.with_param_map(tpl.param_values()),
             None => env,
         };
+        // FR-025 (правка 2): значение КАЖДОЙ формульной строки текста —
+        // кандидат построчной точки выхода, теперь и у шаблонных нод
+        // (лист параметров — присваивания со значениями). Ошибки строк
+        // и проза значений не дают.
+        let line_outcomes = expr::eval_lines_in(&node.text.clone().unwrap_or_default(), &env);
+        for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
+            if let Some(ExprOutcome::Ok(value)) = line_outcome {
+                solutions
+                    .lines
+                    .insert((id.clone(), line_index), value.clone());
+            }
+        }
         // Значение ноды: шаблонная формула (FR-018), явная формула
         // `canvasdesk.expr` (MCP) или — для обычных заметок — последняя
         // формульная строка Numi-листа (FR-013: «итог заметки — последняя
@@ -289,17 +302,6 @@ pub fn propagate_with_lines(
                     .map_err(|err| EvalError::BadFormula(err.to_string()))
                     .and_then(|parsed| expr::eval(&parsed, &env)),
                 None => {
-                    let text = node.text.clone().unwrap_or_default();
-                    // FR-025: значение КАЖДОЙ формульной строки — кандидаты
-                    // построчных точек выхода; ошибки/проза значения не дают.
-                    let line_outcomes = expr::eval_lines_in(&text, &env);
-                    for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
-                        if let Some(ExprOutcome::Ok(value)) = line_outcome {
-                            solutions
-                                .lines
-                                .insert((id.clone(), line_index), value.clone());
-                        }
-                    }
                     let last = line_outcomes.into_iter().flatten().last();
                     match last {
                         Some(ExprOutcome::Ok(value)) => Ok(value),
@@ -873,6 +875,116 @@ mod tests {
         assert_eq!(
             solutions.outputs.get("A"),
             Some(&Ok(solutions.lines[&("A".to_owned(), 3)].clone()))
+        );
+    }
+
+    /// FR-025 (правка 2, по проверке владельца): шаблонная нода даёт
+    /// построчные выходы листа параметров (присваивания текста), узловое
+    /// значение — формула шаблона (НЕ последняя строка листа).
+    #[test]
+    fn propagate_template_line_outputs() {
+        use crate::templates::{TemplateParam, TemplateRef};
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("T", "", 0.0, 0.0);
+        node.text = Some("rps = 1000\nservers = 2".to_owned());
+        let mut params = std::collections::BTreeMap::new();
+        params.insert(
+            "rps".to_owned(),
+            TemplateParam {
+                num: 1000.0,
+                unit: None,
+            },
+        );
+        params.insert(
+            "servers".to_owned(),
+            TemplateParam {
+                num: 2.0,
+                unit: None,
+            },
+        );
+        node.set_template(Some(TemplateRef {
+            id: "com.canvasdesk.test".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "$rps × $servers".to_owned(),
+            params,
+            icon: String::new(),
+            color: String::new(),
+            name: None,
+        }));
+        canvas.nodes.push(node);
+
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        assert_eq!(
+            solutions.lines[&("T".to_owned(), 0)].num,
+            1000.0,
+            "строка 0 листа параметров (rps)"
+        );
+        assert_eq!(
+            solutions.lines[&("T".to_owned(), 1)].num,
+            2.0,
+            "строка 1 листа параметров (servers)"
+        );
+        // Узловое значение — формула шаблона (2000), не последняя строка (2)
+        assert_eq!(
+            solutions.outputs.get("T"),
+            Some(&Ok(Value::scalar(2000.0))),
+            "значение шаблонной ноды — формула"
+        );
+    }
+
+    /// FR-025 (правка 2): drag от строки листа параметров шаблонной ноды —
+    /// downstream получает значение ИМЕННО этой строки (регрессия проверки
+    /// владельца: передавалось только узловое значение — результат формулы).
+    #[test]
+    fn inbound_slot_from_template_line_carries_param_value() {
+        use crate::templates::{TemplateParam, TemplateRef};
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("T", "", 0.0, 0.0);
+        node.text = Some("rps = 1000\nservers = 2".to_owned());
+        let mut params = std::collections::BTreeMap::new();
+        params.insert(
+            "rps".to_owned(),
+            TemplateParam {
+                num: 1000.0,
+                unit: None,
+            },
+        );
+        params.insert(
+            "servers".to_owned(),
+            TemplateParam {
+                num: 2.0,
+                unit: None,
+            },
+        );
+        node.set_template(Some(TemplateRef {
+            id: "com.canvasdesk.test".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "$rps × $servers".to_owned(),
+            params,
+            icon: String::new(),
+            color: String::new(),
+            name: None,
+        }));
+        canvas.nodes.push(node);
+        node_with_expr(&mut canvas, "B", "$in × 2", 1.0);
+        // Ребро от строки 0 шаблонной ноды (rps = 1000)
+        let mut line_edge = Edge::new("e1", "T", None, "B", None);
+        line_edge.set_flow_kind(FlowKind::Value);
+        line_edge.from_line = Some(0);
+        canvas.add_edge(line_edge);
+
+        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
+        assert_eq!(
+            slots[0].as_ref().map(|value| value.num),
+            Some(1000.0),
+            "слот — значение строки 0 (rps), а не результат формулы (2000)"
+        );
+        // Downstream: 1000 × 2 (значение строки умножается в приёмнике)
+        assert_eq!(
+            solutions.outputs.get("B"),
+            Some(&Ok(Value::scalar(2000.0))),
+            "$in приёмника — значение строки шаблонной ноды"
         );
     }
 

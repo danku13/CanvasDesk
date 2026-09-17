@@ -2456,6 +2456,57 @@ impl App {
         select_node_hit(&self.scene.canvas, &visible)
     }
 
+    /// FR-025 (правка 2): построчная точка выхода под world-точкой.
+    /// Кандидаты — ноды из spatial-индекса в прямоугольнике допуска зоны
+    /// портов (CR-003) вокруг курсора; хост под курсором проверяется первым.
+    /// Правка по проверке владельца: раньше hit-test был привязан к
+    /// `hovered`, а кружки сидят НА краю ноды — половина каждого кружка
+    /// торчит наружу, курсор правее края давал `hovered = None` и drag от
+    /// строки не начинался вовсе (пользователь получал либо сторону-порт с
+    /// узловым значением, либо ничего). Группы и скрытые поддеревья — мимо.
+    fn line_port_hit(&self, world: Vec2) -> Option<(usize, canvas_core::LinePort)> {
+        if !self.settings.line_ports {
+            return None;
+        }
+        let renderer = self.renderer.as_ref()?;
+        let zoom = self.camera.zoom();
+        let tolerance = self.settings.port_zone_px / zoom.max(1e-3);
+        let expanded = [
+            world[0] - tolerance,
+            world[1] - tolerance,
+            world[0] + tolerance,
+            world[1] + tolerance,
+        ];
+        let hidden = self.hidden_subtree_nodes();
+        let mut candidates: Vec<usize> = self
+            .scene
+            .spatial
+            .query_rect(expanded)
+            .into_iter()
+            .filter(|index| hidden.binary_search(index).is_err())
+            .collect();
+        if let Some(hovered) = self.hovered {
+            if let Some(pos) = candidates.iter().position(|&index| index == hovered) {
+                candidates.swap(0, pos);
+            }
+        }
+        for index in candidates {
+            let Some(node) = self.scene.canvas.nodes.get(index) else {
+                continue;
+            };
+            if node.kind() == NodeKind::Group {
+                continue;
+            }
+            let ports = renderer.line_ports(index, node);
+            if let Some(port) =
+                canvas_core::line_port_at(&ports, world, zoom, self.settings.port_zone_px)
+            {
+                return Some((index, port));
+            }
+        }
+        None
+    }
+
     /// Хэндл конца выделенной связи под world-точкой (CR-002): конец, чей
     /// порт ближе к курсору в допуске зоны портов (CR-003, экранные px →
     /// world делением на zoom). None — мимо обоих концов/связь висячая.
@@ -7690,36 +7741,21 @@ impl App {
                 // FR-025: ПОСТРОЧНЫЕ точки выхода (флаг line_ports) —
                 // приоритет над сторонными портами в пределах своих рядов:
                 // drag от кружка строки создаёт value-ребро со значением
-                // именно этой строки (from_port, всегда value).
-                if self.settings.line_ports {
-                    let line_port = self.hovered.and_then(|node_index| {
-                        let node = self.scene.canvas.nodes.get(node_index)?;
-                        if node.kind() == NodeKind::Group {
-                            return None;
-                        }
-                        let renderer = self.renderer.as_ref()?;
-                        let ports = renderer.line_ports(node_index, node);
-                        canvas_core::line_port_at(
-                            &ports,
-                            world,
-                            self.camera.zoom(),
-                            self.settings.port_zone_px,
-                        )
+                // именно этой строки (from_port, всегда value). Правка 2:
+                // hit-test по кандидатам spatial-индекса — не привязан к
+                // hovered (кружки наполовину торчат из ноды; см.
+                // line_port_hit)
+                if let Some((node_index, port)) = self.line_port_hit(world) {
+                    let from_node = self.scene.canvas.nodes[node_index].id.clone();
+                    self.edge_drag = Some(EdgeDrag::New {
+                        from_node,
+                        from_side: Side::Right,
+                        // Точка выхода расчёта семантически value
+                        value_flow: true,
+                        from_port: Some(port),
                     });
-                    if let Some(port) = line_port {
-                        let from_node = self.scene.canvas.nodes[self.hovered.unwrap_or_default()]
-                            .id
-                            .clone();
-                        self.edge_drag = Some(EdgeDrag::New {
-                            from_node,
-                            from_side: Side::Right,
-                            // Точка выхода расчёта семантически value
-                            value_flow: true,
-                            from_port: Some(port),
-                        });
-                        self.request_redraw();
-                        return;
-                    }
+                    self.request_redraw();
+                    return;
                 }
                 // Порт hover-ноды (T8): начало drag резиновой линии новой
                 // связи — drag ноды/resize/двойной клик не начинаются.
