@@ -1,6 +1,9 @@
 //! canvas-core — модель данных канваса и JSON Canvas I/O.
 //! Не зависит от ОС и GPU (SPEC §4): вся платформенная логика — за трейтами.
 
+/// FR-016: анализ узких мест и риска очередей — чистая функция над
+/// результатами propagator-а (волна B1/CP5).
+pub mod analyze;
 mod edgegeom;
 mod error;
 /// FR-013: Numi-base формулы text-нод (`canvasdesk.expr`).
@@ -25,6 +28,10 @@ pub mod validate;
 /// персистентность в `canvasdesk.whatif`.
 pub mod whatif;
 
+pub use analyze::{
+    analyze, badge_text, has_risk, AnalysisConfig, AnalysisFlags, AnalysisState,
+    Severity as AnalysisSeverity,
+};
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
     distance_to_edge, draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint,
@@ -65,3 +72,27 @@ pub use whatif::{
     active_line_exprs, scenarios_from_canvas, scenarios_to_canvas, validate_scenario, Scenario,
     StaleOverride,
 };
+
+// --- FR-036: тестовая песочница ------------------------------------------
+/// Корень временных каталогов для тестов крейта. Нативно — системный temp
+/// (поведение тестов не меняется); под wasm32 — относительный каталог
+/// внутри предоткрытого CWD (runner wasmtime маппит корень пакета на `/`),
+/// потому что `std::env::temp_dir` на wasm-таргетах паникует: std для
+/// wasm32-unknown-unknown/wasip1 её не реализует.
+///
+/// Единственное исключение из правила «без cfg(target_arch) в core»
+/// (wasm-port.md §3.1): хелпер живёт в `#[cfg(test)]`-коде и на продуктовые
+/// сборки не попадает. Решение зафиксировано в ADR-0011.
+#[cfg(test)]
+pub(crate) fn test_scratch_root() -> std::path::PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let dir = std::path::PathBuf::from(".wasi-scratch");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+}

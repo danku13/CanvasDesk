@@ -1,3 +1,83 @@
+## 2026-09-18 — Реализация CP5 (FR-016: индикаторы узких мест, волна B1)
+
+- **Задача (владелец):** «Реализуй CP5» — по `docs/plans/product-roadmap.md`
+  §9: FR-016 (волна B1) — bottleneck/queue-risk индикаторы по ρ и W из
+  уже посчитанного потока; гейт — «эталон №1 визуально exposes узкие
+  места без чтения чисел в нодах», автотесты — юниты классификации
+  (пороги ρ/L) + e2e на эталоне.
+- **Сделано:**
+  - **`canvas-core/src/analyze.rs`** (новый, чистая функция — образец
+    validate.rs): `AnalysisFlags {utilization, queue_length, wait_sec,
+    severity}` / `Severity {None, Warn, Critical, Overload}` /
+    `AnalysisConfig` (пороги 0.7/0.9, 100 ms/1 s, 1/10 — дефолты
+    документа FR-016, вынесены в данные — инвариант 2) / `badge_text`
+    (строка бейджа — канвас = MCP, инвариант 4) / `has_risk` (гейт
+    авто-включения). Детекция v1 — актуализация под скалярный движок
+    (документ писал про `Value::Struct` от mm1 — это v2 движка):
+    `Err(Overload{rho})` → Overload (ρ из ошибки); named-выход
+    `utilization` (Percent, доля, ≥1 → Overload) / Percent-значение
+    ноды → ρ; Time-значение → W; named `wait_time`/`queue_length` —
+    точки расширения; Count сам по себе НЕ очередь (анти-ложные
+    срабатывания на innocent «10 req»); SLA — v2. Unit-хелперы
+    expr.rs (`Atom::new`, `Unit::dims/scale`) подняты до pub(crate).
+  - **Манифесты**: 13 queue-шаблонов (cdn, tcp-lb, lb, api-gateway,
+    auth-service, http-endpoint, cache-redis, db-sql-master/-replica,
+    queue-kafka, worker, graphql, grpc-service) + именованный выход
+    `utilization` (зеркалит аргументы своего mm1), версии +minor —
+    ρ стал данными потока через инфраструктуру FR-029.
+  - **canvas-app**: `SceneState.analysis` (runtime-кэш, хвост
+    `recompute_flow` — покрывает все 20+ точек мутаций); настройка
+    `bottleneck_overlay` (config.toml, персистентная, дефолт выкл);
+    тоглы — Ctrl+B (канвас-уровень, кириллица «и»; Bold в редакторе
+    не конфликтует — маршрутизация выше), пункт меню канваса «Узкие
+    места (Ctrl+B)» (6-й, ✓), строка панели настроек «Индикаторы
+    узких мест»; авто-включение один раз за запуск при первом риске
+    (Warn+) с тостом, ручной тогл глушит авто до перезапуска.
+  - **Рендер**: рамка серьёзности на карточке (приоритет шейдера
+    selected > broken > border.a; выделенная нода с риском — внешнее
+    кольцо `analysis_ring_instance`, обе рамки видны — ручная
+    приёмка); бейдж — моно-текст `badge_text` цветом серьёзности над
+    правым верхним углом (шапка занята заголовком/иконкой —
+    адаптация документирована в FR-016 changelog); LOD: бейджи ≥ 0.6
+    эфф. зума (физическая читаемость, как titles_visible), рамки
+    Warn/Critical ≥ 0.25, Overload — всегда; цвета/тексты — по темам
+    (контраст CR-007: тёмно-красный #7A0010 из документа читаем на
+    светлом, на тёмном — яркие аналоги); SceneView/TitleFrame +
+    поля `analysis`/`analysis_overlay`/`analysis_badges`.
+  - **MCP**: инструмент `analyze_bottlenecks` (TOOLS 26 → 27) —
+    {nodes: [{id, severity, utilization?, queue_length?, wait_sec?,
+    badge}], thresholds}; свежий пересчёт как flow_recalc; чтение
+    (e2e проверяет канвас/undo байт-в-байт).
+  - **Тесты** (+22): 16 юнит analyze (все уровни, пороги-как-данные,
+    ρ из ошибки, named-выходы, детерминизм, сериализация, бейджи);
+    4 юнит рендера (палитры серьёзностей по темам, LOD-пороги,
+    геометрия кольца, текстовые цвета); e2e
+    `analyze_bottlenecks_reference_and_growth` — мини-эталон №1
+    (ADR-0006): базовая линия CDN ρ 0.417/W 34.29 ms (здоров),
+    node_update_text DAU ×2 → Warn ρ 0.833 + бейдж «83% · W: 120 ms»,
+    DAU ×5.35 → Overload ρ 2.23 (ветка C эталона №2) ±1 %, GW
+    здоров (ρ 0.334), read-only-инварианты, синхронность
+    runtime-кэша. Обновлены пины версий манифестов (lb 1.1→1.2) и
+    счётчики меню (6)/инструментов (27).
+  - **Доки**: FR-016 → «реализовано (v1)» + Changelog (актуализация
+    детекции, бейдж над карточкой, цвета по темам); index-cr-fr;
+    roadmap Changelog (4); SPEC §4 (27) + §13 analyze_bottlenecks;
+    ACCEPTANCE §25 (FR-016.1–9); user-docs hotkeys (Ctrl+B) /
+    interface (раздел «Индикаторы узких мест») / calculations
+    (связка ρ→оверлей); interface-objects/node.md §5 (состояние
+    серьёзности).
+- **Гейты:** cargo fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  cargo test --workspace — 1034 passed / 0 failed. Инцидент: линковка
+  упала ld signal 7 — диск 100 % (target/ 9.1G, тот же диагноз, что в
+  записи FR-035); cargo clean → прогон заново.
+- **Открытые пункты (следующие шаги):** CP4 = R5 (рецепт агента
+  user-docs/agent-recipe.md — не начат), CP6 = FR-017 v1 (what-if —
+  переиспользует analyze + AnalysisConfig на override-результатах);
+  v2-хвосты FR-016: SLA-сравнение, кастомные пороги в конфиге,
+  паттерны рамки для цветовой слепоты, heatmap.
+
+---
+
 ## 2026-09-18 — Реализация CP0 (волна 0) + CP1 (FR-029 порты значений)
 
 - **Задача (владелец):** на основании product-roadmap.md реализовать CP0 и CP1.
@@ -396,3 +476,97 @@
   прошлой итерации) и ADR-0010.
 - **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
   cargo test --workspace — 1012 passed / 0 failed (+2 к FR-034).
+
+## 2026-09-18 — FR-036: wasm-сборка ядра — гейт wasm32-unknown-unknown + исполнение тестов в wasmtime (ADR-0011)
+
+- **Триггер:** приказ владельца «распланировать сборку wasm и реализовать
+  сборку для повышения твоей автономности в тестировании». Уточнение скоупа
+  (AskUserQuestion): гейт + тесты в wasm-рантайме; таргеты unknown-unknown
+  (продукт) + wasip1 (тесты); CI-джоба в ci.yml; коммит сразу в main.
+- **Инцидент среды:** контейнер откатился к старому снапшоту (HEAD = 28b4dc8,
+  состояние после ADR-0008; ~250 файлов «modified» = смена прав 100644→100755;
+  Rust-тулчейн пропал). Восстановлено из origin/main: `git fetch` +
+  `git reset --hard origin/main` (= 3a13c33, FR-035) + переустановка rustup
+  stable 1.98.1 (rustfmt, clippy). Урок: работы сессий живут только в пуше.
+- **Исследование:** план M8 (`docs/plans/wasm-port.md`, §2) уже фиксировал
+  wasm-совместимость ядра экспериментом 2026-09-16; W0 (CI-гейт) — открыт.
+  Эмпирика на 3a13c33: check ядра под wasm32-unknown-unknown зелёный (55.8 с).
+- **Компиляция ≠ исполнение:** wasmtime 48.0.2 (преduccт-бинарь в
+  ~/.local/bin) + wasm32-wasip1 → тесты canvas-core падали: паника
+  `std::env::temp_dir()` (std на wasm её не реализует) и — после
+  первого фикса — паника `std::process::id()` в scene_ops (frame 11
+  бэктрейса wasmtime). Флэйк первого прогона маскировал счётчиком «283
+  passed» — реальный полный набор 301 (spatial 6 + templates_schema 8 не
+  влезли в обрезанный вывод).
+- **ADR-0011** (docs/adr/adr-0011-wasm-build-gate.md, «принято»): вариант B —
+  гейт (check + rlib) + исполнение тестов ядра в wasmtime; отклонены:
+  только W0-check (исполнение не доказано), wasm-bindgen-фасад (W4/W12),
+  вынос mcp_dispatch в lib (W2, отдельная задача).
+- **Реализация:** `scripts/wasm_gate.sh` (ступени: check ядра → build rlib →
+  `RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1 -p canvas-core`;
+  режим `--check` без wasmtime); `.cargo/config.toml` — runner
+  `wasmtime run -S inherit-env --dir .::/ --dir /tmp::/tmp` (только при
+  явном `--target wasm32-wasip1`); CI-джоба `wasm-check` (ubuntu, ступень 1 —
+  приёмка W0); тестовая песочница `test_scratch_root()` в `#[cfg(test)]`
+  lib.rs (натив — temp_dir, wasm — `.wasi-scratch` в CWD) + локальная копия
+  в scene_ops.rs (интеграционные тесты не видят cfg(test)-хелперы) + замена
+  process::id → SystemTime; `.gitignore` += `.wasi-scratch/`.
+- **Результат:** 301/301 тестов canvas-core под wasip1 (wasmtime 48) и
+  301/301 нативно (нулевой регресс); rlib ядра 21M; полный
+  `scripts/wasm_gate.sh` — OK.
+- **Доки:** ADR-0011; FR-036 (docs/change-requests/fr-036-wasm-build-gate.md);
+  ACCEPTANCE §25 (7 пунктов); index-cr-fr — строка FR-036, следующий номер
+  FR-037; adr/README.md; wasm-port.md — W0 «выполнено» + примечание о
+  тест-раннере; AGENTS «Сборка и тесты» — wasm-гейт; SPEC §3 — строка
+  wasm-таргетов.
+- **Гейты:** wasm-gate — OK (3 ступени + `--check`); fmt — ок; clippy
+  --workspace --all-targets -D warnings — ок; cargo test --workspace —
+  1012 passed / 0 failed (без изменений к FR-035 — нулевой регресс).
+
+---
+
+## 2026-09-18 — FR-037/ADR-0012: план верификации MCP-реализации в WASM (без реализации)
+
+- **Задача (владелец):** «теперь спланировать реализацию MCP для WASM,
+  чтобы можно было проверять не только UI, но и реализацию MCP».
+- **Формат:** только планирование — документы и индексы; код не меняется
+  (Task ID сессии агента: fr-037-plan).
+
+**Исследование (факты кода, main `b9e011c`):**
+- `mcp_dispatch` (main.rs:6074, ~1550 строк, 27 инструментов) — уже чистая
+  функция: зависимости только SceneState (mark_dirty/push_undo/
+  recompute_flow/move_node/ensure_reserve_at), Camera (4 метода:
+  position/zoom/set_center/set_zoom, main.rs:6855–6876),
+  TemplateRegistry::builtin() (embedded). `node_create_file` диск не трогает.
+- Мост canvas-mcp — чистый протокол за трейтом AppTransport (lib.rs:60) +
+  run_stdio (lib.rs:594); платформенное только под cfg(windows). Под
+  wasm-таргеты мост НЕ проверялся (гейт FR-036 = core/render/widgets).
+- ~40 MCP-тестов в main.rs:12060+ (~2970 строк), включая эталонные гейты
+  CP1 (mcp_fr029_instagram_mvp_reference:14183), CP3, CP5 — уже исполняются
+  нативно на Linux, но не в wasm-рантайме; end-to-end сессия требует
+  Windows pipe + GUI.
+- SceneState смешивает модель и ввод: UI-поля selected/selected_nodes/
+  dragging = 99 мест доступа; модельные поля — путь доступа self.scene.*
+  не меняется при переносе типа.
+
+**Документы (этот коммит):**
+- **ADR-0012** (docs/adr/adr-0012-mcp-wasm-verification.md, «предложено»):
+  вариант D — крейт canvas-scene (SceneState-модель + модуль mcp; ноль
+  новых внешних зависимостей; viewport-зеркало вместо зависимости от
+  canvas-render) + canvas-mcp: run_stdio_with_transport<T> + лист-крейт
+  canvas-mcp-headless (HeadlessSession за AppTransport, bin для
+  wasmtime/wasip1) + драйвер mcp_wasm_e2e.py и гейт mcp_wasm_gate.sh.
+  Отклонены: «ничего не выносить» (нет сессии), полный W2 (объём),
+  wasm-bindgen-фасад (волна 2, прецедент ADR-0011-C).
+- **FR-037** (docs/change-requests/fr-037-mcp-wasm-verification.md,
+  «выявлено (план)»): задачи MW1 (canvas-scene, M) → MW2 (мост под wasm,
+  S) → MW3 (headless, M) → MW4 (гейт/CI/доки, M) + опции MW5 (инспектор)
+  / MW6 (файловый режим); критерии приёмки (≥356 wasm-тестов, oracle ±1%
+  эталона №1, нативный регресс 0); 5 открытых вопросов (Q1 имена, Q2
+  viewport, Q3 CI-wasmtime, Q4 инспектор, Q5 файлы) с рекомендациями.
+- Индексы: adr/README.md += ADR-0012; index-cr-fr.md += FR-037, следующий
+  номер FR-038; wasm-port.md — примечание FR-037 (W2 сужается; волна 2
+  MCP-мост = HeadlessSession) + §9-строка моста дополнена ссылкой.
+
+**Границы:** продуктовое поведение не меняется; реализация MW1–MW4 не
+начата — по плану, каждая задача = сессия = коммит.

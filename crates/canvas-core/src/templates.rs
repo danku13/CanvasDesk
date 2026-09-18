@@ -1276,7 +1276,8 @@ mod tests {
     /// Временный корень custom-шаблонов (без tempfile — уникальный суффикс
     /// + ручная уборка).
     fn temp_root(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        // FR-036: test_scratch_root — нативно temp_dir, под wasm — CWD-песочница
+        let dir = crate::test_scratch_root().join(format!(
             "canvasdesk-fr20-{tag}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1403,7 +1404,8 @@ mod tests {
     /// == built-in.
     #[test]
     fn missing_custom_root_gives_empty_customs() {
-        let root = std::env::temp_dir().join(format!(
+        // FR-036: test_scratch_root — wasm-совместимая песочница
+        let root = crate::test_scratch_root().join(format!(
             "canvasdesk-fr20-absent-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

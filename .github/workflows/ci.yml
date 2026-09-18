@@ -36,6 +36,24 @@ jobs:
       - name: build
         run: cargo build --workspace
 
+  # FR-036 (ADR-0011, W0 плана wasm-port): ядро обязано собираться под
+  # wasm32-unknown-unknown — гейт веб-порта M8 (wasm-port.md §3.1,
+  # расширение правила «core собирается на Linux») на каждый пуш.
+  # Быстрая линукс-джоба без wasmtime: только компиляция (ступени 1–2
+  # scripts/wasm_gate.sh); исполнение ядра в wasm-рантайме — ступень 3
+  # того же скрипта, локально (wasm32-wasip1 + wasmtime).
+  wasm-check:
+    name: wasm-check (wasm32-unknown-unknown)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: check ядра под wasm (core/render/widgets)
+        run: cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets
+
   # CP0 (волна 0.1 продуктового роадмапа, ADR-0008): лицензионная
   # чистота дерева — гейт на каждый пуш/PR. cargo-deny проверяет
   # licenses/bans/sources/advisories по deny.toml (allowlist архдока

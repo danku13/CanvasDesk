@@ -3,6 +3,7 @@
 //! Скруглённый прямоугольник, тень и рамка выделения рисуются SDF во фрагментном
 //! шейдере (shaders/cards.wgsl); все карточки кадра — один instanced draw.
 
+use canvas_core::analyze::Severity as AnalysisSeverity;
 use canvas_core::Node;
 use canvas_core::NodeKind;
 
@@ -23,6 +24,112 @@ pub const CORNER_RADIUS: f32 = 8.0;
 pub const SELECTION_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 1.0];
 /// Рамка битой ссылки (brokenLink) — серая.
 pub const BROKEN_BORDER: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
+
+// --- FR-016 (CP5): индикаторы узких мест ---
+
+/// Минимальный зум (мировой масштаб), при котором рисуется РАМКА
+/// серьёзности (LOD FR-016: ниже — только Overload).
+pub const ANALYSIS_BORDER_MIN_ZOOM: f32 = 0.25;
+/// Минимальный ЭФФЕКТИВНЫЙ зум (zoom × scale_factor, физический масштаб),
+/// при котором рисуются БЕЙДЖИ метрик (LOD FR-016: ниже — только цветные
+/// рамки; мера физической читаемости, как `titles_visible`).
+pub const ANALYSIS_BADGES_MIN_ZOOM: f32 = 0.6;
+
+/// Рамка серьёзности узкого места (тёмная тема): жёлтый — Warn
+/// (#F5A623, документ FR-016), красный — Critical, ярко-красный —
+/// Overload (тёмно-красный #7A0010 из документа не виден на тёмном
+/// фоне — контраст CR-007, адаптация под тему).
+const SEVERITY_DARK: [[f32; 4]; 3] = [
+    [0.961, 0.651, 0.137, 1.0],
+    [0.898, 0.282, 0.302, 1.0],
+    [1.0, 0.271, 0.188, 1.0],
+];
+/// Рамка серьёзности (светлая тема): янтарный/красный/тёмно-красный
+/// (#7A0010 из документа FR-016 — читаем именно на светлом фоне).
+const SEVERITY_LIGHT: [[f32; 4]; 3] = [
+    [0.702, 0.42, 0.0, 1.0],
+    [0.761, 0.106, 0.106, 1.0],
+    [0.478, 0.0, 0.063, 1.0],
+];
+
+/// Цвет рамки/кольца серьёзности узкого места по теме (CR-007: не-текстовый
+/// контраст ≥ 3:1 к фону темы). Чистая функция (юнит-тест на маппинг).
+pub fn severity_border(severity: AnalysisSeverity, theme: &ThemeColors) -> [f32; 4] {
+    let slot = match severity {
+        AnalysisSeverity::None => return [0.0; 4],
+        AnalysisSeverity::Warn => 0,
+        AnalysisSeverity::Critical => 1,
+        AnalysisSeverity::Overload => 2,
+    };
+    let palette = if theme.is_dark() {
+        &SEVERITY_DARK
+    } else {
+        &SEVERITY_LIGHT
+    };
+    palette[slot]
+}
+
+/// Цвет ТЕКСТА бейджа узкого места по теме (CR-007: текстовый контраст
+/// ≥ 4.5:1 к фону канваса — бейдж живёт над карточкой, на фоне сцены;
+/// в тёмной теме светлее рамочных, в светлой — темнее).
+pub fn severity_text(severity: AnalysisSeverity, theme: &ThemeColors) -> crate::Color {
+    use crate::Color;
+    let dark = theme.is_dark();
+    match severity {
+        AnalysisSeverity::None => Color::rgb(0x9a, 0x9a, 0xa2),
+        AnalysisSeverity::Warn => {
+            if dark {
+                Color::rgb(0xf5, 0xa6, 0x23)
+            } else {
+                Color::rgb(0x8a, 0x5a, 0x00)
+            }
+        }
+        AnalysisSeverity::Critical => {
+            if dark {
+                Color::rgb(0xf2, 0x6b, 0x73)
+            } else {
+                Color::rgb(0xa0, 0x15, 0x15)
+            }
+        }
+        AnalysisSeverity::Overload => {
+            if dark {
+                Color::rgb(0xff, 0x66, 0x55)
+            } else {
+                Color::rgb(0x7a, 0x00, 0x10)
+            }
+        }
+    }
+}
+
+/// LOD FR-016: рисуется ли рамка серьёзности при данном зуме. Ниже
+/// `ANALYSIS_BORDER_MIN_ZOOM` остаётся только Overload (крупнейший риск
+/// виден издалека); None — никогда.
+pub fn analysis_border_visible(zoom: f32, severity: AnalysisSeverity) -> bool {
+    match severity {
+        AnalysisSeverity::None => false,
+        AnalysisSeverity::Overload => true,
+        AnalysisSeverity::Warn | AnalysisSeverity::Critical => zoom >= ANALYSIS_BORDER_MIN_ZOOM,
+    }
+}
+
+/// LOD FR-016: рисуются ли бейджи метрик (строка `analyze::badge_text`).
+pub fn analysis_badges_visible(zoom: f32) -> bool {
+    zoom >= ANALYSIS_BADGES_MIN_ZOOM
+}
+
+/// Внешнее кольцо серьёзности для ВЫДЕЛЕННОЙ ноды (ручная приёмка FR-016:
+/// «видно обе рамки — красную + синюю selected»): расширенный контур без
+/// заливки и тени, рисуется следом за карточкой (в её z-сегменте).
+pub fn analysis_ring_instance(node: &Node, border: [f32; 4]) -> CardInstance {
+    const GROW: f32 = 3.0;
+    CardInstance {
+        pos: [node.x - GROW, node.y - GROW],
+        size: [node.width + GROW * 2.0, node.height + GROW * 2.0],
+        fill: [0.0; 4],
+        border,
+        params: [CORNER_RADIUS + GROW, 0.0, 0.0, 1.0],
+    }
+}
 
 /// Пресеты цветов JSON Canvas ("1".."6"), тёмная тема: приглушённые тона
 /// поверх тёмного фона; светлый текст темы даёт ≥ 7:1 (см. тесты contrast).
@@ -1906,6 +2013,97 @@ mod tests {
         assert!(
             instances.iter().all(|inst| inst.size[0] == 1.8),
             "тонкая линия — кружки 1.8px"
+        );
+    }
+
+    // --- FR-016 (CP5): индикаторы узких мест ---
+
+    /// Маппинг серьёзностей на цвета: три уровня различимы в каждой теме,
+    /// Warn ≠ Critical ≠ Overload; None — без цвета (рамки нет).
+    #[test]
+    fn severity_border_maps_levels_per_theme() {
+        for theme in [ThemeColors::dark(), ThemeColors::light()] {
+            let warn = severity_border(AnalysisSeverity::Warn, &theme);
+            let critical = severity_border(AnalysisSeverity::Critical, &theme);
+            let overload = severity_border(AnalysisSeverity::Overload, &theme);
+            assert_eq!(severity_border(AnalysisSeverity::None, &theme), [0.0; 4]);
+            assert_ne!(warn, critical, "Warn ≠ Critical ({theme:?})");
+            assert_ne!(critical, overload, "Critical ≠ Overload");
+            assert_ne!(warn, overload);
+            for color in [warn, critical, overload] {
+                assert_eq!(color[3], 1.0, "рамка непрозрачна");
+            }
+        }
+    }
+
+    /// LOD FR-016: None — никогда; Overload — всегда; Warn/Critical —
+    /// от порога 0.25; бейджи — от 0.6 (физический масштаб).
+    #[test]
+    fn analysis_lod_thresholds() {
+        use canvas_core::analyze::AnalysisFlags;
+        assert!(!analysis_border_visible(10.0, AnalysisSeverity::None));
+        assert!(analysis_border_visible(0.0, AnalysisSeverity::Overload));
+        assert!(!analysis_border_visible(
+            ANALYSIS_BORDER_MIN_ZOOM - 0.01,
+            AnalysisSeverity::Warn
+        ));
+        assert!(analysis_border_visible(
+            ANALYSIS_BORDER_MIN_ZOOM,
+            AnalysisSeverity::Warn
+        ));
+        assert!(analysis_border_visible(5.0, AnalysisSeverity::Critical));
+        assert!(!analysis_badges_visible(ANALYSIS_BADGES_MIN_ZOOM - 0.01));
+        assert!(analysis_badges_visible(ANALYSIS_BADGES_MIN_ZOOM));
+        // Флаги без метрик и серьёзности — маркеров нет вовсе
+        let empty = AnalysisFlags::default();
+        assert!(!analysis_border_visible(1.0, empty.severity));
+    }
+
+    /// Кольцо серьёзности выделенной ноды: контур расширен на 3 world-px,
+    /// без заливки и тени, цвет — серьёзность.
+    #[test]
+    fn analysis_ring_expands_card_contour() {
+        let node = Node::text("n", "x", 100.0, 200.0);
+        let node = Node {
+            x: 100.0,
+            y: 200.0,
+            width: 280.0,
+            height: 120.0,
+            ..node
+        };
+        let border = [1.0, 0.2, 0.2, 1.0];
+        let ring = analysis_ring_instance(&node, border);
+        assert_eq!(ring.pos, [97.0, 197.0]);
+        assert_eq!(ring.size, [286.0, 126.0]);
+        assert_eq!(ring.fill, [0.0; 4], "без заливки");
+        assert_eq!(ring.border, border);
+        assert_eq!(ring.params[3], 1.0, "без тени");
+        assert_eq!(ring.params[1], 0.0, "рамка по border.a, не selected-путь");
+    }
+
+    /// Цвет текста бейджа: различается по темам (тёмная — светлые тона,
+    /// светлая — тёмные) и по уровням.
+    #[test]
+    fn severity_text_theme_aware() {
+        let dark = ThemeColors::dark();
+        let light = ThemeColors::light();
+        for severity in [
+            AnalysisSeverity::Warn,
+            AnalysisSeverity::Critical,
+            AnalysisSeverity::Overload,
+        ] {
+            let on_dark = severity_text(severity, &dark);
+            let on_light = severity_text(severity, &light);
+            assert_ne!(on_dark, on_light, "{severity:?}: темы различимы");
+        }
+        // Уровни в одной теме различимы
+        assert_ne!(
+            severity_text(AnalysisSeverity::Warn, &dark),
+            severity_text(AnalysisSeverity::Critical, &dark)
+        );
+        assert_ne!(
+            severity_text(AnalysisSeverity::Critical, &dark),
+            severity_text(AnalysisSeverity::Overload, &dark)
         );
     }
 }

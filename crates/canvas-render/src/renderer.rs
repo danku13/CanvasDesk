@@ -7,15 +7,18 @@ use anyhow::Context;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use canvas_core::analyze::AnalysisState;
 use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
 use canvas_core::{edge_midpoint, Canvas, FlowKind, Node, NodeKind, Side, SpatialIndex, Thumbnail};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
+    analysis_badges_visible, analysis_border_visible, analysis_ring_instance,
     build_draft_instances, build_edge_handle_instances, build_edge_instances,
     build_line_port_instances, build_port_instances, card_instance, dim_instance,
-    make_widget_transparent, template_band_instance, template_icon_quads, template_icon_rect,
-    widget_header_hover_instance, CardInstance, CardsPipeline, FocusView, SELECTION_BORDER,
+    make_widget_transparent, severity_border, severity_text, template_band_instance,
+    template_icon_quads, template_icon_rect, widget_header_hover_instance, CardInstance,
+    CardsPipeline, FocusView, SELECTION_BORDER,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -25,8 +28,8 @@ use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::sectors::{SectorInstance, SectorsPipeline};
 use crate::text::{
-    body_area, titles_visible, BodyQuad, BodyQuadKind, EdgeLabel, OverlayText, ScreenText,
-    TextSystem, TitleFrame,
+    body_area, titles_visible, AnalysisBadge, BodyQuad, BodyQuadKind, EdgeLabel, OverlayText,
+    ScreenText, TextSystem, TitleFrame, ANALYSIS_BADGE_GAP_Y, ANALYSIS_BADGE_MARGIN_X,
 };
 use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
@@ -278,6 +281,14 @@ pub struct SceneView<'a> {
     /// (виртуальный текст, подсветка подмен, дельта-бейджи). Пусто —
     /// режим выключен или подмен нет (рельеф базы не тронут).
     pub whatif_nodes: &'a HashMap<String, WhatIfNode>,
+    /// FR-016 (CP5): флаги анализа узких мест по id нод — runtime-кэш
+    /// приложения (не сериализуется). None — анализ недоступен (пустая
+    /// сцена/цикл потока) — рендер ведёт себя как при severity None.
+    pub analysis: Option<&'a AnalysisState>,
+    /// FR-016 (CP5): оверлей узких мест включён (настройка
+    /// `bottleneck_overlay`, тогл Ctrl+B). false — ни один путь не рисует
+    /// индикаторы (инвариант флага, как `line_ports`).
+    pub analysis_overlay: bool,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -878,6 +889,9 @@ impl Renderer {
         // z-позициях нод) и тамбнейлы, посегментно с границами для draw_range.
         let mut instances: Vec<CardInstance> = Vec::with_capacity(indices.len() + 8);
         let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
+        // FR-016 (CP5): бейджи узких мест видимых нод — world-якорь + цвет
+        // серьёзности; шейпятся/рисуются в text.rs (финальная группа).
+        let mut analysis_badges: Vec<AnalysisBadge> = Vec::new();
         // Связи (T8) — ПОД карточками: depth-теста нет, порядок инстансов
         // в общем буфере = порядок рисования; рисуются диапазоном до сегментов.
         // CR-002: перепривязываемая связь скрыта — её играет резиновая линия.
@@ -922,10 +936,50 @@ impl Renderer {
                 if widget_seethrough {
                     make_widget_transparent(&mut card);
                 }
+                // FR-016 (CP5): рамка серьёзности узкого места из посчитанного
+                // анализа. Приоритет шейдера: selected > broken > border.a —
+                // выделенная нода получает ВНЕШНЕЕ кольцо серьёзности рядом с
+                // карточкой (ручная приёмка: обе рамки видны), невыделенная —
+                // цветную рамку прямо на карточке.
+                let mut analysis_ring: Option<CardInstance> = None;
+                if scene.analysis_overlay {
+                    if let Some(flags) = scene.analysis.and_then(|state| state.get(&node.id)) {
+                        if analysis_border_visible(camera.zoom(), flags.severity) {
+                            let border = severity_border(flags.severity, &self.theme);
+                            if is_selected {
+                                analysis_ring = Some(analysis_ring_instance(node, border));
+                            } else if !widget_seethrough {
+                                card.border = border;
+                            }
+                        }
+                        // Бейдж метрик — флаг над правым верхним углом карточки
+                        // (LOD: физический масштаб; текст = analyze::badge_text —
+                        // тот же, что в MCP, инвариант 4 FR-016).
+                        if analysis_badges_visible(zoom_px) && flags.has_metrics() {
+                            let text = canvas_core::analyze::badge_text(flags);
+                            if !text.is_empty() {
+                                analysis_badges.push(AnalysisBadge {
+                                    text,
+                                    anchor: [
+                                        node.x + node.width - ANALYSIS_BADGE_MARGIN_X,
+                                        node.y - ANALYSIS_BADGE_GAP_Y,
+                                    ],
+                                    color: severity_text(flags.severity, &self.theme),
+                                });
+                            }
+                        }
+                    }
+                }
                 if dim_it {
                     dim_instance(&mut card, dim_factor);
                 }
                 instances.push(card);
+                if let Some(mut ring) = analysis_ring {
+                    if dim_it {
+                        dim_instance(&mut ring, dim_factor);
+                    }
+                    instances.push(ring);
+                }
                 // FR-018: шапка шаблонной ноды — цветная полоса категории +
                 // квад-иконка роли (снимки из canvasdesk.template — реестр
                 // рендеру не нужен). Гаснут в фокус-режиме вместе с карточкой.
@@ -1132,6 +1186,7 @@ impl Renderer {
                 editing_line_results: scene.expr_editing_results,
                 param_spills: scene.param_spills,
                 whatif_nodes: scene.whatif_nodes,
+                analysis_badges: &analysis_badges,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

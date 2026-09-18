@@ -568,8 +568,7 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-035.6 | Прогон реальной сессии (probe) | initialize/batch/tools-call/мусор; каждая строка stdout — валидный JSON (скрипт `mcp_stdio_purity_probe.sh` — PASS, bad=0) |
 | FR-035.7 | Регресс | `cargo test --workspace` — 0 failed (1012 passed); тесты FR-034 не изменены |
 
-
-## 25. Чек-лист R5/CP4 (2026-09-18): рецепт для ИИ-агентов — `user-docs/agent-recipe.md`
+## 27. Чек-лист R5/CP4 (2026-09-18): рецепт для ИИ-агентов — `user-docs/agent-recipe.md`
 
 Контекст: контрольная точка CP4 волны A (CR-013 R5, документация). Рецепт
 фиксирует порядок вызовов MCP-инструментов для агентной сборки моделей
@@ -588,7 +587,7 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | R5.7 | SPEC §MCP | абзац-ссылка на рецепт как на канонический порядок вызовов; коды ошибок — стабильный контракт рецепта |
 | R5.8 | Ручной гейт CP4 (владелец) | ревью текста рецепта + свежий чат стороннего агента (без контекста репо) собирает эталон №5 по рецепту без подсказок; `graph_validate` в конце — `valid: true` |
 
-## 26. Чек-лист FR-017/CP6 (2026-09-18): what-if сценарии — подмены, дельты, сравнение
+## 28. Чек-лист FR-017/CP6 (2026-09-18): what-if сценарии — подмены, дельты, сравнение
 
 Контекст: контрольная точка CP6 волны B2 (роадмап §9). What-if режим:
 построчные подмены без правки `.canvas` (инвариант 2), дельты «было →
@@ -608,3 +607,37 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-017.9 | MCP-каталог | 9 инструментов `whatif_*` в `tools/list` (всего 35); `whatif_scenario_create` активирует новый сценарий; `whatif_set_param` — sugar адресации по имени параметра — тесты canvas-mcp (14 passed) + `mcp_whatif_override_apply_undo` |
 | FR-017.10 | Документация | раздел «What-if сценарии» в `user-docs/calculations.md`; `Ctrl+Shift+I` в `user-docs/hotkeys.md` (синк с HOTKEYS); шаг 7 в `user-docs/agent-recipe.md`; SPEC §5.1 (схема `canvasdesk.whatif`), §8 (ввод), §13 (контракт `whatif_*`) |
 | FR-017.11 | Ручной гейт CP6 (владелец) | демо эталона №2: вход в what-if, смена `rps` в ноде «Нагрузка» → дельты downstream видны на канвасе и в таблице сравнения; Apply → Ctrl+Z возвращает базу |
+## 25. Чек-лист FR-036 (2026-09-18): wasm-сборка ядра — гейт + wasmtime-тесты (ADR-0011)
+
+Контекст: приказ владельца «распланировать сборку wasm и реализовать сборку
+для повышения автономности в тестировании»; закрепление W0 плана M8
+(`docs/plans/wasm-port.md`). Среда агента — Linux без GUI/Windows.
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-036.1 | Компиляция ядра под продуктовый wasm-таргет | `cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets` — зелёный (ступень 1 `scripts/wasm_gate.sh`, CI-джоба `wasm-check`) |
+| FR-036.2 | Артефакт сборки | `cargo build --target wasm32-unknown-unknown -p canvas-core` → `target/wasm32-unknown-unknown/debug/libcanvas_core.rlib` (ступень 2) |
+| FR-036.3 | Исполнение ядра в wasm-рантайме | `cargo test --target wasm32-wasip1 -p canvas-core` (wasmtime, runner из `.cargo/config.toml`) — 301/301: lib 189 + core_api 4 + edgegeom 43 + expr_queueing 32 + json_canvas_io 15 + scene_ops 4 + spatial 6 + templates_schema 8 (ступень 3) |
+| FR-036.4 | Тестовая песочница | нативно `test_scratch_root()` = `temp_dir` (поведение не менялось); под wasm — `.wasi-scratch` в предоткрытом CWD с уборкой; `process::id()` в тестах заменён на `SystemTime` (на wasm паникует) |
+| FR-036.5 | Режим без wasmtime | `scripts/wasm_gate.sh --check` — только ступень 1, не требует wasmtime (для CI и машин без рантайма) |
+| FR-036.6 | CI | джоба `wasm-check` (ubuntu) зелёная на каждый пуш — приёмка W0 плана M8 |
+| FR-036.7 | Регресс | нативные гейты не задеты: `cargo test -p canvas-core` — 301/301; `cargo test --workspace` — 0 failed |
+
+## 26. Чек-лист FR-016 (2026-09-18): индикаторы узких мест и риска очередей (CP5, волна B1)
+
+Контекст: волна B1 продуктового роадмапа — «человек видит узкие места,
+не читая числа в нодах»; анализатор — чистая функция над посчитанным
+потоком (`analyze.rs`), оверлей — рамки серьёзности + бейджи, MCP —
+`analyze_bottlenecks` (инвариант: агент видит то же, что пользователь).
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-016.1 | Мини-эталон №1 (ADR-0006: Нагрузка → CDN → Gateway) собран `graph_apply`; оверлей выключен | без авто-рисков кадр чист — ландшафт здоров (CDN ρ 0.417 < 0.7), оверлей не мешает обычной работе |
+| FR-016.2 | Рост нагрузки (dau ×2 в ноде «Нагрузка», один node_update_text) | CDN: жёлтая рамка + бейдж `83% · W: 120 ms`; downstream пересчитан live (инвариант ADR-0007); авто-включение оверлея с тостом при первом риске |
+| FR-016.3 | Рост до ×5.35 (ветка C эталона №2) | CDN: тёмно-красная/яркая рамка Overload + бейдж `OVERLOAD 223%`; ρ 2.23 ±1 % — сверен с oracle ADR-0006 |
+| FR-016.4 | Выделение ноды с риском (CR-001) | видны ОБЕ рамки: синяя selected на карточке + внешнее кольцо серьёзности (ручная приёмка FR-016) |
+| FR-016.5 | Тоглы режима | Ctrl+B (канвас-уровень; в редакторе Ctrl+B — Bold, конфликт нет), пункт меню канваса «Узкие места (Ctrl+B)» с ✓, строка «Индикаторы узких мест» панели настроек; состояние в config.toml (`bottleneck_overlay`) |
+| FR-016.6 | LOD | зум < 0.6 — только рамки (бейджи скрыты); зум < 0.25 — только Overload-рамки; None — никогда |
+| FR-016.7 | MCP `analyze_bottlenecks {}` | `{nodes: [{id, severity, utilization?, wait_sec?, badge}], thresholds}`; severity/badge = визуал канваса; канвас и undo байт-в-байт нетронуты (e2e analyze_bottlenecks_reference_and_growth) |
+| FR-016.8 | Пороги-как-данные (инвариант 2) | `AnalysisConfig` отдельной структурой: тест analyze_custom_thresholds_change_severity — та же сцена, другой порог → другая серьёзность (прозрачность для FR-017) |
+| FR-016.9 | Регресс | `cargo test --workspace` — 0 failed (1034 passed: +16 analyze, +4 рендер, +1 e2e); fmt/clippy зелёные; 45 шаблонов валидны, версии queue-манифестов подняты минорно |

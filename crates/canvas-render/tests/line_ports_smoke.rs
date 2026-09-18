@@ -110,8 +110,8 @@ fn line_ports_template_and_note() {
             expr_line_results: &line_results,
             editing_line_results: None,
             param_spills: &Default::default(),
-
             whatif_nodes: &Default::default(),
+            analysis_badges: &[],
         },
     )
     .expect("prepare текста");

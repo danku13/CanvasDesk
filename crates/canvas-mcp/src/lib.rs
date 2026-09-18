@@ -184,9 +184,9 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 35 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
+/// 36 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
 /// FR-029 — адресация портов; FR-032 — edges_list/edge_get/graph_validate;
-/// FR-033 — graph_apply; FR-017/CP6 — 9 whatif_*).
+/// FR-033 — graph_apply; FR-016 — analyze_bottlenecks; FR-017/CP6 — 9 whatif_*).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -434,6 +434,12 @@ const TOOLS: &[ToolSpec] = &[
         required: &[],
         properties: &[],
     },
+    ToolSpec {
+        name: "analyze_bottlenecks",
+        description: "FR-016 (CP5): анализ узких мест и риска очередей — те же флаги, что видит пользователь на канвасе (оверлей Ctrl+B). Ответ: {nodes:[{id, severity (\"none\"|\"warn\"|\"critical\"|\"overload\"), utilization? (ρ, доля 0..1, >1 при перегрузке), queue_length?, wait_sec? (W, базовые секунды), badge (строка бейджа канваса)}], thresholds}. Детекция: значение ноды = ошибка Overload (ρ ≥ 1) → severity \"overload\" (ρ из ошибки); utilization-выход шаблона / Percent-значение → пороги 0.7/0.9; Time-значение (W) → пороги 100 ms/1 s; queue_length-выход → 1/10. Чистая функция над пересчитанным потоком: не мутирует канвас",
+        required: &[],
+        properties: &[],
+    },
 ];
 
 /// tools/list: массив дескрипторов с name/description/inputSchema.
@@ -503,7 +509,7 @@ pub fn unwrap_app_payload(payload: &str) -> Result<Value, String> {
 ///   ВСЕГДА успешный (ADR-0009: состояние приложения не влияет на handshake);
 /// - `notifications/initialized`, `notifications/cancelled` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 35 инструментов с inputSchema;
+/// - `tools/list` → 36 инструментов с inputSchema;
 /// - `tools/call` → форвард строки на pipe, конверт приложения разворачивается
 ///   в чистый результат (text-контент + structuredContent, FR-034);
 ///   isError-результат приложения проходит насквозь; pipe мёртв → isError
@@ -1098,13 +1104,18 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 35 инструментов (FR-032: +3, FR-033: +graph_apply,
-    /// FR-017/CP6: +8 whatif_*), у каждого inputSchema с required.
+    /// tools/list: ровно 36 инструментов (FR-032: +3, FR-033: +graph_apply,
+    /// FR-016: +analyze_bottlenecks, FR-017/CP6: +9 whatif_*), у каждого
+    /// inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(tools.len(), 35, "26 (FR-033) + 9 whatif_* (FR-017, CP6)");
+        assert_eq!(
+            tools.len(),
+            36,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6)"
+        );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -1134,6 +1145,16 @@ mod tests {
             "viewport_get",
             "viewport_set",
             "graph_apply",
+            "analyze_bottlenecks",
+            "whatif_set_override",
+            "whatif_set_param",
+            "whatif_scenario_list",
+            "whatif_scenario_create",
+            "whatif_scenario_delete",
+            "whatif_scenario_activate",
+            "whatif_deltas",
+            "whatif_apply",
+            "whatif_reset",
         ] {
             assert!(names.contains(&expected), "нет инструмента {expected}");
         }
@@ -1239,7 +1260,8 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            35
+            36,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6)"
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

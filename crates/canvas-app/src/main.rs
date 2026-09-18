@@ -42,9 +42,10 @@ use canvas_core::expr::{
 };
 use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::{
-    apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at, resolve_node_path,
-    watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node, NodeChange, NodeKind,
-    Scenario, Settings, Side, SpatialIndex, StaleOverride, Theme, ThumbnailProvider,
+    analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
+    resolve_node_path, watched_dirs, AnalysisConfig, AnalysisState, Canvas, Edge, FileEvent,
+    FocusSeed, GridStyle, Node, NodeChange, NodeKind, Scenario, Settings, Side, SpatialIndex,
+    StaleOverride, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{
     ease_out_cubic, focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS,
@@ -663,6 +664,10 @@ struct SceneState {
     /// подсветка подмен, дельта-бейджи). Runtime-кэш — пересчитывается в
     /// `recompute_flow` вместе с картами потока.
     whatif_nodes: HashMap<String, WhatIfNode>,
+    /// FR-016 (CP5): флаги анализа узких мест по id нод — runtime-кэш,
+    /// обновляется хвостом [`SceneState::recompute_flow`] (analyze — чистая
+    /// функция над теми же FlowSolutions; O(N), в бюджете кадра).
+    analysis: AnalysisState,
 }
 
 impl SceneState {
@@ -691,6 +696,7 @@ impl SceneState {
             flow_active: flow::FlowSolutions::default(),
             whatif_stale: Vec::new(),
             whatif_nodes: HashMap::new(),
+            analysis: AnalysisState::new(),
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
@@ -724,6 +730,10 @@ impl SceneState {
                     self.whatif_nodes.clear();
                     self.recompute_all_expr();
                     self.param_spills.clear();
+                    // FR-016: поток недоступен (цикл) — анализ пуст: без
+                    // FlowSolutions детекции не на чем (честное отсутствие, не
+                    // ложное «всё здорово»).
+                    self.analysis.clear();
                     self.apply_result_reserve();
                     return;
                 }
@@ -749,6 +759,10 @@ impl SceneState {
         self.whatif_stale = stale;
         let solutions = &self.flow_active;
         self.expr_results = outputs_to_results(&solutions.outputs);
+        // FR-016 (CP5): анализ узких мест — чистая функция над теми же
+        // решениями (значения + именованные выходы utilization). Пороги —
+        // дефолт документа FR-016; кастомизация — v2 (конфиг в .canvas).
+        self.analysis = analyze::analyze(&self.canvas, solutions, &AnalysisConfig::default());
         self.expr_line_results.clear();
         for node in &self.canvas.nodes {
             let text = node.text.clone().unwrap_or_default();
@@ -1501,6 +1515,9 @@ struct App {
     node_clipboard: Vec<Node>,
     /// Панель горячих клавиш открыта (FR-004, F1): слева по центру.
     hotkeys_open: bool,
+    /// FR-016 (CP5): авто-включение оверлея узких мест уже сработало (или
+    /// отключено ручным тогглом) в этом запуске — повторных тостов нет.
+    bottleneck_auto_enabled: bool,
     /// Отложенный undo-снапшот (FR-006): «до» растянутого действия —
     /// drag/resize/редактирование. Ставится на старте, пушится в историю
     /// при фактическом изменении (клик без движения шага не создаёт).
@@ -1732,6 +1749,7 @@ impl App {
             select_rect: None,
             node_clipboard: Vec::new(),
             hotkeys_open: false,
+            bottleneck_auto_enabled: false,
             pending_undo: None,
             // FR-025 (ревизия): палитра — постоянная, но примарно СВЁРНУТАЯ
             // (полоса категорий); развёрнутость из конфига (дефолт —
@@ -5327,6 +5345,7 @@ impl App {
                     self.settings.focus_mode,
                     self.hotkeys_open,
                     self.desktop_menu_checked(),
+                    self.settings.bottleneck_overlay,
                     self.scene.whatif_active,
                 ),
                 origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
@@ -6507,6 +6526,22 @@ impl App {
         self.request_redraw();
     }
 
+    /// FR-016 (CP5): переключить оверлей узких мест (Ctrl+B / пункт меню
+    /// канваса / панель настроек). Персистентная настройка: сохранение —
+    /// вызывающим (меню/панель — save_settings, хоткей — сам сохраняет).
+    /// Рендер читает флаг на кадре (SceneView.analysis_overlay).
+    fn toggle_bottleneck_overlay(&mut self) {
+        self.settings.bottleneck_overlay = !self.settings.bottleneck_overlay;
+        tracing::info!(
+            вкл = self.settings.bottleneck_overlay,
+            "оверлей узких мест (FR-016)"
+        );
+        // Ручной тогл выключает авто-включение до конца запуска: решение
+        // владельца важнее эвристики (FR-016 «Открытые вопросы»).
+        self.bottleneck_auto_enabled = true;
+        self.request_redraw();
+    }
+
     /// FR-026: применить переключение булевой строки панели настроек
     /// (тумблер) и сохранить конфиг. Многозначные строки — через
     /// выпадающее меню ([`App::apply_dropdown_choice`]).
@@ -6522,6 +6557,12 @@ impl App {
             // на кадре (SceneView.line_ports), синхронизация рендера не нужна
             SettingsRow::LinePorts => {
                 self.settings.line_ports = !self.settings.line_ports;
+            }
+            // FR-016 (CP5): оверлей узких мест — рендер читает флаг на кадре
+            // (SceneView.analysis_overlay), синхронизация рендера не нужна
+            SettingsRow::BottleneckOverlay => {
+                self.settings.bottleneck_overlay = !self.settings.bottleneck_overlay;
+                self.bottleneck_auto_enabled = true;
             }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
@@ -8116,6 +8157,10 @@ fn mcp_dispatch(
                 "issues": issues,
             }))
         }
+        // FR-016 (CP5): анализ узких мест — та же карта флагов, что рисует
+        // оверлей канваса (инвариант 4: MCP-видимость = UI). Пересчёт
+        // свежий (как flow_recalc) — чтение, не мутация.
+        "analyze_bottlenecks" => Ok(mcp_analyze_bottlenecks(&scene.canvas)),
         // FR-018: список шаблонов реестра — те же, что в палитре/wheel
         // (инвариант 4: MCP-видимость эквивалентна UI)
         "template_list" => {
@@ -8840,6 +8885,46 @@ fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
     serde_json::Value::Object(nodes)
 }
 
+/// FR-016 (CP5): анализ узких мест для MCP — та же карта флагов, что рисует
+/// оверлей канваса (инвариант 4 FR-016). Чистая функция над свежим
+/// пересчётом: детерминированный порядок `canvas.nodes`, пороги — дефолт
+/// документа FR-016. Цикл потока — честный `error` (анализа нет).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_analyze_bottlenecks(canvas: &Canvas) -> serde_json::Value {
+    let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
+        Ok(solutions) => solutions,
+        Err(cycle) => {
+            return serde_json::json!({
+                "error": format!("цикл потока значений: {cycle}"),
+            })
+        }
+    };
+    let config = AnalysisConfig::default();
+    let state = analyze::analyze(canvas, &solutions, &config);
+    let nodes: Vec<serde_json::Value> = canvas
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let flags = state.get(&node.id)?;
+            let mut entry = serde_json::Map::new();
+            entry.insert("id".into(), serde_json::json!(node.id));
+            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(flags) {
+                entry.extend(map);
+            }
+            // Бейдж — строка, которую видит пользователь на канвасе
+            entry.insert(
+                "badge".into(),
+                serde_json::json!(analyze::badge_text(flags)),
+            );
+            Some(serde_json::Value::Object(entry))
+        })
+        .collect();
+    serde_json::json!({
+        "nodes": nodes,
+        "thresholds": serde_json::to_value(config).unwrap_or(serde_json::json!({})),
+    })
+}
+
 /// FR-033 п.2: транзакционное применение батча. Ошибки схемы/лимитов —
 /// Err (isError); ошибка ОПЕРАЦИИ — структурированный ответ {ok:false} при
 /// нетронутом канвасе; успех — один undo-шаг, spatial, dirty (автосейв),
@@ -9290,6 +9375,20 @@ impl App {
             self.settings_open = !self.settings_open;
             self.settings_dropdown.reset();
             self.request_redraw();
+            return;
+        }
+        // FR-016 (CP5): Ctrl+B — toggle оверлея узких мест (кириллическая
+        // «и» — та же физическая клавиша; во время редактирования сюда не
+        // доходим — там Ctrl+Б это Bold, конфликт решён комментарием выше).
+        // Персистентная настройка — сохраняем конфиг сразу.
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("b") || c == "и" || c == "И")
+        {
+            self.toggle_bottleneck_overlay();
+            self.save_settings();
             return;
         }
         if event.logical_key == Key::Named(NamedKey::Space) && !event.repeat {
@@ -10059,6 +10158,11 @@ impl App {
                                             "desktop-режим не поддерживается на этой платформе"
                                         );
                                     }
+                                }
+                                // FR-016 (CP5): тогл оверлея узких мест из меню —
+                                // персистентная настройка (как Ctrl+B)
+                                CanvasMenuItem::BottleneckOverlay => {
+                                    self.toggle_bottleneck_overlay();
                                 }
                                 // FR-017 (CP6): тогл what-if режима из меню
                                 // (эквивалент Ctrl+Shift+I; подмены в
@@ -12797,6 +12901,20 @@ impl ApplicationHandler<AppEvent> for App {
                     Some(EdgeDrag::Rebind { edge_index, .. }) => Some(*edge_index),
                     _ => None,
                 };
+                // FR-016 (CP5): авто-включение оверлея при первом появлении
+                // риска (Warn и выше) — один раз за запуск, с тостом;
+                // ручной тогл (Ctrl+B/меню/панель) отключает авто до
+                // перезапуска (решение «Открытые вопросы» FR-016). До
+                // заимствований рендера и FocusView — тост мутирует App.
+                if !self.settings.bottleneck_overlay
+                    && !self.bottleneck_auto_enabled
+                    && analyze::has_risk(&self.scene.analysis)
+                {
+                    self.settings.bottleneck_overlay = true;
+                    self.bottleneck_auto_enabled = true;
+                    self.show_toast("Включён режим анализа (Ctrl+B — выключить)");
+                    // авто-включение не персистим: конфиг не трогаем
+                }
                 // T23 (brainstorm-focus): пересчёт анимации и окрестности
                 // семени ДО сборки сцены — FocusView заимствует поля App
                 self.update_focus_state();
@@ -12809,6 +12927,11 @@ impl ApplicationHandler<AppEvent> for App {
                         .as_ref()
                         .map(|(_, start)| focus_pulse(start.elapsed().as_millis() as u32))
                         .unwrap_or(0.0),
+                };
+                let analysis_view: Option<&AnalysisState> = if self.settings.bottleneck_overlay {
+                    Some(&self.scene.analysis)
+                } else {
+                    None
                 };
                 if let Some(renderer) = self.renderer.as_mut() {
                     // FR-013 (правка 4): живые построчные результаты (Numi —
@@ -12844,6 +12967,8 @@ impl ApplicationHandler<AppEvent> for App {
                         expr_editing_results: editing_line_results.as_deref(),
                         param_spills: &self.scene.param_spills,
                         whatif_nodes: &self.scene.whatif_nodes,
+                        analysis: analysis_view,
+                        analysis_overlay: self.settings.bottleneck_overlay,
                     };
                     match renderer.render(
                         &self.camera,
@@ -15675,10 +15800,16 @@ mod tests {
             .expect("com.canvasdesk.lb");
         assert_eq!(lb["name_en"], "Load Balancer");
         assert_eq!(lb["name_ru"], "Балансировщик нагрузки");
-        // FR-029: секция outputs — версия схемы 1.1
-        assert_eq!(lb["version"], "1.1.0");
+        // FR-029: секция outputs — версия схемы 1.1; FR-016 (CP5):
+        // utilization-выход — минорный подъём до 1.2
+        assert_eq!(lb["version"], "1.2.0");
         let lb_outputs = lb["outputs"].as_array().expect("outputs у lb (FR-029)");
         assert!(lb_outputs.iter().any(|o| o["name"] == "next_hop_rps"));
+        // FR-016: named-выход utilization — источник ρ для анализатора
+        assert!(
+            lb_outputs.iter().any(|o| o["name"] == "utilization"),
+            "outputs lb: {lb_outputs:?}"
+        );
         assert_eq!(lb["category"], "backend");
         assert_eq!(lb["expr"], "mm1($rps, $service_rate, $servers)");
         assert_eq!(lb["params"]["rps"]["type"], "rate");
@@ -15725,7 +15856,7 @@ mod tests {
         // Снимок template-ссылки
         let template = node.template().expect("template");
         assert_eq!(template.id, "com.canvasdesk.lb");
-        assert_eq!(template.version, "1.1.0");
+        assert_eq!(template.version, "1.2.0");
         assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
         assert_eq!(template.params["rps"].num, 2000.0);
         assert_eq!(template.icon, "lb");
@@ -16481,5 +16612,195 @@ mod tests {
             "участники цикла в сообщении: {out}"
         );
         assert!(scene.canvas.nodes.is_empty(), "канвас не изменился");
+    }
+
+    // --- CP5 (FR-016): analyze_bottlenecks — гейт волны B1 ---
+
+    /// Сборка мини-эталона №1 (ADR-0006: Нагрузка → CDN → Gateway) и карта
+    /// id нод по ref-ам батча.
+    fn reference_scene() -> (SceneState, Camera, String, String) {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ab1.canvas"));
+        let mut camera = Camera::default();
+        let ops = r#"[
+            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
+            {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
+            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
+            {"op":"edge_create","fromRef":"traffic","toRef":"cdn","kind":"value","toParam":"rps"},
+            {"op":"edge_create","fromRef":"cdn","toRef":"gw","kind":"value","fromOutput":"origin_rps","toParam":"rps"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч эталона");
+        assert_eq!(out["ok"], true, "ответ: {out}");
+        let created = out["created"].as_array().expect("created").clone();
+        let id_of = |reference: &str| -> String {
+            created
+                .iter()
+                .find(|e| e["ref"] == reference)
+                .and_then(|e| e["node_id"].as_str())
+                .expect("id ноды эталона")
+                .to_owned()
+        };
+        let cdn = id_of("cdn");
+        let gw = id_of("gw");
+        (scene, camera, cdn, gw)
+    }
+
+    /// Запись узла из отчёта analyze_bottlenecks по id.
+    fn node_report(report: &serde_json::Value, node_id: &str) -> serde_json::Value {
+        report["nodes"]
+            .as_array()
+            .expect("массив nodes")
+            .iter()
+            .find(|entry| entry["id"] == node_id)
+            .cloned()
+            .unwrap_or_else(|| panic!("нода {node_id} в отчёте: {report}"))
+    }
+
+    /// CP5 (FR-016, гейт B1): эталон №1 под нагрузкой — узкие места видны
+    /// БЕЗ чтения чисел в нодах: анализ отдаёт те же флаги/бейджи, что
+    /// рисует канвас. Базовая линия — здоровый ландшафт (CDN ρ 0.417 —
+    /// узкое место №1, но ниже warn 0.7); рост DAU ×2 → Warn (ρ 0.833);
+    /// рост ×5.35 → Overload (ρ 2.23 — ветка C эталона №2 ADR-0006).
+    /// Инструмент — чтение: канвас и undo-история не затрагиваются.
+    #[test]
+    fn analyze_bottlenecks_reference_and_growth() {
+        let (mut scene, mut camera, cdn, gw) = reference_scene();
+
+        // --- 1. Базовая линия: здоровый ландшафт (ADR-0006 эталон №1) ---
+        let undo_before = scene.undo_stack.len();
+        let canvas_before = serde_json::to_string(&scene.canvas).expect("сериализация до");
+        let report = dispatch(&mut scene, &mut camera, "analyze_bottlenecks", "{}")
+            .expect("analyze_bottlenecks");
+        // Чтение: канвас байт-в-байт и undo не тронуты
+        assert_eq!(
+            serde_json::to_string(&scene.canvas).expect("сериализация после"),
+            canvas_before,
+            "анализ не мутирует канвас"
+        );
+        assert_eq!(scene.undo_stack.len(), undo_before, "undo не растёт");
+
+        // Только queue-ноды в отчёте: «Нагрузка» (Rate) анализа не даёт
+        let nodes = report["nodes"].as_array().expect("массив");
+        assert_eq!(nodes.len(), 2, "cdn + gw: {report}");
+        // Пороги — в ответе (контракт для агента)
+        assert_eq!(report["thresholds"]["warn_util"], 0.7);
+        assert_eq!(report["thresholds"]["critical_util"], 0.9);
+        assert_eq!(report["thresholds"]["warn_wait_sec"], 0.1);
+
+        let cdn_report = node_report(&report, &cdn);
+        assert_eq!(
+            cdn_report["severity"], "none",
+            "ρ 0.417 < 0.7: {cdn_report}"
+        );
+        assert_close(
+            cdn_report["utilization"].as_f64().expect("ρ cdn"),
+            0.4167,
+            "CDN ρ (named-выход utilization)",
+        );
+        assert_close(
+            cdn_report["wait_sec"].as_f64().expect("W cdn"),
+            0.0342857,
+            "CDN W = 34.29 ms (ниже warn 100 ms)",
+        );
+        assert_eq!(
+            cdn_report["badge"], "42% · W: 34 ms",
+            "бейдж канваса: {cdn_report}"
+        );
+        let gw_report = node_report(&report, &gw);
+        assert_eq!(gw_report["severity"], "none");
+        assert_close(
+            gw_report["utilization"].as_f64().expect("ρ gw"),
+            0.0625,
+            "GW ρ = 20.83/333.3",
+        );
+
+        // --- 2. Рост DAU ×2 (400k): CDN ρ = 0.833 → Warn (жёлтая рамка) ---
+        // node_update_text — мутирующий путь с полным пересчётом
+        // (node_edit с text без expr пересчёт не поднимает — ленивость
+        // футера CR-012; агенту достаточно свежего отчёта инструмента).
+        let dau_edit = serde_json::json!({
+            "id": node_id_of(&scene, "dau = 200000").expect("нода «Нагрузка»"),
+            "text": TRAFFIC_TEXT.replacen("200000", "400000", 1),
+        });
+        mcp_dispatch(
+            &mut scene,
+            &mut camera,
+            &canvas_core::templates::TemplateRegistry::builtin(),
+            "node_update_text",
+            &dau_edit,
+        )
+        .expect("node_update_text dau ×2");
+        let report = dispatch(&mut scene, &mut camera, "analyze_bottlenecks", "{}")
+            .expect("analyze_bottlenecks ×2");
+        let cdn_report = node_report(&report, &cdn);
+        assert_eq!(
+            cdn_report["severity"], "warn",
+            "ρ 0.833 ∈ [0.7, 0.9): {cdn_report}"
+        );
+        assert_close(
+            cdn_report["utilization"].as_f64().expect("ρ cdn ×2"),
+            0.8333,
+            "CDN ρ после ×2",
+        );
+        assert_eq!(
+            cdn_report["badge"], "83% · W: 120 ms",
+            "бейдж Warn: {cdn_report}"
+        );
+
+        // --- 3. Рост DAU ×5.35 (ветка C эталона №2): CDN ρ = 2.23 → Overload ---
+        let dau_edit = serde_json::json!({
+            "id": node_id_of(&scene, "dau = 400000").expect("нода «Нагрузка»"),
+            "text": TRAFFIC_TEXT.replacen("200000", "1070000", 1),
+        });
+        mcp_dispatch(
+            &mut scene,
+            &mut camera,
+            &canvas_core::templates::TemplateRegistry::builtin(),
+            "node_update_text",
+            &dau_edit,
+        )
+        .expect("node_update_text dau ×5.35");
+        let report = dispatch(&mut scene, &mut camera, "analyze_bottlenecks", "{}")
+            .expect("analyze_bottlenecks ×5.35");
+        let cdn_report = node_report(&report, &cdn);
+        assert_eq!(
+            cdn_report["severity"], "overload",
+            "ρ 2.23 ≥ 1 — тёмно-красная рамка + OVERLOAD: {cdn_report}"
+        );
+        assert_close(
+            cdn_report["utilization"].as_f64().expect("ρ cdn ×5.35"),
+            2.2292,
+            "CDN ρ = 2.23 (ADR-0006 ветка C)",
+        );
+        assert_eq!(cdn_report["badge"], "OVERLOAD 223%", "бейдж: {cdn_report}");
+        // W при перегрузке аналитически ∞ — в отчёте его нет
+        assert!(cdn_report.get("wait_sec").is_none(), "W нет: {cdn_report}");
+        // GW остаётся здоровым: origin 111.46 rps при μ 333 rps
+        let gw_report = node_report(&report, &gw);
+        assert_eq!(gw_report["severity"], "none", "GW здоров: {gw_report}");
+        assert_close(
+            gw_report["utilization"].as_f64().expect("ρ gw"),
+            0.3344,
+            "GW ρ = 111.46/333.3",
+        );
+
+        // --- 4. Runtime-кэш сцены синхронен с отчётом (рендер читает его) ---
+        let cdn_flags = scene.analysis.get(&cdn).expect("флаги CDN в сцене");
+        assert_eq!(cdn_flags.severity, canvas_core::AnalysisSeverity::Overload);
+        assert!((cdn_flags.utilization.unwrap() - 2.2292).abs() < 2.2292 * 0.01);
+        assert!(analyze::has_risk(&scene.analysis), "оверлей авто-включится");
+    }
+
+    /// Поиск id ноды по подстроке текста (нода «Нагрузка» эталона).
+    fn node_id_of(scene: &SceneState, needle: &str) -> Option<String> {
+        scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|node| {
+                node.text
+                    .as_deref()
+                    .is_some_and(|text| text.contains(needle))
+            })
+            .map(|node| node.id.clone())
     }
 }
