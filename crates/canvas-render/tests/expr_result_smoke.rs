@@ -60,6 +60,8 @@ fn expr_result_line_draws_in_footer() {
             expr_line_results: &std::collections::HashMap::new(),
             editing_line_results: None,
             param_spills: &Default::default(),
+
+            whatif_nodes: &Default::default(),
         },
     )
     .expect("prepare текста");
@@ -234,6 +236,8 @@ fn expr_line_results_draw_on_own_rows() {
             expr_line_results: &line_results,
             editing_line_results: None,
             param_spills: &Default::default(),
+
+            whatif_nodes: &Default::default(),
         },
     )
     .expect("prepare текста");
@@ -399,6 +403,8 @@ fn expr_line_error_badge_and_hit_zone() {
             expr_line_results: &line_results,
             editing_line_results: None,
             param_spills: &Default::default(),
+
+            whatif_nodes: &Default::default(),
         },
     )
     .expect("prepare текста");
@@ -576,6 +582,8 @@ fn expr_editing_live_line_results() {
             expr_line_results: &ExprLineResults::new(),
             editing_line_results: Some(&live),
             param_spills: &Default::default(),
+
+            whatif_nodes: &Default::default(),
         },
     )
     .expect("prepare текста");

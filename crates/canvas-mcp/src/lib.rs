@@ -184,9 +184,9 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 26 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
+/// 35 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
 /// FR-029 — адресация портов; FR-032 — edges_list/edge_get/graph_validate;
-/// FR-033 — graph_apply).
+/// FR-033 — graph_apply; FR-017/CP6 — 9 whatif_*).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -375,6 +375,65 @@ const TOOLS: &[ToolSpec] = &[
             r#"{"type":"array","minItems":1,"maxItems":256,"items":{"type":"object","required":["op"],"properties":{"op":{"type":"string","enum":["node_create_note","node_create_file","template_instantiate","edge_create","param_set","node_move"]}}}}"#,
         )],
     },
+    // --- FR-017 (CP6): what-if сценарии ---
+    ToolSpec {
+        name: "whatif_set_override",
+        description: "FR-017: построчная what-if подмена активного сценария: исходник строки node_id:line замещается expr на время сценария (база не мутируется, дельты видны на канвасе и в whatif_deltas). Режим/сценарий поднимаются автоматически. Многострочный expr: перенос — настоящий \\n в JSON-строке (двухсимвольная эскапировка нормализуется толерантно)",
+        required: &["node_id", "line", "expr"],
+        properties: &[
+            ("node_id", STR),
+            ("line", r#"{"type":"integer","minimum":0}"#),
+            ("expr", STR),
+        ],
+    },
+    ToolSpec {
+        name: "whatif_set_param",
+        description: "FR-017: sugar поверх whatif_set_override для шаблонных нод — адресация по имени параметра: находит строку «param = …» в тексте ноды и подменяет её значением (строка «param = value»). Параметра нет в тексте — ошибка",
+        required: &["node_id", "param", "value"],
+        properties: &[(("node_id"), STR), (("param"), STR), (("value"), STR)],
+    },
+    ToolSpec {
+        name: "whatif_scenario_list",
+        description: "FR-017: список what-if сценариев: {active, whatif_active, scenarios: [{name, overrides, stale}]} — stale = число протухших подмен (нода/строка удалены, строка стала прозой; пропускаются пересчётом, маркируются здесь)",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "whatif_scenario_create",
+        description: "FR-017: создать именованный what-if сценарий (freeze — сохраняется в canvasdesk.whatif внутри .canvas, один undo-шаг). Без name — имя по умолчанию. Лимит 3 сценария",
+        required: &[],
+        properties: &[("name", STR)],
+    },
+    ToolSpec {
+        name: "whatif_scenario_delete",
+        description: "FR-017: удалить what-if сценарий по имени (мутация .canvas, undo-шаг)",
+        required: &["name"],
+        properties: &[("name", STR)],
+    },
+    ToolSpec {
+        name: "whatif_scenario_activate",
+        description: "FR-017: переключить активный сценарий (имя или «База»). Runtime-only: файл не меняется; канвас пересчитывается с подменами сценария",
+        required: &["name"],
+        properties: &[("name", STR)],
+    },
+    ToolSpec {
+        name: "whatif_deltas",
+        description: "FR-017: дельты активного сценария против базы — {active, deltas: {\"node:line\"|\"node:value\": {node, line?, base, whatif, delta}}} — те же пары «было → стало (+Δ)», что видит пользователь (инвариант: MCP-видимость эквивалентна UI)",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "whatif_apply",
+        description: "FR-017: применить активный сценарий — подмены записываются в persisted-строки/params канваса (один undo-шаг), сценарий удаляется. Переключает «Базу»",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "whatif_reset",
+        description: "FR-017: сбросить подмены активного сценария (runtime, файл не трогается). Режим остаётся активным",
+        required: &[],
+        properties: &[],
+    },
 ];
 
 /// tools/list: массив дескрипторов с name/description/inputSchema.
@@ -444,7 +503,7 @@ pub fn unwrap_app_payload(payload: &str) -> Result<Value, String> {
 ///   ВСЕГДА успешный (ADR-0009: состояние приложения не влияет на handshake);
 /// - `notifications/initialized`, `notifications/cancelled` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 26 инструментов с inputSchema;
+/// - `tools/list` → 35 инструментов с inputSchema;
 /// - `tools/call` → форвард строки на pipe, конверт приложения разворачивается
 ///   в чистый результат (text-контент + structuredContent, FR-034);
 ///   isError-результат приложения проходит насквозь; pipe мёртв → isError
@@ -1039,17 +1098,13 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 26 инструментов (FR-032: +3, FR-033: +graph_apply),
-    /// у каждого inputSchema с required.
+    /// tools/list: ровно 35 инструментов (FR-032: +3, FR-033: +graph_apply,
+    /// FR-017/CP6: +8 whatif_*), у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
-        assert_eq!(
-            tools.len(),
-            26,
-            "22 + edges_list + edge_get + graph_validate (FR-032) + graph_apply (FR-033)"
-        );
+        assert_eq!(tools.len(), 35, "26 (FR-033) + 9 whatif_* (FR-017, CP6)");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "canvas_info",
@@ -1184,7 +1239,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            26
+            35
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

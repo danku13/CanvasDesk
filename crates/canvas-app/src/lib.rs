@@ -59,6 +59,11 @@ pub mod docs_ui;
 /// main.rs; перезапуск — пункт меню «?» (FR-027).
 pub mod onboarding_ui;
 
+/// FR-017 (CP6): what-if нижний бар — чистая модель (геометрия полосы
+/// режима и пилюли входа, hit-тесты действий, список подмен, таблица
+/// сравнения сценариев). Рендер и ввод — в main.rs.
+pub mod whatif_ui;
+
 /// Чистая UI-логика приложения: геометрия оверлеев (контекстное меню,
 /// панель настроек), hit-тесты, генератор id заметок, детектор двойного
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
@@ -409,6 +414,7 @@ pub mod ui {
         ("Ctrl+колесо", "масштаб"),
         ("Ctrl+Enter", "зафиксировать заметку"),
         ("Ctrl+,", "настройки"),
+        ("Ctrl+Shift+I", "what-if сценарии"),
         ("F", "фокус на связях"),
     ];
 
@@ -987,26 +993,33 @@ pub mod ui {
         /// встройка активна; выбор снимает встройку (detach + восстановление
         /// иконок + очистка состояния монитора).
         DesktopMode,
+        /// FR-017 (CP6): «What-if режим» — переключатель what-if сценариев
+        /// (нижний бар; вход также — Ctrl+Shift+I и пилюля). Галочка ✓ —
+        /// режим активен.
+        WhatIf,
     }
 
     /// Меню пустого канваса.
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 5] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 6] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
         CanvasMenuItem::Widgets,
         CanvasMenuItem::DesktopMode,
+        CanvasMenuItem::WhatIf,
     ];
 
     /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
     /// фокуса, `hotkeys_open` — состояние оверлея хоткеев, `desktop_on` —
-    /// состояние desktop-встройки: для пунктов-переключателей рисуется
-    /// ✓-галочка (FR-004.1 — Hotkeys, T15 — DesktopMode).
+    /// состояние desktop-встройки, `whatif_on` — what-if режим: для
+    /// пунктов-переключателей рисуется ✓-галочка (FR-004.1 — Hotkeys,
+    /// T15 — DesktopMode, FR-017 — WhatIf).
     pub fn canvas_menu_label(
         item: CanvasMenuItem,
         focus_on: bool,
         hotkeys_open: bool,
         desktop_on: bool,
+        whatif_on: bool,
     ) -> String {
         match item {
             CanvasMenuItem::NewGroup => "Создать группу".to_owned(),
@@ -1020,6 +1033,12 @@ pub mod ui {
             CanvasMenuItem::Widgets => "Виджеты ▸…".to_owned(),
             CanvasMenuItem::DesktopMode => {
                 format!("{}Режим десктопа", if desktop_on { "✓ " } else { "" })
+            }
+            CanvasMenuItem::WhatIf => {
+                format!(
+                    "{}What-if режим (Ctrl+Shift+I)",
+                    if whatif_on { "✓ " } else { "" }
+                )
             }
         }
     }
@@ -1995,46 +2014,56 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 5);
+            assert_eq!(n, 6);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
             assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false, false, false),
                 "Виджеты ▸…"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false, false, false),
                 "Создать группу"
             );
             // T23: второй пункт — переключатель фокуса с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false, false, false),
                 "✓ Фокус на связях"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false, false, false),
                 "Фокус на связях"
             );
             // FR-004.1: третий пункт — переключатель оверлея хоткеев
             assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true, false, false),
                 "✓ Горячие клавиши (F1)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false, false, false),
                 "Горячие клавиши (F1)"
             );
             // T15: пятый пункт — переключатель desktop-режима с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, true),
+                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, true, false),
                 "✓ Режим десктопа"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, false, false),
                 "Режим десктопа"
+            );
+            // FR-017: шестой пункт — переключатель what-if режима
+            assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::WhatIf);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, true),
+                "✓ What-if режим (Ctrl+Shift+I)"
+            );
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, false),
+                "What-if режим (Ctrl+Shift+I)"
             );
             let y = 50.0 + MENU_PADDING + 3.0;
             assert_eq!(menu_item_at_for(origin, [110.0, y], n), Some(0));

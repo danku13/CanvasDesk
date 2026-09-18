@@ -36,6 +36,7 @@ use canvas_app::ui::{
     MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HINT_HEIGHT, PANEL_PADDING,
     SELECT_DRAG_THRESHOLD,
 };
+use canvas_app::whatif_ui::{self, BarAction};
 use canvas_core::expr::{
     self, line_kind, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind,
 };
@@ -43,7 +44,7 @@ use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::{
     apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at, resolve_node_path,
     watched_dirs, Canvas, Edge, FileEvent, FocusSeed, GridStyle, Node, NodeChange, NodeKind,
-    Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
+    Scenario, Settings, Side, SpatialIndex, StaleOverride, Theme, ThumbnailProvider,
 };
 use canvas_render::animate::{
     ease_out_cubic, focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS,
@@ -68,6 +69,7 @@ use canvas_render::text::{
 };
 use canvas_render::SpillView;
 use canvas_render::ThemeColors;
+use canvas_render::WhatIfNode;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
 use canvas_shell::{
     Priority, SearchCommand, SearchEvent, SearchHit, SearchService, ThumbService, WatchService,
@@ -639,12 +641,36 @@ struct SceneState {
     /// строки для рендера. Runtime-кэш (не сериализуется), пересчитывается
     /// в `recompute_flow` вместе с результатами потока.
     param_spills: HashMap<String, Vec<SpillView>>,
+    /// FR-017 (CP6): what-if режим активен (нижний бар, override-поле
+    /// вместо правки базы). Runtime-флаг — в `.canvas` не пишется.
+    whatif_active: bool,
+    /// FR-017: именованные сценарии — runtime-копия persisted
+    /// `canvasdesk.whatif` (синхронизируется при открытии/Apply/правках
+    /// списка сценариев одним undo-шагом).
+    scenarios: Vec<Scenario>,
+    /// FR-017: активный сценарий; `None` — «База» (overrides пусты,
+    /// дельты нулевые).
+    active_scenario: Option<usize>,
+    /// FR-017: базовый пересчёт БЕЗ подмен — источник дельт (гипотеза Q9:
+    /// чистый пересчёт на каждом ревале, не снапшот при входе).
+    flow_baseline: flow::FlowSolutions,
+    /// FR-017: пересчёт с подменами активного сценария — видимый канвасом.
+    flow_active: flow::FlowSolutions,
+    /// FR-017: протухшие подмены активного сценария (нода/строка удалены,
+    /// строка стала прозой) — маркеры в панели (гипотеза Q5c).
+    whatif_stale: Vec<StaleOverride>,
+    /// FR-017: what-if представления нод для рендера (виртуальный текст,
+    /// подсветка подмен, дельта-бейджи). Runtime-кэш — пересчитывается в
+    /// `recompute_flow` вместе с картами потока.
+    whatif_nodes: HashMap<String, WhatIfNode>,
 }
 
 impl SceneState {
     /// Обернуть готовую модель: построить spatial index.
     fn new(canvas: Canvas, path: PathBuf) -> Self {
         let spatial = SpatialIndex::build(&canvas);
+        // FR-017: сценарии what-if — загрузка persisted `canvasdesk.whatif`
+        let scenarios = canvas_core::whatif::scenarios_from_canvas(&canvas);
         let mut scene = Self {
             canvas,
             spatial,
@@ -658,6 +684,13 @@ impl SceneState {
             expr_results: ExprResults::new(),
             expr_line_results: ExprLineResults::new(),
             param_spills: HashMap::new(),
+            whatif_active: false,
+            scenarios,
+            active_scenario: None,
+            flow_baseline: flow::FlowSolutions::default(),
+            flow_active: flow::FlowSolutions::default(),
+            whatif_stale: Vec::new(),
+            whatif_nodes: HashMap::new(),
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
@@ -674,25 +707,54 @@ impl SceneState {
     /// текста/формулы, рёбра, удаление нод, undo) — propagator чистый,
     /// полный пересчёт ≤1000 нод <10 мс (SPEC §6.3).
     fn recompute_flow(&mut self) {
-        // FR-025: propagate_with_lines — значения нод + построчные выходы
-        // Numi-листов одним обходом (строки видят входы value-рёбер)
-        let solutions = match flow::propagate_with_lines(&self.canvas, &HashMap::new()) {
-            Ok(solutions) => solutions,
-            Err(cycle) => {
-                // UI и MCP блокируют создание value-циклов; сюда попадаем
-                // только из чужих .canvas-файлов — деградация до изолированного
-                // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
-                tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
-                self.recompute_all_expr();
-                self.param_spills.clear();
-                self.apply_result_reserve();
-                return;
+        // FR-017 (гипотеза Q9): дельты — против ЧИСТОГО базового пересчёта
+        // (не снапшота при входе): любая мутация канваса пересчитывает обе
+        // карты заново, дельты консистентны текущему `.canvas`.
+        let baseline =
+            match flow::propagate_with_lines(&self.canvas, &flow::WhatIfOverrides::default()) {
+                Ok(solutions) => solutions,
+                Err(cycle) => {
+                    // UI и MCP блокируют создание value-циклов; сюда попадаем
+                    // только из чужих .canvas-файлов — деградация до изолированного
+                    // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
+                    tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
+                    self.flow_baseline = flow::FlowSolutions::default();
+                    self.flow_active = flow::FlowSolutions::default();
+                    self.whatif_stale = Vec::new();
+                    self.whatif_nodes.clear();
+                    self.recompute_all_expr();
+                    self.param_spills.clear();
+                    self.apply_result_reserve();
+                    return;
+                }
+            };
+        // FR-017: активный сценарий → построчные подмены (протухшие
+        // отфильтрованы — тихая деградация, маркеры в whatif_stale).
+        let (whatif, stale) = self.active_whatif_overrides();
+        let active = if whatif.line_exprs.is_empty() && whatif.node_values.is_empty() {
+            baseline.clone()
+        } else {
+            match flow::propagate_with_lines(&self.canvas, &whatif) {
+                Ok(solutions) => solutions,
+                // Цикл из подмен невозможен (граф тот же), но страховка:
+                // показываем базу, не падая
+                Err(cycle) => {
+                    tracing::warn!(cycle = %cycle, "what-if пересчёт отклонён — показана база");
+                    baseline.clone()
+                }
             }
         };
+        self.flow_baseline = baseline;
+        self.flow_active = active;
+        self.whatif_stale = stale;
+        let solutions = &self.flow_active;
         self.expr_results = outputs_to_results(&solutions.outputs);
         self.expr_line_results.clear();
         for node in &self.canvas.nodes {
             let text = node.text.clone().unwrap_or_default();
+            // FR-017: построчные результаты — по ВИРТУАЛЬНОМУ исходнику
+            // (тем же подменам, что у propagator — инвариант 4)
+            let text = flow::whatif_virtual_text(&text, &whatif.line_overrides(&node.id));
             // FR-025: слоты с учётом построчных истоков — строки downstream
             // нод видят значения строк источников (`= $in × 2` от строки)
             let slots = flow::inbound_slots_with_lines(
@@ -726,7 +788,7 @@ impl SceneState {
                 .map(|spill| {
                     // Значение ребра-источника — что реально пролито
                     // в параметр (не локальный RHS строки).
-                    let value = spill_edge_value(&solutions, &spill).map(|v| v.to_string());
+                    let value = spill_edge_value(solutions, &spill).map(|v| v.to_string());
                     SpillView {
                         line: assignment_line(node, &spill.param),
                         param: spill.param,
@@ -739,8 +801,190 @@ impl SceneState {
             param_spills.insert(node.id.clone(), views);
         }
         self.param_spills = param_spills;
+        // FR-017 (CP6): what-if представления нод для рендера — виртуальный
+        // исходник, подсветка подмен, дельта-бейджи (только ноды с подменами;
+        // рельеф базы рендер рисует как есть).
+        self.whatif_nodes = self.build_whatif_nodes(&whatif);
         // CR-012: ленивый refit высоты — резерв футера результата.
         self.apply_result_reserve();
+    }
+
+    /// FR-017: собрать what-if представления нод активного сценария
+    /// (рендер): виртуальный исходник, индексы подменённых строк, дельты
+    /// строк и узлового итога в полном формате «было → стало (+Δ)».
+    fn build_whatif_nodes(&self, whatif: &flow::WhatIfOverrides) -> HashMap<String, WhatIfNode> {
+        let mut map = HashMap::new();
+        if whatif.line_exprs.is_empty() {
+            return map;
+        }
+        // Группировка подмен по нодам (сортировка строк — детерминизм).
+        let mut per_node: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+        for ((node_id, line), expr) in &whatif.line_exprs {
+            per_node
+                .entry(node_id.clone())
+                .or_default()
+                .push((*line, expr.clone()));
+        }
+        for (node_id, mut lines) in per_node {
+            lines.sort_by_key(|(line, _)| *line);
+            let Some(node) = self.canvas.node(&node_id) else {
+                continue;
+            };
+            let base_text = node.text.clone().unwrap_or_default();
+            let refs: Vec<(usize, &String)> = lines.iter().map(|(l, e)| (*l, e)).collect();
+            let text = flow::whatif_virtual_text(&base_text, &refs);
+            let mut line_deltas = Vec::new();
+            for (line, _) in &lines {
+                let key = (node_id.clone(), *line);
+                let (Some(base), Some(whatif_value)) = (
+                    self.flow_baseline.lines.get(&key),
+                    self.flow_active.lines.get(&key),
+                ) else {
+                    continue;
+                };
+                if let Some(full) = whatif_full_delta(base, whatif_value) {
+                    line_deltas.push((*line, full));
+                }
+            }
+            // Дельта узлового итога — только если футер результата виден
+            // (построчные результаты Numi-листа заменяют его у обычных нод;
+            // у шаблонных футер — всегда).
+            let footer_delta = self
+                .canvas
+                .nodes
+                .iter()
+                .position(|node| node.id == node_id)
+                .filter(|index| self.node_shows_result_footer(*index))
+                .and_then(|_| {
+                    let base = self.flow_baseline.outputs.get(&node_id);
+                    let whatif_value = self.flow_active.outputs.get(&node_id);
+                    match (base, whatif_value) {
+                        (Some(Ok(base)), Some(Ok(whatif_value))) => {
+                            whatif_full_delta(base, whatif_value)
+                        }
+                        _ => None,
+                    }
+                });
+            map.insert(
+                node_id.clone(),
+                WhatIfNode {
+                    text,
+                    overrides: lines.into_iter().map(|(line, _)| line).collect(),
+                    line_deltas,
+                    footer_delta,
+                },
+            );
+        }
+        map
+    }
+
+    /// FR-017: подмены активного сценария + протухшие маркеры. Режим не
+    /// активен или «База» — пустые подмены (propagator = baseline).
+    fn active_whatif_overrides(&self) -> (flow::WhatIfOverrides, Vec<StaleOverride>) {
+        let mut whatif = flow::WhatIfOverrides::default();
+        let mut stale = Vec::new();
+        if self.whatif_active {
+            if let Some(scenario) = self.active_scenario.and_then(|i| self.scenarios.get(i)) {
+                stale = canvas_core::whatif::validate_scenario(&self.canvas, scenario);
+                whatif.line_exprs = canvas_core::whatif::active_line_exprs(&self.canvas, scenario);
+            }
+        }
+        (whatif, stale)
+    }
+
+    /// FR-017: число подмен активного сценария (для счётчика бара).
+    fn whatif_override_count(&self) -> usize {
+        self.active_scenario
+            .and_then(|i| self.scenarios.get(i))
+            .map(|scenario| scenario.line_exprs.len())
+            .unwrap_or(0)
+    }
+
+    /// FR-017: переключить активный сценарий (`None` — «База») и
+    /// пересчитать. Runtime-действие: `.canvas` не мутируется (инвариант 2).
+    fn whatif_activate(&mut self, index: Option<usize>) {
+        self.active_scenario = index;
+        self.recompute_flow();
+    }
+
+    /// FR-017: новый именованный сценарий (лимит 2–3 пользовательских —
+    /// гипотеза Q5b; сверх лимита — отказ). Список сценариев персистентен:
+    /// мутация `Canvas.extra` с push_undo вызывающей стороной.
+    fn whatif_create_scenario(&mut self, name: &str) -> Result<usize, String> {
+        const MAX_SCENARIOS: usize = 3;
+        if self.scenarios.len() >= MAX_SCENARIOS {
+            return Err(format!(
+                "лимит сценариев: не более {MAX_SCENARIOS} (гипотеза Q5b)"
+            ));
+        }
+        let name = if name.trim().is_empty() {
+            format!("Сценарий {}", self.scenarios.len() + 1)
+        } else {
+            name.trim().to_owned()
+        };
+        if self.scenarios.iter().any(|scenario| scenario.name == name) {
+            return Err(format!("сценарий уже существует: {name}"));
+        }
+        self.scenarios.push(Scenario {
+            name,
+            line_exprs: HashMap::new(),
+        });
+        Ok(self.scenarios.len() - 1)
+    }
+
+    /// FR-017: удалить сценарий по индексу (переключение на «Базу», если
+    /// удалён активный).
+    fn whatif_delete_scenario(&mut self, index: usize) {
+        if index >= self.scenarios.len() {
+            return;
+        }
+        self.scenarios.remove(index);
+        self.active_scenario = match self.active_scenario {
+            Some(active) if active == index => None,
+            Some(active) if active > index => Some(active - 1),
+            other => other,
+        };
+    }
+
+    /// FR-017 (Q6b): Apply активного сценария — записать подмены в
+    /// persisted-строки/params и УДАЛИТЬ сценарий (его смысл исчерпан).
+    /// Вызывающий отвечает за push_undo ДО вызова и mark_dirty/ревал ПОСЛЕ.
+    fn whatif_apply_active(&mut self) -> usize {
+        let Some(index) = self.active_scenario else {
+            return 0;
+        };
+        let Some(scenario) = self.scenarios.get(index).cloned() else {
+            return 0;
+        };
+        let applied = canvas_core::whatif::active_line_exprs(&self.canvas, &scenario);
+        for ((node_id, line), expr) in &applied {
+            let Some(node_index) = self.canvas.nodes.iter().position(|n| &n.id == node_id) else {
+                continue;
+            };
+            let text = self.canvas.nodes[node_index]
+                .text
+                .clone()
+                .unwrap_or_default();
+            let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+            if line >= &lines.len() {
+                continue;
+            }
+            lines[*line] = expr.clone();
+            let text = lines.join("\n");
+            let node = &mut self.canvas.nodes[node_index];
+            node.text = Some(text.clone());
+            // Шаблонная нода: синхронизация снапшота params (паттерн
+            // finish_editing FR-018/FR-023 — слияние, не замена)
+            if node.template().is_some() {
+                let fresh = canvas_core::templates::params_from_text(&text);
+                let params = canvas_core::templates::merge_params(node.template_params(), fresh);
+                node.set_template_params(params);
+            }
+        }
+        // Сценарий применён — удаляем (Q6b); остальные валидны против новой базы
+        self.whatif_delete_scenario(index);
+        self.active_scenario = None;
+        applied.len()
     }
 
     /// CR-012: нода получит футер результата по правилу рендера
@@ -1351,6 +1595,15 @@ struct App {
     wheel_menu: Option<template_ui::WheelMenu>,
     /// FR-021: popup контекстных подсказок Numi-ввода (состояние + якорь).
     hints: hints_ui::HintPopup,
+    /// FR-017 (CP6): раскрытый список подмен активного сценария
+    /// (клик по счётчику нижнего бара).
+    whatif_list_open: bool,
+    /// FR-017: таблица сравнения сценариев открыта (кнопка «Сравнить»).
+    whatif_compare_open: bool,
+    /// FR-017: строка ноды, открытая в override-поле (индекс строки текста).
+    /// `Some` — commit сессии редактирования идёт в подмены активного
+    /// сценария, а не в текст ноды (инвариант 2: база не мутируется).
+    whatif_override_line: Option<usize>,
     /// T23 (brainstorm-focus): затемнение сцены 0..1 (анимируется фейдом
     /// 150 мс при вкл/выкл и при появлении/исчезновении семени).
     focus_dim: f32,
@@ -1528,6 +1781,9 @@ impl App {
             template_hover: None,
             wheel_menu: None,
             hints: hints_ui::HintPopup::default(),
+            whatif_list_open: false,
+            whatif_compare_open: false,
+            whatif_override_line: None,
             focus_dim: 0.0,
             focus_fade: None,
             focus_pulse: None,
@@ -2082,6 +2338,11 @@ impl App {
         let Some(session) = self.editing.as_mut() else {
             return;
         };
+        // FR-017: override-поле редактирует ОДНУ строку, а не весь текст —
+        // фит по ней исказил бы высоту ноды.
+        if self.whatif_override_line.is_some() {
+            return;
+        };
         let EditTarget::Node(index) = session.target() else {
             return;
         };
@@ -2138,6 +2399,65 @@ impl App {
         // FR-021: сессия закрыта — popup подсказок больше не нужен
         self.hints.reset();
         self.editor_dragging = false;
+        // FR-017: override-поле строки — commit идёт в подмены активного
+        // сценария, а НЕ в текст ноды (инвариант 2: база не мутируется).
+        if let Some(line) = self.whatif_override_line.take() {
+            if commit && session.changed() {
+                if !self.scene.whatif_active {
+                    self.scene.whatif_active = true;
+                }
+                if self.scene.active_scenario.is_none() {
+                    // Подмене нужен сценарий: автосоздание (персистентно,
+                    // один undo-шаг — паттерн MCP whatif_set_override).
+                    let snapshot = self.scene.canvas.clone();
+                    let name = format!("Сценарий {}", self.scene.scenarios.len() + 1);
+                    match self.scene.whatif_create_scenario(&name) {
+                        Ok(index) => {
+                            self.scene.active_scenario = Some(index);
+                            canvas_core::whatif::scenarios_to_canvas(
+                                &mut self.scene.canvas,
+                                &self.scene.scenarios,
+                            );
+                            if self.scene.canvas != snapshot {
+                                self.scene.push_undo(snapshot);
+                                self.scene.mark_dirty();
+                            }
+                        }
+                        Err(err) => {
+                            self.pending_undo = None;
+                            self.show_toast(err);
+                            self.sync_cursor_icon();
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                }
+                let index = self.scene.active_scenario.expect("сценарий активен");
+                let node_id = match session.target() {
+                    EditTarget::Node(index) => self
+                        .scene
+                        .canvas
+                        .nodes
+                        .get(index)
+                        .map(|node| node.id.clone()),
+                    EditTarget::Edge(_) => None,
+                };
+                if let Some(node_id) = node_id {
+                    let expr = session.text();
+                    if let Some(scenario) = self.scene.scenarios.get_mut(index) {
+                        scenario.line_exprs.insert((node_id, line), expr);
+                    }
+                    self.whatif_list_open = true;
+                    self.scene.recompute_flow();
+                }
+            }
+            // Снапшот «до» begin_editing не нужен: текст ноды не менялся
+            // (undo-шаг — только автосоздание сценария выше).
+            self.pending_undo = None;
+            self.sync_cursor_icon();
+            self.request_redraw();
+            return;
+        }
         if commit && session.changed() {
             // FR-006: правка состоялась — отложенный снапшот «до» в историю
             // (мутация ниже); cancel-ветка дропнет его
@@ -2213,6 +2533,619 @@ impl App {
         }
         self.sync_cursor_icon();
         self.request_redraw();
+    }
+
+    // --- FR-017 (CP6): what-if режим — вход/выход, нижний бар, override ---
+
+    /// Вход в what-if режим (пилюля бара / Ctrl+Shift+I / меню канваса).
+    fn enter_whatif_mode(&mut self) {
+        if self.scene.whatif_active {
+            return;
+        }
+        self.scene.whatif_active = true;
+        self.scene.recompute_flow();
+        self.request_redraw();
+    }
+
+    /// Выход из режима (Esc / ✕): подмены НЕ теряются — они в персистентных
+    /// сценариях `.canvas` (Q3b: подтверждение не требуется). Активный
+    /// сценарий сбрасывается на «Базу», панели гаснут.
+    fn exit_whatif_mode(&mut self) {
+        if !self.scene.whatif_active {
+            return;
+        }
+        if self.whatif_override_line.is_some() {
+            self.finish_editing(false);
+        }
+        self.scene.whatif_active = false;
+        self.whatif_list_open = false;
+        self.whatif_compare_open = false;
+        self.scene.whatif_activate(None);
+        self.request_redraw();
+    }
+
+    /// Геометрия нижнего бара режима (имена сценариев + счётчик подмен).
+    fn whatif_bar_layout(&self) -> whatif_ui::BarLayout {
+        let viewport = self.viewport_logical();
+        let names: Vec<String> = self
+            .scene
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.name.clone())
+            .collect();
+        let count = self.scene.whatif_override_count();
+        whatif_ui::bar_layout(&names, count, viewport)
+    }
+
+    /// Подпись ноды для панелей what-if: первая строка текста (обрезка),
+    /// фолбэк — id (для нод без текста).
+    fn whatif_node_label(&self, node_id: &str) -> String {
+        self.scene
+            .canvas
+            .node(node_id)
+            .map(|node| {
+                node.text
+                    .as_deref()
+                    .and_then(|text| text.lines().next())
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .unwrap_or(&node.id)
+                    .chars()
+                    .take(24)
+                    .collect()
+            })
+            .unwrap_or_else(|| node_id.to_owned())
+    }
+
+    /// FR-017: строки раскрытого списка подмен активного сценария
+    /// (`нода → строка i: было → стало` + маркер протухания Q5c).
+    fn whatif_override_rows(&self) -> Vec<WhatIfOverrideRow> {
+        let Some(index) = self.scene.active_scenario else {
+            return Vec::new();
+        };
+        let Some(scenario) = self.scene.scenarios.get(index) else {
+            return Vec::new();
+        };
+        let stale = canvas_core::whatif::validate_scenario(&self.scene.canvas, scenario);
+        let mut entries: Vec<(&(String, usize), &String)> = scenario.line_exprs.iter().collect();
+        entries.sort();
+        entries
+            .into_iter()
+            .map(|((node_id, line), expr)| {
+                let base = self
+                    .scene
+                    .canvas
+                    .node(node_id)
+                    .and_then(|node| node.text.as_deref())
+                    .and_then(|text| text.split('\n').nth(*line))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                WhatIfOverrideRow {
+                    node: node_id.clone(),
+                    node_label: self.whatif_node_label(node_id),
+                    line: *line,
+                    base,
+                    whatif: expr.clone(),
+                    stale: stale
+                        .iter()
+                        .find(|entry| &entry.node == node_id && entry.line == *line)
+                        .map(|entry| entry.reason.clone()),
+                }
+            })
+            .collect()
+    }
+
+    /// Снять подмену строки списка (runtime-only, `.canvas` не трогаем —
+    /// инвариант 2; пересчёт — живой).
+    fn whatif_remove_override(&mut self, row: usize) {
+        let rows = self.whatif_override_rows();
+        let Some(entry) = rows.get(row) else {
+            return;
+        };
+        let key = (entry.node.clone(), entry.line);
+        if let Some(index) = self.scene.active_scenario {
+            if let Some(scenario) = self.scene.scenarios.get_mut(index) {
+                scenario.line_exprs.remove(&key);
+            }
+        }
+        self.scene.recompute_flow();
+    }
+
+    /// FR-017: данные таблицы сравнения (колонки + ячейки). Строки — union
+    /// подменённых переменных всех сценариев; значения — прогон
+    /// `propagate_with_lines` с подменами каждого сценария (по прогону на
+    /// сценарий — 3–5 прогонов <10 мс, допустимо по роадмапу).
+    fn whatif_compare_table(&self) -> (Vec<String>, Vec<Vec<String>>) {
+        let mut columns = vec!["переменная".to_owned(), "База".to_owned()];
+        for scenario in &self.scene.scenarios {
+            columns.push(scenario.name.clone());
+        }
+        // Ключи: union валидных подмен всех сценариев.
+        let mut keys: Vec<(String, usize)> = Vec::new();
+        for scenario in &self.scene.scenarios {
+            for key in canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario).keys() {
+                if !keys.contains(key) {
+                    keys.push(key.clone());
+                }
+            }
+        }
+        keys.sort();
+        // Одно решение на сценарий (пустой сценарий — None: все ячейки «—»).
+        let per_scenario: Vec<Option<flow::FlowSolutions>> = self
+            .scene
+            .scenarios
+            .iter()
+            .map(|scenario| {
+                let line_exprs =
+                    canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario);
+                if line_exprs.is_empty() {
+                    return None;
+                }
+                let overrides = flow::WhatIfOverrides {
+                    line_exprs,
+                    ..Default::default()
+                };
+                flow::propagate_with_lines(&self.scene.canvas, &overrides).ok()
+            })
+            .collect();
+        let base_lines = &self.scene.flow_baseline.lines;
+        let rows: Vec<Vec<String>> = keys
+            .iter()
+            .map(|(node_id, line)| {
+                let label = format!("{} : стр. {}", self.whatif_node_label(node_id), line + 1);
+                let key = (node_id.clone(), *line);
+                let base = base_lines.get(&key);
+                let mut row = vec![
+                    label,
+                    base.map(|value| value.to_string())
+                        .unwrap_or_else(|| "—".to_owned()),
+                ];
+                for solutions in &per_scenario {
+                    let Some(solutions) = solutions else {
+                        row.push("—".to_owned());
+                        continue;
+                    };
+                    let Some(value) = solutions.lines.get(&key) else {
+                        row.push("—".to_owned());
+                        continue;
+                    };
+                    let cell = match base {
+                        Some(base) => match whatif_delta_str(base, value) {
+                            Some(delta) => format!("{value} ({delta})"),
+                            None => value.to_string(),
+                        },
+                        None => value.to_string(),
+                    };
+                    row.push(cell);
+                }
+                row
+            })
+            .collect();
+        (columns, rows)
+    }
+
+    /// Диспетчер кликов по нижнему бару (пилюля вне режима).
+    fn apply_whatif_bar_action(&mut self, action: BarAction) {
+        match action {
+            BarAction::Enter => self.enter_whatif_mode(),
+            BarAction::Close => self.exit_whatif_mode(),
+            BarAction::Base => self.scene.whatif_activate(None),
+            BarAction::Scenario(index) => self.scene.whatif_activate(Some(index)),
+            BarAction::NewScenario => {
+                let name = format!("Сценарий {}", self.scene.scenarios.len() + 1);
+                let snapshot = self.scene.canvas.clone();
+                match self.scene.whatif_create_scenario(&name) {
+                    Ok(index) => {
+                        // Список сценариев персистентен: мутация
+                        // `canvasdesk.whatif` одним undo-шагом (FR-006).
+                        canvas_core::whatif::scenarios_to_canvas(
+                            &mut self.scene.canvas,
+                            &self.scene.scenarios,
+                        );
+                        if self.scene.canvas != snapshot {
+                            self.scene.push_undo(snapshot);
+                            self.scene.mark_dirty();
+                        }
+                        self.scene.whatif_activate(Some(index));
+                    }
+                    Err(err) => self.show_toast(err),
+                }
+            }
+            BarAction::ToggleOverrides => {
+                self.whatif_list_open = !self.whatif_list_open;
+                if self.whatif_list_open {
+                    self.whatif_compare_open = false;
+                }
+            }
+            BarAction::Apply => {
+                // Паттерн MCP whatif_apply: записать подмены в persisted-
+                // строки/params, удалить сценарий (Q6b) — один undo-шаг.
+                if self.scene.active_scenario.is_none() {
+                    return;
+                }
+                let snapshot = self.scene.canvas.clone();
+                let applied = self.scene.whatif_apply_active();
+                canvas_core::whatif::scenarios_to_canvas(
+                    &mut self.scene.canvas,
+                    &self.scene.scenarios,
+                );
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                    self.scene.mark_dirty();
+                }
+                self.whatif_list_open = false;
+                self.scene.recompute_flow();
+                self.show_toast(format!("Apply: {applied} подмен записано в модель"));
+            }
+            BarAction::Reset => {
+                // Сброс подмен активного сценария — runtime-only.
+                if let Some(index) = self.scene.active_scenario {
+                    if let Some(scenario) = self.scene.scenarios.get_mut(index) {
+                        scenario.line_exprs.clear();
+                    }
+                    self.scene.recompute_flow();
+                }
+            }
+            BarAction::Compare => {
+                self.whatif_compare_open = !self.whatif_compare_open;
+                if self.whatif_compare_open {
+                    self.whatif_list_open = false;
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// FR-017: индекс строки расчёта под world-точкой (двойной клик в
+    /// режиме → override-поле). Измерение — тем же `measure_body_height`,
+    /// что у фита высоты и рендера (переносы учтены): кумулятивная высота
+    /// первых k строк против y в теле ноды. Строка должна быть расчётной
+    /// (иначе проза — toast по месту вызова).
+    fn calc_line_at(&self, index: usize, world: Vec2) -> Option<usize> {
+        let node = self.scene.canvas.nodes.get(index)?;
+        let text = node.text.as_deref()?.trim_end_matches('\n');
+        if text.is_empty() {
+            return None;
+        }
+        let (origin, width, _) = body_area(node);
+        let rel_y = world[1] - origin[1];
+        if rel_y < 0.0 {
+            return None;
+        }
+        let line_count = text.split('\n').count();
+        let results = expr::eval_lines(text);
+        let formula = formula_line_indices(&results);
+        for k in 0..line_count {
+            let prefix = text.split('\n').take(k + 1).collect::<Vec<_>>().join("\n");
+            let formula_prefix: Vec<usize> = formula.iter().copied().filter(|i| *i <= k).collect();
+            let cumulative = measure_body_height(&prefix, width, &formula_prefix);
+            let is_last = k == line_count - 1;
+            if rel_y < cumulative || is_last {
+                let calc = results.get(k).is_some_and(Option::is_some)
+                    || text
+                        .split('\n')
+                        .nth(k)
+                        .map(|line| line.trim().contains('='))
+                        .unwrap_or(false);
+                return calc.then_some(k);
+            }
+        }
+        None
+    }
+
+    /// FR-017: открыть override-поле строки (двойной клик по строке
+    /// расчёта в режиме). Поле предзаполнено текущей подменой (или
+    /// исходником строки); commit идёт в активный сценарий, а не в текст
+    /// ноды (инвариант 2: база не мутируется). Подсказки FR-021 работают
+    /// без правок (контекст тот же).
+    fn begin_whatif_override(&mut self, index: usize, line: usize) {
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return;
+        };
+        let text = node.text.clone().unwrap_or_default();
+        let source = text
+            .split('\n')
+            .nth(line)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let preset = self
+            .scene
+            .active_scenario
+            .and_then(|i| self.scene.scenarios.get(i))
+            .and_then(|scenario| scenario.line_exprs.get(&(node.id.clone(), line)))
+            .cloned()
+            .unwrap_or(source);
+        let (_, width, height) = body_area(node);
+        let zoom_px = self.zoom_px();
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let session = EditingSession::new(
+            renderer.font_system_mut(),
+            EditTarget::Node(index),
+            &preset,
+            width * zoom_px,
+            height * zoom_px,
+            zoom_px,
+        );
+        self.editing = Some(session);
+        self.whatif_override_line = Some(line);
+        self.hints.reset();
+        self.scene.selected = Some(Selection::Node(index));
+        self.scene.dragging = None;
+        self.sync_cursor_icon();
+        self.request_redraw();
+    }
+
+    /// FR-017: обработка клика по what-if поверхностям (пилюля/бар/список/
+    /// таблица). true — клик поглощён (канвасу не достаётся).
+    fn whatif_bar_click(&mut self) -> bool {
+        let viewport = self.viewport_logical();
+        if !self.scene.whatif_active {
+            if point_in_rect(whatif_ui::enter_pill_rect(viewport), self.cursor) {
+                self.enter_whatif_mode();
+                return true;
+            }
+            return false;
+        }
+        let layout = self.whatif_bar_layout();
+        // Раскрытый список подмен — первый приоритет (над баром).
+        if self.whatif_list_open {
+            let rows = self.whatif_override_rows();
+            let list = whatif_ui::overrides_list_layout(layout.rect, rows.len(), viewport);
+            if let Some(row) = whatif_ui::override_row_at(list, rows.len(), self.cursor) {
+                if point_in_rect(whatif_ui::remove_button_rect(list, row), self.cursor) {
+                    self.whatif_remove_override(row);
+                }
+                self.request_redraw();
+                return true;
+            }
+            if point_in_rect(list, self.cursor) {
+                return true;
+            }
+        }
+        if self.whatif_compare_open {
+            let (columns, rows) = self.whatif_compare_table();
+            let table = whatif_ui::table_layout(&columns, rows.len(), layout.rect, viewport);
+            if point_in_rect(table.rect, self.cursor) {
+                return true;
+            }
+        }
+        if let Some(action) = whatif_ui::bar_action_at(&layout, self.cursor) {
+            self.apply_whatif_bar_action(action);
+            return true;
+        }
+        // Клик по телу бара (между элементами) — глотается, канвасу не уходит
+        point_in_rect(layout.rect, self.cursor)
+    }
+
+    /// FR-017: оверлей нижнего бара (пилюля вне режима, полоса, список
+    /// подмен, таблица сравнения). Screen-space — константный размер при
+    /// любом зуме (паттерн `canvas_menu_overlay`).
+    fn whatif_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let viewport = self.viewport_logical();
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let accent = Color::rgb(0x4c, 0xa6, 0xff);
+        let dim = Color::rgb(0x8a, 0x90, 0x9c);
+        if !self.scene.whatif_active {
+            // Свёрнутый вид: пилюля входа.
+            let pill = whatif_ui::enter_pill_rect(viewport);
+            instances.push(CardInstance {
+                pos: [pill[0], pill[1]],
+                size: [pill[2], pill[3]],
+                fill: palette.menu_fill,
+                border: [0.35, 0.40, 0.50, 1.0],
+                params: [pill[3] / 2.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: "What-if сценарии".to_owned(),
+                origin: [pill[0] + pill[2] / 2.0, pill[1] + 8.0],
+                width: pill[2] - 8.0,
+                font_size: 13.0,
+                color: palette.title,
+                align: TextAlign::Center,
+            });
+            return (instances, texts);
+        }
+        let layout = self.whatif_bar_layout();
+        let chip = |rect: [f32; 4], fill: [f32; 4], border: [f32; 4]| CardInstance {
+            pos: [rect[0], rect[1]],
+            size: [rect[2], rect[3]],
+            fill,
+            border,
+            params: [6.0, 0.0, 0.0, 1.0],
+        };
+        instances.push(CardInstance {
+            pos: [layout.rect[0], layout.rect[1]],
+            size: [layout.rect[2], layout.rect[3]],
+            fill: palette.menu_fill,
+            border: [0.35, 0.40, 0.50, 1.0],
+            params: [8.0, 0.0, 0.0, 1.0],
+        });
+        // Индикатор режима.
+        texts.push(OwnedScreenText {
+            text: "WHAT-IF".to_owned(),
+            origin: [layout.indicator[0], layout.indicator[1] + 6.0],
+            width: layout.indicator[2],
+            font_size: 12.0,
+            color: accent,
+            align: TextAlign::Center,
+        });
+        // Чипы: «База» + сценарии + «+». Активный — акцентной рамкой.
+        let active = self.scene.active_scenario;
+        let mut chip_text = |rect: [f32; 4], label: &str, current: bool| {
+            instances.push(chip(
+                rect,
+                if current {
+                    [0.16, 0.32, 0.60, 1.0]
+                } else {
+                    [0.20, 0.23, 0.29, 1.0]
+                },
+                if current {
+                    [0.30, 0.55, 0.95, 1.0]
+                } else {
+                    [0.35, 0.40, 0.50, 1.0]
+                },
+            ));
+            texts.push(OwnedScreenText {
+                text: label.to_owned(),
+                origin: [rect[0] + rect[2] / 2.0, rect[1] + 6.0],
+                width: rect[2] - 6.0,
+                font_size: 13.0,
+                color: if current {
+                    Color::rgb(0xe8, 0xec, 0xf4)
+                } else {
+                    palette.title
+                },
+                align: TextAlign::Center,
+            });
+        };
+        chip_text(layout.base, "База", active.is_none());
+        for (i, rect) in layout.scenarios.iter().enumerate() {
+            let label = self
+                .scene
+                .scenarios
+                .get(i)
+                .map(|scenario| scenario.name.clone())
+                .unwrap_or_default();
+            chip_text(*rect, &label, active == Some(i));
+        }
+        chip_text(layout.new_scenario, "+", false);
+        // Счётчик подмен (клик — список; раскрыт — акцент).
+        let count = self.scene.whatif_override_count();
+        let counter_label = format!("подмен: {count}");
+        chip_text(
+            layout.overrides,
+            &counter_label,
+            self.whatif_list_open && count > 0,
+        );
+        // Кнопки. Apply/Сброс — без активного сценария/подмен приглушены.
+        let has_overrides = active.is_some() && count > 0;
+        let buttons = [
+            (layout.apply, "Apply", has_overrides),
+            (layout.reset, "Сброс", has_overrides),
+            (layout.compare, "Сравнить", !self.scene.scenarios.is_empty()),
+            (layout.close, "✕", true),
+        ];
+        for (rect, label, enabled) in buttons {
+            instances.push(chip(
+                rect,
+                if enabled {
+                    [0.20, 0.23, 0.29, 1.0]
+                } else {
+                    [0.14, 0.16, 0.20, 1.0]
+                },
+                [0.35, 0.40, 0.50, 1.0],
+            ));
+            texts.push(OwnedScreenText {
+                text: label.to_owned(),
+                origin: [rect[0] + rect[2] / 2.0, rect[1] + 6.0],
+                width: rect[2] - 6.0,
+                font_size: 13.0,
+                color: if enabled { palette.title } else { dim },
+                align: TextAlign::Center,
+            });
+        }
+        // Раскрытый список подмен.
+        if self.whatif_list_open {
+            let rows = self.whatif_override_rows();
+            let list = whatif_ui::overrides_list_layout(layout.rect, rows.len(), viewport);
+            instances.push(CardInstance {
+                pos: [list[0], list[1]],
+                size: [list[2], list[3]],
+                fill: palette.menu_fill,
+                border: [0.35, 0.40, 0.50, 1.0],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            if rows.is_empty() {
+                texts.push(OwnedScreenText {
+                    text: "подмен нет — двойной клик по строке расчёта вводит подмену".to_owned(),
+                    origin: [
+                        list[0] + whatif_ui::LIST_MARGIN,
+                        list[1] + whatif_ui::LIST_MARGIN + 4.0,
+                    ],
+                    width: list[2] - whatif_ui::LIST_MARGIN * 2.0,
+                    font_size: 13.0,
+                    color: dim,
+                    align: TextAlign::Left,
+                });
+            }
+            for (i, row) in rows.iter().enumerate() {
+                let rect = whatif_ui::override_row_rect(list, i);
+                let mut text = format!(
+                    "{} → стр. {}: {} → {}",
+                    row.node_label,
+                    row.line + 1,
+                    row.base,
+                    row.whatif
+                );
+                let color = if row.stale.is_some() {
+                    text = format!("{text}  ⚠ {}", row.stale.as_deref().unwrap_or_default());
+                    Color::rgb(0xe5, 0x5c, 0x5c)
+                } else {
+                    palette.title
+                };
+                texts.push(OwnedScreenText {
+                    text,
+                    origin: [rect[0] + 4.0, rect[1] + 4.0],
+                    width: rect[2] - whatif_ui::REMOVE_WIDTH - 8.0,
+                    font_size: 13.0,
+                    color,
+                    align: TextAlign::Left,
+                });
+                let remove = whatif_ui::remove_button_rect(list, i);
+                texts.push(OwnedScreenText {
+                    text: "✕".to_owned(),
+                    origin: [remove[0], remove[1] + 2.0],
+                    width: remove[2],
+                    font_size: 13.0,
+                    color: dim,
+                    align: TextAlign::Center,
+                });
+            }
+        }
+        // Таблица сравнения сценариев.
+        if self.whatif_compare_open {
+            let (columns, rows) = self.whatif_compare_table();
+            let table = whatif_ui::table_layout(&columns, rows.len(), layout.rect, viewport);
+            instances.push(CardInstance {
+                pos: [table.rect[0], table.rect[1]],
+                size: [table.rect[2], table.rect[3]],
+                fill: palette.menu_fill,
+                border: [0.35, 0.40, 0.50, 1.0],
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            for (c, rect) in table.header.iter().enumerate() {
+                texts.push(OwnedScreenText {
+                    text: columns.get(c).cloned().unwrap_or_default(),
+                    origin: [rect[0] + 6.0, rect[1] + 6.0],
+                    width: rect[2] - 12.0,
+                    font_size: 12.0,
+                    color: if c == 0 { dim } else { accent },
+                    align: TextAlign::Left,
+                });
+            }
+            for (r, row) in rows.iter().enumerate() {
+                for (c, cell) in row.iter().enumerate() {
+                    let Some(rect) = table.cells.get(r).and_then(|cells| cells.get(c)) else {
+                        continue;
+                    };
+                    texts.push(OwnedScreenText {
+                        text: cell.clone(),
+                        origin: [rect[0] + 6.0, rect[1] + 4.0],
+                        width: rect[2] - 12.0,
+                        font_size: 13.0,
+                        color: if c == 0 { palette.title } else { palette.body },
+                        align: TextAlign::Left,
+                    });
+                }
+            }
+        }
+        (instances, texts)
     }
 
     /// Вставить готовые ноды в модель (FR-003, паттерн insert_group):
@@ -2316,6 +3249,17 @@ impl App {
         self.group_drop_target = None;
         self.scene.canvas = canvas;
         self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+        // FR-017: сценарии персистентны в снапшоте (undo whatif_apply
+        // возвращает удалённый сценарий, undo create — убирает) —
+        // синхронизируем runtime-список с восстановленным канвасом
+        self.scene.scenarios = canvas_core::whatif::scenarios_from_canvas(&self.scene.canvas);
+        if self
+            .scene
+            .active_scenario
+            .is_some_and(|i| i >= self.scene.scenarios.len())
+        {
+            self.scene.active_scenario = None;
+        }
         // FR-013: снапшот мог изменить формулы и топологию — живой
         // пересчёт графа потока (FR-014)
         self.scene.recompute_flow();
@@ -2752,6 +3696,35 @@ impl App {
             let lay = search_layout(viewport[0], viewport[1], &self.search);
             if over(rect_xywh(lay.panel_rect)) {
                 return true;
+            }
+        }
+        // FR-017 (CP6): what-if пилюля/бар/список подмен/таблица сравнения —
+        // тоже screen-поверхности (колесо/пинч холст не двигают)
+        if !self.scene.whatif_active {
+            if over(whatif_ui::enter_pill_rect(viewport)) {
+                return true;
+            }
+        } else {
+            let layout = self.whatif_bar_layout();
+            if over(layout.rect) {
+                return true;
+            }
+            if self.whatif_list_open {
+                let rows = self.whatif_override_rows();
+                if over(whatif_ui::overrides_list_layout(
+                    layout.rect,
+                    rows.len(),
+                    viewport,
+                )) {
+                    return true;
+                }
+            }
+            if self.whatif_compare_open {
+                let (columns, rows) = self.whatif_compare_table();
+                let table = whatif_ui::table_layout(&columns, rows.len(), layout.rect, viewport);
+                if over(table.rect) {
+                    return true;
+                }
             }
         }
         if let Some(rect) = self.menu_open_rect() {
@@ -4354,6 +5327,7 @@ impl App {
                     self.settings.focus_mode,
                     self.hotkeys_open,
                     self.desktop_menu_checked(),
+                    self.scene.whatif_active,
                 ),
                 origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
                 width: rect[2] - MENU_LABEL_X,
@@ -6138,6 +7112,133 @@ fn mcp_edge_json(edge: &Edge) -> serde_json::Value {
 /// index и помечает канвас грязным (автосейв). Ошибки — строки, посредник
 /// заворачивает их в isError.
 #[cfg_attr(not(windows), allow(dead_code))]
+/// FR-017 (CP6): строка дельты «(+Δ)» между базовым и what-if значением.
+/// Формат полный (гипотеза Q4): % — в процентных пунктах, иначе абсолют
+/// с единицей (Q4c). None — значения совпадают (дельты нет).
+fn whatif_delta_str(base: &expr::Value, whatif: &expr::Value) -> Option<String> {
+    let delta = whatif.num - base.num;
+    if delta.abs() < 1e-9 {
+        return None;
+    }
+    let rounded = (delta * 100.0).round() / 100.0;
+    let unit = whatif.unit.display();
+    if unit == "%" {
+        Some(format!("{rounded:+.0} пп"))
+    } else if unit.is_empty() {
+        Some(format!("{rounded:+}"))
+    } else {
+        Some(format!("{rounded:+} {unit}"))
+    }
+}
+
+/// FR-017: полный формат дельта-бейджа «было → стало (+Δ)» (гипотеза Q4) —
+/// то, что рендер показывает вместо голого значения изменившейся строки/
+/// итога. Без изменений — None (бейдж остаётся обычным).
+fn whatif_full_delta(base: &expr::Value, whatif: &expr::Value) -> Option<String> {
+    let delta = whatif_delta_str(base, whatif)?;
+    Some(format!("{base} → {whatif} ({delta})"))
+}
+
+/// FR-017: одна изменившаяся точка графа (подменённая строка или итог
+/// ноды, пересчитанный каскадом).
+#[derive(Debug, Clone)]
+struct WhatIfDeltaRow {
+    node: String,
+    /// None — узловое значение ноды; Some(i) — строка i текста.
+    line: Option<usize>,
+    base: Option<String>,
+    whatif: Option<String>,
+    delta: Option<String>,
+}
+
+/// FR-017: строка раскрытого списка подмен нижнего бара
+/// (`нода → строка i: было → стало`).
+#[derive(Debug, Clone)]
+struct WhatIfOverrideRow {
+    node: String,
+    node_label: String,
+    line: usize,
+    base: String,
+    whatif: String,
+    /// Протухшая подмена (Q5c) — причина, строка рисуется предупреждающей.
+    stale: Option<String>,
+}
+
+impl WhatIfDeltaRow {
+    fn to_json(&self) -> serde_json::Value {
+        let mut entry = serde_json::json!({ "node": self.node });
+        if let Some(line) = self.line {
+            entry["line"] = serde_json::json!(line);
+        }
+        if let Some(base) = &self.base {
+            entry["base"] = serde_json::json!(base);
+        }
+        if let Some(whatif) = &self.whatif {
+            entry["whatif"] = serde_json::json!(whatif);
+        }
+        if let Some(delta) = &self.delta {
+            entry["delta"] = serde_json::json!(delta);
+        }
+        entry
+    }
+}
+
+/// FR-017: дельты активного сценария против базы — те же пары «было →
+/// стало», что видит пользователь на канвасе (инвариант 6: MCP-видимость
+/// эквивалентна UI).
+fn whatif_delta_rows(scene: &SceneState) -> Vec<WhatIfDeltaRow> {
+    let mut rows = Vec::new();
+    let Some(index) = scene.active_scenario else {
+        return rows;
+    };
+    let Some(scenario) = scene.scenarios.get(index) else {
+        return rows;
+    };
+    // Подменённые строки: сравнение построчных значений base vs active
+    let mut keys: Vec<&(String, usize)> = scenario.line_exprs.keys().collect();
+    keys.sort();
+    for (node, line) in keys {
+        let base = scene.flow_baseline.lines.get(&(node.clone(), *line));
+        let whatif = scene.flow_active.lines.get(&(node.clone(), *line));
+        if let (Some(base), Some(whatif)) = (base, whatif) {
+            rows.push(WhatIfDeltaRow {
+                node: node.clone(),
+                line: Some(*line),
+                base: Some(base.to_string()),
+                whatif: Some(whatif.to_string()),
+                delta: whatif_delta_str(base, whatif),
+            });
+        }
+    }
+    // Итоги нод, пересчитанные каскадом (downstream по value-рёбрам)
+    let mut node_ids: Vec<&String> = scene.flow_active.outputs.keys().collect();
+    node_ids.sort();
+    for id in node_ids {
+        let base = scene
+            .flow_baseline
+            .outputs
+            .get(id)
+            .and_then(|r| r.as_ref().ok());
+        let whatif = scene
+            .flow_active
+            .outputs
+            .get(id)
+            .and_then(|r| r.as_ref().ok());
+        if let (Some(base), Some(whatif)) = (base, whatif) {
+            if whatif_delta_str(base, whatif).is_some() {
+                rows.push(WhatIfDeltaRow {
+                    node: id.clone(),
+                    line: None,
+                    base: Some(base.to_string()),
+                    whatif: Some(whatif.to_string()),
+                    delta: whatif_delta_str(base, whatif),
+                });
+            }
+        }
+    }
+    rows
+}
+
 fn mcp_dispatch(
     scene: &mut SceneState,
     camera: &mut Camera,
@@ -6604,8 +7705,9 @@ fn mcp_dispatch(
         // для агентов, проверяющих сценарии (ноды без формулы не участвуют,
         // но переменные их листов видны в outputs текстовых нод)
         "flow_recalc" => {
-            let solutions = flow::propagate_with_lines(&scene.canvas, &HashMap::new())
-                .map_err(|cycle| cycle.to_string())?;
+            let solutions =
+                flow::propagate_with_lines(&scene.canvas, &flow::WhatIfOverrides::default())
+                    .map_err(|cycle| cycle.to_string())?;
             let nodes: serde_json::Map<String, serde_json::Value> = solutions
                 .outputs
                 .iter()
@@ -6716,6 +7818,211 @@ fn mcp_dispatch(
             Ok(_) => Ok(serde_json::json!([])),
             Err(cycle) => Ok(serde_json::json!(cycle.nodes)),
         },
+        // --- FR-017 (CP6): what-if сценарии ---
+        // Построчная подмена активного сценария. Режим/сценарий
+        // поднимаются автоматически (неявный «Сценарий MCP»). Подмена —
+        // runtime: `.canvas` не мутируется (инвариант 2); expr нормализуется
+        // (literal `\n` от ИИ-агентов → реальные переводы, mcp_text).
+        "whatif_set_override" => {
+            let node_id = mcp_req_str(params, "node_id")?.to_owned();
+            let line = params
+                .get("line")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or("line: неотрицательное целое обязательно")? as usize;
+            let expr = canvas_core::mcp_text::normalize_escapes(mcp_req_str(params, "expr")?);
+            if scene.canvas.node(&node_id).is_none() {
+                return Err(format!("нода не найдена: {node_id}"));
+            }
+            if !scene.whatif_active {
+                scene.whatif_active = true;
+            }
+            if scene.active_scenario.is_none() {
+                let snapshot = scene.canvas.clone();
+                let index = scene.whatif_create_scenario("Сценарий MCP")?;
+                scene.active_scenario = Some(index);
+                canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
+                if scene.canvas != snapshot {
+                    scene.push_undo(snapshot);
+                }
+                scene.mark_dirty();
+            }
+            let index = scene.active_scenario.expect("сценарий активен");
+            scene.scenarios[index]
+                .line_exprs
+                .insert((node_id.clone(), line), expr.clone());
+            scene.recompute_flow();
+            Ok(serde_json::json!({
+                "scenario": scene.scenarios[index].name,
+                "node": node_id,
+                "line": line,
+                "expr": expr,
+            }))
+        }
+        // FR-017: sugar для шаблонных нод — адресация по имени параметра:
+        // находит строку `param = …` в тексте ноды и строит подмену
+        "whatif_set_param" => {
+            let node_id = mcp_req_str(params, "node_id")?.to_owned();
+            let param = mcp_req_str(params, "param")?.to_owned();
+            let value = canvas_core::mcp_text::normalize_escapes(mcp_req_str(params, "value")?);
+            let node = scene
+                .canvas
+                .node(&node_id)
+                .ok_or_else(|| format!("нода не найдена: {node_id}"))?;
+            let text = node.text.clone().unwrap_or_default();
+            let line = {
+                text.split('\n')
+                    .position(|row| {
+                        row.split_once('=')
+                            .map(|(name, _)| name.trim() == param)
+                            .unwrap_or(false)
+                    })
+                    .ok_or_else(|| format!("параметр {param} не найден в тексте ноды {node_id}"))?
+            };
+            let expr = format!("{param} = {value}");
+            mcp_dispatch(
+                scene,
+                camera,
+                templates,
+                "whatif_set_override",
+                &serde_json::json!({ "node_id": node_id, "line": line, "expr": expr }),
+            )
+        }
+        // FR-017: список сценариев с маркерами протухших подмен (Q5c)
+        "whatif_scenario_list" => {
+            let scenarios: Vec<serde_json::Value> = scene
+                .scenarios
+                .iter()
+                .map(|scenario| {
+                    let stale =
+                        canvas_core::whatif::validate_scenario(&scene.canvas, scenario).len();
+                    serde_json::json!({
+                        "name": scenario.name,
+                        "overrides": scenario.line_exprs.len(),
+                        "stale": stale,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "active": scene
+                    .active_scenario
+                    .and_then(|i| scene.scenarios.get(i))
+                    .map(|scenario| scenario.name.clone()),
+                "whatif_active": scene.whatif_active,
+                "scenarios": scenarios,
+            }))
+        }
+        // FR-017: создать именованный сценарий (freeze, Q5d) — мутация
+        // `canvasdesk.whatif` одним undo-шагом
+        "whatif_scenario_create" => {
+            let name = params
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let snapshot = scene.canvas.clone();
+            let index = scene.whatif_create_scenario(name)?;
+            // Активация нового сценария (паттерн UI create): без неё
+            // set_override завёл бы параллельный «Сценарий MCP»
+            scene.active_scenario = Some(index);
+            if !scene.whatif_active {
+                scene.whatif_active = true;
+            }
+            canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
+            scene.push_undo(snapshot);
+            scene.mark_dirty();
+            scene.recompute_flow();
+            Ok(serde_json::json!({
+                "name": scene.scenarios[index].name,
+                "index": index,
+            }))
+        }
+        // FR-017: удалить сценарий (мутация `.canvas`, undo-шаг)
+        "whatif_scenario_delete" => {
+            let name = mcp_req_str(params, "name")?;
+            let Some(index) = scene.scenarios.iter().position(|s| s.name == name) else {
+                return Err(format!("сценарий не найден: {name}"));
+            };
+            let snapshot = scene.canvas.clone();
+            scene.whatif_delete_scenario(index);
+            canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
+            scene.push_undo(snapshot);
+            scene.mark_dirty();
+            scene.recompute_flow();
+            Ok(serde_json::json!({ "deleted": name }))
+        }
+        // FR-017: переключение — runtime-only, файл не трогается (инвариант 2)
+        "whatif_scenario_activate" => {
+            let name = mcp_req_str(params, "name")?;
+            if !scene.whatif_active {
+                scene.whatif_active = true;
+            }
+            let index = if name == "База" {
+                None
+            } else {
+                Some(
+                    scene
+                        .scenarios
+                        .iter()
+                        .position(|s| s.name == name)
+                        .ok_or_else(|| format!("сценарий не найден: {name}"))?,
+                )
+            };
+            scene.whatif_activate(index);
+            Ok(serde_json::json!({ "active": name }))
+        }
+        // FR-017: дельты активного сценария — пары «было → стало», те же,
+        // что видны на канвасе (инвариант 6)
+        "whatif_deltas" => {
+            let rows = whatif_delta_rows(scene);
+            let nodes: serde_json::Map<String, serde_json::Value> = rows
+                .iter()
+                .map(|row| {
+                    (
+                        format!(
+                            "{}:{}",
+                            row.node,
+                            row.line
+                                .map(|l| l.to_string())
+                                .unwrap_or_else(|| "value".to_owned())
+                        ),
+                        row.to_json(),
+                    )
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "active": scene
+                    .active_scenario
+                    .and_then(|i| scene.scenarios.get(i))
+                    .map(|scenario| scenario.name.clone()),
+                "deltas": nodes,
+            }))
+        }
+        // FR-017 (Q6a/Q6b): Apply активного сценария — записать подмены в
+        // persisted-строки/params и удалить сценарий; один undo-шаг
+        "whatif_apply" => {
+            if scene.active_scenario.is_none() {
+                return Err("активен сценарий «База» — нечего применять".to_owned());
+            }
+            let snapshot = scene.canvas.clone();
+            let applied = scene.whatif_apply_active();
+            canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
+            if scene.canvas != snapshot {
+                scene.push_undo(snapshot);
+                scene.mark_dirty();
+            }
+            scene.recompute_flow();
+            Ok(serde_json::json!({ "applied": applied }))
+        }
+        // FR-017: сброс overrides активного сценария (runtime, файл не трогается)
+        "whatif_reset" => {
+            let cleared = scene.whatif_override_count();
+            if let Some(index) = scene.active_scenario {
+                if let Some(scenario) = scene.scenarios.get_mut(index) {
+                    scenario.line_exprs.clear();
+                }
+            }
+            scene.recompute_flow();
+            Ok(serde_json::json!({ "cleared": cleared }))
+        }
         // CR-008: стороны подключения связи. "auto" — снять закрепления
         // (кратчайший путь); "from"/"to"/"both" — закрепить концы, фиксируя
         // текущие эффективные стороны (WYSIWYG, как в палитре)
@@ -7453,7 +8760,7 @@ fn batch_apply_op(
 /// Ноды вне потока (проза/файлы) не включаются; ноды с ошибкой — `{error}`.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
-    let solutions = match flow::propagate_with_lines(canvas, &HashMap::new()) {
+    let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
         Ok(solutions) => solutions,
         Err(cycle) => {
             return serde_json::json!({ "error": format!("цикл потока значений: {cycle}") })
@@ -7793,6 +9100,24 @@ impl App {
             self.request_redraw();
             return;
         }
+        // FR-017 (CP6): Ctrl+Shift+I — вход/выход из what-if режима
+        // (Q3: Ctrl+W отклонён — мышечная память «закрыть вкладку»;
+        // Ctrl+I занят курсивом в редакторе; кириллица — «Ш»).
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("i") || c.eq_ignore_ascii_case("ш"))
+        {
+            if self.scene.whatif_active {
+                self.exit_whatif_mode();
+            } else {
+                self.enter_whatif_mode();
+            }
+            self.request_redraw();
+            return;
+        }
         // T21: модальный диалог глушит весь ввод канваса — Enter/Esc —
         // подтвердить/отменить, остальное игнорируется (П10/П11)
         if self.dialog.is_some() && event.state == ElementState::Pressed && !event.repeat {
@@ -7902,6 +9227,13 @@ impl App {
             }
             if self.hotkeys_open {
                 self.hotkeys_open = false;
+                self.request_redraw();
+                return;
+            }
+            // FR-017: выход из what-if режима (подмены не теряются — они в
+            // персистентных сценариях `.canvas`, Q3b)
+            if self.scene.whatif_active {
+                self.exit_whatif_mode();
                 self.request_redraw();
                 return;
             }
@@ -8397,6 +9729,11 @@ impl App {
                     self.request_redraw();
                     return;
                 }
+                // FR-017 (CP6): what-if бар/пилюля/список/таблица — клики до
+                // канваса (screen-поверхность, как панель настроек)
+                if self.whatif_bar_click() {
+                    return;
+                }
                 // Панель настроек (screen-space): клики обрабатываются до
                 // канваса — кнопка/панель поверх и «прозрачности» не дают
                 let viewport = self.viewport_logical();
@@ -8723,6 +10060,16 @@ impl App {
                                         );
                                     }
                                 }
+                                // FR-017 (CP6): тогл what-if режима из меню
+                                // (эквивалент Ctrl+Shift+I; подмены в
+                                // сценариях переживают выход — Q3b)
+                                CanvasMenuItem::WhatIf => {
+                                    if self.scene.whatif_active {
+                                        self.exit_whatif_mode();
+                                    } else {
+                                        self.enter_whatif_mode();
+                                    }
+                                }
                             }
                             self.request_redraw();
                             return;
@@ -8868,6 +10215,26 @@ impl App {
                             // двойной клик (по хрому) не открывает его; клики
                             // по контенту до этой ветки не доходят (guard выше)
                             if self.scene.canvas.nodes[index].kind() == NodeKind::Widget {
+                                self.request_redraw();
+                                return;
+                            }
+                            // FR-017: в what-if режиме двойной клик по строке
+                            // расчёта — override-поле подмены (база не
+                            // редактируется — Q8); по прозаической строке —
+                            // toast с объяснением.
+                            if self.scene.whatif_active
+                                && self.scene.canvas.nodes[index].kind() == NodeKind::Text
+                            {
+                                match self.calc_line_at(index, world) {
+                                    Some(line) => {
+                                        self.begin_whatif_override(index, line);
+                                    }
+                                    None => {
+                                        self.show_toast(
+                                            "в what-if подменяются только строки расчёта",
+                                        );
+                                    }
+                                }
                                 self.request_redraw();
                                 return;
                             }
@@ -11092,6 +12459,13 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_instances.extend(hint_instances);
                     owned_texts.extend(hint_texts);
                 }
+                // FR-017 (CP6): what-if нижний бар (пилюля/полоса/список/
+                // таблица сравнения) — поверх канваса
+                {
+                    let (whatif_instances, whatif_texts) = self.whatif_overlay();
+                    screen_instances.extend(whatif_instances);
+                    owned_texts.extend(whatif_texts);
+                }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме
                 if let Some(file) = self.hovered.and_then(|index| {
@@ -11469,6 +12843,7 @@ impl ApplicationHandler<AppEvent> for App {
                         expr_line_results: &self.scene.expr_line_results,
                         expr_editing_results: editing_line_results.as_deref(),
                         param_spills: &self.scene.param_spills,
+                        whatif_nodes: &self.scene.whatif_nodes,
                     };
                     match renderer.render(
                         &self.camera,
@@ -13940,6 +15315,167 @@ mod tests {
             .expect("ошибка входа")
             .contains("вход"));
         assert!(map[&id_c]["error"].as_str().is_some(), "downstream тоже");
+    }
+
+    /// FR-017 (CP6) MCP-сценарий «Проверка»: 3 calc-ноды A→B→C;
+    /// `whatif_set_override(A, 0, "a = 20")` → дельты {A: 5→20 (+15),
+    /// B: 10→40 (+30), C: 11→41 (+30)}; сессия без Apply не мутирует
+    /// `.canvas`; `whatif_apply()` → строка A в тексте = `20`; undo (один
+    /// шаг) — база восстановлена.
+    #[test]
+    fn mcp_whatif_override_apply_undo() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        for (x, text) in [
+            (0.0, "a = 5"),
+            (300.0, "b = $in × 2"),
+            (600.0, "c = $in + 1"),
+        ] {
+            dispatch(
+                &mut scene,
+                &mut camera,
+                "node_create_note",
+                &format!(r#"{{"x":{x},"y":0,"text":"{text}"}}"#),
+            )
+            .expect("нода");
+        }
+        // id генерируются автоматически (note-N) — найдём по тексту
+        let id = |scene: &SceneState, prefix: &str| {
+            scene
+                .canvas
+                .nodes
+                .iter()
+                .find(|n| {
+                    n.text
+                        .as_deref()
+                        .map(|t| t.starts_with(prefix))
+                        .unwrap_or(false)
+                })
+                .map(|n| n.id.clone())
+                .expect("нода сценария")
+        };
+        let (id_a, id_b, id_c) = (id(&scene, "a = "), id(&scene, "b = "), id(&scene, "c = "));
+        for (from, to) in [(&id_a, &id_b), (&id_b, &id_c)] {
+            let edge_id = dispatch(
+                &mut scene,
+                &mut camera,
+                "edge_create",
+                &format!(r#"{{"from":"{from}","to":"{to}"}}"#),
+            )
+            .expect("edge")["id"]
+                .as_str()
+                .expect("id")
+                .to_owned();
+            dispatch(
+                &mut scene,
+                &mut camera,
+                "flow_set_kind",
+                &format!(r#"{{"id":"{edge_id}","kind":"value"}}"#),
+            )
+            .expect("value-ребро");
+        }
+        // Именованный сценарий (персистентен — мутация canvas, undo-шаг)
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "whatif_scenario_create",
+            r#"{"name":"S1"}"#,
+        )
+        .expect("сценарий");
+        let hash_before = scene.canvas.to_json().expect("сериализация");
+
+        // Подмена строки 0 ноды A — runtime: canvas не мутируется
+        let out = dispatch(
+            &mut scene,
+            &mut camera,
+            "whatif_set_override",
+            &format!(r#"{{"node_id":"{id_a}","line":0,"expr":"a = 20"}}"#),
+        )
+        .expect("set_override");
+        assert_eq!(out["scenario"], "S1");
+        assert_eq!(
+            scene.canvas.to_json().expect("сериализация"),
+            hash_before,
+            "подмена runtime-only (инвариант 2)"
+        );
+
+        // Дельты — эталон «Проверка» FR-017
+        let deltas = dispatch(&mut scene, &mut camera, "whatif_deltas", "{}").expect("deltas");
+        let key_a = format!("{id_a}:0");
+        let key_b = format!("{id_b}:value");
+        let key_c = format!("{id_c}:value");
+        assert_eq!(deltas["deltas"][key_a.as_str()]["base"], "5");
+        assert_eq!(deltas["deltas"][key_a.as_str()]["whatif"], "20");
+        assert_eq!(deltas["deltas"][key_a.as_str()]["delta"], "+15");
+        assert_eq!(deltas["deltas"][key_b.as_str()]["base"], "10");
+        assert_eq!(deltas["deltas"][key_b.as_str()]["whatif"], "40");
+        assert_eq!(deltas["deltas"][key_b.as_str()]["delta"], "+30");
+        assert_eq!(deltas["deltas"][key_c.as_str()]["base"], "11");
+        assert_eq!(deltas["deltas"][key_c.as_str()]["whatif"], "41");
+        assert_eq!(deltas["deltas"][key_c.as_str()]["delta"], "+30");
+
+        // Переключение База ↔ S1 — runtime, дельты появляются/исчезают
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "whatif_scenario_activate",
+            r#"{"name":"База"}"#,
+        )
+        .expect("база");
+        let deltas = dispatch(&mut scene, &mut camera, "whatif_deltas", "{}").expect("deltas");
+        assert!(
+            deltas["deltas"].as_object().expect("объект").is_empty(),
+            "на базе дельт нет: {deltas}"
+        );
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "whatif_scenario_activate",
+            r#"{"name":"S1"}"#,
+        )
+        .expect("S1");
+        assert_eq!(
+            scene.canvas.to_json().expect("сериализация"),
+            hash_before,
+            "переключение сценариев файл не трогает (инвариант 2)"
+        );
+
+        // Apply: подмена уходит в persisted-текст, сценарий удалён (Q6b)
+        let out = dispatch(&mut scene, &mut camera, "whatif_apply", "{}").expect("apply");
+        assert_eq!(out["applied"], 1);
+        let text = scene.canvas.node(&id_a).expect("A").text.clone().unwrap();
+        assert_eq!(text.lines().next().expect("строка 0"), "a = 20");
+        assert!(
+            scene
+                .canvas
+                .extra
+                .get("canvasdesk")
+                .and_then(|ext| ext.get("whatif"))
+                .is_none(),
+            "применённый сценарий удалён из canvasdesk.whatif"
+        );
+        // Undo (один шаг, FR-006) — база восстановлена
+        let before = scene.take_undo().expect("undo-шаг apply");
+        scene.canvas = before;
+        scene.scenarios = canvas_core::whatif::scenarios_from_canvas(&scene.canvas);
+        if scene
+            .active_scenario
+            .is_some_and(|i| i >= scene.scenarios.len())
+        {
+            scene.active_scenario = None;
+        }
+        scene.recompute_flow();
+        let text = scene.canvas.node(&id_a).expect("A").text.clone().unwrap();
+        assert_eq!(
+            text.lines().next().expect("строка 0"),
+            "a = 5",
+            "undo → база"
+        );
+        assert_eq!(
+            whatif_delta_rows(&scene).len(),
+            0,
+            "после undo активных дельт нет"
+        );
     }
 
     /// flow_cycle_check: без value-циклов — []; после value-цикла — участники.

@@ -88,7 +88,7 @@ canvasdesk/
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 26 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply)
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 35 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-017: whatif_*)
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
 ├── assets/                  # шрифты, иконки нод, виджеты (widgets/), шаблоны (templates/)
 ├── docs/                    # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
@@ -133,6 +133,7 @@ canvasdesk/
 - `canvasdesk: { pin_ports: ["from", "to"] }` на связи — закреплённые концы подключения (CR-008). Конец без пина подключается к порту кратчайшего пути (`best_sides`, пересчёт при перетаскивании нод и автораскладке — в файл не пишется); закреплённый — следует сохранённым `fromSide`/`toSide`. Массив может содержать один или оба конца; пустой/отсутствующий — оба конца авто. Снятие последнего пина удаляет поле (чистый round-trip)
 - `canvasdesk: { template }` на text-ноде — снимок ссылки на шаблон (FR-018): `{ id, version, expr, params: { имя: { num, unit? } }, icon, color, outputs? }` — `outputs` (FR-029, схема манифеста 1.1): `[{ name, unit?, line | expr }]`, именованные выходы для адресации рёбрами `fromOutput`; ключ пишется только при непустой секции (round-trip старых файлов). `expr` — Numi-формула с `$param`-ссылками (результат — в футере карточки и в потоке FR-014, в файл не пишется); `icon`/`color` — снапшоты роли/категории (рендер шапки без реестра). Текст ноды — Numi-лист присваиваний параметров; правка текста синхронизирует `params`. Поле переживает round-trip (снимок, не ссылка на реестр)
 - MCP-чтение и валидация графа (FR-032) — runtime, в файл не пишется: `edges_list`/`edge_get` отдают каноническую схему ребра `{id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide}` (адресация портов FR-029); `graph_validate` — отчёт `{valid, issues: [{severity, code, node_id, edge_id, message}]}` из чистой функции `canvas-core/src/validate.rs`. Коды — стабильный контракт для рецепта агента: `E-CYCLE` (цикл value-рёбер), `E-OVERLOAD` (ρ ≥ 1), `W-AMBIGUOUS-SRC` (многолинейный исток без адресации строки/выхода), `W-UNUSED-SLOT` (позиционный вход `$N` не читается формулой), `E-UNIT`/`E-PORT-UNKNOWN`/`E-DOUBLE-INPUT` (контракт портов FR-029 — реализованы при влитии CP1)
+- `canvasdesk: { whatif: { scenarios: [{ name, overrides: [{ node, line, expr }] }] } }` в `Canvas.extra` (FR-017, CP6) — персистентные what-if сценарии (лимит 3): построчные подмены `(id ноды, индекс строки текста) → новый исходник`. Подмены активного сценария — runtime-only: propagator считает по виртуальному исходнику (`canvas-core/src/flow.rs`, `whatif_virtual_text`), `.canvas` без Apply не мутируется; `whatif_apply` пишет подмены в строки/params и удаляет сценарий (один undo-шаг). Протухшие подмены (нода/строка удалены, строка стала прозой) тихо пропускаются пересчётом и помечаются в списке overrides; пустой список сценариев удаляет поле (round-trip старых файлов чистый)
 
 ### 5.2. SQLite (`~/.canvasdesk/cache.db`)
 
@@ -326,6 +327,7 @@ input → camera update → world-space culling (rstar query по viewport)
 | Обзор (fit to content) | Ctrl+0; миникарта — клик/драг viewport-прямоугольника |
 | Двойной клик по файлу | Открыть в ассоциированном приложении |
 | Панель настроек | Кнопка ⚙ / `Ctrl+,`; булевы строки — тумблеры, многозначные — dropdown-меню с клампом к окну (FR-026) |
+| What-if режим (FR-017) | `Ctrl+Shift+I` / пилюля «What-if» / меню канваса; двойной клик по строке расчёта в режиме — подмена; Esc — выход |
 | Меню помощи и документация | Кнопка «?» (кластер ⚙/тема): «Документация ▸» — 7 разделов во встроенном просмотрщике (правый док: колесо — прокрутка, внутренние ссылки — переход, × / Esc / клик вне — закрыть); «Пройти онбординг» (FR-031/FR-028) |
 | Онбординг | Первый запуск — тур-карусель (8 шагов); «Пропустить»/Esc — отложить до следующего запуска (после 3 подряд — авто-показ молчит); повтор тура — «?» → «Пройти онбординг»; полный проход («Готово») выключает авто-показ навсегда (FR-028) |
 | Ввод внутри виджета (M5) | Клик по виджету — фокус виджету; Esc — возврат фокуса канвасу |
@@ -480,6 +482,23 @@ flow_recalc не нужен.
 (нет строки параметра), `E-RANGE` (вне min/max). Нумерация
 `op_index` — с 0; ref-ы живут только внутри батча (адресуют ноды,
 созданные ранее в том же вызове).
+
+### whatif_* (FR-017, CP6) — сценарии «а что если»
+
+Девять инструментов поверх активного канваса. Подмены — runtime-only:
+канвас без `whatif_apply` не мутируется (инвариант 2).
+
+| Инструмент | Семантика |
+|---|---|
+| `whatif_set_override {node_id, line, expr}` | построчная подмена активного сценария; режим/сценарий поднимаются автоматически (неявный «Сценарий MCP»); `expr` нормализуется (литеральный `\n` → переводы строк) |
+| `whatif_set_param {node_id, param, value}` | sugar: находит строку `param = …` и строит подмену |
+| `whatif_scenario_list` | сценарии с числом подмен и маркерами протухших |
+| `whatif_scenario_create {name}` | новый сценарий (лимит 3), сразу активен; мутация `canvasdesk.whatif` — один undo-шаг |
+| `whatif_scenario_delete {name}` | удаление (undo-шаг) |
+| `whatif_scenario_activate {name}` | переключение База ↔ сценарий; runtime-only, файл не трогает |
+| `whatif_deltas` | дельты активного сценария — те же пары «было → стало», что видны на канвасе (инвариант 6) |
+| `whatif_apply` | записать подмены в persisted-строки/params и удалить сценарий; один undo-шаг |
+| `whatif_reset` | сброс подмен активного сценария (runtime) |
 
 ### Транспорт stdio (FR-034, ADR-0009)
 

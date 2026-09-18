@@ -79,6 +79,7 @@ fn headless_spilled_param_row_draws() {
             expr_line_results: &line_results,
             editing_line_results: None,
             param_spills: &spills,
+            whatif_nodes: &Default::default(),
         },
     )
     .expect("prepare текста");
