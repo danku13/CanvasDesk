@@ -18,7 +18,6 @@ path = "src/main.rs"
 [dependencies]
 canvas-core.workspace = true
 canvas-render.workspace = true
-canvas-shell.workspace = true
 canvas-mcp.workspace = true
 # FR-037/ADR-0012: SceneState + MCP-инструменты (перенесены из main.rs)
 canvas-scene.workspace = true
@@ -29,8 +28,15 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 winit.workspace = true
-arboard.workspace = true
 pollster.workspace = true
+
+# M8/W3 (wasm-port §3.1): нативная shell-платформа — только для нативных
+# целей (её использует бинарь main.rs); wasm-сборка библиотеки (для
+# canvas-web, W4) shell не тянет — платформенные сервисы инъектируются
+# через нейтральные трейты core (CanvasStorage/ClipboardBackend/
+# WatchBackend/SearchBackend/ThumbBackend)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+canvas-shell.workspace = true
 
 [dev-dependencies]
 cosmic-text = { workspace = true }

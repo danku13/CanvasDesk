@@ -2528,3 +2528,23 @@ fn mcp_whatif_override_apply_undo() {
 /// Текст эталонной ноды «Нагрузка» (эталон №1 ADR-0006: dau=200000,
 /// 3 сессии × 10 req → 69.44 rps avg, peak ×3 → 208.33 rps).
 const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak";
+
+/// M8/W3 (wasm-port §6): SceneState.save_now пишет через инъектированное
+/// хранилище (натив — FsCanvasStorage, тест — MemStorage); содержимое
+/// читается обратно тем же хранилищем.
+#[test]
+fn save_now_goes_through_injected_storage() {
+    use canvas_core::CanvasStorage;
+    use std::sync::Arc;
+
+    let storage = Arc::new(canvas_core::MemStorage::new());
+    let path = PathBuf::from("mem://w3-storage-test.canvas");
+    let canvas = Canvas::default();
+    let mut scene = crate::SceneState::with_storage(canvas, path.clone(), storage.clone());
+    assert!(scene.save_now(), "сохранение в MemStorage успешно");
+    assert_eq!(storage.len(), 1, "хранилище получило файл");
+    let loaded = storage.load(&path).expect("файл читается из хранилища");
+    assert!(loaded.nodes.is_empty(), "roundtrip пустой сцены");
+    // Повторный сейв: dirty_since сброшен — autosave_if_due не пишет.
+    assert!(!scene.autosave_if_due(), "не dirty — записи нет");
+}

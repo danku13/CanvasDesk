@@ -834,13 +834,13 @@ pub mod ui {
     /// заметка в origin. Канвас не мутируется — вставку делает приложение.
     pub fn plan_drop(
         canvas: &Canvas,
-        data: &canvas_shell::dragdrop::DragData,
+        data: &canvas_core::dragdrop::DragData,
         origin: Vec2,
     ) -> Vec<DropInsert> {
         let occupied: HashSet<&str> = canvas.nodes.iter().map(|node| node.id.as_str()).collect();
         let mut issued: HashSet<String> = HashSet::new();
         match data {
-            canvas_shell::dragdrop::DragData::HdropBytes(bytes) => {
+            canvas_core::dragdrop::DragData::HdropBytes(bytes) => {
                 let paths = expand_drop_paths(&parse_hdrop_bytes(bytes));
                 let positions = drop_grid(origin, paths.len());
                 paths
@@ -853,7 +853,7 @@ pub mod ui {
                     })
                     .collect()
             }
-            canvas_shell::dragdrop::DragData::Text(text) => {
+            canvas_core::dragdrop::DragData::Text(text) => {
                 // И Url, и Plain -> единая заметка с полным текстом
                 let kind = match drop_text_kind(text) {
                     DropTextKind::Url | DropTextKind::Plain => DropInsertKind::Note(text.clone()),
@@ -864,7 +864,7 @@ pub mod ui {
                     pos: origin,
                 }]
             }
-            canvas_shell::dragdrop::DragData::None => Vec::new(),
+            canvas_core::dragdrop::DragData::None => Vec::new(),
         }
     }
 
@@ -891,9 +891,9 @@ pub mod ui {
     /// в корне (мультидроп с папками/файлами идёт прежним путём — файлы).
     /// Чистая функция (только fs-проверки), вызывается до plan_drop.
     pub fn dropped_widget_package(
-        data: &canvas_shell::dragdrop::DragData,
+        data: &canvas_core::dragdrop::DragData,
     ) -> Option<std::path::PathBuf> {
-        let canvas_shell::dragdrop::DragData::HdropBytes(bytes) = data else {
+        let canvas_core::dragdrop::DragData::HdropBytes(bytes) = data else {
             return None;
         };
         let paths = parse_hdrop_bytes(bytes);
@@ -1784,7 +1784,7 @@ pub mod ui {
                 .push(Node::file("file-1", "old.png", 0.0, 0.0, 10.0, 10.0));
             let plan = plan_drop(
                 &canvas,
-                &canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[&a, &b, &c])),
+                &canvas_core::dragdrop::DragData::HdropBytes(hdrop(&[&a, &b, &c])),
                 [100.0, 200.0],
             );
             assert_eq!(plan.len(), 3);
@@ -1815,7 +1815,7 @@ pub mod ui {
             .unwrap();
             let pkg_s = pkg.to_string_lossy().into_owned();
             assert_eq!(
-                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                dropped_widget_package(&canvas_core::dragdrop::DragData::HdropBytes(hdrop(&[
                     &pkg_s
                 ]))),
                 Some(pkg.clone())
@@ -1825,7 +1825,7 @@ pub mod ui {
             std::fs::create_dir_all(&plain).unwrap();
             let plain_s = plain.to_string_lossy().into_owned();
             assert_eq!(
-                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                dropped_widget_package(&canvas_core::dragdrop::DragData::HdropBytes(hdrop(&[
                     &plain_s
                 ]))),
                 None
@@ -1834,7 +1834,7 @@ pub mod ui {
             let file = pkg.join("widget.json");
             let file_s = file.to_string_lossy().into_owned();
             assert_eq!(
-                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                dropped_widget_package(&canvas_core::dragdrop::DragData::HdropBytes(hdrop(&[
                     &file_s
                 ]))),
                 None
@@ -1849,16 +1849,14 @@ pub mod ui {
             .unwrap();
             let pkg2_s = pkg2.to_string_lossy().into_owned();
             assert_eq!(
-                dropped_widget_package(&canvas_shell::dragdrop::DragData::HdropBytes(hdrop(&[
+                dropped_widget_package(&canvas_core::dragdrop::DragData::HdropBytes(hdrop(&[
                     &pkg_s, &pkg2_s
                 ]))),
                 None
             );
             // Текст — не пакет
             assert_eq!(
-                dropped_widget_package(&canvas_shell::dragdrop::DragData::Text(
-                    "привет".to_owned()
-                )),
+                dropped_widget_package(&canvas_core::dragdrop::DragData::Text("привет".to_owned())),
                 None
             );
             let _ = std::fs::remove_dir_all(&dir);
@@ -1869,7 +1867,7 @@ pub mod ui {
         fn plan_drop_text_single_note() {
             let plan = plan_drop(
                 &Canvas::default(),
-                &canvas_shell::dragdrop::DragData::Text("https://example.com".into()),
+                &canvas_core::dragdrop::DragData::Text("https://example.com".into()),
                 [5.0, 6.0],
             );
             assert_eq!(plan.len(), 1);
@@ -1886,7 +1884,7 @@ pub mod ui {
         fn plan_drop_none_is_empty() {
             assert!(plan_drop(
                 &Canvas::default(),
-                &canvas_shell::dragdrop::DragData::None,
+                &canvas_core::dragdrop::DragData::None,
                 [0.0, 0.0]
             )
             .is_empty());
