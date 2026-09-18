@@ -69,9 +69,10 @@ pub mod whatif_ui;
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
 pub mod ui {
     use super::*;
+    use canvas_core::time::Instant;
     use std::collections::HashSet;
     use std::path::PathBuf;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     /// Ширина контекстного меню в логических px (T7; screen-space —
     /// константный размер при любом зуме).

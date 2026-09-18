@@ -5,11 +5,12 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use canvas_core::analyze::AnalysisConfig;
 use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults};
 use canvas_core::flow::{self, FlowKind, FlowOutputs};
+use canvas_core::time::Instant;
 use canvas_core::{analyze, AnalysisState, Canvas, Node, Scenario, SpatialIndex, StaleOverride};
 
 use crate::measure::{ensure_result_reserve, formula_line_indices};
