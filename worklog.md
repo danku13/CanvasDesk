@@ -1,3 +1,43 @@
+## 2026-09-19 — W2 (M8 wasm-порт, трек A): вынос App в lib — `canvas_app::app`, main.rs — тонкая нативная обёртка
+
+- **Задача (§6.1):** трек A, шаг 2 после W1 (884309e→705e923): «Вынос App
+  в lib» (wasm-port §6, строка W2; MW1 уже сузил задачу — SceneState
+  уехал в canvas-scene). Чистое перемещение, zero behavior change;
+  синхронизация main: origin/main ушёл вперёд на W4-каркас трека B
+  (1056d89) — ff-pull, зоны не пересеклись.
+- **Сделано (механический сплит, скрипт с assert'ами границ):**
+  - **`crates/canvas-app/src/app.rs`** (новый, ~10.9k строк) — модуль
+    `canvas_app::app`: `App` (все четыре `impl` — new, ввод/редактирование,
+    рендер-кадр, MCP/виджеты/поиск), `ApplicationHandler<AppEvent>`,
+    `AppEvent`, типы-обвязка (Clipboard/OwnedScreenText/DropPreview/
+    AppDialog/SettleAnim/HelpMenuState/DocsViewer/WhatIfOverrideRow),
+    хелперы (геометрия оверлеев, slugify/шаблоны, стресс-сцена
+    `--stress`/`--stress-widgets`, `parse_args`/`CliArgs`,
+    `measured_result_reserve_height`, `open_path_externally`) и весь
+    `mod tests` (юнит-тесты переехали вместе с кодом).
+  - **`main.rs`** — 311 строк (было 11 172): нативная инициализация
+    (mcp-режим FR-008, трейсинг FR-035, crash-recovery/single-instance
+    T17/T15, конфиг, пул тамбнейлов/вотчер/поиск/виджеты/MCP-pipe) +
+    `run_app`. Зависимости бинаря: только `canvas_app::app::*` (pub),
+    canvas-core/-scene/-shell/-widgets, winit.
+  - **Видимость:** `App`/`AppEvent`/`App::new`/`init_widgets` — `pub`
+    (кросс-крейтный API для canvas-web W4-прошивка); bin — отдельный
+    крейт, поэтому `pub(crate)` не виден (E0603) — все символы main.rs —
+    `pub`; остальные хелперы остались приватными в модуле.
+  - Само-ссылки `canvas_app::` → `crate::` (55 шт., перенесённый код);
+    lib.rs — `pub mod app;` с докой (§3.1 п. 2).
+- **Гейты (все зелёные):** fmt --check ✓; clippy --workspace
+  --all-targets `-D warnings` ✓ (0w); test --workspace ✓ — 45 наборов,
+  0 failed, юнит-тесты canvas-app исполняются из lib (156, было в bin);
+  wasm_gate.sh ✓ (345 core + 13 mcp в wasmtime); mcp_wasm_gate.sh ✓
+  (e2e-сессия, oracle ±1 %, exit 0). Прогон с
+  CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 (урок W1 — диск).
+- **Доки:** wasm-port.md строка W2 — «Выполнено 2026-09-19 (трек A,
+  §6.1)»; AGENTS.md не тронут (структура workspace без изменений);
+  CI-файлы заморожены до W12 (п. 4 протокола).
+- **Коммит:** 1 коммит на feature/wasm-w2-app-to-lib → merge `--no-ff`
+  в main (протокол §6.1).
+
 ## 2026-09-19 — W4-каркас (M8 wasm-порт, трек B): крейт canvas-web — bindgen-обвязка, panic-hook, tracing-консоль
 
 - **Задача (владелец):** «Ты отвечаешь за трек B» — двухагентное
