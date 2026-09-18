@@ -709,3 +709,48 @@
   100 % при сборке тестов) — cargo clean + локальный прогон гейтов с
   CARGO_PROFILE_DEV_DEBUG=0/CARGO_PROFILE_TEST_DEBUG=0 (на семантику
   тестов не влияет; в CI профили дефолтные).
+
+## 2026-09-18 — FR-037 MW3: canvas-mcp-headless — headless MCP-сервер в wasmtime (ADR-0012)
+
+- **Задача:** MW3 плана FR-037 — headless MCP-сервер для реальных сессий
+  в Linux-контейнере без Windows/GUI (приказ владельца «работай сам»).
+- **Сделано:**
+  - **`crates/canvas-mcp-headless`** (lib + bin, лист в DAG — паттерн
+    canvas-web §3.5 M8; нативный граф canvasdesk.exe не затронут):
+    `HeadlessSession` — SceneState (in-memory, пустой канвас, модель
+    собирается graph_apply, как в гейтах эталонов) +
+    `TemplateRegistry::builtin()` за `AppTransport`. `send_line`
+    воспроизводит конверт `on_mcp_wake` буквально: parse_envelope →
+    (id) → mcp_unwrap_call → mcp_dispatch → build_result |
+    build_call_error; notification (id == None) — тишина (recv → None,
+    мост трактует как таймаут — семантика прод-приложения); битый
+    конверт — build_error с null-id. Viewport-зеркало уже в SceneState
+    — синк с Camera не нужен (ADR-0012). Bin `canvasdesk-mcp-headless`
+    = run_stdio_with_transport (reconnect — no-op, in-process).
+  - **12 lib-тестов протокольного цикла** (через мост handle_line/
+    handle_input, не напрямую в диспетчер): initialize-эхо 2025-06-18;
+    tools/list = 36; tools/call roundtrip (text + structuredContent,
+    FR-034); CP3-гейт graph_apply мини-эталон №1 — oracle ±1 % (208.33
+    rps / CDN W 34.29 ms ρ 0.417 / origin 20.83 / GW W 3.2 ms / смета
+    86 — те же числа, что canvas-scene); CP5-гейт ρ-лестница (базовая
+    none 0.417 → DAU×2 warn 0.833 → DAU×5.35 overload 2.229, бейджи);
+    негативные ветки: isError неизвестного инструмента, isError ошибки
+    внутри инструмента, −32601, −32700 (handle_input), batch из 2,
+    notification-тишина; персистентность состояния между вызовами.
+  - Нюансы реализации тестов (зафиксированы в комментариях): тексты с
+    переносами строк — только через serde_json-маршаллинг (сырые \n в
+    format!-конверте = parse error control-character); массивные
+    результаты (nodes_list) приходят в text-контенте — structuredContent
+    мост даёт только объектным результатам (FR-034).
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓
+  (мин-правка len_zero → is_empty); cargo test --workspace — 1089/0
+  (1077 + 12 headless); cargo check --target wasm32-unknown-unknown
+  -p canvas-mcp-headless ✓; RUST_TEST_THREADS=1 cargo test --target
+  wasm32-wasip1 -p canvas-mcp-headless — 12/12 в wasmtime; **ручная
+  сессия в wasmtime** (критерий приёмки MW3): initialize (эхо
+  2025-06-18, serverInfo canvasdesk) → tools/list (36) → tools/call
+  canvas_info (structuredContent, isError=false) → EOF — штатный выход
+  (exit 0).
+- **Дальше:** MW4 — mcp_wasm_e2e.py (драйвер) + mcp_wasm_gate.sh (гейт
+  одной командой) + CI wasm-check (компиляция трёх крейтов) + AGENTS/
+  SPEC/ACCEPTANCE; опции MW5/MW6 — по решению владельца.
