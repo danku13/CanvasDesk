@@ -56,3 +56,27 @@ pub use settings::{
 };
 pub use spatial::{SpatialIndex, WorldRect};
 pub use validate::{has_errors, validate, IssueCode, Severity, ValidationIssue};
+
+// --- FR-036: тестовая песочница ------------------------------------------
+/// Корень временных каталогов для тестов крейта. Нативно — системный temp
+/// (поведение тестов не меняется); под wasm32 — относительный каталог
+/// внутри предоткрытого CWD (runner wasmtime маппит корень пакета на `/`),
+/// потому что `std::env::temp_dir` на wasm-таргетах паникует: std для
+/// wasm32-unknown-unknown/wasip1 её не реализует.
+///
+/// Единственное исключение из правила «без cfg(target_arch) в core»
+/// (wasm-port.md §3.1): хелпер живёт в `#[cfg(test)]`-коде и на продуктовые
+/// сборки не попадает. Решение зафиксировано в ADR-0011.
+#[cfg(test)]
+pub(crate) fn test_scratch_root() -> std::path::PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let dir = std::path::PathBuf::from(".wasi-scratch");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+}

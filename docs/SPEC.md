@@ -73,6 +73,7 @@
 | Мост виджетов | `postMessage` JSON-RPC (`serde_json`) | Узкий типизированный host API с permissions, без eval |
 | Сериализация конфига | `serde` + `toml` | — |
 | Логирование | `tracing` + `tracing-subscriber` | Диагностика на машинах пользователей |
+| WASM-таргеты (FR-036, ADR-0011) | `wasm32-unknown-unknown` (продуктовый, план M8) + `wasm32-wasip1` (служебный тестовый, wasmtime) | Ядро обязано собираться и исполняться под wasm: гейт `scripts/wasm_gate.sh`, CI `wasm-check` |
 | Упаковка | `cargo-wix` → MSI, Authenticode-подпись | M4 требует доверия системы |
 
 ## 4. Структура workspace

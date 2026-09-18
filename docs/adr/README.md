@@ -18,6 +18,7 @@
 | [adr-0008](adr-0008-math-computing-stack.md) | Вычислительный стек математического моделирования и лицензионная политика (B2B / реестр РФ) | принято | 2026-09-17 (принято 2026-09-18) | ADR-0002/0004/0006/0007, CR-013, FR-015/017/027/029; `docs/architecture/math-computing-stack.md`; `docs/plans/product-roadmap.md` |
 | [adr-0009](adr-0009-mcp-transport-compatibility.md) | Транспортная совместимость MCP — протокол 2025-06-18, batch-запросы, отказоустойчивый handshake | принято | 2026-09-18 | ADR-0004, FR-034, FR-008; `crates/canvas-mcp`, SPEC §13, BYOK §3 |
 | [adr-0010](adr-0010-mcp-stdio-purity.md) | Чистота stdout MCP-потока — изоляция stdio автоспавна и перевод диагностики в stderr | принято | 2026-09-18 | ADR-0009, FR-035, FR-008; `crates/canvas-mcp`, `crates/canvas-app`, SPEC §13 |
+| [adr-0011](adr-0011-wasm-build-gate.md) | WASM-сборка ядра — гейт wasm32-unknown-unknown и исполнение тестов в wasmtime (wasm32-wasip1) | принято | 2026-09-18 | `docs/plans/wasm-port.md` (M8, W0), FR-036; `scripts/wasm_gate.sh`, `.cargo/config.toml`, CI `wasm-check`, `crates/canvas-core` (тестовая песочница) |
 
 ## Как читать по задаче «агентная композиция с проливанием значений»
 
