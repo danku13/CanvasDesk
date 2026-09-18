@@ -632,8 +632,8 @@ impl Raster<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use canvas_core::time::Instant;
     use canvas_core::{Edge, Node, Side};
-    use std::time::Instant;
 
     /// Допуск для точных аффинных проверок (суб-пиксель).
     const EPS: f32 = 1e-2;

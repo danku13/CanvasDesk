@@ -38,6 +38,10 @@ notify = "8.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # окно, рендер, текст (версии по SPEC §3)
 winit = "0.30"
+# M8/W1 (wasm-port §6): Instant, безопасный на wasm32-unknown-unknown
+# (§2 п. 7: std-версия компилируется, но паникует в рантайме); на нативе
+# это тонкая обёртка над std. Версия уже в дереве через winit.
+web-time = "1.1"
 wgpu = "22"
 glyphon = "0.6" # совместим с wgpu 22
 # инлайн-редактирование текста (T7): та же версия, что тянет glyphon 0.6

@@ -22,6 +22,9 @@ mod settings;
 mod spatial;
 /// FR-018: реестр шаблонных архитектурных нод.
 pub mod templates;
+/// M8/W1 (wasm-port §6): монотонное время, безопасное под wasm32 —
+/// alias над `web_time::Instant`; нативный код подмены не замечает.
+pub mod time;
 /// FR-032: валидация модели — чистая функция ядра (коды E-*/W-*).
 pub mod validate;
 /// FR-017 (CP6): what-if сценарии — именованные построчные подмены,
