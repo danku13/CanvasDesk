@@ -207,6 +207,15 @@ scripts/mcp_wasm_gate.sh           # check + wasip1-тесты (scene 53 + мо�
 scripts/mcp_wasm_gate.sh --check   # только компиляция — без wasmtime
 ```
 
+Инспектор-сессия (FR-037 MW5) — живая ручная проверка MCP владельцем без
+Windows, официальным инспектором `@modelcontextprotocol/inspector`
+(требует node 18+/npx, первый запуск качает пакет; в гейты/CI не входит):
+
+```
+scripts/mcp_wasm_inspector.sh           # web UI: браузер → 127.0.0.1:6274, сервер предподключён
+scripts/mcp_wasm_inspector.sh --check   # автоприёмка инспектором-клиентом: tools/list + graph_apply oracle ±1 %
+```
+
 Требования к тестам:
 - Юнит-тесты для `canvas-core` обязательны (трансформации камеры round-trip, round-trip
   `.canvas` без потерь неизвестных полей, парсинг примеров с jsoncanvas.org).
