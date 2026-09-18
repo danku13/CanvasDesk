@@ -641,3 +641,27 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-016.7 | MCP `analyze_bottlenecks {}` | `{nodes: [{id, severity, utilization?, wait_sec?, badge}], thresholds}`; severity/badge = визуал канваса; канвас и undo байт-в-байт нетронуты (e2e analyze_bottlenecks_reference_and_growth) |
 | FR-016.8 | Пороги-как-данные (инвариант 2) | `AnalysisConfig` отдельной структурой: тест analyze_custom_thresholds_change_severity — та же сцена, другой порог → другая серьёзность (прозрачность для FR-017) |
 | FR-016.9 | Регресс | `cargo test --workspace` — 0 failed (1034 passed: +16 analyze, +4 рендер, +1 e2e); fmt/clippy зелёные; 45 шаблонов валидны, версии queue-манифестов подняты минорно |
+
+## 29. Чек-лист FR-037 (2026-09-18): MCP-WASM-верификация — canvas-scene, мост и headless-сервер (ADR-0012)
+
+Контекст: приказ владельца «проверять не только UI, но и реализацию MCP» —
+контрактный слой (ADR-0004) верифицируется в wasm-рантайме без Windows и
+GUI; уровни: компиляция → исполнение тестов в wasmtime → реальная
+MCP-сессия. Сценарий ~5 минут, полностью в Linux-контейнере:
+
+```
+scripts/mcp_wasm_gate.sh           # все три ступени
+```
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-037.1 | Ступень 1: `cargo check --target wasm32-unknown-unknown -p canvas-scene -p canvas-mcp -p canvas-mcp-headless` | зелёный — MCP-слой компилируется под продуктовый таргет веб-порта (CI `wasm-check`) |
+| FR-037.2 | Ступень 2: `RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1` тех же крейтов | 78/78 в wasmtime: scene 53 (50 перенесённых MCP-тестов с эталонами CP1/CP3/CP5 — имена/ассерты без изменений + view/паритет), мост 13 (2 автоспавн-теста за гвардами), headless 12 |
+| FR-037.3 | Ступень 3, handshake: initialize (2025-06-18) | эхо protocolVersion 2025-06-18; serverInfo `canvasdesk`; capabilities.tools |
+| FR-037.4 | Ступень 3, каталог: tools/list | 36 инструментов с inputSchema (26 базовых + analyze_bottlenecks + 9 whatif_*) |
+| FR-037.5 | Ступень 3, CP3-гейт: graph_apply мини-эталон №1 | `ok: true`, created 7 (4 ноды + 3 ребра); flow oracle ±1 %: peak_rps 208.33, CDN W 34.29 ms (ρ 0.417), origin_rps 20.83, GW W 3.2 ms, смета 86 (ADR-0005/0006) |
+| FR-037.6 | Ступень 3, CP5-гейт: analyze_bottlenecks ρ-лестница | базовая none 0.417 (бейдж `42% · W: 34 ms`) → DAU×2 warn 0.833 (`83% · W: 120 ms`) → DAU×5.35 overload 2.229 (`OVERLOAD 223%`) |
+| FR-037.7 | Ступень 3, негативные ветки | неизвестный инструмент → isError (MCP-идиома, не JSON-RPC error); неизвестный метод → −32601; batch [ping, tools/list] → два ответа по порядку; notification → тишина (следующий ответ — на ping) |
+| FR-037.8 | Ступень 3, завершение | EOF stdin → штатный выход сервера (exit 0); лог сессии — target/tmp/mcp_wasm_session.log |
+| FR-037.9 | Нативный регресс | `cargo test --workspace` — 0 failed (1089 passed: 1077 + 12 headless); fmt/clippy зелёные; WASM-гейт ядра `scripts/wasm_gate.sh` не затронут |
+| FR-037.10 | Ручная инспекция (опционально, MW5) | `wasmtime run target/wasm32-wasip1/debug/canvasdesk-mcp-headless.wasm` в интерактивном stdin: initialize/tools_list отвечают; инспектор `npx @modelcontextprotocol/inspector` — по решению владельца |

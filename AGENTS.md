@@ -93,8 +93,10 @@ crates/
   canvas-shell/            # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW
   canvas-preview-host/     # отдельный exe — песочница для IPreviewHandler
   canvas-widgets/          # M5: WebView2-хост, bridge, манифесты, снапшоты
-  canvas-mcp/              # MCP-посредник: stdio JSON-RPC ↔ named pipe (инструменты канваса)
-  canvas-app/              # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
+  canvas-mcp/              # MCP-посредник: stdio JSON-RPC ↔ named pipe, run_stdio_with_transport (FR-037)
+  canvas-scene/            # модель сцены + mcp_dispatch (27+ инструментов) — платформенно-нейтральный, wasm (FR-037/ADR-0012)
+  canvas-mcp-headless/     # headless MCP-сервер для wasmtime/wasip1 — верификация MCP-сессий без Windows (FR-037, лист-крейт)
+  canvas-app/              # приложение: event loop, команды, UI-состояние, main()
 assets/                    # шрифты, иконки нод, встроенные виджеты (assets/widgets/), шаблоны (assets/templates/)
 docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
 ```
@@ -191,6 +193,18 @@ wasm-рантайме; CI-джоба `wasm-check` проверяет компи�
 ```
 scripts/wasm_gate.sh          # check wasm-таргета + rlib ядра + тесты canvas-core под wasip1 (wasmtime)
 scripts/wasm_gate.sh --check  # только компиляция — без wasmtime (эквивалент CI-джобы)
+```
+
+MCP-wasm-гейт (FR-037, ADR-0012): контрактный слой (canvas-scene,
+canvas-mcp, canvas-mcp-headless) собирается под wasm32-unknown-unknown,
+тесты исполняются под wasip1 в wasmtime, и драйвер проводит РЕАЛЬНУЮ
+MCP-сессию (initialize → tools/list → graph_apply oracle ±1 % →
+analyze_bottlenecks ρ-гейт → негативные ветки) с headless-сервером —
+регресс контракта ADR-0004 ловится без Windows и GUI:
+
+```
+scripts/mcp_wasm_gate.sh           # check + wasip1-тесты (scene 53 + мост 13 + headless 12) + e2e-сессия
+scripts/mcp_wasm_gate.sh --check   # только компиляция — без wasmtime
 ```
 
 Требования к тестам:
