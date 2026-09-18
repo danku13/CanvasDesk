@@ -567,7 +567,7 @@ impl Renderer {
         mut editing: Option<&mut EditingSession>,
         overlay: &FrameOverlay,
     ) -> anyhow::Result<FrameStats> {
-        let cpu_start = std::time::Instant::now();
+        let cpu_start = canvas_core::time::Instant::now();
         if !surface_size_valid(self.size.width, self.size.height) {
             return Ok(FrameStats::default());
         }

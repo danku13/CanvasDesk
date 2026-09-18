@@ -6,6 +6,7 @@
 //! `host` (cfg(windows)) и тонкие обёртки. Источник решений —
 //! `canvas_widgets::lod::plan_frame`; airspace-политика П7 — здесь.
 
+use canvas_core::time::Instant;
 use canvas_core::{Canvas, Node, NodeKind};
 use canvas_widgets::layout::{self, CameraArgs};
 use canvas_widgets::lod::{self, Target};
@@ -15,7 +16,7 @@ use canvas_widgets::registry::{InstallOutcome, WidgetRegistry};
 use canvas_widgets::{HostToWidget, ThemeInfo, WidgetEvent, WidgetProps};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Кулдаун пересоздания контроллера после сбоя, с (риски M5 §8).
 pub const CONTROLLER_COOLDOWN_SECS: u64 = 10;

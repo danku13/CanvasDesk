@@ -13,6 +13,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 rstar.workspace = true
 toml.workspace = true
+# M8/W1: alias Instant (canvas_core::time) для web-порта — wasm-безопасное
+# монотонное время; на нативе обёртка над std (обоснование — wasm-port.md §6 W1)
+web-time.workspace = true
 
 [features]
 default = []
