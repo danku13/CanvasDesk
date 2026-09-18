@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.worker",
   "name_en": "Worker",
   "name_ru": "Воркер",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "backend",
   "description": "Фоновый обработчик задач: пул воркеров как M/M/c.",
   "description_en": "Background task worker: worker pool as M/M/c.",
@@ -31,5 +31,12 @@
   ],
   "expr": "mm1($tasks_per_sec, 1 req / $processing_time, $workers)",
   "color": "#4A90E2",
-  "icon": "worker"
+  "icon": "worker",
+  "outputs": [
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($tasks_per_sec, 1 req / $processing_time, $workers)"
+    }
+  ]
 }

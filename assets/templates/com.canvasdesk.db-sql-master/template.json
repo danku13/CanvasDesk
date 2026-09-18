@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.db-sql-master",
   "name_en": "DB SQL (master)",
   "name_ru": "БД SQL (мастер)",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "category": "backend",
   "description": "Мастер БД: μ = 1 / query_time.",
   "description_en": "SQL master DB: μ = 1 / query_time.",
@@ -49,6 +49,11 @@
       "name": "capacity_qps",
       "unit": "rps",
       "expr": "1 req / $query_time × $replicas"
+    },
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($qps, 1 req / $query_time, $replicas)"
     }
   ]
 }

@@ -89,7 +89,7 @@ canvasdesk/
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 26 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply)
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 27 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks)
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
 ├── assets/                  # шрифты, иконки нод, виджеты (widgets/), шаблоны (templates/)
 ├── docs/                    # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
@@ -475,6 +475,25 @@ flow_recalc не нужен.
 (нет строки параметра), `E-RANGE` (вне min/max). Нумерация
 `op_index` — с 0; ref-ы живут только внутри батча (адресуют ноды,
 созданные ранее в том же вызове).
+
+### analyze_bottlenecks (FR-016) — узкие места и риск очередей
+
+Схема вызова: `analyze_bottlenecks {}` (без параметров — активный канвас).
+Чтение: пересчёт свежий (как `flow_recalc`), канвас и undo не затрагиваются.
+
+**Ответ:** `{nodes: [{id, severity, utilization?, queue_length?, wait_sec?,
+badge}], thresholds}` — те же флаги, что видит пользователь на канвасе
+(инвариант 4 FR-016: `badge` — строка бейджа канваса, например
+`"OVERLOAD 223% · W: 1.2 s"`). `severity` — `none|warn|critical|overload`;
+`utilization` — ρ (доля 0..1, > 1 при перегрузке); `wait_sec` — W в базовых
+секундах; `thresholds` — пороги дефолта (0.7/0.9, 100 ms/1 s, 1/10).
+
+**Детекция (анализатор `canvas-core/src/analyze.rs`):** значение ноды —
+ошибка `Overload{ρ}` → `overload` (ρ из ошибки); именованный выход
+`utilization` шаблона (13 queue-манифестов) или Percent-значение → пороги
+0.7/0.9; Time-значение (W) → 100 ms/1 s; именованные выходы
+`queue_length`/`wait_time` — точки расширения манифестов. Порядок —
+`canvas.nodes` (детерминизм).
 
 ### Транспорт stdio (FR-034, ADR-0009)
 

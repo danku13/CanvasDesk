@@ -58,6 +58,7 @@ fn headless_note_body_draws() {
             expr_results: &std::collections::HashMap::new(),
             expr_line_results: &std::collections::HashMap::new(),
             editing_line_results: None,
+            analysis_badges: &[],
         },
     )
     .expect("prepare текста");

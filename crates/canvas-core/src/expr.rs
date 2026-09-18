@@ -84,7 +84,8 @@ pub struct Atom {
 }
 
 impl Atom {
-    const fn new(dim: Dimension, exp: i8, scale: f64, name: &'static str) -> Self {
+    /// FR-016 (analyze): атом из таблицы для юнит-тестов смежных модулей.
+    pub(crate) const fn new(dim: Dimension, exp: i8, scale: f64, name: &'static str) -> Self {
         Self {
             dim,
             exp,
@@ -123,8 +124,9 @@ impl Unit {
     }
 
     /// Мультимножество (размерность → суммарная степень) — совместимость
-    /// операндов сложения/вычитания и функций.
-    fn dims(&self) -> BTreeMap<Dimension, i16> {
+    /// операндов сложения/вычитания и функций. FR-016 (analyze): чтение
+    /// размерности значения из смежных модулей ядра.
+    pub(crate) fn dims(&self) -> BTreeMap<Dimension, i16> {
         let mut map = BTreeMap::new();
         for atom in &self.atoms {
             *map.entry(atom.key()).or_insert(0) += atom.exp as i16;
@@ -135,7 +137,8 @@ impl Unit {
 
     /// Произведение масштабов атомов: значение единицы в базовых единицах
     /// её размерностей (`ms` → 0.001, `min` → 60, `MB` → 1024²).
-    fn scale(&self) -> f64 {
+    /// FR-016 (analyze): перевод значения в базу из смежных модулей ядра.
+    pub(crate) fn scale(&self) -> f64 {
         self.atoms
             .iter()
             .map(|atom| atom.scale.powi(atom.exp as i32))
@@ -316,7 +319,7 @@ impl Value {
     }
 
     /// Мультимножество размерностей значения.
-    fn dims(&self) -> BTreeMap<Dimension, i16> {
+    pub(crate) fn dims(&self) -> BTreeMap<Dimension, i16> {
         self.unit.dims()
     }
 }

@@ -109,6 +109,7 @@ fn line_ports_template_and_note() {
             expr_results: &results,
             expr_line_results: &line_results,
             editing_line_results: None,
+            analysis_badges: &[],
         },
     )
     .expect("prepare текста");

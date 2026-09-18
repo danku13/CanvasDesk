@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.api-gateway",
   "name_en": "API Gateway",
   "name_ru": "API-шлюз",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "category": "backend",
   "description": "API-шлюз: бюджет латентности минус overhead аутентификации.",
   "description_en": "API gateway: latency budget minus auth overhead.",
@@ -42,6 +42,11 @@
       "name": "effective_service_rate",
       "unit": "rps",
       "expr": "1 req / ($latency_budget - $auth_overhead)"
+    },
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($rps, 1 req / ($latency_budget - $auth_overhead))"
     }
   ]
 }
