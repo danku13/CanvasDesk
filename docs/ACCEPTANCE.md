@@ -535,3 +535,19 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-033.8 | Лимиты | 257-я операция и 129-я нода — ошибки уровня вызова (isError), канвас не меняется |
 | FR-033.9 | value-цикл внутри батча | `{ok: false, code: "E-CYCLE"}` с участниками в message; канвас прежний |
 | FR-033.10 | tools/list | 26 инструментов (после интеграции с FR-032); у `graph_apply` схема `operations` (1..=256, тег op с 6 вариантами) — тест tools_list_has_all_with_schemas |
+
+## 23. Чек-лист FR-034 (2026-09-18): перепроектирование MCP-транспорта (ADR-0009)
+
+Контекст: внешний MCP-клиент (hermes agent) не мог нормально подключиться.
+Диагноз — 5 дефектов моста; все закрываются юнит-тестами `canvas-mcp`.
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-034.1 | `initialize` с `protocolVersion: "2025-06-18"` | эхо `2025-06-18` в ответе (тест initialize_protocol_negotiation); строгие SDK не рвут соединение из-за даунгрейда |
+| FR-034.2 | Batch `[initialize, ping]` одной строкой | два ответа по id (тест batch_requests); пустой массив → `-32600`; батч целиком из уведомлений → stdout молчит |
+| FR-034.3 | `tools/call` при живом приложении | `content[0].text` — чистый JSON результата, `structuredContent` — тот же объект (тест handshake_and_call_with_connected_pipe); конверт приложения не «заворачивается двойно» |
+| FR-034.4 | error-конверт приложения по pipe | `isError: true` с сообщением (тест call_result_unwrapping); isError-результат приложения проходит насквозь |
+| FR-034.5 | `initialize` без запущенного приложения | успешный handshake (тест offline_handshake_and_calls) — процесс моста НЕ завершается (нет exit 2) |
+| FR-034.6 | `tools/call` без приложения / с разорванным pipe | `isError: true` «CanvasDesk не запущен…»; перед следующим пакетом — reconnect (500 мс, без автоспавна) |
+| FR-034.7 | Зондирование read-only методов | `resources/list`/`prompts/list`/`resources/templates/list` → пустые списки; `logging/setLevel` → `{}`; `notifications/cancelled` → тишина (тест read_only_stubs_and_cancelled) |
+| FR-034.8 | Регресс стеков | pipe round-trip тесты canvas-shell зелёные; `cargo test --workspace` — 0 failed; конфиги `docs/BYOK.md` (`canvasdesk.exe mcp`) работают без изменений |

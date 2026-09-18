@@ -293,3 +293,56 @@
 - **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
   cargo test --workspace — 1007 passed / 0 failed; canvas-shell ×3 — стабильно
   129/0.
+
+## 2026-09-18 — FR-034: перепроектирование MCP-транспорта (ADR-0009) — hermes agent подключается
+
+- **Приказ владельца:** «перепроектировать MCP — hermes agent не может
+  нормально подключиться». Уточнено: hermes — на той же машине; транспорт
+  нужен спек-совместимый; формат — ADR + реализация.
+- **Диагноз** (чтение кода + прогон эмуляции клиентской сессии против
+  canvasdesk-mcp, скрипт mcp_client_probe.sh): 5 дефектов моста —
+  1) даунгрейд версии: SUPPORTED_PROTOCOLS без 2025-06-18 → клиенту с
+  актуальной версией отвечали 2024-11-05, строгие SDK рвут соединение;
+  2) batch-массивы (JSON-RPC, spec 2025-03-26) → -32600 «ожидался объект»;
+  3) двойная упаковка tools/call: прод-приложение отвечает JSON-RPC-конвертом
+  (on_mcp_wake → build_result), мост клал конверт ЦЕЛИКОМ в content[0].text
+  (юнит-тест этого не ловил — FakeTransport возвращал чистое значение);
+  4) initialize без pipe → JSON-RPC ошибка -32002 и exit(2) — клиент видит
+  краш сервера, сессии нет; 5) транспорт фиксировался на старте —
+  приложение, поднявшееся позже, не подхватывалось. Дополнительно:
+  resources/list, prompts/list, resources/templates/list, logging/setLevel,
+  notifications/cancelled → -32601 (хосты зондируют безотносительно
+  capabilities).
+- **ADR-0009** (docs/adr/adr-0009-mcp-transport-compatibility.md, статус
+  «принято»): выбран вариант C — точечное перепроектирование конвертного
+  слоя canvas-mcp; отклонены A (сетевой транспорт Streamable HTTP — hermes
+  локальный, SPEC §7.6 «только локально»; вернуться отдельным ADR при
+  удалённых агентах, с Bearer-токеном) и B (переход на официальный MCP SDK —
+  несоразмерно). FR-034 (docs/change-requests/fr-034-mcp-transport-
+  compatibility.md) — реализация решения.
+- **Реализация (crates/canvas-mcp/src/lib.rs, main.rs):**
+  SUPPORTED_PROTOCOLS = [2025-06-18, 2025-03-26, 2024-11-05] (эхо клиентской);
+  handle_input — batch-разбор (поэлементно, пустой массив → -32600,
+  все-уведомления → тишина); unwrap_app_payload — разворот конверта
+  приложения: result → чистый JSON в content[0].text + structuredContent
+  (объект), error → isError, isError-результат приложения — насквозь;
+  initialize успешен ВСЕГДА (HandleOutcome::Exit удалён — процесс живёт до
+  закрытия stdio); refresh_transport — reconnect перед каждым пакетом
+  (WaitNamedPipeW 500 мс, без автоспавна); толерантные заглушки read-only
+  методов. build_call_result сменил сигнатуру (&str → &Value).
+  Автоспавн (FR-008), pipe-сервер canvas-shell и mcp_dispatch (26
+  инструментов) — без изменений.
+- **Тесты canvas-mcp:** новые batch_requests, call_result_unwrapping,
+  offline_handshake_and_calls (вместо pipe_unavailable_scenarios),
+  read_only_stubs_and_cancelled; handshake_and_call_with_connected_pipe
+  переведён на прод-конверт (envelope в FakeTransport) + structuredContent;
+  initialize_protocol_negotiation — эхо 2025-06-18. Итог: 17 тестов крейта.
+- **Верификация реальной сессией (probe):** initialize без приложения →
+  success + эхо 2025-06-18, exit 0 (было: -32002 + exit 2); batch
+  [initialize, ping] → 2 ответа; tools/call offline → isError «не запущен».
+- **Доки:** SPEC.md §13 «Транспорт stdio (FR-034, ADR-0009)»; BYOK.md §3 —
+  гарантии транспорта, Hermes Agent в списке клиентов; ACCEPTANCE.md §23 —
+  8 пунктов чек-листа; index-cr-fr.md — строка FR-034, следующий номер
+  FR-035.
+- **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
+  cargo test --workspace — 1010 passed / 0 failed.
