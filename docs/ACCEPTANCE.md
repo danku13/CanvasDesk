@@ -503,7 +503,7 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 
 | # | Сценарий | Ожидание |
 |---|---|---|
-| FR-032.1 | `tools/list` | 25 инструментов; есть `edges_list`, `edge_get`, `graph_validate` с корректными inputSchema |
+| FR-032.1 | `tools/list` | 26 инструментов (после интеграции CP3); есть `edges_list`, `edge_get`, `graph_validate` с корректными inputSchema |
 | FR-032.2 | `edges_list` на канвасе со связями | Массив `{id, from, to, kind, fromLine?, fromSide, toSide}`; value-ребро — `kind: "value"`, построчное — с `fromLine`; контрольное — `kind: "control"` без `fromLine` |
 | FR-032.3 | `edge_get` по существующему id | Та же каноническая схема одного ребра; несуществующий id — isError «связь не найдена» |
 | FR-032.4 | `graph_validate` на чистом графе | `{valid: true, issues: []}` |
@@ -515,3 +515,23 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-032.10 | (после CP1) ребро с несовместимой единицей (`ms` → `toParam: rps`) | Issue `E-UNIT` с `edge_id` |
 | FR-032.11 | (после CP1) два value-ребра в один `toParam` | Issue `E-DOUBLE-INPUT` с обоими `edge_id` в детерминированном порядке |
 | FR-032.12 | (после CP1) ребро на несуществующее имя выхода/параметра | Issue `E-PORT-UNKNOWN` с `edge_id`; после исправлений повторный `graph_validate` — `valid: true, issues: []` (гейт A2) |
+## 22. Чек-лист FR-033 (2026-09-18): graph_apply — атомарная батч-композиция (CP3)
+
+> Источник — `docs/change-requests/fr-033-graph-apply-batch.md` (волна A3,
+> CP3 критического пути `docs/plans/product-roadmap.md` §9). Код —
+> `crates/canvas-app/src/main.rs` (`mcp_graph_apply`/`batch_apply_op`),
+> инструмент — `crates/canvas-mcp/src/lib.rs`. Автотесты — `graph_apply_*`
+> в `main.rs` (7) + проливание в `flow.rs` (7).
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-033.1 | Один вызов `graph_apply` (~10 операций) собирает мини-эталон «Нагрузка → CDN → Gateway» (эталон №1 ADR-0006) | `ok: true`; числа в `flow` = oracle ±1 %: peak_rps ≈ 208.33 rps, CDN W ≈ 34.29 ms, CDN.origin ≈ 20.83 rps, Gateway W ≈ 3.20 ms (тест graph_apply_assembles_mini_reference_with_oracle) |
+| FR-033.2 | Проливание живое: правка `dau` в «Нагрузке» одним `node_edit` | Весь downstream пересчитан без правки связей/формул: peak ×2, CDN.origin ×2 (инвариант ADR-0007) |
+| FR-033.3 | Ошибка операции в середине батча (edge на несуществующую ноду) | `{ok: false, op_index: 2, code: "E-NOT-FOUND"}`; сериализация канваса байт-в-байт прежняя; ни одного undo-шага |
+| FR-033.4 | Неизвестный `toParam`/`fromOutput` в edge-операции | `{ok: false, code: "E-PORT-UNKNOWN"}`, канвас прежний (валидация имён по снапшотам шаблонов) |
+| FR-033.5 | Ctrl+Z после успешного батча | Вся сборка исчезает ОДНИМ шагом; Ctrl+Y возвращает целиком (тест graph_apply_undo_reverts_whole_batch) |
+| FR-033.6 | ref-резолв | Ребро на `fromRef` ноды, созданной ранее в том же батче, работает; forward-ref — `E-NOT-FOUND`; дубликат ref — `E-BAD-OP`; смешанная адресация ref + id канваса работает |
+| FR-033.7 | `param_set` | Правит ровно одну строку «param = value unit» (текст + снапшот шаблона), соседние строки нетронуты; единица — из операции/снапшота; параметра нет — `E-PARAM-UNKNOWN` без append |
+| FR-033.8 | Лимиты | 257-я операция и 129-я нода — ошибки уровня вызова (isError), канвас не меняется |
+| FR-033.9 | value-цикл внутри батча | `{ok: false, code: "E-CYCLE"}` с участниками в message; канвас прежний |
+| FR-033.10 | tools/list | 26 инструментов (после интеграции с FR-032); у `graph_apply` схема `operations` (1..=256, тег op с 6 вариантами) — тест tools_list_has_all_with_schemas |

@@ -171,9 +171,9 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 25 инструментов канваса (сигнатуры — план MCP-задачи; FR-005 — node_edit;
-/// FR-025 построчные истоки; FR-029 — адресация портов; FR-032 —
-/// edges_list/edge_get/graph_validate).
+/// 26 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
+/// FR-029 — адресация портов; FR-032 — edges_list/edge_get/graph_validate;
+/// FR-033 — graph_apply).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -352,6 +352,15 @@ const TOOLS: &[ToolSpec] = &[
         description: "Установить центр viewport (x, y) и опционально зум",
         required: &["x", "y"],
         properties: &[("x", NUM), ("y", NUM), ("zoom", NUM)],
+    },
+    ToolSpec {
+        name: "graph_apply",
+        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}. Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, error?}}} — flow = значения всех нод после пересчёта (второй вызов flow_recalc не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч",
+        required: &["operations"],
+        properties: &[(
+            "operations",
+            r#"{"type":"array","minItems":1,"maxItems":256,"items":{"type":"object","required":["op"],"properties":{"op":{"type":"string","enum":["node_create_note","node_create_file","template_instantiate","edge_create","param_set","node_move"]}}}}"#,
+        )],
     },
 ];
 
@@ -875,15 +884,16 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 25 инструментов, у каждого inputSchema с required.
+    /// tools/list: ровно 26 инструментов (FR-032: +3, FR-033: +graph_apply),
+    /// у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
         assert_eq!(
             tools.len(),
-            25,
-            "22 + edges_list + edge_get + graph_validate"
+            26,
+            "22 + edges_list + edge_get + graph_validate (FR-032) + graph_apply (FR-033)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
@@ -913,6 +923,7 @@ mod tests {
             "template_instantiate",
             "viewport_get",
             "viewport_set",
+            "graph_apply",
         ] {
             assert!(names.contains(&expected), "нет инструмента {expected}");
         }
@@ -962,6 +973,28 @@ mod tests {
             by_name("graph_validate")["inputSchema"]["required"],
             json!([])
         );
+        // FR-033: схема graph_apply — операции с тегом op, лимиты массива
+        let ops = &by_name("graph_apply")["inputSchema"]["properties"]["operations"];
+        assert_eq!(ops["type"], "array");
+        assert_eq!(ops["minItems"], 1);
+        assert_eq!(ops["maxItems"], 256);
+        assert_eq!(ops["items"]["required"], json!(["op"]));
+        let tags: Vec<&str> = ops["items"]["properties"]["op"]["enum"]
+            .as_array()
+            .expect("enum op")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        for expected in [
+            "node_create_note",
+            "node_create_file",
+            "template_instantiate",
+            "edge_create",
+            "param_set",
+            "node_move",
+        ] {
+            assert!(tags.contains(&expected), "нет операции {expected}");
+        }
     }
 
     /// Автомат: initialize → initialized → tools/list → tools/call форвардит
@@ -993,7 +1026,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            25
+            26
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

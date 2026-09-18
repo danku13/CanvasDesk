@@ -124,6 +124,45 @@
   коммит — см. git log (feat(core,mcp,app): FR-032 v1).
 ---
 
+## 2026-09-18 — FR-033 graph_apply: атомарная батч-композиция (CP3, ветка feature/fr-033-graph-apply)
+
+- **Задача (владелец):** по `docs/plans/product-roadmap.md` реализовать CP3
+  (FR-033, волна A3) — параллельно: агент_1 ведёт CP0+CP1 (волна 0 + FR-029),
+  агент_2 — CP2 (FR-032). Работа в отдельной ветке для бесконфликтной сборки.
+- **Сделано (код):**
+  - `canvas-mcp`: инструмент `graph_apply` (TOOLS 22 → 23 на ветке) — схема
+    `operations: [Op; 1..=256]`, тег op с 6 вариантами; лимиты в описании;
+  - `canvas-app`: `mcp_graph_apply` (транзакция: клон → apply → commit;
+    ошибка операции → `{ok:false, op_index, code, message}`, канвас байт-в-байт
+    прежний; успех → ровно один undo-шаг + spatial + dirty + recompute_flow),
+    `batch_apply_op` (6 операций: node_create_note/file, template_instantiate,
+    edge_create с портами FR-029 и валидацией имён/циклов, param_set с правкой
+    ровно одной строки и синхронизацией снапшота шаблона, node_move),
+    ref-резолв (дубликат ref — E-BAD-OP), `mcp_flow_v2` (flow_recalc v2:
+    value/unit/outputs/lines/error);
+  - `canvas-core` (минимальный контур FR-029 — необходим гейту CP3, при
+    интеграции уступает полной реализации CP1): `Edge.to_param`/`from_output`
+    (мягкое чтение, round-trip, сброс при перепривязке истока), `OutputSpec`/
+    `OutputSource` в манифесте и снапшоте `TemplateRef`, проливание `to_param`
+    поверх локальных параметров («последнее ребро побеждает»), резолв
+    `from_output` (Line/Expr) в `propagate_with_lines`, `FlowSolutions.named`;
+  - `assets/templates/com.canvasdesk.cdn`: именованный выход `origin` (демо
+    мини-эталона; остальные манифесты — за полной реализацией FR-029).
+- **Тесты:** +14 (7 `graph_apply_*` в main.rs: oracle e2e ±1 % по эталону №1
+  ADR-0006 — 208.33 rps / 34.29 ms / 20.83 rps / 3.20 ms, атомарность,
+  ref-правила, param_set, лимиты, undo/redo, цикл; 7 flow-тестов проливания;
+  2 round-trip порта в model.rs). Гейты зелёные: fmt, clippy -D warnings,
+  test --workspace — 988 тестов, 0 провалов.
+- **Документация:** SPEC §13 «MCP-инструменты канваса» (graph_apply: схема,
+  лимиты, транзакция, коды ошибок) + счётчик 23 в §4; ACCEPTANCE §21
+  (FR-033.1–FR-033.10); fr-033 — статус «реализовано (v1)» + Changelog;
+  index-cr-fr — статус.
+- **Коммит:** ветка `feature/fr-033-graph-apply` (не main — параллельные
+  CP0/CP1/CP2 других агентов; порядок интеграции: CP0/CP1 → CP2 → CP3,
+  контур FR-029 в этой ветке уступить ветке CP1).
+
+---
+
 ## 2026-09-18 — Критический путь: детализация + FR-032/FR-033 (разметка FR/CR)
 
 - **Задача (владелец):** прописать критический путь с обоснованием, разметить
@@ -198,3 +237,24 @@
   документов `docs/change-requests/` (обновления статусов «выполнено» = код в
   main + автотесты зелёные). Ручная приёмка по `docs/ACCEPTANCE.md` §13–14 —
   отдельный процесс владельца.
+
+## 2026-09-18 — Интеграция: merge feature/fr-033-graph-apply → main (все CP слиты)
+
+- **Операция:** слияние CP3 (FR-033 graph_apply) в main поверх интегрированных
+  CP0 (лицензионная гигиена), CP2 (FR-032) и CP1 волны A (FR-029); ветки
+  fr-027 и fr-032 были уже полностью слиты ранее.
+- **Разрешение конфликтов (10 файлов, ~37 гунков):** во всех зонах FR-029
+  (model.rs, templates.rs, flow.rs, edgegeom.rs) приоритет полной реализации
+  CP1 из main — минимальный контур ветки CP3 уступил по её же оговорке;
+  тесты main.rs сохранены ОБЕ стороны (CP1 Instagram MVP + CP3 graph_apply,
+  коллизий имён нет); canvas-mcp — счётчик инструментов 22 → 26, ассерты
+  FR-032 и FR-033 объединены; манифест cdn — схема CP1 (плоская), выход
+  `origin_rps`, дубль ключа `outputs` от автослияния устранён; дубли полей
+  в литералах (templates.rs, main.rs, json_canvas_io.rs) вычищены; вызов
+  `inbound_slots_with_lines` приведён к 4-арговой сигнатуре CP1.
+- **Адаптация CP3:** oracle-тест graph_apply переведён на выход `origin_rps`
+  (контракт манифеста CP1) — значения оракула не изменились (20.8333/41.6667
+  rps, ±1 %); SPEC §13 и счётчики (26) актуализированы, ACCEPTANCE §22,
+  index-cr-fr: fr-033 «реализовано (v1)».
+- **Гейты:** cargo fmt — ок; clippy --workspace --all-targets -D warnings —
+  ок; cargo test --workspace — 1007 passed, 0 failed.
