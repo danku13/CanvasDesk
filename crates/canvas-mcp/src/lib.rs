@@ -10,6 +10,12 @@
 //! пакетом короткой попыткой переподключается к pipe (приложение могло
 //! подняться позже). Поддержаны batch-запросы (JSON-RPC массив) и протокол
 //! 2025-06-18.
+//!
+//! Чистота stdout (ADR-0010/FR-035): stdout процесса — ТОЛЬКО newline-
+//! delimited JSON-RPC. Собственный код моста молчалив по stdout, а
+//! автоспавн поднимает ребёнка с `stdin/stdout/stderr = Stdio::null()` —
+//! чужие логи (ANSI-tracing GUI) физически не могут попасть в протокол;
+//! диагностика моста — в stderr.
 
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -638,9 +644,48 @@ fn refresh_transport(transport: &mut Option<PipeTransport>) {
     }
 }
 
+/// FR-035/ADR-0010: команда автоспавна с изолированным stdio. В Rust
+/// `Command::spawn()` без явных хэндлов НАСЛЕДУЕТ stdin/stdout/stderr
+/// родителя — спавненный GUI писал ANSI-tracing-логи прямо в JSON-RPC-канал
+/// моста («Invalid JSON» у клиента). Null-хэндлы отсекают класс целиком:
+/// чужой процесс физически не может писать в stdout протокола или красть
+/// stdin. Поведенческая проверка — юнит-тестом (ребёнок репортит свои fd).
+#[cfg(any(windows, test))]
+fn spawn_service_command(exe: &std::path::Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd
+}
+
+/// FR-035/ADR-0010: ориентация автоспавна. Единый бинарь `canvasdesk`
+/// без аргументов — GUI-режим того же exe (FR-008). Автономный мост
+/// `canvasdesk-mcp` спавнить СЕБЯ не может (двойник конкурирует за stdin
+/// и рекурсивно плодит процессы) — вместо него ищем GUI-бинарь
+/// `canvasdesk.exe` рядом (один каталог дистрибутива); нет соседа —
+/// спавн невозможен (None → offline-режим ADR-0009).
+#[cfg(any(windows, test))]
+fn autosprawn_target(current_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let stem = current_exe
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())?;
+    if stem == "canvasdesk-mcp" {
+        let sibling = current_exe.with_file_name("canvasdesk.exe");
+        if sibling.exists() {
+            Some(sibling)
+        } else {
+            None
+        }
+    } else {
+        Some(current_exe.to_path_buf())
+    }
+}
+
 /// Подключение к приложению с автостартом (FR-008): сервис уже работает —
-/// короткое ожидание; нет — спавним себя (GUI-режим) и ждём подъёма pipe.
-/// Не удалось — None: мост продолжит работу offline (ADR-0009/FR-034).
+/// короткое ожидание; нет — спавним сервис (см. autosprawn_target) и ждём
+/// подъёма pipe. Не удалось — None: мост продолжит работу offline
+/// (ADR-0009/FR-034).
 #[cfg(windows)]
 fn connect_app(no_spawn: bool) -> Option<PipeTransport> {
     if let Some(transport) = try_connect(CONNECT_WAIT_MS) {
@@ -650,7 +695,13 @@ fn connect_app(no_spawn: bool) -> Option<PipeTransport> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
-    match std::process::Command::new(exe).spawn() {
+    let Some(target) = autosprawn_target(&exe) else {
+        eprintln!(
+            "автостарт недоступен: рядом с canvasdesk-mcp нет canvasdesk.exe — мост работает offline"
+        );
+        return None;
+    };
+    match spawn_service_command(&target).spawn() {
         Ok(child) => {
             // Child дропается: процесс сервиса живёт своей жизнью, зомби на
             // Windows не образуется, убийство при выходе посредника не нужно
@@ -1392,5 +1443,78 @@ mod tests {
         };
         let parsed: Value = serde_json::from_str(&reply).expect("ответ парсится");
         assert_eq!(parsed["error"]["code"], -32700);
+    }
+
+    /// FR-035/ADR-0010: автоспавн изолирует stdio — на всех трёх стандартных
+    /// дескрипторах ребёнка /dev/null, никакого наследования stdout/stderr
+    /// моста (корень «Invalid JSON \x1b[2m…» у hermes) и кражи stdin.
+    /// Поведенческая проверка: ребёнок сам читает свои fd и репортит в файл
+    /// (unix; на Windows тот же код применяет Stdio::null).
+    #[cfg(unix)]
+    #[test]
+    fn spawn_service_command_isolates_stdio() {
+        let dir = std::env::temp_dir().join(format!(
+            "canvasdesk_mcp_fr035_stdio_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let report = dir.join("fds.txt");
+        // ВАЖНО: тип fd фиксируем ДО любого редиректа (redirect printf на
+        // файл сам бы переключил fd1). /dev/null — символьное устройство,
+        // файл/pipe — нет: «ccc» = все три дескриптора /dev/null.
+        let script = format!(
+            "[ -c /dev/fd/0 ] && a=c || a=x; [ -c /dev/fd/1 ] && b=c || b=x; \
+             [ -c /dev/fd/2 ] && d=c || d=x; printf '%s%s%s\\n' \"$a\" \"$b\" \"$d\" > '{}'",
+            report.display()
+        );
+        let mut cmd = spawn_service_command(std::path::Path::new("sh"));
+        cmd.arg("-c").arg(&script);
+        let status = cmd.status().expect("sh доступен");
+        assert!(status.success(), "ребёнок отчитался без ошибок");
+        let text = std::fs::read_to_string(&report).expect("отчёт ребёнка");
+        assert_eq!(
+            text.trim(),
+            "ccc",
+            "stdin/stdout/stderr — /dev/null: {text:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FR-035/ADR-0010: ориентация автоспавна. Автономный мост
+    /// `canvasdesk-mcp(.exe)` спавнит GUI-соседа `canvasdesk.exe`, а не сам
+    /// себя (рекурсия двойников); соседа нет → None (offline). Единый
+    /// бинарь `canvasdesk(.exe)` спавнит сам себя (GUI-режим без аргументов).
+    #[test]
+    fn autosprawn_target_prefers_sibling_gui_for_standalone_bridge() {
+        let dir = std::env::temp_dir().join(format!(
+            "canvasdesk_mcp_fr035_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let bridge = dir.join("canvasdesk-mcp.exe");
+        let gui = dir.join("canvasdesk.exe");
+        std::fs::write(&bridge, b"").expect("файл моста");
+
+        // GUI-соседа нет → автоспавн невозможен (offline-режим ADR-0009)
+        assert_eq!(autosprawn_target(&bridge), None);
+        // Сосед появился → спавним ЕГО, не мост
+        std::fs::write(&gui, b"").expect("файл GUI");
+        assert_eq!(autosprawn_target(&bridge), Some(gui.clone()));
+        // Единый бинарь — сам себе GUI-цель
+        assert_eq!(autosprawn_target(&gui), Some(gui.clone()));
+        // Регистронезависимый стем (Windows-дистрибутивы бывают CAPS)
+        let caps = dir.join("CANVASDESK-MCP.EXE");
+        std::fs::write(&caps, b"").expect("файл CAPS");
+        assert_eq!(autosprawn_target(&caps), Some(gui.clone()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

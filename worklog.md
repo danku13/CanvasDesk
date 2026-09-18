@@ -346,3 +346,53 @@
   FR-035.
 - **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
   cargo test --workspace — 1010 passed / 0 failed.
+
+## 2026-09-18 — FR-035: чистота stdout MCP-потока (ADR-0010) — «Invalid JSON \x1b[2m…» у hermes устранён
+
+- **Триггер:** владелец прислал лог hermes после FR-034: сервер регистрируется
+  (parked → connected, инструменты видны), но вызовы падают —
+  `Invalid JSON: expected value at line 1 column 1,
+  input_value='\x1b[2m2026-09-18T11:16:…canvasdesk\\widgets"'`.
+- **Диагноз (улика разобрана, цепочка подтверждена кодом):** `\x1b[2m` — ANSI
+  escape формата tracing_subscriber; в stdout моста попадали логи
+  автоспавненного GUI. 1) `connect_app` спавнил `Command::new(exe).spawn()`
+  без Stdio — в Rust это НАСЛЕДОВАНИЕ stdin/stdout/stderr родителя;
+  2) GUI инициализировал `tracing_subscriber::fmt()` — writer по умолчанию
+  stdout, ANSI включён; 3) старт GUI (версия, реестр виджетов
+  `…\canvasdesk\widgets`, wgpu) заливал цветной текст прямо в JSON-RPC-канал;
+  4) hermes парсит stdout как newline-delimited JSON → каждая лог-строка =
+  Invalid JSON → вызов падает → сессия парковится/возрождается (в логе два
+  «revived» за 12 с), цикл. Доп. дефект: автономный `canvasdesk-mcp.exe`
+  спавнил current_exe = САМ СЕБЯ (двойник крадёт stdin, рекурсивный спавн).
+- **ADR-0010** (docs/adr/adr-0010-mcp-stdio-purity.md, «принято»): вариант C —
+  изоляция stdio автоспавна + ориентация спавна + stderr-логи GUI
+  (defense-in-depth); отклонены: фильтрация мусора в мосту (лечение симптома),
+  отказ от автоспавна (регрессия FR-008), только stderr без изоляции
+  (GUI может писать в stdout не через tracing).
+- **Реализация canvas-mcp:** `spawn_service_command` — Stdio::null() на все
+  три хэндла; `autosprawn_target` — единый `canvasdesk` спавнит сам себя
+  (GUI-режим), автономный `canvasdesk-mcp` ищет соседа `canvasdesk.exe` в
+  своём каталоге, нет соседа → offline (ADR-0009); `connect_app` переведён на
+  хелперы. `#[cfg(any(windows, test))]` — без dead_code на Linux.
+- **Реализация canvas-app:** tracing_subscriber → `.with_writer(io::stderr)`
+  + `.with_ansi(io::IsTerminal::is_terminal(&stderr()))`; актуализирован
+  комментарий перехвата подкоманды `mcp`.
+- **Тесты (canvas-mcp 15):** `spawn_service_command_isolates_stdio` —
+  поведенческий (unix): ребёнок репортит `[ -c /dev/fd/N ]` по трём fd в файл
+  до любого редиректа → «ccc» (/dev/null); `autosprawn_target_…` — мост без
+  соседа → None, с соседом → Some(gui), единый бинарь → сам себя, CAPS-стем.
+  Нюанс: `Command::get_stdin/get_stdout/get_stderr` НЕ стабилизированы —
+  первый вариант теста заменён поведенческим.
+- **Probe реальной сессии** (/home/z/my-project/scripts/
+  mcp_stdio_purity_probe.sh): initialize (эхо 2025-06-18) + batch + tools/call
+  offline + cancelled + мусор; каждая строка stdout — валидный JSON
+  (bad=0), контракт FR-034 сохранён. PROBE PASS.
+- **Инцидент гейтов:** первый полный `cargo test --workspace` упал
+  `ld: signal 7 (Bus error)` на линковке thumbs_smoke — диск 100%
+  (target/ = 8.4G). cargo clean (−9 ГБ) → прогон заново.
+- **Доки:** SPEC §13 «Чистота stdout (FR-035, ADR-0010)»; BYOK §3 — гарантия
+  чистоты канала; ACCEPTANCE §24 (7 пунктов); index-cr-fr — строка FR-035,
+  следующий номер FR-036; adr/README.md — добавлены ADR-0009 (пропуск
+  прошлой итерации) и ADR-0010.
+- **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
+  cargo test --workspace — 1012 passed / 0 failed (+2 к FR-034).

@@ -16,6 +16,8 @@
 | [adr-0006](adr-0006-reference-scenario-catalog.md) | Каталог эталонных сценариев №1–№5 — system design, защита бюджета, P&L, value chain, unit economics | принято | 2026-09-17 | CR-013, FR-016/017/029, ADR-0002/0004/0005 |
 | [adr-0007](adr-0007-pivot-math-modeling.md) | Pivot: CanvasDesk — визуальная система математического моделирования (+ реестр разночтений аудита документации) | принято | 2026-09-17 | CR-013, FR-013…031, ADR-0001…0006; README, AGENTS, SPEC, CONTEXT, user-docs |
 | [adr-0008](adr-0008-math-computing-stack.md) | Вычислительный стек математического моделирования и лицензионная политика (B2B / реестр РФ) | принято | 2026-09-17 (принято 2026-09-18) | ADR-0002/0004/0006/0007, CR-013, FR-015/017/027/029; `docs/architecture/math-computing-stack.md`; `docs/plans/product-roadmap.md` |
+| [adr-0009](adr-0009-mcp-transport-compatibility.md) | Транспортная совместимость MCP — протокол 2025-06-18, batch-запросы, отказоустойчивый handshake | принято | 2026-09-18 | ADR-0004, FR-034, FR-008; `crates/canvas-mcp`, SPEC §13, BYOK §3 |
+| [adr-0010](adr-0010-mcp-stdio-purity.md) | Чистота stdout MCP-потока — изоляция stdio автоспавна и перевод диагностики в stderr | принято | 2026-09-18 | ADR-0009, FR-035, FR-008; `crates/canvas-mcp`, `crates/canvas-app`, SPEC §13 |
 
 ## Как читать по задаче «агентная композиция с проливанием значений»
 

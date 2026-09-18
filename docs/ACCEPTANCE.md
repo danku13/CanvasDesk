@@ -551,3 +551,19 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-034.6 | `tools/call` без приложения / с разорванным pipe | `isError: true` «CanvasDesk не запущен…»; перед следующим пакетом — reconnect (500 мс, без автоспавна) |
 | FR-034.7 | Зондирование read-only методов | `resources/list`/`prompts/list`/`resources/templates/list` → пустые списки; `logging/setLevel` → `{}`; `notifications/cancelled` → тишина (тест read_only_stubs_and_cancelled) |
 | FR-034.8 | Регресс стеков | pipe round-trip тесты canvas-shell зелёные; `cargo test --workspace` — 0 failed; конфиги `docs/BYOK.md` (`canvasdesk.exe mcp`) работают без изменений |
+
+## 24. Чек-лист FR-035 (2026-09-18): чистота stdout MCP-потока (ADR-0010)
+
+Контекст: после FR-034 hermes подключался, но вызовы падали — в stdout
+моста попадали ANSI-логи tracing автоспавненного GUI
+(`Invalid JSON … \x1b[2m2026-09-18T…canvasdesk\widgets`).
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-035.1 | Ребёнок автоспавна и его stdio | все три дескриптора — /dev/null (`spawn_service_command`, тест spawn_service_command_isolates_stdio: ребёнок репортит `[ -c /dev/fd/N ]` по всем fd) |
+| FR-035.2 | Автономный мост `canvasdesk-mcp.exe` без GUI-соседа | автоспавн невозможен, offline-режим ADR-0009 (тест autosprawn_target_prefers_sibling_gui_for_standalone_bridge → None) |
+| FR-035.3 | Автономный мост с соседом `canvasdesk.exe` | спавнится GUI-сосед, а не сам мост (тот же тест → Some(сосед)); рекурсия двойников исключена |
+| FR-035.4 | Единый бинарь `canvasdesk mcp` без приложения | спавнится сам exe без аргументов (GUI-режим, FR-008) с изолированным stdio |
+| FR-035.5 | Логи GUI | `tracing_subscriber` пишет в stderr; ANSI — только на живом терминале (`IsTerminal`); stdout GUI не претендует на протокол |
+| FR-035.6 | Прогон реальной сессии (probe) | initialize/batch/tools-call/мусор; каждая строка stdout — валидный JSON (скрипт `mcp_stdio_purity_probe.sh` — PASS, bad=0) |
+| FR-035.7 | Регресс | `cargo test --workspace` — 0 failed (1012 passed); тесты FR-034 не изменены |
