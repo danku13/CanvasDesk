@@ -258,3 +258,22 @@
   index-cr-fr: fr-033 «реализовано (v1)».
 - **Гейты:** cargo fmt — ок; clippy --workspace --all-targets -D warnings —
   ок; cargo test --workspace — 1007 passed, 0 failed.
+
+## 2026-09-18 — Стабилизация CI: таймаут search-тестов 2с → 10с (флейк windows-latest)
+
+- **Диагноз:** merge-коммит f305972 (CP3) уронил CI на windows-latest — все 9
+  search-тестов canvas-shell упали по таймауту «событие поиска не пришло:
+  Timeout» (search.rs:412, RECV=2с), при зелёных macOS/Linux и зелёных
+  watcher-тестах того же бинарника (порог первого события — 5с). Тестовый
+  бинарник canvas-shell между зелёным 9fc11f3 и красным f305972 идентичен
+  (CP1/CP3 не трогали canvas-shell и Cargo-манифесты) — регрессии нет,
+  чистый флейк: медленный раннер отдаёт событие позже 2с. CI на ветку CP3
+  не гонялся (мерж пушем в main, без PR) — потому и всплыл только на main.
+- **Фикс:** RECV в тестах search.rs 2с → 10с — выше порога watcher (5с) с
+  запасом на Windows-раннеры (параллельные тесты, сканирование свежих
+  cache.db). Таймаут теста — защита от зависания, не гейт производительности.
+- **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
+  cargo test --workspace — 1007 passed / 0 failed (порог merge-коммита).
+- **Открытые пункты:** флейк-политика «сначала зелёный main»: слияния CP
+  в main делать через PR (ci.yml гоняет гейты на pull_request) либо
+  локально прогонять полный гейт перед пушем в main.
