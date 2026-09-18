@@ -290,7 +290,7 @@ L — три-пять дней.
 
 | ID | Объём | Задача и критерий приёмки |
 |---|---|---|
-| W0 | S | **Каркас плана.** Ветка `wasm-port`; этот документ в `docs/plans/wasm-port.md`; CI-гейт `wasm-check` на ubuntu: `cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets`. Приёмка: гейт зелёный на каждый пуш; нативные гейты не задеты |
+| W0 | S | **Каркас плана.** Ветка `wasm-port`; этот документ в `docs/plans/wasm-port.md`; CI-гейт `wasm-check` на ubuntu: `cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets`. Приёмка: гейт зелёный на каждый пуш; нативные гейты не задеты. **Выполнено 2026-09-18 (FR-036, ADR-0011):** CI-джоба `wasm-check` в ci.yml + локальный гейт `scripts/wasm_gate.sh` (см. примечание после таблицы) |
 | W1 | S | **Время.** Миграция на `web_time::Instant` (alias-тип в core, чтобы натив не заметил подмены): FrameMeter, DoubleClick, debounce-таймеры. Приёмка: wasm-check зелёный; нативные тесты без регресс; после W4 первый кадр не паникует |
 | W2 | M | **Вынос App в lib.** `App`/`SceneState`/обработчики событий из main.rs → `canvas_app::app` (чистое перемещение, zero behavior change); main.rs — тонкая нативная обёртка. Приёмка: cargo build/test нативно зелёные; diff — перемещения кода |
 | W3 | M | **Трейты сервисов.** `CanvasStorage`, `ClipboardBackend`, `WatchBackend` (+Noop), `SearchBackend` (+MemSearch); инъекция в `App::new`; нативные реализации = сегодняшнее поведение. Приёмка: натив без регресс; трейты покрыты тестами на заглушках (паттерн NoopThumbnailProvider) |
@@ -307,6 +307,35 @@ L — три-пять дней.
 **Суммарно волна 1: ~2–4 недели** сфокусированной работы одного
 разработчика (совпадает с экспресс-оценкой анализа от 2026-09-16: ядро
 готово на 100%, работа — в обвязке и платформенном слое).
+
+> **Примечание 2026-09-18 (FR-036, ADR-0011) — W0 реализован + расширение
+> тест-раннером.** Приказ владельца «распланировать сборку wasm и реализовать
+> сборку для повышения автономности в тестировании» дал ядру две ступени сверх
+> W0: (1) локальный гейт `scripts/wasm_gate.sh` — check (ступень 1) + артефакт
+> rlib ядра (ступень 2) + **исполнение 301 теста `canvas-core` в wasmtime**
+> под `wasm32-wasip1` (ступень 3, runner в `.cargo/config.toml`; wasip1 —
+> служебный тестовый таргет, продуктовый браузерный — прежний
+> `wasm32-unknown-unknown`); (2) эмпирически найдены и устранены паники
+> `std::env::temp_dir`/`std::process::id` на wasm (тестовая песочница
+> `test_scratch_root` — единственное `cfg(target_arch)` в core, только в
+> `#[cfg(test)]`, исключение зафиксировано в ADR-0011). Волны W1–W12 не
+> затронуты; CI — только ступень 1 (джоба `wasm-check`), исполнение в
+> рантайме — локальная ступень гейта.
+>
+> **Примечание 2026-09-18 (FR-037, ADR-0012 — предложено) — MCP-слой под
+> wasm: план.** Приказ владельца «спланировать реализацию MCP для WASM,
+> чтобы можно было проверять не только UI, но и реализацию MCP». План
+> (`docs/change-requests/fr-037-mcp-wasm-verification.md`): вынос
+> SceneState + `mcp_dispatch` (27 инструментов) из `main.rs` в
+> платформенно-нейтральный крейт `canvas-scene` (модельный слой — ядро
+> задачи **W2**: после его исполнения W2 сужается до выноса App-обёртки);
+> `run_stdio_with_transport` в `canvas-mcp` (транспорт-агностика);
+> лист-крейт `canvas-mcp-headless` (bin для wasmtime/wasip1) — серверная
+> сторона будущего **MCP WebSocket-моста волны 2 (§9)**: браузерный мост
+> обернёт ту же HeadlessSession. Гейт: `scripts/mcp_wasm_gate.sh` —
+> реальная MCP-сессия в wasmtime (initialize → tools/list → graph_apply
+> эталона → oracle ±1%). Реализация не начата; волны W1–W12 остаются в
+> прежних границах.
 
 ## 7. Риски и митигации
 
@@ -347,7 +376,9 @@ L — три-пять дней.
 - **iframe-live виджеты** — пост-стабилизация; контракт bridge
   сохраняется (§5).
 - **WebGL2-фолбэк** (wgpu feature `webgl`) + таргетирование Firefox/Safari.
-- **MCP WebSocket-мост** к локальному canvasdesk-сервису.
+- **MCP WebSocket-мост** к локальному canvasdesk-сервису (серверная
+  сторона — HeadlessSession из FR-037/ADR-0012: мост обернёт тот же
+  in-process слой инструментов, что верифицируется в wasmtime).
 - **PWA/оффлайн-манифест**, установка приложения браузером.
 - **Воркер-декод тамбнейлов** (OffscreenCanvas + wasm в worker) — убрать
   просадки на больших JPEG.

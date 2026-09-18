@@ -404,6 +404,7 @@ pub mod ui {
         ("Ctrl+V", "вставить ноды"),
         ("Ctrl+D", "дублировать ноды"),
         ("Ctrl+G", "сгруппировать выделенное"),
+        ("Ctrl+B", "индикаторы узких мест"),
         ("Ctrl+клик", "добавить к выделению"),
         ("ЛКМ + drag", "рамка выделения"),
         ("ЛКМ от порта", "протянуть связь"),
@@ -993,6 +994,10 @@ pub mod ui {
         /// встройка активна; выбор снимает встройку (detach + восстановление
         /// иконок + очистка состояния монитора).
         DesktopMode,
+        /// FR-016 (CP5): «Узкие места (Ctrl+B)» — переключатель оверлея
+        /// анализа: цветная рамка/бейджи по ρ и W из посчитанного потока
+        /// (галочка — оверлей включён).
+        BottleneckOverlay,
         /// FR-017 (CP6): «What-if режим» — переключатель what-if сценариев
         /// (нижний бар; вход также — Ctrl+Shift+I и пилюля). Галочка ✓ —
         /// режим активен.
@@ -1000,25 +1005,28 @@ pub mod ui {
     }
 
     /// Меню пустого канваса.
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 6] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 7] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
         CanvasMenuItem::Widgets,
         CanvasMenuItem::DesktopMode,
+        CanvasMenuItem::BottleneckOverlay,
         CanvasMenuItem::WhatIf,
     ];
 
     /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
     /// фокуса, `hotkeys_open` — состояние оверлея хоткеев, `desktop_on` —
-    /// состояние desktop-встройки, `whatif_on` — what-if режим: для
-    /// пунктов-переключателей рисуется ✓-галочка (FR-004.1 — Hotkeys,
-    /// T15 — DesktopMode, FR-017 — WhatIf).
+    /// состояние desktop-встройки, `bottleneck_on` — оверлей узких мест
+    /// (FR-016), `whatif_on` — what-if режим: для пунктов-переключателей
+    /// рисуется ✓-галочка (FR-004.1 — Hotkeys, T15 — DesktopMode,
+    /// FR-016 — BottleneckOverlay, FR-017 — WhatIf).
     pub fn canvas_menu_label(
         item: CanvasMenuItem,
         focus_on: bool,
         hotkeys_open: bool,
         desktop_on: bool,
+        bottleneck_on: bool,
         whatif_on: bool,
     ) -> String {
         match item {
@@ -1034,6 +1042,10 @@ pub mod ui {
             CanvasMenuItem::DesktopMode => {
                 format!("{}Режим десктопа", if desktop_on { "✓ " } else { "" })
             }
+            CanvasMenuItem::BottleneckOverlay => format!(
+                "{}Узкие места (Ctrl+B)",
+                if bottleneck_on { "✓ " } else { "" }
+            ),
             CanvasMenuItem::WhatIf => {
                 format!(
                     "{}What-if режим (Ctrl+Shift+I)",
@@ -2014,55 +2026,65 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 6);
+            assert_eq!(n, 7);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
             assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false, false, false, false),
                 "Виджеты ▸…"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false, false, false, false),
                 "Создать группу"
             );
             // T23: второй пункт — переключатель фокуса с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false, false, false, false),
                 "✓ Фокус на связях"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false, false, false, false),
                 "Фокус на связях"
             );
             // FR-004.1: третий пункт — переключатель оверлея хоткеев
             assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true, false, false, false),
                 "✓ Горячие клавиши (F1)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false, false, false, false),
                 "Горячие клавиши (F1)"
             );
             // T15: пятый пункт — переключатель desktop-режима с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, true, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, true, false, false),
                 "✓ Режим десктопа"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, false, false, false),
                 "Режим десктопа"
             );
-            // FR-017: шестой пункт — переключатель what-if режима
-            assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::WhatIf);
+            // FR-016 (CP5): шестой пункт — переключатель оверлея узких мест
+            assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::BottleneckOverlay);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, true),
+                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, true, false),
+                "✓ Узкие места (Ctrl+B)"
+            );
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, false, false),
+                "Узкие места (Ctrl+B)"
+            );
+            // FR-017: седьмой пункт — переключатель what-if режима
+            assert_eq!(CANVAS_MENU_ITEMS[6], CanvasMenuItem::WhatIf);
+            assert_eq!(
+                canvas_menu_label(CANVAS_MENU_ITEMS[6], false, false, false, false, true),
                 "✓ What-if режим (Ctrl+Shift+I)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, false),
+                canvas_menu_label(CANVAS_MENU_ITEMS[6], false, false, false, false, false),
                 "What-if режим (Ctrl+Shift+I)"
             );
             let y = 50.0 + MENU_PADDING + 3.0;

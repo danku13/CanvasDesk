@@ -37,10 +37,35 @@ fn hit_test_edges_inclusive() {
     assert_eq!(canvas.hit_test([100.0, 100.0]), Some(1));
 }
 
+/// FR-036: корень песочницы для интеграционного теста. Нативно — системный
+/// temp; под wasm32 — относительный каталог (std::env::temp_dir на wasm
+/// паникует). Интеграционный тест не видит #[cfg(test)]-хелперы крейта,
+/// поэтому хелпер локальный (решение — ADR-0011).
+fn scratch_root() -> std::path::PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let dir = std::path::PathBuf::from(".wasi-scratch");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+}
+
 /// Первый сейв — без .bak; второй — .bak содержит предыдущую версию.
 #[test]
 fn save_with_backup_creates_bak() {
-    let dir = std::env::temp_dir().join(format!("canvasdesk-t4-{}", std::process::id()));
+    // FR-036: уникальность через SystemTime, а не process::id() —
+    // std::process::id на wasm32 паникует (как и temp_dir, ADR-0011).
+    let dir = scratch_root().join(format!(
+        "canvasdesk-t4-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
     std::fs::create_dir_all(&dir).expect("tempdir");
     let path = dir.join("scene.canvas");
     let bak = dir.join("scene.canvas.bak");

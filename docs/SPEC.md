@@ -73,6 +73,7 @@
 | Мост виджетов | `postMessage` JSON-RPC (`serde_json`) | Узкий типизированный host API с permissions, без eval |
 | Сериализация конфига | `serde` + `toml` | — |
 | Логирование | `tracing` + `tracing-subscriber` | Диагностика на машинах пользователей |
+| WASM-таргеты (FR-036, ADR-0011) | `wasm32-unknown-unknown` (продуктовый, план M8) + `wasm32-wasip1` (служебный тестовый, wasmtime) | Ядро обязано собираться и исполняться под wasm: гейт `scripts/wasm_gate.sh`, CI `wasm-check` |
 | Упаковка | `cargo-wix` → MSI, Authenticode-подпись | M4 требует доверия системы |
 
 ## 4. Структура workspace
@@ -88,7 +89,7 @@ canvasdesk/
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 35 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-017: whatif_*)
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 36 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks; FR-017: whatif_*)
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
 ├── assets/                  # шрифты, иконки нод, виджеты (widgets/), шаблоны (templates/)
 ├── docs/                    # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
@@ -499,6 +500,25 @@ flow_recalc не нужен.
 | `whatif_deltas` | дельты активного сценария — те же пары «было → стало», что видны на канвасе (инвариант 6) |
 | `whatif_apply` | записать подмены в persisted-строки/params и удалить сценарий; один undo-шаг |
 | `whatif_reset` | сброс подмен активного сценария (runtime) |
+
+### analyze_bottlenecks (FR-016) — узкие места и риск очередей
+
+Схема вызова: `analyze_bottlenecks {}` (без параметров — активный канвас).
+Чтение: пересчёт свежий (как `flow_recalc`), канвас и undo не затрагиваются.
+
+**Ответ:** `{nodes: [{id, severity, utilization?, queue_length?, wait_sec?,
+badge}], thresholds}` — те же флаги, что видит пользователь на канвасе
+(инвариант 4 FR-016: `badge` — строка бейджа канваса, например
+`"OVERLOAD 223% · W: 1.2 s"`). `severity` — `none|warn|critical|overload`;
+`utilization` — ρ (доля 0..1, > 1 при перегрузке); `wait_sec` — W в базовых
+секундах; `thresholds` — пороги дефолта (0.7/0.9, 100 ms/1 s, 1/10).
+
+**Детекция (анализатор `canvas-core/src/analyze.rs`):** значение ноды —
+ошибка `Overload{ρ}` → `overload` (ρ из ошибки); именованный выход
+`utilization` шаблона (13 queue-манифестов) или Percent-значение → пороги
+0.7/0.9; Time-значение (W) → 100 ms/1 s; именованные выходы
+`queue_length`/`wait_time` — точки расширения манифестов. Порядок —
+`canvas.nodes` (детерминизм).
 
 ### Транспорт stdio (FR-034, ADR-0009)
 

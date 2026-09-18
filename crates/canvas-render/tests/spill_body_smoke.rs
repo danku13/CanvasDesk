@@ -80,6 +80,7 @@ fn headless_spilled_param_row_draws() {
             editing_line_results: None,
             param_spills: &spills,
             whatif_nodes: &Default::default(),
+            analysis_badges: &[],
         },
     )
     .expect("prepare текста");

@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.http-endpoint",
   "name_en": "HTTP Endpoint",
   "name_ru": "HTTP-эндпоинт",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "network",
   "description": "HTTP-эндпоинт с пулом соединений, keepalive — справочный.",
   "description_en": "HTTP endpoint with a connection pool, keepalive informational.",
@@ -37,5 +37,12 @@
   ],
   "expr": "mm1($rps, 1 req × $max_connections / $timeout)",
   "color": "#7ED321",
-  "icon": "http"
+  "icon": "http",
+  "outputs": [
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($rps, 1 req × $max_connections / $timeout)"
+    }
+  ]
 }

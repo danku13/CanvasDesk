@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.tcp-lb",
   "name_en": "TCP Load Balancer",
   "name_ru": "TCP-балансировщик",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "category": "network",
   "description": "L4-балансировщик TCP-соединений по серверам.",
   "description_en": "L4 balancer distributing TCP connections across servers.",
@@ -73,6 +73,11 @@
       "name": "out_media",
       "unit": "rps",
       "expr": "$connections_per_sec × $media_share"
+    },
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($connections_per_sec, $server_rate, $servers)"
     }
   ]
 }

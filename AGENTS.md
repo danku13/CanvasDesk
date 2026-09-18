@@ -183,6 +183,16 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --check
 ```
 
+WASM-гейт (FR-036, ADR-0011): ядро (canvas-core/canvas-render/canvas-widgets)
+обязано собираться под wasm32-unknown-unknown, а canvas-core — исполняться в
+wasm-рантайме; CI-джоба `wasm-check` проверяет компиляцию на каждый пуш,
+локальный гейт — обе части:
+
+```
+scripts/wasm_gate.sh          # check wasm-таргета + rlib ядра + тесты canvas-core под wasip1 (wasmtime)
+scripts/wasm_gate.sh --check  # только компиляция — без wasmtime (эквивалент CI-джобы)
+```
+
 Требования к тестам:
 - Юнит-тесты для `canvas-core` обязательны (трансформации камеры round-trip, round-trip
   `.canvas` без потерь неизвестных полей, парсинг примеров с jsoncanvas.org).

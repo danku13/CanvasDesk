@@ -188,6 +188,12 @@ pub struct Settings {
     /// счётчик не трогает. Значения клампятся в `[0, 3]` при загрузке
     /// (паттерн `port_zone_px` — ручные правки не роняют приложение).
     pub onboarding_defers: u8,
+    /// FR-016 (индикаторы узких мест, CP5): оверлей анализа включён —
+    /// рамка/бейджи по ρ и W из посчитанного потока. Дефолт — выкл;
+    /// авто-включается один раз за запуск при первом появлении риска
+    /// (Warn и выше) с тостом. Тогл: Ctrl+B, пункт меню канваса, панель
+    /// настроек. Рендер читает флаг на кадре (как `line_ports`).
+    pub bottleneck_overlay: bool,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -235,6 +241,8 @@ impl Default for Settings {
             line_ports: false,
             onboarding_done: false,
             onboarding_defers: 0,
+            // FR-016: оверлей узких мест по умолчанию выключен.
+            bottleneck_overlay: false,
         }
     }
 }
@@ -318,8 +326,9 @@ mod tests {
             line_ports: true,
             onboarding_done: true,
             onboarding_defers: 2,
+            bottleneck_overlay: true,
         };
-        let dir = std::env::temp_dir().join("canvasdesk-settings-test");
+        let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
         settings.save(&path).expect("сохранение");
         let (loaded, warn) = Settings::load(&path);
@@ -369,7 +378,7 @@ mod tests {
     /// Отсутствующий/битый файл — дефолты, без паники; битый — с предупреждением.
     #[test]
     fn broken_or_missing_gives_defaults() {
-        let dir = std::env::temp_dir().join("canvasdesk-settings-broken");
+        let dir = crate::test_scratch_root().join("canvasdesk-settings-broken"); // FR-036
         let _ = std::fs::create_dir_all(&dir);
         let missing = dir.join("nope.toml");
         let (settings, warn) = Settings::load(&missing);
@@ -506,6 +515,7 @@ mod tests {
         assert!(text.contains("line_ports"), "{text}");
         assert!(text.contains("onboarding_done"), "{text}");
         assert!(text.contains("onboarding_defers"), "{text}");
+        assert!(text.contains("bottleneck_overlay"), "{text}");
     }
 
     /// FR-025: флаг построчных точек выхода — дефолт false (старые конфиги
@@ -517,6 +527,18 @@ mod tests {
         assert!(warn.is_none());
         let (settings, warn) = Settings::load_toml_str("line_ports = true\n");
         assert!(settings.line_ports, "флаг читается из конфига");
+        assert!(warn.is_none());
+    }
+
+    /// FR-016 (CP5): флаг оверлея узких мест — дефолт false (старые конфиги
+    /// без поля — прежнее поведение).
+    #[test]
+    fn bottleneck_overlay_defaults_off_and_round_trips() {
+        let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
+        assert!(!settings.bottleneck_overlay, "дефолт — выкл");
+        assert!(warn.is_none());
+        let (settings, warn) = Settings::load_toml_str("bottleneck_overlay = true\n");
+        assert!(settings.bottleneck_overlay, "флаг читается из конфига");
         assert!(warn.is_none());
     }
 }

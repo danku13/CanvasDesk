@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.queue-kafka",
   "name_en": "Queue (Kafka)",
   "name_ru": "Очередь (Kafka)",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "category": "backend",
   "description": "Очередь: партиция как канал обслуживания, retention — справочный.",
   "description_en": "Queue: partition as service channel, retention informational.",
@@ -44,6 +44,11 @@
       "name": "consume_rate",
       "unit": "rps",
       "expr": "min($produce_rate, $partition_consume × $partitions)"
+    },
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($produce_rate / $partitions, $partition_consume)"
     }
   ]
 }

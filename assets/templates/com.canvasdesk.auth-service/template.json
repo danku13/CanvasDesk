@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.auth-service",
   "name_en": "Auth Service",
   "name_ru": "Сервис аутентификации",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "backend",
   "description": "Аутентификация: верификация токенов, cache_ttl — справочный.",
   "description_en": "Auth service: token verification, cache_ttl informational.",
@@ -31,5 +31,12 @@
   ],
   "expr": "mm1($rps, 1 req / $token_verify)",
   "color": "#4A90E2",
-  "icon": "auth"
+  "icon": "auth",
+  "outputs": [
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($rps, 1 req / $token_verify)"
+    }
+  ]
 }
