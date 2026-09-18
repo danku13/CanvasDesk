@@ -21,6 +21,7 @@
 | `calculations.md` | Numi-формулы, единицы, value-связи, `$in` |
 | `templates.md` | Шаблоны архитектурных нод: применение, параметры и доменные типы, свой шаблон |
 | `faq.md` | FAQ |
+| `agent-recipe.md` | Рецепт для ИИ-агентов: сборка моделей через MCP (инструменты, порядок вызовов, лимиты, коды ошибок) |
 
 ## Публикация на GitHub Pages (опциональное веб-зеркало)
 
@@ -48,6 +49,7 @@
 | Расчёты и поток значений | `https://danku13.github.io/CanvasDesk/user-docs/calculations.html` |
 | Шаблоны нод | `https://danku13.github.io/CanvasDesk/user-docs/templates.html` |
 | FAQ | `https://danku13.github.io/CanvasDesk/user-docs/faq.html` |
+| Рецепт для ИИ-агентов | `https://danku13.github.io/CanvasDesk/user-docs/agent-recipe.html` |
 
 Рекомендуемые точки подключения в приложении (реализовано, FR-031):
 
