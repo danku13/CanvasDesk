@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
@@ -42,6 +42,7 @@ use canvas_app::whatif_ui::{self, BarAction};
 // импортами внутри mod tests
 use canvas_core::expr::{self, ExprOutcome};
 use canvas_core::flow::{self, FlowKind};
+use canvas_core::time::Instant;
 use canvas_core::{
     analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
     resolve_node_path, watched_dirs, AnalysisState, Canvas, Edge, FileEvent, FocusSeed, GridStyle,

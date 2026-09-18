@@ -22,8 +22,9 @@
 //! SDF-пайплайн карточек: без SVG-растеризатора и текстур. Геометрия —
 //! чистые функции (тесты без GPU/окна).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use canvas_core::time::Instant;
 use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, NodeKind};
 
 use canvas_render::ThemeColors;

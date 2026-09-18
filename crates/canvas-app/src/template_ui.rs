@@ -16,9 +16,10 @@
 //!   геометрия в [`crate::cards`-пайплайне]; здесь — [`icon_key`].
 
 use canvas_core::templates::{TemplateManifest, TemplateRegistry};
+use canvas_core::time::Instant;
 use canvas_render::sectors::{angle_gap, norm_angle};
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::Vec2;
 

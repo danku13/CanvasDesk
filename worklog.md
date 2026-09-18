@@ -1,3 +1,35 @@
+## 2026-09-19 — M8/W1: web_time::Instant вместо std::time::Instant (трек A, §6.1)
+
+- **Задача:** W1 (S) из `docs/plans/wasm-port.md` §6 — «Время»: миграция на
+  `web_time::Instant` (alias в core), до W4. std-Instant на
+  wasm32-unknown-unknown компилируется, но паникует в рантайме (§2 п. 7) —
+  первый же кадр FrameMeter/debounce падал бы.
+- **Сделано:**
+  - `canvas-core/src/time.rs` (новый модуль) — alias
+    `canvas_core::time::Instant` над `web_time::Instant`: на нативе
+    прозрачная обёртка над std, на wasm32 — `performance.now()`;
+  - `web-time = "1.1"` в `[workspace.dependencies]` + dep canvas-core —
+    версия уже в дереве через winit 0.30, Cargo.lock получил только ребро
+    `canvas-core → web-time` (смен версий нет);
+  - замена std::Instant: `canvas-render` (renderer FrameMeter `cpu_start`,
+    тест minimap), `canvas-scene` (`scene.rs` `dirty_since` — крейт на
+    wasm-пути, ADR-0012), `canvas-app` (main/lib/widgets/palette/
+    template_ui — DoubleClick-детектор, hover/debounce-таймеры, toast,
+    focus-fade, search_pending, explorer-tracker);
+  - `canvas-shell` не тронут — натив-only, вне скоупа волны 1 (§1);
+  - wasm-port.md: строка W1 «Выполнено 2026-09-19 (трек A, §6.1)».
+- **Гейты (все зелёные):** `cargo fmt --check`; `cargo clippy --workspace
+  --all-targets -- -D warnings` (0 предупреждений); `cargo test
+  --workspace` (все suites ok, 0 провалов; прогон с
+  `CARGO_PROFILE_DEV_DEBUG=0` — на 9,9-ГБ диске полные debug-артефакты
+  workspace не помещаются, env-оверрайд без правок репо);
+  `scripts/wasm_gate.sh` (canvas-core 345 + canvas-mcp 13 в wasmtime,
+  web-time 1.1 собрался под wasm32-unknown-unknown);
+  `scripts/mcp_wasm_gate.sh` (scene 53 + мост 13 + headless 12, e2e-сессия
+  oracle ±1 %).
+- **Протокол:** §6.1 — трек A, ветка `feature/wasm-w1-web-time`,
+  1 задача = 1 коммит, merge `--no-ff` в main после гейтов.
+
 ## 2026-09-19 — FR-037 MW5: инспектор-сессия владельца — mcp_wasm_inspector.sh (ADR-0012)
 
 - **Задача (владелец):** «Бери в работу MW5 (S)» — опция FR-037: обёртка
