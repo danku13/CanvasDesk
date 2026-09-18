@@ -26,6 +26,13 @@ pub use canvas_render::{
 };
 pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 
+/// M8/W2 (wasm-port §3.1/§6): `App` + обработчики событий — вынесены из
+/// main.rs в библиотечную часть чистым перемещением (zero behavior change).
+/// Нативный main.rs — тонкая обёртка (инициализация сервисов + `run_app`);
+/// web-бинарь canvas-web (W4-прошивка) соберёт свой набор сервисов вокруг
+/// того же `App`.
+pub mod app;
+
 /// Менеджер виджетов (M5 T20-F): реестр + LOD + host-обёртки. Модуль
 /// кроссплатформен (host — cfg(windows) внутри), юнит-тесты — на Linux.
 pub mod widgets;
