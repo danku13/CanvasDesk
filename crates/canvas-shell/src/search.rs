@@ -20,66 +20,15 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::Duration;
 
-/// FTS5-запись для переиндексации сцены (загрузка канваса).
-pub struct IndexEntry {
-    /// Путь файла ноды (ключ записи).
-    pub path: PathBuf,
-    /// Имя файла для отображения.
-    pub display_name: String,
-}
-
-/// Команда worker-потоку индекса.
-pub enum SearchCommand {
-    /// Upsert записи файла (имя + извлечённый текст).
-    IndexFile {
-        /// Путь (ключ).
-        path: PathBuf,
-        /// Имя для отображения.
-        display_name: String,
-    },
-    /// Удалить запись файла (нода удалена / файл пропал).
-    RemoveFile {
-        /// Путь (ключ).
-        path: PathBuf,
-    },
-    /// Полная переиндексация набора: upsert всех записей, удалить лишние.
-    /// Сценарий: загрузка канваса, открытие другого файла.
-    ReplaceAll {
-        /// Новый набор записей.
-        entries: Vec<IndexEntry>,
-    },
-    /// Поисковый запрос (ответ — `SearchEvent::Ready`).
-    Query {
-        /// Текст запроса (сырой, экранируется внутри).
-        query: String,
-        /// Максимум строк в ответе.
-        limit: usize,
-    },
-}
-
-/// Хит поиска: путь + имя (матчинг с нодами — в приложении через
-/// `canvas_core::fs_events::path_matches`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchHit {
-    /// Путь файла (ключ записи).
-    pub path: PathBuf,
-    /// Имя для отображения.
-    pub display_name: String,
-}
-
-/// Событие от worker-потока индекса (в приложение через responder).
-pub enum SearchEvent {
-    /// Ответ на `SearchCommand::Query`: хиты в порядке bm25 (лучшие первыми).
-    Ready(Vec<SearchHit>),
-    /// Индексация `ReplaceAll` завершена: число актуальных записей (для лога).
-    Indexed(usize),
-}
-
-/// Ответчик событий поиска (обёртка над EventLoopProxy в приложении).
-pub type SearchResponder = Arc<dyn Fn(SearchEvent) + Send + Sync>;
+// M8/W3 (wasm-port §3.1/§6): протокол поиска переехал в
+// `canvas-core::search` — нейтральный контракт между FTS5-worker'ом
+// (здесь, натив) и `MemSearch` (canvas-web/тесты). Ре-экспорт сохраняет
+// пути `canvas_shell::search::*` для потребителей.
+pub use canvas_core::search::{
+    IndexEntry, SearchBackend, SearchCommand, SearchEvent, SearchHit, SearchResponder,
+};
 
 /// Схема FTS5 (идемпотентно): `path` — UNINDEXED-ключ записи (не участвует
 /// в полнотекстовом матчинге), `display_name`/`text` — индексируемые колонки.
@@ -132,6 +81,15 @@ impl SearchService {
         // Канал в умерший/нестартовавший поток (деградация) — ошибка
         // отправки игнорируется: приложение живёт без поиска
         let _ = self.sender.send(cmd);
+    }
+}
+
+/// M8/W3 (wasm-port §6): нативная реализация нейтрального трейта —
+/// `SearchService` и есть FTS5-backend приложения (сегодняшнее поведение).
+impl SearchBackend for SearchService {
+    fn command(&self, cmd: SearchCommand) {
+        // Явный вызов наследуемого метода — тот же канал в worker-поток
+        SearchService::command(self, cmd);
     }
 }
 
@@ -371,6 +329,7 @@ mod tests {
     use super::*;
 
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
 
     /// Ожидание события от worker-потока, чтобы тест не вис вечно (бриф T14-A).
     /// 10 с вместо 2 с: флейк windows-latest CI 2026-09-18 (merge-коммит
