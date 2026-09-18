@@ -1,20 +1,25 @@
-//! canvas-mcp — MCP-клиент-посредник: stdio (newline-delimited JSON-RPC 2.0,
+//! canvas-mcp — MCP-сервер-посредник: stdio (newline-delimited JSON-RPC 2.0,
 //! БЕЗ Content-Length, как предписывает MCP spec) ↔ named pipe запущенного
 //! canvas-app (`\\.\pipe\canvasdesk`, тот же line-framing).
 //!
 //! Вся логика — чистые функции в этом модуле (framing, JSON-RPC-огибающие,
 //! tools/list, автомат handshake/tools-call), чтобы тестироваться без pipe.
-//! Автостарта приложения нет: pipe недоступен → на `initialize` отвечаем
-//! JSON-RPC ошибкой и завершаемся с кодом 2 (поведение задаёт bin через
-//! `HandleOutcome::Exit`).
+//! Handshake не зависит от состояния приложения (ADR-0009/FR-034):
+//! `initialize` успешен всегда; недоступность CanvasDesk — состояние, а не
+//! краш — `tools/call` отвечает isError «не запущен», а мост перед каждым
+//! пакетом короткой попыткой переподключается к pipe (приложение могло
+//! подняться позже). Поддержаны batch-запросы (JSON-RPC массив) и протокол
+//! 2025-06-18.
 
 use serde_json::{json, Value};
 use std::time::Duration;
 
 /// Pipe, который слушает canvas-app (SPEC: один канал на инстанс приложения).
 pub const PIPE_NAME: &str = r"\\.\pipe\canvasdesk";
-/// Протокольные версии MCP, которые мы заявляем (последняя — первая).
-pub const SUPPORTED_PROTOCOLS: [&str; 2] = ["2025-03-26", "2024-11-05"];
+/// Протокольные версии MCP, которые мы заявляем (новейшая — первая).
+/// FR-034/ADR-0009: добавлена 2025-06-18 — версия клиента эхом, иначе
+/// строгие SDK (проверяют protocolVersion в ответе сервера) рвут соединение.
+pub const SUPPORTED_PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// Дефолтная версия протокола: отвечаем ею, если версия клиента неизвестна.
 pub const DEFAULT_PROTOCOL: &str = "2024-11-05";
 /// Таймаут ответа приложения на tools/call (SPEC задачи: 30 с → isError).
@@ -36,15 +41,13 @@ pub struct ParseError {
     pub message: String,
 }
 
-/// Результат обработки одной входной строки stdio.
+/// Результат обработки одного элемента входного пакета stdio.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HandleOutcome {
-    /// Ответить строкой на stdio.
+    /// Ответить строкой на stdio (в batch — элемент массива ответов).
     Reply(String),
     /// Молчать (notification без результата).
     Silent,
-    /// Ответить и завершить процесс с кодом (pipe недоступен на initialize).
-    Exit { code: i32, reply: String },
 }
 
 /// Транспорт к canvas-app: pipe (Windows) или фейк в тестах.
@@ -135,12 +138,16 @@ pub fn initialize_result(client_version: Option<&str>) -> Value {
     })
 }
 
-/// Ответ tools/call: единственный text-контент, payload — JSON-строка.
-pub fn build_call_result(id: &Value, payload: &str) -> String {
-    build_result(
-        id,
-        &json!({ "content": [{ "type": "text", "text": payload }] }),
-    )
+/// Ответ tools/call: чистый JSON результата в text-контенте (машинный разбор
+/// без вложенного парсинга) и structuredContent для объектных результатов
+/// (spec 2025-06-18: структурированный вывод дублируется текстом для
+/// обратной совместимости со старыми хостами).
+pub fn build_call_result(id: &Value, result: &Value) -> String {
+    let mut envelope = json!({ "content": [{ "type": "text", "text": result.to_string() }] });
+    if result.is_object() {
+        envelope["structuredContent"] = result.clone();
+    }
+    build_result(id, &envelope)
 }
 
 /// Ошибка инструмента (MCP-идиома: isError внутри результата, НЕ JSON-RPC error).
@@ -397,20 +404,48 @@ pub fn tools_list() -> Value {
     json!({ "tools": tools })
 }
 
-/// Текст ошибки «приложение не запущено» (единый для initialize и tools/call).
+/// Текст ошибки «приложение не запущено» (единый для tools/call и reconnect).
 fn not_running_message() -> String {
     format!("CanvasDesk не запущен (pipe {PIPE_NAME} не найден)")
 }
 
-/// Обработать одну строку stdio в конечном автомате MCP.
+/// Разворот конверта приложения (FR-034/ADR-0009): по pipe CanvasDesk
+/// отвечает JSON-RPC-конвертом (`build_result` в `on_mcp_wake`) — клиенту
+/// нужен только `result` (или сообщение из `error`). Не-конвертный payload
+/// (легаси-транспорт, тестовые заглушки) проходит как есть.
+pub fn unwrap_app_payload(payload: &str) -> Result<Value, String> {
+    let value: Value =
+        serde_json::from_str(payload).map_err(|err| format!("ответ CanvasDesk не JSON: {err}"))?;
+    if value.get("jsonrpc").and_then(Value::as_str) == Some("2.0") {
+        if let Some(result) = value.get("result") {
+            return Ok(result.clone());
+        }
+        if let Some(error) = value.get("error") {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("ошибка приложения");
+            return Err(message.to_owned());
+        }
+    }
+    Ok(value)
+}
+
+/// Обработать один JSON-RPC элемент stdio в конечном автомате MCP
+/// (для batch-массивов используйте `handle_input`).
 ///
-/// - `initialize` → ответ с protocolVersion/capabilities/serverInfo; pipe
-///   недоступен → JSON-RPC ошибка + `Exit(2)` (завершение делает bin);
-/// - `notifications/initialized` → Silent;
+/// - `initialize` → ответ с protocolVersion/capabilities/serverInfo —
+///   ВСЕГДА успешный (ADR-0009: состояние приложения не влияет на handshake);
+/// - `notifications/initialized`, `notifications/cancelled` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 23 инструмента с inputSchema (FR-029: edges_list);
-/// - `tools/call` → форвард строки на pipe, ответ приложения — в text-контенте;
-///   pipe мёртв → isError «не запущен», таймаут ответа (в транспорте) → isError;
+/// - `tools/list` → 26 инструментов с inputSchema;
+/// - `tools/call` → форвард строки на pipe, конверт приложения разворачивается
+///   в чистый результат (text-контент + structuredContent, FR-034);
+///   isError-результат приложения проходит насквозь; pipe мёртв → isError
+///   «не запущен», таймаут ответа → isError;
+/// - `resources/list`, `prompts/list`, `resources/templates/list`,
+///   `logging/setLevel` → толерантные пустые ответы (хосты зондируют их
+///   безотносительно заявленных capabilities);
 /// - прочее → JSON-RPC -32601.
 pub fn handle_line<T: AppTransport>(line: &str, transport: &mut Option<T>) -> HandleOutcome {
     let request = match parse_envelope(line) {
@@ -422,22 +457,21 @@ pub fn handle_line<T: AppTransport>(line: &str, transport: &mut Option<T>) -> Ha
     let id = request.id.clone().unwrap_or(Value::Null);
     match request.method.as_str() {
         "initialize" => {
-            if transport.as_ref().is_some_and(AppTransport::is_connected) {
-                let client_version = request
-                    .params
-                    .get("protocolVersion")
-                    .and_then(Value::as_str);
-                HandleOutcome::Reply(build_result(&id, &initialize_result(client_version)))
-            } else {
-                HandleOutcome::Exit {
-                    code: 2,
-                    reply: build_error(Some(&id), -32002, &not_running_message()),
-                }
-            }
+            let client_version = request
+                .params
+                .get("protocolVersion")
+                .and_then(Value::as_str);
+            HandleOutcome::Reply(build_result(&id, &initialize_result(client_version)))
         }
-        "notifications/initialized" => HandleOutcome::Silent,
+        "notifications/initialized" | "notifications/cancelled" => HandleOutcome::Silent,
         "ping" => HandleOutcome::Reply(build_result(&id, &json!({}))),
         "tools/list" => HandleOutcome::Reply(build_result(&id, &tools_list())),
+        "resources/list" => HandleOutcome::Reply(build_result(&id, &json!({ "resources": [] }))),
+        "prompts/list" => HandleOutcome::Reply(build_result(&id, &json!({ "prompts": [] }))),
+        "resources/templates/list" => {
+            HandleOutcome::Reply(build_result(&id, &json!({ "resourceTemplates": [] })))
+        }
+        "logging/setLevel" => HandleOutcome::Reply(build_result(&id, &json!({}))),
         "tools/call" => {
             let Some(pipe) = transport.as_mut().filter(|t| t.is_connected()) else {
                 return HandleOutcome::Reply(build_call_error(&id, &not_running_message()));
@@ -446,7 +480,15 @@ pub fn handle_line<T: AppTransport>(line: &str, transport: &mut Option<T>) -> Ha
                 return HandleOutcome::Reply(build_call_error(&id, &err));
             }
             match pipe.recv_line() {
-                Some(payload) => HandleOutcome::Reply(build_call_result(&id, &payload)),
+                Some(payload) => match unwrap_app_payload(&payload) {
+                    // isError из приложения — готовый MCP-результат ошибки:
+                    // проходим насквозь, не заворачивая повторно
+                    Ok(result) if result.get("isError").and_then(Value::as_bool) == Some(true) => {
+                        HandleOutcome::Reply(build_result(&id, &result))
+                    }
+                    Ok(result) => HandleOutcome::Reply(build_call_result(&id, &result)),
+                    Err(message) => HandleOutcome::Reply(build_call_error(&id, &message)),
+                },
                 None => HandleOutcome::Reply(build_call_error(
                     &id,
                     &format!("таймаут ответа CanvasDesk ({} с)", CALL_TIMEOUT.as_secs()),
@@ -461,8 +503,43 @@ pub fn handle_line<T: AppTransport>(line: &str, transport: &mut Option<T>) -> Ha
     }
 }
 
+/// Обработать входной пакет stdio (FR-034/ADR-0009): одиночный JSON-RPC
+/// объект ИЛИ batch-массив (spec 2025-03-26). Элементы массива обрабатываются
+/// по порядку, ответы собираются в вектор; уведомления ответов не порождают
+/// (батч целиком из уведомлений → пустой вектор, stdout молчит). Пустой
+/// массив — один ответ -32600 (невалидный батч по JSON-RPC 2.0).
+pub fn handle_input<T: AppTransport>(input: &str, transport: &mut Option<T>) -> Vec<HandleOutcome> {
+    let value: Value = match serde_json::from_str(input) {
+        Ok(value) => value,
+        Err(err) => {
+            return vec![HandleOutcome::Reply(build_error(
+                None,
+                -32700,
+                &format!("parse error: {err}"),
+            ))]
+        }
+    };
+    match value {
+        Value::Array(items) => {
+            if items.is_empty() {
+                return vec![HandleOutcome::Reply(build_error(
+                    None,
+                    -32600,
+                    "пустой batch-запрос",
+                ))];
+            }
+            let mut outcomes = Vec::new();
+            for item in items {
+                outcomes.push(handle_line(&item.to_string(), transport));
+            }
+            outcomes
+        }
+        _ => vec![handle_line(input, transport)],
+    }
+}
+
 /// Заглушка транспорта для сборки вне Windows: pipe всегда недоступен —
-/// bin ответит ошибкой на initialize (код 2).
+/// мост работает offline (handshake успешен, вызовы — isError, ADR-0009).
 #[cfg(not(windows))]
 pub struct OfflineTransport;
 
@@ -487,20 +564,27 @@ const SPAWN_WAIT_SECS: u32 = 15;
 /// Ожидание pipe при уже запущенном сервисе (как у старого бинарника).
 #[cfg(windows)]
 const CONNECT_WAIT_MS: u32 = 2000;
+/// Ожидание pipe при переподключении перед каждым пакетом (FR-034): pipe
+/// отсутствует → WaitNamedPipeW откажет мгновенно; занят — ждём до
+/// полсекунды. Автоспавна на reconnect нет — только на старте (FR-008).
+#[cfg(windows)]
+const RECONNECT_WAIT_MS: u32 = 500;
 
-/// Запустить stdio-MCP-посредник (FR-008): цикл бинарника `canvasdesk-mcp`,
+/// Запустить stdio-MCP-сервер (FR-008): цикл бинарника `canvasdesk-mcp`,
 /// доступный и как `canvasdesk mcp` — один exe на весь стек. Автостарт: если
 /// pipe приложения недоступен и в `args` нет `--no-spawn`, поднимаем сервис
 /// (`current_exe` без аргументов, это GUI-режим того же бинарника) и ждём
-/// pipe до SPAWN_WAIT_SECS — «сервис + MCP одной командой». Неудача — прежнее
-/// поведение: initialize ответит JSON-RPC-ошибкой и вернёт код 2.
-/// Молчалив по stdout (там протокол MCP); диагностика — в stderr.
+/// pipe до SPAWN_WAIT_SECS — «сервис + MCP одной командой». Неудача — мост
+/// работает offline (ADR-0009): handshake успешен, вызовы инструментов
+/// отвечают isError «не запущен», reconnect подхватывает pipe, когда
+/// приложение появится. Молчалив по stdout (там протокол MCP); диагностика —
+/// в stderr.
 pub fn run_stdio(args: &[String]) -> anyhow::Result<()> {
     let no_spawn = args.iter().any(|arg| arg == "--no-spawn");
     #[cfg(windows)]
     let mut transport = connect_app(no_spawn);
-    // Вне Windows pipe нет — OfflineTransport::None, lib ответит ошибкой
-    // на initialize (код 2); автостарта не делаем (GUI-режим Windows-only)
+    // Вне Windows pipe нет — мост работает offline: handshake успешен,
+    // tools/call отвечает isError «не запущен» (FR-034/ADR-0009)
     #[cfg(not(windows))]
     let _ = no_spawn;
     #[cfg(not(windows))]
@@ -522,16 +606,17 @@ pub fn run_stdio(args: &[String]) -> anyhow::Result<()> {
         }
         pending.extend_from_slice(&buf[..read]);
         for line in split_frames(&mut pending) {
-            match handle_line(&line, &mut transport) {
-                HandleOutcome::Reply(reply) => {
-                    writeln!(stdout, "{reply}")?;
-                    stdout.flush()?;
-                }
-                HandleOutcome::Silent => {}
-                HandleOutcome::Exit { code, reply } => {
-                    writeln!(stdout, "{reply}")?;
-                    stdout.flush()?;
-                    std::process::exit(code);
+            // FR-034: приложение могло подняться после старта моста —
+            // короткая попытка reconnect перед каждым пакетом
+            #[cfg(windows)]
+            refresh_transport(&mut transport);
+            for outcome in handle_input(&line, &mut transport) {
+                match outcome {
+                    HandleOutcome::Reply(reply) => {
+                        writeln!(stdout, "{reply}")?;
+                        stdout.flush()?;
+                    }
+                    HandleOutcome::Silent => {}
                 }
             }
         }
@@ -539,8 +624,23 @@ pub fn run_stdio(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// FR-034 (ADR-0009): переподключение перед обработкой пакета. Приложение
+/// может подняться ПОСЛЕ старта моста (автоспавн не удался, GUI перезапущен,
+/// pipe-сессия разорвалась) — короткая попытка соединения (без автоспавна)
+/// подхватывает pipe без перезапуска MCP-сессии.
+#[cfg(windows)]
+fn refresh_transport(transport: &mut Option<PipeTransport>) {
+    let dead = transport.as_ref().map(|t| t.is_connected()) != Some(true);
+    if dead {
+        if let Some(fresh) = try_connect(RECONNECT_WAIT_MS) {
+            *transport = Some(fresh);
+        }
+    }
+}
+
 /// Подключение к приложению с автостартом (FR-008): сервис уже работает —
 /// короткое ожидание; нет — спавним себя (GUI-режим) и ждём подъёма pipe.
+/// Не удалось — None: мост продолжит работу offline (ADR-0009/FR-034).
 #[cfg(windows)]
 fn connect_app(no_spawn: bool) -> Option<PipeTransport> {
     if let Some(transport) = try_connect(CONNECT_WAIT_MS) {
@@ -871,8 +971,12 @@ mod tests {
     }
 
     /// initialize: версия клиента проходит, если поддерживается, иначе дефолт.
+    /// FR-034: 2025-06-18 эхом — строгие SDK не рвут соединение из-за даунгрейда.
     #[test]
     fn initialize_protocol_negotiation() {
+        let latest = initialize_result(Some("2025-06-18"));
+        assert_eq!(latest["protocolVersion"], "2025-06-18");
+
         let accepted = initialize_result(Some("2025-03-26"));
         assert_eq!(accepted["protocolVersion"], "2025-03-26");
         assert_eq!(accepted["capabilities"], json!({"tools": {}}));
@@ -998,16 +1102,19 @@ mod tests {
     }
 
     /// Автомат: initialize → initialized → tools/list → tools/call форвардит
-    /// строку и заворачивает ответ приложения в text-контент.
+    /// строку и разворачивает конверт приложения в text + structuredContent
+    /// (FR-034; FakeTransport теперь возвращает конверт, как прод-`on_mcp_wake`).
     #[test]
     fn handshake_and_call_with_connected_pipe() {
-        let mut transport = Some(FakeTransport::connected(&[r#"{"nodes":3}"#]));
-        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test"}}}"#;
+        let mut transport = Some(FakeTransport::connected(&[
+            r#"{"jsonrpc":"2.0","id":3,"result":{"nodes":3}}"#,
+        ]));
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test"}}}"#;
         let HandleOutcome::Reply(reply) = handle_line(line, &mut transport) else {
             panic!("initialize должен ответить");
         };
         let parsed: Value = serde_json::from_str(&reply).expect("initialize ответ");
-        assert_eq!(parsed["result"]["protocolVersion"], "2025-03-26");
+        assert_eq!(parsed["result"]["protocolVersion"], "2025-06-18");
 
         assert_eq!(
             handle_line(
@@ -1037,41 +1144,156 @@ mod tests {
         assert_eq!(transport.sent, vec![call], "строка форвардится как есть");
         let parsed: Value = serde_json::from_str(&reply).expect("call ответ");
         assert_eq!(parsed["id"], 3);
+        // FR-034: конверт приложения развёрнут — клиент видит чистый результат
         assert_eq!(
             parsed["result"]["content"],
             json!([{ "type": "text", "text": r#"{"nodes":3}"# }])
         );
+        assert_eq!(parsed["result"]["structuredContent"], json!({"nodes":3}));
         assert!(!parsed["result"]
             .as_object()
             .unwrap()
             .contains_key("isError"));
     }
 
-    /// Pipe недоступен: initialize → Exit(2) с JSON-RPC ошибкой; tools/call → isError.
+    /// FR-034: разворот конверта приложения — error-конверт → isError;
+    /// isError-результат проходит насквозь (без двойной упаковки);
+    /// легаси не-конвертный payload — как есть, без structuredContent.
     #[test]
-    fn pipe_unavailable_scenarios() {
-        let mut transport: Option<FakeTransport> = None;
-        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test"}}}"#;
-        let outcome = handle_line(line, &mut transport);
-        let HandleOutcome::Exit { code, reply } = outcome else {
-            panic!("ожидался Exit, получено {outcome:?}");
+    fn call_result_unwrapping() {
+        let mut transport = Some(FakeTransport::connected(&[
+            r#"{"jsonrpc":"2.0","id":9,"error":{"code":-32601,"message":"нет ноды"}}"#,
+        ]));
+        let HandleOutcome::Reply(reply) = handle_line(
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"node_get","arguments":{"id":"x"}}}"#,
+            &mut transport,
+        ) else {
+            panic!("tools/call должен ответить");
         };
-        assert_eq!(code, 2);
-        let parsed: Value = serde_json::from_str(&reply).expect("ошибка парсится");
-        assert!(parsed["error"]["message"]
+        let parsed: Value = serde_json::from_str(&reply).expect("ответ парсится");
+        assert_eq!(parsed["result"]["isError"], true);
+        assert!(parsed["result"]["content"][0]["text"]
             .as_str()
-            .expect("сообщение")
-            .contains("CanvasDesk не запущен"));
+            .expect("текст")
+            .contains("нет ноды"));
 
-        // С отсоединённым транспортом tools/call — isError, не JSON-RPC error
-        let mut disconnected = Some(FakeTransport {
-            sent: Vec::new(),
-            inbox: VecDeque::new(),
-            connected: false,
-        });
+        let mut transport = Some(FakeTransport::connected(&[
+            r#"{"jsonrpc":"2.0","id":4,"result":{"isError":true,"content":[{"type":"text","text":"упс"}]}}"#,
+        ]));
+        let HandleOutcome::Reply(reply) = handle_line(
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"node_get","arguments":{}}}"#,
+            &mut transport,
+        ) else {
+            panic!("tools/call должен ответить");
+        };
+        let parsed: Value = serde_json::from_str(&reply).expect("ответ парсится");
+        assert_eq!(parsed["result"]["isError"], true);
+        assert_eq!(parsed["result"]["content"][0]["text"], "упс");
+
+        let mut transport = Some(FakeTransport::connected(&[r#"[1,2]"#]));
+        let HandleOutcome::Reply(reply) = handle_line(
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nodes_list","arguments":{}}}"#,
+            &mut transport,
+        ) else {
+            panic!("tools/call должен ответить");
+        };
+        let parsed: Value = serde_json::from_str(&reply).expect("ответ парсится");
+        assert_eq!(parsed["result"]["content"][0]["text"], json!("[1,2]"));
+        assert!(parsed["result"]
+            .as_object()
+            .unwrap()
+            .get("structuredContent")
+            .is_none());
+    }
+
+    /// FR-034: batch-массив — ответы по каждому запросу; уведомления молчат;
+    /// пустой батч и мусорный элемент → -32600; одиночная строка как раньше.
+    #[test]
+    fn batch_requests() {
+        let mut transport: Option<FakeTransport> = None;
+        let outcomes = handle_input(
+            r#"[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}},{"jsonrpc":"2.0","id":2,"method":"ping"}]"#,
+            &mut transport,
+        );
+        assert_eq!(outcomes.len(), 2, "по ответу на каждый запрос");
+        let HandleOutcome::Reply(first) = &outcomes[0] else {
+            panic!("первый — ответ");
+        };
+        let parsed: Value = serde_json::from_str(first).expect("initialize ответ");
+        assert_eq!(parsed["id"], 1);
+        assert_eq!(parsed["result"]["protocolVersion"], "2025-06-18");
+        let HandleOutcome::Reply(second) = &outcomes[1] else {
+            panic!("второй — ответ");
+        };
+        let parsed: Value = serde_json::from_str(second).expect("ping ответ");
+        assert_eq!(parsed["id"], 2);
+        assert_eq!(parsed["result"], json!({}));
+
+        // Батч с уведомлением: Reply на запрос, Silent на уведомление
+        // (stdout пишет только Reply — Silent пропускается циклом run_stdio)
+        let outcomes = handle_input(
+            r#"[{"jsonrpc":"2.0","id":3,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"}]"#,
+            &mut transport,
+        );
+        assert_eq!(outcomes.len(), 2);
+        assert!(matches!(outcomes[0], HandleOutcome::Reply(_)));
+        assert_eq!(outcomes[1], HandleOutcome::Silent);
+
+        // Батч целиком из уведомлений — тишина (ни одного Reply, stdout молчит)
+        let outcomes = handle_input(
+            r#"[{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}]"#,
+            &mut transport,
+        );
+        assert!(outcomes.iter().all(|o| matches!(o, HandleOutcome::Silent)));
+
+        // Пустой батч невалиден
+        let outcomes = handle_input("[]", &mut transport);
+        let HandleOutcome::Reply(reply) = &outcomes[0] else {
+            panic!("ответ ожидался");
+        };
+        let parsed: Value = serde_json::from_str(reply).expect("ответ парсится");
+        assert_eq!(parsed["error"]["code"], -32600);
+
+        // Мусорный элемент батча — -32600 по нему, сосед отвечает
+        let outcomes = handle_input(
+            r#"[42,{"jsonrpc":"2.0","id":7,"method":"ping"}]"#,
+            &mut transport,
+        );
+        assert_eq!(outcomes.len(), 2);
+        let HandleOutcome::Reply(reply) = &outcomes[0] else {
+            panic!("ответ ожидался");
+        };
+        let parsed: Value = serde_json::from_str(reply).expect("ответ парсится");
+        assert_eq!(parsed["error"]["code"], -32600);
+
+        // Одиночная строка-мусор — как раньше -32700
+        let outcomes = handle_input("}}}", &mut transport);
+        assert_eq!(outcomes.len(), 1);
+        let HandleOutcome::Reply(reply) = &outcomes[0] else {
+            panic!("ответ ожидался");
+        };
+        let parsed: Value = serde_json::from_str(reply).expect("ответ парсится");
+        assert_eq!(parsed["error"]["code"], -32700);
+    }
+
+    /// ADR-0009: недоступное приложение — не краш. Handshake успешен всегда;
+    /// tools/call → isError «не запущен» (и с None, и с разорванным транспортом).
+    #[test]
+    fn offline_handshake_and_calls() {
+        let mut transport: Option<FakeTransport> = None;
+        let HandleOutcome::Reply(reply) = handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test"}}}"#,
+            &mut transport,
+        ) else {
+            panic!("initialize должен ответить и без приложения");
+        };
+        let parsed: Value = serde_json::from_str(&reply).expect("initialize ответ");
+        assert_eq!(parsed["result"]["protocolVersion"], "2024-11-05");
+        assert_eq!(parsed["result"]["serverInfo"]["name"], "canvasdesk");
+
         let HandleOutcome::Reply(reply) = handle_line(
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"node_get","arguments":{"id":"x"}}}"#,
-            &mut disconnected,
+            &mut transport,
         ) else {
             panic!("tools/call должен ответить");
         };
@@ -1081,6 +1303,57 @@ mod tests {
             .as_str()
             .expect("текст")
             .contains("CanvasDesk не запущен"));
+
+        // Разорванный транспорт — то же поведение isError
+        let mut disconnected = Some(FakeTransport {
+            sent: Vec::new(),
+            inbox: VecDeque::new(),
+            connected: false,
+        });
+        let HandleOutcome::Reply(reply) = handle_line(
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#,
+            &mut disconnected,
+        ) else {
+            panic!("tools/call должен ответить");
+        };
+        let parsed: Value = serde_json::from_str(&reply).expect("isError ответ");
+        assert_eq!(parsed["result"]["isError"], true);
+    }
+
+    /// FR-034: толерантные заглушки read-only методов и notifications/cancelled
+    /// (хосты зондируют их безотносительно заявленных capabilities).
+    #[test]
+    fn read_only_stubs_and_cancelled() {
+        let mut transport: Option<FakeTransport> = None;
+        for (method, key) in [
+            ("resources/list", "resources"),
+            ("prompts/list", "prompts"),
+            ("resources/templates/list", "resourceTemplates"),
+        ] {
+            let line = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#);
+            let HandleOutcome::Reply(reply) = handle_line(&line, &mut transport) else {
+                panic!("{method} должен ответить");
+            };
+            let parsed: Value = serde_json::from_str(&reply).expect("ответ парсится");
+            assert_eq!(parsed["result"][key], json!([]), "{method}");
+        }
+
+        let HandleOutcome::Reply(reply) = handle_line(
+            r#"{"jsonrpc":"2.0","id":2,"method":"logging/setLevel","params":{"level":"info"}}"#,
+            &mut transport,
+        ) else {
+            panic!("logging/setLevel должен ответить");
+        };
+        let parsed: Value = serde_json::from_str(&reply).expect("ответ парсится");
+        assert_eq!(parsed["result"], json!({}));
+
+        assert_eq!(
+            handle_line(
+                r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5}}"#,
+                &mut transport
+            ),
+            HandleOutcome::Silent
+        );
     }
 
     /// Таймаут ответа приложения (recv_line → None) — isError с текстом про таймаут.
