@@ -245,6 +245,20 @@ reestr.digital.gov.ru. Трек **никогда не блокирует** во�
 
 ## История изменений
 
+- `2026-09-18` (4) — реализован **CP5** (FR-016, волна B1): анализатор
+  узких мест `canvas-core/src/analyze.rs` (чистая функция над
+  FlowSolutions; ρ — из ошибки Overload, named-выходов `utilization`
+  13 queue-шаблонов и Percent-значений; W — Time-значения; пороги
+  0.7/0.9, 100 ms/1 s, 1/10 в `AnalysisConfig`), оверлей канваса
+  (рамки серьёзности + бейджи, LOD, Ctrl+B/меню/панель настроек,
+  авто-включение с тостом), MCP `analyze_bottlenecks` (27-й
+  инструмент; тот же `badge_text`, что на канвасе — инвариант 4).
+  Гейт: e2e на мини-эталоне №1 — базовая линия здоровая (CDN ρ 0.417),
+  DAU ×2 → Warn (ρ 0.833), DAU ×5.35 → Overload (ρ 2.23, ветка C
+  эталона №2) ±1 %; `cargo test --workspace` — 1034 passed. Гейты
+  волн: CP0–CP3 были закрыты ранее; следующий — CP4 (R5 рецепт агента)
+  и CP6 (FR-017 v1).
+
 - `2026-09-18` (3) — реализованы **CP0** (волна 0: cargo-deny в CI + deny.toml
   по allowlist §7.2 архдока; THIRD-PARTY-NOTICES — cargo-about (шаблон
   `docs/templates/third-party-notices.hbs`, дрифт-контроль релизным

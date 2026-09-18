@@ -48,6 +48,8 @@ pub enum SettingsRow {
     PortZone,
     /// FR-025: построчные точки выхода на нодах с расчётами вкл/выкл.
     LinePorts,
+    /// FR-016 (CP5): оверлей узких мест (рамка/бейджи по ρ и W) вкл/выкл.
+    BottleneckOverlay,
     /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
     FocusMode,
     /// HUD (F3) включён при старте.
@@ -55,9 +57,10 @@ pub enum SettingsRow {
 }
 
 /// Плоский список всех строк панели (порядок: прежний плоский список,
-/// LinePorts FR-025 — после PortZone). Группировка — в [`SETTINGS_GROUPS`];
+/// LinePorts FR-025 — после PortZone, BottleneckOverlay FR-016 — после
+/// LinePorts). Группировка — в [`SETTINGS_GROUPS`];
 /// инвариант полноты (юнит-тест): union строк групп == этот список без дублей.
-pub const SETTINGS_ROWS: [SettingsRow; 9] = [
+pub const SETTINGS_ROWS: [SettingsRow; 10] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -65,6 +68,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 9] = [
     SettingsRow::EdgesAvoid,
     SettingsRow::PortZone,
     SettingsRow::LinePorts,
+    SettingsRow::BottleneckOverlay,
     SettingsRow::FocusMode,
     SettingsRow::HudOnStart,
 ];
@@ -96,6 +100,7 @@ pub const SETTINGS_GROUPS: [SettingsGroup; 3] = [
             SettingsRow::EdgesAvoid,
             SettingsRow::PortZone,
             SettingsRow::LinePorts,
+            SettingsRow::BottleneckOverlay,
             SettingsRow::FocusMode,
         ],
     },
@@ -127,6 +132,12 @@ impl SettingsRow {
             }
             SettingsRow::LinePorts => {
                 format!("Точки выхода строк: {}", on_off(settings.line_ports))
+            }
+            SettingsRow::BottleneckOverlay => {
+                format!(
+                    "Индикаторы узких мест: {}",
+                    on_off(settings.bottleneck_overlay)
+                )
             }
             SettingsRow::FocusMode => {
                 format!("Фокус на связях: {}", on_off(settings.focus_mode))
@@ -160,6 +171,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
+        | SettingsRow::BottleneckOverlay
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => RowKind::Toggle,
     }
@@ -206,6 +218,7 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
+        | SettingsRow::BottleneckOverlay
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => Vec::new(),
     }
@@ -247,6 +260,7 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
+        | SettingsRow::BottleneckOverlay
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => {}
     }
@@ -466,6 +480,10 @@ mod tests {
                 SettingsRow::LinePorts => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.line_ports;
+                }
+                SettingsRow::BottleneckOverlay => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.bottleneck_overlay;
                 }
                 SettingsRow::FocusMode => {
                     assert_eq!(row_kind(row), RowKind::Toggle);

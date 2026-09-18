@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.graphql",
   "name_en": "GraphQL",
   "name_ru": "GraphQL",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "category": "network",
   "description": "GraphQL: сложность запроса умножает нагрузку на резолверы.",
   "description_en": "GraphQL: query complexity multiplies resolver load.",
@@ -55,6 +55,11 @@
       "name": "events",
       "unit": "rps",
       "expr": "$rps"
+    },
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($rps × $avg_complexity, 1 req / $resolver_time)"
     }
   ]
 }

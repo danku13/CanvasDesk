@@ -1,6 +1,9 @@
 //! canvas-core — модель данных канваса и JSON Canvas I/O.
 //! Не зависит от ОС и GPU (SPEC §4): вся платформенная логика — за трейтами.
 
+/// FR-016: анализ узких мест и риска очередей — чистая функция над
+/// результатами propagator-а (волна B1/CP5).
+pub mod analyze;
 mod edgegeom;
 mod error;
 /// FR-013: Numi-base формулы text-нод (`canvasdesk.expr`).
@@ -20,6 +23,10 @@ pub mod templates;
 /// FR-032: валидация модели — чистая функция ядра (коды E-*/W-*).
 pub mod validate;
 
+pub use analyze::{
+    analyze, badge_text, has_risk, AnalysisConfig, AnalysisFlags, AnalysisState,
+    Severity as AnalysisSeverity,
+};
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
     distance_to_edge, draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint,

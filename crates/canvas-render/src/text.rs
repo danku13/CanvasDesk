@@ -1023,6 +1023,26 @@ pub struct EdgeLabel<'a> {
     pub factor: f32,
 }
 
+/// FR-016 (CP5): бейдж узкого места ноды — текст метрик (`badge_text`:
+/// «42%», «OVERLOAD 223% · W: 1.2 s») цветом серьёзности, world-якорь
+/// ПРАВОГО края (выравнивание вправо-минус-ширина), рисуется НАД правым
+/// верхним углом карточки в финальной группе (поверх карточек, вместе с
+/// лейблами связей). Шейпинг покадровый — тексты короткие и меняются
+/// только при пересчёте (паттерн live-line бейджей FR-013 правка 4).
+#[derive(Debug, Clone)]
+pub struct AnalysisBadge {
+    pub text: String,
+    /// World-координата правого края бейджа (якорь выравнивания).
+    pub anchor: [f32; 2],
+    /// Цвет текста — серьёзность по теме (`cards::severity_text`).
+    pub color: Color,
+}
+
+/// FR-016: отступ правого края бейджа от правой границы карточки (world-px).
+pub const ANALYSIS_BADGE_MARGIN_X: f32 = 6.0;
+/// FR-016: зазор между НИЗОМ бейджа и верхом карточки (world-px).
+pub const ANALYSIS_BADGE_GAP_Y: f32 = 2.0;
+
 /// Параметры кадра для подготовки текста (группировка аргументов prepare_titles).
 pub struct TitleFrame<'a> {
     pub camera: &'a Camera,
@@ -1074,6 +1094,10 @@ pub struct TitleFrame<'a> {
     /// показывает результаты по ходу набора). Привязка — к рядам буфера
     /// редактора (`LayoutRun.line_i`). meaningful при `editing: Some`.
     pub editing_line_results: Option<&'a [Option<ExprOutcome>]>,
+    /// FR-016 (CP5): бейджи узких мест видимых нод — шейпятся покадрово,
+    /// рисуются в финальной группе (поверх карточек, рядом с лейблами
+    /// связей). Пустой список — оверлей выключен или рисков нет.
+    pub analysis_badges: &'a [AnalysisBadge],
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -1811,6 +1835,32 @@ impl TextSystem {
             badge_buffer = Some(buffer);
         }
 
+        // FR-016 (CP5): бейджи узких мест — шейпинг покадрово (моно, как
+        // строки результатов FR-013: метрика = код). Правое выравнивание по
+        // якорю измеренной шириной (паттерн live-line буферов).
+        let mut analysis_badge_buffers: Vec<(Buffer, [f32; 2], f32, Color)> =
+            Vec::with_capacity(frame.analysis_badges.len());
+        for badge in frame.analysis_badges {
+            let font = RESULT_FONT_SIZE * zoom_px;
+            let line_h = RESULT_LINE_HEIGHT * zoom_px;
+            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_h));
+            buffer.set_wrap(&mut self.font_system, Wrap::None);
+            buffer.set_size(&mut self.font_system, Some(font * 24.0), Some(line_h));
+            buffer.set_text(
+                &mut self.font_system,
+                badge.text.as_str(),
+                mono_attrs(),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            let width_px = buffer
+                .layout_runs()
+                .next()
+                .map(|run| run.line_w)
+                .unwrap_or(0.0);
+            analysis_badge_buffers.push((buffer, badge.anchor, width_px, badge.color));
+        }
+
         // FR-013 (правка 4): ЖИВЫЕ построчные результаты редактируемой ноды
         // (Numi показывает результаты по ходу набора) — шейпятся покадрово:
         // текст сессии меняется при каждой правке, буферы маленькие. Ошибка —
@@ -2226,6 +2276,29 @@ impl TextSystem {
                             custom_glyphs: &[],
                         });
                     }
+                }
+                // FR-016 (CP5): бейджи узких мест — над правым верхним углом
+                // карточки, правое выравнивание по якорю минус измеренная
+                // ширина (зеркало строки результата FR-013, но над карточкой).
+                for (buffer, anchor, width_px, color) in &analysis_badge_buffers {
+                    let anchor_phys = to_physical(*anchor);
+                    let line_h = RESULT_LINE_HEIGHT * zoom_px;
+                    let left = anchor_phys[0] - width_px;
+                    let top = anchor_phys[1] - line_h;
+                    areas.push(TextArea {
+                        buffer,
+                        left,
+                        top,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: (left.floor() as i32) - 1,
+                            top: top as i32,
+                            right: (anchor_phys[0].round() as i32) + 1,
+                            bottom: (top + line_h) as i32,
+                        },
+                        default_color: *color,
+                        custom_glyphs: &[],
+                    });
                 }
                 for (buffer, origin, width) in &overlay_buffers {
                     let pos = to_physical(*origin);
