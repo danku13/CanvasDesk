@@ -629,3 +629,83 @@
 
 **Границы:** продуктовое поведение не меняется; реализация MW1–MW4 не
 начата — по плану, каждая задача = сессия = коммит.
+
+## 2026-09-18 — FR-037 MW1: крейт canvas-scene — вынос SceneState + MCP-инструментов + тестов из canvas-app (ADR-0012)
+
+- **Задача:** MW1 плана FR-037 (первая задача реализации; ADR-0012 вариант
+  D) — платформенно-нейтральный крейт `canvas-scene` для верификации
+  MCP-слоя в wasm; нулевое изменение поведения (те же ассерты, те же имена
+  тестов).
+- **Сделано:**
+  - **`crates/canvas-scene`** (lib, лист в DAG): `scene.rs` — SceneState
+    модельного слоя (canvas/spatial/path/dirty_since/undo/redo/
+    expr_results/expr_line_results/analysis + viewport-зеркало; поля и
+    методы pub) + `Viewport {x, y, zoom}` (дефолт 0/0/1 = Camera::default;
+    MIN/MAX_ZOOM-кламп синхронен canvas-render) + `next_free_id`
+    (из canvas-app/src/lib.rs, путь `canvas_app::ui::next_free_id`
+    сохранён реэкспортом) + seed_canvas/outputs_to_results/
+    split_formula_lines/AUTOSAVE_DEBOUNCE/UNDO_LIMIT; `measure.rs` —
+    CR-010/CR-012 двухуровневый refit: уровень 1 (оценка) в крейте,
+    уровень 2 (точный шейпинг canvas-render) инжектируется через
+    `install_measured_reserve` (canvas-scene от canvas-render не зависит);
+    `mcp.rs` — диспетчер 27 инструментов + хелперы + FR-033 graph_apply
+    (перенос 1:1 из main.rs:5946–7575; viewport_get/set работают со
+    значением `Viewport` в SceneState, зум клампится как Camera::set_zoom;
+    `DEFAULT_FILE_CARD_W/H` — парные константы вместо canvas_app::ui::
+    DROP_CARD_*, паритет — тестом).
+  - **canvas-app**: main.rs 15026 → 10352 строк (−4674): вырезаны
+    SceneState+impl (551–915), mcp-секция (5946–7575), measure-хелперы
+    (256–331, 344–390), outputs_to_results/seed_canvas, константы
+    AUTOSAVE_DEBOUNCE/UNDO_LIMIT. UI-поля ввода `selected`
+    (Option<Selection>)/`selected_nodes`/`dragging` (Option<DragState>) —
+    поля App (73 механические замены self.scene.* → self.*; в canvas-scene
+    их нет). `on_mcp_wake` (cfg(windows)): viewport-синк зеркалом (~8
+    строк: до диспетчера camera.position()/zoom() → scene.viewport, после
+    — set_center/set_zoom; числа идентичны, клампы Camera — тождество,
+    поведение не меняется) + чистка выделения после успешного node_delete
+    (единственный инструмент, чистивший выделение в старом SceneState —
+    индексы сдвинулись). `main()`: инъекция уровня 2 ДО загрузки сцены
+    (стартовые высоты точные, как до выноса; headless/wasm — уровень 1).
+  - **Тесты**: 50 MCP-тестов перенесены в canvas-scene/src/tests.rs
+    (диспетчер, undo-инварианты, формулы/поток, эталоны CP1
+    mcp_fr029_instagram_mvp_reference / CP3 graph_apply / CP5
+    analyze_bottlenecks) — имена/ассерты без изменений, изменились только
+    конструкция viewport (Viewport вместо Camera, значения те же 0/0/1;
+    камера ушла из сигнатуры dispatch — viewport живёт в SceneState) и
+    пути импортов (MAX_ZOOM, DROP_CARD → константы canvas-scene тех же
+    значений). В main.rs остались canvas-render-зависимые тесты точного
+    измерения (уровень 2 устанавливается в каждом тесте до создания сцены
+    — паритет поведения) + новый паритет-тест
+    `measure_layout_consts_match_render` (метрики refit, зум, дефолты
+    файловой карточки).
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  cargo test --workspace — 1035 passed / 0 failed (было 1034, +1
+  паритет-тест; 50 перенесённых тестов считаются в canvas-scene) —
+  нулевой регресс; cargo check --target wasm32-unknown-unknown
+  -p canvas-scene ✓; RUST_TEST_THREADS=1 cargo test --target
+  wasm32-wasip1 -p canvas-scene — 50/50 в wasmtime (включая oracle-гейты
+  эталонов CP1/CP3/CP5); cargo test -p canvas-shell — 129/129 (pipe
+  round-trip). Инцидент линковки (диск 84 %, повтор FR-035) — почищен
+  target/debug/incremental + устаревшие canvasdesk-бинари, депы
+  сохранены.
+- **Дальше (план FR-037):** MW2 — мост canvas-mcp под wasm
+  (run_stdio_with_transport); MW3 — canvas-mcp-headless; MW4 — гейт/CI/
+  документация (AGENTS/SPEC/ACCEPTANCE НЕ тронуты этим коммитом —
+  задача MW4).
+- **Ребейс на параллельную волну владельца (доведён этой сессией):**
+  после коммита MW1 в origin/main параллельной сессией владельца была
+  влита волна CP4/CP6 (867bf8d визуализация проливания, f43eb44 CP4
+  рецепт агента, 15b228a CP6 what-if FR-017, merge 83d43a9). Ребейс MW1
+  поверх 83d43a9: конфликт main.rs (CP6 добавлял ~800 строк what-if в
+  вырезанную MW1 область) разрешён интеграцией CP6-кода в пост-MW1
+  структуру — App получил WhatIfOverrideRow и панель what-if поверх
+  scene-модели. Вью-типы `SpillView`/`WhatIfNode` (чистые данные, без
+  GPU/шрифтов) перенесены из canvas-render в новый
+  `canvas-scene/src/view.rs`; canvas-render зависит от canvas-scene и
+  реэкспортирует (слои: core → scene → render → app). +3 теста
+  view/паритета в tests.rs. Итог: main.rs 11171 (10352 + CP6);
+  workspace 1077/0 (1035 + 42 теста CP6 what-if); wasip1 canvas-scene
+  53/53 в wasmtime; fmt/clippy чистые. Инцидент диска (третий:
+  100 % при сборке тестов) — cargo clean + локальный прогон гейтов с
+  CARGO_PROFILE_DEV_DEBUG=0/CARGO_PROFILE_TEST_DEBUG=0 (на семантику
+  тестов не влияет; в CI профили дефолтные).

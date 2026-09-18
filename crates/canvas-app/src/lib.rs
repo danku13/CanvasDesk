@@ -360,18 +360,10 @@ pub mod ui {
 
     /// Первый свободный id вида `{prefix}-N` (T9): N от 1, занятые в канвасе
     /// пропускаются. Обобщение генератора id заметок на `file-N`/`note-N`
-    /// (вызовы с "note" — заметки, с "file" — ноды дропа).
-    pub fn next_free_id(canvas: &Canvas, prefix: &str) -> String {
-        let mut n = 1u32;
-        while canvas
-            .nodes
-            .iter()
-            .any(|node| node.id == format!("{prefix}-{n}"))
-        {
-            n += 1;
-        }
-        format!("{prefix}-{n}")
-    }
+    /// (вызовы с "note" — заметки, с "file" — ноды дропа). Реализация
+    /// перенесена в canvas-scene (FR-037/ADR-0012) — реэкспорт, путь
+    /// `canvas_app::ui::next_free_id` сохранён для GUI-кода и тестов.
+    pub use canvas_scene::next_free_id;
 
     // --- Оверлей горячих клавиш (FR-004) ---
 

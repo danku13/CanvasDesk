@@ -1,6 +1,6 @@
 //! canvas-app — приложение: event loop, команды, UI-состояние, main().
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,16 +37,19 @@ use canvas_app::ui::{
     SELECT_DRAG_THRESHOLD,
 };
 use canvas_app::whatif_ui::{self, BarAction};
-use canvas_core::expr::{
-    self, line_kind, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind,
-};
-use canvas_core::flow::{self, FlowKind, FlowOutputs};
+// FR-037 MW1: line_kind/NumiLineKind/ExprLineResults/ExprResults и whatif-
+// типы использовались только вынесенным кодом; тестовые упоминания —
+// импортами внутри mod tests
+use canvas_core::expr::{self, ExprOutcome};
+use canvas_core::flow::{self, FlowKind};
 use canvas_core::{
     analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
-    resolve_node_path, watched_dirs, AnalysisConfig, AnalysisState, Canvas, Edge, FileEvent,
-    FocusSeed, GridStyle, Node, NodeChange, NodeKind, Scenario, Settings, Side, SpatialIndex,
-    StaleOverride, Theme, ThumbnailProvider,
+    resolve_node_path, watched_dirs, AnalysisState, Canvas, Edge, FileEvent, FocusSeed, GridStyle,
+    Node, NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme, ThumbnailProvider,
 };
+// FR-037/ADR-0012 (MW1): модельный слой сцены + MCP-инструменты — вынесены
+// из main.rs в крейт canvas-scene (wasm-верификация); UI-поля ввода
+// (selected/selected_nodes/dragging) остались здесь, в App
 use canvas_render::animate::{
     ease_out_cubic, focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS,
     FOCUS_FADE_MS, FOCUS_PULSE_MS,
@@ -65,13 +68,15 @@ use canvas_render::search_ui::{
 };
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign,
-    BODY_FONT_SIZE, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_PADDING,
+    BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
-use canvas_render::SpillView;
 use canvas_render::ThemeColors;
-use canvas_render::WhatIfNode;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
+use canvas_scene::{
+    fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
+    SceneState,
+};
 use canvas_shell::{
     Priority, SearchCommand, SearchEvent, SearchHit, SearchService, ThumbService, WatchService,
 };
@@ -84,16 +89,14 @@ use winit::window::{CursorIcon, Window, WindowId};
 // Атрибуты окна Windows: отключение своего IDropTarget у winit (T9, план §3)
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
+// FR-037 MW1: конверт MCP-приложения (on_mcp_wake) — Windows-pipe-ветка
+#[cfg(windows)]
+use canvas_scene::{mcp_dispatch, mcp_unwrap_call, Viewport};
 
 /// Множитель зума на одну строку колеса мыши (Ctrl+колесо, SPEC §8).
 const ZOOM_STEP_PER_LINE: f32 = 1.1;
 /// Пикселей панорамирования на строку колеса без Ctrl (скролл тачпада).
 const PAN_PX_PER_LINE: f32 = 40.0;
-/// Debounce автосейва (SPEC §9).
-const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(2);
-/// Глубина истории undo (FR-006): не менее 50 последних действий (запрос
-/// пользователя «не менее 50»); старейшие шаги вытесняются.
-const UNDO_LIMIT: usize = 50;
 /// Ширина клип-бокса тултипа битой ссылки (T10): длинный путь переносится
 /// на границы этой области, экран не покидает.
 const TOOLTIP_WIDTH: f32 = 380.0;
@@ -256,82 +259,6 @@ fn hit_subtitle(path: &Path) -> String {
         .unwrap_or_else(|| "файл".to_owned())
 }
 
-/// FR-013: извлечь формулу из текста заметки (смешанный редактор — решение
-/// открытого вопроса дизайна): строки, начинающиеся с `=` (после пропуска
-/// пробелов), — утверждения формулы без префикса. Текст ноды остаётся
-/// пользовательским описанием вместе с `=`-строками; результат живёт в
-/// `canvasdesk.expr`. None — формульных строк нет (calc-режим выключен).
-fn split_formula_lines(text: &str) -> Option<String> {
-    let lines: Vec<&str> = text
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            let formula = trimmed.strip_prefix('=')?.trim();
-            (!formula.is_empty()).then_some(formula)
-        })
-        .collect();
-    (!lines.is_empty()).then(|| lines.join("\n"))
-}
-
-/// CR-010: оценка числа визуальных рядов тела с учётом переносов. Рендер
-/// шейпит тело с `Wrap::WordOrGlyph` в области шириной `body_width`, поэтому
-/// длинная строка параметра даёт несколько рядов, хотя `\n`-строка одна.
-/// Средняя ширина глифа Noto Sans 14 px (смешанная кириллица/латиница) —
-/// оценка консервативная: функция только РАСТИТ высоту, занижать нельзя.
-/// CJK-идеографы считаются двойными юнитами.
-/// CR-012: строки Numi-листа (присваивания/выражения) рендерятся
-/// моноширинным Noto Sans Mono (mono-флаг source_line, text.rs) — их
-/// аванс шире пропорционального, и считаются они по моноширинной
-/// метрике (`MONO_AVG_CHAR_W`), иначе переносы недооценивались на ряд.
-fn wrapped_body_rows(text: &str, body_width: f32) -> usize {
-    const AVG_CHAR_W: f32 = 7.0;
-    let units = |c: char| -> f32 {
-        match c {
-            '\u{2E80}'..='\u{9FFF}'
-            | '\u{AC00}'..='\u{D7AF}'
-            | '\u{F900}'..='\u{FAFF}'
-            | '\u{FF00}'..='\u{FF60}' => 2.0,
-            _ => 1.0,
-        }
-    };
-    text.lines()
-        .map(|line| {
-            let char_w = if line_kind(line) == NumiLineKind::Prose {
-                AVG_CHAR_W
-            } else {
-                MONO_AVG_CHAR_W
-            };
-            let units_per_line = (body_width / char_w).floor().max(1.0);
-            let line_units: f32 = line.chars().map(units).sum();
-            (line_units / units_per_line).ceil().max(1.0) as usize
-        })
-        .sum::<usize>()
-        .max(1)
-}
-
-/// CR-012: аванс Noto Sans Mono на символ в px (≈0.614 em при размере
-/// тела 14 px). Строки Numi-листа рендерятся моноширинным шрифтом —
-/// пропорциональная оценка 7 px/символ занижала число рядов переносов.
-/// Завязана на [`BODY_FONT_SIZE`]: при смене размера тела метрика едет
-/// вместе с ним. Завышение здесь безопасно: высота только РАСТЁТ.
-const MONO_AVG_CHAR_W: f32 = 0.614 * BODY_FONT_SIZE;
-
-/// CR-012: оценочная требуемая высота ноды с учётом резерва футера
-/// результата (шапка + тело с переносами + паддинг + резерв футера) —
-/// дешевая метрика среднего аванса символа. Оценка только РАСТИТ высоту
-/// (завышение безопасно), поэтому годится воротами двухуровневого refit:
-/// если оценка влезает в текущую высоту, точное измерение не нужно.
-fn estimated_result_reserve_height(text: &str, node_width: f32) -> f32 {
-    let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
-    let rows = wrapped_body_rows(text, body_width);
-    HEADER_HEIGHT
-        + BODY_TOP_GAP
-        + rows as f32 * BODY_LINE_HEIGHT
-        + BODY_PADDING
-        + RESULT_LINE_HEIGHT
-        + 2.0
-}
-
 /// CR-012 (правка 2): точная требуемая высота — тело измеряется реальным
 /// шейпингом (`measure_body_height`: те же встроенные Noto-шрифты и
 /// mono-сегментация формульных строк, что у рендера). Оценка среднего
@@ -342,110 +269,6 @@ fn measured_result_reserve_height(text: &str, node_width: f32, formula_lines: &[
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     let body = measure_body_height(text, body_width, formula_lines);
     HEADER_HEIGHT + BODY_TOP_GAP + body + BODY_PADDING + RESULT_LINE_HEIGHT + 2.0
-}
-
-/// CR-012 (правка 2): двухуровневый ленивый refit высоты под резерв футера
-/// результата. Growth-only: растит высоту, только если она занижена;
-/// достаточную не трогает — без осцилляций при частых вызовах из
-/// `recompute_flow`. Уровень 1 — дешёвая оценка (`estimated_result_reserve_height`):
-/// влезает → выход (99 % вызовов, измерение не грузит перф). Уровень 2 —
-/// точное измерение реальным шейпингом: рост ровно до измеренного needed,
-/// без фантомных рядов. `display_text` — текст как на карточке (FR-029:
-/// пролитые строки показаны подписями источников — они длиннее локальных
-/// литералов, подгонка идёт по ним, иначе подпись вылезет за низ карточки).
-fn ensure_result_reserve(node: &mut Node, display_text: &str, formula_lines: &[usize]) {
-    if estimated_result_reserve_height(display_text, node.width) <= node.height {
-        return;
-    }
-    let needed = measured_result_reserve_height(display_text, node.width, formula_lines);
-    if needed > node.height {
-        node.height = needed;
-    }
-}
-
-/// FR-029: текст ноды как на карточке — с подменой строк-присваиваний
-/// пролитых параметров на подписи источников («param ← нода · выход»).
-/// Единая точка для рендера (SceneView) и подгонки высоты.
-fn display_body_text(node: &Node, param_spills: &HashMap<String, Vec<SpillView>>) -> String {
-    let text = node.text.as_deref().unwrap_or("");
-    match param_spills.get(&node.id) {
-        Some(spills) if !spills.is_empty() => {
-            flow::substitute_spilled_lines(text, spills.iter().map(SpillView::as_triple))
-        }
-        _ => text.to_owned(),
-    }
-}
-
-/// FR-029: индекс строки-присваивания `param = …` в тексте ноды
-/// (имя до '=' — одно слово). None — такой строки нет.
-fn assignment_line(node: &Node, param: &str) -> Option<usize> {
-    node.text
-        .as_deref()
-        .unwrap_or_default()
-        .split('\n')
-        .position(|line| {
-            line.split_once('=')
-                .map(|(name, _)| name.trim() == param)
-                .unwrap_or(false)
-        })
-}
-
-/// FR-029: значение, которое value-ребро с toParam приносит в параметр —
-/// по адресации истока (зеркало `edge_source_value` flow): fromLine →
-/// построчный выход источника, fromOutput → именованный выход, иначе
-/// узловое значение источника. None — источник без значения (тихая
-/// деградация: бейдж строки тогда по локальному результату).
-fn spill_edge_value(
-    solutions: &flow::FlowSolutions,
-    spill: &canvas_core::ParamSpill,
-) -> Option<canvas_core::Value> {
-    if let Some(line) = spill.from_line {
-        solutions
-            .lines
-            .get(&(spill.from_node.clone(), line))
-            .cloned()
-    } else if let Some(name) = &spill.from_output {
-        solutions
-            .named
-            .get(&(spill.from_node.clone(), name.clone()))
-            .cloned()
-    } else {
-        solutions
-            .outputs
-            .get(&spill.from_node)
-            .and_then(|result| result.as_ref().ok().cloned())
-    }
-}
-
-/// CR-012 (правка 2): индексы строк с результатом из построчных исходов —
-/// тот же источник, что у рендера (`expr_line_results` → formula_lines,
-/// text.rs): по ним `body_items` ставит mono-флаг `source_line`.
-fn formula_line_indices(line_results: &[Option<ExprOutcome>]) -> Vec<usize> {
-    line_results
-        .iter()
-        .enumerate()
-        .filter(|(_, outcome)| outcome.is_some())
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// FR-023: авто-высота шаблонной ноды — по списку параметров: шапка,
-/// тело и футер результата. CR-010/CR-012: тело — с переносами,
-/// двухуровневый refit `ensure_result_reserve`: длинное значение параметра
-/// не вылезает за низ карточки у новой ноды. formula_lines — из
-/// `expr::eval_lines` текста листа (тот же источник, что пишет
-/// `expr_line_results` при пересчёте). Общая для GUI-инстанциации и MCP
-/// `template_instantiate`: новая нода сразу влезает целиком (без «подгонки
-/// правкой»). Только рост (не сжимает пользовательский размер).
-fn fit_template_node_height(node: &mut Node) {
-    let formula_lines = node
-        .text
-        .as_deref()
-        .map(|text| formula_line_indices(&expr::eval_lines(text)))
-        .unwrap_or_default();
-    // Инстанциация: проливания ещё нет — display_text = исходный текст.
-    let text = node.text.clone().unwrap_or_default();
-    ensure_result_reserve(node, &text, &formula_lines);
 }
 
 /// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
@@ -564,695 +387,6 @@ fn expr_error_hit_at(hits: &[LineErrorHit], cursor: [f32; 2]) -> Option<&LineErr
         let [x, y, w, h] = hit.rect;
         cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
     })
-}
-
-/// FR-014: карта результатов propagator'а → display-карта приложения
-/// (`expr_results`): типизированные ошибки становятся строками для рендера.
-fn outputs_to_results(outputs: &FlowOutputs) -> ExprResults {
-    outputs
-        .iter()
-        .map(|(id, result)| {
-            let outcome = match result {
-                Ok(value) => ExprOutcome::Ok(value.clone()),
-                Err(err) => ExprOutcome::Err(err.to_string()),
-            };
-            (id.clone(), outcome)
-        })
-        .collect()
-}
-
-/// Стартовый канвас при отсутствии файла: заметка + файловые ноды (T4).
-fn seed_canvas() -> Canvas {
-    let mut canvas = Canvas::default();
-    let mut note = Node::text("note-1", "Добро пожаловать в CanvasDesk", 80.0, 60.0);
-    note.width = 280.0;
-    note.color = Some("4".into());
-    canvas.nodes.push(note);
-    canvas.nodes.push(Node::file(
-        "file-1",
-        "docs/SPEC.md",
-        440.0,
-        60.0,
-        320.0,
-        220.0,
-    ));
-    canvas.nodes.push(Node::file(
-        "file-2",
-        "docs/TASKS.md",
-        440.0,
-        340.0,
-        320.0,
-        220.0,
-    ));
-    canvas
-}
-
-/// Состояние сцены: модель, spatial index (T5), файл, выделение и перетаскивание.
-struct SceneState {
-    canvas: Canvas,
-    /// R-tree над AABB нод; синхронизируется при каждом изменении геометрии.
-    spatial: SpatialIndex,
-    path: PathBuf,
-    /// Первичное выделение: нода или связь (T8) — якорь для контекстного
-    /// меню, редактирования, фокуса (T23), перепривязки (CR-002).
-    selected: Option<Selection>,
-    /// Множественное выделение нод (CR-001): рамка drag или Ctrl/Shift+клик.
-    /// Порядок — порядок добавления (клики) или индексы (рамка).
-    selected_nodes: Vec<usize>,
-    /// Drag ноды (T7/CR-001): захваченная нода + исходные позиции всех
-    /// перемещаемых (выделение или одна + дети групп).
-    dragging: Option<DragState>,
-    dirty_since: Option<Instant>,
-    /// История undo (FR-006): снапшоты Canvas «до» действий (push ДО
-    /// мутации). VecDeque — O(1) вытеснение старейшего при переполнении.
-    undo_stack: VecDeque<Canvas>,
-    /// Отменённые состояния (FR-006): текущее уходит сюда при undo; новое
-    /// действие обнуляет ветку redo.
-    redo_stack: Vec<Canvas>,
-    /// FR-013: результаты формул (`canvasdesk.expr`) по id нод —
-    /// runtime-кэш (инвариант 4 FR-013: НЕ сериализуется, источник
-    /// истины — формула; пересчитывается при загрузке/commit/undo).
-    /// Программный итог (MCP-expr) — в футере карточки.
-    expr_results: ExprResults,
-    /// FR-013 (правка 2): построчные результаты текста нод (Numi-стиль) —
-    /// тоже runtime-кэш (инвариант 4).
-    expr_line_results: ExprLineResults,
-    /// FR-029 (визуализация проливания): параметры нод, запитанные
-    /// value-рёбрами с `toParam` — подпись источника и эффективное значение
-    /// строки для рендера. Runtime-кэш (не сериализуется), пересчитывается
-    /// в `recompute_flow` вместе с результатами потока.
-    param_spills: HashMap<String, Vec<SpillView>>,
-    /// FR-017 (CP6): what-if режим активен (нижний бар, override-поле
-    /// вместо правки базы). Runtime-флаг — в `.canvas` не пишется.
-    whatif_active: bool,
-    /// FR-017: именованные сценарии — runtime-копия persisted
-    /// `canvasdesk.whatif` (синхронизируется при открытии/Apply/правках
-    /// списка сценариев одним undo-шагом).
-    scenarios: Vec<Scenario>,
-    /// FR-017: активный сценарий; `None` — «База» (overrides пусты,
-    /// дельты нулевые).
-    active_scenario: Option<usize>,
-    /// FR-017: базовый пересчёт БЕЗ подмен — источник дельт (гипотеза Q9:
-    /// чистый пересчёт на каждом ревале, не снапшот при входе).
-    flow_baseline: flow::FlowSolutions,
-    /// FR-017: пересчёт с подменами активного сценария — видимый канвасом.
-    flow_active: flow::FlowSolutions,
-    /// FR-017: протухшие подмены активного сценария (нода/строка удалены,
-    /// строка стала прозой) — маркеры в панели (гипотеза Q5c).
-    whatif_stale: Vec<StaleOverride>,
-    /// FR-017: what-if представления нод для рендера (виртуальный текст,
-    /// подсветка подмен, дельта-бейджи). Runtime-кэш — пересчитывается в
-    /// `recompute_flow` вместе с картами потока.
-    whatif_nodes: HashMap<String, WhatIfNode>,
-    /// FR-016 (CP5): флаги анализа узких мест по id нод — runtime-кэш,
-    /// обновляется хвостом [`SceneState::recompute_flow`] (analyze — чистая
-    /// функция над теми же FlowSolutions; O(N), в бюджете кадра).
-    analysis: AnalysisState,
-}
-
-impl SceneState {
-    /// Обернуть готовую модель: построить spatial index.
-    fn new(canvas: Canvas, path: PathBuf) -> Self {
-        let spatial = SpatialIndex::build(&canvas);
-        // FR-017: сценарии what-if — загрузка persisted `canvasdesk.whatif`
-        let scenarios = canvas_core::whatif::scenarios_from_canvas(&canvas);
-        let mut scene = Self {
-            canvas,
-            spatial,
-            path,
-            selected: None,
-            selected_nodes: Vec::new(),
-            dragging: None,
-            dirty_since: None,
-            undo_stack: VecDeque::new(),
-            redo_stack: Vec::new(),
-            expr_results: ExprResults::new(),
-            expr_line_results: ExprLineResults::new(),
-            param_spills: HashMap::new(),
-            whatif_active: false,
-            scenarios,
-            active_scenario: None,
-            flow_baseline: flow::FlowSolutions::default(),
-            flow_active: flow::FlowSolutions::default(),
-            whatif_stale: Vec::new(),
-            whatif_nodes: HashMap::new(),
-            analysis: AnalysisState::new(),
-        };
-        // FR-013: первичный пересчёт формул при загрузке (результат не
-        // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
-        // FR-014: пересчёт — живой propagator графа потока
-        scene.recompute_flow();
-        scene
-    }
-
-    /// FR-014: живой пересчёт графа потока значений (инвариант live — в
-    /// пределах одного кадра). Заполняет `expr_results` (результаты формул
-    /// всех expr-нод, с входами value-рёбер) и `expr_line_results`
-    /// (построчные результаты Numi-листов — строки видят входы ноды).
-    /// Запускается после ЛЮБОЙ мутации формул или топологии (правка
-    /// текста/формулы, рёбра, удаление нод, undo) — propagator чистый,
-    /// полный пересчёт ≤1000 нод <10 мс (SPEC §6.3).
-    fn recompute_flow(&mut self) {
-        // FR-017 (гипотеза Q9): дельты — против ЧИСТОГО базового пересчёта
-        // (не снапшота при входе): любая мутация канваса пересчитывает обе
-        // карты заново, дельты консистентны текущему `.canvas`.
-        let baseline =
-            match flow::propagate_with_lines(&self.canvas, &flow::WhatIfOverrides::default()) {
-                Ok(solutions) => solutions,
-                Err(cycle) => {
-                    // UI и MCP блокируют создание value-циклов; сюда попадаем
-                    // только из чужих .canvas-файлов — деградация до изолированного
-                    // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
-                    tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
-                    self.flow_baseline = flow::FlowSolutions::default();
-                    self.flow_active = flow::FlowSolutions::default();
-                    self.whatif_stale = Vec::new();
-                    self.whatif_nodes.clear();
-                    self.recompute_all_expr();
-                    self.param_spills.clear();
-                    // FR-016: поток недоступен (цикл) — анализ пуст: без
-                    // FlowSolutions детекции не на чем (честное отсутствие, не
-                    // ложное «всё здорово»).
-                    self.analysis.clear();
-                    self.apply_result_reserve();
-                    return;
-                }
-            };
-        // FR-017: активный сценарий → построчные подмены (протухшие
-        // отфильтрованы — тихая деградация, маркеры в whatif_stale).
-        let (whatif, stale) = self.active_whatif_overrides();
-        let active = if whatif.line_exprs.is_empty() && whatif.node_values.is_empty() {
-            baseline.clone()
-        } else {
-            match flow::propagate_with_lines(&self.canvas, &whatif) {
-                Ok(solutions) => solutions,
-                // Цикл из подмен невозможен (граф тот же), но страховка:
-                // показываем базу, не падая
-                Err(cycle) => {
-                    tracing::warn!(cycle = %cycle, "what-if пересчёт отклонён — показана база");
-                    baseline.clone()
-                }
-            }
-        };
-        self.flow_baseline = baseline;
-        self.flow_active = active;
-        self.whatif_stale = stale;
-        let solutions = &self.flow_active;
-        self.expr_results = outputs_to_results(&solutions.outputs);
-        // FR-016 (CP5): анализ узких мест — чистая функция над теми же
-        // решениями (значения + именованные выходы utilization). Пороги —
-        // дефолт документа FR-016; кастомизация — v2 (конфиг в .canvas).
-        self.analysis = analyze::analyze(&self.canvas, solutions, &AnalysisConfig::default());
-        self.expr_line_results.clear();
-        for node in &self.canvas.nodes {
-            let text = node.text.clone().unwrap_or_default();
-            // FR-017: построчные результаты — по ВИРТУАЛЬНОМУ исходнику
-            // (тем же подменам, что у propagator — инвариант 4)
-            let text = flow::whatif_virtual_text(&text, &whatif.line_overrides(&node.id));
-            // FR-025: слоты с учётом построчных истоков — строки downstream
-            // нод видят значения строк источников (`= $in × 2` от строки)
-            let slots = flow::inbound_slots_with_lines(
-                &self.canvas,
-                &node.id,
-                &solutions.outputs,
-                &solutions.lines,
-            );
-            let line_results = if slots.is_empty() {
-                expr::eval_lines(&text)
-            } else {
-                expr::eval_lines_in(&text, &ExprEnv::with_inbound(slots))
-            };
-            if line_results.iter().any(Option::is_some) {
-                self.expr_line_results.insert(node.id.clone(), line_results);
-            }
-        }
-        // FR-029 (визуализация проливания): параметры, запитанные рёбрами
-        // с toParam — рендер покажет «param ← источник» и эффективный бейдж.
-        // Эффективное значение — значение РЕБРА-источника (адресация fromLine/
-        // fromOutput/узловое), а не локальный RHS строки: бейдж и подпись
-        // показывают истину потока, а не захардкоженный литерал листа.
-        let mut param_spills: HashMap<String, Vec<SpillView>> = HashMap::new();
-        for node in &self.canvas.nodes {
-            let spills = flow::param_spills(&self.canvas, &node.id);
-            if spills.is_empty() {
-                continue;
-            }
-            let views = spills
-                .into_iter()
-                .map(|spill| {
-                    // Значение ребра-источника — что реально пролито
-                    // в параметр (не локальный RHS строки).
-                    let value = spill_edge_value(solutions, &spill).map(|v| v.to_string());
-                    SpillView {
-                        line: assignment_line(node, &spill.param),
-                        param: spill.param,
-                        from_label: spill.from_label,
-                        from_output: spill.from_output,
-                        value,
-                    }
-                })
-                .collect();
-            param_spills.insert(node.id.clone(), views);
-        }
-        self.param_spills = param_spills;
-        // FR-017 (CP6): what-if представления нод для рендера — виртуальный
-        // исходник, подсветка подмен, дельта-бейджи (только ноды с подменами;
-        // рельеф базы рендер рисует как есть).
-        self.whatif_nodes = self.build_whatif_nodes(&whatif);
-        // CR-012: ленивый refit высоты — резерв футера результата.
-        self.apply_result_reserve();
-    }
-
-    /// FR-017: собрать what-if представления нод активного сценария
-    /// (рендер): виртуальный исходник, индексы подменённых строк, дельты
-    /// строк и узлового итога в полном формате «было → стало (+Δ)».
-    fn build_whatif_nodes(&self, whatif: &flow::WhatIfOverrides) -> HashMap<String, WhatIfNode> {
-        let mut map = HashMap::new();
-        if whatif.line_exprs.is_empty() {
-            return map;
-        }
-        // Группировка подмен по нодам (сортировка строк — детерминизм).
-        let mut per_node: HashMap<String, Vec<(usize, String)>> = HashMap::new();
-        for ((node_id, line), expr) in &whatif.line_exprs {
-            per_node
-                .entry(node_id.clone())
-                .or_default()
-                .push((*line, expr.clone()));
-        }
-        for (node_id, mut lines) in per_node {
-            lines.sort_by_key(|(line, _)| *line);
-            let Some(node) = self.canvas.node(&node_id) else {
-                continue;
-            };
-            let base_text = node.text.clone().unwrap_or_default();
-            let refs: Vec<(usize, &String)> = lines.iter().map(|(l, e)| (*l, e)).collect();
-            let text = flow::whatif_virtual_text(&base_text, &refs);
-            let mut line_deltas = Vec::new();
-            for (line, _) in &lines {
-                let key = (node_id.clone(), *line);
-                let (Some(base), Some(whatif_value)) = (
-                    self.flow_baseline.lines.get(&key),
-                    self.flow_active.lines.get(&key),
-                ) else {
-                    continue;
-                };
-                if let Some(full) = whatif_full_delta(base, whatif_value) {
-                    line_deltas.push((*line, full));
-                }
-            }
-            // Дельта узлового итога — только если футер результата виден
-            // (построчные результаты Numi-листа заменяют его у обычных нод;
-            // у шаблонных футер — всегда).
-            let footer_delta = self
-                .canvas
-                .nodes
-                .iter()
-                .position(|node| node.id == node_id)
-                .filter(|index| self.node_shows_result_footer(*index))
-                .and_then(|_| {
-                    let base = self.flow_baseline.outputs.get(&node_id);
-                    let whatif_value = self.flow_active.outputs.get(&node_id);
-                    match (base, whatif_value) {
-                        (Some(Ok(base)), Some(Ok(whatif_value))) => {
-                            whatif_full_delta(base, whatif_value)
-                        }
-                        _ => None,
-                    }
-                });
-            map.insert(
-                node_id.clone(),
-                WhatIfNode {
-                    text,
-                    overrides: lines.into_iter().map(|(line, _)| line).collect(),
-                    line_deltas,
-                    footer_delta,
-                },
-            );
-        }
-        map
-    }
-
-    /// FR-017: подмены активного сценария + протухшие маркеры. Режим не
-    /// активен или «База» — пустые подмены (propagator = baseline).
-    fn active_whatif_overrides(&self) -> (flow::WhatIfOverrides, Vec<StaleOverride>) {
-        let mut whatif = flow::WhatIfOverrides::default();
-        let mut stale = Vec::new();
-        if self.whatif_active {
-            if let Some(scenario) = self.active_scenario.and_then(|i| self.scenarios.get(i)) {
-                stale = canvas_core::whatif::validate_scenario(&self.canvas, scenario);
-                whatif.line_exprs = canvas_core::whatif::active_line_exprs(&self.canvas, scenario);
-            }
-        }
-        (whatif, stale)
-    }
-
-    /// FR-017: число подмен активного сценария (для счётчика бара).
-    fn whatif_override_count(&self) -> usize {
-        self.active_scenario
-            .and_then(|i| self.scenarios.get(i))
-            .map(|scenario| scenario.line_exprs.len())
-            .unwrap_or(0)
-    }
-
-    /// FR-017: переключить активный сценарий (`None` — «База») и
-    /// пересчитать. Runtime-действие: `.canvas` не мутируется (инвариант 2).
-    fn whatif_activate(&mut self, index: Option<usize>) {
-        self.active_scenario = index;
-        self.recompute_flow();
-    }
-
-    /// FR-017: новый именованный сценарий (лимит 2–3 пользовательских —
-    /// гипотеза Q5b; сверх лимита — отказ). Список сценариев персистентен:
-    /// мутация `Canvas.extra` с push_undo вызывающей стороной.
-    fn whatif_create_scenario(&mut self, name: &str) -> Result<usize, String> {
-        const MAX_SCENARIOS: usize = 3;
-        if self.scenarios.len() >= MAX_SCENARIOS {
-            return Err(format!(
-                "лимит сценариев: не более {MAX_SCENARIOS} (гипотеза Q5b)"
-            ));
-        }
-        let name = if name.trim().is_empty() {
-            format!("Сценарий {}", self.scenarios.len() + 1)
-        } else {
-            name.trim().to_owned()
-        };
-        if self.scenarios.iter().any(|scenario| scenario.name == name) {
-            return Err(format!("сценарий уже существует: {name}"));
-        }
-        self.scenarios.push(Scenario {
-            name,
-            line_exprs: HashMap::new(),
-        });
-        Ok(self.scenarios.len() - 1)
-    }
-
-    /// FR-017: удалить сценарий по индексу (переключение на «Базу», если
-    /// удалён активный).
-    fn whatif_delete_scenario(&mut self, index: usize) {
-        if index >= self.scenarios.len() {
-            return;
-        }
-        self.scenarios.remove(index);
-        self.active_scenario = match self.active_scenario {
-            Some(active) if active == index => None,
-            Some(active) if active > index => Some(active - 1),
-            other => other,
-        };
-    }
-
-    /// FR-017 (Q6b): Apply активного сценария — записать подмены в
-    /// persisted-строки/params и УДАЛИТЬ сценарий (его смысл исчерпан).
-    /// Вызывающий отвечает за push_undo ДО вызова и mark_dirty/ревал ПОСЛЕ.
-    fn whatif_apply_active(&mut self) -> usize {
-        let Some(index) = self.active_scenario else {
-            return 0;
-        };
-        let Some(scenario) = self.scenarios.get(index).cloned() else {
-            return 0;
-        };
-        let applied = canvas_core::whatif::active_line_exprs(&self.canvas, &scenario);
-        for ((node_id, line), expr) in &applied {
-            let Some(node_index) = self.canvas.nodes.iter().position(|n| &n.id == node_id) else {
-                continue;
-            };
-            let text = self.canvas.nodes[node_index]
-                .text
-                .clone()
-                .unwrap_or_default();
-            let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-            if line >= &lines.len() {
-                continue;
-            }
-            lines[*line] = expr.clone();
-            let text = lines.join("\n");
-            let node = &mut self.canvas.nodes[node_index];
-            node.text = Some(text.clone());
-            // Шаблонная нода: синхронизация снапшота params (паттерн
-            // finish_editing FR-018/FR-023 — слияние, не замена)
-            if node.template().is_some() {
-                let fresh = canvas_core::templates::params_from_text(&text);
-                let params = canvas_core::templates::merge_params(node.template_params(), fresh);
-                node.set_template_params(params);
-            }
-        }
-        // Сценарий применён — удаляем (Q6b); остальные валидны против новой базы
-        self.whatif_delete_scenario(index);
-        self.active_scenario = None;
-        applied.len()
-    }
-
-    /// CR-012: нода получит футер результата по правилу рендера
-    /// (text.rs): шаблонные — всегда (итог формулы шаблона поверх
-    /// построчных результатов), обычные — только при отсутствии
-    /// построчных Numi-результатов и наличии итога/ошибки формулы.
-    fn node_shows_result_footer(&self, index: usize) -> bool {
-        let node = &self.canvas.nodes[index];
-        let has_line_results = self
-            .expr_line_results
-            .get(&node.id)
-            .is_some_and(|lines| lines.iter().any(Option::is_some));
-        if has_line_results && node.template().is_none() {
-            return false;
-        }
-        matches!(
-            self.expr_results.get(&node.id),
-            Some(ExprOutcome::Ok(_) | ExprOutcome::Err(_))
-        )
-    }
-
-    /// CR-012: growth-only рост высоты ноды под резерв футера результата
-    /// (по [`SceneState::node_shows_result_footer]); spatial index
-    /// обновляется только при реальном росте. formula_lines — из построчных
-    /// результатов ноды (тот же источник, что у рендера).
-    fn ensure_reserve_at(&mut self, index: usize) {
-        if !self.node_shows_result_footer(index) {
-            return;
-        }
-        let formula_lines = self
-            .expr_line_results
-            .get(&self.canvas.nodes[index].id)
-            .map(|lines| formula_line_indices(lines))
-            .unwrap_or_default();
-        // FR-029: подгонка по показываемому тексту (пролитые строки —
-        // подписи источников, длиннее локальных литералов).
-        let display = display_body_text(&self.canvas.nodes[index], &self.param_spills);
-        let before = self.canvas.nodes[index].height;
-        ensure_result_reserve(&mut self.canvas.nodes[index], &display, &formula_lines);
-        if self.canvas.nodes[index].height > before {
-            let node = &self.canvas.nodes[index];
-            self.spatial.update(index, node);
-        }
-    }
-
-    /// CR-012: ленивый refit всех нод канваса — резерв футера результата
-    /// для нод, которым рендер его покажет. Вызывается в конце ЛЮБОГО
-    /// пересчёта (recompute_flow, в т.ч. загрузка .canvas и MCP-мутации) —
-    /// growth-only, поэтому повторные вызовы дёшевы и не осциллируют.
-    fn apply_result_reserve(&mut self) {
-        for index in 0..self.canvas.nodes.len() {
-            self.ensure_reserve_at(index);
-        }
-    }
-
-    /// FR-014: тогл типа потока связи (Value ↔ Control) из палитры
-    /// (ПКМ по связи) — единая точка с MCP `flow_set_kind` по инвариантам:
-    /// undo-шаг «до» (FR-006), mark_dirty, живой пересчёт downstream.
-    /// Возвращает `Ok(true)` — применено; `Ok(false)` — no-op (связи нет
-    /// или тип уже такой, шаг не копится); `Err(участники)` — тогл в Value
-    /// замкнул бы цикл value-рёбер, отклонён (UI показывает toast).
-    /// Правка 3: раньше мутация применялась к клону-снимку, живой канвас
-    /// не менялся — переключатель в интерфейсе не работал (MCP работал).
-    fn toggle_edge_flow(&mut self, edge_index: usize, kind: FlowKind) -> Result<bool, Vec<String>> {
-        let Some(edge) = self.canvas.edges.get(edge_index) else {
-            return Ok(false); // связи нет — no-op
-        };
-        if edge.flow_kind() == kind {
-            return Ok(false); // no-op — шаг не копится
-        }
-        if kind == FlowKind::Value
-            && canvas_core::creates_value_cycle(&self.canvas, &edge.from_node, &edge.to_node)
-        {
-            return Err(
-                canvas_core::value_path(&self.canvas, &edge.to_node, &edge.from_node)
-                    .unwrap_or_default(),
-            );
-        }
-        // Снимок «до» мутации (FR-006), затем мутация ЖИВОГО канваса
-        let snapshot = self.canvas.clone();
-        if let Some(edge) = self.canvas.edges.get_mut(edge_index) {
-            edge.set_flow_kind(kind);
-        }
-        if self.canvas != snapshot {
-            self.push_undo(snapshot);
-            self.mark_dirty();
-            // Downstream мог потерять/обрести входы — живой пересчёт
-            self.recompute_flow();
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// FR-013 (правка 2): пересчитать результаты ноды. Текст вычисляется
-    /// ПОСТРОЧНО (Numi-стиль, `expr::eval_lines`): общее окружение,
-    /// результат каждой формульной строки. Если построчных результатов нет,
-    /// а `canvasdesk.expr` задан (MCP) — программный итог в футере карточки.
-    /// Env пустой: ИЗОЛИРОВАННЫЙ расчёт — фолбэк recompute_flow при цикле
-    /// value-рёбер из чужих файлов и проверка FR-013-семантики в тестах;
-    /// живой путь приложения — [`SceneState::recompute_flow`].
-    fn recompute_expr(&mut self, node_id: &str) {
-        let Some(node) = self.canvas.node(node_id) else {
-            self.expr_line_results.remove(node_id);
-            self.expr_results.remove(node_id);
-            return;
-        };
-        let text = node.text.clone().unwrap_or_default();
-        let line_results = expr::eval_lines(&text);
-        if line_results.iter().any(Option::is_some) {
-            // Построчные результаты есть — программный итог не показывается
-            // (его значение — последняя формульная строка)
-            self.expr_line_results
-                .insert(node_id.to_owned(), line_results);
-            self.expr_results.remove(node_id);
-            return;
-        }
-        self.expr_line_results.remove(node_id);
-        let outcome = match node.expr() {
-            // Явная формула (MCP `node_edit { expr }`): ошибки показываются
-            Some(formula) => match expr::parse(formula) {
-                Ok(parsed) => match expr::eval(&parsed, &ExprEnv::empty()) {
-                    Ok(value) => Some(ExprOutcome::Ok(value)),
-                    Err(err) => Some(ExprOutcome::Err(err.to_string())),
-                },
-                Err(err) => Some(ExprOutcome::Err(err.to_string())),
-            },
-            None => None,
-        };
-        match outcome {
-            Some(outcome) => {
-                self.expr_results.insert(node_id.to_owned(), outcome);
-            }
-            None => {
-                self.expr_results.remove(node_id);
-            }
-        }
-    }
-
-    /// FR-013: изолированный пересчёт формул всех нод (фолбэк при цикле
-    /// value-рёбер; без учёта потока). undo/redo — см. recompute_flow.
-    fn recompute_all_expr(&mut self) {
-        self.expr_results.clear();
-        self.expr_line_results.clear();
-        let ids: Vec<String> = self
-            .canvas
-            .nodes
-            .iter()
-            .map(|node| node.id.clone())
-            .collect();
-        for id in ids {
-            self.recompute_expr(&id);
-        }
-    }
-
-    fn load_or_seed(path: PathBuf) -> Self {
-        let canvas = match Canvas::load(&path) {
-            Ok(canvas) => {
-                tracing::info!(path = %path.display(), nodes = canvas.nodes.len(), "канвас загружен");
-                canvas
-            }
-            Err(err) => {
-                tracing::info!(path = %path.display(), %err, "создаю стартовый канвас");
-                let canvas = seed_canvas();
-                if let Err(err) = canvas.save(&path) {
-                    tracing::warn!(%err, "не удалось сохранить стартовый канвас");
-                }
-                canvas
-            }
-        };
-        Self::new(canvas, path)
-    }
-
-    /// Переместить ноду: модель + инкрементальное обновление spatial index (T5).
-    fn move_node(&mut self, index: usize, x: f32, y: f32) {
-        if let Some(node) = self.canvas.nodes.get_mut(index) {
-            node.x = x;
-            node.y = y;
-            self.spatial.update(index, node);
-        }
-    }
-
-    /// Каталог .canvas-файла: база для относительных путей нод (конвенция
-    /// JSON Canvas) и для директорий вотчера (T10).
-    fn canvas_dir(&self) -> PathBuf {
-        self.path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default()
-    }
-
-    /// Абсолютный путь файловой ноды: относительные резолвятся от каталога
-    /// .canvas-файла (конвенция JSON Canvas); shell-API требуют абсолютных путей
-    /// (SHCreateItemFromParsingName возвращает E_INVALIDARG на относительных).
-    /// Логика — в canvas_core::resolve_node_path (единый источник, T10).
-    fn resolve_file_path(&self, file: &str) -> PathBuf {
-        canvas_core::resolve_node_path(file, &self.canvas_dir())
-    }
-
-    fn mark_dirty(&mut self) {
-        self.dirty_since = Some(Instant::now());
-    }
-
-    /// Сохранить, если правки висят дольше debounce (SPEC §9). Возвращает true при записи.
-    fn autosave_if_due(&mut self) -> bool {
-        let due = self
-            .dirty_since
-            .is_some_and(|since| since.elapsed() >= AUTOSAVE_DEBOUNCE);
-        if !due {
-            return false;
-        }
-        self.save_now()
-    }
-
-    fn save_now(&mut self) -> bool {
-        self.dirty_since = None;
-        match self.canvas.save_with_backup(&self.path) {
-            Ok(()) => {
-                tracing::info!(path = %self.path.display(), "канвас сохранён");
-                true
-            }
-            Err(err) => {
-                tracing::error!(%err, "ошибка сохранения канваса");
-                false
-            }
-        }
-    }
-
-    /// Зафиксировать снапшот «до» действия (FR-006): вызывать ДО мутации.
-    /// Новое действие обнуляет ветку redo; глубина — UNDO_LIMIT с
-    /// вытеснением старейшего.
-    fn push_undo(&mut self, snapshot: Canvas) {
-        self.redo_stack.clear();
-        self.undo_stack.push_back(snapshot);
-        while self.undo_stack.len() > UNDO_LIMIT {
-            self.undo_stack.pop_front();
-        }
-    }
-
-    /// Состояние «до» последнего действия (FR-006, Ctrl+Z): pop undo-стека,
-    /// текущая модель уходит в redo. None — история пуста.
-    fn take_undo(&mut self) -> Option<Canvas> {
-        let before = self.undo_stack.pop_back()?;
-        self.redo_stack.push(self.canvas.clone());
-        Some(before)
-    }
-
-    /// Отменённое состояние (FR-006, Ctrl+Y / Ctrl+Shift+Z): pop redo-стека,
-    /// текущая модель возвращается в undo. None — возвратить нечего.
-    fn take_redo(&mut self) -> Option<Canvas> {
-        let after = self.redo_stack.pop()?;
-        self.undo_stack.push_back(self.canvas.clone());
-        Some(after)
-    }
 }
 
 /// Пользовательские события event loop (T6): worker-потоки ThumbService
@@ -1449,6 +583,21 @@ struct DocsViewer {
     layout_width: f32,
 }
 
+/// FR-017 (CP6): строка раскрытого списка подмен нижнего бара
+/// (`нода → строка i: было → стало` + маркер протухания Q5c).
+/// UI-тип панели what-if (после FR-037 MW1 остался в App: используется
+/// только нижним баром).
+#[derive(Debug, Clone)]
+struct WhatIfOverrideRow {
+    node: String,
+    node_label: String,
+    line: usize,
+    base: String,
+    whatif: String,
+    /// Протухшая подмена (Q5c) — причина, строка рисуется предупреждающей.
+    stale: Option<String>,
+}
+
 /// Состояние приложения: окно и рендерер создаются в `resumed`
 /// (идиома winit 0.30 — окно создаётся только на активном event loop).
 struct App {
@@ -1456,6 +605,16 @@ struct App {
     renderer: Option<canvas_render::Renderer>,
     camera: Camera,
     scene: SceneState,
+    /// Первичное выделение: нода или связь (T8) — якорь для контекстного
+    /// меню, редактирования, фокуса (T23), перепривязки (CR-002).
+    /// FR-037/ADR-0012: UI-поля ввода вынесены из SceneState в App.
+    selected: Option<Selection>,
+    /// Множественное выделение нод (CR-001): рамка drag или Ctrl/Shift+клик.
+    /// Порядок — порядок добавления (клики) или индексы (рамка).
+    selected_nodes: Vec<usize>,
+    /// Drag ноды (T7/CR-001): захваченная нода + исходные позиции всех
+    /// перемещаемых (выделение или одна + дети групп).
+    dragging: Option<DragState>,
     /// Пул системных тамбнейлов (T6): заказы по видимым нодам, ответы в канал.
     thumbs: ThumbService,
     modifiers: ModifiersState,
@@ -1723,6 +882,9 @@ impl App {
             renderer: None,
             camera: Camera::default(),
             scene,
+            selected: None,
+            selected_nodes: Vec::new(),
+            dragging: None,
             thumbs,
             modifiers: ModifiersState::empty(),
             cursor: [0.0, 0.0],
@@ -2295,8 +1457,8 @@ impl App {
         self.editing = Some(session);
         // FR-021: popup подсказок — с чистого листа на каждую правку
         self.hints.reset();
-        self.scene.selected = Some(Selection::Node(index));
-        self.scene.dragging = None;
+        self.selected = Some(Selection::Node(index));
+        self.dragging = None;
         // Давняя заметка могла переполниться до нас (загрузка из файла) —
         // подгоняем размер сразу при входе в редактирование. Группу под
         // текст не подгоняем: рамку ресайзит только пользователь.
@@ -2335,8 +1497,8 @@ impl App {
         );
         self.editing = Some(session);
         self.hints.reset();
-        self.scene.selected = Some(Selection::Edge(index));
-        self.scene.dragging = None;
+        self.selected = Some(Selection::Edge(index));
+        self.dragging = None;
         self.sync_cursor_icon();
         self.request_redraw();
     }
@@ -2891,8 +2053,8 @@ impl App {
         self.editing = Some(session);
         self.whatif_override_line = Some(line);
         self.hints.reset();
-        self.scene.selected = Some(Selection::Node(index));
-        self.scene.dragging = None;
+        self.selected = Some(Selection::Node(index));
+        self.dragging = None;
         self.sync_cursor_icon();
         self.request_redraw();
     }
@@ -3181,8 +2343,8 @@ impl App {
             indices.push(index);
         }
         if select {
-            self.scene.selected = None;
-            self.scene.selected_nodes = indices.clone();
+            self.selected = None;
+            self.selected_nodes = indices.clone();
         }
         self.scene.mark_dirty();
         // Файловые копии — вотчер/поиск должны увидеть директории (T10)
@@ -3213,7 +2375,7 @@ impl App {
             return;
         };
         // Drag: позиции нод отличаются от исходных (origins хранит «до»)
-        let moved = self.scene.dragging.as_ref().is_some_and(|drag| {
+        let moved = self.dragging.as_ref().is_some_and(|drag| {
             drag.origins.iter().any(|(index, origin)| {
                 self.scene
                     .canvas
@@ -3285,9 +2447,9 @@ impl App {
             renderer.invalidate_node_caches();
         }
         self.thumbs_failed.clear();
-        self.scene.selected = None;
-        self.scene.selected_nodes.clear();
-        self.scene.dragging = None;
+        self.selected = None;
+        self.selected_nodes.clear();
+        self.dragging = None;
         self.resizing = None;
         self.menu = None;
         self.hovered = None;
@@ -3302,8 +2464,8 @@ impl App {
     /// Индексы выделенных нод (FR-003): набор мультивыделения ∪ primary,
     /// по возрастанию без дубликатов; пусто — ничего не выделено.
     fn selection_node_indices(&self) -> Vec<usize> {
-        let mut indices = self.scene.selected_nodes.clone();
-        if let Some(Selection::Node(index)) = self.scene.selected {
+        let mut indices = self.selected_nodes.clone();
+        if let Some(Selection::Node(index)) = self.selected {
             if !indices.contains(&index) {
                 indices.push(index);
             }
@@ -3402,10 +2564,10 @@ impl App {
     /// сбрасываются полностью.
     fn delete_selected(&mut self) {
         // CR-001: мультивыделение — удаляем весь набор (рамка/Ctrl+клик)
-        if !self.scene.selected_nodes.is_empty() {
+        if !self.selected_nodes.is_empty() {
             // FR-006: удаление набора — undo-шаг
             self.push_undo();
-            let indices = std::mem::take(&mut self.scene.selected_nodes);
+            let indices = std::mem::take(&mut self.selected_nodes);
             let removed = self.scene.canvas.remove_nodes(&indices);
             if removed.is_empty() {
                 return;
@@ -3415,8 +2577,8 @@ impl App {
                 renderer.invalidate_node_caches();
             }
             self.thumbs_failed.clear();
-            self.scene.selected = None;
-            self.scene.dragging = None;
+            self.selected = None;
+            self.dragging = None;
             self.resizing = None;
             self.editing = None;
             self.menu = None;
@@ -3432,7 +2594,7 @@ impl App {
             self.pending_undo = None;
             return;
         }
-        match self.scene.selected {
+        match self.selected {
             Some(Selection::Edge(index)) => {
                 let Some(edge) = self.scene.canvas.edges.get(index) else {
                     return;
@@ -3441,7 +2603,7 @@ impl App {
                 // FR-006: удаление связи — undo-шаг
                 self.push_undo();
                 self.scene.canvas.remove_edge(&id);
-                self.scene.selected = None;
+                self.selected = None;
                 self.scene.mark_dirty();
                 // FR-014: downstream этой связи — «вход отсутствует»
                 self.scene.recompute_flow();
@@ -3460,9 +2622,9 @@ impl App {
                     renderer.invalidate_node_caches();
                 }
                 self.thumbs_failed.clear();
-                self.scene.selected = None;
-                self.scene.selected_nodes.clear();
-                self.scene.dragging = None;
+                self.selected = None;
+                self.selected_nodes.clear();
+                self.dragging = None;
                 self.resizing = None;
                 self.editing = None;
                 self.menu = None;
@@ -3492,8 +2654,8 @@ impl App {
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
-        self.scene.selected = Some(Selection::Node(index));
-        self.scene.selected_nodes.clear();
+        self.selected = Some(Selection::Node(index));
+        self.selected_nodes.clear();
         self.scene.mark_dirty();
         index
     }
@@ -3598,8 +2760,8 @@ impl App {
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
-        self.scene.selected = Some(Selection::Node(index));
-        self.scene.selected_nodes.clear();
+        self.selected = Some(Selection::Node(index));
+        self.selected_nodes.clear();
         self.scene.mark_dirty();
         index
     }
@@ -3651,10 +2813,10 @@ impl App {
         self.edge_drag = None;
         self.select_rect = None;
         self.group_drop_target = None;
-        if self.scene.dragging.is_some() {
+        if self.dragging.is_some() {
             // FR-006: движение до потери фокуса — undo-шаг
             self.finish_interaction_undo();
-            self.scene.dragging = None;
+            self.dragging = None;
         }
         self.sync_cursor_icon();
     }
@@ -3948,7 +3110,7 @@ impl App {
                 if let Some(index) = last {
                     // Выделяем последнюю ноду группы; тамбнейлы закажет
                     // order_thumbnails в ближайшем кадре, автосейв — сам
-                    self.scene.selected = Some(Selection::Node(index));
+                    self.selected = Some(Selection::Node(index));
                     self.scene.mark_dirty();
                 }
                 // Поисковый индекс (T14): сброшенные файлы — сразу в FTS
@@ -4388,8 +3550,8 @@ impl App {
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
-        self.scene.selected = Some(Selection::Node(index));
-        self.scene.selected_nodes.clear();
+        self.selected = Some(Selection::Node(index));
+        self.selected_nodes.clear();
         self.scene.mark_dirty();
         self.scene.recompute_flow();
         index
@@ -5792,7 +4954,7 @@ impl App {
         if self.dialog.is_some()
             || self.search.is_open()
             || self.editing.is_some()
-            || self.scene.dragging.is_some()
+            || self.dragging.is_some()
             || self.edge_drag.is_some()
             || self.select_rect.is_some()
             // Взаимоисключение поповеров: открытое меню канваса прячет
@@ -5804,18 +4966,17 @@ impl App {
         }
         // Список выделенных нод: primary — одиночное/составное выделение
         // или первый из мультивыделения рамкой (CR-001, там selected = None)
-        let selected: Vec<usize> = match self.scene.selected {
+        let selected: Vec<usize> = match self.selected {
             Some(Selection::Node(primary)) => {
                 let mut selected = vec![primary];
-                for &index in &self.scene.selected_nodes {
+                for &index in &self.selected_nodes {
                     if !selected.contains(&index) && self.scene.canvas.nodes.get(index).is_some() {
                         selected.push(index);
                     }
                 }
                 selected
             }
-            None if !self.scene.selected_nodes.is_empty() => self
-                .scene
+            None if !self.selected_nodes.is_empty() => self
                 .selected_nodes
                 .iter()
                 .copied()
@@ -5824,7 +4985,7 @@ impl App {
             _ => Vec::new(),
         };
         if selected.is_empty() {
-            return match self.scene.selected {
+            return match self.selected {
                 Some(Selection::Edge(edge_index))
                     if self.scene.canvas.edges.get(edge_index).is_some() =>
                 {
@@ -6424,13 +5585,9 @@ impl App {
     fn update_focus_state(&mut self) {
         // CR-001: мультивыделение без primary — семя из первой выделенной
         // (фокус живёт и после сброса одиночного клика)
-        let selected = self.scene.selected.or_else(|| {
-            self.scene
-                .selected_nodes
-                .first()
-                .copied()
-                .map(Selection::Node)
-        });
+        let selected = self
+            .selected
+            .or_else(|| self.selected_nodes.first().copied().map(Selection::Node));
         let seed = focus_seed_of(self.hovered, selected);
         let focus_on = self.settings.focus_mode;
         // Цель затемнения: 1 — режим включён и семя есть; иначе всё гаснет
@@ -6479,13 +5636,13 @@ impl App {
                 // не гаснет вместе с остальными (план T23 §7); CR-001 —
                 // весь набор мультивыделения тоже остаётся ярким
                 let seed_is_edge = matches!(seed, FocusSeed::Edge(_));
-                if let (Some(Selection::Node(index)), false) = (self.scene.selected, seed_is_edge) {
+                if let (Some(Selection::Node(index)), false) = (self.selected, seed_is_edge) {
                     if !set.contains_node(index) {
                         set.nodes.push(index);
                     }
                 }
                 if !seed_is_edge {
-                    for index in &self.scene.selected_nodes {
+                    for index in &self.selected_nodes {
                         if !set.contains_node(*index) {
                             set.nodes.push(*index);
                         }
@@ -6994,14 +6151,31 @@ impl App {
                 Ok(request) => {
                     let id = request.id.unwrap_or(serde_json::Value::Null);
                     let (method, params) = mcp_unwrap_call(&request.method, &request.params);
-                    match mcp_dispatch(
-                        &mut self.scene,
-                        &mut self.camera,
-                        &self.templates,
-                        &method,
-                        &params,
-                    ) {
-                        Ok(value) => canvas_mcp::build_result(&id, &value),
+                    // ADR-0012 (viewport-зеркало): до диспетчера камера
+                    // снимается в scene.viewport, после — применяется
+                    // обратно; числа идентичны, viewport_get/set не меняется
+                    let position = self.camera.position();
+                    self.scene.viewport = Viewport {
+                        x: position[0],
+                        y: position[1],
+                        zoom: self.camera.zoom(),
+                    };
+                    let result = mcp_dispatch(&mut self.scene, &self.templates, &method, &params);
+                    self.camera
+                        .set_center([self.scene.viewport.x, self.scene.viewport.y]);
+                    self.camera.set_zoom(self.scene.viewport.zoom);
+                    match result {
+                        Ok(value) => {
+                            // node_delete — единственный инструмент, чистивший
+                            // выделение в старом SceneState (индексы сдвинулись):
+                            // UI-поля теперь в App (ADR-0012), чистим здесь
+                            if method == "node_delete" {
+                                self.selected = None;
+                                self.selected_nodes.clear();
+                                self.dragging = None;
+                            }
+                            canvas_mcp::build_result(&id, &value)
+                        }
                         Err(message) => canvas_mcp::build_call_error(&id, &message),
                     }
                 }
@@ -7013,2013 +6187,6 @@ impl App {
             self.request_redraw();
         }
     }
-}
-
-/// Распаковка MCP-конверта, пришедшего по pipe: `tools/call` несёт имя
-/// инструмента и аргументы внутри params (`name`/`arguments`) — посредник
-/// форвардит конверт как есть; прочие методы проходят без изменений.
-/// Чистая функция — тестируется без pipe.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_unwrap_call(method: &str, params: &serde_json::Value) -> (String, serde_json::Value) {
-    if method == "tools/call" {
-        let name = params
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_default();
-        let args = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        (name, args)
-    } else {
-        (method.to_owned(), params.clone())
-    }
-}
-
-/// Обязательный строковый параметр MCP-инструмента.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_req_str<'v>(params: &'v serde_json::Value, name: &str) -> Result<&'v str, String> {
-    params
-        .get(name)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("отсутствует параметр '{name}'"))
-}
-
-/// MCP-текст ноды (node_create_note / node_update_text / node_edit):
-/// нормализация literal-эскейпов — ИИ-агенты передают многострочный текст
-/// последовательностями `\n` (два символа), принимаем их как реальные
-/// переводы строк (контракт `canvas_core::mcp_text::normalize_escapes`).
-fn mcp_node_text(params: &serde_json::Value, name: &str) -> Option<String> {
-    params
-        .get(name)
-        .and_then(serde_json::Value::as_str)
-        .map(canvas_core::mcp_text::normalize_escapes)
-}
-
-/// Обязательный числовой параметр MCP-инструмента.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_req_f32(params: &serde_json::Value, name: &str) -> Result<f32, String> {
-    params
-        .get(name)
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| value as f32)
-        .ok_or_else(|| format!("отсутствует числовой параметр '{name}'"))
-}
-
-/// Опциональный числовой параметр MCP-инструмента.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_opt_f32(params: &serde_json::Value, name: &str) -> Option<f32> {
-    params
-        .get(name)
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| value as f32)
-}
-
-/// Индекс ноды по строковому id (MCP-инструменты адресуют ноды id).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_node_index(canvas: &Canvas, id: &str) -> Result<usize, String> {
-    canvas
-        .nodes
-        .iter()
-        .position(|node| node.id == id)
-        .ok_or_else(|| format!("нода не найдена: {id}"))
-}
-
-/// Сводка ноды для списков; поле text — только по запросу (can be большим).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_node_summary(node: &Node, with_text: bool) -> serde_json::Value {
-    let mut value = serde_json::json!({
-        "id": node.id,
-        "type": node.node_type,
-        "x": node.x,
-        "y": node.y,
-        "width": node.width,
-        "height": node.height,
-        "label": node.label,
-        "file": node.file,
-        "color": node.color,
-        // FR-013: Numi-формула (null — calc-режим выключен)
-        "expr": node.expr(),
-    });
-    if with_text {
-        value["text"] = serde_json::Value::from(node.text.clone());
-    }
-    value
-}
-
-/// Сторона связи MCP: "any"/отсутствие → None (автовывод из геометрии).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_side(params: &serde_json::Value, name: &str) -> Result<Option<Side>, String> {
-    match params.get(name).and_then(serde_json::Value::as_str) {
-        None | Some("any") => Ok(None),
-        Some(text) => serde_json::from_value(serde_json::Value::String(text.to_owned()))
-            .map(Some)
-            .map_err(|_| format!("неверная сторона '{name}': {text}")),
-    }
-}
-
-/// FR-032: каноническая схема ребра для `edges_list`/`edge_get` — агент
-/// восстанавливает топологию графа (CR-013 G4). FR-029 (CP1): при влитии
-/// полей `toParam`/`fromOutput` добавить их сюда же (опциональные, как
-/// fromLine) — обе ветки читения используют только эту функцию.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_edge_json(edge: &Edge) -> serde_json::Value {
-    let mut value = serde_json::json!({
-        "id": edge.id,
-        "from": edge.from_node,
-        "to": edge.to_node,
-        // FR-014: тип потока ("value"/"control") — ключ топологии для агента
-        "kind": edge.flow_kind().as_str(),
-        "fromSide": edge.from_side,
-        "toSide": edge.to_side,
-    });
-    if let Some(line) = edge.from_line {
-        value["fromLine"] = serde_json::json!(line);
-    }
-    // FR-029: адресация портов — именованный исток и проливание в параметр
-    if let Some(name) = &edge.from_output {
-        value["fromOutput"] = serde_json::json!(name);
-    }
-    if let Some(name) = &edge.to_param {
-        value["toParam"] = serde_json::json!(name);
-    }
-    value
-}
-
-/// Выполнить MCP-инструмент над сценой/камерой: 25 инструментов канваса
-/// (tools/list — в canvas-mcp). Чистая функция над SceneState + Camera —
-/// тестируется без окна и pipe; каждая мутирующая ветка обновляет spatial
-/// index и помечает канвас грязным (автосейв). Ошибки — строки, посредник
-/// заворачивает их в isError.
-#[cfg_attr(not(windows), allow(dead_code))]
-/// FR-017 (CP6): строка дельты «(+Δ)» между базовым и what-if значением.
-/// Формат полный (гипотеза Q4): % — в процентных пунктах, иначе абсолют
-/// с единицей (Q4c). None — значения совпадают (дельты нет).
-fn whatif_delta_str(base: &expr::Value, whatif: &expr::Value) -> Option<String> {
-    let delta = whatif.num - base.num;
-    if delta.abs() < 1e-9 {
-        return None;
-    }
-    let rounded = (delta * 100.0).round() / 100.0;
-    let unit = whatif.unit.display();
-    if unit == "%" {
-        Some(format!("{rounded:+.0} пп"))
-    } else if unit.is_empty() {
-        Some(format!("{rounded:+}"))
-    } else {
-        Some(format!("{rounded:+} {unit}"))
-    }
-}
-
-/// FR-017: полный формат дельта-бейджа «было → стало (+Δ)» (гипотеза Q4) —
-/// то, что рендер показывает вместо голого значения изменившейся строки/
-/// итога. Без изменений — None (бейдж остаётся обычным).
-fn whatif_full_delta(base: &expr::Value, whatif: &expr::Value) -> Option<String> {
-    let delta = whatif_delta_str(base, whatif)?;
-    Some(format!("{base} → {whatif} ({delta})"))
-}
-
-/// FR-017: одна изменившаяся точка графа (подменённая строка или итог
-/// ноды, пересчитанный каскадом).
-#[derive(Debug, Clone)]
-struct WhatIfDeltaRow {
-    node: String,
-    /// None — узловое значение ноды; Some(i) — строка i текста.
-    line: Option<usize>,
-    base: Option<String>,
-    whatif: Option<String>,
-    delta: Option<String>,
-}
-
-/// FR-017: строка раскрытого списка подмен нижнего бара
-/// (`нода → строка i: было → стало`).
-#[derive(Debug, Clone)]
-struct WhatIfOverrideRow {
-    node: String,
-    node_label: String,
-    line: usize,
-    base: String,
-    whatif: String,
-    /// Протухшая подмена (Q5c) — причина, строка рисуется предупреждающей.
-    stale: Option<String>,
-}
-
-impl WhatIfDeltaRow {
-    fn to_json(&self) -> serde_json::Value {
-        let mut entry = serde_json::json!({ "node": self.node });
-        if let Some(line) = self.line {
-            entry["line"] = serde_json::json!(line);
-        }
-        if let Some(base) = &self.base {
-            entry["base"] = serde_json::json!(base);
-        }
-        if let Some(whatif) = &self.whatif {
-            entry["whatif"] = serde_json::json!(whatif);
-        }
-        if let Some(delta) = &self.delta {
-            entry["delta"] = serde_json::json!(delta);
-        }
-        entry
-    }
-}
-
-/// FR-017: дельты активного сценария против базы — те же пары «было →
-/// стало», что видит пользователь на канвасе (инвариант 6: MCP-видимость
-/// эквивалентна UI).
-fn whatif_delta_rows(scene: &SceneState) -> Vec<WhatIfDeltaRow> {
-    let mut rows = Vec::new();
-    let Some(index) = scene.active_scenario else {
-        return rows;
-    };
-    let Some(scenario) = scene.scenarios.get(index) else {
-        return rows;
-    };
-    // Подменённые строки: сравнение построчных значений base vs active
-    let mut keys: Vec<&(String, usize)> = scenario.line_exprs.keys().collect();
-    keys.sort();
-    for (node, line) in keys {
-        let base = scene.flow_baseline.lines.get(&(node.clone(), *line));
-        let whatif = scene.flow_active.lines.get(&(node.clone(), *line));
-        if let (Some(base), Some(whatif)) = (base, whatif) {
-            rows.push(WhatIfDeltaRow {
-                node: node.clone(),
-                line: Some(*line),
-                base: Some(base.to_string()),
-                whatif: Some(whatif.to_string()),
-                delta: whatif_delta_str(base, whatif),
-            });
-        }
-    }
-    // Итоги нод, пересчитанные каскадом (downstream по value-рёбрам)
-    let mut node_ids: Vec<&String> = scene.flow_active.outputs.keys().collect();
-    node_ids.sort();
-    for id in node_ids {
-        let base = scene
-            .flow_baseline
-            .outputs
-            .get(id)
-            .and_then(|r| r.as_ref().ok());
-        let whatif = scene
-            .flow_active
-            .outputs
-            .get(id)
-            .and_then(|r| r.as_ref().ok());
-        if let (Some(base), Some(whatif)) = (base, whatif) {
-            if whatif_delta_str(base, whatif).is_some() {
-                rows.push(WhatIfDeltaRow {
-                    node: id.clone(),
-                    line: None,
-                    base: Some(base.to_string()),
-                    whatif: Some(whatif.to_string()),
-                    delta: whatif_delta_str(base, whatif),
-                });
-            }
-        }
-    }
-    rows
-}
-
-fn mcp_dispatch(
-    scene: &mut SceneState,
-    camera: &mut Camera,
-    templates: &canvas_core::templates::TemplateRegistry,
-    method: &str,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    match method {
-        "canvas_info" => Ok(serde_json::json!({
-            "path": scene.path.to_string_lossy(),
-            "nodes": scene.canvas.nodes.len(),
-            "edges": scene.canvas.edges.len(),
-        })),
-        "nodes_list" => {
-            let with_text = params
-                .get("text")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let nodes = scene
-                .canvas
-                .nodes
-                .iter()
-                .map(|node| mcp_node_summary(node, with_text))
-                .collect();
-            Ok(serde_json::Value::Array(nodes))
-        }
-        "node_get" => {
-            let id = mcp_req_str(params, "id")?;
-            let node = scene
-                .canvas
-                .node(id)
-                .ok_or_else(|| format!("нода не найдена: {id}"))?;
-            serde_json::to_value(node).map_err(|err| err.to_string())
-        }
-        "nodes_search" => {
-            let query = mcp_req_str(params, "query")?.to_lowercase();
-            let nodes = scene
-                .canvas
-                .nodes
-                .iter()
-                .filter(|node| {
-                    [
-                        node.text.as_deref(),
-                        node.label.as_deref(),
-                        node.file.as_deref(),
-                    ]
-                    .into_iter()
-                    .any(|field| field.is_some_and(|text| text.to_lowercase().contains(&query)))
-                })
-                .map(|node| mcp_node_summary(node, true))
-                .collect();
-            Ok(serde_json::Value::Array(nodes))
-        }
-        "node_create_note" => {
-            let x = mcp_req_f32(params, "x")?;
-            let y = mcp_req_f32(params, "y")?;
-            let text = mcp_node_text(params, "text").unwrap_or_default();
-            let mut node = Node::text(next_free_id(&scene.canvas, "note"), &text, x, y);
-            if let Some(width) = mcp_opt_f32(params, "width") {
-                node.width = width;
-            }
-            if let Some(height) = mcp_opt_f32(params, "height") {
-                node.height = height;
-            }
-            // FR-013: строки «= …» в тексте — формула
-            node.set_expr(split_formula_lines(&text));
-            let index = scene.canvas.nodes.len();
-            // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
-            scene.push_undo(scene.canvas.clone());
-            scene.canvas.nodes.push(node);
-            scene.spatial.insert(index, &scene.canvas.nodes[index]);
-            scene.mark_dirty();
-            // FR-014: живой пересчёт потока после создания expr-ноды
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
-        }
-        "node_create_file" => {
-            let path = mcp_req_str(params, "path")?;
-            let x = mcp_req_f32(params, "x")?;
-            let y = mcp_req_f32(params, "y")?;
-            // Файл на диске НЕ создаём — только карточка в модели
-            let node = Node::file(
-                next_free_id(&scene.canvas, "file"),
-                path,
-                x,
-                y,
-                mcp_opt_f32(params, "width").unwrap_or(canvas_app::ui::DROP_CARD_W),
-                mcp_opt_f32(params, "height").unwrap_or(canvas_app::ui::DROP_CARD_H),
-            );
-            let index = scene.canvas.nodes.len();
-            // FR-006: MCP-мутация — undo-шаг
-            scene.push_undo(scene.canvas.clone());
-            scene.canvas.nodes.push(node);
-            scene.spatial.insert(index, &scene.canvas.nodes[index]);
-            scene.mark_dirty();
-            Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
-        }
-        "node_update_text" => {
-            let id = mcp_req_str(params, "id")?;
-            let text = mcp_node_text(params, "text")
-                .ok_or_else(|| "отсутствует параметр 'text'".to_owned())?;
-            let index = mcp_node_index(&scene.canvas, id)?;
-            // FR-006: MCP-мутация — undo-шаг
-            scene.push_undo(scene.canvas.clone());
-            scene.canvas.nodes[index].text = Some(text.clone());
-            // FR-013: строки «= …» в тексте — формула (единая семантика
-            // с редактором); формула нет — сброс
-            scene.canvas.nodes[index].set_expr(split_formula_lines(&text));
-            scene.mark_dirty();
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "id": id }))
-        }
-        // FR-005: редактирование ноды одним вызовом — обновляются ТОЛЬКО
-        // переданные поля; label/color/expr = null — сброс; геометрия — с
-        // обновлением spatial index; ответ — сводка с текстом
-        "node_edit" => {
-            let id = mcp_req_str(params, "id")?;
-            let index = mcp_node_index(&scene.canvas, id)?;
-            // FR-013: expr валидируется ПЕРЕД undo-шагом — при ошибке
-            // парсинга нода не меняется вовсе (isError с диагностикой)
-            let expr_update = match params.get("expr") {
-                None => None,
-                Some(serde_json::Value::Null) => Some(None),
-                Some(serde_json::Value::String(formula)) => match expr::parse(formula) {
-                    Ok(_) => Some(Some(formula.clone())),
-                    Err(err) => return Err(format!("expr: {err}")),
-                },
-                Some(other) => return Err(format!("expr должен быть строкой или null: {other}")),
-            };
-            let mut geometry = false;
-            // FR-006: MCP-мутация — undo-шаг. Пушим до мутаций: валидация
-            // отдельных полей переплетена с применением остальных (частичные
-            // применения при Err тоже должны быть отменяемы)
-            scene.push_undo(scene.canvas.clone());
-            if let Some(text) = mcp_node_text(params, "text") {
-                scene.canvas.nodes[index].text = Some(text);
-                // CR-012: ленивый резерв футера под переносы нового текста
-                // (двухуровневый refit: оценка-ворота → измерение; formula_lines
-                // ensure_reserve_at берёт из текущих expr_line_results).
-                // expr здесь не пересчитывается — правило футера по текущим
-                // expr_results/expr_line_results; полный пересчёт — в ветке
-                // expr ниже (recompute_flow поднимет резерв сам).
-                scene.ensure_reserve_at(index);
-            }
-            match params.get("label") {
-                None => {}
-                Some(serde_json::Value::Null) => scene.canvas.nodes[index].label = None,
-                Some(serde_json::Value::String(label)) => {
-                    scene.canvas.nodes[index].label = Some(label.clone());
-                }
-                Some(other) => return Err(format!("label должен быть строкой или null: {other}")),
-            }
-            if params.get("color").is_some() {
-                let color = match params
-                    .get("color")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null)
-                {
-                    serde_json::Value::Null => None,
-                    serde_json::Value::String(preset)
-                        if matches!(preset.as_str(), "1" | "2" | "3" | "4" | "5" | "6") =>
-                    {
-                        Some(preset)
-                    }
-                    other => {
-                        return Err(format!(
-                            "color должен быть пресетом \"1\"..\"6\" или null, получено {other}"
-                        ));
-                    }
-                };
-                scene.canvas.nodes[index].color = color;
-            }
-            if let Some(x) = mcp_opt_f32(params, "x") {
-                scene.canvas.nodes[index].x = x;
-                geometry = true;
-            }
-            if let Some(y) = mcp_opt_f32(params, "y") {
-                scene.canvas.nodes[index].y = y;
-                geometry = true;
-            }
-            for (name, field) in [("width", 0), ("height", 1)] {
-                if let Some(value) = mcp_opt_f32(params, name) {
-                    if value <= 0.0 {
-                        return Err(format!("{name} должен быть > 0, получено {value}"));
-                    }
-                    if field == 0 {
-                        scene.canvas.nodes[index].width = value;
-                    } else {
-                        scene.canvas.nodes[index].height = value;
-                    }
-                    geometry = true;
-                }
-            }
-            if geometry {
-                let node = &scene.canvas.nodes[index];
-                scene.spatial.update(index, node);
-            }
-            // FR-013: формула уже провалидирована — применяем и пересчитываем;
-            // FR-014: живой пересчёт downstream
-            if let Some(new_expr) = expr_update {
-                scene.canvas.nodes[index].set_expr(new_expr);
-                scene.mark_dirty();
-                scene.recompute_flow();
-            }
-            scene.mark_dirty();
-            let node = &scene.canvas.nodes[index];
-            Ok(mcp_node_summary(node, true))
-        }
-        "node_move" => {
-            let id = mcp_req_str(params, "id")?;
-            let x = mcp_req_f32(params, "x")?;
-            let y = mcp_req_f32(params, "y")?;
-            let index = mcp_node_index(&scene.canvas, id)?;
-            // FR-006: MCP-мутация — undo-шаг
-            scene.push_undo(scene.canvas.clone());
-            scene.move_node(index, x, y);
-            scene.mark_dirty();
-            Ok(serde_json::json!({ "id": id }))
-        }
-        "node_resize" => {
-            let id = mcp_req_str(params, "id")?;
-            let width = mcp_req_f32(params, "width")?;
-            let height = mcp_req_f32(params, "height")?;
-            let index = mcp_node_index(&scene.canvas, id)?;
-            // FR-006: MCP-мутация — undo-шаг
-            scene.push_undo(scene.canvas.clone());
-            let node = &mut scene.canvas.nodes[index];
-            node.width = width;
-            node.height = height;
-            scene.spatial.update(index, node);
-            scene.mark_dirty();
-            Ok(serde_json::json!({ "id": id }))
-        }
-        "node_delete" => {
-            let id = mcp_req_str(params, "id")?;
-            let index = mcp_node_index(&scene.canvas, id)?;
-            // FR-006: MCP-мутация — undo-шаг
-            scene.push_undo(scene.canvas.clone());
-            let removed = scene
-                .canvas
-                .remove_node(index)
-                .ok_or_else(|| format!("нода не найдена: {id}"))?;
-            // Индексы сдвинулись — spatial перестраивается (паттерн delete_selected)
-            scene.spatial = SpatialIndex::build(&scene.canvas);
-            scene.selected = None;
-            scene.selected_nodes.clear();
-            scene.dragging = None;
-            scene.mark_dirty();
-            // FR-014: downstream удалённой ноды — «вход отсутствует»
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "id": removed.id }))
-        }
-        "node_set_color" => {
-            let id = mcp_req_str(params, "id")?;
-            let color = match params
-                .get("color")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null)
-            {
-                serde_json::Value::Null => None,
-                serde_json::Value::String(preset)
-                    if matches!(preset.as_str(), "1" | "2" | "3" | "4" | "5" | "6") =>
-                {
-                    Some(preset)
-                }
-                other => {
-                    return Err(format!(
-                        "color должен быть пресетом \"1\"..\"6\" или null, получено {other}"
-                    ));
-                }
-            };
-            let index = mcp_node_index(&scene.canvas, id)?;
-            // FR-006: MCP-мутация — undo-шаг (валидация цвета прошла выше)
-            scene.push_undo(scene.canvas.clone());
-            scene.canvas.nodes[index].color = color;
-            scene.mark_dirty();
-            Ok(serde_json::json!({ "id": id }))
-        }
-        "edge_create" => {
-            let from = mcp_req_str(params, "from")?.to_owned();
-            let to = mcp_req_str(params, "to")?.to_owned();
-            let from_index = mcp_node_index(&scene.canvas, &from)?;
-            let to_index = mcp_node_index(&scene.canvas, &to)?;
-            // FR-029 v2: адресация портов. kind — "value" включает поток
-            // значений сразу (раньше требовался flow_set_kind); дефолт
-            // "control" — визуальная связь (обратная совместимость).
-            let kind = match params.get("kind").and_then(serde_json::Value::as_str) {
-                None | Some("control") => FlowKind::Control,
-                Some("value") => FlowKind::Value,
-                Some(other) => {
-                    return Err(format!(
-                        "kind должен быть \"value\" или \"control\", получено {other:?}"
-                    ))
-                }
-            };
-            // Взаимное исключение fromLine/fromOutput — ошибка схемы
-            let from_line = match params.get("fromLine") {
-                None => None,
-                Some(value) => {
-                    let line = value.as_u64().ok_or_else(|| {
-                        "fromLine должен быть целым ≥ 0 (индексом строки)".to_owned()
-                    })?;
-                    Some(line as usize)
-                }
-            };
-            let from_output = params
-                .get("fromOutput")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-            if from_line.is_some() && from_output.is_some() {
-                return Err(
-                    "fromLine и fromOutput взаимно исключаются: адресуй строку ИЛИ именованный выход"
-                        .to_owned(),
-                );
-            }
-            let to_param = params
-                .get("toParam")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-            if to_param.is_some() && kind != FlowKind::Value {
-                return Err(
-                    "toParam адресует параметр шаблонной ноды: требуется kind = \"value\""
-                        .to_owned(),
-                );
-            }
-            // Валидация имён по снапшотам (FR-029): неизвестное имя — ошибка
-            // вызова, агент не молчит. Исток: шаблонная нода — секция
-            // outputs снапшота; текстовая — переменные Numi-листа
-            // (присваивания `имя = …`, чтение по списку params_from_text).
-            if let Some(name) = &from_output {
-                let source = &scene.canvas.nodes[from_index];
-                let known = match source.template() {
-                    Some(tpl) => tpl.outputs.iter().any(|spec| &spec.name == name),
-                    None => canvas_core::templates::params_from_text(
-                        &source.text.clone().unwrap_or_default(),
-                    )
-                    .contains_key(name),
-                };
-                if !known {
-                    return Err(format!(
-                        "нода {from} не имеет выхода {name:?}: у шаблонной — секция outputs, у текстовой — переменная Numi-листа"
-                    ));
-                }
-            }
-            // Приёмник: toParam — только параметр шаблонной ноды
-            if let Some(name) = &to_param {
-                let target = &scene.canvas.nodes[to_index];
-                match target.template() {
-                    Some(tpl) if tpl.params.contains_key(name) => {}
-                    Some(_) => {
-                        return Err(format!(
-                            "нода {to} не имеет параметра {name:?}: доступные — {}",
-                            target
-                                .template()
-                                .map(|tpl| tpl
-                                    .params
-                                    .keys()
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join(", "))
-                                .unwrap_or_default()
-                        ))
-                    }
-                    None => {
-                        return Err(format!(
-                            "toParam адресует параметры шаблонных нод: нода {to} — текстовая (позиционные слоты $1..$N без адресации)"
-                        ))
-                    }
-                }
-            }
-            let mut edge = Edge::new(
-                scene.canvas.next_edge_id(),
-                &from,
-                mcp_side(params, "fromSide")?,
-                &to,
-                mcp_side(params, "toSide")?,
-            );
-            edge.set_flow_kind(kind);
-            edge.from_line = from_line;
-            edge.from_output = from_output;
-            edge.to_param = to_param;
-            // FR-014: value-ребро не замыкает цикл (DAG-инвариант)
-            if kind == FlowKind::Value
-                && canvas_core::creates_value_cycle(&scene.canvas, &from, &to)
-            {
-                let participants = canvas_core::value_path(&scene.canvas, &to, &from)
-                    .unwrap_or_default()
-                    .join(" → ");
-                return Err(format!("цикл потока значений: {participants}"));
-            }
-            // FR-006: MCP-мутация — undo-шаг (все валидации прошли)
-            scene.push_undo(scene.canvas.clone());
-            let id = edge.id.clone();
-            scene.canvas.add_edge(edge);
-            scene.mark_dirty();
-            // FR-014: топология изменилась — живой пересчёт потока
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "id": id }))
-        }
-        "edge_delete" => {
-            let id = mcp_req_str(params, "id")?;
-            // FR-006: MCP-мутация — undo-шаг (проверка существования связи
-            // идёт в remove — неудача шага не оставит: снапшот не изменится,
-            // а лишний пуш свернётся сравнением ниже)
-            let snapshot = scene.canvas.clone();
-            if !scene.canvas.remove_edge(id) {
-                return Err(format!("связь не найдена: {id}"));
-            }
-            if scene.canvas != snapshot {
-                scene.push_undo(snapshot);
-            }
-            scene.mark_dirty();
-            // FR-014: топология изменилась — живой пересчёт потока
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "id": id }))
-        }
-        // FR-014: тогл типа потока. Тогл в Value, замыкающий цикл value-рёбер,
-        // — isError с участниками (пользователю UI показывает диалог, агенту
-        // MCP — явную ошибку)
-        "flow_set_kind" => {
-            let id = mcp_req_str(params, "id")?;
-            let kind = match params.get("kind").and_then(serde_json::Value::as_str) {
-                Some("value") => FlowKind::Value,
-                Some("control") => FlowKind::Control,
-                other => {
-                    return Err(format!(
-                        "kind должен быть \"value\" или \"control\", получено {other:?}"
-                    ));
-                }
-            };
-            let edge_index = scene
-                .canvas
-                .edges
-                .iter()
-                .position(|edge| edge.id == id)
-                .ok_or_else(|| format!("связь не найдена: {id}"))?;
-            let (from, to) = {
-                let edge = &scene.canvas.edges[edge_index];
-                (edge.from_node.clone(), edge.to_node.clone())
-            };
-            if kind == FlowKind::Value
-                && scene.canvas.edges[edge_index].flow_kind() != FlowKind::Value
-                && canvas_core::creates_value_cycle(&scene.canvas, &from, &to)
-            {
-                let participants = canvas_core::value_path(&scene.canvas, &to, &from)
-                    .unwrap_or_default()
-                    .join(" → ");
-                return Err(format!("цикл потока значений: {participants}"));
-            }
-            let snapshot = scene.canvas.clone();
-            scene.canvas.edges[edge_index].set_flow_kind(kind);
-            if scene.canvas != snapshot {
-                scene.push_undo(snapshot);
-            }
-            scene.mark_dirty();
-            scene.recompute_flow();
-            Ok(serde_json::json!({
-                "id": id,
-                "kind": scene.canvas.edges[edge_index].flow_kind().as_str(),
-            }))
-        }
-        // FR-029 v2: форс-пересчёт всего графа — узловое значение + именованные
-        // выходы + построчные значения + предупреждения проливания; карта
-        // для агентов, проверяющих сценарии (ноды без формулы не участвуют,
-        // но переменные их листов видны в outputs текстовых нод)
-        "flow_recalc" => {
-            let solutions =
-                flow::propagate_with_lines(&scene.canvas, &flow::WhatIfOverrides::default())
-                    .map_err(|cycle| cycle.to_string())?;
-            let nodes: serde_json::Map<String, serde_json::Value> = solutions
-                .outputs
-                .iter()
-                .map(|(id, result)| {
-                    let mut entry = match result {
-                        Ok(value) => serde_json::json!({
-                            "value": value.num,
-                            "unit": value.unit.display(),
-                        }),
-                        Err(err) => serde_json::json!({ "error": err.to_string() }),
-                    };
-                    // Именованные выходы ноды (FR-029): шаблонные — секция
-                    // outputs, текстовые — переменные Numi-листа
-                    let named: serde_json::Map<String, serde_json::Value> = solutions
-                        .named
-                        .iter()
-                        .filter(|((node_id, _), _)| node_id == id)
-                        .map(|((_, name), value)| {
-                            (
-                                name.clone(),
-                                serde_json::json!({
-                                    "value": value.num,
-                                    "unit": value.unit.display(),
-                                }),
-                            )
-                        })
-                        .collect();
-                    if !named.is_empty() {
-                        entry["outputs"] = serde_json::Value::Object(named);
-                    }
-                    // Построчные значения (FR-025/FR-029)
-                    let lines: Vec<serde_json::Value> = solutions
-                        .lines
-                        .iter()
-                        .filter(|((node_id, _), _)| node_id == id)
-                        .map(|((_, line), value)| {
-                            serde_json::json!({
-                                "index": line,
-                                "value": value.num,
-                                "unit": value.unit.display(),
-                            })
-                        })
-                        .collect();
-                    if !lines.is_empty() {
-                        entry["lines"] = serde_json::Value::Array(lines);
-                    }
-                    if let Some(warnings) = solutions.warnings.get(id) {
-                        entry["warnings"] = serde_json::json!(warnings);
-                    }
-                    (id.clone(), entry)
-                })
-                .collect();
-            // Текстовые ноды без узлового значения: их именованные
-            // выходы всё равно полезны агенту (проливание в downstream)
-            let mut result = serde_json::Value::Object(nodes);
-            for ((node_id, name), value) in &solutions.named {
-                let entry = result
-                    .as_object_mut()
-                    .expect("карта нод")
-                    .entry(node_id.clone())
-                    .or_insert_with(|| serde_json::json!({}));
-                let outputs = entry
-                    .as_object_mut()
-                    .expect("объект ноды")
-                    .entry("outputs".to_owned())
-                    .or_insert_with(|| serde_json::json!({}));
-                outputs[name] = serde_json::json!({
-                    "value": value.num,
-                    "unit": value.unit.display(),
-                });
-            }
-            // FR-029: проливание в параметры — агент видит, откуда пришло
-            // значение каждого запитанного параметра (источник + адресация
-            // порта + эффективное значение строки из пересчёта).
-            for node in &scene.canvas.nodes {
-                let spills = flow::param_spills(&scene.canvas, &node.id);
-                if spills.is_empty() {
-                    continue;
-                }
-                let spilled: serde_json::Map<String, serde_json::Value> = spills
-                    .into_iter()
-                    .map(|spill| {
-                        let mut item = serde_json::json!({ "from": spill.from_node });
-                        if let Some(output) = &spill.from_output {
-                            item["fromOutput"] = serde_json::json!(output);
-                        }
-                        if let Some(line) = spill.from_line {
-                            item["fromLine"] = serde_json::json!(line);
-                        }
-                        if let Some(value) = spill_edge_value(&solutions, &spill) {
-                            item["value"] = serde_json::json!(value.num);
-                            item["unit"] = serde_json::json!(value.unit.display());
-                        }
-                        (spill.param, item)
-                    })
-                    .collect();
-                let entry = result
-                    .as_object_mut()
-                    .expect("карта нод")
-                    .entry(node.id.clone())
-                    .or_insert_with(|| serde_json::json!({}));
-                entry["spilled"] = serde_json::Value::Object(spilled);
-            }
-            Ok(result)
-        }
-        // FR-014: проверка DAG-инварианта — [] или участники цикла
-        "flow_cycle_check" => match flow::topo_sort(&scene.canvas) {
-            Ok(_) => Ok(serde_json::json!([])),
-            Err(cycle) => Ok(serde_json::json!(cycle.nodes)),
-        },
-        // --- FR-017 (CP6): what-if сценарии ---
-        // Построчная подмена активного сценария. Режим/сценарий
-        // поднимаются автоматически (неявный «Сценарий MCP»). Подмена —
-        // runtime: `.canvas` не мутируется (инвариант 2); expr нормализуется
-        // (literal `\n` от ИИ-агентов → реальные переводы, mcp_text).
-        "whatif_set_override" => {
-            let node_id = mcp_req_str(params, "node_id")?.to_owned();
-            let line = params
-                .get("line")
-                .and_then(serde_json::Value::as_u64)
-                .ok_or("line: неотрицательное целое обязательно")? as usize;
-            let expr = canvas_core::mcp_text::normalize_escapes(mcp_req_str(params, "expr")?);
-            if scene.canvas.node(&node_id).is_none() {
-                return Err(format!("нода не найдена: {node_id}"));
-            }
-            if !scene.whatif_active {
-                scene.whatif_active = true;
-            }
-            if scene.active_scenario.is_none() {
-                let snapshot = scene.canvas.clone();
-                let index = scene.whatif_create_scenario("Сценарий MCP")?;
-                scene.active_scenario = Some(index);
-                canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
-                if scene.canvas != snapshot {
-                    scene.push_undo(snapshot);
-                }
-                scene.mark_dirty();
-            }
-            let index = scene.active_scenario.expect("сценарий активен");
-            scene.scenarios[index]
-                .line_exprs
-                .insert((node_id.clone(), line), expr.clone());
-            scene.recompute_flow();
-            Ok(serde_json::json!({
-                "scenario": scene.scenarios[index].name,
-                "node": node_id,
-                "line": line,
-                "expr": expr,
-            }))
-        }
-        // FR-017: sugar для шаблонных нод — адресация по имени параметра:
-        // находит строку `param = …` в тексте ноды и строит подмену
-        "whatif_set_param" => {
-            let node_id = mcp_req_str(params, "node_id")?.to_owned();
-            let param = mcp_req_str(params, "param")?.to_owned();
-            let value = canvas_core::mcp_text::normalize_escapes(mcp_req_str(params, "value")?);
-            let node = scene
-                .canvas
-                .node(&node_id)
-                .ok_or_else(|| format!("нода не найдена: {node_id}"))?;
-            let text = node.text.clone().unwrap_or_default();
-            let line = {
-                text.split('\n')
-                    .position(|row| {
-                        row.split_once('=')
-                            .map(|(name, _)| name.trim() == param)
-                            .unwrap_or(false)
-                    })
-                    .ok_or_else(|| format!("параметр {param} не найден в тексте ноды {node_id}"))?
-            };
-            let expr = format!("{param} = {value}");
-            mcp_dispatch(
-                scene,
-                camera,
-                templates,
-                "whatif_set_override",
-                &serde_json::json!({ "node_id": node_id, "line": line, "expr": expr }),
-            )
-        }
-        // FR-017: список сценариев с маркерами протухших подмен (Q5c)
-        "whatif_scenario_list" => {
-            let scenarios: Vec<serde_json::Value> = scene
-                .scenarios
-                .iter()
-                .map(|scenario| {
-                    let stale =
-                        canvas_core::whatif::validate_scenario(&scene.canvas, scenario).len();
-                    serde_json::json!({
-                        "name": scenario.name,
-                        "overrides": scenario.line_exprs.len(),
-                        "stale": stale,
-                    })
-                })
-                .collect();
-            Ok(serde_json::json!({
-                "active": scene
-                    .active_scenario
-                    .and_then(|i| scene.scenarios.get(i))
-                    .map(|scenario| scenario.name.clone()),
-                "whatif_active": scene.whatif_active,
-                "scenarios": scenarios,
-            }))
-        }
-        // FR-017: создать именованный сценарий (freeze, Q5d) — мутация
-        // `canvasdesk.whatif` одним undo-шагом
-        "whatif_scenario_create" => {
-            let name = params
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let snapshot = scene.canvas.clone();
-            let index = scene.whatif_create_scenario(name)?;
-            // Активация нового сценария (паттерн UI create): без неё
-            // set_override завёл бы параллельный «Сценарий MCP»
-            scene.active_scenario = Some(index);
-            if !scene.whatif_active {
-                scene.whatif_active = true;
-            }
-            canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
-            scene.push_undo(snapshot);
-            scene.mark_dirty();
-            scene.recompute_flow();
-            Ok(serde_json::json!({
-                "name": scene.scenarios[index].name,
-                "index": index,
-            }))
-        }
-        // FR-017: удалить сценарий (мутация `.canvas`, undo-шаг)
-        "whatif_scenario_delete" => {
-            let name = mcp_req_str(params, "name")?;
-            let Some(index) = scene.scenarios.iter().position(|s| s.name == name) else {
-                return Err(format!("сценарий не найден: {name}"));
-            };
-            let snapshot = scene.canvas.clone();
-            scene.whatif_delete_scenario(index);
-            canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
-            scene.push_undo(snapshot);
-            scene.mark_dirty();
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "deleted": name }))
-        }
-        // FR-017: переключение — runtime-only, файл не трогается (инвариант 2)
-        "whatif_scenario_activate" => {
-            let name = mcp_req_str(params, "name")?;
-            if !scene.whatif_active {
-                scene.whatif_active = true;
-            }
-            let index = if name == "База" {
-                None
-            } else {
-                Some(
-                    scene
-                        .scenarios
-                        .iter()
-                        .position(|s| s.name == name)
-                        .ok_or_else(|| format!("сценарий не найден: {name}"))?,
-                )
-            };
-            scene.whatif_activate(index);
-            Ok(serde_json::json!({ "active": name }))
-        }
-        // FR-017: дельты активного сценария — пары «было → стало», те же,
-        // что видны на канвасе (инвариант 6)
-        "whatif_deltas" => {
-            let rows = whatif_delta_rows(scene);
-            let nodes: serde_json::Map<String, serde_json::Value> = rows
-                .iter()
-                .map(|row| {
-                    (
-                        format!(
-                            "{}:{}",
-                            row.node,
-                            row.line
-                                .map(|l| l.to_string())
-                                .unwrap_or_else(|| "value".to_owned())
-                        ),
-                        row.to_json(),
-                    )
-                })
-                .collect();
-            Ok(serde_json::json!({
-                "active": scene
-                    .active_scenario
-                    .and_then(|i| scene.scenarios.get(i))
-                    .map(|scenario| scenario.name.clone()),
-                "deltas": nodes,
-            }))
-        }
-        // FR-017 (Q6a/Q6b): Apply активного сценария — записать подмены в
-        // persisted-строки/params и удалить сценарий; один undo-шаг
-        "whatif_apply" => {
-            if scene.active_scenario.is_none() {
-                return Err("активен сценарий «База» — нечего применять".to_owned());
-            }
-            let snapshot = scene.canvas.clone();
-            let applied = scene.whatif_apply_active();
-            canvas_core::whatif::scenarios_to_canvas(&mut scene.canvas, &scene.scenarios);
-            if scene.canvas != snapshot {
-                scene.push_undo(snapshot);
-                scene.mark_dirty();
-            }
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "applied": applied }))
-        }
-        // FR-017: сброс overrides активного сценария (runtime, файл не трогается)
-        "whatif_reset" => {
-            let cleared = scene.whatif_override_count();
-            if let Some(index) = scene.active_scenario {
-                if let Some(scenario) = scene.scenarios.get_mut(index) {
-                    scenario.line_exprs.clear();
-                }
-            }
-            scene.recompute_flow();
-            Ok(serde_json::json!({ "cleared": cleared }))
-        }
-        // CR-008: стороны подключения связи. "auto" — снять закрепления
-        // (кратчайший путь); "from"/"to"/"both" — закрепить концы, фиксируя
-        // текущие эффективные стороны (WYSIWYG, как в палитре)
-        "edge_ports" => {
-            let id = mcp_req_str(params, "id")?;
-            let pin = params.get("pin").and_then(serde_json::Value::as_str);
-            let edge_index = scene
-                .canvas
-                .edges
-                .iter()
-                .position(|edge| edge.id == id)
-                .ok_or_else(|| format!("связь не найдена: {id}"))?;
-            let snapshot = scene.canvas.clone();
-            match pin {
-                Some("auto") => {
-                    scene.canvas.edges[edge_index].clear_port_pins();
-                }
-                Some("from" | "to" | "both") => {
-                    let pin_from = pin != Some("to");
-                    let pin_to = pin != Some("from");
-                    for (end, do_pin) in [
-                        (canvas_core::EdgeEnd::From, pin_from),
-                        (canvas_core::EdgeEnd::To, pin_to),
-                    ] {
-                        if !do_pin {
-                            continue;
-                        }
-                        // Текущая эффективная сторона конца (геометрия как на экране)
-                        let Some((side, _)) =
-                            canvas_core::edge_endpoint(&scene.canvas, edge_index, end)
-                        else {
-                            return Err("висячая связь (нода не найдена)".to_owned());
-                        };
-                        let edge = &mut scene.canvas.edges[edge_index];
-                        match end {
-                            canvas_core::EdgeEnd::From => edge.from_side = Some(side),
-                            canvas_core::EdgeEnd::To => edge.to_side = Some(side),
-                        }
-                        edge.set_port_pin(end, true);
-                    }
-                }
-                other => {
-                    return Err(format!(
-                        "pin должен быть \"auto\", \"from\", \"to\" или \"both\", получено {other:?}"
-                    ));
-                }
-            }
-            let edge = &scene.canvas.edges[edge_index];
-            let (pin_from, pin_to) = edge.port_pins();
-            if scene.canvas != snapshot {
-                scene.push_undo(snapshot);
-            }
-            scene.mark_dirty();
-            Ok(serde_json::json!({
-                "id": id,
-                "pins": {
-                    "from": pin_from,
-                    "to": pin_to,
-                },
-            }))
-        }
-        // FR-032: чтение связей — агент восстанавливает топологию (CR-013
-        // G4: раньше рёбер не было видно вовсе, сборка шла вслепую)
-        "edges_list" => {
-            let edges: Vec<serde_json::Value> =
-                scene.canvas.edges.iter().map(mcp_edge_json).collect();
-            Ok(serde_json::Value::Array(edges))
-        }
-        // FR-032: одно ребро по id — полная каноническая схема
-        "edge_get" => {
-            let id = mcp_req_str(params, "id")?;
-            let edge = scene
-                .canvas
-                .edges
-                .iter()
-                .find(|edge| edge.id == id)
-                .ok_or_else(|| format!("связь не найдена: {id}"))?;
-            Ok(mcp_edge_json(edge))
-        }
-        // FR-032: валидация модели — отчёт ядра (validate.rs) с кодами
-        // E-*/W-*; чтение, не мутация: undo/автосейв не затрагиваются
-        "graph_validate" => {
-            let issues = canvas_core::validate::validate(&scene.canvas);
-            let valid = !canvas_core::validate::has_errors(&issues);
-            let issues: Vec<serde_json::Value> = issues
-                .iter()
-                .map(|issue| serde_json::to_value(issue).map_err(|err| err.to_string()))
-                .collect::<Result<_, _>>()?;
-            Ok(serde_json::json!({
-                "valid": valid,
-                "issues": issues,
-            }))
-        }
-        // FR-016 (CP5): анализ узких мест — та же карта флагов, что рисует
-        // оверлей канваса (инвариант 4: MCP-видимость = UI). Пересчёт
-        // свежий (как flow_recalc) — чтение, не мутация.
-        "analyze_bottlenecks" => Ok(mcp_analyze_bottlenecks(&scene.canvas)),
-        // FR-018: список шаблонов реестра — те же, что в палитре/wheel
-        // (инвариант 4: MCP-видимость эквивалентна UI)
-        "template_list" => {
-            let templates: Vec<serde_json::Value> = templates
-                .list()
-                .iter()
-                .map(|manifest| {
-                    let params: serde_json::Map<String, serde_json::Value> = manifest
-                        .params
-                        .iter()
-                        .map(|spec| {
-                            let mut entry = serde_json::json!({
-                                "type": spec.kind.as_str(),
-                                "default": spec.default,
-                            });
-                            if let Some(unit) = &spec.unit {
-                                entry["unit"] = serde_json::json!(unit);
-                            }
-                            if let Some(min) = spec.min {
-                                entry["min"] = serde_json::json!(min);
-                            }
-                            if let Some(max) = spec.max {
-                                entry["max"] = serde_json::json!(max);
-                            }
-                            (spec.name.clone(), entry)
-                        })
-                        .collect();
-                    // FR-029: именованные выходы — агент адресует их
-                    // рёбрами fromOutput
-                    let outputs: Vec<serde_json::Value> = manifest
-                        .outputs
-                        .iter()
-                        .map(|spec| {
-                            let mut entry = serde_json::json!({ "name": spec.name });
-                            if let Some(unit) = &spec.unit {
-                                entry["unit"] = serde_json::json!(unit);
-                            }
-                            match &spec.source {
-                                canvas_core::templates::OutputSource::Line(line) => {
-                                    entry["line"] = serde_json::json!(line);
-                                }
-                                canvas_core::templates::OutputSource::Expr(expr) => {
-                                    entry["expr"] = serde_json::json!(expr);
-                                }
-                            }
-                            entry
-                        })
-                        .collect();
-                    let mut entry = serde_json::json!({
-                        "id": manifest.id,
-                        "name_en": manifest.name,
-                        "name_ru": manifest.name_ru,
-                        "version": manifest.version,
-                        "category": manifest.category,
-                        "description": manifest.description,
-                        "description_en": manifest.description_en,
-                        "expr": manifest.expr,
-                        "icon": manifest.icon,
-                        "color": manifest.color,
-                        "source": manifest.source.as_str(),
-                        "params": params,
-                    });
-                    if !outputs.is_empty() {
-                        entry["outputs"] = serde_json::Value::Array(outputs);
-                    }
-                    entry
-                })
-                .collect();
-            Ok(serde_json::Value::Array(templates))
-        }
-        // FR-018: инстанциация шаблона (идентично wheel/палитре): text-нода
-        // с Numi-листом параметров и снимком canvasdesk.template; undo-шаг
-        "template_instantiate" => {
-            let id = mcp_req_str(params, "id")?;
-            let x = mcp_req_f32(params, "x")?;
-            let y = mcp_req_f32(params, "y")?;
-            let manifest = templates
-                .find(id)
-                .ok_or_else(|| format!("шаблон не найден: {id}"))?
-                .clone();
-            let mut overrides: BTreeMap<String, canvas_core::templates::TemplateParam> =
-                BTreeMap::new();
-            if let Some(map) = params.get("params").and_then(serde_json::Value::as_object) {
-                for (name, value) in map {
-                    let param = match value {
-                        serde_json::Value::Number(num) => {
-                            let num = num
-                                .as_f64()
-                                .ok_or_else(|| format!("параметр {name}: число"))?;
-                            // Число без единицы наследует единицу параметра
-                            // манифеста ({"rps": 2000} = 2000 rps)
-                            let unit = manifest
-                                .params
-                                .iter()
-                                .find(|spec| &spec.name == name)
-                                .and_then(|spec| spec.unit.clone());
-                            canvas_core::templates::TemplateParam { num, unit }
-                        }
-                        serde_json::Value::Object(obj) => canvas_core::templates::TemplateParam {
-                            num: obj
-                                .get("num")
-                                .and_then(serde_json::Value::as_f64)
-                                .ok_or_else(|| format!("параметр {name}: num обязателен"))?,
-                            unit: obj
-                                .get("unit")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_owned),
-                        },
-                        _ => {
-                            return Err(format!("параметр {name}: число или {{num, unit}}"));
-                        }
-                    };
-                    overrides.insert(name.clone(), param);
-                }
-            }
-            let node_id = next_free_id(&scene.canvas, "tpl");
-            let mut node =
-                canvas_core::templates::instantiate(&manifest, &overrides, node_id, x, y)
-                    .map_err(|err| err.to_string())?;
-            // FR-023: авто-высота — единая с GUI-путём (см. комментарий)
-            fit_template_node_height(&mut node);
-            let index = scene.canvas.nodes.len();
-            // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
-            scene.push_undo(scene.canvas.clone());
-            scene.canvas.nodes.push(node);
-            scene.spatial.insert(index, &scene.canvas.nodes[index]);
-            scene.mark_dirty();
-            // Формула шаблона с параметрами — в поток (FR-014)
-            scene.recompute_flow();
-            let summary = mcp_node_summary(&scene.canvas.nodes[index], true);
-            Ok(serde_json::json!({
-                "id": scene.canvas.nodes[index].id,
-                "index": index,
-                "node": summary,
-            }))
-        }
-        "viewport_get" => {
-            let position = camera.position();
-            Ok(serde_json::json!({
-                "x": position[0],
-                "y": position[1],
-                "zoom": camera.zoom(),
-            }))
-        }
-        "viewport_set" => {
-            let x = mcp_req_f32(params, "x")?;
-            let y = mcp_req_f32(params, "y")?;
-            camera.set_center([x, y]);
-            if let Some(zoom) = mcp_opt_f32(params, "zoom") {
-                camera.set_zoom(zoom);
-            }
-            let position = camera.position();
-            Ok(serde_json::json!({
-                "x": position[0],
-                "y": position[1],
-                "zoom": camera.zoom(),
-            }))
-        }
-        // FR-033: атомарная батч-композиция — клон → apply → commit
-        // (один undo-шаг) либо отброшенный клон при любой ошибке операции
-        "graph_apply" => mcp_graph_apply(scene, templates, params),
-        other => Err(format!("неизвестный инструмент: {other}")),
-    }
-}
-
-// --- FR-033: graph_apply — атомарная батч-композиция графа ---
-
-/// Лимиты батча (FR-033 п.1): ≤ 256 операций, ≤ 128 новых нод — защита
-/// live-бюджета пересчёта (SPEC §6.3: ≤ 1000 нод < 10 мс).
-const GRAPH_APPLY_MAX_OPS: usize = 256;
-const GRAPH_APPLY_MAX_NODES: usize = 128;
-
-/// Ошибка одной операции батча: стабильный код + сообщение (FR-033 п.2в —
-/// код различим машиной, сообщение — человеку/агенту).
-struct BatchOpError {
-    code: &'static str,
-    message: String,
-}
-
-impl BatchOpError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
-
-/// Запись отчёта об операции батча (FR-033 п.3).
-struct BatchEntry {
-    op_index: usize,
-    op: &'static str,
-    /// true — операция создала объект (created), false — адресовала
-    /// существующий (param_set/node_move — только report, FR-033 п.3)
-    created: bool,
-    ref_name: Option<String>,
-    node_id: Option<String>,
-    edge_id: Option<String>,
-}
-
-impl BatchEntry {
-    /// Идентификатор для report: созданный/адресованный объект операции.
-    fn object_id(&self) -> Option<&String> {
-        self.node_id.as_ref().or(self.edge_id.as_ref())
-    }
-}
-
-/// Структурированный ответ об ошибке операции (канвас при этом НЕ меняется —
-/// клон отброшен вызывающей стороной).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn graph_apply_error(op_index: usize, err: &BatchOpError) -> serde_json::Value {
-    serde_json::json!({
-        "ok": false,
-        "op_index": op_index,
-        "code": err.code,
-        "message": err.message,
-    })
-}
-
-/// Резолв адреса ноды в батче: ref (созданные в этом же батче) приоритетно,
-/// иначе — существующий id ноды канваса.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn batch_node_id(
-    canvas: &Canvas,
-    refs: &HashMap<String, String>,
-    key: &str,
-) -> Result<String, BatchOpError> {
-    if let Some(id) = refs.get(key) {
-        return Ok(id.clone());
-    }
-    if canvas.node(key).is_some() {
-        return Ok(key.to_owned());
-    }
-    Err(BatchOpError::new(
-        "E-NOT-FOUND",
-        format!("нода не найдена (ни ref батча, ни id канваса): {key}"),
-    ))
-}
-
-/// Опциональная строка из операции.
-fn batch_opt_str<'v>(op: &'v serde_json::Value, name: &str) -> Option<&'v str> {
-    op.get(name).and_then(serde_json::Value::as_str)
-}
-
-/// Обязательная строка из операции.
-fn batch_req_str<'v>(op: &'v serde_json::Value, name: &str) -> Result<&'v str, BatchOpError> {
-    op.get(name)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| BatchOpError::new("E-BAD-OP", format!("отсутствует поле '{name}'")))
-}
-
-/// Зарегистрировать ref батча: дубликат — ошибка операции (ref должен
-/// однозначно адресовать ноду сборки).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn register_ref(
-    refs: &mut HashMap<String, String>,
-    name: &str,
-    id: &str,
-) -> Result<(), BatchOpError> {
-    if refs.insert(name.to_owned(), id.to_owned()).is_some() {
-        return Err(BatchOpError::new(
-            "E-BAD-OP",
-            format!("ref '{name}' уже использован в этом батче"),
-        ));
-    }
-    Ok(())
-}
-
-/// Обязательное число из операции.
-fn batch_req_f64(op: &serde_json::Value, name: &str) -> Result<f64, BatchOpError> {
-    op.get(name)
-        .and_then(serde_json::Value::as_f64)
-        .ok_or_else(|| BatchOpError::new("E-BAD-OP", format!("отсутствует число '{name}'")))
-}
-
-/// Сторона связи из операции батча: "any"/отсутствие → None (автовывод
-/// из геометрии) — семантика mcp_side.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn batch_side(op: &serde_json::Value, name: &str) -> Result<Option<Side>, BatchOpError> {
-    match op.get(name).and_then(serde_json::Value::as_str) {
-        None | Some("any") => Ok(None),
-        Some(text) => serde_json::from_value::<Side>(serde_json::Value::String(text.to_owned()))
-            .map(Some)
-            .map_err(|_| {
-                BatchOpError::new("E-BAD-OP", format!("неверная сторона '{name}': {text}"))
-            }),
-    }
-}
-
-/// Применить одну операцию батча к клону канваса (FR-033 п.2б). Чистые
-/// мутации Canvas: spatial/undo/пересчёт — на стороне коммита, не здесь.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn batch_apply_op(
-    canvas: &mut Canvas,
-    refs: &mut HashMap<String, String>,
-    templates: &canvas_core::templates::TemplateRegistry,
-    op_index: usize,
-    op: &serde_json::Value,
-) -> Result<BatchEntry, BatchOpError> {
-    let entry = |op: &'static str, created: bool, ref_name: Option<String>| BatchEntry {
-        op_index,
-        op,
-        created,
-        ref_name,
-        node_id: None,
-        edge_id: None,
-    };
-    let kind = batch_req_str(op, "op")?;
-    match kind {
-        "node_create_note" => {
-            let x = batch_req_f64(op, "x")? as f32;
-            let y = batch_req_f64(op, "y")? as f32;
-            let text_owned = batch_opt_str(op, "text")
-                .map(canvas_core::mcp_text::normalize_escapes)
-                .unwrap_or_default();
-            let text = text_owned.as_str();
-            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
-            let mut node = Node::text(next_free_id(canvas, "note"), text, x, y);
-            if let Some(width) = op.get("width").and_then(serde_json::Value::as_f64) {
-                node.width = width as f32;
-            }
-            if let Some(height) = op.get("height").and_then(serde_json::Value::as_f64) {
-                node.height = height as f32;
-            }
-            // FR-013: строки «= …» в тексте — формула (единая семантика)
-            node.set_expr(split_formula_lines(text));
-            let id = node.id.clone();
-            canvas.nodes.push(node);
-            if let Some(name) = &ref_name {
-                register_ref(refs, name, &id)?;
-            }
-            let mut e = entry("node_create_note", true, ref_name);
-            e.node_id = Some(id);
-            Ok(e)
-        }
-        "node_create_file" => {
-            let path = batch_req_str(op, "path")?;
-            let x = batch_req_f64(op, "x")? as f32;
-            let y = batch_req_f64(op, "y")? as f32;
-            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
-            // Файл на диске НЕ создаём — только карточка в модели
-            let node = Node::file(
-                next_free_id(canvas, "file"),
-                path,
-                x,
-                y,
-                op.get("width")
-                    .and_then(serde_json::Value::as_f64)
-                    .map(|v| v as f32)
-                    .unwrap_or(canvas_app::ui::DROP_CARD_W),
-                op.get("height")
-                    .and_then(serde_json::Value::as_f64)
-                    .map(|v| v as f32)
-                    .unwrap_or(canvas_app::ui::DROP_CARD_H),
-            );
-            let id = node.id.clone();
-            canvas.nodes.push(node);
-            if let Some(name) = &ref_name {
-                register_ref(refs, name, &id)?;
-            }
-            let mut e = entry("node_create_file", true, ref_name);
-            e.node_id = Some(id);
-            Ok(e)
-        }
-        "template_instantiate" => {
-            let template_id = batch_req_str(op, "template")?;
-            let x = batch_req_f64(op, "x")? as f32;
-            let y = batch_req_f64(op, "y")? as f32;
-            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
-            let manifest = templates.find(template_id).ok_or_else(|| {
-                BatchOpError::new("E-NOT-FOUND", format!("шаблон не найден: {template_id}"))
-            })?;
-            let mut overrides: BTreeMap<String, canvas_core::templates::TemplateParam> =
-                BTreeMap::new();
-            if let Some(map) = op.get("params").and_then(serde_json::Value::as_object) {
-                for (name, value) in map {
-                    let param = match value {
-                        serde_json::Value::Number(num) => {
-                            let num = num.as_f64().ok_or_else(|| {
-                                BatchOpError::new("E-BAD-OP", format!("параметр {name}: число"))
-                            })?;
-                            // Число без единицы наследует единицу параметра
-                            let unit = manifest
-                                .params
-                                .iter()
-                                .find(|spec| &spec.name == name)
-                                .and_then(|spec| spec.unit.clone());
-                            canvas_core::templates::TemplateParam { num, unit }
-                        }
-                        serde_json::Value::Object(obj) => canvas_core::templates::TemplateParam {
-                            num: obj.get("num").and_then(serde_json::Value::as_f64).ok_or_else(
-                                || {
-                                    BatchOpError::new(
-                                        "E-BAD-OP",
-                                        format!("параметр {name}: num обязателен"),
-                                    )
-                                },
-                            )?,
-                            unit: obj
-                                .get("unit")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_owned),
-                        },
-                        _ => {
-                            return Err(BatchOpError::new(
-                                "E-BAD-OP",
-                                format!("параметр {name}: число или {{num, unit}}"),
-                            ))
-                        }
-                    };
-                    overrides.insert(name.clone(), param);
-                }
-            }
-            let node_id = next_free_id(canvas, "tpl");
-            let mut node = canvas_core::templates::instantiate(
-                manifest,
-                &overrides,
-                node_id,
-                x,
-                y,
-            )
-            .map_err(|err| match err {
-                canvas_core::templates::InstantiateError::UnknownParam(name) => {
-                    BatchOpError::new("E-PORT-UNKNOWN", format!("неизвестный параметр шаблона: {name}"))
-                }
-                canvas_core::templates::InstantiateError::ParamOutOfRange { name, value } => {
-                    BatchOpError::new("E-RANGE", format!("параметр {name} вне диапазона: {value}"))
-                }
-                other => BatchOpError::new("E-BAD-OP", other.to_string()),
-            })?;
-            // FR-023: авто-высота — единая с GUI-путём и template_instantiate
-            fit_template_node_height(&mut node);
-            let id = node.id.clone();
-            canvas.nodes.push(node);
-            if let Some(name) = &ref_name {
-                register_ref(refs, name, &id)?;
-            }
-            let mut e = entry("template_instantiate", true, ref_name);
-            e.node_id = Some(id);
-            Ok(e)
-        }
-        "edge_create" => {
-            let from_key = batch_opt_str(op, "fromRef")
-                .or_else(|| batch_opt_str(op, "from"))
-                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'fromRef'/'from'"))?;
-            let to_key = batch_opt_str(op, "toRef")
-                .or_else(|| batch_opt_str(op, "to"))
-                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'toRef'/'to'"))?;
-            let from = batch_node_id(canvas, refs, from_key)?;
-            let to = batch_node_id(canvas, refs, to_key)?;
-            let from_side = batch_side(op, "fromSide")?;
-            let to_side = batch_side(op, "toSide")?;
-            // kind: value|control, дефолт control (FR-029 edge_create v2)
-            let flow_kind = match batch_opt_str(op, "kind") {
-                None => flow::FlowKind::Control,
-                Some("value") => flow::FlowKind::Value,
-                Some("control") => flow::FlowKind::Control,
-                Some(other) => {
-                    return Err(BatchOpError::new(
-                        "E-BAD-OP",
-                        format!("kind должен быть \"value\" или \"control\", получено {other:?}"),
-                    ))
-                }
-            };
-            // Адресация портов (FR-029): fromLine (индекс) взаимно
-            // исключителен с fromOutput (имя)
-            let from_line = match op.get("fromLine") {
-                None => None,
-                Some(value) => {
-                    if value.as_u64().is_none() {
-                        return Err(BatchOpError::new(
-                            "E-BAD-OP",
-                            "fromLine должен быть целым ≥ 0",
-                        ));
-                    }
-                    if op.get("fromOutput").is_some() {
-                        return Err(BatchOpError::new(
-                            "E-BAD-OP",
-                            "fromLine и fromOutput взаимно исключительны",
-                        ));
-                    }
-                    value.as_u64().map(|v| v as usize)
-                }
-            };
-            let from_output = batch_opt_str(op, "fromOutput").map(str::to_owned);
-            let to_param = batch_opt_str(op, "toParam").map(str::to_owned);
-            if flow_kind == flow::FlowKind::Value
-                && canvas_core::creates_value_cycle(canvas, &from, &to)
-            {
-                let participants = canvas_core::value_path(canvas, &to, &from)
-                    .unwrap_or_default()
-                    .join(" → ");
-                return Err(BatchOpError::new(
-                    "E-CYCLE",
-                    format!("цикл потока значений: {participants}"),
-                ));
-            }
-            // Валидация имён портов по снапшотам шаблонов (FR-029 п.5)
-            if let Some(param) = &to_param {
-                let known = canvas
-                    .node(&to)
-                    .and_then(|node| node.template())
-                    .map(|tpl| tpl.params.contains_key(param))
-                    .unwrap_or(false);
-                if !known {
-                    return Err(BatchOpError::new(
-                        "E-PORT-UNKNOWN",
-                        format!("у ноды {to} нет параметра '{param}' (приёмник не шаблон либо параметр не объявлен)"),
-                    ));
-                }
-            }
-            if let Some(output) = &from_output {
-                let known = canvas
-                    .node(&from)
-                    .and_then(|node| node.template())
-                    .map(|tpl| tpl.outputs.iter().any(|spec| &spec.name == output))
-                    .unwrap_or(false);
-                if !known {
-                    return Err(BatchOpError::new(
-                        "E-PORT-UNKNOWN",
-                        format!("у ноды {from} нет выхода '{output}' (источник не шаблон либо выход не объявлен)"),
-                    ));
-                }
-            }
-            let mut edge = Edge::new(canvas.next_edge_id(), from, from_side, to, to_side);
-            edge.set_flow_kind(flow_kind);
-            edge.from_line = from_line;
-            edge.from_output = from_output;
-            edge.to_param = to_param;
-            let id = edge.id.clone();
-            canvas.add_edge(edge);
-            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
-            let mut e = entry("edge_create", true, ref_name);
-            e.edge_id = Some(id);
-            Ok(e)
-        }
-        "param_set" => {
-            let key = batch_opt_str(op, "ref")
-                .or_else(|| batch_opt_str(op, "id"))
-                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'ref'/'id'"))?;
-            let param = batch_req_str(op, "param")?;
-            let num = batch_req_f64(op, "value")?;
-            let unit_op = batch_opt_str(op, "unit").map(str::to_owned);
-            let node_id = batch_node_id(canvas, refs, key)?;
-            let index = canvas
-                .nodes
-                .iter()
-                .position(|node| node.id == node_id)
-                .ok_or_else(|| BatchOpError::new("E-NOT-FOUND", format!("нода не найдена: {node_id}")))?;
-            let node = &mut canvas.nodes[index];
-            let text = node
-                .text
-                .clone()
-                .ok_or_else(|| BatchOpError::new("E-PARAM-UNKNOWN", format!("у ноды {node_id} нет текста — параметра '{param}' нет")))?;
-            // Единица: явная из операции → снапшот шаблона → токен из строки
-            let unit_fallback = || -> Option<String> {
-                let line = text.split('\n').find(|line| {
-                    line.split_once('=')
-                        .map(|(name, _)| name.trim() == param)
-                        .unwrap_or(false)
-                })?;
-                let rhs = line.split_once('=')?.1.trim();
-                rhs.split_whitespace().nth(1).map(str::to_owned)
-            };
-            let unit = unit_op.or_else(|| {
-                node.template().and_then(|tpl| {
-                    tpl.params
-                        .get(param)
-                        .and_then(|spec| spec.unit.clone())
-                })
-            }).or_else(unit_fallback);
-            // Правка ровно одной строки «param = value unit», остальные —
-            // без изменений (FR-033 п.4); параметра нет — ошибка (без append)
-            let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-            let mut replaced = false;
-            for line in &mut lines {
-                let matches = line
-                    .split_once('=')
-                    .map(|(name, _)| name.trim() == param)
-                    .unwrap_or(false);
-                if matches && !replaced {
-                    let value =
-                        canvas_core::expr::unit_value(num, unit.as_deref()).to_string();
-                    *line = format!("{param} = {value}");
-                    replaced = true;
-                }
-            }
-            if !replaced {
-                return Err(BatchOpError::new(
-                    "E-PARAM-UNKNOWN",
-                    format!("в тексте ноды {node_id} нет строки параметра '{param}'"),
-                ));
-            }
-            let new_text = lines.join("\n");
-            node.text = Some(new_text);
-            // Синхронизация снапшота шаблона: формула читает params снапшота,
-            // не текст (FR-018) — иначе правка не подействует на расчёт
-            if node.template().map(|tpl| tpl.params.contains_key(param)).unwrap_or(false) {
-                let mut tpl = node.template().expect("проверено выше");
-                tpl.params.insert(
-                    param.to_owned(),
-                    canvas_core::templates::TemplateParam {
-                        num,
-                        unit: unit.clone(),
-                    },
-                );
-                node.set_template(Some(tpl));
-            }
-            let mut e = entry("param_set", false, None);
-            e.node_id = Some(node_id);
-            Ok(e)
-        }
-        "node_move" => {
-            let key = batch_opt_str(op, "ref")
-                .or_else(|| batch_opt_str(op, "id"))
-                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'ref'/'id'"))?;
-            let x = batch_req_f64(op, "x")? as f32;
-            let y = batch_req_f64(op, "y")? as f32;
-            let node_id = batch_node_id(canvas, refs, key)?;
-            let index = canvas
-                .nodes
-                .iter()
-                .position(|node| node.id == node_id)
-                .ok_or_else(|| BatchOpError::new("E-NOT-FOUND", format!("нода не найдена: {node_id}")))?;
-            canvas.nodes[index].x = x;
-            canvas.nodes[index].y = y;
-            let mut e = entry("node_move", false, None);
-            e.node_id = Some(node_id);
-            Ok(e)
-        }
-        other => Err(BatchOpError::new(
-            "E-BAD-OP",
-            format!(
-                "неизвестная операция '{other}' (ожидались node_create_note/node_create_file/template_instantiate/edge_create/param_set/node_move)"
-            ),
-        )),
-    }
-}
-
-/// FR-033 п.3: полный пересчёт после батча и карта значений в формате
-/// flow_recalc v2 (FR-029 п.4): `{node_id: {value, unit, outputs, lines}}`.
-/// Ноды вне потока (проза/файлы) не включаются; ноды с ошибкой — `{error}`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
-    let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
-        Ok(solutions) => solutions,
-        Err(cycle) => {
-            return serde_json::json!({ "error": format!("цикл потока значений: {cycle}") })
-        }
-    };
-    // Построчные значения, сгруппированные по нодам (детерминированный
-    // порядок индексов — BTreeMap)
-    let mut lines_by_node: HashMap<
-        String,
-        std::collections::BTreeMap<usize, canvas_core::expr::Value>,
-    > = HashMap::new();
-    for ((node_id, line), value) in &solutions.lines {
-        lines_by_node
-            .entry(node_id.clone())
-            .or_default()
-            .insert(*line, value.clone());
-    }
-    let mut nodes = serde_json::Map::new();
-    for node in &canvas.nodes {
-        let mut entry = serde_json::Map::new();
-        match solutions.outputs.get(&node.id) {
-            Some(Ok(value)) => {
-                entry.insert("value".into(), serde_json::json!(value.num));
-                entry.insert("unit".into(), serde_json::json!(value.unit.display()));
-            }
-            Some(Err(err)) => {
-                entry.insert("error".into(), serde_json::json!(err.to_string()));
-            }
-            None => {}
-        }
-        // Именованные выходы (FR-029): только вычислившиеся
-        let outputs: serde_json::Map<String, serde_json::Value> = node
-            .template()
-            .map(|tpl| {
-                tpl.outputs
-                    .iter()
-                    .filter_map(|spec| {
-                        solutions
-                            .named
-                            .get(&(node.id.clone(), spec.name.clone()))
-                            .map(|value| {
-                                let name = spec.name.clone();
-                                (
-                                    name,
-                                    serde_json::json!({
-                                        "value": value.num,
-                                        "unit": value.unit.display(),
-                                    }),
-                                )
-                            })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !outputs.is_empty() {
-            entry.insert("outputs".into(), serde_json::Value::Object(outputs));
-        }
-        if let Some(lines) = lines_by_node.get(&node.id) {
-            let lines: Vec<serde_json::Value> = lines
-                .iter()
-                .map(|(index, value)| {
-                    serde_json::json!({
-                        "index": index,
-                        "value": value.num,
-                        "unit": value.unit.display(),
-                    })
-                })
-                .collect();
-            if !lines.is_empty() {
-                entry.insert("lines".into(), serde_json::json!(lines));
-            }
-        }
-        if !entry.is_empty() {
-            nodes.insert(node.id.clone(), serde_json::Value::Object(entry));
-        }
-    }
-    serde_json::Value::Object(nodes)
-}
-
-/// FR-016 (CP5): анализ узких мест для MCP — та же карта флагов, что рисует
-/// оверлей канваса (инвариант 4 FR-016). Чистая функция над свежим
-/// пересчётом: детерминированный порядок `canvas.nodes`, пороги — дефолт
-/// документа FR-016. Цикл потока — честный `error` (анализа нет).
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_analyze_bottlenecks(canvas: &Canvas) -> serde_json::Value {
-    let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
-        Ok(solutions) => solutions,
-        Err(cycle) => {
-            return serde_json::json!({
-                "error": format!("цикл потока значений: {cycle}"),
-            })
-        }
-    };
-    let config = AnalysisConfig::default();
-    let state = analyze::analyze(canvas, &solutions, &config);
-    let nodes: Vec<serde_json::Value> = canvas
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            let flags = state.get(&node.id)?;
-            let mut entry = serde_json::Map::new();
-            entry.insert("id".into(), serde_json::json!(node.id));
-            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(flags) {
-                entry.extend(map);
-            }
-            // Бейдж — строка, которую видит пользователь на канвасе
-            entry.insert(
-                "badge".into(),
-                serde_json::json!(analyze::badge_text(flags)),
-            );
-            Some(serde_json::Value::Object(entry))
-        })
-        .collect();
-    serde_json::json!({
-        "nodes": nodes,
-        "thresholds": serde_json::to_value(config).unwrap_or(serde_json::json!({})),
-    })
-}
-
-/// FR-033 п.2: транзакционное применение батча. Ошибки схемы/лимитов —
-/// Err (isError); ошибка ОПЕРАЦИИ — структурированный ответ {ok:false} при
-/// нетронутом канвасе; успех — один undo-шаг, spatial, dirty (автосейв),
-/// полный пересчёт потока и карта значений в ответе.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn mcp_graph_apply(
-    scene: &mut SceneState,
-    templates: &canvas_core::templates::TemplateRegistry,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let Some(ops) = params
-        .get("operations")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return Err("отсутствует параметр 'operations' (массив операций)".to_owned());
-    };
-    if ops.is_empty() {
-        return Err("operations: минимум 1 операция".to_owned());
-    }
-    if ops.len() > GRAPH_APPLY_MAX_OPS {
-        return Err(format!(
-            "operations: не более {GRAPH_APPLY_MAX_OPS} операций, получено {}",
-            ops.len()
-        ));
-    }
-    let new_nodes = ops
-        .iter()
-        .filter(|op| {
-            matches!(
-                op.get("op").and_then(serde_json::Value::as_str),
-                Some("node_create_note" | "node_create_file" | "template_instantiate")
-            )
-        })
-        .count();
-    if new_nodes > GRAPH_APPLY_MAX_NODES {
-        return Err(format!(
-            "батч создаёт {new_nodes} нод — лимит {GRAPH_APPLY_MAX_NODES}"
-        ));
-    }
-
-    // Транзакция: операции применяются к клону; любая ошибка — клон
-    // отбрасывается, оригинал байт-в-байт прежний (инвариант атомарности)
-    let mut canvas = scene.canvas.clone();
-    let mut refs: HashMap<String, String> = HashMap::new();
-    let mut entries: Vec<BatchEntry> = Vec::new();
-    for (op_index, op) in ops.iter().enumerate() {
-        match batch_apply_op(&mut canvas, &mut refs, templates, op_index, op) {
-            Ok(entry) => entries.push(entry),
-            Err(err) => return Ok(graph_apply_error(op_index, &err)),
-        }
-    }
-
-    // Успех: ровно ОДИН undo-шаг на весь батч (FR-033 п.2г)
-    let before = std::mem::replace(&mut scene.canvas, canvas);
-    scene.push_undo(before);
-    // Индексы изменились — spatial перестраивается (паттерн node_delete)
-    scene.spatial = SpatialIndex::build(&scene.canvas);
-    scene.mark_dirty();
-    scene.recompute_flow();
-
-    let created: Vec<serde_json::Value> = entries
-        .iter()
-        .filter(|e| e.created)
-        .map(|e| {
-            let mut item = serde_json::json!({ "op_index": e.op_index });
-            let map = item.as_object_mut().expect("json object");
-            if let Some(ref_name) = &e.ref_name {
-                map.insert("ref".into(), serde_json::json!(ref_name));
-            }
-            if let Some(node_id) = &e.node_id {
-                map.insert("node_id".into(), serde_json::json!(node_id));
-            }
-            if let Some(edge_id) = &e.edge_id {
-                map.insert("edge_id".into(), serde_json::json!(edge_id));
-            }
-            item
-        })
-        .collect();
-    let report: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|e| {
-            serde_json::json!({
-                "op_index": e.op_index,
-                "op": e.op,
-                "id": e.object_id(),
-            })
-        })
-        .collect();
-    let flow = mcp_flow_v2(&scene.canvas);
-    Ok(serde_json::json!({
-        "ok": true,
-        "created": created,
-        "report": report,
-        "flow": flow,
-    }))
 }
 
 impl App {
@@ -9398,7 +6565,7 @@ impl App {
                 // Отпускание Space во время drag не должно оставлять ноду "прилипшей"
                 // FR-006: применённое движение — undo-шаг; далее drag прерывается
                 self.finish_interaction_undo();
-                self.scene.dragging = None;
+                self.dragging = None;
             }
         }
         // T23 (brainstorm-focus): F (русская раскладка — «А») — переключить
@@ -9438,7 +6605,7 @@ impl App {
         // text-ноде; редактор/поиск/диалог приглушают канвас-хоткеи (return
         // выше — клавиатура уходит туда)
         if event.state == ElementState::Pressed && !event.repeat && !self.modifiers.shift_key() {
-            let selected_index = match self.scene.selected {
+            let selected_index = match self.selected {
                 Some(Selection::Node(index)) => Some(index),
                 _ => None,
             };
@@ -10227,7 +7394,7 @@ impl App {
                 // drag перепривязки без удаления. Проверка ДО портов: хэндл
                 // сидит на порту, занятом существующей связью. Зона — та же,
                 // что у портов (CR-003, из настроек).
-                if let Some(Selection::Edge(edge_index)) = self.scene.selected {
+                if let Some(Selection::Edge(edge_index)) = self.selected {
                     if let Some(end) = self.edge_handle_at(edge_index, world) {
                         self.edge_drag = Some(EdgeDrag::Rebind { edge_index, end });
                         self.request_redraw();
@@ -10365,7 +7532,7 @@ impl App {
                 // Ручной resize (T7): захват за правый нижний угол ноды
                 if let Some(index) = hit {
                     if in_resize_corner(&self.scene.canvas.nodes[index], world) {
-                        self.scene.selected = Some(Selection::Node(index));
+                        self.selected = Some(Selection::Node(index));
                         self.resizing = Some(index);
                         // FR-006: отложенный снапшот «до» resize — шаг
                         // закроется на отпускании при изменении размеров
@@ -10401,31 +7568,29 @@ impl App {
                         // тоглится; drag с модификатором не начинается
                         // (это правка выделения, не перемещение)
                         if self.modifiers.control_key() || self.modifiers.shift_key() {
-                            let primary =
-                                self.scene.selected.and_then(|selection| match selection {
-                                    Selection::Node(index) => Some(index),
-                                    Selection::Edge(_) => None,
-                                });
+                            let primary = self.selected.and_then(|selection| match selection {
+                                Selection::Node(index) => Some(index),
+                                Selection::Edge(_) => None,
+                            });
                             let anchor = toggle_selection_with_primary(
                                 primary,
-                                &mut self.scene.selected_nodes,
+                                &mut self.selected_nodes,
                                 index,
                             );
-                            self.scene.selected = anchor.map(Selection::Node);
+                            self.selected = anchor.map(Selection::Node);
                             self.request_redraw();
                             return;
                         }
                         // Обычный клик: нода вне набора — набор сбрасывается
                         // (одиночное выделение); нода В наборе — тянем набор
-                        let in_set = self.scene.selected_nodes.contains(&index);
-                        self.scene.selected = Some(Selection::Node(index));
+                        let in_set = self.selected_nodes.contains(&index);
+                        self.selected = Some(Selection::Node(index));
                         if !in_set {
-                            self.scene.selected_nodes.clear();
+                            self.selected_nodes.clear();
                         }
                         // Drag (T7/CR-001): исходные позиции — одна нода или
                         // весь набор (+ дети групп); на движении delta к всем
-                        let origins =
-                            drag_origins(&self.scene.canvas, index, &self.scene.selected_nodes);
+                        let origins = drag_origins(&self.scene.canvas, index, &self.selected_nodes);
                         // FR-006: отложенный снапшот «до» перемещения — шаг
                         // закроется на отпускании при фактическом сдвиге
                         self.begin_pending_undo();
@@ -10433,7 +7598,7 @@ impl App {
                         // сбрасывает цель втягивания
                         self.settle_anim = None;
                         self.group_drop_target = None;
-                        self.scene.dragging = Some(DragState {
+                        self.dragging = Some(DragState {
                             primary: index,
                             grab_world: world,
                             origins,
@@ -10444,10 +7609,10 @@ impl App {
                     // Рамка (CR-001): drag с пустого места тянет выделение —
                     // финал на отпускании (порог клик/драг отсекает клики)
                     None => {
-                        self.scene.selected =
+                        self.selected =
                             edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
                                 .map(Selection::Edge);
-                        self.scene.selected_nodes.clear();
+                        self.selected_nodes.clear();
                         self.select_rect = Some((world, world, self.cursor));
                     }
                 }
@@ -10480,8 +7645,8 @@ impl App {
                         || (self.cursor[1] - press[1]).abs() > SELECT_DRAG_THRESHOLD;
                     if moved {
                         let rect = rubber_band_rect(start, self.cursor_world());
-                        self.scene.selected_nodes = nodes_in_rect(&self.scene.canvas, rect);
-                        self.scene.selected = None;
+                        self.selected_nodes = nodes_in_rect(&self.scene.canvas, rect);
+                        self.selected = None;
                     }
                     self.request_redraw();
                 }
@@ -10593,7 +7758,7 @@ impl App {
                 // FR-006: закрытие отложенного drag/resize — undo-шаг при
                 // фактическом изменении (клик без движения не шаг)
                 self.finish_interaction_undo();
-                self.scene.dragging = None;
+                self.dragging = None;
                 self.editor_dragging = false;
                 self.resizing = None;
                 self.minimap_drag = false;
@@ -10643,10 +7808,10 @@ impl App {
             // Нода: выделить → палитра выделения под нодой (FR-009/FR-010).
             // Мультивыделение сохраняется при ПКМ по выделенной ноде
             Some(index) => {
-                if !self.scene.selected_nodes.contains(&index) {
-                    self.scene.selected_nodes.clear();
+                if !self.selected_nodes.contains(&index) {
+                    self.selected_nodes.clear();
                 }
-                self.scene.selected = Some(Selection::Node(index));
+                self.selected = Some(Selection::Node(index));
                 self.menu = None;
             }
             // Связь: выделить → палитра связи (Стиль/Толщина/Цвет);
@@ -10655,8 +7820,8 @@ impl App {
                 let avoid = self.settings.edges_avoid_nodes;
                 match edge_at(&self.scene.canvas, world, avoid) {
                     Some(edge_index) => {
-                        self.scene.selected = Some(Selection::Edge(edge_index));
-                        self.scene.selected_nodes.clear();
+                        self.selected = Some(Selection::Edge(edge_index));
+                        self.selected_nodes.clear();
                         self.menu = None;
                     }
                     None => {
@@ -10792,7 +7957,7 @@ impl App {
         let index = self.scene.canvas.nodes.len() - 1;
         let node_ref = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node_ref);
-        self.scene.selected = Some(Selection::Node(index));
+        self.selected = Some(Selection::Node(index));
         self.scene.mark_dirty();
         // Поисковый индекс (T14): новая нода — сразу в FTS
         self.search_service.command(SearchCommand::IndexFile {
@@ -10887,7 +8052,7 @@ impl App {
                     self.scene.mark_dirty();
                 }
                 self.request_redraw();
-            } else if let Some(drag) = self.scene.dragging.clone() {
+            } else if let Some(drag) = self.dragging.clone() {
                 // Drag (T7/CR-001): каждая перемещаемая нода — в исходную
                 // позицию + дельта курсора от захвата (ровно один сдвиг за
                 // кадр; дети групп — в origins с старта, дубликатов нет)
@@ -11307,6 +8472,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(warn) = config_warn {
         tracing::warn!(%warn, "конфиг не применён, дефолты");
     }
+    // CR-012 (правка 2, FR-037/ADR-0012): уровень 2 refit высоты — точное
+    // измерение шейпингом (canvas-render) инжектируется в canvas-scene ДО
+    // загрузки сцены: стартовые высоты нод сразу точные (как до выноса).
+    // Headless/wasm работает на консервативной оценке уровня 1 (growth-only).
+    canvas_scene::install_measured_reserve(measured_result_reserve_height);
     let scene = match args.stress {
         Some(n) => {
             tracing::info!(nodes = n, path = %args.path.display(), "нагрузочный режим --stress");
@@ -11805,7 +8975,7 @@ impl App {
                         let index = self.scene.canvas.nodes.len() - 1;
                         let node_ref = &self.scene.canvas.nodes[index];
                         self.scene.spatial.insert(index, node_ref);
-                        self.scene.selected = Some(Selection::Node(index));
+                        self.selected = Some(Selection::Node(index));
                         self.scene.mark_dirty();
                     }
                 }
@@ -12153,8 +9323,8 @@ impl App {
                 // Индексы сдвинулись — spatial/кэши перестраиваются
                 // (паттерн delete_selected)
                 self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
-                self.scene.selected = None;
-                self.scene.selected_nodes.clear();
+                self.selected = None;
+                self.selected_nodes.clear();
                 self.scene.mark_dirty();
                 self.show_toast("Группа разгруппирована");
             }
@@ -12238,7 +9408,7 @@ impl App {
     /// зоной): membership + авторасширение rect до bbox+padding + мягкое
     /// раздвигание пересекаемых соседей (с анимацией). Один undo-шаг.
     fn group_insert_dragged(&mut self, group_index: usize) {
-        let Some(drag) = self.scene.dragging.as_ref() else {
+        let Some(drag) = self.dragging.as_ref() else {
             return;
         };
         // Вставляются: первичная нода + весь drag-набор (CR-001), кроме
@@ -12351,7 +9521,7 @@ impl App {
     /// своей ЯВНОЙ группы, удаляется из её детей. Легаси-группы (без
     /// списка) не участвуют — их геометрический фолбэк не меняется.
     fn group_drag_out_released(&mut self) {
-        let Some(drag) = self.scene.dragging.as_ref() else {
+        let Some(drag) = self.dragging.as_ref() else {
             return;
         };
         let dragged: Vec<usize> = std::iter::once(drag.primary)
@@ -12866,8 +10036,8 @@ impl ApplicationHandler<AppEvent> for App {
                     .filter(|(i, node)| {
                         node.kind() == NodeKind::Widget
                             && (self.hovered == Some(*i)
-                                || self.scene.selected == Some(Selection::Node(*i))
-                                || self.scene.selected_nodes.contains(i))
+                                || self.selected == Some(Selection::Node(*i))
+                                || self.selected_nodes.contains(i))
                     })
                     .map(|(i, _)| i)
                     .collect();
@@ -12949,8 +10119,8 @@ impl ApplicationHandler<AppEvent> for App {
                     let scene = SceneView {
                         canvas: &self.scene.canvas,
                         spatial: &self.scene.spatial,
-                        selected: self.scene.selected,
-                        selected_nodes: &self.scene.selected_nodes,
+                        selected: self.selected,
+                        selected_nodes: &self.selected_nodes,
                         hovered: self.hovered,
                         edge_draft,
                         hidden_edge,
@@ -13218,6 +10388,67 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
+    // FR-037 MW1: перенесённые в canvas-scene сущности (модель сцены,
+    // двухуровневый refit) — здесь остались только canvas-render-зависимые
+    // тесты точного измерения (уровень 2)
+    use canvas_core::expr::{line_kind, NumiLineKind};
+    use canvas_render::text::BODY_LINE_HEIGHT;
+    use canvas_scene::{ensure_result_reserve, wrapped_body_rows};
+
+    /// Локальный диспетчер для остающихся в canvas-app тестов (зависят от
+    /// canvas-render — точное измерение); MCP-тесты переехали в
+    /// canvas-scene (имена/ассерты сохранены).
+    fn dispatch(
+        scene: &mut SceneState,
+        method: &str,
+        params: &str,
+    ) -> Result<serde_json::Value, String> {
+        let params: serde_json::Value = serde_json::from_str(params).expect("params — JSON");
+        let registry = canvas_core::templates::TemplateRegistry::builtin();
+        canvas_scene::mcp_dispatch(scene, &registry, method, &params)
+    }
+
+    /// FR-037 MW1: паритет констант canvas-scene с canvas-render (метрики
+    /// раскладки refit, зум viewport) и дефолтов файловой карточки MCP
+    /// (canvas_app::ui::DROP_CARD_*) — вынос не расшатывает синхронность.
+    #[test]
+    fn measure_layout_consts_match_render() {
+        assert_eq!(
+            canvas_scene::measure::HEADER_HEIGHT,
+            canvas_render::cards::HEADER_HEIGHT
+        );
+        assert_eq!(
+            canvas_scene::measure::BODY_FONT_SIZE,
+            canvas_render::text::BODY_FONT_SIZE
+        );
+        assert_eq!(
+            canvas_scene::measure::BODY_LINE_HEIGHT,
+            canvas_render::text::BODY_LINE_HEIGHT
+        );
+        assert_eq!(
+            canvas_scene::measure::BODY_PADDING,
+            canvas_render::text::BODY_PADDING
+        );
+        assert_eq!(
+            canvas_scene::measure::BODY_TOP_GAP,
+            canvas_render::text::BODY_TOP_GAP
+        );
+        assert_eq!(
+            canvas_scene::measure::RESULT_LINE_HEIGHT,
+            canvas_render::text::RESULT_LINE_HEIGHT
+        );
+        assert_eq!(canvas_scene::MIN_ZOOM, canvas_render::camera::MIN_ZOOM);
+        assert_eq!(canvas_scene::MAX_ZOOM, canvas_render::camera::MAX_ZOOM);
+        assert_eq!(
+            canvas_scene::DEFAULT_FILE_CARD_W,
+            canvas_app::ui::DROP_CARD_W
+        );
+        assert_eq!(
+            canvas_scene::DEFAULT_FILE_CARD_H,
+            canvas_app::ui::DROP_CARD_H
+        );
+    }
+
     /// CR-010: оценка рядов тела с переносами — длинная строка даёт
     /// несколько визуальных рядов (рендер шейпит Wrap::WordOrGlyph),
     /// пустой текст — минимум один ряд.
@@ -13275,6 +10506,8 @@ mod tests {
     /// идемпотентен (growth-only — без осцилляций при частых пересчётах).
     #[test]
     fn ensure_result_reserve_grows_only() {
+        // FR-037 MW1: уровень 2 (точное измерение) — как до выноса из main.rs
+        canvas_scene::install_measured_reserve(measured_result_reserve_height);
         let line = format!("{} = 5", "a".repeat(28));
         let mut low = Node::text("n", line.clone(), 0.0, 0.0);
         low.width = 260.0;
@@ -13306,6 +10539,8 @@ mod tests {
     /// шейпинг теми же шрифтами, что у рендера).
     #[test]
     fn fit_template_height_covers_wrapped_lines() {
+        // FR-037 MW1: уровень 2 (точное измерение) — как до выноса из main.rs
+        canvas_scene::install_measured_reserve(measured_result_reserve_height);
         let mono_line = format!("{} = 5", "a".repeat(28));
         let mut node = Node::text("tpl", mono_line.clone(), 0.0, 0.0);
         node.width = 260.0;
@@ -13352,6 +10587,8 @@ mod tests {
     /// recompute_flow).
     #[test]
     fn recompute_grows_result_reserve_for_footer_nodes() {
+        // FR-037 MW1: уровень 2 (точное измерение) — как до выноса из main.rs
+        canvas_scene::install_measured_reserve(measured_result_reserve_height);
         use canvas_core::templates::{TemplateParam, TemplateRef};
         let mut canvas = Canvas::default();
         // Шаблонная нода: футер результата показывается всегда; высота
@@ -13410,11 +10647,9 @@ mod tests {
         );
         // MCP-мутация текста шаблонной ноды (длиннее — рядов больше):
         // рост под новый резерв применяется тем же пересчётом.
-        let mut camera = Camera::default();
         let text = format!("{} = 5\n= $rps", "b".repeat(55));
         dispatch(
             &mut scene,
-            &mut camera,
             "node_update_text",
             &serde_json::json!({ "id": "tpl1", "text": text }).to_string(),
         )
@@ -13426,108 +10661,6 @@ mod tests {
         );
     }
 
-    /// MCP-текст: literal `\n` (два символа — двойное экранирование от
-    /// ИИ-агентов) нормализуется в реальные переводы строк: нода получает
-    /// построчный Numi-лист, а не одну строку с видимым эскейпом.
-    #[test]
-    fn mcp_text_normalizes_literal_newlines() {
-        let mut scene = SceneState::new(
-            Canvas::default(),
-            PathBuf::from("target/tmp/mcp_text_nl.canvas"),
-        );
-        let mut camera = Camera::default();
-        let created = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            &serde_json::json!({ "x": 0, "y": 0, "text": "rps = 1389 rps\\ncache_hit = 0.6" })
-                .to_string(),
-        )
-        .expect("node_create_note");
-        let id = created["id"].as_str().expect("id ноды");
-        let node = scene.canvas.node(id).expect("нода");
-        assert_eq!(
-            node.text.as_deref(),
-            Some("rps = 1389 rps\ncache_hit = 0.6"),
-            "literal \\n стал реальным переводом строки"
-        );
-        let lines = scene
-            .expr_line_results
-            .get(id)
-            .expect("построчные результаты есть");
-        assert_eq!(lines.len(), 2, "две формульные строки после нормализации");
-        // node_update_text — тот же путь нормализации.
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            &serde_json::json!({ "id": id, "text": "a = 1\\nb = 2" }).to_string(),
-        )
-        .expect("node_update_text");
-        assert_eq!(
-            scene.canvas.node(id).expect("нода").text.as_deref(),
-            Some("a = 1\nb = 2")
-        );
-    }
-
-    /// FR-029 (визуализация проливания): recompute_flow заполняет
-    /// param_spills — параметр, строка присваивания, заголовок источника и
-    /// значение РЕБРА (пролитое), а не локальный литерал строки; текст «как
-    /// на карточке» подменяет присваивание подписью источника; MCP
-    /// flow_recalc отдаёт spilled-инфо агенту.
-    #[test]
-    fn recompute_fills_param_spills_with_edge_value() {
-        let mut canvas = Canvas::default();
-        canvas.nodes.push(Node::text(
-            "traffic",
-            "Traffic Profile\npeak_rps = 1388.89 rps",
-            0.0,
-            0.0,
-        ));
-        canvas.nodes.push(Node::text(
-            "cdn",
-            "rps = 100 rps\ncache_hit = 0.6",
-            300.0,
-            0.0,
-        ));
-        let mut edge = Edge::new("e1", "traffic", None, "cdn", None);
-        edge.set_flow_kind(FlowKind::Value);
-        edge.to_param = Some("rps".to_owned());
-        edge.from_output = Some("peak_rps".to_owned());
-        canvas.add_edge(edge);
-        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/spills.canvas"));
-        let spills = scene.param_spills.get("cdn").expect("spills CDN");
-        assert_eq!(spills.len(), 1);
-        let spill = &spills[0];
-        assert_eq!(spill.param, "rps");
-        assert_eq!(spill.line, Some(0));
-        assert_eq!(spill.from_label, "Traffic Profile");
-        assert_eq!(spill.from_output, Some("peak_rps".to_owned()));
-        assert_eq!(
-            spill.value,
-            Some("1388.89 rps".to_owned()),
-            "бейдж — пролитое значение ребра, а не локальный литерал 100 rps"
-        );
-        // Текст как на карточке: присваивание заменено подписью источника.
-        let display =
-            display_body_text(scene.canvas.node("cdn").expect("cdn"), &scene.param_spills);
-        assert_eq!(display, "rps ← Traffic Profile · peak_rps\ncache_hit = 0.6");
-        // Без проливания — исходный текст.
-        let plain = display_body_text(
-            scene.canvas.node("traffic").expect("traffic"),
-            &scene.param_spills,
-        );
-        assert_eq!(plain, "Traffic Profile\npeak_rps = 1388.89 rps");
-        // MCP flow_recalc: spilled — источник, адресация и значение.
-        let mut camera = Camera::default();
-        let result = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
-        let spilled = &result["cdn"]["spilled"];
-        assert_eq!(spilled["rps"]["from"], "traffic");
-        assert_eq!(spilled["rps"]["fromOutput"], "peak_rps");
-        assert_eq!(spilled["rps"]["value"], 1388.89);
-        assert_eq!(spilled["rps"]["unit"], "rps");
-    }
-
     /// CR-012 (правка 2): двухуровневый refit при загрузке — шаблонная нода
     /// со старым дефолтом высоты (120, как до CR-010) вырастает РОВНО до
     /// измеренного резерва (реальный шейпинг, без фантомного ряда);
@@ -13535,6 +10668,8 @@ mod tests {
     /// (нет осцилляций/ползучести).
     #[test]
     fn recompute_result_reserve_matches_measured_height() {
+        // FR-037 MW1: уровень 2 (точное измерение) — как до выноса из main.rs
+        canvas_scene::install_measured_reserve(measured_result_reserve_height);
         use canvas_core::templates::{TemplateParam, TemplateRef};
         let mut canvas = Canvas::default();
         // Скриншотный Numi-лист из CR-012: три параметра при ширине 280 —
@@ -13597,7 +10732,7 @@ mod tests {
     /// Стартовый канвас непустой и переживает round-trip.
     #[test]
     fn seed_canvas_is_valid() {
-        let canvas = seed_canvas();
+        let canvas = canvas_scene::seed_canvas();
         assert!(!canvas.nodes.is_empty());
         let json = canvas.to_json().expect("сериализация seed");
         let restored = Canvas::from_str(&json).expect("seed парсится обратно");
@@ -13678,789 +10813,7 @@ mod tests {
 
     // --- MCP-интеграция: mcp_dispatch (15 инструментов) ---
 
-    /// Тестовая сцена: заметка, файл, группа со связью (MCP-тесты).
-    fn mcp_scene() -> SceneState {
-        let mut canvas = Canvas::default();
-        canvas
-            .nodes
-            .push(Node::text("n1", "Привет Мир", 100.0, 100.0));
-        canvas
-            .nodes
-            .push(Node::file("f1", "docs/SPEC.md", 500.0, 100.0, 320.0, 220.0));
-        let mut group = Node::group("g1", 0.0, 0.0, 900.0, 600.0);
-        group.label = Some("Зона работы".to_owned());
-        canvas.nodes.push(group);
-        canvas.add_edge(Edge::new("edge-1", "n1", None, "f1", Some(Side::Right)));
-        SceneState::new(canvas, PathBuf::from("target/tmp/mcp.canvas"))
-    }
-
-    fn dispatch(
-        scene: &mut SceneState,
-        camera: &mut Camera,
-        method: &str,
-        params: &str,
-    ) -> Result<serde_json::Value, String> {
-        let params: serde_json::Value = serde_json::from_str(params).expect("params — JSON");
-        let registry = canvas_core::templates::TemplateRegistry::builtin();
-        mcp_dispatch(scene, camera, &registry, method, &params)
-    }
-
-    /// canvas_info: счётчики нод/связей и путь к файлу.
-    #[test]
-    fn mcp_canvas_info_counts() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let info = dispatch(&mut scene, &mut camera, "canvas_info", "{}").expect("canvas_info");
-        assert_eq!(info["nodes"], 3);
-        assert_eq!(info["edges"], 1);
-        assert_eq!(info["path"], "target/tmp/mcp.canvas");
-    }
-
-    /// nodes_list: сводки без text по умолчанию, с text по флагу; node_get —
-    /// полная нода.
-    #[test]
-    fn mcp_nodes_list_and_get() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let list = dispatch(&mut scene, &mut camera, "nodes_list", "{}").expect("nodes_list");
-        let first = &list[0];
-        assert_eq!(first["id"], "n1");
-        assert_eq!(first["type"], "text");
-        assert!(
-            !first.as_object().unwrap().contains_key("text"),
-            "text скрыт"
-        );
-        let list = dispatch(&mut scene, &mut camera, "nodes_list", r#"{"text":true}"#)
-            .expect("nodes_list с text");
-        assert_eq!(list[0]["text"], "Привет Мир");
-
-        let node =
-            dispatch(&mut scene, &mut camera, "node_get", r#"{"id":"f1"}"#).expect("node_get");
-        assert_eq!(node["file"], "docs/SPEC.md");
-        assert_eq!(node["width"], 320.0);
-        let err = dispatch(&mut scene, &mut camera, "node_get", r#"{"id":"ghost"}"#)
-            .expect_err("нет такой ноды");
-        assert!(err.contains("не найдена"));
-    }
-
-    /// nodes_search: подстрока без учёта регистра по text/label/file.
-    #[test]
-    fn mcp_nodes_search_case_insensitive() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let hits = dispatch(
-            &mut scene,
-            &mut camera,
-            "nodes_search",
-            r#"{"query":"привет"}"#,
-        )
-        .expect("search");
-        assert_eq!(hits.as_array().expect("массив").len(), 1);
-        assert_eq!(hits[0]["id"], "n1");
-        // по label группы
-        let hits = dispatch(
-            &mut scene,
-            &mut camera,
-            "nodes_search",
-            r#"{"query":"ЗОНА"}"#,
-        )
-        .expect("search по label");
-        assert_eq!(hits[0]["id"], "g1");
-        // по file
-        let hits = dispatch(
-            &mut scene,
-            &mut camera,
-            "nodes_search",
-            r#"{"query":"spec.md"}"#,
-        )
-        .expect("search по file");
-        assert_eq!(hits[0]["id"], "f1");
-        // мимо
-        let hits = dispatch(
-            &mut scene,
-            &mut camera,
-            "nodes_search",
-            r#"{"query":"zzz"}"#,
-        )
-        .expect("search пусто");
-        assert!(hits.as_array().expect("массив").is_empty());
-    }
-
-    /// node_create_note: дефолтные размеры 260×120, переопределение, id
-    /// со свободным суффиксом, spatial index обновлён, канвас грязный.
-    #[test]
-    fn mcp_node_create_note() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let created = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"x":50.0,"y":900.0}"#,
-        )
-        .expect("create_note");
-        assert_eq!(created["id"], "note-1");
-        let index = scene.canvas.nodes.len() - 1;
-        let node = &scene.canvas.nodes[index];
-        assert_eq!((node.x, node.y), (50.0, 900.0));
-        assert_eq!((node.width, node.height), (260.0, 120.0));
-        assert!(scene.dirty_since.is_some(), "канвас грязный");
-        // spatial видит новую ноду
-        let hits = scene.spatial.query_rect([50.0, 900.0, 60.0, 910.0]);
-        assert!(hits.contains(&index), "новая нода в spatial");
-
-        let created = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"x":0.0,"y":0.0,"text":"abc","width":400.0,"height":300.0}"#,
-        )
-        .expect("create_note с размерами");
-        assert_eq!(created["id"], "note-2");
-        let node = scene.canvas.nodes.last().expect("нода");
-        assert_eq!((node.width, node.height), (400.0, 300.0));
-        assert_eq!(node.text.as_deref(), Some("abc"));
-
-        // x обязателен
-        assert!(dispatch(&mut scene, &mut camera, "node_create_note", r#"{"y":1.0}"#).is_err());
-    }
-
-    /// node_create_file: карточка по пути, файл на диске НЕ создаётся,
-    /// дефолтные размеры DROP_CARD.
-    #[test]
-    fn mcp_node_create_file_no_disk_write() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let disk_path = PathBuf::from("target/tmp/mcp_never_created.txt");
-        let _ = std::fs::remove_file(&disk_path);
-        let params = format!(r#"{{"path":"{}","x":10.0,"y":20.0}}"#, disk_path.display());
-        let created =
-            dispatch(&mut scene, &mut camera, "node_create_file", &params).expect("create_file");
-        assert_eq!(created["id"], "file-1");
-        let node = scene.canvas.nodes.last().expect("нода");
-        assert_eq!(node.kind(), NodeKind::File);
-        assert_eq!(
-            (node.width, node.height),
-            (canvas_app::ui::DROP_CARD_W, canvas_app::ui::DROP_CARD_H)
-        );
-        assert!(!disk_path.exists(), "MCP не создаёт файл на диске");
-    }
-
-    /// node_update_text / node_move / node_resize: модель + spatial + dirty.
-    #[test]
-    fn mcp_node_update_move_resize() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"Новый текст"}"#,
-        )
-        .expect("update_text");
-        assert_eq!(scene.canvas.nodes[0].text.as_deref(), Some("Новый текст"));
-
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_move",
-            r#"{"id":"n1","x":-50.0,"y":42.0}"#,
-        )
-        .expect("move");
-        assert_eq!(
-            (scene.canvas.nodes[0].x, scene.canvas.nodes[0].y),
-            (-50.0, 42.0)
-        );
-        let hits = scene.spatial.query_rect([-50.0, 42.0, -40.0, 52.0]);
-        assert!(hits.contains(&0), "spatial обновлён после move");
-
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_resize",
-            r#"{"id":"n1","width":500.0,"height":400.0}"#,
-        )
-        .expect("resize");
-        assert_eq!(
-            (scene.canvas.nodes[0].width, scene.canvas.nodes[0].height),
-            (500.0, 400.0)
-        );
-
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_move",
-            r#"{"id":"ghost","x":0.0,"y":0.0}"#
-        )
-        .is_err());
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_resize",
-            r#"{"id":"n1","width":1.0}"#
-        )
-        .is_err());
-    }
-
-    /// FR-005 node_edit: обновляются ТОЛЬКО переданные поля; label/color
-    /// null — сброс; геометрия — с обновлением spatial; ответ — сводка.
-    #[test]
-    fn mcp_node_edit_updates_only_given_fields() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // Только text: координаты/размеры/подпись не тронуты
-        let summary = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","text":"Отредактировано"}"#,
-        )
-        .expect("node_edit text");
-        assert_eq!(summary["id"], "n1");
-        assert_eq!(summary["text"], "Отредактировано");
-        assert_eq!(
-            (scene.canvas.nodes[0].x, scene.canvas.nodes[0].y),
-            (100.0, 100.0)
-        );
-        assert_eq!(
-            (scene.canvas.nodes[0].width, scene.canvas.nodes[0].height),
-            (260.0, 120.0)
-        );
-        assert_eq!(scene.canvas.nodes[0].label, None);
-        // Только геометрия: text не тронут
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","x":500.0,"y":600.0,"width":300.0,"height":200.0}"#,
-        )
-        .expect("node_edit geometry");
-        assert_eq!(
-            scene.canvas.nodes[0].text.as_deref(),
-            Some("Отредактировано")
-        );
-        let hits = scene.spatial.query_rect([500.0, 600.0, 510.0, 610.0]);
-        assert!(hits.contains(&0), "spatial обновлён после node_edit");
-        // label: строка — задан, null — сброс
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"g1","label":"Моя зона"}"#,
-        )
-        .expect("node_edit label");
-        assert_eq!(scene.canvas.nodes[2].label.as_deref(), Some("Моя зона"));
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"g1","label":null}"#,
-        )
-        .expect("node_edit label null");
-        assert_eq!(scene.canvas.nodes[2].label, None);
-        // color: пресет и сброс
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","color":"3"}"#,
-        )
-        .expect("node_edit color");
-        assert_eq!(scene.canvas.nodes[0].color.as_deref(), Some("3"));
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","color":null}"#,
-        )
-        .expect("node_edit color null");
-        assert_eq!(scene.canvas.nodes[0].color, None);
-    }
-
-    /// FR-005 node_edit: валидация — несуществующая нода, плохой color,
-    /// неположительные размеры, label не-строкой; сцена при ошибках
-    /// не меняется.
-    #[test]
-    fn mcp_node_edit_validation() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        assert!(dispatch(&mut scene, &mut camera, "node_edit", r#"{"id":"ghost"}"#).is_err());
-        let before = scene.canvas.nodes[0].clone();
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","color":"9"}"#
-        )
-        .is_err());
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","width":-5.0}"#
-        )
-        .is_err());
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","height":0.0}"#
-        )
-        .is_err());
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","label":42}"#
-        )
-        .is_err());
-        assert_eq!(scene.canvas.nodes[0], before, "ошибки не меняют ноду");
-        // Пустой вызов (только id) — валиден: ничего не изменилось, но
-        // сводка возвращена (дешёвая «проверка связи»)
-        let summary =
-            dispatch(&mut scene, &mut camera, "node_edit", r#"{"id":"n1"}"#).expect("no-op");
-        assert_eq!(summary["id"], "n1");
-        assert_eq!(scene.canvas.nodes[0], before);
-    }
-
-    /// node_delete: каскад связей, spatial перестроен, дети группы живы.
-    #[test]
-    fn mcp_node_delete_cascades_edges() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // n1 связана с f1 — удаление n1 рвёт edge-1; дети группы g1 остаются
-        dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"n1"}"#).expect("delete");
-        assert_eq!(scene.canvas.nodes.len(), 2);
-        assert!(scene.canvas.edges.is_empty(), "связь каскадно удалена");
-        assert!(scene.canvas.node("g1").is_some(), "группа на месте");
-        assert!(scene.canvas.node("f1").is_some(), "дети не удалены");
-        // spatial консистентен с моделью: индексы пересчитаны (f1=0, g1=1)
-        assert_eq!(
-            scene
-                .spatial
-                .query_rect([-1000.0, -1000.0, 1000.0, 1000.0])
-                .len(),
-            2
-        );
-        // бывшее место n1 теперь покрывает группа (дети остались внутри)
-        assert_eq!(scene.spatial.hit_test([110.0, 110.0]), Some(1));
-        assert!(
-            dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"n1"}"#).is_err(),
-            "повторное удаление — ошибка"
-        );
-    }
-
-    /// node_set_color: пресет, сброс null, отказ на мусоре.
-    #[test]
-    fn mcp_node_set_color_validation() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_set_color",
-            r#"{"id":"n1","color":"4"}"#,
-        )
-        .expect("set_color");
-        assert_eq!(scene.canvas.nodes[0].color.as_deref(), Some("4"));
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_set_color",
-            r#"{"id":"n1","color":null}"#,
-        )
-        .expect("сброс цвета");
-        assert_eq!(scene.canvas.nodes[0].color, None);
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_set_color",
-            r#"{"id":"n1","color":"red"}"#,
-        )
-        .expect_err("не пресет");
-        assert!(err.contains("\"1\"..\"6\""));
-    }
-
-    /// edge_create: id вида edge-N, стороны any→None / явные, валидация нод
-    /// и сторон; edge_delete по id и ошибка на отсутствующую связь.
-    #[test]
-    fn mcp_edge_create_delete() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // дефолт any → стороны не заданы
-        let created = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            r#"{"from":"n1","to":"g1"}"#,
-        )
-        .expect("edge_create");
-        assert_eq!(created["id"], "edge-2");
-        let edge = scene.canvas.edges.last().expect("связь");
-        assert_eq!(edge.from_side, None);
-        assert_eq!(edge.to_side, None);
-        // явные стороны
-        let created = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            r#"{"from":"f1","to":"n1","fromSide":"left","toSide":"bottom"}"#,
-        )
-        .expect("edge_create со сторонами");
-        assert_eq!(created["id"], "edge-3");
-        let edge = scene.canvas.edges.last().expect("связь");
-        assert_eq!(edge.from_side, Some(Side::Left));
-        assert_eq!(edge.to_side, Some(Side::Bottom));
-
-        // несуществующая нода — ошибка, связь не создана
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            r#"{"from":"n1","to":"ghost"}"#
-        )
-        .is_err());
-        // мусорная сторона — ошибка
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            r#"{"from":"n1","to":"f1","fromSide":"diagonal"}"#
-        )
-        .is_err());
-        assert_eq!(scene.canvas.edges.len(), 3, "валидные связи остались");
-
-        dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#)
-            .expect("edge_delete");
-        assert_eq!(scene.canvas.edges.len(), 2);
-        assert!(
-            dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#).is_err(),
-            "повторное удаление — ошибка"
-        );
-    }
-
-    /// FR-032: edges_list/edge_get — каноническая схема (id/from/to/kind/
-    /// fromLine?/fromSide/toSide), kind отражает тип потока, edge_get
-    /// неизвестного id — ошибка.
-    #[test]
-    fn mcp_edges_list_and_get() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // value-ребро с построчным истоком (FR-014/FR-025)
-        let mut value_edge = Edge::new("ve-1", "n1", None, "f1", None);
-        value_edge.set_flow_kind(canvas_core::FlowKind::Value);
-        value_edge.from_line = Some(2);
-        scene.canvas.add_edge(value_edge);
-
-        let list = dispatch(&mut scene, &mut camera, "edges_list", "{}").expect("edges_list");
-        let edges = list.as_array().expect("массив рёбер");
-        assert_eq!(edges.len(), 2);
-        let control = &edges[0];
-        assert_eq!(control["id"], "edge-1");
-        assert_eq!(control["from"], "n1");
-        assert_eq!(control["to"], "f1");
-        assert_eq!(control["kind"], "control");
-        assert_eq!(control["toSide"], "right");
-        assert!(
-            !control
-                .as_object()
-                .expect("объект")
-                .contains_key("fromLine"),
-            "fromLine опционален"
-        );
-        let value = &edges[1];
-        assert_eq!(value["id"], "ve-1");
-        assert_eq!(value["kind"], "value");
-        assert_eq!(value["fromLine"], 2);
-
-        let one =
-            dispatch(&mut scene, &mut camera, "edge_get", r#"{"id":"ve-1"}"#).expect("edge_get");
-        assert_eq!(one["id"], "ve-1");
-        assert_eq!(one["kind"], "value");
-        assert_eq!(one["fromLine"], 2);
-
-        let err = dispatch(&mut scene, &mut camera, "edge_get", r#"{"id":"ghost"}"#)
-            .expect_err("нет такой связи");
-        assert!(err.contains("не найдена"));
-    }
-
-    /// FR-032: graph_validate на чистом графе — valid:true, issues:[]; на
-    /// цикле — valid:false, ровно один E-CYCLE с участниками (топология
-    /// строится напрямую: MCP-пути цикл запрещают by design).
-    #[test]
-    fn mcp_graph_validate_clean_and_cycle() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("validate");
-        assert_eq!(report["valid"], true);
-        assert_eq!(report["issues"], serde_json::json!([]));
-
-        // Цикл a→b→a (value): граф ломается — отчёт с кодом и участниками
-        let mut canvas = Canvas::default();
-        let mut a = Node::text("a", "a", 0.0, 0.0);
-        a.set_expr(Some("1".to_owned()));
-        let mut b = Node::text("b", "b", 220.0, 0.0);
-        b.set_expr(Some("$in".to_owned()));
-        canvas.nodes.push(a);
-        canvas.nodes.push(b);
-        let mut e1 = Edge::new("e1", "a", None, "b", None);
-        e1.set_flow_kind(canvas_core::FlowKind::Value);
-        let mut e2 = Edge::new("e2", "b", None, "a", None);
-        e2.set_flow_kind(canvas_core::FlowKind::Value);
-        canvas.add_edge(e1);
-        canvas.add_edge(e2);
-        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp-validate.canvas"));
-        let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("validate");
-        assert_eq!(report["valid"], false);
-        let issues = report["issues"].as_array().expect("issues");
-        assert_eq!(issues.len(), 1, "цикл — единственный issue: {issues:?}");
-        assert_eq!(issues[0]["code"], "E-CYCLE");
-        assert_eq!(issues[0]["severity"], "error");
-        let message = issues[0]["message"].as_str().expect("message");
-        assert!(
-            message.contains('a') && message.contains('b'),
-            "участники: {message}"
-        );
-        // Чтение: undo-стек и dirty не затронуты (валидация не мутирует)
-        assert!(scene.dirty_since.is_none(), "канвас не помечен грязным");
-    }
-
-    /// FR-032: graph_validate ловит E-OVERLOAD и W-UNUSED-SLOT с точными
-    /// node_id/edge_id (нечитаемый — именно второй слот); warning не делает
-    /// модель невалидной.
-    #[test]
-    fn mcp_graph_validate_overload_and_unused_slot() {
-        let mut canvas = Canvas::default();
-        let mut mm1 = Node::text("mm1", "mm1", 0.0, 0.0);
-        mm1.set_expr(Some("mm1(1200 rps, 1000 rps)".to_owned()));
-        let mut a = Node::text("a", "a", 220.0, 0.0);
-        a.set_expr(Some("10".to_owned()));
-        let mut b = Node::text("b", "b", 220.0, 180.0);
-        b.set_expr(Some("20".to_owned()));
-        let mut sum = Node::text("sum", "sum", 440.0, 0.0);
-        sum.set_expr(Some("$1 + 100".to_owned()));
-        canvas.nodes.push(mm1);
-        canvas.nodes.push(a);
-        canvas.nodes.push(b);
-        canvas.nodes.push(sum);
-        let mut e1 = Edge::new("e-a", "a", None, "sum", None);
-        e1.set_flow_kind(canvas_core::FlowKind::Value);
-        let mut e2 = Edge::new("e-b", "b", None, "sum", None);
-        e2.set_flow_kind(canvas_core::FlowKind::Value);
-        canvas.add_edge(e1);
-        canvas.add_edge(e2);
-        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp-validate2.canvas"));
-        let mut camera = Camera::default();
-        let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("validate");
-        assert_eq!(report["valid"], false, "E-OVERLOAD — ошибка");
-        let issues = report["issues"].as_array().expect("issues");
-        assert_eq!(issues.len(), 2, "перегрузка + нечитаемый слот: {issues:?}");
-        assert_eq!(issues[0]["code"], "E-OVERLOAD");
-        assert_eq!(issues[0]["node_id"], "mm1");
-        assert_eq!(issues[1]["code"], "W-UNUSED-SLOT");
-        assert_eq!(issues[1]["node_id"], "sum");
-        // Формула читает только $1 — предупреждение о ребре второго слота
-        assert_eq!(issues[1]["edge_id"], "e-b");
-    }
-
-    /// viewport_get/set: центр и зум, кламп зума камерой.
-    #[test]
-    fn mcp_viewport_get_set() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let view = dispatch(&mut scene, &mut camera, "viewport_get", "{}").expect("viewport_get");
-        assert_eq!(view["x"], 0.0);
-        assert_eq!(view["zoom"], 1.0);
-
-        let view = dispatch(
-            &mut scene,
-            &mut camera,
-            "viewport_set",
-            r#"{"x":100.0,"y":-50.0,"zoom":2.5}"#,
-        )
-        .expect("viewport_set");
-        assert_eq!(view["x"].as_f64().expect("x"), 100.0);
-        assert_eq!(view["y"].as_f64().expect("y"), -50.0);
-        assert_eq!(view["zoom"], 2.5);
-        // зум клампится
-        let view = dispatch(
-            &mut scene,
-            &mut camera,
-            "viewport_set",
-            r#"{"x":0.0,"y":0.0,"zoom":100.0}"#,
-        )
-        .expect("viewport_set зум");
-        assert_eq!(view["zoom"], canvas_render::camera::MAX_ZOOM);
-        // zoom опционален
-        let view = dispatch(
-            &mut scene,
-            &mut camera,
-            "viewport_set",
-            r#"{"x":1.0,"y":2.0}"#,
-        )
-        .expect("viewport_set без зума");
-        assert_eq!(
-            view["zoom"],
-            canvas_render::camera::MAX_ZOOM,
-            "зум не задет"
-        );
-    }
-
-    /// mcp_unwrap_call: tools/call → (name, arguments); прочие методы как есть.
-    #[test]
-    fn mcp_unwrap_call_passthrough_and_tool_name() {
-        let params: serde_json::Value =
-            serde_json::json!({"name": "node_move", "arguments": {"id": "n1", "x": 1.0, "y": 2.0}});
-        let (method, args) = mcp_unwrap_call("tools/call", &params);
-        assert_eq!(method, "node_move");
-        assert_eq!(args, serde_json::json!({"id": "n1", "x": 1.0, "y": 2.0}));
-
-        // метод напрямую (тесты dispatch) — без изменений
-        let params = serde_json::json!({"id": "n1"});
-        let (method, args) = mcp_unwrap_call("node_get", &params);
-        assert_eq!(method, "node_get");
-        assert_eq!(args, params);
-
-        // arguments отсутствует → Null, не паника
-        let params = serde_json::json!({"name": "canvas_info"});
-        let (method, args) = mcp_unwrap_call("tools/call", &params);
-        assert_eq!(method, "canvas_info");
-        assert_eq!(args, serde_json::Value::Null);
-    }
-
-    /// Неизвестный инструмент и кривые параметры — Err (посредник сделает isError).
-    #[test]
-    fn mcp_unknown_tool_and_bad_params() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        assert!(dispatch(&mut scene, &mut camera, "canvas_destroy", "{}").is_err());
-        assert!(dispatch(&mut scene, &mut camera, "node_get", "{}").is_err());
-        assert!(dispatch(&mut scene, &mut camera, "nodes_search", r#"{"query":42}"#).is_err());
-    }
-
     // --- FR-006: undo/redo ---
-
-    /// Лимит истории — ровно 50 (запрос «не менее 50»): 55 шагов → 50,
-    /// старейший вытеснен, 50-й отменяем.
-    #[test]
-    fn undo_stack_limit_is_fifty() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        for i in 0..55 {
-            dispatch(
-                &mut scene,
-                &mut camera,
-                "node_create_note",
-                &format!(r#"{{"x": {i}.0, "y": 0.0}}"#),
-            )
-            .expect("node_create_note");
-        }
-        assert_eq!(scene.undo_stack.len(), 55.min(UNDO_LIMIT));
-        assert_eq!(scene.undo_stack.len(), 50, "глубина ровно 50");
-        // 55 созданий, отменяем 50: первые 5 созданий вне истории
-        // (вытеснены) — в сцене 3 исходных + 5 = 8 нод
-        for _ in 0..50 {
-            let Some(before) = scene.take_undo() else {
-                panic!("история не должна кончиться раньше 50 шагов");
-            };
-            scene.canvas = before;
-            scene.spatial = SpatialIndex::build(&scene.canvas);
-        }
-        assert_eq!(
-            scene.canvas.nodes.len(),
-            8,
-            "3 исходных + 5 вытеснённых из истории созданий"
-        );
-    }
-
-    /// Удаление ноды через MCP → undo восстанавливает ноду И каскадную
-    /// связь; redo возвращает удаление.
-    #[test]
-    fn mcp_delete_undo_redo_roundtrip() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let before = scene.canvas.clone();
-        dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"n1"}"#).expect("node_delete");
-        // n1 удалена, edge-1 оборвана каскадом
-        assert_eq!(scene.canvas.nodes.len(), 2);
-        assert!(scene.canvas.edges.is_empty());
-        // undo: сцена «до» возвращается целиком
-        let snapshot = scene.take_undo().expect("шаг undo есть");
-        assert_eq!(snapshot, before, "снапшот — состояние до удаления");
-        scene.canvas = snapshot;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        assert_eq!(scene.canvas.nodes.len(), 3);
-        assert_eq!(scene.canvas.edges.len(), 1);
-        // redo: удаление возвращается
-        let after = scene.take_redo().expect("шаг redo есть");
-        assert_eq!(after.nodes.len(), 2);
-        assert!(after.edges.is_empty());
-    }
-
-    /// push нового шага обнуляет ветку redo (стандарт undo-модели).
-    #[test]
-    fn new_action_clears_redo_branch() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_move",
-            r#"{"id":"n1","x":10.0,"y":10.0}"#,
-        )
-        .expect("node_move");
-        let _ = scene.take_undo().expect("undo доступен");
-        assert_eq!(scene.redo_stack.len(), 1);
-        // новое действие после undo — redo ветка сброшена
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_set_color",
-            r#"{"id":"n1","color":"3"}"#,
-        )
-        .expect("node_set_color");
-        assert!(scene.redo_stack.is_empty(), "redo обнулён новым шагом");
-        assert_eq!(scene.undo_stack.len(), 1, "в истории только новый шаг");
-    }
-
-    /// Валидационные ошибки MCP не оставляют пустых шагов: node_get /
-    /// неизвестный id / кривой color — история пуста.
-    #[test]
-    fn mcp_validation_errors_leave_no_steps() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // чтение — не мутация
-        dispatch(&mut scene, &mut camera, "nodes_list", "{}").expect("nodes_list");
-        assert!(scene.undo_stack.is_empty(), "чтение не шаг");
-        // несуществующий id — Err до мутации, шага нет
-        assert!(dispatch(&mut scene, &mut camera, "node_delete", r#"{"id":"нет"}"#).is_err());
-        assert!(scene.undo_stack.is_empty(), "ошибка валидации не шаг");
-        // node_edit с невалидным width — Err
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","width":-5.0}"#
-        )
-        .is_err());
-        assert_eq!(scene.undo_stack.len(), 1, "node_edit пушит до мутаций");
-        // этот шаг откатывает частично применённые поля (text/label)
-        let snapshot = scene.take_undo().expect("шаг есть");
-        assert_eq!(snapshot, mcp_scene().canvas, "снапшот — исходная сцена");
-    }
-
-    /// edge_delete отсутствующей связи — Err без шага (сравнение после).
-    #[test]
-    fn mcp_edge_delete_missing_no_step() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        assert!(dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"нет"}"#).is_err());
-        assert!(scene.undo_stack.is_empty(), "no-op удаления — не шаг");
-        // существующая связь — шаг есть
-        dispatch(&mut scene, &mut camera, "edge_delete", r#"{"id":"edge-1"}"#)
-            .expect("edge_delete");
-        assert_eq!(scene.undo_stack.len(), 1);
-    }
 
     // --- FR-013: Numi-формулы (canvasdesk.expr) ---
 
@@ -14566,409 +10919,6 @@ mod tests {
         let second = unique_custom_id("my-lb", &registry, &root);
         assert_eq!(second, "my-lb-2");
         std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// MCP node_edit { expr } — формула сохранена, результат пересчитан
-    /// в expr_results (инвариант 4: runtime, не в .canvas).
-    #[test]
-    fn mcp_node_edit_expr_computes_result() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let summary = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":"5 ms × 200 req/s"}"#,
-        )
-        .expect("node_edit expr");
-        assert_eq!(summary["expr"], "5 ms × 200 req/s", "формула в сводке");
-        // Результат — runtime-кэш, в модели его нет
-        let value = scene.expr_results.get("n1").expect("результат есть");
-        match value {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
-            other => panic!("ожидался результат, получено: {other:?}"),
-        }
-        let json = scene.canvas.to_json().expect("сериализация");
-        assert!(!json.contains("1000 ms"), "результат не сериализуется");
-        assert!(json.contains("5 ms × 200 req/s"), "формула сериализуется");
-    }
-
-    /// MCP node_edit { expr: null } — сброс calc-режима; невалидная
-    /// формула — Err с диагностикой, нода не менялась и шага undo нет
-    /// (валидация ДО push_undo).
-    #[test]
-    fn mcp_node_edit_expr_null_and_invalid() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // Сброс отсутствующей формулы — no-op без ошибки
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":null}"#,
-        )
-        .expect("expr null");
-        assert!(!scene.expr_results.contains_key("n1"));
-
-        // Установка, затем сброс через null
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":"1k rps"}"#,
-        )
-        .expect("expr set");
-        assert!(scene.expr_results.contains_key("n1"));
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":null}"#,
-        )
-        .expect("expr reset");
-        assert!(
-            scene.canvas.node("n1").and_then(Node::expr).is_none(),
-            "формула удалена из модели"
-        );
-        assert!(!scene.expr_results.contains_key("n1"), "результат удалён");
-
-        // Невалидная формула: Err, нода не тронута, undo-шага нет
-        let steps_before = scene.undo_stack.len();
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":"= invalid @#$"}"#,
-        )
-        .expect_err("парсинг формулы");
-        assert!(err.contains("expr"), "диагностика с префиксом поля: {err}");
-        assert_eq!(
-            scene.undo_stack.len(),
-            steps_before,
-            "невалидный expr не пушит шаг"
-        );
-        // Кривой тип expr — тоже Err
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":42}"#
-        )
-        .is_err());
-    }
-
-    /// Формула с ошибкой вычисления сохраняется (парсинг ок), результат —
-    /// красная диагностика в expr_results (MCP отвергает только синтаксис).
-    #[test]
-    fn mcp_node_edit_expr_eval_error_is_stored() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":"5 ms + 3 rps"}"#,
-        )
-        .expect("синтаксически корректная формула сохраняется");
-        match scene.expr_results.get("n1").expect("запись есть") {
-            ExprOutcome::Err(msg) => {
-                assert!(msg.contains("не совместимы"), "диагностика: {msg}")
-            }
-            other => panic!("ожидалась ошибка вычисления: {other:?}"),
-        }
-    }
-
-    /// Интеграционный сценарий верификации FR-013: node_update_text со
-    /// строками «= …» выводит формулу; построчный результат — Numi-стиль
-    /// (строки сценария); undo восстанавливает пустой expr и убирает
-    /// результаты; загрузка с canvasdesk.expr без формульных строк в
-    /// тексте — программный итог в футере.
-    #[test]
-    fn expr_undo_redo_restores_formula() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // Заметка с формулой: текст с «=»-строками → формула + построчный
-        // результат (Numi-стиль)
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"Параметры\n= 1 sec + 500 ms"}"#,
-        )
-        .expect("node_update_text");
-        assert_eq!(
-            scene.canvas.node("n1").and_then(Node::expr),
-            Some("1 sec + 500 ms"),
-            "формула выведена из текста"
-        );
-        // FR-014: expr_results — карта потока значений (запись есть для
-        // любой expr-ноды); вытеснение футера построчными результатами —
-        // правило РЕНДЕРА (text.rs), а не отсутствие записи
-        assert!(
-            scene.expr_results.contains_key("n1"),
-            "результат формулы в карте потока"
-        );
-        let lines = scene
-            .expr_line_results
-            .get("n1")
-            .expect("построчные результаты есть");
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], None, "проза без результата");
-        match lines[1].as_ref().expect("результат «=»-строки") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1.5 sec"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-
-        // Undo: expr пуст, результатов нет
-        let before = scene.take_undo().expect("шаг есть");
-        scene.canvas = before;
-        scene.recompute_all_expr();
-        assert_eq!(
-            scene.canvas.node("n1").and_then(Node::expr),
-            None,
-            "после undo формула из правки исчезла"
-        );
-        assert!(!scene.expr_results.contains_key("n1"), "итога нет");
-        assert!(
-            !scene.expr_line_results.contains_key("n1"),
-            "построчных результатов нет"
-        );
-
-        // Загрузка с формулой (текст без формульных строк): recompute_all_expr
-        // при SceneState::new даёт программный итог в футере
-        let mut canvas = Canvas::default();
-        let mut note = Node::text("calc", "Gateway", 0.0, 0.0);
-        note.set_expr(Some("1k rps".to_owned()));
-        canvas.nodes.push(note);
-        let scene = SceneState::new(canvas, PathBuf::from("target/tmp/expr.canvas"));
-        match scene
-            .expr_results
-            .get("calc")
-            .expect("результат при загрузке")
-        {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-    }
-
-    /// FR-013 (правка 2, Numi-стиль): каждая формульная строка текста —
-    /// свой результат; переменные протекают между строками; проза и
-    /// пустые строки без результата; canvasdesk.expr не материализуется.
-    /// FR-014: n1 входит в карту потока (expr_results — итог = последняя
-    /// формульная строка), но футер на карточке не рисуется — построчные
-    /// результаты вытесняют программный итог (правило рендера).
-    #[test]
-    fn per_line_results_numi_sheet() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"Gateway\nrps = 1000\n\nlatency = 50 ms\nlatency × rps"}"#,
-        )
-        .expect("node_update_text");
-        assert_eq!(
-            scene.canvas.node("n1").and_then(Node::expr),
-            None,
-            "авто-формулы не материализуются в canvasdesk.expr"
-        );
-        // FR-014: значение ноды в карте потока есть (последняя формульная
-        // строка «latency × rps»); показ футера гасится построчными
-        // результатами — правило рендера, не карты
-        match scene.expr_results.get("n1").expect("итог в карте потока") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "50000 ms"),
-            other => panic!("ожидалось значение: {other:?}"),
-        };
-        let lines = scene
-            .expr_line_results
-            .get("n1")
-            .expect("построчные результаты есть");
-        assert_eq!(lines.len(), 5, "Vec выровнен по строкам текста");
-        assert_eq!(lines[0], None, "проза");
-        match lines[1].as_ref().expect("присваивание — результат") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-        assert_eq!(lines[2], None, "пустая строка");
-        match lines[4]
-            .as_ref()
-            .expect("выражение с переменными — результат")
-        {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "50000 ms"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-    }
-
-    /// MCP node_edit { expr } при тексте без формульных строк — программный
-    /// итог в expr_results (футер карточки), построчных результатов нет.
-    #[test]
-    fn mcp_program_result_fallback_for_prose_text() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            r#"{"id":"n1","expr":"5 ms × 200 req/s"}"#,
-        )
-        .expect("node_edit expr");
-        assert!(
-            !scene.expr_line_results.contains_key("n1"),
-            "в прозе формульных строк нет — построчных результатов нет"
-        );
-        match scene.expr_results.get("n1").expect("программный итог") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-    }
-
-    /// FR-013 (правка 2): выражения без «=» считаются построчно при
-    /// node_update_text и при загрузке канваса; проза результата не создаёт.
-    #[test]
-    fn auto_lines_compute_without_equal_prefix() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // Явной формулы нет, последняя строка — выражение: результат на ней
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"Пропускная способность\n1000 rps * 2"}"#,
-        )
-        .expect("node_update_text");
-        assert_eq!(
-            scene.canvas.node("n1").and_then(Node::expr),
-            None,
-            "авто-формула не материализуется в canvasdesk.expr"
-        );
-        let lines = scene
-            .expr_line_results
-            .get("n1")
-            .expect("построчные результаты есть");
-        assert_eq!(lines[0], None, "проза — не формула");
-        match lines[1].as_ref().expect("результат авто-строки") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "2000 rps"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-
-        // Проза: цифры в строке есть, но выражение не парсится — результата нет
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"План на 15:00"}"#,
-        )
-        .expect("node_update_text проза");
-        assert!(
-            !scene.expr_line_results.contains_key("n1"),
-            "проза — не формула"
-        );
-        assert!(!scene.expr_results.contains_key("n1"), "итога тоже нет");
-
-        // Загрузка канваса с авто-формулой: результат пересчитывается
-        let mut canvas = Canvas::default();
-        canvas
-            .nodes
-            .push(Node::text("auto", "5 ms × 200 req/s", 0.0, 0.0));
-        let scene = SceneState::new(canvas, PathBuf::from("target/tmp/auto.canvas"));
-        let lines = scene
-            .expr_line_results
-            .get("auto")
-            .expect("построчные результаты при загрузке");
-        match lines[0].as_ref().expect("результат") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-    }
-
-    /// FR-013 (правка 4): ТОЧНЫЕ листы владельца из фидбека — присваивания
-    /// (обе формы), ссылки на переменные, кумулятивное окружение. Каждая
-    /// строка показывает результат, присваивания наполняют Env.
-    #[test]
-    fn per_line_results_owner_sheets_v4() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // Нода 1 владельца
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"123 + 5123 = a\n235 + 2323 = b\nx = 200\nc = a + b\n200 + x"}"#,
-        )
-        .expect("node_update_text нода 1");
-        let lines = scene
-            .expr_line_results
-            .get("n1")
-            .expect("построчные результаты ноды 1");
-        assert_eq!(lines.len(), 5);
-        let texts: Vec<String> = lines
-            .iter()
-            .map(|line| match line {
-                Some(ExprOutcome::Ok(value)) => value.to_string(),
-                other => panic!("ожидалось значение: {other:?}"),
-            })
-            .collect();
-        assert_eq!(texts[0], "5246", "хвостовое присваивание a");
-        assert_eq!(texts[1], "2558", "хвостовое присваивание b");
-        assert_eq!(texts[2], "200", "чистое присваивание x");
-        assert_eq!(texts[3], "7804", "ссылки на переменные c = a + b");
-        assert_eq!(texts[4], "400", "ссылка на x");
-
-        // Нода 2 владельца
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"x = 200\n250 + x"}"#,
-        )
-        .expect("node_update_text нода 2");
-        let lines = scene
-            .expr_line_results
-            .get("n1")
-            .expect("построчные результаты ноды 2");
-        assert_eq!(lines.len(), 2);
-        match lines[0].as_ref().expect("x = 200") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "200"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-        match lines[1].as_ref().expect("250 + x") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "450"),
-            other => panic!("ожидалось значение: {other:?}"),
-        }
-    }
-
-    /// FR-013 (правка 4): ошибки строк доходят до expr_line_results как
-    /// ExprOutcome::Err (для красного бейджа и тултипа); ссылки на
-    /// объявленную, но не вычислившуюся переменную тоже помечены.
-    #[test]
-    fn per_line_error_outcomes_reach_scene() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_update_text",
-            r#"{"id":"n1","text":"x = 1 sec + 2 req\nx + 1\nитог = 2 + 2"}"#,
-        )
-        .expect("node_update_text ошибки");
-        let lines = scene
-            .expr_line_results
-            .get("n1")
-            .expect("построчные результаты есть");
-        assert_eq!(lines.len(), 3);
-        assert!(
-            matches!(&lines[0], Some(ExprOutcome::Err(_))),
-            "несовместимость единиц видна"
-        );
-        assert!(
-            matches!(&lines[1], Some(ExprOutcome::Err(_))),
-            "ссылка на объявленную, но не вычисленную x видна"
-        );
-        assert!(
-            matches!(&lines[2], Some(ExprOutcome::Ok(_))),
-            "строка ниже по-прежнему вычисляется"
-        );
     }
 
     /// FR-013 (правка 5): РЕАЛЬНЫЙ флоу набора — EditingSession (как
@@ -15217,1590 +11167,5 @@ mod tests {
         // Модель не изменилась
         assert_eq!(scene.canvas.edges[1].flow_kind(), FlowKind::Control);
         assert!(scene.undo_stack.is_empty(), "отклонённый тогл без шага");
-    }
-
-    /// flow_set_kind: тогл control → value → control; round-trip в extra.
-    #[test]
-    fn mcp_flow_set_kind_toggles_flow() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            r#"{"id":"edge-1","kind":"value"}"#,
-        )
-        .expect("flow_set_kind value");
-        assert_eq!(out["kind"], "value");
-        assert_eq!(
-            scene.canvas.edges[0].flow_kind(),
-            canvas_core::flow::FlowKind::Value
-        );
-        // Тогл обратно — поле удаляется
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            r#"{"id":"edge-1","kind":"control"}"#,
-        )
-        .expect("flow_set_kind control");
-        assert_eq!(out["kind"], "control");
-        assert!(
-            scene.canvas.edges[0].extra.get("canvasdesk").is_none(),
-            "control удаляет расширение целиком"
-        );
-        // Некорректный kind — ошибка
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            r#"{"id":"edge-1","kind":"поток"}"#,
-        )
-        .expect_err("kind валидируется");
-        assert!(err.contains("kind"), "{err}");
-    }
-
-    /// flow_set_kind при цикле — isError с участниками (DAG-инвариант MCP).
-    #[test]
-    fn mcp_flow_set_kind_rejects_cycle() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // A → B → A из новых нод и value-рёбер
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fa","x":0,"y":0,"text":"A"}"#,
-        )
-        .expect("fa");
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fb","x":300,"y":0,"text":"B"}"#,
-        )
-        .expect("fb");
-        // id создаются автоматически (note-N) — найдём по тексту
-        let id_a = scene
-            .canvas
-            .nodes
-            .iter()
-            .find(|n| n.text.as_deref() == Some("A"))
-            .map(|n| n.id.clone())
-            .expect("нода A");
-        let id_b = scene
-            .canvas
-            .nodes
-            .iter()
-            .find(|n| n.text.as_deref() == Some("B"))
-            .map(|n| n.id.clone())
-            .expect("нода B");
-        let e1 = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(r#"{{"from":"{id_a}","to":"{id_b}"}}"#),
-        )
-        .expect("edge A→B")["id"]
-            .as_str()
-            .expect("id")
-            .to_owned();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            &format!(r#"{{"id":"{e1}","kind":"value"}}"#),
-        )
-        .expect("A→B value");
-        let e2 = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(r#"{{"from":"{id_b}","to":"{id_a}"}}"#),
-        )
-        .expect("edge B→A")["id"]
-            .as_str()
-            .expect("id")
-            .to_owned();
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            &format!(r#"{{"id":"{e2}","kind":"value"}}"#),
-        )
-        .expect_err("цикл B→A→B отклонён");
-        assert!(err.contains("цикл"), "{err}");
-        // А control — пожалуйста
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            &format!(r#"{{"id":"{e2}","kind":"control"}}"#),
-        )
-        .expect("control допустим");
-    }
-
-    /// flow_recalc: живой пересчёт цепочки A→B→C; правка формулы A меняет
-    /// downstream; удаление ребра — «вход отсутствует».
-    #[test]
-    fn mcp_flow_recalc_chain_live_reval() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // A=5, B=$in × 2, C=$in + 1
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fa","x":0,"y":0,"text":"A\n= 5"}"#,
-        )
-        .expect("fa");
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fb","x":300,"y":0,"text":"B\n= $in × 2"}"#,
-        )
-        .expect("fb");
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fc","x":600,"y":0,"text":"C\n= $in + 1"}"#,
-        )
-        .expect("fc");
-        let id = |scene: &SceneState, text: &str| {
-            scene
-                .canvas
-                .nodes
-                .iter()
-                .find(|n| {
-                    n.text
-                        .as_deref()
-                        .map(|t| t.starts_with(text))
-                        .unwrap_or(false)
-                })
-                .map(|n| n.id.clone())
-                .expect("нода сценария")
-        };
-        let (id_a, id_b, id_c) = (id(&scene, "A"), id(&scene, "B"), id(&scene, "C"));
-        for (from, to) in [(&id_a, &id_b), (&id_b, &id_c)] {
-            let edge_id = dispatch(
-                &mut scene,
-                &mut camera,
-                "edge_create",
-                &format!(r#"{{"from":"{from}","to":"{to}"}}"#),
-            )
-            .expect("edge")["id"]
-                .as_str()
-                .expect("id")
-                .to_owned();
-            dispatch(
-                &mut scene,
-                &mut camera,
-                "flow_set_kind",
-                &format!(r#"{{"id":"{edge_id}","kind":"value"}}"#),
-            )
-            .expect("value-ребро");
-        }
-        // Верификация FR-014: {A: 5, B: 10, C: 11}
-        let map = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
-        assert_eq!(map[&id_a]["value"], 5.0);
-        assert_eq!(map[&id_b]["value"], 10.0);
-        assert_eq!(map[&id_c]["value"], 11.0);
-        assert_eq!(map[&id_a]["unit"], "");
-        // Правка A → downstream пересчитан: {A: 7, B: 14, C: 15}
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            &format!(r#"{{"id":"{id_a}","expr":"7"}}"#),
-        )
-        .expect("node_edit expr");
-        let map = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
-        assert_eq!(map[&id_b]["value"], 14.0, "downstream пересчитан живьём");
-        assert_eq!(map[&id_c]["value"], 15.0);
-        // Удаление value-ребра A→B — у B «вход отсутствует», C тоже
-        let e_ab = scene
-            .canvas
-            .edges
-            .iter()
-            .find(|e| e.from_node == id_a && e.to_node == id_b)
-            .map(|e| e.id.clone())
-            .expect("ребро A→B");
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_delete",
-            &format!(r#"{{"id":"{e_ab}"}}"#),
-        )
-        .expect("edge_delete");
-        let map = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
-        assert!(map[&id_b]["error"]
-            .as_str()
-            .expect("ошибка входа")
-            .contains("вход"));
-        assert!(map[&id_c]["error"].as_str().is_some(), "downstream тоже");
-    }
-
-    /// FR-017 (CP6) MCP-сценарий «Проверка»: 3 calc-ноды A→B→C;
-    /// `whatif_set_override(A, 0, "a = 20")` → дельты {A: 5→20 (+15),
-    /// B: 10→40 (+30), C: 11→41 (+30)}; сессия без Apply не мутирует
-    /// `.canvas`; `whatif_apply()` → строка A в тексте = `20`; undo (один
-    /// шаг) — база восстановлена.
-    #[test]
-    fn mcp_whatif_override_apply_undo() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        for (x, text) in [
-            (0.0, "a = 5"),
-            (300.0, "b = $in × 2"),
-            (600.0, "c = $in + 1"),
-        ] {
-            dispatch(
-                &mut scene,
-                &mut camera,
-                "node_create_note",
-                &format!(r#"{{"x":{x},"y":0,"text":"{text}"}}"#),
-            )
-            .expect("нода");
-        }
-        // id генерируются автоматически (note-N) — найдём по тексту
-        let id = |scene: &SceneState, prefix: &str| {
-            scene
-                .canvas
-                .nodes
-                .iter()
-                .find(|n| {
-                    n.text
-                        .as_deref()
-                        .map(|t| t.starts_with(prefix))
-                        .unwrap_or(false)
-                })
-                .map(|n| n.id.clone())
-                .expect("нода сценария")
-        };
-        let (id_a, id_b, id_c) = (id(&scene, "a = "), id(&scene, "b = "), id(&scene, "c = "));
-        for (from, to) in [(&id_a, &id_b), (&id_b, &id_c)] {
-            let edge_id = dispatch(
-                &mut scene,
-                &mut camera,
-                "edge_create",
-                &format!(r#"{{"from":"{from}","to":"{to}"}}"#),
-            )
-            .expect("edge")["id"]
-                .as_str()
-                .expect("id")
-                .to_owned();
-            dispatch(
-                &mut scene,
-                &mut camera,
-                "flow_set_kind",
-                &format!(r#"{{"id":"{edge_id}","kind":"value"}}"#),
-            )
-            .expect("value-ребро");
-        }
-        // Именованный сценарий (персистентен — мутация canvas, undo-шаг)
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "whatif_scenario_create",
-            r#"{"name":"S1"}"#,
-        )
-        .expect("сценарий");
-        let hash_before = scene.canvas.to_json().expect("сериализация");
-
-        // Подмена строки 0 ноды A — runtime: canvas не мутируется
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "whatif_set_override",
-            &format!(r#"{{"node_id":"{id_a}","line":0,"expr":"a = 20"}}"#),
-        )
-        .expect("set_override");
-        assert_eq!(out["scenario"], "S1");
-        assert_eq!(
-            scene.canvas.to_json().expect("сериализация"),
-            hash_before,
-            "подмена runtime-only (инвариант 2)"
-        );
-
-        // Дельты — эталон «Проверка» FR-017
-        let deltas = dispatch(&mut scene, &mut camera, "whatif_deltas", "{}").expect("deltas");
-        let key_a = format!("{id_a}:0");
-        let key_b = format!("{id_b}:value");
-        let key_c = format!("{id_c}:value");
-        assert_eq!(deltas["deltas"][key_a.as_str()]["base"], "5");
-        assert_eq!(deltas["deltas"][key_a.as_str()]["whatif"], "20");
-        assert_eq!(deltas["deltas"][key_a.as_str()]["delta"], "+15");
-        assert_eq!(deltas["deltas"][key_b.as_str()]["base"], "10");
-        assert_eq!(deltas["deltas"][key_b.as_str()]["whatif"], "40");
-        assert_eq!(deltas["deltas"][key_b.as_str()]["delta"], "+30");
-        assert_eq!(deltas["deltas"][key_c.as_str()]["base"], "11");
-        assert_eq!(deltas["deltas"][key_c.as_str()]["whatif"], "41");
-        assert_eq!(deltas["deltas"][key_c.as_str()]["delta"], "+30");
-
-        // Переключение База ↔ S1 — runtime, дельты появляются/исчезают
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "whatif_scenario_activate",
-            r#"{"name":"База"}"#,
-        )
-        .expect("база");
-        let deltas = dispatch(&mut scene, &mut camera, "whatif_deltas", "{}").expect("deltas");
-        assert!(
-            deltas["deltas"].as_object().expect("объект").is_empty(),
-            "на базе дельт нет: {deltas}"
-        );
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "whatif_scenario_activate",
-            r#"{"name":"S1"}"#,
-        )
-        .expect("S1");
-        assert_eq!(
-            scene.canvas.to_json().expect("сериализация"),
-            hash_before,
-            "переключение сценариев файл не трогает (инвариант 2)"
-        );
-
-        // Apply: подмена уходит в persisted-текст, сценарий удалён (Q6b)
-        let out = dispatch(&mut scene, &mut camera, "whatif_apply", "{}").expect("apply");
-        assert_eq!(out["applied"], 1);
-        let text = scene.canvas.node(&id_a).expect("A").text.clone().unwrap();
-        assert_eq!(text.lines().next().expect("строка 0"), "a = 20");
-        assert!(
-            scene
-                .canvas
-                .extra
-                .get("canvasdesk")
-                .and_then(|ext| ext.get("whatif"))
-                .is_none(),
-            "применённый сценарий удалён из canvasdesk.whatif"
-        );
-        // Undo (один шаг, FR-006) — база восстановлена
-        let before = scene.take_undo().expect("undo-шаг apply");
-        scene.canvas = before;
-        scene.scenarios = canvas_core::whatif::scenarios_from_canvas(&scene.canvas);
-        if scene
-            .active_scenario
-            .is_some_and(|i| i >= scene.scenarios.len())
-        {
-            scene.active_scenario = None;
-        }
-        scene.recompute_flow();
-        let text = scene.canvas.node(&id_a).expect("A").text.clone().unwrap();
-        assert_eq!(
-            text.lines().next().expect("строка 0"),
-            "a = 5",
-            "undo → база"
-        );
-        assert_eq!(
-            whatif_delta_rows(&scene).len(),
-            0,
-            "после undo активных дельт нет"
-        );
-    }
-
-    /// flow_cycle_check: без value-циклов — []; после value-цикла — участники.
-    #[test]
-    fn mcp_flow_cycle_check_reports_participants() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        assert_eq!(
-            dispatch(&mut scene, &mut camera, "flow_cycle_check", "{}").expect("[]"),
-            serde_json::json!([])
-        );
-        // Контрольный цикл (edge-1 n1→f1 + обратный f1→n1) — НЕ значение
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            r#"{"from":"f1","to":"n1"}"#,
-        )
-        .expect("обратное ребро");
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            r#"{"id":"edge-1","kind":"value"}"#,
-        )
-        .expect("прямое value");
-        assert_eq!(
-            dispatch(&mut scene, &mut camera, "flow_cycle_check", "{}").expect("[]"),
-            serde_json::json!([]),
-            "одно value-ребро цикла не создаёт"
-        );
-        // Обратное тоже value — цикл n1→f1→n1. Через MCP такой тогл
-        // отклоняется (см. mcp_flow_set_kind_rejects_cycle), поэтому строим
-        // чужой-файл сценарий прямой мутацией extra
-        let back_index = scene
-            .canvas
-            .edges
-            .iter()
-            .position(|e| e.from_node == "f1" && e.to_node == "n1")
-            .expect("обратное ребро");
-        scene.canvas.edges[back_index].set_flow_kind(canvas_core::flow::FlowKind::Value);
-        let participants =
-            dispatch(&mut scene, &mut camera, "flow_cycle_check", "{}").expect("участники");
-        // Участники отсортированы по id (лексикографически)
-        assert_eq!(participants, serde_json::json!(["f1", "n1"]));
-    }
-
-    /// FR-014 + FR-006: undo тогла value → control восстанавливает поток
-    /// (формула downstream снова получает вход).
-    #[test]
-    fn mcp_flow_toggle_undo_restores_downstream() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fa","x":0,"y":0,"text":"A\n= 5"}"#,
-        )
-        .expect("fa");
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"id":"fb","x":300,"y":0,"text":"B\n= $in × 2"}"#,
-        )
-        .expect("fb");
-        let id_a = scene
-            .canvas
-            .nodes
-            .iter()
-            .find(|n| n.text.as_deref() == Some("A\n= 5"))
-            .map(|n| n.id.clone())
-            .expect("A");
-        let id_b = scene
-            .canvas
-            .nodes
-            .iter()
-            .find(|n| n.text.as_deref() == Some("B\n= $in × 2"))
-            .map(|n| n.id.clone())
-            .expect("B");
-        let e1 = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(r#"{{"from":"{id_a}","to":"{id_b}"}}"#),
-        )
-        .expect("edge")["id"]
-            .as_str()
-            .expect("id")
-            .to_owned();
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            &format!(r#"{{"id":"{e1}","kind":"value"}}"#),
-        )
-        .expect("value");
-        // B = 10
-        assert_eq!(
-            scene.expr_results.get(&id_b),
-            Some(&ExprOutcome::Ok(canvas_core::expr::Value::scalar(10.0)))
-        );
-        // Тогл в control — у B «вход отсутствует»
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "flow_set_kind",
-            &format!(r#"{{"id":"{e1}","kind":"control"}}"#),
-        )
-        .expect("control");
-        match scene.expr_results.get(&id_b).expect("запись") {
-            ExprOutcome::Err(msg) => assert!(msg.contains("вход"), "{msg}"),
-            other => panic!("ожидалась ошибка входа: {other:?}"),
-        }
-        // Undo — снапшот «до тогла» возвращает value-ребро и пересчёт
-        let before = scene.take_undo().expect("шаг undo");
-        scene.canvas = before;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        scene.recompute_flow();
-        assert_eq!(
-            scene.expr_results.get(&id_b),
-            Some(&ExprOutcome::Ok(canvas_core::expr::Value::scalar(10.0))),
-            "после undo поток восстановлен"
-        );
-    }
-
-    // --- CR-008: умные порты связей ---
-
-    /// edge_ports: закрепление обоих концов, авто сбрасывает пины;
-    /// неизвестный id / невалидный pin — ошибка.
-    #[test]
-    fn mcp_edge_ports_pins_and_auto() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_ports",
-            r#"{"id":"edge-1","pin":"both"}"#,
-        )
-        .expect("pin both");
-        assert_eq!(out["pins"]["from"], true);
-        assert_eq!(out["pins"]["to"], true);
-        assert_eq!(scene.canvas.edges[0].port_pins(), (true, true));
-
-        // auto — снятие всех закреплений
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_ports",
-            r#"{"id":"edge-1","pin":"auto"}"#,
-        )
-        .expect("auto");
-        assert_eq!(out["pins"]["from"], false);
-        assert_eq!(out["pins"]["to"], false);
-        assert!(!scene.canvas.edges[0].ports_pinned());
-        assert!(
-            scene.canvas.edges[0].extra.get("canvasdesk").is_none(),
-            "пустое расширение удалено"
-        );
-
-        // Ошибки: неизвестный pin и неизвестный id
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_ports",
-            r#"{"id":"edge-1","pin":"diagonal"}"#
-        )
-        .is_err());
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_ports",
-            r#"{"id":"ghost","pin":"auto"}"#
-        )
-        .is_err());
-    }
-
-    /// FR-019: template_list — built-in реестр отдаёт 45 шаблонов с полной
-    /// схемой (FR-019: 15 + FR-027: 30; инвариант 4: MCP-видимость
-    /// эквивалентна UI; двуязычные имена).
-    #[test]
-    fn mcp_template_list_builtin_registry() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let list = dispatch(&mut scene, &mut camera, "template_list", "{}").expect("list");
-        let templates = list.as_array().expect("массив");
-        assert_eq!(
-            templates.len(),
-            45,
-            "все built-in шаблоны (FR-019: 15 + FR-027: 30)"
-        );
-        let lb = templates
-            .iter()
-            .find(|t| t["id"] == "com.canvasdesk.lb")
-            .expect("com.canvasdesk.lb");
-        assert_eq!(lb["name_en"], "Load Balancer");
-        assert_eq!(lb["name_ru"], "Балансировщик нагрузки");
-        // FR-029: секция outputs — версия схемы 1.1; FR-016 (CP5):
-        // utilization-выход — минорный подъём до 1.2
-        assert_eq!(lb["version"], "1.2.0");
-        let lb_outputs = lb["outputs"].as_array().expect("outputs у lb (FR-029)");
-        assert!(lb_outputs.iter().any(|o| o["name"] == "next_hop_rps"));
-        // FR-016: named-выход utilization — источник ρ для анализатора
-        assert!(
-            lb_outputs.iter().any(|o| o["name"] == "utilization"),
-            "outputs lb: {lb_outputs:?}"
-        );
-        assert_eq!(lb["category"], "backend");
-        assert_eq!(lb["expr"], "mm1($rps, $service_rate, $servers)");
-        assert_eq!(lb["params"]["rps"]["type"], "rate");
-        assert_eq!(lb["params"]["rps"]["default"], 1000.0);
-        assert_eq!(lb["params"]["rps"]["unit"], "rps");
-        // Схема для UI: иконка и цвет категории в списке
-        assert_eq!(lb["icon"], "lb");
-        assert_eq!(lb["color"], "#4A90E2");
-        // FR-020: источник каждого шаблона в списке
-        assert_eq!(lb["source"], "builtin");
-        // Категории: 10 backend + 5 network
-        let by_cat = |cat: &str| templates.iter().filter(|t| t["category"] == cat).count();
-        assert_eq!(by_cat("backend"), 10);
-        assert_eq!(by_cat("network"), 5);
-    }
-
-    /// FR-018: template_instantiate — text-нода с Numi-листом параметров
-    /// и снимком canvasdesk.template; переопределение параметра учитывается
-    /// формулой (пересчёт в потоке); undo возвращает состояние до создания.
-    #[test]
-    fn mcp_template_instantiate_creates_linked_node() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "template_instantiate",
-            r#"{"id":"com.canvasdesk.lb","x":150,"y":250,"params":{"rps":2000}}"#,
-        )
-        .expect("instantiate");
-        let id = out["id"].as_str().expect("id").to_owned();
-        let node = scene
-            .canvas
-            .nodes
-            .iter()
-            .find(|n| n.id == id)
-            .expect("нода создана");
-        assert_eq!(node.kind(), NodeKind::Text);
-        assert_eq!(node.x, 150.0);
-        // Numi-лист параметров с переопределением
-        let text = node.text.as_deref().expect("текст");
-        assert!(text.contains("rps = 2000 rps"), "текст: {text}");
-        assert!(text.contains("servers = 2"));
-        // Снимок template-ссылки
-        let template = node.template().expect("template");
-        assert_eq!(template.id, "com.canvasdesk.lb");
-        assert_eq!(template.version, "1.2.0");
-        assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
-        assert_eq!(template.params["rps"].num, 2000.0);
-        assert_eq!(template.icon, "lb");
-        // Формула в потоке (FR-014-стык): результат пересчитан
-        assert!(
-            scene.expr_results.contains_key(&id),
-            "результат формулы шаблона в потоке"
-        );
-        // Undo: нода исчезает (undo-шаг при создании)
-        let before = scene.canvas.nodes.len();
-        let restored = scene.take_undo().expect("undo-шаг есть");
-        scene.canvas = restored;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        assert_eq!(scene.canvas.nodes.len(), before - 1);
-        assert!(scene.canvas.nodes.iter().all(|n| n.id != id));
-    }
-
-    /// FR-018: template_instantiate — ошибки: неизвестный id, параметр вне
-    /// границ манифеста (min/max), неизвестное имя параметра.
-    #[test]
-    fn mcp_template_instantiate_rejects_bad_input() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // Неизвестный шаблон
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "template_instantiate",
-            r#"{"id":"ghost","x":0,"y":0}"#
-        )
-        .is_err());
-        // rps < min 0
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "template_instantiate",
-            r#"{"id":"com.canvasdesk.lb","x":0,"y":0,"params":{"rps":-5}}"#
-        )
-        .is_err());
-        // Неизвестное имя параметра
-        assert!(dispatch(
-            &mut scene,
-            &mut camera,
-            "template_instantiate",
-            r#"{"id":"com.canvasdesk.lb","x":0,"y":0,"params":{"ghost":1}}"#
-        )
-        .is_err());
-        // Ни одна ошибочная ветка не мутировала модель
-        assert!(scene.undo_stack.is_empty());
-    }
-
-    /// edge_ports "from": WYSIWYG — в fromSide фиксируется текущая
-    /// эффективная сторона; свободный конец следует геометрии после
-    /// переноса ноды. Undo возвращает состояние до пина.
-    #[test]
-    fn mcp_edge_ports_pin_freezes_effective_side() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        // n1(100,100) → f1(500,100): кратчайшая пара Right → Left
-        let out = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_ports",
-            r#"{"id":"edge-1","pin":"from"}"#,
-        )
-        .expect("pin from");
-        assert_eq!(out["pins"]["from"], true);
-        assert_eq!(out["pins"]["to"], false);
-        assert_eq!(scene.canvas.edges[0].from_side, Some(Side::Right));
-        assert_eq!(scene.canvas.edges[0].port_pins(), (true, false));
-
-        // Перенос f1 влево за n1: закреплённый исток остаётся Right,
-        // свободный сток переходит на кратчайший порт
-        scene.canvas.nodes[1].x = -500.0;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        let curve = canvas_core::edge_curve(&scene.canvas, &scene.canvas.edges[0]).expect("кривая");
-        assert_eq!(
-            curve.p0,
-            canvas_core::port_point(&scene.canvas.nodes[0], Side::Right),
-            "right порт n1 закреплён"
-        );
-        assert_eq!(curve.p1, [-180.0, 210.0], "сток f1 — правый порт (авто)");
-
-        // Undo: пин снят, снапшот до мутации
-        let before = scene.take_undo().expect("шаг undo");
-        scene.canvas = before;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        assert!(!scene.canvas.edges[0].ports_pinned());
-    }
-
-    // --- FR-029: порты значений (CP1, ADR-0005 Instagram MVP) ---
-
-    /// Хелпер: значение в допуске ±1% (гейт эталона ADR-0005).
-    fn close_1pct(actual: f64, oracle: f64) -> bool {
-        (actual - oracle).abs() <= oracle.abs() * 0.01
-    }
-
-    /// CP1 (FR-029, ADR-0005): эталонный сценарий «Instagram MVP» —
-    /// 12 нод, 10 value-рёбер с адресацией портов (fromOutput/toParam).
-    /// Сборка ТОЛЬКО через MCP (агентный путь), числа сходятся с таблицей
-    /// §Эталонные значения в допуске ±1%; правка DAU одним node_edit
-    /// удваивает всю цепочку без правки связей/формул (демо-критерий CP1).
-    #[test]
-    fn mcp_fr029_instagram_mvp_reference() {
-        let mut scene = SceneState::new(
-            Canvas::default(),
-            PathBuf::from("target/tmp/instagram.canvas"),
-        );
-        let mut camera = Camera::default();
-
-        // 1. Текстовая нода «Трафик-профиль» (Numi-лист)
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_create_note",
-            r#"{"x": 0, "y": 0, "width": 300, "text": "dau = 1000000\nsess = 4\nreq = 12\npeak = 2.5\nbudget = 45 ms\navg_rps = dau × sess × req × 1 rps / 86400\npeak_rps = avg_rps × peak"}"#,
-        )
-        .expect("traffic");
-        // id ноды — из nodes_list (создана последней)
-        let traffic = scene.canvas.nodes.last().expect("нода").id.clone();
-
-        // 2. Инстанциация 11 шаблонных нод (ADR-0005 §Состав)
-        let mut node_id = |template: &str, x: f32, y: f32, params: &str| {
-            let result = dispatch(
-                &mut scene,
-                &mut camera,
-                "template_instantiate",
-                &format!(r#"{{"id": "{template}", "x": {x}, "y": {y}, "params": {params}}}"#),
-            )
-            .expect(template);
-            result["id"].as_str().expect("id").to_owned()
-        };
-        // Параметры подобраны так, чтобы пик-нагрузка не перегружала сервисы
-        // (E-OVERLOAD — отдельный сценарий; эталон A2 стартует чистым)
-        let cdn = node_id(
-            "com.canvasdesk.cdn",
-            400.0,
-            0.0,
-            r#"{"cache_hit": 0.6, "origin_latency": 1}"#,
-        );
-        let lb = node_id("com.canvasdesk.tcp-lb", 800.0, 0.0, "{}");
-        let gateway = node_id(
-            "com.canvasdesk.api-gateway",
-            1200.0,
-            -200.0,
-            r#"{"latency_budget": 2.5, "auth_overhead": 1}"#,
-        );
-        let auth = node_id("com.canvasdesk.auth-service", 1600.0, -400.0, "{}");
-        let feed = node_id(
-            "com.canvasdesk.graphql",
-            1600.0,
-            0.0,
-            r#"{"resolver_time": 0.5}"#,
-        );
-        let media = node_id("com.canvasdesk.grpc-service", 1600.0, 400.0, "{}");
-        let cache = node_id("com.canvasdesk.cache-redis", 1200.0, 400.0, "{}");
-        let db = node_id("com.canvasdesk.db-sql-master", 2000.0, -100.0, "{}");
-        let replica = node_id("com.canvasdesk.db-sql-replica", 2400.0, -100.0, "{}");
-        let queue = node_id("com.canvasdesk.queue-kafka", 2000.0, 300.0, "{}");
-        let workers = node_id(
-            "com.canvasdesk.worker",
-            2400.0,
-            300.0,
-            r#"{"processing_time": 2}"#,
-        );
-
-        // 3. Value-рёбра с адресацией портов (ADR-0005 §Цепочки проливания)
-        let mut link = |from: &str, to: &str, from_output: &str, to_param: &str| {
-            dispatch(
-                &mut scene,
-                &mut camera,
-                "edge_create",
-                &format!(
-                    r#"{{"from": "{from}", "to": "{to}", "fromOutput": "{from_output}", "toParam": "{to_param}", "kind": "value"}}"#
-                ),
-            )
-            .unwrap_or_else(|err| panic!("ребро {from}.{from_output} → {to}.{to_param}: {err}"));
-        };
-        link(&traffic, &cdn, "peak_rps", "rps");
-        link(&cdn, &lb, "origin_rps", "connections_per_sec");
-        link(&lb, &gateway, "out_gateway", "rps");
-        link(&lb, &auth, "out_auth", "rps");
-        link(&lb, &feed, "out_feed", "rps");
-        link(&lb, &media, "out_media", "rps");
-        link(&feed, &db, "db_qps", "qps");
-        link(&db, &replica, "replica_load", "qps");
-        link(&feed, &queue, "events", "produce_rate");
-        link(&queue, &workers, "consume_rate", "tasks_per_sec");
-
-        // 4. edges_list: агент видит адресацию (CR-013 G4)
-        let edges = dispatch(&mut scene, &mut camera, "edges_list", "{}").expect("edges_list");
-        let edges = edges.as_array().expect("массив");
-        assert_eq!(edges.len(), 10, "10 value-рёбер");
-        let first = &edges[0];
-        assert_eq!(first["fromOutput"], "peak_rps");
-        assert_eq!(first["toParam"], "rps");
-        assert_eq!(first["kind"], "value");
-
-        // 5. flow_recalc v2: значения против oracle ADR-0005 (±1%)
-        let values = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
-        let oracle = |node: &str, output: &str, expected: f64, what: &str| {
-            let actual = values[node]["outputs"][output]["value"]
-                .as_f64()
-                .unwrap_or_else(|| panic!("{what}: нет значения — {values}"));
-            assert!(
-                close_1pct(actual, expected),
-                "{what}: {actual} vs oracle {expected} (±1%)"
-            );
-        };
-        oracle(&traffic, "avg_rps", 555.6, "avg_rps = 1e6·4·12/86400");
-        oracle(&traffic, "peak_rps", 1388.9, "peak_rps = 555.6·2.5");
-        oracle(&cdn, "origin_rps", 555.6, "origin = 1389·(1−0.6)");
-        oracle(&lb, "out_gateway", 555.6, "gateway = весь origin");
-        oracle(&lb, "out_auth", 83.3, "auth = 556·0.15");
-        oracle(&lb, "out_feed", 333.3, "feed = 556·0.60");
-        oracle(&lb, "out_media", 138.9, "media = 556·0.25");
-        oracle(&feed, "db_qps", 80.0, "db = 333·0.8·0.3");
-        oracle(&feed, "events", 333.3, "events = feed rps");
-        oracle(&db, "replica_load", 40.0, "replica = 80·0.5");
-        oracle(&queue, "consume_rate", 333.3, "consume = min(333, 2400)");
-
-        // Проливание подтверждено транситивно: db_qps зависит от пролито-
-        // го в feed.rps; upstream_rps шлюза — от пролитого out_gateway
-        oracle(
-            &gateway,
-            "upstream_rps",
-            555.6,
-            "gateway.upstream_rps = пролитый rps",
-        );
-
-        // 6. Гейт A2 (FR-032 × FR-029, интеграция CP1): чистый эталон —
-        // valid; 3 подсаженные ошибки (единица, дубль-вход, несуществующий
-        // порт) → ровно 3 issue с кодом/нодой/ребром; исправление → чисто.
-        // Подсадка — прямой мутацией рёбер (как hand-edited .canvas): MCP
-        // edge_create такие рёбра отклоняет валидацией имён.
-        {
-            let report =
-                dispatch(&mut scene, &mut camera, "graph_validate", "{}").expect("graph_validate");
-            assert_eq!(report["valid"], true, "чистый эталон: {report}");
-            assert_eq!(
-                report["issues"].as_array().map(Vec::len),
-                Some(0),
-                "базовая линия без проблем: {report}"
-            );
-
-            // подсадка 1: E-UNIT — время (budget, ms) в Rate-параметр qps
-            // кэша (у кэша нет других входов — ровно одна проблема)
-            let mut unit_edge = Edge::new("planted-unit", &traffic, None, &cache, None);
-            unit_edge.set_flow_kind(FlowKind::Value);
-            unit_edge.from_output = Some("budget".to_owned());
-            unit_edge.to_param = Some("qps".to_owned());
-            scene.canvas.add_edge(unit_edge);
-            // подсадка 2: E-DOUBLE-INPUT — второе ребро в gateway.rps
-            let mut dbl_edge = Edge::new("planted-dbl", &lb, None, &gateway, None);
-            dbl_edge.set_flow_kind(FlowKind::Value);
-            dbl_edge.from_output = Some("out_feed".to_owned());
-            dbl_edge.to_param = Some("rps".to_owned());
-            scene.canvas.add_edge(dbl_edge);
-            // подсадка 3: E-PORT-UNKNOWN — несуществующее имя выхода в
-            // свободный параметр token_verify (без дубль-входа)
-            let mut port_edge = Edge::new("planted-port", &traffic, None, &auth, None);
-            port_edge.set_flow_kind(FlowKind::Value);
-            port_edge.from_output = Some("no_such_output".to_owned());
-            port_edge.to_param = Some("token_verify".to_owned());
-            scene.canvas.add_edge(port_edge);
-
-            let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}")
-                .expect("graph_validate с подсадками");
-            let issues = report["issues"].as_array().expect("issues");
-            assert_eq!(issues.len(), 3, "ровно 3 issue: {report}");
-            let by_code = |code: &str| {
-                issues
-                    .iter()
-                    .find(|i| i["code"] == code)
-                    .unwrap_or_else(|| panic!("нет {code}: {report}"))
-            };
-            let unit_issue = by_code("E-UNIT");
-            assert_eq!(unit_issue["edge_id"], "planted-unit");
-            assert_eq!(unit_issue["node_id"], cache);
-            let dbl_issue = by_code("E-DOUBLE-INPUT");
-            assert_eq!(dbl_issue["edge_id"], "planted-dbl");
-            assert_eq!(dbl_issue["node_id"], gateway);
-            let port_issue = by_code("E-PORT-UNKNOWN");
-            assert_eq!(port_issue["edge_id"], "planted-port");
-
-            // исправление: снять все три подсадки — эталон снова чист
-            scene
-                .canvas
-                .edges
-                .retain(|edge| !edge.id.starts_with("planted-"));
-            let report = dispatch(&mut scene, &mut camera, "graph_validate", "{}")
-                .expect("graph_validate после исправления");
-            assert_eq!(report["valid"], true, "после исправления: {report}");
-            assert_eq!(report["issues"].as_array().map(Vec::len), Some(0));
-        }
-
-        // 7. Демо-критерий CP1: правка DAU одним node_edit удваивает цепочку
-        dispatch(
-            &mut scene,
-            &mut camera,
-            "node_edit",
-            &format!(
-                r#"{{"id": "{traffic}", "text": "dau = 2000000\nsess = 4\nreq = 12\npeak = 2.5\nbudget = 45 ms\navg_rps = dau × sess × req × 1 rps / 86400\npeak_rps = avg_rps × peak"}}"#
-            ),
-        )
-        .expect("node_edit dau");
-        let doubled = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("recalc");
-        for (node, output, expected, what) in [
-            (&traffic, "peak_rps", 2777.8, "peak_rps ×2"),
-            (&cdn, "origin_rps", 1111.1, "origin ×2"),
-            (&feed, "db_qps", 160.0, "db_qps ×2"),
-            (&queue, "consume_rate", 666.7, "consume ×2"),
-        ] {
-            let actual = doubled[node]["outputs"][output]["value"]
-                .as_f64()
-                .unwrap_or_else(|| panic!("{what}: нет значения — {doubled}"));
-            assert!(
-                close_1pct(actual, expected),
-                "{what}: {actual} vs oracle {expected}"
-            );
-        }
-
-        // 7. Валидация имён: неизвестный выход/параметр — ошибка вызова
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(
-                r#"{{"from": "{cdn}", "to": "{gateway}", "fromOutput": "no_such_output", "toParam": "rps", "kind": "value"}}"#
-            ),
-        )
-        .expect_err("неизвестный выход — ошибка");
-        assert!(err.contains("no_such_output"), "ошибка называет имя: {err}");
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(
-                r#"{{"from": "{cdn}", "to": "{gateway}", "fromOutput": "origin_rps", "toParam": "no_such_param", "kind": "value"}}"#
-            ),
-        )
-        .expect_err("неизвестный параметр — ошибка");
-        assert!(
-            err.contains("no_such_param"),
-            "ошибка называет параметр: {err}"
-        );
-        // взаимное исключение fromLine/fromOutput
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(
-                r#"{{"from": "{cdn}", "to": "{gateway}", "fromLine": 0, "fromOutput": "origin_rps", "kind": "value"}}"#
-            ),
-        )
-        .expect_err("fromLine + fromOutput — ошибка схемы");
-        assert!(err.contains("взаимно исключаются"), "{err}");
-        // toParam на текстовой ноде-приёмнике — ошибка (нет параметров)
-        let err = dispatch(
-            &mut scene,
-            &mut camera,
-            "edge_create",
-            &format!(
-                r#"{{"from": "{cdn}", "to": "{traffic}", "fromOutput": "origin_rps", "toParam": "rps", "kind": "value"}}"#
-            ),
-        )
-        .expect_err("toParam на текстовой ноде — ошибка");
-        assert!(err.contains("текстовая"), "{err}");
-    }
-    // --- FR-033: graph_apply — атомарная батч-композиция ---
-
-    fn graph_apply(
-        scene: &mut SceneState,
-        camera: &mut Camera,
-        ops: &str,
-    ) -> Result<serde_json::Value, String> {
-        let params = format!(r#"{{"operations": {ops}}}"#);
-        let params: serde_json::Value = serde_json::from_str(&params).expect("params — JSON");
-        let registry = canvas_core::templates::TemplateRegistry::builtin();
-        mcp_dispatch(scene, camera, &registry, "graph_apply", &params)
-    }
-
-    /// Текст эталонной ноды «Нагрузка» (эталон №1 ADR-0006: dau=200000,
-    /// 3 сессии × 10 req → 69.44 rps avg, peak ×3 → 208.33 rps).
-    const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak";
-
-    /// Oracle-числа эталона №1 (ADR-0006): peak_rps ≈ 208.33 rps;
-    /// CDN W ≈ 34.29 ms (ρ 0.417); CDN origin ≈ 20.83 rps;
-    /// Gateway W ≈ 3.20 ms (latency_budget 5 − auth_overhead 2).
-    fn assert_close(actual: f64, expected: f64, what: &str) {
-        let tolerance = (expected * 0.01).abs().max(1e-9);
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "{what}: {actual} != {expected} (±1 %)"
-        );
-    }
-
-    /// MCP e2e (FR-033 п.6а): один вызов graph_apply собирает мини-эталон
-    /// «Нагрузка → CDN → Gateway» — ноды, параметризация, value-рёбра с
-    /// адресацией портов (toParam/fromOutput); flow в ответе = oracle ±1 %.
-    #[test]
-    fn graph_apply_assembles_mini_reference_with_oracle() {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga.canvas"));
-        let mut camera = Camera::default();
-        let undo_before = scene.undo_stack.len();
-
-        let ops = r#"[
-            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
-            {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
-            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
-            {"op":"param_set","ref":"traffic","param":"dau","value":200000},
-            {"op":"edge_create","fromRef":"traffic","toRef":"cdn","kind":"value","toParam":"rps"},
-            {"op":"edge_create","fromRef":"cdn","toRef":"gw","kind":"value","fromOutput":"origin_rps","toParam":"rps"},
-            {"op":"node_move","ref":"cdn","x":400,"y":40},
-            {"op":"node_move","ref":"gw","x":760,"y":40},
-            {"op":"node_create_note","ref":"cost","x":0,"y":320,"text":"cdn_cost = 50 $\n gw_cost = 36 $\n total = cdn_cost + gw_cost"},
-            {"op":"edge_create","fromRef":"cost","toRef":"cdn"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч собирается");
-        assert_eq!(out["ok"], true, "ответ: {out}");
-        assert_eq!(
-            out["created"].as_array().expect("created").len(),
-            7,
-            "4 ноды + 3 ребра"
-        );
-        assert_eq!(out["report"].as_array().expect("report").len(), 10);
-
-        // ref-резолв: created содержит имена ref-ов и реальные id
-        let created: Vec<&serde_json::Value> = out["created"].as_array().unwrap().iter().collect();
-        assert!(created
-            .iter()
-            .any(|e| e["ref"] == "traffic" && e["node_id"].is_string()));
-        assert!(created
-            .iter()
-            .any(|e| e["ref"] == "cdn" && e["node_id"].is_string()));
-        assert!(created
-            .iter()
-            .any(|e| e["ref"] == "gw" && e["node_id"].is_string()));
-        let edge_ops = created.iter().filter(|e| e["edge_id"].is_string()).count();
-        assert_eq!(edge_ops, 3, "три ребра (2 value + 1 control)");
-
-        // Undo = ровно ОДИН шаг на весь батч
-        assert_eq!(
-            scene.undo_stack.len(),
-            undo_before + 1,
-            "успешный батч — один undo-шаг"
-        );
-
-        // flow в ответе = oracle эталона №1 (ADR-0006) ±1 %
-        let flow = &out["flow"];
-        let traffic_node_id = created
-            .iter()
-            .find(|e| e["ref"] == "traffic")
-            .and_then(|e| e["node_id"].as_str())
-            .expect("traffic id");
-        let cdn_node_id = created
-            .iter()
-            .find(|e| e["ref"] == "cdn")
-            .and_then(|e| e["node_id"].as_str())
-            .expect("cdn id");
-        let gw_node_id = created
-            .iter()
-            .find(|e| e["ref"] == "gw")
-            .and_then(|e| e["node_id"].as_str())
-            .expect("gw id");
-
-        assert_close(
-            flow[traffic_node_id]["value"].as_f64().expect("peak_rps"),
-            208.3333,
-            "peak_rps ноды «Нагрузка»",
-        );
-        assert_eq!(flow[traffic_node_id]["unit"], "req/s");
-
-        assert_close(
-            flow[cdn_node_id]["value"].as_f64().expect("cdn W"),
-            0.0342857,
-            "CDN W (Erlang-C, ρ 0.417)",
-        );
-        assert_eq!(flow[cdn_node_id]["unit"], "sec");
-        assert_close(
-            flow[cdn_node_id]["outputs"]["origin_rps"]["value"]
-                .as_f64()
-                .expect("origin_rps"),
-            20.8333,
-            "именованный выход CDN.origin_rps (проливание rps = 208.33)",
-        );
-
-        assert_close(
-            flow[gw_node_id]["value"].as_f64().expect("gw W"),
-            0.0032,
-            "Gateway W (rps пролито через fromOutput=origin)",
-        );
-        assert_eq!(flow[gw_node_id]["unit"], "sec");
-
-        // Смета тоже в flow (last formula line)
-        let cost_node_id = created
-            .iter()
-            .find(|e| e["ref"] == "cost")
-            .and_then(|e| e["node_id"].as_str())
-            .expect("cost id");
-        assert_close(
-            flow[cost_node_id]["value"].as_f64().expect("cost"),
-            86.0,
-            "смета мини-эталона",
-        );
-
-        // live-ревал: правка DAU одним node_edit меняет весь downstream
-        // без правки связей/формул (инвариант ADR-0007)
-        let dau_edit = serde_json::json!({
-            "id": traffic_node_id,
-            "text": TRAFFIC_TEXT.replacen("200000", "400000", 1),
-        });
-        mcp_dispatch(
-            &mut scene,
-            &mut camera,
-            &canvas_core::templates::TemplateRegistry::builtin(),
-            "node_edit",
-            &dau_edit,
-        )
-        .expect("node_edit dau");
-        let flow = mcp_flow_v2(&scene.canvas);
-        assert_close(
-            flow[traffic_node_id]["value"].as_f64().expect("peak ×2"),
-            416.6667,
-            "peak_rps после удвоения DAU",
-        );
-        assert_close(
-            flow[cdn_node_id]["outputs"]["origin_rps"]["value"]
-                .as_f64()
-                .expect("origin_rps ×2"),
-            41.6667,
-            "CDN.origin_rps после удвоения DAU — проливание живое",
-        );
-    }
-
-    /// Атомарность (FR-033 п.5/п.6б): ошибка операции в середине батча →
-    /// {ok:false, op_index, code} и сериализация канваса байт-в-байт прежняя.
-    #[test]
-    fn graph_apply_mid_batch_error_is_atomic() {
-        let mut scene = mcp_scene();
-        let mut camera = Camera::default();
-        let before = serde_json::to_string(&scene.canvas).expect("сериализация до");
-        let undo_before = scene.undo_stack.len();
-
-        // 3-я операция (index 2) ломается: edge на несуществующую ноду
-        let ops = r#"[
-            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"первая"},
-            {"op":"node_create_note","ref":"b","x":300,"y":0,"text":"вторая"},
-            {"op":"edge_create","fromRef":"a","toRef":"ghost"},
-            {"op":"node_create_note","ref":"c","x":600,"y":0,"text":"третья"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], false, "ответ: {out}");
-        assert_eq!(out["op_index"], 2, "сломанная операция — index 2");
-        assert_eq!(out["code"], "E-NOT-FOUND");
-        assert!(out["message"].as_str().expect("message").contains("ghost"));
-
-        let after = serde_json::to_string(&scene.canvas).expect("сериализация после");
-        assert_eq!(before, after, "канвас байт-в-байт прежний");
-        assert_eq!(
-            scene.undo_stack.len(),
-            undo_before,
-            "неудачный батч — ни одного undo-шага"
-        );
-
-        // Валидация портов тоже атомарна: неизвестный toParam
-        let ops = r#"[
-            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"x"},
-            {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":300,"y":0},
-            {"op":"edge_create","fromRef":"a","toRef":"cdn","kind":"value","toParam":"nope"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], false);
-        assert_eq!(out["code"], "E-PORT-UNKNOWN", "ответ: {out}");
-        assert_eq!(
-            serde_json::to_string(&scene.canvas).unwrap(),
-            before,
-            "канвас по-прежнему прежний"
-        );
-    }
-
-    /// Ref-резолв (FR-033 п.5): edge на ref ноды, созданной РАНЬШЕ в этом же
-    /// батче, работает; ref будущей ноды — ошибка; дубликат ref — ошибка.
-    #[test]
-    fn graph_apply_ref_resolution_rules() {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga2.canvas"));
-        let mut camera = Camera::default();
-
-        // Forward-ref: c ещё не создана на момент ребра
-        let ops = r#"[
-            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"a"},
-            {"op":"edge_create","fromRef":"a","toRef":"c"},
-            {"op":"node_create_note","ref":"c","x":300,"y":0,"text":"c"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], false, "ответ: {out}");
-        assert_eq!(out["op_index"], 1);
-        assert_eq!(out["code"], "E-NOT-FOUND");
-
-        // Дубликат ref
-        let ops = r#"[
-            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"a"},
-            {"op":"node_create_note","ref":"a","x":300,"y":0,"text":"вторая a"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], false, "ответ: {out}");
-        assert_eq!(out["code"], "E-BAD-OP");
-
-        // Смешанная адресация: ref для созданных, id — для существующих
-        scene = mcp_scene();
-        let ops = r#"[
-            {"op":"node_create_note","ref":"new1","x":0,"y":0,"text":"новая"},
-            {"op":"edge_create","fromRef":"new1","to":"n1","kind":"value"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], true, "ответ: {out}");
-        assert_eq!(scene.canvas.nodes.len(), 4, "3 сцены + 1 новая");
-        assert_eq!(scene.canvas.edges.len(), 2, "edge-1 + новое ребро");
-        let new_edge = scene.canvas.edges.last().expect("ребро");
-        assert_eq!(new_edge.to_node, "n1", "id существующей ноды зарезолвен");
-        assert_eq!(new_edge.flow_kind(), canvas_core::flow::FlowKind::Value);
-    }
-
-    /// param_set (FR-033 п.4/п.5): правит ровно одну строку «param = value
-    /// unit» (текст + снапшот шаблона), остальные строки нетронуты;
-    /// несуществующий параметр — ошибка операции.
-    #[test]
-    fn graph_apply_param_set_edits_single_line() {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga4.canvas"));
-        let mut camera = Camera::default();
-        let ops = r#"[
-            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":0,"y":0},
-            {"op":"param_set","ref":"gw","param":"latency_budget","value":5}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч");
-        assert_eq!(out["ok"], true, "ответ: {out}");
-        let node = &scene.canvas.nodes[0];
-        let text = node.text.as_deref().expect("текст");
-        let lines: Vec<&str> = text.split('\n').collect();
-        assert!(
-            lines.contains(&"latency_budget = 5 ms"),
-            "строка заменена с единицей снапшота: {text:?}"
-        );
-        assert!(
-            lines.contains(&"rps = 20 rps"),
-            "соседние строки нетронуты: {text:?}"
-        );
-        // Снапшот синхронизирован — расчёт видит новое значение
-        let tpl = node.template().expect("шаблон");
-        assert_eq!(tpl.params.get("latency_budget").expect("param").num, 5.0);
-        // ref живёт только внутри батча: следующие батчи адресуют по id
-        let gw_id = out["created"][0]["node_id"]
-            .as_str()
-            .expect("id")
-            .to_owned();
-
-        // Единица из операции переопределяет снапшот
-        let ops = format!(
-            r#"[{{"op":"param_set","id":"{gw_id}","param":"latency_budget","value":0.005,"unit":"s"}}]"#
-        );
-        let out = graph_apply(&mut scene, &mut camera, &ops).expect("батч");
-        assert_eq!(out["ok"], true, "ответ: {out}");
-        let text = scene.canvas.nodes[0].text.as_deref().expect("текст");
-        assert!(
-            text.contains("latency_budget = 0.005 s"),
-            "единица из операции: {text:?}"
-        );
-
-        // Параметра нет в тексте — ошибка (консервативно, без append)
-        let ops = format!(r#"[{{"op":"param_set","id":"{gw_id}","param":"servers","value":4}}]"#);
-        let out = graph_apply(&mut scene, &mut camera, &ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], false, "ответ: {out}");
-        assert_eq!(out["code"], "E-PARAM-UNKNOWN");
-    }
-
-    /// Лимиты схемы (FR-033 п.1/п.5): 257-я операция и > 128 нод — ошибки
-    /// уровня вызова (isError), а не {ok:false}.
-    #[test]
-    fn graph_apply_enforces_limits() {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga5.canvas"));
-        let mut camera = Camera::default();
-
-        // 257 node_move-операций по существующей ноде n1
-        let moves: Vec<String> = (0..257)
-            .map(|i| format!(r#"{{"op":"node_move","id":"n1","x":{i},"y":0}}"#))
-            .collect();
-        let ops = format!("[{}]", moves.join(","));
-        let err = graph_apply(&mut scene, &mut camera, &ops).expect_err("лимит операций");
-        assert!(err.contains("256"), "{err}");
-
-        // 129 node_create_note — сверх лимита нод
-        let notes: Vec<String> = (0..129)
-            .map(|i| format!(r#"{{"op":"node_create_note","x":0,"y":{i},"text":"n{i}"}}"#))
-            .collect();
-        let ops = format!("[{}]", notes.join(","));
-        let err = graph_apply(&mut scene, &mut camera, &ops).expect_err("лимит нод");
-        assert!(err.contains("128"), "{err}");
-        assert!(
-            scene.canvas.nodes.is_empty(),
-            "канвас не изменился при ошибке лимита"
-        );
-    }
-
-    /// Undo/redo после успешного батча (FR-033 п.6в): Ctrl+Z откатывает всю
-    /// сборку одним шагом, Ctrl+Y возвращает.
-    #[test]
-    fn graph_apply_undo_reverts_whole_batch() {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga6.canvas"));
-        let mut camera = Camera::default();
-        let ops = r#"[
-            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"= 5"},
-            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":300,"y":0},
-            {"op":"edge_create","fromRef":"a","toRef":"gw","kind":"value","toParam":"rps"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч");
-        assert_eq!(out["ok"], true);
-        assert_eq!(scene.canvas.nodes.len(), 2);
-        assert_eq!(scene.canvas.edges.len(), 1);
-
-        // Ctrl+Z: вся сборка исчезла одним шагом
-        let before = scene.take_undo().expect("undo-шаг есть");
-        scene.canvas = before;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        assert!(scene.canvas.nodes.is_empty(), "сборка откатилась целиком");
-        assert!(scene.canvas.edges.is_empty(), "рёбра ушли вместе с нодами");
-
-        // Ctrl+Y: сборка вернулась целиком
-        let after = scene.take_redo().expect("redo-шаг есть");
-        scene.canvas = after;
-        scene.spatial = SpatialIndex::build(&scene.canvas);
-        assert_eq!(scene.canvas.nodes.len(), 2);
-        assert_eq!(scene.canvas.edges.len(), 1);
-    }
-
-    /// value-цикл внутри батча — ошибка операции E-CYCLE с участниками;
-    /// канвас не меняется.
-    #[test]
-    fn graph_apply_rejects_value_cycle() {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga7.canvas"));
-        let mut camera = Camera::default();
-        let ops = r#"[
-            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"= 1"},
-            {"op":"node_create_note","ref":"b","x":300,"y":0,"text":"= 2"},
-            {"op":"edge_create","fromRef":"a","toRef":"b","kind":"value"},
-            {"op":"edge_create","fromRef":"b","toRef":"a","kind":"value"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
-        assert_eq!(out["ok"], false, "ответ: {out}");
-        assert_eq!(out["op_index"], 3);
-        assert_eq!(out["code"], "E-CYCLE");
-        assert!(
-            out["message"].as_str().expect("msg").contains("→"),
-            "участники цикла в сообщении: {out}"
-        );
-        assert!(scene.canvas.nodes.is_empty(), "канвас не изменился");
-    }
-
-    // --- CP5 (FR-016): analyze_bottlenecks — гейт волны B1 ---
-
-    /// Сборка мини-эталона №1 (ADR-0006: Нагрузка → CDN → Gateway) и карта
-    /// id нод по ref-ам батча.
-    fn reference_scene() -> (SceneState, Camera, String, String) {
-        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ab1.canvas"));
-        let mut camera = Camera::default();
-        let ops = r#"[
-            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
-            {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
-            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
-            {"op":"edge_create","fromRef":"traffic","toRef":"cdn","kind":"value","toParam":"rps"},
-            {"op":"edge_create","fromRef":"cdn","toRef":"gw","kind":"value","fromOutput":"origin_rps","toParam":"rps"}
-        ]"#;
-        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч эталона");
-        assert_eq!(out["ok"], true, "ответ: {out}");
-        let created = out["created"].as_array().expect("created").clone();
-        let id_of = |reference: &str| -> String {
-            created
-                .iter()
-                .find(|e| e["ref"] == reference)
-                .and_then(|e| e["node_id"].as_str())
-                .expect("id ноды эталона")
-                .to_owned()
-        };
-        let cdn = id_of("cdn");
-        let gw = id_of("gw");
-        (scene, camera, cdn, gw)
-    }
-
-    /// Запись узла из отчёта analyze_bottlenecks по id.
-    fn node_report(report: &serde_json::Value, node_id: &str) -> serde_json::Value {
-        report["nodes"]
-            .as_array()
-            .expect("массив nodes")
-            .iter()
-            .find(|entry| entry["id"] == node_id)
-            .cloned()
-            .unwrap_or_else(|| panic!("нода {node_id} в отчёте: {report}"))
-    }
-
-    /// CP5 (FR-016, гейт B1): эталон №1 под нагрузкой — узкие места видны
-    /// БЕЗ чтения чисел в нодах: анализ отдаёт те же флаги/бейджи, что
-    /// рисует канвас. Базовая линия — здоровый ландшафт (CDN ρ 0.417 —
-    /// узкое место №1, но ниже warn 0.7); рост DAU ×2 → Warn (ρ 0.833);
-    /// рост ×5.35 → Overload (ρ 2.23 — ветка C эталона №2 ADR-0006).
-    /// Инструмент — чтение: канвас и undo-история не затрагиваются.
-    #[test]
-    fn analyze_bottlenecks_reference_and_growth() {
-        let (mut scene, mut camera, cdn, gw) = reference_scene();
-
-        // --- 1. Базовая линия: здоровый ландшафт (ADR-0006 эталон №1) ---
-        let undo_before = scene.undo_stack.len();
-        let canvas_before = serde_json::to_string(&scene.canvas).expect("сериализация до");
-        let report = dispatch(&mut scene, &mut camera, "analyze_bottlenecks", "{}")
-            .expect("analyze_bottlenecks");
-        // Чтение: канвас байт-в-байт и undo не тронуты
-        assert_eq!(
-            serde_json::to_string(&scene.canvas).expect("сериализация после"),
-            canvas_before,
-            "анализ не мутирует канвас"
-        );
-        assert_eq!(scene.undo_stack.len(), undo_before, "undo не растёт");
-
-        // Только queue-ноды в отчёте: «Нагрузка» (Rate) анализа не даёт
-        let nodes = report["nodes"].as_array().expect("массив");
-        assert_eq!(nodes.len(), 2, "cdn + gw: {report}");
-        // Пороги — в ответе (контракт для агента)
-        assert_eq!(report["thresholds"]["warn_util"], 0.7);
-        assert_eq!(report["thresholds"]["critical_util"], 0.9);
-        assert_eq!(report["thresholds"]["warn_wait_sec"], 0.1);
-
-        let cdn_report = node_report(&report, &cdn);
-        assert_eq!(
-            cdn_report["severity"], "none",
-            "ρ 0.417 < 0.7: {cdn_report}"
-        );
-        assert_close(
-            cdn_report["utilization"].as_f64().expect("ρ cdn"),
-            0.4167,
-            "CDN ρ (named-выход utilization)",
-        );
-        assert_close(
-            cdn_report["wait_sec"].as_f64().expect("W cdn"),
-            0.0342857,
-            "CDN W = 34.29 ms (ниже warn 100 ms)",
-        );
-        assert_eq!(
-            cdn_report["badge"], "42% · W: 34 ms",
-            "бейдж канваса: {cdn_report}"
-        );
-        let gw_report = node_report(&report, &gw);
-        assert_eq!(gw_report["severity"], "none");
-        assert_close(
-            gw_report["utilization"].as_f64().expect("ρ gw"),
-            0.0625,
-            "GW ρ = 20.83/333.3",
-        );
-
-        // --- 2. Рост DAU ×2 (400k): CDN ρ = 0.833 → Warn (жёлтая рамка) ---
-        // node_update_text — мутирующий путь с полным пересчётом
-        // (node_edit с text без expr пересчёт не поднимает — ленивость
-        // футера CR-012; агенту достаточно свежего отчёта инструмента).
-        let dau_edit = serde_json::json!({
-            "id": node_id_of(&scene, "dau = 200000").expect("нода «Нагрузка»"),
-            "text": TRAFFIC_TEXT.replacen("200000", "400000", 1),
-        });
-        mcp_dispatch(
-            &mut scene,
-            &mut camera,
-            &canvas_core::templates::TemplateRegistry::builtin(),
-            "node_update_text",
-            &dau_edit,
-        )
-        .expect("node_update_text dau ×2");
-        let report = dispatch(&mut scene, &mut camera, "analyze_bottlenecks", "{}")
-            .expect("analyze_bottlenecks ×2");
-        let cdn_report = node_report(&report, &cdn);
-        assert_eq!(
-            cdn_report["severity"], "warn",
-            "ρ 0.833 ∈ [0.7, 0.9): {cdn_report}"
-        );
-        assert_close(
-            cdn_report["utilization"].as_f64().expect("ρ cdn ×2"),
-            0.8333,
-            "CDN ρ после ×2",
-        );
-        assert_eq!(
-            cdn_report["badge"], "83% · W: 120 ms",
-            "бейдж Warn: {cdn_report}"
-        );
-
-        // --- 3. Рост DAU ×5.35 (ветка C эталона №2): CDN ρ = 2.23 → Overload ---
-        let dau_edit = serde_json::json!({
-            "id": node_id_of(&scene, "dau = 400000").expect("нода «Нагрузка»"),
-            "text": TRAFFIC_TEXT.replacen("200000", "1070000", 1),
-        });
-        mcp_dispatch(
-            &mut scene,
-            &mut camera,
-            &canvas_core::templates::TemplateRegistry::builtin(),
-            "node_update_text",
-            &dau_edit,
-        )
-        .expect("node_update_text dau ×5.35");
-        let report = dispatch(&mut scene, &mut camera, "analyze_bottlenecks", "{}")
-            .expect("analyze_bottlenecks ×5.35");
-        let cdn_report = node_report(&report, &cdn);
-        assert_eq!(
-            cdn_report["severity"], "overload",
-            "ρ 2.23 ≥ 1 — тёмно-красная рамка + OVERLOAD: {cdn_report}"
-        );
-        assert_close(
-            cdn_report["utilization"].as_f64().expect("ρ cdn ×5.35"),
-            2.2292,
-            "CDN ρ = 2.23 (ADR-0006 ветка C)",
-        );
-        assert_eq!(cdn_report["badge"], "OVERLOAD 223%", "бейдж: {cdn_report}");
-        // W при перегрузке аналитически ∞ — в отчёте его нет
-        assert!(cdn_report.get("wait_sec").is_none(), "W нет: {cdn_report}");
-        // GW остаётся здоровым: origin 111.46 rps при μ 333 rps
-        let gw_report = node_report(&report, &gw);
-        assert_eq!(gw_report["severity"], "none", "GW здоров: {gw_report}");
-        assert_close(
-            gw_report["utilization"].as_f64().expect("ρ gw"),
-            0.3344,
-            "GW ρ = 111.46/333.3",
-        );
-
-        // --- 4. Runtime-кэш сцены синхронен с отчётом (рендер читает его) ---
-        let cdn_flags = scene.analysis.get(&cdn).expect("флаги CDN в сцене");
-        assert_eq!(cdn_flags.severity, canvas_core::AnalysisSeverity::Overload);
-        assert!((cdn_flags.utilization.unwrap() - 2.2292).abs() < 2.2292 * 0.01);
-        assert!(analyze::has_risk(&scene.analysis), "оверлей авто-включится");
-    }
-
-    /// Поиск id ноды по подстроке текста (нода «Нагрузка» эталона).
-    fn node_id_of(scene: &SceneState, needle: &str) -> Option<String> {
-        scene
-            .canvas
-            .nodes
-            .iter()
-            .find(|node| {
-                node.text
-                    .as_deref()
-                    .is_some_and(|text| text.contains(needle))
-            })
-            .map(|node| node.id.clone())
     }
 }
