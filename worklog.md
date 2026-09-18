@@ -1,3 +1,62 @@
+## 2026-09-19 — Реализация MW2 (FR-037: мост canvas-mcp под wasm)
+
+- **Задача (владелец):** «распланируй и реализуй MW2 с 3 сабагентами» —
+  план `docs/plans/mw2-wasm-bridge.md`: мост `canvas-mcp` под wasm
+  (`run_stdio` → `run_stdio_with_transport`, гварды автоспавн-тестов,
+  включение моста в wasm-гейты); MW2 без MW1; ветка
+  `feature/fr-037-mw2-wasm-bridge`, один коммит.
+- **Сделано** (MW2-a ∥ MW2-b → верификация/коммит MW2-c):
+  - **`crates/canvas-mcp/src/lib.rs`** (MW2-a): тело stdio-цикла
+    (stdin → `split_frames` → `handle_input` → stdout; буфер 8192,
+    EOF = штатный выход) перенесено в
+    `pub fn run_stdio_with_transport<T, R>(transport: Option<T>,
+    reconnect: R)` (`T: AppTransport`, `R: FnMut(&mut Option<T>)`) —
+    хук `reconnect(&mut transport)` перед каждым пакетом вместо
+    cfg-вызова `refresh_transport`; `run_stdio(&[String])` — тонкая
+    обёртка (автоспавн FR-035 / offline ADR-0009 / хук reconnect
+    FR-034), pub-сигнатура неизменна, `main.rs` не тронут; гварды
+    `#[cfg(all(unix, not(target_arch = "wasm32")))]`
+    (`spawn_service_command_isolates_stdio`) и
+    `#[cfg(not(target_arch = "wasm32"))]`
+    (`autosprawn_target_prefers_sibling_gui_for_standalone_bridge`) —
+    15 тестов, имена/ассерты не менялись; мин-правка MW2-c: убран
+    лишний `mut` у `transport` в обёртке (clippy `unused_mut` после
+    выделения цикла, семантика прежняя).
+  - **`scripts/wasm_gate.sh`** (MW2-b): `CRATES` += `-p canvas-mcp`
+    (ступени 1–2); ступень 3 — явный список `-p canvas-core
+    -p canvas-mcp` (не `$CRATES`: render/widgets под wasip1 не
+    тестируются — wgpu-тесты требуют GPU-адаптер); шапка/echo
+    синхронизированы.
+  - **`.github/workflows/ci.yml`** (MW2-b): джоба `wasm-check` —
+    `run` += `-p canvas-mcp`, имя шага и комментарий (FR-037/MW2)
+    актуализированы; `targets`/прочие джобы не тронуты.
+  - **`docs/plans/mw2-wasm-bridge.md`** (оркестратор): план MW2 —
+    декомпозиция MW2-a/b/c, сигнатура с хуком reconnect (§3), риски,
+    критерии приёмки.
+  - **`docs/change-requests/fr-037-mcp-wasm-verification.md`**:
+    строка MW2 «Выполнено 2026-09-19» + Changelog.
+- **Гейты:** `cargo fmt --check` ✓; `cargo clippy -p canvas-mcp
+  --all-targets -- -D warnings` ✓; `cargo test -p canvas-mcp` нативно —
+  15 passed/0 failed (регресс FR-008/034/035 — ноль);
+  `cargo check --target wasm32-unknown-unknown -p canvas-mcp` ✓ (R1);
+  `RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1 -p canvas-mcp`
+  — 13 passed/0 failed в wasmtime (R2; 2 автоспавн-теста исключены
+  гвардами); `scripts/wasm_gate.sh` — полный зелёный прогон ступеней
+  1–3 (canvas-core 318 + canvas-mcp 13 тестов в wasmtime).
+- **Решения:** сигнатура выделенного цикла — с хуком
+  `R: FnMut(&mut Option<T>)`: reconnect (FR-034) платформенный и не
+  прячется в трейт `AppTransport` (§3 плана); MW3 (headless) вызовет
+  `run_stdio_with_transport(Some(session), |_| {})`. Контингенция
+  wasmtime-флагов не понадобилась (wasmtime 48.0.2 принял runner из
+  `.cargo/config.toml`); после ребейза на апстрим (CP6/FR-017, main
+  `83d43a9`) применена вторая контингенция плана (§4 MW2-a п.4): cfg
+  хелперов `spawn_service_command`/`autosprawn_target` расширен до
+  `#[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]` —
+  dead_code-warning'и под wasip1-test устранены, `std::process` полностью
+  вне wasm-сборки; итоговый полный гейт — 0 warnings.
+
+---
+
 ## 2026-09-18 — Реализация CP5 (FR-016: индикаторы узких мест, волна B1)
 
 - **Задача (владелец):** «Реализуй CP5» — по `docs/plans/product-roadmap.md`

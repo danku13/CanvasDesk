@@ -4,10 +4,12 @@
 # может проверить ядро целиком: компиляция под продуктовый таргет веб-порта
 # (wasm32-unknown-unknown, план M8 §3.1) + исполнение тестов в wasmtime
 # (wasm32-wasip1, .cargo/config.toml — runner).
+# FR-037/MW2: в гейт включён мост canvas-mcp (исполнение его тестов —
+# ступень 3, wasmtime, локально — прецедент ADR-0011).
 #
-#   1/3 check: core/render/widgets компилируются под wasm32-unknown-unknown
+#   1/3 check: core/render/widgets/mcp компилируются под wasm32-unknown-unknown
 #   2/3 build: артефакт — rlib ядра под wasm32-unknown-unknown
-#   3/3 test:  тесты canvas-core исполняются под wasm32-wasip1 (wasmtime)
+#   3/3 test:  тесты canvas-core и моста canvas-mcp исполняются под wasm32-wasip1 (wasmtime)
 #
 # Использование:
 #   scripts/wasm_gate.sh           # все три ступени
@@ -15,7 +17,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CRATES="-p canvas-core -p canvas-render -p canvas-widgets"
+CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp"
 
 echo "[wasm-gate 1/3] cargo check --target wasm32-unknown-unknown $CRATES"
 cargo check --target wasm32-unknown-unknown $CRATES
@@ -32,13 +34,15 @@ if [ "${1:-}" = "--check" ]; then
     exit 0
 fi
 
-echo "[wasm-gate 3/3] cargo test --target wasm32-wasip1 -p canvas-core (runner: wasmtime)"
+# Список ступени 3 явный (не $CRATES): render/widgets под wasip1 не
+# тестируются — их wgpu-тесты требуют GPU-адаптер, которого в wasmtime нет.
+echo "[wasm-gate 3/3] cargo test --target wasm32-wasip1 -p canvas-core -p canvas-mcp (runner: wasmtime)"
 if ! command -v wasmtime >/dev/null 2>&1; then
     echo "  wasmtime не найден: curl https://wasmtime.dev/install.sh -sSf | bash" >&2
     echo "  (или ~/.local/bin в PATH; ступени 1–2 зелёные)" >&2
     exit 2
 fi
 # Харнесс однопоточный: std::thread на wasip1 не поддержан.
-RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1 -p canvas-core
+RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1 -p canvas-core -p canvas-mcp
 
-echo "[wasm-gate] OK: ядро собирается под wasm и исполняется в wasm-рантайме"
+echo "[wasm-gate] OK: ядро и мост canvas-mcp собираются под wasm и исполняются в wasm-рантайме"

@@ -641,26 +641,44 @@ const CONNECT_WAIT_MS: u32 = 2000;
 #[cfg(windows)]
 const RECONNECT_WAIT_MS: u32 = 500;
 
-/// Запустить stdio-MCP-сервер (FR-008): цикл бинарника `canvasdesk-mcp`,
-/// доступный и как `canvasdesk mcp` — один exe на весь стек. Автостарт: если
-/// pipe приложения недоступен и в `args` нет `--no-spawn`, поднимаем сервис
-/// (`current_exe` без аргументов, это GUI-режим того же бинарника) и ждём
-/// pipe до SPAWN_WAIT_SECS — «сервис + MCP одной командой». Неудача — мост
-/// работает offline (ADR-0009): handshake успешен, вызовы инструментов
-/// отвечают isError «не запущен», reconnect подхватывает pipe, когда
-/// приложение появится. Молчалив по stdout (там протокол MCP); диагностика —
-/// в stderr.
+/// Запустить stdio-MCP-сервер (FR-008) — нативная обёртка: автоспавн сервиса
+/// (FR-008/FR-035), offline-режим вне Windows (ADR-0009), хук reconnect
+/// (FR-034). Семантика не меняется; сам stdio-цикл выделен в
+/// платформенно-нейтральную `run_stdio_with_transport` (FR-037/MW2).
 pub fn run_stdio(args: &[String]) -> anyhow::Result<()> {
     let no_spawn = args.iter().any(|arg| arg == "--no-spawn");
     #[cfg(windows)]
-    let mut transport = connect_app(no_spawn);
+    let transport = connect_app(no_spawn);
     // Вне Windows pipe нет — мост работает offline: handshake успешен,
     // tools/call отвечает isError «не запущен» (FR-034/ADR-0009)
     #[cfg(not(windows))]
     let _ = no_spawn;
     #[cfg(not(windows))]
-    let mut transport: Option<OfflineTransport> = None;
+    let transport: Option<OfflineTransport> = None;
+    // Хук reconnect (FR-034): на Windows — refresh_transport (fn item
+    // реализует FnMut(&mut Option<PipeTransport>)), вне Windows — no-op.
+    #[cfg(windows)]
+    let reconnect = refresh_transport;
+    #[cfg(not(windows))]
+    let reconnect = |_t: &mut Option<OfflineTransport>| {};
 
+    run_stdio_with_transport(transport, reconnect)
+}
+
+/// Платформенно-нейтральный stdio-цикл моста (выделение FR-037/MW2):
+/// stdin → split_frames → handle_input → stdout. Контракт `reconnect` —
+/// короткая попытка переподключения транспорта перед каждым пакетом
+/// (FR-034; на Windows — refresh_transport к pipe, вне Windows — no-op).
+/// Молчалив по stdout (там протокол MCP), диагностика — в stderr.
+/// EOF stdin — штатный выход.
+pub fn run_stdio_with_transport<T, R>(
+    mut transport: Option<T>,
+    mut reconnect: R,
+) -> anyhow::Result<()>
+where
+    T: AppTransport,
+    R: FnMut(&mut Option<T>),
+{
     use std::io::{Read, Write};
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
@@ -679,8 +697,7 @@ pub fn run_stdio(args: &[String]) -> anyhow::Result<()> {
         for line in split_frames(&mut pending) {
             // FR-034: приложение могло подняться после старта моста —
             // короткая попытка reconnect перед каждым пакетом
-            #[cfg(windows)]
-            refresh_transport(&mut transport);
+            reconnect(&mut transport);
             for outcome in handle_input(&line, &mut transport) {
                 match outcome {
                     HandleOutcome::Reply(reply) => {
@@ -715,7 +732,10 @@ fn refresh_transport(transport: &mut Option<PipeTransport>) {
 /// моста («Invalid JSON» у клиента). Null-хэндлы отсекают класс целиком:
 /// чужой процесс физически не может писать в stdout протокола или красть
 /// stdin. Поведенческая проверка — юнит-тестом (ребёнок репортит свои fd).
-#[cfg(any(windows, test))]
+// FR-037/MW2 (контингенция плана §4 MW2-a п.4, прецедент FR-036): под
+// wasm-таргеты хелперы исключены вовсе — их тесты загвардены, а компиляция
+// в wasip1-test давала бы dead_code и вносила бы std::process в wasm-сборку.
+#[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]
 fn spawn_service_command(exe: &std::path::Path) -> std::process::Command {
     let mut cmd = std::process::Command::new(exe);
     cmd.stdin(std::process::Stdio::null())
@@ -730,7 +750,7 @@ fn spawn_service_command(exe: &std::path::Path) -> std::process::Command {
 /// и рекурсивно плодит процессы) — вместо него ищем GUI-бинарь
 /// `canvasdesk.exe` рядом (один каталог дистрибутива); нет соседа —
 /// спавн невозможен (None → offline-режим ADR-0009).
-#[cfg(any(windows, test))]
+#[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]
 fn autosprawn_target(current_exe: &std::path::Path) -> Option<std::path::PathBuf> {
     let stem = current_exe
         .file_stem()
@@ -1527,7 +1547,8 @@ mod tests {
     /// моста (корень «Invalid JSON \x1b[2m…» у hermes) и кражи stdin.
     /// Поведенческая проверка: ребёнок сам читает свои fd и репортит в файл
     /// (unix; на Windows тот же код применяет Stdio::null).
-    #[cfg(unix)]
+    /// wasm исключён — реальная ФС/процессы, test-only cfg, прецедент FR-036.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
     #[test]
     fn spawn_service_command_isolates_stdio() {
         let dir = std::env::temp_dir().join(format!(
@@ -1565,6 +1586,8 @@ mod tests {
     /// `canvasdesk-mcp(.exe)` спавнит GUI-соседа `canvasdesk.exe`, а не сам
     /// себя (рекурсия двойников); соседа нет → None (offline). Единый
     /// бинарь `canvasdesk(.exe)` спавнит сам себя (GUI-режим без аргументов).
+    /// wasm исключён — реальная ФС/процессы, test-only cfg, прецедент FR-036.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn autosprawn_target_prefers_sibling_gui_for_standalone_bridge() {
         let dir = std::env::temp_dir().join(format!(
