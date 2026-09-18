@@ -1,3 +1,66 @@
+## 2026-09-19 — W3 (M8 wasm-порт, трек A): трейты сервисов в core, инъекция в App::new, canvas-app lib под wasm32
+
+- **Задача (§6.1):** трек A, шаг 3 после W2 (8482183): «Трейты сервисов»
+  (wasm-port §6 W3): `CanvasStorage`, `ClipboardBackend`, `WatchBackend`,
+  `SearchBackend` (+MemSearch); инъекция в `App::new`; нативные реализации =
+  сегодняшнее поведение. Ветка feature/wasm-w3-service-traits от main
+  8482183 (origin/main не ушёл — гонки нет).
+- **Survey → расширение скоупа (документировано):** приёмка W3→W4 требует
+  собрать `App::new` без нативных типов — проверка
+  `cargo check -p canvas-app --target wasm32` показала, что shell (rusqlite
+  bundled → clang) под wasm не собирается, а в lib-коде кроме 4 сервисов
+  живут `ThumbService`, `WidgetStateStore` (widgets.rs, T21-E) и
+  `DragEvent`/`DragData` (T9). Итого 6 трейтов + перенос drag-типов.
+- **canvas-core (контракты, паттерн NoopThumbnailProvider):**
+  - `providers.rs` += `ClipboardBackend`+`NoopClipboard`,
+    `WatchBackend`+`NoopWatch`, `ThumbBackend`+`NoopThumbs`,
+    `WidgetStateBackend`+`MemWidgetState`, `Priority` (из shell);
+  - `io.rs` += `CanvasStorage` + `FsCanvasStorage` (натив: load +
+    save_with_backup = `.bak`, SPEC §9) + `MemStorage` (тесты);
+  - new `search.rs`: протокол T14 (`IndexEntry`/`SearchCommand`/
+    `SearchEvent`/`SearchHit`/`SearchResponder`) + `SearchBackend` +
+    `MemSearch` (BTreeMap-индекс имён, §3.2 «ответы через тот же
+    SearchEvent»);
+  - new `dragdrop.rs`: `DragData`/`DragEvent` из shell (shell и web-бинарь
+    (W6) — производители, app — потребитель).
+- **canvas-shell (нативные реализации «как сегодня»):** new `clipboard.rs`
+  `ArboardClipboard` (код `Clipboard` из app.rs); `impl WatchBackend for
+  WatchService`; `impl SearchBackend for SearchService`; `impl ThumbBackend
+  for ThumbService`; `impl WidgetStateBackend for WidgetStateStore`;
+  протоколы поиска/drag — ре-экспорты из core (`canvas_shell::SearchCommand`
+  и `canvas_shell::dragdrop::DragEvent` — пути потребителей сохранены);
+  arboard — dep shell (из canvas-app).
+- **canvas-scene:** `SceneState.storage: Arc<dyn CanvasStorage>`;
+  `with_storage`/`load_or_seed_with_storage` (сигнатуры `new`/
+  `load_or_seed` сохранены — 0 изменений в существующих тестах/MCP);
+  `save_now` идёт через хранилище.
+- **canvas-app:** `App::new` — инъекция: `Box<dyn ThumbBackend/WatchBackend/
+  SearchBackend/ClipboardBackend>` + `widget_state` + `cache_dir`
+  (12 параметров, shell-типов нет); `Clipboard` удалён из app.rs; поля
+  App — трейт-объекты; `AppEvent::Drag(canvas_core::dragdrop::DragEvent)`;
+  widgets.rs — `state_store: Option<Box<dyn WidgetStateBackend>>` (открытие
+  store — работа вызывающего); Cargo.toml: `canvas-shell` →
+  `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`, arboard убран.
+- **main.rs:** нативная сборка — `FsCanvasStorage` в сцену,
+  `ArboardClipboard`, боксы над shell-сервисами, `WidgetStateStore::open`.
+- **Результат:** `cargo check -p canvas-app --lib --target
+  wasm32-unknown-unknown` — зелёный (исторически: весь UI-слой wasm-чист,
+  W4-прошивка разблокирована).
+- **Тесты-заглушки (приёмка):** core — MemSearch (ReplaceAll→Indexed,
+  Query case-insensitive/limit/пустой, IndexFile/RemoveFile), MemStorage
+  roundtrip, FsStorage `.bak` (native-only — wasip1-гейт без temp_dir),
+  Noop-инертность; scene — save_now через инъекцию; app —
+  `app_assembles_on_stub_backends` (App целиком на заглушках, roundtrip
+  widget-state, NoopClipboard). Итого 157 app / 54 scene / 239 core.
+- **Гейты (все зелёные):** fmt ✓; clippy --workspace --all-targets
+  `-D warnings` ✓ (0w); test --workspace ✓ (45 наборов, 0 failed);
+  wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (e2e, exit 0); wasm-check
+  canvas-app lib — ✓ (локально, вне CI до W12).
+- **Доки:** wasm-port.md строка W3 «Выполнено»; CI-файлы не тронуты
+  (заморозка до W12); Cargo.lock — только ребро arboard app→shell.
+- **Коммит:** 1 коммит на feature/wasm-w3-service-traits → merge `--no-ff`
+  в main (протокол §6.1).
+
 ## 2026-09-19 — W2 (M8 wasm-порт, трек A): вынос App в lib — `canvas_app::app`, main.rs — тонкая нативная обёртка
 
 - **Задача (§6.1):** трек A, шаг 2 после W1 (884309e→705e923): «Вынос App

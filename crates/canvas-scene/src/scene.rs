@@ -5,13 +5,17 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use canvas_core::analyze::AnalysisConfig;
 use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, ExprResults};
 use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::time::Instant;
-use canvas_core::{analyze, AnalysisState, Canvas, Node, Scenario, SpatialIndex, StaleOverride};
+use canvas_core::{
+    analyze, AnalysisState, Canvas, CanvasStorage, FsCanvasStorage, Node, Scenario, SpatialIndex,
+    StaleOverride,
+};
 
 use crate::measure::{ensure_result_reserve, formula_line_indices};
 use crate::view::{SpillView, WhatIfNode};
@@ -264,11 +268,22 @@ pub struct SceneState {
     pub whatif_nodes: HashMap<String, WhatIfNode>,
     /// ADR-0012: viewport-зеркало MCP (см. [`Viewport`]).
     pub viewport: Viewport,
+    /// M8/W3 (wasm-port §3.2/§6): хранилище `.canvas` как сервис — нативно
+    /// `FsCanvasStorage` (диск + `.bak`, сегодняшнее поведение), web (W6) —
+    /// FS Access/OPFS через `with_storage`.
+    pub storage: Arc<dyn CanvasStorage>,
 }
 
 impl SceneState {
-    /// Обернуть готовую модель: построить spatial index.
+    /// Обернуть готовую модель: построить spatial index. Хранилище —
+    /// файловое по умолчанию (нативное поведение, диск + `.bak`).
     pub fn new(canvas: Canvas, path: PathBuf) -> Self {
+        Self::with_storage(canvas, path, Arc::new(FsCanvasStorage))
+    }
+
+    /// Обернуть готовую модель с явным хранилищем (M8/W3): web-бинарь
+    /// подставит FS Access/OPFS (W6), тесты — `MemStorage`.
+    pub fn with_storage(canvas: Canvas, path: PathBuf, storage: Arc<dyn CanvasStorage>) -> Self {
         let spatial = SpatialIndex::build(&canvas);
         // FR-017: сценарии what-if — загрузка persisted `canvasdesk.whatif`
         let scenarios = canvas_core::whatif::scenarios_from_canvas(&canvas);
@@ -291,6 +306,7 @@ impl SceneState {
             whatif_nodes: HashMap::new(),
             analysis: AnalysisState::new(),
             viewport: Viewport::default(),
+            storage,
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
@@ -753,7 +769,14 @@ impl SceneState {
     }
 
     pub fn load_or_seed(path: PathBuf) -> Self {
-        let canvas = match Canvas::load(&path) {
+        Self::load_or_seed_with_storage(path, Arc::new(FsCanvasStorage))
+    }
+
+    /// Загрузить канвас с явным хранилищем (M8/W3): нет файла — стартовый;
+    /// ошибка записи стартового — warn, приложение не падает. Web (W6)
+    /// подставит FS Access/OPFS-хранилище.
+    pub fn load_or_seed_with_storage(path: PathBuf, storage: Arc<dyn CanvasStorage>) -> Self {
+        let canvas = match storage.load(&path) {
             Ok(canvas) => {
                 tracing::info!(path = %path.display(), nodes = canvas.nodes.len(), "канвас загружен");
                 canvas
@@ -761,13 +784,13 @@ impl SceneState {
             Err(err) => {
                 tracing::info!(path = %path.display(), %err, "создаю стартовый канвас");
                 let canvas = seed_canvas();
-                if let Err(err) = canvas.save(&path) {
+                if let Err(err) = storage.save(&canvas, &path) {
                     tracing::warn!(%err, "не удалось сохранить стартовый канвас");
                 }
                 canvas
             }
         };
-        Self::new(canvas, path)
+        Self::with_storage(canvas, path, storage)
     }
 
     /// Переместить ноду: модель + инкрементальное обновление spatial index (T5).
@@ -813,7 +836,7 @@ impl SceneState {
 
     pub fn save_now(&mut self) -> bool {
         self.dirty_since = None;
-        match self.canvas.save_with_backup(&self.path) {
+        match self.storage.save(&self.canvas, &self.path) {
             Ok(()) => {
                 tracing::info!(path = %self.path.display(), "канвас сохранён");
                 true

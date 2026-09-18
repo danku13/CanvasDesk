@@ -73,7 +73,9 @@ pub struct WidgetManager {
     pub runtime_dead: bool,
     /// Объёмное состояние виджетов (T21-E): cache.db рядом с корнем пакетов;
     /// None при сбое открытия — деградация warn + пустые значения.
-    pub state_store: Option<canvas_shell::WidgetStateStore>,
+    /// M8/W3: backend состояния виджетов за нейтральным трейтом core
+    /// (натив — SQLite cache.db в shell, web — localStorage W11).
+    pub state_store: Option<Box<dyn canvas_core::WidgetStateBackend>>,
     /// Коалесценция undo setProps (риски M5 §8): нода и время последнего шага.
     last_props_undo: Option<(String, Instant)>,
     /// CR-005 (диагностика): последний LOD-таргет каждой ноды — смена
@@ -85,16 +87,14 @@ pub struct WidgetManager {
 
 impl WidgetManager {
     /// Корень пакетов: `~/.canvasdesk/widgets` (план M5 §2 «Пути»);
-    /// cache.db для widget_state — в родителе корня (`~/.canvasdesk`).
-    pub fn new(widgets_root: PathBuf, dark: bool) -> Self {
-        let data_dir = widgets_root
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| widgets_root.clone());
-        let state_store = canvas_shell::WidgetStateStore::open(&data_dir).ok();
-        if state_store.is_none() {
-            tracing::warn!(dir = %data_dir.display(), "widget_state недоступен: cache.db не открыт");
-        }
+    /// M8/W3: backend состояния виджетов инъектируется (натив — SQLite
+    /// cache.db в shell; web — localStorage, W11); None — деградация без
+    /// состояния (bridge stateGet вернёт None, stateSet — no-op).
+    pub fn new(
+        widgets_root: PathBuf,
+        dark: bool,
+        state_store: Option<Box<dyn canvas_core::WidgetStateBackend>>,
+    ) -> Self {
         Self {
             registry: WidgetRegistry::new(widgets_root),
             states: HashMap::new(),
@@ -707,7 +707,13 @@ mod tests {
     }
 
     fn manager(tag: &str) -> WidgetManager {
-        let mut m = WidgetManager::new(temp_root(tag).join("widgets"), true);
+        // M8/W3: открытие store — работа вызывающего (натив — SQLite
+        // cache.db; тест открывает его явно, как main.rs)
+        let root = temp_root(tag);
+        let state_store = canvas_shell::WidgetStateStore::open(&root)
+            .ok()
+            .map(|store| Box::new(store) as Box<dyn canvas_core::WidgetStateBackend>);
+        let mut m = WidgetManager::new(root.join("widgets"), true, state_store);
         m.init_registry();
         m
     }

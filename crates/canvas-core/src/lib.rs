@@ -4,6 +4,10 @@
 /// FR-016: анализ узких мест и риска очередей — чистая функция над
 /// результатами propagator-а (волна B1/CP5).
 pub mod analyze;
+/// M8/W3 (wasm-port §3.1/§6): платформенно-нейтральные данные drag-drop
+/// (T9): производители — shell (IDropTarget) и canvas-web (DOM, W6);
+/// потребитель — приложение.
+pub mod dragdrop;
 mod edgegeom;
 mod error;
 /// FR-013: Numi-base формулы text-нод (`canvasdesk.expr`).
@@ -18,6 +22,11 @@ mod layout;
 pub mod mcp_text;
 mod model;
 mod providers;
+/// M8/W3 (wasm-port §3.1/§6): протокол поискового индекса + трейт
+/// [`search::SearchBackend`] + [`search::MemSearch`] (web/тесты) — переехал
+/// из canvas-shell, чтобы нативная (FTS5) и web-реализации жили по разные
+/// стороны одного нейтрального контракта.
+pub mod search;
 mod settings;
 mod spatial;
 /// FR-018: реестр шаблонных архитектурных нод.
@@ -35,6 +44,10 @@ pub use analyze::{
     analyze, badge_text, has_risk, AnalysisConfig, AnalysisFlags, AnalysisState,
     Severity as AnalysisSeverity,
 };
+/// M8/W3 (wasm-port §3.1/§6): платформенно-нейтральные данные drag-drop
+/// (T9) — shell производит (IDropTarget), canvas-web будет производить
+/// те же события из DOM-листенеров (W6), приложение — единый потребитель.
+pub use dragdrop::{DragData, DragEvent};
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
     distance_to_edge, draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint,
@@ -56,6 +69,7 @@ pub use fs_events::{
     apply_file_events, normalize_path, path_matches, relative_if_inside, resolve_node_path,
     watched_dirs, FileEvent, NodeChange,
 };
+pub use io::{CanvasStorage, FsCanvasStorage, MemStorage};
 pub use layout::{
     plan_related_layout, LayoutMode, LayoutPlan, LEVEL_GAP, RADIAL_RING_STEP, SIBLING_GAP,
 };
@@ -64,7 +78,14 @@ pub use model::{
     group_materialize_children, group_remove_child, parent_index, plan_push_out, subtree_ids,
     Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node, NodeKind, PreviewState, Side,
 };
-pub use providers::{PreviewProvider, ShellIntegration, Thumbnail, ThumbnailProvider};
+pub use providers::{
+    ClipboardBackend, MemWidgetState, NoopClipboard, NoopThumbs, NoopWatch, PreviewProvider,
+    Priority, ShellIntegration, ThumbBackend, Thumbnail, ThumbnailProvider, WatchBackend,
+    WidgetStateBackend,
+};
+pub use search::{
+    IndexEntry, MemSearch, SearchBackend, SearchCommand, SearchEvent, SearchHit, SearchResponder,
+};
 pub use settings::{
     clamp_onboarding_defers, clamp_port_zone, next_port_zone, Corner, GridDensity, GridStyle,
     Settings, Theme, ONBOARDING_MAX_DEFERS, PORT_ZONE_MAX, PORT_ZONE_MIN, PORT_ZONE_PRESETS,

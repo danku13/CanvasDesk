@@ -72,6 +72,19 @@ impl WidgetStateStore {
     }
 }
 
+/// M8/W3 (wasm-port §6): нативная реализация нейтрального трейта —
+/// таблица widget_state в cache.db и есть backend состояния виджетов
+/// (сегодняшнее поведение; web — localStorage, W11).
+impl canvas_core::WidgetStateBackend for WidgetStateStore {
+    fn get(&self, node_id: &str, key: &str) -> Option<String> {
+        WidgetStateStore::get(self, node_id, key)
+    }
+
+    fn set(&mut self, node_id: &str, key: &str, value: &str) {
+        WidgetStateStore::set(self, node_id, key, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,9 @@
 //! Весь unsafe — только здесь, с SAFETY-комментариями.
 
 pub mod cache;
+// M8/W3 (wasm-port §3.4): буфер обмена как сервис — ArboardClipboard
+// переехал из canvas-app; app держит нейтральный Box<dyn ClipboardBackend>
+pub mod clipboard;
 // Режим десктопа (T15): чистое ядро (desktop/mod.rs) кроссплатформенно —
 // тесты гоняются в CI на Linux; Win32-механика (hierarchy/attach/monitor)
 // — cfg(windows) внутри mod.rs (рекомендация воркера T15-A).

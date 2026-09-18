@@ -174,6 +174,15 @@ impl WatchService {
     }
 }
 
+/// M8/W3 (wasm-port §6): нативная реализация нейтрального трейта —
+/// `WatchService` (notify) и есть backend вотчера (сегодняшнее поведение;
+/// web — `NoopWatch` из core, перечитывание по жесту «Перезагрузить»).
+impl canvas_core::WatchBackend for WatchService {
+    fn sync_dirs(&mut self, dirs: &[PathBuf]) {
+        WatchService::sync_dirs(self, dirs);
+    }
+}
+
 /// Цикл агрегатора: блокирующее ожидание первого события окна (поток-демон,
 /// не рендер-поток — AGENTS.md), добор остатка окна `recv_timeout`'ом, затем
 /// collapse и доставка батча. Disconnected (вотчер умер) — дослать собранное

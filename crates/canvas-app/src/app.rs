@@ -53,9 +53,13 @@ use canvas_core::flow::{self, FlowKind};
 use canvas_core::time::Instant;
 use canvas_core::{
     analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
-    resolve_node_path, watched_dirs, AnalysisState, Canvas, Edge, FileEvent, FocusSeed, GridStyle,
-    Node, NodeChange, NodeKind, Settings, Side, SpatialIndex, Theme,
+    resolve_node_path, watched_dirs, AnalysisState, Canvas, ClipboardBackend, Edge, FileEvent,
+    FocusSeed, GridStyle, Node, NodeChange, NodeKind, Priority, SearchBackend, Settings, Side,
+    SpatialIndex, Theme, ThumbBackend, WatchBackend,
 };
+// M8/W3 (wasm-port §3.1): протокол поиска переехал в core (натив — FTS5 в
+// shell, web/тесты — MemSearch); App общается только через трейт SearchBackend
+use canvas_core::search::{SearchCommand, SearchEvent, SearchHit};
 // FR-037/ADR-0012 (MW1): модельный слой сцены + MCP-инструменты — вынесены
 // из main.rs в крейт canvas-scene (wasm-верификация); UI-поля ввода
 // (selected/selected_nodes/dragging) остались здесь, в App
@@ -85,9 +89,6 @@ use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneVi
 use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
     SceneState,
-};
-use canvas_shell::{
-    Priority, SearchCommand, SearchEvent, SearchHit, SearchService, ThumbService, WatchService,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
@@ -127,40 +128,9 @@ struct OwnedScreenText {
     align: TextAlign,
 }
 
-/// Буфер обмена ОС (T7, arboard): ошибки — warn, редактирование не ломается.
-struct Clipboard(Option<arboard::Clipboard>);
-
-impl Clipboard {
-    fn new() -> Self {
-        match arboard::Clipboard::new() {
-            Ok(clipboard) => Self(Some(clipboard)),
-            Err(err) => {
-                tracing::warn!(%err, "буфер обмена недоступен");
-                Self(None)
-            }
-        }
-    }
-
-    fn set(&mut self, text: String) {
-        if let Some(clipboard) = &mut self.0 {
-            if let Err(err) = clipboard.set_text(text) {
-                tracing::warn!(%err, "не удалось записать в буфер обмена");
-            }
-        }
-    }
-
-    fn get(&mut self) -> Option<String> {
-        self.0
-            .as_mut()
-            .and_then(|clipboard| match clipboard.get_text() {
-                Ok(text) => Some(text),
-                Err(err) => {
-                    tracing::warn!(%err, "не удалось прочитать буфер обмена");
-                    None
-                }
-            })
-    }
-}
+// Буфер обмена ОС (T7, arboard) — M8/W3: за трейтом `ClipboardBackend`
+// (нативная реализация — `canvas_shell::clipboard::ArboardClipboard`,
+// web — navigator.clipboard); инъекция — в `App::new`.
 
 /// Преобразование [x0, y0, x1, y1] → [x, y, w, h] (point_in_rect-конвенция).
 fn rect_xywh(rect: [f32; 4]) -> [f32; 4] {
@@ -405,7 +375,7 @@ pub enum AppEvent {
     /// В канале ThumbService появились результаты — забрать и перерисовать.
     ThumbsReady,
     /// Событие drag-drop из IDropTarget (T9): Enter/Over/Leave/Drop.
-    Drag(canvas_shell::dragdrop::DragEvent),
+    Drag(canvas_core::dragdrop::DragEvent),
     /// Батч событий файловой системы от WatchService (T10): debounce 300 мс
     /// уже отработан в shell, здесь — применение к модели и кэшам.
     FileEvents(Vec<FileEvent>),
@@ -625,7 +595,8 @@ pub struct App {
     /// перемещаемых (выделение или одна + дети групп).
     dragging: Option<DragState>,
     /// Пул системных тамбнейлов (T6): заказы по видимым нодам, ответы в канал.
-    thumbs: ThumbService,
+    /// M8/W3: backend за трейтом (натив — ThumbService, web — W10); инъекция в App::new.
+    thumbs: Box<dyn ThumbBackend>,
     modifiers: ModifiersState,
     /// Позиция курсора в логических пикселях.
     cursor: Vec2,
@@ -653,8 +624,9 @@ pub struct App {
     editor_dragging: bool,
     /// Детектор двойного клика ЛКМ (T7).
     double_click: DoubleClick,
-    /// Буфер обмена ОС (T7).
-    clipboard: Clipboard,
+    /// Буфер обмена ОС (T7). M8/W3: backend за трейтом ClipboardBackend
+    /// (натив — ArboardClipboard, web — navigator.clipboard).
+    clipboard: Box<dyn ClipboardBackend>,
     /// Открытое контекстное меню ноды (ПКМ, T7).
     menu: Option<ContextMenu>,
     /// Hover-раскрытие групп палитры (FR-009): hover-intent открытие,
@@ -716,15 +688,17 @@ pub struct App {
     toast: Option<(String, Instant)>,
     /// Файловый вотчер (T10): события ФС → AppEvent::FileEvents;
     /// набор директорий синхронизируется с моделью (sync_watch_dirs).
-    watcher: WatchService,
+    /// M8/W3: backend за трейтом (натив — notify, web — NoopWatch).
+    watcher: Box<dyn WatchBackend>,
     /// Регистрация IDropTarget (T9), Windows.
     #[cfg(windows)]
     drag_watcher: Option<canvas_shell::dragdrop::DropWatcher>,
     /// Отправитель drag-событий в event loop (T9). Читается только в
     /// cfg(windows)-ветке resumed(): единственный источник drag-событий —
     /// Windows IDropTarget (SPEC §7.3), на других ОС не читается.
+    /// M8/W3: тип события — нейтральный canvas_core::dragdrop::DragEvent.
     #[cfg_attr(not(windows), allow(dead_code))]
-    drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
+    drag_sender: Arc<dyn Fn(canvas_core::dragdrop::DragEvent) + Send + Sync>,
     /// Отправитель событий WebView2-хоста виджетов в event loop (M5/T20).
     /// Прокси создаётся один раз в main() у `EventLoop` — у доступного в
     /// resumed() `ActiveEventLoop` метода create_proxy в winit 0.30 нет;
@@ -746,8 +720,9 @@ pub struct App {
     /// Панель поиска (T14): поле, строки, выбор, скролл.
     search: SearchPanel,
     /// Сервис FTS-индекса (T14): команды в worker-поток, ответы —
-    /// AppEvent::Search через proxy.
-    search_service: SearchService,
+    /// AppEvent::Search через proxy. M8/W3: backend за трейтом
+    /// SearchBackend (натив — FTS5 в shell, web/тесты — MemSearch).
+    search_service: Box<dyn SearchBackend>,
     /// Ноды результатов поиска — параллельно search.rows (T14).
     search_nodes: Vec<usize>,
     /// Debounce запроса (T14): (текст, момент последней правки) — отправка
@@ -858,28 +833,32 @@ pub struct App {
 }
 
 impl App {
-    // 8 аргументов — гейт-конфигурация сессии (сцена, сервисы, флаги);
+    // 11 аргументов — гейт-конфигурация сессии (сцена, сервисы, флаги);
     // группировать в структуру ради clippy — лишний слой на единственном
-    // месте создания (main)
+    // месте создания (main/canvas-web). M8/W3: все платформенные сервисы —
+    // нейтральные трейты (инъекция), shell-типов в сигнатуре нет.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         scene: SceneState,
-        thumbs: ThumbService,
+        thumbs: Box<dyn ThumbBackend>,
         settings: Settings,
         config_path: Option<PathBuf>,
-        drag_sender: Arc<dyn Fn(canvas_shell::dragdrop::DragEvent) + Send + Sync>,
+        cache_dir: Option<PathBuf>,
+        drag_sender: Arc<dyn Fn(canvas_core::dragdrop::DragEvent) + Send + Sync>,
         widget_sender: canvas_widgets::WidgetEventSender,
-        watcher: WatchService,
-        search_service: SearchService,
+        watcher: Box<dyn WatchBackend>,
+        search_service: Box<dyn SearchBackend>,
+        clipboard: Box<dyn ClipboardBackend>,
+        widget_state: Option<Box<dyn canvas_core::WidgetStateBackend>>,
         desktop_mode: bool,
     ) -> Self {
         // M5 (T20-F): менеджер виджетов; реестр инициализируется в
-        // main() (init_widgets) после настройки трейсинга
+        // main() (init_widgets) после настройки трейсинга. M8/W3: каталог
+        // кэша инъектируется (натив — shell::default_cache_dir, web — W6)
         let widgets = crate::widgets::WidgetManager::new(
-            canvas_shell::default_cache_dir()
-                .unwrap_or_default()
-                .join("widgets"),
+            cache_dir.clone().unwrap_or_default().join("widgets"),
             settings.theme == Theme::Dark,
+            widget_state,
         );
         // FR-027/FR-028: помощь/документация закрыты; тур при первом
         // запуске открывает should_show_onboarding (прецедент
@@ -909,7 +888,7 @@ impl App {
             editing: None,
             editor_dragging: false,
             double_click: DoubleClick::new(),
-            clipboard: Clipboard::new(),
+            clipboard,
             menu: None,
             palette_hover: PaletteHover::new(),
             palette_seen: None,
@@ -957,13 +936,9 @@ impl App {
             search_pending: None,
             flight: None,
             pulse: None,
-            templates_root: canvas_shell::default_cache_dir()
-                .unwrap_or_default()
-                .join("templates"),
+            templates_root: cache_dir.clone().unwrap_or_default().join("templates"),
             templates: {
-                let root = canvas_shell::default_cache_dir()
-                    .unwrap_or_default()
-                    .join("templates");
+                let root = cache_dir.unwrap_or_default().join("templates");
                 canvas_core::templates::TemplateRegistry::all_with_custom(&root)
             },
             template_drag: None,
@@ -3005,10 +2980,10 @@ impl App {
 
     /// События drag-drop (T9): превью зоны на Enter/Over, вставка нод на
     /// Drop. Данные приходят сырыми из shell, план строит crate::ui.
-    fn on_drag_event(&mut self, drag: canvas_shell::dragdrop::DragEvent) {
+    fn on_drag_event(&mut self, drag: canvas_core::dragdrop::DragEvent) {
         use crate::ui::{plan_drop, DropInsertKind};
         match drag {
-            canvas_shell::dragdrop::DragEvent::Enter { data, client_pt } => {
+            canvas_core::dragdrop::DragEvent::Enter { data, client_pt } => {
                 let world = self.drag_world_pt(client_pt);
                 // T21-B: дроп одиночной папки с widget.json — призрак
                 // установки виджета (перехват ДО plan_drop файлов)
@@ -3050,15 +3025,15 @@ impl App {
                     })
                 };
             }
-            canvas_shell::dragdrop::DragEvent::Over { client_pt } => {
+            canvas_core::dragdrop::DragEvent::Over { client_pt } => {
                 // Сетка призраков следует за курсором, сам план не меняется
                 let world = self.drag_world_pt(client_pt);
                 if let Some(preview) = self.drop_preview.as_mut() {
                     preview.origin = world;
                 }
             }
-            canvas_shell::dragdrop::DragEvent::Leave => self.drop_preview = None,
-            canvas_shell::dragdrop::DragEvent::Drop { data, client_pt } => {
+            canvas_core::dragdrop::DragEvent::Leave => self.drop_preview = None,
+            canvas_core::dragdrop::DragEvent::Drop { data, client_pt } => {
                 let world = self.drag_world_pt(client_pt);
                 // T21-B: дроп виджет-пакета — диалог П10 (Да/Нет), установка
                 // и нода только после подтверждения; невалидный манифест —
@@ -6258,7 +6233,7 @@ impl App {
                 KeyCommand::Cancel => self.finish_editing(false),
                 KeyCommand::Copy => {
                     if let Some(text) = self.editing.as_ref().and_then(|s| s.copy_selection()) {
-                        self.clipboard.set(text);
+                        self.clipboard.set_text(text);
                     }
                 }
                 KeyCommand::Cut => {
@@ -6269,12 +6244,12 @@ impl App {
                         _ => None,
                     };
                     if let Some(text) = text {
-                        self.clipboard.set(text);
+                        self.clipboard.set_text(text);
                         self.request_redraw();
                     }
                 }
                 KeyCommand::Paste => {
-                    let text = self.clipboard.get();
+                    let text = self.clipboard.get_text();
                     let pasted = if let (Some(text), Some(session), Some(renderer)) =
                         (text, self.editing.as_mut(), self.renderer.as_mut())
                     {
@@ -9009,7 +8984,7 @@ impl App {
                     .and_then(|node| node.file.clone().or_else(|| node.text.clone()))
                     .unwrap_or_default();
                 if !text.is_empty() {
-                    self.clipboard.set(text);
+                    self.clipboard.set_text(text);
                     self.show_toast("Путь скопирован");
                 }
             }
@@ -10879,5 +10854,60 @@ mod tests {
         // Модель не изменилась
         assert_eq!(scene.canvas.edges[1].flow_kind(), FlowKind::Control);
         assert!(scene.undo_stack.is_empty(), "отклонённый тогл без шага");
+    }
+
+    /// M8/W3 (wasm-port §6, приёмка «трейты покрыты тестами на заглушках»):
+    /// `App::new` собирается целиком на заглушках (NoopThumbs/NoopWatch/
+    /// NoopClipboard/MemSearch/MemWidgetState) без окна и GPU — сервисы
+    /// инъектируются, нативных shell-типов в сигнатуре нет. Проверяем
+    /// проводку: sync_watch_dirs (NoopWatch) без паник, state виджетов
+    /// ходит через MemWidgetState, NoopClipboard молча пуст.
+    #[test]
+    fn app_assembles_on_stub_backends() {
+        let scene = SceneState::new(
+            Canvas::default(),
+            PathBuf::from("target/tmp/w3-stubs.canvas"),
+        );
+        let cache_dir =
+            std::env::temp_dir().join(format!("canvasdesk-w3-app-{}", std::process::id()));
+        std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
+
+        let (search_responder, _rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder: canvas_core::SearchResponder = std::sync::Arc::new(move |event| {
+                let _ = tx.send(event);
+            });
+            (responder, rx)
+        };
+        let widget_state = Box::new(canvas_core::MemWidgetState::default());
+
+        let mut app = App::new(
+            scene,
+            Box::new(canvas_core::NoopThumbs),
+            Settings::default(),
+            None,
+            Some(cache_dir.clone()),
+            std::sync::Arc::new(|_event: canvas_core::DragEvent| {}),
+            std::sync::Arc::new(|_event: canvas_widgets::WidgetEvent| {}),
+            Box::new(canvas_core::NoopWatch),
+            Box::new(canvas_core::MemSearch::new(search_responder)),
+            Box::new(canvas_core::NoopClipboard),
+            Some(widget_state),
+            false,
+        );
+
+        // Вотчер-заглушка: синхронизация директорий — no-op без паник
+        app.sync_watch_dirs();
+        // Буфер обмена-заглушка: пусто и без паник
+        assert_eq!(app.clipboard.get_text(), None);
+        app.clipboard.set_text("тест".into());
+        assert_eq!(app.clipboard.get_text(), None, "NoopClipboard не хранит");
+        // Состояние виджетов через MemWidgetState: set/get roundtrip
+        app.widgets.state_set("node-1", "note", "значение");
+        assert_eq!(
+            app.widgets.state_get("node-1", "note"),
+            Some("значение".into())
+        );
+        std::fs::remove_dir_all(&cache_dir).ok();
     }
 }

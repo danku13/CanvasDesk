@@ -262,7 +262,6 @@ name = "canvas-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arboard",
  "canvas-core",
  "canvas-mcp",
  "canvas-render",
@@ -343,6 +342,7 @@ dependencies = [
 name = "canvas-shell"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "canvas-core",
  "notify",
  "rusqlite",
