@@ -495,7 +495,10 @@ mod tests {
     use notify::event::{AccessKind, CreateKind, DataChange, MetadataKind, RemoveKind};
 
     /// Ожидание первого батча после действия (CI под нагрузкой, план §5).
-    const FIRST: Duration = Duration::from_secs(5);
+    /// 10 с вместо 5 с: windows-latest задерживал событие за 2 с (флейк
+    /// 2026-09-18 на f305972: search-тесты с порогом 2 с упали, watcher с
+    /// 5 с прошли) — выравниваем запас с search-тестами (RECV = 10 с).
+    const FIRST: Duration = Duration::from_secs(10);
     /// Тишина «ничего не пришло»: окно 300 мс + запас.
     const QUIET: Duration = Duration::from_millis(700);
     /// Пауза опроса канала в ожидании.
@@ -1034,7 +1037,10 @@ mod tests {
 
     /// Тест 17: debounce-шквал — 10 быстрых записей → один батч с одним
     /// Modify (мягко: если ОС разорвала окно — допустимо 2 батча, но суммарно
-    /// один Modify-набор без дублей).
+    /// один Modify-набор без дублей). Число батчей ограничено не константой,
+    /// а числом окон дебаунса, реально покрытых самим шквалом записей
+    /// (медленный CI-раннер растягивает цикл записи — это корректное
+    /// поведение trailing-дебаунсера, не его баг; флейк ubuntu 2026-09-18).
     #[test]
     fn watcher_debounce_burst() {
         let dir = temp_dir("burst");
@@ -1045,9 +1051,11 @@ mod tests {
         let mut svc = WatchService::new(sender);
         svc.sync_dirs(std::slice::from_ref(&dir));
 
+        let burst_started = Instant::now();
         for i in 0..10 {
             std::fs::write(&file, format!("v{i}")).expect("запись в цикле");
         }
+        let burst_elapsed = burst_started.elapsed();
 
         let first = normalized(wait_batch(&rx, FIRST).expect("первый батч не пришёл"));
         let rest: Vec<Vec<FileEvent>> = collect_quiet(&rx, Duration::from_secs(1))
@@ -1057,9 +1065,19 @@ mod tests {
         let mut batches = vec![first];
         batches.extend(rest);
 
+        // Разрывов окна не больше, чем burst_elapsed / DEBOUNCE: каждый
+        // закрывшийся батч означает паузу между записями ≥ DEBOUNCE, а такие
+        // паузы в сумме не превосходят длительность шквала. +1 — батчей
+        // всегда на один больше разрывов, ещё +1 — разрыв ядром ОС
+        // (inotify/FSEvents) — исходная мягкость «допустимо 2 батча».
+        // Не-дебаунсинг ловится: 10 отдельных батчей потребовали бы
+        // burst_elapsed ≥ 8×DEBOUNCE = 2.4 с на записи 10 байтовых строк.
+        let max_batches = (burst_elapsed.as_millis() / DEBOUNCE.as_millis()) as usize + 2;
         assert!(
-            batches.len() <= 2,
-            "шквал должен схлопнуться в ≤2 батча, пришло {}",
+            batches.len() <= max_batches,
+            "шквал за {} мс должен схлопнуться в ≤{} батчей (окон дебаунса), пришло {}",
+            burst_elapsed.as_millis(),
+            max_batches,
             batches.len()
         );
         // FSEvents (macOS) может пометить первую запись в существующий файл
