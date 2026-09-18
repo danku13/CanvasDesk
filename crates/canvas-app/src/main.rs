@@ -66,6 +66,7 @@ use canvas_render::text::{
     body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign,
     BODY_FONT_SIZE, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
+use canvas_render::SpillView;
 use canvas_render::ThemeColors;
 use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
 use canvas_shell::{
@@ -346,15 +347,70 @@ fn measured_result_reserve_height(text: &str, node_width: f32, formula_lines: &[
 /// `recompute_flow`. Уровень 1 — дешёвая оценка (`estimated_result_reserve_height`):
 /// влезает → выход (99 % вызовов, измерение не грузит перф). Уровень 2 —
 /// точное измерение реальным шейпингом: рост ровно до измеренного needed,
-/// без фантомных рядов.
-fn ensure_result_reserve(node: &mut Node, formula_lines: &[usize]) {
-    let text = node.text.as_deref().unwrap_or("");
-    if estimated_result_reserve_height(text, node.width) <= node.height {
+/// без фантомных рядов. `display_text` — текст как на карточке (FR-029:
+/// пролитые строки показаны подписями источников — они длиннее локальных
+/// литералов, подгонка идёт по ним, иначе подпись вылезет за низ карточки).
+fn ensure_result_reserve(node: &mut Node, display_text: &str, formula_lines: &[usize]) {
+    if estimated_result_reserve_height(display_text, node.width) <= node.height {
         return;
     }
-    let needed = measured_result_reserve_height(text, node.width, formula_lines);
+    let needed = measured_result_reserve_height(display_text, node.width, formula_lines);
     if needed > node.height {
         node.height = needed;
+    }
+}
+
+/// FR-029: текст ноды как на карточке — с подменой строк-присваиваний
+/// пролитых параметров на подписи источников («param ← нода · выход»).
+/// Единая точка для рендера (SceneView) и подгонки высоты.
+fn display_body_text(node: &Node, param_spills: &HashMap<String, Vec<SpillView>>) -> String {
+    let text = node.text.as_deref().unwrap_or("");
+    match param_spills.get(&node.id) {
+        Some(spills) if !spills.is_empty() => {
+            flow::substitute_spilled_lines(text, spills.iter().map(SpillView::as_triple))
+        }
+        _ => text.to_owned(),
+    }
+}
+
+/// FR-029: индекс строки-присваивания `param = …` в тексте ноды
+/// (имя до '=' — одно слово). None — такой строки нет.
+fn assignment_line(node: &Node, param: &str) -> Option<usize> {
+    node.text
+        .as_deref()
+        .unwrap_or_default()
+        .split('\n')
+        .position(|line| {
+            line.split_once('=')
+                .map(|(name, _)| name.trim() == param)
+                .unwrap_or(false)
+        })
+}
+
+/// FR-029: значение, которое value-ребро с toParam приносит в параметр —
+/// по адресации истока (зеркало `edge_source_value` flow): fromLine →
+/// построчный выход источника, fromOutput → именованный выход, иначе
+/// узловое значение источника. None — источник без значения (тихая
+/// деградация: бейдж строки тогда по локальному результату).
+fn spill_edge_value(
+    solutions: &flow::FlowSolutions,
+    spill: &canvas_core::ParamSpill,
+) -> Option<canvas_core::Value> {
+    if let Some(line) = spill.from_line {
+        solutions
+            .lines
+            .get(&(spill.from_node.clone(), line))
+            .cloned()
+    } else if let Some(name) = &spill.from_output {
+        solutions
+            .named
+            .get(&(spill.from_node.clone(), name.clone()))
+            .cloned()
+    } else {
+        solutions
+            .outputs
+            .get(&spill.from_node)
+            .and_then(|result| result.as_ref().ok().cloned())
     }
 }
 
@@ -384,7 +440,9 @@ fn fit_template_node_height(node: &mut Node) {
         .as_deref()
         .map(|text| formula_line_indices(&expr::eval_lines(text)))
         .unwrap_or_default();
-    ensure_result_reserve(node, &formula_lines);
+    // Инстанциация: проливания ещё нет — display_text = исходный текст.
+    let text = node.text.clone().unwrap_or_default();
+    ensure_result_reserve(node, &text, &formula_lines);
 }
 
 /// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
@@ -576,6 +634,11 @@ struct SceneState {
     /// FR-013 (правка 2): построчные результаты текста нод (Numi-стиль) —
     /// тоже runtime-кэш (инвариант 4).
     expr_line_results: ExprLineResults,
+    /// FR-029 (визуализация проливания): параметры нод, запитанные
+    /// value-рёбрами с `toParam` — подпись источника и эффективное значение
+    /// строки для рендера. Runtime-кэш (не сериализуется), пересчитывается
+    /// в `recompute_flow` вместе с результатами потока.
+    param_spills: HashMap<String, Vec<SpillView>>,
 }
 
 impl SceneState {
@@ -594,6 +657,7 @@ impl SceneState {
             redo_stack: Vec::new(),
             expr_results: ExprResults::new(),
             expr_line_results: ExprLineResults::new(),
+            param_spills: HashMap::new(),
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
@@ -620,6 +684,7 @@ impl SceneState {
                 // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
                 tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
                 self.recompute_all_expr();
+                self.param_spills.clear();
                 self.apply_result_reserve();
                 return;
             }
@@ -645,6 +710,35 @@ impl SceneState {
                 self.expr_line_results.insert(node.id.clone(), line_results);
             }
         }
+        // FR-029 (визуализация проливания): параметры, запитанные рёбрами
+        // с toParam — рендер покажет «param ← источник» и эффективный бейдж.
+        // Эффективное значение — значение РЕБРА-источника (адресация fromLine/
+        // fromOutput/узловое), а не локальный RHS строки: бейдж и подпись
+        // показывают истину потока, а не захардкоженный литерал листа.
+        let mut param_spills: HashMap<String, Vec<SpillView>> = HashMap::new();
+        for node in &self.canvas.nodes {
+            let spills = flow::param_spills(&self.canvas, &node.id);
+            if spills.is_empty() {
+                continue;
+            }
+            let views = spills
+                .into_iter()
+                .map(|spill| {
+                    // Значение ребра-источника — что реально пролито
+                    // в параметр (не локальный RHS строки).
+                    let value = spill_edge_value(&solutions, &spill).map(|v| v.to_string());
+                    SpillView {
+                        line: assignment_line(node, &spill.param),
+                        param: spill.param,
+                        from_label: spill.from_label,
+                        from_output: spill.from_output,
+                        value,
+                    }
+                })
+                .collect();
+            param_spills.insert(node.id.clone(), views);
+        }
+        self.param_spills = param_spills;
         // CR-012: ленивый refit высоты — резерв футера результата.
         self.apply_result_reserve();
     }
@@ -681,8 +775,11 @@ impl SceneState {
             .get(&self.canvas.nodes[index].id)
             .map(|lines| formula_line_indices(lines))
             .unwrap_or_default();
+        // FR-029: подгонка по показываемому тексту (пролитые строки —
+        // подписи источников, длиннее локальных литералов).
+        let display = display_body_text(&self.canvas.nodes[index], &self.param_spills);
         let before = self.canvas.nodes[index].height;
-        ensure_result_reserve(&mut self.canvas.nodes[index], &formula_lines);
+        ensure_result_reserve(&mut self.canvas.nodes[index], &display, &formula_lines);
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
             self.spatial.update(index, node);
@@ -5934,6 +6031,17 @@ fn mcp_req_str<'v>(params: &'v serde_json::Value, name: &str) -> Result<&'v str,
         .ok_or_else(|| format!("отсутствует параметр '{name}'"))
 }
 
+/// MCP-текст ноды (node_create_note / node_update_text / node_edit):
+/// нормализация literal-эскейпов — ИИ-агенты передают многострочный текст
+/// последовательностями `\n` (два символа), принимаем их как реальные
+/// переводы строк (контракт `canvas_core::mcp_text::normalize_escapes`).
+fn mcp_node_text(params: &serde_json::Value, name: &str) -> Option<String> {
+    params
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .map(canvas_core::mcp_text::normalize_escapes)
+}
+
 /// Обязательный числовой параметр MCP-инструмента.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn mcp_req_f32(params: &serde_json::Value, name: &str) -> Result<f32, String> {
@@ -6086,11 +6194,8 @@ fn mcp_dispatch(
         "node_create_note" => {
             let x = mcp_req_f32(params, "x")?;
             let y = mcp_req_f32(params, "y")?;
-            let text = params
-                .get("text")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let mut node = Node::text(next_free_id(&scene.canvas, "note"), text, x, y);
+            let text = mcp_node_text(params, "text").unwrap_or_default();
+            let mut node = Node::text(next_free_id(&scene.canvas, "note"), &text, x, y);
             if let Some(width) = mcp_opt_f32(params, "width") {
                 node.width = width;
             }
@@ -6098,7 +6203,7 @@ fn mcp_dispatch(
                 node.height = height;
             }
             // FR-013: строки «= …» в тексте — формула
-            node.set_expr(split_formula_lines(text));
+            node.set_expr(split_formula_lines(&text));
             let index = scene.canvas.nodes.len();
             // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
             scene.push_undo(scene.canvas.clone());
@@ -6132,14 +6237,15 @@ fn mcp_dispatch(
         }
         "node_update_text" => {
             let id = mcp_req_str(params, "id")?;
-            let text = mcp_req_str(params, "text")?;
+            let text = mcp_node_text(params, "text")
+                .ok_or_else(|| "отсутствует параметр 'text'".to_owned())?;
             let index = mcp_node_index(&scene.canvas, id)?;
             // FR-006: MCP-мутация — undo-шаг
             scene.push_undo(scene.canvas.clone());
-            scene.canvas.nodes[index].text = Some(text.to_owned());
+            scene.canvas.nodes[index].text = Some(text.clone());
             // FR-013: строки «= …» в тексте — формула (единая семантика
             // с редактором); формула нет — сброс
-            scene.canvas.nodes[index].set_expr(split_formula_lines(text));
+            scene.canvas.nodes[index].set_expr(split_formula_lines(&text));
             scene.mark_dirty();
             scene.recompute_flow();
             Ok(serde_json::json!({ "id": id }))
@@ -6166,8 +6272,8 @@ fn mcp_dispatch(
             // отдельных полей переплетена с применением остальных (частичные
             // применения при Err тоже должны быть отменяемы)
             scene.push_undo(scene.canvas.clone());
-            if let Some(text) = params.get("text").and_then(serde_json::Value::as_str) {
-                scene.canvas.nodes[index].text = Some(text.to_owned());
+            if let Some(text) = mcp_node_text(params, "text") {
+                scene.canvas.nodes[index].text = Some(text);
                 // CR-012: ленивый резерв футера под переносы нового текста
                 // (двухуровневый refit: оценка-ворота → измерение; formula_lines
                 // ensure_reserve_at берёт из текущих expr_line_results).
@@ -6570,6 +6676,38 @@ fn mcp_dispatch(
                     "value": value.num,
                     "unit": value.unit.display(),
                 });
+            }
+            // FR-029: проливание в параметры — агент видит, откуда пришло
+            // значение каждого запитанного параметра (источник + адресация
+            // порта + эффективное значение строки из пересчёта).
+            for node in &scene.canvas.nodes {
+                let spills = flow::param_spills(&scene.canvas, &node.id);
+                if spills.is_empty() {
+                    continue;
+                }
+                let spilled: serde_json::Map<String, serde_json::Value> = spills
+                    .into_iter()
+                    .map(|spill| {
+                        let mut item = serde_json::json!({ "from": spill.from_node });
+                        if let Some(output) = &spill.from_output {
+                            item["fromOutput"] = serde_json::json!(output);
+                        }
+                        if let Some(line) = spill.from_line {
+                            item["fromLine"] = serde_json::json!(line);
+                        }
+                        if let Some(value) = spill_edge_value(&solutions, &spill) {
+                            item["value"] = serde_json::json!(value.num);
+                            item["unit"] = serde_json::json!(value.unit.display());
+                        }
+                        (spill.param, item)
+                    })
+                    .collect();
+                let entry = result
+                    .as_object_mut()
+                    .expect("карта нод")
+                    .entry(node.id.clone())
+                    .or_insert_with(|| serde_json::json!({}));
+                entry["spilled"] = serde_json::Value::Object(spilled);
             }
             Ok(result)
         }
@@ -6983,7 +7121,10 @@ fn batch_apply_op(
         "node_create_note" => {
             let x = batch_req_f64(op, "x")? as f32;
             let y = batch_req_f64(op, "y")? as f32;
-            let text = batch_opt_str(op, "text").unwrap_or("");
+            let text_owned = batch_opt_str(op, "text")
+                .map(canvas_core::mcp_text::normalize_escapes)
+                .unwrap_or_default();
+            let text = text_owned.as_str();
             let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
             let mut node = Node::text(next_free_id(canvas, "note"), text, x, y);
             if let Some(width) = op.get("width").and_then(serde_json::Value::as_f64) {
@@ -11327,6 +11468,7 @@ impl ApplicationHandler<AppEvent> for App {
                         expr_results: &self.scene.expr_results,
                         expr_line_results: &self.scene.expr_line_results,
                         expr_editing_results: editing_line_results.as_deref(),
+                        param_spills: &self.scene.param_spills,
                     };
                     match renderer.render(
                         &self.camera,
@@ -11638,7 +11780,7 @@ mod tests {
         low.width = 260.0;
         low.height = 80.0; // занижено: 2 ряда тела + резерв футера не влезают
                            // CR-012 (правка 2): formula_lines для присваивания — [0].
-        ensure_result_reserve(&mut low, &[0]);
+        ensure_result_reserve(&mut low, &line, &[0]);
         let needed = measured_result_reserve_height(&line, low.width, &[0]);
         assert!(
             low.height >= needed - 1e-3,
@@ -11646,12 +11788,12 @@ mod tests {
             low.height
         );
         let grown = low.height;
-        ensure_result_reserve(&mut low, &[0]);
+        ensure_result_reserve(&mut low, &line, &[0]);
         assert_eq!(low.height, grown, "повторный вызов — no-op (growth-only)");
-        let mut tall = Node::text("n2", line, 0.0, 0.0);
+        let mut tall = Node::text("n2", line.clone(), 0.0, 0.0);
         tall.width = 260.0;
         tall.height = 1000.0;
-        ensure_result_reserve(&mut tall, &[0]);
+        ensure_result_reserve(&mut tall, &line, &[0]);
         assert_eq!(tall.height, 1000.0, "достаточная высота не сжимается");
     }
 
@@ -11782,6 +11924,108 @@ mod tests {
             tpl_node.height >= needed_for(&scene, tpl_node),
             "после MCP-правки высота покрывает новый резерв футера"
         );
+    }
+
+    /// MCP-текст: literal `\n` (два символа — двойное экранирование от
+    /// ИИ-агентов) нормализуется в реальные переводы строк: нода получает
+    /// построчный Numi-лист, а не одну строку с видимым эскейпом.
+    #[test]
+    fn mcp_text_normalizes_literal_newlines() {
+        let mut scene = SceneState::new(
+            Canvas::default(),
+            PathBuf::from("target/tmp/mcp_text_nl.canvas"),
+        );
+        let mut camera = Camera::default();
+        let created = dispatch(
+            &mut scene,
+            &mut camera,
+            "node_create_note",
+            &serde_json::json!({ "x": 0, "y": 0, "text": "rps = 1389 rps\\ncache_hit = 0.6" })
+                .to_string(),
+        )
+        .expect("node_create_note");
+        let id = created["id"].as_str().expect("id ноды");
+        let node = scene.canvas.node(id).expect("нода");
+        assert_eq!(
+            node.text.as_deref(),
+            Some("rps = 1389 rps\ncache_hit = 0.6"),
+            "literal \\n стал реальным переводом строки"
+        );
+        let lines = scene
+            .expr_line_results
+            .get(id)
+            .expect("построчные результаты есть");
+        assert_eq!(lines.len(), 2, "две формульные строки после нормализации");
+        // node_update_text — тот же путь нормализации.
+        dispatch(
+            &mut scene,
+            &mut camera,
+            "node_update_text",
+            &serde_json::json!({ "id": id, "text": "a = 1\\nb = 2" }).to_string(),
+        )
+        .expect("node_update_text");
+        assert_eq!(
+            scene.canvas.node(id).expect("нода").text.as_deref(),
+            Some("a = 1\nb = 2")
+        );
+    }
+
+    /// FR-029 (визуализация проливания): recompute_flow заполняет
+    /// param_spills — параметр, строка присваивания, заголовок источника и
+    /// значение РЕБРА (пролитое), а не локальный литерал строки; текст «как
+    /// на карточке» подменяет присваивание подписью источника; MCP
+    /// flow_recalc отдаёт spilled-инфо агенту.
+    #[test]
+    fn recompute_fills_param_spills_with_edge_value() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "traffic",
+            "Traffic Profile\npeak_rps = 1388.89 rps",
+            0.0,
+            0.0,
+        ));
+        canvas.nodes.push(Node::text(
+            "cdn",
+            "rps = 100 rps\ncache_hit = 0.6",
+            300.0,
+            0.0,
+        ));
+        let mut edge = Edge::new("e1", "traffic", None, "cdn", None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.to_param = Some("rps".to_owned());
+        edge.from_output = Some("peak_rps".to_owned());
+        canvas.add_edge(edge);
+        let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/spills.canvas"));
+        let spills = scene.param_spills.get("cdn").expect("spills CDN");
+        assert_eq!(spills.len(), 1);
+        let spill = &spills[0];
+        assert_eq!(spill.param, "rps");
+        assert_eq!(spill.line, Some(0));
+        assert_eq!(spill.from_label, "Traffic Profile");
+        assert_eq!(spill.from_output, Some("peak_rps".to_owned()));
+        assert_eq!(
+            spill.value,
+            Some("1388.89 rps".to_owned()),
+            "бейдж — пролитое значение ребра, а не локальный литерал 100 rps"
+        );
+        // Текст как на карточке: присваивание заменено подписью источника.
+        let display =
+            display_body_text(scene.canvas.node("cdn").expect("cdn"), &scene.param_spills);
+        assert_eq!(display, "rps ← Traffic Profile · peak_rps\ncache_hit = 0.6");
+        // Без проливания — исходный текст.
+        let plain = display_body_text(
+            scene.canvas.node("traffic").expect("traffic"),
+            &scene.param_spills,
+        );
+        assert_eq!(plain, "Traffic Profile\npeak_rps = 1388.89 rps");
+        // MCP flow_recalc: spilled — источник, адресация и значение.
+        let mut camera = Camera::default();
+        let result = dispatch(&mut scene, &mut camera, "flow_recalc", "{}").expect("flow_recalc");
+        let spilled = &result["cdn"]["spilled"];
+        assert_eq!(spilled["rps"]["from"], "traffic");
+        assert_eq!(spilled["rps"]["fromOutput"], "peak_rps");
+        assert_eq!(spilled["rps"]["value"], 1388.89);
+        assert_eq!(spilled["rps"]["unit"], "rps");
     }
 
     /// CR-012 (правка 2): двухуровневый refit при загрузке — шаблонная нода

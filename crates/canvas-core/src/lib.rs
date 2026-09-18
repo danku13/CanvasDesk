@@ -11,6 +11,8 @@ mod focus;
 mod fs_events;
 mod io;
 mod layout;
+/// Нормализация MCP-текстов (literal `\n` от ИИ-агентов → реальные переводы).
+pub mod mcp_text;
 mod model;
 mod providers;
 mod settings;
@@ -32,9 +34,9 @@ pub use expr::{
     Env, EvalError, Expr, ExprLineResults, ExprOutcome, ExprResults, ParseError, Value,
 };
 pub use flow::{
-    creates_value_cycle, inbound_slots, inbound_slots_with_lines, outputs_display, propagate,
-    propagate_with_lines, topo_sort, value_path, CycleError, FlowKind, FlowOutputs, FlowSolutions,
-    LineOutputs,
+    creates_value_cycle, inbound_slots, inbound_slots_with_lines, outputs_display, param_spills,
+    propagate, propagate_with_lines, substitute_spilled_lines, topo_sort, value_path, CycleError,
+    FlowKind, FlowOutputs, FlowSolutions, LineOutputs, ParamSpill,
 };
 pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{

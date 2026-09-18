@@ -23,6 +23,7 @@
 //! - результат (`FlowOutputs`) — runtime-данные: НЕ сериализуется в
 //!   `.canvas`, источник истины — формулы + топология рёбер.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::expr::{self, Env, EvalError, ExprOutcome, Value};
@@ -509,6 +510,127 @@ fn inbound_values(
         }
     }
     result
+}
+
+/// FR-029 (визуализация проливания): параметр ноды, запитанный входящим
+/// value-ребром с `toParam` — источник значения для отображения
+/// («rps ← Traffic Profile · peak_rps»). Runtime-данные: не сериализуются.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamSpill {
+    /// Имя параметра (адрес `toParam`; совпадает с именем присваивания
+    /// в Numi-листе ноды).
+    pub param: String,
+    /// id ноды-источника значения.
+    pub from_node: String,
+    /// Заголовок источника для отображения (снимок имени шаблона /
+    /// первая строка текста / label / id как последний фолбэк).
+    pub from_label: String,
+    /// FR-025: построчная адресация истока (индекс строки листа источника).
+    pub from_line: Option<usize>,
+    /// FR-029: именованный выход истока (секция outputs шаблона /
+    /// переменная Numi-листа текстовой ноды).
+    pub from_output: Option<String>,
+}
+
+/// FR-029: параметры ноды, запитанные входящими value-рёбрами с `toParam`.
+/// Последнее ребро по `canvas.edges` в параметр побеждает — зеркало
+/// семантики проливания в [`propagate_with_lines`] (тихая деградация:
+/// источник удалён/без значения — spill в списке остаётся, значение
+/// подставляет приложение из результатов пересчёта).
+pub fn param_spills(canvas: &Canvas, node_id: &str) -> Vec<ParamSpill> {
+    let mut by_param: BTreeMap<String, ParamSpill> = BTreeMap::new();
+    for edge in &canvas.edges {
+        if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
+            continue;
+        }
+        let Some(param) = &edge.to_param else {
+            continue;
+        };
+        let from_label = canvas
+            .node(&edge.from_node)
+            .map(spill_source_title)
+            .unwrap_or_else(|| edge.from_node.clone());
+        by_param.insert(
+            param.clone(),
+            ParamSpill {
+                param: param.clone(),
+                from_node: edge.from_node.clone(),
+                from_label,
+                from_line: edge.from_line,
+                from_output: edge.from_output.clone(),
+            },
+        );
+    }
+    by_param.into_values().collect()
+}
+
+/// Заголовок ноды-источника для подписи проливания: снимок имени шаблона
+/// (FR-023) / первая непустая строка текста (ATX-маркеры не показываем) /
+/// label / id. Легковесный аналог заголовка карточки рендера: file/группы
+/// для источника значения не бывает (формульные ноды — text-ноды).
+fn spill_source_title(node: &crate::model::Node) -> String {
+    if let Some(name) = node
+        .template()
+        .and_then(|template| template.name)
+        .filter(|name| !name.is_empty())
+    {
+        return name;
+    }
+    if let Some(line) = node
+        .text
+        .as_deref()
+        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
+    {
+        return line.trim_start_matches('#').trim().to_owned();
+    }
+    node.label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| node.id.clone())
+}
+
+/// FR-029 (визуализация проливания): заменить строки-присваивания
+/// пролитых параметров на подпись источника — `name ← from_label[ · output]`
+/// (как на карточке: вместо локального литерала показываем, ОТКУДА пришло
+/// значение). Индексы строк сохраняются (меняется содержимое, не структура)
+/// — построчные результаты и порты FR-025 остаются на своих рядах.
+/// `spills` — кортежи `(параметр, заголовок источника, именованный выход)`.
+/// Строка без `=`, с пустым/многословным именем или чужим параметром —
+/// без изменений; список пуст или совпадений нет — исходный текст (копия).
+pub fn substitute_spilled_lines<'a>(
+    text: &str,
+    spills: impl IntoIterator<Item = (&'a str, &'a str, Option<&'a str>)>,
+) -> String {
+    let spills: Vec<(&str, &str, Option<&str>)> = spills.into_iter().collect();
+    if spills.is_empty() {
+        return text.to_owned();
+    }
+    let mut changed = false;
+    let lines: Vec<Cow<str>> = text
+        .split('\n')
+        .map(|line| {
+            let Some((name, _)) = line.split_once('=') else {
+                return Cow::Borrowed(line);
+            };
+            let name = name.trim();
+            if name.is_empty() || name.chars().any(char::is_whitespace) {
+                return Cow::Borrowed(line);
+            }
+            match spills.iter().find(|(param, _, _)| *param == name) {
+                Some((_, label, output)) => {
+                    changed = true;
+                    let suffix = output.map(|out| format!(" · {out}")).unwrap_or_default();
+                    Cow::Owned(format!("{name} ← {label}{suffix}"))
+                }
+                None => Cow::Borrowed(line),
+            }
+        })
+        .collect();
+    if !changed {
+        return text.to_owned();
+    }
+    lines.join("\n")
 }
 
 /// Путь по value-рёбрам от `start` до `goal` (включая концы) — участники
@@ -1002,6 +1124,138 @@ mod tests {
         let display = outputs_display(&outputs);
         assert_eq!(display["A"].as_ref().unwrap(), "5");
         assert!(display["B"].as_ref().unwrap_err().contains("вход"));
+    }
+
+    // --- FR-029: визуализация проливания (param_spills) ---
+
+    /// value-ребро с toParam → spill с адресацией истока и заголовком
+    /// (первая строка текста источника).
+    #[test]
+    fn param_spills_collects_to_param_edges() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("A", "Traffic Profile — ADR005 (MVP)", 0.0, 0.0));
+        node_with_expr(&mut canvas, "B", "$rps × 2", 1.0);
+        let mut edge = Edge::new("e1", "A", None, "B", None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.to_param = Some("rps".to_owned());
+        edge.from_output = Some("peak_rps".to_owned());
+        canvas.add_edge(edge);
+        let spills = param_spills(&canvas, "B");
+        assert_eq!(spills.len(), 1);
+        assert_eq!(spills[0].param, "rps");
+        assert_eq!(spills[0].from_node, "A");
+        assert_eq!(spills[0].from_label, "Traffic Profile — ADR005 (MVP)");
+        assert_eq!(spills[0].from_output, Some("peak_rps".to_owned()));
+        assert_eq!(spills[0].from_line, None);
+        // У ноды без входящих toParam-рёбер — пусто.
+        assert!(param_spills(&canvas, "A").is_empty());
+    }
+
+    /// Два ребра в один параметр — побеждает последнее по canvas.edges
+    /// (зеркало семантики проливания propagate).
+    #[test]
+    fn param_spills_last_edge_wins() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "1", 0.0);
+        node_with_expr(&mut canvas, "C", "2", 1.0);
+        node_with_expr(&mut canvas, "B", "$rps", 2.0);
+        for (id, from) in [("e1", "A"), ("e2", "C")] {
+            let mut edge = Edge::new(id, from, None, "B", None);
+            edge.set_flow_kind(FlowKind::Value);
+            edge.to_param = Some("rps".to_owned());
+            canvas.add_edge(edge);
+        }
+        let spills = param_spills(&canvas, "B");
+        assert_eq!(spills.len(), 1, "один параметр — один spill");
+        assert_eq!(spills[0].from_node, "C", "последнее ребро побеждает");
+    }
+
+    /// Control-рёбра и value-рёбра без toParam в список не попадают.
+    #[test]
+    fn param_spills_ignores_control_and_slot_edges() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "1", 0.0);
+        node_with_expr(&mut canvas, "B", "$1 + $rps", 1.0);
+        let mut control = Edge::new("e1", "A", None, "B", None);
+        control.to_param = Some("rps".to_owned());
+        canvas.add_edge(control);
+        let mut slot = Edge::new("e2", "A", None, "B", None);
+        slot.set_flow_kind(FlowKind::Value);
+        canvas.add_edge(slot);
+        assert!(
+            param_spills(&canvas, "B").is_empty(),
+            "control с toParam и value без toParam — не проливание"
+        );
+    }
+
+    /// Заголовок источника-шаблона — снимок имени шаблона (FR-023),
+    /// а не первая строка листа параметров.
+    #[test]
+    fn param_spills_template_snapshot_name_as_label() {
+        let mut canvas = Canvas::default();
+        let mut source = Node::text("A", "rps = 1000 rps", 0.0, 0.0);
+        source.set_template(Some(crate::templates::TemplateRef {
+            id: "t".to_owned(),
+            version: "1".to_owned(),
+            expr: "$rps".to_owned(),
+            params: Default::default(),
+            icon: "custom".to_owned(),
+            color: "#9B9B9B".to_owned(),
+            name: Some("Сервис аутентификации".to_owned()),
+            outputs: Vec::new(),
+        }));
+        canvas.nodes.push(source);
+        node_with_expr(&mut canvas, "B", "$token_verify × 2", 1.0);
+        let mut edge = Edge::new("e1", "A", None, "B", None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.to_param = Some("token_verify".to_owned());
+        edge.from_line = Some(1);
+        canvas.add_edge(edge);
+        let spills = param_spills(&canvas, "B");
+        assert_eq!(spills[0].from_label, "Сервис аутентификации");
+        assert_eq!(spills[0].from_line, Some(1));
+    }
+
+    /// Подмена строки-присваивания на подпись источника: индексы строк
+    /// сохраняются, чужие строки и проза не тронуты.
+    #[test]
+    fn substitute_spilled_lines_rewrites_assignment() {
+        let text = "rps = 1389 rps\ncache_hit = 0.6\nlatency = 200 ms";
+        let out = substitute_spilled_lines(
+            text,
+            [("rps", "Traffic Profile — ADR005 (MVP)", Some("peak_rps"))],
+        );
+        assert_eq!(
+            out,
+            "rps ← Traffic Profile — ADR005 (MVP) · peak_rps\ncache_hit = 0.6\nlatency = 200 ms"
+        );
+        assert_eq!(out.lines().count(), 3, "структура строк сохранена");
+    }
+
+    /// Подмена без именованного выхода — подпись без суффикса «· output».
+    #[test]
+    fn substitute_spilled_lines_without_output() {
+        let out = substitute_spilled_lines("load = 100", [("load", "CDN", None)]);
+        assert_eq!(out, "load ← CDN");
+    }
+
+    /// Совпадений нет / список пуст — исходный текст без изменений.
+    #[test]
+    fn substitute_spilled_lines_no_match_is_identity() {
+        let text = "a = 1\nпроза\nb = 2";
+        assert_eq!(substitute_spilled_lines(text, []), text);
+        assert_eq!(
+            substitute_spilled_lines(text, [("c", "X", None)]),
+            text,
+            "чужой параметр — без изменений"
+        );
+        // Многословное имя до '=' (проза с равенством) не присваивание.
+        assert_eq!(
+            substitute_spilled_lines("it = quality = 5", [("it = quality", "X", None)]),
+            "it = quality = 5"
+        );
     }
 
     // --- FR-025: построчные точки выхода (значение строки в потоке) ---

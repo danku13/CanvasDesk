@@ -1,17 +1,17 @@
-//! Headless smoke-тест рендера тела текстовой заметки (T7): многострочный
-//! кириллический текст шейпится и рисуется в области тела карточки.
-//! Если адаптер недоступен (CI без GPU/WARP) — тест пропускается, не падает.
+//! FR-029: headless smoke проливания в параметры — строка-присваивание,
+//! запитанная value-ребром с toParam, рендерится подписью источника
+//! («rps ← Traffic Profile · peak_rps»), а бейдж строки берёт пролитое
+//! значение. Путь: подмена текста тела + ключ свежести кэша с spills +
+//! подмена бейджа в prepare_titles. Если адаптер недоступен (CI без
+//! GPU/WARP) — тест пропускается, не падает.
 
-use canvas_core::{Canvas, Node};
+use canvas_core::{Canvas, ExprOutcome, Node, Value};
 use canvas_render::gpu::GpuContext;
 use canvas_render::text::{TextSystem, TitleFrame};
-use canvas_render::zorder;
-use canvas_render::Camera;
+use canvas_render::{Camera, SpillView};
 
-/// После кадра область тела карточки содержит нарисованные глифы (не clear),
-/// а угол вне карточки остаётся фоном.
 #[test]
-fn headless_note_body_draws() {
+fn headless_spilled_param_row_draws() {
     let Some(gpu) = pollster::block_on(GpuContext::headless()) else {
         eprintln!("GPU-адаптер недоступен, headless-тест пропущен");
         return;
@@ -19,22 +19,43 @@ fn headless_note_body_draws() {
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut text = TextSystem::new(&gpu.device, &gpu.queue, format);
 
-    // Заметка перекрывает левый верх viewport 400×300 (камера по умолчанию:
-    // world (0,0) в центре экрана)
     let mut canvas = Canvas::default();
-    let mut note = Node::text(
-        "note-1",
-        "Первая строка\nВторая строка кириллицей\nТретья строка",
-        -190.0,
-        -140.0,
+    let mut cdn = Node::text("cdn", "rps = 100 rps\ncache_hit = 0.6", -190.0, -140.0);
+    cdn.width = 380.0;
+    cdn.height = 260.0;
+    canvas.nodes.push(cdn);
+
+    // Построчные результаты: локальный итог строк 0 и 1 (как пишет app).
+    let mut line_results = canvas_core::ExprLineResults::new();
+    line_results.insert(
+        "cdn".to_owned(),
+        vec![
+            Some(ExprOutcome::Ok(Value::scalar(100.0))),
+            Some(ExprOutcome::Ok(Value::scalar(0.6))),
+        ],
     );
-    note.width = 380.0;
-    note.height = 260.0;
-    canvas.nodes.push(note);
+    // FR-029: параметр rps запитан ребром из «Traffic Profile» (peak_rps) —
+    // значение ребра 1388.89 rps перекрывает локальный бейдж строки.
+    let mut spills: std::collections::HashMap<String, Vec<SpillView>> =
+        std::collections::HashMap::new();
+    spills.insert(
+        "cdn".to_owned(),
+        vec![SpillView {
+            param: "rps".to_owned(),
+            line: Some(0),
+            from_label: "Traffic Profile".to_owned(),
+            from_output: Some("peak_rps".to_owned()),
+            value: Some("1388.89 rps".to_owned()),
+        }],
+    );
 
     let camera = Camera::default();
-    // Одна нода без перекрытий — один сегмент, одна (финальная) группа
-    let zplan = zorder::plan_z_order(&[[-190.0, -140.0, 190.0, 120.0]], &[true], &[false], 16);
+    let zplan = canvas_render::zorder::plan_z_order(
+        &[[-190.0, -140.0, 190.0, 120.0]],
+        &[true],
+        &[false],
+        16,
+    );
     text.prepare_titles(
         &gpu.device,
         &gpu.queue,
@@ -54,11 +75,10 @@ fn headless_note_body_draws() {
             focus: canvas_render::cards::FocusView::EMPTY,
             widget_title_reveal: &[],
             collapsed_counts: &[],
-            // FR-013: без формул
-            expr_results: &std::collections::HashMap::new(),
-            expr_line_results: &std::collections::HashMap::new(),
+            expr_results: &canvas_core::ExprResults::new(),
+            expr_line_results: &line_results,
             editing_line_results: None,
-            param_spills: &Default::default(),
+            param_spills: &spills,
         },
     )
     .expect("prepare текста");
@@ -71,7 +91,7 @@ fn headless_note_body_draws() {
         depth_or_array_layers: 1,
     };
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("text-body-smoke"),
+        label: Some("spill-body-smoke"),
         size,
         mip_level_count: 1,
         sample_count: 1,
@@ -84,11 +104,11 @@ fn headless_note_body_draws() {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("text-body-smoke"),
+            label: Some("spill-body-smoke"),
         });
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("text-body-smoke"),
+            label: Some("spill-body-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
@@ -106,7 +126,7 @@ fn headless_note_body_draws() {
     let unpadded_row = width * 4;
     let padded_row = unpadded_row.div_ceil(256) * 256;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("text-body-smoke-readback"),
+        label: Some("spill-body-smoke-readback"),
         size: u64::from(padded_row * height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
@@ -141,7 +161,7 @@ fn headless_note_body_draws() {
         .expect("map_async: ошибка маппинга");
     let data = slice.get_mapped_range();
 
-    // Область тела заметки: world (-180,-108)..(170,102) → screen (20,42)..(370,252)
+    // Область тела: подпись источника (первая строка) + бейджи — глифы есть.
     let lit_in_body = (42..252)
         .flat_map(|y| (20..370).map(move |x| (x, y)))
         .filter(|&(x, y)| {
@@ -151,12 +171,11 @@ fn headless_note_body_draws() {
         .count();
     assert!(
         lit_in_body > 100,
-        "в области тела заметки должны быть глифы, lit={lit_in_body}"
+        "в области тела (подпись проливания + бейджи) должны быть глифы, lit={lit_in_body}"
     );
 
     // Правый нижний угол вне карточки остаётся clear-фоном
-    let corner = ((280 * padded_row + 390 * 4) as usize, 0);
-    let start = corner.0;
+    let start = (280 * padded_row + 390 * 4) as usize;
     assert_eq!(
         &data[start..start + 4],
         &[0, 0, 0, 255],

@@ -94,6 +94,7 @@ fn headless_text_under_covering_card() {
             expr_results: &std::collections::HashMap::new(),
             expr_line_results: &std::collections::HashMap::new(),
             editing_line_results: None,
+            param_spills: &Default::default(),
         },
     )
     .expect("prepare текста");
