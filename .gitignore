@@ -10,3 +10,7 @@ marketing/
 node_modules/
 dist-widget/
 demo-out/
+
+# FR-036: wasm-песочница тестов canvas-core (только в wasm-прогонах)
+.wasi-scratch/
+crates/canvas-core/.wasi-scratch/

@@ -567,3 +567,19 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-035.5 | Логи GUI | `tracing_subscriber` пишет в stderr; ANSI — только на живом терминале (`IsTerminal`); stdout GUI не претендует на протокол |
 | FR-035.6 | Прогон реальной сессии (probe) | initialize/batch/tools-call/мусор; каждая строка stdout — валидный JSON (скрипт `mcp_stdio_purity_probe.sh` — PASS, bad=0) |
 | FR-035.7 | Регресс | `cargo test --workspace` — 0 failed (1012 passed); тесты FR-034 не изменены |
+
+## 25. Чек-лист FR-036 (2026-09-18): wasm-сборка ядра — гейт + wasmtime-тесты (ADR-0011)
+
+Контекст: приказ владельца «распланировать сборку wasm и реализовать сборку
+для повышения автономности в тестировании»; закрепление W0 плана M8
+(`docs/plans/wasm-port.md`). Среда агента — Linux без GUI/Windows.
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-036.1 | Компиляция ядра под продуктовый wasm-таргет | `cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets` — зелёный (ступень 1 `scripts/wasm_gate.sh`, CI-джоба `wasm-check`) |
+| FR-036.2 | Артефакт сборки | `cargo build --target wasm32-unknown-unknown -p canvas-core` → `target/wasm32-unknown-unknown/debug/libcanvas_core.rlib` (ступень 2) |
+| FR-036.3 | Исполнение ядра в wasm-рантайме | `cargo test --target wasm32-wasip1 -p canvas-core` (wasmtime, runner из `.cargo/config.toml`) — 301/301: lib 189 + core_api 4 + edgegeom 43 + expr_queueing 32 + json_canvas_io 15 + scene_ops 4 + spatial 6 + templates_schema 8 (ступень 3) |
+| FR-036.4 | Тестовая песочница | нативно `test_scratch_root()` = `temp_dir` (поведение не менялось); под wasm — `.wasi-scratch` в предоткрытом CWD с уборкой; `process::id()` в тестах заменён на `SystemTime` (на wasm паникует) |
+| FR-036.5 | Режим без wasmtime | `scripts/wasm_gate.sh --check` — только ступень 1, не требует wasmtime (для CI и машин без рантайма) |
+| FR-036.6 | CI | джоба `wasm-check` (ubuntu) зелёная на каждый пуш — приёмка W0 плана M8 |
+| FR-036.7 | Регресс | нативные гейты не задеты: `cargo test -p canvas-core` — 301/301; `cargo test --workspace` — 0 failed |

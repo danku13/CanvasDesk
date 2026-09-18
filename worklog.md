@@ -396,3 +396,49 @@
   прошлой итерации) и ADR-0010.
 - **Гейты:** fmt — ок; clippy --workspace --all-targets -D warnings — ок;
   cargo test --workspace — 1012 passed / 0 failed (+2 к FR-034).
+
+## 2026-09-18 — FR-036: wasm-сборка ядра — гейт wasm32-unknown-unknown + исполнение тестов в wasmtime (ADR-0011)
+
+- **Триггер:** приказ владельца «распланировать сборку wasm и реализовать
+  сборку для повышения твоей автономности в тестировании». Уточнение скоупа
+  (AskUserQuestion): гейт + тесты в wasm-рантайме; таргеты unknown-unknown
+  (продукт) + wasip1 (тесты); CI-джоба в ci.yml; коммит сразу в main.
+- **Инцидент среды:** контейнер откатился к старому снапшоту (HEAD = 28b4dc8,
+  состояние после ADR-0008; ~250 файлов «modified» = смена прав 100644→100755;
+  Rust-тулчейн пропал). Восстановлено из origin/main: `git fetch` +
+  `git reset --hard origin/main` (= 3a13c33, FR-035) + переустановка rustup
+  stable 1.98.1 (rustfmt, clippy). Урок: работы сессий живут только в пуше.
+- **Исследование:** план M8 (`docs/plans/wasm-port.md`, §2) уже фиксировал
+  wasm-совместимость ядра экспериментом 2026-09-16; W0 (CI-гейт) — открыт.
+  Эмпирика на 3a13c33: check ядра под wasm32-unknown-unknown зелёный (55.8 с).
+- **Компиляция ≠ исполнение:** wasmtime 48.0.2 (преduccт-бинарь в
+  ~/.local/bin) + wasm32-wasip1 → тесты canvas-core падали: паника
+  `std::env::temp_dir()` (std на wasm её не реализует) и — после
+  первого фикса — паника `std::process::id()` в scene_ops (frame 11
+  бэктрейса wasmtime). Флэйк первого прогона маскировал счётчиком «283
+  passed» — реальный полный набор 301 (spatial 6 + templates_schema 8 не
+  влезли в обрезанный вывод).
+- **ADR-0011** (docs/adr/adr-0011-wasm-build-gate.md, «принято»): вариант B —
+  гейт (check + rlib) + исполнение тестов ядра в wasmtime; отклонены:
+  только W0-check (исполнение не доказано), wasm-bindgen-фасад (W4/W12),
+  вынос mcp_dispatch в lib (W2, отдельная задача).
+- **Реализация:** `scripts/wasm_gate.sh` (ступени: check ядра → build rlib →
+  `RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1 -p canvas-core`;
+  режим `--check` без wasmtime); `.cargo/config.toml` — runner
+  `wasmtime run -S inherit-env --dir .::/ --dir /tmp::/tmp` (только при
+  явном `--target wasm32-wasip1`); CI-джоба `wasm-check` (ubuntu, ступень 1 —
+  приёмка W0); тестовая песочница `test_scratch_root()` в `#[cfg(test)]`
+  lib.rs (натив — temp_dir, wasm — `.wasi-scratch` в CWD) + локальная копия
+  в scene_ops.rs (интеграционные тесты не видят cfg(test)-хелперы) + замена
+  process::id → SystemTime; `.gitignore` += `.wasi-scratch/`.
+- **Результат:** 301/301 тестов canvas-core под wasip1 (wasmtime 48) и
+  301/301 нативно (нулевой регресс); rlib ядра 21M; полный
+  `scripts/wasm_gate.sh` — OK.
+- **Доки:** ADR-0011; FR-036 (docs/change-requests/fr-036-wasm-build-gate.md);
+  ACCEPTANCE §25 (7 пунктов); index-cr-fr — строка FR-036, следующий номер
+  FR-037; adr/README.md; wasm-port.md — W0 «выполнено» + примечание о
+  тест-раннере; AGENTS «Сборка и тесты» — wasm-гейт; SPEC §3 — строка
+  wasm-таргетов.
+- **Гейты:** wasm-gate — OK (3 ступени + `--check`); fmt — ок; clippy
+  --workspace --all-targets -D warnings — ок; cargo test --workspace —
+  1012 passed / 0 failed (без изменений к FR-035 — нулевой регресс).

@@ -1,0 +1,7 @@
+# FR-036 (ADR-0011): runner для wasm-тестов. Активируется ТОЛЬКО при явном
+# --target wasm32-wasip1 и не влияет на нативные цели. wasmtime маппит
+# текущий каталог (корень пакета при cargo test) на гостевой / и системный
+# /tmp — тесты canvas-core читают fixtures и пишут песочницу через
+# test_scratch_root/scratch_root (см. crates/canvas-core/src/lib.rs).
+[target.wasm32-wasip1]
+runner = "wasmtime run -S inherit-env --dir .::/ --dir /tmp::/tmp"

@@ -319,7 +319,7 @@ mod tests {
             onboarding_done: true,
             onboarding_defers: 2,
         };
-        let dir = std::env::temp_dir().join("canvasdesk-settings-test");
+        let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
         settings.save(&path).expect("сохранение");
         let (loaded, warn) = Settings::load(&path);
@@ -369,7 +369,7 @@ mod tests {
     /// Отсутствующий/битый файл — дефолты, без паники; битый — с предупреждением.
     #[test]
     fn broken_or_missing_gives_defaults() {
-        let dir = std::env::temp_dir().join("canvasdesk-settings-broken");
+        let dir = crate::test_scratch_root().join("canvasdesk-settings-broken"); // FR-036
         let _ = std::fs::create_dir_all(&dir);
         let missing = dir.join("nope.toml");
         let (settings, warn) = Settings::load(&missing);
