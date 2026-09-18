@@ -9618,8 +9618,8 @@ fn stress_canvas(n: usize) -> Canvas {
 fn main() -> anyhow::Result<()> {
     // FR-008: подкоманда `mcp` — режим MCP-посредника (stdio ↔ pipe) того
     // же бинарника: один exe на весь стек. Перехват ДО инициализации
-    // трейсинга и parse_args: tracing пишет в stdout, а в mcp-режиме stdout
-    // занят протоколом (run_stdio молчалив, диагностика — в stderr).
+    // трейсинга: stdout в mcp-режиме занят протоколом (ADR-0010/FR-035 —
+    // stdout только JSON-RPC; run_stdio молчалив, диагностика — в stderr).
     // Файл с именем «mcp» открывается как ./mcp (путь с префиксом).
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.first().map(String::as_str) == Some("mcp") {
@@ -9629,7 +9629,17 @@ fn main() -> anyhow::Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("info,wgpu_hal=warn,wgpu_core=warn")
     });
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // FR-035/ADR-0010 (чистота stdout): контракт «stdout — протокол/продукт,
+    // stderr — диагностика». tracing_subscriber::fmt() по умолчанию писал в
+    // stdout с ANSI — автоспавненный из моста GUI клал цветные логи прямо в
+    // JSON-RPC-канал («Invalid JSON \x1b[2m…» у hermes). Логи — в stderr;
+    // ANSI — только на живом терминале (машиночитаемые хвосты stderr без
+    // escape-последовательностей).
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .init();
     // Версия сборки первой строкой лога: version (Cargo.toml) + git-коммит +
     // флаг «грязной» рабочей копии + профиль — по логу видно, какую именно
     // сборку запустили (env от build.rs; без git — «unknown»)
