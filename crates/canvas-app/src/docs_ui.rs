@@ -28,7 +28,7 @@ pub struct DocsPage {
 /// Страницы вшиты в бинарь на этапе сборки (FR-027): отсутствие файла =
 /// ошибка сборки — доки нельзя «забыть»; версия страниц = версия бинарника.
 /// Порядок = порядок подменю (стабилен).
-pub const DOCS_PAGES: [DocsPage; 7] = [
+pub const DOCS_PAGES: [DocsPage; 8] = [
     DocsPage {
         id: "index",
         label: "Главная",
@@ -63,6 +63,11 @@ pub const DOCS_PAGES: [DocsPage; 7] = [
         id: "faq",
         label: "FAQ",
         md: include_str!("../../../user-docs/faq.md"),
+    },
+    DocsPage {
+        id: "agent-recipe",
+        label: "Рецепт для ИИ-агентов",
+        md: include_str!("../../../user-docs/agent-recipe.md"),
     },
 ];
 
@@ -148,7 +153,7 @@ pub const HELP_SUBMENU_GAP: f32 = 2.0;
 /// Пункт меню помощи (клик по кнопке «?»).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpMenuItem {
-    /// «Документация ▸» — открывает подменю разделов (7 страниц).
+    /// «Документация ▸» — открывает подменю разделов (8 страниц).
     Docs,
     /// «Пройти онбординг» — перезапуск тура (FR-028).
     Onboarding,
@@ -842,11 +847,11 @@ pub fn link_at(
 mod tests {
     use super::*;
 
-    /// Инвариант полноты (FR-027): 7 страниц, id/подписи уникальны и
+    /// Инвариант полноты (FR-027): 8 страниц, id/подписи уникальны и
     /// непусты — пункт подменю ↔ страница, без пропусков и дублей.
     #[test]
     fn pages_complete_and_unique() {
-        assert_eq!(DOCS_PAGES.len(), 7, "7 страниц документации");
+        assert_eq!(DOCS_PAGES.len(), 8, "8 страниц документации");
         let mut ids = Vec::new();
         let mut labels = Vec::new();
         for page in &DOCS_PAGES {
@@ -1098,7 +1103,7 @@ mod tests {
             .links
             .iter()
             .any(|l| matches!(l.target, LinkTarget::Page(_))));
-        // Все 7 страниц раскладываются без паник
+        // Все 8 страниц раскладываются без паник
         for page in 0..DOCS_PAGES.len() {
             let layout = layout_page(page, 440.0);
             assert!(!layout.lines.is_empty(), "страница {page} пустая");

@@ -567,3 +567,23 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-035.5 | Логи GUI | `tracing_subscriber` пишет в stderr; ANSI — только на живом терминале (`IsTerminal`); stdout GUI не претендует на протокол |
 | FR-035.6 | Прогон реальной сессии (probe) | initialize/batch/tools-call/мусор; каждая строка stdout — валидный JSON (скрипт `mcp_stdio_purity_probe.sh` — PASS, bad=0) |
 | FR-035.7 | Регресс | `cargo test --workspace` — 0 failed (1012 passed); тесты FR-034 не изменены |
+
+
+## 25. Чек-лист R5/CP4 (2026-09-18): рецепт для ИИ-агентов — `user-docs/agent-recipe.md`
+
+Контекст: контрольная точка CP4 волны A (CR-013 R5, документация). Рецепт
+фиксирует порядок вызовов MCP-инструментов для агентной сборки моделей
+(разведка → ноды → value-связи → пересчёт → батч → валидацию), гайд по
+многострочному тексту (`\n`) и контракт кодов ошибок. Ручной гейт CP4 —
+ревью текста владельцем и прогон свежего чата стороннего агента.
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| R5.1 | Файл рецепта | `user-docs/agent-recipe.md` существует, front matter, русский; шаги: `canvas_info`/`template_list` → `node_create_note`/`template_instantiate` → `edge_create kind=value` с `fromOutput`/`fromLine`/`toParam` → `flow_recalc` → `graph_apply` → `graph_validate` |
+| R5.2 | Гайд по `\n` | в рецепте явно: канон — настоящий перенос строки в JSON-строке; двухсимвольная эскапировка нормализуется толерантно; проверка — число `lines` в `flow_recalc` |
+| R5.3 | Коды ошибок | таблицы кодов `graph_validate` (E-CYCLE/E-OVERLOAD/E-UNIT/E-PORT-UNKNOWN/E-DOUBLE-INPUT, W-AMBIGUOUS-SRC/W-UNUSED-SLOT) и операций `graph_apply` (E-BAD-OP/E-NOT-FOUND/E-PARAM-UNKNOWN/E-RANGE) с расшифровкой «что делать» |
+| R5.4 | Прогоняемый пример | эталон Instagram MVP (ADR-0005): таблица 12 нод, цепочки value-рёбер с портами, скелет `graph_apply`, oracle-числа (avg_rps ≈ 555.6 … db_read ≈ 80) |
+| R5.5 | Встройка во вьюер | страница в `DOCS_PAGES` (8 страниц), пункт «Рецепт для ИИ-агентов» в меню «?» → «Документация ▸»; тесты `docs_ui` зелёные (инвариант полноты, линк-чек внутренних ссылок) |
+| R5.6 | Таблицы user-docs | строки в `user-docs/README.md` (файл + канонический URL `agent-recipe.html`) и `user-docs/index.md` (оглавление разделов) |
+| R5.7 | SPEC §MCP | абзац-ссылка на рецепт как на канонический порядок вызовов; коды ошибок — стабильный контракт рецепта |
+| R5.8 | Ручной гейт CP4 (владелец) | ревью текста рецепта + свежий чат стороннего агента (без контекста репо) собирает эталон №5 по рецепту без подсказок; `graph_validate` в конце — `valid: true` |
