@@ -306,6 +306,17 @@ impl TemplateManifest {
         if let Some(description_en) = &self.description_en {
             map.insert("description_en".to_owned(), json!(description_en));
         }
+        // FR-029: outputs пишутся только когда есть (старая схема не меняется)
+        if !self.outputs.is_empty() {
+            map.insert(
+                "outputs".to_owned(),
+                json!(self
+                    .outputs
+                    .iter()
+                    .map(OutputSpec::to_json)
+                    .collect::<Vec<_>>()),
+            );
+        }
         obj
     }
 }

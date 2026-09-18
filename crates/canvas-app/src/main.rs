@@ -6829,8 +6829,664 @@ fn mcp_dispatch(
                 "zoom": camera.zoom(),
             }))
         }
+        // FR-033: атомарная батч-композиция — клон → apply → commit
+        // (один undo-шаг) либо отброшенный клон при любой ошибке операции
+        "graph_apply" => mcp_graph_apply(scene, templates, params),
         other => Err(format!("неизвестный инструмент: {other}")),
     }
+}
+
+// --- FR-033: graph_apply — атомарная батч-композиция графа ---
+
+/// Лимиты батча (FR-033 п.1): ≤ 256 операций, ≤ 128 новых нод — защита
+/// live-бюджета пересчёта (SPEC §6.3: ≤ 1000 нод < 10 мс).
+const GRAPH_APPLY_MAX_OPS: usize = 256;
+const GRAPH_APPLY_MAX_NODES: usize = 128;
+
+/// Ошибка одной операции батча: стабильный код + сообщение (FR-033 п.2в —
+/// код различим машиной, сообщение — человеку/агенту).
+struct BatchOpError {
+    code: &'static str,
+    message: String,
+}
+
+impl BatchOpError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Запись отчёта об операции батча (FR-033 п.3).
+struct BatchEntry {
+    op_index: usize,
+    op: &'static str,
+    /// true — операция создала объект (created), false — адресовала
+    /// существующий (param_set/node_move — только report, FR-033 п.3)
+    created: bool,
+    ref_name: Option<String>,
+    node_id: Option<String>,
+    edge_id: Option<String>,
+}
+
+impl BatchEntry {
+    /// Идентификатор для report: созданный/адресованный объект операции.
+    fn object_id(&self) -> Option<&String> {
+        self.node_id.as_ref().or(self.edge_id.as_ref())
+    }
+}
+
+/// Структурированный ответ об ошибке операции (канвас при этом НЕ меняется —
+/// клон отброшен вызывающей стороной).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn graph_apply_error(op_index: usize, err: &BatchOpError) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "op_index": op_index,
+        "code": err.code,
+        "message": err.message,
+    })
+}
+
+/// Резолв адреса ноды в батче: ref (созданные в этом же батче) приоритетно,
+/// иначе — существующий id ноды канваса.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn batch_node_id(
+    canvas: &Canvas,
+    refs: &HashMap<String, String>,
+    key: &str,
+) -> Result<String, BatchOpError> {
+    if let Some(id) = refs.get(key) {
+        return Ok(id.clone());
+    }
+    if canvas.node(key).is_some() {
+        return Ok(key.to_owned());
+    }
+    Err(BatchOpError::new(
+        "E-NOT-FOUND",
+        format!("нода не найдена (ни ref батча, ни id канваса): {key}"),
+    ))
+}
+
+/// Опциональная строка из операции.
+fn batch_opt_str<'v>(op: &'v serde_json::Value, name: &str) -> Option<&'v str> {
+    op.get(name).and_then(serde_json::Value::as_str)
+}
+
+/// Обязательная строка из операции.
+fn batch_req_str<'v>(op: &'v serde_json::Value, name: &str) -> Result<&'v str, BatchOpError> {
+    op.get(name)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| BatchOpError::new("E-BAD-OP", format!("отсутствует поле '{name}'")))
+}
+
+/// Зарегистрировать ref батча: дубликат — ошибка операции (ref должен
+/// однозначно адресовать ноду сборки).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn register_ref(
+    refs: &mut HashMap<String, String>,
+    name: &str,
+    id: &str,
+) -> Result<(), BatchOpError> {
+    if refs.insert(name.to_owned(), id.to_owned()).is_some() {
+        return Err(BatchOpError::new(
+            "E-BAD-OP",
+            format!("ref '{name}' уже использован в этом батче"),
+        ));
+    }
+    Ok(())
+}
+
+/// Обязательное число из операции.
+fn batch_req_f64(op: &serde_json::Value, name: &str) -> Result<f64, BatchOpError> {
+    op.get(name)
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| BatchOpError::new("E-BAD-OP", format!("отсутствует число '{name}'")))
+}
+
+/// Сторона связи из операции батча: "any"/отсутствие → None (автовывод
+/// из геометрии) — семантика mcp_side.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn batch_side(op: &serde_json::Value, name: &str) -> Result<Option<Side>, BatchOpError> {
+    match op.get(name).and_then(serde_json::Value::as_str) {
+        None | Some("any") => Ok(None),
+        Some(text) => serde_json::from_value::<Side>(serde_json::Value::String(text.to_owned()))
+            .map(Some)
+            .map_err(|_| {
+                BatchOpError::new("E-BAD-OP", format!("неверная сторона '{name}': {text}"))
+            }),
+    }
+}
+
+/// Применить одну операцию батча к клону канваса (FR-033 п.2б). Чистые
+/// мутации Canvas: spatial/undo/пересчёт — на стороне коммита, не здесь.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn batch_apply_op(
+    canvas: &mut Canvas,
+    refs: &mut HashMap<String, String>,
+    templates: &canvas_core::templates::TemplateRegistry,
+    op_index: usize,
+    op: &serde_json::Value,
+) -> Result<BatchEntry, BatchOpError> {
+    let entry = |op: &'static str, created: bool, ref_name: Option<String>| BatchEntry {
+        op_index,
+        op,
+        created,
+        ref_name,
+        node_id: None,
+        edge_id: None,
+    };
+    let kind = batch_req_str(op, "op")?;
+    match kind {
+        "node_create_note" => {
+            let x = batch_req_f64(op, "x")? as f32;
+            let y = batch_req_f64(op, "y")? as f32;
+            let text = batch_opt_str(op, "text").unwrap_or("");
+            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
+            let mut node = Node::text(next_free_id(canvas, "note"), text, x, y);
+            if let Some(width) = op.get("width").and_then(serde_json::Value::as_f64) {
+                node.width = width as f32;
+            }
+            if let Some(height) = op.get("height").and_then(serde_json::Value::as_f64) {
+                node.height = height as f32;
+            }
+            // FR-013: строки «= …» в тексте — формула (единая семантика)
+            node.set_expr(split_formula_lines(text));
+            let id = node.id.clone();
+            canvas.nodes.push(node);
+            if let Some(name) = &ref_name {
+                register_ref(refs, name, &id)?;
+            }
+            let mut e = entry("node_create_note", true, ref_name);
+            e.node_id = Some(id);
+            Ok(e)
+        }
+        "node_create_file" => {
+            let path = batch_req_str(op, "path")?;
+            let x = batch_req_f64(op, "x")? as f32;
+            let y = batch_req_f64(op, "y")? as f32;
+            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
+            // Файл на диске НЕ создаём — только карточка в модели
+            let node = Node::file(
+                next_free_id(canvas, "file"),
+                path,
+                x,
+                y,
+                op.get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|v| v as f32)
+                    .unwrap_or(canvas_app::ui::DROP_CARD_W),
+                op.get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|v| v as f32)
+                    .unwrap_or(canvas_app::ui::DROP_CARD_H),
+            );
+            let id = node.id.clone();
+            canvas.nodes.push(node);
+            if let Some(name) = &ref_name {
+                register_ref(refs, name, &id)?;
+            }
+            let mut e = entry("node_create_file", true, ref_name);
+            e.node_id = Some(id);
+            Ok(e)
+        }
+        "template_instantiate" => {
+            let template_id = batch_req_str(op, "template")?;
+            let x = batch_req_f64(op, "x")? as f32;
+            let y = batch_req_f64(op, "y")? as f32;
+            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
+            let manifest = templates.find(template_id).ok_or_else(|| {
+                BatchOpError::new("E-NOT-FOUND", format!("шаблон не найден: {template_id}"))
+            })?;
+            let mut overrides: BTreeMap<String, canvas_core::templates::TemplateParam> =
+                BTreeMap::new();
+            if let Some(map) = op.get("params").and_then(serde_json::Value::as_object) {
+                for (name, value) in map {
+                    let param = match value {
+                        serde_json::Value::Number(num) => {
+                            let num = num.as_f64().ok_or_else(|| {
+                                BatchOpError::new("E-BAD-OP", format!("параметр {name}: число"))
+                            })?;
+                            // Число без единицы наследует единицу параметра
+                            let unit = manifest
+                                .params
+                                .iter()
+                                .find(|spec| &spec.name == name)
+                                .and_then(|spec| spec.unit.clone());
+                            canvas_core::templates::TemplateParam { num, unit }
+                        }
+                        serde_json::Value::Object(obj) => canvas_core::templates::TemplateParam {
+                            num: obj.get("num").and_then(serde_json::Value::as_f64).ok_or_else(
+                                || {
+                                    BatchOpError::new(
+                                        "E-BAD-OP",
+                                        format!("параметр {name}: num обязателен"),
+                                    )
+                                },
+                            )?,
+                            unit: obj
+                                .get("unit")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned),
+                        },
+                        _ => {
+                            return Err(BatchOpError::new(
+                                "E-BAD-OP",
+                                format!("параметр {name}: число или {{num, unit}}"),
+                            ))
+                        }
+                    };
+                    overrides.insert(name.clone(), param);
+                }
+            }
+            let node_id = next_free_id(canvas, "tpl");
+            let mut node = canvas_core::templates::instantiate(
+                manifest,
+                &overrides,
+                node_id,
+                x,
+                y,
+            )
+            .map_err(|err| match err {
+                canvas_core::templates::InstantiateError::UnknownParam(name) => {
+                    BatchOpError::new("E-PORT-UNKNOWN", format!("неизвестный параметр шаблона: {name}"))
+                }
+                canvas_core::templates::InstantiateError::ParamOutOfRange { name, value } => {
+                    BatchOpError::new("E-RANGE", format!("параметр {name} вне диапазона: {value}"))
+                }
+                other => BatchOpError::new("E-BAD-OP", other.to_string()),
+            })?;
+            // FR-023: авто-высота — единая с GUI-путём и template_instantiate
+            fit_template_node_height(&mut node);
+            let id = node.id.clone();
+            canvas.nodes.push(node);
+            if let Some(name) = &ref_name {
+                register_ref(refs, name, &id)?;
+            }
+            let mut e = entry("template_instantiate", true, ref_name);
+            e.node_id = Some(id);
+            Ok(e)
+        }
+        "edge_create" => {
+            let from_key = batch_opt_str(op, "fromRef")
+                .or_else(|| batch_opt_str(op, "from"))
+                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'fromRef'/'from'"))?;
+            let to_key = batch_opt_str(op, "toRef")
+                .or_else(|| batch_opt_str(op, "to"))
+                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'toRef'/'to'"))?;
+            let from = batch_node_id(canvas, refs, from_key)?;
+            let to = batch_node_id(canvas, refs, to_key)?;
+            let from_side = batch_side(op, "fromSide")?;
+            let to_side = batch_side(op, "toSide")?;
+            // kind: value|control, дефолт control (FR-029 edge_create v2)
+            let flow_kind = match batch_opt_str(op, "kind") {
+                None => flow::FlowKind::Control,
+                Some("value") => flow::FlowKind::Value,
+                Some("control") => flow::FlowKind::Control,
+                Some(other) => {
+                    return Err(BatchOpError::new(
+                        "E-BAD-OP",
+                        format!("kind должен быть \"value\" или \"control\", получено {other:?}"),
+                    ))
+                }
+            };
+            // Адресация портов (FR-029): fromLine (индекс) взаимно
+            // исключителен с fromOutput (имя)
+            let from_line = match op.get("fromLine") {
+                None => None,
+                Some(value) => {
+                    if value.as_u64().is_none() {
+                        return Err(BatchOpError::new(
+                            "E-BAD-OP",
+                            "fromLine должен быть целым ≥ 0",
+                        ));
+                    }
+                    if op.get("fromOutput").is_some() {
+                        return Err(BatchOpError::new(
+                            "E-BAD-OP",
+                            "fromLine и fromOutput взаимно исключительны",
+                        ));
+                    }
+                    value.as_u64().map(|v| v as usize)
+                }
+            };
+            let from_output = batch_opt_str(op, "fromOutput").map(str::to_owned);
+            let to_param = batch_opt_str(op, "toParam").map(str::to_owned);
+            if flow_kind == flow::FlowKind::Value
+                && canvas_core::creates_value_cycle(canvas, &from, &to)
+            {
+                let participants = canvas_core::value_path(canvas, &to, &from)
+                    .unwrap_or_default()
+                    .join(" → ");
+                return Err(BatchOpError::new(
+                    "E-CYCLE",
+                    format!("цикл потока значений: {participants}"),
+                ));
+            }
+            // Валидация имён портов по снапшотам шаблонов (FR-029 п.5)
+            if let Some(param) = &to_param {
+                let known = canvas
+                    .node(&to)
+                    .and_then(|node| node.template())
+                    .map(|tpl| tpl.params.contains_key(param))
+                    .unwrap_or(false);
+                if !known {
+                    return Err(BatchOpError::new(
+                        "E-PORT-UNKNOWN",
+                        format!("у ноды {to} нет параметра '{param}' (приёмник не шаблон либо параметр не объявлен)"),
+                    ));
+                }
+            }
+            if let Some(output) = &from_output {
+                let known = canvas
+                    .node(&from)
+                    .and_then(|node| node.template())
+                    .map(|tpl| tpl.outputs.iter().any(|spec| &spec.name == output))
+                    .unwrap_or(false);
+                if !known {
+                    return Err(BatchOpError::new(
+                        "E-PORT-UNKNOWN",
+                        format!("у ноды {from} нет выхода '{output}' (источник не шаблон либо выход не объявлен)"),
+                    ));
+                }
+            }
+            let mut edge = Edge::new(canvas.next_edge_id(), from, from_side, to, to_side);
+            edge.set_flow_kind(flow_kind);
+            edge.from_line = from_line;
+            edge.from_output = from_output;
+            edge.to_param = to_param;
+            let id = edge.id.clone();
+            canvas.add_edge(edge);
+            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
+            let mut e = entry("edge_create", true, ref_name);
+            e.edge_id = Some(id);
+            Ok(e)
+        }
+        "param_set" => {
+            let key = batch_opt_str(op, "ref")
+                .or_else(|| batch_opt_str(op, "id"))
+                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'ref'/'id'"))?;
+            let param = batch_req_str(op, "param")?;
+            let num = batch_req_f64(op, "value")?;
+            let unit_op = batch_opt_str(op, "unit").map(str::to_owned);
+            let node_id = batch_node_id(canvas, refs, key)?;
+            let index = canvas
+                .nodes
+                .iter()
+                .position(|node| node.id == node_id)
+                .ok_or_else(|| BatchOpError::new("E-NOT-FOUND", format!("нода не найдена: {node_id}")))?;
+            let node = &mut canvas.nodes[index];
+            let text = node
+                .text
+                .clone()
+                .ok_or_else(|| BatchOpError::new("E-PARAM-UNKNOWN", format!("у ноды {node_id} нет текста — параметра '{param}' нет")))?;
+            // Единица: явная из операции → снапшот шаблона → токен из строки
+            let unit_fallback = || -> Option<String> {
+                let line = text.split('\n').find(|line| {
+                    line.split_once('=')
+                        .map(|(name, _)| name.trim() == param)
+                        .unwrap_or(false)
+                })?;
+                let rhs = line.split_once('=')?.1.trim();
+                rhs.split_whitespace().nth(1).map(str::to_owned)
+            };
+            let unit = unit_op.or_else(|| {
+                node.template().and_then(|tpl| {
+                    tpl.params
+                        .get(param)
+                        .and_then(|spec| spec.unit.clone())
+                })
+            }).or_else(unit_fallback);
+            // Правка ровно одной строки «param = value unit», остальные —
+            // без изменений (FR-033 п.4); параметра нет — ошибка (без append)
+            let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+            let mut replaced = false;
+            for line in &mut lines {
+                let matches = line
+                    .split_once('=')
+                    .map(|(name, _)| name.trim() == param)
+                    .unwrap_or(false);
+                if matches && !replaced {
+                    let value =
+                        canvas_core::expr::unit_value(num, unit.as_deref()).to_string();
+                    *line = format!("{param} = {value}");
+                    replaced = true;
+                }
+            }
+            if !replaced {
+                return Err(BatchOpError::new(
+                    "E-PARAM-UNKNOWN",
+                    format!("в тексте ноды {node_id} нет строки параметра '{param}'"),
+                ));
+            }
+            let new_text = lines.join("\n");
+            node.text = Some(new_text);
+            // Синхронизация снапшота шаблона: формула читает params снапшота,
+            // не текст (FR-018) — иначе правка не подействует на расчёт
+            if node.template().map(|tpl| tpl.params.contains_key(param)).unwrap_or(false) {
+                let mut tpl = node.template().expect("проверено выше");
+                tpl.params.insert(
+                    param.to_owned(),
+                    canvas_core::templates::TemplateParam {
+                        num,
+                        unit: unit.clone(),
+                    },
+                );
+                node.set_template(Some(tpl));
+            }
+            let mut e = entry("param_set", false, None);
+            e.node_id = Some(node_id);
+            Ok(e)
+        }
+        "node_move" => {
+            let key = batch_opt_str(op, "ref")
+                .or_else(|| batch_opt_str(op, "id"))
+                .ok_or_else(|| BatchOpError::new("E-BAD-OP", "отсутствует поле 'ref'/'id'"))?;
+            let x = batch_req_f64(op, "x")? as f32;
+            let y = batch_req_f64(op, "y")? as f32;
+            let node_id = batch_node_id(canvas, refs, key)?;
+            let index = canvas
+                .nodes
+                .iter()
+                .position(|node| node.id == node_id)
+                .ok_or_else(|| BatchOpError::new("E-NOT-FOUND", format!("нода не найдена: {node_id}")))?;
+            canvas.nodes[index].x = x;
+            canvas.nodes[index].y = y;
+            let mut e = entry("node_move", false, None);
+            e.node_id = Some(node_id);
+            Ok(e)
+        }
+        other => Err(BatchOpError::new(
+            "E-BAD-OP",
+            format!(
+                "неизвестная операция '{other}' (ожидались node_create_note/node_create_file/template_instantiate/edge_create/param_set/node_move)"
+            ),
+        )),
+    }
+}
+
+/// FR-033 п.3: полный пересчёт после батча и карта значений в формате
+/// flow_recalc v2 (FR-029 п.4): `{node_id: {value, unit, outputs, lines}}`.
+/// Ноды вне потока (проза/файлы) не включаются; ноды с ошибкой — `{error}`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
+    let solutions = match flow::propagate_with_lines(canvas, &HashMap::new()) {
+        Ok(solutions) => solutions,
+        Err(cycle) => {
+            return serde_json::json!({ "error": format!("цикл потока значений: {cycle}") })
+        }
+    };
+    // Построчные значения, сгруппированные по нодам (детерминированный
+    // порядок индексов — BTreeMap)
+    let mut lines_by_node: HashMap<
+        String,
+        std::collections::BTreeMap<usize, canvas_core::expr::Value>,
+    > = HashMap::new();
+    for ((node_id, line), value) in &solutions.lines {
+        lines_by_node
+            .entry(node_id.clone())
+            .or_default()
+            .insert(*line, value.clone());
+    }
+    let mut nodes = serde_json::Map::new();
+    for node in &canvas.nodes {
+        let mut entry = serde_json::Map::new();
+        match solutions.outputs.get(&node.id) {
+            Some(Ok(value)) => {
+                entry.insert("value".into(), serde_json::json!(value.num));
+                entry.insert("unit".into(), serde_json::json!(value.unit.display()));
+            }
+            Some(Err(err)) => {
+                entry.insert("error".into(), serde_json::json!(err.to_string()));
+            }
+            None => {}
+        }
+        // Именованные выходы (FR-029): только вычислившиеся
+        let outputs: serde_json::Map<String, serde_json::Value> = node
+            .template()
+            .map(|tpl| {
+                tpl.outputs
+                    .iter()
+                    .filter_map(|spec| {
+                        solutions
+                            .named
+                            .get(&(node.id.clone(), spec.name.clone()))
+                            .map(|value| {
+                                let name = spec.name.clone();
+                                (
+                                    name,
+                                    serde_json::json!({
+                                        "value": value.num,
+                                        "unit": value.unit.display(),
+                                    }),
+                                )
+                            })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !outputs.is_empty() {
+            entry.insert("outputs".into(), serde_json::Value::Object(outputs));
+        }
+        if let Some(lines) = lines_by_node.get(&node.id) {
+            let lines: Vec<serde_json::Value> = lines
+                .iter()
+                .map(|(index, value)| {
+                    serde_json::json!({
+                        "index": index,
+                        "value": value.num,
+                        "unit": value.unit.display(),
+                    })
+                })
+                .collect();
+            if !lines.is_empty() {
+                entry.insert("lines".into(), serde_json::json!(lines));
+            }
+        }
+        if !entry.is_empty() {
+            nodes.insert(node.id.clone(), serde_json::Value::Object(entry));
+        }
+    }
+    serde_json::Value::Object(nodes)
+}
+
+/// FR-033 п.2: транзакционное применение батча. Ошибки схемы/лимитов —
+/// Err (isError); ошибка ОПЕРАЦИИ — структурированный ответ {ok:false} при
+/// нетронутом канвасе; успех — один undo-шаг, spatial, dirty (автосейв),
+/// полный пересчёт потока и карта значений в ответе.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mcp_graph_apply(
+    scene: &mut SceneState,
+    templates: &canvas_core::templates::TemplateRegistry,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let Some(ops) = params
+        .get("operations")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Err("отсутствует параметр 'operations' (массив операций)".to_owned());
+    };
+    if ops.is_empty() {
+        return Err("operations: минимум 1 операция".to_owned());
+    }
+    if ops.len() > GRAPH_APPLY_MAX_OPS {
+        return Err(format!(
+            "operations: не более {GRAPH_APPLY_MAX_OPS} операций, получено {}",
+            ops.len()
+        ));
+    }
+    let new_nodes = ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op.get("op").and_then(serde_json::Value::as_str),
+                Some("node_create_note" | "node_create_file" | "template_instantiate")
+            )
+        })
+        .count();
+    if new_nodes > GRAPH_APPLY_MAX_NODES {
+        return Err(format!(
+            "батч создаёт {new_nodes} нод — лимит {GRAPH_APPLY_MAX_NODES}"
+        ));
+    }
+
+    // Транзакция: операции применяются к клону; любая ошибка — клон
+    // отбрасывается, оригинал байт-в-байт прежний (инвариант атомарности)
+    let mut canvas = scene.canvas.clone();
+    let mut refs: HashMap<String, String> = HashMap::new();
+    let mut entries: Vec<BatchEntry> = Vec::new();
+    for (op_index, op) in ops.iter().enumerate() {
+        match batch_apply_op(&mut canvas, &mut refs, templates, op_index, op) {
+            Ok(entry) => entries.push(entry),
+            Err(err) => return Ok(graph_apply_error(op_index, &err)),
+        }
+    }
+
+    // Успех: ровно ОДИН undo-шаг на весь батч (FR-033 п.2г)
+    let before = std::mem::replace(&mut scene.canvas, canvas);
+    scene.push_undo(before);
+    // Индексы изменились — spatial перестраивается (паттерн node_delete)
+    scene.spatial = SpatialIndex::build(&scene.canvas);
+    scene.mark_dirty();
+    scene.recompute_flow();
+
+    let created: Vec<serde_json::Value> = entries
+        .iter()
+        .filter(|e| e.created)
+        .map(|e| {
+            let mut item = serde_json::json!({ "op_index": e.op_index });
+            let map = item.as_object_mut().expect("json object");
+            if let Some(ref_name) = &e.ref_name {
+                map.insert("ref".into(), serde_json::json!(ref_name));
+            }
+            if let Some(node_id) = &e.node_id {
+                map.insert("node_id".into(), serde_json::json!(node_id));
+            }
+            if let Some(edge_id) = &e.edge_id {
+                map.insert("edge_id".into(), serde_json::json!(edge_id));
+            }
+            item
+        })
+        .collect();
+    let report: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "op_index": e.op_index,
+                "op": e.op,
+                "id": e.object_id(),
+            })
+        })
+        .collect();
+    let flow = mcp_flow_v2(&scene.canvas);
+    Ok(serde_json::json!({
+        "ok": true,
+        "created": created,
+        "report": report,
+        "flow": flow,
+    }))
 }
 
 impl App {
@@ -13648,5 +14304,392 @@ mod tests {
         )
         .expect_err("toParam на текстовой ноде — ошибка");
         assert!(err.contains("текстовая"), "{err}");
+    }
+    // --- FR-033: graph_apply — атомарная батч-композиция ---
+
+    fn graph_apply(
+        scene: &mut SceneState,
+        camera: &mut Camera,
+        ops: &str,
+    ) -> Result<serde_json::Value, String> {
+        let params = format!(r#"{{"operations": {ops}}}"#);
+        let params: serde_json::Value = serde_json::from_str(&params).expect("params — JSON");
+        let registry = canvas_core::templates::TemplateRegistry::builtin();
+        mcp_dispatch(scene, camera, &registry, "graph_apply", &params)
+    }
+
+    /// Текст эталонной ноды «Нагрузка» (эталон №1 ADR-0006: dau=200000,
+    /// 3 сессии × 10 req → 69.44 rps avg, peak ×3 → 208.33 rps).
+    const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak";
+
+    /// Oracle-числа эталона №1 (ADR-0006): peak_rps ≈ 208.33 rps;
+    /// CDN W ≈ 34.29 ms (ρ 0.417); CDN origin ≈ 20.83 rps;
+    /// Gateway W ≈ 3.20 ms (latency_budget 5 − auth_overhead 2).
+    fn assert_close(actual: f64, expected: f64, what: &str) {
+        let tolerance = (expected * 0.01).abs().max(1e-9);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{what}: {actual} != {expected} (±1 %)"
+        );
+    }
+
+    /// MCP e2e (FR-033 п.6а): один вызов graph_apply собирает мини-эталон
+    /// «Нагрузка → CDN → Gateway» — ноды, параметризация, value-рёбра с
+    /// адресацией портов (toParam/fromOutput); flow в ответе = oracle ±1 %.
+    #[test]
+    fn graph_apply_assembles_mini_reference_with_oracle() {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga.canvas"));
+        let mut camera = Camera::default();
+        let undo_before = scene.undo_stack.len();
+
+        let ops = r#"[
+            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
+            {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
+            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
+            {"op":"param_set","ref":"traffic","param":"dau","value":200000},
+            {"op":"edge_create","fromRef":"traffic","toRef":"cdn","kind":"value","toParam":"rps"},
+            {"op":"edge_create","fromRef":"cdn","toRef":"gw","kind":"value","fromOutput":"origin_rps","toParam":"rps"},
+            {"op":"node_move","ref":"cdn","x":400,"y":40},
+            {"op":"node_move","ref":"gw","x":760,"y":40},
+            {"op":"node_create_note","ref":"cost","x":0,"y":320,"text":"cdn_cost = 50 $\n gw_cost = 36 $\n total = cdn_cost + gw_cost"},
+            {"op":"edge_create","fromRef":"cost","toRef":"cdn"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч собирается");
+        assert_eq!(out["ok"], true, "ответ: {out}");
+        assert_eq!(
+            out["created"].as_array().expect("created").len(),
+            7,
+            "4 ноды + 3 ребра"
+        );
+        assert_eq!(out["report"].as_array().expect("report").len(), 10);
+
+        // ref-резолв: created содержит имена ref-ов и реальные id
+        let created: Vec<&serde_json::Value> = out["created"].as_array().unwrap().iter().collect();
+        assert!(created
+            .iter()
+            .any(|e| e["ref"] == "traffic" && e["node_id"].is_string()));
+        assert!(created
+            .iter()
+            .any(|e| e["ref"] == "cdn" && e["node_id"].is_string()));
+        assert!(created
+            .iter()
+            .any(|e| e["ref"] == "gw" && e["node_id"].is_string()));
+        let edge_ops = created.iter().filter(|e| e["edge_id"].is_string()).count();
+        assert_eq!(edge_ops, 3, "три ребра (2 value + 1 control)");
+
+        // Undo = ровно ОДИН шаг на весь батч
+        assert_eq!(
+            scene.undo_stack.len(),
+            undo_before + 1,
+            "успешный батч — один undo-шаг"
+        );
+
+        // flow в ответе = oracle эталона №1 (ADR-0006) ±1 %
+        let flow = &out["flow"];
+        let traffic_node_id = created
+            .iter()
+            .find(|e| e["ref"] == "traffic")
+            .and_then(|e| e["node_id"].as_str())
+            .expect("traffic id");
+        let cdn_node_id = created
+            .iter()
+            .find(|e| e["ref"] == "cdn")
+            .and_then(|e| e["node_id"].as_str())
+            .expect("cdn id");
+        let gw_node_id = created
+            .iter()
+            .find(|e| e["ref"] == "gw")
+            .and_then(|e| e["node_id"].as_str())
+            .expect("gw id");
+
+        assert_close(
+            flow[traffic_node_id]["value"].as_f64().expect("peak_rps"),
+            208.3333,
+            "peak_rps ноды «Нагрузка»",
+        );
+        assert_eq!(flow[traffic_node_id]["unit"], "req/s");
+
+        assert_close(
+            flow[cdn_node_id]["value"].as_f64().expect("cdn W"),
+            0.0342857,
+            "CDN W (Erlang-C, ρ 0.417)",
+        );
+        assert_eq!(flow[cdn_node_id]["unit"], "sec");
+        assert_close(
+            flow[cdn_node_id]["outputs"]["origin_rps"]["value"]
+                .as_f64()
+                .expect("origin_rps"),
+            20.8333,
+            "именованный выход CDN.origin_rps (проливание rps = 208.33)",
+        );
+
+        assert_close(
+            flow[gw_node_id]["value"].as_f64().expect("gw W"),
+            0.0032,
+            "Gateway W (rps пролито через fromOutput=origin)",
+        );
+        assert_eq!(flow[gw_node_id]["unit"], "sec");
+
+        // Смета тоже в flow (last formula line)
+        let cost_node_id = created
+            .iter()
+            .find(|e| e["ref"] == "cost")
+            .and_then(|e| e["node_id"].as_str())
+            .expect("cost id");
+        assert_close(
+            flow[cost_node_id]["value"].as_f64().expect("cost"),
+            86.0,
+            "смета мини-эталона",
+        );
+
+        // live-ревал: правка DAU одним node_edit меняет весь downstream
+        // без правки связей/формул (инвариант ADR-0007)
+        let dau_edit = serde_json::json!({
+            "id": traffic_node_id,
+            "text": TRAFFIC_TEXT.replacen("200000", "400000", 1),
+        });
+        mcp_dispatch(
+            &mut scene,
+            &mut camera,
+            &canvas_core::templates::TemplateRegistry::builtin(),
+            "node_edit",
+            &dau_edit,
+        )
+        .expect("node_edit dau");
+        let flow = mcp_flow_v2(&scene.canvas);
+        assert_close(
+            flow[traffic_node_id]["value"].as_f64().expect("peak ×2"),
+            416.6667,
+            "peak_rps после удвоения DAU",
+        );
+        assert_close(
+            flow[cdn_node_id]["outputs"]["origin_rps"]["value"]
+                .as_f64()
+                .expect("origin_rps ×2"),
+            41.6667,
+            "CDN.origin_rps после удвоения DAU — проливание живое",
+        );
+    }
+
+    /// Атомарность (FR-033 п.5/п.6б): ошибка операции в середине батча →
+    /// {ok:false, op_index, code} и сериализация канваса байт-в-байт прежняя.
+    #[test]
+    fn graph_apply_mid_batch_error_is_atomic() {
+        let mut scene = mcp_scene();
+        let mut camera = Camera::default();
+        let before = serde_json::to_string(&scene.canvas).expect("сериализация до");
+        let undo_before = scene.undo_stack.len();
+
+        // 3-я операция (index 2) ломается: edge на несуществующую ноду
+        let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"первая"},
+            {"op":"node_create_note","ref":"b","x":300,"y":0,"text":"вторая"},
+            {"op":"edge_create","fromRef":"a","toRef":"ghost"},
+            {"op":"node_create_note","ref":"c","x":600,"y":0,"text":"третья"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], false, "ответ: {out}");
+        assert_eq!(out["op_index"], 2, "сломанная операция — index 2");
+        assert_eq!(out["code"], "E-NOT-FOUND");
+        assert!(out["message"].as_str().expect("message").contains("ghost"));
+
+        let after = serde_json::to_string(&scene.canvas).expect("сериализация после");
+        assert_eq!(before, after, "канвас байт-в-байт прежний");
+        assert_eq!(
+            scene.undo_stack.len(),
+            undo_before,
+            "неудачный батч — ни одного undo-шага"
+        );
+
+        // Валидация портов тоже атомарна: неизвестный toParam
+        let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"x"},
+            {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":300,"y":0},
+            {"op":"edge_create","fromRef":"a","toRef":"cdn","kind":"value","toParam":"nope"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], false);
+        assert_eq!(out["code"], "E-PORT-UNKNOWN", "ответ: {out}");
+        assert_eq!(
+            serde_json::to_string(&scene.canvas).unwrap(),
+            before,
+            "канвас по-прежнему прежний"
+        );
+    }
+
+    /// Ref-резолв (FR-033 п.5): edge на ref ноды, созданной РАНЬШЕ в этом же
+    /// батче, работает; ref будущей ноды — ошибка; дубликат ref — ошибка.
+    #[test]
+    fn graph_apply_ref_resolution_rules() {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga2.canvas"));
+        let mut camera = Camera::default();
+
+        // Forward-ref: c ещё не создана на момент ребра
+        let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"a"},
+            {"op":"edge_create","fromRef":"a","toRef":"c"},
+            {"op":"node_create_note","ref":"c","x":300,"y":0,"text":"c"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], false, "ответ: {out}");
+        assert_eq!(out["op_index"], 1);
+        assert_eq!(out["code"], "E-NOT-FOUND");
+
+        // Дубликат ref
+        let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"a"},
+            {"op":"node_create_note","ref":"a","x":300,"y":0,"text":"вторая a"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], false, "ответ: {out}");
+        assert_eq!(out["code"], "E-BAD-OP");
+
+        // Смешанная адресация: ref для созданных, id — для существующих
+        scene = mcp_scene();
+        let ops = r#"[
+            {"op":"node_create_note","ref":"new1","x":0,"y":0,"text":"новая"},
+            {"op":"edge_create","fromRef":"new1","to":"n1","kind":"value"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], true, "ответ: {out}");
+        assert_eq!(scene.canvas.nodes.len(), 4, "3 сцены + 1 новая");
+        assert_eq!(scene.canvas.edges.len(), 2, "edge-1 + новое ребро");
+        let new_edge = scene.canvas.edges.last().expect("ребро");
+        assert_eq!(new_edge.to_node, "n1", "id существующей ноды зарезолвен");
+        assert_eq!(new_edge.flow_kind(), canvas_core::flow::FlowKind::Value);
+    }
+
+    /// param_set (FR-033 п.4/п.5): правит ровно одну строку «param = value
+    /// unit» (текст + снапшот шаблона), остальные строки нетронуты;
+    /// несуществующий параметр — ошибка операции.
+    #[test]
+    fn graph_apply_param_set_edits_single_line() {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga4.canvas"));
+        let mut camera = Camera::default();
+        let ops = r#"[
+            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":0,"y":0},
+            {"op":"param_set","ref":"gw","param":"latency_budget","value":5}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч");
+        assert_eq!(out["ok"], true, "ответ: {out}");
+        let node = &scene.canvas.nodes[0];
+        let text = node.text.as_deref().expect("текст");
+        let lines: Vec<&str> = text.split('\n').collect();
+        assert!(
+            lines.contains(&"latency_budget = 5 ms"),
+            "строка заменена с единицей снапшота: {text:?}"
+        );
+        assert!(
+            lines.contains(&"rps = 20 rps"),
+            "соседние строки нетронуты: {text:?}"
+        );
+        // Снапшот синхронизирован — расчёт видит новое значение
+        let tpl = node.template().expect("шаблон");
+        assert_eq!(tpl.params.get("latency_budget").expect("param").num, 5.0);
+        // ref живёт только внутри батча: следующие батчи адресуют по id
+        let gw_id = out["created"][0]["node_id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
+
+        // Единица из операции переопределяет снапшот
+        let ops = format!(
+            r#"[{{"op":"param_set","id":"{gw_id}","param":"latency_budget","value":0.005,"unit":"s"}}]"#
+        );
+        let out = graph_apply(&mut scene, &mut camera, &ops).expect("батч");
+        assert_eq!(out["ok"], true, "ответ: {out}");
+        let text = scene.canvas.nodes[0].text.as_deref().expect("текст");
+        assert!(
+            text.contains("latency_budget = 0.005 s"),
+            "единица из операции: {text:?}"
+        );
+
+        // Параметра нет в тексте — ошибка (консервативно, без append)
+        let ops = format!(r#"[{{"op":"param_set","id":"{gw_id}","param":"servers","value":4}}]"#);
+        let out = graph_apply(&mut scene, &mut camera, &ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], false, "ответ: {out}");
+        assert_eq!(out["code"], "E-PARAM-UNKNOWN");
+    }
+
+    /// Лимиты схемы (FR-033 п.1/п.5): 257-я операция и > 128 нод — ошибки
+    /// уровня вызова (isError), а не {ok:false}.
+    #[test]
+    fn graph_apply_enforces_limits() {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga5.canvas"));
+        let mut camera = Camera::default();
+
+        // 257 node_move-операций по существующей ноде n1
+        let moves: Vec<String> = (0..257)
+            .map(|i| format!(r#"{{"op":"node_move","id":"n1","x":{i},"y":0}}"#))
+            .collect();
+        let ops = format!("[{}]", moves.join(","));
+        let err = graph_apply(&mut scene, &mut camera, &ops).expect_err("лимит операций");
+        assert!(err.contains("256"), "{err}");
+
+        // 129 node_create_note — сверх лимита нод
+        let notes: Vec<String> = (0..129)
+            .map(|i| format!(r#"{{"op":"node_create_note","x":0,"y":{i},"text":"n{i}"}}"#))
+            .collect();
+        let ops = format!("[{}]", notes.join(","));
+        let err = graph_apply(&mut scene, &mut camera, &ops).expect_err("лимит нод");
+        assert!(err.contains("128"), "{err}");
+        assert!(
+            scene.canvas.nodes.is_empty(),
+            "канвас не изменился при ошибке лимита"
+        );
+    }
+
+    /// Undo/redo после успешного батча (FR-033 п.6в): Ctrl+Z откатывает всю
+    /// сборку одним шагом, Ctrl+Y возвращает.
+    #[test]
+    fn graph_apply_undo_reverts_whole_batch() {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga6.canvas"));
+        let mut camera = Camera::default();
+        let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"= 5"},
+            {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":300,"y":0},
+            {"op":"edge_create","fromRef":"a","toRef":"gw","kind":"value","toParam":"rps"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("батч");
+        assert_eq!(out["ok"], true);
+        assert_eq!(scene.canvas.nodes.len(), 2);
+        assert_eq!(scene.canvas.edges.len(), 1);
+
+        // Ctrl+Z: вся сборка исчезла одним шагом
+        let before = scene.take_undo().expect("undo-шаг есть");
+        scene.canvas = before;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        assert!(scene.canvas.nodes.is_empty(), "сборка откатилась целиком");
+        assert!(scene.canvas.edges.is_empty(), "рёбра ушли вместе с нодами");
+
+        // Ctrl+Y: сборка вернулась целиком
+        let after = scene.take_redo().expect("redo-шаг есть");
+        scene.canvas = after;
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+        assert_eq!(scene.canvas.nodes.len(), 2);
+        assert_eq!(scene.canvas.edges.len(), 1);
+    }
+
+    /// value-цикл внутри батча — ошибка операции E-CYCLE с участниками;
+    /// канвас не меняется.
+    #[test]
+    fn graph_apply_rejects_value_cycle() {
+        let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga7.canvas"));
+        let mut camera = Camera::default();
+        let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"= 1"},
+            {"op":"node_create_note","ref":"b","x":300,"y":0,"text":"= 2"},
+            {"op":"edge_create","fromRef":"a","toRef":"b","kind":"value"},
+            {"op":"edge_create","fromRef":"b","toRef":"a","kind":"value"}
+        ]"#;
+        let out = graph_apply(&mut scene, &mut camera, ops).expect("инструмент отвечает");
+        assert_eq!(out["ok"], false, "ответ: {out}");
+        assert_eq!(out["op_index"], 3);
+        assert_eq!(out["code"], "E-CYCLE");
+        assert!(
+            out["message"].as_str().expect("msg").contains("→"),
+            "участники цикла в сообщении: {out}"
+        );
+        assert!(scene.canvas.nodes.is_empty(), "канвас не изменился");
     }
 }
