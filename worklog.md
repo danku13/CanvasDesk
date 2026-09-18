@@ -1,3 +1,46 @@
+## 2026-09-19 — FR-037 MW5: инспектор-сессия владельца — mcp_wasm_inspector.sh (ADR-0012)
+
+- **Задача (владелец):** «Бери в работу MW5 (S)» — опция FR-037: обёртка
+  официального инспектора `npx @modelcontextprotocol/inspector` поверх
+  wasmtime-запуска headless-сервера — живая ручная проверка MCP без
+  Windows (снимает зависимость ручной MCP-приёмки от Windows-машины).
+- **Сделано:**
+  - **`scripts/mcp_wasm_inspector.sh`** (новый, один файл): два режима —
+    web UI по умолчанию (сервер предподключён позиционной целью:
+    `--web wasmtime run …canvasdesk-mcp-headless.wasm`; браузер →
+    http://127.0.0.1:6274, токен-URL печатает сам инспектор; CLIENT_PORT
+    пробрасывается) и `--check` — автоматическая приёмка инспектором как
+    реальным MCP-клиентом: initialize → tools/list (36, graph_apply в
+    списке) → tools/call graph_apply мини-эталон №1 → oracle ±1 %
+    (MINI_OPS/ORACLE/close_1pct импортируются из scripts/mcp_wasm_e2e.py —
+    один источник истины; артефакты — target/tmp/mcp_inspector_*.json).
+    Сборка wasip1 внутри скрипта (с кэшем — секунды) или --skip-build;
+    exit 0/1/2 как у e2e-драйвера.
+  - Нюансы CLI инспектора 2.7.0 (найдены разведкой, зафиксированы в
+    FR-037): версия запинена (`INSPECTOR_PACKAGE` — воспроизводимость);
+    массивные аргументы инструментов — только через `--tool-args-json`
+    (значения дословно; `--tool-arg key=value` коэрцитует значение в
+    строку → сервер отвечает «отсутствует параметр operations»);
+    schema-portability предупреждения — в stderr, stdout — чистый JSON;
+    первый запуск npx требует npm registry (node 18+), дальше кэш.
+  - **Доки:** FR-037 — статус «реализовано (MW1–MW5)», MW5 «Выполнено»,
+    changelog; AGENTS «Сборка и тесты» — инспектор-сессия (node/npx вне
+    гейтов); SPEC §13 — строка про инспектора в Headless-подразделе;
+    ACCEPTANCE §29 FR-037.10 — конкретный сценарий (--check + web UI).
+    Гейты/CI не менялись: npx — внешняя зависимость для автономных
+    гейтов, инспектор — ручная способность владельца (Q4 ADR-0012).
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  cargo test --workspace 1089/0 (регресс — ноль, Rust-код не менялся);
+  scripts/mcp_wasm_gate.sh — полный зелёный (78 wasip1-тестов + e2e);
+  scripts/mcp_wasm_inspector.sh --check — зелёный (36 инструментов,
+  5 чисел oracle ±1 %, exit 0); web UI — дым HTTP 200 в headless.
+- **Инцидент диска №4** (ld signal 7 при линковке, 100 %): удалены
+  target/debug/incremental (1,9 Г) + устаревшие тест-бинари >100 М;
+  тесты перепрогнаны с CARGO_PROFILE_TEST_DEBUG=0 — итог 3+ Г свободно.
+- **Дальше:** MW6 (файловый режим `--canvas`, опция — рекомендация Q5
+  «нет»); по роадмапу — продуктовый веб-слой S5 (W1–W12 M8), волна 2
+  (WebSocket-мост поверх HeadlessSession).
+
 ## 2026-09-19 — Реализация MW2 (FR-037: мост canvas-mcp под wasm)
 
 - **Задача (владелец):** «распланируй и реализуй MW2 с 3 сабагентами» —

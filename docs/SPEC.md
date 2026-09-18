@@ -458,7 +458,10 @@ headless-сервер (`canvas-mcp-headless`) верифицируются в wa
 тестов под `wasm32-wasip1` в wasmtime и полная MCP-сессия с реальным
 клиентом (initialize → tools/list → tools/call → oracle-гейты эталонов
 CP1/CP3/CP5 → негативные ветки) — гейт `scripts/mcp_wasm_gate.sh`, без
-Windows и GUI. `HeadlessSession` — серверная сторона будущего
+Windows и GUI. Живые ручные сессии владельца — официальным инспектором
+`@modelcontextprotocol/inspector`: `scripts/mcp_wasm_inspector.sh`
+(web UI; `--check` — автоприёмка oracle ±1 %; node/npx — вне гейтов, MW5).
+`HeadlessSession` — серверная сторона будущего
 WebSocket-моста (волна 2 плана M8).
 
 ### graph_apply (FR-033) — атомарная батч-композиция
