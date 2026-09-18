@@ -522,3 +522,51 @@
 - **Гейты:** wasm-gate — OK (3 ступени + `--check`); fmt — ок; clippy
   --workspace --all-targets -D warnings — ок; cargo test --workspace —
   1012 passed / 0 failed (без изменений к FR-035 — нулевой регресс).
+
+---
+
+## 2026-09-18 — FR-037/ADR-0012: план верификации MCP-реализации в WASM (без реализации)
+
+- **Задача (владелец):** «теперь спланировать реализацию MCP для WASM,
+  чтобы можно было проверять не только UI, но и реализацию MCP».
+- **Формат:** только планирование — документы и индексы; код не меняется
+  (Task ID сессии агента: fr-037-plan).
+
+**Исследование (факты кода, main `b9e011c`):**
+- `mcp_dispatch` (main.rs:6074, ~1550 строк, 27 инструментов) — уже чистая
+  функция: зависимости только SceneState (mark_dirty/push_undo/
+  recompute_flow/move_node/ensure_reserve_at), Camera (4 метода:
+  position/zoom/set_center/set_zoom, main.rs:6855–6876),
+  TemplateRegistry::builtin() (embedded). `node_create_file` диск не трогает.
+- Мост canvas-mcp — чистый протокол за трейтом AppTransport (lib.rs:60) +
+  run_stdio (lib.rs:594); платформенное только под cfg(windows). Под
+  wasm-таргеты мост НЕ проверялся (гейт FR-036 = core/render/widgets).
+- ~40 MCP-тестов в main.rs:12060+ (~2970 строк), включая эталонные гейты
+  CP1 (mcp_fr029_instagram_mvp_reference:14183), CP3, CP5 — уже исполняются
+  нативно на Linux, но не в wasm-рантайме; end-to-end сессия требует
+  Windows pipe + GUI.
+- SceneState смешивает модель и ввод: UI-поля selected/selected_nodes/
+  dragging = 99 мест доступа; модельные поля — путь доступа self.scene.*
+  не меняется при переносе типа.
+
+**Документы (этот коммит):**
+- **ADR-0012** (docs/adr/adr-0012-mcp-wasm-verification.md, «предложено»):
+  вариант D — крейт canvas-scene (SceneState-модель + модуль mcp; ноль
+  новых внешних зависимостей; viewport-зеркало вместо зависимости от
+  canvas-render) + canvas-mcp: run_stdio_with_transport<T> + лист-крейт
+  canvas-mcp-headless (HeadlessSession за AppTransport, bin для
+  wasmtime/wasip1) + драйвер mcp_wasm_e2e.py и гейт mcp_wasm_gate.sh.
+  Отклонены: «ничего не выносить» (нет сессии), полный W2 (объём),
+  wasm-bindgen-фасад (волна 2, прецедент ADR-0011-C).
+- **FR-037** (docs/change-requests/fr-037-mcp-wasm-verification.md,
+  «выявлено (план)»): задачи MW1 (canvas-scene, M) → MW2 (мост под wasm,
+  S) → MW3 (headless, M) → MW4 (гейт/CI/доки, M) + опции MW5 (инспектор)
+  / MW6 (файловый режим); критерии приёмки (≥356 wasm-тестов, oracle ±1%
+  эталона №1, нативный регресс 0); 5 открытых вопросов (Q1 имена, Q2
+  viewport, Q3 CI-wasmtime, Q4 инспектор, Q5 файлы) с рекомендациями.
+- Индексы: adr/README.md += ADR-0012; index-cr-fr.md += FR-037, следующий
+  номер FR-038; wasm-port.md — примечание FR-037 (W2 сужается; волна 2
+  MCP-мост = HeadlessSession) + §9-строка моста дополнена ссылкой.
+
+**Границы:** продуктовое поведение не меняется; реализация MW1–MW4 не
+начата — по плану, каждая задача = сессия = коммит.
