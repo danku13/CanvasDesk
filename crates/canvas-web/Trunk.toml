@@ -1,0 +1,17 @@
+# trunk — сборка браузерного бинаря canvas-web (wasm-port §3.5, W4-каркас).
+#
+# Использование (из crates/canvas-web):
+#   trunk build        # артефакты → target/dist (каталог target gitignored)
+#   trunk serve        # дев-сервер (приёмка прошивки W4: страница грузится)
+#
+# Инструменты зафиксированы (воспроизводимость): trunk 0.21.14,
+# wasm-bindgen-cli 0.2.127 — версия CLI обязана совпадать с версией
+# крейта wasm-bindgen в Cargo.lock.
+
+[build]
+target = "index.html"
+dist = "../../target/dist"
+
+[serve]
+# приёмка прошивки W4: `trunk serve` → http://127.0.0.1:8080
+port = 8080
