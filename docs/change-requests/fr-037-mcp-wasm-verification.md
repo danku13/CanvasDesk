@@ -1,6 +1,6 @@
 # FR-037: Верификация MCP-реализации в WASM — крейт canvas-scene, in-process транспорт и headless MCP-сервер (wasmtime/wasip1)
 
-- **Статус:** выявлено (план реализации; исполнение — по приказу владельца) · **Дата:** 2026-09-18 · **ADR:** 0012 (предложено) · **Связанные:** FR-036 (прецедент wasm-гейта), FR-008 (подкоманда `mcp`), FR-034/FR-035 (транспорт и чистота stdio), ADR-0004 (агентная сборка), ADR-0009/0010/0011, `docs/plans/wasm-port.md` (M8: W2, §9 волна 2), `docs/plans/product-roadmap.md` (CP4/CP6 — потребители)
+- **Статус:** выявлено (план реализации; исполнение — по приказу владельца) · **Дата:** 2026-09-18 · **ADR:** 0012 (предложено) · **Связанные:** FR-036 (прецедент wasm-гейта), FR-008 (подкоманда `mcp`), FR-034/FR-035 (транспорт и чистота stdio), ADR-0004 (агентная сборка), ADR-0009/0010/0011, `docs/plans/wasm-port.md` (M8: W2, §9 волна 2), `docs/plans/product-roadmap.md` (CP4/CP6 — потребители), `docs/plans/mw2-wasm-bridge.md` (план исполнения MW2: три сабагента, 2026-09-19)
 
 ## Описание
 
@@ -120,7 +120,7 @@ tracing); `canvas-mcp-headless → canvas-mcp + canvas-scene`;
 | ID | Объём | Задача и критерий приёмки |
 |----|-------|---------------------------|
 | MW1 | M | **Крейт `canvas-scene`.** Перенос SceneState (модельные поля + методы, `main.rs:551+`), модуль `mcp` (диспетчер + хелперы + `next_free_id` из `canvas-app/src/lib.rs:359`, реэкспорт для UI), `Viewport` + синк в `on_mcp_wake`; UI-поля `selected/selected_nodes/dragging` → поля App (~99 механических правок `self.scene.selected` → `self.selected`); перенос ~40 MCP-тестов (~2970 строк). Приёмка: нативные гейты зелёные (тестов ≥ 1034, те же имена/ассерты); `cargo check --target wasm32-unknown-unknown -p canvas-scene` ✓; `RUST_TEST_THREADS=1 cargo test --target wasm32-wasip1 -p canvas-scene` ✓ (~40 тестов в wasmtime); `cargo test -p canvas-shell` (pipe round-trip) ✓ |
-| MW2 | S | **Мост под wasm.** `run_stdio` → `pub fn run_stdio_with_transport<T: AppTransport>` (чистое выделение; `run_stdio` — обёртка, поведение FR-008/034/035 не меняется); wasm-таргеты моста в гейтах; точечные `#[cfg(not(target_arch = "wasm32"))]` на тестах автоспавна (`std::process` в test-cfg — test-only cfg, прецедент FR-036). Приёмка: `cargo check --target wasm32-unknown-unknown -p canvas-mcp` ✓; `cargo test --target wasm32-wasip1 -p canvas-mcp` ✓ (тесты моста в wasmtime); регресс FR-008/034/035 — ноль |
+| MW2 | S | **Мост под wasm.** `run_stdio` → `pub fn run_stdio_with_transport<T: AppTransport>` (чистое выделение; `run_stdio` — обёртка, поведение FR-008/034/035 не меняется); wasm-таргеты моста в гейтах; точечные `#[cfg(not(target_arch = "wasm32"))]` на тестах автоспавна (`std::process` в test-cfg — test-only cfg, прецедент FR-036). Приёмка: `cargo check --target wasm32-unknown-unknown -p canvas-mcp` ✓; `cargo test --target wasm32-wasip1 -p canvas-mcp` ✓ (тесты моста в wasmtime); регресс FR-008/034/035 — ноль **Выполнено 2026-09-19:** `run_stdio` — тонкая обёртка, stdio-цикл выделен в `pub fn run_stdio_with_transport<T, R>` с хуком `reconnect: FnMut(&mut Option<T>)` (FR-034 сохранён на Windows; решение §3 плана `docs/plans/mw2-wasm-bridge.md`); гварды `not(target_arch = "wasm32")` на оба автоспавн-теста (прецедент FR-036); мост включён в `scripts/wasm_gate.sh` (ступени 1–3) и CI `wasm-check`. Приёмка: fmt/clippy чисто; нативно 15 passed/0 failed (регресс — ноль); R1 `check` под wasm32-unknown-unknown ✓; R2 — 13 passed/0 failed под wasm32-wasip1 в wasmtime (2 автоспавн-теста исключены гвардами); `scripts/wasm_gate.sh` — полный зелёный прогон (canvas-core 318 + canvas-mcp 13 в wasmtime) |
 | MW3 | M | **`canvas-mcp-headless`.** `HeadlessSession` (SceneState + `TemplateRegistry::builtin()`) с impl `AppTransport`; bin `canvasdesk-mcp-headless` = `run_stdio_with_transport(Some(session))`; lib-тесты протокольного цикла: initialize (эхо версии 2025-06-18) → tools/list (27) → tools/call → graph_apply мини-эталон №1 → flow oracle ±1% → analyze_bottlenecks (ρ-гейт CP5) → негативные ветки (isError неизвестного инструмента, −32601, −32700, batch, notification-тишина). Приёмка: lib-тесты под wasip1 ✓; ручная сессия: `wasmtime run target/wasm32-wasip1/debug/canvasdesk-mcp-headless.wasm` отвечает на initialize/tools_list через stdio |
 | MW4 | M | **Гейт, CI, документация.** `scripts/mcp_wasm_e2e.py` (драйвер сессии: build wasip1 → wasmtime → сценарий MW3 + сохранение лога сессии для разбора падений) + `scripts/mcp_wasm_gate.sh`; CI `wasm-check` += `-p canvas-mcp -p canvas-scene -p canvas-mcp-headless` (компиляция; исполнение — локально, прецедент ADR-0011); AGENTS (структура workspace, «Сборка и тесты»: wasm-гейт теперь покрывает MCP-слой), SPEC §13/§3, ACCEPTANCE § «MCP-WASM-верификация» (сценарий 5 минут), wasm-port.md — примечание (уже добавлено этим документом). Приёмка: `scripts/mcp_wasm_gate.sh` — полный зелёный прогон в чистом контейнере; CI зелёный; документация синхронна |
 | MW5 (опция) | S | **Инспектор-сессия владельца.** `scripts/mcp_wasm_inspector.sh`: обёртка для `npx @modelcontextprotocol/inspector` поверх wasmtime-запуска headless-сервера — живая ручная проверка MCP без Windows (устраняет зависимость ручной приёмки MCP от Windows-машины). Приёмка: инспектор подключается, tools/list отображается, graph_apply из UI инспектора сходится с oracle |
@@ -184,6 +184,30 @@ tracing); `canvas-mcp-headless → canvas-mcp + canvas-scene`;
 
 ## Changelog
 
+- 2026-09-19 — **MW2 реализован** (план `docs/plans/mw2-wasm-bridge.md`,
+  исполнение тремя сабагентами MW2-a/MW2-b/MW2-c, ветка
+  `feature/fr-037-mw2-wasm-bridge`): `run_stdio` → тонкая обёртка +
+  `pub run_stdio_with_transport<T, R>` (хук `reconnect:
+  FnMut(&mut Option<T>)` вместо cfg-вызова `refresh_transport` — решение
+  §3 плана); гварды `#[cfg(not(target_arch = "wasm32"))]` на оба
+  автоспавн-теста; мост включён в гейты (`scripts/wasm_gate.sh` — CRATES
+  ступеней 1–2 и явный список ступени 3, CI `wasm-check`). Гейты
+  приёмки: `cargo fmt --check` и `cargo clippy -p canvas-mcp
+  --all-targets -- -D warnings` — чисто (мин-правка: убран лишний `mut`
+  у транспорта в обёртке — unused_mut, семантика прежняя); `cargo test
+  -p canvas-mcp` нативно — 15 passed/0 failed (регресс FR-008/034/035 —
+  ноль); R1: `cargo check --target wasm32-unknown-unknown -p canvas-mcp`
+  ✓; R2: 13 passed/0 failed под wasm32-wasip1 в wasmtime (2
+  автоспавн-теста исключены гвардами); `scripts/wasm_gate.sh` — полный
+  зелёный прогон (canvas-core 318 + canvas-mcp 13 тестов в wasmtime).
+  Интеграция с апстримом (CP6/FR-017, визуализация проливания, рецепт
+  агента — ребейз на main `83d43a9` без конфликтов) вскрыла dead_code
+  хелперов автоспавна под wasip1-test (их тесты загвардены) — применена
+  контингенция плана (§4 MW2-a п.4): cfg хелперов расширен до
+  `#[cfg(any(windows, all(test, not(target_arch = "wasm32"))))]` —
+  warning'и нулевые, std::process полностью вне wasm-сборки; итог:
+  полный гейт зелёный, 0 warnings (canvas-core 345 + canvas-mcp 13 в
+  wasmtime). MW1 и MW3–MW6 не начинались.
 - 2026-09-18 — создан план (агент, приказ владельца «спланировать
   реализацию MCP для WASM…»): ADR-0012 (предложено), декомпозиция
   MW1–MW4 + опции MW5/MW6, критерии приёмки, 5 открытых вопросов;
