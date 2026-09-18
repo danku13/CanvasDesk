@@ -154,6 +154,40 @@ pub enum Selection {
     Edge(usize),
 }
 
+/// FR-029 (визуализация проливания): параметр ноды, запитанный входящим
+/// value-ребром с `toParam` — как показать строку-присваивание в теле
+/// карточки и её бейдж. Runtime-данные приложения: пересчитываются в
+/// `recompute_flow` (canvas-app), НЕ сериализуются в `.canvas`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpillView {
+    /// Имя параметра (имя присваивания в Numi-листе ноды).
+    pub param: String,
+    /// Индекс строки листа с присваиванием `param = …` (None — строки нет:
+    /// подмены текста и бейджа не будет, значение только в окружении формулы).
+    pub line: Option<usize>,
+    /// Заголовок ноды-источника (подпись «← откуда»).
+    pub from_label: String,
+    /// Именованный выход истока (суффикс «· output» подписи).
+    pub from_output: Option<String>,
+    /// Эффективное значение для бейджа — значение ребра-источника
+    /// (адресация fromLine/fromOutput/узловое), т.е. то, что реально
+    /// пролито в параметр. None — источник без значения: тихая деградация
+    /// до локального результата строки.
+    pub value: Option<String>,
+}
+
+impl SpillView {
+    /// Кортеж для `canvas_core::flow::substitute_spilled_lines`
+    /// (параметр, заголовок источника, именованный выход).
+    pub fn as_triple(&self) -> (&str, &str, Option<&str>) {
+        (
+            self.param.as_str(),
+            self.from_label.as_str(),
+            self.from_output.as_deref(),
+        )
+    }
+}
+
 /// Сцена кадра: модель канваса, spatial index (culling, T5), выделение
 /// и интерактивные состояния связей (T8).
 pub struct SceneView<'a> {
@@ -210,6 +244,10 @@ pub struct SceneView<'a> {
     /// (вычисляются приложением из текста сессии на каждом кадре). None —
     /// редактирования нет или оно не текстовой ноды.
     pub expr_editing_results: Option<&'a [Option<ExprOutcome>]>,
+    /// FR-029 (визуализация проливания): параметры нод, запитанные
+    /// value-рёбрами с `toParam` — подмена строк-присваиваний на подпись
+    /// источника («param ← нода · выход») и эффективный бейдж строки.
+    pub param_spills: &'a std::collections::HashMap<String, Vec<SpillView>>,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -1062,6 +1100,7 @@ impl Renderer {
                 expr_results: scene.expr_results,
                 expr_line_results: scene.expr_line_results,
                 editing_line_results: scene.expr_editing_results,
+                param_spills: scene.param_spills,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");

@@ -68,6 +68,7 @@ fn headless_gfm_body_quads_draw() {
             expr_results: &std::collections::HashMap::new(),
             expr_line_results: &std::collections::HashMap::new(),
             editing_line_results: None,
+            param_spills: &Default::default(),
         },
     )
     .expect("prepare текста");

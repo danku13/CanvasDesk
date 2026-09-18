@@ -29,7 +29,7 @@ pub mod zorder;
 
 pub use camera::Camera;
 pub use glyphon::Color;
-pub use renderer::{FrameOverlay, FrameStats, Renderer, SceneView, Selection};
+pub use renderer::{FrameOverlay, FrameStats, Renderer, SceneView, Selection, SpillView};
 pub use stats::FrameMeter;
 pub use theme::ThemeColors;
 pub use widget_pass::{WidgetPass, WidgetQuad, WIDGET_SNAPSHOT_MAX};

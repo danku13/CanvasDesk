@@ -1074,6 +1074,11 @@ pub struct TitleFrame<'a> {
     /// показывает результаты по ходу набора). Привязка — к рядам буфера
     /// редактора (`LayoutRun.line_i`). meaningful при `editing: Some`.
     pub editing_line_results: Option<&'a [Option<ExprOutcome>]>,
+    /// FR-029 (визуализация проливания): параметры нод, запитанные
+    /// value-рёбрами с `toParam`. Строка-присваивание пролитого параметра
+    /// рендерится как подпись источника («param ← нода · выход»), бейдж
+    /// строки — эффективным значением (пролитым), а не локальным литералом.
+    pub param_spills: &'a std::collections::HashMap<String, Vec<crate::SpillView>>,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -1415,7 +1420,20 @@ impl TextSystem {
                 let body_text = if frame.editing == Some(index) || !body_visible(node, zoom_px) {
                     String::new()
                 } else {
-                    node.text.clone().unwrap_or_default()
+                    let raw = node.text.clone().unwrap_or_default();
+                    match frame.param_spills.get(&node.id) {
+                        // FR-029: пролитый параметр показываем подписью
+                        // источника — «rps ← Traffic Profile · peak_rps»
+                        // вместо локального литерала (в файле он остаётся
+                        // фолбэком на случай удаления ребра).
+                        Some(spills) if !spills.is_empty() => {
+                            canvas_core::flow::substitute_spilled_lines(
+                                &raw,
+                                spills.iter().map(crate::SpillView::as_triple),
+                            )
+                        }
+                        _ => raw,
+                    }
                 };
                 // FR-013: программный итог формулы (футер карточки).
                 // FR-014: expr_results — карта потока значений (пишется
@@ -1474,6 +1492,32 @@ impl TextSystem {
                     String::new()
                 } else {
                     format!("P:{result_text}|L:{line_key}")
+                };
+                // FR-029: эффективные значения пролитых строк — в ключе
+                // свежести (бейдж зависит от значения upstream).
+                let spill_values: std::collections::HashMap<usize, &str> = frame
+                    .param_spills
+                    .get(&node.id)
+                    .map(|spills| {
+                        spills
+                            .iter()
+                            .filter_map(|spill| spill.line.zip(spill.value.as_deref()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let spill_key = if spill_values.is_empty() {
+                    String::new()
+                } else {
+                    spill_values
+                        .iter()
+                        .map(|(line, value)| format!("{line}~{value}"))
+                        .collect::<Vec<_>>()
+                        .join(";")
+                };
+                let results_key = if results_key.is_empty() && spill_key.is_empty() {
+                    results_key
+                } else {
+                    format!("{results_key}|S:{spill_key}")
                 };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
@@ -1594,11 +1638,20 @@ impl TextSystem {
                                 .enumerate()
                                 .filter_map(|(i, outcome)| {
                                     let outcome = outcome.as_ref()?;
-                                    let (text, message) = match outcome {
-                                        ExprOutcome::Ok(value) => (value.to_string(), None),
-                                        ExprOutcome::Err(msg) => {
-                                            (LINE_ERROR_BADGE.to_owned(), Some(msg.clone()))
-                                        }
+                                    // FR-029: у пролитой строки бейдж —
+                                    // эффективное значение (пересчёт с
+                                    // окружением, включая проливание), а не
+                                    // локальный литерал; локальная ошибка
+                                    // при этом скрывается (источник истины —
+                                    // значение потока).
+                                    let (text, message) = match spill_values.get(&i) {
+                                        Some(value) => ((*value).to_owned(), None),
+                                        None => match outcome {
+                                            ExprOutcome::Ok(value) => (value.to_string(), None),
+                                            ExprOutcome::Err(msg) => {
+                                                (LINE_ERROR_BADGE.to_owned(), Some(msg.clone()))
+                                            }
+                                        },
                                     };
                                     if text.is_empty() {
                                         return None;
@@ -1632,7 +1685,11 @@ impl TextSystem {
                                         buffer,
                                         width_px,
                                         source_line: i,
-                                        error: matches!(outcome, ExprOutcome::Err(_)),
+                                        // FR-029: пролитая строка со
+                                        // значением — не ошибка, даже если
+                                        // локальный литерал не вычислился.
+                                        error: !spill_values.contains_key(&i)
+                                            && matches!(outcome, ExprOutcome::Err(_)),
                                         message,
                                     })
                                 })
