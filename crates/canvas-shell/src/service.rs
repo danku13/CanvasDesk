@@ -11,20 +11,13 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 
 use canvas_core::{Thumbnail, ThumbnailProvider};
+// M8/W3: Priority — тип нейтрального протокола ThumbBackend, переехал в core
+pub use canvas_core::Priority;
 
 use crate::cache::{file_mtime_secs, ThumbCache, SIZE_CLASS};
 
 /// Число worker-потоков пула (SPEC §7.1).
 const WORKERS: usize = 4;
-
-/// Приоритет заказа: видимые ноды впереди остальных (SPEC §7.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Priority {
-    /// Нода в viewport — обработать первой.
-    High,
-    /// Нода вне viewport — фоновая подгрузка.
-    Normal,
-}
 
 /// Заказ на тамбнейл одной ноды.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +178,23 @@ impl ThumbService {
             Ok(shared) => shared.queue.len(),
             Err(_) => 0,
         }
+    }
+}
+
+/// M8/W3 (wasm-port §6): нативная реализация нейтрального трейта —
+/// `ThumbService` и есть backend очереди тамбнейлов (сегодняшнее поведение;
+/// web-реализация [`canvas_core::ThumbBackend`] — W10).
+impl canvas_core::ThumbBackend for ThumbService {
+    fn request(&self, priority: Priority, node: usize, path: PathBuf) {
+        ThumbService::request(self, priority, node, path);
+    }
+
+    fn drain(&self) -> Vec<(usize, Option<Thumbnail>)> {
+        ThumbService::drain(self)
+    }
+
+    fn queue_len(&self) -> usize {
+        ThumbService::queue_len(self)
     }
 }
 

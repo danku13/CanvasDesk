@@ -102,6 +102,10 @@ fn main() -> anyhow::Result<()> {
     // загрузки сцены: стартовые высоты нод сразу точные (как до выноса).
     // Headless/wasm работает на консервативной оценке уровня 1 (growth-only).
     canvas_scene::install_measured_reserve(measured_result_reserve_height);
+    // M8/W3 (wasm-port §3.2): хранилище сцены — сервис за трейтом
+    // CanvasStorage; натив — файловый (диск + .bak, сегодняшнее поведение);
+    // web (W6) подставит FS Access/OPFS при своей сборке.
+    let storage: Arc<dyn canvas_core::CanvasStorage> = Arc::new(canvas_core::FsCanvasStorage);
     let scene = match args.stress {
         Some(n) => {
             tracing::info!(nodes = n, path = %args.path.display(), "нагрузочный режим --stress");
@@ -109,9 +113,9 @@ fn main() -> anyhow::Result<()> {
             if let Err(err) = canvas.save(&args.path) {
                 tracing::warn!(%err, "не удалось сохранить стресс-сцену");
             }
-            SceneState::new(canvas, args.path)
+            SceneState::with_storage(canvas, args.path, storage.clone())
         }
-        None => SceneState::load_or_seed(args.path),
+        None => SceneState::load_or_seed_with_storage(args.path, storage.clone()),
     };
     // M5: --stress-widgets N — детерминированная сетка виджет-нод (часы)
     let mut scene = scene;
@@ -168,6 +172,7 @@ fn main() -> anyhow::Result<()> {
     };
     let mut watcher = WatchService::new(file_sender);
     watcher.sync_dirs(&watched_dirs(&scene.canvas, &scene.canvas_dir()));
+    // M8/W3: вотчер — за трейтом WatchBackend (натив — notify-сервис выше)
     #[cfg(windows)]
     let provider: Arc<dyn ThumbnailProvider + Send + Sync> =
         Arc::new(canvas_shell::ShellThumbnailProvider);
@@ -189,6 +194,7 @@ fn main() -> anyhow::Result<()> {
             let _ = proxy.send_event(AppEvent::ThumbsReady);
         }))
     });
+    // M8/W3: очередь тамбнейлов — за трейтом ThumbBackend (натив — пул выше)
     // Поисковый индекс (T14): worker-поток FTS5 в общем cache.db; ответы —
     // AppEvent::Search через proxy (паттерн ThumbService/Watcher). Ошибка
     // открытия БД — деградация: warn внутри, пустые результаты (SPEC §5.3)
@@ -199,7 +205,9 @@ fn main() -> anyhow::Result<()> {
         })
     };
     let search_cache_dir = canvas_shell::default_cache_dir().unwrap_or_else(|| PathBuf::from("."));
-    let search_service = SearchService::spawn(search_cache_dir, search_responder);
+    // M8/W3: поиск — за трейтом SearchBackend (натив — FTS5 worker)
+    let search_service: Box<dyn canvas_core::SearchBackend> =
+        Box::new(SearchService::spawn(search_cache_dir, search_responder));
     // Первичная индексация file-нод загруженного канваса (T14): полный
     // пересбор таблицы, лишние записи удаляются (ReplaceAll)
     {
@@ -222,15 +230,30 @@ fn main() -> anyhow::Result<()> {
         search_service.command(SearchCommand::ReplaceAll { entries });
     }
     event_loop.run_app(&mut {
+        // M8/W3 (wasm-port §3.1): сборка App — инъекция нейтральных backend'ов
+        // (нативные реализации shell «как сегодня»; canvas-web соберёт свой
+        // набор — тот же App, дублирования UI-логики нет)
         let mut app = App::new(
             scene,
-            thumbs,
+            Box::new(thumbs),
             settings,
             config_path,
+            canvas_shell::default_cache_dir(),
             drag_sender,
             widget_sender,
-            watcher,
+            Box::new(watcher),
             search_service,
+            Box::new(canvas_shell::clipboard::ArboardClipboard::new()),
+            // M8/W3: widget_state — SQLite-таблица cache.db (натив; web — W11)
+            canvas_shell::default_cache_dir().and_then(|dir| {
+                match canvas_shell::WidgetStateStore::open(&dir) {
+                    Ok(store) => Some(Box::new(store) as Box<dyn canvas_core::WidgetStateBackend>),
+                    Err(err) => {
+                        tracing::warn!(%err, "widget_state недоступен: cache.db не открыт");
+                        None
+                    }
+                }
+            }),
             args.desktop,
         );
         // M5 (T20-F): реестр виджетов (материализация встроенных + скан)

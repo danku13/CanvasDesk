@@ -8,6 +8,9 @@ rust-version.workspace = true
 [dependencies]
 canvas-core.workspace = true
 tracing.workspace = true
+# буфер обмена (T7; M8/W3 — ArboardClipboard переехал сюда из canvas-app,
+# app держит нейтральный Box<dyn ClipboardBackend>)
+arboard.workspace = true
 # тамбнейл-кэш SQLite (SPEC §5.2)
 rusqlite.workspace = true
 # файловый вотчер (T10, SPEC §7.5): кроссплатформенный (inotify/RDCW),
