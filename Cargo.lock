@@ -300,6 +300,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvas-mcp-headless"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "canvas-core",
+ "canvas-mcp",
+ "canvas-scene",
+ "serde_json",
+]
+
+[[package]]
 name = "canvas-preview-host"
 version = "0.1.0"
 

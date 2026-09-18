@@ -1,0 +1,25 @@
+[package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
+name = "canvas-mcp-headless"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# мост (протокол + stdio-цикл) и модель сцены с MCP-инструментами
+canvas-mcp.workspace = true
+canvas-scene.workspace = true
+canvas-core.workspace = true
+serde_json.workspace = true
+# bin: run_stdio_with_transport возвращает anyhow::Result
+anyhow.workspace = true
+
+[lib]
+name = "canvas_mcp_headless"
+
+# Лист-крейт (ADR-0012, паттерн canvas-web §3.5 M8): в нативный граф
+# canvasdesk.exe / canvasdesk-mcp.exe НЕ входит — бинарник верификационный,
+# исполняется нативно и в wasmtime (wasm32-wasip1).
+[[bin]]
+name = "canvasdesk-mcp-headless"
+path = "src/main.rs"
