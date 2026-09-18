@@ -44,6 +44,9 @@ jobs:
   # того же скрипта, локально (wasm32-wasip1 + wasmtime).
   # Расширение FR-037/MW2: мост canvas-mcp входит в wasm-гейт (исполнение
   # тестов моста — локально, ступень 3 scripts/wasm_gate.sh, прецедент ADR-0011).
+  # Расширение FR-037/MW4: MCP-слой целиком (canvas-scene, canvas-mcp,
+  # canvas-mcp-headless) — компиляция здесь, исполнение тестов и реальная
+  # MCP-сессия — локально scripts/mcp_wasm_gate.sh (wasmtime, прецедент ADR-0011).
   wasm-check:
     name: wasm-check (wasm32-unknown-unknown)
     runs-on: ubuntu-latest
@@ -53,8 +56,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: check ядра и моста под wasm (core/render/widgets/mcp)
-        run: cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp
+      - name: check ядра и MCP-слоя под wasm (core/render/widgets/mcp/scene/headless)
+        run: cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-scene -p canvas-mcp-headless
 
   # CP0 (волна 0.1 продуктового роадмапа, ADR-0008): лицензионная
   # чистота дерева — гейт на каждый пуш/PR. cargo-deny проверяет

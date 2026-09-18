@@ -754,3 +754,38 @@
 - **Дальше:** MW4 — mcp_wasm_e2e.py (драйвер) + mcp_wasm_gate.sh (гейт
   одной командой) + CI wasm-check (компиляция трёх крейтов) + AGENTS/
   SPEC/ACCEPTANCE; опции MW5/MW6 — по решению владельца.
+
+## 2026-09-18 — FR-037 MW4: гейт, CI и документация — FR-037 закрыт (MW1–MW4)
+
+- **Задача:** MW4 плана FR-037 — верификационные артефакты и синхронизация
+  документации; закрытие FR (приказ владельца «работай сам»).
+- **Сделано:**
+  - **`scripts/mcp_wasm_e2e.py`** (драйвер реальной MCP-сессии, ноль
+    внешних зависимостей): build wasip1 → wasmtime run → сценарий:
+    initialize (эхо 2025-06-18) → tools/list (36) → graph_apply
+    мини-эталон №1 (oracle ±1 %: 208.33 rps / CDN W 34.29 ms ρ 0.417 /
+    origin 20.83 / GW W 3.2 ms / смета 86) → analyze_bottlenecks
+    ρ-лестница CP5 (none 0.417 → warn 0.833 → overload 2.229, бейджи) →
+    негативные ветки (isError, −32601, batch из 2, notification-тишина —
+    проверена трюком «следующий ответ уже на ping») → EOF stdin —
+    штатный exit 0. Лог сессии (каждый конверт с меткой времени) —
+    target/tmp/mcp_wasm_session.log. select-таймаут 60 с на ответ.
+  - **`scripts/mcp_wasm_gate.sh`** (3 ступени, паттерн wasm_gate.sh):
+    1/3 check wasm32-unknown-unknown (scene/mcp/headless); 2/3 wasip1-
+    тесты (RUST_TEST_THREADS=1: 53+13+12=78 в wasmtime); 3/3 e2e-драйвер.
+    Режим --check — только компиляция (эквивалент CI).
+  - **CI** `wasm-check` += `-p canvas-scene -p canvas-mcp-headless`
+    (компиляция; исполнение — локально, прецедент ADR-0011).
+  - **Доки:** AGENTS (структура workspace: canvas-scene/
+    canvas-mcp-headless; раздел «Сборка и тесты»: MCP-wasm-гейт);
+    SPEC §3 (строка wasm-таргетов: MCP-слой) + §3-дерево + §13
+    (подраздел «Headless-верификация MCP»); ACCEPTANCE §29 (чек-лист
+    FR-037, 10 пунктов); FR-037: статус «реализовано (MW1–MW4)», MW4
+    «Выполнено», changelog; ADR-0012 → «принято»; wasm-port.md —
+    примечание актуализировано (W2-вынос исполнен).
+- **Гейты:** `scripts/mcp_wasm_gate.sh` — полный зелёный прогон, exit 0
+  (78 wasip1-тестов + e2e-сессия сошлась по всем оракулам); fmt ✓
+  (Rust-код не менялся с MW3 — workspace 1089/0 остаётся в силе).
+- **FR-037 закрыт.** Опции MW5 (инспектор-сессия владельца)/MW6 (файловый
+  режим headless) — по решению владельца (рекомендации агента: Q4 да/Q5
+  нет). Открытые пункты роадмапа: продуктовый веб-слой S5 (W1–W12 M8).

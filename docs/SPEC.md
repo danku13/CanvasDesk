@@ -73,7 +73,7 @@
 | Мост виджетов | `postMessage` JSON-RPC (`serde_json`) | Узкий типизированный host API с permissions, без eval |
 | Сериализация конфига | `serde` + `toml` | — |
 | Логирование | `tracing` + `tracing-subscriber` | Диагностика на машинах пользователей |
-| WASM-таргеты (FR-036, ADR-0011) | `wasm32-unknown-unknown` (продуктовый, план M8) + `wasm32-wasip1` (служебный тестовый, wasmtime) | Ядро обязано собираться и исполняться под wasm: гейт `scripts/wasm_gate.sh`, CI `wasm-check` |
+| WASM-таргеты (FR-036, ADR-0011) | `wasm32-unknown-unknown` (продуктовый, план M8) + `wasm32-wasip1` (служебный тестовый, wasmtime) | Ядро и MCP-слой (core/render/widgets/mcp/scene/headless, FR-037) обязаны собираться и исполняться под wasm: гейты `scripts/wasm_gate.sh` + `scripts/mcp_wasm_gate.sh`, CI `wasm-check` |
 | Упаковка | `cargo-wix` → MSI, Authenticode-подпись | M4 требует доверия системы |
 
 ## 4. Структура workspace
@@ -90,6 +90,8 @@ canvasdesk/
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
 │   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 36 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks; FR-017: whatif_*)
+│   ├── canvas-scene/        # модель сцены (SceneState) + mcp_dispatch — платформенно-нейтральный, wasm (FR-037/ADR-0012)
+│   ├── canvas-mcp-headless/ # headless MCP-сервер для wasmtime/wasip1 (FR-037) — верификация сессий без Windows
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
 ├── assets/                  # шрифты, иконки нод, виджеты (widgets/), шаблоны (templates/)
 ├── docs/                    # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
@@ -447,6 +449,17 @@ value-связи → пересчёт → батч → валидация) за�
 `user-docs/agent-recipe.md` (R5/CP4, CR-013). Коды ошибок `graph_validate`
 и операций `graph_apply` — стабильный контракт рецепта: менять их только
 вместе с рецептом.
+
+### Headless-верификация MCP (FR-037, ADR-0012)
+
+Слой инструментов (`canvas-scene`), протокольный мост (`canvas-mcp`) и
+headless-сервер (`canvas-mcp-headless`) верифицируются в wasm-рантайме:
+компиляция под `wasm32-unknown-unknown` (CI `wasm-check`), исполнение
+тестов под `wasm32-wasip1` в wasmtime и полная MCP-сессия с реальным
+клиентом (initialize → tools/list → tools/call → oracle-гейты эталонов
+CP1/CP3/CP5 → негативные ветки) — гейт `scripts/mcp_wasm_gate.sh`, без
+Windows и GUI. `HeadlessSession` — серверная сторона будущего
+WebSocket-моста (волна 2 плана M8).
 
 ### graph_apply (FR-033) — атомарная батч-композиция
 
