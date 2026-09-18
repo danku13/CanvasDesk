@@ -20,6 +20,8 @@ canvas-core.workspace = true
 canvas-render.workspace = true
 canvas-shell.workspace = true
 canvas-mcp.workspace = true
+# FR-037/ADR-0012: SceneState + MCP-инструменты (перенесены из main.rs)
+canvas-scene.workspace = true
 # M5 (T20): менеджер виджетов — реестр/LOD/host над canvas-widgets
 canvas-widgets.workspace = true
 anyhow.workspace = true

@@ -266,6 +266,7 @@ dependencies = [
  "canvas-core",
  "canvas-mcp",
  "canvas-render",
+ "canvas-scene",
  "canvas-shell",
  "canvas-widgets",
  "cosmic-text",
@@ -308,12 +309,22 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "canvas-core",
+ "canvas-scene",
  "cosmic-text",
  "glyphon",
  "pollster",
  "tracing",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "canvas-scene"
+version = "0.1.0"
+dependencies = [
+ "canvas-core",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

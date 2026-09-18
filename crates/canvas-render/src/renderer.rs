@@ -165,57 +165,11 @@ pub enum Selection {
     Edge(usize),
 }
 
-/// FR-029 (визуализация проливания): параметр ноды, запитанный входящим
-/// value-ребром с `toParam` — как показать строку-присваивание в теле
-/// карточки и её бейдж. Runtime-данные приложения: пересчитываются в
-/// `recompute_flow` (canvas-app), НЕ сериализуются в `.canvas`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpillView {
-    /// Имя параметра (имя присваивания в Numi-листе ноды).
-    pub param: String,
-    /// Индекс строки листа с присваиванием `param = …` (None — строки нет:
-    /// подмены текста и бейджа не будет, значение только в окружении формулы).
-    pub line: Option<usize>,
-    /// Заголовок ноды-источника (подпись «← откуда»).
-    pub from_label: String,
-    /// Именованный выход истока (суффикс «· output» подписи).
-    pub from_output: Option<String>,
-    /// Эффективное значение для бейджа — значение ребра-источника
-    /// (адресация fromLine/fromOutput/узловое), т.е. то, что реально
-    /// пролито в параметр. None — источник без значения: тихая деградация
-    /// до локального результата строки.
-    pub value: Option<String>,
-}
-
-impl SpillView {
-    /// Кортеж для `canvas_core::flow::substitute_spilled_lines`
-    /// (параметр, заголовок источника, именованный выход).
-    pub fn as_triple(&self) -> (&str, &str, Option<&str>) {
-        (
-            self.param.as_str(),
-            self.from_label.as_str(),
-            self.from_output.as_deref(),
-        )
-    }
-}
-
-/// FR-017 (CP6): what-if представление ноды кадра — виртуальный исходник
-/// (подмены строк активного сценария), подсветка подменённых строк и
-/// дельта-строки «было → стало (+Δ)». Runtime-данные приложения
-/// (пересчёт в `SceneState::recompute_flow`), НЕ сериализуются; подмены
-/// базу не мутируют (инвариант 2 FR-017).
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct WhatIfNode {
-    /// Виртуальный исходник тела: подменённые строки заменены.
-    pub text: String,
-    /// Индексы подменённых строк — фон-подсветка (`BodyQuadKind::WhatIfBg`).
-    pub overrides: Vec<usize>,
-    /// Дельта-строки по формульным строкам: (индекс строки текста,
-    /// «было → стало (+Δ)») — бейдж результата строки.
-    pub line_deltas: Vec<(usize, String)>,
-    /// Дельта узлового итога (футер результата шаблонной/expr-ноды).
-    pub footer_delta: Option<String>,
-}
+// FR-037 MW1 (ребейз): типы view-модели проливаний/what-if переехали в
+// canvas-scene (чистые данные, нужны модельному слою); здесь — реэкспорт,
+// все прежние пути (canvas_render::SpillView/WhatIfNode, crate::SpillView)
+// сохранены. Слои: core → scene → render → app (ADR-0012, без wgpu в scene).
+pub use canvas_scene::{SpillView, WhatIfNode};
 
 /// Сцена кадра: модель канваса, spatial index (culling, T5), выделение
 /// и интерактивные состояния связей (T8).
