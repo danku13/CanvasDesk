@@ -112,7 +112,7 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
     // цикл многосубъектен и ломает пересчёт целиком, остальные проверки
     // дали бы шум (тишина до починки цикла; структурные проверки портов
     // FR-029 тоже вне отчёта — контракт «почини цикл, потом остальное»).
-    let solutions = match flow::propagate_with_lines(canvas, &HashMap::new()) {
+    let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
         Ok(solutions) => solutions,
         Err(cycle) => {
             issues.push(ValidationIssue {

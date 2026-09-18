@@ -21,6 +21,9 @@ mod spatial;
 pub mod templates;
 /// FR-032: валидация модели — чистая функция ядра (коды E-*/W-*).
 pub mod validate;
+/// FR-017 (CP6): what-if сценарии — именованные построчные подмены,
+/// персистентность в `canvasdesk.whatif`.
+pub mod whatif;
 
 pub use edgegeom::{
     best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
@@ -36,7 +39,7 @@ pub use expr::{
 pub use flow::{
     creates_value_cycle, inbound_slots, inbound_slots_with_lines, outputs_display, param_spills,
     propagate, propagate_with_lines, substitute_spilled_lines, topo_sort, value_path, CycleError,
-    FlowKind, FlowOutputs, FlowSolutions, LineOutputs, ParamSpill,
+    FlowKind, FlowOutputs, FlowSolutions, LineOutputs, ParamSpill, WhatIfOverrides,
 };
 pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{
@@ -58,3 +61,7 @@ pub use settings::{
 };
 pub use spatial::{SpatialIndex, WorldRect};
 pub use validate::{has_errors, validate, IssueCode, Severity, ValidationIssue};
+pub use whatif::{
+    active_line_exprs, scenarios_from_canvas, scenarios_to_canvas, validate_scenario, Scenario,
+    StaleOverride,
+};

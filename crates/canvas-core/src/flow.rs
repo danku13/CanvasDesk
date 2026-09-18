@@ -216,13 +216,88 @@ fn cycle_participants(
 /// не прерывает пересчёт — downstream этой ноды получает «вход
 /// отсутствует». Возвращает карту результатов всех формульных нод.
 ///
-/// `overrides` — подмена значений нод по id (what-if, FR-017): нода
+/// `overrides` — подмена значений нод по id (FR-014): нода
 /// получает override как своё значение, downstream видит его же.
+/// Сохраняет сигнатуру FR-014; построчные подмены (FR-017) — через
+/// [`propagate_with_lines`] с [`WhatIfOverrides`].
 pub fn propagate(
     canvas: &Canvas,
     overrides: &HashMap<String, Value>,
 ) -> Result<FlowOutputs, CycleError> {
-    propagate_with_lines(canvas, overrides).map(|solutions| solutions.outputs)
+    let whatif = WhatIfOverrides::from_node_values(overrides);
+    propagate_with_lines(canvas, &whatif).map(|solutions| solutions.outputs)
+}
+
+/// FR-017 (CP6): what-if подмены для [`propagate_with_lines`]. Пустая
+/// структура — поведение идентично FR-014/FR-025 (обратная совместимость,
+/// инвариант 1 FR-017).
+#[derive(Debug, Clone, Default)]
+pub struct WhatIfOverrides {
+    /// Построчные подмены исходников: (id ноды, индекс строки ТЕКСТА)
+    /// → новый исходник строки. Индексация едина с `FlowSolutions.lines`
+    /// и `Edge::from_line` (инвариант 4 FR-017). Индексы вне диапазона
+    /// текста игнорируются (тихая деградация протухших подмен).
+    pub line_exprs: HashMap<(String, usize), String>,
+    /// Value-level подмена значения ноды целиком (наследие FR-014; путь
+    /// MCP): формула не выполняется, downstream видит подменённое значение.
+    pub node_values: HashMap<String, Value>,
+}
+
+impl WhatIfOverrides {
+    /// Value-only слой из старой карты FR-014 (миграция вызовов).
+    pub fn from_node_values(values: &HashMap<String, Value>) -> Self {
+        Self {
+            line_exprs: HashMap::new(),
+            node_values: values.clone(),
+        }
+    }
+
+    /// Подмены строк одной ноды, отсортированные по индексу строки
+    /// (порядок важен: последовательная оценка RHS в виртуальной
+    /// param-карте шаблонной ноды).
+    pub fn line_overrides(&self, node_id: &str) -> Vec<(usize, &String)> {
+        let mut list: Vec<(usize, &String)> = self
+            .line_exprs
+            .iter()
+            .filter(|((id, _), _)| id == node_id)
+            .map(|((_, line), expr)| (*line, expr))
+            .collect();
+        list.sort_by_key(|(line, _)| *line);
+        list
+    }
+}
+
+/// FR-017: виртуальный исходник текста — строки с индексами из подмен
+/// заменены новыми исходниками, остальные — как в persisted-тексте. Индексы
+/// вне диапазона игнорируются (тихая деградация протухших подмен,
+/// симметрия политики FR-025). Публична для приложения: построчные
+/// результаты рендера считаются по тому же виртуальному листу, что и
+/// propagator (инвариант 4 FR-017).
+pub fn whatif_virtual_text(text: &str, overrides: &[(usize, &String)]) -> String {
+    if overrides.is_empty() {
+        return text.to_owned();
+    }
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    for (index, expr) in overrides {
+        if let Some(slot) = lines.get_mut(*index) {
+            *slot = expr;
+        }
+    }
+    lines.join("\n")
+}
+
+/// FR-017: разбор override-строки присваивания (`rps = 2000 rps`) в
+/// (имя, значение) — RHS вычисляется в данном окружении. Не-присваивание
+/// (проза, явная формула `= …`) — None (параметр не биндится).
+fn override_assignment(expr: &str, env: &Env) -> Option<(String, Value)> {
+    let (name, rhs) = expr.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let parsed = expr::parse(rhs.trim()).ok()?;
+    let value = expr::eval(&parsed, env).ok()?;
+    Some((name.to_owned(), value))
 }
 
 /// FR-025: построчные выходы Numi-листов — значение каждой формульной
@@ -281,18 +356,22 @@ struct InboundValues {
 /// остаётся у формулы шаблона (футер, `line = None`).
 pub fn propagate_with_lines(
     canvas: &Canvas,
-    overrides: &HashMap<String, Value>,
+    whatif: &WhatIfOverrides,
 ) -> Result<FlowSolutions, CycleError> {
     let order = topo_sort(canvas)?;
     let mut solutions = FlowSolutions::default();
     for index in order {
         let node = &canvas.nodes[index];
         let id = &node.id;
-        // What-if: подменённое значение заменяет формулу целиком
-        if let Some(value) = overrides.get(id) {
+        // FR-014/FR-017: value-level подмена заменяет формулу целиком
+        if let Some(value) = whatif.node_values.get(id) {
             solutions.outputs.insert(id.clone(), Ok(value.clone()));
             continue;
         }
+        // FR-017: построчные подмены → виртуальный исходник текста
+        // (пустой список — persisted-текст как есть, нулевой оверхед).
+        let line_overrides = whatif.line_overrides(id);
+        let text = whatif_virtual_text(&node.text.clone().unwrap_or_default(), &line_overrides);
         // FR-029: входы по адресации — позиционные слоты (рёбра без
         // toParam) и карта проливания в параметры (рёбра с toParam)
         let inbound = inbound_values(
@@ -322,9 +401,24 @@ pub fn propagate_with_lines(
         // FR-018: у шаблонной ноды параметры (`canvasdesk.template.params`)
         // входят в окружение как `$имя`; формула — снимок из template-ссылки
         // (приоритет над `canvasdesk.expr` — шаблон определяет расчёт).
+        // FR-017: override строки-параметра подменяет значение в ВИРТУАЛЬНОЙ
+        // param-карте (persisted-снапшот не трогается): RHS вычисляется
+        // последовательно в окружении входов + уже подменённых параметров.
         let template = node.template();
         let env = match &template {
-            Some(tpl) => env.with_param_map(tpl.param_values()),
+            Some(tpl) => {
+                let mut params = tpl.param_values();
+                if !line_overrides.is_empty() {
+                    let mut env_params = env.clone();
+                    for (_, expr) in &line_overrides {
+                        if let Some((name, value)) = override_assignment(expr, &env_params) {
+                            params.insert(name.clone(), value.clone());
+                            env_params = env_params.with_param_map(params.clone());
+                        }
+                    }
+                }
+                env.with_param_map(params)
+            }
             None => env,
         };
         // FR-029: ПРОЛИВАНИЕ — значения рёбер с `toParam` подставляются в
@@ -347,8 +441,8 @@ pub fn propagate_with_lines(
         // (лист параметров — присваивания со значениями). Ошибки строк
         // и проза значений не дают. FR-029: финальное окружение листа
         // (переменные) сохраняется — именованные выходы текстовой ноды.
-        let (line_outcomes, sheet_env) =
-            expr::eval_lines_with_env(&node.text.clone().unwrap_or_default(), &env);
+        // FR-017: вычисляется ВИРТУАЛЬНЫЙ исходник (подменённые строки).
+        let (line_outcomes, sheet_env) = expr::eval_lines_with_env(&text, &env);
         for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
             if let Some(ExprOutcome::Ok(value)) = line_outcome {
                 solutions
@@ -1268,7 +1362,7 @@ mod tests {
         let mut node = Node::text("A", "", 0.0, 0.0);
         node.text = Some("встреча в 15:00\nrps = 1000\nlatency = 50 ms\nrps × latency".to_owned());
         canvas.nodes.push(node);
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         // Формульные строки 1, 2, 3 — значения есть (индексы ТЕКСТА;
         // числа сверяем по .num — юниты строк сохраняются: ms у latency)
         assert_eq!(
@@ -1330,7 +1424,7 @@ mod tests {
         }));
         canvas.nodes.push(node);
 
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions.lines[&("T".to_owned(), 0)].num,
             1000.0,
@@ -1391,7 +1485,7 @@ mod tests {
         line_edge.from_line = Some(0);
         canvas.add_edge(line_edge);
 
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
         assert_eq!(
             slots[0].as_ref().map(|value| value.num),
@@ -1423,7 +1517,7 @@ mod tests {
         line_edge.from_line = Some(0);
         canvas.add_edge(line_edge);
 
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
         assert_eq!(slots.len(), 2, "оба value-ребра");
         assert_eq!(
@@ -1462,7 +1556,7 @@ mod tests {
         edge9.from_line = Some(9);
         canvas.add_edge(edge9);
 
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
         assert_eq!(
             slots,
@@ -1483,7 +1577,7 @@ mod tests {
         value_edge(&mut canvas, "e1", "A", "B");
 
         let legacy = propagate(&canvas, &HashMap::new()).expect("DAG");
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(legacy, solutions.outputs, "значения нод совпадают");
         assert_eq!(
             legacy.get("A").and_then(|r| r.as_ref().ok()),
@@ -1580,7 +1674,7 @@ mod tests {
         );
         // value-ребро: значение traffic (2500) → параметр rps
         ported_value_edge(&mut canvas, "e1", "traffic", "gateway", None, Some("rps"));
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         // utilization = 2500 / 100 = 25 — проливание перекрыло локальный 1000
         let utilization = solutions
             .outputs
@@ -1612,7 +1706,7 @@ mod tests {
         node_with_expr(&mut canvas, "A", "7", 0.0);
         node_with_expr(&mut canvas, "B", "$1 × 3", 1.0);
         value_edge(&mut canvas, "e1", "A", "B");
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions
                 .outputs
@@ -1653,7 +1747,7 @@ mod tests {
             Some("origin_rps"),
             Some("connections_per_sec"),
         );
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         // Именованный выход зарегистрирован
         assert_eq!(
             solutions
@@ -1704,7 +1798,7 @@ mod tests {
             Some("peak_rps"),
             Some("rps"),
         );
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions
                 .named
@@ -1733,7 +1827,7 @@ mod tests {
             "# примечание\nX = 1\ndau = 1000000\npeak_rps = 1389 rps\navg = dau / 86400 s"
                 .to_owned(),
         );
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions
                 .outputs
@@ -1756,7 +1850,7 @@ mod tests {
         // Порядок в canvas.edges: e1 (A) раньше e2 (B) — победит B
         ported_value_edge(&mut canvas, "e1", "A", "gw", None, Some("rps"));
         ported_value_edge(&mut canvas, "e2", "B", "gw", None, Some("rps"));
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions
                 .outputs
@@ -1796,7 +1890,7 @@ mod tests {
             Some("no_such"),
             Some("also_missing"),
         );
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions
                 .outputs
@@ -1812,7 +1906,7 @@ mod tests {
         node.set_expr(None);
         canvas.nodes.push(node);
         ported_value_edge(&mut canvas, "e2", "prose", "gw", None, Some("rps"));
-        let solutions = propagate_with_lines(&canvas, &HashMap::new()).expect("DAG");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         assert_eq!(
             solutions
                 .outputs
@@ -1821,6 +1915,200 @@ mod tests {
                 .map(|value| value.num),
             Some(500.0),
             "ребро без значения не сбрасывает локальный параметр"
+        );
+    }
+
+    // --- FR-017 (CP6): what-if построчные подмены ---
+
+    /// Инвариант 1 FR-017: пустой WhatIfOverrides — результат байт-в-байт
+    /// как прежний propagate без подмен (обратная совместимость FR-014).
+    #[test]
+    fn whatif_empty_overrides_matches_baseline() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "5", 0.0);
+        node_with_expr(&mut canvas, "B", "$in * 2", 1.0);
+        value_edge(&mut canvas, "e", "A", "B");
+        let legacy = propagate(&canvas, &HashMap::new()).expect("DAG");
+        let whatif = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(legacy, whatif.outputs, "baseline идентичен");
+        // Value-слой — прежняя семантика FR-014 (тест
+        // overrides_flow_downstream_what_if перенесён на WhatIfOverrides)
+        let mut node_values = HashMap::new();
+        node_values.insert("A".to_owned(), Value::scalar(20.0));
+        let whatif = WhatIfOverrides {
+            line_exprs: HashMap::new(),
+            node_values,
+        };
+        let solutions = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("B")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(40.0),
+            "node_values подмена течёт в downstream"
+        );
+    }
+
+    /// FR-017: подмена строки заметки пересчитывает зависимые строки ниже
+    /// по листу; независимые строки не тронуты (инвариант 4).
+    #[test]
+    fn whatif_line_override_note_recomputes_dependents() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "n",
+            "rps = 1000\nlat = 50 ms\ncpu = rps * 2",
+            0.0,
+            0.0,
+        ));
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("n".to_owned(), 0), "rps = 2000".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let solutions = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        // Строка-подмена: lines видит новое значение (индекс един с
+        // FlowSolutions.lines / from_line — тот же слот)
+        assert_eq!(
+            solutions.lines.get(&("n".to_owned(), 0)).map(|v| v.num),
+            Some(2000.0),
+            "подменённая строка пересчитана в lines"
+        );
+        // Зависимая строка ниже пересчиталась
+        assert_eq!(
+            solutions.lines.get(&("n".to_owned(), 2)).map(|v| v.num),
+            Some(4000.0),
+            "зависимая строка видит подменённую переменную"
+        );
+        // Независимая строка не тронута
+        assert_eq!(
+            solutions.lines.get(&("n".to_owned(), 1)).map(|v| v.num),
+            Some(50.0),
+            "независимая строка не изменилась"
+        );
+        // Итог ноды — последняя формульная строка виртуального листа
+        assert_eq!(
+            solutions
+                .outputs
+                .get("n")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(4000.0),
+            "итог ноды = пересчитанная последняя строка"
+        );
+    }
+
+    /// FR-017: подмена ПОСЛЕДНЕЙ строки заменяет итог ноды.
+    #[test]
+    fn whatif_line_override_last_line_becomes_node_value() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("n", "10 + 5", 0.0, 0.0));
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("n".to_owned(), 0), "7 * 3".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let solutions = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("n")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(21.0),
+            "итог ноды = подменённая последняя строка"
+        );
+    }
+
+    /// FR-017: override строки-параметра шаблонной ноды мержится в
+    /// ВИРТУАЛЬНУЮ param-карту (снапшот не тронут): формула пересчитана,
+    /// соседний параметр — нет.
+    #[test]
+    fn whatif_template_param_virtual_map() {
+        let mut canvas = Canvas::default();
+        template_node_with_outputs(
+            &mut canvas,
+            "svc",
+            &[("rps", 100.0, None), ("capacity", 200.0, None)],
+            "$rps / $capacity",
+            &[],
+        );
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("svc".to_owned(), 0), "rps = 300".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let solutions = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("svc")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(1.5),
+            "формула пересчитана с виртуальной param-картой"
+        );
+        // Соседний параметр не подменён
+        assert_eq!(
+            solutions.lines.get(&("svc".to_owned(), 1)).map(|v| v.num),
+            Some(200.0),
+            "capacity остался локальным"
+        );
+    }
+
+    /// FR-017: каскад — подмена в A пересчитывает B и C по value-рёбрам.
+    #[test]
+    fn whatif_line_override_cascades_downstream() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("A", "5", 0.0, 0.0));
+        canvas.nodes.push(Node::text("B", "$in * 2", 1.0, 0.0));
+        canvas.nodes.push(Node::text("C", "$in + 1", 2.0, 0.0));
+        value_edge(&mut canvas, "e1", "A", "B");
+        value_edge(&mut canvas, "e2", "B", "C");
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("A".to_owned(), 0), "20".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let solutions = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        let num = |id: &str| {
+            solutions
+                .outputs
+                .get(id)
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num)
+        };
+        assert_eq!(num("A"), Some(20.0));
+        assert_eq!(num("B"), Some(40.0), "B пересчитан");
+        assert_eq!(num("C"), Some(41.0), "C пересчитан");
+    }
+
+    /// FR-017: индекс вне текста — тихая деградация (протухшая подмена
+    /// не ломает пересчёт, симметрия политики FR-025).
+    #[test]
+    fn whatif_out_of_range_line_ignored() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "n", "5", 0.0);
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("n".to_owned(), 7), "999".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let solutions = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("n")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(5.0),
+            "протухшая подмена проигнорирована"
         );
     }
 }

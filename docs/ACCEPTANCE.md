@@ -587,3 +587,24 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | R5.6 | Таблицы user-docs | строки в `user-docs/README.md` (файл + канонический URL `agent-recipe.html`) и `user-docs/index.md` (оглавление разделов) |
 | R5.7 | SPEC §MCP | абзац-ссылка на рецепт как на канонический порядок вызовов; коды ошибок — стабильный контракт рецепта |
 | R5.8 | Ручной гейт CP4 (владелец) | ревью текста рецепта + свежий чат стороннего агента (без контекста репо) собирает эталон №5 по рецепту без подсказок; `graph_validate` в конце — `valid: true` |
+
+## 26. Чек-лист FR-017/CP6 (2026-09-18): what-if сценарии — подмены, дельты, сравнение
+
+Контекст: контрольная точка CP6 волны B2 (роадмап §9). What-if режим:
+построчные подмены без правки `.canvas` (инвариант 2), дельты «было →
+стало (+Δ)» на канвасе и в MCP, именованные сценарии (лимит 3) в
+`canvasdesk.whatif`, таблица сравнения, Apply одним undo-шагом.
+
+| # | Сценарий | Ожидание |
+|---|---|---|
+| FR-017.1 | Каскад подмены | 3 calc-ноды A→B→C (`a = 5`, `b = $in × 2`, `c = $in + 1`); подмена строки 0 ноды A на `a = 20` → outputs {A: 20, B: 40, C: 41} (эталон «Проверка»: дельты A: 5→20 (+15), B: 10→40 (+30), C: 11→41 (+30)) — юнит `flow.rs` + интеграционный `integration_whatif.rs::override_recalculates_downstream_cascade` |
+| FR-017.2 | Инвариант 2 (runtime-only) | сериализованный JSON `.canvas` до/после what-if сессии без Apply байт-в-байт идентичен (подмена, переключение сценариев) — `session_without_apply_leaves_canvas_bytes_identical`, `mcp_whatif_override_apply_undo` |
+| FR-017.3 | Дельты MCP ≡ UI | `whatif_deltas` отдаёт те же пары base/whatif/delta, что видит пользователь (инвариант 6) — тест `mcp_whatif_override_apply_undo` |
+| FR-017.4 | Apply + undo | `whatif_apply` пишет подмену в persisted-строку (`a = 20` в тексте) и удаляет сценарий из `canvasdesk.whatif`; undo одним шагом возвращает базу — `mcp_whatif_override_apply_undo` |
+| FR-017.5 | Сценарии персистентны | round-trip `canvasdesk.whatif` в `Canvas.extra`: создание/удаление — undo-шаг; пустой список не оставляет поля; undo синхронизирует runtime-список с восстановленным канвасом — `scenario_round_trip_through_canvas_extra`, `restore_canvas` (main.rs) |
+| FR-017.6 | Протухшие подмены (Q5c) | удалённая нода / строка вне текста / проза — помечены `validate_scenario`, тихо пропускаются пересчётом, валидные подмены работают — `validate_scenario_marks_stale_overrides` |
+| FR-017.7 | Рендер дельт | подменённая строка — квад `WhatIfBg` поверх фона формульной строки (юнит `shape_body_whatif_line_quad`); дельта-бейдж «было → стало (+Δ)» янтарным; при зум < 0.6 — только подсветка (LOD §6.2 SPEC) |
+| FR-017.8 | Ввод режима | `Ctrl+Shift+I` (в HOTKEYS и F1-оверлее), пилюля «What-if», пункт меню канваса; двойной клик по строке расчёта в режиме — override-поле; Esc — выход; тесты `whatif_ui.rs`, `lib.rs` (меню 6 пунктов) |
+| FR-017.9 | MCP-каталог | 9 инструментов `whatif_*` в `tools/list` (всего 35); `whatif_scenario_create` активирует новый сценарий; `whatif_set_param` — sugar адресации по имени параметра — тесты canvas-mcp (14 passed) + `mcp_whatif_override_apply_undo` |
+| FR-017.10 | Документация | раздел «What-if сценарии» в `user-docs/calculations.md`; `Ctrl+Shift+I` в `user-docs/hotkeys.md` (синк с HOTKEYS); шаг 7 в `user-docs/agent-recipe.md`; SPEC §5.1 (схема `canvasdesk.whatif`), §8 (ввод), §13 (контракт `whatif_*`) |
+| FR-017.11 | Ручной гейт CP6 (владелец) | демо эталона №2: вход в what-if, смена `rps` в ноде «Нагрузка» → дельты downstream видны на канвасе и в таблице сравнения; Apply → Ctrl+Z возвращает базу |

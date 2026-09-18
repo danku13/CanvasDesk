@@ -335,6 +335,9 @@ pub enum BodyQuadKind {
     QuoteBar,
     /// Фон фенса кода.
     CodeBg,
+    /// FR-017 (CP6): фон подменённой what-if строки (акцентный тинт поверх
+    /// CodeBg формульной строки).
+    WhatIfBg,
     /// Горизонтальная линия `---`.
     Rule,
 }
@@ -804,6 +807,7 @@ fn shape_body(
     body_width: f32,
     zoom_px: f32,
     formula_lines: &[usize],
+    whatif_lines: &[usize],
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -881,6 +885,16 @@ fn shape_body(
                     rect: [0.0, oy, body_width * zoom_px, height_px],
                     kind: BodyQuadKind::CodeBg,
                 });
+            }
+            // FR-017: подменённая what-if строка — акцентная подсветка
+            // поверх фона формульной строки (видна при любом теле).
+            if let Some(source_line) = item.source_line {
+                if whatif_lines.contains(&source_line) {
+                    quads.push(BodyQuad {
+                        rect: [0.0, oy, body_width * zoom_px, height_px],
+                        kind: BodyQuadKind::WhatIfBg,
+                    });
+                }
             }
             blocks.push(BodyBlock {
                 buffer,
@@ -1079,6 +1093,11 @@ pub struct TitleFrame<'a> {
     /// рендерится как подпись источника («param ← нода · выход»), бейдж
     /// строки — эффективным значением (пролитым), а не локальным литералом.
     pub param_spills: &'a std::collections::HashMap<String, Vec<crate::SpillView>>,
+    /// FR-017 (CP6): what-if представления нод активного сценария —
+    /// виртуальный исходник (подмены строк), подсветка подменённых строк,
+    /// дельта-бейджи «было → стало (+Δ)». Пусто — режим выключен или подмен
+    /// нет (рельеф базы не тронут, инвариант 2 FR-017).
+    pub whatif_nodes: &'a std::collections::HashMap<String, crate::WhatIfNode>,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -1165,6 +1184,8 @@ struct LineResultBuf {
     /// FR-013 (правка 4): полный текст ошибки — для тултипа при наведении
     /// на бейдж (None для успешных строк).
     message: Option<String>,
+    /// FR-017 (CP6): дельта what-if — янтарный бейдж «было → стало (+Δ)».
+    whatif: bool,
 }
 
 /// Зашейпленный лейбл связи (T8): валиден при том же тексте и зуме.
@@ -1387,6 +1408,15 @@ impl TextSystem {
 
         // Фаза 1: актуализация кэша — шейпинг только новых/изменившихся заголовков.
         let show_titles = titles_visible(zoom_px);
+        // FR-017 (CP6): what-if представление — только при читаемом теле
+        // (LOD SPEC §6.2: ниже порога превью тело и подсветка не рисуются).
+        let empty_whatif: std::collections::HashMap<String, crate::WhatIfNode> =
+            std::collections::HashMap::new();
+        let whatif_nodes = if frame.camera.zoom() >= 0.6 {
+            frame.whatif_nodes
+        } else {
+            &empty_whatif
+        };
         if show_titles {
             for &index in frame.indices {
                 let Some(node) = frame.canvas.nodes.get(index) else {
@@ -1421,6 +1451,13 @@ impl TextSystem {
                     String::new()
                 } else {
                     let raw = node.text.clone().unwrap_or_default();
+                    // FR-017: виртуальный исходник активного сценария
+                    // (подменённые строки заменены) — рельеф базы в файле
+                    // не тронут (инвариант 2).
+                    let raw = whatif_nodes
+                        .get(&node.id)
+                        .map(|whatif| whatif.text.clone())
+                        .unwrap_or(raw);
                     match frame.param_spills.get(&node.id) {
                         // FR-029: пролитый параметр показываем подписью
                         // источника — «rps ← Traffic Profile · peak_rps»
@@ -1457,6 +1494,12 @@ impl TextSystem {
                         _ => (String::new(), false),
                     }
                 };
+                // FR-017: дельта узлового итога активного сценария — полный
+                // формат «было → стало (+Δ)» вместо голого значения.
+                let result_text = whatif_nodes
+                    .get(&node.id)
+                    .and_then(|whatif| whatif.footer_delta.clone())
+                    .unwrap_or(result_text);
                 // FR-013 (правка 2): формульные строки текста (для сегментации
                 // тела) и сводка построчных результатов — ключ свежести кэша
                 let formula_lines: Vec<usize> = line_outcomes
@@ -1492,6 +1535,28 @@ impl TextSystem {
                     String::new()
                 } else {
                     format!("P:{result_text}|L:{line_key}")
+                };
+                // FR-017: дельты/подмены активного сценария — в ключе свежести
+                // (бейджи и подсветка зависят от сценария, не от базы).
+                let whatif_key = whatif_nodes
+                    .get(&node.id)
+                    .map(|whatif| {
+                        let mut parts: Vec<String> = whatif
+                            .line_deltas
+                            .iter()
+                            .map(|(line, delta)| format!("{line}~{delta}"))
+                            .collect();
+                        parts.sort();
+                        if let Some(footer) = &whatif.footer_delta {
+                            parts.push(format!("F~{footer}"));
+                        }
+                        parts.join(";")
+                    })
+                    .unwrap_or_default();
+                let results_key = if whatif_key.is_empty() {
+                    results_key
+                } else {
+                    format!("{results_key}|W:{whatif_key}")
                 };
                 // FR-029: эффективные значения пролитых строк — в ключе
                 // свежести (бейдж зависит от значения upstream).
@@ -1583,6 +1648,11 @@ impl TextSystem {
                         None
                     } else {
                         let (_, body_width, _) = body_area(node);
+                        // FR-017: подсветка подменённых строк активного сценария.
+                        let whatif_lines: &[usize] = whatif_nodes
+                            .get(&node.id)
+                            .map(|whatif| whatif.overrides.as_slice())
+                            .unwrap_or(&[]);
                         Some(shape_body(
                             &mut self.font_system,
                             &self.theme,
@@ -1590,6 +1660,7 @@ impl TextSystem {
                             body_width,
                             zoom_px,
                             &formula_lines,
+                            whatif_lines,
                         ))
                     };
 
@@ -1644,14 +1715,33 @@ impl TextSystem {
                                     // локальный литерал; локальная ошибка
                                     // при этом скрывается (источник истины —
                                     // значение потока).
-                                    let (text, message) = match spill_values.get(&i) {
-                                        Some(value) => ((*value).to_owned(), None),
-                                        None => match outcome {
-                                            ExprOutcome::Ok(value) => (value.to_string(), None),
-                                            ExprOutcome::Err(msg) => {
-                                                (LINE_ERROR_BADGE.to_owned(), Some(msg.clone()))
-                                            }
-                                        },
+                                    // FR-017: дельта активного сценария —
+                                    // полный формат «было → стало (+Δ)»
+                                    // вместо голого значения (один ряд:
+                                    // резерв под вторую строку мутировал
+                                    // бы модель — инвариант 2 FR-017).
+                                    let whatif_delta =
+                                        whatif_nodes.get(&node.id).and_then(|whatif| {
+                                            whatif
+                                                .line_deltas
+                                                .iter()
+                                                .find(|(line, _)| *line == i)
+                                                .map(|(_, delta)| delta.clone())
+                                        });
+                                    // FR-017: строка с дельтой — янтарный бейдж.
+                                    let whatif_line = whatif_delta.is_some();
+                                    let (text, message) = if let Some(delta) = whatif_delta {
+                                        (delta, None)
+                                    } else {
+                                        match spill_values.get(&i) {
+                                            Some(value) => ((*value).to_owned(), None),
+                                            None => match outcome {
+                                                ExprOutcome::Ok(value) => (value.to_string(), None),
+                                                ExprOutcome::Err(msg) => {
+                                                    (LINE_ERROR_BADGE.to_owned(), Some(msg.clone()))
+                                                }
+                                            },
+                                        }
                                     };
                                     if text.is_empty() {
                                         return None;
@@ -1691,6 +1781,8 @@ impl TextSystem {
                                         error: !spill_values.contains_key(&i)
                                             && matches!(outcome, ExprOutcome::Err(_)),
                                         message,
+                                        // FR-017: дельта what-if — янтарный бейдж.
+                                        whatif: whatif_line,
                                     })
                                 })
                                 .collect()
@@ -2066,6 +2158,9 @@ impl TextSystem {
                                 },
                                 default_color: if line_result.error {
                                     dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
+                                } else if line_result.whatif {
+                                    // FR-017: дельта сценария — янтарный бейдж.
+                                    dim_color(on_card(crate::WHATIF_BADGE_COLOR), text_factor)
                                 } else {
                                     dim_color(on_card(self.theme.link), text_factor)
                                 },
@@ -2765,7 +2860,7 @@ mod tests {
 
     fn shaped(text: &str) -> BodyLayout {
         let mut fs = FontSystem::new();
-        shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[])
+        shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[], &[])
     }
 
     /// FR-013 (правка 2): формульная строка — самостоятельный блок с
@@ -2780,6 +2875,7 @@ mod tests {
             300.0,
             1.0,
             &[1, 2],
+            &[],
         );
         assert_eq!(
             layout.blocks.len(),
@@ -2792,6 +2888,43 @@ mod tests {
         assert!(
             layout.blocks[1].offset[1] < layout.blocks[2].offset[1],
             "ряды формульных строк идут сверху вниз"
+        );
+    }
+
+    /// FR-017 (CP6): whatif_lines — подменённые строки получают квад WhatIfBg
+    /// на всю ширину и высоту блока формульной строки; без whatif_lines —
+    /// квада нет.
+    #[test]
+    fn shape_body_whatif_line_quad() {
+        let mut fs = FontSystem::new();
+        let text = "Gateway\nrps = 1000";
+        // Без подмен: только фон CodeBg формульной строки.
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[1], &[]);
+        assert!(
+            !layout
+                .quads
+                .iter()
+                .any(|quad| quad.kind == BodyQuadKind::WhatIfBg),
+            "без whatif_lines квада подмены нет: {:?}",
+            layout.quads
+        );
+        // Подмена строки 1 → квад WhatIfBg поверх CodeBg.
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[1], &[1]);
+        let whatif = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::WhatIfBg)
+            .expect("квад what-if подмены есть");
+        assert_eq!(whatif.rect[0], 0.0);
+        assert_eq!(whatif.rect[2], 300.0, "квад на всю ширину тела");
+        let code_bg = layout
+            .quads
+            .iter()
+            .find(|quad| quad.kind == BodyQuadKind::CodeBg)
+            .expect("фон формульной строки рядом");
+        assert_eq!(
+            whatif.rect[3], code_bg.rect[3],
+            "квад подмены — на высоту блока формульной строки"
         );
     }
 
@@ -2859,6 +2992,7 @@ mod tests {
             300.0,
             1.0,
             &[2],
+            &[],
         );
         assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
         let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
@@ -3224,7 +3358,7 @@ mod tests {
         for data in FONT_DATA {
             fs.db_mut().load_font_data((*data).to_vec());
         }
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[2]);
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[2], &[]);
         let rendered = layout
             .blocks
             .iter()
@@ -3242,7 +3376,7 @@ mod tests {
     #[test]
     fn shape_body_quads_scale_with_zoom() {
         let mut fs = FontSystem::new();
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), "- a", 300.0, 2.0, &[]);
+        let layout = shape_body(&mut fs, &ThemeColors::dark(), "- a", 300.0, 2.0, &[], &[]);
         let bullet = layout
             .quads
             .iter()

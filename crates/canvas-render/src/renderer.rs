@@ -31,11 +31,18 @@ use crate::text::{
 use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
 use crate::zorder;
+use glyphon::Color;
 
 /// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
 const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
 /// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
 const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
+/// FR-017 (CP6): фон подменённой what-if строки — акцентный тинт (поверх
+/// CodeBg формульной строки).
+const WHATIF_FILL: [f32; 4] = [0.30, 0.55, 0.95, 0.22];
+/// FR-017 (CP6): цвет дельта-бейджа what-if («было → стало (+Δ)») — янтарный,
+/// отличен от акцентного результата и красной ошибки.
+pub const WHATIF_BADGE_COLOR: Color = Color::rgb(0xdf, 0xa6, 0x3e);
 /// Отступы подложки лейбла связи вокруг текста (world-px, по осям x и y).
 const EDGE_LABEL_PADDING: [f32; 2] = [6.0, 3.0];
 /// Потолок текст-групп кадра (включая финальную): сегменты сверх потолка
@@ -56,6 +63,7 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         | BodyQuadKind::Rule => theme.gfm_muted_fill,
         BodyQuadKind::QuoteBar => theme.gfm_quote_fill,
         BodyQuadKind::CodeBg => theme.gfm_code_fill,
+        BodyQuadKind::WhatIfBg => WHATIF_FILL,
     }
 }
 
@@ -188,6 +196,24 @@ impl SpillView {
     }
 }
 
+/// FR-017 (CP6): what-if представление ноды кадра — виртуальный исходник
+/// (подмены строк активного сценария), подсветка подменённых строк и
+/// дельта-строки «было → стало (+Δ)». Runtime-данные приложения
+/// (пересчёт в `SceneState::recompute_flow`), НЕ сериализуются; подмены
+/// базу не мутируют (инвариант 2 FR-017).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WhatIfNode {
+    /// Виртуальный исходник тела: подменённые строки заменены.
+    pub text: String,
+    /// Индексы подменённых строк — фон-подсветка (`BodyQuadKind::WhatIfBg`).
+    pub overrides: Vec<usize>,
+    /// Дельта-строки по формульным строкам: (индекс строки текста,
+    /// «было → стало (+Δ)») — бейдж результата строки.
+    pub line_deltas: Vec<(usize, String)>,
+    /// Дельта узлового итога (футер результата шаблонной/expr-ноды).
+    pub footer_delta: Option<String>,
+}
+
 /// Сцена кадра: модель канваса, spatial index (culling, T5), выделение
 /// и интерактивные состояния связей (T8).
 pub struct SceneView<'a> {
@@ -248,6 +274,10 @@ pub struct SceneView<'a> {
     /// value-рёбрами с `toParam` — подмена строк-присваиваний на подпись
     /// источника («param ← нода · выход») и эффективный бейдж строки.
     pub param_spills: &'a std::collections::HashMap<String, Vec<SpillView>>,
+    /// FR-017 (CP6): what-if представления нод активного сценария
+    /// (виртуальный текст, подсветка подмен, дельта-бейджи). Пусто —
+    /// режим выключен или подмен нет (рельеф базы не тронут).
+    pub whatif_nodes: &'a HashMap<String, WhatIfNode>,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -1101,6 +1131,7 @@ impl Renderer {
                 expr_line_results: scene.expr_line_results,
                 editing_line_results: scene.expr_editing_results,
                 param_spills: scene.param_spills,
+                whatif_nodes: scene.whatif_nodes,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
