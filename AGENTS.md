@@ -96,6 +96,7 @@ crates/
   canvas-mcp/              # MCP-посредник: stdio JSON-RPC ↔ named pipe, run_stdio_with_transport (FR-037)
   canvas-scene/            # модель сцены + mcp_dispatch (27+ инструментов) — платформенно-нейтральный, wasm (FR-037/ADR-0012)
   canvas-mcp-headless/     # headless MCP-сервер для wasmtime/wasip1 — верификация MCP-сессий без Windows (FR-037, лист-крейт)
+  canvas-web/              # M8/W4 (wasm-port): web-платформенный слой — bindgen-обвязка, web-сервисы; трек B, лист в DAG (каркас)
   canvas-app/              # приложение: event loop, команды, UI-состояние, main()
 assets/                    # шрифты, иконки нод, встроенные виджеты (assets/widgets/), шаблоны (assets/templates/)
 docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/

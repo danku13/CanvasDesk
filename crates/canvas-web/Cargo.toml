@@ -1,0 +1,22 @@
+[package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
+name = "canvas-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# каркас W4 (wasm-port §6): console-логирование на tracing — свой слой,
+# ноль новых внешних зависимостей (кроме bindgen-семейства, см. ниже)
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# bindgen-обвязка (§2/§3.5): генерация JS-глю для браузерной сборки;
+# на нативных целях макросы раскрываются в заглушки (контрольная сборка
+# 2026-09-16) — крейт собирается в составе workspace
+wasm-bindgen.workspace = true
+
+[lib]
+name = "canvas_web"
+# §3.1 wasm-port: web-платформенный слой — зеркало canvas-shell по роли;
+# cdylib — браузерный бинарь (trunk), rlib — нативные тесты каркаса
+crate-type = ["cdylib", "rlib"]

@@ -17,6 +17,9 @@ canvas-shell = { path = "crates/canvas-shell", version = "0.1.0" }
 canvas-mcp = { path = "crates/canvas-mcp", version = "0.1.0" }
 # FR-037/ADR-0012: модельный слой сцены + MCP-инструменты (wasm-верификация)
 canvas-scene = { path = "crates/canvas-scene", version = "0.1.0" }
+# M8/W4 (wasm-port §3.1/§3.5): web-платформенный слой — bindgen-обвязка,
+# web-сервисы; лист в DAG, в нативный граф бинарей не входит
+canvas-web = { path = "crates/canvas-web", version = "0.1.0" }
 # M5: движок виджетов (манифесты, bridge, LOD, реестр, WebView2-хост)
 canvas-widgets = { path = "crates/canvas-widgets", version = "0.1.0" }
 # модель и сериализация
@@ -45,6 +48,11 @@ cosmic-text = "0.12"
 # буфер обмена (T7): без ручного unsafe Win32 clipboard-кода
 arboard = "3"
 pollster = "0.3"
+# M8/W4 (wasm-port §3.5, контрольная сборка §2): JS-глю для браузерной
+# сборки canvas-web; на нативных целях макросы раскрываются в заглушки.
+# Версия для trunk-сборки: wasm-bindgen-cli 0.2.127 — обязан совпадать
+# с Cargo.lock (там =0.2.127 зафоршен js-sys 0.3.104 из winit)
+wasm-bindgen = "0.2"
 # Win32/COM (только canvas-shell / canvas-widgets, под cfg(windows))
 windows = { version = "0.62", features = [
     "Win32_Foundation",

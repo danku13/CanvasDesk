@@ -28,8 +28,11 @@ B2B-контрактом/EULA; в SBOM first-party — сам бинарник `
 | `canvas-widgets` | движок HTML-виджетов (манифесты, bridge, LOD) |
 | `canvas-mcp` | MCP-посредник: stdio ↔ named pipe, 22 инструмента |
 | `canvas-preview-host` | headless-хост для скриншотов виджетов |
+| `canvas-scene` | модель сцены + MCP-инструменты (wasm-верификация, FR-037) |
+| `canvas-mcp-headless` | headless MCP-сервер для wasmtime/wasip1 (FR-037) |
+| `canvas-web` | web-платформенный слой: bindgen-обвязка, web-сервисы (M8/W4) |
 
-## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-18)
+## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-19)
 
 Всего в графе сборки — 382 сторонних крейта (включая транзитивные и
 dev-зависимости); полный состав с текстами лицензий —
@@ -53,6 +56,7 @@ dev-зависимости); полный состав с текстами ли�
 | `cosmic-text` | 0.12 | MIT OR Apache-2.0 | шейпинг/редактирование текста |
 | `arboard` | 3.x | MIT OR Apache-2.0 | буфер обмена (T7) |
 | `pollster` | 0.3 | Apache-2.0/MIT | блокирующий запуск async GPU |
+| `wasm-bindgen` | 0.2.127 | MIT OR Apache-2.0 | JS-глю браузерной сборки `canvas-web` (M8/W4); семейство уже было в дереве транзитивно (winit, wasm-цели) — с W4 прямая зависимость, компилируется и нативно (заглушки макросов) |
 | `windows` / `windows-core` | 0.62 | MIT OR Apache-2.0 | Win32/COM (только Windows-таргеты) |
 
 **Выбор опции дуальных лицензий.** Для крейтов `MIT OR Apache-2.0`
