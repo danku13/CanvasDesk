@@ -19,7 +19,7 @@ CanvasDesk использует сторонние Rust-крейты с перм
 
 | Лицензия | Крейтов |
 |---|---|
-| MIT License | 275 |
+| MIT License | 281 |
 | Apache License 2.0 | 15 |
 | ISC License | 3 |
 | BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License | 2 |
@@ -1749,7 +1749,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Используется: `cc 1.4.5`, `cfg-if 1.0.4`, `find-msvc-tools 0.1.12`, `pkg-config 0.3.34`, `scoped-tls 1.0.1`, 
+Используется: `cc 1.4.5`, `cfg-if 1.0.4`, `find-msvc-tools 0.1.12`, `pkg-config 0.3.34`, `scoped-tls 1.0.1`, `wasm-bindgen-macro-support 0.2.127`, `wasm-bindgen-macro 0.2.127`, `wasm-bindgen-shared 0.2.127`, `wasm-bindgen 0.2.127`, 
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -2964,6 +2964,41 @@ SOFTWARE.
 
 ```text
 Copyright (c) 2019 Embark Studios
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+---
+
+### MIT License
+
+Используется: `bumpalo 3.20.3`, 
+
+```text
+Copyright (c) 2019 Nick Fitzgerald
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4604,7 +4639,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Используется: `adler2 2.0.1`, `anyhow 1.0.104`, `concurrent-queue 2.5.0`, `glyphon 0.6.0`, `itoa 1.0.18`, `khronos-egl 6.0.0`, `linux-raw-sys 0.12.1`, `linux-raw-sys 0.4.15`, `once_cell 1.21.4`, `paste 1.0.15`, `pin-project-lite 0.2.17`, `polling 3.11.0`, `proc-macro2 1.0.107`, `quote 1.0.47`, `rustc-hash 1.1.0`, `rustix 0.38.44`, `rustix 1.1.4`, `serde 1.0.229`, `serde_core 1.0.229`, `serde_derive 1.0.229`, `serde_json 1.0.151`, `smol_str 0.2.2`, `syn 1.0.109`, `syn 2.0.119`, `syn 3.0.4`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.20`, `thiserror 1.0.69`, `thiserror 2.0.20`, `unicode-ident 1.0.24`, `x11-dl 2.21.0`, `zmij 1.0.23`, 
+Используется: `adler2 2.0.1`, `anyhow 1.0.104`, `concurrent-queue 2.5.0`, `glyphon 0.6.0`, `itoa 1.0.18`, `khronos-egl 6.0.0`, `linux-raw-sys 0.12.1`, `linux-raw-sys 0.4.15`, `once_cell 1.21.4`, `paste 1.0.15`, `pin-project-lite 0.2.17`, `polling 3.11.0`, `proc-macro2 1.0.107`, `quote 1.0.47`, `rustc-hash 1.1.0`, `rustix 0.38.44`, `rustix 1.1.4`, `rustversion 1.0.23`, `serde 1.0.229`, `serde_core 1.0.229`, `serde_derive 1.0.229`, `serde_json 1.0.151`, `smol_str 0.2.2`, `syn 1.0.109`, `syn 2.0.119`, `syn 3.0.4`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.20`, `thiserror 1.0.69`, `thiserror 2.0.20`, `unicode-ident 1.0.24`, `x11-dl 2.21.0`, `zmij 1.0.23`, 
 
 ```text
 Permission is hereby granted, free of charge, to any
