@@ -1,3 +1,62 @@
+## 2026-09-19 — W4-каркас (M8 wasm-порт, трек B): крейт canvas-web — bindgen-обвязка, panic-hook, tracing-консоль
+
+- **Задача (владелец):** «Ты отвечаешь за трек B» — двухагентное
+  расписание wasm-port §6.1 (утверждено 14bf50f): трек B стартует
+  W4-каркасом параллельно W1–W3 трека A (ноль файловых пересечений —
+  только новые файлы `crates/canvas-web/` + редкая правка workspace-
+  манифеста). Протокол: ветка на задачу, merge `--no-ff` после гейтов,
+  CI-файлы заморожены до W12 (не тронуты).
+- **Сделано:**
+  - **`crates/canvas-web/`** (новый крейт, cdylib+rlib — зеркало роли
+    canvas-shell, §3.1; лист в DAG, §3.5): `src/lib.rs` — точка слияния
+    (mod-декларации + init-строки): `#[wasm_bindgen(start)]` →
+    `boot()` (panic-hook + tracing + баннер версии); `src/panic_hook.rs`
+    — паники → console.error (wasm) / stderr (натив), формат — чистая
+    функция; `src/web_log.rs` — консольные extern'ы (log/info/warn/error,
+    без js-sys/web-sys — их привнесёт winit на прошивке) + собственный
+    `ConsoleLayer` на tracing-subscriber (Registry + INFO-фильтр,
+    идемпотентный init) — ноль новых внешних зависимостей сверх
+    bindgen-семейства; `index.html` (заглушка каркаса) + `Trunk.toml`
+    (dist → target/dist, serve :8080).
+  - **Зависимости:** wasm-bindgen 0.2.127 — прямая prod-зависимость;
+    семейство уже было в Cargo.lock транзитивно (winit, wasm-цели) —
+    lock-дифф только запись canvas-web, счёт внешних крейтов не изменился
+    (382). Версия пинится js-sys 0.3.104 (=0.2.127). Лицензионный ритуал
+    CP0: `cargo deny check` — advisories/bans/licenses/sources ok;
+    THIRD-PARTY-NOTICES.md перегенерирован (+bindgen-семейство);
+    DEPENDENCIES.md — first-party строка canvas-web + прямая
+    зависимость wasm-bindgen (lock 2026-09-19).
+  - **Инструменты сборки (в контейнер, версии зафиксированы):**
+    trunk 0.21.14, wasm-bindgen-cli 0.2.127 (= версии крейта в lock —
+    обязательное совпадение), cargo-deny 0.20.2, cargo-about 0.9.2.
+    Нюанс trunk: env NO_COLOR=1 валивается его clap (`--no-color`
+    ожидает true/false) — запускать с NO_COLOR=true.
+  - **Доки:** wasm-port.md W4 — аннотация «Каркас исполнен» (приёмка
+    каркаса, прошивка после W3); AGENTS.md — строка canvas-web в
+    структуре workspace.
+- **Приёмка каркаса:** cargo check -p canvas-web (native) ✓; cargo
+  check --target wasm32-unknown-unknown -p canvas-web ✓; cargo test
+  -p canvas-web — 7/7 (формат строки события/паники, идемпотентность
+  init, проводка событий через слой, паника через hook без смерти
+  unwind, баннер версии); `trunk build` ✓ (target/dist: index.html +
+  JS-глю 5,6 КБ + wasm 602 КБ debug); браузерный дым (agent-browser +
+  http.server): страница грузится, в консоли
+  `[INFO canvas_web] canvas-web каркас загружен (W4): версия 0.1.0`,
+  ошибок страницы нет — модуль инстанцируется, start() отрабатывает.
+- **Гейты протокола §6.1:** fmt ✓; clippy --workspace --all-targets
+  -D warnings ✓; cargo test --workspace — 1096/0 (1089 + 7 каркаса);
+  scripts/wasm_gate.sh ✓; CI-файлы не тронуты (заморозка до W12).
+- **Гонка с треком A (протокол п.2):** первый push отклонён — параллельно
+  влит W1 (705e923, web_time). main сброшен на origin, ветка
+  перемержена поверх W1 (конфликт только worklog.md — обе записи
+  сохранены; Cargo.toml/lock автомерж: web-time + wasm-bindgen/
+  canvas-web сосуществуют). Гейты перегнаны на объединённом дереве:
+  fmt/clippy ✓; 1096/0 (W1 тестов не добавил); wasm_gate.sh ✓;
+  cargo deny ✓; trunk build ✓.
+- **Дальше (трек B):** W4-прошивка после W3 трека A (spawn_app,
+  async-init Renderer через spawn_local, пустая сцена); затем
+  W7 → W9 → W8 → W11; W10 — после W6 трека A.
+
 ## 2026-09-19 — M8/W1: web_time::Instant вместо std::time::Instant (трек A, §6.1)
 
 - **Задача:** W1 (S) из `docs/plans/wasm-port.md` §6 — «Время»: миграция на

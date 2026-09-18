@@ -353,6 +353,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvas-web"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "canvas-widgets"
 version = "0.1.0"
 dependencies = [

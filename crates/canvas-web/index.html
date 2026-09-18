@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- CanvasDesk web (M8, wasm-port §3.5). Каркас W4: страница-заглушка —
+     trunk подключит сюда JS-глю canvas_web (#[wasm_bindgen(start)]
+     инициализирует логирование/паник-хук; сцена и камера — прошивка W4
+     после W2/W3 трека A). -->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CanvasDesk — web (каркас W4)</title>
+    <style>
+      /* Тёмная заглушка в тон продукта (SPEC §6, темы CR-007); на прошивке
+         место займёт полноэкранный <canvas> — стили уйдут в него */
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #14161a;
+        color: #c8cdd4;
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+      #boot { opacity: 0.75; }
+    </style>
+  </head>
+  <body>
+    <p id="boot">
+      CanvasDesk web — каркас W4: bindgen-обвязка инициализирована,
+      сцена появится на прошивке (после W2/W3)
+    </p>
+  </body>
+</html>
