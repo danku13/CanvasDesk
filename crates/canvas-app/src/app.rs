@@ -133,6 +133,17 @@ struct OwnedScreenText {
     align: TextAlign,
 }
 
+/// Опора для центрируемого screen-текста внутри `rect` (подписи кнопок/чипов).
+/// Контракт рендера (`ScreenText`, text.rs): `origin` — ЛЕВЫЙ край области
+/// выравнивания, Center центрирует строку в `[origin_x, origin_x + width]`.
+/// Поэтому origin ставим на `rect[0] + inset`, а ширину берём с двусторонним
+/// инсетом — итоговая область по центру rect. Передача центра rect как
+/// origin сдвигает текст вправо на полширины области (дефект CR-015).
+fn centered_box(rect: [f32; 4], inset: f32) -> ([f32; 2], f32) {
+    let width = (rect[2] - inset * 2.0).max(0.0);
+    ([rect[0] + inset, rect[1]], width)
+}
+
 // Буфер обмена ОС (T7, arboard) — M8/W3: за трейтом `ClipboardBackend`
 // (нативная реализация — `canvas_shell::clipboard::ArboardClipboard`,
 // web — navigator.clipboard); инъекция — в `App::new`.
@@ -2146,10 +2157,11 @@ impl App {
                 border: [0.35, 0.40, 0.50, 1.0],
                 params: [pill[3] / 2.0, 0.0, 0.0, 1.0],
             });
+            let (pill_box, pill_width) = centered_box(pill, 4.0);
             texts.push(OwnedScreenText {
                 text: "What-if сценарии".to_owned(),
-                origin: [pill[0] + pill[2] / 2.0, pill[1] + 8.0],
-                width: pill[2] - 8.0,
+                origin: [pill_box[0], pill[1] + 8.0],
+                width: pill_width,
                 font_size: 13.0,
                 color: palette.title,
                 align: TextAlign::Center,
@@ -2196,10 +2208,11 @@ impl App {
                     [0.35, 0.40, 0.50, 1.0]
                 },
             ));
+            let (box_origin, box_width) = centered_box(rect, 3.0);
             texts.push(OwnedScreenText {
                 text: label.to_owned(),
-                origin: [rect[0] + rect[2] / 2.0, rect[1] + 6.0],
-                width: rect[2] - 6.0,
+                origin: [box_origin[0], rect[1] + 6.0],
+                width: box_width,
                 font_size: 13.0,
                 color: if current {
                     Color::rgb(0xe8, 0xec, 0xf4)
@@ -2248,10 +2261,11 @@ impl App {
                 },
                 [0.35, 0.40, 0.50, 1.0],
             ));
+            let (box_origin, box_width) = centered_box(rect, 3.0);
             texts.push(OwnedScreenText {
                 text: label.to_owned(),
-                origin: [rect[0] + rect[2] / 2.0, rect[1] + 6.0],
-                width: rect[2] - 6.0,
+                origin: [box_origin[0], rect[1] + 6.0],
+                width: box_width,
                 font_size: 13.0,
                 color: if enabled { palette.title } else { dim },
                 align: TextAlign::Center,
@@ -9671,10 +9685,11 @@ impl ApplicationHandler<AppEvent> for App {
                             border: [0.35, 0.40, 0.50, 1.0],
                             params: [6.0, 0.0, 0.0, 1.0],
                         });
+                        let (btn_box, btn_width) = centered_box(buttons[i], 4.0);
                         owned_texts.push(OwnedScreenText {
                             text: (*label).to_owned(),
-                            origin: [bx + bw / 2.0, by + 7.0],
-                            width: bw - 8.0,
+                            origin: [btn_box[0], buttons[i][1] + 7.0],
+                            width: btn_width,
                             font_size: 14.0,
                             color: Color::rgb(0xe8, 0xec, 0xf4),
                             align: TextAlign::Center,
@@ -9708,9 +9723,11 @@ impl ApplicationHandler<AppEvent> for App {
                 } else if let Some((text, _)) = &self.toast {
                     let viewport = self.viewport_logical();
                     let ty = viewport[1] - 44.0;
+                    // CR-015: origin — левый край области (контракт ScreenText):
+                    // область [40, viewport−40] по центру окна, текст в её центре.
                     owned_texts.push(OwnedScreenText {
                         text: text.clone(),
-                        origin: [viewport[0] / 2.0, ty],
+                        origin: [40.0, ty],
                         width: viewport[0] - 80.0,
                         font_size: 14.0,
                         color: Color::rgb(0xf0, 0xe6, 0xc2),
@@ -10280,6 +10297,23 @@ mod tests {
         let params: serde_json::Value = serde_json::from_str(params).expect("params — JSON");
         let registry = canvas_core::templates::TemplateRegistry::builtin();
         canvas_scene::mcp_dispatch(scene, &registry, method, &params)
+    }
+
+    /// CR-015: область центрируемого screen-текста лежит внутри rect с
+    /// двусторонним инсетом (origin — левый край области по контракту
+    /// `ScreenText`; подпись центрируется рендером внутри [origin, origin+width]).
+    #[test]
+    fn centered_box_stays_inside_rect() {
+        let rect = [100.0, 20.0, 90.0, 26.0];
+        let (origin, width) = centered_box(rect, 3.0);
+        assert_eq!(origin[0], rect[0] + 3.0);
+        assert_eq!(origin[1], rect[1]);
+        // Область симметрична: центр области == центр rect.
+        assert!((origin[0] + width / 2.0 - (rect[0] + rect[2] / 2.0)).abs() < 0.01);
+        assert!(origin[0] + width <= rect[0] + rect[2] - 3.0 + 0.01);
+        // Узкий rect — ширина не уходит в минус.
+        let (_, narrow_w) = centered_box([0.0, 0.0, 4.0, 10.0], 3.0);
+        assert_eq!(narrow_w, 0.0);
     }
 
     /// FR-037 MW1: паритет констант canvas-scene с canvas-render (метрики
