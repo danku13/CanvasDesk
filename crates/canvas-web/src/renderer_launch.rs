@@ -36,6 +36,14 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
             // успеет присылать Resized к готовности GPU — первый кадр
             // сразу с реальным размером (CSS: body > canvas на весь экран)
             attach_canvas_to_dom(&window);
+            // W5 (ввод): фокус канваса сразу после вставки в DOM. winit
+            // фокусирует canvas при create_window (with_active), но канвас
+            // тогда ЕЩЁ НЕ В DOM — focus() на оторванном элементе
+            // бессмыслен; keydown-листенеры winit висят на канвасе, без
+            // фокуса клавиатура мертва до первого клика. focus_window()
+            // — тот же canvas.focus() (winit WindowExtWebSys-внутренность)
+            // + FocusEvent → Focused(true) → has_focus.
+            window.focus_window();
             let deliver = slot.clone();
             let wake = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
