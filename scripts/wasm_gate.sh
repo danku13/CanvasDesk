@@ -6,8 +6,11 @@
 # (wasm32-wasip1, .cargo/config.toml — runner).
 # FR-037/MW2: в гейт включён мост canvas-mcp (исполнение его тестов —
 # ступень 3, wasmtime, локально — прецедент ADR-0011).
+# M8/W12 (wasm-port §6.1 п.4): canvas-web — продуктовый web-слой в
+# ступени 1 (компиляция; бандл/деплой — scripts/web_bundle.sh и
+# Pages-workflow, там же размер бандла в логе §8.8).
 #
-#   1/3 check: core/render/widgets/mcp компилируются под wasm32-unknown-unknown
+#   1/3 check: core/render/widgets/mcp/web компилируются под wasm32-unknown-unknown
 #   2/3 build: артефакт — rlib ядра под wasm32-unknown-unknown
 #   3/3 test:  тесты canvas-core и моста canvas-mcp исполняются под wasm32-wasip1 (wasmtime)
 #
@@ -17,7 +20,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp"
+CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-web"
 
 echo "[wasm-gate 1/3] cargo check --target wasm32-unknown-unknown $CRATES"
 cargo check --target wasm32-unknown-unknown $CRATES

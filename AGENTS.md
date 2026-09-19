@@ -189,12 +189,20 @@ cargo fmt --check
 WASM-гейт (FR-036, ADR-0011): ядро (canvas-core/canvas-render/canvas-widgets)
 обязано собираться под wasm32-unknown-unknown, а canvas-core — исполняться в
 wasm-рантайме; CI-джоба `wasm-check` проверяет компиляцию на каждый пуш,
-локальный гейт — обе части:
+локальный гейт — обе части. M8/W12 (wasm-port §6.1 п.4): в ступень компиляции
+включён и продуктовый web-слой `canvas-web`:
 
 ```
-scripts/wasm_gate.sh          # check wasm-таргета + rlib ядра + тесты canvas-core под wasip1 (wasmtime)
+scripts/wasm_gate.sh          # check wasm-таргета (core/render/widgets/mcp/web) + rlib ядра + тесты canvas-core под wasip1 (wasmtime)
 scripts/wasm_gate.sh --check  # только компиляция — без wasmtime (эквивалент CI-джобы)
 ```
+
+Web-бандл и деплой (M8/W12): `scripts/web_bundle.sh` — релизная сборка
+canvas-web (trunk 0.21.14, `[profile.release] lto="thin"`), оптимизация
+`wasm-opt -Oz` и отчёт о размере (§8.8: ≤8 МБ raw / ≤4 МБ brotli; в CI итог
+дублируется в $GITHUB_STEP_SUMMARY). Публикация на GitHub Pages (путь `/app` +
+Jekyll-сборка user-docs) — workflow `pages-web.yml` (Source: «GitHub
+Actions», см. README «Веб-версия»).
 
 MCP-wasm-гейт (FR-037, ADR-0012): контрактный слой (canvas-scene,
 canvas-mcp, canvas-mcp-headless) собирается под wasm32-unknown-unknown,

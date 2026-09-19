@@ -124,3 +124,11 @@ windows-core = "0.62"
 include_dir = "0.7"
 # декодирование PNG-тамбнейлов виджетов (без default-фич — только png)
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# M8/W12 (wasm-port §6, «Полировка и деплой»): thin LTO в release-профиле —
+# бандл canvas-web заметно компактнее, нативные релизные бинари чуть меньше
+# и быстрее при приемлемом времени линковки (профиль общий для всех целей:
+# cargo не поддерживает wasm-специфичные профили). Основное сжатие wasm даёт
+# wasm-opt -Oz — scripts/web_bundle.sh / Pages-workflow (§6 W12).
+[profile.release]
+lto = "thin"
