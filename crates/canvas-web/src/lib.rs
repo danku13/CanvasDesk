@@ -27,7 +27,9 @@ use wasm_bindgen::prelude::*;
 /// Точка входа wasm-модуля: `#[wasm_bindgen(start)]` исполняется при
 /// инстанцировании (trunk подключает модуль в `index.html`). Каркас
 /// (panic-hook + tracing-консоль) — сразу, затем прошивка: App,
-/// web-сервисы и event loop (`spawn_app`).
+/// web-сервисы и event loop (`spawn_app`). W7: уровень консольного лога —
+/// из URL (`?log=debug|trace|…`, дефолт INFO) — читать параметры надо ДО
+/// инициализации трейсинга, поэтому `read_params` зовётся здесь.
 #[wasm_bindgen(start)]
 pub fn start() {
     let _banner = boot();
@@ -40,10 +42,31 @@ pub fn start() {
 /// (в лог). `pub` — вызывается из `start` (wasm) и из тестов каркаса
 /// (нативно); возвращает строку баннера для проверяемости.
 pub fn boot() -> String {
+    boot_with_level(app_spawn::read_params().log_level)
+}
+
+/// Вариант с явным уровнем лога (wasm: `?log=`; тесты: None → INFO).
+fn boot_with_level(level: Option<url_params::LogLevel>) -> String {
     panic_hook::set_hook();
-    web_log::init_tracing();
+    use tracing_subscriber::filter::LevelFilter;
+    match level {
+        Some(url_params::LogLevel::Trace) => {
+            web_log::init_tracing_with(LevelFilter::TRACE);
+        }
+        Some(url_params::LogLevel::Debug) => {
+            web_log::init_tracing_with(LevelFilter::DEBUG);
+        }
+        Some(url_params::LogLevel::Warn) => {
+            web_log::init_tracing_with(LevelFilter::WARN);
+        }
+        Some(url_params::LogLevel::Error) => {
+            web_log::init_tracing_with(LevelFilter::ERROR);
+        }
+        // Info и «не уровень» (url_params уже смягчил) — дефолт INFO
+        _ => web_log::init_tracing_with(LevelFilter::INFO),
+    }
     let banner = format!(
-        "canvas-web каркас загружен (W4): версия {}",
+        "canvas-web каркас загружен (W5): версия {}",
         env!("CARGO_PKG_VERSION")
     );
     tracing::info!(target: "canvas_web", "{banner}");
