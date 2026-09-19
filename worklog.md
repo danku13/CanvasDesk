@@ -1,3 +1,69 @@
+## 2026-09-19 — W5 (M8 wasm-порт, трек A): ввод и редактирование в браузере — фокус, буфер обмена (navigator.clipboard), ?stress URL-параметры
+
+- **Задача (§6):** трек A после W3/W4: «Ввод и редактирование» — клавиатура
+  (map_key), двойной клик, drag нод, инлайн-edit, палитра, resize, undo,
+  темы, F1. Приёмка: кириллица печатается/выделяется; Ctrl+B/I/H,
+  Ctrl+Z/Y, Ctrl+C/X/V; `?stress=5000` — 60 fps. Ветка
+  feature/wasm-w5-input-editing от main ce69af2 (fetch — origin не ушёл).
+- **Разведка:** ввод/редактирование — общий код App (W2/W3), платформенных
+  веток не требует; по исходникам winit 0.30.13 (web-бэкенд) найдены три
+  web-пробела: (1) фокус — winit фокусирует canvas при create_window
+  (with_active), но канвас тогда НЕ в DOM (with_append выключен; вставка —
+  платформенный слой) → focus() на оторванном элементе теряется, keydown
+  (листенеры на канвасе) мертвы до первого клика; (2) буфер — NoopClipboard;
+  (3) стресс — CLI-флаги нативной обёртки недоступны на web.
+- **Сделано (всё в canvas-web — правило §3.1):**
+  - **фокус:** `renderer_launch` — `window.focus_window()` сразу после
+    attach_canvas_to_dom (canvas.focus() → FocusEvent → Focused(true) →
+    has_focus; winit сам разруливает «фокус до регистрации листенера»
+    через active_element-проверку).
+  - **`web_clipboard.rs`:** `WebClipboard` за трейтом `ClipboardBackend`
+    (паттерн W3-сервисов, инъекция в App::new вместо NoopClipboard):
+    синхронный контракт через кэш (Rc<RefCell>) + системный буфер
+    `navigator.clipboard` — set_text: кэш сразу, writeText Promise
+    fire-and-forget (spawn_local, ошибки warn — user activation есть от
+    Ctrl+C/X); get_text: кэш сразу, фоновый readText обновляет кэш к
+    следующему Ctrl+V. Ограничение волны 1 задокументировано в шапке
+    модуля: DOM-`paste` с синхронным clipboardData не используем — winit
+    web prevent_default (дефолт) гасит его preventDefault'ом на keydown;
+    внешнее копирование подтягивается следующим жестом. Натив (rlib-тесты):
+    кэш-only, 4 теста (roundtrip, None до set, замена, трейт-объект).
+  - **`url_params.rs`:** `parse_query` — чистая функция над строкой
+    запроса (без web-sys, 6 нативных тестов: stress, оба параметра,
+    неизвестные ключи, пустые пары, битые числа → Err, пустой запрос) +
+    wasm-обвязка `read_params()` (location.search; Err → warn + дефолт).
+    `app_spawn`: `?stress=N` → `SceneState::with_storage(stress_canvas(n),
+    stress.canvas, …)` (зеркало main.rs, автосейв не затирает
+    default.canvas), `?stress-widgets=N` → add_stress_widgets + mark_dirty.
+  - web-sys +3 фичи (Clipboard/Navigator/Location); ноль новых крейтов
+    (js_sys::Promise используется через transitive-типы, сам крейт не
+    нужен). Cargo.lock не изменился.
+  - **`scripts/web_smoke.py`** — воспроизводимый браузерный дым приёмки
+    (Playwright + Chromium+swiftshader `--enable-unsafe-webgpu
+    --use-angle=swiftshader --enable-features=Vulkan`; WEB_SMOKE_URL).
+- **Приёмка (браузерный дым, оракул — консоль/DOM/rAF; скриншоты WebGPU-
+  канваса в headless не снимаются — ограничение из W4):** фокус
+  `document.activeElement=CANVAS` ✓; негативный контроль — онбординг
+  (FR-028, показывается на первом запуске) глушит ввод ✓; Esc «Пропустить»
+  доходит до App ✓; dblclick → инлайн-редактор (cursor=text через
+  sync_cursor_icon) ✓; кириллица «привет» + Shift+Arrow + Ctrl+B/A/Z/C/V
+  — ноль pageerror ✓; Enter коммитит (cursor обратно) ✓; Space+ЛКМ →
+  cursor=grabbing ✓ (клавиши до App; нюанс: при space_pressed
+  on_left_button уходит в ранний return — курсор синкается в
+  on_cursor_moved, в дыме жест с движением, как в реальности);
+  `?stress=5000` — сеется (лог nodes=5000), рендер живёт, rAF-fps = 60 ✓;
+  `?stress=abc` — warn «битый URL-параметр» + обычный запуск ✓.
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  test --workspace — 0 failed (canvas-web: 20 тестов — каркас 13 + W5 11
+  с учётом app_spawn); wasm_gate.sh — полный ✓; mcp_wasm_gate.sh —
+  полный ✓ (e2e-сессия сошлась); cargo check wasm32 canvas-web ✓;
+  trunk build ✓. Нюанс окружения: trunk 0.21.14 падает на NO_COLOR=1
+  (парсит как --no-color=1) — в этом контейнере вызывать с env -u
+  NO_COLOR; rustc 1.98.1 = версия плана §2.
+- **Дальше:** трек A — W6 хранение (L: FS Access + OPFS, IndexedDB-recent,
+  DOM-drop, `?canvas=`); трек B — W7 поиск+миникарта, W9 шаблоны, W8 Numi,
+  W11 виджеты; W10 после W6; W12 финализатор.
+
 ## 2026-09-19 — W4-прошивка (M8 wasm-порт, трек B): первый свет canvas-web — App в браузере, async-init Renderer, WebGPU
 
 - **Задача (§6.1):** трек B, шаг после W4-каркаса (1056d89) и слитого
