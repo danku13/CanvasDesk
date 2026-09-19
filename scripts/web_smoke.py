@@ -377,7 +377,51 @@ async def main() -> int:
         if page_errors:
             failures.append(f"W9 pageerror: {page_errors[:3]}")
 
-        # --- 5c. W9 (часть 2): палитра Ctrl+P + вставка Enter ---
+        # --- 5c. W8: Numi-формулы — calc-строка и бейдж ошибки ---
+        # Тракт FR-013: заметка «кв = 5» → коммит → recompute_flow →
+        # построчный результат (оракул canvas_scene «пересчёт потока»:
+        # values/lines/errors); строка «2 +» — диагностика → error-бейдж.
+        # Поток значений по рёбрам — тот же чистый propagate_with_lines
+        # (canvas-core/flow), верифицирован wasip1-тестами и MCP e2e
+        # оракулом ±1 %; вставленный шаблон (5d) считает $param-лист.
+        await page.mouse.dblclick(400, 430)
+        await asyncio.sleep(0.8)
+        await dispatch_text(page, "кв = 5")
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.5)
+        ok = await wait_console(console_msgs, "пересчёт потока", 10)
+        values = lines = 0
+        for m in reversed(console_msgs):
+            if "пересчёт потока" in m and "values=" in m:
+                values = int(m.split("values=")[1].split()[0])
+                lines = int(m.split("lines=")[1].split()[0])
+                break
+        print(("PASS" if ok and values >= 1 and lines >= 1 else "FAIL"),
+              f"Numi: calc-строка считает (values={values}, lines={lines})")
+        if not (ok and values >= 1 and lines >= 1):
+            failures.append(f"Numi-пересчёт: values={values}, lines={lines}")
+        await page.mouse.dblclick(400, 540)
+        await asyncio.sleep(0.8)
+        await dispatch_text(page, "2 +")
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.5)
+        errors = 0
+        for m in reversed(console_msgs):
+            if "пересчёт потока" in m and "errors=" in m:
+                errors = int(m.split("errors=")[1].split()[0])
+                break
+        print(("PASS" if errors >= 1 else "FAIL"),
+              f"Numi: бейдж ошибки на «2 +» (errors={errors})")
+        if errors < 1:
+            failures.append(f"нет error-исхода: errors={errors}")
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"W8-сценарии без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"W8 pageerror: {page_errors[:3]}")
+
+        # --- 5d. W9 (часть 2): палитра Ctrl+P + вставка Enter ---
         # Тракт FR-018/024/025: Ctrl+P разворачивает постоянный док и
         # фокусирует поиск (реестр include_dir не пуст), Enter вставляет
         # выбранную строку в центр (instantiate_template_at → модель).

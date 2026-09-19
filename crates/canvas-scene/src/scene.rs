@@ -429,6 +429,22 @@ impl SceneState {
         // исходник, подсветка подмен, дельта-бейджи (только ноды с подменами;
         // рельеф базы рендер рисует как есть).
         self.whatif_nodes = self.build_whatif_nodes(&whatif);
+        // W8 (web-приёмка): оракул браузерного дыма — Numi-формулы и поток
+        // значений живут на web-сцене (критерий приёмки W8, wasm-port §6):
+        // values — ноды с вычисленным итогом; errors — бейджи ошибок
+        // (парсинг/вычисление); lines — построчные результаты. DEBUG — на
+        // нативе под дефолтным фильтром не виден, на web виден с ?log=debug.
+        let errors = self
+            .expr_results
+            .values()
+            .filter(|outcome| matches!(outcome, ExprOutcome::Err(_)))
+            .count();
+        tracing::debug!(
+            values = self.expr_results.len(),
+            errors,
+            lines = self.expr_line_results.len(),
+            "пересчёт потока: значения вычислены"
+        );
         // CR-012: ленивый refit высоты — резерв футера результата.
         self.apply_result_reserve();
     }
