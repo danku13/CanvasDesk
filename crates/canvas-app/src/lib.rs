@@ -853,6 +853,22 @@ pub mod ui {
                     })
                     .collect()
             }
+            canvas_core::dragdrop::DragData::Paths(paths) => {
+                // M8/W10: пути уже готовы (web: файлы материализованы в
+                // OPFS, папок нет) — ФС-инспекция не нужна (expand опирается
+                // на std::fs и на wasm неприменим; HdropBytes остаётся
+                // нативным сценарием с разворотом каталогов)
+                let positions = drop_grid(origin, paths.len());
+                paths
+                    .iter()
+                    .zip(positions)
+                    .map(|(path, pos)| DropInsert {
+                        id: next_free_plan_id(&occupied, &mut issued, "file"),
+                        kind: DropInsertKind::File(path.clone()),
+                        pos,
+                    })
+                    .collect()
+            }
             canvas_core::dragdrop::DragData::Text(text) => {
                 // И Url, и Plain -> единая заметка с полным текстом
                 let kind = match drop_text_kind(text) {
@@ -1798,6 +1814,44 @@ pub mod ui {
             // Канвас не мутирован
             assert_eq!(canvas.nodes.len(), 1);
             let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// M8/W10: вариант Paths — пути готовы, ФС-инспекция не нужна
+        /// (на wasm expand неприменим); сетка/ids — как у HdropBytes.
+        #[test]
+        fn plan_drop_paths_variant_needs_no_fs() {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::file("file-1", "old.png", 0.0, 0.0, 10.0, 10.0));
+            // Пути не существуют на диске — план всё равно их принимает
+            let plan = plan_drop(
+                &canvas,
+                &canvas_core::dragdrop::DragData::Paths(vec![
+                    PathBuf::from("/files/картинка.png"),
+                    PathBuf::from("/files/заметка.txt"),
+                ]),
+                [50.0, 60.0],
+            );
+            assert_eq!(plan.len(), 2);
+            assert_eq!(plan[0].id, "file-2");
+            assert_eq!(plan[1].id, "file-3");
+            assert_eq!(plan[0].pos, [50.0, 60.0]);
+            assert_eq!(
+                plan[0].kind,
+                DropInsertKind::File(PathBuf::from("/files/картинка.png"))
+            );
+            assert_eq!(
+                plan[1].kind,
+                DropInsertKind::File(PathBuf::from("/files/заметка.txt"))
+            );
+            // Пустой список — пустой план
+            let plan = plan_drop(
+                &canvas,
+                &canvas_core::dragdrop::DragData::Paths(Vec::new()),
+                [0.0, 0.0],
+            );
+            assert!(plan.is_empty());
         }
 
         /// T21-B: классификация дропа — только одиночная папка с widget.json

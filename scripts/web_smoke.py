@@ -563,6 +563,65 @@ async def main() -> int:
             failures.append(f"W11 pageerror: {page_errors[:3]}")
         await context3.close()
 
+        # --- 7. W10: превью картинок — DOM-drop → OPFS files/ → атлас ---
+        # Приёмка W10 (план §6): PNG/JPEG file-ноды с превью; заглушка
+        # для прочих типов. Синтетический DragEvent с DataTransfer
+        # (Chromium конструирует drop с files): 1×1 PNG + txt — PNG
+        # декодируется (INFO-оракул «превью готово width=… height=…»),
+        # txt — честная заглушка (DEBUG «превью не удалось»); оба файла
+        # материализуются в OPFS files/ (INFO «файл сохранён в OPFS»).
+        context4 = await browser.new_context()
+        page = await context4.new_page()
+        page.on("console", lambda m: console_msgs.append(f"{m.type}: {m.text}"))
+        page.on("pageerror", on_pageerror)
+        console_msgs.clear()
+        page_errors.clear()
+        await page.goto(f"{BASE}/?log=debug", wait_until="load")
+        ok = await wait_console(console_msgs, READY, 25)
+        if not ok:
+            failures.append("W10: рендер не поднялся до drop")
+        print(("PASS" if ok else "FAIL"), "W10: старт до drop")
+        await page.keyboard.press("Escape")  # онбординг → «Пропустить»
+        await asyncio.sleep(0.4)
+        await page.evaluate(
+            """() => {
+                const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+                const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+                const png = new File([bytes], "картинка w10.png", { type: "image/png" });
+                const txt = new File(["заметка"], "заметка w10.txt", { type: "text/plain" });
+                const dt = new DataTransfer();
+                dt.items.add(png);
+                dt.items.add(txt);
+                window.dispatchEvent(new DragEvent("drop", {
+                    dataTransfer: dt, clientX: 600, clientY: 320,
+                }));
+            }"""
+        )
+        ok = await wait_console(console_msgs, "файлы приняты в OPFS", 10)
+        print(("PASS" if ok else "FAIL"), "W10: drop принят (файлы → OPFS files/)")
+        if not ok:
+            failures.append("нет лога приёма файлов (DragData::Paths)")
+        saved = sum("файл сохранён в OPFS" in m for m in console_msgs)
+        print(("PASS" if saved == 2 else "FAIL"),
+              f"W10: PNG и txt материализованы в OPFS ({saved}/2)")
+        if saved != 2:
+            failures.append(f"в OPFS сохранено {saved}/2 файлов")
+        ok = await wait_console(console_msgs, "превью готово", 15)
+        print(("PASS" if ok else "FAIL"), "W10: PNG декодирован (превью в атласе)")
+        if not ok:
+            failures.append("нет лога «превью готово» для PNG")
+        stub = any("превью не удалось" in m for m in console_msgs)
+        print(("PASS" if stub else "FAIL"), "W10: txt — честная заглушка (None)")
+        if not stub:
+            failures.append("нет DEBUG-лога заглушки для txt")
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"W10-сценарии без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"W10 pageerror: {page_errors[:3]}")
+        await context4.close()
+
         await browser.close()
 
     if swiftshader_noise:
