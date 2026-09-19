@@ -25,23 +25,25 @@
 
 ## Публикация на GitHub Pages (опциональное веб-зеркало)
 
-Страницы написаны с Jekyll front matter и рендерятся той же стандартной
-сборкой GitHub Pages, что и раньше, — но выполняет её теперь workflow
-[pages-web.yml](../.github/workflows/pages-web.yml) (M8/W12): он собирает
-Jekyll-сайт из корня репозитория и добавляет веб-версию CanvasDesk по пути
-`/app` в один артефакт (снапшот сайта единый, деплой заменяет прежний
-branch-режим).
+Фактический источник сайта Pages — каталог `docs/` (Settings → Pages
+показывал Source: `main` / `docs`, а не корень, как писала прежняя версия
+этого руководства) — публикуются SPEC/ACCEPTANCE/RECIPES и прочие .md из
+`docs/`. Эту же Jekyll-сборку теперь выполняет workflow
+[pages-web.yml](../.github/workflows/pages-web.yml) (M8/W12), добавляя
+веб-версию CanvasDesk по пути `/app` в тот же артефакт сайта.
 
 1. Откройте **Settings → Pages** репозитория `danku13/CanvasDesk`.
-2. **Source**: «GitHub Actions» (branch-режим больше не используется —
-   деплоем управляет workflow). Нажмите **Save**.
-3. Пуш в `main` (правки `user-docs/**`, `docs/**`, web-крейтов или
-   workflow'а) или ручной запуск **Actions → Pages (web + docs) → Run
-   workflow** публикует сайт.
+2. **Source**: «GitHub Actions» (branch-деплой заменяется workflow'ом,
+   содержимое сайта из `docs/` сохраняется). Нажмите **Save**.
+3. Пуш в `main` (правки `docs/**`, web-крейтов или workflow'а) или ручной
+   запуск **Actions → Pages (web + docs) → Run workflow** публикует сайт.
 4. Через 1–2 минуты после джобы сайт доступен по адресу
    `https://danku13.github.io/CanvasDesk/`.
 
 Нюанс: в частном репозитории Pages доступен на планах Pro/Team/Enterprise.
+Страницы `user-docs/*.md` в сайт Pages не входят (встроенный просмотрщик
+приложения — основной канал; эти URL в таблице ниже — ориентир на случай
+будущего подключения).
 
 ## Канонические URL для ссылок извне
 
