@@ -1,3 +1,60 @@
+## 2026-09-19 — W7 (M8 wasm-порт, трек B): поиск + миникарта в браузере — ?log=debug, DEBUG-оракулы, усиленный smoke
+
+- **Задача (§6):** трек B (после W5-трек A): «Поиск + миникарта» —
+  MemSearch-индекс по нодам, debounce 200 мс, UI поиска/миникарта из
+  render без изменений. Приёмка: Ctrl+F по 5000-нод сцене, переход/
+  подсветка результата. Ветка feature/wasm-w7-search от main 0569e6b.
+- **Разведка:** цепочка поиска на web уже собрана W3/W4: MemSearch за
+  трейтом SearchBackend, ответы через AppEvent::Search (EventLoopProxy на
+  web — mpsc + Waker, работает), поиск по заголовкам/телам нод —
+  платформенно-нейтральный scan_scene в apply_search_hits (§3.2
+  «scan_scene уже есть»), миникарта — общий GPU-проход canvas-render.
+  Дебаунс 200 мс (about_to_wait + request_redraw — цикл самоподдерживается
+  на web через rAF-回调 request_redraw, проверено инструментально). W7 —
+  наблюдаемость и приёмка (слепые зоны дыма W5: редактор/панель не видны).
+- **Сделано:**
+  - **`?log=debug|trace|warn|error`** — уровень консоли из URL:
+    `url_params::LogLevel` (мягкий парсинг — неуровень → тихий INFO,
+    не роняет `?stress`; +3 теста), `web_log::init_tracing_with` (+1
+    тест), boot() читает параметры ДО инициализации трейсинга (баннер
+    W4→W5). Диагностика на web — прямой аналог RUST_LOG (W12 может
+    расширить), снял слепоту DEBUG-канала для приёмки.
+  - **DEBUG-оракулы:** ответ backend'а логируется в респондере
+    canvas-web («поисковый backend ответил hits=N» — доказательство круга
+    Query → MemSearch → SearchEvent → proxy); итог склейки FTS+scan_scene
+    — в `apply_search_hits` canvas-app («поиск завершён rows=N» — DEBUG,
+    нативно невидим, нулевой регресс).
+  - **`scripts/web_smoke.py`** (замена точечного дыма W5, переносим):
+    синтетические `KeyboardEvent` для кириллицы — Playwright
+    `keyboard.type()` шлёт insertText БЕЗ keydown для вне-US-символов,
+    winit-web их не видит (IME на web в winit 0.30 нет); реальная
+    RU-клавиатура даёт keydown с key="ф" — диспатч KeyboardEvent точно
+    воспроизводит контракт браузера; фильтр известного SwiftShader-
+    артефакта (mappedAtCreation 8192 в glyphon — см. ниже).
+- **Диагностика по пути (инструментально, по исходникам winit 0.30.13):**
+  «умирание клавиатуры после Ctrl+F» оказалось иллюзией — Playwright
+  type() не даёт keydown для кириллицы; панель поиска честно открывается
+  и глотает клавиши (доказано курсором: Space+ЛКМ до Ctrl+F → grabbing,
+  при открытой панели → пусто, после Esc → grabbing). ControlFlow::Wait на
+  web не планирует тик — цикл живёт через request_redraw-rAF (дебаунс
+  сходится, проверено tick-пробой — временные пробы удалены).
+- **Приёмка (smoke, 16 PASS):** Ctrl+F по `?stress=5000&log=debug` —
+  запрос «смета» → rows=625 → Enter (прыжок/полёт) ✓; сквозной кейс —
+  dblclick → «привет мир» (синтетическая кириллица) → коммит → Ctrl+F →
+  «привет» → rows=1 ✓ (текст дошёл до модели и ищется); MemSearch-roundtrip
+  ✓; W5-набор (фокус CANVAS, онбординг-гейт, cursor=text/grabbing,
+  копипаст WebClipboard) не сломан ✓; `?stress=abc` — деградация ✓;
+  rAF-fps = 61 ✓. Известный артефакт среды (задокументирован в дыме,
+  не падение): SwiftShader отвергает mappedAtCreation=8192 (glyphon
+  create_oversized_buffer) на прыжке — продуктовый таргет (аппаратный
+  WebGPU, Chromium 113+) ограничения не имеет.
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  test --workspace 0 failed (canvas-web 24: url_params 9, web_log 4);
+  wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (e2e-сессия сошлась); check wasm32
+  canvas-web ✓; trunk build ✓.
+- **Дальше:** трек B — W9 шаблоны (S) → W8 Numi (S) → W11 виджеты (M);
+  трек A — W6 хранение (L); W10 после W6; W12 финализатор.
+
 ## 2026-09-19 — W5 (M8 wasm-порт, трек A): ввод и редактирование в браузере — фокус, буфер обмена (navigator.clipboard), ?stress URL-параметры
 
 - **Задача (§6):** трек A после W3/W4: «Ввод и редактирование» — клавиатура
