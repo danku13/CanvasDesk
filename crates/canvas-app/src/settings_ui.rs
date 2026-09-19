@@ -11,7 +11,10 @@
 //! через [`apply_dropdown_value`] + побочные эффекты рендера на стороне
 //! `App`). Схема `config.toml` не меняется — это реорганизация UI.
 
-use canvas_core::{Corner, GridDensity, GridStyle, Settings, PORT_ZONE_PRESETS};
+use canvas_core::{
+    Corner, GridDensity, GridStyle, Settings, PORT_ZONE_PRESETS, SNAP_COARSE_ZOOM_PRESETS,
+    SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_PRESETS,
+};
 
 use crate::ui::{
     panel_rect, point_in_rect, PANEL_HEADER_HEIGHT, PANEL_HINT_HEIGHT, PANEL_PADDING,
@@ -50,6 +53,21 @@ pub enum SettingsRow {
     LinePorts,
     /// FR-016 (CP5): оверлей узких мест (рамка/бейджи по ρ и W) вкл/выкл.
     BottleneckOverlay,
+    /// FR-038 (п.5): мастер-тумблер магнитной раскладки — гасит весь снап
+    /// без сброса остальных настроек.
+    SnapEnabled,
+    /// FR-038 (п.1/19): привязка к сетке на отпускании drag.
+    SnapGrid,
+    /// FR-038 (п.6/19): направляющие соседей (края/центры/середины).
+    SnapGuides,
+    /// FR-038 (п.15/19): collision-avoidance — не проходить сквозь ноды.
+    SnapCollision,
+    /// FR-038 (п.19): допуск направляющих — цикл по пресетам (экранные px).
+    SnapTolerance,
+    /// FR-038 (п.3/19): порог sub-сетки — цикл по пресетам (zoom).
+    SnapSubZoom,
+    /// FR-038 (п.3/19): порог coarse-сетки — цикл по пресетам (zoom).
+    SnapCoarseZoom,
     /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
     FocusMode,
     /// HUD (F3) включён при старте.
@@ -58,9 +76,10 @@ pub enum SettingsRow {
 
 /// Плоский список всех строк панели (порядок: прежний плоский список,
 /// LinePorts FR-025 — после PortZone, BottleneckOverlay FR-016 — после
-/// LinePorts). Группировка — в [`SETTINGS_GROUPS`];
-/// инвариант полноты (юнит-тест): union строк групп == этот список без дублей.
-pub const SETTINGS_ROWS: [SettingsRow; 10] = [
+/// LinePorts, Snap FR-038 — после BottleneckOverlay). Группировка — в
+/// [`SETTINGS_GROUPS`]; инвариант полноты (юнит-тест): union строк групп ==
+/// этот список без дублей.
+pub const SETTINGS_ROWS: [SettingsRow; 17] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -69,6 +88,13 @@ pub const SETTINGS_ROWS: [SettingsRow; 10] = [
     SettingsRow::PortZone,
     SettingsRow::LinePorts,
     SettingsRow::BottleneckOverlay,
+    SettingsRow::SnapEnabled,
+    SettingsRow::SnapGrid,
+    SettingsRow::SnapGuides,
+    SettingsRow::SnapCollision,
+    SettingsRow::SnapTolerance,
+    SettingsRow::SnapSubZoom,
+    SettingsRow::SnapCoarseZoom,
     SettingsRow::FocusMode,
     SettingsRow::HudOnStart,
 ];
@@ -83,15 +109,29 @@ pub struct SettingsGroup {
 }
 
 /// Группы настроек (FR-026): логические секции вместо плоского списка.
-/// Распределение v1: «Канвас» — сетка; «Связи и порты» — связи/порты/фокус
-/// + построчные точки выхода FR-025; «Приложение» — кнопка и HUD.
-pub const SETTINGS_GROUPS: [SettingsGroup; 3] = [
+/// Распределение: «Канвас» — сетка; «Snap» — магнитная раскладка FR-038
+/// (п.19: мастер + три тумблера + допуск + пороги; якорь п.4 — advanced,
+/// в UI не входит); «Связи и порты» — связи/порты/фокус + построчные точки
+/// выхода FR-025; «Приложение» — кнопка и HUD.
+pub const SETTINGS_GROUPS: [SettingsGroup; 4] = [
     SettingsGroup {
         title: "Канвас",
         rows: &[
             SettingsRow::Grid,
             SettingsRow::GridStyle,
             SettingsRow::GridDensity,
+        ],
+    },
+    SettingsGroup {
+        title: "Snap",
+        rows: &[
+            SettingsRow::SnapEnabled,
+            SettingsRow::SnapGrid,
+            SettingsRow::SnapGuides,
+            SettingsRow::SnapCollision,
+            SettingsRow::SnapTolerance,
+            SettingsRow::SnapSubZoom,
+            SettingsRow::SnapCoarseZoom,
         ],
     },
     SettingsGroup {
@@ -139,6 +179,37 @@ impl SettingsRow {
                     on_off(settings.bottleneck_overlay)
                 )
             }
+            // FR-038 (п.19): раздел Snap — подписи с текущим значением
+            SettingsRow::SnapEnabled => {
+                format!(
+                    "Snap-выравнивание (мастер): {}",
+                    on_off(settings.snap_enabled)
+                )
+            }
+            SettingsRow::SnapGrid => {
+                format!("Привязка к сетке: {}", on_off(settings.snap_to_grid))
+            }
+            SettingsRow::SnapGuides => {
+                format!("Направляющие соседей: {}", on_off(settings.snap_to_guides))
+            }
+            SettingsRow::SnapCollision => {
+                format!(
+                    "Не проходить сквозь ноды: {}",
+                    on_off(settings.snap_collision)
+                )
+            }
+            SettingsRow::SnapTolerance => {
+                format!(
+                    "Допуск направляющих: {} px",
+                    settings.snap_tolerance_px as i32
+                )
+            }
+            SettingsRow::SnapSubZoom => {
+                format!("Порог sub-сетки: ×{}", settings.snap_grid_sub_zoom)
+            }
+            SettingsRow::SnapCoarseZoom => {
+                format!("Порог coarse-сетки: ×{}", settings.snap_grid_coarse_zoom)
+            }
             SettingsRow::FocusMode => {
                 format!("Фокус на связях: {}", on_off(settings.focus_mode))
             }
@@ -167,11 +238,18 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         SettingsRow::ButtonCorner
         | SettingsRow::GridStyle
         | SettingsRow::GridDensity
-        | SettingsRow::PortZone => RowKind::Dropdown,
+        | SettingsRow::PortZone
+        | SettingsRow::SnapTolerance
+        | SettingsRow::SnapSubZoom
+        | SettingsRow::SnapCoarseZoom => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => RowKind::Toggle,
     }
@@ -215,10 +293,50 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
                 .map(|(i, preset)| (format!("{} px", *preset as i32), i == current))
                 .collect()
         }
+        // FR-038 (п.19): допуск и пороги — пресеты с отметкой текущего
+        // (паттерн PortZone: значение между пресетами отмечает ближайший
+        // меньший — ручная правка config.toml всё равно получает отметку)
+        SettingsRow::SnapTolerance => {
+            let current = SNAP_TOLERANCE_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.snap_tolerance_px)
+                .unwrap_or(0);
+            SNAP_TOLERANCE_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("{} px", *preset as i32), i == current))
+                .collect()
+        }
+        SettingsRow::SnapSubZoom => {
+            let current = SNAP_SUB_ZOOM_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.snap_grid_sub_zoom)
+                .unwrap_or(0);
+            SNAP_SUB_ZOOM_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("×{preset}"), i == current))
+                .collect()
+        }
+        SettingsRow::SnapCoarseZoom => {
+            let current = SNAP_COARSE_ZOOM_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.snap_grid_coarse_zoom)
+                .unwrap_or(0);
+            SNAP_COARSE_ZOOM_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("×{preset}"), i == current))
+                .collect()
+        }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => Vec::new(),
     }
@@ -257,10 +375,30 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.port_zone_px = *preset;
             }
         }
+        // FR-038 (п.19): значения раздела Snap
+        SettingsRow::SnapTolerance => {
+            if let Some(preset) = SNAP_TOLERANCE_PRESETS.get(index) {
+                settings.snap_tolerance_px = *preset;
+            }
+        }
+        SettingsRow::SnapSubZoom => {
+            if let Some(preset) = SNAP_SUB_ZOOM_PRESETS.get(index) {
+                settings.snap_grid_sub_zoom = *preset;
+            }
+        }
+        SettingsRow::SnapCoarseZoom => {
+            if let Some(preset) = SNAP_COARSE_ZOOM_PRESETS.get(index) {
+                settings.snap_grid_coarse_zoom = *preset;
+            }
+        }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => {}
     }
@@ -455,7 +593,10 @@ mod tests {
                 seen.push(row);
             }
         }
-        assert_eq!(titles, vec!["Канвас", "Связи и порты", "Приложение"]);
+        assert_eq!(
+            titles,
+            vec!["Канвас", "Snap", "Связи и порты", "Приложение"]
+        );
         for row in SETTINGS_ROWS {
             assert!(seen.contains(&row), "строка вне групп: {row:?}");
         }
@@ -485,6 +626,22 @@ mod tests {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.bottleneck_overlay;
                 }
+                SettingsRow::SnapEnabled => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_enabled;
+                }
+                SettingsRow::SnapGrid => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_to_grid;
+                }
+                SettingsRow::SnapGuides => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_to_guides;
+                }
+                SettingsRow::SnapCollision => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_collision;
+                }
                 SettingsRow::FocusMode => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.focus_mode;
@@ -496,7 +653,10 @@ mod tests {
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
-                | SettingsRow::PortZone => {
+                | SettingsRow::PortZone
+                | SettingsRow::SnapTolerance
+                | SettingsRow::SnapSubZoom
+                | SettingsRow::SnapCoarseZoom => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
@@ -570,11 +730,50 @@ mod tests {
             Some("20 px")
         );
 
+        // FR-038: допуск и пороги — пресеты с отметкой текущего; значение
+        // между пресетами отмечает ближайший меньший (паттерн PortZone)
+        let snap = Settings {
+            snap_tolerance_px: 7.0,
+            snap_grid_sub_zoom: 1.4,
+            snap_grid_coarse_zoom: 0.6,
+            ..Settings::default()
+        };
+        let tolerance = dropdown_options(SettingsRow::SnapTolerance, &snap);
+        assert_eq!(tolerance.len(), SNAP_TOLERANCE_PRESETS.len());
+        assert_eq!(
+            tolerance
+                .iter()
+                .find(|(_, cur)| *cur)
+                .map(|(label, _)| label.as_str()),
+            Some("6 px")
+        );
+        let sub = dropdown_options(SettingsRow::SnapSubZoom, &snap);
+        assert_eq!(sub.len(), SNAP_SUB_ZOOM_PRESETS.len());
+        assert_eq!(
+            sub.iter()
+                .find(|(_, cur)| *cur)
+                .map(|(label, _)| label.as_str()),
+            Some("×1.25")
+        );
+        let coarse = dropdown_options(SettingsRow::SnapCoarseZoom, &snap);
+        assert_eq!(coarse.len(), SNAP_COARSE_ZOOM_PRESETS.len());
+        assert_eq!(
+            coarse
+                .iter()
+                .find(|(_, cur)| *cur)
+                .map(|(label, _)| label.as_str()),
+            Some("×0.5")
+        );
+
         for row in [
             SettingsRow::Grid,
             SettingsRow::EdgesAvoid,
             SettingsRow::FocusMode,
             SettingsRow::HudOnStart,
+            SettingsRow::SnapEnabled,
+            SettingsRow::SnapGrid,
+            SettingsRow::SnapGuides,
+            SettingsRow::SnapCollision,
         ] {
             assert!(
                 dropdown_options(row, &settings).is_empty(),
@@ -589,7 +788,7 @@ mod tests {
     fn dropdown_choice_matches_value_cycle() {
         /// (строка, цикл значений, число значений) — сценарий эквивалентности.
         type CycleCase = (SettingsRow, fn(&mut Settings, usize), usize);
-        let cases: [CycleCase; 4] = [
+        let cases: [CycleCase; 7] = [
             (
                 SettingsRow::ButtonCorner,
                 |s, k| {
@@ -626,6 +825,35 @@ mod tests {
                 },
                 PORT_ZONE_PRESETS.len(),
             ),
+            (
+                SettingsRow::SnapTolerance,
+                |s, k| {
+                    for _ in 0..k {
+                        s.snap_tolerance_px = canvas_core::next_snap_tolerance(s.snap_tolerance_px);
+                    }
+                },
+                SNAP_TOLERANCE_PRESETS.len(),
+            ),
+            (
+                SettingsRow::SnapSubZoom,
+                |s, k| {
+                    for _ in 0..k {
+                        s.snap_grid_sub_zoom =
+                            canvas_core::next_snap_sub_zoom(s.snap_grid_sub_zoom);
+                    }
+                },
+                SNAP_SUB_ZOOM_PRESETS.len(),
+            ),
+            (
+                SettingsRow::SnapCoarseZoom,
+                |s, k| {
+                    for _ in 0..k {
+                        s.snap_grid_coarse_zoom =
+                            canvas_core::next_snap_coarse_zoom(s.snap_grid_coarse_zoom);
+                    }
+                },
+                SNAP_COARSE_ZOOM_PRESETS.len(),
+            ),
         ];
         for (row, cycle, count) in cases {
             for start in 0..count {
@@ -660,6 +888,9 @@ mod tests {
         apply_dropdown_value(&mut settings, SettingsRow::GridStyle, 99);
         apply_dropdown_value(&mut settings, SettingsRow::GridDensity, usize::MAX);
         apply_dropdown_value(&mut settings, SettingsRow::PortZone, 5);
+        apply_dropdown_value(&mut settings, SettingsRow::SnapTolerance, 5);
+        apply_dropdown_value(&mut settings, SettingsRow::SnapSubZoom, 4);
+        apply_dropdown_value(&mut settings, SettingsRow::SnapCoarseZoom, usize::MAX);
         assert_eq!(settings, before);
     }
 
@@ -726,7 +957,13 @@ mod tests {
         // Первая строка = первая строка первой группы (Grid), последняя =
         // последняя строка последней группы (HudOnStart)
         let first = SETTINGS_GROUPS[0].rows[0];
-        let last = SETTINGS_GROUPS[2].rows[1];
+        let last = SETTINGS_GROUPS
+            .last()
+            .expect("группы есть")
+            .rows
+            .last()
+            .copied()
+            .expect("строки есть");
         let first_rect = layout.row_rect(first).expect("первая строка");
         let last_rect = layout.row_rect(last).expect("последняя строка");
         assert_eq!(
