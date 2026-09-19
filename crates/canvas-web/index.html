@@ -59,6 +59,37 @@
         };
       })();
     </script>
+    <script>
+      /* M8/W9 шим (wasm-port §7, «WebGPU-драйверные баги Chromium» —
+         горячая клавиша против браузерного ускорителя). Ctrl+P —
+         продуктовая связка палитры шаблонов (FR-018), но Chromium по
+         Ctrl+P открывает диалог печати: winit-web не делает
+         preventDefault для браузерных акселераторов, и печать
+         поверхностно перехватывает ввод (пауза rAF-насоса winit) —
+         палитра «открывается и умирает». Шим в фазе перехвата (до
+         listeners winit на канвасе) гасит ТОЛЬКО default-действие
+         браузера; событие продолжает распространяться и доходит до
+         App (preventDefault не мешает propagation). Кириллица — «з»
+         (русская раскладка, ср. on_key в canvas-app). F5/Ctrl+S/F12 не
+         трогаем: перезагрузка — часть UX хранения (W6), остальное вне
+         продуктовых связок. Правило §3.1: web-костыли — в canvas-web. */
+      (function () {
+        document.addEventListener(
+          "keydown",
+          function (e) {
+            if (
+              (e.ctrlKey || e.metaKey) &&
+              !e.shiftKey &&
+              !e.altKey &&
+              (e.key === "p" || e.key === "P" || e.key === "з" || e.key === "З")
+            ) {
+              e.preventDefault();
+            }
+          },
+          true,
+        );
+      })();
+    </script>
     <style>
       /* Канвас winit (вставляется canvas-web'ом из renderer_launch) —
       * единственный контент, растянут на окно; тёмный фон в тон продукта

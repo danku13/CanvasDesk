@@ -1,3 +1,76 @@
+## 2026-09-19 — W9 + W8 (M8 wasm-порт, трек B): шаблоны и Numi-формулы в браузере — приёмка смоук-оракулами
+
+- **Задача (§6, топопорядок после W7):** W9 «Шаблоны (FR-018/020)» —
+  `include_dir` c template.json, панель Ctrl+P, wheel-меню; приёмка:
+  вставка шаблонной группы на web. W8 «Numi-формулы (FR-013/014)» —
+  прогон expr/flow на web-сцене, фикс падений; приёмка: calc-строки
+  считают, поток значений живой, бейджи ошибок. Обе задачи — S; одна
+  сессия, ветка feature/wasm-w9-templates от main 58e929b, два коммита
+  (W9, W8), merge --no-ff.
+- **Разведка:** реестр шаблонов — чистый код canvas-core
+  (`TemplateRegistry::builtin` из `include_dir`) + скан custom-каталога
+  через `std::fs` (в W3 уже подтянут под wasm32 — `custom()` возвращает
+  пустой набор при `Err`); UI (палитра FR-024/025, wheel-меню, вставка)
+  — платформенно-нейтральный canvas-app. Numi — чистые expr/flow.
+  Ожидалось «работает как есть» — потребовалась приёмка и два fix'а
+  web-слоя (см. ниже).
+- **Сделано (W9):**
+  - DEBUG-оракулы дыма (по образцу W7): в `on_key` Ctrl+P-ветка —
+    «шаблонная палитра: док открыт/сфокусирован templates=N
+    categories=M»; в `instantiate_template_at` — «шаблон вставлен
+    template=<id> node=<id>» (canvas-app; на нативе под дефолтным
+    фильтром не видны, на web — оракулы `scripts/web_smoke.py`).
+  - Шим Ctrl+P в `index.html` (M8/W9, web-слой §3.1): гасит
+    браузерный акселератор печати в фазе перехвата. Найдено дымом:
+    winit-web НЕ preventDefault'ит браузерные связки — палитра
+    открывалась, но Chromium параллельно поднимал печать, rAF-насос
+    winit приостанавливался и весь ввод умирал (мышь/клавиатура
+    безответны, кадры не презентуются, pageerror=0 — маскировка под
+    «зависший модуль»). preventDefault не мешает propagation — до
+    App событие доходит.
+  - Приёмка-цепочка: Ctrl+P → «шаблонная палитра» templates=45
+    categories=4; Enter → «шаблон вставлен template=com.canvasdesk.
+    api-gateway» (instantiate + fit_template_node_height +
+    recompute_flow); Shift+клик по пустому → wheel-меню (оракул
+    «wheel-меню шаблонов: категории categories=4»).
+  - clippy-фикс: unused `use canvas_core::CanvasStorage as _;` в
+    нативных тестах fs_access.rs/opfs.rs (гейт clippy -D warnings был
+    красный на main — импорт дублировался из `super::*`).
+- **Сделано (W8):**
+  - DEBUG-оракул в `SceneState::recompute_flow` (canvas-scene):
+    «пересчёт потока: значения вычислены values=N errors=M lines=K».
+  - Сцены дыма 5c: calc-строка «кв = 5» → values=1, lines=1
+    (кириллический идентификатор — грамматика FR-013 Unicode-совместима);
+    «2 +» → errors=1 (бейдж ошибки; hit-test тултипа — нативный тест
+    `expr_error_tooltip_hit_test`). Падений expr/flow на web не
+    найдено — фикс не потребовался.
+  - Поток значений по рёбрам — тот же чистый `propagate_with_lines`:
+    верифицирован wasip1-тестами гейта + MCP e2e-оракулом ±1%;
+    вставленный шаблон считает $param-лист на web-сцене.
+- **Деградации волны 1 (задокументированы, не блокеры):**
+  - FR-020 custom-шаблоны: `std::fs` под wasm32-unknown-unknown возвращает
+    `Err(Unsupported)` (не панику) — custom-скан пуст, «Сохранить как
+    шаблон» честно показывает toast об ошибке. OPFS-хранилище custom —
+    волна 2 (§9).
+  - SwiftShader-артефакт дыма (не падение): первый кадр палитры бьёт
+    mappedAtCreation-лимит (32768 > 4KiB) — необработанное исключение
+    разрывает rAF-насос winit. Поэтому палитра проверяется атомарно
+    последней секцией дыма (аккорд Ctrl+P + Enter одним evaluate —
+    обработчики ключей успевают до ломкого кадра), а wheel-меню — до
+    палитры. На аппаратном WebGPU (продуктовый таргет) ограничения нет;
+    ср. W7 (там тот же артефакт на прыжке поиска, 8192 байта).
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓
+  (натив); cargo test --workspace — 45 наборов, 0 failed; check wasm32
+  canvas-web/core/render/widgets/scene/mcp-headless ✓; wasm_gate.sh
+  (345 core + 13 mcp в wasmtime) ✓; mcp_wasm_gate.sh (78 wasip1 +
+  e2e-оракул ±1%) ✓; trunk build (trunk 0.21.14 + wasm-bindgen-cli
+  0.2.127) ✓; браузерный дым web_smoke.py — SMOKE OK (все оракулы
+  W4–W8 без регресса).
+- **Дальше:** W11 (виджеты снапшотом) и W10 (превью картинок) —
+  параллелизуемы (зона canvas-web); W12 — финализатор (полировка/
+  деплой/CI). Отступление от «1 задача = 1 сессия» осознанное: обе
+  задачи S, общая smoke-инфраструктура.
+
 ## 2026-09-19 — W6 (M8 wasm-порт, трек A): хранение в браузере — OPFS + FS Access + IndexedDB-recent + DOM-drop + ?canvas= + экспорт blob
 
 - **Задача (§6, после W5):** «Хранение (§4)»: `CanvasStorage` —
