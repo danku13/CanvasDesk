@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,9 +54,9 @@ use canvas_core::flow::{self, FlowKind};
 use canvas_core::time::Instant;
 use canvas_core::{
     analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
-    resolve_node_path, watched_dirs, AnalysisState, Canvas, ClipboardBackend, Edge, FileEvent,
-    FocusSeed, GridStyle, Node, NodeChange, NodeKind, Priority, SearchBackend, Settings, Side,
-    SpatialIndex, Theme, ThumbBackend, WatchBackend,
+    resolve_node_path, watched_dirs, AnalysisState, Canvas, CanvasStorage, ClipboardBackend, Edge,
+    FileEvent, FocusSeed, GridStyle, Node, NodeChange, NodeKind, Priority, SearchBackend, Settings,
+    Side, SpatialIndex, Theme, ThumbBackend, WatchBackend,
 };
 // M8/W3 (wasm-port §3.1): протокол поиска переехал в core (натив — FTS5 в
 // shell, web/тесты — MemSearch); App общается только через трейт SearchBackend
@@ -395,6 +396,17 @@ pub enum AppEvent {
     /// таймера refresh-снапшотов. Тип кроссплатформенный: на Linux
     /// события не приходят (host нет), матчинг единообразен.
     Widget(canvas_widgets::WidgetEvent),
+    /// M8/W6 (wasm-port §4.2): открыть канвас как активную сцену — текст
+    /// уже прочитан платформенным слоем (FS Access/OPFS/DOM-drop), App
+    /// только парсит и подменяет сцену. `storage` — новое хранилище (диск-
+    /// хэндл после «Открыть с диска»); None — оставить текущее (импорт
+    /// копии в OPFS). Платформенно-нейтрально: источник — web сейчас,
+    /// позже тот же путь пригодится «Недавним» натива.
+    OpenScene {
+        path: PathBuf,
+        json: String,
+        storage: Option<Arc<dyn CanvasStorage>>,
+    },
     /// События шины системных событий (T16): сессия (lock/unlock, R8),
     /// suspend/resume, ExplorerStarted (TaskbarCreated, R7/R11),
     /// shell-hook/clipboard (потребители T18/будущее), SHCNE-мост в
@@ -4435,6 +4447,69 @@ impl App {
                 }
             }
         }
+        self.request_redraw();
+    }
+
+    /// M8/W6 (wasm-port §4.2): смена активной сцены — «Открыть с диска»,
+    /// reopen из недавних, DOM-drop `.canvas`-файла. Текст уже прочитан
+    /// платформенным слоем; здесь: форс-сохранение прежней сцены (незакрытые
+    /// правки не теряются — SPEC §9), парсинг, подмена SceneState и сброс
+    /// переходного UI-состояния (индексы нод новой сцены несовместимы со
+    /// старой — селекция/drag/редактор/поиск/миникарта устаревают мгновенно).
+    /// Камера — дефолт старта (viewport новой сцены дефолтный, ср. App::new).
+    fn on_open_scene(
+        &mut self,
+        path: PathBuf,
+        json: String,
+        storage: Option<Arc<dyn CanvasStorage>>,
+    ) {
+        // Незакрытые правки прежней сцены — в её хранилище до подмены
+        if self.scene.dirty_since.is_some() {
+            self.scene.save_now();
+        }
+        let opened = path.display().to_string();
+        let canvas = match Canvas::from_str(&json) {
+            Ok(canvas) => canvas,
+            Err(err) => {
+                // Битый файл/текст — прежняя сцена продолжает жить (деградация,
+                // не паника; правило обёртки — SPEC §7.5-стиль тоста)
+                self.show_toast(format!("Канвас не открыт: {err}"));
+                self.request_redraw();
+                return;
+            }
+        };
+        let next = match storage {
+            Some(storage) => SceneState::with_storage(canvas, path, storage),
+            None => SceneState::with_storage(canvas, path, Arc::clone(&self.scene.storage)),
+        };
+        self.scene = next;
+        // Сброс переходного UI: всё, что ссылалось на ноды/геометрию старой
+        // сцены. Панели-оверлеи (настройки/хоткеи/помощь/доки/онбординг)
+        // сознательно НЕ трогаем — они про приложение, не про сцену.
+        self.selected = None;
+        self.selected_nodes.clear();
+        self.dragging = None;
+        self.editing = None;
+        self.editor_dragging = false;
+        self.menu = None;
+        self.edge_drag = None;
+        self.select_rect = None;
+        self.drop_preview = None;
+        self.dialog = None;
+        self.pending_undo = None;
+        self.resizing = None;
+        self.hovered = None;
+        self.node_clipboard.clear();
+        self.search = SearchPanel::default();
+        self.search_nodes.clear();
+        self.search_pending = None;
+        self.flight = None;
+        self.pulse = None;
+        self.minimap = None;
+        self.minimap_drag = false;
+        self.template_drag = None;
+        self.camera = Camera::default();
+        self.show_toast(format!("Открыт канвас: {opened}"));
         self.request_redraw();
     }
 
@@ -9945,6 +10020,11 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Drag(event) => self.on_drag_event(event),
             AppEvent::FileEvents(events) => self.on_file_events(events),
             AppEvent::Search(event) => self.on_search_event(event),
+            AppEvent::OpenScene {
+                path,
+                json,
+                storage,
+            } => self.on_open_scene(path, json, storage),
             #[cfg(windows)]
             AppEvent::Desktop(event) => self.on_desktop_event(event),
             #[cfg(windows)]
@@ -9962,6 +10042,15 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.scene.autosave_if_due();
+        // M8/W6 (wasm-port §4.2): пока сцена грязная, цикл не засыпает —
+        // запланированный кадр держит rAF-цепочку web-цикла живой, иначе
+        // about_to_wait не вызывается после последнего события ввода и
+        // debounce автосейва (2 с) никогда не срабатывает (правка → коммит
+        // → тишина → сохранения нет). На нативе цена — пара лишних кадров
+        // в течение 2 с после правки; поведение автосейва идентичное.
+        if self.scene.dirty_since.is_some() {
+            self.request_redraw();
+        }
         // Debounce запроса поиска (T14): 200 мс покоя после правки — отправка.
         // Панель/анимации держат цикл красным через request_redraw ниже,
         // иначе ControlFlow::Wait уснул бы до следующего события
@@ -10964,5 +11053,156 @@ mod tests {
             Some("значение".into())
         );
         std::fs::remove_dir_all(&cache_dir).ok();
+    }
+
+    /// Хелпер W6: App на заглушках с явным хранилищем сцены (MemStorage)
+    /// — для проверки подмены сцены/флаша правок без окна и GPU.
+    fn stub_app_on_storage(
+        path: &str,
+        storage: Arc<dyn CanvasStorage>,
+    ) -> (App, Arc<dyn CanvasStorage>) {
+        let scene =
+            SceneState::with_storage(Canvas::default(), PathBuf::from(path), Arc::clone(&storage));
+        let cache_dir =
+            std::env::temp_dir().join(format!("canvasdesk-w6-app-{}", std::process::id()));
+        std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
+        let (search_responder, _rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder: canvas_core::SearchResponder = std::sync::Arc::new(move |event| {
+                let _ = tx.send(event);
+            });
+            (responder, rx)
+        };
+        let app = App::new(
+            scene,
+            Box::new(canvas_core::NoopThumbs),
+            Settings::default(),
+            None,
+            Some(cache_dir.clone()),
+            std::sync::Arc::new(|_event: canvas_core::DragEvent| {}),
+            std::sync::Arc::new(|_event: canvas_widgets::WidgetEvent| {}),
+            Box::new(canvas_core::NoopWatch),
+            Box::new(canvas_core::MemSearch::new(search_responder)),
+            Box::new(canvas_core::NoopClipboard),
+            Some(Box::new(canvas_core::MemWidgetState::default())),
+            false,
+            Box::new(canvas_render::renderer_init::NoopRendererLaunch),
+        );
+        std::fs::remove_dir_all(&cache_dir).ok();
+        (app, storage)
+    }
+
+    /// M8/W6: OpenScene — сцена подменяется (путь/модель), переходный UI
+    /// сбрасывается (селекция/поиск/миникарта ссылались на старые индексы),
+    /// камера — дефолт старта.
+    #[test]
+    fn open_scene_replaces_scene_and_resets_ui() {
+        let (mut app, _old_storage) = stub_app_on_storage(
+            "target/tmp/w6-a.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        // Переходное состояние «до»: селекция ноды 0, миникарта, поиск
+        app.selected = Some(Selection::Node(0));
+        app.selected_nodes.push(0);
+        app.minimap = None; // поле приватное, но тесты в том же модуле — установим через открытие
+        app.camera.set_zoom(3.0);
+
+        let json = r#"{"nodes":[{"id":"n1","type":"text","text":"новая сцена","x":0,"y":0,"width":200,"height":150}]}"#;
+        app.on_open_scene(
+            PathBuf::from("target/tmp/w6-b.canvas"),
+            json.to_string(),
+            None,
+        );
+
+        assert_eq!(app.scene.path, PathBuf::from("target/tmp/w6-b.canvas"));
+        assert_eq!(app.scene.canvas.nodes.len(), 1, "новая модель на месте");
+        assert_eq!(app.selected, None, "селекция старой сцены сброшена");
+        assert!(app.selected_nodes.is_empty());
+        assert!(!app.search.open, "панель поиска закрыта");
+        assert!(
+            (app.camera.zoom() - Camera::default().zoom()).abs() < 1e-6,
+            "камера — дефолт старта"
+        );
+        // Тост подтверждает открытие
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(text, _)| text.contains("Открыт")));
+    }
+
+    /// M8/W6: битый текст канваса — прежняя сцена продолжает жить (тост
+    /// с ошибкой, путь/модель не тронуты) — деградация, не паника.
+    #[test]
+    fn open_scene_parse_error_keeps_current_scene() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/w6-keep.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.on_open_scene(
+            PathBuf::from("target/tmp/w6-broken.canvas"),
+            "{битый json".to_string(),
+            None,
+        );
+        assert_eq!(app.scene.path, PathBuf::from("target/tmp/w6-keep.canvas"));
+        assert!(app.scene.canvas.nodes.is_empty());
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(text, _)| text.contains("не открыт")));
+    }
+
+    /// M8/W6: незакрытые правки прежней сцены — форс-сохранение в её
+    /// хранилище ДО подмены (SPEC §9: правки не теряются при смене файла).
+    #[test]
+    fn open_scene_flushes_dirty_previous_scene() {
+        let old = Arc::new(canvas_core::MemStorage::new());
+        let (mut app, old_handle) = stub_app_on_storage("target/tmp/w6-dirty.canvas", old);
+        app.scene
+            .canvas
+            .extra
+            .insert("name".into(), serde_json::json!("незакрытая правка"));
+        app.scene.mark_dirty();
+        assert!(app.scene.dirty_since.is_some());
+
+        let json = r#"{"nodes":[]}"#;
+        app.on_open_scene(
+            PathBuf::from("target/tmp/w6-next.canvas"),
+            json.to_string(),
+            None,
+        );
+        // Прежняя сцена записана в СТАРОЕ хранилище под старым путём
+        let saved = old_handle
+            .load(&PathBuf::from("target/tmp/w6-dirty.canvas"))
+            .expect("грязная сцена сохранена до подмены");
+        assert_eq!(
+            saved.extra.get("name").and_then(|v| v.as_str()),
+            Some("незакрытая правка")
+        );
+        // Новая сцена чистая
+        assert!(app.scene.dirty_since.is_none());
+    }
+
+    /// M8/W6: явное хранилище в событии (диск-хэндл после «Открыть с
+    /// диска») — новая сцена сохраняет именно в него.
+    #[test]
+    fn open_scene_uses_provided_storage() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/w6-opfs.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        let disk = Arc::new(canvas_core::MemStorage::new());
+        let json = r#"{"nodes":[{"id":"d1","type":"text","text":"с диска","x":10,"y":20,"width":200,"height":150}]}"#;
+        app.on_open_scene(
+            PathBuf::from("disk.canvas"),
+            json.to_string(),
+            Some(disk as Arc<dyn CanvasStorage>),
+        );
+        app.scene.save_now();
+        let saved = app
+            .scene
+            .storage
+            .load(&PathBuf::from("disk.canvas"))
+            .expect("сохранение ушло в подменённое хранилище");
+        assert_eq!(saved.nodes.len(), 1);
     }
 }
