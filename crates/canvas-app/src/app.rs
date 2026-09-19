@@ -2211,11 +2211,13 @@ impl App {
         };
         chip_text(layout.base, "База", active.is_none());
         for (i, rect) in layout.scenarios.iter().enumerate() {
+            // CR-015: подпись через `chip_label` — тот же кап «…», что в
+            // раскладке чипа (иначе текст шире чипа и переливается).
             let label = self
                 .scene
                 .scenarios
                 .get(i)
-                .map(|scenario| scenario.name.clone())
+                .map(|scenario| whatif_ui::chip_label(&scenario.name))
                 .unwrap_or_default();
             chip_text(*rect, &label, active == Some(i));
         }
