@@ -13,6 +13,7 @@ use canvas_app::app::{
     add_stress_widgets, measured_result_reserve_height, parse_args, stress_canvas, App, AppEvent,
 };
 use canvas_core::{resolve_node_path, watched_dirs, Settings, ThumbnailProvider};
+use canvas_render::renderer_init::BlockOnRendererLaunch;
 use canvas_scene::SceneState;
 use canvas_shell::{SearchCommand, SearchService, ThumbService, WatchService};
 use winit::event_loop::{EventLoop, EventLoopProxy};
@@ -255,6 +256,10 @@ fn main() -> anyhow::Result<()> {
                 }
             }),
             args.desktop,
+            // M8/W4 (wasm-port §3.4): натив-стратегия инициализации Renderer —
+            // pollster::block_on (GPU-иниц блокирующая, как до W4); web
+            // подставит SpawnLocalRendererLaunch (spawn_local + слот)
+            Box::new(BlockOnRendererLaunch),
         );
         // M5 (T20-F): реестр виджетов (материализация встроенных + скан)
         app.init_widgets();

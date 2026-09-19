@@ -1,33 +1,83 @@
 <!doctype html>
-<!-- CanvasDesk web (M8, wasm-port §3.5). Каркас W4: страница-заглушка —
-     trunk подключит сюда JS-глю canvas_web (#[wasm_bindgen(start)]
-     инициализирует логирование/паник-хук; сцена и камера — прошивка W4
-     после W2/W3 трека A). -->
+<!-- CanvasDesk web (M8, wasm-port §3.5). Прошивка W4: trunk подключает
+     JS-глю canvas_web — #[wasm_bindgen(start)] поднимает App; winit web
+     создаёт <canvas> при create_window, а canvas-web вставляет его в DOM
+     (winit 0.30 не делает этого сам), Renderer инициализируется
+     асинхронно (spawn_local, §3.4). -->
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CanvasDesk — web (каркас W4)</title>
+    <title>CanvasDesk — web</title>
+    <script>
+      /* M8/W4 web-compat шим (wasm-port §7, «WebGPU-драйверные баги
+         Chromium» — конкретный случай дрейфа спеки). wgpu 22 просит у
+         requestDevice лимит maxInterStageShaderComponents, удалённый из
+         WebGPU (переименован в maxInterStageShaderVariables): свежие
+         Chromium отклоняют весь запрос из-за нераспознанного имени
+         («The limit … is not recognized») — падение замаскировано под
+         «GPU-адаптер не найден». Шим удаляет из requiredLimits имена,
+         которых нет в limits адаптера (generic-фильтр: переживает и
+         будущие переименования); значения распознанных лимитов не
+         трогает — запрос лимита выше возможностей адаптера честно
+         отклоняется браузером, как в спеке. Правило §3.1: web-костыли
+         живут в web-слое (canvas-web), ядро и wgpu не патчатся. */
+      (function () {
+        if (typeof GPUAdapter === "undefined") return;
+        var proto = GPUAdapter.prototype;
+        if (!proto || !proto.requestDevice) return;
+        var orig = proto.requestDevice;
+        proto.requestDevice = function (desc) {
+          if (
+            desc &&
+            desc.requiredLimits &&
+            this.limits &&
+            typeof this.limits === "object"
+          ) {
+            // for..in, а не Object.keys: свойства GPUAdapterLimits —
+            // геттеры на прототипе (собственных enumerable-ключей нет)
+            var known = {};
+            for (var limit in this.limits) known[limit] = true;
+            var filtered = {};
+            var dropped = [];
+            for (var key in desc.requiredLimits) {
+              if (known[key]) {
+                filtered[key] = desc.requiredLimits[key];
+              } else {
+                dropped.push(key);
+              }
+            }
+            if (dropped.length > 0) {
+              console.warn(
+                "[canvas-web compat] лимиты не распознаны браузером, исключены из requestDevice: " +
+                  dropped.join(", "),
+              );
+              desc = Object.assign({}, desc, { requiredLimits: filtered });
+            }
+          }
+          return orig.call(this, desc);
+        };
+      })();
+    </script>
     <style>
-      /* Тёмная заглушка в тон продукта (SPEC §6, темы CR-007); на прошивке
-         место займёт полноэкранный <canvas> — стили уйдут в него */
+      /* Канвас winit (вставляется canvas-web'ом из renderer_launch) —
+      * единственный контент, растянут на окно; тёмный фон в тон продукта
+      * (SPEC §6, темы CR-007) — до первого кадра async-init Renderer. */
       :root { color-scheme: dark; }
-      body {
+      html, body {
         margin: 0;
-        height: 100vh;
-        display: grid;
-        place-items: center;
+        height: 100%;
+        overflow: hidden;
         background: #14161a;
-        color: #c8cdd4;
-        font: 14px/1.5 system-ui, sans-serif;
       }
-      #boot { opacity: 0.75; }
+      body > canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        /* tabindex="0" (winit: клавиатура) — без рамки фокуса */
+        outline: none;
+      }
     </style>
   </head>
-  <body>
-    <p id="boot">
-      CanvasDesk web — каркас W4: bindgen-обвязка инициализирована,
-      сцена появится на прошивке (после W2/W3)
-    </p>
-  </body>
+  <body></body>
 </html>

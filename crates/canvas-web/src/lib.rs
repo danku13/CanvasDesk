@@ -4,25 +4,34 @@
 //! `canvas-app`, ни нативные бинари на него не ссылаются — граф сборки
 //! `canvasdesk.exe` не меняется.
 //!
-//! Стадия **W4-каркас** (§6.1, трек B): каркас без App — panic-hook,
-//! console-логирование tracing и точки входа. Прошивка (`spawn_app`,
-//! async-init Renderer, пустая сцена) — после W2/W3 трека A.
+//! Стадия **W4** (§6.1, трек B): каркас (panic-hook, tracing-консоль,
+//! точки входа) + **прошивка** — App в браузере: web-набор сервисов
+//! (Noop/Mem до W6/W10/W11, `app_spawn`), `spawn_app` (winit web) и
+//! async-init Renderer через `spawn_local` + слот (§3.4,
+//! `renderer_launch`). Приёмка: `trunk serve` грузится, камера живая,
+//! HUD F3 работает.
 //!
 //! Нативная компиляция: макросы `#[wasm_bindgen]` на не-wasm целях
 //! раскрываются в заглушки (контрольная сборка 2026-09-16, §2) — крейт
 //! собирается в составе workspace, web-код при этом не вызывается.
 
+pub mod app_spawn;
 pub mod panic_hook;
+pub mod renderer_launch;
 pub mod web_log;
 
 use wasm_bindgen::prelude::*;
 
 /// Точка входа wasm-модуля: `#[wasm_bindgen(start)]` исполняется при
-/// инстанцировании (trunk подключает модуль в `index.html`). Каркас —
-/// инициализация обвязки; сцена появится на прошивке W4.
+/// инстанцировании (trunk подключает модуль в `index.html`). Каркас
+/// (panic-hook + tracing-консоль) — сразу, затем прошивка: App,
+/// web-сервисы и event loop (`spawn_app`).
 #[wasm_bindgen(start)]
 pub fn start() {
-    let _ = boot();
+    let _banner = boot();
+    if let Err(err) = app_spawn::spawn_desk() {
+        tracing::error!(target: "canvas_web", %err, "не удалось запустить CanvasDesk (web)");
+    }
 }
 
 /// Инициализация каркаса: panic-hook + tracing-консоль + строка версии

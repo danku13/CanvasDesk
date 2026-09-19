@@ -303,7 +303,6 @@ impl Renderer {
     /// env не читает — разбор здесь); неизвестное значение — warn и
     /// бэкенды по умолчанию.
     pub async fn new(window: Arc<Window>, prefer_dx12: bool) -> anyhow::Result<Self> {
-        let size = window.inner_size();
         let scale_factor = window.scale_factor();
         let backends = match std::env::var("WGPU_BACKEND") {
             Ok(name) => match name.to_ascii_lowercase().as_str() {
@@ -326,11 +325,20 @@ impl Renderer {
             ..Default::default()
         });
         let surface = instance
-            .create_surface(window)
+            .create_surface(window.clone())
             .context("создание surface")?;
         let gpu = GpuContext::new(instance, Some(&surface))
             .await
             .context("GPU-адаптер не найден")?;
+
+        // M8/W4 (wasm-port §3.4): размер читается ПОСЛЕ async-ожиданий —
+        // на web за инициализацию адаптера/устройства успевает отработать
+        // ResizeObserver winit'а (канвас получает layout-размер), а
+        // событие Resized тем временем приходило при renderer=None и было
+        // пропущено; читанное ДО ожиданий 0×0 оставляло surface
+        // несконфигурированным (canvas 300×150). Натив: ожидания не меняют
+        // размер (block_on в том же кадре) — поведение то же.
+        let size = window.inner_size();
 
         let caps = surface.get_capabilities(&gpu.adapter);
         let format = choose_surface_format(&caps.formats);
@@ -1254,6 +1262,14 @@ impl Renderer {
         }
         self.gpu.queue.submit([encoder.finish()]);
         frame.present();
+        // M8/W4: покадровая метка для диагностики web-дыма (по умолчанию
+        // под INFO-фильтром консоли/натива; RUST_LOG=debug — включает)
+        tracing::debug!(
+            w = self.size.width,
+            h = self.size.height,
+            instances = instance_count,
+            "кадр презентован"
+        );
         // Считаем связи, у которых хотя бы одна нода видна
         let visible_node_set: std::collections::HashSet<usize> = indices.iter().copied().collect();
         let visible_edges = scene

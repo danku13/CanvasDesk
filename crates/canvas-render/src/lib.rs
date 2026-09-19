@@ -18,6 +18,7 @@ pub mod markdown;
 pub mod minimap;
 pub mod minimap_pass;
 pub mod renderer;
+pub mod renderer_init;
 pub mod search_ui;
 pub mod sectors;
 pub mod stats;
