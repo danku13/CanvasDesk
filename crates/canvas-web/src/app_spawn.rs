@@ -43,9 +43,11 @@ use crate::web_clipboard::WebClipboard;
 
 /// Чтение URL-параметров запуска (`location.search`). Выделено ради
 /// нативных тестов: JS-часть — одна строка; парсинг — [`parse_query`]
-/// (чистая функция, тесты в url_params).
+/// (чистая функция, тесты в url_params). Вызывается дважды: из `boot`
+/// (уровень лога — до инициализации трейсинга) и из `spawn_desk` —
+/// чтение location дёшево, а сигнатура точки входа остаётся без параметров.
 #[cfg(target_arch = "wasm32")]
-fn read_params() -> WebParams {
+pub(crate) fn read_params() -> WebParams {
     use crate::url_params::parse_query;
     let query = web_sys::window()
         .map(|window| window.location().search().unwrap_or_default())
@@ -61,7 +63,7 @@ fn read_params() -> WebParams {
 
 /// Нативная заглушка (rlib-тесты каркаса): env-аргументов/URL нет — дефолт.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_params() -> WebParams {
+pub(crate) fn read_params() -> WebParams {
     WebParams::default()
 }
 
@@ -104,8 +106,19 @@ pub fn spawn_desk() -> anyhow::Result<()> {
     let widget_sender: canvas_widgets::WidgetEventSender =
         Arc::new(|_event: canvas_widgets::WidgetEvent| {});
     // Поиск (T14): MemSearch — ответы будят цикл через proxy (паттерн
-    // сервисов W3; тот же AppEvent::Search, что у нативного worker'а)
+    // сервисов W3; тот же AppEvent::Search, что у нативного worker'а).
+    // W7: на web нет консоли кроме браузерной — ответ backend'а дублируем
+    // в tracing (DEBUG; виден с ?log=debug) — дым приёмки ищет эти строки:
+    // доказательство круга Query → MemSearch → SearchEvent → proxy.
     let search_service = canvas_core::MemSearch::new(Arc::new(move |event| {
+        match &event {
+            canvas_core::SearchEvent::Ready(hits) => {
+                tracing::debug!(target: "canvas_web", hits = hits.len(), "поисковый backend ответил");
+            }
+            canvas_core::SearchEvent::Indexed(count) => {
+                tracing::debug!(target: "canvas_web", count, "поисковый индекс обновлён");
+            }
+        }
         let _ = proxy.send_event(AppEvent::Search(event));
     }));
     let app = App::new(

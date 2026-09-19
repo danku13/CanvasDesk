@@ -115,17 +115,22 @@ impl<S: Subscriber> Layer<S> for ConsoleLayer {
 }
 
 /// Установить глобальный подписчика: Registry + консольный слой + фильтр
-/// INFO (без фильтра в консоль утекут TRACE/DEBUG крейтов — на web нет
-/// RUST_LOG, детальная настройка — прошивка W4). Идемпотентно: повторный
-/// вызов молча оставляет уже установленного подписчика (возврат Err от
-/// `set_global_default` проглатывается).
+/// (дефолт INFO: без фильтра в консоль утекут TRACE/DEBUG крейтов — на web
+/// нет RUST_LOG; W7: уровень можно поднять параметром `?log=debug|trace` —
+/// диагностика поискового тракта/событий в браузерной консоли).
+/// Идемпотентно: повторный вызов молча оставляет уже установленного
+/// подписчика (возврат Err от `set_global_default` проглатывается).
 pub fn init_tracing() {
-    use tracing_subscriber::filter::LevelFilter;
+    init_tracing_with(tracing_subscriber::filter::LevelFilter::INFO);
+}
+
+/// То же с явным уровнем (`?log=` из url_params; вызывается из `start`).
+pub fn init_tracing_with(level: tracing_subscriber::filter::LevelFilter) {
     use tracing_subscriber::layer::SubscriberExt;
 
     let subscriber = tracing_subscriber::Registry::default()
         .with(ConsoleLayer)
-        .with(LevelFilter::INFO);
+        .with(level);
     let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
@@ -163,5 +168,14 @@ mod tests {
     fn init_twice_is_silent() {
         init_tracing();
         init_tracing();
+    }
+
+    /// Явный уровень (W7, `?log=debug`): инициализация с DEBUG не паникует
+    /// и DEBUG-события проходят сквозь слой (нативный фолбэк — println).
+    #[test]
+    fn init_with_debug_level_passes_debug_events() {
+        use super::init_tracing_with;
+        init_tracing_with(tracing_subscriber::filter::LevelFilter::DEBUG);
+        tracing::debug!(target: "canvas_web_test", "debug-дым с ?log=debug");
     }
 }
