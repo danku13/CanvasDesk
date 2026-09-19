@@ -66,6 +66,12 @@ jobs:
           source: ./docs
           destination: ./_site
 
+      # jekyll-build-pages работает в контейнере и пишет _site от root:
+      # без chown последующие шаги (web_bundle --dist _site/app) падают
+      # «Permission denied» (найдено вторым прогоном CI).
+      - name: Права на _site (jekyll-контейнер пишет от root)
+        run: sudo chown -R "$(id -u):$(id -g)" ./_site
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
