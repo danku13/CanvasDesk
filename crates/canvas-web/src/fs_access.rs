@@ -371,7 +371,6 @@ pub(crate) async fn reopen_recent(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use canvas_core::CanvasStorage as _;
 
     /// FsAccessStorage: тот же контракт трейта, что у OPFS-версии —
     /// зеркальный roundtrip без диска (I/O web-only).
