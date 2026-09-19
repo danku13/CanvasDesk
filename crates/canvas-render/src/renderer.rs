@@ -24,6 +24,7 @@ use crate::config::{choose_present_mode, choose_surface_format, surface_size_val
 use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
+use crate::guides::{self, GuidePalette, GuidesFrame, GuidesPipeline};
 use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::sectors::{SectorInstance, SectorsPipeline};
@@ -272,6 +273,12 @@ pub struct Renderer {
     cards: CardsPipeline,
     /// FR-022: donut-сектора wheel-меню (instanced SDF-проход).
     sectors: SectorsPipeline,
+    /// FR-038 (T-038.3): направляющие магнитной раскладки — линии smart
+    /// guides и ghost-предпросмотр snapped-позиции (поверх нод, до секторов).
+    guides: GuidesPipeline,
+    /// FR-038: данные направляющих кадра (set_guides из приложения,
+    /// из SnapOutcome снап-движка; пусто по умолчанию — слой молчит).
+    guides_frame: GuidesFrame,
     /// Атлас тамбнейлов + их пайплайн (T6).
     thumbs: ThumbsPipeline,
     text: TextSystem,
@@ -287,6 +294,11 @@ pub struct Renderer {
     grid_dots: bool,
     /// Шаги сетки (мелкий, крупный) в world-px — плотность из настроек.
     grid_steps: (f32, f32),
+    /// FR-038 (п.3 v2): порог sub-сетки — выше рисуются линии полушага
+    /// (настройки Snap, T-038.4; дефолт — grid::DEFAULT_SUB_ZOOM).
+    grid_sub_zoom: f32,
+    /// FR-038 (п.3 v2): порог coarse-сетки — ниже только major-шаг.
+    grid_coarse_zoom: f32,
     /// Палитра темы (фон, сетка, карточки, текст).
     theme: ThemeColors,
 }
@@ -372,6 +384,7 @@ impl Renderer {
         let grid = GridPipeline::new(&gpu.device, format);
         let cards = CardsPipeline::new(&gpu.device, format);
         let sectors = SectorsPipeline::new(&gpu.device, format);
+        let guides = GuidesPipeline::new(&gpu.device, format);
         let thumbs = ThumbsPipeline::new(&gpu.device, format);
         let minimap_pipeline = MinimapPipeline::new(&gpu.device, format);
         let widget_pass = crate::widget_pass::WidgetPass::new(&gpu.device, format);
@@ -384,6 +397,8 @@ impl Renderer {
             grid,
             cards,
             sectors,
+            guides,
+            guides_frame: GuidesFrame::default(),
             thumbs,
             text,
             minimap_pipeline,
@@ -393,6 +408,8 @@ impl Renderer {
             grid_visible: true,
             grid_dots: false,
             grid_steps: (20.0, 100.0),
+            grid_sub_zoom: crate::grid::DEFAULT_SUB_ZOOM,
+            grid_coarse_zoom: crate::grid::DEFAULT_COARSE_ZOOM,
             theme: ThemeColors::dark(),
         })
     }
@@ -416,6 +433,26 @@ impl Renderer {
     /// Плотность сетки канваса (настройки): шаги (мелкий, крупный) в world-px.
     pub fn set_grid_steps(&mut self, minor: f32, major: f32) {
         self.grid_steps = (minor, major);
+    }
+
+    /// FR-038 (п.3 v2): пороги zoom-адаптивности сетки (настройки Snap,
+    /// T-038.4): zoom > sub_zoom — sub-линии полушага, zoom < coarse_zoom —
+    /// только major-шаг. Дефолты — `grid::DEFAULT_SUB_ZOOM`/`..._COARSE_ZOOM`.
+    pub fn set_grid_zoom_thresholds(&mut self, sub_zoom: f32, coarse_zoom: f32) {
+        self.grid_sub_zoom = sub_zoom;
+        self.grid_coarse_zoom = coarse_zoom;
+    }
+
+    /// FR-038 (T-038.3): данные направляющих кадра из снап-движка
+    /// (SnapOutcome → `GuidesFrame::from_snap`). Вызывается приложением
+    /// каждый кадр драга; пустой кадр — слой не рисуется.
+    pub fn set_guides(&mut self, frame: GuidesFrame) {
+        self.guides_frame = frame;
+    }
+
+    /// FR-038 (п.8): убрать направляющие (drag завершён или выход из допуска).
+    pub fn clear_guides(&mut self) {
+        self.guides_frame = GuidesFrame::default();
     }
 
     /// Обновить scale factor окна (перенос между мониторами с разным DPI, SPEC §6.5).
@@ -722,13 +759,23 @@ impl Renderer {
         }
 
         if self.grid_visible {
+            // FR-038 (п.3 v2): zoom-адаптивные шаги — sub-линии полушага при
+            // сильном приближении, coarse (только major) при отдалении;
+            // пороги — настройки Snap (T-038.4), базовые шаги — GridDensity
+            let (minor, major) = crate::grid::adaptive_grid_steps(
+                self.grid_steps.0,
+                self.grid_steps.1,
+                camera.zoom(),
+                self.grid_sub_zoom,
+                self.grid_coarse_zoom,
+            );
             self.grid.update_camera(
                 &self.gpu.queue,
                 camera,
                 [self.size.width as f32, self.size.height as f32],
                 self.scale_factor,
                 GridLook {
-                    steps: self.grid_steps,
+                    steps: (minor, major),
                     dots: self.grid_dots,
                     colors: (self.theme.grid_minor, self.theme.grid_major),
                 },
@@ -1113,6 +1160,23 @@ impl Renderer {
             self.scale_factor,
             &thumb_instances,
         );
+        // FR-038 (T-038.3): направляющие магнитной раскладки — линии во весь
+        // viewport на world-осях снапа + ghost-рамка snapped-позиции;
+        // интенсивность (п.8) — по дельтам снапа осей, цвета — из темы
+        let guide_instances = guides::build_instances(
+            camera.zoom() * self.scale_factor,
+            visible,
+            &self.guides_frame,
+            &GuidePalette::from_theme(&self.theme),
+        );
+        let guide_count = self.guides.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+            &guide_instances,
+        );
         // Актуальные метрики уже выставлены выше (до сборки оверлеев)
         let editing_ref = editing.as_deref();
         // Из кэша тела исключается только редактируемая НОДА; у лейбла связи
@@ -1235,6 +1299,12 @@ impl Renderer {
             // снапшота — airspace-политика П7 плана M5)
             if widget_quad_count > 0 {
                 self.widget_pass.draw(&mut pass, widget_quad_count);
+            }
+            // FR-038 (T-038.3): направляющие снапа — ПОВЕРХ нод и снапшотов
+            // виджетов, ПОД wheel-меню (сектора FR-022): магнитная раскладка
+            // видна поверх контента, но не перекрывает всплывшее меню
+            if guide_count > 0 {
+                self.guides.draw(&mut pass, guide_count);
             }
             // FR-022: donut-сектора wheel-меню — поверх мира и снапшотов
             // виджетов, ПОД screen-квадами оверлея (первый сектор — диск-

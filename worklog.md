@@ -1,3 +1,121 @@
+## 2026-09-19 — FR-038/T-038.3 (render направляющих, ветка feature/fr-038-guide-render): слой smart guides + ghost-предпросмотр + zoom-адаптивная сетка
+
+- **Задача (FR-038):** T-038.3 — render-слой магнитной раскладки: проход
+  направляющих `crates/canvas-render/src/guides.rs` (+ `shaders/guides.wgsl`)
+  по осям из `SnapOutcome` снап-движка (T-038.2), нелинейная интенсивность
+  п.8, ghost-предпросмотр snapped-позиции п.2, стиль источника п.18;
+  `grid.rs` — sub/coarse линии по zoom-порогам п.3. Аудит и завершение
+  незакоммиченных артефактов прерванного запуска этой же задачи.
+- **Проход направляющих:** instanced SDF-квады по образцу `sectors.rs`
+  (FR-022): свой CameraUniform (32 байта), instance-буфер (12 float =
+  rect/color/params), alpha-blend без depth; форма (линия/пунктир/рамка) —
+  SDF во фрагменте, толщина/штрих в физических px (effective_zoom =
+  zoom·scale_factor), фаза штриха — в world. Чистая логика вынесена в
+  тестируемые функции: `guide_intensity(ratio) = 1 - ratio²` кламп [0,1]
+  (п.8), `guide_alpha` 0.25..1 (плато видимости у края допуска),
+  `guide_thickness` 1..2.5 px, `build_instances` (линии во весь viewport на
+  world-осях + ghost первой инстансой), `GuidesFrame::from_snap` — маппинг
+  `SnapOutcome` для T-038.4. Источник линии — двойная кодировка (п.18):
+  Guide — сплошная маджента темы, Grid — пунктир + приглушённый тон и
+  множитель альфы. Z-порядок: поверх карточек/тамбнейлов/текстов и
+  снапшотов виджетов, ПОД wheel-меню (сектора FR-022) — в `renderer.rs`
+  между `widget_pass.draw` и `sectors.draw`. API для интеграции:
+  `Renderer::set_guides(GuidesFrame)` / `clear_guides()`.
+- **Zoom-адаптивная сетка:** `grid::adaptive_grid_steps(minor, major, zoom,
+  sub_zoom, coarse_zoom) -> (minor, major)` — выше sub-порога полушаг
+  (minor/2), ниже coarse-порога укрупнение до major, между — база; встроено
+  в `Renderer::render` перед `grid.update_camera` (GridLook.steps),
+  `Renderer::set_grid_zoom_thresholds` — пороги из настроек T-038.4.
+  Порядок веток и строгие неравенства ЗЕРКАЛЬНЫ
+  `canvas-app::snap::effective_grid_step` (паритет закреплён оракул-тестом
+  по матрице пресетов GridDensity × зумов): snap-шаг и видимые линии
+  совпадают при любых порогах.
+- **Исправлено у наследованного (аудит прерванного запуска):** (1)
+  `adaptive_grid_steps` расходилась со снап-движком при вырожденных порогах
+  (coarse-first + гард `sub_zoom > coarse_zoom` против sub-first у оракула
+  T-038.2) → переписана зеркально + оракул-тест паритета; (2) ghost-рамка
+  рисовалась на 1.5 px наружу от snapped-bbox (margin добавлялся в инстанс,
+  а для рамки rect и есть SDF-форма) → рамка точно по bbox, AA-запас даёт
+  vs_main (расширение квада, не формы); (3) в guides_smoke пиксель «внутри
+  ghost прозрачно» совпадал с пикселем сплошной линии (два
+  противоречивых утверждения об одном пикселе — падало бы на реальном GPU)
+  → пиксель смещён на (150,150) вне осей; (4) рабочая копия
+  `crates/canvas-app/src/snap.rs` содержала устаревший черновик T-038.2
+  (clippy too_many_arguments) — синхронизирована с закоммиченным
+  контрактом 4f547ad (файл в ЭТОТ коммит НЕ входит — чужой, ветка
+  feature/fr-038-snap-core).
+- **Темы:** `ThemeColors.guide_align`/`guide_grid` (тёмная 5.2:1/4.0:1,
+  светлая 4.7:1/6.1:1 к фону) + тест контраста ≥3:1 на обеих темах (WCAG
+  1.4.11, урок CR-007); палитра слоя — `GuidePalette::from_theme`.
+- **Тесты:** 12 юнит-тестов guides.rs (интенсивность: границы/монотонность/
+  нелинейность; альфа/толщина; геометрия линий; стили источников; ghost;
+  вырожденные входы; from_snap; сериализация 12 float; палитра), 6 новых на
+  adaptive_grid_steps (пороги/границы/клампы/паритет), 1 на контраст тем;
+  `tests/guides_smoke.rs` — headless GPU-прогон 2 теста (skip без адаптера,
+  как sector_smoke: в этой среде адаптера нет — чистая логика покрыта
+  юнит-тестами).
+- **Гейты (все зелёные):** cargo fmt --all --check ✓; CARGO_INCREMENTAL=0
+  clippy --workspace --all-targets -D warnings ✓; CARGO_INCREMENTAL=0
+  CARGO_PROFILE_DEV_DEBUG=0 cargo test -p canvas-render — 286 lib + все
+  suites ✓ (+ canvas-app snap 24 ✓ после синка); bash scripts/wasm_gate.sh
+  --check ✓ (canvas-render собирается под wasm32). Полный workspace-тест —
+  прогон оркестратора на merge.
+- **Один коммит** на feature/fr-038-guide-render: только
+  canvas-render/** + worklog.md; canvas-app/** (чужие остатки T-038.2),
+  scripts/ и CI в коммит не входят. НЕ пуш, НЕ merge. Вопрос владельцу
+  (AGENTS.md) отложен до приёмки FR-038 целиком (T-038.6).
+
+## 2026-09-19 — FR-038/T-038.2 (snap-движок ядра, ветка feature/fr-038-snap-core): чистая геометрия магнитной раскладки — snap.rs без winit/wgpu
+
+- **Задача (FR-038):** T-038.2 — snap-движок: новый
+  `crates/canvas-app/src/snap.rs`, чистая геометрия без winit/wgpu,
+  без времени/случайности (детерминизм п.20); оракул-тесты на правила
+  п.6-15/20 владельца v2. Контракт для T-038.3 (рендер направляющих)
+  и T-038.4 (интеграция в drag): `SnapSource { Grid, Guide }`;
+  `SnapConfig { to_grid, to_guides, grid_minor, grid_major,
+  tolerance_px (экранные px), zoom, sub_zoom, coarse_zoom,
+  collision_gap }`; `SnapOutcome { dx, dy, guides_x, guides_y,
+  source }`; `SnapRect { x, y, w, h }` (Rect-типа в canvas-core нет,
+  Node хранит x/y/width/height); `snap_move(moving, dx, dy,
+  candidates, cfg)`; `effective_grid_step(cfg)` — minor/2 при
+  zoom > sub_zoom, major при zoom < coarse_zoom, иначе minor (общая
+  с рендером zoom-адаптивной сетки функция).
+- **Правила в движке:** п.1-3 — snap по осям независимо к ближайшей
+  линии (тянется ближайший край bbox), допуск tolerance_px/zoom
+  (screen → world); п.6-7 — оси кандидатов: края/центры/середины,
+  якоря moving — те же три точки (надмножество пар «соответствующих»
+  точек — покрывает и стыковку «вплотную»); п.8-9 — за допуском ни
+  снапа, ни линий (нелинейное усиление п.8 — визуальная интенсивность,
+  живёт на рендере); п.10 — majority: наибольшее число РАЗЛИЧНЫХ
+  соседей на координате, при равенстве — минимальная |дельта|, при
+  полном равенстве — первый кандидат в срезе; п.11 — арбитраж
+  grid-vs-guide по меньшей |дельте|, при равенстве — направляющая
+  (позиция та же, выравнивание информативнее); п.13 — equal spacing
+  по центрам: фланкирование + поперечная близость в допуске +
+  |gap_a-gap_b| в допуске, направляющая — целевой центр; п.15 —
+  collision-кламп (при collision_gap > 0) на границе расширенного на
+  gap AABB: начавшееся пересечение не телепортирует (уход разрешён),
+  диагональ скользит вдоль границы зазора; п.14 — вход = bbox
+  выделения (точка привязки угол/центр п.4 — надстройка T-038.4).
+- **Тесты:** 24 юнит-теста (TDD — оракулы до реализации): sub/coarse-
+  шаги с границами порогов (строгие неравенства), толкование допуска
+  в экранных px, негативные сценарии (молчание за допуском, без
+  фланкирования, поперечная разница, zero-gap), majority и разрешение
+  равенств, арбитраж в обе стороны, равные интервалы, коллизия ×4
+  (справа/слева/уход из зоны/выкл), ось Y, выключенные тумблеры,
+  детерминизм (бит-в-бит повтор + ручной оракул итога 48/0/[0.0]).
+- **Изменения:** `crates/canvas-app/src/snap.rs` (новый) + `pub mod
+  snap;` в `lib.rs` (единственное изменение вне snap.rs). Ветка от
+  main e9256e8; работа в отдельном git worktree (главная копия занята
+  веткой feature/fr-038-guide-render с чужими незакоммиченными
+  изменениями — их не трогал), worktree после коммита удалён; один
+  коммит, не пушится, не мержится.
+- **Гейты:** fmt --all --check ✓; clippy --workspace --all-targets
+  -D warnings ✓; cargo test -p canvas-app snap — 24 passed ✓;
+  cargo test -p canvas-app --lib — 186 passed ✓; build -p canvas-app
+  ✓. Полный workspace-тест и wasm-гейты — прогон оркестратора на
+  merge.
+
 ## 2026-09-19 — W10 (M8 wasm-порт, трек A): превью картинок — WebImageThumbs, приём файлов DOM-drop'ом в OPFS files/
 
 - **Задача (§6, после W6):** «Превью картинок»: WebImageThumbnailProvider —

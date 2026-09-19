@@ -14,6 +14,7 @@ pub mod edit;
 pub mod gfm;
 pub mod gpu;
 pub mod grid;
+pub mod guides;
 pub mod markdown;
 pub mod minimap;
 pub mod minimap_pass;
@@ -30,6 +31,7 @@ pub mod zorder;
 
 pub use camera::Camera;
 pub use glyphon::Color;
+pub use guides::{GuideLine, GuideSource, GuidesFrame};
 pub use renderer::{
     FrameOverlay, FrameStats, Renderer, SceneView, Selection, SpillView, WhatIfNode,
     WHATIF_BADGE_COLOR,

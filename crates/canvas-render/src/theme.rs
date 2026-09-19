@@ -63,6 +63,13 @@ pub struct ThemeColors {
     pub group_fill: [f32; 4],
     /// Рамка группы — акцент, средняя прозрачность.
     pub group_border: [f32; 4],
+    /// Направляющая магнитной раскладки, источник «сосед» (FR-038, п.18):
+    /// маджента; контраст к фону ≥ 3:1 на обеих темах (урок CR-007,
+    /// WCAG 1.4.11 — нетекстовая графика) — проверяется тестами.
+    pub guide_align: [f32; 4],
+    /// Направляющая от сетки (источник grid): тот же тон приглушённее —
+    /// отличима от «соседской» ещё и штрихом (шейдер guides.wgsl).
+    pub guide_grid: [f32; 4],
 }
 
 impl ThemeColors {
@@ -102,6 +109,10 @@ impl ThemeColors {
             gfm_muted_fill: [0.55, 0.57, 0.62, 1.0],
             group_fill: [0.396, 0.612, 0.969, 0.08],
             group_border: [0.396, 0.612, 0.969, 0.40],
+            // Маджента магнитной раскладки: контраст к фону #1e1e22 ≈ 5.2:1
+            // (подложка grid — приглушённый тон того же тона, ≈ 4.0:1)
+            guide_align: [1.0, 0.18, 0.83, 1.0],
+            guide_grid: [0.86, 0.16, 0.72, 1.0],
         }
     }
 
@@ -136,6 +147,10 @@ impl ThemeColors {
             gfm_muted_fill: [0.60, 0.63, 0.68, 1.0],
             group_fill: [0.396, 0.612, 0.969, 0.10],
             group_border: [0.36, 0.55, 0.90, 0.50],
+            // Маджента на светлом фоне темнее (контраст ≈ 4.7:1;
+            // приглушённый grid — ≈ 6.1:1) — урок CR-007: обе темы равны
+            guide_align: [0.784, 0.118, 0.612, 1.0],
+            guide_grid: [0.66, 0.10, 0.52, 1.0],
         }
     }
 
@@ -263,6 +278,38 @@ mod tests {
     fn is_dark_matches_background() {
         assert!(ThemeColors::dark().is_dark());
         assert!(!ThemeColors::light().is_dark());
+    }
+
+    /// FR-038: маджента направляющих читается на фоне ОБОИХ тем —
+    /// ≥ 3:1 (WCAG 1.4.11, нетекстовая графика; урок CR-007).
+    #[test]
+    fn guide_colors_meet_contrast_on_both_themes() {
+        use crate::contrast::contrast_ratio;
+        for theme in [ThemeColors::dark(), ThemeColors::light()] {
+            let bg = [
+                theme.background[0] as f32 / 255.0,
+                theme.background[1] as f32 / 255.0,
+                theme.background[2] as f32 / 255.0,
+            ];
+            let align = contrast_ratio(
+                [
+                    theme.guide_align[0],
+                    theme.guide_align[1],
+                    theme.guide_align[2],
+                ],
+                bg,
+            );
+            assert!(align >= 3.0, "guide_align {align:.2} < 3:1 на фоне {bg:?}");
+            let grid = contrast_ratio(
+                [
+                    theme.guide_grid[0],
+                    theme.guide_grid[1],
+                    theme.guide_grid[2],
+                ],
+                bg,
+            );
+            assert!(grid >= 3.0, "guide_grid {grid:.2} < 3:1 на фоне {bg:?}");
+        }
     }
 
     /// Гарантия доступности (WCAG AA): readable_on_card возвращает ≥ 4.5:1
