@@ -75,6 +75,10 @@ use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
 use canvas_render::minimap::{Minimap, MINIMAP_H, MINIMAP_W};
+// M8/W4 (wasm-port §3.4): стратегия запуска async-инициализации Renderer —
+// инъекция (натив: pollster::block_on, web: spawn_local + слот доставки),
+// паттерн W3-сервисов: платформенный выбор в точке сборки бинарника
+use canvas_render::renderer_init::{RendererLaunch, RendererLauncher, RendererSlot};
 use canvas_render::search_ui::{
     layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
     SearchRow,
@@ -582,6 +586,15 @@ struct WhatIfOverrideRow {
 pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<canvas_render::Renderer>,
+    /// M8/W4 (wasm-port §3.4): стратегия запуска инициализации Renderer —
+    /// натив `BlockOnRendererLaunch` (pollster, поведение как до W4), web
+    /// `SpawnLocalRendererLaunch` (браузерный главный поток блокировать
+    /// нельзя — план §7). Инъекция в App::new, паттерн W3-сервисов.
+    renderer_launcher: Box<dyn RendererLauncher>,
+    /// M8/W4: слот доставки async-результата (web): футура spawn_local
+    /// кладёт Renderer и будит цикл; забирается первым RedrawRequested
+    /// после готовности GPU. Натив — всегда None (ветка мертва).
+    renderer_slot: Option<RendererSlot>,
     camera: Camera,
     scene: SceneState,
     /// Первичное выделение: нода или связь (T8) — якорь для контекстного
@@ -851,6 +864,7 @@ impl App {
         clipboard: Box<dyn ClipboardBackend>,
         widget_state: Option<Box<dyn canvas_core::WidgetStateBackend>>,
         desktop_mode: bool,
+        renderer_launcher: Box<dyn RendererLauncher>,
     ) -> Self {
         // M5 (T20-F): менеджер виджетов; реестр инициализируется в
         // main() (init_widgets) после настройки трейсинга. M8/W3: каталог
@@ -868,6 +882,8 @@ impl App {
             widgets,
             window: None,
             renderer: None,
+            renderer_launcher,
+            renderer_slot: None,
             camera: Camera::default(),
             scene,
             selected: None,
@@ -4419,6 +4435,27 @@ impl App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    /// M8/W4 (wasm-port §3.4): конфигурация свежего Renderer и первый кадр —
+    /// тело Ok-ветки инициализации до W4, выделено для синхронного (натив,
+    /// pollster) и async (web, слот) путей.
+    fn install_renderer(&mut self, mut renderer: canvas_render::Renderer) {
+        renderer.set_grid_visible(self.settings.grid_visible);
+        renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
+        let (minor, major) = self.settings.grid_density.steps();
+        renderer.set_grid_steps(minor, major);
+        renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
+        if let Some(window) = &self.window {
+            tracing::info!(
+                width = window.inner_size().width,
+                height = window.inner_size().height,
+                scale_factor = window.scale_factor(),
+                "окно создано"
+            );
+        }
+        self.renderer = Some(renderer);
+        self.request_redraw();
     }
 
     /// Строка HUD (F3): fps, p95 frame time, счётчик culling последнего кадра.
@@ -9325,6 +9362,23 @@ impl ApplicationHandler<AppEvent> for App {
                     self.frame_meter.push(now - prev);
                 }
                 self.last_frame = Some(now);
+                // M8/W4 (wasm-port §3.4): async-инициализация (web) — футура
+                // кладёт Renderer в слот и будит цикл request_redraw'ом;
+                // забираем здесь, до отрисовки. Натив: слот пуст всегда —
+                // ветка мертва, накладных расходов нет.
+                let delivered = self.renderer_slot.as_ref().and_then(RendererSlot::take);
+                match delivered {
+                    Some(Ok(renderer)) => self.install_renderer(renderer),
+                    Some(Err(err)) => {
+                        // Полная цепочка anyhow в сообщение: на web консоль —
+                        // единственный канал диагностики (поля %err
+                        // компактный ConsoleLayer суффиксует, но цепочка
+                        // источников видна только в alternate-формате)
+                        tracing::error!("не удалось инициализировать рендер (async): {err:#}");
+                        self.renderer_slot = None;
+                    }
+                    None => {}
+                }
                 // Полёт камеры к результату поиска (T14): семпл ease-out —
                 // пока полёт активен, about_to_wait держит кадры идущими
                 if let Some((flight, start)) = self.flight.take() {
@@ -10046,29 +10100,22 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
         }
-        // GPU-инициализация блокирующая, один раз при старте (SPEC §6.3:
-        // холодный старт < 2 с). prefer_dx12 = desktop-режим: Vulkan не
-        // презентует в ребёнка Progman (подробности — в Renderer::new).
-        match pollster::block_on(canvas_render::Renderer::new(
-            window.clone(),
-            self.desktop_mode,
-        )) {
-            Ok(mut renderer) => {
-                renderer.set_grid_visible(self.settings.grid_visible);
-                renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
-                let (minor, major) = self.settings.grid_density.steps();
-                renderer.set_grid_steps(minor, major);
-                renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
-                tracing::info!(
-                    width = window.inner_size().width,
-                    height = window.inner_size().height,
-                    scale_factor = window.scale_factor(),
-                    "окно создано"
-                );
-                self.renderer = Some(renderer);
-                self.request_redraw();
+        // M8/W4 (wasm-port §3.4): запуск инициализации Renderer через
+        // инъектированную стратегию. Натив — pollster::block_on (GPU-иниц
+        // блокирующая, один раз при старте, SPEC §6.3: холодный старт < 2 с;
+        // prefer_dx12 = desktop-режим — Vulkan не презентует в ребёнка
+        // Progman). Web — spawn_local: результат придёт в слот с побудкой
+        // кадра (браузерный главный поток блокировать нельзя — план §7).
+        match self
+            .renderer_launcher
+            .launch(window.clone(), self.desktop_mode)
+        {
+            RendererLaunch::Ready(renderer) => self.install_renderer(*renderer),
+            RendererLaunch::Pending(slot) => {
+                tracing::info!("GPU-инициализация асинхронная (web): первый кадр по готовности");
+                self.renderer_slot = Some(slot);
             }
-            Err(err) => {
+            RendererLaunch::Failed(err) => {
                 tracing::error!(%err, "не удалось инициализировать рендер");
                 event_loop.exit();
             }
@@ -10894,6 +10941,7 @@ mod tests {
             Box::new(canvas_core::NoopClipboard),
             Some(widget_state),
             false,
+            Box::new(canvas_render::renderer_init::NoopRendererLaunch),
         );
 
         // Вотчер-заглушка: синхронизация директорий — no-op без паник

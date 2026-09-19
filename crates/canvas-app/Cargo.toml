@@ -28,7 +28,9 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 winit.workspace = true
-pollster.workspace = true
+# M8/W4 (wasm-port §3.4): pollster ушёл из app — блокировка Renderer::new
+# переехала в инъектируемую стратегию canvas-render::renderer_init
+# (натив — BlockOnRendererLaunch внутри canvas-render, web — spawn_local)
 
 # M8/W3 (wasm-port §3.1): нативная shell-платформа — только для нативных
 # целей (её использует бинарь main.rs); wasm-сборка библиотеки (для

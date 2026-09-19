@@ -16,6 +16,9 @@ wgpu.workspace = true
 glyphon.workspace = true
 cosmic-text.workspace = true
 tracing.workspace = true
+# M8/W4 (wasm-port §3.4): блокировка Renderer::new в натив-стратегии
+# BlockOnRendererLaunch (renderer_init); на wasm pollster компилируется,
+# но не вызывается (web — spawn_local в canvas-web)
+pollster.workspace = true
 
 [dev-dependencies]
-pollster.workspace = true
