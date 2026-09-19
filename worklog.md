@@ -1,3 +1,56 @@
+## 2026-09-19 — W10 (M8 wasm-порт, трек A): превью картинок — WebImageThumbs, приём файлов DOM-drop'ом в OPFS files/
+
+- **Задача (§6, после W6):** «Превью картинок»: WebImageThumbnailProvider —
+  `createImageBitmap` → OffscreenCanvas downscale → RGBA → существующий
+  thumbs-атлас; приём файлов из W6. Приёмка: PNG/JPEG file-ноды с превью;
+  заглушка для прочих типов.
+- **canvas-core/dragdrop.rs:** нейтральный вариант `DragData::Paths(Vec<PathBuf>)`
+  — готовые пути платформы. Дока dragdrop.rs прямо предписывает: «web-бинарь
+  canvas-web будет производить те же события из DOM-листенеров, приложение —
+  единый потребитель». Альтернатива (синтез CF_HDROP-байтов из DOM) — ложная
+  совместимость с Windows-форматом.
+- **canvas-app/lib.rs:** `plan_drop` — вариант Paths БЕЗ ФС-инспекции:
+  `expand_drop_paths` опирается на std::fs (symlink_metadata) и на wasm
+  весь дроп отбросил бы; Paths = пути уже готовы (материализованы в OPFS,
+  папок нет). Сетка/свободные id/вставка нод — общий код. +1 тест.
+- **canvas-web/drop_files.rs (W10-часть):** не-канвасные файлы дропа →
+  OPFS подкаталог `files/`: санитизация `sanitize_file_name` (правила
+  канваса без .canvas-суффикса), коллизии — `file_name_candidates` («-N»,
+  ведущая точка — часть имени) + probe `get_file_handle` (NotFoundError =
+  свободно; перечисление каталога из Rust не нужно), лимит 64 МБ (паритет
+  MAX_PACKAGE_BYTES); затем `AppEvent::Drag(DragEvent::Drop{DragData::Paths,
+  client_pt})` — `client_pt` в ФИЗИЧЕСКИХ px (CSS × devicePixelRatio,
+  контракт T9 «shell даёт ScreenToClient»). `.canvas`-путь W6 не тронут
+  (первый выигрывает).
+- **canvas-web/web_thumbs.rs (новый):** `WebImageThumbs` за нейтральным
+  `ThumbBackend` (карта §3.2: натив — ThumbService/IShellItemImageFactory +
+  SQLite-кэш). Заказ → `spawn_local`: OPFS-чтение → `createImageBitmap`
+  (декод — нативный кодек браузера, не wasm: риск «однопоточный декод
+  тамбнейлов» §7 митигирован; воркер+OffscreenCanvas — волна 2) →
+  OffscreenCanvas downscale (imageSmoothing) в ячейку 256² (паритет
+  SIZE_CLASS нативного кэша; апскейл запрещён) → `getImageData` → RGBA
+  `Thumbnail` → очередь + побудка `AppEvent::ThumbsReady` → `drain` из app
+  → `renderer.set_thumbnail` — СУЩЕСТВУЮЩИЙ атлас render не тронут.
+  Дедуп по ноде (как натив: active-набор). Не-картинки (класс расширений
+  png/jpg/jpeg/gif/webp/bmp/avif/ico) и ошибки декода → `None`-результат →
+  негативный кэш app (`thumbs_failed`) — честная заглушка, нода-карточка.
+  Кэша на диске нет: rusqlite на wasm недоступен, декод дешёв (нативный
+  кодек). Путь `/files/<имя>` — OPFS-абсолютный: `resolve_node_path`
+  возвращает как есть (не зовёт `std::env::current_dir`, который на
+  wasm32-unknown-unknown паникует) — файл-ноды безопасны и переживают F5.
+- **web-sys +5 фич** (ImageBitmap/ImageData/OffscreenCanvas/
+  OffscreenCanvasRenderingContext2d/FileSystemGetDirectoryOptions) —
+  ноль новых крейтов; `write_with_blob` — байты файла в OPFS.
+- **Приёмка (smoke +6 PASS, всего 38):** синтетический `DragEvent('drop')`
+  с DataTransfer (PNG 1×1 + txt, кириллица в именах): «файлы приняты в
+  OPFS» → «файл сохранён в OPFS» ×2 → «превью готово width=1 height=1»
+  (PNG декодирован и в атласе) → txt — DEBUG «превью не удалось» (заглушка)
+  → без pageerror. Создание file-нод — общий путь plan_drop (сетка от
+  точки дропа), превью закажет order_thumbnails ближайшим кадром.
+- **Гейты:** fmt, clippy `-D warnings`, test --workspace (45 наборов),
+  wasm_gate.sh, mcp_wasm_gate.sh, trunk build, web_smoke.py — зелёные;
+  CI 11/11 SUCCESS (merge 9bf922c).
+
 ## 2026-09-19 — W9 + W8 (M8 wasm-порт, трек B): шаблоны и Numi-формулы в браузере — приёмка смоук-оракулами
 
 - **Задача (§6, топопорядок после W7):** W9 «Шаблоны (FR-018/020)» —
