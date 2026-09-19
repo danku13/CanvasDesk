@@ -167,13 +167,13 @@ URL-параметры: `?canvas=имя` (канвас из OPFS), `?stress=5000
 Публикация на GitHub Pages — workflow
 [.github/workflows/pages-web.yml](.github/workflows/pages-web.yml):
 веб-версия по пути `/app` + Jekyll-сборка документации из `docs/` (та же,
-что у прежнего branch-деплоя) в том же артефакте. Включение (один раз):
-Settings → Pages → Source: «GitHub Actions» (branch-деплой заменяется
-workflow'ом). URL приложения:
-`https://danku13.github.io/CanvasDesk/app/`. Нюанс: в частном репозитории
-Pages доступен на планах Pro/Team/Enterprise — иначе используйте локальную
-сборку. Ограничения v1 — [wasm-port §9](docs/plans/wasm-port.md):
-CJK-IME нет, WebGL2-фолбэка нет.
+что у прежнего branch-деплоя) в том же артефакте. URL приложения:
+`https://danku13.github.io/CanvasDesk/app/`. Необязательная чистка:
+Settings → Pages → Source: «GitHub Actions» — остановит параллельные
+legacy-сборки `docs/` (деплой workflow'ом работает и без переключения).
+Нюанс: в частном репозитории Pages доступен на планах Pro/Team/Enterprise —
+иначе используйте локальную сборку. Ограничения v1 —
+[wasm-port §9](docs/plans/wasm-port.md): CJK-IME нет, WebGL2-фолбэка нет.
 
 ## Горячие клавиши
 
