@@ -2,6 +2,9 @@
 //!
 //! Толщина линий — в screen-space через производные (`fwidth`) в шейдере,
 //! поэтому линии не мерцают и не меняют толщину при зуме.
+//! Zoom-адаптивность (FR-038, п.3 v2): выше sub-порога — дополнительные
+//! sub-линии полушага, ниже coarse-порога — только major-шаг
+//! (`adaptive_grid_steps`; рендер передаёт результат в uniform как шаги).
 
 use crate::camera::Camera;
 
@@ -18,6 +21,54 @@ pub struct GridAppearance {
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Порог sub-сетки по умолчанию (FR-038, п.3 v2, ~150%): выше — рисуются
+/// дополнительные sub-линии полушага. Вынесен в настройки Snap (T-038.4).
+pub const DEFAULT_SUB_ZOOM: f32 = 1.5;
+
+/// Порог coarse-сетки по умолчанию (FR-038, п.3 v2, ~50%): ниже — вместо
+/// minor рисуется только major-шаг. Вынесен в настройки Snap (T-038.4).
+pub const DEFAULT_COARSE_ZOOM: f32 = 0.5;
+
+/// Zoom-адаптивные эффективные шаги сетки (FR-038, п.3 v2): (minor, major).
+///
+/// * `zoom > sub_zoom` — дополнительные sub-линии полушага для точной
+///   раскладки при приближении (эффективный minor = minor/2);
+/// * `zoom < coarse_zoom` — шаг укрупняется до major: minor-линии сливаются
+///   с major и остаётся только крупный шаг (coarse-grid при отдалении);
+/// * между порогами — шаги из настроек без изменений.
+///
+/// Чистая функция без состояния: рендер каждый кадр передаёт БАЗОВЫЕ шаги
+/// из `GridDensity` (настройки), поэтому результат стабилен покадрово.
+/// Порядок веток (sub → coarse → база) и строгие неравенства ЗЕРКАЛЬНЫ
+/// `canvas-app::snap::effective_grid_step` (T-038.2): рендер не зависит от
+/// app (ADR-0012 — слои core → scene → render → app), поэтому семантика
+/// продублирована и закреплена тестами — шаг снапа и линии сетки на экране
+/// совпадают при ЛЮБЫХ порогах, включая вырожденные `sub_zoom <=
+/// coarse_zoom` (их валидация — забота приложения, T-038.4). Клампы:
+/// неположительные шаги возвращаются как есть (альфа `grid_appearance`
+/// погасит вырожденный шаг), нечисловой зум — без изменений.
+pub fn adaptive_grid_steps(
+    minor: f32,
+    major: f32,
+    zoom: f32,
+    sub_zoom: f32,
+    coarse_zoom: f32,
+) -> (f32, f32) {
+    // NaN-шаг не пройдёт проверку — вернётся как есть (без изменений)
+    let steps_valid = minor > 0.0 && major > 0.0;
+    if !steps_valid || !zoom.is_finite() {
+        return (minor, major);
+    }
+    // Зеркало effective_grid_step снап-движка: sub первым, coarse вторым
+    if zoom > sub_zoom {
+        (minor / 2.0, major)
+    } else if zoom < coarse_zoom {
+        (major, major)
+    } else {
+        (minor, major)
+    }
 }
 
 /// Альфы линий сетки по зуму и шагам (`minor_step`/`major_step` — в world-px).
@@ -225,7 +276,7 @@ impl GridPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::MIN_ZOOM;
+    use crate::camera::{MAX_ZOOM, MIN_ZOOM};
 
     /// Базовые шаги (средняя плотность, SPEC T2).
     const MINOR: f32 = 20.0;
@@ -297,6 +348,147 @@ mod tests {
             sparse > dense,
             "при zoom {zoom} редкая ({sparse}) виднее частой ({dense})"
         );
+    }
+
+    /// FR-038 п.3 v2: выше sub-порога — sub-линии полушага (minor/2),
+    /// major не меняется; на границе (zoom == sub_zoom) — ещё базовые шаги.
+    #[test]
+    fn adaptive_steps_add_sub_lines_above_threshold() {
+        // Средняя плотность (SPEC T2): 20/100
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 1.51, 1.5, 0.5),
+            (10.0, 100.0)
+        );
+        // Ровно на пороге — без sub (строгое неравенство)
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 1.5, 1.5, 0.5),
+            (20.0, 100.0)
+        );
+        // Плотная сетка: sub-полушаг 5
+        assert_eq!(adaptive_grid_steps(10.0, 50.0, 4.0, 1.5, 0.5), (5.0, 50.0));
+        // MAX_ZOOM камеры — тоже sub
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, MAX_ZOOM, 1.5, 0.5),
+            (10.0, 100.0)
+        );
+    }
+
+    /// FR-038 п.3 v2: ниже coarse-порога — только major-шаг (minor = major);
+    /// на границе (zoom == coarse_zoom) — ещё базовые шаги.
+    #[test]
+    fn adaptive_steps_coarse_below_threshold() {
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 0.49, 1.5, 0.5),
+            (100.0, 100.0)
+        );
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 0.5, 1.5, 0.5),
+            (20.0, 100.0)
+        );
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, MIN_ZOOM, 1.5, 0.5),
+            (100.0, 100.0)
+        );
+    }
+
+    /// Между порогами шаги из настроек без изменений; sub/coarse не
+    /// совпадают ни с одним из них при корректных порогах.
+    #[test]
+    fn adaptive_steps_unchanged_between_thresholds() {
+        for zoom in [0.51_f32, 0.75, 1.0, 1.49] {
+            assert_eq!(
+                adaptive_grid_steps(20.0, 100.0, zoom, 1.5, 0.5),
+                (20.0, 100.0),
+                "zoom {zoom} — базовые шаги"
+            );
+        }
+    }
+
+    /// Клампы: неположительные шаги и нечисловой зум возвращаются как есть
+    /// (шейдерная альфа гасит вырожденный шаг); coarse-ветка — неподвижная
+    /// точка (повторный вызов с её выходом как входом не меняет результат),
+    /// функция детерминирована.
+    #[test]
+    fn adaptive_steps_clamps_and_fixed_point() {
+        assert_eq!(adaptive_grid_steps(0.0, 100.0, 2.0, 1.5, 0.5), (0.0, 100.0));
+        assert_eq!(
+            adaptive_grid_steps(-5.0, 100.0, 2.0, 1.5, 0.5),
+            (-5.0, 100.0)
+        );
+        assert_eq!(adaptive_grid_steps(20.0, 0.0, 2.0, 1.5, 0.5), (20.0, 0.0));
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, f32::NAN, 1.5, 0.5),
+            (20.0, 100.0)
+        );
+        // Coarse — fixed point: (major, major) при zoom < coarse стабильно
+        assert_eq!(
+            adaptive_grid_steps(100.0, 100.0, 0.4, 1.5, 0.5),
+            (100.0, 100.0)
+        );
+        // Детерминизм: те же аргументы — тот же результат
+        let first = adaptive_grid_steps(20.0, 100.0, 2.0, 1.5, 0.5);
+        let second = adaptive_grid_steps(20.0, 100.0, 2.0, 1.5, 0.5);
+        assert_eq!(first, second);
+    }
+
+    /// Вырожденные пороги — семантика ЗЕРКАЛЬНА
+    /// `canvas-app::snap::effective_grid_step` (порядок sub → coarse): шаг
+    /// снапа и линии сетки совпадают при любых настройках, включая
+    /// противоречивые (их валидация — забота приложения, T-038.4).
+    #[test]
+    fn adaptive_steps_thresholds_mirror_snap_engine() {
+        // sub_zoom == coarse_zoom: при зуме выше порога работает sub-ветка
+        // (zoom > sub_zoom проверяется первым — как в снап-движке)
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 2.0, 0.5, 0.5),
+            (10.0, 100.0)
+        );
+        // sub_zoom < coarse_zoom: в зоне перекрытия побеждает sub (первая ветка)
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 0.6, 0.3, 0.5),
+            (10.0, 100.0)
+        );
+        // ... ниже sub_zoom (< coarse_zoom) — coarse-ветка
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 0.25, 0.3, 0.5),
+            (100.0, 100.0)
+        );
+        // NaN-порог — сравнение ложно, обе ветки не срабатывают: базовые шаги
+        assert_eq!(
+            adaptive_grid_steps(20.0, 100.0, 2.0, f32::NAN, 0.5),
+            (20.0, 100.0)
+        );
+    }
+
+    /// Оракул паритета с снап-движком: формула `effective_grid_step`
+    /// (canvas-app/src/snap.rs, T-038.2) продублирована в тесте как эталон —
+    /// любой дрейф эффективного minor-шага сетки от шага снапа ловится
+    /// регрессом по матрице плотностей × зумов (п.3: snap к видимым линиям).
+    #[test]
+    fn adaptive_steps_minor_matches_snap_oracle() {
+        fn snap_oracle(minor: f32, major: f32, zoom: f32, sub: f32, coarse: f32) -> f32 {
+            if zoom > sub {
+                minor / 2.0
+            } else if zoom < coarse {
+                major
+            } else {
+                minor
+            }
+        }
+        // Все пресеты GridDensity (Dense 10/50, Medium 20/100, Sparse 40/200)
+        for (minor, major) in [(10.0, 50.0), (20.0, 100.0), (40.0, 200.0)] {
+            let mut zoom = MIN_ZOOM;
+            while zoom <= MAX_ZOOM {
+                let (m, mj) = adaptive_grid_steps(minor, major, zoom, 1.5, 0.5);
+                assert_eq!(
+                    m,
+                    snap_oracle(minor, major, zoom, 1.5, 0.5),
+                    "minor при zoom {zoom}"
+                );
+                assert_eq!(mj, major, "major не меняется: {zoom}");
+                zoom += 0.01;
+            }
+        }
     }
 
     /// Uniform сериализуется в 80 байт — layout WGSL-структуры
