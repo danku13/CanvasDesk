@@ -26,6 +26,15 @@ value-связям (DAG-движок), а ИИ-агент строит и про
 | [DEPENDENCIES.md](DEPENDENCIES.html) | Заметки о зависимостях |
 | [ENVIRONMENT.md](ENVIRONMENT.html) | Окружение разработки и сборки |
 
+## PRD — требования продукта
+
+| Документ | Содержание |
+|---|---|
+| [PRD-0001: DuckDB-коннектор данных](PRD-duckdb-connector.html) | PoC подключения к файлам/БД (CSV/Parquet/JSON, SQLite/PG/MySQL), инспектор таблиц и колонок, агрегаты min/max/avg/p50/p90/p95 и перенос их в мат.модель |
+| [PRD-0002: LOD-визуализация связей и main stage](PRD-edge-lod.html) | Пучки связей как одна линия с толщиной по весу входов, режим фокусировки main stage (≤ 70% вьюпорта), выход по Esc/клику |
+
+PRD — документы требований продукта (проблема → цели → user stories → решение → non-goals → roadmap). При переходе к реализации каждый PRD оформляется отдельным FR в `change-requests/` по шаблону `cr-template.md`.
+
 ## Разделы
 
 - [`adr/`](adr/) — архитектурные решения (ADR-0001…0012, индекс — `adr/README.md`).
