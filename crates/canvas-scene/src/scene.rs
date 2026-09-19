@@ -558,7 +558,18 @@ impl SceneState {
             ));
         }
         let name = if name.trim().is_empty() {
-            format!("Сценарий {}", self.scenarios.len() + 1)
+            // CR-016: автоимя — первый свободный номер, а не len+1: при
+            // непоследовательных именах («Сценарий 2», «Сценарий 3») len+1
+            // коллидирует с существующим и «+» падает с «уже существует».
+            (1..)
+                .map(|n| format!("Сценарий {n}"))
+                .find(|candidate| {
+                    !self
+                        .scenarios
+                        .iter()
+                        .any(|scenario| &scenario.name == candidate)
+                })
+                .expect("свободный номер сценария")
         } else {
             name.trim().to_owned()
         };
