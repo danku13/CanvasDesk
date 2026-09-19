@@ -25,10 +25,11 @@
 use std::time::Duration;
 
 use canvas_core::time::Instant;
-use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, NodeKind};
+use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, Language, NodeKind};
 
 use canvas_render::ThemeColors;
 
+use crate::i18n::{self, keys};
 use crate::ui::{point_in_rect, NodeSetting};
 use crate::{preset_color, CardInstance, Vec2};
 
@@ -238,6 +239,7 @@ pub fn template_update_group(
     canvas: &Canvas,
     primary: usize,
     registry: &canvas_core::templates::TemplateRegistry,
+    language: Language,
 ) -> Option<PaletteGroup> {
     let node = canvas.nodes.get(primary)?;
     let template = node.template()?;
@@ -246,15 +248,19 @@ pub fn template_update_group(
         return None;
     }
     Some(PaletteGroup {
-        label: "Шаблон".to_owned(),
+        label: i18n::tr(language, keys::PAL_GROUP_TEMPLATE).to_owned(),
         icon: PaletteIcon::Template,
         entries: vec![PaletteEntry {
             action: PaletteAction::TemplateUpdate {
                 node_index: primary,
             },
-            label: format!(
-                "Обновить до v{} (была v{})",
-                manifest.version, template.version
+            label: i18n::trf(
+                language,
+                keys::PAL_TEMPLATE_UPDATE_TO,
+                &[
+                    ("{version}", manifest.version.as_str()),
+                    ("{old}", template.version.as_str()),
+                ],
             ),
             icon: None,
             current: false,
@@ -264,25 +270,48 @@ pub fn template_update_group(
 
 /// Группы палитры для цели. Ноды: [Цвет][Раскладка][Действия][Ветвление?];
 /// мультивыделение — [Цвет][Раскладка]; связь — [Стиль][Толщина][Цвет].
-pub fn palette_groups(canvas: &Canvas, target: &PaletteTarget) -> Vec<PaletteGroup> {
+pub fn palette_groups(
+    canvas: &Canvas,
+    target: &PaletteTarget,
+    language: Language,
+) -> Vec<PaletteGroup> {
     match target {
-        PaletteTarget::Edge(edge_index) => edge_groups(canvas, *edge_index),
-        PaletteTarget::Nodes { primary, selected } => node_groups(canvas, *primary, selected),
+        PaletteTarget::Edge(edge_index) => edge_groups(canvas, *edge_index, language),
+        PaletteTarget::Nodes { primary, selected } => {
+            node_groups(canvas, *primary, selected, language)
+        }
     }
 }
 
 /// Группы для выделенных нод.
-fn node_groups(canvas: &Canvas, primary: usize, selected: &[usize]) -> Vec<PaletteGroup> {
+fn node_groups(
+    canvas: &Canvas,
+    primary: usize,
+    selected: &[usize],
+    language: Language,
+) -> Vec<PaletteGroup> {
     let mut groups = Vec::new();
-    groups.push(color_group(canvas, primary, selected));
+    groups.push(color_group(canvas, primary, selected, language));
     // FR-010: раскладка связанных — семя primary, из палитры под выделением
     groups.push(PaletteGroup {
-        label: "Раскладка".to_owned(),
+        label: i18n::tr(language, keys::PAL_GROUP_LAYOUT).to_owned(),
         icon: PaletteIcon::TreeHorizontal,
         entries: vec![
-            layout_entry(primary, canvas_core::LayoutMode::TreeHorizontal, "Дерево →"),
-            layout_entry(primary, canvas_core::LayoutMode::TreeVertical, "Дерево ↓"),
-            layout_entry(primary, canvas_core::LayoutMode::Radial, "Радиально"),
+            layout_entry(
+                primary,
+                canvas_core::LayoutMode::TreeHorizontal,
+                i18n::tr(language, keys::PAL_LAYOUT_TREE_LR),
+            ),
+            layout_entry(
+                primary,
+                canvas_core::LayoutMode::TreeVertical,
+                i18n::tr(language, keys::PAL_LAYOUT_TREE_TB),
+            ),
+            layout_entry(
+                primary,
+                canvas_core::LayoutMode::Radial,
+                i18n::tr(language, keys::PAL_LAYOUT_RADIAL),
+            ),
         ],
     });
     // Мультивыделение: настройки конкретной ноды не имеют смысла
@@ -294,9 +323,13 @@ fn node_groups(canvas: &Canvas, primary: usize, selected: &[usize]) -> Vec<Palet
                 .get(primary)
                 .and_then(canvas_core::Node::template)
                 .is_some();
-            groups.push(actions_group(primary, node.kind(), is_template));
+            groups.push(actions_group(primary, node.kind(), is_template, language));
             if node.kind() == NodeKind::Text {
-                groups.push(branch_group(primary, node.collapsed == Some(true)));
+                groups.push(branch_group(
+                    primary,
+                    node.collapsed == Some(true),
+                    language,
+                ));
             }
         }
     }
@@ -304,7 +337,12 @@ fn node_groups(canvas: &Canvas, primary: usize, selected: &[usize]) -> Vec<Palet
 }
 
 /// Группа «Цвет»: свотчи пресетов + сброс; мультивыделение — всем выделенным.
-fn color_group(canvas: &Canvas, primary: usize, selected: &[usize]) -> PaletteGroup {
+fn color_group(
+    canvas: &Canvas,
+    primary: usize,
+    selected: &[usize],
+    language: Language,
+) -> PaletteGroup {
     let current = static_preset(
         canvas
             .nodes
@@ -322,7 +360,7 @@ fn color_group(canvas: &Canvas, primary: usize, selected: &[usize]) -> PaletteGr
                 targets: targets.clone(),
                 preset: Some(preset),
             },
-            label: format!("Цвет {preset}"),
+            label: i18n::trf(language, keys::PAL_COLOR_PRESET, &[("{preset}", preset)]),
             icon: Some(PaletteIcon::Swatch(Some(preset))),
             current: current == Some(preset),
         })
@@ -332,12 +370,12 @@ fn color_group(canvas: &Canvas, primary: usize, selected: &[usize]) -> PaletteGr
             targets,
             preset: None,
         },
-        label: "Без цвета".to_owned(),
+        label: i18n::tr(language, keys::PAL_COLOR_NONE).to_owned(),
         icon: Some(PaletteIcon::Swatch(None)),
         current: current.is_none(),
     });
     PaletteGroup {
-        label: "Цвет".to_owned(),
+        label: i18n::tr(language, keys::PAL_GROUP_COLOR).to_owned(),
         icon: PaletteIcon::Swatch(current),
         entries,
     }
@@ -358,7 +396,12 @@ fn layout_entry(seed: usize, mode: canvas_core::LayoutMode, label: &str) -> Pale
 
 /// Группа «Действия» (FR-009): общие + типовые. Иконки — где наглядно,
 /// редкие действия — текст.
-fn actions_group(index: usize, kind: NodeKind, is_template: bool) -> PaletteGroup {
+fn actions_group(
+    index: usize,
+    kind: NodeKind,
+    is_template: bool,
+    language: Language,
+) -> PaletteGroup {
     let entry = |setting: NodeSetting, label: &str, icon: Option<PaletteIcon>| PaletteEntry {
         action: PaletteAction::Node {
             node_index: index,
@@ -371,17 +414,17 @@ fn actions_group(index: usize, kind: NodeKind, is_template: bool) -> PaletteGrou
     let mut entries = vec![
         entry(
             NodeSetting::Rename,
-            "Переименовать",
+            i18n::tr(language, keys::PAL_ACTION_RENAME),
             Some(PaletteIcon::Rename),
         ),
         entry(
             NodeSetting::Duplicate,
-            "Дублировать",
+            i18n::tr(language, keys::PAL_ACTION_DUPLICATE),
             Some(PaletteIcon::Duplicate),
         ),
         PaletteEntry {
             action: PaletteAction::NodeGroup(index),
-            label: "Сгруппировать".to_owned(),
+            label: i18n::tr(language, keys::PAL_ACTION_GROUP).to_owned(),
             icon: Some(PaletteIcon::GroupBox),
             current: false,
         },
@@ -390,61 +433,73 @@ fn actions_group(index: usize, kind: NodeKind, is_template: bool) -> PaletteGrou
         NodeKind::File => {
             entries.push(entry(
                 NodeSetting::OpenFile,
-                "Открыть файл",
+                i18n::tr(language, keys::PAL_ACTION_OPEN_FILE),
                 Some(PaletteIcon::Folder),
             ));
             entries.push(entry(
                 NodeSetting::OpenFolder,
-                "Открыть папку с файлом",
+                i18n::tr(language, keys::PAL_ACTION_OPEN_FOLDER),
                 Some(PaletteIcon::Folder),
             ));
-            entries.push(entry(NodeSetting::CopyPath, "Скопировать путь", None));
+            entries.push(entry(
+                NodeSetting::CopyPath,
+                i18n::tr(language, keys::PAL_ACTION_COPY_PATH),
+                None,
+            ));
         }
         NodeKind::Link => {
-            entries.push(entry(NodeSetting::CopyPath, "Скопировать ссылку", None));
+            entries.push(entry(
+                NodeSetting::CopyPath,
+                i18n::tr(language, keys::PAL_ACTION_COPY_LINK),
+                None,
+            ));
         }
         NodeKind::Text => {
             entries.push(entry(
                 NodeSetting::ClearText,
-                "Очистить текст",
+                i18n::tr(language, keys::PAL_ACTION_CLEAR_TEXT),
                 Some(PaletteIcon::Clear),
             ));
             if is_template {
                 // FR-020: сохранить как custom-шаблон (шаблонная нода)
                 entries.push(PaletteEntry {
                     action: PaletteAction::SaveAsTemplate { node_index: index },
-                    label: "Сохранить как шаблон".to_owned(),
+                    label: i18n::tr(language, keys::PAL_ACTION_SAVE_AS_TEMPLATE).to_owned(),
                     icon: Some(PaletteIcon::Template),
                     current: false,
                 });
             }
         }
         NodeKind::Group => {
-            entries.push(entry(NodeSetting::Ungroup, "Разгруппировать", None));
+            entries.push(entry(
+                NodeSetting::Ungroup,
+                i18n::tr(language, keys::PAL_ACTION_UNGROUP),
+                None,
+            ));
         }
         NodeKind::Widget => {
             entries.push(entry(
                 NodeSetting::WidgetReload,
-                "Перезагрузить виджет",
+                i18n::tr(language, keys::PAL_ACTION_WIDGET_RELOAD),
                 None,
             ));
             entries.push(entry(
                 NodeSetting::WidgetPermissions,
-                "Разрешения виджета…",
+                i18n::tr(language, keys::PAL_ACTION_WIDGET_PERMISSIONS),
                 None,
             ));
         }
         NodeKind::Unknown => {}
     }
     PaletteGroup {
-        label: "Действия".to_owned(),
+        label: i18n::tr(language, keys::PAL_GROUP_ACTIONS).to_owned(),
         icon: PaletteIcon::Sliders,
         entries,
     }
 }
 
 /// Группа «Ветвление» (FR-011, text-ноды): дочерняя, сиблинг, сворачивание.
-fn branch_group(index: usize, collapsed: bool) -> PaletteGroup {
+fn branch_group(index: usize, collapsed: bool, language: Language) -> PaletteGroup {
     let entry = |setting: NodeSetting, label: &str, icon: PaletteIcon| PaletteEntry {
         action: PaletteAction::Node {
             node_index: index,
@@ -455,29 +510,29 @@ fn branch_group(index: usize, collapsed: bool) -> PaletteGroup {
         current: false,
     };
     PaletteGroup {
-        label: "Ветвление".to_owned(),
+        label: i18n::tr(language, keys::PAL_GROUP_BRANCHING).to_owned(),
         icon: PaletteIcon::AddChild,
         entries: vec![
             entry(
                 NodeSetting::AddChild,
-                "Добавить дочернюю",
+                i18n::tr(language, keys::PAL_ACTION_ADD_CHILD),
                 PaletteIcon::AddChild,
             ),
             entry(
                 NodeSetting::AddSibling,
-                "Добавить сиблинга",
+                i18n::tr(language, keys::PAL_ACTION_ADD_SIBLING),
                 PaletteIcon::AddSibling,
             ),
             if collapsed {
                 entry(
                     NodeSetting::ExpandBranch,
-                    "Развернуть ветку",
+                    i18n::tr(language, keys::PAL_ACTION_EXPAND_BRANCH),
                     PaletteIcon::Expand,
                 )
             } else {
                 entry(
                     NodeSetting::CollapseBranch,
-                    "Свернуть ветку",
+                    i18n::tr(language, keys::PAL_ACTION_COLLAPSE_BRANCH),
                     PaletteIcon::Collapse,
                 )
             },
@@ -486,7 +541,7 @@ fn branch_group(index: usize, collapsed: bool) -> PaletteGroup {
 }
 
 /// Группы для выделенной связи: [Стиль][Толщина][Цвет] с иконками.
-fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
+fn edge_groups(canvas: &Canvas, edge_index: usize, language: Language) -> Vec<PaletteGroup> {
     let Some(edge) = canvas.edges.get(edge_index) else {
         return Vec::new();
     };
@@ -514,7 +569,7 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
                 edge_index,
                 preset: Some(preset),
             },
-            label: format!("Цвет {preset}"),
+            label: i18n::trf(language, keys::PAL_COLOR_PRESET, &[("{preset}", preset)]),
             icon: Some(PaletteIcon::Swatch(Some(preset))),
             current: current == Some(preset),
         })
@@ -524,31 +579,55 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
             edge_index,
             preset: None,
         },
-        label: "Без цвета".to_owned(),
+        label: i18n::tr(language, keys::PAL_COLOR_NONE).to_owned(),
         icon: Some(PaletteIcon::Swatch(None)),
         current: current.is_none(),
     });
     vec![
         PaletteGroup {
-            label: "Стиль".to_owned(),
+            label: i18n::tr(language, keys::PAL_GROUP_STYLE).to_owned(),
             icon: PaletteIcon::LineSolid,
             entries: vec![
-                style_entry(EdgeLineStyle::Solid, "Сплошная", PaletteIcon::LineSolid),
-                style_entry(EdgeLineStyle::Dashed, "Пунктир", PaletteIcon::LineDashed),
-                style_entry(EdgeLineStyle::Dotted, "Точки", PaletteIcon::LineDotted),
+                style_entry(
+                    EdgeLineStyle::Solid,
+                    i18n::tr(language, keys::PAL_STYLE_SOLID),
+                    PaletteIcon::LineSolid,
+                ),
+                style_entry(
+                    EdgeLineStyle::Dashed,
+                    i18n::tr(language, keys::PAL_STYLE_DASHED),
+                    PaletteIcon::LineDashed,
+                ),
+                style_entry(
+                    EdgeLineStyle::Dotted,
+                    i18n::tr(language, keys::PAL_STYLE_DOTTED),
+                    PaletteIcon::LineDotted,
+                ),
             ],
         },
         PaletteGroup {
-            label: "Толщина".to_owned(),
+            label: i18n::tr(language, keys::PAL_GROUP_THICKNESS).to_owned(),
             icon: PaletteIcon::Medium,
             entries: vec![
-                thickness_entry(EdgeThickness::Thin, "Тонкая", PaletteIcon::Thin),
-                thickness_entry(EdgeThickness::Medium, "Обычная", PaletteIcon::Medium),
-                thickness_entry(EdgeThickness::Thick, "Толстая", PaletteIcon::Thick),
+                thickness_entry(
+                    EdgeThickness::Thin,
+                    i18n::tr(language, keys::PAL_THICKNESS_THIN),
+                    PaletteIcon::Thin,
+                ),
+                thickness_entry(
+                    EdgeThickness::Medium,
+                    i18n::tr(language, keys::PAL_THICKNESS_MEDIUM),
+                    PaletteIcon::Medium,
+                ),
+                thickness_entry(
+                    EdgeThickness::Thick,
+                    i18n::tr(language, keys::PAL_THICKNESS_THICK),
+                    PaletteIcon::Thick,
+                ),
             ],
         },
         PaletteGroup {
-            label: "Цвет".to_owned(),
+            label: i18n::tr(language, keys::PAL_GROUP_COLOR).to_owned(),
             icon: PaletteIcon::Swatch(current),
             entries: color_entries,
         },
@@ -556,7 +635,7 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
         // как value-ребро; control — визуальная связь. Пометка «(фолбэк при
         // цикле)» не нужна: цикл блокируется на создании/тогле.
         PaletteGroup {
-            label: "Поток".to_owned(),
+            label: i18n::tr(language, keys::PAL_GROUP_FLOW).to_owned(),
             icon: PaletteIcon::Flow,
             entries: vec![
                 PaletteEntry {
@@ -564,7 +643,7 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
                         edge_index,
                         kind: FlowKind::Value,
                     },
-                    label: "Значение".to_owned(),
+                    label: i18n::tr(language, keys::PAL_FLOW_VALUE).to_owned(),
                     icon: Some(PaletteIcon::Flow),
                     current: edge.flow_kind() == FlowKind::Value,
                 },
@@ -573,7 +652,7 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
                         edge_index,
                         kind: FlowKind::Control,
                     },
-                    label: "Контрольная".to_owned(),
+                    label: i18n::tr(language, keys::PAL_FLOW_CONTROL).to_owned(),
                     icon: None,
                     current: edge.flow_kind() == FlowKind::Control,
                 },
@@ -583,12 +662,12 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
         // путь, пересчёт при drag/раскладке); закрепление фиксирует текущую
         // эффективную сторону конца (WYSIWYG) в файле.
         PaletteGroup {
-            label: "Порты".to_owned(),
+            label: i18n::tr(language, keys::PAL_GROUP_PORTS).to_owned(),
             icon: PaletteIcon::Pin,
             entries: vec![
                 PaletteEntry {
                     action: PaletteAction::EdgePortsAuto { edge_index },
-                    label: "Авто (кратчайший путь)".to_owned(),
+                    label: i18n::tr(language, keys::PAL_PORTS_AUTO).to_owned(),
                     icon: Some(PaletteIcon::Pin),
                     current: !edge.ports_pinned(),
                 },
@@ -599,9 +678,9 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
                         pin: !pin_from,
                     },
                     label: if pin_from {
-                        "Исток: закреплён".to_owned()
+                        i18n::tr(language, keys::PAL_PORTS_PINNED_FROM).to_owned()
                     } else {
-                        "Исток: закрепить".to_owned()
+                        i18n::tr(language, keys::PAL_PORTS_PIN_FROM).to_owned()
                     },
                     icon: None,
                     current: pin_from,
@@ -613,9 +692,9 @@ fn edge_groups(canvas: &Canvas, edge_index: usize) -> Vec<PaletteGroup> {
                         pin: !pin_to,
                     },
                     label: if pin_to {
-                        "Сток: закреплён".to_owned()
+                        i18n::tr(language, keys::PAL_PORTS_PINNED_TO).to_owned()
                     } else {
-                        "Сток: закрепить".to_owned()
+                        i18n::tr(language, keys::PAL_PORTS_PIN_TO).to_owned()
                     },
                     icon: None,
                     current: pin_to,
@@ -1163,6 +1242,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let viewport = [1200.0, 800.0];
         let origin = palette_origin([600.0, 300.0], palette_bar_size(&groups), viewport);
@@ -1180,6 +1260,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, vec!["Цвет", "Раскладка", "Действия", "Ветвление"]);
@@ -1215,6 +1296,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, vec!["Цвет", "Раскладка", "Действия"]);
@@ -1236,6 +1318,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0, 1],
             },
+            Language::Ru,
         );
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, vec!["Цвет", "Раскладка"]);
@@ -1257,7 +1340,7 @@ mod tests {
         edge.thickness = Some(EdgeThickness::Thick);
         edge.color = Some("3".into());
         canvas.edges.push(edge);
-        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0));
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), Language::Ru);
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, vec!["Стиль", "Толщина", "Цвет", "Поток", "Порты"]);
         let style_current: Vec<bool> = groups[0].entries.iter().map(|e| e.current).collect();
@@ -1316,6 +1399,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let viewport = [1200.0, 800.0];
         let origin = palette_origin([600.0, 300.0], palette_bar_size(&groups), viewport);
@@ -1516,6 +1600,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let viewport = [800.0, 400.0];
         // Бар у нижнего края
@@ -1606,7 +1691,7 @@ mod tests {
         );
         edge.set_port_pin(canvas_core::EdgeEnd::To, true);
         canvas.edges.push(edge);
-        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0));
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), Language::Ru);
         let ports = groups
             .iter()
             .find(|g| g.label == "Порты")
@@ -1642,7 +1727,7 @@ mod tests {
         both.set_port_pin(canvas_core::EdgeEnd::From, true);
         both.set_port_pin(canvas_core::EdgeEnd::To, true);
         canvas.edges.push(both);
-        let groups = palette_groups(&canvas, &PaletteTarget::Edge(1));
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(1), Language::Ru);
         let ports = groups.iter().find(|g| g.label == "Порты").expect("группа");
         assert!(!ports.entries[0].current, "авто не текущий при пинах");
         match &ports.entries[0].action {
@@ -1689,7 +1774,8 @@ mod tests {
         manifest.version = "1.1.0".to_owned();
         let registry = TemplateRegistry::from_manifests(vec![manifest]);
 
-        let group = template_update_group(&canvas, 0, &registry).expect("группа update");
+        let group =
+            template_update_group(&canvas, 0, &registry, Language::Ru).expect("группа update");
         assert_eq!(group.label, "Шаблон");
         assert_eq!(group.icon, PaletteIcon::Template);
         assert!(
@@ -1704,11 +1790,11 @@ mod tests {
 
         // Актуальная версия — группы нет
         let current = TemplateRegistry::mock();
-        assert!(template_update_group(&canvas, 0, &current).is_none());
+        assert!(template_update_group(&canvas, 0, &current, Language::Ru).is_none());
         // Не-шаблонная нода — группы нет
         let mut plain = Canvas::default();
         plain.nodes.push(Node::text("a", "a", 0.0, 0.0));
-        assert!(template_update_group(&plain, 0, &registry).is_none());
+        assert!(template_update_group(&plain, 0, &registry, Language::Ru).is_none());
     }
 
     /// FR-020: у шаблонной text-ноды в «Действиях» есть «Сохранить как
@@ -1744,6 +1830,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let actions = groups
             .iter()
@@ -1765,6 +1852,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            Language::Ru,
         );
         let actions = groups
             .iter()

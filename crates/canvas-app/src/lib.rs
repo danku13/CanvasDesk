@@ -8,7 +8,7 @@
 
 pub use canvas_core::{
     edge_at, focus_set, nearest_side, next_port_zone, port_at, port_point, Canvas, Corner, Edge,
-    EdgeLineStyle, EdgeThickness, FocusSeed, FocusSet, Node, NodeKind, Settings, Side,
+    EdgeLineStyle, EdgeThickness, FocusSeed, FocusSet, Language, Node, NodeKind, Settings, Side,
     SpatialIndex,
 };
 pub use canvas_render::camera::Vec2;
@@ -32,6 +32,11 @@ pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 /// web-бинарь canvas-web (W4-прошивка) соберёт свой набор сервисов вокруг
 /// того же `App`.
 pub mod app;
+
+/// FR-040: локализация интерфейса — ключи-фразы, статические таблицы RU/EN,
+/// [`i18n::tr`]/[`i18n::trf`]. Чистый модуль, ноль внешних крейтов; тексты
+/// читаются по кадру — смена языка применяется на лету.
+pub mod i18n;
 
 /// Менеджер виджетов (M5 T20-F): реестр + LOD + host-обёртки. Модуль
 /// кроссплатформен (host — cfg(windows) внутри), юнит-тесты — на Linux.
@@ -192,21 +197,6 @@ pub mod ui {
             _ => theme[0] - SETTINGS_GAP - SETTINGS_BUTTON,
         };
         [x, theme[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
-    }
-
-    /// Rect панели настроек: прижата к кнопке (с зазором), в том же углу.
-    /// Высота — из `settings_ui::panel_height` (FR-026: группы + отступы).
-    pub fn panel_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
-        let height = crate::settings_ui::panel_height();
-        let x = match corner {
-            Corner::TopLeft | Corner::BottomLeft => SETTINGS_MARGIN,
-            _ => viewport[0] - SETTINGS_MARGIN - PANEL_WIDTH,
-        };
-        let y = match corner {
-            Corner::TopLeft | Corner::TopRight => SETTINGS_MARGIN + SETTINGS_BUTTON + SETTINGS_GAP,
-            _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON - SETTINGS_GAP - height,
-        };
-        [x, y, PANEL_WIDTH, height]
     }
 
     /// Точка в зоне resize (правый нижний угол ноды)? Чистая функция для тестов.
@@ -382,6 +372,9 @@ pub mod ui {
     // --- Оверлей горячих клавиш (FR-004) ---
 
     /// Ширина панели хоткеев (логические px).
+    /// Клавишная колонка («F1», «Ctrl+F»…) — тоже ключи: «ЛКМ»/«ПКМ»/
+    /// «клик» — русские аббревиатуры, в EN переводятся (LMB/RMB/click).
+    /// (клавиша, ключ колонки, ключ описания) — см. таблицу i18n.
     pub const HOTKEYS_PANEL_WIDTH: f32 = 340.0;
     /// Высота строки хоткея (логические px).
     pub const HOTKEYS_ROW_HEIGHT: f32 = 22.0;
@@ -392,37 +385,84 @@ pub mod ui {
     /// Ширина колонки клавиши (выравнивание описаний).
     pub const HOTKEYS_KEY_COLUMN: f32 = 118.0;
 
-    /// Список горячих клавиш (FR-004): (клавиша, описание) — единый
-    /// источник для оверлея F1. Порядок = порядок отображения; обновлять
+    /// Список горячих клавиш (FR-004): (ключ колонки клавиши, ключ
+    /// описания) — оба элемента — ключи таблицы [`crate::i18n`] (FR-040:
+    /// «ЛКМ»/«ПКМ» — русские аббревиатуры, в EN — LMB/RMB). Единый
+    /// источник для оверлея F1; порядок = порядок отображения; обновлять
     /// при изменении хоткеев (ввод — main.rs on_key).
     pub const HOTKEYS: &[(&str, &str)] = &[
-        ("F1", "список горячих клавиш"),
-        ("Ctrl+F", "поиск по канвасу"),
-        ("Ctrl+P", "палитра шаблонов"),
-        ("Shift+клик (пусто)", "wheel-меню шаблонов"),
-        ("F3", "HUD / следующий результат"),
-        ("Esc", "закрыть меню и панели"),
-        ("Del", "удалить выделенное"),
-        ("Ctrl+Z", "отменить действие"),
-        ("Ctrl+Y", "вернуть отменённое"),
-        ("Ctrl+C", "копировать ноды"),
-        ("Ctrl+X", "вырезать ноды"),
-        ("Ctrl+V", "вставить ноды"),
-        ("Ctrl+D", "дублировать ноды"),
-        ("Ctrl+G", "сгруппировать выделенное"),
-        ("Ctrl+B", "индикаторы узких мест"),
-        ("Ctrl+клик", "добавить к выделению"),
-        ("ЛКМ + drag", "рамка выделения"),
-        ("ЛКМ от порта", "протянуть связь"),
-        ("ЛКМ за хэндл", "перепривязать связь"),
-        ("2× клик", "заметка / открыть файл"),
-        ("ПКМ", "меню объекта"),
-        ("Space+drag", "панорамирование"),
-        ("Ctrl+колесо", "масштаб"),
-        ("Ctrl+Enter", "зафиксировать заметку"),
-        ("Ctrl+,", "настройки"),
-        ("Ctrl+Shift+I", "what-if сценарии"),
-        ("F", "фокус на связях"),
+        (crate::i18n::keys::HKEY_F1, crate::i18n::keys::HK_F1),
+        (crate::i18n::keys::HKEY_CTRL_F, crate::i18n::keys::HK_SEARCH),
+        (
+            crate::i18n::keys::HKEY_CTRL_P,
+            crate::i18n::keys::HK_PALETTE,
+        ),
+        (
+            crate::i18n::keys::HKEY_SHIFT_CLICK,
+            crate::i18n::keys::HK_WHEEL,
+        ),
+        (crate::i18n::keys::HKEY_F3, crate::i18n::keys::HK_HUD),
+        (crate::i18n::keys::HKEY_ESC, crate::i18n::keys::HK_ESC),
+        (crate::i18n::keys::HKEY_DEL, crate::i18n::keys::HK_DELETE),
+        (crate::i18n::keys::HKEY_CTRL_Z, crate::i18n::keys::HK_UNDO),
+        (crate::i18n::keys::HKEY_CTRL_Y, crate::i18n::keys::HK_REDO),
+        (crate::i18n::keys::HKEY_CTRL_C, crate::i18n::keys::HK_COPY),
+        (crate::i18n::keys::HKEY_CTRL_X, crate::i18n::keys::HK_CUT),
+        (crate::i18n::keys::HKEY_CTRL_V, crate::i18n::keys::HK_PASTE),
+        (
+            crate::i18n::keys::HKEY_CTRL_D,
+            crate::i18n::keys::HK_DUPLICATE,
+        ),
+        (crate::i18n::keys::HKEY_CTRL_G, crate::i18n::keys::HK_GROUP),
+        (
+            crate::i18n::keys::HKEY_CTRL_B,
+            crate::i18n::keys::HK_BOTTLENECK,
+        ),
+        (
+            crate::i18n::keys::HKEY_CTRL_CLICK,
+            crate::i18n::keys::HK_ADD_TO_SELECTION,
+        ),
+        (
+            crate::i18n::keys::HKEY_LMB_DRAG,
+            crate::i18n::keys::HK_SELECTION_FRAME,
+        ),
+        (
+            crate::i18n::keys::HKEY_LMB_PORT,
+            crate::i18n::keys::HK_DRAG_EDGE,
+        ),
+        (
+            crate::i18n::keys::HKEY_LMB_HANDLE,
+            crate::i18n::keys::HK_REBIND_EDGE,
+        ),
+        (
+            crate::i18n::keys::HKEY_DOUBLE_CLICK,
+            crate::i18n::keys::HK_DOUBLE_CLICK,
+        ),
+        (
+            crate::i18n::keys::HKEY_RMB,
+            crate::i18n::keys::HK_CONTEXT_MENU,
+        ),
+        (
+            crate::i18n::keys::HKEY_SPACE_DRAG,
+            crate::i18n::keys::HK_PAN,
+        ),
+        (
+            crate::i18n::keys::HKEY_CTRL_WHEEL,
+            crate::i18n::keys::HK_ZOOM,
+        ),
+        (
+            crate::i18n::keys::HKEY_CTRL_ENTER,
+            crate::i18n::keys::HK_COMMIT_NOTE,
+        ),
+        (
+            crate::i18n::keys::HKEY_CTRL_COMMA,
+            crate::i18n::keys::HK_SETTINGS,
+        ),
+        (
+            crate::i18n::keys::HKEY_CTRL_SHIFT_I,
+            crate::i18n::keys::HK_WHATIF,
+        ),
+        (crate::i18n::keys::HKEY_F, crate::i18n::keys::HK_EDGE_FOCUS),
     ];
 
     /// Полная высота панели хоткеев (FR-004): паддинги + заголовок +
@@ -1050,28 +1090,47 @@ pub mod ui {
         desktop_on: bool,
         bottleneck_on: bool,
         whatif_on: bool,
+        language: Language,
     ) -> String {
+        // Галочка переключателя — префикс символа на стороне вызова; сама
+        // фраза — ключ таблицы i18n (FR-040, ключ = полная фраза)
+        let check = "✓ ";
         match item {
-            CanvasMenuItem::NewGroup => "Создать группу".to_owned(),
+            CanvasMenuItem::NewGroup => {
+                i18n::tr(language, crate::i18n::keys::MENU_NEW_GROUP).to_owned()
+            }
             CanvasMenuItem::FocusMode => {
-                format!("{}Фокус на связях", if focus_on { "✓ " } else { "" })
+                format!(
+                    "{}{}",
+                    if focus_on { check } else { "" },
+                    i18n::tr(language, crate::i18n::keys::MENU_FOCUS_MODE)
+                )
             }
             CanvasMenuItem::Hotkeys => format!(
-                "{}Горячие клавиши (F1)",
-                if hotkeys_open { "✓ " } else { "" }
+                "{}{}",
+                if hotkeys_open { check } else { "" },
+                i18n::tr(language, crate::i18n::keys::MENU_HOTKEYS)
             ),
-            CanvasMenuItem::Widgets => "Виджеты ▸…".to_owned(),
+            CanvasMenuItem::Widgets => {
+                i18n::tr(language, crate::i18n::keys::MENU_WIDGETS).to_owned()
+            }
             CanvasMenuItem::DesktopMode => {
-                format!("{}Режим десктопа", if desktop_on { "✓ " } else { "" })
+                format!(
+                    "{}{}",
+                    if desktop_on { check } else { "" },
+                    i18n::tr(language, crate::i18n::keys::MENU_DESKTOP_MODE)
+                )
             }
             CanvasMenuItem::BottleneckOverlay => format!(
-                "{}Узкие места (Ctrl+B)",
-                if bottleneck_on { "✓ " } else { "" }
+                "{}{}",
+                if bottleneck_on { check } else { "" },
+                i18n::tr(language, crate::i18n::keys::MENU_BOTTLENECK)
             ),
             CanvasMenuItem::WhatIf => {
                 format!(
-                    "{}What-if режим (Ctrl+Shift+I)",
-                    if whatif_on { "✓ " } else { "" }
+                    "{}{}",
+                    if whatif_on { check } else { "" },
+                    i18n::tr(language, crate::i18n::keys::MENU_WHATIF)
                 )
             }
         }
@@ -1596,16 +1655,30 @@ pub mod ui {
             // Узкое окно: ширина клампнута
             let rect = hotkeys_panel_rect([200.0, 900.0]);
             assert!(rect[2] <= 200.0);
-            // Данные хоткеев: непустые пары, колонка клавиш влезает
+            // Данные хоткеев: непустые ключи клавиши/описания (FR-040),
+            // RU-значения обоих колонок непусты
             assert!(!HOTKEYS.is_empty());
             for (key, description) in HOTKEYS {
-                assert!(!key.is_empty(), "пустая клавиша");
-                assert!(!description.is_empty(), "пустое описание: {key}");
+                assert!(!key.is_empty(), "пустой ключ клавиши");
+                assert!(!description.is_empty(), "пустой ключ описания: {key}");
+                assert!(
+                    !crate::i18n::tr(canvas_core::Language::Ru, key).is_empty(),
+                    "пустое RU-значение клавиши"
+                );
+                assert!(
+                    !crate::i18n::tr(canvas_core::Language::Ru, description).is_empty(),
+                    "пустое RU-значение описания"
+                );
             }
             // FR-006/FR-007: новые операции в списке (undo/redo/cut)
             let keys: Vec<&str> = HOTKEYS.iter().map(|(key, _)| *key).collect();
-            for required in ["Ctrl+Z", "Ctrl+Y", "Ctrl+X"] {
-                assert!(keys.contains(&required), "в списке нет {required}");
+            for (required, shown) in [
+                (crate::i18n::keys::HKEY_CTRL_Z, "Ctrl+Z"),
+                (crate::i18n::keys::HKEY_CTRL_Y, "Ctrl+Y"),
+                (crate::i18n::keys::HKEY_CTRL_X, "Ctrl+X"),
+            ] {
+                assert!(keys.contains(&required), "в списке нет {shown}");
+                assert_eq!(crate::i18n::tr(canvas_core::Language::Ru, required), shown);
             }
         }
 
@@ -2088,61 +2161,157 @@ pub mod ui {
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
             assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[3], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[3],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "Виджеты ▸…"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[0], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[0],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "Создать группу"
             );
             // T23: второй пункт — переключатель фокуса с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], true, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[1],
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "✓ Фокус на связях"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[1], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[1],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "Фокус на связях"
             );
             // FR-004.1: третий пункт — переключатель оверлея хоткеев
             assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, true, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[2],
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "✓ Горячие клавиши (F1)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[2], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[2],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "Горячие клавиши (F1)"
             );
             // T15: пятый пункт — переключатель desktop-режима с ✓-галочкой
             assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, true, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[4],
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "✓ Режим десктопа"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[4], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[4],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "Режим десктопа"
             );
             // FR-016 (CP5): шестой пункт — переключатель оверлея узких мест
             assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::BottleneckOverlay);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, true, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[5],
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    Language::Ru
+                ),
                 "✓ Узкие места (Ctrl+B)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[5], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[5],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "Узкие места (Ctrl+B)"
             );
             // FR-017: седьмой пункт — переключатель what-if режима
             assert_eq!(CANVAS_MENU_ITEMS[6], CanvasMenuItem::WhatIf);
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[6], false, false, false, false, true),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[6],
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    Language::Ru
+                ),
                 "✓ What-if режим (Ctrl+Shift+I)"
             );
             assert_eq!(
-                canvas_menu_label(CANVAS_MENU_ITEMS[6], false, false, false, false, false),
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[6],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
                 "What-if режим (Ctrl+Shift+I)"
             );
             let y = 50.0 + MENU_PADDING + 3.0;
@@ -2465,30 +2634,24 @@ pub mod ui {
             }
         }
 
-        /// Панель настроек: прижата к углу кнопки, целиком в viewport.
+        /// FR-039: модалка настроек — по центру окна, целиком в viewport
+        /// (замена угловой панели; геометрия — settings_ui::modal_layout).
         #[test]
-        fn settings_panel_placement() {
-            let viewport = [1600.0, 900.0];
-            for corner in [
-                Corner::TopLeft,
-                Corner::TopRight,
-                Corner::BottomLeft,
-                Corner::BottomRight,
-            ] {
-                let panel = panel_rect(corner, viewport);
+        fn settings_modal_placement() {
+            use crate::settings_ui::modal_layout;
+            for viewport in [[1600.0, 900.0], [1920.0, 1080.0], [320.0, 240.0]] {
+                let modal = modal_layout(0, viewport).rect;
                 assert!(
-                    panel[0] >= 0.0 && panel[0] + panel[2] <= viewport[0],
-                    "{corner:?}"
+                    modal[0] >= 0.0 && modal[0] + modal[2] <= viewport[0],
+                    "{viewport:?}"
                 );
                 assert!(
-                    panel[1] >= 0.0 && panel[1] + panel[3] <= viewport[1],
-                    "{corner:?}"
+                    modal[1] >= 0.0 && modal[1] + modal[3] <= viewport[1],
+                    "{viewport:?}"
                 );
-                let button = button_rect(corner, viewport);
-                // Панель по горизонтали на той же стороне, что и кнопка
-                let same_side = (panel[0] - button[0]).abs() < 1.0
-                    || ((panel[0] + panel[2]) - (button[0] + button[2])).abs() < 1.0;
-                assert!(same_side, "{corner:?}: панель не под кнопкой");
+                // Модалка по центру (допуск на кламп на маленьком окне)
+                let center_delta = ((modal[0] + modal[2] / 2.0) - viewport[0] / 2.0).abs();
+                assert!(center_delta < 1.0, "{viewport:?}: не по центру X");
             }
         }
 

@@ -12,15 +12,19 @@
 //! просмотрщик, колесо скроллит, клик по внутренней ссылке ведёт на
 //! страницу. Схема `config.toml` не меняется.
 
+use canvas_core::Language;
 use canvas_render::gfm::{self, Block, LinkSegment};
+
+use crate::i18n::{self, keys};
 
 /// Вшитая страница документации: `id` (basename файла), короткая подпись
 /// для подменю «Документация ▸» и сырое markdown-тело (`include_str!`,
 /// front matter срезается [`strip_front_matter`]).
 pub struct DocsPage {
     pub id: &'static str,
-    /// Подпись в подменю (инвариант полноты: пункт ↔ страница).
-    pub label: &'static str,
+    /// Ключ подписи в подменю (таблица [`crate::i18n`] — FR-040; контент
+    /// страницы не переводится — данные, не UI-код).
+    pub label_key: &'static str,
     /// Сырой markdown (с front matter).
     pub md: &'static str,
 }
@@ -31,42 +35,42 @@ pub struct DocsPage {
 pub const DOCS_PAGES: [DocsPage; 8] = [
     DocsPage {
         id: "index",
-        label: "Главная",
+        label_key: keys::DOCS_PAGE_INDEX,
         md: include_str!("../../../user-docs/index.md"),
     },
     DocsPage {
         id: "quick-start",
-        label: "Быстрый старт",
+        label_key: keys::DOCS_PAGE_QUICK_START,
         md: include_str!("../../../user-docs/quick-start.md"),
     },
     DocsPage {
         id: "interface",
-        label: "Объекты интерфейса",
+        label_key: keys::DOCS_PAGE_INTERFACE,
         md: include_str!("../../../user-docs/interface.md"),
     },
     DocsPage {
         id: "hotkeys",
-        label: "Горячие клавиши",
+        label_key: keys::DOCS_PAGE_HOTKEYS,
         md: include_str!("../../../user-docs/hotkeys.md"),
     },
     DocsPage {
         id: "calculations",
-        label: "Расчёты и поток значений",
+        label_key: keys::DOCS_PAGE_CALCULATIONS,
         md: include_str!("../../../user-docs/calculations.md"),
     },
     DocsPage {
         id: "templates",
-        label: "Шаблоны нод",
+        label_key: keys::DOCS_PAGE_TEMPLATES,
         md: include_str!("../../../user-docs/templates.md"),
     },
     DocsPage {
         id: "faq",
-        label: "FAQ",
+        label_key: keys::DOCS_PAGE_FAQ,
         md: include_str!("../../../user-docs/faq.md"),
     },
     DocsPage {
         id: "agent-recipe",
-        label: "Рецепт для ИИ-агентов",
+        label_key: keys::DOCS_PAGE_AGENT_RECIPE,
         md: include_str!("../../../user-docs/agent-recipe.md"),
     },
 ];
@@ -162,11 +166,11 @@ pub enum HelpMenuItem {
 /// Пункты меню помощи (порядок отображения).
 pub const HELP_MENU_ITEMS: [HelpMenuItem; 2] = [HelpMenuItem::Docs, HelpMenuItem::Onboarding];
 
-/// Подпись пункта меню помощи.
-pub fn help_menu_item_label(item: HelpMenuItem) -> &'static str {
+/// Подпись пункта меню помощи (таблица [`crate::i18n`] — FR-040).
+pub fn help_menu_item_label(item: HelpMenuItem, language: Language) -> &'static str {
     match item {
-        HelpMenuItem::Docs => "Документация ▸",
-        HelpMenuItem::Onboarding => "Пройти онбординг",
+        HelpMenuItem::Docs => i18n::tr(language, keys::HELP_DOCS),
+        HelpMenuItem::Onboarding => i18n::tr(language, keys::HELP_ONBOARDING),
     }
 }
 
@@ -856,15 +860,15 @@ mod tests {
         let mut labels = Vec::new();
         for page in &DOCS_PAGES {
             assert!(!page.id.is_empty());
-            assert!(!page.label.is_empty());
+            assert!(!page.label_key.is_empty());
             assert!(!ids.contains(&page.id), "дубль id: {}", page.id);
             assert!(
-                !labels.contains(&page.label),
+                !labels.contains(&page.label_key),
                 "дубль подписи: {}",
-                page.label
+                page.label_key
             );
             ids.push(page.id);
-            labels.push(page.label);
+            labels.push(page.label_key);
         }
     }
 
@@ -1036,7 +1040,7 @@ mod tests {
         );
         // Подписи пунктов непустые
         for item in HELP_MENU_ITEMS {
-            assert!(!help_menu_item_label(item).is_empty());
+            assert!(!help_menu_item_label(item, Language::Ru).is_empty());
         }
     }
 

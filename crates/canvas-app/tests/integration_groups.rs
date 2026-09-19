@@ -52,6 +52,7 @@ fn test_group_via_node_menu() {
             primary: 1,
             selected: vec![1],
         },
+        canvas_core::Language::Ru,
     );
     let actions = groups
         .iter()
@@ -423,9 +424,12 @@ use canvas_app::ui::{plan_group_around_nodes, HOTKEYS};
 /// (FR-012); хоткей задокументирован в панели F1 (HOTKEYS).
 #[test]
 fn test_group_selection_hotkey_ctrl_g() {
-    // Хоткей виден в оверлее F1
+    // Хоткей виден в оверлее F1 (колонка клавиши — ключ i18n FR-040,
+    // RU-значение "Ctrl+G")
     assert!(
-        HOTKEYS.iter().any(|(key, _)| *key == "Ctrl+G"),
+        HOTKEYS
+            .iter()
+            .any(|(key, _)| { canvas_app::i18n::tr(canvas_core::Language::Ru, key) == "Ctrl+G" }),
         "Ctrl+G в панели хоткеев"
     );
 

@@ -1,37 +1,81 @@
-//! FR-026: панель настроек — группы настроек и выпадающие меню — чистая
-//! модель (образец [`crate::hints_ui`]/`template_ui`): модель групп
-//! ([`SETTINGS_GROUPS`]), род строки ([`row_kind`]), перечень значений
-//! многозначной настройки ([`dropdown_options`]) с чистым применением
-//! выбора ([`apply_dropdown_value`]), геометрия панели и меню с клампом
-//! к окну ([`panel_layout`]/[`dropdown_layout`]) и hit-тесты.
+//! FR-039: модалка настроек в стиле Obsidian — чистая модель
+//! (образец [`crate::hints_ui`]/`template_ui`): табы ([`SETTINGS_TABS`]),
+//! род строки ([`row_kind`]), перечень значений многозначной настройки
+//! ([`dropdown_options`]) с чистым применением выбора
+//! ([`apply_dropdown_value`]), геометрия модалки и меню с клампом к окну
+//! ([`modal_layout`]/[`dropdown_layout`]) и hit-тесты.
 //!
-//! Рендер и ввод — приложение (`main.rs`): панель собирается по кадру из
-//! квадов + screen-текстов, клик по тумблеру переключает значение, клик
-//! по dropdown-строке открывает меню (выбор пункта применяет значение
-//! через [`apply_dropdown_value`] + побочные эффекты рендера на стороне
-//! `App`). Схема `config.toml` не меняется — это реорганизация UI.
+//! Отличия от панели FR-026 (ревизия владельцем 2026-09-20): модалка по
+//! центру окна над затемнением (не панель у угла кнопки); строки
+//! «лейбл + описание + контрол» (pill-тумблер / dropdown-кнопка);
+//! таб «Внешний вид» — карточки темы + dropdown языка (FR-040); размер
+//! адаптивный с потолками (расчёт на Full HD+, контрольные точки
+//! [`MODAL_BP_COMPACT`]/[`MODAL_BP_MOBILE`] — константы без реализации);
+//! поиск по настройкам — отклонён владельцем (не реализуем).
+//!
+//! Все тексты настроек — через таблицу строк [`crate::i18n`] (ключи,
+//! без хардкода — база локализации FR-040); значения из `canvas-core`
+//! (`Corner::label` и др.) в рендер не идут. Схема `config.toml` не
+//! меняется — это реорганизация UI.
 
-use canvas_core::{Corner, GridDensity, GridStyle, Settings, PORT_ZONE_PRESETS};
+use canvas_core::{Corner, GridDensity, GridStyle, Language, Settings, Theme, PORT_ZONE_PRESETS};
 
-use crate::ui::{
-    panel_rect, point_in_rect, PANEL_HEADER_HEIGHT, PANEL_HINT_HEIGHT, PANEL_PADDING,
-    PANEL_ROW_HEIGHT, PANEL_WIDTH,
-};
+use crate::i18n::{self, keys};
+use crate::ui::{point_in_rect, SETTINGS_MARGIN};
 
-/// Высота заголовка группы (капс-текст меньшим кеглем).
-pub const GROUP_TITLE_HEIGHT: f32 = 22.0;
-/// Межсекционный отступ между группами.
-pub const GROUP_GAP: f32 = 8.0;
 /// Высота пункта выпадающего меню.
 pub const DROPDOWN_ROW_H: f32 = 26.0;
 /// Внутренние поля выпадающего меню.
 pub const DROPDOWN_MARGIN: f32 = 6.0;
 
-// Панель настроек: строки (порядок = прежний плоский список + LinePorts
-// FR-025, источник инварианта полноты групп). Тема вынесена в отдельную
-// кнопку-переключатель рядом с кнопкой настроек — вне панели, как раньше.
+// Модалка настроек (FR-039): адаптивный размер с потолками — расчёт на
+// десктопы Full HD и выше (1920×1080 → ~864×640).
 
-/// Строка-переключатель панели настроек.
+/// Минимальная ширина модалки (логические px).
+pub const MODAL_MIN_W: f32 = 560.0;
+/// Потолок ширины модалки (логические px).
+pub const MODAL_MAX_W: f32 = 880.0;
+/// Минимальная высота модалки (логические px).
+pub const MODAL_MIN_H: f32 = 400.0;
+/// Потолок высоты модалки (логические px).
+pub const MODAL_MAX_H: f32 = 640.0;
+/// Контрольная точка «компакт» (ширина окна, логические px) — задел под
+/// будущую адаптацию планшетов; поведение ниже точки в v1 не реализуется.
+pub const MODAL_BP_COMPACT: f32 = 1280.0;
+/// Контрольная точка «мобильный» (ширина окна, логические px) — задел под
+/// будущую адаптацию телефонов; поведение ниже точки в v1 не реализуется.
+pub const MODAL_BP_MOBILE: f32 = 768.0;
+/// Ширина левой колонки навигации (клампится на узких окнах).
+pub const MODAL_NAV_WIDTH: f32 = 180.0;
+/// Высота пункта левой навигации.
+pub const MODAL_NAV_ITEM_H: f32 = 34.0;
+/// Высота заголовка раздела в правой панели.
+pub const MODAL_TITLE_HEIGHT: f32 = 30.0;
+/// Внутренние поля модалки и её панелей.
+pub const MODAL_PADDING: f32 = 12.0;
+/// Высота строки настройки (лейбл + описание, контрол справа).
+pub const MODAL_ROW_HEIGHT: f32 = 44.0;
+/// Высота карточки темы (таб «Внешний вид»).
+pub const MODAL_THEME_CARD_H: f32 = 56.0;
+/// Зазор между карточками темы и следующей секцией.
+pub const MODAL_THEME_GAP: f32 = 14.0;
+/// Высота строки-подсказки внизу левой колонки.
+pub const MODAL_HINT_HEIGHT: f32 = 24.0;
+/// Размер pill-тумблера: трек и ручка (логические px).
+pub const PILL_TRACK_W: f32 = 34.0;
+pub const PILL_TRACK_H: f32 = 18.0;
+pub const PILL_KNOB: f32 = 14.0;
+/// Размер dropdown-кнопки в строке.
+pub const DROPDOWN_BTN_W: f32 = 170.0;
+pub const DROPDOWN_BTN_H: f32 = 24.0;
+/// Резерв ширины под контрол и поля при расчёте ширины текста лейбла/описания
+/// (текст не наезжает на контрол справа).
+pub const MODAL_ROW_LABEL_W: f32 = DROPDOWN_BTN_W + MODAL_PADDING + 6.0;
+
+// Строки настроек: порядок плоского списка = прежний (FR-026) + Language
+// FR-040. Источник инварианта полноты табов.
+
+/// Строка-переключатель модалки настроек.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsRow {
     /// Угол летающей кнопки (цикл по 4 углам).
@@ -54,13 +98,14 @@ pub enum SettingsRow {
     FocusMode,
     /// HUD (F3) включён при старте.
     HudOnStart,
+    /// FR-040: язык интерфейса (русский/English).
+    Language,
 }
 
-/// Плоский список всех строк панели (порядок: прежний плоский список,
-/// LinePorts FR-025 — после PortZone, BottleneckOverlay FR-016 — после
-/// LinePorts). Группировка — в [`SETTINGS_GROUPS`];
-/// инвариант полноты (юнит-тест): union строк групп == этот список без дублей.
-pub const SETTINGS_ROWS: [SettingsRow; 10] = [
+/// Плоский список всех строк настроек (инвариант полноты: union строк
+/// табов == этот список без дублей). Тема — вне списка (карточки,
+/// отдельное поле `settings.theme`).
+pub const SETTINGS_ROWS: [SettingsRow; 11] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -71,91 +116,106 @@ pub const SETTINGS_ROWS: [SettingsRow; 10] = [
     SettingsRow::BottleneckOverlay,
     SettingsRow::FocusMode,
     SettingsRow::HudOnStart,
+    SettingsRow::Language,
 ];
 
-/// Группа настроек панели (FR-026): заголовок-капс + строки.
+/// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
+/// отдельный вид контента таба «Внешний вид» (карточки), не строка.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettingsGroup {
-    /// Заголовок секции («КАНВАС», «СВЯЗИ И ПОРТЫ», «ПРИЛОЖЕНИЕ»).
-    pub title: &'static str,
-    /// Строки группы в порядке отображения.
+pub struct SettingsTab {
+    /// Ключ заголовка таба (таблица [`crate::i18n`]).
+    pub title_key: &'static str,
+    /// Иконка-глиф (набор как у всего UI: ⚙/▾/✓ — системный фолбэк).
+    pub icon: &'static str,
+    /// Таб содержит карточки темы (ровно один — «Внешний вид»).
+    pub theme_cards: bool,
+    /// Строки таба в порядке отображения.
     pub rows: &'static [SettingsRow],
 }
 
-/// Группы настроек (FR-026): логические секции вместо плоского списка.
-/// Распределение v1: «Канвас» — сетка; «Связи и порты» — связи/порты/фокус
-/// + построчные точки выхода FR-025; «Приложение» — кнопка и HUD.
-pub const SETTINGS_GROUPS: [SettingsGroup; 3] = [
-    SettingsGroup {
-        title: "Канвас",
+/// Табы настроек (FR-039 §1, распределение v1): «Общие» — кнопка и HUD;
+/// «Канвас» — сетка и оверлей узких мест; «Связи и порты» — связи/порты/
+/// фокус + построчные точки выхода FR-025; «Внешний вид» — карточки темы
+/// и язык FR-040. FR-038 дополнит модель пятым табом «Snap».
+pub const SETTINGS_TABS: [SettingsTab; 4] = [
+    SettingsTab {
+        title_key: keys::TAB_GENERAL,
+        icon: "◎",
+        theme_cards: false,
+        rows: &[SettingsRow::ButtonCorner, SettingsRow::HudOnStart],
+    },
+    SettingsTab {
+        title_key: keys::TAB_CANVAS,
+        icon: "▦",
+        theme_cards: false,
         rows: &[
             SettingsRow::Grid,
             SettingsRow::GridStyle,
             SettingsRow::GridDensity,
+            SettingsRow::BottleneckOverlay,
         ],
     },
-    SettingsGroup {
-        title: "Связи и порты",
+    SettingsTab {
+        title_key: keys::TAB_EDGES,
+        icon: "⇄",
+        theme_cards: false,
         rows: &[
             SettingsRow::EdgesAvoid,
             SettingsRow::PortZone,
             SettingsRow::LinePorts,
-            SettingsRow::BottleneckOverlay,
             SettingsRow::FocusMode,
         ],
     },
-    SettingsGroup {
-        title: "Приложение",
-        rows: &[SettingsRow::ButtonCorner, SettingsRow::HudOnStart],
+    SettingsTab {
+        title_key: keys::TAB_APPEARANCE,
+        icon: "◐",
+        theme_cards: true,
+        rows: &[SettingsRow::Language],
     },
 ];
 
-impl SettingsRow {
-    /// Подпись строки с текущим значением (закрытый dropdown показывает
-    /// текущее значение на самой строке — HIG «Pop-Up Buttons»).
-    pub fn label(self, settings: &Settings) -> String {
-        let on_off = |v: bool| if v { "вкл" } else { "выкл" };
-        match self {
-            SettingsRow::ButtonCorner => {
-                format!("Угол кнопки: {}", settings.button_corner.label())
-            }
-            SettingsRow::Grid => format!("Сетка: {}", on_off(settings.grid_visible)),
-            SettingsRow::GridStyle => format!("Вид сетки: {}", settings.grid_style.label()),
-            SettingsRow::GridDensity => {
-                format!("Плотность сетки: {}", settings.grid_density.label())
-            }
-            SettingsRow::EdgesAvoid => {
-                format!("Связи огибают ноды: {}", on_off(settings.edges_avoid_nodes))
-            }
-            SettingsRow::PortZone => {
-                format!("Зона портов: {} px", settings.port_zone_px as i32)
-            }
-            SettingsRow::LinePorts => {
-                format!("Точки выхода строк: {}", on_off(settings.line_ports))
-            }
-            SettingsRow::BottleneckOverlay => {
-                format!(
-                    "Индикаторы узких мест: {}",
-                    on_off(settings.bottleneck_overlay)
-                )
-            }
-            SettingsRow::FocusMode => {
-                format!("Фокус на связях: {}", on_off(settings.focus_mode))
-            }
-            SettingsRow::HudOnStart => {
-                format!("HUD при запуске: {}", on_off(settings.hud_on_start))
-            }
-        }
+/// Ключ лейбла строки (значение показывает контрол — лейбл без «: вкл»,
+/// FR-039 §5).
+pub fn row_label_key(row: SettingsRow) -> &'static str {
+    match row {
+        SettingsRow::ButtonCorner => keys::ROW_BUTTON_CORNER,
+        SettingsRow::Grid => keys::ROW_GRID,
+        SettingsRow::GridStyle => keys::ROW_GRID_STYLE,
+        SettingsRow::GridDensity => keys::ROW_GRID_DENSITY,
+        SettingsRow::EdgesAvoid => keys::ROW_EDGES_AVOID,
+        SettingsRow::PortZone => keys::ROW_PORT_ZONE,
+        SettingsRow::LinePorts => keys::ROW_LINE_PORTS,
+        SettingsRow::BottleneckOverlay => keys::ROW_BOTTLENECK,
+        SettingsRow::FocusMode => keys::ROW_FOCUS_MODE,
+        SettingsRow::HudOnStart => keys::ROW_HUD_ON_START,
+        SettingsRow::Language => keys::ROW_LANGUAGE,
     }
 }
 
-/// Род строки панели: тумблер (клик переключает) или dropdown (клик
-/// открывает меню значений). Инвариант (юнит-тест): `Toggle` — ровно для
-/// `bool`-полей `Settings`, `Dropdown` — для остальных.
+/// Ключ описания строки (приглушённый текст под лейблом — v1 по решению
+/// владельца).
+pub fn row_desc_key(row: SettingsRow) -> &'static str {
+    match row {
+        SettingsRow::ButtonCorner => keys::DESC_BUTTON_CORNER,
+        SettingsRow::Grid => keys::DESC_GRID,
+        SettingsRow::GridStyle => keys::DESC_GRID_STYLE,
+        SettingsRow::GridDensity => keys::DESC_GRID_DENSITY,
+        SettingsRow::EdgesAvoid => keys::DESC_EDGES_AVOID,
+        SettingsRow::PortZone => keys::DESC_PORT_ZONE,
+        SettingsRow::LinePorts => keys::DESC_LINE_PORTS,
+        SettingsRow::BottleneckOverlay => keys::DESC_BOTTLENECK,
+        SettingsRow::FocusMode => keys::DESC_FOCUS_MODE,
+        SettingsRow::HudOnStart => keys::DESC_HUD_ON_START,
+        SettingsRow::Language => keys::DESC_LANGUAGE,
+    }
+}
+
+/// Род строки: тумблер (pill-тумблер, клик переключает) или dropdown
+/// (клик открывает меню значений). Инвариант (юнит-тест): `Toggle` — ровно
+/// для `bool`-полей `Settings`, `Dropdown` — для остальных.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
-    /// Булева настройка: клик — переключить (цикл из двух значений —
-    /// это тумблер, меню избыточно).
+    /// Булева настройка: клик — переключить (pill-тумблер, меню избыточно).
     Toggle,
     /// Многозначная настройка: клик — открыть выпадающее меню.
     Dropdown,
@@ -167,13 +227,56 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         SettingsRow::ButtonCorner
         | SettingsRow::GridStyle
         | SettingsRow::GridDensity
-        | SettingsRow::PortZone => RowKind::Dropdown,
+        | SettingsRow::PortZone
+        | SettingsRow::Language => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => RowKind::Toggle,
+    }
+}
+
+/// Текущее значение настройки для dropdown-кнопки (контрол на строке
+/// показывает значение — HIG «Pop-Up Buttons»; тексты из таблицы
+/// [`crate::i18n`], язык — `settings.language`). Для тумблеров — `None`
+/// (состояние видно по позиции pill-ручки).
+pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
+    let language = settings.language;
+    match row {
+        SettingsRow::ButtonCorner => {
+            let key = match settings.button_corner {
+                Corner::TopLeft => keys::CORNER_TOP_LEFT,
+                Corner::TopRight => keys::CORNER_TOP_RIGHT,
+                Corner::BottomLeft => keys::CORNER_BOTTOM_LEFT,
+                Corner::BottomRight => keys::CORNER_BOTTOM_RIGHT,
+            };
+            Some(i18n::tr(language, key).to_owned())
+        }
+        SettingsRow::GridStyle => {
+            let key = match settings.grid_style {
+                GridStyle::Lines => keys::GRID_STYLE_LINES,
+                GridStyle::Dots => keys::GRID_STYLE_DOTS,
+            };
+            Some(i18n::tr(language, key).to_owned())
+        }
+        SettingsRow::GridDensity => {
+            let key = match settings.grid_density {
+                GridDensity::Dense => keys::GRID_DENSITY_DENSE,
+                GridDensity::Medium => keys::GRID_DENSITY_MEDIUM,
+                GridDensity::Sparse => keys::GRID_DENSITY_SPARSE,
+            };
+            Some(i18n::tr(language, key).to_owned())
+        }
+        SettingsRow::PortZone => Some(format!("{} px", settings.port_zone_px as i32)),
+        SettingsRow::Language => Some(settings.language.native_label().to_owned()),
+        SettingsRow::Grid
+        | SettingsRow::EdgesAvoid
+        | SettingsRow::LinePorts
+        | SettingsRow::BottleneckOverlay
+        | SettingsRow::FocusMode
+        | SettingsRow::HudOnStart => None,
     }
 }
 
@@ -185,25 +288,50 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
 /// Зона портов: текущим считается пресет, от которого цикл
 /// `next_port_zone` шагнул бы дальше (последний пресет ≤ значения) —
 /// ручная правка `config.toml` между пресетами всё равно получает отметку.
+/// Язык (FR-040): названия — в собственной локали
+/// ([`Language::native_label`], конвенция Obsidian/VS Code).
 pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, bool)> {
+    let language = settings.language;
     match row {
         SettingsRow::ButtonCorner => [
-            Corner::TopLeft,
-            Corner::TopRight,
-            Corner::BottomRight,
-            Corner::BottomLeft,
+            (Corner::TopLeft, keys::CORNER_TOP_LEFT),
+            (Corner::TopRight, keys::CORNER_TOP_RIGHT),
+            (Corner::BottomRight, keys::CORNER_BOTTOM_RIGHT),
+            (Corner::BottomLeft, keys::CORNER_BOTTOM_LEFT),
         ]
         .into_iter()
-        .map(|corner| (corner.label().to_owned(), settings.button_corner == corner))
+        .map(|(corner, key)| {
+            (
+                i18n::tr(language, key).to_owned(),
+                settings.button_corner == corner,
+            )
+        })
         .collect(),
-        SettingsRow::GridStyle => [GridStyle::Lines, GridStyle::Dots]
-            .into_iter()
-            .map(|style| (style.label().to_owned(), settings.grid_style == style))
-            .collect(),
-        SettingsRow::GridDensity => [GridDensity::Dense, GridDensity::Medium, GridDensity::Sparse]
-            .into_iter()
-            .map(|density| (density.label().to_owned(), settings.grid_density == density))
-            .collect(),
+        SettingsRow::GridStyle => [
+            (GridStyle::Lines, keys::GRID_STYLE_LINES),
+            (GridStyle::Dots, keys::GRID_STYLE_DOTS),
+        ]
+        .into_iter()
+        .map(|(style, key)| {
+            (
+                i18n::tr(language, key).to_owned(),
+                settings.grid_style == style,
+            )
+        })
+        .collect(),
+        SettingsRow::GridDensity => [
+            (GridDensity::Dense, keys::GRID_DENSITY_DENSE),
+            (GridDensity::Medium, keys::GRID_DENSITY_MEDIUM),
+            (GridDensity::Sparse, keys::GRID_DENSITY_SPARSE),
+        ]
+        .into_iter()
+        .map(|(density, key)| {
+            (
+                i18n::tr(language, key).to_owned(),
+                settings.grid_density == density,
+            )
+        })
+        .collect(),
         SettingsRow::PortZone => {
             let current = PORT_ZONE_PRESETS
                 .iter()
@@ -215,6 +343,10 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
                 .map(|(i, preset)| (format!("{} px", *preset as i32), i == current))
                 .collect()
         }
+        SettingsRow::Language => [Language::Ru, Language::En]
+            .into_iter()
+            .map(|lang| (lang.native_label().to_owned(), settings.language == lang))
+            .collect(),
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -257,6 +389,14 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.port_zone_px = *preset;
             }
         }
+        // FR-040: выбор языка — прямое присваивание (не цикл), применяется
+        // на лету; сохранение — общий хвост вызывающего.
+        SettingsRow::Language => {
+            let languages = [Language::Ru, Language::En];
+            if let Some(language) = languages.get(index) {
+                settings.language = *language;
+            }
+        }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -269,7 +409,7 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
 /// Состояние выпадающего меню настроек (FR-026): какая строка открыта и
 /// клавиатурное выделение пункта. Пункты вычисляются на кадр из
 /// [`dropdown_options`] — состояние не может устареть. Хранится в `App`,
-/// сбрасывается при закрытии панели/меню.
+/// сбрасывается при закрытии модалки/меню.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DropdownState {
     /// Открытое меню строки (`None` — все закрыты).
@@ -315,104 +455,244 @@ impl DropdownState {
     }
 }
 
-/// Элемент панели настроек: заголовок группы (не кликабелен) или строка
-/// настройки (кликабельна).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelEntry {
-    /// Заголовок секции.
-    Header(&'static str),
-    /// Строка настройки.
-    Row(SettingsRow),
-}
-
-/// Геометрия панели настроек (FR-026): rect целиком + rect'ы элементов
-/// (заголовки групп и строки) в порядке отображения. Высота панели =
-/// прежняя формула + заголовки секций + межсекционные отступы.
+/// Геометрия модалки настроек (FR-039): rect целиком, пункты левой
+/// навигации, заголовок раздела, строки активного таба, карточки темы,
+/// подсказка внизу левой колонки.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PanelLayout {
-    /// Rect панели `[x, y, w, h]` (логические px).
+pub struct ModalLayout {
+    /// Rect модалки `[x, y, w, h]` (логические px).
     pub rect: [f32; 4],
-    /// Элементы по вертикали: заголовки групп и строки настроек.
-    pub entries: Vec<(PanelEntry, [f32; 4])>,
+    /// Ширина левой колонки навигации (кламп на узких окнах).
+    pub nav_w: f32,
+    /// Rect'ы пунктов навигации по индексу таба.
+    pub nav_items: Vec<[f32; 4]>,
+    /// Rect заголовка раздела (правая панель).
+    pub title_rect: [f32; 4],
+    /// Зона контента правой панели (строки внутри неё).
+    pub content_rect: [f32; 4],
+    /// Строки активного таба в порядке отображения.
+    pub rows: Vec<(SettingsRow, [f32; 4])>,
+    /// Карточки темы `[Dark, Light]` (пустые rect'ы вне таба «Внешний вид»).
+    pub theme_cards: [[f32; 4]; 2],
+    /// Rect подсказки внизу левой колонки.
+    pub hint_rect: [f32; 4],
 }
 
-impl PanelLayout {
-    /// Rect строки настройки (`None` для заголовков и отсутствующих).
+impl ModalLayout {
+    /// Rect строки настройки активного таба (`None` для отсутствующих).
     pub fn row_rect(&self, row: SettingsRow) -> Option<[f32; 4]> {
-        self.entries.iter().find_map(|(entry, rect)| match entry {
-            PanelEntry::Row(r) if *r == row => Some(*rect),
-            _ => None,
-        })
+        self.rows
+            .iter()
+            .find_map(|(r, rect)| (*r == row).then_some(*rect))
+    }
+
+    /// Rect карточки темы.
+    pub fn theme_card_rect(&self, theme: Theme) -> [f32; 4] {
+        match theme {
+            Theme::Dark => self.theme_cards[0],
+            Theme::Light => self.theme_cards[1],
+        }
     }
 }
 
-/// Высота панели настроек: паддинги + заголовок + группы (заголовок
-/// секции + строки, межсекционные отступы) + подсказка.
-pub fn panel_height() -> f32 {
-    let entries: f32 = SETTINGS_GROUPS
+/// Rect контрола внутри строки: pill-тумблер у тумблера, dropdown-кнопка
+/// у выпадающего списка (справа от строки, вертикально по центру).
+pub fn control_rect(row_rect: [f32; 4], kind: RowKind) -> [f32; 4] {
+    match kind {
+        RowKind::Toggle => [
+            row_rect[0] + row_rect[2] - MODAL_PADDING - PILL_TRACK_W,
+            row_rect[1] + (row_rect[3] - PILL_TRACK_H) / 2.0,
+            PILL_TRACK_W,
+            PILL_TRACK_H,
+        ],
+        RowKind::Dropdown => [
+            row_rect[0] + row_rect[2] - MODAL_PADDING - DROPDOWN_BTN_W,
+            row_rect[1] + (row_rect[3] - DROPDOWN_BTN_H) / 2.0,
+            DROPDOWN_BTN_W,
+            DROPDOWN_BTN_H,
+        ],
+    }
+}
+
+/// Rect ручки pill-тумблера по треку и состоянию (включён — справа,
+/// акцентный цвет; выключен — слева, приглушённый).
+pub fn pill_knob_rect(track: [f32; 4], on: bool) -> [f32; 4] {
+    let x = if on {
+        track[0] + track[2] - PILL_KNOB - 2.0
+    } else {
+        track[0] + 2.0
+    };
+    [
+        x,
+        track[1] + (track[3] - PILL_KNOB) / 2.0,
+        PILL_KNOB,
+        PILL_KNOB,
+    ]
+}
+
+/// Адаптивный размер модалки: ширина `(vw * 0.45).clamp(MIN_W, MAX_W)`,
+/// высота `(vh * 0.6).clamp(MIN_H, MAX_H)`, затем кламп в окно с полями
+/// [`SETTINGS_MARGIN`] — инвариант: модалка целиком в окне при любом
+/// viewport (320×240 включительно).
+fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
+    let w = (viewport[0] * 0.45).clamp(MODAL_MIN_W, MODAL_MAX_W);
+    let h = (viewport[1] * 0.6).clamp(MODAL_MIN_H, MODAL_MAX_H);
+    let w = w.min((viewport[0] - SETTINGS_MARGIN * 2.0).max(1.0));
+    let h = h.min((viewport[1] - SETTINGS_MARGIN * 2.0).max(1.0));
+    [w, h]
+}
+
+/// Геометрия модалки с позициями навигации, заголовка, строк активного
+/// таба и карточек темы. Активный таб — индекс в [`SETTINGS_TABS`]
+/// (вне диапазона — первый таб; состояние `App::settings_tab` клампится
+/// на вызывающей стороне).
+pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
+    let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
+    let [w, h] = modal_size(viewport);
+    let x = (viewport[0] - w) / 2.0;
+    let y = (viewport[1] - h) / 2.0;
+    let rect = [x, y, w, h];
+    // Левая колонка: на узких окнах сжимается (40% ширины модалки), но не
+    // исчезает — инвариант различимости навигации при клампе 320×240.
+    let nav_w = MODAL_NAV_WIDTH.min(rect[2] * 0.4);
+    let nav_items = SETTINGS_TABS
         .iter()
-        .map(|group| GROUP_TITLE_HEIGHT + group.rows.len() as f32 * PANEL_ROW_HEIGHT)
-        .sum();
-    let gaps = SETTINGS_GROUPS.len().saturating_sub(1) as f32 * GROUP_GAP;
-    PANEL_PADDING * 2.0 + PANEL_HEADER_HEIGHT + entries + gaps + PANEL_HINT_HEIGHT
-}
-
-/// Геометрия панели с позициями заголовков групп и строк (позиция/ширина
-/// панели — та же, что у `ui::panel_rect`; источник один).
-pub fn panel_layout(corner: Corner, viewport: [f32; 2]) -> PanelLayout {
-    let rect = panel_rect(corner, viewport);
-    let mut entries = Vec::new();
-    let mut y = rect[1] + PANEL_PADDING + PANEL_HEADER_HEIGHT;
-    for (gi, group) in SETTINGS_GROUPS.iter().enumerate() {
-        if gi > 0 {
-            y += GROUP_GAP;
-        }
-        entries.push((
-            PanelEntry::Header(group.title),
-            [rect[0], y, PANEL_WIDTH, GROUP_TITLE_HEIGHT],
-        ));
-        y += GROUP_TITLE_HEIGHT;
-        for &row in group.rows {
-            entries.push((
-                PanelEntry::Row(row),
-                [rect[0], y, PANEL_WIDTH, PANEL_ROW_HEIGHT],
-            ));
-            y += PANEL_ROW_HEIGHT;
-        }
+        .enumerate()
+        .map(|(i, _)| {
+            [
+                rect[0],
+                rect[1] + MODAL_PADDING + i as f32 * MODAL_NAV_ITEM_H,
+                nav_w,
+                MODAL_NAV_ITEM_H,
+            ]
+        })
+        .collect();
+    let hint_rect = [
+        rect[0] + MODAL_PADDING,
+        rect[1] + rect[3] - MODAL_PADDING - MODAL_HINT_HEIGHT,
+        nav_w - MODAL_PADDING,
+        MODAL_HINT_HEIGHT,
+    ];
+    // Правая панель: заголовок раздела + зона контента
+    let content_x = rect[0] + nav_w;
+    let content_w = rect[2] - nav_w;
+    let title_rect = [
+        content_x + MODAL_PADDING,
+        rect[1] + MODAL_PADDING,
+        content_w - MODAL_PADDING * 2.0,
+        MODAL_TITLE_HEIGHT,
+    ];
+    let content_y = rect[1] + MODAL_PADDING + MODAL_TITLE_HEIGHT + 4.0;
+    let content_h = rect[3] - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0;
+    let content_rect = [content_x, content_y, content_w, content_h];
+    // Строки: единая сетка (высота MODAL_ROW_HEIGHT); в табе с карточками
+    // темы строки начинаются ниже карточек.
+    let cards_top = content_y;
+    let rows_top = if tab_def.theme_cards {
+        cards_top + MODAL_THEME_CARD_H + MODAL_THEME_GAP
+    } else {
+        cards_top
+    };
+    let row_w = content_w - MODAL_PADDING * 2.0;
+    let rows = tab_def
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            (
+                *row,
+                [
+                    content_x + MODAL_PADDING,
+                    rows_top + i as f32 * MODAL_ROW_HEIGHT,
+                    row_w,
+                    MODAL_ROW_HEIGHT,
+                ],
+            )
+        })
+        .collect();
+    // Карточки темы: две рядом («тёмная»/«светлая» — паттерн Obsidian
+    // «Base theme»); вне таба «Внешний вид» — пустые rect'ы.
+    let theme_cards = if tab_def.theme_cards {
+        let gap = 10.0;
+        let card_w = (row_w - gap) / 2.0;
+        [
+            [
+                content_x + MODAL_PADDING,
+                cards_top,
+                card_w,
+                MODAL_THEME_CARD_H,
+            ],
+            [
+                content_x + MODAL_PADDING + card_w + gap,
+                cards_top,
+                card_w,
+                MODAL_THEME_CARD_H,
+            ],
+        ]
+    } else {
+        [[0.0; 4]; 2]
+    };
+    ModalLayout {
+        rect,
+        nav_w,
+        nav_items,
+        title_rect,
+        content_rect,
+        rows,
+        theme_cards,
+        hint_rect,
     }
-    PanelLayout { rect, entries }
 }
 
-/// Hit-test строки панели: какая строка настройки под точкой. Заголовки
-/// групп, шапка, подсказка и паддинги — `None` (не кликабельны).
-pub fn row_at(layout: &PanelLayout, point: [f32; 2]) -> Option<SettingsRow> {
-    for (entry, rect) in &layout.entries {
-        if let PanelEntry::Row(row) = entry {
-            if point_in_rect(*rect, point) {
-                return Some(*row);
-            }
-        }
+/// Hit-test пункта левой навигации: индекс таба под точкой или `None`
+/// (вне пунктов — в том числе зона контента и подсказка).
+pub fn modal_nav_at(layout: &ModalLayout, point: [f32; 2]) -> Option<usize> {
+    layout
+        .nav_items
+        .iter()
+        .position(|rect| point_in_rect(*rect, point))
+}
+
+/// Hit-test строки модалки: какая строка настройки под точкой. Заголовок,
+/// зона контента мимо строк, навигация и паддинги — `None` (не кликабельны).
+pub fn modal_row_at(layout: &ModalLayout, point: [f32; 2]) -> Option<SettingsRow> {
+    layout
+        .rows
+        .iter()
+        .find_map(|(row, rect)| point_in_rect(*rect, point).then_some(*row))
+}
+
+/// Hit-test карточки темы: `Some(theme)` — клик по карточке («тёмная»/
+/// «светлая»); вне карточек — `None`.
+pub fn modal_theme_card_at(layout: &ModalLayout, point: [f32; 2]) -> Option<Theme> {
+    if point_in_rect(layout.theme_cards[0], point) {
+        return Some(Theme::Dark);
+    }
+    if point_in_rect(layout.theme_cards[1], point) {
+        return Some(Theme::Light);
     }
     None
 }
 
 /// Геометрия выпадающего меню `[x, y, w, h]` с клампом к окну: ниже
-/// строки-якоря; не влезает снизу — выше строки. Ширина = ширине панели
-/// (единая сетка, самый длинный пункт «верхний левый»/«редкая» влезает с
-/// запасом); кламп по горизонтали и вертикали — паттерн
+/// контрола-якоря; не влезает снизу — выше строки. Ширина — параметр
+/// (FR-039: в модалке это ширина контрола, у угловой панели была жёстко
+/// `PANEL_WIDTH`); кламп по горизонтали и вертикали — паттерн
 /// `hints_ui::popup_layout` (FR-021). `count == 0` — пустой rect.
-pub fn dropdown_layout(anchor: [f32; 4], viewport: [f32; 2], count: usize) -> [f32; 4] {
+pub fn dropdown_layout(anchor: [f32; 4], viewport: [f32; 2], count: usize, width: f32) -> [f32; 4] {
     if count == 0 {
         return [0.0; 4];
     }
     let height = count as f32 * DROPDOWN_ROW_H + DROPDOWN_MARGIN * 2.0;
-    let width = PANEL_WIDTH.min((viewport[0] - DROPDOWN_MARGIN * 2.0).max(0.0));
+    let width = width
+        .max(80.0)
+        .min((viewport[0] - DROPDOWN_MARGIN * 2.0).max(0.0));
     let mut x = anchor[0];
     if x + width > viewport[0] - DROPDOWN_MARGIN {
         x = viewport[0] - DROPDOWN_MARGIN - width;
     }
     let x = x.max(DROPDOWN_MARGIN);
-    // Ниже строки; не влезает снизу — выше (не перекрывая саму строку)
+    // Ниже контрола; не влезает снизу — выше (не перекрывая саму строку)
     let below = anchor[1] + anchor[3] + 2.0;
     let y = if below + height <= viewport[1] - DROPDOWN_MARGIN {
         below
@@ -439,31 +719,76 @@ pub fn dropdown_item_at(menu: [f32; 4], count: usize, point: [f32; 2]) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::tr;
 
-    /// Инвариант полноты: union строк групп == SETTINGS_ROWS — ни одна
-    /// настройка не потеряна и не задублирована; порядок групп стабилен.
+    /// Инвариант полноты (перенос FR-026 на табы): union строк табов ==
+    /// SETTINGS_ROWS — ни одна настройка не потеряна и не задублирована;
+    /// карточки темы — ровно у одного таба; ключи/иконки табов непусты.
     #[test]
-    fn groups_cover_all_rows() {
+    fn tabs_cover_all_rows() {
         let mut seen = Vec::new();
-        let mut titles = Vec::new();
-        for group in &SETTINGS_GROUPS {
-            assert!(!group.title.is_empty(), "заголовок группы пуст");
-            assert!(!group.rows.is_empty(), "пустая группа: {}", group.title);
-            titles.push(group.title);
-            for &row in group.rows {
-                assert!(!seen.contains(&row), "дубль строки в группах: {row:?}");
+        let mut theme_tabs = 0;
+        for tab in &SETTINGS_TABS {
+            assert!(!tab.title_key.is_empty(), "ключ заголовка таба пуст");
+            assert!(!tab.icon.is_empty(), "иконка таба пуста");
+            assert!(!tab.rows.is_empty(), "пустой таб: {}", tab.title_key);
+            if tab.theme_cards {
+                theme_tabs += 1;
+            }
+            for &row in tab.rows {
+                assert!(!seen.contains(&row), "дубль строки в табах: {row:?}");
                 seen.push(row);
             }
         }
-        assert_eq!(titles, vec!["Канвас", "Связи и порты", "Приложение"]);
+        assert_eq!(theme_tabs, 1, "карточки темы — ровно один таб");
         for row in SETTINGS_ROWS {
-            assert!(seen.contains(&row), "строка вне групп: {row:?}");
+            assert!(seen.contains(&row), "строка вне табов: {row:?}");
         }
         assert_eq!(seen.len(), SETTINGS_ROWS.len());
+        // Распределение v1 (FR-039 §1)
+        assert_eq!(
+            SETTINGS_TABS[0].rows,
+            &[SettingsRow::ButtonCorner, SettingsRow::HudOnStart]
+        );
+        assert_eq!(
+            SETTINGS_TABS[1].rows,
+            &[
+                SettingsRow::Grid,
+                SettingsRow::GridStyle,
+                SettingsRow::GridDensity,
+                SettingsRow::BottleneckOverlay
+            ]
+        );
+        assert_eq!(
+            SETTINGS_TABS[2].rows,
+            &[
+                SettingsRow::EdgesAvoid,
+                SettingsRow::PortZone,
+                SettingsRow::LinePorts,
+                SettingsRow::FocusMode
+            ]
+        );
+        assert_eq!(SETTINGS_TABS[3].rows, &[SettingsRow::Language]);
+    }
+
+    /// Инвариант локализации (FR-039 §5): у каждой строки есть ключи
+    /// лейбла и описания, значения непусты в обоих языках.
+    #[test]
+    fn every_row_has_label_and_description() {
+        for row in SETTINGS_ROWS {
+            for (lang, name) in [(Language::Ru, "RU"), (Language::En, "EN")] {
+                assert!(!tr(lang, row_label_key(row)).is_empty(), "{name}: {row:?}");
+                assert!(!tr(lang, row_desc_key(row)).is_empty(), "{name}: {row:?}");
+            }
+        }
+        for tab in &SETTINGS_TABS {
+            assert!(!tr(Language::Ru, tab.title_key).is_empty());
+            assert!(!tr(Language::En, tab.title_key).is_empty());
+        }
     }
 
     /// Инвариант булевых: `Toggle` — ровно для `bool`-полей `Settings`;
-    /// многозначные — `Dropdown`.
+    /// многозначные (включая язык FR-040) — `Dropdown`.
     #[test]
     fn row_kind_partitions_bool_and_value_rows() {
         let defaults = Settings::default();
@@ -496,7 +821,8 @@ mod tests {
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
-                | SettingsRow::PortZone => {
+                | SettingsRow::PortZone
+                | SettingsRow::Language => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
@@ -504,8 +830,9 @@ mod tests {
     }
 
     /// Инвариант значений: у каждого dropdown полный перечень значений
-    /// (4 угла / 2 вида / 3 плотности / 5 пресетов), текущее отмечено ровно
-    /// один раз; у тумблеров список пуст.
+    /// (4 угла / 2 вида / 3 плотности / 5 пресетов / 2 языка), текущее
+    /// отмечено ровно один раз; у тумблеров список пуст; язык подписан
+    /// собственной локалью.
     #[test]
     fn dropdown_options_counts_and_current() {
         let settings = Settings {
@@ -513,6 +840,7 @@ mod tests {
             grid_style: GridStyle::Dots,
             grid_density: GridDensity::Sparse,
             port_zone_px: 20.0,
+            language: Language::En,
             ..Settings::default()
         };
 
@@ -524,7 +852,7 @@ mod tests {
                 .iter()
                 .find(|(_, cur)| *cur)
                 .map(|(label, _)| label.as_str()),
-            Some("нижний левый")
+            Some("bottom left")
         );
 
         let styles = dropdown_options(SettingsRow::GridStyle, &settings);
@@ -534,7 +862,7 @@ mod tests {
                 .iter()
                 .find(|(_, cur)| *cur)
                 .map(|(label, _)| label.as_str()),
-            Some("точки")
+            Some("dots")
         );
 
         let densities = dropdown_options(SettingsRow::GridDensity, &settings);
@@ -544,7 +872,7 @@ mod tests {
                 .iter()
                 .find(|(_, cur)| *cur)
                 .map(|(label, _)| label.as_str()),
-            Some("редкая")
+            Some("sparse")
         );
 
         let zones = dropdown_options(SettingsRow::PortZone, &settings);
@@ -570,6 +898,13 @@ mod tests {
             Some("20 px")
         );
 
+        // Язык — названия в собственной локали независимо от языка UI
+        let languages = dropdown_options(SettingsRow::Language, &settings);
+        assert_eq!(languages.len(), 2);
+        assert_eq!(languages[0].0, "русский");
+        assert_eq!(languages[1].0, "English");
+        assert_eq!(languages.iter().position(|(_, cur)| *cur), Some(1));
+
         for row in [
             SettingsRow::Grid,
             SettingsRow::EdgesAvoid,
@@ -580,16 +915,30 @@ mod tests {
                 dropdown_options(row, &settings).is_empty(),
                 "{row:?}: тумблер без меню"
             );
+            assert!(
+                dropdown_value(row, &settings).is_none(),
+                "{row:?}: тумблер без значения на контроле"
+            );
         }
+        // Значение на контроле dropdown-строк
+        assert_eq!(
+            dropdown_value(SettingsRow::Language, &settings).as_deref(),
+            Some("English")
+        );
+        assert_eq!(
+            dropdown_value(SettingsRow::PortZone, &settings).as_deref(),
+            Some("20 px")
+        );
     }
 
     /// Инвариант эквивалентности: выбор пункта `i` == k нажатий цикла
-    /// (значение и подпись совпадают с `.next()`/`next_port_zone`).
+    /// (значение и подпись совпадают с `.next()`/`next_port_zone`);
+    /// язык — включён в проверку (2 значения, цикл `Language::next`).
     #[test]
     fn dropdown_choice_matches_value_cycle() {
         /// (строка, цикл значений, число значений) — сценарий эквивалентности.
         type CycleCase = (SettingsRow, fn(&mut Settings, usize), usize);
-        let cases: [CycleCase; 4] = [
+        let cases: [CycleCase; 5] = [
             (
                 SettingsRow::ButtonCorner,
                 |s, k| {
@@ -626,6 +975,15 @@ mod tests {
                 },
                 PORT_ZONE_PRESETS.len(),
             ),
+            (
+                SettingsRow::Language,
+                |s, k| {
+                    for _ in 0..k {
+                        s.language = s.language.next();
+                    }
+                },
+                2,
+            ),
         ];
         for (row, cycle, count) in cases {
             for start in 0..count {
@@ -660,46 +1018,196 @@ mod tests {
         apply_dropdown_value(&mut settings, SettingsRow::GridStyle, 99);
         apply_dropdown_value(&mut settings, SettingsRow::GridDensity, usize::MAX);
         apply_dropdown_value(&mut settings, SettingsRow::PortZone, 5);
+        apply_dropdown_value(&mut settings, SettingsRow::Language, 2);
         assert_eq!(settings, before);
     }
 
-    /// `dropdown_layout`: кламп к окну на всех углах панели и узком окне;
-    /// у нижнего края — выше строки (не перекрывая её); 0 пунктов — пусто.
+    /// Инвариант адаптива (FR-039): на Full HD модалка ~864×640, на
+    /// 1280×720 — в границах MIN/MAX, на 320×240 — целиком внутри окна;
+    /// модалка центрирована на больших окнах.
+    #[test]
+    fn modal_layout_adaptive_and_clamped() {
+        // Full HD: 0.45*1920 = 864, 0.6*1080 = 648 → потолок 640
+        let layout = modal_layout(0, [1920.0, 1080.0]);
+        assert_eq!(
+            layout.rect,
+            [(1920.0 - 864.0) / 2.0, (1080.0 - 640.0) / 2.0, 864.0, 640.0]
+        );
+        assert_eq!(layout.nav_w, MODAL_NAV_WIDTH);
+        // 1280×720: в границах MIN/MAX
+        let layout = modal_layout(0, [1280.0, 720.0]);
+        assert!(layout.rect[2] >= MODAL_MIN_W && layout.rect[2] <= MODAL_MAX_W);
+        assert!(layout.rect[3] >= MODAL_MIN_H && layout.rect[3] <= MODAL_MAX_H);
+        // 320×240: целиком внутри окна
+        let layout = modal_layout(0, [320.0, 240.0]);
+        assert!(layout.rect[0] >= SETTINGS_MARGIN - 0.01);
+        assert!(layout.rect[1] >= SETTINGS_MARGIN - 0.01);
+        assert!(layout.rect[0] + layout.rect[2] <= 320.0 - SETTINGS_MARGIN + 0.01);
+        assert!(layout.rect[1] + layout.rect[3] <= 240.0 - SETTINGS_MARGIN + 0.01);
+        assert!(
+            layout.nav_w > 0.0 && layout.nav_w < layout.rect[2],
+            "навигация различима"
+        );
+        // Вне диапазона таб — первый таб
+        let fallback = modal_layout(99, [1920.0, 1080.0]);
+        assert_eq!(fallback.rows, modal_layout(0, [1920.0, 1080.0]).rows);
+    }
+
+    /// Структура модалки: 4 пункта навигации; строки — только активного
+    /// таба; карточки темы только у «Внешнего вида»; hit-тесты навигации,
+    /// строк и карточек согласованы с layout.
+    #[test]
+    fn modal_layout_structure_and_hit_tests() {
+        let viewport = [1600.0, 900.0];
+        // Таб 0 (Общие): 2 строки, карточек нет
+        let layout = modal_layout(0, viewport);
+        assert_eq!(layout.nav_items.len(), SETTINGS_TABS.len());
+        assert_eq!(layout.rows.len(), 2);
+        assert!(layout
+            .rows
+            .iter()
+            .all(|(row, _)| { SETTINGS_TABS[0].rows.contains(row) }));
+        assert_eq!(layout.theme_cards, [[0.0; 4]; 2]);
+        assert_eq!(
+            modal_theme_card_at(&layout, [layout.rect[0] + 10.0, layout.rect[1] + 10.0]),
+            None
+        );
+        // Навигация: клик по пункту 2 — Some(2), клик в контент — None
+        let item2 = layout.nav_items[2];
+        assert_eq!(
+            modal_nav_at(&layout, [item2[0] + 5.0, item2[1] + 5.0]),
+            Some(2)
+        );
+        let inside_content = [layout.content_rect[0] + 5.0, layout.content_rect[1] + 5.0];
+        assert_eq!(modal_nav_at(&layout, inside_content), None);
+        // Строки: клик по первой строке таба; клик в шапку/подсказку — None
+        let (first_row, first_rect) = layout.rows[0];
+        assert_eq!(
+            modal_row_at(&layout, [first_rect[0] + 10.0, first_rect[1] + 5.0]),
+            Some(first_row)
+        );
+        assert_eq!(
+            modal_row_at(
+                &layout,
+                [layout.title_rect[0] + 10.0, layout.title_rect[1] + 5.0]
+            ),
+            None
+        );
+        assert_eq!(
+            modal_row_at(
+                &layout,
+                [layout.hint_rect[0] + 5.0, layout.hint_rect[1] + 5.0]
+            ),
+            None
+        );
+        assert_eq!(
+            modal_nav_at(
+                &layout,
+                [layout.hint_rect[0] + 5.0, layout.hint_rect[1] + 5.0]
+            ),
+            None
+        );
+        // Таб 3 (Внешний вид): карточки темы + строка языка ниже них
+        let layout = modal_layout(3, viewport);
+        assert_eq!(layout.rows.len(), 1);
+        assert_eq!(layout.rows[0].0, SettingsRow::Language);
+        let card_dark = layout.theme_card_rect(Theme::Dark);
+        let card_light = layout.theme_card_rect(Theme::Light);
+        assert!(card_dark[2] > 0.0 && card_light[2] > 0.0);
+        assert!(card_light[0] > card_dark[0], "карточки рядом");
+        assert_eq!(
+            modal_theme_card_at(&layout, [card_dark[0] + 5.0, card_dark[1] + 5.0]),
+            Some(Theme::Dark)
+        );
+        assert_eq!(
+            modal_theme_card_at(&layout, [card_light[0] + 5.0, card_light[1] + 5.0]),
+            Some(Theme::Light)
+        );
+        // Строка языка — ниже карточек (не перекрываются)
+        let lang_rect = layout
+            .row_rect(SettingsRow::Language)
+            .expect("строка языка");
+        assert!(lang_rect[1] >= card_dark[1] + card_dark[3]);
+        // row_rect согласован с modal_row_at для каждого таба
+        for tab in 0..SETTINGS_TABS.len() {
+            let layout = modal_layout(tab, viewport);
+            for (row, rect) in &layout.rows {
+                assert_eq!(
+                    modal_row_at(&layout, [rect[0] + 10.0, rect[1] + 5.0]),
+                    Some(*row),
+                    "таб {tab}, строка {row:?}"
+                );
+            }
+        }
+    }
+
+    /// Контролы в строках: pill-тумблер у тумблера, dropdown-кнопка у
+    /// выпадающего списка; ручка pill отражает состояние (вкл — справа).
+    #[test]
+    fn control_rects_follow_row_kind() {
+        for row in SETTINGS_ROWS {
+            let layout = modal_layout(0, [1600.0, 900.0]);
+            let Some(rect) = layout.row_rect(row) else {
+                continue;
+            };
+            let control = control_rect(rect, row_kind(row));
+            assert!(control[0] >= rect[0] && control[0] + control[2] <= rect[0] + rect[2] + 0.01);
+            assert!(control[1] >= rect[1] && control[1] + control[3] <= rect[1] + rect[3] + 0.01);
+            match row_kind(row) {
+                RowKind::Toggle => assert_eq!(control[2], PILL_TRACK_W),
+                RowKind::Dropdown => assert_eq!(control[2], DROPDOWN_BTN_W),
+            }
+        }
+        // Ручка pill: выкл — слева, вкл — справа
+        let track = [100.0, 10.0, PILL_TRACK_W, PILL_TRACK_H];
+        let off = pill_knob_rect(track, false);
+        let on = pill_knob_rect(track, true);
+        assert!(off[0] < on[0]);
+        assert_eq!(on[0] + on[2], track[0] + track[2] - 2.0);
+    }
+
+    /// `dropdown_layout` с параметрической шириной: кламп к окну у правого
+    /// края модалки и в узком окне; у нижнего края — выше контрола; 0
+    /// пунктов — пусто; меню не перекрывает якорную строку целиком.
     #[test]
     fn dropdown_layout_clamps_to_window() {
         assert_eq!(
-            dropdown_layout([0.0, 0.0, 100.0, 28.0], [800.0, 600.0], 0),
+            dropdown_layout([0.0, 0.0, 100.0, 28.0], [800.0, 600.0], 0, DROPDOWN_BTN_W),
             [0.0; 4]
         );
         let viewport = [1600.0, 900.0];
-        for corner in [
-            Corner::TopLeft,
-            Corner::TopRight,
-            Corner::BottomLeft,
-            Corner::BottomRight,
-        ] {
-            let layout = panel_layout(corner, viewport);
+        for tab in 0..SETTINGS_TABS.len() {
+            let layout = modal_layout(tab, viewport);
             for row in SETTINGS_ROWS {
-                let Some(anchor) = layout.row_rect(row) else {
+                let Some(row_rect) = layout.row_rect(row) else {
                     continue;
                 };
-                let menu = dropdown_layout(anchor, viewport, 5);
-                assert!(menu[0] >= DROPDOWN_MARGIN - 0.01, "{corner:?} {row:?}");
+                if row_kind(row) != RowKind::Dropdown {
+                    continue;
+                }
+                let anchor = control_rect(row_rect, RowKind::Dropdown);
+                let menu = dropdown_layout(anchor, viewport, 5, DROPDOWN_BTN_W);
+                assert!(menu[0] >= DROPDOWN_MARGIN - 0.01, "таб {tab} {row:?}");
                 assert!(
                     menu[0] + menu[2] <= viewport[0] - DROPDOWN_MARGIN + 0.01,
-                    "{corner:?} {row:?}"
+                    "таб {tab} {row:?}"
                 );
-                assert!(menu[1] >= DROPDOWN_MARGIN - 0.01, "{corner:?} {row:?}");
+                assert!(menu[1] >= DROPDOWN_MARGIN - 0.01, "таб {tab} {row:?}");
                 assert!(
                     menu[1] + menu[3] <= viewport[1] - DROPDOWN_MARGIN + 0.01,
-                    "{corner:?} {row:?}"
+                    "таб {tab} {row:?}"
                 );
-                assert_eq!(menu[2], PANEL_WIDTH);
+                assert_eq!(menu[2], DROPDOWN_BTN_W);
+                // Не перекрывает якорную строку целиком: при открытии вниз
+                // верх строки остаётся виден (контрол внутри строки)
+                if menu[1] >= anchor[1] + anchor[3] {
+                    assert!(menu[1] > row_rect[1], "таб {tab} {row:?}");
+                }
             }
         }
         // Узкое окно (320×240): меню клампится внутрь, ширина <= окна
         let narrow = [320.0, 240.0];
-        let menu = dropdown_layout([8.0, 100.0, 300.0, 28.0], narrow, 5);
+        let menu = dropdown_layout([8.0, 100.0, 300.0, 28.0], narrow, 5, DROPDOWN_BTN_W);
         assert!(
             menu[0] >= DROPDOWN_MARGIN - 0.01
                 && menu[0] + menu[2] <= 320.0 - DROPDOWN_MARGIN + 0.01
@@ -708,87 +1216,17 @@ mod tests {
             menu[1] >= DROPDOWN_MARGIN - 0.01
                 && menu[1] + menu[3] <= 240.0 - DROPDOWN_MARGIN + 0.01
         );
-        assert!(menu[2] <= 320.0);
-        // У нижнего края — меню выше строки, её верх виден
-        let menu = dropdown_layout([50.0, 200.0, 300.0, 28.0], narrow, 5);
-        assert!(menu[1] + menu[3] <= 200.0, "меню выше якорной строки");
-        // Меню ниже строки, когда влезает: не перекрывает якорь
-        let menu = dropdown_layout([50.0, 20.0, 300.0, 28.0], [800.0, 600.0], 3);
-        assert!(menu[1] >= 20.0 + 28.0, "меню ниже якорной строки");
-    }
-
-    /// Hit-тесты: строки кликабельны по своим rect'ам, заголовки групп /
-    /// шапка / подсказка / паддинги — None; `row_rect` согласован с `row_at`.
-    #[test]
-    fn row_hit_tests() {
-        let viewport = [1600.0, 900.0];
-        let layout = panel_layout(Corner::TopRight, viewport);
-        // Первая строка = первая строка первой группы (Grid), последняя =
-        // последняя строка последней группы (HudOnStart)
-        let first = SETTINGS_GROUPS[0].rows[0];
-        let last = SETTINGS_GROUPS[2].rows[1];
-        let first_rect = layout.row_rect(first).expect("первая строка");
-        let last_rect = layout.row_rect(last).expect("последняя строка");
-        assert_eq!(
-            row_at(&layout, [first_rect[0] + 20.0, first_rect[1] + 3.0]),
-            Some(first)
-        );
-        assert_eq!(
-            row_at(&layout, [last_rect[0] + 20.0, last_rect[1] + 3.0]),
-            Some(last)
-        );
-        // Заголовок панели, заголовок группы, подсказка, мимо панели — None
-        let header_y = layout.rect[1] + PANEL_PADDING + 3.0;
-        assert_eq!(row_at(&layout, [layout.rect[0] + 20.0, header_y]), None);
-        let group_rect = layout.entries[0].1;
-        assert_eq!(
-            row_at(&layout, [group_rect[0] + 20.0, group_rect[1] + 3.0]),
-            None
-        );
-        let hint_y = layout.rect[1] + layout.rect[3] - PANEL_PADDING - PANEL_HINT_HEIGHT + 3.0;
-        assert_eq!(row_at(&layout, [layout.rect[0] + 20.0, hint_y]), None);
-        assert_eq!(
-            row_at(&layout, [layout.rect[0] - 5.0, last_rect[1] + 3.0]),
-            None
-        );
-        assert_eq!(
-            row_at(&layout, [layout.rect[0] + 20.0, layout.rect[1] - 5.0]),
-            None
-        );
-        // Согласованность высот: сумма элементов + подсказка/паддинги = панель
-        let bottom = layout.entries.last().expect("элементы есть").1[1] + PANEL_ROW_HEIGHT;
-        assert!(
-            (bottom + PANEL_HINT_HEIGHT + PANEL_PADDING - (layout.rect[1] + layout.rect[3])).abs()
-                < 0.01
-        );
-    }
-
-    /// Порядок строк в layout = порядок групп (не прежний плоский список).
-    #[test]
-    fn panel_layout_rows_follow_groups() {
-        let layout = panel_layout(Corner::TopLeft, [1600.0, 900.0]);
-        let rows: Vec<SettingsRow> = layout
-            .entries
-            .iter()
-            .filter_map(|(entry, _)| match entry {
-                PanelEntry::Row(row) => Some(*row),
-                PanelEntry::Header(_) => None,
-            })
-            .collect();
-        let expected: Vec<SettingsRow> = SETTINGS_GROUPS
-            .iter()
-            .flat_map(|group| group.rows.iter().copied())
-            .collect();
-        assert_eq!(rows, expected);
-        let headers: Vec<&str> = layout
-            .entries
-            .iter()
-            .filter_map(|(entry, _)| match entry {
-                PanelEntry::Header(title) => Some(*title),
-                PanelEntry::Row(_) => None,
-            })
-            .collect();
-        assert_eq!(headers.len(), SETTINGS_GROUPS.len());
+        // Ширина меньше потолка — ширина якоря; гигантская — кламп к окну
+        let menu = dropdown_layout([50.0, 20.0, 120.0, 28.0], [800.0, 600.0], 3, 100.0);
+        assert_eq!(menu[2], 100.0);
+        let menu = dropdown_layout([50.0, 20.0, 120.0, 28.0], [800.0, 600.0], 3, 5000.0);
+        assert!(menu[2] <= 800.0 - DROPDOWN_MARGIN * 2.0);
+        // У нижнего края — меню выше контрола
+        let menu = dropdown_layout([50.0, 200.0, 300.0, 28.0], narrow, 5, DROPDOWN_BTN_W);
+        assert!(menu[1] + menu[3] <= 200.0, "меню выше якорного контрола");
+        // Меню ниже контрола, когда влезает
+        let menu = dropdown_layout([50.0, 20.0, 300.0, 28.0], [800.0, 600.0], 3, DROPDOWN_BTN_W);
+        assert!(menu[1] >= 20.0 + 28.0, "меню ниже якорного контрола");
     }
 
     /// Hit-тест пунктов меню: пункты 0/средний/последний, паддинги и мимо
@@ -796,7 +1234,12 @@ mod tests {
     #[test]
     fn dropdown_item_hit_tests() {
         let count = 5;
-        let menu = dropdown_layout([100.0, 100.0, 300.0, 28.0], [1600.0, 900.0], count);
+        let menu = dropdown_layout(
+            [100.0, 100.0, 300.0, 28.0],
+            [1600.0, 900.0],
+            count,
+            DROPDOWN_BTN_W,
+        );
         let height = count as f32 * DROPDOWN_ROW_H + DROPDOWN_MARGIN * 2.0;
         assert!((menu[3] - height).abs() < 0.01);
         // Пункт 0 и последний
@@ -835,7 +1278,7 @@ mod tests {
     }
 
     /// Модель состояния меню: открытие ставит выделение на текущее значение,
-    /// сдвиг закольцован, reset закрывает.
+    /// сдвиг закольцован, reset закрывает; язык открывается на «русский».
     #[test]
     fn dropdown_state_model() {
         let settings = Settings {
@@ -859,5 +1302,9 @@ mod tests {
         assert!(!state.is_open());
         assert_eq!(state.selected, 0);
         assert!(!state.move_selection(1, 0), "пустой список — сдвига нет");
+        // Язык: дефолт Ru — выделение на пункте 0
+        let mut state = DropdownState::default();
+        state.open(SettingsRow::Language, &Settings::default());
+        assert_eq!(state.selected, 0);
     }
 }
