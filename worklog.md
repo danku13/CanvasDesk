@@ -1527,3 +1527,42 @@
 - **FR-037 закрыт.** Опции MW5 (инспектор-сессия владельца)/MW6 (файловый
   режим headless) — по решению владельца (рекомендации агента: Q4 да/Q5
   нет). Открытые пункты роадмапа: продуктовый веб-слой S5 (W1–W12 M8).
+
+---
+
+## 2026-09-20 — CR-014: адаптивность веб-оболочки canvas-web (вёрстка — текст не за края)
+
+- **Задача (владелец):** «Проверь всю вёрстку и поправь её так, чтобы текст
+  не вылетал за края (проверь адаптивность) и т.д.»
+- **Аудит:** DOM-вёрстка = index.html (#w6-toolbar + канвас) — единственный
+  HTML-слой (остальной UI — GPU, его текст не переполняется: тело
+  `Wrap::WordOrGlyph`, заголовки/строки/HUD/оверлеи — однострочные буферы под
+  `TextBounds`-клипом, за окно физически не рисуют). Дефекты: (1) тулбар без
+  flex-wrap/max-width/ellipsis — «Недавние: <длинное имя>» выталкивало панель
+  за левый край; (2) пересечение с зоной панели поиска (топ-центр 460px) на
+  окнах ≤1196px и HUD на телефонах; (3) 100vh без dvh; (4) тач-цели 27px;
+  (5) корень Pages-сайта 404 (в docs/ нет index). Диагностика — Playwright
+  (scripts/web_layout_audit.py, добавлен в репо): 7 вьюпортов, замер
+  scrollWidth/getBoundingClientRect против зон GPU-панелей (search_ui,
+  minimap_pass, template_ui).
+- **Правки:** index.html — never-off-screen (flex-wrap, max-width
+  calc(100vw−16px), min-width:0 + ellipsis + nowrap на кнопках), кап
+  #btn-recent min(40vw,240px) (px — ch-единица плывёт на fallback-шрифтах:
+  «0» 7.64px headless против ~6.6px Segoe UI), @media <1199px — тулбар в
+  левый нижний угол (единственная всегда-пустая зона), max-width
+  max(120px,100vw−264px) — чисто от колонки миникарты; 100dvh +
+  touch-action:none; (pointer:coarse) — цели 44px; :focus-visible;
+  user-select:none. toolbar.rs — title-тултип «Переоткрыть: <полное имя>»
+  (эллипсис не прячет имя). docs/index.md — лендинг сайта (таблица
+  документов + разделы + /app; ссылки по живым URL-паттернам Jekyll:
+  adr/ = read-me-index, плоские *.html). Документация: CR-014, индекс
+  CR/FR, план §6 W6-заметка, ACCEPTANCE §30.
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  test --workspace ✓; wasm_gate.sh ✓; mcp_wasm_gate.sh (e2e) ✓;
+  web_smoke.py — SMOKE OK (0 pageerror); web_layout_audit.py — ЧИСТО
+  (7 вьюпортов, старт+длинное имя; 2 WARN ≥1200px — косметика, обоснование
+  в CR-014 «Известные ограничения»). Среда: диск забивался debug-бинарниками
+  (SIGBUS при линковке) — нативный target/debug пересобран с
+  CARGO_PROFILE_DEV_DEBUG=0 (конвенция W12).
+- **Merge:** fix/cr-014-web-shell-responsive → main (--no-ff), Pages
+  пересоберёт сайт (docs/** в paths) + /app (canvas-web/** в paths).
