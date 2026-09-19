@@ -87,9 +87,14 @@ pub use search::{
     IndexEntry, MemSearch, SearchBackend, SearchCommand, SearchEvent, SearchHit, SearchResponder,
 };
 pub use settings::{
-    clamp_onboarding_defers, clamp_port_zone, next_port_zone, Corner, GridDensity, GridStyle,
-    Language, Settings, Theme, ONBOARDING_MAX_DEFERS, PORT_ZONE_MAX, PORT_ZONE_MIN,
-    PORT_ZONE_PRESETS,
+    clamp_onboarding_defers, clamp_port_zone, clamp_snap_coarse_zoom, clamp_snap_sub_zoom,
+    clamp_snap_tolerance, next_port_zone, next_snap_coarse_zoom, next_snap_sub_zoom,
+    next_snap_tolerance, validated_grid_zoom_thresholds, Corner, GridDensity, GridStyle, Language,
+    Settings, SnapAnchor, Theme, COLLISION_GAP, ONBOARDING_MAX_DEFERS, PORT_ZONE_MAX,
+    PORT_ZONE_MIN, PORT_ZONE_PRESETS, SNAP_COARSE_ZOOM_DEFAULT, SNAP_COARSE_ZOOM_MAX,
+    SNAP_COARSE_ZOOM_MIN, SNAP_COARSE_ZOOM_PRESETS, SNAP_SUB_ZOOM_DEFAULT, SNAP_SUB_ZOOM_MAX,
+    SNAP_SUB_ZOOM_MIN, SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_MAX, SNAP_TOLERANCE_MIN,
+    SNAP_TOLERANCE_PRESETS,
 };
 pub use spatial::{SpatialIndex, WorldRect};
 pub use validate::{has_errors, validate, IssueCode, Severity, ValidationIssue};

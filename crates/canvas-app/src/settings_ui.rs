@@ -18,7 +18,10 @@
 //! (`Corner::label` и др.) в рендер не идут. Схема `config.toml` не
 //! меняется — это реорганизация UI.
 
-use canvas_core::{Corner, GridDensity, GridStyle, Language, Settings, Theme, PORT_ZONE_PRESETS};
+use canvas_core::{
+    Corner, GridDensity, GridStyle, Language, Settings, Theme, PORT_ZONE_PRESETS,
+    SNAP_COARSE_ZOOM_PRESETS, SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_PRESETS,
+};
 
 use crate::i18n::{self, keys};
 use crate::ui::{point_in_rect, SETTINGS_MARGIN};
@@ -100,12 +103,28 @@ pub enum SettingsRow {
     HudOnStart,
     /// FR-040: язык интерфейса (русский/English).
     Language,
+
+    /// FR-038 (п.5): мастер-тумблер магнитной раскладки — гасит весь снап
+    /// без сброса остальных настроек.
+    SnapEnabled,
+    /// FR-038 (п.1/19): привязка к сетке на отпускании drag.
+    SnapGrid,
+    /// FR-038 (п.6/19): направляющие соседей (края/центры/середины).
+    SnapGuides,
+    /// FR-038 (п.15/19): collision-avoidance — не проходить сквозь ноды.
+    SnapCollision,
+    /// FR-038 (п.8/12): допуск направляющих — цикл по пресетам.
+    SnapTolerance,
+    /// FR-038 (п.3): порог sub-сетки — цикл по пресетам.
+    SnapSubZoom,
+    /// FR-038 (п.3): порог coarse-сетки — цикл по пресетами.
+    SnapCoarseZoom,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 11] = [
+pub const SETTINGS_ROWS: [SettingsRow; 18] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -114,6 +133,13 @@ pub const SETTINGS_ROWS: [SettingsRow; 11] = [
     SettingsRow::PortZone,
     SettingsRow::LinePorts,
     SettingsRow::BottleneckOverlay,
+    SettingsRow::SnapEnabled,
+    SettingsRow::SnapGrid,
+    SettingsRow::SnapGuides,
+    SettingsRow::SnapCollision,
+    SettingsRow::SnapTolerance,
+    SettingsRow::SnapSubZoom,
+    SettingsRow::SnapCoarseZoom,
     SettingsRow::FocusMode,
     SettingsRow::HudOnStart,
     SettingsRow::Language,
@@ -137,7 +163,7 @@ pub struct SettingsTab {
 /// «Канвас» — сетка и оверлей узких мест; «Связи и порты» — связи/порты/
 /// фокус + построчные точки выхода FR-025; «Внешний вид» — карточки темы
 /// и язык FR-040. FR-038 дополнит модель пятым табом «Snap».
-pub const SETTINGS_TABS: [SettingsTab; 4] = [
+pub const SETTINGS_TABS: [SettingsTab; 5] = [
     SettingsTab {
         title_key: keys::TAB_GENERAL,
         icon: "◎",
@@ -153,6 +179,20 @@ pub const SETTINGS_TABS: [SettingsTab; 4] = [
             SettingsRow::GridStyle,
             SettingsRow::GridDensity,
             SettingsRow::BottleneckOverlay,
+        ],
+    },
+    SettingsTab {
+        title_key: keys::TAB_SNAP,
+        icon: "≡",
+        theme_cards: false,
+        rows: &[
+            SettingsRow::SnapEnabled,
+            SettingsRow::SnapGrid,
+            SettingsRow::SnapGuides,
+            SettingsRow::SnapCollision,
+            SettingsRow::SnapTolerance,
+            SettingsRow::SnapSubZoom,
+            SettingsRow::SnapCoarseZoom,
         ],
     },
     SettingsTab {
@@ -189,6 +229,13 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::FocusMode => keys::ROW_FOCUS_MODE,
         SettingsRow::HudOnStart => keys::ROW_HUD_ON_START,
         SettingsRow::Language => keys::ROW_LANGUAGE,
+        SettingsRow::SnapEnabled => keys::ROW_SNAP_ENABLED,
+        SettingsRow::SnapGrid => keys::ROW_SNAP_GRID,
+        SettingsRow::SnapGuides => keys::ROW_SNAP_GUIDES,
+        SettingsRow::SnapCollision => keys::ROW_SNAP_COLLISION,
+        SettingsRow::SnapTolerance => keys::ROW_SNAP_TOLERANCE,
+        SettingsRow::SnapSubZoom => keys::ROW_SNAP_SUB_ZOOM,
+        SettingsRow::SnapCoarseZoom => keys::ROW_SNAP_COARSE_ZOOM,
     }
 }
 
@@ -207,6 +254,13 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::FocusMode => keys::DESC_FOCUS_MODE,
         SettingsRow::HudOnStart => keys::DESC_HUD_ON_START,
         SettingsRow::Language => keys::DESC_LANGUAGE,
+        SettingsRow::SnapEnabled => keys::DESC_SNAP_ENABLED,
+        SettingsRow::SnapGrid => keys::DESC_SNAP_GRID,
+        SettingsRow::SnapGuides => keys::DESC_SNAP_GUIDES,
+        SettingsRow::SnapCollision => keys::DESC_SNAP_COLLISION,
+        SettingsRow::SnapTolerance => keys::DESC_SNAP_TOLERANCE,
+        SettingsRow::SnapSubZoom => keys::DESC_SNAP_SUB_ZOOM,
+        SettingsRow::SnapCoarseZoom => keys::DESC_SNAP_COARSE_ZOOM,
     }
 }
 
@@ -228,11 +282,18 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::GridStyle
         | SettingsRow::GridDensity
         | SettingsRow::PortZone
-        | SettingsRow::Language => RowKind::Dropdown,
+        | SettingsRow::Language
+        | SettingsRow::SnapTolerance
+        | SettingsRow::SnapSubZoom
+        | SettingsRow::SnapCoarseZoom => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => RowKind::Toggle,
     }
@@ -271,10 +332,22 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         }
         SettingsRow::PortZone => Some(format!("{} px", settings.port_zone_px as i32)),
         SettingsRow::Language => Some(settings.language.native_label().to_owned()),
+        SettingsRow::SnapTolerance => Some(format!("{} px", settings.snap_tolerance_px as i32)),
+        SettingsRow::SnapSubZoom => {
+            Some(format!("{}%", (settings.snap_grid_sub_zoom * 100.0) as i32))
+        }
+        SettingsRow::SnapCoarseZoom => Some(format!(
+            "{}%",
+            (settings.snap_grid_coarse_zoom * 100.0) as i32
+        )),
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => None,
     }
@@ -347,10 +420,47 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
             .into_iter()
             .map(|lang| (lang.native_label().to_owned(), settings.language == lang))
             .collect(),
+        SettingsRow::SnapTolerance => {
+            let current = SNAP_TOLERANCE_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.snap_tolerance_px)
+                .unwrap_or(0);
+            SNAP_TOLERANCE_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("{} px", *preset as i32), i == current))
+                .collect()
+        }
+        SettingsRow::SnapSubZoom => {
+            let current = SNAP_SUB_ZOOM_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.snap_grid_sub_zoom)
+                .unwrap_or(0);
+            SNAP_SUB_ZOOM_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("{}%", (*preset * 100.0) as i32), i == current))
+                .collect()
+        }
+        SettingsRow::SnapCoarseZoom => {
+            let current = SNAP_COARSE_ZOOM_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.snap_grid_coarse_zoom)
+                .unwrap_or(0);
+            SNAP_COARSE_ZOOM_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("{}%", (*preset * 100.0) as i32), i == current))
+                .collect()
+        }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => Vec::new(),
     }
@@ -397,10 +507,29 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.language = *language;
             }
         }
+        SettingsRow::SnapTolerance => {
+            if let Some(preset) = SNAP_TOLERANCE_PRESETS.get(index) {
+                settings.snap_tolerance_px = *preset;
+            }
+        }
+        SettingsRow::SnapSubZoom => {
+            if let Some(preset) = SNAP_SUB_ZOOM_PRESETS.get(index) {
+                settings.snap_grid_sub_zoom = *preset;
+            }
+        }
+        SettingsRow::SnapCoarseZoom => {
+            if let Some(preset) = SNAP_COARSE_ZOOM_PRESETS.get(index) {
+                settings.snap_grid_coarse_zoom = *preset;
+            }
+        }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
         | SettingsRow::BottleneckOverlay
+        | SettingsRow::SnapEnabled
+        | SettingsRow::SnapGrid
+        | SettingsRow::SnapGuides
+        | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::HudOnStart => {}
     }
@@ -762,13 +891,25 @@ mod tests {
         assert_eq!(
             SETTINGS_TABS[2].rows,
             &[
+                SettingsRow::SnapEnabled,
+                SettingsRow::SnapGrid,
+                SettingsRow::SnapGuides,
+                SettingsRow::SnapCollision,
+                SettingsRow::SnapTolerance,
+                SettingsRow::SnapSubZoom,
+                SettingsRow::SnapCoarseZoom
+            ]
+        );
+        assert_eq!(
+            SETTINGS_TABS[3].rows,
+            &[
                 SettingsRow::EdgesAvoid,
                 SettingsRow::PortZone,
                 SettingsRow::LinePorts,
                 SettingsRow::FocusMode
             ]
         );
-        assert_eq!(SETTINGS_TABS[3].rows, &[SettingsRow::Language]);
+        assert_eq!(SETTINGS_TABS[4].rows, &[SettingsRow::Language]);
     }
 
     /// Инвариант локализации (FR-039 §5): у каждой строки есть ключи
@@ -818,11 +959,31 @@ mod tests {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.hud_on_start;
                 }
+                // FR-038: тумблеры магнитной раскладки — булевы поля Settings
+                SettingsRow::SnapEnabled => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_enabled;
+                }
+                SettingsRow::SnapGrid => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_to_grid;
+                }
+                SettingsRow::SnapGuides => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_to_guides;
+                }
+                SettingsRow::SnapCollision => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.snap_collision;
+                }
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
                 | SettingsRow::PortZone
-                | SettingsRow::Language => {
+                | SettingsRow::Language
+                | SettingsRow::SnapTolerance
+                | SettingsRow::SnapSubZoom
+                | SettingsRow::SnapCoarseZoom => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
@@ -1107,8 +1268,19 @@ mod tests {
             ),
             None
         );
-        // Таб 3 (Внешний вид): карточки темы + строка языка ниже них
-        let layout = modal_layout(3, viewport);
+        // Таб 2 (Snap, FR-038): 4 тумблера + 3 dropdown-пресета
+        let layout = modal_layout(2, viewport);
+        assert_eq!(layout.rows.len(), 7);
+        assert_eq!(layout.rows[0].0, SettingsRow::SnapEnabled);
+        assert_eq!(
+            modal_nav_at(
+                &layout,
+                [layout.hint_rect[0] + 5.0, layout.hint_rect[1] + 5.0]
+            ),
+            None
+        );
+        // Таб 4 (Внешний вид): карточки темы + строка языка ниже них
+        let layout = modal_layout(4, viewport);
         assert_eq!(layout.rows.len(), 1);
         assert_eq!(layout.rows[0].0, SettingsRow::Language);
         let card_dark = layout.theme_card_rect(Theme::Dark);
