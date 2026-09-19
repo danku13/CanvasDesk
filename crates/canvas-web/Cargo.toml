@@ -15,6 +15,31 @@ tracing-subscriber.workspace = true
 # 2026-09-16) — крейт собирается в составе workspace
 wasm-bindgen.workspace = true
 
+# Прошивка W4 (wasm-port §6.1, трек B): App/AppEvent из lib-части canvas-app
+# (bin остаётся нативной обёрткой — DAG: canvas-web лист, §3.5); модель,
+# поиск и storage — за нейтральными трейтами canvas-core; сцена —
+# canvas-scene; типы событий виджетов — canvas-widgets; Renderer и
+# контракт async-инициализации (renderer_init) — canvas-render; окно и
+# spawn_app — winit web
+canvas-app.workspace = true
+canvas-core.workspace = true
+canvas-render.workspace = true
+canvas-scene.workspace = true
+canvas-widgets.workspace = true
+winit.workspace = true
+anyhow.workspace = true
+# Прошивка (§3.4): футура async-инициализации Renderer — spawn_local
+wasm-bindgen-futures.workspace = true
+# Прошивка: вставка winit-канваса в DOM (renderer_launch) + доступ
+# к document/window (web_sys::Window/Document/Node/HtmlCanvasElement)
+web-sys = { workspace = true, features = [
+    "HtmlCanvasElement",
+    "Document",
+    "Window",
+    "Element",
+    "Node",
+] }
+
 [lib]
 name = "canvas_web"
 # §3.1 wasm-port: web-платформенный слой — зеркало canvas-shell по роли;

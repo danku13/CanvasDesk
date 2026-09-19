@@ -269,7 +269,6 @@ dependencies = [
  "canvas-shell",
  "canvas-widgets",
  "cosmic-text",
- "pollster",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -356,9 +355,18 @@ dependencies = [
 name = "canvas-web"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "canvas-app",
+ "canvas-core",
+ "canvas-render",
+ "canvas-scene",
+ "canvas-widgets",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "winit",
 ]
 
 [[package]]
