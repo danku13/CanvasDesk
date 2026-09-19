@@ -99,6 +99,23 @@ impl GridStyle {
     }
 }
 
+/// FR-038 (п.4, advanced): точка привязки grid-снапа при перетаскивании.
+/// В панели настроек НЕ показывается — только config.toml (владелец v2:
+/// «advanced»; альтернативные точки привязки меняют только grid-притяжение,
+/// направляющие соседей всегда по краям/центрам — п.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapAnchor {
+    /// По краям bbox — семантика snap-движка как есть (ближайший край к
+    /// линии, п.1-3).
+    #[default]
+    BoundingBox,
+    /// Левый-верхний угол bbox — к пересечению линий сетки.
+    Corner,
+    /// Центр bbox — к пересечению линий сетки.
+    Center,
+}
+
 /// Плотность сетки: шаг линий/точек относительно базового (20/100 world-px).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -194,6 +211,37 @@ pub struct Settings {
     /// (Warn и выше) с тостом. Тогл: Ctrl+B, пункт меню канваса, панель
     /// настроек. Рендер читает флаг на кадре (как `line_ports`).
     pub bottleneck_overlay: bool,
+    /// FR-038 (п.5): мастер-тумблер магнитной раскладки. false — никакого
+    /// снапа/предпросмотра/collision; остальные snap-настройки НЕ сбрасываются
+    /// (обратно включил — всё вернулось). Snap-движок и рендер направляющих
+    /// читают флаг на кадре. Старые конфиги без поля грузятся как true
+    /// (serde default) — магнитная раскладка включена по умолчанию.
+    pub snap_enabled: bool,
+    /// FR-038 (п.1/19): притягивать к фоновой сетке на отпускании drag
+    /// (во время драга — ghost-предпросмотр snapped-позиции, п.2).
+    pub snap_to_grid: bool,
+    /// FR-038 (п.6/19): направляющие соседей — края/центры/середины,
+    /// majority-выбор оси, равные интервалы (п.6-13).
+    pub snap_to_guides: bool,
+    /// FR-038 (п.15/19): collision-avoidance — опциональный режим: движение
+    /// при drag останавливается на границе зазора [`COLLISION_GAP`] вокруг
+    /// чужих нод. Дефолт — выкл (прохождение сквозь — прежнее поведение).
+    pub snap_collision: bool,
+    /// FR-038 (п.6/19): допуск совпадения для направляющих и сетки,
+    /// ЭКРАННЫЕ px (стартовый ориентир v2 «несколько пикселей»; внутри
+    /// движка переводится в world делением на зум). Пресеты + кламп —
+    /// по образцу `port_zone_px` (CR-003).
+    pub snap_tolerance_px: f32,
+    /// FR-038 (п.3): порог sub-сетки — при зуме СТРОГО выше линии полушага
+    /// появляются (и снап мелкий). Дефолт 1.5 = «150%» из v2. Валидация пары
+    /// с `snap_grid_coarse_zoom` — [`validated_grid_zoom_thresholds`].
+    pub snap_grid_sub_zoom: f32,
+    /// FR-038 (п.3): порог coarse-сетки — при зуме СТРОГО ниже линии
+    /// укрупняются до major-шага. Дефолт 0.5 = «50%» из v2.
+    pub snap_grid_coarse_zoom: f32,
+    /// FR-038 (п.4, advanced): точка привязки grid-снапа — в основном UI
+    /// не показывается (только config.toml).
+    pub snap_anchor: SnapAnchor,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -243,6 +291,17 @@ impl Default for Settings {
             onboarding_defers: 0,
             // FR-016: оверлей узких мест по умолчанию выключен.
             bottleneck_overlay: false,
+            // FR-038: магнитная раскладка включена (п.5), тумблеры сетки/
+            // направляющих — вкл (п.1/6), collision — выкл (п.15 опционален);
+            // допуск и пороги — стартовые ориентиры v2.
+            snap_enabled: true,
+            snap_to_grid: true,
+            snap_to_guides: true,
+            snap_collision: false,
+            snap_tolerance_px: SNAP_TOLERANCE_PRESETS[1],
+            snap_grid_sub_zoom: SNAP_SUB_ZOOM_DEFAULT,
+            snap_grid_coarse_zoom: SNAP_COARSE_ZOOM_DEFAULT,
+            snap_anchor: SnapAnchor::BoundingBox,
         }
     }
 }
@@ -253,10 +312,108 @@ pub fn clamp_onboarding_defers(value: u8) -> u8 {
     value.min(ONBOARDING_MAX_DEFERS)
 }
 
+// --- FR-038: магнитная раскладка (snap) — константы и пресеты -------------
+
+/// FR-038 (п.15): минимальный зазор collision-avoidance вокруг чужих нод,
+/// world px (0.0 — режим выключен). Стартовый ориентир v2 — настройкой не
+/// является (п.15 «опционально» — только тумблер `snap_collision`).
+pub const COLLISION_GAP: f32 = 8.0;
+
+/// Дефолт порога sub-сетки (п.3 v2: «150%»); зеркало
+/// `canvas_render::guides::DEFAULT_SUB_ZOOM` (зависимости core→render нет —
+/// значение дублируется, паритет ловит тест ниже).
+pub const SNAP_SUB_ZOOM_DEFAULT: f32 = 1.5;
+/// Дефолт порога coarse-сетки (п.3 v2: «50%»); зеркало
+/// `canvas_render::guides::DEFAULT_COARSE_ZOOM`.
+pub const SNAP_COARSE_ZOOM_DEFAULT: f32 = 0.5;
+
+/// Пресеты допуска направляющих (FR-038, панель настроек): клик циклит.
+/// ЭКРАННЫЕ px — как `PORT_ZONE_PRESETS` (CR-003).
+pub const SNAP_TOLERANCE_PRESETS: [f32; 5] = [4.0, 6.0, 8.0, 12.0, 16.0];
+/// Минимальный допуск направляющих (экранные px, FR-038).
+pub const SNAP_TOLERANCE_MIN: f32 = 2.0;
+/// Максимальный допуск направляющих (экранные px, FR-038).
+pub const SNAP_TOLERANCE_MAX: f32 = 32.0;
+
+/// Пресеты порога sub-сетки (FR-038). Диапазоны пресетов sub и coarse НЕ
+/// пересекаются (минимум sub 1.25 > максимум coarse 1.0) — любая пара
+/// пресетов валидна по правилу «sub > coarse» (п.3).
+pub const SNAP_SUB_ZOOM_PRESETS: [f32; 4] = [1.25, 1.5, 2.0, 3.0];
+/// Границы клампа порога sub-сетки (ручные правки config.toml).
+pub const SNAP_SUB_ZOOM_MIN: f32 = 1.0;
+/// Границы клампа порога sub-сетки.
+pub const SNAP_SUB_ZOOM_MAX: f32 = 6.0;
+
+/// Пресеты порога coarse-сетки (FR-038) — см. [`SNAP_SUB_ZOOM_PRESETS`].
+pub const SNAP_COARSE_ZOOM_PRESETS: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
+/// Границы клампа порога coarse-сетки (ручные правки config.toml).
+pub const SNAP_COARSE_ZOOM_MIN: f32 = 0.1;
+/// Границы клампа порога coarse-сетки.
+pub const SNAP_COARSE_ZOOM_MAX: f32 = 1.0;
+
+/// Следующий пресет допуска направляющих по циклу (FR-038, панель настроек).
+/// Значение вне пресетов округляется к ближайшему меньшему — паттерн
+/// [`next_port_zone`].
+pub fn next_snap_tolerance(value: f32) -> f32 {
+    let current = SNAP_TOLERANCE_PRESETS
+        .iter()
+        .rposition(|preset| *preset <= value)
+        .unwrap_or(0);
+    SNAP_TOLERANCE_PRESETS[(current + 1) % SNAP_TOLERANCE_PRESETS.len()]
+}
+
+/// Кламп допуска направляющих в допустимые границы (FR-038): защита от
+/// ручной правки config.toml — паттерн [`clamp_port_zone`].
+pub fn clamp_snap_tolerance(value: f32) -> f32 {
+    value.clamp(SNAP_TOLERANCE_MIN, SNAP_TOLERANCE_MAX)
+}
+
+/// Следующий пресет порога sub-сетки по циклу (FR-038, панель настроек).
+pub fn next_snap_sub_zoom(value: f32) -> f32 {
+    let current = SNAP_SUB_ZOOM_PRESETS
+        .iter()
+        .rposition(|preset| *preset <= value)
+        .unwrap_or(0);
+    SNAP_SUB_ZOOM_PRESETS[(current + 1) % SNAP_SUB_ZOOM_PRESETS.len()]
+}
+
+/// Кламп порога sub-сетки в допустимые границы (FR-038).
+pub fn clamp_snap_sub_zoom(value: f32) -> f32 {
+    value.clamp(SNAP_SUB_ZOOM_MIN, SNAP_SUB_ZOOM_MAX)
+}
+
+/// Следующий пресет порога coarse-сетки по циклу (FR-038, панель настроек).
+pub fn next_snap_coarse_zoom(value: f32) -> f32 {
+    let current = SNAP_COARSE_ZOOM_PRESETS
+        .iter()
+        .rposition(|preset| *preset <= value)
+        .unwrap_or(0);
+    SNAP_COARSE_ZOOM_PRESETS[(current + 1) % SNAP_COARSE_ZOOM_PRESETS.len()]
+}
+
+/// Кламп порога coarse-сетки в допустимые границы (FR-038).
+pub fn clamp_snap_coarse_zoom(value: f32) -> f32 {
+    value.clamp(SNAP_COARSE_ZOOM_MIN, SNAP_COARSE_ZOOM_MAX)
+}
+
+/// Валидация пары порогов zoom-адаптивной сетки (FR-038, п.3): суб-порог
+/// обязан быть СТРОГО больше coarse-порога, оба — конечные положительные;
+/// иначе пара заменяется дефолтами v2 (150%/50%). Ручная правка config.toml
+/// (sub = 0.2, coarse = 4.0, NaN) не ломает ни снап-движок, ни рендер сетки.
+pub fn validated_grid_zoom_thresholds(sub: f32, coarse: f32) -> (f32, f32) {
+    let valid = sub > coarse && sub.is_finite() && coarse.is_finite() && sub > 0.0 && coarse > 0.0;
+    if valid {
+        (sub, coarse)
+    } else {
+        (SNAP_SUB_ZOOM_DEFAULT, SNAP_COARSE_ZOOM_DEFAULT)
+    }
+}
+
 impl Settings {
     /// Загрузить настройки; отсутствующий или битый файл — дефолты
     /// (ошибка разбора возвращается для лога, приложение не падает).
-    /// Зона портов клампится в границы (CR-003) — ручные правки не роняют UX.
+    /// Числовые поля клампятся/валидуются ([`Self::normalize`]) — ручные
+    /// правки не роняют UX (CR-003, FR-028, FR-038).
     pub fn load(path: &Path) -> (Self, Option<String>) {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -269,8 +426,7 @@ impl Settings {
         };
         match toml::from_str::<Self>(&text) {
             Ok(mut settings) => {
-                settings.port_zone_px = clamp_port_zone(settings.port_zone_px);
-                settings.onboarding_defers = clamp_onboarding_defers(settings.onboarding_defers);
+                settings.normalize();
                 (settings, None)
             }
             Err(err) => (
@@ -290,14 +446,26 @@ impl Settings {
         std::fs::write(path, text)
     }
 
-    /// Разбор из строки (тесты; логика общая с load, включая кламп CR-003
-    /// и FR-028).
+    /// Клампы/валидация числовых полей после разбора конфига: ручные правки
+    /// config.toml не роняют UX (CR-003 — зона портов, FR-028 — откладывания
+    /// онбординга, FR-038 — допуск и пара порогов сетки).
+    fn normalize(&mut self) {
+        self.port_zone_px = clamp_port_zone(self.port_zone_px);
+        self.onboarding_defers = clamp_onboarding_defers(self.onboarding_defers);
+        self.snap_tolerance_px = clamp_snap_tolerance(self.snap_tolerance_px);
+        let (sub, coarse) =
+            validated_grid_zoom_thresholds(self.snap_grid_sub_zoom, self.snap_grid_coarse_zoom);
+        self.snap_grid_sub_zoom = sub;
+        self.snap_grid_coarse_zoom = coarse;
+    }
+
+    /// Разбор из строки (тесты; логика общая с load, включая клампы
+    /// [`Self::normalize`]).
     #[cfg(test)]
     fn load_toml_str(text: &str) -> (Self, Option<String>) {
         match toml::from_str::<Self>(text) {
             Ok(mut settings) => {
-                settings.port_zone_px = clamp_port_zone(settings.port_zone_px);
-                settings.onboarding_defers = clamp_onboarding_defers(settings.onboarding_defers);
+                settings.normalize();
                 (settings, None)
             }
             Err(err) => (Self::default(), Some(err.to_string())),
@@ -327,6 +495,14 @@ mod tests {
             onboarding_done: true,
             onboarding_defers: 2,
             bottleneck_overlay: true,
+            snap_enabled: false,
+            snap_to_grid: false,
+            snap_to_guides: true,
+            snap_collision: true,
+            snap_tolerance_px: 12.0,
+            snap_grid_sub_zoom: 2.0,
+            snap_grid_coarse_zoom: 0.25,
+            snap_anchor: SnapAnchor::Center,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
@@ -516,6 +692,118 @@ mod tests {
         assert!(text.contains("onboarding_done"), "{text}");
         assert!(text.contains("onboarding_defers"), "{text}");
         assert!(text.contains("bottleneck_overlay"), "{text}");
+        // FR-038: поля магнитной раскладки — snake_case
+        assert!(text.contains("snap_enabled"), "{text}");
+        assert!(text.contains("snap_to_grid"), "{text}");
+        assert!(text.contains("snap_to_guides"), "{text}");
+        assert!(text.contains("snap_collision"), "{text}");
+        assert!(text.contains("snap_tolerance_px"), "{text}");
+        assert!(text.contains("snap_grid_sub_zoom"), "{text}");
+        assert!(text.contains("snap_grid_coarse_zoom"), "{text}");
+        assert!(text.contains("snap_anchor = \"bounding_box\""), "{text}");
+    }
+
+    /// FR-038: snap-поля — старый конфиг без них грузится дефолтами v2:
+    /// мастер и оба тумблера включены, collision выключен, допуск — второй
+    /// пресет (6 px), пороги 150%/50%, якорь — bbox (п.1/5/6/15/19).
+    #[test]
+    fn snap_fields_defaults_on_old_config() {
+        let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
+        assert!(settings.snap_enabled, "мастер-тумблер — вкл");
+        assert!(settings.snap_to_grid, "привязка к сетке — вкл");
+        assert!(settings.snap_to_guides, "направляющие — вкл");
+        assert!(!settings.snap_collision, "collision — выкл (опция п.15)");
+        assert_eq!(settings.snap_tolerance_px, SNAP_TOLERANCE_PRESETS[1]);
+        assert_eq!(settings.snap_grid_sub_zoom, 1.5);
+        assert_eq!(settings.snap_grid_coarse_zoom, 0.5);
+        assert_eq!(settings.snap_anchor, SnapAnchor::BoundingBox);
+        assert!(warn.is_none());
+        // Флаги читаются из конфига
+        let (settings, warn) = Settings::load_toml_str(
+            "snap_enabled = false\nsnap_collision = true\nsnap_anchor = \"corner\"\n",
+        );
+        assert!(!settings.snap_enabled);
+        assert!(settings.snap_collision);
+        assert_eq!(settings.snap_anchor, SnapAnchor::Corner);
+        assert!(warn.is_none());
+    }
+
+    /// FR-038: допуск направляющих — пресеты, цикл замкнут, кламп ручных
+    /// значений и кламп при загрузке (паттерн port_zone, CR-003).
+    #[test]
+    fn snap_tolerance_cycle_clamp_and_load() {
+        // Цикл по пресетам замкнут без повторов на витке
+        let mut value = SNAP_TOLERANCE_PRESETS[0];
+        let first = value;
+        let mut seen = vec![value];
+        for _ in 0..SNAP_TOLERANCE_PRESETS.len() - 1 {
+            value = next_snap_tolerance(value);
+            assert!(!seen.contains(&value), "повтор в цикле: {value}");
+            seen.push(value);
+        }
+        assert_eq!(next_snap_tolerance(value), first);
+        // Вне пресетов — ближайший меньший, затем следующий
+        assert_eq!(next_snap_tolerance(10.0), SNAP_TOLERANCE_PRESETS[3]);
+        // Кламп: границы и экстремумы
+        assert_eq!(clamp_snap_tolerance(1.5), SNAP_TOLERANCE_MIN);
+        assert_eq!(clamp_snap_tolerance(-5.0), SNAP_TOLERANCE_MIN);
+        assert_eq!(clamp_snap_tolerance(99.0), SNAP_TOLERANCE_MAX);
+        assert_eq!(clamp_snap_tolerance(7.0), 7.0);
+        // Дефолт — второй пресет (стартовый ориентир v2 «несколько пикселей»)
+        assert_eq!(Settings::default().snap_tolerance_px, 6.0);
+        // Кламп при загрузке
+        let (settings, warn) = Settings::load_toml_str("snap_tolerance_px = 999.0\n");
+        assert_eq!(settings.snap_tolerance_px, SNAP_TOLERANCE_MAX);
+        assert!(warn.is_none(), "кламп молчалив — значение валидно числово");
+    }
+
+    /// FR-038: пороги zoom-адаптивной сетки — пресеты (диапазоны sub и
+    /// coarse не пересекаются — любая пара пресетов валидна), клампы и
+    /// валидация пары «sub > coarse, иначе дефолты» на загрузке.
+    #[test]
+    fn snap_zoom_thresholds_presets_and_validation() {
+        // Дефолты — ориентиры v2 150%/50% (паритет с рендером сетки ловит
+        // тест measure_layout_consts_match_render в canvas-app: core→render
+        // зависимости по архитектуре нет — ADR-0012)
+        assert_eq!(Settings::default().snap_grid_sub_zoom, 1.5);
+        assert_eq!(Settings::default().snap_grid_coarse_zoom, 0.5);
+        // Любая пара пресетов валидна: минимальный sub > максимального coarse
+        for sub in SNAP_SUB_ZOOM_PRESETS {
+            for coarse in SNAP_COARSE_ZOOM_PRESETS {
+                let (s, c) = validated_grid_zoom_thresholds(sub, coarse);
+                assert_eq!((s, c), (sub, coarse), "пара пресетов испорчена");
+                assert!(s > c);
+            }
+        }
+        // Циклы замкнуты
+        let mut sub = SNAP_SUB_ZOOM_PRESETS[0];
+        for _ in 0..SNAP_SUB_ZOOM_PRESETS.len() - 1 {
+            sub = next_snap_sub_zoom(sub);
+        }
+        assert_eq!(next_snap_sub_zoom(sub), SNAP_SUB_ZOOM_PRESETS[0]);
+        let mut coarse = SNAP_COARSE_ZOOM_PRESETS[0];
+        for _ in 0..SNAP_COARSE_ZOOM_PRESETS.len() - 1 {
+            coarse = next_snap_coarse_zoom(coarse);
+        }
+        assert_eq!(next_snap_coarse_zoom(coarse), SNAP_COARSE_ZOOM_PRESETS[0]);
+        // Клампы
+        assert_eq!(clamp_snap_sub_zoom(0.5), SNAP_SUB_ZOOM_MIN);
+        assert_eq!(clamp_snap_sub_zoom(50.0), SNAP_SUB_ZOOM_MAX);
+        assert_eq!(clamp_snap_coarse_zoom(0.01), SNAP_COARSE_ZOOM_MIN);
+        assert_eq!(clamp_snap_coarse_zoom(9.0), SNAP_COARSE_ZOOM_MAX);
+        // Валидация: инверсия/равенство/не-конечность — дефолты
+        assert_eq!(validated_grid_zoom_thresholds(0.5, 1.5), (1.5, 0.5));
+        assert_eq!(validated_grid_zoom_thresholds(1.0, 1.0), (1.5, 0.5));
+        assert_eq!(validated_grid_zoom_thresholds(f32::NAN, 0.5), (1.5, 0.5));
+        assert_eq!(validated_grid_zoom_thresholds(2.0, -1.0), (1.5, 0.5));
+        // Валидные значения проходят без изменений
+        assert_eq!(validated_grid_zoom_thresholds(2.5, 0.75), (2.5, 0.75));
+        // Кламп+валидация на загрузке: перепутанная пара заменяется дефолтом
+        let (settings, warn) =
+            Settings::load_toml_str("snap_grid_sub_zoom = 0.2\nsnap_grid_coarse_zoom = 4.0\n");
+        assert_eq!(settings.snap_grid_sub_zoom, SNAP_SUB_ZOOM_DEFAULT);
+        assert_eq!(settings.snap_grid_coarse_zoom, SNAP_COARSE_ZOOM_DEFAULT);
+        assert!(warn.is_none());
     }
 
     /// FR-025: флаг построчных точек выхода — дефолт false (старые конфиги

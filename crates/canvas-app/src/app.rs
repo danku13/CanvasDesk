@@ -29,6 +29,11 @@ use crate::settings_ui::{
     row_at, row_kind, DropdownState, PanelEntry, RowKind, SettingsRow, DROPDOWN_MARGIN,
     DROPDOWN_ROW_H,
 };
+// FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
+// раскладки; кламп collision публичен для live-клампа кадра драга (п.15)
+use crate::snap::{
+    clamp_collision, effective_grid_step, snap_move, SnapConfig, SnapOutcome, SnapRect, SnapSource,
+};
 use crate::template_ui;
 use crate::template_ui::{
     panel_layout as template_panel_layout, panel_rows as template_panel_rows,
@@ -56,7 +61,7 @@ use canvas_core::{
     analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
     resolve_node_path, watched_dirs, AnalysisState, Canvas, CanvasStorage, ClipboardBackend, Edge,
     FileEvent, FocusSeed, GridStyle, Node, NodeChange, NodeKind, Priority, SearchBackend, Settings,
-    Side, SpatialIndex, Theme, ThumbBackend, WatchBackend,
+    Side, SnapAnchor, SpatialIndex, Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
 };
 // M8/W3 (wasm-port §3.1): протокол поиска переехал в core (натив — FTS5 в
 // shell, web/тесты — MemSearch); App общается только через трейт SearchBackend
@@ -75,6 +80,8 @@ use canvas_render::cards::{
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
 };
+// FR-038: кадр направляющих рендера — конвертация SnapOutcome (T-038.3)
+use canvas_render::guides::{GuideSource, GuidesFrame};
 use canvas_render::minimap::{Minimap, MINIMAP_H, MINIMAP_W};
 // M8/W4 (wasm-port §3.4): стратегия запуска async-инициализации Renderer —
 // инъекция (натив: pollster::block_on, web: spawn_local + слот доставки),
@@ -142,6 +149,236 @@ struct OwnedScreenText {
 fn centered_box(rect: [f32; 4], inset: f32) -> ([f32; 2], f32) {
     let width = (rect[2] - inset * 2.0).max(0.0);
     ([rect[0] + inset, rect[1]], width)
+}
+
+// --- FR-038 (T-038.4): интеграция магнитной раскладки ----------------------
+//
+// Семантика v2: во время drag нода следует курсору свободно (origin+delta),
+// snap-движок работает на ПРЕДПРОСМОТР (направляющие + ghost, каждый кадр
+// драга) и НА ОТПУСКАНИИ (п.2), collision-avoidance — LIVE (кламп дельты
+// каждого кадра, п.15), anchor (п.4) — надстройка над grid-частью движка.
+
+/// Данные snap-расчёта одного кадра драга (T-038.4): достаточно и для
+/// перемещения (live-collision), и для предпросмотра, и для отпускания —
+/// отпускание пересчитывает кадр с теми же входами (детерминизм п.20:
+/// результат совпадает с последним предпросмотром).
+struct SnapFrame {
+    /// Дельта перемещения ЭТОГО кадра: свободная (world−grab) или ужатая
+    /// live-collision (п.15, если `snap_collision` включён).
+    eff_delta: [f32; 2],
+    /// Полный расчёт снапа от bbox-origins с желаемой дельтой `eff_delta`:
+    /// итоговая дельта (grid/guides/anchor + collision поверх) и оси
+    /// направляющих. Итоговые позиции = origin + outcome.dx/dy.
+    outcome: SnapOutcome,
+    /// bbox перемещаемого набора в позиции кадра (origins + eff_delta),
+    /// [x0, y0, x1, y1] — вход `GuidesFrame::from_snap` для ghost.
+    bbox_current: [f32; 4],
+    /// Допуск в world px (`snap_tolerance_px / zoom`) — для нелинейного
+    /// усиления направляющих (п.8, `GuidesFrame.tolerance`).
+    tolerance_world: f32,
+}
+
+/// bbox перемещаемого набора ПО ИСХОДНЫМ позициям (origins): размеры берутся
+/// из текущих нод — drag размеры не меняет. Групповой drag — union bbox
+/// (п.14: дети групп уже в origins, дубликатов нет). Пустой/битый набор —
+/// None (снап не применяется).
+fn drag_bbox(canvas: &Canvas, origins: &[(usize, Vec2)]) -> Option<SnapRect> {
+    let mut acc: Option<SnapRect> = None;
+    for (index, origin) in origins {
+        let node = canvas.nodes.get(*index)?;
+        let rect = SnapRect {
+            x: origin[0],
+            y: origin[1],
+            w: node.width,
+            h: node.height,
+        };
+        acc = Some(match acc {
+            None => rect,
+            Some(acc) => {
+                let left = acc.x.min(rect.x);
+                let top = acc.y.min(rect.y);
+                let right = (acc.x + acc.w).max(rect.x + rect.w);
+                let bottom = (acc.y + acc.h).max(rect.y + rect.h);
+                SnapRect {
+                    x: left,
+                    y: top,
+                    w: right - left,
+                    h: bottom - top,
+                }
+            }
+        });
+    }
+    acc
+}
+
+/// Кандидаты снапа (T-038.4): bbox видимых нод ВНЕ перемещаемого набора
+/// (края/центры/середины движок берёт из bbox сам). Группа — обычная нода
+/// в `canvas.nodes`: её bbox и есть кандидат (п.14). Чистая функция.
+fn snap_candidates(canvas: &Canvas, visible: &[usize], moving: &[usize]) -> Vec<SnapRect> {
+    visible
+        .iter()
+        .filter(|index| !moving.contains(index))
+        .filter_map(|index| canvas.nodes.get(*index))
+        .map(|node| SnapRect {
+            x: node.x,
+            y: node.y,
+            w: node.width,
+            h: node.height,
+        })
+        .collect()
+}
+
+/// Дельта притяжения точки к ближайшей линии сетки (п.4 anchor-надстройка):
+/// в пределах допуска — дельта до ближайшей линии (кратной `step`), иначе 0 —
+/// сетка молчит, как в движке (п.1-3). Отрицательные координаты корректны
+/// ((pos/step).round() математически одинаков).
+fn anchor_grid_delta(pos: f32, step: f32, tol: f32) -> f32 {
+    let delta = (pos / step).round() * step - pos;
+    if delta.abs() <= tol {
+        delta
+    } else {
+        0.0
+    }
+}
+
+/// Допуск в world px из экранных (п.6): screen = world·zoom → деление на
+/// зум; некорректный зум — фолбэк 1.0 (зеркало движка, snap::tol_world).
+fn snap_tolerance_world(tolerance_px: f32, zoom: f32) -> f32 {
+    if zoom > 0.0 {
+        tolerance_px / zoom
+    } else {
+        tolerance_px
+    }
+}
+
+/// FR-038 (п.4): anchor-надстройка над движком — тонкая коррекция grid-части.
+/// `BoundingBox` — движок как есть (ближайший край bbox к линии). `Corner`/
+/// `Center` — движок вызывается БЕЗ сетки (to_grid=false), grid-дельта
+/// считается вручную для левого-верхнего угла / центра bbox (к пересечению
+/// линий); направляющие всегда от движка (п.7 — по краям/центрам); арбитраж
+/// grid-vs-guide по осям — минимальная |дельта| (п.11), при равенстве —
+/// направляющая (как в движке), ось, выигранная grid, направляющей НЕ
+/// помечается (п.9). Collision (п.15) — финальный кламп поверх итоговой
+/// дельты. Детерминизм (п.20): только арифметика входа.
+fn snap_with_anchor(
+    moving: SnapRect,
+    dx: f32,
+    dy: f32,
+    candidates: &[SnapRect],
+    cfg: &SnapConfig,
+    anchor: SnapAnchor,
+) -> SnapOutcome {
+    if matches!(anchor, SnapAnchor::BoundingBox) {
+        return snap_move(moving, dx, dy, candidates, cfg);
+    }
+    // Движок без сетки и без collision (клампим сами после anchor-дельты —
+    // иначе collision «зафиксирует» дельту до арбитража осей)
+    let mut outcome = snap_move(
+        moving,
+        dx,
+        dy,
+        candidates,
+        &SnapConfig {
+            collision_gap: 0.0,
+            ..*cfg
+        },
+    );
+    let step = effective_grid_step(cfg);
+    let tol = snap_tolerance_world(cfg.tolerance_px, cfg.zoom);
+    let (ax, ay) = match anchor {
+        // Угол bbox — к пересечению линий (п.4)
+        SnapAnchor::Corner => (moving.x, moving.y),
+        // Центр bbox — аналогично по центру (п.4)
+        _ => (moving.cx(), moving.cy()),
+    };
+    let grid_step_valid = cfg.to_grid && step > 0.0 && step.is_finite();
+    let gx = if grid_step_valid {
+        anchor_grid_delta(ax + dx, step, tol)
+    } else {
+        0.0
+    };
+    let gy = if grid_step_valid {
+        anchor_grid_delta(ay + dy, step, tol)
+    } else {
+        0.0
+    };
+
+    // Арбитраж по осям: guide (уже в outcome — там, где сработал, ось
+    // помечена линией) против anchor-grid. Дельта guide по оси = outcome −
+    // желаемая. Равенство — направляющая (детерминизм, как в движке п.11).
+    let guide_won_x = !outcome.guides_x.is_empty();
+    let guide_won_y = !outcome.guides_y.is_empty();
+    let guide_dx = outcome.dx - dx;
+    let guide_dy = outcome.dy - dy;
+    let mut out_dx = if !guide_won_x || gx.abs() < guide_dx.abs() {
+        dx + gx
+    } else {
+        outcome.dx
+    };
+    let mut out_dy = if !guide_won_y || gy.abs() < guide_dy.abs() {
+        dy + gy
+    } else {
+        outcome.dy
+    };
+    // Ось, выигранная anchor-grid, направляющей не помечается (п.9)
+    let mut guides_x = std::mem::take(&mut outcome.guides_x);
+    let mut guides_y = std::mem::take(&mut outcome.guides_y);
+    if guide_won_x && out_dx != outcome.dx {
+        guides_x.clear();
+    }
+    if guide_won_y && out_dy != outcome.dy {
+        guides_y.clear();
+    }
+    // Collision поверх финальной дельты (п.15) — как в движке
+    if cfg.collision_gap > 0.0 {
+        let (fx, fy) = clamp_collision(
+            moving,
+            moving.x + out_dx,
+            moving.y + out_dy,
+            candidates,
+            cfg.collision_gap,
+            out_dx,
+            out_dy,
+        );
+        // Кламп, сдвинувший ось с выигранной позиции, гасит её направляющую
+        // (п.9: линия — только там, где снап определил финальную позицию;
+        // иначе рендер показывает ось, которой позиция больше не касается)
+        if guide_won_x && fx != out_dx {
+            guides_x.clear();
+        }
+        if guide_won_y && fy != out_dy {
+            guides_y.clear();
+        }
+        out_dx = fx;
+        out_dy = fy;
+    }
+
+    // Источник — по выжившим направляющим (кламп мог погасить оси)
+    let source = if !guides_x.is_empty() || !guides_y.is_empty() {
+        SnapSource::Guide
+    } else {
+        SnapSource::Grid
+    };
+
+    SnapOutcome {
+        dx: out_dx,
+        dy: out_dy,
+        guides_x,
+        guides_y,
+        source,
+    }
+}
+
+/// Шаг клавиатурного nudge в world px (п.22): спецификация v2 задаёт шаг
+/// «в пикселях экрана» — визуальный шаг одинаков на любом зуме; перевод в
+/// world — делением на зум (screen = world·zoom). Детерминировано: шаг
+/// зависит только от зума кадра. Некорректный зум — фолбэк к экранным px.
+fn nudge_step_world(screen_px: f32, zoom: f32) -> f32 {
+    if zoom > 0.0 {
+        screen_px / zoom
+    } else {
+        screen_px
+    }
 }
 
 // Буфер обмена ОС (T7, arboard) — M8/W3: за трейтом `ClipboardBackend`
@@ -2443,6 +2680,229 @@ impl App {
         }
     }
 
+    // --- FR-038 (T-038.4): магнитная раскладка — методы App ----------------
+
+    /// Snap-расчёт кадра драга (п.2/4/15): bbox набора по origins, кандидаты
+    /// (видимые ноды вне перемещаемого набора, с запасом на допуск/зазор),
+    /// конфиг из настроек + зума; live-collision клампит дельту кадра (п.15),
+    /// полный outcome (grid/guides/anchor + collision) — для предпросмотра и
+    /// отпускания. Мастер-тумблер выключен или bbox пуст — None (снапа нет).
+    fn compute_snap_frame(&self, drag: &DragState, delta: [f32; 2]) -> Option<SnapFrame> {
+        if !self.settings.snap_enabled {
+            return None;
+        }
+        let bbox = drag_bbox(&self.scene.canvas, &drag.origins)?;
+        let zoom = self.camera.zoom();
+        let (minor, major) = self.settings.grid_density.steps();
+        let cfg = SnapConfig {
+            to_grid: self.settings.snap_to_grid,
+            to_guides: self.settings.snap_to_guides,
+            grid_minor: minor,
+            grid_major: major,
+            tolerance_px: self.settings.snap_tolerance_px,
+            zoom,
+            sub_zoom: self.settings.snap_grid_sub_zoom,
+            coarse_zoom: self.settings.snap_grid_coarse_zoom,
+            collision_gap: if self.settings.snap_collision {
+                COLLISION_GAP
+            } else {
+                0.0
+            },
+        };
+        let tolerance_world = snap_tolerance_world(cfg.tolerance_px, zoom);
+        // Кандидаты — видимые ноды с запасом на допуск и зазор collision:
+        // за пределами запаса ни направляющая, ни кламп задеть не могут
+        let viewport = self.viewport_logical();
+        let mut visible = self.camera.visible_world_rect(viewport);
+        let margin = tolerance_world.max(cfg.collision_gap);
+        visible[0] -= margin;
+        visible[1] -= margin;
+        visible[2] += margin;
+        visible[3] += margin;
+        let moving: Vec<usize> = drag.origins.iter().map(|(index, _)| *index).collect();
+        let candidates = snap_candidates(
+            &self.scene.canvas,
+            &self.scene.spatial.query_rect(visible),
+            &moving,
+        );
+
+        // Live-collision (п.15): grid/guides остаются release-time, поэтому
+        // клампим ТОЛЬКО дельту кадра — движение останавливается на границе
+        // зазора, свободный курсор не «уводит» ноду сквозь соседей
+        let eff_delta = if cfg.collision_gap > 0.0 {
+            let (fx, fy) = clamp_collision(
+                bbox,
+                bbox.x + delta[0],
+                bbox.y + delta[1],
+                &candidates,
+                cfg.collision_gap,
+                delta[0],
+                delta[1],
+            );
+            [fx, fy]
+        } else {
+            delta
+        };
+
+        // Полный расчёт: отпускание применит outcome.dx/dy как итоговую дельту
+        let outcome = snap_with_anchor(
+            bbox,
+            eff_delta[0],
+            eff_delta[1],
+            &candidates,
+            &cfg,
+            self.settings.snap_anchor,
+        );
+        let bbox_current = [
+            bbox.x + eff_delta[0],
+            bbox.y + eff_delta[1],
+            bbox.x + bbox.w + eff_delta[0],
+            bbox.y + bbox.h + eff_delta[1],
+        ];
+        Some(SnapFrame {
+            eff_delta,
+            outcome,
+            bbox_current,
+            tolerance_world,
+        })
+    }
+
+    /// Предпросмотр снапа в кадре драга (п.2/8/9): направляющие + ghost
+    /// snapped-позиции в рендере; снапа нет — слой гасится (п.9: за допуском
+    /// и у выключенного мастера линий нет). Коррекция относительно позиции
+    /// кадра: ghost = текущий bbox + коррекция, интенсивность (п.8) — по
+    /// модулю коррекции (не по полной дельте от захвата).
+    fn update_snap_preview(&mut self, frame: Option<&SnapFrame>) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let Some(frame) = frame else {
+            renderer.clear_guides();
+            return;
+        };
+        let corr_x = frame.outcome.dx - frame.eff_delta[0];
+        let corr_y = frame.outcome.dy - frame.eff_delta[1];
+        if frame.outcome.guides_x.is_empty()
+            && frame.outcome.guides_y.is_empty()
+            && corr_x == 0.0
+            && corr_y == 0.0
+        {
+            renderer.clear_guides();
+            return;
+        }
+        let source = match frame.outcome.source {
+            SnapSource::Grid => GuideSource::Grid,
+            SnapSource::Guide => GuideSource::Guide,
+        };
+        renderer.set_guides(GuidesFrame::from_snap(
+            frame.bbox_current,
+            corr_x,
+            corr_y,
+            frame.outcome.guides_x.clone(),
+            frame.outcome.guides_y.clone(),
+            source,
+            frame.tolerance_world,
+        ));
+    }
+
+    /// Snap-at-release (п.2/21): на отпускании drag применить snap-коррекцию
+    /// к свободной позиции. Возвращает true, если коррекция применена —
+    /// тогда drag-шаг undo уже закрыт здесь; false — вызывающий делает
+    /// обычный одиночный [`Self::finish_interaction_undo`].
+    ///
+    /// Undo (п.21): при сработавшем снапе — ДВА шага: (1) `finish_interaction_undo`
+    /// пушит снапшот начала драга (шаг «drag: старт → свободная позиция»),
+    /// (2) `push_undo` фиксирует состояние до коррекции и шаг «snap-коррекция».
+    /// Снап не сработал (коррекция нулевая) — один шаг, как раньше; клик без
+    /// движения — ни одного (телепорт по сетке на клике был бы сюрпризом).
+    fn apply_snap_at_release(&mut self) -> bool {
+        let Some(drag) = self.dragging.clone() else {
+            return false;
+        };
+        if !self.settings.snap_enabled {
+            return false;
+        }
+        // Фактическое перемещение — тот же предикат, что в finish_interaction_undo
+        let moved = drag.origins.iter().any(|(index, origin)| {
+            self.scene
+                .canvas
+                .nodes
+                .get(*index)
+                .is_some_and(|node| node.x != origin[0] || node.y != origin[1])
+        });
+        if !moved {
+            return false;
+        }
+        // Финальная дельта — от той же геометрии, что последний кадр драга:
+        // результат бит-в-бит совпадает с предпросмотром (п.20)
+        let world = self.cursor_world();
+        let delta = [world[0] - drag.grab_world[0], world[1] - drag.grab_world[1]];
+        let Some(frame) = self.compute_snap_frame(&drag, delta) else {
+            return false;
+        };
+        let corr_x = frame.outcome.dx - frame.eff_delta[0];
+        let corr_y = frame.outcome.dy - frame.eff_delta[1];
+        if corr_x == 0.0 && corr_y == 0.0 {
+            // Снап не сработал — один push_undo как сейчас (п.21)
+            return false;
+        }
+        // Шаг 1 (FR-006): drag — снапшот начала → состояние до коррекции
+        self.finish_interaction_undo();
+        // Шаг 2 (п.21): snap-коррекция — отдельная undo-операция
+        self.push_undo();
+        for (index, origin) in &drag.origins {
+            self.scene.move_node(
+                *index,
+                origin[0] + frame.outcome.dx,
+                origin[1] + frame.outcome.dy,
+            );
+        }
+        self.scene.mark_dirty();
+        // п.9: направляющие скрываются сразу на отпускании
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.clear_guides();
+        }
+        self.request_redraw();
+        true
+    }
+
+    /// Клавиатурный nudge выделения (п.22): стрелки — 1 px, Shift+стрелки —
+    /// 10 px, ЭКРАННЫЕ px (обоснование — [`nudge_step_world`]). RAW-дельты
+    /// поверх включённого снапа: snap_move НЕ вызывается — точная корректировка
+    /// обязана обходить магниты (п.22 v2). Каждый шаг — отдельная undo-
+    /// операция (FR-006: push_undo ДО мутации). Направляющие не показываются.
+    fn nudge_selection(&mut self, dir: [f32; 2], screen_px: f32) {
+        // Nudge не конкурирует с drag/resize: там origin+delta пересчитал бы
+        // позиции поверх клавиатурного сдвига
+        if self.dragging.is_some() || self.resizing.is_some() {
+            return;
+        }
+        // Набор — как у drag: выделенная нода или весь набор (+ дети групп).
+        // Рамка выделения оставляет selected = None при непустом наборе —
+        // берём первичным первый из набора
+        let primary = match self.selected {
+            Some(Selection::Node(index)) => Some(index),
+            _ => self.selected_nodes.first().copied(),
+        };
+        let Some(primary) = primary else {
+            return;
+        };
+        let origins = drag_origins(&self.scene.canvas, primary, &self.selected_nodes);
+        if origins.is_empty() {
+            return;
+        }
+        let step = nudge_step_world(screen_px, self.camera.zoom());
+        let dx = dir[0] * step;
+        let dy = dir[1] * step;
+        // Каждый nudge — отдельная undo-операция (п.21/22, FR-006)
+        self.push_undo();
+        for (index, origin) in &origins {
+            self.scene.move_node(*index, origin[0] + dx, origin[1] + dy);
+        }
+        self.scene.mark_dirty();
+        self.request_redraw();
+    }
+
     /// Отменить последнее действие (FR-006, Ctrl+Z): модель «до» из
     /// undo-стека, текущее состояние — в redo.
     fn undo_action(&mut self) {
@@ -2488,6 +2948,9 @@ impl App {
         self.scene.recompute_flow();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.invalidate_node_caches();
+            // FR-038 (п.9): undo/redo прерывают drag — предпросмотр направляющих
+            // не должен переживать восстановление состояния
+            renderer.clear_guides();
         }
         self.thumbs_failed.clear();
         self.selected = None;
@@ -2859,6 +3322,11 @@ impl App {
         if self.dragging.is_some() {
             // FR-006: движение до потери фокуса — undo-шаг
             self.finish_interaction_undo();
+            // FR-038 (п.9): drag прерван потерей фокуса — предпросмотр
+            // направляющих не должен переживать жест
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.clear_guides();
+            }
             self.dragging = None;
         }
         self.sync_cursor_icon();
@@ -4548,6 +5016,11 @@ impl App {
         self.minimap = None;
         self.minimap_drag = false;
         self.template_drag = None;
+        // FR-038 (п.9): сцена заменена — оси направляющих/ghost старой сцены
+        // указывали на исчезнувшую геометрию, слой гасится
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.clear_guides();
+        }
         self.camera = Camera::default();
         self.show_toast(format!("Открыт канвас: {opened}"));
         self.request_redraw();
@@ -4567,6 +5040,12 @@ impl App {
         renderer.set_grid_dots(self.settings.grid_style == GridStyle::Dots);
         let (minor, major) = self.settings.grid_density.steps();
         renderer.set_grid_steps(minor, major);
+        // FR-038 (п.3): пороги zoom-адаптивной сетки — пользовательские
+        // настройки (старт: sub 150% / coarse 50% из v2)
+        renderer.set_grid_zoom_thresholds(
+            self.settings.snap_grid_sub_zoom,
+            self.settings.snap_grid_coarse_zoom,
+        );
         renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
         if let Some(window) = &self.window {
             tracing::info!(
@@ -5867,6 +6346,27 @@ impl App {
                 self.settings.bottleneck_overlay = !self.settings.bottleneck_overlay;
                 self.bottleneck_auto_enabled = true;
             }
+            // FR-038 (п.19): тумблеры магнитной раскладки — движок и рендер
+            // читают флаги на кадр. Мастер-тумблер (п.5) гасит весь снаппинг
+            // без сброса остальных настроек — активный предпросмотр убираем
+            // сразу (drag с открытой панелью невозможен, но защита дешёвая)
+            SettingsRow::SnapEnabled => {
+                self.settings.snap_enabled = !self.settings.snap_enabled;
+                if !self.settings.snap_enabled {
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.clear_guides();
+                    }
+                }
+            }
+            SettingsRow::SnapGrid => {
+                self.settings.snap_to_grid = !self.settings.snap_to_grid;
+            }
+            SettingsRow::SnapGuides => {
+                self.settings.snap_to_guides = !self.settings.snap_to_guides;
+            }
+            SettingsRow::SnapCollision => {
+                self.settings.snap_collision = !self.settings.snap_collision;
+            }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
             SettingsRow::HudOnStart => {
@@ -5877,7 +6377,10 @@ impl App {
             SettingsRow::ButtonCorner
             | SettingsRow::GridStyle
             | SettingsRow::GridDensity
-            | SettingsRow::PortZone => {
+            | SettingsRow::PortZone
+            | SettingsRow::SnapTolerance
+            | SettingsRow::SnapSubZoom
+            | SettingsRow::SnapCoarseZoom => {
                 debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
                 return;
             }
@@ -5912,6 +6415,13 @@ impl App {
                 let (minor, major) = self.settings.grid_density.steps();
                 renderer.set_grid_steps(minor, major);
             }
+            // FR-038 (п.3/19): пороги zoom-адаптивной сетки — в рендер сразу
+            // (линии sub/coarse перерисовываются с новыми порогами)
+            SettingsRow::SnapSubZoom | SettingsRow::SnapCoarseZoom => renderer
+                .set_grid_zoom_thresholds(
+                    self.settings.snap_grid_sub_zoom,
+                    self.settings.snap_grid_coarse_zoom,
+                ),
             _ => {}
         }
     }
@@ -6318,6 +6828,11 @@ impl App {
                             if method == "node_delete" {
                                 self.selected = None;
                                 self.selected_nodes.clear();
+                                // FR-038 (п.9): MCP удалил ноду под активным
+                                // drag — оси предпросмотра стали устаревшими
+                                if let Some(renderer) = self.renderer.as_mut() {
+                                    renderer.clear_guides();
+                                }
                                 self.dragging = None;
                             }
                             canvas_mcp::build_result(&id, &value)
@@ -6719,6 +7234,10 @@ impl App {
                 // Отпускание Space во время drag не должно оставлять ноду "прилипшей"
                 // FR-006: применённое движение — undo-шаг; далее drag прерывается
                 self.finish_interaction_undo();
+                // FR-038 (п.9): drag прерван — предпросмотр направляющих гасится
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.clear_guides();
+                }
                 self.dragging = None;
             }
         }
@@ -6753,6 +7272,32 @@ impl App {
             && !event.repeat
         {
             self.delete_selected();
+        }
+        // FR-038 (п.22): клавиатурный nudge выделения — стрелки 1 px,
+        // Shift+стрелки 10 px. Глобальный контур (ВНЕ оверлея поиска —
+        // стрелки панели уходят в on_search_key с return выше): редактор/
+        // поиск/диалог/настройки-меню тоже возвращают раньше. Ctrl не трогаем
+        // — Ctrl+←/→ заняты mindmap-сворачиванием (ветка ниже). Повторы
+        // клавиши НЕ глотаются: удержание двигает ноду, каждый шаг — своя
+        // undo-операция (п.22 «каждый шаг в undo»)
+        if event.state == ElementState::Pressed && !self.modifiers.control_key() {
+            if let Key::Named(named) = &event.logical_key {
+                let dir = match named {
+                    NamedKey::ArrowUp => Some([0.0, -1.0]),
+                    NamedKey::ArrowDown => Some([0.0, 1.0]),
+                    NamedKey::ArrowLeft => Some([-1.0, 0.0]),
+                    NamedKey::ArrowRight => Some([1.0, 0.0]),
+                    _ => None,
+                };
+                if let Some(dir) = dir {
+                    let screen_px = if self.modifiers.shift_key() {
+                        10.0
+                    } else {
+                        1.0
+                    };
+                    self.nudge_selection(dir, screen_px);
+                }
+            }
         }
         // FR-011: mindmap-ветвление — Tab (дочерняя), Enter (сиблинг),
         // Ctrl+← (свернуть ветку), Ctrl+→ (развернуть). Только при выделенной
@@ -7913,9 +8458,20 @@ impl App {
                 } else {
                     self.group_drag_out_released();
                 }
-                // FR-006: закрытие отложенного drag/resize — undo-шаг при
-                // фактическом изменении (клик без движения не шаг)
-                self.finish_interaction_undo();
+                // FR-038 (п.2/21): snap-at-release — коррекция свободной позиции
+                // отпускания по сетке/направляющим. При сработавшем снапе — ДВА
+                // undo-шага: drag-шаг закрывается внутри (снапшот начала → до
+                // коррекции), затем шаг коррекции (до → после); без снапа —
+                // обычный одиночный путь FR-006
+                if !self.apply_snap_at_release() {
+                    // FR-006: закрытие отложенного drag/resize — undo-шаг при
+                    // фактическом изменении (клик без движения не шаг)
+                    self.finish_interaction_undo();
+                }
+                // FR-038 (п.9): направляющие не переживают отпускание
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.clear_guides();
+                }
                 self.dragging = None;
                 self.editor_dragging = false;
                 self.resizing = None;
@@ -8213,12 +8769,17 @@ impl App {
             } else if let Some(drag) = self.dragging.clone() {
                 // Drag (T7/CR-001): каждая перемещаемая нода — в исходную
                 // позицию + дельта курсора от захвата (ровно один сдвиг за
-                // кадр; дети групп — в origins с старта, дубликатов нет)
+                // кадр; дети групп — в origins с старта, дубликатов нет).
+                // FR-038: нода следует курсору СВОБОДНО (п.2 v2) — дельта
+                // кадра клампится только live-collision (п.15, если включён);
+                // grid/guides — предпросмотр + release-time, позиции не трогают
                 let world = self.cursor_world();
                 let delta = [world[0] - drag.grab_world[0], world[1] - drag.grab_world[1]];
+                let snap_frame = self.compute_snap_frame(&drag, delta);
+                let eff = snap_frame.as_ref().map_or(delta, |frame| frame.eff_delta);
                 for (index, origin) in &drag.origins {
                     self.scene
-                        .move_node(*index, origin[0] + delta[0], origin[1] + delta[1]);
+                        .move_node(*index, origin[0] + eff[0], origin[1] + eff[1]);
                 }
                 // FR-012: зона втягивания — группа под центром первичной ноды
                 let target = self.group_drop_target(&drag);
@@ -8226,6 +8787,9 @@ impl App {
                     self.group_drop_target = target;
                 }
                 self.scene.mark_dirty();
+                // FR-038 (п.2/8/9): предпросмотр — направляющие + ghost
+                // snapped-позиции; без снапа слой гасится
+                self.update_snap_preview(snap_frame.as_ref());
                 self.request_redraw();
             } else if self.edge_drag.is_some() {
                 // Резиновая линия (T8) следует за курсором — курсор уже
@@ -10325,6 +10889,215 @@ mod tests {
         assert_eq!(narrow_w, 0.0);
     }
 
+    // --- FR-038 (T-038.4): чистые хелперы интеграции магнитной раскладки ----
+
+    /// Краткая форма прямоугольника для snap-тестов.
+    fn sr(x: f32, y: f32, w: f32, h: f32) -> SnapRect {
+        SnapRect { x, y, w, h }
+    }
+
+    /// drag_bbox: одиночный набор — rect ноды по origin; групповой — union.
+    #[test]
+    fn drag_bbox_unions_origins() {
+        let mut canvas = Canvas::default();
+        // Размеры заданы явно: drag_bbox берёт размеры из текущих нод
+        let mut a = Node::text("a", "", 10.0, 20.0);
+        a.width = 30.0;
+        a.height = 60.0;
+        canvas.nodes.push(a);
+        let mut wide = Node::text("b", "", 0.0, 0.0);
+        wide.x = 40.0;
+        wide.y = 5.0;
+        wide.width = 30.0;
+        wide.height = 60.0;
+        canvas.nodes.push(wide);
+        let origins = vec![(0usize, [1.0, 2.0]), (1usize, [3.0, 4.0])];
+        let bbox = drag_bbox(&canvas, &origins).expect("bbox");
+        assert_eq!((bbox.x, bbox.y), (1.0, 2.0));
+        assert_eq!((bbox.right(), bbox.bottom()), (33.0, 64.0));
+        // Битый индекс — None (снап не применяется)
+        assert!(drag_bbox(&canvas, &[(99, [0.0, 0.0])]).is_none());
+    }
+
+    /// snap_candidates: перемещаемые исключены (в т.ч. дети групп — они в
+    /// origins), группы попадают своим bbox.
+    #[test]
+    fn snap_candidates_exclude_moving_set() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("moving", "", 0.0, 0.0));
+        let mut group = Node::text("g", "", 0.0, 0.0);
+        group.node_type = "group".into();
+        group.x = 100.0;
+        group.width = 200.0;
+        canvas.nodes.push(group);
+        canvas.nodes.push(Node::text("other", "", 300.0, 0.0));
+        let candidates = snap_candidates(&canvas, &[0, 1, 2], &[0]);
+        assert_eq!(candidates.len(), 2, "moving исключён, группа и сосед — нет");
+        assert_eq!((candidates[0].x, candidates[0].w), (100.0, 200.0));
+        assert_eq!((candidates[1].x, candidates[1].w), (300.0, 260.0));
+    }
+
+    /// anchor_grid_delta: в допуске — дельта до ближайшей линии, за допуском
+    /// — 0; отрицательные координаты корректны.
+    #[test]
+    fn anchor_grid_delta_rules() {
+        assert_eq!(anchor_grid_delta(103.0, 20.0, 8.0), -3.0);
+        assert_eq!(anchor_grid_delta(117.0, 20.0, 8.0), 3.0);
+        assert_eq!(anchor_grid_delta(110.0, 20.0, 8.0), 0.0, "за допуском");
+        // Отрицательные координаты: −3 тянется к линии 0 (+3)
+        assert_eq!(anchor_grid_delta(-3.0, 20.0, 8.0), 3.0);
+        assert_eq!(anchor_grid_delta(-17.0, 20.0, 8.0), -3.0);
+    }
+
+    /// snap_with_anchor: BoundingBox — точный passthrough движка.
+    #[test]
+    fn snap_with_anchor_bounding_box_passthrough() {
+        let cfg = SnapConfig::default();
+        let candidates = [sr(160.0, 500.0, 50.0, 50.0)];
+        let outcome = snap_with_anchor(
+            sr(0.0, 0.0, 40.0, 40.0),
+            162.0,
+            0.0,
+            &candidates,
+            &cfg,
+            SnapAnchor::BoundingBox,
+        );
+        let direct = snap_move(sr(0.0, 0.0, 40.0, 40.0), 162.0, 0.0, &candidates, &cfg);
+        assert_eq!(outcome, direct);
+    }
+
+    /// snap_with_anchor Corner: левый-верхний угол тянется к пересечению
+    /// линий; ось за допуском не двигается.
+    #[test]
+    fn snap_with_anchor_corner_aligns_corner() {
+        let cfg = SnapConfig::default();
+        // Угол (3, 7): X до линии 0 (дельта -3 в допуске), Y до линии 0
+        // (дельта -7 в допуске 8) — угол встаёт на пересечение (0, 0)
+        let outcome = snap_with_anchor(
+            sr(3.0, 7.0, 43.0, 30.0),
+            0.0,
+            0.0,
+            &[],
+            &cfg,
+            SnapAnchor::Corner,
+        );
+        assert_eq!(outcome.dx, -3.0);
+        assert_eq!(outcome.dy, -7.0);
+        assert!(outcome.guides_x.is_empty() && outcome.guides_y.is_empty());
+        assert_eq!(outcome.source, SnapSource::Grid);
+        // Сетка выключена — anchor-grid молчит (п.4: anchor меняет только grid)
+        let no_grid = SnapConfig {
+            to_grid: false,
+            ..SnapConfig::default()
+        };
+        let outcome = snap_with_anchor(
+            sr(3.0, 7.0, 43.0, 30.0),
+            0.0,
+            0.0,
+            &[],
+            &no_grid,
+            SnapAnchor::Corner,
+        );
+        assert_eq!((outcome.dx, outcome.dy), (0.0, 0.0));
+    }
+
+    /// snap_with_anchor Center: центр bbox — к пересечению линий.
+    #[test]
+    fn snap_with_anchor_center_aligns_center() {
+        let cfg = SnapConfig::default();
+        // Центр (21.5, 15): до линий 20 — дельты -1.5/+5, обе в допуске
+        let outcome = snap_with_anchor(
+            sr(0.0, 0.0, 43.0, 30.0),
+            0.0,
+            0.0,
+            &[],
+            &cfg,
+            SnapAnchor::Center,
+        );
+        assert_eq!(outcome.dx, -1.5);
+        assert_eq!(outcome.dy, 5.0);
+    }
+
+    /// snap_with_anchor: арбитраж anchor-grid vs guide (п.11) — меньшая
+    /// |дельта| побеждает; проигравшая guide-ось линию не оставляет (п.9).
+    #[test]
+    fn snap_with_anchor_arbitrates_grid_vs_guide() {
+        let cfg = SnapConfig::default();
+        // Guide ближе (0.25 < 0.5 у grid; значения кратны 0.25 — точны в
+        // f32, дельты бит-в-бит): guide выигрывает, линия остаётся
+        let closer = [sr(100.75, 500.0, 50.0, 50.0)];
+        let outcome = snap_with_anchor(
+            sr(100.5, 0.0, 40.0, 40.0),
+            0.0,
+            0.0,
+            &closer,
+            &cfg,
+            SnapAnchor::Corner,
+        );
+        assert_eq!(outcome.dx, 0.25);
+        assert_eq!(outcome.guides_x, vec![100.75]);
+        assert_eq!(outcome.source, SnapSource::Guide);
+        // Grid ближе (0.5 < 1.5 у guide): grid выигрывает, линия гасится
+        let farther = [sr(102.0, 500.0, 50.0, 50.0)];
+        let outcome = snap_with_anchor(
+            sr(100.5, 0.0, 40.0, 40.0),
+            0.0,
+            0.0,
+            &farther,
+            &cfg,
+            SnapAnchor::Corner,
+        );
+        assert_eq!(outcome.dx, -0.5);
+        assert!(outcome.guides_x.is_empty());
+        assert_eq!(outcome.source, SnapSource::Grid);
+    }
+
+    /// snap_with_anchor: collision (п.15) — финальный кламп поверх
+    /// anchor-grid: движение останавливается на границе зазора.
+    #[test]
+    fn snap_with_anchor_collision_clamps_last() {
+        let cfg = SnapConfig {
+            collision_gap: 8.0,
+            ..SnapConfig::default()
+        };
+        // Движение вправо на 95: anchor-grid тянет угол к линии 100, но
+        // зона зазора кандидата (120−8) останавливает правый край на 112 →
+        // дельта 72
+        let candidate = [sr(120.0, 0.0, 40.0, 40.0)];
+        let outcome = snap_with_anchor(
+            sr(0.0, 0.0, 40.0, 40.0),
+            95.0,
+            0.0,
+            &candidate,
+            &cfg,
+            SnapAnchor::Corner,
+        );
+        assert_eq!(outcome.dx, 72.0);
+        assert!(outcome.guides_x.is_empty());
+        // Без collision anchor-grid дотянул бы до 100
+        let free = SnapConfig::default();
+        let outcome = snap_with_anchor(
+            sr(0.0, 0.0, 40.0, 40.0),
+            95.0,
+            0.0,
+            &candidate,
+            &free,
+            SnapAnchor::Corner,
+        );
+        assert_eq!(outcome.dx, 100.0);
+    }
+
+    /// nudge_step_world (п.22): экранные px → world делением на зум — шаг
+    /// «1 px экрана» одинаково выглядит на любом зуме; зум ≤ 0 — фолбэк.
+    #[test]
+    fn nudge_step_world_scales_with_zoom() {
+        assert_eq!(nudge_step_world(1.0, 2.0), 0.5);
+        assert_eq!(nudge_step_world(1.0, 0.5), 2.0);
+        assert_eq!(nudge_step_world(10.0, 1.0), 10.0);
+        assert_eq!(nudge_step_world(1.0, 0.0), 1.0);
+        assert_eq!(nudge_step_world(1.0, -2.0), 1.0);
+    }
+
     /// FR-037 MW1: паритет констант canvas-scene с canvas-render (метрики
     /// раскладки refit, зум viewport) и дефолтов файловой карточки MCP
     /// (crate::ui::DROP_CARD_*) — вынос не расшатывает синхронность.
@@ -10358,6 +11131,17 @@ mod tests {
         assert_eq!(canvas_scene::MAX_ZOOM, canvas_render::camera::MAX_ZOOM);
         assert_eq!(canvas_scene::DEFAULT_FILE_CARD_W, crate::ui::DROP_CARD_W);
         assert_eq!(canvas_scene::DEFAULT_FILE_CARD_H, crate::ui::DROP_CARD_H);
+        // FR-038: дефолты порогов zoom-адаптивной сетки core ↔ render —
+        // дублируются (зависимости core→render нет, ADR-0012), расхождение
+        // ловим паритетом
+        assert_eq!(
+            canvas_core::SNAP_SUB_ZOOM_DEFAULT,
+            canvas_render::grid::DEFAULT_SUB_ZOOM
+        );
+        assert_eq!(
+            canvas_core::SNAP_COARSE_ZOOM_DEFAULT,
+            canvas_render::grid::DEFAULT_COARSE_ZOOM
+        );
     }
 
     /// CR-010: оценка рядов тела с переносами — длинная строка даёт
