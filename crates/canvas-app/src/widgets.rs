@@ -15,7 +15,11 @@ use canvas_widgets::permissions::Permissions;
 use canvas_widgets::registry::{InstallOutcome, WidgetRegistry};
 use canvas_widgets::{HostToWidget, ThemeInfo, WidgetEvent, WidgetProps};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+// PathBuf — только Windows-хост (attach_host) и тесты; M8/W11: реестр
+// передаётся готовым, корень PathBuf больше не нужен на не-Windows
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Кулдаун пересоздания контроллера после сбоя, с (риски M5 §8).
@@ -86,17 +90,19 @@ pub struct WidgetManager {
 }
 
 impl WidgetManager {
-    /// Корень пакетов: `~/.canvasdesk/widgets` (план M5 §2 «Пути»);
-    /// M8/W3: backend состояния виджетов инъектируется (натив — SQLite
-    /// cache.db в shell; web — localStorage, W11); None — деградация без
-    /// состояния (bridge stateGet вернёт None, stateSet — no-op).
+    /// Корень пакетов задаётся реестром (M8/W11): натив — файловый реестр
+    /// над `~/.canvasdesk/widgets`; web — реестр в памяти (встроенные
+    /// пакеты из include_dir, tombstone — в памяти). Backend состояния
+    /// виджетов инъектируется (натив — SQLite cache.db в shell; web —
+    /// localStorage, W11); None — деградация без состояния (bridge
+    /// stateGet вернёт None, stateSet — no-op).
     pub fn new(
-        widgets_root: PathBuf,
+        registry: WidgetRegistry,
         dark: bool,
         state_store: Option<Box<dyn canvas_core::WidgetStateBackend>>,
     ) -> Self {
         Self {
-            registry: WidgetRegistry::new(widgets_root),
+            registry,
             states: HashMap::new(),
             last_capture: HashMap::new(),
             cooldown_until: HashMap::new(),
@@ -698,6 +704,7 @@ fn content_of(node: &[f32; 4]) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn temp_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("cd_widgets_mgr_{tag}_{}", std::process::id()));
@@ -708,12 +715,14 @@ mod tests {
 
     fn manager(tag: &str) -> WidgetManager {
         // M8/W3: открытие store — работа вызывающего (натив — SQLite
-        // cache.db; тест открывает его явно, как main.rs)
+        // cache.db; тест открывает его явно, как main.rs). W11: реестр —
+        // файловый (натив-сценарий); Memory-режим покрыт тестами registry.
         let root = temp_root(tag);
         let state_store = canvas_shell::WidgetStateStore::open(&root)
             .ok()
             .map(|store| Box::new(store) as Box<dyn canvas_core::WidgetStateBackend>);
-        let mut m = WidgetManager::new(root.join("widgets"), true, state_store);
+        let mut m =
+            WidgetManager::new(WidgetRegistry::new(root.join("widgets")), true, state_store);
         m.init_registry();
         m
     }

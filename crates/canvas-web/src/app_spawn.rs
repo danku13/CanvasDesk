@@ -3,7 +3,7 @@
 //! обёртки main.rs по составу (§3.1): тот же `App`, свой платформенный
 //! слой — дублирования UI-логики нет.
 //!
-//! Состав web-сервисов (карта замен §3.2; W6 актуализировал storage):
+//! Состав web-сервисов (карта замен §3.2; W6 актуализировал storage, W11 — виджеты):
 //! - storage: `OpfsStorage` (зеркало + фоновая запись в OPFS, §4) —
 //!   дефолт и фолбэк; `?stress` и отказ OPFS — `MemStorage` (без
 //!   сохранения); после «Открыть с диска» — `FsAccessStorage` (диск);
@@ -15,7 +15,9 @@
 //! - clipboard: `WebClipboard` — navigator.clipboard + кэш (W5);
 //! - config: TOML из localStorage (`canvasdesk.config`); запись обратно
 //!   настроек — W12 (read-only в W6);
-//! - widget_state: `None` (localStorage — W11);
+//! - widget_state: `WebWidgetState` — localStorage (W11);
+//! - виджеты: реестр встроенных пакетов в памяти (`App::init_widgets`,
+//!   W11), тик LOD — setInterval (W11); live-хост — волна 2 (§5);
 //! - renderer: `SpawnLocalRendererLaunch` — async-init через
 //!   `spawn_local` (§3.4), результат в слот, побудка кадром.
 //!
@@ -26,9 +28,6 @@
 //! Платформенные различия против натива (осознанные, план §6.1):
 //! - нет single-instance/exit-листенера/десктоп-монитора/shell-шины/
 //!   MCP-pipe (натив-Windows обвязка — не для web);
-//! - нет `init_widgets` (реестр материализует пакеты через std::fs —
-//!   решение OPFS/память в W11) и тик-потока виджетов (`std::thread`
-//!   недоступен; gloo-interval — W11);
 //! - файловые жесты (открыть/экспорт/недавние/drop) — DOM-панель и
 //!   DOM-листенеры (W6, §4.2), drag-превью T9 на web недоступно.
 
@@ -131,13 +130,19 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     }
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
+    // M5 (T20-F): события host'а виджетов (WidgetEvent) — тем же паттерном,
+    // что у сервисов W3; W11: Tick из setInterval (widgets_web) тоже идёт
+    // сюда и будит цикл как на нативе.
     // Drag-drop (T9): winit web не даёт DroppedFile (план §7) — заглушка-
     // отправитель; приём файлов — DOM-drop (W6) шлёт OpenScene напрямую.
+    let widget_sender: canvas_widgets::WidgetEventSender = {
+        let proxy = proxy.clone();
+        Arc::new(move |event| {
+            let _ = proxy.send_event(AppEvent::Widget(event));
+        })
+    };
     let drag_sender: Arc<dyn Fn(canvas_core::dragdrop::DragEvent) + Send + Sync> =
         Arc::new(|_event: canvas_core::dragdrop::DragEvent| {});
-    // Виджеты (M5): live-хост — волна 2 (§5); тик-таймер — W11
-    let widget_sender: canvas_widgets::WidgetEventSender =
-        Arc::new(|_event: canvas_widgets::WidgetEvent| {});
     // Поиск (T14): MemSearch — ответы будят цикл через proxy (паттерн
     // сервисов W3; тот же AppEvent::Search, что у нативного worker'а).
     // W7: DEBUG-оракулы дыма — «поисковый backend ответил hits=N».
@@ -155,7 +160,7 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     }));
     // W6: конфиг — TOML из localStorage (read-only; запись обратно — W12)
     let settings = load_settings();
-    let app = App::new(
+    let mut app = App::new(
         scene,
         // W10: WebImageThumbnailProvider (createImageBitmap → атлас)
         Box::new(canvas_core::NoopThumbs),
@@ -164,17 +169,23 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
         // W6: каталог кэша (тамбнейлы — W10); сейчас — нет кэша
         None,
         drag_sender,
-        widget_sender,
+        // W11: клон — sender ещё понадобится install_tick (тики setInterval)
+        widget_sender.clone(),
         Box::new(canvas_core::NoopWatch),
         Box::new(search_service),
         // W5 (§3.2): navigator.clipboard за трейтом — Ctrl+C/X/V живут
         Box::new(WebClipboard::new()),
-        // W11: widget_state в localStorage
-        None,
+        // W11 (§3.2): widget_state — localStorage за трейтом core
+        Some(Box::new(crate::widgets_web::web::WebWidgetState::new())),
         false,
         // W4 (§3.4): async-init Renderer — spawn_local + слот доставки
         Box::new(SpawnLocalRendererLaunch),
     );
+    // W11 (§5): реестр виджетов — как на нативе (в памяти: встроенные
+    // пакеты из include_dir; выбор режима — в App::new по каталогу кэша)
+    app.init_widgets();
+    // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
+    crate::widgets_web::web::install_tick(widget_sender);
     // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop
     crate::toolbar::install(proxy.clone());
     crate::drop_files::install(proxy);
