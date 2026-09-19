@@ -157,6 +157,55 @@ pub fn sanitize_canvas_name(raw: &str) -> Option<String> {
     }
 }
 
+/// Санитизация имени произвольного файла (M8/W10, DOM-drop): те же правила
+/// безопасности, что у [`sanitize_canvas_name`], но расширение сохраняется
+/// как есть и суффикс не дописывается (картинки идут в OPFS `files/` для
+/// превью WebImageThumbnailProvider, план §4.3).
+pub fn sanitize_file_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > 80 {
+        return None;
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed == ".." {
+        return None;
+    }
+    if trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    if trimmed.starts_with('.') || trimmed.ends_with('.') {
+        return None;
+    }
+    let safe = trimmed
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.'));
+    if !safe {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Кандидаты имени при коллизии (M8/W10): «имя.ext», «имя-1.ext»,
+/// «имя-2.ext», … (без расширения — суффикс в конец; ведущая точка не
+/// стем: «.gitignore» → «.gitignore-1»). Первый незанятый выбирает
+/// вызывающий: проверка наличия на web асинхронная (get_file_handle →
+/// NotFoundError = свободно), поэтому чистая функция отдаёт список.
+pub fn file_name_candidates(name: &str, max: usize) -> Vec<String> {
+    // Стем/расширение: последняя точка (расширение — не пусто и не всё имя)
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
+        _ => (name, None),
+    };
+    let mut out = Vec::with_capacity(max);
+    out.push(name.to_owned());
+    for n in 1..max as u32 {
+        out.push(match ext {
+            Some(ext) => format!("{stem}-{n}.{ext}"),
+            None => format!("{stem}-{n}"),
+        });
+    }
+    out
+}
+
 /// Разобрать строку запроса (`location.search`, с ведущим `?` или без).
 /// Неизвестные ключи игнорируются; битое число — Err с текстом (caller
 /// пишет warn и продолжает без параметра). `log` — мягкий параметр:
@@ -344,5 +393,37 @@ mod tests {
         assert_eq!(params.canvas.as_deref(), Some("демо.canvas"));
         assert_eq!(params.stress, Some(100));
         assert_eq!(params.log_level, Some(LogLevel::Debug));
+    }
+
+    /// W10: имя произвольного файла — расширение сохраняется, суффикс
+    /// не дописывается; опасные имена отклоняются целиком.
+    #[test]
+    fn file_name_sanitize_keeps_extension() {
+        use super::sanitize_file_name;
+        assert_eq!(
+            sanitize_file_name("фото лето.png").as_deref(),
+            Some("фото лето.png")
+        );
+        assert_eq!(sanitize_file_name(" a.PNG ").as_deref(), Some("a.PNG"));
+        // Опасные — None (как у канвасов)
+        assert_eq!(sanitize_file_name("../etc/passwd"), None);
+        assert_eq!(sanitize_file_name("a/b.png"), None);
+        assert_eq!(sanitize_file_name(".hidden"), None);
+        assert_eq!(sanitize_file_name("name."), None);
+        assert_eq!(sanitize_file_name("a?b.png"), None);
+        assert_eq!(sanitize_file_name(""), None);
+    }
+
+    /// W10: коллизии имён при приёме в OPFS — суффикс -N, расширение
+    /// сохраняется; ведущая точка — часть имени (не стем).
+    #[test]
+    fn file_name_candidates_avoid_collisions() {
+        use super::file_name_candidates;
+        let c = file_name_candidates("pic.png", 3);
+        assert_eq!(c, vec!["pic.png", "pic-1.png", "pic-2.png"]);
+        let c = file_name_candidates("notes", 2);
+        assert_eq!(c, vec!["notes", "notes-1"]);
+        let c = file_name_candidates(".gitignore", 2);
+        assert_eq!(c, vec![".gitignore", ".gitignore-1"]);
     }
 }

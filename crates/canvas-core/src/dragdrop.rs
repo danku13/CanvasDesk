@@ -6,6 +6,8 @@
 //! — единый потребитель. Здесь только данные; COM-механика остаётся в
 //! shell (`dragdrop::com`, cfg(windows)).
 
+use std::path::PathBuf;
+
 /// Данные, снятые с источника перетаскивания (T9).
 ///
 /// `HdropBytes` — сырой payload платформы (на Windows — CF_HDROP целиком,
@@ -17,6 +19,11 @@ pub enum DragData {
     /// Сырые байты списка файлов платформы (CF_HDROP: заголовок DROPFILES
     /// + список файлов), файлы/папки из Explorer.
     HdropBytes(Vec<u8>),
+    /// Готовые пути файлов (M8/W10): платформа, у которой пути уже
+    /// разобраны (web: файлы DOM-drop'а заранее материализуются в OPFS —
+    /// «/files/<имя>»; план §4.3). Папок в списке нет — expand уже сделан
+    /// или не нужен.
+    Paths(Vec<PathBuf>),
     /// Текст или URL (CF_UNICODETEXT).
     Text(String),
     /// Поддерживаемых форматов нет — эффект DROPEFFECT_NONE.

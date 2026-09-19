@@ -3,11 +3,12 @@
 //! обёртки main.rs по составу (§3.1): тот же `App`, свой платформенный
 //! слой — дублирования UI-логики нет.
 //!
-//! Состав web-сервисов (карта замен §3.2; W6 актуализировал storage, W11 — виджеты):
+//! Состав web-сервисов (карта замен §3.2; W6 — storage, W11 — виджеты, W10 — превью):
 //! - storage: `OpfsStorage` (зеркало + фоновая запись в OPFS, §4) —
 //!   дефолт и фолбэк; `?stress` и отказ OPFS — `MemStorage` (без
 //!   сохранения); после «Открыть с диска» — `FsAccessStorage` (диск);
-//! - thumbs: `NoopThumbs` (WebImageThumbnailProvider — W10);
+//! - thumbs: `WebImageThumbs` (W10) — createImageBitmap → OffscreenCanvas
+//!   downscale → RGBA в существующий thumbs-атлас;
 //! - watcher: `NoopWatch` — событий ФС нет, перечитывание по жесту
 //!   «Перезагрузить» (§3.2, §4.2);
 //! - search: `MemSearch` — индекс в памяти, ответы через тот же
@@ -162,11 +163,13 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     let settings = load_settings();
     let mut app = App::new(
         scene,
-        // W10: WebImageThumbnailProvider (createImageBitmap → атлас)
-        Box::new(canvas_core::NoopThumbs),
+        // W10 (§3.2): превью картинок — createImageBitmap → атлас;
+        // результаты будят цикл через AppEvent::ThumbsReady
+        Box::new(crate::web_thumbs::WebImageThumbs::new(proxy.clone())),
         settings,
         None,
-        // W6: каталог кэша (тамбнейлы — W10); сейчас — нет кэша
+        // W6: каталог кэша; web без SQLite — None = реестр виджетов
+        // в памяти (W11) и превью без дискового кэша (W10, декод дешёв)
         None,
         drag_sender,
         // W11: клон — sender ещё понадобится install_tick (тики setInterval)

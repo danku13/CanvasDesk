@@ -54,6 +54,7 @@ web-sys = { workspace = true, features = [
     "StorageManager",
     "Storage",
     "FileSystemDirectoryHandle",
+    "FileSystemGetDirectoryOptions",
     "FileSystemGetFileOptions",
     "FileSystemFileHandle",
     "FileSystemHandle",
@@ -77,6 +78,12 @@ web-sys = { workspace = true, features = [
     "DataTransfer",
     "DataTransferItemList",
     "DataTransferItem",
+    # W10 (§6): превью картинок — createImageBitmap → OffscreenCanvas
+    # downscale → RGBA (существующий thumbs-атлас render)
+    "ImageBitmap",
+    "ImageData",
+    "OffscreenCanvas",
+    "OffscreenCanvasRenderingContext2d",
 ] }
 
 [dev-dependencies]
