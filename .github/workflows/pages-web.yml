@@ -1,0 +1,107 @@
+name: Pages (web + docs)
+
+# M8/W12 (wasm-port §6, задача W12 «Полировка и деплой»): публикация сайта
+# GitHub Pages — веб-версия canvas-web по пути /app + Jekyll-сборка
+# документов (user-docs и прочие .md из корня — та же стандартная сборка
+# Pages, что была у «Deploy from a branch: main / (root)»; канонические
+# URL user-docs/*.html сохраняются, Pages-workflow ЗАМЕНЯЕТ branch-деплой —
+# снапшот сайта = один артефакт: доки + /app).
+#
+# Включение (один раз, руками): Settings → Pages → Source: «GitHub Actions»
+# (при прежнем «Deploy from a branch» deploy-pages завершится ошибкой —
+# инструкция в README «Веб-версия»). Частный репозиторий: Pages доступен
+# на планах Pro/Team/Enterprise.
+#
+# Сборка web: scripts/web_bundle.sh — trunk 0.21.14 --release
+# (wasm-bindgen-cli 0.2.127 = Cargo.lock; prebuilt-тарбалл отдаёт 404,
+# ставим cargo install) + wasm-opt -Oz (binaryen 125) + отчёт о размере
+# бандла в лог и $GITHUB_STEP_SUMMARY (§8.8: ≤8 МБ raw / ≤4 МБ brotli,
+# загрузка ≤5 с на 25 Мбит/с).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/canvas-web/**"
+      - "crates/canvas-core/**"
+      - "crates/canvas-render/**"
+      - "crates/canvas-scene/**"
+      - "crates/canvas-app/**"
+      - "crates/canvas-widgets/**"
+      - "user-docs/**"
+      - "docs/**"
+      - "*.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/*/Cargo.toml"
+      - "scripts/web_bundle.sh"
+      - ".github/workflows/pages-web.yml"
+  workflow_dispatch: # ручной запуск (первое включение, перевыпуск)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages" # один деплой; новый пуш отменяет незавершённый
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: web /app + docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+
+      # Jekyll ДО восстановления cargo-кэша и сборки: source-каталог не
+      # должен содержать target/ (Jekyll копирует всё не исключённое,
+      # rust-cache восстанавливает target/ на следующем шаге).
+      - name: Jekyll-сборка документов (user-docs и .md из корня)
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./
+          destination: ./_site
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # trunk: предсобранный бинарник (та же версия, что Trunk.toml)
+      - name: Установить trunk 0.21.14
+        run: |
+          curl -sL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | sudo tar -xz -C /usr/local/bin
+          trunk --version
+
+      # wasm-bindgen-cli: версия обязана совпадать с крейтом в Cargo.lock
+      # (Trunk.toml); официальный prebuilt-тарбалл отдаёт 404 — cargo install.
+      - name: Установить wasm-bindgen-cli 0.2.127
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      - name: Установить wasm-opt (binaryen 125) и brotli
+        run: |
+          curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_125/binaryen-version_125-x86_64-linux.tar.gz \
+            | sudo tar -xz -C /usr/local/bin --strip-components=1 binaryen-version_125/bin/wasm-opt
+          sudo apt-get install -y -q brotli
+          wasm-opt --version
+
+      # База public-url = имя репозитория (project-pages): /CanvasDesk/app/
+      - name: Сборка web-бандла (trunk release + wasm-opt -Oz) в /app
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          BASE="/$(basename "$GITHUB_REPOSITORY")/app"
+          scripts/web_bundle.sh --public-url "$BASE/" --dist _site/app
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

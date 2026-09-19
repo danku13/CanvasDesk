@@ -47,6 +47,9 @@ jobs:
   # Расширение FR-037/MW4: MCP-слой целиком (canvas-scene, canvas-mcp,
   # canvas-mcp-headless) — компиляция здесь, исполнение тестов и реальная
   # MCP-сессия — локально scripts/mcp_wasm_gate.sh (wasmtime, прецедент ADR-0011).
+  # Расширение M8/W12 (wasm-port §6.1 п.4): canvas-web — продуктовый
+  # web-слой в wasm-гейте (компиляция здесь = ступень 1 scripts/wasm_gate.sh;
+  # бандл/деплой — Pages-workflow pages-web.yml, там же размер в логе).
   wasm-check:
     name: wasm-check (wasm32-unknown-unknown)
     runs-on: ubuntu-latest
@@ -56,8 +59,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: check ядра и MCP-слоя под wasm (core/render/widgets/mcp/scene/headless)
-        run: cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-scene -p canvas-mcp-headless
+      - name: check ядра, MCP-слоя и web-слоя под wasm (core/render/widgets/mcp/scene/headless/web)
+        run: cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-scene -p canvas-mcp-headless -p canvas-web
 
   # CP0 (волна 0.1 продуктового роадмапа, ADR-0008): лицензионная
   # чистота дерева — гейт на каждый пуш/PR. cargo-deny проверяет

@@ -133,6 +133,48 @@ args = `["mcp"]`); при недоступном pipe посредник сам 
 стек одной командой (`--no-spawn` — отключить). Отдельный `canvasdesk-mcp.exe`
 сохраняется для совместимости.
 
+### Веб-версия (wasm, M8)
+
+Тот же движок (canvas-core/render/scene, WebGPU) собирается в браузерное
+wasm-приложение — крейт `canvas-web` (план
+[docs/plans/wasm-port.md](docs/plans/wasm-port.md)): ввод/редактирование,
+поиск, браузерное хранение (OPFS-дефолт, «Открыть с диска…», экспорт
+`.canvas`). Браузер — Chromium (Chrome/Edge: нужен WebGPU); Firefox —
+экспериментально (§8.3 — бонус, не таргет).
+
+Локальный запуск (dev-сервер с hot-rebuild; детали по платформам —
+[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)):
+
+```powershell
+rustup target add wasm32-unknown-unknown
+cargo install trunk --version 0.21.14 --locked
+cd crates\canvas-web
+trunk serve --open          # http://127.0.0.1:8080
+```
+
+`wasm-bindgen-cli` trunk скачает сам; его версия обязана совпадать с
+Cargo.lock (0.2.127) — при ошибке авто-скачивания (404):
+`cargo install wasm-bindgen-cli --version 0.2.127 --locked`.
+
+URL-параметры: `?canvas=имя` (канвас из OPFS), `?stress=5000`
+(нагрузочная сцена в памяти), `?log=debug` (debug-лог в консоль).
+Файлы из `target/dist` открывайте только через HTTP (`trunk serve`),
+не `file://` — wasm-модуль не загрузится.
+
+Релизный бандл + оптимизация (`wasm-opt -Oz`) + отчёт о размере:
+`scripts/web_bundle.sh` (Linux/WSL; цель §8.8 — ≤8 МБ raw / ≤4 МБ brotli).
+
+Публикация на GitHub Pages — workflow
+[.github/workflows/pages-web.yml](.github/workflows/pages-web.yml):
+веб-версия по пути `/app` + Jekyll-сборка документации (user-docs) в том
+же артефакте. Включение (один раз): Settings → Pages → Source:
+«GitHub Actions» (branch-деплой заменяется workflow'ом; канонические
+URL `user-docs/*.html` сохраняются). URL приложения:
+`https://danku13.github.io/CanvasDesk/app/`. Нюанс: в частном репозитории
+Pages доступен на планах Pro/Team/Enterprise — иначе используйте локальную
+сборку. Ограничения v1 — [wasm-port §9](docs/plans/wasm-port.md):
+CJK-IME нет, WebGL2-фолбэка нет.
+
 ## Горячие клавиши
 
 | Ввод | Действие |
