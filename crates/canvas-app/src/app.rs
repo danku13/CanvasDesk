@@ -32,9 +32,11 @@ use crate::settings_ui::{
     DROPDOWN_ROW_H, MODAL_ROW_LABEL_W, SETTINGS_TABS,
 };
 // FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
-// раскладки; кламп collision публичен для live-клампа кадра драга (п.15)
+// раскладки; кламп collision публичен для live-клампа кадра драга (п.15);
+// T-038.5: batch-операции выделения (п.16-17) — те же чистые функции
 use crate::snap::{
-    clamp_collision, effective_grid_step, snap_move, SnapConfig, SnapOutcome, SnapRect, SnapSource,
+    align_centers, clamp_collision, distribute_evenly, effective_grid_step, snap_move, AlignAxis,
+    SnapConfig, SnapOutcome, SnapRect, SnapSource,
 };
 use crate::template_ui;
 use crate::template_ui::{
@@ -42,14 +44,14 @@ use crate::template_ui::{
     row_of_ordinal as template_row_of_ordinal, split_two_lines, PanelRow, WheelHit,
 };
 use crate::ui::{
-    button_rect, canvas_menu_label, drag_origins, focus_seed_of, help_button_rect,
-    hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
-    next_free_id, nodes_in_rect, paste_nodes, plan_group_around, plan_group_around_nodes,
-    plan_group_at, point_in_rect, reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at,
-    submenu_origin_next_to, submenu_rect, theme_button_rect, toggle_selection_with_primary,
-    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, PastePlacement, Submenu,
-    SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
-    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
+    button_rect, canvas_menu_label, canvas_menu_visible_items, drag_origins, focus_seed_of,
+    help_button_rect, hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect,
+    menu_rect_for, next_free_id, nodes_in_rect, paste_nodes, plan_group_around,
+    plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
+    select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
+    toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
+    PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION, DUPLICATE_OFFSET, MENU_LABEL_X,
+    MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
 // FR-037 MW1: line_kind/NumiLineKind/ExprLineResults/ExprResults и whatif-
@@ -380,6 +382,47 @@ fn nudge_step_world(screen_px: f32, zoom: f32) -> f32 {
     } else {
         screen_px
     }
+}
+
+/// FR-038 п.16 (T-038.5): ось «Распределить равномерно» по контексту
+/// выделения. Правило (детерминизм п.20): ось с БОЛЬШИМ размахом центров —
+/// ряд (размах по X больше) распределяется по X, колонна — по Y; равенство
+/// размахов — X. Пары с выравниванием: после «Выровнять по горизонтали»
+/// (ряд) распределение идёт по X, после «по вертикали» — по Y. Решение в
+/// пользу одного пункта меню (вместо двух) — компактность меню и
+/// предсказуемая связка с только что выполненным выравниванием; правило
+/// выводится из текущей раскладки, вопрос владельцу — на приёмке FR-038.
+fn distribute_axis_for(rects: &[SnapRect]) -> AlignAxis {
+    if rects.len() < 2 {
+        return AlignAxis::X;
+    }
+    let span = |axis: AlignAxis| -> f32 {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for rect in rects {
+            let c = match axis {
+                AlignAxis::X => rect.cx(),
+                AlignAxis::Y => rect.cy(),
+            };
+            lo = lo.min(c);
+            hi = hi.max(c);
+        }
+        hi - lo
+    };
+    if span(AlignAxis::Y) > span(AlignAxis::X) {
+        AlignAxis::Y
+    } else {
+        AlignAxis::X
+    }
+}
+
+/// Род batch-операции выделения (FR-038 п.16, T-038.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchOp {
+    /// «Выровнять…» — ряд/колонна по центрам (общая ось из пункта меню).
+    Align,
+    /// «Распределить равномерно» — равные зазоры вдоль оси раскладки
+    /// (ось из контекста выделения, [`distribute_axis_for`]).
+    Distribute,
 }
 
 // Буфер обмена ОС (T7, arboard) — M8/W3: за трейтом `ClipboardBackend`
@@ -2924,6 +2967,157 @@ impl App {
         self.request_redraw();
     }
 
+    // --- FR-038 (T-038.5): batch-операции выравнивания (п.16-17) ------------
+
+    /// Видимость batch-пунктов в меню канваса (п.16: ТОЛЬКО при N≥3
+    /// выделенных нодах; иначе скрыты).
+    fn align_menu_visible(&self) -> bool {
+        self.selected_nodes.len() >= ALIGN_MIN_SELECTION
+    }
+
+    /// Набор batch-операции (п.16): (юниты, ведомые по юнитам).
+    ///
+    /// Юнит — выделенная нода, НЕ являющаяся ребёнком другой выделенной
+    /// группы; rect юнита — собственный bbox ноды (группа — её рамка:
+    /// семантика «группа — обычная нода», как у кандидатов снапа, п.14).
+    /// Ведомые — дети выделенных групп (механизм групп FR-012: дети следуют
+    /// за родителем, как в `drag_origins`): прямой ребёнок юнита-группы и
+    /// транзитивно дети выделенных групп среди ведомых — все с дельтой
+    /// своего верхнего выделенного предка; ребёнок НЕвыделенной группы не
+    /// двигается (v1-семантика drag без рекурсии в модель). Дубль ведомого
+    /// (ребёнок двух выделенных групп) закрепляется за первым родителем
+    /// в порядке выделения (детерминизм п.20). Чистое чтение модели.
+    fn align_units(&self) -> (Vec<(usize, SnapRect)>, Vec<Vec<usize>>) {
+        let canvas = &self.scene.canvas;
+        let mut selection = self.selected_nodes.clone();
+        selection.sort_unstable();
+        selection.dedup();
+        let is_group = |index: usize| {
+            canvas
+                .nodes
+                .get(index)
+                .is_some_and(|node| node.kind() == NodeKind::Group)
+        };
+        // Прямые дети выделенных групп — не самостоятельные юниты
+        let mut following: Vec<usize> = Vec::new();
+        for &index in &selection {
+            if is_group(index) {
+                for child in canvas_core::group_children(canvas, index) {
+                    if !following.contains(&child) {
+                        following.push(child);
+                    }
+                }
+            }
+        }
+        let units: Vec<(usize, SnapRect)> = selection
+            .iter()
+            .filter(|index| !following.contains(index))
+            .filter_map(|&index| {
+                canvas.nodes.get(index).map(|node| {
+                    (
+                        index,
+                        SnapRect {
+                            x: node.x,
+                            y: node.y,
+                            w: node.width,
+                            h: node.height,
+                        },
+                    )
+                })
+            })
+            .collect();
+        // Ведомые по юнитам: обход от юнита — прямые дети группы-юнита +
+        // дети выделенных групп среди ведомых (та же дельта, что у предка)
+        let mut followers: Vec<Vec<usize>> = Vec::with_capacity(units.len());
+        for (unit_index, _) in &units {
+            let mut children: Vec<usize> = Vec::new();
+            let mut queue: Vec<usize> = if is_group(*unit_index) {
+                canvas_core::group_children(canvas, *unit_index)
+            } else {
+                Vec::new()
+            };
+            while let Some(child) = queue.pop() {
+                if child == *unit_index || children.contains(&child) {
+                    continue;
+                }
+                children.push(child);
+                if selection.contains(&child) && is_group(child) {
+                    queue.extend(canvas_core::group_children(canvas, child));
+                }
+            }
+            followers.push(children);
+        }
+        (units, followers)
+    }
+
+    /// FR-038 п.16-17 (T-038.5): применить batch-операцию к выделению.
+    ///
+    /// ОДНА undo-операция независимо от числа нод (п.17): один `push_undo`
+    /// (снапшот «до») непосредственно перед мутациями — НЕ pending_undo-
+    /// модель драга. Перемещения — через `scene.move_node` (spatial-индекс
+    /// обновляется на каждую ноду, паттерн nudge/delete_selected);
+    /// `mark_dirty` — за ним автосейв. Ничего не сдвинулось — без
+    /// undo-шага (паттерн `finish_interaction_undo`: пустых шагов нет).
+    /// `axis: None` — только для распределения: ось выводится из контекста
+    /// выделения ([`distribute_axis_for`], решение об одной кнопке меню).
+    fn run_batch_op(&mut self, op: BatchOp, axis: Option<AlignAxis>) {
+        // Страховка: пункты меню скрыты при N<3 — команды не доходят
+        if self.selected_nodes.len() < ALIGN_MIN_SELECTION {
+            return;
+        }
+        let (units, followers) = self.align_units();
+        if units.len() < 2 {
+            // Например, выделение «группа + её дети»: самостоятельный юнит
+            // один — выравнивать/распределять нечего (п.16 про N≥3 нод)
+            return;
+        }
+        let mut rects: Vec<SnapRect> = units.iter().map(|(_, rect)| *rect).collect();
+        let axis = match axis {
+            Some(axis) => axis,
+            None => {
+                debug_assert!(
+                    matches!(op, BatchOp::Distribute),
+                    "авто-ось — только у распределения"
+                );
+                distribute_axis_for(&rects)
+            }
+        };
+        match op {
+            BatchOp::Align => align_centers(&mut rects, axis),
+            BatchOp::Distribute => distribute_evenly(&mut rects, axis),
+        }
+        // Дельты юнитов: новая позиция минус старая (x/y меняются, w/h нет)
+        let deltas: Vec<[f32; 2]> = units
+            .iter()
+            .zip(&rects)
+            .map(|((_, old), new)| [new.x - old.x, new.y - old.y])
+            .collect();
+        if deltas.iter().all(|[dx, dy]| *dx == 0.0 && *dy == 0.0) {
+            return; // раскладка уже такая — без пустого undo-шага
+        }
+        // План перемещений: юниты + их ведомые (дельта родителя); дубль
+        // ведомого двух юнитов — первый в порядке юнитов (детерминизм п.20)
+        let mut moves: Vec<(usize, [f32; 2])> = Vec::new();
+        for (u, ((index, _), delta)) in units.iter().zip(&deltas).enumerate() {
+            moves.push((*index, *delta));
+            for &child in &followers[u] {
+                if !moves.iter().any(|(moved, _)| moved == &child) {
+                    moves.push((child, *delta));
+                }
+            }
+        }
+        // ОДИН undo-шаг на всю batch-операцию (п.17, FR-006)
+        self.push_undo();
+        for (index, [dx, dy]) in moves {
+            if let Some(node) = self.scene.canvas.nodes.get(index) {
+                let (x, y) = (node.x, node.y);
+                self.scene.move_node(index, x + dx, y + dy);
+            }
+        }
+        self.scene.mark_dirty();
+        self.request_redraw();
+    }
+
     /// Отменить последнее действие (FR-006, Ctrl+Z): модель «до» из
     /// undo-стека, текущее состояние — в redo.
     fn undo_action(&mut self) {
@@ -5133,14 +5327,17 @@ impl App {
     /// Оверлей контекстного меню пустого канваса (T7): фон, подписи.
     /// Screen-space — логические px, константный читаемый размер при любом
     /// зуме (уточнение владельца). Меню ноды/связи заменены палитрой.
+    /// FR-038 (T-038.5): batch-пункты выравнивания — хвост меню, видны
+    /// только при N≥3 выделенных нодах (единый список с хит-тестом).
     fn canvas_menu_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
         let Some(menu) = &self.menu else {
             return (instances, texts);
         };
+        let items = canvas_menu_visible_items(self.align_menu_visible());
         let palette = ThemeColors::from_theme(self.settings.theme);
-        let [x, y, w, h] = menu_rect_for(menu.origin, CANVAS_MENU_ITEMS.len());
+        let [x, y, w, h] = menu_rect_for(menu.origin, items.len());
         instances.push(CardInstance {
             pos: [x, y],
             size: [w, h],
@@ -5150,8 +5347,8 @@ impl App {
         });
         // Hover-подсветка пункта (аффорданс — как строки палитры/поиска:
         // интерактивный элемент отвечает на курсор)
-        let hovered_item = menu_item_at_for(menu.origin, self.cursor, CANVAS_MENU_ITEMS.len());
-        for (i, item) in CANVAS_MENU_ITEMS.iter().enumerate() {
+        let hovered_item = menu_item_at_for(menu.origin, self.cursor, items.len());
+        for (i, item) in items.iter().enumerate() {
             let rect = menu_item_rect(menu.origin, i);
             if hovered_item == Some(i) {
                 instances.push(CardInstance {
@@ -8170,12 +8367,12 @@ impl App {
                         self.request_redraw();
                         return;
                     }
-                    // 3. Пункт или паддинг базового меню
+                    // 3. Пункт или паддинг базового меню (список — тот же,
+                    // что в отрисовке: batch-пункты видны только при N≥3)
                     if let Some(menu) = self.menu.take() {
-                        if let Some(i) =
-                            menu_item_at_for(menu.origin, self.cursor, CANVAS_MENU_ITEMS.len())
-                        {
-                            match CANVAS_MENU_ITEMS[i] {
+                        let items = canvas_menu_visible_items(self.align_menu_visible());
+                        if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
+                            match items[i] {
                                 CanvasMenuItem::NewGroup => {
                                     let center = self.viewport_center_world();
                                     let mut group = plan_group_at(&self.scene.canvas, center);
@@ -8291,6 +8488,24 @@ impl App {
                                     } else {
                                         self.enter_whatif_mode();
                                     }
+                                }
+                                // FR-038 п.16-17 (T-038.5): batch-операции
+                                // выделения — ОДНА undo-операция на все ноды;
+                                // хоткеи не назначаются (F1 HOTKEYS не трогаем,
+                                // кандидат — на приёмку FR-038)
+                                CanvasMenuItem::AlignHorizontal => {
+                                    // ряд: общая ось Y (центры на одной горизонтали)
+                                    self.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+                                }
+                                CanvasMenuItem::AlignVertical => {
+                                    // колонна: общая ось X (центры на одной вертикали)
+                                    self.run_batch_op(BatchOp::Align, Some(AlignAxis::X));
+                                }
+                                CanvasMenuItem::DistributeEvenly => {
+                                    // ось раскладки — из контекста выделения
+                                    // (решение T-038.5: одна кнопка, правило в
+                                    // distribute_axis_for)
+                                    self.run_batch_op(BatchOp::Distribute, None);
                                 }
                             }
                             self.request_redraw();
@@ -10266,9 +10481,14 @@ impl App {
     }
 
     /// Rect открытого меню канваса (логические px) — airspace для виджетов.
+    /// Число пунктов — то же видимое множество, что в отрисовке/хит-тесте
+    /// (batch-пункты FR-038 добавляют высоту только при N≥3).
     fn menu_open_rect(&self) -> Option<[f32; 4]> {
         let menu = self.menu.as_ref()?;
-        Some(menu_rect_for(menu.origin, CANVAS_MENU_ITEMS.len()))
+        Some(menu_rect_for(
+            menu.origin,
+            canvas_menu_visible_items(self.align_menu_visible()).len(),
+        ))
     }
 }
 
@@ -12340,5 +12560,282 @@ mod tests {
             .load(&PathBuf::from("disk.canvas"))
             .expect("сохранение ушло в подменённое хранилище");
         assert_eq!(saved.nodes.len(), 1);
+    }
+
+    // --- FR-038 (T-038.5): batch-операции выравнивания (п.16-17) ------------
+
+    /// distribute_axis_for: ряд (размах центров по X больше) → X, колонна → Y,
+    /// равенство размахов и меньше двух элементов → X (детерминизм).
+    #[test]
+    fn distribute_axis_for_picks_larger_center_span() {
+        let row = [
+            sr(0.0, 0.0, 40.0, 40.0),
+            sr(100.0, 2.0, 40.0, 40.0),
+            sr(300.0, 10.0, 40.0, 40.0),
+        ];
+        assert_eq!(distribute_axis_for(&row), AlignAxis::X);
+        let column = [
+            sr(0.0, 0.0, 40.0, 40.0),
+            sr(2.0, 100.0, 40.0, 40.0),
+            sr(10.0, 300.0, 40.0, 40.0),
+        ];
+        assert_eq!(distribute_axis_for(&column), AlignAxis::Y);
+        // Диагональ с равными размахами — X (тай-брейк)
+        let tie = [sr(0.0, 0.0, 40.0, 40.0), sr(100.0, 100.0, 40.0, 40.0)];
+        assert_eq!(distribute_axis_for(&tie), AlignAxis::X);
+        assert_eq!(
+            distribute_axis_for(&[sr(0.0, 0.0, 40.0, 40.0)]),
+            AlignAxis::X
+        );
+    }
+
+    /// Хелпер T-038.5: сцена из трёх нод с явными габаритами + выделение.
+    fn batch_app(canvas: Canvas, selection: &[usize]) -> App {
+        let (mut app, _storage) = stub_app_on_storage(
+            "target/tmp/fr-038-batch.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.scene.canvas = canvas;
+        app.scene.spatial = SpatialIndex::build(&app.scene.canvas);
+        app.selected_nodes = selection.to_vec();
+        app
+    }
+
+    /// Выравнивание в ряд (п.16): центры на общей горизонтали = среднее
+    /// центров Y; X/размеры не тронуты.
+    #[test]
+    fn run_batch_op_align_row_sets_common_y() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "", 0.0, 0.0);
+        a.width = 100.0;
+        a.height = 50.0;
+        let mut b = Node::text("b", "", 200.0, 90.0);
+        b.width = 80.0;
+        b.height = 60.0;
+        let mut c = Node::text("c", "", 400.0, 30.0);
+        c.width = 40.0;
+        c.height = 20.0;
+        canvas.nodes.extend([a, b, c]);
+        let expected = (25.0 + 120.0 + 40.0) / 3.0;
+        let mut app = batch_app(canvas, &[0, 1, 2]);
+
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+
+        for i in 0..3 {
+            let node = &app.scene.canvas.nodes[i];
+            assert!(
+                (node.y + node.height / 2.0 - expected).abs() < 1e-3,
+                "центр ноды {i} на оси"
+            );
+        }
+        assert_eq!(app.scene.canvas.nodes[0].x, 0.0, "X не тронут");
+        assert_eq!(app.scene.canvas.nodes[1].x, 200.0);
+        assert_eq!(app.scene.canvas.nodes[2].x, 400.0);
+        // Выделение сохранено (операция не трогает UI-состояние выделения)
+        assert_eq!(app.selected_nodes, vec![0, 1, 2]);
+    }
+
+    /// П.17: batch-операция — ОДИН undo-шаг на всё выделение; Ctrl+Z
+    /// возвращает исходные позиции ровно; redo возвращает выравненные.
+    #[test]
+    fn run_batch_op_is_single_undo_step() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "", 0.0, 0.0);
+        a.width = 100.0;
+        a.height = 50.0;
+        let mut b = Node::text("b", "", 200.0, 90.0);
+        b.width = 80.0;
+        b.height = 60.0;
+        let mut c = Node::text("c", "", 400.0, 30.0);
+        c.width = 40.0;
+        c.height = 20.0;
+        canvas.nodes.extend([a, b, c]);
+        let before: Vec<[f32; 2]> = canvas.nodes.iter().map(|n| [n.x, n.y]).collect();
+        let mut app = batch_app(canvas, &[0, 1, 2]);
+
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+        assert_eq!(app.scene.undo_stack.len(), 1, "один undo-шаг (п.17)");
+        let aligned: Vec<[f32; 2]> = app.scene.canvas.nodes.iter().map(|n| [n.x, n.y]).collect();
+        assert_ne!(aligned, before, "операция что-то сдвинула");
+
+        app.undo_action();
+        assert!(app.scene.undo_stack.is_empty());
+        let after_undo: Vec<[f32; 2]> = app.scene.canvas.nodes.iter().map(|n| [n.x, n.y]).collect();
+        assert_eq!(after_undo, before, "undo вернул исходные позиции");
+
+        app.redo_action();
+        let after_redo: Vec<[f32; 2]> = app.scene.canvas.nodes.iter().map(|n| [n.x, n.y]).collect();
+        assert_eq!(after_redo, aligned, "redo вернул выравнивание");
+    }
+
+    /// Batch-операция обновляет spatial-индекс (паттерн move_node):
+    /// нода находится по НОВОЙ позиции и уже не по старой.
+    #[test]
+    fn run_batch_op_updates_spatial_index() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "", 0.0, 0.0);
+        a.width = 100.0;
+        a.height = 50.0;
+        let mut b = Node::text("b", "", 200.0, 900.0);
+        b.width = 80.0;
+        b.height = 60.0;
+        let mut c = Node::text("c", "", 400.0, 1800.0);
+        c.width = 40.0;
+        c.height = 20.0;
+        canvas.nodes.extend([a, b, c]);
+        let mut app = batch_app(canvas, &[0, 1, 2]);
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+        let expected = (25.0 + 930.0 + 1810.0) / 3.0;
+
+        // Зона вокруг НОВОЙ оси (среднее центров) видит все три ноды;
+        // старые позиции (по краям) — больше ни одной из них
+        let near_axis: [f32; 4] = [-1000.0, expected - 10.0, 1000.0, expected + 10.0];
+        let hits = app.scene.spatial.query_rect(near_axis);
+        assert_eq!(hits, vec![0, 1, 2], "все ноды у новой оси");
+        let old_top: [f32; 4] = [-1000.0, 800.0, 100.0, 860.0];
+        assert!(
+            !app.scene.spatial.query_rect(old_top).contains(&1),
+            "нода 1 ушла со старого места в индексе"
+        );
+    }
+
+    /// Дети групп следуют за родителем (п.6): выделены группа + две ноды —
+    /// юниты три, ребёнок группы двигается дельтой группы, не выделяясь.
+    #[test]
+    fn run_batch_op_group_children_follow_parent() {
+        let mut canvas = Canvas::default();
+        // Группа-рамка g с явным списком детей [c]
+        let mut g = Node::text("g", "", 1000.0, 500.0);
+        g.node_type = "group".into();
+        g.width = 300.0;
+        g.height = 200.0;
+        g.children = Some(vec!["c".into()]);
+        canvas.nodes.push(g);
+        let mut c = Node::text("c", "", 1100.0, 550.0);
+        c.width = 60.0;
+        c.height = 40.0;
+        canvas.nodes.push(c);
+        let mut b = Node::text("b", "", 0.0, 0.0);
+        b.width = 80.0;
+        b.height = 60.0;
+        let mut d = Node::text("d", "", 50.0, 900.0);
+        d.width = 40.0;
+        d.height = 20.0;
+        canvas.nodes.push(b);
+        canvas.nodes.push(d);
+        // Выделение: группа (0) + две ноды (2, 3); ребёнок (1) НЕ выделен
+        let mut app = batch_app(canvas, &[0, 2, 3]);
+        let group_before = app.scene.canvas.nodes[0].y;
+        let child_before = app.scene.canvas.nodes[1].y;
+
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+
+        let expected = (600.0 + 30.0 + 910.0) / 3.0; // центры Y юнитов
+        let group = &app.scene.canvas.nodes[0];
+        let child = &app.scene.canvas.nodes[1];
+        assert!((group.y + group.height / 2.0 - expected).abs() < 1e-3);
+        let group_dy = group.y - group_before;
+        assert!(
+            (child.y - (child_before + group_dy)).abs() < 1e-3,
+            "ребёнок сдвинулся дельтой группы"
+        );
+        assert_eq!(child.x, 1100.0, "поперечное ребёнка не тронуто");
+        // undo возвращает и группу, и ребёнка
+        app.undo_action();
+        assert_eq!(app.scene.canvas.nodes[1].y, child_before);
+    }
+
+    /// Распределение через авто-ось (None): колонна (размах центров по Y
+    /// больше) распределяется по Y с равными зазорами между краями.
+    #[test]
+    fn run_batch_op_distribute_auto_axis_column() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "", 0.0, 0.0);
+        a.width = 100.0;
+        a.height = 40.0;
+        let mut b = Node::text("b", "", 20.0, 60.0);
+        b.width = 80.0;
+        b.height = 80.0;
+        canvas.nodes.push(a);
+        canvas.nodes.push(b);
+        let mut c = Node::text("c", "", 10.0, 300.0);
+        c.width = 60.0;
+        c.height = 20.0;
+        canvas.nodes.push(c);
+        let mut app = batch_app(canvas, &[0, 1, 2]);
+
+        app.run_batch_op(BatchOp::Distribute, None);
+
+        // span 0..320, сумма высот 140 → зазор 90; позиции 0, 130, 300
+        assert_eq!(app.scene.canvas.nodes[0].y, 0.0);
+        assert_eq!(app.scene.canvas.nodes[1].y, 130.0);
+        assert_eq!(app.scene.canvas.nodes[2].y, 300.0);
+        assert_eq!(app.scene.undo_stack.len(), 1, "один undo-шаг");
+    }
+
+    /// Повторная команда на уже выровненном выделении — no-op БЕЗ
+    /// undo-шага (пустых шагов в истории нет).
+    #[test]
+    fn run_batch_op_noop_when_already_aligned() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "", 0.0, 100.0);
+        a.width = 100.0;
+        a.height = 50.0;
+        let mut b = Node::text("b", "", 200.0, 90.0);
+        b.width = 80.0;
+        b.height = 60.0;
+        let mut c = Node::text("c", "", 400.0, 80.0);
+        c.width = 40.0;
+        c.height = 20.0;
+        // Центры Y: 125, 120, 90 — среднее 111.666…, операция сдвинет;
+        // сначала выравниваем, потом повторяем
+        canvas.nodes.extend([a, b, c]);
+        let mut app = batch_app(canvas, &[0, 1, 2]);
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+        assert_eq!(app.scene.undo_stack.len(), 1);
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+        assert_eq!(
+            app.scene.undo_stack.len(),
+            1,
+            "повтор без сдвига — без undo-шага"
+        );
+    }
+
+    /// Выделение «группа + её дети» (N=3) — самостоятельный юнит один:
+    /// операция честный no-op (выравнивать нечего), история не растёт.
+    #[test]
+    fn run_batch_op_group_with_children_only_is_noop() {
+        let mut canvas = Canvas::default();
+        let mut g = Node::text("g", "", 0.0, 0.0);
+        g.node_type = "group".into();
+        g.width = 300.0;
+        g.height = 200.0;
+        g.children = Some(vec!["c1".into(), "c2".into()]);
+        canvas.nodes.push(g);
+        canvas.nodes.push(Node::text("c1", "", 10.0, 10.0));
+        canvas.nodes.push(Node::text("c2", "", 100.0, 20.0));
+        let before: Vec<[f32; 2]> = canvas.nodes.iter().map(|n| [n.x, n.y]).collect();
+        let mut app = batch_app(canvas, &[0, 1, 2]);
+
+        app.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+
+        let after: Vec<[f32; 2]> = app.scene.canvas.nodes.iter().map(|n| [n.x, n.y]).collect();
+        assert_eq!(after, before, "ничего не сдвинулось");
+        assert!(app.scene.undo_stack.is_empty(), "без undo-шага");
+    }
+
+    /// Видимость batch-пунктов (п.16): N≥3 — видны, меньше — скрыты.
+    #[test]
+    fn align_menu_visible_only_from_three_nodes() {
+        let mut canvas = Canvas::default();
+        for id in ["a", "b", "c"] {
+            canvas.nodes.push(Node::text(id, "", 0.0, 0.0));
+        }
+        let mut app = batch_app(canvas, &[]);
+        assert!(!app.align_menu_visible(), "нет выделения — скрыты");
+        app.selected_nodes = vec![0, 1];
+        assert!(!app.align_menu_visible(), "N=2 — скрыты");
+        app.selected_nodes = vec![0, 1, 2];
+        assert!(app.align_menu_visible(), "N=3 — видны");
     }
 }
