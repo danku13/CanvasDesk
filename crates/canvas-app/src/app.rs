@@ -3322,6 +3322,13 @@ impl App {
                 });
             }
         }
+        // W7 (web-приёмка): итог склейки FTS+scan_scene в лог (DEBUG — на
+        // нативе под дефолтным фильтром не виден; на web виден с ?log=debug
+        // и служит оракулом браузерного дыма: поиск по 5000-нод сцене)
+        tracing::debug!(
+            rows = rows.len(),
+            "поиск завершён: склейка FTS и scan_scene"
+        );
         self.search.set_results(rows);
         self.search_nodes = nodes;
         self.request_redraw();
