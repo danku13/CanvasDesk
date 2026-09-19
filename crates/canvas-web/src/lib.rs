@@ -4,23 +4,38 @@
 //! `canvas-app`, ни нативные бинари на него не ссылаются — граф сборки
 //! `canvasdesk.exe` не меняется.
 //!
-//! Стадия **W4** (§6.1, трек B): каркас (panic-hook, tracing-консоль,
-//! точки входа) + **прошивка** — App в браузере: web-набор сервисов
-//! (Noop/Mem до W6/W10/W11, `app_spawn`), `spawn_app` (winit web) и
-//! async-init Renderer через `spawn_local` + слот (§3.4,
-//! `renderer_launch`). Приёмка: `trunk serve` грузится, камера живая,
-//! HUD F3 работает.
+//! Стадия **W6** (§6.1): каркас, прошивка (W4), ввод (W5), поиск (W7) и
+//! хранение (план §4). OPFS-хранилище канвасов — зеркало с фоновой
+//! записью и автосейвом с `.bak` (§4.1); FS Access — пикер и автосейв на
+//! настоящий диск; IndexedDB — недавние канвасы; DOM-drop — приём файлов;
+//! `?canvas=` — именованный старт; экспорт — download-blob; конфиг — из
+//! localStorage.
 //!
 //! Нативная компиляция: макросы `#[wasm_bindgen]` на не-wasm целях
 //! раскрываются в заглушки (контрольная сборка 2026-09-16, §2) — крейт
 //! собирается в составе workspace, web-код при этом не вызывается.
 
 pub mod app_spawn;
+pub mod fs_access;
+pub mod opfs;
 pub mod panic_hook;
+pub mod recent;
 pub mod renderer_launch;
 pub mod url_params;
 pub mod web_clipboard;
 pub mod web_log;
+pub mod web_state;
+
+// Чисто web-модули: JS-рунтайм обязателен (spawn_local/web-sys-вызовы),
+// нативная компиляция rlib их не включает.
+#[cfg(target_arch = "wasm32")]
+pub mod drop_files;
+#[cfg(target_arch = "wasm32")]
+pub mod export;
+#[cfg(target_arch = "wasm32")]
+pub mod js_glue;
+#[cfg(target_arch = "wasm32")]
+pub mod toolbar;
 
 use wasm_bindgen::prelude::*;
 
@@ -66,7 +81,7 @@ fn boot_with_level(level: Option<url_params::LogLevel>) -> String {
         _ => web_log::init_tracing_with(LevelFilter::INFO),
     }
     let banner = format!(
-        "canvas-web каркас загружен (W5): версия {}",
+        "canvas-web каркас загружен (W6): версия {}",
         env!("CARGO_PKG_VERSION")
     );
     tracing::info!(target: "canvas_web", "{banner}");

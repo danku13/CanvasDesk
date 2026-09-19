@@ -1,3 +1,113 @@
+## 2026-09-19 — W6 (M8 wasm-порт, трек A): хранение в браузере — OPFS + FS Access + IndexedDB-recent + DOM-drop + ?canvas= + экспорт blob
+
+- **Задача (§6, после W5):** «Хранение (§4)»: `CanvasStorage` —
+  FsAccessStorage + OpfsStorage + выбор при старте; IndexedDB-recent;
+  DOM-drop приём файлов; `?canvas=`/`?stress=` URL-параметры; автосейв +
+  `.bak`. Приёмка: открыть с диска → править → автосейв в файл → F5 →
+  reopen из recent без пикера; OPFS-дефолт работает без диска; экспорт
+  blob. Ветка feature/wasm-w6-storage от main af05c5c.
+- **Разведка:** трейт `CanvasStorage` синхронный (W3), браузер даёт только
+  async — мост двухуровневый: чистый `MirrorStore` (зеркало путь→текст +
+  очередь записей, тестируется нативно) + фоновый `spawn_local`-сброс в
+  OPFS (fire-and-forget, ошибки — в консоль). Автосейв уже в App
+  (`autosave_if_due`, debounce 2 с) — `save()` трейта честно доезжает до
+  web-хранилища. Смена активной сцены в рантайме не существовала —
+  добавлена (см. OpenScene).
+- **Сделано:**
+  - **`opfs.rs`** — OPFS-хранилище (§4.1, фолбэк/дефолт): `MirrorStore`
+    (save_text ставит пару `.bak`-прежний + новый в очередь; seed_text —
+    зеркало без очереди; load_text — NotFound как MemStorage);
+    `OpfsStorage` за трейтом `CanvasStorage` (load из зеркала мгновенно,
+    save — сериализация + drain); async-примитивы `opfs_root`/
+    `read_opfs_text` (NotFoundError → None)/`write_opfs_text`
+    (get_file_handle {create:true} → createWritable → write → close —
+    close через unchecked_ref::<WritableStream>, биндинга на наследнике
+    нет); `init_scene` — выбор `?canvas=` → недавний → `default.canvas`,
+    файл есть → parse (битый — сеем поверх, как натив load_or_seed),
+    нет → сеем; отказ OPFS целиком — деградация в MemStorage (страница
+    открывается всегда; перезапись при read-ошибке запрещена — защита
+    данных).
+  - **`fs_access.rs`** — FS Access (§4.1, основной путь): пикер
+    `showOpenFilePicker` c accept-фильтром .canvas (жест кнопки), permis-
+    sion query→request readwrite, `FsAccessStorage` (зеркало + фоновый
+    автосейв через хэндл; версия-назад — в OPFS: браузер не отдаёт
+    родительский каталог файла-хэндла, sibling невозможен — отклонение
+    от §4.2 п.3 задокументировано); отказ разрешения — «Открыть копию» в
+    OPFS (текст уже прочитан, чтение разрешения не требует);
+    `reopen_recent` — хэндл из IndexedDB → requestPermission (жест) →
+    диск, иначе OPFS-копия.
+  - **`recent.rs` + `js_glue.rs` + index.html** — IndexedDB-недавние:
+    база `canvasdesk`, сторы `recent` (keyPath name, {name, ts}) и
+    `handles` (name → FileSystemFileHandle); бойлерплейт open/upgrade —
+    в JS-глю `window.__canvasdesk` (index.html), Rust-мост — `js_glue`
+    (Promise → JsFuture), выбор верхней записи — чистая `recent_top_of`
+    (нативные тесты).
+  - **`drop_files.rs`** — DOM-drop: dragover глушит preventDefault'ом
+    (иначе браузер уводит дроп в ОС), drop → первый .canvas →
+    `import_to_opfs` (санитизация имени, OPFS-запись, недавние,
+    OpenScene с OPFS-хранилищем); не-.canvas — info-лог (W10). Превью
+    дропа (призраки T9) на web невозможно — данные файлов браузер отдаёт
+    только в момент drop (деградация, §4.2).
+  - **`export.rs`** — экспорт download-blob: активный канвас читается из
+    ХРАНИЛИЩА (диск-хэндл или OPFS-файл), не из живой сцены — второй
+    канал состояния сознательно не заводим; отставание ≤ debounce 2 с.
+    Blob(application/json) → objectURL → `<a download>` → revoke.
+  - **`toolbar.rs` + index.html** — DOM-панель хранилища («Открыть с
+    диска…» / «Недавние: <имя>» / «Экспорт .canvas»), листенеры из Rust
+    (Closure::forget — singleton), подпись недавних синхронится из
+    web_state. Стиль — минимальный, полировка W12.
+  - **`web_state.rs`** — thread_local web-оболочки: активный канвас
+    (имя+тип), дисковый хэндл, общее `Arc<OpfsStorage>` (весь web-код —
+    главный поток, JsValue-типы не трогают Send+Sync-трейты).
+  - **`url_params.rs`** — `?canvas=имя`: `sanitize_canvas_name` (≤80
+    символов; без `/` `\` `..` и управляющих; суффикс .canvas
+    дописывается; кириллица разрешена; опасное имя — мягкий None),
+    percent-декод значения (браузер кодирует кириллицу в
+    location.search; байтовые срезы — без паник на мультибайте); +4
+    теста (12 в url_params).
+  - **canvas-app: `AppEvent::OpenScene {path, json, storage}`** —
+    платформенно-нейтральная смена активной сцены: форс-сохранение
+    прежней (если dirty) → парсинг (битый — тост, сцена живёт) →
+    подмена `SceneState::with_storage` (None — текущее хранилище,
+    Some — новое, диск-хэндл) → сброс переходного UI (селекция/drag/
+    редактор/поиск/миникарта/полёт — индексы старой сцены несовместимы)
+    → камера дефолт старта. +4 теста (161 в app: замена/сброс, битый
+    json, флаш dirty в СТАРОЕ хранилище, явное хранилище).
+  - **canvas-app: `about_to_wait` — будка автосейва** — пока сцена
+    грязная, request_redraw держит rAF-цепочку web-цикла живой: без
+    этого после коммита тишина → about_to_wait не вызывается → debounce
+    2 с никогда не срабатывает (инструментально доказано пробой).
+    Натив: пара лишних кадров за 2 с после правки — поведение то же.
+  - **`app_spawn.rs`** — старт переехал в async (`spawn_desk_web`):
+    init_scene (OPFS/недавние/сеяние) ДО построения App; `?stress` —
+    MemStorage (не писать OPFS/recent); конфиг — TOML из localStorage
+    `canvasdesk.config` (read-only, клампы CR-003/FR-028; запись — W12);
+    подключение toolbar+drop; native-путь rlib-тестов — прежний
+    синхронный (`spawn_desk_native`).
+- **Диагностика по пути:** (1) запись OPFS без `{create:true}` —
+  NotFoundError замаскирован под «сеется, но не пишется» (зеркало
+  скрывало отсутствие I/O — вскрывается только консольными оракулами);
+  (2) navigator.storage недоступен на about:blank — probe-скрипты
+  проверять только на странице приложения (secure context localhost);
+  (3) rAF-засыпание цикла (см. будку автосейва).
+- **Приёмка (smoke, 25 PASS / 8 новых W6):** первый запуск —
+  «сеется новый канвас» + рендер ✓; правка («w6 автосейв») → «канвас
+  сохранён» + OPFS: `default.canvas.bak` (прежняя версия) + `default.canvas`
+  (новая) ✓; F5 — «стартовый канвас из недавних» + «канвас загружен из
+  OPFS» без пикера ✓; `?canvas=w6-имя` (кириллица, percent-декод) —
+  «стартовый канвас из URL» + сеяние именованного ✓; W5/W7-набор
+  (редактор, кириллица, стресс 5000 @ rAF-fps 61, поиск rows=625,
+  `?stress=abc`) не сломан ✓; pageerror 0 ✓. «Открыть с диска»/экспорт —
+  ручная приёмка (пикер/скачивание в headless не автоматизируются);
+  путь автосейва на диск покрыт тем же drain-контрактом, что и OPFS.
+- **Гейты:** fmt ✓; clippy -D warnings (canvas-app + canvas-web,
+  натив + wasm32) ✓; test --workspace 0 failed (canvas-app 161,
+  canvas-web 36); wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (e2e сошлась);
+  check wasm32 canvas-web ✓; trunk build ✓; web_smoke.py SMOKE OK.
+- **Дальше:** трек A свободен — ребаланс §6.1: верхняя незанятая — W8
+  (Numi, S) или W9 (шаблоны, S); W10 (превью, M) разблокирован W6;
+  W11 (виджеты, M); W12 закрывает финализатор.
+
 ## 2026-09-19 — W7 (M8 wasm-порт, трек B): поиск + миникарта в браузере — ?log=debug, DEBUG-оракулы, усиленный smoke
 
 - **Задача (§6):** трек B (после W5-трек A): «Поиск + миникарта» —
