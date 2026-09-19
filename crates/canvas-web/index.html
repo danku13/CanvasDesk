@@ -93,7 +93,11 @@
     <style>
       /* Канвас winit (вставляется canvas-web'ом из renderer_launch) —
       * единственный контент, растянут на окно; тёмный фон в тон продукта
-      * (SPEC §6, темы CR-007) — до первого кадра async-init Renderer. */
+      * (SPEC §6, темы CR-007) — до первого кадра async-init Renderer.
+      * CR-014: dvh — динамический viewport мобильных браузеров (адресная
+      * строка): 100vh выше видимой области, низ канваса уходил под бар;
+      * dvh ставится ПОСЛЕ vh — старые браузеры берут vh, новые — dvh.
+      * touch-action — тач-жесты не скроллят/зумят страницу поверх канваса. */
       :root { color-scheme: dark; }
       html, body {
         margin: 0;
@@ -105,19 +109,28 @@
         display: block;
         width: 100vw;
         height: 100vh;
+        height: 100dvh;
         /* tabindex="0" (winit: клавиатура) — без рамки фокуса */
         outline: none;
+        touch-action: none;
       }
       /* M8/W6 (wasm-port §4.2): DOM-панель хранилища — файловые жесты
       * браузера (пикер/экспорт/недавние) требуют window+жест, канвас —
-      * GPU-UI, поэтому три кнопки поверх (W12 отполирует стиль). */
+      * GPU-UI, поэтому три кнопки поверх (W12 отполировали стиль,
+      * CR-014 — адаптивность). Инвариант панели: НИКОГДА не покидает
+      * экран — flex-wrap + max-width переносят кнопки на новые строки,
+      * эллипсис режет текст кнопки (полное имя — в title-тултипе). */
       #w6-toolbar {
         position: fixed;
         top: 8px;
         right: 8px;
         display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
         gap: 6px;
         z-index: 10;
+        /* Край до края экрана минус отступы: шире не бываем никогда */
+        max-width: calc(100vw - 16px);
       }
       #w6-toolbar button {
         background: #1d2128;
@@ -127,8 +140,57 @@
         font: 12px/1.4 system-ui, sans-serif;
         padding: 4px 10px;
         cursor: pointer;
+        /* min-width: 0 — кнопка сжимается в flex-строке; переполнение
+         * текста — эллипсисом, не выездом панели за край экрана */
+        min-width: 0;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
       }
       #w6-toolbar button:hover { background: #262c35; }
+      #w6-toolbar button:focus-visible {
+        outline: 2px solid #8ab4ff;
+        outline-offset: 1px;
+      }
+      /* Подпись «Недавние: <имя>» — единственная растяжимая кнопка.
+       * Детерминированный кап в px (ch/vw зависят от системного шрифта
+       * — на fallback-шрифтах headless/лиукса цифры шире и кап плывёт):
+       * панель ≤ ~480px — при открытой панели поиска (топ-центр 460px,
+       * правый край vw/2+230) тулбар ≥1200px-окна до неё не
+       * дотягивается; 40vw — компаньон для узких окон. Полное имя —
+       * в title-тултипе. */
+      #w6-toolbar #btn-recent { max-width: min(40vw, 240px); }
+      /* Узкие окна/планшеты (<1200px): верх занят GPU-панелями — поиск
+       * топ-центр (search_ui.rs, 460px, правый край vw/2+230 — при
+       * верстке-как-сейчас тулбар топ-право на 768–1024 наезжает на
+       * поле ввода), HUD топ-лево, миникарта — правый нижний угол
+       * (220px + отступы), палитра — левый край на всю высоту (футер —
+       * подсказка, свернутый стрип — по центру левого края). Тулбар
+       * уходит в ЛЕВЫЙ НИЖНИЙ угол — единственную всегда-пустую зону;
+       * кап 100vw−264px не даёт залезать в колонку миникарты (floor
+       * 180px — на 320-375px кнопки стопкой с эллипсисом). */
+      @media (max-width: 1199px) {
+        #w6-toolbar {
+          top: auto;
+          bottom: 8px;
+          left: 8px;
+          right: auto;
+          justify-content: flex-start;
+          max-width: max(120px, calc(100vw - 264px));
+        }
+      }
+      /* Тач-экраны: минимальная высота цели ~44px (Apple HIG/Material);
+       * у 12px-кнопки с padding 4px было ~27px — мимо пальца. */
+      @media (pointer: coarse) {
+        #w6-toolbar button {
+          font: 13px/1.4 system-ui, sans-serif;
+          padding: 12px 16px;
+        }
+      }
     </style>
     <!-- M8/W6: JS-глю web-оболочки — IndexedDB (недавние + хэндлы FS
          Access) компактнее в JS; Rust-мост — canvas_web::js_glue (вызовы
