@@ -607,6 +607,7 @@ Milestone M5 по плану `docs/plans/M5-widgets.md` (продуктовые 
 | FR-017.9 | MCP-каталог | 9 инструментов `whatif_*` в `tools/list` (всего 35); `whatif_scenario_create` активирует новый сценарий; `whatif_set_param` — sugar адресации по имени параметра — тесты canvas-mcp (14 passed) + `mcp_whatif_override_apply_undo` |
 | FR-017.10 | Документация | раздел «What-if сценарии» в `user-docs/calculations.md`; `Ctrl+Shift+I` в `user-docs/hotkeys.md` (синк с HOTKEYS); шаг 7 в `user-docs/agent-recipe.md`; SPEC §5.1 (схема `canvasdesk.whatif`), §8 (ввод), §13 (контракт `whatif_*`) |
 | FR-017.11 | Ручной гейт CP6 (владелец) | демо эталона №2: вход в what-if, смена `rps` в ноде «Нагрузка» → дельты downstream видны на канвасе и в таблице сравнения; Apply → Ctrl+Z возвращает базу |
+| CR-015 | Вёрстка бара (2026-09-19) | чипы «База»/«Сценарий N»/счётчик и кнопки Apply/Сброс/Сравнить/✕ не пересекаются, «Сравнить» не обрезана, длинные имена сценариев схлопываются «…», на узком окне элементы не уходят за край бара — юнит-тесты `whatif_ui.rs` (`bar_layout_no_overlap_and_covers_labels`, `btn_width_covers_labels`, `chip_label_caps_long_names`, `bar_layout_narrow_window_keeps_elements_inside`) + ручной гейт владельца |
 ## 25. Чек-лист FR-036 (2026-09-18): wasm-сборка ядра — гейт + wasmtime-тесты (ADR-0011)
 
 Контекст: приказ владельца «распланировать сборку wasm и реализовать сборку

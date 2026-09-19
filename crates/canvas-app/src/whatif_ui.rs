@@ -22,13 +22,22 @@ pub const PILL_WIDTH: f32 = 104.0;
 /// Высота чипа сценария.
 pub const CHIP_HEIGHT: f32 = 26.0;
 /// Горизонтальные поля чипа.
-pub const CHIP_PAD_X: f32 = 10.0;
+pub const CHIP_PAD_X: f32 = 12.0;
+/// Запас ширины чипа поверх оценки текста (рендер-метрики Noto шире
+/// эвристики `text_width` — без запаса подпись переливается на соседа,
+/// см. CR-015).
+pub const CHIP_SLACK: f32 = 4.0;
 /// Зазор между элементами бара.
 pub const BAR_GAP: f32 = 6.0;
 /// Ширина индикатора «WHAT-IF».
 pub const INDICATOR_WIDTH: f32 = 78.0;
-/// Ширина кнопок Apply/Сброс/Сравнить.
+/// Минимальная ширина кнопок Apply/Сброс/Сравнить (фактическая — по
+/// подписи, `btn_width`).
 pub const BTN_WIDTH: f32 = 74.0;
+/// Горизонтальные поля кнопки.
+pub const BTN_PAD_X: f32 = 12.0;
+/// Максимальная длина подписи чипа сценария (символов) до «…».
+pub const CHIP_LABEL_MAX: usize = 24;
 /// Ширина кнопки «✕».
 pub const CLOSE_WIDTH: f32 = 28.0;
 /// Высота строки раскрытого списка подмен.
@@ -48,10 +57,12 @@ pub const TABLE_COL_W: f32 = 190.0;
 /// Поля таблицы сравнения.
 pub const TABLE_MARGIN: f32 = 8.0;
 
-/// Грубая оценка ширины текста (средний глиф ≈ 0.58 кегля) — для раскладки
-/// чипов сценариев; точность не критична (подпись клампится по ширине чипа).
+/// Грубая оценка ширины текста (средний глиф ≈ 0.62 кегля — синк с
+/// `docs_ui::CHAR_W_FACTOR` для Noto Sans Display) — для раскладки чипов
+/// сценариев; точность не критична (сверху есть `CHIP_SLACK`/поля кнопок,
+/// см. CR-015).
 pub fn text_width(text: &str, font_size: f32) -> f32 {
-    text.chars().count() as f32 * font_size * 0.58
+    text.chars().count() as f32 * font_size * 0.62
 }
 
 /// Действие клика по нижнему бару.
@@ -112,9 +123,26 @@ pub fn enter_pill_rect(viewport: [f32; 2]) -> [f32; 4] {
     ]
 }
 
-/// Ширина чипа по подписи.
+/// Подпись чипа сценария с капом длины: длинные имена схлопываются «…»
+/// (единообразно в раскладке и отрисовке — `app.rs` рисует эту же строку).
+pub fn chip_label(name: &str) -> String {
+    let mut chars: Vec<char> = name.chars().collect();
+    if chars.len() > CHIP_LABEL_MAX {
+        chars.truncate(CHIP_LABEL_MAX);
+        chars.push('…');
+    }
+    chars.into_iter().collect()
+}
+
+/// Ширина чипа по подписи (с капом `chip_label`).
 fn chip_width(label: &str) -> f32 {
-    text_width(label, 13.0) + CHIP_PAD_X * 2.0
+    text_width(&chip_label(label), 13.0) + CHIP_PAD_X * 2.0 + CHIP_SLACK
+}
+
+/// Ширина кнопки по подписи: не уже `BTN_WIDTH`, поля `BTN_PAD_X`
+/// (CR-015: «Сравнить» шире прежнего фикса 74 px и обрезалась).
+fn btn_width(label: &str) -> f32 {
+    BTN_WIDTH.max(text_width(label, 13.0) + BTN_PAD_X * 2.0)
 }
 
 /// Геометрия полосы режима. `scenario_names` — имена пользовательских
@@ -127,7 +155,7 @@ pub fn bar_layout(
     viewport: [f32; 2],
 ) -> BarLayout {
     let counter_label = format!("подмен: {override_count}");
-    let counter_w = text_width(&counter_label, 13.0) + CHIP_PAD_X * 2.0;
+    let counter_w = chip_width(&counter_label);
     // Ширина: паддинги + индикатор + База + чипы + «+» + счётчик + 3
     // кнопки + ✕ + зазоры (элементов scenarios.len() + 7 — зазоров на 1
     // меньше, но запас не вредит; считаем точно)
@@ -137,7 +165,12 @@ pub fn bar_layout(
         .sum::<f32>()
         + chip_width("База")
         + chip_width("+");
-    let controls_w = INDICATOR_WIDTH + counter_w + BTN_WIDTH * 3.0 + CLOSE_WIDTH;
+    let controls_w = INDICATOR_WIDTH
+        + counter_w
+        + CLOSE_WIDTH
+        + btn_width("Apply")
+        + btn_width("Сброс")
+        + btn_width("Сравнить");
     let elements = scenario_names.len() as f32 + 7.0; // чипы+База+«+»+инд+счёт+3кн+✕
     let width = (BAR_PADDING * 2.0 + chips_w + controls_w + BAR_GAP * (elements - 1.0))
         .min((viewport[0] - BAR_MARGIN * 2.0).max(0.0));
@@ -148,9 +181,13 @@ pub fn bar_layout(
         BAR_HEIGHT,
     ];
     let cy = rect[1] + (BAR_HEIGHT - CHIP_HEIGHT) / 2.0;
+    // CR-015: элементы не уходят за правый край полосы (узкое окно) —
+    // при нехватке ширины хвост ужимается до нуля, а не рисуется мимо бара.
+    let right_limit = rect[0] + rect[2] - BAR_PADDING;
     let mut x = rect[0] + BAR_PADDING;
     let mut take = |w: f32| {
-        let rect = [x, cy, w, CHIP_HEIGHT];
+        let w = w.min((right_limit - x).max(0.0));
+        let rect = [x.min(right_limit), cy, w, CHIP_HEIGHT];
         x += w + BAR_GAP;
         rect
     };
@@ -162,9 +199,9 @@ pub fn bar_layout(
         .collect();
     let new_scenario = take(chip_width("+"));
     let overrides = take(counter_w);
-    let apply = take(BTN_WIDTH);
-    let reset = take(BTN_WIDTH);
-    let compare = take(BTN_WIDTH);
+    let apply = take(btn_width("Apply"));
+    let reset = take(btn_width("Сброс"));
+    let compare = take(btn_width("Сравнить"));
     let close = take(CLOSE_WIDTH);
     BarLayout {
         rect,
@@ -467,5 +504,98 @@ mod tests {
         assert!(text_width("Рост", 13.0) > 0.0);
         assert!(text_width("Рост ×2", 13.0) > text_width("Рост", 13.0));
         assert!(text_width("", 13.0) == 0.0);
+    }
+
+    /// CR-015: типичный набор бара (скриншот пользователя) — соседние
+    /// элементы не пересекаются, каждый чип/кнопка не уже своей подписи
+    /// (текст не переливается на соседа).
+    #[test]
+    fn bar_layout_no_overlap_and_covers_labels() {
+        let names: Vec<String> = ["Сценарий 3", "Сценарий 2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let layout = bar_layout(&names, 0, [1600.0, 900.0]);
+        let rects = [
+            layout.indicator,
+            layout.base,
+            layout.scenarios[0],
+            layout.scenarios[1],
+            layout.new_scenario,
+            layout.overrides,
+            layout.apply,
+            layout.reset,
+            layout.compare,
+            layout.close,
+        ];
+        for w in rects.windows(2) {
+            assert!(
+                w[0][0] + w[0][2] <= w[1][0] + 0.01,
+                "соседние элементы пересекаются"
+            );
+        }
+        let chip_cover = |rect: [f32; 4], label: &str| {
+            assert!(
+                rect[2] >= text_width(&chip_label(label), 13.0) + CHIP_PAD_X * 2.0 - 0.01,
+                "чип «{label}» уже подписи"
+            );
+        };
+        chip_cover(layout.base, "База");
+        chip_cover(layout.scenarios[0], "Сценарий 3");
+        chip_cover(layout.scenarios[1], "Сценарий 2");
+        chip_cover(layout.overrides, "подмен: 0");
+        let btn_cover = |rect: [f32; 4], label: &str| {
+            assert!(
+                rect[2] >= text_width(label, 13.0) + BTN_PAD_X * 2.0 - 0.01,
+                "кнопка «{label}» уже подписи"
+            );
+        };
+        btn_cover(layout.apply, "Apply");
+        btn_cover(layout.reset, "Сброс");
+        btn_cover(layout.compare, "Сравнить");
+    }
+
+    /// CR-015: ширина кнопки — не уже минимума и покрывает подпись.
+    #[test]
+    fn btn_width_covers_labels() {
+        assert!(btn_width("Apply") >= BTN_WIDTH);
+        assert!(btn_width("Сравнить") >= BTN_WIDTH);
+        assert!(btn_width("Сравнить") >= text_width("Сравнить", 13.0) + BTN_PAD_X * 2.0 - 0.01);
+    }
+
+    /// CR-015: длинные имена сценариев капаются «…» (раскладка и отрисовка
+    /// используют одну строку — `chip_label`).
+    #[test]
+    fn chip_label_caps_long_names() {
+        let long = "Очень длинное имя сценария с деталями эксперимента";
+        let capped = chip_label(long);
+        assert!(capped.chars().count() <= CHIP_LABEL_MAX + 1);
+        assert!(capped.ends_with('…'));
+        assert_eq!(chip_label("Сценарий 2"), "Сценарий 2");
+    }
+
+    /// CR-015: узкое окно — все элементы внутри rect бара, правый край
+    /// ничего не уходит за полосу (хвост ужимается, а не рисуется мимо).
+    #[test]
+    fn bar_layout_narrow_window_keeps_elements_inside() {
+        let layout = bar_layout(&names(), 1, [400.0, 240.0]);
+        let right = layout.rect[0] + layout.rect[2] - BAR_PADDING + 0.01;
+        let left = layout.rect[0] + BAR_PADDING - 0.01;
+        for r in [
+            layout.indicator,
+            layout.base,
+            layout.new_scenario,
+            layout.overrides,
+            layout.apply,
+            layout.reset,
+            layout.compare,
+            layout.close,
+        ]
+        .into_iter()
+        .chain(layout.scenarios.iter().copied())
+        {
+            assert!(r[0] >= left, "элемент левее бара");
+            assert!(r[0] + r[2] <= right, "элемент за правым краем бара");
+        }
     }
 }
