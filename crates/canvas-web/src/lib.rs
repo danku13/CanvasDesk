@@ -25,6 +25,7 @@ pub mod url_params;
 pub mod web_clipboard;
 pub mod web_log;
 pub mod web_state;
+pub mod widgets_web;
 
 // Чисто web-модули: JS-рунтайм обязателен (spawn_local/web-sys-вызовы),
 // нативная компиляция rlib их не включает.

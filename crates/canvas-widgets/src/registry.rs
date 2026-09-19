@@ -2,6 +2,13 @@
 //! установка drag-пакета, обновление, удаление, встроенные пакеты
 //! (встроены в бинарник, материализуются при старте, tombstone уважает
 //! ручное удаление). ФС-операции через std::fs — тестируются на tempdir.
+//!
+//! M8/W11 (wasm-port §5): режим «память» (без ФС) — встроенные пакеты
+//! обслуживаются прямо из include_dir-статики, установка из папки
+//! недоступна, tombstone — в памяти (экспорт/импорт для сохранения — на
+//! платформенном слое, web: localStorage). Решение W11 «OPFS или память» —
+//! память: пакетные файлы (index.html и т.п.) в волне 1 никто не читает
+//! (live-хост отсутствует), а манифесты нужны меню/LOD/permissions.
 
 use crate::manifest::{ManifestError, WidgetManifest};
 use std::collections::BTreeMap;
@@ -29,6 +36,10 @@ pub enum RegistryError {
     TooLarge { files: usize, bytes: u64 },
     #[error("пакет `{0}` не установлен")]
     NotInstalled(String),
+    /// Операция требует файловой системы (установка из папки в режиме
+    /// «память» — web W11: браузер не даёт папок; сценарий — вне волны 1).
+    #[error("операция недоступна без файловой системы")]
+    NoFileSystem,
 }
 
 /// Результат установки.
@@ -52,19 +63,46 @@ pub struct InstalledWidget {
     pub builtin: bool,
 }
 
-/// Реестр над корнем `~/.canvasdesk/widgets`.
+/// Хранилище реестра: файловая система (натив) или память (web W11 +
+/// тесты без tempdir). Выбор — в конструкторе, без cfg: обе ветки
+/// компилируются и тестируются на любой ОС.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Store {
+    Fs,
+    Memory,
+}
+
+/// Реестр над корнем `~/.canvasdesk/widgets` (или над памятью — web W11).
 #[derive(Debug, Clone)]
 pub struct WidgetRegistry {
     root: PathBuf,
     installed: BTreeMap<String, InstalledWidget>,
+    store: Store,
+    /// Tombstone-набор режима «память»: удалённые встроенные пакеты
+    /// (id → версия встроенного на момент удаления). Персистентность —
+    /// на вызывающем ([`Self::memory_tombstones`]/[`Self::set_memory_tombstones`]).
+    memory_tombstones: BTreeMap<String, [u32; 3]>,
 }
 
 impl WidgetRegistry {
-    /// Новый реестр; скан делается отдельно (`reload`).
+    /// Новый реестр над ФС; скан делается отдельно (`reload`).
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             installed: BTreeMap::new(),
+            store: Store::Fs,
+            memory_tombstones: BTreeMap::new(),
+        }
+    }
+
+    /// Реестр без файловой системы (web W11): встроенные пакеты — из
+    /// include_dir-статики, `root` — условная метка для логов/диагностики.
+    pub fn in_memory() -> Self {
+        Self {
+            root: PathBuf::from("widgets:memory"),
+            installed: BTreeMap::new(),
+            store: Store::Memory,
+            memory_tombstones: BTreeMap::new(),
         }
     }
 
@@ -74,7 +112,32 @@ impl WidgetRegistry {
 
     /// Скан корня: каждая подпапка с валидным `widget.json` — пакет;
     /// невалидные — warn и пропуск (сбойные пакеты не ломают реестр).
+    /// Память: источник истины — встроенная статика (не-tombstone).
     pub fn reload(&mut self) -> Result<(), RegistryError> {
+        if self.store == Store::Memory {
+            self.installed.clear();
+            for pkg in EMBEDDED_WIDGETS.dirs() {
+                let Some(manifest) = embedded_manifest(pkg) else {
+                    continue; // warn — в materialize_builtins
+                };
+                if self
+                    .memory_tombstones
+                    .get(&manifest.id)
+                    .is_some_and(|t| *t >= manifest.version_tuple())
+                {
+                    continue;
+                }
+                self.installed.insert(
+                    manifest.id.clone(),
+                    InstalledWidget {
+                        manifest,
+                        dir: builtin_memory_dir(pkg.path()),
+                        builtin: true,
+                    },
+                );
+            }
+            return Ok(());
+        }
         self.installed.clear();
         let entries = match std::fs::read_dir(&self.root) {
             Ok(entries) => entries,
@@ -123,7 +186,11 @@ impl WidgetRegistry {
     /// Установка пакета из папки-источника (drag из Explorer): валидация
     /// манифеста и лимитов, копирование в `root/<id>`. Та же версия —
     /// `SameVersion` (no-op); папка с битым манифестом перезаписывается.
+    /// Память: папок нет — честная ошибка (NoFileSystem).
     pub fn install(&mut self, src: &Path) -> Result<InstallOutcome, RegistryError> {
+        if self.store == Store::Memory {
+            return Err(RegistryError::NoFileSystem);
+        }
         if !src.is_dir() {
             return Err(RegistryError::NotADirectory);
         }
@@ -151,12 +218,25 @@ impl WidgetRegistry {
 
     /// Удаление пакета (ноды становятся «битыми» — это делает приложение).
     /// Ставит tombstone, чтобы встроенный пакет не воскрес на перезапуске.
+    /// Память: из map + tombstone в памяти (файлов нет — persist на
+    /// платформенном слое).
     pub fn remove(&mut self, id: &str) -> Result<(), RegistryError> {
         let dir = self
             .installed
             .get(id)
             .map(|w| w.dir.clone())
             .ok_or_else(|| RegistryError::NotInstalled(id.to_owned()))?;
+        if self.store == Store::Memory {
+            if let Some(version) = Self::builtin_manifests()
+                .into_iter()
+                .find(|m| m.id == id)
+                .map(|m| m.version_tuple())
+            {
+                self.memory_tombstones.insert(id.to_owned(), version);
+            }
+            self.installed.remove(id);
+            return Ok(());
+        }
         remove_package_dir(&dir)?;
         if self.is_builtin(id) {
             let version = self
@@ -172,8 +252,41 @@ impl WidgetRegistry {
 
     /// Материализация встроенных пакетов при старте (план M5 §4.8):
     /// нет папки и нет tombstone → установить; версия встроенной выше
-    /// установленной/tombstone → обновить; иначе не трогать.
+    /// установленной/tombstone → обновить; иначе не трогать. Память:
+    /// «установить» = запись в map (файлов нет, dir — виртуальная метка).
     pub fn materialize_builtins(&mut self) -> Result<(), RegistryError> {
+        if self.store == Store::Memory {
+            for pkg in EMBEDDED_WIDGETS.dirs() {
+                let Some(manifest) = embedded_manifest(pkg) else {
+                    tracing::warn!(dir = ?pkg.path(), "встроенный пакет без валидного манифеста");
+                    continue;
+                };
+                let builtin_v = manifest.version_tuple();
+                let up_to_date = self
+                    .installed
+                    .get(&manifest.id)
+                    .is_some_and(|w| w.manifest.version_tuple() >= builtin_v);
+                let suppressed = self
+                    .memory_tombstones
+                    .get(&manifest.id)
+                    .is_some_and(|t| *t >= builtin_v);
+                if up_to_date || suppressed {
+                    continue;
+                }
+                // Снятие tombstone до переезда manifest в InstalledWidget
+                self.memory_tombstones.remove(&manifest.id);
+                tracing::info!(id = %manifest.id, "встроенный виджет зарегистрирован в памяти");
+                self.installed.insert(
+                    manifest.id.clone(),
+                    InstalledWidget {
+                        manifest,
+                        dir: builtin_memory_dir(pkg.path()),
+                        builtin: true,
+                    },
+                );
+            }
+            return Ok(());
+        }
         std::fs::create_dir_all(&self.root)?;
         for pkg in EMBEDDED_WIDGETS.dirs() {
             let Some(manifest) = embedded_manifest(pkg) else {
@@ -206,6 +319,29 @@ impl WidgetRegistry {
             .dirs()
             .filter_map(embedded_manifest)
             .collect()
+    }
+
+    /// Tombstone-набор режима «память» (id, версия «1.2.0») — для
+    /// сохранения платформенным слоем (web: localStorage, W11). ФС-режим —
+    /// пустой список (tombstone живут файлами в root/.deleted).
+    pub fn memory_tombstones(&self) -> Vec<(String, String)> {
+        self.memory_tombstones
+            .iter()
+            .map(|(id, v)| (id.clone(), format_version(*v)))
+            .collect()
+    }
+
+    /// Восстановить tombstone-набор режима «память» (до инициализации:
+    /// `materialize_builtins`/`reload` уважают восстановленное). ФС-режим —
+    /// no-op (tombstone читаются с диска сами).
+    pub fn set_memory_tombstones(&mut self, entries: &[(String, String)]) {
+        if self.store != Store::Memory {
+            return;
+        }
+        self.memory_tombstones = entries
+            .iter()
+            .map(|(id, version)| (id.clone(), parse_version_line(version)))
+            .collect();
     }
 
     fn is_builtin(&self, id: &str) -> bool {
@@ -279,6 +415,22 @@ fn parse_version_line(text: &str) -> [u32; 3] {
         out[slot] = digits.parse().unwrap_or(0);
     }
     out
+}
+
+/// Версия `[u32; 3]` → строка «1.2.0» (экспорт tombstone режима «память»).
+fn format_version(v: [u32; 3]) -> String {
+    format!("{}.{}.{}", v[0], v[1], v[2])
+}
+
+/// Виртуальная папка встроенного пакета в режиме «память»: ясно помечена
+/// как встроенная, файлов под ней нет (live-хост в волне 1 отсутствует —
+/// dir читает только диагностика/логи).
+fn builtin_memory_dir(pkg_path: &Path) -> PathBuf {
+    let id = pkg_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    PathBuf::from(format!("/builtin/{id}"))
 }
 
 /// Копирование пакета с лимитами и пропуском симлинков (безопасность).
@@ -592,5 +744,98 @@ mod tests {
         assert_eq!(parse_version_line("[1, 2, 0]"), [1, 2, 0]);
         assert_eq!(parse_version_line(" 2.5.1-beta\n "), [2, 5, 1]);
         assert_eq!(parse_version_line("мусор"), [0, 0, 0]);
+    }
+
+    // ==========================================================================
+    // M8/W11: режим «память» (web) — без ФС, встроенные пакеты из статики
+    // ==========================================================================
+
+    #[test]
+    fn memory_mode_materializes_and_lists_builtins() {
+        let mut reg = WidgetRegistry::in_memory();
+        reg.materialize_builtins().expect("материализация в памяти");
+        reg.reload().expect("reload в памяти");
+
+        let builtins: Vec<String> = WidgetRegistry::builtin_manifests()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(!builtins.is_empty(), "в репо есть встроенные пакеты");
+        for id in &builtins {
+            let pkg = reg.get(id).expect("встроенный зарегистрирован");
+            assert!(pkg.builtin, "{id} помечен встроенным");
+            assert!(
+                pkg.dir.starts_with("/builtin/"),
+                "виртуальная папка: {}",
+                pkg.dir.display()
+            );
+        }
+        // Идемпотентность: повторный вызов не дублирует и не ломает
+        reg.materialize_builtins()
+            .expect("повторная материализация");
+        assert_eq!(reg.installed().len(), builtins.len());
+    }
+
+    #[test]
+    fn memory_mode_remove_tombstones_and_restore() {
+        let mut reg = WidgetRegistry::in_memory();
+        reg.materialize_builtins().expect("материализация");
+        let first = WidgetRegistry::builtin_manifests()[0].id.clone();
+
+        reg.remove(&first).expect("удаление в памяти");
+        assert!(!reg.contains(&first));
+
+        // Tombstone в памяти удерживает повторную материализацию/reload
+        reg.materialize_builtins()
+            .expect("материализация после удаления");
+        reg.reload().expect("reload после удаления");
+        assert!(!reg.contains(&first), "tombstone удерживает удаление");
+
+        // Экспорт tombstone: (id, «1.2.0»)-формат, валидный для импорта
+        let exported = reg.memory_tombstones();
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].0, first);
+        assert!(
+            exported[0]
+                .1
+                .split('.')
+                .all(|part| part.parse::<u32>().is_ok()),
+            "версия вида 1.2.0: {}",
+            exported[0].1
+        );
+
+        // Перезапуск страницы: новый реестр + импорт tombstone до init —
+        // удалённый встроенный пакет не возвращается
+        let mut reg2 = WidgetRegistry::in_memory();
+        reg2.set_memory_tombstones(&exported);
+        reg2.materialize_builtins()
+            .expect("материализация с tombstone");
+        assert!(!reg2.contains(&first));
+        // Остальные встроенные — на месте
+        for m in WidgetRegistry::builtin_manifests() {
+            if m.id != first {
+                assert!(reg2.contains(&m.id), "{} на месте", m.id);
+            }
+        }
+
+        // ФС-режим: импорт tombstone — no-op (tombstone живут файлами)
+        let mut fs_reg = WidgetRegistry::new(std::env::temp_dir().join("canvasdesk_w11_fs_reg"));
+        fs_reg.set_memory_tombstones(&exported);
+        assert!(fs_reg.memory_tombstones().is_empty());
+    }
+
+    #[test]
+    fn memory_mode_install_from_folder_is_rejected() {
+        let mut reg = WidgetRegistry::in_memory();
+        let src = std::env::temp_dir().join(format!("canvasdesk_w11_src_{}", std::process::id()));
+        std::fs::create_dir_all(&src).unwrap();
+        let err = reg.install(&src).expect_err("папок на web нет");
+        assert!(matches!(err, RegistryError::NoFileSystem), "{err}");
+        // Несуществующий id — как на ФС: NotInstalled
+        assert!(matches!(
+            reg.remove("no.such.package"),
+            Err(RegistryError::NotInstalled(_))
+        ));
+        let _ = std::fs::remove_dir_all(&src);
     }
 }
