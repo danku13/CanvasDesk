@@ -3571,9 +3571,14 @@ impl App {
     ) -> usize {
         self.push_undo();
         let id = next_free_id(&self.scene.canvas, "tpl");
-        let mut node =
-            canvas_core::templates::instantiate(manifest, &BTreeMap::new(), id, world[0], world[1])
-                .expect("дефолты манифеста в границах");
+        let mut node = canvas_core::templates::instantiate(
+            manifest,
+            &BTreeMap::new(),
+            id.clone(),
+            world[0],
+            world[1],
+        )
+        .expect("дефолты манифеста в границах");
         // FR-023: авто-высота шаблонной ноды при инстанциации — по числу
         // строк листа параметров: шапка + тело + футер результата. Новая
         // нода сразу влезает целиком (без «подгонки правкой»).
@@ -3586,6 +3591,13 @@ impl App {
         self.selected_nodes.clear();
         self.scene.mark_dirty();
         self.scene.recompute_flow();
+        // W9 (web-приёмка): оракул браузерного дыма — вставка шаблонной
+        // группы дошла до модели (критерий приёмки W9, wasm-port §6)
+        tracing::debug!(
+            template = %manifest.id,
+            node = %id,
+            "шаблон вставлен"
+        );
         index
     }
 
@@ -6465,6 +6477,14 @@ impl App {
             } else {
                 self.template_panel.open();
             }
+            // W9 (web-приёмка): оракул браузерного дыма — палитра открылась
+            // и реестр не пуст (DEBUG — на нативе под дефолтным фильтром
+            // не виден; на web виден с ?log=debug)
+            tracing::debug!(
+                templates = self.templates.list().len(),
+                categories = self.templates.categories().len(),
+                "шаблонная палитра: док открыт/сфокусирован"
+            );
             self.request_redraw();
             return;
         }
@@ -7575,6 +7595,12 @@ impl App {
                         world,
                         category: None,
                     });
+                    // W9 (web-приёмка): оракул браузерного дыма —
+                    // Shift+клик поднял wheel-меню категорий (FR-018)
+                    tracing::debug!(
+                        categories = self.templates.categories().len(),
+                        "wheel-меню шаблонов: категории"
+                    );
                     self.request_redraw();
                     return;
                 }

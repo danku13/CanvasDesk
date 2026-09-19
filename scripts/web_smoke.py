@@ -348,6 +348,128 @@ async def main() -> int:
         ok = await wait_console(console_msgs, READY, 30)
         if not ok:
             failures.append("рендер не поднялся после reopen")
+
+        # --- 5b. W9 (часть 1): wheel-меню шаблонов Shift+кликом ---
+        # Тракт FR-018: Shift+клик по пустому месту поднимает wheel-меню
+        # категорий (оракул canvas_app «wheel-меню шаблонов»). Меню
+        # рендерится до палитры: текстовый оверлей палитры на SwiftShader
+        # бьёт известный лимит mappedAtCreation (см. 5d) — палитра
+        # проверяется в 5d атомарно, до ломкого кадра.
+        console_msgs.clear()
+        # После reopen онбординг может подняться снова (FR-028, счётчик
+        # defer'ов в localStorage) — он глушит КЛАВИАТУРУ канваса
+        # (мышь проходит). Esc «Пропустить» до wheel-меню (как в W5/W7).
+        await page.keyboard.press("Escape")
+        await asyncio.sleep(0.4)
+        await page.keyboard.down("Shift")
+        await page.mouse.click(250, 470)  # пустое место левее-ниже заметок
+        await page.keyboard.up("Shift")
+        ok = await wait_console(console_msgs, "wheel-меню шаблонов", 10)
+        print(("PASS" if ok else "FAIL"), "Shift+клик: wheel-меню категорий")
+        if not ok:
+            failures.append("wheel-меню не открылось")
+        await page.keyboard.press("Escape")  # закрыть wheel-меню
+        await asyncio.sleep(0.3)
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"W9-сценарии без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"W9 pageerror: {page_errors[:3]}")
+
+        # --- 5c. W8: Numi-формулы — calc-строка и бейдж ошибки ---
+        # Тракт FR-013: заметка «кв = 5» → коммит → recompute_flow →
+        # построчный результат (оракул canvas_scene «пересчёт потока»:
+        # values/lines/errors); строка «2 +» — диагностика → error-бейдж.
+        # Поток значений по рёбрам — тот же чистый propagate_with_lines
+        # (canvas-core/flow), верифицирован wasip1-тестами и MCP e2e
+        # оракулом ±1 %; вставленный шаблон (5d) считает $param-лист.
+        await page.mouse.dblclick(400, 430)
+        await asyncio.sleep(0.8)
+        await dispatch_text(page, "кв = 5")
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.5)
+        ok = await wait_console(console_msgs, "пересчёт потока", 10)
+        values = lines = 0
+        for m in reversed(console_msgs):
+            if "пересчёт потока" in m and "values=" in m:
+                values = int(m.split("values=")[1].split()[0])
+                lines = int(m.split("lines=")[1].split()[0])
+                break
+        print(("PASS" if ok and values >= 1 and lines >= 1 else "FAIL"),
+              f"Numi: calc-строка считает (values={values}, lines={lines})")
+        if not (ok and values >= 1 and lines >= 1):
+            failures.append(f"Numi-пересчёт: values={values}, lines={lines}")
+        await page.mouse.dblclick(400, 540)
+        await asyncio.sleep(0.8)
+        await dispatch_text(page, "2 +")
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.5)
+        errors = 0
+        for m in reversed(console_msgs):
+            if "пересчёт потока" in m and "errors=" in m:
+                errors = int(m.split("errors=")[1].split()[0])
+                break
+        print(("PASS" if errors >= 1 else "FAIL"),
+              f"Numi: бейдж ошибки на «2 +» (errors={errors})")
+        if errors < 1:
+            failures.append(f"нет error-исхода: errors={errors}")
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"W8-сценарии без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"W8 pageerror: {page_errors[:3]}")
+
+        # --- 5d. W9 (часть 2): палитра Ctrl+P + вставка Enter ---
+        # Тракт FR-018/024/025: Ctrl+P разворачивает постоянный док и
+        # фокусирует поиск (реестр include_dir не пуст), Enter вставляет
+        # выбранную строку в центр (instantiate_template_at → модель).
+        #
+        # Атомарность: первый ЖЕ кадр палитры на SwiftShader бьёт лимит
+        # createBuffer/mappedAtCreation (известный артефакт среды, W7;
+        # на аппаратном WebGPU его нет) — необработанное исключение
+        # разрывает rAF-насос winit и все СЛЕДУЮЩИЕ события умирают.
+        # Оба ключевых события (Ctrl+P-аккорд и Enter) диспетчатся
+        # СИНТЕТИЧЕСКИ одним evaluate: обработчики ключей winit
+        # исполняются в rAF-тике ДО RedrawRequested, так что оба оракула
+        # («шаблонная палитра», «шаблон вставлен») успевают выйти.
+        # Синтетика обязательна и для Ctrl+P: реальная trusted-клавиша
+        # поднимает браузерную печать (акселератор Chromium) — шим
+        # index.html (M8/W9) гасит её для продуктовых пользователей.
+        console_msgs.clear()
+        await page.evaluate("""() => {
+            const el = document.querySelector('canvas');
+            const ev = (type, init) => el.dispatchEvent(
+                new KeyboardEvent(type, Object.assign({bubbles: true}, init)));
+            ev('keydown', {key: 'Control', code: 'ControlLeft', ctrlKey: true});
+            ev('keydown', {key: 'p', code: 'KeyP', ctrlKey: true});
+            ev('keyup', {key: 'p', code: 'KeyP', ctrlKey: true});
+            ev('keyup', {key: 'Control', code: 'ControlLeft'});
+            ev('keydown', {key: 'Enter', code: 'Enter'});
+            ev('keyup', {key: 'Enter', code: 'Enter'});
+        }""")
+        await asyncio.sleep(1.0)
+        ok = await wait_console(console_msgs, "шаблонная палитра", 5)
+        tpl_count = 0
+        for m in reversed(console_msgs):
+            if "шаблонная палитра" in m and "templates=" in m:
+                tpl_count = int(m.split("templates=")[1].split()[0])
+                break
+        print(("PASS" if ok and tpl_count >= 15 else "FAIL"),
+              f"Ctrl+P: палитра открыта, реестр не пуст (templates={tpl_count})")
+        if not (ok and tpl_count >= 15):
+            failures.append(f"палитра шаблонов: ok={ok}, templates={tpl_count}")
+        ok = await wait_console(console_msgs, "шаблон вставлен", 5)
+        tpl_id = next(
+            (m.split("template=")[1].split()[0] for m in reversed(console_msgs)
+             if "шаблон вставлен" in m and "template=" in m),
+            "?",
+        )
+        print(("PASS" if ok else "FAIL"), f"Enter: шаблон вставлен (id={tpl_id})")
+        if not ok:
+            failures.append("нет лога вставки шаблона")
+
         # ?canvas=имя — именованный старт по ссылке; файла нет → сеется
         # (ещё один свежий контекст: чистый OPFS — имени точно нет)
         context2 = await browser.new_context()
