@@ -28,12 +28,19 @@ value-связям (DAG-движок), а ИИ-агент строит и про
 
 ## PRD — требования продукта
 
+Каталог PRD — [`prd/`](prd/README.html): правила ведения, единый
+[шаблон](prd/TEMPLATE.html) (CJM — обязательный раздел) и индекс документов.
+
 | Документ | Содержание |
 |---|---|
-| [PRD-0001: DuckDB-коннектор данных](PRD-duckdb-connector.html) | PoC подключения к файлам/БД (CSV/Parquet/JSON, SQLite/PG/MySQL), инспектор таблиц и колонок, агрегаты min/max/avg/p50/p90/p95 и перенос их в мат.модель |
-| [PRD-0002: LOD-визуализация связей и main stage](PRD-edge-lod.html) | Пучки связей как одна линия с толщиной по весу входов, режим фокусировки main stage (≤ 70% вьюпорта), выход по Esc/клику |
+| [PRD-0001: DuckDB-коннектор данных](prd/prd-0001-duckdb-data-connector.html) | PoC подключения к файлам/БД (CSV/Parquet/JSON, SQLite/PG/MySQL), инспектор колонок, агрегаты min/max/avg/p50/p90/p95 → вводные мат.модели |
+| [PRD-0002: LOD-визуализация связей и main stage](prd/prd-0002-edge-lod-main-stage.html) | Пучки связей одной линией с толщиной по весу входов, режим main stage (≤ 70% вьюпорта), выход Esc/кликом по фону |
+| [PRD-0003: Всеядный импорт описаний архитектуры](prd/prd-0003-universal-architecture-import.html) | Импорт машиночитаемых описаний (draw.io/UML/PlantUML/Mermaid/DOT, terraform/ansible/compose) → ноды, связи и группы канваса |
 
-PRD — документы требований продукта (проблема → цели → user stories → решение → non-goals → roadmap). При переходе к реализации каждый PRD оформляется отдельным FR в `change-requests/` по шаблону `cr-template.md`.
+PRD — документы требований продукта (проблема → цели → пользователи и CJM →
+user stories → решение → non-goals → roadmap). CJM с трассировкой точек отвала —
+обязательный раздел каждого PRD. При переходе к реализации каждый PRD оформляется
+отдельным FR в `change-requests/` по шаблону `cr-template.md`.
 
 ## Разделы
 
