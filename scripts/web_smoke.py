@@ -300,6 +300,84 @@ async def main() -> int:
         if not ok:
             failures.append("рендер не поднялся после битого параметра")
 
+        # --- 5. W6: хранение — сеяние OPFS, автосейв, reopen, ?canvas= ---
+        # UX-поток плана §4.2: первый запуск сеет /default.canvas; правки
+        # уходят автосейвом (debounce 2 с) в OPFS; перезагрузка открывает
+        # верхний «недавний» без пикера (OPFS разрешений не требует).
+        # Оракулы — INFO-логи canvas_web/canvas_scene (уровень из ?log=).
+        # Свежий контекст = чистый OPFS/IndexedDB origin'а (секции 1–4
+        # уже сеяли default.canvas в профиле основной страницы).
+        context = await browser.new_context()
+        page = await context.new_page()
+        page.on("console", lambda m: console_msgs.append(f"{m.type}: {m.text}"))
+        page.on("pageerror", on_pageerror)
+        console_msgs.clear()
+        page_errors.clear()
+        await page.goto(f"{BASE}/?log=debug", wait_until="load")
+        ok = await wait_console(console_msgs, "сеется новый канвас", 25)
+        print(("PASS" if ok else "FAIL"), "первый запуск: default.canvas сеется в OPFS")
+        if not ok:
+            failures.append("нет лога сеяния OPFS (первый запуск)")
+        ok = await wait_console(console_msgs, READY, 30)
+        if not ok:
+            failures.append("рендер не поднялся после сеяния OPFS")
+        print(("PASS" if ok else "FAIL"), "рендер инициализирован после сеяния")
+        # Правка → коммит → автосейв через debounce 2 с: «канвас сохранён»
+        await page.keyboard.press("Escape")  # онбординг → «Пропустить»
+        await asyncio.sleep(0.4)
+        await page.mouse.dblclick(640, 300)
+        await asyncio.sleep(0.8)
+        await dispatch_text(page, "w6 автосейв")
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.5)
+        ok = await wait_console(console_msgs, "канвас сохранён", 10)
+        print(("PASS" if ok else "FAIL"), "автосейв в OPFS (лог «канвас сохранён»)")
+        if not ok:
+            failures.append("нет лога автосейва после правки (debounce 2 с)")
+        # F5 → reopen из недавних без пикера: «стартовый канвас из недавних»
+        console_msgs.clear()
+        await page.goto(f"{BASE}/?log=debug", wait_until="load")
+        ok = await wait_console(console_msgs, "стартовый канвас из недавних", 25)
+        print(("PASS" if ok else "FAIL"), "F5: reopen из недавних (без пикера)")
+        if not ok:
+            failures.append("нет лога reopen из недавних")
+        ok = await wait_console(console_msgs, "канвас загружен из OPFS", 10)
+        print(("PASS" if ok else "FAIL"), "reopen: содержимое прочитано из OPFS")
+        if not ok:
+            failures.append("нет лога загрузки из OPFS")
+        ok = await wait_console(console_msgs, READY, 30)
+        if not ok:
+            failures.append("рендер не поднялся после reopen")
+        # ?canvas=имя — именованный старт по ссылке; файла нет → сеется
+        # (ещё один свежий контекст: чистый OPFS — имени точно нет)
+        context2 = await browser.new_context()
+        page = await context2.new_page()
+        page.on("console", lambda m: console_msgs.append(f"{m.type}: {m.text}"))
+        page.on("pageerror", on_pageerror)
+        console_msgs.clear()
+        page_errors.clear()
+        await page.goto(f"{BASE}/?canvas=w6-имя&log=debug", wait_until="load")
+        ok = await wait_console(console_msgs, "стартовый канвас из URL", 25)
+        print(("PASS" if ok else "FAIL"), "?canvas= парсится (лог «стартовый канвас из URL»)")
+        if not ok:
+            failures.append("нет лога ?canvas= старта")
+        ok = await wait_console(console_msgs, "сеется новый канвас", 10)
+        print(("PASS" if ok else "FAIL"), "?canvas=w6-имя — файла нет, сеется новый")
+        if not ok:
+            failures.append("нет сеяния именованного канваса")
+        ok = await wait_console(console_msgs, READY, 30)
+        print(("PASS" if ok else "FAIL"), "рендер живёт на именованном канвасе")
+        if not ok:
+            failures.append("нет рендера на именованном канвасе")
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"W6-сценарии без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"W6 pageerror: {page_errors[:3]}")
+        await context.close()
+        await context2.close()
+
         await browser.close()
 
     if swiftshader_noise:

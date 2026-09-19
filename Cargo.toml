@@ -60,6 +60,9 @@ pollster = "0.3"
 # Версия для trunk-сборки: wasm-bindgen-cli 0.2.127 — обязан совпадать
 # с Cargo.lock (там =0.2.127 зафоршен js-sys 0.3.104 из winit)
 wasm-bindgen = "0.2"
+# M8/W6 (wasm-port §4): Promise-мосты (JsFuture) и вызов JS-глю
+# (IndexedDB-recent в index.html); версия уже в дереве через wasm-bindgen
+js-sys = "0.3"
 # M8/W4 (прошивка): async-инициализация Renderer на web — spawn_local
 wasm-bindgen-futures = "0.4"
 # M8/W4 (прошивка): канвас для winit-окна из index.html (EventLoopBuilder
