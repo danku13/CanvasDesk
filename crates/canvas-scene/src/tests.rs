@@ -2548,3 +2548,28 @@ fn save_now_goes_through_injected_storage() {
     // Повторный сейв: dirty_since сброшен — autosave_if_due не пишет.
     assert!(!scene.autosave_if_due(), "не dirty — записи нет");
 }
+
+/// CR-016: автоимя сценария (пустое имя) — первый свободный номер, а не
+/// len+1: при непоследовательных именах («Сценарий 2», «Сценарий 3») len+1
+/// коллидирует с существующим и чип «+» падает с «уже существует».
+#[test]
+fn whatif_autoname_picks_first_free_slot() {
+    let mut scene = mcp_scene();
+    scene
+        .whatif_create_scenario("Сценарий 2")
+        .expect("явное имя");
+    // Автоимя занимает первый свободный номер, а не len+1.
+    let index = scene
+        .whatif_create_scenario("")
+        .expect("автоимя без коллизии");
+    assert_eq!(scene.scenarios[index].name, "Сценарий 1");
+    // Явный дубль — по-прежнему ошибка (контракт MCP).
+    assert!(
+        scene.whatif_create_scenario("Сценарий 2").is_err(),
+        "явная коллизия имени — Err"
+    );
+    // После удаления автоимя занимает освободившийся номер.
+    scene.whatif_delete_scenario(index);
+    let again = scene.whatif_create_scenario("").expect("повторное автоимя");
+    assert_eq!(scene.scenarios[again].name, "Сценарий 1");
+}

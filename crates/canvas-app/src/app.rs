@@ -1625,9 +1625,10 @@ impl App {
                 if self.scene.active_scenario.is_none() {
                     // Подмене нужен сценарий: автосоздание (персистентно,
                     // один undo-шаг — паттерн MCP whatif_set_override).
+                    // CR-016: имя — пустое, scene выбирает первый свободный
+                    // номер (иначе len+1 коллидирует с существующими).
                     let snapshot = self.scene.canvas.clone();
-                    let name = format!("Сценарий {}", self.scene.scenarios.len() + 1);
-                    match self.scene.whatif_create_scenario(&name) {
+                    match self.scene.whatif_create_scenario("") {
                         Ok(index) => {
                             self.scene.active_scenario = Some(index);
                             canvas_core::whatif::scenarios_to_canvas(
@@ -1949,9 +1950,10 @@ impl App {
             BarAction::Base => self.scene.whatif_activate(None),
             BarAction::Scenario(index) => self.scene.whatif_activate(Some(index)),
             BarAction::NewScenario => {
-                let name = format!("Сценарий {}", self.scene.scenarios.len() + 1);
+                // CR-016: имя — пустое, scene выбирает первый свободный
+                // номер (иначе len+1 коллидирует с существующими).
                 let snapshot = self.scene.canvas.clone();
-                match self.scene.whatif_create_scenario(&name) {
+                match self.scene.whatif_create_scenario("") {
                     Ok(index) => {
                         // Список сценариев персистентен: мутация
                         // `canvasdesk.whatif` одним undo-шагом (FR-006).
@@ -9722,7 +9724,14 @@ impl ApplicationHandler<AppEvent> for App {
                     self.toast = None;
                 } else if let Some((text, _)) = &self.toast {
                     let viewport = self.viewport_logical();
-                    let ty = viewport[1] - 44.0;
+                    // CR-016: при активном what-if бар занимает низ окна
+                    // [viewport−BAR_MARGIN−BAR_HEIGHT, viewport−BAR_MARGIN] —
+                    // toast поднимаем над ним, чтобы не перекрывать чипы.
+                    let ty = if self.scene.whatif_active {
+                        viewport[1] - whatif_ui::BAR_MARGIN - whatif_ui::BAR_HEIGHT - 26.0
+                    } else {
+                        viewport[1] - 44.0
+                    };
                     // CR-015: origin — левый край области (контракт ScreenText):
                     // область [40, viewport−40] по центру окна, текст в её центре.
                     owned_texts.push(OwnedScreenText {
