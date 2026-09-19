@@ -18,6 +18,8 @@
 pub mod app_spawn;
 pub mod panic_hook;
 pub mod renderer_launch;
+pub mod url_params;
+pub mod web_clipboard;
 pub mod web_log;
 
 use wasm_bindgen::prelude::*;

@@ -32,12 +32,17 @@ anyhow.workspace = true
 wasm-bindgen-futures.workspace = true
 # Прошивка: вставка winit-канваса в DOM (renderer_launch) + доступ
 # к document/window (web_sys::Window/Document/Node/HtmlCanvasElement)
+# W5: Clipboard/Navigator — navigator.clipboard за трейтом (web_clipboard);
+#     Location — чтение location.search для URL-параметров (?stress=N)
 web-sys = { workspace = true, features = [
     "HtmlCanvasElement",
     "Document",
     "Window",
     "Element",
     "Node",
+    "Clipboard",
+    "Navigator",
+    "Location",
 ] }
 
 [lib]
