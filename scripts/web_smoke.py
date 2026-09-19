@@ -375,8 +375,71 @@ async def main() -> int:
         )
         if page_errors:
             failures.append(f"W6 pageerror: {page_errors[:3]}")
-        await context.close()
-        await context2.close()
+        # --- 6. W11: виджеты снапшотом — реестр в памяти, LOD-placeholder,
+        #     widget_state в localStorage (переживает F5) ---
+        # Приёмка W11 (план §6): виджет-нода не падает и рендерится
+        # плейсхолдером (?stress-widgets → LOD-лог target=Placeholder);
+        # реестр инициализируется в памяти («реестр виджетов готов»);
+        # widget_state восстанавливается из localStorage после
+        # перезагрузки (INFO-оракул «localStorage готов keys=N»).
+        # Создание/удаление через контекстное меню — ручная приёмка
+        # (меню рисуется в wgpu-канвасе, headless-клики вслепую хрупки).
+        context3 = await browser.new_context()
+        page = await context3.new_page()
+        page.on("console", lambda m: console_msgs.append(f"{m.type}: {m.text}"))
+        page.on("pageerror", on_pageerror)
+        console_msgs.clear()
+        page_errors.clear()
+        await page.goto(f"{BASE}/?stress-widgets=3&log=debug", wait_until="load")
+        ok = await wait_console(console_msgs, "реестр виджетов готов", 25)
+        print(("PASS" if ok else "FAIL"), "W11: реестр виджетов инициализирован (память)")
+        if not ok:
+            failures.append("нет лога «реестр виджетов готов» на web")
+        ok = await wait_console(console_msgs, "нагрузочные виджеты добавлен", 10)
+        print(("PASS" if ok else "FAIL"), "W11: ?stress-widgets=3 сеется")
+        if not ok:
+            failures.append("нет лога сеяния стресс-виджетов")
+        ok = await wait_console(console_msgs, "смена LOD-состояния", 15)
+        placeholder = any(
+            "смена LOD-состояния" in m and "target=Placeholder" in m
+            for m in console_msgs
+        )
+        print(("PASS" if ok and placeholder else "FAIL"),
+              "W11: виджет-нода — LOD Placeholder (плейсхолдер, без падения)")
+        if not (ok and placeholder):
+            failures.append("нет LOD-решения Placeholder для виджет-нод")
+        ok = await wait_console(console_msgs, READY, 30)
+        print(("PASS" if ok else "FAIL"), "W11: рендер живёт со виджет-нодами")
+        if not ok:
+            failures.append("рендер не поднялся на сцене с виджет-нодами")
+        # widget_state: сеем JSON (формат W11) → перезагрузка → чтение
+        await page.evaluate(
+            "localStorage.setItem('canvasdesk.widget_state',"
+            " JSON.stringify({'widget-1': {'draft': 'привет'},"
+            " 'widget-2': {'k': 'v2'}}))"
+        )
+        console_msgs.clear()
+        await page.reload(wait_until="load")
+        ok = await wait_console(console_msgs, "widget_state: localStorage готов", 25)
+        keys = -1
+        for m in reversed(console_msgs):
+            if "widget_state: localStorage готов" in m and "keys=" in m:
+                keys = int(m.split("keys=")[1].split()[0])
+                break
+        print(("PASS" if ok and keys == 2 else "FAIL"),
+              f"W11: widget_state пережил F5 (восстановлено keys={keys})")
+        if not (ok and keys == 2):
+            failures.append(f"widget_state не восстановлен из localStorage: keys={keys}")
+        ok = await wait_console(console_msgs, READY, 30)
+        if not ok:
+            failures.append("рендер не поднялся после F5 (W11)")
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"W11-сценарии без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"W11 pageerror: {page_errors[:3]}")
+        await context3.close()
 
         await browser.close()
 

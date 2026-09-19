@@ -34,6 +34,8 @@ wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
 # W6: конфиг web — localStorage хранит TOML-текст (тот же формат config.toml)
 toml.workspace = true
+# W11: widget_state — одна JSON-запись в localStorage (карта StateMap)
+serde_json.workspace = true
 # Прошивка: вставка winit-канваса в DOM (renderer_launch) + доступ
 # к document/window (web_sys::Window/Document/Node/HtmlCanvasElement)
 # W5: Clipboard/Navigator — navigator.clipboard за трейтом (web_clipboard);

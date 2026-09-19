@@ -433,7 +433,6 @@ async fn choose_canvas(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use canvas_core::CanvasStorage as _;
 
     fn canvas_with(name: &str) -> Canvas {
         let mut canvas = Canvas::default();
