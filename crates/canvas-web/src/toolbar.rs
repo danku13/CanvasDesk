@@ -70,6 +70,9 @@ fn bind(document: &web_sys::Document, id: &str, handler: impl FnMut() + 'static)
 
 /// Обновить подпись «Недавние» под имя активного канваса (синхронизация
 /// DOM ↔ web_state; ошибки молча — декоративный элемент).
+/// CR-014: CSS панели эллипсирует длинное имя (`max-width` + `overflow:
+/// hidden`), поэтому ПОЛНОЕ имя дублируется в `title` кнопки — тултип
+/// показывает его при наведении, эллипсис ничего не прячет безвозвратно.
 pub(crate) fn set_recent_label(name: &str) {
     let Some(window) = web_sys::window() else {
         return;
@@ -81,5 +84,9 @@ pub(crate) fn set_recent_label(name: &str) {
         element
             .unchecked_ref::<web_sys::Node>()
             .set_text_content(Some(&format!("Недавние: {name}")));
+        if let Err(err) = element.set_attribute("title", &format!("Переоткрыть: {name}"))
+        {
+            tracing::warn!(target: "canvas_web", ?err, "тултип кнопки «Недавние» не обновлён");
+        }
     }
 }
