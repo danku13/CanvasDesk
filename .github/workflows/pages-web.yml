@@ -2,10 +2,9 @@ name: Pages (web + docs)
 
 # M8/W12 (wasm-port §6, задача W12 «Полировка и деплой»): публикация сайта
 # GitHub Pages — веб-версия canvas-web по пути /app + Jekyll-сборка
-# документов (user-docs и прочие .md из корня — та же стандартная сборка
-# Pages, что была у «Deploy from a branch: main / (root)»; канонические
-# URL user-docs/*.html сохраняются, Pages-workflow ЗАМЕНЯЕТ branch-деплой —
-# снапшот сайта = один артефакт: доки + /app).
+# документации из docs/ (реплика прежнего branch-деплоя: фактический
+# источник был main /docs, а не корень; структура сайта сохраняется 1:1,
+# Pages-workflow заменяет branch-деплой — снапшот сайта единый: docs + /app).
 #
 # Включение (один раз, руками): Settings → Pages → Source: «GitHub Actions»
 # (при прежнем «Deploy from a branch» deploy-pages завершится ошибкой —
@@ -57,13 +56,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
 
-      # Jekyll ДО восстановления cargo-кэша и сборки: source-каталог не
-      # должен содержать target/ (Jekyll копирует всё не исключённое,
-      # rust-cache восстанавливает target/ на следующем шаге).
-      - name: Jekyll-сборка документов (user-docs и .md из корня)
+      # Jekyll ДО восстановления cargo-кэша и сборки (source ./docs —
+      # реплика прежнего branch-деплоя legacy-типа: Settings → Pages показывал
+      # Source: main /docs, а не корень, как писало устаревшее руководство;
+      # сохраняем структуру сайта 1:1, добавляя только /app).
+      - name: Jekyll-сборка документации (docs/ — как у branch-деплоя)
         uses: actions/jekyll-build-pages@v1
         with:
-          source: ./
+          source: ./docs
           destination: ./_site
 
       - uses: dtolnay/rust-toolchain@stable
@@ -83,10 +83,13 @@ jobs:
       - name: Установить wasm-bindgen-cli 0.2.127
         run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
 
+      # --strip-components=2: binaryen-version_125/bin/wasm-opt → wasm-opt
+      # (strip=1 клал бы его в /usr/local/bin/bin/wasm-opt — найдено первым
+      # прогоном CI: «wasm-opt: command not found» при зелёном tar).
       - name: Установить wasm-opt (binaryen 125) и brotli
         run: |
           curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_125/binaryen-version_125-x86_64-linux.tar.gz \
-            | sudo tar -xz -C /usr/local/bin --strip-components=1 binaryen-version_125/bin/wasm-opt
+            | sudo tar -xz -C /usr/local/bin --strip-components=2 binaryen-version_125/bin/wasm-opt
           sudo apt-get install -y -q brotli
           wasm-opt --version
 

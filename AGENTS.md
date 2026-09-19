@@ -201,8 +201,8 @@ Web-бандл и деплой (M8/W12): `scripts/web_bundle.sh` — релиз�
 canvas-web (trunk 0.21.14, `[profile.release] lto="thin"`), оптимизация
 `wasm-opt -Oz` и отчёт о размере (§8.8: ≤8 МБ raw / ≤4 МБ brotli; в CI итог
 дублируется в $GITHUB_STEP_SUMMARY). Публикация на GitHub Pages (путь `/app` +
-Jekyll-сборка user-docs) — workflow `pages-web.yml` (Source: «GitHub
-Actions», см. README «Веб-версия»).
+Jekyll-сборка docs/ — как у прежнего branch-деплоя) — workflow `pages-web.yml`
+(Source: «GitHub Actions», см. README «Веб-версия»).
 
 MCP-wasm-гейт (FR-037, ADR-0012): контрактный слой (canvas-scene,
 canvas-mcp, canvas-mcp-headless) собирается под wasm32-unknown-unknown,
