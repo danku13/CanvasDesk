@@ -30,6 +30,10 @@ winit.workspace = true
 anyhow.workspace = true
 # Прошивка (§3.4): футура async-инициализации Renderer — spawn_local
 wasm-bindgen-futures.workspace = true
+# W6: JsFuture (промисы OPFS/FS Access/IDB), Function.apply (JS-глю recent)
+js-sys.workspace = true
+# W6: конфиг web — localStorage хранит TOML-текст (тот же формат config.toml)
+toml.workspace = true
 # Прошивка: вставка winit-канваса в DOM (renderer_launch) + доступ
 # к document/window (web_sys::Window/Document/Node/HtmlCanvasElement)
 # W5: Clipboard/Navigator — navigator.clipboard за трейтом (web_clipboard);
@@ -43,7 +47,39 @@ web-sys = { workspace = true, features = [
     "Clipboard",
     "Navigator",
     "Location",
+    # W6 (§4): OPFS-хранилище канвасов + FS Access (пикер/хэндлы) +
+    # DOM-drop + экспорт blob + конфиг из localStorage
+    "StorageManager",
+    "Storage",
+    "FileSystemDirectoryHandle",
+    "FileSystemGetFileOptions",
+    "FileSystemFileHandle",
+    "FileSystemHandle",
+    "FileSystemWritableFileStream",
+    "FileSystemHandlePermissionDescriptor",
+    "FileSystemPermissionMode",
+    "WritableStream",
+    "OpenFilePickerOptions",
+    "FilePickerAcceptType",
+    "File",
+    "FileList",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlAnchorElement",
+    "HtmlButtonElement",
+    "HtmlElement",
+    "Event",
+    "EventTarget",
+    "DragEvent",
+    "DataTransfer",
+    "DataTransferItemList",
+    "DataTransferItem",
 ] }
+
+[dev-dependencies]
+# нативные тесты зеркала: json! для extra-полей канваса
+serde_json.workspace = true
 
 [lib]
 name = "canvas_web"
