@@ -26,6 +26,23 @@ pub mod keys {
     pub const TAB_CANVAS: &str = "settings.tab.canvas";
     pub const TAB_EDGES: &str = "settings.tab.edges";
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
+    pub const TAB_SNAP: &str = "settings.tab.snap";
+
+    pub const ROW_SNAP_ENABLED: &str = "settings.row.snap_enabled";
+    pub const ROW_SNAP_GRID: &str = "settings.row.snap_grid";
+    pub const ROW_SNAP_GUIDES: &str = "settings.row.snap_guides";
+    pub const ROW_SNAP_COLLISION: &str = "settings.row.snap_collision";
+    pub const ROW_SNAP_TOLERANCE: &str = "settings.row.snap_tolerance";
+    pub const ROW_SNAP_SUB_ZOOM: &str = "settings.row.snap_sub_zoom";
+    pub const ROW_SNAP_COARSE_ZOOM: &str = "settings.row.snap_coarse_zoom";
+
+    pub const DESC_SNAP_ENABLED: &str = "settings.desc.snap_enabled";
+    pub const DESC_SNAP_GRID: &str = "settings.desc.snap_grid";
+    pub const DESC_SNAP_GUIDES: &str = "settings.desc.snap_guides";
+    pub const DESC_SNAP_COLLISION: &str = "settings.desc.snap_collision";
+    pub const DESC_SNAP_TOLERANCE: &str = "settings.desc.snap_tolerance";
+    pub const DESC_SNAP_SUB_ZOOM: &str = "settings.desc.snap_sub_zoom";
+    pub const DESC_SNAP_COARSE_ZOOM: &str = "settings.desc.snap_coarse_zoom";
 
     pub const ROW_BUTTON_CORNER: &str = "settings.row.button_corner";
     pub const ROW_GRID: &str = "settings.row.grid";
@@ -352,6 +369,41 @@ const RU: &[(&str, &str)] = &[
     (
         keys::DESC_LANGUAGE,
         "Язык интерфейса — применяется на лету, без перезапуска.",
+    ),
+    (keys::ROW_SNAP_ENABLED, "Snap-выравнивание (мастер)"),
+    (
+        keys::DESC_SNAP_ENABLED,
+        "Мастер-выключатель магнитной раскладки: гасит весь снаппинг, не сбрасывая остальные настройки.",
+    ),
+    (keys::ROW_SNAP_GRID, "Привязка к сетке"),
+    (
+        keys::DESC_SNAP_GRID,
+        "Притягивать ноду к линиям фоновой сетки в момент отпускания drag.",
+    ),
+    (keys::ROW_SNAP_GUIDES, "Направляющие соседей"),
+    (
+        keys::DESC_SNAP_GUIDES,
+        "Умные направляющие по краям, центрам и серединам соседних нод, включая равные интервалы.",
+    ),
+    (keys::ROW_SNAP_COLLISION, "Не проходить сквозь ноды"),
+    (
+        keys::DESC_SNAP_COLLISION,
+        "При перетаскивании движение останавливается на границе зазора вокруг чужих нод.",
+    ),
+    (keys::ROW_SNAP_TOLERANCE, "Допуск направляющих"),
+    (
+        keys::DESC_SNAP_TOLERANCE,
+        "Радиус притяжения направляющих и сетки в экранных пикселях.",
+    ),
+    (keys::ROW_SNAP_SUB_ZOOM, "Порог sub-сетки"),
+    (
+        keys::DESC_SNAP_SUB_ZOOM,
+        "При зуме выше порога появляются линии полушага для точной раскладки.",
+    ),
+    (keys::ROW_SNAP_COARSE_ZOOM, "Порог coarse-сетки"),
+    (
+        keys::DESC_SNAP_COARSE_ZOOM,
+        "При зуме ниже порога линии укрупняются до major-шага для крупной компоновки.",
     ),
     (keys::VALUE_ON, "вкл"),
     (keys::VALUE_OFF, "выкл"),
@@ -681,6 +733,41 @@ const EN: &[(&str, &str)] = &[
     (
         keys::DESC_LANGUAGE,
         "Interface language — applied instantly, no restart needed.",
+    ),
+    (keys::ROW_SNAP_ENABLED, "Snap alignment (master)"),
+    (
+        keys::DESC_SNAP_ENABLED,
+        "Master switch of magnetic layout: disables all snapping without resetting other settings.",
+    ),
+    (keys::ROW_SNAP_GRID, "Snap to grid"),
+    (
+        keys::DESC_SNAP_GRID,
+        "Snap the node to background grid lines on drag release.",
+    ),
+    (keys::ROW_SNAP_GUIDES, "Neighbor guides"),
+    (
+        keys::DESC_SNAP_GUIDES,
+        "Smart guides by edges, centers and midpoints of neighbor nodes, including equal spacing.",
+    ),
+    (keys::ROW_SNAP_COLLISION, "Collision avoidance"),
+    (
+        keys::DESC_SNAP_COLLISION,
+        "While dragging, movement stops at the gap boundary around other nodes.",
+    ),
+    (keys::ROW_SNAP_TOLERANCE, "Guide tolerance"),
+    (
+        keys::DESC_SNAP_TOLERANCE,
+        "Attraction radius of guides and grid, in screen pixels.",
+    ),
+    (keys::ROW_SNAP_SUB_ZOOM, "Sub-grid threshold"),
+    (
+        keys::DESC_SNAP_SUB_ZOOM,
+        "Above this zoom, half-step lines appear for precise layout.",
+    ),
+    (keys::ROW_SNAP_COARSE_ZOOM, "Coarse-grid threshold"),
+    (
+        keys::DESC_SNAP_COARSE_ZOOM,
+        "Below this zoom, lines coarsen to the major step for large-scale composition.",
     ),
     (keys::VALUE_ON, "on"),
     (keys::VALUE_OFF, "off"),
@@ -1095,6 +1182,13 @@ mod tests {
             keys::ROW_FOCUS_MODE,
             keys::ROW_HUD_ON_START,
             keys::ROW_LANGUAGE,
+            keys::ROW_SNAP_ENABLED,
+            keys::ROW_SNAP_GRID,
+            keys::ROW_SNAP_GUIDES,
+            keys::ROW_SNAP_COLLISION,
+            keys::ROW_SNAP_TOLERANCE,
+            keys::ROW_SNAP_SUB_ZOOM,
+            keys::ROW_SNAP_COARSE_ZOOM,
         ];
         let desc_keys = [
             keys::DESC_BUTTON_CORNER,
@@ -1108,12 +1202,20 @@ mod tests {
             keys::DESC_FOCUS_MODE,
             keys::DESC_HUD_ON_START,
             keys::DESC_LANGUAGE,
+            keys::DESC_SNAP_ENABLED,
+            keys::DESC_SNAP_GRID,
+            keys::DESC_SNAP_GUIDES,
+            keys::DESC_SNAP_COLLISION,
+            keys::DESC_SNAP_TOLERANCE,
+            keys::DESC_SNAP_SUB_ZOOM,
+            keys::DESC_SNAP_COARSE_ZOOM,
         ];
         let tab_keys = [
             keys::TAB_GENERAL,
             keys::TAB_CANVAS,
             keys::TAB_EDGES,
             keys::TAB_APPEARANCE,
+            keys::TAB_SNAP,
         ];
         for key in row_keys.into_iter().chain(desc_keys).chain(tab_keys) {
             assert!(!tr(Language::Ru, key).is_empty(), "RU пуст: {key}");
