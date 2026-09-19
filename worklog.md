@@ -70,6 +70,63 @@
   параллелизуемы (зона canvas-web); W12 — финализатор (полировка/
   деплой/CI). Отступление от «1 задача = 1 сессия» осознанное: обе
   задачи S, общая smoke-инфраструктура.
+## 2026-09-19 — W11 (M8 wasm-порт, трек A): виджеты снапшотом — реестр в памяти, widget_state в localStorage, тик setInterval
+
+- **Задача (§6, поверх W5/W7):** «Виджеты снапшотом»: Registry — встроенные
+  пакеты из include_dir в OPFS/память; widget_state в localStorage;
+  LOD-деградация как на Linux. Приёмка: виджет-нода не падает, рендерится
+  плейсхолдером; создать/удалить можно; состояние переживает reload.
+- **Решение «OPFS или память» — память** (§5): пакетные файлы (index.html и
+  пр.) в волне 1 никто не читает — live-хост WebView2 отсутствует, манифесты
+  нужны меню/LOD/permissions. Материализация файлов в OPFS дала бы пустой
+  артефакт и лишний async-код.
+- **canvas-widgets/registry.rs — режим «память» без cfg:** `Store::Fs|Memory`,
+  `WidgetRegistry::in_memory()`; Memory: materialize/reload из
+  include_dir-статики (виртуальные dir `/builtin/<id>` — dir читают только
+  диагностика/логи), `install` из папки — ошибка `RegistryError::NoFileSystem`
+  (браузер не даёт папок; сценарий — волна 2), `remove` — из map + tombstone
+  в памяти; tombstone-экспорт/импорт `memory_tombstones`/`set_memory_tombstones`
+  (формат «1.2.0», парсинг — готовый `parse_version_line`). +3 нативных теста
+  (материализация/идемпотентность, remove+tombstone+restore, отказ install).
+- **canvas-app:** выбор реестра — в `App::new` по инъецированному каталогу
+  кэша (семантика «нет ФС-каталога»): `Some(dir)` → файловый реестр
+  `dir/widgets` (натив — нулевое поведение), `None` (web) → память.
+  `WidgetManager::new` теперь принимает готовый `WidgetRegistry`
+  (5 мест вызова). LOD-деградация «как на Linux» — без нового кода:
+  `runtime_ok()` = false вне Windows → все виджет-ноды Placeholder
+  (серая карточка), общий путь plan_frame.
+- **canvas-web/widgets_web.rs (новый):** `WebWidgetState` —
+  `WidgetStateBackend` над localStorage синхронно (трейт синхронный —
+  без spawn_local/очередей): одна JSON-запись `canvasdesk.widget_state`,
+  карта `{node: {key: value}}` (§3.2 «serde_json»); битый JSON — warn +
+  пустая карта, недоступный localStorage — деградация (get None, set no-op).
+  Чистая `StateMap` — 4 нативных теста (roundtrip/upsert, изоляция нод T21,
+  юникод-ключи, битый JSON). `install_tick` — `setInterval` 1000 мс →
+  `WidgetEvent::Tick` через EventLoopProxy — зеркало тик-потока
+  «widget-tick» main.rs (std::thread на wasm недоступен; обошлись web-sys
+  `set_interval_with_callback_and_timeout_and_arguments`, ноль новых
+  зависимостей — gloo-interval не понадобился).
+- **canvas-web/app_spawn.rs:** widget_sender — через EventLoopProxy
+  (был no-op); в `App::new` — `Some(WebWidgetState::new())`; после сборки —
+  `app.init_widgets()` (тот же путь, что в нативном main.rs) + install_tick.
+- **Осознанное отклонение от натива:** tombstone удалённых встроенных пакетов
+  живёт в памяти сессии — F5 возвращает пакет в меню (нода при этом всё
+  равно рендерится плейсхолдером — визуальной разницы в волне 1 нет).
+  Экспорт/импорт API у реестра готов; сохранение в localStorage — W12
+  (полировка) или волна 2.
+- **Приёмка (smoke +6 PASS, всего 32):** ?stress-widgets=3 → «реестр виджетов
+  готов» + LOD `target=Placeholder` (нода не падает, рендерится
+  плейсхолдером) + рендер живёт; widget_state: сеев JSON в localStorage →
+  F5 → «widget_state: localStorage готов keys=2» (состояние пережило
+  reload); все W11-сцены без pageerror. Создание/удаление через
+  контекстное меню канваса — ручная приёмка (меню рисуется в wgpu,
+  headless-клики вслепую хрупки — прецедент пикера W6).
+- **Попутное:** убраны избыточные `use Trait as _` в тестах fs_access/opfs
+  (lint-drift rustc 1.98.1 — pre-existing на main, валил локальный
+  clippy-гейт).
+- **Гейты:** fmt, clippy `-D warnings`, test --workspace (45 наборов),
+  wasm_gate.sh, mcp_wasm_gate.sh, trunk build, web_smoke.py — зелёные;
+  CI 11/11 SUCCESS (merge 2fc7720).
 
 ## 2026-09-19 — W6 (M8 wasm-порт, трек A): хранение в браузере — OPFS + FS Access + IndexedDB-recent + DOM-drop + ?canvas= + экспорт blob
 
