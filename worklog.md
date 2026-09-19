@@ -1,3 +1,88 @@
+## 2026-09-19 — W4-прошивка (M8 wasm-порт, трек B): первый свет canvas-web — App в браузере, async-init Renderer, WebGPU
+
+- **Задача (§6.1):** трек B, шаг после W4-каркаса (1056d89) и слитого
+  W3 трека A (af0219a — «W4-прошивка разблокирована»): «Первый свет
+  canvas-web» — spawn_app, async-init Renderer через spawn_local, пустая
+  сцена, зум/пан/сетка, HUD F3. Ветка feature/wasm-w4-proshivka от main
+  af0219a (fetch перед стартом — origin не ушёл, гонки нет).
+- **Async-init Renderer за инъекцией (§3.4, паттерн W3-сервисов):**
+  - `canvas-render::renderer_init` (новый модуль): `RendererLauncher`
+    (launch(window, prefer_dx12) -> RendererLaunch), варианты
+    `Ready(Box<Renderer>)`/`Pending(RendererSlot)`/`Failed(anyhow)`,
+    `RendererSlot` — Rc-RefCell одноразовый слот (главный поток:
+    web-футура spawn_local и кадр-цикл не пересекаются по потокам);
+    `BlockOnRendererLaunch` — pollster::block_on (натив, поведение как
+    до W4); `NoopRendererLaunch` — заглушка для тестов.
+  - canvas-app: `App::new` + параметр `renderer_launcher`;
+    `resumed()` зовёт `launch` (натив — Ready/Failed синхронно, web —
+    Pending+слот); тело Ok-ветки выделено в `install_renderer`;
+    RedrawRequested забирает слот `and_then(RendererSlot::take)` ДО
+    отрисовки — кадры до готовности GPU пропускаются (renderer None,
+    R14), натив-ветка мертва (слот всегда None). pollster убран из
+    deps canvas-app (переехал в canvas-render).
+  - canvas-web `renderer_launch::SpawnLocalRendererLaunch`:
+    spawn_local(Renderer::new) → put(слот) → window.request_redraw();
+    вставка winit-канваса в DOM (WindowExtWebSys::canvas + append,
+    идемпотентно — winit 0.30 `with_append` по умолчанию выключен,
+    attrs строятся в canvas-app, §3.1: web-знания туда не идут).
+- **canvas-web `app_spawn` (зеркало нативного main.rs):**
+  install_measured_reserve (тот же хук) → SceneState::
+  load_or_seed_with_storage(default.canvas, MemStorage) →
+  EventLoop<AppEvent> + spawn_app (EventLoopExtWebSys) → App::new с
+  web-набором (карта §3.2): NoopThumbs (W10), NoopWatch, MemSearch с
+  proxy-ответами (AppEvent::Search), NoopClipboard (W5+),
+  widget_state None (W11), Settings::default (W6), SpawnLocalRenderer-
+  Launch. `start()` = boot() + spawn_desk(); нативные тесты каркаса не
+  зовут spawn (EventLoop требует JS-рунтайм/дисплей).
+- **Web-compat шимы (§7 «WebGPU-драйверные баги», web-слой, wgpu не
+  патчится):** (1) `--cfg=web_sys_unstable_apis` для
+  wasm32-unknown-unknown в .cargo/config.toml — стандартное требование
+  wgpu-web; (2) index.html-шим: GPUAdapter.prototype.requestDevice
+  фильтрует requiredLimits по именам adapter.limits (for..in —
+  WebIDL-геттеры) — wgpu 22 требует удалённый из WebGPU лимит
+  maxInterStageShaderComponents (переименование), свежие Chromium
+  отклоняли весь requestDevice («The limit … is not recognized») —
+  маскировалось под «GPU-адаптер не найден» (GpuContext::new возвращает
+  None и при ошибке device). Найдено перехватом requestAdapter/
+  requestDevice в консоли.
+- **Точечные правки ядра:** `Renderer::new` перечитывает размер ПОСЛЕ
+  async-ожиданий (было: читал до → на web 0×0, Resized приходил при
+  renderer=None и пропускался → canvas 300×150; нативу не вредит —
+  block_on в том же кадре); `web_log` ConsoleLayer печатает поля
+  событий key=value-суффиксами (раньше терялись — диагностика web-ошибок
+  без полей невозможна); метка «кадр презентован» — debug-уровень.
+- **Workspace/Cargo.toml:** canvas-app в [workspace.dependencies] (lib
+  для canvas-web), wasm-bindgen-futures + web-sys (фичи у потребителя),
+  canvas-app: pollster убран; canvas-render: pollster в [dependencies]
+  (был dev-only); canvas-web: +app/core/render/scene/widgets/winit/
+  anyhow/wasm-bindgen-futures/web-sys. Cargo.lock: новые
+  consumer-строки, версии не менялись. CI-файлы не тронуты (протокол
+  §6.1 п.4 — заморозка до W12).
+- **Приёмка (весь каскад зелёный):** cargo fmt ✓; clippy --workspace
+  --all-targets -D warnings ✓; test --workspace ✓ (45 наборов, 0 failed;
+  +3 теста renderer_init, +2 canvas-web, app-тест на NoopRendererLaunch);
+  wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (e2e oracle ±1 %); test -p
+  canvas-shell ✓ (129). trunk build ✓ (dist: index.html 4.7 КБ + глю
+  78 КБ + wasm 20.6 МБ debug). Браузерный дым (Chromium 153 + swiftshader,
+  agent-browser --webgpu): модуль стартует → каркас → сцена сеется →
+  окно+канвас 1280×577 в DOM (context: rgba8unorm/opaque) → «рендер
+  инициализирован backend=BrowserWebGpu format=Rgba8Unorm
+  present_mode=Fifo» → кадры презентуются (24 инстанса сетки), ошибок
+  страницы и GPU-валидации (uncapturederror-listener) нет. Пиксельный
+  скриншот WebGPU-канваса в headless — известное ограничение платформы
+  (agent-browser doctor: «WebGPU renders, but headless screenshots miss
+  the canvas»); рендер подтверждён present-логами и doctor-пробой
+  GPU-readback. Зум/пан/F3 проверяются владельцем в `trunk serve` на
+  обычном десктоп-браузере (headless-песочница принципиально не даёт
+  визуального канала).
+- **Уроки (для W6/W10/W11):** NO_COLOR=1 в песочнице ломает trunk
+  0.21.14 (clap: «invalid value '1' for --no-color'») — запускать
+  NO_COLOR=false; WebGPU-диагностика — uncapturederror-listener + поле-
+  суффиксы web_log; wgpu-web деградации молчат (None без причины) —
+  differentiate adapter/device в GpuContext::new при будущих правках.
+- **Коммит:** 1 коммит на feature/wasm-w4-proshivka → merge --no-ff в
+  main (протокол §6.1).
+
 ## 2026-09-19 — W3 (M8 wasm-порт, трек A): трейты сервисов в core, инъекция в App::new, canvas-app lib под wasm32
 
 - **Задача (§6.1):** трек A, шаг 3 после W2 (8482183): «Трейты сервисов»

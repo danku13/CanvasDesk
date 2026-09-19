@@ -76,17 +76,23 @@ pub fn format_line(level: &tracing::Level, target: &str, message: &str) -> Strin
     format!("[{level} {target}] {message}")
 }
 
-/// Посетитель полей события: выдёргивает поле `message` (стандартное поле
-/// макросов `tracing::*!`; Debug-формат `format_args!` — готовый текст).
+/// Посетитель полей события: `message` — текст, остальные поля —
+/// `key=value`-суффиксы (диагностика на web: ошибки приходят полями
+/// `%err` — компактный формат каркаса их раньше терял; прошивка W4
+/// подняла это до контракта — консоль — единственный канал ошибок).
 #[derive(Default)]
 struct MessageVisitor {
     message: String,
+    fields: String,
 }
 
 impl tracing::field::Visit for MessageVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = format!("{value:?}");
+        } else {
+            self.fields
+                .push_str(&format!(" {}={:?}", field.name(), value));
         }
     }
 }
@@ -99,11 +105,11 @@ impl<S: Subscriber> Layer<S> for ConsoleLayer {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
-        let line = format_line(
-            event.metadata().level(),
-            event.metadata().target(),
-            &visitor.message,
-        );
+        let mut text = visitor.message;
+        if !visitor.fields.is_empty() {
+            text.push_str(&visitor.fields);
+        }
+        let line = format_line(event.metadata().level(), event.metadata().target(), &text);
         console_out(event.metadata().level(), &line);
     }
 }
@@ -139,7 +145,8 @@ mod tests {
 
     /// Слой прокладывает реальные события до консольного вывода без
     /// паник (нативный фолбэк — println/eprintln; сам факт прохождения
-    /// on_event по всем уровням и есть проверка проводки).
+    /// on_event по всем уровням и есть проверка проводки). Поля
+    /// (кроме message) — суффиксами key=value.
     #[test]
     fn events_flow_through_console_layer() {
         init_tracing();
