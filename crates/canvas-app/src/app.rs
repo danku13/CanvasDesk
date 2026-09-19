@@ -880,9 +880,19 @@ impl App {
     ) -> Self {
         // M5 (T20-F): менеджер виджетов; реестр инициализируется в
         // main() (init_widgets) после настройки трейсинга. M8/W3: каталог
-        // кэша инъектируется (натив — shell::default_cache_dir, web — W6)
+        // кэша инъектируется (натив — shell::default_cache_dir, web — W6).
+        // M8/W11: реестр виджетов выбирается по каталогу кэша — есть ФС-
+        // каталог → файловый реестр (натив, как сегодня); нет (web) →
+        // реестр в памяти (встроенные пакеты из include_dir; решение
+        // «OPFS или память» — память, план §5: пакетные файлы в волне 1
+        // никто не читает — live-хост отсутствует, манифесты нужны
+        // меню/LOD/permissions).
+        let widgets_registry = match &cache_dir {
+            Some(dir) => canvas_widgets::registry::WidgetRegistry::new(dir.join("widgets")),
+            None => canvas_widgets::registry::WidgetRegistry::in_memory(),
+        };
         let widgets = crate::widgets::WidgetManager::new(
-            cache_dir.clone().unwrap_or_default().join("widgets"),
+            widgets_registry,
             settings.theme == Theme::Dark,
             widget_state,
         );
