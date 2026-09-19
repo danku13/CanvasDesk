@@ -91,6 +91,11 @@ pub mod keys {
     pub const MENU_BOTTLENECK: &str = "menu.bottleneck";
     pub const MENU_WHATIF: &str = "menu.whatif";
 
+    // --- Batch-операции выделения (FR-038 п.16, T-038.5): видны при N≥3 ---
+    pub const MENU_ALIGN_HORIZONTAL: &str = "menu.align_horizontal";
+    pub const MENU_ALIGN_VERTICAL: &str = "menu.align_vertical";
+    pub const MENU_DISTRIBUTE_EVENLY: &str = "menu.distribute_evenly";
+
     // --- Панель хоткеев (FR-004): колонка клавиши («ЛКМ» — раскладочная
     // аббревиатура, тоже переводится) и описания ---
     pub const HOTKEYS_TITLE: &str = "hotkeys.title";
@@ -426,6 +431,10 @@ const RU: &[(&str, &str)] = &[
     (keys::MENU_DESKTOP_MODE, "Режим десктопа"),
     (keys::MENU_BOTTLENECK, "Узкие места (Ctrl+B)"),
     (keys::MENU_WHATIF, "What-if режим (Ctrl+Shift+I)"),
+    // --- Batch-операции выделения (FR-038 п.16) ---
+    (keys::MENU_ALIGN_HORIZONTAL, "Выровнять по горизонтали"),
+    (keys::MENU_ALIGN_VERTICAL, "Выровнять по вертикали"),
+    (keys::MENU_DISTRIBUTE_EVENLY, "Распределить равномерно"),
     // --- Панель хоткеев ---
     (keys::HOTKEYS_TITLE, "Горячие клавиши"),
     (keys::HKEY_F1, "F1"),
@@ -790,6 +799,10 @@ const EN: &[(&str, &str)] = &[
     (keys::MENU_DESKTOP_MODE, "Desktop mode"),
     (keys::MENU_BOTTLENECK, "Bottlenecks (Ctrl+B)"),
     (keys::MENU_WHATIF, "What-if mode (Ctrl+Shift+I)"),
+    // --- Batch-операции выделения (FR-038 п.16) ---
+    (keys::MENU_ALIGN_HORIZONTAL, "Align horizontally"),
+    (keys::MENU_ALIGN_VERTICAL, "Align vertically"),
+    (keys::MENU_DISTRIBUTE_EVENLY, "Distribute evenly"),
     // --- Hotkeys panel ---
     (keys::HOTKEYS_TITLE, "Hotkeys"),
     (keys::HKEY_F1, "F1"),
@@ -1220,6 +1233,34 @@ mod tests {
         for key in row_keys.into_iter().chain(desc_keys).chain(tab_keys) {
             assert!(!tr(Language::Ru, key).is_empty(), "RU пуст: {key}");
             assert!(!tr(Language::En, key).is_empty(), "EN пуст: {key}");
+        }
+    }
+
+    /// Ключи пунктов batch-выравнивания (FR-038 п.16, T-038.5) присутствуют
+    /// в обоих языках с точными фразами постановки (ключ = полная фраза,
+    /// FR-040); полнота таблиц в целом — tables_are_complete_and_consistent.
+    #[test]
+    fn menu_align_keys_present_in_both_tables() {
+        let phrases = [
+            (
+                keys::MENU_ALIGN_HORIZONTAL,
+                "Выровнять по горизонтали",
+                "Align horizontally",
+            ),
+            (
+                keys::MENU_ALIGN_VERTICAL,
+                "Выровнять по вертикали",
+                "Align vertically",
+            ),
+            (
+                keys::MENU_DISTRIBUTE_EVENLY,
+                "Распределить равномерно",
+                "Distribute evenly",
+            ),
+        ];
+        for (key, ru, en) in phrases {
+            assert_eq!(tr(Language::Ru, key), ru, "RU фраза: {key}");
+            assert_eq!(tr(Language::En, key), en, "EN фраза: {key}");
         }
     }
 }
