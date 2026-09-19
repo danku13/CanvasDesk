@@ -33,12 +33,14 @@
 веб-версию CanvasDesk по пути `/app` в тот же артефакт сайта.
 
 1. Откройте **Settings → Pages** репозитория `danku13/CanvasDesk`.
-2. **Source**: «GitHub Actions» (branch-деплой заменяется workflow'ом,
-   содержимое сайта из `docs/` сохраняется). Нажмите **Save**.
+2. **Source**: «GitHub Actions» (необязательная чистка — деплой workflow'ом
+   работает и поверх legacy-источника; переключение останавливает параллельные
+   legacy-сборки `docs/`, содержимое сайта не меняется). Нажмите **Save**.
 3. Пуш в `main` (правки `docs/**`, web-крейтов или workflow'а) или ручной
    запуск **Actions → Pages (web + docs) → Run workflow** публикует сайт.
 4. Через 1–2 минуты после джобы сайт доступен по адресу
-   `https://danku13.github.io/CanvasDesk/`.
+   `https://danku13.github.io/CanvasDesk/`, веб-версия — по
+   `/CanvasDesk/app/`.
 
 Нюанс: в частном репозитории Pages доступен на планах Pro/Team/Enterprise.
 Страницы `user-docs/*.md` в сайт Pages не входят (встроенный просмотрщик
