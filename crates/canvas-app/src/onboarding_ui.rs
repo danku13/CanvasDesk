@@ -10,9 +10,10 @@
 //! `onboarding_done`/`onboarding_defers` и кламп — `canvas-core`
 //! settings.rs (схема `config.toml`, `#[serde(default)]`).
 
-use canvas_core::{Settings, ONBOARDING_MAX_DEFERS};
+use canvas_core::{Language, Settings, ONBOARDING_MAX_DEFERS};
 
 use crate::docs_ui::{text_width, SPACE_W_FACTOR};
+use crate::i18n::{self, keys};
 
 /// Автопоказ тура при старте (таблица решений FR-028): не пройден до конца
 /// И отложен менее `ONBOARDING_MAX_DEFERS` раз. Ручной вход из меню «?»
@@ -26,8 +27,10 @@ pub fn should_show_onboarding(settings: &Settings) -> bool {
 /// оценка ширины глифа). Зарезервированный `action` для v2 — интерактивная
 /// чек-точка демо-канваса (машина состояний не переписывается).
 pub struct OnboardingStep {
-    pub title: &'static str,
-    pub body: &'static str,
+    /// Ключ заголовка (таблица [`crate::i18n`] — FR-040).
+    pub title_key: &'static str,
+    /// Ключ тела (полная фраза, перенос на стороне [`body_lines`]).
+    pub body_key: &'static str,
 }
 
 /// Шаги тура (FR-028, скоуп владельца — база + расчёты + шаблоны; NN/g:
@@ -35,52 +38,36 @@ pub struct OnboardingStep {
 /// стабилен; «Готово» — на последнем.
 pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
     OnboardingStep {
-        title: "Добро пожаловать в CanvasDesk",
-        body: "Это бесконечный зумируемый канвас для вашего рабочего стола: \
-файловые карточки, заметки, связи и расчёты. Панорамируйте мышью со Space, \
-средней кнопкой или тачпадом; зум — Ctrl+колесо. Всё сохраняется в файл \
-.canvas рядом с приложением.",
+        title_key: keys::ONBOARDING_STEP1_TITLE,
+        body_key: keys::ONBOARDING_STEP1_BODY,
     },
     OnboardingStep {
-        title: "Заметки",
-        body: "Двойной клик по пустому месту создаёт заметку с markdown-разметкой \
-(списки, заголовки, ссылки). Цвет — через контекстное меню выделения. \
-Ctrl+Enter фиксирует текст, Esc — откат правки.",
+        title_key: keys::ONBOARDING_STEP2_TITLE,
+        body_key: keys::ONBOARDING_STEP2_BODY,
     },
     OnboardingStep {
-        title: "Связи",
-        body: "Наведите курсор на ноду — по краям появятся порты. Протяните \
-связь от порта к другой ноде; конец существующей связи можно перепривязать \
-перетаскиванием за хэндл.",
+        title_key: keys::ONBOARDING_STEP3_TITLE,
+        body_key: keys::ONBOARDING_STEP3_BODY,
     },
     OnboardingStep {
-        title: "Группы и отмена",
-        body: "Обведите несколько нод рамкой и нажмите Ctrl+G — получится \
-группа, которую можно двигать целиком. Ошибки отменяются: Ctrl+Z — отменить, \
-Ctrl+Y — вернуть.",
+        title_key: keys::ONBOARDING_STEP4_TITLE,
+        body_key: keys::ONBOARDING_STEP4_BODY,
     },
     OnboardingStep {
-        title: "Формулы Numi",
-        body: "В заметках считайте прямо в тексте: «ширина = 120 mm * 4» или \
-«частота = 60 rps». Единицы измерения (mm, ms, MB/s) и подсказки по ходу \
-ввода поддерживаются; результат виден под строкой.",
+        title_key: keys::ONBOARDING_STEP5_TITLE,
+        body_key: keys::ONBOARDING_STEP5_BODY,
     },
     OnboardingStep {
-        title: "Поток значений",
-        body: "Протяните связь с зажатым Shift — это value-связь: значение \
-вышестоящей формулы приходит во вход $in нижестоящей и пересчитывается \
-на живую.",
+        title_key: keys::ONBOARDING_STEP6_TITLE,
+        body_key: keys::ONBOARDING_STEP6_BODY,
     },
     OnboardingStep {
-        title: "Шаблоны нод",
-        body: "Ctrl+P открывает палитру готовых архитектурных ролей \
-(сервис, очередь, база данных) с параметрами и доменными типами. \
-Shift+клик по пустому месту — радиальное wheel-меню.",
+        title_key: keys::ONBOARDING_STEP7_TITLE,
+        body_key: keys::ONBOARDING_STEP7_BODY,
     },
     OnboardingStep {
-        title: "Что дальше",
-        body: "Кнопка «?» рядом с настройками — документация и повтор этого \
-тура в любой момент. F1 — список горячих клавиш прямо в приложении.",
+        title_key: keys::ONBOARDING_STEP8_TITLE,
+        body_key: keys::ONBOARDING_STEP8_BODY,
     },
 ];
 
@@ -129,18 +116,19 @@ impl OnboardingState {
         self.step + 1 >= ONBOARDING_STEPS.len()
     }
 
-    /// Подпись правой кнопки: «Далее» / «Готово» на последнем шаге.
-    pub fn next_label(&self) -> &'static str {
+    /// Ключ подписи правой кнопки: «Далее» / «Готово» на последнем шаге
+    /// (текст — таблица [`crate::i18n`], FR-040).
+    pub fn next_label_key(&self) -> &'static str {
         if self.is_last() {
-            "Готово"
+            keys::ONBOARDING_DONE
         } else {
-            "Далее"
+            keys::ONBOARDING_NEXT
         }
     }
 
-    /// Подпись левой кнопки: «Назад» / нет на первом шаге.
-    pub fn prev_label(&self) -> Option<&'static str> {
-        (self.step > 0).then_some("Назад")
+    /// Ключ подписи левой кнопки: «Назад» / нет на первом шаге.
+    pub fn prev_label_key(&self) -> Option<&'static str> {
+        (self.step > 0).then_some(keys::ONBOARDING_BACK)
     }
 }
 
@@ -182,14 +170,14 @@ pub enum OnboardingButton {
 /// оценка ширины глифа — перенос раньше реальной границы, строки не
 /// вылезают за клип). Один источник для высоты карточки ([`card_rect`])
 /// и рендера (main.rs) — раскладка и геометрия не разъезжаются.
-pub fn body_lines(step: usize, width: f32) -> Vec<String> {
+pub fn body_lines(step: usize, width: f32, language: Language) -> Vec<String> {
     let Some(step) = ONBOARDING_STEPS.get(step) else {
         return Vec::new();
     };
     let avail = (width - ONBOARDING_PAD * 2.0).max(10.0);
     let mut lines: Vec<String> = Vec::new();
     let mut cur_w = 0.0;
-    for word in step.body.split(' ') {
+    for word in i18n::tr(language, step.body_key).split(' ') {
         let w = text_width(word, ONBOARDING_BODY_FONT);
         let need = w + if cur_w > 0.0 {
             ONBOARDING_BODY_FONT * SPACE_W_FACTOR
@@ -225,9 +213,9 @@ pub fn body_top_offset() -> f32 {
 /// Rect карточки тура `[x, y, w, h]`: центр окна, ширина клампится к окну,
 /// высота — по контенту шага (заголовок + точки + тело + футер), на
 /// маленьких окнах клампится к высоте окна (инвариант FR-028).
-pub fn card_rect(viewport: [f32; 2], step: usize) -> [f32; 4] {
+pub fn card_rect(viewport: [f32; 2], step: usize, language: Language) -> [f32; 4] {
     let w = ONBOARDING_CARD_WIDTH.min(viewport[0].max(0.0));
-    let body_h = body_lines(step, w).len() as f32 * ONBOARDING_BODY_LINE_H;
+    let body_h = body_lines(step, w, language).len() as f32 * ONBOARDING_BODY_LINE_H;
     let h = (body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H)
         .min(viewport[1].max(0.0));
     [
@@ -346,16 +334,23 @@ mod tests {
     fn carousel_bounds_and_labels() {
         let mut state = OnboardingState::default();
         assert_eq!(state.step, 0);
-        assert!(state.prev_label().is_none(), "«Назад» на первом шаге нет");
+        assert!(
+            state.prev_label_key().is_none(),
+            "«Назад» на первом шаге нет"
+        );
         assert!(!state.prev(), "prev на первом — без изменений");
-        assert_eq!(state.next_label(), "Далее");
+        assert_eq!(i18n::tr(Language::Ru, state.next_label_key()), "Далее");
         // Полный проход до последнего
         for expected in 1..ONBOARDING_STEPS.len() {
             assert!(state.next(), "шаг {expected}");
             assert_eq!(state.step, expected);
         }
         assert!(state.is_last());
-        assert_eq!(state.next_label(), "Готово", "подпись на последнем шаге");
+        assert_eq!(
+            i18n::tr(Language::Ru, state.next_label_key()),
+            "Готово",
+            "подпись на последнем шаге"
+        );
         assert!(!state.next(), "next на последнем — без изменений");
         assert_eq!(state.step, ONBOARDING_STEPS.len() - 1);
         // Возврат к началу
@@ -363,10 +358,13 @@ mod tests {
             assert!(state.prev());
         }
         assert!(!state.prev());
-        // Шаги непустые (заголовок/тело)
+        // Шаги непустые (ключи заголовка/тела; EN-перевод длиннее 40 знаков)
         for step in &ONBOARDING_STEPS {
-            assert!(!step.title.is_empty());
-            assert!(step.body.len() > 40, "тело шага слишком короткое");
+            assert!(!step.title_key.is_empty());
+            assert!(
+                i18n::tr(Language::En, step.body_key).len() > 40,
+                "тело шага слишком короткое"
+            );
         }
     }
 
@@ -381,7 +379,7 @@ mod tests {
             [240.0, 180.0],
         ] {
             for step in 0..ONBOARDING_STEPS.len() {
-                let card = card_rect(viewport, step);
+                let card = card_rect(viewport, step, Language::Ru);
                 assert!(card[0] >= 0.0, "за левым краем: {card:?}");
                 assert!(card[1] >= 0.0, "за верхним краем: {card:?}");
                 assert!(
@@ -411,7 +409,7 @@ mod tests {
     fn button_hit_tests() {
         let viewport = [1600.0, 900.0];
         let mut state = OnboardingState::default();
-        let card = card_rect(viewport, state.step);
+        let card = card_rect(viewport, state.step, Language::Ru);
         let next = button_rect(card, OnboardingButton::Next);
         assert_eq!(
             button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
@@ -431,7 +429,7 @@ mod tests {
         );
         // Второй шаг: «Назад» есть
         state.next();
-        let card = card_rect(viewport, state.step);
+        let card = card_rect(viewport, state.step, Language::Ru);
         let prev = button_rect(card, OnboardingButton::Prev);
         assert_eq!(
             button_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
@@ -449,7 +447,7 @@ mod tests {
     #[test]
     fn progress_dots_layout() {
         let viewport = [1600.0, 900.0];
-        let card = card_rect(viewport, 0);
+        let card = card_rect(viewport, 0, Language::Ru);
         let (centers, y) = progress_dots(card);
         assert_eq!(centers.len(), ONBOARDING_STEPS.len());
         assert!(y > card[1]);
@@ -469,11 +467,11 @@ mod tests {
     fn card_height_follows_content() {
         let viewport = [1600.0, 900.0];
         let heights: Vec<f32> = (0..ONBOARDING_STEPS.len())
-            .map(|step| card_rect(viewport, step)[3])
+            .map(|step| card_rect(viewport, step, Language::Ru)[3])
             .collect();
         assert!(heights.iter().all(|&h| h > 100.0), "карточка не пустая");
         // Узкое окно не даёт карточке вылезти
-        let narrow = card_rect([320.0, 240.0], 0);
+        let narrow = card_rect([320.0, 240.0], 0, Language::Ru);
         assert!(narrow[2] <= 320.0);
     }
 }

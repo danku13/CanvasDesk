@@ -88,7 +88,8 @@ pub use search::{
 };
 pub use settings::{
     clamp_onboarding_defers, clamp_port_zone, next_port_zone, Corner, GridDensity, GridStyle,
-    Settings, Theme, ONBOARDING_MAX_DEFERS, PORT_ZONE_MAX, PORT_ZONE_MIN, PORT_ZONE_PRESETS,
+    Language, Settings, Theme, ONBOARDING_MAX_DEFERS, PORT_ZONE_MAX, PORT_ZONE_MIN,
+    PORT_ZONE_PRESETS,
 };
 pub use spatial::{SpatialIndex, WorldRect};
 pub use validate::{has_errors, validate, IssueCode, Severity, ValidationIssue};

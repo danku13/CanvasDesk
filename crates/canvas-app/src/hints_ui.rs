@@ -7,7 +7,9 @@
 //! принятие подсказки заменяет токен слева от каретки
 //! ([`canvas_render::edit::EditingSession::replace_token_before_caret`]).
 
-use canvas_core::expr;
+use canvas_core::{expr, Language};
+
+use crate::i18n::{self, keys};
 
 /// Максимум элементов в popup (читабельность, стандарт автокомплитов).
 pub const HINT_LIMIT: usize = 8;
@@ -81,7 +83,7 @@ pub fn token_before_caret(line: &str, caret: usize) -> (String, usize) {
 /// ноды. Порядок (proposal FR-021): переменные → `$`-ссылки → функции →
 /// единицы; лимит [`HINT_LIMIT`]. Единицы — после числа (токен-число или
 /// число+пробел); `$`-токен — только `$`-ссылки; пустой токен — переменные.
-pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
+pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> Vec<HintItem> {
     let (token, _start) = token_before_caret(line_prefix, line_prefix.len());
     let mut items: Vec<HintItem> = Vec::with_capacity(HINT_LIMIT);
     let mut push = |item: HintItem| {
@@ -97,7 +99,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                 kind: HintKind::DollarRef,
                 insert: "$in".to_owned(),
                 label: "$in".to_owned(),
-                detail: "вход value-рёбер (FR-014)".to_owned(),
+                detail: i18n::tr(language, keys::HINT_DOLLAR_IN).to_owned(),
             });
         }
         for i in 1..=ctx.inbound {
@@ -107,7 +109,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                     kind: HintKind::DollarRef,
                     insert: label.clone(),
                     label,
-                    detail: format!("вход №{i}"),
+                    detail: i18n::trf(language, keys::HINT_DOLLAR_N, &[("{i}", &i.to_string())]),
                 });
             }
         }
@@ -118,7 +120,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                     kind: HintKind::DollarRef,
                     insert: label.clone(),
                     label: param.clone(),
-                    detail: "параметр шаблона".to_owned(),
+                    detail: i18n::tr(language, keys::HINT_PARAM).to_owned(),
                 });
             }
         }
@@ -142,7 +144,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                     kind: HintKind::Unit,
                     insert: unit.to_owned(),
                     label: unit.to_owned(),
-                    detail: "единица измерения".to_owned(),
+                    detail: i18n::tr(language, keys::HINT_UNIT).to_owned(),
                 });
             }
         }
@@ -155,7 +157,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                 kind: HintKind::Var,
                 insert: var.clone(),
                 label: var.clone(),
-                detail: "переменная листа".to_owned(),
+                detail: i18n::tr(language, keys::HINT_VAR).to_owned(),
             });
         }
         return items;
@@ -168,7 +170,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                 kind: HintKind::Var,
                 insert: var.clone(),
                 label: var.clone(),
-                detail: "переменная листа".to_owned(),
+                detail: i18n::tr(language, keys::HINT_VAR).to_owned(),
             });
         }
     }
@@ -188,7 +190,7 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext) -> Vec<HintItem> {
                 kind: HintKind::Unit,
                 insert: unit.to_owned(),
                 label: unit.to_owned(),
-                detail: "единица измерения".to_owned(),
+                detail: i18n::tr(language, keys::HINT_UNIT).to_owned(),
             });
         }
     }
@@ -285,7 +287,7 @@ mod tests {
     /// Префикс `mm` → mm1/mmc (регистр не важен); функции — со скобкой.
     #[test]
     fn hints_filter_by_prefix() {
-        let items = hint_items("w = mm", &ctx());
+        let items = hint_items("w = mm", &ctx(), Language::Ru);
         let names: Vec<&str> = items
             .iter()
             .filter(|item| item.kind == HintKind::Fn)
@@ -294,9 +296,9 @@ mod tests {
         assert_eq!(names, vec!["mm1", "mmc"]);
         let mm1 = items.iter().find(|item| item.label == "mm1").unwrap();
         assert_eq!(mm1.insert, "mm1(");
-        assert_eq!(mm1.detail, "mm1(λ, μ[, c])");
-        // Регистр не важен
-        let items = hint_items("w = MM", &ctx());
+        assert_eq!(mm1.detail, "mm1(λ, μ[, c])"); // сигнатура функции — из каталога движка, не переводится
+                                                  // Регистр не важен
+        let items = hint_items("w = MM", &ctx(), Language::Ru);
         assert!(items.iter().any(|item| item.label == "mm1"));
     }
 
@@ -305,20 +307,20 @@ mod tests {
     #[test]
     fn hints_vars_and_units_order() {
         // Пустой токен (строка кончается не числом) → только переменные
-        let items = hint_items("rps = 1000 rps\n", &ctx());
+        let items = hint_items("rps = 1000 rps\n", &ctx(), Language::Ru);
         assert!(!items.is_empty());
         assert!(items.iter().all(|item| item.kind == HintKind::Var));
         assert!(items.iter().any(|item| item.label == "rps"));
         // Идентификатор `s`: переменная rate? нет — но unit `s`/`sec`,
         // функций нет; переменные по префиксу — нет подходящих из ctx
-        let items = hint_items("w = s", &ctx());
+        let items = hint_items("w = s", &ctx(), Language::Ru);
         let kinds: Vec<HintKind> = items.iter().map(|item| item.kind.clone()).collect();
         assert!(
             kinds.contains(&HintKind::Unit),
             "единицы после идентификатора"
         );
         // Лимит списка
-        let items = hint_items("", &ctx());
+        let items = hint_items("", &ctx(), Language::Ru);
         assert!(items.len() <= HINT_LIMIT);
     }
 
@@ -326,30 +328,30 @@ mod tests {
     /// нет.
     #[test]
     fn hints_dollar_refs() {
-        let items = hint_items("w = $", &ctx());
+        let items = hint_items("w = $", &ctx(), Language::Ru);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
         assert!(labels.contains(&"$in"));
         assert!(labels.contains(&"$1"));
         assert!(labels.contains(&"$2"));
         assert!(labels.contains(&"service_rate"));
         // Фильтр по префиксу после `$`
-        let items = hint_items("w = $se", &ctx());
+        let items = hint_items("w = $se", &ctx(), Language::Ru);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].insert, "$service_rate");
         // Без inbound и шаблона — `$`-подсказок нет
         let empty = HintContext::default();
-        assert!(hint_items("w = $", &empty).is_empty());
+        assert!(hint_items("w = $", &empty, Language::Ru).is_empty());
     }
 
     /// Число и число+пробел → единицы; вставка замещает только число.
     #[test]
     fn hints_units_after_number() {
-        let items = hint_items("w = 50 ", &ctx());
+        let items = hint_items("w = 50 ", &ctx(), Language::Ru);
         assert!(!items.is_empty());
         assert!(items.iter().all(|item| item.kind == HintKind::Unit));
         assert!(items.iter().any(|item| item.label == "sec"));
         // Число частично: `50 s`е... — токен числа целиком → единицы
-        let items = hint_items("w = 50", &ctx());
+        let items = hint_items("w = 50", &ctx(), Language::Ru);
         assert!(items.iter().all(|item| item.kind == HintKind::Unit));
         // `token_before_caret` возвращает число целиком
         let (token, start) = token_before_caret("w = 50", 6);
@@ -360,7 +362,7 @@ mod tests {
     /// стороне вызывающего; тут проверяем фильтрацию мусорного токена).
     #[test]
     fn hints_unknown_token_is_empty() {
-        let items = hint_items("встреча в 3", &ctx());
+        let items = hint_items("встреча в 3", &ctx(), Language::Ru);
         assert!(items.is_empty(), "проза не подсказывает");
     }
 
@@ -386,7 +388,7 @@ mod tests {
     #[test]
     fn hints_popup_keyboard_model() {
         let mut popup = HintPopup::default();
-        let items = hint_items("w = mm", &ctx());
+        let items = hint_items("w = mm", &ctx(), Language::Ru);
         popup.sync("mm".to_owned(), items);
         assert!(popup.open);
         assert!(popup.move_selection(1));
@@ -402,7 +404,7 @@ mod tests {
         // Выбранный элемент — подсказка mm1
         assert_eq!(popup.selected_item().unwrap().label, "mm1");
         // Обновление с сохранением выделения; пустой список закрывает
-        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx()));
+        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx(), Language::Ru));
         assert_eq!(popup.selected, 0, "выделение вне границ сбрасывается");
         popup.reset();
         assert!(!popup.open);

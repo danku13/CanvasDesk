@@ -18,6 +18,7 @@ use std::time::Duration;
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
 use crate::docs_ui;
 use crate::hints_ui;
+use crate::i18n::{self, keys};
 use crate::onboarding_ui::{self, OnboardingButton, OnboardingState};
 use crate::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
@@ -25,9 +26,10 @@ use crate::palette::{
     PaletteLayout, PaletteTarget, PAL_ICON,
 };
 use crate::settings_ui::{
-    apply_dropdown_value, dropdown_item_at, dropdown_layout, dropdown_options, panel_layout,
-    row_at, row_kind, DropdownState, PanelEntry, RowKind, SettingsRow, DROPDOWN_MARGIN,
-    DROPDOWN_ROW_H,
+    apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
+    dropdown_value, modal_layout, modal_nav_at, modal_row_at, modal_theme_card_at, pill_knob_rect,
+    row_desc_key, row_kind, row_label_key, DropdownState, RowKind, SettingsRow, DROPDOWN_MARGIN,
+    DROPDOWN_ROW_H, MODAL_ROW_LABEL_W, SETTINGS_TABS,
 };
 use crate::template_ui;
 use crate::template_ui::{
@@ -37,13 +39,12 @@ use crate::template_ui::{
 use crate::ui::{
     button_rect, canvas_menu_label, drag_origins, focus_seed_of, help_button_rect,
     hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect, menu_rect_for,
-    next_free_id, nodes_in_rect, panel_rect, paste_nodes, plan_group_around,
-    plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
-    select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
-    toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
-    PastePlacement, Submenu, SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X,
-    MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, PANEL_HINT_HEIGHT, PANEL_PADDING,
-    SELECT_DRAG_THRESHOLD,
+    next_free_id, nodes_in_rect, paste_nodes, plan_group_around, plan_group_around_nodes,
+    plan_group_at, point_in_rect, reassign_ids, rubber_band_rect, select_node_hit, submenu_item_at,
+    submenu_origin_next_to, submenu_rect, theme_button_rect, toggle_selection_with_primary,
+    CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag, PastePlacement, Submenu,
+    SubmenuEntry, CANVAS_MENU_ITEMS, DUPLICATE_OFFSET, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH,
+    MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
 // FR-037 MW1: line_kind/NumiLineKind/ExprLineResults/ExprResults и whatif-
@@ -55,8 +56,8 @@ use canvas_core::time::Instant;
 use canvas_core::{
     analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
     resolve_node_path, watched_dirs, AnalysisState, Canvas, CanvasStorage, ClipboardBackend, Edge,
-    FileEvent, FocusSeed, GridStyle, Node, NodeChange, NodeKind, Priority, SearchBackend, Settings,
-    Side, SpatialIndex, Theme, ThumbBackend, WatchBackend,
+    FileEvent, FocusSeed, GridStyle, Language, Node, NodeChange, NodeKind, Priority, SearchBackend,
+    Settings, Side, SpatialIndex, Theme, ThumbBackend, WatchBackend,
 };
 // M8/W3 (wasm-port §3.1): протокол поиска переехал в core (натив — FTS5 в
 // shell, web/тесты — MemSearch); App общается только через трейт SearchBackend
@@ -476,25 +477,33 @@ enum AppDialog {
 
 impl AppDialog {
     /// Кнопки диалога (screen-space rect'ы считаются от центра окна).
-    fn buttons(&self) -> [(&'static str, bool); 2] {
+    /// Подписи — таблица i18n (FR-040), `language` — язык интерфейса.
+    fn buttons(&self, language: Language) -> [(&'static str, bool); 2] {
         // (подпись, confirm?)
-        [("Да", true), ("Нет", false)]
+        [
+            (i18n::tr(language, keys::DIALOG_YES), true),
+            (i18n::tr(language, keys::DIALOG_NO), false),
+        ]
     }
 
     /// Заголовок диалога. `canvas` — для имени участников цикла (FR-014).
-    fn title(&self, canvas: &Canvas) -> String {
+    fn title(&self, canvas: &Canvas, language: Language) -> String {
         match self {
             AppDialog::InstallWidget {
                 manifest, updating, ..
             } => {
+                let subs = [
+                    ("{name}", manifest.name.as_str()),
+                    ("{version}", manifest.version.as_str()),
+                ];
                 if *updating {
-                    format!("Обновить виджет {} до {}?", manifest.name, manifest.version)
+                    i18n::trf(language, keys::DIALOG_UPDATE_TITLE, &subs)
                 } else {
-                    format!("Установить виджет {} {}?", manifest.name, manifest.version)
+                    i18n::trf(language, keys::DIALOG_INSTALL_TITLE, &subs)
                 }
             }
             AppDialog::RemovePackage { name, .. } => {
-                format!("Удалить пакет {name}?")
+                i18n::trf(language, keys::DIALOG_REMOVE_TITLE, &[("{name}", name)])
             }
             // FR-014: участники цикла — путь по value-рёбрам от стока к
             // истоку + замыкающее ребро (решение открытого вопроса:
@@ -507,17 +516,17 @@ impl AppDialog {
                     .join(" → ");
                 chain.push_str(" → ");
                 chain.push_str(from_node);
-                format!("Обнаружен цикл: {chain}")
+                i18n::trf(language, keys::DIALOG_CYCLE_TITLE, &[("{chain}", &chain)])
             }
         }
     }
 
-    /// Пояснение под заголовком.
-    fn body(&self) -> String {
+    /// Пояснение под заголовком (таблица i18n — FR-040).
+    fn body(&self, language: Language) -> String {
         match self {
             AppDialog::InstallWidget { manifest, .. } => {
                 let perms = if manifest.permissions.is_empty() {
-                    "без разрешений".to_owned()
+                    i18n::tr(language, keys::DIALOG_PERMS_NONE).to_owned()
                 } else {
                     manifest
                         .permissions
@@ -526,14 +535,12 @@ impl AppDialog {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                format!("Пакет скопируется в локальную папку виджетов.\nРазрешения: {perms}.")
+                i18n::trf(language, keys::DIALOG_INSTALL_BODY, &[("{perms}", &perms)])
             }
             AppDialog::RemovePackage { .. } => {
-                "Ноды этого виджета останутся на канвасе как заглушки.\nПакет можно поставить снова перетаскиванием папки.".to_owned()
+                i18n::tr(language, keys::DIALOG_REMOVE_BODY).to_owned()
             }
-            AppDialog::EdgeCycle { .. } => {
-                "Ребро замкнуло бы цикл потока значений (граф обязан быть DAG).\nСоздать как контрольную связь — без передачи значения?".to_owned()
-            }
+            AppDialog::EdgeCycle { .. } => i18n::tr(language, keys::DIALOG_CYCLE_BODY).to_owned(),
         }
     }
 }
@@ -704,6 +711,10 @@ pub struct App {
     config_path: Option<PathBuf>,
     /// Панель настроек открыта.
     settings_open: bool,
+    /// FR-039: активный таб модалки настроек (индекс в SETTINGS_TABS).
+    /// Хранится между открытиями модалки (как в Obsidian), в конфиг не
+    /// пишется.
+    settings_tab: usize,
     /// Выпадающее меню строки настроек (FR-026): какая строка открыта;
     /// пункты вычисляются на кадр, состояние не устаревает.
     settings_dropdown: DropdownState,
@@ -961,6 +972,7 @@ impl App {
             settings,
             config_path,
             settings_open: false,
+            settings_tab: 0,
             settings_dropdown: DropdownState::default(),
             // FR-027/FR-028: помощь/документация закрыты; тур при первом
             // запуске открывает should_show_onboarding (прецедент
@@ -1874,7 +1886,10 @@ impl App {
     /// `propagate_with_lines` с подменами каждого сценария (по прогону на
     /// сценарий — 3–5 прогонов <10 мс, допустимо по роадмапу).
     fn whatif_compare_table(&self) -> (Vec<String>, Vec<Vec<String>>) {
-        let mut columns = vec!["переменная".to_owned(), "База".to_owned()];
+        let mut columns = vec![
+            self.tr(keys::WHATIF_COLUMN_VAR).to_owned(),
+            self.tr(keys::WHATIF_BASE).to_owned(),
+        ];
         for scenario in &self.scene.scenarios {
             columns.push(scenario.name.clone());
         }
@@ -1994,7 +2009,9 @@ impl App {
                 }
                 self.whatif_list_open = false;
                 self.scene.recompute_flow();
-                self.show_toast(format!("Apply: {applied} подмен записано в модель"));
+                self.show_toast(
+                    self.trf(keys::TOAST_APPLY_DONE, &[("{count}", &applied.to_string())]),
+                );
             }
             BarAction::Reset => {
                 // Сброс подмен активного сценария — runtime-only.
@@ -2161,7 +2178,7 @@ impl App {
             });
             let (pill_box, pill_width) = centered_box(pill, 4.0);
             texts.push(OwnedScreenText {
-                text: "What-if сценарии".to_owned(),
+                text: self.tr(keys::WHATIF_PILL).to_owned(),
                 origin: [pill_box[0], pill[1] + 8.0],
                 width: pill_width,
                 font_size: 13.0,
@@ -2224,7 +2241,7 @@ impl App {
                 align: TextAlign::Center,
             });
         };
-        chip_text(layout.base, "База", active.is_none());
+        chip_text(layout.base, self.tr(keys::WHATIF_BASE), active.is_none());
         for (i, rect) in layout.scenarios.iter().enumerate() {
             // CR-015: подпись через `chip_label` — тот же кап «…», что в
             // раскладке чипа (иначе текст шире чипа и переливается).
@@ -2239,7 +2256,7 @@ impl App {
         chip_text(layout.new_scenario, "+", false);
         // Счётчик подмен (клик — список; раскрыт — акцент).
         let count = self.scene.whatif_override_count();
-        let counter_label = format!("подмен: {count}");
+        let counter_label = self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
         chip_text(
             layout.overrides,
             &counter_label,
@@ -2248,9 +2265,13 @@ impl App {
         // Кнопки. Apply/Сброс — без активного сценария/подмен приглушены.
         let has_overrides = active.is_some() && count > 0;
         let buttons = [
-            (layout.apply, "Apply", has_overrides),
-            (layout.reset, "Сброс", has_overrides),
-            (layout.compare, "Сравнить", !self.scene.scenarios.is_empty()),
+            (layout.apply, self.tr(keys::WHATIF_APPLY), has_overrides),
+            (layout.reset, self.tr(keys::WHATIF_RESET), has_overrides),
+            (
+                layout.compare,
+                self.tr(keys::WHATIF_COMPARE),
+                !self.scene.scenarios.is_empty(),
+            ),
             (layout.close, "✕", true),
         ];
         for (rect, label, enabled) in buttons {
@@ -2286,7 +2307,7 @@ impl App {
             });
             if rows.is_empty() {
                 texts.push(OwnedScreenText {
-                    text: "подмен нет — двойной клик по строке расчёта вводит подмену".to_owned(),
+                    text: self.tr(keys::WHATIF_NO_OVERRIDES).to_owned(),
                     origin: [
                         list[0] + whatif_ui::LIST_MARGIN,
                         list[1] + whatif_ui::LIST_MARGIN + 4.0,
@@ -2578,9 +2599,11 @@ impl App {
         if indices.is_empty() {
             return;
         }
-        if let Some(group) =
+        if let Some(mut group) =
             plan_group_around_nodes(&self.scene.canvas, &indices, crate::ui::GROUP_PADDING)
         {
+            // FR-040: подпись по умолчанию — через таблицу i18n
+            group.label = Some(self.tr(keys::GROUP_DEFAULT_LABEL).to_owned());
             self.insert_group(group);
             self.request_redraw();
         }
@@ -2895,22 +2918,27 @@ impl App {
         }
         // FR-028: карточка онбординга (открытый тур глушит колесо канваса)
         if let Some(state) = &self.onboarding {
-            let card = onboarding_ui::card_rect(viewport, state.step);
+            let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
             if over(card) {
                 return true;
             }
         }
-        if self.settings_open && over(panel_rect(self.settings.button_corner, viewport)) {
+        // FR-039: модалка настроек глушит колесо/пинч канваса целиком
+        // (затемнение + модалка по центру)
+        if self.settings_open && over(modal_layout(self.settings_tab, viewport).rect) {
             return true;
         }
         // FR-026: открытое выпадающее меню настройки — тоже screen-поверхность
-        // (может выходить за пределы панели, колесо/пинч над ним холст не двигают)
+        // (может выходить за пределы модалки, колесо/пинч над ним холст не двигают)
         if self.settings_open && self.settings_dropdown.is_open() {
-            let layout = panel_layout(self.settings.button_corner, viewport);
+            let layout = modal_layout(self.settings_tab, viewport);
             if let Some(row) = self.settings_dropdown.open_row {
                 let items = dropdown_options(row, &self.settings);
-                let anchor = layout.row_rect(row).unwrap_or([0.0; 4]);
-                if over(dropdown_layout(anchor, viewport, items.len())) {
+                let anchor = layout
+                    .row_rect(row)
+                    .map(|rect| control_rect(rect, RowKind::Dropdown))
+                    .unwrap_or([0.0; 4]);
+                if over(dropdown_layout(anchor, viewport, items.len(), anchor[2])) {
                     return true;
                 }
             }
@@ -3063,7 +3091,10 @@ impl App {
                         // Битый манифест: честный призрак-ошибка + toast,
                         // как «файл недоступен» у битых ссылок (SPEC §7.5)
                         Err(e) => {
-                            self.show_toast(format!("Виджет не установлен: {e}"));
+                            self.show_toast(self.trf(
+                                keys::TOAST_WIDGET_NOT_INSTALLED,
+                                &[("{err}", &e.to_string())],
+                            ));
                             self.drop_preview = None;
                             self.request_redraw();
                             return;
@@ -3106,7 +3137,10 @@ impl App {
                             });
                         }
                         Err(e) => {
-                            self.show_toast(format!("Виджет не установлен: {e}"));
+                            self.show_toast(self.trf(
+                                keys::TOAST_WIDGET_NOT_INSTALLED,
+                                &[("{err}", &e.to_string())],
+                            ));
                         }
                     }
                     self.drop_preview = None;
@@ -3689,7 +3723,7 @@ impl App {
                 .map(|template| template.params.keys().cloned().collect())
                 .unwrap_or_default(),
         };
-        let items = hints_ui::hint_items(prefix, &ctx);
+        let items = hints_ui::hint_items(prefix, &ctx, self.settings.language);
         let token = hints_ui::token_before_caret(prefix, prefix.len()).0;
         self.hints.sync(token, items);
         // Якорь — низ каретки (screen logical px): world-область тела ноды
@@ -3920,7 +3954,7 @@ impl App {
             // Шапка: название + счётчик шаблонов
             let total = template_ui::template_row_count(&rows);
             texts.push(OwnedScreenText {
-                text: "Шаблоны".to_owned(),
+                text: self.tr(keys::TEMPLATES_TITLE).to_owned(),
                 origin: [lay.header_rect[0], lay.header_rect[1] + 6.0],
                 width: lay.header_rect[2] * 0.5,
                 font_size: 14.0,
@@ -3966,7 +4000,7 @@ impl App {
             });
             texts.push(OwnedScreenText {
                 text: if self.template_panel.filter.is_empty() {
-                    "Поиск шаблонов…".to_owned()
+                    self.tr(keys::TEMPLATES_SEARCH).to_owned()
                 } else {
                     format!("{}|", self.template_panel.filter)
                 },
@@ -4058,7 +4092,7 @@ impl App {
             // строки списка в него не заходят; FR-025: Esc сворачивает док)
             let footer = rect_xywh(lay.footer_rect);
             texts.push(OwnedScreenText {
-                text: "Enter — вставить в центр · Esc — свернуть".to_owned(),
+                text: self.tr(keys::TEMPLATES_FOOTER).to_owned(),
                 origin: [footer[0], footer[1] + 7.0],
                 width: footer[2],
                 font_size: 10.0,
@@ -4513,7 +4547,9 @@ impl App {
             Err(err) => {
                 // Битый файл/текст — прежняя сцена продолжает жить (деградация,
                 // не паника; правило обёртки — SPEC §7.5-стиль тоста)
-                self.show_toast(format!("Канвас не открыт: {err}"));
+                self.show_toast(
+                    self.trf(keys::TOAST_CANVAS_NOT_OPEN, &[("{err}", &err.to_string())]),
+                );
                 self.request_redraw();
                 return;
             }
@@ -4549,7 +4585,7 @@ impl App {
         self.minimap_drag = false;
         self.template_drag = None;
         self.camera = Camera::default();
-        self.show_toast(format!("Открыт канвас: {opened}"));
+        self.show_toast(self.trf(keys::TOAST_CANVAS_OPENED, &[("{name}", &opened)]));
         self.request_redraw();
     }
 
@@ -4655,6 +4691,7 @@ impl App {
                     self.desktop_menu_checked(),
                     self.settings.bottleneck_overlay,
                     self.scene.whatif_active,
+                    self.settings.language,
                 ),
                 origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
                 width: rect[2] - MENU_LABEL_X,
@@ -4675,7 +4712,7 @@ impl App {
             });
             if submenu.entries.is_empty() {
                 texts.push(OwnedScreenText {
-                    text: "(нет установленных)".to_owned(),
+                    text: self.tr(keys::WIDGETS_EMPTY).to_owned(),
                     origin: [
                         submenu.origin[0] + MENU_PADDING + 4.0,
                         submenu.origin[1] + MENU_PADDING + 5.0,
@@ -4743,7 +4780,7 @@ impl App {
                 });
             }
             texts.push(OwnedScreenText {
-                text: docs_ui::help_menu_item_label(*item).to_owned(),
+                text: docs_ui::help_menu_item_label(*item, self.settings.language).to_owned(),
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
                 width: rect[2] - 8.0,
                 font_size: 13.0,
@@ -4774,7 +4811,7 @@ impl App {
                     });
                 }
                 texts.push(OwnedScreenText {
-                    text: page.label.to_owned(),
+                    text: self.tr(page.label_key).to_owned(),
                     origin: [rect[0] + 8.0, rect[1] + 6.0],
                     width: rect[2] - 8.0,
                     font_size: 13.0,
@@ -4844,7 +4881,7 @@ impl App {
         });
         let title = docs_ui::DOCS_PAGES
             .get(viewer.page)
-            .map(|p| p.label.to_owned())
+            .map(|p| self.tr(p.label_key).to_owned())
             .unwrap_or_default();
         texts.push(OwnedScreenText {
             text: title,
@@ -4944,7 +4981,7 @@ impl App {
         }
         // Футер-подсказка
         texts.push(OwnedScreenText {
-            text: "Колесо — прокрутка · ссылки — переход · Esc — закрыть".to_owned(),
+            text: self.tr(keys::DOCS_FOOTER).to_owned(),
             origin: [panel[0] + docs_ui::DOCS_PADDING, panel[1] + panel[3] - 18.0],
             width: panel[2] - docs_ui::DOCS_PADDING * 2.0,
             font_size: 11.0,
@@ -4979,7 +5016,7 @@ impl App {
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 0.0],
         });
-        let card = onboarding_ui::card_rect(viewport, state.step);
+        let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
         instances.push(CardInstance {
             pos: [card[0], card[1]],
             size: [card[2], card[3]],
@@ -4991,7 +5028,7 @@ impl App {
         let text_w = card[2] - onboarding_ui::ONBOARDING_PAD * 2.0;
         // Заголовок
         texts.push(OwnedScreenText {
-            text: step.title.to_owned(),
+            text: self.tr(step.title_key).to_owned(),
             origin: [text_x, card[1] + onboarding_ui::ONBOARDING_PAD],
             width: text_w,
             font_size: onboarding_ui::ONBOARDING_TITLE_FONT,
@@ -5017,7 +5054,7 @@ impl App {
         }
         // Тело шага (строки переноса — тот же источник, что высота карточки)
         let body_top = card[1] + onboarding_ui::body_top_offset();
-        for (i, line) in onboarding_ui::body_lines(state.step, card[2])
+        for (i, line) in onboarding_ui::body_lines(state.step, card[2], self.settings.language)
             .iter()
             .enumerate()
         {
@@ -5038,10 +5075,16 @@ impl App {
         let buttons = [
             (
                 OnboardingButton::Prev,
-                state.prev_label().map(str::to_owned),
+                state.prev_label_key().map(|key| self.tr(key).to_owned()),
             ),
-            (OnboardingButton::Next, Some(state.next_label().to_owned())),
-            (OnboardingButton::Skip, Some("Пропустить".to_owned())),
+            (
+                OnboardingButton::Next,
+                Some(self.tr(state.next_label_key()).to_owned()),
+            ),
+            (
+                OnboardingButton::Skip,
+                Some(self.tr(keys::ONBOARDING_SKIP).to_owned()),
+            ),
         ];
         for (button, label) in &buttons {
             let Some(label) = label.clone() else {
@@ -5195,13 +5238,16 @@ impl App {
         PaletteTarget,
     )> {
         let target = self.palette_target()?;
-        let mut groups = palette_groups(&self.scene.canvas, &target);
+        let mut groups = palette_groups(&self.scene.canvas, &target, self.settings.language);
         // FR-019: linked-связь с шаблоном — при несовпадении версии ноды
         // с реестром группа «Шаблон» с ручным update
         if let PaletteTarget::Nodes { primary, .. } = &target {
-            if let Some(group) =
-                template_update_group(&self.scene.canvas, *primary, &self.templates)
-            {
+            if let Some(group) = template_update_group(
+                &self.scene.canvas,
+                *primary,
+                &self.templates,
+                self.settings.language,
+            ) {
                 groups.push(group);
             }
         }
@@ -5395,9 +5441,10 @@ impl App {
                 self.scene.mark_dirty();
             }
             PaletteAction::NodeGroup(index) => {
-                if let Some(group) =
+                if let Some(mut group) =
                     plan_group_around(&self.scene.canvas, index, crate::ui::GROUP_PADDING)
                 {
+                    group.label = Some(self.tr(keys::GROUP_DEFAULT_LABEL).to_owned());
                     self.insert_group(group);
                 }
             }
@@ -5445,7 +5492,9 @@ impl App {
                 match self.scene.toggle_edge_flow(edge_index, kind) {
                     Err(participants) => {
                         let participants = participants.join(" → ");
-                        self.show_toast(format!("Цикл потока: {participants} — тогл отклонён"));
+                        self.show_toast(
+                            self.trf(keys::TOAST_FLOW_CYCLE, &[("{participants}", &participants)]),
+                        );
                         self.request_redraw();
                     }
                     Ok(true) => self.request_redraw(),
@@ -5474,7 +5523,7 @@ impl App {
                 }
                 self.scene.push_undo(snapshot);
                 self.scene.mark_dirty();
-                self.show_toast("Порты связи: авто (кратчайший путь)");
+                self.show_toast(self.tr(keys::TOAST_PORT_AUTO));
                 self.request_redraw();
             }
             // FR-019: ручной update шаблонной ноды (linked-связь):
@@ -5522,10 +5571,12 @@ impl App {
                 }
                 self.scene.mark_dirty();
                 self.scene.recompute_flow();
-                self.show_toast(format!(
-                    "Шаблон обновлён: {} → v{}",
-                    manifest.display_name(),
-                    manifest.version
+                self.show_toast(self.trf(
+                    keys::TOAST_TEMPLATE_UPDATED,
+                    &[
+                        ("{name}", manifest.display_name()),
+                        ("{version}", manifest.version.as_str()),
+                    ],
                 ));
                 self.request_redraw();
             }
@@ -5578,10 +5629,16 @@ impl App {
                         self.templates = canvas_core::templates::TemplateRegistry::all_with_custom(
                             &self.templates_root,
                         );
-                        self.show_toast(format!("Шаблон «{name}» сохранён: {}", path.display()));
+                        self.show_toast(self.trf(
+                            keys::TOAST_TEMPLATE_SAVED,
+                            &[("{name}", &name), ("{path}", &path.display().to_string())],
+                        ));
                     }
                     Err(err) => {
-                        self.show_toast(format!("Не удалось сохранить шаблон: {err}"));
+                        self.show_toast(self.trf(
+                            keys::TOAST_TEMPLATE_SAVE_FAILED,
+                            &[("{err}", &err.to_string())],
+                        ));
                     }
                 }
                 self.request_redraw();
@@ -5612,7 +5669,7 @@ impl App {
             }
             self.scene.push_undo(snapshot);
             self.scene.mark_dirty();
-            self.show_toast("Порт освобождён: кратчайший путь");
+            self.show_toast(self.tr(keys::TOAST_PORT_FREED));
             self.request_redraw();
             return;
         }
@@ -5633,8 +5690,19 @@ impl App {
         edge.set_port_pin(end, true);
         self.scene.push_undo(snapshot);
         self.scene.mark_dirty();
-        self.show_toast("Порт связи закреплён");
+        self.show_toast(self.tr(keys::TOAST_PORT_PINNED));
         self.request_redraw();
+    }
+
+    /// FR-040: перевод ключа по языку настроек этого приложения
+    /// (обёртка [`i18n::tr`] — короткая форма для мест рендера/ввода).
+    fn tr(&self, key: &'static str) -> &'static str {
+        i18n::tr(self.settings.language, key)
+    }
+
+    /// FR-040: перевод с подстановками (обёртка [`i18n::trf`]).
+    fn trf(&self, key: &'static str, subs: &[(&str, &str)]) -> String {
+        i18n::trf(self.settings.language, key, subs)
     }
 
     /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
@@ -5877,7 +5945,8 @@ impl App {
             SettingsRow::ButtonCorner
             | SettingsRow::GridStyle
             | SettingsRow::GridDensity
-            | SettingsRow::PortZone => {
+            | SettingsRow::PortZone
+            | SettingsRow::Language => {
                 debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
                 return;
             }
@@ -6073,7 +6142,7 @@ impl App {
             let desc_x = panel[0] + pad + key_w;
             let desc_w = (panel[2] - pad * 2.0 - key_w).max(10.0);
             texts.push(OwnedScreenText {
-                text: "Горячие клавиши".to_owned(),
+                text: self.tr(keys::HOTKEYS_TITLE).to_owned(),
                 origin: [key_x, panel[1] + pad + 7.0],
                 width: panel[2] - pad * 2.0,
                 font_size: 15.0,
@@ -6087,7 +6156,7 @@ impl App {
                     break;
                 }
                 texts.push(OwnedScreenText {
-                    text: (*key).to_owned(),
+                    text: self.tr(key).to_owned(),
                     origin: [key_x, y],
                     width: key_w,
                     font_size: 12.0,
@@ -6095,7 +6164,7 @@ impl App {
                     align: TextAlign::Left,
                 });
                 texts.push(OwnedScreenText {
-                    text: (*description).to_owned(),
+                    text: self.tr(description).to_owned(),
                     origin: [desc_x, y],
                     width: desc_w,
                     font_size: 12.0,
@@ -6107,105 +6176,250 @@ impl App {
         if !self.settings_open {
             return (instances, texts);
         }
-        // FR-026: панель по группам — layout несёт rect'ы заголовков и строк
-        let layout = panel_layout(self.settings.button_corner, viewport);
-        let panel = layout.rect;
+        // FR-039: затемнение канваса под модалкой (паттерн онбординга
+        // FR-028) — фокус на диалоге настроек, ввод под ним глушится
         instances.push(CardInstance {
-            pos: [panel[0], panel[1]],
-            size: [panel[2], panel[3]],
+            pos: [0.0, 0.0],
+            size: [viewport[0], viewport[1]],
+            fill: [0.02, 0.02, 0.04, 0.45],
+            border: [0.0; 4],
+            params: [0.0, 0.0, 0.0, 0.0],
+        });
+        // FR-039: модалка по центру — layout несёт rect'ы навигации,
+        // заголовка раздела, строк активного таба и карточек темы
+        let layout = modal_layout(self.settings_tab, viewport);
+        let modal = layout.rect;
+        instances.push(CardInstance {
+            pos: [modal[0], modal[1]],
+            size: [modal[2], modal[3]],
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
         });
-        let text_x = panel[0] + PANEL_PADDING + 4.0;
-        let text_w = panel[2] - PANEL_PADDING * 2.0 - 8.0;
-        texts.push(OwnedScreenText {
-            text: "Настройки".to_owned(),
-            origin: [text_x, panel[1] + PANEL_PADDING + 5.0],
-            width: text_w,
-            font_size: 15.0,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
-        // FR-026: открытое выпадающее меню — геометрия и пункты (состояние
-        // не хранит список — вычисляется из настроек, устареть не может)
-        let menu = self.settings_dropdown.open_row.map(|row| {
-            let items = dropdown_options(row, &self.settings);
-            let anchor = layout.row_rect(row).unwrap_or([0.0; 4]);
-            let rect = dropdown_layout(anchor, viewport, items.len());
-            (row, items, rect)
-        });
-        // Hover-подсветка кликабельной строки под курсором (аффорданс);
-        // подсветка строки под меню уходит под фон меню — безвредно
-        if let Some(row) = row_at(&layout, self.cursor) {
-            if let Some(rect) = layout.row_rect(row) {
+        // Левая колонка: пункты «иконка + название» (Obsidian); активный
+        // раздел — акцентная подложка, неактивные — hover-подсветка
+        let tab_index = self.settings_tab.min(SETTINGS_TABS.len() - 1);
+        for (i, tab) in SETTINGS_TABS.iter().enumerate() {
+            let Some(item) = layout.nav_items.get(i) else {
+                continue;
+            };
+            let active = i == tab_index;
+            let hovered = point_in_rect(*item, self.cursor);
+            if active {
                 instances.push(CardInstance {
-                    pos: [panel[0] + PANEL_PADDING, rect[1] + 1.0],
-                    size: [panel[2] - PANEL_PADDING * 2.0, rect[3] - 2.0],
-                    fill: [0.24, 0.30, 0.42, 0.6],
+                    pos: [item[0] + 4.0, item[1] + 2.0],
+                    size: [item[2] - 8.0, item[3] - 4.0],
+                    fill: palette.palette_selected_fill,
                     border: [0.0; 4],
-                    params: [4.0, 0.0, 0.0, 1.0],
+                    params: [6.0, 0.0, 0.0, 1.0],
+                });
+            } else if hovered {
+                instances.push(CardInstance {
+                    pos: [item[0] + 4.0, item[1] + 2.0],
+                    size: [item[2] - 8.0, item[3] - 4.0],
+                    fill: palette.palette_hover_fill,
+                    border: [0.0; 4],
+                    params: [6.0, 0.0, 0.0, 1.0],
                 });
             }
+            texts.push(OwnedScreenText {
+                text: tab.icon.to_owned(),
+                origin: [item[0] + 12.0, item[1] + (item[3] - 14.0 * 1.3) / 2.0],
+                width: 20.0,
+                font_size: 14.0,
+                color: if active { palette.link } else { palette.icon },
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: self.tr(tab.title_key).to_owned(),
+                origin: [item[0] + 36.0, item[1] + (item[3] - 13.0 * 1.3) / 2.0],
+                width: item[2] - 36.0 - 6.0,
+                font_size: 13.0,
+                color: if active { palette.title } else { palette.body },
+                align: TextAlign::Left,
+            });
         }
-        for (entry, rect) in &layout.entries {
-            match entry {
-                PanelEntry::Header(title) => {
-                    // Заголовок секции: капс меньшим кеглем, цвет иконок
-                    texts.push(OwnedScreenText {
-                        text: title.to_uppercase(),
-                        origin: [text_x, rect[1] + 4.0],
-                        width: text_w,
-                        font_size: 11.0,
-                        color: palette.icon,
-                        align: TextAlign::Left,
-                    });
-                }
-                PanelEntry::Row(row) => {
-                    // Квады рисуются ДО всех screen-текстов (renderer.rs):
-                    // строки, перекрытые меню, не рисуем — иначе их текст
-                    // проступит сквозь фон меню
-                    if menu
-                        .as_ref()
-                        .is_some_and(|(_, _, menu_rect)| rects_intersect(*menu_rect, *rect))
-                    {
-                        continue;
-                    }
-                    texts.push(OwnedScreenText {
-                        text: row.label(&self.settings),
-                        origin: [text_x, rect[1] + 5.0],
-                        width: text_w,
-                        font_size: 13.0,
-                        color: palette.body,
-                        align: TextAlign::Left,
-                    });
-                    // Аффорданс dropdown: ▾ у правого края строки (тумблерам
-                    // не нужен — их цикл из двух значений виден целиком)
-                    if row_kind(*row) == RowKind::Dropdown {
-                        texts.push(OwnedScreenText {
-                            text: "▾".to_owned(),
-                            origin: [panel[0] + panel[2] - PANEL_PADDING - 12.0, rect[1] + 5.0],
-                            width: 12.0,
-                            font_size: 12.0,
-                            color: palette.icon,
-                            align: TextAlign::Left,
-                        });
-                    }
-                }
-            }
-        }
+        // Подсказка внизу левой колонки (перенос из подвала панели FR-026)
         texts.push(OwnedScreenText {
-            text: "Ctrl+, — открыть/закрыть".to_owned(),
-            origin: [
-                text_x,
-                panel[1] + panel[3] - PANEL_PADDING - PANEL_HINT_HEIGHT + 4.0,
-            ],
-            width: text_w,
+            text: self.tr(keys::SETTINGS_HINT).to_owned(),
+            origin: [layout.hint_rect[0], layout.hint_rect[1] + 4.0],
+            width: layout.hint_rect[2],
             font_size: 11.0,
             color: palette.icon,
             align: TextAlign::Left,
         });
-        // FR-026: выпадающее меню — поверх панели: фон чуть ярче панели,
+        // Заголовок раздела (правая панель)
+        let tab_def = &SETTINGS_TABS[tab_index];
+        texts.push(OwnedScreenText {
+            text: self.tr(tab_def.title_key).to_owned(),
+            origin: [layout.title_rect[0], layout.title_rect[1] + 3.0],
+            width: layout.title_rect[2],
+            font_size: 16.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        // FR-026/FR-039: открытое выпадающее меню — геометрия и пункты
+        // (состояние не хранит список — вычисляется из настроек, устареть
+        // не может); ширина меню = ширине контрола строки (FR-039 §1)
+        let menu = self.settings_dropdown.open_row.map(|row| {
+            let items = dropdown_options(row, &self.settings);
+            let anchor = layout
+                .row_rect(row)
+                .map(|rect| control_rect(rect, RowKind::Dropdown))
+                .unwrap_or([0.0; 4]);
+            let rect = dropdown_layout(anchor, viewport, items.len(), anchor[2]);
+            (row, items, rect)
+        });
+        // Карточки темы (таб «Внешний вид», паттерн Obsidian «Base theme»):
+        // активная — акцентная рамка; клик — прямой выбор (логика кнопки
+        // ☀/🌙). params.y = рамка выделения (паттерн кнопки ⚙)
+        if tab_def.theme_cards {
+            for (theme, label_key) in [
+                (Theme::Dark, keys::THEME_DARK),
+                (Theme::Light, keys::THEME_LIGHT),
+            ] {
+                let card = layout.theme_card_rect(theme);
+                let selected = self.settings.theme == theme;
+                let hovered = point_in_rect(card, self.cursor);
+                instances.push(CardInstance {
+                    pos: [card[0], card[1]],
+                    size: [card[2], card[3]],
+                    fill: if selected {
+                        palette.palette_selected_fill
+                    } else if hovered {
+                        palette.palette_hover_fill
+                    } else {
+                        palette.palette_row_fill
+                    },
+                    border: if selected {
+                        color_to_rgba(palette.link)
+                    } else {
+                        palette.palette_border
+                    },
+                    params: [8.0, selected as u8 as f32, 0.0, 1.0],
+                });
+                texts.push(OwnedScreenText {
+                    text: self.tr(label_key).to_owned(),
+                    origin: [card[0], card[1] + card[3] / 2.0 - 8.5],
+                    width: card[2],
+                    font_size: 13.0,
+                    color: palette.title,
+                    align: TextAlign::Center,
+                });
+            }
+        }
+        // Строки единой сетки: лейбл (БЕЗ значения) + описание приглушённым
+        // кеглем, контрол справа — pill-тумблер или dropdown-кнопка
+        for (row, rect) in &layout.rows {
+            // Квады рисуются ДО всех screen-текстов (renderer.rs):
+            // строки, перекрытые меню, не рисуем — иначе их текст
+            // проступит сквозь фон меню
+            if menu
+                .as_ref()
+                .is_some_and(|(_, _, menu_rect)| rects_intersect(*menu_rect, *rect))
+            {
+                continue;
+            }
+            // Hover-подсветка кликабельной строки (аффорданс)
+            if point_in_rect(*rect, self.cursor) {
+                instances.push(CardInstance {
+                    pos: [rect[0], rect[1] + 1.0],
+                    size: [rect[2], rect[3] - 2.0],
+                    fill: [0.24, 0.30, 0.42, 0.35],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
+            texts.push(OwnedScreenText {
+                text: self.tr(row_label_key(*row)).to_owned(),
+                origin: [rect[0] + 2.0, rect[1] + 4.0],
+                width: rect[2] - MODAL_ROW_LABEL_W,
+                font_size: 13.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: self.tr(row_desc_key(*row)).to_owned(),
+                origin: [rect[0] + 2.0, rect[1] + 22.0],
+                width: rect[2] - MODAL_ROW_LABEL_W,
+                font_size: 11.0,
+                color: palette.icon,
+                align: TextAlign::Left,
+            });
+            let kind = row_kind(*row);
+            let control = control_rect(*rect, kind);
+            match kind {
+                RowKind::Toggle => {
+                    let on = match row {
+                        SettingsRow::Grid => self.settings.grid_visible,
+                        SettingsRow::EdgesAvoid => self.settings.edges_avoid_nodes,
+                        SettingsRow::LinePorts => self.settings.line_ports,
+                        SettingsRow::BottleneckOverlay => self.settings.bottleneck_overlay,
+                        SettingsRow::FocusMode => self.settings.focus_mode,
+                        SettingsRow::HudOnStart => self.settings.hud_on_start,
+                        SettingsRow::ButtonCorner
+                        | SettingsRow::GridStyle
+                        | SettingsRow::GridDensity
+                        | SettingsRow::PortZone
+                        | SettingsRow::Language => false,
+                    };
+                    // Pill-тумблер: трек (включён — акцент) + ручка-квад,
+                    // позиция отражает значение (рисуется квадами)
+                    instances.push(CardInstance {
+                        pos: [control[0], control[1]],
+                        size: [control[2], control[3]],
+                        fill: if on {
+                            color_to_rgba(palette.link)
+                        } else {
+                            [0.30, 0.33, 0.40, 0.9]
+                        },
+                        border: [0.0; 4],
+                        params: [control[3] / 2.0, 0.0, 0.0, 1.0],
+                    });
+                    let knob = pill_knob_rect(control, on);
+                    instances.push(CardInstance {
+                        pos: [knob[0], knob[1]],
+                        size: [knob[2], knob[3]],
+                        fill: [0.92, 0.92, 0.94, 1.0],
+                        border: [0.0; 4],
+                        params: [knob[2] / 2.0, 0.0, 0.0, 1.0],
+                    });
+                }
+                RowKind::Dropdown => {
+                    // Кнопка со значением + ▾ (HIG «Pop-Up Buttons»)
+                    instances.push(CardInstance {
+                        pos: [control[0], control[1]],
+                        size: [control[2], control[3]],
+                        fill: if point_in_rect(control, self.cursor) {
+                            hover_fill(palette.palette_chip_fill)
+                        } else {
+                            palette.palette_chip_fill
+                        },
+                        border: palette.palette_border,
+                        params: [6.0, 0.0, 0.0, 1.0],
+                    });
+                    if let Some(value) = dropdown_value(*row, &self.settings) {
+                        texts.push(OwnedScreenText {
+                            text: value,
+                            origin: [control[0] + 10.0, control[1] + 4.0],
+                            width: control[2] - 26.0,
+                            font_size: 12.0,
+                            color: palette.title,
+                            align: TextAlign::Left,
+                        });
+                    }
+                    texts.push(OwnedScreenText {
+                        text: "▾".to_owned(),
+                        origin: [control[0] + control[2] - 16.0, control[1] + 4.0],
+                        width: 14.0,
+                        font_size: 12.0,
+                        color: palette.icon,
+                        align: TextAlign::Left,
+                    });
+                }
+            }
+        }
+        // FR-026: выпадающее меню — поверх модалки: фон чуть ярче панели,
         // hover/клавиатурное выделение пункта, галочка у текущего значения
         if let Some((row, items, menu_rect)) = &menu {
             instances.push(CardInstance {
@@ -6826,7 +7040,8 @@ impl App {
                 // реагирует; выход виден всегда — «Пропустить» в углу)
                 if let Some(state) = &self.onboarding {
                     let viewport = self.viewport_logical();
-                    let card = onboarding_ui::card_rect(viewport, state.step);
+                    let card =
+                        onboarding_ui::card_rect(viewport, state.step, self.settings.language);
                     match onboarding_ui::button_at(card, state, self.cursor) {
                         Some(OnboardingButton::Next) => {
                             if state.is_last() {
@@ -7194,38 +7409,63 @@ impl App {
                     return;
                 }
                 if self.settings_open {
-                    // FR-026: layout панели с группами — hit-тесты по строкам
-                    let layout = panel_layout(self.settings.button_corner, viewport);
+                    // FR-039: layout модалки — hit-тесты по навигации,
+                    // строкам и карточкам темы
+                    let layout = modal_layout(self.settings_tab, viewport);
                     // Открытое выпадающее меню — первый приоритет: клик по
                     // пункту применяет значение; клик мимо меню закрывает
-                    // ТОЛЬКО меню (панель остаётся открытой — двухэтапный
+                    // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
                     // dismiss), клик по другой строке обработается ниже
                     if let Some(open_row) = self.settings_dropdown.open_row {
                         let items = dropdown_options(open_row, &self.settings);
-                        let anchor = layout.row_rect(open_row).unwrap_or([0.0; 4]);
-                        let menu_rect = dropdown_layout(anchor, viewport, items.len());
+                        let anchor = layout
+                            .row_rect(open_row)
+                            .map(|rect| control_rect(rect, RowKind::Dropdown))
+                            .unwrap_or([0.0; 4]);
+                        let menu_rect = dropdown_layout(anchor, viewport, items.len(), anchor[2]);
                         if point_in_rect(menu_rect, self.cursor) {
                             if let Some(index) =
                                 dropdown_item_at(menu_rect, items.len(), self.cursor)
                             {
                                 self.apply_dropdown_choice(open_row, index);
                             }
-                            // Выбор угла кнопки перепривязывает панель —
-                            // меню закрывается в любом случае
                             self.settings_dropdown.reset();
                             self.request_redraw();
                             return;
                         }
                         self.settings_dropdown.reset();
-                        if row_at(&layout, self.cursor).is_none() {
-                            // Клик вне меню и не по строке панели: меню
-                            // закрыто, панель осталась, канвасу клик не
-                            // достаётся (иначе создал бы заметку)
+                        if modal_row_at(&layout, self.cursor).is_none()
+                            && !point_in_rect(layout.rect, self.cursor)
+                        {
+                            // Клик вне меню, не по строке и не по модалке:
+                            // меню закрыто, канвасу клик не достаётся
+                            // (иначе создал бы заметку)
                             self.request_redraw();
                             return;
                         }
                     }
-                    if let Some(row) = row_at(&layout, self.cursor) {
+                    // Пункт левой навигации — смена таба (+ сброс dropdown);
+                    // активный таб переживает закрытие модалки (в памяти App)
+                    if let Some(tab) = modal_nav_at(&layout, self.cursor) {
+                        self.settings_tab = tab;
+                        self.settings_dropdown.reset();
+                        self.request_redraw();
+                        return;
+                    }
+                    // Карточки темы (таб «Внешний вид») — прямой выбор
+                    if let Some(theme) = modal_theme_card_at(&layout, self.cursor) {
+                        if self.settings.theme != theme {
+                            self.settings.theme = theme;
+                            self.widgets.set_theme(theme == Theme::Dark);
+                            if let Some(renderer) = self.renderer.as_mut() {
+                                renderer.set_theme(ThemeColors::from_theme(theme));
+                            }
+                            self.save_settings();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                    if let Some(row) = modal_row_at(&layout, self.cursor) {
                         match row_kind(row) {
                             RowKind::Toggle => self.apply_toggle_row(row),
                             RowKind::Dropdown => {
@@ -7240,8 +7480,9 @@ impl App {
                             }
                         }
                     } else if !point_in_rect(layout.rect, self.cursor) {
-                        // Клик мимо панели — закрыть; канвасу клик не достаётся
-                        // (иначе двойной клик мимо создал бы заметку)
+                        // FR-039: клик по затемнению (вне rect модалки) —
+                        // закрыть; канвасу клик не достаётся (иначе двойной
+                        // клик мимо создал бы заметку)
                         self.settings_open = false;
                         self.settings_dropdown.reset();
                     }
@@ -7384,7 +7625,9 @@ impl App {
                             match CANVAS_MENU_ITEMS[i] {
                                 CanvasMenuItem::NewGroup => {
                                     let center = self.viewport_center_world();
-                                    let group = plan_group_at(&self.scene.canvas, center);
+                                    let mut group = plan_group_at(&self.scene.canvas, center);
+                                    group.label =
+                                        Some(self.tr(keys::GROUP_DEFAULT_LABEL).to_owned());
                                     self.insert_group(group);
                                 }
                                 // T23: переключение из меню — рантайм,
@@ -7424,7 +7667,10 @@ impl App {
                                                     action: crate::ui::SubmenuAction::Remove(
                                                         widget_id,
                                                     ),
-                                                    label: format!("— Удалить: {label}"),
+                                                    label: self.trf(
+                                                        keys::WIDGETS_REMOVE_ENTRY,
+                                                        &[("{name}", &label)],
+                                                    ),
                                                 },
                                             ),
                                         );
@@ -7659,9 +7905,7 @@ impl App {
                                         self.begin_whatif_override(index, line);
                                     }
                                     None => {
-                                        self.show_toast(
-                                            "в what-if подменяются только строки расчёта",
-                                        );
+                                        self.show_toast(self.tr(keys::WHATIF_ONLY_CALC_LINES));
                                     }
                                 }
                                 self.request_redraw();
@@ -8087,7 +8331,7 @@ impl App {
         let world = self.cursor_world();
         let dir = self.scene.canvas_dir();
         // Уникальное имя: «Новая заметка.txt», при коллизии — « 2», « 3»…
-        let base = "Новая заметка";
+        let base = self.tr(keys::FILE_NEW_NOTE);
         let mut name = format!("{base}.txt");
         let mut counter = 1u32;
         while dir.join(&name).exists() {
@@ -8683,7 +8927,10 @@ impl App {
                 let resolved = self.scene.canvas_dir().join(path.trim_end_matches('/'));
                 if let Err(e) = open_path_externally(&resolved) {
                     tracing::warn!(node_id, path = %resolved.display(), error = %e, "openFile не удался");
-                    self.show_toast(format!("Виджет: не удалось открыть {}", resolved.display()));
+                    self.show_toast(self.trf(
+                        keys::TOAST_WIDGET_OPEN_FAILED,
+                        &[("{path}", &resolved.display().to_string())],
+                    ));
                 }
             }
             WidgetToHost::ReadDir { path } => {
@@ -8808,20 +9055,31 @@ impl App {
             } => {
                 match self.widgets.install_package(&src) {
                     Ok(canvas_widgets::registry::InstallOutcome::Installed) => {
-                        self.show_toast(format!("Виджет {} установлен", manifest.name));
+                        self.show_toast(self.trf(
+                            keys::TOAST_WIDGET_INSTALLED,
+                            &[("{name}", manifest.name.as_str())],
+                        ));
                     }
                     Ok(canvas_widgets::registry::InstallOutcome::Updated) => {
-                        self.show_toast(format!(
-                            "Виджет {} обновлён до {}",
-                            manifest.name, manifest.version
+                        self.show_toast(self.trf(
+                            keys::TOAST_WIDGET_UPDATED,
+                            &[
+                                ("{name}", manifest.name.as_str()),
+                                ("{version}", manifest.version.as_str()),
+                            ],
                         ));
                     }
                     Ok(canvas_widgets::registry::InstallOutcome::SameVersion) => {
-                        self.show_toast(format!("Виджет {} уже в этой версии", manifest.name));
+                        self.show_toast(self.trf(
+                            keys::TOAST_WIDGET_SAME_VERSION,
+                            &[("{name}", manifest.name.as_str())],
+                        ));
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "установка виджета не удалась");
-                        self.show_toast(format!("Установка не удалась: {e}"));
+                        self.show_toast(
+                            self.trf(keys::TOAST_INSTALL_FAILED, &[("{err}", &e.to_string())]),
+                        );
                         self.request_redraw();
                         return;
                     }
@@ -8850,13 +9108,17 @@ impl App {
             AppDialog::RemovePackage { widget_id, name } => {
                 match self.widgets.remove_package(&widget_id) {
                     Ok(()) => {
-                        self.show_toast(format!("Пакет {name} удалён"));
+                        self.show_toast(
+                            self.trf(keys::TOAST_PACKAGE_REMOVED, &[("{name}", &name)]),
+                        );
                         // Ноды пакета остаются (деградируют в заглушки —
                         // package_ok=false в LOD); пересборка spatial не нужна
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "удаление пакета не удалось");
-                        self.show_toast(format!("Удаление не удалось: {e}"));
+                        self.show_toast(
+                            self.trf(keys::TOAST_REMOVE_FAILED, &[("{err}", &e.to_string())]),
+                        );
                     }
                 }
                 self.request_redraw();
@@ -8937,7 +9199,7 @@ impl App {
     fn apply_related_layout(&mut self, seed: usize, mode: canvas_core::LayoutMode) {
         let plan = canvas_core::plan_related_layout(&self.scene.canvas, seed, mode);
         if plan.is_empty() {
-            self.show_toast("Нет связанных карточек для раскладки");
+            self.show_toast(self.tr(keys::TOAST_NO_RELATED_CARDS));
             return;
         }
         // FR-006: раскладка — один undo-шаг
@@ -8952,7 +9214,7 @@ impl App {
             }
         }
         self.scene.mark_dirty();
-        self.show_toast("Связанные карточки выровнены");
+        self.show_toast(self.tr(keys::TOAST_RELATED_ALIGNED));
     }
 
     // --- FR-011: mindmap (Tab / Enter / сворачивание ветки) ---
@@ -9029,7 +9291,7 @@ impl App {
     /// FR-011). Один undo-шаг.
     fn mindmap_add_sibling(&mut self, node_index: usize) {
         let Some(parent) = canvas_core::parent_index(&self.scene.canvas, node_index) else {
-            self.show_toast("У корневой ветки нет уровня — используйте Tab");
+            self.show_toast(self.tr(keys::TOAST_NO_LEVEL));
             return;
         };
         self.mindmap_add_child(parent);
@@ -9054,9 +9316,9 @@ impl App {
         }
         self.scene.mark_dirty();
         self.show_toast(if collapsed {
-            "Ветка свёрнута"
+            self.tr(keys::TOAST_BRANCH_COLLAPSED)
         } else {
-            "Ветка развёрнута"
+            self.tr(keys::TOAST_BRANCH_EXPANDED)
         });
     }
 
@@ -9158,7 +9420,7 @@ impl App {
                     .unwrap_or_default();
                 if !text.is_empty() {
                     self.clipboard.set_text(text);
-                    self.show_toast("Путь скопирован");
+                    self.show_toast(self.tr(keys::TOAST_PATH_COPIED));
                 }
             }
             NodeSetting::ClearText => {
@@ -9192,7 +9454,7 @@ impl App {
                 self.selected = None;
                 self.selected_nodes.clear();
                 self.scene.mark_dirty();
-                self.show_toast("Группа разгруппирована");
+                self.show_toast(self.tr(keys::TOAST_GROUP_UNGROUPED));
             }
             NodeSetting::WidgetReload => {
                 let node_id = self
@@ -9203,7 +9465,7 @@ impl App {
                     .map(|node| node.id.clone());
                 if let Some(node_id) = node_id {
                     self.widgets.reload_widget(&node_id);
-                    self.show_toast("Виджет перезагружается");
+                    self.show_toast(self.tr(keys::TOAST_WIDGET_RELOADING));
                 }
             }
             NodeSetting::WidgetPermissions => {
@@ -9226,7 +9488,7 @@ impl App {
                         }
                     })
                     .unwrap_or_else(|| "пакет не установлен".to_owned());
-                self.show_toast(format!("Разрешения: {summary}"));
+                self.show_toast(self.trf(keys::TOAST_PERMISSIONS, &[("{summary}", &summary)]));
             }
         }
     }
@@ -9380,7 +9642,7 @@ impl App {
             });
         }
         self.scene.mark_dirty();
-        self.show_toast("Нода вставлена в группу");
+        self.show_toast(self.tr(keys::TOAST_NODE_INSERTED));
     }
 
     /// Вынос детей из групп после drag (FR-012): нода, отпущенная вне rect
@@ -9428,7 +9690,7 @@ impl App {
             canvas_core::group_remove_child(&mut self.scene.canvas, gi, &id);
         }
         self.scene.mark_dirty();
-        self.show_toast("Нода вынесена из группы");
+        self.show_toast(self.tr(keys::TOAST_NODE_EXTRACTED));
     }
 
     /// Rect открытого меню канваса (логические px) — airspace для виджетов.
@@ -9638,7 +9900,7 @@ impl ApplicationHandler<AppEvent> for App {
                     let origin_x =
                         (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
                     owned_texts.push(OwnedScreenText {
-                        text: format!("Файл недоступен: {file}"),
+                        text: self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
                         origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
                         width: TOOLTIP_WIDTH,
                         font_size: 13.0,
@@ -9674,7 +9936,8 @@ impl ApplicationHandler<AppEvent> for App {
                         params: [10.0, 0.0, 0.0, 1.0],
                     });
                     let buttons = self.dialog_button_rects();
-                    for (i, (label, _)) in dialog.buttons().iter().enumerate() {
+                    for (i, (label, _)) in dialog.buttons(self.settings.language).iter().enumerate()
+                    {
                         let [bx, by, bw, bh] = buttons[i];
                         screen_instances.push(CardInstance {
                             pos: [bx, by],
@@ -9698,7 +9961,7 @@ impl ApplicationHandler<AppEvent> for App {
                         });
                     }
                     owned_texts.push(OwnedScreenText {
-                        text: dialog.title(&self.scene.canvas),
+                        text: dialog.title(&self.scene.canvas, self.settings.language),
                         origin: [dx + 20.0, dy + 16.0],
                         width: dw - 40.0,
                         font_size: 16.0,
@@ -9706,7 +9969,7 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Left,
                     });
                     owned_texts.push(OwnedScreenText {
-                        text: dialog.body(),
+                        text: dialog.body(self.settings.language),
                         origin: [dx + 20.0, dy + 46.0],
                         width: dw - 40.0,
                         font_size: 13.0,
@@ -9975,7 +10238,7 @@ impl ApplicationHandler<AppEvent> for App {
                 {
                     self.settings.bottleneck_overlay = true;
                     self.bottleneck_auto_enabled = true;
-                    self.show_toast("Включён режим анализа (Ctrl+B — выключить)");
+                    self.show_toast(self.tr(keys::TOAST_ANALYSIS_ON));
                     // авто-включение не персистим: конфиг не трогаем
                 }
                 // T23 (brainstorm-focus): пересчёт анимации и окрестности

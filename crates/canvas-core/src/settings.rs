@@ -70,6 +70,41 @@ impl Theme {
     }
 }
 
+/// Язык интерфейса (FR-040): русский (дефолт — старые конфиги без поля
+/// грузятся как `ru`) или английский. Смена — dropdown в разделе
+/// «Внешний вид» модалки настроек (FR-039), применяется на лету;
+/// названия языков в переключателе — на языке самого языка («русский»,
+/// «English»), не через перевод этого enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    /// Русский (дефолт).
+    #[default]
+    Ru,
+    /// Английский.
+    En,
+}
+
+impl Language {
+    /// Следующий язык по циклу (два значения — переключение замкнуто;
+    /// используется тестами эквивалентности dropdown).
+    pub fn next(self) -> Self {
+        match self {
+            Language::Ru => Language::En,
+            Language::En => Language::Ru,
+        }
+    }
+
+    /// Название языка в его собственной локали (конвенция Obsidian/VS Code:
+    /// язык в переключателе подписывается собой, перевод не нужен).
+    pub fn native_label(self) -> &'static str {
+        match self {
+            Language::Ru => "русский",
+            Language::En => "English",
+        }
+    }
+}
+
 /// Вид сетки канваса: линии или точки (панель настроек).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -194,6 +229,9 @@ pub struct Settings {
     /// (Warn и выше) с тостом. Тогл: Ctrl+B, пункт меню канваса, панель
     /// настроек. Рендер читает флаг на кадре (как `line_ports`).
     pub bottleneck_overlay: bool,
+    /// FR-040: язык интерфейса (`ru`/`en`). Старые конфиги без поля
+    /// грузятся как `ru` (serde default на struct) — прежнее поведение.
+    pub language: Language,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -243,6 +281,8 @@ impl Default for Settings {
             onboarding_defers: 0,
             // FR-016: оверлей узких мест по умолчанию выключен.
             bottleneck_overlay: false,
+            // FR-040: интерфейс по умолчанию — русский.
+            language: Language::Ru,
         }
     }
 }
@@ -327,6 +367,7 @@ mod tests {
             onboarding_done: true,
             onboarding_defers: 2,
             bottleneck_overlay: true,
+            language: Language::En,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
@@ -433,6 +474,38 @@ mod tests {
         assert_eq!(defaults.onboarding_defers, 0);
     }
 
+    /// FR-040: язык — дефолт `ru` для старых конфигов без поля, чтение
+    /// `language = "en"`, round-trip выбора, цикл из двух замкнут.
+    #[test]
+    fn language_defaults_and_round_trip() {
+        // Старый конфиг без поля — русский, без предупреждения
+        let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
+        assert_eq!(settings.language, Language::Ru, "дефолт — русский");
+        assert!(warn.is_none());
+        // Поле читается
+        let (settings, warn) = Settings::load_toml_str("language = \"en\"\n");
+        assert_eq!(settings.language, Language::En);
+        assert!(warn.is_none());
+        // Цикл замкнут из двух
+        assert_eq!(Language::Ru.next(), Language::En);
+        assert_eq!(Language::En.next(), Language::Ru);
+        // Названия в собственной локали — непустые
+        assert_eq!(Language::Ru.native_label(), "русский");
+        assert_eq!(Language::En.native_label(), "English");
+        // Round-trip: сохранённый выбор читается обратно
+        let dir = crate::test_scratch_root().join("canvasdesk-language-test");
+        let path = dir.join("config.toml");
+        let settings = Settings {
+            language: Language::En,
+            ..Settings::default()
+        };
+        settings.save(&path).expect("сохранение");
+        let (loaded, warn) = Settings::load(&path);
+        assert_eq!(loaded.language, Language::En);
+        assert!(warn.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Тема: переключение замкнуто, подписи непустые, дефолт — тёмная.
     #[test]
     fn theme_cycle_and_labels() {
@@ -516,6 +589,7 @@ mod tests {
         assert!(text.contains("onboarding_done"), "{text}");
         assert!(text.contains("onboarding_defers"), "{text}");
         assert!(text.contains("bottleneck_overlay"), "{text}");
+        assert!(text.contains("language"), "{text}");
     }
 
     /// FR-025: флаг построчных точек выхода — дефолт false (старые конфиги
