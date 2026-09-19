@@ -1064,9 +1064,19 @@ pub mod ui {
         /// (нижний бар; вход также — Ctrl+Shift+I и пилюля). Галочка ✓ —
         /// режим активен.
         WhatIf,
+        /// FR-038 п.16 (T-038.5): «Выровнять по горизонтали» — ряд по центрам
+        /// (общая ось Y). Виден ТОЛЬКО при N≥3 выделенных нодах.
+        AlignHorizontal,
+        /// FR-038 п.16 (T-038.5): «Выровнять по вертикали» — колонна по
+        /// центрам (общая ось X). Виден ТОЛЬКО при N≥3 выделенных нодах.
+        AlignVertical,
+        /// FR-038 п.16 (T-038.5): «Распределить равномерно» — равные зазоры
+        /// вдоль оси раскладки выделения. Виден ТОЛЬКО при N≥3 выделенных
+        /// нодах.
+        DistributeEvenly,
     }
 
-    /// Меню пустого канваса.
+    /// Меню пустого канваса (базовые пункты — видны всегда).
     pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 7] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
@@ -1076,6 +1086,31 @@ pub mod ui {
         CanvasMenuItem::BottleneckOverlay,
         CanvasMenuItem::WhatIf,
     ];
+
+    /// Минимальное число выделенных нод для batch-операций выравнивания
+    /// (FR-038 п.16: N≥3; ниже — пункты скрыты).
+    pub const ALIGN_MIN_SELECTION: usize = 3;
+
+    /// Пункты batch-выравнивания (FR-038 п.16, T-038.5) — хвост меню
+    /// канваса; добавляются к базовым при N≥3 выделенных нодах.
+    pub const ALIGN_MENU_ITEMS: [CanvasMenuItem; 3] = [
+        CanvasMenuItem::AlignHorizontal,
+        CanvasMenuItem::AlignVertical,
+        CanvasMenuItem::DistributeEvenly,
+    ];
+
+    /// Видимый список пунктов меню канваса: базовые 7 + batch-выравнивание
+    /// при `align_visible` (N≥3 выделенных, [`ALIGN_MIN_SELECTION`]). Список
+    /// единый источник для отрисовки, хит-теста и airspace — расхождений
+    /// высоты меню не бывает. Порядок фиксирован (детерминизм).
+    pub fn canvas_menu_visible_items(align_visible: bool) -> Vec<CanvasMenuItem> {
+        let mut items = Vec::with_capacity(CANVAS_MENU_ITEMS.len() + ALIGN_MENU_ITEMS.len());
+        items.extend_from_slice(&CANVAS_MENU_ITEMS);
+        if align_visible {
+            items.extend_from_slice(&ALIGN_MENU_ITEMS);
+        }
+        items
+    }
 
     /// Подпись пункта меню пустого канваса. `focus_on` — состояние режима
     /// фокуса, `hotkeys_open` — состояние оверлея хоткеев, `desktop_on` —
@@ -1132,6 +1167,17 @@ pub mod ui {
                     if whatif_on { check } else { "" },
                     i18n::tr(language, crate::i18n::keys::MENU_WHATIF)
                 )
+            }
+            // FR-038 (T-038.5): batch-операции — действия, не переключатели
+            // (галочек нет; видимость пунктов решает список меню, N≥3)
+            CanvasMenuItem::AlignHorizontal => {
+                i18n::tr(language, crate::i18n::keys::MENU_ALIGN_HORIZONTAL).to_owned()
+            }
+            CanvasMenuItem::AlignVertical => {
+                i18n::tr(language, crate::i18n::keys::MENU_ALIGN_VERTICAL).to_owned()
+            }
+            CanvasMenuItem::DistributeEvenly => {
+                i18n::tr(language, crate::i18n::keys::MENU_DISTRIBUTE_EVENLY).to_owned()
             }
         }
     }
@@ -2322,6 +2368,79 @@ pub mod ui {
             assert_eq!(
                 menu_item_at_for(origin, [110.0, 50.0 + menu_rect_for(origin, n)[3] + 1.0], n),
                 None
+            );
+        }
+
+        /// FR-038 (T-038.5): batch-пункты — хвост меню при N≥3 выделенных,
+        /// скрыты при меньшем выделении; базовые 7 не смещаются; подписи
+        /// без галочек (действия, не переключатели).
+        #[test]
+        fn canvas_menu_align_items_visible_only_for_n_ge_3() {
+            use super::canvas_menu_visible_items;
+            // Меньше трёх выделенных — только базовые 7
+            let base = canvas_menu_visible_items(false);
+            assert_eq!(base.len(), CANVAS_MENU_ITEMS.len());
+            assert_eq!(base[0], CanvasMenuItem::NewGroup);
+            assert!(!base
+                .iter()
+                .any(|item| matches!(item, CanvasMenuItem::AlignHorizontal)));
+            // N≥3 — ровно 10 пунктов, batch-хвост в фиксированном порядке
+            let full = canvas_menu_visible_items(true);
+            assert_eq!(full.len(), CANVAS_MENU_ITEMS.len() + ALIGN_MENU_ITEMS.len());
+            assert_eq!(
+                &full[CANVAS_MENU_ITEMS.len()..],
+                &ALIGN_MENU_ITEMS,
+                "batch-пункты — хвост в фиксированном порядке"
+            );
+            assert_eq!(
+                full[CANVAS_MENU_ITEMS.len()..],
+                [
+                    CanvasMenuItem::AlignHorizontal,
+                    CanvasMenuItem::AlignVertical,
+                    CanvasMenuItem::DistributeEvenly
+                ]
+            );
+            // Подписи: RU/EN фразы из i18n, без ✓-галочек
+            assert_eq!(
+                canvas_menu_label(
+                    CanvasMenuItem::AlignHorizontal,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
+                "Выровнять по горизонтали"
+            );
+            assert_eq!(
+                canvas_menu_label(
+                    CanvasMenuItem::AlignVertical,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::En
+                ),
+                "Align vertically"
+            );
+            assert_eq!(
+                canvas_menu_label(
+                    CanvasMenuItem::DistributeEvenly,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
+                "Распределить равномерно"
+            );
+            // Высота меню растёт с batch-пунктами (hit-test/отрисовка — один список)
+            assert_eq!(
+                menu_rect_for([0.0, 0.0], full.len())[3],
+                menu_rect_for([0.0, 0.0], base.len())[3] + MENU_ITEM_HEIGHT * 3.0
             );
         }
 

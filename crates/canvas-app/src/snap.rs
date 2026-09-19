@@ -38,6 +38,13 @@
 //!   иначе `Grid` (в т.ч. когда ни одна ось не сработала — дельта без изменений).
 //! - полное равенство счётчиков/дельт разрешается порядком обхода: первый
 //!   встреченный кандидат в `candidates` (детерминизм п.20).
+//!
+//! Batch-операции выделения (п.16-17, T-038.5): [`align_centers`] — ряд/
+//! колонна по центрам с опорной осью = среднее центров; [`distribute_evenly`]
+//! — равные зазоры между краями соседних при сохранении span. Обе — чистые
+//! функции над `&mut [SnapRect]`, один вызов интеграции = один undo-шаг
+//! (п.17); правила осей и сортировки зафиксированы в док-комментариях
+//! (детерминизм п.20).
 
 /// Источник сработавшей привязки (п.18: цвет/подпись линии на рендере).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,6 +555,130 @@ pub fn clamp_collision(
 }
 
 // ---------------------------------------------------------------------------
+// Batch-операции выделения (FR-038 п.16-17, T-038.5)
+// ---------------------------------------------------------------------------
+
+/// Ось batch-операции выравнивания/распределения (п.16).
+///
+/// Семантика оси у ОПЕРАЦИЙ разнонаправленная и зафиксирована FR-038:
+/// - `align_centers`: axis=X → колонна (общий center X), axis=Y → ряд
+///   (общий center Y) — ось задаёт совмещаемую координату;
+/// - `distribute_evenly`: axis=X → равные зазоры вдоль X (ряд), axis=Y →
+///   вдоль Y (колонна) — ось задаёт направление раскладки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignAxis {
+    /// Ось X: колонна при выравнивании / горизонтальная раскладка при
+    /// распределении.
+    X,
+    /// Ось Y: ряд при выравнивании / вертикальная раскладка при
+    /// распределении.
+    Y,
+}
+
+/// Центр rect по оси операции (хелпер — единая точка семантики оси).
+fn axis_center(rect: &SnapRect, axis: AlignAxis) -> f32 {
+    match axis {
+        AlignAxis::X => rect.cx(),
+        AlignAxis::Y => rect.cy(),
+    }
+}
+
+/// Размер rect вдоль оси операции.
+fn axis_size(rect: &SnapRect, axis: AlignAxis) -> f32 {
+    match axis {
+        AlignAxis::X => rect.w,
+        AlignAxis::Y => rect.h,
+    }
+}
+
+/// Начало rect вдоль оси операции (левый край / верх).
+fn axis_start(rect: &SnapRect, axis: AlignAxis) -> f32 {
+    match axis {
+        AlignAxis::X => rect.x,
+        AlignAxis::Y => rect.y,
+    }
+}
+
+/// Конец rect вдоль оси операции (правый край / низ).
+fn axis_end(rect: &SnapRect, axis: AlignAxis) -> f32 {
+    match axis {
+        AlignAxis::X => rect.right(),
+        AlignAxis::Y => rect.bottom(),
+    }
+}
+
+/// Записать начало rect вдоль оси операции (поперечное и размеры нетронуты).
+fn set_axis_start(rect: &mut SnapRect, axis: AlignAxis, start: f32) {
+    match axis {
+        AlignAxis::X => rect.x = start,
+        AlignAxis::Y => rect.y = start,
+    }
+}
+
+/// FR-038 п.16 (T-038.5): «Выровнять по горизонтали/вертикали» — ряд/колонна
+/// ПО ЦЕНТРАМ (интерпретация зафиксирована во FR-038; края/углы владелец
+/// подтвердит на приёмке).
+///
+/// Опорная ось — СРЕДНЕЕ арифметическое центров по оси (правило детерминизма
+/// п.20 зафиксировано: сумма берётся в порядке входа — порядок индексов
+/// выделения, деление на N; медиана отвергнута — требует соглашения о
+/// чётности, а среднее однозначно). Поперечная координата и размеры не
+/// меняются. Меньше двух элементов — no-op.
+pub fn align_centers(rects: &mut [SnapRect], axis: AlignAxis) {
+    if rects.len() < 2 {
+        return;
+    }
+    let total: f32 = rects.iter().map(|rect| axis_center(rect, axis)).sum();
+    let target = total / rects.len() as f32;
+    for rect in rects.iter_mut() {
+        let start = target - axis_size(rect, axis) / 2.0;
+        set_axis_start(rect, axis, start);
+    }
+}
+
+/// FR-038 п.16 (T-038.5): «Распределить равномерно» — равные интервалы между
+/// соседними (по порядку координаты оси) элементами.
+///
+/// Правило (детерминизм п.20): сортировка по центру оси (`total_cmp` —
+/// устойчива к NaN, равные центры сохраняют порядок входа); span = [начало
+/// первого, конец последнего] НЕ меняется; зазор = (span − Σ размеров) / (N−1)
+/// — равные зазоры между КРАЯМИ соседних (при равных размерах — между
+/// центрами). Каждый элемент ставится напрямую: start_k = span_start +
+/// Σ_{j<k} size_j + k·gap (без накопления f32-дрейфа). Отрицательный зазор
+/// (элементы перекрываются уже в span) не клампится — детерминированное
+/// «равномерное сжатие». Меньше двух элементов — no-op (N=2: крайние и так
+/// на границах span).
+pub fn distribute_evenly(rects: &mut [SnapRect], axis: AlignAxis) {
+    let n = rects.len();
+    if n < 2 {
+        return;
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| axis_center(&rects[a], axis).total_cmp(&axis_center(&rects[b], axis)));
+
+    let first = &rects[order[0]];
+    let last = &rects[order[n - 1]];
+    let span_start = axis_start(first, axis);
+    let span_end = axis_end(last, axis);
+    // Сумма размеров в отсортированном порядке — фиксированный порядок
+    // суммирования (детерминизм п.20)
+    let total_size: f32 = order.iter().map(|&i| axis_size(&rects[i], axis)).sum();
+    let gap = (span_end - span_start - total_size) / (n - 1) as f32;
+
+    // Префиксная сумма размеров до k-го элемента в отсортированном порядке
+    let mut prefix: Vec<f32> = Vec::with_capacity(n);
+    let mut acc = 0.0;
+    for &i in &order {
+        prefix.push(acc);
+        acc += axis_size(&rects[i], axis);
+    }
+    for (k, &i) in order.iter().enumerate() {
+        let start = span_start + prefix[k] + k as f32 * gap;
+        set_axis_start(&mut rects[i], axis, start);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Оракул-тесты правил п.1-15/20 (TDD: написаны до реализации).
 // ---------------------------------------------------------------------------
 
@@ -978,5 +1109,206 @@ mod tests {
         };
         let out = snap_move(r(115.0, 0.0, 5.0, 5.0), 0.0, 0.0, &[], &coarse);
         assert_eq!(out.dx, -15.0);
+    }
+
+    // --- FR-038 T-038.5: batch-операции выделения (п.16-17) ---
+
+    /// Выравнивание в ряд (axis=Y): центры на ОДНОЙ горизонтали; опорная
+    /// ось — СРЕДНЕЕ центров Y (правило зафиксировано, п.20); X и размеры
+    /// не меняются.
+    #[test]
+    fn выравнивание_ряд_ставит_центры_на_среднюю_горизонталь() {
+        // Центры Y: 25, 120, 40 → среднее 185/3
+        let mut rects = vec![
+            r(0.0, 0.0, 100.0, 50.0),
+            r(200.0, 90.0, 80.0, 60.0),
+            r(400.0, 30.0, 40.0, 20.0),
+        ];
+        align_centers(&mut rects, AlignAxis::Y);
+        let expected = (25.0 + 120.0 + 40.0) / 3.0;
+        for (i, rect) in rects.iter().enumerate() {
+            assert!(
+                (rect.cy() - expected).abs() < 1e-3,
+                "центр {i} на оси: {} vs {expected}",
+                rect.cy()
+            );
+        }
+        // X и размеры не тронуты
+        assert_eq!(rects[0].x, 0.0);
+        assert_eq!(rects[1].x, 200.0);
+        assert_eq!(rects[2].x, 400.0);
+        assert_eq!((rects[0].w, rects[0].h), (100.0, 50.0));
+        assert_eq!((rects[1].w, rects[1].h), (80.0, 60.0));
+        assert_eq!((rects[2].w, rects[2].h), (40.0, 20.0));
+    }
+
+    /// Выравнивание в колонну (axis=X): центры на одной вертикали; Y не меняется.
+    #[test]
+    fn выравнивание_колонна_ставит_центры_на_среднюю_вертикаль() {
+        // Центры X: 50, 240, 420 → среднее 710/3
+        let mut rects = vec![
+            r(0.0, 0.0, 100.0, 50.0),
+            r(200.0, 90.0, 80.0, 60.0),
+            r(400.0, 30.0, 40.0, 20.0),
+        ];
+        align_centers(&mut rects, AlignAxis::X);
+        let expected = (50.0 + 240.0 + 420.0) / 3.0;
+        for rect in &rects {
+            assert!((rect.cx() - expected).abs() < 1e-3);
+        }
+        assert_eq!(rects[0].y, 0.0);
+        assert_eq!(rects[1].y, 90.0);
+        assert_eq!(rects[2].y, 30.0);
+    }
+
+    /// Меньше двух элементов — no-op (выравнивать нечего).
+    #[test]
+    fn выравнивание_меньше_двух_элементов_nop() {
+        let mut one = vec![r(10.0, 20.0, 30.0, 40.0)];
+        align_centers(&mut one, AlignAxis::Y);
+        assert_eq!(one[0], r(10.0, 20.0, 30.0, 40.0));
+        let mut empty: Vec<SnapRect> = Vec::new();
+        align_centers(&mut empty, AlignAxis::X);
+        assert!(empty.is_empty());
+    }
+
+    /// Группа — обычный rect по габаритам (п.14-семантика): большой bbox
+    /// группы выравнивается как любой элемент, поперечное не трогается.
+    #[test]
+    fn выравнивание_работает_по_габаритам_группы() {
+        // Группа 300×200 рядом с двумя мелкими: ряд по Y
+        let mut rects = vec![
+            r(1000.0, 500.0, 300.0, 200.0), // группа, центр Y 600
+            r(0.0, 0.0, 50.0, 40.0),        // центр Y 20
+            r(50.0, 108.0, 60.0, 24.0),     // центр Y 120
+        ];
+        align_centers(&mut rects, AlignAxis::Y);
+        let expected = (600.0 + 20.0 + 120.0) / 3.0;
+        for rect in &rects {
+            assert!((rect.cy() - expected).abs() < 1e-3);
+        }
+        assert_eq!(rects[0].x, 1000.0, "группа: X не тронут");
+        assert_eq!(rects[0].w, 300.0, "группа: габарит не меняется");
+    }
+
+    /// Распределение по X: разные ширины — равные ЗАЗОРЫ между краями
+    /// соседних; span (крайний левый/правый) сохранён; Y не тронут.
+    #[test]
+    fn распределение_по_x_даёт_равные_зазоры_между_краями() {
+        let mut rects = vec![
+            r(0.0, 0.0, 100.0, 10.0),
+            r(150.0, 0.0, 50.0, 10.0),
+            r(500.0, 0.0, 30.0, 10.0),
+        ];
+        distribute_evenly(&mut rects, AlignAxis::X);
+        // span 0..530, сумма ширин 180 → зазор (530-180)/2 = 175
+        assert_eq!(rects[0].x, 0.0, "первый — на начале span");
+        assert_eq!(rects[1].x, 100.0 + 175.0);
+        assert_eq!(
+            rects[2].x,
+            100.0 + 175.0 + 50.0 + 175.0,
+            "впритык к span_end"
+        );
+        for rect in &rects {
+            assert_eq!(rect.y, 0.0, "Y не тронут");
+        }
+    }
+
+    /// Распределение по Y (колонна): то же правило вдоль Y, X не тронут.
+    #[test]
+    fn распределение_по_y_даёт_равные_зазоры_между_краями() {
+        let mut rects = vec![
+            r(0.0, 0.0, 10.0, 40.0),
+            r(10.0, 60.0, 10.0, 80.0),
+            r(5.0, 300.0, 10.0, 20.0),
+        ];
+        distribute_evenly(&mut rects, AlignAxis::Y);
+        // По центрам Y: 20, 100, 310; span 0..320, сумма высот 140 → зазор 90
+        assert_eq!(rects[0].y, 0.0);
+        assert_eq!(rects[1].y, 40.0 + 90.0);
+        assert_eq!(rects[2].y, 40.0 + 90.0 + 80.0 + 90.0);
+        assert_eq!(rects[0].x, 0.0, "X не тронут");
+        assert_eq!(rects[1].x, 10.0);
+        assert_eq!(rects[2].x, 5.0);
+    }
+
+    /// Порядок входа не важен: сортировка по центру оси — раскладка та же,
+    /// что у заведомо упорядоченного входа.
+    #[test]
+    fn распределение_сортирует_по_центру_оси() {
+        let mut scrambled = vec![
+            r(500.0, 0.0, 30.0, 10.0),
+            r(0.0, 0.0, 100.0, 10.0),
+            r(150.0, 0.0, 50.0, 10.0),
+        ];
+        distribute_evenly(&mut scrambled, AlignAxis::X);
+        let mut sorted = vec![
+            r(0.0, 0.0, 100.0, 10.0),
+            r(150.0, 0.0, 50.0, 10.0),
+            r(500.0, 0.0, 30.0, 10.0),
+        ];
+        distribute_evenly(&mut sorted, AlignAxis::X);
+        // По размеру элемента — итоговая позиция совпадает
+        for size in [100.0, 50.0, 30.0] {
+            let a = scrambled.iter().find(|rt| rt.w == size).expect("w");
+            let b = sorted.iter().find(|rt| rt.w == size).expect("w");
+            assert_eq!((a.x, a.y), (b.x, b.y), "элемент ширины {size}");
+        }
+    }
+
+    /// N=2 — no-op: крайние элементы уже образуют границы span (зазор
+    /// помещает их ровно на места).
+    #[test]
+    fn распределение_двух_элементов_nop() {
+        let mut rects = vec![r(0.0, 5.0, 100.0, 10.0), r(300.0, 6.0, 50.0, 10.0)];
+        let before = rects.clone();
+        distribute_evenly(&mut rects, AlignAxis::X);
+        assert_eq!(rects, before);
+    }
+
+    /// Меньше двух элементов — no-op.
+    #[test]
+    fn распределение_меньше_двух_элементов_nop() {
+        let mut one = vec![r(10.0, 20.0, 30.0, 40.0)];
+        distribute_evenly(&mut one, AlignAxis::X);
+        assert_eq!(one[0], r(10.0, 20.0, 30.0, 40.0));
+    }
+
+    /// Идемпотентность распределения: уже равные зазоры — второй вызов
+    /// ничего не меняет (повторный пункт меню не «гуляет»).
+    #[test]
+    fn распределение_идемпотентно() {
+        let mut rects = vec![
+            r(0.0, 0.0, 100.0, 10.0),
+            r(150.0, 0.0, 50.0, 10.0),
+            r(500.0, 0.0, 30.0, 10.0),
+        ];
+        distribute_evenly(&mut rects, AlignAxis::X);
+        let after_first = rects.clone();
+        distribute_evenly(&mut rects, AlignAxis::X);
+        assert_eq!(rects, after_first);
+    }
+
+    /// Детерминизм (п.20): тот же вход — бит-в-бит тот же выход для обеих
+    /// операций и обеих осей.
+    #[test]
+    fn детерминизм_batch_операций_повтор_даёт_бит_в_бит() {
+        let input = vec![
+            r(0.0, 0.0, 100.0, 50.0),
+            r(200.0, 90.0, 80.0, 60.0),
+            r(400.0, 30.0, 40.0, 20.0),
+        ];
+        for axis in [AlignAxis::X, AlignAxis::Y] {
+            let mut a = input.clone();
+            let mut b = input.clone();
+            align_centers(&mut a, axis);
+            align_centers(&mut b, axis);
+            assert_eq!(a, b, "align_centers {axis:?}");
+            let mut a = input.clone();
+            let mut b = input.clone();
+            distribute_evenly(&mut a, axis);
+            distribute_evenly(&mut b, axis);
+            assert_eq!(a, b, "distribute_evenly {axis:?}");
+        }
     }
 }
