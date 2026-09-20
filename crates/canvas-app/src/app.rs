@@ -110,6 +110,12 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+/// FR-046: мост «примитив design-токенов → glyphon::Color» (константный):
+/// текстовые цвета диалогов/тостов берутся из `canvas_core::tokens`.
+const fn token_color(rgb: [u8; 3]) -> Color {
+    Color::rgb(rgb[0], rgb[1], rgb[2])
+}
 use winit::window::{CursorIcon, Window, WindowId};
 // Атрибуты окна Windows: отключение своего IDropTarget у winit (T9, план §3)
 #[cfg(windows)]
@@ -2497,14 +2503,14 @@ impl App {
             instances.push(chip(
                 rect,
                 if current {
-                    [0.16, 0.32, 0.60, 1.0]
+                    canvas_core::tokens::DIALOG_BUTTON_PRIMARY
                 } else {
-                    [0.20, 0.23, 0.29, 1.0]
+                    canvas_core::tokens::DIALOG_BUTTON_SECONDARY
                 },
                 if current {
-                    [0.30, 0.55, 0.95, 1.0]
+                    canvas_core::tokens::WHATIF_CHIP
                 } else {
-                    [0.35, 0.40, 0.50, 1.0]
+                    canvas_core::tokens::DIALOG_BUTTON_BORDER
                 },
             ));
             let (box_origin, box_width) = centered_box(rect, 3.0);
@@ -2514,7 +2520,7 @@ impl App {
                 width: box_width,
                 font_size: 13.0,
                 color: if current {
-                    Color::rgb(0xe8, 0xec, 0xf4)
+                    token_color(canvas_core::tokens::DIALOG_TEXT)
                 } else {
                     palette.title
                 },
@@ -2558,11 +2564,11 @@ impl App {
             instances.push(chip(
                 rect,
                 if enabled {
-                    [0.20, 0.23, 0.29, 1.0]
+                    canvas_core::tokens::DIALOG_BUTTON_SECONDARY
                 } else {
-                    [0.14, 0.16, 0.20, 1.0]
+                    canvas_core::tokens::WHATIF_CHIP_DIM
                 },
-                [0.35, 0.40, 0.50, 1.0],
+                canvas_core::tokens::DIALOG_BUTTON_BORDER,
             ));
             let (box_origin, box_width) = centered_box(rect, 3.0);
             texts.push(OwnedScreenText {
@@ -4946,15 +4952,14 @@ impl App {
     /// радиусы / zoom — `screen_sector_to_world` в renderer.rs). Возвращает
     /// (сектора, квады, тексты) — квады рисуются ПОВЕРХ секторов.
     fn wheel_overlay(&self) -> (Vec<SectorInstance>, Vec<CardInstance>, Vec<OwnedScreenText>) {
-        // Цвета wheel-меню. Полноценный ThemeColors для wheel — открытый
-        // вопрос (FR-022): пока именованные константы вместо разрозненных
-        // литералов по коду функции.
-        const FILL_DIM: [f32; 4] = [0.0, 0.0, 0.0, 0.35];
-        const FILL_CATEGORY: [f32; 4] = [0.17, 0.18, 0.22, 0.92];
-        const FILL_TEMPLATE: [f32; 4] = [0.20, 0.22, 0.27, 0.92];
-        const FILL_HOVER: [f32; 4] = [0.18, 0.29, 0.48, 0.95];
-        const FILL_HUB_ACTIVE: [f32; 4] = [0.18, 0.29, 0.48, 0.95];
-        const BORDER: [f32; 4] = [0.22, 0.24, 0.30, 0.9];
+        // Цвета wheel-меню. FR-046: открытый вопрос FR-022 закрыт — значения
+        // из design-токенов (wheel.*; дифференциация светлой темы — v2).
+        const FILL_DIM: [f32; 4] = canvas_core::tokens::WHEEL_DIM;
+        const FILL_CATEGORY: [f32; 4] = canvas_core::tokens::WHEEL_CATEGORY;
+        const FILL_TEMPLATE: [f32; 4] = canvas_core::tokens::WHEEL_TEMPLATE;
+        const FILL_HOVER: [f32; 4] = canvas_core::tokens::WHEEL_HOVER;
+        const FILL_HUB_ACTIVE: [f32; 4] = canvas_core::tokens::WHEEL_HUB_ACTIVE;
+        const BORDER: [f32; 4] = canvas_core::tokens::WHEEL_BORDER;
 
         let mut sectors = Vec::new();
         let mut instances = Vec::new();
@@ -6294,7 +6299,9 @@ impl App {
                     // вместе со снимком (снапшот переживает пересохранение)
                     outputs: template.outputs.clone(),
                     expr: template.expr.clone(),
-                    color: "#9B9B9B".to_owned(),
+                    // FR-046: дефолтный цвет манифеста — константа данных
+                    // templates::DEFAULT_TEMPLATE_COLOR (контракт FR-018)
+                    color: canvas_core::templates::DEFAULT_TEMPLATE_COLOR.to_owned(),
                     icon: "custom".to_owned(),
                     source: canvas_core::templates::TemplateSource::Custom,
                 };
@@ -10723,8 +10730,8 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_instances.push(CardInstance {
                         pos: [dx, dy],
                         size: [dw, dh],
-                        fill: [0.09, 0.11, 0.15, 0.97],
-                        border: [0.23, 0.51, 0.96, 1.0],
+                        fill: canvas_core::tokens::DIALOG_FILL,
+                        border: canvas_core::tokens::DIALOG_BORDER,
                         params: [10.0, 0.0, 0.0, 1.0],
                     });
                     let buttons = self.dialog_button_rects();
@@ -10735,11 +10742,11 @@ impl ApplicationHandler<AppEvent> for App {
                             pos: [bx, by],
                             size: [bw, bh],
                             fill: if i == 0 {
-                                [0.16, 0.32, 0.60, 1.0]
+                                canvas_core::tokens::DIALOG_BUTTON_PRIMARY
                             } else {
-                                [0.20, 0.23, 0.29, 1.0]
+                                canvas_core::tokens::DIALOG_BUTTON_SECONDARY
                             },
-                            border: [0.35, 0.40, 0.50, 1.0],
+                            border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
                             params: [6.0, 0.0, 0.0, 1.0],
                         });
                         let (btn_box, btn_width) = centered_box(buttons[i], 4.0);
@@ -10748,7 +10755,7 @@ impl ApplicationHandler<AppEvent> for App {
                             origin: [btn_box[0], buttons[i][1] + 7.0],
                             width: btn_width,
                             font_size: 14.0,
-                            color: Color::rgb(0xe8, 0xec, 0xf4),
+                            color: token_color(canvas_core::tokens::DIALOG_TEXT),
                             align: TextAlign::Center,
                         });
                     }
@@ -10757,7 +10764,7 @@ impl ApplicationHandler<AppEvent> for App {
                         origin: [dx + 20.0, dy + 16.0],
                         width: dw - 40.0,
                         font_size: 16.0,
-                        color: Color::rgb(0xe8, 0xec, 0xf4),
+                        color: token_color(canvas_core::tokens::DIALOG_TEXT),
                         align: TextAlign::Left,
                     });
                     owned_texts.push(OwnedScreenText {
@@ -10765,7 +10772,7 @@ impl ApplicationHandler<AppEvent> for App {
                         origin: [dx + 20.0, dy + 46.0],
                         width: dw - 40.0,
                         font_size: 13.0,
-                        color: Color::rgb(0xb6, 0xbe, 0xce),
+                        color: token_color(canvas_core::tokens::DIALOG_TEXT_MUTED),
                         align: TextAlign::Left,
                     });
                 }
@@ -10794,7 +10801,7 @@ impl ApplicationHandler<AppEvent> for App {
                         origin: [40.0, ty],
                         width: viewport[0] - 80.0,
                         font_size: 14.0,
-                        color: Color::rgb(0xf0, 0xe6, 0xc2),
+                        color: token_color(canvas_core::tokens::TOAST_TEXT),
                         align: TextAlign::Center,
                     });
                 }
@@ -10860,7 +10867,12 @@ impl ApplicationHandler<AppEvent> for App {
                             pos: [target.x - grow, target.y - grow],
                             size: [target.width + grow * 2.0, target.height + grow * 2.0],
                             fill: [0.0; 4],
-                            border: [1.0, 0.85, 0.35, alpha],
+                            border: [
+                                canvas_core::tokens::PULSE_RESULT[0],
+                                canvas_core::tokens::PULSE_RESULT[1],
+                                canvas_core::tokens::PULSE_RESULT[2],
+                                alpha,
+                            ],
                             params: [6.0, 0.0, 0.0, 1.0],
                         });
                     }
@@ -10883,8 +10895,18 @@ impl ApplicationHandler<AppEvent> for App {
                         overlay_instances.push(CardInstance {
                             pos: [group.x - 4.0, group.y - 4.0],
                             size: [group.width + 8.0, group.height + 8.0],
-                            fill: [0.396, 0.612, 0.969, 0.10],
-                            border: [0.396, 0.612, 0.969, 0.9],
+                            fill: [
+                                canvas_core::tokens::ACCENT[0],
+                                canvas_core::tokens::ACCENT[1],
+                                canvas_core::tokens::ACCENT[2],
+                                canvas_core::tokens::ALPHA_10,
+                            ],
+                            border: [
+                                canvas_core::tokens::ACCENT[0],
+                                canvas_core::tokens::ACCENT[1],
+                                canvas_core::tokens::ACCENT[2],
+                                canvas_core::tokens::ALPHA_90,
+                            ],
                             params: [8.0, 0.0, 0.0, 1.0],
                         });
                     }
