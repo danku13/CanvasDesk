@@ -2102,3 +2102,10 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Индексы:** `docs/prd/README.md` — строка PRD-0006 + связи «0006+0004» и «0006+0002»; `docs/index.md` — строка в «PRD — требования продукта».
 - **Нумерация:** реализационный FR — **FR-046** (следующий свободный по заметке индекса).
 - **Коммит:** docs(prd) — PRD-0006 + prd/README + docs/index; docs — worklog.
+
+## 2026-09-21 — FR-046 (design-токены, этап D0 PRD-0006): реализационная постановка; PRD-0006 → «в работе»
+
+- **Постановка:** `docs/change-requests/fr-046-design-tokens.md` — PoC PRD-0006 (этапы D1–D5): (1) примитивы `design/tokens/*.json` (серый/акцент ×12, error/warning/success/info, радиусы/типографика/длительности/альфа; значения = текущим, ноль скачка) + зеркальный `canvas-core::tokens` + тест паритета JSON↔Rust (serde_json уже в стеке); (2) `ThemeColors` v2: +accent/accent_soft/edge_*/broken/error/hud/dialog_*/toast_*/whatif_*/wheel_*/select_rect_*/highlight + `SeverityPalette` + `MinimapPalette::from_theme`; (3) миграция ~25 бродячих констант с прокидыванием `&ThemeColors` в билдеры cards.rs; (4) единый акцент до `ThemeInfo.accent` (widgets.rs) и SELECT_RECT (lib.rs); (5) WCAG-тесты новых слотов (паттерн FR-038/CR-007) + токен-линт + пресеты Nord/Catppuccin Mocha как данные + web CSS-переменные/persist.
+- **Решения Р-1..Р-10, план T-046.1..5** (ветка = полный гейт = merge --no-ff, паттерн волны FR-038), **10 инвариантов** (I-1 ноль визуального скачка, I-2 нейтральность ядра/wasm, I-3 шейдеры не трогаем, I-4 тема — параметр не глобал, I-5 паритет, I-6 контраст автотестом, I-7 config.toml не расширяется, I-8 round-trip, I-9 ThemeColors Copy, I-10 гейты).
+- **Индексы/статусы:** `index-cr-fr.md` — строка FR-046 («в работе») + нумерационная заметка → следующий **FR-047**; PRD-0006 → «в работе (FR-046 создан)» + changelog; prd/README — статус.
+- **Коммит:** docs(fr) — FR-046 + index-cr-fr + PRD-0006/README; docs — worklog.
