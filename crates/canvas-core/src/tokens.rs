@@ -51,6 +51,10 @@ pub const BROKEN_BORDER: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
 pub const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
 /// Фон what-if строки (FR-017). Источник: `WHATIF_FILL` renderer.rs:46.
 pub const WHATIF_FILL: [f32; 4] = [0.30, 0.55, 0.95, 0.22];
+/// Заливка чипа what-if (FR-017). Источник: app.rs:2507.
+pub const WHATIF_CHIP: [f32; 4] = [0.30, 0.55, 0.95, 1.0];
+/// Приглушённый чип what-if. Источник: app.rs:2562.
+pub const WHATIF_CHIP_DIM: [f32; 4] = [0.14, 0.16, 0.20, 1.0];
 /// Дельта-бейдж what-if (#dfa63e, FR-017). Источник: `WHATIF_BADGE_COLOR` renderer.rs:49.
 pub const WHATIF_BADGE: [u8; 3] = [223, 166, 62];
 /// Красный строки результата с ошибкой (#e55c5c, FR-013). Источник: `RESULT_ERROR_COLOR` text.rs:108.
@@ -104,6 +108,31 @@ pub const SEVERITY_LIGHT: [[f32; 4]; 3] = [
     [0.761, 0.106, 0.106, 1.0],
     [0.478, 0.0, 0.063, 1.0],
 ];
+/// Тексты бейджей severity (warning/danger/critical), тёмная тема.
+/// Источник: `severity_text` cards.rs:75-102.
+pub const SEVERITY_TEXT_DARK: [[u8; 3]; 3] = [[245, 166, 35], [242, 107, 115], [255, 102, 85]];
+/// Тексты бейджей severity, светлая тема. Источник: `severity_text` cards.rs:75-102.
+pub const SEVERITY_TEXT_LIGHT: [[u8; 3]; 3] = [[138, 90, 0], [160, 21, 21], [122, 0, 16]];
+/// Текст бейджа для severity=None. Источник: `severity_text` cards.rs:84.
+pub const SEVERITY_TEXT_NONE: [u8; 3] = [154, 154, 162];
+
+/// Тень текста HUD (#101012). Источник: text.rs:1884.
+pub const HUD_SHADOW: [u8; 3] = [16, 16, 18];
+
+/// Минимапа — нода-файл (RGBA). Источник: `NODE_COLOR_FILE` minimap.rs:34.
+pub const MINIMAP_NODE_FILE: [u8; 4] = [96, 148, 228, 255];
+/// Минимапа — текстовая нода. Источник: `NODE_COLOR_TEXT` minimap.rs:37.
+pub const MINIMAP_NODE_TEXT: [u8; 4] = [228, 196, 96, 255];
+/// Минимапа — группа. Источник: `NODE_COLOR_GROUP` minimap.rs:39.
+pub const MINIMAP_NODE_GROUP: [u8; 4] = [150, 150, 158, 255];
+/// Минимапа — битая ссылка. Источник: `NODE_COLOR_BROKEN` minimap.rs:41.
+pub const MINIMAP_NODE_BROKEN: [u8; 4] = [214, 92, 92, 255];
+/// Минимапа — рамка viewport. Источник: `VIEWPORT_COLOR` minimap.rs:43.
+pub const MINIMAP_VIEWPORT: [u8; 4] = [255, 255, 255, 255];
+/// Минимапа — линии рёбер. Источник: `EDGE_COLOR` minimap.rs:45.
+pub const MINIMAP_EDGE: [u8; 4] = [170, 176, 188, 255];
+/// Минимапа — фон (полупрозрачный). Источник: `BG_COLOR` minimap.rs:47.
+pub const MINIMAP_BG: [u8; 4] = [30, 32, 38, 184];
 
 // ---------------------------------------------------------------------------
 // Размеры (design/tokens/dimensions.json)
@@ -234,6 +263,20 @@ mod parity_tests {
             WHATIF_FILL
         );
         assert_eq!(
+            f32_arr4(
+                color(&root, "state.whatif_chip.$value"),
+                "state.whatif_chip"
+            ),
+            WHATIF_CHIP
+        );
+        assert_eq!(
+            f32_arr4(
+                color(&root, "state.whatif_chip_dim.$value"),
+                "state.whatif_chip_dim"
+            ),
+            WHATIF_CHIP_DIM
+        );
+        assert_eq!(
             u8_arr3(
                 color(&root, "state.whatif_badge.$value"),
                 "state.whatif_badge"
@@ -329,7 +372,49 @@ mod parity_tests {
             assert_eq!(f32_arr4(d, "severity.dark"), SEVERITY_DARK[i]);
             let l = &color(&root, "severity.light.$value").as_array().unwrap()[i];
             assert_eq!(f32_arr4(l, "severity.light"), SEVERITY_LIGHT[i]);
+            let td = &color(&root, "severity.text_dark.$value")
+                .as_array()
+                .unwrap()[i];
+            assert_eq!(u8_arr3(td, "severity.text_dark"), SEVERITY_TEXT_DARK[i]);
+            let tl = &color(&root, "severity.text_light.$value")
+                .as_array()
+                .unwrap()[i];
+            assert_eq!(u8_arr3(tl, "severity.text_light"), SEVERITY_TEXT_LIGHT[i]);
         }
+        assert_eq!(
+            u8_arr3(
+                color(&root, "severity.text_none.$value"),
+                "severity.text_none"
+            ),
+            SEVERITY_TEXT_NONE
+        );
+        assert_eq!(
+            u8_arr3(color(&root, "state.hud_shadow.$value"), "state.hud_shadow"),
+            HUD_SHADOW
+        );
+
+        let map = color(&root, "minimap");
+        let rgba = |key: &str| -> [u8; 4] {
+            let a = map
+                .get(key)
+                .and_then(|v| v.get("$value"))
+                .unwrap()
+                .as_array()
+                .unwrap();
+            [
+                a[0].as_u64().unwrap() as u8,
+                a[1].as_u64().unwrap() as u8,
+                a[2].as_u64().unwrap() as u8,
+                a[3].as_u64().unwrap() as u8,
+            ]
+        };
+        assert_eq!(rgba("node_file"), MINIMAP_NODE_FILE);
+        assert_eq!(rgba("node_text"), MINIMAP_NODE_TEXT);
+        assert_eq!(rgba("node_group"), MINIMAP_NODE_GROUP);
+        assert_eq!(rgba("node_broken"), MINIMAP_NODE_BROKEN);
+        assert_eq!(rgba("viewport"), MINIMAP_VIEWPORT);
+        assert_eq!(rgba("edge"), MINIMAP_EDGE);
+        assert_eq!(rgba("bg"), MINIMAP_BG);
     }
 
     #[test]

@@ -31,20 +31,21 @@ pub const CONTENT_PADDING_PX: f32 = 8.0;
 /// Минимальный размер прямоугольника ноды на миникарте, px.
 pub const NODE_MIN_PX: u32 = 2;
 
-/// Цвет ноды-файла (RGBA, непрозрачный).
-pub const NODE_COLOR_FILE: [u8; 4] = [96, 148, 228, 255];
-/// Цвет текстовой ноды (жёлтая палитра заметок).
-pub const NODE_COLOR_TEXT: [u8; 4] = [228, 196, 96, 255];
-/// Цвет ноды-группы.
-pub const NODE_COLOR_GROUP: [u8; 4] = [150, 150, 158, 255];
-/// Цвет ноды с битой ссылкой (file, brokenLink).
-pub const NODE_COLOR_BROKEN: [u8; 4] = [214, 92, 92, 255];
-/// Цвет рамки viewport (белый, непрозрачный).
-pub const VIEWPORT_COLOR: [u8; 4] = [255, 255, 255, 255];
-/// Цвет линий edges.
-pub const EDGE_COLOR: [u8; 4] = [170, 176, 188, 255];
-/// Фон миникарты: тёмный, полупрозрачный.
-pub const BG_COLOR: [u8; 4] = [30, 32, 38, 184];
+/// Фон миникарты: тёмный, полупрозрачный — из design-токенов (FR-046;
+/// дифференциация по темам — v2).
+pub use canvas_core::tokens::MINIMAP_BG as BG_COLOR;
+/// Цвет линий edges — из design-токенов (FR-046).
+pub use canvas_core::tokens::MINIMAP_EDGE as EDGE_COLOR;
+/// Цвет ноды с битой ссылкой (file, brokenLink) — из design-токенов (FR-046).
+pub use canvas_core::tokens::MINIMAP_NODE_BROKEN as NODE_COLOR_BROKEN;
+/// Цвет ноды-файла (RGBA, непрозрачный) — из design-токенов (FR-046).
+pub use canvas_core::tokens::MINIMAP_NODE_FILE as NODE_COLOR_FILE;
+/// Цвет ноды-группы — из design-токенов (FR-046).
+pub use canvas_core::tokens::MINIMAP_NODE_GROUP as NODE_COLOR_GROUP;
+/// Цвет текстовой ноды (жёлтая палитра заметок) — из design-токенов (FR-046).
+pub use canvas_core::tokens::MINIMAP_NODE_TEXT as NODE_COLOR_TEXT;
+/// Цвет рамки viewport (белый, непрозрачный) — из design-токенов (FR-046).
+pub use canvas_core::tokens::MINIMAP_VIEWPORT as VIEWPORT_COLOR;
 
 /// Максимальная сторона буфера миникарты, px: реальный физический размер
 /// (логические 220×140 × scale_factor) не превышает размеры экрана с большим

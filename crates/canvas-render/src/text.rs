@@ -63,9 +63,13 @@ pub(crate) fn mono_attrs() -> Attrs<'static> {
 /// Размер заголовка в world-px (масштабируется зумом).
 /// FR-023: 13 → 16 — заголовок иерархически главнее тела и набирается
 /// КРУПНЕЕ основного текста: 16 / 14 ≈ +14 % (вилка владельца 10–20 %).
-const TITLE_FONT_SIZE: f32 = 16.0;
-/// Высота строки заголовка (под кегль 16 + межстрочный воздух).
-const TITLE_LINE_HEIGHT: f32 = 22.0;
+/// FR-046: размеры типографики — из design-токенов (dimensions.json).
+use canvas_core::tokens::{
+    TYPE_BADGE as BADGE_FONT_SIZE, TYPE_BADGE_LINE as BADGE_LINE_HEIGHT,
+    TYPE_EDGE_LABEL as EDGE_LABEL_FONT_SIZE, TYPE_EDGE_LABEL_LINE as EDGE_LABEL_LINE_HEIGHT,
+    TYPE_HUD as HUD_FONT_SIZE, TYPE_HUD_LINE as HUD_LINE_HEIGHT, TYPE_RESULT as RESULT_FONT_SIZE,
+    TYPE_TITLE as TITLE_FONT_SIZE, TYPE_TITLE_LINE as TITLE_LINE_HEIGHT,
+};
 /// Левый отступ заголовка в world-px (без иконки).
 /// FR-023: 8 → 12 — адекватный отступ заголовка от края карточки
 /// (согласован с BODY_PADDING и визуальным ритмом шапки).
@@ -84,28 +88,23 @@ pub(crate) fn title_clip_width(node_width: f32, reserves_icon: bool) -> f32 {
     (node_width - TITLE_PADDING * 2.0 - if reserves_icon { ICON_WIDTH } else { 0.0 }).max(0.0)
 }
 
-/// Размер тела заметки в world-px (T7).
-pub const BODY_FONT_SIZE: f32 = 14.0;
-/// Высота строки тела заметки.
-pub const BODY_LINE_HEIGHT: f32 = 20.0;
+/// Размер тела заметки в world-px (T7) — из design-токенов (FR-046).
+pub use canvas_core::tokens::TYPE_BODY as BODY_FONT_SIZE;
+/// Высота строки тела заметки — из design-токенов (FR-046).
+pub use canvas_core::tokens::TYPE_BODY_LINE as BODY_LINE_HEIGHT;
 /// Внутренний отступ тела заметки по горизонтали и снизу в world-px.
 pub const BODY_PADDING: f32 = 10.0;
 /// Зазор между заголовком и телом заметки в world-px.
 pub const BODY_TOP_GAP: f32 = 4.0;
 
-/// Размер шрифта лейбла связи в world-px (T8).
-const EDGE_LABEL_FONT_SIZE: f32 = 12.0;
-/// Высота строки лейбла связи.
-const EDGE_LABEL_LINE_HEIGHT: f32 = 16.0;
-
-/// Размер шрифта строки результата формулы в world-px (FR-013).
-const RESULT_FONT_SIZE: f32 = 12.0;
+/// Размер шрифта лейбла связи в world-px (T8) — из design-токенов (FR-046;
+/// алиас EDGE_LABEL_* — в блоке use выше).
+/// Размер шрифта строки результата формулы в world-px (FR-013) — из design-токенов.
 /// Высота строки результата формулы в world-px (FR-013) — резерв футера
 /// карточки; приложение учитывает в fit_note_size.
-pub const RESULT_LINE_HEIGHT: f32 = 16.0;
-/// Цвет строки результата с ОШИБКОЙ (парсинг/вычисление) — красный акцент
-/// (FR-013: «красная строка с тултипом»; согласован с рамкой битой ссылки).
-const RESULT_ERROR_COLOR: Color = Color::rgb(0xe5, 0x5c, 0x5c);
+pub use canvas_core::tokens::TYPE_RESULT_LINE as RESULT_LINE_HEIGHT;
+/// FR-046: красный строки результата с ошибкой — слот темы `error`
+/// (примитив `canvas_core::tokens::ERROR`), литерал удалён (G1).
 /// FR-013 (правка 4): текст бейджа ошибки формульной строки — компактный
 /// красный маркер у правого края СВОЕЙ строки; подробности — в тултипе
 /// при наведении (длинные сообщения не влезают в строку ноды).
@@ -125,19 +124,12 @@ pub struct LineErrorHit {
     pub message: String,
 }
 /// Размер шрифта бейджа «=» calc-ноды при дальнем зуме (FR-013) —
-/// физические px (не масштабируется зумом, как HUD).
-const BADGE_FONT_SIZE: f32 = 10.0;
-/// Высота строки бейджа «=» в физических px.
-const BADGE_LINE_HEIGHT: f32 = 12.0;
-
-/// Размер шрифта HUD в физических px (не масштабируется зумом).
-const HUD_FONT_SIZE: f32 = 14.0;
-/// Высота строки HUD.
-const HUD_LINE_HEIGHT: f32 = 18.0;
+/// физические px (не масштабируется зумом, как HUD) — из design-токенов
+/// (алиасы BADGE_* — в блоке use выше).
+/// Размер шрифта HUD в физических px (не масштабируется зумом) — из design-токенов.
+/// FR-046: цвет HUD — слот темы `hud` (примитив tokens::HUD), литерал удалён (G1).
 /// Отступ HUD от угла экрана в физических px.
 const HUD_PADDING: f32 = 12.0;
-/// Цвет HUD — акцентный (тот же, что рамка выделения).
-const HUD_COLOR: Color = Color::rgb(0x65, 0x9c, 0xf8);
 
 /// Как часто чистить кэш заголовков от давно невидимых нод (в кадрах).
 const CACHE_SWEEP_INTERVAL: u64 = 128;
@@ -1880,14 +1872,18 @@ impl TextSystem {
                 [HUD_PADDING + 1.0, HUD_PADDING + 1.0],
                 width,
                 HUD_LINE_HEIGHT,
-                Color::rgb(0x10, 0x10, 0x12),
+                Color::rgb(
+                    canvas_core::tokens::HUD_SHADOW[0],
+                    canvas_core::tokens::HUD_SHADOW[1],
+                    canvas_core::tokens::HUD_SHADOW[2],
+                ),
             ));
             hud_buffers.push((
                 make_buffer(&mut self.font_system),
                 [HUD_PADDING, HUD_PADDING],
                 width,
                 HUD_LINE_HEIGHT,
-                HUD_COLOR,
+                self.theme.hud,
             ));
         }
 
@@ -2207,10 +2203,10 @@ impl TextSystem {
                                     bottom: (top_phys + RESULT_LINE_HEIGHT * zoom_px) as i32,
                                 },
                                 default_color: if line_result.error {
-                                    dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
+                                    dim_color(on_card(self.theme.error), text_factor)
                                 } else if line_result.whatif {
                                     // FR-017: дельта сценария — янтарный бейдж.
-                                    dim_color(on_card(crate::WHATIF_BADGE_COLOR), text_factor)
+                                    dim_color(on_card(self.theme.whatif_badge), text_factor)
                                 } else {
                                     dim_color(on_card(self.theme.link), text_factor)
                                 },
@@ -2269,7 +2265,7 @@ impl TextSystem {
                                             bottom: (top_phys + result_h) as i32,
                                         },
                                         default_color: if *error {
-                                            dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
+                                            dim_color(on_card(self.theme.error), text_factor)
                                         } else {
                                             dim_color(on_card(self.theme.link), text_factor)
                                         },
@@ -2312,7 +2308,7 @@ impl TextSystem {
                                 bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
                             },
                             default_color: if entry.result_error {
-                                dim_color(on_card(RESULT_ERROR_COLOR), text_factor)
+                                dim_color(on_card(self.theme.error), text_factor)
                             } else {
                                 dim_color(on_card(self.theme.link), text_factor)
                             },

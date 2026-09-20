@@ -24,9 +24,12 @@
     "broken": { "$value": [0.45, 0.45, 0.45, 1.0], "$desc": "BROKEN_BORDER cards.rs:26 — битая ссылка" },
     "highlight": { "$value": [0.85, 0.75, 0.30, 0.30], "$desc": "HIGHLIGHT_FILL renderer.rs:43 — ==текст==" },
     "whatif_fill": { "$value": [0.30, 0.55, 0.95, 0.22], "$desc": "WHATIF_FILL renderer.rs:46 — what-if строка FR-017" },
+    "whatif_chip": { "$value": [0.30, 0.55, 0.95, 1.0], "$desc": "Заливка чипа what-if app.rs:2507 (FR-017)" },
+    "whatif_chip_dim": { "$value": [0.14, 0.16, 0.20, 1.0], "$desc": "Приглушённый чип what-if app.rs:2562" },
     "whatif_badge": { "$value": [223, 166, 62], "$desc": "WHATIF_BADGE_COLOR renderer.rs:49 (#dfa63e) — дельта-бейдж FR-017" },
     "error": { "$value": [229, 92, 92], "$desc": "RESULT_ERROR_COLOR text.rs:108 (#e55c5c) — строка результата с ошибкой FR-013" },
     "hud": { "$value": [101, 156, 248], "$desc": "HUD_COLOR text.rs:140 (#659cf8) — HUD F3" },
+    "hud_shadow": { "$value": [16, 16, 18], "$desc": "Тень текста HUD text.rs:1884 (#101012)" },
     "pulse_result": { "$value": [1.0, 0.85, 0.35, 1.0], "$desc": "Рамка пульса результата app.rs:10863 (альфа анимируется)" }
   },
 
@@ -74,6 +77,34 @@
         [0.478, 0.0, 0.063, 1.0]
       ],
       "$desc": "SEVERITY_LIGHT cards.rs:51-56 (CR-007-адаптация)"
-    }
+    },
+    "text_dark": {
+      "$value": [
+        [245, 166, 35],
+        [242, 107, 115],
+        [255, 102, 85]
+      ],
+      "$desc": "Тексты бейджей, тёмная тема — severity_text cards.rs:75-102"
+    },
+    "text_light": {
+      "$value": [
+        [138, 90, 0],
+        [160, 21, 21],
+        [122, 0, 16]
+      ],
+      "$desc": "Тексты бейджей, светлая тема — severity_text cards.rs:75-102"
+    },
+    "text_none": { "$value": [154, 154, 162], "$desc": "Текст бейджа для severity=None — severity_text cards.rs:84" }
+  },
+
+  "minimap": {
+    "$type": "color",
+    "node_file": { "$value": [96, 148, 228, 255], "$desc": "NODE_COLOR_FILE minimap.rs:34" },
+    "node_text": { "$value": [228, 196, 96, 255], "$desc": "NODE_COLOR_TEXT minimap.rs:37" },
+    "node_group": { "$value": [150, 150, 158, 255], "$desc": "NODE_COLOR_GROUP minimap.rs:39" },
+    "node_broken": { "$value": [214, 92, 92, 255], "$desc": "NODE_COLOR_BROKEN minimap.rs:41" },
+    "viewport": { "$value": [255, 255, 255, 255], "$desc": "VIEWPORT_COLOR minimap.rs:43" },
+    "edge": { "$value": [170, 176, 188, 255], "$desc": "EDGE_COLOR minimap.rs:45" },
+    "bg": { "$value": [30, 32, 38, 184], "$desc": "BG_COLOR minimap.rs:47 — тёмная, полупрозрачная (дифференциация по темам — v2)" }
   }
 }
