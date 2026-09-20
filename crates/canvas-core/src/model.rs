@@ -133,6 +133,32 @@ pub struct CanvasdeskExt {
     /// модуля templates; схема — `TemplateRef::from_json`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<Value>,
+    /// FR-045 R-1: текст-описание ноды (`canvasdesk.desc`) — контекст/
+    /// назначение; в расчёте НЕ участвует, отображается в теле C (LOD-клампы)
+    /// и в тултипе. Опционально: старые файлы байт-в-байт (round-trip чистый).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// FR-045 R-2: источник данных (`canvasdesk.data`) — вид, ссылка и
+    /// поля-колонки (= имена выходов). Токены/секреты сюда не пишутся.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<DataRef>,
+}
+
+/// FR-045 R-2: источник данных ноды «Входные данные» (`canvasdesk.data`).
+/// Категория «данные» (чип хедера A) и индикатор источника рендерятся
+/// из этого снимка; поля — выходные value-порты (по одному на колонку).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataRef {
+    /// Вид источника: `"csv"` | `"dacdb"` | `"db"` (FR-045 Р-2).
+    pub kind: String,
+    /// Ссылка на источник (путь файла / имя таблицы) — для индикатора
+    /// источника («CSV · 24 записи»); адресацией НЕ является.
+    #[serde(rename = "ref")]
+    pub source_ref: String,
+    /// Поля источника (колонки) — имена выходов; квалифицированный путь
+    /// `<Объект>.<Поле>` собирается в `dataref::display_ref` (FR-045 Р-5).
+    #[serde(default)]
+    pub fields: Vec<String>,
 }
 
 impl CanvasdeskExt {
@@ -143,6 +169,8 @@ impl CanvasdeskExt {
             props: Map::new(),
             expr: None,
             template: None,
+            desc: None,
+            data: None,
         }
     }
 
@@ -152,6 +180,8 @@ impl CanvasdeskExt {
             && self.props.is_empty()
             && self.expr.is_none()
             && self.template.is_none()
+            && self.desc.is_none()
+            && self.data.is_none()
     }
 
     /// Расширение виджет-ноды: идентификатор пакета + пустые props.
@@ -161,6 +191,8 @@ impl CanvasdeskExt {
             props: Map::new(),
             expr: None,
             template: None,
+            desc: None,
+            data: None,
         }
     }
 }
@@ -270,7 +302,60 @@ impl Node {
             None => {
                 if let Some(ext) = &mut self.canvasdesk {
                     ext.expr = None;
-                    if ext.widget_id.is_none() && ext.props.is_empty() && ext.template.is_none() {
+                    // FR-045: desc/data — равноправные поля расширения;
+                    // пустой контейнер снимается только если пусты ВСЕ поля.
+                    if ext.is_empty() {
+                        self.canvasdesk = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// FR-045 R-1: текст-описание (`canvasdesk.desc`) — чтение.
+    /// Отсутствие поля (обычные ноды, старые `.canvas`) — `None`.
+    pub fn desc(&self) -> Option<&str> {
+        self.canvasdesk.as_ref()?.desc.as_deref()
+    }
+
+    /// FR-045 R-1: записать/снять описание (`canvasdesk.desc`). `None`
+    /// удаляет поле (и пустой контейнер `canvasdesk` — как
+    /// [`Node::set_expr`]); чужие поля расширения сохраняются.
+    pub fn set_desc(&mut self, desc: Option<String>) {
+        match desc {
+            Some(text) => {
+                let ext = self.canvasdesk.get_or_insert_with(CanvasdeskExt::empty);
+                ext.desc = Some(text);
+            }
+            None => {
+                if let Some(ext) = &mut self.canvasdesk {
+                    ext.desc = None;
+                    if ext.is_empty() {
+                        self.canvasdesk = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// FR-045 R-2: источник данных (`canvasdesk.data`) — чтение.
+    pub fn data(&self) -> Option<&DataRef> {
+        self.canvasdesk.as_ref()?.data.as_ref()
+    }
+
+    /// FR-045 R-2: записать/снять источник (`canvasdesk.data`). `None`
+    /// удаляет поле (и пустой контейнер); чужие поля расширения
+    /// сохраняются (round-trip с Obsidian чистый).
+    pub fn set_data(&mut self, data: Option<DataRef>) {
+        match data {
+            Some(source) => {
+                let ext = self.canvasdesk.get_or_insert_with(CanvasdeskExt::empty);
+                ext.data = Some(source);
+            }
+            None => {
+                if let Some(ext) = &mut self.canvasdesk {
+                    ext.data = None;
+                    if ext.is_empty() {
                         self.canvasdesk = None;
                     }
                 }
@@ -1274,6 +1359,8 @@ mod tests {
             props,
             expr: None,
             template: None,
+            desc: None,
+            data: None,
         };
         let widget = Node::widget("w1", ext, "Clock", 5.0, 6.0, 320.0, 200.0);
         assert_eq!(widget.kind(), NodeKind::Widget);
@@ -1305,6 +1392,8 @@ mod tests {
             props,
             expr: None,
             template: None,
+            desc: None,
+            data: None,
         };
         let mut widget = Node::widget("w9", ext, "Clock", 0.0, 0.0, 320.0, 200.0);
         // Стороннее поле уровня ноды — сохраняется как unknown

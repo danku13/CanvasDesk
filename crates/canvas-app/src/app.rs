@@ -9541,6 +9541,8 @@ pub fn add_stress_widgets(canvas: &mut Canvas, n: usize) -> usize {
             props: serde_json::Map::new(),
             expr: None,
             template: None,
+            desc: None,
+            data: None,
         };
         canvas.nodes.push(Node::widget(
             format!("widget-{}", existing + i as u32 + 1),
