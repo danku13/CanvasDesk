@@ -29,6 +29,11 @@ use serde_json::{json, Map, Value as Json};
 use crate::expr::{self, ExprOutcome};
 use crate::model::Node;
 
+/// Цвет по умолчанию манифеста шаблона (контракт ДАННЫХ `canvasdesk.template.color`,
+/// FR-018; hex-строка сериализуется в манифест/.canvas — это не рендер-палитра;
+/// исключение токен-линта F-7, риск R5 PRD-0006).
+pub const DEFAULT_TEMPLATE_COLOR: &str = "#9B9B9B";
+
 /// FR-019: built-in библиотека шаблонов (`assets/templates/*/template.json`),
 /// зашитая в бинарник (образец — `EMBEDDED_WIDGETS` в canvas-widgets).
 static EMBEDDED_TEMPLATES: include_dir::Dir<'_> =
@@ -221,7 +226,7 @@ impl TemplateManifest {
         let color = obj
             .get("color")
             .and_then(Json::as_str)
-            .unwrap_or("#9B9B9B")
+            .unwrap_or(DEFAULT_TEMPLATE_COLOR)
             .to_owned();
         let icon = obj
             .get("icon")
@@ -425,7 +430,7 @@ impl TemplateRef {
             color: obj
                 .get("color")
                 .and_then(Json::as_str)
-                .unwrap_or("#9B9B9B")
+                .unwrap_or(DEFAULT_TEMPLATE_COLOR)
                 .to_owned(),
             // FR-023: файлы до снапшота имени — None (заголовок по
             // прежнему фолбэку — первая строка текста)

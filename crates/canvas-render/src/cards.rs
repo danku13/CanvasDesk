@@ -13,17 +13,19 @@ use crate::markdown;
 use crate::theme::ThemeColors;
 use crate::Color;
 
+/// Радиус скругления в world-пикселях — из design-токенов (FR-046).
+pub use canvas_core::tokens::CARD_CORNER_RADIUS as CORNER_RADIUS;
 /// Высота шапки карточки в world px (полоса-разделитель с заголовком).
 /// FR-023: 28 → 34 — под кегль заголовка 16 (+14 % к телу 14, вилка
 /// владельца 10–20 %) и адекватные вертикальные отступы (по 6 px).
-pub const HEADER_HEIGHT: f32 = 34.0;
-/// Радиус скругления в world-пикселях.
-pub const CORNER_RADIUS: f32 = 8.0;
+/// FR-046: значение — из design-токенов (`design/tokens/dimensions.json`).
+pub use canvas_core::tokens::CARD_HEADER_HEIGHT as HEADER_HEIGHT;
 
-/// Рамка выделения (акцент).
-pub const SELECTION_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 1.0];
-/// Рамка битой ссылки (brokenLink) — серая.
-pub const BROKEN_BORDER: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
+/// Рамка выделения (акцент) — из design-токенов: единый источник
+/// акцентного семейства `canvas_core::tokens::ACCENT` (FR-046, G4).
+pub use canvas_core::tokens::ACCENT as SELECTION_BORDER;
+/// Рамка битой ссылки (brokenLink) — серая; из design-токенов (FR-046).
+pub use canvas_core::tokens::BROKEN_BORDER;
 
 // --- FR-016 (CP5): индикаторы узких мест ---
 
@@ -39,18 +41,10 @@ pub const ANALYSIS_BADGES_MIN_ZOOM: f32 = 0.6;
 /// (#F5A623, документ FR-016), красный — Critical, ярко-красный —
 /// Overload (тёмно-красный #7A0010 из документа не виден на тёмном
 /// фоне — контраст CR-007, адаптация под тему).
-const SEVERITY_DARK: [[f32; 4]; 3] = [
-    [0.961, 0.651, 0.137, 1.0],
-    [0.898, 0.282, 0.302, 1.0],
-    [1.0, 0.271, 0.188, 1.0],
-];
-/// Рамка серьёзности (светлая тема): янтарный/красный/тёмно-красный
-/// (#7A0010 из документа FR-016 — читаем именно на светлом фоне).
-const SEVERITY_LIGHT: [[f32; 4]; 3] = [
-    [0.702, 0.42, 0.0, 1.0],
-    [0.761, 0.106, 0.106, 1.0],
-    [0.478, 0.0, 0.063, 1.0],
-];
+/// FR-046: таблицы — из design-токенов (design/tokens/colors.json).
+use canvas_core::tokens::{
+    SEVERITY_DARK, SEVERITY_LIGHT, SEVERITY_TEXT_DARK, SEVERITY_TEXT_LIGHT, SEVERITY_TEXT_NONE,
+};
 
 /// Цвет рамки/кольца серьёзности узкого места по теме (CR-007: не-текстовый
 /// контраст ≥ 3:1 к фону темы). Чистая функция (юнит-тест на маппинг).
@@ -75,30 +69,19 @@ pub fn severity_border(severity: AnalysisSeverity, theme: &ThemeColors) -> [f32;
 pub fn severity_text(severity: AnalysisSeverity, theme: &ThemeColors) -> crate::Color {
     use crate::Color;
     let dark = theme.is_dark();
-    match severity {
-        AnalysisSeverity::None => Color::rgb(0x9a, 0x9a, 0xa2),
-        AnalysisSeverity::Warn => {
-            if dark {
-                Color::rgb(0xf5, 0xa6, 0x23)
-            } else {
-                Color::rgb(0x8a, 0x5a, 0x00)
-            }
-        }
-        AnalysisSeverity::Critical => {
-            if dark {
-                Color::rgb(0xf2, 0x6b, 0x73)
-            } else {
-                Color::rgb(0xa0, 0x15, 0x15)
-            }
-        }
-        AnalysisSeverity::Overload => {
-            if dark {
-                Color::rgb(0xff, 0x66, 0x55)
-            } else {
-                Color::rgb(0x7a, 0x00, 0x10)
-            }
-        }
-    }
+    // FR-046: тексты бейджей — из design-токенов (severity.text_dark/light/none)
+    let table: &[[u8; 3]; 3] = if dark {
+        &SEVERITY_TEXT_DARK
+    } else {
+        &SEVERITY_TEXT_LIGHT
+    };
+    let [r, g, b] = match severity {
+        AnalysisSeverity::None => &SEVERITY_TEXT_NONE,
+        AnalysisSeverity::Warn => &table[0],
+        AnalysisSeverity::Critical => &table[1],
+        AnalysisSeverity::Overload => &table[2],
+    };
+    Color::rgb(*r, *g, *b)
 }
 
 /// LOD FR-016: рисуется ли рамка серьёзности при данном зуме. Ниже
@@ -589,7 +572,13 @@ pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<Ca
 /// Подсветка хрома виджет-ноды при hover (CR-004 v1): лёгкая акцентная
 /// полоса заголовка — единственный видимый след «карточки» (заливка и
 /// тень прозрачны); рамка остаётся drag-зоной без визуального хрома.
-pub const WIDGET_CHROME_HOVER_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.10];
+/// FR-046: акцент + альфа-ступень из design-токенов (G4).
+pub const WIDGET_CHROME_HOVER_FILL: [f32; 4] = [
+    canvas_core::tokens::ACCENT[0],
+    canvas_core::tokens::ACCENT[1],
+    canvas_core::tokens::ACCENT[2],
+    canvas_core::tokens::ALPHA_10,
+];
 
 /// Сделать инстанс карточки виджет-ноды полностью прозрачным (CR-004):
 /// заливка — нулевая альфа, тень — выключена (params.w). Рамка выделения
@@ -639,13 +628,15 @@ pub const PORT_DOT_MAX: f32 = 26.0;
 pub fn port_dot_diameter(zone_px: f32) -> f32 {
     zone_px.clamp(PORT_DOT, PORT_DOT_MAX)
 }
-/// Цвет связи по умолчанию — нейтральный серо-голубой.
-pub const EDGE_COLOR: [f32; 4] = [0.52, 0.58, 0.66, 1.0];
+/// Цвет связи по умолчанию — нейтральный серо-голубой; из design-токенов (FR-046).
+pub use canvas_core::tokens::EDGE_DEFAULT as EDGE_COLOR;
 /// FR-014: цвет value-ребра (поток значений) — бирюзовый, отличим от
 /// обычных связей; явный цвет пользователя имеет приоритет.
-pub const FLOW_EDGE_COLOR: [f32; 4] = [0.13, 0.66, 0.55, 1.0];
-/// Цвет резиновой линии (drag новой связи) — акцент с прозрачностью.
-const DRAFT_COLOR: [f32; 4] = [0.396, 0.612, 0.969, 0.7];
+/// FR-046: из design-токенов.
+pub use canvas_core::tokens::EDGE_FLOW as FLOW_EDGE_COLOR;
+/// Цвет резиновой линии (drag новой связи) — акцент с прозрачностью;
+/// FR-046: из design-токенов (акцент α0.70).
+pub const DRAFT_COLOR: [f32; 4] = canvas_core::tokens::EDGE_DRAFT;
 /// Длина уса стрелки в world-px.
 const ARROW_LEN: f32 = 10.0;
 /// Угол уса стрелки от обратного направления касательной.
@@ -663,7 +654,8 @@ const DOT_SPACING: f32 = 3.0;
 
 /// Цвет подсвеченной фокусом связи — акцент (един для тёмной/светлой
 /// темы, как рамка выделения и группы; альфа модулируется пульсом).
-pub const FOCUS_EDGE_COLOR: [f32; 4] = [0.396, 0.612, 0.969, 1.0];
+/// FR-046: из design-токенов.
+pub const FOCUS_EDGE_COLOR: [f32; 4] = canvas_core::tokens::ACCENT;
 /// Доля яркости, остающаяся у НЕ-фокусных элементов при dim = 1
 /// (план T23 §1: «~35% яркости»).
 pub const FOCUS_DIM_FLOOR: f32 = 0.35;
@@ -1057,11 +1049,27 @@ pub fn build_draft_instances(
 // это мелкие overlay-квады в FrameOverlay.instances (world-space).
 
 /// Заливка призрака карточки дропа — акцент, полупрозрачный.
-pub const DROP_GHOST_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.10];
+/// FR-046: акцент + альфа-ступени из design-токенов (G4).
+pub const DROP_GHOST_FILL: [f32; 4] = [
+    canvas_core::tokens::ACCENT[0],
+    canvas_core::tokens::ACCENT[1],
+    canvas_core::tokens::ACCENT[2],
+    canvas_core::tokens::ALPHA_10,
+];
 /// Рамка призрака карточки дропа — акцент заметнее заливки.
-pub const DROP_GHOST_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 0.7];
+pub const DROP_GHOST_BORDER: [f32; 4] = [
+    canvas_core::tokens::ACCENT[0],
+    canvas_core::tokens::ACCENT[1],
+    canvas_core::tokens::ACCENT[2],
+    canvas_core::tokens::ALPHA_70,
+];
 /// Рамка зоны дропа (bbox сетки) — акцент, средняя прозрачность.
-pub const DROP_ZONE_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 0.5];
+pub const DROP_ZONE_BORDER: [f32; 4] = [
+    canvas_core::tokens::ACCENT[0],
+    canvas_core::tokens::ACCENT[1],
+    canvas_core::tokens::ACCENT[2],
+    canvas_core::tokens::ALPHA_50,
+];
 
 /// Призрак одной карточки дропа: pos/size заданы сеткой, заливка и рамка
 /// дропа, без тени (params.w = 1 — малые квады не отбрасывают).

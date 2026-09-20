@@ -491,10 +491,20 @@ pub mod ui {
     /// Порог «клик vs drag» рамки выделения: логические px (CR-001).
     pub const SELECT_DRAG_THRESHOLD: f32 = 4.0;
     /// Заливка рамки выделения (CR-001): акцент, полупрозрачная (стиль
-    /// призраков зоны дропа T9).
-    pub const SELECT_RECT_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.08];
+    /// призраков зоны дропа T9) — из design-токенов (FR-046, G4).
+    pub const SELECT_RECT_FILL: [f32; 4] = [
+        canvas_core::tokens::ACCENT[0],
+        canvas_core::tokens::ACCENT[1],
+        canvas_core::tokens::ACCENT[2],
+        canvas_core::tokens::ALPHA_08,
+    ];
     /// Рамка рамки выделения (CR-001): акцент заметнее заливки.
-    pub const SELECT_RECT_BORDER: [f32; 4] = [0.396, 0.612, 0.969, 0.6];
+    pub const SELECT_RECT_BORDER: [f32; 4] = [
+        canvas_core::tokens::ACCENT[0],
+        canvas_core::tokens::ACCENT[1],
+        canvas_core::tokens::ACCENT[2],
+        canvas_core::tokens::ALPHA_60,
+    ];
 
     /// Прямоугольник рамки выделения по двум углам (world, CR-001):
     /// нормализация min/max — тянуть можно в любую сторону.
