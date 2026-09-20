@@ -70,6 +70,24 @@ pub struct ThemeColors {
     /// Направляющая от сетки (источник grid): тот же тон приглушённее —
     /// отличима от «соседской» ещё и штрихом (шейдер guides.wgsl).
     pub guide_grid: [f32; 4],
+    /// Акцент — единый источник акцентного семейства (PRD-0006 G4, FR-046):
+    /// выделение, каретка/селекция текста, фокус-связь. Значение — из
+    /// примитива `canvas_core::tokens::ACCENT`; обе темы совпадают (сегодняшняя
+    /// единая константа), расхождение — решение владельца (v2).
+    pub accent: [f32; 4],
+    /// Заливка выделения текста в редакторе (T7) — акцент α0.35.
+    /// Источник: `TEXT_SELECTION_FILL` renderer.rs:41.
+    pub selection_fill: [f32; 4],
+    /// Фон-подсветка `==текст==`. Источник: `HIGHLIGHT_FILL` renderer.rs:43.
+    pub highlight: [f32; 4],
+    /// Фон what-if строки (FR-017). Источник: `WHATIF_FILL` renderer.rs:46.
+    pub whatif_fill: [f32; 4],
+    /// Дельта-бейдж what-if (FR-017). Источник: `WHATIF_BADGE_COLOR` renderer.rs:49.
+    pub whatif_badge: Color,
+    /// Красный строки результата с ошибкой (FR-013). Источник: `RESULT_ERROR_COLOR` text.rs:108.
+    pub error: Color,
+    /// Цвет HUD F3. Источник: `HUD_COLOR` text.rs:140.
+    pub hud: Color,
 }
 
 impl ThemeColors {
@@ -113,6 +131,31 @@ impl ThemeColors {
             // (подложка grid — приглушённый тон того же тона, ≈ 4.0:1)
             guide_align: [1.0, 0.18, 0.83, 1.0],
             guide_grid: [0.86, 0.16, 0.72, 1.0],
+            // FR-046: слоты v2 — из примитивов design/tokens (ноль скачка)
+            accent: canvas_core::tokens::ACCENT,
+            selection_fill: [
+                canvas_core::tokens::ACCENT[0],
+                canvas_core::tokens::ACCENT[1],
+                canvas_core::tokens::ACCENT[2],
+                canvas_core::tokens::ALPHA_35,
+            ],
+            highlight: canvas_core::tokens::HIGHLIGHT_FILL,
+            whatif_fill: canvas_core::tokens::WHATIF_FILL,
+            whatif_badge: Color::rgb(
+                canvas_core::tokens::WHATIF_BADGE[0],
+                canvas_core::tokens::WHATIF_BADGE[1],
+                canvas_core::tokens::WHATIF_BADGE[2],
+            ),
+            error: Color::rgb(
+                canvas_core::tokens::ERROR[0],
+                canvas_core::tokens::ERROR[1],
+                canvas_core::tokens::ERROR[2],
+            ),
+            hud: Color::rgb(
+                canvas_core::tokens::HUD[0],
+                canvas_core::tokens::HUD[1],
+                canvas_core::tokens::HUD[2],
+            ),
         }
     }
 
@@ -151,6 +194,32 @@ impl ThemeColors {
             // приглушённый grid — ≈ 6.1:1) — урок CR-007: обе темы равны
             guide_align: [0.784, 0.118, 0.612, 1.0],
             guide_grid: [0.66, 0.10, 0.52, 1.0],
+            // FR-046: слоты v2 — из примитивов (значения обеих тем совпадают
+            // с прежними едиными константами — ноль скачка)
+            accent: canvas_core::tokens::ACCENT,
+            selection_fill: [
+                canvas_core::tokens::ACCENT[0],
+                canvas_core::tokens::ACCENT[1],
+                canvas_core::tokens::ACCENT[2],
+                canvas_core::tokens::ALPHA_35,
+            ],
+            highlight: canvas_core::tokens::HIGHLIGHT_FILL,
+            whatif_fill: canvas_core::tokens::WHATIF_FILL,
+            whatif_badge: Color::rgb(
+                canvas_core::tokens::WHATIF_BADGE[0],
+                canvas_core::tokens::WHATIF_BADGE[1],
+                canvas_core::tokens::WHATIF_BADGE[2],
+            ),
+            error: Color::rgb(
+                canvas_core::tokens::ERROR[0],
+                canvas_core::tokens::ERROR[1],
+                canvas_core::tokens::ERROR[2],
+            ),
+            hud: Color::rgb(
+                canvas_core::tokens::HUD[0],
+                canvas_core::tokens::HUD[1],
+                canvas_core::tokens::HUD[2],
+            ),
         }
     }
 
@@ -310,6 +379,101 @@ mod tests {
             );
             assert!(grid >= 3.0, "guide_grid {grid:.2} < 3:1 на фоне {bg:?}");
         }
+    }
+
+    /// FR-046 (PRD-0006 F-5/I-6): слоты v2 из примитивов — значения совпадают
+    /// в обеих темах (прежние единые константы; расхождение — решение
+    /// владельца v2), и соответствуют tokens-зеркалу байт-в-байт.
+    #[test]
+    fn v2_slots_match_tokens_in_both_themes() {
+        use canvas_core::tokens;
+        for theme in [ThemeColors::dark(), ThemeColors::light()] {
+            assert_eq!(theme.accent, tokens::ACCENT);
+            assert_eq!(theme.selection_fill[0..3], tokens::ACCENT[0..3]);
+            assert_eq!(theme.selection_fill[3], tokens::ALPHA_35);
+            assert_eq!(theme.highlight, tokens::HIGHLIGHT_FILL);
+            assert_eq!(theme.whatif_fill, tokens::WHATIF_FILL);
+            assert_eq!(
+                [
+                    theme.whatif_badge.r(),
+                    theme.whatif_badge.g(),
+                    theme.whatif_badge.b()
+                ],
+                tokens::WHATIF_BADGE
+            );
+            assert_eq!(
+                [theme.error.r(), theme.error.g(), theme.error.b()],
+                tokens::ERROR
+            );
+            assert_eq!([theme.hud.r(), theme.hud.g(), theme.hud.b()], tokens::HUD);
+        }
+    }
+
+    /// FR-046 (PRD-0006 F-5, протокол исключений): контраст новых слотов.
+    /// Прохожие пороги фиксируются; существующие пары, НЕ проходящие WCAG,
+    /// ЗАДОКУМЕНТИРОВАНЫ как известные исключения (значения не менялись —
+    /// инвариант I-1) с нижней границей-регрессией; подстройка значений —
+    /// отдельное решение владельца.
+    #[test]
+    fn v2_slots_contrast_documented() {
+        use crate::contrast::{contrast_ratio, contrast_text_vs_fill};
+        let dark = ThemeColors::dark();
+        let light = ThemeColors::light();
+        let bg = |t: &ThemeColors| {
+            [
+                t.background[0] as f32 / 255.0,
+                t.background[1] as f32 / 255.0,
+                t.background[2] as f32 / 255.0,
+                1.0,
+            ]
+        };
+
+        // error (текст результата) к фону канваса: ≥ 3:1 на обеих темах
+        for theme in [&dark, &light] {
+            let r = contrast_text_vs_fill(theme.error, bg(theme));
+            assert!(
+                r >= 3.0,
+                "error {r:.2} < 3:1 к фону (dark={})",
+                theme.is_dark()
+            );
+        }
+        // error к заливке карточки: ИЗВЕСТНОЕ ИСКЛЮЧЕНИЕ к AA 4.5 (значения
+        // не менялись: 4.32 тёмная / 3.38 светлая — строка результата живёт
+        // на карточке, читаемость дотягивает автоконтраст on_card);
+        // регрессионная граница ниже фактических значений.
+        for theme in [&dark, &light] {
+            let r = contrast_text_vs_fill(theme.error, theme.card_fill);
+            assert!(
+                r >= 3.2,
+                "error-vs-card {r:.2} — ушла ниже задокументированной границы"
+            );
+        }
+
+        // accent к фону: тёмная ≥ 3:1; светлая — ИЗВЕСТНОЕ ИСКЛЮЧЕНИЕ
+        // (2.52; выделение — 1.5px рамка + заливка-гало, не самостоятельная
+        // графика; v2 может затемнить акцент светлой темы по решению владельца)
+        let acc = |t: &ThemeColors| {
+            contrast_ratio(
+                [t.accent[0], t.accent[1], t.accent[2]],
+                [bg(t)[0], bg(t)[1], bg(t)[2]],
+            )
+        };
+        assert!(acc(&dark) >= 3.0, "accent тёмная {:.2} < 3:1", acc(&dark));
+        assert!(
+            acc(&light) >= 2.4,
+            "accent светлая {:.2} — ниже документированной границы",
+            acc(&light)
+        );
+
+        // hud к фону: тёмная ≥ 3:1; светлая — ИЗВЕСТНОЕ ИСКЛЮЧЕНИЕ (2.51;
+        // HUD отрисовывается с тенью, значение прежнее)
+        let hud = |t: &ThemeColors| contrast_text_vs_fill(t.hud, bg(t));
+        assert!(hud(&dark) >= 3.0, "hud тёмная {:.2} < 3:1", hud(&dark));
+        assert!(
+            hud(&light) >= 2.4,
+            "hud светлая {:.2} — ниже документированной границы",
+            hud(&light)
+        );
     }
 
     /// Гарантия доступности (WCAG AA): readable_on_card возвращает ≥ 4.5:1
