@@ -1,0 +1,33 @@
+{
+  "$note": "Design-токены размеров (слой примитивы, PRD-0006 F-6; стык PRD-0004 F-1 — метрики анатомии). Значения = текущим константам (I-1: ноль скачка); $desc — источник. Единицы: world px (f32) либо физические px для экранных элементов.",
+
+  "card": {
+    "corner_radius": { "$type": "dimension", "$value": 8.0, "$desc": "CORNER_RADIUS cards.rs:21" },
+    "header_height": { "$type": "dimension", "$value": 34.0, "$desc": "HEADER_HEIGHT cards.rs:19 (FR-023: 28 → 34)" }
+  },
+
+  "edge": {
+    "dot": { "$type": "dimension", "$value": 2.5, "$desc": "EDGE_DOT cards.rs:627 — диаметр бусины" },
+    "arrow_len": { "$type": "dimension", "$value": 10.0, "$desc": "ARROW_LEN cards.rs:651" },
+    "arrow_angle_deg": { "$type": "dimension", "$value": 30.0, "$desc": "ARROW_ANGLE cards.rs:652 (FRAC_PI_6)" },
+    "arrow_dots": { "$type": "dimension", "$value": 4.0, "$desc": "ARROW_DOTS cards.rs:653" },
+    "dash_period": { "$type": "dimension", "$value": 8.0, "$desc": "DASH_PERIOD cards.rs:656 (в диаметрах бусины)" },
+    "dash_duty": { "$type": "dimension", "$value": 0.6, "$desc": "DASH_DUTY cards.rs:657" },
+    "dot_spacing": { "$type": "dimension", "$value": 3.0, "$desc": "DOT_SPACING cards.rs:660" }
+  },
+
+  "typography": {
+    "title_size": { "$type": "dimension", "$value": 16.0, "$desc": "text.rs:66 (world px, кегль)" },
+    "title_line": { "$type": "dimension", "$value": 22.0, "$desc": "text.rs:67 (высота строки)" },
+    "body_size": { "$type": "dimension", "$value": 14.0, "$desc": "text.rs:88" },
+    "body_line": { "$type": "dimension", "$value": 20.0, "$desc": "text.rs:89" },
+    "edge_label_size": { "$type": "dimension", "$value": 12.0, "$desc": "text.rs:97" },
+    "edge_label_line": { "$type": "dimension", "$value": 16.0, "$desc": "text.rs:98" },
+    "result_size": { "$type": "dimension", "$value": 12.0, "$desc": "RESULT_FONT_SIZE text.rs:102" },
+    "result_line": { "$type": "dimension", "$value": 16.0, "$desc": "RESULT_LINE_HEIGHT text.rs:105 (pub, резерв футера)" },
+    "hud_size": { "$type": "dimension", "$value": 14.0, "$desc": "HUD_FONT_SIZE text.rs:134 (физические px)" },
+    "hud_line": { "$type": "dimension", "$value": 18.0, "$desc": "HUD_LINE_HEIGHT text.rs:136" },
+    "badge_size": { "$type": "dimension", "$value": 10.0, "$desc": "BADGE_FONT_SIZE text.rs:129 (физические px)" },
+    "badge_line": { "$type": "dimension", "$value": 12.0, "$desc": "BADGE_LINE_HEIGHT text.rs:131" }
+  }
+}

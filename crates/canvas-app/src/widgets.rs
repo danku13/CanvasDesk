@@ -89,6 +89,15 @@ pub struct WidgetManager {
     pub host: Option<canvas_widgets::host::WidgetHost>,
 }
 
+/// FR-046 (G4): акцент виджет-моста — из design-токенов (`tokens::ACCENT`),
+/// а не отдельного #3B82F6: единый акцент канваса и виджетов. Санкционированное
+/// изменение цвета хрома виджетов (#3B82F6 → #659CF7) — см. changelog FR-046.
+fn accent_hex() -> String {
+    let a = canvas_core::tokens::ACCENT;
+    let ch = |v: f32| format!("{:02X}", (v * 255.0).round() as u8);
+    format!("#{}{}{}", ch(a[0]), ch(a[1]), ch(a[2]))
+}
+
 impl WidgetManager {
     /// Корень пакетов задаётся реестром (M8/W11): натив — файловый реестр
     /// над `~/.canvasdesk/widgets`; web — реестр в памяти (встроенные
@@ -106,7 +115,7 @@ impl WidgetManager {
             states: HashMap::new(),
             last_capture: HashMap::new(),
             cooldown_until: HashMap::new(),
-            theme: ThemeInfo::new(dark, "#3B82F6"),
+            theme: ThemeInfo::new(dark, accent_hex()),
             last_zoom: 1.0,
             started: Instant::now(),
             runtime_ready: false,
@@ -135,7 +144,7 @@ impl WidgetManager {
     }
 
     pub fn set_theme(&mut self, dark: bool) {
-        let new = ThemeInfo::new(dark, "#3B82F6");
+        let new = ThemeInfo::new(dark, accent_hex());
         if new != self.theme {
             self.theme = new;
             self.broadcast_theme();

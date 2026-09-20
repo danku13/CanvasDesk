@@ -18,7 +18,7 @@ use crate::cards::{
     build_line_port_instances, build_port_instances, card_instance, dim_instance,
     make_widget_transparent, severity_border, severity_text, template_band_instance,
     template_icon_quads, template_icon_rect, widget_header_hover_instance, CardInstance,
-    CardsPipeline, FocusView, SELECTION_BORDER,
+    CardsPipeline, FocusView,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -35,18 +35,12 @@ use crate::text::{
 use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
 use crate::zorder;
-use glyphon::Color;
 
-/// Заливка выделения текста в редакторе (T7) — акцент с прозрачностью.
-const TEXT_SELECTION_FILL: [f32; 4] = [0.396, 0.612, 0.969, 0.35];
-/// Фон-подсветка `==текст==` в заметках — приглушённый жёлтый с прозрачностью.
-const HIGHLIGHT_FILL: [f32; 4] = [0.85, 0.75, 0.30, 0.30];
-/// FR-017 (CP6): фон подменённой what-if строки — акцентный тинт (поверх
-/// CodeBg формульной строки).
-const WHATIF_FILL: [f32; 4] = [0.30, 0.55, 0.95, 0.22];
-/// FR-017 (CP6): цвет дельта-бейджа what-if («было → стало (+Δ)») — янтарный,
-/// отличен от акцентного результата и красной ошибки.
-pub const WHATIF_BADGE_COLOR: Color = Color::rgb(0xdf, 0xa6, 0x3e);
+// FR-046: цветовые константы рендера мигрированы в design-токены:
+// селекция/подсветка/what-if — слоты `ThemeColors` (accent/selection_fill/
+// highlight/whatif_fill/whatif_badge), акцентное семейство — примитив
+// `canvas_core::tokens::ACCENT`. Литералы удалены (G1).
+
 /// Отступы подложки лейбла связи вокруг текста (world-px, по осям x и y).
 const EDGE_LABEL_PADDING: [f32; 2] = [6.0, 3.0];
 /// Потолок текст-групп кадра (включая финальную): сегменты сверх потолка
@@ -59,7 +53,7 @@ const MAX_TEXT_GROUPS: usize = 16;
 /// буллиты/чекбоксы/зачёркивание/линия — приглушённый gfm_muted_fill.
 pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
     match kind {
-        BodyQuadKind::Highlight => HIGHLIGHT_FILL,
+        BodyQuadKind::Highlight => theme.highlight,
         BodyQuadKind::Strike
         | BodyQuadKind::Bullet
         | BodyQuadKind::CheckboxBox
@@ -67,7 +61,7 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         | BodyQuadKind::Rule => theme.gfm_muted_fill,
         BodyQuadKind::QuoteBar => theme.gfm_quote_fill,
         BodyQuadKind::CodeBg => theme.gfm_code_fill,
-        BodyQuadKind::WhatIfBg => WHATIF_FILL,
+        BodyQuadKind::WhatIfBg => theme.whatif_fill,
     }
 }
 
@@ -803,7 +797,7 @@ impl Renderer {
                                 origin,
                                 rect,
                                 zoom_px,
-                                TEXT_SELECTION_FILL,
+                                self.theme.selection_fill,
                             ));
                         }
                         if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
@@ -811,7 +805,7 @@ impl Renderer {
                                 origin,
                                 rect,
                                 zoom_px,
-                                SELECTION_BORDER,
+                                self.theme.accent,
                             ));
                         }
                     }
@@ -825,7 +819,7 @@ impl Renderer {
                             pos: origin,
                             size: [width, height],
                             fill: self.theme.edge_edit_fill,
-                            border: SELECTION_BORDER,
+                            border: self.theme.accent,
                             params: [6.0, 1.0, 0.0, 0.0],
                         });
                         let zoom_px = camera.zoom() * self.scale_factor;
@@ -834,7 +828,7 @@ impl Renderer {
                                 origin,
                                 rect,
                                 zoom_px,
-                                TEXT_SELECTION_FILL,
+                                self.theme.selection_fill,
                             ));
                         }
                         if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
@@ -842,7 +836,7 @@ impl Renderer {
                                 origin,
                                 rect,
                                 zoom_px,
-                                SELECTION_BORDER,
+                                self.theme.accent,
                             ));
                         }
                     }
@@ -1419,10 +1413,10 @@ mod tests {
             body_quad_fill(BodyQuadKind::CodeBg, &dark),
             dark.gfm_code_fill
         );
-        // Подсветка — жёлтая константа (как до GFM)
+        // Подсветка — жёлтый слот темы (как до GFM)
         assert_eq!(
             body_quad_fill(BodyQuadKind::Highlight, &dark),
-            HIGHLIGHT_FILL
+            dark.highlight
         );
         // Светлая тема: свои значения (не тёмные)
         let light = ThemeColors::light();

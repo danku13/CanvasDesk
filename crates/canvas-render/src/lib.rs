@@ -34,7 +34,6 @@ pub use glyphon::Color;
 pub use guides::{GuideLine, GuideSource, GuidesFrame};
 pub use renderer::{
     FrameOverlay, FrameStats, Renderer, SceneView, Selection, SpillView, WhatIfNode,
-    WHATIF_BADGE_COLOR,
 };
 pub use stats::FrameMeter;
 pub use theme::ThemeColors;
