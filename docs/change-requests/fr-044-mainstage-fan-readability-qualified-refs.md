@@ -1,6 +1,6 @@
 # FR-044: Main stage — читаемость веера рёбер, адресация «Объект.Поле» и подсветка зависимостей расчёта
 
-- **Статус:** в анализе
+- **Статус:** в работе (этап-ядро canvas-core реализован: `bundles.rs` — `stage_fan_label_layout`/`fan_corridor` + тесты инвариантов 1–3; render/app-этапы — после E-волны FR-042, см. Changelog)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (постановка по фидбэку владельца)
@@ -177,13 +177,11 @@ UX-решения проверены владельцем на прототип�
 - `pub fn fan_corridor(source_labels: Rect, target_labels: Rect, pad: f32)
   -> Rect` — коридор между колонками подписей портов (константы отступов
   рядом с `stage_edge_fan`).
-- `pub struct QualifiedRef { obj: String, field: String }` +
-  `pub fn display_ref(canvas: &Canvas, edge_index: usize) -> QualifiedRef` —
-  единственная точка сборки отображаемого пути (общая с FR-045): объект =
-  имя ноды-истока (`canvasdesk.data`-нода — имя объекта источника, FR-045),
-  поле = `from_output` | «строка N» (`from_line`) | имя колонки данных;
-  fallback при безымянном выходе — `edge.id`. Чистая, детерминированная,
-  wasm-совместимая.
+- ~~`pub struct QualifiedRef`… в этом модуле~~ **сметчено 2026-09-21
+  (приоритет FR-045)**: `QualifiedRef`/`display_ref` определены в
+  `canvas-core/src/dataref.rs` (FR-045 Р-5 — единственная точка, с
+  тултип-данными, коллизиями §Q2 и рёберным фолбэком); настоящий модуль
+  ИМПОРТИРУЕТ их из dataref — дубль в `bundles.rs` не создаётся.
 - `pub fn formula_operands(edge_index) -> Vec<usize>`-совместимый реестр
   зависимостей панели: множество «строка расчёта → рёбра-операнды» строится
   из `inbound_slots` + разбора тела приёмника; детерминированный порядок.
@@ -307,6 +305,20 @@ UX-решения проверены владельцем на прототип�
 
 ## История изменений (Changelog)
 
+- `2026-09-21` (2) — агент: **сметчивание** — код-ссылки flow.rs
+  исправлены (canvas-core, не canvas-scene); `QualifiedRef`/`display_ref`
+  закреплены за FR-045 (`dataref.rs`, приоритет владельца) — из контракта
+  этого FR дубль убран, bundles.rs импортирует. **Этап-ядро реализован**
+  (`crates/canvas-core/src/bundles.rs`): `stage_fan_label_layout`
+  (стопка с шагом «факт. высота + 8 px», центрирование на оси, клампы в
+  зону, уплотнение при переполнении §Q2, горизонтальный коридор),
+  `fan_corridor` (исключает колонки подписей), `FAN_LABEL_GAP_PX` — тесты
+  инвариантов 1–3 (×6 без пересечений, ×8 кламп внутрь, детерминизм,
+  исключение колонок, прижатие стопки). Гейты: cargo test 1277 ✓,
+  clippy -D warnings ✓, fmt ✓, wasm_gate.sh полный ✓. Render/app-этапы
+  (пилюли, подложки, z-порядок, панель «Как считается», StageCalcFocus,
+  Esc-каскад, i18n) — после E-волны FR-042 (нужен stage-подсистемой).
+  Статус → «в работе».
 - `2026-09-21` — агент: создан документ. Фидбэк владельца по прототипу
   (5 пунктов) сведён в постановку; UX-решения прототипа зафиксированы в
   §Решения (Р-1…Р-8); контракт `bundles.rs` расширен раскладкой подписей и
@@ -327,7 +339,7 @@ UX-решения проверены владельцем на прототип�
   FOCUS_DIM_FLOOR, dim_factor), `crates/canvas-render/src/renderer.rs:908`
   (порядок инстансов), `crates/canvas-core/src/edgegeom.rs:668` (edge_at),
   `crates/canvas-core/src/model.rs:447-474` (адреса рёбер),
-  `crates/canvas-scene/src/flow.rs:518/579` (inbound_slots/inbound_values),
+  `crates/canvas-core/src/flow.rs:518/579` (inbound_slots/inbound_values; сметчено), `crates/canvas-core/src/dataref.rs` (адресация — владелец FR-045),
   `crates/canvas-app/src/app.rs:896/7273/7506` (состояние, ввод, ESC-цепочка).
 - Интерактивный прототип (валидация решений, вне репозитория):
   `prototype-mainstage-anatomy.html` — демо Заявки→Стоимость ×6, панель
