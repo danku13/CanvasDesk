@@ -2166,3 +2166,10 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Гейты:** fmt/clippy --workspace -D warnings/test --workspace (core 253, render 288, app 229+)/wasm_gate --check/mcp_wasm_gate --check/token_lint — зелёные. CI merge-коммитов — все success.
 - **Статусы:** FR-046 → «выполнено (v1)» (F-8 пресеты и F-9 web — перенос на D4, отклонения зафиксированы в FR); PRD-0006 — D1–D3 закрыты, D4/D5 — следующий этап; индексы index-cr-fr/prd-README обновлены; ACCEPTANCE.md — секция FR-046 (G1/G3/G4/G5 замерены); SPEC.md — новый §6.6 «Палитра и design-токены».
 - **Коммит:** docs(fr-046) — статусы/приёмка/SPEC; docs — worklog.
+
+## 2026-09-21 — Слияние с параллельной волной FR-044/FR-045 и финализация FR-046 v1
+
+- **Merge origin/main** (этап-ядро canvas-core FR-045/FR-044: dataref.rs, csv.rs, bundles.rs раскладка/коридор, unmapped_inputs): конфликты index-cr-fr (их свежие статусы FR-044/045 «в работе (этап-ядро)» + мой FR-046 «выполнено (v1)») и worklog (обе записи сохранены) разрешены семантически; код смержился авто (их новые модули не пересекались с токен-миграцией).
+- **Гейт после слияния:** fmt/clippy --workspace -D warnings/test --workspace (1283 passed, 0 failed)/token_lint/wasm_gate --check — зелёные.
+- **CI merge-коммита b09ac59:** build/gates ubuntu+macos/wasm-check/licenses/web+docs/deploy — success; **gates (windows-latest) — failure**: flake `app::tests::run_batch_op_group_with_children_only_is_noop` (FR-042 волна, не FR-046) — `create_dir_all(temp)` PermissionDenied (Os code 5) на раннере; перезапуск джобы недоступен PAT (403 actions:write) — перезапуск за владельцем (Actions → «CI failure» → Re-run failed jobs).
+- **Коммит:** merge origin/main b09ac59 → push.
