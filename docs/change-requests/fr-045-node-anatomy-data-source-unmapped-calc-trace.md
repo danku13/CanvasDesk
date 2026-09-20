@@ -1,6 +1,6 @@
 # FR-045: Анатомия ноды и LOD — текст-описание, нода «Входные данные», состояние «значение не подставлено», прозрачность расчёта
 
-- **Статус:** в анализе
+- **Статус:** в работе (этап-ядро canvas-core реализован: `dataref.rs` — единая точка `QualifiedRef`/`display_ref`, `csv.rs` — снапшот-парсер, `canvasdesk.desc`/`canvasdesk.data` в модели, `unmapped_inputs` в flow; render/app-этапы — после N-волны PRD-0004, см. Changelog)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (постановка по вводным и фидбэку владельца)
@@ -71,7 +71,9 @@
    «нода входных данных» с портами-на-колонки и qualified-именами полей не
    оформлен; CSV/DAC-DB-бэкендов нет.
 3. **Состояния слота «не подставлено» нет.** Поток вычисляет
-   `inbound_slots` (`flow.rs:518`) и `inbound_values` (`flow.rs:579`);
+   `inbound_slots` (`crates/canvas-core/src/flow.rs:518`) и `inbound_values`
+   (`flow.rs:579`) — модуль в canvas-core, не в canvas-scene (сметчено
+   2026-09-21: постановка FR-045/FR-044 ошибочно указывала canvas-scene);
    случаи «ребро подключено, значения нет» (`fromLine` пуст или вне
    диапазона, источник не отдал запись) сегодня дают молчаливую пустоту.
    Статусный слой E (PRD-0004 F-7) знает `selection > analysis > broken >
@@ -291,6 +293,23 @@ main stage запрашивает L2 независимо от зума (PRD-000
 
 ## История изменений (Changelog)
 
+- `2026-09-21` (2) — агент: **сметчивание с более ранними FR (приоритет
+  FR-045 — решение владельца)**: (1) код-ссылки исправлены — flow.rs живёт
+  в `crates/canvas-core` (в постановке ошибочно указывался canvas-scene);
+  (2) `QualifiedRef`/`display_ref` — ЕДИНСТВЕННАЯ точка сборки путей в
+  `canvas-core/src/dataref.rs` (FR-045 владеет определением; контракта
+  FR-044 §Changes-1 убран дубль в bundles.rs — импортирует из dataref);
+  (3) для data-ноды объектом адресации служит имя ноды (колонка — через
+  `fromOutput`), `ref` — техническое поле индикатора источника;
+  (4) `fromLine` в отображении — 1-based («строка N»), в модели — индекс.
+  **Этап-ядро реализован** (гейты: cargo test 1277 ✓, clippy -D warnings ✓,
+  fmt ✓, wasm_gate.sh полный ✓): `dataref.rs` (display_ref + input_refs +
+  formula_displays с подстановкой путей и `$in`-токеном), `csv.rs`
+  (RFC4180-подмножество, sniff, лимиты, 9 фикстур-тестов), модель —
+  `canvasdesk.desc`/`canvasdesk.data` (+`DataRef`, set/cleanup, regression
+  set_expr), flow — `unmapped_inputs` (инварианты 1/4). Render/app-этапы
+  (R-1/R-2/R-3/R-4 визуал, палитра, тултипы, i18n) — после N-волны
+  PRD-0004 (N1–N5), т.к. требуют `anatomy.rs`. Статус → «в работе».
 - `2026-09-21` — агент: создан документ. Вводные владельца (4 пункта) +
   нотационный фидбэк сведены в требования R-1…R-5; решения прототипа
   зафиксированы (Р-1…Р-5); LOD-матрица новых элементов; 10 инвариантов;
@@ -311,7 +330,7 @@ main stage запрашивает L2 независимо от зума (PRD-000
 - `docs/change-requests/fr-029-value-ports.md` / `fr-025-line-output-ports.md`
   — адресация `fromOutput`/`fromLine`/`toParam`.
 - Код: `crates/canvas-core/src/model.rs:210` (`Node.extra`),
-  `crates/canvas-scene/src/flow.rs:518/579` (`inbound_slots`/`inbound_values`),
+  `crates/canvas-core/src/flow.rs:518/579` (`inbound_slots`/`inbound_values`), `crates/canvas-core/src/dataref.rs` (реализация Р-5), `crates/canvas-core/src/csv.rs` (реализация Р-2),
   `crates/canvas-render/src/cards.rs:349` (полоса шаблона — обобщение чипа),
   `crates/canvas-app/src/app.rs:896` (состояние App).
 - Интерактивный прототип (валидация решений, вне репозитория):
