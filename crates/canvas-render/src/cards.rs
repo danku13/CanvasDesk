@@ -1456,6 +1456,8 @@ mod tests {
                 props: Default::default(),
                 expr: None,
                 template: None,
+                desc: None,
+                data: None,
             },
             "Clock",
             10.0,

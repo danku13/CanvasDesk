@@ -658,6 +658,60 @@ pub fn param_spills(canvas: &Canvas, node_id: &str) -> Vec<ParamSpill> {
     by_param.into_values().collect()
 }
 
+/// FR-045 R-3: вход без пролитого значения — производное pending-состояние
+/// «значение не подставлено». Определение (§Решения Р-3): value-ребро
+/// подключено к приёмнику, но значения нет (источник pending/ошибка/
+/// отсутствует, `fromLine` пуст или вне диапазона, именованный выход/
+/// колонка отсутствует в снапшоте). Контрольные рёбра значения не несут —
+/// в состояние не входят.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmappedInput {
+    /// id ребра (пунктирная отрисовка unmapped-ребра, FR-045 Р-3).
+    pub edge_id: String,
+    /// Позиционный слот `$N` (0-based среди позиционных рёбер) — для
+    /// слотов; `None` — проливание в параметр.
+    pub slot: Option<usize>,
+    /// Имя параметра (`toParam`); `None` — позиционный слот.
+    pub param: Option<String>,
+}
+
+/// FR-045 R-3: множество unmapped-входов ноды — производное состояние,
+/// **не сериализуется** (в `.canvas` не пишется); вычисляется на каждом
+/// пересчёте из готовых результатов [`propagate_with_lines`]. Порядок —
+/// `canvas.edges` (детерминирован). Подстановка значения снимает состояние
+/// автоматически (следующий пересчёт; инвариант 4 FR-045).
+pub fn unmapped_inputs(
+    canvas: &Canvas,
+    node_id: &str,
+    solutions: &FlowSolutions,
+) -> Vec<UnmappedInput> {
+    let mut slot: usize = 0;
+    let mut result = Vec::new();
+    for edge in &canvas.edges {
+        if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
+            continue;
+        }
+        let value = edge_source_value(edge, &solutions.outputs, &solutions.lines, &solutions.named);
+        if value.is_none() {
+            let (slot_no, param) = if edge.to_param.is_none() {
+                let no = slot;
+                (Some(no), None)
+            } else {
+                (None, edge.to_param.clone())
+            };
+            result.push(UnmappedInput {
+                edge_id: edge.id.clone(),
+                slot: slot_no,
+                param,
+            });
+        }
+        if edge.to_param.is_none() {
+            slot += 1;
+        }
+    }
+    result
+}
+
 /// Заголовок ноды-источника для подписи проливания: снимок имени шаблона
 /// (FR-023) / первая непустая строка текста (ATX-маркеры не показываем) /
 /// label / id. Легковесный аналог заголовка карточки рендера: file/группы
@@ -2110,5 +2164,94 @@ mod tests {
             Some(5.0),
             "протухшая подмена проигнорирована"
         );
+    }
+    /// FR-045 R-3 (инвариант 4): unmapped ставится — ребро есть, значения
+    /// нет (источник без значения); подача значения снимает состояние.
+    #[test]
+    fn unmapped_inputs_set_and_unset() {
+        let mut canvas = Canvas::default();
+        // Источник — проза: значения не даёт → unmapped.
+        node_with_expr(&mut canvas, "A", "заметка без формулы", 0.0);
+        node_with_expr(&mut canvas, "B", "$in * 2", 1.0);
+        value_edge(&mut canvas, "e1", "A", "B");
+        let solutions =
+            propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("пересчёт");
+        let unmapped = unmapped_inputs(&canvas, "B", &solutions);
+        assert_eq!(unmapped.len(), 1);
+        assert_eq!(unmapped[0].edge_id, "e1");
+        assert_eq!(unmapped[0].slot, Some(0));
+        assert_eq!(unmapped[0].param, None);
+        // Значение появилось — состояние снято (следующий пересчёт).
+        node_with_expr(&mut canvas, "A", "21", 0.0);
+        let solutions =
+            propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("пересчёт");
+        assert!(unmapped_inputs(&canvas, "B", &solutions).is_empty());
+    }
+
+    /// FR-045 R-3: mixed-кейс — часть слотов пролитая, часть unmapped;
+    /// слот-индекс учитывает только позиционные рёбра.
+    #[test]
+    fn unmapped_inputs_mixed_slots_and_params() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "5", 0.0);
+        node_with_expr(&mut canvas, "P", "проза", 1.0);
+        node_with_expr(&mut canvas, "T", "$1 * $2 + $Сезон", 2.0);
+        value_edge(&mut canvas, "e1", "A", "T");
+        value_edge(&mut canvas, "e2", "P", "T"); // позиционный слот 1 — без значения
+        let mut e3 = Edge::new("e3", "A", None, "T", None);
+        e3.set_flow_kind(FlowKind::Value);
+        e3.to_param = Some("Сезон".to_owned());
+        canvas.edges.push(e3); // проливание — значение есть
+        let solutions =
+            propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("пересчёт");
+        let unmapped = unmapped_inputs(&canvas, "T", &solutions);
+        assert_eq!(unmapped.len(), 1, "unmapped только у e2");
+        assert_eq!(unmapped[0].slot, Some(1));
+        // Проливание без значения источника → unmapped-параметр.
+        let mut canvas2 = Canvas::default();
+        node_with_expr(&mut canvas2, "P", "проза", 0.0);
+        node_with_expr(&mut canvas2, "T", "$Сезон", 1.0);
+        let mut e = Edge::new("eP", "P", None, "T", None);
+        e.set_flow_kind(FlowKind::Value);
+        e.to_param = Some("Сезон".to_owned());
+        canvas2.edges.push(e);
+        let solutions =
+            propagate_with_lines(&canvas2, &WhatIfOverrides::default()).expect("пересчёт");
+        let unmapped = unmapped_inputs(&canvas2, "T", &solutions);
+        assert_eq!(unmapped.len(), 1);
+        assert_eq!(unmapped[0].slot, None);
+        assert_eq!(unmapped[0].param.as_deref(), Some("Сезон"));
+    }
+
+    /// FR-045 R-3: контрольные рёбра и висячее ребро; control не входит
+    /// в состояние, висячее (исток не существует) — unmapped.
+    #[test]
+    fn unmapped_inputs_control_and_dangling() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "B", "$in", 0.0);
+        control_edge(&mut canvas, "ec", "ghost1", "B");
+        value_edge(&mut canvas, "ev", "ghost2", "B");
+        let solutions =
+            propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("пересчёт");
+        let unmapped = unmapped_inputs(&canvas, "B", &solutions);
+        assert_eq!(unmapped.len(), 1, "control не в состоянии");
+        assert_eq!(unmapped[0].edge_id, "ev");
+    }
+
+    /// FR-045 (инвариант 1): `canvasdesk.desc` не влияет на поток —
+    /// расчёт ноды с описанием и без идентичен.
+    #[test]
+    fn desc_does_not_affect_flow() {
+        let mut base = Canvas::default();
+        node_with_expr(&mut base, "A", "3", 0.0);
+        node_with_expr(&mut base, "B", "$in + 1", 1.0);
+        value_edge(&mut base, "e1", "A", "B");
+        let mut with_desc = base.clone();
+        with_desc.nodes[1].set_desc(Some("Итоговый коэффициент".to_owned()));
+        let out_base = propagate_with_lines(&base, &WhatIfOverrides::default()).expect("пересчёт");
+        let out_desc =
+            propagate_with_lines(&with_desc, &WhatIfOverrides::default()).expect("пересчёт");
+        assert_eq!(out_base.outputs, out_desc.outputs);
+        assert_eq!(out_base.lines, out_desc.lines);
     }
 }
