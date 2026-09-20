@@ -19,7 +19,7 @@ PRD (Product Requirements Document) — документ требований п
 | [TEMPLATE.md](TEMPLATE.html) | — | Единый шаблон PRD (копировать в новый файл) |
 | [prd-0001-duckdb-data-connector.md](prd-0001-duckdb-data-connector.html) | в анализе | DuckDB-коннектор данных: файлы/БД → инспектор колонок → агрегаты min/max/avg/p50/p90/p95 → снапшот-ноды в мат.модель (реализация — FR-041, зависимости — ADR-0013) |
 | [prd-0002-edge-lod-main-stage.md](prd-0002-edge-lod-main-stage.html) | в анализе | LOD связей: пучки рёбер одной линией с толщиной по весу входов + режим main stage (≤ 70% вьюпорта, выход Esc/кликом по фону) (реализация — FR-042) |
-| [prd-0003-universal-architecture-import.md](prd-0003-universal-architecture-import.html) | в анализе | Всеядный импорт машиночитаемых описаний архитектуры: draw.io/UML/PlantUML/Mermaid/DOT и terraform/ansible/compose → ноды, связи и группы канваса (реализация — FR-043) |
+| [prd-0003-universal-architecture-import.md](prd-0003-universal-architecture-import.html) | в работе (FR-043 создан) | Всеядный импорт машиночитаемых описаний архитектуры: draw.io/UML/PlantUML/Mermaid/DOT и terraform/ansible/compose → ноды, связи и группы канваса (реализация — FR-043, создан 2026-09-20, статус «в анализе») |
 
 ## Связи между PRD
 
