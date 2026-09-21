@@ -213,6 +213,7 @@ pub mod keys {
     pub const GALLERY_EMPTY_OPEN: &str = "gallery.empty.open";
     pub const GALLERY_EMPTY_DISMISS: &str = "gallery.empty.dismiss";
     pub const GALLERY_APPLIED: &str = "gallery.applied";
+    pub const GALLERY_UNKNOWN: &str = "gallery.unknown";
     pub const HELP_SCHEMES: &str = "help.schemes";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
@@ -575,6 +576,10 @@ const RU: &[(&str, &str)] = &[
     (
         keys::GALLERY_APPLIED,
         "Схема «{name}» добавлена — одно Ctrl+Z отменяет",
+    ),
+    (
+        keys::GALLERY_UNKNOWN,
+        "Схема не найдена: {id} — проверьте параметр ?template",
     ),
     (keys::HELP_SCHEMES, "Галерея схем"),
     (keys::ONBOARDING_BACK, "Назад"),
@@ -977,6 +982,10 @@ const EN: &[(&str, &str)] = &[
     (
         keys::GALLERY_APPLIED,
         "Scheme «{name}» added — one Ctrl+Z undoes it",
+    ),
+    (
+        keys::GALLERY_UNKNOWN,
+        "Scheme not found: {id} — check the ?template parameter",
     ),
     (keys::HELP_SCHEMES, "Scheme gallery"),
     (keys::ONBOARDING_BACK, "Back"),

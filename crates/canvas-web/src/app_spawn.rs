@@ -187,6 +187,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // W11 (§5): реестр виджетов — как на нативе (в памяти: встроенные
     // пакеты из include_dir; выбор режима — в App::new по каталогу кэша)
     app.init_widgets();
+    // FR-049 (US-5): ?template=<id> — отложенное применение на первом кадре
+    if params.template.is_some() {
+        app.set_pending_scheme(params.template.clone());
+    }
     // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
     crate::widgets_web::web::install_tick(widget_sender);
     // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop

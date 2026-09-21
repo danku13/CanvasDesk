@@ -30,6 +30,10 @@ pub struct WebParams {
     /// имя — None (тихий старт с недавним/дефолтным). String вместо
     /// Copy-полей — derive сужен до Clone.
     pub canvas: Option<String>,
+    /// `?template=<id>` (FR-049): авто-вставка встроенной схемы после
+    /// инициализации App. Неизвестный id — мягкий отказ (тост), URL не
+    /// валидируется здесь: реестр схем проверяет при применении.
+    pub template: Option<String>,
 }
 
 /// Уровень лога из URL (срез `tracing_subscriber::filter::LevelFilter`:
@@ -221,11 +225,13 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
     let stress_widgets = numeric_param(query, "stress-widgets")?;
     let log_level = string_param(query, "log").and_then(|value| LogLevel::parse(&value));
     let canvas = string_param(query, "canvas").and_then(|value| sanitize_canvas_name(&value));
+    let template = string_param(query, "template");
     Ok(WebParams {
         stress,
         stress_widgets,
         log_level,
         canvas,
+        template,
     })
 }
 
@@ -243,9 +249,24 @@ mod tests {
                 stress: Some(5000),
                 stress_widgets: None,
                 log_level: None,
-                canvas: None
+                canvas: None,
+                template: None
             }
         );
+    }
+
+    /// FR-049 (US-5): `?template=<id>` — id схемы для авто-вставки;
+    /// пустое значение — None (мягкий старт без схемы).
+    #[test]
+    fn template_param_parses() {
+        let params = parse_query("?template=com.canvasdesk.scheme.intro-calculations")
+            .expect("валидный запрос");
+        assert_eq!(
+            params.template.as_deref(),
+            Some("com.canvasdesk.scheme.intro-calculations")
+        );
+        let empty = parse_query("?template=").expect("валидный запрос");
+        assert_eq!(empty.template, None, "пустое значение — None");
     }
 
     /// Ведущий `?` опционален (location.search его всегда даёт, но парсер
@@ -258,7 +279,8 @@ mod tests {
                 stress: Some(7),
                 stress_widgets: None,
                 log_level: None,
-                canvas: None
+                canvas: None,
+                template: None
             }
         );
     }
@@ -276,7 +298,8 @@ mod tests {
                 stress: Some(100),
                 stress_widgets: Some(10),
                 log_level: None,
-                canvas: Some("x.canvas".to_string())
+                canvas: Some("x.canvas".to_string()),
+                template: None
             }
         );
     }
