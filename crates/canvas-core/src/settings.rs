@@ -280,6 +280,13 @@ pub struct Settings {
     /// FR-038 (п.4, advanced): точка привязки grid-снапа — в основном UI
     /// не показывается (только config.toml).
     pub snap_anchor: SnapAnchor,
+    /// FR-042 (F-13): агрегация связей — пучок рёбер одной пары рисуется
+    /// одной линией с бейджем ×N, клик открывает main stage. false —
+    /// прежний рендер связей без агрегации (регресс-щит, инвариант 5:
+    /// количество/параметры инстансов идентичны прежнему поведению).
+    /// Рендер/ввод читают флаг на кадре (как `line_ports`). Старые конфиги
+    /// без поля грузятся как true (serde default) — агрегация включена.
+    pub edge_aggregation: bool,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -342,6 +349,8 @@ impl Default for Settings {
             snap_grid_sub_zoom: SNAP_SUB_ZOOM_DEFAULT,
             snap_grid_coarse_zoom: SNAP_COARSE_ZOOM_DEFAULT,
             snap_anchor: SnapAnchor::BoundingBox,
+            // FR-042 (F-13): агрегация связей включена по умолчанию.
+            edge_aggregation: true,
         }
     }
 }
@@ -544,6 +553,7 @@ mod tests {
             snap_grid_sub_zoom: 2.0,
             snap_grid_coarse_zoom: 0.25,
             snap_anchor: SnapAnchor::Center,
+            edge_aggregation: true,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
