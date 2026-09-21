@@ -161,16 +161,23 @@ pub enum HelpMenuItem {
     Docs,
     /// «Пройти онбординг» — перезапуск тура (FR-028).
     Onboarding,
+    /// «Галерея схем» — модальная галерея готовых схем (FR-049).
+    Schemes,
 }
 
 /// Пункты меню помощи (порядок отображения).
-pub const HELP_MENU_ITEMS: [HelpMenuItem; 2] = [HelpMenuItem::Docs, HelpMenuItem::Onboarding];
+pub const HELP_MENU_ITEMS: [HelpMenuItem; 3] = [
+    HelpMenuItem::Docs,
+    HelpMenuItem::Onboarding,
+    HelpMenuItem::Schemes,
+];
 
 /// Подпись пункта меню помощи (таблица [`crate::i18n`] — FR-040).
 pub fn help_menu_item_label(item: HelpMenuItem, language: Language) -> &'static str {
     match item {
         HelpMenuItem::Docs => i18n::tr(language, keys::HELP_DOCS),
         HelpMenuItem::Onboarding => i18n::tr(language, keys::HELP_ONBOARDING),
+        HelpMenuItem::Schemes => i18n::tr(language, keys::HELP_SCHEMES),
     }
 }
 

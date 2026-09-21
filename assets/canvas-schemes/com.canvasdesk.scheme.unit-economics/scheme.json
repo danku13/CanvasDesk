@@ -1,0 +1,143 @@
+{
+  "id": "com.canvasdesk.scheme.unit-economics",
+  "name_ru": "Юнит-экономика",
+  "name_en": "Unit economics",
+  "description_ru": "Маржа с клиента, пожизненная ценность и соотношение с ценой привлечения.",
+  "description_en": "Per-customer margin, lifetime value and the ratio against acquisition cost.",
+  "category": "business",
+  "category_ru": "Бизнес",
+  "category_en": "Business",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 330,
+        "height": 170,
+        "text": "Юнит-экономика: маржа считается из цены и себестоимости, ценность — маржа на срок жизни, далее соотношение с ценой привлечения.",
+        "color": "4"
+      },
+      {
+        "id": "price",
+        "type": "text",
+        "x": 410,
+        "y": 0,
+        "width": 220,
+        "height": 120,
+        "text": "10 $",
+        "color": "1"
+      },
+      {
+        "id": "cogs",
+        "type": "text",
+        "x": 410,
+        "y": 180,
+        "width": 220,
+        "height": 120,
+        "text": "4 $",
+        "color": "1"
+      },
+      {
+        "id": "margin",
+        "type": "text",
+        "x": 710,
+        "y": 80,
+        "width": 250,
+        "height": 140,
+        "text": "$1 - $2",
+        "color": "2"
+      },
+      {
+        "id": "months",
+        "type": "text",
+        "x": 410,
+        "y": 360,
+        "width": 220,
+        "height": 120,
+        "text": "36",
+        "color": "1"
+      },
+      {
+        "id": "cac",
+        "type": "text",
+        "x": 710,
+        "y": 360,
+        "width": 250,
+        "height": 120,
+        "text": "120 $",
+        "color": "1"
+      },
+      {
+        "id": "ltv",
+        "type": "text",
+        "x": 1040,
+        "y": 80,
+        "width": 250,
+        "height": 140,
+        "text": "$1 * $2",
+        "color": "2"
+      },
+      {
+        "id": "ratio",
+        "type": "text",
+        "x": 1370,
+        "y": 220,
+        "width": 250,
+        "height": 140,
+        "text": "$1 / $2",
+        "color": "6"
+      },
+      {
+        "id": "verdict",
+        "type": "text",
+        "x": 410,
+        "y": 540,
+        "width": 350,
+        "height": 130,
+        "text": "Соотношение ниже нормы: привлечение дорогое — снизьте цену привлечения или поднимите маржу.",
+        "color": "4"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "price",
+        "toNode": "margin",
+        "flowKind": "value"
+      },
+      {
+        "id": "e2",
+        "fromNode": "cogs",
+        "toNode": "margin",
+        "flowKind": "value"
+      },
+      {
+        "id": "e3",
+        "fromNode": "margin",
+        "toNode": "ltv",
+        "flowKind": "value"
+      },
+      {
+        "id": "e4",
+        "fromNode": "months",
+        "toNode": "ltv",
+        "flowKind": "value"
+      },
+      {
+        "id": "e5",
+        "fromNode": "ltv",
+        "toNode": "ratio",
+        "flowKind": "value"
+      },
+      {
+        "id": "e6",
+        "fromNode": "cac",
+        "toNode": "ratio",
+        "flowKind": "value"
+      }
+    ]
+  }
+}

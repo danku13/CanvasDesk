@@ -31,6 +31,9 @@ mod layout;
 pub mod mcp_text;
 mod model;
 mod providers;
+/// FR-049 (PRD-0008 T1): реестр шаблонов готовых схем — манифесты
+/// `assets/canvas-schemes/*/scheme.json`, валидатор, кэш OnceLock.
+pub mod schemes;
 /// M8/W3 (wasm-port §3.1/§6): протокол поискового индекса + трейт
 /// [`search::SearchBackend`] + [`search::MemSearch`] (web/тесты) — переехал
 /// из canvas-shell, чтобы нативная (FTS5) и web-реализации жили по разные

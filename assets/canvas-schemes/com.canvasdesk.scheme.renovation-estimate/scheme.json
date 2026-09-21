@@ -1,0 +1,139 @@
+{
+  "id": "com.canvasdesk.scheme.renovation-estimate",
+  "name_ru": "Смета ремонта",
+  "name_en": "Renovation estimate",
+  "description_ru": "Площади комнат на общую ставку плюс материалы: фан-аут одного входа на два расчёта.",
+  "description_en": "Room areas against a shared rate plus materials: one input fans out to two calculations.",
+  "category": "planning",
+  "category_ru": "Планирование",
+  "category_en": "Planning",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 60,
+        "width": 330,
+        "height": 180,
+        "text": "Ставка общая для комнат: один вход питает два расчёта. Итог складывает комнаты и материалы.",
+        "color": "4"
+      },
+      {
+        "id": "area-a",
+        "type": "text",
+        "x": 410,
+        "y": 0,
+        "width": 220,
+        "height": 120,
+        "text": "18",
+        "color": "1"
+      },
+      {
+        "id": "area-b",
+        "type": "text",
+        "x": 410,
+        "y": 180,
+        "width": 220,
+        "height": 120,
+        "text": "12",
+        "color": "1"
+      },
+      {
+        "id": "rate",
+        "type": "text",
+        "x": 410,
+        "y": 360,
+        "width": 220,
+        "height": 120,
+        "text": "25 $",
+        "color": "1"
+      },
+      {
+        "id": "cost-a",
+        "type": "text",
+        "x": 710,
+        "y": 60,
+        "width": 250,
+        "height": 140,
+        "text": "$1 * $2",
+        "color": "2"
+      },
+      {
+        "id": "cost-b",
+        "type": "text",
+        "x": 710,
+        "y": 260,
+        "width": 250,
+        "height": 140,
+        "text": "$1 * $2",
+        "color": "2"
+      },
+      {
+        "id": "materials",
+        "type": "text",
+        "x": 710,
+        "y": 470,
+        "width": 250,
+        "height": 120,
+        "text": "700 $",
+        "color": "1"
+      },
+      {
+        "id": "total",
+        "type": "text",
+        "x": 1050,
+        "y": 260,
+        "width": 250,
+        "height": 140,
+        "text": "$1 + $2 + $3",
+        "color": "6"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "area-a",
+        "toNode": "cost-a",
+        "flowKind": "value"
+      },
+      {
+        "id": "e2",
+        "fromNode": "rate",
+        "toNode": "cost-a",
+        "flowKind": "value"
+      },
+      {
+        "id": "e3",
+        "fromNode": "area-b",
+        "toNode": "cost-b",
+        "flowKind": "value"
+      },
+      {
+        "id": "e4",
+        "fromNode": "rate",
+        "toNode": "cost-b",
+        "flowKind": "value"
+      },
+      {
+        "id": "e5",
+        "fromNode": "cost-a",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e6",
+        "fromNode": "cost-b",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e7",
+        "fromNode": "materials",
+        "toNode": "total",
+        "flowKind": "value"
+      }
+    ]
+  }
+}
