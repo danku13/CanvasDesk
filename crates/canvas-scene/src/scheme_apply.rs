@@ -90,8 +90,7 @@ pub fn instantiate_scheme(
     let mut counters: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
 
     // Ремап id нод (порядок пакета стабилен → карта полна до рёбер).
-    let mut id_map: std::collections::HashMap<&str, String> =
-        std::collections::HashMap::new();
+    let mut id_map: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
     for node in &manifest.content.nodes {
         let prefix = if node.node_type == "group" {
             "group"
@@ -143,9 +142,7 @@ pub fn instantiate_scheme(
         loop {
             candidate = format!("edge-{edge_counter}");
             edge_counter += 1;
-            if !canvas.edges.iter().any(|e| e.id == candidate)
-                && !edge_used.contains(&candidate)
-            {
+            if !canvas.edges.iter().any(|e| e.id == candidate) && !edge_used.contains(&candidate) {
                 break;
             }
         }
@@ -162,12 +159,7 @@ pub fn instantiate_scheme(
     Ok(SchemeInstance {
         nodes,
         edges,
-        bbox: [
-            min_x + dx,
-            min_y + dy,
-            max_x + dx,
-            max_y + dy,
-        ],
+        bbox: [min_x + dx, min_y + dy, max_x + dx, max_y + dy],
     })
 }
 
@@ -229,9 +221,13 @@ mod tests {
     fn instancer_avoids_collisions_on_occupied_canvas() {
         let mut canvas = canvas_core::Canvas::default();
         for i in 1..=3 {
-            canvas.nodes.push(Node::text(format!("note-{i}"), "занято", 0.0, 0.0));
+            canvas
+                .nodes
+                .push(Node::text(format!("note-{i}"), "занято", 0.0, 0.0));
         }
-        canvas.edges.push(Edge::new("edge-1", "note-1", None, "note-2", None));
+        canvas
+            .edges
+            .push(Edge::new("edge-1", "note-1", None, "note-2", None));
         let manifest = SchemeRegistry::embedded()
             .get("com.canvasdesk.scheme.intro-calculations")
             .unwrap();
@@ -303,9 +299,11 @@ mod tests {
             .map(|n| n.id.clone())
             .zip(instance.nodes.iter().map(|n| n.id.clone()))
             .collect();
-        let mut canvas = canvas_core::Canvas::default();
-        canvas.nodes = instance.nodes;
-        canvas.edges = instance.edges;
+        let canvas = canvas_core::Canvas {
+            nodes: instance.nodes,
+            edges: instance.edges,
+            ..canvas_core::Canvas::default()
+        };
         let mut scene = crate::scene::SceneState::new(canvas, PathBuf::from("oracle.canvas"));
         scene.recompute_flow();
         (scene, map)
@@ -329,7 +327,10 @@ mod tests {
         let rps = value_of(&scene, &map, "rps");
         assert!((rps - 5000.0 / 30.0).abs() < 1e-6, "rps = {rps}");
         let util = value_of(&scene, &map, "util");
-        assert!((util - (5000.0 / 30.0) / 200.0).abs() < 1e-6, "util = {util}");
+        assert!(
+            (util - (5000.0 / 30.0) / 200.0).abs() < 1e-6,
+            "util = {util}"
+        );
     }
 
     #[test]
@@ -364,10 +365,7 @@ mod tests {
         let hint = scene.expr_line_results.get(&map["hint"]);
         // Нода-подсказка: все строки без результата (проза молчит).
         if let Some(lines) = hint {
-            assert!(
-                lines.iter().all(|line| line.is_none()),
-                "проза-нода молчит"
-            );
+            assert!(lines.iter().all(|line| line.is_none()), "проза-нода молчит");
         }
     }
 
@@ -376,7 +374,9 @@ mod tests {
     #[test]
     fn instantiate_into_occupied_canvas_recomputes() {
         let mut canvas = canvas_core::Canvas::default();
-        canvas.nodes.push(Node::text("note-1", "существующая нода", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("note-1", "существующая нода", 0.0, 0.0));
         let manifest = SchemeRegistry::embedded()
             .get("com.canvasdesk.scheme.intro-whatif")
             .unwrap();

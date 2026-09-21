@@ -55,7 +55,10 @@ impl SchemeGalleryState {
 
 /// Отфильтрованные строки: категория-чип + подстрока фильтра
 /// (название RU/EN, описание RU/EN, категория).
-pub fn rows<'a>(registry: &'a SchemeRegistry, state: &SchemeGalleryState) -> Vec<&'a SchemeManifest> {
+pub fn rows<'a>(
+    registry: &'a SchemeRegistry,
+    state: &SchemeGalleryState,
+) -> Vec<&'a SchemeManifest> {
     let filter = state.filter.to_lowercase();
     registry
         .list()
@@ -136,7 +139,7 @@ pub fn layout(
     let panel_h = max_h.min(chrome + ROW_H * list.len().max(1) as f32);
     let avail_rows_h = (panel_h - chrome).max(0.0);
     let visible = ((avail_rows_h / ROW_H).floor() as usize).max(1);
-    let shown = visible.min(list.len().saturating_sub(state.scroll_top)).max(0);
+    let shown = visible.min(list.len().saturating_sub(state.scroll_top));
 
     let x = (viewport[0] - panel_w) / 2.0;
     let y = (viewport[1] - panel_h) / 2.0;
@@ -156,7 +159,7 @@ pub fn layout(
     let all_w = 56.0f32.min(inner_w);
     chip_rects.push(([inner_x, chips_y, all_w, CHIP_H], None));
     cx += all_w + chip_gap;
-    for (key, _, _) in categories(&SchemeRegistry::embedded()) {
+    for (key, _, _) in categories(SchemeRegistry::embedded()) {
         let w = 120.0;
         if cx + w > inner_x + inner_w {
             break;
@@ -248,21 +251,21 @@ mod tests {
     fn rows_list_all_and_filter() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        assert_eq!(rows(&registry, &st).len(), registry.list().len());
+        assert_eq!(rows(registry, &st).len(), registry.list().len());
         let mut filtered = st.clone();
         filtered.filter = "смета".into();
-        let r = rows(&registry, &filtered);
+        let r = rows(registry, &filtered);
         assert!(!r.is_empty(), "фильтр по русскому названию находит");
         assert!(r.iter().all(|s| s.category == "planning"));
         let mut cat = st.clone();
         cat.category = Some("onboarding".into());
-        assert_eq!(rows(&registry, &cat).len(), 2, "две онбординг-схемы");
+        assert_eq!(rows(registry, &cat).len(), 2, "две онбординг-схемы");
     }
 
     #[test]
     fn categories_unique() {
         let registry = SchemeRegistry::embedded();
-        let cats = categories(&registry);
+        let cats = categories(registry);
         assert!(cats.len() >= 3, "G2: ≥ 3 категории");
         let mut keys: Vec<&String> = cats.iter().map(|(k, _, _)| k).collect();
         keys.sort();
@@ -274,7 +277,7 @@ mod tests {
     fn layout_clamps_to_small_viewport() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        let list = rows(&registry, &st);
+        let list = rows(registry, &st);
         // Инвариант 320×240: панель помещается, хотя бы одна строка видна.
         let lay = layout([320.0, 240.0], &list, &st);
         assert!(lay.panel_rect[2] <= 320.0);
@@ -300,7 +303,7 @@ mod tests {
     fn hit_tests_rows_chips_and_empty_buttons() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        let list = rows(&registry, &st);
+        let list = rows(registry, &st);
         let lay = layout([1280.0, 800.0], &list, &st);
         let rect = lay.row_rects[0];
         assert_eq!(
@@ -320,7 +323,13 @@ mod tests {
         let card = empty_card_rect([1280.0, 800.0]);
         let (open_btn, dismiss_btn) = empty_buttons(card);
         assert!(point_in_rect(card, [open_btn[0] + 2.0, open_btn[1] + 2.0]));
-        assert!(point_in_rect(card, [dismiss_btn[0] + 2.0, dismiss_btn[1] + 2.0]));
-        assert!(open_btn[0] + open_btn[2] <= dismiss_btn[0], "кнопки не пересекаются");
+        assert!(point_in_rect(
+            card,
+            [dismiss_btn[0] + 2.0, dismiss_btn[1] + 2.0]
+        ));
+        assert!(
+            open_btn[0] + open_btn[2] <= dismiss_btn[0],
+            "кнопки не пересекаются"
+        );
     }
 }

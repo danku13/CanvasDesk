@@ -249,8 +249,7 @@ impl SchemeRegistry {
         static REGISTRY: OnceLock<SchemeRegistry> = OnceLock::new();
         REGISTRY.get_or_init(|| {
             let mut schemes = Vec::new();
-            let mut dirs: Vec<&include_dir::Dir<'_>> =
-                EMBEDDED_SCHEMES.dirs().collect();
+            let mut dirs: Vec<&include_dir::Dir<'_>> = EMBEDDED_SCHEMES.dirs().collect();
             dirs.sort_by_key(|d| d.path());
             for dir in dirs {
                 // include_dir 0.7 хранит пути детей с префиксом корня
@@ -267,7 +266,9 @@ impl SchemeRegistry {
                 };
                 let text = file.contents_utf8().unwrap_or_default();
                 let manifest: SchemeManifest = serde_json::from_str(text)
-                    .map_err(|err| SchemeRegistryError::Parse(dir.path().display().to_string(), err))
+                    .map_err(|err| {
+                        SchemeRegistryError::Parse(dir.path().display().to_string(), err)
+                    })
                     .expect("built-in пакет схем разбирается");
                 manifest
                     .validate()
