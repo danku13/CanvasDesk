@@ -1039,7 +1039,7 @@ pub fn build_edge_instances_ctx(
 /// Выделение/hover ребра stage — бамп и цвет рамки выделения.
 pub fn build_stage_edge_instances(
     slice: &canvas_core::Canvas,
-    fan: &[f32],
+    lines: &[canvas_core::StageEdgeLine],
     weight: usize,
     selected: Option<usize>,
     hovered: Option<usize>,
@@ -1053,14 +1053,10 @@ pub fn build_stage_edge_instances(
         d += 1.0;
     }
     for (index, edge) in slice.edges.iter().enumerate() {
-        let Some(points) = canvas_core::stage_edge_points(
-            slice,
-            index,
-            fan.get(index).copied().unwrap_or(0.0),
-            EDGE_RENDER_SEGMENTS,
-        ) else {
+        let Some(line) = lines.get(index) else {
             continue;
         };
+        let points = &line.points;
         let fill = if selected == Some(index) || hovered == Some(index) {
             SELECTION_BORDER
         } else {
@@ -1073,7 +1069,7 @@ pub fn build_stage_edge_instances(
             )
         };
         let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
-        polyline_dots(&points, style, d, fill, true, &mut out);
+        polyline_dots(points, style, d, fill, true, &mut out);
     }
     out
 }

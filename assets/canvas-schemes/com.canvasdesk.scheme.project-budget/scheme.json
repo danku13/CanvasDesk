@@ -1,0 +1,181 @@
+{
+  "id": "com.canvasdesk.scheme.project-budget",
+  "name_ru": "Бюджет проекта",
+  "name_en": "Project budget",
+  "description_ru": "Статьи по группам, подытоги команд и инфраструктуры, резерв пятнадцать процентов и общий итог.",
+  "description_en": "Line items grouped by team and infrastructure, subtotals, a reserve line and the grand total.",
+  "category": "planning",
+  "category_ru": "Планирование",
+  "category_en": "Planning",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 60,
+        "width": 330,
+        "height": 170,
+        "text": "Итог складывает подытоги групп и резерв: резерв — пятнадцать процентов от команды. Поменяйте статью — всё пересчитается.",
+        "color": "4"
+      },
+      {
+        "id": "group-team",
+        "type": "group",
+        "x": 400,
+        "y": 0,
+        "width": 320,
+        "height": 340,
+        "color": "3",
+        "children": [
+          "salaries",
+          "teamtools"
+        ]
+      },
+      {
+        "id": "salaries",
+        "type": "text",
+        "x": 430,
+        "y": 60,
+        "width": 250,
+        "height": 120,
+        "text": "12000 $",
+        "color": "1"
+      },
+      {
+        "id": "teamtools",
+        "type": "text",
+        "x": 430,
+        "y": 200,
+        "width": 250,
+        "height": 120,
+        "text": "1500 $",
+        "color": "1"
+      },
+      {
+        "id": "group-infra",
+        "type": "group",
+        "x": 400,
+        "y": 380,
+        "width": 320,
+        "height": 340,
+        "color": "3",
+        "children": [
+          "hosting",
+          "licenses"
+        ]
+      },
+      {
+        "id": "hosting",
+        "type": "text",
+        "x": 430,
+        "y": 440,
+        "width": 250,
+        "height": 120,
+        "text": "800 $",
+        "color": "1"
+      },
+      {
+        "id": "licenses",
+        "type": "text",
+        "x": 430,
+        "y": 580,
+        "width": 250,
+        "height": 120,
+        "text": "600 $",
+        "color": "1"
+      },
+      {
+        "id": "team-total",
+        "type": "text",
+        "x": 820,
+        "y": 60,
+        "width": 250,
+        "height": 140,
+        "text": "$1 + $2",
+        "color": "2"
+      },
+      {
+        "id": "infra-total",
+        "type": "text",
+        "x": 820,
+        "y": 440,
+        "width": 250,
+        "height": 140,
+        "text": "$1 + $2",
+        "color": "2"
+      },
+      {
+        "id": "reserve",
+        "type": "text",
+        "x": 1150,
+        "y": 60,
+        "width": 250,
+        "height": 140,
+        "text": "$1 * 0.15",
+        "color": "2"
+      },
+      {
+        "id": "total",
+        "type": "text",
+        "x": 1150,
+        "y": 300,
+        "width": 250,
+        "height": 140,
+        "text": "$1 + $2 + $3",
+        "color": "6"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "salaries",
+        "toNode": "team-total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e2",
+        "fromNode": "teamtools",
+        "toNode": "team-total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e3",
+        "fromNode": "hosting",
+        "toNode": "infra-total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e4",
+        "fromNode": "licenses",
+        "toNode": "infra-total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e5",
+        "fromNode": "team-total",
+        "toNode": "reserve",
+        "flowKind": "value"
+      },
+      {
+        "id": "e6",
+        "fromNode": "team-total",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e7",
+        "fromNode": "infra-total",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e8",
+        "fromNode": "reserve",
+        "toNode": "total",
+        "flowKind": "value"
+      }
+    ]
+  }
+}

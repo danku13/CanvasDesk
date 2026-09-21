@@ -98,10 +98,13 @@ pub struct FanLabelLayout {
     pub compressed: bool,
 }
 
-/// Лейн-раскладка подписей значений веера (FR-044 Р-1, чистая функция).
+/// Лейн-раскладка подписей значений веера (FR-044 Р-1, чистая функция;
+/// владелец 2026-09-22: пилюля тянется к своей линии — элементы несут
+/// `preferred_x` = x середины своего ребра, клампится в коридор).
 ///
-/// - `items` — `(индекс ребра, ширина пилюли, высота пилюли)` в порядке
-///   рёбер веера (стабильный порядок `edge.id` на вызывающей стороне);
+/// - `items` — `(индекс ребра, ширина пилюли, высота пилюли, желаемый x
+///   центра)` в порядке рёбер веера (стабильный порядок `edge.id` на
+///   вызывающей стороне); `None` — центр коридора (как раньше);
 /// - `corridor` — горизонтальный коридор ([`fan_corridor`]);
 /// - `clamp_zone` — зона stage между заголовком и панелью «Как считается»;
 /// - `axis_y` — вертикальная ось веера (центрирование стопки).
@@ -113,12 +116,12 @@ pub struct FanLabelLayout {
 /// к нижней границе (пересечения возможны только в этом деградационном
 /// режиме — сигнал для сокращения текста, §Q2).
 pub fn stage_fan_label_layout(
-    items: Vec<(usize, f32, f32)>,
+    items: Vec<(usize, f32, f32, Option<f32>)>,
     corridor: Rect,
     clamp_zone: Rect,
     axis_y: f32,
 ) -> FanLabelLayout {
-    let heights: Vec<f32> = items.iter().map(|(_, _, h)| *h).collect();
+    let heights: Vec<f32> = items.iter().map(|(_, _, h, _)| *h).collect();
     let sum_h: f32 = heights.iter().sum();
     let n = items.len();
     let total = if n > 1 {
@@ -156,10 +159,24 @@ pub fn stage_fan_label_layout(
     } else {
         top
     };
-    for (item, w, h) in items {
-        // Горизонталь: центр коридора, кламп внутрь (инвариант 2).
-        let mut x = corridor.x + (corridor.w - w) / 2.0;
+    for (item, w, h, preferred_x) in items {
+        // Горизонталь: пилюля тянется к середине СВОЕЙ линии (прототип:
+        // `clamp(mid.x, zL+w/2+4, zR-w/2-4)`), при перепашке — центр
+        // коридора; затем кламп внутрь (инвариант 2).
+        let natural_center = preferred_x.unwrap_or(corridor.x + corridor.w / 2.0);
+        let m = 4.0;
+        let lo = corridor.x + w / 2.0 + m;
+        let hi = corridor.right() - w / 2.0 - m;
         let mut clamped = false;
+        let mut x = if lo <= hi {
+            let center = natural_center.clamp(lo, hi);
+            clamped = (center - natural_center).abs() > f32::EPSILON;
+            center - w / 2.0
+        } else {
+            // Перепашка: пилюля шире коридора — центр с клампом
+            clamped |= preferred_x.is_some();
+            corridor.x + (corridor.w - w) / 2.0
+        };
         if corridor.w > 0.0 && x < corridor.x {
             x = corridor.x;
             clamped = true;
@@ -216,14 +233,8 @@ pub const BUNDLE_THICKNESS_BASE: f32 = 1.8;
 pub const BUNDLE_THICKNESS_STEP: f32 = 0.9;
 /// Кап толщины: очень крупные пучки не превращаются в трубы.
 pub const BUNDLE_THICKNESS_MAX: f32 = 8.0;
-/// Зазор между соседними линиями веера в stage поверх толщины (px).
-pub const STAGE_FAN_GAP_PX: f32 = 6.0;
 /// Максимальная доля стороны вьюпорта (PRD-0002 §7.2: «≤ 70%»).
 pub const MAIN_STAGE_MAX_FRACTION: f32 = 0.7;
-/// Абсолютный кап ширины stage, px.
-pub const STAGE_MAX_W: f32 = 1280.0;
-/// Абсолютный кап высоты stage, px.
-pub const STAGE_MAX_H: f32 = 800.0;
 /// Поле stage от краёв окна при клампе, px.
 pub const STAGE_MARGIN: f32 = 24.0;
 /// Горизонтальный отступ нод от краёв stage в stage-единицах, px.
@@ -236,34 +247,19 @@ pub fn bundle_thickness(weight: usize) -> f32 {
         .min(BUNDLE_THICKNESS_MAX)
 }
 
-/// Шаг веера stage: не меньше толщины линии + зазор (инвариант 6).
-pub fn stage_fan_spacing(weight: usize) -> f32 {
-    bundle_thickness(weight) + STAGE_FAN_GAP_PX
-}
-
-/// Симметричные перпендикулярные смещения рёбер веера (FR-042 §4):
-/// `[-(k-1)/2·s, …, +(k-1)/2·s]`, детерминировано; k = 0 → пусто.
-pub fn stage_edge_fan(count: usize, spacing: f32) -> Vec<f32> {
-    if count == 0 {
-        return Vec::new();
-    }
-    (0..count)
-        .map(|i| (i as f32 - (count as f32 - 1.0) / 2.0) * spacing)
-        .collect()
-}
-
 /// Прямоугольник main stage (инвариант 4 FR-042): центрирован, обе стороны
-/// ≤ 70% соответствующей стороны вьюпорта (и ≤ абсолютных капов), целиком
-/// внутри окна с полем [`STAGE_MARGIN`] при любых пропорциях.
+/// = 70% соответствующей стороны вьюпорта (владелец, 2026-09-22: stage
+/// должен масштабироваться ДО 70% поля видимости — абсолютные капы
+/// 1280×800 сняты: на экранах крупнее 1830×1140 они сжимали stage ниже
+/// ожидаемых 70%), целиком внутри окна с полем [`STAGE_MARGIN`] при любых
+/// пропорциях.
 pub fn main_stage_rect(viewport: [f32; 2]) -> Rect {
     let vw = viewport[0].max(0.0);
     let vh = viewport[1].max(0.0);
     let w = (vw * MAIN_STAGE_MAX_FRACTION)
-        .min(STAGE_MAX_W)
         .min(vw - STAGE_MARGIN * 2.0)
         .max(1.0);
     let h = (vh * MAIN_STAGE_MAX_FRACTION)
-        .min(STAGE_MAX_H)
         .min(vh - STAGE_MARGIN * 2.0)
         .max(1.0);
     Rect {
@@ -452,60 +448,302 @@ pub fn stage_layout(source_size: [f32; 2], target_size: [f32; 2], rect: &Rect) -
     }
 }
 
-/// Единичная нормаль веера: перпендикуляр к оси «центр истока → центр
-/// приёмника» среза (слайс stage содержит ровно 2 ноды). None — нод не две
-/// или ось вырождена.
-pub fn stage_fan_normal(slice: &Canvas) -> Option<[f32; 2]> {
-    let a = slice.nodes.first()?;
-    let b = slice.nodes.get(1)?;
-    let ax = b.x + b.width / 2.0 - (a.x + a.width / 2.0);
-    let ay = b.y + b.height / 2.0 - (a.y + a.height / 2.0);
-    let len = ax.hypot(ay);
-    if len < f32::EPSILON {
+/// Шаг веера внутри группы рёбер с одинаковыми якорями (прототип R7,
+/// drawStage: `off = (i-(g-1)/2)*12` — ±12 px по вертикали).
+pub const STAGE_FAN_GROUP_STEP_PX: f32 = 12.0;
+
+/// Метрики анатомии карточки (PRD-0004), нужные геометрии строк значений.
+/// Заполняется вызывающим из констант рендера (HEADER_HEIGHT/BODY_*),
+/// чтобы рендер и геометрия веера не разъезжались; Default — значения
+/// дизайн-токенов (`canvas_core::tokens`: CARD_HEADER_HEIGHT/TYPE_*).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StageMetrics {
+    /// Высота шапки карточки (HEADER_HEIGHT).
+    pub header_h: f32,
+    /// Отступ тела от шапки (BODY_TOP_GAP).
+    pub body_top_gap: f32,
+    /// Шаг строк тела (BODY_LINE_HEIGHT).
+    pub body_line: f32,
+    /// Высота строки результата (RESULT_LINE_HEIGHT).
+    pub result_line: f32,
+    /// Внутренний отступ карточки (BODY_PADDING).
+    pub body_padding: f32,
+    /// Доп. зазор полосы результата (strip = result_line + extra).
+    pub strip_extra: f32,
+}
+
+impl Default for StageMetrics {
+    fn default() -> Self {
+        Self {
+            header_h: 34.0,
+            body_top_gap: 4.0,
+            body_line: 20.0,
+            result_line: 16.0,
+            body_padding: 10.0,
+            strip_extra: 6.0,
+        }
+    }
+}
+
+/// Якоря веера по рёбрам среза: `[i] = (точка истока, точка приёмника)`
+/// в stage-локальных px ([`stage_edge_anchor_points`]).
+pub type StageAnchors = Vec<([f32; 2], [f32; 2])>;
+
+/// Линия веера stage: якоря (с групповым смещением), полилиния кривой и
+/// середина (порядок/привязка пилюль). Единая геометрия рендера и hit-test'а.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageEdgeLine {
+    /// Полилиния Безье (segments+1 точка), stage-локальные px.
+    pub points: Vec<[f32; 2]>,
+    /// Точка истока (правый край ноды-истока на строке значения).
+    pub from: [f32; 2],
+    /// Точка приёмника (левый край ноды-приёмника на строке параметра).
+    pub to: [f32; 2],
+    /// Середина кривой (t = 0.5) — порядок и привязка пилюль.
+    pub mid: [f32; 2],
+}
+
+/// Центр вертикали строки `li` тела ноды (stage-локальные px).
+fn stage_row_center(node: &crate::model::Node, metrics: &StageMetrics, li: usize) -> f32 {
+    node.y
+        + metrics.header_h
+        + metrics.body_top_gap
+        + li as f32 * metrics.body_line
+        + metrics.body_line / 2.0
+}
+
+/// Вертикаль строки с клампом в диапазон отображаемых строк; строк нет —
+/// фолбэк (центр полосы результата или центр ноды).
+fn stage_row_y(
+    node: &crate::model::Node,
+    metrics: &StageMetrics,
+    rows: usize,
+    li: usize,
+    fallback: f32,
+) -> f32 {
+    if rows == 0 {
+        fallback
+    } else {
+        stage_row_center(node, metrics, li.min(rows - 1))
+    }
+}
+
+/// Число отображаемых строк тела (та же формула, что в отрисовке карточки:
+/// строки сверх высоты тела не рисуются). Не-текст/пустой текст — 0.
+fn stage_row_count(node: &crate::model::Node, metrics: &StageMetrics, has_footer: bool) -> usize {
+    if node.kind() != crate::model::NodeKind::Text {
+        return 0;
+    }
+    let text_lines = node.text.as_deref().map(|t| t.lines().count()).unwrap_or(0);
+    if text_lines == 0 {
+        return 0;
+    }
+    let footer_h = if has_footer {
+        metrics.result_line + metrics.strip_extra
+    } else {
+        0.0
+    };
+    let avail_h =
+        (node.height - metrics.header_h - metrics.body_top_gap - metrics.body_padding - footer_h)
+            .max(0.0);
+    let max_rows = ((avail_h / metrics.body_line).floor() as usize).max(1);
+    text_lines.min(max_rows)
+}
+
+/// Центр полосы результата (футера), если он есть.
+fn stage_strip_center(
+    node: &crate::model::Node,
+    metrics: &StageMetrics,
+    has_footer: bool,
+) -> Option<f32> {
+    if !has_footer {
         return None;
     }
-    Some([-ay / len, ax / len])
+    let strip_h = metrics.result_line + metrics.strip_extra;
+    Some(node.y + node.height - metrics.body_padding - strip_h / 2.0)
 }
 
-/// Полилиния ребра среза со смещением веера: polyline ребра слайса,
-/// каждая точка сдвинута на `fan_offset * нормаль` (FR-042 §4 —
-/// перпендикулярно оси A→B). Единая формула для рендера и hit-test'а.
-pub fn stage_edge_points(
+/// Строка присваивания `name = …` в Numi-листе (зеркало
+/// `canvas_scene::assignment_line` — ядро не зависит от scene).
+fn assignment_line_of(text: &str, name: &str) -> Option<usize> {
+    text.split('\n').position(|line| {
+        line.split_once('=')
+            .map(|(n, _)| n.trim() == name)
+            .unwrap_or(false)
+    })
+}
+
+/// Точная привязка рёбер среза к строкам значений (владелец, 2026-09-22:
+/// «точки выходов/входов — к строкам, на которых значения»; прототип
+/// `portPos`: порты сидят на вертикали своих строк).
+///
+/// - исток: `from_line` → центр той строки; `from_output` → строка
+///   присваивания переменной; иначе — центр полосы результата (есть футер)
+///   либо равномерное распределение по строкам;
+/// - приёмник: `to_param` → строка присваивания параметра; без параметра —
+///   равномерное распределение по строкам (позиционные слоты `$N`);
+/// - строк нет (не-текст/пусто) — центр ноды по вертикали.
+///
+/// Якорь истока — правый край ноды-истока, приёмника — левый край
+/// ноды-приёмника. Детерминировано: порядок распределения — порядок рёбер
+/// среза (стабилен по `edge.id` на вызывающей стороне).
+pub fn stage_edge_anchor_points(
     slice: &Canvas,
-    edge_index: usize,
-    fan_offset: f32,
-    segments: usize,
-) -> Option<Vec<[f32; 2]>> {
-    let edge = slice.edges.get(edge_index)?;
-    let normal = stage_fan_normal(slice)?;
-    let points = crate::edge_polyline(slice, edge, false, segments)?;
-    if fan_offset.abs() < f32::EPSILON {
-        return Some(points);
+    metrics: &StageMetrics,
+    footers: [bool; 2],
+) -> StageAnchors {
+    let (Some(src), Some(dst)) = (slice.nodes.first(), slice.nodes.get(1)) else {
+        return Vec::new();
+    };
+    let src_cy = src.y + src.height / 2.0;
+    let dst_cy = dst.y + dst.height / 2.0;
+    let src_rows = stage_row_count(src, metrics, footers[0]);
+    let dst_rows = stage_row_count(dst, metrics, footers[1]);
+    let src_strip = stage_strip_center(src, metrics, footers[0]);
+    let src_text = src.text.as_deref().unwrap_or_default();
+    let dst_text = dst.text.as_deref().unwrap_or_default();
+
+    let row_y = |node: &crate::model::Node, rows: usize, li: usize, fallback: f32| {
+        stage_row_y(node, metrics, rows, li, fallback)
+    };
+    // Распределение k рёбер без точной строки по полосе строк (прототип:
+    // `rt + span*(i+0.5)/n`): i-е из k → строка floor((i+0.5)*rows/k).
+    let distribute = |node: &crate::model::Node, k: usize, i: usize, rows: usize, fallback: f32| {
+        if rows == 0 {
+            return fallback;
+        }
+        let idx = (((i as f32 + 0.5) * rows as f32) / k.max(1) as f32).floor() as usize;
+        stage_row_center(node, metrics, idx.min(rows - 1))
+    };
+
+    // 1) Точные якоря истока (from_line/from_output); остальное — в очередь
+    let mut src_y: Vec<Option<f32>> = Vec::with_capacity(slice.edges.len());
+    let mut src_queue: Vec<usize> = Vec::new();
+    for (i, edge) in slice.edges.iter().enumerate() {
+        let exact = if let Some(line) = edge.from_line {
+            Some(row_y(src, src_rows, line, src_cy))
+        } else if let Some(output) = edge.from_output.as_deref() {
+            assignment_line_of(src_text, output)
+                .map(|li| row_y(src, src_rows, li, src_cy))
+                .or(src_strip)
+        } else {
+            src_strip
+        };
+        if exact.is_some() {
+            src_y.push(exact);
+        } else {
+            src_y.push(None);
+            src_queue.push(i);
+        }
     }
-    Some(
-        points
-            .into_iter()
-            .map(|p| [p[0] + normal[0] * fan_offset, p[1] + normal[1] * fan_offset])
-            .collect(),
-    )
+    for (k, &i) in src_queue.iter().enumerate() {
+        src_y[i] = Some(distribute(src, src_queue.len(), k, src_rows, src_cy));
+    }
+
+    // 2) Приёмник: to_param → строка присваивания; остальное — в очередь
+    let mut dst_y: Vec<Option<f32>> = Vec::with_capacity(slice.edges.len());
+    let mut dst_queue: Vec<usize> = Vec::new();
+    for (i, edge) in slice.edges.iter().enumerate() {
+        let exact = edge
+            .to_param
+            .as_deref()
+            .and_then(|param| assignment_line_of(dst_text, param))
+            .map(|li| row_y(dst, dst_rows, li, dst_cy));
+        if exact.is_some() {
+            dst_y.push(exact);
+        } else {
+            dst_y.push(None);
+            dst_queue.push(i);
+        }
+    }
+    for (k, &i) in dst_queue.iter().enumerate() {
+        dst_y[i] = Some(distribute(dst, dst_queue.len(), k, dst_rows, dst_cy));
+    }
+
+    // 3) Якоря: исток — правый край, приёмник — левый край (прототип portPos)
+    slice
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            (
+                [src.x + src.width, src_y[i].unwrap_or(src_cy)],
+                [dst.x, dst_y[i].unwrap_or(dst_cy)],
+            )
+        })
+        .collect()
 }
 
-/// Hit-test рёбер среза с веером (FR-042 §Changes-4, ввод внутри stage):
-/// индекс среза с минимальной дистанцией в допуске; None — промах.
-pub fn stage_edge_at(
+/// Линии веера из якорей ([`stage_edge_anchor_points`]): рёбра с
+/// ОДИНАКОВЫМИ якорями расходятся шагом [`STAGE_FAN_GROUP_STEP_PX`]
+/// по вертикали (прототип: смещение в группе одного порта), кривая —
+/// кубическая Безье с горизонтальными плечами
+/// `dx = clamp(0.45·длины, 40, 130)` (прототип drawStage). Детерминировано.
+pub fn stage_edge_lines(
     slice: &Canvas,
-    fan: &[f32],
+    anchors: &StageAnchors,
+    segments: usize,
+) -> Vec<StageEdgeLine> {
+    if slice.edges.is_empty() {
+        return Vec::new();
+    }
+    // Группы одинаковых якорей: ключ — округлённая пара вертикалей (×2 →
+    // полупиксельная точность, целочисленный ключ без Float-хэша).
+    let key = |a: &[f32; 2], b: &[f32; 2]| -> (i64, i64) {
+        ((a[1] * 2.0).round() as i64, (b[1] * 2.0).round() as i64)
+    };
+    let mut groups: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, (a, b)) in anchors.iter().enumerate().take(slice.edges.len()) {
+        groups.entry(key(a, b)).or_default().push(i);
+    }
+    let mut out = Vec::with_capacity(slice.edges.len());
+    for (i, (a, b)) in anchors.iter().enumerate().take(slice.edges.len()) {
+        let group = &groups[&key(a, b)];
+        let pos = group.iter().position(|&g| g == i).unwrap_or(0);
+        let dy = (pos as f32 - (group.len() as f32 - 1.0) / 2.0) * STAGE_FAN_GROUP_STEP_PX;
+        let p0 = [a[0], a[1] + dy];
+        let p3 = [b[0], b[1] + dy];
+        let dx = ((p3[0] - p0[0]).abs() * 0.45).clamp(40.0, 130.0);
+        let curve = crate::CubicBezier {
+            p0,
+            c0: [p0[0] + dx, p0[1]],
+            c1: [p3[0] - dx, p3[1]],
+            p1: p3,
+        };
+        let mid = crate::curve_point(&curve, 0.5);
+        out.push(StageEdgeLine {
+            points: crate::tessellate(&curve, segments.max(1)),
+            from: p0,
+            to: p3,
+            mid,
+        });
+    }
+    out
+}
+
+/// Полные линии веера среза: якоря + кривые одной причиной (удобство для
+/// рендера и hit-test'а — одна и та же геометрия на кадре).
+pub fn stage_edge_geometry(
+    slice: &Canvas,
+    metrics: &StageMetrics,
+    footers: [bool; 2],
+    segments: usize,
+) -> Vec<StageEdgeLine> {
+    let anchors = stage_edge_anchor_points(slice, metrics, footers);
+    stage_edge_lines(slice, &anchors, segments)
+}
+
+/// Hit-test линий веера (FR-042 §Changes-4, ввод внутри stage): индекс
+/// среза с минимальной дистанцией в допуске; None — промах.
+pub fn stage_edge_at_lines(
+    lines: &[StageEdgeLine],
     point: [f32; 2],
     tolerance: f32,
 ) -> Option<usize> {
     let mut best: Option<(f32, usize)> = None;
-    for index in 0..slice.edges.len() {
-        let offset = fan.get(index).copied().unwrap_or(0.0);
-        let Some(points) = stage_edge_points(slice, index, offset, 24) else {
-            continue;
-        };
+    for (index, line) in lines.iter().enumerate() {
         let mut dist = f32::INFINITY;
-        for w in points.windows(2) {
+        for w in line.points.windows(2) {
             let d = point_segment_distance(point, w[0], w[1]);
             if d < dist {
                 dist = d;
@@ -542,8 +780,8 @@ mod tests {
     const PILL_W: f32 = 170.0;
     const PILL_H: f32 = 24.0;
 
-    fn demo_items(n: usize) -> Vec<(usize, f32, f32)> {
-        (0..n).map(|i| (i, PILL_W, PILL_H)).collect()
+    fn demo_items(n: usize) -> Vec<(usize, f32, f32, Option<f32>)> {
+        (0..n).map(|i| (i, PILL_W, PILL_H, None)).collect()
     }
 
     fn zone(y: f32, h: f32) -> Rect {
@@ -627,8 +865,12 @@ mod tests {
             w: 300.0,
             h: 400.0,
         };
-        let layout =
-            stage_fan_label_layout(vec![(0, 500.0, PILL_H)], corridor, zone(0.0, 400.0), 200.0);
+        let layout = stage_fan_label_layout(
+            vec![(0, 500.0, PILL_H, None)],
+            corridor,
+            zone(0.0, 400.0),
+            200.0,
+        );
         let pill = &layout.pills[0];
         assert!(pill.clamped);
         assert_eq!(
@@ -694,6 +936,34 @@ mod tests {
         for pill in &layout.pills {
             assert!(zone(300.0, 200.0).contains_fully(&pill.rect));
         }
+    }
+
+    /// preferred_x: пилюля тянется к x середины СВОЕЙ линии, кламп в
+    /// коридор; без желаемого — центр коридора (прежнее поведение).
+    #[test]
+    fn fan_layout_preferred_x_follows_edge_mid() {
+        let corridor = corridor_demo(); // x=100, w=500 → центр 350
+                                        // Три пилюли с разными mid.x
+        let items = vec![
+            (0, PILL_W, PILL_H, Some(200.0)),
+            (1, PILL_W, PILL_H, Some(350.0)),
+            (2, PILL_W, PILL_H, Some(900.0)), // за пределами — кламп вправо
+        ];
+        let layout = stage_fan_label_layout(items, corridor, zone(0.0, 400.0), 200.0);
+        let cx = |p: &FanPill| p.rect.x + p.rect.w / 2.0;
+        assert!(
+            (cx(&layout.pills[0]) - 200.0).abs() < 0.01,
+            "по своей линии"
+        );
+        assert!((cx(&layout.pills[1]) - 350.0).abs() < 0.01, "центр совпал");
+        assert!(
+            cx(&layout.pills[2]) <= corridor.right() - 4.0 + 0.01,
+            "кламп вправо"
+        );
+        assert!(layout.pills[2].clamped, "кламп зафиксирован");
+        // Без preferred — центр коридора
+        let plain = stage_fan_label_layout(demo_items(1), corridor, zone(0.0, 400.0), 200.0);
+        assert!((cx(&plain.pills[0]) - 350.0).abs() < 0.01);
     }
 }
 
@@ -860,69 +1130,138 @@ mod fr042_tests {
         }
     }
 
-    /// Инвариант 6: веер симметричен, шаг равен spacing, детерминирован;
-    /// чёт/нечёт.
+    /// Веер (новая геометрия, владелец 2026-09-22): якоря на строках
+    /// значений, группы одинаковых якорей расходятся ±12 px, кривые
+    /// детерминированы, hit-test ловит свою линию.
     #[test]
-    fn fan_symmetry_and_spacing() {
-        let s = stage_fan_spacing(4);
-        let even = stage_edge_fan(4, s);
-        assert_eq!(even.len(), 4);
-        assert!((even[0] + even[3]).abs() < 1e-5 && (even[1] + even[2]).abs() < 1e-5);
-        assert!((even[1] - even[0] - s).abs() < 1e-5, "шаг = spacing");
-        let odd = stage_edge_fan(5, s);
-        assert!(odd.iter().any(|o| o.abs() < 1e-6), "нечёт: центральная — 0");
-        assert_eq!(stage_edge_fan(0, s).len(), 0);
-        assert_eq!(even, stage_edge_fan(4, s), "детерминизм");
-        assert!(s > bundle_thickness(4), "шаг больше толщины");
+    fn stage_anchors_rows_groups_and_hit() {
+        let mut slice = Canvas::default();
+        // Исток: 2 строки значений («10 $» / «4 $»); приёмник: «$1 - $2»
+        let mut a = Node::text("a", "10 $\n4 $", 0.0, 0.0);
+        a.width = 220.0;
+        a.height = 120.0;
+        let mut b = Node::text("b", "$1 - $2", 500.0, 0.0);
+        b.width = 250.0;
+        b.height = 140.0;
+        slice.nodes.push(a);
+        slice.nodes.push(b);
+        let mut e1 = Edge::new("f1", "a", None, "b", None);
+        e1.from_line = Some(0);
+        let mut e2 = Edge::new("f2", "a", None, "b", None);
+        e2.from_line = Some(1);
+        let e3 = Edge::new("f3", "a", None, "b", None); // без строки — распределение
+        slice.add_edge(e1);
+        slice.add_edge(e2);
+        slice.add_edge(e3);
+        let metrics = StageMetrics::default();
+        let anchors = stage_edge_anchor_points(&slice, &metrics, [false, false]);
+        assert_eq!(anchors.len(), 3);
+        // Якорь истока — правый край; from_line=0/1 сидят на центрах строк
+        let src_right = slice.nodes[0].x + slice.nodes[0].width;
+        assert!((anchors[0].0[0] - src_right).abs() < 1e-4);
+        let row0 = stage_row_center(&slice.nodes[0], &metrics, 0);
+        let row1 = stage_row_center(&slice.nodes[0], &metrics, 1);
+        assert!((anchors[0].0[1] - row0).abs() < 1e-4, "строка 0");
+        assert!((anchors[1].0[1] - row1).abs() < 1e-4, "строка 1");
+        // Ребро без from_line: футера нет → распределение по строкам
+        let dist_y = anchors[2].0[1];
+        assert!(
+            (dist_y - row0).abs() < 1e-4 || (dist_y - row1).abs() < 1e-4,
+            "распределение попало в строку значения"
+        );
+        // Приёмник: 3 ребра без to_param → 2 строки тела, 3 ребра → группы
+        // по строкам: первое и третье совпадут (floor), якоря различны
+        let dst_left = slice.nodes[1].x;
+        for (a, b) in &anchors {
+            assert!((b[0] - dst_left).abs() < 1e-4, "левый край приёмника");
+            let _ = a;
+        }
+        // Линии: одинаковые якоря расходятся ±12 px (группы)
+        let lines = stage_edge_lines(&slice, &anchors, 24);
+        assert_eq!(lines.len(), 3);
+        for line in &lines {
+            assert!(
+                (line.points[0][0] - src_right).abs() < 1e-4,
+                "старт у порта истока"
+            );
+            let last = line.points.last().expect("точки");
+            assert!((last[0] - dst_left).abs() < 1e-4, "финиш у порта приёмника");
+        }
+        // Рёбра 0 и 2 попадают в одну строку приёмника при распределении —
+        // их якоря различны по вертикали хотя бы с одной стороны (группы/строки)
+        let distinct = lines
+            .iter()
+            .map(|l| (l.from[1], l.to[1]))
+            .collect::<Vec<_>>();
+        assert!(
+            distinct[0] != distinct[1] || distinct[0] != distinct[2],
+            "веер разводит линии по вертикалям"
+        );
+        // Hit-test: точка середины линии 1 ловит индекс 1
+        let mid = lines[1].mid;
+        assert_eq!(stage_edge_at_lines(&lines, mid, 4.0), Some(1));
+        // Мимо всех линий
+        assert_eq!(
+            stage_edge_at_lines(&lines, [mid[0], mid[1] + 500.0], 6.0),
+            None
+        );
+        // Детерминизм
+        let again = stage_edge_lines(&slice, &anchors, 24);
+        assert_eq!(lines, again);
     }
 
-    /// Инвариант 5/6: hit-test веера — попадание в свою линию (точки
-    /// берутся с самих полилиний веера), промах мимо веера, допуск от
-    /// толщины.
+    /// Привязка приёмника к параметру: to_param сидит на строке присваивания
+    /// параметра в Numi-листе приёмника (прототип: вход на строке значения).
     #[test]
-    fn stage_hit_test() {
+    fn stage_anchor_target_param_row() {
         let mut slice = Canvas::default();
-        slice.nodes.push(Node::text("a", "A", 0.0, 0.0));
-        slice.nodes.push(Node::text("b", "B", 400.0, 0.0));
-        let e = |id: &str| Edge::new(id, "a", None, "b", None);
-        slice.add_edge(e("f1"));
-        slice.add_edge(e("f2"));
-        slice.add_edge(e("f3"));
-        let spacing = stage_fan_spacing(3);
-        let fan = stage_edge_fan(3, spacing);
-        let normal = stage_fan_normal(&slice).expect("нормаль");
-        assert!((normal[0].abs() - 0.0).abs() < 1e-4 && (normal[1] - 1.0).abs() < 1e-4);
-        // Точка середины средней линии веера — попадание в индекс 1;
-        // середина верхней — в индекс 2.
-        let mid_of = |index: usize| {
-            let points = stage_edge_points(&slice, index, fan[index], 24).expect("полилиния");
-            let mid = points[points.len() / 2];
-            (mid[0], mid[1])
-        };
-        let (cx, cy) = mid_of(1);
-        assert_eq!(
-            stage_edge_at(&slice, &fan, [cx, cy], 4.0),
-            Some(1),
-            "центральная"
-        );
-        let (ux, uy) = mid_of(2);
-        assert_eq!(
-            stage_edge_at(&slice, &fan, [ux, uy], 3.0),
-            Some(2),
-            "верхняя"
-        );
-        // Допуск от толщины: точка на d/2 от средней линии ловится при
-        // допуске max(EDGE_HIT_TOLERANCE, d/2 + 2.0)
-        let half = bundle_thickness(3) / 2.0 + 1.0;
-        let (nx, ny) = mid_of(0);
-        let _ = (nx, ny);
-        let near = [cx + normal[0] * half, cy + normal[1] * half];
+        let mut a = Node::text("a", "5", 0.0, 0.0);
+        a.width = 200.0;
+        a.height = 100.0;
+        // Приёмник: параметр rps присваивается на второй строке (индекс 1)
+        let mut b = Node::text("b", "цена = 9 $\nrps = $in\nитог = rps * 2", 400.0, 0.0);
+        b.width = 300.0;
+        b.height = 200.0;
+        slice.nodes.push(a);
+        slice.nodes.push(b);
+        let mut e = Edge::new("f1", "a", None, "b", None);
+        e.to_param = Some("rps".to_owned());
+        slice.add_edge(e);
+        let metrics = StageMetrics::default();
+        let anchors = stage_edge_anchor_points(&slice, &metrics, [false, false]);
+        // строка 1: header 34 + gap 4 + 1*20 + 10 = 68
         assert!(
-            stage_edge_at(&slice, &fan, near, half + 2.0).is_some(),
-            "допуск от толщины"
+            (anchors[0].1[1] - 68.0).abs() < 1e-4,
+            "якорь на строке параметра"
         );
-        // Мимо всех линий — далеко перпендикулярно оси
-        assert_eq!(stage_edge_at(&slice, &fan, [cx, cy + 500.0], 6.0), None);
+    }
+
+    /// Без строк и футера якоря — центры сторон нод; одинаковые якоря
+    /// расходятся группой ±12 px (пучок из 3 → -12/0/+12).
+    #[test]
+    fn stage_fan_group_offsets_on_identical_anchors() {
+        let mut slice = Canvas::default();
+        let mut a = Node::text("a", "A", 0.0, 0.0);
+        a.width = 200.0;
+        a.height = 100.0;
+        let mut b = Node::text("b", "B", 400.0, 0.0);
+        b.width = 200.0;
+        b.height = 100.0;
+        slice.nodes.push(a);
+        slice.nodes.push(b);
+        for id in ["f1", "f2", "f3"] {
+            slice.add_edge(Edge::new(id, "a", None, "b", None));
+        }
+        let metrics = StageMetrics::default();
+        let lines = stage_edge_geometry(&slice, &metrics, [false, false], 24);
+        let ys: Vec<f32> = lines.iter().map(|l| l.from[1]).collect();
+        // Одиночная строка «A»: центр строки = 34 (шапка) + 4 (gap) + 10 = 48
+        assert!((ys[0] - (ys[1] - 12.0)).abs() < 1e-4, "-12");
+        assert!(
+            (ys[1] - 48.0).abs() < 1e-4,
+            "якорь на центре единственной строки"
+        );
+        assert!((ys[2] - (ys[1] + 12.0)).abs() < 1e-4, "+12");
     }
 
     /// Раскладка stage: натуральный случай — масштаб 1, коридор между
