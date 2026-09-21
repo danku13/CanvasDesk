@@ -19,7 +19,7 @@
 //! меняется — это реорганизация UI.
 
 use canvas_core::{
-    Corner, GridDensity, GridStyle, Language, Settings, Theme, PORT_ZONE_PRESETS,
+    theme_presets, Corner, GridDensity, GridStyle, Language, Settings, Theme, PORT_ZONE_PRESETS,
     SNAP_COARSE_ZOOM_PRESETS, SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_PRESETS,
 };
 
@@ -103,6 +103,10 @@ pub enum SettingsRow {
     HudOnStart,
     /// FR-040: язык интерфейса (русский/English).
     Language,
+    /// FR-047 (PRD-0006 D4/F-8): тема-пресет (Nord, Dracula, Catppuccin,
+    /// Solarized, Tokyo Night, Gruvbox) — dropdown в табе «Внешний вид»;
+    /// «Классическая» = выбор по карточкам тёмной/светлой.
+    ThemePreset,
 
     /// FR-038 (п.5): мастер-тумблер магнитной раскладки — гасит весь снап
     /// без сброса остальных настроек.
@@ -124,7 +128,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 18] = [
+pub const SETTINGS_ROWS: [SettingsRow; 19] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -142,6 +146,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 18] = [
     SettingsRow::SnapCoarseZoom,
     SettingsRow::FocusMode,
     SettingsRow::HudOnStart,
+    SettingsRow::ThemePreset,
     SettingsRow::Language,
 ];
 
@@ -210,7 +215,7 @@ pub const SETTINGS_TABS: [SettingsTab; 5] = [
         title_key: keys::TAB_APPEARANCE,
         icon: "◐",
         theme_cards: true,
-        rows: &[SettingsRow::Language],
+        rows: &[SettingsRow::ThemePreset, SettingsRow::Language],
     },
 ];
 
@@ -228,6 +233,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::BottleneckOverlay => keys::ROW_BOTTLENECK,
         SettingsRow::FocusMode => keys::ROW_FOCUS_MODE,
         SettingsRow::HudOnStart => keys::ROW_HUD_ON_START,
+        SettingsRow::ThemePreset => keys::ROW_THEME_PRESET,
         SettingsRow::Language => keys::ROW_LANGUAGE,
         SettingsRow::SnapEnabled => keys::ROW_SNAP_ENABLED,
         SettingsRow::SnapGrid => keys::ROW_SNAP_GRID,
@@ -253,6 +259,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::BottleneckOverlay => keys::DESC_BOTTLENECK,
         SettingsRow::FocusMode => keys::DESC_FOCUS_MODE,
         SettingsRow::HudOnStart => keys::DESC_HUD_ON_START,
+        SettingsRow::ThemePreset => keys::DESC_THEME_PRESET,
         SettingsRow::Language => keys::DESC_LANGUAGE,
         SettingsRow::SnapEnabled => keys::DESC_SNAP_ENABLED,
         SettingsRow::SnapGrid => keys::DESC_SNAP_GRID,
@@ -283,6 +290,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::GridDensity
         | SettingsRow::PortZone
         | SettingsRow::Language
+        | SettingsRow::ThemePreset
         | SettingsRow::SnapTolerance
         | SettingsRow::SnapSubZoom
         | SettingsRow::SnapCoarseZoom => RowKind::Dropdown,
@@ -332,6 +340,10 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         }
         SettingsRow::PortZone => Some(format!("{} px", settings.port_zone_px as i32)),
         SettingsRow::Language => Some(settings.language.native_label().to_owned()),
+        SettingsRow::ThemePreset => Some(match settings.active_preset() {
+            Some(id) => theme_presets::find(id).unwrap().label.to_owned(),
+            None => i18n::tr(language, keys::THEME_PRESET_CLASSIC).to_owned(),
+        }),
         SettingsRow::SnapTolerance => Some(format!("{} px", settings.snap_tolerance_px as i32)),
         SettingsRow::SnapSubZoom => {
             Some(format!("{}%", (settings.snap_grid_sub_zoom * 100.0) as i32))
@@ -420,6 +432,22 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
             .into_iter()
             .map(|lang| (lang.native_label().to_owned(), settings.language == lang))
             .collect(),
+        // FR-047: первый пункт — «Классическая» (карточки тёмной/светлой),
+        // далее — реестр пресетов в порядке регистрации. Порядок опций =
+        // порядку apply_dropdown_value (инвариант, тест).
+        SettingsRow::ThemePreset => {
+            let active = settings.active_preset();
+            let mut options = vec![(
+                i18n::tr(language, keys::THEME_PRESET_CLASSIC).to_owned(),
+                active.is_none(),
+            )];
+            options.extend(
+                theme_presets::PRESETS
+                    .iter()
+                    .map(|preset| (preset.label.to_owned(), Some(preset.id) == active)),
+            );
+            options
+        }
         SettingsRow::SnapTolerance => {
             let current = SNAP_TOLERANCE_PRESETS
                 .iter()
@@ -505,6 +533,16 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
             let languages = [Language::Ru, Language::En];
             if let Some(language) = languages.get(index) {
                 settings.language = *language;
+            }
+        }
+        // FR-047: индекс 0 — «Классическая» (сброс пресета, выбор по
+        // карточкам тёмной/светлой); далее — реестр PRESETS в порядке
+        // регистрации (порядок == dropdown_options, тест).
+        SettingsRow::ThemePreset => {
+            if index == 0 {
+                settings.theme_preset.clear();
+            } else if let Some(preset) = theme_presets::PRESETS.get(index - 1) {
+                settings.theme_preset = preset.id.to_string();
             }
         }
         SettingsRow::SnapTolerance => {
@@ -909,7 +947,13 @@ mod tests {
                 SettingsRow::FocusMode
             ]
         );
-        assert_eq!(SETTINGS_TABS[4].rows, &[SettingsRow::Language]);
+        assert_eq!(
+            SETTINGS_TABS[4].rows,
+            &[
+                SettingsRow::ThemePreset,
+                SettingsRow::Language
+            ]
+        );
     }
 
     /// Инвариант локализации (FR-039 §5): у каждой строки есть ключи
@@ -981,6 +1025,7 @@ mod tests {
                 | SettingsRow::GridDensity
                 | SettingsRow::PortZone
                 | SettingsRow::Language
+                | SettingsRow::ThemePreset
                 | SettingsRow::SnapTolerance
                 | SettingsRow::SnapSubZoom
                 | SettingsRow::SnapCoarseZoom => {
@@ -988,6 +1033,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// FR-047: пресетный dropdown — полный перечень (классика + 7 пресетов),
+    /// ровно одна отметка текущего; выбор по индексу согласован с
+    /// dropdown_options (порядок apply == порядку опций); сброс на
+    /// «Классическую» очищает пресет; карточки Classic Dark/Light
+    /// (settings.theme) при активном пресете не отмечены.
+    #[test]
+    fn theme_preset_options_apply_and_reset() {
+        let mut settings = Settings::default();
+
+        // Дефолт: классика отмечена, пресетов в реестре 7
+        let options = dropdown_options(SettingsRow::ThemePreset, &settings);
+        assert_eq!(options.len(), 1 + theme_presets::PRESETS.len());
+        assert_eq!(options.iter().filter(|(_, cur)| *cur).count(), 1);
+        assert!(
+            options[0].1,
+            "классическая отмечена при пустом theme_preset"
+        );
+
+        // Выбор пресета по индексу (i-я опция == i-1-й пресет реестра)
+        apply_dropdown_value(&mut settings, SettingsRow::ThemePreset, 2);
+        assert_eq!(
+            settings.theme_preset,
+            theme_presets::PRESETS[1].id,
+            "индекс 2 == второй пресет реестра"
+        );
+        assert_eq!(settings.active_preset(), Some(theme_presets::PRESETS[1].id));
+        let options = dropdown_options(SettingsRow::ThemePreset, &settings);
+        assert_eq!(options.iter().filter(|(_, cur)| *cur).count(), 1);
+        assert!(options[2].1, "выбранный пресет отмечен");
+        // Значение на контроле — метка пресета (без i18n: имена собственные)
+        assert_eq!(
+            dropdown_value(SettingsRow::ThemePreset, &settings).as_deref(),
+            Some(theme_presets::PRESETS[1].label)
+        );
+
+        // Сброс на «Классическую»
+        apply_dropdown_value(&mut settings, SettingsRow::ThemePreset, 0);
+        assert!(settings.theme_preset.is_empty());
+        assert!(
+            dropdown_value(SettingsRow::ThemePreset, &settings).is_some(),
+            "значение на контроле всегда есть"
+        );
+
+        // Некорректный индекс не меняет состояние
+        apply_dropdown_value(&mut settings, SettingsRow::ThemePreset, 99);
+        assert!(settings.theme_preset.is_empty());
+
+        // Активный пресет гасит отметку классических карточек (апп-инвариант
+        // выбора темы: пресет перекрывает theme, см. ThemeColors::from_settings)
+        settings.theme_preset = "nord".to_string();
+        assert_eq!(settings.active_preset(), Some("nord"));
+        settings.theme_preset.clear();
+        assert_eq!(settings.active_preset(), None);
+        // Неизвестный id из config.toml — мягкая деградация к классике
+        settings.theme_preset = "monokai".to_string();
+        assert_eq!(settings.active_preset(), None);
     }
 
     /// Инвариант значений: у каждого dropdown полный перечень значений
@@ -1279,10 +1382,11 @@ mod tests {
             ),
             None
         );
-        // Таб 4 (Внешний вид): карточки темы + строка языка ниже них
+        // Таб 4 (Внешний вид): карточки темы + строки пресета и языка ниже
         let layout = modal_layout(4, viewport);
-        assert_eq!(layout.rows.len(), 1);
-        assert_eq!(layout.rows[0].0, SettingsRow::Language);
+        assert_eq!(layout.rows.len(), 2);
+        assert_eq!(layout.rows[0].0, SettingsRow::ThemePreset);
+        assert_eq!(layout.rows[1].0, SettingsRow::Language);
         let card_dark = layout.theme_card_rect(Theme::Dark);
         let card_light = layout.theme_card_rect(Theme::Light);
         assert!(card_dark[2] > 0.0 && card_light[2] > 0.0);

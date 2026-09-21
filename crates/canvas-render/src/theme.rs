@@ -252,6 +252,14 @@ impl ThemeColors {
         }
     }
 
+    /// FR-047: эффективная палитра настроек — пресет по id
+    /// (`theme_preset` из config.toml) или классическая тема. Неизвестный
+    /// id (переименование пресета, ручная правка конфига) деградирует
+    /// мягко — классика (ноль паник, выбор чинится из модалки).
+    pub fn from_settings(theme: canvas_core::Theme, preset_id: &str) -> Self {
+        crate::theme_presets::preset_theme(preset_id).unwrap_or_else(|| Self::from_theme(theme))
+    }
+
     /// Цвет тела текста как [f32; 4] (образцы-толщины в меню связи).
     pub fn body_fill(&self) -> [f32; 4] {
         [

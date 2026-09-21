@@ -40,6 +40,9 @@ mod settings;
 mod spatial;
 /// FR-018: реестр шаблонных архитектурных нод.
 pub mod templates;
+/// FR-047 (PRD-0006 D4/F-8): темы-пресеты как данные — реестр встроенных
+/// палитр `design/tokens/themes/*.json`, разбор+валидация, кэш OnceLock.
+pub mod theme_presets;
 /// M8/W1 (wasm-port §6): монотонное время, безопасное под wasm32 —
 /// alias над `web_time::Instant`; нативный код подмены не замечает.
 pub mod time;
