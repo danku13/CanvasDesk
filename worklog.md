@@ -2387,3 +2387,22 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Обновлены индексы тем же коммитом:** `docs/prd/README.md` (строка каталога +
   4 связи между PRD), `docs/index.md` (строка PRD). Следующий FR — **FR-047**
   (зафиксировано в §13/X0).
+
+## 2026-09-21 — Слияние FR-047 в main, CI-подтверждение
+
+- **Merge:** `db29ee08e7d281806de38d89be91bfa1b4a47435` (merge --no-ff
+  feature/fr-047-theme-presets в main; ветка синхронизирована с main 597b2ac
+  — FR-042 v1 + PRD-0007: конфликт доков разрешён, stage_dim FR-042 включён
+  в пресеты — слоты 36→37, SETTINGS_ROWS 18→20 с EdgeAggregation+ThemePreset).
+- **Гейты на ветке после merge (все зелёные):** fmt ✓; clippy -D warnings ✓;
+  test --workspace 1317 passed / 0 failed ✓; token_lint ✓; wasm_gate ✓;
+  mcp_wasm_gate ✓.
+- **CI по merge SHA:** build ✓; gates ubuntu/macos/windows ✓; wasm-check ✓;
+  web /app + docs ✓; licenses (cargo-deny) ✓; report-build-status ✓; deploy ✓;
+  artifacts ubuntu/macos/windows — публикация бинарей (windows дожималась,
+  не гейт качества).
+- **Документация синхронна:** FR-047 выполнено; PRD-0006 — D4/F-8 закрыт,
+  Q3 закрыт; индексы/README/SPEC/ACCEPTANCE/user-docs обновлены.
+- **Вопрос владельцу (AGENTS.md):** достаточно ли правки user-docs/interface.md
+  для онбординга (страница настроек) — faq/quick-start не трогал (поведение
+  настроек там не описано; тема ☀/🌙 упомянута в interface.md).
