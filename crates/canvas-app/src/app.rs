@@ -1203,6 +1203,9 @@ pub struct App {
     /// FR-049: empty-state скрыт кнопкой «Пустой холст» до следующего
     /// опустошения канваса (сброс при появлении первой ноды).
     empty_state_dismissed: bool,
+    /// FR-049 (US-5): отложенная схема `?template=<id>` (web) — применяется
+    /// на первом кадре, когда вьюпорт известен (zoom-to-fit корректен).
+    pub pending_scheme: Option<String>,
     /// FR-025: drag карточки шаблона из палитры в точку канваса (нажатие
     /// на строку; отпускание решает — клик: в центр viewport, drag: в
     /// точку курсора с ghost-превью).
@@ -1390,6 +1393,7 @@ impl App {
             },
             scheme_gallery: scheme_gallery_ui::SchemeGalleryState::default(),
             empty_state_dismissed: false,
+            pending_scheme: None,
             settings,
             config_path,
             settings_open: false,
@@ -4460,6 +4464,12 @@ impl App {
     /// Popup открывается только на Numi-строках каретки (вердикт
     /// `expr::line_kind`, вне код-фенсов) при непустом списке вариантов;
     // --- FR-049: галерея схем и empty-state ---
+
+    /// FR-049 (US-5): отложенная схема `?template=<id>` для web-порта
+    /// (поле private — сеттер для canvas-web; применяется на первом кадре).
+    pub fn set_pending_scheme(&mut self, id: Option<String>) {
+        self.pending_scheme = id;
+    }
 
     /// Empty-state пустого канваса виден: 0 нод и нет конкурирующих
     /// модальных поверхностей (US-1 AC-1.1).
@@ -11383,6 +11393,25 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
             WindowEvent::RedrawRequested => {
+                // FR-049 (US-5): ?template=<id> — применить на первом кадре
+                // (вьюпорт известен — zoom-to-fit корректен); неизвестный
+                // id — мягкий отказ (тост), канвас остаётся как есть
+                if let Some(id) = self.pending_scheme.take() {
+                    match canvas_core::schemes::SchemeRegistry::embedded().get(&id) {
+                        Some(manifest) => {
+                            let manifest = manifest.clone();
+                            self.apply_scheme(&manifest);
+                        }
+                        None => {
+                            tracing::warn!(scheme = %id, "?template: схема не найдена");
+                            self.show_toast(i18n::trf(
+                                self.settings.language,
+                                keys::GALLERY_UNKNOWN,
+                                &[("id", id.as_str())],
+                            ));
+                        }
+                    }
+                }
                 // Замер интервала между кадрами для HUD (T5)
                 let now = Instant::now();
                 if let Some(prev) = self.last_frame {
