@@ -1,0 +1,12 @@
+[package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
+name = "canvas-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# FR-051 U1: нулевые зависимости — чистая геометрия экрана без GPU/ОС
+# (PRD-0009 §7.3/§9.1: headless-тестируемо, 0 новых runtime-зависимостей — G7).
+# canvas-core (токены) подключается на U3 вместе с layout-примитивами
+# и слотами состояний ThemeColors.
