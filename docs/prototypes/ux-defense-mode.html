@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CanvasDesk — прототип У9 (v3): режим защиты — модальное окно с деревом нод с ветками</title>
+<title>CanvasDesk — прототип У9 (v3.1): режим защиты — модальное окно с деревом нод с ветками</title>
 <style>
   :root{
     --bg:#14161b; --panel:#1d2027; --panel2:#232733; --line:#2e3342;
@@ -12,11 +12,12 @@
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{background:var(--bg); color:var(--tx); font:14px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; padding:24px;}
+  body.defense-on{overflow:hidden;}
   h1{font-size:18px; margin-bottom:4px;}
   .sub{color:var(--tx2); font-size:13px; margin-bottom:16px; max-width:1150px;}
   .sub b{color:var(--tx);}
 
-  .app{display:flex; gap:14px; height:calc(100vh - 190px); min-height:560px;}
+  .app{display:flex; gap:14px; height:calc(100vh - 250px); min-height:520px;}
 
   /* ── канвас ─────────────────────────────── */
   .canvas{flex:1.1; background:var(--panel); border:1px solid var(--line); border-radius:12px; position:relative; overflow:hidden;}
@@ -56,7 +57,7 @@
     color:var(--tx2); font-size:13px; text-align:center; padding:24px; z-index:0;}
   .panel.detached .tree-hint{display:flex;}
   #graph{position:relative; min-width:100%; min-height:100%;}
-  #gscale{position:absolute; top:0; left:0; transform-origin:0 0;}
+  #gscale{position:absolute; top:0; left:0; transform-origin:0 0; transition:transform .45s ease;}
   #edges{position:absolute; top:0; left:0; z-index:0;}
   #edges path{fill:none; stroke:var(--accent); stroke-width:2; opacity:.75;}
   #edges path.toLeaf{stroke:var(--leaf);}
@@ -73,11 +74,13 @@
 
   /* ── режим защиты: модальное окно ───────── */
   .overlay{position:fixed; inset:0; background:rgba(9,10,13,.62); display:none;
-    align-items:center; justify-content:center; z-index:50;}
+    align-items:center; justify-content:center; z-index:50; animation:ovIn .22s ease;}
   .defense-on .overlay{display:flex;}
   .modal{width:min(92vw, 1380px); height:min(86vh, 920px); background:var(--panel);
     border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column;
-    overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.55);}
+    overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.55); animation:mIn .3s ease;}
+  @keyframes ovIn{from{opacity:0;} to{opacity:1;}}
+  @keyframes mIn{from{opacity:0; transform:scale(.96) translateY(10px);} to{opacity:1; transform:none;}}
   .m-head{padding:14px 18px 12px; border-bottom:1px solid var(--line); display:flex; align-items:flex-start; gap:16px;}
   .m-head .ttl{font-weight:600; font-size:16px;}
   .m-head .meta{color:var(--tx2); font-size:12px; margin-top:3px;}
@@ -91,6 +94,11 @@
     border-radius:7px; padding:5px 12px; font-size:12px; user-select:none;}
   .btn:hover{border-color:var(--accent);}
 
+  /* появление узлов и веток в окне защиты: класс .shown ставится шагом раскрытия (AC-6.3) */
+  .m-body .gnode{opacity:0; transform:scale(.97); pointer-events:none; transition:opacity .3s ease, transform .3s ease;}
+  .m-body .gnode.shown{opacity:1; transform:none; pointer-events:auto;}
+  .m-body #edges path{transition:stroke-dashoffset .55s ease, opacity .25s ease .18s;}
+
   .note{background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--delta);
     border-radius:10px; padding:12px 16px; font-size:13px;}
   .note b{color:var(--delta);}
@@ -99,15 +107,19 @@
 </head>
 <body>
 
-<h1>Прототип У9 (v3) — режим защиты: модальное окно с деревом нод с ветками</h1>
+<h1>Прототип У9 (v3.1) — режим защиты: модальное окно с деревом нод с ветками</h1>
 <div class="sub">
   <b>Решение владельца (2026-09-22):</b> «режим защиты — это модальное окно» — окно открывается
   <b>поверх канваса</b> одним действием (AC-6.1), канвас и панель уходят под затемнённый фон;
   панель на время защиты прячется (паттерн диалога ревью, §6.5). Внутри окна — <b>тот же граф нод
-  с ветками</b>, что и в explain-панели (v2), укрупнённый (×1.35, AC-6.2), с пошаговым раскрытием
+  с ветками</b>, что и в explain-панели, укрупнённый (<b>×1.5</b>, AC-6.2), с пошаговым раскрытием
   уровней от корня: клик по узлу, <b>пробел</b> или «Следующий уровень» (AC-6.3).
   <b>Esc</b>, <b>✕</b> или клик по фону — выход: окно закрывается, панель и подсветка возвращаются
   полностью (AC-6.4).
+  <br><b>v3.1 — фикс:</b> в v3 окно фактически не открывалось — класс состояния вешался на #app,
+  а CSS-селектор оверлея его не видел (клик по тумблеру лишь прятал дерево из панели). Теперь запуск
+  проверен в браузере: открытие → пошаговое раскрытие ×1.5 → выход с полным возвратом панели.
+  Граф центрируется в окне и вписывается в него, узлы и ветки появляются с анимацией.
 </div>
 
 <div class="app" id="app">
@@ -165,8 +177,8 @@
       <b>Решение владельца (v3, 2026-09-22).</b> Режим защиты — <b>модальное окно</b> поверх канваса:
       панель прячется на время защиты, внутри окна — тот же дерево-граф, укрупнённый, с пошаговым
       раскрытием. Подвопрос У9 («панель остаётся видимой?») закрыт: панель рядом не остаётся.
-      <div class="q">Если на проекторе захочется видеть канвас одновременно — альтернативу можно
-      вернуть отдельным вариантом, но по умолчанию фиксируем модальность.</div>
+      <div class="q">v3.1: окно теперь действительно открывается (исправлен запуск); граф — ×1.5
+      с центрированием и анимацией появления узлов и веток (AC-6.2).</div>
     </div>
   </div>
 </div>
@@ -177,7 +189,7 @@
     <div class="m-head">
       <div>
         <div class="ttl">Режим защиты — Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
-        <div class="meta">модальное окно поверх канваса (У9 — решение владельца, 2026-09-22) · дерево — граф нод с ветками · Esc / ✕ / клик по фону — выход</div>
+        <div class="meta">модальное окно поверх канваса (У9 — решение владельца, 2026-09-22) · тот же граф нод с ветками · ×1.5 (AC-6.2) · Esc / ✕ / клик по фону — выход</div>
       </div>
       <button class="m-x" id="mx" title="Закрыть (Esc)">✕</button>
     </div>
@@ -211,8 +223,9 @@ const DATA = {
 };
 const MAX_LV = 4;        // глубина данных
 const AUTO_LV = 3;       // лимит авто-раскрытия (FR-039)
-const SCALE_D = 1.35;    // укрупнение графа в модальном окне защиты
-const COLW = 196, CARDW = 158, ROWH = 116, PAD = 14;
+const SCALE_MAX = 1.5;   // ×1.5 (AC-6.2): потолок укрупнения графа в окне защиты
+const COLW = 196, CARDW = 158, ROWH = 116, PAD = 14;   // сетка панели
+const D_COLW = 190, D_ROWH = 100;                      // сетка окна: плотнее, чтобы полное дерево вписывалось при ×1.5
 
 let defense = false, revealed = 1;
 const manualOpen = new Set();   // узлы, раскрытые вручную за лимитом 3 (обычный режим)
@@ -220,7 +233,6 @@ const plural = (n, one, few) => (n % 10 === 1 && n % 100 !== 11) ? one : few;
 
 (function link(n, p){ n.p = p; (n.kids || []).forEach(k => link(k, n)); })(DATA, null);
 
-const app = document.getElementById("app");
 const sw = document.getElementById("sw");
 const panel = document.getElementById("panel");
 const graph = document.getElementById("graph");
@@ -237,30 +249,25 @@ function isVisible(n){
 }
 function hiddenKidCount(n){ return kids(n).filter(k => !isVisible(k)).length; }
 
-/* ── компоновка: колонка = уровень, ряд = порядок листьев ── */
+/* ── компоновка: колонка = уровень, ряд = порядок листьев; all=true — полное дерево (окно защиты) ── */
 let leafCursor, maxCol;
-function assign(n, depth){
+function assign(n, depth, all){
   n.col = depth - 1;
   if (n.col > maxCol) maxCol = n.col;
-  const vk = kids(n).filter(isVisible);
+  const vk = kids(n).filter(k => all || isVisible(k));
   if (!vk.length){ n.row = leafCursor++; return; }
-  vk.forEach(k => assign(k, depth + 1));
+  vk.forEach(k => assign(k, depth + 1, all));
   n.row = (vk[0].row + vk[vk.length - 1].row) / 2;
 }
 
-let nodeEls = new Map();
-function render(){
-  leafCursor = 0; maxCol = 0;
-  assign(DATA, 1);
+let nodeEls = new Map(), badgeEls = new Map(), edgeEls = new Map();
 
-  const W = PAD + maxCol * COLW + CARDW + PAD;
-  const H = PAD + Math.max(0, leafCursor - 1) * ROWH + 104;
-
+function buildTree(all, CW, RH){
   gscale.textContent = "";
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.id = "edges";
   gscale.append(svg);
-  nodeEls = new Map();
+  nodeEls = new Map(); badgeEls = new Map(); edgeEls = new Map();
 
   (function place(n){
     const el = document.createElement("div");
@@ -272,25 +279,29 @@ function render(){
     if (n.f){ const f = document.createElement("div"); f.className = "f"; f.textContent = n.f; el.append(f); }
     if (n.src){ const s = document.createElement("div"); s.className = "src"; s.textContent = n.src; el.append(s); }
     const hid = hiddenKidCount(n);
-    if (hid > 0){
+    if (defense){
+      if (kids(n).length){
+        const b = document.createElement("div"); b.className = "badge";
+        b.style.display = "none";
+        el.append(b); badgeEls.set(n, b);
+      }
+    } else if (hid > 0){
       el.classList.add("frontier");
       const b = document.createElement("div"); b.className = "badge";
-      b.textContent = defense
-        ? "ещё " + hid + " " + plural(hid, "ветка", "ветки") + " — уровень " + (revealed + 1)
-        : "ещё " + hid + " " + plural(hid, "уровень", "уровня") + " — клик: раскрыть";
+      b.textContent = "ещё " + hid + " " + plural(hid, "уровень", "уровня") + " — клик: раскрыть";
       el.append(b);
     }
-    el.style.left = (PAD + n.col * COLW) + "px";
-    el.style.top  = (PAD + n.row * ROWH) + "px";
+    el.style.left = (PAD + n.col * CW) + "px";
+    el.style.top  = (PAD + n.row * RH) + "px";
     el.onclick = (e) => { e.stopPropagation(); onNodeClick(n); };
     gscale.append(el);
     nodeEls.set(n, el);
-    kids(n).filter(isVisible).forEach(place);
+    kids(n).filter(k => all || isVisible(k)).forEach(place);
   })(DATA);
 
   const draw = (n) => {
     const pEl = nodeEls.get(n);
-    kids(n).filter(isVisible).forEach(k => {
+    kids(n).filter(k => all || isVisible(k)).forEach(k => {
       const cEl = nodeEls.get(k);
       const x1 = pEl.offsetLeft + pEl.offsetWidth, y1 = pEl.offsetTop + pEl.offsetHeight / 2;
       const x2 = cEl.offsetLeft, y2 = cEl.offsetTop + cEl.offsetHeight / 2;
@@ -299,26 +310,96 @@ function render(){
       p.setAttribute("d", "M " + x1 + " " + y1 + " C " + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2);
       if (k.leaf) p.classList.add("toLeaf");
       svg.append(p);
+      if (defense){
+        const L = Math.ceil(p.getTotalLength()) + 2;
+        p.style.strokeDasharray = L;
+        p.style.strokeDashoffset = L;
+        p.style.opacity = 0;
+        edgeEls.set(k, {p, L});
+      } else {
+        edgeEls.set(k, {p, L:0});
+      }
       draw(k);
     });
   };
   draw(DATA);
+  return svg;
+}
+
+function render(){
+  if (defense){ renderDefense(); return; }
+  /* ── панель: обычный режим ── */
+  gscale.style.transform = "";
+  graph.style.width = ""; graph.style.height = "";
+  leafCursor = 0; maxCol = 0;
+  assign(DATA, 1, false);
+  const W = PAD + maxCol * COLW + CARDW + PAD;
+  const H = PAD + Math.max(0, leafCursor - 1) * ROWH + 104;
+  const svg = buildTree(false, COLW, ROWH);
   svg.setAttribute("width", W); svg.setAttribute("height", H);
+  document.getElementById("lv").textContent = "";
+}
 
-  /* масштаб: окно защиты показывает тот же граф крупнее */
-  const s = defense ? SCALE_D : 1;
-  gscale.style.transform = "scale(" + s + ")";
-  gscale.style.width = W + "px"; gscale.style.height = H + "px";
-  graph.style.width = Math.round(W * s) + "px";
-  graph.style.height = Math.round(H * s) + "px";
+/* ── окно защиты: полное дерево строится один раз за вход, шаги раскрытия только включают
+   видимость узлов и веток — позиции стабильны, ничего не «прыгает» между шагами ── */
+function renderDefense(){
+  leafCursor = 0; maxCol = 0;
+  assign(DATA, 1, true);
+  const svg = buildTree(true, D_COLW, D_ROWH);
+  let maxR = 0, maxB = 0;
+  nodeEls.forEach((el) => {
+    maxR = Math.max(maxR, el.offsetLeft + el.offsetWidth);
+    maxB = Math.max(maxB, el.offsetTop + el.offsetHeight);
+  });
+  svg.setAttribute("width", Math.ceil(maxR + PAD));
+  svg.setAttribute("height", Math.ceil(maxB + PAD));
+  applyDefenseVisibility();
+}
 
+function applyDefenseVisibility(){
+  nodeEls.forEach((el, n) => {
+    const vis = isVisible(n);
+    el.classList.toggle("shown", vis);
+    el.classList.toggle("frontier", vis && hiddenKidCount(n) > 0);
+    const b = badgeEls.get(n);
+    if (b){
+      const hid = hiddenKidCount(n);
+      const need = vis && hid > 0;
+      b.style.display = need ? "" : "none";
+      if (need) b.textContent = "ещё " + hid + " " + plural(hid, "ветка", "ветки") + " — уровень " + (revealed + 1);
+    }
+  });
+  edgeEls.forEach(({p, L}, k) => {
+    const vis = isVisible(k);
+    p.style.opacity = vis ? .75 : 0;
+    p.style.strokeDashoffset = vis ? 0 : L;
+  });
+  /* центрирование видимой части графа в окне; масштаб до ×1.5 (AC-6.2) с вписыванием в окно */
+  let minL = Infinity, minT = Infinity, maxR = 0, maxB = 0;
+  nodeEls.forEach((el, n) => {
+    if (!isVisible(n)) return;
+    minL = Math.min(minL, el.offsetLeft);
+    minT = Math.min(minT, el.offsetTop);
+    maxR = Math.max(maxR, el.offsetLeft + el.offsetWidth);
+    maxB = Math.max(maxB, el.offsetTop + el.offsetHeight);
+  });
+  const host = document.getElementById("mbody");
+  const aw = host.clientWidth, ah = host.clientHeight;
+  const bw = Math.max(1, maxR - minL), bh = Math.max(1, maxB - minT);
+  const s = Math.min(SCALE_MAX, (aw - 48) / bw, (ah - 48) / bh);
+  const tx = (aw - bw * s) / 2 - minL * s;
+  const ty = (ah - bh * s) / 2 - minT * s;
+  gscale.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + s + ")";
   document.getElementById("lv").textContent =
     "Уровень " + revealed + " из " + MAX_LV + " · клик по узлу или пробел — следующий уровень";
 }
 
 function onNodeClick(n){
   if (defense){
-    if (kids(n).length && n.lv === revealed && revealed < MAX_LV){ revealed = n.lv + 1; apply(); }
+    if (hiddenKidCount(n) > 0 && revealed < MAX_LV){
+      revealed = Math.max(revealed, Math.min(MAX_LV, n.lv + 1));
+      applyDefenseVisibility();
+    }
     return;
   }
   const hid = hiddenKidCount(n);
@@ -348,10 +429,11 @@ function drawCanvasEdges(){
 
 function flashTree(nm){
   let target = null;
-  nodeEls.forEach((el, n) => { if (n.nm === nm) target = {el, n}; });
+  nodeEls.forEach((el, n) => { if (n.nm === nm) target = n; });
   if (!target) return;
-  if (defense && target.n.lv > revealed){ revealed = Math.min(target.n.lv, MAX_LV); apply(); }
-  const el = nodeEls.get(target.n) || target.el;
+  if (defense && target.lv > revealed){ revealed = Math.min(target.lv, MAX_LV); applyDefenseVisibility(); }
+  const el = nodeEls.get(target);
+  if (!el) return;
   el.classList.add("hit");
   el.scrollIntoView({block:"nearest", inline:"nearest", behavior:"smooth"});
   setTimeout(() => el.classList.remove("hit"), 1400);
@@ -360,9 +442,11 @@ document.querySelectorAll(".cnode.chain").forEach(c => {
   c.addEventListener("click", () => flashTree(c.dataset.tree));
 });
 
-/* ── вход/выход режима защиты: модальное окно ── */
+/* ── вход/выход режима защиты: модальное окно ──
+   v3.1: класс defense-on вешается на body — в v3 он был на #app, а оверлей является соседом #app,
+   поэтому селектор .defense-on .overlay не срабатывал и окно не открывалось вовсе */
 function apply(){
-  app.classList.toggle("defense-on", defense);
+  document.body.classList.toggle("defense-on", defense);
   sw.classList.toggle("on", defense);
   panel.classList.toggle("detached", defense);
   /* дерево-граф переезжает: панель ↔ тело модального окна */
@@ -377,14 +461,24 @@ document.getElementById("mx").onclick = exitDefense;
 overlay.addEventListener("click", (e) => { if (e.target === overlay) exitDefense(); });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") exitDefense();
-  if (e.code === "Space" && defense){ e.preventDefault(); revealed = Math.min(revealed + 1, MAX_LV); apply(); }
+  if (e.code === "Space" && defense && !e.repeat){
+    e.preventDefault();
+    revealed = Math.min(revealed + 1, MAX_LV);
+    applyDefenseVisibility();
+  }
 });
-document.getElementById("nextLv").onclick = () => { if (defense){ revealed = Math.min(revealed + 1, MAX_LV); apply(); } };
-document.getElementById("openAll").onclick = () => { if (defense){ revealed = MAX_LV; apply(); } };
+document.getElementById("nextLv").onclick = (e) => {
+  e.currentTarget.blur();   /* фикс: фокус на кнопке + пробел раньше давал двойной шаг */
+  if (defense){ revealed = Math.min(revealed + 1, MAX_LV); applyDefenseVisibility(); }
+};
+document.getElementById("openAll").onclick = (e) => {
+  e.currentTarget.blur();
+  if (defense){ revealed = MAX_LV; applyDefenseVisibility(); }
+};
 
 apply();
 drawCanvasEdges();
-window.addEventListener("resize", drawCanvasEdges);
+window.addEventListener("resize", () => { drawCanvasEdges(); if (defense) applyDefenseVisibility(); });
 </script>
 </body>
 </html>
