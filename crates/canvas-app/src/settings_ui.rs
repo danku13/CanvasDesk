@@ -99,6 +99,8 @@ pub enum SettingsRow {
     BottleneckOverlay,
     /// Режим фокуса связей (T23, brainstorm-focus) вкл/выкл.
     FocusMode,
+    /// FR-042 (F-13): агрегация связей (LOD-0 пучки + main stage) вкл/выкл.
+    EdgeAggregation,
     /// HUD (F3) включён при старте.
     HudOnStart,
     /// FR-040: язык интерфейса (русский/English).
@@ -124,7 +126,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 18] = [
+pub const SETTINGS_ROWS: [SettingsRow; 19] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -141,6 +143,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 18] = [
     SettingsRow::SnapSubZoom,
     SettingsRow::SnapCoarseZoom,
     SettingsRow::FocusMode,
+    SettingsRow::EdgeAggregation,
     SettingsRow::HudOnStart,
     SettingsRow::Language,
 ];
@@ -204,6 +207,7 @@ pub const SETTINGS_TABS: [SettingsTab; 5] = [
             SettingsRow::PortZone,
             SettingsRow::LinePorts,
             SettingsRow::FocusMode,
+            SettingsRow::EdgeAggregation,
         ],
     },
     SettingsTab {
@@ -227,6 +231,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::LinePorts => keys::ROW_LINE_PORTS,
         SettingsRow::BottleneckOverlay => keys::ROW_BOTTLENECK,
         SettingsRow::FocusMode => keys::ROW_FOCUS_MODE,
+        SettingsRow::EdgeAggregation => keys::ROW_EDGE_AGGREGATION,
         SettingsRow::HudOnStart => keys::ROW_HUD_ON_START,
         SettingsRow::Language => keys::ROW_LANGUAGE,
         SettingsRow::SnapEnabled => keys::ROW_SNAP_ENABLED,
@@ -252,6 +257,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::LinePorts => keys::DESC_LINE_PORTS,
         SettingsRow::BottleneckOverlay => keys::DESC_BOTTLENECK,
         SettingsRow::FocusMode => keys::DESC_FOCUS_MODE,
+        SettingsRow::EdgeAggregation => keys::DESC_EDGE_AGGREGATION,
         SettingsRow::HudOnStart => keys::DESC_HUD_ON_START,
         SettingsRow::Language => keys::DESC_LANGUAGE,
         SettingsRow::SnapEnabled => keys::DESC_SNAP_ENABLED,
@@ -295,6 +301,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::SnapGuides
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
+        | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart => RowKind::Toggle,
     }
 }
@@ -349,6 +356,7 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::SnapGuides
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
+        | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart => None,
     }
 }
@@ -462,6 +470,7 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::SnapGuides
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
+        | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart => Vec::new(),
     }
 }
@@ -531,6 +540,7 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::SnapGuides
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
+        | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart => {}
     }
 }
@@ -906,7 +916,8 @@ mod tests {
                 SettingsRow::EdgesAvoid,
                 SettingsRow::PortZone,
                 SettingsRow::LinePorts,
-                SettingsRow::FocusMode
+                SettingsRow::FocusMode,
+                SettingsRow::EdgeAggregation
             ]
         );
         assert_eq!(SETTINGS_TABS[4].rows, &[SettingsRow::Language]);
@@ -954,6 +965,11 @@ mod tests {
                 SettingsRow::FocusMode => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.focus_mode;
+                }
+                // FR-042 (F-13): агрегация связей — булево поле Settings
+                SettingsRow::EdgeAggregation => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.edge_aggregation;
                 }
                 SettingsRow::HudOnStart => {
                     assert_eq!(row_kind(row), RowKind::Toggle);

@@ -22,6 +22,7 @@ pub mod renderer;
 pub mod renderer_init;
 pub mod search_ui;
 pub mod sectors;
+pub mod stage;
 pub mod stats;
 pub mod text;
 pub mod theme;
@@ -35,6 +36,7 @@ pub use guides::{GuideLine, GuideSource, GuidesFrame};
 pub use renderer::{
     FrameOverlay, FrameStats, Renderer, SceneView, Selection, SpillView, WhatIfNode,
 };
+pub use stage::{stage_rect_screen, StageTransform};
 pub use stats::FrameMeter;
 pub use theme::ThemeColors;
 pub use widget_pass::{WidgetPass, WidgetQuad, WIDGET_SNAPSHOT_MAX};
