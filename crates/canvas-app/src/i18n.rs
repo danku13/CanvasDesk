@@ -68,6 +68,14 @@ pub mod keys {
     pub const DESC_HUD_ON_START: &str = "settings.desc.hud_on_start";
     pub const DESC_LANGUAGE: &str = "settings.desc.language";
 
+    // --- Main stage / агрегация связей (FR-042) ---
+    pub const ROW_EDGE_AGGREGATION: &str = "settings.row.edge_aggregation";
+    pub const DESC_EDGE_AGGREGATION: &str = "settings.desc.edge_aggregation";
+    pub const STAGE_TITLE: &str = "stage.title";
+    pub const STAGE_HINT: &str = "stage.hint";
+    pub const STAGE_LINE_LABEL: &str = "stage.line_label";
+    pub const STAGE_PARAM_LABEL: &str = "stage.param_label";
+
     pub const VALUE_ON: &str = "settings.value.on";
     pub const VALUE_OFF: &str = "settings.value.off";
     pub const CORNER_TOP_LEFT: &str = "settings.value.corner.top_left";
@@ -686,6 +694,15 @@ const RU: &[(&str, &str)] = &[
     (keys::TOAST_WIDGET_OPEN_FAILED, "Виджет: не удалось открыть {path}"),
     (keys::GROUP_DEFAULT_LABEL, "Группа"),
     (keys::FILE_NEW_NOTE, "Новая заметка"),
+    (keys::ROW_EDGE_AGGREGATION, "Агрегация связей"),
+    (
+        keys::DESC_EDGE_AGGREGATION,
+        "Пучок рёбер одной пары — одна линия с бейджем ×N; клик открывает main stage.",
+    ),
+    (keys::STAGE_TITLE, "Связи"),
+    (keys::STAGE_HINT, "Esc — закрыть"),
+    (keys::STAGE_LINE_LABEL, "строка {n}"),
+    (keys::STAGE_PARAM_LABEL, "→ {param}"),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -1045,6 +1062,15 @@ const EN: &[(&str, &str)] = &[
     (keys::TOAST_WIDGET_OPEN_FAILED, "Widget: failed to open {path}"),
     (keys::GROUP_DEFAULT_LABEL, "Group"),
     (keys::FILE_NEW_NOTE, "New note"),
+    (keys::ROW_EDGE_AGGREGATION, "Edge aggregation"),
+    (
+        keys::DESC_EDGE_AGGREGATION,
+        "A bundle between a pair is one line with a ×N badge; click opens the main stage.",
+    ),
+    (keys::STAGE_TITLE, "Connections"),
+    (keys::STAGE_HINT, "Esc — close"),
+    (keys::STAGE_LINE_LABEL, "line {n}"),
+    (keys::STAGE_PARAM_LABEL, "→ {param}"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).
