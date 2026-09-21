@@ -2173,3 +2173,58 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Гейт после слияния:** fmt/clippy --workspace -D warnings/test --workspace (1283 passed, 0 failed)/token_lint/wasm_gate --check — зелёные.
 - **CI merge-коммита b09ac59:** build/gates ubuntu+macos/wasm-check/licenses/web+docs/deploy — success; **gates (windows-latest) — failure**: flake `app::tests::run_batch_op_group_with_children_only_is_noop` (FR-042 волна, не FR-046) — `create_dir_all(temp)` PermissionDenied (Os code 5) на раннере; перезапуск джобы недоступен PAT (403 actions:write) — перезапуск за владельцем (Actions → «CI failure» → Re-run failed jobs).
 - **Коммит:** merge origin/main b09ac59 → push.
+
+## 2026-09-21 — FR-045 (реализация, приоритет FR-045): этап-ядро 2 — проливание колонок CSV в поток
+
+- **Задача:** продолжение приказа владельца «реализовать FR-044 и FR-045» —
+  следующий этап из очереди worklog («проливание колонок CSV в поток,
+  семантика строк/снапшота — §Q3»); не зависит от N-волны PRD-0004 и
+  E-волны FR-042.
+- **csv.rs:** `CsvSnapshot::cell(запись, колонка)` — безопасный акцессор
+  по имени колонки (вне диапазона/неизвестное имя — None, без паники);
+  `csv_cell_value` — детерминированные правила числового значения ячейки:
+  трим пробелов, десятичный разделитель — точка («1,5» — не число: машинный
+  формат CSV), только конечные значения (inf/NaN отклонены), пустое/текст —
+  None (текстовые колонки значения не дают; единицы — вне скоупа PoC).
+- **flow.rs:** `DataSnapshots` (`node_id → CsvSnapshot`) — содержимое
+  источника НЕ хранится в `.canvas` (модель несёт только ref/fields),
+  карту заполняет приложение при создании/перезагрузке CSV (снапшот при
+  создании, §Q3); `propagate_with_lines_data` — полный вариант пропагатора:
+  колонка data-ноды (`fromOutput`) проливается в позиционные слоты,
+  параметры (`toParam`) и `$in` приёмников; `propagate_with_lines`
+  делегирует с пустой картой — ВСЕ существующие вызовы (scene/mcp/app/
+  analyze/validate) без изменений (совместимость проверена тестом);
+  `edge_source_value_with_data` — семантика адресации data-ноды:
+  `fromOutput` = колонка; `fromLine` = запись снапшота (0-based; для
+  data-ноды адресует СТРОКУ ТАБЛИЦЫ, не строку листа; нет — запись 0,
+  детерминированное PoC-правило; пустой снапшот — None); колонки нет в
+  снапшоте / запись вне диапазона / ячейка не числовая — None (unmapped,
+  R-3); ребро без `fromOutput` значения не несёт (адресация колонки
+  обязательна — согласовано с fallback `edge.id` в `display_ref`);
+  снапшота нет (dacdb/db PoC, CSV не загружен) — легаси-путь → источник
+  pending (R-3); `unmapped_inputs_with_data` — состояние согласовано
+  резолюции (снапшот появился — unmapped снят автоматически, инвариант 4).
+  Снапшот решает, даже если у data-ноды есть собственный Numi-лист
+  (`named` не участвует в колонке). What-if override ноды (`node_values`)
+  подменяет значение ноды, но НЕ колонки (§Q3 — связь с what-if открыта).
+- **lib.rs:** экспорты `DataSnapshots`, `propagate_with_lines_data`,
+  `unmapped_inputs`, `unmapped_inputs_with_data`, `UnmappedInput`.
+- **Тесты:** +8 (csv 2: cell-акцессор, правила числа; flow 6: проливание
+  в слот, проливание в параметр, адресация записей (0/1/вне диапазона +
+  согласованность unmapped), unmapped-кейсы (нет колонки/текст/без
+  адресации/пустая ячейка), dacdb-заглушка и появление снапшота,
+  независимость от формулы источника); workspace 1291 passed, 0 failed.
+- **Гейты (все зелёные):** cargo fmt --all --check ✓; CARGO_INCREMENTAL=0
+  clippy --workspace --all-targets -D warnings ✓; CARGO_INCREMENTAL=0
+  CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace (1291) ✓;
+  bash scripts/wasm_gate.sh ПОЛНЫЙ ✓ (wasm32-unknown-unknown check+build +
+  wasip1/wasmtime исполнение тестов core+mcp).
+- **Вне скоупа сессии (очередь):** app-проводка снапшотов (загрузка CSV с
+  диска/FS Access, диалог «Входные данные» в палитре, тултипы) и
+  render/app-этапы FR-045 (тело C: описание, группы расчёта, пунктирные
+  порты/рёбра, i18n) — требуют N-волны PRD-0004 (anatomy.rs, N1–N5);
+  render/app-этапы FR-044 (пилюли, подложки, z-порядок, панель «Как
+  считается», StageCalcFocus, Esc-каскад) — требуют E-волны FR-042
+  (stage-подсистема). Открытые вопросы §Q3 (живая перезагрузка, связь
+  с what-if) — за владельцем/PRD-0001.
+- **Коммиты:** feat(core) этап-ядро 2; docs(fr) changelog FR-045; docs — worklog.
