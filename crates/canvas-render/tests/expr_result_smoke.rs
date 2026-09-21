@@ -62,6 +62,7 @@ fn expr_result_line_draws_in_footer() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");
@@ -238,6 +239,7 @@ fn expr_line_results_draw_on_own_rows() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");
@@ -405,6 +407,7 @@ fn expr_line_error_badge_and_hit_zone() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");
@@ -584,6 +587,7 @@ fn expr_editing_live_line_results() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");

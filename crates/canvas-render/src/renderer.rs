@@ -130,6 +130,15 @@ pub struct FrameOverlay<'a> {
     pub texts: &'a [OverlayText<'a>],
     pub screen_instances: &'a [CardInstance],
     pub screen_texts: &'a [ScreenText<'a>],
+    /// FR-042 (E3)/FR-044: квады main stage (затемнение, подложка, веер,
+    /// пилюли, карточки среза). МОДАЛЬНЫЙ проход: рисуются ПОСЛЕ всех
+    /// z-сегментов, текст-групп, панелей и миникарты — ни живой текст
+    /// канваса, ни панели не попадают поверх stage (дефект «каши»);
+    /// тексты stage — отдельной группой `stage_texts` поверх квадов.
+    pub stage_instances: &'a [CardInstance],
+    /// FR-042/FR-044: тексты main stage (screen-space, отдельная группа —
+    /// рисуются после `stage_instances`, поверх своих пилюль/карточек).
+    pub stage_texts: &'a [ScreenText<'a>],
     /// FR-022 (рестайл 2026-09-16): donut-сектора wheel-меню шаблонов
     /// (логические px от угла окна — конвертируются в world рендерером,
     /// см. `screen_sector_to_world`). Рисуются ПЕРЕД screen_instances:
@@ -148,6 +157,8 @@ impl FrameOverlay<'_> {
         texts: &[],
         screen_instances: &[],
         screen_texts: &[],
+        stage_instances: &[],
+        stage_texts: &[],
         screen_sectors: &[],
         widget_quads: &[],
     };
@@ -1211,6 +1222,13 @@ impl Renderer {
             world_tail_end,
             instances.len() as u32,
         );
+        // FR-042 (E3)/FR-044: квады main stage — в конец буфера ОТДЕЛЬНЫМ
+        // диапазоном (plan_tail_ranges посчитал overlay_range по buffer_end
+        // ДО stage, поэтому модальные квады не входят ни в один сегментный
+        // диапазон; рисуются финальным проходом после миникарты)
+        let stage_start = instances.len() as u32;
+        instances.extend_from_slice(overlay.stage_instances);
+        let stage_end = instances.len() as u32;
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1291,6 +1309,7 @@ impl Renderer {
                 param_spills: scene.param_spills,
                 whatif_nodes: scene.whatif_nodes,
                 analysis_badges: &analysis_badges,
+                stage_texts: overlay.stage_texts,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
@@ -1406,6 +1425,20 @@ impl Renderer {
             // против HUD слева сверху — пересечений по площади нет
             if let (Some(texture), Some(_)) = (self.minimap.as_ref(), minimap_quad) {
                 self.minimap_pipeline.draw(&mut pass, texture);
+            }
+            // FR-042 (E3)/FR-044: модальный проход main stage — квады поверх
+            // всего кадра (включая миникарту и панели), затем тексты stage
+            // поверх своих квадов. Живой контент канваса остаётся ПОД
+            // затемнением: ни тела нод, ни подписи связей, ни бейджи анализа
+            // не «просвечивают» сквозь stage (дефект скриншота)
+            if stage_end > stage_start {
+                self.cards.draw_range(&mut pass, stage_start..stage_end);
+            }
+            if let Err(err) = self
+                .text
+                .draw_group(&mut pass, TextSystem::stage_group(&zplan))
+            {
+                tracing::warn!(?err, "отрисовка текстов stage пропущена");
             }
         }
         self.gpu.queue.submit([encoder.finish()]);

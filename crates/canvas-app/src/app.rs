@@ -68,6 +68,9 @@ use canvas_core::{
     Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex, StageLayout, Theme,
     ThumbBackend, WatchBackend, COLLISION_GAP,
 };
+// FR-044 Р-1 (стык раскладок): лейн-раскладка пилюль подписей веера —
+// чистые функции core с инвариантами (без пересечений, кламп в зону).
+use canvas_core::bundles::{fan_corridor, stage_fan_label_layout, Rect as StageLocalRect};
 // M8/W3 (wasm-port §3.1): протокол поиска переехал в core (натив — FTS5 в
 // shell, web/тесты — MemSearch); App общается только через трейт SearchBackend
 use canvas_core::search::{SearchCommand, SearchEvent, SearchHit};
@@ -80,8 +83,9 @@ use canvas_render::animate::{
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{
-    build_stage_edge_instances, card_instance, drop_ghost, template_icon_quads, title_for,
-    BundleContext, CardInstance, FocusView, HEADER_HEIGHT,
+    build_stage_edge_instances, card_instance, drop_ghost, template_band_instance,
+    template_icon_quads, title_for, BundleContext, CardInstance, FocusView, EDGE_COLOR,
+    FLOW_EDGE_COLOR, HEADER_HEIGHT, SELECTION_BORDER,
 };
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
@@ -99,8 +103,8 @@ use canvas_render::search_ui::{
 };
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign, BODY_PADDING,
-    BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign,
+    BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{
@@ -163,6 +167,18 @@ struct OwnedScreenText {
 fn centered_box(rect: [f32; 4], inset: f32) -> ([f32; 2], f32) {
     let width = (rect[2] - inset * 2.0).max(0.0);
     ([rect[0] + inset, rect[1]], width)
+}
+
+/// Усечение строки до `max` символов с многоточием (FR-044: ширина пилюль
+/// и строк stage оценивается по числу символов — средняя advance моно 12 px;
+/// точное измерение недоступно на стороне приложения — шейпинг в TextSystem).
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 // --- FR-038 (T-038.4): интеграция магнитной раскладки ----------------------
@@ -971,6 +987,14 @@ impl MainStageState {
 
     /// Переложить ноды среза по раскладке текущего вьюпорта (кадр):
     /// rect зависит от размеров окна, масштаб ≤ 1 гарантирует умещение.
+    ///
+    /// Срез хранится в stage-локальных px БЕЗ масштаба: раскладка
+    /// [`canvas_core::stage_layout`] возвращает уже сжатые rect-относительные
+    /// px, а [`StageTransform`] применяет scale к позициям/размерам/полилиниям
+    /// ровно один раз — поэтому позиции делятся на scale. Иначе (дефект
+    /// «каши» в stage) позиции сжимались дважды, карточки рисовались в
+    /// натуральном размере и расходились с веером и подписями тем сильнее,
+    /// чем меньше scale.
     fn relayout(&mut self, viewport: [f32; 2]) -> StageLayout {
         let rect = main_stage_rect(viewport);
         let layout = stage_layout(
@@ -978,10 +1002,11 @@ impl MainStageState {
             [self.slice.nodes[1].width, self.slice.nodes[1].height],
             &rect,
         );
-        self.slice.nodes[0].x = layout.source_pos[0];
-        self.slice.nodes[0].y = layout.source_pos[1];
-        self.slice.nodes[1].x = layout.target_pos[0];
-        self.slice.nodes[1].y = layout.target_pos[1];
+        let s = layout.scale.max(f32::EPSILON);
+        self.slice.nodes[0].x = layout.source_pos[0] / s;
+        self.slice.nodes[0].y = layout.source_pos[1] / s;
+        self.slice.nodes[1].x = layout.target_pos[0] / s;
+        self.slice.nodes[1].y = layout.target_pos[1] / s;
         self.scale = layout.scale;
         layout
     }
@@ -7939,11 +7964,401 @@ impl App {
         }
     }
 
-    /// FR-042 (E3): составить подпись ребра в stage — адресация истока
-    /// (fromLine «строка N» / fromOutput), параметр-приёмник (toParam) и
-    /// текущее значение ребра (FR-014/FR-025/FR-029; для fromLine —
-    /// построчный результат Numi-листа источника).
-    fn stage_edge_label_text(&self, edge: &Edge) -> String {
+    /// FR-042 (E3) + FR-044: кадр main stage — паритет с прототипом
+    /// prototype-mainstage-anatomy.html (drawStage). Затемнение фона,
+    /// подложка, заголовок «Пучок: A → B · ×N» с кнопкой ✕, веер рёбер
+    /// с точками портов, ПОЛНЫЕ карточки среза (заголовок, построчные
+    /// результаты, полоса результата), пилюли подписей лейн-стопкой в
+    /// коридоре между колонками ([`canvas_core::bundles::stage_fan_label_layout`]).
+    /// Возвращает (квады, screen-тексты) — рендерер выводит их модальным
+    /// проходом после всего живого контента (инвариант 8: модальность).
+    fn stage_frame(
+        &self,
+        viewport: [f32; 2],
+        stage: &MainStageState,
+        layout: StageLayout,
+    ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let rect = main_stage_rect(viewport);
+        let transform = StageTransform::new([rect.x, rect.y], layout.scale);
+        let camera = &self.camera;
+        let zoom = camera.zoom();
+        let s = layout.scale.max(f32::EPSILON);
+        let mut quads: Vec<CardInstance> = Vec::new();
+        let mut texts: Vec<OwnedScreenText> = Vec::new();
+        // Шрифт stage-текста: базовый размер * масштаб раскладки (геометрия
+        // сжата тем же коэффициентом — карточка и её текст сжимаются вместе);
+        // минимум 8 px — читаемость деградационных режимов.
+        let font = |px: f32| (px * s).max(8.0);
+        // 1) Затемнение фона (§7.5: тёмная 0.6 / светлая 0.5) — весь вьюпорт
+        quads.push(CardInstance {
+            pos: camera.screen_to_world([0.0, 0.0], viewport),
+            size: [viewport[0] / zoom, viewport[1] / zoom],
+            fill: palette.stage_dim,
+            border: [0.0; 4],
+            params: [0.0, 0.0, 0.0, 1.0],
+        });
+        // 2) Подложка и рамка stage — стиль модалок FR-039 (радиус 14)
+        quads.push(CardInstance {
+            pos: camera.screen_to_world([rect.x, rect.y], viewport),
+            size: [rect.w / zoom, rect.h / zoom],
+            fill: palette.menu_fill,
+            border: palette.palette_border,
+            params: [14.0 / zoom, 0.0, 0.0, 1.0],
+        });
+        // 3) Заголовок «Пучок: A → B · ×N», подсказка Esc и кнопка ✕
+        let from_title = title_for(&stage.slice.nodes[0]);
+        let to_title = title_for(&stage.slice.nodes[1]);
+        texts.push(OwnedScreenText {
+            text: self.trf(
+                keys::STAGE_BUNDLE_TITLE,
+                &[
+                    ("from", from_title.as_str()),
+                    ("to", to_title.as_str()),
+                    ("n", stage.slice.edges.len().to_string().as_str()),
+                ],
+            ),
+            origin: transform.map_point([16.0, 12.0]),
+            width: transform.map_size(rect.w) - 200.0,
+            font_size: font(13.0),
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        // Кнопка ✕ — правый верхний угол (rect пересчитывается в клике —
+        // та же формула, состояния не требует)
+        let close = [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0];
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::STAGE_HINT).to_owned(),
+            origin: [close[0] - 160.0, close[1] + 5.0],
+            width: 152.0,
+            font_size: font(11.0),
+            color: palette.quote,
+            align: TextAlign::Left,
+        });
+        quads.push(CardInstance {
+            pos: camera.screen_to_world([close[0], close[1]], viewport),
+            size: [close[2] / zoom, close[3] / zoom],
+            fill: [0.0; 4],
+            border: palette.palette_border,
+            params: [7.0 / zoom, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "×".to_owned(),
+            origin: [close[0], close[1] + 3.0],
+            width: close[2],
+            font_size: font(12.0),
+            color: palette.body,
+            align: TextAlign::Center,
+        });
+        // 4) Рёбра среза веером (stage-локальные px → мир); выделение
+        // ребра среза — live-индекс из Selection
+        let selected_slice = self.selected.and_then(|sel| match sel {
+            Selection::Edge(live) => stage.edges.iter().position(|&e| e == live),
+            Selection::Node(_) => None,
+        });
+        for inst in build_stage_edge_instances(
+            &stage.slice,
+            &stage.fan,
+            stage.slice.edges.len(),
+            selected_slice,
+            None,
+        ) {
+            quads.push(transform.instance_to_world(&inst, camera, viewport));
+        }
+        // 5) Точки портов на концах веера (аффорданс входа/выхода, прототип):
+        // цвет — класс потока ребра, выделенное ребро — акцент
+        for (i, edge) in stage.slice.edges.iter().enumerate() {
+            let Some(points) = canvas_core::stage_edge_points(&stage.slice, i, stage.fan[i], 24)
+            else {
+                continue;
+            };
+            let fill = if selected_slice == Some(i) {
+                SELECTION_BORDER
+            } else if edge.flow_kind() == FlowKind::Value {
+                FLOW_EDGE_COLOR
+            } else {
+                EDGE_COLOR
+            };
+            let Some(last) = points.last() else { continue };
+            for p in [points[0], *last] {
+                let d = 7.0;
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [p[0] - d / 2.0, p[1] - d / 2.0],
+                        size: [d, d],
+                        fill,
+                        border: [0.0; 4],
+                        params: [d / 2.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+            }
+        }
+        // 6) Карточки среза: карточка + полоса категории шаблона (анатомия
+        // A/B, PRD-0004); выделенная — рамка выделения
+        let is_selected = |node: &Node| {
+            self.scene
+                .canvas
+                .nodes
+                .iter()
+                .position(|n| n.id == node.id)
+                .is_some_and(|idx| {
+                    self.selected == Some(Selection::Node(idx))
+                        || self.selected_nodes.contains(&idx)
+                })
+        };
+        for node in stage.slice.nodes.iter() {
+            quads.push(transform.instance_to_world(
+                &card_instance(node, is_selected(node), &palette),
+                camera,
+                viewport,
+            ));
+            if let Some(band) = template_band_instance(node) {
+                quads.push(transform.instance_to_world(&band, camera, viewport));
+            }
+        }
+        // 7) Контент нод среза (анатомия C/D, PRD-0004): заголовок,
+        // построчные результаты Numi-листа, полоса результата в футере —
+        // screen-space тексты константного размера (стиль модальностей
+        // FR-039), позиции — через transform (scale применён один раз)
+        for node in stage.slice.nodes.iter() {
+            let title = title_for(node);
+            if !title.is_empty() {
+                texts.push(OwnedScreenText {
+                    text: title,
+                    origin: transform.map_point([node.x + 12.0, node.y + 8.0]),
+                    width: transform.map_size(node.width) - 24.0,
+                    font_size: font(13.0),
+                    color: palette.title,
+                    align: TextAlign::Left,
+                });
+            }
+            if node.kind() != NodeKind::Text {
+                continue;
+            }
+            let Some(text) = node.text.as_deref() else {
+                continue;
+            };
+            let results = self.scene.expr_line_results.get(&node.id);
+            let has_footer = self.scene.expr_results.contains_key(&node.id);
+            // Вертикали строк — ритм живой карточки (BODY_LINE_HEIGHT от
+            // шапки, инвариант вертикали FR-025); строки сверх высоты тела
+            // (минус футер результата) не рисуются
+            let body_top = node.y + HEADER_HEIGHT + BODY_TOP_GAP;
+            let footer_h = if has_footer {
+                RESULT_LINE_HEIGHT + 6.0
+            } else {
+                0.0
+            };
+            let avail_h =
+                (node.height - HEADER_HEIGHT - BODY_TOP_GAP - BODY_PADDING - footer_h).max(0.0);
+            let max_rows = ((avail_h / BODY_LINE_HEIGHT).floor() as usize).max(1);
+            // Оценка ширины моно-строки: advance ≈ 0.6·font (stage-локальные px)
+            let char_w = 7.2f32;
+            for (li, line) in text.lines().enumerate().take(max_rows) {
+                let row_y = body_top
+                    + li as f32 * BODY_LINE_HEIGHT
+                    + (BODY_LINE_HEIGHT - RESULT_LINE_HEIGHT) / 2.0;
+                let outcome = results.and_then(|l| l.get(li)).and_then(|o| o.as_ref());
+                let (value_text, is_err) = match outcome {
+                    Some(ExprOutcome::Ok(value)) => (value.to_string(), false),
+                    Some(ExprOutcome::Err(_)) => ("!".to_owned(), true),
+                    None => (String::new(), false),
+                };
+                let value_w = value_text.chars().count() as f32 * char_w;
+                // Левая колонка — исходная строка; усечение под зазор до
+                // колонки значения (прототип: truncate до ширины карточки)
+                let fit =
+                    ((node.width - BODY_PADDING * 2.0 - value_w - 14.0) / char_w).max(3.0) as usize;
+                let color = if is_err {
+                    palette.error
+                } else if outcome.is_some() {
+                    palette.body
+                } else {
+                    palette.quote
+                };
+                texts.push(OwnedScreenText {
+                    text: truncate_chars(line.trim_end(), fit),
+                    origin: transform.map_point([node.x + BODY_PADDING, row_y + 2.0]),
+                    width: transform.map_size(node.width - BODY_PADDING * 2.0),
+                    font_size: font(12.0),
+                    color,
+                    align: TextAlign::Left,
+                });
+                if !value_text.is_empty() {
+                    let vw = value_text.chars().count() as f32 * char_w;
+                    texts.push(OwnedScreenText {
+                        text: value_text,
+                        origin: transform
+                            .map_point([node.x + node.width - BODY_PADDING - vw, row_y + 2.0]),
+                        width: transform.map_size(vw) + 24.0,
+                        font_size: font(12.0),
+                        color: if is_err { palette.error } else { palette.body },
+                        align: TextAlign::Left,
+                    });
+                }
+            }
+            // Полоса результата (D): узловое значение в футере карточки
+            if let Some(outcome) = self.scene.expr_results.get(&node.id) {
+                let (value_text, color) = match outcome {
+                    ExprOutcome::Ok(value) => (format!("= {value}"), palette.body),
+                    ExprOutcome::Err(msg) => {
+                        (truncate_chars(&format!("! {msg}"), 40), palette.error)
+                    }
+                };
+                let vw = value_text.chars().count() as f32 * char_w;
+                let strip_h = RESULT_LINE_HEIGHT + 6.0;
+                let strip_y = node.y + node.height - BODY_PADDING - strip_h;
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [node.x + 6.0, strip_y],
+                        size: [(node.width - 12.0).max(0.0), strip_h],
+                        fill: palette.search_row_fill,
+                        border: [0.0; 4],
+                        params: [6.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+                // Порт выхода (FR-025) — кружок value-цвета у правого края
+                let d = 7.0;
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [
+                            node.x + node.width - d - 4.0,
+                            strip_y + strip_h / 2.0 - d / 2.0,
+                        ],
+                        size: [d, d],
+                        fill: FLOW_EDGE_COLOR,
+                        border: [0.0; 4],
+                        params: [d / 2.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+                let vw = vw.min(node.width - BODY_PADDING * 2.0 - 14.0).max(0.0);
+                texts.push(OwnedScreenText {
+                    text: value_text,
+                    origin: transform.map_point([
+                        node.x + node.width - BODY_PADDING - d - 6.0 - vw,
+                        strip_y + 3.0,
+                    ]),
+                    width: transform.map_size(vw) + 24.0,
+                    font_size: font(12.0),
+                    color,
+                    align: TextAlign::Left,
+                });
+            }
+        }
+        // 8) Пилюли подписей веера (FR-044 Р-1): адресация + значение,
+        // лейн-стопка в коридоре между колонками (stage_fan_label_layout:
+        // без пересечений, кламп в зону; порядок — по вертикали середин)
+        let mut pills_in: Vec<(usize, f32, f32)> = Vec::new();
+        let mut mids: Vec<[f32; 2]> = Vec::new();
+        for (i, _edge) in stage.slice.edges.iter().enumerate() {
+            let Some(points) = canvas_core::stage_edge_points(&stage.slice, i, stage.fan[i], 24)
+            else {
+                continue;
+            };
+            let mid = points[points.len() / 2];
+            mids.push(mid);
+            pills_in.push((i, 0.0, 34.0)); // ширина заполнится после сортировки
+        }
+        // Сортировка по вертикали середин (прототип R7: стопка следует
+        // геометрии веера) с сохранением индекса ребра
+        let mut order: Vec<usize> = (0..mids.len()).collect();
+        order.sort_by(|&a, &b| mids[a][1].total_cmp(&mids[b][1]));
+        let sorted: Vec<(usize, f32, f32)> = order
+            .iter()
+            .enumerate()
+            .map(|(k, &oi)| {
+                let (item, _, h) = pills_in[oi];
+                let addr = truncate_chars(&self.stage_edge_addr_text(&stage.slice.edges[item]), 42);
+                let value =
+                    truncate_chars(&self.stage_edge_value_text(&stage.slice.edges[item]), 42);
+                let w =
+                    (addr.chars().count().max(value.chars().count()) as f32 * 7.2 + 24.0).max(56.0);
+                let _ = k;
+                (item, w, h)
+            })
+            .collect();
+        // Зона и коридор — stage-локальные px (заголовок сверху, подсказка
+        // снизу; коридор — между колонками нод, pad прототипа 70 px)
+        let zone = StageLocalRect {
+            x: 0.0,
+            y: 56.0 / s,
+            w: rect.w / s,
+            h: ((rect.h - 56.0 - 46.0) / s).max(0.0),
+        };
+        let src = &stage.slice.nodes[0];
+        let dst = &stage.slice.nodes[1];
+        let src_labels = StageLocalRect {
+            x: src.x,
+            y: src.y,
+            w: src.width,
+            h: src.height,
+        };
+        let dst_labels = StageLocalRect {
+            x: dst.x,
+            y: dst.y,
+            w: dst.width,
+            h: dst.height,
+        };
+        let corridor = fan_corridor(src_labels, dst_labels, 70.0);
+        let axis_y = zone.y + zone.h / 2.0;
+        let laid = stage_fan_label_layout(sorted, corridor, zone, axis_y);
+        for pill in &laid.pills {
+            let edge = &stage.slice.edges[pill.item];
+            let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
+            let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
+            let sel = selected_slice == Some(pill.item);
+            quads.push(transform.instance_to_world(
+                &CardInstance {
+                    pos: [pill.rect.x, pill.rect.y],
+                    size: [pill.rect.w, pill.rect.h],
+                    fill: palette.edge_label_fill,
+                    border: if sel { SELECTION_BORDER } else { [0.0; 4] },
+                    params: [9.0, 0.0, 0.0, 1.0],
+                },
+                camera,
+                viewport,
+            ));
+            texts.push(OwnedScreenText {
+                text: addr,
+                origin: transform.map_point([pill.rect.x + 12.0, pill.rect.y + 5.0]),
+                width: transform.map_size(pill.rect.w - 16.0),
+                font_size: font(12.0),
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            if !value.is_empty() {
+                texts.push(OwnedScreenText {
+                    text: value,
+                    origin: transform.map_point([pill.rect.x + 12.0, pill.rect.y + 18.0]),
+                    width: transform.map_size(pill.rect.w - 16.0),
+                    font_size: font(11.0),
+                    color: palette.edge_label,
+                    align: TextAlign::Left,
+                });
+            }
+        }
+        // 9) Подсказка внизу stage (i18n, §7.2)
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::STAGE_FOOT_HINT).to_owned(),
+            origin: [rect.x + 40.0, rect.y + rect.h - 26.0],
+            width: rect.w - 80.0,
+            font_size: font(11.5),
+            color: palette.quote,
+            align: TextAlign::Center,
+        });
+        (quads, texts)
+    }
+
+    /// FR-042 (E3): адресная часть подписи ребра в stage — адресация истока
+    /// (fromLine «строка N» / fromOutput, FR-025/FR-029) и параметр-приёмник
+    /// (toParam). Значение — отдельно, второй строкой пилюли (FR-044).
+    fn stage_edge_addr_text(&self, edge: &Edge) -> String {
         let language = self.settings.language;
         let mut parts: Vec<String> = Vec::new();
         if let Some(line) = edge.from_line {
@@ -7962,7 +8377,16 @@ impl App {
                 &[("param", param)],
             ));
         }
-        let value = match edge.from_line {
+        if parts.is_empty() {
+            parts.push("—".to_owned());
+        }
+        parts.join(" · ")
+    }
+
+    /// FR-042 (E3): значение ребра в stage (FR-014/FR-025; для fromLine —
+    /// построчный результат Numi-листа источника).
+    fn stage_edge_value_text(&self, edge: &Edge) -> String {
+        match edge.from_line {
             Some(line) => self
                 .scene
                 .expr_line_results
@@ -7972,17 +8396,14 @@ impl App {
                 .map(|outcome| match outcome {
                     ExprOutcome::Ok(value) => value.to_string(),
                     ExprOutcome::Err(msg) => msg.clone(),
-                }),
+                })
+                .unwrap_or_default(),
             None => match self.scene.expr_results.get(&edge.from_node) {
-                Some(ExprOutcome::Ok(value)) => Some(value.to_string()),
-                Some(ExprOutcome::Err(msg)) => Some(msg.clone()),
-                None => None,
+                Some(ExprOutcome::Ok(value)) => value.to_string(),
+                Some(ExprOutcome::Err(msg)) => msg.clone(),
+                None => String::new(),
             },
-        };
-        if let Some(value) = value {
-            parts.push(value);
         }
-        parts.join(" · ")
     }
 
     /// FR-042 (E3): открыть main stage, если ребро — часть пучка веса ≥ 2
@@ -8079,6 +8500,16 @@ impl App {
                 if self.main_stage.is_some() {
                     let viewport = self.viewport_logical();
                     let rect = main_stage_rect(viewport);
+                    // FR-044 (прототип): кнопка ✕ в правом верхнем углу —
+                    // закрытие stage; rect по той же формуле, что в рендере
+                    if point_in_rect(
+                        [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0],
+                        self.cursor,
+                    ) {
+                        self.close_main_stage();
+                        self.request_redraw();
+                        return;
+                    }
                     if point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
                         let stage = self.main_stage.as_ref().expect("stage открыт");
                         let transform = StageTransform::new([rect.x, rect.y], stage.scale);
@@ -11031,43 +11462,49 @@ impl ApplicationHandler<AppEvent> for App {
                     owned_texts.extend(whatif_texts);
                 }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
-                // файла; screen-space, константный размер при любом зуме
-                if let Some(file) = self.hovered.and_then(|index| {
-                    self.scene.canvas.nodes.get(index).and_then(|node| {
-                        (node.broken_link == Some(true))
-                            .then(|| node.file.clone())
-                            .flatten()
-                    })
-                }) {
-                    // Ограничиваем правым краём окна, чтобы длинный путь
-                    // не вылез за экран (width — только клип-бounds)
-                    let viewport = self.viewport_logical();
-                    let origin_x =
-                        (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                    owned_texts.push(OwnedScreenText {
-                        text: self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
-                        origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                        width: TOOLTIP_WIDTH,
-                        font_size: 13.0,
-                        color: Color::rgb(0xd4, 0xd4, 0xd4),
-                        align: TextAlign::Left,
-                    });
-                }
-                // Тултип ошибки формульной строки (FR-013, правка 4): курсор
-                // над бейджем «!» (зоны — с прошлого кадра) — сообщение об
-                // ошибке у курсора; так видно, ЧТО именно не так в расчёте
-                if let Some(hit) = self.expr_error_hit_at(self.cursor) {
-                    let viewport = self.viewport_logical();
-                    let origin_x =
-                        (self.cursor[0] + 14.0).min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                    owned_texts.push(OwnedScreenText {
-                        text: hit.message.clone(),
-                        origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                        width: TOOLTIP_WIDTH,
-                        font_size: 13.0,
-                        color: Color::rgb(0xe5, 0x5c, 0x5c),
-                        align: TextAlign::Left,
-                    });
+                // файла; screen-space, константный размер при любом зуме.
+                // Main stage — модален: тултипы живого канваса глушатся
+                // (иначе тултип «просвечивает» поверх затемнения, дефект
+                // скриншота — stage должен быть единственным источником
+                // контента поверх затемнения)
+                if self.main_stage.is_none() {
+                    if let Some(file) = self.hovered.and_then(|index| {
+                        self.scene.canvas.nodes.get(index).and_then(|node| {
+                            (node.broken_link == Some(true))
+                                .then(|| node.file.clone())
+                                .flatten()
+                        })
+                    }) {
+                        // Ограничиваем правым краём окна, чтобы длинный путь
+                        // не вылез за экран (width — только клип-бounds)
+                        let viewport = self.viewport_logical();
+                        let origin_x = (self.cursor[0] + 14.0)
+                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                        owned_texts.push(OwnedScreenText {
+                            text: self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
+                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                            width: TOOLTIP_WIDTH,
+                            font_size: 13.0,
+                            color: Color::rgb(0xd4, 0xd4, 0xd4),
+                            align: TextAlign::Left,
+                        });
+                    }
+                    // Тултип ошибки формульной строки (FR-013, правка 4): курсор
+                    // над бейджем «!» (зоны — с прошлого кадра) — сообщение об
+                    // ошибке у курсора; так видно, ЧТО именно не так в расчёте
+                    if let Some(hit) = self.expr_error_hit_at(self.cursor) {
+                        let viewport = self.viewport_logical();
+                        let origin_x = (self.cursor[0] + 14.0)
+                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                        owned_texts.push(OwnedScreenText {
+                            text: hit.message.clone(),
+                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                            width: TOOLTIP_WIDTH,
+                            font_size: 13.0,
+                            color: Color::rgb(0xe5, 0x5c, 0x5c),
+                            align: TextAlign::Left,
+                        });
+                    }
                 }
                 // T21: модальный диалог (screen-space): панель + тексты +
                 // кнопки; рендер после битой ссылки — поверх всего канваса
@@ -11151,12 +11588,14 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Center,
                     });
                 }
-                // FR-042 (E3): main stage — валидация среза (инвариант 9:
-                // фоновые мутации MCP/undo закрывают), затемнение фона,
-                // подложка/рамка и контент среза (рёбра веера, карточки).
-                // Инстансы — в overlay_instances (world-tail поверх карточек
-                // канваса); тексты — в owned_texts (screen-space, константный
-                // размер — стиль модальностей FR-039).
+                // FR-042 (E3) + FR-044: main stage — МОДАЛЬНЫЙ проход кадра.
+                // Валидация среза (инвариант 9: фоновые мутации MCP/undo
+                // закрывают), затем сборка квадов/текстов stage в ОТДЕЛЬНЫЕ
+                // списки: рендерер выводит их после всех z-сегментов, текст-
+                // групп и миникарты — ни живой текст канваса (тела нод,
+                // подписи связей, бейджи анализа), ни тултипы не «просвечивают»
+                // сквозь затемнение (раньше stage шёл в мир-хвост ПОД текстом
+                // финального сегмента — регрессия «каши», дефект скриншота).
                 if let Some(stage) = self.main_stage.as_mut() {
                     if !stage.valid(&self.scene.canvas) {
                         self.main_stage = None;
@@ -11165,132 +11604,32 @@ impl ApplicationHandler<AppEvent> for App {
                 // Раскладка среза — единственный mut-заём stage (кадр);
                 // далее только чтение — совместимо с методами self.tr/….
                 let stage_viewport = self.viewport_logical();
+                let mut stage_instances: Vec<CardInstance> = Vec::new();
+                let mut stage_owned_texts: Vec<OwnedScreenText> = Vec::new();
                 let relaid = self
                     .main_stage
                     .as_mut()
                     .map(|stage| stage.relayout(stage_viewport));
                 if let (Some(stage), Some(layout)) = (self.main_stage.as_ref(), relaid) {
-                    let palette = ThemeColors::from_theme(self.settings.theme);
-                    let viewport = self.viewport_logical();
-                    let stage_rect = main_stage_rect(viewport);
-                    let transform = StageTransform::new([stage_rect.x, stage_rect.y], layout.scale);
-                    let zoom = self.camera.zoom();
-                    let camera = &self.camera;
-                    let to_world = |screen: Vec2| camera.screen_to_world(screen, viewport);
-                    // 1) Затемнение фона — альфа-аппроксимация §7.5 (тёмная
-                    // 0.6 / светлая 0.5 из темы), полный вьюпорт
-                    overlay_instances.push(CardInstance {
-                        pos: to_world([0.0, 0.0]),
-                        size: [viewport[0] / zoom, viewport[1] / zoom],
-                        fill: palette.stage_dim,
-                        border: [0.0; 4],
-                        params: [0.0, 0.0, 0.0, 1.0],
-                    });
-                    // 2) Подложка и рамка stage — стиль модалок FR-039
-                    // (menu_fill + рамка панели, радиус 12)
-                    overlay_instances.push(CardInstance {
-                        pos: to_world([stage_rect.x, stage_rect.y]),
-                        size: [stage_rect.w / zoom, stage_rect.h / zoom],
-                        fill: palette.menu_fill,
-                        border: [0.22, 0.24, 0.30, 0.9],
-                        params: [12.0 / zoom, 0.0, 0.0, 1.0],
-                    });
-                    // 3) Рёбра среза веером (stage-локальные px → мир);
-                    // выделение ребра среза — live-индекс из Selection
-                    let selected_slice = self.selected.and_then(|sel| match sel {
-                        Selection::Edge(live) => stage.edges.iter().position(|&e| e == live),
-                        Selection::Node(_) => None,
-                    });
-                    for inst in build_stage_edge_instances(
-                        &stage.slice,
-                        &stage.fan,
-                        stage.slice.edges.len(),
-                        selected_slice,
-                        None,
-                    ) {
-                        overlay_instances
-                            .push(transform.instance_to_world(&inst, camera, viewport));
-                    }
-                    // 4) Карточки обеих нод (выделенная — рамка выделения)
-                    for node in stage.slice.nodes.iter() {
-                        let live_node =
-                            self.scene.canvas.nodes.iter().position(|n| n.id == node.id);
-                        let is_selected = live_node.is_some_and(|idx| {
-                            self.selected == Some(Selection::Node(idx))
-                                || self.selected_nodes.contains(&idx)
-                        });
-                        let inst = transform.instance_to_world(
-                            &card_instance(node, is_selected, &palette),
-                            camera,
-                            viewport,
-                        );
-                        overlay_instances.push(inst);
-                        // Заголовок ноды — screen-space текст (читаем при
-                        // любом зуме; гейт LOD не нужен — stage детален)
-                        let title = title_for(node);
-                        if title.is_empty() {
-                            continue;
-                        }
-                        let origin = transform.map_point([node.x + 10.0, node.y + 6.0]);
-                        owned_texts.push(OwnedScreenText {
-                            text: title,
-                            origin,
-                            width: transform.map_size(node.width) - 20.0,
-                            font_size: 13.0,
-                            color: palette.title,
-                            align: TextAlign::Left,
-                        });
-                    }
-                    // 5) Подписи рёбер веера: адресация fromLine/fromOutput/
-                    // toParam (FR-025/FR-029) + текущее значение ребра —
-                    // детализация, ради которой существует stage (US-2)
-                    for (i, edge) in stage.slice.edges.iter().enumerate() {
-                        let Some(points) =
-                            canvas_core::stage_edge_points(&stage.slice, i, stage.fan[i], 24)
-                        else {
-                            continue;
-                        };
-                        let mid = points[points.len() / 2];
-                        let origin = transform.map_point(mid);
-                        owned_texts.push(OwnedScreenText {
-                            text: self.stage_edge_label_text(edge),
-                            origin: [origin[0] - 120.0, origin[1] - 22.0],
-                            width: 240.0,
-                            font_size: 12.0,
-                            color: palette.edge_label,
-                            align: TextAlign::Center,
-                        });
-                    }
-                    // 6) Заголовок, бейдж ×N и подсказка Esc (i18n, F-3/§7.2)
-                    owned_texts.push(OwnedScreenText {
-                        text: self.tr(keys::STAGE_TITLE).to_owned(),
-                        origin: transform.map_point([14.0, 10.0]),
-                        width: 240.0,
-                        font_size: 13.0,
-                        color: palette.title,
-                        align: TextAlign::Left,
-                    });
-                    owned_texts.push(OwnedScreenText {
-                        text: format!("×{}", stage.slice.edges.len()),
-                        origin: [
-                            stage_rect.x + stage_rect.w - 14.0 - 160.0,
-                            stage_rect.y + 10.0,
-                        ],
-                        width: 160.0,
-                        font_size: 14.0,
-                        color: palette.title,
-                        align: TextAlign::Center,
-                    });
-                    owned_texts.push(OwnedScreenText {
-                        text: self.tr(keys::STAGE_HINT).to_owned(),
-                        origin: [stage_rect.x + 40.0, stage_rect.y + stage_rect.h - 26.0],
-                        width: stage_rect.w - 80.0,
-                        font_size: 12.0,
-                        color: palette.hud,
-                        align: TextAlign::Center,
-                    });
+                    let (insts, texts) = self.stage_frame(stage_viewport, stage, layout);
+                    stage_instances = insts;
+                    stage_owned_texts = texts;
                 }
                 let screen_texts: Vec<ScreenText> = owned_texts
+                    .iter()
+                    .map(|t| ScreenText {
+                        text: &t.text,
+                        origin: t.origin,
+                        width: t.width,
+                        font_size: t.font_size,
+                        color: t.color,
+                        align: t.align,
+                    })
+                    .collect();
+                // FR-042/FR-044: тексты main stage — отдельный список (не
+                // screen_texts панелей): рисуются группой ПОСЛЕ модального
+                // прохода квадов stage
+                let stage_screen_texts: Vec<ScreenText> = stage_owned_texts
                     .iter()
                     .map(|t| ScreenText {
                         text: &t.text,
@@ -11513,6 +11852,8 @@ impl ApplicationHandler<AppEvent> for App {
                     texts: &overlay_texts,
                     screen_instances: &screen_instances,
                     screen_texts: &screen_texts,
+                    stage_instances: &stage_instances,
+                    stage_texts: &stage_screen_texts,
                     screen_sectors: &overlay_sectors,
                     widget_quads: &widget_quad_refs,
                 };
@@ -12870,6 +13211,66 @@ mod tests {
         // Модель не изменилась
         assert_eq!(scene.canvas.edges[1].flow_kind(), FlowKind::Control);
         assert!(scene.undo_stack.is_empty(), "отклонённый тогл без шага");
+    }
+
+    /// FR-042/FR-044 (регрессия «каши» в stage, дефект скриншота): срез
+    /// хранится в stage-локальных px БЕЗ масштаба — [`StageTransform`]
+    /// применяет scale ровно ОДИН раз: позиция ноды на экране совпадает с
+    /// раскладкой `stage_layout`, размеры сжаты тем же коэффициентом,
+    /// обе колонки умещаются в rect, а веер стартует у порта истока
+    /// (рендер и hit-test — в одной системе координат).
+    #[test]
+    fn stage_slice_is_stage_local_and_fits_rect() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("fa", "исток", 0.0, 0.0);
+        a.width = 420.0;
+        a.height = 240.0;
+        let mut b = Node::text("fb", "приёмник", 600.0, 0.0);
+        b.width = 360.0;
+        b.height = 200.0;
+        canvas.nodes.push(a);
+        canvas.nodes.push(b);
+        canvas.add_edge(Edge::new("e1", "fa", None, "fb", Some(Side::Left)));
+        canvas.add_edge(Edge::new("e2", "fa", None, "fb", Some(Side::Left)));
+        canvas.add_edge(Edge::new("e3", "fa", None, "fb", Some(Side::Left)));
+        let index = canvas_core::EdgeBundleIndex::build(&canvas);
+        assert!(index.bundle_of_edge(0).is_some(), "пучок собран");
+        let mut stage = MainStageState::open(&canvas, &index, 0).expect("stage открыт");
+        // Тесный вьюпорт → масштаб сжатия < 1 (инвариант умещения)
+        let viewport = [900.0_f32, 600.0];
+        let layout = stage.relayout(viewport);
+        assert!(layout.scale < 1.0, "узкий viewport требует сжатия");
+        let rect = main_stage_rect(viewport);
+        let transform = StageTransform::new([rect.x, rect.y], layout.scale);
+        // Позиция истока на экране = раскладке (масштаб применён один раз)
+        let p = transform.map_point([stage.slice.nodes[0].x, stage.slice.nodes[0].y]);
+        assert!(
+            (p[0] - (rect.x + layout.source_pos[0])).abs() < 0.01,
+            "x истока"
+        );
+        assert!(
+            (p[1] - (rect.y + layout.source_pos[1])).abs() < 0.01,
+            "y истока"
+        );
+        // Размеры сжаты тем же масштабом, что и позиции
+        assert!(
+            (transform.map_size(stage.slice.nodes[0].width) - layout.scale * 420.0).abs() < 0.01,
+            "ширина карточки сжата тем же scale"
+        );
+        // Правый край приёмника внутри rect main stage
+        let right = transform.map_point([stage.slice.nodes[1].x, 0.0])[0]
+            + transform.map_size(stage.slice.nodes[1].width);
+        assert!(right <= rect.x + rect.w + 0.01, "приёмник умещается в rect");
+        // Веер согласован с карточками: полилиния стартует у порта истока
+        // (смещение веера перпендикулярно оси — x совпадает)
+        let points =
+            canvas_core::stage_edge_points(&stage.slice, 0, stage.fan[0], 24).expect("полилиния");
+        let p0 = transform.map_point(points[0]);
+        let src_port_x = stage.slice.nodes[0].x + stage.slice.nodes[0].width;
+        assert!(
+            (p0[0] - transform.map_point([src_port_x, 0.0])[0]).abs() < 2.0,
+            "веер стартует у правого порта истока"
+        );
     }
 
     /// M8/W3 (wasm-port §6, приёмка «трейты покрыты тестами на заглушках»):

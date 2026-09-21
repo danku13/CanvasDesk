@@ -97,6 +97,7 @@ fn headless_text_under_covering_card() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");
