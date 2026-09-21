@@ -314,6 +314,13 @@ pub type LineOutputs = HashMap<(String, usize), Value>;
 /// определение). Источник адресуется value-рёбрами `fromOutput`.
 pub type NamedOutputs = HashMap<(String, String), Value>;
 
+/// FR-045 R-2 (§Q3): снапшоты источников данных data-нод (`canvasdesk.data`)
+/// — `node_id → CsvSnapshot`. Содержимое источника НЕ хранится в `.canvas`
+/// (модель несёт только `ref`/`fields`) — карту заполняет приложение при
+/// создании/перезагрузке CSV-источника (снапшот при создании, §Q3); для
+/// `dacdb`/`db` в PoC снапшота нет — рёбра остаются unmapped (§Q4).
+pub type DataSnapshots = HashMap<String, crate::csv::CsvSnapshot>;
+
 /// FR-029: полный результат пересчёта — значения нод ([`FlowOutputs`]),
 /// построчные выходы ([`LineOutputs`]), именованные выходы
 /// ([`NamedOutputs`]) и предупреждения по нодам (конфликты проливания).
@@ -358,6 +365,18 @@ pub fn propagate_with_lines(
     canvas: &Canvas,
     whatif: &WhatIfOverrides,
 ) -> Result<FlowSolutions, CycleError> {
+    propagate_with_lines_data(canvas, whatif, &DataSnapshots::new())
+}
+
+/// FR-045 R-2 (§Q3): [`propagate_with_lines`] со снапшотами CSV-источников
+/// — колонки data-нод проливаются в поток (см.
+/// [`edge_source_value_with_data`]). Пустая карта — поведение идентично
+/// [`propagate_with_lines`] (обратная совместимость всех вызовов).
+pub fn propagate_with_lines_data(
+    canvas: &Canvas,
+    whatif: &WhatIfOverrides,
+    data: &DataSnapshots,
+) -> Result<FlowSolutions, CycleError> {
     let order = topo_sort(canvas)?;
     let mut solutions = FlowSolutions::default();
     for index in order {
@@ -374,12 +393,14 @@ pub fn propagate_with_lines(
         let text = whatif_virtual_text(&node.text.clone().unwrap_or_default(), &line_overrides);
         // FR-029: входы по адресации — позиционные слоты (рёбра без
         // toParam) и карта проливания в параметры (рёбра с toParam)
+        // FR-045: снапшоты CSV — колонки data-нод адресуются fromOutput
         let inbound = inbound_values(
             canvas,
             id,
             &solutions.outputs,
             &solutions.lines,
             &solutions.named,
+            data,
         );
         if !inbound.conflicts.is_empty() {
             let warnings = inbound
@@ -571,6 +592,48 @@ pub(crate) fn edge_source_value(
     }
 }
 
+/// FR-045 R-2 (проливание колонок CSV, §Q3): [`edge_source_value`] со
+/// снапшотами data-нод. Семантика адресации data-ноды (снапшот присутствует
+/// в карте — карту заполняет приложение только для CSV):
+/// - `fromOutput` = колонка; `fromLine` = запись снапшота (0-based;
+///   для data-ноды адресует СТРОКУ ТАБЛИЦЫ, не строку листа); `fromLine`
+///   нет — первая запись (детерминированное PoC-правило; пустой снапшот —
+///   `None`);
+/// - колонки нет в снапшоте / запись вне диапазона / ячейка пустая или
+///   текстовая — `None` (unmapped, R-3: «значение не подставлено»);
+/// - ребро без `fromOutput` — значения не несёт (значение data-ноды
+///   «целиком» не определено: адресация колонки обязательна; согласовано
+///   с fallback `edge.id` в `dataref::display_ref`);
+/// - снапшота нет (dacdb/db PoC, CSV не загружен) — легаси-путь: у
+///   data-ноды формулы обычно нет → `None` (источник pending, R-3).
+///
+/// What-if override data-ноды ([`WhatIfOverrides::node_values`]) подменяет
+/// значение ноды, но НЕ колонки (§Q3 — связь с what-if открыта).
+pub(crate) fn edge_source_value_with_data(
+    edge: &Edge,
+    outputs: &FlowOutputs,
+    lines: &LineOutputs,
+    named: &NamedOutputs,
+    data: &DataSnapshots,
+) -> Option<Value> {
+    if let Some(snapshot) = data.get(&edge.from_node) {
+        if let Some(field) = &edge.from_output {
+            let row = edge.from_line.unwrap_or(0);
+            return snapshot
+                .cell(row, field)
+                .and_then(crate::csv::csv_cell_value)
+                .map(Value::scalar);
+        }
+        if edge.from_line.is_some() {
+            // Запись без колонки — скаляра нет: значение не подставлено.
+            return None;
+        }
+        // Ребро без адресации — легаси-путь ниже (значение ноды целиком;
+        // у data-ноды формулы обычно нет → None → unmapped).
+    }
+    edge_source_value(edge, outputs, lines, named)
+}
+
 /// FR-029: входящие value-рёбра ноды по адресации — позиционные слоты
 /// `$1..$N` (рёбра без `toParam`, порядок `canvas.edges`) и карта
 /// проливания в параметры (рёбра с `toParam`; несколько рёбер в один
@@ -582,6 +645,7 @@ fn inbound_values(
     outputs: &FlowOutputs,
     lines: &LineOutputs,
     named: &NamedOutputs,
+    data: &DataSnapshots,
 ) -> InboundValues {
     let mut result = InboundValues::default();
     // параметры, в которые уже приходили рёбра (для детекции конфликтов)
@@ -590,7 +654,7 @@ fn inbound_values(
         if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
             continue;
         }
-        let value = edge_source_value(edge, outputs, lines, named);
+        let value = edge_source_value_with_data(edge, outputs, lines, named, data);
         match &edge.to_param {
             None => result.slots.push(value),
             Some(name) => {
@@ -685,13 +749,31 @@ pub fn unmapped_inputs(
     node_id: &str,
     solutions: &FlowSolutions,
 ) -> Vec<UnmappedInput> {
+    unmapped_inputs_with_data(canvas, node_id, solutions, &DataSnapshots::new())
+}
+
+/// FR-045 R-3: [`unmapped_inputs`] со снапшотами CSV — колонка data-ноды,
+/// пролитая из снапшота, снимает состояние (та же резолюция, что в
+/// [`propagate_with_lines_data`] — инвариант согласованности состояния).
+pub fn unmapped_inputs_with_data(
+    canvas: &Canvas,
+    node_id: &str,
+    solutions: &FlowSolutions,
+    data: &DataSnapshots,
+) -> Vec<UnmappedInput> {
     let mut slot: usize = 0;
     let mut result = Vec::new();
     for edge in &canvas.edges {
         if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
             continue;
         }
-        let value = edge_source_value(edge, &solutions.outputs, &solutions.lines, &solutions.named);
+        let value = edge_source_value_with_data(
+            edge,
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+            data,
+        );
         if value.is_none() {
             let (slot_no, param) = if edge.to_param.is_none() {
                 let no = slot;
@@ -2253,5 +2335,260 @@ mod tests {
             propagate_with_lines(&with_desc, &WhatIfOverrides::default()).expect("пересчёт");
         assert_eq!(out_base.outputs, out_desc.outputs);
         assert_eq!(out_base.lines, out_desc.lines);
+    }
+
+    /// Data-нода FR-045 R-2: `canvasdesk.data` + снапшот CSV.
+    fn data_node(canvas: &mut Canvas, id: &str, label: &str, x: f32, fields: &[&str]) {
+        let mut node = Node::text(id, "", x, 0.0);
+        node.label = Some(label.to_owned());
+        node.set_data(Some(crate::model::DataRef {
+            kind: "csv".to_owned(),
+            source_ref: format!("{label}.csv"),
+            fields: fields.iter().map(|f| f.to_string()).collect(),
+        }));
+        canvas.nodes.push(node);
+    }
+
+    fn snapshot(fields: &[&str], rows: &[&[&str]]) -> crate::csv::CsvSnapshot {
+        crate::csv::CsvSnapshot {
+            fields: fields.iter().map(|f| f.to_string()).collect(),
+            rows: rows
+                .iter()
+                .map(|row| row.iter().map(|c| c.to_string()).collect())
+                .collect(),
+        }
+    }
+
+    /// FR-045 R-2 (проливание, §Q3): колонка data-ноды (`fromOutput`)
+    /// проливается в слот приёмника — формула считает значение снапшота;
+    /// сама data-нода значения «целиком» не даёт (адресация обязательна).
+    #[test]
+    fn data_column_spills_into_slot() {
+        let mut canvas = Canvas::default();
+        data_node(&mut canvas, "K", "Курсы", 0.0, &["USD", "EUR"]);
+        node_with_expr(&mut canvas, "T", "$1 * 2", 1.0);
+        let mut e1 = Edge::new("e1", "K", None, "T", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("USD".to_owned());
+        canvas.add_edge(e1);
+        let mut data: DataSnapshots = DataSnapshots::new();
+        data.insert("K".to_owned(), snapshot(&["USD", "EUR"], &[&["90", "100"]]));
+        let solutions = propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data)
+            .expect("пересчёт");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("T")
+                .and_then(|r| r.as_ref().ok())
+                .map(|v| v.num),
+            Some(180.0),
+            "$1 = Курсы.USD = 90"
+        );
+        assert!(
+            !solutions.outputs.contains_key("K"),
+            "data-нода без формулы значения целиком не даёт"
+        );
+        // Устаревший вызов (пустая карта) — колонка не проливается (совместимость).
+        let legacy = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("пересчёт");
+        assert!(!legacy.outputs.contains_key("T") || legacy.outputs["T"].is_err());
+    }
+
+    /// FR-045 R-2: проливание колонки в параметр (`toParam` + `fromOutput`).
+    #[test]
+    fn data_column_spills_into_param() {
+        let mut canvas = Canvas::default();
+        data_node(&mut canvas, "K", "Курсы", 0.0, &["USD"]);
+        node_with_expr(&mut canvas, "T", "$Rate * $Rate", 1.0);
+        let mut e1 = Edge::new("e1", "K", None, "T", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.to_param = Some("Rate".to_owned());
+        e1.from_output = Some("USD".to_owned());
+        canvas.add_edge(e1);
+        let mut data: DataSnapshots = DataSnapshots::new();
+        data.insert("K".to_owned(), snapshot(&["USD"], &[&["7"]]));
+        let solutions = propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data)
+            .expect("пересчёт");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("T")
+                .and_then(|r| r.as_ref().ok())
+                .map(|v| v.num),
+            Some(49.0)
+        );
+    }
+
+    /// FR-045 (§Q3, семантика строк): `fromLine` адресует запись снапшота
+    /// (0-based); без `fromLine` — первая запись; вне диапазона — unmapped.
+    #[test]
+    fn data_row_addressing() {
+        let mut canvas = Canvas::default();
+        data_node(&mut canvas, "K", "Курсы", 0.0, &["USD"]);
+        node_with_expr(&mut canvas, "T0", "$1", 1.0);
+        node_with_expr(&mut canvas, "T1", "$1", 2.0);
+        node_with_expr(&mut canvas, "T9", "$1", 3.0);
+        let mut e0 = Edge::new("e0", "K", None, "T0", None);
+        e0.set_flow_kind(FlowKind::Value);
+        e0.from_output = Some("USD".to_owned());
+        canvas.add_edge(e0);
+        let mut e1 = Edge::new("e1", "K", None, "T1", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("USD".to_owned());
+        e1.from_line = Some(1);
+        canvas.add_edge(e1);
+        let mut e9 = Edge::new("e9", "K", None, "T9", None);
+        e9.set_flow_kind(FlowKind::Value);
+        e9.from_output = Some("USD".to_owned());
+        e9.from_line = Some(9);
+        canvas.add_edge(e9);
+        let mut data: DataSnapshots = DataSnapshots::new();
+        data.insert(
+            "K".to_owned(),
+            snapshot(&["USD"], &[&["90"], &["91"], &["92"]]),
+        );
+        let solutions = propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data)
+            .expect("пересчёт");
+        let num = |id: &str| {
+            solutions
+                .outputs
+                .get(id)
+                .and_then(|r| r.as_ref().ok())
+                .map(|v| v.num)
+        };
+        assert_eq!(num("T0"), Some(90.0), "без fromLine — первая запись");
+        assert_eq!(num("T1"), Some(91.0), "fromLine = запись 1 (0-based)");
+        assert_eq!(num("T9"), None, "запись вне диапазона — значения нет");
+        // Состояние согласовано резолюции: unmapped только у e9.
+        let unmapped = unmapped_inputs_with_data(&canvas, "T9", &solutions, &data);
+        assert_eq!(unmapped.len(), 1);
+        assert_eq!(unmapped[0].edge_id, "e9");
+        assert!(unmapped_inputs_with_data(&canvas, "T0", &solutions, &data).is_empty());
+        assert!(unmapped_inputs_with_data(&canvas, "T1", &solutions, &data).is_empty());
+    }
+
+    /// FR-045 R-3: колонки нет в снапшоте / ячейка текстовая / пустая /
+    /// ребро без адресации — unmapped; пустой снапшот — тоже.
+    #[test]
+    fn data_unmapped_cases() {
+        let mut canvas = Canvas::default();
+        data_node(&mut canvas, "K", "Курсы", 0.0, &["USD", "note"]);
+        node_with_expr(&mut canvas, "T", "$1", 1.0);
+        // e1: колонка не из снапшота (GBP отсутствует в fields)
+        let mut e1 = Edge::new("e1", "K", None, "T", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("GBP".to_owned());
+        canvas.add_edge(e1);
+        // e2: текстовая ячейка
+        let mut e2 = Edge::new("e2", "K", None, "T", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("note".to_owned());
+        canvas.add_edge(e2);
+        // e3: без адресации — значение data-ноды целиком не определено
+        let mut e3 = Edge::new("e3", "K", None, "T", None);
+        e3.set_flow_kind(FlowKind::Value);
+        canvas.add_edge(e3);
+        // e4: пустая ячейка числовой колонки
+        let mut e4 = Edge::new("e4", "K", None, "T", None);
+        e4.set_flow_kind(FlowKind::Value);
+        e4.from_output = Some("USD".to_owned());
+        e4.from_line = Some(2);
+        canvas.add_edge(e4);
+        let mut data: DataSnapshots = DataSnapshots::new();
+        data.insert(
+            "K".to_owned(),
+            snapshot(
+                &["USD", "note"],
+                &[&["90", "утро"], &["91", ""], &["", "ночь"]],
+            ),
+        );
+        let solutions = propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data)
+            .expect("пересчёт");
+        let unmapped = unmapped_inputs_with_data(&canvas, "T", &solutions, &data);
+        let ids: Vec<&str> = unmapped.iter().map(|u| u.edge_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["e1", "e2", "e3", "e4"],
+            "все четыре случая без значения"
+        );
+        // Формула не считается: слот $1 — первое позиционное ребро (e1) — None.
+        assert!(!solutions.outputs.contains_key("T") || solutions.outputs["T"].is_err());
+    }
+
+    /// FR-045 (§Q4): dacdb/db — структура без снапшота (PoC) — рёбра
+    /// unmapped; CSV без загруженного снапшота — источник pending.
+    #[test]
+    fn data_without_snapshot_is_unmapped() {
+        let mut canvas = Canvas::default();
+        data_node(&mut canvas, "D", "Проекты", 0.0, &["name"]);
+        canvas.nodes[0].set_data(Some(crate::model::DataRef {
+            kind: "dacdb".to_owned(),
+            source_ref: "projects".to_owned(),
+            fields: vec!["name".to_owned()],
+        }));
+        node_with_expr(&mut canvas, "T", "$1", 1.0);
+        let mut e1 = Edge::new("e1", "D", None, "T", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("name".to_owned());
+        canvas.add_edge(e1);
+        let solutions =
+            propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("пересчёт");
+        assert_eq!(
+            unmapped_inputs(&canvas, "T", &solutions).len(),
+            1,
+            "нет снапшота — значение не подставлено (R-3)"
+        );
+        // Снапшот появился (перезагрузка источника) — состояние снято.
+        let mut data: DataSnapshots = DataSnapshots::new();
+        data.insert("D".to_owned(), snapshot(&["name"], &[&["apollo"]]));
+        // Текст «apollo» — не число: ячейка без значения (R-3, PoC числовых).
+        let solutions =
+            propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data).expect("ok");
+        assert_eq!(
+            unmapped_inputs_with_data(&canvas, "T", &solutions, &data).len(),
+            1,
+            "текстовая колонка значения не даёт"
+        );
+        data.insert("D".to_owned(), snapshot(&["name"], &[&["42"]]));
+        let solutions =
+            propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data).expect("ok");
+        assert!(unmapped_inputs_with_data(&canvas, "T", &solutions, &data).is_empty());
+        assert_eq!(
+            solutions
+                .outputs
+                .get("T")
+                .and_then(|r| r.as_ref().ok())
+                .map(|v| v.num),
+            Some(42.0)
+        );
+    }
+
+    /// FR-045: резолюция колонки не зависит от топологии/формул data-ноды —
+    /// снапшот решает; downstream нода (через строку-переменную) тоже видит
+    /// пролив (значение идёт при обработке ПРИЁМНИКА).
+    #[test]
+    fn data_spill_independent_of_source_formula() {
+        let mut canvas = Canvas::default();
+        data_node(&mut canvas, "K", "Курсы", 0.0, &["USD"]);
+        // У data-ноды есть проза и даже локальная переменная листа —
+        // колонка решает по снапшоту, `named` не участвует.
+        canvas.nodes[0].set_expr(Some("USD = 1".to_owned()));
+        node_with_expr(&mut canvas, "T", "$1 + 1", 1.0);
+        let mut e1 = Edge::new("e1", "K", None, "T", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("USD".to_owned());
+        canvas.add_edge(e1);
+        let mut data: DataSnapshots = DataSnapshots::new();
+        data.insert("K".to_owned(), snapshot(&["USD"], &[&["10"]]));
+        let solutions = propagate_with_lines_data(&canvas, &WhatIfOverrides::default(), &data)
+            .expect("пересчёт");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("T")
+                .and_then(|r| r.as_ref().ok())
+                .map(|v| v.num),
+            Some(11.0),
+            "снапшот (10), а не переменная листа (1)"
+        );
     }
 }

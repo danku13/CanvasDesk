@@ -8,8 +8,9 @@
 //!
 //! Выход — [`CsvSnapshot { fields, rows }`]: `fields` — имена колонок
 //! (= имена выходов data-ноды, квалифицированная адресация FR-045 Р-5),
-//! `rows` — значения для пролива (подключение к потоку — следующий этап
-//! FR-045; снапшот при создании, §Q3).
+//! `rows` — значения для пролива в поток ([`CsvSnapshot::cell`] +
+//! [`csv_cell_value`]; движок — `flow::propagate_with_lines_data`;
+//! снапшот при создании, §Q3).
 //!
 //! Allowlist зависимостей (ADR-0008) не расширяется: парсер ручной,
 //! без внешних крейтов; чистый Rust — wasm-гейт (ADR-0011).
@@ -37,6 +38,35 @@ impl CsvSnapshot {
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
+
+    /// FR-045 R-2 (проливание в поток): значение ячейки дословно —
+    /// `(запись, колонка)`. Запись и колонка вне диапазона/неизвестное имя —
+    /// `None` (без паники; чистый акцессор — источник истины для
+    /// `flow::edge_source_value_with_data`). Колонка ищется по имени в
+    /// `fields` (однозначность гарантирует парсер — дублики отклонены).
+    pub fn cell(&self, row: usize, field: &str) -> Option<&str> {
+        let col = self.fields.iter().position(|f| f == field)?;
+        self.rows.get(row)?.get(col).map(String::as_str)
+    }
+}
+
+/// FR-045 (проливание колонок CSV, §Q3): числовое значение ячейки для
+/// потока. Детерминированные правила PoC:
+/// - пробелы по краям срезаются; пустая ячейка — `None` (unmapped, R-3);
+/// - число — по правилам `f64` (десятичный разделитель — точка; «1,5» —
+///   не число: машинный формат CSV, локали сознательно не поддерживаются);
+/// - не конечные значения (`inf`/`NaN`) — `None`: в расчёт не попадают;
+/// - текст — `None` (текстовые колонки значения не дают; единицы — вне
+///   скоупа PoC, значение скалярное).
+pub fn csv_cell_value(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
 }
 
 /// Ошибка формата CSV: строка/колонка 1-based (как в `CoreError::Parse`).
@@ -331,5 +361,32 @@ mod tests {
         assert!(parse_csv("\n\n", ',').is_err());
         let snap = parse_csv("a\n1\n", ',').expect("ok");
         assert_eq!(snap.row_count(), 1, "хвостовой перевод строки — не запись");
+    }
+
+    /// FR-045 (проливание): `cell` — значение по (запись, колонка);
+    /// вне диапазона/неизвестная колонка — None без паники.
+    #[test]
+    fn cell_accessor() {
+        let snap = parse_csv("usd,eur\n90,100\n91,101", ',').expect("ok");
+        assert_eq!(snap.cell(0, "usd"), Some("90"));
+        assert_eq!(snap.cell(1, "eur"), Some("101"));
+        assert_eq!(snap.cell(2, "usd"), None, "запись вне диапазона");
+        assert_eq!(snap.cell(0, "gbp"), None, "неизвестная колонка");
+    }
+
+    /// FR-045 (проливание): `csv_cell_value` — детерминированные правила
+    /// числа (точка-разделитель, finite), пустое/текст — None.
+    #[test]
+    fn cell_value_rules() {
+        assert_eq!(csv_cell_value("50"), Some(50.0));
+        assert_eq!(csv_cell_value(" 0.85 "), Some(0.85));
+        assert_eq!(csv_cell_value("-3"), Some(-3.0));
+        assert_eq!(csv_cell_value("1e3"), Some(1000.0));
+        assert_eq!(csv_cell_value(""), None, "пустая ячейка");
+        assert_eq!(csv_cell_value("   "), None, "пробельная ячейка");
+        assert_eq!(csv_cell_value("хлеб"), None, "текст — не значение");
+        assert_eq!(csv_cell_value("1,5"), None, "запятая — не число (PoC)");
+        assert_eq!(csv_cell_value("inf"), None, "не конечное");
+        assert_eq!(csv_cell_value("NaN"), None, "не конечное");
     }
 }
