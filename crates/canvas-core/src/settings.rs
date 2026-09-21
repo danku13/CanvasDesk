@@ -208,6 +208,12 @@ pub struct Settings {
     pub grid_density: GridDensity,
     /// Тема интерфейса.
     pub theme: Theme,
+    /// FR-047 (PRD-0006 D4/F-8): идентификатор темы-пресета
+    /// (`canvas_core::theme_presets`): "nord", "dracula", ...
+    /// Пустая строка (старые конфиги без поля, serde default) — пресет не
+    /// выбран, действует классическая тема [`Theme`]. Неизвестный id
+    /// (переименование пресета) деградирует мягко — классическая тема.
+    pub theme_preset: String,
     /// Связи огибают посторонние ноды (роутинг полилинией).
     pub edges_avoid_nodes: bool,
     /// HUD (fps/p95, F3) включён сразу при старте.
@@ -326,6 +332,8 @@ impl Default for Settings {
             theme: Theme::Dark,
             edges_avoid_nodes: true,
             hud_on_start: false,
+            // FR-047: пресет не выбран — классическая тема `theme`.
+            theme_preset: String::new(),
             focus_mode: false,
             port_zone_px: PORT_ZONE_PRESETS[0],
             // Ревизия FR-025 (2026-09-16): палитра примарно свёрнута.
@@ -459,6 +467,13 @@ pub fn validated_grid_zoom_thresholds(sub: f32, coarse: f32) -> (f32, f32) {
 }
 
 impl Settings {
+    /// FR-047: активный пресет темы — валидный id из реестра
+    /// [`crate::theme_presets::PRESETS`] или `None` (пустое/неизвестное
+    /// значение — действует классическая тема [`Theme`]).
+    pub fn active_preset(&self) -> Option<&'static str> {
+        crate::theme_presets::find(&self.theme_preset).map(|p| p.id)
+    }
+
     /// Загрузить настройки; отсутствующий или битый файл — дефолты
     /// (ошибка разбора возвращается для лога, приложение не падает).
     /// Числовые поля клампятся/валидуются ([`Self::normalize`]) — ручные
@@ -535,6 +550,8 @@ mod tests {
             grid_style: GridStyle::Dots,
             grid_density: GridDensity::Sparse,
             theme: Theme::Light,
+            // FR-047: пресет проходит round-trip config.toml без потерь
+            theme_preset: "gruvbox-dark".to_string(),
             edges_avoid_nodes: false,
             hud_on_start: true,
             focus_mode: true,

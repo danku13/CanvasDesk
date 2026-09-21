@@ -1322,7 +1322,9 @@ impl App {
         };
         let widgets = crate::widgets::WidgetManager::new(
             widgets_registry,
-            settings.theme == Theme::Dark,
+            // FR-047: виджетам флаг темности ЭФФЕКТИВНОЙ темы (пресет из
+            // config.toml перекрывает классику)
+            ThemeColors::from_settings(settings.theme, &settings.theme_preset).is_dark(),
             widget_state,
         );
         // FR-027/FR-028: помощь/документация закрыты; тур при первом
@@ -2573,7 +2575,7 @@ impl App {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
         let viewport = self.viewport_logical();
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let accent = Color::rgb(0x4c, 0xa6, 0xff);
         let dim = Color::rgb(0x8a, 0x90, 0x9c);
         if !self.scene.whatif_active {
@@ -4332,7 +4334,7 @@ impl App {
             return (instances, texts);
         }
         let lay = search_layout(viewport[0], viewport[1], &self.search);
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let panel = rect_xywh(lay.panel_rect);
         instances.push(CardInstance {
             pos: [panel[0], panel[1]],
@@ -4574,7 +4576,7 @@ impl App {
         if !self.hints.open || self.hints.items.is_empty() {
             return (instances, texts);
         }
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let viewport = self.viewport_logical();
         let [px, py, pw, ph] =
             hints_ui::popup_layout(self.hints.anchor, viewport, self.hints.items.len());
@@ -4715,7 +4717,7 @@ impl App {
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return (instances, texts);
         }
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let icon_tint = color_to_rgba(palette.icon);
         // FR-025 (ревизия): свёрнутый режим — полоса категорий + flyout
         if !self.template_panel.open {
@@ -5091,7 +5093,7 @@ impl App {
         let Some(menu) = &self.wheel_menu else {
             return (sectors, instances, texts);
         };
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let icon_tint = color_to_rgba(palette.icon);
         let [vw, vh] = self.viewport_logical();
         let categories = self.templates.categories();
@@ -5405,7 +5407,7 @@ impl App {
             self.settings.snap_grid_sub_zoom,
             self.settings.snap_grid_coarse_zoom,
         );
-        renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
+        renderer.set_theme(self.effective_palette());
         if let Some(window) = &self.window {
             tracing::info!(
                 width = window.inner_size().width,
@@ -5465,7 +5467,7 @@ impl App {
             return (instances, texts);
         };
         let items = canvas_menu_visible_items(self.align_menu_visible());
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let [x, y, w, h] = menu_rect_for(menu.origin, items.len());
         instances.push(CardInstance {
             pos: [x, y],
@@ -5563,7 +5565,7 @@ impl App {
             return (instances, texts);
         };
         let viewport = self.viewport_logical();
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let [x, y, w, h] = docs_ui::help_menu_rect(menu.origin);
         instances.push(CardInstance {
             pos: [x, y],
@@ -5641,7 +5643,7 @@ impl App {
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return (instances, texts);
         }
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let panel = docs_ui::viewer_rect(viewport);
         let content = docs_ui::viewer_content_rect(panel);
         // Затемнение канваса вокруг панели (паттерн wheel FR-022)
@@ -5808,7 +5810,7 @@ impl App {
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return (instances, texts);
         }
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let Some(step) = onboarding_ui::ONBOARDING_STEPS.get(state.step) else {
             return (instances, texts);
         };
@@ -6099,7 +6101,7 @@ impl App {
     ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         let tint = color_to_rgba(palette.icon);
         let title = palette.title;
         let accent = [0.18, 0.29, 0.48, 0.95];
@@ -6515,11 +6517,14 @@ impl App {
     /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
     fn toggle_theme(&mut self) {
         self.settings.theme = self.settings.theme.next();
+        // FR-047: явный выбор классики тумблером сбрасывает пресет
+        self.settings.theme_preset.clear();
         // M5: смена темы уходит виджетам (themeChanged — T21 доведёт
         // рассылку до инстансов, пока обновляется init-данные будущих нод)
         self.widgets.set_theme(self.settings.theme == Theme::Dark);
+        let palette = self.effective_palette();
         if let Some(renderer) = self.renderer.as_mut() {
-            renderer.set_theme(ThemeColors::from_theme(self.settings.theme));
+            renderer.set_theme(palette);
         }
         if let Some(path) = &self.config_path {
             if let Err(err) = self.settings.save(path) {
@@ -6785,6 +6790,7 @@ impl App {
             | SettingsRow::GridDensity
             | SettingsRow::PortZone
             | SettingsRow::Language
+            | SettingsRow::ThemePreset
             | SettingsRow::SnapTolerance
             | SettingsRow::SnapSubZoom
             | SettingsRow::SnapCoarseZoom => {
@@ -6803,8 +6809,29 @@ impl App {
     /// меню закрывает вызывающий (состояние привязано к строке, не к точке).
     fn apply_dropdown_choice(&mut self, row: SettingsRow, index: usize) {
         apply_dropdown_value(&mut self.settings, row, index);
+        // FR-047: смена пресета темы — рендер + виджеты сразу
+        if row == SettingsRow::ThemePreset {
+            self.apply_effective_theme();
+        }
         self.sync_settings_row(row);
         self.save_settings();
+    }
+
+    /// FR-047: эффективная палитра настроек — активный пресет
+    /// (`settings.theme_preset`) или классическая тема (`settings.theme`).
+    fn effective_palette(&self) -> ThemeColors {
+        ThemeColors::from_settings(self.settings.theme, &self.settings.theme_preset)
+    }
+
+    /// FR-047: применить эффективную тему к рендеру и виджетам
+    /// (паттерн toggle_theme/клика по карточке — единая точка).
+    fn apply_effective_theme(&mut self) {
+        let palette = self.effective_palette();
+        self.widgets.set_theme(palette.is_dark());
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_theme(palette);
+        }
+        self.request_redraw();
     }
 
     /// FR-026: синхронизация рендера с настройками после изменения строки
@@ -6892,7 +6919,7 @@ impl App {
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return (instances, texts);
         }
-        let palette = ThemeColors::from_theme(self.settings.theme);
+        let palette = self.effective_palette();
         // Вертикальная центровка иконки: лайн-бокс высотой font*1.3 по центру
         // кнопки (так же считает рендер screen-текстов).
         let icon_top = |rect: [f32; 4], font_size: f32| rect[1] + (rect[3] - font_size * 1.3) / 2.0;
@@ -7127,7 +7154,10 @@ impl App {
                 (Theme::Light, keys::THEME_LIGHT),
             ] {
                 let card = layout.theme_card_rect(theme);
-                let selected = self.settings.theme == theme;
+                // FR-047: карточка отмечена только при БЕЗАКТИВНОМ пресете
+                // (пресет перекрывает классику — отметка была бы ложной)
+                let selected =
+                    self.settings.theme_preset.is_empty() && self.settings.theme == theme;
                 let hovered = point_in_rect(card, self.cursor);
                 instances.push(CardInstance {
                     pos: [card[0], card[1]],
@@ -7216,6 +7246,7 @@ impl App {
                         | SettingsRow::GridDensity
                         | SettingsRow::PortZone
                         | SettingsRow::Language
+                        | SettingsRow::ThemePreset
                         | SettingsRow::SnapTolerance
                         | SettingsRow::SnapSubZoom
                         | SettingsRow::SnapCoarseZoom => false,
@@ -8462,9 +8493,12 @@ impl App {
                         return;
                     }
                     // Карточки темы (таб «Внешний вид») — прямой выбор
+                    // классики; клик по карточке сбрасывает пресет (FR-047:
+                    // карточки и пресет — взаимоисключающие источники темы)
                     if let Some(theme) = modal_theme_card_at(&layout, self.cursor) {
-                        if self.settings.theme != theme {
+                        if self.settings.theme != theme || !self.settings.theme_preset.is_empty() {
                             self.settings.theme = theme;
+                            self.settings.theme_preset.clear();
                             self.widgets.set_theme(theme == Theme::Dark);
                             if let Some(renderer) = self.renderer.as_mut() {
                                 renderer.set_theme(ThemeColors::from_theme(theme));
