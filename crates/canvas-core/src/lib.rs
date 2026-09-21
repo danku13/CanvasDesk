@@ -64,11 +64,13 @@ pub use analyze::{
     Severity as AnalysisSeverity,
 };
 /// FR-042 (E1): пучки рёбер и геометрия main stage — индекс сцены (LOD-0
-/// агрегация), толщина по весу, rect/веер/раскладка stage, hit-test веера.
+/// агрегация), толщина по весу, rect/раскладка stage, точная привязка веера
+/// к строкам значений (FR-044, владелец 2026-09-22), hit-test веера.
 pub use bundles::{
-    bundle_thickness, main_stage_rect, stage_edge_at, stage_edge_fan, stage_edge_points,
-    stage_fan_spacing, stage_layout, EdgeBundle, EdgeBundleIndex, StageLayout,
-    MAIN_STAGE_MAX_FRACTION,
+    bundle_thickness, main_stage_rect, stage_edge_anchor_points, stage_edge_at_lines,
+    stage_edge_geometry, stage_edge_lines, stage_fan_label_layout, stage_layout, EdgeBundle,
+    EdgeBundleIndex, StageAnchors, StageEdgeLine, StageLayout, StageMetrics,
+    MAIN_STAGE_MAX_FRACTION, STAGE_FAN_GROUP_STEP_PX,
 };
 /// M8/W3 (wasm-port §3.1/§6): платформенно-нейтральные данные drag-drop
 /// (T9) — shell производит (IDropTarget), canvas-web будет производить
