@@ -55,6 +55,8 @@ pub mod keys {
     pub const ROW_FOCUS_MODE: &str = "settings.row.focus_mode";
     pub const ROW_HUD_ON_START: &str = "settings.row.hud_on_start";
     pub const ROW_LANGUAGE: &str = "settings.row.language";
+    /// FR-047: тема-пресет (таб «Внешний вид»).
+    pub const ROW_THEME_PRESET: &str = "settings.row.theme_preset";
 
     pub const DESC_BUTTON_CORNER: &str = "settings.desc.button_corner";
     pub const DESC_GRID: &str = "settings.desc.grid";
@@ -67,6 +69,10 @@ pub mod keys {
     pub const DESC_FOCUS_MODE: &str = "settings.desc.focus_mode";
     pub const DESC_HUD_ON_START: &str = "settings.desc.hud_on_start";
     pub const DESC_LANGUAGE: &str = "settings.desc.language";
+    /// FR-047: описание строки темы-пресета.
+    pub const DESC_THEME_PRESET: &str = "settings.desc.theme_preset";
+    /// FR-047: значение «нет пресета» (выбор по карточкам тёмной/светлой).
+    pub const THEME_PRESET_CLASSIC: &str = "settings.value.theme_preset.classic";
 
     pub const VALUE_ON: &str = "settings.value.on";
     pub const VALUE_OFF: &str = "settings.value.off";
@@ -375,6 +381,12 @@ const RU: &[(&str, &str)] = &[
         keys::DESC_LANGUAGE,
         "Язык интерфейса — применяется на лету, без перезапуска.",
     ),
+    (keys::ROW_THEME_PRESET, "Тема-пресет"),
+    (
+        keys::DESC_THEME_PRESET,
+        "Встроенная палитра (Nord, Dracula, Catppuccin и другие) — перекрывает карточки тёмной/светлой выше.",
+    ),
+    (keys::THEME_PRESET_CLASSIC, "Классическая"),
     (keys::ROW_SNAP_ENABLED, "Snap-выравнивание (мастер)"),
     (
         keys::DESC_SNAP_ENABLED,
@@ -743,6 +755,12 @@ const EN: &[(&str, &str)] = &[
         keys::DESC_LANGUAGE,
         "Interface language — applied instantly, no restart needed.",
     ),
+    (keys::ROW_THEME_PRESET, "Theme preset"),
+    (
+        keys::DESC_THEME_PRESET,
+        "Built-in palette (Nord, Dracula, Catppuccin and more) — overrides the dark/light cards above.",
+    ),
+    (keys::THEME_PRESET_CLASSIC, "Classic"),
     (keys::ROW_SNAP_ENABLED, "Snap alignment (master)"),
     (
         keys::DESC_SNAP_ENABLED,
