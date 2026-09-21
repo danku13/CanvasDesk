@@ -334,6 +334,7 @@ version = "0.1.0"
 dependencies = [
  "canvas-core",
  "serde_json",
+ "thiserror 2.0.20",
  "tracing",
 ]
 

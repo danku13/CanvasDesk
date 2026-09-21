@@ -1,0 +1,111 @@
+{
+  "id": "com.canvasdesk.scheme.capacity-service",
+  "name_ru": "Ёмкость сервиса",
+  "name_en": "Service capacity",
+  "description_ru": "Спрос (пользователи и время размышления) против мощности: запросов в секунду и загрузка узкого места.",
+  "description_en": "Demand (users and think time) versus capacity: requests per second and bottleneck utilization.",
+  "category": "architecture",
+  "category_ru": "Архитектура",
+  "category_en": "Architecture",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180,
+        "text": "Ёмкость сервиса: спрос делится на время размышления, загрузка — отношение спроса к мощности. Одно value-ребро — один вход формулы.",
+        "color": "4"
+      },
+      {
+        "id": "users",
+        "type": "text",
+        "x": 420,
+        "y": 0,
+        "width": 230,
+        "height": 120,
+        "text": "5000 req",
+        "color": "1"
+      },
+      {
+        "id": "think",
+        "type": "text",
+        "x": 420,
+        "y": 180,
+        "width": 230,
+        "height": 120,
+        "text": "30 s",
+        "color": "1"
+      },
+      {
+        "id": "rps",
+        "type": "text",
+        "x": 730,
+        "y": 80,
+        "width": 250,
+        "height": 140,
+        "text": "$1 / $2",
+        "color": "2"
+      },
+      {
+        "id": "service",
+        "type": "text",
+        "x": 730,
+        "y": 300,
+        "width": 250,
+        "height": 120,
+        "text": "200 req/s",
+        "color": "1"
+      },
+      {
+        "id": "util",
+        "type": "text",
+        "x": 1060,
+        "y": 180,
+        "width": 250,
+        "height": 140,
+        "text": "$1 / $2",
+        "color": "2"
+      },
+      {
+        "id": "verdict",
+        "type": "text",
+        "x": 420,
+        "y": 370,
+        "width": 340,
+        "height": 130,
+        "text": "Запас небольшой: поднимите мощность и посмотрите, как падает загрузка.",
+        "color": "4"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "users",
+        "toNode": "rps",
+        "flowKind": "value"
+      },
+      {
+        "id": "e2",
+        "fromNode": "think",
+        "toNode": "rps",
+        "flowKind": "value"
+      },
+      {
+        "id": "e3",
+        "fromNode": "rps",
+        "toNode": "util",
+        "flowKind": "value"
+      },
+      {
+        "id": "e4",
+        "fromNode": "service",
+        "toNode": "util",
+        "flowKind": "value"
+      }
+    ]
+  }
+}

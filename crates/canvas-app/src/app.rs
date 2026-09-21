@@ -25,6 +25,7 @@ use crate::palette::{
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
     PaletteLayout, PaletteTarget, PAL_ICON,
 };
+use crate::scheme_gallery_ui;
 use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
     dropdown_value, modal_layout, modal_nav_at, modal_row_at, modal_theme_card_at, pill_knob_rect,
@@ -62,11 +63,11 @@ use canvas_core::flow::{self, FlowKind};
 use canvas_core::time::Instant;
 use canvas_core::{
     analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
-    nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at, stage_edge_fan,
-    stage_fan_spacing, stage_layout, watched_dirs, AnalysisState, Canvas, CanvasStorage,
+    nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at_lines,
+    stage_edge_geometry, stage_layout, watched_dirs, AnalysisState, Canvas, CanvasStorage,
     ClipboardBackend, Edge, FileEvent, FocusSeed, GridStyle, Language, Node, NodeChange, NodeKind,
-    Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex, StageLayout, Theme,
-    ThumbBackend, WatchBackend, COLLISION_GAP,
+    Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex, StageLayout, StageMetrics,
+    Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
 };
 // FR-044 Р-1 (стык раскладок): лейн-раскладка пилюль подписей веера —
 // чистые функции core с инвариантами (без пересечений, кламп в зону).
@@ -923,6 +924,8 @@ struct WhatIfOverrideRow {
 /// раскладкой [`canvas_core::stage_layout`], stage-локальные px); рёбра
 /// среза сохраняют оригинальные id — выделение отображается в живую
 /// модель через `edges` (индексы среза ↔ live-индексы canvas.edges).
+/// Геометрия веера (якоря на строках значений + кривые) — чистая функция
+/// [`canvas_core::stage_edge_geometry`] на кадре: состояние не дублируется.
 struct MainStageState {
     /// Упорядоченная пара концов пучка `(from_node, to_node)`.
     key: (String, String),
@@ -930,8 +933,6 @@ struct MainStageState {
     edges: Vec<usize>,
     /// Срез: 2 ноды (раскладка stage) + рёбра пучка.
     slice: Canvas,
-    /// Веер перпендикулярных смещений рёбер среза (stage px).
-    fan: Vec<f32>,
     /// Масштаб сжатия раскладки (обновляется на кадре в `relayout`).
     scale: f32,
 }
@@ -967,20 +968,15 @@ impl MainStageState {
         }
         // Раскладка среза — на КАДРЕ (rect зависит от вьюпорта):
         // MainStageState::relayout; здесь — нейтральные позиции, чтобы
-        // веер/полилинии были согласованы до первого кадра.
+        // якоря/кривые были согласованы до первого кадра.
         slice.nodes[0].x = 0.0;
         slice.nodes[0].y = 0.0;
         slice.nodes[1].x = slice.nodes[0].width + 200.0;
         slice.nodes[1].y = 0.0;
-        let fan = stage_edge_fan(
-            slice.edges.len(),
-            stage_fan_spacing(slice.edges.len().max(2)),
-        );
         Some(Self {
             key,
             edges,
             slice,
-            fan,
             scale: 1.0,
         })
     }
@@ -1221,6 +1217,15 @@ pub struct App {
     /// FR-025 — постоянный левый док (не модальна): open — развёрнутость,
     /// focused — клавиатурный фокус.
     template_panel: template_ui::TemplatePanel,
+    /// FR-049: галерея готовых схем (модальная) — реестр встроенных
+    /// пакетов `assets/canvas-schemes` (canvas-core::schemes).
+    scheme_gallery: scheme_gallery_ui::SchemeGalleryState,
+    /// FR-049: empty-state скрыт кнопкой «Пустой холст» до следующего
+    /// опустошения канваса (сброс при появлении первой ноды).
+    empty_state_dismissed: bool,
+    /// FR-049 (US-5): отложенная схема `?template=<id>` (web) — применяется
+    /// на первом кадре, когда вьюпорт известен (zoom-to-fit корректен).
+    pub pending_scheme: Option<String>,
     /// FR-025: drag карточки шаблона из палитры в точку канваса (нажатие
     /// на строку; отпускание решает — клик: в центр viewport, drag: в
     /// точку курсора с ghost-превью).
@@ -1406,6 +1411,9 @@ impl App {
                 panel.open = settings.template_palette_open;
                 panel
             },
+            scheme_gallery: scheme_gallery_ui::SchemeGalleryState::default(),
+            empty_state_dismissed: false,
+            pending_scheme: None,
             settings,
             config_path,
             settings_open: false,
@@ -4472,7 +4480,421 @@ impl App {
         index
     }
 
-    /// FR-021: пересчитать состояние popup подсказок после правки текста.
+    // --- FR-049: галерея схем и empty-state ---
+
+    /// FR-049 (US-5): отложенная схема `?template=<id>` для web-порта
+    /// (поле private — сеттер для canvas-web; применяется на первом кадре).
+    pub fn set_pending_scheme(&mut self, id: Option<String>) {
+        self.pending_scheme = id;
+    }
+
+    /// Empty-state пустого канваса виден: 0 нод и нет конкурирующих
+    /// модальных поверхностей (US-1 AC-1.1).
+    fn empty_state_visible(&self) -> bool {
+        self.scene.canvas.nodes.is_empty()
+            && !self.scheme_gallery.open
+            && self.onboarding.is_none()
+            && !self.settings_open
+            && self.main_stage.is_none()
+            && self.menu.is_none()
+            && !self.empty_state_dismissed
+    }
+
+    /// Открыть схему из галереи: чистый инстансер → один undo-шаг →
+    /// вставка → recompute_flow → zoom-to-fit (US-3, G3/G7).
+    fn apply_scheme(&mut self, manifest: &canvas_core::schemes::SchemeManifest) {
+        let center = self.viewport_center_world();
+        let instance = match canvas_scene::scheme_apply::instantiate_scheme(
+            manifest,
+            &self.scene.canvas,
+            center,
+        ) {
+            Ok(instance) => instance,
+            Err(err) => {
+                tracing::warn!(scheme = %manifest.id, %err, "инстанс схемы не удался");
+                return;
+            }
+        };
+        self.push_undo();
+        for node in instance.nodes {
+            self.scene.canvas.nodes.push(node);
+            let index = self.scene.canvas.nodes.len() - 1;
+            let node = &self.scene.canvas.nodes[index];
+            self.scene.spatial.insert(index, node);
+        }
+        for edge in instance.edges {
+            self.scene.canvas.add_edge(edge);
+        }
+        self.selected = None;
+        self.selected_nodes.clear();
+        self.scene.mark_dirty();
+        self.scene.recompute_flow();
+        // Zoom-to-fit содержимого схемы (F-3 PRD-0008): bbox → вьюпорт.
+        let bbox = instance.bbox;
+        let viewport = self.viewport_logical();
+        let bw = (bbox[2] - bbox[0]).max(160.0);
+        let bh = (bbox[3] - bbox[1]).max(120.0);
+        let zoom = ((viewport[0] - 96.0) / bw)
+            .min((viewport[1] - 160.0) / bh)
+            .clamp(0.15, 1.5);
+        self.camera.set_zoom(zoom);
+        self.camera
+            .set_center([(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0]);
+        self.empty_state_dismissed = false;
+        self.scheme_gallery.close();
+        let name = manifest.display_name(self.settings.language == canvas_core::Language::Ru);
+        self.show_toast(i18n::trf(
+            self.settings.language,
+            keys::GALLERY_APPLIED,
+            &[("name", name)],
+        ));
+        self.request_redraw();
+    }
+
+    /// Клавиатура галереи: true — нужен redraw (нажатия глотаются).
+    fn on_gallery_key(&mut self, event: &KeyEvent) -> bool {
+        // Ctrl+T — закрыть (той же клавишей, что открытие)
+        if self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("t") || c == "е" || c == "Е")
+        {
+            self.scheme_gallery.close();
+            return true;
+        }
+        let registry = canvas_core::schemes::SchemeRegistry::embedded();
+        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
+        let lay = scheme_gallery_ui::layout(self.viewport_logical(), &list, &self.scheme_gallery);
+        let visible = lay.visible_rows.len().max(1);
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) if !event.repeat => {
+                self.scheme_gallery.close();
+                true
+            }
+            Key::Named(NamedKey::Enter) if !event.repeat => {
+                if let Some(scheme) = list.get(self.scheme_gallery.selected) {
+                    let manifest = (*scheme).clone();
+                    self.apply_scheme(&manifest);
+                }
+                true
+            }
+            Key::Named(NamedKey::ArrowDown) if !event.repeat => {
+                if self.scheme_gallery.selected + 1 < list.len() {
+                    self.scheme_gallery.selected += 1;
+                }
+                scheme_gallery_ui::clamp_scroll(&mut self.scheme_gallery, visible);
+                true
+            }
+            Key::Named(NamedKey::ArrowUp) if !event.repeat => {
+                self.scheme_gallery.selected = self.scheme_gallery.selected.saturating_sub(1);
+                scheme_gallery_ui::clamp_scroll(&mut self.scheme_gallery, visible);
+                true
+            }
+            Key::Named(NamedKey::Backspace) if !event.repeat => {
+                self.scheme_gallery.filter.pop();
+                self.scheme_gallery.selected = 0;
+                self.scheme_gallery.scroll_top = 0;
+                true
+            }
+            Key::Character(text) if !event.repeat && !self.modifiers.control_key() => {
+                self.scheme_gallery.filter.push_str(text.as_str());
+                self.scheme_gallery.selected = 0;
+                self.scheme_gallery.scroll_top = 0;
+                true
+            }
+            // Прочие нажатия глотаются молча — канвасу не достаются
+            _ => false,
+        }
+    }
+
+    /// Клик по открытой галерее: элементы панели, мимо — закрыть.
+    fn on_gallery_click(&mut self) {
+        let registry = canvas_core::schemes::SchemeRegistry::embedded();
+        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
+        let lay = scheme_gallery_ui::layout(self.viewport_logical(), &list, &self.scheme_gallery);
+        if scheme_gallery_ui::point_in_rect(lay.close_rect, self.cursor) {
+            self.scheme_gallery.close();
+            return;
+        }
+        // Поле фильтра — глотаем (клавиатура уже маршрутизируется галереей)
+        if scheme_gallery_ui::point_in_rect(lay.input_rect, self.cursor) {
+            return;
+        }
+        if let Some(category) = scheme_gallery_ui::chip_at(&lay, self.cursor) {
+            self.scheme_gallery.category = if self.scheme_gallery.category == category {
+                None
+            } else {
+                category
+            };
+            self.scheme_gallery.selected = 0;
+            self.scheme_gallery.scroll_top = 0;
+            return;
+        }
+        if let Some(index) = scheme_gallery_ui::row_at(&lay, self.cursor) {
+            self.scheme_gallery.selected = index;
+            if let Some(scheme) = list.get(index) {
+                let manifest = (*scheme).clone();
+                self.apply_scheme(&manifest);
+            }
+            return;
+        }
+        if scheme_gallery_ui::point_in_rect(lay.panel_rect, self.cursor) {
+            return; // внутри панели, мимо элементов — глотаем
+        }
+        self.scheme_gallery.close();
+    }
+
+    /// Отрисовка галереи (screen-space): панель, шапка, фильтр, чипы,
+    /// строки схем, футер-подсказка. Цвета — слоты ThemeColors.
+    fn scheme_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let palette = self.effective_palette();
+        let registry = canvas_core::schemes::SchemeRegistry::embedded();
+        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
+        let lay = scheme_gallery_ui::layout(viewport, &list, &self.scheme_gallery);
+        // Подложка панели
+        instances.push(CardInstance {
+            pos: [lay.panel_rect[0], lay.panel_rect[1]],
+            size: [lay.panel_rect[2], lay.panel_rect[3]],
+            fill: palette.menu_fill,
+            border: palette.palette_border,
+            params: [10.0, 0.0, 0.0, 1.0],
+        });
+        // Шапка + счётчик
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::GALLERY_TITLE).to_owned(),
+            origin: [lay.header_rect[0], lay.header_rect[1] + 8.0],
+            width: lay.header_rect[2] - 40.0,
+            font_size: 14.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        texts.push(OwnedScreenText {
+            text: format!("{}", list.len()),
+            origin: [
+                lay.header_rect[0] + lay.header_rect[2] - 36.0,
+                lay.header_rect[1] + 10.0,
+            ],
+            width: 30.0,
+            font_size: 11.0,
+            color: palette.body,
+            align: TextAlign::Center,
+        });
+        // Кнопка закрытия «×»
+        instances.push(CardInstance {
+            pos: [lay.close_rect[0], lay.close_rect[1]],
+            size: [lay.close_rect[2], lay.close_rect[3]],
+            fill: palette.palette_chip_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "×".to_owned(),
+            origin: [lay.close_rect[0], lay.close_rect[1] + 3.0],
+            width: lay.close_rect[2],
+            font_size: 13.0,
+            color: palette.title,
+            align: TextAlign::Center,
+        });
+        // Поле фильтра
+        instances.push(CardInstance {
+            pos: [lay.input_rect[0], lay.input_rect[1]],
+            size: [lay.input_rect[2], lay.input_rect[3]],
+            fill: palette.search_input_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: if self.scheme_gallery.filter.is_empty() {
+                self.tr(keys::GALLERY_SEARCH).to_owned()
+            } else {
+                format!("{}|", self.scheme_gallery.filter)
+            },
+            origin: [lay.input_rect[0] + 8.0, lay.input_rect[1] + 8.0],
+            width: lay.input_rect[2] - 16.0,
+            font_size: 12.0,
+            color: palette.body,
+            align: TextAlign::Left,
+        });
+        // Чипы категорий («Все» + уникальные категории реестра)
+        let ru = self.settings.language == canvas_core::Language::Ru;
+        for (rect, category) in &lay.chip_rects {
+            let active = self.scheme_gallery.category == *category;
+            instances.push(CardInstance {
+                pos: [rect[0], rect[1]],
+                size: [rect[2], rect[3]],
+                fill: if active {
+                    palette.palette_chip_fill
+                } else {
+                    palette.menu_fill
+                },
+                border: palette.palette_border,
+                params: [12.0, 0.0, 0.0, 1.0],
+            });
+            let label = match category {
+                None => self.tr(keys::GALLERY_ALL).to_owned(),
+                Some(key) => {
+                    let manifest = registry.list().iter().find(|s| &s.category == key);
+                    match manifest {
+                        Some(m) => {
+                            if ru {
+                                m.category_ru.clone()
+                            } else {
+                                m.category_en.clone()
+                            }
+                        }
+                        None => key.clone(),
+                    }
+                }
+            };
+            texts.push(OwnedScreenText {
+                text: label,
+                origin: [rect[0] + 8.0, rect[1] + 6.0],
+                width: rect[2] - 16.0,
+                font_size: 11.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        // Строки схем (окно видимости)
+        let hovered = scheme_gallery_ui::row_at(&lay, self.cursor);
+        for (rect, index) in lay.row_rects.iter().zip(lay.visible_rows.iter()) {
+            let Some(scheme) = list.get(*index) else {
+                continue;
+            };
+            let is_selected = *index == self.scheme_gallery.selected;
+            instances.push(CardInstance {
+                pos: [rect[0], rect[1]],
+                size: [rect[2], rect[3]],
+                fill: if is_selected || hovered == Some(*index) {
+                    hover_fill(palette.menu_fill)
+                } else {
+                    palette.menu_fill
+                },
+                border: palette.palette_border,
+                params: [8.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: scheme.display_name(ru).to_owned(),
+                origin: [rect[0] + 10.0, rect[1] + 8.0],
+                width: rect[2] - 20.0,
+                font_size: 13.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: if ru {
+                    scheme.description_ru.clone()
+                } else {
+                    scheme.description_en.clone()
+                },
+                origin: [rect[0] + 10.0, rect[1] + 28.0],
+                width: rect[2] - 20.0,
+                font_size: 11.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: i18n::trf(
+                    self.settings.language,
+                    keys::GALLERY_META,
+                    &[
+                        ("nodes", scheme.content.nodes.len().to_string().as_str()),
+                        ("edges", scheme.content.edges.len().to_string().as_str()),
+                    ],
+                ),
+                origin: [rect[0] + 10.0, rect[1] + 44.0],
+                width: rect[2] - 20.0,
+                font_size: 10.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        }
+        // Футер-подсказка
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::GALLERY_FOOTER).to_owned(),
+            origin: [lay.footer_rect[0], lay.footer_rect[1] + 5.0],
+            width: lay.footer_rect[2],
+            font_size: 10.0,
+            color: palette.body,
+            align: TextAlign::Left,
+        });
+        (instances, texts)
+    }
+
+    /// Отрисовка empty-state пустого канваса (US-1): карточка с одной
+    /// главной кнопкой и альтернативой «Пустой холст».
+    fn empty_state_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let palette = self.effective_palette();
+        let card = scheme_gallery_ui::empty_card_rect(viewport);
+        instances.push(CardInstance {
+            pos: [card[0], card[1]],
+            size: [card[2], card[3]],
+            fill: palette.menu_fill,
+            border: palette.palette_border,
+            params: [10.0, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::GALLERY_EMPTY_TITLE).to_owned(),
+            origin: [card[0] + 20.0, card[1] + 18.0],
+            width: card[2] - 40.0,
+            font_size: 16.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::GALLERY_EMPTY_BODY).to_owned(),
+            origin: [card[0] + 20.0, card[1] + 46.0],
+            width: card[2] - 40.0,
+            font_size: 12.0,
+            color: palette.body,
+            align: TextAlign::Left,
+        });
+        let (open_btn, dismiss_btn) = scheme_gallery_ui::empty_buttons(card);
+        for (rect, label_key, accent) in [
+            (open_btn, keys::GALLERY_EMPTY_OPEN, true),
+            (dismiss_btn, keys::GALLERY_EMPTY_DISMISS, false),
+        ] {
+            let hovered = scheme_gallery_ui::point_in_rect(rect, self.cursor);
+            instances.push(CardInstance {
+                pos: [rect[0], rect[1]],
+                size: [rect[2], rect[3]],
+                fill: if accent {
+                    if hovered {
+                        hover_fill([0.16, 0.32, 0.60, 1.0])
+                    } else {
+                        [0.16, 0.32, 0.60, 1.0]
+                    }
+                } else if hovered {
+                    hover_fill(palette.menu_fill)
+                } else {
+                    palette.menu_fill
+                },
+                border: palette.palette_border,
+                params: [6.0, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: self.tr(label_key).to_owned(),
+                origin: [rect[0], rect[1] + 9.0],
+                width: rect[2],
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Center,
+            });
+        }
+        (instances, texts)
+    }
+
     /// Popup открывается только на Numi-строках каретки (вердикт
     /// `expr::line_kind`, вне код-фенсов) при непустом списке вариантов;
     /// якорь — низ каретки в логических px окна.
@@ -7481,6 +7903,14 @@ impl App {
             }
             return;
         }
+        // FR-049: модальная галерея схем — клавиатура галереи (↑/↓/Enter/
+        // Esc/фильтр), остальное глотается (канвас не получает)
+        if self.scheme_gallery.open {
+            if event.state == ElementState::Pressed && self.on_gallery_key(event) {
+                self.request_redraw();
+            }
+            return;
+        }
         // Активное редактирование (T7): клавиатура уходит в редактор
         if self.editing.is_some() {
             if event.state != ElementState::Pressed {
@@ -7832,6 +8262,24 @@ impl App {
                 }
             }
         }
+        // FR-049: Ctrl+T — тогл галереи схем (кириллическая «е» — та же
+        // физическая клавиша; во время редактирования не доходим — там
+        // нет Ctrl+T-команды редактора)
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("t") || c == "е" || c == "Е")
+        {
+            if self.scheme_gallery.open {
+                self.scheme_gallery.close();
+            } else {
+                self.scheme_gallery.open();
+                self.empty_state_dismissed = false;
+            }
+            self.request_redraw();
+            return;
+        }
         // Ctrl+, — toggle панели настроек (кириллическая «б» — та же клавиша;
         // во время редактирования сюда не доходим — там Ctrl+Б это Bold)
         if event.state == ElementState::Pressed
@@ -7990,6 +8438,27 @@ impl App {
         // сжата тем же коэффициентом — карточка и её текст сжимаются вместе);
         // минимум 8 px — читаемость деградационных режимов.
         let font = |px: f32| (px * s).max(8.0);
+        // FR-044 (владелец, 2026-09-22): геометрия веера — якоря рёбер на
+        // строках значений (from_line/to_param → строка карточки), группы
+        // одинаковых якорей расходятся ±12 px. Метрики — константы рендера,
+        // чтобы геометрия и отрисовка строк не разъезжались.
+        let metrics = StageMetrics {
+            header_h: HEADER_HEIGHT,
+            body_top_gap: BODY_TOP_GAP,
+            body_line: BODY_LINE_HEIGHT,
+            result_line: RESULT_LINE_HEIGHT,
+            body_padding: BODY_PADDING,
+            strip_extra: 6.0,
+        };
+        let footers = [
+            self.scene
+                .expr_results
+                .contains_key(&stage.slice.nodes[0].id),
+            self.scene
+                .expr_results
+                .contains_key(&stage.slice.nodes[1].id),
+        ];
+        let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
         // 1) Затемнение фона (§7.5: тёмная 0.6 / светлая 0.5) — весь вьюпорт
         quads.push(CardInstance {
             pos: camera.screen_to_world([0.0, 0.0], viewport),
@@ -8051,14 +8520,15 @@ impl App {
             align: TextAlign::Center,
         });
         // 4) Рёбра среза веером (stage-локальные px → мир); выделение
-        // ребра среза — live-индекс из Selection
+        // ребра среза — live-индекс из Selection. Геометрия — те же линии,
+        // что у точек портов и hit-test'а (единый источник)
         let selected_slice = self.selected.and_then(|sel| match sel {
             Selection::Edge(live) => stage.edges.iter().position(|&e| e == live),
             Selection::Node(_) => None,
         });
         for inst in build_stage_edge_instances(
             &stage.slice,
-            &stage.fan,
+            &lines,
             stage.slice.edges.len(),
             selected_slice,
             None,
@@ -8066,10 +8536,10 @@ impl App {
             quads.push(transform.instance_to_world(&inst, camera, viewport));
         }
         // 5) Точки портов на концах веера (аффорданс входа/выхода, прототип):
-        // цвет — класс потока ребра, выделенное ребро — акцент
+        // цвет — класс потока ребра, выделенное ребро — акцент; точки сидят
+        // на строках значений (якоря линий)
         for (i, edge) in stage.slice.edges.iter().enumerate() {
-            let Some(points) = canvas_core::stage_edge_points(&stage.slice, i, stage.fan[i], 24)
-            else {
+            let Some(line) = lines.get(i) else {
                 continue;
             };
             let fill = if selected_slice == Some(i) {
@@ -8079,8 +8549,7 @@ impl App {
             } else {
                 EDGE_COLOR
             };
-            let Some(last) = points.last() else { continue };
-            for p in [points[0], *last] {
+            for p in [line.from, line.to] {
                 let d = 7.0;
                 quads.push(transform.instance_to_world(
                     &CardInstance {
@@ -8251,40 +8720,123 @@ impl App {
                 });
             }
         }
-        // 8) Пилюли подписей веера (FR-044 Р-1): адресация + значение,
-        // лейн-стопка в коридоре между колонками (stage_fan_label_layout:
-        // без пересечений, кламп в зону; порядок — по вертикали середин)
-        let mut pills_in: Vec<(usize, f32, f32)> = Vec::new();
-        let mut mids: Vec<[f32; 2]> = Vec::new();
-        for (i, _edge) in stage.slice.edges.iter().enumerate() {
-            let Some(points) = canvas_core::stage_edge_points(&stage.slice, i, stage.fan[i], 24)
-            else {
+        // 7b) Подписи на концах рёбер (FR-044, владелец 2026-09-22: «на
+        // концах edge — подписи значений», прототип R5/R6 — порты с
+        // подложкой): у истока — ЗНАЧЕНИЕ ребра (своей строки), у приёмника
+        // — квалифицированный адрес «Объект · строка N / Объект.output».
+        // Подложка — цвет подложки stage (меню): подписи не сливаются с
+        // линиями веера (прототип R6: подложка от рёбер). Оценка ширины —
+        // advance ≈ 0.6·шрифта (как у строк карточки).
+        let src_title = title_for(&stage.slice.nodes[0]);
+        let mut src_label_max = 0.0_f32;
+        let mut dst_label_max = 0.0_f32;
+        for (i, edge) in stage.slice.edges.iter().enumerate() {
+            let Some(line) = lines.get(i) else {
                 continue;
             };
-            let mid = points[points.len() / 2];
-            mids.push(mid);
-            pills_in.push((i, 0.0, 34.0)); // ширина заполнится после сортировки
+            // Исток: значение строки/ноды (подпись значения)
+            let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
+            if !value.is_empty() {
+                let w = value.chars().count() as f32 * 6.3 + 12.0;
+                src_label_max = src_label_max.max(w);
+                let bx = line.from[0] + 10.0;
+                let by = line.from[1] - 9.0;
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [bx, by],
+                        size: [w, 18.0],
+                        fill: palette.menu_fill,
+                        border: [0.0; 4],
+                        params: [4.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+                texts.push(OwnedScreenText {
+                    text: value,
+                    origin: transform.map_point([bx + 6.0, by + 13.0]),
+                    width: transform.map_size(w),
+                    font_size: font(10.5),
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
+            // Приёмник: квалифицированный адрес истока (Объект.Поле)
+            let qualified = if let Some(line_no) = edge.from_line {
+                format!(
+                    "{src_title} · {}",
+                    i18n::trf(
+                        self.settings.language,
+                        keys::STAGE_LINE_LABEL,
+                        &[("n", &(line_no + 1).to_string())],
+                    )
+                )
+            } else if let Some(output) = edge.from_output.as_deref() {
+                format!("{src_title}.{output}")
+            } else {
+                src_title.clone()
+            };
+            let qualified = truncate_chars(&qualified, 26);
+            if !qualified.is_empty() {
+                let w = qualified.chars().count() as f32 * 6.3 + 12.0;
+                dst_label_max = dst_label_max.max(w);
+                let bx = line.to[0] - 10.0 - w;
+                let by = line.to[1] - 9.0;
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [bx, by],
+                        size: [w, 18.0],
+                        fill: palette.menu_fill,
+                        border: [0.0; 4],
+                        params: [4.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+                texts.push(OwnedScreenText {
+                    text: qualified,
+                    origin: transform.map_point([bx + 6.0, by + 13.0]),
+                    width: transform.map_size(w),
+                    font_size: font(10.5),
+                    color: palette.edge_label,
+                    align: TextAlign::Left,
+                });
+            }
+        }
+        // 8) Пилюли подписей веера (FR-044 Р-1): адресация + значение,
+        // лейн-стопка в коридоре между колонками (stage_fan_label_layout:
+        // без пересечений, кламп в зону; порядок — по вертикали середин;
+        // пилюля тянется к середине СВОЕЙ линии — preferred_x)
+        let mut pills_in: Vec<(usize, f32, f32, Option<f32>)> = Vec::new();
+        let mut mids: Vec<[f32; 2]> = Vec::new();
+        for (i, _edge) in stage.slice.edges.iter().enumerate() {
+            let Some(line) = lines.get(i) else {
+                continue;
+            };
+            mids.push(line.mid);
+            pills_in.push((i, 0.0, 34.0, Some(line.mid[0]))); // ширина после сортировки
         }
         // Сортировка по вертикали середин (прототип R7: стопка следует
         // геометрии веера) с сохранением индекса ребра
         let mut order: Vec<usize> = (0..mids.len()).collect();
         order.sort_by(|&a, &b| mids[a][1].total_cmp(&mids[b][1]));
-        let sorted: Vec<(usize, f32, f32)> = order
+        let sorted: Vec<(usize, f32, f32, Option<f32>)> = order
             .iter()
-            .enumerate()
-            .map(|(k, &oi)| {
-                let (item, _, h) = pills_in[oi];
+            .map(|&oi| {
+                let (item, _, h, pref) = pills_in[oi];
                 let addr = truncate_chars(&self.stage_edge_addr_text(&stage.slice.edges[item]), 42);
                 let value =
                     truncate_chars(&self.stage_edge_value_text(&stage.slice.edges[item]), 42);
                 let w =
                     (addr.chars().count().max(value.chars().count()) as f32 * 7.2 + 24.0).max(56.0);
-                let _ = k;
-                (item, w, h)
+                (item, w, h, pref)
             })
             .collect();
         // Зона и коридор — stage-локальные px (заголовок сверху, подсказка
-        // снизу; коридор — между колонками нод, pad прототипа 70 px)
+        // снизу; коридор — между колонками нод, pad прототипа 70 px),
+        // дополнительно сужен на зоны подписей концов рёбер (7b): пилюли
+        // не наезжают на подписи значений/адресов (владелец 2026-09-22:
+        // «тултипы не залезают на edge и подписи»)
         let zone = StageLocalRect {
             x: 0.0,
             y: 56.0 / s,
@@ -8305,7 +8857,19 @@ impl App {
             w: dst.width,
             h: dst.height,
         };
-        let corridor = fan_corridor(src_labels, dst_labels, 70.0);
+        let mut corridor = fan_corridor(src_labels, dst_labels, 70.0);
+        let left_needed = src.x + src.width + 10.0 + src_label_max + 6.0;
+        let right_limit = dst.x - 10.0 - dst_label_max - 6.0;
+        if left_needed > corridor.x {
+            let d = left_needed - corridor.x;
+            corridor.x += d;
+            corridor.w -= d;
+        }
+        let over = corridor.x + corridor.w - right_limit;
+        if over > 0.0 {
+            corridor.w -= over;
+        }
+        corridor.w = corridor.w.max(0.0);
         let axis_y = zone.y + zone.h / 2.0;
         let laid = stage_fan_label_layout(sorted, corridor, zone, axis_y);
         for pill in &laid.pills {
@@ -8465,6 +9029,13 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // FR-049: модальная галерея схем — клики по элементам,
+                // мимо панели — закрыть (канвас клик не получает)
+                if self.scheme_gallery.open {
+                    self.on_gallery_click();
+                    self.request_redraw();
+                    return;
+                }
                 // FR-028: онбординг открыт — модальный оверлей: клики по
                 // кнопкам карточки, остальное глотается (канвас не
                 // реагирует; выход виден всегда — «Пропустить» в углу)
@@ -8477,6 +9048,15 @@ impl App {
                             if state.is_last() {
                                 // «Готово»: тур пройден — флаг + сохранение
                                 self.complete_onboarding();
+                            } else if onboarding_ui::ONBOARDING_STEPS
+                                .get(state.step)
+                                .and_then(|step| step.action_key)
+                                .is_some()
+                            {
+                                // FR-049: CTA шага («Попробовать») — тур
+                                // пройден, галерея схем открыта
+                                self.complete_onboarding();
+                                self.scheme_gallery.open();
                             } else if let Some(state) = self.onboarding.as_mut() {
                                 state.next();
                             }
@@ -8491,6 +9071,27 @@ impl App {
                     }
                     self.request_redraw();
                     return;
+                }
+                // FR-049: empty-state пустого канваса — кнопки карточки;
+                // мимо карточки канвас жив (двойной клик создаёт заметку,
+                // empty-state исчезает при первой ноде — AC-1.1)
+                if self.empty_state_visible() {
+                    let card = scheme_gallery_ui::empty_card_rect(self.viewport_logical());
+                    let (open_btn, dismiss_btn) = scheme_gallery_ui::empty_buttons(card);
+                    if scheme_gallery_ui::point_in_rect(open_btn, self.cursor) {
+                        self.scheme_gallery.open();
+                        self.request_redraw();
+                        return;
+                    }
+                    if scheme_gallery_ui::point_in_rect(dismiss_btn, self.cursor) {
+                        self.empty_state_dismissed = true;
+                        self.request_redraw();
+                        return;
+                    }
+                    if scheme_gallery_ui::point_in_rect(card, self.cursor) {
+                        self.request_redraw();
+                        return;
+                    }
                 }
                 // FR-042 (E3, F-8/F-9): модальность main stage — клик вне
                 // rect закрывает (канвас клик не получает, инвариант 8:
@@ -8514,10 +9115,29 @@ impl App {
                         let stage = self.main_stage.as_ref().expect("stage открыт");
                         let transform = StageTransform::new([rect.x, rect.y], stage.scale);
                         let local = transform.unmap_point(self.cursor);
-                        // Допуск от толщины (F-5): max(EDGE_HIT_TOLERANCE, d/2 + 2)
+                        // Допуск от толщины (F-5): max(EDGE_HIT_TOLERANCE, d/2 + 2).
+                        // Геометрия веера — та же чистая функция, что на кадре
+                        // (детерминизм: рендер и hit-test совпадают)
                         let tolerance = (bundle_thickness(stage.slice.edges.len()) / 2.0 + 2.0)
                             .max(canvas_core::EDGE_HIT_TOLERANCE);
-                        let hit = stage_edge_at(&stage.slice, &stage.fan, local, tolerance)
+                        let metrics = StageMetrics {
+                            header_h: HEADER_HEIGHT,
+                            body_top_gap: BODY_TOP_GAP,
+                            body_line: BODY_LINE_HEIGHT,
+                            result_line: RESULT_LINE_HEIGHT,
+                            body_padding: BODY_PADDING,
+                            strip_extra: 6.0,
+                        };
+                        let footers = [
+                            self.scene
+                                .expr_results
+                                .contains_key(&stage.slice.nodes[0].id),
+                            self.scene
+                                .expr_results
+                                .contains_key(&stage.slice.nodes[1].id),
+                        ];
+                        let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
+                        let hit = stage_edge_at_lines(&lines, local, tolerance)
                             .and_then(|slice_i| stage.live_edge(slice_i));
                         // Заимствование stage закончено — можно мутировать
                         if let Some(live) = hit {
@@ -8782,6 +9402,11 @@ impl App {
                         // счётчик откладываний не трогается
                         Some(docs_ui::HelpMenuItem::Onboarding) => {
                             self.onboarding = Some(OnboardingState::default());
+                        }
+                        // «Галерея схем» (FR-049): открыть модальную галерею
+                        Some(docs_ui::HelpMenuItem::Schemes) => {
+                            self.help_menu = None;
+                            self.scheme_gallery.open();
                         }
                         None => {
                             // Поверхность меню (паддинг) — глотается, меню
@@ -11330,6 +11955,25 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
             WindowEvent::RedrawRequested => {
+                // FR-049 (US-5): ?template=<id> — применить на первом кадре
+                // (вьюпорт известен — zoom-to-fit корректен); неизвестный
+                // id — мягкий отказ (тост), канвас остаётся как есть
+                if let Some(id) = self.pending_scheme.take() {
+                    match canvas_core::schemes::SchemeRegistry::embedded().get(&id) {
+                        Some(manifest) => {
+                            let manifest = manifest.clone();
+                            self.apply_scheme(&manifest);
+                        }
+                        None => {
+                            tracing::warn!(scheme = %id, "?template: схема не найдена");
+                            self.show_toast(i18n::trf(
+                                self.settings.language,
+                                keys::GALLERY_UNKNOWN,
+                                &[("id", id.as_str())],
+                            ));
+                        }
+                    }
+                }
                 // Замер интервала между кадрами для HUD (T5)
                 let now = Instant::now();
                 if let Some(prev) = self.last_frame {
@@ -11397,8 +12041,18 @@ impl ApplicationHandler<AppEvent> for App {
                 // Ширины подписей оверлея: призраки дропа — по ширине
                 // карточки-призрака (Т9)
                 let mut overlay_widths: Vec<f32> = Vec::new();
-                // Панель настроек (screen-space): кнопка + строки переключателей
+                // FR-049: галерея схем — самая верхняя модальная панель;
+                // иначе — empty-state пустого канваса (US-1)
                 let (mut screen_instances, mut owned_texts) = self.settings_overlay();
+                if self.scheme_gallery.open {
+                    let (gal_instances, gal_texts) = self.scheme_gallery_overlay();
+                    screen_instances.extend(gal_instances);
+                    owned_texts.extend(gal_texts);
+                } else if self.empty_state_visible() {
+                    let (es_instances, es_texts) = self.empty_state_overlay();
+                    screen_instances.extend(es_instances);
+                    owned_texts.extend(es_texts);
+                }
                 // Меню пустого канваса (T7): screen-space, константный размер
                 {
                     let (menu_instances, menu_texts) = self.canvas_menu_overlay();
@@ -13261,11 +13915,12 @@ mod tests {
         let right = transform.map_point([stage.slice.nodes[1].x, 0.0])[0]
             + transform.map_size(stage.slice.nodes[1].width);
         assert!(right <= rect.x + rect.w + 0.01, "приёмник умещается в rect");
-        // Веер согласован с карточками: полилиния стартует у порта истока
-        // (смещение веера перпендикулярно оси — x совпадает)
-        let points =
-            canvas_core::stage_edge_points(&stage.slice, 0, stage.fan[0], 24).expect("полилиния");
-        let p0 = transform.map_point(points[0]);
+        // Веер согласован с карточками: полилиния стартует у правого края
+        // истока (якоря на строках значений — та же чистая функция, что
+        // в рендере)
+        let metrics = StageMetrics::default();
+        let lines = stage_edge_geometry(&stage.slice, &metrics, [false, false], 24);
+        let p0 = transform.map_point(lines[0].points[0]);
         let src_port_x = stage.slice.nodes[0].x + stage.slice.nodes[0].width;
         assert!(
             (p0[0] - transform.map_point([src_port_x, 0.0])[0]).abs() < 2.0,
