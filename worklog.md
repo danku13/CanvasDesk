@@ -3240,3 +3240,52 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Далее:** ответ владельца по Н10 → реализация FR-050 с этапа A (ядро
   семантики: приоритеты Р-1, fail-fast Н4, единицы Н5, производная
   авто-строка) + этап B (грамматика именованных ссылок в `expr.rs`).
+
+---
+
+## 2026-09-22 — FR-051 (PRD-0009 U0+U1): реализационная постановка и каркас canvas-ui
+
+- **Приказ владельца:** «оформляй и реализуй U0 и U1» + вопрос о разбивке на 3 агентов.
+- **U0 (326aef6):** FR-051 (`docs/change-requests/fr-051-ui-layering-uikit.md`) —
+  зафиксированы layer-стек 9 полос (World/WorldOverlay/Widgets/Panels/Popups/
+  Modals/Drag/Toasts/Debug), capture-политики 4 режимов (Block/Capture/
+  PassThrough/Passive), карта переносов egui/iced/Ribir (Приложение А:
+  layers.rs→UiLayer L2, hit_test.rs→HitStack L2, modal.rs→Esc-стек L2,
+  text_layout→TextMeasurer L3 U3, popup/tooltip→kit L3 U4, text_edit→TextInput
+  L2 U5+; iced Catalog→контракт стилизации кита U4, Ribir IgnorePointer→
+  PassThrough), Q-дефолты §11 PRD-0009 приняты. index-cr-fr — указатель FR-052,
+  строка FR-051. PRD-0009 — статус «в работе» (U0–U1 выполнены), changelog.
+  docs/prd/README.md — статус PRD-0009 обновлён.
+- **U1 (06f2931 + ebf9c9d fmt/clippy):** новый крейт `crates/canvas-ui` —
+  чистая геометрия экрана без wgpu/winit, зависимости нулевые (G7):
+  `geometry.rs` (UiPoint/UiVec2/UiRect/EdgeInsets — contains/intersection/
+  inset/translate), `layer.rs` (UiLayer 9 полос + DRAW_ORDER + label F-10),
+  `capture.rs` (CapturePolicy + intercept_outside/is_interactive),
+  `registry.rs` (SurfaceId/KeyboardScopeId/DegradationPolicy/SurfaceDecl/
+  SurfaceRegistry — add паника на дубликат, draw_bands, esc_stack реверс,
+  visible_at hide-below), `frame.rs` (HitRect interactive/decoration,
+  SurfaceFrame клип обязателен, UiFrame from_registry/pick_order/draw_bands/
+  overlaps_within_layer — F-11 precursor), `hit.rs` (HitStack::pick — реверс-
+  обход L8→L0, Block глотает backdrop, Capture по hit-rect,
+  PassThrough/Passive пропускают, верхний rect выигрывает; absorbs), 
+  `keyboard.rs` (KeyboardRouter from_registry/push/pop_surface с «детьми»/
+  deliver верх-first/esc_target). 34 TDD-теста: pick-матрица G2 precursor,
+  порядок draw-полос, Esc-лестница, backdrop-глотание, per-layer скрытие,
+  overlap-детектор, router-лестница, контракт единственности, end-to-end
+  сценарий каркаса. 0 правок app/render/web (каркас без интеграции — U1).
+- **Гейты:** fmt ✓, clippy -D warnings ✓, test --workspace ✓ (48 тест-бинарей,
+  0 failed; canvas-ui 34), wasm_gate ✓, mcp_wasm_gate ✓ — на ветке и повторно
+  на объединённом коде.
+- **Слияние:** merge --no-ff 8970ca7 поверх b0e6f3b (remote ушёл вперёд:
+  FR-050 раунд 3 + PRD-0008 контент v2 — параллельная волна); конфликты
+  docs/prd/README.md (строка PRD-0008 из HEAD «реализовано v2», PRD-0009 из
+  ветки «в работе U0–U1») и index-cr-fr.md (строка FR-050 раунда 3 из HEAD,
+  строка FR-051 из ветки; указатель FR-052 почищен от стыка) — обе стороны
+  сохранены. Push main → CI по merge SHA 8970ca7a58ffa8d2b9f05eea781d57d4307a0667
+  — ПОЛНОСТЬЮ ЗЕЛЁНЫЙ (12/12 check-runs).
+- **Далее:** U2 — интеграция (UiFrame-сборка из реестра в RedrawRequested,
+  draw-полосы/scissor в renderer, HitStack в on_left_button, KeyboardRouter
+  в on_key, существующие z-тесты зелёные); U3 — TextMeasurer+токены+примитивы
+  + пилоты (галерея схем, what-if бар); U4 — kit+DebugOverlay+витрина;
+  U5 — миграция 4 поверхностей, вывод лестницы on_key, ленты в CI,
+  docs/ui-kit.md.
