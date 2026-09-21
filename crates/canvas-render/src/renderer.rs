@@ -14,11 +14,11 @@ use canvas_core::{edge_midpoint, Canvas, FlowKind, Node, NodeKind, Side, Spatial
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
     analysis_badges_visible, analysis_border_visible, analysis_ring_instance,
-    build_draft_instances, build_edge_handle_instances, build_edge_instances,
+    build_draft_instances, build_edge_handle_instances, build_edge_instances_ctx,
     build_line_port_instances, build_port_instances, card_instance, dim_instance,
     make_widget_transparent, severity_border, severity_text, template_band_instance,
-    template_icon_quads, template_icon_rect, widget_header_hover_instance, CardInstance,
-    CardsPipeline, FocusView,
+    template_icon_quads, template_icon_rect, widget_header_hover_instance, BundleContext,
+    CardInstance, CardsPipeline, FocusView,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -238,6 +238,9 @@ pub struct SceneView<'a> {
     /// `bottleneck_overlay`, тогл Ctrl+B). false — ни один путь не рисует
     /// индикаторы (инвариант флага, как `line_ports`).
     pub analysis_overlay: bool,
+    /// FR-042 (E2): контекст агрегации пучков (индекс сцены + hover).
+    /// None — агрегация выключена (F-13): рендер рёбер байт-в-байт прежний.
+    pub bundles: Option<&'a BundleContext<'a>>,
 }
 
 /// Счётчики отрисованного кадра (T5) — для HUD и проверки culling.
@@ -751,6 +754,85 @@ impl Renderer {
                 });
             }
         }
+        // FR-042 (E2): бейджи кратности пучков ×N (LOD-0) — независимо от
+        // порога заголовков: вес соединения виден и при дальнем зуме, в этом
+        // смысл структурной агрегации (PRD-0002 F-3). Рисуются по
+        // доминанте каждого пучка веса ≥ 2 у edge_midpoint со сдвигом
+        // перпендикулярно линии; при N = 1 не рисуются (инвариант F-3).
+        // Владение (id, текст) — вне блока: edge_labels заимствует строки.
+        let mut badge_texts: Vec<(String, String, [f32; 2])> = Vec::new();
+        if let Some(ctx) = scene.bundles {
+            for (index, edge) in scene.canvas.edges.iter().enumerate() {
+                if editing_edge == Some(index) || scene.hidden_edge == Some(index) {
+                    continue;
+                }
+                if hidden_ids.contains(edge.from_node.as_str())
+                    || hidden_ids.contains(edge.to_node.as_str())
+                {
+                    continue;
+                }
+                let Some(bundle) = ctx.index.bundle_of_edge(index) else {
+                    continue;
+                };
+                if bundle.weight < 2 || ctx.index.dominant_edge(scene.canvas, bundle) != Some(index)
+                {
+                    continue;
+                }
+                // Сдвиг по нормали локального сегмента вокруг середины дуги
+                let Some(mid) = edge_midpoint(scene.canvas, edge, scene.edges_avoid) else {
+                    continue;
+                };
+                let Some(points) =
+                    canvas_core::edge_polyline(scene.canvas, edge, scene.edges_avoid, 24)
+                else {
+                    continue;
+                };
+                // Сегмент полилинии, ближайший к midpoint (избегает вырожденных
+                // касательных на хвостах кривой)
+                let mut normal = [0.0f32, -1.0];
+                let mut best_d = f32::INFINITY;
+                for w in points.windows(2) {
+                    let dx = w[1][0] - w[0][0];
+                    let dy = w[1][1] - w[0][1];
+                    let len = dx.hypot(dy);
+                    if len < f32::EPSILON {
+                        continue;
+                    }
+                    let mx = (w[0][0] + w[1][0]) / 2.0;
+                    let my = (w[0][1] + w[1][1]) / 2.0;
+                    let dist = (mid[0] - mx).hypot(mid[1] - my);
+                    if dist < best_d {
+                        best_d = dist;
+                        normal = [-dy / len, dx / len];
+                    }
+                }
+                let offset = canvas_core::bundle_thickness(bundle.weight) / 2.0 + 14.0;
+                let center = [mid[0] + normal[0] * offset, mid[1] + normal[1] * offset];
+                badge_texts.push((
+                    format!("bundle:{}\u{2192}{}", edge.from_node, edge.to_node),
+                    format!("\u{00d7}{}", bundle.weight),
+                    center,
+                ));
+            }
+            for (id, text, center) in &badge_texts {
+                let size = self.text.edge_label_size(id, text, zoom_px);
+                let w = size[0] + EDGE_LABEL_PADDING[0] * 2.0;
+                let h = size[1] + EDGE_LABEL_PADDING[1] * 2.0;
+                label_backdrops.push(CardInstance {
+                    pos: [center[0] - w / 2.0, center[1] - h / 2.0],
+                    size: [w, h],
+                    fill: self.theme.edge_label_fill,
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+                edge_labels.push(EdgeLabel {
+                    id,
+                    text,
+                    center: *center,
+                    factor: 1.0,
+                });
+            }
+        }
 
         if self.grid_visible {
             // FR-038 (п.3 v2): zoom-адаптивные шаги — sub-линии полушага при
@@ -899,13 +981,15 @@ impl Renderer {
         // в общем буфере = порядок рисования; рисуются диапазоном до сегментов.
         // CR-002: перепривязываемая связь скрыта — её играет резиновая линия.
         // FR-011: связи, инцидентные скрытым нодам, не рисуются
-        instances.extend(build_edge_instances(
+        // FR-042: агрегация пучков (LOD-0) — по контексту сцены
+        instances.extend(build_edge_instances_ctx(
             scene.canvas,
             selected_edge,
             scene.edges_avoid,
             &scene.focus,
             scene.hidden_edge,
             &hidden_ids,
+            scene.bundles,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).

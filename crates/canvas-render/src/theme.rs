@@ -88,6 +88,9 @@ pub struct ThemeColors {
     pub error: Color,
     /// Цвет HUD F3. Источник: `HUD_COLOR` text.rs:140.
     pub hud: Color,
+    /// Затемнение фона main stage (FR-042 §7.5, альфа-аппроксимация):
+    /// тёмная 0.6 / светлая 0.5 (уточнение — демо E3, коридор PRD 0.55–0.65).
+    pub stage_dim: [f32; 4],
 }
 
 impl ThemeColors {
@@ -156,6 +159,7 @@ impl ThemeColors {
                 canvas_core::tokens::HUD[1],
                 canvas_core::tokens::HUD[2],
             ),
+            stage_dim: [0.02, 0.02, 0.04, 0.6],
         }
     }
 
@@ -220,6 +224,7 @@ impl ThemeColors {
                 canvas_core::tokens::HUD[1],
                 canvas_core::tokens::HUD[2],
             ),
+            stage_dim: [0.02, 0.02, 0.04, 0.5],
         }
     }
 

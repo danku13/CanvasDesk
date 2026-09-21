@@ -41,6 +41,7 @@
     "whatif_fill": "#89B4FA38",
     "whatif_badge": "#F9E2AF",
     "error": "#F38BA8",
-    "hud": "#89B4FA"
+    "hud": "#89B4FA",
+    "stage_dim": "#05050A99"
   }
 }

@@ -120,6 +120,7 @@ pub const REQUIRED_KEYS: &[&str] = &[
     "selection_fill",
     "highlight",
     "whatif_fill",
+    "stage_dim",
 ];
 
 /// Сырой JSON-документ пресета (поля `$note`/`source`/`license` игнорируются).
