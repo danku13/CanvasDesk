@@ -3,482 +3,1713 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CanvasDesk — прототип У9 (v3.1): режим защиты — модальное окно с деревом нод с ветками</title>
+<title>CanvasDesk — прототип У9 (v4): проверка цепочки расчёта цифры поверх полноэкранного канваса</title>
 <style>
   :root{
-    --bg:#14161b; --panel:#1d2027; --panel2:#232733; --line:#2e3342;
-    --tx:#dfe3ec; --tx2:#8b93a7; --accent:#4f8cff; --ok:#3fbf7f;
-    --dim:.32; --delta:#ffb84f; --leaf:#9fd6ff;
+    --radius:12px;
+    font-size:14px;
+  }
+  body.dark{
+    --bg:#12141a; --panel:rgba(24,27,35,.93); --panel-border:#2c313d;
+    --text:#e8eaf0; --subtext:#9aa1b0; --accent:#8f7bff; --accent-soft:rgba(143,123,255,.16);
+  }
+  body.light{
+    --bg:#eef1f6; --panel:rgba(255,255,255,.95); --panel-border:#d4d9e2;
+    --text:#1a1d24; --subtext:#5b6270; --accent:#6b46f0; --accent-soft:rgba(107,70,240,.10);
   }
   *{box-sizing:border-box; margin:0; padding:0;}
-  body{background:var(--bg); color:var(--tx); font:14px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; padding:24px;}
-  body.defense-on{overflow:hidden;}
-  h1{font-size:18px; margin-bottom:4px;}
-  .sub{color:var(--tx2); font-size:13px; margin-bottom:16px; max-width:1150px;}
-  .sub b{color:var(--tx);}
+  html,body{width:100%;height:100%;overflow:hidden;}
+  body{font-family:-apple-system,"Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
+       background:var(--bg); color:var(--text);}
+  canvas#cv{position:fixed; inset:0; display:block;}
 
-  .app{display:flex; gap:14px; height:calc(100vh - 250px); min-height:520px;}
+  .panel{position:fixed; background:var(--panel); border:1px solid var(--panel-border);
+         border-radius:var(--radius); padding:10px 12px; font-size:12.5px; line-height:1.45;
+         backdrop-filter:blur(6px); box-shadow:0 6px 24px rgba(0,0,0,.18);}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--subtext); margin-bottom:6px;}
+  .panel .muted{color:var(--subtext);}
 
-  /* ── канвас ─────────────────────────────── */
-  .canvas{flex:1.1; background:var(--panel); border:1px solid var(--line); border-radius:12px; position:relative; overflow:hidden;}
-  .canvas .tag{position:absolute; top:12px; left:14px; color:var(--tx2); font-size:11px; letter-spacing:.4px; z-index:3;}
-  #cedges{position:absolute; inset:0; width:100%; height:100%; z-index:0;}
-  .cnode{position:absolute; background:var(--panel2); border:1px solid var(--line); border-radius:9px;
-    padding:9px 12px; min-width:180px; z-index:1; cursor:pointer; transition:opacity .25s;}
-  .cnode .t{font-size:11px; color:var(--tx2); margin-bottom:3px;}
-  .cnode .row{display:flex; justify-content:space-between; gap:14px; font-size:13px;}
-  .cnode .val{font-weight:600;}
-  .cnode .d{color:var(--delta); font-weight:600;}
-  .cnode.chain{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
-  .cnode.dim{opacity:var(--dim);}
-  .cnode.prose{opacity:var(--dim); font-style:italic; color:var(--tx2); font-size:12px; cursor:default;}
-  .cnode.hit{box-shadow:0 0 0 3px var(--ok);}
+  /* — шапка «Что проверяем» — */
+  #info{top:12px; left:12px; width:300px;}
+  #info summary{cursor:pointer; font-weight:600; font-size:13px; list-style:none; user-select:none;}
+  #info summary::-webkit-details-marker{display:none;}
+  #info summary .chev{display:inline-block; transition:transform .15s; margin-right:6px; color:var(--accent);}
+  #info[open] summary .chev{transform:rotate(90deg);}
+  #info ol{margin:8px 0 0 18px;}
+  #info li{margin-bottom:6px; font-size:12px; color:var(--text);}
+  #info li b{color:var(--accent);}
+  #info .legend{margin-top:8px; padding-top:8px; border-top:1px solid var(--panel-border);
+                display:flex; gap:14px; align-items:center; color:var(--subtext); font-size:11.5px;}
+  .dotv{display:inline-block;width:10px;height:10px;border-radius:50%;background:#5aa2ff;margin-right:5px;vertical-align:-1px;}
+  .dotc{display:inline-block;width:9px;height:9px;background:#f2a44a;transform:rotate(45deg);margin-right:7px;vertical-align:-1px;}
+  body.light .dotv{background:#2f7fe8;} body.light .dotc{background:#d97c14;}
+  .dotu{display:inline-block;width:10px;height:10px;border-radius:50%;border:1.6px dashed #9aa1b0;margin-right:5px;vertical-align:-1px;}
 
-  /* ── панель ─────────────────────────────── */
-  .side{flex:1; display:flex; flex-direction:column; gap:14px; min-width:540px;}
-  .panel{background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; flex:1; overflow:hidden;}
-  .p-head{padding:14px 16px 10px; border-bottom:1px solid var(--line);}
-  .p-head .ttl{font-weight:600; font-size:15px; display:flex; align-items:center; gap:10px;}
-  .p-head .meta{color:var(--tx2); font-size:12px; margin-top:3px;}
-  .toggle-row{display:flex; align-items:center; gap:10px; margin-top:10px;}
-  .switch{width:38px; height:21px; border-radius:11px; background:var(--panel2); border:1px solid var(--line); position:relative; cursor:pointer; transition:background .2s;}
-  .switch::after{content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:var(--tx2); transition:all .2s;}
-  .switch.on{background:#1c4429; border-color:var(--ok);}
-  .switch.on::after{left:19px; background:var(--ok);}
-  .toggle-row .lbl{font-size:13px;}
-  .kbd{border:1px solid var(--line); background:var(--panel2); border-radius:5px; padding:0 6px; font-size:11px; color:var(--tx2);}
+  /* — панель управления — */
+  #controls{top:12px; right:12px; width:280px;}
+  #controls .row{display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; gap:8px;}
+  #controls label.toggle{display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;}
+  #controls input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px; cursor:pointer;}
+  #controls .btns{display:flex; flex-wrap:wrap; gap:6px; margin-top:2px;}
+  button.ctl{font:inherit; font-size:12px; padding:5px 10px; border-radius:8px; cursor:pointer;
+             border:1px solid var(--panel-border); background:transparent; color:var(--text);}
+  button.ctl:hover{border-color:var(--accent); color:var(--accent);}
+  button.ctl.primary{background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600;}
+  #readout{margin-top:8px; padding-top:8px; border-top:1px solid var(--panel-border);
+           color:var(--subtext); font-size:11.5px; display:flex; justify-content:space-between;}
+  #readout b{color:var(--text); font-weight:600;}
 
-  .crumbs{padding:8px 16px 0; color:var(--tx2); font-size:12px;}
-  .crumbs b{color:var(--accent);}
+  /* — тур — */
+  #tour{bottom:14px; left:50%; transform:translateX(-50%); min-width:560px; max-width:min(760px,92vw);
+        display:flex; align-items:center; gap:12px;}
+  #tour .step{flex:1;}
+  #tour .num{color:var(--accent); font-weight:700; margin-right:6px;}
+  #tour .done{color:var(--ok,#7fd18b);}
+  #tour .dots{display:flex; gap:4px;}
+  #tour .dots i{width:7px; height:7px; border-radius:50%; background:var(--panel-border); display:block;}
+  #tour .dots i.cur{background:var(--accent);}
+  #tour .dots i.past{background:var(--accent); opacity:.45;}
+  #tour button{font-size:11px; padding:3px 8px;}
 
-  /* ── дерево-граф: узлы-карточки + SVG-ветки ── */
-  .tree-wrap{flex:1; overflow:auto; position:relative;}
-  .tree-hint{display:none; position:absolute; inset:0; align-items:center; justify-content:center;
-    color:var(--tx2); font-size:13px; text-align:center; padding:24px; z-index:0;}
-  .panel.detached .tree-hint{display:flex;}
-  #graph{position:relative; min-width:100%; min-height:100%;}
-  #gscale{position:absolute; top:0; left:0; transform-origin:0 0; transition:transform .45s ease;}
-  #edges{position:absolute; top:0; left:0; z-index:0;}
-  #edges path{fill:none; stroke:var(--accent); stroke-width:2; opacity:.75;}
-  #edges path.toLeaf{stroke:var(--leaf);}
-  .gnode{position:absolute; background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--accent);
+  /* — drawer решений — */
+  #drawer{top:0; right:0; height:100%; width:400px; max-width:94vw; border-radius:0; border-right:none;
+          overflow-y:auto; transform:translateX(105%); transition:transform .22s ease; z-index:40; padding:16px 18px;}
+  #drawer.open{transform:translateX(0);}
+  #drawer h3{font-size:13px; margin:14px 0 8px; color:var(--accent);}
+  #drawer h3:first-of-type{margin-top:10px;}
+  #drawer ol{margin-left:18px;}
+  #drawer li{margin-bottom:7px; font-size:12.5px;}
+  #drawer .close{position:absolute; top:10px; right:12px;}
+
+  /* — tooltip — */
+  #tooltip{position:fixed; pointer-events:none; z-index:60; display:none;
+           background:rgba(10,12,18,.94); color:#e6e9f0; border:1px solid #3a4050;
+           border-radius:8px; padding:5px 9px; font-size:11.5px; max-width:280px;}
+  body.light #tooltip{background:rgba(24,27,35,.94);}
+
+  .hidden{display:none !important;}
+  /* при открытом оверлее плавающие панели приглушаются (и в main stage, и в окне проверки) */
+  body.modal #info, body.modal #controls,
+  body.chain-open #info, body.chain-open #controls{opacity:.1; pointer-events:none;}
+  #info,#controls{transition:opacity .2s;}
+  @media (max-width:900px){ #info{width:250px;} #tour{min-width:0;} }
+
+  /* ═══ окно «Проверка цепочки расчёта» (У9 v4): оверлей поверх канваса, паттерн main stage ═══ */
+  #chainov{position:fixed; inset:0; background:rgba(9,10,13,.62); display:none;
+    align-items:center; justify-content:center; z-index:80; animation:ovIn .22s ease;}
+  body.chain-open #chainov{display:flex;}
+  @keyframes ovIn{from{opacity:0;} to{opacity:1;}}
+  @keyframes winIn{from{opacity:0; transform:scale(.97) translateY(10px);} to{opacity:1; transform:none;}}
+  .dwin{width:min(88vw,1320px); height:min(86vh,900px); background:var(--panel);
+    border:1px solid var(--panel-border); border-radius:14px; display:flex; flex-direction:column;
+    overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.55); animation:winIn .3s ease;}
+  .dhead{padding:13px 18px 11px; border-bottom:1px solid var(--panel-border); display:flex; align-items:flex-start; gap:16px;}
+  .dhead .ttl{font-weight:600; font-size:15px; color:var(--text);}
+  .dhead .ttl b{color:var(--accent);}
+  .dhead .meta{color:var(--subtext); font-size:11.5px; margin-top:3px; max-width:760px;}
+  .dtoggle{display:flex; align-items:center; gap:8px; margin-left:auto; cursor:pointer; user-select:none; flex:none; margin-top:3px;}
+  .dtoggle .lbl{font-size:12.5px; color:var(--text);}
+  .switch{width:38px; height:21px; border-radius:11px; background:transparent; border:1px solid var(--panel-border); position:relative; cursor:pointer; transition:background .2s; flex:none;}
+  .switch::after{content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:var(--subtext); transition:all .2s;}
+  .switch.on{background:var(--accent-soft); border-color:var(--accent);}
+  .switch.on::after{left:19px; background:var(--accent);}
+  .dclose{cursor:pointer; border:1px solid var(--panel-border); background:transparent;
+    color:var(--subtext); border-radius:7px; width:30px; height:30px; font-size:14px; flex:none;}
+  .dclose:hover{border-color:var(--accent); color:var(--text);}
+  .dbody{flex:1; overflow:auto; position:relative;}
+  #dscale{position:absolute; top:0; left:0; transform-origin:0 0; transition:transform .45s ease;}
+  #dedge{position:absolute; top:0; left:0; z-index:0;}
+  #dedge path{fill:none; stroke:var(--accent); stroke-width:2; opacity:.75;}
+  #dedge path.toLeaf{stroke:#9fd6ff;}
+  .gnode{position:absolute; background:var(--panel); border:1px solid var(--panel-border); border-left:3px solid var(--accent);
     border-radius:8px; padding:7px 10px; width:158px; cursor:pointer; z-index:1;}
-  .gnode .nm{font-weight:600; font-size:12px; display:flex; justify-content:space-between; gap:8px; align-items:baseline;}
+  .gnode .nm{font-weight:600; font-size:12px; display:flex; justify-content:space-between; gap:8px; align-items:baseline; flex-wrap:wrap; color:var(--text);}
   .gnode .vl{font-weight:600; white-space:nowrap;}
-  .gnode .f{color:var(--tx2); font-size:10.5px; margin-top:2px;}
-  .gnode .src{color:var(--leaf); font-size:10.5px; margin-top:2px;}
-  .gnode.leaf{border-left-color:var(--leaf);}
+  .gnode .f{color:var(--subtext); font-size:10.5px; margin-top:2px;}
+  .gnode .src{color:#9fd6ff; font-size:10.5px; margin-top:2px;}
+  .gnode.leaf{border-left-color:#9fd6ff;}
+  .gnode.prose{border-left-color:var(--subtext); font-style:italic; color:var(--subtext); cursor:default;}
   .gnode.frontier{border-style:dashed;}
   .gnode .badge{color:var(--accent); font-size:10.5px; margin-top:4px;}
-  .gnode.hit{box-shadow:0 0 0 3px var(--ok);}
-
-  /* ── режим защиты: модальное окно ───────── */
-  .overlay{position:fixed; inset:0; background:rgba(9,10,13,.62); display:none;
-    align-items:center; justify-content:center; z-index:50; animation:ovIn .22s ease;}
-  .defense-on .overlay{display:flex;}
-  .modal{width:min(92vw, 1380px); height:min(86vh, 920px); background:var(--panel);
-    border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column;
-    overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.55); animation:mIn .3s ease;}
-  @keyframes ovIn{from{opacity:0;} to{opacity:1;}}
-  @keyframes mIn{from{opacity:0; transform:scale(.96) translateY(10px);} to{opacity:1; transform:none;}}
-  .m-head{padding:14px 18px 12px; border-bottom:1px solid var(--line); display:flex; align-items:flex-start; gap:16px;}
-  .m-head .ttl{font-weight:600; font-size:16px;}
-  .m-head .meta{color:var(--tx2); font-size:12px; margin-top:3px;}
-  .m-x{margin-left:auto; cursor:pointer; border:1px solid var(--line); background:var(--panel2);
-    color:var(--tx2); border-radius:7px; width:30px; height:30px; font-size:14px; flex:none;}
-  .m-x:hover{border-color:var(--accent); color:var(--tx);}
-  .m-body{flex:1; overflow:auto; position:relative;}
-  .m-foot{border-top:1px solid var(--line); padding:10px 18px; display:flex; align-items:center; gap:10px;}
-  .m-foot .lv{color:var(--tx2); font-size:12px; flex:1;}
-  .btn{cursor:pointer; border:1px solid var(--line); background:var(--panel2); color:var(--tx);
-    border-radius:7px; padding:5px 12px; font-size:12px; user-select:none;}
-  .btn:hover{border-color:var(--accent);}
-
-  /* появление узлов и веток в окне защиты: класс .shown ставится шагом раскрытия (AC-6.3) */
-  .m-body .gnode{opacity:0; transform:scale(.97); pointer-events:none; transition:opacity .3s ease, transform .3s ease;}
-  .m-body .gnode.shown{opacity:1; transform:none; pointer-events:auto;}
-  .m-body #edges path{transition:stroke-dashoffset .55s ease, opacity .25s ease .18s;}
-
-  .note{background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--delta);
-    border-radius:10px; padding:12px 16px; font-size:13px;}
-  .note b{color:var(--delta);}
-  .note .q{color:var(--tx2); margin-top:6px;}
+  .dfoot{border-top:1px solid var(--panel-border); padding:10px 18px; display:flex; align-items:center; gap:10px;}
+  .dfoot .lv{color:var(--subtext); font-size:12px; flex:1;}
+  .dbtn{cursor:pointer; border:1px solid var(--panel-border); background:transparent; color:var(--text);
+    border-radius:7px; padding:5px 12px; font-size:12px; user-select:none; font-family:inherit;}
+  .dbtn:hover{border-color:var(--accent); color:var(--accent);}
+  /* появление узлов и веток в защите: класс .shown ставится шагом раскрытия (AC-6.3);
+     правило скрытости по умолчанию — только в защите, обычный вид окна всегда видим */
+  body.defense-on .dbody .gnode{opacity:0; transform:scale(.97); pointer-events:none; transition:opacity .3s ease, transform .3s ease;}
+  body.defense-on .dbody .gnode.shown{opacity:1; transform:none; pointer-events:auto;}
+  body.defense-on .dbody #dedge path{transition:stroke-dashoffset .55s ease, opacity .25s ease .18s;}
+  body.defense-on{cursor:default;}
 </style>
 </head>
-<body>
+<body class="dark">
+<canvas id="cv"></canvas>
 
-<h1>Прототип У9 (v3.1) — режим защиты: модальное окно с деревом нод с ветками</h1>
-<div class="sub">
-  <b>Решение владельца (2026-09-22):</b> «режим защиты — это модальное окно» — окно открывается
-  <b>поверх канваса</b> одним действием (AC-6.1), канвас и панель уходят под затемнённый фон;
-  панель на время защиты прячется (паттерн диалога ревью, §6.5). Внутри окна — <b>тот же граф нод
-  с ветками</b>, что и в explain-панели, укрупнённый (<b>×1.5</b>, AC-6.2), с пошаговым раскрытием
-  уровней от корня: клик по узлу, <b>пробел</b> или «Следующий уровень» (AC-6.3).
-  <b>Esc</b>, <b>✕</b> или клик по фону — выход: окно закрывается, панель и подсветка возвращаются
-  полностью (AC-6.4).
-  <br><b>v3.1 — фикс:</b> в v3 окно фактически не открывалось — класс состояния вешался на #app,
-  а CSS-селектор оверлея его не видел (клик по тумблеру лишь прятал дерево из панели). Теперь запуск
-  проверен в браузере: открытие → пошаговое раскрытие ×1.5 → выход с полным возвратом панели.
-  Граф центрируется в окне и вписывается в него, узлы и ветки появляются с анимацией.
+<!-- Шапка «Что проверяем» -->
+<details class="panel" id="info" open>
+  <summary><span class="chev">▶</span>Что проверяем — У9 v4</summary>
+  <ol>
+    <li><b>Канвас — полноэкранный</b>, как в <b>prototype-mainstage-anatomy</b>: ноды, пучки, камера (пан/зум), main stage. Экран <b>не делится</b> на «канвас + панель».</li>
+    <li>Клик по <b>цифре</b> в полосе результата ноды (фолбэк-триггер У1) или кнопка «Проверить цепочку» открывает окно <b>«Проверка цепочки расчёта»</b> — <b>поверх канваса</b>, тот же паттерн, что main stage.</li>
+    <li>В окне — дерево цепочки: <b>граф нод с ветками</b>; авто-раскрытие 3 уровня (FR-039), уровень 4 — по клику на бейдж.</li>
+    <li>Тумблер <b>«Режим защиты»</b> (AC-6.1): дерево ×1.5 (AC-6.2), проза скрыта, пошаговое раскрытие — пробел / клик по узлу / кнопка (AC-6.3).</li>
+    <li><b>Esc</b> — выход из защиты в окно; ещё раз — окно закрыто, канвас без следов (AC-6.4).</li>
+    <li><b>Main stage</b> (клик по пучку) — второй оверлей поверх того же канваса; одновременно открыт один оверлей (F-10).</li>
+  </ol>
+  <div class="legend"><span><span class="dotv"></span>value — данные</span><span><span class="dotc"></span>control — управление</span><span><span class="dotu"></span>не подставлено</span><span><span style="font-family:Georgia,serif;font-style:italic;color:var(--accent)">ƒ</span> — формула</span></div>
+</details>
+
+<!-- Панель управления -->
+<div class="panel" id="controls">
+  <h2>Управление</h2>
+  <div class="row">
+    <label class="toggle"><input type="checkbox" id="aggToggle" checked> Агрегация связей</label>
+    <button class="ctl" id="themeBtn">☀ Светлая</button>
+  </div>
+  <div class="row muted" style="font-size:11.5px">
+    <span>Пучок «Заявки → Стоимость»:</span>
+    <span>
+      <button class="ctl" id="minusBtn" title="убрать связь">− связь</button>
+      <button class="ctl" id="plusBtn" title="добавить связь">+ связь</button>
+    </span>
+  </div>
+  <div class="btns">
+    <button class="ctl primary" id="chainBtn" title="AC-6.1: запуск одним действием">Проверить цепочку: Стоимость.Итог</button>
+    <button class="ctl" id="resetBtn">Сбросить демо</button>
+    <button class="ctl" id="drawerBtn">Решения и вопросы</button>
+  </div>
+  <div id="readout"><span>Зум <b id="zoomVal">—</b></span><span id="lodVal">—</span></div>
 </div>
 
-<div class="app" id="app">
-  <div class="canvas" id="canvas">
-    <div class="tag">канвас — подсветка цепочки (AC-3.1); в защите — под затемнённым фоном модалки</div>
-    <svg id="cedges"></svg>
-
-    <div class="cnode chain" id="cn-root" data-tree="Стоимость подписки" style="top:52px; left:40%;">
-      <div class="t">Юнит-экономика подписки</div>
-      <div class="row"><span>Стоимость подписки</span><span class="val">1 240 ₽</span></div>
-      <div class="row"><span class="t">полоса D</span><span class="d">+33пп</span></div>
-    </div>
-    <div class="cnode chain" id="cn-npl" data-tree="NPL 90+" style="top:230px; left:6%;">
-      <div class="t">Риск NPL</div>
-      <div class="row"><span>доля NPL</span><span class="val">92%</span></div>
-      <div class="row" style="font-style:italic; color:var(--tx2); font-size:11px;"><span>Комментарий аналитика к таблице рисков</span></div>
-    </div>
-    <div class="cnode chain" id="cn-arent" data-tree="Аренда устройств" style="top:230px; left:38%;">
-      <div class="t">Аренда устройств</div>
-      <div class="row"><span>аренда/мес</span><span class="val">620 ₽</span></div>
-    </div>
-    <div class="cnode chain" id="cn-trade" data-tree="Трейд-ин" style="top:230px; left:72%;">
-      <div class="t">Трейд-ин</div>
-      <div class="row"><span>остаточная ст-ть</span><span class="val">18%</span></div>
-    </div>
-    <div class="cnode dim" style="top:420px; left:10%;">
-      <div class="t">CRM-воронка</div>
-      <div class="row"><span>конверсия демо</span><span class="val">34%</span></div>
-    </div>
-    <div class="cnode dim" style="top:420px; left:56%;">
-      <div class="t">Маркетинг</div>
-      <div class="row"><span>CAC</span><span class="val">2 100 ₽</span></div>
-    </div>
-  </div>
-
-  <div class="side">
-    <div class="panel" id="panel">
-      <div class="p-head">
-        <div class="ttl">Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
-        <div class="meta">представление: граф нод с ветками · лимит авто-раскрытия: 3 (FR-039) · корень: итог ноды</div>
-        <div class="toggle-row">
-          <div class="switch" id="sw" title="AC-6.1: запуск одним действием — открывает модальное окно защиты"></div>
-          <span class="lbl">Режим защиты</span>
-          <span class="kbd">Esc</span><span class="lbl" style="color:var(--tx2)">— выход из окна</span>
-        </div>
-      </div>
-      <div class="crumbs">Крошки: <b>Стоимость подписки</b></div>
-      <div class="tree-wrap" id="treewrap">
-        <div class="tree-hint">Дерево открыто в модальном окне режима защиты.<br>Закройте окно (Esc / ✕ / клик по фону) — панель вернётся.</div>
-        <div id="graph"><div id="gscale"></div></div>
-      </div>
-    </div>
-
-    <div class="note">
-      <b>Решение владельца (v3, 2026-09-22).</b> Режим защиты — <b>модальное окно</b> поверх канваса:
-      панель прячется на время защиты, внутри окна — тот же дерево-граф, укрупнённый, с пошаговым
-      раскрытием. Подвопрос У9 («панель остаётся видимой?») закрыт: панель рядом не остаётся.
-      <div class="q">v3.1: окно теперь действительно открывается (исправлен запуск); граф — ×1.5
-      с центрированием и анимацией появления узлов и веток (AC-6.2).</div>
-    </div>
-  </div>
+<!-- Тур -->
+<div class="panel" id="tour">
+  <div class="step"><span class="num" id="tourNum">1/6</span><span id="tourText">—</span></div>
+  <div class="dots" id="tourDots"></div>
+  <button class="ctl" id="tourReset">сбросить</button>
 </div>
 
-<!-- ── модальное окно режима защиты ── -->
-<div class="overlay" id="overlay">
-  <div class="modal" role="dialog" aria-label="Режим защиты">
-    <div class="m-head">
+<!-- Drawer: решения и открытые вопросы -->
+<div class="panel" id="drawer">
+  <button class="ctl close" id="drawerClose">✕</button>
+  <h2 style="font-size:14px">Прототип «проверка цепочки поверх канваса» (У9 v4)</h2>
+  <p class="muted" style="font-size:12px">Фидбэк владельца (2026-09-22): «зачем делить экран на две стороны — канвас должен идти как в prototype-mainstage-anatomy, поверх него может открываться main stage и/или проверка цепочки расчёта цифры». Ниже — решения прототипа и открытые вопросы.</p>
+  <h3>А. Решения, принятые прототипом</h3>
+  <ol>
+    <li>База — движок <b>prototype-mainstage-anatomy.html без изменений</b>: полноэкранный канвас, камера (пан/зум), LOD, пучки, main stage, тема.</li>
+    <li>Проверка цепочки = <b>плавающее окно поверх канваса</b> (паттерн main stage: затемнение + окно), не боковая панель — боковых панелей больше нет.</li>
+    <li>Вход: клик по цифре в полосе результата ноды (У1 — фолбэк-триггер) или кнопка в панели управления — <b>одним действием</b> (AC-6.1).</li>
+    <li>Дерево в окне — <b>граф нод с ветками</b> (то же представление, что и в обычном режиме); авто-раскрытие 3 уровня (FR-039), уровень 4 — источники — по бейджу/клику.</li>
+    <li>Режим защиты — состояние того же окна: тумблер в шапке (AC-6.1) → ×1.5 с вписыванием в окно (AC-6.2), проза скрыта, пошаговое раскрытие уровней (AC-6.3).</li>
+    <li>Esc — выход из защиты в окно; повторный Esc / ✕ / клик по фону — закрытие окна; канвас остаётся без следов (AC-6.4).</li>
+    <li>Демо-данные цепочки: «Стоимость.Итог 4 687 200 ₽» → выручка (Количество · Средний_чек · Сезон) и план USD (выручка / Курсы.USD); источники — уровень 4. Для остальных нод дерево строится из их trace-строк.</li>
+    <li>Взаимоисключимость: открытое окно проверки закрывает main stage (реестр модальностей, F-10).</li>
+    <li>Контекст ноды (курсивные строки) на канвасе остаётся как в референсе; в дерево окна он не входит — в защите проза скрыта полностью (AC-6.2).</li>
+  </ol>
+  <h3>Б. Открытые вопросы (неоднозначно в концепции)</h3>
+  <ol>
+    <li>Размер окна проверки: 70% экрана как main stage — или крупнее (сейчас 88vw/86vh)?</li>
+    <li>Нужны ли зум/пан содержимого внутри окна дерева (сейчас — вписывание целиком + скролл)?</li>
+    <li>Подсветка соответствующих нод на канвасе под затемнением окна — нужна (сейчас канвас просто затемнён)?</li>
+    <li>Вход в проверку цифры прямо из main stage (панель «Как считается»)?</li>
+    <li>Нужны ли в окне крошки и действия листов (источник/автор) — сейчас только дерево и строки источников?</li>
+    <li>Проза в обычном виде окна: показывать курсивом (сейчас) или скрывать сразу?</li>
+    <li>Поведение «Раскрыть всё» в защите: до уровня 4 включительно (сейчас) или только авто-лимит 3?</li>
+  </ol>
+</div>
+
+<div id="tooltip"></div>
+
+<!-- ── окно «Проверка цепочки расчёта цифры» (У9 v4) ── -->
+<div id="chainov">
+  <div class="dwin" role="dialog" aria-label="Проверка цепочки расчёта">
+    <div class="dhead">
       <div>
-        <div class="ttl">Режим защиты — Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
-        <div class="meta">модальное окно поверх канваса (У9 — решение владельца, 2026-09-22) · тот же граф нод с ветками · ×1.5 (AC-6.2) · Esc / ✕ / клик по фону — выход</div>
+        <div class="ttl" id="dtitle">Проверка цепочки расчёта</div>
+        <div class="meta" id="dmeta"></div>
       </div>
-      <button class="m-x" id="mx" title="Закрыть (Esc)">✕</button>
+      <label class="dtoggle" title="AC-6.1: запуск одним действием из открытого окна">
+        <div class="switch" id="dsw"></div><span class="lbl">Режим защиты</span>
+      </label>
+      <button class="dclose" id="dclose" title="Закрыть (Esc)">✕</button>
     </div>
-    <div class="m-body" id="mbody"></div>
-    <div class="m-foot">
-      <span class="lv" id="lv"></span>
-      <button class="btn" id="nextLv">Следующий уровень</button>
-      <button class="btn" id="openAll">Раскрыть всё</button>
+    <div class="dbody" id="dbody"><div id="dscale"></div></div>
+    <div class="dfoot" id="dfoot" style="display:none">
+      <span class="lv" id="dlv"></span>
+      <button class="dbtn" id="dnext">Следующий уровень</button>
+      <button class="dbtn" id="dall">Раскрыть всё</button>
     </div>
   </div>
 </div>
 
 <script>
-const DATA = {
-  nm:"Стоимость подписки", vl:"1 240 ₽", f:"= ARPU × (NPL + трейд-ин) + аренда", lv:1,
-  kids:[
-    {nm:"ARPU-блок", vl:"810 ₽", f:"= база × доля NPL", lv:2, kids:[
-      {nm:"NPL 90+", vl:"92%", f:"допущение", lv:3, leaf:true, src:"источник: Риск-отчёт Q3 · автор: А. Ким"},
-      {nm:"Платёжная сетка", vl:"83%", f:"= сетка × ставка", lv:3, kids:[
-        {nm:"ставка (rate)", vl:"24,9%", f:"допущение", lv:4, leaf:true, src:"источник: тарифный реестр"},
-      ]},
-    ]},
-    {nm:"Аренда устройств", vl:"620 ₽", f:"= парк × аренда/мес", lv:2, kids:[
-      {nm:"Трейд-ин", vl:"18%", f:"допущение", lv:3, leaf:true, src:"источник: прайс-лист выкупа"},
-      {nm:"Парк устройств", vl:"4 800", f:"константа", lv:3, leaf:true},
-    ]},
-    {nm:"Прочие переменные", vl:"−190 ₽", f:"= сводные списания", lv:2, kids:[
-      {nm:"Списания по договорам", vl:"−190 ₽", f:"константа", lv:3, leaf:true},
-    ]},
-  ],
+'use strict';
+/* ================= ТЕМА И ПАЛИТРЫ (референс: prototype-mainstage-anatomy) ================= */
+const PALETTES = {
+  dark:{
+    bg:'#12141a', grid:'rgba(255,255,255,0.05)',
+    card:'#1b1e26', cardEdge:'#2b303c', strip:'#171a21', stripEdge:'#232834',
+    title:'#e8eaf0', body:'#b6bcc9', subtext:'#8b93a4',
+    base:'#6f7686', value:'#5aa2ff', control:'#f2a44a', accent:'#8f7bff',
+    ok:'#7fd18b', err:'#ff7a76', analysis:'#b18cff',
+    dim:'rgba(4,5,10,0.6)', stageFill:'#171a22', stageEdge:'#3a4050',
+    pillBg:'rgba(10,12,18,0.92)', pillText:'#e6e9f0', chipText:'#14161c',
+    chips:{template:'#a78bfa', text:'#4fd1c5', calc:'#f6ad55', data:'#5aa2ff'}
+  },
+  light:{
+    bg:'#eef1f6', grid:'rgba(20,24,40,0.07)',
+    card:'#ffffff', cardEdge:'#d5dae3', strip:'#f4f6fa', stripEdge:'#e3e8f0',
+    title:'#1a1d24', body:'#3c4250', subtext:'#6a7180',
+    base:'#9aa1b0', value:'#2f7fe8', control:'#d97c14', accent:'#6b46f0',
+    ok:'#2e9e5b', err:'#d84c48', analysis:'#7c4de0',
+    dim:'rgba(24,28,40,0.5)', stageFill:'#ffffff', stageEdge:'#c3cad6',
+    pillBg:'rgba(24,27,35,0.92)', pillText:'#f2f4f8', chipText:'#14161c',
+    chips:{template:'#a78bfa', text:'#4fd1c5', calc:'#f6ad55', data:'#5aa2ff'}
+  }
 };
+let theme = 'dark';
+let PAL = PALETTES.dark;
+const CAT_LABEL = {template:'шаблон', text:'текст', calc:'расчёт', data:'данные'};
+
+/* ================= ДЕМО-МОДЕЛЬ (референс: prototype-mainstage-anatomy) ================= */
+const NODES = [
+  {id:'A', title:'Заявки', obj:'Заявки', cat:'template', x:60, y:140, w:230,
+   desc:'Историческая база: заявки собираются с 2023-Q1, пик — март и сентябрь. Каналы: сайт, колл-центр, партнёры.',
+   trace:[{kind:'calc', txt:'Количество := Σ строк шаблона = 1 240'},
+          {kind:'var', txt:'Средний_чек := 3 500 ₽ (шаблон Q3)'},
+          {kind:'var', txt:'Конверсия := 4,2 % (историч. Q3’25)'},
+          {kind:'var', txt:'Сезон := ×1,08 (март, регламент №14)'}],
+   inputs:[{id:'svodka', t:'value', label:'Итог'}],
+   outputs:[{id:'zayavki', t:'value', label:'Количество'},
+            {id:'sredchek', t:'value', label:'Средний_чек'},
+            {id:'konv', t:'value', label:'Конверсия'},
+            {id:'sezon', t:'value', label:'Сезон'},
+            {id:'rezhim', t:'control', label:'Режим'}],
+   lines:['период: Q3 2026','канал: все','валюта: RUB'],
+   result:{text:'выполнено · 12 мс', ok:true}},
+  {id:'B', title:'Стоимость', obj:'Стоимость', cat:'text', x:480, y:70, w:320,
+   desc:'Ставки пересматриваются ежеквартально (протокол №7). Курс — средневзвешенный за период из CSV ЦБ; сезонность ×1,08 — март, регламент №14.',
+   trace:[{kind:'var', txt:'Заявки.Количество · 1 240 ← «Заявки»', edges:['ab0']},
+          {kind:'var', txt:'Заявки.Средний_чек · 3 500 ₽ ← «Заявки»', edges:['ab1']},
+          {kind:'var', txt:'Заявки.Конверсия · 4,2 % ← «Заявки»', edges:['ab2']},
+          {kind:'var', txt:'Заявки.Сезон · ×1,08 ← «Заявки»', edges:['ab3']},
+          {kind:'var', txt:'Курсы.USD · 90,2 ₽ ← «Курсы (CSV)»', edges:['eS1']},
+          {kind:'var', txt:'Цены.Прайс · −5 % ← «Цены»', edges:['e7']},
+          {kind:'calc', txt:'выручка := Заявки.Количество · Заявки.Средний_чек · Заявки.Сезон = 4 687 200 ₽', edges:['ab0','ab1','ab3']},
+          {kind:'calc', txt:'план (USD) := выручка / Курсы.USD = 51 965 $', edges:['eS1']}],
+   inputs:[{id:'p1', t:'value', label:'Количество'},{id:'p2', t:'value', label:'Средний_чек'},
+           {id:'p3', t:'value', label:'Конверсия'},{id:'p4', t:'value', label:'Сезон'},
+           {id:'p5', t:'value', label:'USD'},
+           {id:'skidka', t:'value', label:'Прайс'},
+           {id:'stotka', t:'control', label:'to: ставка'},
+           {id:'limit', t:'control', label:'to: лимит'},
+           {id:'status', t:'control', label:'to: статус'},
+           {id:'kanal', t:'control', label:'to: канал'}],
+   outputs:[{id:'itog', t:'value', label:'Итог'},{id:'delta', t:'value', label:'Дельта'}],
+   lines:['лиды := Заявки.Количество · Заявки.Конверсия','выручка := Заявки.Количество · Заявки.Средний_чек','   · Заявки.Сезон = 4,69 млн ₽','план (USD) := выручка / Курсы.USD = 51 965 $'],
+   result:{text:'итог: 4 687 200 ₽ · 12 мс', ok:true}},
+  {id:'C', title:'Отчёт', obj:'Отчёт', cat:'text', x:910, y:100, w:240,
+   desc:'Отчёт заказчику: итог и динамика. Бюджет из DAC-DB получен, но ещё не привязан к слотам — войдёт в следующую ревизию.',
+   trace:[{kind:'var', txt:'Стоимость.Итог · 4 687 200 ₽ ← «Стоимость»', edges:['e2']},
+          {kind:'var', txt:'Стоимость.Дельта · −3,1 % ← «Стоимость»', edges:['e3']},
+          {kind:'var', txt:'Проекты.Бюджет · 12 000 ← «Проекты (DAC-DB)» — не подставлено', edges:['eS2'], warn:true},
+          {kind:'calc', txt:'резюме := «Динамика выручки Q3: −3,1 %» (из Стоимость.Дельта)', edges:['e3']}],
+   inputs:[{id:'p1', t:'value', label:'Итог'},{id:'p2', t:'value', label:'Дельта'},{id:'open1', t:'open', label:'бюджет'}],
+   outputs:[{id:'o1', t:'value', label:'Резюме'}],
+   lines:['Стоимость.Итог → динамика','Стоимость.Дельта → тренд'],
+   result:{text:'резюме готово · 5 мс', ok:true}},
+  {id:'I', title:'Сводка', obj:'Сводка', cat:'text', x:1245, y:120, w:170,
+   inputs:[{id:'p1', t:'value', label:'Резюме'}], outputs:[],
+   lines:['Стоимость.Резюме → сводка за Q3'],
+   result:{text:'ок', ok:true}},
+  {id:'H', title:'Цены', obj:'Цены', cat:'template', x:50, y:440, w:200,
+   inputs:[], outputs:[{id:'o1', t:'value', label:'Прайс'}],
+   lines:['прайс: v14','скидки: вкл'],
+   result:{text:'ок · 1 мс', ok:true}},
+  {id:'D', title:'Трафик', obj:'Трафик', cat:'text', x:330, y:480, w:190,
+   inputs:[], outputs:[{id:'o1', t:'value', label:'Visits'}],
+   lines:['visits: 124 000','leads: 1 240'],
+   result:{text:'ок · 3 мс', ok:true}},
+  {id:'E', title:'CPL', obj:'CPL', cat:'calc', x:660, y:480, w:190, state:'analysis',
+   inputs:[{id:'i1', t:'value', label:'Visits'}], outputs:[{id:'o1', t:'value', label:'cpl'}],
+   lines:['CPL := Трафик.Visits / leads'],
+   trace:[{kind:'var', txt:'Трафик.Visits · 124 000 ← «Трафик»', edges:['e4']},
+          {kind:'calc', txt:'CPL := Трафик.Visits / leads = 103 ₽', edges:['e4']}],
+   result:{text:'103 ₽ · анализ 2.1 с', ok:true}},
+  {id:'F', title:'Бюджет', obj:'Бюджет', cat:'calc', x:920, y:480, w:190, state:'broken',
+   inputs:[{id:'i1', t:'value', label:'cpl'}], outputs:[{id:'o1', t:'value', label:'значение'}],
+   lines:['бюджет := CPL.cpl · 1,2'],
+   trace:[{kind:'calc', txt:'бюджет := CPL.cpl · 1,2 → ОШИБКА: бюджет < 0', edges:['e5'], warn:true}],
+   result:{text:'ОШИБКА: бюджет < 0', ok:false}},
+  {id:'G', title:'ROI', obj:'ROI', cat:'calc', x:1230, y:460, w:200,
+   inputs:[{id:'i1', t:'value', label:'значение'}], outputs:[],
+   lines:['ROI := Бюджет.значение / spend'],
+   result:{text:'—', ok:true}},
+  {id:'S1', title:'Курсы (CSV)', obj:'Курсы', cat:'data', src:'CSV · rates_2025-03.csv', x:140, y:620, w:210,
+   desc:'Выгрузка курсов ЦБ за период, разделитель «;». Обновляется ежемесячно, ревизия v12.',
+   inputs:[], outputs:[{id:'usd', t:'value', label:'USD'},{id:'eur', t:'value', label:'EUR'}],
+   lines:['rates_2025-03.csv · ЦБ РФ','24 строки · обновл. 01.03'],
+   trace:[{kind:'calc', txt:'Курсы.USD := колонка «USD», среднее = 90,2 ₽'},{kind:'calc', txt:'Курсы.EUR := колонка «EUR», среднее = 98,4 ₽'}],
+   result:{text:'24 записи · загружено', ok:true}},
+  {id:'S2', title:'Проекты (DAC-DB)', obj:'Проекты', cat:'data', src:'DAC-DB · projects', x:700, y:640, w:220,
+   desc:'Проектный контур DAC-DB: таблица projects. Колонка «бюджет» ещё не привязана к слотам «Отчёта».',
+   inputs:[], outputs:[{id:'bud', t:'value', label:'Бюджет'},{id:'st', t:'value', label:'Статус'}],
+   lines:['dacdb.projects · nightly','1 842 записи'],
+   result:{text:'1 842 записи · синхр. 03:00', ok:true}}
+];
+
+/* Пул рёбер пучка A→B (стабильный порядок; ± связь обрезает пул) */
+const POOL_AB = [
+  {fp:'zayavki',  tp:'p1',     t:'value',   value:'1 240'},
+  {fp:'sredchek', tp:'p2',     t:'value',   value:'3 500 ₽'},
+  {fp:'konv',     tp:'p3',     t:'value',   value:'4,2 %'},
+  {fp:'sezon',    tp:'p4',     t:'value',   value:'×1,08'},
+  {fp:'rezhim',   tp:'stotka', t:'control', value:'вкл'},
+  {fp:'rezhim',   tp:'limit',  t:'control', value:'выкл'},
+  {fp:'rezhim',   tp:'status', t:'control', value:'авто'},
+  {fp:'sezon',    tp:'kanal',  t:'control', value:'±π'}
+];
+const STATIC_EDGES = [
+  {id:'e1', from:'B', fp:'itog', to:'A', tp:'svodka', t:'value',   value:'4,69 млн ₽'},
+  {id:'e2', from:'B', fp:'itog', to:'C', tp:'p1',     t:'value',   value:'4 687 200 ₽'},
+  {id:'e3', from:'B', fp:'delta',to:'C', tp:'p2',     t:'value',   value:'−3,1 %'},
+  {id:'e4', from:'D', fp:'o1',   to:'E', tp:'i1',     t:'value',   value:'124 000'},
+  {id:'e5', from:'E', fp:'o1',   to:'F', tp:'i1',     t:'value',   value:'103 ₽'},
+  {id:'e6', from:'F', fp:'o1',   to:'G', tp:'i1',     t:'value',   value:'—'},
+  {id:'e7', from:'H', fp:'o1',   to:'B', tp:'skidka', t:'value',   value:'−5 %'},
+  {id:'e8', from:'C', fp:'o1',   to:'I', tp:'p1',     t:'value',   value:'готово'},
+  {id:'eS1', from:'S1', fp:'usd',  to:'B', tp:'p5',     t:'value',   value:'90,2 ₽'},
+  {id:'eS2', from:'S2', fp:'bud',  to:'C', tp:'open1',  t:'value',   value:'12 000', unmapped:true}
+];
+let abCount = 6;
+let edges = [];
+function rebuildEdges(){
+  edges = POOL_AB.slice(0, abCount).map((p,i)=>({id:'ab'+i, from:'A', to:'B', ...p}))
+          .concat(STATIC_EDGES);
+  // R5: полный адрес входного слота «Объект.Поле» выводится из источника связи
+  for(const e of edges){
+    const tNode = nodeById(e.to), fNode = nodeById(e.from);
+    const ip = tNode.inputs.find(p=>p.id===e.tp);
+    const op = fNode.outputs.find(p=>p.id===e.fp);
+    if(ip && op && e.t==='value') ip.full = (fNode.obj||fNode.title) + '.' + op.label;
+  }
+}
+/* ================= СОСТОЯНИЕ ================= */
+const canvas = document.getElementById('cv');
+const ctx = canvas.getContext('2d');
+let dpr = 1;
+const cam = {x:0, y:0, z:0.9};          // screen = world*z + cam
+let selection = null;                    // {type:'node'|'edge', id}
+let hoverPrim = null;                    // {kind:'bundle',key} | {kind:'edge',id} | null
+let hoverNode = null;
+let stage = null;                        // {key:'A>B'} | null
+let agg = true;
+let dragNode = null, panState = null, mouse = {x:0, y:0, cx:0, cy:0, inside:false};
+
+function resize(){
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(innerWidth * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+  canvas.style.width = innerWidth + 'px';
+  canvas.style.height = innerHeight + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+if (!CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    r = Math.min(r, w/2, h/2);
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r); this.arcTo(x+w,y+h,x,y+h,r);
+    this.arcTo(x,y+h,x,y,r); this.arcTo(x,y,x+w,y,r); this.closePath();
+  };
+}
+
+/* ================= ГЕОМЕТРИЯ ================= */
+const HEADER_H = 30, STRIP_H = 26, LINE_H = 18;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+
+function nodeById(id){ return NODES.find(n=>n.id===id); }
+
+function curLod(){ return cam.z < 0.6 ? 0 : (cam.z > 1.5 ? 2 : 1); }
+
+function nodeGeom(n, lod, x, y){
+  const descH = (n.desc && lod>=1) ? LINE_H : 0;
+  const bodyH = lod===0 ? 0 : Math.max(n.lines.length*LINE_H + 14 + descH, Math.max(n.inputs.length, n.outputs.length)*20);
+  const h = HEADER_H + bodyH + STRIP_H;
+  const rt = lod===0 ? y + 4 : y + HEADER_H + 11;
+  const rb = lod===0 ? y + h - 4 : y + h - STRIP_H - 11;
+  return {h, rt, rb};
+}
+function portPos(n, side, portId, lod, x, y){
+  const g = nodeGeom(n, lod, x, y);
+  const list = side==='out' ? n.outputs : n.inputs;
+  const i = list.findIndex(p=>p.id===portId);
+  const span = Math.max(2, g.rb - g.rt);
+  return { x: side==='out' ? x + n.w : x, y: g.rt + span*((i<0?0:i)+0.5)/list.length };
+}
+function edgeAnchors(e, lod){
+  const f = nodeById(e.from), t = nodeById(e.to);
+  const p0 = portPos(f,'out',e.fp,lod,f.x,f.y);
+  const p3 = portPos(t,'in',e.tp,lod,t.x,t.y);
+  const dx = clamp(Math.abs(p3.x-p0.x)*0.45, 50, 170);
+  return {p0, c1:{x:p0.x+dx,y:p0.y}, c2:{x:p3.x-dx,y:p3.y}, p3};
+}
+function bezPoint(a,t){
+  const u = 1-t;
+  return {
+    x: u*u*u*a.p0.x + 3*u*u*t*a.c1.x + 3*u*t*t*a.c2.x + t*t*t*a.p3.x,
+    y: u*u*u*a.p0.y + 3*u*u*t*a.c1.y + 3*u*t*t*a.c2.y + t*t*t*a.p3.y
+  };
+}
+function sampleBezier(a, n=48){
+  const pts = [];
+  for(let i=0;i<=n;i++) pts.push(bezPoint(a, i/n));
+  return pts;
+}
+function strokeBezier(a){
+  ctx.beginPath();
+  ctx.moveTo(a.p0.x, a.p0.y);
+  ctx.bezierCurveTo(a.c1.x,a.c1.y,a.c2.x,a.c2.y,a.p3.x,a.p3.y);
+  ctx.stroke();
+}
+const bundleThickness = w => clamp(1.8 + (w-1)*0.9, 1.8, 8.0);
+function unmappedLabel(k){
+  if(k===1) return '1 вход не подставлен';
+  if(k<5) return k+' входа не подставлено';
+  return k+' входов не подставлено';
+}
+
+function computeBundles(){
+  const map = new Map();
+  for(const e of edges){
+    const key = e.from + '>' + e.to;
+    if(!map.has(key)) map.set(key, {key, from:e.from, to:e.to, edges:[]});
+    map.get(key).edges.push(e);
+  }
+  for(const b of map.values()){
+    b.weight = b.edges.length;
+    const withColor = b.edges.find(e=>e.color);
+    const valueEdge = b.edges.find(e=>e.t==='value');
+    b.dominant = withColor || valueEdge || b.edges[0];
+    b.color = b.dominant.color || (b.dominant.t==='value' ? PAL.value : PAL.control);
+  }
+  return map;
+}
+
+/* ================= ХИТ-ТЕСТ ================= */
+function distToSegment(px,py,ax,ay,bx,by){
+  const dx=bx-ax, dy=by-ay;
+  const len2 = dx*dx+dy*dy;
+  let t = len2 ? ((px-ax)*dx+(py-ay)*dy)/len2 : 0;
+  t = clamp(t,0,1);
+  const qx=ax+dx*t, qy=ay+dy*t;
+  return Math.hypot(px-qx, py-qy);
+}
+function distToPolyline(px,py,pts){
+  let m = Infinity;
+  for(let i=0;i<pts.length-1;i++)
+    m = Math.min(m, distToSegment(px,py,pts[i].x,pts[i].y,pts[i+1].x,pts[i+1].y));
+  return m;
+}
+function nodeRectAt(n, lod){
+  const g = nodeGeom(n, lod, n.x, n.y);
+  return {x:n.x, y:n.y, w:n.w, h:g.h};
+}
+function nodeAt(wx, wy){
+  const lod = curLod();
+  for(let i=NODES.length-1;i>=0;i--){
+    const r = nodeRectAt(NODES[i], lod);
+    if(wx>=r.x && wx<=r.x+r.w && wy>=r.y && wy<=r.y+r.h) return NODES[i];
+  }
+  return null;
+}
+/* полоса результата ноды = «цифра» (У1: клик по цифре — триггер проверки цепочки) */
+function stripRectAt(n, lod){
+  const g = nodeGeom(n, lod, n.x, n.y);
+  return {x:n.x, y:n.y+g.h-STRIP_H, w:n.w, h:STRIP_H};
+}
+function inStrip(n, wx, wy){
+  const r = stripRectAt(n, curLod());
+  return wx>=r.x && wx<=r.x+r.w && wy>=r.y && wy<=r.y+r.h;
+}
+
+/* ================= РЕНДР: КАНВАС ================= */
+function drawGrid(){
+  const z = cam.z;
+  if(z < 0.35) return;
+  const step = 40;
+  const x0 = Math.floor((0 - cam.x)/z/step)*step, y0 = Math.floor((0 - cam.y)/z/step)*step;
+  const x1 = (innerWidth - cam.x)/z, y1 = (innerHeight - cam.y)/z;
+  ctx.fillStyle = PAL.grid;
+  for(let x=x0; x<x1; x+=step)
+    for(let y=y0; y<y1; y+=step)
+      ctx.fillRect(x-0.75, y-0.75, 1.5, 1.5);
+}
+
+function edgeColorAndDash(e){
+  if(e.unmapped) return { color: PAL.control, dash: [5,4] };
+  return { color: e.color || (e.t==='value' ? PAL.value : PAL.control), dash: e.t==='control' ? [6,5] : null };
+}
+
+function drawEdges(bundles, lod){
+  const drawSingle = (e, widthBump)=>{
+    const a = edgeAnchors(e, lod);
+    const {color, dash} = edgeColorAndDash(e);
+    ctx.strokeStyle = (selection && selection.type==='edge' && selection.id===e.id) ? PAL.accent : color;
+    ctx.lineWidth = 1.8 + (widthBump||0);
+    ctx.setLineDash(dash || []);
+    strokeBezier(a);
+    ctx.setLineDash([]);
+  };
+  if(!agg){
+    for(const e of edges){
+      const hov = hoverPrim && hoverPrim.kind==='edge' && hoverPrim.id===e.id;
+      drawSingle(e, hov ? 1 : 0);
+    }
+    return;
+  }
+  const bundledIds = new Set();
+  for(const b of bundles.values()){
+    if(b.weight < 2){
+      drawSingle(b.edges[0], 0);
+      continue;
+    }
+    b.edges.forEach(e=>bundledIds.add(e.id));
+    const a = edgeAnchors(b.dominant, lod);
+    const hov = hoverPrim && hoverPrim.kind==='bundle' && hoverPrim.key===b.key;
+    const selInside = selection && selection.type==='edge' && b.edges.some(e=>e.id===selection.id);
+    ctx.strokeStyle = selInside ? PAL.accent : b.color;
+    ctx.lineWidth = bundleThickness(b.weight) + (hov?1:0) + (selInside?1:0);
+    ctx.setLineDash(b.dominant.t==='control' ? [6,5] : []);
+    strokeBezier(a);
+    ctx.setLineDash([]);
+  }
+  for(const e of edges) if(!bundledIds.has(e.id)) drawSingle(e, 0);
+}
+
+function drawBundleRings(bundles, lod){
+  if(!hoverPrim || hoverPrim.kind!=='bundle') return;
+  const b = bundles.get(hoverPrim.key);
+  if(!b) return;
+  ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5;
+  const seen = new Set();
+  for(const e of b.edges){
+    const pOut = portPos(nodeById(e.from),'out',e.fp,lod,nodeById(e.from).x,nodeById(e.from).y);
+    const pIn  = portPos(nodeById(e.to),'in',e.tp,lod,nodeById(e.to).x,nodeById(e.to).y);
+    for(const p of [pOut,pIn]){
+      const k = Math.round(p.x*2)+':'+Math.round(p.y*2);
+      if(seen.has(k)) continue;
+      seen.add(k);
+      ctx.beginPath(); ctx.arc(p.x,p.y,7.5,0,Math.PI*2); ctx.stroke();
+    }
+  }
+}
+
+/* — анатомия ноды: зоны A–E — */
+function truncate(s, maxW){
+  if(ctx.measureText(s).width <= maxW) return s;
+  while(s.length > 1 && ctx.measureText(s+'…').width > maxW) s = s.slice(0,-1);
+  return s + '…';
+}
+function drawNode(n, lod, opts){
+  opts = opts || {};
+  const x = opts.x !== undefined ? opts.x : n.x;
+  const y = opts.y !== undefined ? opts.y : n.y;
+  const g = nodeGeom(n, lod, x, y);
+  const isSel = selection && selection.type==='node' && selection.id===n.id;
+  const isHov = hoverNode === n.id && !opts.inStage;
+  const broken = n.state==='broken', analysis = n.state==='analysis';
+  const oc = n.inputs.filter(p=>p.t==='open').length;
+
+  // E: статусный слой — приоритет selection > analysis > broken > hover
+  let borderColor = PAL.cardEdge, bw = 1.25;
+  if(broken){ borderColor = PAL.err; bw = 1.6; }
+  if(oc && !broken){ borderColor = PAL.control; bw = 1.6; }
+  if(analysis){ borderColor = PAL.analysis; bw = 1.6; }
+  if(isHov){ borderColor = PAL.subtext; bw = 1.6; }
+  if(isSel){ borderColor = PAL.accent; bw = 2.5; }
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = PAL.card;
+  ctx.beginPath(); ctx.roundRect(x, y, n.w, g.h, 10); ctx.fill();
+  ctx.restore();
+
+  // A: хедер — чип категории + имя (явный fillStyle — не наследовать «старый»)
+  ctx.fillStyle = PAL.card;
+  ctx.beginPath(); ctx.roundRect(x, y, n.w, HEADER_H, [10,10,0,0]); ctx.fill();
+  ctx.fillStyle = PAL.stripEdge;
+  ctx.fillRect(x, y+HEADER_H-1, n.w, 1);
+
+  const chipLabel = CAT_LABEL[n.cat];
+  ctx.font = '600 10px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  const chipW = ctx.measureText(chipLabel).width + 14;
+  ctx.fillStyle = PAL.chips[n.cat];
+  ctx.beginPath(); ctx.roundRect(x+10, y+7, chipW, 16, 8); ctx.fill();
+  ctx.fillStyle = PAL.chipText;
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText(chipLabel, x+17, y+15.5);
+  ctx.font = '600 12.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = PAL.title;
+  ctx.fillText(truncate(n.title, n.w - chipW - 34), x + chipW + 18, y + 15.5);
+
+  // статусные бейджи (стек справа в хедере)
+  let bx = x + n.w - 10;
+  const badge = (txt, color)=>{
+    ctx.font='600 9.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    const w = ctx.measureText(txt).width + 12;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.roundRect(bx-w, y+7.5, w, 15, 7.5); ctx.fill();
+    ctx.fillStyle = PAL.chipText;
+    ctx.fillText(txt, bx-w+6, y+15.5);
+    bx -= w + 6;
+  };
+  if(broken) badge('ошибка', PAL.err);
+  if(oc) badge(unmappedLabel(oc), PAL.control);
+  if(analysis) badge('узкое место', PAL.analysis);
+
+  // C: тело
+  if(lod >= 1){
+    ctx.font = '11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    ctx.fillStyle = PAL.body; ctx.textAlign='left';
+    n.lines.forEach((ln,i)=> ctx.fillText(truncate(ln, n.w-24), x+12, y + HEADER_H + 12 + i*LINE_H + 8));
+    // R1: контекст ноды — курсивная строка с маркером «i»
+    if(n.desc){
+      const dy = y + HEADER_H + 12 + n.lines.length*LINE_H + 12;
+      ctx.strokeStyle = PAL.subtext; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x+15, dy-3.5, 4.5, 0, Math.PI*2); ctx.stroke();
+      ctx.font='italic 600 8px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+      ctx.fillStyle = PAL.subtext; ctx.textAlign='center';
+      ctx.fillText('i', x+15, dy-0.5);
+      ctx.font='italic 10.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+      ctx.textAlign='left';
+      ctx.fillText(truncate(n.desc, n.w-38), x+26, dy);
+    }
+  }
+
+  // D: полоса результата — единая для text/template
+  ctx.fillStyle = PAL.strip;
+  ctx.beginPath(); ctx.roundRect(x, y+g.h-STRIP_H, n.w, STRIP_H, [0,0,10,10]); ctx.fill();
+  ctx.fillStyle = PAL.stripEdge; ctx.fillRect(x, y+g.h-STRIP_H, n.w, 1);
+  ctx.font = '600 11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = n.result.ok ? PAL.ok : PAL.err;
+  ctx.fillText(truncate(n.result.text, n.w-22), x+12, y+g.h-STRIP_H/2);
+
+  // B: порт-рейлы
+  const showPorts = lod===2 || opts.forcePorts || (lod===1 && isHov);
+  if(showPorts){
+    const drawPort = (p, px, py, side)=>{
+      ctx.save();
+      ctx.translate(px, py);
+      if(p.t==='open'){
+        ctx.setLineDash([2.5,2.2]); ctx.strokeStyle = PAL.subtext; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(0,0,4.5,0,Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+      }
+      else if(p.t==='control'){ ctx.rotate(Math.PI/4); ctx.fillStyle = PAL.control; ctx.fillRect(-4,-4,8,8); }
+      else { ctx.fillStyle = PAL.value; ctx.beginPath(); ctx.arc(0,0,4.5,0,Math.PI*2); ctx.fill(); }
+      ctx.restore();
+      if(isSel || opts.inStage){
+        ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(px,py,7,0,Math.PI*2); ctx.stroke();
+      }
+      // лейблы слотов (только L2); R5: в stage вход = полный путь Объект.Поле; R6: подложка от рёбер
+      if(lod===2 || opts.forcePorts){
+        const lbl = (side==='in' && opts.inStage && p.full && p.t!=='control') ? p.full : p.label;
+        ctx.font = '10px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+        const tw = ctx.measureText(lbl).width;
+        const lx = side==='in' ? px-10-tw : px+10;
+        ctx.fillStyle = opts.inStage ? PAL.stageFill : PAL.card;
+        ctx.beginPath(); ctx.roundRect(lx-3, py-7.5, tw+6, 15, 4); ctx.fill();
+        ctx.fillStyle = PAL.subtext;
+        if(side==='in'){ ctx.textAlign='right'; ctx.fillText(lbl, px-10, py+0.5); }
+        else { ctx.textAlign='left'; ctx.fillText(lbl, px+10, py+0.5); }
+      }
+    };
+    n.inputs.forEach((p,i)=>{
+      const span = g.rb-g.rt;
+      drawPort(p, x, g.rt + span*(i+0.5)/n.inputs.length, 'in');
+    });
+    n.outputs.forEach((p,i)=>{
+      const span = g.rb-g.rt;
+      drawPort(p, x+n.w, g.rt + span*(i+0.5)/n.outputs.length, 'out');
+    });
+  }
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+}
+
+function drawNodes(lod){
+  for(const n of NODES) drawNode(n, lod);
+}
+
+/* ================= БЕЙДЖИ ×N (screen-space) ================= */
+function drawBadges(bundles, lod){
+  if(!agg) return;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  for(const b of bundles.values()){
+    if(b.weight < 2) continue;
+    const a = edgeAnchors(b.dominant, lod);
+    const midW = bezPoint(a, 0.5);
+    const t1 = bezPoint(a, 0.52);
+    let nx = t1.x-midW.x, ny = t1.y-midW.y;
+    const len = Math.hypot(nx,ny) || 1; nx/=len; ny/=len;
+    if(ny > 0){ nx=-nx; ny=-ny; }                    // стабильно вверх
+    const sx = midW.x*cam.z + cam.x + (-ny)*18;      // перпендикуляр
+    const sy = midW.y*cam.z + cam.y + (nx)*18;
+    const label = '×' + b.weight;
+    ctx.font = '700 11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    const w = ctx.measureText(label).width + 12;
+    const hov = hoverPrim && hoverPrim.kind==='bundle' && hoverPrim.key===b.key;
+    const selInside = selection && selection.type==='edge' && b.edges.some(e=>e.id===selection.id);
+    ctx.fillStyle = PAL.pillBg;
+    ctx.beginPath(); ctx.roundRect(sx-w/2, sy-9, w, 18, 9); ctx.fill();
+    if(hov || selInside){ ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5; ctx.stroke(); }
+    ctx.fillStyle = hov ? PAL.accent : PAL.pillText;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(label, sx, sy+0.5);
+    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  }
+}
+
+/* ================= ХОВЕР / ПИКИНГ ================= */
+function pickPrim(sx, sy){
+  const lod = curLod();
+  const bundles = computeBundles();
+  let best = null, bestD = Infinity;
+  const consider = (pts, meta)=>{
+    let d = Infinity;
+    for(let i=0;i<pts.length-1;i++){
+      const ax=pts[i].x*cam.z+cam.x, ay=pts[i].y*cam.z+cam.y;
+      const bx=pts[i+1].x*cam.z+cam.x, by=pts[i+1].y*cam.z+cam.y;
+      d = Math.min(d, distToSegment(sx,sy,ax,ay,bx,by));
+    }
+    if(d < 6 + meta.lw/2 && d < bestD){ bestD = d; best = meta; }
+  };
+  if(agg){
+    const bundled = new Set();
+    for(const b of bundles.values()){
+      if(b.weight < 2){
+        consider(sampleBezier(edgeAnchors(b.edges[0],lod)), {kind:'edge', id:b.edges[0].id, lw:1.8});
+        continue;
+      }
+      b.edges.forEach(e=>bundled.add(e.id));
+      const lw = bundleThickness(b.weight);
+      consider(sampleBezier(edgeAnchors(b.dominant,lod)), {kind:'bundle', key:b.key, lw});
+    }
+    for(const e of edges) if(!bundled.has(e.id))
+      consider(sampleBezier(edgeAnchors(e,lod)), {kind:'edge', id:e.id, lw:1.8});
+  } else {
+    for(const e of edges)
+      consider(sampleBezier(edgeAnchors(e,lod)), {kind:'edge', id:e.id, lw:1.8});
+  }
+  return best;
+}
+function edgeName(e){
+  const f=nodeById(e.from), t=nodeById(e.to);
+  const op=f.outputs.find(p=>p.id===e.fp), ip=t.inputs.find(p=>p.id===e.tp);
+  const src = (f.obj||f.title)+'.'+(op?op.label:'?');
+  const dst = e.unmapped ? (t.obj||t.title)+' · не подставлено'
+            : (e.t==='control' && ip) ? ip.label
+            : ((ip&&ip.full) || (t.obj||t.title));
+  return src + ' → ' + dst;
+}
+/* ================= MAIN STAGE ================= */
+function stageRect(){
+  const w = Math.min(innerWidth*0.7, 1100), h = Math.min(innerHeight*0.7, 720);
+  return {x:(innerWidth-w)/2, y:(innerHeight-h)/2, w, h};
+}
+let stageEdges = [], stageNodeRects = [], stageCloseRect = null, stageHoverId = null;
+let stageTraceRects = [], stageMinis = [], stageOpenRect = null;
+let hoverTraceIdx = null, stageHlRows = new Set(), stageHlEdges = new Set(), stageHoverEdges = new Set(), stageTraceMeta = [];
+
+function miniCardH(){ return 34; }
+function drawMiniCard(x,y,w,h,title,sub){
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.22)'; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
+  ctx.fillStyle=PAL.card;
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,8); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle=PAL.cardEdge; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,8); ctx.stroke();
+  ctx.fillStyle=PAL.chips.data;
+  ctx.beginPath(); ctx.roundRect(x+9,y+h/2-4,8,8,2); ctx.fill();
+  ctx.font='600 11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle=PAL.title; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.fillText(truncate(title,w-66), x+23, y+15);
+  ctx.font='9.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle=PAL.subtext;
+  ctx.fillText(truncate(sub,w-66), x+23, y+27);
+}
+function inrangeY(v,a,b){ return Math.max(a, Math.min(v,b)); }
+
+function drawStage(){
+  const r = stageRect();
+  const b = computeBundles().get(stage.key);
+  if(!b){ stage = null; return; }
+  const f = nodeById(b.from), t = nodeById(b.to);
+  const lod = 2;
+
+  // чужие входящие связи приёмника (вне пучка) — прозрачность источников Курсы.USD / Цены.Прайс / Проекты.Бюджет
+  const extras = edges.filter(e => e.to===t.id && !b.edges.includes(e));
+  const openPorts = t.inputs.filter(p=>p.t==='open');
+  const boxH = openPorts.length ? 24 + openPorts.length*18 + 8 : 0;
+  const trace = t.trace || [];
+  const nVar = trace.filter(l=>l.kind==='var').length, nCalc = trace.length - nVar;
+  const traceH = trace.length ? clamp(44 + Math.max(nVar, nCalc, 1)*16 + 10, 84, 220) : 0;
+
+  ctx.fillStyle = PAL.dim;
+  ctx.fillRect(0,0,innerWidth,innerHeight);
+
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.45)'; ctx.shadowBlur=30; ctx.shadowOffsetY=8;
+  ctx.fillStyle = PAL.stageFill;
+  ctx.beginPath(); ctx.roundRect(r.x,r.y,r.w,r.h,14); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = PAL.stageEdge; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(r.x,r.y,r.w,r.h,14); ctx.stroke();
+
+  // заголовок + закрыть
+  ctx.font='600 13px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = PAL.title; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  let titleTxt = `Пучок: ${f.title} → ${t.title} · ×${b.weight}`;
+  if(extras.length) titleTxt += ` · +${extras.length} внешн. вход${extras.length===1?'':extras.length<5?'а':'ов'}`;
+  ctx.fillText(titleTxt, r.x+20, r.y+30);
+  ctx.font='11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = PAL.subtext; ctx.textAlign='right';
+  ctx.fillText('Esc — закрыть', r.x+r.w-46, r.y+30);
+  ctx.textAlign='left';
+  stageCloseRect = {x:r.x+r.w-36, y:r.y+12, w:24, h:24};
+  ctx.strokeStyle = PAL.stageEdge;
+  ctx.beginPath(); ctx.roundRect(stageCloseRect.x, stageCloseRect.y, 24, 24, 7); ctx.stroke();
+  ctx.fillStyle = PAL.subtext; ctx.font='600 12px -apple-system,system-ui,sans-serif';
+  ctx.fillText('✕', stageCloseRect.x+7, stageCloseRect.y+17);
+
+  // геометрия нод внутри stage
+  const sg = nodeGeom(f,lod,0,0), tg = nodeGeom(t,lod,0,0);
+  const innerTop = r.y+52;
+  const innerBottom = r.y + r.h - 20 - traceH - (traceH?12:0);
+  const midY = (innerTop+innerBottom)/2;
+  const leftH = sg.h + (extras.length ? extras.length*(miniCardH()+10) + 6 : 0);
+  const fS = {x:r.x+64, y: inrangeY(midY - leftH/2, innerTop, innerBottom-leftH)};
+  let tY = midY - tg.h/2;
+  if(boxH) tY = Math.min(tY, innerBottom - tg.h - 14 - boxH);
+  const tS = {x:r.x+r.w-64-t.w, y: inrangeY(tY, innerTop, Math.max(innerTop, innerBottom-tg.h-(boxH?boxH+14:0)))};
+  const boxY = tS.y + tg.h + 14;
+
+  // веер: группировка одинаковых якорей + смещения
+  const groups = new Map();
+  for(const e of b.edges){
+    const k = e.fp+'|'+e.tp;
+    if(!groups.has(k)) groups.set(k,[]);
+    groups.get(k).push(e);
+  }
+  const off = new Map();
+  for(const g of groups.values())
+    g.forEach((e,i)=> off.set(e.id, (i-(g.length-1)/2)*12));
+
+  // рёбра пучка (до нод — как в world-проходе)
+  stageEdges = []; stageMinis = [];
+  for(const e of b.edges){
+    const p0 = portPos(f,'out',e.fp,lod,fS.x,fS.y);
+    const p3 = portPos(t,'in',e.tp,lod,tS.x,tS.y);
+    const dx = clamp(Math.abs(p3.x-p0.x)*0.45, 40, 130);
+    const a = {p0, c1:{x:p0.x+dx,y:p0.y}, c2:{x:p3.x-dx,y:p3.y}, p3};
+    const o = off.get(e.id)||0;
+    a.p0={...a.p0, y:a.p0.y+o}; a.p3={...a.p3, y:a.p3.y+o};
+    a.c1.y+=o; a.c2.y+=o;
+    const sel = selection && selection.type==='edge' && selection.id===e.id;
+    const hln = stageHlEdges.has(e.id) || stageHoverEdges.has(e.id);
+    const hov = stageHoverId===e.id;
+    ctx.strokeStyle = (sel||hln) ? PAL.accent : (e.t==='value' ? PAL.value : PAL.control);
+    ctx.lineWidth = 2.2 + ((sel||hln)?1:0) + (hov?0.8:0);
+    ctx.setLineDash(e.t==='control' ? [7,5] : []);
+    strokeBezier(a);
+    ctx.setLineDash([]);
+    stageEdges.push({id:e.id, e, pts:sampleBezier(a,40), mid:bezPoint(a,0.5), sel:sel||hln});
+  }
+
+  // мини-карточки чужих источников + их рёбра
+  let my = fS.y + sg.h + 16;
+  for(const e of extras){
+    const src = nodeById(e.from);
+    const mH = miniCardH();
+    stageMinis.push({x:fS.x, y:my, w:f.w, h:mH});
+    drawMiniCard(fS.x, my, f.w, mH, src.title, src.src || CAT_LABEL[src.cat] || '');
+    const p0 = {x:fS.x+f.w, y:my+mH/2};
+    let p3;
+    if(e.unmapped){
+      const oi = openPorts.findIndex(p=>p.id===e.tp);
+      p3 = {x:tS.x, y:boxY + 24 + oi*18 + 9};
+    } else {
+      p3 = portPos(t,'in',e.tp,lod,tS.x,tS.y);
+    }
+    const dx = clamp(Math.abs(p3.x-p0.x)*0.45, 40, 130);
+    const a = {p0, c1:{x:p0.x+dx,y:p0.y}, c2:{x:p3.x-dx,y:p3.y}, p3};
+    const sel = selection && selection.type==='edge' && selection.id===e.id;
+    const hln = stageHlEdges.has(e.id) || stageHoverEdges.has(e.id);
+    const hov = stageHoverId===e.id;
+    ctx.strokeStyle = (sel||hln) ? PAL.accent : (e.unmapped ? PAL.control : (e.t==='value' ? PAL.value : PAL.control));
+    ctx.lineWidth = 2.2 + ((sel||hln)?1:0) + (hov?0.8:0);
+    ctx.setLineDash(e.unmapped ? [5,4] : (e.t==='control' ? [7,5] : []));
+    strokeBezier(a);
+    ctx.setLineDash([]);
+    stageEdges.push({id:e.id, e, pts:sampleBezier(a,40), mid:bezPoint(a,0.5), sel:sel||hln});
+    my += mH + 10;
+  }
+
+  // ноды поверх
+  drawNode(f, lod, {x:fS.x, y:fS.y, inStage:true, forcePorts:true});
+  drawNode(t, lod, {x:tS.x, y:tS.y, inStage:true, forcePorts:true});
+  stageNodeRects = [
+    {id:f.id, x:fS.x, y:fS.y, w:f.w, h:sg.h},
+    {id:t.id, x:tS.x, y:tS.y, w:t.w, h:tg.h}
+  ];
+
+  // зона «входы без привязки» (R3)
+  stageOpenRect = null;
+  if(openPorts.length){
+    const bw = t.w, bh2 = 24 + openPorts.length*18 + 8;
+    ctx.save();
+    ctx.strokeStyle = PAL.control; ctx.lineWidth = 1.2; ctx.setLineDash([5,4]);
+    ctx.fillStyle = PAL.stageFill;
+    ctx.beginPath(); ctx.roundRect(tS.x, boxY, bw, bh2, 9); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.font='600 9px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    ctx.fillStyle = PAL.control; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    ctx.fillText('ВХОДЫ БЕЗ ПРИВЯЗКИ', tS.x+10, boxY+15);
+    openPorts.forEach((p,i)=>{
+      const e2 = edges.find(x=>x.to===t.id && x.tp===p.id);
+      const ry = boxY + 24 + i*18 + 12;
+      ctx.strokeStyle = PAL.subtext; ctx.lineWidth=1.3; ctx.setLineDash([2.5,2]);
+      ctx.beginPath(); ctx.arc(tS.x+13, ry-3, 3.5, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font='10.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+      ctx.fillStyle = PAL.body;
+      ctx.fillText((p.full || p.label) + (e2 ? ' · ' + e2.value : ''), tS.x+22, ry);
+    });
+    stageOpenRect = {x:tS.x, y:boxY, w:bw, h:bh2};
+  }
+
+  // подписи связей: адрес Объект.Поле + тип + значение; R7: без слипания —
+  // зазор = высота пилюли + 8 px (было 36 px при высоте 38 px), стопка центрируется по вееру
+  const items = stageEdges.slice().sort((a,b)=>a.mid.y-b.mid.y)
+                 .map(it=>({it, h: it.e.unmapped ? 52 : 38, y:0}));
+  const zoneTop = r.y+56, zoneBot = r.y+r.h-20-traceH-(traceH?12:0)-26;
+  let lastBottom = -Infinity;
+  for(const p of items){
+    p.y = Math.max(p.it.mid.y, lastBottom + p.h/2 + 8);
+    lastBottom = p.y + p.h/2;
+  }
+  if(items.length){
+    const natC = (items[0].it.mid.y + items[items.length-1].it.mid.y)/2;
+    const curC = (items[0].y - items[0].h/2 + items[items.length-1].y + items[items.length-1].h/2)/2;
+    const lo = zoneTop - (items[0].y - items[0].h/2), hi = zoneBot - (items[items.length-1].y + items[items.length-1].h/2);
+    const sh = clamp(natC - curC, Math.min(lo,hi), Math.max(lo,hi));
+    for(const p of items) p.y += sh;
+  }
+  for(const p of items){
+    const it = p.it, y = p.y;
+    const isUnm = !!it.e.unmapped;
+    const tp = t.inputs.find(pp=>pp.id===it.e.tp);
+    const addr = tp ? (it.e.t==='value' ? (tp.full || tp.label) : tp.label) : '?';
+    ctx.font='600 11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    const w1 = ctx.measureText(addr).width;
+    ctx.font='10.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    const w2 = ctx.measureText(it.e.value||'').width;
+    ctx.font='600 9.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    const w3 = isUnm ? ctx.measureText('◌ не подставлено').width : 0;
+    const w = Math.max(w1, w2, w3) + 24, h = p.h;
+    // пилюли держим в «коридоре» между подписями портов истока и приёмника (R6/R7)
+    const zL = fS.x + f.w + 70, zR = tS.x - 116;
+    const px = (zL + w/2 + 4 <= zR - w/2 - 4)
+      ? clamp(it.mid.x, zL + w/2 + 4, zR - w/2 - 4)
+      : (zL + zR)/2;
+    ctx.fillStyle = PAL.pillBg;
+    ctx.beginPath(); ctx.roundRect(px-w/2, y-h/2, w, h, 9); ctx.fill();
+    if(it.sel || stageHlEdges.has(it.e.id) || stageHoverEdges.has(it.e.id)){ ctx.strokeStyle=PAL.accent; ctx.lineWidth=1.5; ctx.stroke(); }
+    if(isUnm){
+      ctx.strokeStyle = PAL.control; ctx.lineWidth=1.4; ctx.setLineDash([2.5,2]);
+      ctx.beginPath(); ctx.arc(px-w/2+11, y-6, 3.5, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+    } else {
+      ctx.fillStyle = it.e.t==='value' ? PAL.value : PAL.control;
+      if(it.e.t==='value'){ ctx.beginPath(); ctx.arc(px-w/2+11, y-6, 3.2, 0, Math.PI*2); ctx.fill(); }
+      else { ctx.save(); ctx.translate(px-w/2+11, y-6); ctx.rotate(Math.PI/4); ctx.fillRect(-3,-3,6,6); ctx.restore(); }
+    }
+    ctx.fillStyle = PAL.pillText; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    ctx.font='600 11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    ctx.fillText(addr, px-w/2+21, y-2);
+    ctx.font='10.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    ctx.fillStyle='rgba(230,233,240,0.72)';
+    ctx.fillText(it.e.value||'', px-w/2+21, y+12);
+    if(isUnm){
+      ctx.font='600 9.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+      ctx.fillStyle = PAL.control;
+      ctx.fillText('◌ не подставлено', px-w/2+21, y+26);
+    }
+  }
+
+  // панель «Как считается» (R4/R7) — прозрачность расчёта приёмника
+  stageTraceRects = [];
+  stageTraceMeta = trace.map((ln,i)=>({i, kind: ln.kind||'calc', edges: ln.edges||[], feeds:new Set(), usedIn:new Set()}));
+  for(const m of stageTraceMeta){
+    if(m.kind!=='calc') continue;
+    for(const v of stageTraceMeta){
+      if(v.kind==='calc') continue;
+      if(v.edges.some(id=>m.edges.includes(id))){ m.feeds.add(v.i); v.usedIn.add(m.i); }
+    }
+  }
+  if(trace.length) drawTracePanel(r, t, trace);
+  else {
+    ctx.font='11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    ctx.fillStyle = PAL.subtext; ctx.textAlign='center';
+    ctx.fillText('Esc или клик по затемнённому фону — закрыть · клик по связи — выделить', r.x+r.w/2, r.y+r.h-18);
+    ctx.textAlign='left';
+  }
+}
+
+function drawTracePanel(r, t, trace){
+  const vars = [], calcs = [];
+  trace.forEach((ln,i)=> (ln.kind==='var' ? vars : calcs).push({...ln, i}));
+  const rows = Math.max(vars.length, calcs.length, 1);
+  const h = 44 + rows*16 + 10;
+  const x = r.x+16, y = r.y+r.h-20-h, w = r.w-32;
+  ctx.fillStyle = PAL.strip;
+  ctx.strokeStyle = PAL.stageEdge; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,10); ctx.fill(); ctx.stroke();
+  ctx.font='600 11px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = PAL.title; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.fillText('Как считается: '+t.title+' — прозрачность расчёта', x+12, y+18);
+  ctx.font='10px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = PAL.subtext; ctx.textAlign='right';
+  ctx.fillText('клик по формуле — её переменные · клик по переменной — её формулы · Esc — закрыть', x+w-12, y+18);
+  ctx.textAlign='left';
+  const colW = Math.min(360, Math.floor(w*0.4));   // переменные — уже, формулы — шире
+  const colW2 = w - 36 - colW;
+  const cx1 = x+12, cx2 = x+24+colW;
+  ctx.font='600 9px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+  ctx.fillStyle = PAL.subtext;
+  ctx.fillText('ПЕРЕМЕННЫЕ · ВХОДЯЩИЕ ЗНАЧЕНИЯ', cx1, y+32);
+  ctx.fillText('РАСЧЁТ · ФОРМУЛЫ', cx2, y+32);
+  ctx.strokeStyle = PAL.stageEdge; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx2-7, y+38); ctx.lineTo(cx2-7, y+h-8); ctx.stroke();
+
+  const row = (ln, cx, cw, isCalc, k)=>{
+    const ly = y+48+k*16;
+    const hit = {x:cx-4, y:ly-12, w:cw+8, h:16, idx:ln.i, kind:ln.kind||'calc', edges:ln.edges||[]};
+    stageTraceRects.push(hit);
+    const inHl = stageHlRows.has(ln.i);
+    const hov = hoverTraceIdx===ln.i;
+    if(hov){ ctx.fillStyle='rgba(143,123,255,0.10)'; ctx.fillRect(hit.x,hit.y,hit.w,hit.h); }
+    if(inHl){ ctx.fillStyle='rgba(143,123,255,0.18)'; ctx.fillRect(hit.x,hit.y,hit.w,hit.h); }
+    if(isCalc){
+      ctx.font='italic 600 10.5px Georgia,serif';
+      ctx.fillStyle = inHl ? PAL.accent : PAL.analysis;
+      ctx.fillText('ƒ', cx+2, ly);
+    } else if(ln.warn){
+      ctx.strokeStyle = PAL.control; ctx.lineWidth=1.2; ctx.setLineDash([2,1.6]);
+      ctx.beginPath(); ctx.arc(cx+5, ly-3.5, 3, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+    } else if(ln.edges && ln.edges.length){
+      ctx.fillStyle = inHl ? PAL.accent : PAL.value;
+      ctx.beginPath(); ctx.arc(cx+5, ly-3.5, 2.2, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.font=(ln.warn?'600 ':'')+'10.5px -apple-system,"Segoe UI",system-ui,Roboto,sans-serif';
+    ctx.fillStyle = ln.warn ? PAL.control : (inHl ? PAL.accent : (isCalc ? PAL.title : PAL.body));
+    ctx.fillText(truncate(ln.txt, cw-14), cx+13, ly);
+  };
+  vars.forEach((ln,k)=> row(ln, cx1, colW, false, k));
+  calcs.forEach((ln,k)=> row(ln, cx2, colW2, true, k));
+}
+
+function pickStageEdge(sx, sy){
+  let best=null, bestD=Infinity;
+  for(const s of stageEdges){
+    const d = distToPolyline(sx,sy,s.pts);
+    if(d < Math.max(6, 2.2/2+2) + 2 && d < bestD){ bestD=d; best=s.id; }
+  }
+  return best;
+}
+
+function openStage(key){ if(chain) closeChain(); stage = {key}; hoverTraceIdx = null; stageHlRows = new Set(); stageHlEdges = new Set(); stageHoverEdges = new Set(); document.body.classList.add('modal'); emit('stageOpen'); }
+function closeStage(){ stage = null; stageHoverId = null; hoverTraceIdx = null; stageHlRows = new Set(); stageHlEdges = new Set(); stageHoverEdges = new Set(); stageTraceRects = []; document.body.classList.remove('modal'); emit('stageClose'); }
+
+/* ================= ТУР (У9 v4) ================= */
+const TOUR = [
+  {text:'Кликни по цифре «4 687 200 ₽» в полосе результата ноды «Стоимость» — откроется окно проверки цепочки', ev:'defOpen'},
+  {text:'В шапке окна включи тумблер «Режим защиты» — дерево укрупнится до ×1.5, проза скроется', ev:'defOn'},
+  {text:'Раскрывай уровни: пробел или клик по узлу (уровни 2–4)', ev:'defStep'},
+  {text:'Esc — выход из защиты в окно; Esc ещё раз — окно закроется, канвас вернётся без следов', ev:'defClose'},
+  {text:'Кликни по пучку «Заявки → Стоимость» — main stage открывается поверх того же канваса', ev:'stageOpen'},
+  {text:'Выйди из stage: Esc — снова канвас. Оба окна живут поверх одного полноэкранного канваса', ev:'stageClose'}
+];
+let tourIdx = 0;
+function emit(ev){
+  if(tourIdx < TOUR.length && TOUR[tourIdx].ev === ev){ tourIdx++; renderTour(); }
+}
+function renderTour(){
+  const num = document.getElementById('tourNum');
+  const txt = document.getElementById('tourText');
+  const dots = document.getElementById('tourDots');
+  if(tourIdx >= TOUR.length){
+    num.textContent = '✓'; num.classList.add('done');
+    txt.innerHTML = '<span class="done">Тур пройден — исследуйте свободно</span>';
+  } else {
+    num.textContent = (tourIdx+1) + '/' + TOUR.length; num.classList.remove('done');
+    txt.textContent = TOUR[tourIdx].text;
+  }
+  dots.innerHTML = TOUR.map((_,i)=>
+    `<i class="${i<tourIdx?'past':(i===tourIdx?'cur':'')}"></i>`).join('');
+}
+/* ═══════════════ ОКНО «ПРОВЕРКА ЦЕПОЧКИ РАСЧЁТА» (У9 v4) ═══════════════
+   Паттерн main stage: оверлей поверх полноэкранного канваса, боковых панелей нет.
+   Состояния (§6.4 PRD-0007): Closed → окно проверки (Ready) → тумблер «Режим защиты» (Defense).
+   AC-6.1 запуск одним действием · AC-6.2 ×1.5 + скрытие прозы · AC-6.3 пошаговое раскрытие ·
+   AC-6.4 Esc — выход без следов. */
+
 const MAX_LV = 4;        // глубина данных
 const AUTO_LV = 3;       // лимит авто-раскрытия (FR-039)
-const SCALE_MAX = 1.5;   // ×1.5 (AC-6.2): потолок укрупнения графа в окне защиты
-const COLW = 196, CARDW = 158, ROWH = 116, PAD = 14;   // сетка панели
-const D_COLW = 190, D_ROWH = 100;                      // сетка окна: плотнее, чтобы полное дерево вписывалось при ×1.5
+const SCALE_MAX = 1.5;   // ×1.5 (AC-6.2): потолок укрупнения графа в защите
+const CW = 196, RH = 112, DW = 190, DH = 100, TPAD = 14;   // сетки: обычная / защиты
 
-let defense = false, revealed = 1;
-const manualOpen = new Set();   // узлы, раскрытые вручную за лимитом 3 (обычный режим)
+/* Дерево цепочки цифры «Стоимость.Итог» (демо-снапшот LineageTree) */
+const TREE_B = {nm:'Стоимость.Итог', vl:'4 687 200 ₽', f:'= выручка · итог ноды «Стоимость»', kids:[
+  {nm:'выручка', vl:'4 687 200 ₽', f:'= Количество · Средний_чек · Сезон', kids:[
+    {nm:'Заявки.Количество', vl:'1 240', f:'Σ строк шаблона', kids:[
+      {nm:'Шаблон «Заявки» Q3', vl:'1 240 строк', f:'вводные владельца', leaf:true, src:'источник: шаблон, каналы: сайт · колл-центр'}]},
+    {nm:'Заявки.Средний_чек', vl:'3 500 ₽', f:'шаблон Q3', kids:[
+      {nm:'Шаблон «Заявки» Q3', vl:'3 500 ₽', f:'прайс-строка', leaf:true, src:'источник: шаблон Q3, ставка v14'}]},
+    {nm:'Заявки.Сезон', vl:'×1,08', f:'март — сезонность', kids:[
+      {nm:'Регламент №14', vl:'март', f:'коэффициент сезона', leaf:true, src:'источник: регламент №14'}]},
+  ]},
+  {nm:'план (USD)', vl:'51 965 $', f:'= выручка / Курсы.USD', kids:[
+    {nm:'Курсы.USD', vl:'90,2 ₽', f:'среднее за период', kids:[
+      {nm:'rates_2025-03.csv', vl:'24 строки', f:'колонка «USD», среднее', leaf:true, src:'источник: CSV ЦБ, ревизия v12'}]},
+  ]},
+  {nm:'Комментарий аналитика', vl:'', f:'итог за Q3 сверён с реестром — расхождений нет', prose:true, leaf:true},
+]};
+
+let chain = null;                 // {nodeId, defense, revealed} | null
+const manualOpen = new Set();     // узлы, раскрытые вручную за лимитом 3 (обычный вид окна)
 const plural = (n, one, few) => (n % 10 === 1 && n % 100 !== 11) ? one : few;
 
-(function link(n, p){ n.p = p; (n.kids || []).forEach(k => link(k, n)); })(DATA, null);
+function linkTree(n, p){ n.p = p; n.lv = p ? p.lv + 1 : 1; (n.kids || []).forEach(k => linkTree(k, n)); }
+linkTree(TREE_B, null);
 
-const sw = document.getElementById("sw");
-const panel = document.getElementById("panel");
-const graph = document.getElementById("graph");
-const gscale = document.getElementById("gscale");
-const overlay = document.getElementById("overlay");
+/* дерево для любой другой ноды: root + листья из trace-переменных */
+function treeForNode(n){
+  if(n.id === 'B') return TREE_B;
+  const root = {nm:(n.obj||n.title), vl:'—', f:'', kids:[]};
+  const calc = (n.trace||[]).find(l=>l.kind==='calc');
+  root.f = calc ? calc.txt.split(' = ')[0] : (n.lines && n.lines[0]) || '';
+  const txt = (n.result && n.result.text) || '';
+  const mu = txt.match(/[-−]?\d[\d\s.,]*\s?(?:₽|\$|%)/);
+  const mn = txt.match(/[-−]?\d[\d\s.,]*/);
+  const isTiming = mn && /^(?:мс|с\b|мин|сек)/.test(txt.slice(mn.index + mn[0].length).trim());
+  root.vl = mu ? mu[0].trim() : (mn && !isTiming ? mn[0].trim() : '—');
+  (n.trace||[]).forEach(ln=>{
+    if(ln.kind !== 'var') return;
+    const parts = ln.txt.split(' · ');
+    const rest = parts.slice(1).join(' · ');
+    const vv = rest.split(' ← ');
+    root.kids.push({nm:parts[0], vl:(vv[0]||'').trim(), f:vv[1]?('← '+vv[1].trim()):'', leaf:true});
+  });
+  if(!root.kids.length) root.kids = null;
+  linkTree(root, null);
+  return root;
+}
 
-function kids(n){ return n.kids || []; }
+const chainov = document.getElementById('chainov');
+const dscale = document.getElementById('dscale');
+const dbody = document.getElementById('dbody');
+const dsw = document.getElementById('dsw');
+const dfoot = document.getElementById('dfoot');
+const dlv = document.getElementById('dlv');
+
+function kidsOf(n){ return n.kids || []; }
 function isVisible(n){
-  if (defense) return n.lv <= revealed;
-  if (n.lv <= AUTO_LV) return true;
+  if(chain.defense) return !n.prose && n.lv <= chain.revealed;
+  if(n.prose) return true;
+  if(n.lv <= AUTO_LV) return true;
   let p = n.p;
-  while (p && p.lv > AUTO_LV){ if (!manualOpen.has(p)) return false; p = p.p; }
+  while(p && p.lv > AUTO_LV){ if(!manualOpen.has(p)) return false; p = p.p; }
   return manualOpen.has(p);
 }
-function hiddenKidCount(n){ return kids(n).filter(k => !isVisible(k)).length; }
+function hiddenKidCount(n){ return kidsOf(n).filter(k => !isVisible(k) && !k.prose).length; }
 
-/* ── компоновка: колонка = уровень, ряд = порядок листьев; all=true — полное дерево (окно защиты) ── */
-let leafCursor, maxCol;
+/* компоновка: колонка = уровень, ряд = порядок листьев; all=true — полное дерево (защита) */
+let cLeafCursor, cMaxCol;
 function assign(n, depth, all){
   n.col = depth - 1;
-  if (n.col > maxCol) maxCol = n.col;
-  const vk = kids(n).filter(k => all || isVisible(k));
-  if (!vk.length){ n.row = leafCursor++; return; }
+  if(n.col > cMaxCol) cMaxCol = n.col;
+  const vk = kidsOf(n).filter(k => all || isVisible(k));
+  if(!vk.length){ n.row = cLeafCursor++; return; }
   vk.forEach(k => assign(k, depth + 1, all));
   n.row = (vk[0].row + vk[vk.length - 1].row) / 2;
 }
 
-let nodeEls = new Map(), badgeEls = new Map(), edgeEls = new Map();
+let cNodeEls = new Map(), cBadgeEls = new Map(), cEdgeEls = new Map();
 
-function buildTree(all, CW, RH){
-  gscale.textContent = "";
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.id = "edges";
-  gscale.append(svg);
-  nodeEls = new Map(); badgeEls = new Map(); edgeEls = new Map();
+function buildChainTree(all, cwid, rh){
+  dscale.textContent = '';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.id = 'dedge';
+  dscale.append(svg);
+  cNodeEls = new Map(); cBadgeEls = new Map(); cEdgeEls = new Map();
 
   (function place(n){
-    const el = document.createElement("div");
-    el.className = "gnode" + (n.leaf ? " leaf" : "");
-    const r1 = document.createElement("div"); r1.className = "nm";
-    r1.append(Object.assign(document.createElement("span"), {textContent:n.nm}),
-              Object.assign(document.createElement("span"), {className:"vl", textContent:n.vl}));
+    const el = document.createElement('div');
+    el.className = 'gnode' + (n.leaf ? ' leaf' : '') + (n.prose ? ' prose' : '');
+    const r1 = document.createElement('div'); r1.className = 'nm';
+    r1.append(Object.assign(document.createElement('span'), {textContent:n.nm}),
+              Object.assign(document.createElement('span'), {className:'vl', textContent:n.vl}));
     el.append(r1);
-    if (n.f){ const f = document.createElement("div"); f.className = "f"; f.textContent = n.f; el.append(f); }
-    if (n.src){ const s = document.createElement("div"); s.className = "src"; s.textContent = n.src; el.append(s); }
+    if(n.f){ const f = document.createElement('div'); f.className = 'f'; f.textContent = n.f; el.append(f); }
+    if(n.src){ const s = document.createElement('div'); s.className = 'src'; s.textContent = n.src; el.append(s); }
     const hid = hiddenKidCount(n);
-    if (defense){
-      if (kids(n).length){
-        const b = document.createElement("div"); b.className = "badge";
-        b.style.display = "none";
-        el.append(b); badgeEls.set(n, b);
+    if(chain.defense){
+      if(kidsOf(n).length){
+        const b = document.createElement('div'); b.className = 'badge';
+        b.style.display = 'none';
+        el.append(b); cBadgeEls.set(n, b);
       }
-    } else if (hid > 0){
-      el.classList.add("frontier");
-      const b = document.createElement("div"); b.className = "badge";
-      b.textContent = "ещё " + hid + " " + plural(hid, "уровень", "уровня") + " — клик: раскрыть";
+    } else if(hid > 0){
+      el.classList.add('frontier');
+      const b = document.createElement('div'); b.className = 'badge';
+      b.textContent = 'ещё ' + hid + ' ' + plural(hid, 'уровень', 'уровня') + ' — клик: раскрыть';
       el.append(b);
     }
-    el.style.left = (PAD + n.col * CW) + "px";
-    el.style.top  = (PAD + n.row * RH) + "px";
+    el.style.left = (TPAD + n.col * cwid) + 'px';
+    el.style.top  = (TPAD + n.row * rh) + 'px';
     el.onclick = (e) => { e.stopPropagation(); onNodeClick(n); };
-    gscale.append(el);
-    nodeEls.set(n, el);
-    kids(n).filter(k => all || isVisible(k)).forEach(place);
-  })(DATA);
+    dscale.append(el);
+    cNodeEls.set(n, el);
+    kidsOf(n).filter(k => all || isVisible(k)).forEach(place);
+  })(chain.data);
 
   const draw = (n) => {
-    const pEl = nodeEls.get(n);
-    kids(n).filter(k => all || isVisible(k)).forEach(k => {
-      const cEl = nodeEls.get(k);
+    const pEl = cNodeEls.get(n);
+    kidsOf(n).filter(k => all || isVisible(k)).forEach(k => {
+      const cEl = cNodeEls.get(k);
       const x1 = pEl.offsetLeft + pEl.offsetWidth, y1 = pEl.offsetTop + pEl.offsetHeight / 2;
       const x2 = cEl.offsetLeft, y2 = cEl.offsetTop + cEl.offsetHeight / 2;
       const mx = (x1 + x2) / 2;
-      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      p.setAttribute("d", "M " + x1 + " " + y1 + " C " + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2);
-      if (k.leaf) p.classList.add("toLeaf");
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', 'M ' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2);
+      if(k.leaf) p.classList.add('toLeaf');
       svg.append(p);
-      if (defense){
+      if(chain.defense){
         const L = Math.ceil(p.getTotalLength()) + 2;
         p.style.strokeDasharray = L;
         p.style.strokeDashoffset = L;
         p.style.opacity = 0;
-        edgeEls.set(k, {p, L});
+        cEdgeEls.set(k, {p, L});
       } else {
-        edgeEls.set(k, {p, L:0});
+        cEdgeEls.set(k, {p, L:0});
       }
       draw(k);
     });
   };
-  draw(DATA);
+  draw(chain.data);
   return svg;
 }
 
-function render(){
-  if (defense){ renderDefense(); return; }
-  /* ── панель: обычный режим ── */
-  gscale.style.transform = "";
-  graph.style.width = ""; graph.style.height = "";
-  leafCursor = 0; maxCol = 0;
-  assign(DATA, 1, false);
-  const W = PAD + maxCol * COLW + CARDW + PAD;
-  const H = PAD + Math.max(0, leafCursor - 1) * ROWH + 104;
-  const svg = buildTree(false, COLW, ROWH);
-  svg.setAttribute("width", W); svg.setAttribute("height", H);
-  document.getElementById("lv").textContent = "";
-}
-
-/* ── окно защиты: полное дерево строится один раз за вход, шаги раскрытия только включают
-   видимость узлов и веток — позиции стабильны, ничего не «прыгает» между шагами ── */
-function renderDefense(){
-  leafCursor = 0; maxCol = 0;
-  assign(DATA, 1, true);
-  const svg = buildTree(true, D_COLW, D_ROWH);
-  let maxR = 0, maxB = 0;
-  nodeEls.forEach((el) => {
-    maxR = Math.max(maxR, el.offsetLeft + el.offsetWidth);
-    maxB = Math.max(maxB, el.offsetTop + el.offsetHeight);
-  });
-  svg.setAttribute("width", Math.ceil(maxR + PAD));
-  svg.setAttribute("height", Math.ceil(maxB + PAD));
-  applyDefenseVisibility();
+function renderChain(){
+  if(!chain) return;
+  if(chain.defense){
+    /* защита: полное дерево строится один раз за вход, шаги только включают видимость (AC-6.3) */
+    cLeafCursor = 0; cMaxCol = 0;
+    assign(chain.data, 1, true);
+    const svg = buildChainTree(true, DW, DH);
+    let maxR = 0, maxB = 0;
+    cNodeEls.forEach((el) => {
+      maxR = Math.max(maxR, el.offsetLeft + el.offsetWidth);
+      maxB = Math.max(maxB, el.offsetTop + el.offsetHeight);
+    });
+    dscale.style.width = Math.ceil(maxR + TPAD) + 'px';
+    dscale.style.height = Math.ceil(maxB + TPAD) + 'px';
+    svg.setAttribute('width', Math.ceil(maxR + TPAD));
+    svg.setAttribute('height', Math.ceil(maxB + TPAD));
+    applyDefenseVisibility();
+  } else {
+    /* обычный вид окна: авто 3 уровня (FR-039) + бейджи ручного раскрытия */
+    dscale.style.transform = '';
+    dbody.scrollTop = 0; dbody.scrollLeft = 0;
+    cLeafCursor = 0; cMaxCol = 0;
+    assign(chain.data, 1, false);
+    const svg = buildChainTree(false, CW, RH);
+    let maxR = 0, maxB = 0;
+    cNodeEls.forEach((el) => {
+      maxR = Math.max(maxR, el.offsetLeft + el.offsetWidth);
+      maxB = Math.max(maxB, el.offsetTop + el.offsetHeight);
+    });
+    dscale.style.width = Math.ceil(maxR + TPAD) + 'px';
+    dscale.style.height = Math.ceil(maxB + TPAD) + 'px';
+    svg.setAttribute('width', Math.ceil(maxR + TPAD));
+    svg.setAttribute('height', Math.ceil(maxB + TPAD));
+  }
 }
 
 function applyDefenseVisibility(){
-  nodeEls.forEach((el, n) => {
+  cNodeEls.forEach((el, n) => {
     const vis = isVisible(n);
-    el.classList.toggle("shown", vis);
-    el.classList.toggle("frontier", vis && hiddenKidCount(n) > 0);
-    const b = badgeEls.get(n);
-    if (b){
+    el.classList.toggle('shown', vis);
+    el.classList.toggle('frontier', vis && hiddenKidCount(n) > 0);
+    const b = cBadgeEls.get(n);
+    if(b){
       const hid = hiddenKidCount(n);
       const need = vis && hid > 0;
-      b.style.display = need ? "" : "none";
-      if (need) b.textContent = "ещё " + hid + " " + plural(hid, "ветка", "ветки") + " — уровень " + (revealed + 1);
+      b.style.display = need ? '' : 'none';
+      if(need) b.textContent = 'ещё ' + hid + ' ' + plural(hid, 'ветка', 'ветки') + ' — уровень ' + (chain.revealed + 1);
     }
   });
-  edgeEls.forEach(({p, L}, k) => {
+  cEdgeEls.forEach(({p, L}, k) => {
     const vis = isVisible(k);
     p.style.opacity = vis ? .75 : 0;
     p.style.strokeDashoffset = vis ? 0 : L;
   });
-  /* центрирование видимой части графа в окне; масштаб до ×1.5 (AC-6.2) с вписыванием в окно */
+  /* центрирование видимой части графа в окне; масштаб до ×1.5 (AC-6.2) с вписыванием */
   let minL = Infinity, minT = Infinity, maxR = 0, maxB = 0;
-  nodeEls.forEach((el, n) => {
-    if (!isVisible(n)) return;
+  cNodeEls.forEach((el, n) => {
+    if(!isVisible(n)) return;
     minL = Math.min(minL, el.offsetLeft);
     minT = Math.min(minT, el.offsetTop);
     maxR = Math.max(maxR, el.offsetLeft + el.offsetWidth);
     maxB = Math.max(maxB, el.offsetTop + el.offsetHeight);
   });
-  const host = document.getElementById("mbody");
-  const aw = host.clientWidth, ah = host.clientHeight;
+  const aw = dbody.clientWidth, ah = dbody.clientHeight;
   const bw = Math.max(1, maxR - minL), bh = Math.max(1, maxB - minT);
   const s = Math.min(SCALE_MAX, (aw - 48) / bw, (ah - 48) / bh);
   const tx = (aw - bw * s) / 2 - minL * s;
   const ty = (ah - bh * s) / 2 - minT * s;
-  gscale.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + s + ")";
-  document.getElementById("lv").textContent =
-    "Уровень " + revealed + " из " + MAX_LV + " · клик по узлу или пробел — следующий уровень";
+  dscale.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+  dlv.textContent = 'Уровень ' + chain.revealed + ' из ' + MAX_LV + ' · клик по узлу или пробел — следующий уровень';
 }
 
 function onNodeClick(n){
-  if (defense){
-    if (hiddenKidCount(n) > 0 && revealed < MAX_LV){
-      revealed = Math.max(revealed, Math.min(MAX_LV, n.lv + 1));
+  if(chain.defense){
+    if(kidsOf(n).length && chain.revealed < MAX_LV){
+      chain.revealed = Math.max(chain.revealed, Math.min(MAX_LV, n.lv + 1));
       applyDefenseVisibility();
+      emit('defStep');
     }
     return;
   }
+  if(n.prose) return;
   const hid = hiddenKidCount(n);
-  if (hid > 0){ manualOpen.add(n); apply(); }
-  else if (manualOpen.has(n) && kids(n).every(k => k.lv > AUTO_LV)){ manualOpen.delete(n); apply(); }
+  if(hid > 0){ manualOpen.add(n); renderChain(); }
+  else if(manualOpen.has(n) && kidsOf(n).every(k => k.lv > AUTO_LV)){ manualOpen.delete(n); renderChain(); }
 }
 
-/* ── канвас: ветки цепочки + обратная синхронизация (У2 — да) ── */
-function drawCanvasEdges(){
-  const canvas = document.getElementById("canvas");
-  const svg = document.getElementById("cedges");
-  svg.textContent = "";
-  const root = document.getElementById("cn-root");
-  ["cn-npl", "cn-arent", "cn-trade"].forEach(id => {
-    const c = document.getElementById(id);
-    const cr = canvas.getBoundingClientRect(), rr = root.getBoundingClientRect(), cc = c.getBoundingClientRect();
-    const x1 = rr.left - cr.left + rr.width / 2, y1 = rr.bottom - cr.top;
-    const x2 = cc.left - cr.left + cc.width / 2, y2 = cc.top - cr.top;
-    const my = (y1 + y2) / 2;
-    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p.setAttribute("d", "M " + x1 + " " + y1 + " C " + x1 + " " + my + ", " + x2 + " " + my + ", " + x2 + " " + y2);
-    p.setAttribute("stroke", "#4f8cff"); p.setAttribute("stroke-width", "2");
-    p.setAttribute("fill", "none"); p.setAttribute("opacity", "0.65");
-    svg.append(p);
-  });
+function updateChainChrome(){
+  document.getElementById('dtitle').innerHTML =
+    'Проверка цепочки расчёта — ' + (chain.data.nm) + ' <b>' + (chain.data.vl || '') + '</b>';
+  document.getElementById('dmeta').textContent = chain.defense
+    ? 'режим защиты: тот же граф нод с ветками · ×1.5 (AC-6.2) · проза скрыта · пошаговое раскрытие: пробел / клик по узлу (AC-6.3) · Esc — выход из защиты'
+    : 'окно поверх канваса — паттерн main stage (У9 v4) · граф нод с ветками · авто-раскрытие 3 уровня (FR-039) · клик по цифре ноды — триггер (У1)';
+  dsw.classList.toggle('on', chain.defense);
+  dfoot.style.display = chain.defense ? '' : 'none';
 }
 
-function flashTree(nm){
-  let target = null;
-  nodeEls.forEach((el, n) => { if (n.nm === nm) target = n; });
-  if (!target) return;
-  if (defense && target.lv > revealed){ revealed = Math.min(target.lv, MAX_LV); applyDefenseVisibility(); }
-  const el = nodeEls.get(target);
-  if (!el) return;
-  el.classList.add("hit");
-  el.scrollIntoView({block:"nearest", inline:"nearest", behavior:"smooth"});
-  setTimeout(() => el.classList.remove("hit"), 1400);
+function openChain(nodeId){
+  const n = nodeById(nodeId);
+  if(!n) return;
+  if(stage) closeStage();
+  chain = {nodeId, defense:false, revealed:1, data:treeForNode(n)};
+  manualOpen.clear();
+  document.body.classList.add('chain-open');
+  updateChainChrome();
+  renderChain();
+  emit('defOpen');
 }
-document.querySelectorAll(".cnode.chain").forEach(c => {
-  c.addEventListener("click", () => flashTree(c.dataset.tree));
+function closeChain(){
+  if(!chain) return;
+  chain = null;
+  document.body.classList.remove('chain-open');
+  document.body.classList.remove('defense-on');
+}
+function enterDefense(){
+  if(!chain) return;
+  chain.defense = true; chain.revealed = 1;
+  document.body.classList.add('defense-on');
+  updateChainChrome();
+  renderChain();
+  emit('defOn');
+}
+function exitDefense(){
+  if(chain && chain.defense){
+    chain.defense = false;
+    document.body.classList.remove('defense-on');
+    updateChainChrome();
+    renderChain();
+    emit('defClose');
+  }
+}
+
+dsw.onclick = (e) => { e.stopPropagation(); if(chain && !chain.defense) enterDefense(); };
+document.getElementById('dclose').onclick = closeChain;
+chainov.addEventListener('mousedown', (e) => { if(e.target === chainov) closeChain(); });
+document.getElementById('dnext').onclick = (e) => {
+  e.currentTarget.blur();   /* фикс: фокус на кнопке + пробел раньше давал двойной шаг */
+  if(chain && chain.defense){ chain.revealed = Math.min(chain.revealed + 1, MAX_LV); applyDefenseVisibility(); emit('defStep'); }
+};
+document.getElementById('dall').onclick = (e) => {
+  e.currentTarget.blur();
+  if(chain && chain.defense){ chain.revealed = MAX_LV; applyDefenseVisibility(); emit('defStep'); }
+};
+
+/* ================= ВВОД ================= */
+const tooltip = document.getElementById('tooltip');
+let prevHoverKey = '';
+
+canvas.addEventListener('contextmenu', e=>{
+  e.preventDefault();
+  if(stage) return;
+  const prim = pickPrim(e.clientX, e.clientY);
+  if(prim && prim.kind==='bundle') openStage(prim.key);
 });
+canvas.addEventListener('dblclick', e=> e.preventDefault());
 
-/* ── вход/выход режима защиты: модальное окно ──
-   v3.1: класс defense-on вешается на body — в v3 он был на #app, а оверлей является соседом #app,
-   поэтому селектор .defense-on .overlay не срабатывал и окно не открывалось вовсе */
-function apply(){
-  document.body.classList.toggle("defense-on", defense);
-  sw.classList.toggle("on", defense);
-  panel.classList.toggle("detached", defense);
-  /* дерево-граф переезжает: панель ↔ тело модального окна */
-  const host = defense ? document.getElementById("mbody") : document.getElementById("treewrap");
-  host.appendChild(graph);
-  render();
-}
-
-sw.onclick = () => { defense = true; revealed = 1; apply(); };
-function exitDefense(){ if (defense){ defense = false; revealed = 1; apply(); } }
-document.getElementById("mx").onclick = exitDefense;
-overlay.addEventListener("click", (e) => { if (e.target === overlay) exitDefense(); });
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") exitDefense();
-  if (e.code === "Space" && defense && !e.repeat){
-    e.preventDefault();
-    revealed = Math.min(revealed + 1, MAX_LV);
-    applyDefenseVisibility();
+canvas.addEventListener('mousedown', e=>{
+  if(e.button !== 0) return;
+  if(stage){
+    const r = stageRect();
+    const c = stageCloseRect;
+    if(c && e.clientX>=c.x && e.clientX<=c.x+c.w && e.clientY>=c.y && e.clientY<=c.y+c.h){ closeStage(); return; }
+    if(e.clientX<r.x || e.clientX>r.x+r.w || e.clientY<r.y || e.clientY>r.y+r.h){ closeStage(); return; }
+    // R7: клик по строке «Как считается» — формула ⇄ переменные (двусторонняя подсветка)
+    stageHlRows = new Set(); stageHlEdges = new Set();
+    const tr = stageTraceRects.find(hh=> e.clientX>=hh.x && e.clientX<=hh.x+hh.w && e.clientY>=hh.y && e.clientY<=hh.y+hh.h);
+    if(tr){
+      const m = stageTraceMeta[tr.idx];
+      if(m){
+        if(m.kind==='calc'){ stageHlRows = new Set([m.i, ...m.feeds]); stageHlEdges = new Set(m.edges); }
+        else { stageHlRows = new Set([m.i, ...m.usedIn]); stageHlEdges = new Set(m.edges); }
+      }
+      emit('traceHl');
+      return;
+    }
+    const hit = pickStageEdge(e.clientX, e.clientY);
+    if(hit){
+      selection = {type:'edge', id:hit};
+      stageHlEdges = new Set([hit]);
+      stageHlRows = new Set(stageTraceMeta.filter(m=>m.edges.includes(hit)).map(m=>m.i));
+      emit('stageSelect');
+      return;
+    }
+    const nr = stageNodeRects.find(rr=> e.clientX>=rr.x && e.clientX<=rr.x+rr.w && e.clientY>=rr.y && e.clientY<=rr.y+rr.h);
+    if(nr){ selection = {type:'node', id:nr.id}; }
+    return;
+  }
+  const wx = (e.clientX-cam.x)/cam.z, wy = (e.clientY-cam.y)/cam.z;
+  const n = nodeAt(wx,wy);
+  if(n){
+    dragNode = {id:n.id, dx:wx-n.x, dy:wy-n.y, moved:false};
+    selection = {type:'node', id:n.id};
+  } else {
+    panState = {sx:e.clientX, sy:e.clientY, cx0:cam.x, cy0:cam.y, moved:false};
   }
 });
-document.getElementById("nextLv").onclick = (e) => {
-  e.currentTarget.blur();   /* фикс: фокус на кнопке + пробел раньше давал двойной шаг */
-  if (defense){ revealed = Math.min(revealed + 1, MAX_LV); applyDefenseVisibility(); }
-};
-document.getElementById("openAll").onclick = (e) => {
-  e.currentTarget.blur();
-  if (defense){ revealed = MAX_LV; applyDefenseVisibility(); }
-};
 
-apply();
-drawCanvasEdges();
-window.addEventListener("resize", () => { drawCanvasEdges(); if (defense) applyDefenseVisibility(); });
+window.addEventListener('mousemove', e=>{
+  mouse.cx = e.clientX; mouse.cy = e.clientY; mouse.inside = true;
+  if(dragNode){
+    const n = nodeById(dragNode.id);
+    const wx = (e.clientX-cam.x)/cam.z, wy = (e.clientY-cam.y)/cam.z;
+    n.x = wx-dragNode.dx; n.y = wy-dragNode.dy;
+    dragNode.moved = true;
+  } else if(panState){
+    cam.x = panState.cx0 + (e.clientX-panState.sx);
+    cam.y = panState.cy0 + (e.clientY-panState.sy);
+    if(Math.hypot(e.clientX-panState.sx, e.clientY-panState.sy) > 4) panState.moved = true;
+  }
+});
+
+window.addEventListener('mouseup', e=>{
+  if(dragNode){
+    /* У1: клик (без перетаскивания) по цифре в полосе результата — открыть проверку цепочки */
+    if(!dragNode.moved){
+      const n = nodeById(dragNode.id);
+      const wx = (e.clientX-cam.x)/cam.z, wy = (e.clientY-cam.y)/cam.z;
+      if(n && inStrip(n, wx, wy)) openChain(n.id);
+    }
+    dragNode = null;
+  }
+  else if(panState){
+    if(!panState.moved && !stage){
+      const prim = pickPrim(e.clientX, e.clientY);
+      if(prim && prim.kind==='bundle') openStage(prim.key);
+      else if(prim && prim.kind==='edge') selection = {type:'edge', id:prim.id};
+      else selection = null;
+    }
+    panState = null;
+  }
+});
+
+canvas.addEventListener('wheel', e=>{
+  if(stage) return;
+  e.preventDefault();
+  const z2 = clamp(cam.z * Math.exp(-e.deltaY*0.0012), 0.25, 3);
+  const wx = (e.clientX-cam.x)/cam.z, wy = (e.clientY-cam.y)/cam.z;
+  cam.z = z2;
+  cam.x = e.clientX - wx*z2;
+  cam.y = e.clientY - wy*z2;
+  if(z2 >= 1.5) emit('zoomL2');
+}, {passive:false});
+
+window.addEventListener('keydown', e=>{
+  if(e.key === 'Escape'){
+    if(chain && chain.defense) exitDefense();
+    else if(chain) closeChain();
+    else if(stage) closeStage();
+    else if(selection) selection = null;
+  }
+  if(e.code === 'Space' && chain && chain.defense && !e.repeat){
+    e.preventDefault();
+    chain.revealed = Math.min(chain.revealed + 1, MAX_LV);
+    applyDefenseVisibility();
+    emit('defStep');
+  }
+});
+
+/* ================= ПАНЕЛИ ================= */
+document.getElementById('aggToggle').addEventListener('change', e=>{
+  agg = e.target.checked;
+  if(!agg){ if(stage) closeStage(); }
+});
+document.getElementById('themeBtn').addEventListener('click', ()=>{
+  theme = theme==='dark' ? 'light' : 'dark';
+  PAL = PALETTES[theme];
+  document.body.className = theme;
+  document.getElementById('themeBtn').textContent = theme==='dark' ? '☀ Светлая' : '🌙 Тёмная';
+});
+document.getElementById('plusBtn').addEventListener('click', ()=>{ abCount = clamp(abCount+1,1,8); rebuildEdges(); });
+document.getElementById('minusBtn').addEventListener('click', ()=>{ abCount = clamp(abCount-1,1,8); rebuildEdges(); });
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  abCount = 6; rebuildEdges();
+  selection = null; agg = true;
+  closeChain(); closeStage();
+  document.getElementById('aggToggle').checked = true;
+  tourIdx = 0; renderTour();
+  document.getElementById('drawer').classList.remove('open');
+  fit();
+});
+document.getElementById('chainBtn').addEventListener('click', ()=> openChain('B'));
+document.getElementById('drawerBtn').addEventListener('click', ()=> document.getElementById('drawer').classList.add('open'));
+document.getElementById('drawerClose').addEventListener('click', ()=> document.getElementById('drawer').classList.remove('open'));
+document.getElementById('tourReset').addEventListener('click', ()=>{ tourIdx = 0; renderTour(); });
+window.addEventListener('resize', ()=>{ if(chain) renderChain(); });
+
+/* ================= КАМЕРА / ЦИКЛ ================= */
+function fit(){
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  for(const n of NODES){
+    const g = nodeGeom(n, 1, n.x, n.y);
+    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x+n.w); maxY = Math.max(maxY, n.y+g.h);
+  }
+  const pad = 80;
+  const ox = minX-pad, oy = minY-pad;
+  const bw = (maxX-minX)+pad*2, bh = (maxY-minY)+pad*2;
+  const mL = innerWidth>1100 ? 316 : 12, mR = innerWidth>1100 ? 306 : 12;
+  const mT = 12, mB = 92;
+  const availW = innerWidth-mL-mR, availH = innerHeight-mT-mB;
+  cam.z = clamp(Math.min(availW/bw, availH/bh), 0.74, 1.1);   // стартуем в LOD 1
+  cam.x = mL + Math.max(0, (availW - bw*cam.z))/2 - ox*cam.z;  // левый край не прячем под панель
+  cam.y = mT + (availH - bh*cam.z)/2 - oy*cam.z;
+}
+
+let lastZoomTxt = '', lastLodTxt = '';
+function updateReadouts(){
+  const z = 'Зум ' + cam.z.toFixed(2);
+  if(z !== lastZoomTxt){ document.getElementById('zoomVal').textContent = cam.z.toFixed(2); lastZoomTxt = z; }
+  const lod = curLod();
+  const l = 'LOD ' + lod + ' · ' + (lod===0?'силуэт':lod===1?'детали':'максимум');
+  if(l !== lastLodTxt){ document.getElementById('lodVal').textContent = l; lastLodTxt = l; }
+}
+
+function updateHover(){
+  let tip = '';
+  if(chain){ tooltip.style.display = 'none'; canvas.style.cursor = 'default'; return; }
+  if(stage){
+    hoverPrim = null; hoverNode = null;
+    hoverTraceIdx = null;
+    const trh = stageTraceRects.find(hh=> mouse.cx>=hh.x && mouse.cx<=hh.x+hh.w && mouse.cy>=hh.y && mouse.cy<=hh.y+hh.h);
+    stageHoverId = null;
+    stageHoverEdges = new Set();
+    if(trh){
+      hoverTraceIdx = trh.idx;
+      stageHoverEdges = new Set(trh.edges);
+      if(trh.edges.length) tip = trh.kind==='calc' ? 'Клик — подсветить все переменные формулы' : 'Клик — подсветить формулы и связи';
+    } else {
+      hoverTraceIdx = null;
+      stageHoverId = pickStageEdge(mouse.cx, mouse.cy);
+      if(stageHoverId) tip = 'Клик — выделить связь';
+    }
+    canvas.style.cursor = ((trh && trh.edges.length) || stageHoverId) ? 'pointer' : 'default';
+  } else {
+    stageHoverId = null;
+    stageHoverEdges = new Set();
+    const wx = (mouse.cx-cam.x)/cam.z, wy = (mouse.cy-cam.y)/cam.z;
+    const n = nodeAt(wx,wy);
+    hoverNode = n ? n.id : null;
+    hoverPrim = panState ? null : pickPrim(mouse.cx, mouse.cy);
+    if(hoverPrim && hoverPrim.kind==='bundle'){
+      const b = computeBundles().get(hoverPrim.key);
+      tip = `Пучок ${nodeById(b.from).title} → ${nodeById(b.to).title} · ×${b.weight} · клик — детально`;
+      if(prevHoverKey !== 'b:'+hoverPrim.key) emit('bundleHover');
+      prevHoverKey = 'b:'+hoverPrim.key;
+    } else if(hoverPrim && hoverPrim.kind==='edge'){
+      const e = edges.find(x=>x.id===hoverPrim.id);
+      tip = 'Связь: ' + (e ? edgeName(e) : '') + ' · клик — выделить';
+      prevHoverKey = 'e:'+hoverPrim.id;
+    } else {
+      prevHoverKey = '';
+      if(hoverNode){
+        const nn = nodeById(hoverNode);
+        if(inStrip(nn, wx, wy)){
+          tip = 'Цифра: ' + nn.result.text + ' · клик — проверить цепочку расчёта';
+          canvas.style.cursor = 'pointer';
+          tooltip.style.display = 'block';
+          tooltip.textContent = tip;
+          tooltip.style.left = Math.min(mouse.cx+14, innerWidth-260) + 'px';
+          tooltip.style.top = (mouse.cy+18) + 'px';
+          return;
+        }
+        tip = nn.desc ? nn.title+' · '+nn.desc : 'Нода: '+nn.title;
+      }
+    }
+    canvas.style.cursor = (hoverPrim || hoverNode) ? 'pointer' : 'default';
+  }
+  if(tip && !dragNode && !panState){
+    tooltip.style.display = 'block';
+    tooltip.textContent = tip;
+    tooltip.style.left = Math.min(mouse.cx+14, innerWidth-260) + 'px';
+    tooltip.style.top = (mouse.cy+18) + 'px';
+  } else tooltip.style.display = 'none';
+}
+
+function render(){
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle = PAL.bg;
+  ctx.fillRect(0,0,innerWidth,innerHeight);
+  ctx.translate(cam.x, cam.y);
+  ctx.scale(cam.z, cam.z);
+  drawGrid();
+  const lod = curLod();
+  const bundles = computeBundles();
+  drawEdges(bundles, lod);
+  drawNodes(lod);
+  drawBundleRings(bundles, lod);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  drawBadges(bundles, lod);
+  if(stage) drawStage();
+  updateHover();
+  updateReadouts();
+  requestAnimationFrame(render);
+}
+
+rebuildEdges();
+renderTour();
+fit();
+requestAnimationFrame(render);
 </script>
 </body>
 </html>
