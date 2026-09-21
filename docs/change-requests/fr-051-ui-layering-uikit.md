@@ -62,7 +62,7 @@ PRD-0009 принят владельцем к реализации: систем
 
 | Что → Где → Как |
 |---|
-| `Cargo.toml` → `crates/canvas-ui/` → новый крейт workspace (`crates/*` авточулен), зависимости: только `canvas-core` (токены/палитры; **0 новых внешних зависимостей** — G7); publish=false; головной комментарий-манифест (симметрия canvas-core=мир / canvas-ui=экран) |
+| `Cargo.toml` → `crates/canvas-ui/` → новый крейт workspace (`crates/*` авточулен), зависимости: **нулевые на U1** (чистая геометрия — сильнее для G7; canvas-core/токены подключается на U3 вместе с layout-примитивами); publish=false; головной комментарий-манифест (симметрия canvas-core=мир / canvas-ui=экран) |
 | `src/geometry.rs` → чистые типы `UiPoint`, `UiVec2`, `UiRect` (f32, min/max-нормализация, contains, intersect, inset, перевод `[f32;2]`) — без внешних крейтов, headless-тестируемо |
 | `src/layer.rs` → `UiLayer` (9 полос L0..L8, `as_u8`, `DRAW_ORDER` — производный порядок отрисовки по возрастанию; тест эквивалентности полосам PRD §7.3) |
 | `src/capture.rs` → `CapturePolicy` (Block/Capture/PassThrough/Passive; `intercept_outside()` — семантика «глотает ли клик мимо своих rect'ов») |
@@ -100,7 +100,7 @@ U0:
 - [x] Q-дефолты PRD-0009 приняты явно.
 
 U1:
-- [ ] Крейт `canvas-ui` собирается; зависимости — только `canvas-core` (0 новых внешних — G7).
+- [ ] Крейт `canvas-ui` собирается; зависимости — нулевые (0 новых внешних — G7; canvas-core подключается на U3 с токенами).
 - [ ] Pick-матрица автотестом: Block/Capture-поверхности перехватывают клик под собой; PassThrough/Passive — нет (G2 precursor, PRD US-1 AC-1.3).
 - [ ] Draw-порядок выводится из реестра по возрастанию слоя (F-2 precursor); тест эквивалентен 9 полосам §7.3.
 - [ ] Esc-стек выводится из реестра (реверс-порядок) — тест лестницы на модельных поверхностях.
@@ -118,7 +118,7 @@ U1:
 - `docs/prd/prd-0009-ui-layering-uikit.md` — §7.3 (точки интеграции, слои/модальности), §8 (F-1…F-12), §13 (U0–U5), §15 (DoD G1–G8).
 - `crates/canvas-app/src/app.rs` — сборка кадра (:11905–12260), ввод (:8923–9510), лестница клавиатуры (:7901–8226), hover-глушение (:10519–10523).
 - `crates/canvas-render/src/zorder.rs` — z-планировщик мира (не меняется).
-- `crates/canvas-core/src/tokens.rs` — палитры/токены (единственная зависимость canvas-ui).
+- `crates/canvas-core/src/tokens.rs` — палитры/токены (подключение canvas-ui на U3).
 - Внешние референсы (анализ 2026-09-22, worklog Task 5): egui `layers.rs` (Order/LayerId), `hit_test.rs` (реверс-обход, скрытие за непрозрачными), `containers/modal.rs` (стек модалей + Esc), iced `widget/src/overlay.rs`, Ribir `IgnorePointer` — таксономия подходов, не зависимости.
 - `docs/adr/adr-0008` (allowlist зависимостей), `docs/adr/adr-0011` (wasm-гейт).
 
