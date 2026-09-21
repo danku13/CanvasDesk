@@ -82,6 +82,10 @@ pub struct SchemeNode {
     /// Пресет цвета `"1".."6"` (инвариант 3); hex запрещён.
     #[serde(default)]
     pub color: Option<String>,
+    /// JSON Canvas `label` (стандартное поле): имя группы (заголовок
+    /// рамки; для `text` — фолбэк-заголовок, в контенте не задаётся).
+    #[serde(default)]
+    pub label: Option<String>,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -92,6 +96,12 @@ pub struct SchemeNode {
 }
 
 /// Ребро схемы: связь или value-канал (`$1..$N` входа приёмника).
+///
+/// FR-025/FR-029 (адресация, v2 контента PRD-0008): `fromLine` — индекс
+/// строки-истока (0-based по всем строкам текста), `fromOutput` — имя
+/// именованного выхода (переменная Numi-листа), `toParam` — имя входного
+/// параметра приёмника (проливание `$имя`). Поля переносятся инстансером
+/// в модель `Edge` без расширения формата `.canvas` (поля уже в SPEC §5.1).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemeEdge {
@@ -103,6 +113,17 @@ pub struct SchemeEdge {
     /// `"value"` — value-ребро (вход `$N`); отсутствие — обычная связь.
     #[serde(rename = "flowKind", default)]
     pub flow_kind: Option<String>,
+    /// FR-025: индекс строки-истока (0-based); только у value-рёбер.
+    #[serde(rename = "fromLine", default)]
+    pub from_line: Option<usize>,
+    /// FR-029: имя выходного порта истока; только у value-рёбер;
+    /// взаимоисключимо с `fromLine` (контракт MCP `edge_create`).
+    #[serde(rename = "fromOutput", default)]
+    pub from_output: Option<String>,
+    /// FR-029: имя входного параметра приёмника (проливание `$имя`);
+    /// только у value-рёбер.
+    #[serde(rename = "toParam", default)]
+    pub to_param: Option<String>,
 }
 
 /// Ошибка валидации пакета схемы (чистая функция [`SchemeManifest::validate`]).
@@ -130,6 +151,12 @@ pub enum SchemeValidationError {
     TooManyEdges(usize, usize),
     #[error("ребро {0} без потока не может иметь flowKind != value")]
     BadEdge(String),
+    #[error("ребро {0}: адресация {1} допустима только у value-рёбер (flowKind: value)")]
+    AddressingNeedsValue(String, String),
+    #[error("ребро {0}: fromLine и fromOutput взаимоисключительны (контракт edge_create FR-029)")]
+    LineAndOutputExclusive(String),
+    #[error("ребро {0}: пустое имя порта {1}")]
+    EmptyPortName(String, String),
 }
 
 impl SchemeManifest {
@@ -194,6 +221,40 @@ impl SchemeManifest {
                         edge.id.clone(),
                         kind.clone(),
                     ));
+                }
+            }
+            // FR-049 v2 (адресация): поля портов — только у value-рёбер;
+            // fromLine XOR fromOutput; имена портов непустые. Контракт
+            // общий с MCP edge_create (FR-025/FR-029).
+            let addressed = [
+                ("fromLine", edge.from_line.is_some()),
+                ("fromOutput", edge.from_output.is_some()),
+                ("toParam", edge.to_param.is_some()),
+            ];
+            for (field, present) in addressed {
+                if present && edge.flow_kind.as_deref() != Some("value") {
+                    return Err(SchemeValidationError::AddressingNeedsValue(
+                        edge.id.clone(),
+                        field.to_owned(),
+                    ));
+                }
+            }
+            if edge.from_line.is_some() && edge.from_output.is_some() {
+                return Err(SchemeValidationError::LineAndOutputExclusive(
+                    edge.id.clone(),
+                ));
+            }
+            for (field, name) in [
+                ("fromOutput", &edge.from_output),
+                ("toParam", &edge.to_param),
+            ] {
+                if let Some(name) = name {
+                    if name.trim().is_empty() {
+                        return Err(SchemeValidationError::EmptyPortName(
+                            edge.id.clone(),
+                            field.to_owned(),
+                        ));
+                    }
                 }
             }
             if !ids.contains(&edge.from_node.as_str()) {
@@ -379,6 +440,58 @@ mod tests {
         ));
     }
 
+    /// FR-049 v2: адресованные рёбра (fromLine/fromOutput/toParam)
+    /// валидны у value-рёбер — базовый позитивный случай.
+    #[test]
+    fn validator_accepts_addressed_value_edge() {
+        let mut manifest = sample_manifest();
+        manifest.content.nodes.push(SchemeNode {
+            id: "b".into(),
+            node_type: "text".into(),
+            text: Some("$users / $think".into()),
+            color: None,
+            label: None,
+            x: 300.0,
+            y: 0.0,
+            width: 240.0,
+            height: 140.0,
+            children: None,
+        });
+        manifest.content.edges[0].to_node = "b".into();
+        manifest.content.edges[0].from_output = Some("users".into());
+        manifest.content.edges[0].to_param = Some("users".into());
+        assert!(
+            manifest.validate().is_ok(),
+            "адресация у value-ребра валидна"
+        );
+    }
+
+    /// FR-049 v2: адресация только у value-рёбер; fromLine XOR fromOutput;
+    /// пустые имена портов — невалидны.
+    #[test]
+    fn validator_rejects_bad_addressing() {
+        let mut manifest = sample_manifest();
+        manifest.content.edges[0].from_output = Some("users".into());
+        manifest.content.edges[0].flow_kind = None;
+        assert!(matches!(
+            manifest.validate(),
+            Err(SchemeValidationError::AddressingNeedsValue(_, _))
+        ));
+        let mut manifest = sample_manifest();
+        manifest.content.edges[0].from_line = Some(2);
+        manifest.content.edges[0].from_output = Some("users".into());
+        assert!(matches!(
+            manifest.validate(),
+            Err(SchemeValidationError::LineAndOutputExclusive(_))
+        ));
+        let mut manifest = sample_manifest();
+        manifest.content.edges[0].to_param = Some("   ".into());
+        assert!(matches!(
+            manifest.validate(),
+            Err(SchemeValidationError::EmptyPortName(_, _))
+        ));
+    }
+
     /// Минимальный валидный образец для негативных тестов.
     fn sample_manifest() -> SchemeManifest {
         SchemeManifest {
@@ -397,6 +510,7 @@ mod tests {
                     node_type: "text".into(),
                     text: Some("120".into()),
                     color: Some("4".into()),
+                    label: None,
                     x: 0.0,
                     y: 0.0,
                     width: 240.0,
@@ -408,6 +522,9 @@ mod tests {
                     from_node: "a".into(),
                     to_node: "a".into(),
                     flow_kind: Some("value".into()),
+                    from_line: None,
+                    from_output: None,
+                    to_param: None,
                 }],
             },
         }

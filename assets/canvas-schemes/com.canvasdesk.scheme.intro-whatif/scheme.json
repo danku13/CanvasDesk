@@ -2,12 +2,12 @@
   "id": "com.canvasdesk.scheme.intro-whatif",
   "name_ru": "Сценарии what-if",
   "name_en": "What-if scenarios",
-  "description_ru": "Бюджет из двух статей и приглашение к what-if: подмените вход в режиме сценария и сравните дельту.",
-  "description_en": "A two-line budget with a what-if invitation: override an input in scenario mode and compare the delta.",
+  "description_ru": "Бюджет со статьями и годовым итогом: подмена входа в сценарии, дельты без правки базы и проливание значений в параметры.",
+  "description_en": "A budget with line items and an annual total: override an input in a scenario, see deltas without touching the base, values spill into parameters.",
   "category": "onboarding",
   "category_ru": "Онбординг",
   "category_en": "Onboarding",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "content": {
     "nodes": [
       {
@@ -15,64 +15,90 @@
         "type": "text",
         "x": 0,
         "y": 0,
-        "width": 330,
-        "height": 170,
-        "text": "Сценарии: выделите строку с формулой и включите режим What-if в нижнем баре — подмените вход и сравните дельту. База при этом не меняется.",
+        "width": 360,
+        "height": 230,
+        "text": "Сценарии what-if\nВыделите строку с числом и включите режим What-if в нижнем баре: подмените вход — дельты пересчитываются поверх базы, файл не меняется.\nГодовой бюджет принимает значения через параметры: итог проливается в доллары на месяц.",
         "color": "4"
       },
       {
-        "id": "marketing",
+        "id": "costs",
         "type": "text",
-        "x": 410,
+        "x": 440,
         "y": 0,
-        "width": 220,
-        "height": 120,
-        "text": "1200 $",
-        "color": "1"
-      },
-      {
-        "id": "tools",
-        "type": "text",
-        "x": 410,
-        "y": 180,
-        "width": 220,
-        "height": 120,
-        "text": "300 $",
+        "width": 260,
+        "height": 220,
+        "text": "Статьи бюджета\nПрямые расходы за месяц: маркетинг и инструменты.\n\nmarketing = 1200 $\ntools = 300 $",
         "color": "1"
       },
       {
         "id": "total",
         "type": "text",
-        "x": 710,
-        "y": 80,
-        "width": 240,
-        "height": 140,
-        "text": "$1 + $2",
+        "x": 800,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Итог месяца\nСумма статей: маркетинг плюс инструменты.\n\ntotal = $1 + $2",
+        "color": "2"
+      },
+      {
+        "id": "months",
+        "type": "text",
+        "x": 440,
+        "y": 300,
+        "width": 260,
+        "height": 180,
+        "text": "Горизонт\nДлительность проекта в месяцах.\n\nmonths = 12",
+        "color": "1"
+      },
+      {
+        "id": "annual",
+        "type": "text",
+        "x": 1160,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Годовой бюджет\nИтог месяца, помноженный на горизонт: значения приходят в параметры по имени.\n\n$spend * $months",
         "color": "2"
       },
       {
         "id": "try",
         "type": "text",
-        "x": 410,
-        "y": 360,
-        "width": 330,
-        "height": 130,
-        "text": "Попробуйте поднять маркетинг до полутора тысяч — итог покажет дельту.",
+        "x": 440,
+        "y": 560,
+        "width": 360,
+        "height": 200,
+        "text": "Попробуйте\nПоднимите маркетинг до полутора тысяч в режиме сценария — итог и годовой бюджет покажут дельты.\nКлик по двойной линии «Статьи → Итог» открывает main stage с веером значений.",
         "color": "4"
       }
     ],
     "edges": [
       {
         "id": "e1",
-        "fromNode": "marketing",
+        "fromNode": "costs",
         "toNode": "total",
-        "flowKind": "value"
+        "flowKind": "value",
+        "fromOutput": "marketing"
       },
       {
         "id": "e2",
-        "fromNode": "tools",
+        "fromNode": "costs",
         "toNode": "total",
-        "flowKind": "value"
+        "flowKind": "value",
+        "fromOutput": "tools"
+      },
+      {
+        "id": "e3",
+        "fromNode": "total",
+        "toNode": "annual",
+        "flowKind": "value",
+        "toParam": "spend"
+      },
+      {
+        "id": "e4",
+        "fromNode": "months",
+        "toNode": "annual",
+        "flowKind": "value",
+        "toParam": "months"
       }
     ]
   }

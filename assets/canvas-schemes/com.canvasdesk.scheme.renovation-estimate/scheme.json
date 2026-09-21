@@ -2,12 +2,12 @@
   "id": "com.canvasdesk.scheme.renovation-estimate",
   "name_ru": "Смета ремонта",
   "name_en": "Renovation estimate",
-  "description_ru": "Площади комнат на общую ставку плюс материалы: фан-аут одного входа на два расчёта.",
-  "description_en": "Room areas against a shared rate plus materials: one input fans out to two calculations.",
+  "description_ru": "Площади комнат на общую ставку плюс материалы и итог со скидкой: один вход питает оба расчёта, значения проливаются в параметры.",
+  "description_en": "Room areas against a shared rate plus materials and a discounted total: one input fans out to both calculations, values spill into parameters.",
   "category": "planning",
   "category_ru": "Планирование",
   "category_en": "Planning",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "content": {
     "nodes": [
       {
@@ -15,124 +15,184 @@
         "type": "text",
         "x": 0,
         "y": 60,
-        "width": 330,
-        "height": 180,
-        "text": "Ставка общая для комнат: один вход питает два расчёта. Итог складывает комнаты и материалы.",
+        "width": 360,
+        "height": 260,
+        "text": "Смета ремонта\nПлощади комнат множатся на общую ставку, работы складываются с материалами и итог принимает скидку.\nСтавка питает обе комнаты: поменяйте её — пересчитается вся смета. Пучок «Площади → Общая площадь» открывается кликом в main stage.",
         "color": "4"
       },
       {
-        "id": "area-a",
+        "id": "areas",
         "type": "text",
-        "x": 410,
+        "x": 440,
         "y": 0,
-        "width": 220,
-        "height": 120,
-        "text": "18",
-        "color": "1"
-      },
-      {
-        "id": "area-b",
-        "type": "text",
-        "x": 410,
-        "y": 180,
-        "width": 220,
-        "height": 120,
-        "text": "12",
+        "width": 260,
+        "height": 200,
+        "text": "Площади\nКомнаты под отделку: гостиная и спальня, метры квадратные.\n\nliving = 18\nbedroom = 12",
         "color": "1"
       },
       {
         "id": "rate",
         "type": "text",
-        "x": 410,
-        "y": 360,
-        "width": 220,
-        "height": 120,
-        "text": "25 $",
+        "x": 440,
+        "y": 240,
+        "width": 260,
+        "height": 180,
+        "text": "Ставка\nСтоимость отделки за квадратный метр.\n\nrate = 25 $",
         "color": "1"
-      },
-      {
-        "id": "cost-a",
-        "type": "text",
-        "x": 710,
-        "y": 60,
-        "width": 250,
-        "height": 140,
-        "text": "$1 * $2",
-        "color": "2"
-      },
-      {
-        "id": "cost-b",
-        "type": "text",
-        "x": 710,
-        "y": 260,
-        "width": 250,
-        "height": 140,
-        "text": "$1 * $2",
-        "color": "2"
       },
       {
         "id": "materials",
         "type": "text",
-        "x": 710,
-        "y": 470,
-        "width": 250,
-        "height": 120,
-        "text": "700 $",
+        "x": 440,
+        "y": 480,
+        "width": 260,
+        "height": 180,
+        "text": "Материалы\nЧерновые и чистовые материалы на все комнаты.\n\nmaterials = 700 $",
         "color": "1"
+      },
+      {
+        "id": "discount",
+        "type": "text",
+        "x": 440,
+        "y": 720,
+        "width": 260,
+        "height": 180,
+        "text": "Скидка\nСкидка подрядчика на объём: доля от итога.\n\ndiscount = 0.1",
+        "color": "1"
+      },
+      {
+        "id": "space",
+        "type": "text",
+        "x": 800,
+        "y": 0,
+        "width": 280,
+        "height": 180,
+        "text": "Общая площадь\nСумма площадей комнат.\n\ntotal_area = $1 + $2",
+        "color": "2"
+      },
+      {
+        "id": "cost-living",
+        "type": "text",
+        "x": 800,
+        "y": 200,
+        "width": 280,
+        "height": 180,
+        "text": "Гостиная\nСтоимость отделки гостиной: площадь на ставку.\n\nliving_cost = $1 * $2",
+        "color": "2"
+      },
+      {
+        "id": "cost-bedroom",
+        "type": "text",
+        "x": 800,
+        "y": 400,
+        "width": 280,
+        "height": 180,
+        "text": "Спальня\nСтоимость отделки спальни: площадь на ставку.\n\nbedroom_cost = $1 * $2",
+        "color": "2"
       },
       {
         "id": "total",
         "type": "text",
-        "x": 1050,
-        "y": 260,
-        "width": 250,
-        "height": 140,
-        "text": "$1 + $2 + $3",
+        "x": 1160,
+        "y": 300,
+        "width": 280,
+        "height": 180,
+        "text": "Итог\nРаботы по комнатам плюс материалы.\n\ntotal = $1 + $2 + $3",
         "color": "6"
+      },
+      {
+        "id": "final",
+        "type": "text",
+        "x": 1520,
+        "y": 300,
+        "width": 300,
+        "height": 200,
+        "text": "Итог со скидкой\nРаботы и материалы за вычетом скидки: итог и доля приходят в параметры.\n\n$total * (1 - $discount)",
+        "color": "2"
+      },
+      {
+        "id": "verdict",
+        "type": "text",
+        "x": 1520,
+        "y": 40,
+        "width": 320,
+        "height": 220,
+        "text": "Вердикт\nКлючевая ручка — ставка: она питает обе комнаты сразу.\nВыделите итог — цепочка покажет путь до площадей и материалов.\nПопробуйте сценарий на площади: дельту увидите сразу.",
+        "color": "4"
       }
     ],
     "edges": [
       {
         "id": "e1",
-        "fromNode": "area-a",
-        "toNode": "cost-a",
-        "flowKind": "value"
+        "fromNode": "areas",
+        "toNode": "space",
+        "flowKind": "value",
+        "fromOutput": "living"
       },
       {
         "id": "e2",
-        "fromNode": "rate",
-        "toNode": "cost-a",
-        "flowKind": "value"
+        "fromNode": "areas",
+        "toNode": "space",
+        "flowKind": "value",
+        "fromOutput": "bedroom"
       },
       {
         "id": "e3",
-        "fromNode": "area-b",
-        "toNode": "cost-b",
-        "flowKind": "value"
+        "fromNode": "areas",
+        "toNode": "cost-living",
+        "flowKind": "value",
+        "fromOutput": "living"
       },
       {
         "id": "e4",
         "fromNode": "rate",
-        "toNode": "cost-b",
+        "toNode": "cost-living",
         "flowKind": "value"
       },
       {
         "id": "e5",
-        "fromNode": "cost-a",
-        "toNode": "total",
-        "flowKind": "value"
+        "fromNode": "areas",
+        "toNode": "cost-bedroom",
+        "flowKind": "value",
+        "fromOutput": "bedroom"
       },
       {
         "id": "e6",
-        "fromNode": "cost-b",
-        "toNode": "total",
+        "fromNode": "rate",
+        "toNode": "cost-bedroom",
         "flowKind": "value"
       },
       {
         "id": "e7",
+        "fromNode": "cost-living",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e8",
+        "fromNode": "cost-bedroom",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e9",
         "fromNode": "materials",
         "toNode": "total",
         "flowKind": "value"
+      },
+      {
+        "id": "e10",
+        "fromNode": "total",
+        "toNode": "final",
+        "flowKind": "value",
+        "toParam": "total"
+      },
+      {
+        "id": "e11",
+        "fromNode": "discount",
+        "toNode": "final",
+        "flowKind": "value",
+        "toParam": "discount"
       }
     ]
   }

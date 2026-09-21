@@ -3106,3 +3106,71 @@ CanvasDesk». Источник — вводные владельца о проз
 - Файлы: docs/change-requests/fr-050-spill-visibility-ui.md (новый),
   docs/change-requests/fr-029-value-ports.md,
   docs/change-requests/index-cr-fr.md, worklog.md.
+---## 2026-09-22 — PRD-0008: контент v2 стартовых схем — описания нод, множественные связи, адресация/проливание, трассируемость фич
+
+- **Задача (запрос владельца):** «нужна переделка PRD-0008. Сейчас во всех нодах
+  сценариев с числами полностью отсутствует какое-либо описание, что делает эти
+  примеры полностью непонятными. Нужно как минимум добавить краткие описания в
+  каждую ноду, что там за значение. Так же требуется доработать сценарии так,
+  чтобы в них появились ноды с множественными связями и пользователь мог
+  происследовать не менее 3-4 функциональных особенностей продукта на базе
+  каждого шаблона. В идеале доработать схемы так, чтобы каждая отражала все
+  основные особенности функционала, начиная от расчётов и проливания значений,
+  заканчивая main stage и функционалом защиты расчётов/цифр.»
+- **Ревью виртуальной командой экспертов (3 параллельных вердикта, сверка с
+  кодом):** (А) движок Numi/DAG — проза в нодах молчит, ОПАСНО `=`-присваивания
+  и кириллические единицы в описаниях; значение ноды = последняя формульная
+  строка; слоты `$1..$N` = рёбра без toParam; (B) UI-фичи — main stage требует
+  пучок ≥2 рёбер одной упорядоченной пары, веер заякорен на строках значений;
+  FR-016 триггерится только Percent-значением (utilization/mm1/`%`); защита
+  цепочки PRD-0007 требует цепочки 3-4 хопа с ветвлением; (C) доки/гейты —
+  расширение SchemeEdge легально (PRD §7.2 декларировал адресацию), инварианты
+  6 схем/4 категории/пресеты 1..6/лимиты 200/400/hint D5/EN-единицы. Scratch-
+  эксперимент (cargo test, 7 паттернов) подтвердил баг ядра:
+  `inbound_slots_with_lines` передавал пустой NamedOutputs — красный бейдж
+  «вход отсутствует: $1» на приёмниках fromOutput-рёбер.
+- **Ядро (canvas-core/flow.rs):** `inbound_slots_with_lines` получил параметр
+  `named: &NamedOutputs` — построчные слоты приёмников резолвят именованные
+  выходы (красный бейдж исчезает при верном потоке); вызов из `scene.rs`
+  синхронизирован (`solutions.named`); регресс-тест
+  `inbound_slots_resolve_named_outputs`.
+- **Формат (canvas-core/schemes.rs):** `SchemeNode.label` (заголовок группы,
+  стандарт JSON Canvas); `SchemeEdge.from_line/from_output/to_param`
+  (serde-маппинг fromLine/fromOutput/toParam). Валидатор: адресация только у
+  value-рёбер, `fromLine XOR fromOutput` (контракт edge_create FR-029),
+  непустые имена портов/параметров; тесты манифестных ссылок.
+- **Инстансер (canvas-scene/scheme_apply.rs):** перенос label групп и полей
+  адресации в рёбра канваса (автотесты `addressing_survives_instantiation`,
+  `groups_remap_children_and_labels`).
+- **Контент 6 схем (v2, «шаблон = витрина фич», PRD §7.2.1):** КАЖДАЯ текстовая
+  нода = заголовок-объект (первая проза-строка — основа квалифицированных
+  адресов «Объект.Поле» в main stage) + пояснение, что за значение и в каких
+  единицах; hint-приглашение D5 «поменяйте число — пересчитается» + указание
+  на пучок. Множественные связи: в каждой схеме ≥1 пучок ≥2 рёбер одной пары с
+  адресацией истока (main stage FR-042) и ≥1 нода с ≥3 value-связями
+  (intensity×5, subtotals×7, margin×4, areas×4...). Адресация/проливание:
+  fromOutput во всех 6, toParam в 5 (вводная учит позиционным слотам по одному
+  механизму), fromLine в project-budget (график платежей 0.6/0.4 по строкам).
+  FR-016: capacity-service — utilization()/mm1() дают Percent → util=0.833
+  Warn, peak_util=2.5 Overload (узкие места живые). Глубина: онбординг ≥2
+  хопа, прочие ≥3 (дерево происхождения PRD-0007 получит ветвление).
+  Живость: ни одной красной строки/итога; формулы с $параметр — авто-строки
+  (значение в полосе результата D).
+- **Тесты:** 8 инвариантов контента перебором реестра
+  (every_text_node_is_documented, every_scheme_opens_main_stage,
+  every_scheme_has_multi_connected_nodes, schemes_cover_addressing_features,
+  schemes_have_deep_value_chains, schemes_never_show_red_lines,
+  every_scheme_invites_to_edit, capacity_service_triggers_bottleneck_analysis)
+  + обновлённые оракулы всех 6 схем; canvas-core 310, scene 189; итог:
+  46 тест-бинарников, fmt/clippy/test зелёные.
+- **Доки:** PRD-0008 (§7.2 состав v2, §7.2.1 новые требования к контенту,
+  §8 F-5, §16 история); SPEC §5.3 (поля формата ассетов); scheme-gallery.md
+  (§5 оракулы v2 + инварианты); ACCEPTANCE.md (FR-049.4/FR-049.9 обновлены,
+  FR-049.10 добавлен); FR-049 (статус v2, история). Бюджет G5: ассеты
+  32.4 КБ ≤ 100 КБ.
+- **Файлы:** assets/canvas-schemes/*6*/scheme.json,
+  crates/canvas-core/src/{flow,schemes}.rs, crates/canvas-scene/src/{scene,
+  scheme_apply}.rs, docs/prd/prd-0008-canvas-scheme-templates.md, docs/SPEC.md,
+  docs/interface-objects/scheme-gallery.md, docs/ACCEPTANCE.md,
+  docs/change-requests/fr-049-canvas-scheme-templates.md, worklog.md.
+

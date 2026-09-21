@@ -2,12 +2,12 @@
   "id": "com.canvasdesk.scheme.intro-calculations",
   "name_ru": "Живые расчёты",
   "name_en": "Live calculations",
-  "description_ru": "Минимальная цепочка Numi: два входа и формула. Поменяйте число — пересчёт мгновенный.",
-  "description_en": "A minimal Numi chain: two inputs and one formula. Change a number and watch it recalculate.",
+  "description_ru": "Спрос и лимит превращаются в долю занятости: именованные выходы, пучок в main stage и пересчёт при правке любой цифры.",
+  "description_en": "Demand and limit become utilization share: named outputs, a main stage bundle and instant recalculation of any number.",
   "category": "onboarding",
   "category_ru": "Онбординг",
   "category_en": "Onboarding",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "content": {
     "nodes": [
       {
@@ -15,53 +15,87 @@
         "type": "text",
         "x": 0,
         "y": 0,
-        "width": 330,
-        "height": 170,
-        "text": "Живые расчёты: поменяйте число в любой карточке — цепочка пересчитается сама. Формулы Numi читаются построчно, единицы измерения поддерживаются.",
+        "width": 360,
+        "height": 240,
+        "text": "Живые расчёты\nПоменяйте число в любой карточке — цепочка пересчитается сама: формулы читаются построчно, единицы поддерживаются.\nДвойная линия «Спрос → Нагрузка» — пучок из двух связей: клик открывает main stage со значениями и адресами «Объект.Поле».",
         "color": "4"
       },
       {
-        "id": "users",
+        "id": "demand",
         "type": "text",
-        "x": 410,
+        "x": 440,
         "y": 0,
-        "width": 220,
-        "height": 120,
-        "text": "1000",
-        "color": "1"
-      },
-      {
-        "id": "sessions",
-        "type": "text",
-        "x": 410,
-        "y": 180,
-        "width": 220,
-        "height": 120,
-        "text": "5",
+        "width": 260,
+        "height": 200,
+        "text": "Спрос\nВходные данные: пользователи и сессии на каждого.\n\nusers = 1000\nsessions = 5",
         "color": "1"
       },
       {
         "id": "load",
         "type": "text",
-        "x": 710,
-        "y": 80,
-        "width": 240,
-        "height": 140,
-        "text": "$1 * $2",
+        "x": 800,
+        "y": 20,
+        "width": 280,
+        "height": 200,
+        "text": "Нагрузка\nОбщие сессии за период: пользователи на сессии.\n\ntotal = $1 * $2",
         "color": "2"
+      },
+      {
+        "id": "limit",
+        "type": "text",
+        "x": 440,
+        "y": 300,
+        "width": 260,
+        "height": 180,
+        "text": "Лимит\nПропускная способность: сколько сессий выдерживает сервис.\n\nlimit = 8000",
+        "color": "1"
+      },
+      {
+        "id": "share",
+        "type": "text",
+        "x": 1160,
+        "y": 20,
+        "width": 280,
+        "height": 200,
+        "text": "Доля лимита\nЗанятость: нагрузка к пропускной способности.\n\nshare = $1 / $2",
+        "color": "2"
+      },
+      {
+        "id": "verdict",
+        "type": "text",
+        "x": 1520,
+        "y": 20,
+        "width": 320,
+        "height": 200,
+        "text": "Вердикт\nЛимит занят на две трети: запас ещё есть.\nВыделите цифру итога — цепочка расчёта покажет, откуда она взялась. Удвойте пользователей и проследите долю.",
+        "color": "4"
       }
     ],
     "edges": [
       {
         "id": "e1",
-        "fromNode": "users",
+        "fromNode": "demand",
         "toNode": "load",
-        "flowKind": "value"
+        "flowKind": "value",
+        "fromOutput": "users"
       },
       {
         "id": "e2",
-        "fromNode": "sessions",
+        "fromNode": "demand",
         "toNode": "load",
+        "flowKind": "value",
+        "fromOutput": "sessions"
+      },
+      {
+        "id": "e3",
+        "fromNode": "load",
+        "toNode": "share",
+        "flowKind": "value"
+      },
+      {
+        "id": "e4",
+        "fromNode": "limit",
+        "toNode": "share",
         "flowKind": "value"
       }
     ]

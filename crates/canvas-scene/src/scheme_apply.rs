@@ -116,6 +116,9 @@ pub fn instantiate_scheme(
             n
         };
         built.color = node.color.clone();
+        // FR-049 v2: `label` (JSON Canvas) — заголовок группы и
+        // фолбэк-заголовок text-ноды.
+        built.label = node.label.clone();
         if let Some(children) = &node.children {
             let mapped: Vec<String> = children
                 .iter()
@@ -126,7 +129,10 @@ pub fn instantiate_scheme(
         nodes.push(built);
     }
 
-    // Рёбра: id `edge-N` без коллизий; value-рёбра → FlowKind::Value.
+    // Рёбра: id `edge-N` без коллизий; value-рёбра → FlowKind::Value;
+    // FR-049 v2: адресация (fromLine/fromOutput/toParam) копируется в
+    // модель `Edge` — поля уже существуют в формате `.canvas` (SPEC §5.1),
+    // вставка не расширяет формат документа.
     let mut edge_used: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut edge_counter = canvas
         .edges
@@ -153,6 +159,9 @@ pub fn instantiate_scheme(
         if edge.flow_kind.as_deref() == Some("value") {
             built.set_flow_kind(FlowKind::Value);
         }
+        built.from_line = edge.from_line;
+        built.from_output = edge.from_output.clone();
+        built.to_param = edge.to_param.clone();
         edges.push(built);
     }
 
@@ -197,8 +206,8 @@ mod tests {
     #[test]
     fn instancer_remaps_ids_and_shifts_bbox() {
         let instance = instance_of("com.canvasdesk.scheme.intro-calculations");
-        assert_eq!(instance.nodes.len(), 4);
-        assert_eq!(instance.edges.len(), 2);
+        assert_eq!(instance.nodes.len(), 6, "6 нод intro-схемы (PRD §7.2)");
+        assert_eq!(instance.edges.len(), 4);
         // Все id свободны и префиксны.
         for node in &instance.nodes {
             assert!(
@@ -250,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn groups_remap_children() {
+    fn groups_remap_children_and_labels() {
         let instance = instance_of("com.canvasdesk.scheme.project-budget");
         let groups: Vec<&Node> = instance
             .nodes
@@ -265,6 +274,11 @@ mod tests {
             for child in children {
                 assert!(ids.contains(&child.as_str()), "ребёнок {child} ремапнут");
             }
+            assert!(
+                group.label.as_deref().is_some_and(|l| !l.is_empty()),
+                "группа {} имеет заголовок (label)",
+                group.id
+            );
         }
     }
 
@@ -278,6 +292,31 @@ mod tests {
                 .all(|e| e.flow_kind() == FlowKind::Value),
             "все рёбра схемы — value"
         );
+    }
+
+    /// FR-049 v2: адресация рёбер (fromOutput/toParam/fromLine) переживает
+    /// инстанцирование — без неё схемы не смогли бы демонстрировать
+    /// именованные выходы, проливание и построчные истоки.
+    #[test]
+    fn addressing_survives_instantiation() {
+        let instance = instance_of("com.canvasdesk.scheme.project-budget");
+        let bundle = instance
+            .edges
+            .iter()
+            .filter(|e| e.from_output.as_deref() == Some("team"))
+            .count();
+        assert_eq!(bundle, 2, "подытог team питает и резерв, и итог");
+        let spill = instance
+            .edges
+            .iter()
+            .any(|e| e.to_param.as_deref() == Some("team"));
+        assert!(spill, "резерв получает подытог через toParam");
+        let lines = instance
+            .edges
+            .iter()
+            .filter(|e| e.from_line.is_some())
+            .count();
+        assert_eq!(lines, 2, "график платежей адресуется по строкам");
     }
 
     // --- Оракулы стартового набора (G2 PRD-0008) ---
@@ -313,33 +352,46 @@ mod tests {
     fn oracle_intro_calculations() {
         let (scene, map) = scene_with("com.canvasdesk.scheme.intro-calculations");
         assert!((value_of(&scene, &map, "load") - 5000.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "share") - 0.625).abs() < 1e-6);
     }
 
     #[test]
     fn oracle_intro_whatif() {
         let (scene, map) = scene_with("com.canvasdesk.scheme.intro-whatif");
         assert!((value_of(&scene, &map, "total") - 1500.0).abs() < 1e-6);
+        // Проливание: итог и горизонт приходят в параметры $spend/$months.
+        assert!((value_of(&scene, &map, "annual") - 18000.0).abs() < 1e-6);
     }
 
     #[test]
     fn oracle_capacity_service() {
         let (scene, map) = scene_with("com.canvasdesk.scheme.capacity-service");
-        let rps = value_of(&scene, &map, "rps");
+        let rps = value_of(&scene, &map, "intensity");
         assert!((rps - 5000.0 / 30.0).abs() < 1e-6, "rps = {rps}");
         let util = value_of(&scene, &map, "util");
         assert!(
             (util - (5000.0 / 30.0) / 200.0).abs() < 1e-6,
             "util = {util}"
         );
+        // M/M/1: W = W_q + 1/μ = ρ/(μ−λ) + 1/μ при c=1.
+        let wait = value_of(&scene, &map, "wait");
+        let rho = (5000.0 / 30.0) / 200.0;
+        let expected = rho / (200.0 - 5000.0 / 30.0) + 1.0 / 200.0;
+        assert!((wait - expected).abs() < 1e-6, "wait = {wait}");
+        // Проливание: $rps и $factor приходят в пиковый поток по имени.
+        assert!((value_of(&scene, &map, "peak") - 500.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "peak_util") - 2.5).abs() < 1e-6);
     }
 
     #[test]
     fn oracle_project_budget() {
         let (scene, map) = scene_with("com.canvasdesk.scheme.project-budget");
-        assert!((value_of(&scene, &map, "team-total") - 13500.0).abs() < 1e-6);
-        assert!((value_of(&scene, &map, "infra-total") - 1400.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "subtotals") - 1400.0).abs() < 1e-6);
+        // Проливание: $team = 13500 из именованного выхода, $share = 0.15.
         assert!((value_of(&scene, &map, "reserve") - 2025.0).abs() < 1e-6);
         assert!((value_of(&scene, &map, "total") - 16925.0).abs() < 1e-6);
+        // Построчные истоки: доли 0.6/0.4 из строк графика платежей.
+        assert!((value_of(&scene, &map, "cash") - 16925.0).abs() < 1e-6);
     }
 
     #[test]
@@ -348,14 +400,39 @@ mod tests {
         assert!((value_of(&scene, &map, "margin") - 6.0).abs() < 1e-6);
         assert!((value_of(&scene, &map, "ltv") - 216.0).abs() < 1e-6);
         assert!((value_of(&scene, &map, "ratio") - 1.8).abs() < 1e-6);
+        // Проливание: $cac и $margin приходят в формулу окупаемости.
+        assert!((value_of(&scene, &map, "payback") - 20.0).abs() < 1e-6);
     }
 
     #[test]
     fn oracle_renovation_estimate() {
         let (scene, map) = scene_with("com.canvasdesk.scheme.renovation-estimate");
-        assert!((value_of(&scene, &map, "cost-a") - 450.0).abs() < 1e-6);
-        assert!((value_of(&scene, &map, "cost-b") - 300.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "space") - 30.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "cost-living") - 450.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "cost-bedroom") - 300.0).abs() < 1e-6);
         assert!((value_of(&scene, &map, "total") - 1450.0).abs() < 1e-6);
+        // Проливание: $total и $discount приходят в итог со скидкой.
+        assert!((value_of(&scene, &map, "final") - 1305.0).abs() < 1e-6);
+    }
+
+    /// FR-016: capacity-service демонстрирует анализ узких мест: средняя
+    /// утилизация — Warn (ρ ≈ 0.83 ≥ 0.7), пиковая — Overload (2.5 ≥ 1).
+    #[test]
+    fn capacity_service_triggers_bottleneck_analysis() {
+        use canvas_core::analyze::Severity;
+        let (scene, map) = scene_with("com.canvasdesk.scheme.capacity-service");
+        let util = &scene.analysis[&map["util"]];
+        assert_eq!(
+            util.severity,
+            Severity::Warn,
+            "средняя занятость — жёлтая рамка"
+        );
+        let peak = &scene.analysis[&map["peak_util"]];
+        assert_eq!(peak.severity, Severity::Overload, "пик — перегрузка");
+        assert!(
+            (peak.utilization.unwrap() - 2.5).abs() < 1e-6,
+            "ρ пика = 2.5"
+        );
     }
 
     /// Проза-заметки не порождают значений и ошибок (инвариант тишины прозы).
@@ -394,5 +471,263 @@ mod tests {
         scene.recompute_flow();
         // Итог схемы жив и не зависит от существующей ноды.
         assert!((value_of(&scene, &map, "total") - 1500.0).abs() < 1e-6);
+    }
+
+    // --- Инварианты контента v2 (PRD-0008 §8 F-5, запрос владельца) ---
+    // Требования: описания в каждой ноде, пучки для main stage, ноды с
+    // множественными связями, адресация/проливание, глубина цепочки под
+    // объяснение происхождения цифр, отсутствие красных строк.
+
+    use canvas_core::expr::{line_kind, NumiLineKind};
+    use canvas_core::schemes::{SchemeEdge, SchemeManifest, SchemeNode};
+
+    fn all_schemes() -> Vec<&'static SchemeManifest> {
+        SchemeRegistry::embedded().list().iter().collect()
+    }
+
+    /// Требование владельца: «краткие описания в каждую ноду, что там за
+    /// значение» — первая строка каждой текстовой ноды обязана быть прозой
+    /// (заголовок-объект для адресов «Объект.Поле»), минимум две
+    /// прозаические строки (заголовок + пояснение смысла значений).
+    #[test]
+    fn every_text_node_is_documented() {
+        for scheme in all_schemes() {
+            for node in &scheme.content.nodes {
+                if node.node_type != "text" {
+                    continue;
+                }
+                let text = node.text.as_deref().unwrap_or_default();
+                let lines: Vec<&str> = text.split('\n').collect();
+                let first = lines[0].trim();
+                assert!(
+                    !first.is_empty(),
+                    "{}: нода {} без заголовка",
+                    scheme.id,
+                    node.id
+                );
+                assert_eq!(
+                    line_kind(first),
+                    NumiLineKind::Prose,
+                    "{}: первая строка {} должна быть прозой (заголовок), не формулой",
+                    scheme.id,
+                    node.id
+                );
+                let prose = lines
+                    .iter()
+                    .filter(|l| !l.trim().is_empty() && line_kind(l.trim()) == NumiLineKind::Prose)
+                    .count();
+                assert!(
+                    prose >= 2,
+                    "{}: нода {} — нужно заголовок и пояснение (не менее 2 проза-строк), проза-строк: {prose}",
+                    scheme.id,
+                    node.id
+                );
+            }
+        }
+    }
+
+    /// Main stage открывается по пучку из ≥2 рёбер одной упорядоченной пары
+    /// (FR-042): каждая схема обязана содержать хотя бы один такой пучок.
+    #[test]
+    fn every_scheme_opens_main_stage() {
+        for scheme in all_schemes() {
+            let mut pairs: std::collections::HashMap<(String, String), usize> =
+                std::collections::HashMap::new();
+            for edge in &scheme.content.edges {
+                *pairs
+                    .entry((edge.from_node.clone(), edge.to_node.clone()))
+                    .or_insert(0) += 1;
+            }
+            let bundles: Vec<_> = pairs.iter().filter(|(_, n)| **n >= 2).collect();
+            assert!(
+                !bundles.is_empty(),
+                "{}: нет пучка для main stage (нужно ≥2 рёбер одной пары)",
+                scheme.id
+            );
+            for (pair, weight) in bundles {
+                // Якоря веера: fromOutput (именованный выход) ИЛИ fromLine
+                // (построчный исток) — оба заякоривают порты на строках.
+                let addressed = scheme.content.edges.iter().any(|e| {
+                    e.from_node == pair.0 && (e.from_output.is_some() || e.from_line.is_some())
+                });
+                assert!(
+                    addressed,
+                    "{}: пучок {:?} без адресации истока (веер без якорей)",
+                    scheme.id, pair
+                );
+                let _ = weight;
+            }
+        }
+    }
+
+    /// «Ноды с множественными связями»: в каждой схеме есть нода с ≥3
+    /// инцидентными value-рёбрами (fan-in/fan-out), обычно несколько.
+    #[test]
+    fn every_scheme_has_multi_connected_nodes() {
+        for scheme in all_schemes() {
+            let mut degree: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
+            for edge in &scheme.content.edges {
+                *degree.entry(edge.from_node.as_str()).or_insert(0) += 1;
+                *degree.entry(edge.to_node.as_str()).or_insert(0) += 1;
+            }
+            let hubs = degree.values().filter(|d| **d >= 3).count();
+            assert!(
+                hubs >= 1,
+                "{}: нет ноды с ≥3 value-связями (множественные связи)",
+                scheme.id
+            );
+        }
+    }
+
+    /// Трассируемость фич: позиционные слоты и именованные выходы — во всех
+    /// схемах; проливание toParam — во всех, кроме вводной (она учит по
+    /// одному механизму за раз); построчные истоки fromLine — в бюджете.
+    #[test]
+    fn schemes_cover_addressing_features() {
+        for scheme in all_schemes() {
+            let from_output = scheme.content.edges.iter().any(|e| e.from_output.is_some());
+            assert!(
+                from_output,
+                "{}: нет fromOutput (именованные выходы не демонстрируются)",
+                scheme.id
+            );
+            if scheme.id != "com.canvasdesk.scheme.intro-calculations" {
+                let spill = scheme.content.edges.iter().any(|e| e.to_param.is_some());
+                assert!(
+                    spill,
+                    "{}: нет toParam (проливание значений не демонстрируется)",
+                    scheme.id
+                );
+            }
+        }
+        let budget = SchemeRegistry::embedded()
+            .get("com.canvasdesk.scheme.project-budget")
+            .unwrap();
+        assert!(
+            budget.content.edges.iter().any(|e| e.from_line.is_some()),
+            "бюджет: нет fromLine (построчные истоки не демонстрируются)"
+        );
+    }
+
+    /// Глубина цепочки значений (готовность к объяснению происхождения
+    /// цифр, PRD-0007): самый длинный путь по value-рёбрам от листа.
+    /// Вводные схемы — ≥2 хопа, прочие — ≥3.
+    #[test]
+    fn schemes_have_deep_value_chains() {
+        for scheme in all_schemes() {
+            let mut best = 0usize;
+            let ids: Vec<&str> = scheme.content.nodes.iter().map(|n| n.id.as_str()).collect();
+            for start in &ids {
+                let mut stack: Vec<(&str, usize)> = vec![(start, 0)];
+                while let Some((node, depth)) = stack.pop() {
+                    best = best.max(depth);
+                    for edge in &scheme.content.edges {
+                        if edge.from_node == node {
+                            stack.push((edge.to_node.as_str(), depth + 1));
+                        }
+                    }
+                }
+            }
+            let floor = if scheme.category == "onboarding" {
+                2
+            } else {
+                3
+            };
+            assert!(
+                best >= floor,
+                "{}: цепочка значений {best} хопов, нужно ≥{floor} (дерево происхождения)",
+                scheme.id
+            );
+        }
+    }
+
+    /// Живость без красного: ни одна строка и ни один узловой итог схем не
+    /// дают ошибок — вставленная схема не выглядит «сломанной».
+    #[test]
+    fn schemes_never_show_red_lines() {
+        for scheme in all_schemes() {
+            let (scene, map) = scene_with(&scheme.id);
+            for (node_id, outcome) in &scene.expr_results {
+                assert!(
+                    !matches!(outcome, ExprOutcome::Err(_)),
+                    "{}: нода {node_id} в ошибке: {outcome:?}",
+                    scheme.id
+                );
+            }
+            for (node_id, lines) in &scene.expr_line_results {
+                for (i, line) in lines.iter().enumerate() {
+                    assert!(
+                        !matches!(line, Some(ExprOutcome::Err(_))),
+                        "{}: нода {node_id} строка {i} красная: {line:?}",
+                        scheme.id
+                    );
+                }
+            }
+            // Формульные ноды живы: у каждой есть Ok-итог.
+            for node in &scheme.content.nodes {
+                if node.node_type != "text" {
+                    continue;
+                }
+                let text = node.text.as_deref().unwrap_or_default();
+                let has_formula = text
+                    .split('\n')
+                    .any(|l| line_kind(l.trim()) != NumiLineKind::Prose && !l.trim().is_empty());
+                if has_formula {
+                    let id = &map[&node.id];
+                    assert!(
+                        scene
+                            .expr_results
+                            .get(id)
+                            .is_some_and(|o| !matches!(o, ExprOutcome::Err(_))),
+                        "{}: формульная нода {} без живого итога",
+                        scheme.id,
+                        node.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// D5 CJM: подсказка-приглашение «поменяйте число — цепочка
+    /// пересчитается» живёт в каждой схеме (нода-проза hint).
+    #[test]
+    fn every_scheme_invites_to_edit() {
+        for scheme in all_schemes() {
+            let hint = scheme
+                .content
+                .nodes
+                .iter()
+                .find(|n| n.id == "hint")
+                .unwrap_or_else(|| panic!("{}: нет ноды-подсказки hint", scheme.id));
+            let text = hint.text.as_deref().unwrap_or_default();
+            assert!(
+                text.contains("пересчит"),
+                "{}: hint не приглашает к правке (D5)",
+                scheme.id
+            );
+            assert!(
+                text.split('\n')
+                    .all(|l| { l.trim().is_empty() || line_kind(l.trim()) == NumiLineKind::Prose }),
+                "{}: hint обязан быть чистой прозой (тишина)",
+                scheme.id
+            );
+        }
+    }
+
+    /// Манифестная ссылка для инвариантов формата (компиляция полей
+    /// адресации в serde-слое не деградирует).
+    #[test]
+    fn manifest_addressing_fields_parse() {
+        let json = r#"{
+            "id": "e", "fromNode": "a", "toNode": "b",
+            "flowKind": "value", "fromLine": 3
+        }"#;
+        let edge: SchemeEdge = serde_json::from_str(json).unwrap();
+        assert_eq!(edge.from_line, Some(3));
+        let node: SchemeNode =
+            serde_json::from_str(r#"{"id": "g", "type": "group", "x": 0, "y": 0, "width": 10, "height": 10, "label": "Команда"}"#)
+                .unwrap();
+        assert_eq!(node.label.as_deref(), Some("Команда"));
     }
 }
