@@ -392,12 +392,16 @@ impl SceneState {
             // (тем же подменам, что у propagator — инвариант 4)
             let text = flow::whatif_virtual_text(&text, &whatif.line_overrides(&node.id));
             // FR-025: слоты с учётом построчных истоков — строки downstream
-            // нод видят значения строк источников (`= $in × 2` от строки)
+            // нод видят значения строк источников (`= $in × 2` от строки).
+            // FR-049: + `named` — слоты резолвляют и именованные выходы
+            // (fromOutput-рёбра), иначе построчные бейджи приёмников
+            // краснели бы «вход отсутствует» при верном узловом итоге
             let slots = flow::inbound_slots_with_lines(
                 &self.canvas,
                 &node.id,
                 &solutions.outputs,
                 &solutions.lines,
+                &solutions.named,
             );
             let line_results = if slots.is_empty() {
                 expr::eval_lines(&text)

@@ -537,7 +537,13 @@ pub fn propagate_with_lines_data(
 /// есть, значения нет (источник без формулы, с ошибкой или висячее ребро).
 /// Слоты НЕ схлопываются — индексы `$1..$N` стабильны.
 pub fn inbound_slots(canvas: &Canvas, node_id: &str, outputs: &FlowOutputs) -> Vec<Option<Value>> {
-    inbound_slots_with_lines(canvas, node_id, outputs, &LineOutputs::new())
+    inbound_slots_with_lines(
+        canvas,
+        node_id,
+        outputs,
+        &LineOutputs::new(),
+        &NamedOutputs::new(),
+    )
 }
 
 /// FR-025: [`inbound_slots`] с построчными выходами: ребро с
@@ -552,11 +558,17 @@ pub fn inbound_slots(canvas: &Canvas, node_id: &str, outputs: &FlowOutputs) -> V
 /// приоритет при обоих полях — `fromLine`. Рёбра с `toParam` в слоты
 /// НЕ входят (они «проливаются» в параметры — [`inbound_values`]); в
 /// канвасах без адресованных рёбер поведение идентично прежнему.
+/// `named` — карта именованных выходов потока (`FlowSolutions::named`):
+/// до FR-049 карта передавалась пустой и `fromOutput`-рёбра тихо теряли
+/// значение в построчных бейджах (красный «вход отсутствует: $1» при
+/// корректном узловом итоге) — регресс-тест
+/// `inbound_slots_resolve_named_outputs`.
 pub fn inbound_slots_with_lines(
     canvas: &Canvas,
     node_id: &str,
     outputs: &FlowOutputs,
     lines: &LineOutputs,
+    named: &NamedOutputs,
 ) -> Vec<Option<Value>> {
     canvas
         .edges
@@ -566,7 +578,7 @@ pub fn inbound_slots_with_lines(
                 && edge.flow_kind() == FlowKind::Value
                 && edge.to_param.is_none()
         })
-        .map(|edge| edge_source_value(edge, outputs, lines, &NamedOutputs::new()))
+        .map(|edge| edge_source_value(edge, outputs, lines, named))
         .collect()
 }
 
@@ -1622,7 +1634,13 @@ mod tests {
         canvas.add_edge(line_edge);
 
         let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
-        let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
+        let slots = inbound_slots_with_lines(
+            &canvas,
+            "B",
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+        );
         assert_eq!(
             slots[0].as_ref().map(|value| value.num),
             Some(1000.0),
@@ -1654,7 +1672,13 @@ mod tests {
         canvas.add_edge(line_edge);
 
         let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
-        let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
+        let slots = inbound_slots_with_lines(
+            &canvas,
+            "B",
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+        );
         assert_eq!(slots.len(), 2, "оба value-ребра");
         assert_eq!(
             slots[0],
@@ -1693,11 +1717,64 @@ mod tests {
         canvas.add_edge(edge9);
 
         let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
-        let slots = inbound_slots_with_lines(&canvas, "B", &solutions.outputs, &solutions.lines);
+        let slots = inbound_slots_with_lines(
+            &canvas,
+            "B",
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+        );
         assert_eq!(
             slots,
             vec![None, None, None],
             "ошибка/проза/нет строки — Some(None)"
+        );
+    }
+
+    /// FR-049 (регресс слотов + fromOutput): построчные слоты резолвят
+    /// именованные выходы текстовой ноды (`FlowSolutions::named`), а не
+    /// тихо теряют значение. До фикса карта `named` не передавалась вовсе:
+    /// приёмник с `$1`/`$2` от fromOutput-рёбер показывал красный бейдж
+    /// «вход отсутствует» при корректном узловом итоге — паттерн адресации
+    /// встроенных схем PRD-0008 этого не допускает.
+    #[test]
+    fn inbound_slots_resolve_named_outputs() {
+        let mut canvas = Canvas::default();
+        let mut sheet = Node::text("A", "", 0.0, 0.0);
+        sheet.text = Some("users = 1000\nsessions = 5".to_owned());
+        canvas.nodes.push(sheet);
+        node_with_expr(&mut canvas, "B", "$1 × $2", 1.0);
+        let mut users_edge = Edge::new("e1", "A", None, "B", None);
+        users_edge.set_flow_kind(FlowKind::Value);
+        users_edge.from_output = Some("users".to_owned());
+        canvas.add_edge(users_edge);
+        let mut sessions_edge = Edge::new("e2", "A", None, "B", None);
+        sessions_edge.set_flow_kind(FlowKind::Value);
+        sessions_edge.from_output = Some("sessions".to_owned());
+        canvas.add_edge(sessions_edge);
+
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let slots = inbound_slots_with_lines(
+            &canvas,
+            "B",
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+        );
+        assert_eq!(
+            slots[0].as_ref().map(|value| value.num),
+            Some(1000.0),
+            "слот $1 — именованный выход users"
+        );
+        assert_eq!(
+            slots[1].as_ref().map(|value| value.num),
+            Some(5.0),
+            "слот $2 — именованный выход sessions"
+        );
+        assert_eq!(
+            solutions.outputs.get("B"),
+            Some(&Ok(Value::scalar(5000.0))),
+            "узловой итог B жив"
         );
     }
 

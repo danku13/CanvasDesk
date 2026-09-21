@@ -2,108 +2,178 @@
   "id": "com.canvasdesk.scheme.capacity-service",
   "name_ru": "Ёмкость сервиса",
   "name_en": "Service capacity",
-  "description_ru": "Спрос (пользователи и время размышления) против мощности: запросов в секунду и загрузка узкого места.",
-  "description_en": "Demand (users and think time) versus capacity: requests per second and bottleneck utilization.",
+  "description_ru": "Спрос против мощности: запросы в секунду, утилизация в процентах, время ответа M/M/1 и узкие места вплоть до перегрузки на пике.",
+  "description_en": "Demand versus capacity: requests per second, utilization percent, M/M/1 latency and bottlenecks up to overload at peak.",
   "category": "architecture",
   "category_ru": "Архитектура",
   "category_en": "Architecture",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "content": {
     "nodes": [
       {
         "id": "hint",
         "type": "text",
         "x": 0,
-        "y": 0,
-        "width": 340,
-        "height": 180,
-        "text": "Ёмкость сервиса: спрос делится на время размышления, загрузка — отношение спроса к мощности. Одно value-ребро — один вход формулы.",
+        "y": 40,
+        "width": 360,
+        "height": 260,
+        "text": "Ёмкость сервиса\nСпрос превращается в запросы в секунду и сравнивается с мощностью; утилизация считается процентом — жёлтая рамка узкого места загорается от 70, красная — от 100.\nПоменяйте спрос или мощность — всё пересчитается. Двойная линия «Спрос → Интенсивность» — пучок: клик открывает main stage.",
         "color": "4"
       },
       {
-        "id": "users",
+        "id": "demand",
         "type": "text",
-        "x": 420,
+        "x": 440,
         "y": 0,
-        "width": 230,
-        "height": 120,
-        "text": "5000 req",
+        "width": 260,
+        "height": 200,
+        "text": "Спрос\nОдновременные запросы и время обдумывания каждого.\n\nrequests = 5000 req\nthink = 30 s",
         "color": "1"
       },
       {
-        "id": "think",
+        "id": "factor",
         "type": "text",
-        "x": 420,
-        "y": 180,
-        "width": 230,
-        "height": 120,
-        "text": "30 s",
+        "x": 440,
+        "y": 260,
+        "width": 260,
+        "height": 180,
+        "text": "Пик\nЗапас на пиковый час: множитель к среднему потоку.\n\nfactor = 3",
         "color": "1"
       },
       {
-        "id": "rps",
+        "id": "capacity",
         "type": "text",
-        "x": 730,
-        "y": 80,
-        "width": 250,
-        "height": 140,
-        "text": "$1 / $2",
+        "x": 440,
+        "y": 520,
+        "width": 260,
+        "height": 180,
+        "text": "Мощность\nПропускная способность сервиса в запросах за секунду.\n\ncapacity = 200 req/s",
+        "color": "1"
+      },
+      {
+        "id": "intensity",
+        "type": "text",
+        "x": 800,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Интенсивность\nПоток запросов: спрос, делённый на время обдумывания.\n\nrps = $1 / $2",
         "color": "2"
       },
       {
-        "id": "service",
+        "id": "peak",
         "type": "text",
-        "x": 730,
-        "y": 300,
-        "width": 250,
-        "height": 120,
-        "text": "200 req/s",
-        "color": "1"
+        "x": 800,
+        "y": 420,
+        "width": 280,
+        "height": 200,
+        "text": "Пиковый поток\nИнтенсивность, помноженная на запас пика: значения приходят в параметры по имени.\n\n$rps * $factor",
+        "color": "2"
       },
       {
         "id": "util",
         "type": "text",
-        "x": 1060,
-        "y": 180,
-        "width": 250,
-        "height": 140,
-        "text": "$1 / $2",
+        "x": 1160,
+        "y": 0,
+        "width": 280,
+        "height": 180,
+        "text": "Утилизация\nЗанятость мощности в долях: локальный предел — единица.\n\nutil = utilization($1, $2)",
         "color": "2"
+      },
+      {
+        "id": "wait",
+        "type": "text",
+        "x": 1160,
+        "y": 220,
+        "width": 280,
+        "height": 180,
+        "text": "Время ответа\nПребывание запроса в системе M/M/1.\n\nwait = mm1($1, $2)",
+        "color": "2"
+      },
+      {
+        "id": "peak_util",
+        "type": "text",
+        "x": 1160,
+        "y": 440,
+        "width": 280,
+        "height": 200,
+        "text": "Утилизация на пике\nПиковый поток к мощности: перегрузка видна сразу.\n\npeak_util = utilization($1, $2)",
+        "color": "6"
       },
       {
         "id": "verdict",
         "type": "text",
-        "x": 420,
-        "y": 370,
-        "width": 340,
-        "height": 130,
-        "text": "Запас небольшой: поднимите мощность и посмотрите, как падает загрузка.",
+        "x": 1520,
+        "y": 220,
+        "width": 320,
+        "height": 220,
+        "text": "Вердикт\nСредняя занятость — 83 процента: запас тонкий.\nНа пике утилизация зашкаливает — метрики подсветят узкое место.\nПоменяйте спрос или мощность — всё пересчитается и рамки остынут.",
         "color": "4"
       }
     ],
     "edges": [
       {
         "id": "e1",
-        "fromNode": "users",
-        "toNode": "rps",
-        "flowKind": "value"
+        "fromNode": "demand",
+        "toNode": "intensity",
+        "flowKind": "value",
+        "fromOutput": "requests"
       },
       {
         "id": "e2",
-        "fromNode": "think",
-        "toNode": "rps",
-        "flowKind": "value"
+        "fromNode": "demand",
+        "toNode": "intensity",
+        "flowKind": "value",
+        "fromOutput": "think"
       },
       {
         "id": "e3",
-        "fromNode": "rps",
+        "fromNode": "factor",
+        "toNode": "peak",
+        "flowKind": "value",
+        "toParam": "factor"
+      },
+      {
+        "id": "e4",
+        "fromNode": "intensity",
+        "toNode": "peak",
+        "flowKind": "value",
+        "toParam": "rps"
+      },
+      {
+        "id": "e5",
+        "fromNode": "intensity",
         "toNode": "util",
         "flowKind": "value"
       },
       {
-        "id": "e4",
-        "fromNode": "service",
+        "id": "e6",
+        "fromNode": "capacity",
         "toNode": "util",
+        "flowKind": "value"
+      },
+      {
+        "id": "e7",
+        "fromNode": "intensity",
+        "toNode": "wait",
+        "flowKind": "value"
+      },
+      {
+        "id": "e8",
+        "fromNode": "capacity",
+        "toNode": "wait",
+        "flowKind": "value"
+      },
+      {
+        "id": "e9",
+        "fromNode": "peak",
+        "toNode": "peak_util",
+        "flowKind": "value"
+      },
+      {
+        "id": "e10",
+        "fromNode": "capacity",
+        "toNode": "peak_util",
         "flowKind": "value"
       }
     ]

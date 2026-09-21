@@ -2,12 +2,12 @@
   "id": "com.canvasdesk.scheme.unit-economics",
   "name_ru": "Юнит-экономика",
   "name_en": "Unit economics",
-  "description_ru": "Маржа с клиента, пожизненная ценность и соотношение с ценой привлечения.",
-  "description_en": "Per-customer margin, lifetime value and the ratio against acquisition cost.",
+  "description_ru": "Маржа из цены и себестоимости, LTV на срок жизни, соотношение с ценой привлечения и окупаемость через проливание в параметры.",
+  "description_en": "Margin from price and COGS, LTV over lifetime, the ratio against acquisition cost and payback via parameter spill.",
   "category": "business",
   "category_ru": "Бизнес",
   "category_en": "Business",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "content": {
     "nodes": [
       {
@@ -15,104 +15,106 @@
         "type": "text",
         "x": 0,
         "y": 0,
-        "width": 330,
-        "height": 170,
-        "text": "Юнит-экономика: маржа считается из цены и себестоимости, ценность — маржа на срок жизни, далее соотношение с ценой привлечения.",
+        "width": 360,
+        "height": 240,
+        "text": "Юнит-экономика\nМаржа считается из цены и себестоимости, ценность — маржа на срок жизни, дальше соотношение с ценой привлечения и окупаемость.\nПоменяйте цену или себестоимость — всё пересчитается. Окупаемость принимает маржу и привлечение по именам параметров. Пучок «Единица → Маржа» открывается кликом в main stage.",
         "color": "4"
       },
       {
-        "id": "price",
+        "id": "unit",
         "type": "text",
-        "x": 410,
+        "x": 440,
         "y": 0,
-        "width": 220,
-        "height": 120,
-        "text": "10 $",
-        "color": "1"
-      },
-      {
-        "id": "cogs",
-        "type": "text",
-        "x": 410,
-        "y": 180,
-        "width": 220,
-        "height": 120,
-        "text": "4 $",
+        "width": 260,
+        "height": 220,
+        "text": "Продуктовая единица\nЭкономика пользователя в месяц: цена подписки и себестоимость обслуживания.\n\nprice = 10 $\ncogs = 4 $",
         "color": "1"
       },
       {
         "id": "margin",
         "type": "text",
-        "x": 710,
-        "y": 80,
-        "width": 250,
-        "height": 140,
-        "text": "$1 - $2",
+        "x": 800,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Маржа\nПрибыль с пользователя в месяц: цена минус себестоимость.\n\nmargin = $1 - $2",
         "color": "2"
       },
       {
-        "id": "months",
+        "id": "lifetime",
         "type": "text",
-        "x": 410,
-        "y": 360,
-        "width": 220,
-        "height": 120,
-        "text": "36",
-        "color": "1"
-      },
-      {
-        "id": "cac",
-        "type": "text",
-        "x": 710,
-        "y": 360,
-        "width": 250,
-        "height": 120,
-        "text": "120 $",
+        "x": 440,
+        "y": 300,
+        "width": 260,
+        "height": 180,
+        "text": "Срок жизни\nСколько месяцев пользователь остаётся с продуктом.\n\nmonths = 36",
         "color": "1"
       },
       {
         "id": "ltv",
         "type": "text",
-        "x": 1040,
-        "y": 80,
-        "width": 250,
-        "height": 140,
-        "text": "$1 * $2",
+        "x": 1160,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "LTV\nПожизненная ценность: маржа на срок жизни.\n\nltv = $1 * $2",
         "color": "2"
+      },
+      {
+        "id": "cac",
+        "type": "text",
+        "x": 800,
+        "y": 300,
+        "width": 280,
+        "height": 180,
+        "text": "CAC\nЦена привлечения одного пользователя.\n\ncac = 120 $",
+        "color": "1"
       },
       {
         "id": "ratio",
         "type": "text",
-        "x": 1370,
-        "y": 220,
-        "width": 250,
-        "height": 140,
-        "text": "$1 / $2",
+        "x": 1520,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "LTV к CAC\nСоотношение ценности и цены привлечения.\n\nratio = $1 / $2",
         "color": "6"
+      },
+      {
+        "id": "payback",
+        "type": "text",
+        "x": 1160,
+        "y": 300,
+        "width": 280,
+        "height": 180,
+        "text": "Окупаемость\nМесяцы до возврата привлечения: маржа приходит в параметр.\n\n$cac / $margin",
+        "color": "2"
       },
       {
         "id": "verdict",
         "type": "text",
-        "x": 410,
-        "y": 540,
-        "width": 350,
-        "height": 130,
-        "text": "Соотношение ниже нормы: привлечение дорогое — снизьте цену привлечения или поднимите маржу.",
+        "x": 1520,
+        "y": 300,
+        "width": 320,
+        "height": 220,
+        "text": "Вердикт\nСоотношение ниже здоровой нормы: привлечение дорогое.\nВыделите цифру соотношения — цепочка покажет путь от цены и себестоимости.\nПоднимите цену — маржа и LTV пересчитаются по всей цепочке.",
         "color": "4"
       }
     ],
     "edges": [
       {
         "id": "e1",
-        "fromNode": "price",
+        "fromNode": "unit",
         "toNode": "margin",
-        "flowKind": "value"
+        "flowKind": "value",
+        "fromOutput": "price"
       },
       {
         "id": "e2",
-        "fromNode": "cogs",
+        "fromNode": "unit",
         "toNode": "margin",
-        "flowKind": "value"
+        "flowKind": "value",
+        "fromOutput": "cogs"
       },
       {
         "id": "e3",
@@ -122,7 +124,7 @@
       },
       {
         "id": "e4",
-        "fromNode": "months",
+        "fromNode": "lifetime",
         "toNode": "ltv",
         "flowKind": "value"
       },
@@ -137,6 +139,20 @@
         "fromNode": "cac",
         "toNode": "ratio",
         "flowKind": "value"
+      },
+      {
+        "id": "e7",
+        "fromNode": "cac",
+        "toNode": "payback",
+        "flowKind": "value",
+        "toParam": "cac"
+      },
+      {
+        "id": "e8",
+        "fromNode": "margin",
+        "toNode": "payback",
+        "flowKind": "value",
+        "toParam": "margin"
       }
     ]
   }

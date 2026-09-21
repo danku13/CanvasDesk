@@ -70,13 +70,28 @@ Web-порт: `?template=<id>` — авто-вставка схемы на пе�
 - I-G4: лимиты пакета ≤ 200 нод / ≤ 400 рёбер; вставка ≤ 50 мс на
   200 нод (G7, release-замер).
 
-## 5. Стартовый набор (6 схем, G2 — oracle-тесты)
+## 5. Стартовый набор (6 схем, 4 категории — oracle-тесты + инварианты v2)
+
+Контент v2 (переделка по запросу владельца 2026-09-22, PRD-0008 §7.2.1
+«шаблон = витрина фич»): в каждой текстовой ноде — заголовок-объект
+(первая проза-строка, основа адресов «Объект.Поле» в main stage) и
+пояснение, что за значение и в каких единицах; ≥1 пучок из ≥2 рёбер одной
+упорядоченной пары с адресацией истока (клик → main stage, FR-042); ≥1
+нода с ≥3 инцидентными value-рёбрами (fan-in/fan-out); адресация значений
+(`fromOutput`/`fromLine`/`toParam` — именованные выходы, построчные
+истоки, проливание в `$параметр`); цепочка значений 2–4 хопа с ветвлением
+(дерево происхождения PRD-0007 получит ветки, а не пару); живость без
+красных строк. Инварианты фиксированы автотестами `scheme_apply`
+(`every_text_node_is_documented`, `every_scheme_opens_main_stage`,
+`every_scheme_has_multi_connected_nodes`, `schemes_cover_addressing_features`,
+`schemes_have_deep_value_chains`, `schemes_never_show_red_lines`,
+`every_scheme_invites_to_edit`, `capacity_service_triggers_bottleneck_analysis`).
 
 | id | Категория | Оракул |
 |---|---|---|
-| `intro-calculations` | Онбординг | load = 5000 |
-| `intro-whatif` | Онбординг | total = 1500 $ |
-| `capacity-service` | Архитектура | rps = 166.67 req/s; util ≈ 0.833 |
-| `project-budget` | Планирование | total = 16925 $ (вкл. резерв 15%) |
-| `unit-economics` | Бизнес | margin = 6 $; ltv = 216 $; ratio = 1.8 |
-| `renovation-estimate` | Планирование | total = 1450 $ |
+| `intro-calculations` | Онбординг | load = 5000; share = 0.625 (доля лимита) |
+| `intro-whatif` | Онбординг | total = 1500 $; annual = 18000 $ (проливание `$spend`/`$months`) |
+| `capacity-service` | Архитектура | intensity = 5000/30 ≈ 166.67 req/s; util = 0.833 → Warn (FR-016); wait = mm1-формула M/M/1; peak = 500; peak_util = 2.5 → Overload |
+| `project-budget` | Планирование | subtotals: team = 13500 $, infra = 1400 $; reserve = 2025 $ (`$team` × 0.15); total = 16925 $; cash = 16925 $ (доли 0.6/0.4 по `fromLine`) |
+| `unit-economics` | Бизнес | margin = 6 $; ltv = 216 $; ratio = 1.8; payback = 20 мес (`$cac`/`$margin`) |
+| `renovation-estimate` | Планирование | space = 30 m²; cost-living = 450 $; cost-bedroom = 300 $; total = 1450 $; final = 1305 $ (скидка `$discount`) |
