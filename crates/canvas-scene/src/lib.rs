@@ -7,6 +7,9 @@
 
 pub mod mcp;
 pub mod measure;
+/// FR-049 (PRD-0008 T2): чистый инстансер схем (ремап id, bbox→origin)
+/// + oracle-тесты стартового набора.
+pub mod scheme_apply;
 pub mod scene;
 pub mod view;
 

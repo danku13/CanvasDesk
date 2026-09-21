@@ -38,6 +38,9 @@ mod providers;
 pub mod search;
 mod settings;
 mod spatial;
+/// FR-049 (PRD-0008 T1): реестр шаблонов готовых схем — манифесты
+/// `assets/canvas-schemes/*/scheme.json`, валидатор, кэш OnceLock.
+pub mod schemes;
 /// FR-018: реестр шаблонных архитектурных нод.
 pub mod templates;
 /// FR-047 (PRD-0006 D4/F-8): темы-пресеты как данные — реестр встроенных
