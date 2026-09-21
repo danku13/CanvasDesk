@@ -2792,3 +2792,19 @@ CanvasDesk». Источник — вводные владельца о проз
   wasm_gate ✓; mcp_wasm_gate ✓ (полная MCP-сессия в wasmtime); token_lint ✓.
   Окружение восстановлено после пересоздания (rustup 1.98.1, wasmtime
   36.0.1, таргеты wasm32); чистка диска: rm -rf target/debug (StorageFull).
+
+---
+
+## 2026-09-22 — слияние FR-049 в main: CI зелёный
+
+- Merge feature/fr-049-scheme-templates --no-ff `e614046` (поверх
+  параллельных FR-042/FR-044 main-stage 402aff8 — конфликт worklog
+  разрешён, обе записи сохранены; гейты перепрогнаны на объединённом
+  коде: fmt/clippy/test 46 бинар/wasm/mcp-wasm — зелёные).
+- **CI по merge SHA e614046fd667fba75377d5f559c7901447f5af85 — ПОЛНОСТЬЮ
+  ЗЕЛЁНЫЙ (12/12):** build, gates ubuntu/macos/windows, wasm-check,
+  web/app+docs, licenses, report-build-status, deploy, artifacts ×3.
+- **Итог FR-049:** 6 встроенных схем с oracle-значениями, галерея
+  (Ctrl+T / меню «?» / empty-state / CTA шага 7 онбординга), web
+  `?template=`; PRD-0008 T1–T5 закрыты; DoD §15 выполнен (кроме ручной
+  приёмки владельцем и release-замера G7 — по готовности демо-гейта).
