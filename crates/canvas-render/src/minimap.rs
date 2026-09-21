@@ -156,13 +156,24 @@ impl MinimapInput {
             nodes.push(minimap_node);
         }
         let mut edges = Vec::with_capacity(canvas.edges.len());
+        // FR-042 (F-11): дедуп по паре концов — пучок рёбер на миникарте
+        // одна линия; A→B и B→A визуально совпадают, дедуп неупорядоченный.
+        let mut seen: std::collections::HashSet<(&str, &str)> =
+            std::collections::HashSet::with_capacity(canvas.edges.len());
         for edge in &canvas.edges {
             // Связь на отсутствующую или пропущенную ноду в снимок не попадает.
             if let (Some(from), Some(to)) = (
                 centers.get(edge.from_node.as_str()),
                 centers.get(edge.to_node.as_str()),
             ) {
-                edges.push((*from, *to));
+                let key = if edge.from_node.as_str() <= edge.to_node.as_str() {
+                    (edge.from_node.as_str(), edge.to_node.as_str())
+                } else {
+                    (edge.to_node.as_str(), edge.from_node.as_str())
+                };
+                if seen.insert(key) {
+                    edges.push((*from, *to));
+                }
             }
         }
         Self {
@@ -965,6 +976,28 @@ mod tests {
         );
         assert_eq!(input.edges.len(), 1, "edges на ghost-ноды пропущены");
         assert_eq!(input.edges[0], ([10.0, 10.0], [110.0, 10.0]));
+    }
+
+    /// FR-042 (F-11): дедуп рёбер снапшота по паре концов — пучок → одна
+    /// линия; A→B и B→A (неупорядоченная пара) — тоже одна линия.
+    #[test]
+    fn from_canvas_dedups_bundle_edges() {
+        let input = MinimapInput::from_canvas(
+            &canvas(
+                vec![
+                    node_of_type("file", "a", 0.0, 0.0, 20.0, 20.0),
+                    node_of_type("text", "b", 100.0, 0.0, 20.0, 20.0),
+                ],
+                vec![
+                    Edge::new("e1", "a", None, "b", None),
+                    Edge::new("e2", "a", None, "b", None),
+                    Edge::new("e3", "b", None, "a", None),
+                    Edge::new("e4", "a", None, "b", None),
+                ],
+            ),
+            [0.0, 0.0, 150.0, 50.0],
+        );
+        assert_eq!(input.edges.len(), 1, "пучок из 4 рёбер — одна линия");
     }
 
     /// from_canvas: ноды с NaN-координатами и отрицательной шириной

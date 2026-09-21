@@ -869,6 +869,18 @@ fn polyline_dots(
     }
 }
 
+/// FR-042 (E2): контекст агрегации пучков кадра — индекс сцены + ребро
+/// под курсором (live-индекс, hover пучка). `None` вместо контекста —
+/// агрегация выключена (настройка F-13): поведение байт-в-байт прежнее
+/// (регресс-щит, инвариант 5 FR-042).
+pub struct BundleContext<'a> {
+    /// Индекс пучков сцены (`SceneState.bundles`, перестраивается в
+    /// `recompute_flow`).
+    pub index: &'a canvas_core::EdgeBundleIndex,
+    /// Ребро под курсором (индекс в `canvas.edges`), если оно в пучке.
+    pub hover: Option<usize>,
+}
+
 /// Инстансы всех связей канваса (T8): кривые-«чётки» и стрелки.
 /// Выделенная связь (`selected` — индекс в `canvas.edges`) ярче и толще.
 /// Стиль/толщина — из полей связи `edgeStyle`/`edgeWidth` (дефолты: сплошная,
@@ -888,6 +900,34 @@ pub fn build_edge_instances(
     hidden_edge: Option<usize>,
     hidden_ids: &std::collections::HashSet<&str>,
 ) -> Vec<CardInstance> {
+    build_edge_instances_ctx(
+        canvas,
+        selected,
+        avoid,
+        focus,
+        hidden_edge,
+        hidden_ids,
+        None,
+    )
+}
+
+/// FR-042 (E2): вариант с контекстом агрегации. Пучок веса ≥ 2 рисуется
+/// ОДНОЙ агрегированной линией по полилинии доминирующего ребра с
+/// непрерывной толщиной `bundle_thickness(weight)` (LOD-0, инвариант F-2);
+/// доминанта — приоритет user-color > value > прочее. Выделение/hover
+/// любого ребра пучка подсвечивают агрегированную линию бампом +1.0;
+/// фокус (T23) — OR-семантика по пучку (инвариант F-12). Если доминанта
+/// скрыта (drag rebind, CR-002) — пучок на кадр рисуется по-прежнему
+/// индивидуально. Одиночные рёбра (вес 1) — прежний путь без изменений.
+pub fn build_edge_instances_ctx(
+    canvas: &canvas_core::Canvas,
+    selected: Option<usize>,
+    avoid: bool,
+    focus: &FocusView,
+    hidden_edge: Option<usize>,
+    hidden_ids: &std::collections::HashSet<&str>,
+    bundles: Option<&BundleContext<'_>>,
+) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
         // CR-002: перепривязываемая связь скрыта — её место занимает
@@ -901,6 +941,56 @@ pub fn build_edge_instances(
             || hidden_ids.contains(edge.to_node.as_str())
         {
             continue;
+        }
+        // FR-042 (LOD-0): агрегированная линия пучка
+        if let Some(ctx) = bundles {
+            if let Some(bundle) = ctx.index.bundle_of_edge(index) {
+                if bundle.weight >= 2 {
+                    let dominant = ctx.index.dominant_edge(canvas, bundle);
+                    let dominant_hidden = dominant.is_some_and(|d| hidden_edge == Some(d));
+                    if !dominant_hidden {
+                        if dominant != Some(index) {
+                            // Линию пучка рисует доминирующее ребро
+                            continue;
+                        }
+                        let Some(points) =
+                            canvas_core::edge_polyline(canvas, edge, avoid, EDGE_RENDER_SEGMENTS)
+                        else {
+                            continue;
+                        };
+                        let in_selection = selected.is_some_and(|s| bundle.edges.contains(&s));
+                        let in_hover = ctx.hover.is_some_and(|h| bundle.edges.contains(&h));
+                        let in_focus =
+                            focus.dim > 0.0 && bundle.edges.iter().any(|e| focus.has_edge(*e));
+                        let mut d = canvas_core::bundle_thickness(bundle.weight);
+                        if in_selection {
+                            d += EDGE_DOT_SELECTED - EDGE_DOT;
+                        }
+                        if in_hover {
+                            d += 1.0;
+                        }
+                        let mut fill = parse_color_raw(edge.color.as_deref().unwrap_or_default())
+                            .unwrap_or(if edge.flow_kind() == canvas_core::FlowKind::Value {
+                                FLOW_EDGE_COLOR
+                            } else {
+                                EDGE_COLOR
+                            });
+                        let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
+                        if in_focus {
+                            // OR-семантика: пучок подсвечен, если в фокусе
+                            // хотя бы одно его ребро; альфа дышит пульсом
+                            fill = FOCUS_EDGE_COLOR;
+                            fill[3] = 0.75 + 0.25 * focus.pulse;
+                            d += FOCUS_EDGE_BOOST + focus.pulse * FOCUS_EDGE_PULSE_BOOST;
+                        } else if focus.dim > 0.0 {
+                            fill[3] *= focus.dim_factor();
+                        }
+                        polyline_dots(&points, style, d, fill, true, &mut out);
+                        continue;
+                    }
+                    // Доминанта скрыта (rebind) — рисуем пучок индивидуально
+                }
+            }
         }
         let Some(points) = canvas_core::edge_polyline(canvas, edge, avoid, EDGE_RENDER_SEGMENTS)
         else {
@@ -935,6 +1025,52 @@ pub fn build_edge_instances(
                 fill[3] *= focus.dim_factor();
             }
             (fill, edge.thickness.unwrap_or_default().dot())
+        };
+        let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
+        polyline_dots(&points, style, d, fill, true, &mut out);
+    }
+    out
+}
+
+/// FR-042 (E3): инстансы рёбер среза main stage с веером — stage-локальные
+/// px (позиции слайса); вызывающий переводит их в мир реальной камеры
+/// через [`crate::stage::StageTransform::instance_to_world`]. Толщина всех
+/// линий — `bundle_thickness(weight)` (веер рассчитан на этот шаг).
+/// Выделение/hover ребра stage — бамп и цвет рамки выделения.
+pub fn build_stage_edge_instances(
+    slice: &canvas_core::Canvas,
+    fan: &[f32],
+    weight: usize,
+    selected: Option<usize>,
+    hovered: Option<usize>,
+) -> Vec<CardInstance> {
+    let mut out = Vec::new();
+    let mut d = canvas_core::bundle_thickness(weight.max(1));
+    if selected.is_some() {
+        d += EDGE_DOT_SELECTED - EDGE_DOT;
+    }
+    if hovered.is_some() {
+        d += 1.0;
+    }
+    for (index, edge) in slice.edges.iter().enumerate() {
+        let Some(points) = canvas_core::stage_edge_points(
+            slice,
+            index,
+            fan.get(index).copied().unwrap_or(0.0),
+            EDGE_RENDER_SEGMENTS,
+        ) else {
+            continue;
+        };
+        let fill = if selected == Some(index) || hovered == Some(index) {
+            SELECTION_BORDER
+        } else {
+            parse_color_raw(edge.color.as_deref().unwrap_or_default()).unwrap_or(
+                if edge.flow_kind() == canvas_core::FlowKind::Value {
+                    FLOW_EDGE_COLOR
+                } else {
+                    EDGE_COLOR
+                },
+            )
         };
         let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
         polyline_dots(&points, style, d, fill, true, &mut out);
@@ -2114,6 +2250,145 @@ mod tests {
         assert_ne!(
             severity_text(AnalysisSeverity::Critical, &dark),
             severity_text(AnalysisSeverity::Overload, &dark)
+        );
+    }
+}
+
+// --- FR-042 (E2): тесты агрегации пучков ---
+
+#[cfg(test)]
+mod fr042_tests {
+    use super::*;
+    use canvas_core::{EdgeBundleIndex, Node};
+
+    fn no_hidden() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
+    /// Сцена: пара a→b с 3 рёбрами (пучок) + одиночное a→c.
+    fn scene() -> canvas_core::Canvas {
+        let mut canvas = canvas_core::Canvas::default();
+        canvas.nodes.push(Node::text("a", "A", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "B", 400.0, 0.0));
+        canvas.nodes.push(Node::text("c", "C", 0.0, 300.0));
+        let e = |id: &str, from: &str, to: &str| canvas_core::Edge::new(id, from, None, to, None);
+        canvas.add_edge(e("e1", "a", "b"));
+        canvas.add_edge(e("e2", "a", "b"));
+        canvas.add_edge(e("e3", "a", "b"));
+        canvas.add_edge(e("e4", "a", "c"));
+        canvas
+    }
+
+    /// Инвариант 5 (регресс-щит): bundles = None — вывод байт-в-байт
+    /// идентичен прежнему билдеру.
+    #[test]
+    fn none_context_matches_baseline() {
+        let canvas = scene();
+        let via_wrapper =
+            build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
+        let via_ctx = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            None,
+        );
+        assert_eq!(via_wrapper.len(), via_ctx.len());
+        assert_eq!(via_wrapper[0].pos, via_ctx[0].pos);
+    }
+
+    /// Инвариант F-2: пучок из 3 рёбер рисуется ОДНОЙ линией с толщиной
+    /// bundle_thickness(3); одиночное ребро — прежняя толщина.
+    #[test]
+    fn bundle_drawn_once_with_weight_thickness() {
+        let canvas = scene();
+        let baseline =
+            build_edge_instances(&canvas, None, false, &FocusView::EMPTY, None, &no_hidden());
+        let index = EdgeBundleIndex::build(&canvas);
+        let ctx = BundleContext {
+            index: &index,
+            hover: None,
+        };
+        let aggregated = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            Some(&ctx),
+        );
+        assert!(
+            aggregated.len() < baseline.len(),
+            "пучок ужимается в одну линию: {} < {}",
+            aggregated.len(),
+            baseline.len()
+        );
+        // Вклад пары (3 ребра) сокращается до ОДНОЙ линии: вклад одиночного
+        // ребра a→c одинаков в обоих выводах (индивидуальный путь) —
+        // вычитаем его и сравниваем вклад пары
+        let mut only_c = canvas_core::Canvas::default();
+        only_c.nodes.push(Node::text("a", "A", 0.0, 0.0));
+        only_c.nodes.push(Node::text("c", "C", 0.0, 300.0));
+        only_c.add_edge(canvas_core::Edge::new("e4", "a", None, "c", None));
+        let single_len =
+            build_edge_instances(&only_c, None, false, &FocusView::EMPTY, None, &no_hidden()).len();
+        let base_pair = baseline.len() - single_len;
+        let agg_pair = aggregated.len() - single_len;
+        assert!(
+            agg_pair < base_pair,
+            "пучок из 3 рёбер -> одна линия: {agg_pair} < {base_pair}"
+        );
+        assert!(agg_pair > 0, "линия пучка отрисована");
+        // Толщина первой бусины пучка = bundle_thickness(3)
+        let expected = canvas_core::bundle_thickness(3);
+        assert!((aggregated[0].size[0] - expected).abs() < 1e-4);
+    }
+
+    /// Инвариант F-4: user-color доминанты перекрашивает агрегированную
+    /// линию; выделение ребра пучка — бамп толщины.
+    #[test]
+    fn bundle_color_and_selection_bump() {
+        let mut canvas = scene();
+        if let Some(edge) = canvas.edges.iter_mut().find(|e| e.id == "e2") {
+            edge.color = Some("#ff8000".to_owned());
+        }
+        let index = EdgeBundleIndex::build(&canvas);
+        let ctx = BundleContext {
+            index: &index,
+            hover: None,
+        };
+        let plain = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            Some(&ctx),
+        );
+        // Доминанта — user-color ребро e2: цвет линии #ff8000
+        assert!((plain[0].fill[0] - 1.0).abs() < 1e-3);
+        assert!((plain[0].fill[1] - 128.0 / 255.0).abs() < 1e-3);
+        // Выделение ЛЮБОГО ребра пучка (e3 — не доминанта) — бамп +1.0
+        let e3_index = canvas.edges.iter().position(|e| e.id == "e3").unwrap();
+        let bumped = build_edge_instances_ctx(
+            &canvas,
+            Some(e3_index),
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            Some(&ctx),
+        );
+        assert!(
+            bumped[0].size[0] > plain[0].size[0],
+            "выделение утолщает агрегированную линию"
+        );
+        assert!(
+            (bumped[0].size[0] - plain[0].size[0] - (EDGE_DOT_SELECTED - EDGE_DOT)).abs() < 1e-4
         );
     }
 }

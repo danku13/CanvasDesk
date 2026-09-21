@@ -75,6 +75,7 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         whatif_badge: color("whatif_badge"),
         error: color("error"),
         hud: color("hud"),
+        stage_dim: rgba("stage_dim"),
     }
 }
 

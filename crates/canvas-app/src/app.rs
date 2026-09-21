@@ -61,10 +61,12 @@ use canvas_core::expr::{self, ExprOutcome};
 use canvas_core::flow::{self, FlowKind};
 use canvas_core::time::Instant;
 use canvas_core::{
-    analyze, apply_file_events, edge_at, focus_set, nearest_side, path_matches, port_at,
-    resolve_node_path, watched_dirs, AnalysisState, Canvas, CanvasStorage, ClipboardBackend, Edge,
-    FileEvent, FocusSeed, GridStyle, Language, Node, NodeChange, NodeKind, Priority, SearchBackend,
-    Settings, Side, SnapAnchor, SpatialIndex, Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
+    analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
+    nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at, stage_edge_fan,
+    stage_fan_spacing, stage_layout, watched_dirs, AnalysisState, Canvas, CanvasStorage,
+    ClipboardBackend, Edge, FileEvent, FocusSeed, GridStyle, Language, Node, NodeChange, NodeKind,
+    Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex, StageLayout, Theme,
+    ThumbBackend, WatchBackend, COLLISION_GAP,
 };
 // M8/W3 (wasm-port §3.1): протокол поиска переехал в core (натив — FTS5 в
 // shell, web/тесты — MemSearch); App общается только через трейт SearchBackend
@@ -78,7 +80,8 @@ use canvas_render::animate::{
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{
-    drop_ghost, template_icon_quads, CardInstance, FocusView, HEADER_HEIGHT,
+    build_stage_edge_instances, card_instance, drop_ghost, template_icon_quads, title_for,
+    BundleContext, CardInstance, FocusView, HEADER_HEIGHT,
 };
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
@@ -100,7 +103,9 @@ use canvas_render::text::{
     BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
-use canvas_render::{Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection};
+use canvas_render::{
+    Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection, StageTransform,
+};
 use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
     SceneState,
@@ -897,6 +902,115 @@ struct WhatIfOverrideRow {
     stale: Option<String>,
 }
 
+/// Состояние main stage (FR-042, E3): открытая детализация пучка.
+/// Срез канваса — 2 ноды + все рёбра пучка (клон; позиции нод переписаны
+/// раскладкой [`canvas_core::stage_layout`], stage-локальные px); рёбра
+/// среза сохраняют оригинальные id — выделение отображается в живую
+/// модель через `edges` (индексы среза ↔ live-индексы canvas.edges).
+struct MainStageState {
+    /// Упорядоченная пара концов пучка `(from_node, to_node)`.
+    key: (String, String),
+    /// Live-индексы рёбер пучка в порядке рёбер среза.
+    edges: Vec<usize>,
+    /// Срез: 2 ноды (раскладка stage) + рёбра пучка.
+    slice: Canvas,
+    /// Веер перпендикулярных смещений рёбер среза (stage px).
+    fan: Vec<f32>,
+    /// Масштаб сжатия раскладки (обновляется на кадре в `relayout`).
+    scale: f32,
+}
+
+impl MainStageState {
+    /// Открыть main stage для пучка: срез + раскладка + веер. None —
+    /// пучок вырожден (нет доминанты/нод) или рёбра < 2.
+    fn open(
+        canvas: &Canvas,
+        index: &canvas_core::EdgeBundleIndex,
+        edge_index: usize,
+    ) -> Option<Self> {
+        let bundle = index.bundle_of_edge(edge_index)?;
+        if bundle.weight < 2 {
+            return None;
+        }
+        let key = index.bundle_key_of_edge(edge_index)?;
+        let key = (key.0.to_owned(), key.1.to_owned());
+        let from = canvas.node(&key.0)?;
+        let to = canvas.node(&key.1)?;
+        // Доминанта: её цвет/стиль/геометрия несут агрегированную линию
+        // (проверка валидности: доминанта должна существовать)
+        index.dominant_edge(canvas, bundle)?;
+        // Срез: клон нод + рёбер пучка; позиции раскладкой stage.
+        let mut slice = Canvas::default();
+        slice.nodes.push(from.clone());
+        slice.nodes.push(to.clone());
+        let mut edges = Vec::with_capacity(bundle.edges.len());
+        for &edge_idx in &bundle.edges {
+            let edge = canvas.edges.get(edge_idx)?.clone();
+            slice.edges.push(edge);
+            edges.push(edge_idx);
+        }
+        // Раскладка среза — на КАДРЕ (rect зависит от вьюпорта):
+        // MainStageState::relayout; здесь — нейтральные позиции, чтобы
+        // веер/полилинии были согласованы до первого кадра.
+        slice.nodes[0].x = 0.0;
+        slice.nodes[0].y = 0.0;
+        slice.nodes[1].x = slice.nodes[0].width + 200.0;
+        slice.nodes[1].y = 0.0;
+        let fan = stage_edge_fan(
+            slice.edges.len(),
+            stage_fan_spacing(slice.edges.len().max(2)),
+        );
+        Some(Self {
+            key,
+            edges,
+            slice,
+            fan,
+            scale: 1.0,
+        })
+    }
+
+    /// Переложить ноды среза по раскладке текущего вьюпорта (кадр):
+    /// rect зависит от размеров окна, масштаб ≤ 1 гарантирует умещение.
+    fn relayout(&mut self, viewport: [f32; 2]) -> StageLayout {
+        let rect = main_stage_rect(viewport);
+        let layout = stage_layout(
+            [self.slice.nodes[0].width, self.slice.nodes[0].height],
+            [self.slice.nodes[1].width, self.slice.nodes[1].height],
+            &rect,
+        );
+        self.slice.nodes[0].x = layout.source_pos[0];
+        self.slice.nodes[0].y = layout.source_pos[1];
+        self.slice.nodes[1].x = layout.target_pos[0];
+        self.slice.nodes[1].y = layout.target_pos[1];
+        self.scale = layout.scale;
+        layout
+    }
+
+    /// Валидность среза живой модели (инвариант 9 FR-042): все рёбра среза
+    /// живы и связывают те же концы; обе ноды живы. Фоновые мутации
+    /// (MCP graph_apply/undo) закрывают stage на следующем кадре.
+    fn valid(&self, canvas: &Canvas) -> bool {
+        for (slice_i, &live) in self.edges.iter().enumerate() {
+            let Some(edge) = canvas.edges.get(live) else {
+                return false;
+            };
+            let slice_edge = &self.slice.edges[slice_i];
+            if edge.from_node != slice_edge.from_node || edge.to_node != slice_edge.to_node {
+                return false;
+            }
+        }
+        if self.edges.len() != self.slice.edges.len() {
+            return false;
+        }
+        canvas.node(&self.key.0).is_some() && canvas.node(&self.key.1).is_some()
+    }
+
+    /// Live-индекс по индексу среза.
+    fn live_edge(&self, slice_index: usize) -> Option<usize> {
+        self.edges.get(slice_index).copied()
+    }
+}
+
 /// Состояние приложения: окно и рендерер создаются в `resumed`
 /// (идиома winit 0.30 — окно создаётся только на активном event loop).
 pub struct App {
@@ -969,6 +1083,13 @@ pub struct App {
     resizing: Option<usize>,
     /// Нода под курсором (T8): показываются порты для начала drag связи.
     hovered: Option<usize>,
+    /// FR-042 (E3): открытый main stage (детализация пучка). None — режим
+    /// выключен; Q6 — взаимоисключителен с полноэкранными оверлеями.
+    main_stage: Option<MainStageState>,
+    /// FR-042 (E2): ребро пучка под курсором (live-индекс) — hover-бамп
+    /// агрегированной линии; вычисляется на каждый кадр ввода (паттерн
+    /// `hovered`), в кэш не пишется.
+    bundle_hover: Option<usize>,
     /// FR-013 (правка 4): зоны наведения бейджей ошибок формульных строк с
     /// прошлого кадра (логические px + текст ошибки). Заполняется после
     /// рендера, используется в сборке оверлея кадра (тултип у курсора —
@@ -1242,6 +1363,9 @@ impl App {
             palette_seen: None,
             resizing: None,
             hovered: None,
+            // FR-042: main stage закрыт; hover пучка пуст
+            main_stage: None,
+            bundle_hover: None,
             expr_error_hits: Vec::new(),
             edge_drag: None,
             select_rect: None,
@@ -6646,6 +6770,16 @@ impl App {
             }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
+            // FR-042 (F-13): агрегация рендер/ввод читают на кадр
+            // (SceneView.bundles + гейты открытия stage); при выключении
+            // открытый stage закрывается (инвариант согласованности)
+            SettingsRow::EdgeAggregation => {
+                self.settings.edge_aggregation = !self.settings.edge_aggregation;
+                if !self.settings.edge_aggregation {
+                    self.close_main_stage();
+                    self.bundle_hover = None;
+                }
+            }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -7105,6 +7239,7 @@ impl App {
                         SettingsRow::SnapGuides => self.settings.snap_to_guides,
                         SettingsRow::SnapCollision => self.settings.snap_collision,
                         SettingsRow::FocusMode => self.settings.focus_mode,
+                        SettingsRow::EdgeAggregation => self.settings.edge_aggregation,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
@@ -7545,6 +7680,13 @@ impl App {
             && event.state == ElementState::Pressed
             && !event.repeat
         {
+            // FR-042 (E3, инвариант 8): первый Esc закрывает открытый
+            // main stage (Q6: при открытом stage прочие оверлеи закрыты —
+            // ветка однозначна)
+            if self.main_stage.take().is_some() {
+                self.request_redraw();
+                return;
+            }
             // FR-027: меню помощи — двухэтапный Esc (подменю → меню →
             // закрыто; семантика FR-026), просмотрщик закрывается одним Esc
             if let Some(menu) = self.help_menu.take() {
@@ -7621,6 +7763,13 @@ impl App {
                 self.request_redraw();
                 return;
             }
+        }
+        // FR-042 (E3, F-9/Q6): открытый main stage модален — любой другой
+        // ключ закрывает stage и глотается (правка/undo/оверлеи из stage
+        // недоступны; нужный оверлей откроется следующим нажатием)
+        if self.main_stage.take().is_some() {
+            self.request_redraw();
+            return;
         }
         // F1 — панель горячих клавиш (FR-004): раскладконезависимая
         // функциональная клавиша; внутри редактора/поиска не работает
@@ -7790,6 +7939,78 @@ impl App {
         }
     }
 
+    /// FR-042 (E3): составить подпись ребра в stage — адресация истока
+    /// (fromLine «строка N» / fromOutput), параметр-приёмник (toParam) и
+    /// текущее значение ребра (FR-014/FR-025/FR-029; для fromLine —
+    /// построчный результат Numi-листа источника).
+    fn stage_edge_label_text(&self, edge: &Edge) -> String {
+        let language = self.settings.language;
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(line) = edge.from_line {
+            parts.push(i18n::trf(
+                language,
+                keys::STAGE_LINE_LABEL,
+                &[("n", &(line + 1).to_string())],
+            ));
+        } else if let Some(output) = edge.from_output.as_deref() {
+            parts.push(output.to_owned());
+        }
+        if let Some(param) = edge.to_param.as_deref() {
+            parts.push(i18n::trf(
+                language,
+                keys::STAGE_PARAM_LABEL,
+                &[("param", param)],
+            ));
+        }
+        let value = match edge.from_line {
+            Some(line) => self
+                .scene
+                .expr_line_results
+                .get(&edge.from_node)
+                .and_then(|lines| lines.get(line))
+                .and_then(|outcome| outcome.as_ref())
+                .map(|outcome| match outcome {
+                    ExprOutcome::Ok(value) => value.to_string(),
+                    ExprOutcome::Err(msg) => msg.clone(),
+                }),
+            None => match self.scene.expr_results.get(&edge.from_node) {
+                Some(ExprOutcome::Ok(value)) => Some(value.to_string()),
+                Some(ExprOutcome::Err(msg)) => Some(msg.clone()),
+                None => None,
+            },
+        };
+        if let Some(value) = value {
+            parts.push(value);
+        }
+        parts.join(" · ")
+    }
+
+    /// FR-042 (E3): открыть main stage, если ребро — часть пучка веса ≥ 2
+    /// и агрегация включена (F-13). true — stage открыт (клик поглощён);
+    /// false — одиночное ребро/агрегация выключена (поведение прежнее).
+    fn try_open_main_stage(&mut self, edge_index: usize) -> bool {
+        if !self.settings.edge_aggregation {
+            return false;
+        }
+        match MainStageState::open(&self.scene.canvas, &self.scene.bundles, edge_index) {
+            Some(stage) => {
+                self.main_stage = Some(stage);
+                self.bundle_hover = None;
+                self.request_redraw();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// FR-042 (E3): закрыть main stage (Esc/клик по фону/перед открытием
+    /// оверлея — Q6). Выделение ребра сохраняется (AC-3.2).
+    fn close_main_stage(&mut self) {
+        if self.main_stage.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
     fn on_left_button(&mut self, state: ElementState) {
         self.left_pressed = state == ElementState::Pressed;
         // T15: первый клик по канвасу снимает WS_EX_NOACTIVATE — с этого
@@ -7846,6 +8067,33 @@ impl App {
                         }
                         Some(OnboardingButton::Skip) => self.defer_onboarding(),
                         None => {}
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                // FR-042 (E3, F-8/F-9): модальность main stage — клик вне
+                // rect закрывает (канвас клик не получает, инвариант 8:
+                // нода не создаётся, выделение не сбрасывается); внутри —
+                // выделение ребра среза (живой индекс), без правки (PoC —
+                // просмотр и выделение, non-goals PRD).
+                if self.main_stage.is_some() {
+                    let viewport = self.viewport_logical();
+                    let rect = main_stage_rect(viewport);
+                    if point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
+                        let stage = self.main_stage.as_ref().expect("stage открыт");
+                        let transform = StageTransform::new([rect.x, rect.y], stage.scale);
+                        let local = transform.unmap_point(self.cursor);
+                        // Допуск от толщины (F-5): max(EDGE_HIT_TOLERANCE, d/2 + 2)
+                        let tolerance = (bundle_thickness(stage.slice.edges.len()) / 2.0 + 2.0)
+                            .max(canvas_core::EDGE_HIT_TOLERANCE);
+                        let hit = stage_edge_at(&stage.slice, &stage.fan, local, tolerance)
+                            .and_then(|slice_i| stage.live_edge(slice_i));
+                        // Заимствование stage закончено — можно мутировать
+                        if let Some(live) = hit {
+                            self.selected = Some(Selection::Edge(live));
+                        }
+                    } else {
+                        self.main_stage = None;
                     }
                     self.request_redraw();
                     return;
@@ -8170,10 +8418,12 @@ impl App {
                     return;
                 }
                 // FR-027: кнопка «?» — тогл меню помощи (как ⚙ у настроек)
+                // Q6 FR-042: открытие оверлея закрывает main stage
                 if point_in_rect(
                     help_button_rect(self.settings.button_corner, viewport),
                     self.cursor,
                 ) {
+                    self.close_main_stage();
                     self.help_menu = match self.help_menu.take() {
                         Some(_) => None,
                         None => {
@@ -8191,6 +8441,8 @@ impl App {
                     button_rect(self.settings.button_corner, viewport),
                     self.cursor,
                 ) {
+                    // Q6 FR-042: открытие настроек закрывает main stage
+                    self.close_main_stage();
                     self.settings_open = !self.settings_open;
                     self.settings_dropdown.reset();
                     self.request_redraw();
@@ -8684,7 +8936,16 @@ impl App {
                     let avoid = self.settings.edges_avoid_nodes;
                     match hit {
                         None => match edge_at(&self.scene.canvas, world, avoid) {
-                            Some(edge_index) => self.begin_editing_edge(edge_index),
+                            Some(edge_index) => {
+                                // FR-042 (E3): двойной клик по пучку — main
+                                // stage (лейбл-редактор у пучка неопределён;
+                                // подписи отдельных рёбер видны в stage);
+                                // одиночное ребро — лейбл, как раньше.
+                                if self.try_open_main_stage(edge_index) {
+                                    return;
+                                }
+                                self.begin_editing_edge(edge_index);
+                            }
                             None => {
                                 let index = self.create_note_at(world);
                                 self.begin_editing(index);
@@ -8819,10 +9080,19 @@ impl App {
                     // в допуске EDGE_HIT_TOLERANCE, иначе сброс выделения.
                     // Рамка (CR-001): drag с пустого места тянет выделение —
                     // финал на отпускании (порог клик/драг отсекает клики)
+                    // FR-042 (E3, F-5/F-6): клик по агрегированной линии
+                    // пучка — открытие main stage; одиночное ребро —
+                    // выделение, как раньше (F-10)
                     None => {
-                        self.selected =
+                        if let Some(edge_index) =
                             edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
-                                .map(Selection::Edge);
+                        {
+                            if !self.try_open_main_stage(edge_index) {
+                                self.selected = Some(Selection::Edge(edge_index));
+                            }
+                        } else {
+                            self.selected = None;
+                        }
                         self.selected_nodes.clear();
                         self.select_rect = Some((world, world, self.cursor));
                     }
@@ -9038,10 +9308,17 @@ impl App {
             }
             // Связь: выделить → палитра связи (Стиль/Толщина/Цвет);
             // мимо — меню пустого канваса или закрытие (десктоп-меню T17)
+            // FR-042 (E3): ПКМ по агрегированной линии — main stage (единый
+            // вход AC-3.1; палитра применяется к конкретному ребру изнутри
+            // stage); одиночное ребро — выделение + палитра, как раньше
             None => {
                 let avoid = self.settings.edges_avoid_nodes;
                 match edge_at(&self.scene.canvas, world, avoid) {
                     Some(edge_index) => {
+                        if self.try_open_main_stage(edge_index) {
+                            self.request_redraw();
+                            return;
+                        }
                         self.selected = Some(Selection::Edge(edge_index));
                         self.selected_nodes.clear();
                         self.menu = None;
@@ -9218,7 +9495,7 @@ impl App {
             self.request_redraw();
             return;
         }
-        if self.panning() {
+        if self.panning() && self.main_stage.is_none() {
             let delta = [logical[0] - self.cursor[0], logical[1] - self.cursor[1]];
             self.camera.pan(delta);
             self.request_redraw();
@@ -9330,6 +9607,30 @@ impl App {
                     // следует за курсором
                     self.request_redraw();
                 }
+                // FR-042 (E2): BundleHover — ребро пучка веса ≥ 2 под
+                // курсором (hover-бамп агрегированной линии + курсор);
+                // вычисляется на кадр ввода, в кэш не пишется. Нода под
+                // курсором / открытый stage / drag — hover пучка нет.
+                let bundle_hover = if self.main_stage.is_none()
+                    && self.edge_drag.is_none()
+                    && self.settings.edge_aggregation
+                    && hovered.is_none()
+                {
+                    edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes).filter(
+                        |&i| {
+                            self.scene
+                                .bundles
+                                .bundle_of_edge(i)
+                                .is_some_and(|b| b.weight >= 2)
+                        },
+                    )
+                } else {
+                    None
+                };
+                if bundle_hover != self.bundle_hover {
+                    self.bundle_hover = bundle_hover;
+                    self.request_redraw();
+                }
             }
         }
         // Аффорданс курсора (Grabbing/Text/NwseResize/Arrow) — после всех
@@ -9338,6 +9639,11 @@ impl App {
     }
 
     fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // FR-042 (E3, F-9): открытое main stage модально — колесо глушится
+        // (пан/зум канваса в stage недоступны, инвариант 8)
+        if self.main_stage.is_some() {
+            return;
+        }
         // Ревизия FR-025: колесо над flyout свёрнутой палитры прокручивает
         // список шаблонов, а не панорамирует канвас (знак — как у списков:
         // колесо от себя, y<0, увеличивает scroll_top)
@@ -9413,6 +9719,10 @@ impl App {
     }
 
     fn on_pinch(&mut self, delta: f64) {
+        // FR-042 (E3, F-9): пинч при открытом stage глушится
+        if self.main_stage.is_some() {
+            return;
+        }
         // Пинч над screen-space UI — холст не зумит (как колесо выше)
         if self.cursor_over_screen_surface() {
             return;
@@ -10841,6 +11151,145 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Center,
                     });
                 }
+                // FR-042 (E3): main stage — валидация среза (инвариант 9:
+                // фоновые мутации MCP/undo закрывают), затемнение фона,
+                // подложка/рамка и контент среза (рёбра веера, карточки).
+                // Инстансы — в overlay_instances (world-tail поверх карточек
+                // канваса); тексты — в owned_texts (screen-space, константный
+                // размер — стиль модальностей FR-039).
+                if let Some(stage) = self.main_stage.as_mut() {
+                    if !stage.valid(&self.scene.canvas) {
+                        self.main_stage = None;
+                    }
+                }
+                // Раскладка среза — единственный mut-заём stage (кадр);
+                // далее только чтение — совместимо с методами self.tr/….
+                let stage_viewport = self.viewport_logical();
+                let relaid = self
+                    .main_stage
+                    .as_mut()
+                    .map(|stage| stage.relayout(stage_viewport));
+                if let (Some(stage), Some(layout)) = (self.main_stage.as_ref(), relaid) {
+                    let palette = ThemeColors::from_theme(self.settings.theme);
+                    let viewport = self.viewport_logical();
+                    let stage_rect = main_stage_rect(viewport);
+                    let transform = StageTransform::new([stage_rect.x, stage_rect.y], layout.scale);
+                    let zoom = self.camera.zoom();
+                    let camera = &self.camera;
+                    let to_world = |screen: Vec2| camera.screen_to_world(screen, viewport);
+                    // 1) Затемнение фона — альфа-аппроксимация §7.5 (тёмная
+                    // 0.6 / светлая 0.5 из темы), полный вьюпорт
+                    overlay_instances.push(CardInstance {
+                        pos: to_world([0.0, 0.0]),
+                        size: [viewport[0] / zoom, viewport[1] / zoom],
+                        fill: palette.stage_dim,
+                        border: [0.0; 4],
+                        params: [0.0, 0.0, 0.0, 1.0],
+                    });
+                    // 2) Подложка и рамка stage — стиль модалок FR-039
+                    // (menu_fill + рамка панели, радиус 12)
+                    overlay_instances.push(CardInstance {
+                        pos: to_world([stage_rect.x, stage_rect.y]),
+                        size: [stage_rect.w / zoom, stage_rect.h / zoom],
+                        fill: palette.menu_fill,
+                        border: [0.22, 0.24, 0.30, 0.9],
+                        params: [12.0 / zoom, 0.0, 0.0, 1.0],
+                    });
+                    // 3) Рёбра среза веером (stage-локальные px → мир);
+                    // выделение ребра среза — live-индекс из Selection
+                    let selected_slice = self.selected.and_then(|sel| match sel {
+                        Selection::Edge(live) => stage.edges.iter().position(|&e| e == live),
+                        Selection::Node(_) => None,
+                    });
+                    for inst in build_stage_edge_instances(
+                        &stage.slice,
+                        &stage.fan,
+                        stage.slice.edges.len(),
+                        selected_slice,
+                        None,
+                    ) {
+                        overlay_instances
+                            .push(transform.instance_to_world(&inst, camera, viewport));
+                    }
+                    // 4) Карточки обеих нод (выделенная — рамка выделения)
+                    for node in stage.slice.nodes.iter() {
+                        let live_node =
+                            self.scene.canvas.nodes.iter().position(|n| n.id == node.id);
+                        let is_selected = live_node.is_some_and(|idx| {
+                            self.selected == Some(Selection::Node(idx))
+                                || self.selected_nodes.contains(&idx)
+                        });
+                        let inst = transform.instance_to_world(
+                            &card_instance(node, is_selected, &palette),
+                            camera,
+                            viewport,
+                        );
+                        overlay_instances.push(inst);
+                        // Заголовок ноды — screen-space текст (читаем при
+                        // любом зуме; гейт LOD не нужен — stage детален)
+                        let title = title_for(node);
+                        if title.is_empty() {
+                            continue;
+                        }
+                        let origin = transform.map_point([node.x + 10.0, node.y + 6.0]);
+                        owned_texts.push(OwnedScreenText {
+                            text: title,
+                            origin,
+                            width: transform.map_size(node.width) - 20.0,
+                            font_size: 13.0,
+                            color: palette.title,
+                            align: TextAlign::Left,
+                        });
+                    }
+                    // 5) Подписи рёбер веера: адресация fromLine/fromOutput/
+                    // toParam (FR-025/FR-029) + текущее значение ребра —
+                    // детализация, ради которой существует stage (US-2)
+                    for (i, edge) in stage.slice.edges.iter().enumerate() {
+                        let Some(points) =
+                            canvas_core::stage_edge_points(&stage.slice, i, stage.fan[i], 24)
+                        else {
+                            continue;
+                        };
+                        let mid = points[points.len() / 2];
+                        let origin = transform.map_point(mid);
+                        owned_texts.push(OwnedScreenText {
+                            text: self.stage_edge_label_text(edge),
+                            origin: [origin[0] - 120.0, origin[1] - 22.0],
+                            width: 240.0,
+                            font_size: 12.0,
+                            color: palette.edge_label,
+                            align: TextAlign::Center,
+                        });
+                    }
+                    // 6) Заголовок, бейдж ×N и подсказка Esc (i18n, F-3/§7.2)
+                    owned_texts.push(OwnedScreenText {
+                        text: self.tr(keys::STAGE_TITLE).to_owned(),
+                        origin: transform.map_point([14.0, 10.0]),
+                        width: 240.0,
+                        font_size: 13.0,
+                        color: palette.title,
+                        align: TextAlign::Left,
+                    });
+                    owned_texts.push(OwnedScreenText {
+                        text: format!("×{}", stage.slice.edges.len()),
+                        origin: [
+                            stage_rect.x + stage_rect.w - 14.0 - 160.0,
+                            stage_rect.y + 10.0,
+                        ],
+                        width: 160.0,
+                        font_size: 14.0,
+                        color: palette.title,
+                        align: TextAlign::Center,
+                    });
+                    owned_texts.push(OwnedScreenText {
+                        text: self.tr(keys::STAGE_HINT).to_owned(),
+                        origin: [stage_rect.x + 40.0, stage_rect.y + stage_rect.h - 26.0],
+                        width: stage_rect.w - 80.0,
+                        font_size: 12.0,
+                        color: palette.hud,
+                        align: TextAlign::Center,
+                    });
+                }
                 let screen_texts: Vec<ScreenText> = owned_texts
                     .iter()
                     .map(|t| ScreenText {
@@ -11110,6 +11559,13 @@ impl ApplicationHandler<AppEvent> for App {
                     None
                 };
                 if let Some(renderer) = self.renderer.as_mut() {
+                    // FR-042 (E2): контекст агрегации кадра — индекс сцены +
+                    // hover пучка; None при выключенной агрегации (F-13)
+                    let bundle_ctx = self.settings.edge_aggregation.then_some(BundleContext {
+                        index: &self.scene.bundles,
+                        hover: self.bundle_hover,
+                    });
+                    let bundle_ctx = bundle_ctx.as_ref();
                     // FR-013 (правка 4): живые построчные результаты (Numi —
                     // результаты по ходу набора): считаем из текста СЕССИИ
                     // на каждый кадр (дёшево: парсинг только формульных
@@ -11145,6 +11601,9 @@ impl ApplicationHandler<AppEvent> for App {
                         whatif_nodes: &self.scene.whatif_nodes,
                         analysis: analysis_view,
                         analysis_overlay: self.settings.bottleneck_overlay,
+                        // FR-042 (E2): контекст агрегации пучков кадра
+                        // (F-13: выкл — None, поведение байт-в-байт прежнее)
+                        bundles: bundle_ctx,
                     };
                     match renderer.render(
                         &self.camera,

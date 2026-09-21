@@ -13,8 +13,8 @@ use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, Expr
 use canvas_core::flow::{self, FlowKind, FlowOutputs};
 use canvas_core::time::Instant;
 use canvas_core::{
-    analyze, AnalysisState, Canvas, CanvasStorage, FsCanvasStorage, Node, Scenario, SpatialIndex,
-    StaleOverride,
+    analyze, AnalysisState, Canvas, CanvasStorage, EdgeBundleIndex, FsCanvasStorage, Node,
+    Scenario, SpatialIndex, StaleOverride,
 };
 
 use crate::measure::{ensure_result_reserve, formula_line_indices};
@@ -244,6 +244,12 @@ pub struct SceneState {
     /// строки для рендера. Runtime-кэш (не сериализуется), пересчитывается
     /// в `recompute_flow` вместе с результатами потока.
     pub param_spills: HashMap<String, Vec<SpillView>>,
+    /// FR-042 (E2): индекс пучков рёбер — группировка по упорядоченной паре
+    /// концов для LOD-0 агрегации и main stage. Runtime-кэш (не
+    /// сериализуется, инвариант «формат .canvas не расширяется»);
+    /// перестраивается в хвосте [`SceneState::recompute_flow`] — единой
+    /// точке синхронизации мутаций (O(edges) поверх пересчёта потока).
+    pub bundles: EdgeBundleIndex,
     /// FR-017 (CP6): what-if режим активен (нижний бар, override-поле
     /// вместо правки базы). Runtime-флаг — в `.canvas` не пишется.
     pub whatif_active: bool,
@@ -285,6 +291,8 @@ impl SceneState {
     /// подставит FS Access/OPFS (W6), тесты — `MemStorage`.
     pub fn with_storage(canvas: Canvas, path: PathBuf, storage: Arc<dyn CanvasStorage>) -> Self {
         let spatial = SpatialIndex::build(&canvas);
+        // FR-042: первичный индекс пучков (до переезда canvas в структуру)
+        let bundles = EdgeBundleIndex::build(&canvas);
         // FR-017: сценарии what-if — загрузка persisted `canvasdesk.whatif`
         let scenarios = canvas_core::whatif::scenarios_from_canvas(&canvas);
         let mut scene = Self {
@@ -297,6 +305,7 @@ impl SceneState {
             expr_results: ExprResults::new(),
             expr_line_results: ExprLineResults::new(),
             param_spills: HashMap::new(),
+            bundles,
             whatif_active: false,
             scenarios,
             active_scenario: None,
@@ -344,6 +353,9 @@ impl SceneState {
                     // FlowSolutions детекции не на чем (честное отсутствие, не
                     // ложное «всё здорово»).
                     self.analysis.clear();
+                    // FR-042: кэш пучков — в обеих ветках выхода пересчёта
+                    // (мутация возможна и при цикле потока)
+                    self.bundles = EdgeBundleIndex::build(&self.canvas);
                     self.apply_result_reserve();
                     return;
                 }
@@ -447,6 +459,10 @@ impl SceneState {
         );
         // CR-012: ленивый refit высоты — резерв футера результата.
         self.apply_result_reserve();
+        // FR-042 (E2): перестройка индекса пучков — единственная точка
+        // синхронизации (хвост recompute_flow): все мутации топологии
+        // завершаются пересчётом потока; O(edges) поверх него, вне кадра.
+        self.bundles = EdgeBundleIndex::build(&self.canvas);
     }
 
     /// FR-017: собрать what-if представления нод активного сценария
