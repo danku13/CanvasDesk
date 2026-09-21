@@ -186,7 +186,11 @@ impl SurfaceRegistry {
 
     /// Видимые при данном вьюпорте поверхности (hide-политика деградации;
     /// F-11 c precursor).
-    pub fn visible_at(&self, viewport_w: f32, viewport_h: f32) -> impl Iterator<Item = &SurfaceDecl> {
+    pub fn visible_at(
+        &self,
+        viewport_w: f32,
+        viewport_h: f32,
+    ) -> impl Iterator<Item = &SurfaceDecl> {
         self.decls
             .iter()
             .filter(move |d| !d.degradation.hidden_at(viewport_w, viewport_h))
@@ -226,17 +230,20 @@ mod tests {
         let mut reg = SurfaceRegistry::new();
         reg.add(panel("whatif"));
         reg.add(modal("gallery"));
-        reg.add(SurfaceDecl::new("toast", UiLayer::Toasts, CapturePolicy::Passive));
+        reg.add(SurfaceDecl::new(
+            "toast",
+            UiLayer::Toasts,
+            CapturePolicy::Passive,
+        ));
         reg.add(panel("search"));
         let bands = reg.draw_bands();
         let layers: Vec<UiLayer> = bands.iter().map(|(l, _)| *l).collect();
-        assert_eq!(layers, vec![UiLayer::Panels, UiLayer::Modals, UiLayer::Toasts]);
+        assert_eq!(
+            layers,
+            vec![UiLayer::Panels, UiLayer::Modals, UiLayer::Toasts]
+        );
         // порядок регистрации внутри полосы сохранён (стабильность)
-        let panels: Vec<&str> = bands[0]
-            .1
-            .iter()
-            .map(|d| d.id.as_str())
-            .collect();
+        let panels: Vec<&str> = bands[0].1.iter().map(|d| d.id.as_str()).collect();
         assert_eq!(panels, vec!["whatif", "search"]);
     }
 
@@ -246,7 +253,11 @@ mod tests {
         reg.add(panel("whatif")); // Capture без scope — в стек не попадает
         reg.add(modal("gallery"));
         reg.add(modal("dialog"));
-        reg.add(SurfaceDecl::new("toast", UiLayer::Toasts, CapturePolicy::Passive));
+        reg.add(SurfaceDecl::new(
+            "toast",
+            UiLayer::Toasts,
+            CapturePolicy::Passive,
+        ));
         let stack = reg.esc_stack();
         let names: Vec<&str> = stack.iter().map(|id| id.as_str()).collect();
         assert_eq!(names, vec!["dialog", "gallery"]);
@@ -256,11 +267,10 @@ mod tests {
     fn hide_below_degradation_filters_by_viewport() {
         let mut reg = SurfaceRegistry::new();
         reg.add(
-            panel("whatif")
-                .with_degradation(DegradationPolicy::HideBelow {
-                    min_width: 900.0,
-                    min_height: 600.0,
-                }),
+            panel("whatif").with_degradation(DegradationPolicy::HideBelow {
+                min_width: 900.0,
+                min_height: 600.0,
+            }),
         );
         reg.add(panel("search"));
         // 1280×800 (G4) — обе видимы

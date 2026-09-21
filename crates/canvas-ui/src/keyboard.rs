@@ -72,16 +72,11 @@ impl KeyboardRouter {
 
     /// Доставка события: верхний скоуп первым; `consume` возвращает true,
     /// если скоуп поглотил событие. Возвращает Some(поверхность) поглотителя.
-    pub fn deliver(
-        &self,
-        mut consume: impl FnMut(&Activation) -> bool,
-    ) -> Option<&Activation> {
-        for activation in self.stack.iter().rev() {
-            if consume(activation) {
-                return Some(activation);
-            }
-        }
-        None
+    pub fn deliver(&self, mut consume: impl FnMut(&Activation) -> bool) -> Option<&Activation> {
+        self.stack
+            .iter()
+            .rev()
+            .find(|activation| consume(activation))
     }
 
     /// Автоматический Esc: цель — верх стека; при пустом стеке — None
@@ -157,12 +152,10 @@ mod tests {
         let mut reg = SurfaceRegistry::new();
         reg.add(modal("gallery"));
         reg.add(modal("dialog"));
-        reg.add(SurfaceDecl::new(
-            "whatif",
-            UiLayer::Panels,
-            CapturePolicy::Capture,
-        )
-        .with_scope("whatif"));
+        reg.add(
+            SurfaceDecl::new("whatif", UiLayer::Panels, CapturePolicy::Capture)
+                .with_scope("whatif"),
+        );
         let mut router = KeyboardRouter::from_registry(&reg);
         // закрываем gallery — dialog и whatif (выше неё) снимаются вместе
         let popped = router.pop_surface(&SurfaceId::new("gallery"));
@@ -174,9 +167,15 @@ mod tests {
     #[test]
     fn esc_target_is_top_of_stack() {
         let (_reg, mut router) = seed_router();
-        assert_eq!(router.esc_target().map(|a| a.surface.as_str()), Some("dialog"));
+        assert_eq!(
+            router.esc_target().map(|a| a.surface.as_str()),
+            Some("dialog")
+        );
         router.pop_top();
-        assert_eq!(router.esc_target().map(|a| a.surface.as_str()), Some("gallery"));
+        assert_eq!(
+            router.esc_target().map(|a| a.surface.as_str()),
+            Some("gallery")
+        );
         router.pop_top();
         assert!(router.esc_target().is_none());
     }
@@ -192,7 +191,11 @@ mod tests {
         ));
         reg.add(modal("gallery"));
         reg.add(modal("dialog"));
-        reg.add(SurfaceDecl::new("toast", UiLayer::Toasts, CapturePolicy::Passive));
+        reg.add(SurfaceDecl::new(
+            "toast",
+            UiLayer::Toasts,
+            CapturePolicy::Passive,
+        ));
         // Esc-стек из реестра: реверс-порядок активных
         let stack = reg.esc_stack();
         let names: Vec<&str> = stack.iter().map(|id| id.as_str()).collect();

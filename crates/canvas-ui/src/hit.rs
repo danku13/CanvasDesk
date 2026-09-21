@@ -174,7 +174,10 @@ mod tests {
         // dropdown (Popups, Capture) с rect'ом над баром, клик мимо него
         frame.surfaces.push(
             SurfaceFrame::new("dropdown", UiLayer::Popups, CapturePolicy::Capture, vp())
-                .with_hit_rect(HitRect::interactive(UiRect::new(100.0, 700.0, 200.0, 50.0), "dd-list")),
+                .with_hit_rect(HitRect::interactive(
+                    UiRect::new(100.0, 700.0, 200.0, 50.0),
+                    "dd-list",
+                )),
         );
         // клик в бар: dropdown не перехватывает (мимо), бар получает
         let hit = HitStack::pick(&frame, UiPoint::new(640.0, 770.0));

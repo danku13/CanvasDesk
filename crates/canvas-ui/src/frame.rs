@@ -50,7 +50,12 @@ pub struct SurfaceFrame {
 }
 
 impl SurfaceFrame {
-    pub fn new(id: impl Into<String>, layer: UiLayer, capture: CapturePolicy, clip: UiRect) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        layer: UiLayer,
+        capture: CapturePolicy,
+        clip: UiRect,
+    ) -> Self {
         Self {
             surface: SurfaceId::new(id),
             layer,
@@ -202,7 +207,11 @@ mod tests {
                 },
             ),
         );
-        reg.add(SurfaceDecl::new("toast", UiLayer::Toasts, CapturePolicy::Passive));
+        reg.add(SurfaceDecl::new(
+            "toast",
+            UiLayer::Toasts,
+            CapturePolicy::Passive,
+        ));
         assert_eq!(UiFrame::from_registry(&reg, vp()).surfaces.len(), 2);
         // 800×560 — whatif скрыт, кадр содержит только тосты
         let small = UiFrame::from_registry(&reg, UiRect::new(0.0, 0.0, 800.0, 560.0));
@@ -296,7 +305,10 @@ mod tests {
         assert_eq!(overlaps.len(), 1);
         let o = &overlaps[0];
         assert_eq!(o.layer, UiLayer::Panels);
-        assert_eq!((o.a_surface.as_str(), o.a_element), ("whatif", "whatif-bar"));
+        assert_eq!(
+            (o.a_surface.as_str(), o.a_element),
+            ("whatif", "whatif-bar")
+        );
         assert_eq!(
             (o.b_surface.as_str(), o.b_element),
             ("wheel_hint", "wheel-hint-chip")
@@ -309,9 +321,14 @@ mod tests {
         let mut frame = UiFrame::new(vp());
         frame.surfaces.push(
             SurfaceFrame::new("toast", UiLayer::Toasts, CapturePolicy::Passive, vp())
-                .with_hit_rect(HitRect::decoration(UiRect::new(500.0, 20.0, 300.0, 40.0), "toast")),
+                .with_hit_rect(HitRect::decoration(
+                    UiRect::new(500.0, 20.0, 300.0, 40.0),
+                    "toast",
+                )),
         );
-        assert!(frame.surfaces[0].top_hit_at(UiPoint::new(650.0, 40.0)).is_none());
+        assert!(frame.surfaces[0]
+            .top_hit_at(UiPoint::new(650.0, 40.0))
+            .is_none());
         // пассивная поверхность не даёт ни одного перехвата
         assert!(crate::hit::HitStack::pick(&frame, UiPoint::new(650.0, 40.0)).is_none());
     }
