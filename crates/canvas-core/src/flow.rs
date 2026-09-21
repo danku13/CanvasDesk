@@ -798,7 +798,7 @@ pub fn unmapped_inputs_with_data(
 /// (FR-023) / первая непустая строка текста (ATX-маркеры не показываем) /
 /// label / id. Легковесный аналог заголовка карточки рендера: file/группы
 /// для источника значения не бывает (формульные ноды — text-ноды).
-fn spill_source_title(node: &crate::model::Node) -> String {
+pub(crate) fn spill_source_title(node: &crate::model::Node) -> String {
     if let Some(name) = node
         .template()
         .and_then(|template| template.name)

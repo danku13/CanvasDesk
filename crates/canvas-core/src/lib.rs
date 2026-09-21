@@ -27,6 +27,11 @@ mod focus;
 mod fs_events;
 mod io;
 mod layout;
+/// PRD-0007 F-2 (X1): lineage — дерево происхождения цифры (`LineageTree` +
+/// `build_lineage`): проекция существующих связей (рёбра потока, построчные
+/// зависимости Numi-листов, спиллы, unmapped, циклы) в рекурсивное дерево;
+/// чистая функция, движок расчётов не меняется.
+pub mod lineage;
 /// Нормализация MCP-текстов (literal `\n` от ИИ-агентов → реальные переводы).
 pub mod mcp_text;
 mod model;
@@ -101,6 +106,10 @@ pub use fs_events::{
 pub use io::{CanvasStorage, FsCanvasStorage, MemStorage};
 pub use layout::{
     plan_related_layout, LayoutMode, LayoutPlan, LEVEL_GAP, RADIAL_RING_STEP, SIBLING_GAP,
+};
+pub use lineage::{
+    build_lineage, LineageChild, LineageError, LineageFlow, LineageNode, LineageNodeId,
+    LineageNodeKind, LineageTree, LineageVia, LINEAGE_MAX_NODES,
 };
 pub use model::{
     enclosing_group_indices, group_add_children, group_children, group_expand_to_children,
