@@ -166,8 +166,11 @@ pub enum HelpMenuItem {
 }
 
 /// Пункты меню помощи (порядок отображения).
-pub const HELP_MENU_ITEMS: [HelpMenuItem; 3] =
-    [HelpMenuItem::Docs, HelpMenuItem::Onboarding, HelpMenuItem::Schemes];
+pub const HELP_MENU_ITEMS: [HelpMenuItem; 3] = [
+    HelpMenuItem::Docs,
+    HelpMenuItem::Onboarding,
+    HelpMenuItem::Schemes,
+];
 
 /// Подпись пункта меню помощи (таблица [`crate::i18n`] — FR-040).
 pub fn help_menu_item_label(item: HelpMenuItem, language: Language) -> &'static str {

@@ -20,12 +20,12 @@ use crate::docs_ui;
 use crate::hints_ui;
 use crate::i18n::{self, keys};
 use crate::onboarding_ui::{self, OnboardingButton, OnboardingState};
-use crate::scheme_gallery_ui;
 use crate::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
     PaletteLayout, PaletteTarget, PAL_ICON,
 };
+use crate::scheme_gallery_ui;
 use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
     dropdown_value, modal_layout, modal_nav_at, modal_row_at, modal_theme_card_at, pill_knob_rect,
@@ -4460,9 +4460,6 @@ impl App {
         index
     }
 
-    /// FR-021: пересчитать состояние popup подсказок после правки текста.
-    /// Popup открывается только на Numi-строках каретки (вердикт
-    /// `expr::line_kind`, вне код-фенсов) при непустом списке вариантов;
     // --- FR-049: галерея схем и empty-state ---
 
     /// FR-049 (US-5): отложенная схема `?template=<id>` для web-порта
@@ -4521,7 +4518,8 @@ impl App {
             .min((viewport[1] - 160.0) / bh)
             .clamp(0.15, 1.5);
         self.camera.set_zoom(zoom);
-        self.camera.set_center([(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0]);
+        self.camera
+            .set_center([(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0]);
         self.empty_state_dismissed = false;
         self.scheme_gallery.close();
         let name = manifest.display_name(self.settings.language == canvas_core::Language::Ru);
@@ -4544,7 +4542,7 @@ impl App {
             return true;
         }
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
-        let list = scheme_gallery_ui::rows(&registry, &self.scheme_gallery);
+        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
         let lay = scheme_gallery_ui::layout(self.viewport_logical(), &list, &self.scheme_gallery);
         let visible = lay.visible_rows.len().max(1);
         match &event.logical_key {
@@ -4591,7 +4589,7 @@ impl App {
     /// Клик по открытой галерее: элементы панели, мимо — закрыть.
     fn on_gallery_click(&mut self) {
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
-        let list = scheme_gallery_ui::rows(&registry, &self.scheme_gallery);
+        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
         let lay = scheme_gallery_ui::layout(self.viewport_logical(), &list, &self.scheme_gallery);
         if scheme_gallery_ui::point_in_rect(lay.close_rect, self.cursor) {
             self.scheme_gallery.close();
@@ -4602,12 +4600,11 @@ impl App {
             return;
         }
         if let Some(category) = scheme_gallery_ui::chip_at(&lay, self.cursor) {
-            self.scheme_gallery.category =
-                if self.scheme_gallery.category == category {
-                    None
-                } else {
-                    category
-                };
+            self.scheme_gallery.category = if self.scheme_gallery.category == category {
+                None
+            } else {
+                category
+            };
             self.scheme_gallery.selected = 0;
             self.scheme_gallery.scroll_top = 0;
             return;
@@ -4637,7 +4634,7 @@ impl App {
         }
         let palette = self.effective_palette();
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
-        let list = scheme_gallery_ui::rows(&registry, &self.scheme_gallery);
+        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
         let lay = scheme_gallery_ui::layout(viewport, &list, &self.scheme_gallery);
         // Подложка панели
         instances.push(CardInstance {
@@ -4746,7 +4743,9 @@ impl App {
         // Строки схем (окно видимости)
         let hovered = scheme_gallery_ui::row_at(&lay, self.cursor);
         for (rect, index) in lay.row_rects.iter().zip(lay.visible_rows.iter()) {
-            let Some(scheme) = list.get(*index) else { continue };
+            let Some(scheme) = list.get(*index) else {
+                continue;
+            };
             let is_selected = *index == self.scheme_gallery.selected;
             instances.push(CardInstance {
                 pos: [rect[0], rect[1]],
@@ -4876,6 +4875,8 @@ impl App {
         (instances, texts)
     }
 
+    /// Popup открывается только на Numi-строках каретки (вердикт
+    /// `expr::line_kind`, вне код-фенсов) при непустом списке вариантов;
     /// якорь — низ каретки в логических px окна.
     fn update_hints(&mut self) {
         let Some(session) = self.editing.as_ref() else {
