@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CanvasDesk — прототип У9 (v2): режим защиты — дерево нод с ветками</title>
+<title>CanvasDesk — прототип У9 (v3): режим защиты — модальное окно с деревом нод с ветками</title>
 <style>
   :root{
     --bg:#14161b; --panel:#1d2027; --panel2:#232733; --line:#2e3342;
@@ -32,9 +32,6 @@
   .cnode.dim{opacity:var(--dim);}
   .cnode.prose{opacity:var(--dim); font-style:italic; color:var(--tx2); font-size:12px; cursor:default;}
   .cnode.hit{box-shadow:0 0 0 3px var(--ok);}
-  .defense-on .cnode.chain .row, .defense-on .cnode.chain .val{font-size:19px;}
-  .defense-on .cnode.chain{min-width:230px;}
-  .defense-on .cnode.prose{display:none;}
 
   /* ── панель ─────────────────────────────── */
   .side{flex:1; display:flex; flex-direction:column; gap:14px; min-width:540px;}
@@ -55,6 +52,9 @@
 
   /* ── дерево-граф: узлы-карточки + SVG-ветки ── */
   .tree-wrap{flex:1; overflow:auto; position:relative;}
+  .tree-hint{display:none; position:absolute; inset:0; align-items:center; justify-content:center;
+    color:var(--tx2); font-size:13px; text-align:center; padding:24px; z-index:0;}
+  .panel.detached .tree-hint{display:flex;}
   #graph{position:relative; min-width:100%; min-height:100%;}
   #gscale{position:absolute; top:0; left:0; transform-origin:0 0;}
   #edges{position:absolute; top:0; left:0; z-index:0;}
@@ -71,9 +71,22 @@
   .gnode .badge{color:var(--accent); font-size:10.5px; margin-top:4px;}
   .gnode.hit{box-shadow:0 0 0 3px var(--ok);}
 
-  .stepbar{border-top:1px solid var(--line); padding:10px 16px; display:none; align-items:center; gap:10px;}
-  .defense-on .stepbar{display:flex;}
-  .stepbar .lv{color:var(--tx2); font-size:12px; flex:1;}
+  /* ── режим защиты: модальное окно ───────── */
+  .overlay{position:fixed; inset:0; background:rgba(9,10,13,.62); display:none;
+    align-items:center; justify-content:center; z-index:50;}
+  .defense-on .overlay{display:flex;}
+  .modal{width:min(92vw, 1380px); height:min(86vh, 920px); background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column;
+    overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.55);}
+  .m-head{padding:14px 18px 12px; border-bottom:1px solid var(--line); display:flex; align-items:flex-start; gap:16px;}
+  .m-head .ttl{font-weight:600; font-size:16px;}
+  .m-head .meta{color:var(--tx2); font-size:12px; margin-top:3px;}
+  .m-x{margin-left:auto; cursor:pointer; border:1px solid var(--line); background:var(--panel2);
+    color:var(--tx2); border-radius:7px; width:30px; height:30px; font-size:14px; flex:none;}
+  .m-x:hover{border-color:var(--accent); color:var(--tx);}
+  .m-body{flex:1; overflow:auto; position:relative;}
+  .m-foot{border-top:1px solid var(--line); padding:10px 18px; display:flex; align-items:center; gap:10px;}
+  .m-foot .lv{color:var(--tx2); font-size:12px; flex:1;}
   .btn{cursor:pointer; border:1px solid var(--line); background:var(--panel2); color:var(--tx);
     border-radius:7px; padding:5px 12px; font-size:12px; user-select:none;}
   .btn:hover{border-color:var(--accent);}
@@ -86,19 +99,20 @@
 </head>
 <body>
 
-<h1>Прототип У9 (v2) — режим защиты: дерево нод с ветками</h1>
+<h1>Прототип У9 (v3) — режим защиты: модальное окно с деревом нод с ветками</h1>
 <div class="sub">
-  <b>Правка владельца (2026-09-22):</b> «режим защиты должен выглядеть так же как дерево нод с ветками».
-  Дерево цепочки теперь рендерится <b>графом узлов-карточек, соединённых ветками</b> — одинаково в обычном
-  режиме и в защите; списочное представление с отступами убрано. Режим защиты показывает <b>тот же граф</b>,
-  укрупнённый (×1.35), с пошаговым раскрытием уровней от корня: клик по узлу, <b>пробел</b> или кнопка
-  «Следующий уровень» (AC-6.3); цифры канваса укрупняются (×1.5, AC-6.2), проза скрывается. <b>Esc</b> —
-  полный выход (AC-6.4). Клик по подсвеченной ноде канваса подводит к её узлу в дереве (У2 — да).
+  <b>Решение владельца (2026-09-22):</b> «режим защиты — это модальное окно» — окно открывается
+  <b>поверх канваса</b> одним действием (AC-6.1), канвас и панель уходят под затемнённый фон;
+  панель на время защиты прячется (паттерн диалога ревью, §6.5). Внутри окна — <b>тот же граф нод
+  с ветками</b>, что и в explain-панели (v2), укрупнённый (×1.35, AC-6.2), с пошаговым раскрытием
+  уровней от корня: клик по узлу, <b>пробел</b> или «Следующий уровень» (AC-6.3).
+  <b>Esc</b>, <b>✕</b> или клик по фону — выход: окно закрывается, панель и подсветка возвращаются
+  полностью (AC-6.4).
 </div>
 
 <div class="app" id="app">
   <div class="canvas" id="canvas">
-    <div class="tag">канвас — подсветка цепочки, остальное затемнено (AC-3.1)</div>
+    <div class="tag">канвас — подсветка цепочки (AC-3.1); в защите — под затемнённым фоном модалки</div>
     <svg id="cedges"></svg>
 
     <div class="cnode chain" id="cn-root" data-tree="Стоимость подписки" style="top:52px; left:40%;">
@@ -133,28 +147,45 @@
     <div class="panel" id="panel">
       <div class="p-head">
         <div class="ttl">Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
-        <div class="meta">представление: граф нод с ветками (v2) · лимит авто-раскрытия: 3 (FR-039) · корень: итог ноды</div>
+        <div class="meta">представление: граф нод с ветками · лимит авто-раскрытия: 3 (FR-039) · корень: итог ноды</div>
         <div class="toggle-row">
-          <div class="switch" id="sw" title="AC-6.1: запуск одним действием"></div>
+          <div class="switch" id="sw" title="AC-6.1: запуск одним действием — открывает модальное окно защиты"></div>
           <span class="lbl">Режим защиты</span>
-          <span class="kbd">Esc</span><span class="lbl" style="color:var(--tx2)">— выход</span>
-          <span class="kbd">Пробел</span><span class="lbl" style="color:var(--tx2)">— следующий уровень</span>
+          <span class="kbd">Esc</span><span class="lbl" style="color:var(--tx2)">— выход из окна</span>
         </div>
       </div>
       <div class="crumbs">Крошки: <b>Стоимость подписки</b></div>
-      <div class="tree-wrap"><div id="graph"><div id="gscale"><svg id="edges"></svg></div></div></div>
-      <div class="stepbar">
-        <span class="lv" id="lv"></span>
-        <button class="btn" id="nextLv">Следующий уровень</button>
-        <button class="btn" id="openAll">Раскрыть всё</button>
+      <div class="tree-wrap" id="treewrap">
+        <div class="tree-hint">Дерево открыто в модальном окне режима защиты.<br>Закройте окно (Esc / ✕ / клик по фону) — панель вернётся.</div>
+        <div id="graph"><div id="gscale"></div></div>
       </div>
     </div>
 
     <div class="note">
-      <b>Правка владельца (v2).</b> Дерево — <b>граф нод с ветками</b>, один и тот же в обычном режиме и в защите
-      (список с отступами из v1 удалён); защита = тот же граф крупнее + пошаговое раскрытие.
-      <div class="q">Открытый подвопрос У9: панель остаётся видимой (как здесь) или защита оставляет только крупный
-      канвас и граф? Посмотрите оба сценария на проекторе.</div>
+      <b>Решение владельца (v3, 2026-09-22).</b> Режим защиты — <b>модальное окно</b> поверх канваса:
+      панель прячется на время защиты, внутри окна — тот же дерево-граф, укрупнённый, с пошаговым
+      раскрытием. Подвопрос У9 («панель остаётся видимой?») закрыт: панель рядом не остаётся.
+      <div class="q">Если на проекторе захочется видеть канвас одновременно — альтернативу можно
+      вернуть отдельным вариантом, но по умолчанию фиксируем модальность.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── модальное окно режима защиты ── -->
+<div class="overlay" id="overlay">
+  <div class="modal" role="dialog" aria-label="Режим защиты">
+    <div class="m-head">
+      <div>
+        <div class="ttl">Режим защиты — Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
+        <div class="meta">модальное окно поверх канваса (У9 — решение владельца, 2026-09-22) · дерево — граф нод с ветками · Esc / ✕ / клик по фону — выход</div>
+      </div>
+      <button class="m-x" id="mx" title="Закрыть (Esc)">✕</button>
+    </div>
+    <div class="m-body" id="mbody"></div>
+    <div class="m-foot">
+      <span class="lv" id="lv"></span>
+      <button class="btn" id="nextLv">Следующий уровень</button>
+      <button class="btn" id="openAll">Раскрыть всё</button>
     </div>
   </div>
 </div>
@@ -180,7 +211,7 @@ const DATA = {
 };
 const MAX_LV = 4;        // глубина данных
 const AUTO_LV = 3;       // лимит авто-раскрытия (FR-039)
-const SCALE_D = 1.35;    // укрупнение графа в защите (≈ ×1.5 к шрифту узла)
+const SCALE_D = 1.35;    // укрупнение графа в модальном окне защиты
 const COLW = 196, CARDW = 158, ROWH = 116, PAD = 14;
 
 let defense = false, revealed = 1;
@@ -191,9 +222,10 @@ const plural = (n, one, few) => (n % 10 === 1 && n % 100 !== 11) ? one : few;
 
 const app = document.getElementById("app");
 const sw = document.getElementById("sw");
+const panel = document.getElementById("panel");
 const graph = document.getElementById("graph");
 const gscale = document.getElementById("gscale");
-const edgesSvg = document.getElementById("edges");
+const overlay = document.getElementById("overlay");
 
 function kids(n){ return n.kids || []; }
 function isVisible(n){
@@ -221,7 +253,6 @@ function render(){
   leafCursor = 0; maxCol = 0;
   assign(DATA, 1);
 
-  /* размер сцены (без масштаба) */
   const W = PAD + maxCol * COLW + CARDW + PAD;
   const H = PAD + Math.max(0, leafCursor - 1) * ROWH + 104;
 
@@ -257,7 +288,6 @@ function render(){
     kids(n).filter(isVisible).forEach(place);
   })(DATA);
 
-  /* ветки: от правого края родителя к левому краю ребёнка */
   const draw = (n) => {
     const pEl = nodeEls.get(n);
     kids(n).filter(isVisible).forEach(k => {
@@ -275,7 +305,7 @@ function render(){
   draw(DATA);
   svg.setAttribute("width", W); svg.setAttribute("height", H);
 
-  /* масштаб: защита укрупняет тот же граф целиком */
+  /* масштаб: окно защиты показывает тот же граф крупнее */
   const s = defense ? SCALE_D : 1;
   gscale.style.transform = "scale(" + s + ")";
   gscale.style.width = W + "px"; gscale.style.height = H + "px";
@@ -316,7 +346,7 @@ function drawCanvasEdges(){
   });
 }
 
-function flashTree(nm, lv){
+function flashTree(nm){
   let target = null;
   nodeEls.forEach((el, n) => { if (n.nm === nm) target = {el, n}; });
   if (!target) return;
@@ -327,22 +357,30 @@ function flashTree(nm, lv){
   setTimeout(() => el.classList.remove("hit"), 1400);
 }
 document.querySelectorAll(".cnode.chain").forEach(c => {
-  c.addEventListener("click", () => flashTree(c.dataset.tree, 99));
+  c.addEventListener("click", () => flashTree(c.dataset.tree));
 });
 
+/* ── вход/выход режима защиты: модальное окно ── */
 function apply(){
   app.classList.toggle("defense-on", defense);
   sw.classList.toggle("on", defense);
+  panel.classList.toggle("detached", defense);
+  /* дерево-граф переезжает: панель ↔ тело модального окна */
+  const host = defense ? document.getElementById("mbody") : document.getElementById("treewrap");
+  host.appendChild(graph);
   render();
 }
 
-sw.onclick = () => { defense = !defense; if (defense) revealed = 1; apply(); };
-document.getElementById("nextLv").onclick = () => { if (defense){ revealed = Math.min(revealed + 1, MAX_LV); apply(); } };
-document.getElementById("openAll").onclick = () => { if (defense){ revealed = MAX_LV; apply(); } };
+sw.onclick = () => { defense = true; revealed = 1; apply(); };
+function exitDefense(){ if (defense){ defense = false; revealed = 1; apply(); } }
+document.getElementById("mx").onclick = exitDefense;
+overlay.addEventListener("click", (e) => { if (e.target === overlay) exitDefense(); });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && defense){ defense = false; revealed = 1; apply(); }
+  if (e.key === "Escape") exitDefense();
   if (e.code === "Space" && defense){ e.preventDefault(); revealed = Math.min(revealed + 1, MAX_LV); apply(); }
 });
+document.getElementById("nextLv").onclick = () => { if (defense){ revealed = Math.min(revealed + 1, MAX_LV); apply(); } };
+document.getElementById("openAll").onclick = () => { if (defense){ revealed = MAX_LV; apply(); } };
 
 apply();
 drawCanvasEdges();
