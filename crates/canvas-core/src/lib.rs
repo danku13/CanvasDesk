@@ -74,8 +74,9 @@ pub use expr::{
 };
 pub use flow::{
     creates_value_cycle, inbound_slots, inbound_slots_with_lines, outputs_display, param_spills,
-    propagate, propagate_with_lines, substitute_spilled_lines, topo_sort, value_path, CycleError,
-    FlowKind, FlowOutputs, FlowSolutions, LineOutputs, ParamSpill, WhatIfOverrides,
+    propagate, propagate_with_lines, propagate_with_lines_data, substitute_spilled_lines,
+    topo_sort, unmapped_inputs, unmapped_inputs_with_data, value_path, CycleError, DataSnapshots,
+    FlowKind, FlowOutputs, FlowSolutions, LineOutputs, ParamSpill, UnmappedInput, WhatIfOverrides,
 };
 pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{
