@@ -31,6 +31,10 @@ pub struct OnboardingStep {
     pub title_key: &'static str,
     /// Ключ тела (полная фраза, перенос на стороне [`body_lines`]).
     pub body_key: &'static str,
+    /// FR-049: опциональное действие шага — CTA-кнопка «Далее» превращается
+    /// в действие (резервация v1 `onboarding_ui.rs:27` задействована).
+    /// `Some(keys::GALLERY_TRY)` — открыть галерею схем (тур закрывается).
+    pub action_key: Option<&'static str>,
 }
 
 /// Шаги тура (FR-028, скоуп владельца — база + расчёты + шаблоны; NN/g:
@@ -40,34 +44,42 @@ pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP1_TITLE,
         body_key: keys::ONBOARDING_STEP1_BODY,
+        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP2_TITLE,
         body_key: keys::ONBOARDING_STEP2_BODY,
+        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP3_TITLE,
         body_key: keys::ONBOARDING_STEP3_BODY,
+        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP4_TITLE,
         body_key: keys::ONBOARDING_STEP4_BODY,
+        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP5_TITLE,
         body_key: keys::ONBOARDING_STEP5_BODY,
+        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP6_TITLE,
         body_key: keys::ONBOARDING_STEP6_BODY,
+        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP7_TITLE,
         body_key: keys::ONBOARDING_STEP7_BODY,
+        action_key: Some(keys::GALLERY_TRY),
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP8_TITLE,
         body_key: keys::ONBOARDING_STEP8_BODY,
+        action_key: None,
     },
 ];
 
@@ -121,6 +133,12 @@ impl OnboardingState {
     pub fn next_label_key(&self) -> &'static str {
         if self.is_last() {
             keys::ONBOARDING_DONE
+        } else if let Some(action) = ONBOARDING_STEPS
+            .get(self.step)
+            .and_then(|step| step.action_key)
+        {
+            // FR-049: шаг с действием — CTA «Попробовать» (галерея схем)
+            action
         } else {
             keys::ONBOARDING_NEXT
         }
