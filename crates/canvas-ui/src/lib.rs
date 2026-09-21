@@ -61,16 +61,24 @@ mod tests {
         );
         // what-if бар (Capture, hide на малом окне)
         reg.add(
-            SurfaceDecl::new("whatif", UiLayer::Panels, CapturePolicy::Capture)
-                .with_degradation(DegradationPolicy::HideBelow {
+            SurfaceDecl::new("whatif", UiLayer::Panels, CapturePolicy::Capture).with_degradation(
+                DegradationPolicy::HideBelow {
                     min_width: 900.0,
                     min_height: 600.0,
-                }),
+                },
+            ),
         );
         // галерея схем (модаль Block)
-        reg.add(SurfaceDecl::new("gallery", UiLayer::Modals, CapturePolicy::Block).with_scope("gallery"));
+        reg.add(
+            SurfaceDecl::new("gallery", UiLayer::Modals, CapturePolicy::Block)
+                .with_scope("gallery"),
+        );
         // тост (Passive)
-        reg.add(SurfaceDecl::new("toast", UiLayer::Toasts, CapturePolicy::Passive));
+        reg.add(SurfaceDecl::new(
+            "toast",
+            UiLayer::Toasts,
+            CapturePolicy::Passive,
+        ));
 
         let vp = UiRect::new(0.0, 0.0, 1280.0, 800.0);
         let mut frame = UiFrame::from_registry(&reg, vp);
@@ -97,7 +105,12 @@ mod tests {
         let layers: Vec<UiLayer> = bands.iter().map(|(l, _)| *l).collect();
         assert_eq!(
             layers,
-            vec![UiLayer::World, UiLayer::Panels, UiLayer::Modals, UiLayer::Toasts]
+            vec![
+                UiLayer::World,
+                UiLayer::Panels,
+                UiLayer::Modals,
+                UiLayer::Toasts
+            ]
         );
 
         // ввод: клик по кнопке модали — модаль; клик по бару — backdrop модали;
@@ -115,7 +128,10 @@ mod tests {
 
         // клавиатура: Esc-цель — верх стека (галерея), канвас — дно
         let router = KeyboardRouter::from_registry(&reg);
-        assert_eq!(router.esc_target().map(|a| a.surface.as_str()), Some("gallery"));
+        assert_eq!(
+            router.esc_target().map(|a| a.surface.as_str()),
+            Some("gallery")
+        );
         assert_eq!(
             router.activations().first().map(|a| a.scope.as_str()),
             Some(KeyboardScopeId::CANVAS)

@@ -114,7 +114,11 @@ impl UiRect {
     }
 
     pub fn contains(&self, p: UiPoint) -> bool {
-        !self.is_empty() && p.x >= self.x && p.x < self.right() && p.y >= self.y && p.y < self.bottom()
+        !self.is_empty()
+            && p.x >= self.x
+            && p.x < self.right()
+            && p.y >= self.y
+            && p.y < self.bottom()
     }
 
     pub fn intersects(&self, other: &UiRect) -> bool {
