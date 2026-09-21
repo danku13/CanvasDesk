@@ -26,6 +26,9 @@ pub mod stage;
 pub mod stats;
 pub mod text;
 pub mod theme;
+/// FR-047 (PRD-0006 D4/F-8): темы-пресеты — отображение разобранных
+/// JSON-данных canvas-core в `ThemeColors` + контраст-тесты G3.
+pub mod theme_presets;
 pub mod thumbs;
 pub mod widget_pass;
 pub mod zorder;
