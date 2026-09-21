@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CanvasDesk — прототип У7/У8: ревью автосвязи (группировка + обратимость «Отклонить все»)</title>
+<style>
+  :root{
+    --bg:#14161b; --panel:#1d2027; --panel2:#232733; --line:#2e3342;
+    --tx:#dfe3ec; --tx2:#8b93a7; --accent:#4f8cff; --accent2:#3d6fd6;
+    --ok:#3fbf7f; --ok-bg:#17301f; --rej:#e5697a; --rej-bg:#331a1f;
+    --chip:#2a3f66; --warn:#e0a34f;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--tx); font:14px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; padding:24px;}
+  h1{font-size:18px; margin-bottom:4px;}
+  .sub{color:var(--tx2); font-size:13px; margin-bottom:20px;}
+  .sub b{color:var(--tx);}
+
+  /* ── макет канваса ─────────────────────────── */
+  .canvas{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:18px;}
+  .canvas-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .node{background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13px;}
+  .node .t{color:var(--tx2); font-size:11px;}
+  .spacer{flex:1;}
+  .badge{
+    position:relative; background:var(--chip); border:1px solid var(--accent2); color:#cfe0ff;
+    border-radius:20px; padding:6px 14px 6px 30px; cursor:pointer; font-size:13px; user-select:none;
+  }
+  .badge::before{content:""; position:absolute; left:11px; top:50%; width:10px; height:10px; margin-top:-5px;
+    border-radius:50%; background:var(--accent);}
+  .badge .cnt{background:var(--accent); color:#fff; border-radius:10px; padding:0 7px; margin-left:7px; font-weight:600;}
+  .badge:hover{border-color:var(--accent);}
+
+  /* ── диалог ────────────────────────────────── */
+  .overlay{position:fixed; inset:0; background:rgba(8,10,14,.62); display:flex; align-items:center; justify-content:center; z-index:10;}
+  .overlay.hidden{display:none;}
+  .dlg{width:min(760px,94vw); max-height:88vh; background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; display:flex; flex-direction:column; box-shadow:0 18px 60px rgba(0,0,0,.5);}
+  .dlg-head{padding:16px 20px 12px; border-bottom:1px solid var(--line);}
+  .dlg-head .row{display:flex; align-items:center; gap:10px;}
+  .dlg-head h2{font-size:16px; flex:1;}
+  .meta{color:var(--tx2); font-size:12px; margin-top:4px;}
+  .x{cursor:pointer; color:var(--tx2); font-size:18px; padding:2px 8px; border-radius:6px;}
+  .x:hover{background:var(--panel2); color:var(--tx);}
+  .banner{margin:12px 20px 0; background:var(--rej-bg); border:1px solid #5c2f39; border-radius:8px;
+    padding:10px 14px; font-size:13px; display:none; align-items:center; gap:12px;}
+  .banner.show{display:flex;}
+  .banner .grow{flex:1;}
+  .dlg-body{overflow:auto; padding:14px 20px; flex:1;}
+
+  .grp{margin-bottom:14px; border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .grp-head{display:flex; align-items:center; gap:10px; padding:9px 14px; background:var(--panel2); cursor:pointer; user-select:none;}
+  .grp-head .arrow{color:var(--tx2); font-size:11px; width:12px; transition:transform .15s;}
+  .grp.closed .arrow{transform:rotate(-90deg);}
+  .grp.closed .rows{display:none;}
+  .grp-head .ttl{font-weight:600; font-size:13px;}
+  .grp-head .n{color:var(--tx2); font-size:12px;}
+  .grp-head .sort{margin-left:auto; color:var(--tx2); font-size:11px;}
+  .rows{padding:4px 0;}
+
+  .sug{display:flex; align-items:center; gap:10px; padding:7px 14px 7px 20px; border-left:3px solid transparent;}
+  .sug:hover{background:var(--panel2);}
+  .sug .pair{flex:1; font-size:13px;}
+  .sug .pair .to{color:var(--tx2);}
+  .pct{font-size:11px; border-radius:10px; padding:1px 8px; background:var(--chip); color:#cfe0ff; min-width:44px; text-align:center;}
+  .pct.hi{background:#1c4429; color:#8fe0b2;}
+  .pct.mid{background:#4a3a17; color:#ecd39a;}
+  .btn{cursor:pointer; border:1px solid var(--line); background:var(--panel2); color:var(--tx);
+    border-radius:7px; padding:4px 10px; font-size:12px; user-select:none;}
+  .btn:hover{border-color:var(--accent);}
+  .btn.acc.on{background:var(--ok-bg); border-color:var(--ok); color:var(--ok);}
+  .btn.rej.on{background:var(--rej-bg); border-color:var(--rej); color:var(--rej);}
+  .sug.accepted{border-left-color:var(--ok); background:rgba(63,191,127,.05);}
+  .sug.rejected{opacity:.45;}
+  .sug.rejected .pair{text-decoration:line-through;}
+
+  .dlg-foot{border-top:1px solid var(--line); padding:12px 20px; display:flex; align-items:center; gap:12px;}
+  .hint{color:var(--tx2); font-size:12px; flex:1;}
+  .primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; padding:8px 18px; font-size:13px;}
+  .primary:disabled{opacity:.35; cursor:default;}
+  .ghost{padding:8px 14px; font-size:13px;}
+
+  .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:var(--ok-bg);
+    border:1px solid var(--ok); color:#bdebd2; padding:10px 18px; border-radius:10px; font-size:13px;
+    display:none; z-index:20;}
+  .toast.show{display:block;}
+  .legend{margin-top:18px; color:var(--tx2); font-size:12px; border-top:1px dashed var(--line); padding-top:12px;}
+  .legend b{color:var(--tx);}
+</style>
+</head>
+<body>
+
+<h1>Прототип У7/У8 — диалог ревью автосвязи</h1>
+<div class="sub">
+  <b>У7</b> — предложения сгруппированы по паре нод «исток → приёмник», внутри группы отсортированы по имени переменной, бейдж показывает количество. <b>У8</b> — «Отклонить все» обратимо: кнопка «Вернуть все» работает до закрытия диалога.
+</div>
+
+<div class="canvas">
+  <div class="canvas-row">
+    <div class="node"><div class="t">нода-таблица</div>Риск NPL</div>
+    <div class="node"><div class="t">нода-таблица</div>Трейд-ин</div>
+    <div class="node"><div class="t">нода-таблица</div>Платёжная сетка</div>
+    <div class="node"><div class="t">нода-таблица</div>Аренда устройств</div>
+    <div class="node"><div class="t">нода-таблица</div>Юнит-экономика подписки</div>
+    <div class="spacer"></div>
+    <div class="badge" id="badge" title="Фоновый детектор нашёл предложения (AC-5.5)">Найти связи по именам<span class="cnt" id="badgeCnt">12</span></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="dlg">
+    <div class="dlg-head">
+      <div class="row">
+        <h2>Ревью автосвязи</h2>
+        <span class="x" id="closeBtn" title="Закрыть">×</span>
+      </div>
+      <div class="meta">Найдено предложений: <b id="metaTotal">12</b> · группировка: пара нод · сортировка: по имени переменной (У7) · фон связи не создаёт (D1)</div>
+    </div>
+
+    <div class="banner" id="banner">
+      <span id="bannerTxt">Отклонено 12.</span>
+      <span class="grow"></span>
+      <button class="btn ghost" id="restoreAllBtn">Вернуть все</button>
+    </div>
+
+    <div class="dlg-body" id="body"></div>
+
+    <div class="dlg-foot">
+      <span class="hint">Создание — одним undo-батом; откат пачки — с подтверждением и подсветкой отменяемого (AC-5.3). После закрытия диалога отклонённые вернутся через фоновую перепроверку (AC-5.5).</span>
+      <button class="btn ghost" id="rejectAllBtn">Отклонить все</button>
+      <button class="btn ghost" id="acceptAllBtn">Принять все</button>
+      <button class="btn primary" id="createBtn" disabled>Создать связи (0)</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="legend">
+  <b>Что проверяем:</b> читаемость списка из 12+ предложений (D10) — группы сворачиваются, счётчик в бейдже виден до открытия;
+  защита от промаха массовыми кнопками — «Вернуть все» живёт, пока диалог открыт (У8). Группировка/сортировка — <b>вопрос У7</b>:
+  подтвердите или отклоните после просмотра. Клик по бейджу — открыть диалог заново.
+</div>
+
+<script>
+const GROUPS = [
+  {a:"Риск NPL", b:"Платёжная сетка", items:[
+    {s:"default_q",   t:"default_m",  slot:"слот rate", p:84},
+    {s:"npl_annual",  t:"rate",       slot:"слот rate", p:100},
+    {s:"npl_q",       t:"rate",       slot:"слот rate", p:92},
+    {s:"npl_stress",  t:"rate",       slot:"слот rate", p:87},
+    {s:"recovery_rate", t:"recovery", slot:"слот rate", p:100},
+  ]},
+  {a:"Трейд-ин", b:"Юнит-экономика подписки", items:[
+    {s:"residual_pct",  t:"residual",     slot:"слот buyback", p:100},
+    {s:"tradein_months",t:"amort_months", slot:"слот buyback", p:95},
+    {s:"tradein_price", t:"p_buyback",    slot:"слот buyback", p:89},
+    {s:"tradein_value", t:"tradein_base", slot:"слот buyback", p:100},
+  ]},
+  {a:"Аренда устройств", b:"Юнит-экономика подписки", items:[
+    {s:"fleet_size",  t:"devices_n",  slot:"слот opex", p:100},
+    {s:"rent_growth", t:"growth_m",   slot:"слот opex", p:78},
+    {s:"rent_monthly",t:"opex_rent",  slot:"слот opex", p:100},
+  ]},
+];
+// сортировка внутри группы по имени переменной (У7)
+GROUPS.forEach(g => g.items.sort((x,y) => x.s.localeCompare(y.s, "ru")));
+
+const state = GROUPS.map(g => g.items.map(() => "pending")); // pending | accepted | rejected
+let massRejected = false;
+
+const body = document.getElementById("body");
+const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
+
+function pctCls(p){ return p >= 95 ? "pct hi" : (p >= 85 ? "pct mid" : "pct"); }
+
+function render(){
+  body.textContent = "";
+  let accepted = 0, rejected = 0, pending = 0;
+  GROUPS.forEach((g, gi) => {
+    const grp = el("div", "grp");
+    const head = el("div", "grp-head");
+    head.append(el("span", "arrow", "▼"),
+      el("span", "ttl", g.a + "  →  " + g.b),
+      el("span", "n", "· " + g.items.length));
+    head.append(el("span", "sort", "сорт.: имя (А→Я)"));
+    head.onclick = () => grp.classList.toggle("closed");
+    grp.append(head);
+    const rows = el("div", "rows");
+    g.items.forEach((it, ii) => {
+      const st = state[gi][ii];
+      if (st === "accepted") accepted++; else if (st === "rejected") rejected++; else pending++;
+      const row = el("div", "sug" + (st === "accepted" ? " accepted" : st === "rejected" ? " rejected" : ""));
+      const pair = el("div", "pair");
+      pair.append(document.createTextNode(it.s + " "));
+      pair.append(el("span", "to", "→ " + it.t + " (" + it.slot + ")"));
+      row.append(pair, el("span", pctCls(it.p), it.p + "%"));
+      const bA = el("button", "btn acc" + (st === "accepted" ? " on" : ""), "Принять");
+      const bR = el("button", "btn rej" + (st === "rejected"  ? " on" : ""), "Отклонить");
+      bA.onclick = () => { state[gi][ii] = st === "accepted" ? "pending" : "accepted"; sync(); };
+      bR.onclick = () => { state[gi][ii] = st === "rejected"  ? "pending" : "rejected"; sync(); };
+      row.append(bA, bR);
+      rows.append(row);
+    });
+    grp.append(rows);
+    body.append(grp);
+  });
+  document.getElementById("metaTotal").textContent = accepted + rejected + pending;
+  document.getElementById("badgeCnt").textContent = pending;
+  const create = document.getElementById("createBtn");
+  create.disabled = accepted === 0;
+  create.textContent = "Создать связи (" + accepted + ")";
+  const banner = document.getElementById("banner");
+  banner.classList.toggle("show", rejected > 0);
+  if (rejected > 0) document.getElementById("bannerTxt").textContent =
+    "Отклонено: " + rejected + ". До закрытия диалога можно вернуть одним кликом (У8).";
+  massRejected = rejected === accepted + rejected && rejected > 0;
+  return {accepted, rejected, pending};
+}
+
+function sync(){ render(); }
+function setAll(v){ GROUPS.forEach((g, gi) => g.items.forEach((_, ii) => state[gi][ii] = v)); sync(); }
+
+document.getElementById("acceptAllBtn").onclick = () => setAll("accepted");
+document.getElementById("rejectAllBtn").onclick  = () => setAll("rejected");
+document.getElementById("restoreAllBtn").onclick = () => setAll("pending");
+document.getElementById("closeBtn").onclick = () =>
+  document.getElementById("overlay").classList.add("hidden");
+document.getElementById("badge").onclick = () =>
+  document.getElementById("overlay").classList.remove("hidden");
+document.getElementById("createBtn").onclick = () => {
+  const {accepted} = render();
+  const t = document.getElementById("toast");
+  t.textContent = "Создано связей: " + accepted + " — один undo-шаг (AC-5.3).";
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 3200);
+  setAll("pending");
+  document.getElementById("overlay").classList.add("hidden");
+};
+
+render();
+</script>
+</body>
+</html>

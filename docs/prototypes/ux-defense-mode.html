@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CanvasDesk — прототип У9: режим защиты (панель остаётся видимой)</title>
+<style>
+  :root{
+    --bg:#14161b; --panel:#1d2027; --panel2:#232733; --line:#2e3342;
+    --tx:#dfe3ec; --tx2:#8b93a7; --accent:#4f8cff; --ok:#3fbf7f;
+    --dim:.32; --delta:#ffb84f; --leaf:#9fd6ff;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--tx); font:14px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; padding:24px;}
+  h1{font-size:18px; margin-bottom:4px;}
+  .sub{color:var(--tx2); font-size:13px; margin-bottom:16px; max-width:1100px;}
+  .sub b{color:var(--tx);}
+
+  .app{display:flex; gap:14px; height:calc(100vh - 150px); min-height:520px;}
+  /* ── канвас ─────────────────────────────── */
+  .canvas{flex:1.35; background:var(--panel); border:1px solid var(--line); border-radius:12px; position:relative; overflow:hidden;}
+  .canvas .tag{position:absolute; top:12px; left:14px; color:var(--tx2); font-size:11px; letter-spacing:.4px;}
+  .cnode{position:absolute; background:var(--panel2); border:1px solid var(--line); border-radius:9px;
+    padding:9px 12px; min-width:180px; transition:all .25s;}
+  .cnode .t{font-size:11px; color:var(--tx2); margin-bottom:3px;}
+  .cnode .row{display:flex; justify-content:space-between; gap:14px; font-size:13px;}
+  .cnode .val{font-weight:600;}
+  .cnode .d{color:var(--delta); font-weight:600;}
+  .cnode.chain{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
+  .cnode.dim{opacity:var(--dim);}
+  .cnode.prose{opacity:var(--dim); font-style:italic; color:var(--tx2); font-size:12px;}
+  .edge{position:absolute; height:2px; background:var(--accent); opacity:.75; transform-origin:0 50%;}
+  .defense-on .cnode.chain .row, .defense-on .cnode.chain .val{font-size:19px;}
+  .defense-on .cnode.chain{min-width:230px;}
+  .defense-on .cnode.prose{display:none;}
+
+  /* ── панель ─────────────────────────────── */
+  .side{flex:1; display:flex; flex-direction:column; gap:14px;}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; flex:1; overflow:hidden;}
+  .p-head{padding:14px 16px 10px; border-bottom:1px solid var(--line);}
+  .p-head .ttl{font-weight:600; font-size:15px; display:flex; align-items:center; gap:10px;}
+  .p-head .meta{color:var(--tx2); font-size:12px; margin-top:3px;}
+  .toggle-row{display:flex; align-items:center; gap:10px; margin-top:10px;}
+  .switch{width:38px; height:21px; border-radius:11px; background:var(--panel2); border:1px solid var(--line); position:relative; cursor:pointer; transition:background .2s;}
+  .switch::after{content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:var(--tx2); transition:all .2s;}
+  .switch.on{background:#1c4429; border-color:var(--ok);}
+  .switch.on::after{left:19px; background:var(--ok);}
+  .toggle-row .lbl{font-size:13px;}
+  .kbd{border:1px solid var(--line); background:var(--panel2); border-radius:5px; padding:0 6px; font-size:11px; color:var(--tx2);}
+
+  .crumbs{padding:8px 16px 0; color:var(--tx2); font-size:12px;}
+  .crumbs b{color:var(--accent);}
+  .tree{padding:10px 16px 16px; overflow:auto; flex:1;}
+  .tnode{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--panel2);
+    border-radius:8px; padding:8px 12px; margin:8px 0 0 0; cursor:pointer; transition:all .2s;}
+  .tnode .r1{display:flex; justify-content:space-between; gap:10px; align-items:baseline;}
+  .tnode .nm{font-weight:600; font-size:13px;}
+  .tnode .vl{font-weight:600;}
+  .tnode .r2{color:var(--tx2); font-size:11.5px; margin-top:2px;}
+  .tnode .delta{color:var(--delta); font-weight:600;}
+  .tnode.leaf{border-left-color:var(--leaf);}
+  .tnode.leaf .src{color:var(--leaf); font-size:11.5px; margin-top:2px;}
+  .tnode .kids{margin-left:16px; display:none;}
+  .tnode.open > .kids{display:block;}
+  .tnode .more{color:var(--tx2); font-size:11px; margin-top:3px;}
+  .tnode.hidden-lv{display:none;}
+  .defense-on .tnode .nm, .defense-on .tnode .vl{font-size:19px;}
+  .defense-on .tnode{padding:12px 16px;}
+  .defense-on .tnode .r2, .defense-on .tnode .src{font-size:13px;}
+
+  .stepbar{border-top:1px solid var(--line); padding:10px 16px; display:none; align-items:center; gap:10px;}
+  .defense-on .stepbar{display:flex;}
+  .stepbar .lv{color:var(--tx2); font-size:12px; flex:1;}
+  .btn{cursor:pointer; border:1px solid var(--line); background:var(--panel2); color:var(--tx);
+    border-radius:7px; padding:5px 12px; font-size:12px; user-select:none;}
+  .btn:hover{border-color:var(--accent);}
+
+  .note{background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--delta);
+    border-radius:10px; padding:12px 16px; font-size:13px;}
+  .note b{color:var(--delta);}
+  .note .q{color:var(--tx2); margin-top:6px;}
+</style>
+</head>
+<body>
+
+<h1>Прототип У9 — режим защиты</h1>
+<div class="sub">
+  Показан вариант, при котором в режиме защиты <b>explain-панель остаётся видимой</b> и дерево укрупняется (×1.5),
+  одновременно с крупными цифрами канваса (AC-6.2). Раскрытие — по шагам: кнопка «Следующий уровень» или клик по узлу (AC-6.3).
+  <b>Esc</b> — выход с полным восстановлением вида (AC-6.4).
+</div>
+
+<div class="app" id="app">
+  <div class="canvas" id="canvas">
+    <div class="tag">канвас — подсветка цепочки, остальное затемнено (AC-3.1)</div>
+
+    <div class="cnode chain" style="top:52px; left:42%;">
+      <div class="t">Юнит-экономика подписки</div>
+      <div class="row"><span>Стоимость подписки</span><span class="val">1 240 ₽</span></div>
+      <div class="row"><span class="t">полоса D</span><span class="d">+33пп</span></div>
+    </div>
+    <div class="cnode chain" style="top:190px; left:8%;">
+      <div class="t">Риск NPL</div>
+      <div class="row"><span>доля NPL</span><span class="val">92%</span></div>
+      <div class="row" style="font-style:italic; color:var(--tx2); font-size:11px;"><span>Комментарий аналитика к таблице рисков</span></div>
+    </div>
+    <div class="cnode chain" style="top:200px; left:40%;">
+      <div class="t">Аренда устройств</div>
+      <div class="row"><span>аренда/мес</span><span class="val">620 ₽</span></div>
+    </div>
+    <div class="cnode chain" style="top:200px; left:72%;">
+      <div class="t">Трейд-ин</div>
+      <div class="row"><span>остаточная ст-ть</span><span class="val">18%</span></div>
+    </div>
+    <div class="cnode dim" style="top:390px; left:12%;">
+      <div class="t">CRM-воронка</div>
+      <div class="row"><span>конверсия демо</span><span class="val">34%</span></div>
+    </div>
+    <div class="cnode dim" style="top:390px; left:58%;">
+      <div class="t">Маркетинг</div>
+      <div class="row"><span>CAC</span><span class="val">2 100 ₽</span></div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="panel" id="panel">
+      <div class="p-head">
+        <div class="ttl">Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
+        <div class="meta">лимит авто-раскрытия: 3 (FR-039) · корень: итог ноды</div>
+        <div class="toggle-row">
+          <div class="switch" id="sw" title="AC-6.1: запуск одним действием"></div>
+          <span class="lbl">Режим защиты</span>
+          <span class="kbd">Esc</span><span class="lbl" style="color:var(--tx2)">— выход</span>
+        </div>
+      </div>
+      <div class="crumbs">Крошки: <b>Стоимость подписки</b></div>
+      <div class="tree" id="tree"></div>
+      <div class="stepbar">
+        <span class="lv" id="lv">Уровень 1 из 4 · клик по узлу — следующий уровень</span>
+        <button class="btn" id="nextLv">Следующий уровень</button>
+        <button class="btn" id="openAll">Раскрыть всё</button>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>Вопрос У9.</b> Здесь панель в режиме защиты <b>не скрывается</b>: дерево укрупняется вместе с канвасом.
+      <div class="q">Альтернатива: скрывать панель и оставлять только крупный канвас. Посмотрите оба сценария на проекторе — какое поведение подтверждаете?</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA = {
+  nm:"Стоимость подписки", vl:"1 240 ₽", f:"= ARPU × (NPL + трейд-ин) + аренда", lv:1,
+  kids:[
+    {nm:"ARPU-блок", vl:"810 ₽", f:"= база × доля NPL", lv:2, kids:[
+      {nm:"NPL 90+", vl:"92%", f:"допущение", lv:3, leaf:true, src:"источник: Риск-отчёт Q3 · автор: А. Ким"},
+      {nm:"Платёжная сетка", vl:"83%", f:"= сетка × ставка", lv:3, kids:[
+        {nm:"ставка (rate)", vl:"24,9%", f:"допущение", lv:4, leaf:true, src:"источник: тарифный реестр"},
+      ]},
+    ]},
+    {nm:"Аренда устройств", vl:"620 ₽", f:"= парк × аренда/мес", lv:2, kids:[
+      {nm:"Трейд-ин", vl:"18%", f:"допущение", lv:3, leaf:true, src:"источник: прайс-лист выкупа"},
+      {nm:"Парк устройств", vl:"4 800", f:"константа", lv:3, leaf:true},
+    ]},
+    {nm:"Прочие переменные", vl:"−190 ₽", f:"= сводные списания", lv:2, kids:[
+      {nm:"Списания по договорам", vl:"−190 ₽", f:"константа", lv:3, leaf:true},
+    ]},
+  ],
+};
+const MAX_LV = 4;
+let defense = false, revealed = 1;
+
+const tree = document.getElementById("tree");
+function nodeEl(n){
+  const d = document.createElement("div");
+  d.className = "tnode" + (n.leaf ? " leaf" : "") + (n.lv > revealed ? " hidden-lv" : "");
+  const r1 = document.createElement("div"); r1.className = "r1";
+  r1.append(Object.assign(document.createElement("span"), {className:"nm", textContent:n.nm}),
+            Object.assign(document.createElement("span"), {className:"vl", textContent:n.vl}));
+  d.append(r1);
+  if (n.f){ const r2 = document.createElement("div"); r2.className = "r2"; r2.textContent = n.f; d.append(r2); }
+  if (n.src){ const s = document.createElement("div"); s.className = "src"; s.textContent = n.src; d.append(s); }
+  if (n.kids){
+    const kids = document.createElement("div"); kids.className = "kids";
+    n.kids.forEach(k => kids.append(nodeEl(k)));
+    d.append(kids);
+    const more = document.createElement("div"); more.className = "more";
+    more.textContent = n.kids.length + " входа — клик, чтобы раскрыть";
+    d.prepend(more);
+    d.onclick = (e) => { e.stopPropagation();
+      if (defense && n.lv >= revealed){ revealed = Math.min(n.lv + 1, MAX_LV); apply(); }
+      d.classList.toggle("open"); };
+  } else { d.onclick = (e) => e.stopPropagation(); }
+  return d;
+}
+function renderTree(){ tree.textContent = ""; tree.append(nodeEl(DATA)); }
+
+const app = document.getElementById("app");
+const sw = document.getElementById("sw");
+function apply(){
+  app.classList.toggle("defense-on", defense);
+  sw.classList.toggle("on", defense);
+  document.querySelectorAll(".tnode").forEach(t => t.classList.toggle("hidden-lv", false));
+  document.getElementById("lv").textContent =
+    "Уровень " + revealed + " из " + MAX_LV + " · клик по узлу — следующий уровень";
+  // в обычном режиме показываем всё (авто-раскрытие до лимита 3)
+  if (!defense){ revealed = 1; renderTree(); tree.querySelectorAll(".tnode").forEach(t => t.classList.add("open")); }
+  else { renderTree(); }
+}
+sw.onclick = () => { defense = !defense; revealed = 1; apply(); };
+document.getElementById("nextLv").onclick = () => { revealed = Math.min(revealed + 1, MAX_LV); apply(); };
+document.getElementById("openAll").onclick = () => { revealed = MAX_LV; apply();
+  tree.querySelectorAll(".tnode").forEach(t => t.classList.add("open")); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && defense){ defense = false; revealed = 1; apply(); }
+});
+apply();
+</script>
+</body>
+</html>
