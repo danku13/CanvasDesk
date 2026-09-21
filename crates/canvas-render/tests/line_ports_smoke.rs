@@ -112,6 +112,7 @@ fn line_ports_template_and_note() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");

@@ -81,6 +81,7 @@ fn headless_spilled_param_row_draws() {
             param_spills: &spills,
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");

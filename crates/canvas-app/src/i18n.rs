@@ -81,6 +81,10 @@ pub mod keys {
     pub const STAGE_HINT: &str = "stage.hint";
     pub const STAGE_LINE_LABEL: &str = "stage.line_label";
     pub const STAGE_PARAM_LABEL: &str = "stage.param_label";
+    /// FR-044: заголовок main stage с составом пучка (паритет с прототипом).
+    pub const STAGE_BUNDLE_TITLE: &str = "stage.bundle_title";
+    /// FR-044: нижняя подсказка main stage с жестами закрытия/выделения.
+    pub const STAGE_FOOT_HINT: &str = "stage.foot_hint";
 
     pub const VALUE_ON: &str = "settings.value.on";
     pub const VALUE_OFF: &str = "settings.value.off";
@@ -715,6 +719,16 @@ const RU: &[(&str, &str)] = &[
     (keys::STAGE_HINT, "Esc — закрыть"),
     (keys::STAGE_LINE_LABEL, "строка {n}"),
     (keys::STAGE_PARAM_LABEL, "→ {param}"),
+    // FR-044 (паритет с прототипом): заголовок stage с составом пучка
+    // и нижняя подсказка с жестами закрытия/выделения
+    (
+        keys::STAGE_BUNDLE_TITLE,
+        "Пучок: {from} → {to} · ×{n}",
+    ),
+    (
+        keys::STAGE_FOOT_HINT,
+        "Esc или клик по затемнённому фону — закрыть · клик по связи — выделить",
+    ),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -1089,6 +1103,14 @@ const EN: &[(&str, &str)] = &[
     (keys::STAGE_HINT, "Esc — close"),
     (keys::STAGE_LINE_LABEL, "line {n}"),
     (keys::STAGE_PARAM_LABEL, "→ {param}"),
+    (
+        keys::STAGE_BUNDLE_TITLE,
+        "Bundle: {from} → {to} · ×{n}",
+    ),
+    (
+        keys::STAGE_FOOT_HINT,
+        "Esc or click the dimmed background — close · click an edge — select",
+    ),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).

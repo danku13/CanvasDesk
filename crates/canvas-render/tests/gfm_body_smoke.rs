@@ -71,6 +71,7 @@ fn headless_gfm_body_quads_draw() {
             param_spills: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
+            stage_texts: &[],
         },
     )
     .expect("prepare текста");

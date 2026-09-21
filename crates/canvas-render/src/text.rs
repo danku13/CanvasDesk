@@ -146,6 +146,42 @@ fn snap_to_pixel(screen: [f32; 2], scale_factor: f32) -> [f32; 2] {
     ]
 }
 
+/// TextArea для screen-space текста (панели, тултипы, тексты stage FR-042):
+/// центровка сдвигом левого края (glyphon 0.6 не имеет set_align), снап к
+/// целым физическим px — единый рендер для всех screen-текстов кадра.
+fn screen_text_area<'a>(
+    buffer: &'a Buffer,
+    st: &ScreenText<'_>,
+    scale_factor: f32,
+) -> TextArea<'a> {
+    let mut left = st.origin[0] * scale_factor;
+    if st.align == TextAlign::Center {
+        let line_w = buffer
+            .layout_runs()
+            .next()
+            .map(|run| run.line_w)
+            .unwrap_or(0.0);
+        left += ((st.width * scale_factor) - line_w).max(0.0) / 2.0;
+    }
+    let left = left.round();
+    let top = (st.origin[1] * scale_factor).round();
+    let line_height = st.font_size * scale_factor * 1.3;
+    TextArea {
+        buffer,
+        left,
+        top,
+        scale: 1.0,
+        bounds: TextBounds {
+            left: left as i32,
+            top: top as i32,
+            right: (left + st.width * scale_factor) as i32,
+            bottom: (top + line_height) as i32,
+        },
+        default_color: st.color,
+        custom_glyphs: &[],
+    }
+}
+
 /// Подготовить текст-группу с одним повтором после trim атласа: при
 /// AtlasFull trim() освобождает место — повтор почти всегда успешен;
 /// повторная ошибка уходит вызывающему (рендерер логирует и рисует stale).
@@ -1114,6 +1150,10 @@ pub struct TitleFrame<'a> {
     /// рисуются в финальной группе (поверх карточек, рядом с лейблами
     /// связей). Пустой список — оверлей выключен или рисков нет.
     pub analysis_badges: &'a [AnalysisBadge],
+    /// FR-042/FR-044: тексты main stage (screen-space) — отдельная группа
+    /// ПОСЛЕ модального прохода квадов stage (рендерер рисует её самой
+    /// последней, поверх пилюль/карточек stage — см. `TextSystem::stage_group`).
+    pub stage_texts: &'a [ScreenText<'a>],
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -1899,7 +1939,11 @@ impl TextSystem {
         // Раньше квады оверлея расширяли диапазон последнего сегмента, и
         // тамбнейлы/тексты его нод перекрывали панель (баг T14).
         let overlay_group = group_count;
-        while self.renderers.len() <= overlay_group {
+        // FR-042/FR-044: группа текстов main stage — на две больше числа
+        // групп z-плана (после оверлея панелей): её квадов нет (квады stage
+        // в cards-буфере), тексты рисуются самой последней группой кадра.
+        let stage_group = overlay_group + 1;
+        while self.renderers.len() <= stage_group {
             let renderer = TextRenderer::new(
                 &mut self.atlas,
                 device,
@@ -1950,6 +1994,30 @@ impl TextSystem {
             );
             buffer.shape_until_scroll(&mut self.font_system, false);
             screen_buffers.push(buffer);
+        }
+
+        // FR-042/FR-044: тексты main stage — тот же screen-space конвейер,
+        // что у панелей (константный физический размер); рисуются отдельной
+        // группой после квадов stage (см. хвост функции)
+        let mut stage_buffers: Vec<Buffer> = Vec::with_capacity(frame.stage_texts.len());
+        for st in frame.stage_texts {
+            let font = st.font_size * scale_factor;
+            let line_height = font * 1.3;
+            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
+            buffer.set_wrap(&mut self.font_system, Wrap::None);
+            buffer.set_size(
+                &mut self.font_system,
+                Some(st.width * scale_factor),
+                Some(line_height),
+            );
+            buffer.set_text(
+                &mut self.font_system,
+                st.text,
+                sans_attrs(),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            stage_buffers.push(buffer);
         }
 
         // FR-013: бейдж «=» calc-нод при дальнем зуме (титулы скрыты) —
@@ -2505,35 +2573,7 @@ impl TextSystem {
         // текстов и закрывал собственные строки панели
         let mut overlay_areas: Vec<TextArea> = Vec::with_capacity(screen_buffers.len());
         for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
-            let mut left = st.origin[0] * scale_factor;
-            // Центровка: glyphon 0.6 (cosmic-text 0.11) не имеет set_align —
-            // сдвигаем левый край на половину разницы ширин областей.
-            if st.align == TextAlign::Center {
-                let line_w = buffer
-                    .layout_runs()
-                    .next()
-                    .map(|run| run.line_w)
-                    .unwrap_or(0.0);
-                left += ((st.width * scale_factor) - line_w).max(0.0) / 2.0;
-            }
-            // Снап к целым физическим px — единообразно с мировыми текстами
-            let left = left.round();
-            let top = (st.origin[1] * scale_factor).round();
-            let line_height = st.font_size * scale_factor * 1.3;
-            overlay_areas.push(TextArea {
-                buffer,
-                left,
-                top,
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: left as i32,
-                    top: top as i32,
-                    right: (left + st.width * scale_factor) as i32,
-                    bottom: (top + line_height) as i32,
-                },
-                default_color: st.color,
-                custom_glyphs: &[],
-            });
+            overlay_areas.push(screen_text_area(buffer, st, scale_factor));
         }
         if let Some(renderer) = self.renderers.get_mut(overlay_group) {
             prepare_group(
@@ -2544,6 +2584,24 @@ impl TextSystem {
                 &mut self.atlas,
                 &self.viewport,
                 &overlay_areas,
+                &mut self.swash_cache,
+            )?;
+        }
+        // FR-042/FR-044: тексты main stage — последняя группа кадра (после
+        // модального прохода квадов stage в рендерере)
+        let mut stage_areas: Vec<TextArea> = Vec::with_capacity(stage_buffers.len());
+        for (buffer, st) in stage_buffers.iter().zip(frame.stage_texts) {
+            stage_areas.push(screen_text_area(buffer, st, scale_factor));
+        }
+        if let Some(renderer) = self.renderers.get_mut(stage_group) {
+            prepare_group(
+                renderer,
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                &stage_areas,
                 &mut self.swash_cache,
             )?;
         }
@@ -2575,6 +2633,15 @@ impl TextSystem {
     /// панель, баг T14).
     pub fn overlay_group(zplan: &crate::zorder::ZPlan) -> usize {
         zplan.group_count()
+    }
+
+    /// Индекс группы текстов main stage (FR-042/FR-044): на два больше числа
+    /// групп z-плана — САМАЯ последняя группа кадра. Рендерер рисует её после
+    /// модального прохода квадов stage (который идёт после всех сегментов,
+    /// панелей и миникарты), поэтому тексты stage лежат поверх своих пилюль
+    /// и карточек, но ничего живого канваса поверх stage нет.
+    pub fn stage_group(zplan: &crate::zorder::ZPlan) -> usize {
+        zplan.group_count() + 1
     }
 
     /// Доступ к FontSystem для операций EditingSession (T7): ввод, каретка,
