@@ -2698,3 +2698,53 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Файлы:** docs/prd/prd-0007-calc-chain-explain.md,
   docs/prototypes/ux-defense-mode.html (v3),
   docs/prototypes/README.md, worklog.md.
+
+---
+
+## 2026-09-21 — FR-049: шаблоны готовых схем — реализация T1–T5 (PRD-0008)
+
+- **Источник:** решение владельца «давай реализуем PRD-0008» (сессия
+  2026-09-21); FR-049 оформлен по cr-template.md (Q1–Q5 закрыты вариантами
+  по умолчанию: манифест двуязычный/содержимое RU-заметки+EN-единицы,
+  состав 6 схем §7.2 PRD, вставка без диалога, seed сохраняется, MCP — v2).
+- **T1 (canvas-core::schemes):** формат пакета `scheme.json` — метаданные
+  RU/EN + `content.nodes[]/edges[]` (подмножество JSON Canvas: типы
+  text/group, цвет — пресеты 1..6 без hex, `flowKind: "value"`); валидатор
+  (dangling-рёбра, дубликаты id, лимиты 200/400, обязательные поля);
+  `SchemeRegistry::embedded()` — `include_dir!` + `OnceLock`, сортировка по
+  id, API list/get/by_category (паттерн FR-019; нюанс include_dir 0.7 —
+  пути детей с префиксом корня, поиск по file_name).
+- **T2 (canvas-scene::scheme_apply):** чистый `instantiate_scheme` — ремап
+  id (note-N/group-N, рёбра edge-N) без коллизий с канвасом, bbox → origin,
+  дети групп ремапятся, value-рёбра → `FlowKind::Value` (входы `$1..$N`).
+- **T4 (assets + оракулы):** 6 схем — intro-calculations (5000),
+  intro-whatif (1500 $), capacity-service (166.67 req/s → util 0.833),
+  project-budget (16925 $ с резервом 15% и группами), unit-economics
+  (6 $ → 216 $ → 1.8), renovation-estimate (1450 $, фан-аут ставки);
+  суммарно 17.5 КБ (G5 ≤ 100 КБ). Oracle-тесты: инстанс → recompute_flow →
+  контрольные значения (+ коллизии на занятом канвасе, ремап групп, проза
+  молчит) — исполняются нативно и под wasip1.
+- **T3 (canvas-app):** `scheme_gallery_ui.rs` — состояние/раскладка
+  (кламп 320×240, окно видимости), фильтр, чипы категорий из реестра,
+  hit-тесты; в app.rs — `apply_scheme` (инстанс в центр → один undo-шаг →
+  spatial → recompute_flow → zoom-to-fit → тост), клавиатура
+  (↑/↓/Enter/Esc/фильтр/Ctrl+T), клики (строка/чип/×/мимо — закрыть),
+  empty-state при 0 нод (US-1: «Открыть галерею» / «Пустой холст»),
+  пункт «Галерея схем» в меню «?» (HelpMenuItem::Schemes), CTA шага 7
+  онбординга («Попробовать» — `OnboardingStep.action_key`, резервация v1
+  задействована), i18n RU/EN ×13 ключей (GALLERY_*, HELP_SCHEMES).
+- **T5 (canvas-web):** `?template=<id>` — WebParams.template (мягкий
+  разбор, юнит-тест), `App::set_pending_scheme`, применение на первом кадре
+  (вьюпорт известен — zoom-to-fit корректен), неизвестный id — тост
+  GALLERY_UNKNOWN; app_spawn прокидывает параметр.
+- **Доки:** SPEC §5 (ассеты схем), interface-objects/scheme-gallery.md
+  (новый: границы, входы, поведение, инварианты, оракулы),
+  interface-objects/onboarding.md (action шага 7), user-docs/quick-start.md
+  (§7 «Быстрый старт со шаблонами»), ACCEPTANCE.md (FR-049.1–9),
+  index-cr-fr (выполнено v1), prd/README (статус PRD-0008 → в работе),
+  FR-049 (статус/ченжлог/фикс примера манифеста — accent не введён).
+- **Гейты:** fmt ✓; clippy -D warnings ✓; test --workspace ✓ (46 бинарей,
+  0 failed; canvas-app 235, canvas-scene scheme_apply 12, canvas-web 47);
+  wasm_gate ✓; mcp_wasm_gate ✓ (полная MCP-сессия в wasmtime); token_lint ✓.
+  Окружение восстановлено после пересоздания (rustup 1.98.1, wasmtime
+  36.0.1, таргеты wasm32); чистка диска: rm -rf target/debug (StorageFull).
