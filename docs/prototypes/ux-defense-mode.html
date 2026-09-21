@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CanvasDesk — прототип У9: режим защиты (панель остаётся видимой)</title>
+<title>CanvasDesk — прототип У9 (v2): режим защиты — дерево нод с ветками</title>
 <style>
   :root{
     --bg:#14161b; --panel:#1d2027; --panel2:#232733; --line:#2e3342;
@@ -13,29 +13,31 @@
   *{box-sizing:border-box; margin:0; padding:0;}
   body{background:var(--bg); color:var(--tx); font:14px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; padding:24px;}
   h1{font-size:18px; margin-bottom:4px;}
-  .sub{color:var(--tx2); font-size:13px; margin-bottom:16px; max-width:1100px;}
+  .sub{color:var(--tx2); font-size:13px; margin-bottom:16px; max-width:1150px;}
   .sub b{color:var(--tx);}
 
-  .app{display:flex; gap:14px; height:calc(100vh - 150px); min-height:520px;}
+  .app{display:flex; gap:14px; height:calc(100vh - 190px); min-height:560px;}
+
   /* ── канвас ─────────────────────────────── */
-  .canvas{flex:1.35; background:var(--panel); border:1px solid var(--line); border-radius:12px; position:relative; overflow:hidden;}
-  .canvas .tag{position:absolute; top:12px; left:14px; color:var(--tx2); font-size:11px; letter-spacing:.4px;}
+  .canvas{flex:1.1; background:var(--panel); border:1px solid var(--line); border-radius:12px; position:relative; overflow:hidden;}
+  .canvas .tag{position:absolute; top:12px; left:14px; color:var(--tx2); font-size:11px; letter-spacing:.4px; z-index:3;}
+  #cedges{position:absolute; inset:0; width:100%; height:100%; z-index:0;}
   .cnode{position:absolute; background:var(--panel2); border:1px solid var(--line); border-radius:9px;
-    padding:9px 12px; min-width:180px; transition:all .25s;}
+    padding:9px 12px; min-width:180px; z-index:1; cursor:pointer; transition:opacity .25s;}
   .cnode .t{font-size:11px; color:var(--tx2); margin-bottom:3px;}
   .cnode .row{display:flex; justify-content:space-between; gap:14px; font-size:13px;}
   .cnode .val{font-weight:600;}
   .cnode .d{color:var(--delta); font-weight:600;}
   .cnode.chain{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
   .cnode.dim{opacity:var(--dim);}
-  .cnode.prose{opacity:var(--dim); font-style:italic; color:var(--tx2); font-size:12px;}
-  .edge{position:absolute; height:2px; background:var(--accent); opacity:.75; transform-origin:0 50%;}
+  .cnode.prose{opacity:var(--dim); font-style:italic; color:var(--tx2); font-size:12px; cursor:default;}
+  .cnode.hit{box-shadow:0 0 0 3px var(--ok);}
   .defense-on .cnode.chain .row, .defense-on .cnode.chain .val{font-size:19px;}
   .defense-on .cnode.chain{min-width:230px;}
   .defense-on .cnode.prose{display:none;}
 
   /* ── панель ─────────────────────────────── */
-  .side{flex:1; display:flex; flex-direction:column; gap:14px;}
+  .side{flex:1; display:flex; flex-direction:column; gap:14px; min-width:540px;}
   .panel{background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; flex:1; overflow:hidden;}
   .p-head{padding:14px 16px 10px; border-bottom:1px solid var(--line);}
   .p-head .ttl{font-weight:600; font-size:15px; display:flex; align-items:center; gap:10px;}
@@ -50,23 +52,24 @@
 
   .crumbs{padding:8px 16px 0; color:var(--tx2); font-size:12px;}
   .crumbs b{color:var(--accent);}
-  .tree{padding:10px 16px 16px; overflow:auto; flex:1;}
-  .tnode{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--panel2);
-    border-radius:8px; padding:8px 12px; margin:8px 0 0 0; cursor:pointer; transition:all .2s;}
-  .tnode .r1{display:flex; justify-content:space-between; gap:10px; align-items:baseline;}
-  .tnode .nm{font-weight:600; font-size:13px;}
-  .tnode .vl{font-weight:600;}
-  .tnode .r2{color:var(--tx2); font-size:11.5px; margin-top:2px;}
-  .tnode .delta{color:var(--delta); font-weight:600;}
-  .tnode.leaf{border-left-color:var(--leaf);}
-  .tnode.leaf .src{color:var(--leaf); font-size:11.5px; margin-top:2px;}
-  .tnode .kids{margin-left:16px; display:none;}
-  .tnode.open > .kids{display:block;}
-  .tnode .more{color:var(--tx2); font-size:11px; margin-top:3px;}
-  .tnode.hidden-lv{display:none;}
-  .defense-on .tnode .nm, .defense-on .tnode .vl{font-size:19px;}
-  .defense-on .tnode{padding:12px 16px;}
-  .defense-on .tnode .r2, .defense-on .tnode .src{font-size:13px;}
+
+  /* ── дерево-граф: узлы-карточки + SVG-ветки ── */
+  .tree-wrap{flex:1; overflow:auto; position:relative;}
+  #graph{position:relative; min-width:100%; min-height:100%;}
+  #gscale{position:absolute; top:0; left:0; transform-origin:0 0;}
+  #edges{position:absolute; top:0; left:0; z-index:0;}
+  #edges path{fill:none; stroke:var(--accent); stroke-width:2; opacity:.75;}
+  #edges path.toLeaf{stroke:var(--leaf);}
+  .gnode{position:absolute; background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--accent);
+    border-radius:8px; padding:7px 10px; width:158px; cursor:pointer; z-index:1;}
+  .gnode .nm{font-weight:600; font-size:12px; display:flex; justify-content:space-between; gap:8px; align-items:baseline;}
+  .gnode .vl{font-weight:600; white-space:nowrap;}
+  .gnode .f{color:var(--tx2); font-size:10.5px; margin-top:2px;}
+  .gnode .src{color:var(--leaf); font-size:10.5px; margin-top:2px;}
+  .gnode.leaf{border-left-color:var(--leaf);}
+  .gnode.frontier{border-style:dashed;}
+  .gnode .badge{color:var(--accent); font-size:10.5px; margin-top:4px;}
+  .gnode.hit{box-shadow:0 0 0 3px var(--ok);}
 
   .stepbar{border-top:1px solid var(--line); padding:10px 16px; display:none; align-items:center; gap:10px;}
   .defense-on .stepbar{display:flex;}
@@ -83,40 +86,44 @@
 </head>
 <body>
 
-<h1>Прототип У9 — режим защиты</h1>
+<h1>Прототип У9 (v2) — режим защиты: дерево нод с ветками</h1>
 <div class="sub">
-  Показан вариант, при котором в режиме защиты <b>explain-панель остаётся видимой</b> и дерево укрупняется (×1.5),
-  одновременно с крупными цифрами канваса (AC-6.2). Раскрытие — по шагам: кнопка «Следующий уровень» или клик по узлу (AC-6.3).
-  <b>Esc</b> — выход с полным восстановлением вида (AC-6.4).
+  <b>Правка владельца (2026-09-22):</b> «режим защиты должен выглядеть так же как дерево нод с ветками».
+  Дерево цепочки теперь рендерится <b>графом узлов-карточек, соединённых ветками</b> — одинаково в обычном
+  режиме и в защите; списочное представление с отступами убрано. Режим защиты показывает <b>тот же граф</b>,
+  укрупнённый (×1.35), с пошаговым раскрытием уровней от корня: клик по узлу, <b>пробел</b> или кнопка
+  «Следующий уровень» (AC-6.3); цифры канваса укрупняются (×1.5, AC-6.2), проза скрывается. <b>Esc</b> —
+  полный выход (AC-6.4). Клик по подсвеченной ноде канваса подводит к её узлу в дереве (У2 — да).
 </div>
 
 <div class="app" id="app">
   <div class="canvas" id="canvas">
     <div class="tag">канвас — подсветка цепочки, остальное затемнено (AC-3.1)</div>
+    <svg id="cedges"></svg>
 
-    <div class="cnode chain" style="top:52px; left:42%;">
+    <div class="cnode chain" id="cn-root" data-tree="Стоимость подписки" style="top:52px; left:40%;">
       <div class="t">Юнит-экономика подписки</div>
       <div class="row"><span>Стоимость подписки</span><span class="val">1 240 ₽</span></div>
       <div class="row"><span class="t">полоса D</span><span class="d">+33пп</span></div>
     </div>
-    <div class="cnode chain" style="top:190px; left:8%;">
+    <div class="cnode chain" id="cn-npl" data-tree="NPL 90+" style="top:230px; left:6%;">
       <div class="t">Риск NPL</div>
       <div class="row"><span>доля NPL</span><span class="val">92%</span></div>
       <div class="row" style="font-style:italic; color:var(--tx2); font-size:11px;"><span>Комментарий аналитика к таблице рисков</span></div>
     </div>
-    <div class="cnode chain" style="top:200px; left:40%;">
+    <div class="cnode chain" id="cn-arent" data-tree="Аренда устройств" style="top:230px; left:38%;">
       <div class="t">Аренда устройств</div>
       <div class="row"><span>аренда/мес</span><span class="val">620 ₽</span></div>
     </div>
-    <div class="cnode chain" style="top:200px; left:72%;">
+    <div class="cnode chain" id="cn-trade" data-tree="Трейд-ин" style="top:230px; left:72%;">
       <div class="t">Трейд-ин</div>
       <div class="row"><span>остаточная ст-ть</span><span class="val">18%</span></div>
     </div>
-    <div class="cnode dim" style="top:390px; left:12%;">
+    <div class="cnode dim" style="top:420px; left:10%;">
       <div class="t">CRM-воронка</div>
       <div class="row"><span>конверсия демо</span><span class="val">34%</span></div>
     </div>
-    <div class="cnode dim" style="top:390px; left:58%;">
+    <div class="cnode dim" style="top:420px; left:56%;">
       <div class="t">Маркетинг</div>
       <div class="row"><span>CAC</span><span class="val">2 100 ₽</span></div>
     </div>
@@ -126,25 +133,28 @@
     <div class="panel" id="panel">
       <div class="p-head">
         <div class="ttl">Цепочка: Стоимость подписки <span>1 240 ₽</span></div>
-        <div class="meta">лимит авто-раскрытия: 3 (FR-039) · корень: итог ноды</div>
+        <div class="meta">представление: граф нод с ветками (v2) · лимит авто-раскрытия: 3 (FR-039) · корень: итог ноды</div>
         <div class="toggle-row">
           <div class="switch" id="sw" title="AC-6.1: запуск одним действием"></div>
           <span class="lbl">Режим защиты</span>
           <span class="kbd">Esc</span><span class="lbl" style="color:var(--tx2)">— выход</span>
+          <span class="kbd">Пробел</span><span class="lbl" style="color:var(--tx2)">— следующий уровень</span>
         </div>
       </div>
       <div class="crumbs">Крошки: <b>Стоимость подписки</b></div>
-      <div class="tree" id="tree"></div>
+      <div class="tree-wrap"><div id="graph"><div id="gscale"><svg id="edges"></svg></div></div></div>
       <div class="stepbar">
-        <span class="lv" id="lv">Уровень 1 из 4 · клик по узлу — следующий уровень</span>
+        <span class="lv" id="lv"></span>
         <button class="btn" id="nextLv">Следующий уровень</button>
         <button class="btn" id="openAll">Раскрыть всё</button>
       </div>
     </div>
 
     <div class="note">
-      <b>Вопрос У9.</b> Здесь панель в режиме защиты <b>не скрывается</b>: дерево укрупняется вместе с канвасом.
-      <div class="q">Альтернатива: скрывать панель и оставлять только крупный канвас. Посмотрите оба сценария на проекторе — какое поведение подтверждаете?</div>
+      <b>Правка владельца (v2).</b> Дерево — <b>граф нод с ветками</b>, один и тот же в обычном режиме и в защите
+      (список с отступами из v1 удалён); защита = тот же граф крупнее + пошаговое раскрытие.
+      <div class="q">Открытый подвопрос У9: панель остаётся видимой (как здесь) или защита оставляет только крупный
+      канвас и граф? Посмотрите оба сценария на проекторе.</div>
     </div>
   </div>
 </div>
@@ -168,54 +178,175 @@ const DATA = {
     ]},
   ],
 };
-const MAX_LV = 4;
-let defense = false, revealed = 1;
+const MAX_LV = 4;        // глубина данных
+const AUTO_LV = 3;       // лимит авто-раскрытия (FR-039)
+const SCALE_D = 1.35;    // укрупнение графа в защите (≈ ×1.5 к шрифту узла)
+const COLW = 196, CARDW = 158, ROWH = 116, PAD = 14;
 
-const tree = document.getElementById("tree");
-function nodeEl(n){
-  const d = document.createElement("div");
-  d.className = "tnode" + (n.leaf ? " leaf" : "") + (n.lv > revealed ? " hidden-lv" : "");
-  const r1 = document.createElement("div"); r1.className = "r1";
-  r1.append(Object.assign(document.createElement("span"), {className:"nm", textContent:n.nm}),
-            Object.assign(document.createElement("span"), {className:"vl", textContent:n.vl}));
-  d.append(r1);
-  if (n.f){ const r2 = document.createElement("div"); r2.className = "r2"; r2.textContent = n.f; d.append(r2); }
-  if (n.src){ const s = document.createElement("div"); s.className = "src"; s.textContent = n.src; d.append(s); }
-  if (n.kids){
-    const kids = document.createElement("div"); kids.className = "kids";
-    n.kids.forEach(k => kids.append(nodeEl(k)));
-    d.append(kids);
-    const more = document.createElement("div"); more.className = "more";
-    more.textContent = n.kids.length + " входа — клик, чтобы раскрыть";
-    d.prepend(more);
-    d.onclick = (e) => { e.stopPropagation();
-      if (defense && n.lv >= revealed){ revealed = Math.min(n.lv + 1, MAX_LV); apply(); }
-      d.classList.toggle("open"); };
-  } else { d.onclick = (e) => e.stopPropagation(); }
-  return d;
-}
-function renderTree(){ tree.textContent = ""; tree.append(nodeEl(DATA)); }
+let defense = false, revealed = 1;
+const manualOpen = new Set();   // узлы, раскрытые вручную за лимитом 3 (обычный режим)
+const plural = (n, one, few) => (n % 10 === 1 && n % 100 !== 11) ? one : few;
+
+(function link(n, p){ n.p = p; (n.kids || []).forEach(k => link(k, n)); })(DATA, null);
 
 const app = document.getElementById("app");
 const sw = document.getElementById("sw");
+const graph = document.getElementById("graph");
+const gscale = document.getElementById("gscale");
+const edgesSvg = document.getElementById("edges");
+
+function kids(n){ return n.kids || []; }
+function isVisible(n){
+  if (defense) return n.lv <= revealed;
+  if (n.lv <= AUTO_LV) return true;
+  let p = n.p;
+  while (p && p.lv > AUTO_LV){ if (!manualOpen.has(p)) return false; p = p.p; }
+  return manualOpen.has(p);
+}
+function hiddenKidCount(n){ return kids(n).filter(k => !isVisible(k)).length; }
+
+/* ── компоновка: колонка = уровень, ряд = порядок листьев ── */
+let leafCursor, maxCol;
+function assign(n, depth){
+  n.col = depth - 1;
+  if (n.col > maxCol) maxCol = n.col;
+  const vk = kids(n).filter(isVisible);
+  if (!vk.length){ n.row = leafCursor++; return; }
+  vk.forEach(k => assign(k, depth + 1));
+  n.row = (vk[0].row + vk[vk.length - 1].row) / 2;
+}
+
+let nodeEls = new Map();
+function render(){
+  leafCursor = 0; maxCol = 0;
+  assign(DATA, 1);
+
+  /* размер сцены (без масштаба) */
+  const W = PAD + maxCol * COLW + CARDW + PAD;
+  const H = PAD + Math.max(0, leafCursor - 1) * ROWH + 104;
+
+  gscale.textContent = "";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.id = "edges";
+  gscale.append(svg);
+  nodeEls = new Map();
+
+  (function place(n){
+    const el = document.createElement("div");
+    el.className = "gnode" + (n.leaf ? " leaf" : "");
+    const r1 = document.createElement("div"); r1.className = "nm";
+    r1.append(Object.assign(document.createElement("span"), {textContent:n.nm}),
+              Object.assign(document.createElement("span"), {className:"vl", textContent:n.vl}));
+    el.append(r1);
+    if (n.f){ const f = document.createElement("div"); f.className = "f"; f.textContent = n.f; el.append(f); }
+    if (n.src){ const s = document.createElement("div"); s.className = "src"; s.textContent = n.src; el.append(s); }
+    const hid = hiddenKidCount(n);
+    if (hid > 0){
+      el.classList.add("frontier");
+      const b = document.createElement("div"); b.className = "badge";
+      b.textContent = defense
+        ? "ещё " + hid + " " + plural(hid, "ветка", "ветки") + " — уровень " + (revealed + 1)
+        : "ещё " + hid + " " + plural(hid, "уровень", "уровня") + " — клик: раскрыть";
+      el.append(b);
+    }
+    el.style.left = (PAD + n.col * COLW) + "px";
+    el.style.top  = (PAD + n.row * ROWH) + "px";
+    el.onclick = (e) => { e.stopPropagation(); onNodeClick(n); };
+    gscale.append(el);
+    nodeEls.set(n, el);
+    kids(n).filter(isVisible).forEach(place);
+  })(DATA);
+
+  /* ветки: от правого края родителя к левому краю ребёнка */
+  const draw = (n) => {
+    const pEl = nodeEls.get(n);
+    kids(n).filter(isVisible).forEach(k => {
+      const cEl = nodeEls.get(k);
+      const x1 = pEl.offsetLeft + pEl.offsetWidth, y1 = pEl.offsetTop + pEl.offsetHeight / 2;
+      const x2 = cEl.offsetLeft, y2 = cEl.offsetTop + cEl.offsetHeight / 2;
+      const mx = (x1 + x2) / 2;
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", "M " + x1 + " " + y1 + " C " + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2);
+      if (k.leaf) p.classList.add("toLeaf");
+      svg.append(p);
+      draw(k);
+    });
+  };
+  draw(DATA);
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+  /* масштаб: защита укрупняет тот же граф целиком */
+  const s = defense ? SCALE_D : 1;
+  gscale.style.transform = "scale(" + s + ")";
+  gscale.style.width = W + "px"; gscale.style.height = H + "px";
+  graph.style.width = Math.round(W * s) + "px";
+  graph.style.height = Math.round(H * s) + "px";
+
+  document.getElementById("lv").textContent =
+    "Уровень " + revealed + " из " + MAX_LV + " · клик по узлу или пробел — следующий уровень";
+}
+
+function onNodeClick(n){
+  if (defense){
+    if (kids(n).length && n.lv === revealed && revealed < MAX_LV){ revealed = n.lv + 1; apply(); }
+    return;
+  }
+  const hid = hiddenKidCount(n);
+  if (hid > 0){ manualOpen.add(n); apply(); }
+  else if (manualOpen.has(n) && kids(n).every(k => k.lv > AUTO_LV)){ manualOpen.delete(n); apply(); }
+}
+
+/* ── канвас: ветки цепочки + обратная синхронизация (У2 — да) ── */
+function drawCanvasEdges(){
+  const canvas = document.getElementById("canvas");
+  const svg = document.getElementById("cedges");
+  svg.textContent = "";
+  const root = document.getElementById("cn-root");
+  ["cn-npl", "cn-arent", "cn-trade"].forEach(id => {
+    const c = document.getElementById(id);
+    const cr = canvas.getBoundingClientRect(), rr = root.getBoundingClientRect(), cc = c.getBoundingClientRect();
+    const x1 = rr.left - cr.left + rr.width / 2, y1 = rr.bottom - cr.top;
+    const x2 = cc.left - cr.left + cc.width / 2, y2 = cc.top - cr.top;
+    const my = (y1 + y2) / 2;
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", "M " + x1 + " " + y1 + " C " + x1 + " " + my + ", " + x2 + " " + my + ", " + x2 + " " + y2);
+    p.setAttribute("stroke", "#4f8cff"); p.setAttribute("stroke-width", "2");
+    p.setAttribute("fill", "none"); p.setAttribute("opacity", "0.65");
+    svg.append(p);
+  });
+}
+
+function flashTree(nm, lv){
+  let target = null;
+  nodeEls.forEach((el, n) => { if (n.nm === nm) target = {el, n}; });
+  if (!target) return;
+  if (defense && target.n.lv > revealed){ revealed = Math.min(target.n.lv, MAX_LV); apply(); }
+  const el = nodeEls.get(target.n) || target.el;
+  el.classList.add("hit");
+  el.scrollIntoView({block:"nearest", inline:"nearest", behavior:"smooth"});
+  setTimeout(() => el.classList.remove("hit"), 1400);
+}
+document.querySelectorAll(".cnode.chain").forEach(c => {
+  c.addEventListener("click", () => flashTree(c.dataset.tree, 99));
+});
+
 function apply(){
   app.classList.toggle("defense-on", defense);
   sw.classList.toggle("on", defense);
-  document.querySelectorAll(".tnode").forEach(t => t.classList.toggle("hidden-lv", false));
-  document.getElementById("lv").textContent =
-    "Уровень " + revealed + " из " + MAX_LV + " · клик по узлу — следующий уровень";
-  // в обычном режиме показываем всё (авто-раскрытие до лимита 3)
-  if (!defense){ revealed = 1; renderTree(); tree.querySelectorAll(".tnode").forEach(t => t.classList.add("open")); }
-  else { renderTree(); }
+  render();
 }
-sw.onclick = () => { defense = !defense; revealed = 1; apply(); };
-document.getElementById("nextLv").onclick = () => { revealed = Math.min(revealed + 1, MAX_LV); apply(); };
-document.getElementById("openAll").onclick = () => { revealed = MAX_LV; apply();
-  tree.querySelectorAll(".tnode").forEach(t => t.classList.add("open")); };
+
+sw.onclick = () => { defense = !defense; if (defense) revealed = 1; apply(); };
+document.getElementById("nextLv").onclick = () => { if (defense){ revealed = Math.min(revealed + 1, MAX_LV); apply(); } };
+document.getElementById("openAll").onclick = () => { if (defense){ revealed = MAX_LV; apply(); } };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && defense){ defense = false; revealed = 1; apply(); }
+  if (e.code === "Space" && defense){ e.preventDefault(); revealed = Math.min(revealed + 1, MAX_LV); apply(); }
 });
+
 apply();
+drawCanvasEdges();
+window.addEventListener("resize", drawCanvasEdges);
 </script>
 </body>
 </html>
