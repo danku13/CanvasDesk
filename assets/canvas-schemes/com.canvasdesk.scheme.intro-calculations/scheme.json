@@ -1,0 +1,69 @@
+{
+  "id": "com.canvasdesk.scheme.intro-calculations",
+  "name_ru": "Живые расчёты",
+  "name_en": "Live calculations",
+  "description_ru": "Минимальная цепочка Numi: два входа и формула. Поменяйте число — пересчёт мгновенный.",
+  "description_en": "A minimal Numi chain: two inputs and one formula. Change a number and watch it recalculate.",
+  "category": "onboarding",
+  "category_ru": "Онбординг",
+  "category_en": "Onboarding",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 330,
+        "height": 170,
+        "text": "Живые расчёты: поменяйте число в любой карточке — цепочка пересчитается сама. Формулы Numi читаются построчно, единицы измерения поддерживаются.",
+        "color": "4"
+      },
+      {
+        "id": "users",
+        "type": "text",
+        "x": 410,
+        "y": 0,
+        "width": 220,
+        "height": 120,
+        "text": "1000",
+        "color": "1"
+      },
+      {
+        "id": "sessions",
+        "type": "text",
+        "x": 410,
+        "y": 180,
+        "width": 220,
+        "height": 120,
+        "text": "5",
+        "color": "1"
+      },
+      {
+        "id": "load",
+        "type": "text",
+        "x": 710,
+        "y": 80,
+        "width": 240,
+        "height": 140,
+        "text": "$1 * $2",
+        "color": "2"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "users",
+        "toNode": "load",
+        "flowKind": "value"
+      },
+      {
+        "id": "e2",
+        "fromNode": "sessions",
+        "toNode": "load",
+        "flowKind": "value"
+      }
+    ]
+  }
+}

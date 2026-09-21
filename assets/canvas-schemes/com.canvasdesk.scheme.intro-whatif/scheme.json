@@ -1,0 +1,79 @@
+{
+  "id": "com.canvasdesk.scheme.intro-whatif",
+  "name_ru": "Сценарии what-if",
+  "name_en": "What-if scenarios",
+  "description_ru": "Бюджет из двух статей и приглашение к what-if: подмените вход в режиме сценария и сравните дельту.",
+  "description_en": "A two-line budget with a what-if invitation: override an input in scenario mode and compare the delta.",
+  "category": "onboarding",
+  "category_ru": "Онбординг",
+  "category_en": "Onboarding",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 330,
+        "height": 170,
+        "text": "Сценарии: выделите строку с формулой и включите режим What-if в нижнем баре — подмените вход и сравните дельту. База при этом не меняется.",
+        "color": "4"
+      },
+      {
+        "id": "marketing",
+        "type": "text",
+        "x": 410,
+        "y": 0,
+        "width": 220,
+        "height": 120,
+        "text": "1200 $",
+        "color": "1"
+      },
+      {
+        "id": "tools",
+        "type": "text",
+        "x": 410,
+        "y": 180,
+        "width": 220,
+        "height": 120,
+        "text": "300 $",
+        "color": "1"
+      },
+      {
+        "id": "total",
+        "type": "text",
+        "x": 710,
+        "y": 80,
+        "width": 240,
+        "height": 140,
+        "text": "$1 + $2",
+        "color": "2"
+      },
+      {
+        "id": "try",
+        "type": "text",
+        "x": 410,
+        "y": 360,
+        "width": 330,
+        "height": 130,
+        "text": "Попробуйте поднять маркетинг до полутора тысяч — итог покажет дельту.",
+        "color": "4"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "marketing",
+        "toNode": "total",
+        "flowKind": "value"
+      },
+      {
+        "id": "e2",
+        "fromNode": "tools",
+        "toNode": "total",
+        "flowKind": "value"
+      }
+    ]
+  }
+}

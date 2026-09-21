@@ -205,6 +205,20 @@ pub mod keys {
 
     // --- Онбординг (FR-028) ---
     pub const ONBOARDING_BACK: &str = "onboarding.back";
+    // --- Галерея схем (FR-049) ---
+    pub const GALLERY_TITLE: &str = "gallery.title";
+    pub const GALLERY_SEARCH: &str = "gallery.search";
+    pub const GALLERY_ALL: &str = "gallery.all";
+    pub const GALLERY_META: &str = "gallery.meta";
+    pub const GALLERY_FOOTER: &str = "gallery.footer";
+    pub const GALLERY_TRY: &str = "gallery.try";
+    pub const GALLERY_EMPTY_TITLE: &str = "gallery.empty.title";
+    pub const GALLERY_EMPTY_BODY: &str = "gallery.empty.body";
+    pub const GALLERY_EMPTY_OPEN: &str = "gallery.empty.open";
+    pub const GALLERY_EMPTY_DISMISS: &str = "gallery.empty.dismiss";
+    pub const GALLERY_APPLIED: &str = "gallery.applied";
+    pub const GALLERY_UNKNOWN: &str = "gallery.unknown";
+    pub const HELP_SCHEMES: &str = "help.schemes";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -549,6 +563,29 @@ const RU: &[(&str, &str)] = &[
     (keys::HINT_DOLLAR_IN, "вход value-рёбер (FR-014)"),
     (keys::HINT_DOLLAR_N, "вход №{i}"),
     // --- Онбординг ---
+    // --- Галерея схем (FR-049) ---
+    (keys::GALLERY_TITLE, "Шаблоны схем"),
+    (keys::GALLERY_SEARCH, "Поиск схем"),
+    (keys::GALLERY_ALL, "Все"),
+    (keys::GALLERY_META, "ноды: {nodes}, связи: {edges}"),
+    (keys::GALLERY_FOOTER, "Enter — открыть · Esc — закрыть"),
+    (keys::GALLERY_TRY, "Попробовать"),
+    (keys::GALLERY_EMPTY_TITLE, "Начните с шаблона"),
+    (
+        keys::GALLERY_EMPTY_BODY,
+        "Готовые схемы со связями и расчётами: откройте одну и поменяйте числа — всё пересчитается на живую.",
+    ),
+    (keys::GALLERY_EMPTY_OPEN, "Открыть галерею"),
+    (keys::GALLERY_EMPTY_DISMISS, "Пустой холст"),
+    (
+        keys::GALLERY_APPLIED,
+        "Схема «{name}» добавлена — одно Ctrl+Z отменяет",
+    ),
+    (
+        keys::GALLERY_UNKNOWN,
+        "Схема не найдена: {id} — проверьте параметр ?template",
+    ),
+    (keys::HELP_SCHEMES, "Галерея схем"),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
     (keys::ONBOARDING_DONE, "Готово"),
@@ -942,6 +979,29 @@ const EN: &[(&str, &str)] = &[
     (keys::HINT_DOLLAR_IN, "value-edge input (FR-014)"),
     (keys::HINT_DOLLAR_N, "input #{i}"),
     // --- Onboarding ---
+    // --- Scheme gallery (FR-049) ---
+    (keys::GALLERY_TITLE, "Scheme templates"),
+    (keys::GALLERY_SEARCH, "Search schemes"),
+    (keys::GALLERY_ALL, "All"),
+    (keys::GALLERY_META, "nodes: {nodes}, edges: {edges}"),
+    (keys::GALLERY_FOOTER, "Enter — open · Esc — close"),
+    (keys::GALLERY_TRY, "Try it"),
+    (keys::GALLERY_EMPTY_TITLE, "Start from a template"),
+    (
+        keys::GALLERY_EMPTY_BODY,
+        "Ready-made diagrams with connections and calculations: open one and change the numbers — everything recalculates live.",
+    ),
+    (keys::GALLERY_EMPTY_OPEN, "Open gallery"),
+    (keys::GALLERY_EMPTY_DISMISS, "Blank canvas"),
+    (
+        keys::GALLERY_APPLIED,
+        "Scheme «{name}» added — one Ctrl+Z undoes it",
+    ),
+    (
+        keys::GALLERY_UNKNOWN,
+        "Scheme not found: {id} — check the ?template parameter",
+    ),
+    (keys::HELP_SCHEMES, "Scheme gallery"),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
     (keys::ONBOARDING_DONE, "Done"),
