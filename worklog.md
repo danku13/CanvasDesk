@@ -2228,3 +2228,57 @@ CanvasDesk». Источник — вводные владельца о проз
   (stage-подсистема). Открытые вопросы §Q3 (живая перезагрузка, связь
   с what-if) — за владельцем/PRD-0001.
 - **Коммиты:** feat(core) этап-ядро 2; docs(fr) changelog FR-045; docs — worklog.
+
+## 2026-09-21 — FR-047 (этап D4 PRD-0006): темы-пресеты как данные — 7 встроенных палитр (Nord, Dracula, Catppuccin Mocha/Latte, Solarized Light, Tokyo Night, Gruvbox Dark)
+
+- **Задача (запрос владельца, сессия 2026-09-21):** «Теперь хочу чтобы мы реализовали
+  5-7 тем-пресетов типа Встроенные пресеты: Nord, Dracula, Catppuccin (Mocha/Latte),
+  Solarized (Dark/Light), Tokyo Night, Gruvbox, Monokai, GitHub Light/Dark; VSCode
+  Dark Modern / Dark+» — закрытие открытого вопроса Q3 PRD-0006 (состав F-8).
+- **Решение состава:** 7 пресетов (5 тёмных + 2 светлых — Catppuccin Mocha + Latte,
+  Solarized Light); Monokai, GitHub Light/Dark, VSCode Dark Modern/Dark+, Solarized
+  Dark — пул «позже» (добавление = JSON + одна строка реестра, метрика G2).
+- **Данные (G2):** `design/tokens/themes/*.json` — полный набор из 36 семантических
+  слотов `ThemeColors` + `source`/`license`; генерация скриптом с WCAG-пре-валидацией
+  (скрипт вне репо; значения зафиксированы JSON + тестами).
+- **canvas-core:** `theme_presets.rs` — реестр `PRESETS` (include_str!, wasm-безопасно),
+  валидация набора ключей = `REQUIRED_KEYS` (I-47.1), паритет label (I-47.2), парс hex
+  #RRGGBB(AA), кэш `OnceLock` (разбор 1 раз на процесс, O(1) на кадр); `Settings.theme_preset:
+  String` (serde default, round-trip) + `active_preset()` (мягкая деградация при
+  неизвестном id — I-47.5).
+- **canvas-render:** `theme_presets.rs` — универсальный маппинг «имя слота → поле»
+  `preset_theme(id) -> Option<ThemeColors>` (рендер-код при добавлении пресета не
+  меняется — G2); `ThemeColors::from_settings(theme, preset)` — единая точка выбора
+  палитры (13 точек app.rs); контраст-тесты G3 каждого пресета: графика к фону ≥3:1
+  (accent/guide_align/guide_grid/error/hud/whatif_badge), тексты к карточке ≥4.5:1
+  (title/body/edge_label), code_text к подложке ≥4.5:1, icon/link/quote ≥3:1 (I-47.3).
+- **canvas-app:** dropdown-строка «Тема-пресет» в табе «Внешний вид» (SETTINGS_ROWS
+  18→19; опции «Классическая» + 7 меток — имена собственные без i18n; RU/EN лейблы/
+  описания); `effective_palette()`/`apply_effective_theme()` (рендер + виджеты +
+  redraw); 13 точек `from_theme(self.settings.theme)` → `effective_palette()`; клик по
+  карточке тёмной/светлой и тумблер ☀/🌙 сбрасывают пресет; флаг виджетов при старте —
+  от эффективной палитры. Отклонение от AC-3.2 (карточки пресетов): 9 карточек не
+  влезают в адаптивную модалку 320×240 — dropdown (паттерн Obsidian «Base theme»),
+  задокументировано в FR-047 §Отклонения.
+- **Подстроенные слоты** (порог WCAG важнее буквального следования официальной палитре;
+  перечень — FR-047): Nord error/gfm_code_fill; Latte code_text/whatif_badge/quote;
+  Solarized Light code_text/whatif_badge. Поверхности (card/menu/grid) — производные
+  официальных ролей.
+- **Документация:** `docs/change-requests/fr-047-theme-presets.md` (8 секций шаблона +
+  Решения/Инварианты/Отклонения); index-cr-fr (строка FR-047); PRD-0006 (статус, Q3
+  закрыт, DoD F-8/G3 — [x], changelog D4); prd/README; SPEC §6.6; ACCEPTANCE (секция
+  FR-047); user-docs/interface.md (строка «Тема-пресет», сброс тумблером).
+- **Тесты:** +19 (canvas-core theme_presets 5: разбор всех, уникальность id/состав 7,
+  валидация отказов, hex-формы, find; canvas-render theme_presets 4: маппинг+is_dark,
+  графика G3, тексты G3, fallback; canvas-app settings_ui 1 группа: опции/применение/
+  сброс/отметки + обновлённые layout/полнота); workspace 1301 passed, 0 failed.
+- **Гейты (все зелёные):** cargo fmt --all --check ✓; CARGO_INCREMENTAL=0 clippy
+  --workspace --all-targets -D warnings ✓; CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0
+  cargo test --workspace (1301) ✓; token_lint ✓ (hex пресетов — данные design/, allowlist);
+  wasm_gate ПОЛНЫЙ ✓; mcp_wasm_gate ✓ (полная MCP-сессия в wasmtime).
+- **Вне скоупа (очередь):** F-9 web (CSS-переменные index.html из токенов + persist
+  localStorage-конфига) — D4b; карточки пресетов с превью-свотчами — v2; import тем
+  VSCode/Obsidian — V2 (§13 PRD-0006); вопрос владельцу (AGENTS.md): нужна ли правка
+  user-docs/faq/quick-start сверх interface.md.
+- **Коммиты:** feat(core,render,app) FR-047 реализация; docs(fr) FR-047 + индексы/PRD/
+  SPEC/ACCEPTANCE/user-docs; docs — worklog.
