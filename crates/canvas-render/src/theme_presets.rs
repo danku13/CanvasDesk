@@ -48,6 +48,19 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
     } else {
         canvas_core::tokens::EXPLAIN_LEAF
     };
+    // FR-053 (U3 F-9): слоты состояний контролов в JSON-пресетах не хранятся
+    // (валидатор I-47.1 фиксирует набор ключей) — выводятся: hover/selected —
+    // формула hover_fill (c·1.3+0.04; синий канал +0.06 — контракт бывшего
+    // вычисления app.rs:1042-1049, ноль скачка) от menu_fill пресета;
+    // primary hover и disabled-текст — тематически-независимые примитивы
+    // tokens.rs (как dark()/light() в theme.rs).
+    let menu = rgba("menu_fill");
+    let control_hover = [
+        (menu[0] * 1.3 + 0.04).min(1.0),
+        (menu[1] * 1.3 + 0.04).min(1.0),
+        (menu[2] * 1.3 + 0.06).min(1.0),
+        menu[3],
+    ];
     ThemeColors {
         background: bytes("background"),
         grid_minor: rgb3("grid_minor"),
@@ -87,6 +100,14 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         hud: color("hud"),
         stage_dim: rgba("stage_dim"),
         explain_leaf,
+        control_hover_fill: control_hover,
+        control_primary_hover_fill: canvas_core::tokens::CONTROL_PRIMARY_HOVER_FILL,
+        control_selected_fill: control_hover,
+        control_disabled_text: Color::rgb(
+            canvas_core::tokens::CONTROL_DISABLED_TEXT[0],
+            canvas_core::tokens::CONTROL_DISABLED_TEXT[1],
+            canvas_core::tokens::CONTROL_DISABLED_TEXT[2],
+        ),
     }
 }
 

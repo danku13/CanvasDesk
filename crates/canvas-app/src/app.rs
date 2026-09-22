@@ -2434,6 +2434,9 @@ impl App {
     }
 
     /// Геометрия нижнего бара режима (имена сценариев + счётчик подмен).
+    /// FR-053 (U3): ширины — измеренные TextMeasurer'ом (шейпинг теми же
+    /// метриками, что рендер); счётчик — i18n-строка приложения (ширина
+    /// считается по ТОЙ ЖЕ строке, что рисуется).
     fn whatif_bar_layout(&self) -> whatif_ui::BarLayout {
         let viewport = self.viewport_logical();
         let names: Vec<String> = self
@@ -2443,7 +2446,10 @@ impl App {
             .map(|scenario| scenario.name.clone())
             .collect();
         let count = self.scene.whatif_override_count();
-        whatif_ui::bar_layout(&names, count, viewport)
+        let counter_label = self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        whatif_ui::bar_layout(&names, &counter_label, viewport, &mut measurer, &mut fs)
     }
 
     /// Подпись ноды для панелей what-if: первая строка текста (обрезка),
@@ -2805,7 +2811,8 @@ impl App {
         let viewport = self.viewport_logical();
         let palette = self.effective_palette();
         let accent = Color::rgb(0x4c, 0xa6, 0xff);
-        let dim = Color::rgb(0x8a, 0x90, 0x9c);
+        // FR-053 (U3 F-9): disabled-текст — слот темы (бывший локальный hex).
+        let dim = palette.control_disabled_text;
         if !self.scene.whatif_active {
             // Свёрнутый вид: пилюля входа.
             let pill = whatif_ui::enter_pill_rect(viewport);
@@ -2883,14 +2890,10 @@ impl App {
         };
         chip_text(layout.base, self.tr(keys::WHATIF_BASE), active.is_none());
         for (i, rect) in layout.scenarios.iter().enumerate() {
-            // CR-015: подпись через `chip_label` — тот же кап «…», что в
-            // раскладке чипа (иначе текст шире чипа и переливается).
-            let label = self
-                .scene
-                .scenarios
-                .get(i)
-                .map(|scenario| whatif_ui::chip_label(&scenario.name))
-                .unwrap_or_default();
+            // FR-053 (U3): подпись — из раскладки (та же Ellipsis-строка,
+            // по которой считалась ширина чипа — урок CR-015; при узком
+            // окне подпись усечена по фактической ширине сжатого чипа).
+            let label = layout.scenario_labels.get(i).cloned().unwrap_or_default();
             chip_text(*rect, &label, active == Some(i));
         }
         chip_text(layout.new_scenario, "+", false);
@@ -4726,6 +4729,19 @@ impl App {
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
         let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
         let lay = scheme_gallery_ui::layout(viewport, &list, &self.scheme_gallery);
+        // FR-053 (U3): измеренные подписи строк (Ellipsis по фактической
+        // ширине строки) — раскладка и отрисовка используют одни строки.
+        let ru = self.settings.language == canvas_core::Language::Ru;
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let row_labels = scheme_gallery_ui::row_labels(
+            viewport,
+            &list,
+            &self.scheme_gallery,
+            ru,
+            &mut measurer,
+            &mut fs,
+        );
         // Подложка панели
         instances.push(CardInstance {
             pos: [lay.panel_rect[0], lay.panel_rect[1]],
@@ -4791,7 +4807,6 @@ impl App {
             align: TextAlign::Left,
         });
         // Чипы категорий («Все» + уникальные категории реестра)
-        let ru = self.settings.language == canvas_core::Language::Ru;
         for (rect, category) in &lay.chip_rects {
             let active = self.scheme_gallery.category == *category;
             instances.push(CardInstance {
@@ -4832,7 +4847,10 @@ impl App {
         }
         // Строки схем (окно видимости)
         let hovered = scheme_gallery_ui::row_at(&lay, self.cursor);
-        for (rect, index) in lay.row_rects.iter().zip(lay.visible_rows.iter()) {
+        for (label, (rect, index)) in row_labels
+            .iter()
+            .zip(lay.row_rects.iter().zip(lay.visible_rows.iter()))
+        {
             let Some(scheme) = list.get(*index) else {
                 continue;
             };
@@ -4841,7 +4859,14 @@ impl App {
                 pos: [rect[0], rect[1]],
                 size: [rect[2], rect[3]],
                 fill: if is_selected || hovered == Some(*index) {
-                    hover_fill(palette.menu_fill)
+                    // FR-053 (U3 F-9): selected/hover строки — слоты темы
+                    // (бывший hover_fill(palette.menu_fill); сегодня значения
+                    // совпадают — ноль скачка, семантика разделена слотами).
+                    if is_selected {
+                        palette.control_selected_fill
+                    } else {
+                        palette.control_hover_fill
+                    }
                 } else {
                     palette.menu_fill
                 },
@@ -4849,7 +4874,8 @@ impl App {
                 params: [8.0, 0.0, 0.0, 1.0],
             });
             texts.push(OwnedScreenText {
-                text: scheme.display_name(ru).to_owned(),
+                // FR-053 (U3): метка из раскладки — измеренный Ellipsis.
+                text: label.title.clone(),
                 origin: [rect[0] + 10.0, rect[1] + 8.0],
                 width: rect[2] - 20.0,
                 font_size: 13.0,
@@ -4857,11 +4883,7 @@ impl App {
                 align: TextAlign::Left,
             });
             texts.push(OwnedScreenText {
-                text: if ru {
-                    scheme.description_ru.clone()
-                } else {
-                    scheme.description_en.clone()
-                },
+                text: label.desc.clone(),
                 origin: [rect[0] + 10.0, rect[1] + 28.0],
                 width: rect[2] - 20.0,
                 font_size: 11.0,
@@ -4941,12 +4963,14 @@ impl App {
                 size: [rect[2], rect[3]],
                 fill: if accent {
                     if hovered {
-                        hover_fill([0.16, 0.32, 0.60, 1.0])
+                        // FR-053 (U3 F-9): hover primary — слот темы (бывший
+                        // hover_fill(DIALOG_BUTTON_PRIMARY), значение прежнее).
+                        palette.control_primary_hover_fill
                     } else {
-                        [0.16, 0.32, 0.60, 1.0]
+                        canvas_core::tokens::DIALOG_BUTTON_PRIMARY
                     }
                 } else if hovered {
-                    hover_fill(palette.menu_fill)
+                    palette.control_hover_fill
                 } else {
                     palette.menu_fill
                 },
