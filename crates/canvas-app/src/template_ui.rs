@@ -18,10 +18,19 @@
 use canvas_core::templates::{TemplateManifest, TemplateRegistry};
 use canvas_core::time::Instant;
 use canvas_render::sectors::{angle_gap, norm_angle};
+use canvas_ui::measure::TextMeasurer;
 
 use std::time::Duration;
 
 use crate::Vec2;
+
+/// Семейство измерения = семейство screen-текстов рендера (паритет метрик
+/// FR-053: раскладка и отрисовка в одних единицах).
+const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+
+/// Кегль чипов категорий (панель и полоса) — совпадает с отрисовкой
+/// (`app.rs`, screen-тексты чипов).
+const CHIP_FONT: f32 = 12.0;
 
 // --- Иконки ---
 
@@ -71,11 +80,17 @@ pub const SCROLL_WINDOW: usize = 14;
 /// строки списка под неё не заходят.
 pub const PANEL_FOOTER_H: f32 = 24.0;
 
-/// Ширина чипа категории по имени (CR-011): считается по СИМВОЛАМ
-/// (`chars().count()`), не по байтам UTF-8 — иначе кириллические категории
-/// получали чип вдвое шире текста и вылезали за панель.
-pub fn category_chip_width(name: &str) -> f32 {
-    name.chars().count() as f32 * 7.5 + 20.0
+/// Ширина чипа категории по имени (CR-011): измеренный текст (FR-054,
+/// TextMeasurer — реальный шейпинг cosmic-text тем же семейством/кеглем,
+/// что отрисовка). Прежняя символьная эвристика `chars·7.5+20` удалена
+/// (урок CR-015: символьные оценки дрейфуют с текстом и шрифтом); паддинг
+/// чипа — прежний (20 px).
+pub fn category_chip_width(
+    name: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> f32 {
+    m.width_of(fs, name, FAMILY, CHIP_FONT) + 20.0
 }
 
 /// Строка панели (FR-024): заголовок секции категории или строка шаблона.
@@ -415,10 +430,15 @@ pub struct StripLayout {
 /// (+ запас под счётчик), строки по [`CATEGORY_ROW_H`], полоса центрирована
 /// по вертикали окна и клампится отступом [`PANEL_TOP_MARGIN`] сверху/снизу
 /// (в маленьком окне не уходит за края выше верхнего отступа).
-pub fn dock_strip_layout(categories: &[String], window_h: f32) -> StripLayout {
+pub fn dock_strip_layout(
+    categories: &[String],
+    window_h: f32,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> StripLayout {
     let width = categories
         .iter()
-        .map(|name| category_chip_width(name) + STRIP_COUNT_SLACK)
+        .map(|name| category_chip_width(name, m, fs) + STRIP_COUNT_SLACK)
         .fold(STRIP_MIN_W, f32::max);
     let rows_h = categories.len() as f32 * CATEGORY_ROW_H;
     // + строка шеврона внизу полосы
@@ -665,55 +685,82 @@ pub fn panel_layout(
     registry: &TemplateRegistry,
     panel: &TemplatePanel,
     rows: &[PanelRow],
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
 ) -> PanelLayout {
+    use canvas_ui::geometry::{UiRect, UiVec2};
+    use canvas_ui::layout::{pad, stack, Child, Column, HAlign, Row, RowPolicy, VAlign};
+
     let width = PANEL_WIDTH.min((window_w - PANEL_MARGIN * 2.0).max(0.0));
     // FR-024: док у ЛЕВОГО края, во всю высоту окна (как Miro)
     let x = PANEL_MARGIN;
     let y = PANEL_TOP_MARGIN;
     let height = (window_h - PANEL_TOP_MARGIN * 2.0).max(0.0);
-    let inner_w = width - PANEL_PADDING * 2.0;
+    let panel_slot = UiRect::new(x, y, width, height);
+    let inner = pad(
+        panel_slot,
+        canvas_ui::geometry::EdgeInsets::uniform(PANEL_PADDING),
+    );
+    let inner_w = inner.w;
 
-    let header_rect = [
-        x + PANEL_PADDING,
-        y + PANEL_PADDING,
-        inner_w,
-        PANEL_HEADER_H,
-    ];
-    let input_rect = [
-        x + PANEL_PADDING,
-        y + PANEL_PADDING + PANEL_HEADER_H + 6.0,
-        inner_w,
-        INPUT_HEIGHT,
-    ];
-
-    // Чипы категорий: одна строка, ширина по имени (+ паддинг), перенос
-    // не делаем — в v1 категорий ≤ 6
-    let categories = registry.categories();
-    let mut category_rects = Vec::with_capacity(categories.len());
-    let mut cx = x + PANEL_PADDING;
-    let chips_y = input_rect[1] + INPUT_HEIGHT + 6.0;
-    for category in &categories {
-        let w = category_chip_width(category);
-        if cx + w > x + width - PANEL_PADDING {
-            break; // не влезли — остальные доступны прокруткой фильтра
-        }
-        let active = panel.category.as_deref() == Some(*category);
-        category_rects.push((
-            [cx, chips_y, w, CATEGORY_ROW_H],
-            (*category).to_owned(),
-            active,
-        ));
-        cx += w + 6.0;
+    // Скелет содержимого: колонка [шапка, поле, чипы] с зазором SPACING_S
+    // (значение прежнего литерала 6).
+    let gap = canvas_core::tokens::SPACING_S;
+    let head_flow = Column {
+        gap,
+        ..Column::default()
     }
+    .lay_out(
+        UiRect::new(inner.x, inner.y, inner_w, f32::INFINITY),
+        &[
+            Child::fixed(inner_w, PANEL_HEADER_H),
+            Child::fixed(inner_w, INPUT_HEIGHT),
+            Child::fixed(inner_w, CATEGORY_ROW_H),
+        ],
+    );
+    let header = head_flow[0];
+    let input = head_flow[1];
+    let chip_strip = head_flow[2];
+    let header_rect = [header.x, header.y, header.w, header.h];
+    let input_rect = [input.x, input.y, input.w, input.h];
+    let chips_y = chip_strip.y;
 
-    let rows_top = chips_y + CATEGORY_ROW_H + 6.0;
+    // Чипы категорий: одна строка, ширина по имени (измеренная), политика
+    // SqueezeTail — именованная деградация узкой панели вместо прежнего
+    // молчаливого `break`-клампа (не влезающий хвост сжимается до нулевой
+    // ширины — переполнение видно линту, категории не «исчезают» silently).
+    // Переноса нет — в v1 категорий ≤ 6.
+    let categories = registry.categories();
+    let chip_rects = Row {
+        gap,
+        policy: RowPolicy::SqueezeTail,
+        ..Row::default()
+    }
+    .lay_out(
+        UiRect::new(inner.x, chips_y, inner_w, CATEGORY_ROW_H),
+        &categories
+            .iter()
+            .map(|c| Child::fixed(category_chip_width(c, m, fs), CATEGORY_ROW_H))
+            .collect::<Vec<_>>(),
+    );
+    let category_rects: Vec<([f32; 4], String, bool)> = categories
+        .iter()
+        .zip(&chip_rects)
+        .map(|(category, r)| {
+            let active = panel.category.as_deref() == Some(*category);
+            ([r.x, r.y, r.w, r.h], (*category).to_owned(), active)
+        })
+        .collect();
+
+    let rows_top = chips_y + CATEGORY_ROW_H + gap;
     // CR-011: резерв под футер-подсказку — строки в неё не заходят
-    let footer_rect = [
-        x + PANEL_PADDING,
-        y + height - PANEL_PADDING - PANEL_FOOTER_H,
-        inner_w,
-        PANEL_FOOTER_H,
-    ];
+    let footer = stack(
+        UiRect::new(inner.x, inner.y, inner_w, inner.h),
+        UiVec2::new(inner_w, PANEL_FOOTER_H),
+        HAlign::Start,
+        VAlign::End,
+    );
+    let footer_rect = [footer.x, footer.y, footer.w, footer.h];
     let bottom_limit = footer_rect[1];
     let mut row_rects = Vec::new();
     let mut visible_rows = Vec::new();
@@ -721,22 +768,32 @@ pub fn panel_layout(
     let mut shown_templates = 0_usize;
     for row in rows.iter().skip(panel.scroll_top) {
         if matches!(row, PanelRow::Template(_)) && shown_templates >= MAX_VISIBLE_ROWS {
-            break;
+            break; // окно прокрутки строк-шаблонов (именованное поведение)
         }
         let (step, card_h) = match row {
             PanelRow::Section(_) => (SECTION_HEIGHT, SECTION_HEIGHT),
             PanelRow::Template(_) => (ROW_HEIGHT, ROW_HEIGHT - 4.0),
         };
         if cursor_y + card_h > bottom_limit {
-            break; // строка не влезает в панель — прокрутка
+            break; // строка не влезает в панель — прокрутка (пагинация)
         }
-        row_rects.push([x + PANEL_PADDING, cursor_y, inner_w, card_h]);
+        row_rects.push([inner.x, cursor_y, inner_w, card_h]);
         visible_rows.push(row.clone());
         cursor_y += step;
         if matches!(row, PanelRow::Template(_)) {
             shown_templates += 1;
         }
     }
+    // Кнопка сворачивания: правый край шапки (Row с хвостом-спейсером),
+    // вертикально с небольшим сдвигом от верха шапки.
+    let collapse = Row {
+        gap: 0.0,
+        ..Row::default()
+    }
+    .lay_out(
+        UiRect::new(inner.x, header.y + 4.0, inner_w, 22.0),
+        &[Child::spacer(inner_w - 22.0), Child::fixed(22.0, 22.0)],
+    );
     PanelLayout {
         panel_rect: [x, y, width, height],
         header_rect,
@@ -745,12 +802,7 @@ pub fn panel_layout(
         row_rects,
         rows: visible_rows,
         footer_rect,
-        collapse_rect: [
-            x + width - PANEL_PADDING - 22.0,
-            y + PANEL_PADDING + 4.0,
-            22.0,
-            22.0,
-        ],
+        collapse_rect: [collapse[1].x, collapse[1].y, collapse[1].w, collapse[1].h],
     }
 }
 
@@ -1202,13 +1254,24 @@ mod tests {
         assert!(!panel.open && !panel.focused);
     }
 
+    /// Детерминированный FontSystem тестов: только вшитый рендером шрифт
+    /// (паттерн measure.rs — метрики одинаковы на всех платформах CI).
+    fn font_system() -> cosmic_text::FontSystem {
+        let mut fs = cosmic_text::FontSystem::new();
+        const FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf");
+        fs.db_mut().load_font_data(FONT.to_vec());
+        fs
+    }
+
     #[test]
     fn panel_collapse_button_and_strip_geometry() {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
         let rows = panel_rows(&registry, &panel);
-        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
         // Кнопка сворачивания — в правой части шапки, внутри панели
         let c = lay.collapse_rect;
         assert!(c[0] >= lay.header_rect[0]);
@@ -1222,7 +1285,7 @@ mod tests {
             .into_iter()
             .map(|c| c.to_owned())
             .collect();
-        let strip = dock_strip_layout(&categories, 800.0);
+        let strip = dock_strip_layout(&categories, 800.0, &mut m, &mut fs);
         assert_eq!(strip.rect[0], PANEL_MARGIN);
         assert!(strip.rect[1] >= PANEL_TOP_MARGIN);
         let h = strip.rect[3];
@@ -1244,7 +1307,7 @@ mod tests {
             strip.chevron_rect[1] + strip.chevron_rect[3] <= strip.rect[1] + strip.rect[3] + 0.01
         );
         // Малое окно: полоса клампится к верхнему отступу, не уходит в минус
-        let small = dock_strip_layout(&categories, 60.0);
+        let small = dock_strip_layout(&categories, 60.0, &mut m, &mut fs);
         assert_eq!(small.rect[1], PANEL_TOP_MARGIN);
     }
 
@@ -1254,7 +1317,9 @@ mod tests {
         let categories: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
         let h = (categories.len() + 1) as f32 * CATEGORY_ROW_H + STRIP_PAD_V * 2.0;
         let window_h = h + PANEL_TOP_MARGIN * 2.0 + 10.0;
-        let strip = dock_strip_layout(&categories, window_h);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let strip = dock_strip_layout(&categories, window_h, &mut m, &mut fs);
         assert!(strip.rect[1] >= PANEL_TOP_MARGIN - 0.01);
         assert!(
             strip.rect[1] + strip.rect[3] <= window_h - PANEL_TOP_MARGIN + 0.01,
@@ -1458,7 +1523,9 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.open = true;
         let rows = panel_rows(&registry, &panel);
-        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
         // FR-024: док у ЛЕВОГО края, во всю высоту окна
         assert!((lay.panel_rect[0] - PANEL_MARGIN).abs() < 0.01);
         assert!((lay.panel_rect[1] - PANEL_TOP_MARGIN).abs() < 0.01);
@@ -1487,20 +1554,31 @@ mod tests {
             assert!(!overlap, "строка палитры налезла на футер");
         }
         // Малое окно: строки обрезаются по высоте панели, без паники
-        let small = panel_layout(400.0, 300.0, &registry, &panel, &rows);
+        let small = panel_layout(400.0, 300.0, &registry, &panel, &rows, &mut m, &mut fs);
         for rect in &small.row_rects {
             assert!(rect[1] + rect[3] <= small.panel_rect[1] + small.panel_rect[3] + 0.01);
         }
     }
 
     #[test]
-    fn panel_chip_width_counts_chars_not_bytes() {
-        // CR-011: ширина чипа — по символам, не по байтам UTF-8: кириллица
-        // (2 байта/символ) давала чип вдвое шире текста и чипы вылезали
-        // за панель, остальные категории молча отбрасывались
-        assert!((category_chip_width("db") - (2.0 * 7.5 + 20.0)).abs() < 0.01);
-        assert!((category_chip_width("БД") - (2.0 * 7.5 + 20.0)).abs() < 0.01);
-        assert!((category_chip_width("Очереди") - (7.0 * 7.5 + 20.0)).abs() < 0.01);
+    fn panel_chip_width_measured_fits_text() {
+        // CR-011 + FR-054: ширина чипа — измеренная (реальный шейпинг),
+        // паддинг прежний: чип всегда шире своего текста, кириллица и
+        // латиница меряются одними метриками (символьная эвристика
+        // `chars·7.5+20` удалена — дрейфовала с текстом/шрифтом).
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        for name in ["db", "БД", "Очереди", "very long category name"] {
+            let w = category_chip_width(name, &mut m, &mut fs);
+            let text_w = m.width_of(&mut fs, name, FAMILY, CHIP_FONT);
+            assert!(
+                w >= text_w + 20.0 - 0.05,
+                "чип шире текста+паддинга: {name} {w} vs {text_w}"
+            );
+        }
+        let short = category_chip_width("db", &mut m, &mut fs);
+        let long = category_chip_width("Очереди", &mut m, &mut fs);
+        assert!(long > short, "шире имя — шире чип");
     }
 
     // --- Wheel: геометрия donut-секторов (рестайл FR-022, 2026-09-16) ---

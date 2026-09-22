@@ -46,7 +46,7 @@ use crate::template_ui::{
 };
 use crate::ui::{
     button_rect, canvas_menu_label, canvas_menu_visible_items, drag_origins, focus_seed_of,
-    help_button_rect, hotkeys_panel_rect, in_resize_corner, menu_item_at_for, menu_item_rect,
+    help_button_rect, hotkeys_panel_rect_at, in_resize_corner, menu_item_at_for, menu_item_rect,
     menu_rect_for, next_free_id, nodes_in_rect, paste_nodes, plan_group_around,
     plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
     select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
@@ -130,6 +130,9 @@ use canvas_scene::{
 /// сборка `UiFrame` (hit-rect'ы из тех же layout-функций, что у ввода и
 /// отрисовки), владелец клавиатуры из `esc_stack`, draw-полосы.
 pub mod ui_registry;
+// FR-054 (U5 PRD-0009, F-11): сквозной layout-линт полного кадра — CI-гейт G4.
+#[cfg(test)]
+mod ui_layout_lint;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -5101,6 +5104,13 @@ impl App {
             && !self.scheme_gallery.open
             && self.onboarding.is_none()
             && !self.settings_open
+            // FR-054: развёрнутый док палитры накрывает левую треть
+            // карточки (тот класс постоянных панелей, что settings/menu —
+            // карточка прячетcя, клики под доком не теряются)
+            && !self.template_panel.open
+            // FR-054: панель хоткеев — transient-оверлей того же класса
+            // (конкурирует с карточкой за лево-центр/центр)
+            && !self.hotkeys_open
             && self.main_stage.is_none()
             && self.menu.is_none()
             && !self.empty_state_dismissed
@@ -5801,12 +5811,17 @@ impl App {
             texts.append(&mut strip_texts);
         } else {
             let rows = template_panel_rows(&self.templates, &self.template_panel);
+            // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
             let lay = template_panel_layout(
                 viewport[0],
                 viewport[1],
                 &self.templates,
                 &self.template_panel,
                 &rows,
+                &mut measurer,
+                &mut fs,
             );
             let panel = rect_xywh(lay.panel_rect);
             // Подложка дока: плотная, с рамкой (отделяет панель от канваса).
@@ -6015,7 +6030,11 @@ impl App {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
         let categories = self.template_category_names();
-        let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+        // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let strip =
+            template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
         let icon_tint = color_to_rgba(palette.icon);
         let open_category = self.template_hover.as_ref().and_then(|h| h.open);
         // Подложка полосы
@@ -6783,6 +6802,10 @@ impl App {
             return (instances, texts);
         }
         let palette = self.effective_palette();
+        // FR-054: сдвиг по спанам — измеренными ширинами (те же метрики, что
+        // у раскладки страницы); measurer на кадр (паттерн пилотов U3).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
         let panel = docs_ui::viewer_rect(viewport);
         let content = docs_ui::viewer_content_rect(panel);
         // Затемнение канваса вокруг панели (паттерн wheel FR-022)
@@ -6873,7 +6896,7 @@ impl App {
                     color: span_color,
                     align: TextAlign::Left,
                 });
-                x += docs_ui::text_width(&span.text, font);
+                x += measurer.width_of(&mut fs, &span.text, canvas_render::text::SANS_FAMILY, font);
             }
         }
         // Квады раскладки (линии/подчёркивания шапок таблиц/бары цитат) —
@@ -7725,7 +7748,11 @@ impl App {
         }
         let viewport = self.viewport_logical();
         let categories = self.template_category_names();
-        let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+        // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let strip =
+            template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
         let hovered = strip
             .rows
             .iter()
@@ -8036,7 +8063,11 @@ impl App {
         let viewport = self.viewport_logical();
         let panel = docs_ui::viewer_rect(viewport);
         let content = docs_ui::viewer_content_rect(panel);
-        let layout = docs_ui::layout_page(page, content[2]);
+        // FR-054: раскладка страницы — измеренным текстом (measurer
+        // создаётся на перекомпоновку, не на кадр; страница кэшируется).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let layout = docs_ui::layout_page(page, content[2], &mut measurer, &mut fs);
         let scroll = docs_ui::ScrollState::new(layout.content_height, content[3]);
         self.docs = Some(DocsViewer {
             page,
@@ -8068,6 +8099,22 @@ impl App {
         self.onboarding = None;
         self.save_settings();
         self.request_redraw();
+    }
+
+    /// FR-054 (гейт G4): панель хоткеев и полоса палитры — соседи
+    /// «лево-центр» одного слоя `Panels`; при свёрнутой палитре панель
+    /// хоткеев смещается правее полосы (налезание интерактивных rect'ов
+    /// одного слоя запрещено; прежде полоса рисовалась поверх панели).
+    fn hotkeys_left_offset(&self, viewport: Vec2) -> f32 {
+        if self.template_panel.open {
+            return 0.0; // док развёрнут — полосы нет, панель у левого края
+        }
+        let categories = self.template_category_names();
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let strip =
+            template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
+        strip.rect[2] + crate::ui::SETTINGS_GAP
     }
 
     /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
@@ -8161,7 +8208,7 @@ impl App {
         // Панель горячих клавиш (FR-004): у левого края, по центру;
         // рендерится независимо от панели настроек
         if self.hotkeys_open {
-            let panel = hotkeys_panel_rect(viewport);
+            let panel = hotkeys_panel_rect_at(viewport, self.hotkeys_left_offset(viewport));
             instances.push(CardInstance {
                 pos: [panel[0], panel[1]],
                 size: [panel[2], panel[3]],
@@ -8710,13 +8757,12 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, event: &KeyEvent) {
-        // FR-052 (U2 PRD-0009): маршрутизация клавиатуры из реестра —
-        // владелец = верх esc_stack активных поверхностей (дословно
-        // воспроизводит прежние head-ветки; NUMI-хоткеи канваса не
-        // тронуты — Q4 §11 PRD-0009).
-        let registry = ui_registry::build_registry(self);
-        match ui_registry::key_owner(&registry) {
+    /// FR-054 (Q4-a PRD-0009): обработчик клавиши владельцем-поверхностью —
+    /// тела прежних head-веток on_key (FR-052) дословно; `true` — событие
+    /// поглощено (доставка KeyboardRouter останавливается), `false` —
+    /// скоуп пропускает событие вниз по стеку (к Canvas-лестнице).
+    fn route_owner_key(&mut self, owner: ui_registry::KeyOwner, event: &KeyEvent) -> bool {
+        match owner {
             ui_registry::KeyOwner::Onboarding => {
                 // FR-028: открытый онбординг глушит канвас-хоткеи (тур модален);
                 // Esc — «Пропустить» (отложить до следующего запуска)
@@ -8728,9 +8774,9 @@ impl App {
                         self.defer_onboarding();
                         self.request_redraw();
                     }
-                    return;
+                    return true;
                 }
-                return;
+                true
             }
             ui_registry::KeyOwner::Gallery => {
                 // FR-049: модальная галерея схем — клавиатура галереи (↑/↓/Enter/
@@ -8739,15 +8785,15 @@ impl App {
                     if event.state == ElementState::Pressed && self.on_gallery_key(event) {
                         self.request_redraw();
                     }
-                    return;
+                    return true;
                 }
-                return;
+                true
             }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
                 if self.editing.is_some() {
                     if event.state != ElementState::Pressed {
-                        return;
+                        return true;
                     }
                     let ctrl = self.modifiers.control_key();
                     let shift = self.modifiers.shift_key();
@@ -8760,29 +8806,29 @@ impl App {
                             Key::Named(NamedKey::ArrowDown) if !event.repeat => {
                                 self.hints.move_selection(1);
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             Key::Named(NamedKey::ArrowUp) if !event.repeat => {
                                 self.hints.move_selection(-1);
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab)
                                 if !event.repeat =>
                             {
                                 self.accept_hint();
-                                return;
+                                return true;
                             }
                             Key::Named(NamedKey::Escape) if !event.repeat => {
                                 self.hints.reset();
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             _ => {}
                         }
                     }
                     let Some(command) = map_key(&event.logical_key, ctrl, shift) else {
-                        return;
+                        return true;
                     };
                     match command {
                         KeyCommand::Commit => self.finish_editing(true),
@@ -8841,8 +8887,9 @@ impl App {
                             }
                         }
                     }
-                    return;
+                    return true;
                 }
+                false
             }
             ui_registry::KeyOwner::Search => {
                 // Панель поиска (T14): открыта — клавиатура уходит в панель
@@ -8851,16 +8898,17 @@ impl App {
                     if event.state == ElementState::Pressed {
                         self.on_search_key(event);
                     }
-                    return;
+                    return true;
                 }
-                return;
+                true
             }
             ui_registry::KeyOwner::TemplatePanel => {
                 // Прежний гейт 8036: панель без клавиатурного фокуса
                 // клавиши не перехватывает — лестница (Ctrl+P и др.) работает
                 if self.template_panel.focused && self.on_template_panel_key(event) {
-                    return;
+                    return true;
                 }
+                false
             }
             ui_registry::KeyOwner::Dialog => {
                 // T21: модальный диалог глушит весь ввод канваса — Enter/Esc —
@@ -8873,9 +8921,9 @@ impl App {
                         Key::Named(NamedKey::Escape) => self.cancel_dialog(),
                         _ => {}
                     }
-                    return;
+                    return true;
                 }
-                return;
+                true
             }
             ui_registry::KeyOwner::Explain => {
                 // PRD-0007 (X2): открытое окно проверки — Esc закрывает
@@ -8889,14 +8937,14 @@ impl App {
                             Key::Named(NamedKey::Enter) => {
                                 self.finish_explain_edit();
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             Key::Named(NamedKey::Escape) => {
                                 if let Some(state) = self.explain.as_mut() {
                                     state.cancel_edit();
                                 }
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             Key::Named(NamedKey::Backspace) => {
                                 if let Some(state) = self.explain.as_mut() {
@@ -8905,7 +8953,7 @@ impl App {
                                     }
                                 }
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             Key::Character(text) => {
                                 if let Some(state) = self.explain.as_mut() {
@@ -8914,27 +8962,54 @@ impl App {
                                     }
                                 }
                                 self.request_redraw();
-                                return;
+                                return true;
                             }
                             _ => {}
                         }
-                        return; // прочие клавиши глотаются, пока поле открыто
+                        return true; // прочие клавиши глотаются, пока поле открыто
                     }
                     if event.logical_key == Key::Named(NamedKey::Escape) && !event.repeat {
                         self.close_explain();
                         self.request_redraw();
-                        return;
+                        return true;
                     }
                 }
+                false
             }
             ui_registry::KeyOwner::Stage => {
                 // Любая клавиша закрывает stage (8233–8239; Esc — 8141):
                 // нужный оверлей откроется следующим нажатием
                 self.main_stage = None;
                 self.request_redraw();
-                return;
+                true
             }
-            ui_registry::KeyOwner::Canvas => {}
+            ui_registry::KeyOwner::Canvas => false,
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyEvent) {
+        // FR-054 (Q4-a PRD-0009): весь on_key — доставка KeyboardRouter'ом
+        // по скоуп-стеку из реестра (FR-051): верхний скоуп первым,
+        // поглотивший гасит доставку; скоупы без обработчика
+        // (settings/hotkeys/whatif/palette/…) пропускают событие вниз.
+        // Canvas-лестница (команды и NUMI-хоткеи) — без изменений (Q4).
+        // Дельта против U2: владелец ищется проходом по стеку (первая
+        // поверхность с обработчиком), а не только верхом esc_stack, —
+        // комбинация «док палитры в фокусе + палитра выделения видима»
+        // снова отдаёт клавиши панели (прежний гейт 8036; регресс U2
+        // устранён, тест router_delivery_matches_legacy_head).
+        let registry = ui_registry::build_registry(self);
+        let router = canvas_ui::KeyboardRouter::from_registry(&registry);
+        if router
+            .deliver(
+                |activation| match ui_registry::owner_of(activation.surface.as_str()) {
+                    Some(owner) => self.route_owner_key(owner, event),
+                    None => false,
+                },
+            )
+            .is_some()
+        {
+            return;
         }
         // Esc-лестница из реестра: порядок esc_stack воспроизводит прежнюю
         // ручную лестницу 8143–8232 дословно (первый поглотитель останавливает)
@@ -10205,12 +10280,17 @@ impl App {
     fn click_template_panel(&mut self) {
         let viewport = self.viewport_logical();
         let rows = template_panel_rows(&self.templates, &self.template_panel);
+        // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
         let lay = template_panel_layout(
             viewport[0],
             viewport[1],
             &self.templates,
             &self.template_panel,
             &rows,
+            &mut measurer,
+            &mut fs,
         );
         let mut handled = false;
         // Кнопка сворачивания дока («‹» в шапке)
@@ -10278,7 +10358,11 @@ impl App {
         // мимо полосы — закрыть flyout, клик уходит в канвас.
         let viewport = self.viewport_logical();
         let categories = self.template_category_names();
-        let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+        // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let strip =
+            template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
         // Строка flyout: кандидат в drag (тот же пайплайн, что
         // и у развёрнутого дока — ghost + вставка на отпускании)
         let flyout_hit = self
@@ -10562,7 +10646,7 @@ impl App {
         // пункт меню канваса, Esc) и проходит в канвас; клик по
         // самой панели — глотается (строки не интерактивны)
         if self.hotkeys_open {
-            let panel = hotkeys_panel_rect(viewport);
+            let panel = hotkeys_panel_rect_at(viewport, self.hotkeys_left_offset(viewport));
             if point_in_rect(panel, self.cursor) {
                 self.request_redraw();
             }
@@ -12658,7 +12742,11 @@ impl App {
         if !self.template_panel.open {
             let viewport = self.viewport_logical();
             let categories = self.template_category_names();
-            let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+            // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let strip =
+                template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
             let fly = self.template_flyout_geometry(viewport, &strip);
             if let (Some(hover), Some(fly)) = (self.template_hover.as_mut(), fly) {
                 if fly.max_scroll > 0 && point_in_rect(fly.rect, self.cursor) {
@@ -12687,7 +12775,10 @@ impl App {
                 let content = docs_ui::viewer_content_rect(panel);
                 if let Some(viewer) = self.docs.as_mut() {
                     if (viewer.layout_width - content[2]).abs() > 0.5 {
-                        viewer.layout = docs_ui::layout_page(viewer.page, content[2]);
+                        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+                        let mut fs = canvas_render::text::measure_font_system();
+                        viewer.layout =
+                            docs_ui::layout_page(viewer.page, content[2], &mut measurer, &mut fs);
                         viewer.layout_width = content[2];
                         viewer
                             .scroll
@@ -14529,7 +14620,8 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
                 if self.hotkeys_open {
-                    widget_airspace.push(hotkeys_panel_rect(self.viewport_logical()));
+                    let vp = self.viewport_logical();
+                    widget_airspace.push(hotkeys_panel_rect_at(vp, self.hotkeys_left_offset(vp)));
                 }
                 if let Some(renderer) = self.renderer.as_ref() {
                     if let Some(rect) = renderer.minimap_rect_logical() {
