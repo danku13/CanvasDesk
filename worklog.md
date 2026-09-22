@@ -3774,3 +3774,28 @@ CanvasDesk». Источник — вводные владельца о проз
   --all-targets) ✓; нативные: core 454, mcp 15, headless 12, scene 85 ✓;
   wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (wasip1: 13+12+85 под wasmtime,
   полная e2e-сессия сошлась).
+
+## 2026-09-22 — FR-053: PRD-0009 U3 — TextMeasurer, layout-примитивы, токены состояний/spacing, пилоты
+
+- **Агент:** Super Z (сессия web-e10bc589, приказ владельца «Продолжай u3»)
+- **Задача:** реализация этапа U3 PRD-0009 (§13): TextMeasurer (F-6) + layout-примитивы (F-7) + токены состояний/spacing/radius (F-9 в пределах пилотов) + пилотная миграция галерея схем / what-if бар; гейты G4/G5 на пилотах; оформление FR-053.
+
+### Work Log
+- FR-053 (dd1e741): постановка U3 — анализ отсутствия измерения/примитивов/слотов (6 пунктов), Changes 4.1–4.6, нормализованные дельты (ширины чипов = измеренные; EN-счётчик шире RU — фикс; описания галереи усекаются «…»); index-cr-fr → FR-054; PRD-0009 статус/changelog.
+- canvas-ui: `layout.rs` — Row/Column{gap, MainAlign{Start,SpaceBetween}, CrossAlign, RowPolicy::{Fit,SqueezeTail}}, Child/spacer, stack, constrain, pad, Custom; SqueezeTail = именованная деградация (min(desired, остаток), хвост → 0) — дословная семантика бывшего `take`; `measure.rs` — TextMeasurer: shape через cosmic-text (Metrics size×1.3, Wrap::None, Family::Name+Weight::MEDIUM — зеркало screen-конвейера text.rs), кэш (текст, семейство, кегль, max_w) с ёмкостью и очисткой, width_of/ellipsis (бинарный поиск, FIT_EPS 0.05 против отмены разрядов f32 при (w+pad−pad)); тесты на детерминированном FontSystem со вшитым NotoSansDisplay-Medium (тот же файл, что FONT_DATA). +12 тестов.
+- canvas-core/tokens.rs: SPACING_S/SM/MD/LG/XL = 6/8/10/12/24, RADIUS_CHIP/PANEL/PILL = 6/10/12, CONTROL_HOVER_FILL_DARK/LIGHT, CONTROL_PRIMARY_HOVER_FILL, CONTROL_SELECTED_FILL_DARK/LIGHT, CONTROL_DISABLED_TEXT (#8a909c) — значения = прежним константам/вычислениям hover_fill (I-1); dimensions.json + spacing/radius, colors.json + группа control; паритет-тесты продолжены.
+- canvas-render: ThemeColors +4 слота (control_hover_fill/primary_hover/selected/disabled_text; dark()/light() из примитивов; пресеты — вывод hover-формулы от menu_fill пресета — паттерн explain_leaf); v2_slots паритет по темам; контраст-протокол FR-046: disabled_text ≥3:1 к подложкам (dark — WHATIF_CHIP_DIM, light — menu_fill), hover-различимость — регрессионная граница дельты каналов 0.045 (факты 0.245/0.05); text.rs: SANS_FAMILY/measure_font_system → pub (владелец FontSystem — Q6).
+- Пилот what-if (whatif_ui.rs): bar_layout(names, counter_label, viewport, measurer, fs) — измеренные ширины (text_width 0.62·кегль и CHIP_SLACK удалены), Ellipsis-подписи сценариев из раскладки по фактической (возможно сжатой) ширине чипа → BarLayout.scenario_labels, draw читает их (chip_label/chars.truncate удалены); хвост бара — Row SqueezeTail; ширина бара — constrain; позиция — stack; счётчик — i18n-строка параметром (фикс: ширина считалась по RU при EN-подписи); константы — из SPACING_*.
+- Пилот галерея (scheme_gallery_ui.rs): layout через stack/constrain (панель), Column+спейсеры (вертикальный ритм дословно: 0/6/6/0), Row Fit для чипов (break-кламп удалён — переполнение тестируемо, D2-тест усилен проверкой ширины ряда), Column для строк (ритм 56/50), empty-state — constrain/stack/Row(cross End); row_labels — измеренный Ellipsis заголовка (13 px)/описания (11 px) — фикс «текст переливается на соседнюю строку» (screen-тексты не переносятся).
+- app.rs: whatif_bar_layout через TextMeasurer + measure_font_system (общий FontSystem рендера); disabled-текст бара → palette.control_disabled_text (бывший локальный hex dim); галерея — selected/hover → control_selected_fill/control_hover_fill, empty-кнопки → control_primary_hover_fill/control_hover_fill (hover_fill в пилотах больше не используется; сама функция осталась для не-пилотов — U5); cosmic-text в deps canvas-app (тип FontSystem в сигнатурах; workspace-зависимость — не новая, G7).
+- TDD: G4-линт пилотов — вьюпорты 1280×800/1024×640/800×560 × RU/EN × {короткие, длинные, 8 сценариев}: 0 пересечений интерактивных rect'ов, 0 выходов за вьюпорт, подписи в границах, кадр через UiFrame.overlaps_within_layer (Panels/Modals).
+- Слияние параллельной волны: merge origin/main 8b87cfe (FR-050 C: UI-порты, диалоги, unmapped; MCP v2) — БЕЗ конфликтов (45fc88e); гейты на объединённом коде зелёные.
+- Гейты: fmt ✓, clippy -D warnings ✓, test --workspace ✓ (canvased 48 ui / 258 app-lib / 299 render / 129+81 core…), wasm_gate ✓, mcp_wasm_gate ✓ (wasmtime 36.0.1 установлен в пересозданное окружение).
+- Инфра: диск песочницы заполнился (bus error ld) — cargo clean + пересборка; wasmtime доустановлен вручную (install.sh сломан — релизный tarball v36.0.1).
+
+### Stage Summary
+- Измеренный текст работает end-to-end: раскладка what-if/галереи шейпит теми же метриками, что рендер (одна строка подписи в раскладке и отрисовке).
+- G5: в пилотах 0 take(/truncate/break-клампов; деградация узких окон — именованная политика SqueezeTail.
+- G4-линт-приём готов и переиспользуем для U5 (6 поверхностей).
+- Слоты состояний в ThemeColors + parity: база UI kit U4 (компоненты берут только слоты).
+- Далее: U4 — UI kit v1 (F-8), DebugOverlay (F-10), витрина-галерея, scissor-бакеты (G5-клип); U5 — миграция 4 поверхностей, лестница on_key целиком, линты в CI, docs/ui-kit.md.
