@@ -4416,3 +4416,33 @@ user-docs (calculations.md, hotkeys.md, interface.md).
   docs/change-requests/index-cr-fr.md, worklog.md.
 - **Далее:** слить в main (--no-ff), push, CI по merge SHA. Остаток
   FR-044: Р-3-а (слоты тел) — с FR-045; Q2-скролл/Q3-fade — v2.
+## CI-инцидент bbcdbc7 → фикс (2026-09-22) — красный wasm на выкатке X6
+
+- **Диагноз:** push bbcdbc7 (PRD-0007 X6) уронил два чек-рана —
+  `wasm-check (wasm32-unknown-unknown)` и `Pages / web + docs` (сборка
+  web-бандла). Оба на одной ошибке E0308 (mismatched types):
+  `crates/canvas-app/src/app.rs:12976` — `state.pick_flash_at(Instant::now())`
+  передавал `web_time::time::instant::Instant` (alias `canvas_core::time::Instant`,
+  app.rs:71), а метод `pick_flash_at` в `explain_ui.rs:937` принимал
+  `std::time::Instant` — прямой импорт (explain_ui.rs:21), вопреки конвенции
+  W1 (`canvas-core/src/time.rs`: «крейты волны импортируют alias отсюда, а
+  не из std»). На нативе `web_time::Instant` — прозрачный реэкспорт std,
+  поэтому все gates ubuntu/windows/macos и 1572 нативных теста прошли;
+  на wasm32 это разные типы → E0308. Единственное пересечение границы
+  типов во всём дереве (остальные `Instant` в app.rs — через alias;
+  `opened_at.elapsed()` границу не пересекает).
+- **Фикс:** `explain_ui.rs` — `use std::time::Instant` →
+  `use canvas_core::time::Instant` + комментарий-страж конвенции у импорта.
+- **Верификация локально (rustc 1.98.1 48a229cea — тот же, что в CI):**
+  - `cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render
+    -p canvas-widgets -p canvas-mcp -p canvas-scene -p canvas-mcp-headless
+    -p canvas-web` (точная команда wasm-check из ci.yml) — зелёный;
+  - `cargo fmt --check` — чисто;
+  - `cargo clippy -p canvas-app -- -D warnings` — чисто;
+  - `cargo test -p canvas-app` — 348 passed / 0 failed (вкл. explain_ui X2/X5/X6).
+- **Урок:** X6 закрывался без локального wasm-прогона (диск 9.9 ГБ) —
+  единственный слой, где std/web_time расходятся. Правило на будущее:
+  любое новое упоминание `Instant` в крейтах волны — только через
+  `canvas_core::time::Instant`; при нехватке диска гонять хотя бы
+  `cargo check --target wasm32-unknown-unknown -p canvas-web` (тянет
+  canvas-app транзитивно, ~1 мин).
