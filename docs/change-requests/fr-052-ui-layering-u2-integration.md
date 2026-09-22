@@ -1,6 +1,6 @@
 # FR-052: Слои, вёрстка и UI kit — этап U2 PRD-0009: интеграция каркаса canvas-ui (единый диспетчер: реестр → UiFrame → HitStack/KeyboardRouter/draw-полосы)
 
-- **Статус:** в работе
+- **Статус:** выполнено (U2)
 - **Тип:** FR
 - **Приоритет:** критично (инфраструктура всех UI-фич; устраняет класс z-регрессий CR-006/CR-010/CR-015 и рассинхронизацию ввода)
 - **Владелец:** агент (по приказу владельца «Продолжи u2», сессия 2026-09-22)
@@ -100,10 +100,11 @@
 - [x] Wheel/hover: `cursor_over_screen_surface` = `HitStack::absorbs` по кадру реестра; hover-глушение = pick по кадру (единый диспетчер вместо списков).
 - [x] G7: 0 новых внешних зависимостей (canvas-ui — внутренний workspace-крейт в render/app); wasm-гейты зелёные.
 - [x] Гейты на ветке 2e03eeb: `cargo fmt --all --check` ✓; `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` ✓; `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace` ✓ (48/48); `bash scripts/wasm_gate.sh` ✓ (wasmtime 36.0.1); `bash scripts/mcp_wasm_gate.sh` ✓.
-- [ ] CI по merge SHA — зелёный (после слияния).
+- [x] CI по merge SHA `f7008e4` — **зелёный (12/12 check-runs)**: gates ubuntu/macos/windows, artifacts ×3, build, wasm-check, web, licenses, deploy.
 
 ## История изменений (Changelog)
 
+- `2026-09-22` — агент: **U2 выполнен** — слияние в main (03bd216, интеграция X2-конфликтов f7008e4), CI 12/12 по merge SHA `f7008e4`; X2-окно проверки цепочки (PRD-0007, параллельная волна) интегрировано через реестр U2 (поверхность explain: L5/Block/scope + KeyOwner::Explain + Backdrop→close_explain) — единый диспетчер выдержал параллельную миграцию без правок X2-кода.
 - `2026-09-22` — агент: этап U2 реализован (коммиты ffff8d5 docs + 2e03eeb feat): ScreenBand/полосное исполнение в canvas-render, модуль `app/ui_registry` (20 поверхностей, build_registry/build_frame_at/key_owner/dispatch_esc/ScreenBands), head-диспетчеры HitStack/KeyOwner в on_left_button/on_key, wheel/hover из кадра; нормализованные дельты применены; 48 тест-бинарей зелёные, 5 гейтов зелёные. Статус — ожидание CI по merge SHA.
 - `2026-09-22` — агент: создан документ (FR-052), статус `в работе`; постановка U2: ScreenBand/полосы в renderer+text, модуль ui_registry (реестр/адаптеры/KeyOwner), head-диспетчеры ввода через HitStack/Router, wheel/hover из кадра; зафиксированы нормализованные дельты.
 
