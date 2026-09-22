@@ -1,3 +1,82 @@
+## 2026-09-22 — FR-050 этап C (UI-порты и диалоги): входные якоря параметров, toParam-drag с подсветкой совместимости, меню выбора, диалог «Заменить источник?», line_ports ON, unmapped-диагностика Р-3
+
+- **Контекст:** дорожная карта FR-050 (этапы A и B — ядро семантики и
+  именованный синтаксис — в main с 2026-09-22); этап C по плану §Дорожная
+  карта: Н2 входные якоря + drag с подсветкой совместимых, Н3 line_ports
+  default ON, Н4 диалог «Заменить источник?», Р-3 unmapped-подсветка +
+  тултипы «проблема + решение», i18n RU/EN (FR-040).
+- **Н2 якоря параметров (core→render→app):** `ParamPort {param, point}` +
+  `param_port_at` в edgegeom (зеркало FR-025, допуск CR-003, zoom-ужесточение);
+  `text.rs::param_ports()` — вертикали ряда строки из кэша раскладки, имя —
+  по строке-присваиванию, входящей в снапшот `TemplateRef.params` (канонический
+  адрес toParam, тот же источник, что у E-PORT-UNKNOWN); рендер
+  `build_param_port_instances` (левый край, LINE_PORT_DOT/port_dot_diameter,
+  hover-аффорданс) + во время value-drag подсветка совместимости:
+  `ParamDropView`/`SceneView.param_drop` — совместимые (Н5: скаляр совместим
+  с любой стороной, конвертируемые масштабы совместимы) — акцент value-потока
+  и узловой размер, несовместимые — приглушены; источник сравнения —
+  `flow::value_param_compatible` (pub; `dimensions_compatible` стал
+  pub(crate) в validate). App: `param_port_hit` (кандидаты spatial-индекса,
+  хост первым), `compute_param_drop` на кадр ввода (паттерн bundle_hover),
+  drop на якорь → `drop_to_param` → `create_param_edge` (undo-шаг + живой
+  пересчёт; цикл — диалог FR-014 с control-фолбэком: toParam не переносится,
+  как from_line у FR-025).
+- **Н2 меню выбора:** drop value-ребра на шаблонную ноду мимо якоря —
+  `ChoiceMenu` (screen-space, геометрия меню T7 + строка заголовка
+  CHOICE_MENU_TITLE_H; пункты = параметры снапшота; клик по пункту — действие,
+  клик мимо/Esc/ПКМ — отмена); W-AMBIGUOUS-SRC (FR-032): drag от текстовой
+  ноды целиком при >1 формульных строк — меню выбора строки-источника
+  («имя = значение», из `source_formula_lines` по flow_active.lines).
+- **Н3:** `Settings::default().line_ports = true` (старые конфиги без поля —
+  включены; явный false сохраняется); тест переименован
+  `line_ports_defaults_on_and_round_trips`.
+- **Н4 диалог замены:** `AppDialog::ReplaceSource` (кнопки
+  [Заменить]/[Отмена] — DIALOG_REPLACE_YES/DIALOG_CANCEL; тело — параметр +
+  подпись текущего источника `node_display_label`: имя шаблона → первая
+  непустая строка → label → id); подтверждение — ОДИН undo-шаг:
+  `occupying_param_edges` (легаси-дубли — все) удаляются, новое ребро
+  создаётся (инвариант «один вход на параметр» восстанавливается).
+- **Р-3 диагностика:** кэш `SceneState.unmapped_edges` (id рёбер, пересчёт в
+  `recompute_flow` из `flow::unmapped_inputs`, цикл-ветка чистит);
+  `build_edge_instances_ctx` + `unmapped_ids` — пунктир янтарным
+  `UNMAPPED_EDGE_COLOR` (severity warning FR-016), модель не мутируется,
+  выделение/фокус приоритетнее; тултип при наведении (контракт Р-3 — ровно
+  два пункта «проблема + решение»): параметр с fromOutput — точный диагноз
+  (TOOLTIP_UNMAPPED_PARAM {param}/{output}/{node}), прочие — общий шаблон
+  (TOOLTIP_UNMAPPED_SLOT); глушится при drag/меню.
+- **i18n (FR-040):** 8 ключей (диалог замены 4, меню выбора 2, тултипы 2),
+  RU/EN, тест полноты таблиц гарантирует.
+- **Тесты (+10):** core — param_port_at (hit/miss/nearest/zoom),
+  value_param_compatible (правила Н5), occupying_param_edges (фильтры +
+  легаси-дубли), line_ports default; render — якоря plain/hover/drag-compat
+  (+короткий список флагов), unmapped пунктир-янтарь + инвариант «без
+  unmapped — байт-в-байт» (цвет FLOW, модель не тронута), вызовы
+  build_edge_instances_ctx 8-арг (обёртка + no_unmapped в тестах); scene —
+  кэш unmapped set/unset (источник стал прозой через node_update_text —
+  полный пересчёт; node_edit с text ленив, CR-012); app — drag_from_node,
+  node_display_label (приоритет шаблон→строка→label→id).
+- **Гейты:** fmt ✓; clippy -D warnings (core/scene/render/app/mcp) ✓;
+  нативные тесты ✓ (457+82+15+324+278); wasm_gate ПОЛНЫЙ ✓;
+  mcp_wasm_gate ПОЛНЫЙ ✓ (e2e-сессия oracle ±1 %). Локальная чистка диска
+  (target/debug/incremental + тяжёлые тестовые бинари) — окружение песочницы,
+  CI-матрица на GitHub проверит полно.
+- **Доки:** FR-050 — статус «этапы A, B и C выполнены», дорожная карта C
+  ВЫПОЛНЕН (детально), changelog (5); FR-025 — changelog реализации Н3;
+  индекс CR/FR обновлён.
+- **Rebase на main с FR-052 U2 (единый диспетчер):** этап C написан до
+  слияния U2 в main; конфликт app.rs/lib.rs разрешён — код C сохранён,
+  меню выбора интегрировано в реестр поверхностей U2: `CHOICE_MENU` — 21-я
+  поверхность (Popups/Block, «клик мимо — закрыть и глотнуть»; esc-стек
+  РАНЬШЕ контекстного меню — transient-выбор приоритетнее базового меню;
+  hit-rect панели = пункты + заголовок; KeyOwner — Canvas, как у MENU),
+  `choice_menu_overlay` — полоса Popups в ScreenBands (поверх меню
+  канваса), диспетчерные арм click/backdrop/esc. Тест
+  `choice_menu_surface_block_above_context_menu` (реестр: Block, порядок
+  esc, hit-rect, «нет состояния — нет поверхности»). Гейты на
+  объединённом коде: fmt ✓, clippy -D warnings ✓, `cargo test --workspace`
+  1458 ✓ (48 бинарников), wasm_gate ПОЛНЫЙ ✓ (344 под wasmtime),
+  mcp_wasm_gate ✓ (e2e oracle ±1 %).
+
 ## 2026-09-21 — main stage по фидбэку владельца (wasm /CanvasDesk/app): 70% вьюпорта, порты на строках значений, подписи концов рёбер, анти-наезд пилюль
 
 - **Задача (запрос владельца, сессия 2026-09-21):** «Проанализируй wasm вариант
