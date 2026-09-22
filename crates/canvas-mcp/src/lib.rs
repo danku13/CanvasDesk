@@ -149,6 +149,21 @@ pub fn initialize_result(client_version: Option<&str>) -> Value {
 /// (spec 2025-06-18: структурированный вывод дублируется текстом для
 /// обратной совместимости со старыми хостами).
 pub fn build_call_result(id: &Value, result: &Value) -> String {
+    // PRD-0007 X6 (F-9): text-first инструменты (`render: "text"`) отдают
+    // готовый человекочитаемый текст как content text (не JSON-эхо всего
+    // объекта) — LLM-клиенту не нужно парсить JSON ради поля text;
+    // structuredContent сохраняет полный объект для структурированных
+    // клиентов. Маркер узкий: только объекты с render == "text" и полем
+    // text (никакой другой инструмент его не выставляет).
+    let text_first = result.get("render").and_then(Value::as_str) == Some("text")
+        && result.get("text").and_then(Value::as_str).is_some();
+    if text_first {
+        let mut envelope = json!({
+            "content": [{ "type": "text", "text": result["text"].as_str().unwrap_or_default() }],
+        });
+        envelope["structuredContent"] = result.clone();
+        return build_result(id, &envelope);
+    }
     let mut envelope = json!({ "content": [{ "type": "text", "text": result.to_string() }] });
     if result.is_object() {
         envelope["structuredContent"] = result.clone();
@@ -184,9 +199,10 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 36 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
+/// 40 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
 /// FR-029 — адресация портов; FR-032 — edges_list/edge_get/graph_validate;
-/// FR-033 — graph_apply; FR-016 — analyze_bottlenecks; FR-017/CP6 — 9 whatif_*).
+/// FR-033 — graph_apply; FR-016 — analyze_bottlenecks; FR-017/CP6 — 9 whatif_*;
+/// PRD-0008 Q5 — schemes_*; PRD-0007 — lineage + explain_number F-9).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -320,6 +336,15 @@ const TOOLS: &[ToolSpec] = &[
         description: "FR-014: проверка DAG-инварианта value-рёбер: [] — циклов нет, иначе список id участников цикла",
         required: &[],
         properties: &[],
+    },
+    ToolSpec {
+        name: "explain_number",
+        description: "PRD-0007 (X6, FR-048, F-9 must): объяснение цифры ТЕКСТОМ — линейная развёртка дерева происхождения с адресами (node_id, строка Numi-листа, выход/параметр) и значениями каждого узла; тот же снапшот, что окно проверки и lineage (F-5). Ответ {render:\"text\", text, root, nodes, truncated}: text — готовое объяснение (мост отдаёт его как content text), truncated — достигнут бюджет 4096 узлов. Значения активного what-if сценария (преамбула в text); цикл потока — топология без значений (AC-2.4)",
+        required: &["node_id"],
+        properties: &[
+            ("node_id", STR),
+            ("line", r#"{"type":["integer","null"],"minimum":0}"#),
+        ],
     },
     ToolSpec {
         name: "edge_ports",
@@ -530,7 +555,7 @@ pub fn unwrap_app_payload(payload: &str) -> Result<Value, String> {
 ///   ВСЕГДА успешный (ADR-0009: состояние приложения не влияет на handshake);
 /// - `notifications/initialized`, `notifications/cancelled` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 36 инструментов с inputSchema;
+/// - `tools/list` → 40 инструментов с inputSchema;
 /// - `tools/call` → форвард строки на pipe, конверт приложения разворачивается
 ///   в чистый результат (text-контент + structuredContent, FR-034);
 ///   isError-результат приложения проходит насквозь; pipe мёртв → isError
@@ -1145,7 +1170,7 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 36 инструментов (FR-032: +3, FR-033: +graph_apply,
+    /// tools/list: ровно 40 инструментов (FR-032: +3, FR-033: +graph_apply,
     /// FR-016: +analyze_bottlenecks, FR-017/CP6: +9 whatif_*), у каждого
     /// inputSchema с required.
     #[test]
@@ -1154,8 +1179,8 @@ mod tests {
         let tools = list["tools"].as_array().expect("массив tools");
         assert_eq!(
             tools.len(),
-            39,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 3 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2/FR-048)"
+            40,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
@@ -1186,6 +1211,7 @@ mod tests {
             "schemes_list",
             "schemes_apply",
             "lineage",
+            "explain_number",
             "viewport_get",
             "viewport_set",
             "graph_apply",
@@ -1248,10 +1274,18 @@ mod tests {
             by_name("graph_validate")["inputSchema"]["required"],
             json!([])
         );
-        // PRD-0008 Q5 / PRD-0007 X2: схемы галереи + lineage
+        // PRD-0008 Q5 / PRD-0007 X2/X6: схемы галереи + lineage + explain_number
         assert_eq!(
             by_name("schemes_list")["inputSchema"]["required"],
             json!([])
+        );
+        assert_eq!(
+            by_name("explain_number")["inputSchema"]["required"],
+            json!(["node_id"])
+        );
+        assert_eq!(
+            by_name("explain_number")["inputSchema"]["properties"]["line"]["type"],
+            json!(["integer", "null"])
         );
         assert_eq!(
             by_name("schemes_apply")["inputSchema"]["required"],
@@ -1460,8 +1494,8 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            39,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage"
+            40,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9)"
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;
@@ -1482,6 +1516,41 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("isError"));
+    }
+
+    /// PRD-0007 X6 (F-9): text-first результат (render:"text") — content text
+    /// несёт готовый текст объяснения (не JSON-эхо), structuredContent —
+    /// полный объект; обычные результаты не затронуты (JSON-эхо как раньше).
+    #[test]
+    fn call_result_text_first_marker() {
+        let id = json!(7);
+        let result = json!({
+            "render": "text",
+            "text": "Цепочка расчёта: Итог [b] = 10\nВсего узлов: 2 (листьев: 1)",
+            "root": {"node_id": "b", "line": null},
+            "nodes": 2,
+            "truncated": false,
+        });
+        let parsed: Value =
+            serde_json::from_str(&build_call_result(&id, &result)).expect("конверт");
+        assert_eq!(
+            parsed["result"]["content"],
+            json!([{
+                "type": "text",
+                "text": "Цепочка расчёта: Итог [b] = 10\nВсего узлов: 2 (листьев: 1)",
+            }]),
+            "content text — готовое объяснение, не JSON"
+        );
+        assert_eq!(parsed["result"]["structuredContent"], result);
+
+        // Инструмент без маркера — прежнее поведение (JSON-эхо), даже
+        // если в объекте есть поле text (например node_get с текстом ноды).
+        let plain = json!({"id": "note-1", "text": "A\n= 5"});
+        let parsed: Value = serde_json::from_str(&build_call_result(&id, &plain)).expect("конверт");
+        assert_eq!(
+            parsed["result"]["content"],
+            json!([{ "type": "text", "text": plain.to_string() }])
+        );
     }
 
     /// FR-034: разворот конверта приложения — error-конверт → isError;

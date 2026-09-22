@@ -307,6 +307,12 @@ pub struct Settings {
     /// ревью (D1 — фон не мутирует модель). Дефолт вкл (функция видна);
     /// старые конфиги без поля грузятся включёнными (serde default).
     pub autolink_enabled: bool,
+    /// PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками «Цепочки:
+    /// N%» в углу канваса — доля вычисляемых цифр, чья цепочка доходит до
+    /// листьев. Opt-in (решение владельца, раунд 2 (в)): дефолт выкл;
+    /// старые конфиги без поля грузятся выключенными (serde default).
+    #[serde(default)]
+    pub explain_coverage: bool,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -387,6 +393,8 @@ impl Default for Settings {
             explain_depth_limit: EXPLAIN_DEPTH_DEFAULT,
             // PRD-0007 (AC-5.5): фоновый детектор автосвязи включён.
             autolink_enabled: true,
+            // PRD-0007 (F-12): индикатор покрытия — opt-in (дефолт выкл).
+            explain_coverage: false,
         }
     }
 }
@@ -605,6 +613,8 @@ mod tests {
             explain_depth_limit: 4,
             // PRD-0007 (AC-5.5): тумблер фонового детектора автосвязи
             autolink_enabled: false,
+            // PRD-0007 (F-12, X6): индикатор покрытия цепочками round-trip
+            explain_coverage: true,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");

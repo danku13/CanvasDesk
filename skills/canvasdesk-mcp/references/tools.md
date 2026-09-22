@@ -60,12 +60,13 @@
 | `template_instantiate` {id, x, y, params?} | id: id шаблона | Создать text-ноду из шаблона; params — {имя: число \| {num, unit}}; вне min/max — ошибка |
 | `schemes_apply` {id, x?, y?} | id: id схемы | Вставить схему галереи в текущий канвас: ремап id без коллизий, один undo-шаг, ответ {applied, name, nodes, edges, bbox, flow} |
 
-## Вычисление и проверка (5)
+## Вычисление и проверка (6)
 
 | Инструмент | Сигнатура | Назначение |
 |---|---|---|
 | `flow_recalc` {} | — | Карта значений потока АКТИВНОГО what-if состояния: {node_id: {value, unit, outputs, lines, warnings?, spilled?, autoRows?}} |
 | `lineage` {node_id, line?} | line: integer \| null | Дерево происхождения цифры (паритет с окном проверки цепочки): {root, nodes[]}, kind calc\|leaf\|cycle\|unmapped\|unlinked\|truncated, via-рёбра |
+| `explain_number` {node_id, line?} | line: integer \| null | Объяснение цифры ТЕКСТОМ (F-9, PRD-0007): линейная развёртка дерева с адресами и значениями; ответ {render: "text", text, root, nodes, truncated} — мост отдаёт text как content text |
 | `flow_cycle_check` {} | — | Проверка DAG-инварианта value-рёбер: [] — циклов нет, иначе список id участников |
 | `graph_validate` {} | — | Валидация модели: {valid, issues: [{severity, code, node_id, edge_id, message}]} — коды E-CYCLE, E-OVERLOAD, E-UNIT, E-PORT-UNKNOWN, E-DOUBLE-INPUT, W-AMBIGUOUS-SRC, W-UNUSED-SLOT |
 | `analyze_bottlenecks` {} | — | Узкие места и риск очередей АКТИВНОГО состояния: {nodes: [{id, severity, utilization?, queue_length?, wait_sec?, badge}], thresholds} |
