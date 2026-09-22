@@ -145,30 +145,18 @@ pub fn spill_edge_value(
 }
 
 /// FR-017 (CP6): строка дельты «(+Δ)» между базовым и what-if значением.
-/// Формат полный (гипотеза Q4): % — в процентных пунктах, иначе абсолют
-/// с единицей (Q4c). None — значения совпадают (дельты нет).
+/// PRD-0007 X3: реализация перенесена в ядро ([`canvas_core::expr`]) —
+/// формат нужен и `lineage_deltas` explain-дерева; здесь делегация
+/// (публичный API сцены сохранён — mcp.rs/lib.rs/whatif_ui).
 pub fn whatif_delta_str(base: &expr::Value, whatif: &expr::Value) -> Option<String> {
-    let delta = whatif.num - base.num;
-    if delta.abs() < 1e-9 {
-        return None;
-    }
-    let rounded = (delta * 100.0).round() / 100.0;
-    let unit = whatif.unit.display();
-    if unit == "%" {
-        Some(format!("{rounded:+.0} пп"))
-    } else if unit.is_empty() {
-        Some(format!("{rounded:+}"))
-    } else {
-        Some(format!("{rounded:+} {unit}"))
-    }
+    expr::whatif_delta_str(base, whatif)
 }
 
 /// FR-017: полный формат дельта-бейджа «было → стало (+Δ)» (гипотеза Q4) —
 /// то, что рендер показывает вместо голого значения изменившейся строки/
 /// итога. Без изменений — None (бейдж остаётся обычным).
 pub fn whatif_full_delta(base: &expr::Value, whatif: &expr::Value) -> Option<String> {
-    let delta = whatif_delta_str(base, whatif)?;
-    Some(format!("{base} → {whatif} ({delta})"))
+    expr::whatif_full_delta(base, whatif)
 }
 
 /// Первый свободный id вида `{prefix}-N` (T9): N от 1, занятые в канвасе

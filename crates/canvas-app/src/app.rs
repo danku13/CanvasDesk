@@ -295,12 +295,37 @@ fn build_lineage_snapshot(
     }
 }
 
+/// Сборка ПАРЫ деревьев X3 (основное + база) одним проходом: основной —
+/// из `solutions` (flow_active — с подменами), база — из `base_solutions`
+/// (flow_baseline — без подмен; None — дельты не нужны, AC-4.2).
+fn build_lineage_outcome(
+    canvas: &Canvas,
+    solutions: &flow::FlowSolutions,
+    base_solutions: Option<&flow::FlowSolutions>,
+    cycle: Option<&flow::CycleError>,
+    root: LineageNodeId,
+) -> explain_ui::LineageOutcome {
+    let base = base_solutions.map(|flow| {
+        // Подмены в базе нет по определению — цикл там тот же (движок
+        // падает одинаково), но Cycled-база не содержит значений — дельты
+        // всё равно пусты; Ready-ветка достаточна.
+        build_lineage_snapshot(canvas, flow, None, root.clone())
+    });
+    explain_ui::LineageOutcome {
+        tree: build_lineage_snapshot(canvas, solutions, cycle, root),
+        base,
+    }
+}
+
 /// PRD-0007 (X2, AC-1.2/G5): запуск сборки дерева — натив: фоновый поток
 /// (UI не блокируется, честный лоадер крутится), wasm/сбой потока:
 /// синхронный результат (Ready на первом же poll).
+/// X3 (AC-4.2): при активном what-if тем же проходом строится БАЗА —
+/// источник дельт в дереве.
 fn spawn_lineage_build(
     canvas: &Canvas,
     solutions: &flow::FlowSolutions,
+    base_solutions: Option<&flow::FlowSolutions>,
     cycle: Option<&flow::CycleError>,
     root: LineageNodeId,
 ) -> ExplainBuild {
@@ -309,29 +334,43 @@ fn spawn_lineage_build(
         let (tx, rx) = std::sync::mpsc::channel();
         let worker_canvas = canvas.clone();
         let worker_solutions = solutions.clone();
+        let worker_base = base_solutions.cloned();
         let worker_cycle = cycle.cloned();
         let worker_root = root.clone();
         let spawned = std::thread::Builder::new()
             .name("lineage-build".into())
             .spawn(move || {
-                let tree = build_lineage_snapshot(
+                let outcome = build_lineage_outcome(
                     &worker_canvas,
                     &worker_solutions,
+                    worker_base.as_ref(),
                     worker_cycle.as_ref(),
                     worker_root,
                 );
-                let _ = tx.send(tree);
+                let _ = tx.send(outcome);
             });
         match spawned {
             Ok(_handle) => ExplainBuild::Native(rx),
             // Поток не поднялся — синхронный фолбэк (окно честно ждёт)
-            Err(_) => ExplainBuild::Done(build_lineage_snapshot(canvas, solutions, cycle, root)),
+            Err(_) => ExplainBuild::Done(build_lineage_outcome(
+                canvas,
+                solutions,
+                base_solutions,
+                cycle,
+                root,
+            )),
         }
     }
     #[cfg(target_arch = "wasm32")]
     {
         // Однопоточный рантайм: сборка синхронная (Ready на первом poll)
-        ExplainBuild::Done(build_lineage_snapshot(canvas, solutions, cycle, root))
+        ExplainBuild::Done(build_lineage_outcome(
+            canvas,
+            solutions,
+            base_solutions,
+            cycle,
+            root,
+        ))
     }
 }
 
@@ -8840,14 +8879,52 @@ impl App {
             }
             ui_registry::KeyOwner::Explain => {
                 // PRD-0007 (X2): открытое окно проверки — Esc закрывает
-                // (§6.4: Ready/Stale → Closed); прочие клавиши — в лестницу
-                if event.state == ElementState::Pressed
-                    && !event.repeat
-                    && event.logical_key == Key::Named(NamedKey::Escape)
-                {
-                    self.close_explain();
-                    self.request_redraw();
-                    return;
+                // (§6.4: Ready/Stale → Closed); прочие клавиши — в лестницу.
+                // X3 (AC-4.1): открытое inline-поле подмены листа глушит
+                // клавиатуру: символы — ввод, Enter — коммит, Esc — отмена.
+                if event.state == ElementState::Pressed {
+                    let edit_open = self.explain.as_ref().is_some_and(|s| s.edit.is_some());
+                    if edit_open {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Enter) => {
+                                self.finish_explain_edit();
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                if let Some(state) = self.explain.as_mut() {
+                                    state.cancel_edit();
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                if let Some(state) = self.explain.as_mut() {
+                                    if let Some(edit) = state.edit.as_mut() {
+                                        edit.backspace();
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Character(text) => {
+                                if let Some(state) = self.explain.as_mut() {
+                                    if let Some(edit) = state.edit.as_mut() {
+                                        edit.type_str(text.as_str());
+                                    }
+                                }
+                                self.request_redraw();
+                                return;
+                            }
+                            _ => {}
+                        }
+                        return; // прочие клавиши глотаются, пока поле открыто
+                    }
+                    if event.logical_key == Key::Named(NamedKey::Escape) && !event.repeat {
+                        self.close_explain();
+                        self.request_redraw();
+                        return;
+                    }
                 }
             }
             ui_registry::KeyOwner::Stage => {
@@ -10837,7 +10914,8 @@ impl App {
         if let Some(snap) = self.explain_cache.take() {
             if snap.root == root && snap.revision == revision {
                 // Переоткрытие из кэша: Ready сразу, чип — если модель
-                // всё-таки изменилась (from_snapshot сравнивает ревизии)
+                // всё-таки изменилась (from_snapshot сравнивает ревизии);
+                // дельты what-if восстанавливаются из снапшота (AC-4.2)
                 self.explain = Some(ExplainState::from_snapshot(snap, revision));
                 self.request_redraw();
                 return;
@@ -10845,9 +10923,16 @@ impl App {
             // Чужой/устаревший снапшот не нужен: новый закэшируется при
             // закрытии окна (гигиена памяти — держим только последний)
         }
+        // X3 (AC-4.2): при активном what-if база (flow_baseline) строится
+        // тем же фоновым проходом — дельты в дереве Ready.
+        let base = self
+            .scene
+            .whatif_active
+            .then_some(&self.scene.flow_baseline);
         let build = spawn_lineage_build(
             &self.scene.canvas,
             &self.scene.flow_active,
+            base,
             self.scene.flow_cycle.as_ref(),
             root.clone(),
         );
@@ -10860,17 +10945,91 @@ impl App {
     /// подсветка цепочки гаснет фейдом (F-4, цель 0 в update_focus_state).
     fn close_explain(&mut self) {
         if let Some(mut state) = self.explain.take() {
+            state.cancel_edit();
+            // База забирается до move поля root (частичный move Rust)
+            let base_tree = state.take_base_tree();
             if let Some(tree) = state.take_tree() {
                 self.explain_cache = Some(ExplainSnapshot {
                     root: state.root,
                     revision: state.revision,
                     tree,
+                    base_tree,
                 });
             }
         }
         self.focus_nodes.clear();
         self.focus_edges.clear();
         self.request_redraw();
+    }
+
+    /// X3 (AC-4.1/AC-4.2): применить подмену из inline-поля листа через
+    /// рантайм FR-017. Канвас пересчитывается сразу (recompute_flow —
+    /// живая модель, дельты на карточках показывает whatif_node_map),
+    /// панель остаётся на кэшированном снапшоте — чип «Данные изменены»
+    /// появляется по новой ревизии (AC-3.3). Сценарий автосоздаётся при
+    /// необходимости (персистентный, один undo-шаг — паттерн
+    /// finish_editing FR-017/MCP whatif_set_override).
+    fn commit_explain_edit(&mut self, node_id: String, line: usize, expr: String) {
+        if !self.scene.whatif_active {
+            self.scene.whatif_active = true;
+        }
+        if self.scene.active_scenario.is_none() {
+            // Подмене нужен сценарий: автосоздание (CR-016: имя — пустое,
+            // scene выбирает первый свободный номер)
+            let snapshot = self.scene.canvas.clone();
+            match self.scene.whatif_create_scenario("") {
+                Ok(index) => {
+                    self.scene.active_scenario = Some(index);
+                    canvas_core::whatif::scenarios_to_canvas(
+                        &mut self.scene.canvas,
+                        &self.scene.scenarios,
+                    );
+                    if self.scene.canvas != snapshot {
+                        self.scene.push_undo(snapshot);
+                        self.scene.mark_dirty();
+                    }
+                }
+                Err(err) => {
+                    self.show_toast(err);
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
+        let index = self.scene.active_scenario.expect("сценарий активен");
+        if let Some(scenario) = self.scene.scenarios.get_mut(index) {
+            scenario.line_exprs.insert((node_id, line), expr);
+        }
+        self.scene.recompute_flow();
+        self.request_redraw();
+    }
+
+    /// Закрыть inline-поле с коммитом (Enter/клик мимо, AC-4.1): finish →
+    /// commit; без открытого поля/без изменений — no-op.
+    fn finish_explain_edit(&mut self) {
+        let Some((node_id, line, text)) =
+            self.explain.as_mut().and_then(|state| state.finish_edit())
+        else {
+            return;
+        };
+        self.commit_explain_edit(node_id, line, text);
+    }
+
+    /// Preset для inline-поля листа (X3): текущая подмена активного
+    /// сценария (правка существующей подмены); None — исходник строки
+    /// (start_edit возьмёт formula узла).
+    fn explain_leaf_preset(&self, idx: usize) -> Option<String> {
+        let state = self.explain.as_ref()?;
+        let tree = state.tree()?;
+        let node = tree.nodes.get(idx)?;
+        let line = node.line?;
+        let scenario = self
+            .scene
+            .active_scenario
+            .and_then(|i| self.scene.scenarios.get(i));
+        scenario
+            .and_then(|s| s.line_exprs.get(&(node.node_id.clone(), line)))
+            .cloned()
     }
 
     /// Клик при открытом окне (§6.4): ✕/чип «Данные изменены»/мета-крошки/
@@ -10886,6 +11045,23 @@ impl App {
         }
         let ready = self.explain.as_ref().is_some_and(|s| s.is_ready());
         if ready {
+            // --- X3 (AC-4.1): inline-поле подмены листа -----------------
+            if self.explain.as_ref().is_some_and(|s| s.edit.is_some()) {
+                let body = explain_ui::body_rect(win);
+                // Геометрия поля (та же, что в рендере): правый нижний
+                // угол тела — чистая функция explain_ui (детерминизм)
+                let field = explain_ui::field_rect(body);
+                if point_in_rect(field, self.cursor) {
+                    // Клик по самому полю — глотаем (текст уже сфокусирован)
+                    self.request_redraw();
+                    return;
+                }
+                // Клик мимо поля (но внутри окна) — коммит (паттерн
+                // FR-017: клик мимо override-редактора фиксирует подмену);
+                // после — клик обработан (не переходит в узлы дерева)
+                self.finish_explain_edit();
+                return;
+            }
             let stale_now = self
                 .explain
                 .as_ref()
@@ -10908,6 +11084,31 @@ impl App {
             // Узел дерева: hit по лейауту кадра (та же чистая функция,
             // что в рендере — детерминизм рендер/ввод)
             let body = explain_ui::body_rect(win);
+            // X3 (AC-4.1): кнопка «Изменить» на листе — приоритет перед
+            // кликом по карточке (кнопка поверх)
+            let edit_hit = self.explain.as_ref().and_then(|state| {
+                let tree = state.tree()?;
+                let vis = explain_ui::visibility(
+                    tree,
+                    state.view_root(),
+                    self.settings.explain_depth_limit,
+                    &state.expanded,
+                );
+                let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
+                let scale = explain_ui::fit_scale(layout.bounds, body);
+                explain_ui::edit_at(tree, &layout, scale, body, self.cursor)
+            });
+            if let Some(idx) = edit_hit {
+                // Preset — текущая подмена активного сценария (правка
+                // существующей подмены), иначе исходник строки
+                let preset = self.explain_leaf_preset(idx);
+                if let Some(state) = self.explain.as_mut() {
+                    let tree = state.tree().expect("дерево есть").clone();
+                    state.start_edit(idx, &tree, preset);
+                }
+                self.request_redraw();
+                return;
+            }
             let hit = self.explain.as_ref().and_then(|state| {
                 let tree = state.tree()?;
                 let vis = explain_ui::visibility(
@@ -11217,8 +11418,17 @@ impl App {
                 });
                 // 2) Значение (Ok — цифра; Err — диагностика; None — метка
                 // терминального узла: «цикл»/«не связано»/…)
+                // X3 (AC-4.2): на затронутых узлах — дельта what-if в
+                // формате FR-017 «было → стало (+Δ)» (цвет бейджа what-if)
                 let (value_str, value_color) = match &node.value {
-                    Some(Ok(v)) => (v.to_string(), palette.title),
+                    Some(Ok(v)) => match state.deltas.get(&(node.node_id.clone(), node.line)) {
+                        Some(d) => (
+                            canvas_core::expr::whatif_full_delta(&d.base, &d.whatif)
+                                .unwrap_or_else(|| v.to_string()),
+                            palette.whatif_badge,
+                        ),
+                        None => (v.to_string(), palette.title),
+                    },
                     Some(Err(e)) => (e.clone(), palette.error),
                     None => (
                         match node.kind {
@@ -11326,6 +11536,85 @@ impl App {
                         color: Color::rgb(255, 255, 255),
                         align: TextAlign::Center,
                     });
+                }
+                // X3 (AC-4.1): кнопка «Изменить» на редактируемом листе —
+                // подмена значения через WhatIfOverrides (FR-017); кнопка
+                // скрывается, пока открыто inline-поле (одно за раз)
+                let editable = node.kind == canvas_core::LineageNodeKind::Leaf
+                    && node.line.is_some()
+                    && matches!(&node.value, Some(Ok(_)));
+                if editable && state.edit.is_none() {
+                    let btn = explain_ui::edit_rect(rect, scale);
+                    let btn_hovered = point_in_rect(btn, self.cursor);
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        btn,
+                        if btn_hovered {
+                            palette.accent
+                        } else {
+                            palette.card_fill
+                        },
+                        palette.palette_border,
+                        5.0,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: self.tr(keys::EXPLAIN_EDIT).to_owned(),
+                        origin: [btn[0], btn[1] + 2.0],
+                        width: btn[2],
+                        font_size: (10.0 * scale).max(8.0),
+                        color: if btn_hovered {
+                            Color::rgb(255, 255, 255)
+                        } else {
+                            palette.body
+                        },
+                        align: TextAlign::Center,
+                    });
+                }
+            }
+            // X3 (AC-4.1): inline-поле подмены — поверх дерева (правый
+            // нижний угол тела); клик мимо/Enter — коммит, Esc — отмена
+            if let Some(edit) = state.edit.as_ref() {
+                let field = explain_ui::field_rect(body);
+                quads.push(screen_rect_quad(
+                    camera,
+                    viewport,
+                    field,
+                    palette.menu_fill,
+                    palette.accent,
+                    6.0,
+                ));
+                let empty = edit.text.is_empty();
+                texts.push(OwnedScreenText {
+                    text: if empty {
+                        self.tr(keys::EXPLAIN_EDIT_HINT).to_owned()
+                    } else {
+                        edit.text.clone()
+                    },
+                    origin: [field[0] + 8.0, field[1] + 5.5],
+                    width: field[2] - 16.0,
+                    font_size: 12.0,
+                    color: if empty { palette.quote } else { palette.body },
+                    align: TextAlign::Left,
+                });
+                // Каретка (мигающая полоса) — оценка ширины текста (0.62
+                // кегля — синк whatif_ui::text_width)
+                let caret_x = field[0] + 8.0 + edit.text.chars().count() as f32 * 12.0 * 0.62;
+                if (state.opened_at.elapsed().as_millis() / 530) % 2 == 0 {
+                    let caret = [
+                        caret_x.min(field[0] + field[2] - 8.0),
+                        field[1] + 5.0,
+                        1.5,
+                        16.0,
+                    ];
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        caret,
+                        palette.accent,
+                        [0.0; 4],
+                        0.0,
+                    ));
                 }
             }
             // Hover узла дерева (кадр) — рамка акцентом

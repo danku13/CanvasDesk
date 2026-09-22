@@ -109,6 +109,10 @@ pub mod keys {
     /// Адресная строка узла (AC-2.1): «вход {n}» / «выход {name}».
     pub const EXPLAIN_ADDR_SLOT: &str = "explain.addr_slot";
     pub const EXPLAIN_ADDR_OUTPUT: &str = "explain.addr_output";
+    /// X3 (AC-4.1): кнопка «Изменить» на листе дерева — подмена what-if.
+    pub const EXPLAIN_EDIT: &str = "explain.edit";
+    /// Подсказка пустого inline-поля подмены.
+    pub const EXPLAIN_EDIT_HINT: &str = "explain.edit_hint";
     /// Настройка FR-039 (AC-2.3): лимит глубины авто-раскрытия дерева.
     pub const ROW_EXPLAIN_DEPTH: &str = "settings.row.explain_depth";
     pub const DESC_EXPLAIN_DEPTH: &str = "settings.desc.explain_depth";
@@ -854,6 +858,9 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::VALUE_EXPLAIN_ALL, "Без ограничения"),
     (keys::EXPLAIN_TITLE, "Проверка цепочки расчёта"),
+    // X3 (AC-4.1): кнопка подмены листа и подсказка inline-поля
+    (keys::EXPLAIN_EDIT, "Изменить"),
+    (keys::EXPLAIN_EDIT_HINT, "Новое значение — Enter применит"),
     (
         keys::EXPLAIN_META,
         "Цепочка расчёта цифры «{title}» · Esc — закрыть",
@@ -1319,6 +1326,9 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::VALUE_EXPLAIN_ALL, "No limit"),
     (keys::EXPLAIN_TITLE, "Calculation chain check"),
+    // X3 (AC-4.1): leaf override button and inline-field hint
+    (keys::EXPLAIN_EDIT, "Edit"),
+    (keys::EXPLAIN_EDIT_HINT, "New value — Enter to apply"),
     (
         keys::EXPLAIN_META,
         "Calculation chain for “{title}” · Esc — close",

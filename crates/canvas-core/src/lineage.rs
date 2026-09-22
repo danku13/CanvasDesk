@@ -951,6 +951,62 @@ impl<'a> Builder<'a> {
     }
 }
 
+// --- What-if дельты дерева (PRD-0007 X3, AC-4.2/F-6) ----------------------
+
+/// Дельта what-if на узле дерева: базовое и сценарное значения плюс
+/// строка дельты формата FR-017 («(+33 пп)» / «(+2)»); `delta: None` не
+/// встречается (совпадающие значения не попадают в карту).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineageDelta {
+    /// Значение узла в базовой модели.
+    pub base: Value,
+    /// Значение узла при активных подменах.
+    pub whatif: Value,
+    /// Строка дельты формата FR-017 (`expr::whatif_delta_str`).
+    pub delta: String,
+}
+
+/// Сопоставить базовое и what-if дерево происхождения по адресу узла
+/// `(node_id, line)` и собрать дельты изменившихся значений (AC-4.2:
+/// «пересчитанные значения и дельты на затронутых узлах дерева»).
+///
+/// Чтоif-дерево строится из `flow_active` (подмены), базовое — из
+/// `flow_baseline`; оба из одного снапшота `.canvas` (инвариант F-5:
+/// структура ветвей совпадает, различаются только вычисленные значения —
+/// но сопоставление по адресу устойчиво и к структурным сдвигам: узлы
+/// без пары просто не дают дельту). Чистая функция, порядок — BTreeMap.
+pub fn lineage_deltas(
+    base: &LineageTree,
+    whatif: &LineageTree,
+) -> BTreeMap<(String, Option<usize>), LineageDelta> {
+    let mut base_values: BTreeMap<(String, Option<usize>), &Value> = BTreeMap::new();
+    for node in &base.nodes {
+        if let Some(Ok(value)) = &node.value {
+            base_values.insert((node.node_id.clone(), node.line), value);
+        }
+    }
+    let mut deltas = BTreeMap::new();
+    for node in &whatif.nodes {
+        let Some(Ok(value)) = &node.value else {
+            continue;
+        };
+        let Some(base_value) = base_values.get(&(node.node_id.clone(), node.line)).copied() else {
+            continue;
+        };
+        if let Some(delta) = expr::whatif_delta_str(base_value, value) {
+            deltas.insert(
+                (node.node_id.clone(), node.line),
+                LineageDelta {
+                    base: base_value.clone(),
+                    whatif: value.clone(),
+                    delta,
+                },
+            );
+        }
+    }
+    deltas
+}
+
 // --- Тесты (верификационный список §9.4 PRD-0007) ---
 
 #[cfg(test)]
@@ -1503,5 +1559,100 @@ mod tests {
             "неразрешённый путь — терминал «не связано»: {:?}",
             t2.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>()
         );
+    }
+
+    /// X3 (AC-4.2/F-6): дельты what-if в дереве — подмена листа «a = 5»
+    /// → «a = 7» даёт дельты на всех затронутых узлах (лист a, узел b,
+    /// строка c и итог корня); совпадающие значения дельт не дают.
+    #[test]
+    fn lineage_deltas_track_overrides() {
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "a", "a = 5", 0.0);
+        sheet(&mut canvas, "b", "b = $in × 2", 1.0);
+        sheet(&mut canvas, "c", "c = $in + 1", 2.0);
+        value_edge(&mut canvas, "e1", "a", "b");
+        value_edge(&mut canvas, "e2", "b", "c");
+        let base = tree(&canvas, LineageNodeId::total("c"));
+        // What-if: подмена строки 0 ноды a («a = 5» → «a = 7»).
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("a".to_owned(), 0usize), "a = 7".to_owned());
+        let overrides = WhatIfOverrides {
+            line_exprs,
+            ..WhatIfOverrides::default()
+        };
+        let whatif_solutions =
+            propagate_with_lines_data(&canvas, &overrides, &DataSnapshots::new())
+                .expect("пересчёт с подменой");
+        let whatif = build_lineage(
+            &canvas,
+            LineageFlow::Ready {
+                solutions: &whatif_solutions,
+                data: &DataSnapshots::new(),
+            },
+            LineageNodeId::total("c"),
+        )
+        .expect("what-if дерево построено");
+        let deltas = lineage_deltas(&base, &whatif);
+        // 6 узлов: итоги нод (a/b/c, None) + строки Numi-листов (b/c, 0) +
+        // лист (a, 0) — каждый узел с изменившимся значением.
+        assert_eq!(deltas.len(), 6, "все затронутые узлы: {deltas:?}");
+        let root = deltas
+            .get(&("c".to_owned(), None))
+            .expect("дельта итога корня");
+        assert_eq!(root.base.to_string(), "11");
+        assert_eq!(root.whatif.to_string(), "15");
+        assert_eq!(root.delta, "+4");
+        assert!(deltas.contains_key(&("a".to_owned(), Some(0))), "лист a");
+        assert!(deltas.contains_key(&("a".to_owned(), None)), "итог a");
+        assert!(deltas.contains_key(&("b".to_owned(), Some(0))), "узел b");
+        assert!(
+            deltas.contains_key(&("c".to_owned(), Some(0))),
+            "строка c: {deltas:?}"
+        );
+        // Совпадающие значения (подмен нет) — дельт нет.
+        let same = tree(&canvas, LineageNodeId::total("c"));
+        assert!(lineage_deltas(&base, &same).is_empty());
+    }
+
+    /// X3: узел what-if дерева без пары в базе (структурный сдвиг) или
+    /// с ошибочным значением не даёт дельту — сопоставление по адресу
+    /// устойчиво (F-5).
+    #[test]
+    fn lineage_deltas_skip_unmatched_and_errors() {
+        let mut base = LineageTree {
+            root: LineageNodeId::total("x"),
+            nodes: Vec::new(),
+        };
+        base.nodes.push(LineageNode {
+            node_id: "x".into(),
+            line: None,
+            kind: LineageNodeKind::Calc,
+            value: Some(Ok(Value::scalar(10.0))),
+            formula: None,
+            title: "X".into(),
+            label: None,
+            children: Vec::new(),
+        });
+        // What-if: значение стало ошибкой — дельты нет.
+        let mut errored = base.clone();
+        errored.nodes[0].value = Some(Err("цикл".into()));
+        assert!(lineage_deltas(&base, &errored).is_empty());
+        // What-if: пара отсутствует (узел без значения) — дельты нет.
+        let mut absent = base.clone();
+        absent.nodes[0].value = None;
+        assert!(lineage_deltas(&base, &absent).is_empty());
+        // Новый узел what-if без базовой пары — дельты нет.
+        let mut extra = base.clone();
+        extra.nodes.push(LineageNode {
+            node_id: "y".into(),
+            line: None,
+            kind: LineageNodeKind::Leaf,
+            value: Some(Ok(Value::scalar(1.0))),
+            formula: None,
+            title: "Y".into(),
+            label: None,
+            children: Vec::new(),
+        });
+        assert!(lineage_deltas(&base, &extra).is_empty());
     }
 }

@@ -3719,6 +3719,26 @@ CanvasDesk». Источник — вводные владельца о проз
 - Нормализованные дельты (попапы над панелями, stage-any-key, минимапа-клик) зафиксированы в FR-052 §Changes.
 - Далее: U3 — TextMeasurer + токены слотов состояний + layout-примитивы + пилоты (галерея схем, what-if бар); U4 — kit+DebugOverlay; U5 — миграция остальных поверхностей, лестница on_key целиком, линты CI, docs/ui-kit.md.
 
+## 2026-09-22 — PRD-0007 X3: what-if из дерева (подмена листа, дельты, сценарии)
+
+- **Агент:** Super Z (сессия web-29b539cb, директива «Продолжай реализовывать»)
+- **Задача:** этап X3 дорожной карты PRD-0007 §13 (F-6, AC-4.1–AC-4.3): подмена листа explain-дерева через `WhatIfOverrides` (FR-017), дельты в дереве и полосе D корня, именованные сценарии, возврат к базе, Apply.
+
+### Work Log
+- Синхронизация клона: origin/main ушёл вперёд на 53 коммита (FR-050 A/B, PRD-0008 аудит, PRD-0009 U0–U2/FR-051–FR-052, X2 через реестр); fast-forward 1dcb58f → 5473aea; окружение пересобрано (rustup 1.98.1, wasmtime 49.0.0, wasm-таргеты).
+- **canvas-core:** `expr.rs` — `whatif_delta_str`/`whatif_full_delta` перенесены из canvas-scene (делегация в scene — публичный API сохранён); `whatif.rs` — `validate_scenario` считает живыми числовые/expr-константы без «=» (детектор — `eval_lines`, тот же, что у движка: проза/фенсы протухают, инвариант 5 сохранён); `lineage.rs` — `LineageDelta` + `lineage_deltas(base, whatif)` (BTreeMap по (node_id, line), только затронутые Ok/Ok узлы, устойчиво к структурным сдвигам).
+- **canvas-app/explain_ui.rs:** `EditField` (type_str/backspace без байт-резки), `start_edit/finish_edit/cancel_edit` (редактируемый лист = Leaf + line: Some + value Ok; preset — подмена сценария или исходник), `field_rect`/`edit_rect`/`edit_at` (единая геометрия рендера и hit-теста), `LineageOutcome {tree, base}` — пара деревьев (flow_active + flow_baseline) одним фоновым проходом (G5), `base_tree`/`deltas` в `ExplainState` (заполняются в poll → Ready), `ExplainSnapshot.base_tree` — дельты при переоткрытии из кэша.
+- **canvas-app/app.rs:** `spawn_lineage_build` — опциональная база; `open_explain` — база строится при активном what-if; `close_explain` — база в кэш; `commit_explain_edit` (whatif_active, автосценарий одним undo-шагом — паттерн finish_editing, insert подмены, `recompute_flow` — живая модель; чип Stale по новой ревизии — панель на снапшоте); `finish_explain_edit`/`explain_leaf_preset`; on_explain_click — кнопка «Изменить» (приоритет над карточкой), клик мимо поля — коммит; KeyOwner::Explain — открытое поле глушит клавиатуру (символы/Backspace/Enter/Esc); explain_frame — дельта в строке значения («было → стало (+Δ)», whatif_badge), кнопка «Изменить» с hover, inline-поле поверх дерева с мигающей кареткой.
+- **i18n:** +2 ключа RU/EN (EXPLAIN_EDIT, EXPLAIN_EDIT_HINT).
+- **Тесты (TDD):** core 345 (+3: numeric_constant_lines_stay_valid, lineage_deltas_track_overrides — 6 дельт каскада A→B→C с форматом «+4», lineage_deltas_skip_unmatched_and_errors); explain_ui 11 (+4: poll_with_base_builds_deltas, edit_button_targets_editable_leaves, edit_field_lifecycle, edit_rect_stays_inside_card); интеграционные integration_explain_whatif.rs — 3 (подмена листа → дельты корня 11→15 «+4» при целой базе; round-trip сценария с константой «5» без «=» после перезагрузки; возврат к базе одним действием → дельт нет).
+- **AC-4.3 без нового кода:** таблица сравнения, «База» (возврат одним действием), Apply (undo-шаг) — существующие поверхности бара FR-017. **AC-4.4:** механика не зависит от состояния окна — проверка в X5.
+- **Гейты:** fmt ✓, clippy -D warnings ✓, cargo test --workspace ✓ (EXIT=0), token_lint ✓, wasm_gate 1–3 ✓ (wasm32-unknown-unknown + wasip1/wasmtime 49.0.0). Инцидент песочницы: диск 9.9 ГБ переполнялся линковкой тест-бинарников по 250 МБ — временный профиль [profile.test] debug=0 (откачен после гейта), incremental-кэш удалён.
+- **Доки:** PRD-0007 — статус X0–X3, §13 X3 «выполнено», §16 запись; FR-048 — статус/Changes/changelog X3.
+
+### Stage Summary
+- **X3 закрыт:** what-if из дерева работает по AC-4.1–AC-4.3; связка explain↔FR-017 не меняла ни движок, ни формат `.canvas` (инварианты G6/§10).
+- Ключевые решения: пара деревьев (base/whatif) одним проходом вместо диффа flow-карт; дельты только на затронутых узлах; подмена адресует строку Numi-листа (line: Some) — итоги-программы/шаблоны не редактируются из дерева (X3-скоуп, честно зафиксировано).
+- **Далее:** X4 — автосвязь F-7 (canvas-core/autolink.rs: детектор точных имён с фильтрами циклов/дубликатов, фон с дебаунсом, диалог ревью по прототипу ux-review-dialog.html, undo-бат, тумблер FR-039); затем X5 (режим защиты) и X6 (MCP explain_number, закрытие PoC).
 ---
 
 ## 2026-09-22 — MCP v2: «подтянуть функционал под обновления и полностью проверить» (PRD-0008 Q5 + FR-048 X2 + FR-050 паритет)
@@ -3800,3 +3820,47 @@ CanvasDesk». Источник — вводные владельца о проз
 - G4-линт-приём готов и переиспользуем для U5 (6 поверхностей).
 - Слоты состояний в ThemeColors + parity: база UI kit U4 (компоненты берут только слоты).
 - Далее: U4 — UI kit v1 (F-8), DebugOverlay (F-10), витрина-галерея, scissor-бакеты (G5-клип); U5 — миграция 4 поверхностей, лестница on_key целиком, линты в CI, docs/ui-kit.md.
+## 2026-09-22 — Скиллы MCP: пакет skills/ для внешних агентов + контракт синхронности
+
+Запрос владельца: «написать скиллы для использования mcp, чтобы можно
+было выложить их в репозиторий для других агентов; обновлять описания
+скиллов по мере изменения функционала mcp».
+
+- **Пакет `skills/`** (публикуемая производная реестра 39 инструментов,
+  самодостаточные папки — копируются в каталог скиллов любого агента):
+  `canvasdesk-mcp` (подключение/транспорт, инварианты, разведка, карта
+  «задача → скилл», подводные камни) + `references/tools.md` (полный
+  каталог 39 инструментов по 7 группам); `canvasdesk-model-build`
+  (рецепт 5 шагов, порты FR-029, ops graph_apply, лимиты, чек-лист) +
+  `examples/instagram-mvp.json` (эталон ADR-0005: 12 нод, 10 рёбер,
+  один батч); `canvasdesk-model-verify` (структура flow-ответа
+  value/outputs/lines/spilled/autoRows, lineage-дерево, таблица кодов
+  E-*/W-*, analyze_bottlenecks, порядок верификации, оракулы ±1 %);
+  `canvasdesk-whatif` (9 инструментов, дельты, дисциплина apply/reset,
+  типичный сеанс). Плюс `README.md` (установка, версия, счётчик),
+  `UPDATE-PROTOCOL.md` (протокол актуализации), `CHANGELOG.md` (v1).
+- **Контракт синхронности «скиллы = реестр»** — 4 теста `skills_*` в
+  canvas-mcp (include_str! пакета, компайл-тайм — работает и под wasm):
+  (1) полнота каталога tools.md по TOOLS; (2) каждый инструмент
+  упомянут хотя бы в одном SKILL.md; (3) счётчик «N инструмент» в
+  README актуален; (4) call-позиции `` `имя` {…} `` — только имена
+  реестра или операции батча (`param_set` в CALL_POSITION_OPS).
+  Добавление/удаление/переименование инструмента валит CI до правки
+  скиллов — механизм «обновлять по мере изменения» формализован.
+- **Исполнимость примера:** тест
+  `skills_example_instagram_mvp_applies_and_matches_oracle` в
+  canvas-mcp-headless прогоняет сам JSON скилла через полный
+  протокольный цикл и сверяет 8 оракулов ADR-0005 (±1 %).
+  Тест немедленно поймал реальную ловушку: `fromOutput` переменной
+  Numi-листа в `graph_apply` валидируется только по выходам шаблонов
+  (E-PORT-UNKNOWN), у прямого edge_create — принимает переменные.
+  Пример переведён на `fromLine: 6`; асимметрия задокументирована в
+  скиллах (build шаг 3/4 + ops-таблица + «подводные камни» базы, п. 6).
+- **Доки:** SPEC §13 (абзац «Пакет скиллов skills/» + инвариант
+  синхронности), AGENTS.md (skills/ в карте источников истины —
+  обязанность обновлять в том же коммите), README (ссылка в секции
+  MCP), user-docs/agent-recipe.md (предусловие 3: ссылка на пакет).
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓;
+  нативные workspace 1457 passed / 0 failed (mcp 19, headless 13) ✓;
+  wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (wasip1 под wasmtime: skills-тесты
+  зелёные, полная e2e-сессия сошлась).

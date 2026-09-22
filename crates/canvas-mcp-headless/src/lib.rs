@@ -297,6 +297,100 @@ mod tests {
         assert_eq!(scene.canvas.nodes.len(), 4, "4 ноды мини-эталона");
     }
 
+    /// Пример пакета скиллов: `skills/canvasdesk-model-build/examples/
+    /// instagram-mvp.json` исполняется дословно через полный протокольный
+    /// цикл и сходится с oracle ADR-0005 (±1 %) — тот же источник чисел,
+    /// что `mcp_fr029_instagram_mvp_reference` в canvas-scene. Гарантия
+    /// внешним агентам: опубликованный в скилле пример собирается и
+    /// считает. Изменение примера без обновления oracle — падение теста.
+    #[test]
+    fn skills_example_instagram_mvp_applies_and_matches_oracle() {
+        let mut transport = Some(HeadlessSession::new());
+        let batch: Value = serde_json::from_str(include_str!(
+            "../../../skills/canvasdesk-model-build/examples/instagram-mvp.json"
+        ))
+        .expect("пример скилла — валидный JSON");
+        let operations = batch["operations"].clone();
+        assert_eq!(
+            operations.as_array().map(Vec::len),
+            Some(22),
+            "эталон ADR-0005: 12 нод + 10 value-рёбер"
+        );
+        let result = call(
+            &mut transport,
+            "graph_apply",
+            &format!(r#"{{"operations": {operations}}}"#),
+        );
+        let structured = result["structuredContent"].clone();
+        assert_eq!(structured["ok"], true, "ответ: {structured}");
+        let created = structured["created"].clone();
+        let flow = structured["flow"].clone();
+
+        let traffic = ref_id(&created, "traffic");
+        let cdn = ref_id(&created, "cdn");
+        let lb = ref_id(&created, "lb");
+        let feed = ref_id(&created, "feed");
+        let db = ref_id(&created, "db");
+        let queue = ref_id(&created, "queue");
+
+        assert_close(
+            flow[traffic]["outputs"]["avg_rps"]["value"]
+                .as_f64()
+                .expect("avg_rps"),
+            555.6,
+            "avg_rps = 1e6·4·12/86400",
+        );
+        assert_close(
+            flow[traffic]["outputs"]["peak_rps"]["value"]
+                .as_f64()
+                .expect("peak_rps"),
+            1388.9,
+            "peak_rps = 555.6·2.5",
+        );
+        assert_close(
+            flow[cdn]["outputs"]["origin_rps"]["value"]
+                .as_f64()
+                .expect("origin_rps"),
+            555.6,
+            "origin = 1389·(1−0.6)",
+        );
+        assert_close(
+            flow[lb]["outputs"]["out_auth"]["value"]
+                .as_f64()
+                .expect("out_auth"),
+            83.3,
+            "auth = 556·0.15",
+        );
+        assert_close(
+            flow[lb]["outputs"]["out_feed"]["value"]
+                .as_f64()
+                .expect("out_feed"),
+            333.3,
+            "feed = 556·0.60",
+        );
+        assert_close(
+            flow[feed]["outputs"]["db_qps"]["value"]
+                .as_f64()
+                .expect("db_qps"),
+            80.0,
+            "db = 333·0.8·0.3",
+        );
+        assert_close(
+            flow[db]["outputs"]["replica_load"]["value"]
+                .as_f64()
+                .expect("replica_load"),
+            40.0,
+            "replica = 80·0.5",
+        );
+        assert_close(
+            flow[queue]["outputs"]["consume_rate"]["value"]
+                .as_f64()
+                .expect("consume_rate"),
+            333.3,
+            "consume = min(333, 2400)",
+        );
+    }
+
     /// CP5-гейт (ρ-лестница FR-016): базовая линия здорова (CDN ρ 0.417),
     /// DAU×2 → Warn (0.833), DAU×5.35 → Overload (2.23, ветка C ADR-0006).
     /// Весь сценарий — tools/call через протокол (node_update_text — путь
