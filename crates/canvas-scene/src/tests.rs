@@ -2573,3 +2573,211 @@ fn whatif_autoname_picks_first_free_slot() {
     let again = scene.whatif_create_scenario("").expect("повторное автоимя");
     assert_eq!(scene.scenarios[again].name, "Сценарий 1");
 }
+
+// --- FR-050 этап A: Н4 fail-fast дубль-входов; Р-4 кэш авто-строк ---
+
+/// FR-050 Н4: fail-fast дубль-входов — прямое `edge_create` со вторым
+/// value-ребром в занятый `toParam` отклоняется немедленно с кодом
+/// E-DOUBLE-INPUT; канвас не изменился (undo-шаг не добавлен).
+#[test]
+fn mcp_edge_create_double_input_fail_fast() {
+    let mut scene = mcp_scene();
+    // Сборка: заметки-источники + шаблонный приёмник + первое ребро в rps
+    // (value-ребро без fromOutput — узловое значение заметки).
+    let ops = r#"[
+        {"op": "node_create_note", "ref": "src", "x": 0, "y": 0, "text": "v = 100 rps"},
+        {"op": "node_create_note", "ref": "alt", "x": 0, "y": 200, "text": "w = 200 rps"},
+        {"op": "template_instantiate", "ref": "gw", "template": "com.canvasdesk.api-gateway",
+         "x": 400, "y": 0, "params": {"latency_budget": 5, "auth_overhead": 2}},
+        {"op": "edge_create", "fromRef": "src", "toRef": "gw", "kind": "value",
+         "toParam": "rps"}
+    ]"#;
+    let report = graph_apply(&mut scene, ops).expect("сборка");
+    assert_eq!(report["ok"], true, "сборка чистая: {report}");
+    let gw = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.template().is_some())
+        .map(|n| n.id.clone())
+        .expect("шаблонная нода");
+    let alt = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| {
+            n.text
+                .as_deref()
+                .map(|t| t.contains("w = 200"))
+                .unwrap_or(false)
+        })
+        .map(|n| n.id.clone())
+        .expect("нода alt");
+    let undo_len = scene.undo_stack.len();
+    // Второе ребро в тот же gw.rps — fail-fast E-DOUBLE-INPUT
+    let err = dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{alt}", "to": "{gw}", "fromOutput": "w", "toParam": "rps", "kind": "value"}}"#
+        ),
+    )
+    .expect_err("дубль-вход отклонён");
+    assert!(err.contains("E-DOUBLE-INPUT"), "ошибка называет код: {err}");
+    assert!(err.contains("rps"), "ошибка называет параметр: {err}");
+    // Канвас не изменился: одно ребро в rps, undo не рос
+    let into_rps = scene
+        .canvas
+        .edges
+        .iter()
+        .filter(|e| e.to_param.as_deref() == Some("rps") && e.to_node == gw)
+        .count();
+    assert_eq!(into_rps, 1, "в параметре осталось одно ребро");
+    assert_eq!(
+        scene.undo_stack.len(),
+        undo_len,
+        "неудачный вызов не оставил undo-шаг"
+    );
+    // Другой параметр того же приёмника — допустимо (не дубль)
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{alt}", "to": "{gw}", "toParam": "auth_overhead", "kind": "value"}}"#
+        ),
+    )
+    .expect("другой параметр — не дубль");
+}
+
+/// FR-050 Н4: graph_apply[edge_create] — дубль-вход (два edge_create в
+/// один toParam в ОДНОМ батче) отклоняется операцией с кодом
+/// E-DOUBLE-INPUT, батч атомарно откатывается; замена источника — явная
+/// пара edge_delete + edge_create в одном батче (проходит: ровно одно
+/// ребро в параметре); edge_delete несуществующего ребра — E-NOT-FOUND.
+#[test]
+fn graph_apply_double_input_atomic_and_replacement() {
+    let mut scene = mcp_scene();
+    // Два edge_create в один toParam в ОДНОМ батче — пятая операция
+    // падает E-DOUBLE-INPUT, весь батч откатывается (атомарность FR-033)
+    let dup = r#"[
+        {"op": "node_create_note", "ref": "src", "x": 0, "y": 0, "text": "v = 100 rps"},
+        {"op": "node_create_note", "ref": "alt", "x": 0, "y": 200, "text": "w = 200 rps"},
+        {"op": "template_instantiate", "ref": "gw", "template": "com.canvasdesk.api-gateway",
+         "x": 400, "y": 0, "params": {"latency_budget": 5, "auth_overhead": 2}},
+        {"op": "edge_create", "fromRef": "src", "toRef": "gw", "kind": "value",
+         "toParam": "rps", "ref": "e_src"},
+        {"op": "edge_create", "fromRef": "alt", "toRef": "gw", "kind": "value",
+         "toParam": "rps", "ref": "e_alt"}
+    ]"#;
+    let report = graph_apply(&mut scene, dup).expect("отчёт об ошибке операции");
+    assert_eq!(report["ok"], false, "батч отклонён: {report}");
+    assert_eq!(report["op_index"], 4, "падает операция дубля: {report}");
+    assert_eq!(report["code"], "E-DOUBLE-INPUT", "код устойчив: {report}");
+    assert!(
+        report["message"].as_str().expect("message").contains("rps"),
+        "ошибка называет параметр: {report}"
+    );
+    assert!(
+        scene.canvas.edges.iter().all(|e| e.to_param.is_none()),
+        "атомарный откат: ни одного адресованного ребра"
+    );
+    assert_eq!(scene.canvas.nodes.len(), 3, "созданные ноды откатились");
+    // Замена источника: create + delete + create в одном батче — проходит
+    let replace = r#"[
+        {"op": "node_create_note", "ref": "src", "x": 0, "y": 0, "text": "v = 100 rps"},
+        {"op": "node_create_note", "ref": "alt", "x": 0, "y": 200, "text": "w = 200 rps"},
+        {"op": "template_instantiate", "ref": "gw", "template": "com.canvasdesk.api-gateway",
+         "x": 400, "y": 0, "params": {"latency_budget": 5, "auth_overhead": 2}},
+        {"op": "edge_create", "fromRef": "src", "toRef": "gw", "kind": "value",
+         "toParam": "rps", "ref": "e_first"},
+        {"op": "edge_delete", "id": "e_first"},
+        {"op": "edge_create", "fromRef": "alt", "toRef": "gw", "kind": "value",
+         "toParam": "rps"}
+    ]"#;
+    let report = graph_apply(&mut scene, replace).expect("замена источника");
+    assert_eq!(report["ok"], true, "явная замена допустима: {report}");
+    let gw = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.template().is_some())
+        .map(|n| n.id.clone())
+        .expect("шаблонная нода");
+    assert_eq!(
+        scene
+            .canvas
+            .edges
+            .iter()
+            .filter(|e| e.to_param.as_deref() == Some("rps") && e.to_node == gw)
+            .count(),
+        1,
+        "источник заменён — ровно одно ребро в параметре"
+    );
+    // edge_delete несуществующего ребра — операция падает E-NOT-FOUND
+    let missing = r#"[{"op": "edge_delete", "id": "no-such-edge"}]"#;
+    let report = graph_apply(&mut scene, missing).expect("отчёт");
+    assert_eq!(report["ok"], false, "несуществующее ребро: {report}");
+    assert_eq!(report["code"], "E-NOT-FOUND", "{report}");
+}
+
+/// FR-050 Р-4 (Н10-а): recompute_flow заполняет кэш авто-строк —
+/// производные данные пересчёта для рендера (этап D): путь «Объект.Поле»,
+/// значение из активного пересчёта, слот не читается формулой приёмника.
+/// Прямое edge_create (текстовый исток с fromOutput — валидация имён
+/// прямого инструмента знает переменные Numi-листа).
+#[test]
+fn scene_auto_rows_cache_populated() {
+    let mut scene = mcp_scene();
+    let ops = r#"[
+        {"op": "node_create_note", "ref": "traffic", "x": 0, "y": 0,
+         "text": "Трафик\npeak_rps = 1389 rps"},
+        {"op": "node_create_note", "ref": "gateway", "x": 400, "y": 0,
+         "text": "заметка без формулы"}
+    ]"#;
+    let report = graph_apply(&mut scene, ops).expect("сборка");
+    assert_eq!(report["ok"], true, "сборка чистая: {report}");
+    let find = |scene: &SceneState, text: &str| {
+        scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref().map(|t| t.contains(text)).unwrap_or(false))
+            .map(|n| n.id.clone())
+            .expect(text)
+    };
+    let traffic = find(&scene, "Трафик");
+    let gateway = find(&scene, "заметка без формулы");
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{traffic}", "to": "{gateway}", "fromOutput": "peak_rps", "kind": "value"}}"#
+        ),
+    )
+    .expect("value-ребро");
+    let rows = scene.auto_rows.get(&gateway).expect("кэш заполнен");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].path, "Трафик.peak_rps");
+    assert_eq!(rows[0].field, "peak_rps");
+    assert_eq!(rows[0].slot, 0);
+    let value = rows[0].value.as_ref().expect("значение пролито");
+    assert!(value.to_string().contains("1389"), "значение: {value}");
+    // Удаление ребра → пересчёт → строка исчезла
+    let edge_id = scene
+        .canvas
+        .edges
+        .iter()
+        .find(|e| e.to_node == gateway)
+        .map(|e| e.id.clone())
+        .expect("ребро");
+    dispatch(
+        &mut scene,
+        "edge_delete",
+        &format!(r#"{{"id": "{edge_id}"}}"#),
+    )
+    .expect("edge_delete");
+    assert!(
+        !scene.auto_rows.contains_key(&gateway),
+        "ребра нет — авто-строка исчезла"
+    );
+}

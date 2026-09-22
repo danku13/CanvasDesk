@@ -244,6 +244,13 @@ pub struct SceneState {
     /// строки для рендера. Runtime-кэш (не сериализуется), пересчитывается
     /// в `recompute_flow` вместе с результатами потока.
     pub param_spills: HashMap<String, Vec<SpillView>>,
+    /// FR-050 Р-4 (Н10-а — строка-проекция): авто-строки приёмников —
+    /// производные строки тела нод для value-рёбер без `toParam` к нодам
+    /// без ожидающего порта (слот не читается формулой — W-UNUSED-SLOT).
+    /// Runtime-кэш (не сериализуется, инвариант «формат .canvas не
+    /// расширяется»), пересчитывается в `recompute_flow` — значения из
+    /// активного сценария what-if. Рендер авто-строки — этап D FR-050.
+    pub auto_rows: HashMap<String, Vec<flow::AutoRow>>,
     /// FR-042 (E2): индекс пучков рёбер — группировка по упорядоченной паре
     /// концов для LOD-0 агрегации и main stage. Runtime-кэш (не
     /// сериализуется, инвариант «формат .canvas не расширяется»);
@@ -305,6 +312,7 @@ impl SceneState {
             expr_results: ExprResults::new(),
             expr_line_results: ExprLineResults::new(),
             param_spills: HashMap::new(),
+            auto_rows: HashMap::new(),
             bundles,
             whatif_active: false,
             scenarios,
@@ -349,6 +357,7 @@ impl SceneState {
                     self.whatif_nodes.clear();
                     self.recompute_all_expr();
                     self.param_spills.clear();
+                    self.auto_rows.clear();
                     // FR-016: поток недоступен (цикл) — анализ пуст: без
                     // FlowSolutions детекции не на чем (честное отсутствие, не
                     // ложное «всё здорово»).
@@ -441,6 +450,19 @@ impl SceneState {
             param_spills.insert(node.id.clone(), views);
         }
         self.param_spills = param_spills;
+        // FR-050 Р-4 (Н10-а): авто-строки приёмников — производные данные
+        // пересчёта (значения активного сценария): детерминированы,
+        // повторный пересчёт даёт идентичные строки (инвариант 2 FR-050);
+        // рендер — этап D.
+        let mut auto_rows: HashMap<String, Vec<flow::AutoRow>> = HashMap::new();
+        for node in &self.canvas.nodes {
+            let rows = flow::auto_rows(&self.canvas, &node.id, solutions);
+            if rows.is_empty() {
+                continue;
+            }
+            auto_rows.insert(node.id.clone(), rows);
+        }
+        self.auto_rows = auto_rows;
         // FR-017 (CP6): what-if представления нод для рендера — виртуальный
         // исходник, подсветка подмен, дельта-бейджи (только ноды с подменами;
         // рельеф базы рендер рисует как есть).
