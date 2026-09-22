@@ -4484,3 +4484,22 @@ user-docs (calculations.md, hotkeys.md, interface.md).
 - **Урок (повтор из FR-050):** параллельные выкладки уходили вперёд во
   время работы (X6 дважды) — `git fetch` непосредственно перед merge и
   push; счётчик инструментов MCP — точка синхронизации драйвера e2e.
+
+---
+Task ID: 1
+Agent: Super Z (main agent)
+Task: FR-055 — этап U4 PRD-0009 (приказ владельца «нужно реализовать Продолжай U4»): UI kit v1 (F-8), DebugOverlay (F-10), витрина, перенос пилотов на кит, гейт G6.
+
+Work Log:
+- git fetch/main 3481a56 — чисто; определение U4 сверки с PRD §13/§15 (G6 — единственный незакрытый DoD-пункт).
+- Ветка feature/fr-055-ui-layering-u4; FR-055 docs/change-requests/fr-055-ui-layering-u4-kit.md + index-cr-fr (FR-055 → в работе) + статус PRD-0009.
+- canvas-ui: kit.rs (Panel/Modal, Button×варианты×состояния, IconButton, Chip, Dropdown «якорь+flip», Toast «TTL+avoid», Tooltip «+delay»; KitPalette — только слоты; panel_style_of/control_style_of для каноники, I-1) + anim.rs (BoolAnim, dt-детерминизм); +canvas-core (внутренняя, G7). 60 тестов крейта.
+- canvas-render: From<&ThemeColors> for KitPalette + ThemeColors::kit_palette() (слоты состояний FR-053; DIALOG_* примитивы).
+- canvas-app: kit_ui.rs (витрина + KitDraw-адаптер), debug_overlay.rs (F9/?ui=debug; рамки слоёв, имя под курсором, подсветка пересечений overlaps_within_layer; чистая сигнатура — headless), реестр: KIT_GALLERY 22-я поверхность (Modals/Block, KeyOwner::KitGallery, esc/click/backdrop), help_menu «О интерфейсе» (Q5-a), i18n RU/EN 24 ключа, F9 вне роутера.
+- Пилоты: контейнер/пилюля what-if и «✕» галереи — через kit-стили (те же слоты — байт-в-байт).
+- G4-линт: каноническое состояние lint_kit_gallery_open; линт ПОЙМАЛ выход панели витрины за 800×560 — погашен gallery_panel (кламп во вьюпорт, hit-слоты = раскладка).
+- Гейты: fmt ✓; clippy -D warnings ✓ (3 раунда фиксов: needless_range_loop, redundant binding, Copy-clone); cargo test --workspace ✓ (1500+; app lib 316, +3 новых); wasm_gate 2/3 ступеней ✓ (wasmtime локально недоступен — как в предыдущих выкладках); mcp_wasm_gate ступень 1 ✓. G6 закрыт headless-тестами debug_overlay (labels/cursor/intersections).
+
+Stage Summary:
+- U4 выполнен в коде: kit v1 F-8 + DebugOverlay F-10 + витрина kit_gallery + перенос хрома пилотов; DoD PRD-0009 без открытых пунктов (scissor/замер wasm — G7-остаток, следующая web-сборка).
+- Следующие шаги: merge --no-ff в main, push, CI по merge SHA, финальная запись worklog.
