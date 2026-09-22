@@ -379,7 +379,9 @@ fn unit_dims(unit: &expr::Unit) -> std::collections::BTreeMap<String, i16> {
 
 /// Совместимы ли единицы значения и параметра: равные мультимножества
 /// размерностей (масштабы ms/s, KB/MB — не важны; имена — не важны).
-fn dimensions_compatible(actual: &expr::Unit, expected: &expr::Unit) -> bool {
+/// FR-050 Н2 (этап C): pub(crate) — переиспользуется подсветкой
+/// совместимости целей drag в `flow::value_param_compatible`.
+pub(crate) fn dimensions_compatible(actual: &expr::Unit, expected: &expr::Unit) -> bool {
     // FR-050 Н5: скаляр с любой стороны совместим — безразмерное
     // пролитое значение трактуется в единицах приёмника (flow прикрепляет
     // единицу), значение с единицей в безразмерный параметр приходит как

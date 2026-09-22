@@ -32,6 +32,10 @@ pub mod geometry;
 pub mod hit;
 pub mod keyboard;
 pub mod layer;
+// FR-053 U3 (F-7): layout-примитивы — микро-движок вёрстки от слота родителя.
+pub mod layout;
+// FR-053 U3 (F-6): TextMeasurer — измеренный текст (cosmic-text + кэш).
+pub mod measure;
 pub mod registry;
 
 pub use capture::CapturePolicy;
@@ -40,6 +44,11 @@ pub use geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 pub use hit::{HitStack, HitTarget};
 pub use keyboard::{Activation, KeyboardRouter};
 pub use layer::UiLayer;
+pub use layout::{
+    constrain, pad, stack, Child, Column, CrossAlign, Custom, HAlign, MainAlign, Row, RowPolicy,
+    VAlign,
+};
+pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
 pub use registry::{
     DegradationPolicy, KeyboardScopeId, RegistryError, SurfaceDecl, SurfaceId, SurfaceRegistry,
 };

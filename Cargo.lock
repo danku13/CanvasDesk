@@ -357,6 +357,9 @@ dependencies = [
 [[package]]
 name = "canvas-ui"
 version = "0.1.0"
+dependencies = [
+ "cosmic-text",
+]
 
 [[package]]
 name = "canvas-web"

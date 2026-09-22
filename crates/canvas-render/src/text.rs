@@ -40,7 +40,9 @@ const FONT_DATA: &[&[u8]] = &[
 ];
 
 /// Семейство базового текста канваса (CR-009): Noto Sans Display.
-pub(crate) const SANS_FAMILY: &str = "Noto Sans Display";
+/// FR-053 (U3): pub — измерение раскладки (canvas-ui::measure) обязано
+/// использовать то же семейство, что и рендер (parity метрик).
+pub const SANS_FAMILY: &str = "Noto Sans Display";
 /// Семейство Numi-строк, результатов и код-фенсов (CR-009): Noto Sans Mono.
 pub(crate) const MONO_FAMILY: &str = "Noto Sans Mono";
 
@@ -957,7 +959,9 @@ static MEASURE_FS: OnceLock<Mutex<FontSystem>> = OnceLock::new();
 /// через `into_inner`: отравление возможно только при панике внутри
 /// шейпинга, FontSystem после неё консистентен (layout-кэш пересчитывается
 /// заново), поэтому измерение не падает, а продолжает работать.
-fn measure_font_system() -> MutexGuard<'static, FontSystem> {
+/// FR-053 (U3): pub — владелец инстанса FontSystem для TextMeasurer
+/// (PRD-0009 §14: раскладка пилотов шейпит теми же метриками, что рендер).
+pub fn measure_font_system() -> MutexGuard<'static, FontSystem> {
     let mutex = MEASURE_FS.get_or_init(|| {
         let mut font_system = FontSystem::new();
         for data in FONT_DATA {
@@ -1424,6 +1428,53 @@ impl TextSystem {
             });
         }
         ports
+    }
+
+    /// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды из кэша
+    /// раскладки: для каждой строки-присваивания, чьё имя входит в снапшот
+    /// параметров шаблона (`TemplateRef::params` — канонический адрес
+    /// `toParam`, тот же источник истины, что у валидации E-PORT-UNKNOWN),
+    /// — [`ParamPort`] на ЛЕВОМ краю ноды (вертикаль — [`result_row_y`]
+    /// ряда строки, зеркально построчным выходам FR-025; hit-тест — допуск
+    /// CR-003). Текстовая нода якорей не имеет (toParam к ней не адресуется).
+    /// Нет кэша/строк (нода вне экрана, виджет) — якорей нет.
+    pub fn param_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::ParamPort> {
+        let Some(template) = node.template() else {
+            return Vec::new();
+        };
+        let Some(entry) = self.cache.get(&index) else {
+            return Vec::new();
+        };
+        entry
+            .line_results
+            .iter()
+            .filter_map(|line_result| {
+                let block = entry
+                    .body
+                    .as_ref()?
+                    .blocks
+                    .iter()
+                    .find(|block| block.source_line == Some(line_result.source_line))?;
+                let raw = node
+                    .text
+                    .as_deref()
+                    .and_then(|text| text.lines().nth(line_result.source_line))?;
+                let canvas_core::expr::NumiLineKind::Assignment { name } =
+                    canvas_core::expr::line_kind(raw)
+                else {
+                    return None;
+                };
+                // Имя строки вне снапшота параметров (правка текста руками) —
+                // не адрес toParam, якоря не даём (E-PORT-UNKNOWN у MCP)
+                if !template.params.contains_key(&name) {
+                    return None;
+                }
+                Some(canvas_core::ParamPort {
+                    param: name,
+                    point: [node.x, result_row_y(node, block.offset[1])],
+                })
+            })
+            .collect()
     }
 
     /// Подготовить тексты кадра по текст-группам z-плана (zorder.rs):
