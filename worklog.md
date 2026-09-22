@@ -4538,3 +4538,19 @@ Stage Summary:
   (история: ссылка на анализ, ортогональность анатомии A–E, Q3 по F-3).
 - **Не тронуто:** код продукта (анализ/прототип не меняют рендер и модель —
   решение за владельцем по Q1–Q7).
+
+---
+Task ID: 1 (завершение)
+Agent: Super Z (main agent)
+Task: FR-055 — закрытие этапа U4 PRD-0009: merge, push, CI по merge SHA.
+
+Work Log:
+- git fetch непосредственно перед merge (дисциплина R-2): параллельная выкладка aac420b (пре-PRD редизайн Node/Edge) — влита в ветку, конфликт worklog.md разрешён сохранением ОБЕИХ сторон.
+- Merge FR-055 into main --no-ff → merge SHA f781c6b; push (PAT) → aac420b..f781c6b.
+- CI по f781c6b: 12/12 check-runs success (gates ×3 ubuntu/macos/windows, artifacts ×3, build, wasm-check wasm32-unknown-unknown, web /app+docs, licenses cargo-deny, deploy, report-build-status) — наблюдение с авторизацией PAT после rate-limit.
+- Гигиена: index-cr-fr FR-055 → «выполнено (U4)»; чекбоксы FR-055 (гейты, CI) закрыты.
+
+Stage Summary:
+- PRD-0009 ПОЛНОСТЬЮ выполнен: U0–U5 (FR-051/FR-052/FR-053/FR-055/FR-054), DoD G1–G8 без открытых пунктов (G6 закрыт U4).
+- Витрина кита доступна пользователю: меню «?» → «О интерфейсе» (RU/EN); DebugOverlay — F9 натив / ?ui=debug web.
+- Остаток (вне этапа, зафиксировано): scissor-бакеты (F-5) и замер wasm-прироста — при следующей web-сборке (G7); TextInput кита — v2.
