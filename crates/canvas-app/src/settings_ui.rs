@@ -756,108 +756,185 @@ pub fn pill_knob_rect(track: [f32; 4], on: bool) -> [f32; 4] {
     ]
 }
 
-/// Адаптивный размер модалки: ширина `(vw * 0.45).clamp(MIN_W, MAX_W)`,
-/// высота `(vh * 0.6).clamp(MIN_H, MAX_H)`, затем кламп в окно с полями
-/// [`SETTINGS_MARGIN`] — инвариант: модалка целиком в окне при любом
-/// viewport (320×240 включительно).
+/// Адаптивный размер модалки — два яруса `constrain` (FR-054, примитивы U3):
+/// 1) желаемый (45%/60% вьюпорта) в дизайн-границах `[MODAL_MIN_*, MODAL_MAX_*]`;
+/// 2) итог — в пределах окна с полями [`SETTINGS_MARGIN`] (инвариант: модалка
+///    целиком в окне при любом viewport, 320×240 включительно; окно-кламп
+///    приоритетен над дизайн-минимумом).
 fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
-    let w = (viewport[0] * 0.45).clamp(MODAL_MIN_W, MODAL_MAX_W);
-    let h = (viewport[1] * 0.6).clamp(MODAL_MIN_H, MODAL_MAX_H);
-    let w = w.min((viewport[0] - SETTINGS_MARGIN * 2.0).max(1.0));
-    let h = h.min((viewport[1] - SETTINGS_MARGIN * 2.0).max(1.0));
-    [w, h]
+    use canvas_ui::geometry::UiVec2;
+    use canvas_ui::layout::constrain;
+    let design = constrain(
+        UiVec2::new(MODAL_MIN_W, MODAL_MIN_H),
+        UiVec2::new(MODAL_MAX_W, MODAL_MAX_H),
+        UiVec2::new(viewport[0] * 0.45, viewport[1] * 0.6),
+    );
+    let window_max = UiVec2::new(
+        (viewport[0] - SETTINGS_MARGIN * 2.0).max(1.0),
+        (viewport[1] - SETTINGS_MARGIN * 2.0).max(1.0),
+    );
+    let size = constrain(UiVec2::new(0.0, 0.0), window_max, design);
+    [size.x, size.y]
 }
 
 /// Геометрия модалки с позициями навигации, заголовка, строк активного
 /// таба и карточек темы. Активный таб — индекс в [`SETTINGS_TABS`]
 /// (вне диапазона — первый таб; состояние `App::settings_tab` клампится
 /// на вызывающей стороне).
+///
+/// Раскладка — примитивами `canvas_ui` (FR-054, миграция U5): размер —
+/// `constrain`, центрирование — `stack`, скелет — `Row` [навигация |
+/// контент], пункты навигации и строки — `Column`, карточки тем — `Row`
+/// (зазор — токен `SPACING_MD`, значение прежнего литерала 10). Числа —
+/// дословно прежние (тесты фиксируют структуру и клампы).
 pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
+    use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
+    use canvas_ui::layout::{stack, Child, Column, HAlign, Row, VAlign};
+
     let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
     let [w, h] = modal_size(viewport);
-    let x = (viewport[0] - w) / 2.0;
-    let y = (viewport[1] - h) / 2.0;
-    let rect = [x, y, w, h];
+    // Панель — по центру вьюпорта.
+    let panel = stack(
+        UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0)),
+        UiVec2::new(w, h),
+        HAlign::Center,
+        VAlign::Center,
+    );
+    let rect = [panel.x, panel.y, panel.w, panel.h];
     // Левая колонка: на узких окнах сжимается (40% ширины модалки), но не
     // исчезает — инвариант различимости навигации при клампе 320×240.
-    let nav_w = MODAL_NAV_WIDTH.min(rect[2] * 0.4);
-    let nav_items = SETTINGS_TABS
+    let nav_w = canvas_ui::layout::constrain(
+        UiVec2::new(0.0, 0.0),
+        UiVec2::new(panel.w * 0.4, f32::INFINITY),
+        UiVec2::new(MODAL_NAV_WIDTH, 1.0),
+    )
+    .x;
+    // Скелет: навигация | контент (Row gap 0 — колонки вплотную).
+    let columns = Row {
+        gap: 0.0,
+        ..Row::default()
+    }
+    .lay_out(
+        panel,
+        &[
+            Child::fixed(nav_w, panel.h),
+            Child::fixed(panel.w - nav_w, panel.h),
+        ],
+    );
+    let nav_area = columns[0];
+    let content_area = columns[1];
+    // Пункты навигации: колонка от верхнего паддинга (x — левый край
+    // панели, как прежде).
+    let nav_slot = nav_area.inset(&EdgeInsets {
+        left: 0.0,
+        top: MODAL_PADDING,
+        right: 0.0,
+        bottom: MODAL_PADDING,
+    });
+    let nav_children: Vec<Child> = SETTINGS_TABS
         .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            [
-                rect[0],
-                rect[1] + MODAL_PADDING + i as f32 * MODAL_NAV_ITEM_H,
-                nav_w,
-                MODAL_NAV_ITEM_H,
-            ]
-        })
+        .map(|_| Child::fixed(nav_w, MODAL_NAV_ITEM_H))
         .collect();
-    let hint_rect = [
-        rect[0] + MODAL_PADDING,
-        rect[1] + rect[3] - MODAL_PADDING - MODAL_HINT_HEIGHT,
-        nav_w - MODAL_PADDING,
-        MODAL_HINT_HEIGHT,
-    ];
-    // Правая панель: заголовок раздела + зона контента
-    let content_x = rect[0] + nav_w;
-    let content_w = rect[2] - nav_w;
-    let title_rect = [
-        content_x + MODAL_PADDING,
-        rect[1] + MODAL_PADDING,
-        content_w - MODAL_PADDING * 2.0,
-        MODAL_TITLE_HEIGHT,
-    ];
-    let content_y = rect[1] + MODAL_PADDING + MODAL_TITLE_HEIGHT + 4.0;
-    let content_h = rect[3] - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0;
-    let content_rect = [content_x, content_y, content_w, content_h];
-    // Строки: единая сетка (высота MODAL_ROW_HEIGHT); в табе с карточками
-    // темы строки начинаются ниже карточек.
-    let cards_top = content_y;
-    let rows_top = if tab_def.theme_cards {
-        cards_top + MODAL_THEME_CARD_H + MODAL_THEME_GAP
-    } else {
-        cards_top
-    };
-    let row_w = content_w - MODAL_PADDING * 2.0;
-    let rows = tab_def
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            (
-                *row,
-                [
-                    content_x + MODAL_PADDING,
-                    rows_top + i as f32 * MODAL_ROW_HEIGHT,
-                    row_w,
-                    MODAL_ROW_HEIGHT,
-                ],
-            )
-        })
-        .collect();
-    // Карточки темы: две рядом («тёмная»/«светлая» — паттерн Obsidian
-    // «Base theme»); вне таба «Внешний вид» — пустые rect'ы.
-    let theme_cards = if tab_def.theme_cards {
-        let gap = 10.0;
+    let nav_items: Vec<[f32; 4]> = Column {
+        gap: 0.0,
+        ..Column::default()
+    }
+    .lay_out(nav_slot, &nav_children)
+    .iter()
+    .map(|r| [r.x, r.y, r.w, r.h])
+    .collect();
+    // Подсказка — к низу навигационной колонки (stack Start/End).
+    let hint_slot = nav_area.inset(&EdgeInsets {
+        left: MODAL_PADDING,
+        top: 0.0,
+        right: 0.0,
+        bottom: MODAL_PADDING,
+    });
+    let hint = stack(
+        hint_slot,
+        UiVec2::new(nav_w - MODAL_PADDING, MODAL_HINT_HEIGHT),
+        HAlign::Start,
+        VAlign::End,
+    );
+    let hint_rect = [hint.x, hint.y, hint.w, hint.h];
+    // Правая панель: заголовок раздела (с внутренним паддингом) + зона
+    // контента: колонка [паддинг, заголовок, зазор 4, контент].
+    let content_w = content_area.w;
+    let title_slot = content_area.inset(&EdgeInsets {
+        left: MODAL_PADDING,
+        top: MODAL_PADDING,
+        right: MODAL_PADDING,
+        bottom: 0.0,
+    });
+    let title = stack(
+        title_slot,
+        UiVec2::new(content_w - MODAL_PADDING * 2.0, MODAL_TITLE_HEIGHT),
+        HAlign::Start,
+        VAlign::Start,
+    );
+    let title_rect = [title.x, title.y, title.w, title.h];
+    let content_h = panel.h - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0;
+    let content_flow = Column {
+        gap: 0.0,
+        ..Column::default()
+    }
+    .lay_out(
+        content_area,
+        &[
+            Child::fixed(0.0, MODAL_PADDING),
+            Child::fixed(0.0, MODAL_TITLE_HEIGHT),
+            Child::fixed(0.0, 4.0), // зазор заголовок/контент (вне spacing-scale)
+            Child::fixed(content_w, content_h),
+        ],
+    );
+    let content = content_flow[3];
+    let content_rect = [content.x, content.y, content.w, content.h];
+    // Строки и карточки тем — колонка от зоны контента (внутренний паддинг):
+    // в табе с карточками темы строки начинаются ниже карточек (распорка —
+    // MODAL_THEME_GAP).
+    let inner = content.inset(&EdgeInsets::uniform(MODAL_PADDING));
+    let row_w = inner.w;
+    let mut flow: Vec<Child> = Vec::new();
+    let mut card_strip = [[0.0f32; 4]; 2];
+    if tab_def.theme_cards {
+        // Карточки темы: две рядом («тёмная»/«светлая» — паттерн Obsidian
+        // «Base theme»); зазор — токен SPACING_MD (значение прежнего литерала).
+        let gap = canvas_core::tokens::SPACING_MD;
         let card_w = (row_w - gap) / 2.0;
-        [
-            [
-                content_x + MODAL_PADDING,
-                cards_top,
-                card_w,
-                MODAL_THEME_CARD_H,
+        let cards = Row {
+            gap,
+            ..Row::default()
+        }
+        .lay_out(
+            inner,
+            &[
+                Child::fixed(card_w, MODAL_THEME_CARD_H),
+                Child::fixed(card_w, MODAL_THEME_CARD_H),
             ],
-            [
-                content_x + MODAL_PADDING + card_w + gap,
-                cards_top,
-                card_w,
-                MODAL_THEME_CARD_H,
-            ],
-        ]
-    } else {
-        [[0.0; 4]; 2]
-    };
+        );
+        card_strip = [
+            [cards[0].x, cards[0].y, cards[0].w, cards[0].h],
+            [cards[1].x, cards[1].y, cards[1].w, cards[1].h],
+        ];
+        flow.push(Child::fixed(row_w, MODAL_THEME_CARD_H));
+        flow.push(Child::fixed(0.0, MODAL_THEME_GAP));
+    }
+    flow.extend(
+        tab_def
+            .rows
+            .iter()
+            .map(|_| Child::fixed(row_w, MODAL_ROW_HEIGHT)),
+    );
+    let rows = Column {
+        gap: 0.0,
+        ..Column::default()
+    }
+    .lay_out(inner, &flow)
+    .iter()
+    .skip(if tab_def.theme_cards { 2 } else { 0 })
+    .enumerate()
+    .map(|(i, r)| (tab_def.rows[i], [r.x, r.y, r.w, r.h]))
+    .collect();
     ModalLayout {
         rect,
         nav_w,
@@ -865,7 +942,7 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
         title_rect,
         content_rect,
         rows,
-        theme_cards,
+        theme_cards: card_strip,
         hint_rect,
     }
 }
