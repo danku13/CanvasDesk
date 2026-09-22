@@ -18,6 +18,9 @@ path = "src/main.rs"
 [dependencies]
 canvas-core.workspace = true
 canvas-render.workspace = true
+# FR-052 (U2 PRD-0009): каркас canvas-ui — реестр поверхностей, HitStack,
+# KeyboardRouter; единый диспетчер ввода и draw-полос (0 внешних — G7)
+canvas-ui.workspace = true
 canvas-mcp.workspace = true
 # FR-037/ADR-0012: SceneState + MCP-инструменты (перенесены из main.rs)
 canvas-scene.workspace = true

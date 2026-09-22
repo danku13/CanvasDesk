@@ -86,6 +86,11 @@ Web-порт: `?template=<id>` — авто-вставка схемы на пе�
 `every_scheme_has_multi_connected_nodes`, `schemes_cover_addressing_features`,
 `schemes_have_deep_value_chains`, `schemes_never_show_red_lines`,
 `every_scheme_invites_to_edit`, `capacity_service_triggers_bottleneck_analysis`).
+Инварианты аудита CJM (2026-09-22): все чипы «Все» + N категорий видны
+без среза (ширина чипа 108 при панели 560 — тест `chips_all_categories_fit`);
+пресет «1» (красный) в заливках нод схем запрещён — красный занят рамкой
+перегрузки FR-016 (входы — «5» циан, тест `schemes_avoid_red_node_fills`);
+описания карточек — язык задачи без жаргона движка (D3).
 
 | id | Категория | Оракул |
 |---|---|---|

@@ -7,6 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 canvas-core.workspace = true
+# FR-052 (U2 PRD-0009): типы полос экрана (UiLayer/ScreenBand) — внутренний
+# workspace-крейт каркаса canvas-ui (0 внешних зависимостей — G7)
+canvas-ui.workspace = true
 # FR-037 MW1 (ребейз): view-модель сцены (SpillView/WhatIfNode) живёт в
 # canvas-scene — рендер реэкспортирует (слои: core → scene → render → app)
 canvas-scene.workspace = true

@@ -2,8 +2,8 @@
   "id": "com.canvasdesk.scheme.capacity-service",
   "name_ru": "Ёмкость сервиса",
   "name_en": "Service capacity",
-  "description_ru": "Спрос против мощности: запросы в секунду, утилизация в процентах, время ответа M/M/1 и узкие места вплоть до перегрузки на пике.",
-  "description_en": "Demand versus capacity: requests per second, utilization percent, M/M/1 latency and bottlenecks up to overload at peak.",
+  "description_ru": "Спрос против мощности: запросы в секунду, утилизация в процентах, среднее время ответа и узкие места вплоть до перегрузки на пике.",
+  "description_en": "Demand versus capacity: requests per second, utilization percent, average response time and bottlenecks up to overload at peak.",
   "category": "architecture",
   "category_ru": "Архитектура",
   "category_en": "Architecture",
@@ -28,7 +28,7 @@
         "width": 260,
         "height": 200,
         "text": "Спрос\nОдновременные запросы и время обдумывания каждого.\n\nrequests = 5000 req\nthink = 30 s",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "factor",
@@ -38,7 +38,7 @@
         "width": 260,
         "height": 180,
         "text": "Пик\nЗапас на пиковый час: множитель к среднему потоку.\n\nfactor = 3",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "capacity",
@@ -48,7 +48,7 @@
         "width": 260,
         "height": 180,
         "text": "Мощность\nПропускная способность сервиса в запросах за секунду.\n\ncapacity = 200 req/s",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "intensity",
@@ -77,7 +77,7 @@
         "y": 0,
         "width": 280,
         "height": 180,
-        "text": "Утилизация\nЗанятость мощности в долях: локальный предел — единица.\n\nutil = utilization($1, $2)",
+        "text": "Утилизация\nЗанятость мощности в долях; норма — не выше единицы.\n\nutil = utilization($1, $2)",
         "color": "2"
       },
       {
@@ -87,7 +87,7 @@
         "y": 220,
         "width": 280,
         "height": 180,
-        "text": "Время ответа\nПребывание запроса в системе M/M/1.\n\nwait = mm1($1, $2)",
+        "text": "Время ответа\nСреднее время пребывания запроса в системе (модель M/M/1).\n\nwait = mm1($1, $2)",
         "color": "2"
       },
       {

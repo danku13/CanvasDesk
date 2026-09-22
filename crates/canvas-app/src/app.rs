@@ -59,6 +59,8 @@ use crate::whatif_ui::{self, BarAction};
 // типы использовались только вынесенным кодом; тестовые упоминания —
 // импортами внутри mod tests
 use canvas_core::expr::{self, ExprOutcome};
+// FR-052 (U2 PRD-0009): каркас canvas-ui — HitStack/pick и полосы слоёв
+// (ScreenBand) для единого диспетчера ввода/отрисовки
 use canvas_core::flow::{self, FlowKind};
 use canvas_core::time::Instant;
 use canvas_core::{
@@ -69,6 +71,8 @@ use canvas_core::{
     Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex, StageLayout, StageMetrics,
     Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
 };
+use canvas_ui::geometry::UiPoint;
+use canvas_ui::{HitStack, HitTarget, UiLayer};
 // FR-044 Р-1 (стык раскладок): лейн-раскладка пилюль подписей веера —
 // чистые функции core с инвариантами (без пересечений, кламп в зону).
 use canvas_core::bundles::{fan_corridor, stage_fan_label_layout, Rect as StageLocalRect};
@@ -115,6 +119,13 @@ use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
     SceneState,
 };
+
+/// FR-052 (этап U2 PRD-0009): реестр поверхностей экрана — единый диспетчер.
+/// Дочерний модуль `app`: доступ к приватным полям `App` (снимок состояния
+/// на кадр). Декларации поверхностей (слой/capture/scope/деградация),
+/// сборка `UiFrame` (hit-rect'ы из тех же layout-функций, что у ввода и
+/// отрисовки), владелец клавиатуры из `esc_stack`, draw-полосы.
+pub mod ui_registry;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -149,14 +160,14 @@ const SEARCH_RESULTS_LIMIT: usize = 16;
 
 /// Screen-space текст с владеемой строкой (панель настроек): промежуточное
 /// представление, конвертируется в `ScreenText` на кадр рендера.
-struct OwnedScreenText {
-    text: String,
-    origin: [f32; 2],
-    width: f32,
-    font_size: f32,
-    color: Color,
+pub(crate) struct OwnedScreenText {
+    pub(crate) text: String,
+    pub(crate) origin: [f32; 2],
+    pub(crate) width: f32,
+    pub(crate) font_size: f32,
+    pub(crate) color: Color,
     /// Выравнивание в области `width` (иконки кнопок — по центру).
-    align: TextAlign,
+    pub(crate) align: TextAlign,
 }
 
 /// Опора для центрируемого screen-текста внутри `rect` (подписи кнопок/чипов).
@@ -3719,138 +3730,13 @@ impl App {
     /// Практика canvas-приложений (Miro/Figma): колесо/пинч над плавающим
     /// UI холст не двигают.
     fn cursor_over_screen_surface(&self) -> bool {
-        let viewport = self.viewport_logical();
-        let over = |rect: [f32; 4]| point_in_rect(rect, self.cursor);
-        if over(button_rect(self.settings.button_corner, viewport))
-            || over(theme_button_rect(self.settings.button_corner, viewport))
-            || over(help_button_rect(self.settings.button_corner, viewport))
-        {
-            return true;
-        }
-        // FR-027: меню помощи (+раскрытое подменю разделов) и панель
-        // просмотрщика — тоже screen-поверхности
-        if let Some(menu) = &self.help_menu {
-            if over(docs_ui::help_menu_rect(menu.origin)) {
-                return true;
-            }
-            if menu.docs_open {
-                let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
-                if over(docs_ui::help_submenu_rect(sub)) {
-                    return true;
-                }
-            }
-        }
-        if self.docs.is_some() && over(docs_ui::viewer_rect(viewport)) {
-            return true;
-        }
-        // FR-028: карточка онбординга (открытый тур глушит колесо канваса)
-        if let Some(state) = &self.onboarding {
-            let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
-            if over(card) {
-                return true;
-            }
-        }
-        // FR-039: модалка настроек глушит колесо/пинч канваса целиком
-        // (затемнение + модалка по центру)
-        if self.settings_open && over(modal_layout(self.settings_tab, viewport).rect) {
-            return true;
-        }
-        // FR-026: открытое выпадающее меню настройки — тоже screen-поверхность
-        // (может выходить за пределы модалки, колесо/пинч над ним холст не двигают)
-        if self.settings_open && self.settings_dropdown.is_open() {
-            let layout = modal_layout(self.settings_tab, viewport);
-            if let Some(row) = self.settings_dropdown.open_row {
-                let items = dropdown_options(row, &self.settings);
-                let anchor = layout
-                    .row_rect(row)
-                    .map(|rect| control_rect(rect, RowKind::Dropdown))
-                    .unwrap_or([0.0; 4]);
-                if over(dropdown_layout(anchor, viewport, items.len(), anchor[2])) {
-                    return true;
-                }
-            }
-        }
-        if self.search.is_open() {
-            let lay = search_layout(viewport[0], viewport[1], &self.search);
-            if over(rect_xywh(lay.panel_rect)) {
-                return true;
-            }
-        }
-        // FR-017 (CP6): what-if пилюля/бар/список подмен/таблица сравнения —
-        // тоже screen-поверхности (колесо/пинч холст не двигают)
-        if !self.scene.whatif_active {
-            if over(whatif_ui::enter_pill_rect(viewport)) {
-                return true;
-            }
-        } else {
-            let layout = self.whatif_bar_layout();
-            if over(layout.rect) {
-                return true;
-            }
-            if self.whatif_list_open {
-                let rows = self.whatif_override_rows();
-                if over(whatif_ui::overrides_list_layout(
-                    layout.rect,
-                    rows.len(),
-                    viewport,
-                )) {
-                    return true;
-                }
-            }
-            if self.whatif_compare_open {
-                let (columns, rows) = self.whatif_compare_table();
-                let table = whatif_ui::table_layout(&columns, rows.len(), layout.rect, viewport);
-                if over(table.rect) {
-                    return true;
-                }
-            }
-        }
-        if let Some(rect) = self.menu_open_rect() {
-            if over(rect) {
-                return true;
-            }
-            if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
-                if over(submenu_rect(submenu)) {
-                    return true;
-                }
-            }
-        }
-        if let Some((lay, _, _)) = self.palette_geometry() {
-            if over(lay.bar) {
-                return true;
-            }
-            if let Some(group) = self.palette_hover.open.and_then(|g| lay.groups.get(g)) {
-                if over(group.dropdown) {
-                    return true;
-                }
-            }
-        }
-        if self.hotkeys_open && over(hotkeys_panel_rect(viewport)) {
-            return true;
-        }
-        if let Some(rect) = self.minimap_rect() {
-            if over([rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]]) {
-                return true;
-            }
-        }
-        // Ревизия FR-025: свёрнутая палитра — полоса категорий и flyout
-        // (колесо/пинч над ними канвас не двигают)
-        if !self.template_panel.open {
-            let categories = self.template_category_names();
-            let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
-            if point_in_rect(strip.rect, self.cursor) {
-                return true;
-            }
-            if let Some(fly) = self.template_flyout_geometry(viewport, &strip) {
-                if point_in_rect(fly.rect, self.cursor) {
-                    return true;
-                }
-            }
-        }
-        if self.dialog.is_some() && over(self.dialog_rect()) {
-            return true;
-        }
-        false
+        // FR-052 (U2 PRD-0009): колесо/пинч глушатся над экранной
+        // поверхностью — решение из реестра (HitStack::absorbs по кадру),
+        // а не из ручного списка rect'ов. Панели Capture — в своих rect'ах,
+        // Block-модали — везде (инвариант 8: при stage колесо глушится
+        // ранним return в on_mouse_wheel/on_pinch).
+        let frame = ui_registry::build_frame(self);
+        HitStack::absorbs(&frame, UiPoint::new(self.cursor[0], self.cursor[1]))
     }
 
     /// Размер viewport в логических пикселях. Делитель — effective scale
@@ -7890,129 +7776,286 @@ impl App {
 }
 
 impl App {
+    /// FR-052 (U2): Esc-диспетчер реестра — тела прежней лестницы
+    /// 8143–8232 дословно, порядок задаёт `SurfaceRegistry::esc_stack`.
+    /// `true` — поверхность поглотила Esc (обход стека прекращается).
+    fn dispatch_esc(&mut self, surface: &str) -> bool {
+        match surface {
+            // FR-042 (E3, инвариант 8): первый Esc закрывает открытый
+            // main stage (при открытом stage прочие оверлеи закрыты)
+            ui_registry::id::STAGE => self.main_stage.take().is_some(),
+            // FR-027: двухэтапный Esc — подменю → меню → закрыто
+            ui_registry::id::HELP_MENU => {
+                if let Some(menu) = self.help_menu.take() {
+                    // Подменю открыто — первый Esc закрывает только его
+                    if menu.docs_open {
+                        self.help_menu = Some(HelpMenuState {
+                            origin: menu.origin,
+                            docs_open: false,
+                        });
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            ui_registry::id::DOCS => self.docs.take().is_some(),
+            // Раскрытая колонка палитры закрывается без снятия выделения
+            ui_registry::id::PALETTE => {
+                if self.palette_hover.open.is_some() || self.palette_hover.pending() {
+                    self.palette_hover.reset();
+                    true
+                } else {
+                    false
+                }
+            }
+            // Ревизия FR-025: Esc гасит flyout свёрнутой полосы палитры
+            ui_registry::id::TEMPLATE_STRIP => {
+                if self
+                    .template_hover
+                    .as_ref()
+                    .is_some_and(|h| h.open.is_some() || h.pending())
+                {
+                    self.template_hover = None;
+                    true
+                } else {
+                    false
+                }
+            }
+            // FR-025 п.3: Esc сворачивает развёрнутый док и БЕЗ
+            // клавиатурного фокуса — мышиный expand() даёт focused=false
+            ui_registry::id::TEMPLATE_PANEL => {
+                if self.template_panel.open {
+                    self.template_panel.close();
+                    self.persist_palette_dock();
+                    true
+                } else {
+                    false
+                }
+            }
+            ui_registry::id::MENU => self.menu.take().is_some(),
+            ui_registry::id::SETTINGS => {
+                // FR-026: Esc при открытом меню закрывает ТОЛЬКО меню
+                // (повторный Esc закроет панель — семантика popup FR-021)
+                if self.settings_dropdown.is_open() {
+                    self.settings_dropdown.reset();
+                } else {
+                    self.settings_open = false;
+                }
+                true
+            }
+            ui_registry::id::HOTKEYS => {
+                if self.hotkeys_open {
+                    self.hotkeys_open = false;
+                    true
+                } else {
+                    false
+                }
+            }
+            // FR-017: выход из what-if режима (подмены не теряются —
+            // они в персистентных сценариях `.canvas`, Q3b)
+            ui_registry::id::WHATIF => {
+                if self.scene.whatif_active {
+                    self.exit_whatif_mode();
+                    true
+                } else {
+                    false
+                }
+            }
+            // FR-018: wheel-меню закрывается Esc (панель шаблонов — раньше)
+            ui_registry::id::WHEEL => self.wheel_menu.take().is_some(),
+            _ => false,
+        }
+    }
+
     fn on_key(&mut self, event: &KeyEvent) {
-        // FR-028: открытый онбординг глушит канвас-хоткеи (тур модален);
-        // Esc — «Пропустить» (отложить до следующего запуска)
-        if self.onboarding.is_some() {
-            if event.state == ElementState::Pressed
-                && !event.repeat
-                && event.logical_key == Key::Named(NamedKey::Escape)
-            {
-                self.defer_onboarding();
-                self.request_redraw();
-            }
-            return;
-        }
-        // FR-049: модальная галерея схем — клавиатура галереи (↑/↓/Enter/
-        // Esc/фильтр), остальное глотается (канвас не получает)
-        if self.scheme_gallery.open {
-            if event.state == ElementState::Pressed && self.on_gallery_key(event) {
-                self.request_redraw();
-            }
-            return;
-        }
-        // Активное редактирование (T7): клавиатура уходит в редактор
-        if self.editing.is_some() {
-            if event.state != ElementState::Pressed {
+        // FR-052 (U2 PRD-0009): маршрутизация клавиатуры из реестра —
+        // владелец = верх esc_stack активных поверхностей (дословно
+        // воспроизводит прежние head-ветки; NUMI-хоткеи канваса не
+        // тронуты — Q4 §11 PRD-0009).
+        let registry = ui_registry::build_registry(self);
+        match ui_registry::key_owner(&registry) {
+            ui_registry::KeyOwner::Onboarding => {
+                // FR-028: открытый онбординг глушит канвас-хоткеи (тур модален);
+                // Esc — «Пропустить» (отложить до следующего запуска)
+                if self.onboarding.is_some() {
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                    {
+                        self.defer_onboarding();
+                        self.request_redraw();
+                    }
+                    return;
+                }
                 return;
             }
-            let ctrl = self.modifiers.control_key();
-            let shift = self.modifiers.shift_key();
-            // FR-021: при открытом popup подсказок навигация/выбор
-            // перехватываются ДО команд редактора: Enter/Tab принимают
-            // подсказку (НЕ коммитят заметку), Esc закрывает только popup
-            // (повторный Esc — откат правки, прежнее поведение)
-            if self.hints.open {
-                match &event.logical_key {
-                    Key::Named(NamedKey::ArrowDown) if !event.repeat => {
-                        self.hints.move_selection(1);
+            ui_registry::KeyOwner::Gallery => {
+                // FR-049: модальная галерея схем — клавиатура галереи (↑/↓/Enter/
+                // Esc/фильтр), остальное глотается (канвас не получает)
+                if self.scheme_gallery.open {
+                    if event.state == ElementState::Pressed && self.on_gallery_key(event) {
                         self.request_redraw();
-                        return;
                     }
-                    Key::Named(NamedKey::ArrowUp) if !event.repeat => {
-                        self.hints.move_selection(-1);
-                        self.request_redraw();
-                        return;
-                    }
-                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) if !event.repeat => {
-                        self.accept_hint();
-                        return;
-                    }
-                    Key::Named(NamedKey::Escape) if !event.repeat => {
-                        self.hints.reset();
-                        self.request_redraw();
-                        return;
-                    }
-                    _ => {}
+                    return;
                 }
-            }
-            let Some(command) = map_key(&event.logical_key, ctrl, shift) else {
                 return;
-            };
-            match command {
-                KeyCommand::Commit => self.finish_editing(true),
-                KeyCommand::Cancel => self.finish_editing(false),
-                KeyCommand::Copy => {
-                    if let Some(text) = self.editing.as_ref().and_then(|s| s.copy_selection()) {
-                        self.clipboard.set_text(text);
+            }
+            ui_registry::KeyOwner::Editor => {
+                // Активное редактирование (T7): клавиатура уходит в редактор
+                if self.editing.is_some() {
+                    if event.state != ElementState::Pressed {
+                        return;
                     }
-                }
-                KeyCommand::Cut => {
-                    let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
-                        (Some(session), Some(renderer)) => {
-                            session.cut_selection(renderer.font_system_mut())
+                    let ctrl = self.modifiers.control_key();
+                    let shift = self.modifiers.shift_key();
+                    // FR-021: при открытом popup подсказок навигация/выбор
+                    // перехватываются ДО команд редактора: Enter/Tab принимают
+                    // подсказку (НЕ коммитят заметку), Esc закрывает только popup
+                    // (повторный Esc — откат правки, прежнее поведение)
+                    if self.hints.open {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::ArrowDown) if !event.repeat => {
+                                self.hints.move_selection(1);
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::ArrowUp) if !event.repeat => {
+                                self.hints.move_selection(-1);
+                                self.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab)
+                                if !event.repeat =>
+                            {
+                                self.accept_hint();
+                                return;
+                            }
+                            Key::Named(NamedKey::Escape) if !event.repeat => {
+                                self.hints.reset();
+                                self.request_redraw();
+                                return;
+                            }
+                            _ => {}
                         }
-                        _ => None,
-                    };
-                    if let Some(text) = text {
-                        self.clipboard.set_text(text);
-                        self.request_redraw();
                     }
-                }
-                KeyCommand::Paste => {
-                    let text = self.clipboard.get_text();
-                    let pasted = if let (Some(text), Some(session), Some(renderer)) =
-                        (text, self.editing.as_mut(), self.renderer.as_mut())
-                    {
-                        session.insert_text(renderer.font_system_mut(), &text);
-                        true
-                    } else {
-                        false
+                    let Some(command) = map_key(&event.logical_key, ctrl, shift) else {
+                        return;
                     };
-                    if pasted {
-                        self.fit_note_size();
-                        self.update_hints();
-                        self.request_redraw();
+                    match command {
+                        KeyCommand::Commit => self.finish_editing(true),
+                        KeyCommand::Cancel => self.finish_editing(false),
+                        KeyCommand::Copy => {
+                            if let Some(text) =
+                                self.editing.as_ref().and_then(|s| s.copy_selection())
+                            {
+                                self.clipboard.set_text(text);
+                            }
+                        }
+                        KeyCommand::Cut => {
+                            let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
+                                (Some(session), Some(renderer)) => {
+                                    session.cut_selection(renderer.font_system_mut())
+                                }
+                                _ => None,
+                            };
+                            if let Some(text) = text {
+                                self.clipboard.set_text(text);
+                                self.request_redraw();
+                            }
+                        }
+                        KeyCommand::Paste => {
+                            let text = self.clipboard.get_text();
+                            let pasted = if let (Some(text), Some(session), Some(renderer)) =
+                                (text, self.editing.as_mut(), self.renderer.as_mut())
+                            {
+                                session.insert_text(renderer.font_system_mut(), &text);
+                                true
+                            } else {
+                                false
+                            };
+                            if pasted {
+                                self.fit_note_size();
+                                self.update_hints();
+                                self.request_redraw();
+                            }
+                        }
+                        other => {
+                            let applied = if let (Some(session), Some(renderer)) =
+                                (self.editing.as_mut(), self.renderer.as_mut())
+                            {
+                                session.apply(renderer.font_system_mut(), other);
+                                true
+                            } else {
+                                false
+                            };
+                            if applied {
+                                // Текст мог вырасти (wrap/новые строки) — подгоняем
+                                // высоту заметки под контент прямо во время набора
+                                self.fit_note_size();
+                                // FR-021: popup подсказок — следом за правкой текста
+                                self.update_hints();
+                                self.request_redraw();
+                            }
+                        }
                     }
-                }
-                other => {
-                    let applied = if let (Some(session), Some(renderer)) =
-                        (self.editing.as_mut(), self.renderer.as_mut())
-                    {
-                        session.apply(renderer.font_system_mut(), other);
-                        true
-                    } else {
-                        false
-                    };
-                    if applied {
-                        // Текст мог вырасти (wrap/новые строки) — подгоняем
-                        // высоту заметки под контент прямо во время набора
-                        self.fit_note_size();
-                        // FR-021: popup подсказок — следом за правкой текста
-                        self.update_hints();
-                        self.request_redraw();
-                    }
+                    return;
                 }
             }
-            return;
+            ui_registry::KeyOwner::Search => {
+                // Панель поиска (T14): открыта — клавиатура уходит в панель
+                // (ввод/каретка/Enter/Esc/F3), канвас-хоткеи приглушены
+                if self.search.is_open() {
+                    if event.state == ElementState::Pressed {
+                        self.on_search_key(event);
+                    }
+                    return;
+                }
+                return;
+            }
+            ui_registry::KeyOwner::TemplatePanel => {
+                // Прежний гейт 8036: панель без клавиатурного фокуса
+                // клавиши не перехватывает — лестница (Ctrl+P и др.) работает
+                if self.template_panel.focused && self.on_template_panel_key(event) {
+                    return;
+                }
+            }
+            ui_registry::KeyOwner::Dialog => {
+                // T21: модальный диалог глушит весь ввод канваса — Enter/Esc —
+                // подтвердить/отменить, остальное игнорируется (П10/П11)
+                if self.dialog.is_some() && event.state == ElementState::Pressed && !event.repeat {
+                    match event.logical_key {
+                        Key::Named(NamedKey::Enter) => {
+                            self.confirm_dialog();
+                        }
+                        Key::Named(NamedKey::Escape) => self.cancel_dialog(),
+                        _ => {}
+                    }
+                    return;
+                }
+                return;
+            }
+            ui_registry::KeyOwner::Stage => {
+                // Любая клавиша закрывает stage (8233–8239; Esc — 8141):
+                // нужный оверлей откроется следующим нажатием
+                self.main_stage = None;
+                self.request_redraw();
+                return;
+            }
+            ui_registry::KeyOwner::Canvas => {}
         }
-        // Панель поиска (T14): открыта — клавиатура уходит в панель
-        // (ввод/каретка/Enter/Esc/F3), канвас-хоткеи приглушены
-        if self.search.is_open() {
-            if event.state == ElementState::Pressed {
-                self.on_search_key(event);
+        // Esc-лестница из реестра: порядок esc_stack воспроизводит прежнюю
+        // ручную лестницу 8143–8232 дословно (первый поглотитель останавливает)
+        if event.logical_key == Key::Named(NamedKey::Escape)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            for surface in registry.esc_stack() {
+                if self.dispatch_esc(surface.as_str()) {
+                    self.request_redraw();
+                    return;
+                }
             }
-            return;
         }
         // Ctrl+F — открыть панель поиска (T14; кириллическая раскладка — «а»);
         // активное редактирование сначала фиксируется
@@ -8027,16 +8070,6 @@ impl App {
             }
             self.search.open();
             self.request_redraw();
-            return;
-        }
-        // FR-018: панель шаблонов в фокусе — клавиатура уходит в неё
-        // (фильтр, стрелки, Enter, Esc), канвас-хоткеи приглушены.
-        // FR-025: док постоянный — клавиши перехватывает только при
-        // клавиатурном фокусе (Ctrl+P/клик по поиску), иначе — канвас
-        if self.template_panel.open
-            && self.template_panel.focused
-            && self.on_template_panel_key(event)
-        {
             return;
         }
         // Ctrl+P — фокус в поиск палитры шаблонов (FR-018/FR-025;
@@ -8086,18 +8119,6 @@ impl App {
             self.request_redraw();
             return;
         }
-        // T21: модальный диалог глушит весь ввод канваса — Enter/Esc —
-        // подтвердить/отменить, остальное игнорируется (П10/П11)
-        if self.dialog.is_some() && event.state == ElementState::Pressed && !event.repeat {
-            match event.logical_key {
-                Key::Named(NamedKey::Enter) => {
-                    self.confirm_dialog();
-                }
-                Key::Named(NamedKey::Escape) => self.cancel_dialog(),
-                _ => {}
-            }
-            return;
-        }
         // FR-026: клавиатура выпадающего меню настроек — ↑/↓ сдвигают
         // выделение, Enter применяет (модель popup FR-021); Esc обрабатывается
         // ниже — первым делом закрывает меню, панель остаётся открытой
@@ -8128,103 +8149,6 @@ impl App {
                 }
                 _ => {}
             }
-        }
-        // Esc закрывает раскрытие палитры (верхний transient), затем —
-        // контекстное меню (T7), панель настроек, панель хоткеев (FR-004)
-        if event.logical_key == Key::Named(NamedKey::Escape)
-            && event.state == ElementState::Pressed
-            && !event.repeat
-        {
-            // FR-042 (E3, инвариант 8): первый Esc закрывает открытый
-            // main stage (Q6: при открытом stage прочие оверлеи закрыты —
-            // ветка однозначна)
-            if self.main_stage.take().is_some() {
-                self.request_redraw();
-                return;
-            }
-            // FR-027: меню помощи — двухэтапный Esc (подменю → меню →
-            // закрыто; семантика FR-026), просмотрщик закрывается одним Esc
-            if let Some(menu) = self.help_menu.take() {
-                // Подменю открыто — первый Esc закрывает только его
-                if menu.docs_open {
-                    self.help_menu = Some(HelpMenuState {
-                        origin: menu.origin,
-                        docs_open: false,
-                    });
-                }
-                self.request_redraw();
-                return;
-            }
-            if self.docs.take().is_some() {
-                self.request_redraw();
-                return;
-            }
-            if self.palette_hover.open.is_some() || self.palette_hover.pending() {
-                // Раскрытая колонка палитры закрывается без снятия выделения
-                self.palette_hover.reset();
-                self.request_redraw();
-                return;
-            }
-            // Ревизия FR-025: Esc гасит flyout свёрнутой полосы палитры
-            if self
-                .template_hover
-                .as_ref()
-                .is_some_and(|h| h.open.is_some() || h.pending())
-            {
-                self.template_hover = None;
-                self.request_redraw();
-                return;
-            }
-            // FR-025 п.3: Esc сворачивает развёрнутый док и БЕЗ
-            // клавиатурного фокуса — мышиный expand() даёт focused=false,
-            // а сфокусированная панель закрывается раньше, в
-            // on_template_panel_key (гейт выше этой цепочки)
-            if self.template_panel.open {
-                self.template_panel.close();
-                self.persist_palette_dock();
-                self.request_redraw();
-                return;
-            }
-            if self.menu.take().is_some() {
-                self.request_redraw();
-                return;
-            }
-            if self.settings_open {
-                if self.settings_dropdown.is_open() {
-                    // FR-026: Esc при открытом меню закрывает ТОЛЬКО меню
-                    // (повторный Esc закроет панель — семантика popup FR-021)
-                    self.settings_dropdown.reset();
-                } else {
-                    self.settings_open = false;
-                }
-                self.request_redraw();
-                return;
-            }
-            if self.hotkeys_open {
-                self.hotkeys_open = false;
-                self.request_redraw();
-                return;
-            }
-            // FR-017: выход из what-if режима (подмены не теряются — они в
-            // персистентных сценариях `.canvas`, Q3b)
-            if self.scene.whatif_active {
-                self.exit_whatif_mode();
-                self.request_redraw();
-                return;
-            }
-            // FR-018: wheel-меню закрывается Esc (панель шаблонов — раньше,
-            // в on_template_panel_key)
-            if self.wheel_menu.take().is_some() {
-                self.request_redraw();
-                return;
-            }
-        }
-        // FR-042 (E3, F-9/Q6): открытый main stage модален — любой другой
-        // ключ закрывает stage и глотается (правка/undo/оверлеи из stage
-        // недоступны; нужный оверлей откроется следующим нажатием)
-        if self.main_stage.take().is_some() {
-            self.request_redraw();
-            return;
         }
         // F1 — панель горячих клавиш (FR-004): раскладконезависимая
         // функциональная клавиша; внутри редактора/поиска не работает
@@ -8996,6 +8920,1066 @@ impl App {
         }
     }
 
+    /// FR-052 (U2): диспетчер кликов экрана — `HitStack::pick` решил, что
+    /// точка принадлежит поверхности `surface` (элемент `element`).
+    /// Тела обработчиков — дословный перенос прежних веток `on_left_button`
+    /// (PRD-0009 §13 U2: реестр — единственный диспетчер). `false` —
+    /// поверхность не поглотила (клик продолжает путь в канвас).
+    fn dispatch_surface_click(&mut self, surface: &str, element: &str) -> bool {
+        match surface {
+            ui_registry::id::GALLERY => {
+                self.on_gallery_click();
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::ONBOARDING => {
+                self.click_onboarding();
+                true
+            }
+            ui_registry::id::EMPTY => {
+                self.click_empty_state();
+                true
+            }
+            ui_registry::id::STAGE => {
+                self.click_main_stage();
+                true
+            }
+            ui_registry::id::SEARCH => {
+                self.click_search();
+                true
+            }
+            ui_registry::id::WHEEL => {
+                self.click_wheel_menu();
+                true
+            }
+            ui_registry::id::TEMPLATE_PANEL => {
+                self.click_template_panel();
+                true
+            }
+            ui_registry::id::TEMPLATE_STRIP => {
+                self.click_template_strip();
+                true
+            }
+            ui_registry::id::HELP_MENU => {
+                self.click_help_menu();
+                true
+            }
+            ui_registry::id::DOCS => {
+                self.click_docs();
+                true
+            }
+            ui_registry::id::WHATIF => self.whatif_bar_click(),
+            ui_registry::id::CORNER_BUTTONS => self.click_corner_button(element),
+            ui_registry::id::SETTINGS => {
+                self.click_settings();
+                true
+            }
+            ui_registry::id::HOTKEYS => {
+                self.click_hotkeys_panel();
+                true
+            }
+            ui_registry::id::MINIMAP => {
+                self.click_minimap();
+                true
+            }
+            ui_registry::id::DIALOG => {
+                self.click_dialog();
+                true
+            }
+            ui_registry::id::PALETTE => self.click_palette(),
+            ui_registry::id::MENU => {
+                self.click_context_menu();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// FR-052 (U2): контракт «клик мимо Block-поверхности» (backdrop).
+    /// gallery/search/settings/docs/help/stage/menu — закрыть и глотнуть;
+    /// onboarding/dialog — глотнуть без закрытия (явный выбор); wheel —
+    /// near/far логика внутри обработчика.
+    fn dispatch_surface_backdrop(&mut self, surface: &str) -> bool {
+        match surface {
+            ui_registry::id::GALLERY => {
+                self.scheme_gallery.close();
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::ONBOARDING => {
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::STAGE => {
+                self.main_stage = None;
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::SEARCH => {
+                self.search.close();
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::SETTINGS => {
+                // Двухэтапный dismiss (9533–9541 / 9592–9597): открытое меню —
+                // закрывается только оно, модалка остаётся; иначе — модалка.
+                if self.settings_dropdown.is_open() {
+                    self.settings_dropdown.reset();
+                } else {
+                    self.settings_open = false;
+                }
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::MENU => {
+                self.menu = None;
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::HELP_MENU => {
+                self.help_menu = None;
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::DOCS => {
+                self.docs = None;
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::DIALOG => {
+                self.request_redraw();
+                true
+            }
+            ui_registry::id::WHEEL => {
+                self.click_wheel_menu();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// FR-052 (U2): dismiss-транзиенты при клике мимо ВСЕХ поверхностей
+    /// (клик уходит в канвас): фокус дока палитры, flyout свёрнутой полосы,
+    /// hover-intent палитры выделения (обновлялся на каждом клике и в
+    /// прежней цепочке). Commit редактора делает редакторная ветка
+    /// canvas-цепочки — как раньше (9877–9907).
+    fn dismiss_transients_on_miss(&mut self) {
+        if self.template_panel.open {
+            self.template_panel.unfocus();
+        }
+        if self
+            .template_hover
+            .as_ref()
+            .is_some_and(|h| h.open.is_some() || h.pending())
+        {
+            self.template_hover = None;
+        }
+        let _ = self.palette_view();
+    }
+
+    /// Онбординг: кнопки карточки, остальное глотается.
+    fn click_onboarding(&mut self) {
+        // FR-028: онбординг открыт — модальный оверлей: клики по
+        // кнопкам карточки, остальное глотается (канвас не
+        // реагирует; выход виден всегда — «Пропустить» в углу)
+        if let Some(state) = &self.onboarding {
+            let viewport = self.viewport_logical();
+            let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
+            match onboarding_ui::button_at(card, state, self.cursor) {
+                Some(OnboardingButton::Next) => {
+                    if state.is_last() {
+                        // «Готово»: тур пройден — флаг + сохранение
+                        self.complete_onboarding();
+                    } else if onboarding_ui::ONBOARDING_STEPS
+                        .get(state.step)
+                        .and_then(|step| step.action_key)
+                        .is_some()
+                    {
+                        // FR-049: CTA шага («Попробовать») — тур
+                        // пройден, галерея схем открыта
+                        self.complete_onboarding();
+                        self.scheme_gallery.open();
+                    } else if let Some(state) = self.onboarding.as_mut() {
+                        state.next();
+                    }
+                }
+                Some(OnboardingButton::Prev) => {
+                    if let Some(state) = self.onboarding.as_mut() {
+                        state.prev();
+                    }
+                }
+                Some(OnboardingButton::Skip) => self.defer_onboarding(),
+                None => {}
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Empty-state: кнопки карточки; мимо — канвас жив (AC-1.1).
+    fn click_empty_state(&mut self) {
+        // FR-049: empty-state пустого канваса — кнопки карточки;
+        // мимо карточки канвас жив (двойной клик создаёт заметку,
+        // empty-state исчезает при первой ноде — AC-1.1)
+        if self.empty_state_visible() {
+            let card = scheme_gallery_ui::empty_card_rect(self.viewport_logical());
+            let (open_btn, dismiss_btn) = scheme_gallery_ui::empty_buttons(card);
+            if scheme_gallery_ui::point_in_rect(open_btn, self.cursor) {
+                self.scheme_gallery.open();
+                self.request_redraw();
+                return;
+            }
+            if scheme_gallery_ui::point_in_rect(dismiss_btn, self.cursor) {
+                self.empty_state_dismissed = true;
+                self.request_redraw();
+                return;
+            }
+            if scheme_gallery_ui::point_in_rect(card, self.cursor) {
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Main stage: ✕/внутри — выделение ребра, мимо — закрыть.
+    fn click_main_stage(&mut self) {
+        // FR-042 (E3, F-8/F-9): модальность main stage — клик вне
+        // rect закрывает (канвас клик не получает, инвариант 8:
+        // нода не создаётся, выделение не сбрасывается); внутри —
+        // выделение ребра среза (живой индекс), без правки (PoC —
+        // просмотр и выделение, non-goals PRD).
+        if self.main_stage.is_some() {
+            let viewport = self.viewport_logical();
+            let rect = main_stage_rect(viewport);
+            // FR-044 (прототип): кнопка ✕ в правом верхнем углу —
+            // закрытие stage; rect по той же формуле, что в рендере
+            if point_in_rect(
+                [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0],
+                self.cursor,
+            ) {
+                self.close_main_stage();
+                self.request_redraw();
+                return;
+            }
+            if point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
+                let stage = self.main_stage.as_ref().expect("stage открыт");
+                let transform = StageTransform::new([rect.x, rect.y], stage.scale);
+                let local = transform.unmap_point(self.cursor);
+                // Допуск от толщины (F-5): max(EDGE_HIT_TOLERANCE, d/2 + 2).
+                // Геометрия веера — та же чистая функция, что на кадре
+                // (детерминизм: рендер и hit-test совпадают)
+                let tolerance = (bundle_thickness(stage.slice.edges.len()) / 2.0 + 2.0)
+                    .max(canvas_core::EDGE_HIT_TOLERANCE);
+                let metrics = StageMetrics {
+                    header_h: HEADER_HEIGHT,
+                    body_top_gap: BODY_TOP_GAP,
+                    body_line: BODY_LINE_HEIGHT,
+                    result_line: RESULT_LINE_HEIGHT,
+                    body_padding: BODY_PADDING,
+                    strip_extra: 6.0,
+                };
+                let footers = [
+                    self.scene
+                        .expr_results
+                        .contains_key(&stage.slice.nodes[0].id),
+                    self.scene
+                        .expr_results
+                        .contains_key(&stage.slice.nodes[1].id),
+                ];
+                let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
+                let hit = stage_edge_at_lines(&lines, local, tolerance)
+                    .and_then(|slice_i| stage.live_edge(slice_i));
+                // Заимствование stage закончено — можно мутировать
+                if let Some(live) = hit {
+                    self.selected = Some(Selection::Edge(live));
+                }
+            } else {
+                self.main_stage = None;
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Панель поиска: строка — прыжок, панель — глотается.
+    fn click_search(&mut self) {
+        // Панель поиска (T14): клик по строке — прыжок, мимо панели —
+        // закрыть; канвасу клик не достаётся. Проверяется первой —
+        // панель висит поверх всех оверлеев
+        if self.search.is_open() {
+            let viewport = self.viewport_logical();
+            let lay = search_layout(viewport[0], viewport[1], &self.search);
+            let mut handled = false;
+            for (visible, rect) in lay.row_rects.iter().enumerate() {
+                let row_rect = rect_xywh(*rect);
+                if point_in_rect(row_rect, self.cursor) {
+                    let row = self.search.scroll_top + visible;
+                    self.search.selected = Some(row);
+                    self.jump_to_search_row(row);
+                    handled = true;
+                    break;
+                }
+            }
+            if !handled && !point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+                self.search.close();
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Wheel-меню: сектор/хаб/near/far — polar-геометрия.
+    fn click_wheel_menu(&mut self) {
+        // FR-018: wheel-меню шаблонов — клики обрабатываются до
+        // канваса (оверлей поверх всего). Сектор категории — выбор
+        // категории (растут шаблонные кольца); сектор шаблона —
+        // инстанциация в world-точку открытия; мимо секторов, но
+        // рядом — глотаем, заметно дальше — закрыть.
+        // Любой клик глотается — dismiss не создаёт заметку.
+        if let Some(menu) = self.wheel_menu.clone() {
+            let [vw, vh] = self.viewport_logical();
+            let categories = self.templates.categories();
+            let template_count = menu
+                .category
+                .as_deref()
+                .map(|c| self.templates.by_category(c).len())
+                .unwrap_or(0);
+            let geo =
+                template_ui::wheel_geometry(menu.screen, vw, vh, categories.len(), template_count);
+            match geo.hit(self.cursor) {
+                Some(WheelHit::Category(i)) => {
+                    if let Some(menu_mut) = self.wheel_menu.as_mut() {
+                        menu_mut.category = Some(categories[i].to_owned());
+                    }
+                }
+                Some(WheelHit::Template(i)) => {
+                    let category = menu.category.expect("категория выбрана");
+                    let manifest = self.templates.by_category(&category)[i].clone();
+                    let world = menu.world;
+                    self.wheel_menu = None;
+                    self.instantiate_template_at(&manifest, world);
+                }
+                None => {
+                    // FR-022: клик по кнопке-хабу — «назад» (сброс
+                    // категории) или «закрыть»; дальше — как раньше:
+                    // рядом глотаем, заметно дальше — закрыть.
+                    if geo.hub_hit(self.cursor) {
+                        if let Some(menu_mut) = self.wheel_menu.as_mut() {
+                            menu_mut.category = None;
+                        }
+                        if menu.category.is_none() {
+                            self.wheel_menu = None;
+                        }
+                    } else {
+                        let dx = self.cursor[0] - geo.center[0];
+                        let dy = self.cursor[1] - geo.center[1];
+                        let outside = (dx * dx + dy * dy).sqrt() > geo.extent + 12.0;
+                        if outside {
+                            self.wheel_menu = None;
+                        }
+                    }
+                }
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Док палитры: collapse/поиск/категории/строки.
+    fn click_template_panel(&mut self) {
+        let viewport = self.viewport_logical();
+        let rows = template_panel_rows(&self.templates, &self.template_panel);
+        let lay = template_panel_layout(
+            viewport[0],
+            viewport[1],
+            &self.templates,
+            &self.template_panel,
+            &rows,
+        );
+        let mut handled = false;
+        // Кнопка сворачивания дока («‹» в шапке)
+        if point_in_rect(rect_xywh(lay.collapse_rect), self.cursor) {
+            self.template_panel.close();
+            self.persist_palette_dock();
+            handled = true;
+        }
+        // Клик по полю поиска — клавиатурный фокус в панель
+        if !handled && point_in_rect(rect_xywh(lay.input_rect), self.cursor) {
+            self.template_panel.focus_search();
+            handled = true;
+        }
+        if !handled {
+            for (rect, name, _active) in &lay.category_rects {
+                if point_in_rect(rect_xywh(*rect), self.cursor) {
+                    self.template_panel.category =
+                        if self.template_panel.category.as_deref() == Some(name) {
+                            None
+                        } else {
+                            Some(name.clone())
+                        };
+                    self.template_panel.selected = 0;
+                    self.template_panel.scroll_top = 0;
+                    handled = true;
+                    break;
+                }
+            }
+        }
+        if !handled {
+            // FR-024: строки панели — секции (заголовки, клик
+            // глотается) и карточки шаблонов (FR-025: нажатие
+            // — кандидат в drag; вставка — на отпускании: клик —
+            // в центр viewport, drag — в точку курсора)
+            for (rect, row) in lay.row_rects.iter().zip(lay.rows.iter()) {
+                if point_in_rect(rect_xywh(*rect), self.cursor) {
+                    if let PanelRow::Template(index) = row {
+                        self.template_drag = Some(template_ui::PanelDrag {
+                            index: *index,
+                            press: self.cursor,
+                            active: false,
+                        });
+                    }
+                    handled = true;
+                    break;
+                }
+            }
+        }
+        if !handled && point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+            // Внутри дока, мимо элементов — глотаем
+            handled = true;
+        }
+        if handled {
+            self.request_redraw();
+        }
+    }
+
+    /// Свёрнутая полоса + flyout: drag-кандидаты/пин/expand.
+    fn click_template_strip(&mut self) {
+        // FR-025 (ревизия): свёрнутая палитра — полоса категорий
+        // по центру слева; hover/pin раскрывает flyout справа.
+        // Клик по строке flyout — drag-кандидат (инстанциация на
+        // отпускании); по строке категории — пин-переключение;
+        // по шеврону или полосе мимо строк — развернуть док;
+        // мимо полосы — закрыть flyout, клик уходит в канвас.
+        let viewport = self.viewport_logical();
+        let categories = self.template_category_names();
+        let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
+        // Строка flyout: кандидат в drag (тот же пайплайн, что
+        // и у развёрнутого дока — ghost + вставка на отпускании)
+        let flyout_hit = self
+            .template_flyout_geometry(viewport, &strip)
+            .and_then(|fly| {
+                self.template_hover.as_ref().and_then(|hover| {
+                    hover.open.and_then(|cat| {
+                        strip.rows.get(cat).and_then(|(_, name)| {
+                            let items = self.templates.by_category(name);
+                            fly.row_rects
+                                .iter()
+                                .enumerate()
+                                .find(|(_, rect)| point_in_rect(**rect, self.cursor))
+                                .and_then(|(v, _)| {
+                                    items.get(fly.scroll_top + v).and_then(|m| {
+                                        self.templates.list().iter().position(|lm| lm.id == m.id)
+                                    })
+                                })
+                        })
+                    })
+                })
+            });
+        if let Some(index) = flyout_hit {
+            self.template_drag = Some(template_ui::PanelDrag {
+                index,
+                press: self.cursor,
+                active: false,
+            });
+            self.request_redraw();
+            return;
+        }
+        if let Some(i) = strip
+            .rows
+            .iter()
+            .position(|(rect, _)| point_in_rect(*rect, self.cursor))
+        {
+            // Пин-переключение flyout категории (WAI-ARIA)
+            self.template_hover
+                .get_or_insert_with(template_ui::StripHover::new)
+                .toggle_trigger(i);
+            self.request_redraw();
+            return;
+        }
+        if point_in_rect(strip.rect, self.cursor) {
+            // Шеврон или полоса мимо строк — развернуть док
+            self.template_panel.expand();
+            self.persist_palette_dock();
+            self.template_hover = None;
+            self.request_redraw();
+            return;
+        }
+        // Мимо полосы: flyout закрывается, клик уходит в канвас
+        self.template_hover = None;
+    }
+
+    /// Меню помощи: подменю первым, паддинг глотается.
+    fn click_help_menu(&mut self) {
+        // FR-027: меню помощи (кнопка «?») и просмотрщик
+        // документации — поповеры поверх канваса: клики
+        // обрабатываются до кнопок/панели настроек
+        if let Some(menu) = self.help_menu.take() {
+            let viewport = self.viewport_logical();
+            // Подменю разделов — ПЕРВЫМ (колонка правее/левее меню):
+            // выбор открывает просмотрщик, паддинг — глотается
+            if menu.docs_open {
+                let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
+                if let Some(page) = docs_ui::help_submenu_item_at(sub, self.cursor) {
+                    self.open_docs_page(page);
+                    self.request_redraw();
+                    return;
+                }
+                if point_in_rect(docs_ui::help_submenu_rect(sub), self.cursor) {
+                    self.help_menu = Some(menu);
+                    self.request_redraw();
+                    return;
+                }
+            }
+            match docs_ui::help_menu_item_at(menu.origin, self.cursor) {
+                // «Документация ▸» — тогл подменю (7 разделов)
+                Some(docs_ui::HelpMenuItem::Docs) => {
+                    self.help_menu = Some(HelpMenuState {
+                        origin: menu.origin,
+                        docs_open: !menu.docs_open,
+                    });
+                }
+                // «Пройти онбординг» (FR-028): явное намерение —
+                // счётчик откладываний не трогается
+                Some(docs_ui::HelpMenuItem::Onboarding) => {
+                    self.onboarding = Some(OnboardingState::default());
+                }
+                // «Галерея схем» (FR-049): открыть модальную галерею
+                Some(docs_ui::HelpMenuItem::Schemes) => {
+                    self.help_menu = None;
+                    self.scheme_gallery.open();
+                }
+                None => {
+                    // Поверхность меню (паддинг) — глотается, меню
+                    // остаётся; мимо — закрыть (клик глотается,
+                    // паттерн контекстного меню T7)
+                    if point_in_rect(docs_ui::help_menu_rect(menu.origin), self.cursor) {
+                        self.help_menu = Some(menu);
+                    }
+                }
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Просмотрщик документации: ✕/ссылки/панель.
+    fn click_docs(&mut self) {
+        if self.docs.is_some() {
+            let viewport = self.viewport_logical();
+            let panel = docs_ui::viewer_rect(viewport);
+            // × — закрыть
+            if point_in_rect(docs_ui::viewer_close_rect(panel), self.cursor) {
+                self.docs = None;
+                self.request_redraw();
+                return;
+            }
+            if point_in_rect(panel, self.cursor) {
+                // Внутренняя ссылка — переход на страницу
+                let content = docs_ui::viewer_content_rect(panel);
+                let link = self.docs.as_ref().and_then(|viewer| {
+                    docs_ui::link_at(
+                        &viewer.layout,
+                        viewer.scroll,
+                        [content[0], content[1]],
+                        self.cursor,
+                    )
+                    .cloned()
+                });
+                if let Some(docs_ui::LinkTarget::Page(id)) = link.map(|l| l.target) {
+                    if let Some(page) = docs_ui::page_index_by_id(id) {
+                        self.open_docs_page(page);
+                        return;
+                    }
+                }
+                // Клик по панели без ссылки — глотается
+                self.request_redraw();
+                return;
+            }
+            // Клик мимо панели — закрыть (клик глотается)
+            self.docs = None;
+            self.request_redraw();
+        }
+    }
+
+    /// Модалка настроек: dropdown/навигация/карточки/строки.
+    fn click_settings(&mut self) {
+        // Панель настроек (screen-space): клики обрабатываются до
+        // канваса — кнопка/панель поверх и «прозрачности» не дают
+        let viewport = self.viewport_logical();
+        // Кнопка переключения темы — рядом с кнопкой настроек
+        if point_in_rect(
+            theme_button_rect(self.settings.button_corner, viewport),
+            self.cursor,
+        ) {
+            self.toggle_theme();
+            self.request_redraw();
+            return;
+        }
+        // FR-027: кнопка «?» — тогл меню помощи (как ⚙ у настроек)
+        // Q6 FR-042: открытие оверлея закрывает main stage
+        if point_in_rect(
+            help_button_rect(self.settings.button_corner, viewport),
+            self.cursor,
+        ) {
+            self.close_main_stage();
+            self.help_menu = match self.help_menu.take() {
+                Some(_) => None,
+                None => {
+                    let button = help_button_rect(self.settings.button_corner, viewport);
+                    Some(HelpMenuState {
+                        origin: docs_ui::help_menu_origin(button, viewport),
+                        docs_open: false,
+                    })
+                }
+            };
+            self.request_redraw();
+            return;
+        }
+        if point_in_rect(
+            button_rect(self.settings.button_corner, viewport),
+            self.cursor,
+        ) {
+            // Q6 FR-042: открытие настроек закрывает main stage
+            self.close_main_stage();
+            self.settings_open = !self.settings_open;
+            self.settings_dropdown.reset();
+            self.request_redraw();
+            return;
+        }
+        if self.settings_open {
+            // FR-039: layout модалки — hit-тесты по навигации,
+            // строкам и карточкам темы
+            let layout = modal_layout(self.settings_tab, viewport);
+            // Открытое выпадающее меню — первый приоритет: клик по
+            // пункту применяет значение; клик мимо меню закрывает
+            // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
+            // dismiss), клик по другой строке обработается ниже
+            if let Some(open_row) = self.settings_dropdown.open_row {
+                let items = dropdown_options(open_row, &self.settings);
+                let anchor = layout
+                    .row_rect(open_row)
+                    .map(|rect| control_rect(rect, RowKind::Dropdown))
+                    .unwrap_or([0.0; 4]);
+                let menu_rect = dropdown_layout(anchor, viewport, items.len(), anchor[2]);
+                if point_in_rect(menu_rect, self.cursor) {
+                    if let Some(index) = dropdown_item_at(menu_rect, items.len(), self.cursor) {
+                        self.apply_dropdown_choice(open_row, index);
+                    }
+                    self.settings_dropdown.reset();
+                    self.request_redraw();
+                    return;
+                }
+                self.settings_dropdown.reset();
+                if modal_row_at(&layout, self.cursor).is_none()
+                    && !point_in_rect(layout.rect, self.cursor)
+                {
+                    // Клик вне меню, не по строке и не по модалке:
+                    // меню закрыто, канвасу клик не достаётся
+                    // (иначе создал бы заметку)
+                    self.request_redraw();
+                    return;
+                }
+            }
+            // Пункт левой навигации — смена таба (+ сброс dropdown);
+            // активный таб переживает закрытие модалки (в памяти App)
+            if let Some(tab) = modal_nav_at(&layout, self.cursor) {
+                self.settings_tab = tab;
+                self.settings_dropdown.reset();
+                self.request_redraw();
+                return;
+            }
+            // Карточки темы (таб «Внешний вид») — прямой выбор
+            // классики; клик по карточке сбрасывает пресет (FR-047:
+            // карточки и пресет — взаимоисключающие источники темы)
+            if let Some(theme) = modal_theme_card_at(&layout, self.cursor) {
+                if self.settings.theme != theme || !self.settings.theme_preset.is_empty() {
+                    self.settings.theme = theme;
+                    self.settings.theme_preset.clear();
+                    self.widgets.set_theme(theme == Theme::Dark);
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        renderer.set_theme(ThemeColors::from_theme(theme));
+                    }
+                    self.save_settings();
+                }
+                self.request_redraw();
+                return;
+            }
+            if let Some(row) = modal_row_at(&layout, self.cursor) {
+                match row_kind(row) {
+                    RowKind::Toggle => self.apply_toggle_row(row),
+                    RowKind::Dropdown => {
+                        // Клик по dropdown-строке открывает меню
+                        // значений (НЕ меняет значение); повторный
+                        // клик по той же строке закрывает
+                        if self.settings_dropdown.open_row == Some(row) {
+                            self.settings_dropdown.reset();
+                        } else {
+                            self.settings_dropdown.open(row, &self.settings);
+                        }
+                    }
+                }
+            } else if !point_in_rect(layout.rect, self.cursor) {
+                // FR-039: клик по затемнению (вне rect модалки) —
+                // закрыть; канвасу клик не достаётся (иначе двойной
+                // клик мимо создал бы заметку)
+                self.settings_open = false;
+                self.settings_dropdown.reset();
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Панель хоткеев: клик по панели глотается.
+    fn click_hotkeys_panel(&mut self) {
+        let viewport = self.viewport_logical();
+        // Панель хоткеев (FR-004.1, тогл): панель «видно/не видно»
+        // устойчива — клик мимо НЕ закрывает (переключение: F1,
+        // пункт меню канваса, Esc) и проходит в канвас; клик по
+        // самой панели — глотается (строки не интерактивны)
+        if self.hotkeys_open {
+            let panel = hotkeys_panel_rect(viewport);
+            if point_in_rect(panel, self.cursor) {
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Миникарта: центрирование + drag.
+    fn click_minimap(&mut self) {
+        // Миникарта (T13, SPEC §6.1): клик — центрирование камеры,
+        // drag — world-точка под курсором следует за ним. Квад
+        // рисуется поверх всего — проверка до канвас-хит-тестов
+        if let Some(rect) = self.minimap_rect() {
+            if point_in_rect(
+                [rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]],
+                self.cursor,
+            ) {
+                self.center_camera_on_minimap_cursor();
+                self.minimap_drag = true;
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Модальный диалог: кнопки Да/Нет, мимо — глотается.
+    fn click_dialog(&mut self) {
+        // T21: модальный диалог поверх всего — кнопки Да/Нет
+        // (клики мимо панели не закрывают: установка — явный выбор)
+        if self.dialog.is_some() {
+            for (i, rect) in self.dialog_button_rects().iter().enumerate() {
+                let [x, y, w, h] = *rect;
+                if self.cursor[0] >= x
+                    && self.cursor[0] <= x + w
+                    && self.cursor[1] >= y
+                    && self.cursor[1] <= y + h
+                {
+                    if i == 0 {
+                        self.confirm_dialog();
+                    } else {
+                        self.cancel_dialog();
+                    }
+                    break;
+                }
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Контекстное меню: подменю/пункты/паддинг/мимо.
+    fn click_context_menu(&mut self) {
+        // Открытое меню канваса (T7): клик по пункту — действие,
+        // клик по поверхности меню (паддинг) — глотается, меню
+        // ОСТАЁТСЯ открытым (Radix: клик внутри поверхности меню
+        // не закрывает), клик мимо — закрыть (dismiss-клик в канвас
+        // не проходит). M5: подменю проверяется ПЕРВЫМ — его колонка
+        // правее базового меню. Hit-test — в логических px (курсор).
+        if self.menu.is_some() {
+            let in_base = self
+                .menu_open_rect()
+                .is_some_and(|rect| point_in_rect(rect, self.cursor));
+            let in_submenu = self
+                .menu
+                .as_ref()
+                .and_then(|m| m.submenu.as_ref())
+                .map(submenu_rect)
+                .is_some_and(|rect| point_in_rect(rect, self.cursor));
+            // 1. Пункт подменю — действие
+            if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
+                if let Some(i) = submenu_item_at(submenu, self.cursor) {
+                    let action = submenu.entries[i].action.clone();
+                    self.menu = None;
+                    match action {
+                        crate::ui::SubmenuAction::Insert(widget_id) => {
+                            self.insert_widget_from_menu(&widget_id);
+                        }
+                        // T21-C (П11): удаление пакета — с подтверждением;
+                        // меню уже закрыто, модальный диалог поверх
+                        crate::ui::SubmenuAction::Remove(widget_id) => {
+                            let name = self
+                                .widgets
+                                .registry
+                                .get(&widget_id)
+                                .map(|p| p.manifest.name.clone())
+                                .unwrap_or(widget_id.clone());
+                            self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
+            }
+            // 2. Поверхность подменю без пункта — глотается, не закрывает
+            if in_submenu {
+                self.request_redraw();
+                return;
+            }
+            // 3. Пункт или паддинг базового меню (список — тот же,
+            // что в отрисовке: batch-пункты видны только при N≥3)
+            if let Some(menu) = self.menu.take() {
+                let items = canvas_menu_visible_items(self.align_menu_visible());
+                if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
+                    match items[i] {
+                        CanvasMenuItem::NewGroup => {
+                            let center = self.viewport_center_world();
+                            let mut group = plan_group_at(&self.scene.canvas, center);
+                            group.label = Some(self.tr(keys::GROUP_DEFAULT_LABEL).to_owned());
+                            self.insert_group(group);
+                        }
+                        // T23: переключение из меню — рантайм,
+                        // без записи конфига (как и хоткей F)
+                        CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
+                        // FR-004.1: тогл оверлея хоткеев из меню
+                        // (панель «видно/не видно», галочка ✓)
+                        CanvasMenuItem::Hotkeys => {
+                            self.hotkeys_open = !self.hotkeys_open;
+                        }
+                        // M5 (T20-F): открыть подменю пакетов;
+                        // повторный клик — тоггл (закрыть). Пустой
+                        // список — честная строка «(нет установленных)».
+                        // T21-C: под каждой вставкой — секция
+                        // удаления пакетов (П11)
+                        CanvasMenuItem::Widgets => {
+                            if menu.submenu.is_some() {
+                                // Тоггл: подменю уже открыто — закрыть
+                                self.menu = Some(ContextMenu {
+                                    origin: menu.origin,
+                                    submenu: None,
+                                });
+                            } else {
+                                let submenu_origin = submenu_origin_next_to(menu.origin);
+                                let mut entries: Vec<SubmenuEntry> = self
+                                    .widgets
+                                    .menu_entries()
+                                    .into_iter()
+                                    .map(|(widget_id, label)| SubmenuEntry {
+                                        action: crate::ui::SubmenuAction::Insert(widget_id),
+                                        label,
+                                    })
+                                    .collect();
+                                entries.extend(self.widgets.menu_entries().into_iter().map(
+                                    |(widget_id, label)| SubmenuEntry {
+                                        action: crate::ui::SubmenuAction::Remove(widget_id),
+                                        label:
+                                            self.trf(
+                                                keys::WIDGETS_REMOVE_ENTRY,
+                                                &[("{name}", &label)],
+                                            ),
+                                    },
+                                ));
+                                self.menu = Some(ContextMenu {
+                                    origin: menu.origin,
+                                    submenu: Some(Submenu {
+                                        origin: submenu_origin,
+                                        entries,
+                                    }),
+                                });
+                            }
+                        }
+                        // T15: переключатель desktop-режима. Вход
+                        // (runtime, без --desktop): перезапуск себя с
+                        // --desktop через single-instance handoff —
+                        // in-place SetParent не работает (Vulkan-swapchain
+                        // не презентует в ребёнка Progman, Renderer
+                        // фиксируется с prefer_dx12 при старте). Выход
+                        // (уже встроены): in-place detach — DX12-рендерер
+                        // в обычном окне презентует, пересоздание не нужно.
+                        // На не-Windows — warn.
+                        CanvasMenuItem::DesktopMode => {
+                            #[cfg(windows)]
+                            {
+                                if self.desktop_mode && self.desktop_hierarchy.is_some() {
+                                    self.leave_desktop();
+                                } else {
+                                    match self.spawn_desktop_relaunch() {
+                                        Ok(()) => tracing::info!(
+                                            "перезапуск на --desktop: новый инстанс \
+                                             закроет текущий (single-instance handoff)"
+                                        ),
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                %err,
+                                                "перезапуск на --desktop не удался"
+                                            );
+                                            canvas_shell::desktop::attach::fallback_message_box(
+                                                &format!(
+                                                    "Не удалось перезапустить CanvasDesk \
+                                                 в режиме десктопа:\n{err}\n\nЗапустите \
+                                                 приложение вручную с флагом --desktop."
+                                                ),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(not(windows))]
+                            {
+                                tracing::warn!("desktop-режим не поддерживается на этой платформе");
+                            }
+                        }
+                        // FR-016 (CP5): тогл оверлея узких мест из меню —
+                        // персистентная настройка (как Ctrl+B)
+                        CanvasMenuItem::BottleneckOverlay => {
+                            self.toggle_bottleneck_overlay();
+                        }
+                        // FR-017 (CP6): тогл what-if режима из меню
+                        // (эквивалент Ctrl+Shift+I; подмены в
+                        // сценариях переживают выход — Q3b)
+                        CanvasMenuItem::WhatIf => {
+                            if self.scene.whatif_active {
+                                self.exit_whatif_mode();
+                            } else {
+                                self.enter_whatif_mode();
+                            }
+                        }
+                        // FR-038 п.16-17 (T-038.5): batch-операции
+                        // выделения — ОДНА undo-операция на все ноды;
+                        // хоткеи не назначаются (F1 HOTKEYS не трогаем,
+                        // кандидат — на приёмку FR-038)
+                        CanvasMenuItem::AlignHorizontal => {
+                            // ряд: общая ось Y (центры на одной горизонтали)
+                            self.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
+                        }
+                        CanvasMenuItem::AlignVertical => {
+                            // колонна: общая ось X (центры на одной вертикали)
+                            self.run_batch_op(BatchOp::Align, Some(AlignAxis::X));
+                        }
+                        CanvasMenuItem::DistributeEvenly => {
+                            // ось раскладки — из контекста выделения
+                            // (решение T-038.5: одна кнопка, правило в
+                            // distribute_axis_for)
+                            self.run_batch_op(BatchOp::Distribute, None);
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                if in_base {
+                    // Паддинг базового меню — меню остаётся открытым
+                    self.menu = Some(menu);
+                    self.request_redraw();
+                    return;
+                }
+                // Клик мимо — меню закрыто (take выше), клик глотается
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Угловые кнопки: тема / помощь «?» / настройки ⚙ — диспетчер по
+    /// имени hit-элемента кадра.
+    fn click_corner_button(&mut self, element: &str) -> bool {
+        let viewport = self.viewport_logical();
+        match element {
+            "theme-button" => {
+                if point_in_rect(
+                    theme_button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    self.toggle_theme();
+                    self.request_redraw();
+                    return true;
+                }
+                false
+            }
+            "help-button" => {
+                if point_in_rect(
+                    help_button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    // Q6 FR-042: открытие оверлея закрывает main stage
+                    self.close_main_stage();
+                    self.help_menu = match self.help_menu.take() {
+                        Some(_) => None,
+                        None => {
+                            let button = help_button_rect(self.settings.button_corner, viewport);
+                            Some(HelpMenuState {
+                                origin: docs_ui::help_menu_origin(button, viewport),
+                                docs_open: false,
+                            })
+                        }
+                    };
+                    self.request_redraw();
+                    return true;
+                }
+                false
+            }
+            "settings-button" => {
+                if point_in_rect(
+                    button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    // Q6 FR-042: открытие настроек закрывает main stage
+                    self.close_main_stage();
+                    self.settings_open = !self.settings_open;
+                    self.settings_dropdown.reset();
+                    self.request_redraw();
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Палитра выделения: Entry/Trigger/Bar поглощают, мимо rect'ов —
+    /// `false` (клик уходит в канвас). palette_view() обновляет
+    /// hover-intent — как в прежней цепочке.
+    fn click_palette(&mut self) -> bool {
+        if let Some((lay, groups, open)) = self.palette_view() {
+            match palette_hit(&lay, self.cursor, open) {
+                Some(PaletteHit::Entry { group, entry }) => {
+                    let action = groups[group].entries[entry].action.clone();
+                    self.apply_palette_action(action);
+                    // Действие выполнено — раскрытие закрывается
+                    // (состав групп мог измениться; Radix: закрытие
+                    // меню по выбору пункта)
+                    self.palette_hover.reset();
+                    self.request_redraw();
+                    true
+                }
+                Some(PaletteHit::Trigger(group)) => {
+                    // Пин: клик открывает без задержки / закрывает
+                    // повторным кликом — стабильность для точного
+                    // наведения, как у menu-button в вебе
+                    self.palette_hover.toggle_trigger(group);
+                    self.request_redraw();
+                    true
+                }
+                Some(PaletteHit::Bar) => {
+                    self.request_redraw();
+                    true
+                }
+                None => false,
+            }
+        } else {
+            false
+        }
+    }
+
     fn on_left_button(&mut self, state: ElementState) {
         self.left_pressed = state == ElementState::Pressed;
         // T15: первый клик по канвасу снимает WS_EX_NOACTIVATE — с этого
@@ -9029,848 +10013,34 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
-                // FR-049: модальная галерея схем — клики по элементам,
-                // мимо панели — закрыть (канвас клик не получает)
-                if self.scheme_gallery.open {
-                    self.on_gallery_click();
-                    self.request_redraw();
-                    return;
-                }
-                // FR-028: онбординг открыт — модальный оверлей: клики по
-                // кнопкам карточки, остальное глотается (канвас не
-                // реагирует; выход виден всегда — «Пропустить» в углу)
-                if let Some(state) = &self.onboarding {
-                    let viewport = self.viewport_logical();
-                    let card =
-                        onboarding_ui::card_rect(viewport, state.step, self.settings.language);
-                    match onboarding_ui::button_at(card, state, self.cursor) {
-                        Some(OnboardingButton::Next) => {
-                            if state.is_last() {
-                                // «Готово»: тур пройден — флаг + сохранение
-                                self.complete_onboarding();
-                            } else if onboarding_ui::ONBOARDING_STEPS
-                                .get(state.step)
-                                .and_then(|step| step.action_key)
-                                .is_some()
-                            {
-                                // FR-049: CTA шага («Попробовать») — тур
-                                // пройден, галерея схем открыта
-                                self.complete_onboarding();
-                                self.scheme_gallery.open();
-                            } else if let Some(state) = self.onboarding.as_mut() {
-                                state.next();
-                            }
-                        }
-                        Some(OnboardingButton::Prev) => {
-                            if let Some(state) = self.onboarding.as_mut() {
-                                state.prev();
-                            }
-                        }
-                        Some(OnboardingButton::Skip) => self.defer_onboarding(),
-                        None => {}
-                    }
-                    self.request_redraw();
-                    return;
-                }
-                // FR-049: empty-state пустого канваса — кнопки карточки;
-                // мимо карточки канвас жив (двойной клик создаёт заметку,
-                // empty-state исчезает при первой ноде — AC-1.1)
-                if self.empty_state_visible() {
-                    let card = scheme_gallery_ui::empty_card_rect(self.viewport_logical());
-                    let (open_btn, dismiss_btn) = scheme_gallery_ui::empty_buttons(card);
-                    if scheme_gallery_ui::point_in_rect(open_btn, self.cursor) {
-                        self.scheme_gallery.open();
-                        self.request_redraw();
-                        return;
-                    }
-                    if scheme_gallery_ui::point_in_rect(dismiss_btn, self.cursor) {
-                        self.empty_state_dismissed = true;
-                        self.request_redraw();
-                        return;
-                    }
-                    if scheme_gallery_ui::point_in_rect(card, self.cursor) {
-                        self.request_redraw();
-                        return;
-                    }
-                }
-                // FR-042 (E3, F-8/F-9): модальность main stage — клик вне
-                // rect закрывает (канвас клик не получает, инвариант 8:
-                // нода не создаётся, выделение не сбрасывается); внутри —
-                // выделение ребра среза (живой индекс), без правки (PoC —
-                // просмотр и выделение, non-goals PRD).
-                if self.main_stage.is_some() {
-                    let viewport = self.viewport_logical();
-                    let rect = main_stage_rect(viewport);
-                    // FR-044 (прототип): кнопка ✕ в правом верхнем углу —
-                    // закрытие stage; rect по той же формуле, что в рендере
-                    if point_in_rect(
-                        [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0],
-                        self.cursor,
-                    ) {
-                        self.close_main_stage();
-                        self.request_redraw();
-                        return;
-                    }
-                    if point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
-                        let stage = self.main_stage.as_ref().expect("stage открыт");
-                        let transform = StageTransform::new([rect.x, rect.y], stage.scale);
-                        let local = transform.unmap_point(self.cursor);
-                        // Допуск от толщины (F-5): max(EDGE_HIT_TOLERANCE, d/2 + 2).
-                        // Геометрия веера — та же чистая функция, что на кадре
-                        // (детерминизм: рендер и hit-test совпадают)
-                        let tolerance = (bundle_thickness(stage.slice.edges.len()) / 2.0 + 2.0)
-                            .max(canvas_core::EDGE_HIT_TOLERANCE);
-                        let metrics = StageMetrics {
-                            header_h: HEADER_HEIGHT,
-                            body_top_gap: BODY_TOP_GAP,
-                            body_line: BODY_LINE_HEIGHT,
-                            result_line: RESULT_LINE_HEIGHT,
-                            body_padding: BODY_PADDING,
-                            strip_extra: 6.0,
-                        };
-                        let footers = [
-                            self.scene
-                                .expr_results
-                                .contains_key(&stage.slice.nodes[0].id),
-                            self.scene
-                                .expr_results
-                                .contains_key(&stage.slice.nodes[1].id),
-                        ];
-                        let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
-                        let hit = stage_edge_at_lines(&lines, local, tolerance)
-                            .and_then(|slice_i| stage.live_edge(slice_i));
-                        // Заимствование stage закончено — можно мутировать
-                        if let Some(live) = hit {
-                            self.selected = Some(Selection::Edge(live));
-                        }
-                    } else {
-                        self.main_stage = None;
-                    }
-                    self.request_redraw();
-                    return;
-                }
-                // Панель поиска (T14): клик по строке — прыжок, мимо панели —
-                // закрыть; канвасу клик не достаётся. Проверяется первой —
-                // панель висит поверх всех оверлеев
-                if self.search.is_open() {
-                    let viewport = self.viewport_logical();
-                    let lay = search_layout(viewport[0], viewport[1], &self.search);
-                    let mut handled = false;
-                    for (visible, rect) in lay.row_rects.iter().enumerate() {
-                        let row_rect = rect_xywh(*rect);
-                        if point_in_rect(row_rect, self.cursor) {
-                            let row = self.search.scroll_top + visible;
-                            self.search.selected = Some(row);
-                            self.jump_to_search_row(row);
-                            handled = true;
-                            break;
-                        }
-                    }
-                    if !handled && !point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
-                        self.search.close();
-                    }
-                    self.request_redraw();
-                    return;
-                }
-                // FR-018: wheel-меню шаблонов — клики обрабатываются до
-                // канваса (оверлей поверх всего). Сектор категории — выбор
-                // категории (растут шаблонные кольца); сектор шаблона —
-                // инстанциация в world-точку открытия; мимо секторов, но
-                // рядом — глотаем, заметно дальше — закрыть.
-                // Любой клик глотается — dismiss не создаёт заметку.
-                if let Some(menu) = self.wheel_menu.clone() {
-                    let [vw, vh] = self.viewport_logical();
-                    let categories = self.templates.categories();
-                    let template_count = menu
-                        .category
-                        .as_deref()
-                        .map(|c| self.templates.by_category(c).len())
-                        .unwrap_or(0);
-                    let geo = template_ui::wheel_geometry(
-                        menu.screen,
-                        vw,
-                        vh,
-                        categories.len(),
-                        template_count,
-                    );
-                    match geo.hit(self.cursor) {
-                        Some(WheelHit::Category(i)) => {
-                            if let Some(menu_mut) = self.wheel_menu.as_mut() {
-                                menu_mut.category = Some(categories[i].to_owned());
-                            }
-                        }
-                        Some(WheelHit::Template(i)) => {
-                            let category = menu.category.expect("категория выбрана");
-                            let manifest = self.templates.by_category(&category)[i].clone();
-                            let world = menu.world;
-                            self.wheel_menu = None;
-                            self.instantiate_template_at(&manifest, world);
-                        }
-                        None => {
-                            // FR-022: клик по кнопке-хабу — «назад» (сброс
-                            // категории) или «закрыть»; дальше — как раньше:
-                            // рядом глотаем, заметно дальше — закрыть.
-                            if geo.hub_hit(self.cursor) {
-                                if let Some(menu_mut) = self.wheel_menu.as_mut() {
-                                    menu_mut.category = None;
-                                }
-                                if menu.category.is_none() {
-                                    self.wheel_menu = None;
-                                }
-                            } else {
-                                let dx = self.cursor[0] - geo.center[0];
-                                let dy = self.cursor[1] - geo.center[1];
-                                let outside = (dx * dx + dy * dy).sqrt() > geo.extent + 12.0;
-                                if outside {
-                                    self.wheel_menu = None;
-                                }
-                            }
-                        }
-                    }
-                    self.request_redraw();
-                    return;
-                }
-                // FR-025: палитра — постоянный левый док (не модальна).
-                // Клики по её элементам обрабатываем; мимо панели клик
-                // уходит в канвас (фокус панели снимается, док не закрывается).
-                // Свёрнутый док — полоса-ручка слева: клик по ней разворачивает.
-                if self.template_panel.open {
-                    let viewport = self.viewport_logical();
-                    let rows = template_panel_rows(&self.templates, &self.template_panel);
-                    let lay = template_panel_layout(
-                        viewport[0],
-                        viewport[1],
-                        &self.templates,
-                        &self.template_panel,
-                        &rows,
-                    );
-                    let mut handled = false;
-                    // Кнопка сворачивания дока («‹» в шапке)
-                    if point_in_rect(rect_xywh(lay.collapse_rect), self.cursor) {
-                        self.template_panel.close();
-                        self.persist_palette_dock();
-                        handled = true;
-                    }
-                    // Клик по полю поиска — клавиатурный фокус в панель
-                    if !handled && point_in_rect(rect_xywh(lay.input_rect), self.cursor) {
-                        self.template_panel.focus_search();
-                        handled = true;
-                    }
-                    if !handled {
-                        for (rect, name, _active) in &lay.category_rects {
-                            if point_in_rect(rect_xywh(*rect), self.cursor) {
-                                self.template_panel.category =
-                                    if self.template_panel.category.as_deref() == Some(name) {
-                                        None
-                                    } else {
-                                        Some(name.clone())
-                                    };
-                                self.template_panel.selected = 0;
-                                self.template_panel.scroll_top = 0;
-                                handled = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !handled {
-                        // FR-024: строки панели — секции (заголовки, клик
-                        // глотается) и карточки шаблонов (FR-025: нажатие
-                        // — кандидат в drag; вставка — на отпускании: клик —
-                        // в центр viewport, drag — в точку курсора)
-                        for (rect, row) in lay.row_rects.iter().zip(lay.rows.iter()) {
-                            if point_in_rect(rect_xywh(*rect), self.cursor) {
-                                if let PanelRow::Template(index) = row {
-                                    self.template_drag = Some(template_ui::PanelDrag {
-                                        index: *index,
-                                        press: self.cursor,
-                                        active: false,
-                                    });
-                                }
-                                handled = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !handled && point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
-                        // Внутри дока, мимо элементов — глотаем
-                        handled = true;
-                    }
-                    if handled {
-                        self.request_redraw();
-                        return;
-                    }
-                    // Мимо дока: фокус снимаем, клик проходит в канвас
-                    self.template_panel.unfocus();
-                } else {
-                    // FR-025 (ревизия): свёрнутая палитра — полоса категорий
-                    // по центру слева; hover/pin раскрывает flyout справа.
-                    // Клик по строке flyout — drag-кандидат (инстанциация на
-                    // отпускании); по строке категории — пин-переключение;
-                    // по шеврону или полосе мимо строк — развернуть док;
-                    // мимо полосы — закрыть flyout, клик уходит в канвас.
-                    let viewport = self.viewport_logical();
-                    let categories = self.template_category_names();
-                    let strip = template_ui::dock_strip_layout(&categories, viewport[1]);
-                    // Строка flyout: кандидат в drag (тот же пайплайн, что
-                    // и у развёрнутого дока — ghost + вставка на отпускании)
-                    let flyout_hit =
-                        self.template_flyout_geometry(viewport, &strip)
-                            .and_then(|fly| {
-                                self.template_hover.as_ref().and_then(|hover| {
-                                    hover.open.and_then(|cat| {
-                                        strip.rows.get(cat).and_then(|(_, name)| {
-                                            let items = self.templates.by_category(name);
-                                            fly.row_rects
-                                                .iter()
-                                                .enumerate()
-                                                .find(|(_, rect)| {
-                                                    point_in_rect(**rect, self.cursor)
-                                                })
-                                                .and_then(|(v, _)| {
-                                                    items.get(fly.scroll_top + v).and_then(|m| {
-                                                        self.templates
-                                                            .list()
-                                                            .iter()
-                                                            .position(|lm| lm.id == m.id)
-                                                    })
-                                                })
-                                        })
-                                    })
-                                })
-                            });
-                    if let Some(index) = flyout_hit {
-                        self.template_drag = Some(template_ui::PanelDrag {
-                            index,
-                            press: self.cursor,
-                            active: false,
-                        });
-                        self.request_redraw();
-                        return;
-                    }
-                    if let Some(i) = strip
-                        .rows
-                        .iter()
-                        .position(|(rect, _)| point_in_rect(*rect, self.cursor))
-                    {
-                        // Пин-переключение flyout категории (WAI-ARIA)
-                        self.template_hover
-                            .get_or_insert_with(template_ui::StripHover::new)
-                            .toggle_trigger(i);
-                        self.request_redraw();
-                        return;
-                    }
-                    if point_in_rect(strip.rect, self.cursor) {
-                        // Шеврон или полоса мимо строк — развернуть док
-                        self.template_panel.expand();
-                        self.persist_palette_dock();
-                        self.template_hover = None;
-                        self.request_redraw();
-                        return;
-                    }
-                    // Мимо полосы: flyout закрывается, клик уходит в канвас
-                    self.template_hover = None;
-                }
-                // FR-027: меню помощи (кнопка «?») и просмотрщик
-                // документации — поповеры поверх канваса: клики
-                // обрабатываются до кнопок/панели настроек
-                if let Some(menu) = self.help_menu.take() {
-                    let viewport = self.viewport_logical();
-                    // Подменю разделов — ПЕРВЫМ (колонка правее/левее меню):
-                    // выбор открывает просмотрщик, паддинг — глотается
-                    if menu.docs_open {
-                        let sub = docs_ui::help_submenu_origin(menu.origin, viewport);
-                        if let Some(page) = docs_ui::help_submenu_item_at(sub, self.cursor) {
-                            self.open_docs_page(page);
-                            self.request_redraw();
-                            return;
-                        }
-                        if point_in_rect(docs_ui::help_submenu_rect(sub), self.cursor) {
-                            self.help_menu = Some(menu);
-                            self.request_redraw();
+                // FR-052 (U2 PRD-0009): единый диспетчер поверхностей —
+                // HitStack::pick по кадру реестра решает, кто получает клик
+                // (порядок = слои/визуальный верх, а не порядок веток).
+                // Block-модали глотают backdrop по контракту поверхности;
+                // Capture — только в своих rect'ах; None → dismiss
+                // транзиентов и прежняя canvas-цепочка (мир L0).
+                let ui_frame = ui_registry::build_frame(self);
+                let pick = HitStack::pick(&ui_frame, UiPoint::new(self.cursor[0], self.cursor[1]));
+                match pick {
+                    Some(HitTarget::Element { surface, rect }) => {
+                        let surface_id = surface.surface.as_str().to_owned();
+                        let element = rect.element.clone();
+                        if self.dispatch_surface_click(&surface_id, &element) {
                             return;
                         }
                     }
-                    match docs_ui::help_menu_item_at(menu.origin, self.cursor) {
-                        // «Документация ▸» — тогл подменю (7 разделов)
-                        Some(docs_ui::HelpMenuItem::Docs) => {
-                            self.help_menu = Some(HelpMenuState {
-                                origin: menu.origin,
-                                docs_open: !menu.docs_open,
-                            });
-                        }
-                        // «Пройти онбординг» (FR-028): явное намерение —
-                        // счётчик откладываний не трогается
-                        Some(docs_ui::HelpMenuItem::Onboarding) => {
-                            self.onboarding = Some(OnboardingState::default());
-                        }
-                        // «Галерея схем» (FR-049): открыть модальную галерею
-                        Some(docs_ui::HelpMenuItem::Schemes) => {
-                            self.help_menu = None;
-                            self.scheme_gallery.open();
-                        }
-                        None => {
-                            // Поверхность меню (паддинг) — глотается, меню
-                            // остаётся; мимо — закрыть (клик глотается,
-                            // паттерн контекстного меню T7)
-                            if point_in_rect(docs_ui::help_menu_rect(menu.origin), self.cursor) {
-                                self.help_menu = Some(menu);
-                            }
-                        }
-                    }
-                    self.request_redraw();
-                    return;
-                }
-                if self.docs.is_some() {
-                    let viewport = self.viewport_logical();
-                    let panel = docs_ui::viewer_rect(viewport);
-                    // × — закрыть
-                    if point_in_rect(docs_ui::viewer_close_rect(panel), self.cursor) {
-                        self.docs = None;
-                        self.request_redraw();
-                        return;
-                    }
-                    if point_in_rect(panel, self.cursor) {
-                        // Внутренняя ссылка — переход на страницу
-                        let content = docs_ui::viewer_content_rect(panel);
-                        let link = self.docs.as_ref().and_then(|viewer| {
-                            docs_ui::link_at(
-                                &viewer.layout,
-                                viewer.scroll,
-                                [content[0], content[1]],
-                                self.cursor,
-                            )
-                            .cloned()
-                        });
-                        if let Some(docs_ui::LinkTarget::Page(id)) = link.map(|l| l.target) {
-                            if let Some(page) = docs_ui::page_index_by_id(id) {
-                                self.open_docs_page(page);
-                                return;
-                            }
-                        }
-                        // Клик по панели без ссылки — глотается
-                        self.request_redraw();
-                        return;
-                    }
-                    // Клик мимо панели — закрыть (клик глотается)
-                    self.docs = None;
-                    self.request_redraw();
-                    return;
-                }
-                // FR-017 (CP6): what-if бар/пилюля/список/таблица — клики до
-                // канваса (screen-поверхность, как панель настроек)
-                if self.whatif_bar_click() {
-                    return;
-                }
-                // Панель настроек (screen-space): клики обрабатываются до
-                // канваса — кнопка/панель поверх и «прозрачности» не дают
-                let viewport = self.viewport_logical();
-                // Кнопка переключения темы — рядом с кнопкой настроек
-                if point_in_rect(
-                    theme_button_rect(self.settings.button_corner, viewport),
-                    self.cursor,
-                ) {
-                    self.toggle_theme();
-                    self.request_redraw();
-                    return;
-                }
-                // FR-027: кнопка «?» — тогл меню помощи (как ⚙ у настроек)
-                // Q6 FR-042: открытие оверлея закрывает main stage
-                if point_in_rect(
-                    help_button_rect(self.settings.button_corner, viewport),
-                    self.cursor,
-                ) {
-                    self.close_main_stage();
-                    self.help_menu = match self.help_menu.take() {
-                        Some(_) => None,
-                        None => {
-                            let button = help_button_rect(self.settings.button_corner, viewport);
-                            Some(HelpMenuState {
-                                origin: docs_ui::help_menu_origin(button, viewport),
-                                docs_open: false,
-                            })
-                        }
-                    };
-                    self.request_redraw();
-                    return;
-                }
-                if point_in_rect(
-                    button_rect(self.settings.button_corner, viewport),
-                    self.cursor,
-                ) {
-                    // Q6 FR-042: открытие настроек закрывает main stage
-                    self.close_main_stage();
-                    self.settings_open = !self.settings_open;
-                    self.settings_dropdown.reset();
-                    self.request_redraw();
-                    return;
-                }
-                if self.settings_open {
-                    // FR-039: layout модалки — hit-тесты по навигации,
-                    // строкам и карточкам темы
-                    let layout = modal_layout(self.settings_tab, viewport);
-                    // Открытое выпадающее меню — первый приоритет: клик по
-                    // пункту применяет значение; клик мимо меню закрывает
-                    // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
-                    // dismiss), клик по другой строке обработается ниже
-                    if let Some(open_row) = self.settings_dropdown.open_row {
-                        let items = dropdown_options(open_row, &self.settings);
-                        let anchor = layout
-                            .row_rect(open_row)
-                            .map(|rect| control_rect(rect, RowKind::Dropdown))
-                            .unwrap_or([0.0; 4]);
-                        let menu_rect = dropdown_layout(anchor, viewport, items.len(), anchor[2]);
-                        if point_in_rect(menu_rect, self.cursor) {
-                            if let Some(index) =
-                                dropdown_item_at(menu_rect, items.len(), self.cursor)
-                            {
-                                self.apply_dropdown_choice(open_row, index);
-                            }
-                            self.settings_dropdown.reset();
-                            self.request_redraw();
-                            return;
-                        }
-                        self.settings_dropdown.reset();
-                        if modal_row_at(&layout, self.cursor).is_none()
-                            && !point_in_rect(layout.rect, self.cursor)
-                        {
-                            // Клик вне меню, не по строке и не по модалке:
-                            // меню закрыто, канвасу клик не достаётся
-                            // (иначе создал бы заметку)
-                            self.request_redraw();
+                    Some(HitTarget::Backdrop { surface }) => {
+                        let surface_id = surface.surface.as_str().to_owned();
+                        if self.dispatch_surface_backdrop(&surface_id) {
                             return;
                         }
                     }
-                    // Пункт левой навигации — смена таба (+ сброс dropdown);
-                    // активный таб переживает закрытие модалки (в памяти App)
-                    if let Some(tab) = modal_nav_at(&layout, self.cursor) {
-                        self.settings_tab = tab;
-                        self.settings_dropdown.reset();
-                        self.request_redraw();
-                        return;
-                    }
-                    // Карточки темы (таб «Внешний вид») — прямой выбор
-                    // классики; клик по карточке сбрасывает пресет (FR-047:
-                    // карточки и пресет — взаимоисключающие источники темы)
-                    if let Some(theme) = modal_theme_card_at(&layout, self.cursor) {
-                        if self.settings.theme != theme || !self.settings.theme_preset.is_empty() {
-                            self.settings.theme = theme;
-                            self.settings.theme_preset.clear();
-                            self.widgets.set_theme(theme == Theme::Dark);
-                            if let Some(renderer) = self.renderer.as_mut() {
-                                renderer.set_theme(ThemeColors::from_theme(theme));
-                            }
-                            self.save_settings();
-                        }
-                        self.request_redraw();
-                        return;
-                    }
-                    if let Some(row) = modal_row_at(&layout, self.cursor) {
-                        match row_kind(row) {
-                            RowKind::Toggle => self.apply_toggle_row(row),
-                            RowKind::Dropdown => {
-                                // Клик по dropdown-строке открывает меню
-                                // значений (НЕ меняет значение); повторный
-                                // клик по той же строке закрывает
-                                if self.settings_dropdown.open_row == Some(row) {
-                                    self.settings_dropdown.reset();
-                                } else {
-                                    self.settings_dropdown.open(row, &self.settings);
-                                }
-                            }
-                        }
-                    } else if !point_in_rect(layout.rect, self.cursor) {
-                        // FR-039: клик по затемнению (вне rect модалки) —
-                        // закрыть; канвасу клик не достаётся (иначе двойной
-                        // клик мимо создал бы заметку)
-                        self.settings_open = false;
-                        self.settings_dropdown.reset();
-                    }
-                    self.request_redraw();
-                    return;
-                }
-                // Панель хоткеев (FR-004.1, тогл): панель «видно/не видно»
-                // устойчива — клик мимо НЕ закрывает (переключение: F1,
-                // пункт меню канваса, Esc) и проходит в канвас; клик по
-                // самой панели — глотается (строки не интерактивны)
-                if self.hotkeys_open {
-                    let panel = hotkeys_panel_rect(viewport);
-                    if point_in_rect(panel, self.cursor) {
-                        self.request_redraw();
-                        return;
-                    }
-                }
-                // Миникарта (T13, SPEC §6.1): клик — центрирование камеры,
-                // drag — world-точка под курсором следует за ним. Квад
-                // рисуется поверх всего — проверка до канвас-хит-тестов
-                if let Some(rect) = self.minimap_rect() {
-                    if point_in_rect(
-                        [rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]],
-                        self.cursor,
-                    ) {
-                        self.center_camera_on_minimap_cursor();
-                        self.minimap_drag = true;
-                        self.request_redraw();
-                        return;
-                    }
+                    None => self.dismiss_transients_on_miss(),
                 }
                 let world = self.cursor_world();
-                // T21: модальный диалог поверх всего — кнопки Да/Нет
-                // (клики мимо панели не закрывают: установка — явный выбор)
-                if self.dialog.is_some() {
-                    for (i, rect) in self.dialog_button_rects().iter().enumerate() {
-                        let [x, y, w, h] = *rect;
-                        if self.cursor[0] >= x
-                            && self.cursor[0] <= x + w
-                            && self.cursor[1] >= y
-                            && self.cursor[1] <= y + h
-                        {
-                            if i == 0 {
-                                self.confirm_dialog();
-                            } else {
-                                self.cancel_dialog();
-                            }
-                            break;
-                        }
-                    }
-                    self.request_redraw();
-                    return;
-                }
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
-                // Палитра выделения (FR-009/FR-010): клик по строке ОТКРЫТОЙ
-                // группы — действие, по кнопке-триггеру — пин-переключение
-                // раскрытия (WAI-ARIA menu button), по бару — глотается;
-                // проверяется ДО канваса — тулбар поверх выделения
-                if let Some((lay, groups, open)) = self.palette_view() {
-                    match palette_hit(&lay, self.cursor, open) {
-                        Some(PaletteHit::Entry { group, entry }) => {
-                            let action = groups[group].entries[entry].action.clone();
-                            self.apply_palette_action(action);
-                            // Действие выполнено — раскрытие закрывается
-                            // (состав групп мог измениться; Radix: закрытие
-                            // меню по выбору пункта)
-                            self.palette_hover.reset();
-                            self.request_redraw();
-                            return;
-                        }
-                        Some(PaletteHit::Trigger(group)) => {
-                            // Пин: клик открывает без задержки / закрывает
-                            // повторным кликом — стабильность для точного
-                            // наведения, как у menu-button в вебе
-                            self.palette_hover.toggle_trigger(group);
-                            self.request_redraw();
-                            return;
-                        }
-                        Some(PaletteHit::Bar) => {
-                            self.request_redraw();
-                            return;
-                        }
-                        None => {}
-                    }
-                }
-                // Открытое меню канваса (T7): клик по пункту — действие,
-                // клик по поверхности меню (паддинг) — глотается, меню
-                // ОСТАЁТСЯ открытым (Radix: клик внутри поверхности меню
-                // не закрывает), клик мимо — закрыть (dismiss-клик в канвас
-                // не проходит). M5: подменю проверяется ПЕРВЫМ — его колонка
-                // правее базового меню. Hit-test — в логических px (курсор).
-                if self.menu.is_some() {
-                    let in_base = self
-                        .menu_open_rect()
-                        .is_some_and(|rect| point_in_rect(rect, self.cursor));
-                    let in_submenu = self
-                        .menu
-                        .as_ref()
-                        .and_then(|m| m.submenu.as_ref())
-                        .map(submenu_rect)
-                        .is_some_and(|rect| point_in_rect(rect, self.cursor));
-                    // 1. Пункт подменю — действие
-                    if let Some(submenu) = self.menu.as_ref().and_then(|m| m.submenu.as_ref()) {
-                        if let Some(i) = submenu_item_at(submenu, self.cursor) {
-                            let action = submenu.entries[i].action.clone();
-                            self.menu = None;
-                            match action {
-                                crate::ui::SubmenuAction::Insert(widget_id) => {
-                                    self.insert_widget_from_menu(&widget_id);
-                                }
-                                // T21-C (П11): удаление пакета — с подтверждением;
-                                // меню уже закрыто, модальный диалог поверх
-                                crate::ui::SubmenuAction::Remove(widget_id) => {
-                                    let name = self
-                                        .widgets
-                                        .registry
-                                        .get(&widget_id)
-                                        .map(|p| p.manifest.name.clone())
-                                        .unwrap_or(widget_id.clone());
-                                    self.dialog =
-                                        Some(AppDialog::RemovePackage { widget_id, name });
-                                }
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                    }
-                    // 2. Поверхность подменю без пункта — глотается, не закрывает
-                    if in_submenu {
-                        self.request_redraw();
-                        return;
-                    }
-                    // 3. Пункт или паддинг базового меню (список — тот же,
-                    // что в отрисовке: batch-пункты видны только при N≥3)
-                    if let Some(menu) = self.menu.take() {
-                        let items = canvas_menu_visible_items(self.align_menu_visible());
-                        if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
-                            match items[i] {
-                                CanvasMenuItem::NewGroup => {
-                                    let center = self.viewport_center_world();
-                                    let mut group = plan_group_at(&self.scene.canvas, center);
-                                    group.label =
-                                        Some(self.tr(keys::GROUP_DEFAULT_LABEL).to_owned());
-                                    self.insert_group(group);
-                                }
-                                // T23: переключение из меню — рантайм,
-                                // без записи конфига (как и хоткей F)
-                                CanvasMenuItem::FocusMode => self.toggle_focus_mode(),
-                                // FR-004.1: тогл оверлея хоткеев из меню
-                                // (панель «видно/не видно», галочка ✓)
-                                CanvasMenuItem::Hotkeys => {
-                                    self.hotkeys_open = !self.hotkeys_open;
-                                }
-                                // M5 (T20-F): открыть подменю пакетов;
-                                // повторный клик — тоггл (закрыть). Пустой
-                                // список — честная строка «(нет установленных)».
-                                // T21-C: под каждой вставкой — секция
-                                // удаления пакетов (П11)
-                                CanvasMenuItem::Widgets => {
-                                    if menu.submenu.is_some() {
-                                        // Тоггл: подменю уже открыто — закрыть
-                                        self.menu = Some(ContextMenu {
-                                            origin: menu.origin,
-                                            submenu: None,
-                                        });
-                                    } else {
-                                        let submenu_origin = submenu_origin_next_to(menu.origin);
-                                        let mut entries: Vec<SubmenuEntry> = self
-                                            .widgets
-                                            .menu_entries()
-                                            .into_iter()
-                                            .map(|(widget_id, label)| SubmenuEntry {
-                                                action: crate::ui::SubmenuAction::Insert(widget_id),
-                                                label,
-                                            })
-                                            .collect();
-                                        entries.extend(
-                                            self.widgets.menu_entries().into_iter().map(
-                                                |(widget_id, label)| SubmenuEntry {
-                                                    action: crate::ui::SubmenuAction::Remove(
-                                                        widget_id,
-                                                    ),
-                                                    label: self.trf(
-                                                        keys::WIDGETS_REMOVE_ENTRY,
-                                                        &[("{name}", &label)],
-                                                    ),
-                                                },
-                                            ),
-                                        );
-                                        self.menu = Some(ContextMenu {
-                                            origin: menu.origin,
-                                            submenu: Some(Submenu {
-                                                origin: submenu_origin,
-                                                entries,
-                                            }),
-                                        });
-                                    }
-                                }
-                                // T15: переключатель desktop-режима. Вход
-                                // (runtime, без --desktop): перезапуск себя с
-                                // --desktop через single-instance handoff —
-                                // in-place SetParent не работает (Vulkan-swapchain
-                                // не презентует в ребёнка Progman, Renderer
-                                // фиксируется с prefer_dx12 при старте). Выход
-                                // (уже встроены): in-place detach — DX12-рендерер
-                                // в обычном окне презентует, пересоздание не нужно.
-                                // На не-Windows — warn.
-                                CanvasMenuItem::DesktopMode => {
-                                    #[cfg(windows)]
-                                    {
-                                        if self.desktop_mode && self.desktop_hierarchy.is_some() {
-                                            self.leave_desktop();
-                                        } else {
-                                            match self.spawn_desktop_relaunch() {
-                                                Ok(()) => tracing::info!(
-                                                    "перезапуск на --desktop: новый инстанс \
-                                                     закроет текущий (single-instance handoff)"
-                                                ),
-                                                Err(err) => {
-                                                    tracing::warn!(
-                                                        %err,
-                                                        "перезапуск на --desktop не удался"
-                                                    );
-                                                    canvas_shell::desktop::attach::fallback_message_box(&format!(
-                                                        "Не удалось перезапустить CanvasDesk \
-                                                         в режиме десктопа:\n{err}\n\nЗапустите \
-                                                         приложение вручную с флагом --desktop."
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    #[cfg(not(windows))]
-                                    {
-                                        tracing::warn!(
-                                            "desktop-режим не поддерживается на этой платформе"
-                                        );
-                                    }
-                                }
-                                // FR-016 (CP5): тогл оверлея узких мест из меню —
-                                // персистентная настройка (как Ctrl+B)
-                                CanvasMenuItem::BottleneckOverlay => {
-                                    self.toggle_bottleneck_overlay();
-                                }
-                                // FR-017 (CP6): тогл what-if режима из меню
-                                // (эквивалент Ctrl+Shift+I; подмены в
-                                // сценариях переживают выход — Q3b)
-                                CanvasMenuItem::WhatIf => {
-                                    if self.scene.whatif_active {
-                                        self.exit_whatif_mode();
-                                    } else {
-                                        self.enter_whatif_mode();
-                                    }
-                                }
-                                // FR-038 п.16-17 (T-038.5): batch-операции
-                                // выделения — ОДНА undo-операция на все ноды;
-                                // хоткеи не назначаются (F1 HOTKEYS не трогаем,
-                                // кандидат — на приёмку FR-038)
-                                CanvasMenuItem::AlignHorizontal => {
-                                    // ряд: общая ось Y (центры на одной горизонтали)
-                                    self.run_batch_op(BatchOp::Align, Some(AlignAxis::Y));
-                                }
-                                CanvasMenuItem::AlignVertical => {
-                                    // колонна: общая ось X (центры на одной вертикали)
-                                    self.run_batch_op(BatchOp::Align, Some(AlignAxis::X));
-                                }
-                                CanvasMenuItem::DistributeEvenly => {
-                                    // ось раскладки — из контекста выделения
-                                    // (решение T-038.5: одна кнопка, правило в
-                                    // distribute_axis_for)
-                                    self.run_batch_op(BatchOp::Distribute, None);
-                                }
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                        if in_base {
-                            // Паддинг базового меню — меню остаётся открытым
-                            self.menu = Some(menu);
-                            self.request_redraw();
-                            return;
-                        }
-                        // Клик мимо — меню закрыто (take выше), клик глотается
-                        self.request_redraw();
-                        return;
-                    }
-                }
                 // Активное редактирование (T7/T8): клик внутри области
                 // редактирования — в курсор, клик снаружи — commit и обычная
                 // обработка
@@ -10645,12 +10815,18 @@ impl App {
                 // меню канваса hover-порты гасятся — сквозь оверлей
                 // не подсвечивают
                 let world = self.cursor_world();
-                let hovered =
-                    if self.dialog.is_some() || self.search.is_open() || self.menu.is_some() {
+                // FR-052 (U2): hover-порты гасятся, если клик в точке
+                // курсора перехватила экранная поверхность (pick по кадру
+                // реестра) — прежний список dialog/search/menu заменён
+                // правилом (модали/панели не подсвечивают мир под собой)
+                let hovered = {
+                    let frame = ui_registry::build_frame(self);
+                    if HitStack::absorbs(&frame, UiPoint::new(self.cursor[0], self.cursor[1])) {
                         None
                     } else {
                         self.selective_hit(world)
-                    };
+                    }
+                };
                 if hovered != self.hovered {
                     self.hovered = hovered;
                     self.request_redraw();
@@ -12041,79 +12217,75 @@ impl ApplicationHandler<AppEvent> for App {
                 // Ширины подписей оверлея: призраки дропа — по ширине
                 // карточки-призрака (Т9)
                 let mut overlay_widths: Vec<f32> = Vec::new();
-                // FR-049: галерея схем — самая верхняя модальная панель;
-                // иначе — empty-state пустого канваса (US-1)
-                let (mut screen_instances, mut owned_texts) = self.settings_overlay();
+                // FR-052 (U2 PRD-0009): экран собирается в ПОЛОСЫ слоёв
+                // (ui_registry::ScreenBands): порядок полос выводится из
+                // реестра поверхностей (UiLayer по возрастанию — контракт
+                // UiFrame::draw_bands), порядок внутри полосы сохранён
+                // дословно — визуальный порядок канонических состояний
+                // не меняется.
+                let mut screen_bands = ui_registry::ScreenBands::default();
+                {
+                    let (settings_instances, settings_texts) = self.settings_overlay();
+                    screen_bands.push(UiLayer::Panels, settings_instances, settings_texts);
+                }
                 if self.scheme_gallery.open {
                     let (gal_instances, gal_texts) = self.scheme_gallery_overlay();
-                    screen_instances.extend(gal_instances);
-                    owned_texts.extend(gal_texts);
+                    screen_bands.push(UiLayer::Modals, gal_instances, gal_texts);
                 } else if self.empty_state_visible() {
                     let (es_instances, es_texts) = self.empty_state_overlay();
-                    screen_instances.extend(es_instances);
-                    owned_texts.extend(es_texts);
+                    screen_bands.push(UiLayer::Panels, es_instances, es_texts);
                 }
                 // Меню пустого канваса (T7): screen-space, константный размер
                 {
                     let (menu_instances, menu_texts) = self.canvas_menu_overlay();
-                    screen_instances.extend(menu_instances);
-                    owned_texts.extend(menu_texts);
+                    screen_bands.push(UiLayer::Popups, menu_instances, menu_texts);
                 }
                 // FR-027: меню помощи «?» и просмотрщик документации —
                 // поверх канваса (просмотрщик выше меню: открытие закрывает
                 // меню, но порядок безопасен в любом состоянии)
                 {
                     let (help_instances, help_texts) = self.help_menu_overlay();
-                    screen_instances.extend(help_instances);
-                    owned_texts.extend(help_texts);
+                    screen_bands.push(UiLayer::Popups, help_instances, help_texts);
                     let (docs_instances, docs_texts) = self.docs_overlay();
-                    screen_instances.extend(docs_instances);
-                    owned_texts.extend(docs_texts);
+                    screen_bands.push(UiLayer::Popups, docs_instances, docs_texts);
                 }
-                // FR-028: онбординг-карусель — поверх всего канваса
-                // (модальный оверлей первого запуска)
+                // FR-028: онбординг-карусель — модальный оверлей первого запуска
                 {
                     let (onb_instances, onb_texts) = self.onboarding_overlay();
-                    screen_instances.extend(onb_instances);
-                    owned_texts.extend(onb_texts);
+                    screen_bands.push(UiLayer::Modals, onb_instances, onb_texts);
                 }
                 // Палитра выделения (FR-009/FR-010): тулбар под выделением;
                 // rect'ы запоминаются для airspace виджетов
                 let palette_view = self.palette_view();
                 if let Some((lay, groups, open)) = &palette_view {
                     let (pal_instances, pal_texts) = self.palette_overlay(lay, groups, *open);
-                    screen_instances.extend(pal_instances);
-                    owned_texts.extend(pal_texts);
+                    screen_bands.push(UiLayer::Widgets, pal_instances, pal_texts);
                 }
                 // Панель поиска (T14): квады/тексты поверх всего канваса
                 {
                     let (search_instances, search_texts) = self.search_overlay();
-                    screen_instances.extend(search_instances);
-                    owned_texts.extend(search_texts);
+                    screen_bands.push(UiLayer::Panels, search_instances, search_texts);
                 }
                 // FR-018: палитра шаблонов (Ctrl+P) и wheel-меню
-                // (Shift+клик) — поверх канваса
+                // (Shift+клик) — поверх канваса; иконки/хаб wheel — полоса
+                // WorldOverlay (над секторами, под панелями)
                 {
                     let (tpl_instances, tpl_texts) = self.template_panel_overlay();
-                    screen_instances.extend(tpl_instances);
-                    owned_texts.extend(tpl_texts);
+                    screen_bands.push(UiLayer::Panels, tpl_instances, tpl_texts);
                     let (wheel_sectors, wheel_instances, wheel_texts) = self.wheel_overlay();
                     overlay_sectors.extend(wheel_sectors);
-                    screen_instances.extend(wheel_instances);
-                    owned_texts.extend(wheel_texts);
+                    screen_bands.push(UiLayer::WorldOverlay, wheel_instances, wheel_texts);
                 }
                 // FR-021: popup подсказок Numi-ввода — поверх редактора
                 {
                     let (hint_instances, hint_texts) = self.hints_overlay();
-                    screen_instances.extend(hint_instances);
-                    owned_texts.extend(hint_texts);
+                    screen_bands.push(UiLayer::Popups, hint_instances, hint_texts);
                 }
                 // FR-017 (CP6): what-if нижний бар (пилюля/полоса/список/
                 // таблица сравнения) — поверх канваса
                 {
                     let (whatif_instances, whatif_texts) = self.whatif_overlay();
-                    screen_instances.extend(whatif_instances);
-                    owned_texts.extend(whatif_texts);
+                    screen_bands.push(UiLayer::Panels, whatif_instances, whatif_texts);
                 }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме.
@@ -12122,6 +12294,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // скриншота — stage должен быть единственным источником
                 // контента поверх затемнения)
                 if self.main_stage.is_none() {
+                    let mut tooltip_texts: Vec<OwnedScreenText> = Vec::new();
                     if let Some(file) = self.hovered.and_then(|index| {
                         self.scene.canvas.nodes.get(index).and_then(|node| {
                             (node.broken_link == Some(true))
@@ -12134,7 +12307,7 @@ impl ApplicationHandler<AppEvent> for App {
                         let viewport = self.viewport_logical();
                         let origin_x = (self.cursor[0] + 14.0)
                             .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        owned_texts.push(OwnedScreenText {
+                        tooltip_texts.push(OwnedScreenText {
                             text: self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
                             origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
                             width: TOOLTIP_WIDTH,
@@ -12150,7 +12323,7 @@ impl ApplicationHandler<AppEvent> for App {
                         let viewport = self.viewport_logical();
                         let origin_x = (self.cursor[0] + 14.0)
                             .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        owned_texts.push(OwnedScreenText {
+                        tooltip_texts.push(OwnedScreenText {
                             text: hit.message.clone(),
                             origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
                             width: TOOLTIP_WIDTH,
@@ -12159,12 +12332,15 @@ impl ApplicationHandler<AppEvent> for App {
                             align: TextAlign::Left,
                         });
                     }
+                    screen_bands.push(UiLayer::Popups, Vec::new(), tooltip_texts);
                 }
                 // T21: модальный диалог (screen-space): панель + тексты +
                 // кнопки; рендер после битой ссылки — поверх всего канваса
                 if let Some(dialog) = &self.dialog {
                     let [dx, dy, dw, dh] = self.dialog_rect();
-                    screen_instances.push(CardInstance {
+                    let mut dialog_instances: Vec<CardInstance> = Vec::new();
+                    let mut dialog_texts: Vec<OwnedScreenText> = Vec::new();
+                    dialog_instances.push(CardInstance {
                         pos: [dx, dy],
                         size: [dw, dh],
                         fill: canvas_core::tokens::DIALOG_FILL,
@@ -12175,7 +12351,7 @@ impl ApplicationHandler<AppEvent> for App {
                     for (i, (label, _)) in dialog.buttons(self.settings.language).iter().enumerate()
                     {
                         let [bx, by, bw, bh] = buttons[i];
-                        screen_instances.push(CardInstance {
+                        dialog_instances.push(CardInstance {
                             pos: [bx, by],
                             size: [bw, bh],
                             fill: if i == 0 {
@@ -12187,7 +12363,7 @@ impl ApplicationHandler<AppEvent> for App {
                             params: [6.0, 0.0, 0.0, 1.0],
                         });
                         let (btn_box, btn_width) = centered_box(buttons[i], 4.0);
-                        owned_texts.push(OwnedScreenText {
+                        dialog_texts.push(OwnedScreenText {
                             text: (*label).to_owned(),
                             origin: [btn_box[0], buttons[i][1] + 7.0],
                             width: btn_width,
@@ -12196,7 +12372,7 @@ impl ApplicationHandler<AppEvent> for App {
                             align: TextAlign::Center,
                         });
                     }
-                    owned_texts.push(OwnedScreenText {
+                    dialog_texts.push(OwnedScreenText {
                         text: dialog.title(&self.scene.canvas, self.settings.language),
                         origin: [dx + 20.0, dy + 16.0],
                         width: dw - 40.0,
@@ -12204,7 +12380,7 @@ impl ApplicationHandler<AppEvent> for App {
                         color: token_color(canvas_core::tokens::DIALOG_TEXT),
                         align: TextAlign::Left,
                     });
-                    owned_texts.push(OwnedScreenText {
+                    dialog_texts.push(OwnedScreenText {
                         text: dialog.body(self.settings.language),
                         origin: [dx + 20.0, dy + 46.0],
                         width: dw - 40.0,
@@ -12212,6 +12388,7 @@ impl ApplicationHandler<AppEvent> for App {
                         color: token_color(canvas_core::tokens::DIALOG_TEXT_MUTED),
                         align: TextAlign::Left,
                     });
+                    screen_bands.push(UiLayer::Modals, dialog_instances, dialog_texts);
                 }
                 // T21: toast — строка внизу центра, живёт 3 с (T21-A).
                 // Истечение проверяем ДО рендера (без borrow-конфликта)
@@ -12233,14 +12410,18 @@ impl ApplicationHandler<AppEvent> for App {
                     };
                     // CR-015: origin — левый край области (контракт ScreenText):
                     // область [40, viewport−40] по центру окна, текст в её центре.
-                    owned_texts.push(OwnedScreenText {
-                        text: text.clone(),
-                        origin: [40.0, ty],
-                        width: viewport[0] - 80.0,
-                        font_size: 14.0,
-                        color: token_color(canvas_core::tokens::TOAST_TEXT),
-                        align: TextAlign::Center,
-                    });
+                    screen_bands.push(
+                        UiLayer::Toasts,
+                        Vec::new(),
+                        vec![OwnedScreenText {
+                            text: text.clone(),
+                            origin: [40.0, ty],
+                            width: viewport[0] - 80.0,
+                            font_size: 14.0,
+                            color: token_color(canvas_core::tokens::TOAST_TEXT),
+                            align: TextAlign::Center,
+                        }],
+                    );
                 }
                 // FR-042 (E3) + FR-044: main stage — МОДАЛЬНЫЙ проход кадра.
                 // Валидация среза (инвариант 9: фоновые мутации MCP/undo
@@ -12269,15 +12450,33 @@ impl ApplicationHandler<AppEvent> for App {
                     stage_instances = insts;
                     stage_owned_texts = texts;
                 }
-                let screen_texts: Vec<ScreenText> = owned_texts
+                // FR-052 (U2): полосы в порядке отрисовки (слои по возрастанию)
+                // + Owned-тексты → заимствованные ScreenText (заём живёт до
+                // конца кадра, конфликтов с &mut self нет)
+                let bands = screen_bands.finish();
+                let band_screen_texts: Vec<Vec<ScreenText>> = bands
                     .iter()
-                    .map(|t| ScreenText {
-                        text: &t.text,
-                        origin: t.origin,
-                        width: t.width,
-                        font_size: t.font_size,
-                        color: t.color,
-                        align: t.align,
+                    .map(|(_, _, texts)| {
+                        texts
+                            .iter()
+                            .map(|t| ScreenText {
+                                text: &t.text,
+                                origin: t.origin,
+                                width: t.width,
+                                font_size: t.font_size,
+                                color: t.color,
+                                align: t.align,
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let screen_band_refs: Vec<canvas_render::ScreenBand> = bands
+                    .iter()
+                    .zip(&band_screen_texts)
+                    .map(|((layer, instances, _), texts)| canvas_render::ScreenBand {
+                        layer: *layer,
+                        instances,
+                        texts,
                     })
                     .collect();
                 // FR-042/FR-044: тексты main stage — отдельный список (не
@@ -12504,8 +12703,7 @@ impl ApplicationHandler<AppEvent> for App {
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
-                    screen_instances: &screen_instances,
-                    screen_texts: &screen_texts,
+                    screen_bands: &screen_band_refs,
                     stage_instances: &stage_instances,
                     stage_texts: &stage_screen_texts,
                     screen_sectors: &overlay_sectors,
