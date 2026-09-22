@@ -491,19 +491,19 @@ impl SceneState {
             // нод видят значения строк источников (`= $in × 2` от строки).
             // FR-049: + `named` — слоты резолвляют и именованные выходы
             // (fromOutput-рёбра), иначе построчные бейджи приёмников
-            // краснели бы «вход отсутствует» при верном узловом итоге
-            let slots = flow::inbound_slots_with_lines(
+            // краснели бы «вход отсутствует» при верном узловом итоге.
+            // FR-050 этап F: + qualified-карта «Объект.Поле» — формулы
+            // строк резолвят именованные ссылки так же, как узловой итог
+            // (инвариант «строка и узел видят одно окружение»; найдено
+            // миграцией схем на именованные ссылки).
+            let env = flow::line_eval_env(
                 &self.canvas,
                 &node.id,
                 &solutions.outputs,
                 &solutions.lines,
                 &solutions.named,
             );
-            let line_results = if slots.is_empty() {
-                expr::eval_lines(&text)
-            } else {
-                expr::eval_lines_in(&text, &ExprEnv::with_inbound(slots))
-            };
+            let line_results = expr::eval_lines_in(&text, &env);
             if line_results.iter().any(Option::is_some) {
                 self.expr_line_results.insert(node.id.clone(), line_results);
             }

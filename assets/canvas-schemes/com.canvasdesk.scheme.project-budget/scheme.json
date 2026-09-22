@@ -238,14 +238,14 @@
     "fromNode": "payment",
     "toNode": "cash",
     "flowKind": "value",
-    "fromOutput": "advance"
+    "fromLine": 3
    },
    {
     "id": "e12",
     "fromNode": "payment",
     "toNode": "cash",
     "flowKind": "value",
-    "fromOutput": "final"
+    "fromLine": 4
    }
   ]
  }
