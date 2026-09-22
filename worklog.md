@@ -3614,3 +3614,28 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Далее:** демо владельцу (Q6 — «панель + подсветка» готовы; замер
   G1/G2 на демо-сценарии юнит-экономики); X3 — what-if из дерева F-6
   (подмена листа → WhatIfOverrides, дельты, сценарии, Apply).
+
+
+## 2026-09-22 — FR-052: PRD-0009 U2 — интеграция каркаса canvas-ui (единый диспетчер)
+
+- **Агент:** Super Z (сессия web-e10bc589, приказ владельца «Продолжи u2»)
+- **Задача:** реализация этапа U2 PRD-0009 (§13): каркас canvas-ui (FR-051) — единственный диспетчер экрана; оформление FR-052 по cr-template.
+
+### Work Log
+- Восстановление окружения (клон, rustup 1.98.1, wasmtime 36.0.1, wasm-таргеты).
+- FR-052 (ffff8d5): постановка U2 — ScreenBand/полосы, ui_registry, head-диспетчеры, wheel/hover из кадра; нормализованные дельты зафиксированы; index-cr-fr → FR-053; PRD-0009 статус.
+- canvas-render (2e03eeb): `ScreenBand {layer, instances, texts}`; `FrameOverlay.screen_bands` (плоские screen_instances/screen_texts удалены); исполнение полос: квад-диапазон полосы → текст-группа полосы (`band_group/stage_group`, пул растёт динамически); миникарта/stage после полос; +внутренняя зависимость canvas-ui (0 внешних — G7); 7 smoke-тестов переведены на screen_bands.
+- canvas-app: модуль `app/ui_registry` — 20 идентификаторов поверхностей; `build_registry` (только активные; порядок регистрации = обратный Esc-лестнице 8143–8232 дословно; head-поверхности над stage); `build_frame_at` (визуальный порядок кадра bottom→top; hit-rect'ы из тех же layout-функций, что у ввода/отрисовки; whatif HideBelow 900×600); `key_owner` (верх esc_stack → Onboarding/Gallery/Editor/Search/TemplatePanel/Dialog/Explain/Stage/Canvas); `dispatch_esc` (2-фазные help_menu/settings); `ScreenBands` (сборка экрана в полосы; внутри полосы — прежний draw-порядок дословно).
+- on_left_button: head-диспетчер `HitStack::pick` — Element → `dispatch_surface_click` (тела 18 веток перенесены дословно в click_*), Backdrop → `dispatch_surface_backdrop` (контракт поверхности: gallery/search/settings/docs/help/stage/menu закрывают; onboarding/dialog глотают), None → `dismiss_transients_on_miss` (фокус палитры, flyout, hover-intent) → canvas-цепочка (мир L0) без изменений.
+- on_key: head через `key_owner` (Stage закрывается любой клавишей — фикс противоречия 8222; TemplatePanel с гейтом фокуса 8036), Esc-лестница = `registry.esc_stack()` + `dispatch_esc` (дословный порядок прежней 8143–8232); NUMI-хоткеи/Ctrl+F/P/T/… не тронуты (Q4).
+- wheel/pinch: `cursor_over_screen_surface` = `HitStack::absorbs` по кадру (ручной список rect'ов удалён); hover-глушение = pick по кадру (список dialog/search/menu → правило).
+- TDD: 11 тестов ui_registry — pick-матрица на реальных адаптерах (галерея/онбординг backdrop, empty-state Capture, whatif hide-below, toast Passive), esc_stack == прежняя лестница, key_owner, полосы по слоям; заглушка App без окна (Noop-бэкенды).
+- Слияние параллельной волны: FR-050 A/B (без конфликтов) и PRD-0007 X2 (5 ганков в app.rs) — окно проверки цепочки (explain) интегрировано ЧЕРЕЗ реестр U2: поверхность explain (L5/Block/scope, hit-rect = окно), KeyOwner::Explain (Esc — закрыть, прочие — в лестницу: семантика X2 сохранена), click → on_explain_click, Backdrop → close_explain, esc-диспетчер; фолбэк-триггер полосы D — в canvas-цепочке; explain_frame/hover_pill — модальный проход stage-кадра. X2-код не переписывался — только декларация + 4 диспетчерныхarm.
+- Гейты на объединённом коде: fmt ✓, clippy -D warnings ✓, test --workspace 1448 ✓ (48 бинарей; 11 новых), wasm_gate ✓, mcp_wasm_gate ✓ (wasmtime 36.0.1).
+- Слияние: merge --no-ff 03bd216 (push был отклонён — remote ушёл вперёд; merge origin/main f1d5703 → f7008e4 с разрешением 5 конфликтов app.rs, обе стороны сохранены); push main → CI по merge SHA f7008e4 — **ПОЛНОСТЬЮ ЗЕЛЁНЫЙ (12/12 check-runs: gates ×3, artifacts ×3, build, wasm-check, web, licenses, deploy)**.
+
+### Stage Summary
+- **Единый диспетчер работает**: добавление поверхности = 1 декларация + 1 hit-rect + 1 arm (X2-интеграция — живое доказательство, G1-прекурсор).
+- Draw-порядок и pick-порядок выводятся из реестра/кадра; порядок веток больше не источник истины.
+- Нормализованные дельты (попапы над панелями, stage-any-key, минимапа-клик) зафиксированы в FR-052 §Changes.
+- Далее: U3 — TextMeasurer + токены слотов состояний + layout-примитивы + пилоты (галерея схем, what-if бар); U4 — kit+DebugOverlay; U5 — миграция остальных поверхностей, лестница on_key целиком, линты CI, docs/ui-kit.md.
