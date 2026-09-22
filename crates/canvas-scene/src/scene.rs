@@ -272,6 +272,10 @@ pub struct SceneState {
     pub flow_baseline: flow::FlowSolutions,
     /// FR-017: пересчёт с подменами активного сценария — видимый канвасом.
     pub flow_active: flow::FlowSolutions,
+    /// PRD-0007 (AC-2.4): ошибка цикла последнего пересчёта — explain-дерево
+    /// строится в режиме [`canvas_core::LineageFlow::Cycled`] (топология без
+    /// значений). None — пересчёт прошёл. Runtime-поле, не сериализуется.
+    pub flow_cycle: Option<flow::CycleError>,
     /// FR-017: протухшие подмены активного сценария (нода/строка удалены,
     /// строка стала прозой) — маркеры в панели (гипотеза Q5c).
     pub whatif_stale: Vec<StaleOverride>,
@@ -281,6 +285,13 @@ pub struct SceneState {
     pub whatif_nodes: HashMap<String, WhatIfNode>,
     /// ADR-0012: viewport-зеркало MCP (см. [`Viewport`]).
     pub viewport: Viewport,
+    /// PRD-0007 (FR-048 X2, AC-3.3): монотонный счётчик ревизий модели —
+    /// увеличивается в [`SceneState::recompute_flow`] (единая точка
+    /// синхронизации мутаций). Explain-оверлей запоминает ревизию снапшота
+    /// и сравнением показывает чип «Данные изменены»: правки канваса, MCP,
+    /// перезапись файла, подмена листа, Apply — все проходят через
+    /// пересчёт. В `.canvas` не пишется (runtime).
+    pub revision: u64,
     /// M8/W3 (wasm-port §3.2/§6): хранилище `.canvas` как сервис — нативно
     /// `FsCanvasStorage` (диск + `.bak`, сегодняшнее поведение), web (W6) —
     /// FS Access/OPFS через `with_storage`.
@@ -319,10 +330,12 @@ impl SceneState {
             active_scenario: None,
             flow_baseline: flow::FlowSolutions::default(),
             flow_active: flow::FlowSolutions::default(),
+            flow_cycle: None,
             whatif_stale: Vec::new(),
             whatif_nodes: HashMap::new(),
             analysis: AnalysisState::new(),
             viewport: Viewport::default(),
+            revision: 0,
             storage,
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
@@ -340,6 +353,10 @@ impl SceneState {
     /// текста/формулы, рёбра, удаление нод, undo) — propagator чистый,
     /// полный пересчёт ≤1000 нод <10 мс (SPEC §6.3).
     pub fn recompute_flow(&mut self) {
+        // PRD-0007 (AC-3.3): любая мутация модели — новая ревизия (обе ветки
+        // выхода: цикл и штатная); кэш explain-оверлея сравнивает её со
+        // своей, чтобы показать чип «Данные изменены».
+        self.revision = self.revision.wrapping_add(1);
         // FR-017 (гипотеза Q9): дельты — против ЧИСТОГО базового пересчёта
         // (не снапшота при входе): любая мутация канваса пересчитывает обе
         // карты заново, дельты консистентны текущему `.canvas`.
@@ -353,6 +370,7 @@ impl SceneState {
                     tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
                     self.flow_baseline = flow::FlowSolutions::default();
                     self.flow_active = flow::FlowSolutions::default();
+                    self.flow_cycle = Some(cycle);
                     self.whatif_stale = Vec::new();
                     self.whatif_nodes.clear();
                     self.recompute_all_expr();
@@ -387,6 +405,8 @@ impl SceneState {
         };
         self.flow_baseline = baseline;
         self.flow_active = active;
+        // PRD-0007 (AC-2.4): цикл кончился — explain строится по значениям.
+        self.flow_cycle = None;
         self.whatif_stale = stale;
         let solutions = &self.flow_active;
         self.expr_results = outputs_to_results(&solutions.outputs);
