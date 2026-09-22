@@ -85,6 +85,13 @@ pub mod keys {
     pub const STAGE_BUNDLE_TITLE: &str = "stage.bundle_title";
     /// FR-044: нижняя подсказка main stage с жестами закрытия/выделения.
     pub const STAGE_FOOT_HINT: &str = "stage.foot_hint";
+    /// FR-044 Р-4: панель «Как считается» — заголовки групп, unmapped-строка,
+    /// счётчик внешних входов (Р-8), индикатор усечения (Q2 v1).
+    pub const STAGE_CALC_VARS: &str = "stage.calc_vars";
+    pub const STAGE_CALC_FORMULAS: &str = "stage.calc_formulas";
+    pub const STAGE_CALC_UNMAPPED: &str = "stage.calc_unmapped";
+    pub const STAGE_CALC_EXT: &str = "stage.calc_ext";
+    pub const STAGE_CALC_MORE: &str = "stage.calc_more";
 
     // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
     /// Заголовок окна проверки.
@@ -1003,6 +1010,12 @@ const RU: &[(&str, &str)] = &[
         keys::STAGE_FOOT_HINT,
         "Esc или клик по затемнённому фону — закрыть · клик по связи — выделить",
     ),
+    // FR-044 Р-4/Р-5/Р-8: панель «Как считается» и подсветка зависимостей
+    (keys::STAGE_CALC_VARS, "Переменные · входящие значения"),
+    (keys::STAGE_CALC_FORMULAS, "Расчёт · формулы"),
+    (keys::STAGE_CALC_UNMAPPED, "не подставлено"),
+    (keys::STAGE_CALC_EXT, "+{n} внешн. вход(а/ов)"),
+    (keys::STAGE_CALC_MORE, "… ещё {n}"),
     // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
     (
         keys::ROW_EXPLAIN_DEPTH,
@@ -1589,6 +1602,12 @@ const EN: &[(&str, &str)] = &[
         keys::STAGE_FOOT_HINT,
         "Esc or click the dimmed background — close · click an edge — select",
     ),
+    // FR-044 Р-4/Р-5/Р-8: calculation panel and dependency focus
+    (keys::STAGE_CALC_VARS, "Variables · incoming values"),
+    (keys::STAGE_CALC_FORMULAS, "Calculation · formulas"),
+    (keys::STAGE_CALC_UNMAPPED, "not mapped"),
+    (keys::STAGE_CALC_EXT, "+{n} external input(s)"),
+    (keys::STAGE_CALC_MORE, "… {n} more"),
     // --- PRD-0007 (FR-048 X2): calculation chain check window ---
     (keys::ROW_EXPLAIN_DEPTH, "Calculation chain depth"),
     (

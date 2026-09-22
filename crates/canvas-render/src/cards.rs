@@ -1177,6 +1177,20 @@ pub fn build_stage_edge_instances(
     selected: Option<usize>,
     hovered: Option<usize>,
 ) -> Vec<CardInstance> {
+    build_stage_edge_instances_with_alpha(slice, lines, weight, selected, hovered, |_| 1.0)
+}
+
+/// FR-044 Р-5: [`build_stage_edge_instances`] с per-edge альфой —
+/// подсветка зависимостей приглушает рёбра вне множества фокуса
+/// (`alpha(index)` < 1 — деградация прозрачности, паттерн `dim_factor`).
+pub fn build_stage_edge_instances_with_alpha(
+    slice: &canvas_core::Canvas,
+    lines: &[canvas_core::StageEdgeLine],
+    weight: usize,
+    selected: Option<usize>,
+    hovered: Option<usize>,
+    alpha: impl Fn(usize) -> f32,
+) -> Vec<CardInstance> {
     let mut out = Vec::new();
     let mut d = canvas_core::bundle_thickness(weight.max(1));
     if selected.is_some() {
@@ -1190,7 +1204,7 @@ pub fn build_stage_edge_instances(
             continue;
         };
         let points = &line.points;
-        let fill = if selected == Some(index) || hovered == Some(index) {
+        let mut fill = if selected == Some(index) || hovered == Some(index) {
             SELECTION_BORDER
         } else {
             parse_color_raw(edge.color.as_deref().unwrap_or_default()).unwrap_or(
@@ -1201,6 +1215,7 @@ pub fn build_stage_edge_instances(
                 },
             )
         };
+        fill[3] *= alpha(index);
         let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
         polyline_dots(points, style, d, fill, true, &mut out);
     }
