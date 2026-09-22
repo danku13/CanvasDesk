@@ -111,8 +111,18 @@ pub mod keys {
     pub const EXPLAIN_ADDR_OUTPUT: &str = "explain.addr_output";
     /// X3 (AC-4.1): кнопка «Изменить» на листе дерева — подмена what-if.
     pub const EXPLAIN_EDIT: &str = "explain.edit";
-    /// Подсказка пустого inline-поля подмены.
+    /// Подсказка inline-поля подмены (AC-4.1).
     pub const EXPLAIN_EDIT_HINT: &str = "explain.edit_hint";
+    /// X5 (AC-6.1): тумблер режима защиты — вход (шапка окна).
+    pub const EXPLAIN_DEFENSE: &str = "explain.defense";
+    /// X5 (AC-6.4): тумблер в защите — выход в обычный вид окна.
+    pub const EXPLAIN_DEFENSE_EXIT: &str = "explain.defense_exit";
+    /// X5 (AC-6.3): кнопка шага раскрытия (следующий уровень).
+    pub const EXPLAIN_DEFENSE_STEP: &str = "explain.defense_step";
+    /// X5 (AC-6.3): кнопка «Раскрыть всё».
+    pub const EXPLAIN_DEFENSE_ALL: &str = "explain.defense_all";
+    /// X5: подсказка футера защиты (пробел/клик — шаг, Esc — выход).
+    pub const EXPLAIN_DEFENSE_HINT: &str = "explain.defense_hint";
     /// Настройка FR-039 (AC-2.3): лимит глубины авто-раскрытия дерева.
     pub const ROW_EXPLAIN_DEPTH: &str = "settings.row.explain_depth";
     pub const DESC_EXPLAIN_DEPTH: &str = "settings.desc.explain_depth";
@@ -995,6 +1005,15 @@ const RU: &[(&str, &str)] = &[
     // X3 (AC-4.1): кнопка подмены листа и подсказка inline-поля
     (keys::EXPLAIN_EDIT, "Изменить"),
     (keys::EXPLAIN_EDIT_HINT, "Новое значение — Enter применит"),
+    // X5 (AC-6.1–6.4): режим защиты — состояние окна проверки
+    (keys::EXPLAIN_DEFENSE, "Режим защиты"),
+    (keys::EXPLAIN_DEFENSE_EXIT, "Обычный вид"),
+    (keys::EXPLAIN_DEFENSE_STEP, "Раскрыть уровень"),
+    (keys::EXPLAIN_DEFENSE_ALL, "Раскрыть всё"),
+    (
+        keys::EXPLAIN_DEFENSE_HINT,
+        "Пробел/клик по узлу — следующий уровень · Esc — обычный вид",
+    ),
     (
         keys::EXPLAIN_META,
         "Цепочка расчёта цифры «{title}» · Esc — закрыть",
@@ -1558,6 +1577,15 @@ const EN: &[(&str, &str)] = &[
     // X3 (AC-4.1): leaf override button and inline-field hint
     (keys::EXPLAIN_EDIT, "Edit"),
     (keys::EXPLAIN_EDIT_HINT, "New value — Enter to apply"),
+    // X5 (AC-6.1–6.4): defense mode — a state of the check window
+    (keys::EXPLAIN_DEFENSE, "Defense mode"),
+    (keys::EXPLAIN_DEFENSE_EXIT, "Normal view"),
+    (keys::EXPLAIN_DEFENSE_STEP, "Reveal level"),
+    (keys::EXPLAIN_DEFENSE_ALL, "Reveal all"),
+    (
+        keys::EXPLAIN_DEFENSE_HINT,
+        "Space/click a node — next level · Esc — normal view",
+    ),
     (
         keys::EXPLAIN_META,
         "Calculation chain for “{title}” · Esc — close",

@@ -4075,3 +4075,49 @@ docs/change-requests/index-cr-fr.md.
 **Осталось:** этап F — миграция формул 6 схем FR-049 на именованные
 ссылки (Н6+Р-6; toParam-адресация рёбер уже в контенте v2 59e6fe9) +
 user-docs (calculations.md, hotkeys.md, interface.md).
+
+## 2026-09-22 — PRD-0007: X5 выполнено — режим защиты F-8 (состояние Defense)
+
+- **Синтронизация с origin/main:** локальная сессия обнаружила
+  параллельную реализацию X0–X4 upstream (9cd55df, 29a5ea5, d5b6966,
+  5728b9e — lineage/explain/what-if/автосвязь; локальный дубль этих
+  этапов сброшен, `git reset --hard origin/main` на 3dfca46) — работа
+  продолжена с единственного оставшегося этапа X5.
+- **Модель Defense (`explain_ui.rs`, +6 тестов):** `enter_defense(auto_depth)`/
+  `exit_defense` — Ready ↔ Defense одним действием; вид Ready (путь
+  крошек + ручные раскрытия) запоминается и восстанавливается по Esc
+  (AC-6.4); снапшот дерева не меняется (F-5); `defense_reveal` — число
+  видимых уровней от корня вида (синк с лимитом FR-039 при входе,
+  0 = без ограничения — семантика `visibility`); `defense_step`/`defense_reveal_all`
+  (AC-6.3); `defense_fit_scale` — укрупнение ×1.5 с вписыванием (AC-6.2,
+  прототип v4: потолок `DEFENSE_SCALE_MAX = 1.5` против fit ≤ 1.0 обычного
+  вида); геометрия `defense_toggle_rect` (шапка, левее чипа Stale) и
+  `defense_step_rect`/`defense_all_rect` (футер); `has_hidden` — гвард шага.
+  Проза (AC-6.2) скрыта структурно — lineage собирается только из
+  формульных строк; шаги — runtime-состояние, не сериализуются (AC-6.3).
+- **Интеграция (`app.rs`):** единая точка вида `explain_view(&state, body)`
+  — рендер и все hit-тесты окна (узлы/«Изменить»/крошки) используют одну
+  геометрию; в защите — `defense_reveal` + `defense_fit_scale`. Тумблер
+  «Режим защиты»/«Обычный вид» в шапке (Q4: без глобального хоткея — v2);
+  футер защиты — «Раскрыть уровень» (гаснет, когда скрытых уровней нет)
+  и «Раскрыть всё» + подсказка; клавиатура KeyOwner::Explain: Space —
+  шаг ТОЛЬКО в защите (вне защиты клавиша идёт по лестнице как раньше),
+  Esc — двухступенчатый выход (Defense → Ready → Closed); ✕/клик по фону
+  в защите — полное закрытие (§6.4); крошки в защите глушатся (вид
+  зафиксирован на корне); открытие main stage в защите глушится (§6.5 —
+  другие оверлеи недоступны, канвас без следов); AC-4.4 — inline-поле
+  подмены листа работает и из защиты (вход в защиту закрывает открытое
+  поле — одно за раз).
+- **i18n:** +5 ключей RU/EN (`explain.defense`, `explain.defense_exit`,
+  `explain.defense_step`, `explain.defense_all`, `explain.defense_hint`).
+- **Тесты:** explain_ui 18 lib-тестов (+6 defense: roundtrip вход/выход
+  AC-6.1/6.4, шаги/«Раскрыть всё» AC-6.3, `has_hidden`, fit-потолок ×1.5
+  AC-6.2, геометрия кнопок, подмена из защиты AC-4.4).
+- **Гейты:** fmt ✓; clippy --workspace -D warnings ✓; cargo test
+  --workspace **1542 passed / 0 failed** ✓; token_lint ✓. wasm_gate локально
+  не гонялся (диск окружения 9.9 ГБ — полный debug-билд не помещается,
+  тесты с `CARGO_PROFILE_*_DEBUG=0`) — CI прогонит wasm-check/mcp-wasm на push.
+- **Документы:** PRD-0007 §13 (X5 — выполнено) и §16; FR-048 — статус
+  «X0–X5 выполнены» + changelog. Осталось X6: интеграция F-10 аудит,
+  MCP `explain_number` (F-9 must), доки §14 (node/edge/SPEC/user-docs/
+  ACCEPTANCE), приёмка §15 (G1–G7), демо-гейт Q6.

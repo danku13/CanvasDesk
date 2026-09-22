@@ -9541,7 +9541,43 @@ impl App {
                         }
                         return true; // прочие клавиши глотаются, пока поле открыто
                     }
+                    // X5 (AC-6.3): Space в защите — следующий уровень
+                    // (вне защиты клавиша идёт по лестнице, как раньше)
+                    let defense_now = self.explain.as_ref().is_some_and(|s| s.is_defense());
+                    if defense_now
+                        && event.logical_key == Key::Named(NamedKey::Space)
+                        && !event.repeat
+                    {
+                        // шаг имеет смысл, только если есть скрытые узлы
+                        let win = explain_ui::window_rect(self.viewport_logical());
+                        let body = explain_ui::body_rect(win);
+                        let can_step = self
+                            .explain
+                            .as_ref()
+                            .map(|state| {
+                                let (vis, _, _) = self.explain_view(state, body);
+                                explain_ui::has_hidden(&vis)
+                            })
+                            .unwrap_or(false);
+                        if can_step {
+                            if let Some(state) = self.explain.as_mut() {
+                                state.defense_step();
+                            }
+                        }
+                        self.request_redraw();
+                        return true;
+                    }
                     if event.logical_key == Key::Named(NamedKey::Escape) && !event.repeat {
+                        // X5 (AC-6.4): в защите Esc — выход в обычный вид
+                        // окна (Defense → Ready); полное закрытие — второй
+                        // Esc (Ready → Closed, ветка ниже)
+                        if self.explain.as_ref().is_some_and(|s| s.is_defense()) {
+                            if let Some(state) = self.explain.as_mut() {
+                                state.exit_defense();
+                            }
+                            self.request_redraw();
+                            return true;
+                        }
                         self.close_explain();
                         self.request_redraw();
                         return true;
@@ -10469,6 +10505,11 @@ impl App {
     /// false — одиночное ребро/агрегация выключена (поведение прежнее).
     fn try_open_main_stage(&mut self, edge_index: usize) -> bool {
         if !self.settings.edge_aggregation {
+            return false;
+        }
+        // X5 (§6.5): в режиме защиты другие оверлеи недоступны —
+        // открытие stage глушится (канвас не изменяется, AC-6.4)
+        if self.explain.as_ref().is_some_and(|s| s.is_defense()) {
             return false;
         }
         match MainStageState::open(&self.scene.canvas, &self.scene.bundles, edge_index) {
@@ -12281,10 +12322,36 @@ impl App {
     /// Клик при открытом окне (§6.4): ✕/чип «Данные изменены»/мета-крошки/
     /// узлы дерева; клик по фону (мимо окна) — закрытие, внутри окна мимо
     /// элементов — глотается (канвас клик не получает).
+    /// Вид/лейаут/масштаб кадра окна проверки — единые для рендера и
+    /// hit-тестов (детерминизм рендер/ввод). X5: в режиме защиты видимость
+    /// управляется `defense_reveal` (шаги AC-6.3), масштаб — укрупнение
+    /// ×1.5 с вписыванием (AC-6.2) вместо обычного fit ≤ 1.0.
+    fn explain_view(
+        &self,
+        state: &ExplainState,
+        body: [f32; 4],
+    ) -> (explain_ui::Visibility, explain_ui::TreeLayout, f32) {
+        let tree = state.tree().expect("Ready: дерево есть");
+        let auto = if state.is_defense() {
+            state.defense_reveal
+        } else {
+            self.settings.explain_depth_limit
+        };
+        let vis = explain_ui::visibility(tree, state.view_root(), auto, &state.expanded);
+        let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
+        let scale = if state.is_defense() {
+            explain_ui::defense_fit_scale(layout.bounds, body)
+        } else {
+            explain_ui::fit_scale(layout.bounds, body)
+        };
+        (vis, layout, scale)
+    }
+
     fn on_explain_click(&mut self) {
         let viewport = self.viewport_logical();
         let win = explain_ui::window_rect(viewport);
-        // ✕ — закрыть (снапшот → сессионный кэш)
+        // ✕ — закрыть (снапшот → сессионный кэш; работает и в защите —
+        // Defense → Closed, §6.4)
         if point_in_rect(explain_ui::close_rect(win), self.cursor) {
             self.close_explain();
             return;
@@ -12319,8 +12386,50 @@ impl App {
                 self.open_explain(root);
                 return;
             }
-            // Мета-строка с крошками вида (X2: клик — возврат к корню)
-            if point_in_rect(explain_ui::meta_rect(win), self.cursor) {
+            // X5 (AC-6.1): тумблер режима защиты — вход/выход одним действием
+            if point_in_rect(explain_ui::defense_toggle_rect(win), self.cursor) {
+                let depth = self.settings.explain_depth_limit;
+                if let Some(state) = self.explain.as_mut() {
+                    if state.is_defense() {
+                        state.exit_defense();
+                    } else {
+                        state.enter_defense(depth);
+                    }
+                }
+                self.request_redraw();
+                return;
+            }
+            // X5 (AC-6.3): кнопки пошагового раскрытия в защите
+            let defense_now = self.explain.as_ref().is_some_and(|s| s.is_defense());
+            if defense_now && point_in_rect(explain_ui::defense_step_rect(win), self.cursor) {
+                // Шаг имеет смысл, только если есть скрытые уровни
+                let body = explain_ui::body_rect(win);
+                let can_step = self
+                    .explain
+                    .as_ref()
+                    .map(|state| {
+                        let (vis, _, _) = self.explain_view(state, body);
+                        explain_ui::has_hidden(&vis)
+                    })
+                    .unwrap_or(false);
+                if can_step {
+                    if let Some(state) = self.explain.as_mut() {
+                        state.defense_step();
+                    }
+                }
+                self.request_redraw();
+                return;
+            }
+            if defense_now && point_in_rect(explain_ui::defense_all_rect(win), self.cursor) {
+                if let Some(state) = self.explain.as_mut() {
+                    state.defense_reveal_all();
+                }
+                self.request_redraw();
+                return;
+            }
+            // Мета-строка с крошками вида (X2: клик — возврат к корню);
+            // в защите крошки глушатся (вид зафиксирован на корне)
+            if !defense_now && point_in_rect(explain_ui::meta_rect(win), self.cursor) {
                 if let Some(state) = self.explain.as_mut() {
                     state.click_crumb(0);
                 }
@@ -12331,17 +12440,11 @@ impl App {
             // что в рендере — детерминизм рендер/ввод)
             let body = explain_ui::body_rect(win);
             // X3 (AC-4.1): кнопка «Изменить» на листе — приоритет перед
-            // кликом по карточке (кнопка поверх)
+            // кликом по карточке (кнопка поверх); работает и в защите
+            // (AC-4.4 — подмена из режима защиты)
             let edit_hit = self.explain.as_ref().and_then(|state| {
+                let (_, layout, scale) = self.explain_view(state, body);
                 let tree = state.tree()?;
-                let vis = explain_ui::visibility(
-                    tree,
-                    state.view_root(),
-                    self.settings.explain_depth_limit,
-                    &state.expanded,
-                );
-                let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
-                let scale = explain_ui::fit_scale(layout.bounds, body);
                 explain_ui::edit_at(tree, &layout, scale, body, self.cursor)
             });
             if let Some(idx) = edit_hit {
@@ -12356,32 +12459,27 @@ impl App {
                 return;
             }
             let hit = self.explain.as_ref().and_then(|state| {
-                let tree = state.tree()?;
-                let vis = explain_ui::visibility(
-                    tree,
-                    state.view_root(),
-                    self.settings.explain_depth_limit,
-                    &state.expanded,
-                );
-                let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
-                let scale = explain_ui::fit_scale(layout.bounds, body);
+                let (_, layout, scale) = self.explain_view(state, body);
                 explain_ui::node_at(&layout, scale, body, self.cursor)
             });
             if let Some(idx) = hit {
+                // Вид до мут-бейлка — hit-тест и клик используют одну
+                // геометрию (explain_view — чистая функция)
+                let vis = self.explain.as_ref().map(|state| {
+                    let (vis, _, _) = self.explain_view(state, body);
+                    vis
+                });
                 if let Some(state) = self.explain.as_mut() {
-                    let vis = explain_ui::visibility(
-                        state.tree().expect("дерево есть"),
-                        state.view_root(),
-                        self.settings.explain_depth_limit,
-                        &state.expanded,
-                    );
-                    let _click = state.click_node(idx, &vis);
+                    if let Some(vis) = vis {
+                        let _click = state.click_node(idx, &vis);
+                    }
                 }
                 self.request_redraw();
                 return;
             }
         }
-        // Клик по фону (мимо окна) — закрытие (§6.4 Ready/Stale → Closed)
+        // Клик по фону (мимо окна) — закрытие (§6.4 Ready/Stale/Defense →
+        // Closed по клику по фону; AC-6.4)
         if !point_in_rect(win, self.cursor) {
             self.close_explain();
             return;
@@ -12558,14 +12656,9 @@ impl App {
                 return (quads, texts);
             };
             let body = explain_ui::body_rect(win);
-            let vis = explain_ui::visibility(
-                tree,
-                state.view_root(),
-                self.settings.explain_depth_limit,
-                &state.expanded,
-            );
-            let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
-            let scale = explain_ui::fit_scale(layout.bounds, body);
+            // X5: вид/масштаб едины с hit-тестами (explain_view); в защите —
+            // defense_reveal + укрупнение ×1.5 (AC-6.2/6.3)
+            let (vis, layout, scale) = self.explain_view(state, body);
             let local = |x: f32, y: f32| {
                 [
                     body[0] + explain_ui::BODY_PAD + x * scale,
@@ -12612,6 +12705,94 @@ impl App {
                 color: palette.quote,
                 align: TextAlign::Left,
             });
+            // X5 (AC-6.1): тумблер режима защиты в шапке — одним действием
+            {
+                let toggle = explain_ui::defense_toggle_rect(win);
+                let hovered = point_in_rect(toggle, self.cursor);
+                let on = state.is_defense();
+                quads.push(screen_rect_quad(
+                    camera,
+                    viewport,
+                    toggle,
+                    if on || hovered {
+                        palette.accent
+                    } else {
+                        palette.card_fill
+                    },
+                    if on { [0.0; 4] } else { palette.palette_border },
+                    14.0,
+                ));
+                texts.push(OwnedScreenText {
+                    text: self
+                        .tr(if on {
+                            keys::EXPLAIN_DEFENSE_EXIT
+                        } else {
+                            keys::EXPLAIN_DEFENSE
+                        })
+                        .to_owned(),
+                    origin: [toggle[0], toggle[1] + 5.0],
+                    width: toggle[2],
+                    font_size: 11.5,
+                    color: if on || hovered {
+                        Color::rgb(255, 255, 255)
+                    } else {
+                        palette.body
+                    },
+                    align: TextAlign::Center,
+                });
+            }
+            // X5 (AC-6.3): кнопки шага и «Раскрыть всё» + подсказка — футер
+            // защиты; крошки в защите глушатся (вид на корне)
+            if state.is_defense() {
+                let can_step = explain_ui::has_hidden(&vis);
+                let step = explain_ui::defense_step_rect(win);
+                let all = explain_ui::defense_all_rect(win);
+                let buttons = [
+                    (step, keys::EXPLAIN_DEFENSE_STEP, can_step),
+                    (all, keys::EXPLAIN_DEFENSE_ALL, true),
+                ];
+                for (rect, key, active) in buttons {
+                    let hovered = point_in_rect(rect, self.cursor);
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        rect,
+                        if hovered && active {
+                            palette.accent
+                        } else {
+                            palette.card_fill
+                        },
+                        if active {
+                            palette.palette_border
+                        } else {
+                            [0.0; 4]
+                        },
+                        6.0,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: self.tr(key).to_owned(),
+                        origin: [rect[0], rect[1] + 5.5],
+                        width: rect[2],
+                        font_size: 11.0,
+                        color: if hovered && active {
+                            Color::rgb(255, 255, 255)
+                        } else if active {
+                            palette.body
+                        } else {
+                            palette.quote
+                        },
+                        align: TextAlign::Center,
+                    });
+                }
+                texts.push(OwnedScreenText {
+                    text: self.tr(keys::EXPLAIN_DEFENSE_HINT).to_owned(),
+                    origin: [win[0] + 320.0, win[1] + win[3] - 27.0],
+                    width: (win[2] - 480.0).max(120.0),
+                    font_size: 10.5,
+                    color: palette.quote,
+                    align: TextAlign::Center,
+                });
+            }
             // Карточки узлов (F-3: значение + формула + адрес)
             for laid in &layout.nodes {
                 let node = &tree.nodes[laid.idx];
