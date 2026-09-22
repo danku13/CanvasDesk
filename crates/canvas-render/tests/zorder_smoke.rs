@@ -84,7 +84,7 @@ fn headless_text_under_covering_card() {
             editing: None,
             editing_buffer: None,
             overlay_texts: &[],
-            screen_texts: &[],
+            screen_bands: &[],
             zplan: &zplan,
             edge_labels: &[],
             focus: canvas_render::cards::FocusView::EMPTY,
