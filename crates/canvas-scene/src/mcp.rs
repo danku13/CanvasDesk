@@ -233,6 +233,20 @@ pub(crate) fn whatif_delta_rows(scene: &SceneState) -> Vec<WhatIfDeltaRow> {
     rows
 }
 
+/// Род узла lineage-дерева — стабильные строки MCP-контракта (PRD-0007 §6.6,
+/// окно проверки показывает те же роды).
+fn lineage_kind_str(kind: canvas_core::LineageNodeKind) -> &'static str {
+    use canvas_core::LineageNodeKind as K;
+    match kind {
+        K::Calc => "calc",
+        K::Leaf => "leaf",
+        K::Cycle => "cycle",
+        K::Unmapped => "unmapped",
+        K::Unlinked => "unlinked",
+        K::Truncated => "truncated",
+    }
+}
+
 /// Выполнить MCP-инструмент над сценой: 25 инструментов канваса
 /// (tools/list — в canvas-mcp). Чистая функция над SceneState
 /// (viewport_get/set — viewport-зеркало в SceneState, ADR-0012; кламп
@@ -715,124 +729,126 @@ pub fn mcp_dispatch(
                 "kind": scene.canvas.edges[edge_index].flow_kind().as_str(),
             }))
         }
-        // FR-029 v2: форс-пересчёт всего графа — узловое значение + именованные
-        // выходы + построчные значения + предупреждения проливания; карта
-        // для агентов, проверяющих сценарии (ноды без формулы не участвуют,
-        // но переменные их листов видны в outputs текстовых нод)
-        "flow_recalc" => {
-            let solutions =
-                flow::propagate_with_lines(&scene.canvas, &flow::WhatIfOverrides::default())
-                    .map_err(|cycle| cycle.to_string())?;
-            let nodes: serde_json::Map<String, serde_json::Value> = solutions
-                .outputs
-                .iter()
-                .map(|(id, result)| {
-                    let mut entry = match result {
-                        Ok(value) => serde_json::json!({
-                            "value": value.num,
-                            "unit": value.unit.display(),
-                        }),
-                        Err(err) => serde_json::json!({ "error": err.to_string() }),
-                    };
-                    // Именованные выходы ноды (FR-029): шаблонные — секция
-                    // outputs, текстовые — переменные Numi-листа
-                    let named: serde_json::Map<String, serde_json::Value> = solutions
-                        .named
-                        .iter()
-                        .filter(|((node_id, _), _)| node_id == id)
-                        .map(|((_, name), value)| {
-                            (
-                                name.clone(),
-                                serde_json::json!({
-                                    "value": value.num,
-                                    "unit": value.unit.display(),
-                                }),
-                            )
-                        })
-                        .collect();
-                    if !named.is_empty() {
-                        entry["outputs"] = serde_json::Value::Object(named);
-                    }
-                    // Построчные значения (FR-025/FR-029)
-                    let lines: Vec<serde_json::Value> = solutions
-                        .lines
-                        .iter()
-                        .filter(|((node_id, _), _)| node_id == id)
-                        .map(|((_, line), value)| {
-                            serde_json::json!({
-                                "index": line,
-                                "value": value.num,
-                                "unit": value.unit.display(),
-                            })
-                        })
-                        .collect();
-                    if !lines.is_empty() {
-                        entry["lines"] = serde_json::Value::Array(lines);
-                    }
-                    if let Some(warnings) = solutions.warnings.get(id) {
-                        entry["warnings"] = serde_json::json!(warnings);
-                    }
-                    (id.clone(), entry)
-                })
-                .collect();
-            // Текстовые ноды без узлового значения: их именованные
-            // выходы всё равно полезны агенту (проливание в downstream)
-            let mut result = serde_json::Value::Object(nodes);
-            for ((node_id, name), value) in &solutions.named {
-                let entry = result
-                    .as_object_mut()
-                    .expect("карта нод")
-                    .entry(node_id.clone())
-                    .or_insert_with(|| serde_json::json!({}));
-                let outputs = entry
-                    .as_object_mut()
-                    .expect("объект ноды")
-                    .entry("outputs".to_owned())
-                    .or_insert_with(|| serde_json::json!({}));
-                outputs[name] = serde_json::json!({
-                    "value": value.num,
-                    "unit": value.unit.display(),
-                });
-            }
-            // FR-029: проливание в параметры — агент видит, откуда пришло
-            // значение каждого запитанного параметра (источник + адресация
-            // порта + эффективное значение строки из пересчёта).
-            for node in &scene.canvas.nodes {
-                let spills = flow::param_spills(&scene.canvas, &node.id);
-                if spills.is_empty() {
-                    continue;
-                }
-                let spilled: serde_json::Map<String, serde_json::Value> = spills
-                    .into_iter()
-                    .map(|spill| {
-                        let mut item = serde_json::json!({ "from": spill.from_node });
-                        if let Some(output) = &spill.from_output {
-                            item["fromOutput"] = serde_json::json!(output);
-                        }
-                        if let Some(line) = spill.from_line {
-                            item["fromLine"] = serde_json::json!(line);
-                        }
-                        if let Some(value) = spill_edge_value(&solutions, &spill) {
-                            item["value"] = serde_json::json!(value.num);
-                            item["unit"] = serde_json::json!(value.unit.display());
-                        }
-                        (spill.param, item)
-                    })
-                    .collect();
-                let entry = result
-                    .as_object_mut()
-                    .expect("карта нод")
-                    .entry(node.id.clone())
-                    .or_insert_with(|| serde_json::json!({}));
-                entry["spilled"] = serde_json::Value::Object(spilled);
-            }
-            Ok(result)
-        }
+        // FR-029 v2: карта значений потока для агента — узловое значение +
+        // именованные выходы + построчные значения + warnings/spilled.
+        // FR-050/MCP-parity: значения АКТИВНОГО what-if сценария — те же,
+        // что видит пользователь на канвасе (инвариант «MCP-видимость
+        // эквивалентна UI», CP6): подмены активного сценария учитываются
+        // (каскад Р-1: what-if перекрывает проливание перекрывает локальные).
+        // Пересчёт СВЕЖИЙ: ленивые мутации (node_edit с text, CR-012) не
+        // поднимают ревал — агенту нужен актуальный снимок; чтение —
+        // revision не двигает (PRD-0007 AC-3.3). FR-050 Р-4: авто-строки
+        // приёмников — из того же пересчёта.
+        "flow_recalc" => mcp_flow_active_fresh(scene),
         // FR-014: проверка DAG-инварианта — [] или участники цикла
         "flow_cycle_check" => match flow::topo_sort(&scene.canvas) {
             Ok(_) => Ok(serde_json::json!([])),
             Err(cycle) => Ok(serde_json::json!(cycle.nodes)),
         },
+        // PRD-0007 (X2, FR-048): дерево происхождения цифры — та же модель,
+        // что окно проверки цепочки (инвариант F-5: один источник).
+        // Активное состояние: значения what-if подмен видны агенту, как
+        // пользователю; цикл потока — топология без значений (AC-2.4).
+        "lineage" => {
+            let node_id = mcp_req_str(params, "node_id")?;
+            // null/нет поля — итог ноды (полоса D); иначе — индекс строки
+            // Numi-листа (FR-025), как в LineageNodeId
+            let line =
+                match params.get("line") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(value) => {
+                        Some(value.as_i64().filter(|index| *index >= 0).ok_or(
+                            "line: null (итог ноды) или целое ≥ 0 (индекс строки Numi-листа)",
+                        )? as usize)
+                    }
+                };
+            let root = match line {
+                None => canvas_core::LineageNodeId::total(node_id),
+                Some(index) => canvas_core::LineageNodeId::line(node_id, index),
+            };
+            // Паритет с окном проверки (app::build_lineage_snapshot):
+            // Ready по активным значениям, Cycled — топология без значений.
+            // Пересчёт СВЕЖИЙ — ленивые мутации не искажают дерево
+            let (whatif, _stale) = scene.active_whatif_overrides();
+            let tree = match flow::propagate_with_lines(&scene.canvas, &whatif) {
+                Ok(solutions) => {
+                    let data = canvas_core::DataSnapshots::new();
+                    canvas_core::build_lineage(
+                        &scene.canvas,
+                        canvas_core::LineageFlow::Ready {
+                            solutions: &solutions,
+                            data: &data,
+                        },
+                        root,
+                    )
+                }
+                Err(cycle) => canvas_core::build_lineage(
+                    &scene.canvas,
+                    canvas_core::LineageFlow::Cycled(&cycle),
+                    root,
+                ),
+            }
+            .map_err(|err| err.to_string())?;
+            // DFS-порядок: родитель раньше ребёнка; children[] — индексы
+            // в nodes (ромб разворачивается, дубликаты адресов возможны)
+            let nodes: Vec<serde_json::Value> = tree
+                .nodes
+                .iter()
+                .map(|node| {
+                    let mut entry = serde_json::json!({
+                        "node_id": node.node_id,
+                        "line": node.line,
+                        "kind": lineage_kind_str(node.kind),
+                        "title": node.title,
+                    });
+                    match &node.value {
+                        Some(Ok(value)) => {
+                            entry["value"] = serde_json::json!(value.num);
+                            entry["unit"] = serde_json::json!(value.unit.display());
+                        }
+                        Some(Err(text)) => {
+                            entry["error"] = serde_json::json!(text);
+                        }
+                        None => {}
+                    }
+                    if let Some(formula) = &node.formula {
+                        entry["formula"] = serde_json::json!(formula);
+                    }
+                    if let Some(label) = &node.label {
+                        entry["label"] = serde_json::json!(label);
+                    }
+                    let children: Vec<serde_json::Value> = node
+                        .children
+                        .iter()
+                        .map(|child| {
+                            let mut item = serde_json::json!({ "child": child.child });
+                            if let Some(via) = &child.via {
+                                item["via"] = serde_json::json!({
+                                    "edge_id": via.edge_id,
+                                    "from_node": via.from_node,
+                                    "to_node": via.to_node,
+                                    "from_line": via.from_line,
+                                    "from_output": via.from_output,
+                                    "to_param": via.to_param,
+                                });
+                            }
+                            item
+                        })
+                        .collect();
+                    if !children.is_empty() {
+                        entry["children"] = serde_json::Value::Array(children);
+                    }
+                    entry
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "root": {
+                    "node_id": tree.root.node_id,
+                    "line": tree.root.line,
+                },
+                "nodes": nodes,
+            }))
+        }
         // --- FR-017 (CP6): what-if сценарии ---
         // Построчная подмена активного сценария. Режим/сценарий
         // поднимаются автоматически (неявный «Сценарий MCP»). Подмена —
@@ -1130,10 +1146,47 @@ pub fn mcp_dispatch(
                 "issues": issues,
             }))
         }
-        // FR-016 (CP5): анализ узких мест — та же карта флагов, что рисует
-        // оверлей канваса (инвариант 4: MCP-видимость = UI). Пересчёт
-        // свежий (как flow_recalc) — чтение, не мутация.
-        "analyze_bottlenecks" => Ok(mcp_analyze_bottlenecks(&scene.canvas)),
+        // FR-016 (CP5) + MCP-parity: карта флагов АКТИВНОГО состояния
+        // (what-if подмены учитываются) — те же severity/бейджи, что
+        // рисует оверлей канваса Ctrl+B (инвариант 4 FR-016). Пересчёт
+        // СВЕЖИЙ (как flow_recalc) — ленивые мутации (CR-012) не
+        // искажают отчёт; чтение — не мутация. Цикл — честный error.
+        "analyze_bottlenecks" => {
+            let (whatif, _stale) = scene.active_whatif_overrides();
+            let solutions = match flow::propagate_with_lines(&scene.canvas, &whatif) {
+                Ok(solutions) => solutions,
+                Err(cycle) => {
+                    return Ok(serde_json::json!({
+                        "error": format!("цикл потока значений: {cycle}"),
+                    }));
+                }
+            };
+            let config = AnalysisConfig::default();
+            let state = analyze::analyze(&scene.canvas, &solutions, &config);
+            let nodes: Vec<serde_json::Value> = scene
+                .canvas
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let flags = state.get(&node.id)?;
+                    let mut entry = serde_json::Map::new();
+                    entry.insert("id".into(), serde_json::json!(node.id));
+                    if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(flags) {
+                        entry.extend(map);
+                    }
+                    // Бейдж — строка, которую видит пользователь на канвасе
+                    entry.insert(
+                        "badge".into(),
+                        serde_json::json!(analyze::badge_text(flags)),
+                    );
+                    Some(serde_json::Value::Object(entry))
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "nodes": nodes,
+                "thresholds": serde_json::to_value(config).unwrap_or(serde_json::json!({})),
+            }))
+        }
         // FR-018: список шаблонов реестра — те же, что в палитре/wheel
         // (инвариант 4: MCP-видимость эквивалентна UI)
         "template_list" => {
@@ -1268,6 +1321,79 @@ pub fn mcp_dispatch(
                 "id": scene.canvas.nodes[index].id,
                 "index": index,
                 "node": summary,
+            }))
+        }
+        // PRD-0008 (Q5 v2): список встроенных схем галереи — те же пакеты,
+        // что видит пользователь в галерее (Ctrl+T): готовые канвасы с
+        // расчётами, пучками и подсказками (инвариант «MCP-видимость
+        // эквивалентна UI»)
+        "schemes_list" => {
+            let schemes: Vec<serde_json::Value> = canvas_core::schemes::SchemeRegistry::embedded()
+                .list()
+                .iter()
+                .map(|manifest| {
+                    serde_json::json!({
+                        "id": manifest.id,
+                        "name": manifest.name_ru,
+                        "name_en": manifest.name_en,
+                        "category": manifest.category,
+                        "category_ru": manifest.category_ru,
+                        "category_en": manifest.category_en,
+                        "version": manifest.version,
+                        "description": manifest.description_ru,
+                        "description_en": manifest.description_en,
+                        "nodes": manifest.content.nodes.len(),
+                        "edges": manifest.content.edges.len(),
+                    })
+                })
+                .collect();
+            Ok(serde_json::Value::Array(schemes))
+        }
+        // PRD-0008 (Q5 v2): вставить схему в текущий канвас — как «Открыть»
+        // в галерее: ремап id без коллизий (note-N/group-N/edge-N),
+        // содержимое центрируется в точку (x, y) или центр viewport;
+        // один undo-шаг, полный пересчёт. Ответ: созданные объекты, bbox
+        // (для viewport_set/zoom-to-fit) и значения активного состояния
+        "schemes_apply" => {
+            let id = mcp_req_str(params, "id")?;
+            let manifest = canvas_core::schemes::SchemeRegistry::embedded()
+                .get(id)
+                .ok_or_else(|| format!("схема не найдена: {id}"))?
+                .clone();
+            let x = mcp_opt_f32(params, "x").unwrap_or(scene.viewport.x);
+            let y = mcp_opt_f32(params, "y").unwrap_or(scene.viewport.y);
+            let instance =
+                crate::scheme_apply::instantiate_scheme(&manifest, &scene.canvas, [x, y])
+                    .map_err(|err| err.to_string())?;
+            let nodes: Vec<String> = instance.nodes.iter().map(|node| node.id.clone()).collect();
+            let edges: Vec<serde_json::Value> = instance.edges.iter().map(mcp_edge_json).collect();
+            // FR-006: один undo-шаг на вставку (до мутации — как галерея)
+            let snapshot = scene.canvas.clone();
+            scene.push_undo(snapshot);
+            for node in instance.nodes {
+                let index = scene.canvas.nodes.len();
+                scene.canvas.nodes.push(node);
+                scene.spatial.insert(index, &scene.canvas.nodes[index]);
+            }
+            for edge in instance.edges {
+                scene.canvas.add_edge(edge);
+            }
+            scene.mark_dirty();
+            scene.recompute_flow();
+            // Значения АКТИВНОГО состояния (вставка не трогает сценарии
+            // what-if — подмены сохраняются) + авто-строки FR-050 Р-4;
+            // цикл не роняет вставку — честный error в поле flow
+            let flow = match mcp_flow_active_fresh(scene) {
+                Ok(flow) => flow,
+                Err(cycle) => serde_json::json!({ "error": cycle }),
+            };
+            Ok(serde_json::json!({
+                "applied": manifest.id,
+                "name": manifest.display_name(true),
+                "nodes": nodes,
+                "edges": edges,
+                "bbox": instance.bbox,
+                "flow": flow,
             }))
         }
         "viewport_get" => Ok(serde_json::json!({
@@ -1816,68 +1942,61 @@ fn batch_apply_op(
     }
 }
 
-/// FR-033 п.3: полный пересчёт после батча и карта значений в формате
-/// flow_recalc v2 (FR-029 п.4): `{node_id: {value, unit, outputs, lines}}`.
+/// Полная карта значений потока (контракт flow_recalc v2, FR-029 п.4):
+/// `{node_id: {value, unit, outputs, lines, warnings?, spilled?, error?}}`.
 /// Ноды вне потока (проза/файлы) не включаются; ноды с ошибкой — `{error}`.
-pub fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
-    let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
-        Ok(solutions) => solutions,
-        Err(cycle) => {
-            return serde_json::json!({ "error": format!("цикл потока значений: {cycle}") })
-        }
-    };
-    // Построчные значения, сгруппированные по нодам (детерминированный
-    // порядок индексов — BTreeMap)
-    let mut lines_by_node: HashMap<
-        String,
-        std::collections::BTreeMap<usize, canvas_core::expr::Value>,
-    > = HashMap::new();
+/// Чистая функция над ДАННЫМИ решениями: базовыми (легаси-обходчик
+/// [`mcp_flow_v2`] для тестов) или активным what-if состоянием сцены
+/// ([`mcp_flow_state`] — то, что видит пользователь). Детерминизм:
+/// порядок нод канваса, отсортированные имена выходов и индексы строк.
+fn mcp_flow_map(canvas: &Canvas, solutions: &flow::FlowSolutions) -> serde_json::Value {
+    // Построчные значения и именованные выходы, сгруппированные по нодам
+    // (BTreeMap — порядок индексов; имена выходов отсортированы —
+    // HashMap-порядок недетерминирован)
+    let mut lines_by_node: HashMap<String, BTreeMap<usize, canvas_core::expr::Value>> =
+        HashMap::new();
     for ((node_id, line), value) in &solutions.lines {
         lines_by_node
             .entry(node_id.clone())
             .or_default()
             .insert(*line, value.clone());
     }
+    let mut named_by_node: HashMap<String, BTreeMap<String, canvas_core::expr::Value>> =
+        HashMap::new();
+    for ((node_id, name), value) in &solutions.named {
+        named_by_node
+            .entry(node_id.clone())
+            .or_default()
+            .insert(name.clone(), value.clone());
+    }
     let mut nodes = serde_json::Map::new();
     for node in &canvas.nodes {
-        let mut entry = serde_json::Map::new();
-        match solutions.outputs.get(&node.id) {
-            Some(Ok(value)) => {
-                entry.insert("value".into(), serde_json::json!(value.num));
-                entry.insert("unit".into(), serde_json::json!(value.unit.display()));
-            }
-            Some(Err(err)) => {
-                entry.insert("error".into(), serde_json::json!(err.to_string()));
-            }
-            None => {}
+        let mut entry = match solutions.outputs.get(&node.id) {
+            Some(Ok(value)) => serde_json::json!({
+                "value": value.num,
+                "unit": value.unit.display(),
+            }),
+            Some(Err(err)) => serde_json::json!({ "error": err.to_string() }),
+            None => serde_json::json!({}),
+        };
+        // Именованные выходы ноды (FR-029): шаблонные — секция outputs,
+        // текстовые — переменные Numi-листа
+        if let Some(named) = named_by_node.get(&node.id) {
+            let outputs: serde_json::Map<String, serde_json::Value> = named
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.clone(),
+                        serde_json::json!({
+                            "value": value.num,
+                            "unit": value.unit.display(),
+                        }),
+                    )
+                })
+                .collect();
+            entry["outputs"] = serde_json::Value::Object(outputs);
         }
-        // Именованные выходы (FR-029): только вычислившиеся
-        let outputs: serde_json::Map<String, serde_json::Value> = node
-            .template()
-            .map(|tpl| {
-                tpl.outputs
-                    .iter()
-                    .filter_map(|spec| {
-                        solutions
-                            .named
-                            .get(&(node.id.clone(), spec.name.clone()))
-                            .map(|value| {
-                                let name = spec.name.clone();
-                                (
-                                    name,
-                                    serde_json::json!({
-                                        "value": value.num,
-                                        "unit": value.unit.display(),
-                                    }),
-                                )
-                            })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !outputs.is_empty() {
-            entry.insert("outputs".into(), serde_json::Value::Object(outputs));
-        }
+        // Построчные значения (FR-025/FR-029)
         if let Some(lines) = lines_by_node.get(&node.id) {
             let lines: Vec<serde_json::Value> = lines
                 .iter()
@@ -1889,54 +2008,115 @@ pub fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
                     })
                 })
                 .collect();
-            if !lines.is_empty() {
-                entry.insert("lines".into(), serde_json::json!(lines));
-            }
+            entry["lines"] = serde_json::Value::Array(lines);
         }
-        if !entry.is_empty() {
-            nodes.insert(node.id.clone(), serde_json::Value::Object(entry));
+        if let Some(warnings) = solutions.warnings.get(&node.id) {
+            entry["warnings"] = serde_json::json!(warnings);
+        }
+        if entry.as_object().is_some_and(|map| !map.is_empty()) {
+            nodes.insert(node.id.clone(), entry);
         }
     }
-    serde_json::Value::Object(nodes)
+    let mut result = serde_json::Value::Object(nodes);
+    // FR-029: проливание в параметры — агент видит, откуда пришло
+    // значение каждого запитанного параметра (источник + адресация
+    // порта + эффективное значение строки из пересчёта).
+    for node in &canvas.nodes {
+        let spills = flow::param_spills(canvas, &node.id);
+        if spills.is_empty() {
+            continue;
+        }
+        let spilled: serde_json::Map<String, serde_json::Value> = spills
+            .into_iter()
+            .map(|spill| {
+                let mut item = serde_json::json!({ "from": spill.from_node });
+                if let Some(output) = &spill.from_output {
+                    item["fromOutput"] = serde_json::json!(output);
+                }
+                if let Some(line) = spill.from_line {
+                    item["fromLine"] = serde_json::json!(line);
+                }
+                if let Some(value) = spill_edge_value(solutions, &spill) {
+                    item["value"] = serde_json::json!(value.num);
+                    item["unit"] = serde_json::json!(value.unit.display());
+                }
+                (spill.param, item)
+            })
+            .collect();
+        let entry = result
+            .as_object_mut()
+            .expect("карта нод")
+            .entry(node.id.clone())
+            .or_insert_with(|| serde_json::json!({}));
+        entry["spilled"] = serde_json::Value::Object(spilled);
+    }
+    result
 }
 
-/// FR-016 (CP5): анализ узких мест для MCP — та же карта флагов, что рисует
-/// оверлей канваса (инвариант 4 FR-016). Чистая функция над свежим
-/// пересчётом: детерминированный порядок `canvas.nodes`, пороги — дефолт
-/// документа FR-016. Цикл потока — честный `error` (анализа нет).
-fn mcp_analyze_bottlenecks(canvas: &Canvas) -> serde_json::Value {
+/// Значения АКТИВНОГО состояния — СВЕЖИМ пересчётом с подменами
+/// активного сценария (тот же источник подмен, что у recompute_flow:
+/// active_whatif_overrides). Не читает кэш сцены: ленивые мутации
+/// (node_edit с text — CR-012) не поднимают пересчёт, агенту нужен
+/// актуальный снимок; кэши сцены и revision не затрагиваются (чистая
+/// функция). Цикл потока — Err (значений нет). + авто-строки FR-050 Р-4
+/// из того же пересчёта (порядок строк — canvas.edges, инвариант 2).
+fn mcp_flow_active_fresh(scene: &SceneState) -> Result<serde_json::Value, String> {
+    let (whatif, _stale) = scene.active_whatif_overrides();
+    let solutions =
+        flow::propagate_with_lines(&scene.canvas, &whatif).map_err(|cycle| cycle.to_string())?;
+    let mut result = mcp_flow_map(&scene.canvas, &solutions);
+    for node in &scene.canvas.nodes {
+        let rows = flow::auto_rows(&scene.canvas, &node.id, &solutions);
+        if rows.is_empty() {
+            continue;
+        }
+        let entry = result
+            .as_object_mut()
+            .expect("карта нод")
+            .entry(node.id.clone())
+            .or_insert_with(|| serde_json::json!({}));
+        entry["autoRows"] = serde_json::Value::Array(mcp_auto_rows_json(&rows));
+    }
+    Ok(result)
+}
+
+/// FR-050 Р-4: авто-строка приёмника для агента — слот, ребро-источник
+/// истины, путь «Объект.Поле»; value|unit или unmapped («не
+/// подставлено» — агент видит проблему, как пользователь в тултипе).
+fn mcp_auto_rows_json(rows: &[flow::AutoRow]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|row| {
+            let mut item = serde_json::json!({
+                "slot": row.slot,
+                "edge": row.edge_id,
+                "path": row.path,
+                "field": row.field,
+            });
+            match &row.value {
+                Some(value) => {
+                    item["value"] = serde_json::json!(value.num);
+                    item["unit"] = serde_json::json!(value.unit.display());
+                }
+                None => {
+                    item["unmapped"] = serde_json::json!(true);
+                }
+            }
+            item
+        })
+        .collect()
+}
+
+/// Легаси-обходчик: БАЗОВЫЙ пересчёт без what-if подмен (сравнение базы,
+/// тесты). Активное состояние агента — mcp_dispatch "flow_recalc"
+/// (см. mcp_flow_active_fresh).
+pub fn mcp_flow_v2(canvas: &Canvas) -> serde_json::Value {
     let solutions = match flow::propagate_with_lines(canvas, &flow::WhatIfOverrides::default()) {
         Ok(solutions) => solutions,
         Err(cycle) => {
-            return serde_json::json!({
-                "error": format!("цикл потока значений: {cycle}"),
-            })
+            return serde_json::json!({ "error": format!("цикл потока значений: {cycle}") })
         }
     };
-    let config = AnalysisConfig::default();
-    let state = analyze::analyze(canvas, &solutions, &config);
-    let nodes: Vec<serde_json::Value> = canvas
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            let flags = state.get(&node.id)?;
-            let mut entry = serde_json::Map::new();
-            entry.insert("id".into(), serde_json::json!(node.id));
-            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(flags) {
-                entry.extend(map);
-            }
-            // Бейдж — строка, которую видит пользователь на канвасе
-            entry.insert(
-                "badge".into(),
-                serde_json::json!(analyze::badge_text(flags)),
-            );
-            Some(serde_json::Value::Object(entry))
-        })
-        .collect();
-    serde_json::json!({
-        "nodes": nodes,
-        "thresholds": serde_json::to_value(config).unwrap_or(serde_json::json!({})),
-    })
+    mcp_flow_map(canvas, &solutions)
 }
 
 /// FR-033 п.2: транзакционное применение батча. Ошибки схемы/лимитов —
@@ -2026,7 +2206,14 @@ fn mcp_graph_apply(
             })
         })
         .collect();
-    let flow = mcp_flow_v2(&scene.canvas);
+    // FR-050/MCP-parity: flow — СВЕЖИЙ пересчёт АКТИВНОГО состояния
+    // (what-if подмены, авто-строки) — те же значения, что видит
+    // пользователь; цикл потока не роняет успешный батч — честный error
+    // в поле flow (как раньше)
+    let flow = match mcp_flow_active_fresh(scene) {
+        Ok(flow) => flow,
+        Err(cycle) => serde_json::json!({ "error": cycle }),
+    };
     Ok(serde_json::json!({
         "ok": true,
         "created": created,

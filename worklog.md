@@ -3639,3 +3639,59 @@ CanvasDesk». Источник — вводные владельца о проз
 - Draw-порядок и pick-порядок выводятся из реестра/кадра; порядок веток больше не источник истины.
 - Нормализованные дельты (попапы над панелями, stage-any-key, минимапа-клик) зафиксированы в FR-052 §Changes.
 - Далее: U3 — TextMeasurer + токены слотов состояний + layout-примитивы + пилоты (галерея схем, what-if бар); U4 — kit+DebugOverlay; U5 — миграция остальных поверхностей, лестница on_key целиком, линты CI, docs/ui-kit.md.
+
+---
+
+## 2026-09-22 — MCP v2: «подтянуть функционал под обновления и полностью проверить» (PRD-0008 Q5 + FR-048 X2 + FR-050 паритет)
+
+- **Разрывы, найденные разведкой (чек зелёный, но агент видел не то, что
+  пользователь):** (1) `flow_recalc`/`analyze_bottlenecks`/`graph_apply.flow`
+  пересчитывали поток с БАЗОВЫМИ overrides — при активном what-if сценарии
+  агент получал базовые числа/флаги, а канвас показывал подмены
+  (нарушение инварианта «MCP-видимость = UI», CP6/CP5/инвариант 4 FR-016);
+  (2) схемы галереи PRD-0008 не видны агенту (Q5 отложен в v2);
+  (3) lineage FR-048 X0/X1 существовал только в ядре и окне проверки X2
+  (FR-052) — у агента нет способа ответить «откуда эта цифра»;
+  (4) авто-строки FR-050 Р-4 (auto_rows) не попадали в ответы.
+- **Реализовано:** три новых инструмента (36 → 39): `schemes_list`
+  (реестр embedded — 6 пакетов, RU-первично, bare-массив в text-контенте
+  по прецеденту nodes_list FR-034), `schemes_apply {id, x?, y?}`
+  (instantiate_scheme + один undo-шаг + spatial + recompute; ответ:
+  applied/name/nodes/edges (mcp_edge_json, вкл. адресацию)/bbox/flow;
+  неизвестный id — isError БЕЗ undo-шага), `lineage {node_id, line?}`
+  (build_lineage паритет с app::build_lineage_snapshot: Ready по
+  активным значениям / Cycled-топология; сериализация kind/value/
+  formula/title/label/children+via; негативы: проза как корень, line<0,
+  неизвестная нода).
+- **Паритет активного состояния:** `mcp_flow_map` (общее тело
+  flow_recalc v2 — вынесено из arm; детерминизм: порядок нод канваса,
+  BTreeMap-индексы, отсортированные имена выходов) +
+  `mcp_flow_active_fresh` (СВЕЖИЙ пересчёт с `active_whatif_overrides()`
+  — pub(crate) в scene.rs; НЕ читает кэш: ленивые мутации node_edit с
+  text (CR-012) не поднимают ревал — кэш бывает протухшим; ревизию
+  модели и undo чтение не трогает) + `mcp_auto_rows_json` (FR-050 Р-4).
+  Применено к: flow_recalc, graph_apply.flow, schemes_apply.flow,
+  analyze_bottlenecks, lineage. mcp_flow_v2 — легаси-обходчик базы
+  (тесты). Удалена дублевая mcp_analyze_bottlenecks (база).
+- **Тесты (+4 canvas-scene):** mcp_schemes_list_embedded_registry,
+  mcp_schemes_apply_inserts_flow_and_undo (оракулы 5000/0.625, ремап
+  при двойной вставке, fail-fast), mcp_lineage_tree_total_line_and_errors
+  (calc/leaf/via, line-корень, негативы), mcp_flow_and_analysis_follow_
+  active_whatif (ρ-лестница следует за подменой; авто-строка = активное
+  значение; graph_apply.flow — тот же источник; возврат на Базу).
+  Попутно починен скрытый конфликт в mcp_fr029_instagram_mvp_reference:
+  старый тест после ЛЕНИВОГО node_edit с text читал свежий пересчёт
+  (поведение сохранено свежим propagate вместо кэша).
+- **E2E (mcp_wasm_e2e.py):** шаги 4a (schemes_list/apply с оракулами),
+  4b (lineage CDN: calc-корень, via), 4c (flow_recalc = активная подмена
+  416.67 ≠ база; авто-строка; whatif_reset → 1114.58), негативы схем/
+  lineage → isError; счётчики 36 → 39 (драйвер, inspector, headless-тест,
+  SPEC §1). text_payload() для массивных инструментов (FR-034).
+- **Доки:** SPEC §13 (инвариант «MCP-видимость = UI» + секции
+  schemes/lineage + graph_apply.flow), §1 (39); PRD-0008 §11 (Q5 закрыт)
+  + §16; FR-049 (статус MCP v2 + история); ACCEPTANCE FR-049.12;
+  agent-recipe (шаг 1 schemes_list, шаг 4 flow/lineage/autoRows).
+- **Гейты:** fmt ✓; clippy -D warnings (core/scene/mcp/headless,
+  --all-targets) ✓; нативные: core 454, mcp 15, headless 12, scene 85 ✓;
+  wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (wasip1: 13+12+85 под wasmtime,
+  полная e2e-сессия сошлась).
