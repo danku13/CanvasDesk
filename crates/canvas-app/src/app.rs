@@ -116,7 +116,8 @@ use canvas_render::text::{
 };
 use canvas_render::ThemeColors;
 use canvas_render::{
-    Camera, Color, FrameMeter, FrameOverlay, FrameStats, SceneView, Selection, StageTransform,
+    Camera, Color, FrameMeter, FrameOverlay, FrameStats, ParamDropView, SceneView, Selection,
+    StageTransform,
 };
 use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
@@ -155,6 +156,11 @@ const PAN_PX_PER_LINE: f32 = 40.0;
 /// Ширина клип-бокса тултипа битой ссылки (T10): длинный путь переносится
 /// на границы этой области, экран не покидает.
 const TOOLTIP_WIDTH: f32 = 380.0;
+
+/// FR-050 Н2 (этап C): высота строки заголовка меню выбора (screen-space,
+/// логические px) — пункты сдвинуты ниже заголовка (клик по заголовку —
+/// «мимо пункта» — отменяет меню).
+const CHOICE_MENU_TITLE_H: f32 = 24.0;
 
 /// Debounce запроса поиска (T14, план §3).
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -965,17 +971,41 @@ enum AppDialog {
         to_node: String,
         to_side: Side,
     },
+    /// FR-050 Н4 (этап C): «Заменить источник?» — drop value-ребра на
+    /// занятый параметр. Подтверждение — один undo-шаг (FR-006): старые
+    /// рёбра (легаси-дубли — все, инвариант «один вход на параметр»)
+    /// удаляются, новое создаётся; отмена — ничего не меняется.
+    ReplaceSource {
+        from_node: String,
+        from_side: Side,
+        from_line: Option<usize>,
+        to_node: String,
+        to_side: Side,
+        param: String,
+        /// id существующих рёбер, питающих параметр.
+        old_edges: Vec<String>,
+        /// Подпись текущего источника для тела диалога (заголовок ноды /
+        /// имя шаблона — вычислена в момент дропа).
+        old_source: String,
+    },
 }
 
 impl AppDialog {
     /// Кнопки диалога (screen-space rect'ы считаются от центра окна).
     /// Подписи — таблица i18n (FR-040), `language` — язык интерфейса.
+    /// FR-050 Н4: ReplaceSource — «Заменить»/«Отмена» (не Да/Нет).
     fn buttons(&self, language: Language) -> [(&'static str, bool); 2] {
         // (подпись, confirm?)
-        [
-            (i18n::tr(language, keys::DIALOG_YES), true),
-            (i18n::tr(language, keys::DIALOG_NO), false),
-        ]
+        match self {
+            AppDialog::ReplaceSource { .. } => [
+                (i18n::tr(language, keys::DIALOG_REPLACE_YES), true),
+                (i18n::tr(language, keys::DIALOG_CANCEL), false),
+            ],
+            _ => [
+                (i18n::tr(language, keys::DIALOG_YES), true),
+                (i18n::tr(language, keys::DIALOG_NO), false),
+            ],
+        }
     }
 
     /// Заголовок диалога. `canvas` — для имени участников цикла (FR-014).
@@ -1010,6 +1040,10 @@ impl AppDialog {
                 chain.push_str(from_node);
                 i18n::trf(language, keys::DIALOG_CYCLE_TITLE, &[("{chain}", &chain)])
             }
+            // FR-050 Н4: заголовок без подстановок — «Заменить источник?»
+            AppDialog::ReplaceSource { .. } => {
+                i18n::tr(language, keys::DIALOG_REPLACE_TITLE).to_owned()
+            }
         }
     }
 
@@ -1033,8 +1067,96 @@ impl AppDialog {
                 i18n::tr(language, keys::DIALOG_REMOVE_BODY).to_owned()
             }
             AppDialog::EdgeCycle { .. } => i18n::tr(language, keys::DIALOG_CYCLE_BODY).to_owned(),
+            // FR-050 Н4: параметр + текущий источник (подпись вычислена при
+            // дропе — здесь только подстановка)
+            AppDialog::ReplaceSource {
+                param, old_source, ..
+            } => i18n::trf(
+                language,
+                keys::DIALOG_REPLACE_BODY,
+                &[("{param}", param), ("{source}", old_source)],
+            ),
         }
     }
+}
+
+/// FR-050 Н2 (этап C): пункт меню выбора.
+#[derive(Debug, Clone, PartialEq)]
+struct ChoiceItem {
+    /// Подпись (имя параметра / строка-источник со значением).
+    label: String,
+    action: ChoiceAction,
+}
+
+/// FR-050 Н2 (этап C): действие пункта меню выбора.
+#[derive(Debug, Clone, PartialEq)]
+enum ChoiceAction {
+    /// Выбран параметр приёмника — создать value-ребро с `toParam`
+    /// (drop на якорь или через меню выбора параметра).
+    Param {
+        from_node: String,
+        from_side: Side,
+        from_line: Option<usize>,
+        to_node: String,
+        param: String,
+    },
+    /// W-AMBIGUOUS-SRC (FR-032): выбрана строка-источник текстовой ноды —
+    /// цель уже известна (параметр якоря или выбор из меню параметров).
+    SourceLine {
+        from_node: String,
+        from_side: Side,
+        line: usize,
+        to_node: String,
+        param: Option<String>,
+    },
+}
+
+/// FR-050 Н2 (этап C): меню выбора — screen-space (как ContextMenu T7):
+/// origin — логические px от угла окна, размер константен при любом зуме.
+/// Пункты — параметры приёмника (drop мимо якоря: «меню выбора параметра
+/// приёмника либо отмена») либо строки-источники (W-AMBIGUOUS-SRC).
+#[derive(Debug, Clone, PartialEq)]
+struct ChoiceMenu {
+    /// Позиция (логические px) левого верхнего угла меню.
+    origin: Vec2,
+    /// Ключ i18n заголовка (MENU_PICK_PARAM_TITLE / MENU_PICK_LINE_TITLE).
+    title_key: &'static str,
+    /// Пункты: подпись + действие.
+    items: Vec<ChoiceItem>,
+    /// Hover-пункт для подсветки (паттерн аффорданса меню).
+    hovered: Option<usize>,
+}
+
+/// FR-050 Н2 (этап C): id ноды-истока активного drag (None — drag не
+/// активен). Свободная функция — для `compute_param_drop` (self-edge
+/// исключается из подсветки целей).
+fn drag_from_node(drag: Option<&EdgeDrag>) -> Option<String> {
+    match drag {
+        Some(EdgeDrag::New { from_node, .. }) => Some(from_node.clone()),
+        _ => None,
+    }
+}
+
+/// FR-050 Н4 (этап C): подпись ноды-источника для диалога «Заменить
+/// источник?» — снимок имени шаблона (FR-023) / первая непустая строка
+/// текста / label / id (тот же приоритет, что у `spill_source_title`
+/// ядра; публичная копия — core не экспортирует ту).
+fn node_display_label(node: &Node) -> String {
+    if let Some(name) = node
+        .template()
+        .and_then(|template| template.name)
+        .filter(|name| !name.is_empty())
+    {
+        return name;
+    }
+    if let Some(first) = node
+        .text
+        .as_deref()
+        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
+    {
+        return first.trim().to_owned();
+    }
+    node.label.clone().unwrap_or_else(|| node.id.clone())
 }
 
 /// Ярление заливки для hover-подсветки (кнопки настроек/темы): практика
@@ -1310,6 +1432,15 @@ pub struct App {
     expr_error_hits: Vec<LineErrorHit>,
     /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
     edge_drag: Option<EdgeDrag>,
+    /// FR-050 Н2 (этап C): цель value-drag — шаблонная нода под курсором +
+    /// совместимость её параметров с источником по единицам (Н5/E-UNIT).
+    /// Пересчитывается на кадр ввода (паттерн `bundle_hover`), рендер
+    /// подсвечивает якоря допустимых целей.
+    param_drop: Option<(usize, Vec<(String, bool)>)>,
+    /// FR-050 Н2 (этап C): меню выбора — параметры приёмника (drop
+    /// value-ребра мимо якоря) либо строка-источник (W-AMBIGUOUS-SRC,
+    /// FR-032). Screen-space, глушит ввод канваса (паттерн ContextMenu).
+    choice_menu: Option<ChoiceMenu>,
     /// Рамка выделения (CR-001): (start world, current world, press screen)
     /// — тянется от пустого места; отпускание > порога = выделение.
     select_rect: Option<(Vec2, Vec2, Vec2)>,
@@ -1593,6 +1724,8 @@ impl App {
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             edge_drag: None,
+            param_drop: None,
+            choice_menu: None,
             select_rect: None,
             node_clipboard: Vec::new(),
             hotkeys_open: false,
@@ -3814,6 +3947,367 @@ impl App {
         None
     }
 
+    /// FR-050 Н2 (этап C): якорь параметра шаблонной ноды под world-точкой
+    /// (зеркало `line_port_hit`: кандидаты — spatial-индекс в прямоугольнике
+    /// допуска зоны портов CR-003, хост под курсором первым; якоря — только
+    /// у шаблонных нод, на ЛЕВОМ краю). Группы и скрытые поддеревья — мимо.
+    fn param_port_hit(&self, world: Vec2) -> Option<(usize, canvas_core::ParamPort)> {
+        let renderer = self.renderer.as_ref()?;
+        let zoom = self.camera.zoom();
+        let tolerance = self.settings.port_zone_px / zoom.max(1e-3);
+        let expanded = [
+            world[0] - tolerance,
+            world[1] - tolerance,
+            world[0] + tolerance,
+            world[1] + tolerance,
+        ];
+        let hidden = self.hidden_subtree_nodes();
+        let mut candidates: Vec<usize> = self
+            .scene
+            .spatial
+            .query_rect(expanded)
+            .into_iter()
+            .filter(|index| hidden.binary_search(index).is_err())
+            .collect();
+        if let Some(hovered) = self.hovered {
+            if let Some(pos) = candidates.iter().position(|&index| index == hovered) {
+                candidates.swap(0, pos);
+            }
+        }
+        for index in candidates {
+            let Some(node) = self.scene.canvas.nodes.get(index) else {
+                continue;
+            };
+            if node.template().is_none() {
+                continue;
+            }
+            let ports = renderer.param_ports(index, node);
+            if let Some(port) =
+                canvas_core::param_port_at(&ports, world, zoom, self.settings.port_zone_px)
+            {
+                return Some((index, port.clone()));
+            }
+        }
+        None
+    }
+
+    /// FR-050 Н2 (этап C): значение, которое несёт активный value-drag —
+    /// для подсветки совместимости параметров (Н5/E-UNIT). Построчный
+    /// исток — значение строки; нода целиком — узловое значение (data-нода
+    /// значения в потоке не имеет — None, совместимость нейтральна).
+    fn drag_source_value(&self) -> Option<expr::Value> {
+        let EdgeDrag::New {
+            from_node,
+            from_port,
+            ..
+        } = self.edge_drag.as_ref()?
+        else {
+            return None;
+        };
+        let solutions = &self.scene.flow_active;
+        if let Some(port) = from_port {
+            // Построчный исток — значение строки; футер шаблона
+            // (line = None) — узловое значение (ниже, как у ноды целиком)
+            if let Some(line) = port.line {
+                return solutions.lines.get(&(from_node.clone(), line)).cloned();
+            }
+        }
+        solutions
+            .outputs
+            .get(from_node)
+            .cloned()
+            .and_then(|outcome| outcome.ok())
+    }
+
+    /// FR-050 Н2 (этап C): цель value-drag под курсором — шаблонная нода с
+    /// совместимостью параметров по единицам (Н5). Пересчёт на кадр ввода
+    /// (паттерн `bundle_hover`): None — drag не активен / цель не шаблонная.
+    fn compute_param_drop(&self) -> Option<(usize, Vec<(String, bool)>)> {
+        let value_drag = matches!(
+            self.edge_drag,
+            Some(EdgeDrag::New {
+                value_flow: true,
+                ..
+            })
+        );
+        if !value_drag {
+            return None;
+        }
+        let world = self.cursor_world();
+        let index = self.selective_hit(world)?;
+        let node = self.scene.canvas.nodes.get(index)?;
+        let template = node.template()?;
+        // Цель = исток drag — подсветки нет (self-edge не создаётся)
+        if drag_from_node(self.edge_drag.as_ref()).is_some_and(|from| from == node.id) {
+            return None;
+        }
+        let source_value = self.drag_source_value();
+        let params: Vec<(String, bool)> = template
+            .params
+            .iter()
+            .map(|(name, spec)| {
+                // Значение неизвестно (data-нода/без результата) —
+                // нейтральная совместимость (подсветка не отсекает)
+                let compatible = source_value
+                    .as_ref()
+                    .map(|value| {
+                        canvas_core::flow::value_param_compatible(value, spec.unit.as_deref())
+                    })
+                    .unwrap_or(true);
+                (name.clone(), compatible)
+            })
+            .collect();
+        Some((index, params))
+    }
+
+    /// FR-050 Н2 (этап C): формульные строки текстовой ноды-источника для
+    /// меню выбора строки (W-AMBIGUOUS-SRC, FR-032): (индекс строки,
+    /// подпись «имя = значение»). Пусто — источник не текстовая нода или
+    /// строк без результата (ambiguity нет).
+    fn source_formula_lines(&self, from_node: &str) -> Vec<(usize, String)> {
+        let solutions = &self.scene.flow_active;
+        let Some(node) = self.scene.canvas.node(from_node) else {
+            return Vec::new();
+        };
+        if node.template().is_some() {
+            // Шаблонная нода: drag от ноды целиком несёт узловое значение
+            // (формулу шаблона) — выбора строки нет
+            return Vec::new();
+        }
+        let text = node.text.as_deref().unwrap_or("");
+        let mut result = Vec::new();
+        for ((node_id, line), value) in &solutions.lines {
+            if node_id != from_node {
+                continue;
+            }
+            let raw = text.lines().nth(*line).unwrap_or("");
+            let label = match expr::line_kind(raw) {
+                expr::NumiLineKind::Assignment { name } => format!("{name} = {value}"),
+                _ => format!("строка {} = {value}", line + 1),
+            };
+            result.push((*line, label));
+        }
+        result.sort_by_key(|(line, _)| *line);
+        result
+    }
+
+    /// FR-050 Н2 (этап C): drop value-drag на параметр приёмника — создать
+    /// value-ребро с `toParam` (занятый параметр — диалог «Заменить
+    /// источник?» Н4; цикл — диалог FR-014 с control-фолбэком: toParam
+    /// семантики не переносит, как from_line у FR-025). Неоднозначный
+    /// исток (drag от текстовой ноды целиком, >1 формульных строк) —
+    /// меню выбора строки (W-AMBIGUOUS-SRC).
+    fn drop_to_param(
+        &mut self,
+        from_node: String,
+        from_side: Side,
+        from_port: Option<&canvas_core::LinePort>,
+        to_node: String,
+        param: String,
+    ) {
+        let from_line = from_port.and_then(|port| port.line);
+        // W-AMBIGUOUS-SRC (FR-032): исток не адресован, строк с значением
+        // больше одной — сначала выбор строки-источника
+        if from_port.is_none() && self.source_formula_lines(&from_node).len() > 1 {
+            let items = self
+                .source_formula_lines(&from_node)
+                .into_iter()
+                .map(|(line, label)| ChoiceItem {
+                    label,
+                    action: ChoiceAction::SourceLine {
+                        from_node: from_node.clone(),
+                        from_side,
+                        line,
+                        to_node: to_node.clone(),
+                        param: Some(param.clone()),
+                    },
+                })
+                .collect();
+            self.open_choice_menu(keys::MENU_PICK_LINE_TITLE, items);
+            return;
+        }
+        self.connect_to_param(from_node, from_side, from_line, to_node, param);
+    }
+
+    /// FR-050 Н2/Н4 (этап C): создать value-ребро с `toParam` — с
+    /// проверками занятости (диалог замены) и цикла (диалог FR-014).
+    fn connect_to_param(
+        &mut self,
+        from_node: String,
+        from_side: Side,
+        from_line: Option<usize>,
+        to_node: String,
+        param: String,
+    ) {
+        // Н4: параметр уже запитан — диалог «Заменить источник?»
+        let old = canvas_core::flow::occupying_param_edges(&self.scene.canvas, &to_node, &param);
+        if !old.is_empty() {
+            // Победитель — последнее ребро; подпись источника для тела
+            // диалога (имя шаблона / первая строка / label / id)
+            let winner = old
+                .last()
+                .and_then(|edge| self.scene.canvas.node(&edge.from_node))
+                .map(node_display_label)
+                .unwrap_or_else(|| param.clone());
+            let old_edges = old.iter().map(|edge| edge.id.clone()).collect();
+            self.dialog = Some(AppDialog::ReplaceSource {
+                from_node,
+                from_side,
+                from_line,
+                to_node,
+                to_side: Side::Left,
+                param,
+                old_edges,
+                old_source: winner,
+            });
+            self.request_redraw();
+            return;
+        }
+        // FR-014: цикл value-потока — диалог с control-фолбэком
+        if canvas_core::creates_value_cycle(&self.scene.canvas, &from_node, &to_node) {
+            self.dialog = Some(AppDialog::EdgeCycle {
+                from_node,
+                from_side,
+                to_node,
+                to_side: Side::Left,
+            });
+            self.request_redraw();
+            return;
+        }
+        self.create_param_edge(from_node, from_side, from_line, to_node, Side::Left, param);
+    }
+
+    /// FR-050 Н2 (этап C): меню выбора параметра приёмника (drop
+    /// value-ребра на шаблонную ноду мимо якоря). Пункты — параметры
+    /// снапшота шаблона; выбор → `connect_to_param` (занятость/цикл —
+    /// как у drop на якорь).
+    fn open_param_choice_menu(
+        &mut self,
+        from_node: String,
+        from_side: Side,
+        from_port: Option<&canvas_core::LinePort>,
+        to_node: String,
+    ) {
+        let Some(template) = self
+            .scene
+            .canvas
+            .node(&to_node)
+            .and_then(|node| node.template())
+        else {
+            return;
+        };
+        let from_line = from_port.and_then(|port| port.line);
+        let items = template
+            .params
+            .keys()
+            .map(|param| ChoiceItem {
+                label: param.clone(),
+                action: ChoiceAction::Param {
+                    from_node: from_node.clone(),
+                    from_side,
+                    from_line,
+                    to_node: to_node.clone(),
+                    param: param.clone(),
+                },
+            })
+            .collect();
+        self.open_choice_menu(keys::MENU_PICK_PARAM_TITLE, items);
+    }
+
+    /// FR-050 Н2 (этап C): открыть меню выбора у курсора (screen-space).
+    fn open_choice_menu(&mut self, title_key: &'static str, items: Vec<ChoiceItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let viewport = self.viewport_logical();
+        // Геометрия — та же, что у контекстного меню (T7): ширина/высота
+        // пунктов константны (+ строка заголовка), меню не выезжает за
+        // правый/нижний край окна
+        let count = items.len();
+        let [_, _, _, mh] = crate::ui::menu_rect_for([0.0; 2], count);
+        let mh = mh + CHOICE_MENU_TITLE_H;
+        let origin = [
+            (self.cursor[0] + 8.0).min((viewport[0] - crate::ui::MENU_WIDTH).max(0.0)),
+            (self.cursor[1] + 8.0).min((viewport[1] - mh).max(0.0)),
+        ];
+        self.choice_menu = Some(ChoiceMenu {
+            origin,
+            title_key,
+            items,
+            hovered: None,
+        });
+        self.request_redraw();
+    }
+
+    /// FR-050 Н2 (этап C): применить пункт меню выбора — создать ребро
+    /// (параметр — с toParam; строка-источник — from_line + уже выбранная
+    /// цель; проверки занятости/цикла — в connect_to_param).
+    fn apply_choice_action(&mut self, action: ChoiceAction) {
+        match action {
+            ChoiceAction::Param {
+                from_node,
+                from_side,
+                from_line,
+                to_node,
+                param,
+            } => {
+                self.connect_to_param(from_node, from_side, from_line, to_node, param);
+            }
+            ChoiceAction::SourceLine {
+                from_node,
+                from_side,
+                line,
+                to_node,
+                param,
+            } => match param {
+                Some(param) => {
+                    self.connect_to_param(from_node, from_side, Some(line), to_node, param);
+                }
+                None => {
+                    // Строка выбрана, цель — нода целиком (позиционное
+                    // ребро, как до FR-050)
+                    self.create_edge(
+                        from_node,
+                        from_side,
+                        to_node,
+                        Side::Left,
+                        FlowKind::Value,
+                        Some(line),
+                    );
+                }
+            },
+        }
+    }
+
+    /// FR-050 Н2 (этап C): создать value-ребро с `toParam` (общий путь
+    /// drop на якорь / меню выбора / замены источника). Undo-шаг (FR-006),
+    /// живой пересчёт потока — значение сразу перекрывает локальное (Р-1).
+    fn create_param_edge(
+        &mut self,
+        from_node: String,
+        from_side: Side,
+        from_line: Option<usize>,
+        to_node: String,
+        to_side: Side,
+        param: String,
+    ) {
+        let mut edge = Edge::new(
+            self.scene.canvas.next_edge_id(),
+            from_node,
+            Some(from_side),
+            to_node,
+            Some(to_side),
+        );
+        edge.set_flow_kind(FlowKind::Value);
+        edge.from_line = from_line;
+        edge.to_param = Some(param);
+        self.push_undo();
+        self.scene.canvas.add_edge(edge);
+        self.scene.mark_dirty();
+        self.scene.recompute_flow();
+        self.request_redraw();
+    }
+
     /// Хэндл конца выделенной связи под world-точкой (CR-002): конец, чей
     /// порт ближе к курсору в допуске зоны портов (CR-003, экранные px →
     /// world делением на zoom). None — мимо обоих концов/связь висячая.
@@ -6001,6 +6495,71 @@ impl App {
     /// зуме (уточнение владельца). Меню ноды/связи заменены палитрой.
     /// FR-038 (T-038.5): batch-пункты выравнивания — хвост меню, видны
     /// только при N≥3 выделенных нодах (единый список с хит-тестом).
+    /// FR-050 Н2 (этап C): оверлей меню выбора — панель + заголовок +
+    /// пункты (имена параметров / строки-источники со значениями) +
+    /// hover-подсветка. Screen-space (как контекстное меню T7):
+    /// константный размер при любом зуме; клик по пункту — действие,
+    /// мимо/Esc — отмена.
+    fn choice_menu_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let Some(menu) = &self.choice_menu else {
+            return (instances, texts);
+        };
+        let palette = self.effective_palette();
+        // Панель: высота пунктов + строка заголовка (геометрия меню T7)
+        let [x, y, w, h] = menu_rect_for(menu.origin, menu.items.len());
+        instances.push(CardInstance {
+            pos: [x, y],
+            size: [w, h + CHOICE_MENU_TITLE_H],
+            fill: palette.menu_fill,
+            border: [0.0; 4],
+            params: [6.0, 0.0, 0.0, 0.0],
+        });
+        // Заголовок — приглушённым тоном (не пункт, не интерактивен)
+        texts.push(OwnedScreenText {
+            text: self.tr(menu.title_key).to_owned(),
+            origin: [x + MENU_PADDING + 4.0, y + MENU_PADDING + 5.0],
+            width: w - MENU_PADDING * 2.0 - 8.0,
+            font_size: 12.0,
+            color: palette.body,
+            align: TextAlign::Left,
+        });
+        // Пункты — геометрия меню T7, сдвинутая на высоту заголовка;
+        // хит-тест — той же геометрией (choice_menu_item_at), клик по
+        // заголовку = «мимо пункта» = отмена
+        for (i, item) in menu.items.iter().enumerate() {
+            let rect = menu_item_rect(menu.origin, i);
+            let rect = [rect[0], rect[1] + CHOICE_MENU_TITLE_H, rect[2], rect[3]];
+            if menu.hovered == Some(i) {
+                instances.push(CardInstance {
+                    pos: [rect[0], rect[1]],
+                    size: [rect[2], rect[3]],
+                    fill: [0.24, 0.30, 0.42, 0.9],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
+            texts.push(OwnedScreenText {
+                text: item.label.clone(),
+                origin: [rect[0] + 8.0, rect[1] + 5.0],
+                width: rect[2] - 12.0,
+                font_size: 14.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        (instances, texts)
+    }
+
+    /// FR-050 Н2 (этап C): пункт меню выбора под курсором — геометрия
+    /// отрисовки (сдвиг на заголовок); None — заголовок/мимо (отмена).
+    fn choice_menu_item_at(&self, cursor: Vec2) -> Option<usize> {
+        let menu = self.choice_menu.as_ref()?;
+        let shifted = [menu.origin[0], menu.origin[1] + CHOICE_MENU_TITLE_H];
+        crate::ui::menu_item_at_for(shifted, cursor, menu.items.len())
+    }
+
     fn canvas_menu_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -8075,6 +8634,9 @@ impl App {
                 }
             }
             ui_registry::id::MENU => self.menu.take().is_some(),
+            // FR-050 Н2 (этап C): Esc закрывает меню выбора (отмена —
+            // ребро не создаётся, «либо отмена» в постановке)
+            ui_registry::id::CHOICE_MENU => self.choice_menu.take().is_some(),
             ui_registry::id::SETTINGS => {
                 // FR-026: Esc при открытом меню закрывает ТОЛЬКО меню
                 // (повторный Esc закроет панель — семантика popup FR-021)
@@ -9254,6 +9816,13 @@ impl App {
                 self.click_context_menu();
                 true
             }
+            // FR-050 Н2 (этап C): клик по панели меню выбора — пункт
+            // выполняет действие; заголовок/паддинг — отмена («мимо
+            // пункта», как клик мимо панели — backdrop)
+            ui_registry::id::CHOICE_MENU => {
+                self.click_choice_menu();
+                true
+            }
             _ => false,
         }
     }
@@ -9296,6 +9865,13 @@ impl App {
             }
             ui_registry::id::MENU => {
                 self.menu = None;
+                self.request_redraw();
+                true
+            }
+            // FR-050 Н2 (этап C): клик мимо панели меню выбора — отмена
+            // («либо отмена» в постановке): закрыть и глотнуть
+            ui_registry::id::CHOICE_MENU => {
+                self.choice_menu = None;
                 self.request_redraw();
                 true
             }
@@ -11209,6 +11785,9 @@ impl App {
                 // конца существующей (CR-002). На другую ноду — применяем,
                 // в пустоту/на ту же ноду/на зеркальный конец — отмена
                 if let Some(drag) = self.edge_drag.take() {
+                    // FR-050 Н2 (этап C): подсветка целей drag гасится на
+                    // отпускании (drag завершён)
+                    self.param_drop = None;
                     let world = self.cursor_world();
                     match drag {
                         EdgeDrag::New {
@@ -11217,14 +11796,50 @@ impl App {
                             value_flow,
                             from_port,
                         } => {
+                            // FR-025: drag от построчного порта всегда
+                            // value-ребро (точка выхода расчёта)
+                            let value_flow = value_flow || from_port.is_some();
+                            // FR-050 Н2 (этап C): drop value-drag на якорь
+                            // параметра шаблонной ноды — value-ребро с toParam
+                            // (занятость/цикл/W-AMBIGUOUS-SRC — внутри);
+                            // приоритет над портом стороны (якорь сидит на
+                            // левом краю, как порт — но семантика точнее)
+                            if value_flow {
+                                if let Some((target, port)) = self.param_port_hit(world) {
+                                    let to_id = self.scene.canvas.nodes[target].id.clone();
+                                    if to_id != from_node {
+                                        self.drop_to_param(
+                                            from_node.clone(),
+                                            from_side,
+                                            from_port.as_ref(),
+                                            to_id,
+                                            port.param.clone(),
+                                        );
+                                        self.request_redraw();
+                                        return;
+                                    }
+                                }
+                            }
                             if let Some(target) = self.selective_hit(world) {
                                 let to_node = &self.scene.canvas.nodes[target];
                                 let to_id = to_node.id.clone();
                                 if to_id != from_node {
+                                    // FR-050 Н2 (этап C): drop value-ребра на
+                                    // шаблонную ноду мимо якоря — меню выбора
+                                    // параметра приёмника (иначе позиционное
+                                    // ребро даст W-UNUSED-SLOT и авто-строку
+                                    // вместо проливания в параметр)
+                                    if value_flow && to_node.template().is_some() {
+                                        self.open_param_choice_menu(
+                                            from_node.clone(),
+                                            from_side,
+                                            from_port.as_ref(),
+                                            to_id,
+                                        );
+                                        self.request_redraw();
+                                        return;
+                                    }
                                     let to_side = nearest_side(to_node, world);
-                                    // FR-025: drag от построчного порта всегда
-                                    // value-ребро (точка выхода расчёта)
-                                    let value_flow = value_flow || from_port.is_some();
                                     // FR-025: построчный исток — индекс строки
                                     // (футер шаблонной ноды — None: узловое
                                     // значение)
@@ -11343,6 +11958,12 @@ impl App {
         // FR-028: открытый онбординг модален — ПКМ глотается (меню
         // канваса/палитра не всплывают под оверлеем)
         if self.onboarding.is_some() {
+            self.request_redraw();
+            return;
+        }
+        // FR-050 Н2 (этап C): ПКМ закрывает меню выбора (отмена) — канвасное
+        // меню не всплывает поверх активного выбора
+        if self.choice_menu.take().is_some() {
             self.request_redraw();
             return;
         }
@@ -11575,6 +12196,18 @@ impl App {
             self.request_redraw();
         }
         self.cursor = logical;
+        // FR-050 Н2 (этап C): hover-пункт меню выбора (подсветка следует
+        // за курсором — паттерн аффорданса контекстного меню; геометрия —
+        // сдвиг пунктов на заголовок, как в отрисовке)
+        if let Some(menu) = self.choice_menu.as_mut() {
+            let count = menu.items.len();
+            let shifted = [menu.origin[0], menu.origin[1] + CHOICE_MENU_TITLE_H];
+            let hovered = crate::ui::menu_item_at_for(shifted, logical, count);
+            if menu.hovered != hovered {
+                menu.hovered = hovered;
+                self.request_redraw();
+            }
+        }
         // FR-025: нажатие на строку палитры — порог переводит его в drag
         // (ghost-превью следует за курсором до отпускания)
         if let Some(drag) = self.template_drag.as_mut() {
@@ -11652,7 +12285,13 @@ impl App {
                 self.request_redraw();
             } else if self.edge_drag.is_some() {
                 // Резиновая линия (T8) следует за курсором — курсор уже
-                // обновлён выше, нужна только перерисовка
+                // обновлён выше, нужна только перерисовка.
+                // FR-050 Н2 (этап C): цель value-drag — пересчёт подсветки
+                // якорей параметров (совместимость Н5), смена — перерисовка
+                let param_drop = self.compute_param_drop();
+                if param_drop != self.param_drop {
+                    self.param_drop = param_drop;
+                }
                 self.request_redraw();
             } else if !self.panning() && !self.editor_dragging && self.editing.is_none() {
                 // Hover (T8): порты ноды под курсором; перерисовка — только
@@ -12361,6 +13000,39 @@ impl App {
                     None,
                 );
             }
+            // FR-050 Н4: замена источника — ОДИН undo-шаг (FR-006): старые
+            // рёбра (легаси-дубли — все) удаляются, новое создаётся;
+            // инвариант «после успешного создания нет двух value-рёбер в
+            // один toParam» восстанавливается
+            AppDialog::ReplaceSource {
+                from_node,
+                from_side,
+                from_line,
+                to_node,
+                to_side,
+                param,
+                old_edges,
+                ..
+            } => {
+                self.push_undo();
+                for id in &old_edges {
+                    self.scene.canvas.remove_edge(id);
+                }
+                let mut edge = Edge::new(
+                    self.scene.canvas.next_edge_id(),
+                    from_node,
+                    Some(from_side),
+                    to_node,
+                    Some(to_side),
+                );
+                edge.set_flow_kind(FlowKind::Value);
+                edge.from_line = from_line;
+                edge.to_param = Some(param);
+                self.scene.canvas.add_edge(edge);
+                self.scene.mark_dirty();
+                self.scene.recompute_flow();
+                self.request_redraw();
+            }
         }
     }
 
@@ -12923,6 +13595,29 @@ impl App {
             canvas_menu_visible_items(self.align_menu_visible()).len(),
         ))
     }
+
+    /// FR-050 Н2 (этап C): rect панели меню выбора (пункты + строка
+    /// заголовка) — для hit-rect'а реестра поверхностей (FR-052 U2).
+    fn choice_menu_rect(&self) -> Option<[f32; 4]> {
+        let menu = self.choice_menu.as_ref()?;
+        let [x, y, w, h] = menu_rect_for(menu.origin, menu.items.len());
+        Some([x, y, w, h + CHOICE_MENU_TITLE_H])
+    }
+
+    /// FR-050 Н2 (этап C): клик по меню выбора — пункт выполняет действие
+    /// (геометрия отрисовки: сдвиг на заголовок); клик по заголовку/
+    /// паддингу — отмена: ребро не создаётся (меню уже снято диспетчером
+    /// НЕ было — берём сами, контракт как у контекстного меню T7).
+    fn click_choice_menu(&mut self) {
+        if let Some(menu) = self.choice_menu.take() {
+            if let Some(i) = self.choice_menu_item_at(self.cursor) {
+                let action = menu.items[i].action.clone();
+                self.apply_choice_action(action);
+            }
+            // Клик по заголовку/паддингу — отмена («мимо пункта»)
+        }
+        self.request_redraw();
+    }
 }
 
 impl ApplicationHandler<AppEvent> for App {
@@ -13088,6 +13783,13 @@ impl ApplicationHandler<AppEvent> for App {
                     let (menu_instances, menu_texts) = self.canvas_menu_overlay();
                     screen_bands.push(UiLayer::Popups, menu_instances, menu_texts);
                 }
+                // FR-050 Н2 (этап C): меню выбора (параметр приёмника /
+                // строка-источник) — полоса Popups поверх меню канваса
+                // (клики/Escape — через реестр поверхностей FR-052 U2)
+                {
+                    let (choice_instances, choice_texts) = self.choice_menu_overlay();
+                    screen_bands.push(UiLayer::Popups, choice_instances, choice_texts);
+                }
                 // FR-027: меню помощи «?» и просмотрщик документации —
                 // поверх канваса (просмотрщик выше меню: открытие закрывает
                 // меню, но порядок безопасен в любом состоянии)
@@ -13179,6 +13881,54 @@ impl ApplicationHandler<AppEvent> for App {
                             color: Color::rgb(0xe5, 0x5c, 0x5c),
                             align: TextAlign::Left,
                         });
+                    }
+                    // FR-050 Р-3 (этап C): тултип unmapped-ребра «проблема +
+                    // решение» (контракт Р-3 — ровно два пункта): курсор над
+                    // пунктирной янтарной связью «не подставлено». Параметр с
+                    // fromOutput — точный диагноз (какой выход у какой ноды);
+                    // прочие (позиционный слот / параметр без адреса выхода) —
+                    // общий шаблон. Янтарный тон — тот же, что у ребра.
+                    if self.edge_drag.is_none() && self.choice_menu.is_none() {
+                        let world = self.cursor_world();
+                        if let Some(index) =
+                            edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
+                        {
+                            let edge = &self.scene.canvas.edges[index];
+                            if self.scene.unmapped_edges.iter().any(|id| id == &edge.id) {
+                                let text = if let (Some(param), Some(output)) =
+                                    (&edge.to_param, &edge.from_output)
+                                {
+                                    let node_label = self
+                                        .scene
+                                        .canvas
+                                        .node(&edge.from_node)
+                                        .map(node_display_label)
+                                        .unwrap_or_else(|| edge.from_node.clone());
+                                    self.trf(
+                                        keys::TOOLTIP_UNMAPPED_PARAM,
+                                        &[
+                                            ("{param}", param),
+                                            ("{output}", output),
+                                            ("{node}", &node_label),
+                                        ],
+                                    )
+                                } else {
+                                    self.tr(keys::TOOLTIP_UNMAPPED_SLOT).to_owned()
+                                };
+                                let viewport = self.viewport_logical();
+                                let origin_x = (self.cursor[0] + 14.0)
+                                    .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                                tooltip_texts.push(OwnedScreenText {
+                                    text,
+                                    origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                                    width: TOOLTIP_WIDTH,
+                                    font_size: 13.0,
+                                    // Янтарный акцент анализа (severity warning)
+                                    color: Color::rgb(0xf5, 0xa6, 0x23),
+                                    align: TextAlign::Left,
+                                });
+                            }
+                        }
                     }
                     screen_bands.push(UiLayer::Popups, Vec::new(), tooltip_texts);
                 }
@@ -13663,6 +14413,17 @@ impl ApplicationHandler<AppEvent> for App {
                         edges_avoid: self.settings.edges_avoid_nodes,
                         port_zone_px: self.settings.port_zone_px,
                         line_ports: self.settings.line_ports,
+                        // FR-050 Н2 (этап C): подсветка якорей параметров
+                        // во время value-drag (совместимость Н5)
+                        param_drop: self.param_drop.as_ref().map(|(node_index, params)| {
+                            ParamDropView {
+                                node_index: *node_index,
+                                params,
+                            }
+                        }),
+                        // FR-050 Р-3 (этап C): unmapped-рёбра — пунктир
+                        // янтарным акцентом анализа
+                        unmapped_edges: &self.scene.unmapped_edges,
                         focus,
                         widget_transparent: &widget_transparent,
                         widget_title_reveal: &widget_title_reveal,
@@ -15595,5 +16356,63 @@ mod tests {
         assert!(!app.align_menu_visible(), "N=2 — скрыты");
         app.selected_nodes = vec![0, 1, 2];
         assert!(app.align_menu_visible(), "N=3 — видны");
+    }
+}
+
+// --- FR-050 (этап C): чистые функции UI-механизма toParam ---
+
+#[cfg(test)]
+mod fr050_stage_c_tests {
+    use super::*;
+
+    /// Н2: исток активного drag — только вариант New; Rebind/None — нет.
+    #[test]
+    fn drag_from_node_only_new_variant() {
+        assert_eq!(drag_from_node(None), None);
+        assert_eq!(
+            drag_from_node(Some(&EdgeDrag::Rebind {
+                edge_index: 0,
+                end: canvas_core::EdgeEnd::From,
+            })),
+            None,
+            "перепривязка — не новый исток"
+        );
+        assert_eq!(
+            drag_from_node(Some(&EdgeDrag::New {
+                from_node: "a".to_owned(),
+                from_side: Side::Right,
+                value_flow: true,
+                from_port: None,
+            })),
+            Some("a".to_owned())
+        );
+    }
+
+    /// Н4: подпись ноды для диалога замены — приоритет: имя шаблона
+    /// (FR-023) → первая непустая строка текста → label → id.
+    #[test]
+    fn node_display_label_priority() {
+        let mut node = Node::text("n1", "rps = 1000 rps\nservers = 2", 0.0, 0.0);
+        node.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "t".to_owned(),
+            version: "1".to_owned(),
+            expr: "$rps".to_owned(),
+            params: Default::default(),
+            icon: String::new(),
+            color: String::new(),
+            name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
+        }));
+        assert_eq!(node_display_label(&node), "Балансировщик");
+        // Проза без шаблона: первая непустая строка (пустые пропускаются)
+        let prose = Node::text("n2", "\n\nПривет Мир\nвторой", 0.0, 0.0);
+        assert_eq!(node_display_label(&prose), "Привет Мир");
+        // Текст пуст → label
+        let labeled = Node::text("n3", "", 0.0, 0.0);
+        let mut labeled = labeled;
+        labeled.label = Some("Метка".to_owned());
+        assert_eq!(node_display_label(&labeled), "Метка");
+        // Совсем ничего → id
+        assert_eq!(node_display_label(&Node::text("n4", "", 0.0, 0.0)), "n4");
     }
 }

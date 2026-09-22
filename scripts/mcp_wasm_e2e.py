@@ -5,12 +5,15 @@ canvasdesk-mcp-headless в wasmtime (wasm32-wasip1) — без Windows и GUI.
 Сценарий (гейты эталонов, те же числа, что lib-тесты canvas-mcp-headless):
 
   1. initialize          → эхо protocolVersion 2025-06-18, serverInfo canvasdesk
-  2. tools/list          → 36 инструментов
+  2. tools/list          → 39 инструментов
   3. graph_apply         → мини-эталон №1 (ADR-0005/0006): flow oracle ±1 %
   4. analyze_bottlenecks → CP5 ρ-лестница: 0.417 none → DAU×2 warn 0.833
                            → DAU×5.35 overload 2.229 (бейджи канваса)
+  4a. schemes_list/apply → PRD-0008 Q5 v2: галерея агенту, оракулы 5000/0.625
+  4b. lineage            → FR-048 X2: дерево происхождения (calc/via)
+  4c. flow_recalc        → MCP-parity: активный what-if (416.67) + авто-строки
   5. негативные ветки    → isError неизвестного инструмента, −32601
-                           неизвестного метода, batch из 2
+                           неизвестного метода, batch из 2, схемы/lineage
   6. notification        → тишина (следующий ответ — уже на ping)
 
 Лог сессии сохраняется для разбора падений: target/tmp/mcp_wasm_session.log
@@ -221,6 +224,15 @@ def structured(result: dict) -> dict:
     return payload
 
 
+def text_payload(result: dict):
+    """FR-034: массивные инструменты (nodes_list/schemes_list) не имеют
+    structuredContent — JSON приходит в text-контенте."""
+    content = result.get("content", [])
+    if not content:
+        raise AssertionError(f"нет content: {json.dumps(result)[:300]}")
+    return json.loads(content[0].get("text", "null"))
+
+
 def node_report(report: dict, node_id: str) -> dict:
     for entry in report.get("nodes", []):
         if entry.get("id") == node_id:
@@ -248,10 +260,10 @@ def run_scenario(session: Session) -> None:
     assert init.get("serverInfo", {}).get("name") == "canvasdesk", init
     log("    initialize: эхо 2025-06-18, serverInfo canvasdesk")
 
-    # --- 2. tools/list: 36 инструментов ---
+    # --- 2. tools/list: 39 инструментов ---
     reply = session.request("tools/list", log_tag="tools/list")
     tools = result_of(reply).get("tools", [])
-    assert len(tools) == 36, f"tools/list: {len(tools)} != 36"
+    assert len(tools) == 39, f"tools/list: {len(tools)} != 39"
     log(f"    tools/list: {len(tools)} инструментов")
 
     # --- 3. graph_apply: мини-эталон №1, flow oracle ±1 % ---
@@ -307,7 +319,107 @@ def run_scenario(session: Session) -> None:
         assert_close(cdn_report["utilization"], rho, f"CDN ρ DAU {tag}")
         assert cdn_report["badge"] == badge, f"бейдж DAU {tag}: {cdn_report}"
 
+    # --- 4a. PRD-0008 (Q5 v2): галерея схем агенту (те же пакеты, что Ctrl+T) ---
+    reply = session.request(
+        "tools/call", {"name": "schemes_list", "arguments": {}},
+        log_tag="schemes_list",
+    )
+    schemes = text_payload(result_of(reply))
+    assert isinstance(schemes, list) and len(schemes) == 6, schemes
+    scheme_ids = [s.get("id") for s in schemes]
+    assert "com.canvasdesk.scheme.intro-calculations" in scheme_ids, scheme_ids
+    log(f"    schemes_list: {len(schemes)} пакетов (как в галерее)")
+
+    reply = session.request(
+        "tools/call",
+        {"name": "schemes_apply",
+         "arguments": {"id": "com.canvasdesk.scheme.intro-calculations", "x": 0, "y": 900}},
+        log_tag="schemes_apply",
+    )
+    applied = structured(result_of(reply))
+    assert applied.get("applied") == "com.canvasdesk.scheme.intro-calculations", applied
+    assert len(applied.get("nodes", [])) == 6, applied
+    assert len(applied.get("edges", [])) == 4, applied
+    scheme_flow = applied.get("flow", {})
+    scheme_values = [e.get("value") for e in scheme_flow.values() if isinstance(e, dict)]
+    assert 5000.0 in scheme_values, scheme_values
+    assert 0.625 in scheme_values, scheme_values
+    log("    schemes_apply: вставка + оракулы PRD-0008 (load 5000 / share 0.625)")
+
+    # --- 4b. FR-048 X2: lineage — дерево происхождения цифры ---
+    reply = session.request(
+        "tools/call", {"name": "lineage", "arguments": {"node_id": cdn}},
+        log_tag="lineage итога CDN",
+    )
+    tree = structured(result_of(reply))
+    assert tree["root"]["node_id"] == cdn, tree["root"]
+    assert tree["root"]["line"] is None, tree["root"]
+    nodes = tree["nodes"]
+    root = nodes[0]
+    assert root["node_id"] == cdn and root["kind"] == "calc", root
+    children = root.get("children", [])
+    assert any(c.get("via", {}).get("edge_id") for c in children), root
+    log(f"    lineage: calc-корень, {len(nodes)} узлов, via-рёбра подсветки")
+
+    # --- 4c. MCP-parity: flow_recalc = активный what-if + авто-строки Р-4 ---
+    reply = session.request(
+        "tools/call",
+        {"name": "whatif_set_override",
+         "arguments": {"node_id": traffic, "line": 0, "expr": "dau = 400000"}},
+        log_tag="whatif подмена DAU ×2",
+    )
+    assert "scenario" in structured(result_of(reply))
+    flow = structured(result_of(session.request(
+        "tools/call", {"name": "flow_recalc", "arguments": {}},
+        log_tag="flow_recalc активный",
+    )))
+    assert_close(flow[traffic]["value"], 416.6667, "flow_recalc = активная подмена (не база)")
+
+    # авто-строки FR-050 Р-4: value-ребро без toParam — производная строка
+    session.request(
+        "tools/call",
+        {"name": "edge_create",
+         "arguments": {"from": traffic, "to": cost, "kind": "value", "fromOutput": "peak_rps"}},
+        log_tag="value-ребро наблюдателю",
+    )
+    flow = structured(result_of(session.request(
+        "tools/call", {"name": "flow_recalc", "arguments": {}},
+        log_tag="flow с авто-строками",
+    )))
+    auto = flow[cost].get("autoRows", [])
+    assert len(auto) == 1 and auto[0]["field"] == "peak_rps", auto
+    assert_close(auto[0]["value"], 416.6667, "авто-строка — активное значение")
+
+    # сброс подмен — база возвращается (1070000 → peak_rps 1114.58)
+    session.request(
+        "tools/call", {"name": "whatif_reset", "arguments": {}}, log_tag="whatif_reset",
+    )
+    flow = structured(result_of(session.request(
+        "tools/call", {"name": "flow_recalc", "arguments": {}},
+        log_tag="flow_recalc база",
+    )))
+    assert_close(flow[traffic]["value"], 1114.5833, "база после сброса подмен")
+
     # --- 5. Негативные ветки ---
+    # новые инструменты: неизвестная схема и несуществующая нода lineage
+    reply = session.raw(
+        json.dumps({
+            "jsonrpc": "2.0", "id": session.next_id, "method": "tools/call",
+            "params": {"name": "schemes_apply", "arguments": {"id": "com.canvasdesk.scheme.no-such"}},
+        }),
+        log_tag="schemes_apply неизвестная схема",
+    )
+    assert reply.get("result", {}).get("isError") is True, reply
+    reply = session.raw(
+        json.dumps({
+            "jsonrpc": "2.0", "id": session.next_id, "method": "tools/call",
+            "params": {"name": "lineage", "arguments": {"node_id": "no-such"}},
+        }),
+        log_tag="lineage неизвестная нода",
+    )
+    assert reply.get("result", {}).get("isError") is True, reply
+    log("    схемы/lineage негативные ветки → isError")
+
     reply = session.raw(
         json.dumps({
             "jsonrpc": "2.0", "id": session.next_id, "method": "tools/call",
@@ -341,7 +453,7 @@ def run_scenario(session: Session) -> None:
     log(f"← batch[0]: id {first.get('id')}, result {{}}")
     log(f"← batch[1]: id {second.get('id')}, tools {len(second.get('result', {}).get('tools', []))}")
     assert first.get("result") == {}, first
-    assert len(second.get("result", {}).get("tools", [])) == 36, second
+    assert len(second.get("result", {}).get("tools", [])) == 39, second
 
     # --- 6. notification — тишина: следующий ответ уже на ping ---
     notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
