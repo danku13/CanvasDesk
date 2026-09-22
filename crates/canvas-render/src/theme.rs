@@ -326,6 +326,56 @@ impl ThemeColors {
     }
 }
 
+/// FR-055 (этап U4 PRD-0009, F-8): маппинг слотов темы → палитра-срез кита.
+/// Направление зависимости — только render → ui (обратного нет, G7); кит не
+/// знает конкретных цветов, тема отдаёт СЛОТЫ (значения — прежние константы
+/// поверхностей: ноль визуального скачка, I-1 FR-046). Нормализация u8→f32 —
+/// представление, не арифметика цвета; недостающие в v2 слоты читаются из
+/// примитивов `canvas_core::tokens` (DIALOG_* — слоты диалогов T21).
+impl From<&ThemeColors> for canvas_ui::kit::KitPalette {
+    fn from(t: &ThemeColors) -> Self {
+        let c4 = |c: Color| {
+            [
+                c.r() as f32 / 255.0,
+                c.g() as f32 / 255.0,
+                c.b() as f32 / 255.0,
+                c.a() as f32 / 255.0,
+            ]
+        };
+        let rgb3 = |rgb: [u8; 3]| {
+            [
+                rgb[0] as f32 / 255.0,
+                rgb[1] as f32 / 255.0,
+                rgb[2] as f32 / 255.0,
+                1.0,
+            ]
+        };
+        canvas_ui::kit::KitPalette {
+            panel_fill: t.menu_fill,
+            panel_border: t.palette_border,
+            control_fill: t.palette_chip_fill,
+            control_border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
+            control_primary: canvas_core::tokens::DIALOG_BUTTON_PRIMARY,
+            control_danger: c4(t.error),
+            hover_fill: t.control_hover_fill,
+            primary_hover_fill: t.control_primary_hover_fill,
+            selected_fill: t.control_selected_fill,
+            text: c4(t.body),
+            text_title: c4(t.title),
+            text_muted: rgb3(canvas_core::tokens::DIALOG_TEXT_MUTED),
+            disabled_text: c4(t.control_disabled_text),
+            accent: t.accent,
+        }
+    }
+}
+
+/// Удобство: палитра кита из владеемой темы (панель витрины, DebugOverlay).
+impl ThemeColors {
+    pub fn kit_palette(&self) -> canvas_ui::kit::KitPalette {
+        canvas_ui::kit::KitPalette::from(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

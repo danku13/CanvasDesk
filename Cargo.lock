@@ -358,6 +358,7 @@ dependencies = [
 name = "canvas-ui"
 version = "0.1.0"
 dependencies = [
+ "canvas-core",
  "cosmic-text",
 ]
 

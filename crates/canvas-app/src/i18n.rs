@@ -391,6 +391,39 @@ pub mod keys {
     pub const GALLERY_APPLIED: &str = "gallery.applied";
     pub const GALLERY_UNKNOWN: &str = "gallery.unknown";
     pub const HELP_SCHEMES: &str = "help.schemes";
+    /// FR-055 U4 (Q5-a): пункт меню «?» «О интерфейсе» — витрина кита.
+    pub const HELP_INTERFACE: &str = "help.interface";
+    /// FR-055 U4: заголовок витрины кита.
+    pub const KIT_GALLERY_TITLE: &str = "kit.gallery.title";
+    /// Кнопка темы в шапке витрины (реальный kit-контрол).
+    pub const KIT_GALLERY_THEME: &str = "kit.gallery.theme";
+    /// Варианты кнопок витрины.
+    pub const KIT_BTN_PRIMARY: &str = "kit.button.primary";
+    pub const KIT_BTN_SECONDARY: &str = "kit.button.secondary";
+    pub const KIT_BTN_GHOST: &str = "kit.button.ghost";
+    pub const KIT_BTN_DANGER: &str = "kit.button.danger";
+    /// Dropdown-демо витрины.
+    pub const KIT_DROPDOWN_ANCHOR: &str = "kit.dropdown.anchor";
+    pub const KIT_DROPDOWN_ITEM: &str = "kit.dropdown.item";
+    /// Toast/Tooltip-демо витрины.
+    pub const KIT_TOAST_BODY: &str = "kit.toast.body";
+    pub const KIT_TOOLTIP_ANCHOR: &str = "kit.tooltip.anchor";
+    pub const KIT_TOOLTIP_BODY: &str = "kit.tooltip.body";
+    /// Состояния витрины (подписи контролов).
+    pub const KIT_STATE_NORMAL: &str = "kit.state.normal";
+    pub const KIT_STATE_HOVER: &str = "kit.state.hover";
+    pub const KIT_STATE_PRESSED: &str = "kit.state.pressed";
+    pub const KIT_STATE_DISABLED: &str = "kit.state.disabled";
+    pub const KIT_STATE_SELECTED: &str = "kit.state.selected";
+    /// Секции витрины.
+    pub const KIT_SECTION_BUTTONS: &str = "kit.section.buttons";
+    pub const KIT_SECTION_ICON: &str = "kit.section.icon_buttons";
+    pub const KIT_SECTION_CHIPS: &str = "kit.section.chips";
+    pub const KIT_SECTION_DROPDOWN: &str = "kit.section.dropdown";
+    pub const KIT_SECTION_TOAST: &str = "kit.section.toast";
+    pub const KIT_SECTION_TOOLTIP: &str = "kit.section.tooltip";
+    /// DebugOverlay (F10): подсказка тогла.
+    pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -830,6 +863,36 @@ const RU: &[(&str, &str)] = &[
         "Схема не найдена: {id} — проверьте параметр ?template",
     ),
     (keys::HELP_SCHEMES, "Галерея схем"),
+    (keys::HELP_INTERFACE, "О интерфейсе"),
+    (keys::KIT_GALLERY_TITLE, "Витрина интерфейса (UI kit v1)"),
+    (keys::KIT_GALLERY_THEME, "Переключить тему"),
+    (keys::KIT_BTN_PRIMARY, "Главная"),
+    (keys::KIT_BTN_SECONDARY, "Вторичная"),
+    (keys::KIT_BTN_GHOST, "Призрачная"),
+    (keys::KIT_BTN_DANGER, "Опасная"),
+    (keys::KIT_DROPDOWN_ANCHOR, "Выпадающий список"),
+    (keys::KIT_DROPDOWN_ITEM, "Пункт списка"),
+    (keys::KIT_TOAST_BODY, "Тост: внизу по центру, 3 с (T21-A)"),
+    (keys::KIT_TOOLTIP_ANCHOR, "Наведи"),
+    (
+        keys::KIT_TOOLTIP_BODY,
+        "Тултип: якорь + flip при нехватке места + delay 500 мс",
+    ),
+    (keys::KIT_STATE_NORMAL, "Обычное"),
+    (keys::KIT_STATE_HOVER, "Наведение"),
+    (keys::KIT_STATE_PRESSED, "Нажатие"),
+    (keys::KIT_STATE_DISABLED, "Недоступно"),
+    (keys::KIT_STATE_SELECTED, "Выбрано"),
+    (keys::KIT_SECTION_BUTTONS, "Кнопки (Button × варианты × состояния)"),
+    (keys::KIT_SECTION_ICON, "Икон-кнопки (IconButton)"),
+    (keys::KIT_SECTION_CHIPS, "Чипы (Chip)"),
+    (keys::KIT_SECTION_DROPDOWN, "Выпадающий список (Dropdown: якорь + flip)"),
+    (keys::KIT_SECTION_TOAST, "Тост (Toast)"),
+    (keys::KIT_SECTION_TOOLTIP, "Тултип (Tooltip: якорь + flip + delay)"),
+    (
+        keys::KIT_DEBUG_HINT,
+        "DebugOverlay (F9): рамки слоёв, имя под курсором, пересечения",
+    ),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
     (keys::ONBOARDING_DONE, "Готово"),
@@ -1433,6 +1496,36 @@ const EN: &[(&str, &str)] = &[
         "Scheme not found: {id} — check the ?template parameter",
     ),
     (keys::HELP_SCHEMES, "Scheme gallery"),
+    (keys::HELP_INTERFACE, "About the interface"),
+    (keys::KIT_GALLERY_TITLE, "Interface showcase (UI kit v1)"),
+    (keys::KIT_GALLERY_THEME, "Toggle theme"),
+    (keys::KIT_BTN_PRIMARY, "Primary"),
+    (keys::KIT_BTN_SECONDARY, "Secondary"),
+    (keys::KIT_BTN_GHOST, "Ghost"),
+    (keys::KIT_BTN_DANGER, "Danger"),
+    (keys::KIT_DROPDOWN_ANCHOR, "Dropdown"),
+    (keys::KIT_DROPDOWN_ITEM, "List item"),
+    (keys::KIT_TOAST_BODY, "Toast: bottom center, 3 s (T21-A)"),
+    (keys::KIT_TOOLTIP_ANCHOR, "Hover me"),
+    (
+        keys::KIT_TOOLTIP_BODY,
+        "Tooltip: anchor + flip when out of space + 500 ms delay",
+    ),
+    (keys::KIT_STATE_NORMAL, "Normal"),
+    (keys::KIT_STATE_HOVER, "Hover"),
+    (keys::KIT_STATE_PRESSED, "Pressed"),
+    (keys::KIT_STATE_DISABLED, "Disabled"),
+    (keys::KIT_STATE_SELECTED, "Selected"),
+    (keys::KIT_SECTION_BUTTONS, "Buttons (Button × variants × states)"),
+    (keys::KIT_SECTION_ICON, "Icon buttons (IconButton)"),
+    (keys::KIT_SECTION_CHIPS, "Chips (Chip)"),
+    (keys::KIT_SECTION_DROPDOWN, "Dropdown (anchor + flip)"),
+    (keys::KIT_SECTION_TOAST, "Toast"),
+    (keys::KIT_SECTION_TOOLTIP, "Tooltip (anchor + flip + delay)"),
+    (
+        keys::KIT_DEBUG_HINT,
+        "DebugOverlay (F9): layer rects, name under cursor, intersections",
+    ),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
     (keys::ONBOARDING_DONE, "Done"),

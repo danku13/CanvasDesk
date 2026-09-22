@@ -6,9 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# FR-051 U1: нулевые зависимости крейтов проекта — чистая геометрия экрана
-# без GPU/ОС (PRD-0009 §7.3/§9.1: headless-тестируемо, G7).
+# FR-051 U1: чистая геометрия экрана без GPU/ОС (PRD-0009 §7.3/§9.1:
+# headless-тестируемо, G7).
 # FR-053 U3 (F-6): TextMeasurer шейпит реальным cosmic-text — шрифт уже в
 # workspace (canvas-render), НЕ новая runtime-зависимость (G7); без wgpu —
 # headless-тестируемо сохраняется.
 cosmic-text.workspace = true
+# FR-055 U4 (F-8, план FR-051 «canvas-core подключается на U3 с токенами»):
+# кит-стили — только spacing/radius-scale токенов canvas-core (внутренняя
+# зависимость, 0 новых внешних — G7; цикла нет: canvas-core самодостаточен).
+canvas-core.workspace = true
