@@ -46,6 +46,10 @@ fn headless_spilled_param_row_draws() {
             from_label: "Traffic Profile".to_owned(),
             from_output: Some("peak_rps".to_owned()),
             value: Some("1388.89 rps".to_owned()),
+            // FR-050 Н9-2 (этап D): путь источника и локальный литерал —
+            // данные тултипа «пролито: …».
+            path: "Traffic Profile.peak_rps".to_owned(),
+            local: Some("100 rps".to_owned()),
         }],
     );
 
@@ -79,6 +83,7 @@ fn headless_spilled_param_row_draws() {
             expr_line_results: &line_results,
             editing_line_results: None,
             param_spills: &spills,
+            auto_rows: &Default::default(),
             whatif_nodes: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],

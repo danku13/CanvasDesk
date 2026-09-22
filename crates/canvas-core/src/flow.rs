@@ -994,6 +994,18 @@ pub struct AutoRow {
     pub value: Option<Value>,
 }
 
+impl AutoRow {
+    /// FR-050 Р-4 (этап D): текст авто-строки — единая точка сборки для
+    /// рендера (тело приёмника) и подгонки высоты (сцена): «Путь = значение
+    /// единица»; unmapped — «Путь = —» (янтарная диагностика Р-3).
+    pub fn display_text(&self) -> String {
+        match &self.value {
+            Some(value) => format!("{} = {}", self.path, value),
+            None => format!("{} = —", self.path),
+        }
+    }
+}
+
 /// FR-050 Р-4: авто-строки приёмника — производные данные пересчёта
 /// ([`FlowSolutions`] активного состояния). Порядок — `canvas.edges`
 /// (детерминирован; повторный пересчёт — идентичные строки, инвариант 2
@@ -1076,12 +1088,31 @@ pub fn auto_rows_with_data(
 /// (fallback «строка N», отображение 1-based); ребро без адресации —
 /// `edge.id` (значение ноды целиком, FR-045 Р-5).
 fn source_field_name(canvas: &Canvas, edge: &Edge) -> String {
-    if let Some(name) = &edge.from_output {
-        return name.clone();
+    spill_source_field(
+        canvas,
+        &edge.from_node,
+        edge.from_output.as_deref(),
+        edge.from_line,
+        &edge.id,
+    )
+}
+
+/// FR-050 Н9-2 (этап D): поле квалифицированного пути «Объект.Поле» для
+/// тултипа проливания — общий приоритет адресации для авто-строк (Р-4) и
+/// подписей параметров (`toParam`): `fromOutput` → `fromLine` → fallback.
+pub fn spill_source_field(
+    canvas: &Canvas,
+    from_node: &str,
+    from_output: Option<&str>,
+    from_line: Option<usize>,
+    fallback: &str,
+) -> String {
+    if let Some(name) = from_output {
+        return name.to_owned();
     }
-    if let Some(line) = edge.from_line {
+    if let Some(line) = from_line {
         let raw = canvas
-            .node(&edge.from_node)
+            .node(from_node)
             .and_then(|node| node.text.as_deref())
             .and_then(|text| text.lines().nth(line));
         if let Some(raw) = raw {
@@ -1091,7 +1122,7 @@ fn source_field_name(canvas: &Canvas, edge: &Edge) -> String {
         }
         return format!("строка {}", line + 1);
     }
-    edge.id.clone()
+    fallback.to_owned()
 }
 
 /// Заголовок ноды-источника для подписи проливания: снимок имени шаблона

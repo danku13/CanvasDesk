@@ -37,6 +37,12 @@ const FONT_DATA: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/NotoSansDisplay-Bold.ttf"),
     include_bytes!("../../../assets/fonts/NotoSansMono-Regular.ttf"),
     include_bytes!("../../../assets/fonts/NotoSansMono-Bold.ttf"),
+    // FR-050 Р-2 (этап D): наклонная производная Noto Sans Mono (oblique-синтез
+    // 11°, авансы/метрики сохранены; генерация — scripts/gen_oblique_font.py,
+    // лицензия OFL — имя без RFN «Noto»). У Noto Sans Mono НЕТ официального
+    // italic-начертания, наклонный синтез — единственный путь получить курсив
+    // моно с теми же метриками (раскладка не разъезжается).
+    include_bytes!("../../../assets/fonts/CanvasDeskMonoOblique.ttf"),
 ];
 
 /// Семейство базового текста канваса (CR-009): Noto Sans Display.
@@ -60,6 +66,19 @@ pub(crate) fn sans_attrs() -> Attrs<'static> {
 /// шрифт остаётся моно (вшито лицо Bold 700).
 pub(crate) fn mono_attrs() -> Attrs<'static> {
     Attrs::new().family(Family::Name(MONO_FAMILY))
+}
+
+/// FR-050 Р-2 (этап D): семейство пролитых значений — CanvasDesk Mono
+/// Oblique (наклонный синтез Noto Sans Mono, те же авансы/метрики).
+pub(crate) const MONO_OBLIQUE_FAMILY: &str = "CanvasDesk Mono Oblique";
+
+/// FR-050 Р-2 (этап D): атрибуты пролитого значения — наклонное моно
+/// начертание. Значение, пришедшее по связи, визуально отличается от
+/// локального (решение владельца Q9); поверхности — строка параметра
+/// шаблонной ноды и авто-строка приёмника (Р-4). Метрики идентичны
+/// [`mono_attrs`] — измерение и раскладка не меняются.
+pub(crate) fn mono_oblique_attrs() -> Attrs<'static> {
+    Attrs::new().family(Family::Name(MONO_OBLIQUE_FAMILY))
 }
 
 /// Размер заголовка в world-px (масштабируется зумом).
@@ -124,6 +143,43 @@ const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
 pub struct LineErrorHit {
     pub rect: [f32; 4],
     pub message: String,
+}
+
+/// FR-050 Н9-2 (этап D): вид проливаемой строки для тултипа источника —
+/// данные (не текст): форматирование в приложении (i18n RU/EN FR-040).
+/// «Param» — строка параметра шаблонной ноды, запитанная `toParam`-ребром;
+/// «AutoRow» — авто-строка приёмника (Р-4, позиционный вход без читающего
+/// порта). `value: None` — unmapped («не подставлено», Р-3).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpillHitKind {
+    Param {
+        param: String,
+        /// Квалифицированный путь источника «Объект.Поле».
+        path: String,
+        value: Option<String>,
+        /// Локальный литерал RHS («(локально было: 500 rps)»).
+        local: Option<String>,
+    },
+    AutoRow {
+        path: String,
+        /// Позиционный слот 0-based; тултип показывает «вход $N» = slot + 1
+        /// (отображение «$N» на теле ноды запрещено FR-044 Р-3).
+        slot: usize,
+        value: Option<String>,
+        /// Приёмник — шаблонная нода: подсказка «подключите к параметру
+        /// (toParam)» вместо «используйте $N в формуле» (матрица §1 FR-050).
+        template: bool,
+    },
+}
+
+/// FR-050 Н9-2 (этап D): зона наведения пролитой строки — логические px
+/// окна (x, y, w, h) и данные тултипа источника («пролито: Трафик.peak_rps
+/// = 1389 rps (локально было: 500 rps)»). Паттерн [`LineErrorHit`]:
+/// собирается в цикле отрисовки тела, вычитывается приложением.
+#[derive(Debug, Clone)]
+pub struct SpillHit {
+    pub rect: [f32; 4],
+    pub kind: SpillHitKind,
 }
 /// Размер шрифта бейджа «=» calc-ноды при дальнем зуме (FR-013) —
 /// физические px (не масштабируется зумом, как HUD) — из design-токенов
@@ -395,6 +451,10 @@ struct BodyBlock {
     /// FR-013 (правка 2): строка исходного текста — у блоков формульных
     /// строк (None — обычный блок из сплошного сегмента).
     source_line: Option<usize>,
+    /// FR-050 Н9-2 (этап D): данные тултипа проливания — блок
+    /// пролитой строки (авто-строка/параметр); hit-зона собирается
+    /// в цикле отрисовки тела.
+    spill: Option<SpillHitKind>,
 }
 
 /// Отрисованное тело заметки: вертикальный стек блоков (GFM).
@@ -415,6 +475,7 @@ enum ItemDeco {
 }
 
 /// Плоское описание одного размещаемого элемента тела (блок или линия).
+#[derive(Clone)]
 struct BodyItem {
     /// Зазор перед элементом (world-px), первый — 0.
     gap: f32,
@@ -433,6 +494,11 @@ struct BodyItem {
     /// формульных строк (сегмент из одной строки): привязка результата
     /// Numi-стиля к своему ряду.
     source_line: Option<usize>,
+    /// FR-050 Р-2 (этап D): наклонное моно-начертание — пролитое значение
+    /// (CanvasDesk Mono Oblique, метрики те же, что у mono).
+    oblique: bool,
+    /// FR-050 Н9-2 (этап D): данные тултипа проливания (пролитая строка).
+    spill: Option<SpillHitKind>,
 }
 
 /// Метрики заголовка по уровню ATX: 1–3 крупно, 4–6 как bold body.
@@ -491,7 +557,15 @@ fn push_item(
 /// строки — сплошные сегменты между формульными (структура GFM внутри
 /// сегмента прежняя; формульные строки внутри код-фенса не выбираются —
 /// eval_lines их пропускает, фенс не дробится).
-fn body_items(theme: &ThemeColors, body_text: &str, formula_lines: &[usize]) -> Vec<BodyItem> {
+/// FR-050 Р-2 (этап D): строка-присваивание пролитого параметра
+/// (spill_params — строка с подписью источника «param ← Источник · выход»)
+/// помечается наклонным моно-начертанием + данными тултипа Н9-2.
+fn body_items(
+    theme: &ThemeColors,
+    body_text: &str,
+    formula_lines: &[usize],
+    spill_params: &[crate::SpillView],
+) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
     let mut list_id = 0usize;
@@ -516,10 +590,15 @@ fn body_items(theme: &ThemeColors, body_text: &str, formula_lines: &[usize]) -> 
     }
     for (seg_start, seg_end, source_line) in segments {
         let seg_text = lines[seg_start..seg_end].join("\n");
+        // FR-050: пролитая строка параметра — наклонное начертание Р-2
+        // и данные тултипа источника (Н9-2).
+        let spill =
+            source_line.and_then(|line| spill_params.iter().find(|spill| spill.line == Some(line)));
         push_gfm_blocks(
             theme,
             &seg_text,
             source_line,
+            spill,
             &mut out,
             &mut prev,
             &mut list_id,
@@ -528,13 +607,74 @@ fn body_items(theme: &ThemeColors, body_text: &str, formula_lines: &[usize]) -> 
     out
 }
 
+/// FR-050 Н9-2 (этап D): данные тултипа пролитой строки параметра —
+/// из представления проливания сцены (path/local собирает recompute_flow).
+fn spill_hit_param(view: &crate::SpillView) -> SpillHitKind {
+    SpillHitKind::Param {
+        param: view.param.clone(),
+        path: view.path.clone(),
+        value: view.value.clone(),
+        local: view.local.clone(),
+    }
+}
+
+/// FR-050 Р-4 (этап D): элементы авто-строк приёмника — ПРЕФИКС тела
+/// (зона «Переменные · входящие значения», FR-045 R-4 / PRD-0004 зона C):
+/// одна строка-блок на каждое ребро без ожидающего порта. Наклонное моно
+/// начертание Р-2; unmapped — янтарный акцент анализа (Р-3). Зазоры:
+/// первый — 0, между строками — 2 (плотный список переменных).
+fn spill_row_items(
+    theme: &ThemeColors,
+    rows: &[canvas_core::flow::AutoRow],
+    template: bool,
+) -> Vec<BodyItem> {
+    let mut out = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let unmapped = row.value.is_none();
+        // Р-3: unmapped — янтарный акцент анализа (тот же тон, что
+        // пунктир unmapped-ребра UNMAPPED_EDGE_COLOR, f32 → u8).
+        let amber = {
+            let c = crate::cards::UNMAPPED_EDGE_COLOR;
+            Color::rgba(
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+                (c[3] * 255.0) as u8,
+            )
+        };
+        out.push(BodyItem {
+            gap: if i == 0 { 0.0 } else { 2.0 },
+            rule: false,
+            text: row.display_text(),
+            font_size: 13.0,
+            line_height: 18.0,
+            color: if unmapped { amber } else { theme.code_text },
+            indent: 6.0,
+            mono: true,
+            bold: false,
+            deco: ItemDeco::None,
+            source_line: None,
+            oblique: true,
+            spill: Some(SpillHitKind::AutoRow {
+                path: row.path.clone(),
+                slot: row.slot,
+                value: row.value.as_ref().map(|v| v.to_string()),
+                template,
+            }),
+        });
+    }
+    out
+}
+
 /// Разобрать сегмент GFM-блоков и допушить элементы тела; `source_line`
 /// проставляется элементам (Some — у однострочного сегмента формульной
-/// строки).
+/// строки). `spill` — проливание в строку этого сегмента (наклонное
+/// начертание Р-2 + данные тултипа Н9-2; None — обычная строка).
 fn push_gfm_blocks(
     theme: &ThemeColors,
     seg_text: &str,
     source_line: Option<usize>,
+    spill: Option<&crate::SpillView>,
     out: &mut Vec<BodyItem>,
     prev: &mut Option<(bool, bool, Option<usize>)>,
     list_id: &mut usize,
@@ -559,6 +699,8 @@ fn push_gfm_blocks(
                         bold: true,
                         deco: ItemDeco::None,
                         source_line,
+                        oblique: false,
+                        spill: None,
                     },
                 );
             }
@@ -581,6 +723,11 @@ fn push_gfm_blocks(
                         bold: false,
                         deco: ItemDeco::None,
                         source_line,
+                        // FR-050 Р-2 (этап D): пролитая строка параметра —
+                        // наклонное моно-начертание (различение пролитого и
+                        // локального) + данные тултипа источника (Н9-2).
+                        oblique: spill.is_some(),
+                        spill: spill.map(spill_hit_param),
                     },
                 );
             }
@@ -601,6 +748,8 @@ fn push_gfm_blocks(
                         bold: false,
                         deco: ItemDeco::None,
                         source_line,
+                        oblique: false,
+                        spill: None,
                     },
                 );
             }
@@ -621,6 +770,8 @@ fn push_gfm_blocks(
                         bold: false,
                         deco: ItemDeco::None,
                         source_line,
+                        oblique: false,
+                        spill: None,
                     },
                 );
             }
@@ -641,6 +792,8 @@ fn push_gfm_blocks(
                         bold: false,
                         deco: ItemDeco::None,
                         source_line,
+                        oblique: false,
+                        spill: None,
                     },
                 );
             }
@@ -674,6 +827,8 @@ fn push_gfm_blocks(
                             bold: false,
                             deco,
                             source_line,
+                            oblique: false,
+                            spill: None,
                         },
                     );
                 }
@@ -757,6 +912,10 @@ fn shape_text_block(
 /// линии `---` (world-px, после зазора, до прибавки 12). Декоративные квады
 /// оба колбэка складывают в `quads_out`. Возвращает полную высоту стека
 /// в world-px.
+/// FR-050 (этап D): `spill_prefix` — элементы авто-строк приёмника (Р-4,
+/// верх тела, зона «Переменные · входящие значения») — идут ДО собственных
+/// строк тела; `spill_params` — пролитые строки параметров (Р-2 наклонное
+/// начертание, Н9-2 данные тултипа).
 #[allow(clippy::too_many_arguments)]
 fn with_body_stack(
     font_system: &mut FontSystem,
@@ -765,6 +924,8 @@ fn with_body_stack(
     body_width: f32,
     zoom_px: f32,
     formula_lines: &[usize],
+    spill_prefix: Vec<BodyItem>,
+    spill_params: &[crate::SpillView],
     quads_out: &mut Vec<BodyQuad>,
     mut on_block: impl FnMut(
         &BodyItem,
@@ -779,7 +940,18 @@ fn with_body_stack(
     mut on_rule: impl FnMut(f32, &mut Vec<BodyQuad>),
 ) -> f32 {
     let mut cursor_y = 0.0f32; // world-px, верх текущего элемента
-    for item in body_items(theme, body_text, formula_lines) {
+                               // FR-050 Р-4: авто-строки — префикс стека (до собственного тела).
+    let mut items: Vec<BodyItem> = spill_prefix;
+    let mut body = body_items(theme, body_text, formula_lines, spill_params);
+    // Зона «Переменные» отделяется от собственного контента зазором
+    // (первый элемент тела в покое имеет gap 0 — переопределяем).
+    if !items.is_empty() {
+        if let Some(first) = body.first_mut() {
+            first.gap = first.gap.max(6.0);
+        }
+    }
+    items.extend(body);
+    for item in items {
         cursor_y += item.gap;
         if item.rule {
             // Линия: высота блока 12, квад толщиной 2 по центру
@@ -791,7 +963,11 @@ fn with_body_stack(
         // CR-009: базис посемейственно — Noto Sans Mono (Numi-строки, фенсы)
         // или Noto Sans Display Medium (прочее); жирные GFM-заголовки —
         // Weight::BOLD (700) того же семейства.
-        let mut base = if item.mono {
+        // FR-050 Р-2: пролитое значение — наклонная производная моно
+        // (CanvasDesk Mono Oblique, авансы/метрики те же).
+        let mut base = if item.oblique {
+            mono_oblique_attrs()
+        } else if item.mono {
             mono_attrs()
         } else {
             sans_attrs()
@@ -830,6 +1006,7 @@ fn with_body_stack(
 /// `body_width` — world-px, `zoom_px` — физический зум. GPU не нужен —
 /// функция тестируема с настоящим FontSystem. Стек блоков — общий
 /// [`with_body_stack`] (с измерением не разъезжается).
+#[allow(clippy::too_many_arguments)]
 fn shape_body(
     font_system: &mut FontSystem,
     theme: &ThemeColors,
@@ -838,6 +1015,8 @@ fn shape_body(
     zoom_px: f32,
     formula_lines: &[usize],
     whatif_lines: &[usize],
+    spill_prefix: Vec<BodyItem>,
+    spill_params: &[crate::SpillView],
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -848,6 +1027,8 @@ fn shape_body(
         body_width,
         zoom_px,
         formula_lines,
+        spill_prefix,
+        spill_params,
         &mut quads,
         |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
             // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
@@ -933,6 +1114,7 @@ fn shape_body(
                 height,
                 color: item.color,
                 source_line: item.source_line,
+                spill: item.spill.clone(),
             });
         },
         |cursor_y, quads| {
@@ -980,6 +1162,9 @@ pub fn measure_font_system() -> MutexGuard<'static, FontSystem> {
 /// сумма высот и зазоров GFM-блоков, включая 12 px линий `---`. GPU не нужен.
 /// `formula_lines` — те же индексы строк с результатом, что получает рендер
 /// из `expr_line_results` (по ним `body_items` ставит mono-флаг).
+/// FR-050 (этап D): проливания НЕ входят — наклонное начертание имеет те же
+/// авансы/метрики (генерация шрифта), высота стека не меняется; рост высоты
+/// под авто-строки делает сцена (CR-012-механизм, текст-префикс).
 pub fn measure_body_height(text: &str, body_width: f32, formula_lines: &[usize]) -> f32 {
     let mut guard = measure_font_system();
     with_body_stack(
@@ -989,6 +1174,8 @@ pub fn measure_body_height(text: &str, body_width: f32, formula_lines: &[usize])
         body_width.max(0.0),
         1.0,
         formula_lines,
+        Vec::new(),
+        &[],
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -1149,6 +1336,12 @@ pub struct TitleFrame<'a> {
     /// рендерится как подпись источника («param ← нода · выход»), бейдж
     /// строки — эффективным значением (пролитым), а не локальным литералом.
     pub param_spills: &'a std::collections::HashMap<String, Vec<crate::SpillView>>,
+    /// FR-050 Р-4 (этап D): авто-строки приёмников — производные строки
+    /// пересчёта потока (canvas-core `AutoRow`): рендерятся ПРЕФИКСОМ тела
+    /// (зона «Переменные · входящие значения», наклонное начертание Р-2);
+    /// hit-зоны Н9-2 собираются в цикле отрисовки. Пусто — рендер тела
+    /// байт-в-байт прежний.
+    pub auto_rows: &'a std::collections::HashMap<String, Vec<canvas_core::flow::AutoRow>>,
     /// FR-017 (CP6): what-if представления нод активного сценария —
     /// виртуальный исходник (подмены строк), подсветка подменённых строк,
     /// дельта-бейджи «было → стало (+Δ)». Пусто — режим выключен или подмен
@@ -1282,6 +1475,11 @@ pub struct TextSystem {
     /// (логические px) — пересобираются каждый кадр в prepare_titles;
     /// приложение вычитывает после рендера для тултипа.
     line_error_hits: Vec<LineErrorHit>,
+    /// FR-050 Н9-2 (этап D): зоны наведения пролитых строк (параметр с
+    /// toParam / авто-строка приёмника, логические px) — пересобираются
+    /// каждый кадр; приложение вычитывает после рендера для тултипа
+    /// источника («пролито: …»).
+    spill_hits: Vec<SpillHit>,
     /// Номер кадра для LRU-вытеснения кэша.
     tick: u64,
     /// Палитра темы: цвета заголовка/иконки/тела/лейбла связи.
@@ -1310,6 +1508,7 @@ impl TextSystem {
             cache: HashMap::new(),
             label_cache: HashMap::new(),
             line_error_hits: Vec::new(),
+            spill_hits: Vec::new(),
             tick: 0,
             theme: ThemeColors::dark(),
         }
@@ -1381,6 +1580,12 @@ impl TextSystem {
     /// hit-тестит курсор и показывает тултип с текстом ошибки.
     pub fn line_error_hits(&self) -> &[LineErrorHit] {
         &self.line_error_hits
+    }
+
+    /// FR-050 Н9-2 (этап D): зоны наведения пролитых строк кадра —
+    /// тултип источника в оверлее следующего кадра.
+    pub fn spill_hits(&self) -> &[SpillHit] {
+        &self.spill_hits
     }
 
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
@@ -1493,6 +1698,9 @@ impl TextSystem {
         // FR-013 (правка 4): зоны ошибок пересобираются заново каждый кадр
         // (позиции зависят от камеры/зума)
         let mut error_hits: Vec<LineErrorHit> = Vec::new();
+        // FR-050 Н9-2 (этап D): зоны пролитых строк — пересобираются каждый
+        // кадр (позиции зависят от камеры/зума/раскладки тела)
+        let mut spill_hits: Vec<SpillHit> = Vec::new();
         let viewport_physical = frame.viewport_physical;
         let scale_factor = frame.scale_factor;
         self.viewport.update(
@@ -1671,22 +1879,28 @@ impl TextSystem {
                 };
                 // FR-029: эффективные значения пролитых строк — в ключе
                 // свежести (бейдж зависит от значения upstream).
-                let spill_values: std::collections::HashMap<usize, &str> = frame
+                // FR-050 (этап D): в ключ входит НАБОР строк (наклонное
+                // начертание Р-2 и данные тултипа Н9-2 зависят от него),
+                // поэтому строки без значения тоже представлены («—»).
+                let spill_views: &[crate::SpillView] = frame
                     .param_spills
                     .get(&node.id)
-                    .map(|spills| {
-                        spills
-                            .iter()
-                            .filter_map(|spill| spill.line.zip(spill.value.as_deref()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let spill_key = if spill_values.is_empty() {
+                    .map(|spills| spills.as_slice())
+                    .unwrap_or(&[]);
+                let spill_values: std::collections::HashMap<usize, &str> = spill_views
+                    .iter()
+                    .filter_map(|spill| spill.line.zip(spill.value.as_deref()))
+                    .collect();
+                let spill_key = if spill_views.is_empty() {
                     String::new()
                 } else {
-                    spill_values
+                    spill_views
                         .iter()
-                        .map(|(line, value)| format!("{line}~{value}"))
+                        .map(|spill| {
+                            let line = spill.line.map(|l| l.to_string()).unwrap_or_default();
+                            let value = spill.value.as_deref().unwrap_or("—");
+                            format!("{line}~{value}")
+                        })
                         .collect::<Vec<_>>()
                         .join(";")
                 };
@@ -1694,6 +1908,27 @@ impl TextSystem {
                     results_key
                 } else {
                     format!("{results_key}|S:{spill_key}")
+                };
+                // FR-050 Р-4 (этап D): авто-строки приёмника — тексты в ключе
+                // свежести (значение upstream меняет строку → перешейп).
+                let auto_rows: &[canvas_core::flow::AutoRow] = frame
+                    .auto_rows
+                    .get(&node.id)
+                    .map(|rows| rows.as_slice())
+                    .unwrap_or(&[]);
+                let auto_key = if auto_rows.is_empty() {
+                    String::new()
+                } else {
+                    auto_rows
+                        .iter()
+                        .map(|row| row.display_text())
+                        .collect::<Vec<_>>()
+                        .join(";")
+                };
+                let results_key = if auto_key.is_empty() {
+                    results_key
+                } else {
+                    format!("{results_key}|R:{auto_key}")
                 };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
@@ -1755,7 +1990,19 @@ impl TextSystem {
                     // Тело заметки (T7, GFM): вертикальный стек блоков —
                     // заголовки/списки/цитаты/фенсы/линии со своими метриками
                     // и квадами (подсветка, зачёркивание, буллиты, бары).
-                    let body = if body_text.is_empty() {
+                    // FR-050 Р-4 (этап D): авто-строки приёмника — префикс
+                    // тела (зона «Переменные · входящие значения», Р-2
+                    // наклонное начертание); пустое тело при наличии
+                    // авто-строк всё равно шейпится (стек из одного префикса).
+                    // Редактируемая нода / LOD-скрытие тела — как у тела:
+                    // тело рисует EditingSession, авто-строки вернутся после.
+                    let body_hidden = frame.editing == Some(index) || !body_visible(node, zoom_px);
+                    let spill_prefix = if body_hidden {
+                        Vec::new()
+                    } else {
+                        spill_row_items(&self.theme, auto_rows, node.template().is_some())
+                    };
+                    let body = if body_text.is_empty() && spill_prefix.is_empty() {
                         None
                     } else {
                         let (_, body_width, _) = body_area(node);
@@ -1772,6 +2019,8 @@ impl TextSystem {
                             zoom_px,
                             &formula_lines,
                             whatif_lines,
+                            spill_prefix,
+                            spill_views,
                         ))
                     };
 
@@ -2292,6 +2541,24 @@ impl TextSystem {
                                 default_color: dim_color(on_card(block.color), text_factor),
                                 custom_glyphs: &[],
                             });
+                            // FR-050 Н9-2 (этап D): пролитая строка (авто-строка
+                            // Р-4 / параметр с toParam) — зона наведения для
+                            // тултипа источника («пролито: …»); логические px
+                            // окна (физические / scale_factor, паттерн
+                            // LineErrorHit). Только видимый ряд (не ниже клипа).
+                            if let Some(kind) = &block.spill {
+                                if bottom > top {
+                                    spill_hits.push(SpillHit {
+                                        rect: [
+                                            left / scale_factor,
+                                            top / scale_factor,
+                                            (block.width * zoom_px) / scale_factor,
+                                            (bottom - top) / scale_factor,
+                                        ],
+                                        kind: kind.clone(),
+                                    });
+                                }
+                            }
                         }
                     }
                     // FR-013 (правка 2): результат каждой формульной строки —
@@ -2627,6 +2894,9 @@ impl TextSystem {
         // FR-013 (правка 4): зоны ошибок кадра собраны — приложение вычитает
         // их после рендера для hit-теста курсора (тултип ошибки)
         self.line_error_hits = error_hits;
+        // FR-050 Н9-2 (этап D): зоны пролитых строк кадра собраны — тултип
+        // источника в оверлее следующего кадра
+        self.spill_hits = spill_hits;
         // Screen-тексты ПОЛОС (FR-052 U2): отдельная группа на полосу —
         // рендерер рисует полосы по очереди (квады полосы → тексты полосы),
         // поэтому фон следующей полосы не закрывает строки предыдущей,
@@ -3058,7 +3328,17 @@ mod tests {
 
     fn shaped(text: &str) -> BodyLayout {
         let mut fs = FontSystem::new();
-        shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[], &[])
+        shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            300.0,
+            1.0,
+            &[],
+            &[],
+            Vec::new(),
+            &[],
+        )
     }
 
     /// FR-013 (правка 2): формульная строка — самостоятельный блок с
@@ -3073,6 +3353,8 @@ mod tests {
             300.0,
             1.0,
             &[1, 2],
+            &[],
+            Vec::new(),
             &[],
         );
         assert_eq!(
@@ -3097,7 +3379,17 @@ mod tests {
         let mut fs = FontSystem::new();
         let text = "Gateway\nrps = 1000";
         // Без подмен: только фон CodeBg формульной строки.
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[1], &[]);
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            300.0,
+            1.0,
+            &[1],
+            &[],
+            Vec::new(),
+            &[],
+        );
         assert!(
             !layout
                 .quads
@@ -3107,7 +3399,17 @@ mod tests {
             layout.quads
         );
         // Подмена строки 1 → квад WhatIfBg поверх CodeBg.
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[1], &[1]);
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            300.0,
+            1.0,
+            &[1],
+            &[1],
+            Vec::new(),
+            &[],
+        );
         let whatif = layout
             .quads
             .iter()
@@ -3170,11 +3472,166 @@ mod tests {
     #[test]
     fn body_items_formula_line_is_mono() {
         let theme = ThemeColors::dark();
-        let items = body_items(&theme, "Gateway\ndeploy = 40 $", &[1]);
+        let items = body_items(&theme, "Gateway\ndeploy = 40 $", &[1], &[]);
         assert_eq!(items.len(), 2, "проза + формульная строка");
         assert!(!items[0].mono, "проза — sans");
         assert!(items[1].mono, "Numi-строка — моно");
         assert_eq!(items[1].source_line, Some(1));
+    }
+
+    /// FR-050 Р-2 (этап D): наклонное семейство CanvasDesk Mono Oblique
+    /// зарегистрировано во встроенных шрифтах (oblique-производная
+    /// Noto Sans Mono; генерация — scripts/gen_oblique_font.py).
+    #[test]
+    fn font_data_registers_mono_oblique_family() {
+        let mut fs = FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        assert!(
+            fs.db().faces().any(|face| face
+                .families
+                .iter()
+                .any(|(name, _)| name == MONO_OBLIQUE_FAMILY)),
+            "нет вшитого лица {MONO_OBLIQUE_FAMILY}"
+        );
+        let oblique = mono_oblique_attrs();
+        assert_eq!(oblique.family, Family::Name(MONO_OBLIQUE_FAMILY));
+    }
+
+    /// FR-050 Р-2/Н9-2 (этап D): строка параметра, запитанная toParam-ребром
+    /// (подпись «param ← Источник · выход»), — моно + НАКЛОННОЕ начертание
+    /// + данные тултипа источника; прочие строки — прямые, без payload.
+    #[test]
+    fn body_items_marks_spilled_param_oblique() {
+        let theme = ThemeColors::dark();
+        let spills = vec![crate::SpillView {
+            param: "rps".to_owned(),
+            line: Some(1),
+            from_label: "Трафик".to_owned(),
+            from_output: Some("peak_rps".to_owned()),
+            value: Some("1389 rps".to_owned()),
+            path: "Трафик.peak_rps".to_owned(),
+            local: Some("500 rps".to_owned()),
+        }];
+        let items = body_items(&theme, "Gateway\nrps = 500 rps", &[1], &spills);
+        assert_eq!(items.len(), 2);
+        assert!(!items[0].oblique, "проза — прямое начертание");
+        assert!(items[1].oblique, "пролитая строка — наклонное (Р-2)");
+        assert!(items[1].mono);
+        match &items[1].spill {
+            Some(SpillHitKind::Param {
+                param,
+                path,
+                value,
+                local,
+            }) => {
+                assert_eq!(param, "rps");
+                assert_eq!(path, "Трафик.peak_rps");
+                assert_eq!(value.as_deref(), Some("1389 rps"));
+                assert_eq!(local.as_deref(), Some("500 rps"));
+            }
+            other => panic!("нет данных тултипа Н9-2: {other:?}"),
+        }
+        assert!(items[0].spill.is_none(), "у прозы payload нет");
+    }
+
+    /// FR-050 Р-4 (этап D): элементы авто-строк приёмника — префикс тела:
+    /// наклонное моно, текст «Путь = значение», зазор первого 0 / прочих 2,
+    /// payload AutoRow; unmapped — «Путь = —» и янтарный цвет (Р-3).
+    #[test]
+    fn spill_row_items_build_oblique_prefix() {
+        let theme = ThemeColors::dark();
+        let rows = vec![
+            canvas_core::flow::AutoRow {
+                node_id: "gateway".to_owned(),
+                edge_id: "e1".to_owned(),
+                slot: 0,
+                path: "Трафик.peak_rps".to_owned(),
+                field: "peak_rps".to_owned(),
+                value: Some(canvas_core::Value::scalar(1389.0)),
+            },
+            canvas_core::flow::AutoRow {
+                node_id: "gateway".to_owned(),
+                edge_id: "e2".to_owned(),
+                slot: 1,
+                path: "Курсы.usd".to_owned(),
+                field: "usd".to_owned(),
+                value: None,
+            },
+        ];
+        let items = spill_row_items(&theme, &rows, false);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].gap, 0.0, "первая авто-строка — без зазора");
+        assert_eq!(items[1].gap, 2.0, "плотный список переменных");
+        assert!(items.iter().all(|item| item.oblique && item.mono));
+        assert_eq!(items[0].text, "Трафик.peak_rps = 1389");
+        assert_eq!(items[1].text, "Курсы.usd = —");
+        assert_eq!(items[0].color, theme.code_text, "пролитое — цвет кода");
+        assert_ne!(items[1].color, theme.code_text, "unmapped — янтарь Р-3");
+        match &items[0].spill {
+            Some(SpillHitKind::AutoRow {
+                path,
+                slot,
+                value,
+                template,
+            }) => {
+                assert_eq!(path, "Трафик.peak_rps");
+                assert_eq!(*slot, 0);
+                assert_eq!(value.as_deref(), Some("1389"));
+                assert!(!template, "приёмник — текстовая нода");
+            }
+            other => panic!("нет данных тултипа Н9-2: {other:?}"),
+        }
+    }
+
+    /// FR-050 Р-4 (этап D): префикс авто-строк растит высоту стека тела
+    /// (карточка обязана вместить строку-проекцию — рост в сцене, метрики
+    /// здесь); пустой префикс — высота прежняя (байт-в-байт инвариант).
+    #[test]
+    fn with_body_stack_prefix_grows_height() {
+        let mut fs = FontSystem::new();
+        let theme = ThemeColors::dark();
+        let text = "Gateway\ncache_hit = 0.6";
+        let plain = with_body_stack(
+            &mut fs,
+            &theme,
+            text,
+            300.0,
+            1.0,
+            &[1],
+            Vec::new(),
+            &[],
+            &mut Vec::new(),
+            |_, _, _, _, _, _, _, _| {},
+            |_, _| {},
+        );
+        let rows = vec![canvas_core::flow::AutoRow {
+            node_id: "n".to_owned(),
+            edge_id: "e".to_owned(),
+            slot: 0,
+            path: "Трафик.peak_rps".to_owned(),
+            field: "peak_rps".to_owned(),
+            value: Some(canvas_core::Value::scalar(1389.0)),
+        }];
+        let prefix = spill_row_items(&theme, &rows, false);
+        let with_rows = with_body_stack(
+            &mut fs,
+            &theme,
+            text,
+            300.0,
+            1.0,
+            &[1],
+            prefix,
+            &[],
+            &mut Vec::new(),
+            |_, _, _, _, _, _, _, _| {},
+            |_, _| {},
+        );
+        assert!(
+            with_rows > plain + 17.0,
+            "авто-строка добавляет ряд (~18px): {plain} → {with_rows}"
+        );
     }
 
     /// CR-009: атрибуты строк буферов тела — Numi-строка Noto Sans Mono,
@@ -3190,6 +3647,8 @@ mod tests {
             300.0,
             1.0,
             &[2],
+            &[],
+            Vec::new(),
             &[],
         );
         assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
@@ -3556,7 +4015,17 @@ mod tests {
         for data in FONT_DATA {
             fs.db_mut().load_font_data((*data).to_vec());
         }
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), text, 300.0, 1.0, &[2], &[]);
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            300.0,
+            1.0,
+            &[2],
+            &[],
+            Vec::new(),
+            &[],
+        );
         let rendered = layout
             .blocks
             .iter()
@@ -3574,7 +4043,17 @@ mod tests {
     #[test]
     fn shape_body_quads_scale_with_zoom() {
         let mut fs = FontSystem::new();
-        let layout = shape_body(&mut fs, &ThemeColors::dark(), "- a", 300.0, 2.0, &[], &[]);
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            "- a",
+            300.0,
+            2.0,
+            &[],
+            &[],
+            Vec::new(),
+            &[],
+        );
         let bullet = layout
             .quads
             .iter()
