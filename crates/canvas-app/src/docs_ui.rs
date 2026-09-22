@@ -14,8 +14,13 @@
 
 use canvas_core::Language;
 use canvas_render::gfm::{self, Block, LinkSegment};
+use canvas_ui::measure::TextMeasurer;
 
 use crate::i18n::{self, keys};
+
+/// Семейство измерения = семейство screen-текстов рендера (паритет метрик
+/// FR-053: раскладка и отрисовка в одних единицах).
+const FAMILY: &str = canvas_render::text::SANS_FAMILY;
 
 /// Вшитая страница документации: `id` (basename файла), короткая подпись
 /// для подменю «Документация ▸» и сырое markdown-тело (`include_str!`,
@@ -403,28 +408,6 @@ pub struct PageLayout {
     pub content_height: f32,
 }
 
-/// Консервативная оценка ширины глифа Noto Sans Display (доля от кегля):
-/// своя раскладка переноса — screen-тексты рендерятся с `Wrap::None`,
-/// переоценка переносит строку РАНЬШЕ реальной границы (никогда не
-/// вылезает за клип); зона ссылки чуть шире визуала — безопасно для клика.
-pub const CHAR_W_FACTOR: f32 = 0.62;
-/// Оценка ширины пробела (доля от кегля).
-pub const SPACE_W_FACTOR: f32 = 0.34;
-
-/// Оценка ширины текста (логические px) по кеглю.
-pub fn text_width(text: &str, font: f32) -> f32 {
-    text.chars()
-        .map(|c| {
-            if c == ' ' || c == '\u{00a0}' {
-                SPACE_W_FACTOR
-            } else {
-                CHAR_W_FACTOR
-            }
-        })
-        .sum::<f32>()
-        * font
-}
-
 /// Снять инлайн-маркеры акцентов (`**`, `*`, `==`, `~~`, `` ` ``) — их
 /// различие (жирный/моно) screen-тексты не поддерживают, содержимое
 /// сохраняется. Непарный маркер — литерал.
@@ -498,7 +481,13 @@ fn append_word(line: &mut Vec<DocSpan>, line_has_text: bool, word: &str, href: &
 /// Перенос спанов по ширине: слова не рвутся; слово длиннее строки —
 /// жёсткий разрыв по глифам. Ссылка может разбиться на части — каждая
 /// несёт href и кликабельна.
-fn wrap_spans(spans: &[DocSpan], max_w: f32, font: f32) -> Vec<Vec<DocSpan>> {
+fn wrap_spans(
+    spans: &[DocSpan],
+    max_w: f32,
+    font: f32,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> Vec<Vec<DocSpan>> {
     let max_w = max_w.max(1.0);
     // Плоский список слов (без пробелов) с href своего спана
     let mut words: Vec<(String, Option<String>)> = Vec::new();
@@ -512,14 +501,11 @@ fn wrap_spans(spans: &[DocSpan], max_w: f32, font: f32) -> Vec<Vec<DocSpan>> {
     let mut lines: Vec<Vec<DocSpan>> = Vec::new();
     let mut cur: Vec<DocSpan> = Vec::new();
     let mut cur_w = 0.0;
+    // Ширина пробела — измеренная (кэш TextMeasurer; единая для строки).
+    let space_w = m.width_of(fs, " ", FAMILY, font);
     for (word, href) in &words {
-        let word_w = text_width(word, font);
-        let need = word_w
-            + if cur_w > 0.0 {
-                font * SPACE_W_FACTOR
-            } else {
-                0.0
-            };
+        let word_w = m.width_of(fs, word, FAMILY, font);
+        let need = word_w + if cur_w > 0.0 { space_w } else { 0.0 };
         if need <= max_w - cur_w {
             append_word(&mut cur, cur_w > 0.0, word, href);
             cur_w += need;
@@ -531,10 +517,14 @@ fn wrap_spans(spans: &[DocSpan], max_w: f32, font: f32) -> Vec<Vec<DocSpan>> {
             cur_w = 0.0;
         }
         let mut rest: &str = word;
-        while text_width(rest, font) > max_w {
+        while m.width_of(fs, rest, FAMILY, font) > max_w {
             // Сколько глифов влезает в пустую строку
             let mut fit = rest.chars().count();
-            while fit > 1 && text_width(&rest.chars().take(fit).collect::<String>(), font) > max_w {
+            while fit > 1 {
+                let head: String = rest.chars().take(fit).collect();
+                if m.width_of(fs, &head, FAMILY, font) <= max_w {
+                    break;
+                }
                 fit -= 1;
             }
             let head: String = rest.chars().take(fit).collect();
@@ -555,7 +545,7 @@ fn wrap_spans(spans: &[DocSpan], max_w: f32, font: f32) -> Vec<Vec<DocSpan>> {
                 text: rest.to_owned(),
                 href: href.clone(),
             });
-            cur_w = text_width(rest, font);
+            cur_w = m.width_of(fs, rest, FAMILY, font);
         }
     }
     if !cur.is_empty() {
@@ -566,19 +556,24 @@ fn wrap_spans(spans: &[DocSpan], max_w: f32, font: f32) -> Vec<Vec<DocSpan>> {
 
 /// Построитель раскладки: строки на ЯВНЫХ y-позициях (ячейки таблиц одной
 /// строки идут с одного y), content_height — max по низу строк.
-struct PageBuilder {
+struct PageBuilder<'a> {
     layout: PageLayout,
     max_w: f32,
+    /// Измеритель ширин (FR-054, F-6): реальный шейпинг cosmic-text.
+    m: &'a mut TextMeasurer,
+    fs: &'a mut cosmic_text::FontSystem,
 }
 
-impl PageBuilder {
-    fn new(max_w: f32) -> Self {
+impl<'a> PageBuilder<'a> {
+    fn new(max_w: f32, m: &'a mut TextMeasurer, fs: &'a mut cosmic_text::FontSystem) -> Self {
         Self {
             layout: PageLayout {
                 content_height: DOCS_PADDING,
                 ..PageLayout::default()
             },
             max_w: max_w.max(10.0),
+            m,
+            fs,
         }
     }
 
@@ -587,7 +582,7 @@ impl PageBuilder {
         let (font, line_h) = kind_metrics(kind);
         let mut span_x = x;
         for span in spans {
-            let w = text_width(&span.text, font);
+            let w = self.m.width_of(self.fs, &span.text, FAMILY, font);
             if let Some(href) = &span.href {
                 if let LinkTarget::Page(_) = link_target(href) {
                     self.layout.links.push(LinkRect {
@@ -615,7 +610,7 @@ impl PageBuilder {
         let (font, line_h) = kind_metrics(kind);
         let spans = line_spans(text);
         let width = self.max_w - x;
-        let lines = wrap_spans(&spans, width, font);
+        let lines = wrap_spans(&spans, width, font, self.m, self.fs);
         let mut y = self.layout.content_height + gap_before;
         for line in &lines {
             self.place_line(line, kind, x, y);
@@ -626,14 +621,20 @@ impl PageBuilder {
 
 /// Раскладка страницы (FR-027): GFM-блоки (`parse_blocks_opts(_, true)` —
 /// таблицы включены, заметки не затронуты) → строки/квады/ссылки. Чистая
-/// функция от индекса страницы и ширины контента; вызывается при открытии
+/// функция от индекса страницы, ширины контента и measurer'а (FR-054:
+/// ширины — измеренные, family = FAMILY рендера); вызывается при открытии
 /// страницы и смене размера панели, не на каждый кадр.
-pub fn layout_page(page: usize, content_width: f32) -> PageLayout {
+pub fn layout_page(
+    page: usize,
+    content_width: f32,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> PageLayout {
     let Some(page) = DOCS_PAGES.get(page) else {
         return PageLayout::default();
     };
     let body = strip_front_matter(page.md);
-    let mut b = PageBuilder::new(content_width);
+    let mut b = PageBuilder::new(content_width, m, fs);
     for block in &gfm::parse_blocks_opts(body, true) {
         match block {
             Block::Heading { level, text } => {
@@ -690,9 +691,9 @@ pub fn layout_page(page: usize, content_width: f32) -> PageLayout {
                         None if *ordered => format!("{}. ", n + 1),
                         None => "• ".to_owned(),
                     };
-                    let marker_w = text_width(&marker, 13.0);
+                    let marker_w = b.m.width_of(b.fs, &marker, FAMILY, 13.0);
                     let spans = line_spans(&item.text);
-                    let lines = wrap_spans(&spans, b.max_w - 16.0 - marker_w, 13.0);
+                    let lines = wrap_spans(&spans, b.max_w - 16.0 - marker_w, 13.0, b.m, b.fs);
                     let mut y = b.layout.content_height + 4.0;
                     for (i, line) in lines.iter().enumerate() {
                         if i == 0 {
@@ -726,7 +727,9 @@ fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
     let gap = 12.0;
     let avail = (b.max_w - gap * (cols - 1) as f32).max(10.0);
     // Естественная ширина колонки — самая широкая ячейка (без переноса)
-    let cell_w = |text: &str| text_width(&strip_inline_markers(text), 12.0) + 6.0;
+    let mut cell_w = |text: &str| {
+        b.m.width_of(b.fs, &strip_inline_markers(text), FAMILY, 12.0) + 6.0
+    };
     let natural: Vec<f32> = (0..cols)
         .map(|c| {
             let mut w = header.get(c).map(|h| cell_w(h)).unwrap_or(0.0);
@@ -755,7 +758,7 @@ fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
         .enumerate()
         .map(|(c, cell)| {
             let w = widths.get(c).copied().unwrap_or(avail);
-            wrap_spans(&line_spans(cell), w, font)
+            wrap_spans(&line_spans(cell), w, font, b.m, b.fs)
         })
         .collect();
     let header_rows = header_cells.iter().map(Vec::len).max().unwrap_or(0);
@@ -783,7 +786,7 @@ fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
             .iter()
             .take(cols)
             .enumerate()
-            .map(|(c, cell)| wrap_spans(&line_spans(cell), widths[c], font))
+            .map(|(c, cell)| wrap_spans(&line_spans(cell), widths[c], font, b.m, b.fs))
             .collect();
         let row_lines = cells.iter().map(Vec::len).max().unwrap_or(0);
         let mut row_bottom = row_y;
@@ -1090,9 +1093,20 @@ mod tests {
 
     /// Раскладка страницы: строки упорядочены, таблицы дают ячейки,
     /// ссылки в пределах ширины, контент выше нуля.
+    /// Детерминированный FontSystem тестов: только вшитый рендером шрифт
+    /// (паттерн measure.rs — метрики одинаковы на всех платформах CI).
+    fn font_system() -> cosmic_text::FontSystem {
+        let mut fs = cosmic_text::FontSystem::new();
+        const FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf");
+        fs.db_mut().load_font_data(FONT.to_vec());
+        fs
+    }
+
     #[test]
     fn layout_page_orders_lines() {
-        let layout = layout_page(3, 440.0); // hotkeys — таблицы
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let layout = layout_page(3, 440.0, &mut m, &mut fs); // hotkeys — таблицы
         assert!(!layout.lines.is_empty());
         assert!(layout.content_height > 100.0);
         for pair in layout.lines.windows(2) {
@@ -1109,14 +1123,14 @@ mod tests {
             );
         }
         // Главная: внутренние ссылки есть (таблица разделов)
-        let index = layout_page(0, 440.0);
+        let index = layout_page(0, 440.0, &mut m, &mut fs);
         assert!(index
             .links
             .iter()
             .any(|l| matches!(l.target, LinkTarget::Page(_))));
         // Все 8 страниц раскладываются без паник
         for page in 0..DOCS_PAGES.len() {
-            let layout = layout_page(page, 440.0);
+            let layout = layout_page(page, 440.0, &mut m, &mut fs);
             assert!(!layout.lines.is_empty(), "страница {page} пустая");
         }
     }
@@ -1129,23 +1143,28 @@ mod tests {
             text: "а б в г д е ж з и к л м н о п".to_owned(),
             href: None,
         }];
-        let lines = wrap_spans(&spans, 40.0, 13.0);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let lines = wrap_spans(&spans, 40.0, 13.0, &mut m, &mut fs);
         assert!(lines.len() >= 2, "перенос обязан случиться");
         for line in &lines {
-            let w = line.iter().map(|s| text_width(&s.text, 13.0)).sum::<f32>();
+            let w = line
+                .iter()
+                .map(|s| m.width_of(&mut fs, &s.text, FAMILY, 13.0))
+                .sum::<f32>();
             assert!(w <= 40.0 + 1.0, "строка шире лимита: {w}");
         }
         let long = vec![DocSpan {
             text: "очень-очень-длинное-слово-без-пробелов-совсем".to_owned(),
             href: None,
         }];
-        let lines = wrap_spans(&long, 60.0, 13.0);
+        let lines = wrap_spans(&long, 60.0, 13.0, &mut m, &mut fs);
         assert!(lines.len() >= 2, "жёсткий разрыв обязан случиться");
         let linked = vec![DocSpan {
             text: "подробности в разделе расчётов и здесь хвост".to_owned(),
             href: Some("calculations.html".to_owned()),
         }];
-        let lines = wrap_spans(&linked, 50.0, 13.0);
+        let lines = wrap_spans(&linked, 50.0, 13.0, &mut m, &mut fs);
         assert!(lines.len() >= 2);
         assert!(lines.iter().all(|l| l.iter().all(|s| s.href.is_some())),);
     }

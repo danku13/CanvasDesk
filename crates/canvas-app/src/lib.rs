@@ -490,15 +490,25 @@ pub mod ui {
     /// центру (запрос пользователя: «посередине слева экрана»). Высота
     /// клампится к окну (низ не вылезает), минимум отступа сверху.
     pub fn hotkeys_panel_rect(viewport: Vec2) -> [f32; 4] {
+        hotkeys_panel_rect_at(viewport, 0.0)
+    }
+
+    /// Rect панели хоткеев со смещением вправо (FR-054, гейт G4): при
+    /// свёрнутой палитре шаблонов панель хоткеев и полоса — соседи
+    /// «лево-центр» одного слоя `Panels`; налезание интерактивных rect'ов
+    /// запрещено, панель смещается правее полосы на `left_offset`
+    /// (ширина полосы + зазор). `left_offset == 0` — прежняя геометрия.
+    pub fn hotkeys_panel_rect_at(viewport: Vec2, left_offset: f32) -> [f32; 4] {
         let max_h = (viewport[1] - SETTINGS_MARGIN * 2.0).max(0.0);
         let height = hotkeys_panel_height().min(max_h);
         let y = ((viewport[1] - height) / 2.0).max(SETTINGS_MARGIN);
-        [
-            SETTINGS_MARGIN,
-            y,
-            HOTKEYS_PANEL_WIDTH.min(viewport[0]),
-            height,
-        ]
+        let x = SETTINGS_MARGIN + left_offset.max(0.0);
+        let width = if left_offset > 0.0 {
+            HOTKEYS_PANEL_WIDTH.min((viewport[0] - x - SETTINGS_MARGIN).max(0.0))
+        } else {
+            HOTKEYS_PANEL_WIDTH.min(viewport[0])
+        };
+        [x, y, width, height]
     }
 
     // --- Множественное выделение (CR-001) ---
