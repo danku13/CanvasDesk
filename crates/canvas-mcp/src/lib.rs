@@ -368,11 +368,11 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "graph_apply",
-        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}. Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, error?}}} — flow = значения всех нод после пересчёта (второй вызов flow_recalc не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч",
+        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; edge_delete {id|ref} — удаление ребра (FR-050 Н4: замена занятого toParam = пара edge_delete + edge_create в одном батче — второе edge_create в занятый параметр падает E-DOUBLE-INPUT); param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}. Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, error?}}} — flow = значения всех нод после пересчёта (второй вызов flow_recalc не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч",
         required: &["operations"],
         properties: &[(
             "operations",
-            r#"{"type":"array","minItems":1,"maxItems":256,"items":{"type":"object","required":["op"],"properties":{"op":{"type":"string","enum":["node_create_note","node_create_file","template_instantiate","edge_create","param_set","node_move"]}}}}"#,
+            r#"{"type":"array","minItems":1,"maxItems":256,"items":{"type":"object","required":["op"],"properties":{"op":{"type":"string","enum":["node_create_note","node_create_file","template_instantiate","edge_create","edge_delete","param_set","node_move"]}}}}"#,
         )],
     },
     // --- FR-017 (CP6): what-if сценарии ---
@@ -1241,6 +1241,7 @@ mod tests {
             "node_create_file",
             "template_instantiate",
             "edge_create",
+            "edge_delete",
             "param_set",
             "node_move",
         ] {

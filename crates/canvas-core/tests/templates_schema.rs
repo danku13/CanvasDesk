@@ -240,6 +240,8 @@ fn collect_params(expr: &expr::Expr) -> Vec<String> {
     match expr {
         Expr::Num(..) | Expr::Var(_) | Expr::Inbound | Expr::DollarAmount(_) => {}
         Expr::Param(name) => out.push(name.clone()),
+        // FR-050 Р-6: qualified-путь адресует входящее значение, не параметр
+        Expr::Qualified { .. } => {}
         Expr::Neg(inner) => out.extend(collect_params(inner)),
         Expr::Bin { lhs, rhs, .. } => {
             out.extend(collect_params(lhs));
