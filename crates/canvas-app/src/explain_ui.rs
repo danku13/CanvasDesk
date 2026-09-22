@@ -462,6 +462,63 @@ pub struct EditField {
     pub text: String,
 }
 
+// --- режим защиты (PRD-0007 X5, F-8/AC-6.1–6.4) ----------------------------
+
+/// Потолок укрупнения графа в режиме защиты (AC-6.2, прототип v4:
+/// «×1.5 с вписыванием» — граф вписывается в тело окна, потолок 1.5;
+/// маленькие деревья растягиваются только до потолка).
+pub const DEFENSE_SCALE_MAX: f32 = 1.5;
+
+/// Fit-масштаб режима защиты: вписать дерево в тело окна с УКРУПНЕНИЕМ
+/// до потолка [`DEFENSE_SCALE_MAX`] (в отличие от [`fit_scale`] — там
+/// потолок 1.0: обычный вид только сжимает).
+pub fn defense_fit_scale(bounds: [f32; 2], body: [f32; 4]) -> f32 {
+    let avail_w = (body[2] - BODY_PAD * 2.0).max(1.0);
+    let avail_h = (body[3] - BODY_PAD * 2.0).max(1.0);
+    (avail_w / bounds[0].max(1.0))
+        .min(avail_h / bounds[1].max(1.0))
+        .clamp(0.05, DEFENSE_SCALE_MAX)
+}
+
+/// Размер кнопки-тумблера «Режим защиты» (AC-6.1 — одним действием).
+pub const DEFENSE_TOGGLE_W: f32 = 132.0;
+pub const DEFENSE_TOGGLE_H: f32 = 28.0;
+
+/// Тумблер режима защиты — шапка окна, левее чипа «Данные изменены»;
+/// виден в Ready (вход) и Defense (выход в обычный вид, AC-6.4).
+pub fn defense_toggle_rect(win: [f32; 4]) -> [f32; 4] {
+    let chip = chip_rect(win);
+    [
+        chip[0] - DEFENSE_TOGGLE_W - 10.0,
+        win[1] + (HEADER_H - DEFENSE_TOGGLE_H) / 2.0,
+        DEFENSE_TOGGLE_W,
+        DEFENSE_TOGGLE_H,
+    ]
+}
+
+/// Кнопка «Раскрыть уровень» (AC-6.3, шаг) — правый край футера; Defense.
+pub fn defense_step_rect(win: [f32; 4]) -> [f32; 4] {
+    const W: f32 = 158.0;
+    [
+        win[0] + win[2] - W - BODY_PAD,
+        win[1] + win[3] - FOOTER_H + (FOOTER_H - 28.0) / 2.0,
+        W,
+        28.0,
+    ]
+}
+
+/// Кнопка «Раскрыть всё» (AC-6.3) — левее «Раскрыть уровень»; Defense.
+pub fn defense_all_rect(win: [f32; 4]) -> [f32; 4] {
+    const W: f32 = 126.0;
+    let step = defense_step_rect(win);
+    [step[0] - W - 10.0, step[1], W, step[3]]
+}
+
+/// Есть ли скрытые узлы в текущем виде (шаг AC-6.3 имеет смысл).
+pub fn has_hidden(vis: &Visibility) -> bool {
+    vis.visible.iter().any(|v| !*v)
+}
+
 impl EditField {
     /// Ввод строки (клавиши-символы события, включая кириллицу).
     pub fn type_str(&mut self, s: &str) {
@@ -549,6 +606,15 @@ pub struct ExplainState {
     pub deltas: BTreeMap<(String, Option<usize>), LineageDelta>,
     /// Inline-поле подмены листа (AC-4.1) — одно за раз; не сериализуется.
     pub edit: Option<EditField>,
+    /// Режим защиты (§6.4 Ready ↔ Defense): тумблер в шапке, одним
+    /// действием. Runtime-состояние — не сериализуется (AC-6.3).
+    pub defense: bool,
+    /// Число видимых уровней от корня вида в защите (0 — всё дерево);
+    /// шаг (AC-6.3) увеличивает, «Раскрыть всё» обнуляет.
+    pub defense_reveal: u8,
+    /// Вид Ready до входа в защиту (путь крошек + ручные раскрытия) —
+    /// восстановление по Esc (AC-6.4 «окно возвращается к обычному виду»).
+    pre_defense: Option<(Vec<usize>, BTreeSet<usize>)>,
 }
 
 impl ExplainState {
@@ -568,6 +634,9 @@ impl ExplainState {
             base_tree: None,
             deltas: BTreeMap::new(),
             edit: None,
+            defense: false,
+            defense_reveal: 0,
+            pre_defense: None,
         }
     }
 
@@ -594,6 +663,9 @@ impl ExplainState {
             base_tree: snap.base_tree,
             deltas,
             edit: None,
+            defense: false,
+            defense_reveal: 0,
+            pre_defense: None,
         }
     }
 
@@ -774,6 +846,66 @@ impl ExplainState {
     /// Отмена inline-поля (Esc): просто закрыть, модель не меняется.
     pub fn cancel_edit(&mut self) {
         self.edit = None;
+    }
+
+    // --- режим защиты (X5, AC-6.1–6.4) --------------------------------------
+
+    /// Открыт ли режим защиты (§6.4 Defense).
+    pub fn is_defense(&self) -> bool {
+        self.defense
+    }
+
+    /// Войти в режим защиты (AC-6.1, Ready → Defense — одним действием,
+    /// тумблер в шапке). Вид Ready запоминается для восстановления по Esc
+    /// (AC-6.4); вид сбрасывается на корень дерева, авто-раскрытие —
+    /// `auto_depth` уровней (синк с лимитом FR-039), ручные раскрытия
+    /// сброшены. Проза (AC-6.2) в дереве отсутствует структурно — lineage
+    /// собирается только из формульных строк (`line_kind`-детектор).
+    /// Inline-поле подмены Ready-вида в защиту не переносится (одно за раз).
+    pub fn enter_defense(&mut self, auto_depth: u8) {
+        if !self.is_ready() || self.defense {
+            return;
+        }
+        self.pre_defense = Some((self.view_path.clone(), self.expanded.clone()));
+        self.defense = true;
+        self.defense_reveal = auto_depth;
+        self.view_path = vec![0];
+        self.expanded.clear();
+        self.edit = None;
+    }
+
+    /// Выйти из режима защиты (AC-6.4, Defense → Ready): окно возвращается
+    /// к обычному виду (путь крошек и ручные раскрытия как до входа);
+    /// снапшот не меняется, канвас не затрагивается.
+    pub fn exit_defense(&mut self) {
+        if !self.defense {
+            return;
+        }
+        self.defense = false;
+        if let Some((path, expanded)) = self.pre_defense.take() {
+            self.view_path = path;
+            self.expanded = expanded;
+        }
+    }
+
+    /// Шаг раскрытия (AC-6.3: пробел/кнопка — следующий уровень дерева от
+    /// корня). `false` — шагать некуда (защита не активна, «раскрыть всё»
+    /// уже нажато — 0, или скрытых уровней нет — проверка на App-стороне
+    /// через [`has_hidden`]).
+    pub fn defense_step(&mut self) -> bool {
+        if !self.defense || self.defense_reveal == 0 {
+            return false;
+        }
+        self.defense_reveal = self.defense_reveal.saturating_add(1);
+        true
+    }
+
+    /// «Раскрыть всё» (AC-6.3): снять ограничение уровней (0 — без лимита,
+    /// семантика [`visibility`]).
+    pub fn defense_reveal_all(&mut self) {
+        if self.defense {
+            self.defense_reveal = 0;
+        }
     }
 }
 
@@ -1187,5 +1319,202 @@ mod tests {
             assert!(rect[1] + rect[3] <= card[1] + card[3] + 0.01);
             assert!(rect[2] > 0.0 && rect[3] > 0.0);
         }
+    }
+
+    /// X5 (AC-6.1/6.4): вход в защиту одним действием сбрасывает вид на
+    /// корень (auto_depth уровней); Esc-выход восстанавливает обычный вид
+    /// (путь крошек + ручные раскрытия); снапшот не меняется.
+    #[test]
+    fn defense_enter_exit_roundtrip() {
+        let tree = sample_tree();
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            7,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(tree.clone()),
+                base: None,
+            }),
+        );
+        assert!(st.poll());
+        assert!(st.is_ready());
+        assert!(!st.is_defense());
+        // Обычный вид: фокус на поддереве b + раскрытие фронтира.
+        st.view_path = vec![0, 1];
+        st.expanded.insert(1);
+        // Вход (тумблер, одним действием): вид сброшен на корень.
+        st.enter_defense(3);
+        assert!(st.is_defense());
+        assert_eq!(st.view_path, vec![0]);
+        assert!(st.expanded.is_empty());
+        assert_eq!(st.defense_reveal, 3);
+        // Снапшот не изменился (F-5: тот же tree, та же ревизия).
+        assert_eq!(st.revision, 7);
+        // Выход (Esc): обычный вид восстановлен (AC-6.4).
+        st.exit_defense();
+        assert!(!st.is_defense());
+        assert_eq!(st.view_path, vec![0, 1]);
+        assert!(st.expanded.contains(&1));
+        // Повторный вход/выход после восстановления — симметричен.
+        st.enter_defense(2);
+        assert_eq!(st.defense_reveal, 2);
+        st.exit_defense();
+        assert_eq!(st.view_path, vec![0, 1]);
+        // Вход в Loading невозможен (защита поверх Ready, §6.4).
+        let mut loading = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Err(LineageError::RootNotFound("a".into())),
+                base: None,
+            }),
+        );
+        loading.enter_defense(3);
+        assert!(!loading.is_defense());
+    }
+
+    /// X5 (AC-6.3): шаг раскрывает следующий уровень; «Раскрыть всё»
+    /// снимает лимит (0); шаг после «всё» — no-op; без защиты — no-op.
+    #[test]
+    fn defense_step_and_reveal_all() {
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(sample_tree()),
+                base: None,
+            }),
+        );
+        st.poll();
+        // Вне защиты шаг не работает.
+        assert!(!st.defense_step());
+        st.enter_defense(1);
+        assert_eq!(st.defense_reveal, 1);
+        assert!(st.defense_step());
+        assert_eq!(st.defense_reveal, 2);
+        assert!(st.defense_step());
+        assert_eq!(st.defense_reveal, 3);
+        // «Раскрыть всё» — 0 (без лимита), шаги больше не меняют.
+        st.defense_reveal_all();
+        assert_eq!(st.defense_reveal, 0);
+        assert!(!st.defense_step());
+        assert_eq!(st.defense_reveal, 0);
+    }
+
+    /// X5 (AC-6.3): шаг имеет смысл, только если есть скрытые узлы
+    /// (has_hidden); семантика reveal 0 = всё видимо.
+    #[test]
+    fn defense_has_hidden_and_visibility() {
+        // Цепочка 5 узлов: reveal 3 → узел 4 скрыт; reveal 4 → всё видно.
+        let mut tree = LineageTree {
+            root: LineageNodeId::total("n0"),
+            nodes: Vec::new(),
+        };
+        for i in 0..5 {
+            tree.nodes.push(LineageNode {
+                node_id: format!("n{i}"),
+                line: None,
+                kind: if i == 4 {
+                    LineageNodeKind::Leaf
+                } else {
+                    LineageNodeKind::Calc
+                },
+                value: None,
+                formula: None,
+                title: format!("N{i}"),
+                label: None,
+                children: if i < 4 {
+                    vec![LineageChild {
+                        child: i + 1,
+                        via: None,
+                    }]
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        assert!(has_hidden(&vis));
+        let vis = visibility(&tree, 0, 4, &empty);
+        assert!(!has_hidden(&vis), "все уровни раскрыты");
+        // reveal 0 — без ограничения (семантика visibility).
+        let vis = visibility(&tree, 0, 0, &empty);
+        assert!(!has_hidden(&vis));
+    }
+
+    /// X5 (AC-6.2): fit-масштаб защиты вписывает дерево в тело окна с
+    /// потолком 1.5 (маленькое дерево укрупняется, большое — сжимается).
+    #[test]
+    fn defense_fit_scale_up_to_ceiling() {
+        let tree = sample_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0);
+        let body = [0.0, 0.0, 1200.0, 800.0];
+        // Маленькое дерево в большое тело: обычный вид — 1.0, защита —
+        // укрупнение до потолка (×1.5, AC-6.2).
+        assert_eq!(fit_scale(layout.bounds, body), 1.0);
+        let d = defense_fit_scale(layout.bounds, body);
+        assert!(d > 1.0, "защита укрупняет: {d}");
+        assert!(d <= DEFENSE_SCALE_MAX + 1e-3);
+        // Гигантское дерево в маленькое тело — сжатие, как обычно.
+        let tiny = defense_fit_scale(layout.bounds, [0.0, 0.0, 300.0, 200.0]);
+        assert!(tiny < 1.0);
+        // Потолок соблюдён на любом входе.
+        let huge = defense_fit_scale([1.0, 1.0], body);
+        assert!((huge - DEFENSE_SCALE_MAX).abs() < 1e-3);
+    }
+
+    /// X5 (геометрия): тумблер — левее чипа в шапке; кнопки футера —
+    /// внутри окна, «Раскрыть всё» левее «Раскрыть уровень».
+    #[test]
+    fn defense_button_geometry() {
+        let win = [100.0, 100.0, 1200.0, 800.0];
+        let toggle = defense_toggle_rect(win);
+        let chip = chip_rect(win);
+        assert!(toggle[0] + toggle[2] <= chip[0], "тумблер левее чипа");
+        assert!((toggle[1] + toggle[3] / 2.0 - (win[1] + HEADER_H / 2.0)).abs() < 1e-3);
+        let step = defense_step_rect(win);
+        let all = defense_all_rect(win);
+        assert!(step[0] + step[2] <= win[0] + win[2] + 0.01, "внутри окна");
+        assert!(all[0] + all[2] <= step[0] + 0.01, "«всё» левее «уровня»");
+        assert!(step[1] >= win[1] + win[3] - FOOTER_H);
+        assert!(step[1] + step[3] <= win[1] + win[3] + 0.01);
+    }
+
+    /// X5 (AC-4.4): inline-поле подмены работает и в защите — подмена
+    /// из режима защиты не требует выхода (G3).
+    #[test]
+    fn defense_keeps_edit_mechanics() {
+        let mut tree = sample_tree();
+        tree.nodes[2].line = Some(0);
+        tree.nodes[2].value = Some(Ok(canvas_core::expr::Value::scalar(5.0)));
+        tree.nodes[2].formula = Some("620".into());
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(tree.clone()),
+                base: None,
+            }),
+        );
+        st.poll();
+        st.enter_defense(3);
+        let tree_ref = st.tree().unwrap().clone();
+        assert!(
+            st.start_edit(2, &tree_ref, None),
+            "лист редактируем в защите"
+        );
+        st.edit.as_mut().expect("поле").text = "700".into();
+        assert_eq!(
+            st.finish_edit(),
+            Some(("c".to_owned(), 0, "700".to_owned())),
+            "подмена из защиты коммитится"
+        );
+        // Вход в защиту закрывает открытое поле Ready-вида (одно за раз).
+        st.start_edit(2, &st.tree().unwrap().clone(), None);
+        st.exit_defense();
+        st.enter_defense(3);
+        assert!(st.edit.is_none(), "поле не переносится в защиту");
     }
 }
