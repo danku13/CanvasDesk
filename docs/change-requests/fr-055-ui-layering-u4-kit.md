@@ -72,14 +72,16 @@ DoD §15. Поверхности сегодня верстают сырыми п
 - [x] Пилоты: what-if бар и галерея схем используют кит-виджеты для
       контейнера/чипа/кнопок; прежние z-тесты и G4-линт зелёные.
 - [x] G4-линт: каноническое состояние витрины (кит покрыт линтом).
-- [ ] Гейты: `cargo fmt --all --check`; `CARGO_INCREMENTAL=0 cargo clippy
+- [x] Гейты: `cargo fmt --all --check`; `CARGO_INCREMENTAL=0 cargo clippy
       --workspace --all-targets -- -D warnings`; `CARGO_INCREMENTAL=0
       CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace`;
-      `bash scripts/wasm_gate.sh`; `bash scripts/mcp_wasm_gate.sh` — зелёные.
+      `bash scripts/wasm_gate.sh`; `bash scripts/mcp_wasm_gate.sh` — зелёные
+      (wasmtime-ступени локально недоступны — сборочные ступени зелёные,
+      полные гейты — CI).
 - [x] Точки входа §14: `docs/ui-kit.md` (раздел «Кит-виджеты» + статус),
       `docs/interface-objects/surface-registry.md` (+kit_gallery), PRD-0009
       (статус U4, G6 ✅, changelog), index-cr-fr (FR-055), ACCEPTANCE.
-- [ ] CI по merge SHA — зелёный.
+- [x] CI по merge SHA f781c6b — зелёный (12/12 check-runs).
 
 ## 5. Риски
 
