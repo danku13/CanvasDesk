@@ -114,8 +114,8 @@ use canvas_render::search_ui::{
 };
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, TextAlign,
-    BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, SpillHit, SpillHitKind,
+    TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{
@@ -936,6 +936,17 @@ fn expr_error_hit_at(hits: &[LineErrorHit], cursor: [f32; 2]) -> Option<&LineErr
     })
 }
 
+/// FR-050 Н9-2 (этап D): зона наведения пролитой строки под курсором
+/// (параметр с toParam / авто-строка приёмника; логические px окна).
+/// Вынесено из App для прямого unit-тестирования (паттерн
+/// `expr_error_hit_at`).
+fn spill_hit_at(hits: &[SpillHit], cursor: [f32; 2]) -> Option<&SpillHit> {
+    hits.iter().find(|hit| {
+        let [x, y, w, h] = hit.rect;
+        cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+    })
+}
+
 /// Пользовательские события event loop (T6): worker-потоки ThumbService
 /// будят цикл через EventLoopProxy, когда готовы тамбнейлы; shell шлёт
 /// события drag-drop (T9) и файлового вотчера (T10).
@@ -1525,6 +1536,10 @@ pub struct App {
     /// рендера, используется в сборке оверлея кадра (тултип у курсора —
     /// паттерн тултипа битой ссылки T10). Отставание в кадр незаметно.
     expr_error_hits: Vec<LineErrorHit>,
+    /// FR-050 Н9-2 (этап D): зоны наведения пролитых строк с прошлого кадра
+    /// (логические px + данные тултипа источника). Заполняется после
+    /// рендера (паттерн expr_error_hits), оверлей показывает «пролито: …».
+    spill_hits: Vec<SpillHit>,
     /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
     edge_drag: Option<EdgeDrag>,
     /// FR-050 Н2 (этап C): цель value-drag — шаблонная нода под курсором +
@@ -1826,6 +1841,7 @@ impl App {
             autolink_batch: None,
             bundle_hover: None,
             expr_error_hits: Vec::new(),
+            spill_hits: Vec::new(),
             edge_drag: None,
             param_drop: None,
             choice_menu: None,
@@ -4562,6 +4578,13 @@ impl App {
     /// с прошлого кадра (`expr_error_hits`); отставание в кадр незаметно.
     fn expr_error_hit_at(&self, cursor: [f32; 2]) -> Option<&LineErrorHit> {
         expr_error_hit_at(&self.expr_error_hits, cursor)
+    }
+
+    /// FR-050 Н9-2 (этап D): зона наведения пролитой строки под курсором
+    /// (параметр с toParam / авто-строка приёмника), None — мимо. Зоны — с
+    /// прошлого кадра (`spill_hits`); отставание в кадр незаметно.
+    fn spill_hit_at(&self, cursor: [f32; 2]) -> Option<&SpillHit> {
+        spill_hit_at(&self.spill_hits, cursor)
     }
 
     /// Клиентские ФИЗИЧЕСКИЕ px от shell (DragEvent) -> world-координаты:
@@ -15036,6 +15059,80 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                         }
                     }
+                    // FR-050 Н9-2 (этап D): тултип источника пролитой строки —
+                    // курсор над наклонной строкой (параметр с toParam /
+                    // авто-строка приёмника): «пролито: Трафик.peak_rps =
+                    // 1389 rps (локально было: 500 rps)» (Н7: полный путь —
+                    // здесь, на теле — короткая форма). Не спорит с тултипом
+                    // ошибки (бейдж «!» приоритетнее) и глушится при drag.
+                    if self.edge_drag.is_none()
+                        && self.choice_menu.is_none()
+                        && self.expr_error_hit_at(self.cursor).is_none()
+                    {
+                        if let Some(hit) = self.spill_hit_at(self.cursor) {
+                            let text = match &hit.kind {
+                                SpillHitKind::Param {
+                                    path, value, local, ..
+                                } => match (value, local) {
+                                    (Some(value), Some(local)) => self.trf(
+                                        keys::TOOLTIP_SPILL_PARAM,
+                                        &[("{path}", path), ("{value}", value), ("{local}", local)],
+                                    ),
+                                    (Some(value), None) => self.trf(
+                                        keys::TOOLTIP_SPILL_PARAM_NO_LOCAL,
+                                        &[("{path}", path), ("{value}", value)],
+                                    ),
+                                    (None, _) => self.trf(
+                                        keys::TOOLTIP_SPILL_PARAM_NOVALUE,
+                                        &[("{path}", path)],
+                                    ),
+                                },
+                                SpillHitKind::AutoRow {
+                                    path,
+                                    slot,
+                                    value,
+                                    template,
+                                } => {
+                                    let slot_no = (slot + 1).to_string();
+                                    match (value, template) {
+                                        (Some(value), true) => self.trf(
+                                            keys::TOOLTIP_SPILL_AUTOROW_TPL,
+                                            &[
+                                                ("{path}", path),
+                                                ("{value}", value),
+                                                ("{slot}", &slot_no),
+                                            ],
+                                        ),
+                                        (Some(value), false) => self.trf(
+                                            keys::TOOLTIP_SPILL_AUTOROW_TEXT,
+                                            &[
+                                                ("{path}", path),
+                                                ("{value}", value),
+                                                ("{slot}", &slot_no),
+                                            ],
+                                        ),
+                                        (None, _) => self.trf(
+                                            keys::TOOLTIP_SPILL_AUTOROW_NOVALUE,
+                                            &[("{path}", path), ("{slot}", &slot_no)],
+                                        ),
+                                    }
+                                }
+                            };
+                            let viewport = self.viewport_logical();
+                            let origin_x = (self.cursor[0] + 14.0)
+                                .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                            tooltip_texts.push(OwnedScreenText {
+                                text,
+                                origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                                width: TOOLTIP_WIDTH,
+                                font_size: 13.0,
+                                // Спокойный сине-серый акцент потока значений
+                                // (тултип источника, не диагностика)
+                                color: Color::rgb(0x9c, 0xc3, 0xe6),
+                                align: TextAlign::Left,
+                            });
+                        }
+                    }
                     screen_bands.push(UiLayer::Popups, Vec::new(), tooltip_texts);
                 }
                 // T21: модальный диалог (screen-space): панель + тексты +
@@ -15550,6 +15647,9 @@ impl ApplicationHandler<AppEvent> for App {
                         expr_line_results: &self.scene.expr_line_results,
                         expr_editing_results: editing_line_results.as_deref(),
                         param_spills: &self.scene.param_spills,
+                        // FR-050 Р-4 (этап D): авто-строки приёмников —
+                        // префикс тела (наклонное начертание Р-2)
+                        auto_rows: &self.scene.auto_rows,
                         whatif_nodes: &self.scene.whatif_nodes,
                         analysis: analysis_view,
                         analysis_overlay: self.settings.bottleneck_overlay,
@@ -15573,6 +15673,10 @@ impl ApplicationHandler<AppEvent> for App {
                     // FR-013 (правка 4): зоны ошибок кадра — для тултипа в
                     // оверлее следующего кадра (отставание в кадр незаметно)
                     self.expr_error_hits = renderer.line_error_hits().to_vec();
+                    // FR-050 Н9-2 (этап D): зоны пролитых строк кадра —
+                    // тултип источника («пролито: …») в оверлее следующего
+                    // кадра (паттерн expr_error_hits)
+                    self.spill_hits = renderer.spill_hits().to_vec();
                 }
                 // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
                 // уже установилась; ответы придут через AppEvent::ThumbsReady
@@ -16829,6 +16933,48 @@ mod tests {
         );
         // Пустой набор зон
         assert!(expr_error_hit_at(&[], [372.0, 40.0]).is_none());
+    }
+
+    /// FR-050 Н9-2 (этап D): hit-тест зон пролитых строк (параметр с
+    /// toParam / авто-строка приёмника) — данные тултипа источника.
+    #[test]
+    fn spill_hit_at_picks_rect() {
+        use canvas_render::text::SpillHitKind;
+        let hits = vec![
+            SpillHit {
+                rect: [360.0, 30.0, 25.0, 18.0],
+                kind: SpillHitKind::Param {
+                    param: "rps".to_owned(),
+                    path: "Трафик.peak_rps".to_owned(),
+                    value: Some("1389 rps".to_owned()),
+                    local: Some("50 rps".to_owned()),
+                },
+            },
+            SpillHit {
+                rect: [360.0, 54.0, 25.0, 18.0],
+                kind: SpillHitKind::AutoRow {
+                    path: "Курсы.usd".to_owned(),
+                    slot: 1,
+                    value: Some("92.5".to_owned()),
+                    template: false,
+                },
+            },
+        ];
+        // Внутри первой зоны — данные параметра
+        assert!(matches!(
+            spill_hit_at(&hits, [372.0, 38.0]).map(|hit| &hit.kind),
+            Some(SpillHitKind::Param { ref param, .. }) if param == "rps"
+        ));
+        // Внутри второй зоны — данные авто-строки
+        assert!(matches!(
+            spill_hit_at(&hits, [378.0, 60.0]).map(|hit| &hit.kind),
+            Some(SpillHitKind::AutoRow { ref path, slot, .. }) if path == "Курсы.usd" && *slot == 1
+        ));
+        // Мимо всех зон
+        assert!(spill_hit_at(&hits, [100.0, 40.0]).is_none(), "мимо по x");
+        assert!(spill_hit_at(&hits, [372.0, 200.0]).is_none(), "мимо по y");
+        // Пустой набор зон
+        assert!(spill_hit_at(&[], [372.0, 40.0]).is_none());
     }
 
     // --- FR-014: поток значений по рёбрам ---

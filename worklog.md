@@ -3899,3 +3899,77 @@ CanvasDesk». Источник — вводные владельца о проз
 - **Доки:** `docs/ui-kit.md` («поверхность за 3 шага», примитивы, TextMeasurer, линты), `docs/interface-objects/surface-registry.md` (контракт US-5, 21 поверхность), PRD-0009 (статус U0–U3/U5, DoD G1–G5/G7/G8 ✅, G6 — за U4; ретро PoC §16.1), index-cr-fr (FR-054 → выполнено, указатель FR-055), ACCEPTANCE US-1–US-5. Онбординг/user-docs не менялись.
 - **Гейты:** fmt ✓; clippy -D warnings ✓; test --workspace **1528** ✓ (+19 от X4); wasm_gate ✓; mcp_wasm_gate ✓.
 - **Слияние:** merge --no-ff **09e383b** (включил параллельный X4 PRD-0007 — конфликт key_owner разрешён через owner_of + AUTOLINK-арм роутера); push ✓; **CI 12/12 зелёный по 09e383b**.
+
+---
+
+## 2026-09-22 — FR-050 (этап D): визуализация значений — Р-2 наклонная производная моно, рендер авто-строки Р-4, Н9-2 тултип источника
+
+- **Задача:** этап D дорожной карты FR-050 (запрос владельца «продолжи
+  этап D»; CI main проверен перед началом — зелёный 12/12 по merge
+  a58a8cc). До этого выполнены A (ядро семантики, 6354e70), B
+  (именованный синтаксис, efa600f), C (UI-порты/диалоги, 8b87cfe).
+- **Р-2 различение пролитых:** у Noto Sans Mono НЕТ официального
+  italic-начертания; GPU-скос глифов недоступен (glyphon без per-area
+  трансформ), чужой курсивный моно (Sarasa 26 МБ) ломает метрики —
+  выбрана наклонная ПРОИЗВОДНАЯ: `CanvasDeskMonoOblique.ttf` =
+  oblique-синтез fontTools 11° поверх NotoSansMono-Regular
+  (`scripts/gen_oblique_font.py`; контуры скошены, авансы и вертикальные
+  метрики сохранены байт-в-байт — раскладка тела не разъезжается; семейство
+  «CanvasDesk Mono Oblique» без RFN «Noto», OFL-уведомление производной,
+  копирайт сохранён). Шрифт в `FONT_DATA`, `mono_oblique_attrs()`;
+  наклонные строки: пролитая строка параметра (подпись «param ← Источник ·
+  выход») и авто-строки приёмника. Макет сверки вариантов A/B/C (наклон /
+  маркер / оба) — `docs/prototypes/ux-spill-distinction.html` + README
+  прототипов; headless-прогон (живые события, ошибок консоли нет,
+  скриншот docs/assets/fr050-spill-prototype.png); финальное утверждение
+  варианта — за владельцем на макете (выбор A технически обоснован).
+- **Р-4 рендер авто-строки:** префикс стека тела (`spill_row_items` →
+  `with_body_stack`: зона «Переменные · входящие значения», зазоры 0/2px,
+  отделение от тела 6px; пустое тело при наличии строк шейпится;
+  редактирование/LOD-скрытие глушат префикс как тело); текст —
+  `AutoRow::display_text()` («Путь = значение», unmapped — «Путь = —»
+  янтарным `UNMAPPED_EDGE_COLOR`, Р-3); growth-only рост высоты карточки —
+  `SceneState::ensure_spill_rows_reserve` (CR-012-механизм: текст-префикс
+  препендится показываемому тексту, индексы формульных строк сдвигаются на
+  длину префикса, префиксные индексы входят в formula_lines — метрики моно
+  совпадают); ключ свежести кэша текста — набор пролитых строк (строки без
+  значения тоже в ключе) + тексты авто-строк.
+- **Н9-2 тултип источника:** hit-зоны `SpillHit`/`SpillHitKind`
+  (Param{param,path,value,local} / AutoRow{path,slot,value,template})
+  собираются в цикле отрисовки тела (паттерн LineErrorHit: логические px,
+  `TextSystem::spill_hits` → `Renderer::spill_hits` → кэш app после
+  рендера, `spill_hit_at`); форматирование в приложении — i18n RU/EN 6
+  ключей (пролито с локальным «было» / без / unmapped; авто-строка
+  шаблон «подключите к параметру (toParam)» / текст «используйте $N в
+  формуле» / unmapped); приоритет бейджа «!» выше, глушится при
+  value-drag и main stage. `SpillView` расширен полями `path`
+  (квалифицированный «Объект.Поле» источника: dataref-имена + коллизия
+  «Имя (node_id)») и `local` (RHS локальной строки — «локально было:
+  500 rps»); сборка в `recompute_flow`; общий приоритет адресации поля —
+  `flow::spill_source_field` (pub; рефакторинг `source_field_name`).
+- **Тесты (+10):** render 5 (лицо oblique в FONT_DATA; наклон + payload
+  пролитой строки параметра; префикс авто-строк: зазоры/тексты/unmapped-
+  янтарь/payload AutoRow; рост высоты стека с префиксом; полнота
+  body_items со spill_params), scene 2 (SpillView path/local через MCP
+  graph (template приёмник); рост высоты карточки при подключении связи +
+  стабильность при повторном пересчёте), app 1 (spill_hit_at чистая
+  функция), headless 1 (`auto_row_smoke`: глифы зоны «Переменные»,
+  hit-зона Н9-2 с данными, чистый угол вне карточки). Обновлены литералы
+  SpillView/TitleFrame в smoke-тестах (новые поля).
+- **Гейты:** fmt ✓; clippy --workspace --all-targets -D warnings ✓
+  (крейты проверены все: 5 затронутых + ui/widgets/web/shell/headless);
+  нативные тесты затронутых крейтов зелёные (core 348, scene 88, render
+  306+smoke, app 266+integrations, mcp); wasm_gate.sh ✓;
+  mcp_wasm_gate.sh ✓ (wasip1 под wasmtime, e2e-сессия oracle ±1 %);
+  token_lint ✓. CI — после слияния.
+- **Файлы:** assets/fonts/{CanvasDeskMonoOblique.ttf,
+  OFL-CanvasDeskOblique.txt}, scripts/gen_oblique_font.py,
+  docs/prototypes/ux-spill-distinction.html,
+  docs/assets/fr050-spill-prototype.png,
+  crates/canvas-core/src/flow.rs, crates/canvas-scene/src/{view,scene,
+  tests}.rs, crates/canvas-render/src/{text,renderer}.rs,
+  crates/canvas-render/tests/{auto_row_smoke,spill_body_smoke,…}.rs,
+  crates/canvas-app/src/{app,i18n}.rs,
+  docs/change-requests/fr-050-spill-visibility-ui.md, worklog.md.
+- **Далее:** этап E — наглядность каскада (Н9: пульс 1, контекст-меню
+  параметра 3, карта потока 4 поверх PRD-0007/FR-048, тост 6).

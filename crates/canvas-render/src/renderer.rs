@@ -277,6 +277,11 @@ pub struct SceneView<'a> {
     /// value-рёбрами с `toParam` — подмена строк-присваиваний на подпись
     /// источника («param ← нода · выход») и эффективный бейдж строки.
     pub param_spills: &'a std::collections::HashMap<String, Vec<SpillView>>,
+    /// FR-050 Р-4 (этап D): авто-строки приёмников (производные пересчёта
+    /// потока) — рендерятся префиксом тела (зона «Переменные · входящие
+    /// значения», наклонное начертание Р-2) + hit-зоны тултипа Н9-2.
+    /// Пусто — рендер тела байт-в-байт прежний.
+    pub auto_rows: &'a std::collections::HashMap<String, Vec<canvas_core::flow::AutoRow>>,
     /// FR-017 (CP6): what-if представления нод активного сценария
     /// (виртуальный текст, подсветка подмен, дельта-бейджи). Пусто —
     /// режим выключен или подмен нет (рельеф базы не тронут).
@@ -637,6 +642,12 @@ impl Renderer {
     /// приложение hit-тестит курсор и показывает тултип с текстом ошибки.
     pub fn line_error_hits(&self) -> &[crate::text::LineErrorHit] {
         self.text.line_error_hits()
+    }
+
+    /// FR-050 Н9-2 (этап D): зоны наведения пролитых строк кадра —
+    /// приложение кэширует после рендера для тултипа источника.
+    pub fn spill_hits(&self) -> &[crate::text::SpillHit] {
+        self.text.spill_hits()
     }
 
     /// FR-025: построчные точки выхода ноды из кэша раскладки текста —
@@ -1404,6 +1415,7 @@ impl Renderer {
                 expr_line_results: scene.expr_line_results,
                 editing_line_results: scene.expr_editing_results,
                 param_spills: scene.param_spills,
+                auto_rows: scene.auto_rows,
                 whatif_nodes: scene.whatif_nodes,
                 analysis_badges: &analysis_badges,
                 stage_texts: overlay.stage_texts,

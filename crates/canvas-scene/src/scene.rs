@@ -455,6 +455,9 @@ impl SceneState {
         // fromOutput/узловое), а не локальный RHS строки: бейдж и подпись
         // показывают истину потока, а не захардкоженный литерал листа.
         let mut param_spills: HashMap<String, Vec<SpillView>> = HashMap::new();
+        // FR-050 Н9-2 (этап D): счётчики имён — квалифицированные пути
+        // «Объект.Поле» источников (коллизия — «Имя (node_id)»).
+        let name_counts = canvas_core::dataref::display_name_counts(&self.canvas);
         for node in &self.canvas.nodes {
             let spills = flow::param_spills(&self.canvas, &node.id);
             if spills.is_empty() {
@@ -466,12 +469,38 @@ impl SceneState {
                     // Значение ребра-источника — что реально пролито
                     // в параметр (не локальный RHS строки).
                     let value = spill_edge_value(solutions, &spill).map(|v| v.to_string());
+                    // Н9-2: путь «Объект.Поле» для тултипа «пролито: …».
+                    let obj = canvas_core::dataref::qualified_obj_name(
+                        &self.canvas,
+                        &spill.from_node,
+                        &name_counts,
+                    );
+                    let field = flow::spill_source_field(
+                        &self.canvas,
+                        &spill.from_node,
+                        spill.from_output.as_deref(),
+                        spill.from_line,
+                        &spill.from_label,
+                    );
+                    // Н9-2: локальный литерал RHS строки присваивания
+                    // («(локально было: 500 rps)») — правка значения
+                    // по Р-5 возвращает именно его.
+                    let local = assignment_line(node, &spill.param).and_then(|line| {
+                        node.text
+                            .as_deref()
+                            .and_then(|text| text.lines().nth(line))
+                            .and_then(|line| line.split_once('='))
+                            .map(|(_, rhs)| rhs.trim().to_owned())
+                            .filter(|rhs| !rhs.is_empty())
+                    });
                     SpillView {
                         line: assignment_line(node, &spill.param),
                         param: spill.param,
                         from_label: spill.from_label,
                         from_output: spill.from_output,
                         value,
+                        path: format!("{obj}.{field}"),
+                        local,
                     }
                 })
                 .collect();
@@ -503,6 +532,13 @@ impl SceneState {
             }
         }
         self.unmapped_edges = unmapped_edges;
+        // FR-050 Р-4 (этап D): рост высоты под авто-строки — growth-only
+        // (как CR-012): карточка обязана вместить строку-проекцию, иначе
+        // она обрежется клипом тела; достаточная высота не трогается.
+        // Здесь — после конца заимствования `solutions` (мутация канваса).
+        for index in 0..self.canvas.nodes.len() {
+            self.ensure_spill_rows_reserve(index);
+        }
         // FR-017 (CP6): what-if представления нод для рендера — виртуальный
         // исходник, подсветка подмен, дельта-бейджи (только ноды с подменами;
         // рельеф базы рендер рисует как есть).
@@ -774,6 +810,49 @@ impl SceneState {
     pub fn apply_result_reserve(&mut self) {
         for index in 0..self.canvas.nodes.len() {
             self.ensure_reserve_at(index);
+        }
+    }
+
+    /// FR-050 Р-4 (этап D): growth-only рост высоты под авто-строки
+    /// приёмника. Измерение — через тот же двухуровневый механизм CR-012:
+    /// строки-проекции препендятся показываемому тексту (метрики моно
+    /// совпадают с формульными строками — префиксные индексы входят в
+    /// formula_lines), индексы формул сдвигаются на длину префикса.
+    /// Резерв футера у нод без итога — побочный +RESULT_LINE_HEIGHT
+    /// (задокументированная цена: growth-only, один раз при появлении
+    /// связи). spatial index — только при реальном росте.
+    pub fn ensure_spill_rows_reserve(&mut self, index: usize) {
+        let Some(rows) = self
+            .auto_rows
+            .get(&self.canvas.nodes[index].id)
+            .filter(|rows| !rows.is_empty())
+        else {
+            return;
+        };
+        let prefix: Vec<String> = rows.iter().map(|row| row.display_text()).collect();
+        let display_body = display_body_text(&self.canvas.nodes[index], &self.param_spills);
+        let display = if display_body.is_empty() {
+            prefix.join("\n")
+        } else {
+            format!("{}\n{}", prefix.join("\n"), display_body)
+        };
+        let shift = prefix.len();
+        let formula_lines: Vec<usize> = self
+            .expr_line_results
+            .get(&self.canvas.nodes[index].id)
+            .map(|lines| formula_line_indices(lines))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| i + shift)
+            .chain(0..shift)
+            .collect();
+        let mut formula_lines = formula_lines;
+        formula_lines.sort_unstable();
+        let before = self.canvas.nodes[index].height;
+        ensure_result_reserve(&mut self.canvas.nodes[index], &display, &formula_lines);
+        if self.canvas.nodes[index].height > before {
+            let node = &self.canvas.nodes[index];
+            self.spatial.update(index, node);
         }
     }
 

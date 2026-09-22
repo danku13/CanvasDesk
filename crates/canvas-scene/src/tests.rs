@@ -3194,3 +3194,121 @@ fn scene_unmapped_edges_cache_set_and_unset() {
         "значение вернулось — состояние снято"
     );
 }
+
+/// FR-050 Н9-2 (этап D): представление проливания несёт квалифицированный
+/// путь источника «Объект.Поле» и локальный литерал RHS — данные тултипа
+/// «пролито: Трафик.peak_rps = 1389 rps (локально было: 50 rps)».
+/// Приёмник — шаблонная нода (toParam адресует параметры шаблонов).
+#[test]
+fn spill_view_carries_path_and_local() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 0, "y": 0, "text": "Трафик\npeak_rps = 1389 rps"}"#,
+    )
+    .expect("traffic");
+    let traffic = scene.canvas.nodes.last().expect("нода").id.clone();
+    let cdn = dispatch(
+        &mut scene,
+        "template_instantiate",
+        r#"{"id": "com.canvasdesk.cdn", "x": 400, "y": 0, "params": {}}"#,
+    )
+    .expect("CDN")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{traffic}", "to": "{cdn}", "fromOutput": "peak_rps", "toParam": "rps", "kind": "value"}}"#
+        ),
+    )
+    .expect("toParam-ребро");
+    let spills = scene.param_spills.get(&cdn).expect("проливание в кэше");
+    assert_eq!(spills.len(), 1);
+    let view = &spills[0];
+    assert_eq!(view.param, "rps");
+    assert_eq!(view.line, Some(0), "первая строка листа CDN — rps");
+    assert_eq!(view.path, "Трафик.peak_rps", "квалифицированный путь Н9-2");
+    assert_eq!(view.value.as_deref(), Some("1389 rps"), "значение ребра");
+    assert_eq!(
+        view.local.as_deref(),
+        Some("50 rps"),
+        "локальный литерал RHS"
+    );
+}
+
+/// FR-050 Р-4 (этап D): рост высоты под авто-строки при подключении связи
+/// (growth-only, как CR-012): карточка обязана вместить строку-проекцию —
+/// иначе она обрежется клипом тела; достаточная высота не трогается.
+#[test]
+fn auto_rows_grow_node_height() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 0, "y": 0, "text": "Трафик\npeak_rps = 1389 rps"}"#,
+    )
+    .expect("traffic");
+    let traffic = scene.canvas.nodes.last().expect("нода").id.clone();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 400, "y": 0, "text": "Смета\nитог := 100 + 5"}"#,
+    )
+    .expect("note");
+    let note = scene.canvas.nodes.last().expect("нода").id.clone();
+    // Зажим высоты ЗАРАНЕЕ: строка-проекция не вместится → карточка растёт
+    for node in scene.canvas.nodes.iter_mut() {
+        if node.id == note {
+            node.height = 90.0;
+        }
+    }
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{traffic}", "to": "{note}", "fromOutput": "peak_rps", "kind": "value"}}"#
+        ),
+    )
+    .expect("позиционное value-ребро (живой пересчёт)");
+    // Авто-строка: формула ноды не читает $1 (и нет toParam)
+    let rows = scene.auto_rows.get(&note).expect("авто-строка в кэше");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].path, "Трафик.peak_rps");
+    assert_eq!(rows[0].slot, 0);
+    assert_eq!(
+        rows[0].value.clone().map(|v| v.to_string()),
+        Some("1389 rps".to_owned())
+    );
+    let after = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == note)
+        .map(|n| n.height)
+        .expect("нода");
+    assert!(after > 90.0, "высота выросла под авто-строку: 90 → {after}");
+    // Достаточная высота не трогается (growth-only, без осцилляций):
+    // пересчёт без мутаций (node_update_text тем же текстом) — высота та же
+    mcp_dispatch(
+        &mut scene,
+        &canvas_core::templates::TemplateRegistry::builtin(),
+        "node_update_text",
+        &serde_json::json!({
+            "id": note,
+            "text": "Смета\nитог := 100 + 5",
+        }),
+    )
+    .expect("повторный пересчёт");
+    let stable = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == note)
+        .map(|n| n.height)
+        .expect("нода");
+    assert_eq!(after, stable, "повторный пересчёт — без осцилляций");
+}

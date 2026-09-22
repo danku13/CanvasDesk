@@ -297,6 +297,24 @@ pub mod keys {
     pub const TOOLTIP_UNMAPPED_SLOT: &str = "tooltip.unmapped.slot";
     /// FR-050 Р-3 (этап C): тултип unmapped-параметра (toParam без значения).
     pub const TOOLTIP_UNMAPPED_PARAM: &str = "tooltip.unmapped.param";
+    /// FR-050 Н9-2 (этап D): тултип источника пролитого параметра — с
+    /// прежним локальным значением.
+    pub const TOOLTIP_SPILL_PARAM: &str = "tooltip.spill.param";
+    /// FR-050 Н9-2 (этап D): тултип источника пролитого параметра — без
+    /// локального литерала (строки не было / RHS пуст).
+    pub const TOOLTIP_SPILL_PARAM_NO_LOCAL: &str = "tooltip.spill.param_no_local";
+    /// FR-050 Н9-2 (этап D): тултип пролитого параметра при unmapped
+    /// (источник не отдал значение).
+    pub const TOOLTIP_SPILL_PARAM_NOVALUE: &str = "tooltip.spill.param_novalue";
+    /// FR-050 Н9-2/Р-4 (этап D): тултип авто-строки приёмника — шаблонная
+    /// нода (подсказка «подключите к параметру через toParam»).
+    pub const TOOLTIP_SPILL_AUTOROW_TPL: &str = "tooltip.spill.autorow_tpl";
+    /// FR-050 Н9-2/Р-4 (этап D): тултип авто-строки приёмника — текстовая
+    /// нода (подсказка «используйте $N в формуле»).
+    pub const TOOLTIP_SPILL_AUTOROW_TEXT: &str = "tooltip.spill.autorow_text";
+    /// FR-050 Н9-2/Р-4 (этап D): тултип авто-строки при unmapped
+    /// (значение не подставлено).
+    pub const TOOLTIP_SPILL_AUTOROW_NOVALUE: &str = "tooltip.spill.autorow_novalue";
 
     // --- Подсказки Numi-ввода (FR-021) ---
     pub const HINT_VAR: &str = "hints.var";
@@ -675,6 +693,30 @@ const RU: &[(&str, &str)] = &[
     (
         keys::TOOLTIP_UNMAPPED_PARAM,
         "Параметр {param} не получает значение: выход {output} отсутствует у ноды \"{node}\" или не отдал значение. Перепривяжите связь на существующий выход (клик по ребру → перепривязка) или подключите ноду с актуальным значением.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_PARAM,
+        "Пролито: {path} = {value} (локально было: {local}). Правка значения — отключите проливание (контекст-меню строки или удаление связи), Ctrl+Z вернёт связь.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_PARAM_NO_LOCAL,
+        "Пролито: {path} = {value}. Локального значения не было — при удалении связи параметр останется пустым.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_PARAM_NOVALUE,
+        "Пролито из {path}: источник не отдал значение (строка-источник удалена / стала прозой / выход отсутствует). Исправьте строку-источник или перепривяжите связь.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_AUTOROW_TPL,
+        "Пролито: {path} = {value} — вход ${slot} приходит в ноду, но формула шаблона его не читает. Подключите связь к параметру (drag на якорь параметра, toParam) — значение подставится в расчёт.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_AUTOROW_TEXT,
+        "Пролито: {path} = {value} — вход ${slot} приходит в ноду, но формула его не читает. Используйте ${slot} в формуле (или именованный путь {path}) — значение подставится в расчёт.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_AUTOROW_NOVALUE,
+        "{path}: значение не подставлено — связь есть, но источник не отдал значение. Подключите ноду с актуальным значением или исправьте строку-источник.",
     ),
     // --- Подсказки Numi ---
     (keys::HINT_VAR, "переменная листа"),
@@ -1203,6 +1245,30 @@ const EN: &[(&str, &str)] = &[
     (
         keys::TOOLTIP_UNMAPPED_PARAM,
         "Parameter {param} gets no value: output {output} is missing on node \"{node}\" or yielded no value. Rebind the edge to an existing output (click the edge → rebind) or connect a node with an up-to-date value.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_PARAM,
+        "Spilled: {path} = {value} (local was: {local}). To edit the value, disconnect the spill (line context menu or delete the edge); Ctrl+Z restores it.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_PARAM_NO_LOCAL,
+        "Spilled: {path} = {value}. There was no local value — removing the edge leaves the parameter empty.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_PARAM_NOVALUE,
+        "Spilled from {path}: the source yielded no value (source line deleted / became prose / output missing). Fix the source line or rebind the edge.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_AUTOROW_TPL,
+        "Spilled: {path} = {value} — input ${slot} arrives at the node, but the template formula does not read it. Connect the edge to a parameter (drag onto the parameter anchor, toParam) to feed the calculation.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_AUTOROW_TEXT,
+        "Spilled: {path} = {value} — input ${slot} arrives at the node, but the formula does not read it. Use ${slot} in the formula (or the named path {path}) to feed the calculation.",
+    ),
+    (
+        keys::TOOLTIP_SPILL_AUTOROW_NOVALUE,
+        "{path}: value not applied — the edge exists but the source yielded no value. Connect a node with an up-to-date value or fix the source line.",
     ),
     // --- Numi hints ---
     (keys::HINT_VAR, "sheet variable"),

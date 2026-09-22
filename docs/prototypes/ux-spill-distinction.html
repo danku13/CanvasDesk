@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FR-050 · Различение пролитых значений — макет Р-2/Р-4/Н9-2</title>
+<style>
+  :root {
+    --bg: #1e1e22;
+    --card: #26262c;
+    --card-border: #383b45;
+    --title: #e6e6e6;
+    --icon: #9aaabf;
+    --body: #d4d4d4;
+    --link: #6cb6ff;
+    --code-text: #a5d6ff;
+    --code-bg: #383b45;
+    --amber: #f5a623;
+    --accent: #659cf7;
+    --whatif-bg: rgba(245, 166, 35, 0.18);
+    --spill-tooltip: #9cc3e6;
+    --mono: "Noto Sans Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--body);
+    font-family: system-ui, sans-serif;
+    font-size: 14px;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 { color: var(--title); font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+  .sub { color: var(--icon); font-size: 12.5px; margin-bottom: 20px; max-width: 900px; line-height: 1.5; }
+  .canvas {
+    position: relative;
+    height: 480px;
+    background:
+      linear-gradient(var(--bg), var(--bg)),
+      repeating-linear-gradient(0deg, transparent 0 31px, rgba(255,255,255,0.045) 31px 32px),
+      repeating-linear-gradient(90deg, transparent 0 31px, rgba(255,255,255,0.045) 31px 32px);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .node {
+    position: absolute;
+    width: 340px;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+    padding: 10px 12px 12px;
+  }
+  .node-header {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--title);
+    font-size: 15px; font-weight: 600;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: 8px;
+  }
+  .node-header .kind { font-size: 11px; color: var(--icon); font-weight: 400; margin-left: auto; }
+  .row {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 19px;
+    padding: 0 6px;
+    border-radius: 3px;
+    position: relative;
+    white-space: nowrap;
+  }
+  .row.mono-bg { background: var(--code-bg); margin: 0 -6px; padding: 0 12px; }
+  .row .val { color: var(--code-text); }
+  .badge {
+    position: absolute; right: 12px; top: 1px;
+    color: var(--link);
+    font-family: var(--mono); font-size: 12.5px;
+    background: rgba(0,0,0,0.25);
+    border-radius: 3px; padding: 0 5px;
+  }
+  /* FR-050 Р-2: пролитое значение — наклонное моно (CanvasDesk Mono Oblique
+     в продукте; в макете — синтез браузера) + маркер «←» у источника */
+  .row.spilled { font-style: italic; color: var(--code-text); }
+  .row.spilled .arrow { color: var(--link); font-style: normal; padding: 0 2px; }
+  .row.unmapped { font-style: italic; color: var(--amber); }
+  .row.whatif { background: var(--whatif-bg); }
+  .row.whatif .delta { color: var(--amber); }
+  /* FR-050 Р-4: зона «Переменные · входящие значения» — префикс тела */
+  .vars-zone {
+    display: flex; align-items: baseline; gap: 6px;
+    margin: -2px 0 8px;
+    padding: 4px 6px 6px;
+    background: rgba(101, 156, 247, 0.06);
+    border-left: 2px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+  }
+  .vars-zone .zone-label {
+    font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--icon);
+    text-transform: uppercase;
+    flex: none;
+  }
+  .vars-zone .rows { flex: 1; min-width: 0; }
+  .edge { position: absolute; z-index: 0; }
+  .edge-label {
+    position: absolute;
+    font-family: var(--mono); font-size: 12px;
+    color: var(--code-text);
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 99px;
+    padding: 1px 8px;
+    z-index: 2;
+    white-space: nowrap;
+  }
+  .edge-label.to { color: var(--body); font-style: italic; }
+  .edge.unmapped-path { stroke-dasharray: 6 5; }
+  .tooltip {
+    position: fixed;
+    max-width: 380px;
+    background: #14141a;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--spill-tooltip);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 10;
+    display: none;
+    pointer-events: none;
+  }
+  .tooltip.amber { color: var(--amber); }
+  .panel {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: baseline;
+    margin-bottom: 18px;
+  }
+  .panel label { color: var(--title); font-size: 13px; }
+  .panel .opt { margin-right: 10px; cursor: pointer; }
+  .panel input { accent-color: var(--accent); margin-right: 4px; cursor: pointer; }
+  .dau { display: flex; align-items: center; gap: 8px; }
+  .dau input[type=range] { width: 170px; accent-color: var(--accent); }
+  .dau .v { font-family: var(--mono); color: var(--code-text); }
+  .strip { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  .card-demo {
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 8px; padding: 10px 12px; width: 300px;
+  }
+  .card-demo h3 { color: var(--title); font-size: 13px; margin-bottom: 8px; font-weight: 600; }
+  .card-demo .note { font-size: 11.5px; color: var(--icon); margin-top: 8px; line-height: 1.45; }
+  .legend { font-size: 12.5px; color: var(--icon); line-height: 1.6; max-width: 940px; }
+  .legend b { color: var(--title); font-weight: 600; }
+  .legend code { font-family: var(--mono); color: var(--code-text); font-style: italic; }
+  .hit { cursor: help; }
+</style>
+</head>
+<body>
+  <h1>FR-050 · Наглядное проливание — различение пролитых значений (Р-2), авто-строка приёмника (Р-4), тултип источника (Н9-2)</h1>
+  <div class="sub">
+    Макет выбора начертания Р-2 (паттерн проверки FR-044 §Решения): у Noto Sans Mono нет
+    официального italic, поэтому в продукте — <b>наклонная производная «CanvasDesk Mono
+    Oblique»</b> (oblique-синтез 11°, авансы и метрики сохранены: раскладка не разъезжается).
+    В макете курсив синтезирует браузер. Наведите курсор на наклонные строки — тултип Н9-2
+    называет источник; двигайте DAU — авто-строка и итог пересчитываются (демо-критерий
+    «наглядной проверки» FR-050).
+  </div>
+
+  <div class="panel">
+    <label>Вариант Р-2:</label>
+    <span class="opt"><input type="radio" name="v" id="v-oblique" checked><label for="v-oblique">A · наклон (выбран)</label></span>
+    <span class="opt"><input type="radio" name="v" id="v-marker"><label for="v-marker">B · только маркер «←»</label></span>
+    <span class="opt"><input type="radio" name="v" id="v-both"><label for="v-both">C · наклон + маркер</label></span>
+    <span class="dau">
+      <label for="dau">DAU:</label>
+      <input type="range" id="dau" min="100000" max="3000000" step="100000" value="1000000">
+      <span class="v" id="dau-v">1 000 000</span>
+    </span>
+  </div>
+
+  <div class="canvas" id="canvas">
+    <svg class="edge" width="1000" height="480" style="left:0;top:0">
+      <path id="edge-path" d="M 0 0" fill="none" stroke="#5b6675" stroke-width="2.2"/>
+      <path id="edge-unmapped" class="unmapped-path" d="M 0 0" fill="none" stroke="#f5a623" stroke-width="2.2"/>
+    </svg>
+
+    <div class="node" style="left:40px; top:70px" id="src">
+      <div class="node-header">Трафик <span class="kind">numi-лист</span></div>
+      <div class="row mono-bg hit" data-tip="dau = 1 000 000 — локальное значение (прямое начертание)">dau = <span class="val" id="src-dau">1000000</span><span class="badge" id="src-dau-b">1000000</span></div>
+      <div class="row mono-bg hit" data-tip="avg_rps — локальная формула ноды">avg_rps := dau × sess × req ÷ 86400<span class="badge" id="src-avg">555.56 rps</span></div>
+      <div class="row mono-bg hit" data-tip="пролито: Трафик.peak_rps = 1389 rps — значение этой строки питает приёмник по value-связи">peak_rps := avg_rps × peak<span class="badge" id="src-peak">1388.89 rps</span></div>
+    </div>
+
+    <div class="node" style="left:420px; top:60px" id="dst">
+      <div class="node-header">Gateway <span class="kind">текстовая нода</span></div>
+      <div class="vars-zone">
+        <span class="zone-label">Переменные · входящие</span>
+        <span class="rows">
+          <div class="row spilled hit" id="auto-row" data-tip="Пролито: Трафик.peak_rps = 1388.89 rps — вход $1 приходит в ноду, но формула его не читает. Используйте $1 в формуле (или именованный путь Трафик.peak_rps) — значение подставится в расчёт.">Трафик.peak_rps = <span id="auto-val">1388.89 rps</span></div>
+        </span>
+      </div>
+      <div class="row mono-bg">latency = 45 ms<span class="badge">45 ms</span></div>
+      <div class="row mono-bg">slack := 100 ms − latency<span class="badge">55 ms</span></div>
+    </div>
+
+    <div class="node" style="left:420px; top:300px" id="dst2">
+      <div class="node-header">LB — шаблон <span class="kind">com.canvasdesk.tcp-lb</span></div>
+      <div class="row mono-bg spilled hit" id="param-row" data-tip="Пролито: Трафик.peak_rps = 1388.89 rps (локально было: 50 rps). Правка значения — отключите проливание (контекст-меню строки или удаление связи), Ctrl+Z вернёт связь.">rps <span class="arrow">←</span> <span id="param-src">Трафик · peak_rps</span><span class="badge" id="param-val">1388.89 rps</span></div>
+      <div class="row mono-bg">connections_per_sec = 8000<span class="badge">8000 cps</span></div>
+      <div class="row mono-bg whatif hit" data-tip="Подмена сценария what-if (приоритет Р-1: what-if перекрывает проливание и локальное)">utilization := <span class="delta">?</span> × 0.9<span class="badge delta" id="util-val">780.0 %</span></div>
+    </div>
+
+    <div class="node" style="left:40px; top:300px" id="src2">
+      <div class="node-header">Курсы (CSV) <span class="kind">data-нода</span></div>
+      <div class="row mono-bg">usd → колонка «usd»<span class="badge">92.5</span></div>
+      <div class="row unmapped hit" data-tip="Курсы.usd: значение не подставлено — связь есть, но источник не отдал значение. Подключите ноду с актуальным значением или исправьте строку-источник.">Курсы.usd = —</div>
+    </div>
+
+    <div class="edge-label" id="label-from">1388.89 rps</div>
+    <div class="edge-label to" id="label-to">→ rps</div>
+    <div class="edge-label" id="label-from2" style="color:#f5a623">— не подставлено</div>
+  </div>
+
+  <div class="strip">
+    <div class="card-demo">
+      <h3>Различение Р-2 — рядом</h3>
+      <div class="row mono-bg">rps = 50 rps <span class="badge">50 rps</span></div>
+      <div class="row mono-bg spilled">rps <span class="arrow">←</span> Трафик · peak_rps<span class="badge">1388.89 rps</span></div>
+      <div class="row mono-bg whatif">rps := 2000 rps<span class="badge delta">50 → 2000</span></div>
+      <div class="note">Прямое — локальное. Наклонное — пролито (тултип называет источник).
+      Янтарный фон — подмена what-if (Р-1: перекрывает всё).</div>
+    </div>
+    <div class="card-demo">
+      <h3>Почему наклонная производная</h3>
+      <div class="note" style="margin-top:2px">
+        У Noto Sans Mono <b>нет</b> italic-начертания (Google не выпускает). Варианты:
+        чужой курсивный моно-шрифт (чужая метрика/дизайн, 26 МБ Sarasa) — отклонён;
+        GPU-скос глифов (glyphon не даёт per-area трансформ) — отклонён;
+        <b>oblique-производная fontTools</b> (11°, авансы сохранены, имя без RFN
+        «Noto», OFL) — <b>выбрано</b>: та же моно-колонка, то же выравнивание
+        бейджей, различие читается мгновенно.
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>Соответствие FR-050:</b> авто-строка приёмника — «Трафик.peak_rps = 1388.89 rps»
+    вверху тела (зона «Переменные · входящие значения», строка-проекция Н10-а);
+    строка параметра шаблонной ноды — <code>rps ← Трафик · peak_rps</code> (маркер
+    проливания, значение — в бейдже строки); подпись у истока ребра — значение, у
+    приёмника — короткий адрес «→ rps» (Н7); unmapped — янтарный пунктир + тултип
+    «проблема + решение» (Р-3); what-if — янтарная подмена поверх (Р-1). Тост
+    «Параметр подтянулся — Ctrl+Z отменит» и пульс каскада — этап E.
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const tooltip = $('tooltip');
+  const src = $('src'), dst = $('dst'), dst2 = $('dst2'), src2 = $('src2');
+
+  // Геометрия рёбер (кривые от правого края истока к левому краю приёмника)
+  function anchor(node, side) {
+    const r = node.getBoundingClientRect();
+    const c = $('canvas').getBoundingClientRect();
+    const y = r.top - c.top + 74; // строка значения
+    return side === 'right'
+      ? [r.right - c.left, y]
+      : [r.left - c.left, y];
+  }
+  function curve(a, b) {
+    const dx = Math.max(40, (b[0] - a[0]) / 2);
+    return `M ${a[0]} ${a[1]} C ${a[0] + dx} ${a[1]}, ${b[0] - dx} ${b[1]}, ${b[0]} ${b[1]}`;
+  }
+  function relabel(path, t) {
+    const m = path.match(/C ([\d.]+) ([\d.]+), ([\d.]+) ([\d.]+), ([\d.]+) ([\d.]+)/);
+    const x = (+m[1] + +m[5]) / 2, y = (+m[2] + +m[6]) / 2;
+    return [x, y];
+  }
+  function layout() {
+    const a = anchor(src, 'right'), b = anchor(dst, 'left');
+    const p = curve(a, b);
+    $('edge-path').setAttribute('d', p);
+    const [mx, my] = relabel(p);
+    const lf = $('label-from'), lt = $('label-to');
+    lf.style.left = (mx - 40) + 'px'; lf.style.top = (my - 26) + 'px';
+    lt.style.left = (mx + 34) + 'px'; lt.style.top = (my + 8) + 'px';
+    const a2 = anchor(src2, 'right'), b2 = anchor(dst2, 'left');
+    const p2 = curve(a2, b2);
+    $('edge-unmapped').setAttribute('d', p2);
+    const [mx2, my2] = relabel(p2);
+    const l2 = $('label-from2');
+    l2.style.left = (mx2 - 40) + 'px'; l2.style.top = (my2 - 26) + 'px';
+  }
+  layout();
+  window.addEventListener('resize', layout);
+
+  // Тултипы (Н9-2 / Р-3)
+  document.querySelectorAll('.hit').forEach(el => {
+    el.addEventListener('mousemove', e => {
+      tooltip.textContent = el.dataset.tip;
+      tooltip.classList.toggle('amber', el.classList.contains('unmapped'));
+      tooltip.style.display = 'block';
+      const pad = 14;
+      let x = e.clientX + pad, y = e.clientY + 18;
+      const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
+      if (x + w > innerWidth - 8) x = e.clientX - w - pad;
+      if (y + h > innerHeight - 8) y = e.clientY - h - 12;
+      tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
+    });
+    el.addEventListener('mouseleave', () => tooltip.style.display = 'none');
+  });
+
+  // Демо-критерий: правка DAU → авто-строка/бейджи/подписи ребра обновляются
+  $('dau').addEventListener('input', e => {
+    const dau = +e.target.value;
+    const avg = dau * 4 * 12 / 86400;
+    const peak = avg * 2.5;
+    const fmt = v => v >= 1000 ? v.toFixed(2) : v.toFixed(v < 10 ? 2 : 1);
+    $('dau-v').textContent = dau.toLocaleString('ru-RU');
+    $('src-dau').textContent = dau;
+    $('src-dau-b').textContent = dau.toLocaleString('ru-RU');
+    $('src-avg').textContent = fmt(avg) + ' rps';
+    $('src-peak').textContent = fmt(peak) + ' rps';
+    $('auto-val').textContent = fmt(peak) + ' rps';
+    $('param-val').textContent = fmt(peak) + ' rps';
+    $('label-from').textContent = fmt(peak) + ' rps';
+    $('util-val').textContent = fmt(peak * 0.9 / 1.6) + ' %';
+    $('auto-row').dataset.tip =
+      `Пролито: Трафик.peak_rps = ${fmt(peak)} rps — вход $1 приходит в ноду, ` +
+      'но формула его не читает. Используйте $1 в формуле (или именованный путь ' +
+      'Трафик.peak_rps) — значение подставится в расчёт.';
+    $('param-row').dataset.tip =
+      `Пролито: Трафик.peak_rps = ${fmt(peak)} rps (локально было: 50 rps). ` +
+      'Правка значения — отключите проливание (контекст-меню строки или удаление ' +
+      'связи), Ctrl+Z вернёт связь.';
+  });
+
+  // Варианты Р-2: A наклон / B маркер / C оба
+  document.querySelectorAll('input[name=v]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const oblique = $('v-oblique').checked || $('v-both').checked;
+      const marker = $('v-marker').checked || $('v-both').checked;
+      document.querySelectorAll('.row.spilled, .row.unmapped').forEach(row => {
+        row.style.fontStyle = oblique ? 'italic' : 'normal';
+      });
+      document.querySelectorAll('.arrow').forEach(a => {
+        a.style.display = marker ? 'inline' : 'none';
+      });
+      if (!marker && !oblique) {
+        document.querySelectorAll('.row.spilled').forEach(r => r.style.color = 'var(--link)');
+      } else {
+        document.querySelectorAll('.row.spilled').forEach(r => r.style.color = '');
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
