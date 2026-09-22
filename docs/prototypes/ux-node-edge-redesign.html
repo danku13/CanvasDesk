@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Node/Edge 2.0 — три варианта редизайна (CanvasDesk)</title>
+<style>
+  :root{
+    --bg:#141418; --panel:#1b1b20; --line:#2a2a33; --txt:#e8e8ec; --dim:#9a9aa5;
+    --accent:#4da3ff; --flow:#31b8a6; --control:#8b8b96; --amber:#d9a13c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--txt)}
+  header{display:flex;align-items:center;gap:16px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .sub{color:var(--dim);font-size:12px}
+  .tabs{display:flex;gap:6px;margin-left:auto}
+  .tab{padding:6px 14px;border:1px solid var(--line);border-radius:8px;cursor:pointer;color:var(--dim);background:transparent;font-size:13px}
+  .tab.on{color:var(--txt);border-color:var(--accent);background:rgba(77,163,255,.12)}
+  .tab b{display:block;font-size:13px}
+  .tab span{font-size:10px}
+  button.mini{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--dim);cursor:pointer;font-size:12px}
+  button.mini:hover{color:var(--txt)}
+  main{display:flex;gap:0;align-items:stretch;height:calc(100vh - 92px);min-height:560px}
+  #stage{flex:1;position:relative;min-width:640px}
+  canvas{display:block;width:100%;height:100%;cursor:default}
+  aside{width:330px;border-left:1px solid var(--line);background:var(--panel);padding:14px;overflow-y:auto}
+  aside h2{font-size:14px;margin:0 0 6px}
+  aside h3{font-size:12px;margin:14px 0 4px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+  aside p{font-size:12.5px;color:var(--dim);margin:4px 0}
+  aside table{width:100%;border-collapse:collapse;font-size:12px;margin-top:4px}
+  aside td{padding:3px 6px;border-top:1px solid var(--line);color:var(--dim)}
+  aside td:first-child{color:var(--txt);white-space:nowrap}
+  .chip{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;margin:2px 3px 0 0;border:1px solid var(--line);color:var(--dim)}
+  .chip.good{color:var(--flow);border-color:var(--flow)}
+  .chip.bad{color:var(--amber);border-color:var(--amber)}
+  footer{padding:8px 16px;border-top:1px solid var(--line);background:var(--panel);color:var(--dim);font-size:12.5px;min-height:36px}
+  footer b{color:var(--txt)}
+  .menu{position:absolute;background:#222228;border:1px solid #3a3a44;border-radius:10px;padding:4px;min-width:240px;box-shadow:0 12px 32px rgba(0,0,0,.5);z-index:5}
+  .menu .mi{padding:7px 12px;border-radius:7px;cursor:pointer;font-size:13px;display:flex;gap:8px;align-items:center}
+  .menu .mi:hover{background:rgba(77,163,255,.15)}
+  .menu .sep{height:1px;background:var(--line);margin:4px 8px}
+  .menu .mi i{width:10px;height:10px;border-radius:50%;background:var(--control);flex:none}
+  .menu .mi i.v{background:var(--flow)}
+  .menu .mi i.c{border-radius:2px}
+  .hidden{display:none}
+  .legend{display:flex;gap:14px;font-size:11.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap}
+  .legend s{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:-1px;margin-right:5px;text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Node/Edge 2.0 — варианты редизайна</h1>
+    <div class="sub">пре-PRD анализ · <i>docs/interface-objects/node-edge-redesign-analysis.md</i></div>
+  </div>
+  <div class="tabs">
+    <button class="tab" id="tabA"><b>В-А</b><span>двухконтурный</span></button>
+    <button class="tab" id="tabB"><b>В-B</b><span>единый рейл</span></button>
+    <button class="tab on" id="tabC"><b>В-C</b><span>кромки-зоны</span></button>
+  </div>
+  <button class="mini" id="reset">⟲ Сбросить демо</button>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div class="menu hidden" id="menu"></div>
+    <div class="legend" style="position:absolute;left:12px;bottom:10px;background:rgba(20,20,24,.72);padding:6px 10px;border-radius:8px">
+      <span><s style="background:var(--flow)"></s>value / поток</span>
+      <span><s style="background:var(--control);border-radius:2px"></s>control / связь</span>
+      <span><s style="background:var(--amber);border-radius:0;transform:rotate(45deg)"></s>unmapped</span>
+    </div>
+  </div>
+  <aside id="panel"></aside>
+</main>
+<footer id="hint"><b>Наводите</b> на ноды и тяните от портов/кромок — жесты различаются по варианту. <b>Del</b> — удалить выделенную связь, <b>Esc</b> — отмена.</footer>
+
+<script>
+"use strict";
+// ═══════════════ Демо-сцена (модель данных прототипа) ═══════════════
+const NODES = [
+  { id:"load", kind:"calc", title:"Расчёт нагрузки", cat:"лист",
+    x:90, y:70, w:250,
+    rows:[ {label:"users = 2 000", value:"2 000"},
+           {label:"rps = users · 0.5", value:"1 000 rps"} ],
+    result:"1 000 rps" },
+  { id:"gw", kind:"template", title:"API Gateway", cat:"шаблон",
+    x:560, y:60, w:270,
+    params:[ {name:"rps", local:"—", spilled:"1 000 rps", from:"load"},
+             {name:"latency", local:"50 ms", spilled:null, from:"note"} ],
+    lines:[ {name:"throughput = rps · 20", value:"20 000 rps"} ],
+    result:"20 000 rps" },
+  { id:"note", kind:"note", title:"Гипотеза", cat:"заметка",
+    x:110, y:400, w:210, text:"Пропускная способность\nграницы — узкое место." },
+  { id:"file", kind:"file", title:"report.md", cat:"файл",
+    x:580, y:410, w:190 },
+];
+const EDGES0 = [
+  { id:"e1", from:"load", fromPort:{kind:"line", line:1}, to:"gw", toPort:{kind:"param", param:"rps"}, type:"value" },
+  { id:"e2", from:"note", fromPort:{kind:"node"}, to:"gw", toPort:{kind:"param", param:"latency"}, type:"value", unmapped:true },
+  { id:"e3", from:"note", fromPort:{kind:"node"}, to:"file", toPort:{kind:"node"}, type:"control" },
+];
+
+// ═══════════════ Метрики анатомии ═══════════════
+const M = { header:30, row:24, pad:10, result:26, gap:8, portR:6, zone:16 };
+function layout(n){
+  const isCalc = n.kind==="calc" || n.kind==="template";
+  let h = M.header;
+  if(isCalc){
+    n.bodyTop = h;
+    if(n.kind==="template" && n.params) h += n.params.length * M.row + M.gap;
+    if(n.rows) h += n.rows.length * M.row;
+    n.bodyH = h - n.bodyTop;
+    h += M.gap; n.resultTop = h; h += M.result;
+  } else {
+    n.bodyTop = h; n.bodyH = n.kind==="file" ? 64 : 52; h += n.bodyH;
+  }
+  n.h = h;
+}
+NODES.forEach(layout);
+const byId = id => NODES.find(n=>n.id===id);
+
+// ═══════════════ Порты (по вариантам) ═══════════════
+// порт: {node, side:'L'|'R', x,y, type:'value'|'control', label, line?, param?}
+function nodeOutPorts(n){
+  const R = n.x + n.w, out=[];
+  if(n.kind==="calc" && n.rows) n.rows.forEach((r,i)=> out.push({node:n.id, side:"R", x:R, y:portRowY(n,i), type:"value", label:r.label.split("=")[0].trim(), line:i}));
+  if(n.kind==="template" && n.lines) n.lines.forEach((r,i)=> out.push({node:n.id, side:"R", x:R, y:portRowY(n,(n.params?n.params.length:0)+i), type:"value", label:r.name, line:i, named:true}));
+  if(n.kind==="template" || n.kind==="calc") out.push({node:n.id, side:"R", x:R, y:n.y+n.resultTop + M.result/2, type:"value", label:"итог", nodeLevel:true});
+  if(n.kind==="note" || n.kind==="file") out.push({node:n.id, side:"R", x:R, y:n.y+M.header+ (n.bodyH/2), type:"control", label:"связь", nodeLevel:true});
+  return out;
+}
+function nodeInPorts(n){
+  const out=[];
+  if(n.kind==="template" && n.params) n.params.forEach((p,i)=> out.push({node:n.id, side:"L", x:n.x, y:portRowY(n,i), type:"value", label:p.name, param:p.name}));
+  if(n.kind==="calc" || n.kind==="template") out.push({node:n.id, side:"L", x:n.x, y:n.y+M.header+M.gap, type:"value", label:"$in", slot:true});
+  if(n.kind==="note" || n.kind==="file") out.push({node:n.id, side:"L", x:n.x, y:n.y+M.header+(n.bodyH/2), type:"control", label:"связь", nodeLevel:true});
+  return out;
+}
+function portRowY(n,i){ return n.y + n.bodyTop + M.row*i + M.row/2 + (n.kind==="template"?M.gap/2:0); }
+
+// видимость портов в покое — сердце различия вариантов
+function restingPorts(n, hovered){
+  switch(VARIANT){
+    case "A":
+      if(n.kind==="calc"||n.kind==="template") return [...nodeInPorts(n), ...nodeOutPorts(n)];
+      return hovered ? [...nodeInPorts(n), ...nodeOutPorts(n)] : [];
+    case "B":
+      return [...nodeInPorts(n), ...nodeOutPorts(n)];
+    case "C":
+      return []; // в покое — ничего; hover подсвечивает кромки, drag раскрывает
+  }
+}
+
+// ═══════════════ Состояние UI ═══════════════
+let VARIANT="C", edges=JSON.parse(JSON.stringify(EDGES0)), nextId=4;
+let hovered=null, drag=null, selectedEdge=null, revealSrc=null, revealDst=null, msgFlash=null;
+
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d"), stage=document.getElementById("stage");
+function fit(){ const r=stage.getBoundingClientRect(); cv.width=r.width*devicePixelRatio; cv.height=r.height*devicePixelRatio; }
+addEventListener("resize",()=>{fit();render()}); fit();
+
+// ═══════════════ Геометрия портов конца рёбра ═══════════════
+function edgeEnds(e){
+  const s=byId(e.from), t=byId(e.to);
+  let p1, p2;
+  if(e.fromPort.kind==="line"){ const o=nodeOutPorts(s).find(p=>p.line===e.fromPort.line); p1=o||{x:s.x+s.w,y:s.y+M.header}; }
+  else p1={x:s.x+s.w,y:s.y+M.header+ (s.bodyH?s.bodyH/2:10)};
+  if(e.toPort.kind==="param"){ const i=t.params.findIndex(p=>p.name===e.toPort.param); p2={x:t.x,y:portRowY(t,Math.max(0,i))}; }
+  else if(e.toPort.kind==="in"){ p2={x:t.x,y:t.y+M.header+M.gap}; }
+  else p2={x:t.x,y:t.y+M.header+(t.bodyH?t.bodyH/2:10)};
+  return [p1,p2];
+}
+function bezier(p1,p2){
+  const d=Math.max(40,Math.abs(p2.x-p1.x)*0.5);
+  return [p1.x,p1.y, p1.x+d,p1.y, p2.x-d,p2.y, p2.x,p2.y];
+}
+
+// ═══════════════ Рендер ═══════════════
+const C={ value:"#31b8a6", control:"#8b8b96", amber:"#d9a13c", sel:"#4da3ff" };
+function render(){
+  const W=cv.width/devicePixelRatio, H=cv.height/devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  ctx.clearRect(0,0,W,H);
+  // сетка
+  ctx.strokeStyle="rgba(255,255,255,.035)"; ctx.lineWidth=1; ctx.beginPath();
+  for(let x=0;x<W;x+=28){ctx.moveTo(x,0);ctx.lineTo(x,H)} for(let y=0;y<H;y+=28){ctx.moveTo(0,y);ctx.lineTo(W,y)} ctx.stroke();
+
+  // рёбра
+  edges.forEach(e=>{
+    const [p1,p2]=edgeEnds(e), b=bezier(p1,p2);
+    const active = selectedEdge===e.id;
+    ctx.strokeStyle = e.unmapped?C.amber : e.type==="value"?C.value : C.control;
+    ctx.lineWidth = active?3:2;
+    ctx.setLineDash(e.unmapped?[6,5]:[]);
+    ctx.beginPath(); ctx.moveTo(b[0],b[1]); ctx.bezierCurveTo(b[2],b[3],b[4],b[5],b[6],b[7]); ctx.stroke(); ctx.setLineDash([]);
+    // стрелка
+    arrow(b[4],b[5],b[6],b[7], ctx.strokeStyle);
+    // чип значения
+    if(e.type==="value" && !e.unmapped){
+      const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2 - 14;
+      const s=byId(e.from), lbl=(e.fromPort.kind==="line" ? s.rows?.[e.fromPort.line]?.value || s.lines?.[e.fromPort.line]?.value : s.result) || "";
+      chip(mx,my, (e.toPort.param? e.toPort.param+" ← " : "")+lbl, e.unmapped?C.amber:C.value);
+    }
+    if(e.unmapped){ const mx=(p1.x+p2.x)/2; chip(mx,(p1.y+p2.y)/2-14,"не подставлено",C.amber); }
+  });
+
+  // резинка drag
+  if(drag){ const o=dragOrigin();
+    ctx.strokeStyle= drag.type==="value"?C.value:C.control; ctx.lineWidth=2; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(o.x,o.y); ctx.lineTo(mouse.x,mouse.y); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // ноды
+  NODES.forEach(n=>{
+    const hv = hovered===n.id, inDrag = drag && (drag.from===n.id || drag.over===n.id);
+    drawNode(n, hv, inDrag);
+  });
+  if(msgFlash && Date.now()-msgFlash.t < 4000){ /* тост в footer */ }
+  requestAnimationFrame(()=>{ if(drag||hovered) render(); });
+}
+function arrow(x1,y1,x2,y2,color){
+  const a=Math.atan2(y2-y1,x2-x1);
+  ctx.fillStyle=color; ctx.beginPath();
+  ctx.moveTo(x2,y2); ctx.lineTo(x2-10*Math.cos(a-0.42),y2-10*Math.sin(a-0.42)); ctx.lineTo(x2-10*Math.cos(a+0.42),y2-10*Math.sin(a+0.42));
+  ctx.closePath(); ctx.fill();
+}
+function chip(x,y,text,color){
+  ctx.font="11px system-ui"; const w=ctx.measureText(text).width+14;
+  ctx.fillStyle="rgba(20,20,24,.92)"; roundRect(x-w/2,y-9,w,18,9); ctx.fill();
+  ctx.strokeStyle=color; ctx.lineWidth=1; roundRect(x-w/2,y-9,w,18,9); ctx.stroke();
+  ctx.fillStyle=color; ctx.fillText(text,x-w/2+7,y+4);
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function drawNode(n,hv,inDrag){
+  const isCalc=n.kind==="calc"||n.kind==="template";
+  // тень + карточка
+  ctx.fillStyle="rgba(0,0,0,.35)"; roundRect(n.x+3,n.y+4,n.w,n.h,10); ctx.fill();
+  ctx.fillStyle= inDrag? "rgba(77,163,255,.10)" : "#1f1f24"; roundRect(n.x,n.y,n.w,n.h,10); ctx.fill();
+  ctx.strokeStyle = hv? "rgba(232,232,236,.55)" : "#3a3a44"; ctx.lineWidth=1.4; roundRect(n.x,n.y,n.w,n.h,10); ctx.stroke();
+  // хедер A: категорийный чип + имя
+  ctx.save(); ctx.beginPath(); roundRect(n.x,n.y,n.w,n.h,10); ctx.clip();
+  ctx.fillStyle = n.kind==="template"?"rgba(49,184,166,.16)": n.kind==="calc"?"rgba(77,163,255,.14)": n.kind==="note"?"rgba(167,139,250,.14)":"rgba(139,139,150,.14)";
+  ctx.fillRect(n.x,n.y,n.w,M.header);
+  ctx.restore();
+  ctx.font="11px system-ui"; ctx.fillStyle= n.kind==="template"?C.value: n.kind==="calc"?C.sel : n.kind==="note"?"#a78bfa":C.control;
+  ctx.fillText(n.cat.toUpperCase(), n.x+M.pad, n.y+19);
+  const cw=ctx.measureText(n.cat.toUpperCase()).width;
+  ctx.font="600 13px system-ui"; ctx.fillStyle="#e8e8ec"; ctx.fillText(n.title, n.x+M.pad+cw+10, n.y+20);
+
+  if(isCalc){
+    // тело C: параметры (шаблон) + строки (calc)
+    ctx.font="12.5px system-ui";
+    if(n.kind==="template" && n.params){
+      n.params.forEach((p,i)=>{
+        const y=portRowY(n,i);
+        const spill = p.spilled && !p.unmapped;
+        // авто-строка/параметр: пролитое — курсивом с маркером
+        ctx.fillStyle= spill? C.value : "#9a9aa5";
+        ctx.font= spill? "italic 12.5px system-ui" : "12.5px system-ui";
+        const val = p.spilled || p.local;
+        ctx.fillText(p.name+" = "+(spill? p.spilled : p.local), n.x+M.pad+10, y+4);
+        if(spill) ctx.fillText("←", n.x+M.pad, y+4);
+        if(!p.spilled && p.from){ ctx.fillStyle=C.amber; ctx.fillText("= —", n.x+n.w-46, y+4); }
+        ctx.font="12.5px system-ui";
+      });
+    }
+    if(n.rows){
+      ctx.fillStyle="#c7c7cf";
+      n.rows.forEach((r,i)=>{
+        const y = n.y + n.bodyTop + (n.kind==="template"?(n.params.length*M.row+M.gap):0) + M.row*i + M.row/2;
+        ctx.fillText(r.label, n.x+M.pad, y+4);
+        ctx.fillStyle=C.value; ctx.textAlign="right"; ctx.fillText(r.value, n.x+n.w-M.pad-12, y+4); ctx.textAlign="left"; ctx.fillStyle="#c7c7cf";
+      });
+    }
+    // полоса результата D
+    ctx.fillStyle="rgba(49,184,166,.10)"; ctx.fillRect(n.x,n.resultTop,n.w,M.result);
+    ctx.strokeStyle="rgba(49,184,166,.35)"; ctx.beginPath(); ctx.moveTo(n.x,n.resultTop); ctx.lineTo(n.x+n.w,n.resultTop); ctx.stroke();
+    ctx.font="600 12.5px system-ui"; ctx.fillStyle=C.value; ctx.fillText("Σ "+n.result, n.x+M.pad, n.resultTop+17);
+  } else {
+    ctx.font="12.5px system-ui"; ctx.fillStyle="#b9b9c2";
+    const lines=(n.text||"").split("\n");
+    lines.forEach((l,i)=> ctx.fillText(l, n.x+M.pad, n.y+M.header+18+i*17));
+    if(n.kind==="file"){ ctx.fillStyle="#6f6f7a"; ctx.font="11px system-ui"; ctx.fillText("markdown · 3 КБ", n.x+M.pad, n.y+n.h-12); }
+  }
+
+  // ── кромки-зоны (В-C): hover-подсветка входа/выхода ──
+  if(VARIANT==="C" && hv && !drag){
+    edgeGlow(n,"R", n.kind==="note"||n.kind==="file" ? C.control : C.value);
+    edgeGlow(n,"L", n.kind==="note"||n.kind==="file" ? C.control : "rgba(232,232,236,.5)");
+  }
+  if(VARIANT==="C" && drag){
+    if(drag.from===n.id && drag.dir==="out") edgeGlow(n,"R", drag.type==="value"?C.value:C.control, .9);
+    if(drag.from===n.id && drag.dir==="in")  edgeGlow(n,"L", "rgba(232,232,236,.6)", .9);
+    if(drag.over===n.id){
+      if(drag.dir==="out") edgeGlow(n,"L", "rgba(232,232,236,.5)");
+    }
+  }
+  // ── порты ──
+  const ports = drag ? dragPorts(n) : restingPorts(n, hv);
+  ports.forEach(p=>{
+    const isSrc = drag && drag.from===p.node && portEq(drag.port,p);
+    const compat = dropCompat(p);
+    let r=M.portR, col = p.type==="value"?C.value:C.control, alpha=1;
+    if(isSrc){ r+=2; }
+    if(compat===false){ alpha=.25; r-=1; }
+    if(compat===true){ r+=2; }
+    ctx.globalAlpha=alpha;
+    if(p.type==="control"){ ctx.fillStyle=col; roundRect(p.x-r,p.y-r,r*2,r*2,2.5); ctx.fill(); }
+    else { ctx.fillStyle=col; ctx.beginPath(); ctx.arc(p.x,p.y,r,0,7); ctx.fill(); ctx.fillStyle="#141418"; ctx.beginPath(); ctx.arc(p.x,p.y,r*.45,0,7); ctx.fill(); }
+    if(p.named){ ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(p.x,p.y,r+2.5,0,7); ctx.stroke(); }
+    ctx.globalAlpha=1;
+    if(hv||drag){ ctx.font="10.5px system-ui"; ctx.fillStyle="#c9c9d2"; const lbl=p.label; ctx.fillText(lbl, p.side==="R"? p.x+9 : p.x-9-ctx.measureText(lbl).width, p.y-8); }
+  });
+}
+function edgeGlow(n,side,color,a){
+  const x = side==="R"? n.x+n.w-3 : n.x;
+  ctx.globalAlpha=a||.5; ctx.strokeStyle=color; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.moveTo(x,n.y+6); ctx.lineTo(x,n.y+n.h-6); ctx.stroke(); ctx.globalAlpha=1;
+}
+function portEq(a,b){ return a&&b&&a.node===b.node&&a.side===b.side&&a.line===b.line&&a.param===b.param&&a.nodeLevel===b.nodeLevel; }
+function dragPorts(n){ // порты, раскрытые во время drag
+  let out=[];
+  if(VARIANT==="C"){
+    if(drag.from===n.id) out = drag.dir==="out"? nodeOutPorts(n): nodeInPorts(n);
+    else if(drag.over===n.id && drag.dir==="out") out = nodeInPorts(n);
+    else if(drag.over===n.id && drag.dir==="in") out = nodeOutPorts(n);
+  } else {
+    out = [...nodeInPorts(n), ...nodeOutPorts(n)];
+  }
+  return out;
+}
+function dropCompat(p){
+  if(!drag || drag.from===p.node) return null;
+  if(drag.dir==="out") return p.side==="L" ? (drag.type==="value" ? p.type==="value" : p.type==="control") : null;
+  return p.side==="R" ? (drag.type==="value"? p.type==="value" : p.type==="control") : null;
+}
+function dragOrigin(){
+  if(drag.port) return drag.port;
+  const n=byId(drag.from);
+  return drag.dir==="out"? {x:n.x+n.w, y:n.resultTop!==undefined? n.y+n.resultTop+M.result/2 : n.y+M.header+n.bodyH/2}
+                         : {x:n.x, y:n.y+M.header+M.gap};
+}
+
+// ═══════════════ Ввод ═══════════════
+const mouse={x:0,y:0};
+function toLocal(ev){ const r=cv.getBoundingClientRect(); return {x:ev.clientX-r.left, y:ev.clientY-r.top}; }
+function nodeAt(x,y){ return NODES.find(n=> x>=n.x-4 && x<=n.x+n.w+4 && y>=n.y-4 && y<=n.y+n.h+4); }
+function portAt(x,y,n){
+  const list=[...nodeInPorts(n),...nodeOutPorts(n)];
+  return list.find(p=> Math.hypot(p.x-x,p.y-y) < M.zone);
+}
+function nearEdgeZone(n,x,y,side){ // В-C: кромка как зона старта
+  const zx = side==="R"? n.x+n.w : n.x;
+  return Math.abs(x-zx)<M.zone && y>n.y+4 && y<n.y+n.h-4;
+}
+cv.addEventListener("mousemove",ev=>{
+  const p=toLocal(ev); mouse.x=p.x; mouse.y=p.y;
+  const n=nodeAt(p.x,p.y);
+  hovered = n? n.id : null;
+  if(drag){ drag.over = (n && n.id!==drag.from)? n.id : null; }
+  // В-C: выбор конкретной точки скольжением вдоль кромки до отрыва
+  // (нажал кромку → точки раскрылись → съехал на нужную → увёл мышь).
+  if(drag && VARIANT==="C" && !drag.locked){
+    const src=byId(drag.from);
+    const zx = drag.dir==="out"? src.x+src.w : src.x;
+    if(Math.abs(p.x-zx) < M.zone+6 && p.y>src.y && p.y<src.y+src.h){
+      const dots = drag.dir==="out"? nodeOutPorts(src): nodeInPorts(src);
+      let best=null, bd=1e9;
+      dots.forEach(d=>{ const dd=Math.abs(d.y-p.y); if(dd<bd){bd=dd;best=d;} });
+      drag.port = (best && bd < M.row*0.7) ? best : null; // между рядами — узловой уровень
+    } else { drag.locked=true; }
+  }
+  render();
+});
+cv.addEventListener("mousedown",ev=>{
+  const p=toLocal(ev.x!==undefined?ev:ev); const q=toLocal(ev); const x=q.x,y=q.y;
+  hideMenu();
+  const n=nodeAt(x,y);
+  if(!n){ selectedEdge=null; render(); return; }
+  // клик по порту?
+  const port=portAt(x,y,n);
+  if(port && (VARIANT!=="C" || drag)){ /* порт в покое не кликается в В-C */ }
+  if(port && VARIANT!=="C"){ startDrag(port); return; }
+  if(VARIANT==="C"){
+    if(nearEdgeZone(n,x,y,"R")){ startDragZone(n,"out"); return; }
+    if(nearEdgeZone(n,x,y,"L")){ startDragZone(n,"in"); return; }
+  } else {
+    // В-А/В-B: старт от любой видимой точки
+    const ports=[...nodeInPorts(n),...nodeOutPorts(n)];
+    const hitP=ports.find(pl=>Math.hypot(pl.x-x,pl.y-y)<M.zone);
+    if(hitP){ startDrag(hitP); return; }
+  }
+  selectedEdge=null;
+});
+function startDrag(port){ drag={from:port.node, port, dir: port.side==="R"?"out":"in", type:port.type}; hint("Тяните к цели — тип уже определён точкой старта: <b>"+(port.type==="value"?"value (бирюза)":"control")+"</b>"+(port.param?" → параметр "+port.param:port.line!==undefined?" от строки "+(port.line+1):"")); }
+function startDragZone(n,dir){
+  const type = (n.kind==="note"||n.kind==="file")?"control":"value";
+  drag={from:n.id, port:null, dir, type};
+  hint(dir==="out" ? "Тянете <b>выход</b> — точки раскрылись у рядов. Отпустите на кромку/точку входа цели или на тело (меню)."
+                   : "Тянете <b>вход</b> ($in) — подведите к источнику, его выходы раскроются.");
+}
+addEventListener("mouseup",ev=>{
+  if(!drag) return;
+  const q=toLocal(ev), x=q.x,y=q.y;
+  const target=nodeAt(x,y);
+  finishDrag(target,x,y);
+});
+function finishDrag(target,x,y){
+  const src=byId(drag.from);
+  if(!target || target.id===drag.from){ cancelDrag(); return; }
+  // 1) точная посадка на порт
+  const ports=[...nodeInPorts(target),...nodeOutPorts(target)];
+  const hitP=ports.find(pl=>Math.hypot(pl.x-x,pl.y-y)<M.zone);
+  if(hitP && ((drag.dir==="out"&&hitP.side==="L")||(drag.dir==="in"&&hitP.side==="R"))){
+    const e=makeEdge(drag, hitP, target);
+    addEdge(e); cancelDrag(); return;
+  }
+  // 2) В-C: drop на тело → choice-меню (жест один, семантику выбирает цель+меню)
+  if(VARIANT==="C"){
+    openMenu(target,x,y); return; // drag остаётся взвешенным
+  }
+  // 3) В-А/В-B: посадка на тело — дефолтный вход узлового уровня
+  const def = drag.dir==="out" ? nodeInPorts(target).find(p=> p.slot || p.nodeLevel) : null;
+  if(def){ addEdge(makeEdge(drag,def,target)); cancelDrag(); return; }
+  if(drag.dir==="in"){ const o=nodeOutPorts(target).find(p=>p.nodeLevel); if(o){ addEdge(makeEdgeReverse(o)); cancelDrag(); return; } }
+  cancelDrag();
+}
+function makeEdge(d, port, target){
+  const value = d.type==="value";
+  const fromPort = d.dir==="out" ? (d.port? {kind: d.port.line!==undefined&&!d.port.named? "line":"named", line:d.port.line} : {kind:"node"})
+                                 : {kind:"node"};
+  const toPort = d.dir==="out" ? (port.param? {kind:"param",param:port.param} : port.slot? {kind:"in"} : {kind:"node"})
+                               : {kind:"in"};
+  return { id:"e"+(nextId++), from:d.from, fromPort, to:target.id, toPort, type: value?"value":"control" };
+}
+function makeEdgeReverse(o){ // dir=in: привели источник к своему входу
+  return { id:"e"+(nextId++), from:o.node, fromPort:{kind:o.line!==undefined&&!o.named?"line":"node", line:o.line}, to:drag.from, toPort:{kind:"in"}, type:"value" };
+}
+function addEdge(e){
+  // unmapped: value от контентной ноды (не в потоке)
+  if(e.type==="value" && (byId(e.from).kind==="note"||byId(e.from).kind==="file")) e.unmapped=true;
+  edges.push(e); selectedEdge=e.id;
+  const t=byId(e.to);
+  if(e.toPort.kind==="param" && t.params){ const p=t.params.find(pp=>pp.name===e.toPort.param); if(p){ p.from=e.from; p.spilled=e.unmapped?null:(byId(e.from).result||"?"); } }
+  hint("Создано <b>"+(e.type==="value"?"value":"control")+"-ребро</b>"+(e.toPort.param?" → параметр "+e.toPort.param:"")+(e.unmapped?" — <b>unmapped</b> (источник не в потоке)":e.type==="value"?" (значение подтянулось)":""));
+  render();
+}
+function cancelDrag(){ drag=null; hideMenu(); render(); }
+addEventListener("keydown",ev=>{
+  if(ev.key==="Escape"){ cancelDrag(); selectedEdge=null; render(); }
+  if((ev.key==="Delete"||ev.key==="Backspace") && selectedEdge){
+    const e=edges.find(x=>x.id===selectedEdge);
+    if(e){ const t=byId(e.to); if(e.toPort.param&&t.params){const p=t.params.find(pp=>pp.name===e.toPort.param); if(p){p.from=null;p.spilled=null;}} }
+    edges=edges.filter(x=>x.id!==selectedEdge); selectedEdge=null;
+    hint("Связь удалена (в живом продукте — Del с выделенной линией)."); render();
+  }
+});
+
+// выбор связи — клик рядом с кривой
+cv.addEventListener("click",ev=>{
+  const q=toLocal(ev), x=q.x,y=q.y;
+  for(const e of edges){
+    const [p1,p2]=edgeEnds(e), b=bezier(p1,p2);
+    for(let t=0;t<=1;t+=.05){
+      const px=bez(b,t,0), py=bez(b,t,1);
+      if(Math.hypot(px-x,py-y)<9){ selectedEdge=e.id; render(); return; }
+    }
+  }
+});
+function bez(b,t,xy){
+  const u=1-t;
+  const c0=u*u*u, c1=3*u*u*t, c2=3*u*t*t, c3=t*t*t;
+  return xy===0? c0*b[0]+c1*b[2]+c2*b[4]+c3*b[6] : c0*b[1]+c1*b[3]+c2*b[5]+c3*b[7];
+}
+
+// ═══════════════ Choice-меню (В-C, обобщение Н2) ═══════════════
+const menu=document.getElementById("menu");
+function openMenu(target,x,y){
+  menu.innerHTML="";
+  const t=target;
+  const mk=(html,fn,cls)=>{ const d=document.createElement("div"); d.className="mi"; d.innerHTML=html; if(cls)d.querySelectorAll('i').forEach(i=>i.className=cls); d.onclick=()=>{ fn(); hideMenu(); }; menu.appendChild(d); };
+  if(t.kind==="calc"||t.kind==="template"){
+    mk('<i class="v"></i>Передать значение → $in', ()=>{ addEdge(makeEdge(drag,{slot:true,side:"L"},t)); cancelDrag(); });
+    (t.params||[]).forEach(p=> mk('<i class="v"></i>Пролить в параметр «'+p.name+'»', ()=>{ addEdge(makeEdge(drag,{param:p.name,side:"L"},t)); cancelDrag(); }));
+    menu.appendChild(Object.assign(document.createElement("div"),{className:"sep"}));
+  }
+  mk('<i class="c"></i>Просто связь (control)', ()=>{ addEdge({id:"e"+(nextId++),from:drag.from,fromPort:{kind:"node"},to:t.id,toPort:{kind:"node"},type:"control"}); cancelDrag(); });
+  mk('<i class="c"></i>Отмена', ()=>cancelDrag());
+  const r=cv.getBoundingClientRect();
+  menu.style.left=Math.min(x+12, cv.width/devicePixelRatio-260)+"px";
+  menu.style.top=Math.min(y+10, cv.height/devicePixelRatio-160)+"px";
+  menu.classList.remove("hidden");
+  hint("<b>Один жест — семантику выбирает цель:</b> меню появилось потому, что отпуск пришёлся на тело ноды.");
+}
+function hideMenu(){ menu.classList.add("hidden"); }
+
+// ═══════════════ Панель и табы ═══════════════
+const PANEL={
+ A:{title:"В-А «Двухконтурный порядок»", model:"Две системы с явными ролями: расчётные ноды — рейлы входов/выходов (всегда видны), контентные — 2 hover-точки control.",
+    gestures:[["drag от точки рейла","тип задан точкой (value/control)"],["drop на тело","вход узлового уровня"],["hover контентной ноды","появляются 2 точки связи"]],
+    chips:[["R-1 ~","bad"],["R-2 ✓","good"],["R-12 ✗","bad"],["миграция низкая","good"]]},
+ B:{title:"В-B «Единый порт-рейл»", model:"UE/Blender/n8n: все ноды — входы слева, выходы справа, порты всегда видимы, тип = цвет+форма сокета.",
+    gestures:[["drag выход→вход","тип определён парой портов заранее"],["hover","лейблы слотов у точек"],["клик по пучку","кольца портов концов (FR-044)"]],
+    chips:[["R-1 ✓✓","good"],["R-2 ✓✓","good"],["R-4 ✗","bad"],["миграция высокая","bad"]]},
+ C:{title:"В-C «Кромки-зоны» (рекомендация)", model:"Портов в покое нет. Кромки = зоны вход/выход; точки раскрываются в drag; семантику выбирает цель drop + меню (Н2).",
+    gestures:[["hover","кромки дышат: право=выход (бирюза), лево=вход"],["drag от кромки","раскрываются точки у рядов"],["drop на тело","choice-меню: связь/значение/параметр"],["drag от левой кромки","притянуть источник к $in"]],
+    chips:[["R-4 ✓✓","good"],["R-5 ✓✓","good"],["R-12 ✓","good"],["R-2 ~","bad"]]},
+};
+function setPanel(){
+  const p=PANEL[VARIANT];
+  document.getElementById("panel").innerHTML =
+    "<h2>"+p.title+"</h2><p>"+p.model+"</p>"+
+    "<h3>Жесты</h3><table>"+p.gestures.map(g=>"<tr><td>"+g[0]+"</td><td>"+g[1]+"</td></tr>").join("")+"</table>"+
+    "<h3>Покрытие требований</h3><div>"+p.chips.map(c=>'<span class="chip '+c[1]+'">'+c[0]+"</span>").join("")+"</div>"+
+    "<h3>Что попробовать</h3><p>"+(VARIANT==="C"?
+      "Наведите на «Расчёт нагрузки» — кромки подсветятся. Тяните от <b>правой кромки</b>: точки у строк и итога раскроются; подлетите к «API Gateway» — его входы раскроются с совместимостью. Отпустите на <b>тело</b> — появится меню. Потяните от левой кромки приёмника — обратный жест «притянуть источник».":
+      VARIANT==="B"?
+      "Все порты уже видны на всех нодах (входы слева, выходы справа). Тяните от точки «rps» строки у «Расчёт нагрузки» к якорю «rps» у «API Gateway». Обратите внимание на шум точек на плотной сцене — лечится только LOD.":
+      "Расчётные ноды показывают рейлы всегда; контентные («Гипотеза», «report.md») — только 2 точки при hover. Shift больше не нужен: тип задаёт точка старта.")+"</p>";
+}
+["A","B","C"].forEach(v=>{
+  document.getElementById("tab"+v).onclick=()=>{
+    VARIANT=v; cancelDrag();
+    document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on"));
+    document.getElementById("tab"+v).classList.add("on");
+    setPanel(); render();
+    hint("Вариант <b>"+PANEL[v].title+"</b> — жесты обновились.");
+  };
+});
+document.getElementById("reset").onclick=()=>{
+  edges=JSON.parse(JSON.stringify(EDGES0)); nextId=4; selectedEdge=null;
+  byId("gw").params[0].spilled="1 000 rps"; byId("gw").params[1].spilled=null;
+  hint("Демо-сцена сброшена."); render();
+};
+function hint(html){ document.getElementById("hint").innerHTML=html; }
+
+setPanel(); render();
+</script>
+</body>
+</html>
