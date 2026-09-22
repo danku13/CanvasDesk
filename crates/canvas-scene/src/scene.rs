@@ -717,6 +717,15 @@ impl SceneState {
         (whatif, stale)
     }
 
+    /// Публичный доступ к свежим подменам активного сценария (PRD-0007 X6,
+    /// F-12: индикатор покрытия цепочками в canvas-app считает деревья из
+    /// того же источника подмен, что recompute_flow и MCP-инструменты —
+    /// инвариант «MCP-видимость = UI»). Свежий пересчёт валидности —
+    /// ленивые мутации (CR-012) не искажают подмены.
+    pub fn fresh_whatif_overrides(&self) -> flow::WhatIfOverrides {
+        self.active_whatif_overrides().0
+    }
+
     /// FR-017: число подмен активного сценария (для счётчика бара).
     pub fn whatif_override_count(&self) -> usize {
         self.active_scenario

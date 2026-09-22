@@ -2,7 +2,7 @@
 
 Пакет скиллов для ИИ-агентов (MCP-клиентов), работающих с CanvasDesk —
 визуальной системой математического моделирования. Пакет синхронен
-реестру MCP-инструментов: **39 инструментов**, соответствие проверяется
+реестру MCP-инструментов: **40 инструментов**, соответствие проверяется
 контракт-тестом `skills_sync` в crate `canvas-mcp` (см.
 [UPDATE-PROTOCOL.md](UPDATE-PROTOCOL.md)).
 
@@ -17,7 +17,7 @@ CanvasDesk. Ссылки внутри скиллов — относительн�
 |---|---|
 | `canvasdesk-mcp` | Подключение (транспорт, offline/reconnect), инварианты, разведка канваса, карта «задача → скилл» |
 | `canvasdesk-model-build` | Сборка модели: ноды, value-связи с адресацией портов, атомарный батч graph_apply, эталон Instagram MVP |
-| `canvasdesk-model-verify` | Проверка: flow_recalc, lineage, graph_validate (коды ошибок), analyze_bottlenecks |
+| `canvasdesk-model-verify` | Проверка: flow_recalc, lineage, explain_number (текстовое объяснение), graph_validate (коды ошибок), analyze_bottlenecks |
 | `canvasdesk-whatif` | Сценарии «а что если»: подмены, дельты, apply/reset |
 
 Полный каталог сигнатур — `canvasdesk-mcp/references/tools.md`.

@@ -85,6 +85,13 @@ pub mod keys {
     pub const STAGE_BUNDLE_TITLE: &str = "stage.bundle_title";
     /// FR-044: нижняя подсказка main stage с жестами закрытия/выделения.
     pub const STAGE_FOOT_HINT: &str = "stage.foot_hint";
+    /// FR-044 Р-4: панель «Как считается» — заголовки групп, unmapped-строка,
+    /// счётчик внешних входов (Р-8), индикатор усечения (Q2 v1).
+    pub const STAGE_CALC_VARS: &str = "stage.calc_vars";
+    pub const STAGE_CALC_FORMULAS: &str = "stage.calc_formulas";
+    pub const STAGE_CALC_UNMAPPED: &str = "stage.calc_unmapped";
+    pub const STAGE_CALC_EXT: &str = "stage.calc_ext";
+    pub const STAGE_CALC_MORE: &str = "stage.calc_more";
 
     // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
     /// Заголовок окна проверки.
@@ -177,6 +184,11 @@ pub mod keys {
     /// Настройка FR-039 (AC-5.5): тумблер фонового детектора.
     pub const ROW_AUTOLINK: &str = "settings.row.autolink";
     pub const DESC_AUTOLINK: &str = "settings.desc.autolink";
+    /// Настройка FR-039 (F-12, X6): opt-in тумблер индикатора покрытия.
+    pub const ROW_EXPLAIN_COVERAGE: &str = "settings.row.explain_coverage";
+    pub const DESC_EXPLAIN_COVERAGE: &str = "settings.desc.explain_coverage";
+    /// Индикатор покрытия цепочками (F-12, X6): текст в углу канваса.
+    pub const EXPLAIN_COVERAGE: &str = "explain.coverage";
     /// Подтверждение отката пачки (AC-5.3): заголовок/текст/кнопка.
     pub const AUTOLINK_UNDO_TITLE: &str = "autolink.undo_title";
     pub const AUTOLINK_UNDO_BODY: &str = "autolink.undo_body";
@@ -243,6 +255,8 @@ pub mod keys {
     pub const HKEY_CTRL_COMMA: &str = "hotkeys.key.ctrl_comma";
     pub const HKEY_CTRL_SHIFT_I: &str = "hotkeys.key.ctrl_shift_i";
     pub const HKEY_F: &str = "hotkeys.key.f";
+    pub const HKEY_SPACE: &str = "hotkeys.key.space";
+    pub const HK_EXPLAIN_STEP: &str = "hotkeys.desc.explain_step";
     pub const HK_F1: &str = "hotkeys.desc.f1";
     pub const HK_SEARCH: &str = "hotkeys.desc.search";
     pub const HK_PALETTE: &str = "hotkeys.desc.palette";
@@ -660,6 +674,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HKEY_CTRL_COMMA, "Ctrl+,"),
     (keys::HKEY_CTRL_SHIFT_I, "Ctrl+Shift+I"),
     (keys::HKEY_F, "F"),
+    (keys::HKEY_SPACE, "Space"),
     (keys::HK_F1, "список горячих клавиш"),
     (keys::HK_SEARCH, "поиск по канвасу"),
     (keys::HK_PALETTE, "палитра шаблонов"),
@@ -687,6 +702,10 @@ const RU: &[(&str, &str)] = &[
     (keys::HK_SETTINGS, "настройки"),
     (keys::HK_WHATIF, "what-if сценарии"),
     (keys::HK_EDGE_FOCUS, "фокус на связях"),
+    (
+        keys::HK_EXPLAIN_STEP,
+        "проверка цепочки, режим защиты: раскрыть следующий уровень",
+    ),
     // --- Палитра шаблонов ---
     (keys::TEMPLATES_TITLE, "Шаблоны"),
     (keys::TEMPLATES_SEARCH, "Поиск шаблонов…"),
@@ -991,6 +1010,12 @@ const RU: &[(&str, &str)] = &[
         keys::STAGE_FOOT_HINT,
         "Esc или клик по затемнённому фону — закрыть · клик по связи — выделить",
     ),
+    // FR-044 Р-4/Р-5/Р-8: панель «Как считается» и подсветка зависимостей
+    (keys::STAGE_CALC_VARS, "Переменные · входящие значения"),
+    (keys::STAGE_CALC_FORMULAS, "Расчёт · формулы"),
+    (keys::STAGE_CALC_UNMAPPED, "не подставлено"),
+    (keys::STAGE_CALC_EXT, "+{n} внешн. вход(а/ов)"),
+    (keys::STAGE_CALC_MORE, "… ещё {n}"),
     // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
     (
         keys::ROW_EXPLAIN_DEPTH,
@@ -1088,6 +1113,12 @@ const RU: &[(&str, &str)] = &[
         keys::DESC_AUTOLINK,
         "Фоновый детектор предлагает связи по совпадающим именам присваиваний; связь создаётся только после ревью.",
     ),
+    (keys::ROW_EXPLAIN_COVERAGE, "Индикатор покрытия цепочками"),
+    (
+        keys::DESC_EXPLAIN_COVERAGE,
+        "Показывает «Цепочки: N%» в углу канваса — долю вычисляемых цифр, чья цепочка доходит до листьев.",
+    ),
+    (keys::EXPLAIN_COVERAGE, "Цепочки: {n}%"),
     (keys::AUTOLINK_UNDO_TITLE, "Откатить пачку автосвязи ({n})?"),
     (
         keys::AUTOLINK_UNDO_BODY,
@@ -1246,6 +1277,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HKEY_CTRL_COMMA, "Ctrl+,"),
     (keys::HKEY_CTRL_SHIFT_I, "Ctrl+Shift+I"),
     (keys::HKEY_F, "F"),
+    (keys::HKEY_SPACE, "Space"),
     (keys::HK_F1, "hotkey list"),
     (keys::HK_SEARCH, "search the canvas"),
     (keys::HK_PALETTE, "template palette"),
@@ -1273,6 +1305,10 @@ const EN: &[(&str, &str)] = &[
     (keys::HK_SETTINGS, "settings"),
     (keys::HK_WHATIF, "what-if scenarios"),
     (keys::HK_EDGE_FOCUS, "edge focus"),
+    (
+        keys::HK_EXPLAIN_STEP,
+        "calc-chain defense mode: reveal the next level",
+    ),
     // --- Template palette ---
     (keys::TEMPLATES_TITLE, "Templates"),
     (keys::TEMPLATES_SEARCH, "Search templates…"),
@@ -1566,6 +1602,12 @@ const EN: &[(&str, &str)] = &[
         keys::STAGE_FOOT_HINT,
         "Esc or click the dimmed background — close · click an edge — select",
     ),
+    // FR-044 Р-4/Р-5/Р-8: calculation panel and dependency focus
+    (keys::STAGE_CALC_VARS, "Variables · incoming values"),
+    (keys::STAGE_CALC_FORMULAS, "Calculation · formulas"),
+    (keys::STAGE_CALC_UNMAPPED, "not mapped"),
+    (keys::STAGE_CALC_EXT, "+{n} external input(s)"),
+    (keys::STAGE_CALC_MORE, "… {n} more"),
     // --- PRD-0007 (FR-048 X2): calculation chain check window ---
     (keys::ROW_EXPLAIN_DEPTH, "Calculation chain depth"),
     (
@@ -1654,6 +1696,12 @@ const EN: &[(&str, &str)] = &[
         keys::DESC_AUTOLINK,
         "The background detector proposes links for matching assignment names; a link is created only after review.",
     ),
+    (keys::ROW_EXPLAIN_COVERAGE, "Chain coverage indicator"),
+    (
+        keys::DESC_EXPLAIN_COVERAGE,
+        "Shows “Chains: N%” in a canvas corner — the share of computed digits whose chain reaches leaves.",
+    ),
+    (keys::EXPLAIN_COVERAGE, "Chains: {n}%"),
     (keys::AUTOLINK_UNDO_TITLE, "Roll back the autolink batch ({n})?"),
     (
         keys::AUTOLINK_UNDO_BODY,

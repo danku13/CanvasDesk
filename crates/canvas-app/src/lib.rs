@@ -84,6 +84,12 @@ pub mod snap;
 /// панели-оверлея всех проливаний канваса (строки «источник → параметр ·
 /// значение», hit-тесты, кап с «… ещё N»). Рендер и ввод — app.rs.
 pub mod flowmap_ui;
+
+/// FR-044 Р-4/Р-5/Р-8: панель «Как считается» в main stage — чистая модель
+/// (группы «Переменные · входящие значения» / «Расчёт · формулы», внешние
+/// источники Р-8), раскладка нижней зоны stage, hit-тесты строк и
+/// подсветка зависимостей StageCalcFocus (Р-5). Рендер и ввод — app.rs.
+pub mod calc_panel_ui;
 #[cfg(test)]
 mod scheme_cjm_tests;
 /// FR-017 (CP6): what-if нижний бар — чистая модель (геометрия полосы
@@ -482,6 +488,10 @@ pub mod ui {
             crate::i18n::keys::HK_WHATIF,
         ),
         (crate::i18n::keys::HKEY_F, crate::i18n::keys::HK_EDGE_FOCUS),
+        (
+            crate::i18n::keys::HKEY_SPACE,
+            crate::i18n::keys::HK_EXPLAIN_STEP,
+        ),
     ];
 
     /// Полная высота панели хоткеев (FR-004): паддинги + заголовок +
