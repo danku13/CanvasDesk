@@ -58,6 +58,9 @@ use crate::whatif_ui::{self, BarAction};
 // PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — модель и
 // состояния (Loading/Ready/Stale), рендер/ввод — здесь (паттерн main stage).
 use crate::explain_ui::{self, ExplainBuild, ExplainSnapshot, ExplainState};
+// PRD-0007 (FR-048 X4): автосвязь по именам — модель диалога ревью,
+// рендер/ввод/создание связей — здесь (паттерн explain-окна).
+use crate::autolink_ui::{self, ItemState, Review};
 // FR-037 MW1: line_kind/NumiLineKind/ExprLineResults/ExprResults и whatif-
 // типы использовались только вынесенным кодом; тестовые упоминания —
 // импортами внутри mod tests
@@ -203,6 +206,14 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 // --- PRD-0007 (FR-048 X2): хелперы кадра окна проверки ----------------------
+
+/// PRD-0007 (FR-048 X4, AC-5.3): тег undo-снапшота пачки автосвязи —
+/// по нему undo_action узнаёт, что следующий откат требует подтверждения
+/// с подсветкой отменяемого (решение владельца, раунд 2).
+const AUTOLINK_UNDO_TAG: &str = "autolink_batch";
+/// PRD-0007 (FR-048 X4, AC-5.5): дебаунс фонового скана автосвязи после
+/// правок модели (мс) — бурст правок считается одной сессией.
+const AUTOLINK_DEBOUNCE_MS: u128 = 700;
 
 /// Screen-прямоугольник → world-квад (паттерн stage: позиция через
 /// screen_to_world, размер/радиус делятся на зум — константный экранный
@@ -1027,17 +1038,31 @@ enum AppDialog {
         /// имя шаблона — вычислена в момент дропа).
         old_source: String,
     },
+    /// PRD-0007 (FR-048 X4, AC-5.3): «Откатить пачку автосвязи?» —
+    /// подтверждение отката undo-бата создания связей; связи пачки
+    /// подсвечены на канвасе на время диалога (решение владельца, раунд 2).
+    AutolinkRollback {
+        /// Число связей в пачке (для заголовка).
+        count: usize,
+        /// id рёбер пачки — подсветка отменяемого на канвасе.
+        edge_ids: Vec<String>,
+    },
 }
 
 impl AppDialog {
     /// Кнопки диалога (screen-space rect'ы считаются от центра окна).
     /// Подписи — таблица i18n (FR-040), `language` — язык интерфейса.
-    /// FR-050 Н4: ReplaceSource — «Заменить»/«Отмена» (не Да/Нет).
+    /// FR-050 Н4: ReplaceSource — «Заменить»/«Отмена» (не Да/Нет);
+    /// AutolinkRollback — «Откатить»/«Отмена».
     fn buttons(&self, language: Language) -> [(&'static str, bool); 2] {
         // (подпись, confirm?)
         match self {
             AppDialog::ReplaceSource { .. } => [
                 (i18n::tr(language, keys::DIALOG_REPLACE_YES), true),
+                (i18n::tr(language, keys::DIALOG_CANCEL), false),
+            ],
+            AppDialog::AutolinkRollback { .. } => [
+                (i18n::tr(language, keys::AUTOLINK_UNDO_YES), true),
                 (i18n::tr(language, keys::DIALOG_CANCEL), false),
             ],
             _ => [
@@ -1083,6 +1108,12 @@ impl AppDialog {
             AppDialog::ReplaceSource { .. } => {
                 i18n::tr(language, keys::DIALOG_REPLACE_TITLE).to_owned()
             }
+            // PRD-0007 (AC-5.3): «Откатить пачку автосвязи ({n})?»
+            AppDialog::AutolinkRollback { count, .. } => i18n::trf(
+                language,
+                keys::AUTOLINK_UNDO_TITLE,
+                &[("{n}", count.to_string().as_str())],
+            ),
         }
     }
 
@@ -1115,6 +1146,10 @@ impl AppDialog {
                 keys::DIALOG_REPLACE_BODY,
                 &[("{param}", param), ("{source}", old_source)],
             ),
+            // PRD-0007 (AC-5.3): подсветка отменяемого — рендер; здесь текст
+            AppDialog::AutolinkRollback { .. } => {
+                i18n::tr(language, keys::AUTOLINK_UNDO_BODY).to_owned()
+            }
         }
     }
 }
@@ -1460,6 +1495,24 @@ pub struct App {
     /// переживает закрытие окна; переоткрытие того же корня — мгновенно
     /// (≤ 1 с, G1), без перестройки; чип — если модель изменилась.
     explain_cache: Option<ExplainSnapshot>,
+    /// PRD-0007 (FR-048 X4, AC-5.5): предложения фонового детектора
+    /// автосвязи (обновляются с дебаунсом после правок — `about_to_wait`).
+    autolink_proposals: Vec<canvas_core::AutolinkProposal>,
+    /// Момент последней правки модели для дебаунса скана (None — скан не
+    /// отложен). Стартует после каждой смены ревизии.
+    autolink_scan_due: Option<Instant>,
+    /// Ревизия модели последнего выполненного скана (детектор — чистая
+    /// функция над канвасом; скан повторяется только при изменении).
+    autolink_scanned_rev: u64,
+    /// PRD-0007 (FR-048 X4, AC-5.2): открытый диалог ревью автосвязи.
+    /// None — закрыт; панель объяснения прячется на время диалога (§6.5).
+    autolink_review: Option<Review>,
+    /// Прокрутка тела диалога ревью (D10: 12+ предложений — скролл).
+    autolink_scroll: f32,
+    /// PRD-0007 (AC-5.3): id рёбер последнего undo-бата автосвязи — для
+    /// подсветки отменяемого при подтверждении отката. Инвалидация — по
+    /// тегу верхнего undo-снапшота (любое другое действие снимает тег).
+    autolink_batch: Option<Vec<String>>,
     /// FR-042 (E2): ребро пучка под курсором (live-индекс) — hover-бамп
     /// агрегированной линии; вычисляется на каждый кадр ввода (паттерн
     /// `hovered`), в кэш не пишется.
@@ -1760,6 +1813,14 @@ impl App {
             // PRD-0007 (X2): окно проверки закрыто, сессионный кэш пуст
             explain: None,
             explain_cache: None,
+            // PRD-0007 (FR-048 X4): фон автосвязи — пусто до первого скана
+            // (оный стартует в about_to_wait с дебаунсом после загрузки)
+            autolink_proposals: Vec::new(),
+            autolink_scan_due: None,
+            autolink_scanned_rev: 0,
+            autolink_review: None,
+            autolink_scroll: 0.0,
+            autolink_batch: None,
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             edge_drag: None,
@@ -3654,8 +3715,22 @@ impl App {
     }
 
     /// Отменить последнее действие (FR-006, Ctrl+Z): модель «до» из
-    /// undo-стека, текущее состояние — в redo.
+    /// undo-стека, текущее состояние — в redo. PRD-0007 (AC-5.3): если
+    /// верхний снапшот — пачка автосвязи, откат требует подтверждения:
+    /// открывается диалог, связи пачки подсвечиваются на канвасе.
     fn undo_action(&mut self) {
+        if self.scene.peek_undo_tag() == Some(AUTOLINK_UNDO_TAG) {
+            // Подтверждение отката пачки: подсветка отменяемого (AC-5.3) —
+            // id рёбер последнего бата (создание фиксирует их в
+            // autolink_batch); тег гарантирует, что следующий undo — этот бат.
+            let edge_ids = self.autolink_batch.clone().unwrap_or_default();
+            let count = edge_ids.len();
+            self.highlight_autolink_batch(&edge_ids);
+            self.dialog = Some(AppDialog::AutolinkRollback { count, edge_ids });
+            self.request_redraw();
+            return;
+        }
+        self.autolink_batch = None;
         if let Some(before) = self.scene.take_undo() {
             self.restore_canvas(before);
             tracing::debug!(depth = self.scene.undo_stack.len(), "undo");
@@ -7769,6 +7844,11 @@ impl App {
     }
 
     fn update_focus_state(&mut self) {
+        // PRD-0007 (X4, AC-5.3): пока открыт диалог подтверждения отката
+        // пачки, focus_edges держит подсветку отменяемого — не перетирать
+        if matches!(self.dialog, Some(AppDialog::AutolinkRollback { .. })) {
+            return;
+        }
         // PRD-0007 (F-4/AC-3.1): открытое окно Ready — подсветка цепочки
         // из снапшота дерева (F-5: одна модель для окна и подсветки),
         // затемнение прочего — тем же фейдом. Loading не затемняет (У5:
@@ -7936,6 +8016,13 @@ impl App {
                     self.close_main_stage();
                     self.bundle_hover = None;
                 }
+            }
+            // PRD-0007 (FR-048 X4, AC-5.5): тумблер фонового детектора —
+            // при выключении бейдж скрывается и отложенный скан отменяется;
+            // предложения остаются кэшем (не создают ничего сами — D1)
+            SettingsRow::AutolinkEnabled => {
+                self.settings.autolink_enabled = !self.settings.autolink_enabled;
+                self.autolink_scan_due = None;
             }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
@@ -8400,6 +8487,8 @@ impl App {
                         SettingsRow::SnapCollision => self.settings.snap_collision,
                         SettingsRow::FocusMode => self.settings.focus_mode,
                         SettingsRow::EdgeAggregation => self.settings.edge_aggregation,
+                        // PRD-0007 (X4, AC-5.5): тумблер фонового детектора
+                        SettingsRow::AutolinkEnabled => self.settings.autolink_enabled,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
@@ -8617,6 +8706,16 @@ impl App {
             ui_registry::id::EXPLAIN => {
                 if self.explain.is_some() {
                     self.close_explain();
+                    true
+                } else {
+                    false
+                }
+            }
+            // PRD-0007 (X4): диалог ревью закрывается одним Esc —
+            // отклонённые забываются (AC-5.2: возврат фоновой перепроверкой)
+            ui_registry::id::AUTOLINK => {
+                if self.autolink_review.is_some() {
+                    self.close_autolink_review();
                     true
                 } else {
                     false
@@ -8926,6 +9025,21 @@ impl App {
                         return;
                     }
                 }
+            }
+            ui_registry::KeyOwner::Autolink => {
+                // PRD-0007 (X4): открытый диалог ревью — Esc закрывает
+                // (отклонённые забываются, AC-5.2); прочие клавиши глотаются
+                // (модален поверх канваса, §6.5)
+                if self.autolink_review.is_some() {
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                    {
+                        self.close_autolink_review();
+                    }
+                    return;
+                }
+                return;
             }
             ui_registry::KeyOwner::Stage => {
                 // Любая клавиша закрывает stage (8233–8239; Esc — 8141):
@@ -9884,6 +9998,12 @@ impl App {
                 self.on_explain_click();
                 true
             }
+            ui_registry::id::AUTOLINK => {
+                // PRD-0007 (X4): ✕/строки/баннер/футер; мимо элементов
+                // внутри диалога — глотается
+                self.on_autolink_click();
+                true
+            }
             ui_registry::id::DIALOG => {
                 self.click_dialog();
                 true
@@ -9969,6 +10089,12 @@ impl App {
             ui_registry::id::EXPLAIN => {
                 // Клик по фону (мимо окна) — закрытие (on_explain_click X2)
                 self.close_explain();
+                true
+            }
+            ui_registry::id::AUTOLINK => {
+                // Клик мимо диалога ревью — закрыть и глотнуть (§6.5:
+                // модален поверх канваса); отклонённые забываются (AC-5.2)
+                self.close_autolink_review();
                 true
             }
             ui_registry::id::WHEEL => {
@@ -10776,6 +10902,11 @@ impl App {
                                 self.enter_whatif_mode();
                             }
                         }
+                        // PRD-0007 (FR-048 X4, AC-5.1): «Найти связи по именам»
+                        // — немедленный скан детектора + диалог ревью
+                        CanvasMenuItem::AutolinkFind => {
+                            self.open_autolink_review();
+                        }
                         // FR-038 п.16-17 (T-038.5): batch-операции
                         // выделения — ОДНА undo-операция на все ноды;
                         // хоткеи не назначаются (F1 HOTKEYS не трогаем,
@@ -10815,6 +10946,14 @@ impl App {
     fn click_corner_button(&mut self, element: &str) -> bool {
         let viewport = self.viewport_logical();
         match element {
+            "autolink-badge" => {
+                // PRD-0007 (X4, AC-5.5): клик по бейджу — открыть ревью
+                if point_in_rect(crate::autolink_ui::badge_rect(viewport), self.cursor) {
+                    self.open_autolink_review();
+                    return true;
+                }
+                false
+            }
             "theme-button" => {
                 if point_in_rect(
                     theme_button_rect(self.settings.button_corner, viewport),
@@ -10959,6 +11098,525 @@ impl App {
         }
         self.focus_nodes.clear();
         self.focus_edges.clear();
+        self.request_redraw();
+    }
+
+    // --- PRD-0007 (FR-048 X4): автосвязь по именам (F-7) --------------------
+
+    /// Немедленный скан детектора (AC-5.1/AC-5.5): детектор — чистая
+    /// функция над канвасом; результат кэшируется до следующей ревизии.
+    fn autolink_scan_now(&mut self) {
+        self.autolink_proposals = canvas_core::find_proposals(&self.scene.canvas);
+        self.autolink_scanned_rev = self.scene.revision;
+        self.autolink_scan_due = None;
+    }
+
+    /// Открыть диалог ревью по свежему скану (команда меню AC-5.1 / клик
+    /// по бейджу AC-5.5). Пустой результат — тост (честный ответ вместо
+    /// пустого диалога). Stage закрывается (F-10 — взаимоисключимость).
+    fn open_autolink_review(&mut self) {
+        self.close_main_stage();
+        self.autolink_scan_now();
+        if self.autolink_proposals.is_empty() {
+            self.show_toast(self.tr(keys::AUTOLINK_TOAST_NONE).to_owned());
+            self.request_redraw();
+            return;
+        }
+        let proposals = self.autolink_proposals.clone();
+        self.autolink_review = Some(Review::build(&self.scene.canvas, proposals));
+        self.autolink_scroll = 0.0;
+        self.request_redraw();
+    }
+
+    /// Закрыть диалог (Esc/✕/создание связей): решения сеанса (отклонённые)
+    /// не запоминаются — возврат отклонённых после закрытия происходит
+    /// фоновой перепроверкой (AC-5.2, решение владельца У8).
+    fn close_autolink_review(&mut self) {
+        self.autolink_review = None;
+        self.autolink_scroll = 0.0;
+        self.request_redraw();
+    }
+
+    /// Создать связи из принятых предложений — ОДИН undo-бат (AC-5.3,
+    /// паттерн FR-033/FR-006): один `push_undo` с тегом
+    /// [`AUTOLINK_UNDO_TAG`] ДО мутации, затем рёбра адресованного
+    /// проливания (`fromOutput` = `toParam` = имя присваивания, FR-029).
+    /// Откат пачки — с подтверждением и подсветкой отменяемого
+    /// (`undo_action` перехватывает по тегу верхнего снапшота).
+    fn create_autolink_edges(&mut self, accepted: Vec<canvas_core::AutolinkProposal>) {
+        if accepted.is_empty() {
+            return;
+        }
+        let snapshot = self.scene.canvas.clone();
+        self.scene.set_undo_tag(AUTOLINK_UNDO_TAG);
+        // FR-006: push_undo ДО мутации — один снапшот на всю пачку
+        self.scene.push_undo(snapshot);
+        let mut created: Vec<String> = Vec::new();
+        for proposal in &accepted {
+            let id = self.scene.canvas.next_edge_id();
+            let mut edge = canvas_core::Edge::new(
+                id,
+                proposal.from_node.as_str(),
+                None,
+                proposal.to_node.as_str(),
+                None,
+            );
+            edge.set_flow_kind(canvas_core::FlowKind::Value);
+            edge.from_output = Some(proposal.param.clone());
+            edge.to_param = Some(proposal.param.clone());
+            created.push(edge.id.clone());
+            self.scene.canvas.add_edge(edge);
+        }
+        // Живой пересчёт (дельта-семантика X3 не нужна: модель изменилась,
+        // панель/оверлеи закрыты или обновятся чипом по новой ревизии)
+        self.scene.recompute_flow();
+        self.scene.mark_dirty();
+        // Пачка запоминается для подсветки отката (AC-5.3); тег снимет
+        // инвалидацию при любом другом действии
+        self.autolink_batch = Some(created);
+        let n = accepted.len();
+        self.show_toast(
+            self.trf(
+                keys::AUTOLINK_TOAST_CREATED,
+                &[("{n}", n.to_string().as_str())],
+            )
+            .to_owned(),
+        );
+        self.request_redraw();
+    }
+
+    /// Видимость бейджа-индикатора (AC-5.5, «ненавязчивый»): фон включён,
+    /// предложения есть, ни одного модального оверлея не открыто (клик по
+    /// бейджу — открыть ревью). Диалог ревью бейдж скрывает (открыт сам).
+    fn autolink_badge_visible(&self) -> bool {
+        self.settings.autolink_enabled
+            && !self.autolink_proposals.is_empty()
+            && self.autolink_review.is_none()
+            && self.explain.is_none()
+            && self.main_stage.is_none()
+            && self.dialog.is_none()
+            && !self.settings_open
+            && self.menu.is_none()
+            && self.help_menu.is_none()
+            && self.docs.is_none()
+            && self.onboarding.is_none()
+            && !self.scheme_gallery.open
+            && self.wheel_menu.is_none()
+            && !self.search.is_open()
+            && self.editing.is_none()
+    }
+
+    /// Клик при открытом диалоге ревью (AC-5.2): ✕/строка/баннер/футер;
+    /// мимо элементов внутри диалога — глотается.
+    fn on_autolink_click(&mut self) {
+        let viewport = self.viewport_logical();
+        let win = autolink_ui::dialog_rect(viewport);
+        if point_in_rect(autolink_ui::close_rect(win), self.cursor) {
+            self.close_autolink_review();
+            return;
+        }
+        // Баннер отклонённых: «Вернуть все» (У8/AC-5.2)
+        if let Some(review) = self.autolink_review.as_ref() {
+            let (_, rejected, _) = review.counts();
+            if rejected > 0 {
+                let banner = autolink_ui::banner_rect(win);
+                if point_in_rect(autolink_ui::restore_rect(banner), self.cursor) {
+                    if let Some(review) = self.autolink_review.as_mut() {
+                        review.set_all(ItemState::Pending);
+                    }
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
+        // Строки и заголовки групп (та же раскладка, что в рендере)
+        if let Some(review) = self.autolink_review.as_ref() {
+            let layout = autolink_ui::rows_layout(review, win, self.autolink_scroll);
+            let (accepted_count, _, _) = review.counts();
+            for (item_idx, rects) in &layout.rows {
+                if !point_in_rect(rects.row, self.cursor) {
+                    continue;
+                }
+                if point_in_rect(rects.accept, self.cursor) {
+                    if let Some(review) = self.autolink_review.as_mut() {
+                        review.toggle(*item_idx, ItemState::Accepted);
+                    }
+                } else if point_in_rect(rects.reject, self.cursor) {
+                    if let Some(review) = self.autolink_review.as_mut() {
+                        review.toggle(*item_idx, ItemState::Rejected);
+                    }
+                }
+                self.request_redraw();
+                return;
+            }
+            for (group_idx, head) in &layout.group_heads {
+                if point_in_rect(*head, self.cursor) {
+                    if let Some(review) = self.autolink_review.as_mut() {
+                        if !review.collapsed.remove(group_idx) {
+                            review.collapsed.insert(*group_idx);
+                        }
+                    }
+                    self.request_redraw();
+                    return;
+                }
+            }
+            // Футер: массовые действия + создание (AC-5.2/AC-5.3)
+            let [create, accept_all, reject_all] = autolink_ui::footer_buttons(win);
+            if point_in_rect(create, self.cursor) && accepted_count > 0 {
+                let accepted = self
+                    .autolink_review
+                    .as_ref()
+                    .map(|review| review.accepted())
+                    .unwrap_or_default();
+                self.close_autolink_review();
+                self.create_autolink_edges(accepted);
+                return;
+            }
+            if point_in_rect(accept_all, self.cursor) {
+                if let Some(review) = self.autolink_review.as_mut() {
+                    review.set_all(ItemState::Accepted);
+                }
+                self.request_redraw();
+                return;
+            }
+            if point_in_rect(reject_all, self.cursor) {
+                if let Some(review) = self.autolink_review.as_mut() {
+                    review.set_all(ItemState::Rejected);
+                }
+                self.request_redraw();
+                return;
+            }
+        }
+        // Мимо элементов внутри диалога — глотается (канвас не получает)
+        self.request_redraw();
+    }
+
+    /// Кадр диалога ревью (модальный проход, паттерн explain_frame):
+    /// затемнение + окно + шапка + баннер + строки + футер. Одна геометрия
+    /// с on_autolink_click (чистые layout-функции autolink_ui).
+    fn autolink_frame(&mut self, viewport: [f32; 2]) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut quads: Vec<CardInstance> = Vec::new();
+        let mut texts: Vec<OwnedScreenText> = Vec::new();
+        let Some(review) = self.autolink_review.as_ref() else {
+            return (quads, texts);
+        };
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let camera = &self.camera;
+        let win = autolink_ui::dialog_rect(viewport);
+        // Затемнение фона (§6.5: диалог модален поверх канваса)
+        quads.push(screen_rect_quad(
+            camera,
+            viewport,
+            [0.0, 0.0, viewport[0], viewport[1]],
+            palette.stage_dim,
+            [0.0; 4],
+            0.0,
+        ));
+        // Окно (стиль модалок: радиус 14)
+        quads.push(screen_rect_quad(
+            camera,
+            viewport,
+            win,
+            palette.menu_fill,
+            palette.palette_border,
+            14.0,
+        ));
+        let (accepted, rejected, pending) = review.counts();
+        // Шапка: заголовок + мета + ✕
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AUTOLINK_TITLE).to_owned(),
+            origin: [win[0] + 16.0, win[1] + 10.0],
+            width: (win[2] - 120.0).max(120.0),
+            font_size: 15.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        texts.push(OwnedScreenText {
+            text: self.trf(
+                keys::AUTOLINK_META,
+                &[("{n}", review.items.len().to_string().as_str())],
+            ),
+            origin: [win[0] + 16.0, win[1] + 32.0],
+            width: (win[2] - 120.0).max(120.0),
+            font_size: 11.0,
+            color: palette.quote,
+            align: TextAlign::Left,
+        });
+        let close = autolink_ui::close_rect(win);
+        quads.push(screen_rect_quad(
+            camera,
+            viewport,
+            close,
+            [0.0; 4],
+            palette.palette_border,
+            7.0,
+        ));
+        texts.push(OwnedScreenText {
+            text: "×".to_owned(),
+            origin: [close[0], close[1] + 2.0],
+            width: close[2],
+            font_size: 14.0,
+            color: palette.body,
+            align: TextAlign::Center,
+        });
+        // Баннер отклонённых (У8): виден, пока есть отклонённые
+        if rejected > 0 {
+            let banner = autolink_ui::banner_rect(win);
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                banner,
+                [0.0; 4],
+                color_to_rgba(palette.error),
+                8.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: self.trf(
+                    keys::AUTOLINK_BANNER,
+                    &[("{n}", rejected.to_string().as_str())],
+                ),
+                origin: [banner[0] + 10.0, banner[1] + 6.0],
+                width: banner[2] - autolink_ui::RESTORE_W - 30.0,
+                font_size: 11.5,
+                color: palette.error,
+                align: TextAlign::Left,
+            });
+            let restore = autolink_ui::restore_rect(banner);
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                restore,
+                [0.0; 4],
+                palette.palette_border,
+                6.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::AUTOLINK_RESTORE_ALL).to_owned(),
+                origin: [restore[0], restore[1] + 4.0],
+                width: restore[2],
+                font_size: 11.0,
+                color: palette.body,
+                align: TextAlign::Center,
+            });
+        }
+        // Строки (группы «исток → приёмник», сортировка по имени — У7)
+        let layout = autolink_ui::rows_layout(review, win, self.autolink_scroll);
+        for (group_idx, head) in &layout.group_heads {
+            let collapsed = review.collapsed.contains(group_idx);
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                *head,
+                palette.palette_row_fill,
+                palette.palette_border,
+                6.0,
+            ));
+            let group = &review.groups[*group_idx];
+            texts.push(OwnedScreenText {
+                text: format!(
+                    "{}  →  {} · {}{}",
+                    group.from,
+                    group.to,
+                    group.items.len(),
+                    if collapsed { " ▸" } else { " ▾" }
+                ),
+                origin: [head[0] + 10.0, head[1] + 8.0],
+                width: head[2] - 20.0,
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
+        for (item_idx, rects) in &layout.rows {
+            let item = &review.items[*item_idx];
+            // Принятое — акцентная рамка (будет создано); отклонённое —
+            // приглушённый текст; нерешённое — обычная карточка
+            let (row_fill, row_border) = match item.state {
+                ItemState::Accepted => (palette.card_fill, palette.accent),
+                _ => (palette.card_fill, palette.palette_border),
+            };
+            quads.push(screen_rect_quad(
+                camera, viewport, rects.row, row_fill, row_border, 6.0,
+            ));
+            // «имя → приёмник (параметр)» + процент/единицы
+            let param_label = self.trf(
+                keys::AUTOLINK_PARAM,
+                &[("{name}", item.proposal.param.as_str())],
+            );
+            texts.push(OwnedScreenText {
+                text: format!(
+                    "{} → {} ({})",
+                    item.proposal.param, item.to_title, param_label
+                ),
+                origin: [rects.row[0] + 10.0, rects.row[1] + 8.0],
+                width: rects.pct[0] - rects.row[0] - 20.0,
+                font_size: 11.5,
+                color: if item.state == ItemState::Rejected {
+                    palette.quote
+                } else {
+                    palette.body
+                },
+                align: TextAlign::Left,
+            });
+            let pct_text = match item.proposal.unit_match {
+                Some(true) => "100% ✓".to_owned(),
+                Some(false) => "100% ✗".to_owned(),
+                None => format!("{}%", item.proposal.percent),
+            };
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                rects.pct,
+                palette.palette_chip_fill,
+                [0.0; 4],
+                9.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: pct_text,
+                origin: [rects.pct[0], rects.pct[1] + 3.0],
+                width: rects.pct[2],
+                font_size: 10.0,
+                color: palette.body,
+                align: TextAlign::Center,
+            });
+            let accept_on = item.state == ItemState::Accepted;
+            let reject_on = item.state == ItemState::Rejected;
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                rects.accept,
+                if accept_on { palette.accent } else { [0.0; 4] },
+                if accept_on {
+                    palette.accent
+                } else {
+                    palette.palette_border
+                },
+                6.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::AUTOLINK_ACCEPT).to_owned(),
+                origin: [rects.accept[0], rects.accept[1] + 3.0],
+                width: rects.accept[2],
+                font_size: 10.5,
+                color: if accept_on {
+                    Color::rgb(255, 255, 255)
+                } else {
+                    palette.body
+                },
+                align: TextAlign::Center,
+            });
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                rects.reject,
+                if reject_on {
+                    color_to_rgba(palette.error)
+                } else {
+                    [0.0; 4]
+                },
+                if reject_on {
+                    color_to_rgba(palette.error)
+                } else {
+                    palette.palette_border
+                },
+                6.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::AUTOLINK_REJECT).to_owned(),
+                origin: [rects.reject[0], rects.reject[1] + 3.0],
+                width: rects.reject[2],
+                font_size: 10.5,
+                color: if reject_on {
+                    Color::rgb(255, 255, 255)
+                } else {
+                    palette.body
+                },
+                align: TextAlign::Center,
+            });
+        }
+        // Разделитель футера + подсказка + кнопки
+        let footer = autolink_ui::footer_rect(win);
+        quads.push(screen_rect_quad(
+            camera,
+            viewport,
+            [footer[0], footer[1], footer[2], 1.0],
+            palette.palette_border,
+            [0.0; 4],
+            0.0,
+        ));
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AUTOLINK_HINT).to_owned(),
+            origin: [footer[0] + 16.0, footer[1] + 10.0],
+            width: (footer[2] - 3.0 * autolink_ui::FOOT_BTN_W - 40.0).max(120.0),
+            font_size: 10.5,
+            color: palette.quote,
+            align: TextAlign::Left,
+        });
+        let [create, accept_all, reject_all] = autolink_ui::footer_buttons(win);
+        quads.push(screen_rect_quad(
+            camera,
+            viewport,
+            create,
+            if accepted > 0 {
+                palette.accent
+            } else {
+                palette.palette_chip_fill
+            },
+            [0.0; 4],
+            7.0,
+        ));
+        texts.push(OwnedScreenText {
+            text: self.trf(
+                keys::AUTOLINK_CREATE,
+                &[("{n}", accepted.to_string().as_str())],
+            ),
+            origin: [create[0], create[1] + 6.0],
+            width: create[2],
+            font_size: 12.0,
+            color: if accepted > 0 {
+                Color::rgb(255, 255, 255)
+            } else {
+                palette.quote
+            },
+            align: TextAlign::Center,
+        });
+        for (rect, label) in [
+            (&accept_all, keys::AUTOLINK_ACCEPT_ALL),
+            (&reject_all, keys::AUTOLINK_REJECT_ALL),
+        ] {
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                *rect,
+                [0.0; 4],
+                palette.palette_border,
+                7.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: self.tr(label).to_owned(),
+                origin: [rect[0], rect[1] + 6.0],
+                width: rect[2],
+                font_size: 11.5,
+                color: palette.body,
+                align: TextAlign::Center,
+            });
+        }
+        let _ = pending;
+        (quads, texts)
+    }
+
+    /// Подсветить рёбра пачки автосвязи (AC-5.3, «подсветка отменяемого»):
+    /// индексы живых рёбер по id — в focus_edges (механизм F-4).
+    fn highlight_autolink_batch(&mut self, edge_ids: &[String]) {
+        self.focus_edges = self
+            .scene
+            .canvas
+            .edges
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| edge_ids.contains(&edge.id))
+            .map(|(idx, _)| idx)
+            .collect();
         self.request_redraw();
     }
 
@@ -12647,6 +13305,27 @@ impl App {
     }
 
     fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // PRD-0007 (X4, D10): колесо над телом диалога ревью автосвязи
+        // скроллит список предложений (12+), а не панорамирует канвас
+        if self.autolink_review.is_some() {
+            let viewport = self.viewport_logical();
+            let win = autolink_ui::dialog_rect(viewport);
+            let body = autolink_ui::body_rect(win);
+            if point_in_rect(body, self.cursor) {
+                let max = self
+                    .autolink_review
+                    .as_ref()
+                    .map(|review| autolink_ui::rows_layout(review, win, 0.0).scroll_max)
+                    .unwrap_or(0.0);
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                };
+                self.autolink_scroll = (self.autolink_scroll + dy).clamp(0.0, max);
+                self.request_redraw();
+                return;
+            }
+        }
         // FR-042 (E3, F-9): открытое main stage модально — колесо глушится
         // (пан/зум канваса в stage недоступны, инвариант 8)
         if self.main_stage.is_some() {
@@ -13322,11 +14001,29 @@ impl App {
                 self.scene.recompute_flow();
                 self.request_redraw();
             }
+            // PRD-0007 (FR-048 X4, AC-5.3): откат пачки подтверждён —
+            // штатный undo (тег снялся вместе со снапшотом), подсветка гаснет
+            AppDialog::AutolinkRollback { edge_ids, .. } => {
+                self.dialog = None;
+                self.autolink_batch = None;
+                self.focus_edges.clear();
+                let _ = edge_ids;
+                if let Some(before) = self.scene.take_undo() {
+                    self.restore_canvas(before);
+                    tracing::debug!(depth = self.scene.undo_stack.len(), "undo");
+                }
+                self.request_redraw();
+            }
         }
     }
 
-    /// Отмена диалога (Esc/клик «Нет»): ничего не меняется.
+    /// Отмена диалога (Esc/клик «Нет»): ничего не меняется. Откат пачки
+    /// отменён — подсветка отменяемого гаснет (AC-5.3).
     fn cancel_dialog(&mut self) {
+        if matches!(self.dialog, Some(AppDialog::AutolinkRollback { .. })) {
+            self.autolink_batch = None;
+            self.focus_edges.clear();
+        }
         self.dialog = None;
         self.request_redraw();
     }
@@ -14105,6 +14802,33 @@ impl ApplicationHandler<AppEvent> for App {
                     let (search_instances, search_texts) = self.search_overlay();
                     screen_bands.push(UiLayer::Panels, search_instances, search_texts);
                 }
+                // PRD-0007 (X4, AC-5.5): бейдж предложений автосвязи —
+                // верх по центру, ненавязчивый (та же видимость, что у hit-rect)
+                if self.autolink_badge_visible() {
+                    let palette = self.effective_palette();
+                    let camera = &self.camera;
+                    let badge_viewport = self.viewport_logical();
+                    let badge = crate::autolink_ui::badge_rect(badge_viewport);
+                    let mut badge_quads = Vec::with_capacity(2);
+                    badge_quads.push(screen_rect_quad(
+                        camera,
+                        badge_viewport,
+                        badge,
+                        palette.palette_chip_fill,
+                        palette.accent,
+                        16.0,
+                    ));
+                    let count = self.autolink_proposals.len().to_string();
+                    let badge_texts = vec![OwnedScreenText {
+                        text: self.trf(keys::AUTOLINK_BADGE, &[("{n}", count.as_str())]),
+                        origin: [badge[0], badge[1] + 6.0],
+                        width: badge[2],
+                        font_size: 12.0,
+                        color: palette.body,
+                        align: TextAlign::Center,
+                    }];
+                    screen_bands.push(UiLayer::Panels, badge_quads, badge_texts);
+                }
                 // FR-018: палитра шаблонов (Ctrl+P) и wheel-меню
                 // (Shift+клик) — поверх канваса; иконки/хаб wheel — полоса
                 // WorldOverlay (над секторами, под панелями)
@@ -14358,17 +15082,27 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // PRD-0007 (X2): окно проверки — модальный проход кадра
                 // (взаимоисключительно с stage, F-10); при закрытом окне —
-                // hover-«?» у цифры результата (Closed → Hover)
-                if self.explain.is_some() {
+                // hover-«?» у цифры результата (Closed → Hover).
+                // X4 (§6.5): панель прячется на время диалога ревью автосвязи
+                if self.explain.is_some() && self.autolink_review.is_none() {
                     let (insts, texts) = self.explain_frame(stage_viewport);
                     stage_instances = insts;
                     stage_owned_texts = texts;
-                } else if self.main_stage.is_none() {
+                } else if self.main_stage.is_none() && self.autolink_review.is_none() {
                     self.explain_hover_pill(
                         stage_viewport,
                         &mut stage_instances,
                         &mut stage_owned_texts,
                     );
+                }
+                // PRD-0007 (X4): диалог ревью автосвязи — верхний модальный
+                // проход кадра (§6.5 — поверх канваса; панель объяснения
+                // спрятана условием выше, stage закрыт при открытии ревью —
+                // поэтому списки stage пусты и порядок квадов/текстов корректен)
+                if self.autolink_review.is_some() {
+                    let (insts, texts) = self.autolink_frame(stage_viewport);
+                    stage_instances.extend(insts);
+                    stage_owned_texts.extend(texts);
                 }
                 // FR-052 (U2): полосы в порядке отрисовки (слои по возрастанию)
                 // + Owned-тексты → заимствованные ScreenText (заём живёт до
@@ -14822,6 +15556,29 @@ impl ApplicationHandler<AppEvent> for App {
                     query,
                     limit: SEARCH_RESULTS_LIMIT,
                 });
+            }
+        }
+        // PRD-0007 (FR-048 X4, AC-5.5): фоновый скан автосвязи с дебаунсом
+        // после правок модели (переименование строки перепроверяется — П8).
+        // При открытом диалоге ревью скан не перезапускается (решения
+        // сеанса важнее свежести — перепроверка после закрытия, AC-5.2).
+        if self.settings.autolink_enabled
+            && self.autolink_review.is_none()
+            && self.scene.revision != self.autolink_scanned_rev
+        {
+            match self.autolink_scan_due {
+                None => self.autolink_scan_due = Some(Instant::now()),
+                Some(edited_at) if edited_at.elapsed().as_millis() >= AUTOLINK_DEBOUNCE_MS => {
+                    let fresh = canvas_core::find_proposals(&self.scene.canvas);
+                    let changed = fresh != self.autolink_proposals;
+                    self.autolink_proposals = fresh;
+                    self.autolink_scanned_rev = self.scene.revision;
+                    self.autolink_scan_due = None;
+                    if changed {
+                        self.request_redraw();
+                    }
+                }
+                Some(_) => {}
             }
         }
         // Полёт камеры и пульс (T14) + фокус (T23): непрерывные кадры

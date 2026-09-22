@@ -301,6 +301,12 @@ pub struct Settings {
     /// сразу). Дефолт 3 (решение владельца, раунд да/нет 2026-09-21).
     /// Старые конфиги без поля грузятся как 3 (serde default).
     pub explain_depth_limit: u8,
+    /// PRD-0007 (FR-048 X4, AC-5.5): фоновый детектор автосвязи включён —
+    /// после правок модели (дебаунс) скан точных имён присваиваний,
+    /// предложения накапливаются в бейдже; связь создаётся ТОЛЬКО через
+    /// ревью (D1 — фон не мутирует модель). Дефолт вкл (функция видна);
+    /// старые конфиги без поля грузятся включёнными (serde default).
+    pub autolink_enabled: bool,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -379,6 +385,8 @@ impl Default for Settings {
             edge_aggregation: true,
             // PRD-0007 (AC-2.3): авто-раскрытие 3 уровня, глубже — вручную.
             explain_depth_limit: EXPLAIN_DEPTH_DEFAULT,
+            // PRD-0007 (AC-5.5): фоновый детектор автосвязи включён.
+            autolink_enabled: true,
         }
     }
 }
@@ -595,6 +603,8 @@ mod tests {
             edge_aggregation: true,
             // PRD-0007 (AC-2.3): лимит глубины explain-дерева round-trip
             explain_depth_limit: 4,
+            // PRD-0007 (AC-5.5): тумблер фонового детектора автосвязи
+            autolink_enabled: false,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");

@@ -4,6 +4,10 @@
 /// FR-016: анализ узких мест и риска очередей — чистая функция над
 /// результатами propagator-а (волна B1/CP5).
 pub mod analyze;
+/// PRD-0007 F-7 (X4): автосвязь по именам — детектор предложений связей
+/// по точным именам присваиваний (`find_proposals`); фон не создаёт
+/// связей сам — только предложения для ревью (D1).
+pub mod autolink;
 /// FR-044 (расширение контракта stage FR-042): геометрия main stage —
 /// лейн-раскладка подписей веера и коридор между колонками портов.
 pub mod bundles;
@@ -68,6 +72,8 @@ pub use analyze::{
     analyze, badge_text, has_risk, AnalysisConfig, AnalysisFlags, AnalysisState,
     Severity as AnalysisSeverity,
 };
+/// PRD-0007 X4: автосвязь — предложения рёбер по совпадающим именам.
+pub use autolink::{find_proposals, AutolinkProposal};
 /// FR-042 (E1): пучки рёбер и геометрия main stage — индекс сцены (LOD-0
 /// агрегация), толщина по весу, rect/раскладка stage, точная привязка веера
 /// к строкам значений (FR-044, владелец 2026-09-22), hit-test веера.

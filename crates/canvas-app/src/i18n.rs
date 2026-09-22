@@ -133,6 +133,45 @@ pub mod keys {
     pub const EXPLAIN_LOADER_11: &str = "explain.loader.11";
     pub const EXPLAIN_LOADER_12: &str = "explain.loader.12";
 
+    // --- PRD-0007 (FR-048 X4): автосвязь по именам (F-7) ---
+    /// Пункт меню канваса (AC-5.1): «Найти связи по именам».
+    pub const MENU_AUTOLINK_FIND: &str = "menu.autolink_find";
+    /// Бейдж-индикатор предложений (AC-5.5): «Связи по именам · {n}».
+    pub const AUTOLINK_BADGE: &str = "autolink.badge";
+    /// Заголовок диалога ревью (AC-5.2).
+    pub const AUTOLINK_TITLE: &str = "autolink.title";
+    /// Мета-строка шапки: «Найдено предложений: {n} · группировка: пара нод ·
+    /// сортировка: по имени переменной».
+    pub const AUTOLINK_META: &str = "autolink.meta";
+    /// Пустой список: предложений нет.
+    pub const AUTOLINK_EMPTY: &str = "autolink.empty";
+    /// Баннер отклонённых (У8): «Отклонено: {n}. До закрытия диалога можно
+    /// вернуть одним кликом.»
+    pub const AUTOLINK_BANNER: &str = "autolink.banner";
+    /// Кнопки строк и футера (AC-5.2).
+    pub const AUTOLINK_ACCEPT: &str = "autolink.accept";
+    pub const AUTOLINK_REJECT: &str = "autolink.reject";
+    pub const AUTOLINK_ACCEPT_ALL: &str = "autolink.accept_all";
+    pub const AUTOLINK_REJECT_ALL: &str = "autolink.reject_all";
+    pub const AUTOLINK_RESTORE_ALL: &str = "autolink.restore_all";
+    /// Главная кнопка футера: «Создать связи ({n})» (AC-5.3).
+    pub const AUTOLINK_CREATE: &str = "autolink.create";
+    /// Подсказка футера: создание — один undo-бат; откат — с подтверждением.
+    pub const AUTOLINK_HINT: &str = "autolink.hint";
+    /// Подпись адресации в строке: «параметр {name}».
+    pub const AUTOLINK_PARAM: &str = "autolink.param";
+    /// Тост после создания: «Создано связей: {n} — один undo-шаг.»
+    pub const AUTOLINK_TOAST_CREATED: &str = "autolink.toast_created";
+    /// Тост пустого результата команды: совпадений нет.
+    pub const AUTOLINK_TOAST_NONE: &str = "autolink.toast_none";
+    /// Настройка FR-039 (AC-5.5): тумблер фонового детектора.
+    pub const ROW_AUTOLINK: &str = "settings.row.autolink";
+    pub const DESC_AUTOLINK: &str = "settings.desc.autolink";
+    /// Подтверждение отката пачки (AC-5.3): заголовок/текст/кнопка.
+    pub const AUTOLINK_UNDO_TITLE: &str = "autolink.undo_title";
+    pub const AUTOLINK_UNDO_BODY: &str = "autolink.undo_body";
+    pub const AUTOLINK_UNDO_YES: &str = "autolink.undo_yes";
+
     pub const VALUE_ON: &str = "settings.value.on";
     pub const VALUE_OFF: &str = "settings.value.off";
     pub const CORNER_TOP_LEFT: &str = "settings.value.corner.top_left";
@@ -895,6 +934,52 @@ const RU: &[(&str, &str)] = &[
     (keys::EXPLAIN_LOADER_10, "Считаем значения на узлах…"),
     (keys::EXPLAIN_LOADER_11, "Готовим подсветку на канвасе…"),
     (keys::EXPLAIN_LOADER_12, "Почти готово — раскладываем ветки…"),
+    // --- PRD-0007 (FR-048 X4): автосвязь по именам (F-7) ---
+    (keys::MENU_AUTOLINK_FIND, "Найти связи по именам"),
+    (keys::AUTOLINK_BADGE, "Связи по именам · {n}"),
+    (keys::AUTOLINK_TITLE, "Ревью автосвязи"),
+    (
+        keys::AUTOLINK_META,
+        "Найдено предложений: {n} · группировка: пара нод · сортировка: по имени переменной",
+    ),
+    (
+        keys::AUTOLINK_EMPTY,
+        "Предложений нет: совпадений имён присваиваний не найдено.",
+    ),
+    (
+        keys::AUTOLINK_BANNER,
+        "Отклонено: {n}. До закрытия диалога можно вернуть одним кликом.",
+    ),
+    (keys::AUTOLINK_ACCEPT, "Принять"),
+    (keys::AUTOLINK_REJECT, "Отклонить"),
+    (keys::AUTOLINK_ACCEPT_ALL, "Принять все"),
+    (keys::AUTOLINK_REJECT_ALL, "Отклонить все"),
+    (keys::AUTOLINK_RESTORE_ALL, "Вернуть все"),
+    (keys::AUTOLINK_CREATE, "Создать связи ({n})"),
+    (
+        keys::AUTOLINK_HINT,
+        "Создание — одним undo-батом; откат пачки — с подтверждением и подсветкой отменяемого (AC-5.3).",
+    ),
+    (keys::AUTOLINK_PARAM, "параметр {name}"),
+    (
+        keys::AUTOLINK_TOAST_CREATED,
+        "Создано связей: {n} — один undo-шаг.",
+    ),
+    (
+        keys::AUTOLINK_TOAST_NONE,
+        "Совпадений имён не найдено — предложений нет.",
+    ),
+    (keys::ROW_AUTOLINK, "Автосвязь по именам (фон)"),
+    (
+        keys::DESC_AUTOLINK,
+        "Фоновый детектор предлагает связи по совпадающим именам присваиваний; связь создаётся только после ревью.",
+    ),
+    (keys::AUTOLINK_UNDO_TITLE, "Откатить пачку автосвязи ({n})?"),
+    (
+        keys::AUTOLINK_UNDO_BODY,
+        "Связи пачки подсвечены на канвасе. Откат — один undo-шаг.",
+    ),
+    (keys::AUTOLINK_UNDO_YES, "Откатить"),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -1357,6 +1442,52 @@ const EN: &[(&str, &str)] = &[
     (keys::EXPLAIN_LOADER_10, "Computing node values…"),
     (keys::EXPLAIN_LOADER_11, "Preparing the canvas highlight…"),
     (keys::EXPLAIN_LOADER_12, "Almost there — laying out branches…"),
+    // --- PRD-0007 (FR-048 X4): autolink by names (F-7) ---
+    (keys::MENU_AUTOLINK_FIND, "Find links by names"),
+    (keys::AUTOLINK_BADGE, "Links by names · {n}"),
+    (keys::AUTOLINK_TITLE, "Autolink review"),
+    (
+        keys::AUTOLINK_META,
+        "Proposals found: {n} · grouped by node pair · sorted by variable name",
+    ),
+    (
+        keys::AUTOLINK_EMPTY,
+        "No proposals: no matching assignment names were found.",
+    ),
+    (
+        keys::AUTOLINK_BANNER,
+        "Rejected: {n}. You can restore them with one click until the dialog closes.",
+    ),
+    (keys::AUTOLINK_ACCEPT, "Accept"),
+    (keys::AUTOLINK_REJECT, "Reject"),
+    (keys::AUTOLINK_ACCEPT_ALL, "Accept all"),
+    (keys::AUTOLINK_REJECT_ALL, "Reject all"),
+    (keys::AUTOLINK_RESTORE_ALL, "Restore all"),
+    (keys::AUTOLINK_CREATE, "Create links ({n})"),
+    (
+        keys::AUTOLINK_HINT,
+        "Creation is one undo batch; rollback asks for confirmation and highlights the affected links (AC-5.3).",
+    ),
+    (keys::AUTOLINK_PARAM, "parameter {name}"),
+    (
+        keys::AUTOLINK_TOAST_CREATED,
+        "Links created: {n} — a single undo step.",
+    ),
+    (
+        keys::AUTOLINK_TOAST_NONE,
+        "No matching names — nothing to propose.",
+    ),
+    (keys::ROW_AUTOLINK, "Background autolink by names"),
+    (
+        keys::DESC_AUTOLINK,
+        "The background detector proposes links for matching assignment names; a link is created only after review.",
+    ),
+    (keys::AUTOLINK_UNDO_TITLE, "Roll back the autolink batch ({n})?"),
+    (
+        keys::AUTOLINK_UNDO_BODY,
+        "The batch links are highlighted on the canvas. Rollback is a single undo step.",
+    ),
+    (keys::AUTOLINK_UNDO_YES, "Roll back"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).
