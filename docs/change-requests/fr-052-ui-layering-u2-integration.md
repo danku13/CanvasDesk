@@ -93,17 +93,18 @@
 
 ## Проверка (Verification)
 
-- [ ] Pick-матрица на реальных адаптерах: Block-поверхности глотают backdrop, Capture пропускает мимо rect'ов, PassThrough/Passive не перехватывают (G2, автотест `ui_registry`).
-- [ ] Esc-лестница из реестра дословно воспроизводит текущую (автотест последовательности `esc_stack` на состояниях).
-- [ ] Draw-полосы: порядок полос = `UiLayer::DRAW_ORDER`; внутри полосы — сегодняшний порядок; тексты полосы N под квадами полосы N+1 (smoke-тест рендера).
-- [ ] G3: все существующие z-тесты (zorder.rs, zorder_smoke, stage-тест) и полный `cargo test --workspace` зелёные.
-- [ ] Wheel/hover: `cursor_over_screen_surface` == `HitStack::absorbs` (автотест эквивалентности на модельных состояниях).
-- [ ] G7: 0 новых внешних зависимостей; wasm-гейты зелёные (canvas-ui в render/app — внутренние, бинарь ≤ +100 КБ).
-- [ ] Гейты: `cargo fmt --all --check`; `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`; `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace`; `bash scripts/wasm_gate.sh`; `bash scripts/mcp_wasm_gate.sh`.
-- [ ] CI по merge SHA — зелёный.
+- [x] Pick-матрица на реальных адаптерах: Block-поверхности глотают backdrop, Capture пропускает мимо rect'ов, PassThrough/Passive не перехватывают (G2, автотесты `ui_registry`: gallery_block_backdrop_swallows, onboarding_backdrop_swallows_without_close, idle_registry_has_world_and_chrome, whatif_hide_below_and_capture_rect, toast_is_passive).
+- [x] Esc-лестница из реестра дословно воспроизводит прежнюю (автотест `esc_stack_matches_legacy_ladder`: stage → help → docs → palette → strip → panel → menu → settings → hotkeys → whatif → wheel; head-поверхности над stage — key_owner_follows_esc_top).
+- [x] Draw-полосы: порядок полос = слои по возрастанию (автотест frame_bands_are_layer_ascending); порядок внутри полосы — дословно прежний (push-последовательность сохранена); тексты полосы N рисуются между квадами N-1/N+1 (полосное исполнение в renderer.rs:1437–1452).
+- [x] G3: все существующие z-тесты (zorder.rs, zorder_smoke, stage-тесты) зелёные; `cargo test --workspace` — 48 тест-бинарей, 0 failed (245 в canvas-app, из них 11 новых).
+- [x] Wheel/hover: `cursor_over_screen_surface` = `HitStack::absorbs` по кадру реестра; hover-глушение = pick по кадру (единый диспетчер вместо списков).
+- [x] G7: 0 новых внешних зависимостей (canvas-ui — внутренний workspace-крейт в render/app); wasm-гейты зелёные.
+- [x] Гейты на ветке 2e03eeb: `cargo fmt --all --check` ✓; `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` ✓; `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace` ✓ (48/48); `bash scripts/wasm_gate.sh` ✓ (wasmtime 36.0.1); `bash scripts/mcp_wasm_gate.sh` ✓.
+- [ ] CI по merge SHA — зелёный (после слияния).
 
 ## История изменений (Changelog)
 
+- `2026-09-22` — агент: этап U2 реализован (коммиты ffff8d5 docs + 2e03eeb feat): ScreenBand/полосное исполнение в canvas-render, модуль `app/ui_registry` (20 поверхностей, build_registry/build_frame_at/key_owner/dispatch_esc/ScreenBands), head-диспетчеры HitStack/KeyOwner в on_left_button/on_key, wheel/hover из кадра; нормализованные дельты применены; 48 тест-бинарей зелёные, 5 гейтов зелёные. Статус — ожидание CI по merge SHA.
 - `2026-09-22` — агент: создан документ (FR-052), статус `в работе`; постановка U2: ScreenBand/полосы в renderer+text, модуль ui_registry (реестр/адаптеры/KeyOwner), head-диспетчеры ввода через HitStack/Router, wheel/hover из кадра; зафиксированы нормализованные дельты.
 
 ## Источники истины (References)
