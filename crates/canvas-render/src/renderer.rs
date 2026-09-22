@@ -15,8 +15,8 @@ use crate::camera::{Camera, Vec2};
 use crate::cards::{
     analysis_badges_visible, analysis_border_visible, analysis_ring_instance,
     build_draft_instances, build_edge_handle_instances, build_edge_instances_ctx,
-    build_line_port_instances, build_port_instances, card_instance, dim_instance,
-    make_widget_transparent, severity_border, severity_text, template_band_instance,
+    build_line_port_instances, build_param_port_instances, build_port_instances, card_instance,
+    dim_instance, make_widget_transparent, severity_border, severity_text, template_band_instance,
     template_icon_quads, template_icon_rect, widget_header_hover_instance, BundleContext,
     CardInstance, CardsPipeline, FocusView,
 };
@@ -194,6 +194,19 @@ pub enum Selection {
 // сохранены. Слои: core → scene → render → app (ADR-0012, без wgpu в scene).
 pub use canvas_scene::{SpillView, WhatIfNode};
 
+/// FR-050 Н2 (этап C): цель value-drag — шаблонная нода под курсором с
+/// совместимостью её параметров по единицам (Н5/E-UNIT). Данные
+/// принадлежат приложению (пересчёт на кадр ввода); рендер подсвечивает
+/// якоря [`canvas_core::ParamPort`] допустимых целей ярче.
+#[derive(Debug, Clone, Copy)]
+pub struct ParamDropView<'a> {
+    /// Индекс ноды-цели в `canvas.nodes` (шаблонная).
+    pub node_index: usize,
+    /// `(имя параметра, совместим источник drag по единицам)` — порядок
+    /// снапшота параметров шаблона (`TemplateRef::params`).
+    pub params: &'a [(String, bool)],
+}
+
 /// Сцена кадра: модель канваса, spatial index (culling, T5), выделение
 /// и интерактивные состояния связей (T8).
 pub struct SceneView<'a> {
@@ -220,6 +233,16 @@ pub struct SceneView<'a> {
     /// краю ноды. false — ни один путь не рисует построчные порты
     /// (инвариант флага).
     pub line_ports: bool,
+    /// FR-050 Н2 (этап C): цель активного value-drag — шаблонная нода под
+    /// курсором с совместимостью параметров (Н5/E-UNIT). None — drag не
+    /// активен или цель не шаблонная нода: якоря рисуются обычным
+    /// аффордансом (инвариант: без drag кадр байт-в-байт прежний).
+    pub param_drop: Option<ParamDropView<'a>>,
+    /// FR-050 Р-3 (этап C): id value-рёбер в состоянии «не подставлено»
+    /// (unmapped, FR-045 R-3) — рисуются пунктиром янтарным акцентом
+    /// анализа независимо от цвета/стиля в `.canvas` (модель не
+    /// мутируется). Пусто — рендер рёбер байт-в-байт прежний.
+    pub unmapped_edges: &'a [String],
     /// Режим фокуса (T23, brainstorm-focus): подсвеченные ноды/связи и
     /// степень затемнения остального. Данные принадлежат приложению
     /// (пересчёт на кадр); `FocusView::EMPTY` — режим выключен.
@@ -624,6 +647,14 @@ impl Renderer {
         self.text.line_ports(index, node)
     }
 
+    /// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды из
+    /// кэша раскладки — те же данные, по которым рисуются кружки якорей
+    /// (инвариант вертикали со строками-присваиваниями). Приложение зовёт
+    /// для hit-теста drop value-drag на параметр.
+    pub fn param_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::ParamPort> {
+        self.text.param_ports(index, node)
+    }
+
     /// Отрисовать кадр: фон, сетка, связи (T8), карточки видимых нод,
     /// заголовки, лейблы связей, HUD (T2/T4/T5).
     /// `hud` — строка оверлея (F3), None — без оверлея. Возвращает счётчики кадра.
@@ -1010,6 +1041,9 @@ impl Renderer {
         // CR-002: перепривязываемая связь скрыта — её играет резиновая линия.
         // FR-011: связи, инцидентные скрытым нодам, не рисуются
         // FR-042: агрегация пучков (LOD-0) — по контексту сцены
+        // FR-050 Р-3: unmapped-рёбра — пунктир янтарным акцентом
+        let unmapped_ids: std::collections::HashSet<&str> =
+            scene.unmapped_edges.iter().map(|id| id.as_str()).collect();
         instances.extend(build_edge_instances_ctx(
             scene.canvas,
             selected_edge,
@@ -1018,6 +1052,7 @@ impl Renderer {
             scene.hidden_edge,
             &hidden_ids,
             scene.bundles,
+            &unmapped_ids,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
@@ -1198,6 +1233,44 @@ impl Renderer {
                     hovered,
                 ));
             }
+        }
+        // FR-050 Н2 (этап C): входные якоря параметров шаблонных нод —
+        // постоянный аффорданс на ЛЕВОМ краю (зеркало FR-025); во время
+        // value-drag у ноды-цели совместимые параметры (Н5/E-UNIT)
+        // подсвечиваются ярче, несовместимые — приглушены. Без drag кадр
+        // отличается только аффордансом якорей (инвариант). Скрытые ноды
+        // (FR-011) якорей не имеют; кэш раскладки — единый источник
+        // вертикалей (инвариант вертикали).
+        for (index, node) in scene.canvas.nodes.iter().enumerate() {
+            if node.template().is_none() || scene.hidden_nodes.contains(&index) {
+                continue;
+            }
+            let ports = self.text.param_ports(index, node);
+            if ports.is_empty() {
+                continue;
+            }
+            let hovered = scene.hovered == Some(index);
+            // Подсветка drag: флаги совместимости якорей ноды-цели
+            let drop_compat: Option<Vec<bool>> = scene
+                .param_drop
+                .filter(|drop| drop.node_index == index)
+                .map(|drop| {
+                    ports
+                        .iter()
+                        .map(|port| {
+                            drop.params
+                                .iter()
+                                .find(|(name, _)| name.as_str() == port.param.as_str())
+                                .is_some_and(|(_, compatible)| *compatible)
+                        })
+                        .collect()
+                });
+            instances.extend(build_param_port_instances(
+                &ports,
+                scene.port_zone_px,
+                hovered,
+                drop_compat.as_deref(),
+            ));
         }
         // CR-002: хэндлы концов выделенной связи — кружки на обоих концах
         // (захват = drag перепривязки); размер — как у портов (зона CR-003)

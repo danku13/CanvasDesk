@@ -1,6 +1,23 @@
 {
   "$note": "Design-токены размеров (слой примитивы, PRD-0006 F-6; стык PRD-0004 F-1 — метрики анатомии). Значения = текущим константам (I-1: ноль скачка); $desc — источник. Единицы: world px (f32) либо физические px для экранных элементов.",
 
+  "spacing": {
+    "$note": "Spacing-scale UI-оверлеев (FR-053 U3 PRD-0009 F-9): значения = текущим константам пилотов (галерея схем, what-if бар); потребители берут из scale, литералы в модулях пилотов удалены.",
+    "s": { "$type": "dimension", "$value": 6.0, "$desc": "Базовый зазор чипов/строк: whatif BAR_GAP whatif_ui.rs:31, зазор чипов галереи scheme_gallery_ui.rs:162, LIST_MARGIN whatif_ui.rs:46" },
+    "sm": { "$type": "dimension", "$value": 8.0, "$desc": "TABLE_MARGIN whatif_ui.rs:58 — поля таблицы сравнения" },
+    "md": { "$type": "dimension", "$value": 10.0, "$desc": "BAR_PADDING whatif_ui.rs:15; поля empty-кнопок галереи scheme_gallery_ui.rs:227-231" },
+    "lg": { "$type": "dimension", "$value": 12.0, "$desc": "BAR_MARGIN whatif_ui.rs:13; CHIP_PAD_X whatif_ui.rs:25; BTN_PAD_X whatif_ui.rs:38; PANEL_PAD scheme_gallery_ui.rs:24" },
+    "xl": { "$type": "dimension", "$value": 24.0, "$desc": "Поля панели галереи/empty-карточки к вьюпорту scheme_gallery_ui.rs:133,220" }
+  },
+
+  "radius": {
+    "$note": "Radius-scale квадов UI-оверлеев (FR-053 U3): первый параметр CardInstance.params (скругление углов); card.corner_radius — общий радиус карточек.",
+    "chip": { "$type": "dimension", "$value": 6.0, "$desc": "Квад чипа/кнопки what-if бара app.rs (params [6.0,…]) и empty/фильтра галереи" },
+    "card": { "$type": "dimension", "$value": 8.0, "$desc": "CORNER_RADIUS cards.rs:21 (общий радиус карточек)" },
+    "panel": { "$type": "dimension", "$value": 10.0, "$desc": "Панель галереи app.rs (params [10.0,…])" },
+    "pill": { "$type": "dimension", "$value": 12.0, "$desc": "Чипы категорий галереи app.rs (params [12.0,…]) — пилюли" }
+  },
+
   "card": {
     "corner_radius": { "$type": "dimension", "$value": 8.0, "$desc": "CORNER_RADIUS cards.rs:21" },
     "header_height": { "$type": "dimension", "$value": 34.0, "$desc": "HEADER_HEIGHT cards.rs:19 (FR-023: 28 → 34)" }

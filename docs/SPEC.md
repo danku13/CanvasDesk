@@ -89,7 +89,7 @@ canvasdesk/
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 36 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks; FR-017: whatif_*)
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 39 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks; FR-017: whatif_*; PRD-0008 Q5: schemes_list/schemes_apply; PRD-0007 X2/FR-048: lineage)
 │   ├── canvas-scene/        # модель сцены (SceneState) + mcp_dispatch — платформенно-нейтральный, wasm (FR-037/ADR-0012)
 │   ├── canvas-mcp-headless/ # headless MCP-сервер для wasmtime/wasip1 (FR-037) — верификация сессий без Windows
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
@@ -475,6 +475,17 @@ input → camera update → world-space culling (rstar query по viewport)
 Раздел фиксирует контракты, критичные для агентной сборки (ADR-0004:
 MCP — единственный канал; CR-013: волна A).
 
+**Инвариант «MCP-видимость = UI» (запрос 2026-09-22 «подтянуть MCP под
+обновления»):** инструменты чтения значений (`flow_recalc`,
+`analyze_bottlenecks`, `lineage`, поле `flow` у `graph_apply`/
+`schemes_apply`) отдают АКТИВНОЕ what-if состояние — те же числа/флаги,
+что видит пользователь на канвасе (каскад Р-1 FR-050: what-if перекрывает
+проливание перекрывает локальные). Пересчёт всегда СВЕЖИЙ (ленивые
+мутации `node_edit` с text — CR-012 — не искажают отчёт), ревизию модели
+и undo-историю чтение не трогает. Авто-строки FR-050 Р-4 (`autoRows`) —
+в ответах `flow_recalc`/`graph_apply`/`schemes_apply`: слот, ребро-источник,
+путь «Объект.Поле», значение активного сценария или `unmapped`.
+
 Канонический порядок вызовов для агентной сборки модели (разведка → ноды →
 value-связи → пересчёт → батч → валидация) зафиксирован в рецепте
 `user-docs/agent-recipe.md` (R5/CP4, CR-013). Коды ошибок `graph_validate`
@@ -520,8 +531,9 @@ SPEC §6.3). Превышение — ошибка уровня вызова (is
 
 **Ответ (успех):** `{ok: true, created: [{op_index, ref?, node_id?, edge_id?}],
 report: [{op_index, op, id}], flow: {node_id: {value, unit, outputs?,
-lines?, error?}}}` — `flow` в формате flow_recalc v2 (FR-029): узловые
-значения + именованные выходы + построчные значения; второй вызов
+lines?, autoRows?, error?}}}` — `flow` в формате flow_recalc v2
+(FR-029): значения АКТИВНОГО сценария + именованные выходы +
+построчные значения + авто-строки (FR-050 Р-4); второй вызов
 flow_recalc не нужен.
 
 **Коды ошибок операций:** `E-BAD-OP` (форма/поля), `E-NOT-FOUND`
@@ -548,10 +560,38 @@ flow_recalc не нужен.
 | `whatif_apply` | записать подмены в persisted-строки/params и удалить сценарий; один undo-шаг |
 | `whatif_reset` | сброс подмен активного сценария (runtime) |
 
+### schemes_list / schemes_apply (PRD-0008, Q5 v2) — галерея схем агенту
+
+Те же пакеты, что видит пользователь в галерее (Ctrl+T) — инвариант
+«MCP-видимость = UI»: агент может показать демо-канвас одной вставкой.
+
+| Инструмент | Семантика |
+|---|---|
+| `schemes_list {}` | массив пакетов: `{id, name, name_en, category, category_ru/en, version, description/description_en, nodes, edges}` — RU-первично, как в UI; массив приходит в text-контенте (FR-034) |
+| `schemes_apply {id, x?, y?}` | вставка схемы в текущий канвас — как «Открыть» в галерее: ремап id без коллизий (note-N/group-N/edge-N), центрирование в (x, y) или центр viewport; один undo-шаг, полный пересчёт, what-if сценарии не трогаются. Ответ `{applied, name, nodes[], edges[] (контракт edges_list), bbox [4], flow}` — flow как у flow_recalc (активное состояние + autoRows); неизвестный id — isError без undo-шага |
+
+### lineage (PRD-0007 X2, FR-048) — дерево происхождения цифры
+
+Схема вызова: `lineage {node_id, line?}` — `line` null/без поля = итог
+ноды (полоса D), иначе индекс строки Numi-листа (FR-025). Та же модель,
+что окно проверки цепочки (инвариант F-5 PRD-0007: один источник);
+значения — активного what-if состояния, цикл потока — топология без
+значений (AC-2.4), бюджет 4096 узлов — свёртка `truncated`.
+
+**Ответ:** `{root: {node_id, line}, nodes: [{node_id, line, kind
+(calc|leaf|cycle|unmapped|unlinked|truncated), value+unit | error,
+formula?, title, label?, children: [{child (индекс в nodes), via?}]}]` —
+DFS-порядок (родитель раньше ребёнка, ромб разворачивается без
+дедупликации); `via` = `{edge_id, from_node, to_node, from_line?,
+from_output?, to_param?}` — ребро для подсветки цепочки на канвасе
+(F-4/AC-3.1). Негативные ветки: нода не найдена / line < 0 / проза
+как корень — isError.
+
 ### analyze_bottlenecks (FR-016) — узкие места и риск очередей
 
 Схема вызова: `analyze_bottlenecks {}` (без параметров — активный канвас).
-Чтение: пересчёт свежий (как `flow_recalc`), канвас и undo не затрагиваются.
+Чтение: пересчёт свежий и АКТИВНОГО what-if состояния (как `flow_recalc`),
+канвас и undo не затрагиваются.
 
 **Ответ:** `{nodes: [{id, severity, utilization?, queue_length?, wait_sec?,
 badge}], thresholds}` — те же флаги, что видит пользователь на канвасе

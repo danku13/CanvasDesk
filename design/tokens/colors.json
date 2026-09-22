@@ -49,6 +49,27 @@
     "text": { "$value": [240, 230, 194], "$desc": "Текст тоста app.rs:10797 (#f0e6c2)" }
   },
 
+  "control": {
+    "$type": "color",
+    "$note": "Слоты состояний контролов (FR-053 U3 PRD-0009 F-9): hover/selected/disabled пилотов (галерея схем, what-if бар, empty-state). Значения = прежним вычислениям hover_fill (c*1.3+0.04/0.06, app.rs:1042-1049) и локальной dim (инвариант I-1: ноль скачка); дифференциация selected — v2.",
+    "hover_fill": {
+      "dark": { "$value": [0.183, 0.183, 0.229, 0.97], "$desc": "hover_fill(menu_fill dark) — hover строки/вторичной кнопки (галерея app.rs:4844,4949; бывший hover_fill(palette.menu_fill))" },
+      "light": { "$value": [1.0, 1.0, 1.0, 0.97], "$desc": "hover_fill(menu_fill light) — формула насыщает до 1.0" }
+    },
+    "primary_hover_fill": {
+      "$value": [0.248, 0.456, 0.84, 1.0],
+      "$desc": "hover_fill(dialog.button_primary_fill [0.16,0.32,0.60,1.0]) — hover primary-кнопки empty-state app.rs:4944 (обе темы: primary не дифференцирован)"
+    },
+    "selected_fill": {
+      "dark": { "$value": [0.183, 0.183, 0.229, 0.97], "$desc": "= hover (сегодня selected и hover строки галереи неразличимы app.rs:4844 — ноль скачка; семантика разделена слотами, дифференциация — v2)" },
+      "light": { "$value": [1.0, 1.0, 1.0, 0.97], "$desc": "= hover light" }
+    },
+    "disabled_text": {
+      "$value": [138, 144, 156],
+      "$desc": "#8a909c — текст disabled-кнопок what-if бара (бывшая локальная dim app.rs:2808); обе темы"
+    }
+  },
+
   "wheel": {
     "$type": "color",
     "dim": { "$value": [0.0, 0.0, 0.0, 0.35], "$desc": "FILL_DIM app.rs:4952" },
