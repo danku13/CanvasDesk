@@ -1,105 +1,106 @@
 {
-  "id": "com.canvasdesk.scheme.intro-whatif",
-  "name_ru": "Сценарии what-if",
-  "name_en": "What-if scenarios",
-  "description_ru": "Бюджет со статьями и годовым итогом: сценарная подмена входа, дельты без правки базы и годовой итог из итога месяца.",
-  "description_en": "A budget with line items and an annual total: override an input in a scenario, see deltas without touching the base, and the annual total from the monthly one.",
-  "category": "onboarding",
-  "category_ru": "Онбординг",
-  "category_en": "Onboarding",
-  "version": "1.1.0",
-  "content": {
-    "nodes": [
-      {
-        "id": "hint",
-        "type": "text",
-        "x": 0,
-        "y": 0,
-        "width": 360,
-        "height": 230,
-        "text": "Сценарии what-if\nВключите режим What-if кнопкой внизу экрана, затем двойной клик по строке с числом задаёт подмену: дельты пересчитываются поверх базы, файл не меняется.\nГодовой бюджет собирается из итога месяца и горизонта: значения приходят в него по именам параметров.",
-        "color": "4"
-      },
-      {
-        "id": "costs",
-        "type": "text",
-        "x": 440,
-        "y": 0,
-        "width": 260,
-        "height": 220,
-        "text": "Статьи бюджета\nПрямые расходы за месяц: маркетинг и инструменты.\n\nmarketing = 1200 $\ntools = 300 $",
-        "color": "5"
-      },
-      {
-        "id": "total",
-        "type": "text",
-        "x": 800,
-        "y": 0,
-        "width": 280,
-        "height": 200,
-        "text": "Итог месяца\nСумма статей: маркетинг плюс инструменты.\n\ntotal = $1 + $2",
-        "color": "2"
-      },
-      {
-        "id": "months",
-        "type": "text",
-        "x": 440,
-        "y": 300,
-        "width": 260,
-        "height": 180,
-        "text": "Горизонт\nДлительность проекта в месяцах.\n\nmonths = 12",
-        "color": "5"
-      },
-      {
-        "id": "annual",
-        "type": "text",
-        "x": 1160,
-        "y": 0,
-        "width": 280,
-        "height": 200,
-        "text": "Годовой бюджет\nИтог месяца, помноженный на горизонт: значения приходят в параметры по имени.\n\n$spend * $months",
-        "color": "2"
-      },
-      {
-        "id": "try",
-        "type": "text",
-        "x": 440,
-        "y": 560,
-        "width": 360,
-        "height": 200,
-        "text": "Попробуйте\nПоднимите маркетинг до полутора тысяч в режиме сценария — итог и годовой бюджет покажут дельты.\nКлик по двойной линии «Статьи → Итог» открывает main stage с веером значений.",
-        "color": "4"
-      }
-    ],
-    "edges": [
-      {
-        "id": "e1",
-        "fromNode": "costs",
-        "toNode": "total",
-        "flowKind": "value",
-        "fromOutput": "marketing"
-      },
-      {
-        "id": "e2",
-        "fromNode": "costs",
-        "toNode": "total",
-        "flowKind": "value",
-        "fromOutput": "tools"
-      },
-      {
-        "id": "e3",
-        "fromNode": "total",
-        "toNode": "annual",
-        "flowKind": "value",
-        "toParam": "spend"
-      },
-      {
-        "id": "e4",
-        "fromNode": "months",
-        "toNode": "annual",
-        "flowKind": "value",
-        "toParam": "months"
-      }
-    ]
-  }
+ "id": "com.canvasdesk.scheme.intro-whatif",
+ "name_ru": "Сценарии what-if",
+ "name_en": "What-if scenarios",
+ "description_ru": "Бюджет со статьями и годовым итогом: сценарная подмена входа, дельты без правки базы и годовой итог из итога месяца.",
+ "description_en": "A budget with line items and an annual total: override an input in a scenario, see deltas without touching the base, and the annual total from the monthly one.",
+ "category": "onboarding",
+ "category_ru": "Онбординг",
+ "category_en": "Onboarding",
+ "version": "1.1.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 230,
+    "text": "Сценарии what-if\nВключите режим What-if кнопкой внизу экрана, затем двойной клик по строке с числом задаёт подмену: дельты пересчитываются поверх базы, файл не меняется.\nГодовой бюджет собирается из итога месяца и горизонта: значения приходят в него по именам параметров.",
+    "color": "4"
+   },
+   {
+    "id": "costs",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 220,
+    "text": "Статьи бюджета\nПрямые расходы за месяц: маркетинг и инструменты.\n\nmarketing = 1200 $\ntools = 300 $",
+    "color": "5",
+    "label": "Статьи"
+   },
+   {
+    "id": "total",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Итог месяца\nСумма статей: маркетинг плюс инструменты.\n\ntotal = Статьи.marketing + Статьи.tools",
+    "color": "2"
+   },
+   {
+    "id": "months",
+    "type": "text",
+    "x": 440,
+    "y": 300,
+    "width": 260,
+    "height": 180,
+    "text": "Горизонт\nДлительность проекта в месяцах.\n\nmonths = 12",
+    "color": "5"
+   },
+   {
+    "id": "annual",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Годовой бюджет\nИтог месяца, помноженный на горизонт: значения приходят в параметры по имени.\n\n$spend * $months",
+    "color": "2"
+   },
+   {
+    "id": "try",
+    "type": "text",
+    "x": 440,
+    "y": 560,
+    "width": 360,
+    "height": 200,
+    "text": "Попробуйте\nПоднимите маркетинг до полутора тысяч в режиме сценария — итог и годовой бюджет покажут дельты.\nКлик по двойной линии «Статьи → Итог» открывает main stage с веером значений.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "costs",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "marketing"
+   },
+   {
+    "id": "e2",
+    "fromNode": "costs",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "tools"
+   },
+   {
+    "id": "e3",
+    "fromNode": "total",
+    "toNode": "annual",
+    "flowKind": "value",
+    "toParam": "spend"
+   },
+   {
+    "id": "e4",
+    "fromNode": "months",
+    "toNode": "annual",
+    "flowKind": "value",
+    "toParam": "months"
+   }
+  ]
+ }
 }
