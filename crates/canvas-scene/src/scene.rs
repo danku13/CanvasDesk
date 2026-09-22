@@ -291,6 +291,15 @@ pub struct SceneState {
     /// `FsCanvasStorage` (диск + `.bak`, сегодняшнее поведение), web (W6) —
     /// FS Access/OPFS через `with_storage`.
     pub storage: Arc<dyn CanvasStorage>,
+    /// PRD-0007 (FR-048 X4, AC-5.3): теги undo-записей — параллельный стек
+    /// к [`SceneState::undo_stack`]. Тег ставится вызывающим ПЕРЕД
+    /// `push_undo` (снапшот «до»); верхний тег читается ПЕРЕД `take_undo`
+    /// ([`SceneState::peek_undo_tag`]) — так приложение узнаёт, что следующий
+    /// undo откатит пачку автосвязи и обязан спросить подтверждение
+    /// с подсветкой отменяемого. Runtime-поле, не сериализуется.
+    undo_tags: VecDeque<Option<&'static str>>,
+    /// Отложенный тег для СЛЕДУЮЩЕГО `push_undo` (см. [`SceneState::undo_tags`]).
+    pending_undo_tag: Option<&'static str>,
 }
 
 impl SceneState {
@@ -333,6 +342,8 @@ impl SceneState {
             viewport: Viewport::default(),
             revision: 0,
             storage,
+            undo_tags: VecDeque::new(),
+            pending_undo_tag: None,
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
@@ -956,15 +967,32 @@ impl SceneState {
     pub fn push_undo(&mut self, snapshot: Canvas) {
         self.redo_stack.clear();
         self.undo_stack.push_back(snapshot);
+        self.undo_tags.push_back(self.pending_undo_tag.take());
         while self.undo_stack.len() > UNDO_LIMIT {
             self.undo_stack.pop_front();
+            self.undo_tags.pop_front();
         }
+    }
+
+    /// PRD-0007 (FR-048 X4, AC-5.3): пометить следующий undo-снапшот тегом
+    /// (вызывается ДО `push_undo`). Тег — класс действия (сейчас только
+    /// "autolink_batch"); любой следующий `push_undo` без `set_undo_tag`
+    /// кладёт `None` — тег естественным образом устаревает.
+    pub fn set_undo_tag(&mut self, tag: &'static str) {
+        self.pending_undo_tag = Some(tag);
+    }
+
+    /// PRD-0007 (FR-048 X4, AC-5.3): тег ВЕРХНЕГО undo-снапшота (без
+    /// извлечения). `None` — история пуста или верхняя запись без тега.
+    pub fn peek_undo_tag(&self) -> Option<&'static str> {
+        self.undo_tags.back().and_then(|tag| *tag)
     }
 
     /// Состояние «до» последнего действия (FR-006, Ctrl+Z): pop undo-стека,
     /// текущая модель уходит в redo. None — история пуста.
     pub fn take_undo(&mut self) -> Option<Canvas> {
         let before = self.undo_stack.pop_back()?;
+        self.undo_tags.pop_back();
         self.redo_stack.push(self.canvas.clone());
         Some(before)
     }

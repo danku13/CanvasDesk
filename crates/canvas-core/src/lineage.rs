@@ -321,16 +321,18 @@ fn validate_root(
 
 /// Структура Numi-листа ноды: род каждой строки (фенсы — как в движке,
 /// `eval_lines_with_env`) + текст строк после снятия экранирования `\=`.
-struct Sheet {
+/// X4 (autolink): `pub(crate)` — детектор автосвязи читает тот же род
+/// строк/фенсов, что и дерево (один источник истины скана листа).
+pub(crate) struct Sheet {
     /// Род строки: `Some(Assignment/Expression/Prose)` вне фенсов;
     /// `None` — маркер фенса или строка внутри фенса (не считается).
-    kinds: Vec<Option<NumiLineKind>>,
+    pub(crate) kinds: Vec<Option<NumiLineKind>>,
     /// Текст строк (после снятия `\=` — как в `eval_lines_with_env`).
-    texts: Vec<String>,
+    pub(crate) texts: Vec<String>,
 }
 
 impl Sheet {
-    fn build(node: &Node) -> Self {
+    pub(crate) fn build(node: &Node) -> Self {
         let source = node.text.as_deref().unwrap_or_default().replace("\\=", "=");
         let mut kinds = Vec::new();
         let mut texts = Vec::new();
@@ -383,7 +385,7 @@ impl Sheet {
 
     /// Вычисляемое утверждение строки (после снятия `\=` и префикса `=`)
     /// — зеркало `eval_line` (`expr.rs:1306`).
-    fn statement(&self, i: usize) -> Option<&str> {
+    pub(crate) fn statement(&self, i: usize) -> Option<&str> {
         let trimmed = self.texts.get(i)?.trim();
         Some(trimmed.strip_prefix('=').map(str::trim).unwrap_or(trimmed))
     }
@@ -391,8 +393,10 @@ impl Sheet {
 
 /// Ссылка выражения на источник значения (зеркало разрешения имён
 /// движком: [`Env`] expr.rs:419 — входы, параметры, переменные листа).
+/// X4 (autolink): `pub(crate)` — детектор автосвязи матчует `Param`-ссылки
+/// (`$имя`) с именами присваиваний других нод.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Ref {
+pub(crate) enum Ref {
     /// `$in` — единственный вход (при нескольких — ошибка движка).
     InAll,
     /// `$N` (целое ≥ 1 при наличии входов) — N-й позиционный вход.
@@ -410,7 +414,7 @@ enum Ref {
 
 /// Собрать ссылки выражения (порядок обхода AST, без дедупликации —
 /// дедуп внутри строки делается на уровне children).
-fn collect_refs(expr: &expr::Expr, out: &mut Vec<Ref>) {
+pub(crate) fn collect_refs(expr: &expr::Expr, out: &mut Vec<Ref>) {
     match expr {
         expr::Expr::Num(..) => {}
         expr::Expr::Var(name) => out.push(Ref::Var(name.clone())),

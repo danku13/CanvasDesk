@@ -128,12 +128,15 @@ pub enum SettingsRow {
     /// PRD-0007 (FR-048 X2, AC-2.3): лимит глубины авто-раскрытия
     /// explain-дерева (0 — без ограничения) — dropdown в табе «Канвас».
     ExplainDepthLimit,
+    /// PRD-0007 (FR-048 X4, AC-5.5): фоновый детектор автосвязи —
+    /// тумблер в табе «Связи и порты».
+    AutolinkEnabled,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 21] = [
+pub const SETTINGS_ROWS: [SettingsRow; 22] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -155,6 +158,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 21] = [
     SettingsRow::ThemePreset,
     SettingsRow::Language,
     SettingsRow::ExplainDepthLimit,
+    SettingsRow::AutolinkEnabled,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -219,6 +223,9 @@ pub const SETTINGS_TABS: [SettingsTab; 5] = [
             SettingsRow::LinePorts,
             SettingsRow::FocusMode,
             SettingsRow::EdgeAggregation,
+            // PRD-0007 (FR-048 X4): тумблер фонового детектора автосвязи
+            // (AC-5.5 — раздел «Связи и порты»).
+            SettingsRow::AutolinkEnabled,
         ],
     },
     SettingsTab {
@@ -254,6 +261,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapSubZoom => keys::ROW_SNAP_SUB_ZOOM,
         SettingsRow::SnapCoarseZoom => keys::ROW_SNAP_COARSE_ZOOM,
         SettingsRow::ExplainDepthLimit => keys::ROW_EXPLAIN_DEPTH,
+        SettingsRow::AutolinkEnabled => keys::ROW_AUTOLINK,
     }
 }
 
@@ -282,6 +290,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapSubZoom => keys::DESC_SNAP_SUB_ZOOM,
         SettingsRow::SnapCoarseZoom => keys::DESC_SNAP_COARSE_ZOOM,
         SettingsRow::ExplainDepthLimit => keys::DESC_EXPLAIN_DEPTH,
+        SettingsRow::AutolinkEnabled => keys::DESC_AUTOLINK,
     }
 }
 
@@ -319,7 +328,8 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
-        | SettingsRow::HudOnStart => RowKind::Toggle,
+        | SettingsRow::HudOnStart
+        | SettingsRow::AutolinkEnabled => RowKind::Toggle,
     }
 }
 
@@ -384,6 +394,7 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
+        | SettingsRow::AutolinkEnabled
         | SettingsRow::HudOnStart => None,
     }
 }
@@ -529,6 +540,7 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
+        | SettingsRow::AutolinkEnabled
         | SettingsRow::HudOnStart => Vec::new(),
     }
 }
@@ -615,6 +627,7 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::SnapCollision
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
+        | SettingsRow::AutolinkEnabled
         | SettingsRow::HudOnStart => {}
     }
 }
@@ -992,7 +1005,8 @@ mod tests {
                 SettingsRow::PortZone,
                 SettingsRow::LinePorts,
                 SettingsRow::FocusMode,
-                SettingsRow::EdgeAggregation
+                SettingsRow::EdgeAggregation,
+                SettingsRow::AutolinkEnabled
             ]
         );
         assert_eq!(
@@ -1048,6 +1062,11 @@ mod tests {
                 SettingsRow::EdgeAggregation => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.edge_aggregation;
+                }
+                // PRD-0007 (X4, AC-5.5): фоновый детектор автосвязи — булево
+                SettingsRow::AutolinkEnabled => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.autolink_enabled;
                 }
                 SettingsRow::HudOnStart => {
                     assert_eq!(row_kind(row), RowKind::Toggle);

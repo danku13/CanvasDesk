@@ -67,6 +67,9 @@ pub mod id {
     /// Окно проверки цепочки расчёта (PRD-0007 X2, L5, Block — мимо окна
     /// закрывается и глотает; Esc/✕ закрывают, фон — close_explain).
     pub const EXPLAIN: &str = "explain";
+    /// Диалог ревью автосвязи (PRD-0007 X4, L5, Block — модален поверх
+    /// канваса; панель объяснения прячется на время диалога, §6.5).
+    pub const AUTOLINK: &str = "autolink";
     /// Модальный диалог Да/Нет (L5, Block).
     pub const DIALOG: &str = "dialog";
     /// Галерея схем (L5, Block).
@@ -97,6 +100,9 @@ pub enum KeyOwner {
     /// Окно проверки цепочки (PRD-0007 X2): Esc закрывает, прочие клавиши
     /// идут в лестницу канваса (прежнее поведение X2 — только Esc).
     Explain,
+    /// Диалог ревью автосвязи (PRD-0007 X4): Esc закрывает диалог
+    /// (отклонённые забываются — возврат фоновой перепроверкой, AC-5.2).
+    Autolink,
     /// Клавиатура идёт в канвас-лестницу (прежнее поведение).
     Canvas,
 }
@@ -115,6 +121,7 @@ pub fn key_owner(registry: &SurfaceRegistry) -> KeyOwner {
         Some(id::DIALOG) => KeyOwner::Dialog,
         Some(id::STAGE) => KeyOwner::Stage,
         Some(id::EXPLAIN) => KeyOwner::Explain,
+        Some(id::AUTOLINK) => KeyOwner::Autolink,
         Some(id::TEMPLATE_PANEL) => {
             // Фокус решает владелец (прежний гейт 8036: панель без фокуса
             // клавиши не перехватывает — Ctrl+P/лестница работают).
@@ -260,6 +267,15 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::EXPLAIN),
         );
     }
+    // PRD-0007 (X4): диалог ревью автосвязи — верхний модал (§6.5): Esc/
+    // ✕ закрывают, клик мимо — закрыть и глотнуть; панель объяснения,
+    // если открыта, рендером прячется на время диалога
+    if app.autolink_review.is_some() {
+        reg.add(
+            SurfaceDecl::new(id::AUTOLINK, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::AUTOLINK),
+        );
+    }
     if app.dialog.is_some() {
         reg.add(
             SurfaceDecl::new(id::DIALOG, UiLayer::Modals, CapturePolicy::Block)
@@ -327,6 +343,7 @@ const VISUAL_ORDER: &[&str] = &[
     id::ONBOARDING,
     id::DIALOG,
     id::EXPLAIN,
+    id::AUTOLINK,
     id::STAGE,
 ];
 
@@ -437,6 +454,14 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 rect(button_rect(app.settings.button_corner, viewport)),
                 "settings-button",
             ));
+            // PRD-0007 (X4, AC-5.5): бейдж предложений автосвязи — клик
+            // открывает ревью (та же видимость, что в рендере бейджа)
+            if app.autolink_badge_visible() {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(crate::autolink_ui::badge_rect([vw, vh])),
+                    "autolink-badge",
+                ));
+            }
         }
         id::SETTINGS => {
             let layout = modal_layout(app.settings_tab, viewport);
@@ -559,6 +584,14 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(win), "explain-window"));
+        }
+        id::AUTOLINK => {
+            // Диалог ревью (PRD-0007 X4): rect диалога — pick-зона;
+            // внутри — on_autolink_click, фон — Backdrop (закрыть)
+            let win = crate::autolink_ui::dialog_rect([vw, vh]);
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(win), "autolink-dialog"));
         }
         id::GALLERY => {
             let registry = canvas_core::schemes::SchemeRegistry::embedded();

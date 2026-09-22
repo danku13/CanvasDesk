@@ -92,6 +92,11 @@ pub mod whatif_ui;
 /// состояний §6.4 Loading/Ready/Stale, hit-тесты). Рендер и ввод — в app.
 pub mod explain_ui;
 
+/// PRD-0007 (FR-048 X4, F-7): диалог ревью автосвязи — чистая модель
+/// (состояния предложений AC-5.2, группировка/сортировка У7, геометрия,
+/// hit-тесты). Рендер/ввод/создание связей — в app.
+pub mod autolink_ui;
+
 /// Чистая UI-логика приложения: геометрия оверлеев (контекстное меню,
 /// панель настроек), hit-тесты, генератор id заметок, детектор двойного
 /// клика. Не зависит от окна и GPU — используется бинарём и тестами.
@@ -1084,6 +1089,9 @@ pub mod ui {
         /// (нижний бар; вход также — Ctrl+Shift+I и пилюля). Галочка ✓ —
         /// режим активен.
         WhatIf,
+        /// PRD-0007 (FR-048 X4, AC-5.1): «Найти связи по именам» — немедленный
+        /// запуск детектора автосвязи + диалог ревью (не переключатель).
+        AutolinkFind,
         /// FR-038 п.16 (T-038.5): «Выровнять по горизонтали» — ряд по центрам
         /// (общая ось Y). Виден ТОЛЬКО при N≥3 выделенных нодах.
         AlignHorizontal,
@@ -1097,7 +1105,7 @@ pub mod ui {
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 7] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 8] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
@@ -1105,6 +1113,7 @@ pub mod ui {
         CanvasMenuItem::DesktopMode,
         CanvasMenuItem::BottleneckOverlay,
         CanvasMenuItem::WhatIf,
+        CanvasMenuItem::AutolinkFind,
     ];
 
     /// Минимальное число выделенных нод для batch-операций выравнивания
@@ -1119,7 +1128,7 @@ pub mod ui {
         CanvasMenuItem::DistributeEvenly,
     ];
 
-    /// Видимый список пунктов меню канваса: базовые 7 + batch-выравнивание
+    /// Видимый список пунктов меню канваса: базовые 8 + batch-выравнивание
     /// при `align_visible` (N≥3 выделенных, [`ALIGN_MIN_SELECTION`]). Список
     /// единый источник для отрисовки, хит-теста и airspace — расхождений
     /// высоты меню не бывает. Порядок фиксирован (детерминизм).
@@ -1187,6 +1196,10 @@ pub mod ui {
                     if whatif_on { check } else { "" },
                     i18n::tr(language, crate::i18n::keys::MENU_WHATIF)
                 )
+            }
+            // PRD-0007 (FR-048 X4, AC-5.1): действие, не переключатель
+            CanvasMenuItem::AutolinkFind => {
+                i18n::tr(language, crate::i18n::keys::MENU_AUTOLINK_FIND).to_owned()
             }
             // FR-038 (T-038.5): batch-операции — действия, не переключатели
             // (галочек нет; видимость пунктов решает список меню, N≥3)
@@ -2223,7 +2236,9 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            assert_eq!(n, 7);
+            // PRD-0007 (X4): 8-й пункт — «Найти связи по именам» (действие)
+            assert_eq!(n, 8);
+            assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::AutolinkFind);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
             assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
             assert_eq!(
