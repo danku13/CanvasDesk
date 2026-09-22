@@ -94,9 +94,9 @@ use canvas_render::animate::{
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{
-    build_stage_edge_instances, card_instance, drop_ghost, template_band_instance,
+    build_stage_edge_instances_with_alpha, card_instance, drop_ghost, template_band_instance,
     template_icon_quads, title_for, BundleContext, CardInstance, FocusView, SpillWaveView,
-    EDGE_COLOR, FLOW_EDGE_COLOR, HEADER_HEIGHT, SELECTION_BORDER,
+    EDGE_COLOR, FLOW_EDGE_COLOR, HEADER_HEIGHT, SELECTION_BORDER, UNMAPPED_EDGE_COLOR,
 };
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
@@ -108,6 +108,10 @@ use canvas_render::minimap::{Minimap, MINIMAP_H, MINIMAP_W};
 // инъекция (натив: pollster::block_on, web: spawn_local + слот доставки),
 // паттерн W3-сервисов: платформенный выбор в точке сборки бинарника
 use crate::flowmap_ui;
+// FR-044 Р-4/Р-5: панель «Как считается» main stage — модель/раскладка/hit
+// (чистый модуль); состояние подсветки — StageCalcFocus в App.
+use crate::calc_panel_ui;
+use crate::calc_panel_ui::{layout as calc_panel_layout, PanelValues, RowValue, StageCalcFocus};
 use canvas_render::renderer_init::{RendererLaunch, RendererLauncher, RendererSlot};
 use canvas_render::search_ui::{
     layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
@@ -1307,6 +1311,13 @@ fn node_display_label(node: &Node) -> String {
     node.label.clone().unwrap_or_else(|| node.id.clone())
 }
 
+/// FR-044 Р-5: приглушение screen-текста — множитель альфы packed-RGBA
+/// (glyphon `Color`: a<<24|r<<16|g<<8|b); паттерн dim_factor для текстов.
+fn dim_text_color(color: canvas_render::Color, alpha: f32) -> canvas_render::Color {
+    let a = ((color.a() as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+    canvas_render::Color::rgba(color.r(), color.g(), color.b(), a)
+}
+
 /// Ярление заливки для hover-подсветки (кнопки настроек/темы): практика
 /// аффорданса — интерактивная кнопка отвечает на курсор.
 fn hover_fill(c: [f32; 4]) -> [f32; 4] {
@@ -1389,6 +1400,23 @@ struct MainStageState {
     slice: Canvas,
     /// Масштаб сжатия раскладки (обновляется на кадре в `relayout`).
     scale: f32,
+}
+
+/// FR-044 Р-1/Р-4: совместный контекст кадра main stage — один расчёт
+/// для рендера и hit-теста (детерминизм, инвариант 3): геометрия веера,
+/// зона клампа пилюль с учётом панели «Как считается», модель панели
+/// и активная подсветка зависимостей (Р-5).
+struct StageFrameCtx {
+    /// Геометрия линий веера (те же, что у точек портов и hit-теста).
+    lines: Vec<canvas_core::StageEdgeLine>,
+    /// Модель панели «Как считается» (все входы приёмника, Р-8).
+    model: calc_panel_ui::CalcPanelModel,
+    /// Раскладка панели (None — нет ни переменных, ни формул).
+    panel: Option<calc_panel_ui::CalcPanelLayout>,
+    /// Зона клампа пилюль (stage-локальные px; низ — верх панели − 8).
+    zone: StageLocalRect,
+    /// Активная подсветка (hover-превью перекрывает фиксированную).
+    focus: Option<StageCalcFocus>,
 }
 
 impl MainStageState {
@@ -1561,6 +1589,18 @@ pub struct App {
     /// FR-042 (E3): открытый main stage (детализация пучка). None — режим
     /// выключен; Q6 — взаимоисключителен с полноэкранными оверлеями.
     main_stage: Option<MainStageState>,
+    /// FR-044 Р-5: зафиксированная подсветка зависимостей «формула ⇄
+    /// переменные ⇄ рёбра» (клик по строке панели/пилюле/ребру веера).
+    /// Сброс — Esc (Р-7 — первое Esc), клик по фону stage, закрытие stage.
+    /// Runtime-состояние: не пишется в undo и `.canvas` (инвариант 8).
+    stage_calc_focus: Option<StageCalcFocus>,
+    /// FR-044 Р-5: hover-превью подсветки (живой отклик без фиксации;
+    /// визуально перекрывает фиксированную, на оставлении курсора гаснет).
+    stage_calc_hover: Option<StageCalcFocus>,
+    /// Тестовый оверрайд logical-вьюпорта: unit-тесты кликов по
+    /// screen-space UI без winit-окна (viewport_logical читает первым).
+    #[cfg(test)]
+    test_viewport: Option<[f32; 2]>,
     /// PRD-0007 (FR-048 X2): открытое окно проверки цепочки расчёта
     /// (Loading/Ready; Stale — чип внутри). None — окно закрыто. Взаимо-
     /// исключителен с main stage (F-10) — открытие закрывает stage и наоборот.
@@ -1587,6 +1627,11 @@ pub struct App {
     /// подсветки отменяемого при подтверждении отката. Инвалидация — по
     /// тегу верхнего undo-снапшота (любое другое действие снимает тег).
     autolink_batch: Option<Vec<String>>,
+    /// PRD-0007 (FR-048 X6, F-12): кэш индикатора покрытия цепочками —
+    /// `(ревизия, процент)`: пересчёт — O(цифры × дерево), не на кадр;
+    /// None — кэш пуст (первый кадр/смена настройки). Процент `None`
+    /// внутри — цифр нет (индикатор скрыт).
+    coverage_cache: Option<(u64, Option<u8>)>,
     /// FR-042 (E2): ребро пучка под курсором (live-индекс) — hover-бамп
     /// агрегированной линии; вычисляется на каждый кадр ввода (паттерн
     /// `hovered`), в кэш не пишется.
@@ -1907,6 +1952,10 @@ impl App {
             hovered: None,
             // FR-042: main stage закрыт; hover пучка пуст
             main_stage: None,
+            stage_calc_focus: None,
+            stage_calc_hover: None,
+            #[cfg(test)]
+            test_viewport: None,
             // PRD-0007 (X2): окно проверки закрыто, сессионный кэш пуст
             explain: None,
             explain_cache: None,
@@ -1918,6 +1967,7 @@ impl App {
             autolink_review: None,
             autolink_scroll: 0.0,
             autolink_batch: None,
+            coverage_cache: None,
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             spill_hits: Vec::new(),
@@ -4673,6 +4723,11 @@ impl App {
     /// (R10: в desktop-режиме window.scale_factor() после репарентинга
     /// недостоверен — кнопки улетали за видимую область).
     fn viewport_logical(&self) -> Vec2 {
+        // Тестовый оверрайд: клики по screen-space UI без окна
+        #[cfg(test)]
+        if let Some(viewport) = self.test_viewport {
+            return viewport;
+        }
         match &self.window {
             Some(window) => {
                 let size = window.inner_size();
@@ -8516,6 +8571,12 @@ impl App {
                 self.settings.autolink_enabled = !self.settings.autolink_enabled;
                 self.autolink_scan_due = None;
             }
+            // PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками —
+            // opt-in; кэш расчёта инвалидируется при переключении
+            SettingsRow::ExplainCoverage => {
+                self.settings.explain_coverage = !self.settings.explain_coverage;
+                self.coverage_cache = None;
+            }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -9001,6 +9062,8 @@ impl App {
                         SettingsRow::EdgeAggregation => self.settings.edge_aggregation,
                         // PRD-0007 (X4, AC-5.5): тумблер фонового детектора
                         SettingsRow::AutolinkEnabled => self.settings.autolink_enabled,
+                        // PRD-0007 (X6, F-12): индикатор покрытия цепочками
+                        SettingsRow::ExplainCoverage => self.settings.explain_coverage,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
@@ -9233,7 +9296,18 @@ impl App {
                     false
                 }
             }
-            ui_registry::id::STAGE => self.main_stage.take().is_some(),
+            ui_registry::id::STAGE => {
+                // FR-044 Р-7: при активной подсветке первое Esc гасит
+                // подсветку (stage остаётся открытым), второе закрывает;
+                // при неактивной — без изменений (первое Esc закрывает)
+                if self.stage_calc_focus.take().is_some() {
+                    self.stage_calc_hover = None;
+                    true
+                } else {
+                    self.stage_calc_hover = None;
+                    self.main_stage.take().is_some()
+                }
+            }
             // FR-027: двухэтапный Esc — подменю → меню → закрыто
             ui_registry::id::HELP_MENU => {
                 if let Some(menu) = self.help_menu.take() {
@@ -9942,12 +10016,218 @@ impl App {
         }
     }
 
+    /// FR-044 Р-4: модель панели «Как считается» для приёмника среза —
+    /// ВСЕ входы приёмника канваса (панель полная, Р-8) + значения по
+    /// адресации из активных решений потока (what-if подмены видны).
+    fn stage_calc_model(&self, stage: &MainStageState) -> calc_panel_ui::CalcPanelModel {
+        let values = PanelValues {
+            lines: &self.scene.flow_active.lines,
+            named: &self.scene.flow_active.named,
+            outputs: &self.scene.flow_active.outputs,
+        };
+        calc_panel_ui::build_model(
+            &self.scene.canvas,
+            &stage.slice.nodes[1].id,
+            &stage.edges,
+            &values,
+        )
+    }
+
+    /// FR-044 Р-5: активная подсветка — hover-превью перекрывает
+    /// фиксированную (живой отклик; при уходе курсора возвращается
+    /// зафиксированная).
+    fn stage_calc_active(&self) -> Option<&StageCalcFocus> {
+        self.stage_calc_hover
+            .as_ref()
+            .or(self.stage_calc_focus.as_ref())
+    }
+
+    /// FR-044 Р-1/Р-4: совместный контекст кадра main stage — геометрия
+    /// веера, зона клампа пилюль с учётом панели «Как считается» (панель
+    /// съедает низ зоны, Р-1 «между заголовком и панелью») и подсветка.
+    /// Один расчёт для рендера и hit-теста (детерминизм, инвариант 3).
+    fn stage_frame_ctx(
+        &self,
+        stage: &MainStageState,
+        rect: &canvas_core::bundles::Rect,
+        s: f32,
+    ) -> StageFrameCtx {
+        let metrics = StageMetrics {
+            header_h: HEADER_HEIGHT,
+            body_top_gap: BODY_TOP_GAP,
+            body_line: BODY_LINE_HEIGHT,
+            result_line: RESULT_LINE_HEIGHT,
+            body_padding: BODY_PADDING,
+            strip_extra: 6.0,
+        };
+        let footers = [
+            self.scene
+                .expr_results
+                .contains_key(&stage.slice.nodes[0].id),
+            self.scene
+                .expr_results
+                .contains_key(&stage.slice.nodes[1].id),
+        ];
+        let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
+        let model = self.stage_calc_model(stage);
+        // Панель: нижняя зона stage; верх доступной зоны — 96 px от верха
+        // (заголовок 56 + минимальная зона веера 40)
+        let panel = calc_panel_layout(&model, rect.w, rect.h, 96.0);
+        let panel_top_screen = panel.as_ref().map_or(rect.h - 46.0, |p| p.top);
+        let zone = StageLocalRect {
+            x: 0.0,
+            y: 56.0 / s,
+            w: rect.w / s,
+            h: ((panel_top_screen - 8.0 - 56.0) / s).max(0.0),
+        };
+        StageFrameCtx {
+            lines,
+            model,
+            panel,
+            zone,
+            focus: self.stage_calc_active().cloned(),
+        }
+    }
+
+    /// FR-044 Р-1: rect'ы пилюль веера (stage-локальные px) — тот же
+    /// расчёт, что в кадре ([`Self::stage_frame_ctx`]); hit-тест клика
+    /// по пилюле (Р-5: клик = выделение ребра + синхронная подсветка).
+    /// `src_label_max`/`dst_label_max` — ширины колонок подписей концов
+    /// (коридор сужается на них — владелец 2026-09-22).
+    fn stage_pill_rects(
+        &self,
+        stage: &MainStageState,
+        ctx: &StageFrameCtx,
+    ) -> Vec<(usize, StageLocalRect)> {
+        let mut pills_in: Vec<(usize, f32, f32, Option<f32>)> = Vec::new();
+        let mut mids: Vec<[f32; 2]> = Vec::new();
+        for (i, _edge) in stage.slice.edges.iter().enumerate() {
+            let Some(line) = ctx.lines.get(i) else {
+                continue;
+            };
+            mids.push(line.mid);
+            pills_in.push((i, 0.0, 34.0, Some(line.mid[0]))); // ширина после сортировки
+        }
+        // Сортировка по вертикали середин (прототип R7: стопка следует
+        // геометрии веера) с сохранением индекса ребра
+        let mut order: Vec<usize> = (0..mids.len()).collect();
+        order.sort_by(|&a, &b| mids[a][1].total_cmp(&mids[b][1]));
+        let src_title = title_for(&stage.slice.nodes[0]);
+        let sorted: Vec<(usize, f32, f32, Option<f32>)> = order
+            .iter()
+            .map(|&oi| {
+                let (item, _, h, pref) = pills_in[oi];
+                let edge = &stage.slice.edges[item];
+                let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
+                let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
+                let w =
+                    (addr.chars().count().max(value.chars().count()) as f32 * 7.2 + 24.0).max(56.0);
+                (item, w, h, pref)
+            })
+            .collect();
+        // Коридор между колонками нод, дополнительно суженый на зоны
+        // подписей концов рёбер (7b): пилюли не наезжают на подписи
+        let src = &stage.slice.nodes[0];
+        let dst = &stage.slice.nodes[1];
+        let mut src_label_max = 0.0_f32;
+        let mut dst_label_max = 0.0_f32;
+        for edge in stage.slice.edges.iter() {
+            src_label_max = src_label_max.max(self.stage_src_label_width(edge));
+            dst_label_max = dst_label_max.max(self.stage_dst_label_width(edge, &src_title));
+        }
+        let mut corridor = fan_corridor(
+            StageLocalRect {
+                x: src.x,
+                y: src.y,
+                w: src.width,
+                h: src.height,
+            },
+            StageLocalRect {
+                x: dst.x,
+                y: dst.y,
+                w: dst.width,
+                h: dst.height,
+            },
+            70.0,
+        );
+        let left_needed = src.x + src.width + 10.0 + src_label_max + 6.0;
+        let right_limit = dst.x - 10.0 - dst_label_max - 6.0;
+        if left_needed > corridor.x {
+            let d = left_needed - corridor.x;
+            corridor.x += d;
+            corridor.w -= d;
+        }
+        let over = corridor.x + corridor.w - right_limit;
+        if over > 0.0 {
+            corridor.w -= over;
+        }
+        corridor.w = corridor.w.max(0.0);
+        let axis_y = ctx.zone.y + ctx.zone.h / 2.0;
+        let laid = stage_fan_label_layout(sorted, corridor, ctx.zone, axis_y);
+        laid.pills
+            .iter()
+            .map(|pill| {
+                (
+                    pill.item,
+                    StageLocalRect {
+                        x: pill.rect.x,
+                        y: pill.rect.y,
+                        w: pill.rect.w,
+                        h: pill.rect.h,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// FR-044 (7b): ширина подписи значения у истока (0 — нет значения).
+    fn stage_src_label_width(&self, edge: &Edge) -> f32 {
+        let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
+        if value.is_empty() {
+            0.0
+        } else {
+            value.chars().count() as f32 * 6.3 + 12.0
+        }
+    }
+
+    /// FR-044 (7b): ширина подписи квалифицированного адреса у приёмника
+    /// (0 — адресации нет).
+    fn stage_dst_label_width(&self, edge: &Edge, src_title: &str) -> f32 {
+        let qualified = self.stage_dst_label_text(edge, src_title);
+        if qualified.is_empty() {
+            0.0
+        } else {
+            qualified.chars().count() as f32 * 6.3 + 12.0
+        }
+    }
+
+    /// FR-044 (7b): текст подписи адреса у приёмника —
+    /// «{исток} · строка N» / «{исток}.{выход}»; без адресации — имя истока
+    /// (фолбэк прежнего поведения 7b).
+    fn stage_dst_label_text(&self, edge: &Edge, src_title: &str) -> String {
+        if let Some(line_no) = edge.from_line {
+            format!(
+                "{src_title} · {}",
+                i18n::trf(
+                    self.settings.language,
+                    keys::STAGE_LINE_LABEL,
+                    &[("n", &(line_no + 1).to_string())],
+                )
+            )
+        } else if let Some(output) = edge.from_output.as_deref() {
+            format!("{src_title}.{output}")
+        } else {
+            src_title.to_owned()
+        }
+    }
+
     /// FR-042 (E3) + FR-044: кадр main stage — паритет с прототипом
     /// prototype-mainstage-anatomy.html (drawStage). Затемнение фона,
     /// подложка, заголовок «Пучок: A → B · ×N» с кнопкой ✕, веер рёбер
     /// с точками портов, ПОЛНЫЕ карточки среза (заголовок, построчные
     /// результаты, полоса результата), пилюли подписей лейн-стопкой в
-    /// коридоре между колонками ([`canvas_core::bundles::stage_fan_label_layout`]).
+    /// коридоре между колонками, панель «Как считается» с подсветкой
+    /// зависимостей ([`StageFrameCtx`] — общий расчёт с hit-тестом).
     /// Возвращает (квады, screen-тексты) — рендерер выводит их модальным
     /// проходом после всего живого контента (инвариант 8: модальность).
     fn stage_frame(
@@ -9968,27 +10248,20 @@ impl App {
         // сжата тем же коэффициентом — карточка и её текст сжимаются вместе);
         // минимум 8 px — читаемость деградационных режимов.
         let font = |px: f32| (px * s).max(8.0);
-        // FR-044 (владелец, 2026-09-22): геометрия веера — якоря рёбер на
-        // строках значений (from_line/to_param → строка карточки), группы
-        // одинаковых якорей расходятся ±12 px. Метрики — константы рендера,
-        // чтобы геометрия и отрисовка строк не разъезжались.
-        let metrics = StageMetrics {
-            header_h: HEADER_HEIGHT,
-            body_top_gap: BODY_TOP_GAP,
-            body_line: BODY_LINE_HEIGHT,
-            result_line: RESULT_LINE_HEIGHT,
-            body_padding: BODY_PADDING,
-            strip_extra: 6.0,
+        // FR-044: совместный контекст кадра — геометрия веера, зона пилюль
+        // с учётом панели «Как считается» (Р-1/Р-4) и подсветка (Р-5);
+        // hit-тест клика пересчитывает те же значения (детерминизм).
+        let ctx = self.stage_frame_ctx(stage, &rect, s);
+        let lines = &ctx.lines;
+        // FR-044 Р-5: альфа ребра среза по индексу — рёбра вне множества
+        // фокуса приглушены (0.35, паттерн dim_factor)
+        let edge_alpha = |i: usize| -> f32 {
+            match &ctx.focus {
+                Some(focus) if focus.edges.contains(&stage.edges[i]) => 1.0,
+                Some(_) => 0.35,
+                None => 1.0,
+            }
         };
-        let footers = [
-            self.scene
-                .expr_results
-                .contains_key(&stage.slice.nodes[0].id),
-            self.scene
-                .expr_results
-                .contains_key(&stage.slice.nodes[1].id),
-        ];
-        let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
         // 1) Затемнение фона (§7.5: тёмная 0.6 / светлая 0.5) — весь вьюпорт
         quads.push(CardInstance {
             pos: camera.screen_to_world([0.0, 0.0], viewport),
@@ -10023,6 +10296,22 @@ impl App {
             color: palette.title,
             align: TextAlign::Left,
         });
+        // FR-044 Р-8: счётчик внешних входов приёмника (вне пучка) —
+        // «+N внешн. вход(а/ов)» под заголовком (панель полная, источники
+        // видны мини-карточками под истоком)
+        if ctx.model.ext_count > 0 {
+            texts.push(OwnedScreenText {
+                text: self.trf(
+                    keys::STAGE_CALC_EXT,
+                    &[("n", &ctx.model.ext_count.to_string())],
+                ),
+                origin: transform.map_point([16.0, 30.0]),
+                width: transform.map_size(rect.w) - 200.0,
+                font_size: font(10.5),
+                color: palette.quote,
+                align: TextAlign::Left,
+            });
+        }
         // Кнопка ✕ — правый верхний угол (rect пересчитывается в клике —
         // та же формула, состояния не требует)
         let close = [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0];
@@ -10056,12 +10345,13 @@ impl App {
             Selection::Edge(live) => stage.edges.iter().position(|&e| e == live),
             Selection::Node(_) => None,
         });
-        for inst in build_stage_edge_instances(
+        for inst in build_stage_edge_instances_with_alpha(
             &stage.slice,
-            &lines,
+            lines,
             stage.slice.edges.len(),
             selected_slice,
             None,
+            edge_alpha,
         ) {
             quads.push(transform.instance_to_world(&inst, camera, viewport));
         }
@@ -10072,13 +10362,15 @@ impl App {
             let Some(line) = lines.get(i) else {
                 continue;
             };
-            let fill = if selected_slice == Some(i) {
+            let mut fill = if selected_slice == Some(i) {
                 SELECTION_BORDER
             } else if edge.flow_kind() == FlowKind::Value {
                 FLOW_EDGE_COLOR
             } else {
                 EDGE_COLOR
             };
+            // FR-044 Р-5: точки портов приглушаются вместе с ребром
+            fill[3] *= edge_alpha(i);
             for p in [line.from, line.to] {
                 let d = 7.0;
                 quads.push(transform.instance_to_world(
@@ -10256,185 +10548,359 @@ impl App {
         // — квалифицированный адрес «Объект · строка N / Объект.output».
         // Подложка — цвет подложки stage (меню): подписи не сливаются с
         // линиями веера (прототип R6: подложка от рёбер). Оценка ширины —
-        // advance ≈ 0.6·шрифта (как у строк карточки).
+        // advance ≈ 0.6·шрифта (как у строк карточки). Ширины колонок —
+        // те же хелперы, что сужают коридор пилюль (единый расчёт).
+        // FR-044 Р-5: подписи рёбер вне фокуса приглушены.
         let src_title = title_for(&stage.slice.nodes[0]);
-        let mut src_label_max = 0.0_f32;
-        let mut dst_label_max = 0.0_f32;
         for (i, edge) in stage.slice.edges.iter().enumerate() {
             let Some(line) = lines.get(i) else {
                 continue;
             };
+            let alpha = edge_alpha(i);
             // Исток: значение строки/ноды (подпись значения)
             let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
             if !value.is_empty() {
-                let w = value.chars().count() as f32 * 6.3 + 12.0;
-                src_label_max = src_label_max.max(w);
+                let w = self.stage_src_label_width(edge);
                 let bx = line.from[0] + 10.0;
                 let by = line.from[1] - 9.0;
+                let mut fill = palette.menu_fill;
+                fill[3] *= alpha;
                 quads.push(transform.instance_to_world(
                     &CardInstance {
                         pos: [bx, by],
                         size: [w, 18.0],
-                        fill: palette.menu_fill,
+                        fill,
                         border: [0.0; 4],
                         params: [4.0, 0.0, 0.0, 1.0],
                     },
                     camera,
                     viewport,
                 ));
+                let color = dim_text_color(palette.body, alpha);
                 texts.push(OwnedScreenText {
                     text: value,
                     origin: transform.map_point([bx + 6.0, by + 13.0]),
                     width: transform.map_size(w),
                     font_size: font(10.5),
-                    color: palette.body,
+                    color,
                     align: TextAlign::Left,
                 });
             }
             // Приёмник: квалифицированный адрес истока (Объект.Поле)
-            let qualified = if let Some(line_no) = edge.from_line {
-                format!(
-                    "{src_title} · {}",
-                    i18n::trf(
-                        self.settings.language,
-                        keys::STAGE_LINE_LABEL,
-                        &[("n", &(line_no + 1).to_string())],
-                    )
-                )
-            } else if let Some(output) = edge.from_output.as_deref() {
-                format!("{src_title}.{output}")
-            } else {
-                src_title.clone()
-            };
-            let qualified = truncate_chars(&qualified, 26);
+            let qualified = truncate_chars(&self.stage_dst_label_text(edge, &src_title), 26);
             if !qualified.is_empty() {
                 let w = qualified.chars().count() as f32 * 6.3 + 12.0;
-                dst_label_max = dst_label_max.max(w);
                 let bx = line.to[0] - 10.0 - w;
                 let by = line.to[1] - 9.0;
+                let mut fill = palette.menu_fill;
+                fill[3] *= alpha;
                 quads.push(transform.instance_to_world(
                     &CardInstance {
                         pos: [bx, by],
                         size: [w, 18.0],
-                        fill: palette.menu_fill,
+                        fill,
                         border: [0.0; 4],
                         params: [4.0, 0.0, 0.0, 1.0],
                     },
                     camera,
                     viewport,
                 ));
+                let color = dim_text_color(palette.edge_label, alpha);
                 texts.push(OwnedScreenText {
                     text: qualified,
                     origin: transform.map_point([bx + 6.0, by + 13.0]),
                     width: transform.map_size(w),
                     font_size: font(10.5),
-                    color: palette.edge_label,
+                    color,
                     align: TextAlign::Left,
                 });
             }
         }
         // 8) Пилюли подписей веера (FR-044 Р-1): адресация + значение,
-        // лейн-стопка в коридоре между колонками (stage_fan_label_layout:
-        // без пересечений, кламп в зону; порядок — по вертикали середин;
-        // пилюля тянется к середине СВОЕЙ линии — preferred_x)
-        let mut pills_in: Vec<(usize, f32, f32, Option<f32>)> = Vec::new();
-        let mut mids: Vec<[f32; 2]> = Vec::new();
-        for (i, _edge) in stage.slice.edges.iter().enumerate() {
-            let Some(line) = lines.get(i) else {
-                continue;
-            };
-            mids.push(line.mid);
-            pills_in.push((i, 0.0, 34.0, Some(line.mid[0]))); // ширина после сортировки
-        }
-        // Сортировка по вертикали середин (прототип R7: стопка следует
-        // геометрии веера) с сохранением индекса ребра
-        let mut order: Vec<usize> = (0..mids.len()).collect();
-        order.sort_by(|&a, &b| mids[a][1].total_cmp(&mids[b][1]));
-        let sorted: Vec<(usize, f32, f32, Option<f32>)> = order
-            .iter()
-            .map(|&oi| {
-                let (item, _, h, pref) = pills_in[oi];
-                let addr = truncate_chars(&self.stage_edge_addr_text(&stage.slice.edges[item]), 42);
-                let value =
-                    truncate_chars(&self.stage_edge_value_text(&stage.slice.edges[item]), 42);
-                let w =
-                    (addr.chars().count().max(value.chars().count()) as f32 * 7.2 + 24.0).max(56.0);
-                (item, w, h, pref)
-            })
-            .collect();
-        // Зона и коридор — stage-локальные px (заголовок сверху, подсказка
-        // снизу; коридор — между колонками нод, pad прототипа 70 px),
-        // дополнительно сужен на зоны подписей концов рёбер (7b): пилюли
-        // не наезжают на подписи значений/адресов (владелец 2026-09-22:
-        // «тултипы не залезают на edge и подписи»)
-        let zone = StageLocalRect {
-            x: 0.0,
-            y: 56.0 / s,
-            w: rect.w / s,
-            h: ((rect.h - 56.0 - 46.0) / s).max(0.0),
-        };
-        let src = &stage.slice.nodes[0];
-        let dst = &stage.slice.nodes[1];
-        let src_labels = StageLocalRect {
-            x: src.x,
-            y: src.y,
-            w: src.width,
-            h: src.height,
-        };
-        let dst_labels = StageLocalRect {
-            x: dst.x,
-            y: dst.y,
-            w: dst.width,
-            h: dst.height,
-        };
-        let mut corridor = fan_corridor(src_labels, dst_labels, 70.0);
-        let left_needed = src.x + src.width + 10.0 + src_label_max + 6.0;
-        let right_limit = dst.x - 10.0 - dst_label_max - 6.0;
-        if left_needed > corridor.x {
-            let d = left_needed - corridor.x;
-            corridor.x += d;
-            corridor.w -= d;
-        }
-        let over = corridor.x + corridor.w - right_limit;
-        if over > 0.0 {
-            corridor.w -= over;
-        }
-        corridor.w = corridor.w.max(0.0);
-        let axis_y = zone.y + zone.h / 2.0;
-        let laid = stage_fan_label_layout(sorted, corridor, zone, axis_y);
-        for pill in &laid.pills {
-            let edge = &stage.slice.edges[pill.item];
+        // лейн-стопка в коридоре между колонками — общий расчёт с hit-
+        // тестом клика ([`Self::stage_pill_rects`], детерминизм); зона
+        // клампа сжата верхом панели «Как считается» (Р-1 «между
+        // заголовком и панелью»); подсветка Р-5 — пилюли вне фокуса
+        // приглушены
+        for (item, pill_rect) in self.stage_pill_rects(stage, &ctx) {
+            let edge = &stage.slice.edges[item];
             let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
             let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
-            let sel = selected_slice == Some(pill.item);
+            let sel = selected_slice == Some(item);
+            let alpha = edge_alpha(item);
+            let mut fill = palette.edge_label_fill;
+            fill[3] *= alpha;
             quads.push(transform.instance_to_world(
                 &CardInstance {
-                    pos: [pill.rect.x, pill.rect.y],
-                    size: [pill.rect.w, pill.rect.h],
-                    fill: palette.edge_label_fill,
+                    pos: [pill_rect.x, pill_rect.y],
+                    size: [pill_rect.w, pill_rect.h],
+                    fill,
                     border: if sel { SELECTION_BORDER } else { [0.0; 4] },
                     params: [9.0, 0.0, 0.0, 1.0],
                 },
                 camera,
                 viewport,
             ));
+            let addr_color = dim_text_color(palette.title, alpha);
             texts.push(OwnedScreenText {
                 text: addr,
-                origin: transform.map_point([pill.rect.x + 12.0, pill.rect.y + 5.0]),
-                width: transform.map_size(pill.rect.w - 16.0),
+                origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 5.0]),
+                width: transform.map_size(pill_rect.w - 16.0),
                 font_size: font(12.0),
-                color: palette.title,
+                color: addr_color,
                 align: TextAlign::Left,
             });
             if !value.is_empty() {
+                let value_color = dim_text_color(palette.edge_label, alpha);
                 texts.push(OwnedScreenText {
                     text: value,
-                    origin: transform.map_point([pill.rect.x + 12.0, pill.rect.y + 18.0]),
-                    width: transform.map_size(pill.rect.w - 16.0),
+                    origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 18.0]),
+                    width: transform.map_size(pill_rect.w - 16.0),
                     font_size: font(11.0),
-                    color: palette.edge_label,
+                    color: value_color,
                     align: TextAlign::Left,
                 });
+            }
+        }
+        // 8b) Панель «Как считается» (FR-044 Р-4): screen-space каркас
+        // у приёмника (низ stage), две группы — «Переменные · входящие
+        // значения» (value-точка, квалифицированный адрес + значение,
+        // unmapped — янтарный контур и «не подставлено») и «Расчёт ·
+        // формулы» (маркер ƒ, формула с путями операндов). Подсветка Р-5:
+        // строки фокуса — акцентная рамка, остальные приглушены (0.5).
+        if let Some(panel) = &ctx.panel {
+            let px = rect.x + panel.rect[0];
+            let py = rect.y + panel.rect[1];
+            quads.push(CardInstance {
+                pos: camera.screen_to_world([px, py], viewport),
+                size: [panel.rect[2] / zoom, panel.rect[3] / zoom],
+                fill: palette.menu_fill,
+                border: palette.palette_border,
+                params: [10.0 / zoom, 0.0, 0.0, 1.0],
+            });
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::STAGE_CALC_VARS).to_owned(),
+                origin: [px + panel.vars_title[0], py + panel.vars_title[1] + 2.0],
+                width: panel.vars_title[2],
+                font_size: font(11.0),
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::STAGE_CALC_FORMULAS).to_owned(),
+                origin: [
+                    px + panel.formulas_title[0],
+                    py + panel.formulas_title[1] + 2.0,
+                ],
+                width: panel.formulas_title[2],
+                font_size: font(11.0),
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            let any_focus = ctx.focus.is_some();
+            let row_focused = |row: usize| -> bool {
+                ctx.focus
+                    .as_ref()
+                    .is_some_and(|focus| focus.rows.contains(&row))
+            };
+            let row_alpha = |focused: bool| -> f32 {
+                if any_focus && !focused {
+                    0.5
+                } else {
+                    1.0
+                }
+            };
+            let unmapped_text = self.tr(keys::STAGE_CALC_UNMAPPED).to_owned();
+            for (i, row) in panel.var_rows.iter().enumerate() {
+                let var = &ctx.model.vars[i];
+                let focused = row_focused(i);
+                let alpha = row_alpha(focused);
+                let x = px + row[0];
+                let y = py + row[1];
+                let w = row[2];
+                let h = row[3];
+                let unmapped = var.value == RowValue::Unmapped;
+                let mut fill = palette.search_row_fill;
+                fill[3] *= alpha;
+                let border = if focused {
+                    SELECTION_BORDER
+                } else if unmapped {
+                    // «пунктирная строка не подставлено» (Р-4): пунктир
+                    // в примитивах квадов недоступен — янтарный контур
+                    // (UNMAPPED_EDGE_COLOR, семантика Р-3 FR-050)
+                    UNMAPPED_EDGE_COLOR
+                } else {
+                    [0.0; 4]
+                };
+                quads.push(CardInstance {
+                    pos: camera.screen_to_world([x, y], viewport),
+                    size: [w / zoom, h / zoom],
+                    fill,
+                    border,
+                    params: [6.0 / zoom, 0.0, 0.0, 1.0],
+                });
+                // Маркер строки — value-точка (Р-4)
+                let d = 6.0;
+                let mut dot_fill = if unmapped {
+                    UNMAPPED_EDGE_COLOR
+                } else {
+                    FLOW_EDGE_COLOR
+                };
+                dot_fill[3] *= alpha;
+                quads.push(CardInstance {
+                    pos: camera.screen_to_world([x + 6.0, y + h / 2.0 - d / 2.0], viewport),
+                    size: [d / zoom, d / zoom],
+                    fill: dot_fill,
+                    border: [0.0; 4],
+                    params: [d / 2.0 / zoom, 0.0, 0.0, 1.0],
+                });
+                let (value_text, value_color) = match &var.value {
+                    RowValue::Ok(text) => (text.clone(), palette.body),
+                    RowValue::Err(err) => (err.clone(), palette.error),
+                    RowValue::Unmapped => (unmapped_text.clone(), palette.quote),
+                };
+                let vw = value_text.chars().count() as f32 * 6.3;
+                let path_color = dim_text_color(palette.body, alpha);
+                let row_value_color = dim_text_color(value_color, alpha);
+                let fit = ((w - 22.0 - vw - 12.0) / 6.3).max(4.0) as usize;
+                texts.push(OwnedScreenText {
+                    text: truncate_chars(&var.path, fit),
+                    origin: [x + 18.0, y + (h - 12.0) / 2.0],
+                    width: w - 22.0,
+                    font_size: font(11.0),
+                    color: path_color,
+                    align: TextAlign::Left,
+                });
+                texts.push(OwnedScreenText {
+                    text: value_text,
+                    origin: [x + w - 6.0 - vw, y + (h - 12.0) / 2.0],
+                    width: vw + 12.0,
+                    font_size: font(11.0),
+                    color: row_value_color,
+                    align: TextAlign::Left,
+                });
+            }
+            for (i, row) in panel.formula_rows.iter().enumerate() {
+                let formula = &ctx.model.formulas[i];
+                let focused = row_focused(ctx.model.vars.len() + i);
+                let alpha = row_alpha(focused);
+                let x = px + row[0];
+                let y = py + row[1];
+                let w = row[2];
+                let h = row[3];
+                let mut fill = palette.search_row_fill;
+                fill[3] *= alpha;
+                quads.push(CardInstance {
+                    pos: camera.screen_to_world([x, y], viewport),
+                    size: [w / zoom, h / zoom],
+                    fill,
+                    border: if focused { SELECTION_BORDER } else { [0.0; 4] },
+                    params: [6.0 / zoom, 0.0, 0.0, 1.0],
+                });
+                // Маркер строки — ƒ (Р-4)
+                let f_color = dim_text_color(palette.title, alpha);
+                let text_color = dim_text_color(palette.body, alpha);
+                texts.push(OwnedScreenText {
+                    text: "ƒ".to_owned(),
+                    origin: [x + 6.0, y + (h - 12.0) / 2.0],
+                    width: 12.0,
+                    font_size: font(11.0),
+                    color: f_color,
+                    align: TextAlign::Left,
+                });
+                texts.push(OwnedScreenText {
+                    text: truncate_chars(&formula.display, (w / 6.3).max(8.0) as usize),
+                    origin: [x + 20.0, y + (h - 12.0) / 2.0],
+                    width: w - 26.0,
+                    font_size: font(11.0),
+                    color: text_color,
+                    align: TextAlign::Left,
+                });
+            }
+            // Индикаторы усечения за капом высоты (Q2 v1)
+            if panel.vars_cut > 0 {
+                texts.push(OwnedScreenText {
+                    text: self.trf(keys::STAGE_CALC_MORE, &[("n", &panel.vars_cut.to_string())]),
+                    origin: [px + panel.vars_title[0], py + panel.rect[3] - 12.0],
+                    width: panel.vars_title[2],
+                    font_size: font(10.0),
+                    color: palette.quote,
+                    align: TextAlign::Left,
+                });
+            }
+            if panel.formulas_cut > 0 {
+                texts.push(OwnedScreenText {
+                    text: self.trf(
+                        keys::STAGE_CALC_MORE,
+                        &[("n", &panel.formulas_cut.to_string())],
+                    ),
+                    origin: [px + panel.formulas_title[0], py + panel.rect[3] - 12.0],
+                    width: panel.formulas_title[2],
+                    font_size: font(10.0),
+                    color: palette.quote,
+                    align: TextAlign::Left,
+                });
+            }
+        }
+        // 8c) Р-8: мини-карточки внешних источников под истоком — панель
+        // «Как считается» полна, контекст внешних входов не теряется
+        if !ctx.model.ext_sources.is_empty() {
+            let src = &stage.slice.nodes[0];
+            let mut ext_y = src.y + src.height + 10.0;
+            for ext in &ctx.model.ext_sources {
+                let focused =
+                    ctx.focus.as_ref().is_some_and(|focus| {
+                        ctx.model.vars.iter().enumerate().any(|(ri, var)| {
+                            var.from_node == ext.from_node && focus.rows.contains(&ri)
+                        })
+                    });
+                let mut fill = palette.edge_label_fill;
+                if ctx.focus.is_some() && !focused {
+                    fill[3] *= 0.5;
+                }
+                let card_w = src.width.min(220.0);
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [src.x, ext_y],
+                        size: [card_w, 26.0],
+                        fill,
+                        border: if focused {
+                            SELECTION_BORDER
+                        } else {
+                            palette.palette_border
+                        },
+                        params: [8.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+                let color = if ctx.focus.is_some() && !focused {
+                    dim_text_color(palette.body, 0.5)
+                } else {
+                    palette.body
+                };
+                texts.push(OwnedScreenText {
+                    text: truncate_chars(&ext.title, 26),
+                    origin: transform.map_point([src.x + 8.0, ext_y + 4.0]),
+                    width: transform.map_size(card_w - 16.0),
+                    font_size: font(10.5),
+                    color,
+                    align: TextAlign::Left,
+                });
+                let count_color = if ctx.focus.is_some() && !focused {
+                    dim_text_color(palette.quote, 0.5)
+                } else {
+                    palette.quote
+                };
+                texts.push(OwnedScreenText {
+                    text: self.trf(keys::STAGE_CALC_EXT, &[("n", &ext.count.to_string())]),
+                    origin: transform.map_point([src.x + 8.0, ext_y + 15.0]),
+                    width: transform.map_size(card_w - 16.0),
+                    font_size: font(9.5),
+                    color: count_color,
+                    align: TextAlign::Left,
+                });
+                ext_y += 32.0;
             }
         }
         // 9) Подсказка внизу stage (i18n, §7.2)
@@ -10449,21 +10915,19 @@ impl App {
         (quads, texts)
     }
 
-    /// FR-042 (E3): адресная часть подписи ребра в stage — адресация истока
-    /// (fromLine «строка N» / fromOutput, FR-025/FR-029) и параметр-приёмник
+    /// FR-042 (E3) + FR-044 Р-3/инвариант 5: адресная часть подписи ребра
+    /// в stage — квалифицированный путь «Объект.Поле» (единая точка
+    /// [`canvas_core::dataref::display_ref_for_edge`]: fromLine → «строка N»,
+    /// fromOutput → имя выхода, fallback edge.id) и параметр-приёмник
     /// (toParam). Значение — отдельно, второй строкой пилюли (FR-044).
     fn stage_edge_addr_text(&self, edge: &Edge) -> String {
         let language = self.settings.language;
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(line) = edge.from_line {
-            parts.push(i18n::trf(
-                language,
-                keys::STAGE_LINE_LABEL,
-                &[("n", &(line + 1).to_string())],
-            ));
-        } else if let Some(output) = edge.from_output.as_deref() {
-            parts.push(output.to_owned());
-        }
+        let counts = canvas_core::dataref::display_name_counts(&self.scene.canvas);
+        let mut parts: Vec<String> =
+            vec![
+                canvas_core::dataref::display_ref_for_edge(&self.scene.canvas, edge, &counts)
+                    .path(),
+            ];
         if let Some(param) = edge.to_param.as_deref() {
             parts.push(i18n::trf(
                 language,
@@ -10471,17 +10935,16 @@ impl App {
                 &[("param", param)],
             ));
         }
-        if parts.is_empty() {
-            parts.push("—".to_owned());
-        }
         parts.join(" · ")
     }
 
-    /// FR-042 (E3): значение ребра в stage (FR-014/FR-025; для fromLine —
-    /// построчный результат Numi-листа источника).
+    /// FR-042 (E3): значение ребра в stage (FR-014/FR-025/FR-029; для
+    /// fromLine — построчный результат Numi-листа источника, для
+    /// fromOutput — именованный выход (исправление FR-044 Р-4: значение
+    /// ПО АДРЕСУ ребра, а не узловой итог приёмника-источника)).
     fn stage_edge_value_text(&self, edge: &Edge) -> String {
-        match edge.from_line {
-            Some(line) => self
+        if let Some(line) = edge.from_line {
+            return self
                 .scene
                 .expr_line_results
                 .get(&edge.from_node)
@@ -10491,12 +10954,21 @@ impl App {
                     ExprOutcome::Ok(value) => value.to_string(),
                     ExprOutcome::Err(msg) => msg.clone(),
                 })
-                .unwrap_or_default(),
-            None => match self.scene.expr_results.get(&edge.from_node) {
-                Some(ExprOutcome::Ok(value)) => value.to_string(),
-                Some(ExprOutcome::Err(msg)) => msg.clone(),
-                None => String::new(),
-            },
+                .unwrap_or_default();
+        }
+        if let Some(output) = edge.from_output.as_deref() {
+            return self
+                .scene
+                .flow_active
+                .named
+                .get(&(edge.from_node.clone(), output.to_owned()))
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+        }
+        match self.scene.expr_results.get(&edge.from_node) {
+            Some(ExprOutcome::Ok(value)) => value.to_string(),
+            Some(ExprOutcome::Err(msg)) => msg.clone(),
+            None => String::new(),
         }
     }
 
@@ -10515,6 +10987,9 @@ impl App {
         match MainStageState::open(&self.scene.canvas, &self.scene.bundles, edge_index) {
             Some(stage) => {
                 self.main_stage = Some(stage);
+                // FR-044 Р-5: свежий stage — без подсветки предыдущего
+                self.stage_calc_focus = None;
+                self.stage_calc_hover = None;
                 // PRD-0007 (F-10, У10): stage и окно проверки взаимо-
                 // исключительны; снапшот остаётся в сессионном кэше —
                 // возврат через «?» мгновенный (≤ 1 с)
@@ -10528,9 +11003,12 @@ impl App {
     }
 
     /// FR-042 (E3): закрыть main stage (Esc/клик по фону/перед открытием
-    /// оверлея — Q6). Выделение ребра сохраняется (AC-3.2).
+    /// оверлея — Q6). Выделение ребра сохраняется (AC-3.2). Подсветка
+    /// зависимостей умирает вместе со stage (FR-044 Р-5, инвариант 8).
     fn close_main_stage(&mut self) {
         if self.main_stage.take().is_some() {
+            self.stage_calc_focus = None;
+            self.stage_calc_hover = None;
             self.request_redraw();
         }
     }
@@ -10811,6 +11289,9 @@ impl App {
         // нода не создаётся, выделение не сбрасывается); внутри —
         // выделение ребра среза (живой индекс), без правки (PoC —
         // просмотр и выделение, non-goals PRD).
+        // FR-044 Р-4/Р-5: внутри — строки панели «Как считается»
+        // (фиксация подсветки), пилюли веера (= выделение ребра +
+        // синхронная подсветка), клик по фону stage — сброс подсветки.
         if self.main_stage.is_some() {
             let viewport = self.viewport_logical();
             let rect = main_stage_rect(viewport);
@@ -10828,39 +11309,83 @@ impl App {
                 let stage = self.main_stage.as_ref().expect("stage открыт");
                 let transform = StageTransform::new([rect.x, rect.y], stage.scale);
                 let local = transform.unmap_point(self.cursor);
+                let s = stage.scale.max(f32::EPSILON);
+                // FR-044 Р-4/Р-5: общий контекст кадра — модель/панель/
+                // зона (детерминизм: рендер и hit-test совпадают)
+                let ctx = self.stage_frame_ctx(stage, &rect, s);
+                let model = &ctx.model;
+                // 1) Строки панели «Как считается» — фиксация подсветки
+                // (клик по панели мимо строк — глотается, фокус живёт)
+                if let Some(panel) = &ctx.panel {
+                    let rel = [self.cursor[0] - rect.x, self.cursor[1] - rect.y];
+                    if panel.contains(rel) {
+                        self.stage_calc_hover = None;
+                        if let Some(i) = panel.var_row_at(rel) {
+                            self.stage_calc_focus = Some(StageCalcFocus::for_var(model, i));
+                        } else if let Some(i) = panel.formula_row_at(rel) {
+                            self.stage_calc_focus = Some(StageCalcFocus::for_formula(model, i));
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                // 2) Пилюли веера (Р-5): клик = выделение ребра +
+                // синхронная подсветка связанной строки и переменных
+                if let Some((slice_i, _)) = self.stage_pill_hit(stage, &ctx, local) {
+                    if let Some(live) = stage.live_edge(slice_i) {
+                        self.selected = Some(Selection::Edge(live));
+                        self.stage_calc_hover = None;
+                        self.stage_calc_focus = Some(StageCalcFocus::for_edge(model, live));
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Допуск от толщины (F-5): max(EDGE_HIT_TOLERANCE, d/2 + 2).
                 // Геометрия веера — та же чистая функция, что на кадре
-                // (детерминизм: рендер и hit-test совпадают)
+                // (единый источник — ctx.lines)
                 let tolerance = (bundle_thickness(stage.slice.edges.len()) / 2.0 + 2.0)
                     .max(canvas_core::EDGE_HIT_TOLERANCE);
-                let metrics = StageMetrics {
-                    header_h: HEADER_HEIGHT,
-                    body_top_gap: BODY_TOP_GAP,
-                    body_line: BODY_LINE_HEIGHT,
-                    result_line: RESULT_LINE_HEIGHT,
-                    body_padding: BODY_PADDING,
-                    strip_extra: 6.0,
-                };
-                let footers = [
-                    self.scene
-                        .expr_results
-                        .contains_key(&stage.slice.nodes[0].id),
-                    self.scene
-                        .expr_results
-                        .contains_key(&stage.slice.nodes[1].id),
-                ];
-                let lines = stage_edge_geometry(&stage.slice, &metrics, footers, 24);
-                let hit = stage_edge_at_lines(&lines, local, tolerance)
+                let hit = stage_edge_at_lines(&ctx.lines, local, tolerance)
                     .and_then(|slice_i| stage.live_edge(slice_i));
                 // Заимствование stage закончено — можно мутировать
                 if let Some(live) = hit {
                     self.selected = Some(Selection::Edge(live));
+                    // Р-5: синхронная подсветка строки расчёта и переменных
+                    self.stage_calc_hover = None;
+                    self.stage_calc_focus = Some(StageCalcFocus::for_edge(model, live));
+                } else {
+                    // Р-5: клик по фону stage — сброс подсветки (выделение
+                    // сохраняется — поведение прежнее)
+                    self.stage_calc_focus = None;
+                    self.stage_calc_hover = None;
                 }
             } else {
                 self.main_stage = None;
+                self.stage_calc_focus = None;
+                self.stage_calc_hover = None;
             }
             self.request_redraw();
         }
+    }
+
+    /// FR-044 Р-5: hit-тест пилюль веера (rect'ы — тот же расчёт, что в
+    /// кадре). Возвращает (индекс ребра среза, rect) или None.
+    fn stage_pill_hit(
+        &self,
+        stage: &MainStageState,
+        ctx: &StageFrameCtx,
+        local: [f32; 2],
+    ) -> Option<(usize, StageLocalRect)> {
+        for (item, rect) in self.stage_pill_rects(stage, ctx) {
+            if local[0] >= rect.x
+                && local[0] <= rect.x + rect.w
+                && local[1] >= rect.y
+                && local[1] <= rect.y + rect.h
+            {
+                return Some((item, rect));
+            }
+        }
+        None
     }
 
     /// Панель поиска: строка — прыжок, панель — глотается.
@@ -11814,6 +12339,56 @@ impl App {
         self.request_redraw();
     }
 
+    /// PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками виден —
+    /// настройка opt-in включена, поверхность канваса не перекрыта
+    /// модалками (та же дисциплина, что у бейджа автосвязи — §6.5).
+    fn coverage_indicator_visible(&self) -> bool {
+        self.settings.explain_coverage
+            && self.explain.is_none()
+            && self.main_stage.is_none()
+            && self.autolink_review.is_none()
+            && self.dialog.is_none()
+            && !self.settings_open
+            && self.menu.is_none()
+            && self.help_menu.is_none()
+            && self.docs.is_none()
+            && self.onboarding.is_none()
+            && !self.scheme_gallery.open
+    }
+
+    /// PRD-0007 (FR-048 X6, F-12): процент покрытия цепочками из кэша;
+    /// при смене ревизии модели — пересчёт ([`canvas_core::chain_coverage`],
+    /// та же семантика деревьев, что окно проверки — F-5). `None` — цифр
+    /// нет (индикатор скрыт). Стоимость не на кадр — только по ревизии.
+    fn coverage_percent(&mut self) -> Option<u8> {
+        if !self.settings.explain_coverage {
+            return None;
+        }
+        let revision = self.scene.revision;
+        if let Some((rev, percent)) = self.coverage_cache {
+            if rev == revision {
+                return percent;
+            }
+        }
+        let whatif = self.scene.fresh_whatif_overrides();
+        let stat = match flow::propagate_with_lines(&self.scene.canvas, &whatif) {
+            Ok(solutions) => canvas_core::chain_coverage(
+                &self.scene.canvas,
+                canvas_core::LineageFlow::Ready {
+                    solutions: &solutions,
+                    data: &canvas_core::DataSnapshots::new(),
+                },
+            ),
+            Err(cycle) => canvas_core::chain_coverage(
+                &self.scene.canvas,
+                canvas_core::LineageFlow::Cycled(&cycle),
+            ),
+        };
+        let percent = stat.percent();
+        self.coverage_cache = Some((revision, percent));
+        percent
+    }
+
     /// Видимость бейджа-индикатора (AC-5.5, «ненавязчивый»): фон включён,
     /// предложения есть, ни одного модального оверлея не открыто (клик по
     /// бейджу — открыть ревью). Диалог ревью бейдж скрывает (открыт сам).
@@ -12427,11 +13002,26 @@ impl App {
                 self.request_redraw();
                 return;
             }
-            // Мета-строка с крошками вида (X2: клик — возврат к корню);
+            // Мета-строка с крошками вида (X6 — полные чипы: клик по чипу
+            // уровня обрезает путь AC-2.3; клик мимо чипов — ничего);
             // в защите крошки глушатся (вид зафиксирован на корне)
             if !defense_now && point_in_rect(explain_ui::meta_rect(win), self.cursor) {
-                if let Some(state) = self.explain.as_mut() {
-                    state.click_crumb(0);
+                let path_len = self
+                    .explain
+                    .as_ref()
+                    .map(|s| s.view_path.len())
+                    .unwrap_or(0);
+                if path_len > 1 {
+                    let (offset, rects) = explain_ui::crumb_rects(win, path_len);
+                    for (i, rect) in rects.iter().enumerate() {
+                        if point_in_rect(*rect, self.cursor) {
+                            if let Some(state) = self.explain.as_mut() {
+                                state.click_crumb(offset + i);
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 self.request_redraw();
                 return;
@@ -12478,9 +13068,32 @@ impl App {
                 return;
             }
         }
-        // Клик по фону (мимо окна) — закрытие (§6.4 Ready/Stale/Defense →
-        // Closed по клику по фону; AC-6.4)
+        // Клик по фону (мимо окна): §6.4 Ready/Stale → Closed; У2 (§6.5,
+        // X6) — если под курсором подсвеченная нода канваса (есть в дереве,
+        // в поддереве вида) — СИНХРОНИЗАЦИЯ канвас→дерево: выделить и
+        // подвести узел дерева (вспышка), панель не закрывать;Defense —
+        // канвас не отвечает (§6.5), клик по фону — полное закрытие.
         if !point_in_rect(win, self.cursor) {
+            let defense_now = self.explain.as_ref().is_some_and(|s| s.is_defense());
+            let ready_now = self.explain.as_ref().is_some_and(|s| s.is_ready());
+            if ready_now && !defense_now {
+                let index = self.selective_hit(self.cursor_world());
+                if let Some(node_index) = index {
+                    if let Some(node) = self.scene.canvas.nodes.get(node_index) {
+                        let node_id = node.id.clone();
+                        let depth = self.settings.explain_depth_limit;
+                        let picked = self
+                            .explain
+                            .as_mut()
+                            .map(|state| state.pick_by_node_id(&node_id, depth))
+                            .unwrap_or(false);
+                        if picked {
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                }
+            }
             self.close_explain();
             return;
         }
@@ -12552,6 +13165,10 @@ impl App {
                 color: palette.title,
                 align: TextAlign::Left,
             });
+            // Мета-строка шапки: X6 — полные чипы-крошки пути вида (по чипу
+            // на уровень, клик по чипу — обрезка пути, AC-2.3); без фокуса
+            // (путь в корень) и в защите — прежний текст-подзаголовок.
+            // Чипы и hit — одна чистая геометрия crumb_rects (детерминизм).
             let meta = if state.is_ready() {
                 let tree = state.tree().expect("готово");
                 let path: Vec<String> = state
@@ -12567,14 +13184,48 @@ impl App {
             } else {
                 self.trf(keys::EXPLAIN_META, &[("title", root_title.as_str())])
             };
-            texts.push(OwnedScreenText {
-                text: meta,
-                origin: [win[0] + 16.0, win[1] + 32.0],
-                width: (win[2] - 240.0).max(120.0),
-                font_size: 11.5,
-                color: palette.quote,
-                align: TextAlign::Left,
-            });
+            let show_crumbs = state.is_ready() && !state.is_defense() && state.view_path.len() > 1;
+            if show_crumbs {
+                let tree = state.tree().expect("готово");
+                let (offset, rects) = explain_ui::crumb_rects(win, state.view_path.len());
+                let last = state.view_path.len().saturating_sub(1);
+                for (i, rect) in rects.iter().enumerate() {
+                    let level = offset + i;
+                    let Some(node) = tree.nodes.get(state.view_path[level]) else {
+                        continue;
+                    };
+                    let current = level == last;
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        *rect,
+                        if current { palette.accent } else { [0.0; 4] },
+                        palette.palette_border,
+                        6.0,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: node.title.clone(),
+                        origin: [rect[0] + 6.0, rect[1] + 2.5],
+                        width: (rect[2] - 10.0).max(8.0),
+                        font_size: 10.5,
+                        color: if current {
+                            Color::rgb(255, 255, 255)
+                        } else {
+                            palette.body
+                        },
+                        align: TextAlign::Left,
+                    });
+                }
+            } else {
+                texts.push(OwnedScreenText {
+                    text: meta,
+                    origin: [win[0] + 16.0, win[1] + 32.0],
+                    width: (win[2] - 240.0).max(120.0),
+                    font_size: 11.5,
+                    color: palette.quote,
+                    align: TextAlign::Left,
+                });
+            }
             let close = explain_ui::close_rect(win);
             quads.push(screen_rect_quad(
                 camera,
@@ -12801,6 +13452,10 @@ impl App {
                     [x, y, laid.rect[2] * scale, laid.rect[3] * scale]
                 };
                 let hovered = state.cursor == Some(laid.idx);
+                // У2 (§6.5, X6): узел, выбранный кликом по подсвеченной
+                // ноде канваса — рамка выделения (акцент; пока вспышка
+                // не погасла — ярче, alpha от pick_flash_at)
+                let picked = state.pick == Some(laid.idx);
                 // Цвет полосы рода узла: расчётный — акцент, лист — слот
                 // explain_leaf (контраст ≥ 3:1, AC-3.4), терминалы —
                 // ошибка/предупреждение
@@ -12819,13 +13474,25 @@ impl App {
                     viewport,
                     rect,
                     palette.card_fill,
-                    if hovered {
+                    if hovered || picked {
                         palette.accent
                     } else {
                         palette.palette_border
                     },
                     8.0,
                 ));
+                // У2-вспышка: затухающая рамка поверх выделения (700 мс);
+                // после затухания остаётся только рамка выделения выше.
+                if picked {
+                    let flash = state.pick_flash_at(Instant::now());
+                    if flash > 0.0 {
+                        let mut glow = palette.accent;
+                        glow[3] = flash;
+                        quads.push(screen_rect_quad(
+                            camera, viewport, rect, [0.0; 4], glow, 12.0,
+                        ));
+                    }
+                }
                 let strip_rect = [rect[0], rect[1], (4.0 * scale).max(2.0), rect[3]];
                 quads.push(screen_rect_quad(
                     camera, viewport, strip_rect, strip, [0.0; 4], 0.0,
@@ -13939,6 +14606,33 @@ impl App {
         // (ghost-превью следует за курсором до отпускания)
         if let Some(drag) = self.template_drag.as_mut() {
             if drag.update(logical) || drag.active {
+                self.request_redraw();
+            }
+        }
+        // FR-044 Р-5: hover-превью подсветки в main stage — живой отклик
+        // по строкам панели «Как считается» без фиксации; при уходе
+        // курсора превью гаснет (возвращается фиксированная подсветка)
+        if let Some(stage) = self.main_stage.as_ref() {
+            let viewport = self.viewport_logical();
+            let rect = main_stage_rect(viewport);
+            if point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
+                let s = stage.scale.max(f32::EPSILON);
+                let ctx = self.stage_frame_ctx(stage, &rect, s);
+                let rel = [self.cursor[0] - rect.x, self.cursor[1] - rect.y];
+                let preview = ctx.panel.and_then(|panel| {
+                    if let Some(i) = panel.var_row_at(rel) {
+                        Some(StageCalcFocus::for_var(&ctx.model, i))
+                    } else {
+                        panel
+                            .formula_row_at(rel)
+                            .map(|i| StageCalcFocus::for_formula(&ctx.model, i))
+                    }
+                });
+                if self.stage_calc_hover != preview {
+                    self.stage_calc_hover = preview;
+                    self.request_redraw();
+                }
+            } else if self.stage_calc_hover.take().is_some() {
                 self.request_redraw();
             }
         }
@@ -15624,6 +16318,36 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Center,
                     }];
                     screen_bands.push(UiLayer::Panels, badge_quads, badge_texts);
+                }
+                // PRD-0007 (X6, F-12): индикатор покрытия цепочками —
+                // левый нижний угол канваса, opt-in (настройка FR-039);
+                // пересчёт — по ревизии (кэш), скрывается при цифрах нет
+                if self.coverage_indicator_visible() {
+                    if let Some(percent) = self.coverage_percent() {
+                        let palette = self.effective_palette();
+                        let camera = &self.camera;
+                        let cov_viewport = self.viewport_logical();
+                        let chip = [16.0, cov_viewport[1] - 44.0, 132.0, 26.0];
+                        let cov_quads = vec![screen_rect_quad(
+                            camera,
+                            cov_viewport,
+                            chip,
+                            palette.palette_chip_fill,
+                            palette.palette_border,
+                            8.0,
+                        )];
+                        let percent_text = percent.to_string();
+                        let cov_texts = vec![OwnedScreenText {
+                            text: self
+                                .trf(keys::EXPLAIN_COVERAGE, &[("{n}", percent_text.as_str())]),
+                            origin: [chip[0], chip[1] + 6.0],
+                            width: chip[2],
+                            font_size: 12.0,
+                            color: palette.body,
+                            align: TextAlign::Center,
+                        }];
+                        screen_bands.push(UiLayer::Panels, cov_quads, cov_texts);
+                    }
                 }
                 // FR-018: палитра шаблонов (Ctrl+P) и wheel-меню
                 // (Shift+клик) — поверх канваса; иконки/хаб wheel — полоса
@@ -17860,6 +18584,243 @@ mod tests {
             (p0[0] - transform.map_point([src_port_x, 0.0])[0]).abs() < 2.0,
             "веер стартует у правого порта истока"
         );
+    }
+
+    /// Хелпер FR-044: App на заглушках с готовым канвасом и тестовым
+    /// вьюпортом (клики по screen-space UI без winit-окна).
+    #[cfg(test)]
+    fn stub_app_with_canvas(canvas: Canvas) -> App {
+        let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr044-stage.canvas"));
+        let cache_dir =
+            std::env::temp_dir().join(format!("canvasdesk-fr044-{}", std::process::id()));
+        std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
+        let (search_responder, _rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder: canvas_core::SearchResponder = std::sync::Arc::new(move |event| {
+                let _ = tx.send(event);
+            });
+            (responder, rx)
+        };
+        let mut app = App::new(
+            scene,
+            Box::new(canvas_core::NoopThumbs),
+            Settings::default(),
+            None,
+            Some(cache_dir),
+            std::sync::Arc::new(|_event: canvas_core::DragEvent| {}),
+            std::sync::Arc::new(|_event: canvas_widgets::WidgetEvent| {}),
+            Box::new(canvas_core::NoopWatch),
+            Box::new(canvas_core::MemSearch::new(search_responder)),
+            Box::new(canvas_core::NoopClipboard),
+            Some(Box::new(canvas_core::MemWidgetState::default())),
+            false,
+            Box::new(canvas_render::renderer_init::NoopRendererLaunch),
+        );
+        app.test_viewport = Some([1200.0_f32, 800.0]);
+        app
+    }
+
+    /// Демо-канвас FR-044 (оракул инварианта 6 CR): пучок Заявки→Отчёт ×2
+    /// (users, conv) + внешний вход Цены.usd; формулы приёмника с
+    /// qualified-путями именованного синтаксиса (FR-050 Р-6).
+    #[cfg(test)]
+    fn fr044_demo_canvas() -> (Canvas, usize, usize) {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10\nconv = 0.2", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut ext = Node::text("ext", "Цены\nusd = 90", 0.0, 300.0);
+        ext.width = 300.0;
+        ext.height = 140.0;
+        let mut dst = Node::text(
+            "dst",
+            "Отчёт\nx = Заявки.users * Заявки.conv * Цены.usd\ny = Заявки.users + Цены.usd",
+            700.0,
+            0.0,
+        );
+        dst.width = 420.0;
+        dst.height = 220.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(ext);
+        canvas.nodes.push(dst);
+        let mut e1 = Edge::new("e1", "src", None, "dst", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("users".to_owned());
+        let mut e2 = Edge::new("e2", "src", None, "dst", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("conv".to_owned());
+        let mut e3 = Edge::new("e3", "ext", None, "dst", None);
+        e3.set_flow_kind(FlowKind::Value);
+        e3.from_output = Some("usd".to_owned());
+        canvas.edges.push(e1);
+        canvas.edges.push(e2);
+        canvas.edges.push(e3);
+        (canvas, 0, 1) // пучок — рёбра 0/1; внешнее — 2
+    }
+
+    /// FR-044 Р-5/инвариант 6 (интеграция): клик по строке формулы в
+    /// панели «Как считается» — подсветка ровно множества её операнд-
+    /// рёбер и переменных (3 ребра + 3 переменные в демо-оракуле CR);
+    /// значения в модели — из активного потока (named-выходы).
+    #[test]
+    fn stage_calc_panel_click_formula_focuses_operands() {
+        let (canvas, _e1, _e2) = fr044_demo_canvas();
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        let viewport = app.viewport_logical();
+        let rect = main_stage_rect(viewport);
+        let stage = app.main_stage.as_ref().expect("stage открыт");
+        let s = stage.scale.max(f32::EPSILON);
+        let ctx = app.stage_frame_ctx(stage, &rect, s);
+        // Р-8: внешний вход Цены.usd в модели (панель полная)
+        assert_eq!(ctx.model.vars.len(), 3);
+        assert!(!ctx.model.vars[2].in_bundle);
+        assert_eq!(ctx.model.ext_sources.len(), 1);
+        // Значение по именованному выходу (исправление stage_edge_value_text)
+        assert_eq!(
+            ctx.model.vars[0].value,
+            calc_panel_ui::RowValue::Ok("10".to_owned())
+        );
+        let panel = ctx.panel.as_ref().expect("панель построена");
+        assert_eq!(panel.formula_rows.len(), 2);
+        // Клик по строке формулы 0
+        let f = panel.formula_rows[0];
+        app.cursor = [rect.x + f[0] + 30.0, rect.y + f[1] + 5.0];
+        app.click_main_stage();
+        let focus = app.stage_calc_focus.as_ref().expect("фокус зафиксирован");
+        assert_eq!(
+            focus.edges,
+            std::collections::BTreeSet::from([0, 1, 2]),
+            "ровно операнд-рёбра формулы (инвариант 6)"
+        );
+        assert_eq!(
+            focus.rows,
+            std::collections::BTreeSet::from([0, 1, 2, ctx.model.vars.len()]),
+            "формула + её три переменные"
+        );
+        assert!(
+            app.selected.is_none(),
+            "клик по строке панели не выделяет ребро"
+        );
+    }
+
+    /// FR-044 Р-5/инвариант 7 (интеграция): клик по переменной — обратная
+    /// навигация: переменная + её ребро + все формулы, где она участвует;
+    /// клик по пилюле веера — выделение ребра + синхронная подсветка.
+    #[test]
+    fn stage_calc_click_variable_and_pill_sync() {
+        let (canvas, _e1, _e2) = fr044_demo_canvas();
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        let viewport = app.viewport_logical();
+        let rect = main_stage_rect(viewport);
+        let stage = app.main_stage.as_ref().expect("stage открыт");
+        let s = stage.scale.max(f32::EPSILON);
+        let ctx = app.stage_frame_ctx(stage, &rect, s);
+        let panel = ctx.panel.as_ref().expect("панель построена");
+        // Геометрия кликов — до мутаций (заимствование stage)
+        let var_click = {
+            let v = panel.var_rows[0];
+            [rect.x + v[0] + 20.0, rect.y + v[1] + 5.0]
+        };
+        let (pill_item, pill_center) = {
+            let pills = app.stage_pill_rects(stage, &ctx);
+            let (item, pill_rect) = pills
+                .iter()
+                .copied()
+                .find(|(item, _)| stage.edges[*item] == 1)
+                .expect("пилюля ребра 1");
+            let transform = StageTransform::new([rect.x, rect.y], stage.scale);
+            let center = transform.map_point([
+                pill_rect.x + pill_rect.w / 2.0,
+                pill_rect.y + pill_rect.h / 2.0,
+            ]);
+            (item, center)
+        };
+        // Обратная навигация: users (строка 0) участвует в обеих формулах
+        app.cursor = var_click;
+        app.click_main_stage();
+        let focus = app.stage_calc_focus.as_ref().expect("фокус зафиксирован");
+        assert_eq!(focus.edges, std::collections::BTreeSet::from([0]));
+        assert_eq!(
+            focus.rows,
+            std::collections::BTreeSet::from([0, ctx.model.vars.len(), ctx.model.vars.len() + 1]),
+            "переменная + обе формулы (инвариант 7)"
+        );
+        // Клик по пилюле ребра 1 (conv): выделение + синхронная подсветка
+        app.cursor = pill_center;
+        app.click_main_stage();
+        assert_eq!(
+            app.selected,
+            Some(Selection::Edge(1)),
+            "пилюля = выделение ребра (live-индекс, item = {pill_item})"
+        );
+        let focus = app.stage_calc_focus.as_ref().expect("фокус синхронен");
+        assert_eq!(focus.edges, std::collections::BTreeSet::from([1]));
+        assert!(
+            focus.rows.contains(&(ctx.model.vars.len())),
+            "связанная строка формулы подсвечена"
+        );
+    }
+
+    /// FR-044 Р-7 (интеграция): Esc-каскад — первое Esc гасит подсветку
+    /// (stage открыт), второе закрывает stage; клик по фону stage —
+    /// сброс подсветки без закрытия; закрытие stage гасит подсветку
+    /// (инвариант 8: состояние не переживает stage).
+    #[test]
+    fn stage_calc_esc_cascade_and_background_reset() {
+        let (canvas, _e1, _e2) = fr044_demo_canvas();
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        let viewport = app.viewport_logical();
+        let rect = main_stage_rect(viewport);
+        let stage = app.main_stage.as_ref().expect("stage открыт");
+        let s = stage.scale.max(f32::EPSILON);
+        let ctx = app.stage_frame_ctx(stage, &rect, s);
+        let panel = ctx.panel.as_ref().expect("панель построена");
+        // Фиксация подсветки кликом по строке формулы
+        let f = panel.formula_rows[0];
+        app.cursor = [rect.x + f[0] + 30.0, rect.y + f[1] + 5.0];
+        app.click_main_stage();
+        assert!(app.stage_calc_focus.is_some(), "подсветка активна");
+        // Первое Esc — гасит подсветку, stage остаётся
+        assert!(app.dispatch_esc(ui_registry::id::STAGE), "Esc поглощён");
+        assert!(app.stage_calc_focus.is_none(), "подсветка сброшена");
+        assert!(app.main_stage.is_some(), "stage открыт (Р-7)");
+        // Второе Esc — закрывает stage
+        assert!(app.dispatch_esc(ui_registry::id::STAGE), "Esc поглощён");
+        assert!(app.main_stage.is_none(), "stage закрыт");
+        assert!(app.stage_calc_hover.is_none(), "превью тоже погасло");
+        // Снова: подсветка → клик по фону stage (не панель, не пилюля,
+        // не линия — верх stage над веером) — сброс БЕЗ закрытия
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        let stage = app.main_stage.as_ref().expect("stage открыт");
+        let ctx = app.stage_frame_ctx(stage, &rect, s);
+        let panel = ctx.panel.as_ref().expect("панель");
+        let f = panel.formula_rows[0];
+        app.cursor = [rect.x + f[0] + 30.0, rect.y + f[1] + 5.0];
+        app.click_main_stage();
+        assert!(app.stage_calc_focus.is_some());
+        app.cursor = [rect.x + 60.0, rect.y + 70.0];
+        app.click_main_stage();
+        assert!(
+            app.stage_calc_focus.is_none(),
+            "фон stage — сброс подсветки"
+        );
+        assert!(
+            app.main_stage.is_some(),
+            "stage не закрывается фоном внутри"
+        );
+        // Закрытие stage гасит подсветку (инвариант 8)
+        app.stage_calc_focus = Some(StageCalcFocus::default());
+        app.close_main_stage();
+        assert!(app.stage_calc_focus.is_none() && app.stage_calc_hover.is_none());
     }
 
     /// M8/W3 (wasm-port §6, приёмка «трейты покрыты тестами на заглушках»):

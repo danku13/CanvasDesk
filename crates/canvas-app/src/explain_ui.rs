@@ -82,7 +82,8 @@ pub fn chip_rect(win: [f32; 4]) -> [f32; 4] {
 }
 
 /// Мета-строка с крошками вида (AC-2.3) — нижняя половина шапки. X2: клик
-/// по зоне — возврат к корню вида (полные чипы-крошки — позже, UX-шлифовка).
+/// по зоне — возврат к корню вида; X6 — ПОЛНЫЕ чипы-крошки: по кликабельному
+/// чипу на уровень ([`crumb_rects`]), зона — клик по чипу.
 pub fn meta_rect(win: [f32; 4]) -> [f32; 4] {
     [
         win[0] + 16.0,
@@ -90,6 +91,51 @@ pub fn meta_rect(win: [f32; 4]) -> [f32; 4] {
         (win[2] - 240.0).max(80.0),
         20.0,
     ]
+}
+
+// --- чипы-крошки (X6, AC-2.3) ----------------------------------------------
+
+/// Высота чипа-крошки пути вида.
+pub const CRUMB_H: f32 = 18.0;
+/// Зазор между чипами-крошками.
+pub const CRUMB_GAP: f32 = 4.0;
+/// Потолок ширины чипа (длинные заголовки обрезаются рендером текста).
+pub const CRUMB_W_MAX: f32 = 148.0;
+/// Пол ширины чипа (читаемость; уже — рендер обрезает хвост).
+pub const CRUMB_W_MIN: f32 = 48.0;
+/// Максимум одновременно показанных чипов (переполнение — показаны
+/// ПОСЛЕДНИЕ уровни: текущий фокус важнее корневых).
+pub const CRUMB_MAX_CHIPS: usize = 12;
+
+/// Полные чипы-крошки пути вида (AC-2.3, UX-шлифовка X2): по чипу на
+/// уровень `view_path`, слева направо в мета-строке шапки; ширина делится
+/// поровну (потолок [`CRUMB_W_MAX`], пол [`CRUMB_W_MIN`]). Возвращает
+/// `(смещение, прямоугольники)`: смещение — индекс первой показанной
+/// крошки в `view_path` (0, пока все помещаются; при переполнении
+/// показаны последние [`CRUMB_MAX_CHIPS`]); чипы, не влезающие в мета-
+/// зону по ширине, обрезаются/опускаются (рендер и hit используют одну
+/// геометрию — детерминизм).
+pub fn crumb_rects(win: [f32; 4], count: usize) -> (usize, Vec<[f32; 4]>) {
+    let meta = meta_rect(win);
+    if count == 0 {
+        return (0, Vec::new());
+    }
+    let shown = count.min(CRUMB_MAX_CHIPS);
+    let offset = count - shown;
+    let avail = (meta[2] - CRUMB_GAP * (shown as f32 - 1.0)).max(0.0);
+    let width = (avail / shown as f32).clamp(CRUMB_W_MIN, CRUMB_W_MAX);
+    let meta_end = meta[0] + meta[2];
+    let y = meta[1] + (meta[3] - CRUMB_H) / 2.0;
+    let mut rects = Vec::with_capacity(shown);
+    for index in 0..shown {
+        let x = meta[0] + (width + CRUMB_GAP) * index as f32;
+        if x >= meta_end {
+            break; // дальше мета-зоны чипы не отрисовываются и не кликабельны
+        }
+        let w = width.min(meta_end - x);
+        rects.push([x, y, w, CRUMB_H]);
+    }
+    (offset, rects)
 }
 
 /// Тело окна — между шапкой и футером.
@@ -119,6 +165,9 @@ pub const ROW_H: f32 = 100.0;
 pub const LAYOUT_PAD: f32 = 14.0;
 /// Период ротации подписей честного лоадера (мс, AC-1.2).
 pub const LOADER_ROTATION_MS: u128 = 320;
+/// Длительность вспышки канвас→дерево (мс, У2/§6.5): затухающая рамка
+/// вокруг узла дерева после клика по подсвеченной ноде канваса.
+pub const PICK_FLASH_MS: u128 = 700;
 
 /// Результат видимости: кто показан, кто фронтирует (свёрнут), глубины и
 /// родители относительно корня ВИДА (поддерева фокуса, AC-2.3).
@@ -615,6 +664,12 @@ pub struct ExplainState {
     /// Вид Ready до входа в защиту (путь крошек + ручные раскрытия) —
     /// восстановление по Esc (AC-6.4 «окно возвращается к обычному виду»).
     pre_defense: Option<(Vec<usize>, BTreeSet<usize>)>,
+    /// У2 (§6.5, X6): узел дерева, выделенный кликом по подсвеченной ноде
+    /// канваса (индекс в `LineageTree::nodes`); рамка держится до следующего
+    /// пика/смены вида. Runtime-состояние — не сериализуется.
+    pub pick: Option<usize>,
+    /// Момент пика (вспышка затухает за [`PICK_FLASH_MS`], У2).
+    pub pick_at: Option<Instant>,
 }
 
 impl ExplainState {
@@ -637,6 +692,8 @@ impl ExplainState {
             defense: false,
             defense_reveal: 0,
             pre_defense: None,
+            pick: None,
+            pick_at: None,
         }
     }
 
@@ -666,6 +723,8 @@ impl ExplainState {
             defense: false,
             defense_reveal: 0,
             pre_defense: None,
+            pick: None,
+            pick_at: None,
         }
     }
 
@@ -792,6 +851,9 @@ impl ExplainState {
             .unwrap_or(true)
         {
             self.view_path.push(idx);
+            // Вид сменился — У2-выделение сбрасывается.
+            self.pick = None;
+            self.pick_at = None;
             return NodeClick::Focused;
         }
         NodeClick::Leaf
@@ -801,6 +863,84 @@ impl ExplainState {
     pub fn click_crumb(&mut self, level: usize) {
         if level < self.view_path.len() {
             self.view_path.truncate(level + 1);
+        }
+        // Вид сменился — У2-выделение сбрасывается (узел может быть
+        // вне нового поддерева вида).
+        self.pick = None;
+        self.pick_at = None;
+    }
+
+    // --- У2: синхронизация канвас→дерево (§6.5, X6) ------------------------
+
+    /// Клик по подсвеченной ноде канваса — выделить соответствующий узел
+    /// дерева и «подвести» к нему (У2 — да, решение владельца): предок на
+    /// границе лимита глубины раскрывается вручную (узел становится виден),
+    /// путь вида не меняется; вспышка — затухающая рамка за
+    /// [`PICK_FLASH_MS`], выделение держится до следующего пика/смены вида.
+    /// `false` — дерево не готово, индекс вне дерева или нода вне поддерева
+    /// текущего вида (канвас-клик ведёт себя как раньше — закрытие на App-
+    /// стороне).
+    pub fn pick_from_canvas(&mut self, tree_idx: usize, auto_depth: u8) -> bool {
+        let Some(tree) = self.tree.as_ref() else {
+            return false;
+        };
+        if tree_idx >= tree.nodes.len() {
+            return false;
+        }
+        // Карта родителей (родитель всегда раньше ребёнка — предзаказ).
+        let mut parent = vec![None; tree.nodes.len()];
+        for (index, node) in tree.nodes.iter().enumerate() {
+            for child in &node.children {
+                if child.child < tree.nodes.len() {
+                    parent[child.child] = Some(index);
+                }
+            }
+        }
+        // Цепочка от корня вида к узлу; узел вне поддерева вида — отказ.
+        let view_root = self.view_root();
+        let mut chain = vec![tree_idx];
+        let mut current = tree_idx;
+        while current != view_root {
+            let Some(p) = parent[current] else {
+                return false; // дошли до корня дерева — view_root не предок
+            };
+            chain.push(p);
+            current = p;
+        }
+        chain.reverse(); // [view_root, ..., tree_idx]
+                         // Скрытый лимитом глубины узел — раскрываем родителя-фронтира.
+        let depth = chain.len() - 1;
+        if auto_depth > 0 && depth > auto_depth as usize {
+            self.expanded.insert(chain[depth - 1]);
+        }
+        self.pick = Some(tree_idx);
+        self.pick_at = Some(Instant::now());
+        true
+    }
+
+    /// У2: пик по id ноды канваса — первый узел дерева с этим id (ромб
+    /// разворачивается — адресов может быть несколько, берём первый в
+    /// DFS-порядке, как в окне).
+    pub fn pick_by_node_id(&mut self, node_id: &str, auto_depth: u8) -> bool {
+        let Some(index) = self
+            .tree
+            .as_ref()
+            .and_then(|tree| tree.nodes.iter().position(|node| node.node_id == node_id))
+        else {
+            return false;
+        };
+        self.pick_from_canvas(index, auto_depth)
+    }
+
+    /// У2: остаточная яркость вспышки [0..1] к моменту `now`; 0 — погасла
+    /// (выделение остаётся). Чистая версия — тестируется без ожидания.
+    pub fn pick_flash_at(&self, now: Instant) -> f32 {
+        match (self.pick_at, self.pick) {
+            (Some(at), Some(_)) => {
+                let elapsed = now.duration_since(at).as_millis();
+                (1.0 - elapsed as f32 / PICK_FLASH_MS as f32).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
         }
     }
 
@@ -872,6 +1012,8 @@ impl ExplainState {
         self.view_path = vec![0];
         self.expanded.clear();
         self.edit = None;
+        self.pick = None;
+        self.pick_at = None;
     }
 
     /// Выйти из режима защиты (AC-6.4, Defense → Ready): окно возвращается
@@ -1516,5 +1658,90 @@ mod tests {
         st.exit_defense();
         st.enter_defense(3);
         assert!(st.edit.is_none(), "поле не переносится в защиту");
+    }
+
+    /// X6 (AC-2.3): полные чипы-крошки — по чипу на уровень, без
+    /// переполнения смещение 0, ширины в [MIN, MAX], чипы стыкуются без
+    /// налезаний; при переполнении показаны последние уровни (смещение > 0).
+    #[test]
+    fn crumb_rects_layout_and_overflow() {
+        let win = window_rect([1600.0, 1000.0]);
+        // Пустой путь — ничего.
+        let (offset, rects) = crumb_rects(win, 0);
+        assert_eq!((offset, rects.len()), (0, 0));
+        // Три уровня: смещение 0, геометрия согласована.
+        let (offset, rects) = crumb_rects(win, 3);
+        assert_eq!((offset, rects.len()), (0, 3));
+        let meta = meta_rect(win);
+        for pair in rects.windows(2) {
+            assert!((pair[0][0] + pair[0][2] + CRUMB_GAP - pair[1][0]).abs() < 1e-3);
+        }
+        for r in &rects {
+            assert!(r[2] <= CRUMB_W_MAX + 1e-3);
+            assert!(r[2] >= CRUMB_W_MIN - 1e-3);
+            assert!(r[0] >= meta[0] - 1e-3);
+            assert!(r[0] + r[2] <= meta[0] + meta[2] + 1e-3);
+            assert!((r[1] - (meta[1] + (meta[3] - CRUMB_H) / 2.0)).abs() < 1e-3);
+        }
+        // Переполнение: 20 уровней — показаны последние 12, смещение 8.
+        let (offset, rects) = crumb_rects(win, 20);
+        assert_eq!(offset, 8);
+        assert_eq!(rects.len(), CRUMB_MAX_CHIPS);
+        // Узкое окно: чипы обрезаются мета-зоной (рендер = hit).
+        let narrow = window_rect([340.0, 250.0]);
+        let (_, rects) = crumb_rects(narrow, 6);
+        let meta = meta_rect(narrow);
+        for r in &rects {
+            assert!(
+                r[0] + r[2] <= meta[0] + meta[2] + 1e-3,
+                "чип шире мета-зоны"
+            );
+        }
+    }
+
+    /// X6 (У2, §6.5): пик канвас→дерево — видимый узел выделяется сразу;
+    /// узел глубже лимита раскрывает родителя-фронтира; узел вне поддерева
+    /// вида и несуществующий id — отказ; смена вида/защита сбрасывают пик.
+    #[test]
+    fn canvas_pick_selects_and_reveals() {
+        // sample_tree: a(0) → b(1) → c(2), a → d(3, лист).
+        let tree = sample_tree();
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(tree),
+                base: None,
+            }),
+        );
+        st.poll();
+        // Пик по id существующей ноды — выделение + вспышка 1.0.
+        assert!(st.pick_by_node_id("c", 3));
+        assert_eq!(st.pick, Some(2));
+        assert!(st.pick_flash_at(Instant::now()) > 0.99);
+        // Вспышка гаснет к концу окна, выделение остаётся.
+        let later = Instant::now() + std::time::Duration::from_millis(PICK_FLASH_MS as u64 + 50);
+        assert_eq!(st.pick_flash_at(later), 0.0);
+        assert_eq!(st.pick, Some(2));
+        // Лимит глубины 1: узел c (глубина 2 от корня) скрыт — пик
+        // раскрывает родителя b, узел становится видимым («подводит»).
+        st.click_crumb(0);
+        assert_eq!(st.pick, None, "смена вида сбросила пик");
+        assert!(st.pick_by_node_id("c", 1));
+        assert!(st.expanded.contains(&1), "родитель-фронтир раскрыт");
+        let vis = visibility(st.tree().unwrap(), st.view_root(), 1, &st.expanded);
+        assert!(vis.visible[2], "узел раскрыт и видим");
+        // Узел вне поддерева вида — отказ (в фокусе b: c виден, d — нет).
+        st.view_path.push(1);
+        assert!(!st.pick_by_node_id("d", 0), "d вне поддерева вида b");
+        // Несуществующий id — отказ.
+        assert!(!st.pick_by_node_id("no-such", 0));
+        // Защита сбрасывает пик (канвас в защите не отвечает).
+        st.click_crumb(0);
+        st.pick_from_canvas(2, 3);
+        st.enter_defense(3);
+        assert_eq!(st.pick, None);
+        // Пик по индексу вне дерева — отказ.
+        assert!(!st.pick_from_canvas(99, 3));
     }
 }

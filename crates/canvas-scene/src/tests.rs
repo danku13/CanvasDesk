@@ -3015,6 +3015,89 @@ fn mcp_lineage_tree_total_line_and_errors() {
     assert_eq!(null_root["root"]["line"], serde_json::Value::Null);
 }
 
+/// PRD-0007 (X6, FR-048, F-9): explain_number — текстовая линейная
+/// развёртка того же дерева: render:"text", в text — заголовок с
+/// значением корня, узлы с адресами [id:строка], канал прихода (ребро),
+/// статистика; при активном what-if — преамбула; негативы — как у lineage.
+#[test]
+fn mcp_explain_number_text_deployment() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":0,"y":0,"text":"A\n= 5"}"#,
+    )
+    .expect("нода A");
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":300,"y":0,"text":"B\n= $in × 2"}"#,
+    )
+    .expect("нода B");
+    let id = |scene: &SceneState, prefix: &str| {
+        scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref().is_some_and(|t| t.starts_with(prefix)))
+            .map(|n| n.id.clone())
+            .expect("нода сценария")
+    };
+    let (id_a, id_b) = (id(&scene, "A"), id(&scene, "B"));
+    let edge_id = dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(r#"{{"from":"{id_a}","to":"{id_b}"}}"#),
+    )
+    .expect("edge")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    dispatch(
+        &mut scene,
+        "flow_set_kind",
+        &format!(r#"{{"id":"{edge_id}","kind":"value"}}"#),
+    )
+    .expect("value-ребро");
+
+    let out = dispatch(
+        &mut scene,
+        "explain_number",
+        &format!(r#"{{"node_id":"{id_b}"}}"#),
+    )
+    .expect("explain_number итога B");
+    assert_eq!(out["render"], "text", "маркер text-first результата");
+    let text = out["text"].as_str().expect("текст объяснения");
+    assert!(
+        !text.contains("Режим what-if"),
+        "без активного сценария преамбулы нет: {text}"
+    );
+    // Заголовок: корень со значением (B = 5 × 2 = 10).
+    let first_line = text.lines().next().expect("первая строка");
+    assert!(first_line.starts_with("Цепочка расчёта: "), "{first_line}");
+    assert!(first_line.contains("= 10"), "{first_line}");
+    // Узлы: адрес [id:строка] корня и листа, канал с ребром, статистика.
+    // Лист-константа Numi-строки несёт формулу — панель тоже показывает её
+    // (паритет UI: «формула» приоритетнее пометки «исходное значение»).
+    assert!(text.contains(&format!("[{id_b}]")), "{text}");
+    assert!(text.contains(&format!("[{id_a}]")), "{text}");
+    assert!(text.contains("· формула: 5"), "{text}");
+    assert!(text.contains(&format!("(ребро {edge_id})")), "{text}");
+    assert!(text.ends_with("Всего узлов: 2 (листьев: 1)"), "{text}");
+    assert_eq!(out["root"]["node_id"], id_b.as_str());
+    assert_eq!(out["nodes"], 2);
+    assert_eq!(out["truncated"], false);
+
+    // Негативы — паритет с lineage: неизвестная нода / проза-корень.
+    assert!(dispatch(&mut scene, "explain_number", r#"{"node_id": "no-such"}"#).is_err());
+    assert!(dispatch(
+        &mut scene,
+        "explain_number",
+        &format!(r#"{{"node_id":"{id_b}", "line": 0}}"#)
+    )
+    .is_err());
+}
+
 /// MCP-parity (запрос владельца 2026-09-22): flow_recalc и
 /// analyze_bottlenecks следуют за АКТИВНЫМ what-if сценарием — агент
 /// видит те же числа/флаги, что пользователь на канвасе (инвариант
