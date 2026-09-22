@@ -4463,3 +4463,24 @@ user-docs (calculations.md, hotkeys.md, interface.md).
   инструмента — 41).
 - **Гейт:** mcp_wasm_gate ✓ (полная сессия wasmtime сошлась). Остальные
   гейты на слитном a4234d8 уже зелёные (fmt/clippy/test --workspace/wasm).
+
+## 2026-09-22 — FR-044: закрытие — слияние в main, CI 12/12 по SHA c8a5d82
+
+- **Слияние:** ветка `feature/fr-044-calc-panel-focus` влита в main
+  merge --no-ff **c2d4078** «Merge FR-044 into main: панель „Как
+  считается" + подсветка зависимостей в main stage…»; синхронизация с
+  параллельной выкладкой X6 — merge origin/main (c0cf774) → **a4234d8**
+  (конфликт только worklog — обе записи сохранены); упреждающий фикс
+  драйвера e2e — **c8a5d82** (tools/list 39→40, X6 explain_number).
+- **CI по SHA c8a5d82 — ПОЛНОСТЬЮ ЗЕЛЁНЫЙ (12/12 check-runs: gates ×3,
+  artifacts ×3, build, wasm-check, web /app + docs, licenses (cargo-deny),
+  deploy, report-build-status).**
+- **Гигиена:** ветка `feature/fr-044-calc-panel-focus` удалена локально.
+- **FR-044 — остаётся в работе:** Р-3-а (лейблы слотов в телах нод —
+  вместе с render/app-этапом FR-045), Q2-скролл/Q3-fade — v2. Выполнены:
+  ядро bundles, пилюли Р-1, панель «Как считается» Р-4, подсветка Р-5,
+  Esc-каскад Р-7, внешние источники Р-8, qualified-адрес пилюль Р-3
+  (инвариант 5), инварианты 1–8 покрыты тестами.
+- **Урок (повтор из FR-050):** параллельные выкладки уходили вперёд во
+  время работы (X6 дважды) — `git fetch` непосредственно перед merge и
+  push; счётчик инструментов MCP — точка синхронизации драйвера e2e.
