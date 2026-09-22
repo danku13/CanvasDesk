@@ -302,9 +302,18 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "flow_recalc",
-        description: "FR-029 v2: пересчитать весь граф потока значений; возвращает {node_id: {value, unit, outputs: {имя: {value, unit}} (именованные выходы), lines: [{index, value, unit}] (построчные значения), warnings? (конфликты проливания)}} для формульных нод (ошибки — {error: текст}); downstream учитывает значения upstream и проливание в параметры",
+        description: "FR-029 v2: карта значений потока — {node_id: {value, unit, outputs: {имя: {value, unit}} (именованные выходы, вкл. переменные Numi-листов), lines: [{index, value, unit}] (построчные), warnings? (конфликты), spilled? {param: {from, fromOutput?, fromLine?, value, unit}}, autoRows? [{slot, edge, path «Объект.Поле», field, value, unit | unmapped}] (FR-050 Р-4: производные строки приёмников)}}. Значения АКТИВНОГО what-if сценария — те же, что видит пользователь на канвасе (MCP-видимость = UI): подмены активного сценария учитываются, база — после whatif_scenario_activate «База». Цикл потока — ошибка вызова",
         required: &[],
         properties: &[],
+    },
+    ToolSpec {
+        name: "lineage",
+        description: "PRD-0007 (X2, FR-048): дерево происхождения цифры — те же данные, что окно проверки цепочки: node_id + line (индекс строки Numi-листа; null/без поля — итог ноды). Ответ {root, nodes[]}: DFS-порядок (родитель раньше ребёнка, ромб разворачивается), kind calc|leaf|cycle|unmapped|unlinked|truncated, value+unit|error, formula?, title, label? (терминальные: имя переменной/входа), children [{child (индекс в nodes), via? {edge_id, from_node, to_node, from_line?, from_output?, to_param?}}] — via = ребро для подсветки цепочки. Значения активного сценария; цикл потока — топология без значений (AC-2.4); бюджет 4096 узлов — свёртка truncated",
+        required: &["node_id"],
+        properties: &[
+            ("node_id", STR),
+            ("line", r#"{"type":["integer","null"],"minimum":0}"#),
+        ],
     },
     ToolSpec {
         name: "flow_cycle_check",
@@ -355,6 +364,18 @@ const TOOLS: &[ToolSpec] = &[
         properties: &[("id", STR), ("x", NUM), ("y", NUM), ("params", r#"{"type":"object"}"#)],
     },
     ToolSpec {
+        name: "schemes_list",
+        description: "PRD-0008 (Q5 v2): список встроенных схем галереи — те же пакеты, что видит пользователь в галерее (Ctrl+T): [{id, name, name_en, category, category_ru/en, version, description/description_en, nodes, edges}] — готовые канвасы с расчётами, пучками и подсказками; RU-первично, как в UI",
+        required: &[],
+        properties: &[],
+    },
+    ToolSpec {
+        name: "schemes_apply",
+        description: "PRD-0008 (Q5 v2): вставить схему в текущий канвас — как «Открыть» в галерее: id нод/рёбер ремапятся без коллизий (note-N/group-N/edge-N), содержимое центрируется в точку (x, y) или центр viewport (дефолт — видимое пользователю место); один undo-шаг (Ctrl+Z откатывает вставку целиком), полный пересчёт, what-if сценарии не трогаются. Ответ: {applied, name, nodes[] (созданные id), edges[] (схема как у edges_list — вкл. kind/fromLine/fromOutput/toParam), bbox [min_x, min_y, max_x, max_y] (для viewport_set/zoom-to-fit), flow} — flow = значения АКТИВНОГО сценария (как flow_recalc: значения/выходы/построчные/авто-строки)",
+        required: &["id"],
+        properties: &[("id", STR), ("x", NUM), ("y", NUM)],
+    },
+    ToolSpec {
         name: "viewport_get",
         description: "Центр viewport в world-координатах и зум",
         required: &[],
@@ -368,7 +389,7 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "graph_apply",
-        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; edge_delete {id|ref} — удаление ребра (FR-050 Н4: замена занятого toParam = пара edge_delete + edge_create в одном батче — второе edge_create в занятый параметр падает E-DOUBLE-INPUT); param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}. Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, error?}}} — flow = значения всех нод после пересчёта (второй вызов flow_recalc не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч",
+        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; edge_delete {id|ref} — удаление ребра (FR-050 Н4: замена занятого toParam = пара edge_delete + edge_create в одном батче — второе edge_create в занятый параметр падает E-DOUBLE-INPUT); param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}. Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, autoRows?, error?}}} — flow = значения АКТИВНОГО сценария после пересчёта (как flow_recalc; второй вызов не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч",
         required: &["operations"],
         properties: &[(
             "operations",
@@ -436,7 +457,7 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "analyze_bottlenecks",
-        description: "FR-016 (CP5): анализ узких мест и риска очередей — те же флаги, что видит пользователь на канвасе (оверлей Ctrl+B). Ответ: {nodes:[{id, severity (\"none\"|\"warn\"|\"critical\"|\"overload\"), utilization? (ρ, доля 0..1, >1 при перегрузке), queue_length?, wait_sec? (W, базовые секунды), badge (строка бейджа канваса)}], thresholds}. Детекция: значение ноды = ошибка Overload (ρ ≥ 1) → severity \"overload\" (ρ из ошибки); utilization-выход шаблона / Percent-значение → пороги 0.7/0.9; Time-значение (W) → пороги 100 ms/1 s; queue_length-выход → 1/10. Чистая функция над пересчитанным потоком: не мутирует канвас",
+        description: "FR-016 (CP5): анализ узких мест и риска очередей — те же флаги, что видит пользователь на канвасе (оверлей Ctrl+B) — АКТИВНОГО what-if состояния (подмены учитываются, MCP-видимость = UI). Ответ: {nodes:[{id, severity (\"none\"|\"warn\"|\"critical\"|\"overload\"), utilization? (ρ, доля 0..1, >1 при перегрузке), queue_length?, wait_sec? (W, базовые секунды), badge (строка бейджа канваса)}], thresholds}. Детекция: значение ноды = ошибка Overload (ρ ≥ 1) → severity \"overload\" (ρ из ошибки); utilization-выход шаблона / Percent-значение → пороги 0.7/0.9; Time-значение (W) → пороги 100 ms/1 s; queue_length-выход → 1/10. Чистая функция над пересчитанным потоком: не мутирует канвас",
         required: &[],
         properties: &[],
     },
@@ -1133,8 +1154,8 @@ mod tests {
         let tools = list["tools"].as_array().expect("массив tools");
         assert_eq!(
             tools.len(),
-            36,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6)"
+            39,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 3 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2/FR-048)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
@@ -1162,6 +1183,9 @@ mod tests {
             "graph_validate",
             "template_list",
             "template_instantiate",
+            "schemes_list",
+            "schemes_apply",
+            "lineage",
             "viewport_get",
             "viewport_set",
             "graph_apply",
@@ -1224,6 +1248,27 @@ mod tests {
             by_name("graph_validate")["inputSchema"]["required"],
             json!([])
         );
+        // PRD-0008 Q5 / PRD-0007 X2: схемы галереи + lineage
+        assert_eq!(
+            by_name("schemes_list")["inputSchema"]["required"],
+            json!([])
+        );
+        assert_eq!(
+            by_name("schemes_apply")["inputSchema"]["required"],
+            json!(["id"])
+        );
+        assert_eq!(
+            by_name("schemes_apply")["inputSchema"]["properties"]["x"]["type"],
+            json!("number")
+        );
+        assert_eq!(
+            by_name("lineage")["inputSchema"]["required"],
+            json!(["node_id"])
+        );
+        assert_eq!(
+            by_name("lineage")["inputSchema"]["properties"]["line"]["type"],
+            json!(["integer", "null"])
+        );
         // FR-033: схема graph_apply — операции с тегом op, лимиты массива
         let ops = &by_name("graph_apply")["inputSchema"]["properties"]["operations"];
         assert_eq!(ops["type"], "array");
@@ -1281,8 +1326,8 @@ mod tests {
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            36,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6)"
+            39,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage"
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

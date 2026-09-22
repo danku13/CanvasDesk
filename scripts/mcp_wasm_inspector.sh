@@ -91,7 +91,7 @@ import sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 tools = data.get("tools", [])
 names = {tool.get("name") for tool in tools}
-assert len(tools) == 36, f"tools/list: {len(tools)} != 36"
+assert len(tools) == 39, f"tools/list: {len(tools)} != 39"
 assert "graph_apply" in names, "graph_apply отсутствует в списке"
 print(f"    tools/list: {len(tools)} инструментов, graph_apply в списке")
 PY

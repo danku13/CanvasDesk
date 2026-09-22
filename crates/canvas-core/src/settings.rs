@@ -234,8 +234,10 @@ pub struct Settings {
     /// FR-025 (построчные точки выхода): у каждой формульной строки Numi-
     /// листа — свой выходной порт на правом краю ноды; drag от него создаёт
     /// value-ребро со значением именно этой строки (`Edge::from_line`).
-    /// Дефолт — выкл: поведение в точности прежнее (порты сторон, значение
-    /// ноды целиком). Рендер/hit-тест/drag читают флаг на кадре.
+    /// FR-050 Н3 (этап C, решение владельца раунд 3): дефолт — **вкл**
+    /// (максимальная наглядность проливания); старые конфиги без поля
+    /// грузятся включёнными, выключенный конфиг сохраняет выбор
+    /// пользователя. Рендер/hit-тест/drag читают флаг на кадре.
     pub line_ports: bool,
     /// FR-028: онбординг-тур пройден до конца («Готово» на последнем шаге) —
     /// авто-показ при старте выключен навсегда; ручной вход из меню «?»
@@ -354,8 +356,8 @@ impl Default for Settings {
             port_zone_px: PORT_ZONE_PRESETS[0],
             // Ревизия FR-025 (2026-09-16): палитра примарно свёрнута.
             template_palette_open: false,
-            // FR-025 (построчные точки выхода): по умолчанию выключено.
-            line_ports: false,
+            // FR-050 Н3 (этап C): построчные точки выхода — вкл по умолчанию.
+            line_ports: true,
             onboarding_done: false,
             onboarding_defers: 0,
             // FR-016: оверлей узких мест по умолчанию выключен.
@@ -929,12 +931,19 @@ mod tests {
         assert!(warn.is_none());
     }
 
-    /// FR-025: флаг построчных точек выхода — дефолт false (старые конфиги
-    /// без поля — прежнее поведение).
+    /// FR-025 × FR-050 Н3: флаг построчных точек выхода — дефолт **вкл**
+    /// (этап C FR-050); старые конфиги без поля грузятся включёнными,
+    /// явный false проходит round-trip.
     #[test]
-    fn line_ports_defaults_off_and_round_trips() {
+    fn line_ports_defaults_on_and_round_trips() {
         let (settings, warn) = Settings::load_toml_str("grid_visible = false\n");
-        assert!(!settings.line_ports, "дефолт — выкл");
+        assert!(settings.line_ports, "дефолт — вкл (FR-050 Н3, этап C)");
+        assert!(warn.is_none());
+        let (settings, warn) = Settings::load_toml_str("line_ports = false\n");
+        assert!(
+            !settings.line_ports,
+            "явный выключатель читается из конфига"
+        );
         assert!(warn.is_none());
         let (settings, warn) = Settings::load_toml_str("line_ports = true\n");
         assert!(settings.line_ports, "флаг читается из конфига");

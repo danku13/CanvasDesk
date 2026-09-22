@@ -251,6 +251,13 @@ pub struct SceneState {
     /// расширяется»), пересчитывается в `recompute_flow` — значения из
     /// активного сценария what-if. Рендер авто-строки — этап D FR-050.
     pub auto_rows: HashMap<String, Vec<flow::AutoRow>>,
+    /// FR-050 Р-3 (этап C): id value-рёбер в состоянии «не подставлено»
+    /// (unmapped, FR-045 R-3) — пунктир янтарным акцентом анализа + тултип
+    /// «проблема + решение». Runtime-кэш (не сериализуется, тот же источник
+    /// истины, что у `auto_rows`: готовые результаты пересчёта),
+    /// пересчитывается в `recompute_flow`; порядок детерминирован
+    /// (`canvas.nodes` × `canvas.edges`).
+    pub unmapped_edges: Vec<String>,
     /// FR-042 (E2): индекс пучков рёбер — группировка по упорядоченной паре
     /// концов для LOD-0 агрегации и main stage. Runtime-кэш (не
     /// сериализуется, инвариант «формат .canvas не расширяется»);
@@ -324,6 +331,7 @@ impl SceneState {
             expr_line_results: ExprLineResults::new(),
             param_spills: HashMap::new(),
             auto_rows: HashMap::new(),
+            unmapped_edges: Vec::new(),
             bundles,
             whatif_active: false,
             scenarios,
@@ -376,6 +384,7 @@ impl SceneState {
                     self.recompute_all_expr();
                     self.param_spills.clear();
                     self.auto_rows.clear();
+                    self.unmapped_edges.clear();
                     // FR-016: поток недоступен (цикл) — анализ пуст: без
                     // FlowSolutions детекции не на чем (честное отсутствие, не
                     // ложное «всё здорово»).
@@ -483,6 +492,18 @@ impl SceneState {
             auto_rows.insert(node.id.clone(), rows);
         }
         self.auto_rows = auto_rows;
+        // FR-050 Р-3 (этап C): unmapped-рёбра «не подставлено» — те же
+        // готовые результаты пересчёта (дедупликация по id: ребро адресует
+        // ровно одну ноду, но фильтр стоит дёшево и страхует порядок).
+        let mut unmapped_edges: Vec<String> = Vec::new();
+        for node in &self.canvas.nodes {
+            for input in flow::unmapped_inputs(&self.canvas, &node.id, solutions) {
+                if !unmapped_edges.contains(&input.edge_id) {
+                    unmapped_edges.push(input.edge_id);
+                }
+            }
+        }
+        self.unmapped_edges = unmapped_edges;
         // FR-017 (CP6): what-if представления нод для рендера — виртуальный
         // исходник, подсветка подмен, дельта-бейджи (только ноды с подменами;
         // рельеф базы рендер рисует как есть).
@@ -582,7 +603,11 @@ impl SceneState {
 
     /// FR-017: подмены активного сценария + протухшие маркеры. Режим не
     /// активен или «База» — пустые подмены (propagator = baseline).
-    fn active_whatif_overrides(&self) -> (flow::WhatIfOverrides, Vec<StaleOverride>) {
+    /// Активные what-if подмены (протухшие отфильтрованы — тихая
+    /// деградация, маркеры в whatif_stale). pub(crate): свежий пересчёт
+    /// активного состояния в MCP-инструментах (flow_recalc/analyze/
+    /// lineage) — тот же источник подмен, что у recompute_flow.
+    pub(crate) fn active_whatif_overrides(&self) -> (flow::WhatIfOverrides, Vec<StaleOverride>) {
         let mut whatif = flow::WhatIfOverrides::default();
         let mut stale = Vec::new();
         if self.whatif_active {
