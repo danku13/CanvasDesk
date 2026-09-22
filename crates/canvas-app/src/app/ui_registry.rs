@@ -80,6 +80,9 @@ pub mod id {
     pub const GALLERY: &str = "gallery";
     /// Онбординг-карточка (L5, Block).
     pub const ONBOARDING: &str = "onboarding";
+    /// FR-055 (этап U4, F-8): витрина кита (L5, Block — мимо панели
+    /// закрывается и глотает; вход — пункт «?» «О интерфейсе», Q5-a).
+    pub const KIT_GALLERY: &str = "kit_gallery";
     /// Empty-state карточка пустого канваса (L3, Capture — мимо карточки
     /// канвас жив, AC-1.1 FR-049).
     pub const EMPTY: &str = "empty";
@@ -107,6 +110,9 @@ pub enum KeyOwner {
     /// Диалог ревью автосвязи (PRD-0007 X4): Esc закрывает диалог
     /// (отклонённые забываются — возврат фоновой перепроверкой, AC-5.2).
     Autolink,
+    /// Витрина кита (FR-055 U4): Esc закрывает, прочие клавиши глотаются
+    /// (модаль поверх канваса; интерактив — только кнопки шапки).
+    KitGallery,
     /// Клавиатура идёт в канвас-лестницу (прежнее поведение).
     Canvas,
 }
@@ -118,6 +124,8 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
     match surface {
         id::ONBOARDING => Some(KeyOwner::Onboarding),
         id::GALLERY => Some(KeyOwner::Gallery),
+        // FR-055 U4: витрина кита — модаль (Esc закрывает, прочие глотаются)
+        id::KIT_GALLERY => Some(KeyOwner::KitGallery),
         id::EDITOR => Some(KeyOwner::Editor),
         id::SEARCH => Some(KeyOwner::Search),
         id::DIALOG => Some(KeyOwner::Dialog),
@@ -311,6 +319,15 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::GALLERY),
         );
     }
+    // FR-055 (этап U4, F-8): витрина кита — Modals/Block (мимо панели
+    // закрывается и глотает; вход — пункт «?» «О интерфейсе», Q5-a);
+    // клавиатура — только Esc (закрыть), прочие глотаются.
+    if app.kit_gallery_open {
+        reg.add(
+            SurfaceDecl::new(id::KIT_GALLERY, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::KIT_GALLERY),
+        );
+    }
     if app.onboarding.is_some() {
         reg.add(
             SurfaceDecl::new(id::ONBOARDING, UiLayer::Modals, CapturePolicy::Block)
@@ -364,6 +381,7 @@ const VISUAL_ORDER: &[&str] = &[
     id::HELP_MENU,
     id::DOCS,
     id::GALLERY,
+    id::KIT_GALLERY,
     id::ONBOARDING,
     id::DIALOG,
     id::EXPLAIN,
@@ -672,6 +690,20 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.panel_rect), "gallery-panel"));
         }
+        // FR-055 (этап U4): витрина кита — интерактивные зоны шапки (одни
+        // слоты, что у отрисовки — kit_ui::gallery_hit_slots); прочий контент
+        // витрины — декоративный (состояния показываются статически)
+        id::KIT_GALLERY => {
+            let (theme, close) = crate::kit_ui::gallery_hit_slots(viewport);
+            surface.hit_rects.push(HitRect::interactive(
+                UiRect::new(theme.x, theme.y, theme.w, theme.h),
+                "kit-gallery-theme",
+            ));
+            surface.hit_rects.push(HitRect::interactive(
+                UiRect::new(close.x, close.y, close.w, close.h),
+                "kit-gallery-close",
+            ));
+        }
         id::ONBOARDING => {
             if let Some(state) = &app.onboarding {
                 let card = onboarding_ui::card_rect(viewport, state.step, app.settings.language);
@@ -764,7 +796,7 @@ mod tests {
         )
     }
 
-    /// 21 поверхностей объявлены константами без дублей (контракт
+    /// Поверхности объявлены константами без дублей (контракт
     /// единственности реестра — паника на дубликате словлена сборкой).
     #[test]
     fn surface_ids_are_unique() {
@@ -787,6 +819,7 @@ mod tests {
             id::EDITOR,
             id::DIALOG,
             id::GALLERY,
+            id::KIT_GALLERY,
             id::ONBOARDING,
             id::EMPTY,
             id::MINIMAP,
@@ -1143,5 +1176,136 @@ mod tests {
         assert_eq!(layers, sorted, "полосы не по возрастанию слоя");
         assert!(layers.contains(&UiLayer::Modals));
         assert!(layers.contains(&UiLayer::Panels));
+    }
+
+    // --- FR-055 (этап U4 PRD-0009): витрина кита + DebugOverlay (G6) ---
+
+    /// Витрина в реестре: Modals/Block, hit-rect'ы шапки (тема/✕) на месте,
+    /// pick по кнопке темы даёт Element поверхности kit_gallery.
+    #[test]
+    fn kit_gallery_surface_pickable() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.kit_gallery_open = true;
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::KIT_GALLERY)
+            .expect("kit_gallery в реестре");
+        assert_eq!(decl.layer, UiLayer::Modals);
+        assert_eq!(decl.capture, CapturePolicy::Block);
+
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::KIT_GALLERY)
+            .expect("kit_gallery в кадре");
+        let elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        assert!(elements.contains(&"kit-gallery-theme"));
+        assert!(elements.contains(&"kit-gallery-close"));
+
+        // Курсор в центр кнопки темы → Element поверхности (координата —
+        // из hit-rect'а кадра, не из раскладки: один источник геометрии)
+        let theme = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "kit-gallery-theme")
+            .expect("кнопка темы");
+        let c = UiPoint::new(
+            theme.rect.x + theme.rect.w / 2.0,
+            theme.rect.y + theme.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::KIT_GALLERY);
+                assert_eq!(rect.element, "kit-gallery-theme");
+            }
+            other => panic!("кнопка темы не пикается: {other:?}"),
+        }
+        // Esc-стек: витрина — верх (открыта последней из модалей)
+        assert_eq!(key_owner(&reg), KeyOwner::KitGallery);
+    }
+
+    /// G6: DebugOverlay показывает рамки/подписи слоёв и имя под курсором.
+    /// Модель чистая (кадр + геометрия) — headless.
+    #[test]
+    fn debug_overlay_labels_layers_and_cursor() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.kit_gallery_open = true; // Block-модаль с hit-rect'ами
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        // Курсор — в центр кнопки «✕» витрины
+        let close = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::KIT_GALLERY)
+            .and_then(|s| {
+                s.hit_rects
+                    .iter()
+                    .find(|r| r.element == "kit-gallery-close")
+            })
+            .expect("✕ витрины")
+            .rect;
+        let cursor = [close.x + close.w / 2.0, close.y + close.h / 2.0];
+        let (quads, texts) =
+            crate::debug_overlay::build(&app.camera, [1280.0, 800.0], cursor, &frame);
+        // Рамка на каждый hit-rect кадра + плашка под курсором
+        let rect_count: usize = frame.surfaces.iter().map(|s| s.hit_rects.len()).sum();
+        assert!(
+            quads.len() >= rect_count,
+            "рамок {} меньше rect'ов {}",
+            quads.len(),
+            rect_count
+        );
+        // Подпись «слой/поверхность/элемент» — есть для витрины (Modals)
+        assert!(texts
+            .iter()
+            .any(|t| t.text.contains(&format!("L5·Modals / {}", id::KIT_GALLERY))));
+        // Имя под курсором — surface/element кнопки ✕
+        assert!(texts
+            .iter()
+            .any(|t| t.text == format!("{} / kit-gallery-close", id::KIT_GALLERY)));
+    }
+
+    /// G6: пересечения интерактивных rect'ов одного слоя подсвечиваются
+    /// (та же функция overlaps_within_layer, что у G4-линта). Кадр —
+    /// модельный (канонические состояния налезаний не дают — линт).
+    #[test]
+    fn debug_overlay_highlights_intersections() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        // Модельный кадр: две панели одного слоя с общим интерактивным
+        // rect'ом — пересечение обязано попасть в подсветку
+        let mut frame = UiFrame {
+            viewport: UiRect::new(0.0, 0.0, 1280.0, 800.0),
+            ..Default::default()
+        };
+        let mut a = SurfaceFrame::new("a", UiLayer::Panels, CapturePolicy::Capture, frame.viewport);
+        a.hit_rects.push(HitRect::interactive(
+            UiRect::new(100.0, 100.0, 200.0, 60.0),
+            "a-rect",
+        ));
+        let mut b = SurfaceFrame::new("b", UiLayer::Panels, CapturePolicy::Capture, frame.viewport);
+        b.hit_rects.push(HitRect::interactive(
+            UiRect::new(200.0, 120.0, 200.0, 60.0),
+            "b-rect",
+        ));
+        frame.surfaces.push(a);
+        frame.surfaces.push(b);
+        assert_eq!(frame.overlaps_within_layer().len(), 1);
+
+        let (quads, texts) =
+            crate::debug_overlay::build(&app.camera, [1280.0, 800.0], [10.0, 10.0], &frame);
+        // 2 рамки rect'ов + 1 плашка пересечения
+        assert_eq!(quads.len(), 3, "рамки + пересечение: {quads:?}");
+        assert!(texts
+            .iter()
+            .any(|t| t.text.contains("× a × b") && t.text.contains("L3·Panels")));
     }
 }

@@ -244,6 +244,19 @@ fn screen_rect_quad(
     }
 }
 
+/// FR-055 U4: pub(crate)-мост для kit_ui/debug_overlay (тот же паттерн
+/// screen→world; адаптеры кита живут в соседних модулях, камера — в App).
+pub(crate) fn screen_rect_quad_pub(
+    camera: &Camera,
+    viewport: Vec2,
+    rect: [f32; 4],
+    fill: [f32; 4],
+    border: [f32; 4],
+    radius: f32,
+) -> CardInstance {
+    screen_rect_quad(camera, viewport, rect, fill, border, radius)
+}
+
 /// Кружок с центром в screen-точке → world-инстанс (паттерн `cards::dot`).
 fn screen_dot(
     camera: &Camera,
@@ -1758,6 +1771,11 @@ pub struct App {
     /// FR-049: галерея готовых схем (модальная) — реестр встроенных
     /// пакетов `assets/canvas-schemes` (canvas-core::schemes).
     scheme_gallery: scheme_gallery_ui::SchemeGalleryState,
+    /// FR-055 (этап U4 PRD-0009): витрина кита открыта (поверхность
+    /// kit_gallery, Modals/Block) — пункт «?» «О интерфейсе» (Q5-a).
+    pub(crate) kit_gallery_open: bool,
+    /// FR-055 (этап U4, F-10): DebugOverlay виден (тогл F9 / `?ui=debug`).
+    pub(crate) debug_overlay: bool,
     /// FR-049: empty-state скрыт кнопкой «Пустой холст» до следующего
     /// опустошения канваса (сброс при появлении первой ноды).
     empty_state_dismissed: bool,
@@ -1988,6 +2006,10 @@ impl App {
                 panel
             },
             scheme_gallery: scheme_gallery_ui::SchemeGalleryState::default(),
+            // FR-055 U4: витрина кита закрыта, DebugOverlay выключен
+            // (в web включается параметром `?ui=debug` — url_params).
+            kit_gallery_open: false,
+            debug_overlay: false,
             empty_state_dismissed: false,
             pending_scheme: None,
             settings,
@@ -3200,13 +3222,22 @@ impl App {
         let dim = palette.control_disabled_text;
         if !self.scene.whatif_active {
             // Свёрнутый вид: пилюля входа.
+            // FR-055 (этап U4): стиль пилюли — через кит (kit::control_style_of:
+            // явные слоты menu_fill + DIALOG-рамка, капсула h/2 — каноническая
+            // форма; I-1 ноль скачка; текст — слот title напрямую, как был).
             let pill = whatif_ui::enter_pill_rect(viewport);
+            let pill_style = canvas_ui::kit::control_style_of(
+                palette.menu_fill,
+                canvas_core::tokens::DIALOG_BUTTON_BORDER,
+                [0.0; 4],
+                pill[3] / 2.0,
+            );
             instances.push(CardInstance {
                 pos: [pill[0], pill[1]],
                 size: [pill[2], pill[3]],
-                fill: palette.menu_fill,
-                border: [0.35, 0.40, 0.50, 1.0],
-                params: [pill[3] / 2.0, 0.0, 0.0, 1.0],
+                fill: pill_style.fill,
+                border: pill_style.border,
+                params: [pill_style.radius, 0.0, 0.0, 1.0],
             });
             let (pill_box, pill_width) = centered_box(pill, 4.0);
             texts.push(OwnedScreenText {
@@ -3227,12 +3258,21 @@ impl App {
             border,
             params: [6.0, 0.0, 0.0, 1.0],
         };
+        // FR-055 (этап U4): контейнер бара — через кит (kit::panel_style_of:
+        // явные слоты menu_fill + DIALOG-рамка, канонический радиус 8 —
+        // I-1 ноль скачка; унификация радиусов — v2 с токен-паритетом)
+        let bar_style = canvas_ui::kit::panel_style_of(
+            palette.menu_fill,
+            canvas_core::tokens::DIALOG_BUTTON_BORDER,
+            8.0,
+            canvas_core::tokens::SPACING_MD,
+        );
         instances.push(CardInstance {
             pos: [layout.rect[0], layout.rect[1]],
             size: [layout.rect[2], layout.rect[3]],
-            fill: palette.menu_fill,
-            border: [0.35, 0.40, 0.50, 1.0],
-            params: [8.0, 0.0, 0.0, 1.0],
+            fill: bar_style.fill,
+            border: bar_style.border,
+            params: [bar_style.radius, 0.0, 0.0, 1.0],
         });
         // Индикатор режима.
         texts.push(OwnedScreenText {
@@ -5634,6 +5674,13 @@ impl App {
         self.pending_scheme = id;
     }
 
+    /// FR-055 (этап U4, F-10): включить/выключить DebugOverlay извне
+    /// (web-старт с `?ui=debug`; натив — тогл F9 в on_key).
+    pub fn set_debug_overlay(&mut self, on: bool) {
+        self.debug_overlay = on;
+        self.request_redraw();
+    }
+
     /// Empty-state пустого канваса виден: 0 нод и нет конкурирующих
     /// модальных поверхностей (US-1 AC-1.1).
     fn empty_state_visible(&self) -> bool {
@@ -5796,7 +5843,225 @@ impl App {
         self.scheme_gallery.close();
     }
 
-    /// Отрисовка галереи (screen-space): панель, шапка, фильтр, чипы,
+    /// FR-055 (этап U4 PRD-0009, F-8): витрина кита — полоса Modals кадра.
+    /// Компоненты × состояния × RU/EN × темы; слоты палитры — из
+    /// `effective_palette().kit_palette()` (маппинг render→ui).
+    fn kit_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut out = (Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let palette = self.effective_palette().kit_palette();
+        let lang = self.settings.language;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = crate::kit_ui::gallery_layout(viewport, lang, &mut m, &mut fs);
+        let mut d = crate::kit_ui::KitDraw::new(&self.camera, viewport);
+        let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        let cursor = self.cursor;
+
+        // Затемнение (kit Modal.dim) + панель (kit Modal.panel)
+        d.rect(vp, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let panel_style = canvas_ui::kit::modal_style(&palette);
+        d.rect(
+            lay.panel,
+            panel_style.fill,
+            panel_style.border,
+            panel_style.radius,
+        );
+
+        // Шапка: заголовок + кнопка темы (реальный kit::Button Primary) + «✕»
+        let hover = |r: &canvas_ui::geometry::UiRect| crate::kit_ui::cursor_in(r, cursor);
+        let theme_state = crate::kit_ui::cursor_state(hover(&lay.theme), false);
+        let theme_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Primary,
+            theme_state,
+            &palette,
+        );
+        let (theme_rect, theme_label) =
+            crate::kit_ui::theme_button_layout(lay.theme, lang, &mut m, &mut fs);
+        d.control(theme_rect, &theme_style);
+        d.label_center(theme_rect, &theme_label, theme_style.text, 13.0);
+        let close_state = crate::kit_ui::cursor_state(hover(&lay.close), false);
+        let close_style = canvas_ui::kit::icon_button_style(close_state, &palette);
+        d.control(lay.close, &close_style);
+        d.label_center(lay.close, "✕", close_style.text, 13.0);
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(lay.title.x, lay.title.y + 6.0, lay.title.w, 20.0),
+            crate::i18n::tr(lang, crate::i18n::keys::KIT_GALLERY_TITLE),
+            palette.text_title,
+            14.0,
+        );
+
+        let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
+
+        // Подписи секций (приглушённые — слот text_muted)
+        for (origin, key) in &lay.section_titles {
+            let text = label(key);
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(origin.x, origin.y, lay.content.w, 16.0),
+                &text,
+                palette.text_muted,
+                11.0,
+            );
+        }
+        // Buttons: 4 варианта × 4 состояния (слоты состояний палитры)
+        for row in &lay.button_rows {
+            let title_key = match row.variant {
+                canvas_ui::kit::ButtonVariant::Primary => crate::i18n::keys::KIT_BTN_PRIMARY,
+                canvas_ui::kit::ButtonVariant::Secondary => crate::i18n::keys::KIT_BTN_SECONDARY,
+                canvas_ui::kit::ButtonVariant::Ghost => crate::i18n::keys::KIT_BTN_GHOST,
+                canvas_ui::kit::ButtonVariant::Danger => crate::i18n::keys::KIT_BTN_DANGER,
+            };
+            let title = label(title_key);
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    row.slot.x,
+                    row.slot.y + 8.0,
+                    crate::kit_ui::STATE_LABEL_W,
+                    16.0,
+                ),
+                &title,
+                palette.text_muted,
+                11.0,
+            );
+            for (i, br) in row.buttons.iter().enumerate() {
+                let state = match i {
+                    0 => canvas_ui::kit::KitState::Normal,
+                    1 => canvas_ui::kit::KitState::Hovered,
+                    2 => canvas_ui::kit::KitState::Pressed,
+                    _ => canvas_ui::kit::KitState::Disabled,
+                };
+                let style = canvas_ui::kit::button_style(row.variant, state, &palette);
+                d.control(*br, &style);
+                let text = crate::i18n::tr(lang, crate::kit_ui::STATE_LABELS[i]);
+                d.label_center(*br, text, style.text, 13.0);
+            }
+        }
+        // IconButtons: 4 состояния
+        let icons = ["✕", "⚙", "?", "+"];
+        for (i, r) in lay.icon_buttons.iter().enumerate() {
+            let state = match i {
+                0 => canvas_ui::kit::KitState::Normal,
+                1 => canvas_ui::kit::KitState::Hovered,
+                2 => canvas_ui::kit::KitState::Pressed,
+                _ => canvas_ui::kit::KitState::Disabled,
+            };
+            let style = canvas_ui::kit::icon_button_style(state, &palette);
+            d.control(*r, &style);
+            let area = canvas_ui::geometry::UiRect::new(r.x, r.y + 1.0, r.w, r.h);
+            d.label_center(area, icons[i], style.text, 13.0);
+        }
+        // Chips: Normal/Hover/Selected/Disabled
+        for (i, r) in lay.chips.iter().enumerate() {
+            let state = match i {
+                0 => canvas_ui::kit::KitState::Normal,
+                1 => canvas_ui::kit::KitState::Hovered,
+                2 => canvas_ui::kit::KitState::Selected,
+                _ => canvas_ui::kit::KitState::Disabled,
+            };
+            let style = canvas_ui::kit::chip_style(state, &palette);
+            d.control(*r, &style);
+            let text = crate::i18n::tr(lang, crate::kit_ui::STATE_LABELS[i]);
+            d.label_center(*r, text, style.text, 12.0);
+        }
+        // Dropdown: якорь + открытое меню (3 строки, hover по курсору)
+        {
+            let style = canvas_ui::kit::button_style(
+                canvas_ui::kit::ButtonVariant::Secondary,
+                canvas_ui::kit::KitState::Normal,
+                &palette,
+            );
+            d.control(lay.dropdown_anchor, &style);
+            let text = label(crate::i18n::keys::KIT_DROPDOWN_ANCHOR);
+            d.label_center(lay.dropdown_anchor, &text, style.text, 13.0);
+            d.rect(
+                lay.dropdown_menu,
+                palette.panel_fill,
+                palette.panel_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            for r in &lay.dropdown_items {
+                let state = crate::kit_ui::dropdown_item_state(crate::kit_ui::cursor_in(r, cursor));
+                let style = canvas_ui::kit::chip_style(state, &palette);
+                d.rect(*r, style.fill, [0.0; 4], 4.0);
+                let text = label(crate::i18n::keys::KIT_DROPDOWN_ITEM);
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(r.x + 8.0, r.y + 5.0, r.w - 16.0, r.h - 6.0),
+                    &text,
+                    style.text,
+                    12.0,
+                );
+            }
+        }
+        // Toast: строка-демо (kit Toast: TTL/зона — контракт кита)
+        {
+            let text = label(crate::i18n::keys::KIT_TOAST_BODY);
+            d.label_left(lay.toast, &text, palette.text_muted, 12.0);
+        }
+        // Tooltip: якорь-чип + пузырь (delay пройден — показан)
+        {
+            let style = canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &palette);
+            d.control(lay.tooltip_anchor, &style);
+            let text = label(crate::i18n::keys::KIT_TOOLTIP_ANCHOR);
+            d.label_center(lay.tooltip_anchor, &text, style.text, 12.0);
+            if !lay.tooltip.is_empty() {
+                d.rect(
+                    lay.tooltip,
+                    panel_style.fill,
+                    palette.accent,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                let text = label(crate::i18n::keys::KIT_TOOLTIP_BODY);
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        lay.tooltip.x + 8.0,
+                        lay.tooltip.y + 2.0,
+                        lay.tooltip.w - 16.0,
+                        14.0,
+                    ),
+                    &text,
+                    palette.text,
+                    12.0,
+                );
+            }
+        }
+
+        // Конвертация владеемых текстов адаптера в OwnedScreenText кадра
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        out
+    }
+
+    /// FR-055 U4: клик по витрине — кнопка темы (реальный kit-контрол:
+    /// переключение темы — смена слотов палитры) или «✕»/паддинг (глотается).
+    fn click_kit_gallery(&mut self, element: &str) {
+        match element {
+            "kit-gallery-theme" => {
+                // Паттерн кнопки темы угловых кнопок (toggle_theme)
+                self.toggle_theme();
+            }
+            "kit-gallery-close" => {
+                self.kit_gallery_open = false;
+            }
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Отрисовка галереи схем (screen-space): панель, шапка, фильтр, чипы,
     /// строки схем, футер-подсказка. Цвета — слоты ThemeColors.
     fn scheme_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
@@ -5851,12 +6116,21 @@ impl App {
             align: TextAlign::Center,
         });
         // Кнопка закрытия «×»
+        // FR-055 (этап U4): стиль — через кит (kit::control_style_of: явные
+        // слоты palette_chip_fill + title, RADIUS_CHIP — совпадает с прежним
+        // литеральным quad'ом; I-1 ноль скачка)
+        let close_style = canvas_ui::kit::control_style_of(
+            palette.palette_chip_fill,
+            [0.0; 4],
+            [0.0; 4],
+            canvas_core::tokens::RADIUS_CHIP,
+        );
         instances.push(CardInstance {
             pos: [lay.close_rect[0], lay.close_rect[1]],
             size: [lay.close_rect[2], lay.close_rect[3]],
-            fill: palette.palette_chip_fill,
-            border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 1.0],
+            fill: close_style.fill,
+            border: close_style.border,
+            params: [close_style.radius, 0.0, 0.0, 1.0],
         });
         texts.push(OwnedScreenText {
             text: "×".to_owned(),
@@ -9324,6 +9598,15 @@ impl App {
                 }
             }
             ui_registry::id::DOCS => self.docs.take().is_some(),
+            // FR-055 U4: витрина кита — Esc закрывает (один шаг, модаль)
+            ui_registry::id::KIT_GALLERY => {
+                if self.kit_gallery_open {
+                    self.kit_gallery_open = false;
+                    true
+                } else {
+                    false
+                }
+            }
             // Раскрытая колонка палитры закрывается без снятия выделения
             ui_registry::id::PALETTE => {
                 if self.palette_hover.open.is_some() || self.palette_hover.pending() {
@@ -9430,6 +9713,21 @@ impl App {
                 // Esc/фильтр), остальное глотается (канвас не получает)
                 if self.scheme_gallery.open {
                     if event.state == ElementState::Pressed && self.on_gallery_key(event) {
+                        self.request_redraw();
+                    }
+                    return true;
+                }
+                true
+            }
+            ui_registry::KeyOwner::KitGallery => {
+                // FR-055 U4: витрина кита — модаль; Esc закрывает, прочие
+                // клавиши глотаются (интерактив — только кнопки шапки)
+                if self.kit_gallery_open {
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                    {
+                        self.kit_gallery_open = false;
                         self.request_redraw();
                     }
                     return true;
@@ -9723,6 +10021,18 @@ impl App {
                     return;
                 }
             }
+        }
+        // FR-055 (этап U4, F-10): F9 — тогл DebugOverlay (слои/rect'ы/имя
+        // под курсором/пересечения — G6). Вне KeyboardRouter НАМЕРЕННО:
+        // диагностический тогл работает при любом скоупе (модали не глотают)
+        // и не влияет на контракт поверхностей (в реестре не участвует).
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && event.logical_key == Key::Named(NamedKey::F9)
+        {
+            self.debug_overlay = !self.debug_overlay;
+            self.request_redraw();
+            return;
         }
         // Ctrl+F — открыть панель поиска (T14; кириллическая раскладка — «а»);
         // активное редактирование сначала фиксируется
@@ -11025,6 +11335,12 @@ impl App {
                 self.request_redraw();
                 true
             }
+            // FR-055 U4: витрина кита — «✕»/кнопка темы; прочий клик по панели
+            // глотается (Block-модаль, backdrop-контракт закрывает мимо панели)
+            ui_registry::id::KIT_GALLERY => {
+                self.click_kit_gallery(element);
+                true
+            }
             ui_registry::id::ONBOARDING => {
                 self.click_onboarding();
                 true
@@ -11119,6 +11435,13 @@ impl App {
     /// near/far логика внутри обработчика.
     fn dispatch_surface_backdrop(&mut self, surface: &str) -> bool {
         match surface {
+            // FR-055 U4: клик мимо витрины — закрыть и глотнуть (контракт
+            // Block-поверхности, паттерн галереи схем)
+            ui_registry::id::KIT_GALLERY => {
+                self.kit_gallery_open = false;
+                self.request_redraw();
+                true
+            }
             ui_registry::id::GALLERY => {
                 self.scheme_gallery.close();
                 self.request_redraw();
@@ -11651,6 +11974,13 @@ impl App {
                 Some(docs_ui::HelpMenuItem::Schemes) => {
                     self.help_menu = None;
                     self.scheme_gallery.open();
+                }
+                // FR-055 U4 (Q5-a): «О интерфейсе» — витрина кита
+                // (модаль; вход из меню «?», доступна всегда)
+                Some(docs_ui::HelpMenuItem::Interface) => {
+                    self.help_menu = None;
+                    self.kit_gallery_open = true;
+                    self.request_redraw();
                 }
                 None => {
                     // Поверхность меню (паддинг) — глотается, меню
@@ -16241,7 +16571,14 @@ impl ApplicationHandler<AppEvent> for App {
                     let (settings_instances, settings_texts) = self.settings_overlay();
                     screen_bands.push(UiLayer::Panels, settings_instances, settings_texts);
                 }
-                if self.scheme_gallery.open {
+                // FR-055 (этап U4): витрина кита — модаль поверх всего
+                // (Modals/Block: pick через реестр, backdrop закрывает);
+                // взаимоисключима с галереей схем/empty-state (прежняя
+                // цепочка if/else сохранена — 0 дельт канонических состояний)
+                if self.kit_gallery_open {
+                    let (kit_instances, kit_texts) = self.kit_gallery_overlay();
+                    screen_bands.push(UiLayer::Modals, kit_instances, kit_texts);
+                } else if self.scheme_gallery.open {
                     let (gal_instances, gal_texts) = self.scheme_gallery_overlay();
                     screen_bands.push(UiLayer::Modals, gal_instances, gal_texts);
                 } else if self.empty_state_visible() {
@@ -16698,6 +17035,20 @@ impl ApplicationHandler<AppEvent> for App {
                     let (insts, texts) = self.autolink_frame(stage_viewport);
                     stage_instances.extend(insts);
                     stage_owned_texts.extend(texts);
+                }
+                // FR-055 (этап U4, F-10): DebugOverlay — ПОСЛЕДНЯЯ полоса
+                // кадра (UiLayer::Debug, L8): рамки hit-rect'ов по слоям,
+                // имя под курсором, подсветка пересечений (G6). Модель
+                // чистая — по кадру реестра (тот же build_frame, что у ввода)
+                if self.debug_overlay {
+                    let ui_frame = ui_registry::build_frame(self);
+                    let (dbg_instances, dbg_texts) = crate::debug_overlay::build(
+                        &self.camera,
+                        self.viewport_logical(),
+                        self.cursor,
+                        &ui_frame,
+                    );
+                    screen_bands.push(UiLayer::Debug, dbg_instances, dbg_texts);
                 }
                 // FR-052 (U2): полосы в порядке отрисовки (слои по возрастанию)
                 // + Owned-тексты → заимствованные ScreenText (заём живёт до

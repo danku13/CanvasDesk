@@ -34,6 +34,10 @@ pub struct WebParams {
     /// инициализации App. Неизвестный id — мягкий отказ (тост), URL не
     /// валидируется здесь: реестр схем проверяет при применении.
     pub template: Option<String>,
+    /// `?ui=debug` (FR-055 U4, F-10): DebugOverlay включён со старта
+    /// (рамки слоёв/имя под курсором/пересечения — G6). Другие значения —
+    /// None (мягкий игнор, страница открывается при любом URL).
+    pub ui_debug: bool,
 }
 
 /// Уровень лога из URL (срез `tracing_subscriber::filter::LevelFilter`:
@@ -226,12 +230,17 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
     let log_level = string_param(query, "log").and_then(|value| LogLevel::parse(&value));
     let canvas = string_param(query, "canvas").and_then(|value| sanitize_canvas_name(&value));
     let template = string_param(query, "template");
+    // FR-055 U4 (F-10): `?ui=debug` — DebugOverlay со старта; прочие
+    // значения (в т.ч. пустое) — мягкий игнор (URL с опечаткой не повод
+    // отказывать странице в остальных параметрах)
+    let ui_debug = string_param(query, "ui").as_deref() == Some("debug");
     Ok(WebParams {
         stress,
         stress_widgets,
         log_level,
         canvas,
         template,
+        ui_debug,
     })
 }
 
@@ -250,7 +259,8 @@ mod tests {
                 stress_widgets: None,
                 log_level: None,
                 canvas: None,
-                template: None
+                template: None,
+                ui_debug: false
             }
         );
     }
@@ -269,6 +279,23 @@ mod tests {
         assert_eq!(empty.template, None, "пустое значение — None");
     }
 
+    /// FR-055 U4 (F-10): `?ui=debug` — DebugOverlay со старта; прочие
+    /// значения и отсутствие параметра — false (мягкий игнор).
+    #[test]
+    fn ui_debug_param_parses() {
+        let params = parse_query("?ui=debug").expect("валидный запрос");
+        assert!(params.ui_debug);
+        // Комбинируется с остальными (дым G6: витрина+оверлей на web)
+        let params = parse_query("?stress=10&ui=debug&log=debug").expect("валидный запрос");
+        assert!(params.ui_debug);
+        assert_eq!(params.stress, Some(10));
+        // Другое значение / пустое — false
+        let params = parse_query("?ui=verbose").expect("валидный запрос");
+        assert!(!params.ui_debug);
+        let params = parse_query("?ui=").expect("валидный запрос");
+        assert!(!params.ui_debug);
+    }
+
     /// Ведущий `?` опционален (location.search его всегда даёт, но парсер
     /// не должен требовать).
     #[test]
@@ -280,7 +307,8 @@ mod tests {
                 stress_widgets: None,
                 log_level: None,
                 canvas: None,
-                template: None
+                template: None,
+                ui_debug: false
             }
         );
     }
@@ -299,7 +327,8 @@ mod tests {
                 stress_widgets: Some(10),
                 log_level: None,
                 canvas: Some("x.canvas".to_string()),
-                template: None
+                template: None,
+                ui_debug: false
             }
         );
     }

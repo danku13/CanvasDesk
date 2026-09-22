@@ -168,13 +168,16 @@ pub enum HelpMenuItem {
     Onboarding,
     /// «Галерея схем» — модальная галерея готовых схем (FR-049).
     Schemes,
+    /// «О интерфейсе» — витрина кита (FR-055 U4, Q5-a: доступна всегда).
+    Interface,
 }
 
 /// Пункты меню помощи (порядок отображения).
-pub const HELP_MENU_ITEMS: [HelpMenuItem; 3] = [
+pub const HELP_MENU_ITEMS: [HelpMenuItem; 4] = [
     HelpMenuItem::Docs,
     HelpMenuItem::Onboarding,
     HelpMenuItem::Schemes,
+    HelpMenuItem::Interface,
 ];
 
 /// Подпись пункта меню помощи (таблица [`crate::i18n`] — FR-040).
@@ -183,6 +186,7 @@ pub fn help_menu_item_label(item: HelpMenuItem, language: Language) -> &'static 
         HelpMenuItem::Docs => i18n::tr(language, keys::HELP_DOCS),
         HelpMenuItem::Onboarding => i18n::tr(language, keys::HELP_ONBOARDING),
         HelpMenuItem::Schemes => i18n::tr(language, keys::HELP_SCHEMES),
+        HelpMenuItem::Interface => i18n::tr(language, keys::HELP_INTERFACE),
     }
 }
 
