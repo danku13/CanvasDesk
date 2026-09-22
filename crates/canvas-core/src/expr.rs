@@ -1756,6 +1756,38 @@ fn percentile_inc(sorted: &[f64], p: f64) -> f64 {
     sorted[lower] + (sorted[upper] - sorted[lower]) * frac
 }
 
+// --- What-if дельты (FR-017/PRD-0007 F-6) --------------------------------
+
+/// FR-017 (CP6): строка дельты «(+Δ)» между базовым и what-if значением.
+/// Формат полный (гипотеза Q4): % — в процентных пунктах, иначе абсолют
+/// с единицей (Q4c). None — значения совпадают (дельты нет).
+///
+/// PRD-0007 X3: перенесено из `canvas-scene` в ядро — формат нужен и
+/// `lineage_deltas` (explain-дерево, AC-4.2), и карточкам канваса.
+pub fn whatif_delta_str(base: &Value, whatif: &Value) -> Option<String> {
+    let delta = whatif.num - base.num;
+    if delta.abs() < 1e-9 {
+        return None;
+    }
+    let rounded = (delta * 100.0).round() / 100.0;
+    let unit = whatif.unit.display();
+    if unit == "%" {
+        Some(format!("{rounded:+.0} пп"))
+    } else if unit.is_empty() {
+        Some(format!("{rounded:+}"))
+    } else {
+        Some(format!("{rounded:+} {unit}"))
+    }
+}
+
+/// FR-017: полный формат дельта-бейджа «было → стало (+Δ)» (гипотеза Q4) —
+/// то, что рендер показывает вместо голого значения изменившейся строки/
+/// итога. Без изменений — None (бейдж остаётся обычным).
+pub fn whatif_full_delta(base: &Value, whatif: &Value) -> Option<String> {
+    let delta = whatif_delta_str(base, whatif)?;
+    Some(format!("{base} → {whatif} ({delta})"))
+}
+
 // --- FR-021: каталог подсказок и детектор рода строки ---
 
 /// Подсказка функции (FR-021): имя, сигнатура, описание. Каталог —

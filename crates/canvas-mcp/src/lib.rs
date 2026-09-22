@@ -1294,6 +1294,140 @@ mod tests {
         }
     }
 
+    // --- Пакет скиллов MCP (skills/): контракт синхронности с реестром ---
+    // Правила проверок и протокол обновления пакета — skills/UPDATE-PROTOCOL.md.
+    // Файлы встраиваются include_str! (компайл-тайм — работает и под wasm);
+    // новый файл скилла добавляется в списки ниже осознанно.
+
+    /// Все markdown-файлы пакета скиллов (для call-позиций).
+    fn skills_package_text() -> String {
+        [
+            include_str!("../../../skills/README.md"),
+            include_str!("../../../skills/UPDATE-PROTOCOL.md"),
+            include_str!("../../../skills/CHANGELOG.md"),
+            include_str!("../../../skills/canvasdesk-mcp/SKILL.md"),
+            include_str!("../../../skills/canvasdesk-mcp/references/tools.md"),
+            include_str!("../../../skills/canvasdesk-model-build/SKILL.md"),
+            include_str!("../../../skills/canvasdesk-model-verify/SKILL.md"),
+            include_str!("../../../skills/canvasdesk-whatif/SKILL.md"),
+        ]
+        .concat()
+    }
+
+    /// Тела четырёх SKILL.md (для проверки покрытия инструментами).
+    fn skills_bodies_text() -> String {
+        [
+            include_str!("../../../skills/canvasdesk-mcp/SKILL.md"),
+            include_str!("../../../skills/canvasdesk-model-build/SKILL.md"),
+            include_str!("../../../skills/canvasdesk-model-verify/SKILL.md"),
+            include_str!("../../../skills/canvasdesk-whatif/SKILL.md"),
+        ]
+        .concat()
+    }
+
+    /// Токены в бэктиках в «позиции вызова» — `` `имя` {…} `` в той же
+    /// строке: такая форма в пакете означает вызов инструмента, поэтому
+    /// имя обязано быть в реестре (или в CALL_POSITION_OPS ниже).
+    fn call_position_tokens(text: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        for line in text.lines() {
+            let bytes = line.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] != b'`' {
+                    i += 1;
+                    continue;
+                }
+                let Some(close) = bytes[i + 1..].iter().position(|b| *b == b'`') else {
+                    break; // незакрытый бэктик на строке — дальше строки
+                };
+                let j = i + 1 + close;
+                let token = &line[i + 1..j];
+                let mut k = j + 1;
+                while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                    k += 1;
+                }
+                if k < bytes.len() && bytes[k] == b'{' {
+                    tokens.push(token.to_owned());
+                }
+                i = j + 1;
+            }
+        }
+        tokens
+    }
+
+    /// Операции graph_apply, легитимные в call-позиции скиллов, но не
+    /// являющиеся MCP-инструментами. Расширять осознанно (UPDATE-PROTOCOL).
+    const CALL_POSITION_OPS: &[&str] = &["param_set"];
+
+    /// Правило 1 (полнота): каталог skills/ описывает каждый инструмент
+    /// реестра TOOLS.
+    #[test]
+    fn skills_catalog_covers_every_tool() {
+        let catalog = include_str!("../../../skills/canvasdesk-mcp/references/tools.md");
+        for tool in TOOLS {
+            assert!(
+                catalog.contains(tool.name),
+                "skills: каталог references/tools.md не описывает инструмент {} — \
+                 обновите пакет (skills/UPDATE-PROTOCOL.md)",
+                tool.name
+            );
+        }
+    }
+
+    /// Правило 2 (покрытие): каждый инструмент упомянут хотя бы в одном
+    /// SKILL.md — новый инструмент обязан получить зону ответственности.
+    #[test]
+    fn skills_bodies_mention_every_tool() {
+        let bodies = skills_bodies_text();
+        for tool in TOOLS {
+            assert!(
+                bodies.contains(tool.name),
+                "skills: инструмент {} не упомянут ни в одном SKILL.md — \
+                 отнесите его к зоне скилла (skills/UPDATE-PROTOCOL.md)",
+                tool.name
+            );
+        }
+    }
+
+    /// Правило 3 (счётчик): README пакета несёт актуальное число
+    /// инструментов («N инструмент…» — с любым окончанием слова).
+    #[test]
+    fn skills_readme_tool_counter_is_current() {
+        let readme = include_str!("../../../skills/README.md");
+        assert!(
+            readme.contains(&format!("{} инструмент", TOOLS.len())),
+            "skills/README.md не содержит актуальный счётчик «{} инструмент(ов…)» — \
+             обновите пакет (skills/UPDATE-PROTOCOL.md)",
+            TOOLS.len()
+        );
+    }
+
+    /// Правило 4 (call-позиции): форма `` `имя` {…} `` в пакете — вызов;
+    /// имя обязано быть инструментом реестра или операцией батча. Ловит
+    /// вызовы удалённых/переименованных инструментов.
+    #[test]
+    fn skills_call_positions_are_registered_tools() {
+        for token in call_position_tokens(&skills_package_text()) {
+            let looks_like_identifier =
+                token.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                    && token
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            if !looks_like_identifier {
+                continue; // проза в бэктиках перед '{' — не вызов
+            }
+            let known = TOOLS.iter().any(|t| t.name == token)
+                || CALL_POSITION_OPS.contains(&token.as_str());
+            assert!(
+                known,
+                "skills: call-позиция `{token} {{…}}` не является инструментом \
+                 реестра TOOLS ни операцией батча — переименованный/удалённый \
+                 инструмент? (skills/UPDATE-PROTOCOL.md)"
+            );
+        }
+    }
+
     /// Автомат: initialize → initialized → tools/list → tools/call форвардит
     /// строку и разворачивает конверт приложения в text + structuredContent
     /// (FR-034; FakeTransport теперь возвращает конверт, как прод-`on_mcp_wake`).

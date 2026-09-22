@@ -17,10 +17,10 @@
 //! Всё, кроме фонового приёмника, — чистые функции/структуры; юнит-тесты
 //! внизу (§9.4-подобные сценарии лейаута/видимости/состояний).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use canvas_core::{LineageError, LineageNodeKind, LineageTree, LineageVia};
+use canvas_core::{LineageDelta, LineageError, LineageNodeKind, LineageTree, LineageVia};
 
 // --- геометрия окна (паттерн main stage: затемнение + плавающее окно) -----
 
@@ -385,14 +385,112 @@ pub fn node_at(layout: &TreeLayout, scale: f32, body: [f32; 4], point: [f32; 2])
     None
 }
 
+// --- what-if из дерева (PRD-0007 X3, F-6/AC-4.1) ---------------------------
+
+/// Кнопка «Изменить» на карточке ЛИСТА (AC-4.1): правый нижний угол
+/// карточки. `rect` — локальные px карточки, `scale` — fit-масштаб.
+pub fn edit_rect(card: [f32; 4], scale: f32) -> [f32; 4] {
+    const W: f32 = 54.0;
+    const H: f32 = 18.0;
+    const PAD: f32 = 8.0;
+    [
+        card[0] + card[2] - (W + PAD) * scale,
+        card[1] + card[3] - (H + 6.0) * scale,
+        W * scale,
+        H * scale,
+    ]
+}
+
+/// Inline-поле подмены (X3): закреплено в правом нижнем углу тела окна
+/// (одна геометрия для рендера и hit-теста — детерминизм).
+pub fn field_rect(body: [f32; 4]) -> [f32; 4] {
+    const W: f32 = 260.0;
+    const H: f32 = 26.0;
+    [
+        body[0] + body[2] - W - BODY_PAD,
+        body[1] + body[3] - H - BODY_PAD,
+        W,
+        H,
+    ]
+}
+
+/// Кнопка «Изменить» под точкой: обходит карточки листьев (обратный
+/// порядок — верхние позже; hit-тест той же геометрии, что у рендера).
+pub fn edit_at(
+    tree: &LineageTree,
+    layout: &TreeLayout,
+    scale: f32,
+    body: [f32; 4],
+    point: [f32; 2],
+) -> Option<usize> {
+    for laid in layout.nodes.iter().rev() {
+        let node = tree.nodes.get(laid.idx)?;
+        // Подмена адресует строку Numi-листа: у итога-программы/шаблона
+        // её нет (line: None) — кнопка не показывается (X3-скоуп).
+        let editable = node.kind == LineageNodeKind::Leaf
+            && node.line.is_some()
+            && matches!(&node.value, Some(Ok(_)));
+        if !editable {
+            continue;
+        }
+        let [x, y] = {
+            [
+                body[0] + BODY_PAD + laid.rect[0] * scale,
+                body[1] + BODY_PAD + laid.rect[1] * scale,
+            ]
+        };
+        let card = [x, y, laid.rect[2] * scale, laid.rect[3] * scale];
+        let rect = edit_rect(card, scale);
+        if point[0] >= rect[0]
+            && point[0] <= rect[0] + rect[2]
+            && point[1] >= rect[1]
+            && point[1] <= rect[1] + rect[3]
+        {
+            return Some(laid.idx);
+        }
+    }
+    None
+}
+
+/// Inline-поле подмены листа (AC-4.1): одна строка текста, открывается
+/// по кнопке «Изменить», коммит — Enter/клик мимо, отмена — Esc.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditField {
+    /// Индекс редактируемого узла дерева.
+    pub idx: usize,
+    /// Текст поля (preset — текущая подмена или исходник строки).
+    pub text: String,
+}
+
+impl EditField {
+    /// Ввод строки (клавиши-символы события, включая кириллицу).
+    pub fn type_str(&mut self, s: &str) {
+        self.text.push_str(s);
+    }
+
+    /// Backspace: убрать последний графемный кластер (не байт — кириллица).
+    pub fn backspace(&mut self) {
+        self.text.pop();
+    }
+}
+
 // --- машина состояний окна (§6.4: Loading → Ready; Stale — чип) ------------
+
+/// Результат сборки X3: основное дерево (из `flow_active` — с подменами
+/// при активном what-if) плюс опциональная БАЗА (из `flow_baseline`) —
+/// источник дельт (AC-4.2). База строится тем же фоновым проходом —
+/// оба дерева из одного снапшота (инвариант F-5).
+pub struct LineageOutcome {
+    pub tree: Result<LineageTree, LineageError>,
+    pub base: Option<Result<LineageTree, LineageError>>,
+}
 
 /// Приёмник фоновой сборки: натив — канал потока; wasm/фолбэк — готово.
 pub enum ExplainBuild {
     /// Сборка идёт в фоновом потоке (UI не блокируется, G5).
-    Native(std::sync::mpsc::Receiver<Result<LineageTree, LineageError>>),
+    Native(std::sync::mpsc::Receiver<LineageOutcome>),
     /// Результат готов сразу (wasm — однопоточный рантайм, фолбэк spawn).
-    Done(Result<LineageTree, LineageError>),
+    Done(LineageOutcome),
 }
 
 /// Снапшот объяснения для сессионного кэша (AC-3.3, §9.2): переживает
@@ -405,6 +503,9 @@ pub struct ExplainSnapshot {
     pub revision: u64,
     /// Дерево-снапшот (F-5: одна модель для окна и подсветки).
     pub tree: LineageTree,
+    /// Базовое дерево (без what-if подмен) — источник дельт при
+    /// переоткрытии при активном сценарии (AC-4.2); None — подмен нет.
+    pub base_tree: Option<LineageTree>,
 }
 
 /// Что сделал клик по узлу дерева (AC-2.3): раскрыл фронтир / сфокусировал
@@ -440,6 +541,14 @@ pub struct ExplainState {
     pub cursor: Option<usize>,
     /// Модель изменилась после сборки (чип «Данные изменены», AC-3.3).
     pub stale: bool,
+    /// Базовое дерево (без what-if подмен) — источник дельт (AC-4.2);
+    /// None — подмен нет (обычное открытие/перестройка).
+    pub base_tree: Option<LineageTree>,
+    /// Дельты what-if по адресу узла (node_id, line) — AC-4.2; заполняются
+    /// при переходе в Ready, если base_tree есть.
+    pub deltas: BTreeMap<(String, Option<usize>), LineageDelta>,
+    /// Inline-поле подмены листа (AC-4.1) — одно за раз; не сериализуется.
+    pub edit: Option<EditField>,
 }
 
 impl ExplainState {
@@ -456,13 +565,22 @@ impl ExplainState {
             expanded: BTreeSet::new(),
             cursor: None,
             stale: false,
+            base_tree: None,
+            deltas: BTreeMap::new(),
+            edit: None,
         }
     }
 
     /// Переоткрыть из сессионного кэша (AC-3.3): Ready мгновенно; чип —
-    /// если модель изменилась с момента сборки.
+    /// если модель изменилась с момента сборки. Дельты what-if — из
+    /// снапшота (AC-4.2: переоткрытие при активном сценарии).
     pub fn from_snapshot(snap: ExplainSnapshot, current_revision: u64) -> Self {
         let stale = snap.revision != current_revision;
+        let deltas = snap
+            .base_tree
+            .as_ref()
+            .map(|base| canvas_core::lineage_deltas(base, &snap.tree))
+            .unwrap_or_default();
         Self {
             root: snap.root,
             revision: snap.revision,
@@ -473,6 +591,9 @@ impl ExplainState {
             expanded: BTreeSet::new(),
             cursor: None,
             stale,
+            base_tree: snap.base_tree,
+            deltas,
+            edit: None,
         }
     }
 
@@ -501,27 +622,48 @@ impl ExplainState {
         self.tree = Some(tree);
     }
 
+    /// Забрать базовое дерево (закрытие → сессионный кэш, AC-4.2).
+    pub fn take_base_tree(&mut self) -> Option<LineageTree> {
+        self.base_tree.take()
+    }
+
     /// Опрос фоновой сборки (кадр Loading): true — переход в Ready.
     pub fn poll(&mut self) -> bool {
         let Some(build) = self.build.as_mut() else {
             return false;
         };
-        let result = match build {
+        let outcome = match build {
             ExplainBuild::Native(rx) => match rx.try_recv() {
-                Ok(result) => Some(result),
+                Ok(outcome) => Some(outcome),
                 Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    Some(Err(LineageError::RootNotFound(self.root.node_id.clone())))
-                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(LineageOutcome {
+                    tree: Err(LineageError::RootNotFound(self.root.node_id.clone())),
+                    base: None,
+                }),
             },
-            ExplainBuild::Done(result) => Some(std::mem::replace(
-                result,
-                Err(LineageError::RootNotFound(self.root.node_id.clone())),
+            ExplainBuild::Done(outcome) => Some(std::mem::replace(
+                outcome,
+                LineageOutcome {
+                    tree: Err(LineageError::RootNotFound(self.root.node_id.clone())),
+                    base: None,
+                },
             )),
         };
-        if let Some(result) = result {
+        if let Some(outcome) = outcome {
             self.build = None;
-            if let Ok(tree) = result {
+            if let Ok(tree) = outcome.tree {
+                // Дельты what-if (AC-4.2): база построена тем же проходом
+                // из flow_baseline — оба дерева из одного снапшота (F-5).
+                self.deltas = outcome
+                    .base
+                    .as_ref()
+                    .and_then(|base| base.as_ref().ok())
+                    .map(|base| canvas_core::lineage_deltas(base, &tree))
+                    .unwrap_or_default();
+                self.base_tree = outcome
+                    .base
+                    .and_then(|base| base.ok())
+                    .or(self.base_tree.take());
                 self.tree = Some(tree);
                 self.view_path = vec![0];
                 self.expanded.clear();
@@ -588,6 +730,50 @@ impl ExplainState {
         if level < self.view_path.len() {
             self.view_path.truncate(level + 1);
         }
+    }
+
+    // --- what-if из дерева (X3, AC-4.1) ------------------------------------
+
+    /// Открыть inline-поле подмены на узле `idx` (AC-4.1). `preset` —
+    /// текущая подмена активного сценария (если есть); иначе исходник
+    /// строки (`formula` узла). Узел должен быть редактируемым листом:
+    /// kind Leaf, `line: Some` (адрес строки Numi-листа), значение Ok.
+    /// Возвращает true — поле открыто.
+    pub fn start_edit(&mut self, idx: usize, tree: &LineageTree, preset: Option<String>) -> bool {
+        let Some(node) = tree.nodes.get(idx) else {
+            return false;
+        };
+        let editable = node.kind == LineageNodeKind::Leaf
+            && node.line.is_some()
+            && matches!(&node.value, Some(Ok(_)));
+        if !editable {
+            return false;
+        }
+        let text = preset.or_else(|| node.formula.clone()).unwrap_or_default();
+        self.edit = Some(EditField { idx, text });
+        true
+    }
+
+    /// Закрыть inline-поле с коммитом (Enter/клик мимо): Some((node_id,
+    /// line, новый текст строки)) — приложение применит подмену через
+    /// `WhatIfOverrides` (FR-017); None — узел/строка не найдены или
+    /// текст пуст/равен исходнику (поле закрывается без подмены).
+    pub fn finish_edit(&mut self) -> Option<(String, usize, String)> {
+        let edit = self.edit.take()?;
+        let tree = self.tree.as_ref()?;
+        let node = tree.nodes.get(edit.idx)?;
+        let line = node.line?;
+        let source = node.formula.clone().unwrap_or_default();
+        let text = edit.text.trim().to_owned();
+        if text.is_empty() || text == source.trim() {
+            return None; // пустое/неизменённое поле — отмена без подмены
+        }
+        Some((node.node_id.clone(), line, text))
+    }
+
+    /// Отмена inline-поля (Esc): просто закрыть, модель не меняется.
+    pub fn cancel_edit(&mut self) {
+        self.edit = None;
     }
 }
 
@@ -776,7 +962,10 @@ mod tests {
         let mut st = ExplainState::loading(
             LineageNodeId::total("a"),
             7,
-            ExplainBuild::Done(Ok(tree.clone())),
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(tree.clone()),
+                base: None,
+            }),
         );
         assert!(st.is_loading());
         assert!(st.poll());
@@ -796,6 +985,7 @@ mod tests {
             root: LineageNodeId::total("a"),
             revision: 7,
             tree,
+            base_tree: None,
         };
         assert!(!ExplainState::from_snapshot(snap.clone(), 7).stale);
         assert!(ExplainState::from_snapshot(snap, 9).stale);
@@ -808,7 +998,10 @@ mod tests {
         let st = ExplainState::loading(
             LineageNodeId::total("a"),
             0,
-            ExplainBuild::Done(Err(LineageError::RootNotFound("a".into()))),
+            ExplainBuild::Done(LineageOutcome {
+                tree: Err(LineageError::RootNotFound("a".into())),
+                base: None,
+            }),
         );
         assert_eq!(st.loader_caption_at(&captions, 0), "c1");
         assert_eq!(st.loader_caption_at(&captions, LOADER_ROTATION_MS), "c2");
@@ -832,10 +1025,167 @@ mod tests {
         let mut st = ExplainState::loading(
             LineageNodeId::total("a"),
             0,
-            ExplainBuild::Done(Err(LineageError::RootNotFound("a".into()))),
+            ExplainBuild::Done(LineageOutcome {
+                tree: Err(LineageError::RootNotFound("a".into())),
+                base: None,
+            }),
         );
         assert!(!st.poll());
         assert!(st.is_failed());
         assert!(!st.is_ready());
+    }
+
+    /// X3 (AC-4.2): poll с базой — дельты считаются при переходе Ready;
+    /// дерево без базы — дельт нет.
+    #[test]
+    fn poll_with_base_builds_deltas() {
+        // sample_tree: узлы 0(a) → 1(b) → 2(c, лист); узел 3(d, лист).
+        // Лист c — редактируемая строка (line Some(0)); в базе значение
+        // 5, в what-if — 7 (дельта +2).
+        let mut base = sample_tree();
+        base.nodes[2].line = Some(0);
+        base.nodes[2].value = Some(Ok(canvas_core::expr::Value::scalar(5.0)));
+        let mut whatif = sample_tree();
+        whatif.nodes[2].line = Some(0);
+        whatif.nodes[2].value = Some(Ok(canvas_core::expr::Value::scalar(7.0)));
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            3,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(whatif),
+                base: Some(Ok(base)),
+            }),
+        );
+        assert!(st.poll());
+        assert_eq!(st.deltas.len(), 1, "дельта на листе c");
+        let delta = st
+            .deltas
+            .get(&("c".to_owned(), Some(0)))
+            .expect("ключ узла (c, line 0)");
+        assert_eq!(delta.delta, "+2");
+        assert!(st.base_tree.is_some());
+        // Переоткрытие из кэша сохраняет дельты (AC-4.2).
+        let snap = ExplainSnapshot {
+            root: LineageNodeId::total("a"),
+            revision: 3,
+            tree: st.tree().expect("дерево").clone(),
+            base_tree: st.base_tree.clone(),
+        };
+        let reopened = ExplainState::from_snapshot(snap, 3);
+        assert_eq!(reopened.deltas.len(), 1);
+        // Дерево без базы — дельты пусты.
+        let mut st2 = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(sample_tree()),
+                base: None,
+            }),
+        );
+        assert!(st2.poll());
+        assert!(st2.deltas.is_empty());
+    }
+
+    /// X3 (AC-4.1): кнопка «Изменить» — только на редактируемых листьях
+    /// (Leaf + line: Some + значение Ok); hit-тест edit_at.
+    #[test]
+    fn edit_button_targets_editable_leaves() {
+        let mut tree = sample_tree();
+        // Лист c (индекс 2) — редактируемый (line Some(0), value Ok);
+        // лист d (индекс 3) — line None (итог-программа) — не редактируемый.
+        tree.nodes[2].line = Some(0);
+        tree.nodes[2].value = Some(Ok(canvas_core::expr::Value::scalar(5.0)));
+        tree.nodes[3].value = Some(Ok(canvas_core::expr::Value::scalar(7.0)));
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0);
+        let body = [0.0, 0.0, 1200.0, 800.0];
+        // Точка кнопки листа c — из его карточки.
+        let laid = layout
+            .nodes
+            .iter()
+            .find(|n| n.idx == 2)
+            .expect("лист c в лейауте");
+        let x = body[0] + BODY_PAD + laid.rect[0] + laid.rect[2] - 20.0;
+        let y = body[1] + BODY_PAD + laid.rect[1] + laid.rect[3] - 10.0;
+        assert_eq!(edit_at(&tree, &layout, 1.0, body, [x, y]), Some(2));
+        // Точка кнопки листа d (не редактируемый) — None.
+        let laid_d = layout
+            .nodes
+            .iter()
+            .find(|n| n.idx == 3)
+            .expect("лист d в лейауте");
+        let xd = body[0] + BODY_PAD + laid_d.rect[0] + laid_d.rect[2] - 20.0;
+        let yd = body[1] + BODY_PAD + laid_d.rect[1] + laid_d.rect[3] - 10.0;
+        assert_eq!(edit_at(&tree, &layout, 1.0, body, [xd, yd]), None);
+    }
+
+    /// X3 (AC-4.1): inline-поле — start_edit задаёт preset (подмена или
+    /// исходник); finish_edit возвращает (node_id, line, текст) и
+    /// игнорирует пустое/неизменённое значение; Esc — отмена; ввод
+    /// строки/Backspace не рвут кириллицу.
+    #[test]
+    fn edit_field_lifecycle() {
+        let mut tree = sample_tree();
+        tree.nodes[2].line = Some(0);
+        tree.nodes[2].value = Some(Ok(canvas_core::expr::Value::scalar(5.0)));
+        tree.nodes[2].formula = Some("620".into());
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(tree.clone()),
+                base: None,
+            }),
+        );
+        st.poll();
+        let tree_for_check = st.tree().unwrap().clone();
+        // Расчётные узлы не редактируются (kind Calc).
+        assert!(!st.start_edit(0, &tree_for_check, None));
+        assert!(st.edit.is_none());
+        // Лист: preset нет → исходник строки.
+        assert!(st.start_edit(2, &tree_for_check, None));
+        assert_eq!(st.edit.as_ref().expect("поле").text, "620");
+        // Ввод кириллицы/символов + Backspace (pop последнего char —
+        // «₽» и кириллица не режутся по байтам).
+        let edit = st.edit.as_mut().expect("поле");
+        edit.text.clear();
+        edit.type_str("₽ 620");
+        edit.backspace();
+        assert_eq!(edit.text, "₽ 62");
+        edit.text.clear();
+        edit.type_str("700");
+        // finish: узел/строка/текст.
+        let outcome = st.finish_edit();
+        assert_eq!(
+            outcome,
+            Some(("c".to_owned(), 0, "700".to_owned())),
+            "коммит подмены"
+        );
+        assert!(st.edit.is_none());
+        // Неизменённое/пустое значение — без подмены.
+        assert!(st.start_edit(2, &tree_for_check, Some("620".into())));
+        assert_eq!(st.finish_edit(), None, "текст = исходник");
+        assert!(st.start_edit(2, &tree_for_check, Some("   ".into())));
+        assert_eq!(st.finish_edit(), None, "пустой текст");
+        // Esc — отмена.
+        assert!(st.start_edit(2, &tree_for_check, Some("9".into())));
+        st.cancel_edit();
+        assert!(st.edit.is_none());
+        assert_eq!(st.finish_edit(), None);
+    }
+
+    /// X3: кнопка «Изменить» рисуется в правом нижнем углу карточки
+    /// (edit_rect) — не вылезает за карточку при масштабе < 1.
+    #[test]
+    fn edit_rect_stays_inside_card() {
+        for scale in [1.0f32, 0.5, 0.25] {
+            let card = [40.0, 30.0, 158.0, 74.0];
+            let rect = edit_rect(card, scale);
+            assert!(rect[0] >= card[0] && rect[1] >= card[1]);
+            assert!(rect[0] + rect[2] <= card[0] + card[2] + 0.01);
+            assert!(rect[1] + rect[3] <= card[1] + card[3] + 0.01);
+            assert!(rect[2] > 0.0 && rect[3] > 0.0);
+        }
     }
 }
