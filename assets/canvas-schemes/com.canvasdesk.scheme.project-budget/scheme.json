@@ -1,244 +1,252 @@
 {
-  "id": "com.canvasdesk.scheme.project-budget",
-  "name_ru": "Бюджет проекта",
-  "name_en": "Project budget",
-  "description_ru": "Статьи в именованных группах, подытоги, резерв как доля от подытога, итог и денежный поток по стадиям платежей.",
-  "description_en": "Line items in labelled groups, subtotals, a reserve as a share of the team subtotal, the total and cash flow by payment stages.",
-  "category": "planning",
-  "category_ru": "Планирование",
-  "category_en": "Planning",
-  "version": "1.1.0",
-  "content": {
-    "nodes": [
-      {
-        "id": "hint",
-        "type": "text",
-        "x": 0,
-        "y": 0,
-        "width": 360,
-        "height": 240,
-        "text": "Бюджет проекта\nСтатьи по группам складываются в подытоги, добавляется резерв и считается итог; дальше денежный поток по стадиям платежей.\nПоменяйте любую статью — пересчитается вся цепочка. Пучки «Подытоги → Итог» и «График → Поток» открываются кликом в main stage.",
-        "color": "4"
-      },
-      {
-        "id": "group-team",
-        "type": "group",
-        "x": 420,
-        "y": 0,
-        "width": 330,
-        "height": 400,
-        "color": "3",
-        "label": "Команда: люди и инструменты",
-        "children": [
-          "salaries",
-          "teamtools"
-        ]
-      },
-      {
-        "id": "salaries",
-        "type": "text",
-        "x": 450,
-        "y": 60,
-        "width": 270,
-        "height": 150,
-        "text": "Зарплаты\nЕжемесячный фонд оплаты труда команды.\n\nsalaries = 12000 $",
-        "color": "5"
-      },
-      {
-        "id": "teamtools",
-        "type": "text",
-        "x": 450,
-        "y": 220,
-        "width": 270,
-        "height": 150,
-        "text": "Инструменты команды\nСервисы и подписки для разработки.\n\ntools = 1500 $",
-        "color": "5"
-      },
-      {
-        "id": "group-infra",
-        "type": "group",
-        "x": 420,
-        "y": 440,
-        "width": 330,
-        "height": 400,
-        "color": "3",
-        "label": "Инфраструктура: хостинг и лицензии",
-        "children": [
-          "hosting",
-          "licenses"
-        ]
-      },
-      {
-        "id": "hosting",
-        "type": "text",
-        "x": 450,
-        "y": 500,
-        "width": 270,
-        "height": 150,
-        "text": "Хостинг\nСерверы и облако под продакшн.\n\nhosting = 800 $",
-        "color": "5"
-      },
-      {
-        "id": "licenses",
-        "type": "text",
-        "x": 450,
-        "y": 660,
-        "width": 270,
-        "height": 150,
-        "text": "Лицензии\nСофт и лицензии на год.\n\nlicenses = 600 $",
-        "color": "5"
-      },
-      {
-        "id": "subtotals",
-        "type": "text",
-        "x": 840,
-        "y": 60,
-        "width": 290,
-        "height": 220,
-        "text": "Подытоги\nСуммы по группам: команда и инфраструктура.\n\nteam = $1 + $2\ninfra = $3 + $4",
-        "color": "2"
-      },
-      {
-        "id": "share",
-        "type": "text",
-        "x": 840,
-        "y": 420,
-        "width": 290,
-        "height": 150,
-        "text": "Доля резерва\nНепредвиденные расходы: доля от подытога команды.\n\nshare = 0.15",
-        "color": "5"
-      },
-      {
-        "id": "reserve",
-        "type": "text",
-        "x": 840,
-        "y": 600,
-        "width": 290,
-        "height": 180,
-        "text": "Резерв\nЗапас на непредвиденное: подытог команды приходит по связи в параметр и множится на долю.\n\n$team * $share",
-        "color": "2"
-      },
-      {
-        "id": "total",
-        "type": "text",
-        "x": 1220,
-        "y": 60,
-        "width": 290,
-        "height": 180,
-        "text": "Итог\nПодытоги плюс резерв: бюджет целиком.\n\ntotal = $1 + $2 + $3",
-        "color": "6"
-      },
-      {
-        "id": "payment",
-        "type": "text",
-        "x": 1220,
-        "y": 420,
-        "width": 290,
-        "height": 200,
-        "text": "График платежей\nДоли оплаты по стадиям: аванс и завершение — значения читаются по строкам.\n\n0.6\n0.4",
-        "color": "5"
-      },
-      {
-        "id": "cash",
-        "type": "text",
-        "x": 1600,
-        "y": 420,
-        "width": 300,
-        "height": 220,
-        "text": "Денежный поток\nОплата по стадиям: итог, помноженный на доли строк графика.\n\nadvance_sum = $1 * $2\nfinal_sum = advance_sum + $1 * $3",
-        "color": "2"
-      },
-      {
-        "id": "verdict",
-        "type": "text",
-        "x": 1600,
-        "y": 60,
-        "width": 320,
-        "height": 200,
-        "text": "Вердикт\nРезерв — пятнадцать процентов от команды: страховка планов.\nПучок «Подытоги → Итог» открывает веер значений обеих групп.\nПопробуйте сценарий на статьях: дельты увидите в потоке.",
-        "color": "4"
-      }
-    ],
-    "edges": [
-      {
-        "id": "e1",
-        "fromNode": "salaries",
-        "toNode": "subtotals",
-        "flowKind": "value"
-      },
-      {
-        "id": "e2",
-        "fromNode": "teamtools",
-        "toNode": "subtotals",
-        "flowKind": "value"
-      },
-      {
-        "id": "e3",
-        "fromNode": "hosting",
-        "toNode": "subtotals",
-        "flowKind": "value"
-      },
-      {
-        "id": "e4",
-        "fromNode": "licenses",
-        "toNode": "subtotals",
-        "flowKind": "value"
-      },
-      {
-        "id": "e5",
-        "fromNode": "subtotals",
-        "toNode": "reserve",
-        "flowKind": "value",
-        "fromOutput": "team",
-        "toParam": "team"
-      },
-      {
-        "id": "e6",
-        "fromNode": "share",
-        "toNode": "reserve",
-        "flowKind": "value",
-        "toParam": "share"
-      },
-      {
-        "id": "e7",
-        "fromNode": "subtotals",
-        "toNode": "total",
-        "flowKind": "value",
-        "fromOutput": "team"
-      },
-      {
-        "id": "e8",
-        "fromNode": "subtotals",
-        "toNode": "total",
-        "flowKind": "value",
-        "fromOutput": "infra"
-      },
-      {
-        "id": "e9",
-        "fromNode": "reserve",
-        "toNode": "total",
-        "flowKind": "value"
-      },
-      {
-        "id": "e10",
-        "fromNode": "total",
-        "toNode": "cash",
-        "flowKind": "value"
-      },
-      {
-        "id": "e11",
-        "fromNode": "payment",
-        "toNode": "cash",
-        "flowKind": "value",
-        "fromLine": 3
-      },
-      {
-        "id": "e12",
-        "fromNode": "payment",
-        "toNode": "cash",
-        "flowKind": "value",
-        "fromLine": 4
-      }
+ "id": "com.canvasdesk.scheme.project-budget",
+ "name_ru": "Бюджет проекта",
+ "name_en": "Project budget",
+ "description_ru": "Статьи в именованных группах, подытоги, резерв как доля от подытога, итог и денежный поток по стадиям платежей.",
+ "description_en": "Line items in labelled groups, subtotals, a reserve as a share of the team subtotal, the total and cash flow by payment stages.",
+ "category": "planning",
+ "category_ru": "Планирование",
+ "category_en": "Planning",
+ "version": "1.1.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 240,
+    "text": "Бюджет проекта\nСтатьи по группам складываются в подытоги, добавляется резерв и считается итог; дальше денежный поток по стадиям платежей.\nПоменяйте любую статью — пересчитается вся цепочка. Пучки «Подытоги → Итог» и «График → Поток» открываются кликом в main stage.",
+    "color": "4"
+   },
+   {
+    "id": "group-team",
+    "type": "group",
+    "x": 420,
+    "y": 0,
+    "width": 330,
+    "height": 400,
+    "color": "3",
+    "label": "Команда: люди и инструменты",
+    "children": [
+     "salaries",
+     "teamtools"
     ]
-  }
+   },
+   {
+    "id": "salaries",
+    "type": "text",
+    "x": 450,
+    "y": 60,
+    "width": 270,
+    "height": 150,
+    "text": "Зарплаты\nЕжемесячный фонд оплаты труда команды.\n\nsalaries = 12000 $",
+    "color": "5"
+   },
+   {
+    "id": "teamtools",
+    "type": "text",
+    "x": 450,
+    "y": 220,
+    "width": 270,
+    "height": 150,
+    "text": "Инструменты команды\nСервисы и подписки для разработки.\n\ntools = 1500 $",
+    "color": "5",
+    "label": "Инструменты"
+   },
+   {
+    "id": "group-infra",
+    "type": "group",
+    "x": 420,
+    "y": 440,
+    "width": 330,
+    "height": 400,
+    "color": "3",
+    "label": "Инфраструктура: хостинг и лицензии",
+    "children": [
+     "hosting",
+     "licenses"
+    ]
+   },
+   {
+    "id": "hosting",
+    "type": "text",
+    "x": 450,
+    "y": 500,
+    "width": 270,
+    "height": 150,
+    "text": "Хостинг\nСерверы и облако под продакшн.\n\nhosting = 800 $",
+    "color": "5"
+   },
+   {
+    "id": "licenses",
+    "type": "text",
+    "x": 450,
+    "y": 660,
+    "width": 270,
+    "height": 150,
+    "text": "Лицензии\nСофт и лицензии на год.\n\nlicenses = 600 $",
+    "color": "5"
+   },
+   {
+    "id": "subtotals",
+    "type": "text",
+    "x": 840,
+    "y": 60,
+    "width": 290,
+    "height": 220,
+    "text": "Подытоги\nСуммы по группам: команда и инфраструктура.\n\nteam = Зарплаты.salaries + Инструменты.tools\ninfra = Хостинг.hosting + Лицензии.licenses",
+    "color": "2"
+   },
+   {
+    "id": "share",
+    "type": "text",
+    "x": 840,
+    "y": 420,
+    "width": 290,
+    "height": 150,
+    "text": "Доля резерва\nНепредвиденные расходы: доля от подытога команды.\n\nshare = 0.15",
+    "color": "5"
+   },
+   {
+    "id": "reserve",
+    "type": "text",
+    "x": 840,
+    "y": 600,
+    "width": 290,
+    "height": 180,
+    "text": "Резерв\nЗапас на непредвиденное: подытог команды приходит по связи в параметр и множится на долю.\n\nreserve_sum = $team * $share",
+    "color": "2"
+   },
+   {
+    "id": "total",
+    "type": "text",
+    "x": 1220,
+    "y": 60,
+    "width": 290,
+    "height": 180,
+    "text": "Итог\nПодытоги плюс резерв: бюджет целиком.\n\ntotal = Подытоги.team + Подытоги.infra + Резерв.reserve_sum",
+    "color": "6"
+   },
+   {
+    "id": "payment",
+    "type": "text",
+    "x": 1220,
+    "y": 420,
+    "width": 290,
+    "height": 200,
+    "text": "График платежей\nДоли оплаты по стадиям: аванс и завершение — значения читаются по строкам.\n\nadvance = 0.6\nfinal = 0.4",
+    "color": "5",
+    "label": "График"
+   },
+   {
+    "id": "cash",
+    "type": "text",
+    "x": 1600,
+    "y": 420,
+    "width": 300,
+    "height": 220,
+    "text": "Денежный поток\nОплата по стадиям: итог, помноженный на доли графика.\n\nadvance_sum = Итог.total * График.advance\nfinal_sum = advance_sum + Итог.total * График.final",
+    "color": "2"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1600,
+    "y": 60,
+    "width": 320,
+    "height": 200,
+    "text": "Вердикт\nРезерв — пятнадцать процентов от команды: страховка планов.\nПучок «Подытоги → Итог» открывает веер значений обеих групп.\nПопробуйте сценарий на статьях: дельты увидите в потоке.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "salaries",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "salaries"
+   },
+   {
+    "id": "e2",
+    "fromNode": "teamtools",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "tools"
+   },
+   {
+    "id": "e3",
+    "fromNode": "hosting",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "hosting"
+   },
+   {
+    "id": "e4",
+    "fromNode": "licenses",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "licenses"
+   },
+   {
+    "id": "e5",
+    "fromNode": "subtotals",
+    "toNode": "reserve",
+    "flowKind": "value",
+    "fromOutput": "team",
+    "toParam": "team"
+   },
+   {
+    "id": "e6",
+    "fromNode": "share",
+    "toNode": "reserve",
+    "flowKind": "value",
+    "toParam": "share"
+   },
+   {
+    "id": "e7",
+    "fromNode": "subtotals",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "team"
+   },
+   {
+    "id": "e8",
+    "fromNode": "subtotals",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "infra"
+   },
+   {
+    "id": "e9",
+    "fromNode": "reserve",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "reserve_sum"
+   },
+   {
+    "id": "e10",
+    "fromNode": "total",
+    "toNode": "cash",
+    "flowKind": "value",
+    "fromOutput": "total"
+   },
+   {
+    "id": "e11",
+    "fromNode": "payment",
+    "toNode": "cash",
+    "flowKind": "value",
+    "fromOutput": "advance"
+   },
+   {
+    "id": "e12",
+    "fromNode": "payment",
+    "toNode": "cash",
+    "flowKind": "value",
+    "fromOutput": "final"
+   }
+  ]
+ }
 }
