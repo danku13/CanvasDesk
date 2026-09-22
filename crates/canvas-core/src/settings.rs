@@ -293,6 +293,12 @@ pub struct Settings {
     /// Рендер/ввод читают флаг на кадре (как `line_ports`). Старые конфиги
     /// без поля грузятся как true (serde default) — агрегация включена.
     pub edge_aggregation: bool,
+    /// PRD-0007 (FR-048 X2, AC-2.3): лимит глубины авто-раскрытия
+    /// explain-дерева (уровни от корня). Глубже лимита ветви раскрываются
+    /// вручную кликом по узлу-фронтиру. `0` — без ограничения (всё дерево
+    /// сразу). Дефолт 3 (решение владельца, раунд да/нет 2026-09-21).
+    /// Старые конфиги без поля грузятся как 3 (serde default).
+    pub explain_depth_limit: u8,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -320,6 +326,16 @@ pub fn next_port_zone(value: f32) -> f32 {
 /// ручной правки config.toml (0/отрицательные/гигантские значения).
 pub fn clamp_port_zone(value: f32) -> f32 {
     value.clamp(PORT_ZONE_MIN, PORT_ZONE_MAX)
+}
+
+/// PRD-0007: лимит авто-раскрытия explain-дерева «по умолчанию» (AC-2.3 —
+/// решение владельца: 3 уровня; глубже — ручное разворачивание).
+pub const EXPLAIN_DEPTH_DEFAULT: u8 = 3;
+
+/// Кламп лимита глубины explain-дерева (защита от ручной правки
+/// config.toml): 0 — без ограничения, 1..=12 — уровни.
+pub fn clamp_explain_depth(value: u8) -> u8 {
+    value.min(12)
 }
 
 impl Default for Settings {
@@ -359,6 +375,8 @@ impl Default for Settings {
             snap_anchor: SnapAnchor::BoundingBox,
             // FR-042 (F-13): агрегация связей включена по умолчанию.
             edge_aggregation: true,
+            // PRD-0007 (AC-2.3): авто-раскрытие 3 уровня, глубже — вручную.
+            explain_depth_limit: EXPLAIN_DEPTH_DEFAULT,
         }
     }
 }
@@ -516,6 +534,8 @@ impl Settings {
     fn normalize(&mut self) {
         self.port_zone_px = clamp_port_zone(self.port_zone_px);
         self.onboarding_defers = clamp_onboarding_defers(self.onboarding_defers);
+        // PRD-0007: лимит глубины explain-дерева (0 — «всё», 1..=12).
+        self.explain_depth_limit = clamp_explain_depth(self.explain_depth_limit);
         self.snap_tolerance_px = clamp_snap_tolerance(self.snap_tolerance_px);
         let (sub, coarse) =
             validated_grid_zoom_thresholds(self.snap_grid_sub_zoom, self.snap_grid_coarse_zoom);
@@ -571,6 +591,8 @@ mod tests {
             snap_grid_coarse_zoom: 0.25,
             snap_anchor: SnapAnchor::Center,
             edge_aggregation: true,
+            // PRD-0007 (AC-2.3): лимит глубины explain-дерева round-trip
+            explain_depth_limit: 4,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");

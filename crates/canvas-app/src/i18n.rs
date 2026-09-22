@@ -86,6 +86,49 @@ pub mod keys {
     /// FR-044: нижняя подсказка main stage с жестами закрытия/выделения.
     pub const STAGE_FOOT_HINT: &str = "stage.foot_hint";
 
+    // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
+    /// Заголовок окна проверки.
+    pub const EXPLAIN_TITLE: &str = "explain.title";
+    /// Подзаголовок шапки: цепочка корня «{title}».
+    pub const EXPLAIN_META: &str = "explain.meta";
+    /// Чип Stale (AC-3.3): модель изменилась при открытой панели.
+    pub const EXPLAIN_STALE: &str = "explain.stale";
+    /// Тост при закрытии из-за удалённого корня (AC-3.3).
+    pub const EXPLAIN_GONE: &str = "explain.gone";
+    /// Пометка листа-константы (AC-1.4): «исходное значение».
+    pub const EXPLAIN_LEAF_TAG: &str = "explain.leaf_tag";
+    /// Статистика футера: «Уровней: {lv} · Узлов: {n}».
+    pub const EXPLAIN_STATS: &str = "explain.stats";
+    /// Терминальные узлы дерева (§6.6).
+    pub const EXPLAIN_UNMAPPED: &str = "explain.unmapped";
+    pub const EXPLAIN_CYCLE: &str = "explain.cycle";
+    pub const EXPLAIN_UNLINKED: &str = "explain.unlinked";
+    pub const EXPLAIN_TRUNCATED: &str = "explain.truncated";
+    /// Бейдж фронтира: «+{n} глубже» (AC-2.3 — ручное разворачивание).
+    pub const EXPLAIN_EXPAND_BADGE: &str = "explain.expand_badge";
+    /// Адресная строка узла (AC-2.1): «вход {n}» / «выход {name}».
+    pub const EXPLAIN_ADDR_SLOT: &str = "explain.addr_slot";
+    pub const EXPLAIN_ADDR_OUTPUT: &str = "explain.addr_output";
+    /// Настройка FR-039 (AC-2.3): лимит глубины авто-раскрытия дерева.
+    pub const ROW_EXPLAIN_DEPTH: &str = "settings.row.explain_depth";
+    pub const DESC_EXPLAIN_DEPTH: &str = "settings.desc.explain_depth";
+    /// Значение настройки «0 — без ограничения».
+    pub const VALUE_EXPLAIN_ALL: &str = "settings.value.explain.all";
+    /// Честный лоадер (AC-1.2, У5): 12 подписей этапов построения —
+    /// ротация, без фейкового прогресс-бара.
+    pub const EXPLAIN_LOADER_1: &str = "explain.loader.1";
+    pub const EXPLAIN_LOADER_2: &str = "explain.loader.2";
+    pub const EXPLAIN_LOADER_3: &str = "explain.loader.3";
+    pub const EXPLAIN_LOADER_4: &str = "explain.loader.4";
+    pub const EXPLAIN_LOADER_5: &str = "explain.loader.5";
+    pub const EXPLAIN_LOADER_6: &str = "explain.loader.6";
+    pub const EXPLAIN_LOADER_7: &str = "explain.loader.7";
+    pub const EXPLAIN_LOADER_8: &str = "explain.loader.8";
+    pub const EXPLAIN_LOADER_9: &str = "explain.loader.9";
+    pub const EXPLAIN_LOADER_10: &str = "explain.loader.10";
+    pub const EXPLAIN_LOADER_11: &str = "explain.loader.11";
+    pub const EXPLAIN_LOADER_12: &str = "explain.loader.12";
+
     pub const VALUE_ON: &str = "settings.value.on";
     pub const VALUE_OFF: &str = "settings.value.off";
     pub const CORNER_TOP_LEFT: &str = "settings.value.corner.top_left";
@@ -766,6 +809,51 @@ const RU: &[(&str, &str)] = &[
         keys::STAGE_FOOT_HINT,
         "Esc или клик по затемнённому фону — закрыть · клик по связи — выделить",
     ),
+    // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
+    (
+        keys::ROW_EXPLAIN_DEPTH,
+        "Глубина цепочки расчёта",
+    ),
+    (
+        keys::DESC_EXPLAIN_DEPTH,
+        "Сколько уровней дерева объяснения раскрывается автоматически (0 — всё).",
+    ),
+    (keys::VALUE_EXPLAIN_ALL, "Без ограничения"),
+    (keys::EXPLAIN_TITLE, "Проверка цепочки расчёта"),
+    (
+        keys::EXPLAIN_META,
+        "Цепочка расчёта цифры «{title}» · Esc — закрыть",
+    ),
+    (
+        keys::EXPLAIN_STALE,
+        "Данные изменены — обновить оверлей",
+    ),
+    (keys::EXPLAIN_GONE, "Цифра удалена — панель закрыта"),
+    (keys::EXPLAIN_LEAF_TAG, "исходное значение"),
+    (keys::EXPLAIN_STATS, "Уровней: {lv} · Узлов: {n}"),
+    (
+        keys::EXPLAIN_UNMAPPED,
+        "значение не подставлено",
+    ),
+    (keys::EXPLAIN_CYCLE, "цикл"),
+    (keys::EXPLAIN_UNLINKED, "не связано"),
+    (keys::EXPLAIN_TRUNCATED, "дерево усечено"),
+    (keys::EXPLAIN_EXPAND_BADGE, "+{n} глубже"),
+    (keys::EXPLAIN_ADDR_SLOT, "вход {n}"),
+    (keys::EXPLAIN_ADDR_OUTPUT, "выход {name}"),
+    // Честный лоадер (AC-1.2, У5): 12 подписей этапов построения.
+    (keys::EXPLAIN_LOADER_1, "Начали собирать дерево…"),
+    (keys::EXPLAIN_LOADER_2, "Ищем корень цепочки…"),
+    (keys::EXPLAIN_LOADER_3, "Разворачиваем формулы в узлы…"),
+    (keys::EXPLAIN_LOADER_4, "Проверяем все ветки…"),
+    (keys::EXPLAIN_LOADER_5, "Спускаемся к листьям-константам…"),
+    (keys::EXPLAIN_LOADER_6, "Ищем неподставленные входы…"),
+    (keys::EXPLAIN_LOADER_7, "Проверяем переменные листов…"),
+    (keys::EXPLAIN_LOADER_8, "Сверяем проливания параметров…"),
+    (keys::EXPLAIN_LOADER_9, "Ищем циклы в данных…"),
+    (keys::EXPLAIN_LOADER_10, "Считаем значения на узлах…"),
+    (keys::EXPLAIN_LOADER_11, "Готовим подсветку на канвасе…"),
+    (keys::EXPLAIN_LOADER_12, "Почти готово — раскладываем ветки…"),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -1171,6 +1259,42 @@ const EN: &[(&str, &str)] = &[
         keys::STAGE_FOOT_HINT,
         "Esc or click the dimmed background — close · click an edge — select",
     ),
+    // --- PRD-0007 (FR-048 X2): calculation chain check window ---
+    (keys::ROW_EXPLAIN_DEPTH, "Calculation chain depth"),
+    (
+        keys::DESC_EXPLAIN_DEPTH,
+        "How many levels of the explanation tree expand automatically (0 — all).",
+    ),
+    (keys::VALUE_EXPLAIN_ALL, "No limit"),
+    (keys::EXPLAIN_TITLE, "Calculation chain check"),
+    (
+        keys::EXPLAIN_META,
+        "Calculation chain for “{title}” · Esc — close",
+    ),
+    (keys::EXPLAIN_STALE, "Data changed — refresh overlay"),
+    (keys::EXPLAIN_GONE, "The number is gone — panel closed"),
+    (keys::EXPLAIN_LEAF_TAG, "source value"),
+    (keys::EXPLAIN_STATS, "Levels: {lv} · Nodes: {n}"),
+    (keys::EXPLAIN_UNMAPPED, "value not substituted"),
+    (keys::EXPLAIN_CYCLE, "cycle"),
+    (keys::EXPLAIN_UNLINKED, "unlinked"),
+    (keys::EXPLAIN_TRUNCATED, "tree truncated"),
+    (keys::EXPLAIN_EXPAND_BADGE, "+{n} deeper"),
+    (keys::EXPLAIN_ADDR_SLOT, "input {n}"),
+    (keys::EXPLAIN_ADDR_OUTPUT, "output {name}"),
+    // Honest loader (AC-1.2): 12 build-stage captions.
+    (keys::EXPLAIN_LOADER_1, "Started building the tree…"),
+    (keys::EXPLAIN_LOADER_2, "Locating the chain root…"),
+    (keys::EXPLAIN_LOADER_3, "Unfolding formulas into nodes…"),
+    (keys::EXPLAIN_LOADER_4, "Checking every branch…"),
+    (keys::EXPLAIN_LOADER_5, "Descending to constant leaves…"),
+    (keys::EXPLAIN_LOADER_6, "Looking for unmapped inputs…"),
+    (keys::EXPLAIN_LOADER_7, "Checking sheet variables…"),
+    (keys::EXPLAIN_LOADER_8, "Matching parameter spills…"),
+    (keys::EXPLAIN_LOADER_9, "Looking for data cycles…"),
+    (keys::EXPLAIN_LOADER_10, "Computing node values…"),
+    (keys::EXPLAIN_LOADER_11, "Preparing the canvas highlight…"),
+    (keys::EXPLAIN_LOADER_12, "Almost there — laying out branches…"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).

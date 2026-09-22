@@ -125,12 +125,15 @@ pub enum SettingsRow {
     SnapSubZoom,
     /// FR-038 (п.3): порог coarse-сетки — цикл по пресетами.
     SnapCoarseZoom,
+    /// PRD-0007 (FR-048 X2, AC-2.3): лимит глубины авто-раскрытия
+    /// explain-дерева (0 — без ограничения) — dropdown в табе «Канвас».
+    ExplainDepthLimit,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 20] = [
+pub const SETTINGS_ROWS: [SettingsRow; 21] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -151,6 +154,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 20] = [
     SettingsRow::HudOnStart,
     SettingsRow::ThemePreset,
     SettingsRow::Language,
+    SettingsRow::ExplainDepthLimit,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -187,6 +191,8 @@ pub const SETTINGS_TABS: [SettingsTab; 5] = [
             SettingsRow::GridStyle,
             SettingsRow::GridDensity,
             SettingsRow::BottleneckOverlay,
+            // PRD-0007 (FR-048 X2): лимит глубины explain-дерева (AC-2.3).
+            SettingsRow::ExplainDepthLimit,
         ],
     },
     SettingsTab {
@@ -247,6 +253,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapTolerance => keys::ROW_SNAP_TOLERANCE,
         SettingsRow::SnapSubZoom => keys::ROW_SNAP_SUB_ZOOM,
         SettingsRow::SnapCoarseZoom => keys::ROW_SNAP_COARSE_ZOOM,
+        SettingsRow::ExplainDepthLimit => keys::ROW_EXPLAIN_DEPTH,
     }
 }
 
@@ -274,6 +281,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapTolerance => keys::DESC_SNAP_TOLERANCE,
         SettingsRow::SnapSubZoom => keys::DESC_SNAP_SUB_ZOOM,
         SettingsRow::SnapCoarseZoom => keys::DESC_SNAP_COARSE_ZOOM,
+        SettingsRow::ExplainDepthLimit => keys::DESC_EXPLAIN_DEPTH,
     }
 }
 
@@ -297,6 +305,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::PortZone
         | SettingsRow::Language
         | SettingsRow::ThemePreset
+        | SettingsRow::ExplainDepthLimit
         | SettingsRow::SnapTolerance
         | SettingsRow::SnapSubZoom
         | SettingsRow::SnapCoarseZoom => RowKind::Dropdown,
@@ -352,6 +361,12 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
             None => i18n::tr(language, keys::THEME_PRESET_CLASSIC).to_owned(),
         }),
         SettingsRow::SnapTolerance => Some(format!("{} px", settings.snap_tolerance_px as i32)),
+        // PRD-0007 (AC-2.3): «0» показывается как «без ограничения».
+        SettingsRow::ExplainDepthLimit => Some(if settings.explain_depth_limit == 0 {
+            i18n::tr(language, keys::VALUE_EXPLAIN_ALL).to_owned()
+        } else {
+            format!("{}", settings.explain_depth_limit)
+        }),
         SettingsRow::SnapSubZoom => {
             Some(format!("{}%", (settings.snap_grid_sub_zoom * 100.0) as i32))
         }
@@ -489,6 +504,21 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
                 .map(|(i, preset)| (format!("{}%", (*preset * 100.0) as i32), i == current))
                 .collect()
         }
+        // PRD-0007 (AC-2.3): пресеты глубины [2, 3, 4, без ограничения].
+        // Порядок опций = порядку apply_dropdown_value (инвариант, тест).
+        SettingsRow::ExplainDepthLimit => {
+            let current = settings.explain_depth_limit;
+            let all = i18n::tr(language, keys::VALUE_EXPLAIN_ALL).to_owned();
+            [
+                (2u8, "2".to_owned()),
+                (3, "3".to_owned()),
+                (4, "4".to_owned()),
+                (0, all),
+            ]
+            .into_iter()
+            .map(|(value, label)| (label, current == value))
+            .collect()
+        }
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -567,6 +597,12 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         SettingsRow::SnapCoarseZoom => {
             if let Some(preset) = SNAP_COARSE_ZOOM_PRESETS.get(index) {
                 settings.snap_grid_coarse_zoom = *preset;
+            }
+        }
+        // PRD-0007 (AC-2.3): порядок опций — [2, 3, 4, без ограничения].
+        SettingsRow::ExplainDepthLimit => {
+            if let Some(value) = [2u8, 3, 4, 0].get(index) {
+                settings.explain_depth_limit = *value;
             }
         }
         SettingsRow::Grid
@@ -933,7 +969,8 @@ mod tests {
                 SettingsRow::Grid,
                 SettingsRow::GridStyle,
                 SettingsRow::GridDensity,
-                SettingsRow::BottleneckOverlay
+                SettingsRow::BottleneckOverlay,
+                SettingsRow::ExplainDepthLimit
             ]
         );
         assert_eq!(
@@ -1039,6 +1076,7 @@ mod tests {
                 | SettingsRow::PortZone
                 | SettingsRow::Language
                 | SettingsRow::ThemePreset
+                | SettingsRow::ExplainDepthLimit
                 | SettingsRow::SnapTolerance
                 | SettingsRow::SnapSubZoom
                 | SettingsRow::SnapCoarseZoom => {
