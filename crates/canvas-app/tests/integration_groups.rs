@@ -131,9 +131,10 @@ fn test_create_group_at_viewport_center() {
     // «Горячие клавиши (F1)» (FR-004.1) + «Виджеты ▸…» (M5 T20-F) +
     // «Режим десктопа» (T15, runtime-переключение) +
     // «Узкие места (Ctrl+B)» (FR-016 CP5) + «What-if режим»
-    // (FR-017 CP6, переключатель) + «Найти связи по именам»
+    // (FR-017 CP6, переключатель) + «Карта проливаний»
+    // (FR-050 Н9-4 этап E, действие-тогл) + «Найти связи по именам»
     // (PRD-0007 FR-048 X4 AC-5.1, действие)
-    assert_eq!(CANVAS_MENU_ITEMS.len(), 8);
+    assert_eq!(CANVAS_MENU_ITEMS.len(), 9);
     assert_eq!(CANVAS_MENU_ITEMS[0], CanvasMenuItem::NewGroup);
     assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
     assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
@@ -141,7 +142,8 @@ fn test_create_group_at_viewport_center() {
     assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
     assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::BottleneckOverlay);
     assert_eq!(CANVAS_MENU_ITEMS[6], CanvasMenuItem::WhatIf);
-    assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::AutolinkFind);
+    assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::FlowMap);
+    assert_eq!(CANVAS_MENU_ITEMS[8], CanvasMenuItem::AutolinkFind);
 
     // Центр viewport в мировых координатах (паттерн App::viewport_center_world)
     let viewport = [1600.0, 900.0];

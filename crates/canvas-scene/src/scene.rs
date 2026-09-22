@@ -287,6 +287,16 @@ pub struct SceneState {
     /// перезапись файла, подмена листа, Apply — все проходят через
     /// пересчёт. В `.canvas` не пишется (runtime).
     pub revision: u64,
+    /// FR-050 Н9-1 (этап E): ноды с изменившимся итогом последнего
+    /// пересчёта (сравнение с прошлым `expr_results`) — seeds волны
+    /// подсветки каскада ([`canvas_core::flow::spill_wave`]): изменил
+    /// upstream → волна видимо бежит вниз по value-рёдрам. Первый
+    /// пересчёт (загрузка файла) — список пуст (сравнивать не с чем).
+    /// Runtime-поле, не сериализуется; порядок — сортировка по id
+    /// (детерминизм).
+    pub flow_changed_nodes: Vec<String>,
+    /// Был ли хотя бы один пересчёт до текущего (первый — без волны).
+    flow_computed: bool,
     /// M8/W3 (wasm-port §3.2/§6): хранилище `.canvas` как сервис — нативно
     /// `FsCanvasStorage` (диск + `.bak`, сегодняшнее поведение), web (W6) —
     /// FS Access/OPFS через `with_storage`.
@@ -341,6 +351,8 @@ impl SceneState {
             analysis: AnalysisState::new(),
             viewport: Viewport::default(),
             revision: 0,
+            flow_changed_nodes: Vec::new(),
+            flow_computed: false,
             storage,
             undo_tags: VecDeque::new(),
             pending_undo_tag: None,
@@ -364,6 +376,15 @@ impl SceneState {
         // выхода: цикл и штатная); кэш explain-оверлея сравнивает её со
         // своей, чтобы показать чип «Данные изменены».
         self.revision = self.revision.wrapping_add(1);
+        // FR-050 Н9-1 (этап E): снапшоты ДО пересчёта — детект изменений
+        // для волны каскада (первый пересчёт — без волны); снимаются до
+        // любых перезаписей. Итоги нод (`expr_results`) покрывают узловые
+        // результаты; `flow_active` — строки-значения и именованные выходы
+        // ИСТОКОВ-листов (присваивающий Numi-лист без узлового итога тоже
+        // даёт волну вниз — демо-критерий FR-050: «изменил DAU → видно
+        // распространение»).
+        let prev_results = self.expr_results.clone();
+        let prev_solutions = self.flow_active.clone();
         // FR-017 (гипотеза Q9): дельты — против ЧИСТОГО базового пересчёта
         // (не снапшота при входе): любая мутация канваса пересчитывает обе
         // карты заново, дельты консистентны текущему `.canvas`.
@@ -384,6 +405,10 @@ impl SceneState {
                     self.param_spills.clear();
                     self.auto_rows.clear();
                     self.unmapped_edges.clear();
+                    // FR-050 Н9-1 (этап E): поток недоступен (цикл) — волна
+                    // каскада не строится (нет топологии потока); сравнение
+                    // итогов продолжится со следующего штатного пересчёта.
+                    self.flow_changed_nodes.clear();
                     // FR-016: поток недоступен (цикл) — анализ пуст: без
                     // FlowSolutions детекции не на чем (честное отсутствие, не
                     // ложное «всё здорово»).
@@ -418,6 +443,40 @@ impl SceneState {
         self.whatif_stale = stale;
         let solutions = &self.flow_active;
         self.expr_results = outputs_to_results(&solutions.outputs);
+        // FR-050 Н9-1 (этап E): детект изменений значений — seeds волны
+        // каскада. Три наблюдаемых вывода: узловой итог (expr_results),
+        // значения строк (lines — присваивающие листы-истоки) и
+        // именованные выходы (named — адресация fromOutput). Первый
+        // пересчёт (загрузка) — пусто. Сортировка + дедуп — детерминизм.
+        // Вычисляется ДО мутаций сцены ниже (заимствование solutions);
+        // присваивание — последней строкой хвоста.
+        let flow_changed: Vec<String> = if self.flow_computed {
+            let mut changed: Vec<String> = self
+                .expr_results
+                .iter()
+                .filter(|(id, outcome)| prev_results.get(*id) != Some(*outcome))
+                .map(|(id, _)| id.clone())
+                .collect();
+            changed.extend(
+                solutions
+                    .lines
+                    .iter()
+                    .filter(|(key, value)| prev_solutions.lines.get(key) != Some(*value))
+                    .map(|(key, _)| key.0.clone()),
+            );
+            changed.extend(
+                solutions
+                    .named
+                    .iter()
+                    .filter(|(key, value)| prev_solutions.named.get(key) != Some(*value))
+                    .map(|(key, _)| key.0.clone()),
+            );
+            changed.sort();
+            changed.dedup();
+            changed
+        } else {
+            Vec::new()
+        };
         // FR-016 (CP5): анализ узких мест — чистая функция над теми же
         // решениями (значения + именованные выходы utilization). Пороги —
         // дефолт документа FR-016; кастомизация — v2 (конфиг в .canvas).
@@ -565,6 +624,10 @@ impl SceneState {
         // синхронизации (хвост recompute_flow): все мутации топологии
         // завершаются пересчётом потока; O(edges) поверх него, вне кадра.
         self.bundles = EdgeBundleIndex::build(&self.canvas);
+        // FR-050 Н9-1 (этап E): присвоение диффа — в самом конце (все
+        // мутации сцены завершены; borrow solutions уже освобождён)
+        self.flow_changed_nodes = flow_changed;
+        self.flow_computed = true;
     }
 
     /// FR-017: собрать what-if представления нод активного сценария

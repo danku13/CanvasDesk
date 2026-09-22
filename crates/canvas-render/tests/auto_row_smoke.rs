@@ -93,6 +93,7 @@ fn headless_auto_row_draws_with_spill_hit() {
             slot,
             value,
             template,
+            edge_id: _,
         } => {
             assert_eq!(path, "Трафик.peak_rps");
             assert_eq!(*slot, 0);

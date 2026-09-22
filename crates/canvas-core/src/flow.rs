@@ -892,6 +892,55 @@ pub fn occupying_param_edges<'a>(canvas: &'a Canvas, node_id: &str, param: &str)
         .collect()
 }
 
+/// FR-050 Н9-1 (этап E): волна подсветки каскада — value-рёбра downstream
+/// от изменённых нод (`seeds`), с порядком = топологическое расстояние от
+/// ближайшего seed (BFS по value-рёбрам вниз). Ребро от seed получает
+/// порядок 0 и подсвечивается первым, волна «бежит» по потоку значений:
+/// пользователь видит распространение изменения. Control-рёбра значения
+/// не несут — в волну не входят; seed без исходящих value-рёбер — волна
+/// пуста (менять нечего). Value-циклы невозможны (UI/MCP блокируют
+/// создание), но BFS с посещёнными не зациклится и на чужих файлах.
+/// Выход отсортирован по индексу ребра — детерминизм (инвариант 6).
+pub fn spill_wave(canvas: &Canvas, seeds: &HashSet<String>) -> Vec<(usize, u32)> {
+    // Расстояние ноды от ближайшего seed (0 — сам seed); BFS-очередь.
+    let mut dist: HashMap<&str, u32> = HashMap::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for node in &canvas.nodes {
+        if seeds.contains(&node.id) {
+            dist.insert(node.id.as_str(), 0);
+            queue.push_back(node.id.as_str());
+        }
+    }
+    // Исходящие value-рёбра по нодам (список смежности).
+    let mut outgoing: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, edge) in canvas.edges.iter().enumerate() {
+        if edge.flow_kind() == FlowKind::Value {
+            outgoing
+                .entry(edge.from_node.as_str())
+                .or_default()
+                .push(index);
+        }
+    }
+    // BFS: порядок ребра = расстояние его истока; приёмник получает
+    // dist+1 при первом достижении (минимум по всем путям).
+    let mut out: Vec<(usize, u32)> = Vec::new();
+    while let Some(current) = queue.pop_front() {
+        let level = dist[current];
+        if let Some(edges) = outgoing.get(current) {
+            for &index in edges {
+                let to = canvas.edges[index].to_node.as_str();
+                out.push((index, level));
+                if !dist.contains_key(to) {
+                    dist.insert(to, level + 1);
+                    queue.push_back(to);
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 /// FR-045 R-3: вход без пролитого значения — производное pending-состояние
 /// «значение не подставлено». Определение (§Решения Р-3): value-ребро
 /// подключено к приёмнику, но значения нет (источник pending/ошибка/
@@ -3563,5 +3612,82 @@ mod tests {
             Some(100.0),
             "what-if k = 200/100 = 2; итог 200/2"
         );
+    }
+
+    /// FR-050 Н9-1 (этап E): порядок волны = топологическое расстояние —
+    /// цепочка A→B→C от seed A: ребро A→B порядок 0, B→C порядок 1;
+    /// выход отсортирован по индексу ребра (детерминизм).
+    #[test]
+    fn spill_wave_orders_by_topological_distance() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "100", 0.0);
+        node_with_expr(&mut canvas, "B", "$in + 1", 1.0);
+        node_with_expr(&mut canvas, "C", "$in + 2", 2.0);
+        value_edge(&mut canvas, "e1", "A", "B");
+        value_edge(&mut canvas, "e2", "B", "C");
+        let seeds: HashSet<String> = ["A".to_owned()].into_iter().collect();
+        let wave = spill_wave(&canvas, &seeds);
+        assert_eq!(wave, vec![(0, 0), (1, 1)], "порядок: A→B = 0, B→C = 1");
+    }
+
+    /// Н9-1: control-рёбра значения не несут — в волну не входят; seed без
+    /// исходящих value-рёбер и неизвестный seed — пустая волна.
+    #[test]
+    fn spill_wave_skips_control_and_unknown() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "100", 0.0);
+        node_with_expr(&mut canvas, "B", "$in + 1", 1.0);
+        control_edge(&mut canvas, "e1", "A", "B");
+        let seeds: HashSet<String> = ["A".to_owned()].into_iter().collect();
+        assert!(spill_wave(&canvas, &seeds).is_empty(), "control не в волне");
+        // Неизвестный seed (нода удалена) — не паника, волна пуста
+        let ghosts: HashSet<String> = ["ghost".to_owned()].into_iter().collect();
+        assert!(spill_wave(&canvas, &ghosts).is_empty());
+        // Seed без исходящих рёбер — менять нечего
+        let leaf: HashSet<String> = ["B".to_owned()].into_iter().collect();
+        assert!(spill_wave(&canvas, &leaf).is_empty());
+    }
+
+    /// Н9-1: ромб A→B→D, A→C→D — приёмник D достижим по двум путям,
+    /// оба ребра второго уровня получают порядок 1 (расстояние истока);
+    /// BFS с посещёнными не зацикливается на value-цикле чужого файла.
+    #[test]
+    fn spill_wave_diamond_and_cycle_safety() {
+        let mut canvas = Canvas::default();
+        for (id, x) in [("A", 0.0), ("B", 1.0), ("C", 1.0), ("D", 2.0)] {
+            node_with_expr(&mut canvas, id, "1", x);
+        }
+        value_edge(&mut canvas, "e1", "A", "B");
+        value_edge(&mut canvas, "e2", "A", "C");
+        value_edge(&mut canvas, "e3", "B", "D");
+        value_edge(&mut canvas, "e4", "C", "D");
+        let seeds: HashSet<String> = ["A".to_owned()].into_iter().collect();
+        let wave = spill_wave(&canvas, &seeds);
+        assert_eq!(wave, vec![(0, 0), (1, 0), (2, 1), (3, 1)]);
+        // Value-цикл (чужой .canvas): обход конечен, рёбра в волне, дублей нет
+        let mut cyclic = Canvas::default();
+        node_with_expr(&mut cyclic, "A", "1", 0.0);
+        node_with_expr(&mut cyclic, "B", "$in + 1", 1.0);
+        value_edge(&mut cyclic, "e1", "A", "B");
+        value_edge(&mut cyclic, "e2", "B", "A");
+        let seeds: HashSet<String> = ["A".to_owned()].into_iter().collect();
+        let wave = spill_wave(&cyclic, &seeds);
+        assert_eq!(wave, vec![(0, 0), (1, 1)], "цикл обошёлся без дублей");
+    }
+
+    /// Н9-1: приёмник-«изменённая» тоже seed — волна продолжается от неё
+    /// вниз (каскад: изменение итога ноды B подсвечивает и её исходящие).
+    #[test]
+    fn spill_wave_cascade_from_changed_receiver() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "100", 0.0);
+        node_with_expr(&mut canvas, "B", "$in + 1", 1.0);
+        node_with_expr(&mut canvas, "C", "$in + 2", 2.0);
+        value_edge(&mut canvas, "e1", "A", "B");
+        value_edge(&mut canvas, "e2", "B", "C");
+        // Изменился только B (например, правка её формулы): A не seed
+        let seeds: HashSet<String> = ["B".to_owned()].into_iter().collect();
+        let wave = spill_wave(&canvas, &seeds);
+        assert_eq!(wave, vec![(1, 0)], "только ребро B→C, порядок 0");
     }
 }

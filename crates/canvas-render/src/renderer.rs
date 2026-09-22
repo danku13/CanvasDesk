@@ -18,7 +18,7 @@ use crate::cards::{
     build_line_port_instances, build_param_port_instances, build_port_instances, card_instance,
     dim_instance, make_widget_transparent, severity_border, severity_text, template_band_instance,
     template_icon_quads, template_icon_rect, widget_header_hover_instance, BundleContext,
-    CardInstance, CardsPipeline, FocusView,
+    CardInstance, CardsPipeline, FocusView, SpillWaveView,
 };
 use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
@@ -247,6 +247,12 @@ pub struct SceneView<'a> {
     /// степень затемнения остального. Данные принадлежат приложению
     /// (пересчёт на кадр); `FocusView::EMPTY` — режим выключен.
     pub focus: FocusView<'a>,
+    /// FR-050 Н9-1 (этап E): волна каскада — value-рёбра downstream от
+    /// изменённого upstream с порядком топологического расстояния;
+    /// вспышка цвета потока значений, бегущая вниз по рёбрам. Данные —
+    /// приложение (мс от старта); `SpillWaveView::EMPTY` — волны нет,
+    /// рендер рёбер байт-в-байт прежний.
+    pub spill_wave: SpillWaveView<'a>,
     /// CR-004: индексы виджет-нод с видимым контентом (live-HWND или
     /// снапшот-текстура) — их карточка рисуется полностью прозрачной
     /// (без заливки и тени; рамка выделения сохраняется). Placeholder
@@ -1064,6 +1070,7 @@ impl Renderer {
             &hidden_ids,
             scene.bundles,
             &unmapped_ids,
+            &scene.spill_wave,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).

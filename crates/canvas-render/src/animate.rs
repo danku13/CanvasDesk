@@ -13,6 +13,17 @@ pub const PULSE_TOTAL_MS: u32 = 1200;
 pub const FOCUS_FADE_MS: u32 = 150;
 /// «Дыхание» подсвеченных связей — один цикл (план T23 §3, зона B).
 pub const FOCUS_PULSE_MS: u32 = 1600;
+/// FR-050 Н9-1 (этап E): пульс одного ребра в волне каскада —
+/// полуволна 0 → 1 → 0; токен motion.json `spill_wave_edge_ms`.
+pub const SPILL_WAVE_EDGE_MS: u32 = 600;
+/// FR-050 Н9-1 (этап E): шаг волны между уровнями каскада — задержка
+/// рёбер следующего топологического порядка; токен
+/// motion.json `spill_wave_step_ms`.
+pub const SPILL_WAVE_STEP_MS: u32 = 200;
+/// FR-050 Н9-3 (этап E): «Показать источник» — сколько держится
+/// подсветка истока/связи/приёмника с затемнением остального; токен
+/// motion.json `show_source_ms`.
+pub const SHOW_SOURCE_MS: u32 = 2500;
 
 /// Ease-out cubic: быстрый старт, плавное докатывание. t клампится в [0, 1].
 pub fn ease_out_cubic(t: f32) -> f32 {
@@ -105,6 +116,21 @@ pub fn focus_pulse(elapsed_ms: u32) -> f32 {
     } else {
         // sin(pi·t): 0 в t=0, 1 в t=0.5, 0 в t=1
         (std::f32::consts::PI * elapsed_ms as f32 / FOCUS_PULSE_MS as f32).sin()
+    }
+}
+
+/// FR-050 Н9-1 (этап E): пульс одного ребра волны каскада — та же
+/// полуволна, что «дыхание» фокуса, но короче (600 мс): «вспышка»
+/// потока значения, пробегающая вниз по рёбрам. До старта (приложение
+/// передаёт 0 — ещё не время порядка) и после — 0.0. Приложение
+/// смещает старт на порядок ребра: elapsed = now − (start +
+/// order · [`SPILL_WAVE_STEP_MS`]), до старта — насыщение в 0.
+pub fn spill_wave_alpha(elapsed_ms: u32) -> f32 {
+    if elapsed_ms >= SPILL_WAVE_EDGE_MS {
+        0.0
+    } else {
+        // sin(pi·t): 0 в t=0, 1 в t=0.5, 0 в t=1
+        (std::f32::consts::PI * elapsed_ms as f32 / SPILL_WAVE_EDGE_MS as f32).sin()
     }
 }
 
@@ -225,5 +251,40 @@ mod tests {
                 "выход за [0,1] при t={t}: {v}"
             );
         }
+    }
+
+    /// FR-050 Н9-1 (этап E): пульс ребра волны — полуволна 0 → 1 → 0 за
+    /// SPILL_WAVE_EDGE_MS; до старта/после — 0; после конца — не
+    /// восстанавливается (кадры не нужны).
+    #[test]
+    fn spill_wave_alpha_half_wave() {
+        assert!((spill_wave_alpha(0) - 0.0).abs() < EPS);
+        assert!((spill_wave_alpha(SPILL_WAVE_EDGE_MS) - 0.0).abs() < EPS);
+        assert_eq!(spill_wave_alpha(SPILL_WAVE_EDGE_MS + 1), 0.0);
+        assert_eq!(spill_wave_alpha(u32::MAX), 0.0);
+        let mid = spill_wave_alpha(SPILL_WAVE_EDGE_MS / 2);
+        assert!((mid - 1.0).abs() < EPS, "максимум в середине: {mid}");
+        for t in (0..=SPILL_WAVE_EDGE_MS).step_by(25) {
+            let v = spill_wave_alpha(t);
+            assert!(
+                (0.0..=1.0 + EPS).contains(&v),
+                "выход за [0,1] при t={t}: {v}"
+            );
+        }
+    }
+
+    /// Н9-1: пульс короче «дыхания» фокуса (волна — быстрая вспышка,
+    /// бегущая по рёбрам; фокус — медленное удержание внимания) и шаг
+    /// волны меньше её длительности (рёбра соседних порядков
+    /// перекрываются — непрерывный «фронт» волны).
+    #[test]
+    fn spill_wave_tokens_shape() {
+        // Проверка соотношений — на этапе компиляции (const-ассерты;
+        // clippy assertions-on-constants), сам тест фиксирует сумму
+        const _: () = assert!(SPILL_WAVE_EDGE_MS < FOCUS_PULSE_MS);
+        const _: () = assert!(SPILL_WAVE_STEP_MS < SPILL_WAVE_EDGE_MS);
+        const _: () = assert!(SPILL_WAVE_STEP_MS > 0);
+        const _: () = assert!(SHOW_SOURCE_MS > FOCUS_PULSE_MS);
+        assert_eq!(SPILL_WAVE_EDGE_MS + SPILL_WAVE_STEP_MS, 800);
     }
 }

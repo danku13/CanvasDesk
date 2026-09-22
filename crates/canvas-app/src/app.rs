@@ -90,13 +90,13 @@ use canvas_core::search::{SearchCommand, SearchEvent, SearchHit};
 // (selected/selected_nodes/dragging) остались здесь, в App
 use canvas_render::animate::{
     ease_out_cubic, focus_fade, focus_pulse, pulse_alpha, Flight, FLIGHT_DURATION_MS,
-    FOCUS_FADE_MS, FOCUS_PULSE_MS,
+    FOCUS_FADE_MS, FOCUS_PULSE_MS, SHOW_SOURCE_MS, SPILL_WAVE_EDGE_MS, SPILL_WAVE_STEP_MS,
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{
     build_stage_edge_instances, card_instance, drop_ghost, template_band_instance,
-    template_icon_quads, title_for, BundleContext, CardInstance, FocusView, EDGE_COLOR,
-    FLOW_EDGE_COLOR, HEADER_HEIGHT, SELECTION_BORDER,
+    template_icon_quads, title_for, BundleContext, CardInstance, FocusView, SpillWaveView,
+    EDGE_COLOR, FLOW_EDGE_COLOR, HEADER_HEIGHT, SELECTION_BORDER,
 };
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
@@ -107,6 +107,7 @@ use canvas_render::minimap::{Minimap, MINIMAP_H, MINIMAP_W};
 // M8/W4 (wasm-port §3.4): стратегия запуска async-инициализации Renderer —
 // инъекция (натив: pollster::block_on, web: spawn_local + слот доставки),
 // паттерн W3-сервисов: платформенный выбор в точке сборки бинарника
+use crate::flowmap_ui;
 use canvas_render::renderer_init::{RendererLaunch, RendererLauncher, RendererSlot};
 use canvas_render::search_ui::{
     layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
@@ -120,7 +121,7 @@ use canvas_render::text::{
 use canvas_render::ThemeColors;
 use canvas_render::{
     Camera, Color, FrameMeter, FrameOverlay, FrameStats, ParamDropView, SceneView, Selection,
-    StageTransform,
+    SpillView, StageTransform,
 };
 use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
@@ -947,6 +948,57 @@ fn spill_hit_at(hits: &[SpillHit], cursor: [f32; 2]) -> Option<&SpillHit> {
     })
 }
 
+/// FR-050 Н9-6 (этап E): ключ тоста по представлению проливания — строка
+/// присваивания была (line: Some) — «Параметр…»; параметра не было
+/// (строка-проекция Р-4) — «Значение…». Чистая функция — юнит-тест.
+fn spill_toast_key(view: &SpillView) -> &'static str {
+    if view.line.is_some() {
+        keys::TOAST_SPILL_PARAM
+    } else {
+        keys::TOAST_SPILL_AUTOROW
+    }
+}
+
+/// FR-050 Н9-3 (этап E): цель контекст-меню параметра — ребро-источник
+/// проливания и заголовок меню. Параметр с `toParam` резолвится по
+/// инварианту Н4 (победитель — последнее ребро); авто-строка несёт
+/// id ребра в hit-зоне (Н10-а — строка производна ребра). Чистая функция
+/// над канвасом и hit-зоной — юнит-тест.
+#[derive(Debug, Clone, PartialEq)]
+struct SpillMenuTarget {
+    /// id ребра-источника проливания.
+    edge_id: String,
+    /// Имя параметра (None — авто-строка/позиционный вход).
+    param: Option<String>,
+    /// Ключ i18n заголовка меню (параметр/входящее значение).
+    title_key: &'static str,
+}
+
+fn spill_hit_target(canvas: &Canvas, hit: &SpillHit) -> Option<SpillMenuTarget> {
+    let node_id = canvas.nodes.get(hit.node)?.id.clone();
+    match &hit.kind {
+        SpillHitKind::Param { param, .. } => {
+            // Н4: победитель — последнее ребро в параметр
+            let edges = canvas_core::flow::occupying_param_edges(canvas, &node_id, param);
+            let edge_id = edges.last()?.id.clone();
+            Some(SpillMenuTarget {
+                edge_id,
+                param: Some(param.clone()),
+                title_key: keys::MENU_PARAM_TITLE,
+            })
+        }
+        SpillHitKind::AutoRow { edge_id, .. } => {
+            // Строка-проекция производна ребра — id уже в hit-зоне
+            let exists = canvas.edges.iter().any(|edge| edge.id == *edge_id);
+            exists.then(|| SpillMenuTarget {
+                edge_id: edge_id.clone(),
+                param: None,
+                title_key: keys::MENU_AUTOROW_TITLE,
+            })
+        }
+    }
+}
+
 /// Пользовательские события event loop (T6): worker-потоки ThumbService
 /// будят цикл через EventLoopProxy, когда готовы тамбнейлы; shell шлёт
 /// события drag-drop (T9) и файлового вотчера (T10).
@@ -1197,6 +1249,14 @@ enum ChoiceAction {
         to_node: String,
         param: Option<String>,
     },
+    /// FR-050 Н9-3 (этап E): «Показать источник» — полёт камеры к истоку +
+    /// подсветка связи и её концов (токен SHOW_SOURCE_MS).
+    ShowSource { edge_id: String },
+    /// FR-050 Н9-3/Р-5 (этап E): «Отключить проливание» — удалить ребро
+    /// (основной путь ручной правки; Ctrl+Z возвращает связь и значение).
+    DisconnectSpill { edge_id: String },
+    /// FR-050 Н9-3 (этап E): «Что если…» — вход в what-if режим (FR-017).
+    WhatIf,
 }
 
 /// FR-050 Н2 (этап C): меню выбора — screen-space (как ContextMenu T7):
@@ -1694,6 +1754,25 @@ pub struct App {
     focus_nodes: Vec<usize>,
     /// T23: подсвеченные связи (инцидентные семени).
     focus_edges: Vec<usize>,
+    /// FR-050 Н9-1 (этап E): активная волна каскада — value-рёбра с
+    /// порядком топологического расстояния от изменённых нод
+    /// (пульс подсветки вниз по потоку, `flow::spill_wave`); None — волна
+    /// не идёт (нет изменений/закончилась). Ревизия сцены отслеживается
+    /// отдельно (`seen_flow_revision`) — перестройка на каждом пересчёте.
+    spill_wave: Option<(Vec<(usize, u32)>, Instant)>,
+    /// Ревизия потока, на которой волна последний раз перестраивалась
+    /// (дётект: `scene.revision` изменился → прочитать
+    /// `scene.flow_changed_nodes`).
+    seen_flow_revision: u64,
+    /// FR-050 Н9-3 (этап E): «Показать источник» — подсветка истока,
+    /// связи и приёмника с затемнением остального (машинерия фокуса
+    /// PRD-0007/FR-048, без дублирования): (ноды, рёбра, старт); живёт
+    /// SHOW_SOURCE_MS (токен motion.json), затем фейд обратно.
+    show_source: Option<(Vec<usize>, Vec<usize>, Instant)>,
+    /// FR-050 Н9-4 (этап E): панель «Карта проливаний» открыта — оверлей
+    /// всех проливаний канваса (источник → параметр → значение), клик по
+    /// строке — переход к истоку (камера + подсветка Н9-3).
+    flow_map_open: bool,
     /// FR-012: цель «втягивания» во время drag — группа под центром
     /// перетаскиваемой ноды (зона подсвечивается, отпускание — вставка).
     group_drop_target: Option<usize>,
@@ -1906,6 +1985,10 @@ impl App {
             focus_pulse: None,
             focus_nodes: Vec::new(),
             focus_edges: Vec::new(),
+            spill_wave: None,
+            seen_flow_revision: 0,
+            show_source: None,
+            flow_map_open: false,
             group_drop_target: None,
             settle_anim: None,
             desktop_mode,
@@ -4374,7 +4457,8 @@ impl App {
 
     /// FR-050 Н2 (этап C): применить пункт меню выбора — создать ребро
     /// (параметр — с toParam; строка-источник — from_line + уже выбранная
-    /// цель; проверки занятости/цикла — в connect_to_param).
+    /// цель; проверки занятости/цикла — в connect_to_param). Этап E:
+    /// действия контекст-меню параметра (Н9-3) идут тем же путём.
     fn apply_choice_action(&mut self, action: ChoiceAction) {
         match action {
             ChoiceAction::Param {
@@ -4409,12 +4493,19 @@ impl App {
                     );
                 }
             },
+            // Н9-3: полёт + подсветка истока (машинария фокуса FR-048)
+            ChoiceAction::ShowSource { edge_id } => self.show_spill_source(&edge_id),
+            // Н9-3/Р-5: удалить ребро — один undo-шаг
+            ChoiceAction::DisconnectSpill { edge_id } => self.disconnect_spill(&edge_id),
+            // Н9-3: what-if режим (уже включён — просто панель на виду)
+            ChoiceAction::WhatIf => self.enter_whatif_mode(),
         }
     }
 
     /// FR-050 Н2 (этап C): создать value-ребро с `toParam` (общий путь
     /// drop на якорь / меню выбора / замены источника). Undo-шаг (FR-006),
     /// живой пересчёт потока — значение сразу перекрывает локальное (Р-1).
+    /// Этап E (Н9-6): тост «подтянулся из …» — паттерн CR-016.
     fn create_param_edge(
         &mut self,
         from_node: String,
@@ -4428,17 +4519,42 @@ impl App {
             self.scene.canvas.next_edge_id(),
             from_node,
             Some(from_side),
-            to_node,
+            to_node.clone(),
             Some(to_side),
         );
         edge.set_flow_kind(FlowKind::Value);
         edge.from_line = from_line;
-        edge.to_param = Some(param);
+        edge.to_param = Some(param.clone());
         self.push_undo();
         self.scene.canvas.add_edge(edge);
         self.scene.mark_dirty();
         self.scene.recompute_flow();
+        self.spill_connected_toast(&to_node, &param);
         self.request_redraw();
+    }
+
+    /// FR-050 Н9-6 (этап E): тост подключения проливания — по представлению
+    /// сцены после пересчёта: строка присваивания была — «Параметр {param}
+    /// подтянулся из {path}»; параметра не было (строка-проекция Р-4) —
+    /// «Значение подтянулось из {path}»; оба с «— Ctrl+Z отменит» (один
+    /// undo-шаг только что созданного ребра). Проливание не собралось
+    /// (unmapped/источник без значения) — тоста нет (диагностика Р-3 на
+    /// месте: пунктир + тултип).
+    fn spill_connected_toast(&mut self, to_node: &str, param: &str) {
+        let Some(view) = self
+            .scene
+            .param_spills
+            .get(to_node)
+            .and_then(|views| views.iter().find(|view| view.param == param))
+        else {
+            return;
+        };
+        let key = spill_toast_key(view);
+        let subs: &[(&str, &str)] = match view.line.is_some() {
+            true => &[("{param}", param), ("{path}", view.path.as_str())],
+            false => &[("{path}", view.path.as_str())],
+        };
+        self.show_toast(self.trf(key, subs));
     }
 
     /// Хэндл конца выделенной связи под world-точкой (CR-002): конец, чей
@@ -4585,6 +4701,111 @@ impl App {
     /// прошлого кадра (`spill_hits`); отставание в кадр незаметно.
     fn spill_hit_at(&self, cursor: [f32; 2]) -> Option<&SpillHit> {
         spill_hit_at(&self.spill_hits, cursor)
+    }
+
+    /// FR-050 Н9-3 (этап E): открыть контекст-меню проливания по hit-зоне
+    /// пролитой строки (параметр с toParam / авто-строка приёмника) —
+    /// пункты «Показать источник» / «Отключить проливание» / «Что если…».
+    /// Паттерн ChoiceMenu (screen-space, Popups Block, Esc/клик мимо —
+    /// отмена). Заголовок — «Проливание в параметр»/«Входящее значение».
+    fn open_param_menu(&mut self, hit: &SpillHit) -> bool {
+        let Some(target) = spill_hit_target(&self.scene.canvas, hit) else {
+            return false;
+        };
+        let items = vec![
+            ChoiceItem {
+                label: self.tr(keys::MENU_PARAM_SOURCE).to_owned(),
+                action: ChoiceAction::ShowSource {
+                    edge_id: target.edge_id.clone(),
+                },
+            },
+            ChoiceItem {
+                label: self.tr(keys::MENU_PARAM_DISCONNECT).to_owned(),
+                action: ChoiceAction::DisconnectSpill {
+                    edge_id: target.edge_id.clone(),
+                },
+            },
+            ChoiceItem {
+                label: self.tr(keys::MENU_PARAM_WHATIF).to_owned(),
+                action: ChoiceAction::WhatIf,
+            },
+        ];
+        self.open_choice_menu(target.title_key, items);
+        true
+    }
+
+    /// FR-050 Н9-3 (этап E): «Показать источник» — полёт камеры к истоку
+    /// (300 мс ease-out, зум не ниже читаемого — паттерн поиска T14) +
+    /// пульс ноды-истока + подсветка истока/связи/приёмника с затемнением
+    /// остального до SHOW_SOURCE_MS (машинерия фокуса PRD-0007/FR-048 —
+    /// та же, что у карты потока Н9-4; update_focus_state уважает окно).
+    fn show_spill_source(&mut self, edge_id: &str) {
+        let Some(index) = self
+            .scene
+            .canvas
+            .edges
+            .iter()
+            .position(|edge| edge.id == edge_id)
+        else {
+            return;
+        };
+        let edge = &self.scene.canvas.edges[index];
+        let Some(from_index) = self
+            .scene
+            .canvas
+            .nodes
+            .iter()
+            .position(|node| node.id == edge.from_node)
+        else {
+            return;
+        };
+        let to_index = self
+            .scene
+            .canvas
+            .nodes
+            .iter()
+            .position(|node| node.id == edge.to_node);
+        let from = &self.scene.canvas.nodes[from_index];
+        let center = [from.x + from.width / 2.0, from.y + from.height / 2.0];
+        let flight = Flight::new(
+            self.camera.position(),
+            self.camera.zoom(),
+            center,
+            self.camera.zoom().max(0.8),
+            FLIGHT_DURATION_MS,
+        );
+        self.flight = Some((flight, Instant::now()));
+        self.pulse = Some((from_index, Instant::now()));
+        // Подсветка: исток + приёмник + ребро; «дыхание» — один цикл
+        let mut nodes = vec![from_index];
+        if let Some(to_index) = to_index {
+            nodes.push(to_index);
+        }
+        nodes.sort_unstable();
+        nodes.dedup();
+        self.show_source = Some((nodes, vec![index], Instant::now()));
+        self.focus_pulse = Some((FocusSeed::Edge(index), Instant::now()));
+        self.request_redraw();
+    }
+
+    /// FR-050 Н9-3/Р-5 (этап E): «Отключить проливание» — удалить ребро
+    /// (основной путь ручной правки пролитого значения): один undo-шаг,
+    /// Ctrl+Z возвращает связь — значение откатывается к локальному.
+    fn disconnect_spill(&mut self, edge_id: &str) {
+        if !self
+            .scene
+            .canvas
+            .edges
+            .iter()
+            .any(|edge| edge.id == edge_id)
+        {
+            return;
+        }
+        self.push_undo();
+        self.scene.canvas.remove_edge(edge_id);
+        self.scene.mark_dirty();
+        self.scene.recompute_flow();
+        self.request_redraw();
     }
 
     /// Клиентские ФИЗИЧЕСКИЕ px от shell (DragEvent) -> world-координаты:
@@ -5061,6 +5282,169 @@ impl App {
             Instant::now(),
         ));
         self.pulse = Some((node, Instant::now()));
+        self.request_redraw();
+    }
+
+    /// FR-050 Н9-4 (этап E): тогл панели «Карта проливаний» — оверлей всех
+    /// проливаний канваса; входы — пункт меню канваса и Ctrl+Shift+M,
+    /// выход — повторный тогл/Esc/клик мимо панели/«✕».
+    fn toggle_flow_map(&mut self) {
+        self.flow_map_open = !self.flow_map_open;
+        self.request_redraw();
+    }
+
+    /// Н9-4: строки карты — чистый сбор из результатов пересчёта сцены
+    /// (проливания + авто-строки; чистая функция — flowmap_ui).
+    fn flow_map_rows(&self) -> Vec<flowmap_ui::FlowMapRow> {
+        flowmap_ui::flow_map_rows(
+            &self.scene.canvas,
+            &self.scene.param_spills,
+            &self.scene.auto_rows,
+        )
+    }
+
+    /// Н9-4: раскладка панели по текущему вьюпорту и числу строк.
+    fn flow_map_layout(&self) -> flowmap_ui::FlowMapLayout {
+        flowmap_ui::flow_map_layout(self.viewport_logical(), self.flow_map_rows().len())
+    }
+
+    /// Н9-4: текст строки карты «путь → адрес · значение» — адрес параметра
+    /// или позиционного входа («вход N» = слот + 1, тултип-нотация FR-025).
+    fn flow_map_row_text(&self, row: &flowmap_ui::FlowMapRow) -> String {
+        let target = match &row.param {
+            Some(param) => param.clone(),
+            None => self.trf(
+                keys::FLOW_MAP_INPUT,
+                &[("{n}", &(row.slot + 1).to_string())],
+            ),
+        };
+        let value = row.value.clone().unwrap_or_else(|| "—".to_owned());
+        format!("{} → {} · {}", row.path, target, value)
+    }
+
+    /// Н9-4: оверлей панели карты — screen-space квады + тексты (паттерн
+    /// search_overlay): панель, заголовок, «✕», строки с hover-подсветкой,
+    /// «… ещё N»; пустой канвас — строка-подсказка. Unmapped-строки —
+    /// янтарным акцентом анализа (Р-3, тот же тон, что пунктир рёбер).
+    fn flow_map_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        if !self.flow_map_open {
+            return (instances, texts);
+        }
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (instances, texts);
+        }
+        let rows = self.flow_map_rows();
+        let lay = flowmap_ui::flow_map_layout(viewport, rows.len());
+        let palette = self.effective_palette();
+        // Панель
+        instances.push(CardInstance {
+            pos: [lay.panel[0], lay.panel[1]],
+            size: [lay.panel[2], lay.panel[3]],
+            fill: palette.menu_fill,
+            border: [0.22, 0.24, 0.30, 0.9],
+            params: [8.0, 0.0, 0.0, 1.0],
+        });
+        // Заголовок + «✕» (кнопка — тем же стилем, что панель поиска)
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::FLOW_MAP_TITLE).to_owned(),
+            origin: [lay.panel[0] + 12.0, lay.panel[1] + 10.0],
+            width: lay.panel[2] - 48.0,
+            font_size: 13.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        texts.push(OwnedScreenText {
+            text: "✕".to_owned(),
+            origin: [lay.close[0] + 5.0, lay.close[1] + 3.0],
+            width: lay.close[2] - 8.0,
+            font_size: 14.0,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        // Пустое состояние — подсказка
+        if rows.is_empty() {
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::FLOW_MAP_EMPTY).to_owned(),
+                origin: [
+                    lay.panel[0] + 12.0,
+                    lay.panel[1] + flowmap_ui::HEADER_H + 8.0,
+                ],
+                width: lay.panel[2] - 24.0,
+                font_size: 12.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+            return (instances, texts);
+        }
+        // Строки: hover-подсветка по курсору (аффорданс — как меню T7),
+        // unmapped — янтарь анализа (Р-3)
+        let amber = {
+            let c = canvas_render::cards::UNMAPPED_EDGE_COLOR;
+            Color::rgba(
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+                255,
+            )
+        };
+        let hovered = flowmap_ui::flow_map_row_at(&lay, self.cursor);
+        for (i, rect) in lay.rows.iter().enumerate() {
+            if hovered == Some(i) {
+                instances.push(CardInstance {
+                    pos: [rect[0], rect[1]],
+                    size: [rect[2], rect[3]],
+                    fill: [0.24, 0.30, 0.42, 0.9],
+                    border: [0.0; 4],
+                    params: [4.0, 0.0, 0.0, 1.0],
+                });
+            }
+            let row = &rows[i];
+            texts.push(OwnedScreenText {
+                text: self.flow_map_row_text(row),
+                origin: [rect[0] + 6.0, rect[1] + 5.0],
+                width: rect[2] - 10.0,
+                font_size: 12.0,
+                color: if row.value.is_some() {
+                    palette.body
+                } else {
+                    amber
+                },
+                align: TextAlign::Left,
+            });
+        }
+        // «… ещё N» — скрытые сверх капа/высоты
+        if let Some((rect, hidden)) = lay.more {
+            texts.push(OwnedScreenText {
+                text: self.trf(keys::FLOW_MAP_MORE, &[("{n}", &hidden.to_string())]),
+                origin: [rect[0] + 6.0, rect[1] + 6.0],
+                width: rect[2] - 10.0,
+                font_size: 12.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        }
+        (instances, texts)
+    }
+
+    /// Н9-4: клик по панели карты — «✕» закрывает; строка — переход к
+    /// истоку (полёт + подсветка Н9-3, панель остаётся — можно пройти все
+    /// проливания подряд); мимо элементов — глотается (Block, панель жива).
+    fn click_flow_map(&mut self) {
+        let lay = self.flow_map_layout();
+        if flowmap_ui::flow_map_close_at(&lay, self.cursor) {
+            self.flow_map_open = false;
+            self.request_redraw();
+            return;
+        }
+        if let Some(index) = flowmap_ui::flow_map_row_at(&lay, self.cursor) {
+            let rows = self.flow_map_rows();
+            if let Some(row) = rows.get(index) {
+                self.show_spill_source(&row.edge_id);
+            }
+        }
         self.request_redraw();
     }
 
@@ -7899,6 +8283,21 @@ impl App {
         if matches!(self.dialog, Some(AppDialog::AutolinkRollback { .. })) {
             return;
         }
+        // FR-050 Н9-3 (этап E): «Показать источник» — открытое окно
+        // подсветки истока/связи/приёмника (машинерия фокуса PRD-0007/
+        // FR-048, без дублирования): затемнение и рёбра — из снапшота,
+        // «дыхание» тикает своим полем; живёт SHOW_SOURCE_MS, затем —
+        // фейд к обычному состоянию (провал в штатную логику ниже).
+        if let Some((nodes, edges, start)) = &self.show_source {
+            if (start.elapsed().as_millis() as u32) < SHOW_SOURCE_MS {
+                self.focus_nodes = nodes.clone();
+                self.focus_edges = edges.clone();
+                self.advance_focus_dim(1.0);
+                return;
+            }
+            // Время вышло: окно гаснет, штатная логика (fade → 0)
+            self.show_source = None;
+        }
         // PRD-0007 (F-4/AC-3.1): открытое окно Ready — подсветка цепочки
         // из снапшота дерева (F-5: одна модель для окна и подсветки),
         // затемнение прочего — тем же фейдом. Loading не затемняет (У5:
@@ -7982,6 +8381,49 @@ impl App {
                 .focus_pulse
                 .as_ref()
                 .is_some_and(|(_, start)| start.elapsed().as_millis() < u128::from(FOCUS_PULSE_MS))
+            // FR-050 Н9-3 (этап E): окно «Показать источник» — затемнение
+            // держится до истечения токена (затем фейд обратно)
+            || self.show_source.is_some()
+    }
+
+    /// FR-050 Н9-1 (этап E): волна каскада — перестройка и тик.
+    /// Перестройка: ревизия потока изменилась → seeds = ноды с изменившимся
+    /// итогом (`scene.flow_changed_nodes`) → `flow::spill_wave` (рёбра
+    /// вниз с порядком топологического расстояния); пустой диф — волна
+    /// гаснет (мутация без изменения значений: сдвиг, переименование).
+    /// Тик: за последним порядком + длительность ребра волна снимается
+    /// (кадры для статики не нужны). Вызывается ДО сборки SceneView кадра.
+    fn update_spill_wave(&mut self) {
+        if self.scene.revision != self.seen_flow_revision {
+            self.seen_flow_revision = self.scene.revision;
+            let seeds: std::collections::HashSet<String> =
+                self.scene.flow_changed_nodes.iter().cloned().collect();
+            let edges = if seeds.is_empty() {
+                Vec::new()
+            } else {
+                canvas_core::flow::spill_wave(&self.scene.canvas, &seeds)
+            };
+            self.spill_wave = (!edges.is_empty()).then(|| (edges, Instant::now()));
+        } else if let Some((edges, start)) = &self.spill_wave {
+            let max_order = edges.iter().map(|(_, order)| *order).max().unwrap_or(0);
+            let total = max_order
+                .saturating_mul(SPILL_WAVE_STEP_MS)
+                .saturating_add(SPILL_WAVE_EDGE_MS);
+            if start.elapsed().as_millis() as u32 >= total {
+                self.spill_wave = None;
+            }
+        }
+    }
+
+    /// Н9-1: волна ещё анимируется (кадры держит about_to_wait)?
+    fn spill_wave_animating(&self) -> bool {
+        self.spill_wave.as_ref().is_some_and(|(edges, start)| {
+            let max_order = edges.iter().map(|(_, order)| *order).max().unwrap_or(0);
+            let total = max_order
+                .saturating_mul(SPILL_WAVE_STEP_MS)
+                .saturating_add(SPILL_WAVE_EDGE_MS);
+            start.elapsed().as_millis() < u128::from(total)
+        })
     }
 
     /// T23: переключить режим фокуса связей (хоткей F / ПКМ-меню / панель
@@ -8863,6 +9305,15 @@ impl App {
                     false
                 }
             }
+            // FR-050 Н9-4 (этап E): Esc закрывает карту проливаний
+            ui_registry::id::FLOW_MAP => {
+                if self.flow_map_open {
+                    self.flow_map_open = false;
+                    true
+                } else {
+                    false
+                }
+            }
             // FR-017: выход из what-if режима (подмены не теряются —
             // они в персистентных сценариях `.canvas`, Q3b)
             ui_registry::id::WHATIF => {
@@ -9223,6 +9674,19 @@ impl App {
                 self.enter_whatif_mode();
             }
             self.request_redraw();
+            return;
+        }
+        // FR-050 Н9-4 (этап E): Ctrl+Shift+M — тогл панели «Карта
+        // проливаний» (кириллица — «ь»/«Ь»; M = map, не занято: Ctrl+M
+        // нет, Ctrl+Shift+M нет).
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("m") || c == "ь" || c == "Ь")
+        {
+            self.toggle_flow_map();
             return;
         }
         // FR-026: клавиатура выпадающего меню настроек — ↑/↓ сдвигают
@@ -10058,6 +10522,12 @@ impl App {
                 self.click_search();
                 true
             }
+            // FR-050 Н9-4 (этап E): клик по панели карты — «✕»/строка;
+            // мимо элементов внутри панели — глотается (панель жива)
+            ui_registry::id::FLOW_MAP => {
+                self.click_flow_map();
+                true
+            }
             ui_registry::id::WHEEL => {
                 self.click_wheel_menu();
                 true
@@ -10146,6 +10616,13 @@ impl App {
             }
             ui_registry::id::SEARCH => {
                 self.search.close();
+                self.request_redraw();
+                true
+            }
+            // FR-050 Н9-4 (этап E): клик мимо панели карты — закрыть и
+            // глотнуть (паттерн поиска)
+            ui_registry::id::FLOW_MAP => {
+                self.flow_map_open = false;
                 self.request_redraw();
                 true
             }
@@ -11011,6 +11488,8 @@ impl App {
                                 self.enter_whatif_mode();
                             }
                         }
+                        // FR-050 Н9-4 (этап E): тогл панели карты проливаний
+                        CanvasMenuItem::FlowMap => self.toggle_flow_map(),
                         // PRD-0007 (FR-048 X4, AC-5.1): «Найти связи по именам»
                         // — немедленный скан детектора + диалог ревью
                         CanvasMenuItem::AutolinkFind => {
@@ -13046,6 +13525,17 @@ impl App {
         if self.editing.is_some() {
             self.finish_editing(true);
         }
+        // FR-050 Н9-3 (этап E): ПКМ по пролитой строке/авто-строке —
+        // контекст-меню параметра («Показать источник» / «Отключить
+        // проливание» / «Что если…») вместо палитры ноды. Зоны — экранной
+        // раскладки тела (Н9-2, логические px) с прошлого кадра; клик по
+        // строке без ребра (кэш протух) — проваливается в обычный путь.
+        if let Some(hit) = self.spill_hit_at(self.cursor).cloned() {
+            if self.open_param_menu(&hit) {
+                self.request_redraw();
+                return;
+            }
+        }
         let world = self.cursor_world();
         match self.selective_hit(world) {
             // Нода: выделить → палитра выделения под нодой (FR-009/FR-010).
@@ -14106,15 +14596,18 @@ impl App {
                     self.scene.canvas.next_edge_id(),
                     from_node,
                     Some(from_side),
-                    to_node,
+                    to_node.clone(),
                     Some(to_side),
                 );
                 edge.set_flow_kind(FlowKind::Value);
                 edge.from_line = from_line;
-                edge.to_param = Some(param);
+                edge.to_param = Some(param.clone());
                 self.scene.canvas.add_edge(edge);
                 self.scene.mark_dirty();
                 self.scene.recompute_flow();
+                // FR-050 Н9-6 (этап E): замена источника — тот же тост
+                // «подтянулся из …» (новый источник виден владельцу)
+                self.spill_connected_toast(&to_node, &param);
                 self.request_redraw();
             }
             // PRD-0007 (FR-048 X4, AC-5.3): откат пачки подтверждён —
@@ -14918,6 +15411,12 @@ impl ApplicationHandler<AppEvent> for App {
                     let (search_instances, search_texts) = self.search_overlay();
                     screen_bands.push(UiLayer::Panels, search_instances, search_texts);
                 }
+                // FR-050 Н9-4 (этап E): панель «Карта проливаний» — справа
+                // сверху (Block: клик мимо — закрыть; строки — переход)
+                {
+                    let (map_instances, map_texts) = self.flow_map_overlay();
+                    screen_bands.push(UiLayer::Panels, map_instances, map_texts);
+                }
                 // PRD-0007 (X4, AC-5.5): бейдж предложений автосвязи —
                 // верх по центру, ненавязчивый (та же видимость, что у hit-rect)
                 if self.autolink_badge_visible() {
@@ -15092,6 +15591,7 @@ impl ApplicationHandler<AppEvent> for App {
                                     slot,
                                     value,
                                     template,
+                                    edge_id: _,
                                 } => {
                                     let slot_no = (slot + 1).to_string();
                                     match (value, template) {
@@ -15581,6 +16081,20 @@ impl ApplicationHandler<AppEvent> for App {
                 // T23 (brainstorm-focus): пересчёт анимации и окрестности
                 // семени ДО сборки сцены — FocusView заимствует поля App
                 self.update_focus_state();
+                // FR-050 Н9-1 (этап E): волна каскада — перестройка на новой
+                // ревизии потока (изменённые ноды → рёбра вниз с порядком)
+                // и тик времени; ДО сборки сцены — SpillWaveView
+                // заимствует поля App
+                self.update_spill_wave();
+                let spill_wave = self
+                    .spill_wave
+                    .as_ref()
+                    .map(|(edges, start)| SpillWaveView {
+                        edges,
+                        elapsed_ms: start.elapsed().as_millis() as u32,
+                        step_ms: SPILL_WAVE_STEP_MS,
+                    })
+                    .unwrap_or(SpillWaveView::EMPTY);
                 let focus = FocusView {
                     nodes: &self.focus_nodes,
                     edges: &self.focus_edges,
@@ -15647,6 +16161,9 @@ impl ApplicationHandler<AppEvent> for App {
                         expr_line_results: &self.scene.expr_line_results,
                         expr_editing_results: editing_line_results.as_deref(),
                         param_spills: &self.scene.param_spills,
+                        // FR-050 Н9-1 (этап E): волна каскада (вспышка
+                        // потока значений по рёбрам downstream)
+                        spill_wave,
                         // FR-050 Р-4 (этап D): авто-строки приёмников —
                         // префикс тела (наклонное начертание Р-2)
                         auto_rows: &self.scene.auto_rows,
@@ -15793,6 +16310,7 @@ impl ApplicationHandler<AppEvent> for App {
         if self.search_pending.is_some()
             || self.flight.is_some()
             || self.pulse.is_some()
+            || self.spill_wave_animating()
             || self.focus_animating()
             || self.palette_hover.pending()
             || self
@@ -16949,6 +17467,7 @@ mod tests {
                     value: Some("1389 rps".to_owned()),
                     local: Some("50 rps".to_owned()),
                 },
+                node: 3,
             },
             SpillHit {
                 rect: [360.0, 54.0, 25.0, 18.0],
@@ -16957,7 +17476,9 @@ mod tests {
                     slot: 1,
                     value: Some("92.5".to_owned()),
                     template: false,
+                    edge_id: "e-9".to_owned(),
                 },
+                node: 4,
             },
         ];
         // Внутри первой зоны — данные параметра
@@ -17700,5 +18221,133 @@ mod fr050_stage_c_tests {
         assert_eq!(node_display_label(&labeled), "Метка");
         // Совсем ничего → id
         assert_eq!(node_display_label(&Node::text("n4", "", 0.0, 0.0)), "n4");
+    }
+}
+
+/// FR-050 этап E: юнит-тесты чистых функций (Н9-1/Н9-3/Н9-6).
+#[cfg(test)]
+mod fr050_stage_e_tests {
+    use super::*;
+
+    /// Н9-6: ключ тоста по представлению проливания — строка присваивания
+    /// была → «Параметр…»; параметра не было (строка-проекция Р-4) →
+    /// «Значение…».
+    #[test]
+    fn spill_toast_key_by_line_presence() {
+        let with_param = SpillView {
+            param: "rps".to_owned(),
+            line: Some(0),
+            from_label: "Трафик".to_owned(),
+            from_output: Some("peak_rps".to_owned()),
+            value: Some("1389 rps".to_owned()),
+            path: "Трафик.peak_rps".to_owned(),
+            local: Some("50 rps".to_owned()),
+        };
+        assert_eq!(spill_toast_key(&with_param), keys::TOAST_SPILL_PARAM);
+        let auto_row = SpillView {
+            param: "rps".to_owned(),
+            line: None,
+            from_label: "Трафик".to_owned(),
+            from_output: Some("peak_rps".to_owned()),
+            value: Some("1389 rps".to_owned()),
+            path: "Трафик.peak_rps".to_owned(),
+            local: None,
+        };
+        assert_eq!(spill_toast_key(&auto_row), keys::TOAST_SPILL_AUTOROW);
+    }
+
+    /// Н9-3: цель контекст-меню параметра — ребро-победитель (последнее по
+    /// canvas.edges, инвариант Н4) и заголовок «Проливание в параметр»;
+    /// авто-строка адресует ребро из hit-зоны, заголовок «Входящее
+    /// значение»; протухшие hit-зоны (нода/ребро удалены) — None.
+    #[test]
+    fn spill_hit_target_resolves_edge() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "traffic",
+            "Трафик\npeak_rps = 1389 rps",
+            0.0,
+            0.0,
+        ));
+        canvas
+            .nodes
+            .push(Node::text("gw", "rps = 50 rps", 400.0, 0.0));
+        // Легаси-дубль + победитель: E2 позже по edges
+        for (id, from) in [("e1", "traffic"), ("e2", "traffic")] {
+            let mut edge = Edge::new(id, from, None, "gw", None);
+            edge.set_flow_kind(FlowKind::Value);
+            edge.to_param = Some("rps".to_owned());
+            edge.from_line = Some(1);
+            canvas.add_edge(edge);
+        }
+        let hit = SpillHit {
+            rect: [0.0, 0.0, 10.0, 10.0],
+            kind: SpillHitKind::Param {
+                param: "rps".to_owned(),
+                path: "Трафик.peak_rps".to_owned(),
+                value: Some("1389 rps".to_owned()),
+                local: Some("50 rps".to_owned()),
+            },
+            node: 1,
+        };
+        let target = spill_hit_target(&canvas, &hit).expect("победитель найден");
+        assert_eq!(target.edge_id, "e2", "победитель — последнее ребро");
+        assert_eq!(target.param.as_deref(), Some("rps"));
+        assert_eq!(target.title_key, keys::MENU_PARAM_TITLE);
+
+        // Авто-строка: ребро в hit-зоне
+        let auto = SpillHit {
+            rect: [0.0, 0.0, 10.0, 10.0],
+            kind: SpillHitKind::AutoRow {
+                path: "Трафик.peak_rps".to_owned(),
+                slot: 0,
+                value: Some("1389 rps".to_owned()),
+                template: false,
+                edge_id: "e2".to_owned(),
+            },
+            node: 1,
+        };
+        let target = spill_hit_target(&canvas, &auto).expect("ребро авто-строки");
+        assert_eq!(target.edge_id, "e2");
+        assert_eq!(target.param, None);
+        assert_eq!(target.title_key, keys::MENU_AUTOROW_TITLE);
+
+        // Протухшие зоны: неизвестная нода / удалённое ребро / свободный
+        // параметр — меню не открывается (None)
+        let ghost_node = SpillHit {
+            rect: [0.0, 0.0, 10.0, 10.0],
+            kind: SpillHitKind::AutoRow {
+                path: String::new(),
+                slot: 0,
+                value: None,
+                template: false,
+                edge_id: "e2".to_owned(),
+            },
+            node: 99,
+        };
+        assert!(spill_hit_target(&canvas, &ghost_node).is_none());
+        let gone_edge = SpillHit {
+            rect: [0.0, 0.0, 10.0, 10.0],
+            kind: SpillHitKind::AutoRow {
+                path: String::new(),
+                slot: 0,
+                value: None,
+                template: false,
+                edge_id: "e-missing".to_owned(),
+            },
+            node: 1,
+        };
+        assert!(spill_hit_target(&canvas, &gone_edge).is_none());
+        let free_param = SpillHit {
+            rect: [0.0, 0.0, 10.0, 10.0],
+            kind: SpillHitKind::Param {
+                param: "unknown".to_owned(),
+                path: String::new(),
+                value: None,
+                local: None,
+            },
+            node: 1,
+        };
+        assert!(spill_hit_target(&canvas, &free_param).is_none());
     }
 }

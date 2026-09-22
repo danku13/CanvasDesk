@@ -1,8 +1,38 @@
 {
   "$note": "Design-токены движения (слой примитивов, PRD-0006 F-1). Значения = текущим константам animate.rs/app.rs (I-1: ноль скачка). Единицы: мс.",
-
-  "focus_fade_ms": { "$type": "duration", "$value": 150, "$desc": "animate.rs — затухание не-фокусных элементов (T23)" },
-  "camera_flight_ms": { "$type": "duration", "$value": 300, "$desc": "animate.rs:9,61-79 — перелёт камеры, ease-out" },
-  "result_pulse_ms": { "$type": "duration", "$value": 1200, "$desc": "app.rs:10853-10867 — пульс результата" },
-  "focus_breath_ms": { "$type": "duration", "$value": 1600, "$desc": "app.rs/cards.rs:925-931 — дыхание фокусной связи" }
+  "focus_fade_ms": {
+    "$type": "duration",
+    "$value": 150,
+    "$desc": "animate.rs — затухание не-фокусных элементов (T23)"
+  },
+  "camera_flight_ms": {
+    "$type": "duration",
+    "$value": 300,
+    "$desc": "animate.rs:9,61-79 — перелёт камеры, ease-out"
+  },
+  "result_pulse_ms": {
+    "$type": "duration",
+    "$value": 1200,
+    "$desc": "app.rs:10853-10867 — пульс результата"
+  },
+  "focus_breath_ms": {
+    "$type": "duration",
+    "$value": 1600,
+    "$desc": "app.rs/cards.rs:925-931 — дыхание фокусной связи"
+  },
+  "spill_wave_edge_ms": {
+    "$type": "duration",
+    "$value": 600,
+    "$desc": "animate.rs — пульс одного ребра волны каскада проливаний (FR-050 Н9-1)"
+  },
+  "spill_wave_step_ms": {
+    "$type": "duration",
+    "$value": 200,
+    "$desc": "animate.rs — шаг волны между топологическими порядками рёбер (FR-050 Н9-1)"
+  },
+  "show_source_ms": {
+    "$type": "duration",
+    "$value": 2500,
+    "$desc": "app.rs — «Показать источник»: подсветка истока/связи/приёмника с затемнением (FR-050 Н9-3)"
+  }
 }

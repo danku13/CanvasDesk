@@ -3988,3 +3988,90 @@ CanvasDesk». Источник — вводные владельца о проз
   «Переменные» y 41..57 (первый блок тела — авто-строка, экран y≈40…58);
   комментарий фиксирует паттерн. Гейты локально: fmt/clippy/test —
   зелёные; CI — после пуша.
+
+---
+## 2026-09-22 — FR-050 этап E: наглядность каскада (Н9-1/Н9-3/Н9-4/Н9-6)
+
+**Запрос:** «продолжаю разработку» (следующий этап дорожной карты после D;
+CI main проверен перед началом: CI #215 / Pages #79 зелёные на 3dfca46).
+
+**Н9-1 пульс каскада** — вспышка потока значений, бегущая вниз по рёбрам:
+- Ядро: `flow::spill_wave(canvas, seeds)` — BFS по value-рёбрам вниз,
+  порядок = топологическое расстояние от ближайшего seed (ребро от seed —
+  порядок 0); control-рёбра не в волне; посещённые — цикл-безопасность
+  (чужие .canvas); выход отсортирован по индексу ребра (детерминизм).
+- Детект: `SceneState.flow_changed_nodes` в `recompute_flow` — снапшоты
+  ДО пересчёта (`expr_results` + `flow_active`), дифф по трём
+  наблюдаемым выводам: узловой итог, значения строк (присваивающие
+  листы-истоки без узлового итога — иначе демо-критерий «изменил DAU →
+  видно распространение» нарушался), именованные выходы (fromOutput).
+  Первый пересчёт — пусто; мутация без изменения значений — гаснет.
+- Рендер: `SpillWaveView { edges, elapsed_ms, step_ms }` — альфа ребра
+  полуволной `spill_wave_alpha` (600 мс, sin(πt)) со смещением
+  `order · step_ms` (200 мс); бамп цвета FLOW_EDGE_COLOR (альфа
+  0.55+0.45·α) и толщины `SPILL_WAVE_BOOST`·α; пучки FR-042 — OR-семантика
+  (макс альфа рёбер пучка); приоритет выделение > фокус > волна >
+  unmapped > обычный; пустая волна — инстансы байт-в-байт.
+- App: `spill_wave`/`seen_flow_revision` — перестройка на новой ревизии
+  сцены (update_spill_wave до сборки SceneView), тик до
+  max_order·step+edge; кадры держит about_to_wait.
+- Токены: motion.json `spill_wave_edge_ms` 600 / `spill_wave_step_ms` 200.
+
+**Н9-3 контекст-меню параметра** — ПКМ по пролитой строке/авто-строке:
+- `SpillHit.node` (индекс приёмника) + `SpillHitKind::AutoRow.edge_id`
+  (ребро строки-проекции — без поиска по слоту); `spill_hit_target`
+  резолвит Param по инварианту Н4 (победитель — последнее ребро).
+- Пункты (ChoiceMenu-паттерн): «Показать источник» — полёт камеры 300 мс
+  (паттерн поиска) + подсветка истока/связи/приёмника затемнением на
+  токен `show_source_ms` 2500 (ветка show_source в update_focus_state —
+  машинерия фокуса PRD-0007/FR-048, дыхание один цикл, фейд обратно);
+  «Отключить проливание» — remove_edge одним undo-шагом (Р-5);
+  «Что если…» — enter_whatif_mode (FR-017).
+
+**Н9-4 карта потока** — панель «Карта проливаний»:
+- `flowmap_ui` (чистые модель/раскладка/hit): строки из param_spills +
+  auto_rows (сортировка по пути; протухшие spill — фильтр), unmapped —
+  янтарь Р-3, кап 12 строк + «… ещё N», пустое состояние, кламп высоты.
+- Поверхность FLOW_MAP реестра FR-052: Panels **Capture** (клик мимо
+  панели работает с канвасом — владелец изучает истоки, переходя по
+  строкам; закрытие — Esc/✕/пункт/хоткей); входы — пункт меню канваса
+  (CanvasMenuItem::FlowMap, базовых 9) + Ctrl+Shift+M (кириллица «ь»);
+  клик по строке — переход к истоку подсветкой Н9-3 (панель остаётся).
+
+**Н9-6 тост** — `spill_connected_toast` (create_param_edge + замена
+источника Н4): «Параметр {param} подтянулся из {path} — Ctrl+Z отменит» /
+«Значение подтянулось из {path}…» (ключ по `SpillView.line`,
+`spill_toast_key`); unmapped — тоста нет (диагностика Р-3 на месте).
+
+**i18n RU/EN** — 13 ключей (меню параметра ×3 + заголовки ×2, карта ×4,
+тосты ×2, пункт меню, hotkey-подпись).
+
+**Тесты +28:** core spill_wave 6 (порядок/транзитивность, control+unknown,
+ромб+цикл, cascade-from-receiver), animate 2, scene 2 (первый пересчёт
+пуст; правка истока → обе ноды — lines-детект), render 2 (альфа-смещение/
+бамп+приоритеты), app 2 (spill_toast_key / spill_hit_target),
+flowmap_ui 6, integration_groups (меню 9 пунктов).
+
+**Гейты:** fmt ✓, clippy -D warnings ✓, test workspace по крейтам ✓
+(core 364 / scene 43+43 / render 311+smoke / app 294+42 / widgets 48 /
+ui 56 / mcp 19), wasm_gate 3/3 ✓ (core 363 под wasmtime), token_lint ✓,
+mcp_wasm_gate ✓ (e2e-сессия oracle ±1 %). CI — после пуша.
+
+**Диски-кризис сессии:** target/ раздут (>8G), повторные чистки
+incremental/smoke-бинарников/дублей rlib; тесты гонялись по крейтам с
+CARGO_INCREMENTAL=0.
+
+**Файлы:** crates/canvas-core/src/flow.rs,
+crates/canvas-scene/src/{scene,tests}.rs,
+crates/canvas-render/src/{animate,cards,renderer,text}.rs,
+crates/canvas-render/tests/auto_row_smoke.rs,
+crates/canvas-app/src/{lib,app,i18n,flowmap_ui}.rs,
+crates/canvas-app/src/app/ui_registry.rs,
+crates/canvas-app/tests/integration_groups.rs,
+design/tokens/motion.json,
+docs/change-requests/fr-050-spill-visibility-ui.md,
+docs/change-requests/index-cr-fr.md.
+
+**Осталось:** этап F — миграция формул 6 схем FR-049 на именованные
+ссылки (Н6+Р-6; toParam-адресация рёбер уже в контенте v2 59e6fe9) +
+user-docs (calculations.md, hotkeys.md, interface.md).

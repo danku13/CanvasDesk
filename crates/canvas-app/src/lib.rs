@@ -80,6 +80,10 @@ pub mod scheme_gallery_ui;
 /// T-038.4.
 pub mod snap;
 
+/// FR-050 Н9-4 (этап E): «Карта проливаний» — чистая модель и раскладка
+/// панели-оверлея всех проливаний канваса (строки «источник → параметр ·
+/// значение», hit-тесты, кап с «… ещё N»). Рендер и ввод — app.rs.
+pub mod flowmap_ui;
 #[cfg(test)]
 mod scheme_cjm_tests;
 /// FR-017 (CP6): what-if нижний бар — чистая модель (геометрия полосы
@@ -1099,6 +1103,11 @@ pub mod ui {
         /// (нижний бар; вход также — Ctrl+Shift+I и пилюля). Галочка ✓ —
         /// режим активен.
         WhatIf,
+        /// FR-050 Н9-4 (этап E): «Карта проливаний» — оверлей всех
+        /// проливаний канваса (источник → параметр → значение), клик по
+        /// строке — переход к истоку; вход также — Ctrl+Shift+M. Действие
+        /// (тогл панели), без ✓-галочки.
+        FlowMap,
         /// PRD-0007 (FR-048 X4, AC-5.1): «Найти связи по именам» — немедленный
         /// запуск детектора автосвязи + диалог ревью (не переключатель).
         AutolinkFind,
@@ -1115,7 +1124,7 @@ pub mod ui {
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 8] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 9] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
@@ -1123,6 +1132,7 @@ pub mod ui {
         CanvasMenuItem::DesktopMode,
         CanvasMenuItem::BottleneckOverlay,
         CanvasMenuItem::WhatIf,
+        CanvasMenuItem::FlowMap,
         CanvasMenuItem::AutolinkFind,
     ];
 
@@ -1206,6 +1216,11 @@ pub mod ui {
                     if whatif_on { check } else { "" },
                     i18n::tr(language, crate::i18n::keys::MENU_WHATIF)
                 )
+            }
+            // FR-050 Н9-4 (этап E): карта проливаний — действие-тогл панели
+            // (повторный выбор/Esc/клик мимо — закрыть), без галочки
+            CanvasMenuItem::FlowMap => {
+                i18n::tr(language, crate::i18n::keys::MENU_FLOW_MAP).to_owned()
             }
             // PRD-0007 (FR-048 X4, AC-5.1): действие, не переключатель
             CanvasMenuItem::AutolinkFind => {
@@ -2246,9 +2261,11 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            // PRD-0007 (X4): 8-й пункт — «Найти связи по именам» (действие)
-            assert_eq!(n, 8);
-            assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::AutolinkFind);
+            // PRD-0007 (X4): пункт автосвязи — последний (действие);
+            // FR-050 Н9-4: перед ним — карта проливаний (действие)
+            assert_eq!(n, 9);
+            assert_eq!(CANVAS_MENU_ITEMS[8], CanvasMenuItem::AutolinkFind);
+            assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::FlowMap);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
             assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
             assert_eq!(

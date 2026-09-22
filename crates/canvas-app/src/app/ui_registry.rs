@@ -62,6 +62,10 @@ pub mod id {
     pub const STAGE: &str = "stage";
     /// Панель поиска (L3, Block — мимо панели закрывается и глотает).
     pub const SEARCH: &str = "search";
+    /// FR-050 Н9-4 (этап E): панель «Карта проливаний» (L3, Capture —
+    /// клик мимо панели работает с канвасом: владелец изучает истоки,
+    /// переходя по строкам; закрытие — ✕/Esc/Ctrl+Shift+M/пункт меню).
+    pub const FLOW_MAP: &str = "flow_map";
     /// Сессия редактирования текста (L2, scope — клики остаются в мире).
     pub const EDITOR: &str = "editor";
     /// Окно проверки цепочки расчёта (PRD-0007 X2, L5, Block — мимо окна
@@ -264,6 +268,14 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::SEARCH),
         );
     }
+    // FR-050 Н9-4 (этап E): карта проливаний — Capture-панель (канвас
+    // под ней жив: владелец кликает ноды, переходя по строкам карты)
+    if app.flow_map_open {
+        reg.add(
+            SurfaceDecl::new(id::FLOW_MAP, UiLayer::Panels, CapturePolicy::Capture)
+                .with_scope(id::FLOW_MAP),
+        );
+    }
     if app.editing.is_some() {
         reg.add(
             SurfaceDecl::new(id::EDITOR, UiLayer::Widgets, CapturePolicy::Capture)
@@ -339,6 +351,7 @@ const VISUAL_ORDER: &[&str] = &[
     id::CORNER_BUTTONS,
     id::EMPTY,
     id::SEARCH,
+    id::FLOW_MAP,
     id::TEMPLATE_STRIP,
     id::TEMPLATE_PANEL,
     id::WHATIF,
@@ -610,6 +623,25 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 UiRect::new(sx0, sy0, sx1 - sx0, sy1 - sy0),
                 "search-panel",
             ));
+        }
+        // FR-050 Н9-4 (этап E): карта проливаний — панель + «✕» + строки
+        // (раскладка flowmap_ui, xywh-контракт); клики — click_flow_map
+        // (hit-тест той же раскладкой), клик мимо панели — канвас (Capture)
+        id::FLOW_MAP => {
+            let rows = app.flow_map_rows();
+            let lay = crate::flowmap_ui::flow_map_layout(viewport, rows.len());
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.panel), "flow-map-panel"));
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.close), "flow-map-close"));
+            for (i, row) in lay.rows.iter().enumerate() {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(*row),
+                    format!("flow-map-row-{i}"),
+                ));
+            }
         }
         id::DIALOG => {
             surface
