@@ -2,8 +2,8 @@
   "id": "com.canvasdesk.scheme.intro-whatif",
   "name_ru": "Сценарии what-if",
   "name_en": "What-if scenarios",
-  "description_ru": "Бюджет со статьями и годовым итогом: подмена входа в сценарии, дельты без правки базы и проливание значений в параметры.",
-  "description_en": "A budget with line items and an annual total: override an input in a scenario, see deltas without touching the base, values spill into parameters.",
+  "description_ru": "Бюджет со статьями и годовым итогом: сценарная подмена входа, дельты без правки базы и годовой итог из итога месяца.",
+  "description_en": "A budget with line items and an annual total: override an input in a scenario, see deltas without touching the base, and the annual total from the monthly one.",
   "category": "onboarding",
   "category_ru": "Онбординг",
   "category_en": "Onboarding",
@@ -17,7 +17,7 @@
         "y": 0,
         "width": 360,
         "height": 230,
-        "text": "Сценарии what-if\nВыделите строку с числом и включите режим What-if в нижнем баре: подмените вход — дельты пересчитываются поверх базы, файл не меняется.\nГодовой бюджет принимает значения через параметры: итог проливается в доллары на месяц.",
+        "text": "Сценарии what-if\nВключите режим What-if кнопкой внизу экрана, затем двойной клик по строке с числом задаёт подмену: дельты пересчитываются поверх базы, файл не меняется.\nГодовой бюджет собирается из итога месяца и горизонта: значения приходят в него по именам параметров.",
         "color": "4"
       },
       {
@@ -28,7 +28,7 @@
         "width": 260,
         "height": 220,
         "text": "Статьи бюджета\nПрямые расходы за месяц: маркетинг и инструменты.\n\nmarketing = 1200 $\ntools = 300 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "total",
@@ -48,7 +48,7 @@
         "width": 260,
         "height": 180,
         "text": "Горизонт\nДлительность проекта в месяцах.\n\nmonths = 12",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "annual",

@@ -152,7 +152,11 @@ pub fn layout(
     let rows_y = chips_y + CHIP_H + 6.0;
     let footer_y = y + panel_h - FOOTER_H - PANEL_PAD;
 
-    // Чипы: «Все» + категории (укладываемся в ширину, остаток — срез).
+    // Чипы: «Все» + категории. Ширина 108 подобрана под полный ряд
+    // «Все» + 4 категории при PANEL_W 560 (inner 536): 56+6+4×(108+6)=512 —
+    // все категории видны, ни одна не срезается (инвариант D2 CJM:
+    // молчаливый срез прятал категорию «Бизнес»; тест
+    // `chips_all_categories_fit`).
     let mut chip_rects = Vec::new();
     let mut cx = inner_x;
     let chip_gap = 6.0;
@@ -160,7 +164,7 @@ pub fn layout(
     chip_rects.push(([inner_x, chips_y, all_w, CHIP_H], None));
     cx += all_w + chip_gap;
     for (key, _, _) in categories(SchemeRegistry::embedded()) {
-        let w = 120.0;
+        let w = 108.0;
         if cx + w > inner_x + inner_w {
             break;
         }
@@ -286,6 +290,25 @@ mod tests {
         // Стандартный вьюпорт — все схемы видимы без скролла.
         let lay = layout([1280.0, 800.0], &list, &st);
         assert_eq!(lay.visible_rows.len(), list.len());
+    }
+
+    /// D2 CJM: молчаливый срез чипов прятал последнюю категорию
+    /// («Бизнес», unit-economics) — на стандартном и компактном десктопе
+    /// все «Все» + N категорий обязаны быть в ряду.
+    #[test]
+    fn chips_all_categories_fit() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        let list = rows(registry, &st);
+        for viewport in [[1280.0, 800.0], [1024.0, 768.0], [800.0, 600.0]] {
+            let lay = layout(viewport, &list, &st);
+            assert_eq!(
+                lay.chip_rects.len(),
+                1 + categories(registry).len(),
+                "все категории влезают при {:?}",
+                viewport
+            );
+        }
     }
 
     #[test]

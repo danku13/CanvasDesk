@@ -607,6 +607,23 @@ pub fn mcp_dispatch(
                     }
                 }
             }
+            // FR-050 Н4 (fail-fast дубль-входов): второе value-ребро в тот же
+            // `toParam` отклоняется немедленно — не ждём `graph_validate`
+            // (замена источника — явная пара edge_delete + edge_create; UI —
+            // диалог «Заменить источник?», этап C). Легаси-файлы с дублями
+            // грузятся с warning «последний побеждает» (как сегодня).
+            if let Some(param) = &to_param {
+                if let Some(existing) = scene.canvas.edges.iter().find(|edge| {
+                    edge.flow_kind() == FlowKind::Value
+                        && edge.to_node == to
+                        && edge.to_param.as_deref() == Some(param.as_str())
+                }) {
+                    return Err(format!(
+                        "E-DOUBLE-INPUT: параметр {param:?} ноды {to} уже запитан value-ребром {} — замена: edge_delete {} + edge_create (или один graph_apply)",
+                        existing.id, existing.id
+                    ));
+                }
+            }
             let mut edge = Edge::new(
                 scene.canvas.next_edge_id(),
                 &from,
@@ -1621,6 +1638,24 @@ fn batch_apply_op(
                         format!("у ноды {to} нет параметра '{param}' (приёмник не шаблон либо параметр не объявлен)"),
                     ));
                 }
+                // FR-050 Н4 (fail-fast дубль-входов): симметрично прямому
+                // edge_create — второе value-ребро в занятый `toParam`
+                // отклоняется операцией (батч атомарно откатывается,
+                // инвариант FR-033); замена источника — явная пара
+                // edge_delete + edge_create в том же батче.
+                if let Some(existing) = canvas.edges.iter().find(|edge| {
+                    edge.flow_kind() == flow::FlowKind::Value
+                        && edge.to_node == to
+                        && edge.to_param.as_deref() == Some(param.as_str())
+                }) {
+                    return Err(BatchOpError::new(
+                        "E-DOUBLE-INPUT",
+                        format!(
+                            "параметр '{param}' ноды {to} уже запитан value-ребром {} — замена: edge_delete + edge_create в одном батче",
+                            existing.id
+                        ),
+                    ));
+                }
             }
             if let Some(output) = &from_output {
                 let known = canvas
@@ -1642,8 +1677,39 @@ fn batch_apply_op(
             edge.to_param = to_param;
             let id = edge.id.clone();
             canvas.add_edge(edge);
+            // FR-050 Н4: ref ребра регистрируется в карте батча — пара
+            // «edge_delete + edge_create» (замена занятого toParam) адресует
+            // созданное ребро по ref в том же батче (уникальность имени —
+            // как у нод, дубликат — ошибка операции).
+            if let Some(name) = batch_opt_str(op, "ref") {
+                register_ref(refs, name, &id)?;
+            }
             let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
             let mut e = entry("edge_create", true, ref_name);
+            e.edge_id = Some(id);
+            Ok(e)
+        }
+        "edge_delete" => {
+            // FR-050 Н4: удаление ребра в батче — вторая половина пары
+            // «delete + create» замены источника (замена занятого toParam —
+            // edge_create падает E-DOUBLE-INPUT, замена = явная пара в ОДНОМ
+            // батче: атомарно, один undo-шаг на весь батч). id — существующее
+            // ребро канваса или ref рёбра, созданного ранее в этом же батче.
+            let key = batch_opt_str(op, "id")
+                .or_else(|| batch_opt_str(op, "ref"))
+                .ok_or_else(|| {
+                    BatchOpError::new("E-BAD-OP", "отсутствует поле 'id'/'ref'")
+                })?;
+            let id = refs.get(key).cloned().unwrap_or_else(|| key.to_owned());
+            let index = canvas
+                .edges
+                .iter()
+                .position(|edge| edge.id == id)
+                .ok_or_else(|| {
+                    BatchOpError::new("E-NOT-FOUND", format!("связь не найдена: {id}"))
+                })?;
+            canvas.edges.remove(index);
+            let mut e = entry("edge_delete", false, None);
             e.edge_id = Some(id);
             Ok(e)
         }
@@ -1744,7 +1810,7 @@ fn batch_apply_op(
         other => Err(BatchOpError::new(
             "E-BAD-OP",
             format!(
-                "неизвестная операция '{other}' (ожидались node_create_note/node_create_file/template_instantiate/edge_create/param_set/node_move)"
+                "неизвестная операция '{other}' (ожидались node_create_note/node_create_file/template_instantiate/edge_create/edge_delete/param_set/node_move)"
             ),
         )),
     }

@@ -2,8 +2,8 @@
   "id": "com.canvasdesk.scheme.renovation-estimate",
   "name_ru": "Смета ремонта",
   "name_en": "Renovation estimate",
-  "description_ru": "Площади комнат на общую ставку плюс материалы и итог со скидкой: один вход питает оба расчёта, значения проливаются в параметры.",
-  "description_en": "Room areas against a shared rate plus materials and a discounted total: one input fans out to both calculations, values spill into parameters.",
+  "description_ru": "Площади комнат на общую ставку плюс материалы и итог со скидкой: один вход питает оба расчёта.",
+  "description_en": "Room areas against a shared rate plus materials and a discounted total: one input fans out to both calculations.",
   "category": "planning",
   "category_ru": "Планирование",
   "category_en": "Planning",
@@ -28,7 +28,7 @@
         "width": 260,
         "height": 200,
         "text": "Площади\nКомнаты под отделку: гостиная и спальня, метры квадратные.\n\nliving = 18\nbedroom = 12",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "rate",
@@ -38,7 +38,7 @@
         "width": 260,
         "height": 180,
         "text": "Ставка\nСтоимость отделки за квадратный метр.\n\nrate = 25 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "materials",
@@ -48,7 +48,7 @@
         "width": 260,
         "height": 180,
         "text": "Материалы\nЧерновые и чистовые материалы на все комнаты.\n\nmaterials = 700 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "discount",
@@ -58,7 +58,7 @@
         "width": 260,
         "height": 180,
         "text": "Скидка\nСкидка подрядчика на объём: доля от итога.\n\ndiscount = 0.1",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "space",
@@ -117,7 +117,7 @@
         "y": 40,
         "width": 320,
         "height": 220,
-        "text": "Вердикт\nКлючевая ручка — ставка: она питает обе комнаты сразу.\nВыделите итог — цепочка покажет путь до площадей и материалов.\nПопробуйте сценарий на площади: дельту увидите сразу.",
+        "text": "Вердикт\nКлючевая ручка — ставка: она питает обе комнаты сразу.\nПучок «Площади → Общая площадь» открывает веер обеих комнат.\nПопробуйте сценарий на площади: дельту увидите сразу.",
         "color": "4"
       }
     ],

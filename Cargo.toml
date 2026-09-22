@@ -25,6 +25,10 @@ canvas-scene = { path = "crates/canvas-scene", version = "0.1.0" }
 canvas-web = { path = "crates/canvas-web", version = "0.1.0" }
 # M5: движок виджетов (манифесты, bridge, LOD, реестр, WebView2-хост)
 canvas-widgets = { path = "crates/canvas-widgets", version = "0.1.0" }
+# FR-051/FR-052 (PRD-0009): каркас canvas-ui — модель экрана (слои, реестр
+# поверхностей, capture-политики, HitStack, KeyboardRouter); потребляют
+# canvas-render (полосы кадра) и canvas-app (диспетчер ввода)
+canvas-ui = { path = "crates/canvas-ui", version = "0.1.0" }
 # модель и сериализация
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

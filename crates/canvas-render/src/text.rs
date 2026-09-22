@@ -1105,12 +1105,16 @@ pub struct TitleFrame<'a> {
     pub editing_buffer: Option<(&'a Buffer, [f32; 2], f32, f32)>,
     /// Оверлей-тексты кадра (контекстное меню, T7).
     pub overlay_texts: &'a [OverlayText<'a>],
-    /// Screen-space тексты (панель настроек): константный размер при зуме.
-    pub screen_texts: &'a [ScreenText<'a>],
+    /// Screen-space ПОЛОСЫ слоёв (FR-052, U2 PRD-0009): тексты каждой
+    /// полосы готовятся в СВОЕЙ группе (`TextSystem::band_group`) —
+    /// рендерер рисует полосы по очереди (квады полосы → тексты полосы),
+    /// поэтому тексты нижней полосы не ложатся поверх квадов верхней.
+    pub screen_bands: &'a [crate::renderer::ScreenBand<'a>],
     /// Z-план кадра (zorder.rs): текст-группы — тексты нод рисуются
     /// сегментами между карточками, чтобы текст фоновой ноды не ложился
     /// поверх карточек переднего плана. Финальная группа — лейблы связей,
-    /// подписи меню и HUD; screen-тексты панелей — в `TextSystem::overlay_group`.
+    /// подписи меню и HUD; screen-тексты панелей — в группах полос
+    /// (`TextSystem::band_group`, FR-052).
     pub zplan: &'a ZPlan,
     /// Лейблы связей (T8): по центрам кривых; лейбл редактируемой связи
     /// сюда не передаётся — его рисует EditingSession. Рисуются в финальной
@@ -1933,16 +1937,13 @@ impl TextSystem {
         // и до карточек, перекрывающих его ноды (z-порядок, zorder.rs).
         let group_count = frame.zplan.group_count();
         let final_group = frame.zplan.final_group();
-        // Группа screen-space оверлеев (панель поиска/настроек, тултип):
-        // индекс за пределами z-плана — её квады рисует рендерер финальным
-        // проходом ПОСЛЕ всех сегментов, тексты — этой группой после квадов.
-        // Раньше квады оверлея расширяли диапазон последнего сегмента, и
-        // тамбнейлы/тексты его нод перекрывали панель (баг T14).
-        let overlay_group = group_count;
-        // FR-042/FR-044: группа текстов main stage — на две больше числа
-        // групп z-плана (после оверлея панелей): её квадов нет (квады stage
-        // в cards-буфере), тексты рисуются самой последней группой кадра.
-        let stage_group = overlay_group + 1;
+        // Группы screen-space ПОЛОС (FR-052 U2): по одной группе на полосу,
+        // индексы сразу за группами z-плана; stage-группа — после всех
+        // полос. Раньше все screen-тексты шли одной группой после квадов
+        // оверлея — тексты панели ложились поверх квадов модали, открытой
+        // выше (полосное исполнение устраняет класс дефекта, §7.3).
+        let band_count = frame.screen_bands.len();
+        let stage_group = group_count + band_count;
         while self.renderers.len() <= stage_group {
             let renderer = TextRenderer::new(
                 &mut self.atlas,
@@ -1973,27 +1974,34 @@ impl TextSystem {
             overlay_buffers.push((buffer, overlay.origin, overlay.width));
         }
 
-        // Screen-space тексты (панель настроек): константный физический
-        // размер, позиции — логические px от угла окна, без камеры
-        let mut screen_buffers: Vec<Buffer> = Vec::with_capacity(frame.screen_texts.len());
-        for st in frame.screen_texts {
-            let font = st.font_size * scale_factor;
-            let line_height = font * 1.3;
-            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(
-                &mut self.font_system,
-                Some(st.width * scale_factor),
-                Some(line_height),
-            );
-            buffer.set_text(
-                &mut self.font_system,
-                st.text,
-                sans_attrs(),
-                Shaping::Advanced,
-            );
-            buffer.shape_until_scroll(&mut self.font_system, false);
-            screen_buffers.push(buffer);
+        // Screen-space тексты ПОЛОС (FR-052 U2): константный физический
+        // размер, позиции — логические px от угла окна, без камеры.
+        // Буферы группируются по полосам — каждая полоса готовится в своей
+        // текст-группе (см. хвост функции)
+        let mut band_buffers: Vec<Vec<Buffer>> = Vec::with_capacity(frame.screen_bands.len());
+        for band in frame.screen_bands {
+            let mut buffers: Vec<Buffer> = Vec::with_capacity(band.texts.len());
+            for st in band.texts {
+                let font = st.font_size * scale_factor;
+                let line_height = font * 1.3;
+                let mut buffer =
+                    Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
+                buffer.set_wrap(&mut self.font_system, Wrap::None);
+                buffer.set_size(
+                    &mut self.font_system,
+                    Some(st.width * scale_factor),
+                    Some(line_height),
+                );
+                buffer.set_text(
+                    &mut self.font_system,
+                    st.text,
+                    sans_attrs(),
+                    Shaping::Advanced,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                buffers.push(buffer);
+            }
+            band_buffers.push(buffers);
         }
 
         // FR-042/FR-044: тексты main stage — тот же screen-space конвейер,
@@ -2434,7 +2442,7 @@ impl TextSystem {
             }
             // Финальная группа поверх всего кадра: лейблы связей (T8),
             // подписи меню (T7) и HUD (F3). Screen-тексты панелей — в
-            // overlay_group (после квадов оверлея, см. ниже)
+            // группах полос (band_group, FR-052; после квадов своей полосы)
             if g == final_group {
                 // Лейблы связей (T8): текст по центру кривой — кэш обновлён
                 // в фазе 1, подложка лейбла уходит в карточки оверлей-региона
@@ -2568,24 +2576,28 @@ impl TextSystem {
         // FR-013 (правка 4): зоны ошибок кадра собраны — приложение вычитает
         // их после рендера для hit-теста курсора (тултип ошибки)
         self.line_error_hits = error_hits;
-        // Screen-тексты (панель поиска/настроек, тултип): отдельная группа
-        // ПОСЛЕ квадов оверлея — иначе их фон (квады) рисовался бы после
-        // текстов и закрывал собственные строки панели
-        let mut overlay_areas: Vec<TextArea> = Vec::with_capacity(screen_buffers.len());
-        for (buffer, st) in screen_buffers.iter().zip(frame.screen_texts) {
-            overlay_areas.push(screen_text_area(buffer, st, scale_factor));
-        }
-        if let Some(renderer) = self.renderers.get_mut(overlay_group) {
-            prepare_group(
-                renderer,
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                &overlay_areas,
-                &mut self.swash_cache,
-            )?;
+        // Screen-тексты ПОЛОС (FR-052 U2): отдельная группа на полосу —
+        // рендерер рисует полосы по очереди (квады полосы → тексты полосы),
+        // поэтому фон следующей полосы не закрывает строки предыдущей,
+        // а тексты нижней полосы не ложатся поверх квадов верхней
+        for (band_index, buffers) in band_buffers.iter().enumerate() {
+            let band = &frame.screen_bands[band_index];
+            let mut band_areas: Vec<TextArea> = Vec::with_capacity(buffers.len());
+            for (buffer, st) in buffers.iter().zip(band.texts) {
+                band_areas.push(screen_text_area(buffer, st, scale_factor));
+            }
+            if let Some(renderer) = self.renderers.get_mut(group_count + band_index) {
+                prepare_group(
+                    renderer,
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    &band_areas,
+                    &mut self.swash_cache,
+                )?;
+            }
         }
         // FR-042/FR-044: тексты main stage — последняя группа кадра (после
         // модального прохода квадов stage в рендерере)
@@ -2626,22 +2638,21 @@ impl TextSystem {
         }
     }
 
-    /// Индекс группы screen-space оверлеев (панель поиска/настроек, тултип):
-    /// на один больше всех групп z-плана — её тексты рисуются ПОСЛЕ квадов
-    /// оверлея, которые рендерер выводит финальным проходом после всех
-    /// сегментов (иначе тамбнейлы/тексты последнего сегмента перекрывали
-    /// панель, баг T14).
-    pub fn overlay_group(zplan: &crate::zorder::ZPlan) -> usize {
-        zplan.group_count()
+    /// Индекс текст-группы полосы `band_index` (FR-052 U2): группы полос
+    /// идут сразу за группами z-плана, по одной на полосу; рендерер
+    /// рисует полосы по очереди — квад-диапазон полосы, затем её группа.
+    pub fn band_group(zplan: &crate::zorder::ZPlan, band_index: usize) -> usize {
+        zplan.group_count() + band_index
     }
 
-    /// Индекс группы текстов main stage (FR-042/FR-044): на два больше числа
-    /// групп z-плана — САМАЯ последняя группа кадра. Рендерер рисует её после
-    /// модального прохода квадов stage (который идёт после всех сегментов,
-    /// панелей и миникарты), поэтому тексты stage лежат поверх своих пилюль
-    /// и карточек, но ничего живого канваса поверх stage нет.
-    pub fn stage_group(zplan: &crate::zorder::ZPlan) -> usize {
-        zplan.group_count() + 1
+    /// Индекс группы текстов main stage (FR-042/FR-044): после ВСЕХ групп
+    /// полос (`band_count` — число screen-полос кадра) — САМАЯ последняя
+    /// группа кадра. Рендерер рисует её после модального прохода квадов
+    /// stage (который идёт после всех полос и миникарты), поэтому тексты
+    /// stage лежат поверх своих пилюль и карточек, но ничего живого
+    /// канваса поверх stage нет.
+    pub fn stage_group(zplan: &crate::zorder::ZPlan, band_count: usize) -> usize {
+        zplan.group_count() + band_count
     }
 
     /// Доступ к FontSystem для операций EditingSession (T7): ввод, каретка,

@@ -36,6 +36,13 @@ use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
 use crate::zorder;
 
+// FR-052 (U2 PRD-0009): полосы слоёв экрана — тип полосы и тип слоя из
+// каркаса canvas-ui (внутренний workspace-крейт, 0 внешних зависимостей —
+// G7). Рендерер исполняет screen-хвост кадра ПОЛОСАМИ: порядок выводится
+// из реестра поверхностей приложения (UiFrame.draw_bands), а не из
+// последовательности вызовов сборки оверлея.
+use canvas_ui::layer::UiLayer;
+
 // FR-046: цветовые константы рендера мигрированы в design-токены:
 // селекция/подсветка/what-if — слоты `ThemeColors` (accent/selection_fill/
 // highlight/whatif_fill/whatif_badge), акцентное семейство — примитив
@@ -123,13 +130,24 @@ fn screen_sector_to_world(
 /// Оверлеи кадра от приложения (контекстное меню T7, панель настроек):
 /// дополнительные инстансы квадов (поверх карточек, под текстом) и подписи.
 /// `instances`/`texts` — world-координаты (масштабируются зумом);
-/// `screen_instances`/`screen_texts` — логические px от угла окна,
-/// константный размер при любом зуме.
+/// Полоса screen-space контента одного слоя (FR-052, U2 PRD-0009).
+/// Квады и тексты рисуются вместе: квады полосы → тексты полосы — тексты
+/// нижней полосы не ложатся поверх квадов верхней (класс дефекта
+/// «текст панели поверх модали», F-4/§7.3). Порядок полос — возрастание
+/// [`UiLayer`] (поле — подпись debug-оверлея F-10 и контракт сборщика).
+pub struct ScreenBand<'a> {
+    pub layer: UiLayer,
+    pub instances: &'a [CardInstance],
+    pub texts: &'a [ScreenText<'a>],
+}
+
+/// `screen_bands` — логические px от угла окна, константный размер при
+/// любом зуме; полосы упорядочены по возрастанию слоя (контракт сборщика
+/// кадра — `UiFrame::draw_bands`, PRD-0009 F-2).
 pub struct FrameOverlay<'a> {
     pub instances: &'a [CardInstance],
     pub texts: &'a [OverlayText<'a>],
-    pub screen_instances: &'a [CardInstance],
-    pub screen_texts: &'a [ScreenText<'a>],
+    pub screen_bands: &'a [ScreenBand<'a>],
     /// FR-042 (E3)/FR-044: квады main stage (затемнение, подложка, веер,
     /// пилюли, карточки среза). МОДАЛЬНЫЙ проход: рисуются ПОСЛЕ всех
     /// z-сегментов, текст-групп, панелей и миникарты — ни живой текст
@@ -141,9 +159,9 @@ pub struct FrameOverlay<'a> {
     pub stage_texts: &'a [ScreenText<'a>],
     /// FR-022 (рестайл 2026-09-16): donut-сектора wheel-меню шаблонов
     /// (логические px от угла окна — конвертируются в world рендерером,
-    /// см. `screen_sector_to_world`). Рисуются ПЕРЕД screen_instances:
+    /// см. `screen_sector_to_world`). Рисуются ПЕРЕД screen-полосами:
     /// первым инстансом идёт диск-затемнение, поверх него — сектора меню,
-    /// поверх них — иконки/хаб из `screen_instances` и тексты.
+    /// поверх них — иконки/хаб из полосы `WorldOverlay` и тексты.
     pub screen_sectors: &'a [SectorInstance],
     /// Квады снапшотов виджетов (M5 T20-D): id ноды + область контента
     /// (world). Рисуются поверх карточек, под screen-оверлеями.
@@ -155,8 +173,7 @@ impl FrameOverlay<'_> {
     pub const EMPTY: FrameOverlay<'static> = FrameOverlay {
         instances: &[],
         texts: &[],
-        screen_instances: &[],
-        screen_texts: &[],
+        screen_bands: &[],
         stage_instances: &[],
         stage_texts: &[],
         screen_sectors: &[],
@@ -1201,13 +1218,20 @@ impl Renderer {
         // поверх его карточек, под его текстом
         instances.extend_from_slice(overlay.instances);
         let world_tail_end = instances.len() as u32;
-        // Screen-space оверлеи (панель поиска/настроек, тултип): ОТДЕЛЬНЫЙ
-        // диапазон — раньше расширяли диапазон последнего сегмента, и
-        // тамбнейлы/тексты его нод перекрывали панель (баг T14). Рисуются
-        // финальным проходом после всех сегментов; их тексты — отдельной
-        // группой TextSystem после этих квадов (иначе фон закрыл бы строки)
-        for inst in overlay.screen_instances {
-            instances.push(screen_instance_to_world(camera, viewport_logical, inst));
+        // Screen-space оверлеи (FR-052 U2): ПОЛОСЫ слоёв — диапазон на полосу
+        // (раньше расширяли диапазон последнего сегмента, и тамбнейлы/тексты
+        // его нод перекрывали панель — баг T14; затем плоский список в
+        // порядке вызовов сборки). Квады каждой полосы конвертируются в
+        // world подряд; диапазоны запоминаются — отрисовка ниже выводит
+        // полосы по очереди (квады полосы → тексты полосы).
+        let mut band_ranges: Vec<(UiLayer, std::ops::Range<u32>)> =
+            Vec::with_capacity(overlay.screen_bands.len());
+        for band in overlay.screen_bands {
+            let start = instances.len() as u32;
+            for inst in band.instances {
+                instances.push(screen_instance_to_world(camera, viewport_logical, inst));
+            }
+            band_ranges.push((band.layer, start..instances.len() as u32));
         }
         // FR-022: donut-сектора wheel-меню — screen → world той же камерой
         // (центр через screen_to_world, радиусы / zoom; углы не трогаем)
@@ -1216,7 +1240,7 @@ impl Renderer {
             .iter()
             .map(|s| screen_sector_to_world(camera, viewport_logical, s))
             .collect();
-        let (top_range, overlay_range) = zorder::plan_tail_ranges(
+        let (top_range, _overlay_range) = zorder::plan_tail_ranges(
             &mut draw_ranges,
             world_tail_start,
             world_tail_end,
@@ -1297,7 +1321,7 @@ impl Renderer {
                 editing: editing_index,
                 editing_buffer,
                 overlay_texts: overlay.texts,
-                screen_texts: overlay.screen_texts,
+                screen_bands: overlay.screen_bands,
                 zplan: &zplan,
                 edge_labels: &edge_labels,
                 focus: scene.focus,
@@ -1404,20 +1428,27 @@ impl Renderer {
                 self.guides.draw(&mut pass, guide_count);
             }
             // FR-022: donut-сектора wheel-меню — поверх мира и снапшотов
-            // виджетов, ПОД screen-квадами оверлея (первый сектор — диск-
-            // затемнение, дальше сектора меню; иконки/хаб — в overlay_range
-            // ниже, поверх секторов)
+            // виджетов, ПОД screen-полосами (первый сектор — диск-
+            // затемнение, дальше сектора меню; иконки/хаб — в полосе
+            // WorldOverlay ниже, поверх секторов)
             if sector_count > 0 {
                 self.sectors.draw(&mut pass, sector_count);
             }
-            if !overlay_range.is_empty() {
-                self.cards.draw_range(&mut pass, overlay_range.clone());
-            }
-            if let Err(err) = self
-                .text
-                .draw_group(&mut pass, TextSystem::overlay_group(&zplan))
-            {
-                tracing::warn!(?err, "отрисовка оверлейных текстов пропущена");
+            // FR-052 (U2): исполнение ПОЛОС слоёв — для каждой полосы:
+            // квад-диапазон полосы → текст-группа полосы. Тексты нижней
+            // полосы не ложатся поверх квадов верхней (класс дефекта
+            // «текст панели поверх модали»); порядок полос — возрастание
+            // UiLayer (реестр поверхностей приложения, PRD-0009 F-2).
+            for (band_index, (_, band_range)) in band_ranges.iter().enumerate() {
+                if !band_range.is_empty() {
+                    self.cards.draw_range(&mut pass, band_range.clone());
+                }
+                if let Err(err) = self
+                    .text
+                    .draw_group(&mut pass, TextSystem::band_group(&zplan, band_index))
+                {
+                    tracing::warn!(?err, "отрисовка текстов полосы пропущена");
+                }
             }
             // Миникарта (T13-B): последний квад кадра — после карточек,
             // тамбнейлов и ВСЕХ текст-групп (HUD и оверлеи приложения —
@@ -1434,10 +1465,10 @@ impl Renderer {
             if stage_end > stage_start {
                 self.cards.draw_range(&mut pass, stage_start..stage_end);
             }
-            if let Err(err) = self
-                .text
-                .draw_group(&mut pass, TextSystem::stage_group(&zplan))
-            {
+            if let Err(err) = self.text.draw_group(
+                &mut pass,
+                TextSystem::stage_group(&zplan, band_ranges.len()),
+            ) {
                 tracing::warn!(?err, "отрисовка текстов stage пропущена");
             }
         }

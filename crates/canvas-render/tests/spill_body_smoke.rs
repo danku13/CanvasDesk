@@ -69,7 +69,7 @@ fn headless_spilled_param_row_draws() {
             editing: None,
             editing_buffer: None,
             overlay_texts: &[],
-            screen_texts: &[],
+            screen_bands: &[],
             zplan: &zplan,
             edge_labels: &[],
             focus: canvas_render::cards::FocusView::EMPTY,

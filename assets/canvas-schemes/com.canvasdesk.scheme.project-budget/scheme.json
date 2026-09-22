@@ -2,8 +2,8 @@
   "id": "com.canvasdesk.scheme.project-budget",
   "name_ru": "Бюджет проекта",
   "name_en": "Project budget",
-  "description_ru": "Статьи в именованных группах, подытоги, резерв через проливание в параметр, итог и денежный поток по строкам графика платежей.",
-  "description_en": "Line items in labelled groups, subtotals, a reserve via parameter spill, the total and cash flow off the payment schedule lines.",
+  "description_ru": "Статьи в именованных группах, подытоги, резерв как доля от подытога, итог и денежный поток по стадиям платежей.",
+  "description_en": "Line items in labelled groups, subtotals, a reserve as a share of the team subtotal, the total and cash flow by payment stages.",
   "category": "planning",
   "category_ru": "Планирование",
   "category_en": "Planning",
@@ -42,7 +42,7 @@
         "width": 270,
         "height": 150,
         "text": "Зарплаты\nЕжемесячный фонд оплаты труда команды.\n\nsalaries = 12000 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "teamtools",
@@ -52,7 +52,7 @@
         "width": 270,
         "height": 150,
         "text": "Инструменты команды\nСервисы и подписки для разработки.\n\ntools = 1500 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "group-infra",
@@ -76,7 +76,7 @@
         "width": 270,
         "height": 150,
         "text": "Хостинг\nСерверы и облако под продакшн.\n\nhosting = 800 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "licenses",
@@ -86,7 +86,7 @@
         "width": 270,
         "height": 150,
         "text": "Лицензии\nСофт и лицензии на год.\n\nlicenses = 600 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "subtotals",
@@ -106,7 +106,7 @@
         "width": 290,
         "height": 150,
         "text": "Доля резерва\nНепредвиденные расходы: доля от подытога команды.\n\nshare = 0.15",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "reserve",
@@ -115,7 +115,7 @@
         "y": 600,
         "width": 290,
         "height": 180,
-        "text": "Резерв\nЗапас на непредвиденное: подытог команды проливается в параметр и множится на долю.\n\n$team * $share",
+        "text": "Резерв\nЗапас на непредвиденное: подытог команды приходит по связи в параметр и множится на долю.\n\n$team * $share",
         "color": "2"
       },
       {
@@ -136,7 +136,7 @@
         "width": 290,
         "height": 200,
         "text": "График платежей\nДоли оплаты по стадиям: аванс и завершение — значения читаются по строкам.\n\n0.6\n0.4",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "cash",
@@ -155,7 +155,7 @@
         "y": 60,
         "width": 320,
         "height": 200,
-        "text": "Вердикт\nРезерв — пятнадцать процентов от команды: страховка планов.\nВыделите итог — цепочка расчёта покажет происхождение каждой цифры.\nПопробуйте сценарий на статьях: дельты увидите в потоке.",
+        "text": "Вердикт\nРезерв — пятнадцать процентов от команды: страховка планов.\nПучок «Подытоги → Итог» открывает веер значений обеих групп.\nПопробуйте сценарий на статьях: дельты увидите в потоке.",
         "color": "4"
       }
     ],
