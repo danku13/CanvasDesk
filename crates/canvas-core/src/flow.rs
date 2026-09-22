@@ -605,6 +605,73 @@ pub fn inbound_slots(canvas: &Canvas, node_id: &str, outputs: &FlowOutputs) -> V
     )
 }
 
+/// FR-050 этап F: окружение для ПОСТРОЧНОГО вычисления листа ноды —
+/// позиционные слоты `$1..$N` + qualified-карта «Объект.Поле» (те же
+/// ключи, что регистрирует узловой propagate в `inbound_values`):
+/// формулы строк резолвят именованные ссылки ТОЧНО так же, как узловой
+/// итог (инвариант «строка и узел видят одно окружение»). Без этого
+/// формула строки с именованной ссылкой краснела «вход не найден» при
+/// верном узловом итоге (найдено миграцией схем FR-049, этап F).
+/// Рёбра с `toParam` в слоты не входят, но qualified-ключи регистрируют
+/// (зеркало `inbound_values`); источник без значения — ключ не
+/// регистрируется (видимая ошибка, диагностика Р-3).
+pub fn line_eval_env(
+    canvas: &Canvas,
+    node_id: &str,
+    outputs: &FlowOutputs,
+    lines: &LineOutputs,
+    named: &NamedOutputs,
+) -> Env {
+    let obj_names = QualifiedNames::build(canvas);
+    let mut slots: Vec<Option<Value>> = Vec::new();
+    let mut qualified: HashMap<(String, String), Value> = HashMap::new();
+    // Проливание в параметры (toParam, побеждает последнее ребро —
+    // зеркально inbound_values/progagate): у шаблонной ноды — поверх
+    // значений параметров манифеста, у текстовой — вся карта параметров.
+    let mut spill: BTreeMap<String, Value> = BTreeMap::new();
+    for edge in &canvas.edges {
+        if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
+            continue;
+        }
+        let value = edge_source_value(edge, outputs, lines, named);
+        for key in obj_names.edge_keys(canvas, edge) {
+            if let Some(v) = &value {
+                qualified.insert(key, v.clone());
+            }
+        }
+        match &edge.to_param {
+            None => slots.push(value),
+            Some(name) => {
+                if let Some(v) = value {
+                    spill.insert(name.clone(), v);
+                }
+            }
+        }
+    }
+    let mut params: BTreeMap<String, Value> = canvas
+        .node(node_id)
+        .and_then(|node| node.template().map(|template| template.param_values()))
+        .unwrap_or_default();
+    for (name, value) in spill {
+        params.insert(name, value);
+    }
+    let env = if slots.is_empty() {
+        Env::empty()
+    } else {
+        Env::with_inbound(slots)
+    };
+    let env = if params.is_empty() {
+        env
+    } else {
+        env.with_param_map(params)
+    };
+    if qualified.is_empty() {
+        env
+    } else {
+        env.with_qualified(qualified)
+    }
+}
+
 /// FR-025: [`inbound_slots`] с построчными выходами: ребро с
 /// `from_line = Some(i)` уносит значение строки `i` источника; строка
 /// удалена/стала прозой/ошибка — слот `Some(None)` (тихая деградация,

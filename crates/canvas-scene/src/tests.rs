@@ -3399,3 +3399,156 @@ fn flow_changed_nodes_detects_upstream_edit() {
         "повторный пересчёт — без изменений"
     );
 }
+
+/// FR-050 этап F (Н6/Р-6): все 6 схем FR-049 мигрированы на именованные
+/// ссылки «Объект.Поле» — формулы не используют позиционные `$N`/`$in`,
+/// каждая позиционная value-связь адресуется qualified-путём (fromOutput
+/// на ребре). Оракулы чисел — ДО миграции (значения не меняются,
+/// детерминизм резолва имён); без ошибок вычисления и предупреждений
+/// W-UNUSED-SLOT (именованный путь читает слот своего ребра).
+#[test]
+fn schemes_named_refs_keep_oracles() {
+    let oracles: &[(&str, &[(&str, f64)])] = &[
+        (
+            "com.canvasdesk.scheme.intro-calculations",
+            &[("total", 5000.0), ("share", 0.625)],
+        ),
+        // rps = 5000/30 ≈ 166.667; peak = ×3 = 500; util = 166.67/200 ≈ 0.8333;
+        // peak_util = 500/200 = 2.5
+        (
+            "com.canvasdesk.scheme.capacity-service",
+            &[
+                ("rps", 166.666_67),
+                ("peak_rps", 500.0),
+                ("util", 0.833_333_3),
+                ("peak_util", 2.5),
+            ],
+        ),
+        // total = 1200 + 300 = 1500; annual = 1500 × 12 = 18000
+        (
+            "com.canvasdesk.scheme.intro-whatif",
+            &[("total", 1500.0), ("annual", 18_000.0)],
+        ),
+        // team 13500 — построчная переменная (не узловой выход);
+        // узловые: infra 1400 (последняя строка), reserve_sum 2025,
+        // total 16925, final_sum 16925; advance_sum 10155 — строка
+        (
+            "com.canvasdesk.scheme.project-budget",
+            &[
+                ("infra", 1_400.0),
+                ("reserve_sum", 2_025.0),
+                ("total", 16_925.0),
+                ("final_sum", 16_925.0),
+            ],
+        ),
+        // total_area 30, living_cost 450, bedroom_cost 300, total 1450,
+        // final 1305
+        (
+            "com.canvasdesk.scheme.renovation-estimate",
+            &[
+                ("total_area", 30.0),
+                ("living_cost", 450.0),
+                ("bedroom_cost", 300.0),
+                ("total", 1_450.0),
+                ("final", 1_305.0),
+            ],
+        ),
+        // margin 6, ltv 216, ratio 1.8, payback 20
+        (
+            "com.canvasdesk.scheme.unit-economics",
+            &[
+                ("margin", 6.0),
+                ("ltv", 216.0),
+                ("ratio", 1.8),
+                ("payback", 20.0),
+            ],
+        ),
+    ];
+    for (scheme_id, checks) in oracles {
+        let mut scene = mcp_scene();
+        let out = mcp_dispatch(
+            &mut scene,
+            &canvas_core::templates::TemplateRegistry::builtin(),
+            "schemes_apply",
+            &serde_json::json!({ "id": scheme_id, "x": 0.0, "y": 0.0 }),
+        )
+        .unwrap_or_else(|err| panic!("{scheme_id}: schemes_apply: {err}"));
+        let flow = out["flow"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{scheme_id}: нет flow: {out}"));
+        // Значения по ИМЕНИ переменной (текст ноды: заголовок / присваивание)
+        let values: Vec<f64> = flow
+            .values()
+            .filter_map(|entry| entry["value"].as_f64())
+            .collect();
+        for (name, expected) in *checks {
+            let found = values.iter().any(|v| {
+                close_1pct(*v, *expected) && (v - expected).abs() < expected.abs().max(1.0) * 0.01
+            });
+            assert!(
+                found,
+                "{scheme_id}: оракул {name}={expected} не найден среди {values:?}"
+            );
+        }
+        // Ни одной ошибки вычисления (красные строки) — резолв имён полный
+        for (node_id, entry) in flow {
+            if entry["error"].is_string() {
+                panic!("{scheme_id}: ошибка в {node_id}: {}", entry["error"]);
+            }
+        }
+    }
+}
+
+/// FR-050 этап F (фикс): инвариант «строка и узел видят одно окружение» —
+/// построчная формула приёмника резолвит qualified-ссылку «Объект.Поле»
+/// так же, как узловой итог: `line_eval_env` — зеркало `inbound_values`
+/// (слоты + проливание в параметры + qualified-карта). До фикса
+/// окружение строк было slots-only (`inbound_slots_with_lines`): строка
+/// краснела «вход не найден» при верном узловом итоге (найдено
+/// миграцией схем FR-049 на именованные ссылки).
+#[test]
+fn line_eval_env_resolves_named_refs() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 0, "y": 0, "width": 300, "text": "Заявки\nusers = 10"}"#,
+    )
+    .expect("исток");
+    let src = scene.canvas.nodes.last().expect("нода").id.clone();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 400, "y": 0, "width": 300, "text": "Отчёт\nx = Заявки.users * 2"}"#,
+    )
+    .expect("приёмник");
+    let dst = scene.canvas.nodes.last().expect("нода").id.clone();
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(r#"{{"from": "{src}", "to": "{dst}", "kind": "value", "fromOutput": "users"}}"#),
+    )
+    .expect("ребро fromOutput");
+    scene.recompute_flow();
+
+    // Узловой итог приёмника верен: Заявки.users × 2 = 20
+    match scene.expr_results.get(&dst) {
+        Some(ExprOutcome::Ok(value)) => assert_eq!(value.to_string(), "20"),
+        other => panic!("узловой итог: {other:?}"),
+    }
+    // Инвариант: построчный результат той же строки — тоже 20 (строка
+    // не краснеет); до фикса здесь был None при верном узловом итоге
+    let lines = scene
+        .expr_line_results
+        .get(&dst)
+        .expect("построчные результаты");
+    assert_eq!(lines.len(), 2, "титул + формула");
+    assert_eq!(lines[0], None, "проза без результата");
+    match lines[1]
+        .as_ref()
+        .expect("строка с qualified-ссылкой резолвится")
+    {
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "20"),
+        other => panic!("построчный итог: {other:?}"),
+    }
+}
