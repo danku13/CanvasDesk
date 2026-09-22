@@ -3316,7 +3316,9 @@ CanvasDesk». Источник — вводные владельца о проз
   единиц (безразмерные — в единицах приёмника, `E-UNIT` — только
   несовместимые размерности), Р-4 производная авто-строка в пересчёте потока
   (Н10-а); TDD — тесты вперёд реализации; гейты fmt/clippy/test/wasm.
----## 2026-09-22 — PRD-0008: аудит CJM контента v2 — «формальный чек зелёный, но CJM ломается» (5 классов находок, все закрыты)
+---
+
+## 2026-09-22 — PRD-0008: аудит CJM контента v2 — «формальный чек зелёный, но CJM ломается» (5 классов находок, все закрыты)
 
 - **Задача (запрос владельца):** «Перепроверь всё ещё раз, поищи баги,
   ошибки, нелогичные моменты, всё что может пройти формальный чек, но
@@ -3396,3 +3398,62 @@ CanvasDesk». Источник — вводные владельца о проз
   docs/prd/prd-0008-canvas-scheme-templates.md, docs/ACCEPTANCE.md,
   docs/change-requests/fr-049-canvas-scheme-templates.md,
   docs/interface-objects/scheme-gallery.md, worklog.md.
+
+---
+
+## 2026-09-22 — FR-050 этап A: ядро семантики (Р-1, Н4, Н5, Р-4) — canvas-core/scene/mcp
+
+- **A. Р-1 (приоритет источников значения):** `propagate_with_lines_data`
+  (flow.rs) — параметры шаблонной ноды собираются каскадом: локальные
+  (`tpl.param_values`) → проливание `toParam` перекрывает (Н5-приведение
+  единиц) → what-if подмена строки-параметра перекрывает всё (RHS в
+  окружении каскада; раньше проливание шло ПОСЛЕ what-if — порядок
+  исправлен по решению владельца Q2 «what-if перекрывает всё»).
+  Текстовая нода: проливание напрямую в param-карту окружения (что-if
+  действует через виртуальный исходник). Инвариант 1 FR-050 закрыт
+  тестом `whatif_beats_spill_beats_local` (500 → 1389 → 2000 → снятие
+  what-if 1389 → удаление ребра 500).
+- **Н5 (безразмерные значения):** `spill_value_in_param_units` (flow.rs) —
+  скаляр в параметр с единицей получает единицу приёмника («500» →
+  500 rps); значение с единицей приходит как есть; `validate.rs`
+  `dimensions_compatible` — скаляр с любой стороны совместим, E-UNIT
+  только при несовместимых размерностях с обеих сторон. Тесты:
+  `spill_units_receiver_semantics` (flow), `unit_scalar_sides_are_compatible`
+  (validate). Контракт кодов в шапке validate.rs обновлён.
+- **Н4 (fail-fast дубль-входов):** прямой `edge_create` (scene/mcp.rs) —
+  второе value-ребро в занятый `toParam` отклоняется немедленно
+  `E-DOUBLE-INPUT` (не ждём graph_validate; undo-шаг не пушится);
+  батч `graph_apply[edge_create]` — симметрично (атомарный откат).
+  НОВАЯ операция батча `edge_delete {id|ref}` — пара «delete + create»
+  замены источника в одном батче (один undo-шаг); ref рёбер
+  регистрируется в карте батча (register_ref). Схема и описание
+  инструмента graph_apply в canvas-mcp обновлены (enum + описание
+  операции; тест tools_list проходит). Легаси-дубли из файлов — как
+  раньше: warning «последний побеждает» + E-DOUBLE-INPUT в
+  graph_validate.
+- **Р-4 (производная авто-строка, Н10-а):** `AutoRow` + `auto_rows`/
+  `auto_rows_with_data` (flow.rs) — строки-проекции value-рёбер без
+  `toParam` к нодам без ожидающего порта (слот не читается формулой —
+  зеркало W-UNUSED-SLOT через pub(crate) `slot_references` из validate);
+  поле «Объект.Поле»: fromOutput → имя выхода, fromLine → имя
+  присваивания (fallback «строка N», 1-based), без адресации → edge.id;
+  obj — `qualified_obj_name` (dataref, коллизия «Имя (node_id)»).
+  `SceneState.auto_rows` — runtime-кэш, заполняется в `recompute_flow`
+  (активный сценарий), цикл → очистка. Тесты: `auto_row_appears_for_unread_slot`
+  (появление/детерминизм/исчезновение), `auto_row_absent_when_slot_read`
+  ($in/$N читаются, шаблонная нода), `auto_row_field_names_and_unmapped`
+  (имя присваивания, fallback, unmapped-проза), `scene_auto_rows_cache_populated`
+  (кэш сцены через MCP-сборку).
+- **Тесты:** +6 flow, +1 validate, +3 scene; всего локально зелёные:
+  canvas-core (нативно 123+43+32+15+4+6+8; wasm 330), canvas-scene 80
+  (нативно + wasip1 в гейте), canvas-mcp 15.
+- **Гейты:** fmt ✓; clippy -D warnings (core/scene/mcp, --all-targets) ✓
+  (правка unnecessary_get_then_check); cargo test (core/scene/mcp) ✓;
+  wasm_gate.sh ПОЛНЫЙ ✓ (компиляция wasm32-unknown-unknown ×5 крейтов,
+  rlib 28 МБ, 330+43+32+15+… тестов под wasmtime); mcp_wasm_gate.sh
+  ПОЛНЫЙ ✓ (scene 80 под wasip1, e2e-сессия: oracle ±1 %, ρ-гейт CP5,
+  негативные ветки, batch с 36 инструментами). Полная матрица
+  workspace (render/app/web на 3 ОС) — CI после пуша.
+- **Далее (дорожная карта FR-050):** этап B — грамматика именованных
+  путей «Объект.Поле» в `expr.rs` (Р-6) + таблица резолва имён в
+  `flow.rs`; параллельно C — UI-порты и диалоги.
