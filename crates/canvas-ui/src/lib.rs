@@ -27,10 +27,14 @@
 //! внешних зависимостей (G7).
 
 pub mod capture;
+// FR-055 U4: kit-анимации — dt-детерминированные тоглы/интерполяции (L3 egui).
+pub mod anim;
 pub mod frame;
 pub mod geometry;
 pub mod hit;
 pub mod keyboard;
+// FR-055 U4 (F-8): UI kit v1 — модель виджетов поверх примитивов U3.
+pub mod kit;
 pub mod layer;
 // FR-053 U3 (F-7): layout-примитивы — микро-движок вёрстки от слота родителя.
 pub mod layout;
@@ -38,6 +42,7 @@ pub mod layout;
 pub mod measure;
 pub mod registry;
 
+pub use anim::{animate_value, BoolAnim};
 pub use capture::CapturePolicy;
 pub use frame::{HitRect, Overlap, SurfaceFrame, UiFrame};
 pub use geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};

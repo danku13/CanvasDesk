@@ -37,7 +37,7 @@
 5. **Draw-порядок**: `UiFrame::draw_bands` → полосы `ScreenBand` по
    `UiLayer::DRAW_ORDER`; внутри полосы — порядок сборки кадра.
 
-## 3. Поверхности (U5, 21 идентификатор)
+## 3. Поверхности (U4, 22 идентификатора)
 
 | id | Слой | Capture | Scope | Примечание |
 |---|---|---|---|---|
@@ -61,6 +61,7 @@
 | `dialog` | Modals | Block | dialog | T21 |
 | `gallery` | Modals | Block | gallery | FR-049 |
 | `onboarding` | Modals | Block | onboarding | FR-028 |
+| `kit_gallery` | Modals | Block | kit_gallery | FR-055 U4: витрина кита («?» → «О интерфейсе», Q5-a); Esc/backdrop/✕ закрывают |
 | `empty` | Panels | Capture | — | empty-state (AC-1.1 FR-049) |
 | `minimap` | Panels | Capture | — | рисуется проходом рендерера |
 

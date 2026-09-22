@@ -191,6 +191,11 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if params.template.is_some() {
         app.set_pending_scheme(params.template.clone());
     }
+    // FR-055 (этап U4, F-10/G6): ?ui=debug — DebugOverlay со старта
+    // (рамки слоёв/имя под курсором/пересечения; натив — тогл F9)
+    if params.ui_debug {
+        app.set_debug_overlay(true);
+    }
     // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
     crate::widgets_web::web::install_tick(widget_sender);
     // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop
