@@ -11,17 +11,53 @@
 //!
 //! Empty-state (US-1 PRD-0008): карточка по центру при пустом канвасе —
 //! «Начните с шаблона» + «Пустой холст» (скрыть до следующего опустошения).
+//!
+//! FR-053 (U3 PRD-0009, пилот G4/G5): раскладка собрана примитивами
+//! `canvas-ui::layout` (панель — [`stack`]/[`constrain`], вертикальный
+//! ритм — [`Column`], чипы — [`Row`] с политикой `Fit` — бывший
+//! `break`-кламп удалён: переполнение стало тестируемым, молчаливый срез
+//! невозможен), поля — spacing-scale `canvas_core::tokens::SPACING_*`;
+//! подписи строк — измеренный Ellipsis ([`row_labels`]: заголовок/описание
+//! усекаются по фактической ширине строки — текст больше не переливается
+//! на соседнюю строку, screen-тексты рендера не переносятся).
 
 use canvas_core::schemes::{SchemeManifest, SchemeRegistry};
+use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
+use canvas_ui::layout::{constrain, pad, stack, Child, Column, CrossAlign, HAlign, Row, VAlign};
+use canvas_ui::measure::TextMeasurer;
 
-/// Константы раскладки галереи (логические px).
+/// Семейство измерения = семейство screen-текстов рендера (parity метрик).
+const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+
+/// Ширина панели галереи (логические px).
 pub const PANEL_W: f32 = 560.0;
+/// Высота шапки.
 pub const HEADER_H: f32 = 40.0;
+/// Высота поля фильтра.
 pub const INPUT_H: f32 = 34.0;
+/// Высота чипа категории.
 pub const CHIP_H: f32 = 28.0;
+/// Полный шаг строки списка (строка + зазор).
 pub const ROW_H: f32 = 56.0;
+/// Высота видимой части строки (шаг минус зазор `SPACING_S`).
+pub const ROW_INNER_H: f32 = ROW_H - canvas_core::tokens::SPACING_S;
+/// Высота футера.
 pub const FOOTER_H: f32 = 26.0;
-pub const PANEL_PAD: f32 = 12.0;
+/// Внутренние поля панели (spacing-scale).
+pub const PANEL_PAD: f32 = canvas_core::tokens::SPACING_LG;
+/// Ширина чипа категории (фикс — D2 CJM: полный ряд «Все» + 4 категории
+/// при PANEL_W 560; design-константа, не эвристика).
+pub const CHIP_W: f32 = 108.0;
+/// Ширина чипа «Все».
+pub const CHIP_ALL_W: f32 = 56.0;
+/// Кегль заголовка строки.
+pub const ROW_FONT: f32 = 13.0;
+/// Кегль описания строки.
+pub const ROW_DESC_FONT: f32 = 11.0;
+/// Поле текста внутри строки (spacing-scale).
+pub const ROW_TEXT_PAD: f32 = canvas_core::tokens::SPACING_MD;
+/// Высота кнопки empty-state.
+pub const EMPTY_BTN_H: f32 = 34.0;
 
 /// Состояние галереи схем (модальная; `None`-подобие — `open == false`).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -124,75 +160,175 @@ pub struct GalleryLayout {
 }
 
 /// Раскладка галереи (чистая функция; кламп к вьюпорту — инвариант
-/// 320×240, строки скроллятся окном видимости).
+/// 320×240, строки скроллятся окном видимости). FR-053: собрана
+/// примитивами `canvas-ui::layout` — вертикальный ритм дословно прежний
+/// (зазоры header→input 0, input→chips `SPACING_S`, chips→rows
+/// `SPACING_S`, строки примыкают к футеру), позиция панели/размер —
+/// Stack/Constrain.
 pub fn layout(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
     state: &SchemeGalleryState,
 ) -> GalleryLayout {
-    let max_w = (viewport[0] - 24.0).max(280.0);
+    let max_w = (viewport[0] - canvas_core::tokens::SPACING_XL).max(280.0);
     let panel_w = PANEL_W.min(max_w);
     // Сколько строк влезает: высота панели — от вьюпорта.
     let chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
-    let max_h = (viewport[1] - 24.0).max(160.0);
+    let max_h = (viewport[1] - canvas_core::tokens::SPACING_XL).max(160.0);
     // Панель растёт под список, но не выше вьюпорта (строки скроллятся).
     let panel_h = max_h.min(chrome + ROW_H * list.len().max(1) as f32);
     let avail_rows_h = (panel_h - chrome).max(0.0);
     let visible = ((avail_rows_h / ROW_H).floor() as usize).max(1);
     let shown = visible.min(list.len().saturating_sub(state.scroll_top));
 
-    let x = (viewport[0] - panel_w) / 2.0;
-    let y = (viewport[1] - panel_h) / 2.0;
-    let inner_x = x + PANEL_PAD;
+    // Панель — Stack по центру вьюпорта (позиция = (vw−w)/2, (vh−h)/2).
+    let panel = stack(
+        UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+        UiVec2::new(panel_w, panel_h),
+        HAlign::Center,
+        VAlign::Center,
+    );
+    let inner = pad(panel, EdgeInsets::uniform(PANEL_PAD));
     let inner_w = panel_w - PANEL_PAD * 2.0;
 
-    let header_y = y + PANEL_PAD;
-    let input_y = header_y + HEADER_H;
-    let chips_y = input_y + INPUT_H + 6.0;
-    let rows_y = chips_y + CHIP_H + 6.0;
-    let footer_y = y + panel_h - FOOTER_H - PANEL_PAD;
-
-    // Чипы: «Все» + категории. Ширина 108 подобрана под полный ряд
-    // «Все» + 4 категории при PANEL_W 560 (inner 536): 56+6+4×(108+6)=512 —
-    // все категории видны, ни одна не срезается (инвариант D2 CJM:
-    // молчаливый срез прятал категорию «Бизнес»; тест
-    // `chips_all_categories_fit`).
-    let mut chip_rects = Vec::new();
-    let mut cx = inner_x;
-    let chip_gap = 6.0;
-    let all_w = 56.0f32.min(inner_w);
-    chip_rects.push(([inner_x, chips_y, all_w, CHIP_H], None));
-    cx += all_w + chip_gap;
-    for (key, _, _) in categories(SchemeRegistry::embedded()) {
-        let w = 108.0;
-        if cx + w > inner_x + inner_w {
-            break;
-        }
-        chip_rects.push(([cx, chips_y, w, CHIP_H], Some(key)));
-        cx += w + chip_gap;
+    // Вертикальный ритм панели: Column без базового зазора + явные
+    // распорки `SPACING_S` там, где прежняя геометрия имела зазор
+    // (header→input 0, input→chips 6, chips→rows 6, rows→footer 0 —
+    // ноль визуального скачка).
+    let items = vec![
+        // Шапка: место под заголовок (кнопка «×» — в правом крае панели).
+        Child::fixed(inner_w - 32.0, HEADER_H),
+        Child::fixed(inner_w, INPUT_H),
+        Child::spacer(canvas_core::tokens::SPACING_S),
+        Child::fixed(inner_w, CHIP_H),
+        Child::spacer(canvas_core::tokens::SPACING_S),
+        Child::fixed(inner_w, avail_rows_h),
+        Child::fixed(inner_w, FOOTER_H),
+    ];
+    let col = Column {
+        gap: 0.0,
+        cross: CrossAlign::Start,
+        ..Column::default()
     }
+    .lay_out(inner, &items);
+    let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
+    let header_rect = as_rect(&col[0]);
+    let input_rect = as_rect(&col[1]);
+    let chips_slot = col[3];
+    let rows_slot = col[5];
+    let footer_rect = as_rect(&col[6]);
 
-    let mut row_rects = Vec::new();
-    let mut visible_rows = Vec::new();
-    for i in 0..shown {
+    // Кнопка «×»: правый край шапки, офсет +4 (дизайн-центровка в 40 px
+    // шапке; Stack на под-слоте шапки).
+    let close = stack(
+        UiRect::new(inner.x, inner.y + 4.0, inner_w, 24.0),
+        UiVec2::new(24.0, 24.0),
+        HAlign::End,
+        VAlign::Start,
+    );
+
+    // Чипы: «Все» + категории — Row с политикой Fit (все элементы
+    // раскладываются; переполнение слота НЕ маскируется — ловится
+    // тестом `chips_all_categories_fit`/G4-линтом; прежний молчаливый
+    // `break`-кламп удалён). Ширина «Все» всегда влезает: панель ≥ 280,
+    // слот чипов ≥ 256.
+    let mut chip_children = vec![Child::fixed(CHIP_ALL_W, CHIP_H)];
+    let mut chip_keys: Vec<Option<String>> = vec![None];
+    for (key, _, _) in categories(SchemeRegistry::embedded()) {
+        chip_children.push(Child::fixed(CHIP_W, CHIP_H));
+        chip_keys.push(Some(key));
+    }
+    let chip_layout = Row {
+        gap: canvas_core::tokens::SPACING_S,
+        cross: CrossAlign::Start,
+        ..Row::default()
+    }
+    .lay_out(chips_slot, &chip_children);
+    let chip_rects: Vec<([f32; 4], Option<String>)> = chip_layout
+        .iter()
+        .zip(chip_keys)
+        .map(|(r, key)| (as_rect(r), key))
+        .collect();
+
+    // Строки окна видимости: Column с зазором `SPACING_S`, видимая часть
+    // строки `ROW_INNER_H` (полный шаг ROW_H — дословно прежний ритм).
+    let row_children: Vec<Child> = (0..shown)
+        .map(|_| Child::fixed(inner_w, ROW_INNER_H))
+        .collect();
+    let row_layout = Column {
+        gap: canvas_core::tokens::SPACING_S,
+        cross: CrossAlign::Start,
+        ..Column::default()
+    }
+    .lay_out(rows_slot, &row_children);
+    let mut row_rects = Vec::with_capacity(shown);
+    let mut visible_rows = Vec::with_capacity(shown);
+    // Инвариант: `shown <= list.len() - scroll_top` (кламп выше), поэтому
+    // scroll_top + i < list.len() для всех i < shown — клампов в цикле нет.
+    for (i, r) in row_layout.iter().enumerate() {
         let index = state.scroll_top + i;
-        if index >= list.len() {
-            break;
-        }
-        row_rects.push([inner_x, rows_y + i as f32 * ROW_H, inner_w, ROW_H - 6.0]);
+        row_rects.push(as_rect(r));
         visible_rows.push(index);
     }
 
     GalleryLayout {
-        panel_rect: [x, y, panel_w, panel_h],
-        header_rect: [inner_x, header_y, inner_w - 32.0, HEADER_H],
-        close_rect: [x + panel_w - PANEL_PAD - 24.0, header_y + 4.0, 24.0, 24.0],
-        input_rect: [inner_x, input_y, inner_w, INPUT_H],
+        panel_rect: [panel.x, panel.y, panel.w, panel.h],
+        header_rect,
+        close_rect: [close.x, close.y, close.w, close.h],
+        input_rect,
         chip_rects,
         row_rects,
         visible_rows,
-        footer_rect: [inner_x, footer_y, inner_w, FOOTER_H],
+        footer_rect,
     }
+}
+
+/// Подписи строк окна видимости (FR-053): заголовок и описание,
+/// усечённые Ellipsis-политикой по фактической ширине строки минус
+/// поля `ROW_TEXT_PAD` (screen-тексты рендера не переносятся — без
+/// усечения длинное описание переливалось на соседнюю строку).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowLabel {
+    pub title: String,
+    pub desc: String,
+}
+
+/// Измеренные подписи строк (параллелен `GalleryLayout.row_rects`).
+pub fn row_labels(
+    viewport: [f32; 2],
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    ru: bool,
+    measurer: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> Vec<RowLabel> {
+    let lay = layout(viewport, list, state);
+    let max_w = (lay.row_rects.first().map(|r| r[2]).unwrap_or(0.0) - ROW_TEXT_PAD * 2.0).max(0.0);
+    lay.visible_rows
+        .iter()
+        .map(|&index| {
+            let Some(scheme) = list.get(index) else {
+                return RowLabel {
+                    title: String::new(),
+                    desc: String::new(),
+                };
+            };
+            RowLabel {
+                title: measurer.ellipsis(fs, scheme.display_name(ru), FAMILY, ROW_FONT, max_w),
+                desc: measurer.ellipsis(
+                    fs,
+                    if ru {
+                        &scheme.description_ru
+                    } else {
+                        &scheme.description_en
+                    },
+                    FAMILY,
+                    ROW_DESC_FONT,
+                    max_w,
+                ),
+            }
+        })
+        .collect()
 }
 
 /// Hit-test строки галереи (индекс в отфильтрованном списке).
@@ -216,20 +352,52 @@ pub fn chip_at(lay: &GalleryLayout, point: [f32; 2]) -> Option<Option<String>> {
 }
 
 /// Rect карточки empty-state `[x, y, w, h]` (по центру вьюпорта).
+/// FR-053: размер — Constrain (desired 380×190, min 240×150, max —
+/// вьюпорт минус маржа `SPACING_XL`), позиция — Stack по центру.
 pub fn empty_card_rect(viewport: [f32; 2]) -> [f32; 4] {
-    let w = 380.0f32.min((viewport[0] - 24.0).max(240.0));
-    let h = 190.0f32.min((viewport[1] - 24.0).max(150.0));
-    [(viewport[0] - w) / 2.0, (viewport[1] - h) / 2.0, w, h]
+    let size = constrain(
+        UiVec2::new(240.0, 150.0),
+        UiVec2::new(
+            (viewport[0] - canvas_core::tokens::SPACING_XL).max(240.0),
+            (viewport[1] - canvas_core::tokens::SPACING_XL).max(150.0),
+        ),
+        UiVec2::new(380.0, 190.0),
+    );
+    let card = stack(
+        UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+        size,
+        HAlign::Center,
+        VAlign::Center,
+    );
+    [card.x, card.y, card.w, card.h]
 }
 
 /// Кнопки empty-state: (rect «Открыть галерею», rect «Пустой холст»).
+/// FR-053: слот кнопок — поля `SPACING_MD` к бокам и низу карточки,
+/// прижим к низу (cross End), ширина каждой — половина слота минус
+/// зазор `SPACING_MD` (дословно прежняя геометрия).
 pub fn empty_buttons(card: [f32; 4]) -> ([f32; 4], [f32; 4]) {
-    let btn_w = (card[2] - 3.0 * 10.0) / 2.0;
-    let y = card[1] + card[3] - 44.0;
-    (
-        [card[0] + 10.0, y, btn_w, 34.0],
-        [card[0] + 20.0 + btn_w, y, btn_w, 34.0],
-    )
+    let slot = UiRect::new(card[0], card[1], card[2], card[3]).inset(&EdgeInsets {
+        left: canvas_core::tokens::SPACING_MD,
+        top: 0.0,
+        right: canvas_core::tokens::SPACING_MD,
+        bottom: canvas_core::tokens::SPACING_MD,
+    });
+    let btn_w = (slot.w - canvas_core::tokens::SPACING_MD) / 2.0;
+    let rects = Row {
+        gap: canvas_core::tokens::SPACING_MD,
+        cross: CrossAlign::End,
+        ..Row::default()
+    }
+    .lay_out(
+        slot,
+        &[
+            Child::fixed(btn_w, EMPTY_BTN_H),
+            Child::fixed(btn_w, EMPTY_BTN_H),
+        ],
+    );
+    let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
+    (as_rect(&rects[0]), as_rect(&rects[1]))
 }
 
 /// Точка в прямоугольнике `[x, y, w, h]` (общий хелпер модуля).
@@ -249,6 +417,14 @@ mod tests {
             open: true,
             ..Default::default()
         }
+    }
+
+    /// Детерминированный FontSystem тестов: вшитый рендером шрифт.
+    fn font_system() -> cosmic_text::FontSystem {
+        let mut fs = cosmic_text::FontSystem::new();
+        const FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf");
+        fs.db_mut().load_font_data(FONT.to_vec());
+        fs
     }
 
     #[test]
@@ -292,9 +468,10 @@ mod tests {
         assert_eq!(lay.visible_rows.len(), list.len());
     }
 
-    /// D2 CJM: молчаливый срез чипов прятал последнюю категорию
-    /// («Бизнес», unit-economics) — на стандартном и компактном десктопе
-    /// все «Все» + N категорий обязаны быть в ряду.
+    /// D2 CJM: полный ряд «Все» + N категорий обязан раскладываться на
+    /// стандартном и компактном десктопе; FR-053: `break`-кламп удалён —
+    /// Row(Fit) раскладывает ВСЕ чипы, и тест фиксирует переполнение,
+    /// если оно появится (молчаливый срез невозможен).
     #[test]
     fn chips_all_categories_fit() {
         let registry = SchemeRegistry::embedded();
@@ -305,7 +482,18 @@ mod tests {
             assert_eq!(
                 lay.chip_rects.len(),
                 1 + categories(registry).len(),
-                "все категории влезают при {:?}",
+                "все категории в ряду при {:?}",
+                viewport
+            );
+            // Полный ряд реально помещается в слот чипов (без переполнения).
+            let chips_w = CHIP_ALL_W
+                + canvas_core::tokens::SPACING_S
+                + categories(registry).len() as f32 * (CHIP_W + canvas_core::tokens::SPACING_S)
+                - canvas_core::tokens::SPACING_S;
+            let inner_w = lay.panel_rect[2] - PANEL_PAD * 2.0;
+            assert!(
+                chips_w <= inner_w + 0.01,
+                "ряд чипов {chips_w} шире слота {inner_w} при {:?}",
                 viewport
             );
         }
@@ -354,5 +542,81 @@ mod tests {
             open_btn[0] + open_btn[2] <= dismiss_btn[0],
             "кнопки не пересекаются"
         );
+    }
+
+    /// FR-053 (G4-линт пилота): вьюпорты 1280×800 / 1024×640 / 800×560 ×
+    /// RU/EN — панель в вьюпорте (маржа xl), все элементы внутри панели,
+    /// чипы/строки попарно не пересекаются; измеренные подписи строк
+    /// укладываются в ширину строки.
+    #[test]
+    fn g4_lint_viewports_and_languages() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        let list = rows(registry, &st);
+        let viewports = [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]];
+        for ru in [true, false] {
+            for vp in viewports {
+                let lay = layout(vp, &list, &st);
+                // Панель внутри вьюпорта (маржа xl).
+                assert!(
+                    lay.panel_rect[0] >= canvas_core::tokens::SPACING_XL - 0.01,
+                    "{vp:?}"
+                );
+                assert!(
+                    lay.panel_rect[0] + lay.panel_rect[2]
+                        <= vp[0] - canvas_core::tokens::SPACING_XL + 0.01,
+                    "{vp:?}"
+                );
+                assert!(
+                    lay.panel_rect[1] >= canvas_core::tokens::SPACING_XL - 0.01,
+                    "{vp:?}"
+                );
+                // Элементы внутри панели.
+                for r in lay
+                    .row_rects
+                    .iter()
+                    .chain(lay.chip_rects.iter().map(|(r, _)| r))
+                    .chain([&lay.input_rect, &lay.footer_rect])
+                {
+                    assert!(r[0] >= lay.panel_rect[0] - 0.01, "левее панели {vp:?}");
+                    assert!(
+                        r[0] + r[2] <= lay.panel_rect[0] + lay.panel_rect[2] + 0.01,
+                        "за правым краем панели {vp:?}"
+                    );
+                    assert!(r[1] >= lay.panel_rect[1] - 0.01, "выше панели {vp:?}");
+                    assert!(
+                        r[1] + r[3] <= lay.panel_rect[1] + lay.panel_rect[3] + 0.01,
+                        "ниже панели {vp:?}"
+                    );
+                }
+                // Чипы и строки попарно не пересекаются.
+                let chips: Vec<[f32; 4]> = lay.chip_rects.iter().map(|(r, _)| *r).collect();
+                for group in [chips, lay.row_rects.clone()] {
+                    for i in 0..group.len() {
+                        for j in i + 1..group.len() {
+                            let a = UiRect::new(group[i][0], group[i][1], group[i][2], group[i][3]);
+                            let b = UiRect::new(group[j][0], group[j][1], group[j][2], group[j][3]);
+                            assert!(!a.intersects(&b), "пересечение {i}×{j} при {vp:?}");
+                        }
+                    }
+                }
+                // Измеренные подписи строк укладываются в ширину строки.
+                let mut fs = font_system();
+                let mut m = TextMeasurer::new();
+                let labels = row_labels(vp, &list, &st, ru, &mut m, &mut fs);
+                assert_eq!(labels.len(), lay.row_rects.len());
+                for (label, rect) in labels.iter().zip(lay.row_rects.iter()) {
+                    let inner = rect[2] - ROW_TEXT_PAD * 2.0;
+                    assert!(
+                        m.width_of(&mut fs, &label.title, FAMILY, ROW_FONT) <= inner + 0.05,
+                        "заголовок шире строки при {vp:?}"
+                    );
+                    assert!(
+                        m.width_of(&mut fs, &label.desc, FAMILY, ROW_DESC_FONT) <= inner + 0.05,
+                        "описание шире строки при {vp:?}"
+                    );
+                }
+            }
+        }
     }
 }

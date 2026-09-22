@@ -40,7 +40,9 @@ const FONT_DATA: &[&[u8]] = &[
 ];
 
 /// Семейство базового текста канваса (CR-009): Noto Sans Display.
-pub(crate) const SANS_FAMILY: &str = "Noto Sans Display";
+/// FR-053 (U3): pub — измерение раскладки (canvas-ui::measure) обязано
+/// использовать то же семейство, что и рендер (parity метрик).
+pub const SANS_FAMILY: &str = "Noto Sans Display";
 /// Семейство Numi-строк, результатов и код-фенсов (CR-009): Noto Sans Mono.
 pub(crate) const MONO_FAMILY: &str = "Noto Sans Mono";
 
@@ -957,7 +959,9 @@ static MEASURE_FS: OnceLock<Mutex<FontSystem>> = OnceLock::new();
 /// через `into_inner`: отравление возможно только при панике внутри
 /// шейпинга, FontSystem после неё консистентен (layout-кэш пересчитывается
 /// заново), поэтому измерение не падает, а продолжает работать.
-fn measure_font_system() -> MutexGuard<'static, FontSystem> {
+/// FR-053 (U3): pub — владелец инстанса FontSystem для TextMeasurer
+/// (PRD-0009 §14: раскладка пилотов шейпит теми же метриками, что рендер).
+pub fn measure_font_system() -> MutexGuard<'static, FontSystem> {
     let mutex = MEASURE_FS.get_or_init(|| {
         let mut font_system = FontSystem::new();
         for data in FONT_DATA {
