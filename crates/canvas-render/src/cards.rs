@@ -663,6 +663,10 @@ pub const FOCUS_DIM_FLOOR: f32 = 0.35;
 pub const FOCUS_EDGE_BOOST: f32 = 1.2;
 /// Амплитуда «дыхания» толщины фокусной связи в world-px.
 pub const FOCUS_EDGE_PULSE_BOOST: f32 = 0.8;
+/// FR-050 Н9-1 (этап E): амплитуда бампа толщины ребра в волне каскада
+/// (world-px, на пике полуволны) — волна заметна, но тише выделения
+/// (EDGE_DOT_SELECTED - EDGE_DOT = 1.6).
+pub const SPILL_WAVE_BOOST: f32 = 1.0;
 
 /// Вид фокуса для кадра (T23): подсвеченные ноды/связи (отсортированные
 /// индексы из `canvas_core::FocusSet`), степень затемнения прочего и фаза
@@ -707,6 +711,62 @@ impl FocusView<'_> {
     /// (1.0 — не трогать; dim=1 → FOCUS_DIM_FLOOR).
     pub fn dim_factor(&self) -> f32 {
         1.0 - self.dim * (1.0 - FOCUS_DIM_FLOOR)
+    }
+}
+
+/// FR-050 Н9-1 (этап E): вид волны каскада для кадра — value-рёбра
+/// downstream от изменённого upstream с порядком топологического
+/// расстояния ([`canvas_core::flow::spill_wave`]); альфа ребра — полуволна
+/// [`crate::animate::spill_wave_alpha`], смещённая на `order · step_ms`
+/// от старта волны. Волна — без затемнения прочего (в отличие от фокуса):
+/// подсветка бегает по обычному кадру. Пустая волна (EMPTY) — рендер без
+/// изменений, инвариант «нет волны — инстансы байт-в-байт».
+#[derive(Debug, Clone, Copy)]
+pub struct SpillWaveView<'a> {
+    /// Рёбра волны: (индекс в `canvas.edges`, порядок от истока).
+    pub edges: &'a [(usize, u32)],
+    /// Мс от старта волны.
+    pub elapsed_ms: u32,
+    /// Шаг между порядками (приложение передаёт
+    /// [`crate::animate::SPILL_WAVE_STEP_MS`]).
+    pub step_ms: u32,
+}
+
+impl SpillWaveView<'_> {
+    /// Выключенная волна: пустой срез — альфа любого ребра 0.
+    pub const EMPTY: SpillWaveView<'static> = SpillWaveView {
+        edges: &[],
+        elapsed_ms: 0,
+        step_ms: 0,
+    };
+
+    /// Альфа пульса ребра: 0 — ребра нет в волне / пульс ещё не начался
+    /// или уже прошёл; иначе полуволна 0 → 1 → 0.
+    pub fn alpha_for(&self, edge_index: usize) -> f32 {
+        let Some(&(_, order)) = self.edges.iter().find(|(index, _)| *index == edge_index) else {
+            return 0.0;
+        };
+        let start = order.saturating_mul(self.step_ms);
+        crate::animate::spill_wave_alpha(self.elapsed_ms.saturating_sub(start))
+    }
+
+    /// Волна ещё анимируется (последний порядок + длительность ребра)?
+    /// Приложение держит кадры, пока true. Пустая волна — false
+    /// (статика без рёбер — кадры не нужны).
+    pub fn is_animating(&self) -> bool {
+        if self.edges.is_empty() {
+            return false;
+        }
+        let max_order = self
+            .edges
+            .iter()
+            .map(|(_, order)| *order)
+            .max()
+            .unwrap_or(0);
+        let total = max_order
+            .saturating_mul(self.step_ms)
+            .saturating_add(crate::animate::SPILL_WAVE_EDGE_MS);
+        self.elapsed_ms < total
     }
 }
 
@@ -909,6 +969,7 @@ pub fn build_edge_instances(
         hidden_ids,
         None,
         &std::collections::HashSet::new(),
+        &SpillWaveView::EMPTY,
     )
 }
 
@@ -932,6 +993,12 @@ pub const UNMAPPED_EDGE_COLOR: [f32; 4] = canvas_core::tokens::SEVERITY_DARK[0];
 /// выделение/фокус приоритетнее unmapped-подсветки. Пучок с unmapped-рёбрами
 /// рисуется агрегированно как раньше (диагностика видна на одиночных
 /// рёбрах и в тултипе).
+///
+/// FR-050 Н9-1 (этап E): `wave` — волна каскада: рёбра с альфой > 0 —
+/// вспышка цвета потока значений (FLOW_EDGE_COLOR) с бампом толщины,
+/// плавно нарастающим/затухающим по полуволне. Без затемнения прочего;
+/// приоритет: выделение > фокус > волна > unmapped > обычный рендер
+/// (волна — временная подсветка события, не состояние).
 #[allow(clippy::too_many_arguments)]
 pub fn build_edge_instances_ctx(
     canvas: &canvas_core::Canvas,
@@ -942,6 +1009,7 @@ pub fn build_edge_instances_ctx(
     hidden_ids: &std::collections::HashSet<&str>,
     bundles: Option<&BundleContext<'_>>,
     unmapped_ids: &std::collections::HashSet<&str>,
+    wave: &SpillWaveView,
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
@@ -977,6 +1045,13 @@ pub fn build_edge_instances_ctx(
                         let in_hover = ctx.hover.is_some_and(|h| bundle.edges.contains(&h));
                         let in_focus =
                             focus.dim > 0.0 && bundle.edges.iter().any(|e| focus.has_edge(*e));
+                        // Н9-1: волна по пучку — OR-семантика (как фокус):
+                        // максимальная альфа рёбер пучка бампает линию
+                        let wave_alpha = bundle
+                            .edges
+                            .iter()
+                            .map(|e| wave.alpha_for(*e))
+                            .fold(0.0f32, f32::max);
                         let mut d = canvas_core::bundle_thickness(bundle.weight);
                         if in_selection {
                             d += EDGE_DOT_SELECTED - EDGE_DOT;
@@ -997,6 +1072,12 @@ pub fn build_edge_instances_ctx(
                             fill = FOCUS_EDGE_COLOR;
                             fill[3] = 0.75 + 0.25 * focus.pulse;
                             d += FOCUS_EDGE_BOOST + focus.pulse * FOCUS_EDGE_PULSE_BOOST;
+                        } else if wave_alpha > 0.0 {
+                            // Н9-1: вспышка волны на агрегированной линии —
+                            // без затемнения прочего, цвет потока значений
+                            fill = FLOW_EDGE_COLOR;
+                            fill[3] = 0.55 + 0.45 * wave_alpha;
+                            d += SPILL_WAVE_BOOST * wave_alpha;
                         } else if focus.dim > 0.0 {
                             fill[3] *= focus.dim_factor();
                         }
@@ -1013,6 +1094,9 @@ pub fn build_edge_instances_ctx(
         };
         let is_selected = selected == Some(index);
         let in_focus = focus.has_edge(index);
+        // Н9-1: альфа волны для одиночного ребра (после фокуса — волна
+        // временная, выделение/фокус приоритетнее)
+        let wave_alpha = wave.alpha_for(index);
         // FR-050 Р-3: unmapped-ребро — пунктир янтарным акцентом анализа
         // (модель не мутируется); выделение/фокус рисуются как раньше
         let is_unmapped = unmapped_ids.contains(edge.id.as_str());
@@ -1029,6 +1113,18 @@ pub fn build_edge_instances_ctx(
             let d = edge.thickness.unwrap_or_default().dot()
                 + FOCUS_EDGE_BOOST
                 + focus.pulse * FOCUS_EDGE_PULSE_BOOST;
+            (
+                fill,
+                d,
+                edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid),
+            )
+        } else if wave_alpha > 0.0 {
+            // Н9-1 (этап E): вспышка волны каскада — цвет потока значений,
+            // толщина/альфа плывут по полуволне; без затемнения прочего
+            // (волна — событие, не режим). Прочий рендер не меняется.
+            let mut fill = FLOW_EDGE_COLOR;
+            fill[3] = 0.55 + 0.45 * wave_alpha;
+            let d = edge.thickness.unwrap_or_default().dot() + SPILL_WAVE_BOOST * wave_alpha;
             (
                 fill,
                 d,
@@ -2372,6 +2468,7 @@ mod fr042_tests {
             &no_hidden(),
             None,
             &no_unmapped(),
+            &SpillWaveView::EMPTY,
         );
         assert_eq!(via_wrapper.len(), via_ctx.len());
         assert_eq!(via_wrapper[0].pos, via_ctx[0].pos);
@@ -2398,6 +2495,7 @@ mod fr042_tests {
             &no_hidden(),
             Some(&ctx),
             &no_unmapped(),
+            &SpillWaveView::EMPTY,
         );
         assert!(
             aggregated.len() < baseline.len(),
@@ -2448,6 +2546,7 @@ mod fr042_tests {
             &no_hidden(),
             Some(&ctx),
             &no_unmapped(),
+            &SpillWaveView::EMPTY,
         );
         // Доминанта — user-color ребро e2: цвет линии #ff8000
         assert!((plain[0].fill[0] - 1.0).abs() < 1e-3);
@@ -2463,6 +2562,7 @@ mod fr042_tests {
             &no_hidden(),
             Some(&ctx),
             &no_unmapped(),
+            &SpillWaveView::EMPTY,
         );
         assert!(
             bumped[0].size[0] > plain[0].size[0],
@@ -2559,6 +2659,7 @@ mod fr050_stage_c_tests {
             &no_hidden(),
             None,
             &no_unmapped(),
+            &SpillWaveView::EMPTY,
         );
         assert!(!plain.is_empty());
         assert_eq!(plain[0].fill, FLOW_EDGE_COLOR);
@@ -2573,6 +2674,7 @@ mod fr050_stage_c_tests {
             &no_hidden(),
             None,
             &unmapped,
+            &SpillWaveView::EMPTY,
         );
         assert!(!amber.is_empty());
         assert_eq!(amber[0].fill, UNMAPPED_EDGE_COLOR);
@@ -2586,5 +2688,161 @@ mod fr050_stage_c_tests {
         // Модель не мутируется: стиль/цвет ребра в .canvas не изменены
         assert_eq!(canvas.edges[0].style, None);
         assert_eq!(canvas.edges[0].color, None);
+    }
+}
+// --- FR-050 (этап E): волна каскада проливаний (Н9-1) ---
+
+#[cfg(test)]
+mod fr050_stage_e_tests {
+    use super::*;
+    use crate::animate::SPILL_WAVE_EDGE_MS;
+
+    /// Пустой набор скрытых/не-подставленных рёбер (инвариант: без волны и
+    /// unmapped — рендер байт-в-байт прежний).
+    fn no_hidden() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
+    fn no_unmapped() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
+    /// Сцена: a→b value-ребро.
+    fn scene() -> canvas_core::Canvas {
+        let mut canvas = canvas_core::Canvas::default();
+        canvas
+            .nodes
+            .push(canvas_core::Node::text("a", "A", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(canvas_core::Node::text("b", "B", 400.0, 0.0));
+        let mut edge = canvas_core::Edge::new("e1", "a", None, "b", None);
+        edge.set_flow_kind(canvas_core::FlowKind::Value);
+        canvas.add_edge(edge);
+        canvas
+    }
+
+    /// Н9-1: волна каскада — альфа ребра смещается на порядок (полуволна
+    /// через step), пустая волна — везде 0; анимация кончается за последним
+    /// порядком + длительность ребра.
+    #[test]
+    fn spill_wave_view_alpha_order_offset() {
+        let edges: [(usize, u32); 2] = [(0, 0), (1, 1)];
+        let wave = SpillWaveView {
+            edges: &edges,
+            elapsed_ms: SPILL_WAVE_EDGE_MS / 2,
+            step_ms: 200,
+        };
+        // Порядок 0 — пульс в середине (максимум)
+        let a0 = wave.alpha_for(0);
+        assert!((a0 - 1.0).abs() < 1e-4, "пик полуволны: {a0}");
+        // Порядок 1 — ранняя фаза (elapsed − 200 < длительность)
+        let a1 = wave.alpha_for(1);
+        assert!(a1 > 0.0 && a1 < 1.0, "второй порядок в ранней фазе: {a1}");
+        // Чужое ребро — 0; пустая волна — 0
+        assert_eq!(wave.alpha_for(9), 0.0);
+        assert_eq!(SpillWaveView::EMPTY.alpha_for(0), 0.0);
+        assert!(!SpillWaveView::EMPTY.is_animating());
+        // Волна анимируется, пока последний порядок не отработал
+        assert!(wave.is_animating());
+        let finished = SpillWaveView {
+            edges: &edges,
+            elapsed_ms: 200 + SPILL_WAVE_EDGE_MS,
+            step_ms: 200,
+        };
+        assert!(!finished.is_animating(), "последний порядок прошёл");
+    }
+
+    /// Н9-1: инстансы рёбер — волна бампает цвет (FLOW_EDGE_COLOR, альфа
+    /// 0.55..1.0) и толщину пропорционально альфе; пустая волна — инстансы
+    /// байт-в-байт прежние (инвариант «нет волны — без изменений»);
+    /// выделение и фокус приоритетнее волны.
+    #[test]
+    fn spill_wave_edge_instance_bump_and_priority() {
+        let canvas = scene();
+        // Пустая волна — прежний рендер
+        let plain = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            None,
+            &no_unmapped(),
+            &SpillWaveView::EMPTY,
+        );
+        assert!(!plain.is_empty());
+        assert_eq!(plain[0].fill, FLOW_EDGE_COLOR);
+
+        // Волна на пике (порядок 0, середина полуволны)
+        let edges = [(0usize, 0u32)];
+        let wave = SpillWaveView {
+            edges: &edges,
+            elapsed_ms: SPILL_WAVE_EDGE_MS / 2,
+            step_ms: 200,
+        };
+        let wavy = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            None,
+            &no_unmapped(),
+            &wave,
+        );
+        assert!(!wavy.is_empty());
+        // Цвет потока, альфа на пике
+        assert_eq!(wavy[0].fill, FLOW_EDGE_COLOR);
+        assert!(
+            (wavy[0].fill[3] - 1.0).abs() < 1e-3,
+            "пик альфы: {}",
+            wavy[0].fill[3]
+        );
+        // Толщина выросла (кружков полилинии больше/шире)
+        assert!(
+            wavy[0].size[0] > plain[0].size[0],
+            "волна утолщает: {} > {}",
+            wavy[0].size[0],
+            plain[0].size[0]
+        );
+
+        // Выделение приоритетнее волны (цвет выделения, не потока)
+        let selected = build_edge_instances_ctx(
+            &canvas,
+            Some(0),
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            None,
+            &no_unmapped(),
+            &wave,
+        );
+        assert_eq!(selected[0].fill, SELECTION_BORDER);
+
+        // Фокус приоритетнее волны: цвет акцентный, статическая альфа
+        // фокуса 0.75 (без дыхания pulse=0)
+        let focus = FocusView {
+            nodes: &[],
+            edges: &[0],
+            dim: 1.0,
+            pulse: 0.0,
+        };
+        let focused = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &focus,
+            None,
+            &no_hidden(),
+            None,
+            &no_unmapped(),
+            &wave,
+        );
+        assert_eq!(focused[0].fill[..3], FOCUS_EDGE_COLOR[..3]);
+        assert!((focused[0].fill[3] - 0.75).abs() < 1e-3);
     }
 }

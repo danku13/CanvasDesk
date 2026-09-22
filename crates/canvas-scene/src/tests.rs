@@ -3312,3 +3312,90 @@ fn auto_rows_grow_node_height() {
         .expect("нода");
     assert_eq!(after, stable, "повторный пересчёт — без осцилляций");
 }
+
+// --- FR-050 этап E: Н9-1 детект изменений для волны каскада ---
+
+/// FR-050 Н9-1: первый пересчёт (загрузка) — без волны (сравнивать не с
+/// чем); мутация, не меняющая итогов (сдвиг позиции ноды) — тоже пусто.
+#[test]
+fn flow_changed_nodes_empty_on_load_and_positional_move() {
+    let mut scene = mcp_scene();
+    assert!(
+        scene.flow_changed_nodes.is_empty(),
+        "первый пересчёт — без волны"
+    );
+    // Сдвиг позиции ноды: итоги формул от позиции не зависят — волны нет
+    scene.canvas.nodes[0].x += 64.0;
+    scene.recompute_flow();
+    assert!(
+        scene.flow_changed_nodes.is_empty(),
+        "позиционная мутация не меняет значений"
+    );
+}
+
+/// FR-050 Н9-1: правка upstream (текст истока) → итоги истока и приёмника
+/// изменились — обе ноды в списке seeds; повторный пересчёт без мутаций —
+/// список пуст (волна одноразовая на событие изменения).
+#[test]
+fn flow_changed_nodes_detects_upstream_edit() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 0, "y": 0, "text": "Трафик\npeak_rps = 1389 rps"}"#,
+    )
+    .expect("traffic");
+    let traffic = scene.canvas.nodes.last().expect("нода").id.clone();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 400, "y": 0, "text": "$in × 2"}"#,
+    )
+    .expect("receiver");
+    let receiver = scene.canvas.nodes.last().expect("нода").id.clone();
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(r#"{{"from": "{traffic}", "to": "{receiver}", "fromLine": 1, "kind": "value"}}"#),
+    )
+    .expect("value-ребро");
+    // Подключение ребра — итог приёмника сменил состояние (ошибка «вход
+    // отсутствует» → значение): волна уместна, приёмник в seeds;
+    // повторный пересчёт — пусто (волна одноразовая на событие)
+    assert_eq!(
+        scene.flow_changed_nodes,
+        vec![receiver.clone()],
+        "подключение ребра — значение подтянулось"
+    );
+    scene.recompute_flow();
+    assert!(
+        scene.flow_changed_nodes.is_empty(),
+        "повторный пересчёт — без изменений"
+    );
+    // Правка upstream: 1389 → 2000 — строка-значение истока (присваивающий
+    // лист без узлового итога — lines-детект) И итог приёмника: обе ноды
+    // в seeds (волна бежит от истока вниз, приёмник продолжает каскад)
+    dispatch(
+        &mut scene,
+        "node_update_text",
+        &serde_json::json!({
+            "id": traffic,
+            "text": "Трафик\npeak_rps = 2000 rps",
+        })
+        .to_string(),
+    )
+    .expect("правка истока");
+    let changed = scene.flow_changed_nodes.clone();
+    assert_eq!(changed.len(), 2, "исток и приёмник: {changed:?}");
+    assert!(
+        changed.contains(&traffic),
+        "исток (строка-значение): {changed:?}"
+    );
+    assert!(changed.contains(&receiver), "приёмник (итог): {changed:?}");
+    // Повторный пересчёт без мутаций — волна погасла
+    scene.recompute_flow();
+    assert!(
+        scene.flow_changed_nodes.is_empty(),
+        "повторный пересчёт — без изменений"
+    );
+}

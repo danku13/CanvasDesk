@@ -315,6 +315,34 @@ pub mod keys {
     /// FR-050 Н9-2/Р-4 (этап D): тултип авто-строки при unmapped
     /// (значение не подставлено).
     pub const TOOLTIP_SPILL_AUTOROW_NOVALUE: &str = "tooltip.spill.autorow_novalue";
+    /// FR-050 Н9-4 (этап E): пункт меню канваса — тогл панели карты
+    /// проливаний.
+    pub const MENU_FLOW_MAP: &str = "menu.flow_map";
+    /// FR-050 Н9-4 (этап E): заголовок панели «Карта проливаний».
+    pub const FLOW_MAP_TITLE: &str = "flow_map.title";
+    /// FR-050 Н9-4 (этап E): пустое состояние панели (проливаний нет).
+    pub const FLOW_MAP_EMPTY: &str = "flow_map.empty";
+    /// FR-050 Н9-4 (этап E): строка «… ещё N» (кап видимых строк).
+    pub const FLOW_MAP_MORE: &str = "flow_map.more";
+    /// FR-050 Н9-4 (этап E): адрес позиционного приёмника в строке карты
+    /// («вход {n}» — слот без имени параметра).
+    pub const FLOW_MAP_INPUT: &str = "flow_map.input";
+    /// FR-050 Н9-3 (этап E): заголовок контекст-меню пролитого параметра.
+    pub const MENU_PARAM_TITLE: &str = "menu.param.title";
+    /// FR-050 Н9-3 (этап E): заголовок контекст-меню авто-строки приёмника.
+    pub const MENU_AUTOROW_TITLE: &str = "menu.autorow.title";
+    /// FR-050 Н9-3 (этап E): пункт «Показать источник» (камера + подсветка).
+    pub const MENU_PARAM_SOURCE: &str = "menu.param.source";
+    /// FR-050 Н9-3 (этап E): пункт «Отключить проливание» (удалить ребро, Р-5).
+    pub const MENU_PARAM_DISCONNECT: &str = "menu.param.disconnect";
+    /// FR-050 Н9-3 (этап E): пункт «Что если…» (what-if режим FR-017).
+    pub const MENU_PARAM_WHATIF: &str = "menu.param.whatif";
+    /// FR-050 Н9-6 (этап E): тост при подключении проливания к параметру
+    /// (строка присваивания была).
+    pub const TOAST_SPILL_PARAM: &str = "toast.spill.param";
+    /// FR-050 Н9-6 (этап E): тост при появлении авто-строки приёмника
+    /// (параметра не было — строка-проекция).
+    pub const TOAST_SPILL_AUTOROW: &str = "toast.spill.autorow";
 
     // --- Подсказки Numi-ввода (FR-021) ---
     pub const HINT_VAR: &str = "hints.var";
@@ -717,6 +745,31 @@ const RU: &[(&str, &str)] = &[
     (
         keys::TOOLTIP_SPILL_AUTOROW_NOVALUE,
         "{path}: значение не подставлено — связь есть, но источник не отдал значение. Подключите ноду с актуальным значением или исправьте строку-источник.",
+    ),
+    // --- FR-050 этап E: Н9-3 контекст-меню параметра, Н9-4 карта, Н9-6 тост ---
+    (
+        keys::MENU_FLOW_MAP,
+        "Карта проливаний (Ctrl+Shift+M)",
+    ),
+    (keys::FLOW_MAP_TITLE, "Проливания"),
+    (
+        keys::FLOW_MAP_EMPTY,
+        "Проливаний нет — подключите значение к параметру или входу ноды",
+    ),
+    (keys::FLOW_MAP_MORE, "… ещё {n}"),
+    (keys::FLOW_MAP_INPUT, "вход {n}"),
+    (keys::MENU_PARAM_TITLE, "Проливание в параметр"),
+    (keys::MENU_AUTOROW_TITLE, "Входящее значение"),
+    (keys::MENU_PARAM_SOURCE, "Показать источник"),
+    (keys::MENU_PARAM_DISCONNECT, "Отключить проливание"),
+    (keys::MENU_PARAM_WHATIF, "Что если…"),
+    (
+        keys::TOAST_SPILL_PARAM,
+        "Параметр {param} подтянулся из {path} — Ctrl+Z отменит",
+    ),
+    (
+        keys::TOAST_SPILL_AUTOROW,
+        "Значение подтянулось из {path} — Ctrl+Z отменит",
     ),
     // --- Подсказки Numi ---
     (keys::HINT_VAR, "переменная листа"),
@@ -1269,6 +1322,31 @@ const EN: &[(&str, &str)] = &[
     (
         keys::TOOLTIP_SPILL_AUTOROW_NOVALUE,
         "{path}: value not applied — the edge exists but the source yielded no value. Connect a node with an up-to-date value or fix the source line.",
+    ),
+    // --- FR-050 этап E: Н9-3 контекст-меню параметра, Н9-4 карта, Н9-6 тост ---
+    (
+        keys::MENU_FLOW_MAP,
+        "Spill map (Ctrl+Shift+M)",
+    ),
+    (keys::FLOW_MAP_TITLE, "Spills"),
+    (
+        keys::FLOW_MAP_EMPTY,
+        "No spills — connect a value to a node parameter or input",
+    ),
+    (keys::FLOW_MAP_MORE, "… {n} more"),
+    (keys::FLOW_MAP_INPUT, "input {n}"),
+    (keys::MENU_PARAM_TITLE, "Spilled into parameter"),
+    (keys::MENU_AUTOROW_TITLE, "Incoming value"),
+    (keys::MENU_PARAM_SOURCE, "Show source"),
+    (keys::MENU_PARAM_DISCONNECT, "Disconnect spill"),
+    (keys::MENU_PARAM_WHATIF, "What if…"),
+    (
+        keys::TOAST_SPILL_PARAM,
+        "Parameter {param} pulled from {path} — Ctrl+Z will undo",
+    ),
+    (
+        keys::TOAST_SPILL_AUTOROW,
+        "Value pulled from {path} — Ctrl+Z will undo",
     ),
     // --- Numi hints ---
     (keys::HINT_VAR, "sheet variable"),
