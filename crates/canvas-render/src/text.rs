@@ -1426,6 +1426,53 @@ impl TextSystem {
         ports
     }
 
+    /// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды из кэша
+    /// раскладки: для каждой строки-присваивания, чьё имя входит в снапшот
+    /// параметров шаблона (`TemplateRef::params` — канонический адрес
+    /// `toParam`, тот же источник истины, что у валидации E-PORT-UNKNOWN),
+    /// — [`ParamPort`] на ЛЕВОМ краю ноды (вертикаль — [`result_row_y`]
+    /// ряда строки, зеркально построчным выходам FR-025; hit-тест — допуск
+    /// CR-003). Текстовая нода якорей не имеет (toParam к ней не адресуется).
+    /// Нет кэша/строк (нода вне экрана, виджет) — якорей нет.
+    pub fn param_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::ParamPort> {
+        let Some(template) = node.template() else {
+            return Vec::new();
+        };
+        let Some(entry) = self.cache.get(&index) else {
+            return Vec::new();
+        };
+        entry
+            .line_results
+            .iter()
+            .filter_map(|line_result| {
+                let block = entry
+                    .body
+                    .as_ref()?
+                    .blocks
+                    .iter()
+                    .find(|block| block.source_line == Some(line_result.source_line))?;
+                let raw = node
+                    .text
+                    .as_deref()
+                    .and_then(|text| text.lines().nth(line_result.source_line))?;
+                let canvas_core::expr::NumiLineKind::Assignment { name } =
+                    canvas_core::expr::line_kind(raw)
+                else {
+                    return None;
+                };
+                // Имя строки вне снапшота параметров (правка текста руками) —
+                // не адрес toParam, якоря не даём (E-PORT-UNKNOWN у MCP)
+                if !template.params.contains_key(&name) {
+                    return None;
+                }
+                Some(canvas_core::ParamPort {
+                    param: name,
+                    point: [node.x, result_row_y(node, block.offset[1])],
+                })
+            })
+            .collect()
+    }
+
     /// Подготовить тексты кадра по текст-группам z-плана (zorder.rs):
     /// заголовки/тела видимых нод (culling, T5: `frame.indices` — выдача
     /// spatial index по viewport), буфер редактора (T7) на z-позиции

@@ -44,6 +44,10 @@ pub mod id {
     pub const SETTINGS: &str = "settings";
     /// Контекстное меню канваса + подменю пакетов (L4, Block).
     pub const MENU: &str = "menu";
+    /// FR-050 Н2 (этап C): меню выбора (параметр приёмника / строка-источник)
+    /// — transient popup как контекстное меню (L4, Block: клик мимо —
+    /// закрыть и глотнуть, «либо отмена» в постановке; Esc — закрыть).
+    pub const CHOICE_MENU: &str = "choice_menu";
     /// Док палитры шаблонов (развёрнутый) (L3, Capture).
     pub const TEMPLATE_PANEL: &str = "template_panel";
     /// Свёрнутая полоса категорий + flyout (L3, Capture).
@@ -181,6 +185,15 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
             CapturePolicy::Block,
         ));
     }
+    // FR-050 Н2 (этап C): меню выбора — transient popup над меню канваса
+    // (Block: клик мимо — закрыть и глотнуть — «либо отмена»; Esc — закрыть).
+    if app.choice_menu.is_some() {
+        reg.add(SurfaceDecl::new(
+            id::CHOICE_MENU,
+            UiLayer::Popups,
+            CapturePolicy::Block,
+        ));
+    }
     // 8. Док палитры шаблонов (Esc закрывает даже без фокуса — 8182).
     if app.template_panel.open {
         reg.add(
@@ -307,6 +320,7 @@ const VISUAL_ORDER: &[&str] = &[
     id::PALETTE,
     id::WHEEL,
     id::MENU,
+    id::CHOICE_MENU,
     id::HELP_MENU,
     id::DOCS,
     id::GALLERY,
@@ -452,6 +466,15 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                     rect(crate::ui::submenu_rect(sub)),
                     "menu-sub",
                 ));
+            }
+        }
+        // FR-050 Н2 (этап C): панель меню выбора (пункты + заголовок;
+        // выбор пункта — геометрия отрисовки в обработчике)
+        id::CHOICE_MENU => {
+            if let Some(r) = app.choice_menu_rect() {
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(r), "choice-menu"));
             }
         }
         id::TEMPLATE_PANEL => {
@@ -637,7 +660,7 @@ mod tests {
         )
     }
 
-    /// 20 поверхностей объявлены константами без дублей (контракт
+    /// 21 поверхностей объявлены константами без дублей (контракт
     /// единственности реестра — паника на дубликате словлена сборкой).
     #[test]
     fn surface_ids_are_unique() {
@@ -649,6 +672,7 @@ mod tests {
             id::CORNER_BUTTONS,
             id::SETTINGS,
             id::MENU,
+            id::CHOICE_MENU,
             id::TEMPLATE_PANEL,
             id::TEMPLATE_STRIP,
             id::PALETTE,
@@ -668,6 +692,70 @@ mod tests {
         let count = sorted.len();
         sorted.dedup();
         assert_eq!(sorted.len(), count, "дубликат идентификатора поверхности");
+    }
+
+    /// FR-050 Н2 (этап C): открытое меню выбора — поверхность Popups/Block
+    /// (клик мимо — backdrop закрывает), в esc-стеке РАНЬШЕ контекстного
+    /// меню (transient-выбор приоритетнее базового меню); hit-rect панели
+    /// накрывает пункты и заголовок; закрытое — поверхности нет.
+    #[test]
+    fn choice_menu_surface_block_above_context_menu() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.choice_menu = Some(crate::app::ChoiceMenu {
+            origin: [200.0, 200.0],
+            title_key: crate::i18n::keys::MENU_PICK_PARAM_TITLE,
+            items: vec![crate::app::ChoiceItem {
+                label: "rps".to_owned(),
+                action: crate::app::ChoiceAction::Param {
+                    from_node: "a".to_owned(),
+                    from_side: canvas_core::Side::Right,
+                    from_line: None,
+                    to_node: "b".to_owned(),
+                    param: "rps".to_owned(),
+                },
+            }],
+            hovered: None,
+        });
+        let registry = build_registry(&app);
+        assert!(
+            registry
+                .esc_stack()
+                .iter()
+                .any(|sid| sid.as_str() == id::CHOICE_MENU),
+            "меню выбора в esc-стеке"
+        );
+        // Порядок: CHOICE_MENU раньше MENU в лестнице (закрывается первым)
+        let esc: Vec<String> = registry
+            .esc_stack()
+            .iter()
+            .map(|sid| sid.as_str().to_owned())
+            .collect();
+        if let (Some(c), Some(m)) = (
+            esc.iter().position(|s| s == id::CHOICE_MENU),
+            esc.iter().position(|s| s == id::MENU),
+        ) {
+            assert!(c < m, "выбор закрывается раньше контекстного меню");
+        }
+        // Hit-rect панели: накрывает первый пункт (сдвиг на заголовок)
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::CHOICE_MENU)
+            .expect("поверхность меню выбора в кадре");
+        assert!(!surface.hit_rects.is_empty(), "hit-rect задан");
+        // Закрытое меню — поверхности нет (инвариант «нет состояния — нет
+        // поверхности»)
+        app.choice_menu = None;
+        let registry = build_registry(&app);
+        assert!(
+            !registry
+                .esc_stack()
+                .iter()
+                .any(|sid| sid.as_str() == id::CHOICE_MENU),
+            "закрытое меню — в реестре отсутствует"
+        );
     }
 
     /// Реестр пустого канваса: мир + угловые кнопки (минимум поверхностей).

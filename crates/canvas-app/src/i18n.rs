@@ -227,7 +227,7 @@ pub mod keys {
     pub const WIDGETS_EMPTY: &str = "widgets.empty";
     pub const WIDGETS_REMOVE_ENTRY: &str = "widgets.remove_entry";
 
-    // --- Модальные диалоги (T21, FR-014) ---
+    // --- Модальные диалоги (T21, FR-014; FR-050 Н4/Р-3 — этап C) ---
     pub const DIALOG_YES: &str = "dialog.yes";
     pub const DIALOG_NO: &str = "dialog.no";
     pub const DIALOG_INSTALL_TITLE: &str = "dialog.install.title";
@@ -238,6 +238,22 @@ pub mod keys {
     pub const DIALOG_PERMS_NONE: &str = "dialog.perms_none";
     pub const DIALOG_REMOVE_BODY: &str = "dialog.remove.body";
     pub const DIALOG_CYCLE_BODY: &str = "dialog.cycle.body";
+    /// FR-050 Н4 (этап C): диалог «Заменить источник?» — заголовок.
+    pub const DIALOG_REPLACE_TITLE: &str = "dialog.replace.title";
+    /// FR-050 Н4 (этап C): тело диалога замены (параметр + текущий источник).
+    pub const DIALOG_REPLACE_BODY: &str = "dialog.replace.body";
+    /// FR-050 Н4 (этап C): кнопка подтверждения замены.
+    pub const DIALOG_REPLACE_YES: &str = "dialog.replace.yes";
+    /// FR-050 Н4 (этап C): кнопка отмены (возврат к drag без создания).
+    pub const DIALOG_CANCEL: &str = "dialog.cancel";
+    /// FR-050 Н2 (этап C): меню выбора параметра приёмника (drop мимо якоря).
+    pub const MENU_PICK_PARAM_TITLE: &str = "menu.pick_param.title";
+    /// FR-050 Н2 (этап C): меню выбора строки-источника (W-AMBIGUOUS-SRC).
+    pub const MENU_PICK_LINE_TITLE: &str = "menu.pick_line.title";
+    /// FR-050 Р-3 (этап C): тултип unmapped-позиционного входа.
+    pub const TOOLTIP_UNMAPPED_SLOT: &str = "tooltip.unmapped.slot";
+    /// FR-050 Р-3 (этап C): тултип unmapped-параметра (toParam без значения).
+    pub const TOOLTIP_UNMAPPED_PARAM: &str = "tooltip.unmapped.param";
 
     // --- Подсказки Numi-ввода (FR-021) ---
     pub const HINT_VAR: &str = "hints.var";
@@ -598,6 +614,24 @@ const RU: &[(&str, &str)] = &[
     (
         keys::DIALOG_CYCLE_BODY,
         "Ребро замкнуло бы цикл потока значений (граф обязан быть DAG).\nСоздать как контрольную связь — без передачи значения?",
+    ),
+    // --- FR-050 (этап C): диалог замены, меню выбора, тултипы Р-3 ---
+    (keys::DIALOG_REPLACE_TITLE, "Заменить источник?"),
+    (
+        keys::DIALOG_REPLACE_BODY,
+        "Параметр {param} уже питается от {source}.\nЗаменить источник новым ребром?",
+    ),
+    (keys::DIALOG_REPLACE_YES, "Заменить"),
+    (keys::DIALOG_CANCEL, "Отмена"),
+    (keys::MENU_PICK_PARAM_TITLE, "Подключить значение к параметру"),
+    (keys::MENU_PICK_LINE_TITLE, "Какая строка — источник значения?"),
+    (
+        keys::TOOLTIP_UNMAPPED_SLOT,
+        "Значение не подставлено: связь есть, но источник не отдал значение (строка-источник удалена / стала прозой / колонка отсутствует). Подключите ноду с актуальным значением или исправьте строку-источник.",
+    ),
+    (
+        keys::TOOLTIP_UNMAPPED_PARAM,
+        "Параметр {param} не получает значение: выход {output} отсутствует у ноды \"{node}\" или не отдал значение. Перепривяжите связь на существующий выход (клик по ребру → перепривязка) или подключите ноду с актуальным значением.",
     ),
     // --- Подсказки Numi ---
     (keys::HINT_VAR, "переменная листа"),
@@ -1059,6 +1093,24 @@ const EN: &[(&str, &str)] = &[
     (
         keys::DIALOG_CYCLE_BODY,
         "The edge would close a value-flow cycle (the graph must be a DAG).\nCreate as a control edge — without carrying a value?",
+    ),
+    // --- FR-050 (stage C): replace dialog, pick menus, R-3 tooltips ---
+    (keys::DIALOG_REPLACE_TITLE, "Replace source?"),
+    (
+        keys::DIALOG_REPLACE_BODY,
+        "Parameter {param} is already fed by {source}.\nReplace the source with the new edge?",
+    ),
+    (keys::DIALOG_REPLACE_YES, "Replace"),
+    (keys::DIALOG_CANCEL, "Cancel"),
+    (keys::MENU_PICK_PARAM_TITLE, "Connect the value to a parameter"),
+    (keys::MENU_PICK_LINE_TITLE, "Which line is the value source?"),
+    (
+        keys::TOOLTIP_UNMAPPED_SLOT,
+        "Value not applied: the edge exists but the source yielded no value (source line deleted / became prose / column missing). Connect a node with an up-to-date value or fix the source line.",
+    ),
+    (
+        keys::TOOLTIP_UNMAPPED_PARAM,
+        "Parameter {param} gets no value: output {output} is missing on node \"{node}\" or yielded no value. Rebind the edge to an existing output (click the edge → rebind) or connect a node with an up-to-date value.",
     ),
     // --- Numi hints ---
     (keys::HINT_VAR, "sheet variable"),

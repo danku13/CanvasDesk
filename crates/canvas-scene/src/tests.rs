@@ -3115,3 +3115,82 @@ fn mcp_flow_and_analysis_follow_active_whatif() {
         "база восстановлена",
     );
 }
+
+/// FR-050 Р-3 (этап C): кэш unmapped-рёбер в `SceneState` — ребро есть,
+/// значения нет (строка-источник стала прозой) → id ребра в кэше (пунктир
+/// янтарным + тултип «проблема + решение»); возврат значения пересчётом
+/// снимает состояние (инвариант 4 FR-045).
+#[test]
+fn scene_unmapped_edges_cache_set_and_unset() {
+    let mut scene = mcp_scene();
+    let ops = r#"[
+        {"op": "node_create_note", "ref": "traffic", "x": 0, "y": 0,
+         "text": "Трафик\npeak_rps = 1389 rps"},
+        {"op": "node_create_note", "ref": "gateway", "x": 400, "y": 0,
+         "text": "заметка без формулы"}
+    ]"#;
+    let report = graph_apply(&mut scene, ops).expect("сборка");
+    assert_eq!(report["ok"], true, "сборка чистая: {report}");
+    let find = |scene: &SceneState, text: &str| {
+        scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref().map(|t| t.contains(text)).unwrap_or(false))
+            .map(|n| n.id.clone())
+            .expect(text)
+    };
+    let traffic = find(&scene, "Трафик");
+    let gateway = find(&scene, "заметка без формулы");
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{traffic}", "to": "{gateway}", "fromOutput": "peak_rps", "kind": "value"}}"#
+        ),
+    )
+    .expect("value-ребро");
+    let edge_id = scene
+        .canvas
+        .edges
+        .iter()
+        .find(|e| e.to_node == gateway)
+        .map(|e| e.id.clone())
+        .expect("ребро");
+    // Значение пролито — unmapped пуст
+    assert!(
+        !scene.unmapped_edges.contains(&edge_id),
+        "значение есть — ребро НЕ unmapped"
+    );
+    // Источник стал прозой: строка-присваивание удалена — значения нет
+    // (node_update_text — полный пересчёт; node_edit с text ленив — CR-012)
+    mcp_dispatch(
+        &mut scene,
+        &canvas_core::templates::TemplateRegistry::builtin(),
+        "node_update_text",
+        &serde_json::json!({
+            "id": traffic,
+            "text": "Трафик",
+        }),
+    )
+    .expect("правка источника");
+    assert!(
+        scene.unmapped_edges.contains(&edge_id),
+        "связь есть, значения нет — ребро unmapped"
+    );
+    // Возврат значения пересчётом снимает состояние
+    mcp_dispatch(
+        &mut scene,
+        &canvas_core::templates::TemplateRegistry::builtin(),
+        "node_update_text",
+        &serde_json::json!({
+            "id": traffic,
+            "text": "Трафик\npeak_rps = 1389 rps",
+        }),
+    )
+    .expect("возврат строки-источника");
+    assert!(
+        !scene.unmapped_edges.contains(&edge_id),
+        "значение вернулось — состояние снято"
+    );
+}
