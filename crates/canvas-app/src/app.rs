@@ -55,6 +55,9 @@ use crate::ui::{
     MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
+// PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — модель и
+// состояния (Loading/Ready/Stale), рендер/ввод — здесь (паттерн main stage).
+use crate::explain_ui::{self, ExplainBuild, ExplainSnapshot, ExplainState};
 // FR-037 MW1: line_kind/NumiLineKind/ExprLineResults/ExprResults и whatif-
 // типы использовались только вынесенным кодом; тестовые упоминания —
 // импортами внутри mod tests
@@ -67,9 +70,9 @@ use canvas_core::{
     analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
     nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at_lines,
     stage_edge_geometry, stage_layout, watched_dirs, AnalysisState, Canvas, CanvasStorage,
-    ClipboardBackend, Edge, FileEvent, FocusSeed, GridStyle, Language, Node, NodeChange, NodeKind,
-    Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex, StageLayout, StageMetrics,
-    Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
+    ClipboardBackend, Edge, FileEvent, FocusSeed, FocusSet, GridStyle, Language, LineageNodeId,
+    Node, NodeChange, NodeKind, Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex,
+    StageLayout, StageMetrics, Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
 };
 use canvas_ui::geometry::UiPoint;
 use canvas_ui::{HitStack, HitTarget, UiLayer};
@@ -191,6 +194,176 @@ fn truncate_chars(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
+}
+
+// --- PRD-0007 (FR-048 X2): хелперы кадра окна проверки ----------------------
+
+/// Screen-прямоугольник → world-квад (паттерн stage: позиция через
+/// screen_to_world, размер/радиус делятся на зум — константный экранный
+/// размер при любом зуме).
+fn screen_rect_quad(
+    camera: &Camera,
+    viewport: Vec2,
+    rect: [f32; 4],
+    fill: [f32; 4],
+    border: [f32; 4],
+    radius: f32,
+) -> CardInstance {
+    let zoom = camera.zoom();
+    CardInstance {
+        pos: camera.screen_to_world([rect[0], rect[1]], viewport),
+        size: [rect[2] / zoom, rect[3] / zoom],
+        fill,
+        border,
+        params: [radius / zoom, 0.0, 0.0, 1.0],
+    }
+}
+
+/// Кружок с центром в screen-точке → world-инстанс (паттерн `cards::dot`).
+fn screen_dot(
+    camera: &Camera,
+    viewport: Vec2,
+    center: [f32; 2],
+    diameter: f32,
+    fill: [f32; 4],
+) -> CardInstance {
+    let zoom = camera.zoom();
+    let world = camera.screen_to_world(center, viewport);
+    let r = diameter / 2.0 / zoom;
+    CardInstance {
+        pos: [world[0] - r, world[1] - r],
+        size: [diameter / zoom, diameter / zoom],
+        fill,
+        border: [0.0; 4],
+        params: [r, 0.0, 0.0, 1.0],
+    }
+}
+
+/// Точки кубической безье (`n` отсчётов, включая концы) — ветки дерева
+/// (прототип v4: от правого порта родителя к левому порту ребёнка).
+fn bezier_samples(points: [[f32; 2]; 4], n: usize) -> Vec<[f32; 2]> {
+    let [p0, c0, c1, p1] = points;
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n.max(1) as f32;
+            let u = 1.0 - t;
+            [
+                u * u * u * p0[0]
+                    + 3.0 * u * u * t * c0[0]
+                    + 3.0 * u * t * t * c1[0]
+                    + t * t * t * p1[0],
+                u * u * u * p0[1]
+                    + 3.0 * u * u * t * c0[1]
+                    + 3.0 * u * t * t * c1[1]
+                    + t * t * t * p1[1],
+            ]
+        })
+        .collect()
+}
+
+/// Сборка lineage-дерева по снапшоту сцены (общая для фонового потока и
+/// фолбэка): Ready по значениям либо Cycled-топология (AC-2.4).
+fn build_lineage_snapshot(
+    canvas: &Canvas,
+    solutions: &flow::FlowSolutions,
+    cycle: Option<&flow::CycleError>,
+    root: LineageNodeId,
+) -> Result<canvas_core::LineageTree, canvas_core::LineageError> {
+    match cycle {
+        Some(cycle) => canvas_core::build_lineage(
+            &canvas.clone(),
+            canvas_core::LineageFlow::Cycled(cycle),
+            root,
+        ),
+        None => {
+            let data = canvas_core::DataSnapshots::new();
+            canvas_core::build_lineage(
+                canvas,
+                canvas_core::LineageFlow::Ready {
+                    solutions,
+                    data: &data,
+                },
+                root,
+            )
+        }
+    }
+}
+
+/// PRD-0007 (X2, AC-1.2/G5): запуск сборки дерева — натив: фоновый поток
+/// (UI не блокируется, честный лоадер крутится), wasm/сбой потока:
+/// синхронный результат (Ready на первом же poll).
+fn spawn_lineage_build(
+    canvas: &Canvas,
+    solutions: &flow::FlowSolutions,
+    cycle: Option<&flow::CycleError>,
+    root: LineageNodeId,
+) -> ExplainBuild {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_canvas = canvas.clone();
+        let worker_solutions = solutions.clone();
+        let worker_cycle = cycle.cloned();
+        let worker_root = root.clone();
+        let spawned = std::thread::Builder::new()
+            .name("lineage-build".into())
+            .spawn(move || {
+                let tree = build_lineage_snapshot(
+                    &worker_canvas,
+                    &worker_solutions,
+                    worker_cycle.as_ref(),
+                    worker_root,
+                );
+                let _ = tx.send(tree);
+            });
+        match spawned {
+            Ok(_handle) => ExplainBuild::Native(rx),
+            // Поток не поднялся — синхронный фолбэк (окно честно ждёт)
+            Err(_) => ExplainBuild::Done(build_lineage_snapshot(canvas, solutions, cycle, root)),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Однопоточный рантайм: сборка синхронная (Ready на первом poll)
+        ExplainBuild::Done(build_lineage_snapshot(canvas, solutions, cycle, root))
+    }
+}
+
+/// PRD-0007 (F-4/AC-3.1): набор подсветки цепочки на канвасе из дерева
+/// снапшота (F-5: одна модель для окна и подсветки). Узлы — все `node_id`
+/// дерева, рёбра — все `via.edge_id`; индексы отсортированы (контракт
+/// FocusSet). Пучки подсвечивает OR-семантика рендера (линию пучка рисует
+/// доминанта); невалидные id (нода/ребро удалены) молча пропускаются.
+fn explain_chain_focus(canvas: &Canvas, tree: &canvas_core::LineageTree) -> FocusSet {
+    let mut set = FocusSet::empty();
+    let node_index: std::collections::HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let edge_index: std::collections::HashMap<&str, usize> = canvas
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id.as_str(), i))
+        .collect();
+    for node in &tree.nodes {
+        if let Some(&i) = node_index.get(node.node_id.as_str()) {
+            set.nodes.push(i);
+        }
+        for child in &node.children {
+            let Some(via) = &child.via else { continue };
+            if let Some(&i) = edge_index.get(via.edge_id.as_str()) {
+                set.edges.push(i);
+            }
+        }
+    }
+    set.nodes.sort_unstable();
+    set.nodes.dedup();
+    set.edges.sort_unstable();
+    set.edges.dedup();
+    set
 }
 
 // --- FR-038 (T-038.4): интеграция магнитной раскладки ----------------------
@@ -1118,6 +1291,14 @@ pub struct App {
     /// FR-042 (E3): открытый main stage (детализация пучка). None — режим
     /// выключен; Q6 — взаимоисключителен с полноэкранными оверлеями.
     main_stage: Option<MainStageState>,
+    /// PRD-0007 (FR-048 X2): открытое окно проверки цепочки расчёта
+    /// (Loading/Ready; Stale — чип внутри). None — окно закрыто. Взаимо-
+    /// исключителен с main stage (F-10) — открытие закрывает stage и наоборот.
+    explain: Option<ExplainState>,
+    /// PRD-0007 (AC-3.3, §9.2): сессионный кэш снапшота объяснения —
+    /// переживает закрытие окна; переоткрытие того же корня — мгновенно
+    /// (≤ 1 с, G1), без перестройки; чип — если модель изменилась.
+    explain_cache: Option<ExplainSnapshot>,
     /// FR-042 (E2): ребро пучка под курсором (live-индекс) — hover-бамп
     /// агрегированной линии; вычисляется на каждый кадр ввода (паттерн
     /// `hovered`), в кэш не пишется.
@@ -1406,6 +1587,9 @@ impl App {
             hovered: None,
             // FR-042: main stage закрыт; hover пучка пуст
             main_stage: None,
+            // PRD-0007 (X2): окно проверки закрыто, сессионный кэш пуст
+            explain: None,
+            explain_cache: None,
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             edge_drag: None,
@@ -6941,17 +7125,9 @@ impl App {
     /// (hover → выделенная нода → выделенная связь; O(V+E) — на 5k нод
     /// ~0.3–0.5 мс, кадры вне изменений не генерируются). Выделенная нода
     /// добавляется в яркий набор: выделение не гаснет (приоритет над фокусом).
-    fn update_focus_state(&mut self) {
-        // CR-001: мультивыделение без primary — семя из первой выделенной
-        // (фокус живёт и после сброса одиночного клика)
-        let selected = self
-            .selected
-            .or_else(|| self.selected_nodes.first().copied().map(Selection::Node));
-        let seed = focus_seed_of(self.hovered, selected);
-        let focus_on = self.settings.focus_mode;
-        // Цель затемнения: 1 — режим включён и семя есть; иначе всё гаснет
-        let target = f32::from(focus_on && seed.is_some());
-        // Фейд к новой цели (перезапуск при смене цели, продолжение — к той же)
+    /// Фейд затемнения фокуса к цели (общий механизм для T23-семени и
+    /// подсветки цепочки explain F-4 — один рендер-путь затемнения).
+    fn advance_focus_dim(&mut self, target: f32) {
         let needs_new_fade = match self.focus_fade {
             Some((_, to, _)) => (to - target).abs() > 1e-3,
             None => (self.focus_dim - target).abs() > 1e-3,
@@ -6968,6 +7144,32 @@ impl App {
                 self.focus_dim = from + (to - from) * focus_fade(elapsed);
             }
         }
+    }
+
+    fn update_focus_state(&mut self) {
+        // PRD-0007 (F-4/AC-3.1): открытое окно Ready — подсветка цепочки
+        // из снапшота дерева (F-5: одна модель для окна и подсветки),
+        // затемнение прочего — тем же фейдом. Loading не затемняет (У5:
+        // затемнение появляется атомарно с деревом). Режим фокуса T23
+        // не нужен — семя не участвует.
+        if let Some(tree) = self.explain.as_ref().and_then(|s| s.tree()) {
+            let set = explain_chain_focus(&self.scene.canvas, tree);
+            self.focus_nodes = set.nodes;
+            self.focus_edges = set.edges;
+            self.advance_focus_dim(1.0);
+            self.focus_pulse = None;
+            return;
+        }
+        // CR-001: мультивыделение без primary — семя из первой выделенной
+        // (фокус живёт и после сброса одиночного клика)
+        let selected = self
+            .selected
+            .or_else(|| self.selected_nodes.first().copied().map(Selection::Node));
+        let seed = focus_seed_of(self.hovered, selected);
+        let focus_on = self.settings.focus_mode;
+        // Цель затемнения: 1 — режим включён и семя есть; иначе всё гаснет
+        let target = f32::from(focus_on && seed.is_some());
+        self.advance_focus_dim(target);
         // «Дыхание»: рестарт при смене семени (режим включён), один цикл,
         // затем поле очищается — кадры для статики не нужны
         if focus_on {
@@ -7126,7 +7328,10 @@ impl App {
             | SettingsRow::ThemePreset
             | SettingsRow::SnapTolerance
             | SettingsRow::SnapSubZoom
-            | SettingsRow::SnapCoarseZoom => {
+            | SettingsRow::SnapCoarseZoom
+            // PRD-0007 (AC-2.3): dropdown «Лимит глубины explain-дерева» —
+            // применяется в apply_dropdown_choice, тумблером не является
+            | SettingsRow::ExplainDepthLimit => {
                 debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
                 return;
             }
@@ -7582,7 +7787,10 @@ impl App {
                         | SettingsRow::ThemePreset
                         | SettingsRow::SnapTolerance
                         | SettingsRow::SnapSubZoom
-                        | SettingsRow::SnapCoarseZoom => false,
+                        | SettingsRow::SnapCoarseZoom
+                        // PRD-0007: dropdown-строка в ветку Toggle не
+                        // попадает (row_kind = Dropdown), arm — для полноты
+                        | SettingsRow::ExplainDepthLimit => false,
                     };
                     // Pill-тумблер: трек (включён — акцент) + ручка-квад,
                     // позиция отражает значение (рисуется квадами)
@@ -7783,6 +7991,15 @@ impl App {
         match surface {
             // FR-042 (E3, инвариант 8): первый Esc закрывает открытый
             // main stage (при открытом stage прочие оверлеи закрыты)
+            // PRD-0007 (X2): окно проверки закрывается одним Esc
+            ui_registry::id::EXPLAIN => {
+                if self.explain.is_some() {
+                    self.close_explain();
+                    true
+                } else {
+                    false
+                }
+            }
             ui_registry::id::STAGE => self.main_stage.take().is_some(),
             // FR-027: двухэтапный Esc — подменю → меню → закрыто
             ui_registry::id::HELP_MENU => {
@@ -8034,6 +8251,18 @@ impl App {
                     return;
                 }
                 return;
+            }
+            ui_registry::KeyOwner::Explain => {
+                // PRD-0007 (X2): открытое окно проверки — Esc закрывает
+                // (§6.4: Ready/Stale → Closed); прочие клавиши — в лестницу
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && event.logical_key == Key::Named(NamedKey::Escape)
+                {
+                    self.close_explain();
+                    self.request_redraw();
+                    return;
+                }
             }
             ui_registry::KeyOwner::Stage => {
                 // Любая клавиша закрывает stage (8233–8239; Esc — 8141):
@@ -8904,6 +9133,10 @@ impl App {
         match MainStageState::open(&self.scene.canvas, &self.scene.bundles, edge_index) {
             Some(stage) => {
                 self.main_stage = Some(stage);
+                // PRD-0007 (F-10, У10): stage и окно проверки взаимо-
+                // исключительны; снапшот остаётся в сессионном кэше —
+                // возврат через «?» мгновенный (≤ 1 с)
+                self.close_explain();
                 self.bundle_hover = None;
                 self.request_redraw();
                 true
@@ -8982,6 +9215,12 @@ impl App {
                 self.click_minimap();
                 true
             }
+            ui_registry::id::EXPLAIN => {
+                // PRD-0007 (X2): ✕/чип/крошки/узлы; внутри окна мимо
+                // элементов — глотается (канвас клик не получает)
+                self.on_explain_click();
+                true
+            }
             ui_registry::id::DIALOG => {
                 self.click_dialog();
                 true
@@ -9048,6 +9287,11 @@ impl App {
             }
             ui_registry::id::DIALOG => {
                 self.request_redraw();
+                true
+            }
+            ui_registry::id::EXPLAIN => {
+                // Клик по фону (мимо окна) — закрытие (on_explain_click X2)
+                self.close_explain();
                 true
             }
             ui_registry::id::WHEEL => {
@@ -9979,6 +10223,576 @@ impl App {
             false
         }
     }
+    // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры -------
+
+    /// Открыть окно проверки (§6.4): сессионный кэш — мгновенный Ready
+    /// (AC-3.3, ≤ 1 с), иначе Loading с честным лоадером + фоновая сборка
+    /// (AC-1.2/G5). Повторный «?» на другую цифру — перестройка на новый
+    /// корень (У6: одна панель — один корень); main stage закрывается
+    /// (F-10 — оверлеи взаимоисключительны, снапшот остаётся в кэше).
+    fn open_explain(&mut self, root: LineageNodeId) {
+        // F-10 (Q6): открытие оверлея закрывает main stage
+        self.close_main_stage();
+        let revision = self.scene.revision;
+        if let Some(snap) = self.explain_cache.take() {
+            if snap.root == root && snap.revision == revision {
+                // Переоткрытие из кэша: Ready сразу, чип — если модель
+                // всё-таки изменилась (from_snapshot сравнивает ревизии)
+                self.explain = Some(ExplainState::from_snapshot(snap, revision));
+                self.request_redraw();
+                return;
+            }
+            // Чужой/устаревший снапшот не нужен: новый закэшируется при
+            // закрытии окна (гигиена памяти — держим только последний)
+        }
+        let build = spawn_lineage_build(
+            &self.scene.canvas,
+            &self.scene.flow_active,
+            self.scene.flow_cycle.as_ref(),
+            root.clone(),
+        );
+        self.explain = Some(ExplainState::loading(root, revision, build));
+        self.request_redraw();
+    }
+
+    /// Закрыть окно (Esc/✕/клик по фону/ошибка сборки): готовое дерево —
+    /// в сессионный кэш (AC-3.3, переход в Closed снапшот не уничтожает);
+    /// подсветка цепочки гаснет фейдом (F-4, цель 0 в update_focus_state).
+    fn close_explain(&mut self) {
+        if let Some(mut state) = self.explain.take() {
+            if let Some(tree) = state.take_tree() {
+                self.explain_cache = Some(ExplainSnapshot {
+                    root: state.root,
+                    revision: state.revision,
+                    tree,
+                });
+            }
+        }
+        self.focus_nodes.clear();
+        self.focus_edges.clear();
+        self.request_redraw();
+    }
+
+    /// Клик при открытом окне (§6.4): ✕/чип «Данные изменены»/мета-крошки/
+    /// узлы дерева; клик по фону (мимо окна) — закрытие, внутри окна мимо
+    /// элементов — глотается (канвас клик не получает).
+    fn on_explain_click(&mut self) {
+        let viewport = self.viewport_logical();
+        let win = explain_ui::window_rect(viewport);
+        // ✕ — закрыть (снапшот → сессионный кэш)
+        if point_in_rect(explain_ui::close_rect(win), self.cursor) {
+            self.close_explain();
+            return;
+        }
+        let ready = self.explain.as_ref().is_some_and(|s| s.is_ready());
+        if ready {
+            let stale_now = self
+                .explain
+                .as_ref()
+                .is_some_and(|s| s.revision != self.scene.revision);
+            // Чип «Данные изменены» — единственный путь Stale → Ready
+            // (AC-3.3): перестройка из нового снапшота, тот же корень
+            if stale_now && point_in_rect(explain_ui::chip_rect(win), self.cursor) {
+                let root = self.explain.as_ref().expect("готово").root.clone();
+                self.open_explain(root);
+                return;
+            }
+            // Мета-строка с крошками вида (X2: клик — возврат к корню)
+            if point_in_rect(explain_ui::meta_rect(win), self.cursor) {
+                if let Some(state) = self.explain.as_mut() {
+                    state.click_crumb(0);
+                }
+                self.request_redraw();
+                return;
+            }
+            // Узел дерева: hit по лейауту кадра (та же чистая функция,
+            // что в рендере — детерминизм рендер/ввод)
+            let body = explain_ui::body_rect(win);
+            let hit = self.explain.as_ref().and_then(|state| {
+                let tree = state.tree()?;
+                let vis = explain_ui::visibility(
+                    tree,
+                    state.view_root(),
+                    self.settings.explain_depth_limit,
+                    &state.expanded,
+                );
+                let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
+                let scale = explain_ui::fit_scale(layout.bounds, body);
+                explain_ui::node_at(&layout, scale, body, self.cursor)
+            });
+            if let Some(idx) = hit {
+                if let Some(state) = self.explain.as_mut() {
+                    let vis = explain_ui::visibility(
+                        state.tree().expect("дерево есть"),
+                        state.view_root(),
+                        self.settings.explain_depth_limit,
+                        &state.expanded,
+                    );
+                    let _click = state.click_node(idx, &vis);
+                }
+                self.request_redraw();
+                return;
+            }
+        }
+        // Клик по фону (мимо окна) — закрытие (§6.4 Ready/Stale → Closed)
+        if !point_in_rect(win, self.cursor) {
+            self.close_explain();
+            return;
+        }
+        self.request_redraw();
+    }
+
+    /// Полоса результата D под world-точкой (F-1/AC-1.1): Some — корень
+    /// explain-дерева (итог ноды, AC-1.4: константа — панель одного узла).
+    /// У ноды без вычисленного результата зоны нет (триггер не глушит
+    /// редактирование прозы). Геометрия — как в рендере (text.rs):
+    /// нижняя полоса карточки высотой RESULT_LINE_HEIGHT.
+    fn result_band_root_at(&self, world: Vec2) -> Option<LineageNodeId> {
+        let index = self.hovered?;
+        let node = self.scene.canvas.nodes.get(index)?;
+        match self.scene.expr_results.get(&node.id) {
+            Some(ExprOutcome::Ok(_)) => {}
+            _ => return None,
+        }
+        let band = [
+            node.x,
+            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
+            node.width,
+            RESULT_LINE_HEIGHT,
+        ];
+        point_in_rect(band, world).then(|| LineageNodeId::total(node.id.clone()))
+    }
+
+    /// Кадр окна проверки (§6.4) — модальный проход кадра (паттерн
+    /// stage_frame: квады + screen-тексты, рендерер выводит поверх всего).
+    /// Loading: окно + честный лоадер (кольцо + ротация подписей), канвас
+    /// НЕ затемняется (У5 — затемнение и подсветка атомарны с деревом).
+    /// Ready: дерево (ветки-безье + карточки узлов), чип Stale, футер.
+    fn explain_frame(&mut self, viewport: [f32; 2]) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut quads: Vec<CardInstance> = Vec::new();
+        let mut texts: Vec<OwnedScreenText> = Vec::new();
+        // Присваивается в ветке Ready; ранние выходы его не читают
+        let cursor_idx;
+        {
+            let Some(state) = self.explain.as_ref() else {
+                return (quads, texts);
+            };
+            let palette = ThemeColors::from_theme(self.settings.theme);
+            let camera = &self.camera;
+            let win = explain_ui::window_rect(viewport);
+            // Заголовок корня — из живой модели (тот же title_for, что у
+            // подписей проливания); в Loading дерева ещё нет
+            let root_title = self
+                .scene
+                .canvas
+                .node(&state.root.node_id)
+                .map(title_for)
+                .unwrap_or_else(|| "—".to_owned());
+            // Окно (затемнение фона НЕ рисуем: в Ready затемняет цепочку
+            // FocusView (F-4), в Loading затемнения нет вообще — У5)
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                win,
+                palette.menu_fill,
+                palette.palette_border,
+                14.0,
+            ));
+            // Шапка: заголовок + крошки + ✕ + чип Stale
+            texts.push(OwnedScreenText {
+                text: self.tr(keys::EXPLAIN_TITLE).to_owned(),
+                origin: [win[0] + 16.0, win[1] + 10.0],
+                width: (win[2] - 240.0).max(120.0),
+                font_size: 15.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            let meta = if state.is_ready() {
+                let tree = state.tree().expect("готово");
+                let path: Vec<String> = state
+                    .view_path
+                    .iter()
+                    .filter_map(|&i| tree.nodes.get(i).map(|n| n.title.clone()))
+                    .collect();
+                if path.len() > 1 {
+                    path.join(" → ")
+                } else {
+                    self.trf(keys::EXPLAIN_META, &[("title", root_title.as_str())])
+                }
+            } else {
+                self.trf(keys::EXPLAIN_META, &[("title", root_title.as_str())])
+            };
+            texts.push(OwnedScreenText {
+                text: meta,
+                origin: [win[0] + 16.0, win[1] + 32.0],
+                width: (win[2] - 240.0).max(120.0),
+                font_size: 11.5,
+                color: palette.quote,
+                align: TextAlign::Left,
+            });
+            let close = explain_ui::close_rect(win);
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                close,
+                [0.0; 4],
+                palette.palette_border,
+                7.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: "×".to_owned(),
+                origin: [close[0], close[1] + 2.0],
+                width: close[2],
+                font_size: 14.0,
+                color: palette.body,
+                align: TextAlign::Center,
+            });
+            // Чип «Данные изменены» (AC-3.3/F-5): модель изменилась после
+            // сборки — канвас и дерево не перерисовываются сами
+            if state.is_ready() && state.revision != self.scene.revision {
+                let chip = explain_ui::chip_rect(win);
+                quads.push(screen_rect_quad(
+                    camera,
+                    viewport,
+                    chip,
+                    color_to_rgba(palette.whatif_badge),
+                    palette.palette_border,
+                    14.0,
+                ));
+                texts.push(OwnedScreenText {
+                    text: self.tr(keys::EXPLAIN_STALE).to_owned(),
+                    origin: [chip[0], chip[1] + 5.0],
+                    width: chip[2],
+                    font_size: 11.5,
+                    color: Color::rgb(255, 255, 255),
+                    align: TextAlign::Center,
+                });
+            }
+            // --- Loading: честный лоадер (AC-1.2, У5) -------------------
+            if state.is_loading() {
+                let body = explain_ui::body_rect(win);
+                let cx = body[0] + body[2] / 2.0;
+                let cy = body[1] + body[3] / 2.0 - 20.0;
+                let elapsed = state.opened_at.elapsed().as_millis();
+                let spin = (elapsed as f32 / 900.0) * std::f32::consts::TAU;
+                for i in 0..10 {
+                    let angle = spin + i as f32 * std::f32::consts::TAU / 10.0;
+                    let p = [cx + angle.cos() * 14.0, cy + angle.sin() * 14.0];
+                    let mut fill = palette.accent;
+                    fill[3] = 0.25 + 0.75 * (i as f32 / 10.0);
+                    quads.push(screen_dot(camera, viewport, p, 6.0, fill));
+                }
+                let captions = [
+                    self.tr(keys::EXPLAIN_LOADER_1),
+                    self.tr(keys::EXPLAIN_LOADER_2),
+                    self.tr(keys::EXPLAIN_LOADER_3),
+                    self.tr(keys::EXPLAIN_LOADER_4),
+                    self.tr(keys::EXPLAIN_LOADER_5),
+                    self.tr(keys::EXPLAIN_LOADER_6),
+                    self.tr(keys::EXPLAIN_LOADER_7),
+                    self.tr(keys::EXPLAIN_LOADER_8),
+                    self.tr(keys::EXPLAIN_LOADER_9),
+                    self.tr(keys::EXPLAIN_LOADER_10),
+                    self.tr(keys::EXPLAIN_LOADER_11),
+                    self.tr(keys::EXPLAIN_LOADER_12),
+                ];
+                texts.push(OwnedScreenText {
+                    text: state.loader_caption(&captions).to_owned(),
+                    origin: [body[0], cy + 34.0],
+                    width: body[2],
+                    font_size: 12.5,
+                    color: palette.body,
+                    align: TextAlign::Center,
+                });
+                return (quads, texts);
+            }
+            // --- Ready: дерево (ветки + карточки), F-5 ------------------
+            let Some(tree) = state.tree() else {
+                return (quads, texts);
+            };
+            let body = explain_ui::body_rect(win);
+            let vis = explain_ui::visibility(
+                tree,
+                state.view_root(),
+                self.settings.explain_depth_limit,
+                &state.expanded,
+            );
+            let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
+            let scale = explain_ui::fit_scale(layout.bounds, body);
+            let local = |x: f32, y: f32| {
+                [
+                    body[0] + explain_ui::BODY_PAD + x * scale,
+                    body[1] + explain_ui::BODY_PAD + y * scale,
+                ]
+            };
+            // Ветки — под карточками (порядок рисования): безье из локальных
+            // px лейаута → screen → мир (паттерн polyline_dots: линия —
+            // цепочка перекрывающихся кружков)
+            for curve in &layout.curves {
+                let samples = bezier_samples(curve.points, 36);
+                let mut fill = if curve.to_leaf {
+                    palette.explain_leaf
+                } else {
+                    palette.accent
+                };
+                fill[3] = if curve.to_leaf { 0.9 } else { 0.55 };
+                for p in samples {
+                    let sp = local(p[0], p[1]);
+                    quads.push(screen_dot(camera, viewport, sp, 4.0, fill));
+                }
+            }
+            // Разделитель футера + статистика видимого дерева
+            let footer_line = [win[0], win[1] + win[3] - explain_ui::FOOTER_H, win[2], 1.0];
+            quads.push(screen_rect_quad(
+                camera,
+                viewport,
+                footer_line,
+                palette.palette_border,
+                [0.0; 4],
+                0.0,
+            ));
+            texts.push(OwnedScreenText {
+                text: self.trf(
+                    keys::EXPLAIN_STATS,
+                    &[
+                        ("lv", layout.levels.to_string().as_str()),
+                        ("n", layout.nodes.len().to_string().as_str()),
+                    ],
+                ),
+                origin: [win[0] + 16.0, win[1] + win[3] - 27.0],
+                width: 280.0,
+                font_size: 11.0,
+                color: palette.quote,
+                align: TextAlign::Left,
+            });
+            // Карточки узлов (F-3: значение + формула + адрес)
+            for laid in &layout.nodes {
+                let node = &tree.nodes[laid.idx];
+                let rect = {
+                    let [x, y] = local(laid.rect[0], laid.rect[1]);
+                    [x, y, laid.rect[2] * scale, laid.rect[3] * scale]
+                };
+                let hovered = state.cursor == Some(laid.idx);
+                // Цвет полосы рода узла: расчётный — акцент, лист — слот
+                // explain_leaf (контраст ≥ 3:1, AC-3.4), терминалы —
+                // ошибка/предупреждение
+                let strip = match node.kind {
+                    canvas_core::LineageNodeKind::Calc => palette.accent,
+                    canvas_core::LineageNodeKind::Leaf => palette.explain_leaf,
+                    canvas_core::LineageNodeKind::Cycle => color_to_rgba(palette.error),
+                    canvas_core::LineageNodeKind::Unmapped
+                    | canvas_core::LineageNodeKind::Unlinked
+                    | canvas_core::LineageNodeKind::Truncated => {
+                        color_to_rgba(palette.whatif_badge)
+                    }
+                };
+                quads.push(screen_rect_quad(
+                    camera,
+                    viewport,
+                    rect,
+                    palette.card_fill,
+                    if hovered {
+                        palette.accent
+                    } else {
+                        palette.palette_border
+                    },
+                    8.0,
+                ));
+                let strip_rect = [rect[0], rect[1], (4.0 * scale).max(2.0), rect[3]];
+                quads.push(screen_rect_quad(
+                    camera, viewport, strip_rect, strip, [0.0; 4], 0.0,
+                ));
+                // Шрифт карточки сжимается fit-масштабом вместе с геометрией
+                let font = |px: f32| (px * scale).max(8.0);
+                let tx = rect[0] + 10.0;
+                let text_w = rect[2] - 16.0;
+                // 1) Заголовок ноды-таблицы
+                texts.push(OwnedScreenText {
+                    text: node.title.clone(),
+                    origin: [tx, rect[1] + 7.0],
+                    width: text_w,
+                    font_size: font(12.0),
+                    color: palette.title,
+                    align: TextAlign::Left,
+                });
+                // 2) Значение (Ok — цифра; Err — диагностика; None — метка
+                // терминального узла: «цикл»/«не связано»/…)
+                let (value_str, value_color) = match &node.value {
+                    Some(Ok(v)) => (v.to_string(), palette.title),
+                    Some(Err(e)) => (e.clone(), palette.error),
+                    None => (
+                        match node.kind {
+                            canvas_core::LineageNodeKind::Cycle => {
+                                self.tr(keys::EXPLAIN_CYCLE).to_owned()
+                            }
+                            canvas_core::LineageNodeKind::Unmapped => {
+                                self.tr(keys::EXPLAIN_UNMAPPED).to_owned()
+                            }
+                            canvas_core::LineageNodeKind::Unlinked => {
+                                self.tr(keys::EXPLAIN_UNLINKED).to_owned()
+                            }
+                            canvas_core::LineageNodeKind::Truncated => {
+                                self.tr(keys::EXPLAIN_TRUNCATED).to_owned()
+                            }
+                            _ => String::new(),
+                        },
+                        palette.error,
+                    ),
+                };
+                texts.push(OwnedScreenText {
+                    text: value_str,
+                    origin: [tx, rect[1] + 25.0],
+                    width: text_w,
+                    font_size: font(13.5),
+                    color: value_color,
+                    align: TextAlign::Left,
+                });
+                // 3) Формула узла/строки (у листа и терминалов нет)
+                if let Some(formula) = &node.formula {
+                    texts.push(OwnedScreenText {
+                        text: formula.clone(),
+                        origin: [tx, rect[1] + 44.0],
+                        width: text_w,
+                        font_size: font(10.5),
+                        color: palette.body,
+                        align: TextAlign::Left,
+                    });
+                } else if node.kind == canvas_core::LineageNodeKind::Leaf {
+                    // Лист-константа: пометка «исходное значение» (AC-1.4)
+                    texts.push(OwnedScreenText {
+                        text: self.tr(keys::EXPLAIN_LEAF_TAG).to_owned(),
+                        origin: [tx, rect[1] + 44.0],
+                        width: text_w,
+                        font_size: font(10.5),
+                        color: palette.quote,
+                        align: TextAlign::Left,
+                    });
+                }
+                // 4) Адресная строка ребра (AC-2.1: квалифицированный адрес)
+                if let Some(via) = &laid.via {
+                    let mut addr = if let Some(name) = &via.from_output {
+                        self.trf(keys::EXPLAIN_ADDR_OUTPUT, &[("name", name.as_str())])
+                    } else if let Some(line) = via.from_line {
+                        self.trf(
+                            keys::EXPLAIN_ADDR_SLOT,
+                            &[("n", (line + 1).to_string().as_str())],
+                        )
+                    } else {
+                        String::new()
+                    };
+                    if let Some(param) = &via.to_param {
+                        if !addr.is_empty() {
+                            addr.push_str(" · ");
+                        }
+                        addr.push_str(param);
+                    }
+                    if !addr.is_empty() {
+                        texts.push(OwnedScreenText {
+                            text: addr,
+                            origin: [tx, rect[1] + 58.0],
+                            width: text_w,
+                            font_size: font(9.5),
+                            color: palette.quote,
+                            align: TextAlign::Left,
+                        });
+                    }
+                }
+                // Бейдж фронтира «+N глубже» (AC-2.3: ручное разворачивание)
+                if vis.frontier[laid.idx] {
+                    let bw = 66.0;
+                    let bh = 15.0;
+                    let badge = [
+                        rect[0] + rect[2] - bw - 6.0,
+                        rect[1] + rect[3] - bh - 5.0,
+                        bw,
+                        bh,
+                    ];
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        badge,
+                        palette.accent,
+                        [0.0; 4],
+                        7.0,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: self.trf(
+                            keys::EXPLAIN_EXPAND_BADGE,
+                            &[("n", vis.hidden_descendants[laid.idx].to_string().as_str())],
+                        ),
+                        origin: [badge[0], badge[1] + 1.5],
+                        width: bw,
+                        font_size: 9.5,
+                        color: Color::rgb(255, 255, 255),
+                        align: TextAlign::Center,
+                    });
+                }
+            }
+            // Hover узла дерева (кадр) — рамка акцентом
+            cursor_idx = explain_ui::node_at(&layout, scale, body, self.cursor);
+        }
+        if let Some(s) = self.explain.as_mut() {
+            s.cursor = cursor_idx;
+        }
+        (quads, texts)
+    }
+
+    /// Hover-«?» у цифры результата (§6.4 Closed → Hover, hover-only —
+    /// решение владельца): pill под курсором у полосы D; клик по цифре —
+    /// фолбэк-триггер (AC-1.1, единственный путь на таче).
+    fn explain_hover_pill(
+        &mut self,
+        viewport: [f32; 2],
+        quads: &mut Vec<CardInstance>,
+        texts: &mut Vec<OwnedScreenText>,
+    ) {
+        // Pill — только когда окно/stage/редактор не перехватывают курсор
+        if self.explain.is_some()
+            || self.main_stage.is_some()
+            || self.scheme_gallery.open
+            || self.onboarding.is_some()
+            || self.editing.is_some()
+        {
+            return;
+        }
+        let world = self.cursor_world();
+        let Some(index) = self.hovered else { return };
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return;
+        };
+        let Some(ExprOutcome::Ok(_)) = self.scene.expr_results.get(&node.id) else {
+            return;
+        };
+        let band = [
+            node.x,
+            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
+            node.width,
+            RESULT_LINE_HEIGHT,
+        ];
+        if !point_in_rect(band, world) {
+            return;
+        }
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let zoom = self.camera.zoom();
+        let origin = self
+            .camera
+            .screen_to_world([self.cursor[0] + 14.0, self.cursor[1] - 30.0], viewport);
+        quads.push(CardInstance {
+            pos: origin,
+            size: [22.0 / zoom, 18.0 / zoom],
+            fill: palette.accent,
+            border: [0.0; 4],
+            params: [5.0 / zoom, 0.0, 0.0, 1.0],
+        });
+        texts.push(OwnedScreenText {
+            text: "?".to_owned(),
+            origin: [self.cursor[0] + 14.0, self.cursor[1] - 28.0],
+            width: 22.0,
+            font_size: 13.0,
+            color: Color::rgb(255, 255, 255),
+            align: TextAlign::Center,
+        });
+    }
 
     fn on_left_button(&mut self, state: ElementState) {
         self.left_pressed = state == ElementState::Pressed;
@@ -10038,6 +10852,16 @@ impl App {
                     None => self.dismiss_transients_on_miss(),
                 }
                 let world = self.cursor_world();
+                // PRD-0007 (F-1/AC-1.1): клик по цифре результата (полоса D)
+                // — фолбэк-триггер окна проверки цепочки; у константы —
+                // панель одного узла (AC-1.4)
+                if self.explain.is_none() {
+                    if let Some(root) = self.result_band_root_at(world) {
+                        self.open_explain(root);
+                        self.request_redraw();
+                        return;
+                    }
+                }
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
@@ -12431,6 +13255,25 @@ impl ApplicationHandler<AppEvent> for App {
                 // подписи связей, бейджи анализа), ни тултипы не «просвечивают»
                 // сквозь затемнение (раньше stage шёл в мир-хвост ПОД текстом
                 // финального сегмента — регрессия «каши», дефект скриншота).
+                // PRD-0007 (X2): опрос фоновой сборки, чип устаревания и
+                // реакция на ошибку — ДО заимствований рендера (тост мутирует
+                // App, паттерн CP5)
+                if let Some(state) = self.explain.as_mut() {
+                    // AC-3.3/F-5: чип при любом изменении модели (канвас,
+                    // MCP, файл, подмена листа, Apply — все идут через
+                    // recompute_flow → ревизия)
+                    state.stale = state.revision != self.scene.revision;
+                    // Loading → Ready: затемнение и подсветка появляются
+                    // атомарно с деревом (У5) — фокус-набор соберёт
+                    // update_focus_state на этом же кадре
+                    state.poll();
+                }
+                if self.explain.as_ref().is_some_and(|s| s.is_failed()) {
+                    // Корень пропал между кликом и сборкой (AC-3.3):
+                    // закрыть с сообщением
+                    self.close_explain();
+                    self.show_toast(self.tr(keys::EXPLAIN_GONE).to_owned());
+                }
                 if let Some(stage) = self.main_stage.as_mut() {
                     if !stage.valid(&self.scene.canvas) {
                         self.main_stage = None;
@@ -12449,6 +13292,20 @@ impl ApplicationHandler<AppEvent> for App {
                     let (insts, texts) = self.stage_frame(stage_viewport, stage, layout);
                     stage_instances = insts;
                     stage_owned_texts = texts;
+                }
+                // PRD-0007 (X2): окно проверки — модальный проход кадра
+                // (взаимоисключительно с stage, F-10); при закрытом окне —
+                // hover-«?» у цифры результата (Closed → Hover)
+                if self.explain.is_some() {
+                    let (insts, texts) = self.explain_frame(stage_viewport);
+                    stage_instances = insts;
+                    stage_owned_texts = texts;
+                } else if self.main_stage.is_none() {
+                    self.explain_hover_pill(
+                        stage_viewport,
+                        &mut stage_instances,
+                        &mut stage_owned_texts,
+                    );
                 }
                 // FR-052 (U2): полосы в порядке отрисовки (слои по возрастанию)
                 // + Owned-тексты → заимствованные ScreenText (заём живёт до
@@ -13052,6 +13909,112 @@ impl ApplicationHandler<AppEvent> for App {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    // --- PRD-0007 (FR-048 X2): чистые хелперы окна проверки ----------------
+
+    /// explain_chain_focus (F-4): узлы дерева → индексы канваса, рёбра
+    /// via → индексы; невалидные id пропускаются; дубли (ромб) дедупятся.
+    #[test]
+    fn explain_chain_focus_maps_tree_to_canvas() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "", 100.0, 0.0));
+        canvas.nodes.push(Node::text("c", "", 200.0, 0.0));
+        canvas.edges.push(Edge {
+            id: "e1".into(),
+            from_node: "a".into(),
+            from_side: None,
+            to_node: "b".into(),
+            to_side: None,
+            label: None,
+            color: None,
+            style: None,
+            thickness: None,
+            from_line: None,
+            from_output: None,
+            to_param: None,
+            extra: Default::default(),
+        });
+        canvas.edges.push(Edge {
+            id: "e2".into(),
+            from_node: "b".into(),
+            from_side: None,
+            to_node: "c".into(),
+            to_side: None,
+            label: None,
+            color: None,
+            style: None,
+            thickness: None,
+            from_line: None,
+            from_output: None,
+            to_param: None,
+            extra: Default::default(),
+        });
+        // Дерево: корень c → b (e1!) → a (ребро e2 — чужой id), лист
+        // «ghost» — ноды нет на канвасе (молча пропускается)
+        let tree = canvas_core::LineageTree {
+            root: canvas_core::LineageNodeId::total("c"),
+            nodes: vec![
+                canvas_core::LineageNode {
+                    node_id: "c".into(),
+                    line: None,
+                    kind: canvas_core::LineageNodeKind::Calc,
+                    value: None,
+                    formula: None,
+                    title: "C".into(),
+                    label: None,
+                    children: vec![canvas_core::LineageChild {
+                        child: 1,
+                        via: Some(canvas_core::LineageVia {
+                            edge_id: "e1".into(),
+                            from_node: "b".into(),
+                            to_node: "c".into(),
+                            from_line: None,
+                            from_output: None,
+                            to_param: None,
+                        }),
+                    }],
+                },
+                canvas_core::LineageNode {
+                    node_id: "b".into(),
+                    line: None,
+                    kind: canvas_core::LineageNodeKind::Calc,
+                    value: None,
+                    formula: None,
+                    title: "B".into(),
+                    label: None,
+                    children: vec![canvas_core::LineageChild {
+                        child: 2,
+                        // Ромб-дубль ребра + несуществующее ребро
+                        via: Some(canvas_core::LineageVia {
+                            edge_id: "e1".into(),
+                            from_node: "a".into(),
+                            to_node: "b".into(),
+                            from_line: None,
+                            from_output: None,
+                            to_param: None,
+                        }),
+                    }],
+                },
+                canvas_core::LineageNode {
+                    node_id: "ghost".into(),
+                    line: None,
+                    kind: canvas_core::LineageNodeKind::Leaf,
+                    value: None,
+                    formula: None,
+                    title: "G".into(),
+                    label: None,
+                    children: Vec::new(),
+                },
+            ],
+        };
+        let set = explain_chain_focus(&canvas, &tree);
+        // Узлы: b=1, c=2 (ghost пропущен — ноды нет на канвасе; «a» в
+        // дерево не входит), отсортированы
+        assert_eq!(set.nodes, vec![1, 2]);
+        // Рёбра: e1 дважды → один индекс 0; e2 не встречался — нет
+        assert_eq!(set.edges, vec![0]);
+    }
 
     // FR-037 MW1: перенесённые в canvas-scene сущности (модель сцены,
     // двухуровневый refit) — здесь остались только canvas-render-зависимые

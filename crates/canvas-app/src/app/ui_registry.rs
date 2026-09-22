@@ -60,6 +60,9 @@ pub mod id {
     pub const SEARCH: &str = "search";
     /// Сессия редактирования текста (L2, scope — клики остаются в мире).
     pub const EDITOR: &str = "editor";
+    /// Окно проверки цепочки расчёта (PRD-0007 X2, L5, Block — мимо окна
+    /// закрывается и глотает; Esc/✕ закрывают, фон — close_explain).
+    pub const EXPLAIN: &str = "explain";
     /// Модальный диалог Да/Нет (L5, Block).
     pub const DIALOG: &str = "dialog";
     /// Галерея схем (L5, Block).
@@ -87,6 +90,9 @@ pub enum KeyOwner {
     /// Любая клавиша закрывает stage (фикс противоречия 8222: раньше
     /// Ctrl+F при stage открывал поиск вместо закрытия stage).
     Stage,
+    /// Окно проверки цепочки (PRD-0007 X2): Esc закрывает, прочие клавиши
+    /// идут в лестницу канваса (прежнее поведение X2 — только Esc).
+    Explain,
     /// Клавиатура идёт в канвас-лестницу (прежнее поведение).
     Canvas,
 }
@@ -104,6 +110,7 @@ pub fn key_owner(registry: &SurfaceRegistry) -> KeyOwner {
         Some(id::SEARCH) => KeyOwner::Search,
         Some(id::DIALOG) => KeyOwner::Dialog,
         Some(id::STAGE) => KeyOwner::Stage,
+        Some(id::EXPLAIN) => KeyOwner::Explain,
         Some(id::TEMPLATE_PANEL) => {
             // Фокус решает владелец (прежний гейт 8036: панель без фокуса
             // клавиши не перехватывает — Ctrl+P/лестница работают).
@@ -232,6 +239,14 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::EDITOR),
         );
     }
+    // PRD-0007 (X2): окно проверки цепочки — над stage в esc-стеке
+    // (Esc закрывает раньше лестницы), Esc/✕/фон — close_explain
+    if app.explain.is_some() {
+        reg.add(
+            SurfaceDecl::new(id::EXPLAIN, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::EXPLAIN),
+        );
+    }
     if app.dialog.is_some() {
         reg.add(
             SurfaceDecl::new(id::DIALOG, UiLayer::Modals, CapturePolicy::Block)
@@ -297,6 +312,7 @@ const VISUAL_ORDER: &[&str] = &[
     id::GALLERY,
     id::ONBOARDING,
     id::DIALOG,
+    id::EXPLAIN,
     id::STAGE,
 ];
 
@@ -512,6 +528,14 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(app.dialog_rect()), "dialog"));
+        }
+        id::EXPLAIN => {
+            // Окно проверки: rect окна — pick-зона; внутри обработчик
+            // ✕/чип/крошки/узлы (on_explain_click X2), фон — Backdrop
+            let win = crate::explain_ui::window_rect([vw, vh]);
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(win), "explain-window"));
         }
         id::GALLERY => {
             let registry = canvas_core::schemes::SchemeRegistry::embedded();

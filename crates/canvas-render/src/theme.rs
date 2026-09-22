@@ -91,6 +91,10 @@ pub struct ThemeColors {
     /// Затемнение фона main stage (FR-042 §7.5, альфа-аппроксимация):
     /// тёмная 0.6 / светлая 0.5 (уточнение — демо E3, коридор PRD 0.55–0.65).
     pub stage_dim: [f32; 4],
+    /// PRD-0007 (F-4/AC-3.4): цвет листа-константы в explain-дереве
+    /// (полоса карточки и ветка к листу). Источник: `EXPLAIN_LEAF` /
+    /// `EXPLAIN_LEAF_LIGHT` tokens.rs — по теме (контраст ≥ 3:1).
+    pub explain_leaf: [f32; 4],
 }
 
 impl ThemeColors {
@@ -160,6 +164,8 @@ impl ThemeColors {
                 canvas_core::tokens::HUD[2],
             ),
             stage_dim: [0.02, 0.02, 0.04, 0.6],
+            // PRD-0007: лист explain-дерева — #9fd6ff (прототип v4).
+            explain_leaf: canvas_core::tokens::EXPLAIN_LEAF,
         }
     }
 
@@ -225,6 +231,9 @@ impl ThemeColors {
                 canvas_core::tokens::HUD[2],
             ),
             stage_dim: [0.02, 0.02, 0.04, 0.5],
+            // PRD-0007: лист explain-дерева — затемнённый слот (AC-3.4:
+            // контраст к светлому фону ≥ 3:1).
+            explain_leaf: canvas_core::tokens::EXPLAIN_LEAF_LIGHT,
         }
     }
 

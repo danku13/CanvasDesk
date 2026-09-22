@@ -38,6 +38,16 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
             (b * 255.0).round() as u8,
         )
     };
+    // PRD-0007 (F-4/AC-3.4): слот explain_leaf в JSON-пресетах не хранится
+    // (валидатор I-47.1 фиксирует набор ключей) — выводится по яркости фона:
+    // светлый фон → затемнённый слот EXPLAIN_LEAF_LIGHT, тёмный → EXPLAIN_LEAF
+    // (те же константы, что dark()/light() в theme.rs; контраст ≥ 3:1).
+    let [br, bg, bb, _] = c["background"];
+    let explain_leaf = if 0.2126 * br + 0.7152 * bg + 0.0722 * bb > 0.5 {
+        canvas_core::tokens::EXPLAIN_LEAF_LIGHT
+    } else {
+        canvas_core::tokens::EXPLAIN_LEAF
+    };
     ThemeColors {
         background: bytes("background"),
         grid_minor: rgb3("grid_minor"),
@@ -76,6 +86,7 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         error: color("error"),
         hud: color("hud"),
         stage_dim: rgba("stage_dim"),
+        explain_leaf,
     }
 }
 
