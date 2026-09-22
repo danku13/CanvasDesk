@@ -2,8 +2,8 @@
   "id": "com.canvasdesk.scheme.unit-economics",
   "name_ru": "Юнит-экономика",
   "name_en": "Unit economics",
-  "description_ru": "Маржа из цены и себестоимости, LTV на срок жизни, соотношение с ценой привлечения и окупаемость через проливание в параметры.",
-  "description_en": "Margin from price and COGS, LTV over lifetime, the ratio against acquisition cost and payback via parameter spill.",
+  "description_ru": "Маржа из цены и себестоимости, LTV на срок жизни, соотношение с ценой привлечения и окупаемость привлечения.",
+  "description_en": "Margin from price and COGS, LTV over lifetime, the ratio against acquisition cost and acquisition payback.",
   "category": "business",
   "category_ru": "Бизнес",
   "category_en": "Business",
@@ -28,7 +28,7 @@
         "width": 260,
         "height": 220,
         "text": "Продуктовая единица\nЭкономика пользователя в месяц: цена подписки и себестоимость обслуживания.\n\nprice = 10 $\ncogs = 4 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "margin",
@@ -48,7 +48,7 @@
         "width": 260,
         "height": 180,
         "text": "Срок жизни\nСколько месяцев пользователь остаётся с продуктом.\n\nmonths = 36",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "ltv",
@@ -68,7 +68,7 @@
         "width": 280,
         "height": 180,
         "text": "CAC\nЦена привлечения одного пользователя.\n\ncac = 120 $",
-        "color": "1"
+        "color": "5"
       },
       {
         "id": "ratio",
@@ -97,7 +97,7 @@
         "y": 300,
         "width": 320,
         "height": 220,
-        "text": "Вердикт\nСоотношение ниже здоровой нормы: привлечение дорогое.\nВыделите цифру соотношения — цепочка покажет путь от цены и себестоимости.\nПоднимите цену — маржа и LTV пересчитаются по всей цепочке.",
+        "text": "Вердикт\nСоотношение ниже здоровой нормы: привлечение дорогое.\nСценарий на цене покажет дельты маржи и окупаемости без правки базы.\nПоднимите цену — маржа и LTV пересчитаются по всей цепочке.",
         "color": "4"
       }
     ],
