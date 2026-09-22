@@ -37,7 +37,7 @@ pub use camera::Camera;
 pub use glyphon::Color;
 pub use guides::{GuideLine, GuideSource, GuidesFrame};
 pub use renderer::{
-    FrameOverlay, FrameStats, Renderer, SceneView, Selection, SpillView, WhatIfNode,
+    FrameOverlay, FrameStats, Renderer, SceneView, ScreenBand, Selection, SpillView, WhatIfNode,
 };
 pub use stage::{stage_rect_screen, StageTransform};
 pub use stats::FrameMeter;

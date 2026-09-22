@@ -58,7 +58,7 @@ fn headless_gfm_body_quads_draw() {
             editing: None,
             editing_buffer: None,
             overlay_texts: &[],
-            screen_texts: &[],
+            screen_bands: &[],
             zplan: &zplan,
             edge_labels: &[],
             focus: canvas_render::cards::FocusView::EMPTY,
