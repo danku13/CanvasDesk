@@ -114,8 +114,9 @@ pub use layout::{
     plan_related_layout, LayoutMode, LayoutPlan, LEVEL_GAP, RADIAL_RING_STEP, SIBLING_GAP,
 };
 pub use lineage::{
-    build_lineage, lineage_deltas, LineageChild, LineageDelta, LineageError, LineageFlow,
-    LineageNode, LineageNodeId, LineageNodeKind, LineageTree, LineageVia, LINEAGE_MAX_NODES,
+    build_lineage, chain_coverage, explain_text, lineage_deltas, ChainCoverage, LineageChild,
+    LineageDelta, LineageError, LineageFlow, LineageNode, LineageNodeId, LineageNodeKind,
+    LineageTree, LineageVia, LINEAGE_MAX_NODES,
 };
 pub use model::{
     enclosing_group_indices, group_add_children, group_children, group_expand_to_children,

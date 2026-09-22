@@ -482,6 +482,10 @@ pub mod ui {
             crate::i18n::keys::HK_WHATIF,
         ),
         (crate::i18n::keys::HKEY_F, crate::i18n::keys::HK_EDGE_FOCUS),
+        (
+            crate::i18n::keys::HKEY_SPACE,
+            crate::i18n::keys::HK_EXPLAIN_STEP,
+        ),
     ];
 
     /// Полная высота панели хоткеев (FR-004): паддинги + заголовок +

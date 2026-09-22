@@ -1011,6 +1011,207 @@ pub fn lineage_deltas(
     deltas
 }
 
+// --- Текстовая выдача объяснения (F-9, X6) --------------------------------
+
+/// Человекочитаемая линейная развёртка дерева происхождения — MCP-инструмент
+/// `explain_number` (F-9, must: решение владельца «MCP-инструменты в ту же
+/// итерацию»; персона 4 §4 — ИИ-агент готовится к защите).
+///
+/// Требование PRD-0007: «линейная развёртка дерева с адресами и значениями»:
+/// каждый узел — самодостаточная строка (заголовок таблицы, адрес
+/// `node_id[#строка]`, значение/терминал, формула/пометка листа, канал
+/// прихода значения — выход/строка/проливание/ребро). Развёртка — DFS
+/// предзаказ ([`LineageTree::nodes`] уже хранится в этом порядке), отступ
+/// кодирует глубину; нумерация сквозная (родитель раньше ребёнка, ромб
+/// разворачивается — как в окне проверки). Итеративный проход (глубина
+/// дерева не ограничена — цепочка 1000+ нод, G5). Чистая функция.
+pub fn explain_text(tree: &LineageTree) -> String {
+    // Один линейный проход (предзаказ — родитель раньше ребёнка):
+    // глубины всех узлов по children-индексам + канал прихода значения
+    // (адресация ребра родителя) на каждый узел.
+    let mut depth = vec![0usize; tree.nodes.len()];
+    let mut channel: Vec<Option<String>> = vec![None; tree.nodes.len()];
+    for (index, node) in tree.nodes.iter().enumerate() {
+        for child in &node.children {
+            if child.child > index && child.child < tree.nodes.len() {
+                depth[child.child] = depth[index] + 1;
+                channel[child.child] = Some(match &child.via {
+                    Some(via) => {
+                        let mut text = match (&via.to_param, &via.from_output, via.from_line) {
+                            (Some(param), _, _) => format!(" · пролито в параметр {param}"),
+                            (_, Some(output), _) => format!(" · через выход {output}"),
+                            (_, _, Some(line)) => format!(" · через строку {}", line + 1),
+                            (None, None, None) => " · через value-связь".to_owned(),
+                        };
+                        text.push_str(&format!(" (ребро {})", via.edge_id));
+                        text
+                    }
+                    // Локальная переменная Numi-листа / переход «итог →
+                    // последняя формульная строка» — ребра канваса нет.
+                    None => " · локальная переменная листа".to_owned(),
+                });
+            }
+        }
+    }
+    let mut out = String::new();
+    for (index, node) in tree.nodes.iter().enumerate() {
+        if index == 0 {
+            // Корень — заголовок развёртки (цифра, чью цепочку объясняем).
+            out.push_str("Цепочка расчёта: ");
+        } else {
+            // Отступ глубины (2 пробела на уровень) + сквозной номер.
+            for _ in 0..depth[index] {
+                out.push_str("  ");
+            }
+            out.push_str(&format!("{index}. "));
+        }
+        // Заголовок таблицы + машинный адрес (node_id и строка Numi-листа).
+        out.push_str(&node.title);
+        out.push_str(" [");
+        out.push_str(&node.node_id);
+        if let Some(line) = node.line {
+            out.push_str(&format!(":{line}"));
+        }
+        out.push(']');
+        // Значение / ошибка / терминал.
+        match &node.value {
+            Some(Ok(value)) => out.push_str(&format!(" = {value}")),
+            Some(Err(error)) => out.push_str(&format!(" — ошибка: {error}")),
+            None => match node.kind {
+                LineageNodeKind::Cycle => out.push_str(" — цикл (значение не определено)"),
+                LineageNodeKind::Unmapped => {
+                    out.push_str(" — значение не подставлено");
+                }
+                LineageNodeKind::Unlinked => {
+                    let label = node.label.as_deref().unwrap_or("вход");
+                    out.push_str(&format!(" — не связано: {label}"));
+                }
+                LineageNodeKind::Truncated => {
+                    out.push_str(&format!(
+                        " — усечено: достигнут бюджет {LINEAGE_MAX_NODES} узлов"
+                    ));
+                }
+                _ => {}
+            },
+        }
+        // Формула расчётного узла / пометка листа («исходное значение»).
+        if let Some(formula) = &node.formula {
+            out.push_str(&format!(" · формула: {formula}"));
+        } else if node.kind == LineageNodeKind::Leaf {
+            out.push_str(" · исходное значение");
+        }
+        if let Some(text) = &channel[index] {
+            out.push_str(text);
+        }
+        out.push('\n');
+    }
+    // Итоговая статистика — агенту объём объяснения без парсинга строк.
+    let leaves = tree
+        .nodes
+        .iter()
+        .filter(|node| node.kind == LineageNodeKind::Leaf)
+        .count();
+    out.push_str(&format!(
+        "Всего узлов: {} (листьев: {})",
+        tree.nodes.len(),
+        leaves
+    ));
+    out
+}
+
+// --- Покрытие цепочками (F-12, X6) -----------------------------------------
+
+/// Статистика индикатора «Цепочки: N%» (F-12, should — решение владельца,
+/// раунд 2 (в); opt-in настройка FR-039). Доля вычисляемых цифр (итоги нод
+/// + построчные результаты), чья цепочка происхождения доходит до листьев.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainCoverage {
+    /// Всего вычисляемых цифр: итоги нод со значением `Ok` + построчные
+    /// результаты (`FlowSolutions.lines` — хранятся только вычисленные).
+    pub total: usize,
+    /// Из них цепочка доходит до листьев: в дереве нет терминалов
+    /// «цикл»/«значение не подставлено»/«не связано»/«усечено» и значение
+    /// корня — `Ok` (ошибка вычисления обрывает цепочку так же, как
+    /// неподставленный вход).
+    pub covered: usize,
+}
+
+impl ChainCoverage {
+    /// Процент покрытия 0..=100; `None` — вычисляемых цифр нет (индикатор
+    /// скрывается — процент не определён).
+    pub fn percent(&self) -> Option<u8> {
+        if self.total == 0 {
+            return None;
+        }
+        Some(((self.covered as f64 / self.total as f64) * 100.0).round() as u8)
+    }
+}
+
+/// Посчитать покрытие цепочками для канваса (F-12). Чистая функция над
+/// той же парой (канвас, пересчёт), что [`build_lineage`]. Вычисляемые
+/// цифры: итоги формульных нод (все записи — включая Err: цифра с
+/// ошибкой вычисляемая, но её цепочка обрывается) + вычисляемые строки
+/// Numi-листов (`Sheet::build` — фенсы и `\=` как в движке). Для каждой
+/// цифры строится её дерево (та же семантика, что окно проверки —
+/// инвариант F-5) и проверяется на терминалы. Опт-индикатор: вызывается
+/// только при включённой настройке (FR-039), стоимость —
+/// O(цифры × размер дерева), на демо-модели мгновенно, на 1000 нод —
+/// фоновая нагрузка вне кадра.
+pub fn chain_coverage(canvas: &Canvas, flow: LineageFlow) -> ChainCoverage {
+    // Кандидаты: (node_id, line) всех вычисляемых цифр. Итоги формульных
+    // нод (все записи, Ok и Err) — только в Ready; в Cycled значений нет
+    // нигде (0% — модель сломана).
+    let mut candidates: Vec<LineageNodeId> = match flow {
+        LineageFlow::Ready { solutions, .. } => solutions
+            .outputs
+            .keys()
+            .map(|node_id| LineageNodeId::total(node_id.clone()))
+            .collect(),
+        LineageFlow::Cycled(_) => Vec::new(),
+    };
+    // Вычисляемые строки текстовых нод (Assignment/Expression — фенсы
+    // исключены, `\=` снят — тот же детектор, что у движка).
+    for node in &canvas.nodes {
+        let sheet = Sheet::build(node);
+        for (index, kind) in sheet.kinds.iter().enumerate() {
+            if matches!(
+                kind,
+                Some(NumiLineKind::Assignment { .. } | NumiLineKind::Expression)
+            ) {
+                candidates.push(LineageNodeId::line(node.id.clone(), index));
+            }
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    let mut stat = ChainCoverage {
+        total: candidates.len(),
+        covered: 0,
+    };
+    for root in candidates {
+        let tree = match build_lineage(canvas, flow, root) {
+            Ok(tree) => tree,
+            // Построить дерево не удалось (нестандартный корень) — цифра
+            // вычисляемая, но цепочка не объясняется: не покрыта.
+            Err(_) => continue,
+        };
+        let root_ok = matches!(&tree.nodes[0].value, Some(Ok(_)));
+        let clean = tree.nodes.iter().all(|node| {
+            !matches!(
+                node.kind,
+                LineageNodeKind::Cycle
+                    | LineageNodeKind::Unmapped
+                    | LineageNodeKind::Unlinked
+                    | LineageNodeKind::Truncated
+            )
+        });
+        if root_ok && clean {
+            stat.covered += 1;
+        }
+    }
+    stat
+}
+
 // --- Тесты (верификационный список §9.4 PRD-0007) ---
 
 #[cfg(test)]
@@ -1018,7 +1219,7 @@ mod tests {
     use super::*;
     use crate::csv::parse_csv;
     use crate::flow::{propagate_with_lines_data, WhatIfOverrides};
-    use crate::model::Node;
+    use crate::model::{Edge, Node, Side};
 
     /// Нода-заметка с Numi-текстом.
     fn sheet(canvas: &mut Canvas, id: &str, text: &str, x: f32) {
@@ -1658,5 +1859,337 @@ mod tests {
             children: Vec::new(),
         });
         assert!(lineage_deltas(&base, &extra).is_empty());
+    }
+
+    /// F-9 (X6): линейная развёртка — корень без отступа, дети с отступом
+    /// и сквозной нумерацией, значения/формулы/каналы в строках.
+    #[test]
+    fn explain_text_linear_deployment() {
+        let mut tree = LineageTree {
+            root: LineageNodeId::total("cost"),
+            nodes: Vec::new(),
+        };
+        // cost = arpu + rent; arpu (calc) ← ad (leaf); rent (leaf).
+        tree.nodes.push(LineageNode {
+            node_id: "cost".into(),
+            line: None,
+            kind: LineageNodeKind::Calc,
+            value: Some(Ok(Value::scalar(1240.0))),
+            formula: Some("total = arpu + rent".into()),
+            title: "Итог".into(),
+            label: None,
+            children: vec![
+                LineageChild {
+                    child: 1,
+                    via: Some(LineageVia {
+                        edge_id: "e1".into(),
+                        from_node: "arpu".into(),
+                        to_node: "cost".into(),
+                        from_line: None,
+                        from_output: Some("arpu".into()),
+                        to_param: None,
+                    }),
+                },
+                LineageChild {
+                    child: 2,
+                    via: None, // локальная переменная листа
+                },
+            ],
+        });
+        tree.nodes.push(LineageNode {
+            node_id: "ad".into(),
+            line: None,
+            kind: LineageNodeKind::Calc,
+            value: Some(Ok(Value::scalar(810.0))),
+            formula: Some("arpu = ads * price".into()),
+            title: "Выручка".into(),
+            label: None,
+            children: vec![LineageChild {
+                child: 3,
+                via: Some(LineageVia {
+                    edge_id: "e2".into(),
+                    from_node: "ad".into(),
+                    to_node: "arpu".into(),
+                    from_line: Some(1),
+                    from_output: None,
+                    to_param: None,
+                }),
+            }],
+        });
+        tree.nodes.push(LineageNode {
+            node_id: "cost".into(),
+            line: Some(3),
+            kind: LineageNodeKind::Leaf,
+            value: Some(Ok(Value::scalar(620.0))),
+            formula: None,
+            title: "Аренда".into(),
+            label: None,
+            children: Vec::new(),
+        });
+        tree.nodes.push(LineageNode {
+            node_id: "ad".into(),
+            line: Some(1),
+            kind: LineageNodeKind::Leaf,
+            value: Some(Ok(Value::scalar(100.0))),
+            formula: None,
+            title: "Трафик".into(),
+            label: None,
+            children: Vec::new(),
+        });
+        let text = explain_text(&tree);
+        let lines: Vec<&str> = text.lines().collect();
+        // Корень — заголовок без номера; статистика в последней строке.
+        assert!(
+            lines[0].starts_with("Цепочка расчёта: Итог [cost] = 1240"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains("формула: total = arpu + rent"),
+            "{}",
+            lines[0]
+        );
+        // Дети: отступ + сквозная нумерация + канал (выход / локальная переменная).
+        assert!(
+            lines[1].starts_with("  1. Выручка [ad] = 810"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[1].contains("через выход arpu (ребро e1)"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].starts_with("  2. Аренда [cost:3] = 620"),
+            "{}",
+            lines[2]
+        );
+        assert!(lines[2].contains("исходное значение"), "{}", lines[2]);
+        assert!(
+            lines[2].contains("локальная переменная листа"),
+            "{}",
+            lines[2]
+        );
+        // Внук: двойной отступ, канал «через строку N» (from_line + 1).
+        assert!(
+            lines[3].starts_with("    3. Трафик [ad:1] = 100"),
+            "{}",
+            lines[3]
+        );
+        assert!(
+            lines[3].contains("через строку 2 (ребро e2)"),
+            "{}",
+            lines[3]
+        );
+        assert_eq!(lines[4], "Всего узлов: 4 (листьев: 2)");
+    }
+
+    /// F-9 (X6): терминальные узлы — цикл/не связано/не подставлено/усечено
+    /// и ошибка значения — текстом, без паники на пустом дереве.
+    #[test]
+    fn explain_text_terminals_and_errors() {
+        // Пустое дерево — только корневой заголовок и статистика.
+        let empty = LineageTree {
+            root: LineageNodeId::total("x"),
+            nodes: Vec::new(),
+        };
+        assert_eq!(explain_text(&empty), "Всего узлов: 0 (листьев: 0)");
+
+        let mut tree = LineageTree {
+            root: LineageNodeId::total("x"),
+            nodes: Vec::new(),
+        };
+        tree.nodes.push(LineageNode {
+            node_id: "x".into(),
+            line: None,
+            kind: LineageNodeKind::Calc,
+            value: Some(Err("деление на ноль".into())),
+            formula: None,
+            title: "Битый".into(),
+            label: None,
+            children: (1..5)
+                .map(|child| LineageChild { child, via: None })
+                .collect(),
+        });
+        let terminals = [
+            (LineageNodeKind::Cycle, "цикл (значение не определено)"),
+            (LineageNodeKind::Unmapped, "значение не подставлено"),
+            (LineageNodeKind::Unlinked, "не связано: npl"),
+            (LineageNodeKind::Truncated, "усечено"),
+        ];
+        for (kind, _needle) in terminals {
+            let label = if kind == LineageNodeKind::Unlinked {
+                Some("npl".to_owned())
+            } else {
+                None
+            };
+            tree.nodes.push(LineageNode {
+                node_id: format!("t{:?}", kind),
+                line: None,
+                kind,
+                value: None,
+                formula: None,
+                title: "Т".into(),
+                label,
+                children: Vec::new(),
+            });
+        }
+        let text = explain_text(&tree);
+        assert!(text.contains("— ошибка: деление на ноль"), "{text}");
+        for (_, needle) in terminals {
+            assert!(text.contains(needle), "{needle} absent: {text}");
+        }
+        // Статистика: листья из терминалов не считаются.
+        assert!(text.ends_with("Всего узлов: 5 (листьев: 0)"), "{text}");
+    }
+
+    /// F-9 (X6): глубина на цепочке 1005 нод — итеративный проход, отступы
+    /// растут линейно, порядок предзаказа не ломается (G5-паритет).
+    #[test]
+    fn explain_text_deep_chain_no_recursion() {
+        const N: usize = 1005;
+        let mut tree = LineageTree {
+            root: LineageNodeId::total("n0"),
+            nodes: Vec::new(),
+        };
+        for index in 0..N {
+            tree.nodes.push(LineageNode {
+                node_id: format!("n{index}"),
+                line: None,
+                kind: if index + 1 < N {
+                    LineageNodeKind::Calc
+                } else {
+                    LineageNodeKind::Leaf
+                },
+                value: Some(Ok(Value::scalar(index as f64))),
+                formula: None,
+                title: format!("Н{index}"),
+                label: None,
+                children: if index + 1 < N {
+                    vec![LineageChild {
+                        child: index + 1,
+                        via: None,
+                    }]
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        let text = explain_text(&tree);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), N + 1, "все узлы + статистика");
+        // Последний узел — глубина N-1: отступ 2·(N-1) пробелов.
+        let last = lines[N - 1];
+        let indent = last.len() - last.trim_start().len();
+        assert_eq!(indent, 2 * (N - 1));
+        assert!(text.ends_with(&format!("Всего узлов: {N} (листьев: 1)")));
+    }
+
+    /// F-12 (X6): покрытие цепочками — связанная модель: 100% (итоги +
+    /// построчные результаты); висячее проливание в параметр шаблона от
+    /// ноды без значения даёт unmapped-терминал — цифра приёмника не
+    /// покрыта; при цикле — 0% (значений нет).
+    #[test]
+    fn chain_coverage_counts_explained_digits() {
+        // a = 5 (константа) → b = $in × 2 (итог + построчный результат).
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "a", "A\n= 5", 0.0);
+        sheet(&mut canvas, "b", "B\n= $in × 2", 300.0);
+        canvas.edges.push(Edge::new(
+            "e1",
+            "a",
+            Some(Side::Right),
+            "b",
+            Some(Side::Left),
+        ));
+        canvas.edges[0].set_flow_kind(crate::flow::FlowKind::Value);
+        let solutions = crate::flow::propagate_with_lines(&canvas, &WhatIfOverrides::default())
+            .expect("без циклов");
+        let data = crate::DataSnapshots::new();
+        let stat = chain_coverage(
+            &canvas,
+            LineageFlow::Ready {
+                solutions: &solutions,
+                data: &data,
+            },
+        );
+        // Цифры: итог a (Ok 5), строка a:1 (Ok 5), итог b (Ok 10), строка
+        // b:1 (Ok 10) — все объяснимы (лист a / calc b через ребро).
+        assert_eq!(stat.total, 4, "2 итога + 2 построчных");
+        assert_eq!(stat.covered, 4);
+        assert_eq!(stat.percent(), Some(100));
+
+        // Висячее проливание: a — проза (значения нет), шаблонная t с
+        // параметром-дефолтом считает итог (R-1: проливание без значения →
+        // дефолт), но в дереве t unmapped-терминал «параметр rate» —
+        // цепочка до листьев не доходит (покрытие 0% при вычислимой цифре).
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "a", "просто текст", 0.0);
+        let mut node = Node::text("t", "Сетка", 300.0, 0.0);
+        let mut params = BTreeMap::new();
+        params.insert(
+            "rate".to_owned(),
+            crate::templates::TemplateParam {
+                num: 2.0,
+                unit: None,
+            },
+        );
+        node.set_template(Some(crate::templates::TemplateRef {
+            id: "grid".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "$rate × 3".to_owned(),
+            params,
+            icon: "custom".to_owned(),
+            color: "#4f8cff".to_owned(),
+            name: Some("Сетка".to_owned()),
+            outputs: Vec::new(),
+        }));
+        canvas.nodes.push(node);
+        let mut edge = Edge::new("e1", "a", None, "t", None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.to_param = Some("rate".to_owned());
+        canvas.add_edge(edge);
+        let solutions = crate::flow::propagate_with_lines(&canvas, &WhatIfOverrides::default())
+            .expect("без циклов");
+        let stat = chain_coverage(
+            &canvas,
+            LineageFlow::Ready {
+                solutions: &solutions,
+                data: &DataSnapshots::new(),
+            },
+        );
+        assert_eq!(stat.total, 1, "итог шаблона t вычислен через дефолт");
+        assert_eq!(stat.covered, 0, "unmapped-терминал «параметр rate»");
+        assert_eq!(stat.percent(), Some(0));
+
+        // Цикл: значений нет — цифр нет, процент не определён.
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "a", "A\n= $in", 0.0);
+        sheet(&mut canvas, "b", "B\n= $in", 300.0);
+        canvas.edges.push(Edge::new(
+            "e1",
+            "a",
+            Some(Side::Right),
+            "b",
+            Some(Side::Left),
+        ));
+        canvas.edges[0].set_flow_kind(crate::flow::FlowKind::Value);
+        canvas.edges.push(Edge::new(
+            "e2",
+            "b",
+            Some(Side::Left),
+            "a",
+            Some(Side::Right),
+        ));
+        canvas.edges[1].set_flow_kind(crate::flow::FlowKind::Value);
+        let cycle = crate::flow::propagate_with_lines(&canvas, &WhatIfOverrides::default())
+            .expect_err("цикл");
+        // Цикл: значений нет нигде — все вычисляемые цифры не покрыты
+        // (0% — модель сломана, индикатор честно это показывает).
+        let stat = chain_coverage(&canvas, LineageFlow::Cycled(&cycle));
+        assert_eq!(stat.total, 2, "2 вычисляемые строки");
+        assert_eq!(stat.covered, 0, "при цикле ни одна цепочка не объясняется");
+        assert_eq!(stat.percent(), Some(0));
     }
 }

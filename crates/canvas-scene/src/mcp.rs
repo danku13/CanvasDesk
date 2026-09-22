@@ -1,6 +1,6 @@
 //! MCP-инструменты канваса (FR-037/ADR-0012, перенос из
 //! canvas-app/main.rs): `mcp_dispatch` — чистая функция над SceneState
-//! (27 инструментов), хелперы параметров, FR-033 graph_apply (атомарная
+//! (28 инструментов), хелперы параметров, FR-033 graph_apply (атомарная
 //! батч-композиция). Протокольный мост (stdio/JSON-RPC) — крейт
 //! canvas-mcp; инструменты не знают о транспорте.
 
@@ -847,6 +847,73 @@ pub fn mcp_dispatch(
                     "line": tree.root.line,
                 },
                 "nodes": nodes,
+            }))
+        }
+        // PRD-0007 (X6, FR-048, F-9 must): объяснение цифры ТЕКСТОМ —
+        // линейная развёртка того же дерева, что окно проверки и lineage
+        // (инвариант F-5: один источник). Персона 4 §4: ИИ-агент получает
+        // готовое объяснение «почему цифра такая» без разбора JSON.
+        // Значения активного what-if сценария; цикл потока — топология
+        // без значений (AC-2.4); бюджет 4096 — маркер truncated в тексте.
+        "explain_number" => {
+            let node_id = mcp_req_str(params, "node_id")?;
+            let line =
+                match params.get("line") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(value) => {
+                        Some(value.as_i64().filter(|index| *index >= 0).ok_or(
+                            "line: null (итог ноды) или целое ≥ 0 (индекс строки Numi-листа)",
+                        )? as usize)
+                    }
+                };
+            let root = match line {
+                None => canvas_core::LineageNodeId::total(node_id),
+                Some(index) => canvas_core::LineageNodeId::line(node_id, index),
+            };
+            // Паритет с lineage и окном проверки (app::build_lineage_snapshot):
+            // Ready по активным значениям, Cycled — топология без значений.
+            // Пересчёт СВЕЖИЙ — ленивые мутации не искажают дерево.
+            let (whatif, _stale) = scene.active_whatif_overrides();
+            // Преамбула — по НАЛИЧИЮ активных подмен (после whatif_reset
+            // режим остаётся включённым, но подмен нет — значения базовые).
+            let has_overrides = !whatif.line_exprs.is_empty();
+            let tree = match flow::propagate_with_lines(&scene.canvas, &whatif) {
+                Ok(solutions) => {
+                    let data = canvas_core::DataSnapshots::new();
+                    canvas_core::build_lineage(
+                        &scene.canvas,
+                        canvas_core::LineageFlow::Ready {
+                            solutions: &solutions,
+                            data: &data,
+                        },
+                        root,
+                    )
+                }
+                Err(cycle) => canvas_core::build_lineage(
+                    &scene.canvas,
+                    canvas_core::LineageFlow::Cycled(&cycle),
+                    root,
+                ),
+            }
+            .map_err(|err| err.to_string())?;
+            let truncated = tree
+                .nodes
+                .iter()
+                .any(|node| node.kind == canvas_core::LineageNodeKind::Truncated);
+            let mut text = String::new();
+            if has_overrides {
+                text.push_str("Режим what-if: значения активного сценария.\n");
+            }
+            text.push_str(&canvas_core::explain_text(&tree));
+            Ok(serde_json::json!({
+                "render": "text",
+                "text": text,
+                "root": {
+                    "node_id": tree.root.node_id,
+                    "line": tree.root.line,
+                },
+                "nodes": tree.nodes.len(),
+                "truncated": truncated,
             }))
         }
         // --- FR-017 (CP6): what-if сценарии ---

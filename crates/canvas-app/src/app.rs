@@ -1587,6 +1587,11 @@ pub struct App {
     /// подсветки отменяемого при подтверждении отката. Инвалидация — по
     /// тегу верхнего undo-снапшота (любое другое действие снимает тег).
     autolink_batch: Option<Vec<String>>,
+    /// PRD-0007 (FR-048 X6, F-12): кэш индикатора покрытия цепочками —
+    /// `(ревизия, процент)`: пересчёт — O(цифры × дерево), не на кадр;
+    /// None — кэш пуст (первый кадр/смена настройки). Процент `None`
+    /// внутри — цифр нет (индикатор скрыт).
+    coverage_cache: Option<(u64, Option<u8>)>,
     /// FR-042 (E2): ребро пучка под курсором (live-индекс) — hover-бамп
     /// агрегированной линии; вычисляется на каждый кадр ввода (паттерн
     /// `hovered`), в кэш не пишется.
@@ -1918,6 +1923,7 @@ impl App {
             autolink_review: None,
             autolink_scroll: 0.0,
             autolink_batch: None,
+            coverage_cache: None,
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             spill_hits: Vec::new(),
@@ -8516,6 +8522,12 @@ impl App {
                 self.settings.autolink_enabled = !self.settings.autolink_enabled;
                 self.autolink_scan_due = None;
             }
+            // PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками —
+            // opt-in; кэш расчёта инвалидируется при переключении
+            SettingsRow::ExplainCoverage => {
+                self.settings.explain_coverage = !self.settings.explain_coverage;
+                self.coverage_cache = None;
+            }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -9001,6 +9013,8 @@ impl App {
                         SettingsRow::EdgeAggregation => self.settings.edge_aggregation,
                         // PRD-0007 (X4, AC-5.5): тумблер фонового детектора
                         SettingsRow::AutolinkEnabled => self.settings.autolink_enabled,
+                        // PRD-0007 (X6, F-12): индикатор покрытия цепочками
+                        SettingsRow::ExplainCoverage => self.settings.explain_coverage,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
@@ -11814,6 +11828,56 @@ impl App {
         self.request_redraw();
     }
 
+    /// PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками виден —
+    /// настройка opt-in включена, поверхность канваса не перекрыта
+    /// модалками (та же дисциплина, что у бейджа автосвязи — §6.5).
+    fn coverage_indicator_visible(&self) -> bool {
+        self.settings.explain_coverage
+            && self.explain.is_none()
+            && self.main_stage.is_none()
+            && self.autolink_review.is_none()
+            && self.dialog.is_none()
+            && !self.settings_open
+            && self.menu.is_none()
+            && self.help_menu.is_none()
+            && self.docs.is_none()
+            && self.onboarding.is_none()
+            && !self.scheme_gallery.open
+    }
+
+    /// PRD-0007 (FR-048 X6, F-12): процент покрытия цепочками из кэша;
+    /// при смене ревизии модели — пересчёт ([`canvas_core::chain_coverage`],
+    /// та же семантика деревьев, что окно проверки — F-5). `None` — цифр
+    /// нет (индикатор скрыт). Стоимость не на кадр — только по ревизии.
+    fn coverage_percent(&mut self) -> Option<u8> {
+        if !self.settings.explain_coverage {
+            return None;
+        }
+        let revision = self.scene.revision;
+        if let Some((rev, percent)) = self.coverage_cache {
+            if rev == revision {
+                return percent;
+            }
+        }
+        let whatif = self.scene.fresh_whatif_overrides();
+        let stat = match flow::propagate_with_lines(&self.scene.canvas, &whatif) {
+            Ok(solutions) => canvas_core::chain_coverage(
+                &self.scene.canvas,
+                canvas_core::LineageFlow::Ready {
+                    solutions: &solutions,
+                    data: &canvas_core::DataSnapshots::new(),
+                },
+            ),
+            Err(cycle) => canvas_core::chain_coverage(
+                &self.scene.canvas,
+                canvas_core::LineageFlow::Cycled(&cycle),
+            ),
+        };
+        let percent = stat.percent();
+        self.coverage_cache = Some((revision, percent));
+        percent
+    }
+
     /// Видимость бейджа-индикатора (AC-5.5, «ненавязчивый»): фон включён,
     /// предложения есть, ни одного модального оверлея не открыто (клик по
     /// бейджу — открыть ревью). Диалог ревью бейдж скрывает (открыт сам).
@@ -12427,11 +12491,26 @@ impl App {
                 self.request_redraw();
                 return;
             }
-            // Мета-строка с крошками вида (X2: клик — возврат к корню);
+            // Мета-строка с крошками вида (X6 — полные чипы: клик по чипу
+            // уровня обрезает путь AC-2.3; клик мимо чипов — ничего);
             // в защите крошки глушатся (вид зафиксирован на корне)
             if !defense_now && point_in_rect(explain_ui::meta_rect(win), self.cursor) {
-                if let Some(state) = self.explain.as_mut() {
-                    state.click_crumb(0);
+                let path_len = self
+                    .explain
+                    .as_ref()
+                    .map(|s| s.view_path.len())
+                    .unwrap_or(0);
+                if path_len > 1 {
+                    let (offset, rects) = explain_ui::crumb_rects(win, path_len);
+                    for (i, rect) in rects.iter().enumerate() {
+                        if point_in_rect(*rect, self.cursor) {
+                            if let Some(state) = self.explain.as_mut() {
+                                state.click_crumb(offset + i);
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
                 }
                 self.request_redraw();
                 return;
@@ -12478,9 +12557,32 @@ impl App {
                 return;
             }
         }
-        // Клик по фону (мимо окна) — закрытие (§6.4 Ready/Stale/Defense →
-        // Closed по клику по фону; AC-6.4)
+        // Клик по фону (мимо окна): §6.4 Ready/Stale → Closed; У2 (§6.5,
+        // X6) — если под курсором подсвеченная нода канваса (есть в дереве,
+        // в поддереве вида) — СИНХРОНИЗАЦИЯ канвас→дерево: выделить и
+        // подвести узел дерева (вспышка), панель не закрывать;Defense —
+        // канвас не отвечает (§6.5), клик по фону — полное закрытие.
         if !point_in_rect(win, self.cursor) {
+            let defense_now = self.explain.as_ref().is_some_and(|s| s.is_defense());
+            let ready_now = self.explain.as_ref().is_some_and(|s| s.is_ready());
+            if ready_now && !defense_now {
+                let index = self.selective_hit(self.cursor_world());
+                if let Some(node_index) = index {
+                    if let Some(node) = self.scene.canvas.nodes.get(node_index) {
+                        let node_id = node.id.clone();
+                        let depth = self.settings.explain_depth_limit;
+                        let picked = self
+                            .explain
+                            .as_mut()
+                            .map(|state| state.pick_by_node_id(&node_id, depth))
+                            .unwrap_or(false);
+                        if picked {
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                }
+            }
             self.close_explain();
             return;
         }
@@ -12552,6 +12654,10 @@ impl App {
                 color: palette.title,
                 align: TextAlign::Left,
             });
+            // Мета-строка шапки: X6 — полные чипы-крошки пути вида (по чипу
+            // на уровень, клик по чипу — обрезка пути, AC-2.3); без фокуса
+            // (путь в корень) и в защите — прежний текст-подзаголовок.
+            // Чипы и hit — одна чистая геометрия crumb_rects (детерминизм).
             let meta = if state.is_ready() {
                 let tree = state.tree().expect("готово");
                 let path: Vec<String> = state
@@ -12567,14 +12673,48 @@ impl App {
             } else {
                 self.trf(keys::EXPLAIN_META, &[("title", root_title.as_str())])
             };
-            texts.push(OwnedScreenText {
-                text: meta,
-                origin: [win[0] + 16.0, win[1] + 32.0],
-                width: (win[2] - 240.0).max(120.0),
-                font_size: 11.5,
-                color: palette.quote,
-                align: TextAlign::Left,
-            });
+            let show_crumbs = state.is_ready() && !state.is_defense() && state.view_path.len() > 1;
+            if show_crumbs {
+                let tree = state.tree().expect("готово");
+                let (offset, rects) = explain_ui::crumb_rects(win, state.view_path.len());
+                let last = state.view_path.len().saturating_sub(1);
+                for (i, rect) in rects.iter().enumerate() {
+                    let level = offset + i;
+                    let Some(node) = tree.nodes.get(state.view_path[level]) else {
+                        continue;
+                    };
+                    let current = level == last;
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        *rect,
+                        if current { palette.accent } else { [0.0; 4] },
+                        palette.palette_border,
+                        6.0,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: node.title.clone(),
+                        origin: [rect[0] + 6.0, rect[1] + 2.5],
+                        width: (rect[2] - 10.0).max(8.0),
+                        font_size: 10.5,
+                        color: if current {
+                            Color::rgb(255, 255, 255)
+                        } else {
+                            palette.body
+                        },
+                        align: TextAlign::Left,
+                    });
+                }
+            } else {
+                texts.push(OwnedScreenText {
+                    text: meta,
+                    origin: [win[0] + 16.0, win[1] + 32.0],
+                    width: (win[2] - 240.0).max(120.0),
+                    font_size: 11.5,
+                    color: palette.quote,
+                    align: TextAlign::Left,
+                });
+            }
             let close = explain_ui::close_rect(win);
             quads.push(screen_rect_quad(
                 camera,
@@ -12801,6 +12941,10 @@ impl App {
                     [x, y, laid.rect[2] * scale, laid.rect[3] * scale]
                 };
                 let hovered = state.cursor == Some(laid.idx);
+                // У2 (§6.5, X6): узел, выбранный кликом по подсвеченной
+                // ноде канваса — рамка выделения (акцент; пока вспышка
+                // не погасла — ярче, alpha от pick_flash_at)
+                let picked = state.pick == Some(laid.idx);
                 // Цвет полосы рода узла: расчётный — акцент, лист — слот
                 // explain_leaf (контраст ≥ 3:1, AC-3.4), терминалы —
                 // ошибка/предупреждение
@@ -12819,13 +12963,25 @@ impl App {
                     viewport,
                     rect,
                     palette.card_fill,
-                    if hovered {
+                    if hovered || picked {
                         palette.accent
                     } else {
                         palette.palette_border
                     },
                     8.0,
                 ));
+                // У2-вспышка: затухающая рамка поверх выделения (700 мс);
+                // после затухания остаётся только рамка выделения выше.
+                if picked {
+                    let flash = state.pick_flash_at(Instant::now());
+                    if flash > 0.0 {
+                        let mut glow = palette.accent;
+                        glow[3] = flash;
+                        quads.push(screen_rect_quad(
+                            camera, viewport, rect, [0.0; 4], glow, 12.0,
+                        ));
+                    }
+                }
                 let strip_rect = [rect[0], rect[1], (4.0 * scale).max(2.0), rect[3]];
                 quads.push(screen_rect_quad(
                     camera, viewport, strip_rect, strip, [0.0; 4], 0.0,
@@ -15624,6 +15780,36 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Center,
                     }];
                     screen_bands.push(UiLayer::Panels, badge_quads, badge_texts);
+                }
+                // PRD-0007 (X6, F-12): индикатор покрытия цепочками —
+                // левый нижний угол канваса, opt-in (настройка FR-039);
+                // пересчёт — по ревизии (кэш), скрывается при цифрах нет
+                if self.coverage_indicator_visible() {
+                    if let Some(percent) = self.coverage_percent() {
+                        let palette = self.effective_palette();
+                        let camera = &self.camera;
+                        let cov_viewport = self.viewport_logical();
+                        let chip = [16.0, cov_viewport[1] - 44.0, 132.0, 26.0];
+                        let cov_quads = vec![screen_rect_quad(
+                            camera,
+                            cov_viewport,
+                            chip,
+                            palette.palette_chip_fill,
+                            palette.palette_border,
+                            8.0,
+                        )];
+                        let percent_text = percent.to_string();
+                        let cov_texts = vec![OwnedScreenText {
+                            text: self
+                                .trf(keys::EXPLAIN_COVERAGE, &[("{n}", percent_text.as_str())]),
+                            origin: [chip[0], chip[1] + 6.0],
+                            width: chip[2],
+                            font_size: 12.0,
+                            color: palette.body,
+                            align: TextAlign::Center,
+                        }];
+                        screen_bands.push(UiLayer::Panels, cov_quads, cov_texts);
+                    }
                 }
                 // FR-018: палитра шаблонов (Ctrl+P) и wheel-меню
                 // (Shift+клик) — поверх канваса; иконки/хаб wheel — полоса

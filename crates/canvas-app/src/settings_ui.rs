@@ -131,12 +131,15 @@ pub enum SettingsRow {
     /// PRD-0007 (FR-048 X4, AC-5.5): фоновый детектор автосвязи —
     /// тумблер в табе «Связи и порты».
     AutolinkEnabled,
+    /// PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками «Цепочки:
+    /// N%» в углу канваса — opt-in тумблер в табе «Канвас».
+    ExplainCoverage,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 22] = [
+pub const SETTINGS_ROWS: [SettingsRow; 23] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -159,6 +162,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 22] = [
     SettingsRow::Language,
     SettingsRow::ExplainDepthLimit,
     SettingsRow::AutolinkEnabled,
+    SettingsRow::ExplainCoverage,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -197,6 +201,9 @@ pub const SETTINGS_TABS: [SettingsTab; 5] = [
             SettingsRow::BottleneckOverlay,
             // PRD-0007 (FR-048 X2): лимит глубины explain-дерева (AC-2.3).
             SettingsRow::ExplainDepthLimit,
+            // PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками
+            // (opt-in — решение владельца, раунд 2 (в)).
+            SettingsRow::ExplainCoverage,
         ],
     },
     SettingsTab {
@@ -262,6 +269,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapCoarseZoom => keys::ROW_SNAP_COARSE_ZOOM,
         SettingsRow::ExplainDepthLimit => keys::ROW_EXPLAIN_DEPTH,
         SettingsRow::AutolinkEnabled => keys::ROW_AUTOLINK,
+        SettingsRow::ExplainCoverage => keys::ROW_EXPLAIN_COVERAGE,
     }
 }
 
@@ -291,6 +299,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapCoarseZoom => keys::DESC_SNAP_COARSE_ZOOM,
         SettingsRow::ExplainDepthLimit => keys::DESC_EXPLAIN_DEPTH,
         SettingsRow::AutolinkEnabled => keys::DESC_AUTOLINK,
+        SettingsRow::ExplainCoverage => keys::DESC_EXPLAIN_COVERAGE,
     }
 }
 
@@ -329,6 +338,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart
+        | SettingsRow::ExplainCoverage
         | SettingsRow::AutolinkEnabled => RowKind::Toggle,
     }
 }
@@ -395,6 +405,7 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
         | SettingsRow::AutolinkEnabled
+        | SettingsRow::ExplainCoverage
         | SettingsRow::HudOnStart => None,
     }
 }
@@ -541,6 +552,7 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
         | SettingsRow::AutolinkEnabled
+        | SettingsRow::ExplainCoverage
         | SettingsRow::HudOnStart => Vec::new(),
     }
 }
@@ -628,6 +640,7 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
         | SettingsRow::AutolinkEnabled
+        | SettingsRow::ExplainCoverage
         | SettingsRow::HudOnStart => {}
     }
 }
@@ -1060,7 +1073,8 @@ mod tests {
                 SettingsRow::GridStyle,
                 SettingsRow::GridDensity,
                 SettingsRow::BottleneckOverlay,
-                SettingsRow::ExplainDepthLimit
+                SettingsRow::ExplainDepthLimit,
+                SettingsRow::ExplainCoverage
             ]
         );
         assert_eq!(
@@ -1144,6 +1158,11 @@ mod tests {
                 SettingsRow::AutolinkEnabled => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.autolink_enabled;
+                }
+                // PRD-0007 (X6, F-12): индикатор покрытия цепочками — булево
+                SettingsRow::ExplainCoverage => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.explain_coverage;
                 }
                 SettingsRow::HudOnStart => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
