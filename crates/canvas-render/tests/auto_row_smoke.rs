@@ -19,9 +19,14 @@ fn headless_auto_row_draws_with_spill_hit() {
     let mut text = TextSystem::new(&gpu.device, &gpu.queue, format);
 
     let mut canvas = Canvas::default();
-    let mut note = Node::text("note", "Смета\nитог := 100 + 5", 10.0, 10.0);
+    // Геометрия зеркалит spill_body_smoke: world-негатив — camera default
+    // центрирует world-ноль в середине viewport (400×300): нода (−190,−140)
+    // размером 380×260 ложится в экранный прямоугольник (10..390, 10..290),
+    // тело — от экранного y≈40. На CI Windows/macOS headless-адаптер есть
+    // (WARP/Metal) — тест реально рисует; локально без адаптера — skip.
+    let mut note = Node::text("note", "Смета\nитог := 100 + 5", -190.0, -140.0);
     note.width = 380.0;
-    note.height = 240.0;
+    note.height = 260.0;
     canvas.nodes.push(note);
 
     // Авто-строка: позиционный вход без читающего порта — производная
@@ -41,8 +46,12 @@ fn headless_auto_row_draws_with_spill_hit() {
     );
 
     let camera = Camera::default();
-    let zplan =
-        canvas_render::zorder::plan_z_order(&[[10.0, 10.0, 390.0, 250.0]], &[true], &[false], 16);
+    let zplan = canvas_render::zorder::plan_z_order(
+        &[[-190.0, -140.0, 190.0, 120.0]],
+        &[true],
+        &[false],
+        16,
+    );
     text.prepare_titles(
         &gpu.device,
         &gpu.queue,
