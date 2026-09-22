@@ -224,6 +224,21 @@ fn lint_gallery_open() {
     assert_backdrop_is(&frame, ui_registry::id::GALLERY);
 }
 
+/// FR-055 (этап U4): витрина кита — каноническое состояние G4-линта
+/// («кит покрыт линтом» — результат этапа U4 по §13 PRD-0009): интерактивные
+/// зоны шапки (кнопка темы + «✕») во вьюпортах и на обоих языках.
+#[test]
+fn lint_kit_gallery_open() {
+    lint_state("kit_gallery", |app, _vp| {
+        app.kit_gallery_open = true;
+    });
+    // Витрина — Block-модаль: угол экрана — её backdrop
+    let mut app = lint_stub(Language::Ru);
+    app.kit_gallery_open = true;
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert_backdrop_is(&frame, ui_registry::id::KIT_GALLERY);
+}
+
 #[test]
 fn lint_onboarding_open() {
     lint_state("onboarding", |app, _vp| {
