@@ -112,7 +112,7 @@ Immediate-mode чистые функции от слота родителя (и�
 
 ## 7. История изменений (Changelog)
 
-- 2026-09-22 — агент — U3 реализован: canvas-ui layout.rs/measure.rs (+12 тестов примитивов/измерения), tokens.rs SPACING/RADIUS/CONTROL + паритет, ThemeColors +4 слота (пресеты — вывод от menu_fill), пилоты what-if/галерея (измеренные ширины, Ellipsis-подписи из раскладки, SqueezeTail/Constrain/Stack/Column/Row, hover/selected/disabled — слоты), G4-линт 3 окна × RU/EN, G5-аудит 0 клампов; гейты ветки (на объединённом с origin/main коде) зелёные: fmt, clippy -D warnings, test --workspace, wasm_gate, mcp_wasm_gate; CI по merge SHA — после слияния. Статус «выполнено (U3)».
+- 2026-09-22 — агент — U3 реализован: canvas-ui layout.rs/measure.rs (+12 тестов примитивов/измерения), tokens.rs SPACING/RADIUS/CONTROL + паритет, ThemeColors +4 слота (пресеты — вывод от menu_fill), пилоты what-if/галерея (измеренные ширины, Ellipsis-подписи из раскладки, SqueezeTail/Constrain/Stack/Column/Row, hover/selected/disabled — слоты), G4-линт 3 окна × RU/EN, G5-аудит 0 клампов; гейты ветки (на объединённом с origin/main коде) зелёные: fmt, clippy -D warnings, test --workspace, wasm_gate, mcp_wasm_gate; CI по merge SHA 599bca8 — ПОЛНОСТЬЮ ЗЕЛЁНЫЙ (12/12 check-runs). Статус «выполнено (U3)».
 - 2026-09-22 — агент — документ создан (постановка этапа U3 PRD-0009: F-6/F-7/F-9-частично + пилоты галерея/what-if), статус «в работе».
 
 ## 8. Источники истины (References)
