@@ -101,27 +101,34 @@ pub enum KeyOwner {
     Canvas,
 }
 
-/// Владелец клавиатуры: верх esc_stack активных поверхностей.
+/// Владелец-обработчик поверхности (FR-054, Q4-a): `Some` — у поверхности
+/// есть клавиатурный обработчик ([`KeyOwner`] → `App::route_owner_key`);
+/// `None` — скоуп пропускает событие вниз по стеку (лестница канваса).
+pub fn owner_of(surface: &str) -> Option<KeyOwner> {
+    match surface {
+        id::ONBOARDING => Some(KeyOwner::Onboarding),
+        id::GALLERY => Some(KeyOwner::Gallery),
+        id::EDITOR => Some(KeyOwner::Editor),
+        id::SEARCH => Some(KeyOwner::Search),
+        id::DIALOG => Some(KeyOwner::Dialog),
+        id::STAGE => Some(KeyOwner::Stage),
+        id::EXPLAIN => Some(KeyOwner::Explain),
+        // Фокус решает владельца (прежний гейт 8036: панель без фокуса
+        // клавиши не перехватывает — Ctrl+P/лестница работают).
+        id::TEMPLATE_PANEL => Some(KeyOwner::TemplatePanel),
+        _ => None,
+    }
+}
+
+/// Владелец клавиатуры: верх esc_stack активных поверхностей (легаси-head
+/// U2; боевой путь с FR-054 — проход `KeyboardRouter::deliver` по всем
+/// скоупам — эквивалентность фиксирует тест `router_delivery_matches_legacy_head`).
 pub fn key_owner(registry: &SurfaceRegistry) -> KeyOwner {
-    let top = registry
+    registry
         .esc_stack()
         .first()
-        .map(|sid| sid.as_str().to_owned());
-    match top.as_deref() {
-        Some(id::ONBOARDING) => KeyOwner::Onboarding,
-        Some(id::GALLERY) => KeyOwner::Gallery,
-        Some(id::EDITOR) => KeyOwner::Editor,
-        Some(id::SEARCH) => KeyOwner::Search,
-        Some(id::DIALOG) => KeyOwner::Dialog,
-        Some(id::STAGE) => KeyOwner::Stage,
-        Some(id::EXPLAIN) => KeyOwner::Explain,
-        Some(id::TEMPLATE_PANEL) => {
-            // Фокус решает владелец (прежний гейт 8036: панель без фокуса
-            // клавиши не перехватывает — Ctrl+P/лестница работают).
-            KeyOwner::TemplatePanel
-        }
-        _ => KeyOwner::Canvas,
-    }
+        .and_then(|sid| owner_of(sid.as_str()))
+        .unwrap_or(KeyOwner::Canvas)
 }
 
 /// Сборка реестра активных поверхностей из состояния приложения.
@@ -171,9 +178,12 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
     ));
     // 6. Модалка настроек (Esc: dropdown → панель — двухэтапный dismiss;
     //    Block: клик мимо модалки закрывает и глотается — FR-039).
+    //    Слой Modals (FR-054, дельта: было Panels — модалка рисовалась ПОД
+    //    полосой палитры/пустой карточкой того же слоя; модаль выше панелей
+    //    — гейт G4 «0 пересечений интерактивных rect'ов одного слоя»).
     if app.settings_open {
         reg.add(
-            SurfaceDecl::new(id::SETTINGS, UiLayer::Panels, CapturePolicy::Block)
+            SurfaceDecl::new(id::SETTINGS, UiLayer::Modals, CapturePolicy::Block)
                 .with_scope(id::SETTINGS),
         );
     }
@@ -366,7 +376,13 @@ pub fn build_frame_at(app: &App, viewport_logical: [f32; 2]) -> UiFrame {
 /// ввод (детерминизм: pick ≡ поведению прежних веток).
 fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
     let viewport = [vw, vh];
-    let rect = |r: [f32; 4]| UiRect::new(r[0], r[1], r[0] + r[2], r[1] + r[3]);
+    // Контракт формата — xywh [x, y, w, h] (общий для раскладок; исключение
+    // — xyxy search_ui::PanelLayout, конвертируется отдельно ниже). Прежнее
+    // замыкание UiRect::new(r[0], r[1], r[0]+r[2], r[1]+r[3]) трактовало
+    // xywh как xyxy и ЗАВЫШАЛО hit-rect'ы всех поверхностей (w ← x+w,
+    // h ← y+h) — расхождение pick с видимой панелью (найдено линтом
+    // F-11 FR-054).
+    let rect = |r: [f32; 4]| UiRect::new(r[0], r[1], r[2], r[3]);
     match surface.surface.as_str() {
         id::WHEEL => {
             // donut-меню: bbox extent (polar-геометрия проверяется в
@@ -419,7 +435,10 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             }
         }
         id::HOTKEYS => {
-            let panel = hotkeys_panel_rect(viewport);
+            // FR-054 (G4): панель смещается правее полосы палитры (налезание
+            // одного слоя запрещено) — тот же сдвиг, что у отрисовки.
+            let panel =
+                crate::ui::hotkeys_panel_rect_at(viewport, app.hotkeys_left_offset(viewport));
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(panel), "hotkeys-panel"));
@@ -479,14 +498,27 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         }
         id::TEMPLATE_PANEL => {
             let rows = template_panel_rows(&app.templates, &app.template_panel);
-            let lay = template_panel_layout(vw, vh, &app.templates, &app.template_panel, &rows);
+            // FR-054: ширины чипов — измеренные (measurer на вызов).
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let lay = template_panel_layout(
+                vw,
+                vh,
+                &app.templates,
+                &app.template_panel,
+                &rows,
+                &mut measurer,
+                &mut fs,
+            );
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.panel_rect), "template-panel"));
         }
         id::TEMPLATE_STRIP => {
             let categories = app.template_category_names();
-            let strip = template_ui::dock_strip_layout(&categories, vh);
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let strip = template_ui::dock_strip_layout(&categories, vh, &mut measurer, &mut fs);
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(strip.rect), "template-strip"));
@@ -543,9 +575,15 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         }
         id::SEARCH => {
             let lay = search_layout(vw, vh, &app.search);
-            surface
-                .hit_rects
-                .push(HitRect::interactive(rect(lay.panel_rect), "search-panel"));
+            // PanelLayout — xyxy (уникальный формат модуля, см. контракт
+            // search_ui::PanelLayout): конвертация прямая, НЕ как xywh —
+            // прежняя трактовка [x0,y0,x1,y1] как [x,y,w,h] завышала
+            // hit-rect (право/низ экрана), расширяя pick панели поиска.
+            let [sx0, sy0, sx1, sy1] = lay.panel_rect;
+            surface.hit_rects.push(HitRect::interactive(
+                UiRect::new(sx0, sy0, sx1 - sx0, sy1 - sy0),
+                "search-panel",
+            ));
         }
         id::DIALOG => {
             surface
@@ -758,6 +796,82 @@ mod tests {
         );
     }
 
+    /// FR-054 (Q4-a TDD): доставка KeyboardRouter эквивалентна прежнему
+    /// head U2 (верх esc_stack) на матрице состояний; у состояний без
+    /// владельца (settings/whatif/hotkeys сверху) доставка не находит
+    /// владельца (None ≡ Canvas). Исключение — задокументированная дельта
+    /// «док палитры в фокусе + палитра выделения видима» (см. ниже).
+    #[test]
+    fn router_delivery_matches_legacy_head() {
+        let routed_owner = |registry: &SurfaceRegistry| {
+            let router = canvas_ui::KeyboardRouter::from_registry(registry);
+            router
+                .deliver(|a| owner_of(a.surface.as_str()).is_some())
+                .and_then(|a| owner_of(a.surface.as_str()))
+        };
+        let assert_eq_legacy = |app: &App| {
+            let registry = build_registry(app);
+            let legacy = key_owner(&registry);
+            let routed = routed_owner(&registry);
+            match legacy {
+                KeyOwner::Canvas => assert_eq!(routed, None, "state без владельца"),
+                owner => assert_eq!(routed, Some(owner), "state с владельцем {owner:?}"),
+            }
+        };
+
+        let mut app = test_stub();
+        app.onboarding = None;
+        assert_eq_legacy(&app); // idle — Canvas
+        app.search.open();
+        assert_eq_legacy(&app); // Search
+        app.search.close();
+        app.scheme_gallery.open();
+        assert_eq_legacy(&app); // Gallery
+        app.scheme_gallery.close();
+        app.onboarding = Some(crate::onboarding_ui::OnboardingState::default());
+        assert_eq_legacy(&app); // Onboarding
+        app.onboarding = None;
+        app.settings_open = true;
+        assert_eq_legacy(&app); // Settings — владельца нет
+        app.settings_open = false;
+        app.hotkeys_open = true;
+        assert_eq_legacy(&app); // Hotkeys — владельца нет
+        app.hotkeys_open = false;
+        app.scene.whatif_active = true;
+        assert_eq_legacy(&app); // Whatif — владельца нет
+        app.scene.whatif_active = false;
+        app.template_panel.open();
+        app.template_panel.focused = true;
+        assert_eq_legacy(&app); // TemplatePanel (палитры нет — панели нет и в кадре)
+    }
+
+    /// FR-054: задокументированная дельта против U2 — «док палитры в
+    /// фокусе + палитра выделения видима»: у палитры владельца клавиатуры
+    /// нет, роутер проходит сквозь неё к панели (прежний гейт 8036);
+    /// легаси-head U2 (только верх esc_stack) отдавал клавиши Canvas —
+    /// панель в фокусе не получала клавиатуру (регресс U2 устранён).
+    #[test]
+    fn router_walks_past_non_owner_scopes_to_panel() {
+        let mut reg = SurfaceRegistry::new();
+        // Порядок регистрации как в build_registry: панель раньше палитры,
+        // в esc-стеке палитра — ВЫШЕ панели.
+        reg.add(
+            SurfaceDecl::new(id::TEMPLATE_PANEL, UiLayer::Panels, CapturePolicy::Capture)
+                .with_scope(id::TEMPLATE_PANEL),
+        );
+        reg.add(
+            SurfaceDecl::new(id::PALETTE, UiLayer::Widgets, CapturePolicy::Capture)
+                .with_scope(id::PALETTE),
+        );
+        let router = canvas_ui::KeyboardRouter::from_registry(&reg);
+        let routed = router
+            .deliver(|a| owner_of(a.surface.as_str()).is_some())
+            .and_then(|a| owner_of(a.surface.as_str()));
+        assert_eq!(routed, Some(KeyOwner::TemplatePanel));
+        // Легаси-head U2 на том же реестре: верх стека — палитра → Canvas.
+        assert_eq!(key_owner(&reg), KeyOwner::Canvas);
+    }
+
     /// Реестр пустого канваса: мир + угловые кнопки (минимум поверхностей).
     #[test]
     fn idle_registry_has_world_and_chrome() {
@@ -866,11 +980,15 @@ mod tests {
         let viewport = app.viewport_logical();
         let panel = crate::docs_ui::viewer_rect(viewport);
         let content = crate::docs_ui::viewer_content_rect(panel);
+        // FR-054: раскладка страницы — измеренным текстом (measurer на вызов).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
         app.docs = Some(DocsViewer {
             page,
-            layout: crate::docs_ui::layout_page(page, content[2]),
+            layout: crate::docs_ui::layout_page(page, content[2], &mut measurer, &mut fs),
             scroll: crate::docs_ui::ScrollState::new(
-                crate::docs_ui::layout_page(page, content[2]).content_height,
+                crate::docs_ui::layout_page(page, content[2], &mut measurer, &mut fs)
+                    .content_height,
                 content[3],
             ),
             layout_width: content[2],

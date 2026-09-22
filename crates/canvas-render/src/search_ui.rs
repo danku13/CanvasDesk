@@ -274,6 +274,12 @@ impl SearchPanel {
 }
 
 /// Геометрия панели в логических px (для отрисовки через FrameOverlay).
+///
+/// Контракт формата — **xyxy** (`[x0, y0, x1, y1]`, уникальный в кодовой
+/// базе: остальные раскладки — xywh). Потребители конвертируют явно
+/// (`rect_xywh` в canvas-app; адаптер реестра — напрямую `UiRect::new`).
+/// Унификация формата отложена: правка потребителей рискует визуальными
+/// регрессиями без выигрыша в поведении (FR-054 §4.1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelLayout {
     /// Прямоугольник панели: `[x0, y0, x1, y1]`.
@@ -288,13 +294,22 @@ pub struct PanelLayout {
 /// Геометрия панели: топ-центр, ширина PANEL_WIDTH (кламп к окну), высота =
 /// поле + видимые строки (0 строк — только поле), скролл от panel.scroll_top.
 ///
+/// Раскладка — примитивами `canvas_ui` (FR-054, миграция U5): ширина —
+/// `constrain` (min 0, max окно−2×боковая маржа), панель — `stack`
+/// (Center/Start), содержимое — `Column` [поле, распорка-паддинг, строки…]
+/// с gap 0 (зазоры — дети-распорки, т.к. между строками зазора нет).
+/// Числа — дословно прежние (тесты структуры фиксируют точные координаты).
+///
 /// Вырожденное окно (ширина/высота ≤ 0 — свёрнутое окно, ширина меньше двух
 /// боковых отступов) схлопывает панель в точку — без паники. Высота окна
 /// панель не ограничивает (геометрия топ-центра).
 pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout {
+    use canvas_ui::geometry::{UiRect, UiVec2};
+    use canvas_ui::layout::{constrain, stack, Child, Column};
+
     let window_w = window_w.max(0.0);
-    let width = (window_w - 2.0 * PANEL_SIDE_MARGIN).clamp(0.0, PANEL_WIDTH);
-    if width <= 0.0 || window_h <= 0.0 {
+    let available = (window_w - 2.0 * PANEL_SIDE_MARGIN).max(0.0);
+    if available <= 0.0 || window_h <= 0.0 {
         // Схлопывание в точку (x — центр вырожденного окна).
         let cx = window_w / 2.0;
         let point = [cx, PANEL_TOP_MARGIN, cx, PANEL_TOP_MARGIN];
@@ -305,35 +320,65 @@ pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout 
         };
     }
 
-    let x0 = (window_w - width) / 2.0;
-    let x1 = x0 + width;
-    let y0 = PANEL_TOP_MARGIN;
-
+    // Ширина: желаемая PANEL_WIDTH, потолок — полезная ширина окна.
+    let width = constrain(
+        UiVec2::new(0.0, 0.0),
+        UiVec2::new(available, f32::INFINITY),
+        UiVec2::new(PANEL_WIDTH, 1.0),
+    )
+    .x;
     // Окно прокрутки клампится к длине списка (scroll_top задаётся извне).
     let scroll_top = panel.scroll_top.min(panel.rows.len());
     let visible = (panel.rows.len() - scroll_top).min(MAX_VISIBLE_ROWS);
 
-    let inner_l = x0 + PANEL_PADDING;
-    // Крошечная ширина (< 2 отступов) — вырожденные, но не вывернутые rect'ы.
-    let inner_r = (x1 - PANEL_PADDING).max(inner_l);
-    let input_top = y0 + PANEL_PADDING;
-    let input_rect = [inner_l, input_top, inner_r, input_top + INPUT_HEIGHT];
+    // Панель — top-center вьюпорта (высота наследуется от контента ниже).
+    let panel_x = stack(
+        UiRect::new(0.0, 0.0, window_w, window_h.max(0.0)),
+        UiVec2::new(width, 0.0),
+        canvas_ui::layout::HAlign::Center,
+        canvas_ui::layout::VAlign::Start,
+    )
+    .x;
+    let panel_top = PANEL_TOP_MARGIN;
 
-    let mut row_rects = Vec::with_capacity(visible);
-    let y1 = if visible == 0 {
-        // Только поле ввода.
-        input_top + INPUT_HEIGHT + PANEL_PADDING
-    } else {
-        let rows_top = input_top + INPUT_HEIGHT + PANEL_PADDING;
-        for i in 0..visible {
-            let y = rows_top + i as f32 * ROW_HEIGHT;
-            row_rects.push([inner_l, y, inner_r, y + ROW_HEIGHT]);
+    // Внутренний слот (pad на PANEL_PADDING): поле + строки одной колонкой.
+    // Крошечная ширина (< 2 отступов) — пустой внутренний слот (не вывернутый):
+    // дети получают нулевую ширину, rect'ы остаются невырожденными по осям.
+    let inner = canvas_ui::layout::pad(
+        UiRect::new(panel_x, panel_top, width, f32::INFINITY),
+        canvas_ui::geometry::EdgeInsets::uniform(PANEL_PADDING),
+    );
+    let inner_w = inner.w.max(0.0);
+    // Колонка gap 0: зазор после поля — ребёнок-распорка (между строками
+    // зазора нет — они касаются).
+    let mut items = vec![Child::fixed(inner_w, INPUT_HEIGHT)];
+    if visible > 0 {
+        items.push(Child::fixed(0.0, PANEL_PADDING));
+        for _ in 0..visible {
+            items.push(Child::fixed(inner_w, ROW_HEIGHT));
         }
-        rows_top + visible as f32 * ROW_HEIGHT + PANEL_PADDING
-    };
+    }
+    let rects = Column {
+        gap: 0.0,
+        ..Column::default()
+    }
+    .lay_out(inner, &items);
+
+    let input = &rects[0];
+    let input_rect = [input.x, input.y, input.right(), input.bottom()];
+    // Строки — дети после поля и распорки (0 строк — срез пуст).
+    let row_rects: Vec<[f32; 4]> = rects
+        .get(2..)
+        .unwrap_or(&[])
+        .iter()
+        .map(|r| [r.x, r.y, r.right(), r.bottom()])
+        .collect();
+    // Панель заканчивается отступом ниже последнего контента (строки/поле).
+    let content_bottom = rects[rects.len() - 1].bottom();
+    let y1 = content_bottom + PANEL_PADDING;
 
     PanelLayout {
-        panel_rect: [x0, y0, x1, y1],
+        panel_rect: [panel_x, panel_top, panel_x + width, y1],
         input_rect,
         row_rects,
     }
@@ -884,6 +929,46 @@ mod tests {
         let expected_h = PANEL_TOP_MARGIN + PANEL_PADDING + INPUT_HEIGHT + PANEL_PADDING;
         assert!((pr[3] - expected_h).abs() < EPS);
         assert!((pr[3] - 64.0).abs() < EPS); // 12 + 8 + 36 + 8
+    }
+
+    /// FR-054 (G4-линт миграции U5): вьюпорты 1280×800 / 1024×640 / 800×560 ×
+    /// пустой/полный список/скролл — панель внутри вьюпорта (боковые поля),
+    /// строки внутри панели, поле и строки попарно не пересекаются.
+    #[test]
+    fn g4_lint_viewports() {
+        use canvas_ui::geometry::{UiPoint, UiRect};
+        let viewports = [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]];
+        let mut panel_full = panel_with_rows(12);
+        panel_full.scroll_top = 3;
+        let panels = [SearchPanel::default(), panel_with_rows(3), panel_full];
+        for panel in &panels {
+            for vp in viewports {
+                let lay = layout(vp[0], vp[1], panel);
+                let pr = lay.panel_rect;
+                // Панель внутри вьюпорта с боковыми полями (кламп ширины).
+                assert!(pr[0] >= PANEL_SIDE_MARGIN - 0.01, "left {vp:?}");
+                assert!(pr[2] <= vp[0] - PANEL_SIDE_MARGIN + 0.01, "right {vp:?}");
+                assert!(pr[1] >= PANEL_TOP_MARGIN - 0.01, "top {vp:?}");
+                assert!(pr[3] <= vp[1] + 0.01, "bottom {vp:?}");
+                // Rect-in-rect: поле и строки внутри панели (границы включительно).
+                let inside = |r: [f32; 4]| {
+                    r[0] >= pr[0] - 0.01
+                        && r[1] >= pr[1] - 0.01
+                        && r[2] <= pr[2] + 0.01
+                        && r[3] <= pr[3] + 0.01
+                };
+                assert!(inside(lay.input_rect), "поле внутри панели {vp:?}");
+                let ir = lay.input_rect;
+                let input_r =
+                    UiRect::from_min_max(UiPoint::new(ir[0], ir[1]), UiPoint::new(ir[2], ir[3]));
+                for r in &lay.row_rects {
+                    assert!(inside(*r), "строка внутри панели {vp:?}");
+                    let row_r =
+                        UiRect::from_min_max(UiPoint::new(r[0], r[1]), UiPoint::new(r[2], r[3]));
+                    assert!(!row_r.intersects(&input_r), "строка ∩ поле {vp:?}");
+                }
+            }
+        }
     }
 
     // ---------- scan_scene ----------
