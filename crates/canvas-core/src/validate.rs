@@ -12,7 +12,7 @@
 //! | Код | Severity | Условие | Статус |
 //! |---|---|---|---|
 //! | `E-CYCLE` | error | цикл в value-подграфе (участники — `CycleError.nodes`) | реализован |
-//! | `E-UNIT` | error | несовместимая размерность единицы выхода истока и параметра приёмника | **после FR-029 (CP1)**: определён на `toParam` + `OutputSpec.unit` |
+//! | `E-UNIT` | error | несовместимая размерность единицы выхода истока и параметра приёмника при единицах с обеих сторон; безразмерная сторона совместима с любой (FR-050 Н5) | **после FR-029 (CP1)**: определён на `toParam` + `OutputSpec.unit` |
 //! | `E-PORT-UNKNOWN` | error | ребро адресует имя выхода/параметра, отсутствующее в снапшоте шаблона | **после FR-029 (CP1)**: определён на `fromOutput`/`toParam` |
 //! | `E-DOUBLE-INPUT` | error | два value-ребра в один `toParam` (оба `edge_id` в отчёте) | **после FR-029 (CP1)**: определён на `toParam` |
 //! | `E-OVERLOAD` | error | нода в `EvalError::Overload` (ρ ≥ 1 — очередь неограничена) | реализован |
@@ -232,11 +232,12 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
 ///   в одну ноду (победитель детерминирован — последний по `canvas.edges`,
 ///   но конфликт почти наверняка ошибка композиции агента).
 /// - **E-UNIT** — проливаемое значение и параметр приёмника имеют
-///   несовместимые размерности (например, время в Rate-параметр);
-///   проверяется по мультимножеству размерностей единиц (масштаб
-///   `ms`/`s` не важен). Параметр без единицы (скаляр) и скалярное
-///   значение совместимы; значение с размерностью в скалярный параметр —
-///   ошибка.
+///   несовместимые размерности при единицах С ОБОИХ сторон (например,
+///   время в Rate-параметр); проверяется по мультимножеству размерностей
+///   единиц (масштаб `ms`/`s` не важен). FR-050 Н5: безразмерная сторона
+///   совместима с любой — безразмерное пролитое значение трактуется в
+///   единицах приёмника, значение с единицей в безразмерный параметр
+///   приходит как есть (только несовместимые размерности — ошибка).
 fn port_contract_issues(canvas: &Canvas, solutions: &flow::FlowSolutions) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     // известные выходы по нодам: шаблонные — снимок outputs; текстовые —
@@ -367,7 +368,12 @@ fn unit_dims(unit: &expr::Unit) -> std::collections::BTreeMap<String, i16> {
 /// Совместимы ли единицы значения и параметра: равные мультимножества
 /// размерностей (масштабы ms/s, KB/MB — не важны; имена — не важны).
 fn dimensions_compatible(actual: &expr::Unit, expected: &expr::Unit) -> bool {
-    unit_dims(actual) == unit_dims(expected)
+    // FR-050 Н5: скаляр с любой стороны совместим — безразмерное
+    // пролитое значение трактуется в единицах приёмника (flow прикрепляет
+    // единицу), значение с единицей в безразмерный параметр приходит как
+    // есть; E-UNIT — только несовместимые размерности при единицах с обеих
+    // сторон (ms против rps; конвертируемые масштабы ms/s совместимы).
+    actual.is_scalar() || expected.is_scalar() || unit_dims(actual) == unit_dims(expected)
 }
 
 /// Число формульных строк по нодам (из построчных выходов пересчёта FR-025):
@@ -388,7 +394,7 @@ fn formula_line_counts(lines: &flow::LineOutputs) -> HashMap<String, usize> {
 /// `canvasdesk.expr`, плюс КАЖДАЯ формульная строка текста (строки листа
 /// делят окружение — вход может читаться любой из них). Код-фенсы и проза
 /// пропускаются: парсинг строки не удался — она не формула (Numi-тишина).
-fn slot_references(node: &Node) -> SlotRefs {
+pub(crate) fn slot_references(node: &Node) -> SlotRefs {
     let mut refs = SlotRefs::default();
     let template = node.template();
     let main_formula: Option<String> = match &template {
@@ -428,10 +434,10 @@ fn slot_references(node: &Node) -> SlotRefs {
 
 /// Множество занятых позиционных входов формул ноды.
 #[derive(Default)]
-struct SlotRefs {
-    slots: HashSet<usize>,
+pub(crate) struct SlotRefs {
+    pub(crate) slots: HashSet<usize>,
     /// Формула читает `$in` (валиден при ровно одном входе).
-    in_ref: bool,
+    pub(crate) in_ref: bool,
 }
 
 /// Обход дерева формулы: `$N` (целые ≥ 1 — входы, дробные — валюта) и
@@ -878,6 +884,35 @@ mod tests {
             validate(&canvas),
             Vec::new(),
             "пролитое ребро — не неиспользуемый слот"
+        );
+    }
+
+    /// FR-050 Н5: безразмерная сторона совместима с любой — скаляр в
+    /// параметр с единицей (трактуется в единицах приёмника) и значение
+    /// с единицей в безразмерный параметр (приходит как есть) — НЕ ошибки;
+    /// E-UNIT — только несовместимые размерности при единицах с обеих
+    /// сторон (ms в rps — ошибка, покрыто unit_mismatch_on_spill_is_error).
+    #[test]
+    fn unit_scalar_sides_are_compatible() {
+        // Скаляр в rps-параметр — чисто (единицу прикрепляет flow)
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "src", "v = 100", 0.0);
+        template_node(&mut canvas, "gw", &[("rps", Some("rps"))], &[]);
+        ported_edge(&mut canvas, "src", "gw", Some("v"), Some("rps"));
+        assert_eq!(
+            validate(&canvas),
+            Vec::new(),
+            "безразмерное значение в параметр с единицей — не ошибка"
+        );
+        // rps-значение в скалярный параметр — чисто (приходит с единицей)
+        let mut canvas2 = Canvas::default();
+        sheet(&mut canvas2, "src", "v = 100 rps", 0.0);
+        template_node(&mut canvas2, "gw", &[("k", None)], &[]);
+        ported_edge(&mut canvas2, "src", "gw", Some("v"), Some("k"));
+        assert_eq!(
+            validate(&canvas2),
+            Vec::new(),
+            "значение с единицей в безразмерный параметр — не ошибка"
         );
     }
 }

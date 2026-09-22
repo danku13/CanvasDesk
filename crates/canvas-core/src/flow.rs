@@ -300,6 +300,32 @@ fn override_assignment(expr: &str, env: &Env) -> Option<(String, Value)> {
     Some((name.to_owned(), value))
 }
 
+/// FR-050 Н5: приведение пролитого значения к единицам параметра приёмника.
+/// Безразмерное значение в параметр с единицей трактуется в единицах
+/// приёмника (Numi-семантика: «500» в параметр rps = 500 rps — число
+/// переносится, единица прикрепляется); значение с единицей приходит как
+/// есть (в безразмерный параметр — тоже, отображается со своей единицей);
+/// несовместимые размерности обеих сторон — диагноз `E-UNIT` в
+/// [`crate::validate`] (здесь значение не искажаем). Неизвестный токен
+/// единицы параметра — скаляр (тихая деградация, как в
+/// [`expr::unit_value`]).
+fn spill_value_in_param_units(
+    tpl: &crate::templates::TemplateRef,
+    param: &str,
+    value: &Value,
+) -> Value {
+    if !value.unit.is_scalar() {
+        return value.clone();
+    }
+    match tpl.params.get(param).and_then(|spec| spec.unit.as_deref()) {
+        Some(unit) => {
+            let expected = expr::unit_value(0.0, Some(unit));
+            Value::with_unit(value.num, expected.unit)
+        }
+        None => value.clone(),
+    }
+}
+
 /// FR-025: построчные выходы Numi-листов — значение каждой формульной
 /// строки: `(id ноды, индекс строки) → Value`. Заполняется в
 /// [`propagate_with_lines`] (тот же обход и то же окружение, что у
@@ -419,18 +445,31 @@ pub fn propagate_with_lines_data(
         } else {
             Env::with_inbound(inbound.slots.clone())
         };
-        // FR-018: у шаблонной ноды параметры (`canvasdesk.template.params`)
-        // входят в окружение как `$имя`; формула — снимок из template-ссылки
-        // (приоритет над `canvasdesk.expr` — шаблон определяет расчёт).
-        // FR-017: override строки-параметра подменяет значение в ВИРТУАЛЬНОЙ
-        // param-карте (persisted-снапшот не трогается): RHS вычисляется
-        // последовательно в окружении входов + уже подменённых параметров.
+        // FR-050 Р-1 (приоритет источников значения): параметры собираются
+        // каскадом «локальный дефолт → проливание (`toParam`, «проливание
+        // сильнее дефолта», FR-029) → what-if подмена строки-параметра
+        // (перекрывает всё, FR-017 поверх, runtime-only)». Инвариант Р-1:
+        // снятие what-if возвращает проливание, удаление ребра — локальное
+        // значение. Н5: безразмерное пролитое значение трактуется в
+        // единицах приёмника (Numi-семантика: «500» в параметр rps =
+        // 500 rps); значение с единицей приходит как есть (в том числе в
+        // безразмерный параметр); E-UNIT — только несовместимые размерности
+        // (validate, FR-032).
         let template = node.template();
         let env = match &template {
             Some(tpl) => {
                 let mut params = tpl.param_values();
+                // Каскад, шаг 2: проливание перекрывает локальные значения.
+                for (name, value) in &inbound.spill {
+                    if let Some(v) = value {
+                        params.insert(name.clone(), spill_value_in_param_units(tpl, name, v));
+                    }
+                }
+                // Каскад, шаг 3: what-if подмена перекрывает всё; RHS
+                // вычисляется последовательно в окружении каскада (входы +
+                // локальные + проливание + уже подменённые параметры).
                 if !line_overrides.is_empty() {
-                    let mut env_params = env.clone();
+                    let mut env_params = env.clone().with_param_map(params.clone());
                     for (_, expr) in &line_overrides {
                         if let Some((name, value)) = override_assignment(expr, &env_params) {
                             params.insert(name.clone(), value.clone());
@@ -440,22 +479,23 @@ pub fn propagate_with_lines_data(
                 }
                 env.with_param_map(params)
             }
-            None => env,
-        };
-        // FR-029: ПРОЛИВАНИЕ — значения рёбер с `toParam` подставляются в
-        // окружение как `$<имя параметра>` ПОСЛЕ локальных параметров:
-        // ребро перекрывает локальное значение («проливание сильнее
-        // дефолта»), без правки формулы шаблона. Ребро без значения —
-        // параметр остаётся локальным (тихая деградация, как у слотов).
-        let env = if inbound.spill.is_empty() {
-            env
-        } else {
-            let resolved: BTreeMap<String, Value> = inbound
-                .spill
-                .into_iter()
-                .filter_map(|(name, value)| value.map(|v| (name, v)))
-                .collect();
-            env.with_param_map(resolved)
+            None => {
+                // Текстовая нода: спецификаций параметров нет — проливание
+                // напрямую в карту окружения (what-if действует через
+                // виртуальный исходник текста выше, FR-017).
+                if inbound.spill.is_empty() {
+                    env
+                } else {
+                    let resolved: BTreeMap<String, Value> = inbound
+                        .spill
+                        .iter()
+                        .filter_map(|(name, value)| {
+                            value.as_ref().map(|v| (name.clone(), v.clone()))
+                        })
+                        .collect();
+                    env.with_param_map(resolved)
+                }
+            }
         };
         // FR-025 (правка 2): значение КАЖДОЙ формульной строки текста —
         // кандидат построчной точки выхода, теперь и у шаблонных нод
@@ -804,6 +844,127 @@ pub fn unmapped_inputs_with_data(
         }
     }
     result
+}
+
+/// FR-050 Р-4 (Н10-а — строка-проекция, решено раундом 4): авто-строка
+/// приёмника — производная строка тела ноды для value-ребра БЕЗ `toParam`,
+/// подключённого к ноде без ожидающего порта (позиционный слот не читается
+/// формулами ноды — условие W-UNUSED-SLOT FR-032; шаблонная нода читает
+/// `$параметры`, не `$N`). Display-level: НЕ сериализуется в `.canvas`
+/// (round-trip байт-в-байт), в undo не участвует — единственный источник
+/// истины ребро; повторный пересчёт даёт идентичную строку; удаление ребра
+/// удаляет строку (конвертации в ручную нет — Р-5); ручная правка
+/// невозможна до удаления связи.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoRow {
+    /// id ноды-приёмника (строка отображается в теле этой ноды).
+    pub node_id: String,
+    /// id ребра — источник истины строки (Н10-а: производная ребра).
+    pub edge_id: String,
+    /// Позиционный слот (0-based среди позиционных value-рёбер, как
+    /// `crate::dataref::InputRef::slot`); `$N` для тултипа = slot + 1
+    /// (отображение `$N` на теле ноды запрещено FR-044 Р-3 — только тултип).
+    pub slot: usize,
+    /// Полный путь «Объект.Поле» (имена — единая точка сборки dataref,
+    /// FR-045 Р-5; коллизия имён объектов — «Имя (node_id)»).
+    pub path: String,
+    /// Короткое имя поля (Н7: канвас LOD-2 вне stage — «Поле», полный
+    /// путь — в тултипе).
+    pub field: String,
+    /// Пролитое значение слота; `None` — unmapped («не подставлено»,
+    /// Р-3: пунктир + тултип «проблема + решение» — этапы C/D).
+    pub value: Option<Value>,
+}
+
+/// FR-050 Р-4: авто-строки приёмника — производные данные пересчёта
+/// ([`FlowSolutions`] активного состояния). Порядок — `canvas.edges`
+/// (детерминирован; повторный пересчёт — идентичные строки, инвариант 2
+/// FR-050).
+pub fn auto_rows(canvas: &Canvas, node_id: &str, solutions: &FlowSolutions) -> Vec<AutoRow> {
+    auto_rows_with_data(canvas, node_id, solutions, &DataSnapshots::new())
+}
+
+/// FR-050 Р-4: [`auto_rows`] со снапшотами CSV-источников — значения
+/// data-нод резолвятся той же адресацией, что в пересчёте (FR-045 R-2:
+/// `fromOutput` — колонка, `fromLine` — запись; снапшота нет — unmapped).
+pub fn auto_rows_with_data(
+    canvas: &Canvas,
+    node_id: &str,
+    solutions: &FlowSolutions,
+    data: &DataSnapshots,
+) -> Vec<AutoRow> {
+    let Some(node) = canvas.node(node_id) else {
+        return Vec::new();
+    };
+    // Позиционные value-рёбра приёмника — слоты $1..$N по порядку
+    // `canvas.edges` (как `inbound_values`).
+    let positional: Vec<&Edge> = canvas
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.to_node == node_id
+                && edge.flow_kind() == FlowKind::Value
+                && edge.to_param.is_none()
+        })
+        .collect();
+    if positional.is_empty() {
+        return Vec::new();
+    }
+    // «Ожидающий порт»: слот читается формулами ноды — `$N` (целые ≥ 1)
+    // или `$in` (валиден при ровно одном входе) — зеркало логики
+    // W-UNUSED-SLOT FR-032. Читается → значение уходит в формулу
+    // (обычный поток FR-014), авто-строки нет.
+    let refs = crate::validate::slot_references(node);
+    let counts = crate::dataref::display_name_counts(canvas);
+    let mut result = Vec::new();
+    for (slot, edge) in positional.iter().enumerate() {
+        let read = (refs.in_ref && positional.len() == 1) || refs.slots.contains(&(slot + 1));
+        if read {
+            continue;
+        }
+        let value = edge_source_value_with_data(
+            edge,
+            &solutions.outputs,
+            &solutions.lines,
+            &solutions.named,
+            data,
+        );
+        let obj = crate::dataref::qualified_obj_name(canvas, &edge.from_node, &counts);
+        let field = source_field_name(canvas, edge);
+        result.push(AutoRow {
+            node_id: node_id.to_owned(),
+            edge_id: edge.id.clone(),
+            slot,
+            path: format!("{obj}.{field}"),
+            field,
+            value,
+        });
+    }
+    result
+}
+
+/// Поле «Объект.Поле» авто-строки (Р-6, зеркалит приоритет адресации
+/// `edge_source_value`): `fromOutput` — имя выхода (data-нода — колонка,
+/// FR-045 R-2); `fromLine` — имя присваивания этой строки-источника
+/// (fallback «строка N», отображение 1-based); ребро без адресации —
+/// `edge.id` (значение ноды целиком, FR-045 Р-5).
+fn source_field_name(canvas: &Canvas, edge: &Edge) -> String {
+    if let Some(name) = &edge.from_output {
+        return name.clone();
+    }
+    if let Some(line) = edge.from_line {
+        let raw = canvas
+            .node(&edge.from_node)
+            .and_then(|node| node.text.as_deref())
+            .and_then(|text| text.lines().nth(line));
+        if let Some(raw) = raw {
+            if let crate::expr::NumiLineKind::Assignment { name } = crate::expr::line_kind(raw) {
+                return name;
+            }
+        }
+        return format!("строка {}", line + 1);
+    }
+    edge.id.clone()
 }
 
 /// Заголовок ноды-источника для подписи проливания: снимок имени шаблона
@@ -2666,6 +2827,243 @@ mod tests {
                 .map(|v| v.num),
             Some(11.0),
             "снапшот (10), а не переменная листа (1)"
+        );
+    }
+
+    // --- FR-050: наглядное проливание — этап A (ядро семантики) ---
+
+    /// FR-050 Р-1 (инвариант 1): приоритет источников значения —
+    /// what-if > проливание > локальный параметр. Снятие what-if
+    /// возвращает проливание, удаление ребра — локальное значение.
+    #[test]
+    fn whatif_beats_spill_beats_local() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "src", "1389", 0.0);
+        // Шаблонная нода: локальный rps = 500 (rps)
+        template_node_with_outputs(
+            &mut canvas,
+            "gw",
+            &[("rps", 500.0, Some("rps"))],
+            "$rps",
+            &[],
+        );
+        ported_value_edge(&mut canvas, "e1", "src", "gw", None, Some("rps"));
+        let num = |solutions: &crate::flow::FlowSolutions| {
+            solutions
+                .outputs
+                .get("gw")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num)
+        };
+        // Проливание: 1389 (перекрыло локальный 500)
+        let base = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(num(&base), Some(1389.0), "проливание перекрывает локальный");
+        // What-if подмена строки-параметра: 2000 (перекрыла проливание)
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("gw".to_owned(), 0), "rps = 2000 rps".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let active = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        assert_eq!(num(&active), Some(2000.0), "what-if перекрывает всё");
+        // Снятие what-if → снова проливание
+        let base2 = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            num(&base2),
+            Some(1389.0),
+            "снятие what-if возвращает проливание"
+        );
+        // Удаление ребра → локальное значение
+        canvas.edges.clear();
+        let local = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            num(&local),
+            Some(500.0),
+            "удаление ребра возвращает локальное"
+        );
+    }
+
+    /// FR-050 Н5: безразмерное пролитое значение трактуется в единицах
+    /// приёмника («500» в параметр rps = 500 rps); значение с единицей в
+    /// безразмерный параметр приходит как есть.
+    #[test]
+    fn spill_units_receiver_semantics() {
+        // Скаляр 500 → параметр rps: единица приёмника прикрепляется
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "src", "500", 0.0);
+        template_node_with_outputs(
+            &mut canvas,
+            "gw",
+            &[("rps", 100.0, Some("rps"))],
+            "$rps",
+            &[],
+        );
+        ported_value_edge(&mut canvas, "e1", "src", "gw", None, Some("rps"));
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let value = solutions
+            .outputs
+            .get("gw")
+            .and_then(|result| result.as_ref().ok())
+            .expect("формула вычислилась");
+        assert!(
+            (value.num - 500.0).abs() < 1e-9,
+            "число перенеслось: {value:?}"
+        );
+        assert!(
+            value.to_string().ends_with("rps"),
+            "единица приёмника прикрепилась: {value}"
+        );
+        // rps-значение → безразмерный параметр: приходит с единицей
+        let mut canvas2 = Canvas::default();
+        canvas2
+            .nodes
+            .push(Node::text("src", "v = 300 rps", 0.0, 0.0));
+        template_node_with_outputs(&mut canvas2, "gw", &[("k", 2.0, None)], "$k", &[]);
+        ported_value_edge(&mut canvas2, "e2", "src", "gw", Some("v"), Some("k"));
+        let solutions2 = propagate_with_lines(&canvas2, &WhatIfOverrides::default()).expect("DAG");
+        let value2 = solutions2
+            .outputs
+            .get("gw")
+            .and_then(|result| result.as_ref().ok())
+            .expect("формула вычислилась");
+        assert!(
+            (value2.num - 300.0).abs() < 1e-9,
+            "число перенеслось: {value2:?}"
+        );
+        assert!(
+            value2.to_string().ends_with("rps"),
+            "единица значения сохранена: {value2}"
+        );
+    }
+
+    /// FR-050 Р-4 (инвариант 2): авто-строка приёмника — производная
+    /// value-ребра без toParam к ноде без ожидающего порта: путь
+    /// «Объект.Поле» (fromOutput — имя выхода; fromLine — имя
+    /// присваивания, fallback «строка N»), значение слота; повторный
+    /// пересчёт — идентичные строки; удаление ребра — строка исчезла.
+    #[test]
+    fn auto_row_appears_for_unread_slot() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "traffic",
+            "Трафик\npeak_rps = 1389 rps",
+            0.0,
+            0.0,
+        ));
+        node_with_expr(&mut canvas, "gateway", "заметка без формулы", 1.0);
+        // value-ребро БЕЗ toParam; формула gateway не читает $1
+        ported_value_edge(
+            &mut canvas,
+            "e1",
+            "traffic",
+            "gateway",
+            Some("peak_rps"),
+            None,
+        );
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let rows = auto_rows(&canvas, "gateway", &solutions);
+        assert_eq!(rows.len(), 1, "ровно одна авто-строка: {rows:?}");
+        assert_eq!(rows[0].node_id, "gateway");
+        assert_eq!(rows[0].edge_id, "e1");
+        assert_eq!(rows[0].slot, 0);
+        assert_eq!(rows[0].path, "Трафик.peak_rps");
+        assert_eq!(rows[0].field, "peak_rps");
+        let value = rows[0].value.as_ref().expect("значение пролито");
+        assert!(value.to_string().contains("1389"), "значение: {value}");
+        // Детерминизм: повторный пересчёт — идентичные строки
+        let solutions2 = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let rows2 = auto_rows(&canvas, "gateway", &solutions2);
+        assert_eq!(rows, rows2, "повторный пересчёт идентичен");
+        // Удаление ребра — строка исчезла
+        canvas.edges.clear();
+        let solutions3 = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert!(
+            auto_rows(&canvas, "gateway", &solutions3).is_empty(),
+            "ребра нет — строки нет"
+        );
+    }
+
+    /// FR-050 Р-4: «ожидающий порт» — слот читается формулой (`$in` при
+    /// единственном входе, `$N`) → авто-строки нет; шаблонная нода читает
+    /// `$параметры` → позиционное ребро даёт авто-строку.
+    #[test]
+    fn auto_row_absent_when_slot_read() {
+        // $in при единственном входе — слот занят
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "7", 0.0);
+        node_with_expr(&mut canvas, "B", "$in × 2", 1.0);
+        value_edge(&mut canvas, "e1", "A", "B");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert!(
+            auto_rows(&canvas, "B", &solutions).is_empty(),
+            "$in читает единственный вход"
+        );
+        // $2 читается, $1 нет — авто-строка только для первого слота
+        let mut canvas2 = Canvas::default();
+        node_with_expr(&mut canvas2, "A", "7", 0.0);
+        node_with_expr(&mut canvas2, "C", "5", 1.0);
+        node_with_expr(&mut canvas2, "D", "$2 + 1", 2.0);
+        value_edge(&mut canvas2, "e1", "A", "D");
+        value_edge(&mut canvas2, "e2", "C", "D");
+        let solutions2 = propagate_with_lines(&canvas2, &WhatIfOverrides::default()).expect("DAG");
+        let rows = auto_rows(&canvas2, "D", &solutions2);
+        assert_eq!(rows.len(), 1, "только неиспользуемый слот: {rows:?}");
+        assert_eq!(rows[0].slot, 0, "слот 0 ($1) не читается");
+        assert_eq!(rows[0].edge_id, "e1");
+        // Шаблонная нода: формула читает $параметры — позиционное ребро
+        // даёт авто-строку (W-UNUSED-SLOT условие)
+        let mut canvas3 = Canvas::default();
+        node_with_expr(&mut canvas3, "A", "7", 0.0);
+        template_node_with_outputs(
+            &mut canvas3,
+            "gw",
+            &[("rps", 100.0, Some("rps"))],
+            "utilization($rps, 1 req / 10 ms)",
+            &[],
+        );
+        value_edge(&mut canvas3, "e1", "A", "gw");
+        let solutions3 = propagate_with_lines(&canvas3, &WhatIfOverrides::default()).expect("DAG");
+        let rows3 = auto_rows(&canvas3, "gw", &solutions3);
+        assert_eq!(rows3.len(), 1, "шаблон не читает $N: {rows3:?}");
+        assert_eq!(rows3[0].field, "e1", "ребро без адресации — edge.id");
+        assert_eq!(rows3[0].path, "A.e1");
+    }
+
+    /// FR-050 Р-4 (Н7/Р-6): поле авто-строки — fromLine → имя присваивания
+    /// строки-источника (fallback «строка N», 1-based); unmapped-источник
+    /// (проза) — строка с value = None (пунктир/тултип — этапы C/D).
+    #[test]
+    fn auto_row_field_names_and_unmapped() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nкол = 42\nпросто текст", 0.0, 0.0));
+        node_with_expr(&mut canvas, "t", "заметка", 1.0);
+        // fromLine = 1 → присваивание «кол»
+        let mut e1 = Edge::new("e1", "s", None, "t", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1);
+        canvas.add_edge(e1);
+        // fromLine = 2 → проза — fallback «строка 3», значение None
+        let mut e2 = Edge::new("e2", "s", None, "t", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(2);
+        canvas.add_edge(e2);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let rows = auto_rows(&canvas, "t", &solutions);
+        assert_eq!(rows.len(), 2, "оба слота не читаются: {rows:?}");
+        assert_eq!(rows[0].field, "кол", "имя присваивания строки 1");
+        assert_eq!(rows[0].path, "Заявки.кол");
+        assert_eq!(
+            rows[0].value.as_ref().map(|v| v.num),
+            Some(42.0),
+            "значение строки листа"
+        );
+        assert_eq!(rows[1].field, "строка 3", "проза — fallback 1-based");
+        assert!(
+            rows[1].value.is_none(),
+            "источник-проза — значение не подставлено (unmapped)"
         );
     }
 }
