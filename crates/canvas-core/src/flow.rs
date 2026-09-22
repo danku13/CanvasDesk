@@ -864,6 +864,34 @@ pub fn param_spills(canvas: &Canvas, node_id: &str) -> Vec<ParamSpill> {
     by_param.into_values().collect()
 }
 
+/// FR-050 Н2 (этап C): совместимо ли значение-источник drag с параметром
+/// приёмника — для подсветки допустимых целей во время drag. Правила те же,
+/// что у `E-UNIT`/Н5: скаляр с любой стороны совместим (безразмерное
+/// значение трактуется в единицах приёмника), несовместимые размерности
+/// при единицах с обеих сторон — нет. Неизвестный токен единицы параметра —
+/// скаляр (тихая деградация, как в [`expr::unit_value`]).
+pub fn value_param_compatible(value: &Value, param_unit: Option<&str>) -> bool {
+    let expected = expr::unit_value(0.0, param_unit);
+    crate::validate::dimensions_compatible(&value.unit, &expected.unit)
+}
+
+/// FR-050 Н4 (этап C): value-рёбра, занимающие параметр `param` ноды —
+/// для диалога «Заменить источник?» (победитель — последнее по
+/// `canvas.edges`). Легаси-дубли входят все: замена источника удаляет
+/// каждое, восстанавливая инвариант «один вход на параметр» (Н4).
+/// Пусто — параметр свободен.
+pub fn occupying_param_edges<'a>(canvas: &'a Canvas, node_id: &str, param: &str) -> Vec<&'a Edge> {
+    canvas
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.to_node == node_id
+                && edge.flow_kind() == FlowKind::Value
+                && edge.to_param.as_deref() == Some(param)
+        })
+        .collect()
+}
+
 /// FR-045 R-3: вход без пролитого значения — производное pending-состояние
 /// «значение не подставлено». Определение (§Решения Р-3): value-ребро
 /// подключено к приёмнику, но значения нет (источник pending/ошибка/
@@ -1718,6 +1746,83 @@ mod tests {
         let spills = param_spills(&canvas, "B");
         assert_eq!(spills[0].from_label, "Сервис аутентификации");
         assert_eq!(spills[0].from_line, Some(1));
+    }
+
+    /// FR-050 Н2 (этап C): совместимость значения с параметром — правила
+    /// Н5/E-UNIT: скаляры совместимы с любой стороной, одинаковые
+    /// размерности совместимы, несовместимые — нет.
+    #[test]
+    fn value_param_compatible_h5_rules() {
+        use crate::expr::{self, Value};
+        // Скаляр в параметр с единицей — совместим (трактуется в единицах
+        // приёмника)
+        assert!(value_param_compatible(&Value::scalar(500.0), Some("rps")));
+        // Единица в безразмерный параметр — совместим (приходит как есть)
+        assert!(value_param_compatible(
+            &Value::with_unit(1389.0, expr::unit_value(0.0, Some("rps")).unit),
+            None
+        ));
+        // Совместимые размерности (rps → rps)
+        assert!(value_param_compatible(
+            &Value::with_unit(1389.0, expr::unit_value(0.0, Some("rps")).unit),
+            Some("rps")
+        ));
+        // Конвертируемые масштабы одной размерности (ms → s)
+        assert!(value_param_compatible(
+            &Value::with_unit(200.0, expr::unit_value(0.0, Some("ms")).unit),
+            Some("s")
+        ));
+        // Несовместимые размерности (ms в параметр rps) — НЕсовместимо
+        assert!(!value_param_compatible(
+            &Value::with_unit(200.0, expr::unit_value(0.0, Some("ms")).unit),
+            Some("rps")
+        ));
+        // Скаляр в скаляр — совместимо
+        assert!(value_param_compatible(&Value::scalar(2.0), None));
+    }
+
+    /// FR-050 Н4 (этап C): занимающие value-рёбра параметра — control-рёбра
+    /// и чужие параметры не считаются; легаси-дубли входят все.
+    #[test]
+    fn occupying_param_edges_filters_and_collects_duplicates() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "A", "1", 0.0);
+        node_with_expr(&mut canvas, "C", "2", 1.0);
+        node_with_expr(&mut canvas, "B", "$rps × $cpu", 2.0);
+        // Value в rps (e1) + control с toParam=cpu (не считается) +
+        // value без toParam (позиционный, не считается) + value в cpu (e4)
+        let mut e1 = Edge::new("e1", "A", None, "B", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.to_param = Some("rps".to_owned());
+        canvas.add_edge(e1);
+        let mut control = Edge::new("e2", "A", None, "B", None);
+        control.to_param = Some("rps".to_owned());
+        canvas.add_edge(control);
+        value_edge(&mut canvas, "e3", "A", "B");
+        let mut e4 = Edge::new("e4", "C", None, "B", None);
+        e4.set_flow_kind(FlowKind::Value);
+        e4.to_param = Some("cpu".to_owned());
+        canvas.add_edge(e4);
+        // Легаси-дубль в rps
+        let mut e5 = Edge::new("e5", "C", None, "B", None);
+        e5.set_flow_kind(FlowKind::Value);
+        e5.to_param = Some("rps".to_owned());
+        canvas.add_edge(e5);
+
+        let rps = occupying_param_edges(&canvas, "B", "rps");
+        assert_eq!(
+            rps.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["e1", "e5"],
+            "value-рёбра в rps (дубль входит), control/позиционные — нет"
+        );
+        let cpu = occupying_param_edges(&canvas, "B", "cpu");
+        assert_eq!(cpu.len(), 1);
+        assert_eq!(cpu[0].id, "e4");
+        assert!(
+            occupying_param_edges(&canvas, "B", "unknown").is_empty(),
+            "свободный параметр — пусто"
+        );
+        assert!(occupying_param_edges(&canvas, "A", "rps").is_empty());
     }
 
     /// Подмена строки-присваивания на подпись источника: индексы строк

@@ -95,6 +95,18 @@ pub struct ThemeColors {
     /// (полоса карточки и ветка к листу). Источник: `EXPLAIN_LEAF` /
     /// `EXPLAIN_LEAF_LIGHT` tokens.rs — по теме (контраст ≥ 3:1).
     pub explain_leaf: [f32; 4],
+    /// FR-053 (U3 PRD-0009 F-9): слоты состояний контролов (пилоты: галерея
+    /// схем, what-if бар, empty-state). Значения — из примитивов
+    /// `canvas_core::tokens::CONTROL_*` (ноль скачка: бывшие hover_fill/dim).
+    /// Hover строки списка/вторичной кнопки.
+    pub control_hover_fill: [f32; 4],
+    /// Hover primary-кнопки (обе темы: primary не дифференцирован).
+    pub control_primary_hover_fill: [f32; 4],
+    /// Выбранная строка списка (сегодня = hover — ноль скачка; семантика
+    /// разделена слотами, дифференциация — v2).
+    pub control_selected_fill: [f32; 4],
+    /// Текст disabled-кнопок (бывшая локальная dim app.rs).
+    pub control_disabled_text: Color,
 }
 
 impl ThemeColors {
@@ -166,6 +178,15 @@ impl ThemeColors {
             stage_dim: [0.02, 0.02, 0.04, 0.6],
             // PRD-0007: лист explain-дерева — #9fd6ff (прототип v4).
             explain_leaf: canvas_core::tokens::EXPLAIN_LEAF,
+            // FR-053 (U3 F-9): слоты состояний контролов — из примитивов.
+            control_hover_fill: canvas_core::tokens::CONTROL_HOVER_FILL_DARK,
+            control_primary_hover_fill: canvas_core::tokens::CONTROL_PRIMARY_HOVER_FILL,
+            control_selected_fill: canvas_core::tokens::CONTROL_SELECTED_FILL_DARK,
+            control_disabled_text: Color::rgb(
+                canvas_core::tokens::CONTROL_DISABLED_TEXT[0],
+                canvas_core::tokens::CONTROL_DISABLED_TEXT[1],
+                canvas_core::tokens::CONTROL_DISABLED_TEXT[2],
+            ),
         }
     }
 
@@ -234,6 +255,15 @@ impl ThemeColors {
             // PRD-0007: лист explain-дерева — затемнённый слот (AC-3.4:
             // контраст к светлому фону ≥ 3:1).
             explain_leaf: canvas_core::tokens::EXPLAIN_LEAF_LIGHT,
+            // FR-053 (U3 F-9): слоты состояний контролов — из примитивов.
+            control_hover_fill: canvas_core::tokens::CONTROL_HOVER_FILL_LIGHT,
+            control_primary_hover_fill: canvas_core::tokens::CONTROL_PRIMARY_HOVER_FILL,
+            control_selected_fill: canvas_core::tokens::CONTROL_SELECTED_FILL_LIGHT,
+            control_disabled_text: Color::rgb(
+                canvas_core::tokens::CONTROL_DISABLED_TEXT[0],
+                canvas_core::tokens::CONTROL_DISABLED_TEXT[1],
+                canvas_core::tokens::CONTROL_DISABLED_TEXT[2],
+            ),
         }
     }
 
@@ -429,6 +459,37 @@ mod tests {
             );
             assert_eq!([theme.hud.r(), theme.hud.g(), theme.hud.b()], tokens::HUD);
         }
+        // FR-053 (U3 F-9): слоты состояний контролов — паритет по темам.
+        assert_eq!(
+            ThemeColors::dark().control_hover_fill,
+            tokens::CONTROL_HOVER_FILL_DARK
+        );
+        assert_eq!(
+            ThemeColors::light().control_hover_fill,
+            tokens::CONTROL_HOVER_FILL_LIGHT
+        );
+        assert_eq!(
+            ThemeColors::dark().control_selected_fill,
+            tokens::CONTROL_SELECTED_FILL_DARK
+        );
+        assert_eq!(
+            ThemeColors::light().control_selected_fill,
+            tokens::CONTROL_SELECTED_FILL_LIGHT
+        );
+        for theme in [ThemeColors::dark(), ThemeColors::light()] {
+            assert_eq!(
+                theme.control_primary_hover_fill,
+                tokens::CONTROL_PRIMARY_HOVER_FILL
+            );
+            assert_eq!(
+                [
+                    theme.control_disabled_text.r(),
+                    theme.control_disabled_text.g(),
+                    theme.control_disabled_text.b()
+                ],
+                tokens::CONTROL_DISABLED_TEXT
+            );
+        }
     }
 
     /// FR-046 (PRD-0006 F-5, протокол исключений): контраст новых слотов.
@@ -496,6 +557,38 @@ mod tests {
             "hud светлая {:.2} — ниже документированной границы",
             hud(&light)
         );
+
+        // FR-053 (U3 F-9): control_disabled_text к подложкам disabled-кнопок
+        // what-if бара: тёмная — заливка WHATIF_CHIP_DIM; светлая — menu_fill
+        // (значение #8a909c прежнее, обе пары проходят 3:1 — новые пороги).
+        for theme in [&dark, &light] {
+            let sub = if theme.is_dark() {
+                canvas_core::tokens::WHATIF_CHIP_DIM
+            } else {
+                theme.menu_fill
+            };
+            let r = contrast_text_vs_fill(theme.control_disabled_text, sub);
+            assert!(
+                r >= 3.0,
+                "control_disabled_text {r:.2} < 3:1 (dark={})",
+                theme.is_dark()
+            );
+        }
+        // control_hover_fill не текстовый (подложка hover) — контраст
+        // фиксируется как различимость от базовой заливки строки: hover
+        // обязан отличаться от menu_fill (суммарная дельта каналов) на обеих
+        // темах. Фактические значения: тёмная 0.245, светлая 0.05 (формула
+        // hover_fill насыщает до 1.0); регрессионная граница ниже фактических.
+        for theme in [&dark, &light] {
+            let delta = (theme.control_hover_fill[0] - theme.menu_fill[0]).abs()
+                + (theme.control_hover_fill[1] - theme.menu_fill[1]).abs()
+                + (theme.control_hover_fill[2] - theme.menu_fill[2]).abs();
+            assert!(
+                delta >= 0.045,
+                "hover неотличим от фона строки: {delta} (dark={})",
+                theme.is_dark()
+            );
+        }
     }
 
     /// Гарантия доступности (WCAG AA): readable_on_card возвращает ≥ 4.5:1

@@ -1,3 +1,82 @@
+## 2026-09-22 — FR-050 этап C (UI-порты и диалоги): входные якоря параметров, toParam-drag с подсветкой совместимости, меню выбора, диалог «Заменить источник?», line_ports ON, unmapped-диагностика Р-3
+
+- **Контекст:** дорожная карта FR-050 (этапы A и B — ядро семантики и
+  именованный синтаксис — в main с 2026-09-22); этап C по плану §Дорожная
+  карта: Н2 входные якоря + drag с подсветкой совместимых, Н3 line_ports
+  default ON, Н4 диалог «Заменить источник?», Р-3 unmapped-подсветка +
+  тултипы «проблема + решение», i18n RU/EN (FR-040).
+- **Н2 якоря параметров (core→render→app):** `ParamPort {param, point}` +
+  `param_port_at` в edgegeom (зеркало FR-025, допуск CR-003, zoom-ужесточение);
+  `text.rs::param_ports()` — вертикали ряда строки из кэша раскладки, имя —
+  по строке-присваиванию, входящей в снапшот `TemplateRef.params` (канонический
+  адрес toParam, тот же источник, что у E-PORT-UNKNOWN); рендер
+  `build_param_port_instances` (левый край, LINE_PORT_DOT/port_dot_diameter,
+  hover-аффорданс) + во время value-drag подсветка совместимости:
+  `ParamDropView`/`SceneView.param_drop` — совместимые (Н5: скаляр совместим
+  с любой стороной, конвертируемые масштабы совместимы) — акцент value-потока
+  и узловой размер, несовместимые — приглушены; источник сравнения —
+  `flow::value_param_compatible` (pub; `dimensions_compatible` стал
+  pub(crate) в validate). App: `param_port_hit` (кандидаты spatial-индекса,
+  хост первым), `compute_param_drop` на кадр ввода (паттерн bundle_hover),
+  drop на якорь → `drop_to_param` → `create_param_edge` (undo-шаг + живой
+  пересчёт; цикл — диалог FR-014 с control-фолбэком: toParam не переносится,
+  как from_line у FR-025).
+- **Н2 меню выбора:** drop value-ребра на шаблонную ноду мимо якоря —
+  `ChoiceMenu` (screen-space, геометрия меню T7 + строка заголовка
+  CHOICE_MENU_TITLE_H; пункты = параметры снапшота; клик по пункту — действие,
+  клик мимо/Esc/ПКМ — отмена); W-AMBIGUOUS-SRC (FR-032): drag от текстовой
+  ноды целиком при >1 формульных строк — меню выбора строки-источника
+  («имя = значение», из `source_formula_lines` по flow_active.lines).
+- **Н3:** `Settings::default().line_ports = true` (старые конфиги без поля —
+  включены; явный false сохраняется); тест переименован
+  `line_ports_defaults_on_and_round_trips`.
+- **Н4 диалог замены:** `AppDialog::ReplaceSource` (кнопки
+  [Заменить]/[Отмена] — DIALOG_REPLACE_YES/DIALOG_CANCEL; тело — параметр +
+  подпись текущего источника `node_display_label`: имя шаблона → первая
+  непустая строка → label → id); подтверждение — ОДИН undo-шаг:
+  `occupying_param_edges` (легаси-дубли — все) удаляются, новое ребро
+  создаётся (инвариант «один вход на параметр» восстанавливается).
+- **Р-3 диагностика:** кэш `SceneState.unmapped_edges` (id рёбер, пересчёт в
+  `recompute_flow` из `flow::unmapped_inputs`, цикл-ветка чистит);
+  `build_edge_instances_ctx` + `unmapped_ids` — пунктир янтарным
+  `UNMAPPED_EDGE_COLOR` (severity warning FR-016), модель не мутируется,
+  выделение/фокус приоритетнее; тултип при наведении (контракт Р-3 — ровно
+  два пункта «проблема + решение»): параметр с fromOutput — точный диагноз
+  (TOOLTIP_UNMAPPED_PARAM {param}/{output}/{node}), прочие — общий шаблон
+  (TOOLTIP_UNMAPPED_SLOT); глушится при drag/меню.
+- **i18n (FR-040):** 8 ключей (диалог замены 4, меню выбора 2, тултипы 2),
+  RU/EN, тест полноты таблиц гарантирует.
+- **Тесты (+10):** core — param_port_at (hit/miss/nearest/zoom),
+  value_param_compatible (правила Н5), occupying_param_edges (фильтры +
+  легаси-дубли), line_ports default; render — якоря plain/hover/drag-compat
+  (+короткий список флагов), unmapped пунктир-янтарь + инвариант «без
+  unmapped — байт-в-байт» (цвет FLOW, модель не тронута), вызовы
+  build_edge_instances_ctx 8-арг (обёртка + no_unmapped в тестах); scene —
+  кэш unmapped set/unset (источник стал прозой через node_update_text —
+  полный пересчёт; node_edit с text ленив, CR-012); app — drag_from_node,
+  node_display_label (приоритет шаблон→строка→label→id).
+- **Гейты:** fmt ✓; clippy -D warnings (core/scene/render/app/mcp) ✓;
+  нативные тесты ✓ (457+82+15+324+278); wasm_gate ПОЛНЫЙ ✓;
+  mcp_wasm_gate ПОЛНЫЙ ✓ (e2e-сессия oracle ±1 %). Локальная чистка диска
+  (target/debug/incremental + тяжёлые тестовые бинари) — окружение песочницы,
+  CI-матрица на GitHub проверит полно.
+- **Доки:** FR-050 — статус «этапы A, B и C выполнены», дорожная карта C
+  ВЫПОЛНЕН (детально), changelog (5); FR-025 — changelog реализации Н3;
+  индекс CR/FR обновлён.
+- **Rebase на main с FR-052 U2 (единый диспетчер):** этап C написан до
+  слияния U2 в main; конфликт app.rs/lib.rs разрешён — код C сохранён,
+  меню выбора интегрировано в реестр поверхностей U2: `CHOICE_MENU` — 21-я
+  поверхность (Popups/Block, «клик мимо — закрыть и глотнуть»; esc-стек
+  РАНЬШЕ контекстного меню — transient-выбор приоритетнее базового меню;
+  hit-rect панели = пункты + заголовок; KeyOwner — Canvas, как у MENU),
+  `choice_menu_overlay` — полоса Popups в ScreenBands (поверх меню
+  канваса), диспетчерные арм click/backdrop/esc. Тест
+  `choice_menu_surface_block_above_context_menu` (реестр: Block, порядок
+  esc, hit-rect, «нет состояния — нет поверхности»). Гейты на
+  объединённом коде: fmt ✓, clippy -D warnings ✓, `cargo test --workspace`
+  1458 ✓ (48 бинарников), wasm_gate ПОЛНЫЙ ✓ (344 под wasmtime),
+  mcp_wasm_gate ✓ (e2e oracle ±1 %).
+
 ## 2026-09-21 — main stage по фидбэку владельца (wasm /CanvasDesk/app): 70% вьюпорта, порты на строках значений, подписи концов рёбер, анти-наезд пилюль
 
 - **Задача (запрос владельца, сессия 2026-09-21):** «Проанализируй wasm вариант
@@ -3639,3 +3718,84 @@ CanvasDesk». Источник — вводные владельца о проз
 - Draw-порядок и pick-порядок выводятся из реестра/кадра; порядок веток больше не источник истины.
 - Нормализованные дельты (попапы над панелями, stage-any-key, минимапа-клик) зафиксированы в FR-052 §Changes.
 - Далее: U3 — TextMeasurer + токены слотов состояний + layout-примитивы + пилоты (галерея схем, what-if бар); U4 — kit+DebugOverlay; U5 — миграция остальных поверхностей, лестница on_key целиком, линты CI, docs/ui-kit.md.
+
+---
+
+## 2026-09-22 — MCP v2: «подтянуть функционал под обновления и полностью проверить» (PRD-0008 Q5 + FR-048 X2 + FR-050 паритет)
+
+- **Разрывы, найденные разведкой (чек зелёный, но агент видел не то, что
+  пользователь):** (1) `flow_recalc`/`analyze_bottlenecks`/`graph_apply.flow`
+  пересчитывали поток с БАЗОВЫМИ overrides — при активном what-if сценарии
+  агент получал базовые числа/флаги, а канвас показывал подмены
+  (нарушение инварианта «MCP-видимость = UI», CP6/CP5/инвариант 4 FR-016);
+  (2) схемы галереи PRD-0008 не видны агенту (Q5 отложен в v2);
+  (3) lineage FR-048 X0/X1 существовал только в ядре и окне проверки X2
+  (FR-052) — у агента нет способа ответить «откуда эта цифра»;
+  (4) авто-строки FR-050 Р-4 (auto_rows) не попадали в ответы.
+- **Реализовано:** три новых инструмента (36 → 39): `schemes_list`
+  (реестр embedded — 6 пакетов, RU-первично, bare-массив в text-контенте
+  по прецеденту nodes_list FR-034), `schemes_apply {id, x?, y?}`
+  (instantiate_scheme + один undo-шаг + spatial + recompute; ответ:
+  applied/name/nodes/edges (mcp_edge_json, вкл. адресацию)/bbox/flow;
+  неизвестный id — isError БЕЗ undo-шага), `lineage {node_id, line?}`
+  (build_lineage паритет с app::build_lineage_snapshot: Ready по
+  активным значениям / Cycled-топология; сериализация kind/value/
+  formula/title/label/children+via; негативы: проза как корень, line<0,
+  неизвестная нода).
+- **Паритет активного состояния:** `mcp_flow_map` (общее тело
+  flow_recalc v2 — вынесено из arm; детерминизм: порядок нод канваса,
+  BTreeMap-индексы, отсортированные имена выходов) +
+  `mcp_flow_active_fresh` (СВЕЖИЙ пересчёт с `active_whatif_overrides()`
+  — pub(crate) в scene.rs; НЕ читает кэш: ленивые мутации node_edit с
+  text (CR-012) не поднимают ревал — кэш бывает протухшим; ревизию
+  модели и undo чтение не трогает) + `mcp_auto_rows_json` (FR-050 Р-4).
+  Применено к: flow_recalc, graph_apply.flow, schemes_apply.flow,
+  analyze_bottlenecks, lineage. mcp_flow_v2 — легаси-обходчик базы
+  (тесты). Удалена дублевая mcp_analyze_bottlenecks (база).
+- **Тесты (+4 canvas-scene):** mcp_schemes_list_embedded_registry,
+  mcp_schemes_apply_inserts_flow_and_undo (оракулы 5000/0.625, ремап
+  при двойной вставке, fail-fast), mcp_lineage_tree_total_line_and_errors
+  (calc/leaf/via, line-корень, негативы), mcp_flow_and_analysis_follow_
+  active_whatif (ρ-лестница следует за подменой; авто-строка = активное
+  значение; graph_apply.flow — тот же источник; возврат на Базу).
+  Попутно починен скрытый конфликт в mcp_fr029_instagram_mvp_reference:
+  старый тест после ЛЕНИВОГО node_edit с text читал свежий пересчёт
+  (поведение сохранено свежим propagate вместо кэша).
+- **E2E (mcp_wasm_e2e.py):** шаги 4a (schemes_list/apply с оракулами),
+  4b (lineage CDN: calc-корень, via), 4c (flow_recalc = активная подмена
+  416.67 ≠ база; авто-строка; whatif_reset → 1114.58), негативы схем/
+  lineage → isError; счётчики 36 → 39 (драйвер, inspector, headless-тест,
+  SPEC §1). text_payload() для массивных инструментов (FR-034).
+- **Доки:** SPEC §13 (инвариант «MCP-видимость = UI» + секции
+  schemes/lineage + graph_apply.flow), §1 (39); PRD-0008 §11 (Q5 закрыт)
+  + §16; FR-049 (статус MCP v2 + история); ACCEPTANCE FR-049.12;
+  agent-recipe (шаг 1 schemes_list, шаг 4 flow/lineage/autoRows).
+- **Гейты:** fmt ✓; clippy -D warnings (core/scene/mcp/headless,
+  --all-targets) ✓; нативные: core 454, mcp 15, headless 12, scene 85 ✓;
+  wasm_gate.sh ✓; mcp_wasm_gate.sh ✓ (wasip1: 13+12+85 под wasmtime,
+  полная e2e-сессия сошлась).
+
+## 2026-09-22 — FR-053: PRD-0009 U3 — TextMeasurer, layout-примитивы, токены состояний/spacing, пилоты
+
+- **Агент:** Super Z (сессия web-e10bc589, приказ владельца «Продолжай u3»)
+- **Задача:** реализация этапа U3 PRD-0009 (§13): TextMeasurer (F-6) + layout-примитивы (F-7) + токены состояний/spacing/radius (F-9 в пределах пилотов) + пилотная миграция галерея схем / what-if бар; гейты G4/G5 на пилотах; оформление FR-053.
+
+### Work Log
+- FR-053 (dd1e741): постановка U3 — анализ отсутствия измерения/примитивов/слотов (6 пунктов), Changes 4.1–4.6, нормализованные дельты (ширины чипов = измеренные; EN-счётчик шире RU — фикс; описания галереи усекаются «…»); index-cr-fr → FR-054; PRD-0009 статус/changelog.
+- canvas-ui: `layout.rs` — Row/Column{gap, MainAlign{Start,SpaceBetween}, CrossAlign, RowPolicy::{Fit,SqueezeTail}}, Child/spacer, stack, constrain, pad, Custom; SqueezeTail = именованная деградация (min(desired, остаток), хвост → 0) — дословная семантика бывшего `take`; `measure.rs` — TextMeasurer: shape через cosmic-text (Metrics size×1.3, Wrap::None, Family::Name+Weight::MEDIUM — зеркало screen-конвейера text.rs), кэш (текст, семейство, кегль, max_w) с ёмкостью и очисткой, width_of/ellipsis (бинарный поиск, FIT_EPS 0.05 против отмены разрядов f32 при (w+pad−pad)); тесты на детерминированном FontSystem со вшитым NotoSansDisplay-Medium (тот же файл, что FONT_DATA). +12 тестов.
+- canvas-core/tokens.rs: SPACING_S/SM/MD/LG/XL = 6/8/10/12/24, RADIUS_CHIP/PANEL/PILL = 6/10/12, CONTROL_HOVER_FILL_DARK/LIGHT, CONTROL_PRIMARY_HOVER_FILL, CONTROL_SELECTED_FILL_DARK/LIGHT, CONTROL_DISABLED_TEXT (#8a909c) — значения = прежним константам/вычислениям hover_fill (I-1); dimensions.json + spacing/radius, colors.json + группа control; паритет-тесты продолжены.
+- canvas-render: ThemeColors +4 слота (control_hover_fill/primary_hover/selected/disabled_text; dark()/light() из примитивов; пресеты — вывод hover-формулы от menu_fill пресета — паттерн explain_leaf); v2_slots паритет по темам; контраст-протокол FR-046: disabled_text ≥3:1 к подложкам (dark — WHATIF_CHIP_DIM, light — menu_fill), hover-различимость — регрессионная граница дельты каналов 0.045 (факты 0.245/0.05); text.rs: SANS_FAMILY/measure_font_system → pub (владелец FontSystem — Q6).
+- Пилот what-if (whatif_ui.rs): bar_layout(names, counter_label, viewport, measurer, fs) — измеренные ширины (text_width 0.62·кегль и CHIP_SLACK удалены), Ellipsis-подписи сценариев из раскладки по фактической (возможно сжатой) ширине чипа → BarLayout.scenario_labels, draw читает их (chip_label/chars.truncate удалены); хвост бара — Row SqueezeTail; ширина бара — constrain; позиция — stack; счётчик — i18n-строка параметром (фикс: ширина считалась по RU при EN-подписи); константы — из SPACING_*.
+- Пилот галерея (scheme_gallery_ui.rs): layout через stack/constrain (панель), Column+спейсеры (вертикальный ритм дословно: 0/6/6/0), Row Fit для чипов (break-кламп удалён — переполнение тестируемо, D2-тест усилен проверкой ширины ряда), Column для строк (ритм 56/50), empty-state — constrain/stack/Row(cross End); row_labels — измеренный Ellipsis заголовка (13 px)/описания (11 px) — фикс «текст переливается на соседнюю строку» (screen-тексты не переносятся).
+- app.rs: whatif_bar_layout через TextMeasurer + measure_font_system (общий FontSystem рендера); disabled-текст бара → palette.control_disabled_text (бывший локальный hex dim); галерея — selected/hover → control_selected_fill/control_hover_fill, empty-кнопки → control_primary_hover_fill/control_hover_fill (hover_fill в пилотах больше не используется; сама функция осталась для не-пилотов — U5); cosmic-text в deps canvas-app (тип FontSystem в сигнатурах; workspace-зависимость — не новая, G7).
+- TDD: G4-линт пилотов — вьюпорты 1280×800/1024×640/800×560 × RU/EN × {короткие, длинные, 8 сценариев}: 0 пересечений интерактивных rect'ов, 0 выходов за вьюпорт, подписи в границах, кадр через UiFrame.overlaps_within_layer (Panels/Modals).
+- Слияние параллельной волны: merge origin/main 8b87cfe (FR-050 C: UI-порты, диалоги, unmapped; MCP v2) — БЕЗ конфликтов (45fc88e); гейты на объединённом коде зелёные.
+- Гейты: fmt ✓, clippy -D warnings ✓, test --workspace ✓ (canvased 48 ui / 258 app-lib / 299 render / 129+81 core…), wasm_gate ✓, mcp_wasm_gate ✓ (wasmtime 36.0.1 установлен в пересозданное окружение).
+- Инфра: диск песочницы заполнился (bus error ld) — cargo clean + пересборка; wasmtime доустановлен вручную (install.sh сломан — релизный tarball v36.0.1).
+
+### Stage Summary
+- Измеренный текст работает end-to-end: раскладка what-if/галереи шейпит теми же метриками, что рендер (одна строка подписи в раскладке и отрисовке).
+- G5: в пилотах 0 take(/truncate/break-клампов; деградация узких окон — именованная политика SqueezeTail.
+- G4-линт-приём готов и переиспользуем для U5 (6 поверхностей).
+- Слоты состояний в ThemeColors + parity: база UI kit U4 (компоненты берут только слоты).
+- Далее: U4 — UI kit v1 (F-8), DebugOverlay (F-10), витрина-галерея, scissor-бакеты (G5-клип); U5 — миграция 4 поверхностей, лестница on_key целиком, линты в CI, docs/ui-kit.md.

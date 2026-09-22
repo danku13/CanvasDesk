@@ -2781,3 +2781,416 @@ fn scene_auto_rows_cache_populated() {
         "ребра нет — авто-строка исчезла"
     );
 }
+
+/// PRD-0008 (Q5 v2 — «подтянуть MCP под обновления», запрос владельца
+/// 2026-09-22): schemes_list — реестр галереи виден агенту: те же 6
+/// пакетов, что в галерее (Ctrl+T), с размерами графа; чтение — канвас
+/// и undo не тронуты.
+#[test]
+fn mcp_schemes_list_embedded_registry() {
+    let mut scene = mcp_scene();
+    let undo_before = scene.undo_stack.len();
+    let list = dispatch(&mut scene, "schemes_list", "{}").expect("schemes_list");
+    let schemes = list.as_array().expect("массив схем");
+    assert_eq!(schemes.len(), 6, "6 пакетов PRD-0008 §7.2: {list}");
+    let ids: Vec<&str> = schemes.iter().filter_map(|s| s["id"].as_str()).collect();
+    assert!(
+        ids.contains(&"com.canvasdesk.scheme.intro-calculations"),
+        "intro-схема в реестре: {ids:?}"
+    );
+    for scheme in schemes {
+        assert!(!scheme["name"].as_str().expect("имя RU").is_empty());
+        assert!(!scheme["name_en"].as_str().expect("имя EN").is_empty());
+        assert!(scheme["nodes"].as_u64().expect("nodes") >= 4);
+        assert!(scheme["edges"].as_u64().expect("edges") >= 3);
+        assert!(!scheme["category"].as_str().expect("категория").is_empty());
+    }
+    assert_eq!(
+        scene.undo_stack.len(),
+        undo_before,
+        "чтение: undo не растёт"
+    );
+    assert_eq!(scene.canvas.nodes.len(), 3, "канвас не мутирован");
+}
+
+/// PRD-0008 (Q5 v2): schemes_apply — вставка как «Открыть» в галерее:
+/// ремап id без коллизий с занятым канвасом, ровно один undo-шаг,
+/// полный пересчёт с оракулами G2 (load 5000 / share 0.625), bbox для
+/// zoom-to-fit; вторая вставка не конфликтует; неизвестный id — ошибка
+/// БЕЗ undo-шага (fail-fast до мутации).
+#[test]
+fn mcp_schemes_apply_inserts_flow_and_undo() {
+    let mut scene = mcp_scene();
+    let undo_before = scene.undo_stack.len();
+    let out = dispatch(
+        &mut scene,
+        "schemes_apply",
+        r#"{"id": "com.canvasdesk.scheme.intro-calculations", "x": 500.0, "y": 300.0}"#,
+    )
+    .expect("schemes_apply");
+    assert_eq!(out["applied"], "com.canvasdesk.scheme.intro-calculations");
+    assert!(!out["name"].as_str().expect("имя схемы").is_empty());
+    let nodes = out["nodes"].as_array().expect("созданные ноды").clone();
+    let edges = out["edges"].as_array().expect("созданные рёбра").clone();
+    assert_eq!(nodes.len(), 6, "6 нод intro-схемы (PRD §7.2): {out}");
+    assert_eq!(edges.len(), 4, "4 ребра intro-схемы");
+    // Ремап: свежие note-N id (канвас занят note-1/f1/g1 из mcp_scene)
+    assert!(nodes
+        .iter()
+        .all(|id| id.as_str().is_some_and(|id| id.starts_with("note-"))));
+    // value-рёбра схемы видны с адресацией (контракт edges_list)
+    assert!(edges.iter().any(|e| e["kind"] == "value"));
+    assert!(edges.iter().all(|e| e["id"].as_str().is_some()));
+    // Оракул G2: поток после вставки — контрольные числа PRD-0008
+    let flow = out["flow"].as_object().expect("карта flow");
+    let values: Vec<f64> = flow.values().filter_map(|e| e["value"].as_f64()).collect();
+    assert!(values.contains(&5000.0), "оракул load 5000: {out}");
+    assert!(values.contains(&0.625), "оракул share 0.625: {out}");
+    // Один undo-шаг, канвас помечен грязным (автосейв)
+    assert_eq!(
+        scene.undo_stack.len(),
+        undo_before + 1,
+        "ровно один undo-шаг"
+    );
+    assert!(
+        scene.dirty_since.is_some(),
+        "вставка помечает канвас грязным"
+    );
+    // bbox — для viewport_set/zoom-to-fit
+    let bbox = out["bbox"].as_array().expect("bbox");
+    assert_eq!(bbox.len(), 4);
+
+    // Вторая вставка: ремап без коллизий с первой
+    let second = dispatch(
+        &mut scene,
+        "schemes_apply",
+        r#"{"id": "com.canvasdesk.scheme.intro-calculations"}"#,
+    )
+    .expect("повторная вставка");
+    let second_nodes = second["nodes"]
+        .as_array()
+        .expect("ноды 2-й вставки")
+        .clone();
+    assert_eq!(second_nodes.len(), 6);
+    let first_ids: Vec<String> = nodes
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        second_nodes.iter().all(|id| id
+            .as_str()
+            .is_some_and(|id| !first_ids.contains(&id.to_owned()))),
+        "id второй вставки не пересекаются с первой"
+    );
+
+    // Неизвестная схема: ошибка до мутации — undo не растёт
+    let undo_after = scene.undo_stack.len();
+    let err = dispatch(
+        &mut scene,
+        "schemes_apply",
+        r#"{"id": "com.canvasdesk.scheme.no-such"}"#,
+    );
+    assert!(err.is_err(), "неизвестная схема — ошибка");
+    assert_eq!(
+        scene.undo_stack.len(),
+        undo_after,
+        "fail-fast без undo-шага"
+    );
+}
+
+/// PRD-0007 (X2, FR-048): lineage — дерево происхождения для агента,
+/// та же модель, что окно проверки: итог B (= $in × 2) — calc-корень со
+/// значением и формулой, вход — leaf через via-ребро; построчный корень
+/// работает; неизвестная нода / отрицательный line / проза — ошибки.
+#[test]
+fn mcp_lineage_tree_total_line_and_errors() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":0,"y":0,"text":"A\n= 5"}"#,
+    )
+    .expect("нода A");
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":300,"y":0,"text":"B\n= $in × 2"}"#,
+    )
+    .expect("нода B");
+    let id = |scene: &SceneState, prefix: &str| {
+        scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref().is_some_and(|t| t.starts_with(prefix)))
+            .map(|n| n.id.clone())
+            .expect("нода сценария")
+    };
+    let (id_a, id_b) = (id(&scene, "A"), id(&scene, "B"));
+    let edge_id = dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(r#"{{"from":"{id_a}","to":"{id_b}"}}"#),
+    )
+    .expect("edge")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    dispatch(
+        &mut scene,
+        "flow_set_kind",
+        &format!(r#"{{"id":"{edge_id}","kind":"value"}}"#),
+    )
+    .expect("value-ребро");
+
+    // Итог ноды B: root = calc 10 с формулой, вход A — leaf 5 через via
+    let out = dispatch(&mut scene, "lineage", &format!(r#"{{"node_id":"{id_b}"}}"#))
+        .expect("lineage итога B");
+    assert_eq!(out["root"]["node_id"], id_b.as_str());
+    assert_eq!(
+        out["root"]["line"],
+        serde_json::Value::Null,
+        "null — итог ноды"
+    );
+    let nodes = out["nodes"].as_array().expect("массив узлов");
+    assert_eq!(nodes.len(), 2, "итог B + его вход: {out}");
+    let root = &nodes[0];
+    assert_eq!(root["node_id"], id_b.as_str());
+    assert_eq!(root["kind"], "calc", "формула с входом — расчётный узел");
+    assert_eq!(root["value"], 10.0, "B = 5 × 2");
+    assert!(root["formula"].as_str().expect("формула").contains("$in"));
+    assert!(!root["title"].as_str().expect("заголовок").is_empty());
+    let children = root["children"].as_array().expect("дети корня");
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0]["via"]["edge_id"].as_str().expect("via-ребро"),
+        edge_id,
+        "via — ребро для подсветки цепочки"
+    );
+    let leaf = &nodes[children[0]["child"].as_u64().expect("индекс ребёнка") as usize];
+    assert_eq!(leaf["node_id"], id_a.as_str());
+    assert_eq!(leaf["kind"], "leaf", "константа без входов");
+    assert_eq!(leaf["value"], 5.0);
+
+    // Построчный корень (строка 1 ноды B — формула) и корень листа A
+    let line_root = dispatch(
+        &mut scene,
+        "lineage",
+        &format!(r#"{{"node_id":"{id_b}", "line": 1}}"#),
+    )
+    .expect("lineage строки B");
+    assert_eq!(line_root["root"]["line"], 1);
+    let a_root = dispatch(&mut scene, "lineage", &format!(r#"{{"node_id":"{id_a}"}}"#))
+        .expect("lineage листа A");
+    assert_eq!(
+        a_root["nodes"].as_array().expect("узлы").len(),
+        1,
+        "лист без детей"
+    );
+
+    // Негативные ветки: неизвестная нода, line < 0, проза
+    assert!(dispatch(&mut scene, "lineage", r#"{"node_id": "no-such"}"#).is_err());
+    assert!(dispatch(
+        &mut scene,
+        "lineage",
+        &format!(r#"{{"node_id":"{id_b}", "line": -1}}"#)
+    )
+    .is_err());
+    assert!(
+        dispatch(
+            &mut scene,
+            "lineage",
+            &format!(r#"{{"node_id":"{id_b}", "line": 0}}"#)
+        )
+        .is_err(),
+        "проза не может быть корнем"
+    );
+    // line: null — то же, что итог (сахар для агентов)
+    let null_root = dispatch(
+        &mut scene,
+        "lineage",
+        &format!(r#"{{"node_id":"{id_b}", "line": null}}"#),
+    )
+    .expect("line null");
+    assert_eq!(null_root["root"]["line"], serde_json::Value::Null);
+}
+
+/// MCP-parity (запрос владельца 2026-09-22): flow_recalc и
+/// analyze_bottlenecks следуют за АКТИВНЫМ what-if сценарием — агент
+/// видит те же числа/флаги, что пользователь на канвасе (инвариант
+/// «MCP-видимость = UI»); авто-строки FR-050 Р-4 в ответе flow_recalc
+/// несут значения активного сценария; graph_apply flow — тот же источник.
+#[test]
+fn mcp_flow_and_analysis_follow_active_whatif() {
+    let (mut scene, cdn, _gw) = reference_scene();
+    let traffic = node_id_of(&scene, "dau = 200000").expect("нода «Нагрузка»");
+
+    // База: CDN ρ 0.417 — none; peak_rps 208.33
+    let report = dispatch(&mut scene, "analyze_bottlenecks", "{}").expect("analyze база");
+    assert_eq!(node_report(&report, &cdn)["severity"], "none");
+    let base = dispatch(&mut scene, "flow_recalc", "{}").expect("flow база");
+    assert_close(
+        base[&traffic]["value"].as_f64().expect("peak_rps"),
+        208.3333,
+        "база: peak_rps",
+    );
+
+    // Нода-наблюдатель с value-ребром БЕЗ toParam → авто-строка (FR-050 Р-4)
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":0,"y":600,"text":"наблюдатель"}"#,
+    )
+    .expect("наблюдатель");
+    let observer = node_id_of(&scene, "наблюдатель").expect("id наблюдателя");
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{traffic}", "to": "{observer}", "kind": "value", "fromOutput": "peak_rps"}}"#
+        ),
+    )
+    .expect("value-ребро без toParam");
+
+    // What-if: DAU ×2 — подмена строки 0 (runtime, файл не меняется)
+    dispatch(
+        &mut scene,
+        "whatif_set_override",
+        &format!(r#"{{"node_id":"{traffic}","line":0,"expr":"dau = 400000"}}"#),
+    )
+    .expect("подмена DAU ×2");
+
+    // Активное состояние: peak_rps 416.67 (не база!), ρ 0.833 → warn
+    let active = dispatch(&mut scene, "flow_recalc", "{}").expect("flow активный");
+    assert_close(
+        active[&traffic]["value"].as_f64().expect("peak_rps ×2"),
+        416.6667,
+        "flow_recalc показывает ПОДМЕНУ, как канвас",
+    );
+    let report = dispatch(&mut scene, "analyze_bottlenecks", "{}").expect("analyze активный");
+    assert_eq!(
+        node_report(&report, &cdn)["severity"],
+        "warn",
+        "анализ следует за подменой: ρ 0.833"
+    );
+    // Авто-строка наблюдателя — значение АКТИВНОГО сценария
+    let auto = active[&observer]["autoRows"]
+        .as_array()
+        .expect("авто-строки");
+    assert_eq!(auto.len(), 1);
+    assert_eq!(auto[0]["field"], "peak_rps");
+    assert!(auto[0]["path"].as_str().expect("путь").contains("peak_rps"));
+    assert_close(
+        auto[0]["value"].as_f64().expect("значение авто-строки"),
+        416.6667,
+        "авто-строка — активное значение",
+    );
+
+    // graph_apply flow — тот же активный источник (node_move не меняет
+    // модель, но пересчёт и карта в ответе — активные)
+    let moved = graph_apply(
+        &mut scene,
+        &format!(r#"[{{"op": "node_move", "id": "{observer}", "x": 40, "y": 640}}]"#),
+    )
+    .expect("node_move");
+    assert_close(
+        moved["flow"][&traffic]["value"]
+            .as_f64()
+            .expect("peak_rps в ответе батча"),
+        416.6667,
+        "graph_apply flow — активное состояние",
+    );
+
+    // Возврат на «Базу» — значения возвращаются (канвас не мутировал)
+    dispatch(
+        &mut scene,
+        "whatif_scenario_activate",
+        r#"{"name": "База"}"#,
+    )
+    .expect("активация Базы");
+    let returned = dispatch(&mut scene, "flow_recalc", "{}").expect("flow после возврата");
+    assert_close(
+        returned[&traffic]["value"].as_f64().expect("peak_rps база"),
+        208.3333,
+        "база восстановлена",
+    );
+}
+
+/// FR-050 Р-3 (этап C): кэш unmapped-рёбер в `SceneState` — ребро есть,
+/// значения нет (строка-источник стала прозой) → id ребра в кэше (пунктир
+/// янтарным + тултип «проблема + решение»); возврат значения пересчётом
+/// снимает состояние (инвариант 4 FR-045).
+#[test]
+fn scene_unmapped_edges_cache_set_and_unset() {
+    let mut scene = mcp_scene();
+    let ops = r#"[
+        {"op": "node_create_note", "ref": "traffic", "x": 0, "y": 0,
+         "text": "Трафик\npeak_rps = 1389 rps"},
+        {"op": "node_create_note", "ref": "gateway", "x": 400, "y": 0,
+         "text": "заметка без формулы"}
+    ]"#;
+    let report = graph_apply(&mut scene, ops).expect("сборка");
+    assert_eq!(report["ok"], true, "сборка чистая: {report}");
+    let find = |scene: &SceneState, text: &str| {
+        scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref().map(|t| t.contains(text)).unwrap_or(false))
+            .map(|n| n.id.clone())
+            .expect(text)
+    };
+    let traffic = find(&scene, "Трафик");
+    let gateway = find(&scene, "заметка без формулы");
+    dispatch(
+        &mut scene,
+        "edge_create",
+        &format!(
+            r#"{{"from": "{traffic}", "to": "{gateway}", "fromOutput": "peak_rps", "kind": "value"}}"#
+        ),
+    )
+    .expect("value-ребро");
+    let edge_id = scene
+        .canvas
+        .edges
+        .iter()
+        .find(|e| e.to_node == gateway)
+        .map(|e| e.id.clone())
+        .expect("ребро");
+    // Значение пролито — unmapped пуст
+    assert!(
+        !scene.unmapped_edges.contains(&edge_id),
+        "значение есть — ребро НЕ unmapped"
+    );
+    // Источник стал прозой: строка-присваивание удалена — значения нет
+    // (node_update_text — полный пересчёт; node_edit с text ленив — CR-012)
+    mcp_dispatch(
+        &mut scene,
+        &canvas_core::templates::TemplateRegistry::builtin(),
+        "node_update_text",
+        &serde_json::json!({
+            "id": traffic,
+            "text": "Трафик",
+        }),
+    )
+    .expect("правка источника");
+    assert!(
+        scene.unmapped_edges.contains(&edge_id),
+        "связь есть, значения нет — ребро unmapped"
+    );
+    // Возврат значения пересчётом снимает состояние
+    mcp_dispatch(
+        &mut scene,
+        &canvas_core::templates::TemplateRegistry::builtin(),
+        "node_update_text",
+        &serde_json::json!({
+            "id": traffic,
+            "text": "Трафик\npeak_rps = 1389 rps",
+        }),
+    )
+    .expect("возврат строки-источника");
+    assert!(
+        !scene.unmapped_edges.contains(&edge_id),
+        "значение вернулось — состояние снято"
+    );
+}
