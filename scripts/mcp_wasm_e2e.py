@@ -5,7 +5,7 @@ canvasdesk-mcp-headless в wasmtime (wasm32-wasip1) — без Windows и GUI.
 Сценарий (гейты эталонов, те же числа, что lib-тесты canvas-mcp-headless):
 
   1. initialize          → эхо protocolVersion 2025-06-18, serverInfo canvasdesk
-  2. tools/list          → 39 инструментов
+  2. tools/list          → 40 инструментов (X6 FR-048: explain_number)
   3. graph_apply         → мини-эталон №1 (ADR-0005/0006): flow oracle ±1 %
   4. analyze_bottlenecks → CP5 ρ-лестница: 0.417 none → DAU×2 warn 0.833
                            → DAU×5.35 overload 2.229 (бейджи канваса)
@@ -260,10 +260,10 @@ def run_scenario(session: Session) -> None:
     assert init.get("serverInfo", {}).get("name") == "canvasdesk", init
     log("    initialize: эхо 2025-06-18, serverInfo canvasdesk")
 
-    # --- 2. tools/list: 39 инструментов ---
+    # --- 2. tools/list: 40 инструментов (X6 FR-048 добавил explain_number) ---
     reply = session.request("tools/list", log_tag="tools/list")
     tools = result_of(reply).get("tools", [])
-    assert len(tools) == 39, f"tools/list: {len(tools)} != 39"
+    assert len(tools) == 40, f"tools/list: {len(tools)} != 40"
     log(f"    tools/list: {len(tools)} инструментов")
 
     # --- 3. graph_apply: мини-эталон №1, flow oracle ±1 % ---
@@ -453,7 +453,7 @@ def run_scenario(session: Session) -> None:
     log(f"← batch[0]: id {first.get('id')}, result {{}}")
     log(f"← batch[1]: id {second.get('id')}, tools {len(second.get('result', {}).get('tools', []))}")
     assert first.get("result") == {}, first
-    assert len(second.get("result", {}).get("tools", [])) == 39, second
+    assert len(second.get("result", {}).get("tools", [])) == 40, second
 
     # --- 6. notification — тишина: следующий ответ уже на ping ---
     notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
