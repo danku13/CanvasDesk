@@ -3639,3 +3639,24 @@ CanvasDesk». Источник — вводные владельца о проз
 - Draw-порядок и pick-порядок выводятся из реестра/кадра; порядок веток больше не источник истины.
 - Нормализованные дельты (попапы над панелями, stage-any-key, минимапа-клик) зафиксированы в FR-052 §Changes.
 - Далее: U3 — TextMeasurer + токены слотов состояний + layout-примитивы + пилоты (галерея схем, what-if бар); U4 — kit+DebugOverlay; U5 — миграция остальных поверхностей, лестница on_key целиком, линты CI, docs/ui-kit.md.
+
+## 2026-09-22 — PRD-0007 X3: what-if из дерева (подмена листа, дельты, сценарии)
+
+- **Агент:** Super Z (сессия web-29b539cb, директива «Продолжай реализовывать»)
+- **Задача:** этап X3 дорожной карты PRD-0007 §13 (F-6, AC-4.1–AC-4.3): подмена листа explain-дерева через `WhatIfOverrides` (FR-017), дельты в дереве и полосе D корня, именованные сценарии, возврат к базе, Apply.
+
+### Work Log
+- Синхронизация клона: origin/main ушёл вперёд на 53 коммита (FR-050 A/B, PRD-0008 аудит, PRD-0009 U0–U2/FR-051–FR-052, X2 через реестр); fast-forward 1dcb58f → 5473aea; окружение пересобрано (rustup 1.98.1, wasmtime 49.0.0, wasm-таргеты).
+- **canvas-core:** `expr.rs` — `whatif_delta_str`/`whatif_full_delta` перенесены из canvas-scene (делегация в scene — публичный API сохранён); `whatif.rs` — `validate_scenario` считает живыми числовые/expr-константы без «=» (детектор — `eval_lines`, тот же, что у движка: проза/фенсы протухают, инвариант 5 сохранён); `lineage.rs` — `LineageDelta` + `lineage_deltas(base, whatif)` (BTreeMap по (node_id, line), только затронутые Ok/Ok узлы, устойчиво к структурным сдвигам).
+- **canvas-app/explain_ui.rs:** `EditField` (type_str/backspace без байт-резки), `start_edit/finish_edit/cancel_edit` (редактируемый лист = Leaf + line: Some + value Ok; preset — подмена сценария или исходник), `field_rect`/`edit_rect`/`edit_at` (единая геометрия рендера и hit-теста), `LineageOutcome {tree, base}` — пара деревьев (flow_active + flow_baseline) одним фоновым проходом (G5), `base_tree`/`deltas` в `ExplainState` (заполняются в poll → Ready), `ExplainSnapshot.base_tree` — дельты при переоткрытии из кэша.
+- **canvas-app/app.rs:** `spawn_lineage_build` — опциональная база; `open_explain` — база строится при активном what-if; `close_explain` — база в кэш; `commit_explain_edit` (whatif_active, автосценарий одним undo-шагом — паттерн finish_editing, insert подмены, `recompute_flow` — живая модель; чип Stale по новой ревизии — панель на снапшоте); `finish_explain_edit`/`explain_leaf_preset`; on_explain_click — кнопка «Изменить» (приоритет над карточкой), клик мимо поля — коммит; KeyOwner::Explain — открытое поле глушит клавиатуру (символы/Backspace/Enter/Esc); explain_frame — дельта в строке значения («было → стало (+Δ)», whatif_badge), кнопка «Изменить» с hover, inline-поле поверх дерева с мигающей кареткой.
+- **i18n:** +2 ключа RU/EN (EXPLAIN_EDIT, EXPLAIN_EDIT_HINT).
+- **Тесты (TDD):** core 345 (+3: numeric_constant_lines_stay_valid, lineage_deltas_track_overrides — 6 дельт каскада A→B→C с форматом «+4», lineage_deltas_skip_unmatched_and_errors); explain_ui 11 (+4: poll_with_base_builds_deltas, edit_button_targets_editable_leaves, edit_field_lifecycle, edit_rect_stays_inside_card); интеграционные integration_explain_whatif.rs — 3 (подмена листа → дельты корня 11→15 «+4» при целой базе; round-trip сценария с константой «5» без «=» после перезагрузки; возврат к базе одним действием → дельт нет).
+- **AC-4.3 без нового кода:** таблица сравнения, «База» (возврат одним действием), Apply (undo-шаг) — существующие поверхности бара FR-017. **AC-4.4:** механика не зависит от состояния окна — проверка в X5.
+- **Гейты:** fmt ✓, clippy -D warnings ✓, cargo test --workspace ✓ (EXIT=0), token_lint ✓, wasm_gate 1–3 ✓ (wasm32-unknown-unknown + wasip1/wasmtime 49.0.0). Инцидент песочницы: диск 9.9 ГБ переполнялся линковкой тест-бинарников по 250 МБ — временный профиль [profile.test] debug=0 (откачен после гейта), incremental-кэш удалён.
+- **Доки:** PRD-0007 — статус X0–X3, §13 X3 «выполнено», §16 запись; FR-048 — статус/Changes/changelog X3.
+
+### Stage Summary
+- **X3 закрыт:** what-if из дерева работает по AC-4.1–AC-4.3; связка explain↔FR-017 не меняла ни движок, ни формат `.canvas` (инварианты G6/§10).
+- Ключевые решения: пара деревьев (base/whatif) одним проходом вместо диффа flow-карт; дельты только на затронутых узлах; подмена адресует строку Numi-листа (line: Some) — итоги-программы/шаблоны не редактируются из дерева (X3-скоуп, честно зафиксировано).
+- **Далее:** X4 — автосвязь F-7 (canvas-core/autolink.rs: детектор точных имён с фильтрами циклов/дубликатов, фон с дебаунсом, диалог ревью по прототипу ux-review-dialog.html, undo-бат, тумблер FR-039); затем X5 (режим защиты) и X6 (MCP explain_number, закрытие PoC).

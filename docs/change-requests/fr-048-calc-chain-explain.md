@@ -1,6 +1,6 @@
 # FR-048: Цепочка расчёта цифры — lineage-ядро, explain-окно, what-if из дерева, автосвязь, режим защиты, MCP (PRD-0007)
 
-- **Статус:** в работе (X0–X2 выполнены 2026-09-22 — FR создан, ядро lineage, окно проверки/триггер/подсветка; демо-гейт Q6; далее X3 — what-if из дерева)
+- **Статус:** в работе (X0–X3 выполнены 2026-09-22 — FR создан, ядро lineage, окно проверки/триггер/подсветка, what-if из дерева; демо-гейт Q6; далее X4 — автосвязь)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** критично
 - **Владелец:** danku13 (владелец продукта)
@@ -72,7 +72,7 @@ X3 what-if из дерева → X4 автосвязь → X5 режим защ�
 |---|---|
 | X1 | `canvas-core/src/lineage.rs`: `LineageNodeId`/`LineageNode`/`LineageChild`/`LineageVia`/`LineageTree`/`LineageError`/`LineageFlow` + `build_lineage(canvas, flow, root)` — рекурсивный upstream-обход (обобщение `value_path`): value-рёбра (слоты/проливания/`fromOutput`), локальные переменные Numi-листа (последнее присваивание до строки), спиллы, unmapped-входы, циклы — терминальные узлы; бюджет `LINEAGE_MAX_NODES`; тесты §9.4 |
 | X2 | Триггер «?» (render), окно проверки (паттерн main stage, движок `ux-defense-mode.html` v4), честный лоадер (12 ключей i18n), `CalcHighlight`, сессионный кэш + чип, лимит глубины в FR-039 |
-| X3 | Подмена листа из дерева → `WhatIfOverrides` (`flow.rs:235`), дельты, именованные сценарии, таблица сравнения, Apply одним undo-шагом |
+| X3 | Подмена листа из дерева → `WhatIfOverrides` (`flow.rs:235`), дельты, именованные сценарии, таблица сравнения, Apply одним undo-шагом — **выполнено 2026-09-22** (кнопка «Изменить» + inline-поле + дельты `lineage_deltas`; таблица сравнения/Apply — существующие механики FR-017) |
 | X4 | `canvas-core/src/autolink.rs`: детектор точных имён присваиваний (фильтры: циклы `creates_value_cycle`, дубликаты), фон с дебаунсом, бейдж, диалог ревью, undo-бат, тумблер FR-039 |
 | X5 | Состояние Defense окна проверки: ×1.5 из токенов, пошаговое раскрытие, скрытие `NumiLineKind::Prose`, выход без следов канваса |
 | X6 | MCP `explain_number` (линейная развёртка дерева), взаимоисключимость оверлеев (реестр F-10), аудит регрессий, доки §14, приёмка G1–G7 |
@@ -151,6 +151,52 @@ X3 what-if из дерева → X4 автосвязь → X5 режим защ�
   канвас→дерево — X6. Гейты: fmt, clippy `-D warnings`, cargo test
   (1115 нативных), token_lint, wasm_gate (ступени 1–3) — зелёные.
   Демо-точка владельцу (Q6) — готова.
+- `2026-09-22` — агент: **X3 выполнено** (what-if из дерева, AC-4.1–
+  AC-4.3). `canvas-core/expr.rs` — `whatif_delta_str`/`whatif_full_delta`
+  перенесены из canvas-scene в ядро (формат дельты FR-017 нужен и
+  `lineage_deltas`; scene — делегация, публичный API сохранён);
+  `canvas-core/whatif.rs` — `validate_scenario` считает живыми и
+  числовые/expr-константы без «=» («620», «-5 %» — листья explain-дерева;
+  детектор рода строки — `eval_lines`, проза/фенсы по-прежнему протухают,
+  инвариант 5 сохранён); `canvas-core/lineage.rs` — `LineageDelta` +
+  `lineage_deltas(base, whatif)`: сопоставление деревьев по адресу узла
+  (node_id, line), дельты только затронутых узлов, устойчиво к
+  структурным сдвигам/ошибкам (F-5). `canvas-app/explain_ui.rs` —
+  `EditField` (ввод строк/Backspace без байт-резки кириллицы),
+  `start_edit`/`finish_edit`/`cancel_edit`, `field_rect` (одна геометрия
+  рендера и hit-теста), `edit_rect`/`edit_at` (кнопка «Изменить» —
+  правый нижний угол карточки ЛИСТА с line: Some и значением Ok;
+  итог-программы/шаблоны не редактируются — X3-скоуп),
+  `LineageOutcome { tree, base }` — сборка ПАРЫ деревьев одним фоновым
+  проходом (основное — flow_active с подменами, база — flow_baseline;
+  натив — один поток G5, wasm — синхронно), `ExplainState.base_tree`/
+  `deltas` (заполняются в poll при переходе Ready), снапшот кэша несёт
+  base_tree (дельты при переоткрытии — AC-4.2/AC-3.3).
+  `canvas-app/app.rs` — `commit_explain_edit` (подмена через WhatIfOverrides:
+  whatif_active=true, автосоздание сценария одним undo-шагом — паттерн
+  finish_editing/MCP whatif_set_override, recompute_flow — живая модель;
+  чип Stale по новой ревизии — панель остаётся на снапшоте AC-4.2),
+  `finish_explain_edit`, `explain_leaf_preset` (preset — текущая подмена
+  сценария, иначе исходник строки), клавиатура KeyOwner::Explain:
+  открытое поле глушит клавиатуру (символы/Backspace — ввод, Enter —
+  коммит, Esc — отмена; закрытие окна при активном поле — отмена);
+  клик: кнопка «Изменить» приоритетна над карточкой, клик мимо поля —
+  коммит (паттерн FR-017); рендер: дельта в строке значения
+  («было → стало (+Δ)» цветом whatif_badge — различимость контрастом,
+  кнопка «Изменить» с hover, inline-поле поверх дерева с мигающей
+  кареткой и подсказкой пустого поля). AC-4.3 — таблица сравнения,
+  «База» (возврат одним действием) и Apply (undo-шаг) — существующие
+  поверхности бара FR-017; сценарий персистентен (canvasdesk.whatif).
+  AC-4.4 (связка из режима защиты) — заработает в X5, механизм от
+  состояния окна не зависит. i18n — 2 ключа RU/EN (EXPLAIN_EDIT,
+  EXPLAIN_EDIT_HINT). Тесты: core 345 (+3: numeric_constant_lines_stay_valid,
+  lineage_deltas_track_overrides, lineage_deltas_skip_unmatched_and_errors),
+  explain_ui 11 (+4: poll_with_base_builds_deltas,
+  edit_button_targets_editable_leaves, edit_field_lifecycle,
+  edit_rect_stays_inside_card), интеграционные X3 — 3
+  (integration_explain_whatif.rs: дельты+база цела, round-trip сценария с
+  константой, возврат к базе). Гейты: fmt, clippy `-D warnings`,
+  cargo test --workspace, token_lint, wasm_gate — зелёные.
 
 ## Источники истины
 
