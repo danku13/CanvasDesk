@@ -12,9 +12,12 @@
 //!   (ребро без адресации — значение ноды целиком);
 //! - имена отображаются **дословно** (нормализация/транслитерация не
 //!   выполняются); коллизия имён нод — fallback «Имя (node_id)» (§Q2);
-//! - display-level: исходный синтаксис выражений (`$1`, `$параметр`) не
-//!   меняется — подстановка делается только при отображении
-//!   ([`formula_displays`]); именованный синтаксис Numi — v2 (FR-044 §Q1).
+//! - display-level: легаси-синтаксис (`$1`, `$параметр`) при отображении
+//!   подставляется путями ([`formula_displays`]); именованный синтаксис
+//!   Numi «Объект.Поле» — в исходнике с FR-050 Р-6 (решение владельца
+//!   «сразу вариант Б», FR-044 §Q1 закрыт): пути резолвит вычислитель
+//!   (`Env.qualified`), а [`formula_displays`] читает их же для
+//!   рёбер-операндов подсветки (FR-044 Р-5).
 //!
 //! Чистый Rust, без I/O и глобального состояния; wasm-гейт (ADR-0011).
 
@@ -220,6 +223,16 @@ pub struct FormulaDisplay {
 ///   ([`NumiLineKind`], детектор FR-021) в порядке тела; проза пропускается.
 ///
 /// Детерминировано; подстановка — display-level, исходник не меняется.
+///
+/// FR-044 Р-5 (именованный синтаксис, решение владельца 2026-09-22 —
+/// FR-050 Р-6 «сразу вариант Б», Q1 закрыт): операндами становятся не
+/// только `$`-токены (`$N`/`$in`/`$параметр`), но и qualified-пути
+/// исходника «Объект.Поле» — матчинг по всем адресным формам имени
+/// истока × поле (`flow::QualifiedNames::edge_keys` — те же ключи, что
+/// резолвит `Env.qualified`; последнее value-ребро побеждает — зеркало
+/// insert в `inbound_values`). Локальные переменные присваиваний (bare-
+/// идентификаторы без `.Поля`) и числа (`0.6`) операндами не являются;
+/// неразрешённый путь остаётся в display как написан (диагностика Р-3).
 pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
     let Some(node) = canvas.node(node_id) else {
         return Vec::new();
@@ -228,6 +241,10 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
     // Карта адресации приёмника: позиционные слоты и проливания.
     let mut slot_edges: Vec<usize> = Vec::new();
     let mut param_edges: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    // FR-044 Р-5: qualified-ключи value-рёбер приёмника → индекс ребра.
+    let obj_names = crate::flow::QualifiedNames::build(canvas);
+    let mut qkeys: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
         if edge.to_node != node_id || edge.flow_kind() != crate::flow::FlowKind::Value {
             continue;
@@ -236,14 +253,47 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
             None => slot_edges.push(index),
             Some(name) => param_edges.entry(name.clone()).or_default().push(index),
         }
+        for key in obj_names.edge_keys(canvas, edge) {
+            qkeys.insert(key, index);
+        }
     }
-    // Подстановка одного токена: `$123` → слот, `$имя` → параметр.
-    let substitute = |raw: &str, operands: &mut Vec<usize>| -> String {
+    // Единый проход по строке: `$`-токены (слот/`$in`/параметр — прежняя
+    // семантика) и qualified-пути именованного синтаксиса; операнды — в
+    // порядке первого упоминания без дублей (документированный контракт).
+    let render = move |raw: &str, operands: &mut Vec<usize>| -> String {
         let chars: Vec<char> = raw.chars().collect();
         let mut out = String::with_capacity(raw.len() + 16);
         let mut i = 0;
         while i < chars.len() {
             if chars[i] != '$' {
+                // FR-044 Р-5: qualified-путь «Объект.Поле» (не цифра —
+                // числа с точкой не пути; bare-идентификатор — локальная
+                // переменная/функция, не операнд)
+                if is_base_char(chars[i]) && !chars[i].is_ascii_digit() {
+                    if let Some((obj, field, next)) = scan_qualified(&chars, i) {
+                        if let Some(&index) = qkeys.get(&(obj, field)) {
+                            if !operands.contains(&index) {
+                                operands.push(index);
+                            }
+                        }
+                        // display: путь остаётся как написан
+                        while i < next {
+                            out.push(chars[i]);
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    // plain идентификатор — копируем как есть
+                    let mut j = i + 1;
+                    while j < chars.len() && is_base_char(chars[j]) {
+                        j += 1;
+                    }
+                    while i < j {
+                        out.push(chars[i]);
+                        i += 1;
+                    }
+                    continue;
+                }
                 out.push(chars[i]);
                 i += 1;
                 continue;
@@ -333,7 +383,8 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
         .filter(|e| !e.trim().is_empty())
     {
         let mut operands = Vec::new();
-        let display = substitute(&expr, &mut operands);
+        let display = render(&expr, &mut operands);
+        dedup_keep_first(&mut operands);
         return vec![FormulaDisplay {
             line: 0,
             raw: expr,
@@ -354,7 +405,8 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
         })
         .map(|(line, raw)| {
             let mut operands = Vec::new();
-            let display = substitute(raw, &mut operands);
+            let display = render(raw, &mut operands);
+            dedup_keep_first(&mut operands);
             FormulaDisplay {
                 line,
                 raw: raw.to_owned(),
@@ -363,6 +415,92 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
             }
         })
         .collect()
+}
+
+/// Стабильный дедуп «первое упоминание» (контракт `operand_edges`).
+fn dedup_keep_first(items: &mut Vec<usize>) {
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|&item| seen.insert(item));
+}
+
+/// Базовый символ идентификатора — зеркало цикла `lex_ident` expr.rs:
+/// alphanumeric (включая кириллицу) + `_`; дефис НЕ входит (`a-b` —
+/// вычитание).
+fn is_base_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// FR-044 Р-5: сканировать qualified-путь с позиции `start` (первый символ
+/// — базовый, не цифра). Ветвь А: `Объект.Поле`; ветвь Б: алиас коллизии
+/// «Объект (N)»/«Объект (id)» + `.Поле` (§Q2). Поле — [`scan_field`].
+/// Возвращает `(объект, поле, позиция за путём)` — зеркало правил
+/// `lex_ident`/`try_qualified`/`lex_qualified_field` expr.rs (FR-050 Р-6),
+/// чтобы матчинг операндов читал ровно то, что резолвит вычислитель.
+fn scan_qualified(chars: &[char], start: usize) -> Option<(String, String, usize)> {
+    let mut j = start + 1;
+    while j < chars.len() && is_base_char(chars[j]) {
+        j += 1;
+    }
+    let base: String = chars[start..j].iter().collect();
+    // Ветвь А: `.Поле` сразу за идентификатором.
+    if let Some((field, next)) = scan_field(chars, j) {
+        return Some((base, field, next));
+    }
+    // Ветвь Б: суффикс ` (N)`/` (id)` (пробелы/табы допускаются) + `.Поле`.
+    let mut k = j;
+    while k < chars.len() && (chars[k] == ' ' || chars[k] == '\t') {
+        k += 1;
+    }
+    if k < chars.len() && chars[k] == '(' {
+        let open = k;
+        let mut m = open + 1;
+        while m < chars.len() && (chars[m].is_alphanumeric() || chars[m] == '_' || chars[m] == '-')
+        {
+            m += 1;
+        }
+        if m < chars.len() && chars[m] == ')' && m > open + 1 {
+            let content: String = chars[open + 1..m].iter().collect();
+            let mut p = m + 1;
+            while p < chars.len() && (chars[p] == ' ' || chars[p] == '\t') {
+                p += 1;
+            }
+            if let Some((field, next)) = scan_field(chars, p) {
+                return Some((format!("{base} ({content})"), field, next));
+            }
+        }
+    }
+    None
+}
+
+/// `.Поле` с позиции `dot` (`chars[dot] == '.'`); поле начинается с
+/// буквы/`_` (точка перед цифрой — дробное число, не путь), продолжается
+/// alphanumeric/`_`; дефис продолжается именем, если сразу за ним
+/// буква/цифра/`_` («Кол-во»; `Кол - во` — вычитание, поле «Кол»).
+/// Возвращает `(поле, позиция за полем)`.
+fn scan_field(chars: &[char], dot: usize) -> Option<(String, usize)> {
+    if chars.get(dot) != Some(&'.') {
+        return None;
+    }
+    let first = *chars.get(dot + 1)?;
+    if !(first.is_alphabetic() || first == '_') {
+        return None;
+    }
+    let mut j = dot + 2;
+    while j < chars.len() {
+        let c = chars[j];
+        let continues = c.is_alphanumeric()
+            || c == '_'
+            || (c == '-'
+                && chars
+                    .get(j + 1)
+                    .is_some_and(|n| n.is_alphanumeric() || *n == '_'));
+        if continues {
+            j += 1;
+        } else {
+            break;
+        }
+    }
+    Some((chars[dot + 1..j].iter().collect(), j))
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -583,5 +721,117 @@ mod tests {
             "формула снимка — одна строка, лист не сканируется"
         );
         assert_eq!(rows[0].display, "2.e1 * $Сезон");
+    }
+
+    /// FR-044 Р-5 (именований синтаксис, FR-050 Р-6): qualified-пути
+    /// исходника — операнды (оракул инварианта 6: «выручка := Заявки.
+    /// Количество · Заявки.Средний_чек · Заявки.Сезон» → 3 ребра).
+    #[test]
+    fn formula_display_named_paths_are_operands() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(text_node(
+            "z",
+            "Заявки\nКоличество = 10\nСредний_чек = 5\nСезон = 1.15",
+            0.0,
+        ));
+        canvas.nodes.push(text_node(
+            "t",
+            "выручка = Заявки.Количество * Заявки.Средний_чек * Заявки.Сезон",
+            1.0,
+        ));
+        let mut e1 = Edge::new("eK", "z", None, "t", None);
+        e1.set_flow_kind(crate::flow::FlowKind::Value);
+        e1.from_output = Some("Количество".to_owned());
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("eS", "z", None, "t", None);
+        e2.set_flow_kind(crate::flow::FlowKind::Value);
+        e2.from_output = Some("Средний_чек".to_owned());
+        canvas.edges.push(e2);
+        let mut e3 = Edge::new("eC", "z", None, "t", None);
+        e3.set_flow_kind(crate::flow::FlowKind::Value);
+        e3.from_output = Some("Сезон".to_owned());
+        canvas.edges.push(e3);
+        let rows = formula_displays(&canvas, "t");
+        assert_eq!(rows.len(), 1);
+        // display: пути остаются как написаны (именований синтаксис)
+        assert_eq!(rows[0].display, rows[0].raw);
+        assert_eq!(rows[0].operand_edges, vec![0, 1, 2]);
+    }
+
+    /// FR-044 Р-5: негативы сканера — локальная переменная присваивания,
+    /// число с точкой, функция, неразрешённый путь — НЕ операнды;
+    /// дефис-поле («Кол-во») — операнд; алиас коллизии «Имя (id).Поле»
+    /// резолвится; дубль пути — один операнд (первое упоминание).
+    #[test]
+    fn formula_display_named_scanner_negatives() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(text_node("z", "Заявки\nКол-во = 10\nusers = 3", 0.0));
+        // Коллизия имён: алиас-форма «Заявки (z)» регистрируется только
+        // при дубликате отображаемого имени (QualifiedNames::build)
+        canvas.nodes.push(text_node("z2", "Заявки", 0.5));
+        canvas.nodes.push(text_node(
+            "t",
+            "tmp = 2\nx = tmp * Заявки.Кол-во + util(2.5) + Нет.Поля + Заявки.Кол-во\ny = Заявки (z).users",
+            1.0,
+        ));
+        let mut e1 = Edge::new("eK", "z", None, "t", None);
+        e1.set_flow_kind(crate::flow::FlowKind::Value);
+        e1.from_output = Some("Кол-во".to_owned());
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("eU", "z", None, "t", None);
+        e2.set_flow_kind(crate::flow::FlowKind::Value);
+        e2.from_output = Some("users".to_owned());
+        canvas.edges.push(e2);
+        let rows = formula_displays(&canvas, "t");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].operand_edges, Vec::<usize>::new(), "локальная tmp");
+        // x: путь ×2 (дубль), число/функция/неразрешённый — мимо
+        assert_eq!(rows[1].operand_edges, vec![0], "Кол-во ×2 — один операнд");
+        assert_eq!(
+            rows[1].display, rows[1].raw,
+            "display без $-токенов не меняется"
+        );
+        // y: алиас «Заявки (z).users» — форма коллизии не нужна (имя
+        // уникально), но допустима и резолвится через алиас-ключ
+        assert_eq!(rows[2].operand_edges, vec![1]);
+    }
+
+    /// FR-044 Р-5: fromLine-ребро — поле пути = имя присваивания строки
+    /// (те же ключи, что у вычислителя — `QualifiedNames::edge_keys`).
+    #[test]
+    fn formula_display_named_from_line_key() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(text_node("z", "График\nadvance = 0.6", 0.0));
+        canvas
+            .nodes
+            .push(text_node("t", "x = График.advance * 2", 1.0));
+        let mut e1 = Edge::new("eA", "z", None, "t", None);
+        e1.set_flow_kind(crate::flow::FlowKind::Value);
+        e1.from_line = Some(1);
+        canvas.edges.push(e1);
+        let rows = formula_displays(&canvas, "t");
+        assert_eq!(rows[0].operand_edges, vec![0]);
+    }
+
+    /// FR-044 Р-5: смешанная строка — `$N` подставляется путём, именованный
+    /// путь остаётся; операнды в порядке упоминания.
+    #[test]
+    fn formula_display_mixed_legacy_and_named() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(text_node("z", "Заявки\nusers = 3", 0.0));
+        canvas
+            .nodes
+            .push(text_node("t", "x = $1 + Заявки.users", 1.0));
+        let mut e1 = Edge::new("e1", "z", None, "t", None);
+        e1.set_flow_kind(crate::flow::FlowKind::Value);
+        e1.from_output = Some("users".to_owned());
+        canvas.edges.push(e1);
+        let rows = formula_displays(&canvas, "t");
+        assert_eq!(rows[0].display, "x = Заявки.users + Заявки.users");
+        assert_eq!(rows[0].operand_edges, vec![0], "$1 и путь — одно ребро");
     }
 }
