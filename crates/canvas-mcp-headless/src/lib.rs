@@ -214,7 +214,8 @@ mod tests {
     }
 
     /// tools/list отдаёт каталог моста — каждый инструмент диспетчера
-    /// объявлен (36: 26 базовых + analyze_bottlenecks + 9 whatif_*).
+    /// объявлен (39: 26 базовых + analyze_bottlenecks + 9 whatif_* +
+    /// schemes_list/schemes_apply + lineage).
     #[test]
     fn tools_list_advertises_full_catalog() {
         let mut transport = Some(HeadlessSession::new());
@@ -226,8 +227,8 @@ mod tests {
         let tools = parsed["result"]["tools"].as_array().expect("массив tools");
         assert_eq!(
             tools.len(),
-            36,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6)"
+            39,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 3 (PRD-0008 Q5 + FR-048 X2)"
         );
     }
 

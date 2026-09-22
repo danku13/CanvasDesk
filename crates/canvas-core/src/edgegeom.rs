@@ -662,6 +662,43 @@ pub fn line_port_at(
         .map(|(_, port)| port)
 }
 
+/// FR-050 Н2 (этап C): входной якорь параметра шаблонной ноды — точка на
+/// ЛЕВОМ краю ноды (вертикаль — ряд строки параметра, зеркально построчным
+/// выходам FR-025; hit-тест — допуск CR-003). Строится рендером из кэша
+/// раскладки тела: core не знает вертикалей строк. Имя — адрес `toParam`
+/// (совпадает с именем присваивания строки Numi-листа шаблонной ноды,
+/// канонический список — `TemplateRef.params`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamPort {
+    /// Имя параметра — цель `toParam` value-ребра.
+    pub param: String,
+    /// World-точка якоря (`node.x`, Y ряда строки параметра).
+    pub point: [f32; 2],
+}
+
+/// FR-050 Н2: якорь параметра под курсором — ближайший в пределах допуска
+/// `tolerance_px` экранных пикселей (тот же допуск, что у построчных и
+/// сторонных портов, CR-003). Приоритет якоря над сторонным портом решает
+/// вызывающий (проверка `param_port_at` ДО `port_at` левого края).
+pub fn param_port_at(
+    ports: &[ParamPort],
+    point: [f32; 2],
+    zoom: f32,
+    tolerance_px: f32,
+) -> Option<&ParamPort> {
+    let tolerance = tolerance_px / zoom.max(1e-3);
+    ports
+        .iter()
+        .map(|port| {
+            let dist =
+                ((point[0] - port.point[0]).powi(2) + (point[1] - port.point[1]).powi(2)).sqrt();
+            (dist, port)
+        })
+        .filter(|(dist, _)| *dist <= tolerance)
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, port)| port)
+}
+
 /// Ближайшая к точке связь в допуске EDGE_HIT_TOLERANCE.
 /// Возвращает индекс в `canvas.edges`; None — промах (или все связи висячие).
 /// `avoid` — обход посторонних нод (см. `edge_polyline`).
@@ -732,6 +769,30 @@ mod tests {
         // zoom > 1 ужесточает world-допуск: 10 screen px при zoom 2 —
         // 5 world px — точка в 6 px от порта уже мимо
         assert!(line_port_at(&ports, [206.0, 50.0], 2.0, 10.0).is_none());
+    }
+
+    /// FR-050 Н2: hit-test якорей параметров — попадание/промах/ближайший,
+    /// zoom ужесточает допуск (зеркало line_port_at).
+    #[test]
+    fn param_port_at_hit_miss_nearest() {
+        let ports = [
+            ParamPort {
+                param: "rps".to_owned(),
+                point: [100.0, 30.0],
+            },
+            ParamPort {
+                param: "latency".to_owned(),
+                point: [100.0, 50.0],
+            },
+        ];
+        let hit = param_port_at(&ports, [94.0, 50.0], 1.0, 10.0).expect("попадание");
+        assert_eq!(hit.param, "latency");
+        assert!(param_port_at(&ports, [94.0, 90.0], 1.0, 10.0).is_none());
+        assert!(param_port_at(&ports, [40.0, 50.0], 1.0, 10.0).is_none());
+        let hit = param_port_at(&ports, [100.0, 41.0], 1.0, 10.0).expect("попадание");
+        assert_eq!(hit.param, "latency", "41 ближе к 50, чем к 30");
+        // zoom 2: 10 screen px → 5 world px — точка в 6 px мимо
+        assert!(param_port_at(&ports, [94.0, 50.0], 2.0, 10.0).is_none());
     }
 
     /// FR-025: перепривязка ИСТОКА сбрасывает построчный исток (v1),

@@ -150,6 +150,59 @@ pub const CARD_CORNER_RADIUS: f32 = 8.0;
 /// Высота шапки карточки, world px (FR-023). Источник: `HEADER_HEIGHT` cards.rs:19.
 pub const CARD_HEADER_HEIGHT: f32 = 34.0;
 
+// ---------------------------------------------------------------------------
+// Spacing/radius-scale UI-оверлеев (design/tokens/dimensions.json — FR-053
+// U3 PRD-0009 F-9): значения = текущим константам пилотов (галерея схем,
+// what-if бар — I-1 ноль скачка); потребители берут из scale.
+// ---------------------------------------------------------------------------
+
+/// Базовый зазор чипов/строк. Источник: `BAR_GAP` whatif_ui.rs, зазор чипов
+/// галереи, `LIST_MARGIN` whatif_ui.rs.
+pub const SPACING_S: f32 = 6.0;
+/// Поля таблицы сравнения. Источник: `TABLE_MARGIN` whatif_ui.rs.
+pub const SPACING_SM: f32 = 8.0;
+/// Поля бара и empty-кнопок. Источник: `BAR_PADDING` whatif_ui.rs, поля
+/// кнопок empty-state scheme_gallery_ui.rs.
+pub const SPACING_MD: f32 = 10.0;
+/// Маржа бара, поля чипов/кнопок/панели. Источник: `BAR_MARGIN`/`CHIP_PAD_X`/
+/// `BTN_PAD_X` whatif_ui.rs, `PANEL_PAD` scheme_gallery_ui.rs.
+pub const SPACING_LG: f32 = 12.0;
+/// Поля панели/карточки к вьюпорту. Источник: маржа панели галереи.
+pub const SPACING_XL: f32 = 24.0;
+
+/// Скругление чипа/кнопки what-if и empty/фильтра галереи (первый параметр
+/// CardInstance.params). Источник: квад чипа app.rs.
+pub const RADIUS_CHIP: f32 = 6.0;
+/// Скругление панели галереи. Источник: квад панели app.rs.
+pub const RADIUS_PANEL: f32 = 10.0;
+/// Скругление чипов-пилюль категорий галереи. Источник: квад чипа app.rs.
+pub const RADIUS_PILL: f32 = 12.0;
+
+// ---------------------------------------------------------------------------
+// Слоты состояний контролов (design/tokens/colors.json группа `control` —
+// FR-053 U3 PRD-0009 F-9): hover/selected/disabled пилотов. Значения =
+// прежним вычислениям hover_fill (app.rs:1042-1049: c·1.3+0.04/0.06) и
+// локальной dim (I-1 ноль скачка); дифференциация selected — v2.
+// ---------------------------------------------------------------------------
+
+/// Hover строки списка/вторичной кнопки, тёмная тема. Источник:
+/// hover_fill(menu_fill dark [0.11,0.11,0.13,0.97]).
+pub const CONTROL_HOVER_FILL_DARK: [f32; 4] = [0.183, 0.183, 0.229, 0.97];
+/// Hover строки списка/вторичной кнопки, светлая тема. Источник:
+/// hover_fill(menu_fill light [0.98,0.98,0.99,0.97]) — формула насыщает до 1.0.
+pub const CONTROL_HOVER_FILL_LIGHT: [f32; 4] = [1.0, 1.0, 1.0, 0.97];
+/// Hover primary-кнопки (обе темы: primary не дифференцирован). Источник:
+/// hover_fill(DIALOG_BUTTON_PRIMARY).
+pub const CONTROL_PRIMARY_HOVER_FILL: [f32; 4] = [0.248, 0.456, 0.84, 1.0];
+/// Выбранная строка списка, тёмная тема (= hover: сегодня selected и hover
+/// неразличимы — ноль скачка; семантика разделена слотами).
+pub const CONTROL_SELECTED_FILL_DARK: [f32; 4] = CONTROL_HOVER_FILL_DARK;
+/// Выбранная строка списка, светлая тема (= hover light).
+pub const CONTROL_SELECTED_FILL_LIGHT: [f32; 4] = CONTROL_HOVER_FILL_LIGHT;
+/// Текст disabled-кнопок (обе темы). Источник: бывшая локальная `dim`
+/// app.rs:2808 (#8a909c).
+pub const CONTROL_DISABLED_TEXT: [u8; 3] = [138, 144, 156];
+
 /// Диаметр бусины связи. Источник: `EDGE_DOT` cards.rs:627.
 pub const EDGE_DOT: f32 = 2.5;
 /// Длина уса стрелки. Источник: `ARROW_LEN` cards.rs:651.
@@ -400,6 +453,50 @@ mod parity_tests {
             HUD_SHADOW
         );
 
+        // FR-053 (U3 F-9): группа control — слоты состояний контролов.
+        assert_eq!(
+            f32_arr4(
+                color(&root, "control.hover_fill.dark.$value"),
+                "control.hover_fill.dark"
+            ),
+            CONTROL_HOVER_FILL_DARK
+        );
+        assert_eq!(
+            f32_arr4(
+                color(&root, "control.hover_fill.light.$value"),
+                "control.hover_fill.light"
+            ),
+            CONTROL_HOVER_FILL_LIGHT
+        );
+        assert_eq!(
+            f32_arr4(
+                color(&root, "control.primary_hover_fill.$value"),
+                "control.primary_hover_fill"
+            ),
+            CONTROL_PRIMARY_HOVER_FILL
+        );
+        assert_eq!(
+            f32_arr4(
+                color(&root, "control.selected_fill.dark.$value"),
+                "control.selected_fill.dark"
+            ),
+            CONTROL_SELECTED_FILL_DARK
+        );
+        assert_eq!(
+            f32_arr4(
+                color(&root, "control.selected_fill.light.$value"),
+                "control.selected_fill.light"
+            ),
+            CONTROL_SELECTED_FILL_LIGHT
+        );
+        assert_eq!(
+            u8_arr3(
+                color(&root, "control.disabled_text.$value"),
+                "control.disabled_text"
+            ),
+            CONTROL_DISABLED_TEXT
+        );
+
         let map = color(&root, "minimap");
         let rgba = |key: &str| -> [u8; 4] {
             let a = map
@@ -464,6 +561,16 @@ mod parity_tests {
         assert_eq!(dim("typography.hud_line.$value"), TYPE_HUD_LINE);
         assert_eq!(dim("typography.badge_size.$value"), TYPE_BADGE);
         assert_eq!(dim("typography.badge_line.$value"), TYPE_BADGE_LINE);
+        // FR-053 (U3 F-9): spacing/radius-scale UI-оверлеев.
+        assert_eq!(dim("spacing.s.$value"), SPACING_S);
+        assert_eq!(dim("spacing.sm.$value"), SPACING_SM);
+        assert_eq!(dim("spacing.md.$value"), SPACING_MD);
+        assert_eq!(dim("spacing.lg.$value"), SPACING_LG);
+        assert_eq!(dim("spacing.xl.$value"), SPACING_XL);
+        assert_eq!(dim("radius.chip.$value"), RADIUS_CHIP);
+        assert_eq!(dim("radius.card.$value"), CARD_CORNER_RADIUS);
+        assert_eq!(dim("radius.panel.$value"), RADIUS_PANEL);
+        assert_eq!(dim("radius.pill.$value"), RADIUS_PILL);
     }
 
     #[test]

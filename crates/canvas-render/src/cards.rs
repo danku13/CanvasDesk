@@ -908,8 +908,14 @@ pub fn build_edge_instances(
         hidden_edge,
         hidden_ids,
         None,
+        &std::collections::HashSet::new(),
     )
 }
+
+/// FR-050 Р-3 (этап C): янтарный акцент анализа для unmapped-ребра
+/// («не подставлено», FR-045 R-3) — тот же тон, что warning-сегмент
+/// severity-таблицы FR-016 (SEVERITY_DARK[0]).
+pub const UNMAPPED_EDGE_COLOR: [f32; 4] = canvas_core::tokens::SEVERITY_DARK[0];
 
 /// FR-042 (E2): вариант с контекстом агрегации. Пучок веса ≥ 2 рисуется
 /// ОДНОЙ агрегированной линией по полилинии доминирующего ребра с
@@ -919,6 +925,14 @@ pub fn build_edge_instances(
 /// фокус (T23) — OR-семантика по пучку (инвариант F-12). Если доминанта
 /// скрыта (drag rebind, CR-002) — пучок на кадр рисуется по-прежнему
 /// индивидуально. Одиночные рёбра (вес 1) — прежний путь без изменений.
+///
+/// FR-050 Р-3 (этап C): `unmapped_ids` — id value-рёбер в состоянии «не
+/// подставлено» (FR-045 R-3): рисуются пунктиром янтарным акцентом анализа
+/// независимо от цвета/стиля в `.canvas` (модель не мутируется);
+/// выделение/фокус приоритетнее unmapped-подсветки. Пучок с unmapped-рёбрами
+/// рисуется агрегированно как раньше (диагностика видна на одиночных
+/// рёбрах и в тултипе).
+#[allow(clippy::too_many_arguments)]
 pub fn build_edge_instances_ctx(
     canvas: &canvas_core::Canvas,
     selected: Option<usize>,
@@ -927,6 +941,7 @@ pub fn build_edge_instances_ctx(
     hidden_edge: Option<usize>,
     hidden_ids: &std::collections::HashSet<&str>,
     bundles: Option<&BundleContext<'_>>,
+    unmapped_ids: &std::collections::HashSet<&str>,
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
@@ -998,10 +1013,14 @@ pub fn build_edge_instances_ctx(
         };
         let is_selected = selected == Some(index);
         let in_focus = focus.has_edge(index);
-        let (fill, d) = if is_selected {
+        // FR-050 Р-3: unmapped-ребро — пунктир янтарным акцентом анализа
+        // (модель не мутируется); выделение/фокус рисуются как раньше
+        let is_unmapped = unmapped_ids.contains(edge.id.as_str());
+        let (fill, d, style) = if is_selected {
             (
                 SELECTION_BORDER,
                 edge.thickness.unwrap_or_default().dot() + (EDGE_DOT_SELECTED - EDGE_DOT),
+                edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid),
             )
         } else if in_focus {
             // Альфа дышит вместе с толщиной: статика 0.75, пик 1.0
@@ -1010,7 +1029,22 @@ pub fn build_edge_instances_ctx(
             let d = edge.thickness.unwrap_or_default().dot()
                 + FOCUS_EDGE_BOOST
                 + focus.pulse * FOCUS_EDGE_PULSE_BOOST;
-            (fill, d)
+            (
+                fill,
+                d,
+                edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid),
+            )
+        } else if is_unmapped {
+            // FR-050 Р-3: пунктир + янтарь — связь есть, значения нет
+            let mut fill = UNMAPPED_EDGE_COLOR;
+            if focus.dim > 0.0 {
+                fill[3] *= focus.dim_factor();
+            }
+            (
+                fill,
+                edge.thickness.unwrap_or_default().dot(),
+                canvas_core::EdgeLineStyle::Dashed,
+            )
         } else {
             // FR-014: value-ребро — бирюзовый поток значений; явный цвет
             // пользователя имеет приоритет над семантическим
@@ -1024,9 +1058,12 @@ pub fn build_edge_instances_ctx(
             if focus.dim > 0.0 {
                 fill[3] *= focus.dim_factor();
             }
-            (fill, edge.thickness.unwrap_or_default().dot())
+            (
+                fill,
+                edge.thickness.unwrap_or_default().dot(),
+                edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid),
+            )
         };
-        let style = edge.style.unwrap_or(canvas_core::EdgeLineStyle::Solid);
         polyline_dots(&points, style, d, fill, true, &mut out);
     }
     out
@@ -1154,6 +1191,43 @@ pub fn build_line_port_instances(
                 FLOW_EDGE_COLOR
             } else {
                 EDGE_COLOR
+            };
+            dot(port.point, dot_d, fill)
+        })
+        .collect()
+}
+
+/// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды — кружки на
+/// ЛЕВОМ краю у ряда каждой строки-параметра (зеркало построчных выходов
+/// FR-025). `hovered` — нода под курсором: якоря растут до узлового
+/// размера. `drop_compat` — параллельный порту признак совместимости
+/// единиц источника активного value-drag (Н5/E-UNIT): Some(true) — ярче и
+/// крупнее (допустимая цель), Some(false) — приглушён (несовместимая),
+/// None — drag не активен (обычный аффорданс).
+pub fn build_param_port_instances(
+    ports: &[canvas_core::ParamPort],
+    zone_px: f32,
+    hovered: bool,
+    drop_compat: Option<&[bool]>,
+) -> Vec<CardInstance> {
+    ports
+        .iter()
+        .enumerate()
+        .map(|(i, port)| {
+            let compat = drop_compat.and_then(|flags| flags.get(i).copied());
+            let (dot_d, fill) = match compat {
+                // Drag активен: допустимая цель — акцент потока значений и
+                // узловой размер (независимо от hover); несовместимая —
+                // маленький тусклый кружок
+                Some(true) => (port_dot_diameter(zone_px), FLOW_EDGE_COLOR),
+                Some(false) => (LINE_PORT_DOT, EDGE_COLOR),
+                None => {
+                    if hovered {
+                        (port_dot_diameter(zone_px), SELECTION_BORDER)
+                    } else {
+                        (LINE_PORT_DOT, EDGE_COLOR)
+                    }
+                }
             };
             dot(port.point, dot_d, fill)
         })
@@ -2261,6 +2335,13 @@ mod fr042_tests {
         std::collections::HashSet::new()
     }
 
+    /// FR-050 Р-3 (этап C): пустой набор unmapped-рёбер для вызовов
+    /// build_edge_instances_ctx (инвариант: без unmapped — байт-в-байт
+    /// прежний рендер).
+    fn no_unmapped() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
     /// Сцена: пара a→b с 3 рёбрами (пучок) + одиночное a→c.
     fn scene() -> canvas_core::Canvas {
         let mut canvas = canvas_core::Canvas::default();
@@ -2290,6 +2371,7 @@ mod fr042_tests {
             None,
             &no_hidden(),
             None,
+            &no_unmapped(),
         );
         assert_eq!(via_wrapper.len(), via_ctx.len());
         assert_eq!(via_wrapper[0].pos, via_ctx[0].pos);
@@ -2315,6 +2397,7 @@ mod fr042_tests {
             None,
             &no_hidden(),
             Some(&ctx),
+            &no_unmapped(),
         );
         assert!(
             aggregated.len() < baseline.len(),
@@ -2364,6 +2447,7 @@ mod fr042_tests {
             None,
             &no_hidden(),
             Some(&ctx),
+            &no_unmapped(),
         );
         // Доминанта — user-color ребро e2: цвет линии #ff8000
         assert!((plain[0].fill[0] - 1.0).abs() < 1e-3);
@@ -2378,6 +2462,7 @@ mod fr042_tests {
             None,
             &no_hidden(),
             Some(&ctx),
+            &no_unmapped(),
         );
         assert!(
             bumped[0].size[0] > plain[0].size[0],
@@ -2386,5 +2471,120 @@ mod fr042_tests {
         assert!(
             (bumped[0].size[0] - plain[0].size[0] - (EDGE_DOT_SELECTED - EDGE_DOT)).abs() < 1e-4
         );
+    }
+}
+
+// --- FR-050 (этап C): тесты якорей параметров и unmapped-рёбер ---
+
+#[cfg(test)]
+mod fr050_stage_c_tests {
+    use super::*;
+    use canvas_core::{Canvas, Node};
+
+    fn no_hidden() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
+    fn no_unmapped() -> std::collections::HashSet<&'static str> {
+        std::collections::HashSet::new()
+    }
+
+    fn ports() -> Vec<canvas_core::ParamPort> {
+        vec![
+            canvas_core::ParamPort {
+                param: "rps".to_owned(),
+                point: [100.0, 30.0],
+            },
+            canvas_core::ParamPort {
+                param: "latency".to_owned(),
+                point: [100.0, 50.0],
+            },
+        ]
+    }
+
+    /// Н2: якоря без drag — маленькие нейтральные кружки; hover ноды —
+    /// рост до узлового размера + рамка выделения (аффорданс портов T8).
+    #[test]
+    fn param_port_instances_plain_and_hovered() {
+        let ports = ports();
+        let plain = build_param_port_instances(&ports, 20.0, false, None);
+        assert_eq!(plain.len(), 2);
+        assert!((plain[0].size[0] - LINE_PORT_DOT).abs() < 1e-4);
+        assert_eq!(plain[0].fill, EDGE_COLOR);
+        let hovered = build_param_port_instances(&ports, 20.0, true, None);
+        assert!((hovered[0].size[0] - port_dot_diameter(20.0)).abs() < 1e-4);
+        assert_eq!(hovered[0].fill, SELECTION_BORDER);
+    }
+
+    /// Н2/Н5: во время value-drag совместимый параметр — акцент потока и
+    /// узловой размер (ярче); несовместимый — приглушён (маленький тусклый);
+    /// флаги короче списка — хвост нейтрален (безопасный фолбэк).
+    #[test]
+    fn param_port_instances_drag_compat_states() {
+        let ports = ports();
+        let compat = [true, false];
+        let inst = build_param_port_instances(&ports, 20.0, false, Some(&compat));
+        // Совместимый — акцент value-потока + узловой размер
+        assert_eq!(inst[0].fill, FLOW_EDGE_COLOR);
+        assert!((inst[0].size[0] - port_dot_diameter(20.0)).abs() < 1e-4);
+        // Несовместимый — нейтральный маленький
+        assert_eq!(inst[1].fill, EDGE_COLOR);
+        assert!((inst[1].size[0] - LINE_PORT_DOT).abs() < 1e-4);
+        // Укороченный список флагов: хвост — обычный аффорданс
+        let short = [true];
+        let inst = build_param_port_instances(&ports, 20.0, false, Some(&short));
+        assert_eq!(inst[1].fill, EDGE_COLOR);
+        assert!((inst[1].size[0] - LINE_PORT_DOT).abs() < 1e-4);
+    }
+
+    /// Р-3: unmapped-ребро — пунктир (меньше кружков на той же полилинии)
+    /// янтарным акцентом анализа; цвет/стиль пользователя не затронуты
+    /// (модель не мутируется); без unmapped — прежний бирюзовый value-цвет.
+    #[test]
+    fn unmapped_edge_dashed_amber_solid_flow() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "A", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "B", 400.0, 0.0));
+        let mut edge = canvas_core::Edge::new("e1", "a", None, "b", None);
+        edge.set_flow_kind(canvas_core::FlowKind::Value);
+        canvas.add_edge(edge);
+        // Без unmapped — бирюзовый поток значений (инвариант: пустой набор
+        // — рендер байт-в-байт прежний)
+        let plain = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            None,
+            &no_unmapped(),
+        );
+        assert!(!plain.is_empty());
+        assert_eq!(plain[0].fill, FLOW_EDGE_COLOR);
+        // Unmapped — янтарь анализа
+        let unmapped: std::collections::HashSet<&str> = ["e1"].into_iter().collect();
+        let amber = build_edge_instances_ctx(
+            &canvas,
+            None,
+            false,
+            &FocusView::EMPTY,
+            None,
+            &no_hidden(),
+            None,
+            &unmapped,
+        );
+        assert!(!amber.is_empty());
+        assert_eq!(amber[0].fill, UNMAPPED_EDGE_COLOR);
+        // Пунктир реже сплошной на той же геометрии
+        assert!(
+            amber.len() < plain.len(),
+            "пунктир реже сплошной: {} < {}",
+            amber.len(),
+            plain.len()
+        );
+        // Модель не мутируется: стиль/цвет ребра в .canvas не изменены
+        assert_eq!(canvas.edges[0].style, None);
+        assert_eq!(canvas.edges[0].color, None);
     }
 }
