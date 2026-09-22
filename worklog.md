@@ -3792,6 +3792,7 @@ CanvasDesk». Источник — вводные владельца о проз
 - Слияние параллельной волны: merge origin/main 8b87cfe (FR-050 C: UI-порты, диалоги, unmapped; MCP v2) — БЕЗ конфликтов (45fc88e); гейты на объединённом коде зелёные.
 - Гейты: fmt ✓, clippy -D warnings ✓, test --workspace ✓ (canvased 48 ui / 258 app-lib / 299 render / 129+81 core…), wasm_gate ✓, mcp_wasm_gate ✓ (wasmtime 36.0.1 установлен в пересозданное окружение).
 - Инфра: диск песочницы заполнился (bus error ld) — cargo clean + пересборка; wasmtime доустановлен вручную (install.sh сломан — релизный tarball v36.0.1).
+- **CI по merge SHA 599bca8 — ПОЛНОСТЬЮ ЗЕЛЁНЫЙ (12/12 check-runs: gates ×3, artifacts ×3, build, wasm-check, web, licenses, deploy).**
 
 ### Stage Summary
 - Измеренный текст работает end-to-end: раскладка what-if/галереи шейпит теми же метриками, что рендер (одна строка подписи в раскладке и отрисовке).
