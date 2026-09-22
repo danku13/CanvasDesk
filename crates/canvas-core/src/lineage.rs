@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::expr::{self, line_kind, NumiLineKind, Value};
 use crate::flow::{
     edge_source_value_with_data, spill_source_title, CycleError, DataSnapshots, FlowKind,
-    FlowSolutions,
+    FlowSolutions, QualifiedNames,
 };
 use crate::model::{Canvas, Edge, Node};
 use crate::templates::OutputSource;
@@ -402,6 +402,10 @@ enum Ref {
     Param(String),
     /// Переменная Numi-листа (присваивание выше по листу).
     Var(String),
+    /// FR-050 Р-6: именованный путь «Объект.Поле» — входящее значение по
+    /// имени (резолв — входящие value-рёбра приёмника, все адресные формы
+    /// имени истока × поле, `flow::QualifiedNames`).
+    Qualified(String, String),
 }
 
 /// Собрать ссылки выражения (порядок обхода AST, без дедупликации —
@@ -434,6 +438,10 @@ fn collect_refs(expr: &expr::Expr, out: &mut Vec<Ref>) {
         // Дробные `$1.5` и `$0` — валюта (константа, expr.rs:408).
         expr::Expr::DollarAmount(..) => {}
         expr::Expr::Param(name) => out.push(Ref::Param(name.clone())),
+        // FR-050 Р-6: именованный путь «Объект.Поле» — вход по имени.
+        expr::Expr::Qualified { obj, field } => {
+            out.push(Ref::Qualified(obj.clone(), field.clone()))
+        }
     }
 }
 
@@ -828,6 +836,28 @@ impl<'a> Builder<'a> {
                         }),
                         // Переменная без источника — «не связано» (§6.6).
                         None => specs.push(ChildSpec::Unlinked { name }),
+                    }
+                }
+                // FR-050 Р-6: именованный путь — ребро, чей qualified-ключ
+                // совпадает (все адресные формы имени истока × поле);
+                // такого ребра нет — терминал «не связано» (движок в этой
+                // строке дал бы UnknownInput).
+                Ref::Qualified(obj, field) => {
+                    let qnames = QualifiedNames::build(self.canvas);
+                    let all = slots.iter().chain(spills.values());
+                    let edge = all.copied().find(|edge| {
+                        qnames
+                            .edge_keys(self.canvas, edge)
+                            .contains(&(obj.clone(), field.clone()))
+                    });
+                    match edge {
+                        Some(edge) => {
+                            let slot_no = slots.iter().position(|e| std::ptr::eq(*e, edge));
+                            specs.push(self.edge_spec(edge, &slots, slot_no));
+                        }
+                        None => specs.push(ChildSpec::Unlinked {
+                            name: format!("{obj}.{field}"),
+                        }),
                     }
                 }
             }
@@ -1401,5 +1431,77 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.kind == LineageNodeKind::Truncated));
+    }
+    /// FR-050 Р-6: именованный путь в формуле — дерево происхождения
+    /// раскрывается через ребро с этим qualified-ключом (итог приёмника →
+    /// ребро e1 → строка присваивания истока). Неразрешённый путь (value-
+    /// подмена what-if при удаляемом ребре) — терминал «не связано».
+    #[test]
+    fn qualified_ref_follows_edge_to_source_line() {
+        let mut canvas = Canvas::default();
+        sheet(&mut canvas, "s", "Заявки\nКол = 40", 0.0);
+        sheet(&mut canvas, "r", "итог = Заявки.Кол · 2", 1.0);
+        let mut edge = Edge::new("e1", "s", None, "r", None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.from_output = Some("Кол".to_owned());
+        canvas.add_edge(edge);
+        let t = tree(&canvas, LineageNodeId::total("r"));
+        assert_eq!(t.nodes[0].kind, LineageNodeKind::Calc);
+        assert_eq!(shown(&t, 0), "80");
+        // Итог текстовой ноды → последняя формульная строка (переход
+        // внутри листа, via None — §7.2), уже в ней — именованная ссылка.
+        let root_kids = kids(&t, 0);
+        assert_eq!(root_kids.len(), 1, "итог → строка формулы");
+        let formula_idx = root_kids[0];
+        assert_eq!(t.nodes[formula_idx].line, Some(0));
+        let ref_kids = kids(&t, formula_idx);
+        assert_eq!(ref_kids.len(), 1, "единственный операнд строки — путь");
+        assert_eq!(
+            t.nodes[formula_idx].children[0]
+                .via
+                .as_ref()
+                .map(|v| v.edge_id.clone()),
+            Some("e1".to_owned()),
+            "переход через ребро именованной ссылки"
+        );
+        let src = ref_kids[0];
+        assert_eq!(t.nodes[src].node_id, "s");
+        assert_eq!(t.nodes[src].line, Some(1), "строка присваивания «Кол = 40»");
+        assert_eq!(shown(&t, src), "40");
+
+        // Неразрешённый путь: value-подмена what-if даёт ноде итог, а
+        // persisted-формула ссылается на путь без ребра — терминал
+        // «не связано» (движок в этой строке дал бы UnknownInput).
+        let mut canvas2 = Canvas::default();
+        sheet(&mut canvas2, "s", "Заявки\nКол = 40", 0.0);
+        sheet(&mut canvas2, "r", "итог = Заявки.Нет", 1.0);
+        let mut node_values = std::collections::HashMap::new();
+        node_values.insert("r".to_owned(), Value::scalar(5.0));
+        let solutions2 = propagate_with_lines_data(
+            &canvas2,
+            &WhatIfOverrides {
+                line_exprs: std::collections::HashMap::new(),
+                node_values,
+            },
+            &DataSnapshots::new(),
+        )
+        .expect("пересчёт");
+        let t2 = build_lineage(
+            &canvas2,
+            LineageFlow::Ready {
+                solutions: &solutions2,
+                data: &DataSnapshots::new(),
+            },
+            LineageNodeId::total("r"),
+        )
+        .expect("дерево построено (итог — подмена)");
+        assert!(
+            t2.nodes
+                .iter()
+                .any(|n| n.kind == LineageNodeKind::Unlinked
+                    && n.label.as_deref() == Some("Заявки.Нет")),
+            "неразрешённый путь — терминал «не связано»: {:?}",
+            t2.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>()
+        );
     }
 }

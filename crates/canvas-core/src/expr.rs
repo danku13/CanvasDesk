@@ -412,6 +412,11 @@ pub enum Expr {
     /// FR-018: `$rps` — параметр шаблонной ноды; источник значений —
     /// `Env.params` (заполняется из `canvasdesk.template.params`).
     Param(String),
+    /// FR-050 Р-6: qualified-путь «Объект.Поле» (`Заявки.Кол-во`) —
+    /// именованная ссылка на входящее значение; резолв — по графу
+    /// входящих value-рёбер (`Env.qualified`, flow.rs). Позиционные
+    /// `$1..$N` — легаси (вариант Б: именованный синтаксис — сразу).
+    Qualified { obj: String, field: String },
 }
 
 /// Окружение вычисления: значения переменных (FR-013) и входящие значения
@@ -427,6 +432,11 @@ pub struct Env {
     /// `Some(None)` — ребро есть, значения нет (источник без формулы или
     /// с ошибкой), `Some(Some(v)) — значение источника.
     inbound: Option<Vec<Option<Value>>>,
+    /// FR-050 Р-6: таблица резолва именованных путей «Объект.Поле» →
+    /// значение — заполняется flow по графу входящих value-рёбер приёмника
+    /// (порядок рёбер не влияет на ключи). Читается
+    /// [`Expr::Qualified`].
+    qualified: HashMap<(String, String), Value>,
 }
 
 impl Env {
@@ -441,6 +451,7 @@ impl Env {
             vars: HashMap::new(),
             params: HashMap::new(),
             inbound: Some(inbound),
+            qualified: HashMap::new(),
         }
     }
 
@@ -450,7 +461,20 @@ impl Env {
             vars: HashMap::new(),
             params: params.into_iter().collect(),
             inbound: None,
+            qualified: HashMap::new(),
         }
+    }
+
+    /// FR-050 Р-6: добавить таблицу резолва именованных путей «Объект.Поле»
+    /// (flow: по графу входящих value-рёбер приёмника).
+    pub fn with_qualified(mut self, qualified: HashMap<(String, String), Value>) -> Self {
+        self.qualified = qualified;
+        self
+    }
+
+    /// FR-050 Р-6: значение именованного пути «Объект.Поле».
+    pub fn qualified_value(&self, obj: &str, field: &str) -> Option<&Value> {
+        self.qualified.get(&(obj.to_owned(), field.to_owned()))
     }
 
     /// FR-018: добавить карту параметров к окружению (flow: входы value-
@@ -524,6 +548,12 @@ pub enum EvalError {
     /// FR-018: ссылка `$имя` не имеет значения в параметрах шаблона.
     #[error("неизвестный параметр: ${0}")]
     UnknownParam(String),
+    /// FR-050 Р-6: именованный путь «Объект.Поле» не разрешён — среди
+    /// входящих value-рёбер приёмника нет пары с таким адресом (источник
+    /// не подключён, имя не совпадает или источник без значения —
+    /// unmapped-диагностика Р-3 отдельным контуром).
+    #[error("вход не найден: {0}")]
+    UnknownInput(String),
     #[error("неизвестная функция: {0}")]
     UnknownFunction(String),
     #[error("{func}: {msg}")]
@@ -568,6 +598,13 @@ enum Tok {
     /// префиксом `in` зарезервированы — совместимость с валютной семантикой
     /// `$inn` из FR-013). Разрешается в `Env.params` (шаблонные ноды).
     DollarIdent(String),
+    /// FR-050 Р-6: qualified-путь «Объект.Поле» (`Заявки.Кол-во`,
+    /// `Заявки (2).Кол-во` — суффикс коллизии имён). Резолв — по графу
+    /// входящих value-рёбер (`Env.qualified`, flow.rs).
+    Qualified {
+        obj: String,
+        field: String,
+    },
     Plus,
     Minus,
     Star,
@@ -676,6 +713,14 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        // FR-050 Р-6: `.` сразу за идентификатором (поле начинается с
+        // буквы/`_`) — qualified-путь «Объект.Поле»; `.` перед цифрой —
+        // прежняя семантика (дробное число, `x.5` = x · 0.5)
+        if let Some(tok) = self.try_qualified(start) {
+            self.after_number = false;
+            self.operand_ended = true;
+            return tok;
+        }
         let ident = self.text[start..self.pos].to_owned();
         self.after_number = false;
         if self.operand_ended && matches!(ident.as_str(), "x" | "х") && self.operand_starts_ahead()
@@ -685,6 +730,92 @@ impl<'a> Lexer<'a> {
         }
         self.operand_ended = true;
         Tok::Ident(ident)
+    }
+
+    /// FR-050 Р-6: остаток начинается с `.Поля` (точка + буква/`_`)?
+    fn dot_field_starts(rest: &str) -> bool {
+        let mut chars = rest.chars();
+        if chars.next() != Some('.') {
+            return false;
+        }
+        chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+    }
+
+    /// FR-050 Р-6: прочитать поле qualified-пути после потреблённой точки —
+    /// идентификатор, в котором дефис продолжается именем, если сразу за ним
+    /// буква/цифра/`_` («Кол-во»); `Заявки.Кол - во` (пробел) — вычитание,
+    /// поле «Кол».
+    fn lex_qualified_field(&mut self) -> String {
+        let start = self.pos;
+        while let Some(ch) = self.text[self.pos..].chars().next() {
+            if ch.is_alphanumeric() || ch == '_' {
+                self.pos += ch.len_utf8();
+            } else if ch == '-'
+                && self.text[self.pos + 1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        self.text[start..self.pos].to_owned()
+    }
+
+    /// FR-050 Р-6: qualified-путь сразу за лексическим идентификатором
+    /// объекта (`self.pos` — за базовым именем, `ident_start` — его начало).
+    /// Ветвь А: `Объект.Поле`. Ветвь Б: `Объект (N).Поле` / `Объект (id).Поле`
+    /// — суффикс коллизии имён (резолвер регистрирует и номер «Имя (2)»,
+    /// и node_id-алиас «Имя (id)» — как в dataref::qualified_obj_name).
+    /// Lookahead без потребления: суффикс опознаётся ТОЛЬКО целиком (до
+    /// точки с полем) — `Заявки (2)` без точки остаётся прежней семантикой
+    /// (вызов/умножение); `f (12, x)` — запятая рушит суффикс, остаётся
+    /// вызовом. Нормализация: ровно один пробел перед скобкой суффикса.
+    fn try_qualified(&mut self, ident_start: usize) -> Option<Tok> {
+        let base_end = self.pos;
+        let rest = &self.text[base_end..];
+        if Self::dot_field_starts(rest) {
+            self.pos = base_end + 1;
+            let field = self.lex_qualified_field();
+            let obj = self.text[ident_start..base_end].to_owned();
+            return Some(Tok::Qualified { obj, field });
+        }
+        // Ветвь Б: суффикс ` (N)`/` (id)` + `.Поле`
+        let after_spaces = rest.trim_start_matches([' ', '\t']);
+        if !after_spaces.starts_with('(') {
+            return None;
+        }
+        let open = base_end + (rest.len() - after_spaces.len());
+        let mut close = open + 1;
+        let mut closed = false;
+        while let Some(ch) = self.text[close..].chars().next() {
+            if ch == ')' {
+                closed = true;
+                break;
+            }
+            if !(ch.is_alphanumeric() || ch == '_' || ch == '-') {
+                return None;
+            }
+            close += ch.len_utf8();
+        }
+        if !closed {
+            return None;
+        }
+        let content = &self.text[open + 1..close];
+        if content.is_empty() {
+            return None;
+        }
+        let after_paren = &self.text[close + 1..];
+        let trimmed = after_paren.trim_start_matches([' ', '\t']);
+        if !Self::dot_field_starts(trimmed) {
+            return None;
+        }
+        self.pos = close + 1 + (after_paren.len() - trimmed.len()) + 1;
+        let field = self.lex_qualified_field();
+        let obj = format!("{} ({})", &self.text[ident_start..base_end], content);
+        Some(Tok::Qualified { obj, field })
     }
 
     fn take_while<F: Fn(u8) -> bool>(&mut self, pred: F) {
@@ -955,13 +1086,15 @@ pub fn parse(input: &str) -> Result<Expr, ParseError> {
                 }
             }
             // Начала утверждений (в т.ч. унарный знак: `-3 ms`; FR-014:
-            // `$in`/`$5` — операнды-ссылки; FR-018: `$rps` — параметр)
+            // `$in`/`$5` — операнды-ссылки; FR-018: `$rps` — параметр;
+            // FR-050 Р-6: «Объект.Поле» — именованная ссылка на вход)
             Tok::Num(_)
             | Tok::Ident(_)
             | Tok::Unit(_)
             | Tok::DollarIn
             | Tok::DollarNum(_)
             | Tok::DollarIdent(_)
+            | Tok::Qualified { .. }
             | Tok::LParen
             | Tok::Plus
             | Tok::Minus => {
@@ -1052,13 +1185,15 @@ fn parse_mul_tail(lexer: &mut Lexer, mut lhs: Expr) -> Result<Expr, ParseError> 
             // Сопоставление без знака: число/единица/скобка/переменная/вход
             // сразу за операндом (`5 ms`, `3 replicas` из примера владельца,
             // `(a + b) ms`, `2 $in`); Ident `(` уже разобран как вызов
-            // на уровне primary
+            // на уровне primary; FR-050 Р-6: qualified-путь — операнд
+            // неявного умножения (`2 Курсы.USD`)
             Some(
                 Tok::Num(_)
                 | Tok::Unit(_)
                 | Tok::DollarIn
                 | Tok::DollarNum(_)
                 | Tok::DollarIdent(_)
+                | Tok::Qualified { .. }
                 | Tok::LParen
                 | Tok::Ident(_),
             ) => (BinOp::Mul, true),
@@ -1114,6 +1249,8 @@ fn parse_unary_from(lexer: &mut Lexer, first: Tok) -> Result<Expr, ParseError> {
         Tok::DollarNum(num) => Ok(Expr::DollarAmount(num)),
         // FR-018: `$rps` — параметр шаблона
         Tok::DollarIdent(name) => Ok(Expr::Param(name)),
+        // FR-050 Р-6: именованный путь «Объект.Поле» — ссылка на вход
+        Tok::Qualified { obj, field } => Ok(Expr::Qualified { obj, field }),
         Tok::Ident(name) => {
             // Вызов функции: Ident `(` args `)`; иначе — переменная
             if matches!(lexer.peek()?, Some(Tok::LParen)) {
@@ -1215,6 +1352,12 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
             .param(name)
             .cloned()
             .ok_or_else(|| EvalError::UnknownParam(name.clone())),
+        // FR-050 Р-6: именованный путь «Объект.Поле» — входящее значение по
+        // графу рёбер; нет такой пары — видимая ошибка (не тихая проза)
+        Expr::Qualified { obj, field } => env
+            .qualified_value(obj, field)
+            .cloned()
+            .ok_or_else(|| EvalError::UnknownInput(format!("{obj}.{field}"))),
         Expr::Neg(inner) => {
             let value = eval(inner, env)?;
             Ok(Value {
@@ -2485,5 +2628,102 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- FR-050 Р-6: qualified-пути «Объект.Поле» (грамматика) ---
+
+    /// Парсинг форм имени: «Объект.Поле», дефис внутри поля («Кол-во»),
+    /// суффикс коллизии « (N)» / « (id)»; «Объект.Кол - во» (пробел) —
+    /// вычитание; `x.5` — прежняя семантика (неявное умножение на дробь).
+    #[test]
+    fn parse_qualified_path_forms() {
+        use super::{BinOp, Expr};
+        // Базовая форма
+        assert_eq!(
+            parse("Заявки.Кол-во"),
+            Ok(Expr::Qualified {
+                obj: "Заявки".to_owned(),
+                field: "Кол-во".to_owned()
+            })
+        );
+        // Суффикс коллизии: номер и node_id-алиас, пробелы нормализуются
+        assert_eq!(
+            parse("Заявки (2).Кол"),
+            Ok(Expr::Qualified {
+                obj: "Заявки (2)".to_owned(),
+                field: "Кол".to_owned()
+            })
+        );
+        assert_eq!(
+            parse("Заявки(a7).Кол"),
+            Ok(Expr::Qualified {
+                obj: "Заявки (a7)".to_owned(),
+                field: "Кол".to_owned()
+            })
+        );
+        // Пробел после точки-поля: вычитание Qualified - Var
+        assert_eq!(
+            parse("Заявки.Кол - во"),
+            Ok(Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Qualified {
+                    obj: "Заявки".to_owned(),
+                    field: "Кол".to_owned()
+                }),
+                rhs: Box::new(Expr::Var("во".to_owned()))
+            })
+        );
+        // Регресс: `x.5` — точка перед цифрой остаётся дробным числом
+        assert_eq!(
+            parse("x.5"),
+            Ok(Expr::Bin {
+                op: BinOp::Mul,
+                lhs: Box::new(Expr::Var("x".to_owned())),
+                rhs: Box::new(Expr::Num(0.5, super::Unit::Scalar))
+            })
+        );
+        // Операнд неявного умножения: `2 Курсы.USD`
+        assert_eq!(
+            parse("2 Курсы.USD"),
+            Ok(Expr::Bin {
+                op: BinOp::Mul,
+                lhs: Box::new(Expr::Num(2.0, super::Unit::Scalar)),
+                rhs: Box::new(Expr::Qualified {
+                    obj: "Курсы".to_owned(),
+                    field: "USD".to_owned()
+                })
+            })
+        );
+        // Суффикс без точки — прежняя семантика (вызов функции)
+        assert!(matches!(parse("sum (12)").unwrap(), Expr::Call { .. }));
+        // Присваивание: LHS — имя, RHS — пути (пример инварианта 6)
+        assert!(matches!(
+            parse("выручка = Заявки.Кол-во * Заявки.Средний_чек").unwrap(),
+            Expr::Assign { .. }
+        ));
+    }
+
+    /// FR-050 Р-6: eval неразрешённого пути — видимая ошибка «вход не
+    /// найден» с полным путём.
+    #[test]
+    fn eval_qualified_missing_is_error() {
+        let parsed = parse("Заявки.Кол").expect("парсится");
+        let err = eval(&parsed, &Env::empty()).expect_err("нет таблицы — ошибка");
+        assert!(
+            err.to_string().contains("вход не найден"),
+            "текст ошибки: {err}"
+        );
+        assert!(
+            err.to_string().contains("Заявки.Кол"),
+            "ошибка называет путь: {err}"
+        );
+        // Разрешённый путь — значение из таблицы
+        let mut qualified = std::collections::HashMap::new();
+        qualified.insert(
+            ("Заявки".to_owned(), "Кол".to_owned()),
+            super::Value::scalar(42.0),
+        );
+        let env = Env::empty().with_qualified(qualified);
+        assert_eq!(eval(&parsed, &env), Ok(super::Value::scalar(42.0)));
     }
 }

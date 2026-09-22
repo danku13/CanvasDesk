@@ -176,6 +176,9 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
 
     // W-UNUSED-SLOT: позиционные входы $1..$N, которые формулы приёмника
     // не читают (порядок — nodes, затем рёбра в порядке slots)
+    // FR-050 Р-6: именованный путь «Объект.Поле» читает слот своего ребра
+    // (резолв — все адресные формы имени истока × поле, flow::QualifiedNames)
+    let qnames = flow::QualifiedNames::build(canvas);
     for node in &canvas.nodes {
         let slots: Vec<&Edge> = canvas
             .edges
@@ -199,6 +202,15 @@ pub fn validate(canvas: &Canvas) -> Vec<ValidationIssue> {
                 continue;
             }
             if refs.slots.contains(&slot) {
+                continue;
+            }
+            // FR-050 Р-6: ребро адресовано именованным путём — слот занят
+            if !refs.qualified.is_empty()
+                && qnames
+                    .edge_keys(canvas, edge)
+                    .iter()
+                    .any(|k| refs.qualified.contains(k))
+            {
                 continue;
             }
             issues.push(ValidationIssue {
@@ -438,6 +450,9 @@ pub(crate) struct SlotRefs {
     pub(crate) slots: HashSet<usize>,
     /// Формула читает `$in` (валиден при ровно одном входе).
     pub(crate) in_ref: bool,
+    /// FR-050 Р-6: именованные пути «Объект.Поле», читаемые формулами ноды
+    /// (адресуют слоты своих рёбер — слот занят, авто-строки/W-UNUSED нет).
+    pub(crate) qualified: HashSet<(String, String)>,
 }
 
 /// Обход дерева формулы: `$N` (целые ≥ 1 — входы, дробные — валюта) и
@@ -468,6 +483,10 @@ fn collect_slot_refs(expr: &Expr, refs: &mut SlotRefs) {
             }
         }
         Expr::Num(..) | Expr::Var(_) | Expr::Param(_) => {}
+        // FR-050 Р-6: именованный путь — ссылка на слот своего ребра
+        Expr::Qualified { obj, field } => {
+            refs.qualified.insert((obj.clone(), field.clone()));
+        }
     }
 }
 

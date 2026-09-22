@@ -378,6 +378,10 @@ struct InboundValues {
     spill: BTreeMap<String, Option<Value>>,
     /// Имена параметров с конфликтом (≥ 2 рёбер в один `toParam`).
     conflicts: Vec<String>,
+    /// FR-050 Р-6 (таблица резолва имён): qualified-пути «Объект.Поле» →
+    /// значение — по всем адресным формам истоков; ключи НЕ зависят от
+    /// порядка `canvas.edges` (перенумерация не меняет резолва, инвариант 6).
+    qualified: BTreeMap<(String, String), Value>,
 }
 
 /// [`propagate`] с построчными выходами (FR-025): для текстовых Numi-листов
@@ -404,6 +408,10 @@ pub fn propagate_with_lines_data(
     data: &DataSnapshots,
 ) -> Result<FlowSolutions, CycleError> {
     let order = topo_sort(canvas)?;
+    // FR-050 Р-6: адресные имена нод для qualified-резолва — один расчёт
+    // на весь пересчёт (коллизии: «Заявки (2)»/«Заявки (id)», порядок
+    // `canvas.nodes` — детерминизм, инвариант 6).
+    let obj_names = QualifiedNames::build(canvas);
     let mut solutions = FlowSolutions::default();
     for index in order {
         let node = &canvas.nodes[index];
@@ -420,6 +428,7 @@ pub fn propagate_with_lines_data(
         // FR-029: входы по адресации — позиционные слоты (рёбра без
         // toParam) и карта проливания в параметры (рёбра с toParam)
         // FR-045: снапшоты CSV — колонки data-нод адресуются fromOutput
+        // FR-050 Р-6: + таблица резолва именованных путей «Объект.Поле»
         let inbound = inbound_values(
             canvas,
             id,
@@ -427,6 +436,7 @@ pub fn propagate_with_lines_data(
             &solutions.lines,
             &solutions.named,
             data,
+            &obj_names,
         );
         if !inbound.conflicts.is_empty() {
             let warnings = inbound
@@ -444,6 +454,15 @@ pub fn propagate_with_lines_data(
             Env::empty()
         } else {
             Env::with_inbound(inbound.slots.clone())
+        };
+        // FR-050 Р-6 (таблица резолва имён): именованные пути «Объект.Поле»
+        // → значения входящих рёбер — доступны и формулам шаблона, и
+        // строкам листа, и what-if-подменам (RHS считается в этом же
+        // окружении каскада Р-1).
+        let env = if inbound.qualified.is_empty() {
+            env
+        } else {
+            env.with_qualified(inbound.qualified.clone().into_iter().collect())
         };
         // FR-050 Р-1 (приоритет источников значения): параметры собираются
         // каскадом «локальный дефолт → проливание (`toParam`, «проливание
@@ -698,6 +717,7 @@ fn inbound_values(
     lines: &LineOutputs,
     named: &NamedOutputs,
     data: &DataSnapshots,
+    obj_names: &QualifiedNames,
 ) -> InboundValues {
     let mut result = InboundValues::default();
     // параметры, в которые уже приходили рёбра (для детекции конфликтов)
@@ -707,6 +727,16 @@ fn inbound_values(
             continue;
         }
         let value = edge_source_value_with_data(edge, outputs, lines, named, data);
+        // FR-050 Р-6: ключи qualified-резолва — все адресные формы имени
+        // истока × поле (регистрируются и позиционные рёбра, и toParam-
+        // проливания: формула может адресовать значение по имени в обоих
+        // случаях). Источник без значения — ключ не регистрируется (eval
+        // даст видимую ошибку «вход не найден», диагностика Р-3 — отдельно).
+        for key in obj_names.edge_keys(canvas, edge) {
+            if let Some(v) = &value {
+                result.qualified.insert(key, v.clone());
+            }
+        }
         match &edge.to_param {
             None => result.slots.push(value),
             Some(name) => {
@@ -720,6 +750,66 @@ fn inbound_values(
         }
     }
     result
+}
+
+/// FR-050 Р-6: адресные имена нод канваса для qualified-резолва
+/// «Объект.Поле». Для каждой ноды — все формы адресации её отображаемого
+/// имени (`dataref::node_display_name`):
+/// - уникальное имя — «Заявки»;
+/// - коллизия (несколько нод с одним именем): первая — «Заявки»,
+///   последующие — «Заявки (2)», «Заявки (3)»… (нумерация по порядку
+///   `canvas.nodes` — детерминизм, инвариант 6); ВСЕ одноимённые
+///   дополнительно — алиас «Заявки (node_id)» (зеркало
+///   `dataref::qualified_obj_name`, FR-045 Q2 — авто-строки и подписи
+///   показывают эту форму, формула может адресовать любую).
+pub(crate) struct QualifiedNames {
+    /// node_id → адресные формы имени.
+    names: HashMap<String, Vec<String>>,
+}
+
+impl QualifiedNames {
+    pub(crate) fn build(canvas: &Canvas) -> Self {
+        let display: Vec<String> = canvas
+            .nodes
+            .iter()
+            .map(|node| crate::dataref::node_display_name(canvas, &node.id))
+            .collect();
+        let mut totals: HashMap<&str, usize> = HashMap::new();
+        for name in display.iter() {
+            *totals.entry(name.as_str()).or_insert(0) += 1;
+        }
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        let mut names: HashMap<String, Vec<String>> = HashMap::new();
+        for (node, name) in canvas.nodes.iter().zip(display.iter()) {
+            let count = seen.entry(name.as_str()).or_insert(0);
+            *count += 1;
+            let mut forms = Vec::new();
+            if *count == 1 {
+                forms.push(name.clone());
+            } else {
+                forms.push(format!("{name} ({count})"));
+            }
+            if totals[name.as_str()] > 1 {
+                forms.push(format!("{name} ({})", node.id));
+            }
+            names.insert(node.id.clone(), forms);
+        }
+        Self { names }
+    }
+
+    /// Все qualified-ключи value-ребра: (адресные формы имени истока) ×
+    /// (поле — приоритет адресации как у `edge_source_value`:
+    /// `fromOutput` → имя присваивания `fromLine` → `edge.id`).
+    pub(crate) fn edge_keys(&self, canvas: &Canvas, edge: &Edge) -> Vec<(String, String)> {
+        let field = source_field_name(canvas, edge);
+        match self.names.get(&edge.from_node) {
+            Some(forms) => forms
+                .iter()
+                .map(|obj| (obj.clone(), field.clone()))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// FR-029 (визуализация проливания): параметр ноды, запитанный входящим
@@ -914,11 +1004,20 @@ pub fn auto_rows_with_data(
     // или `$in` (валиден при ровно одном входе) — зеркало логики
     // W-UNUSED-SLOT FR-032. Читается → значение уходит в формулу
     // (обычный поток FR-014), авто-строки нет.
+    // FR-050 Р-6: именованный путь «Объект.Поле» тоже читает слот своего
+    // ребра (ключи резолва — все адресные формы истока × поле).
     let refs = crate::validate::slot_references(node);
+    let names = QualifiedNames::build(canvas);
     let counts = crate::dataref::display_name_counts(canvas);
     let mut result = Vec::new();
     for (slot, edge) in positional.iter().enumerate() {
-        let read = (refs.in_ref && positional.len() == 1) || refs.slots.contains(&(slot + 1));
+        let read = (refs.in_ref && positional.len() == 1)
+            || refs.slots.contains(&(slot + 1))
+            || (!refs.qualified.is_empty()
+                && names
+                    .edge_keys(canvas, edge)
+                    .iter()
+                    .any(|k| refs.qualified.contains(k)));
         if read {
             continue;
         }
@@ -3064,6 +3163,269 @@ mod tests {
         assert!(
             rows[1].value.is_none(),
             "источник-проза — значение не подставлено (unmapped)"
+        );
+    }
+
+    // --- FR-050 Р-6 (этап B): именованный синтаксис «Объект.Поле» ---
+
+    /// Р-6: формулы приёмника пишутся именованными путями; резолв — по графу
+    /// входящих value-рёбер (fromOutput — имя выхода; итог — как у
+    /// `edge_source_value`). Пример FR-050 §Решения.
+    #[test]
+    fn qualified_path_resolves_from_edges() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nКол = 40\nчек = 25 $", 0.0, 0.0));
+        canvas.nodes.push(Node::text(
+            "r",
+            "выручка = Заявки.Кол · Заявки.чек",
+            1.0,
+            0.0,
+        ));
+        ported_value_edge(&mut canvas, "e1", "s", "r", Some("Кол"), None);
+        ported_value_edge(&mut canvas, "e2", "s", "r", Some("чек"), None);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let value = solutions
+            .outputs
+            .get("r")
+            .and_then(|result| result.as_ref().ok())
+            .expect("формула вычислилась");
+        assert!((value.num - 1000.0).abs() < 1e-9, "40 · 25 $: {value:?}");
+        assert!(value.to_string().contains("$"), "единицы: {value}");
+    }
+
+    /// Инвариант 6: резолв НЕ зависит от порядка рёбер — перенумерация
+    /// `canvas.edges` не меняет значений (в отличие от позиционных $N).
+    #[test]
+    fn qualified_path_independent_of_edge_order() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nКол = 40\nчек = 25", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("r", "итог = Заявки.чек - Заявки.Кол", 1.0, 0.0));
+        ported_value_edge(&mut canvas, "e1", "s", "r", Some("Кол"), None);
+        ported_value_edge(&mut canvas, "e2", "s", "r", Some("чек"), None);
+        let first = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        // Перестановка рёбер местами (позиционные $1/$2 поменялись бы)
+        canvas.edges.swap(0, 1);
+        let second = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let num = |s: &crate::flow::FlowSolutions| {
+            s.outputs
+                .get("r")
+                .and_then(|result| result.as_ref().ok())
+                .map(|v| v.num)
+        };
+        assert_eq!(num(&first), Some(-15.0), "25 - 40");
+        assert_eq!(
+            num(&first),
+            num(&second),
+            "перенумерация canvas.edges не меняет значения"
+        );
+    }
+
+    /// Инвариант 6: легаси-`$N`-формула в том же файле считается по-прежнему.
+    #[test]
+    fn qualified_and_legacy_coexist() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nКол = 40\nчек = 25 $", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("named", "a = Заявки.Кол · 2", 1.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("legacy", "b = $1 · 2", 2.0, 0.0));
+        ported_value_edge(&mut canvas, "e1", "s", "named", Some("Кол"), None);
+        ported_value_edge(&mut canvas, "e2", "s", "legacy", None, None);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let num = |id: &str| {
+            solutions
+                .outputs
+                .get(id)
+                .and_then(|result| result.as_ref().ok())
+                .map(|v| v.num)
+        };
+        // «Заявки.Кол» — именованный выход (присваивание) = 40
+        assert_eq!(num("named"), Some(80.0), "именованное значение · 2");
+        // $1 — значение ноды целиком (итог = последняя строка листа: 25 $)
+        assert_eq!(num("legacy"), Some(50.0), "легаси $1 (итог ноды 25 $) · 2");
+    }
+
+    /// Инвариант 6: коллизия имён объектов — «Имя (2).Поле» (номер по
+    /// порядку `canvas.nodes`); алиас «Имя (node_id)» и плоское имя первой
+    /// ноды также адресуют (зеркало dataref::qualified_obj_name).
+    #[test]
+    fn qualified_name_collision_forms() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("a1", "Заявки\nКол = 10", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("a2", "Заявки\nКол = 20", 1.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("r2", "итог = Заявки (2).Кол", 2.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("rid", "итог = Заявки (a2).Кол", 3.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("r1", "итог = Заявки.Кол", 4.0, 0.0));
+        ported_value_edge(&mut canvas, "e1", "a2", "r2", Some("Кол"), None);
+        ported_value_edge(&mut canvas, "e2", "a2", "rid", Some("Кол"), None);
+        ported_value_edge(&mut canvas, "e3", "a1", "r1", Some("Кол"), None);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let num = |id: &str| {
+            solutions
+                .outputs
+                .get(id)
+                .and_then(|result| result.as_ref().ok())
+                .map(|v| v.num)
+        };
+        assert_eq!(num("r2"), Some(20.0), "«Заявки (2)» — вторая нода");
+        assert_eq!(num("rid"), Some(20.0), "«Заявки (a2)» — алиас node_id");
+        assert_eq!(num("r1"), Some(10.0), "«Заявки» — первая нода");
+    }
+
+    /// Р-6: неразрешённый путь — видимая ошибка (не тихая проза): строка
+    /// краснеет «вход не найден: Заявки.Нет».
+    #[test]
+    fn qualified_missing_reference_is_visible_error() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nКол = 40", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("r", "итог = Заявки.Нет", 1.0, 0.0));
+        ported_value_edge(&mut canvas, "e1", "s", "r", Some("Кол"), None);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let outcome = solutions
+            .outputs
+            .get("r")
+            .expect("ошибка записана (не тишина прозы)");
+        let err = outcome.as_ref().expect_err("пути нет — ошибка");
+        assert!(
+            err.to_string().contains("вход не найден: Заявки.Нет"),
+            "текст ошибки: {err}"
+        );
+    }
+
+    /// Р-6: поле пути fromLine-ребра — имя присваивания строки-источника
+    /// (fallback «строка N»); data-семантика зеркалит edge_source_value.
+    #[test]
+    fn qualified_from_line_field_is_assignment_name() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nкол = 42", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("r", "итог = Заявки.кол", 1.0, 0.0));
+        let mut e = Edge::new("e1", "s", None, "r", None);
+        e.set_flow_kind(FlowKind::Value);
+        e.from_line = Some(1);
+        canvas.add_edge(e);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("r")
+                .and_then(|result| result.as_ref().ok())
+                .map(|v| v.num),
+            Some(42.0),
+            "имя присваивания второй строки"
+        );
+    }
+
+    /// Р-6: именованный путь читает слот своего ребра — W-UNUSED-SLOT не
+    /// срабатывает, авто-строка не появляется (значение не «теряется»).
+    /// Тебро без адресации в путь имени — поле edge.id.
+    #[test]
+    fn qualified_consumes_slot_no_warning_no_auto_row() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("s", "Заявки\nКол = 40", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("r", "итог = Заявки.Кол + 1", 1.0, 0.0));
+        ported_value_edge(&mut canvas, "e1", "s", "r", Some("Кол"), None);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert!(
+            auto_rows(&canvas, "r", &solutions).is_empty(),
+            "слот читается именованным путём — авто-строки нет"
+        );
+        assert_eq!(
+            crate::validate::validate(&canvas),
+            Vec::new(),
+            "W-UNUSED-SLOT не срабатывает: слот занят путём"
+        );
+        // Контраст: ребро БЕЗ адресации — поле edge.id («Заявки.e2»)
+        ported_value_edge(&mut canvas, "e2", "s", "r", None, None);
+        canvas
+            .nodes
+            .push(Node::text("r2", "итог = Заявки.e2 + 1", 2.0, 0.0));
+        canvas.edges.last_mut().unwrap().to_node = "r2".to_owned();
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("r2")
+                .and_then(|result| result.as_ref().ok())
+                .map(|v| v.num),
+            Some(41.0),
+            "безымянный выход — edge.id (итог ноды 40 + 1)"
+        );
+    }
+
+    /// Р-6: пути доступны формулам шаблона и what-if-подменам (RHS
+    /// считается в окружении каскада Р-1); toParam-проливание тоже
+    /// адресуемо по имени.
+    #[test]
+    fn qualified_in_template_formula_and_whatif_rhs() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "traffic",
+            "Трафик\npeak_rps = 200 rps",
+            0.0,
+            0.0,
+        ));
+        template_node_with_outputs(
+            &mut canvas,
+            "gw",
+            &[("k", 8.0, None)],
+            "Трафик.peak_rps / $k",
+            &[],
+        );
+        // Позиционное value-ребро: значение адресуемо путём «Трафик.peak_rps»
+        ported_value_edge(&mut canvas, "e1", "traffic", "gw", Some("peak_rps"), None);
+        let num = |solutions: &crate::flow::FlowSolutions| {
+            solutions
+                .outputs
+                .get("gw")
+                .and_then(|result| result.as_ref().ok())
+                .map(|v| v.num)
+        };
+        let base = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(num(&base), Some(25.0), "200 rps / локальный k=8");
+        // What-if подмена k: RHS видит и параметры, и qualified-пути
+        let mut line_exprs = HashMap::new();
+        line_exprs.insert(("gw".to_owned(), 0), "k = Трафик.peak_rps / 100".to_owned());
+        let whatif = WhatIfOverrides {
+            line_exprs,
+            node_values: HashMap::new(),
+        };
+        let active = propagate_with_lines(&canvas, &whatif).expect("DAG");
+        assert_eq!(
+            num(&active),
+            Some(100.0),
+            "what-if k = 200/100 = 2; итог 200/2"
         );
     }
 }
