@@ -1,0 +1,113 @@
+# UI kit — гайд каркаса экрана (PRD-0009)
+
+> Как добавить поверхность за 3 шага, как верстать примитивами, как измерять
+> текст и какие линты держат геометрию в порядке. Источник архитектуры —
+> `docs/prd/prd-0009-ui-layering-uikit.md`; контракт поверхности —
+> `docs/interface-objects/surface-registry.md`.
+
+## 1. Что это
+
+Экран CanvasDesk — не ad-hoc списки квадов, а **модель поверхностей**:
+
+- `canvas-ui` — чистая геометрия экрана (без GPU/ОС): слои `UiLayer`,
+  реестр `SurfaceRegistry`, capture-политики `CapturePolicy`, кадр `UiFrame`,
+  `HitStack`, `KeyboardRouter`, layout-примитивы, `TextMeasurer`.
+- `canvas-app::app::ui_registry` — декларация поверхностей приложения
+  (что открыто, в каком слое, кто ловит клики/клавиатуру) + hit-rect'ы из тех
+  же layout-функций, что рисуют.
+- `canvas-render` — исполняет кадр полосами слоёв (`ScreenBand`), порядок =
+  `UiLayer::DRAW_ORDER`; внутри полосы — порядок сборки.
+
+Один источник геометрии → **ввод = тому, что видно**; добавление поверхности
+не трогает цепочки ввода.
+
+## 2. Поверхность за 3 шага
+
+1. **Декларация** — `crates/canvas-app/src/app/ui_registry.rs`:
+   константа `id`, запись в `build_registry` (слой, capture-политика,
+   keyboard-scope при необходимости, деградация `HideBelow`).
+2. **Hit-rect'ы** — arm в `fill_hit_rects`: rect'ы из тех же layout-функций,
+   что использует отрисовка (`HitRect::interactive` / `HitRect::decoration`).
+3. **Ввод** — клик: arm в `dispatch_surface_click` (тело вынести в метод
+   `click_<surface>`); клавиатура: при необходимости arm в `owner_of` +
+   `route_owner_key`; Esc: arm в `dispatch_esc`.
+
+Отрисовка — своя overlay-функция в `app.rs`, квады/тексты кладутся в полосу
+своего слоя (`ScreenBands::push`). Порядок pick и draw выводится из реестра —
+ручные z-списки запрещены.
+
+## 3. Слои и capture-политики
+
+Слои снизу вверх: `World → WorldOverlay → Widgets → Panels → Popups → Modals
+→ Drag → Toasts → Debug`.
+
+| Политика | Клики по поверхности | Клики мимо (backdrop) | Примеры |
+|---|---|---|---|
+| `Block` | перехватывает всё | контракт поверхности (закрыть/глотнуть) | настройки, docs, галерея, онбординг, stage, диалог |
+| `Capture` | по hit-rect'ам | уходит ниже | what-if бар, дока палитры, хоткеи, миникарта |
+| `PassThrough` | не перехватывает | уходит ниже | мир |
+| `Passive` | нет hit-rect'ов | уходит ниже | тосты |
+
+Попапы (меню, flyout) — `Popups`, модали — `Modals`; панель/бар — `Panels`.
+Esc-лестница выводится из порядка регистрации (`esc_stack`): регистрируй
+поверхности от нижних к верхним.
+
+## 4. Layout-примитивы (`canvas_ui::layout`)
+
+Immediate-функции от слота родителя — возвращают rect'ы детей:
+
+- `Row { gap, main, cross, policy }` / `Column { gap, main, cross }` —
+  линейная вёрстка; дети — `Child::fixed(w, h)`, распорки — `Child::spacer`.
+- `RowPolicy::Fit` — переполнение НЕ маскируется (ловит линт);
+  `RowPolicy::SqueezeTail` — именованная деградация узкого слота (хвост
+  сжимается до нулевой ширины, не пикается) — замена молчаливых `take`/`break`.
+- `stack(slot, size, HAlign, VAlign)` — фиксированный блок в слоте
+  (центрирование модалок, прижатие футера).
+- `constrain(min, max, desired)` — кламп размера (модалки, панели).
+- `pad(slot, EdgeInsets)` — внутренние отступы.
+- `Custom(rect)` — escape-hatch экзотики (polar wheel, drop-сетка): только с
+  комментарием-обоснованием, попадает в grep-аудит G8.
+
+Зазоры/радиусы — из токенов `canvas_core::tokens` (`SPACING_S/SM/MD/LG/XL`,
+`RADIUS_CHIP/PANEL/PILL`) — значения синхронизированы с
+`design/tokens/dimensions.json`.
+
+## 5. Измеренный текст (`canvas_ui::measure`)
+
+Ширины для раскладки — ТОЛЬКО через `TextMeasurer` (реальный шейпинг
+cosmic-text, те же метрики, что у screen-текстов рендера):
+
+```rust
+let mut measurer = canvas_ui::measure::TextMeasurer::new();
+let mut fs = canvas_render::text::measure_font_system();
+let w = measurer.width_of(&mut fs, label, canvas_render::text::SANS_FAMILY, 13.0);
+let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
+```
+
+- measurer создаётся на перекомпоновку/кадр (дешёвый; кэш внутри кадра);
+- `FontSystem` — владение рендера (`measure_font_system`), аргументом;
+- эвристики «символов × коэффициент» и `chars.truncate` запрещены (класс
+  дефекта CR-015; усечение — только `ellipsis` по фактической ширине).
+
+## 6. Линты (CI)
+
+- **G4** (`app::ui_layout_lint`, исполняется `cargo test --workspace`):
+  полный кадр реестра на канонических состояниях × 3 окна (1280×800,
+  1024×640, 800×560) × RU/EN — 0 пересечений интерактивных rect'ов РАЗНЫХ
+  поверхностей одной полосы, 0 выходов за вьюпорт; Block-модаль накрывает
+  экран (backdrop-контракт).
+- **G5** — grep-аудит мигрированных модулей: 0 `take(`-срезов, 0
+  `break`-клампов раскладки, 0 символьных эвристик ширины.
+- **G8** — 6 поверхностей на реестре+примитивах (поиск, настройки, docs,
+  палитра шаблонов, what-if, галерея).
+- Доброкачественные налезания (popup поверх панели с «верхний непрозрачный
+  скрывает нижний») — не состояние линта: канонические состояния не комбинируют
+  фичи; реальные коллизии (хоткеи × полоса палитры, модаль настроек × полоса)
+  найдены и устранены на U5 — см. историю PRD-0009.
+
+## 7. Статус кита
+
+- Готово (U1–U3, U5): каркас слоёв/реестра, примитивы, TextMeasurer, линты,
+  миграция 6 поверхностей, KeyboardRouter на всей лестнице `on_key`.
+- За этапом U4 (не заказан на момент U5): кит-виджеты (F-8: Button/Input и
+  пр.), DebugOverlay (F-10, F9), витрина-галерея, scissor-бакеты (G6/G7-перф).
