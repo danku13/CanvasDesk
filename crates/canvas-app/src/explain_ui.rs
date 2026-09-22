@@ -18,8 +18,12 @@
 //! внизу (§9.4-подобные сценарии лейаута/видимости/состояний).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
 
+// Instant — только через канонический alias `canvas_core::time::Instant`
+// (W1/`docs/plans/wasm-port.md` §2 п. 7): прямой `std::time::Instant` под
+// wasm32 — другой тип, чем alias (web_time), и валит wasm-check/Pages
+// E0308 на границе вызовов из app.rs (красный CI по bbcdbc7).
+use canvas_core::time::Instant;
 use canvas_core::{LineageDelta, LineageError, LineageNodeKind, LineageTree, LineageVia};
 
 // --- геометрия окна (паттерн main stage: затемнение + плавающее окно) -----
