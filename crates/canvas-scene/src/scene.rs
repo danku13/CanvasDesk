@@ -582,7 +582,11 @@ impl SceneState {
 
     /// FR-017: подмены активного сценария + протухшие маркеры. Режим не
     /// активен или «База» — пустые подмены (propagator = baseline).
-    fn active_whatif_overrides(&self) -> (flow::WhatIfOverrides, Vec<StaleOverride>) {
+    /// Активные what-if подмены (протухшие отфильтрованы — тихая
+    /// деградация, маркеры в whatif_stale). pub(crate): свежий пересчёт
+    /// активного состояния в MCP-инструментах (flow_recalc/analyze/
+    /// lineage) — тот же источник подмен, что у recompute_flow.
+    pub(crate) fn active_whatif_overrides(&self) -> (flow::WhatIfOverrides, Vec<StaleOverride>) {
         let mut whatif = flow::WhatIfOverrides::default();
         let mut stale = Vec::new();
         if self.whatif_active {
