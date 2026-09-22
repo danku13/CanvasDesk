@@ -140,7 +140,16 @@ pub fn validate_scenario(canvas: &Canvas, scenario: &Scenario) -> Vec<StaleOverr
         };
         let trimmed = current.trim();
         let looks_formula = trimmed.starts_with('=') || trimmed.contains('=');
-        if trimmed.is_empty() || !looks_formula {
+        // PRD-0007 X3 (AC-4.3): листом дерева может быть и числовая/
+        // выраженческая константа без «=» («620», «1 240», «-5 %») —
+        // строка жива, если движок даёт ей результат (тот же детектор
+        // рода строки, что у формул: проза и код-фенсы не считаются).
+        let evaluates = crate::expr::eval_lines(current)
+            .into_iter()
+            .next()
+            .flatten()
+            .is_some();
+        if trimmed.is_empty() || (!looks_formula && !evaluates) {
             stale.push(StaleOverride {
                 node: node.clone(),
                 line: *line,
@@ -274,5 +283,40 @@ mod tests {
         let active = active_line_exprs(&canvas, &scenario);
         assert_eq!(active.len(), 1);
         assert!(active.contains_key(&("a".to_owned(), 0)));
+    }
+
+    /// PRD-0007 X3 (AC-4.3): листом дерева бывает константа без «=»
+    /// («620», «1 240 ₽») — подмена такой строки НЕ протухает; проза
+    /// и пустые строки по-прежнему протухают (инвариант 5 FR-017).
+    #[test]
+    fn numeric_constant_lines_stay_valid() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "sheet",
+            "Аренда = 620\n620\n-5 %\nпросто проза\n```js\ncode();\n```",
+            0.0,
+            0.0,
+        ));
+        let mut line_exprs = HashMap::new();
+        // Строка 1 — «620» (константа без «=»), строка 2 — с единицей.
+        for (line, expr) in [(1usize, "700"), (2usize, "-8 %"), (3usize, "проза")] {
+            line_exprs.insert(("sheet".to_owned(), line), expr.to_owned());
+        }
+        let scenario = Scenario {
+            name: "S".to_owned(),
+            line_exprs,
+        };
+        let stale = validate_scenario(&canvas, &scenario);
+        assert_eq!(
+            stale.iter().filter(|s| s.line == 3).count(),
+            1,
+            "проза протухает: {stale:?}"
+        );
+        assert!(
+            stale.iter().all(|s| s.line != 1 && s.line != 2),
+            "числовые константы живы: {stale:?}"
+        );
+        let active = active_line_exprs(&canvas, &scenario);
+        assert_eq!(active.len(), 2, "живые: строки 1 и 2");
     }
 }
