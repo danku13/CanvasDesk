@@ -5400,3 +5400,72 @@ Stage Summary:
 - FR-060 в main (35a1b70), CI 12/12. Волна 2 миграции кита завершена (FR-056+FR-057+FR-058+FR-059+FR-060): весь панельный UI — на ките (кроме сознательно оставленных world-декораций wheel/minimap/HUD и замороженного онбординга).
 - Остаток FR-060 (documented в CR): Painter-конверсия explain_frame (отрисовка на screen_rect_quad — эквивалентный конвейер без теней).
 - Открытые следующие шаги: FR-061 этап E (kit-Row D-15 на RowGuides, зависит от FR-062 F-13/F-14/F-16 — они в main); отложенные пункты этапа D FR-061 по отдельному согласованию владельца (свёрнутость блока/клик, экспандер, ellipsis формулы, VLM-ревью).
+---
+## 2026-09-24 — FR-063: доменный слой статистики (L2) — main aa33d92→feature/fr-063-stats-layer
+
+- **Агент:** Super Z (сессия web-133c38b2; директива: «Реализуй
+  fr-063-stats-layer.md» — реализация по документу, фазы-коммиты)
+- **Координация:** база aa33d92 (main, план волны S). Коллизий нет:
+  территория FR-063 — canvas-core expr (stats/args + три правки expr.rs);
+  файлы FR-061/render/app не тронуты; queueing.rs — только вынос приватных
+  хелперов в shared args.rs (вариант (a) FR, поведение не изменено —
+  expr_queueing 43/0 зелёные).
+
+### Work Log
+- **Сметчивание:** S0 не выполнена — deps statrs/rand/rand_chacha/rand_distr
+  не были прописаны (Открытый вопрос № 5 FR: «P1 может быть выполнен с
+  пустой фичей, P2/P3 блокируются»). Решение: S0 выполнена в этом же цикле
+  отдельным коммитом перед P1 (чисто аддитивный Cargo.lock +196/−0).
+- **S0 (ca9da12):** optional-deps в [workspace.dependencies] + canvas-core;
+  фича stats активирована точной строкой FR; мои rand/rand_chacha/rand_distr
+  — default-features=false (без getrandom).
+- **P1 (0c1f30f):** expr/stats.rs skeleton; mod stats + arm в eval_call за
+  cfg (guard по is_stats_function — единая точка списка имён); expr/args.rs
+  (is_single_dim/scalar_arg/bad_arity/percent_unit/time_unit/count_unit
+  вынесены из queueing дословно); parity-тест stats-домена; попутно закрыт
+  ПРЕДСУЩЕСТВУЮЩИЙ пробел parity FR-021 — npv/cagr/irr/cohort_ltv
+  отсутствовали в FN_HINTS (обратное направление parity теперь тоже
+  проверяется: каждая подсказка — известная диспетчеру функция).
+- **P2 (a1367a2):** 6 функций поверх statrs 0.17 (inverse_cdf/cdf standard
+  normal, Discrete::pmf Пуассона); края p=0/1 явно (statrs паникует вне
+  [0,1] — вход валидируется); triangular_quantile + алиас triangular
+  (расхождение имён внутри самого FR); golden ±1e-9 (14 тестов), размерности
+  rps/ms/scalar, BadCall/UnitMismatch, eval_lines-сценарий P95.
+- **P3 (8ea9776):** ChaCha8Rng::seed_from_u64; сид-контракт M5 в коде —
+  seed_from_parts = FNV-1a 64(content) ⊕ scenario_seed (DefaultHasher
+  забракован FR, векторы FNV тестом); ci_mean (полуширина, норм.
+  аппроксимация — Открытый вопрос № 3); normal/lognormal_sample —
+  scalar-агрегат (Открытый вопрос № 4), кап n≤1e6; тесты to_bits
+  (один сид → побитово одна выборка), сходимость 5·SE, сценарий волны V.
+- **Compat (2cc6b94 + docs):** expr_stats_compat.rs (зеркальный cfg) —
+  без фичи 10 имён → UnknownFunction, остальное штатно; попутно починен
+  ПРЕДСУЩЕСТВУЮЩИЙ баг about.toml: без [private] ignore=true генерация
+  notices падала на AGPL-workspace-крейтах с d6fb7df (неuxioустранимый
+  релизной джобой) — перегенерировано cargo-about 0.9.2.
+- **Доки:** FR-063 (статус ✅ + развёрнутый changelog с отклонениями и
+  находкой wasm+stats), index-cr-fr (строка FR-063), DEPENDENCIES.md
+  (§3→§2, changelog, счётчик 401), SPEC.md §3 (строка L2-статистики),
+  user-docs/calculations.md (раздел «Вероятностные оценки» + буллет в
+  «Что можно в выражениях»), ACCEPTANCE.md (FR-063.1–11).
+- **Гейты:** core --features stats 390/0 + 22 golden ✓; core default
+  384/0 + 2 compat ✓; app lib 342/0 ✓; fmt ✓; clippy -D warnings ✓;
+  wasm_gate.sh --check ✓; cargo deny check ✓ (licenses/bans/sources/
+  advisories); cargo build --no-default-features ✓ (zero-dep).
+
+### Stage Summary
+- **FR-063 закрыт целиком (S0+P1+P2+P3):** слой L2 статистики за фичей
+  `stats` — 10 функций (6 распределений/квантилей + алиас, ДИ, 2 выборки),
+  детерминированный RNG с контрактом сида для M5, parity всех трёх
+  поверхностей (dispatch/FN_HINTS/STATS_FUNCTIONS) тестом.
+- **Находка владельцу (вне скоупа):** getrandom 0.2 (транзитив statrs→
+  rand(std)) не компилируется под wasm32-unknown-unknown при ВКЛЮЧЁННОЙ
+  фиче stats — все формальные гейты зелёные (default-фичи), но web-сборка
+  с stats требует решения (getrandom/js-фича через web-sys — санкционировано
+  формулировкой FR, либо чистая математика без statrs). Прецедент
+  no-wasm-фичи уже запланирован (qmc/FR-066).
+- **Два предсуществующих бага починены попутно:** FN_HINTS без финансовых
+  функций FR-021-parity; about.toml без [private] ignore → генерация
+  notices падала с d6fb7df.
+- **Далее:** FR-064 (воркер, S2) / FR-065 (parallel, S2) — параллельные
+  фронты волны S; FR-066 (M5) после них — потребитель seed_from_parts;
+  CI по push — проверить следующим заходом.

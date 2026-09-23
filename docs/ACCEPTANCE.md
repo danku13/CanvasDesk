@@ -957,3 +957,24 @@ users/arpu/rent/other/npl; оракул 810 000 − 430 − 97 200 = 712 370.
 | FR-044.9 | Фикс `trf`: плейсхолдеры с «{name}» и без — заголовок stage/«строка N»/счётчик внешних без лишних скобок (тест `trf_accepts_braced_and_bare_placeholders`) | ✅ |
 | FR-044.10 | i18n FR-040: инвариант полноты RU/EN; +5 ключей stage (out_label/ctrl_label/ctrl_to/pill_above/pill_below) | ✅ |
 | FR-044.11 | Гейты: fmt ✓, clippy `-D warnings` ✓, `cargo test --workspace` 1732/0 ✓, wasm-check (core/render/widgets/mcp/scene/mcp-headless/web под wasm32-unknown-unknown) ✓, token_lint ✓ (0 новых токенов); LOD-0 агрегация не изменена (инвариант 9 — регресс-щит `bundles.rs`) | ✅ |
+
+## FR-063 — Доменный слой статистики: распределения, квантили, ДИ, детерминированный RNG (M2/S1) — выполнено (2026-09-24)
+
+Приёмка FR-063 (по документу `docs/change-requests/fr-063-stats-layer.md`;
+коммиты S0 → P1 → P2 → P3, ветка `feature/fr-063-stats-layer`). Тесты:
+`crates/canvas-core/src/expr/stats.rs` (unit), `tests/expr_stats.rs`
+(golden, фича `stats`), `tests/expr_stats_compat.rs` (без фичи).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-063.1 | S0: deps `statrs` 0.17 (MIT) + `rand` 0.8 / `rand_chacha` 0.3 / `rand_distr` 0.4 (MIT OR Apache-2.0) — optional в `[workspace.dependencies]` и canvas-core; фича `stats` активирована; `cargo build -p canvas-core --no-default-features` зелёный (zero-dep инвариант B2B-сборки) | ✅ |
+| FR-063.2 | P1: `stats::dispatch` по образцу `queueing::dispatch`; `mod stats` + arm в `eval_call` за `#[cfg(feature = "stats")]` (guard по единой точке `STATS_FUNCTIONS`); существующие arms и fallback не тронуты; parity-тест stats-домена | ✅ |
+| FR-063.3 | P2: `normal_quantile`/`normal_cdf`/`lognormal_quantile`/`exp_quantile`/`poisson_pmf`/`triangular_quantile` (+ алиас `triangular`) поверх statrs; размерностные проверки (`p` строго скаляр, μ/σ одной размерности → `UnitMismatch`, σ > 0 → `BadCall`); результат в единице μ; вероятности → `%` | ✅ |
+| FR-063.4 | Golden ±1e-9: `normal_cdf(1.96, 0, 1) = 0.9750021048517795`; `normal_quantile(0.975, 0, 1) = 1.9599639845400542`; `lognormal_quantile(0.5, 0, 1) = 1.0`; `exp_quantile(0.6321205588285577, 1) = 1.0`; `poisson_pmf(3, 2) = 0.1804470443154836`; `triangular_quantile(0.5, 0, 1, 0.5) = 0.5`; round-trip quantile↔cdf | ✅ |
+| FR-063.5 | P3: `ci_mean(mean, σ, n, conf)` — полуширина ДИ (норм. аппроксимация, z·σ/√n через statrs; golden 2.9399459768100813 ±1e-9; границы — формулой потребителя `mean ± ci_mean(...)`); conf ∈ [0, 1); n целое ≥ 1 | ✅ |
+| FR-063.6 | P3: `normal_sample`/`lognormal_sample` — детерминированные выборки через `ChaCha8Rng::seed_from_u64` (scalar-агрегат — среднее, Открытый вопрос № 4; кап n ≤ 1e6); `thread_rng()` отсутствует в коде и не компилируется (rand без getrandom-фич) | ✅ |
+| FR-063.7 | Сид-контракт M5: `seed_from_parts(content, scenario_seed) = FNV-1a 64(content) ⊕ scenario_seed`; векторы FNV-1a зафиксированы тестом (`fnv1a64_known_vectors`); один сид → побитово одна выборка (`to_bits`, n=1 и n=1000) | ✅ |
+| FR-063.8 | FN_HINTS parity (паттерн FR-021): `stats_fn_hints_parity_with_eval_call` — множество `STATS_FUNCTIONS` == stats-записи каталога; полный каталог = встроенные + queueing + stats; попутно закрыт предсуществующий пробел (4 финансовые функции FR-027 не были в каталоге) | ✅ |
+| FR-063.9 | Обратная совместимость: без фичи `stats` все 10 stats-имён → `EvalError::UnknownFunction` (no panic, no abort), встроенные/queueing/финансовые функции штатны (`expr_stats_compat.rs`, зеркальный `cfg(not(feature))`) | ✅ |
+| FR-063.10 | Доки: `user-docs/calculations.md` — раздел «Вероятностные оценки» (синтаксис, единицы, детерминизм, кап выборки); `docs/DEPENDENCIES.md` §3→§2 (statrs/rand/rand_chacha/rand_distr с версиями и лицензиями); `docs/SPEC.md` §3 — строка L2-статистики; THIRD-PARTY-NOTICES перегенерирован (попутно починен about.toml `[private] ignore` — предсуществующий баг генерации с d6fb7df) | ✅ |
+| FR-063.11 | Гейты: `cargo test -p canvas-core --features stats` 390+22/0 ✓; `cargo test -p canvas-core` 384+2/0 ✓; `cargo test -p canvas-app --lib` 342/0 ✓ (потребитель каталога подсказок); `scripts/wasm_gate.sh --check` ✓; `cargo deny check` ✓; `cargo fmt --check` ✓; `cargo clippy --features stats -D warnings` ✓; находка зафиксирована в Changelog FR-063: getrandom 0.2 (транзитив statrs→rand(std)) не компилируется под wasm при включённой фиче — гейты (default-фичи) не заданы, решение по web-сборке с stats — за владельцем | ✅ |

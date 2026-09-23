@@ -62,6 +62,7 @@
 | Текст | `glyphon` (поверх `cosmic-text`) | Нативная интеграция с wgpu, шейпинг, эмодзи |
 | Пространственный индекс | `rstar` (R-tree) | Hit-testing, viewport culling на 5–10 тыс. нод |
 | Формат канваса | JSON Canvas spec 1.0 (`serde_json`) | Совместимость с Obsidian, human-readable |
+| Статистика (L2, ADR-0008) | `statrs` 0.17 + `rand`/`rand_chacha`/`rand_distr` — за cargo-фичей `stats` в `canvas-core` (FR-063) | Распределения, квантили, доверительные интервалы, детерминированный RNG (ChaCha8, сид `FNV-1a(content) ⊕ scenario_seed`); B2B-сборка без фичи — zero-dep |
 | Метаданные/кэш | `rusqlite` (bundled) | Тамбнейлы-кэш, индекс поиска, сессии |
 | Файловый вотчер | `notify` 6+ | Три бэкенда одним API: ReadDirectoryChangesW (Win), inotify (Linux), FSEvents (macOS); различия нормализуются в canvas-shell |
 | Win32/COM | `windows-rs` (features: Win32_UI_Shell, Win32_Graphics_Dwm, System_Com) | Тамбнейлы, preview handlers, WorkerW — Windows-слой |

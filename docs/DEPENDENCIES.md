@@ -32,9 +32,9 @@ B2B-контрактом/EULA; в SBOM first-party — сам бинарник `
 | `canvas-mcp-headless` | headless MCP-сервер для wasmtime/wasip1 (FR-037) |
 | `canvas-web` | web-платформенный слой: bindgen-обвязка, web-сервисы (M8/W4) |
 
-## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-19)
+## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-24)
 
-Всего в графе сборки — 382 сторонних крейта (включая транзитивные и
+Всего в графе сборки — 401 сторонний крейт (включая транзитивные и
 dev-зависимости); полный состав с текстами лицензий —
 `THIRD-PARTY-NOTICES.md`, машиночитаемый контроль — `deny.toml`.
 Криптозависимостей нет; нативный C — только bundled SQLite внутри
@@ -58,6 +58,10 @@ dev-зависимости); полный состав с текстами ли�
 | `pollster` | 0.3 | Apache-2.0/MIT | блокирующий запуск async GPU |
 | `wasm-bindgen` | 0.2.127 | MIT OR Apache-2.0 | JS-глю браузерной сборки `canvas-web` (M8/W4); семейство уже было в дереве транзитивно (winit, wasm-цели) — с W4 прямая зависимость, компилируется и нативно (заглушки макросов) |
 | `windows` / `windows-core` | 0.62 | MIT OR Apache-2.0 | Win32/COM (только Windows-таргеты) |
+| `statrs` | 0.17 | MIT | L2-статистика: распределения/квантили/ДИ (FR-063, за фичей `stats` в canvas-core — в сборку по умолчанию не входит) |
+| `rand` | 0.8 | MIT OR Apache-2.0 | Rng-трейты, SeedableRng (FR-063, за фичей `stats`; default-features = false — без getrandom) |
+| `rand_chacha` | 0.3 | MIT OR Apache-2.0 | ChaCha8Rng — единственный источник случайности (FR-063, за фичей `stats`) |
+| `rand_distr` | 0.4 | MIT OR Apache-2.0 | сэмплирование Normal/LogNormal (FR-063, за фичей `stats`) |
 
 **Выбор опции дуальных лицензий.** Для крейтов `MIT OR Apache-2.0`
 продукт следует обязательствам обеих сторон консервативно: сохранение
@@ -67,17 +71,15 @@ notices (MIT) и NOTICE-механики (Apache-2.0) обеспечены ге�
 
 ## 3. Кандидаты на будущее (archdoc §4.2, только по продуктовому триггеру)
 
-Волна S роадмапа (после гейта Go): подключение — только через cargo-фичи
-`stats` / `parallel` в `canvas-core` (введены CP0 как пустые гейты,
-см. `crates/canvas-core/Cargo.toml`), чтобы B2B-сборка могла отключить
-неиспользуемые слои.
+Волна S роадмапа: подключение — только через cargo-фичи `stats` /
+`parallel` в `canvas-core` (см. `crates/canvas-core/Cargo.toml`), чтобы
+B2B-сборка могла отключить неиспользуемые слои. S0 (Foundation) и S1
+(FR-063, M2) выполнены 2026-09-24: `statrs`/`rand`/`rand_chacha`/
+`rand_distr` перенесены в §2.
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
-| L2 | `statrs` | распределения, квантили, ДИ | MIT | S1: вероятностные оценки волны V |
-| L2 | `rand` + `rand_chacha` | детерминированная случайность | MIT OR Apache-2.0 | S1/S3 |
-| L2 | `rand_distr` | сэмплирование распределений | MIT OR Apache-2.0 | S3 |
-| L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 |
+| L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 (FR-066, за фичей `qmc`) |
 | L2 | `argmin` | численная оптимизация | MIT OR Apache-2.0 | первый домен с оптимизацией |
 | L2 | `gauss-quad` / `quadrature` | квадратуры | MIT OR Apache-2.0 / BSD-2 | интегралы SLA |
 | L2 | `puruspe` / `special` | спецфункции | MIT OR Apache-2.0 | при выходе за `statrs` |
@@ -155,3 +157,10 @@ auditable-extract target/release/canvasdesk > canvasdesk-sbom.json
 - `2026-09-18` — создан при выполнении CP0 волны 0 (роадмап §4.1): факт
   прямых зависимостей (23, включая 7 workspace), кандидаты волны S из
   архдока §4.2, долг сопровождения рендер-стека, рецепты notices/SBOM.
+- `2026-09-24` — S0/S1 (FR-063): `statrs` 0.17 (MIT), `rand` 0.8 /
+  `rand_chacha` 0.3 / `rand_distr` 0.4 (MIT OR Apache-2.0) перенесены
+  из §3 в §2 — optional за фичей `stats` в canvas-core (default-сборка
+  их не резолвит); отмечена находка: транзитивный getrandom 0.2 от
+  statrs→rand(std) не компилируется под wasm32-unknown-unknown — не
+  влияет на гейты (они идут с default-фичами), решение по web-сборке
+  с `stats` — точка решения владельца.
