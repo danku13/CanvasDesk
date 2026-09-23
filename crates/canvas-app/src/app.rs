@@ -1125,6 +1125,20 @@ struct SpillMenuTarget {
     title_key: &'static str,
 }
 
+/// FR-045 F-5 v1 (PRD-0004 N3, R-5): адресат лейбла порта — порт без
+/// ссылки на ребро (порты — точки присоединения, ребро может отсутствовать).
+#[derive(Debug, Clone, PartialEq)]
+enum PortTarget {
+    /// Построчный порт: Some(line) — формульная строка (0-based),
+    /// None — футер шаблонной ноды (значение ноды целиком).
+    Line(Option<usize>),
+    /// Якорь параметра шаблонной ноды (toParam).
+    Param(String),
+    /// Сторонный порт значения ноды (CR-008: сторона выбирается
+    /// геометрией ребра — лейбл один и тот же на любой стороне).
+    Out,
+}
+
 fn spill_hit_target(canvas: &Canvas, hit: &SpillHit) -> Option<SpillMenuTarget> {
     let node_id = canvas.nodes.get(hit.node)?.id.clone();
     match &hit.kind {
@@ -4512,6 +4526,59 @@ impl App {
             }
         }
         None
+    }
+
+    /// FR-045 F-5 v1: чистая сборка лейбла порта (без hit-теста —
+    /// тестируема без рендера; правило владельца — данные отдельно от
+    /// геометрии). Адресация qualified (R-5): полный путь в тултипе,
+    /// объект — единая точка сборки имён [`canvas_core::dataref`]
+    /// (коллизия имён — «Имя (node_id)», §Q2). None — лейбла нет.
+    fn port_label_for(&self, node_index: usize, target: &PortTarget) -> Option<String> {
+        let canvas = &self.scene.canvas;
+        let node_id = canvas.nodes.get(node_index)?.id.clone();
+        let obj = canvas_core::dataref::qualified_obj_name(
+            canvas,
+            &node_id,
+            &canvas_core::dataref::display_name_counts(canvas),
+        );
+        Some(match target {
+            // «Объект.строка N» — 1-based для отображения, как в dataref
+            // (поле собирается i18n-ключом: RU «строка N», EN «line N»)
+            PortTarget::Line(Some(line)) => {
+                let n = (line + 1).to_string();
+                format!("{obj}.{}", self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)]))
+            }
+            // Футер шаблонной ноды — значение ноды целиком (F-5 «out:»)
+            PortTarget::Line(None) => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
+            // «to: Объект.Параметр» — входной якорь (F-5 «to:<param>»)
+            PortTarget::Param(param) => self.trf(
+                keys::TOOLTIP_PORT_PARAM,
+                &[("{path}", &format!("{obj}.{param}"))],
+            ),
+            PortTarget::Out => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
+        })
+    }
+
+    /// FR-045 F-5 v1: лейбл порта канваса под курсором — приоритет как у
+    /// drag-старта (CR-003/FR-050): построчный порт → якорь параметра →
+    /// сторонный порт значения. Лейблы входных портов без якоря (F-3/F-14
+    /// рейлы) — v2. None — порта под курсором нет.
+    fn port_tooltip_at(&self, world: Vec2) -> Option<String> {
+        if let Some((node_index, port)) = self.line_port_hit(world) {
+            return self.port_label_for(node_index, &PortTarget::Line(port.line));
+        }
+        if let Some((node_index, anchor)) = self.param_port_hit(world) {
+            return self.port_label_for(node_index, &PortTarget::Param(anchor.param.clone()));
+        }
+        let node_index = self.hovered?;
+        let node = self.scene.canvas.nodes.get(node_index)?;
+        if node.kind() == NodeKind::Group {
+            return None;
+        }
+        canvas_core::port_at(node, world, self.camera.zoom(), self.settings.port_zone_px)
+            .is_some()
+            .then(|| self.port_label_for(node_index, &PortTarget::Out))
+            .flatten()
     }
 
     /// FR-050 Н2 (этап C): значение, которое несёт активный value-drag —
@@ -18075,13 +18142,43 @@ impl ApplicationHandler<AppEvent> for App {
                             align: TextAlign::Left,
                         });
                     }
+                    // FR-045 F-5 v1: лейбл порта канваса (qualified-адрес R-5) —
+                    // точечная цель, приоритет над линейными тултипами:
+                    // unmapped/проливание ниже гасятся, пока активен лейбл
+                    // порта (оба рисуются у курсора — двойной нечитаем)
+                    let port_label = if self.edge_drag.is_none()
+                        && self.choice_menu.is_none()
+                        && self.expr_error_hit_at(self.cursor).is_none()
+                    {
+                        self.port_tooltip_at(self.cursor_world())
+                    } else {
+                        None
+                    };
+                    if let Some(text) = port_label.clone() {
+                        let viewport = self.viewport_logical();
+                        let origin_x = (self.cursor[0] + 14.0)
+                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                        tooltip_texts.push(OwnedScreenText {
+                            text,
+                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                            width: TOOLTIP_WIDTH,
+                            font_size: 13.0,
+                            // Спокойный сине-серый акцент потока значений —
+                            // тот же тон, что у тултипа проливания
+                            color: Color::rgb(0x9c, 0xc3, 0xe6),
+                            align: TextAlign::Left,
+                        });
+                    }
                     // FR-050 Р-3 (этап C): тултип unmapped-ребра «проблема +
                     // решение» (контракт Р-3 — ровно два пункта): курсор над
                     // пунктирной янтарной связью «не подставлено». Параметр с
                     // fromOutput — точный диагноз (какой выход у какой ноды);
                     // прочие (позиционный слот / параметр без адреса выхода) —
                     // общий шаблон. Янтарный тон — тот же, что у ребра.
-                    if self.edge_drag.is_none() && self.choice_menu.is_none() {
+                    if port_label.is_none()
+                        && self.edge_drag.is_none()
+                        && self.choice_menu.is_none()
+                    {
                         let world = self.cursor_world();
                         if let Some(index) =
                             edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
@@ -18128,8 +18225,10 @@ impl ApplicationHandler<AppEvent> for App {
                     // авто-строка приёмника): «пролито: Трафик.peak_rps =
                     // 1389 rps (локально было: 500 rps)» (Н7: полный путь —
                     // здесь, на теле — короткая форма). Не спорит с тултипом
-                    // ошибки (бейдж «!» приоритетнее) и глушится при drag.
-                    if self.edge_drag.is_none()
+                    // ошибки (бейдж «!» приоритетнее) и глушится при drag;
+                    // F-5: лейбл порта приоритетнее (точечная цель).
+                    if port_label.is_none()
+                        && self.edge_drag.is_none()
                         && self.choice_menu.is_none()
                         && self.expr_error_hit_at(self.cursor).is_none()
                     {
@@ -20637,6 +20736,109 @@ mod tests {
             app.stage_edge_addr_text(e2),
             "to: Отчёт",
             "адрес control-ребра — «to: <приёмник>»"
+        );
+    }
+
+    /// FR-045 F-5 v1: лейблы портов канваса — qualified-адресация (R-5):
+    /// построчный порт — «Объект.строка N» (1-based), сторонный порт и
+    /// футер шаблона — «out: Объект»; объект — единая точка dataref
+    /// (первая строка текста, дословно).
+    #[test]
+    fn port_label_line_and_out_qualified() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10\nconv = 0.2", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        canvas.nodes.push(src);
+        let app = stub_app_with_canvas(canvas);
+        assert_eq!(
+            app.port_label_for(0, &PortTarget::Line(Some(0))),
+            Some("Заявки.строка 1".to_owned()),
+            "построчный порт — полный путь (R-5: полный путь в тултипе)"
+        );
+        assert_eq!(
+            app.port_label_for(0, &PortTarget::Line(Some(1))),
+            Some("Заявки.строка 2".to_owned())
+        );
+        assert_eq!(
+            app.port_label_for(0, &PortTarget::Out),
+            Some("out: Заявки".to_owned()),
+            "сторонный порт — «out: <объект>» (F-5 «out:<имя>»)"
+        );
+        assert_eq!(
+            app.port_label_for(0, &PortTarget::Line(None)),
+            Some("out: Заявки".to_owned()),
+            "футер шаблона — значение ноды целиком"
+        );
+    }
+
+    /// FR-045 F-5 v1: якорь параметра шаблонной ноды — «to: Объект.Параметр»;
+    /// EN-язык — «line N» в построчном лейбле (i18n FR-040, «out:»/«to:»
+    /// одинаковы в обоих языках).
+    #[test]
+    fn port_label_param_and_english() {
+        let mut canvas = Canvas::default();
+        let mut tpl = Node::text("tpl", "", 0.0, 0.0);
+        tpl.width = 420.0;
+        tpl.height = 200.0;
+        tpl.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
+        }));
+        canvas.nodes.push(tpl);
+        let app = stub_app_with_canvas(canvas);
+        assert_eq!(
+            app.port_label_for(0, &PortTarget::Param("rps".to_owned())),
+            Some("to: Балансировщик.rps".to_owned()),
+            "якорь параметра — «to: <полный путь>» (F-5 «to:<param>»)"
+        );
+        // EN: поле строки локализовано, объект — дословно
+        let mut canvas_en = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        canvas_en.nodes.push(src);
+        let mut app_en = stub_app_with_canvas(canvas_en);
+        app_en.settings.language = Language::En;
+        assert_eq!(
+            app_en.port_label_for(0, &PortTarget::Line(Some(0))),
+            Some("Заявки.line 1".to_owned()),
+            "EN — «line N» (STAGE_LINE_LABEL)"
+        );
+        assert_eq!(
+            app_en.port_label_for(0, &PortTarget::Out),
+            Some("out: Заявки".to_owned())
+        );
+    }
+
+    /// FR-045 F-5 v1: коллизия отображаемых имён — дискриминатор
+    /// «Имя (node_id)» из dataref (§Q2, единая точка сборки).
+    #[test]
+    fn port_label_name_collision_fallback() {
+        let mut canvas = Canvas::default();
+        let mut a = Node::text("a", "Заявки\nx = 1", 0.0, 0.0);
+        a.width = 420.0;
+        a.height = 200.0;
+        let mut b = Node::text("b", "Заявки\ny = 2", 500.0, 0.0);
+        b.width = 420.0;
+        b.height = 200.0;
+        canvas.nodes.push(a);
+        canvas.nodes.push(b);
+        let app = stub_app_with_canvas(canvas);
+        assert_eq!(
+            app.port_label_for(0, &PortTarget::Line(Some(0))),
+            Some("Заявки (a).строка 1".to_owned()),
+            "коллизия имён — дискриминатор node_id (§Q2)"
+        );
+        assert_eq!(
+            app.port_label_for(1, &PortTarget::Out),
+            Some("out: Заявки (b)".to_owned())
         );
     }
 
