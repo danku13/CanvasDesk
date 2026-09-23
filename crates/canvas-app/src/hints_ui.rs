@@ -59,15 +59,17 @@ pub struct HintContext {
 }
 
 /// Токен слева от каретки: `(токен, байтовая позиция начала токена)`.
-/// Токен — `$`+идентификатор, идентификатор (`[A-Za-z_0-9]`) или число;
-/// любой другой символ (пробел, оператор) обрывает токен. Пустая строка
-/// — подсказки по контексту (переменные/единицы после числа).
+/// Токен — `$`+идентификатор или идентификатор (буквы Unicode — латиница/
+/// кириллица — цифры, `_`; тот же класс, что у лексера движка — правка
+/// 2026-09-23: кириллические единицы `2 се` фильтруют каталог); любой
+/// другой символ (пробел, оператор) обрывает токен. Пустая строка —
+/// подсказки по контексту (переменные/единицы после числа).
 pub fn token_before_caret(line: &str, caret: usize) -> (String, usize) {
     let caret = caret.min(line.len());
     let prefix = &line[..caret];
     let mut start = caret;
     for (i, ch) in prefix.char_indices().rev() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
+        if ch.is_alphanumeric() || ch == '_' {
             start = i;
         } else if ch == '$' {
             start = i;
@@ -356,6 +358,30 @@ mod tests {
         // `token_before_caret` возвращает число целиком
         let (token, start) = token_before_caret("w = 50", 6);
         assert_eq!((token.as_str(), start), ("50", 4));
+    }
+
+    /// Кириллический токен перед кареткой фильтрует единицы (правка
+    /// 2026-09-23: класс символов совпадает с лексером движка — буквы
+    /// Unicode). Вставка замещает кириллический префикс целиком.
+    #[test]
+    fn hints_cyrillic_unit_prefix() {
+        let items = hint_items("w = 50 се", &ctx(), Language::Ru);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["сек"],
+            "префикс `се` — только кириллическая секунда"
+        );
+        assert_eq!(items[0].insert, "сек");
+        // Токен и его байтовый якорь — для замещения в редакторе
+        let (token, start) = token_before_caret("w = 50 се", "w = 50 се".len());
+        assert_eq!(token, "се");
+        assert_eq!(start, "w = 50 ".len(), "якорь — байтовая позиция `се`");
+        // Регистр не важен; байтовые единицы тоже фильтруются
+        let items = hint_items("w = 50 ГБ", &ctx(), Language::Ru);
+        assert!(items.iter().any(|item| item.label == "ГБ"));
     }
 
     /// Прозаический контекст даёт пусто (детектор рода строки — на
