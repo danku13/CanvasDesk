@@ -286,6 +286,88 @@ fn lint_hotkeys_open() {
     });
 }
 
+// --- FR-060: канонические состояния перенесённых поверхностей волны 2 -----
+
+/// Предложение автосвязи A→B для линт-состояний волны 2.
+fn lint_autolink_proposal() -> canvas_core::AutolinkProposal {
+    canvas_core::AutolinkProposal {
+        from_node: "A".into(),
+        from_line: 1,
+        to_node: "B".into(),
+        param: "rate".into(),
+        percent: 100,
+        unit_match: None,
+    }
+}
+
+/// Канвас «исток → приёмник» для линт-состояний волны 2.
+fn lint_ab_canvas() -> Canvas {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("A", "Исток", 0.0, 0.0));
+    canvas.nodes.push(Node::text("B", "Приёмник", 300.0, 0.0));
+    canvas
+}
+
+/// FR-060: диалог ревью автосвязи (kit::modal + list_rows) — интерактивный
+/// rect (диалог) во всех окнах/языках; модальность — backdrop-контракт.
+#[test]
+fn lint_autolink_review_open() {
+    lint_state("autolink_review", |app, _vp| {
+        app.autolink_review = Some(crate::autolink_ui::Review::build(
+            &lint_ab_canvas(),
+            vec![lint_autolink_proposal()],
+        ));
+    });
+    let mut app = lint_stub(Language::Ru);
+    app.autolink_review = Some(crate::autolink_ui::Review::build(
+        &lint_ab_canvas(),
+        vec![lint_autolink_proposal()],
+    ));
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert_backdrop_is(&frame, ui_registry::id::AUTOLINK);
+}
+
+/// FR-060: окно проверки цепочки (kit::modal) — Loading (дерево из фоновой
+/// сборки ещё не пришло); линт проверяет геометрию окна и модальность.
+#[test]
+fn lint_explain_open() {
+    lint_state("explain", |app, _vp| {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.explain = Some(crate::explain_ui::ExplainState::loading(
+            canvas_core::LineageNodeId::total("A"),
+            1,
+            crate::explain_ui::ExplainBuild::Native(rx),
+        ));
+    });
+    let mut app = lint_stub(Language::Ru);
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.explain = Some(crate::explain_ui::ExplainState::loading(
+        canvas_core::LineageNodeId::total("A"),
+        1,
+        crate::explain_ui::ExplainBuild::Native(rx),
+    ));
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert_backdrop_is(&frame, ui_registry::id::EXPLAIN);
+}
+
+/// FR-060: палитра выделения (kit::dropdown_menu) — бар + открытая колонка
+/// во всех окнах/языках. Screen-якорь требует вьюпорта — в headless-заглушке
+/// выставляется тестовый оверрайд `test_viewport` (тот же механизм, что у
+/// клик-тестов screen-space UI); клампы палитры дополнительно покрыты
+/// модельными тестами palette.rs (bar_size_and_origin и др.).
+#[test]
+fn lint_palette_selected() {
+    lint_state("palette", |app, vp| {
+        app.scene
+            .canvas
+            .nodes
+            .push(Node::text("A", "Риск", 100.0, 100.0));
+        app.selected = Some(Selection::Node(0));
+        app.palette_hover.open = Some(0);
+        app.test_viewport = Some(vp);
+    });
+}
+
 #[test]
 fn lint_empty_state() {
     lint_state("empty", |app, _vp| {

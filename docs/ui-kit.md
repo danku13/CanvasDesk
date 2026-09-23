@@ -273,3 +273,18 @@ accent; кольцо живёт в контент-координатах `focus_
   `grid_cells` (F-16), фокус-связка FocusRing × WidgetState (F-17),
   геометрические снапшоты (F-18); витрина — 5 секций layout v2 +
   Tab-навигация; taffy не подключён (ADR-0013, триггеры T1–T4).
+- Готово (FR-060, 2026-09-23): миграция волна 2 завершает перенос
+  кастомного UI — autolink (`kit::modal`/`list_rows`+`ScrollState`/`stack`),
+  palette (`kit::dropdown_menu` — бар и колонки; якорь-строка 6 = 10−4,
+  якорь-зона бара ±1; flip бара у нижнего края), explain (`kit::modal`
+  со слотом-инсетом; take_while/match вместо break-клампов); app.rs:
+  диалог подтверждения — измеренная геометрия (kit::modal + button_size —
+  фикс класса дефектов «фиксированные геометрии», ellipsis вместо
+  молчаливого клипа), пункты меню/хоткеи — `list_rows` + `WidgetState`;
+  autolink_frame/palette_overlay — Painter + WidgetState (панели с тенью —
+  квады: params.w вне PaintItem); G5-аудит трёх модулей чист;
+  G4-линт: +3 состояния (autolink/explain/palette через `test_viewport`);
+  финальный замер волны: +1 229 Б ≈ 1,2 КБ (≤ 100 КБ). Сознательно
+  осталось hand-rolled (world-декорации/вне скоупа): wheel/minimap/HUD/onboarding
+  (заморожен владельцем); explain_frame — отрисовка на screen_rect_quad
+  (эквивалент Painter-конверсии, без теней) — остаток волны.
