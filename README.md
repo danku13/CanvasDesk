@@ -19,41 +19,28 @@ value-связям (DAG-движок, live-пересчёт), доменная �
 можно открыть в Obsidian и наоборот, неизвестные поля переживают round-trip
 (совместимость формата — часть носителя, не позиционирование).
 
-## Лицензия и правила игры (License & Rules)
+## Сценарии и целевые аудитории
 
-**Copyright © 2026 danku13.** Проект распространяется под **[GNU AGPLv3](LICENSE)**. Модель простая: код бесплатный и открытый — навсегда; судьба проекта (включая лицензию) — в руках владельца.
+CanvasDesk закрывает четыре класса задач — по эталонам
+[ADR-0006](docs/adr/adr-0006-reference-scenario-catalog.md); портреты ролей
+и боли аудиторий — в [исследовании рынка](docs/market-researches/README.md).
 
-| | |
-|---|---|
-| 💚 **Код бесплатен** | Весь код — под [GNU AGPLv3](LICENSE): свободно используйте, изучайте, изменяйте и распространяйте. Никаких «open core» хитростей — сообщество получает весь проект целиком. |
-| 🔒 **Коммерческие права у владельца** | Исключительные права на проект и **право изменять его лицензию в будущем** сохраняет владелец (**danku13**): можно выпустить коммерческую или проприетарную редакцию, применить dual-licensing, закрыть проект. Код, уже выпущенный под AGPLv3, для сообщества от этого не закроется. |
-| ✍️ **PR = подписание CLA** | Отправляя Pull Request, вы **автоматически принимаете [CLA](CLA.md)**: авторство вашего кода остаётся за вами, но право лицензировать вклад в будущем переходит владельцу. Это защищает проект от юридических рисков при смене лицензии. |
+| ЦА | Сценарий (типовой вопрос) | Чем закрывается | Где посмотреть |
+|---|---|---|---|
+| **Solution/Technical архитектор** | Capacity: «выдержит ли сервис 10k rps? сколько реплик и воркеров нужно?» | queueing-математика `mm1`/`mmc`/`erlang_c`/`littles_law`, инфраструктурные шаблоны (LB, шлюз, кэш, БД, очередь, CDN…), индикаторы узких мест по ρ | эталон №1 system design; шаблоны `cdn`, `cache-redis`, `queue-kafka`, `websocket` |
+| **Продакт-аналитик / финдир** | Юнит-экономика: «что с runway, если churn −1 пп? какой LTV при таком CAC?» | UE-шаблоны (CAC, LTV, LTV:CAC, MRR, ARR, NRR, GRR, ARPU, burn rate, runway, NPV/IRR/CAGR), what-if с таблицей сравнения сценариев | эталон №5 unit economics; шаблоны `ue-*` |
+| **Архитектор / менеджер** | Защита бюджета и решений: «что если нагрузка ×2? где сломается P&L?» | именованные what-if сценарии (до 3), дельты «было → стало», Apply одним undo — базовая модель не портится | эталоны №2–№4 (защита бюджета, P&L, value chain); Ctrl+Shift+I |
+| **ИИ-агент (MCP)** | «Собери модель по описанию и проверь числа» — агент строит граф за минуты, человек исследует | 39 MCP-инструментов: `graph_apply` (атомарный батч), `graph_validate` (коды E-*/W-*), `analyze_bottlenecks`, `whatif_*` | [рецепт агента](user-docs/agent-recipe.md), [пакет скиллов](skills/README.md) |
 
-### Мини-FAQ (License FAQ)
+## Что стоит попробовать
 
-**Можно ли использовать CanvasDesk в коммерческих целях? / Can I use it commercially?**
-
-Да — на условиях AGPLv3: коммерческое использование законно, пока соблюдаются условия лицензии (исходники изменений открываются под AGPLv3; для сетевых сервисов действует §13 AGPL — исходники версии, доступной пользователям, должны быть открыты). Разрешение владельца для этого не требуется.
-
-*Yes — under AGPLv3 terms: commercial use is legal as long as you comply with the license (your modifications stay under AGPLv3; for network services §13 applies — the source of the version you serve must be available). No separate permission from the owner is needed.*
-
-**Условия AGPLv3 мне не подходят (закрытая интеграция, OEM, white-label, SaaS без открытия исходников) / AGPLv3 doesn't fit my case**
-
-Напишите владельцу — обсудим **коммерческую лицензию** под ваш сценарий: Telegram [@danku13](https://t.me/danku13) или [danku13@yandex.ru](mailto:danku13@yandex.ru).
-
-*Contact the owner to discuss a **commercial license** for your scenario: Telegram [@danku13](https://t.me/danku13) or [danku13@yandex.ru](mailto:danku13@yandex.ru).*
-
-**Инвестиции и партнёрство / Investment & partnership**
-
-Компании и инвесторы: если хотите обсудить коммерческое использование проекта, инвестиции или партнёрство — свяжитесь любым способом: Telegram [@danku13](https://t.me/danku13), [danku13@yandex.ru](mailto:danku13@yandex.ru).
-
-*Companies and investors: to discuss commercial use, investment or partnership — reach out via Telegram [@danku13](https://t.me/danku13) or [danku13@yandex.ru](mailto:danku13@yandex.ru).*
-
-**Что происходит с моим вкладом? / What happens to my contribution?**
-
-Авторство — ваше (git-история сохранит), но по [CLA](CLA.md) владелец получает право лицензировать вклад на любых условиях в будущем. Правила участия — в [CONTRIBUTING.md](CONTRIBUTING.md); механика автоподписания — чекбокс в [шаблоне PR](.github/PULL_REQUEST_TEMPLATE.md) + [cla-check](.github/workflows/cla-check.yml).
-
-*Authorship stays with you (git history preserves it), but per the [CLA](CLA.md) the owner may license your contribution on any terms in the future. Contribution rules — [CONTRIBUTING.md](CONTRIBUTING.md).*
+- **Веб-версия без установки** — [danku13.github.io/CanvasDesk/app/](https://danku13.github.io/CanvasDesk/app/): тот же движок в браузере (WebGPU, Chromium), загрузка ~1 с; ввод, кириллица, поиск, OPFS — работают.
+- **Готовый бинарь** — GitHub Actions → CI → артефакты `build-<os>` (Windows x64, Linux, macOS universal2 `.app`).
+- **Эталонные схемы** — галерея схем в приложении и `assets/canvas-schemes/` (unit-economics, capacity-service, intro-whatif, project-budget…): открыть и покрутить параметры.
+- **45 встроенных шаблонов** — палитра слева или wheel-меню: инфраструктура, юнит-экономика, продуктовая аналитика.
+- **What-if** — Ctrl+Shift+I: подмените строку расчёта и увидите дельты по всему downstream; сравните сценарии таблицей.
+- **ИИ-агент** — `canvasdesk.exe mcp` + [рецепт агента](user-docs/agent-recipe.md): агент собирает модель, `graph_validate` проверяет корректность, `analyze_bottlenecks` показывает узкие места.
+- **Виджеты и кастомизация** — SDK-шаблон [sdk/widget-template/](sdk/widget-template/README.md) (примеры todo-panel/dashboard); 7 тем оформления (tokyo-night, dracula, nord…), английский интерфейс в настройках.
 
 ## Математическое моделирование
 
@@ -102,9 +89,11 @@ FR — [docs/change-requests/index-cr-fr.md](docs/change-requests/index-cr-fr.md
 [docs/change-requests/index-cr-fr.md](docs/change-requests/index-cr-fr.md):
 FR-013 (Numi), FR-014 (поток значений), FR-015 (единицы/queueing),
 FR-018/019/027 (шаблоны, 45 шт.), FR-021 (подсказки), FR-025 (построчные
-выходы) — выполнены; FR-016 (bottleneck-индикаторы), FR-017 (what-if),
-FR-020 (custom templates), FR-029 (порты значений) — в плане; состав
-и приёмка — CR-013 + ADR-0005/0006.
+выходы), FR-016 (bottleneck-индикаторы), FR-017 (what-if v1),
+FR-020 (custom templates v1), FR-029/FR-032/FR-033 (порты значений,
+валидация графа, `graph_apply` — волна A роадмапа) — выполнены;
+в работе: FR-044/FR-045 (анатомия ноды), FR-058–FR-060 (ui-kit волна 2);
+состав и приёмка — CR-013 + ADR-0005/0006.
 
 ## Что уже работает
 
@@ -260,37 +249,38 @@ serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 
 ## Дорожная карта
 
-- [x] **M1** (T0–T6) — ядро: окно, камера, модель `.canvas`, карточки, culling, тамбнейлы ✅
-- [x] **M2** (T7–T10) — заметки ✅, форматирование ✅, настройки ✅, связи ✅, drag-drop ✅, файловый вотчер ✅
-- [x] **M3** (T13–T14) — миникарта ✅, поиск ✅ (T11/T12 отложены после v1.0)
-- [x] **M4** (T15–T17) — встройка в десктоп (`--desktop`) ✅, шина событий ✅, иконки/меню/краш-сейф ✅ (T18/T19 — в разработке)
-- [x] **M5** (T20–T22) — движок виджетов: T20 ✅ (рантайм, WebView2-хост,
-  LOD/снапшоты, меню); T21 ✅ (bridge/permissions, установка drag-ом,
-  widget_state, календарь+стикер, RECIPES §8); T22 ✅ (SDK `sdk/canvasdesk.ts`,
-  Vite-шаблон, примеры todo-panel/dashboard, docs/WIDGETS.md, встроенные
-  виджеты мигрированы на SDK — [план](docs/plans/M5-widgets.md))
-- [x] **M6** (T24) — MCP / BYOK (`canvas-mcp`) ✅; T23, T25 — в плане
-- [ ] **M7** (T26–T30) — кроссплатформенность Windows/Linux/macOS: [план](docs/plans/M7-crossplatform.md), аудит зависимостей включён
-- [x] **Волна моделирования** (FR-013…FR-025, FR-027/FR-028) — Numi-движок,
-  поток значений, единицы/queueing, 45 шаблонов, онбординг/документация ✅
-- [ ] **Проверка востребованности** — продуктовый
-  роадмап [docs/plans/product-roadmap.md](docs/plans/product-roadmap.md)
-  (принят вместе с ADR-0008, 2026-09-18):
-  - [ ] Волна 0 — гигиена: cargo-deny в CI (M0), реестр зависимостей + фичи
-    `stats`/`parallel` (M1), синхронизация индекса CR/FR
-  - [ ] Волна A — композиция: **FR-029** (порты значений, R1) → **FR-032**
-    (R2: чтение графа + `graph_validate`) → **FR-033** (R3: `graph_apply`
-    атомарный батч) → R5 (рецепт агента); гейт — эталоны ADR-0005/0006
-    сходятся ±1 %
-  - [ ] Волна B — аналитика: FR-016 (индикаторы узких мест) + FR-017 v1
-    (what-if, сценарные сетки); эталоны №1–№5 презентабельны
-  - [ ] Волна V — гейт спроса: догфудинг + живые демо; **Go = ≥ 5 внешних
-    пользователей сами построили модель и вернулись второй раз**
-  - [ ] Волна S — после Go: статистика (M2), сценарный worker (M3),
-    параллелизм / Monte Carlo (M4/M5), композиты (R4+FR-020), WASM, M7 —
-    по продуктовым триггерам
-  - Параллельный трек без дедлайна: лицензионный каркас и подготовка к
-    реестру РФ (ПП № 1236) — M0–M1 + чек-лист архдока §8.4
+Движение — по [продуктовому роадмапу](docs/plans/product-roadmap.md)
+(принят 2026-09-18 вместе с [ADR-0008](docs/adr/adr-0008-math-computing-stack.md)):
+лестница ступеней, каждая — самостоятельно демонстрируемая; углубление —
+только после подтверждения спроса.
+
+| Этап | Состав | Статус |
+|---|---|---|
+| **M1–M6** (T0–T24) | канвас и рендер (wgpu), заметки, миникарта/поиск, desktop-режим, движок виджетов + SDK, MCP | ✅ |
+| **Волна моделирования** | Numi-движок, поток значений (DAG), единицы/queueing, 45 шаблонов, онбординг (FR-013…FR-031) | ✅ |
+| **Волна 0** — гигиена | cargo-deny в CI, реестр зависимостей, SBOM, триаж CR/FR (CP0) | ✅ |
+| **Волна A** — композиция | FR-029 порты значений → FR-032 валидация графа → FR-033 `graph_apply` → рецепт агента (CP1–CP4) | ✅ |
+| **Волна B** — аналитика | FR-016 узкие места → FR-017 v1 what-if: сценарии, дельты, сравнение (CP5–CP6) | ✅ |
+| **M8** — wasm-порт | `canvas-web`: веб-версия на GitHub Pages, бандл ≤ 4 МБ brotli, wasm/mcp-wasm гейты | ✅ |
+| **UI layering** (PRD-0009) | canvas-ui, ui-kit v2, scissor-клиппинг (FR-051–FR-057) | ✅ |
+| **Лицензионный каркас** | AGPLv3 + CLA с автопринятием в PR (M0 архдока) | ✅ |
+
+**Сейчас — волна V: проверка востребованности.** Догфудинг владельца и живые
+демо архитекторам/аналитикам; гейт Go — **≥ 5 внешних пользователей сами
+построили модель и вернулись к ней второй раз**. Параллельно в работе:
+FR-044/FR-045 (анатомия ноды — источники данных, calc-trace), миграция
+ui-kit волна 2 (FR-058–FR-060), FR-037 (MCP-wasm верификация), FR-043
+(универсальный импорт архитектур).
+
+**Волна S — после Go, по продуктовым триггерам:** статистика и доверительные
+интервалы (M2), сценарный worker + freeze/сравнение сценариев (M3, FR-017 v2),
+параллелизм и Monte Carlo (M4/M5), композитные шаблоны (R4/FR-020 v2),
+платформенные фичи Linux/macOS (M7), BYOK (T25).
+
+Организационный трек — подготовка к реестру РФ (ПП № 1236): лицензионный
+каркас закрыт; чек-лист архдока §8.4 (правообладатель, товарный знак,
+описание функциональных характеристик, SBOM в дистрибутиве) — по готовности
+к заявке, волны разработки не блокирует.
 
 История проектирования волн — [docs/devlog/](docs/devlog/) (M5: как
 строился движок виджетов).
@@ -305,3 +295,41 @@ serde_json · rusqlite (bundled) · notify · windows-rs · tracing
 [user-docs/README.md](user-docs/README.md)). Внутренние доки по
 интерфейсным объектам — [docs/interface-objects/](docs/interface-objects/)
 (нода, связь, миникарта, поиск).
+
+---
+
+## Лицензия и правила игры (License & Rules)
+
+**Copyright © 2026 danku13.** Проект распространяется под **[GNU AGPLv3](LICENSE)**. Модель простая: код бесплатный и открытый — навсегда; судьба проекта (включая лицензию) — в руках владельца.
+
+| | |
+|---|---|
+| 💚 **Код бесплатен** | Весь код — под [GNU AGPLv3](LICENSE): свободно используйте, изучайте, изменяйте и распространяйте. Никаких «open core» хитростей — сообщество получает весь проект целиком. |
+| 🔒 **Коммерческие права у владельца** | Исключительные права на проект и **право изменять его лицензию в будущем** сохраняет владелец (**danku13**): можно выпустить коммерческую или проприетарную редакцию, применить dual-licensing, закрыть проект. Код, уже выпущенный под AGPLv3, для сообщества от этого не закроется. |
+| ✍️ **PR = подписание CLA** | Отправляя Pull Request, вы **автоматически принимаете [CLA](CLA.md)**: авторство вашего кода остаётся за вами, но право лицензировать вклад в будущем переходит владельцу. Это защищает проект от юридических рисков при смене лицензии. |
+
+### Мини-FAQ (License FAQ)
+
+**Можно ли использовать CanvasDesk в коммерческих целях? / Can I use it commercially?**
+
+Да — на условиях AGPLv3: коммерческое использование законно, пока соблюдаются условия лицензии (исходники изменений открываются под AGPLv3; для сетевых сервисов действует §13 AGPL — исходники версии, доступной пользователям, должны быть открыты). Разрешение владельца для этого не требуется.
+
+*Yes — under AGPLv3 terms: commercial use is legal as long as you comply with the license (your modifications stay under AGPLv3; for network services §13 applies — the source of the version you serve must be available). No separate permission from the owner is needed.*
+
+**Условия AGPLv3 мне не подходят (закрытая интеграция, OEM, white-label, SaaS без открытия исходников) / AGPLv3 doesn't fit my case**
+
+Напишите владельцу — обсудим **коммерческую лицензию** под ваш сценарий: Telegram [@danku13](https://t.me/danku13) или [danku13@yandex.ru](mailto:danku13@yandex.ru).
+
+*Contact the owner to discuss a **commercial license** for your scenario: Telegram [@danku13](https://t.me/danku13) or [danku13@yandex.ru](mailto:danku13@yandex.ru).*
+
+**Инвестиции и партнёрство / Investment & partnership**
+
+Компании и инвесторы: если хотите обсудить коммерческое использование проекта, инвестиции или партнёрство — свяжитесь любым способом: Telegram [@danku13](https://t.me/danku13), [danku13@yandex.ru](mailto:danku13@yandex.ru).
+
+*Companies and investors: to discuss commercial use, investment or partnership — reach out via Telegram [@danku13](https://t.me/danku13) or [danku13@yandex.ru](mailto:danku13@yandex.ru).*
+
+**Что происходит с моим вкладом? / What happens to my contribution?**
+
+Авторство — ваше (git-история сохранит), но по [CLA](CLA.md) владелец получает право лицензировать вклад на любых условиях в будущем. Правила участия — в [CONTRIBUTING.md](CONTRIBUTING.md); механика автоподписания — чекбокс в [шаблоне PR](.github/PULL_REQUEST_TEMPLATE.md) + [cla-check](.github/workflows/cla-check.yml).
+
+*Authorship stays with you (git history preserves it), but per the [CLA](CLA.md) the owner may license your contribution on any terms in the future. Contribution rules — [CONTRIBUTING.md](CONTRIBUTING.md).*
