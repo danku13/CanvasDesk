@@ -1139,6 +1139,16 @@ enum PortTarget {
     Out,
 }
 
+/// FR-045 F-5 v2 (PRD-0004 N3, R-5/R-3): строка лейбла порта — текст и
+/// тон. Unmapped-исток (`scene.unmapped_edges`, Р-3) — янтарный акцент
+/// анализа (тот же, что у тултипа unmapped-ребра); прочие — акцент
+/// потока значений (как в v1). Тон — данные, цвет — на вызове.
+#[derive(Debug, Clone, PartialEq)]
+struct PortLabelLine {
+    text: String,
+    unmapped: bool,
+}
+
 fn spill_hit_target(canvas: &Canvas, hit: &SpillHit) -> Option<SpillMenuTarget> {
     let node_id = canvas.nodes.get(hit.node)?.id.clone();
     match &hit.kind {
@@ -4559,26 +4569,120 @@ impl App {
         })
     }
 
-    /// FR-045 F-5 v1: лейбл порта канваса под курсором — приоритет как у
-    /// drag-старта (CR-003/FR-050): построчный порт → якорь параметра →
-    /// сторонный порт значения. Лейблы входных портов без якоря (F-3/F-14
-    /// рейлы) — v2. None — порта под курсором нет.
-    fn port_tooltip_at(&self, world: Vec2) -> Option<String> {
+    /// FR-045 F-5 v2: лейблы входных слотов стороны (PRD-0004 N3, R-5/R-3)
+    /// — qualified-пути истоков value-рёбер, прикреплённых к этой стороне
+    /// (порядок `canvas.edges` — детерминирован, как `inbound_slots`;
+    /// перечисление — единая точка `dataref::input_refs`, FR-044 Р-4).
+    /// Поле «строка N» — i18n-ключ (RU/EN, как в v1: display_ref несёт
+    /// дословное RU — для тултипов локализуем поле поверх единой точки).
+    /// Unmapped (Р-3: `scene.unmapped_edges`) — маркер «не подставлено».
+    /// Больше 3 — первые 3 + свёртка «+N ещё» (полный список — в stage).
+    /// None — входящих value-рёбер на стороне нет (fallback — «out:»).
+    fn inbound_label_lines(&self, node_index: usize, side: Side) -> Option<Vec<PortLabelLine>> {
+        let canvas = &self.scene.canvas;
+        let node_id = canvas.nodes.get(node_index)?.id.clone();
+        let refs = canvas_core::dataref::input_refs(canvas, &node_id);
+        if refs.is_empty() {
+            return None;
+        }
+        let mut lines: Vec<PortLabelLine> = Vec::new();
+        for r in refs {
+            let edge = canvas.edges.get(r.edge_index)?;
+            // Сторона ребра — эффективная (CR-008: пин/авто, как в рендере);
+            // висячий исток пропускается (лейбл стороны — по живым рёбрам).
+            let (Some(from), Some(to)) = (canvas.node(&edge.from_node), canvas.node(&node_id))
+            else {
+                continue;
+            };
+            let (_, eff_to) = canvas_core::effective_sides(edge, from, to);
+            if eff_to != side {
+                continue;
+            }
+            // Поле: from_line → i18n «строка N»/«line N» (1-based);
+            // from_output/fallback edge.id — поле из единой точки dataref.
+            let field = match edge.from_line {
+                Some(line) => {
+                    let n = (line + 1).to_string();
+                    self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                }
+                None => r.r.field.clone(),
+            };
+            let path = format!("{}.{}", r.r.obj, field);
+            // Р-3: исток без значения — маркер «не подставлено» (и янтарный
+            // тон строки на вызове); подстановка значения снимает состояние.
+            let unmapped = self.scene.unmapped_edges.iter().any(|id| id == &edge.id);
+            let text = if unmapped {
+                let marker = self.tr(keys::TOOLTIP_PORT_UNMAPPED);
+                format!("from: {path} · {marker}")
+            } else {
+                format!("from: {path}")
+            };
+            lines.push(PortLabelLine { text, unmapped });
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        // Свёртка: 3 строки + «+N ещё» — тултип у курсора не разрастается
+        // (полный список входов — панель stage, FR-044 Р-4)
+        if lines.len() > 3 {
+            let rest = lines.len() - 3;
+            let n = rest.to_string();
+            lines.truncate(3);
+            lines.push(PortLabelLine {
+                text: self.trf(keys::TOOLTIP_PORT_MORE, &[("{n}", &n)]),
+                unmapped: false,
+            });
+        }
+        Some(lines)
+    }
+
+    /// FR-045 F-5 v1/v2: лейблы порта канваса под курсором — приоритет как
+    /// у drag-старта (CR-003/FR-050): построчный порт → якорь параметра →
+    /// сторонный порт. Сторонный порт читается по стороне (P1 «входы
+    /// слева»): есть входящие value-рёбра — qualified-истоки (v2,
+    /// In-чтение), нет — «out:» (drag-исток, v1). None — порта нет.
+    fn port_tooltip_at(&self, world: Vec2) -> Option<Vec<PortLabelLine>> {
         if let Some((node_index, port)) = self.line_port_hit(world) {
-            return self.port_label_for(node_index, &PortTarget::Line(port.line));
+            return self
+                .port_label_for(node_index, &PortTarget::Line(port.line))
+                .map(|text| {
+                    vec![PortLabelLine {
+                        text,
+                        unmapped: false,
+                    }]
+                });
         }
         if let Some((node_index, anchor)) = self.param_port_hit(world) {
-            return self.port_label_for(node_index, &PortTarget::Param(anchor.param.clone()));
+            return self
+                .port_label_for(node_index, &PortTarget::Param(anchor.param.clone()))
+                .map(|text| {
+                    vec![PortLabelLine {
+                        text,
+                        unmapped: false,
+                    }]
+                });
         }
         let node_index = self.hovered?;
         let node = self.scene.canvas.nodes.get(node_index)?;
         if node.kind() == NodeKind::Group {
             return None;
         }
-        canvas_core::port_at(node, world, self.camera.zoom(), self.settings.port_zone_px)
-            .is_some()
-            .then(|| self.port_label_for(node_index, &PortTarget::Out))
-            .flatten()
+        if let Some(side) =
+            canvas_core::port_at(node, world, self.camera.zoom(), self.settings.port_zone_px)
+        {
+            if let Some(lines) = self.inbound_label_lines(node_index, side) {
+                return Some(lines);
+            }
+            return self
+                .port_label_for(node_index, &PortTarget::Out)
+                .map(|text| {
+                    vec![PortLabelLine {
+                        text,
+                        unmapped: false,
+                    }]
+                });
+        }
+        None
     }
 
     /// FR-050 Н2 (этап C): значение, которое несёт активный value-drag —
@@ -18187,10 +18291,12 @@ impl ApplicationHandler<AppEvent> for App {
                             align: TextAlign::Left,
                         });
                     }
-                    // FR-045 F-5 v1: лейбл порта канваса (qualified-адрес R-5) —
-                    // точечная цель, приоритет над линейными тултипами:
+                    // FR-045 F-5 v1/v2: лейблы порта канваса (qualified-адрес
+                    // R-5) — точечная цель, приоритет над линейными тултипами:
                     // unmapped/проливание ниже гасятся, пока активен лейбл
-                    // порта (оба рисуются у курсора — двойной нечитаем)
+                    // порта (оба рисуются у курсора — двойной нечитаем).
+                    // v2: входные слоты — список истоков (до 3 строк + «+N
+                    // ещё»), строки стеком с шагом 16 px (кегль 13)
                     let port_label = if self.edge_drag.is_none()
                         && self.choice_menu.is_none()
                         && self.expr_error_hit_at(self.cursor).is_none()
@@ -18199,20 +18305,31 @@ impl ApplicationHandler<AppEvent> for App {
                     } else {
                         None
                     };
-                    if let Some(text) = port_label.clone() {
+                    if let Some(lines) = port_label.clone() {
                         let viewport = self.viewport_logical();
                         let origin_x = (self.cursor[0] + 14.0)
                             .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        tooltip_texts.push(OwnedScreenText {
-                            text,
-                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                            width: TOOLTIP_WIDTH,
-                            font_size: 13.0,
-                            // Спокойный сине-серый акцент потока значений —
-                            // тот же тон, что у тултипа проливания
-                            color: Color::rgb(0x9c, 0xc3, 0xe6),
-                            align: TextAlign::Left,
-                        });
+                        for (row, line) in lines.iter().enumerate() {
+                            tooltip_texts.push(OwnedScreenText {
+                                text: line.text.clone(),
+                                origin: [
+                                    origin_x.max(0.0),
+                                    self.cursor[1] + 18.0 + (row as f32) * 16.0,
+                                ],
+                                width: TOOLTIP_WIDTH,
+                                font_size: 13.0,
+                                // Тон строки (v2): unmapped-исток — янтарный
+                                // акцент анализа (тот же, что у тултипа
+                                // unmapped-ребра); значения — спокойный
+                                // сине-серый акцент потока значений (v1)
+                                color: if line.unmapped {
+                                    Color::rgb(0xf5, 0xa6, 0x23)
+                                } else {
+                                    Color::rgb(0x9c, 0xc3, 0xe6)
+                                },
+                                align: TextAlign::Left,
+                            });
+                        }
                     }
                     // FR-050 Р-3 (этап C): тултип unmapped-ребра «проблема +
                     // решение» (контракт Р-3 — ровно два пункта): курсор над
@@ -20885,6 +21002,168 @@ mod tests {
             app.port_label_for(1, &PortTarget::Out),
             Some("out: Заявки (b)".to_owned())
         );
+    }
+
+    /// FR-045 F-5 v2: входные слоты стороны — qualified-истоки (R-5):
+    /// `fromLine` — «строка N» (i18n, 1-based), `fromOutput` — имя выхода,
+    /// без адресации — fallback edge.id; unmapped-исток (Р-3,
+    /// `scene.unmapped_edges`) — маркер «не подставлено» и янтарный тон.
+    #[test]
+    fn port_in_label_lines_qualified_and_unmapped() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10\nconv = 0.2", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = 1", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 200.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        let mut e1 = Edge::new("e1", "src", None, "dst", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(0);
+        let mut e2 = Edge::new("e2", "src", None, "dst", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("users".to_owned());
+        let mut e3 = Edge::new("e3", "src", None, "dst", None);
+        e3.set_flow_kind(FlowKind::Value);
+        canvas.edges.push(e1);
+        canvas.edges.push(e2);
+        canvas.edges.push(e3);
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.unmapped_edges = vec!["e3".to_owned()];
+        let lines = app
+            .inbound_label_lines(1, Side::Left)
+            .expect("левый вход dst — 3 истока");
+        assert_eq!(lines.len(), 3, "каждое входящее value-ребро — строка");
+        assert_eq!(
+            lines[0].text, "from: Заявки.строка 1",
+            "fromLine — i18n «строка N», 1-based (R-5, как в v1)"
+        );
+        assert!(!lines[0].unmapped);
+        assert_eq!(
+            lines[1].text, "from: Заявки.users",
+            "fromOutput — имя выхода (единая точка dataref)"
+        );
+        assert_eq!(
+            lines[2].text, "from: Заявки.e3 · не подставлено",
+            "без адресации — fallback edge.id; unmapped — маркер Р-3"
+        );
+        assert!(lines[2].unmapped, "unmapped-исток — янтарный тон строки");
+    }
+
+    /// FR-045 F-5 v2: свёртка длинного списка входов — 3 строки + «+N ещё»
+    /// (тултип у курсора не разрастается; полный список — панель stage).
+    #[test]
+    fn port_in_label_lines_more_summary() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = 1", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 200.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        for i in 0..4 {
+            let mut edge = Edge::new(format!("e{i}"), "src", None, "dst", None);
+            edge.set_flow_kind(FlowKind::Value);
+            // Существующий выход «users» — рёбра пролитые (unmapped-маркер
+            // не мешает свёртке; вычисляется recompute сцены при stub)
+            edge.from_output = Some("users".to_owned());
+            canvas.edges.push(edge);
+        }
+        let app = stub_app_with_canvas(canvas);
+        let lines = app
+            .inbound_label_lines(1, Side::Left)
+            .expect("левый вход dst — 4 истока");
+        assert_eq!(lines.len(), 4, "3 строки + свёртка «+N ещё»");
+        assert_eq!(lines[0].text, "from: Заявки.users");
+        assert_eq!(lines[2].text, "from: Заявки.users");
+        assert_eq!(lines[3].text, "+1 ещё", "свёртка — счётчик скрытых строк");
+        assert!(!lines[3].unmapped, "свёртка — нейтральный тон");
+    }
+
+    /// FR-045 F-5 v2: сторонный порт читается по стороне (P1 «входы
+    /// слева») — с входами from-чтение (In-лейблы), без входов —
+    /// «out:» (drag-исток, v1); hit-тест — левый порт приёмника.
+    #[test]
+    fn port_tooltip_at_in_precedes_out_fallback() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = 1", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 200.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        let mut edge = Edge::new("e1", "src", None, "dst", None);
+        edge.set_flow_kind(FlowKind::Value);
+        edge.from_output = Some("users".to_owned());
+        canvas.edges.push(edge);
+        let mut app = stub_app_with_canvas(canvas);
+        app.hovered = Some(1);
+        let lines = app
+            .port_tooltip_at([700.0, 100.0])
+            .expect("левый порт dst под курсором");
+        assert_eq!(
+            lines[0].text, "from: Заявки.users",
+            "входящая сторона — from-чтение (R-5 qualified-адрес)"
+        );
+        // Одинокая нода без входов — прежнее v1-чтение («out:»)
+        let mut canvas2 = Canvas::default();
+        let mut solo = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
+        solo.width = 420.0;
+        solo.height = 200.0;
+        canvas2.nodes.push(solo);
+        let mut app2 = stub_app_with_canvas(canvas2);
+        app2.hovered = Some(0);
+        let lines2 = app2
+            .port_tooltip_at([0.0, 100.0])
+            .expect("левый порт src под курсором");
+        assert_eq!(
+            lines2[0].text, "out: Заявки",
+            "без входящих value-рёбер — drag-исток (v1)"
+        );
+        assert!(
+            app2.port_tooltip_at([5000.0, 5000.0]).is_none(),
+            "мимо порта — None"
+        );
+    }
+
+    /// FR-045 F-5 v2: EN-язык — «line N» (i18n STAGE_LINE_LABEL),
+    /// «not mapped» и «+N more» (FR-040, инвариант полноты).
+    #[test]
+    fn port_in_label_lines_english() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = 1", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 200.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        for i in 0..4 {
+            let mut edge = Edge::new(format!("e{i}"), "src", None, "dst", None);
+            edge.set_flow_kind(FlowKind::Value);
+            edge.from_line = Some(0);
+            edge.from_output = Some(format!("f{i}"));
+            canvas.edges.push(edge);
+        }
+        let mut app = stub_app_with_canvas(canvas);
+        app.settings.language = Language::En;
+        app.scene.unmapped_edges = vec!["e0".to_owned()];
+        let lines = app
+            .inbound_label_lines(1, Side::Left)
+            .expect("левый вход dst — 4 истока");
+        assert_eq!(
+            lines[0].text, "from: Заявки.line 1 · not mapped",
+            "EN: поле строки и маркер unmapped (Р-5 + Р-3)"
+        );
+        assert!(lines[0].unmapped);
+        assert_eq!(lines[3].text, "+1 more", "EN: свёртка");
     }
 
     /// FR-044 Q2 (интеграция): переполненная стопка пилюль — режим Scroll

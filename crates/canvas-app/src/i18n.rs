@@ -331,6 +331,13 @@ pub mod keys {
     /// ноды при hover — qualified-адрес «to: Объект.Параметр» (полный путь
     /// в тултипе; короткая форма — на теле, решение FR-045 Р-5).
     pub const TOOLTIP_PORT_PARAM: &str = "tooltip.port.param";
+    /// FR-045 F-5 v2 (PRD-0004 N3, R-3): маркер unmapped-истока в лейбле
+    /// входного слота — короткая форма Р-3 («не подставлено»), полный
+    /// диагноз — TOOLTIP_UNMAPPED_SLOT/PARAM (тултип ребра).
+    pub const TOOLTIP_PORT_UNMAPPED: &str = "tooltip.port.unmapped";
+    /// FR-045 F-5 v2 (PRD-0004 N3, R-5): свёртка длинного списка входов
+    /// стороны — «+N ещё» (полный список — в stage, FR-044 Р-4).
+    pub const TOOLTIP_PORT_MORE: &str = "tooltip.port.more";
     /// FR-050 Р-3 (этап C): тултип unmapped-позиционного входа.
     pub const TOOLTIP_UNMAPPED_SLOT: &str = "tooltip.unmapped.slot";
     /// FR-050 Р-3 (этап C): тултип unmapped-параметра (toParam без значения).
@@ -824,6 +831,8 @@ const RU: &[(&str, &str)] = &[
     (keys::DIALOG_CANCEL, "Отмена"),
     (keys::MENU_PICK_PARAM_TITLE, "Подключить значение к параметру"),
     (keys::MENU_PICK_LINE_TITLE, "Какая строка — источник значения?"),
+    (keys::TOOLTIP_PORT_UNMAPPED, "не подставлено"),
+    (keys::TOOLTIP_PORT_MORE, "+{n} ещё"),
     (
         keys::TOOLTIP_UNMAPPED_SLOT,
         "Значение не подставлено: связь есть, но источник не отдал значение (строка-источник удалена / стала прозой / колонка отсутствует). Подключите ноду с актуальным значением или исправьте строку-источник.",
@@ -1513,6 +1522,8 @@ const EN: &[(&str, &str)] = &[
     (keys::DIALOG_CANCEL, "Cancel"),
     (keys::MENU_PICK_PARAM_TITLE, "Connect the value to a parameter"),
     (keys::MENU_PICK_LINE_TITLE, "Which line is the value source?"),
+    (keys::TOOLTIP_PORT_UNMAPPED, "not mapped"),
+    (keys::TOOLTIP_PORT_MORE, "+{n} more"),
     (
         keys::TOOLTIP_UNMAPPED_SLOT,
         "Value not applied: the edge exists but the source yielded no value (source line deleted / became prose / column missing). Connect a node with an up-to-date value or fix the source line.",
