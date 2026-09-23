@@ -422,6 +422,17 @@ pub mod keys {
     pub const KIT_SECTION_DROPDOWN: &str = "kit.section.dropdown";
     pub const KIT_SECTION_TOAST: &str = "kit.section.toast";
     pub const KIT_SECTION_TOOLTIP: &str = "kit.section.tooltip";
+    /// FR-059: секции компонентов v2 + их демо-подписи.
+    pub const KIT_SECTION_TEXT_FIELD: &str = "kit.section.text_field";
+    pub const KIT_SECTION_SWITCH: &str = "kit.section.switch";
+    pub const KIT_SECTION_CARD: &str = "kit.section.card";
+    pub const KIT_SECTION_LIST: &str = "kit.section.list";
+    pub const KIT_SECTION_ICONS: &str = "kit.section.icons";
+    pub const KIT_TEXTFIELD_PLACEHOLDER: &str = "kit.textfield.placeholder";
+    pub const KIT_CARD_TITLE: &str = "kit.card.title";
+    pub const KIT_CARD_BODY: &str = "kit.card.body";
+    pub const KIT_LIST_ROW: &str = "kit.list.row";
+    pub const KIT_STATE_FOCUSED: &str = "kit.state.focused";
     /// DebugOverlay (F10): подсказка тогла.
     pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
@@ -889,6 +900,20 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_SECTION_DROPDOWN, "Выпадающий список (Dropdown: якорь + flip)"),
     (keys::KIT_SECTION_TOAST, "Тост (Toast)"),
     (keys::KIT_SECTION_TOOLTIP, "Тултип (Tooltip: якорь + flip + delay)"),
+    // FR-059: секции компонентов v2
+    (keys::KIT_SECTION_TEXT_FIELD, "Текстовое поле (TextField: каретка в символах)"),
+    (keys::KIT_SECTION_SWITCH, "Переключатель (Switch)"),
+    (keys::KIT_SECTION_CARD, "Карточка (Card: хедер + тело)"),
+    (keys::KIT_SECTION_LIST, "Список и скролл (list_rows + ScrollState)"),
+    (keys::KIT_SECTION_ICONS, "Иконки (Icon: глифы существующим шрифтом)"),
+    (keys::KIT_TEXTFIELD_PLACEHOLDER, "Подсказка…"),
+    (keys::KIT_CARD_TITLE, "Карточка"),
+    (
+        keys::KIT_CARD_BODY,
+        "Тело карточки: хедер и контент внутри пада панели (SPACING_LG).",
+    ),
+    (keys::KIT_LIST_ROW, "Строка {n}"),
+    (keys::KIT_STATE_FOCUSED, "В фокусе"),
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): рамки слоёв, имя под курсором, пересечения",
@@ -1522,6 +1547,23 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_SECTION_DROPDOWN, "Dropdown (anchor + flip)"),
     (keys::KIT_SECTION_TOAST, "Toast"),
     (keys::KIT_SECTION_TOOLTIP, "Tooltip (anchor + flip + delay)"),
+    // FR-059: v2 component sections
+    (
+        keys::KIT_SECTION_TEXT_FIELD,
+        "Text field (TextField: caret in chars)",
+    ),
+    (keys::KIT_SECTION_SWITCH, "Switch"),
+    (keys::KIT_SECTION_CARD, "Card (header + body)"),
+    (keys::KIT_SECTION_LIST, "List & scroll (list_rows + ScrollState)"),
+    (keys::KIT_SECTION_ICONS, "Icons (glyphs via the existing font)"),
+    (keys::KIT_TEXTFIELD_PLACEHOLDER, "Placeholder…"),
+    (keys::KIT_CARD_TITLE, "Card"),
+    (
+        keys::KIT_CARD_BODY,
+        "Card body: header and content inside the panel pad (SPACING_LG).",
+    ),
+    (keys::KIT_LIST_ROW, "Row {n}"),
+    (keys::KIT_STATE_FOCUSED, "Focused"),
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): layer rects, name under cursor, intersections",

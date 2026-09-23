@@ -643,22 +643,21 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             ));
         }
         // FR-050 Н9-4 (этап E): карта проливаний — панель + «✕» + строки
-        // (раскладка flowmap_ui, xywh-контракт); клики — click_flow_map
-        // (hit-тест той же раскладкой), клик мимо панели — канвас (Capture)
+        // (раскладка flowmap_ui на ките FR-059 — UiRect-контракт; клики —
+        // click_flow_map (hit-тест той же раскладкой), клик мимо панели —
+        // канвас (Capture)
         id::FLOW_MAP => {
-            let rows = app.flow_map_rows();
-            let lay = crate::flowmap_ui::flow_map_layout(viewport, rows.len());
+            let lay = app.flow_map_layout();
             surface
                 .hit_rects
-                .push(HitRect::interactive(rect(lay.panel), "flow-map-panel"));
+                .push(HitRect::interactive(lay.panel, "flow-map-panel"));
             surface
                 .hit_rects
-                .push(HitRect::interactive(rect(lay.close), "flow-map-close"));
-            for (i, row) in lay.rows.iter().enumerate() {
-                surface.hit_rects.push(HitRect::interactive(
-                    rect(*row),
-                    format!("flow-map-row-{i}"),
-                ));
+                .push(HitRect::interactive(lay.close, "flow-map-close"));
+            for (i, (_, row)) in lay.rows.iter().enumerate() {
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(*row, format!("flow-map-row-{i}")));
             }
         }
         id::DIALOG => {

@@ -14,6 +14,14 @@
 //!   (панель полная), их источники агрегируются в [`ExtSource`] для
 //!   мини-карточек под истоком и счётчика «+N внешн.» (Р-8).
 //!
+//! FR-059 (волна 1 миграции кита, паттерн U5 — числа дословно): строки
+//! обеих колонок — `kit::list_rows` + [`ScrollState`] (кит «список+
+//! скролл»): прежний кап высоты панели остаётся ОГРАНИЧЕНИЕМ РАЗМЕРА
+//! ([`PANEL_MAX_H_FRACTION`]), но срез строк «… ещё N» (Q2 v1) удалён —
+//! переполнение честно прокручивается (бегунок `kit::scroll_bar` — цвет
+//! на потребителе), ВСЕ строки доступны клику/подсветке. Индексы строк
+//! ([`StageCalcFocus`]) — модельные, скролл-независимые (инвариант 3).
+//!
 //! Чистый Rust, без I/O; детерминизм — порядок `canvas.edges`/тела.
 
 use std::collections::{BTreeSet, HashSet};
@@ -21,6 +29,8 @@ use std::collections::{BTreeSet, HashSet};
 use canvas_core::dataref::{formula_displays, input_refs};
 use canvas_core::flow::{FlowOutputs, LineOutputs, NamedOutputs};
 use canvas_core::{Canvas, Edge};
+use canvas_ui::kit::{list_rows, ScrollState};
+use canvas_ui::layout::{stack, HAlign, VAlign};
 
 /// Значение строки «Переменных»: значение / ошибка вычисления / unmapped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,8 +215,10 @@ pub const PANEL_MAX_H_FRACTION: f32 = 0.45;
 
 /// Раскладка панели: нижняя зона stage, две колонки (переменные 360 px,
 /// формулы — остальное); `trace_h = max(|vars|, |formulas|)` (Р-4).
-/// Переполнение — кап высоты [`PANEL_MAX_H_FRACTION`] с индикатором
-/// «… ещё N» (`cut`-поля; Q2-семантика уплотнения — в v1 капом).
+/// Переполнение — прокрутка кита (FR-059): кап высоты
+/// [`PANEL_MAX_H_FRACTION`] остаётся ограничением размера панели,
+/// видимые строки — `kit::list_rows` (индексы — модельные), срез
+/// «… ещё N» удалён (G5; прежние `vars_cut`/`formulas_cut`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CalcPanelLayout {
     /// Панель целиком `[x, y, w, h]` (относительно stage-rect).
@@ -215,37 +227,77 @@ pub struct CalcPanelLayout {
     pub vars_title: [f32; 4],
     /// Заголовок группы «Расчёт».
     pub formulas_title: [f32; 4],
-    /// Rect строк переменных (индекс = индексу `model.vars` до капа).
-    pub var_rows: Vec<[f32; 4]>,
-    /// Rect строк формул (индекс = индексу `model.formulas` до капа).
-    pub formula_rows: Vec<[f32; 4]>,
-    /// Число строк переменных за капом (индикатор «… ещё N»).
-    pub vars_cut: usize,
-    /// Число строк формул за капом.
-    pub formulas_cut: usize,
+    /// Окно списка переменных (вьюпорт скролла; сцена для бегунка/колеса).
+    pub vars_area: [f32; 4],
+    /// Окно списка формул (вьюпорт скролла).
+    pub formulas_area: [f32; 4],
+    /// Видимые строки переменных `(индекс в `model.vars`, rect)` —
+    /// `kit::list_rows`; rect — прежний xywh строки.
+    pub var_rows: Vec<(usize, [f32; 4])>,
+    /// Видимые строки формул `(индекс в `model.formulas`, rect)`.
+    pub formula_rows: Vec<(usize, [f32; 4])>,
     /// Верхняя кромка панели (screen px, rect-relative) — нижняя граница
     /// зоны клампа пилюль веера (Р-1: «между заголовком и панелью»).
     pub top: f32,
 }
 
 impl CalcPanelLayout {
-    /// Число видимых строк группы (для индексации фокуса за капом).
+    /// Индекс строки переменных под курсором (МОДЕЛЬНЫЙ — скролл-независимый).
     pub fn var_row_at(&self, cursor: [f32; 2]) -> Option<usize> {
-        self.var_rows.iter().position(|r| point_in(r, cursor))
+        self.var_rows
+            .iter()
+            .find(|(_, r)| point_in(r, cursor))
+            .map(|(i, _)| *i)
     }
 
+    /// Индекс строки формул под курсором (модельный).
     pub fn formula_row_at(&self, cursor: [f32; 2]) -> Option<usize> {
-        self.formula_rows.iter().position(|r| point_in(r, cursor))
+        self.formula_rows
+            .iter()
+            .find(|(_, r)| point_in(r, cursor))
+            .map(|(i, _)| *i)
     }
 
     /// Курсор внутри панели (клик глотается — панель жива).
     pub fn contains(&self, cursor: [f32; 2]) -> bool {
         point_in(&self.rect, cursor)
     }
+
+    /// Курсор над окном списка переменных (скролл колесом — FR-059)?
+    pub fn vars_area_at(&self, cursor: [f32; 2]) -> bool {
+        point_in(&self.vars_area, cursor)
+    }
+
+    /// Курсор над окном списка формул?
+    pub fn formulas_area_at(&self, cursor: [f32; 2]) -> bool {
+        point_in(&self.formulas_area, cursor)
+    }
 }
 
 fn point_in(rect: &[f32; 4], p: [f32; 2]) -> bool {
     p[0] >= rect[0] && p[0] <= rect[0] + rect[2] && p[1] >= rect[1] && p[1] <= rect[1] + rect[3]
+}
+
+/// Синхронизация скролла колонки с контентом/вьюпортом (идемпотентно,
+/// resize-паттерн `docs_ui`) — детерминизм рендер/hit.
+fn sync_scroll(scroll: &mut ScrollState, count: usize, viewport_h: f32) {
+    scroll.content_h = count as f32 * PANEL_ROW_H;
+    scroll.viewport_h = viewport_h;
+    scroll.clamp();
+}
+
+/// Видимые строки колонки — `kit::list_rows` в xywh модели; частичные
+/// строки у краёв окна обрезаются пересечением (клип-семантика — строка
+/// не рисуется за пределами окна списка).
+fn visible_rows(area: [f32; 4], scroll: &ScrollState, count: usize) -> Vec<(usize, [f32; 4])> {
+    let window = canvas_ui::geometry::UiRect::new(area[0], area[1], area[2], area[3]);
+    list_rows(window, scroll, PANEL_ROW_H, 0.0, count)
+        .into_iter()
+        .filter_map(|(index, rect)| {
+            rect.intersection(&window)
+                .map(|r| (index, [r.x, r.y, r.w, r.h]))
+        })
+        .collect()
 }
 
 /// Раскладка панели. `rect_w`/`rect_h` — размер stage (screen px);
@@ -256,58 +308,68 @@ pub fn layout(
     rect_w: f32,
     rect_h: f32,
     zone_top: f32,
+    vars_scroll: &mut ScrollState,
+    formulas_scroll: &mut ScrollState,
 ) -> Option<CalcPanelLayout> {
     if model.vars.is_empty() && model.formulas.is_empty() {
         return None;
     }
     let margin = 16.0;
     let width = (rect_w - margin * 2.0).max(VARS_COL_W + FORMULAS_COL_MIN_W);
-    let x = margin;
-    // Кап высоты: не выше доли stage и не выше зоны веера (не наезжаем
-    // на пилюли — панель растёт от низа вверх до `zone_top`); минимум —
-    // одна строка (маленький stage)
+    // FR-059: позиция панели — кит `stack` (левый-нижний слот: поля
+    // по бокам, низ слота — над нижней подсказкой `PANEL_BOTTOM_GAP`;
+    // прежние x = маржа, низ = `rect_h − PANEL_BOTTOM_GAP` дословно)
     let available = (rect_h - PANEL_BOTTOM_GAP - zone_top).max(0.0);
     let max_h = (rect_h * PANEL_MAX_H_FRACTION)
         .min(available)
         .max(PANEL_TITLE_H + PANEL_PAD * 2.0 + PANEL_ROW_H);
     let inner_h = (max_h - PANEL_TITLE_H - PANEL_PAD * 2.0).max(PANEL_ROW_H);
     let max_rows = ((inner_h / PANEL_ROW_H).floor() as usize).max(1);
-    let vars_rows = model.vars.len().min(max_rows);
-    let formulas_rows = model.formulas.len().min(max_rows);
-    let rows = vars_rows.max(formulas_rows).max(1);
+    // Окно списка каждой колонки — до `max_rows` строк (ограничение
+    // размера панели); строки сверх — прокрутка кита (перебор не срезается)
+    let vars_vis = model.vars.len().min(max_rows);
+    let formulas_vis = model.formulas.len().min(max_rows);
+    let rows = vars_vis.max(formulas_vis).max(1);
     let height = PANEL_TITLE_H + PANEL_PAD * 2.0 + rows as f32 * PANEL_ROW_H;
-    let bottom = rect_h - PANEL_BOTTOM_GAP;
-    let y = bottom - height;
+    let slot = canvas_ui::geometry::UiRect::new(
+        margin,
+        0.0,
+        (rect_w - margin * 2.0).max(0.0),
+        (rect_h - PANEL_BOTTOM_GAP).max(0.0),
+    );
+    let panel = stack(
+        slot,
+        canvas_ui::geometry::UiVec2::new(width, height),
+        HAlign::Start,
+        VAlign::End,
+    );
+    let x = panel.x;
+    let y = panel.y;
     // Колонки: переменные 360 px (или меньше на узком stage), формулы —
     // остальное; заголовок группы — над своей колонкой
     let vars_w = VARS_COL_W.min(width * 0.6);
     let formulas_x = x + vars_w + 16.0;
     let formulas_w = (width - vars_w - 16.0).max(120.0);
     let rows_y = y + PANEL_PAD + PANEL_TITLE_H;
-    let var_rows = model.vars[..vars_rows]
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            [
-                x + PANEL_PAD,
-                rows_y + i as f32 * PANEL_ROW_H,
-                vars_w - PANEL_PAD,
-                PANEL_ROW_H,
-            ]
-        })
-        .collect();
-    let formula_rows = model.formulas[..formulas_rows]
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            [
-                formulas_x,
-                rows_y + i as f32 * PANEL_ROW_H,
-                formulas_w,
-                PANEL_ROW_H,
-            ]
-        })
-        .collect();
+    let vars_area = [
+        x + PANEL_PAD,
+        rows_y,
+        (vars_w - PANEL_PAD).max(0.0),
+        vars_vis as f32 * PANEL_ROW_H,
+    ];
+    let formulas_area = [
+        formulas_x,
+        rows_y,
+        formulas_w,
+        formulas_vis as f32 * PANEL_ROW_H,
+    ];
+    // Скроллы колонок синхронизируются с контентом/вьюпортом
+    // (идемпотентно — детерминизм рендер/hit), видимые строки —
+    // kit::list_rows (модельные индексы, частичные — клип по окну)
+    sync_scroll(vars_scroll, model.vars.len(), vars_area[3]);
+    sync_scroll(formulas_scroll, model.formulas.len(), formulas_area[3]);
+    let var_rows = visible_rows(vars_area, vars_scroll, model.vars.len());
+    let formula_rows = visible_rows(formulas_area, formulas_scroll, model.formulas.len());
     Some(CalcPanelLayout {
         rect: [x, y, width, height],
         vars_title: [
@@ -317,10 +379,10 @@ pub fn layout(
             PANEL_TITLE_H,
         ],
         formulas_title: [formulas_x, y + PANEL_PAD - 2.0, formulas_w, PANEL_TITLE_H],
+        vars_area,
+        formulas_area,
         var_rows,
         formula_rows,
-        vars_cut: model.vars.len() - vars_rows,
-        formulas_cut: model.formulas.len() - formulas_rows,
         top: y,
     })
 }
@@ -490,7 +552,8 @@ mod tests {
         assert_eq!(model.vars[0].value, RowValue::Unmapped);
     }
 
-    /// Раскладка Р-4: нижняя зона, две колонки, кап высоты с cut-индикатором;
+    /// Раскладка Р-4: нижняя зона, две колонки, окно списка с прокруткой
+    /// (FR-059: срез «… ещё N» удалён — модельные индексы скролл-независимы);
     /// hit-тест строк; детерминизм.
     #[test]
     fn layout_columns_cap_and_hits() {
@@ -518,34 +581,86 @@ mod tests {
         };
         let rect_w = 900.0;
         let rect_h = 600.0;
-        let lay = layout(&model, rect_w, rect_h, 120.0).expect("панель есть");
+        let mut vars_scroll = ScrollState::default();
+        let mut formulas_scroll = ScrollState::default();
+        let lay = layout(
+            &model,
+            rect_w,
+            rect_h,
+            120.0,
+            &mut vars_scroll,
+            &mut formulas_scroll,
+        )
+        .expect("панель есть");
         // Нижняя кромка над подсказкой
         assert!((lay.rect[1] + lay.rect[3] - (rect_h - PANEL_BOTTOM_GAP)).abs() < 0.01);
-        // Кап: max_h = 600*0.45 = 270 → rows = (270-18-20)/22 = 10
+        // Кап: max_h = 600*0.45 = 270 → окно 10 строк (геометрия прежняя)
         assert_eq!(lay.var_rows.len(), 10);
-        assert_eq!(lay.vars_cut, 4);
+        assert_eq!(lay.vars_area[3], 10.0 * PANEL_ROW_H);
+        // FR-059: перебор прокручивается — индексы модельные, скролл активен
+        assert!(vars_scroll.needs_scroll());
+        assert_eq!(vars_scroll.max_offset(), 4.0 * PANEL_ROW_H);
+        assert_eq!(lay.var_rows[0].0, 0);
+        assert_eq!(lay.var_rows[9].0, 9);
         assert_eq!(lay.formula_rows.len(), 3);
-        assert_eq!(lay.formulas_cut, 0);
+        assert!(!formulas_scroll.needs_scroll(), "3 строки в окне 10");
+        // Прокрутка переменных: последние строки становятся видимыми
+        vars_scroll.scroll_by(4.0 * PANEL_ROW_H);
+        vars_scroll.clamp();
+        let lay = layout(
+            &model,
+            rect_w,
+            rect_h,
+            120.0,
+            &mut vars_scroll,
+            &mut formulas_scroll,
+        )
+        .expect("панель есть");
+        assert_eq!(lay.var_rows.last().expect("строки есть").0, 13);
         // Колонки: формулы правее колонки переменных
-        let f = lay.formula_rows[0];
-        let v = lay.var_rows[0];
+        let f = lay.formula_rows[0].1;
+        let v = lay.var_rows[0].1;
         assert!(f[0] > v[0] + v[2], "колонки не пересекаются");
-        // Хит-тест: внутри строки и мимо
+        // Хит-тест: внутри строки и мимо (индекс — модельный; после
+        // прокрутки первая видимая строка — № 4)
         let mid = [v[0] + v[2] / 2.0, v[1] + PANEL_ROW_H / 2.0];
-        assert_eq!(lay.var_row_at(mid), Some(0));
+        assert_eq!(lay.var_row_at(mid), Some(4));
         assert_eq!(lay.formula_row_at(mid), None);
         let fmid = [f[0] + 10.0, f[1] + 5.0];
         assert_eq!(lay.formula_row_at(fmid), Some(0));
         assert!(!lay.contains([rect_w, rect_h]), "мимо панели");
+        // Зоны списков — для скролла колесом
+        assert!(lay.vars_area_at([lay.vars_area[0] + 5.0, lay.vars_area[1] + 5.0]));
+        assert!(lay.formulas_area_at([lay.formulas_area[0] + 5.0, lay.formulas_area[1] + 5.0]));
         // Детерминизм: повторный вызов — идентичная раскладка
-        assert_eq!(layout(&model, rect_w, rect_h, 120.0), Some(lay));
+        assert_eq!(
+            layout(
+                &model,
+                rect_w,
+                rect_h,
+                120.0,
+                &mut vars_scroll,
+                &mut formulas_scroll
+            ),
+            Some(lay)
+        );
     }
 
     /// Пустая модель — панели нет.
     #[test]
     fn layout_none_when_empty() {
         let model = CalcPanelModel::default();
-        assert!(layout(&model, 900.0, 600.0, 120.0).is_none());
+        let mut vars_scroll = ScrollState::default();
+        let mut formulas_scroll = ScrollState::default();
+        assert!(layout(
+            &model,
+            900.0,
+            600.0,
+            120.0,
+            &mut vars_scroll,
+            &mut formulas_scroll
+        )
+        .is_none());
     }
 
     /// Р-5/инвариант 6: клик по формуле — ровно её переменные и операнды.
