@@ -127,5 +127,10 @@
     "viewport": { "$value": [255, 255, 255, 255], "$desc": "VIEWPORT_COLOR minimap.rs:43" },
     "edge": { "$value": [170, 176, 188, 255], "$desc": "EDGE_COLOR minimap.rs:45" },
     "bg": { "$value": [30, 32, 38, 184], "$desc": "BG_COLOR minimap.rs:47 — тёмная, полупрозрачная (дифференциация по темам — v2)" }
+  },
+
+  "table": {
+    "$type": "color",
+    "guide_debug": { "$value": [0.549, 0.949, 0.2, 0.851], "$desc": "FR-061 D-14/Q9: диагностика колоночных направляющих в DebugOverlay (F9/?ui=debug) — вне продуктовой палитры, как цвета debug_overlay.rs (конвенция 0–1, как accent)" }
   }
 }

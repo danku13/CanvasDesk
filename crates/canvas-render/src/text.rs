@@ -142,16 +142,16 @@ const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
 /// центрируются в своей строке по этой высоте (I-1: Y-ряд не меняется).
 const AUTO_ROW_LINE_HEIGHT: f32 = 18.0;
 /// FR-061 этап B (D-5): длина штриха и зазора пунктира лидера (world-px) —
-/// паттерн прототипа 2/3 px (анализ §3.1, O-2).
-const LEADER_DASH_W: f32 = 2.0;
-const LEADER_DASH_GAP: f32 = 3.0;
+/// паттерн прототипа 2/3 px (анализ §3.1, O-2); токены D-14.
+const LEADER_DASH_W: f32 = canvas_core::tokens::TABLE_LEADER_DASH;
+const LEADER_DASH_GAP: f32 = canvas_core::tokens::TABLE_LEADER_GAP;
 /// FR-061 этап B (D-5): зебра — фон через строку в прогонах ≥ 4 строк данных.
-const ZEBRA_RUN_MIN: usize = 4;
+const ZEBRA_RUN_MIN: usize = canvas_core::tokens::TABLE_ZEBRA_RUN_MIN;
 /// FR-061 этап B (D-5): толщина линии лидера (world-px).
-const LEADER_H: f32 = 1.0;
+const LEADER_H: f32 = canvas_core::tokens::TABLE_LEADER_H;
 /// FR-061 этап B (D-5): вертикаль лидера в строке (доля высоты строки —
 /// базовая линия прототипа).
-const LEADER_Y_FRAC: f32 = 0.62;
+const LEADER_Y_FRAC: f32 = canvas_core::tokens::TABLE_LEADER_Y_FRAC;
 
 /// FR-061 этап B: янтарный цвет unmapped-значений (Р-3) — тот же тон,
 /// что пунктир unmapped-ребра (см. spill_row_items).
@@ -545,6 +545,10 @@ pub enum BodyQuadKind {
     /// FR-061 этап B (D-5): фон зебры — полупрозрачная подложка через
     /// строку в прогонах ≥ 4 строк данных (прототип O-7).
     RowBg,
+    /// FR-061 этап D (D-14/Q9): вертикальная линия диагностики колоночной
+    /// направляющей (value/unit right-края) — рисуется ТОЛЬКО при
+    /// включённом DebugOverlay (F9/?ui=debug), на ноде невидима (Q9).
+    GuideDebug,
 }
 
 /// Декоративный квад тела заметки: rect — [x, y, w, h] в px виртуального
@@ -693,6 +697,7 @@ fn body_items(
     body_text: &str,
     formula_lines: &[usize],
     spill_params: &[crate::SpillView],
+    language: canvas_core::Language,
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
@@ -727,7 +732,7 @@ fn body_items(
                     &mut out,
                     &mut prev,
                     (true, false, None),
-                    block_header_item(theme, calc_count),
+                    block_header_item(theme, calc_count, language),
                 );
             }
         }
@@ -773,11 +778,16 @@ fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, 
 
 /// FR-061 этап C (D-7): элемент-заголовок блока «▸ расчёт · N строк» —
 /// моно-жирный, приглушённый цвет кода; высота строки тела (I-1).
-fn block_header_item(theme: &ThemeColors, calc_count: usize) -> BodyItem {
+/// D-14 (этап D): текст локализован ([`row_grid::block_header_text_lang`]).
+fn block_header_item(
+    theme: &ThemeColors,
+    calc_count: usize,
+    language: canvas_core::Language,
+) -> BodyItem {
     BodyItem {
         gap: 0.0, // push_item пересчитает по предыдущему блоку
         rule: false,
-        text: row_grid::block_header_text(calc_count),
+        text: row_grid::block_header_text_lang(calc_count, language),
         font_size: BODY_FONT_SIZE,
         line_height: BODY_LINE_HEIGHT,
         color: theme.code_text,
@@ -1030,10 +1040,86 @@ fn push_gfm_blocks(
     }
 }
 
+/// FR-061 этап D (O-5, D-4): rich-раны формульной строки — чисто
+/// визуальная раскраска по прототипу (ux-node-body-fill): идентификатор,
+/// за которым следует «(» — функция (formula_fn, курсив); операторные
+/// символы — приглушённый тон (formula_op); числа/переменные — базовые
+/// атрибуты. РАЗБОР ГРАММАТИКИ НЕ ДУБЛИРУЕТСЯ: оценка строки уже вычислена
+/// движком (line_kind/eval_lines) — здесь только классификация символов
+/// для цвета. Побочный фикс: маркеры GFM (`*`, `==`, `~~`) в формулах
+/// больше не интерпретируются (умножение «a * 2 * 3» раньше попадало в
+/// italic-спан markdown-парсера). Возвращает раны для `set_rich_text`.
+fn formula_rich_runs<'a, 'r>(
+    text: &'a str,
+    base: Attrs<'r>,
+    fn_color: Color,
+    op_color: Color,
+) -> Vec<(&'a str, Attrs<'r>)> {
+    fn is_ident(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '.' || c == '\''
+    }
+    fn is_op(c: char) -> bool {
+        matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | '=' | '<' | '>' | '!')
+    }
+    // (байтовый офсет, символ)
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let byte_at = |idx: usize| chars.get(idx).map(|&(b, _)| b).unwrap_or(text.len());
+    let mut out: Vec<(&'a str, Attrs)> = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let (_, c) = chars[i];
+        if is_op(c) {
+            let start = i;
+            while i < chars.len() && is_op(chars[i].1) {
+                i += 1;
+            }
+            out.push((&text[byte_at(start)..byte_at(i)], base.color(op_color)));
+            continue;
+        }
+        if is_ident(c) && !c.is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && is_ident(chars[i].1) {
+                i += 1;
+            }
+            // Идентификатор, за которым (после пробелов) следует «(» — функция.
+            let mut peek = i;
+            while peek < chars.len() && chars[peek].1 == ' ' {
+                peek += 1;
+            }
+            let is_fn = peek < chars.len() && chars[peek].1 == '(';
+            let attrs = if is_fn {
+                base.color(fn_color).style(Style::Italic)
+            } else {
+                base
+            };
+            out.push((&text[byte_at(start)..byte_at(i)], attrs));
+            continue;
+        }
+        // Прочее (пробелы, скобки, запятые, числа) — базовые атрибуты.
+        let start = i;
+        while i < chars.len()
+            && !is_op(chars[i].1)
+            && !(is_ident(chars[i].1) && !chars[i].1.is_ascii_digit())
+        {
+            i += 1;
+        }
+        out.push((&text[byte_at(start)..byte_at(i)], base));
+    }
+    // Пустые раны не пушим; смежные раны одного стиля не сливаем —
+    // set_rich_text корректно шейпит соседние раны (оптимизация не нужна).
+    let mut merged: Vec<(&'a str, Attrs)> =
+        out.into_iter().filter(|(s, _)| !s.is_empty()).collect();
+    if merged.is_empty() {
+        merged.push((text, base));
+    }
+    merged
+}
+
 /// Зашейпить один текстовый блок тела: буфер с переносами по ширине области
 /// блока (px), высота по layout_runs (px буфера). Квады подсветки/
 /// зачёркивания — в px буфера блока; буллиты/чекбоксы позиционируются по
-/// первой строке снаружи.
+/// первой строке снаружи. `formula` — формульная/параметрская строка
+/// (mono + source_line): раскраска лексем O-5, GFM-маркеры не парсятся.
 #[allow(clippy::too_many_arguments)]
 fn shape_text_block(
     font_system: &mut FontSystem,
@@ -1044,6 +1130,7 @@ fn shape_text_block(
     width_px: f32,
     zoom_px: f32,
     base: Attrs,
+    formula: bool,
 ) -> (Buffer, f32, Vec<([f32; 4], BodyQuadKind)>) {
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     // WordOrGlyph: перенос по словам; слишком длинное слово рвётся по глифам,
@@ -1051,6 +1138,23 @@ fn shape_text_block(
     // ВСЕ строки (scroll_end = бесконечность, buffer.rs cosmic-text).
     buffer.set_wrap(font_system, Wrap::WordOrGlyph);
     buffer.set_size(font_system, Some(width_px), None);
+    // FR-061 этап D (O-5): формульная строка — раскраска лексем БЕЗ
+    // GFM-парсинга (маркеры `*`/`==`/`~~` в формулах — литералы).
+    if formula {
+        let rich = formula_rich_runs(text, base, theme.formula_fn, theme.formula_op);
+        buffer.set_rich_text(
+            font_system,
+            rich.iter().map(|&(s, attrs)| (s, attrs)),
+            base,
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(font_system, false);
+        let height_px = buffer
+            .layout_runs()
+            .last()
+            .map_or(0.0, |run| run.line_top + run.line_height);
+        return (buffer, height_px, Vec::new());
+    }
     // Инлайн-разбор: ссылки (gfm) → сегменты, маркеры (** * == ~~) → спаны.
     let mut plain = String::with_capacity(text.len());
     let mut spans_all: Vec<markdown::StyleSpan> = Vec::new();
@@ -1115,6 +1219,8 @@ fn with_body_stack(
     formula_lines: &[usize],
     spill_prefix: Vec<BodyItem>,
     spill_params: &[crate::SpillView],
+    language: canvas_core::Language,
+    desc: Option<&str>,
     quads_out: &mut Vec<BodyQuad>,
     mut on_block: impl FnMut(
         &BodyItem,
@@ -1130,8 +1236,35 @@ fn with_body_stack(
 ) -> f32 {
     let mut cursor_y = 0.0f32; // world-px, верх текущего элемента
                                // FR-050 Р-4: авто-строки — префикс стека (до собственного тела).
-    let mut items: Vec<BodyItem> = spill_prefix;
-    let mut body = body_items(theme, body_text, formula_lines, spill_params);
+                               // FR-061 этап D (D-8): зона описания — САМАЯ первая (до чисел/авто-строк),
+                               // кламп 2 строки (токен TABLE_DESC_CLAMP_LINES).
+    let desc_items: Vec<BodyItem> = match desc {
+        Some(d) if !d.is_empty() => {
+            let clamped = clamp_desc_text(
+                font_system,
+                d,
+                body_width * zoom_px,
+                canvas_core::tokens::TABLE_DESC_CLAMP_LINES,
+            );
+            if clamped.is_empty() {
+                Vec::new()
+            } else {
+                vec![desc_zone_item(theme, clamped)]
+            }
+        }
+        _ => Vec::new(),
+    };
+    // Зазор между зоной описания и следующей зоной (авто-строки/тело).
+    let mut spill_prefix = spill_prefix;
+    if !desc_items.is_empty() {
+        if let Some(first) = spill_prefix.first_mut() {
+            first.gap = first.gap.max(6.0);
+        }
+    }
+    let mut items: Vec<BodyItem> = desc_items;
+    // FR-050 Р-4: авто-строки — после зоны описания, до собственного тела.
+    items.extend(spill_prefix);
+    let mut body = body_items(theme, body_text, formula_lines, spill_params, language);
     // Зона «Переменные» отделяется от собственного контента зазором
     // (первый элемент тела в покое имеет gap 0 — переопределяем).
     if !items.is_empty() {
@@ -1173,6 +1306,9 @@ fn with_body_stack(
             block_width * zoom_px,
             zoom_px,
             base,
+            // O-5: формульная/параметрская строка (mono + привязка к строке
+            // текста) — раскраска лексем; авто-строки/заголовок — нет.
+            item.mono && item.source_line.is_some() && !item.oblique,
         );
         let height = height_px / zoom_px;
         on_block(
@@ -1188,6 +1324,106 @@ fn with_body_stack(
         cursor_y += height;
     }
     cursor_y
+}
+
+/// FR-061 этап D (D-8): кламп текста описания по ЧИСЛУ СТРОК фактической
+/// верстки (тот же Wrap::WordOrGlyph и кегль, что у стека тела — паритет
+/// с мерой CR-012): укладывается в `max_lines` — возвращается целиком;
+/// иначе — обрезка по словам + «…» в последней строке. Космический буфер
+/// здесь обязателен (кламп должен совпадать с версткой стека); TextMeasurer
+/// (canvas-ui) сознательно остаётся без космических буферов.
+fn clamp_desc_text(
+    font_system: &mut FontSystem,
+    text: &str,
+    width_px: f32,
+    max_lines: usize,
+) -> String {
+    let wrapped_lines = |fs: &mut FontSystem, s: &str| -> usize {
+        let mut buffer = Buffer::new(fs, Metrics::new(BODY_FONT_SIZE, BODY_LINE_HEIGHT));
+        buffer.set_wrap(fs, Wrap::WordOrGlyph);
+        buffer.set_size(fs, Some(width_px), None);
+        buffer.set_text(fs, s, sans_attrs(), Shaping::Advanced);
+        buffer.shape_until_scroll(fs, false);
+        buffer.layout_runs().count()
+    };
+    if text.trim().is_empty() {
+        return String::new();
+    }
+    if wrapped_lines(font_system, text) <= max_lines {
+        return text.to_owned();
+    }
+    // Обрезка по словам: наибольший префикс, чей кандидат с «…» укладывается
+    // в max_lines строк (детерминированный бинарный поиск).
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut lo = 0usize;
+    let mut hi = words.len();
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let candidate = format!("{} …", words[..mid].join(" "));
+        if wrapped_lines(font_system, &candidate) <= max_lines {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo == 0 {
+        return "…".to_owned();
+    }
+    format!("{} …", words[..lo].join(" "))
+}
+
+/// FR-061 этап D (D-8): элемент зоны описания — первая зона тела (до
+/// чисел), sans, приглушённый тон цитаты. Источник — Q3 v1:
+/// `canvasdesk.desc` → описание манифеста шаблона; проза-фолбэк НЕ
+/// применяется (дублировал бы первый абзац тела — решение за владельцем).
+fn desc_zone_item(theme: &ThemeColors, text: String) -> BodyItem {
+    BodyItem {
+        gap: 0.0, // первый в стеке; зазор после зоны — у следующего элемента
+        rule: false,
+        text,
+        font_size: BODY_FONT_SIZE,
+        line_height: BODY_LINE_HEIGHT,
+        color: theme.quote,
+        indent: 0.0,
+        mono: false,
+        bold: false,
+        deco: ItemDeco::None,
+        source_line: None,
+        oblique: false,
+        spill: None,
+        header: false,
+    }
+}
+
+/// FR-061 этап D (D-14/Q9): квады диагностики колоночных направляющих —
+/// вертикальные линии на right-краях колонок (значение/юнит) через зону
+/// строк данных таблицы. Толщина 1 world-px, цвет — токен
+/// TABLE_GUIDE_DEBUG_COLOR (маппинг в renderer::body_quad_fill). Чистая
+/// функция — юнит-тест без GPU.
+fn guide_debug_quads(
+    guides: &canvas_ui::row_guides::RowGuides,
+    rows: &[CachedRow],
+    zoom_px: f32,
+) -> Vec<BodyQuad> {
+    let Some((y0, y1)) = rows.iter().fold(None::<(f32, f32)>, |acc, row| {
+        Some(match acc {
+            None => (row.row_top, row.row_top + row.row_line_h),
+            Some((a, b)) => (a.min(row.row_top), b.max(row.row_top + row.row_line_h)),
+        })
+    }) else {
+        return Vec::new();
+    };
+    let z = zoom_px;
+    vec![
+        BodyQuad {
+            rect: [guides.value_right() * z, y0 * z, z, (y1 - y0) * z],
+            kind: BodyQuadKind::GuideDebug,
+        },
+        BodyQuad {
+            rect: [guides.unit_right() * z, y0 * z, z, (y1 - y0) * z],
+            kind: BodyQuadKind::GuideDebug,
+        },
+    ]
 }
 
 /// Зашейпить тело заметки: GFM-блоки → вертикальный стек буферов со своими
@@ -1206,6 +1442,8 @@ fn shape_body(
     whatif_lines: &[usize],
     spill_prefix: Vec<BodyItem>,
     spill_params: &[crate::SpillView],
+    language: canvas_core::Language,
+    desc: Option<&str>,
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -1218,6 +1456,8 @@ fn shape_body(
         formula_lines,
         spill_prefix,
         spill_params,
+        language,
+        desc,
         &mut quads,
         |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
             // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
@@ -1363,7 +1603,12 @@ pub fn measure_font_system() -> MutexGuard<'static, FontSystem> {
 /// FR-050 (этап D): проливания НЕ входят — наклонное начертание имеет те же
 /// авансы/метрики (генерация шрифта), высота стека не меняется; рост высоты
 /// под авто-строки делает сцена (CR-012-механизм, текст-префикс).
-pub fn measure_body_height(text: &str, body_width: f32, formula_lines: &[usize]) -> f32 {
+pub fn measure_body_height(
+    text: &str,
+    body_width: f32,
+    formula_lines: &[usize],
+    desc: &str,
+) -> f32 {
     let mut guard = measure_font_system();
     with_body_stack(
         &mut guard,
@@ -1374,6 +1619,11 @@ pub fn measure_body_height(text: &str, body_width: f32, formula_lines: &[usize])
         formula_lines,
         Vec::new(),
         &[],
+        // D-14: высота стека от языка не зависит (блок-заголовок — одна
+        // строка в любой локализации) — измерение фиксированным RU.
+        canvas_core::Language::Ru,
+        // D-8: зона описания — часть стека (I-2: measure = render).
+        if desc.is_empty() { None } else { Some(desc) },
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -1391,6 +1641,8 @@ struct CacheKey<'a> {
     body: &'a str,
     /// FR-013: сводка результатов (пустая — результатов нет).
     results: &'a str,
+    /// FR-061 этап D (D-8): текст описания (пустой — зоны нет).
+    desc: &'a str,
 }
 
 /// Запись кэша свежа, если зум, ширина, заголовок, тело и результаты
@@ -1401,6 +1653,7 @@ fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
         && entry.title == current.title
         && entry.body == current.body
         && entry.results == current.results
+        && entry.desc == current.desc
 }
 
 /// Оверлей-текст в world-координатах (контекстное меню, T7): шейпится
@@ -1627,6 +1880,8 @@ struct CachedTitle {
     body_text: String,
     /// Сводка результатов (см. CacheKey.results) — ключ свежести.
     results_key: String,
+    /// FR-061 этап D (D-8): текст описания ноды (ключ свежести D-8).
+    desc_text: String,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
 }
@@ -1708,6 +1963,16 @@ pub struct TextSystem {
     tick: u64,
     /// Палитра темы: цвета заголовка/иконки/тела/лейбла связи.
     theme: ThemeColors,
+    /// FR-061 этап D (D-14): язык таблицы тела (блок-заголовок Н-2).
+    /// Глобальная настройка (не данные кадра) — устанавливается сеттером;
+    /// свежесть кэша — через отпечаток языка в results_key.
+    language: canvas_core::Language,
+    /// FR-061 этап D (D-14/Q9): диагностика колоночных направляющих —
+    /// рисуется только при включённом DebugOverlay (F9/?ui=debug).
+    guides_visible: bool,
+    /// FR-061 этап D (D-8): описания манифестов шаблонов (id → описание)
+    /// — источник зоны описания шаблонных нод (Q3). Пустой — зоны нет.
+    template_descs: HashMap<String, String>,
 }
 
 impl TextSystem {
@@ -1736,6 +2001,9 @@ impl TextSystem {
             spill_hits: Vec::new(),
             tick: 0,
             theme: ThemeColors::dark(),
+            language: canvas_core::Language::Ru,
+            guides_visible: false,
+            template_descs: HashMap::new(),
         }
     }
 
@@ -1747,6 +2015,30 @@ impl TextSystem {
         // CR-007: цвета блоков тела запечены в кэше (BodyItem.color) —
         // без сброса после переключения темы тело остаётся в старых цветах
         self.cache.clear();
+    }
+
+    /// FR-061 этап D (D-14): язык таблицы тела (текст блока-заголовка Н-2).
+    /// Кэш НЕ сбрасываем: отпечаток языка в results_key делает записи
+    /// устаревшими точечно — перешейпятся только ноды с таблицей.
+    pub fn set_table_language(&mut self, language: canvas_core::Language) {
+        self.language = language;
+    }
+
+    /// FR-061 этап D (D-14/Q9): видимость диагностики колоночных направляющих
+    /// (тумблер DebugOverlay F9/?ui=debug). Кэш не сбрасывается — квады
+    /// диагностики добавляются поверх готового кадра без перешейпа.
+    pub fn set_table_guides_visible(&mut self, visible: bool) {
+        self.guides_visible = visible;
+    }
+
+    /// FR-061 этап D (D-8): описания манифестов шаблонов (id → описание) —
+    /// источник зоны описания для шаблонных нод (Q3). Устанавливается
+    /// приложением при построении реестра (снимок, не данные кадра).
+    pub fn set_template_descs(&mut self, descs: std::collections::HashMap<String, String>) {
+        // Кэш сбрасываем: описания могли измениться (импорт/обновление
+        // шаблонов) — записи с зоной описания обязаны перешейпиться.
+        self.cache.clear();
+        self.template_descs = descs;
     }
 
     /// Зашейпить/обновить запись лейбла связи (T8). Ширина буфера не
@@ -2140,6 +2432,33 @@ impl TextSystem {
                 } else {
                     format!("{results_key}|R:{auto_key}")
                 };
+                // FR-061 этап D (D-14): язык таблицы — в ключе свежести
+                // (текст блока-заголовка запечён в кэше; смена языка →
+                // точечный перешейп нод с таблицей).
+                let results_key = if results_key.is_empty() {
+                    results_key
+                } else {
+                    format!("{results_key}|Lang:{:?}", self.language)
+                };
+
+                // FR-061 этап D (D-8): источник описания Q3 —
+                // canvasdesk.desc → описание манифеста шаблона (снимок
+                // id — template_descs); проза-фолбэк не применяется
+                // (дубль первого абзаца — решение за владельцем).
+                let desc_text = node
+                    .canvasdesk
+                    .as_ref()
+                    .and_then(|ext| ext.desc.clone())
+                    .or_else(|| {
+                        node.template()
+                            .and_then(|t| self.template_descs.get(&t.id).cloned())
+                    })
+                    .unwrap_or_default();
+                let desc_ref = if desc_text.is_empty() {
+                    None
+                } else {
+                    Some(desc_text.as_str())
+                };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
                     cache_fresh(
@@ -2149,6 +2468,7 @@ impl TextSystem {
                             title: &e.title_text,
                             body: &e.body_text,
                             results: &e.results_key,
+                            desc: &e.desc_text,
                         },
                         CacheKey {
                             zoom: zoom_px,
@@ -2156,6 +2476,7 @@ impl TextSystem {
                             title: &title_text,
                             body: &body_text,
                             results: &results_key,
+                            desc: &desc_text,
                         },
                     )
                 });
@@ -2212,27 +2533,30 @@ impl TextSystem {
                     } else {
                         spill_row_items(&self.theme, auto_rows, node.template().is_some())
                     };
-                    let mut body = if body_text.is_empty() && spill_prefix.is_empty() {
-                        None
-                    } else {
-                        let (_, body_width, _) = body_area(node);
-                        // FR-017: подсветка подменённых строк активного сценария.
-                        let whatif_lines: &[usize] = whatif_nodes
-                            .get(&node.id)
-                            .map(|whatif| whatif.overrides.as_slice())
-                            .unwrap_or(&[]);
-                        Some(shape_body(
-                            &mut self.font_system,
-                            &self.theme,
-                            &body_text,
-                            body_width,
-                            zoom_px,
-                            &formula_lines,
-                            whatif_lines,
-                            spill_prefix,
-                            spill_views,
-                        ))
-                    };
+                    let mut body =
+                        if body_text.is_empty() && spill_prefix.is_empty() && desc_ref.is_none() {
+                            None
+                        } else {
+                            let (_, body_width, _) = body_area(node);
+                            // FR-017: подсветка подменённых строк активного сценария.
+                            let whatif_lines: &[usize] = whatif_nodes
+                                .get(&node.id)
+                                .map(|whatif| whatif.overrides.as_slice())
+                                .unwrap_or(&[]);
+                            Some(shape_body(
+                                &mut self.font_system,
+                                &self.theme,
+                                &body_text,
+                                body_width,
+                                zoom_px,
+                                &formula_lines,
+                                whatif_lines,
+                                spill_prefix,
+                                spill_views,
+                                self.language,
+                                desc_ref,
+                            ))
+                        };
 
                     // FR-013: строка результата — одна строка в футере
                     // карточки, шейпится вместе с остальным кэшем ноды;
@@ -2535,6 +2859,14 @@ impl TextSystem {
                             layout.quads = table_quads;
                             layout.quads.extend(old);
                         }
+                        // FR-061 этап D (D-14/Q9): диагностика направляющих —
+                        // поверх хрома, ТОЛЬКО при включённом DebugOverlay
+                        // (F9/?ui=debug); в проде невидима (решение Q9).
+                        if self.guides_visible {
+                            if let Some(g) = row_guides {
+                                layout.quads.extend(guide_debug_quads(&g, &rows, zoom_px));
+                            }
+                        }
                     }
 
                     self.cache.insert(
@@ -2553,6 +2885,7 @@ impl TextSystem {
                             title_text,
                             body_text,
                             results_key,
+                            desc_text,
                             last_used: self.tick,
                         },
                     );
@@ -3611,6 +3944,7 @@ mod tests {
             title: "отчёт",
             body: "тело",
             results: "",
+            desc: "",
         };
         let same = CacheKey { ..entry };
         assert!(cache_fresh(entry, same));
@@ -3658,6 +3992,17 @@ mod tests {
                 }
             ),
             "результат формулы изменился"
+        );
+        // FR-061 D (D-8): изменение описания инвалидирует кэш
+        assert!(
+            !cache_fresh(
+                entry,
+                CacheKey {
+                    desc: "описание",
+                    ..same
+                }
+            ),
+            "описание изменилось"
         );
         // Допуски: микродрейф зума и субпиксельная ширина не инвалидируют
         assert!(cache_fresh(
@@ -3842,6 +4187,8 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         )
     }
 
@@ -3860,6 +4207,8 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         assert_eq!(
             layout.blocks.len(),
@@ -3893,6 +4242,8 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         assert!(
             !layout
@@ -3913,6 +4264,8 @@ mod tests {
             &[1],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         let whatif = layout
             .quads
@@ -3972,11 +4325,133 @@ mod tests {
         assert_eq!(mono.weight, Weight::NORMAL);
     }
 
+    /// FR-061 этап D (D-14/Q9): квады диагностики направляющих — вертикали
+    /// на right-краях value/unit через зону строк данных; пустой список
+    /// строк — квадов нет.
+    #[test]
+    fn guide_debug_quads_span_rows_at_right_edges() {
+        let mut fs = FontSystem::new();
+        let cell = |fs: &mut FontSystem| CachedCell {
+            buffer: Buffer::new(fs, Metrics::new(12.0, 16.0)),
+            width_px: 10.0,
+            color: Color::rgb(0, 0, 0),
+        };
+        let row = |fs: &mut FontSystem, top: f32| CachedRow {
+            kind: row_grid::RowKind::Calc,
+            source_line: Some(0),
+            name: String::new(),
+            row_top: top,
+            row_line_h: BODY_LINE_HEIGHT,
+            left_end: 0.0,
+            zebra: false,
+            value: Some(cell(fs)),
+            unit: None,
+            badge: None,
+            error_message: None,
+        };
+        let rows = vec![row(&mut fs, 0.0), row(&mut fs, 20.0)];
+        let guides = canvas_ui::row_guides::RowGuides {
+            value_w: 30.0,
+            unit_w: 20.0,
+            badge_w: 0.0,
+            value_x: 200.0,
+            unit_x: 240.0,
+        };
+        let quads = guide_debug_quads(&guides, &rows, 2.0);
+        assert_eq!(quads.len(), 2, "линии value и unit");
+        assert!(quads.iter().all(|q| q.kind == BodyQuadKind::GuideDebug));
+        // Вертикаль через обе строки: y0 = 0, высота = (20+20)*зум
+        assert_eq!(quads[0].rect[1], 0.0);
+        assert_eq!(quads[0].rect[3], 80.0);
+        // Линии на right-краях ячеек: (value_x + value_w) * зум
+        assert_eq!(quads[0].rect[0], 460.0);
+        assert_eq!(quads[1].rect[0], 520.0);
+        // Пустой список строк — квадов нет
+        assert!(guide_debug_quads(&guides, &[], 1.0).is_empty());
+    }
+
+    /// FR-061 этап D (O-5): раскраска лексем формулы — функция (ident + «(»)
+    /// курсивом и formula_fn, операторы formula_op, переменные/числа — база;
+    /// GFM-маркеры (`*` умножения) — литералы, italic-спанов нет.
+    #[test]
+    fn formula_rich_runs_tints_functions_and_operators() {
+        let base = mono_attrs();
+        let fn_c = Color::rgb(0xc7, 0x92, 0xea);
+        let op_c = Color::rgb(0x66, 0x6a, 0x7c);
+        let runs = formula_rich_runs("rps = max(a, 2) * 3", base, fn_c, op_c);
+        let find = |needle: &str| {
+            runs.iter()
+                .find(|(s, _)| *s == needle)
+                .copied()
+                .unwrap_or_else(|| panic!("ран «{needle}» не найден: {runs:?}"))
+        };
+        let (rps, rps_attrs) = find("rps");
+        assert_eq!(rps, "rps");
+        assert_eq!(rps_attrs.color_opt, None, "переменная — без подкраски");
+        assert_eq!(rps_attrs.style, Style::Normal);
+        let (eq, eq_attrs) = find("=");
+        assert_eq!(eq, "=");
+        assert_eq!(eq_attrs.color_opt, Some(op_c));
+        let (mx, mx_attrs) = find("max");
+        assert_eq!(mx, "max");
+        assert_eq!(mx_attrs.color_opt, Some(fn_c), "функция — formula_fn");
+        assert_eq!(mx_attrs.style, Style::Italic, "функция — курсив (прототип)");
+        let (star, star_attrs) = find("*");
+        assert_eq!(star, "*");
+        assert_eq!(star_attrs.color_opt, Some(op_c));
+        // Умножение «a * 2 * 3» — оба «*» литеральные операторы, без italic
+        let runs = formula_rich_runs("a * 2 * 3", base, fn_c, op_c);
+        assert!(runs.iter().all(|(_, a)| a.style == Style::Normal));
+    }
+
+    /// FR-061 этап D (D-8): кламп описания — короткий текст целиком, длинный —
+    /// обрезается с «…»; зона описания добавляет высоту стека (I-2: мера и
+    /// рендер — один стек).
+    #[test]
+    fn clamp_desc_text_and_measure_parity() {
+        let mut fs = FontSystem::new();
+        let short = "Короткое описание.";
+        assert_eq!(
+            clamp_desc_text(
+                &mut fs,
+                short,
+                280.0,
+                canvas_core::tokens::TABLE_DESC_CLAMP_LINES
+            ),
+            short,
+            "короткий текст не клампится"
+        );
+        let long = "Длинное описание расчётной модели веб-сервиса, которое заведомо не помещается в две строки узкого тела ноды и потому обязано обрезаться многоточием по словам.";
+        let clamped = clamp_desc_text(
+            &mut fs,
+            long,
+            280.0,
+            canvas_core::tokens::TABLE_DESC_CLAMP_LINES,
+        );
+        assert!(clamped.ends_with("…"), "кламп завершается «…»: {clamped}");
+        assert!(clamped.chars().count() < long.chars().count());
+        // Пустой desc — пустая строка (зона не строится)
+        assert_eq!(clamp_desc_text(&mut fs, "   ", 280.0, 2), "");
+        // Мера стека: desc-зона добавляет высоту
+        let plain = measure_body_height("deploy = 40 $", 300.0, &[0], "");
+        let with_desc = measure_body_height("deploy = 40 $", 300.0, &[0], "Описание схемы.");
+        assert!(
+            with_desc > plain,
+            "desc-зона добавляет высоту: {plain} → {with_desc}"
+        );
+    }
+
     /// CR-009: формульная строка (source_line) — Numi-расчёт → mono; проза — sans.
     #[test]
     fn body_items_formula_line_is_mono() {
         let theme = ThemeColors::dark();
-        let items = body_items(&theme, "Gateway\ndeploy = 40 $", &[1], &[]);
+        let items = body_items(
+            &theme,
+            "Gateway\ndeploy = 40 $",
+            &[1],
+            &[],
+            canvas_core::Language::Ru,
+        );
         assert_eq!(items.len(), 2, "проза + формульная строка");
         assert!(!items[0].mono, "проза — sans");
         assert!(items[1].mono, "Numi-строка — моно");
@@ -4018,7 +4493,13 @@ mod tests {
             path: "Трафик.peak_rps".to_owned(),
             local: Some("500 rps".to_owned()),
         }];
-        let items = body_items(&theme, "Gateway\nrps = 500 rps", &[1], &spills);
+        let items = body_items(
+            &theme,
+            "Gateway\nrps = 500 rps",
+            &[1],
+            &spills,
+            canvas_core::Language::Ru,
+        );
         assert_eq!(items.len(), 2);
         assert!(!items[0].oblique, "проза — прямое начертание");
         assert!(items[1].oblique, "пролитая строка — наклонное (Р-2)");
@@ -4109,6 +4590,8 @@ mod tests {
             &[1],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4131,6 +4614,8 @@ mod tests {
             &[1],
             prefix,
             &[],
+            canvas_core::Language::Ru,
+            None,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4157,6 +4642,8 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
         let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
@@ -4457,7 +4944,7 @@ mod tests {
     #[test]
     fn measure_body_height_numi_list_exact() {
         let text = "rps = 200 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min";
-        let height = measure_body_height(text, 280.0, &[0, 1, 2]);
+        let height = measure_body_height(text, 280.0, &[0, 1, 2], "");
         assert_eq!(
             height,
             3.0 * BODY_LINE_HEIGHT + 2.0 * 6.0,
@@ -4472,7 +4959,7 @@ mod tests {
     #[test]
     fn measure_body_height_mono_wraps_to_two_rows() {
         let line = format!("{} = 5", "a".repeat(28)); // 32 символа
-        let height = measure_body_height(&line, 240.0, &[0]);
+        let height = measure_body_height(&line, 240.0, &[0], "");
         assert_eq!(
             height,
             2.0 * BODY_LINE_HEIGHT,
@@ -4487,8 +4974,8 @@ mod tests {
     #[test]
     fn measure_body_height_prose_uses_sans_metrics() {
         let line = "a".repeat(30); // 30 символов — между двумя метриками
-        let sans_height = measure_body_height(&line, 240.0, &[]);
-        let mono_height = measure_body_height(&line, 240.0, &[0]);
+        let sans_height = measure_body_height(&line, 240.0, &[], "");
+        let mono_height = measure_body_height(&line, 240.0, &[0], "");
         assert_eq!(
             sans_height, BODY_LINE_HEIGHT,
             "sans: 30 символов при ширине 240 — один ряд"
@@ -4504,7 +4991,7 @@ mod tests {
     /// (зазоры вокруг линии — по 8, как у рендера).
     #[test]
     fn measure_body_height_counts_rule() {
-        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[]);
+        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[], "");
         assert_eq!(
             height,
             BODY_LINE_HEIGHT + 8.0 + 12.0 + 8.0 + BODY_LINE_HEIGHT,
@@ -4520,7 +5007,13 @@ mod tests {
     fn block_header_inserted_above_threshold_only() {
         let theme = ThemeColors::dark();
         let five = "a = 1\nb = 2\nc = 3\nd = 4\nd * 2";
-        let items = body_items(&theme, five, &[0, 1, 2, 3, 4], &[]);
+        let items = body_items(
+            &theme,
+            five,
+            &[0, 1, 2, 3, 4],
+            &[],
+            canvas_core::Language::Ru,
+        );
         let header_pos = items
             .iter()
             .position(|item| item.header)
@@ -4530,7 +5023,7 @@ mod tests {
         assert_eq!(items[header_pos + 1].source_line, Some(4));
         // Ниже порога (4 строки данных) — заголовка нет
         let four = "a = 1\nb = 2\nc = 3\nd * 2";
-        let items = body_items(&theme, four, &[0, 1, 2, 3], &[]);
+        let items = body_items(&theme, four, &[0, 1, 2, 3], &[], canvas_core::Language::Ru);
         assert!(
             items.iter().all(|item| !item.header),
             "порог T не достигнут"
@@ -4558,21 +5051,23 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         let rendered = layout
             .blocks
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 300.0, lines);
+        let measured = measure_body_height(text, 300.0, lines, "");
         assert_eq!(
             measured, rendered,
             "блок-режим: measured {measured}, rendered {rendered}"
         );
         // Заголовок добавляет ещё ОДНУ строку тела (плюс 5-я строка
         // данных и зазоры стека) — рост через общий стек, не магию.
-        let four = measure_body_height("a = 1\nb = 2\nc = 3\nd = 4", 300.0, &[0, 1, 2, 3]);
-        let five_h = measure_body_height(text, 300.0, lines);
+        let four = measure_body_height("a = 1\nb = 2\nc = 3\nd = 4", 300.0, &[0, 1, 2, 3], "");
+        let five_h = measure_body_height(text, 300.0, lines, "");
         let diff = five_h - four;
         assert!(
             (2.0 * BODY_LINE_HEIGHT + 6.0..=2.0 * BODY_LINE_HEIGHT + 26.0).contains(&diff),
@@ -4600,13 +5095,15 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         let rendered = layout
             .blocks
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 300.0, &[2]);
+        let measured = measure_body_height(text, 300.0, &[2], "");
         assert_eq!(
             measured, rendered,
             "измерение = рендер-стек: measured {measured}, rendered {rendered}"
@@ -4628,6 +5125,8 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
+            None,
         );
         let bullet = layout
             .quads

@@ -73,11 +73,20 @@ const MONO_AVG_CHAR_W: f32 = 0.614 * BODY_FONT_SIZE;
 /// дешевая метрика среднего аванса символа. Оценка только РАСТИТ высоту
 /// (завышение безопасно), поэтому годится воротами двухуровневого refit:
 /// если оценка влезает в текущую высоту, точное измерение не нужно.
-pub fn estimated_result_reserve_height(text: &str, node_width: f32) -> f32 {
+pub fn estimated_result_reserve_height(text: &str, node_width: f32, desc: &str) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     let rows = wrapped_body_rows(text, body_width);
+    // FR-061 этап D (D-8): зона описания — кламп ≤ 2 строк (токен
+    // TABLE_DESC_CLAMP_LINES) + зазор после зоны; консервативная оценка
+    // (факт — фактическая верстка клампа, ≤ этой суммы).
+    let desc_rows = if desc.trim().is_empty() {
+        0.0
+    } else {
+        canvas_core::tokens::TABLE_DESC_CLAMP_LINES as f32 * BODY_LINE_HEIGHT + 6.0
+    };
     HEADER_HEIGHT
         + BODY_TOP_GAP
+        + desc_rows
         + rows as f32 * BODY_LINE_HEIGHT
         + BODY_PADDING
         + RESULT_LINE_HEIGHT
@@ -89,7 +98,8 @@ pub fn estimated_result_reserve_height(text: &str, node_width: f32) -> f32 {
 /// реализация (canvas-app) шейпит реальными Noto-шрифтами через
 /// canvas-render::text::measure_body_height; без установки — оценка
 /// уровня 1 (консервативная, только растит высоту).
-pub type MeasuredReserveFn = fn(text: &str, node_width: f32, formula_lines: &[usize]) -> f32;
+pub type MeasuredReserveFn =
+    fn(text: &str, node_width: f32, formula_lines: &[usize], desc: &str) -> f32;
 
 static MEASURED_RESERVE: std::sync::RwLock<Option<MeasuredReserveFn>> =
     std::sync::RwLock::new(None);
@@ -104,11 +114,11 @@ pub fn install_measured_reserve(f: MeasuredReserveFn) {
 }
 
 /// Текущее измерение уровня 2: установленное приложением или оценка.
-fn measured_reserve(text: &str, node_width: f32, formula_lines: &[usize]) -> f32 {
+fn measured_reserve(text: &str, node_width: f32, formula_lines: &[usize], desc: &str) -> f32 {
     let guard = MEASURED_RESERVE.read().unwrap_or_else(|p| p.into_inner());
     match *guard {
-        Some(f) => f(text, node_width, formula_lines),
-        None => estimated_result_reserve_height(text, node_width),
+        Some(f) => f(text, node_width, formula_lines, desc),
+        None => estimated_result_reserve_height(text, node_width, desc),
     }
 }
 
@@ -121,11 +131,17 @@ fn measured_reserve(text: &str, node_width: f32, formula_lines: &[usize]) -> f32
 /// без фантомных рядов. `display_text` — текст как на карточке (FR-029:
 /// пролитые строки показаны подписями источников — они длиннее локальных
 /// литералов, подгонка идёт по ним, иначе подпись вылезет за низ карточки).
-pub fn ensure_result_reserve(node: &mut Node, display_text: &str, formula_lines: &[usize]) {
-    if estimated_result_reserve_height(display_text, node.width) <= node.height {
+pub fn ensure_result_reserve(
+    node: &mut Node,
+    display_text: &str,
+    formula_lines: &[usize],
+    desc: Option<&str>,
+) {
+    let desc_text = desc.unwrap_or_default();
+    if estimated_result_reserve_height(display_text, node.width, desc_text) <= node.height {
         return;
     }
-    let needed = measured_reserve(display_text, node.width, formula_lines);
+    let needed = measured_reserve(display_text, node.width, formula_lines, desc_text);
     if needed > node.height {
         node.height = needed;
     }
@@ -158,6 +174,9 @@ pub fn fit_template_node_height(node: &mut Node) {
         .map(|text| formula_line_indices(&expr::eval_lines(text)))
         .unwrap_or_default();
     // Инстанциация: проливания ещё нет — display_text = исходный текст.
+    // FR-061 D (D-8): desc — None (реестр шаблонов недоступен здесь);
+    // ленивый refit (apply_result_reserve) догонит зону описания
+    // growth-only при следующем пересчёте — документированная цена.
     let text = node.text.clone().unwrap_or_default();
-    ensure_result_reserve(node, &text, &formula_lines);
+    ensure_result_reserve(node, &text, &formula_lines, None);
 }
