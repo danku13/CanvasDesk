@@ -45,6 +45,9 @@ pub mod layout;
 // FR-053 U3 (F-6): TextMeasurer — измеренный текст (cosmic-text + кэш).
 pub mod measure;
 pub mod registry;
+// FR-061 (D-3, Н-3 пре-PRD): колоночные направляющие табличного тела
+// ноды — проход A/B двухпроходной раскладки (Ф-14: имя RowGuides).
+pub mod row_guides;
 
 pub use anim::{animate_value, BoolAnim};
 pub use capture::CapturePolicy;
@@ -61,6 +64,7 @@ pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
 pub use registry::{
     DegradationPolicy, KeyboardScopeId, RegistryError, SurfaceDecl, SurfaceId, SurfaceRegistry,
 };
+pub use row_guides::{measure_row_cells, RowCellWidths, RowGuides};
 
 #[cfg(test)]
 mod tests {
