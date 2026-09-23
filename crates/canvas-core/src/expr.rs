@@ -2027,6 +2027,25 @@ pub const FN_HINTS: &[FnHint] = &[
         signature: "triangular(p, a, b, c)",
         summary: "алиас triangular_quantile",
     },
+    // FR-063 P3: ДИ и детерминированные выборки (за фичей `stats`).
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "ci_mean",
+        signature: "ci_mean(mean, sigma, n, conf)",
+        summary: "полуширина ДИ среднего (норм. аппроксимация)",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "normal_sample",
+        signature: "normal_sample(μ, σ, n, seed)",
+        summary: "среднее детерминированной выборки N(μ, σ²)",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "lognormal_sample",
+        signature: "lognormal_sample(μ, σ, n, seed)",
+        summary: "среднее выборки LogNormal (лог-пространство)",
+    },
 ];
 
 /// Срез каталога функций для подсказок (FR-021).

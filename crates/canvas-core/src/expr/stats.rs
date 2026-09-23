@@ -36,6 +36,9 @@
 
 use super::args::{bad_arity, is_single_dim, percent_unit, time_unit};
 use super::{format_num, Dimension, EvalError, Unit, Value};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rand_distr::{Distribution, LogNormal, Normal as RandNormal};
 use statrs::distribution::{ContinuousCDF, Discrete, Normal, Poisson};
 
 /// Канонический список stats-функций — единая точка синхронизации трёх
@@ -54,6 +57,9 @@ pub(super) const STATS_FUNCTIONS: &[&str] = &[
     "poisson_pmf",
     "triangular_quantile",
     "triangular",
+    "ci_mean",
+    "normal_sample",
+    "lognormal_sample",
 ];
 
 /// Маршрутизатор arm'а `eval_call`: имя принадлежит stats-домену.
@@ -118,6 +124,34 @@ pub(super) fn dispatch(func: &str, values: &[Value]) -> Result<Value, EvalError>
                 ));
             }
             triangular_quantile(func, values)
+        }
+        // P3: доверительные интервалы и детерминированные выборки.
+        "ci_mean" => {
+            if values.len() != 4 {
+                return Err(bad_arity(
+                    func,
+                    "ci_mean(mean, sigma, n, conf): ровно 4 аргумента",
+                ));
+            }
+            ci_mean(values)
+        }
+        "normal_sample" => {
+            if values.len() != 4 {
+                return Err(bad_arity(
+                    func,
+                    "normal_sample(μ, σ, n, seed): ровно 4 аргумента",
+                ));
+            }
+            normal_sample(values)
+        }
+        "lognormal_sample" => {
+            if values.len() != 4 {
+                return Err(bad_arity(
+                    func,
+                    "lognormal_sample(μ, σ, n, seed): ровно 4 аргумента",
+                ));
+            }
+            lognormal_sample(values)
         }
         _ => Err(EvalError::UnknownFunction(func.to_owned())),
     }
@@ -417,13 +451,211 @@ fn count_arg(func: &str, label: &str, value: &Value) -> Result<f64, EvalError> {
 }
 
 // --- P3: детерминированный RNG и доверительные интервалы -------------------
-// (наполняется фазой P3; сид-контракт M5 — seed_from_parts)
+
+/// Максимум выборки формулы (защита канваса от зависания; массовые прогоны
+/// Monte Carlo — путь FR-066 `propagate_monte_carlo`, не формулы).
+const MAX_SAMPLE_SIZE: usize = 1_000_000;
+
+/// FR-063 P3 (контракт сида для M5/FR-066, план §5.7.2): FNV-1a 64-bit —
+/// ЯВНЫЙ детерминированный хеш. `std::DefaultHasher` НЕ стабилен между
+/// версиями Rust (запрет — «Открытый вопрос» № 2 FR-063); FNV-1a — public
+/// domain, векторы зафиксированы тестом `fnv1a64_known_vectors`.
+/// Consumer — FR-066 (M5 Monte Carlo); до его merge — только тесты.
+#[allow(dead_code)]
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // offset basis
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3); // FNV prime
+    }
+    hash
+}
+
+/// Сид выборок: `hash(content) ⊕ scenario_seed` (wrapping XOR) — фиксация
+/// формулы плана ADR-0008 §5.7.2 (полная `seed = hash(content) ⊕
+/// scenario_seed ⊕ run_idx`: `run_idx` — ответственность FR-066, он
+/// добавляет слагаемое на вызове). Одинаковые `(content, scenario_seed)` →
+/// одинаковый сид → побитово одна выборка — контракт M5 (FR-066).
+/// Consumer — FR-066; до его merge — только тесты.
+#[allow(dead_code)]
+pub(crate) fn seed_from_parts(content: &str, scenario_seed: u64) -> u64 {
+    fnv1a64(content.as_bytes()) ^ scenario_seed
+}
+
+/// `ci_mean(mean, sigma, n, conf)` → размерность mean: ПОЛУШИРИНА
+/// доверительного интервала для среднего при нормальной аппроксимации —
+/// `z·σ/√n`, где `z = Φ⁻¹((1+conf)/2)` (statrs). Границы: `mean − δ` и
+/// `mean + δ` (Value скалярен — решено формулой потребителя: `mean −
+/// ci_mean(...)`/`mean + ci_mean(...)`; FR-017 — потребитель ДИ).
+/// n — целое ≥ 1 (Count или скаляр); conf — скаляр 0 ≤ conf < 1
+/// (conf = 1 — бесконечный интервал, BadCall). σ ≥ 0.
+/// Нормальная аппроксимация — решение «Открытого вопроса» № 3 FR-063
+/// (t-распределение — отдельный коммит при потребности волны V).
+fn ci_mean(values: &[Value]) -> Result<Value, EvalError> {
+    let func = "ci_mean";
+    let (_mean, sigma, unit) = location_scale_args(func, &values[0], &values[1])?;
+    if sigma < 0.0 || sigma.is_nan() {
+        return Err(EvalError::BadCall {
+            func: func.to_owned(),
+            msg: format!(
+                "σ должен быть неотрицательным, получено {}",
+                format_num(sigma)
+            ),
+        });
+    }
+    let n = sample_size_arg(func, &values[2])?;
+    let conf = prob_arg(func, "conf", &values[3])?;
+    if conf >= 1.0 {
+        return Err(EvalError::BadCall {
+            func: func.to_owned(),
+            msg: "conf должен быть < 1 (conf = 1 — бесконечный интервал)".to_owned(),
+        });
+    }
+    let z = if conf == 0.0 {
+        0.0
+    } else {
+        Normal::standard().inverse_cdf((1.0 + conf) / 2.0)
+    };
+    let delta = z * sigma / (n as f64).sqrt();
+    Ok(Value::with_unit(delta / unit.scale(), unit))
+}
+
+/// `normal_sample(μ, σ, n, seed)` → размерность μ: среднее
+/// детерминированной выборки n значений N(μ, σ²) — scalar-агрегат v1
+/// (решение «Открытого вопроса» № 4 FR-063; полный Monte Carlo с массивами
+/// — FR-066). μ/σ одной размерности, σ > 0; n — целое 1..=MAX_SAMPLE_SIZE;
+/// seed — целое ≥ 0 (u64).
+///
+/// RNG — `ChaCha8Rng::seed_from_u64(seed)`: единственный источник
+/// случайности (архдок §5.6.2; `thread_rng()` запрещён и не используется —
+/// rand подключён без getrandom-фич). Один сид → побитово одна выборка
+/// независимо от времени прогона — контракт M5 (FR-066).
+fn normal_sample(values: &[Value]) -> Result<Value, EvalError> {
+    let func = "normal_sample";
+    let (mu, sigma, unit) = location_scale_args(func, &values[0], &values[1])?;
+    if sigma <= 0.0 || sigma.is_nan() {
+        return Err(EvalError::BadCall {
+            func: func.to_owned(),
+            msg: format!(
+                "σ должен быть положительным, получено {}",
+                format_num(sigma)
+            ),
+        });
+    }
+    let n = sample_size_arg(func, &values[2])?;
+    let seed = seed_arg(func, &values[3])?;
+    // σ > 0 здесь — конструктор не ошибается; Err мапим без unwrap.
+    let dist = match RandNormal::new(mu, sigma) {
+        Ok(dist) => dist,
+        Err(_) => {
+            return Err(EvalError::BadCall {
+                func: func.to_owned(),
+                msg: "некорректные параметры нормального распределения".to_owned(),
+            })
+        }
+    };
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut total = 0.0f64;
+    for _ in 0..n {
+        total += dist.sample(&mut rng);
+    }
+    let mean_base = total / n as f64;
+    Ok(Value::with_unit(mean_base / unit.scale(), unit))
+}
+
+/// `lognormal_sample(μ, σ, n, seed)` → скаляр: среднее детерминированной
+/// выборки LogNormal(μ, σ²) (μ/σ — лог-пространство, строго безразмерны —
+/// как [`lognormal_quantile`]; агрегат — среднее выборки, не аналитическое
+/// `exp(μ+σ²/2)` — потому и «выборка»).
+fn lognormal_sample(values: &[Value]) -> Result<Value, EvalError> {
+    let func = "lognormal_sample";
+    let mu = strict_scalar(func, "μ (лог-пространство)", &values[0])?;
+    let sigma = strict_scalar(func, "σ (лог-пространство)", &values[1])?;
+    if sigma <= 0.0 || sigma.is_nan() {
+        return Err(EvalError::BadCall {
+            func: func.to_owned(),
+            msg: format!(
+                "σ должен быть положительным, получено {}",
+                format_num(sigma)
+            ),
+        });
+    }
+    let n = sample_size_arg(func, &values[2])?;
+    let seed = seed_arg(func, &values[3])?;
+    let dist = match LogNormal::new(mu, sigma) {
+        Ok(dist) => dist,
+        Err(_) => {
+            return Err(EvalError::BadCall {
+                func: func.to_owned(),
+                msg: "некорректные параметры логнормального распределения".to_owned(),
+            })
+        }
+    };
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut total = 0.0f64;
+    for _ in 0..n {
+        total += dist.sample(&mut rng);
+    }
+    Ok(Value::scalar(total / n as f64))
+}
+
+/// Размер выборки: целое 1..=MAX_SAMPLE_SIZE (Count или скаляр).
+fn sample_size_arg(func: &str, value: &Value) -> Result<usize, EvalError> {
+    let n = count_arg(func, "n", value)?;
+    if n < 1.0 || n > MAX_SAMPLE_SIZE as f64 {
+        return Err(EvalError::BadCall {
+            func: func.to_owned(),
+            msg: format!("n вне диапазона 1..={MAX_SAMPLE_SIZE}: {}", format_num(n)),
+        });
+    }
+    Ok(n as usize)
+}
+
+/// Сид: строго скаляр, целое 0..=u64::MAX (u64 для seed_from_u64).
+fn seed_arg(func: &str, value: &Value) -> Result<u64, EvalError> {
+    let num = strict_scalar(func, "seed", value)?;
+    if !num.is_finite() || num.fract() != 0.0 || num < 0.0 || num > u64::MAX as f64 {
+        return Err(EvalError::BadCall {
+            func: func.to_owned(),
+            msg: format!(
+                "seed должен быть неотрицательным целым 0..2⁶⁴−1, получено {}",
+                format_num(num)
+            ),
+        });
+    }
+    Ok(num as u64)
+}
 
 // --- Внутренние тесты ------------------------------------------------------
 
 #[cfg(all(test, feature = "stats"))]
 mod tests {
     use super::*;
+
+    /// FNV-1a 64 — публичные референс-векторы (фиксация алгоритма:
+    /// контракт детерминизма «Открытый вопрос» № 2 FR-063 — хеш обязан
+    /// быть стабильным между версиями Rust, в отличие от DefaultHasher).
+    #[test]
+    fn fnv1a64_known_vectors() {
+        // Пустая строка — offset basis
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+        // Классические векторы FNV-1a 64
+        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    /// seed_from_parts: детерминизм (те же части — тот же сид) и XOR-
+    /// семантика scenario_seed (смена сценария — другой сид того же контента).
+    #[test]
+    fn seed_from_parts_is_deterministic_xor() {
+        let s1 = seed_from_parts("gateway = 1000 rps", 42);
+        let s2 = seed_from_parts("gateway = 1000 rps", 42);
+        assert_eq!(s1, s2, "тот же (content, scenario_seed) — тот же сид");
+        assert_ne!(seed_from_parts("gateway = 1000 rps", 43), s1);
+        assert_ne!(seed_from_parts("gateway = 2000 rps", 42), s1);
+        // XOR: scenario_seed = 0 → сид = чистый хеш контента
+        assert_eq!(seed_from_parts("abc", 0), fnv1a64(b"abc"));
+    }
 
     /// location_scale_args: базовые единицы и юнит результата = юнит μ.
     #[test]
@@ -466,6 +698,5 @@ mod tests {
             prob_arg("t", "p", &Value::with_unit(0.5, rps)),
             Err(EvalError::BadCall { .. })
         ));
-        let _ = rps;
     }
 }
