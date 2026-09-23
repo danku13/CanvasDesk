@@ -78,6 +78,10 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         // невыделенных строк списков).
         BodyQuadKind::Leader => theme.gfm_muted_fill,
         BodyQuadKind::RowBg => theme.search_row_fill,
+        // FR-061 этап D (D-14/Q9): диагностика направляющих — вне палитры
+        // тем (принцип debug_overlay.rs: отладочные цвета отличаются от
+        // продуктовых), токен TABLE_GUIDE_DEBUG_COLOR.
+        BodyQuadKind::GuideDebug => canvas_core::tokens::TABLE_GUIDE_DEBUG_COLOR,
     }
 }
 
@@ -523,6 +527,27 @@ impl Renderer {
     pub fn set_theme(&mut self, theme: ThemeColors) {
         self.theme = theme;
         self.text.set_theme(theme);
+    }
+
+    /// FR-061 этап D (D-14): язык таблицы тела ноды (текст блока-заголовка
+    /// Н-2 «▸ расчёт · N строк» / «▸ calc · N lines»). Глобальная настройка
+    /// — вызывается приложением при старте и смене языка.
+    pub fn set_table_language(&mut self, language: canvas_core::Language) {
+        self.text.set_table_language(language);
+    }
+
+    /// FR-061 этап D (D-14/Q9): диагностика колоночных направляющих таблицы
+    /// тела — включается вместе с DebugOverlay (F9/?ui=debug), на ноде
+    /// невидима в обычном режиме (решение Q9).
+    pub fn set_table_guides_visible(&mut self, visible: bool) {
+        self.text.set_table_guides_visible(visible);
+    }
+
+    /// FR-061 этап D (D-8): описания манифестов шаблонов (id → описание) —
+    /// источник зоны описания шаблонных нод (Q3). Вызывается приложением
+    /// при построении/обновлении реестра шаблонов.
+    pub fn set_template_descs(&mut self, descs: std::collections::HashMap<String, String>) {
+        self.text.set_template_descs(descs);
     }
 
     /// Включить/выключить сетку канваса (настройки).

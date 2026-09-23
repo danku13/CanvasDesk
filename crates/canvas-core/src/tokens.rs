@@ -245,6 +245,40 @@ pub const CAMERA_FLIGHT_MS: u64 = 300;
 pub const RESULT_PULSE_MS: u64 = 1200;
 /// Дыхание фокусной связи. Источник: cards.rs:925-931.
 pub const FOCUS_BREATH_MS: u64 = 1600;
+/// Переход свёрнутости блока-ведомости Н-2 (FR-061 D-14; runtime v1 —
+/// включается вместе с hit-зонами app.rs). Источник: motion.json.
+pub const BODY_BLOCK_FLIP_MS: u64 = 150;
+/// Переход клампа описания D-8 «⋯ целиком ▾» (FR-061 D-14). Источник: motion.json.
+pub const BODY_CLAMP_MS: u64 = 150;
+
+// ---------------------------------------------------------------------------
+// Таблица тела ноды (FR-061 D-14, design/tokens/dimensions.json#table,
+// colors.json#table). Хром таблицы: зазоры/пунктиры/зебра/диагностика
+// направляющих. Кегли ячеек — typography.* (result/body). Значения =
+// текущим константам row_grid.rs/text.rs этапа B (I-1: ноль скачка).
+// ---------------------------------------------------------------------------
+
+/// Зазор между ячейками «значение»/«юнит»/«бейдж». Источник: row_grid.rs GUIDE_GAP.
+pub const TABLE_GUIDE_GAP: f32 = 6.0;
+/// Минимальная дорожка лидера — короче не рисуется. Источник: row_grid.rs LEADER_MIN.
+pub const TABLE_LEADER_MIN: f32 = 8.0;
+/// Зазор лидера до значения и от левого текста. Источник: row_grid.rs LEADER_PAD.
+pub const TABLE_LEADER_PAD: f32 = 4.0;
+/// Ширина штриха пунктира лидера. Источник: text.rs LEADER_DASH_W.
+pub const TABLE_LEADER_DASH: f32 = 2.0;
+/// Зазор штрихов пунктира лидера. Источник: text.rs LEADER_DASH_GAP.
+pub const TABLE_LEADER_GAP: f32 = 3.0;
+/// Толщина штриха пунктира. Источник: text.rs LEADER_H.
+pub const TABLE_LEADER_H: f32 = 1.0;
+/// Базовая линия строки (доля высоты строки). Источник: text.rs LEADER_Y_FRAC.
+pub const TABLE_LEADER_Y_FRAC: f32 = 0.62;
+/// Зебра — минимальный прогон строк (O-7). Источник: text.rs ZEBRA_RUN_MIN.
+pub const TABLE_ZEBRA_RUN_MIN: usize = 4;
+/// Кламп зоны описания D-8, строк. Источник: dimensions.json table.desc_clamp_lines.
+pub const TABLE_DESC_CLAMP_LINES: usize = 2;
+/// Диагностика колоночных направляющих в DebugOverlay (Q9: на ноде невидимы).
+/// Вне продуктовой палитры — принцип debug_overlay.rs. Источник: colors.json.
+pub const TABLE_GUIDE_DEBUG_COLOR: [f32; 4] = [0.549, 0.949, 0.2, 0.851];
 
 // ---------------------------------------------------------------------------
 // Тест паритета JSON↔Rust (инвариант I-5): расхождение = красный тест.
@@ -571,6 +605,22 @@ mod parity_tests {
         assert_eq!(dim("radius.card.$value"), CARD_CORNER_RADIUS);
         assert_eq!(dim("radius.panel.$value"), RADIUS_PANEL);
         assert_eq!(dim("radius.pill.$value"), RADIUS_PILL);
+        // FR-061 (D-14): хром таблицы тела ноды.
+        assert_eq!(dim("table.guide_gap.$value"), TABLE_GUIDE_GAP);
+        assert_eq!(dim("table.leader_min.$value"), TABLE_LEADER_MIN);
+        assert_eq!(dim("table.leader_pad.$value"), TABLE_LEADER_PAD);
+        assert_eq!(dim("table.leader_dash.$value"), TABLE_LEADER_DASH);
+        assert_eq!(dim("table.leader_gap.$value"), TABLE_LEADER_GAP);
+        assert_eq!(dim("table.leader_h.$value"), TABLE_LEADER_H);
+        assert_eq!(dim("table.leader_y_frac.$value"), TABLE_LEADER_Y_FRAC);
+        assert_eq!(
+            dim("table.zebra_run_min.$value") as usize,
+            TABLE_ZEBRA_RUN_MIN
+        );
+        assert_eq!(
+            dim("table.desc_clamp_lines.$value") as usize,
+            TABLE_DESC_CLAMP_LINES
+        );
     }
 
     #[test]
@@ -581,5 +631,20 @@ mod parity_tests {
         assert_eq!(ms("camera_flight_ms.$value"), CAMERA_FLIGHT_MS);
         assert_eq!(ms("result_pulse_ms.$value"), RESULT_PULSE_MS);
         assert_eq!(ms("focus_breath_ms.$value"), FOCUS_BREATH_MS);
+        // FR-061 (D-14): переходы режимов Н-3 (контракт runtime v1).
+        assert_eq!(ms("body_block_flip_ms.$value"), BODY_BLOCK_FLIP_MS);
+        assert_eq!(ms("body_clamp_ms.$value"), BODY_CLAMP_MS);
+    }
+
+    #[test]
+    fn json_table_debug_color_matches_rust_mirror() {
+        let root: Value = serde_json::from_str(COLORS).expect("colors.json валиден");
+        assert_eq!(
+            f32_arr4(
+                color(&root, "table.guide_debug.$value"),
+                "table.guide_debug"
+            ),
+            TABLE_GUIDE_DEBUG_COLOR
+        );
     }
 }

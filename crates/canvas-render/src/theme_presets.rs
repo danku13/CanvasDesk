@@ -84,6 +84,11 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         link: color("link"),
         quote: color("quote"),
         code_text: color("code_text"),
+        // FR-061 D (O-5): пресеты без собственных слотов формулы —
+        // семантические эквиваленты (функция — акцент ссылки, оператор —
+        // приглушённый тон цитаты).
+        formula_fn: color("link"),
+        formula_op: color("quote"),
         gfm_code_fill: rgba("gfm_code_fill"),
         gfm_quote_fill: rgba("gfm_quote_fill"),
         gfm_muted_fill: rgba("gfm_muted_fill"),
