@@ -4855,3 +4855,35 @@ Stage Summary:
 - Этап A FR-061 в main: домен и замер готов для этапа B (row_grid.rs + мультибуферный рендер text.rs), C (Н-3 режимы, Q1–Q4), D (полировка), E (kit-Row на RowGuides + Painter/WidgetState из FR-057/058).
 - Волна 2 (FR-056/057/058) + FR-061-A в main; FR-059/060 других агентов — вне зон FR-061.
 - Открытые вопросы к этапам B/C: Q2 (порог T, дефолт 4), Q3 (источник описания), Q5 (политика бейджей, дефолт авто), Q6 (ширина шаблонных нод, дефолт 360–400); Q9 решён владельцем (направляющие — только DebugOverlay).
+
+---
+Task ID: FR-061-B-C-START
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-061 этапы B и C — табличное тело ноды Н-3 (пре-PRD PRD-0004): D-2 RowGrid, D-4 мультибуферный рендер, D-5 лидеры/зебра, D-6 бейдж-колонка + деградация, D-11 кэш; D-7 порог T/блок-ведомость, D-9 Σ на направляющих, D-10 высоты, D-13 правка (приказ владельца «начинай реализацию этапа B и этапа C»; подготовка — верификация вливания FR-059 d701748 другим агентом)
+
+Work Log:
+- Верифицировано вливание FR-059 (merge d701748, агент синхронизировал main через 168493f — этап A и лицензионный каркас сохранены); зоны не пересекаются (FR-059 — canvas-app, этап B/C — canvas-render/canvas-core).
+- Ветка feature/fr-061-node-tabular-stage-b от d701748.
+- Зоны: crates/canvas-render/src/row_grid.rs (новый), crates/canvas-render/src/text.rs (тело ~950–3000: BodyItem/BodyBlock header+line_w, body_items, spill_row_items, сache-miss строки таблицы, фаза 2 ячейки, line_ports/param_ports), crates/canvas-render/src/lib.rs (export), crates/canvas-render/src/renderer.rs (2 руки body_quad_fill), crates/canvas-core/src/settings.rs+lib.rs (NODE_BODY_BLOCK_THRESHOLD), тесты row_grid/text; онбординг и зоны FR-059/060 не тронуты, app.rs не менялся.
+
+---
+Task ID: FR-061-B-C-FINISH
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: см. СТАРТ выше (этапы B и C FR-061)
+
+Work Log:
+- D-2: row_grid.rs — декларативная модель строки данных RowCells {kind, source_line, name, formula, value, unit, upstream, dim_value, badge, error_message} + RowKind {Auto, Param, Calc, Total} + RowBadge {Spill, Delta, Error}; build_rows из источников истины (текст, исходы eval, дельты what-if, SpillView, AutoRow) — разбор рода строки ТОЛЬКО через line_kind/движок; исправление против анализа: Calc — по наличию исхода (line_kind смотрит с пустым окружением — «a * 2» для него проза).
+- D-4: ячейки значение/юнит — отдельные буферы (RESULT-метрики, моно/oblique Р-2), право-прижатие по RowGuides (value_right/unit_right из этапа A); левая часть строки — прежний блок тела (I-1: result_row_y и порты не тронуты — T5 зелёный).
+- D-5: BodyQuadKind::Leader (пунктир 2/3 px на базовой линии) + RowBg (зебра, прогоны ≥ 4 по соседству блоков, Total не в зебре); заливки в renderer.rs body_quad_fill (muted/search_row).
+- D-6: бейдж-колонка каскада Р-1 у правого края; лестница деградации Text→Icon→None в row_grid::pass_a (точная арифметика против body_width, T2-инвариант на корпусе tcp-lb 300/384/520; числа/юниты не деградируют).
+- D-11: направляющие — чистая функция входов ключа кэша (текст/ширина/зум/исходы); pass_key отпечаток заготовлен (активируется в этапах D/E с runtime-состоянием).
+- D-7: NODE_BODY_BLOCK_THRESHOLD=4 (Q2-дефолт, settings.rs); block_mode/calc_row_count/block_header_text (RU-плюрализация «строка/строки/строк»); заголовок «▸ расчёт · N строк» вставляется в ОБЩЕМ body_items перед первой расчётной строкой → measure_body_height = рендер (I-2, тест-паритет).
+- D-9: Σ узлового итога (result_text) — ячейка значения строки-заголовка на направляющей чисел (без лидера и зебры).
+- D-10/D-13: высоты через общий стек + существующий growth-only fit (measured_result_reserve_height); правка — прежняя деградация (body_hidden, live-буферы FR-013 пр.4) подтверждена.
+- ОТЛОЖЕНО в этап D (зафиксировано в CR): свёрнутость блока/клик (hit-зоны app.rs — отдельное согласование), зона описания+кламп D-8, ellipsis формулы, DebugOverlay направляющих.
+- line_results (FR-013 пр.2) заменён декларативными rows; line_ports/param_ports переведены на rows — семантика прежняя (регресс-тесты портов зелёные без правок).
+
+Stage Summary:
+- Гейты зелёные: cargo fmt --all --check; clippy -D warnings; cargo test --workspace (52 сьюта, 0 отказов; 332 в canvas-render, +14 новых: 11 row_grid + 2 block_header + 1 обновлённый spill-текст); wasm_gate; mcp_wasm_gate.
+- Доки: CR-061 (статус «этапы A+B+C выполнены», история с деталями и отложенными), index-cr-fr.md, docs/prd/README.md (prd-0004).
+- Осталось по FR-061: этап D (полировка: токены table.*, motion, i18n, DebugOverlay, D-8 описание/кламп, ellipsis, свёрнутость+клик) и этап E (kit-Row D-15); открытые вопросы Q2 (дефолт 4 применён), Q3, Q5 (дефолт авто применён), Q6.

@@ -24,9 +24,11 @@ use crate::camera::Camera;
 use crate::cards::{dim_color, extension_letter, title_for, FocusView, HEADER_HEIGHT};
 use crate::gfm;
 use crate::markdown;
+/// FR-061 этап B: табличная модель тела ноды (D-2) + проход A (D-6/D-11).
+use crate::row_grid;
 use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
-use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
+use canvas_core::expr::{line_kind, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind};
 
 /// Встроенные шрифты (SIL OFL 1.1 — см. assets/fonts/OFL-NotoSans*.txt).
 /// СТАТИЧЕСКИЕ инстансы (CR-009): cosmic-text 0.12 не инстанцирует вариации
@@ -134,6 +136,34 @@ const LINE_ERROR_BADGE: &str = "!";
 /// px в каждую сторону — один глиф «!» слишком мал для точного попадания
 /// курсора.
 const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
+
+/// FR-061 этап B: высота строки авто-строки (world-px, FR-050 Р-4) —
+/// метрика префикса «Переменные · входящие значения»; ячейки таблицы
+/// центрируются в своей строке по этой высоте (I-1: Y-ряд не меняется).
+const AUTO_ROW_LINE_HEIGHT: f32 = 18.0;
+/// FR-061 этап B (D-5): длина штриха и зазора пунктира лидера (world-px) —
+/// паттерн прототипа 2/3 px (анализ §3.1, O-2).
+const LEADER_DASH_W: f32 = 2.0;
+const LEADER_DASH_GAP: f32 = 3.0;
+/// FR-061 этап B (D-5): зебра — фон через строку в прогонах ≥ 4 строк данных.
+const ZEBRA_RUN_MIN: usize = 4;
+/// FR-061 этап B (D-5): толщина линии лидера (world-px).
+const LEADER_H: f32 = 1.0;
+/// FR-061 этап B (D-5): вертикаль лидера в строке (доля высоты строки —
+/// базовая линия прототипа).
+const LEADER_Y_FRAC: f32 = 0.62;
+
+/// FR-061 этап B: янтарный цвет unmapped-значений (Р-3) — тот же тон,
+/// что пунктир unmapped-ребра (см. spill_row_items).
+fn unmapped_color() -> Color {
+    let c = crate::cards::UNMAPPED_EDGE_COLOR;
+    Color::rgba(
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8,
+        (c[3] * 255.0) as u8,
+    )
+}
 
 /// FR-013 (правка 4): зона наведения бейджа ошибки формульной строки —
 /// логические px окна (x, y, w, h) и текст ошибки для тултипа. Собирается
@@ -344,6 +374,56 @@ pub fn result_row_y(node: &Node, block_offset_y: f32) -> f32 {
     body_area(node).0[1] + block_offset_y + (BODY_LINE_HEIGHT - RESULT_LINE_HEIGHT) / 2.0
 }
 
+/// FR-061 этап B: блок тела по исходной строке — общий поиск для портов/
+/// якорей (строки таблицы ссылаются на ту же геометрию блоков, I-1).
+fn entry_body_block(entry: &CachedTitle, source_line: usize) -> Option<&BodyBlock> {
+    entry
+        .body
+        .as_ref()?
+        .blocks
+        .iter()
+        .find(|block| block.source_line == Some(source_line))
+}
+
+/// FR-061 этап B (D-4): зашейпить ячейку строки таблицы (значение/юнит/
+/// бейдж) — метрики строки результата (RESULT_*), база передаётся вызывающим
+/// (моно/наклонное моно Р-2); цвет ячейки — default_color TextArea (как у
+/// результатов FR-013). Пустой текст — ячейки нет.
+fn shape_row_cell(
+    font_system: &mut FontSystem,
+    text: &str,
+    attrs: Attrs<'static>,
+    color: Color,
+    area_px: f32,
+    zoom_px: f32,
+) -> Option<CachedCell> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut buffer = Buffer::new(
+        font_system,
+        Metrics::new(RESULT_FONT_SIZE * zoom_px, RESULT_LINE_HEIGHT * zoom_px),
+    );
+    buffer.set_wrap(font_system, Wrap::None);
+    buffer.set_size(
+        font_system,
+        Some(area_px),
+        Some(RESULT_LINE_HEIGHT * zoom_px),
+    );
+    buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+    buffer.shape_until_scroll(font_system, false);
+    let width_px = buffer
+        .layout_runs()
+        .next()
+        .map(|run| run.line_w)
+        .unwrap_or(0.0);
+    Some(CachedCell {
+        buffer,
+        width_px,
+        color,
+    })
+}
+
 /// FR-025: world-вертикаль ряда результата шаблонной/expr-ноды — центр
 /// футера результата (FR-023): узловое значение сидит в футере карточки.
 pub fn result_footer_y(node: &Node) -> f32 {
@@ -458,6 +538,13 @@ pub enum BodyQuadKind {
     WhatIfBg,
     /// Горизонтальная линия `---`.
     Rule,
+    /// FR-061 этап B (D-5): пунктирная дорожка лидера от конца формулы
+    /// до направляющей чисел (паттерн чека/оглавления, прототип O-2).
+    /// Рисуется штрихами 2/3 px на базовой линии строки данных.
+    Leader,
+    /// FR-061 этап B (D-5): фон зебры — полупрозрачная подложка через
+    /// строку в прогонах ≥ 4 строк данных (прототип O-7).
+    RowBg,
 }
 
 /// Декоративный квад тела заметки: rect — [x, y, w, h] в px виртуального
@@ -478,11 +565,17 @@ struct BodyBlock {
     width: f32,
     /// Высота блока (world-px), по layout_runs.
     height: f32,
+    /// FR-061 этап B: ширина ЗАШЕЙПЛЕННОГО текста блока (px буфера) —
+    /// конец левого текста строки данных (старт лидера D-5, проход A
+    /// row_grid::pass_a).
+    line_w: f32,
     /// Цвет текста блока (цитата/код приглушены/акцентные).
     color: Color,
     /// FR-013 (правка 2): строка исходного текста — у блоков формульных
     /// строк (None — обычный блок из сплошного сегмента).
     source_line: Option<usize>,
+    /// FR-061 этап C (D-7): заголовок блока-ведомости — привязка Σ-строки.
+    header: bool,
     /// FR-050 Н9-2 (этап D): данные тултипа проливания — блок
     /// пролитой строки (авто-строка/параметр); hit-зона собирается
     /// в цикле отрисовки тела.
@@ -531,6 +624,9 @@ struct BodyItem {
     oblique: bool,
     /// FR-050 Н9-2 (этап D): данные тултипа проливания (пролитая строка).
     spill: Option<SpillHitKind>,
+    /// FR-061 этап C (D-7): заголовок блока-ведомости «▸ расчёт · N строк»
+    /// — привязка Σ-ячейки (RowKind::Total) к своему блоку.
+    header: bool,
 }
 
 /// Метрики заголовка по уровню ATX: 1–3 крупно, 4–6 как bold body.
@@ -620,7 +716,21 @@ fn body_items(
     if seg_start < lines.len() {
         segments.push((seg_start, lines.len(), None));
     }
+    // FR-061 этап C (D-7): заголовок блока-ведомости — вставка перед
+    // ПЕРВОЙ расчётной строкой при числе данных > T (Q2); общий расчёт
+    // для рендера и измерения (один body_items в общем стеке, I-2).
+    let header_plan = block_header_plan(&lines, formula_lines);
     for (seg_start, seg_end, source_line) in segments {
+        if let Some((header_line, calc_count)) = header_plan {
+            if source_line == Some(header_line) {
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (true, false, None),
+                    block_header_item(theme, calc_count),
+                );
+            }
+        }
         let seg_text = lines[seg_start..seg_end].join("\n");
         // FR-050: пролитая строка параметра — наклонное начертание Р-2
         // и данные тултипа источника (Н9-2).
@@ -637,6 +747,49 @@ fn body_items(
         );
     }
     out
+}
+
+/// FR-061 этап C (D-7): план заголовка блока-ведомости — `Some((первая
+/// расчётная строка, число расчётных))`, когда строк данных (параметры +
+/// расчёт — все строки с исходами; авто-строки не входят по построению)
+/// больше порога T (Q2, дефолт 4) и среди них есть расчётные. Чистая
+/// функция — рендер и измерение не разъезжаются (I-2).
+fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, usize)> {
+    let calc: Vec<usize> = formula_lines
+        .iter()
+        .copied()
+        .filter(|&i| {
+            lines
+                .get(i)
+                .is_some_and(|line| !matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+        })
+        .collect();
+    if formula_lines.len() > canvas_core::NODE_BODY_BLOCK_THRESHOLD && !calc.is_empty() {
+        Some((*calc.first()?, calc.len()))
+    } else {
+        None
+    }
+}
+
+/// FR-061 этап C (D-7): элемент-заголовок блока «▸ расчёт · N строк» —
+/// моно-жирный, приглушённый цвет кода; высота строки тела (I-1).
+fn block_header_item(theme: &ThemeColors, calc_count: usize) -> BodyItem {
+    BodyItem {
+        gap: 0.0, // push_item пересчитает по предыдущему блоку
+        rule: false,
+        text: row_grid::block_header_text(calc_count),
+        font_size: BODY_FONT_SIZE,
+        line_height: BODY_LINE_HEIGHT,
+        color: theme.code_text,
+        indent: 0.0,
+        mono: true,
+        bold: true,
+        deco: ItemDeco::None,
+        source_line: None,
+        oblique: false,
+        spill: None,
+        header: true,
+    }
 }
 
 /// FR-050 Н9-2 (этап D): данные тултипа пролитой строки параметра —
@@ -665,21 +818,17 @@ fn spill_row_items(
         let unmapped = row.value.is_none();
         // Р-3: unmapped — янтарный акцент анализа (тот же тон, что
         // пунктир unmapped-ребра UNMAPPED_EDGE_COLOR, f32 → u8).
-        let amber = {
-            let c = crate::cards::UNMAPPED_EDGE_COLOR;
-            Color::rgba(
-                (c[0] * 255.0) as u8,
-                (c[1] * 255.0) as u8,
-                (c[2] * 255.0) as u8,
-                (c[3] * 255.0) as u8,
-            )
-        };
+        let amber = unmapped_color();
+        // FR-061 этап B: левая часть авто-строки — ТОЛЬКО имя (путь);
+        // значение/юнит — ячейки таблицы на направляющих (D-2/D-4),
+        // высота строки прежняя (I-1). display_text сохранён для ключа
+        // кэша (значение upstream меняет строку → перешейп).
         out.push(BodyItem {
             gap: if i == 0 { 0.0 } else { 2.0 },
             rule: false,
-            text: row.display_text(),
+            text: row.path.clone(),
             font_size: 13.0,
-            line_height: 18.0,
+            line_height: AUTO_ROW_LINE_HEIGHT,
             color: if unmapped { amber } else { theme.code_text },
             indent: 6.0,
             mono: true,
@@ -694,6 +843,7 @@ fn spill_row_items(
                 template,
                 edge_id: row.edge_id.clone(),
             }),
+            header: false,
         });
     }
     out
@@ -734,6 +884,7 @@ fn push_gfm_blocks(
                         source_line,
                         oblique: false,
                         spill: None,
+                        header: false,
                     },
                 );
             }
@@ -761,6 +912,7 @@ fn push_gfm_blocks(
                         // локального) + данные тултипа источника (Н9-2).
                         oblique: spill.is_some(),
                         spill: spill.map(spill_hit_param),
+                        header: false,
                     },
                 );
             }
@@ -783,6 +935,7 @@ fn push_gfm_blocks(
                         source_line,
                         oblique: false,
                         spill: None,
+                        header: false,
                     },
                 );
             }
@@ -805,6 +958,7 @@ fn push_gfm_blocks(
                         source_line,
                         oblique: false,
                         spill: None,
+                        header: false,
                     },
                 );
             }
@@ -827,6 +981,7 @@ fn push_gfm_blocks(
                         source_line,
                         oblique: false,
                         spill: None,
+                        header: false,
                     },
                 );
             }
@@ -862,6 +1017,7 @@ fn push_gfm_blocks(
                             source_line,
                             oblique: false,
                             spill: None,
+                            header: false,
                         },
                     );
                 }
@@ -1140,13 +1296,22 @@ fn shape_body(
                     });
                 }
             }
+            // FR-061 этап B: ширина зашейпленного текста — старт лидера
+            // строки данных (D-5) и вход прохода A (left_max); до переноса
+            // буфера в блок (move).
+            let line_w = buffer
+                .layout_runs()
+                .map(|run| run.line_w)
+                .fold(0.0f32, f32::max);
             blocks.push(BodyBlock {
                 buffer,
                 offset: [item.indent, cursor_y],
                 width: block_width,
                 height,
+                line_w,
                 color: item.color,
                 source_line: item.source_line,
+                header: item.header,
                 spill: item.spill.clone(),
             });
         },
@@ -1449,9 +1614,13 @@ struct CachedTitle {
     /// FR-013: ширина зашейпленного программного итога в px буфера — для
     /// выравнивания по правому краю футера (TextArea.left = right − width).
     result_width_px: f32,
-    /// FR-013 (правка 2): зашейпленные результаты формульных строк
-    /// (Numi-стиль) — правый край своей строки.
-    line_results: Vec<LineResultBuf>,
+    /// FR-061 этап B: табличные строки ноды (D-2) — ячейки
+    /// значение/юнит/бейдж шейпятся вместе с кэшем, позиционируются
+    /// по направляющим ([`CachedTitle::row_guides`]) покадрово.
+    rows: Vec<CachedRow>,
+    /// FR-061 этап B: колоночные направляющие таблицы ноды (проход A,
+    /// row_grid::pass_a). None — строк данных нет (таблицы нет).
+    row_guides: Option<canvas_ui::row_guides::RowGuides>,
     zoom_px: f32,
     width_px: f32,
     title_text: String,
@@ -1462,20 +1631,39 @@ struct CachedTitle {
     last_used: u64,
 }
 
-/// FR-013 (правка 2): зашейпленный результат одной формульной строки.
-struct LineResultBuf {
+/// FR-061 этап B: строка таблицы ноды в кэше (D-2/D-4): левой частью
+/// строки остаётся блок тела (I-1 — Y-ряд не тронут), правые ячейки —
+/// свои буферы, право-выровненные по направляющим.
+struct CachedRow {
+    /// Род строки — хром: зебра не заходит на заголовок блока (Total),
+    /// лидер у заголовка не рисуется.
+    kind: row_grid::RowKind,
+    /// Индекс строки текста (Param/Calc); None — авто-строка префикса/заголовок.
+    source_line: Option<usize>,
+    /// Имя строки (параметр/путь авто-строки) — якоря параметров Н2
+    /// (param_ports) сверяют со снапшотом шаблона по нему.
+    name: String,
+    /// Верх строки (world-px, block-local — как [`BodyBlock::offset`]).
+    row_top: f32,
+    /// Высота строки (world-px): BODY_LINE_HEIGHT у Param/Calc,
+    /// AUTO_ROW_LINE_HEIGHT у авто-строк — вертикальное центрирование ячеек.
+    row_line_h: f32,
+    /// Конец левого текста (world-px от левого края тела) — старт лидера.
+    left_end: f32,
+    /// Зебра (D-5): строка в прогоне ≥ 4, чётная позиция внутри прогона.
+    zebra: bool,
+    value: Option<CachedCell>,
+    unit: Option<CachedCell>,
+    badge: Option<CachedCell>,
+    /// Полный текст ошибки (тултип «!», механика FR-013 пр.4).
+    error_message: Option<String>,
+}
+
+/// Зашейпленная ячейка строки: буфер + ширина (px буфера) + цвет.
+struct CachedCell {
     buffer: Buffer,
-    /// Ширина строки результата в px буфера — для правого выравнивания.
     width_px: f32,
-    /// Индекс строки текста ноды, к которой привязан результат.
-    source_line: usize,
-    /// Ошибка — красный бейдж «!» вместо текста (правка 4).
-    error: bool,
-    /// FR-013 (правка 4): полный текст ошибки — для тултипа при наведении
-    /// на бейдж (None для успешных строк).
-    message: Option<String>,
-    /// FR-017 (CP6): дельта what-if — янтарный бейдж «было → стало (+Δ)».
-    whatif: bool,
+    color: Color,
 }
 
 /// Зашейпленный лейбл связи (T8): валиден при том же тексте и зуме.
@@ -1502,6 +1690,9 @@ pub struct TextSystem {
     renderers: Vec<TextRenderer>,
     /// Кэш Buffer'ов по индексу ноды (T5: не шейпить 1500 заголовков каждый кадр).
     cache: HashMap<usize, CachedTitle>,
+    /// FR-061 этап B: измеритель ячеек таблицы (TextMeasurer F-6, кэш
+    /// ширин) — проход A направляющих (row_grid::pass_a).
+    measurer: canvas_ui::measure::TextMeasurer,
     /// Кэш лейблов связей по id связи (T8).
     label_cache: HashMap<String, CachedEdgeLabel>,
     /// FR-013 (правка 4): зоны наведения бейджей ошибок формульных строк
@@ -1539,6 +1730,7 @@ impl TextSystem {
             viewport,
             renderers: vec![renderer],
             cache: HashMap::new(),
+            measurer: canvas_ui::measure::TextMeasurer::new(),
             label_cache: HashMap::new(),
             line_error_hits: Vec::new(),
             spill_hits: Vec::new(),
@@ -1633,31 +1825,33 @@ impl TextSystem {
     pub fn line_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::LinePort> {
         let right = node.x + node.width;
         let is_template = node.template().is_some();
-        let mut ports: Vec<canvas_core::LinePort> =
-            match self.cache.get(&index) {
-                Some(entry) => {
-                    let total = entry.line_results.len();
-                    entry
-                        .line_results
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, line_result)| {
-                            let block =
-                                entry.body.as_ref()?.blocks.iter().find(|block| {
-                                    block.source_line == Some(line_result.source_line)
-                                })?;
-                            Some(canvas_core::LinePort {
-                                line: Some(line_result.source_line),
-                                point: [right, result_row_y(node, block.offset[1])],
-                                // У шаблонной ноды «финальный» порт один — футер;
-                                // строки листа параметров всегда промежуточные
-                                is_final: i + 1 == total && !is_template,
-                            })
-                        })
-                        .collect()
-                }
-                None => Vec::new(),
-            };
+        // FR-061 этап B: источники портов — строки таблицы с исходной
+        // строкой (Param/Calc; авто-строки портов не дают, прежняя
+        // семантика line_results сохранена — D-12, I-1).
+        let source_rows: Vec<&CachedRow> = match self.cache.get(&index) {
+            Some(entry) => entry
+                .rows
+                .iter()
+                .filter(|row| row.source_line.is_some())
+                .collect(),
+            None => Vec::new(),
+        };
+        let total = source_rows.len();
+        let mut ports: Vec<canvas_core::LinePort> = source_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| {
+                let source_line = row.source_line?;
+                let block = entry_body_block(self.cache.get(&index)?, source_line)?;
+                Some(canvas_core::LinePort {
+                    line: Some(source_line),
+                    point: [right, result_row_y(node, block.offset[1])],
+                    // У шаблонной ноды «финальный» порт один — футер;
+                    // строки листа параметров всегда промежуточные
+                    is_final: i + 1 == total && !is_template,
+                })
+            })
+            .collect();
         if is_template {
             ports.push(canvas_core::LinePort {
                 line: None,
@@ -1684,31 +1878,18 @@ impl TextSystem {
             return Vec::new();
         };
         entry
-            .line_results
+            .rows
             .iter()
-            .filter_map(|line_result| {
-                let block = entry
-                    .body
-                    .as_ref()?
-                    .blocks
-                    .iter()
-                    .find(|block| block.source_line == Some(line_result.source_line))?;
-                let raw = node
-                    .text
-                    .as_deref()
-                    .and_then(|text| text.lines().nth(line_result.source_line))?;
-                let canvas_core::expr::NumiLineKind::Assignment { name } =
-                    canvas_core::expr::line_kind(raw)
-                else {
-                    return None;
-                };
-                // Имя строки вне снапшота параметров (правка текста руками) —
-                // не адрес toParam, якоря не даём (E-PORT-UNKNOWN у MCP)
-                if !template.params.contains_key(&name) {
+            .filter_map(|row| {
+                // FR-061 этап B: имя — из строки таблицы (тот же line_kind,
+                // что и при сборке D-2 — дубля разбора нет).
+                let source_line = row.source_line?;
+                if !template.params.contains_key(&row.name) {
                     return None;
                 }
+                let block = entry_body_block(entry, source_line)?;
                 Some(canvas_core::ParamPort {
-                    param: name,
+                    param: row.name.clone(),
                     point: [node.x, result_row_y(node, block.offset[1])],
                 })
             })
@@ -1920,10 +2101,6 @@ impl TextSystem {
                     .get(&node.id)
                     .map(|spills| spills.as_slice())
                     .unwrap_or(&[]);
-                let spill_values: std::collections::HashMap<usize, &str> = spill_views
-                    .iter()
-                    .filter_map(|spill| spill.line.zip(spill.value.as_deref()))
-                    .collect();
                 let spill_key = if spill_views.is_empty() {
                     String::new()
                 } else {
@@ -2035,7 +2212,7 @@ impl TextSystem {
                     } else {
                         spill_row_items(&self.theme, auto_rows, node.template().is_some())
                     };
-                    let body = if body_text.is_empty() && spill_prefix.is_empty() {
+                    let mut body = if body_text.is_empty() && spill_prefix.is_empty() {
                         None
                     } else {
                         let (_, body_width, _) = body_area(node);
@@ -2089,98 +2266,276 @@ impl TextSystem {
                         (Some(buffer), result_width_px)
                     };
 
-                    // FR-013 (правка 2): буферы результатов формульных строк
-                    // (Numi-стиль) — шейпятся вместе с кэшем ноды; ошибка —
-                    // красный бейдж «!» (правка 4: полный текст уходит в
-                    // тултип, длинные сообщения не влезают в строку ноды)
-                    let line_results = line_outcomes
-                        .map(|lines| {
-                            let (_, body_width, _) = body_area(node);
-                            let area_px = (body_width * zoom_px).max(1.0);
-                            lines
+                    // FR-061 этап B (D-2/D-4/D-5/D-6): табличные строки ноды —
+                    // декларативная сборка ячеек (row_grid::build_rows),
+                    // проход A направляющих с лестницей деградации бейджей
+                    // (row_grid::pass_a), шейп ячеек значение/юнит/бейдж и
+                    // квады хрома (лидер/зебра — D-5). Левая часть строки —
+                    // существующий блок тела (I-1: Y-ряд не тронут).
+                    let mut rows: Vec<CachedRow> = Vec::new();
+                    let mut row_guides = None;
+                    if let Some(layout) = body.as_mut() {
+                        let (_, body_width, _) = body_area(node);
+                        let whatif_deltas: &[(usize, String)] = whatif_nodes
+                            .get(&node.id)
+                            .map(|whatif| whatif.line_deltas.as_slice())
+                            .unwrap_or(&[]);
+                        let mut rows_data = row_grid::build_rows(
+                            &body_text,
+                            line_outcomes.map(|lines| lines.as_slice()),
+                            whatif_deltas,
+                            spill_views,
+                            auto_rows,
+                        );
+                        // FR-061 этап C (D-7/D-9): заголовок блока-ведомости
+                        // (Н-2) — Σ узлового итога на направляющей чисел;
+                        // вставка перед первой расчётной строкой, зеркально
+                        // заголовочному блоку в body_items (тот же план —
+                        // block_header_plan в общем стеке, I-2).
+                        if row_grid::block_mode(&rows_data, canvas_core::NODE_BODY_BLOCK_THRESHOLD)
+                        {
+                            let calc_count = row_grid::calc_row_count(&rows_data);
+                            let sigma = if result_error || result_text.is_empty() {
+                                String::new()
+                            } else {
+                                result_text.clone()
+                            };
+                            if let Some(idx) = rows_data
                                 .iter()
-                                .enumerate()
-                                .filter_map(|(i, outcome)| {
-                                    let outcome = outcome.as_ref()?;
-                                    // FR-029: у пролитой строки бейдж —
-                                    // эффективное значение (пересчёт с
-                                    // окружением, включая проливание), а не
-                                    // локальный литерал; локальная ошибка
-                                    // при этом скрывается (источник истины —
-                                    // значение потока).
-                                    // FR-017: дельта активного сценария —
-                                    // полный формат «было → стало (+Δ)»
-                                    // вместо голого значения (один ряд:
-                                    // резерв под вторую строку мутировал
-                                    // бы модель — инвариант 2 FR-017).
-                                    let whatif_delta =
-                                        whatif_nodes.get(&node.id).and_then(|whatif| {
-                                            whatif
-                                                .line_deltas
-                                                .iter()
-                                                .find(|(line, _)| *line == i)
-                                                .map(|(_, delta)| delta.clone())
-                                        });
-                                    // FR-017: строка с дельтой — янтарный бейдж.
-                                    let whatif_line = whatif_delta.is_some();
-                                    let (text, message) = if let Some(delta) = whatif_delta {
-                                        (delta, None)
-                                    } else {
-                                        match spill_values.get(&i) {
-                                            Some(value) => ((*value).to_owned(), None),
-                                            None => match outcome {
-                                                ExprOutcome::Ok(value) => (value.to_string(), None),
-                                                ExprOutcome::Err(msg) => {
-                                                    (LINE_ERROR_BADGE.to_owned(), Some(msg.clone()))
-                                                }
-                                            },
-                                        }
+                                .position(|row| row.kind == row_grid::RowKind::Calc)
+                            {
+                                rows_data.insert(
+                                    idx,
+                                    row_grid::RowCells {
+                                        kind: row_grid::RowKind::Total,
+                                        source_line: None,
+                                        name: row_grid::block_header_text(calc_count),
+                                        formula: String::new(),
+                                        value: sigma,
+                                        unit: String::new(),
+                                        upstream: false,
+                                        dim_value: false,
+                                        badge: None,
+                                        error_message: None,
+                                    },
+                                );
+                            }
+                        }
+                        // Привязка строк к геометрии блоков: авто-строки —
+                        // префиксные блоки (по порядку), Param/Calc — блок
+                        // своей строки текста (I-1: те же Y, что у портов).
+                        let auto_blocks: Vec<usize> = layout
+                            .blocks
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(pos, block)| {
+                                matches!(block.spill, Some(SpillHitKind::AutoRow { .. }))
+                                    .then_some(pos)
+                            })
+                            .collect();
+                        let mut auto_i = 0usize;
+                        // Геометрия строк: (row_top, line_h, left_end, block_idx)
+                        let mut geo: Vec<(f32, f32, f32, usize)> =
+                            Vec::with_capacity(rows_data.len());
+                        for row in &rows_data {
+                            // FR-061 этап C: заголовок блока (Total) — блок с
+                            // маркером header (вставка в body_items, I-2).
+                            let found = match row.kind {
+                                row_grid::RowKind::Total => {
+                                    layout.blocks.iter().position(|block| block.header)
+                                }
+                                row_grid::RowKind::Auto => {
+                                    let pos = auto_blocks.get(auto_i).copied();
+                                    auto_i += 1;
+                                    pos
+                                }
+                                _ => row.source_line.and_then(|line| {
+                                    layout
+                                        .blocks
+                                        .iter()
+                                        .position(|block| block.source_line == Some(line))
+                                }),
+                            };
+                            match found {
+                                Some(pos) => {
+                                    let block = &layout.blocks[pos];
+                                    let line_h = match row.kind {
+                                        row_grid::RowKind::Auto => AUTO_ROW_LINE_HEIGHT,
+                                        _ => BODY_LINE_HEIGHT,
                                     };
-                                    if text.is_empty() {
-                                        return None;
-                                    }
-                                    let mut buffer = Buffer::new(
+                                    let left_end =
+                                        block.offset[0] + block.line_w / zoom_px.max(1e-6);
+                                    geo.push((block.offset[1], line_h, left_end, pos));
+                                }
+                                // Строка без блока (рассинхрон текста/исходов)
+                                // — не рисуется, портов не даёт.
+                                None => geo.push((f32::NAN, 0.0, 0.0, usize::MAX)),
+                            }
+                        }
+                        // Строки без блоков выбрасываются (геометрии нет).
+                        let mut i = 0;
+                        while i < rows_data.len() {
+                            if geo[i].3 == usize::MAX {
+                                rows_data.remove(i);
+                                geo.remove(i);
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        // Проход A: направляющие + режим бейджей (детерминизм
+                        // — входы уже в ключе кэша: текст/ширина/зум/исходы).
+                        let left_max = geo.iter().map(|g| g.2).fold(0.0f32, f32::max);
+                        let pass = row_grid::pass_a(
+                            &mut self.measurer,
+                            &mut self.font_system,
+                            &rows_data,
+                            left_max,
+                            body_width,
+                            MONO_FAMILY,
+                            RESULT_FONT_SIZE,
+                        );
+                        row_guides = pass.guides;
+                        // Зебра (D-5): прогоны ПОДРЯД идущих строк данных —
+                        // соседство по индексам блоков (проза между строками
+                        // рвёт прогон), чётные позиции внутри прогона ≥ 4.
+                        let mut zebra: Vec<bool> = vec![false; rows_data.len()];
+                        let mut j = 0;
+                        while j < geo.len() {
+                            let mut k = j + 1;
+                            while k < geo.len()
+                                && geo[k].3 == geo[k - 1].3 + 1
+                                && !matches!(rows_data[k].kind, row_grid::RowKind::Total)
+                            {
+                                k += 1;
+                            }
+                            if k - j >= ZEBRA_RUN_MIN {
+                                for (pos, z) in zebra[j..k].iter_mut().enumerate() {
+                                    // Заголовок блока зебры не получает (D-5:
+                                    // зебра — фон строк данных).
+                                    *z = pos % 2 == 1
+                                        && !matches!(
+                                            rows_data[j + pos].kind,
+                                            row_grid::RowKind::Total
+                                        );
+                                }
+                            }
+                            j = k;
+                        }
+                        // Шейп ячеек (D-4): значение/юнит — по частям D-1,
+                        // бейдж — по режиму лестницы (D-6). Пролитые/авто —
+                        // наклонное моно Р-2 (метрики те же — I-1).
+                        let area_px = (body_width * zoom_px).max(1.0);
+                        let amber = unmapped_color();
+                        for ((row, g), z) in rows_data.iter().zip(&geo).zip(&zebra) {
+                            let attrs = if row.upstream {
+                                mono_oblique_attrs()
+                            } else {
+                                mono_attrs()
+                            };
+                            let value_color =
+                                if row.kind == row_grid::RowKind::Auto && row.dim_value {
+                                    amber
+                                } else {
+                                    self.theme.link
+                                };
+                            let badge = match (&row.badge, pass.badge_mode) {
+                                (
+                                    Some(badge),
+                                    mode @ (row_grid::BadgeMode::Text | row_grid::BadgeMode::Icon),
+                                ) => {
+                                    let color = match badge {
+                                        row_grid::RowBadge::Spill { .. } => self.theme.link,
+                                        row_grid::RowBadge::Delta(_) => self.theme.whatif_badge,
+                                        row_grid::RowBadge::Error => self.theme.error,
+                                    };
+                                    let text = match mode {
+                                        row_grid::BadgeMode::Text => badge.text(),
+                                        _ => badge.icon(),
+                                    };
+                                    shape_row_cell(
                                         &mut self.font_system,
-                                        Metrics::new(
-                                            RESULT_FONT_SIZE * zoom_px,
-                                            RESULT_LINE_HEIGHT * zoom_px,
-                                        ),
-                                    );
-                                    buffer.set_wrap(&mut self.font_system, Wrap::None);
-                                    buffer.set_size(
-                                        &mut self.font_system,
-                                        Some(area_px),
-                                        Some(RESULT_LINE_HEIGHT * zoom_px),
-                                    );
-                                    buffer.set_text(
-                                        &mut self.font_system,
-                                        &text,
+                                        text,
                                         mono_attrs(),
-                                        Shaping::Advanced,
-                                    );
-                                    buffer.shape_until_scroll(&mut self.font_system, false);
-                                    let width_px = buffer
-                                        .layout_runs()
-                                        .next()
-                                        .map(|run| run.line_w)
-                                        .unwrap_or(0.0);
-                                    Some(LineResultBuf {
-                                        buffer,
-                                        width_px,
-                                        source_line: i,
-                                        // FR-029: пролитая строка со
-                                        // значением — не ошибка, даже если
-                                        // локальный литерал не вычислился.
-                                        error: !spill_values.contains_key(&i)
-                                            && matches!(outcome, ExprOutcome::Err(_)),
-                                        message,
-                                        // FR-017: дельта what-if — янтарный бейдж.
-                                        whatif: whatif_line,
-                                    })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                                        color,
+                                        area_px,
+                                        zoom_px,
+                                    )
+                                }
+                                _ => None,
+                            };
+                            rows.push(CachedRow {
+                                kind: row.kind,
+                                source_line: row.source_line,
+                                name: row.name.clone(),
+                                row_top: g.0,
+                                row_line_h: g.1,
+                                left_end: g.2,
+                                zebra: *z,
+                                value: shape_row_cell(
+                                    &mut self.font_system,
+                                    &row.value,
+                                    attrs,
+                                    value_color,
+                                    area_px,
+                                    zoom_px,
+                                ),
+                                unit: shape_row_cell(
+                                    &mut self.font_system,
+                                    &row.unit,
+                                    attrs,
+                                    self.theme.quote,
+                                    area_px,
+                                    zoom_px,
+                                ),
+                                badge,
+                                error_message: row.error_message.clone(),
+                            });
+                        }
+                        // Квады хрома (D-5) — НИЖЕ всех существующих квадов
+                        // (зебра/лидер под CodeBg/WhatIfBg и текстом).
+                        let mut table_quads: Vec<BodyQuad> = Vec::new();
+                        if let Some(g) = row_guides {
+                            let z = zoom_px;
+                            for row in &rows {
+                                if row.zebra {
+                                    table_quads.push(BodyQuad {
+                                        rect: [
+                                            0.0,
+                                            row.row_top * z,
+                                            body_width * z,
+                                            row.row_line_h * z,
+                                        ],
+                                        kind: BodyQuadKind::RowBg,
+                                    });
+                                }
+                                // Лидер: от конца левого текста до направляющей
+                                // чисел, штрихи 2/3 px на базовой линии строки;
+                                // у заголовка блока (Total) лидера нет — Σ стоит
+                                // на направляющей сама (анализ §3.1).
+                                if row.kind != row_grid::RowKind::Total {
+                                    let x0 = (row.left_end + row_grid::LEADER_PAD) * z;
+                                    let x1 = (g.value_right() - row_grid::LEADER_PAD) * z;
+                                    if x1 - x0 >= 6.0 * z {
+                                        let y = (row.row_top + row.row_line_h * LEADER_Y_FRAC) * z;
+                                        let mut x = x0;
+                                        let step = (LEADER_DASH_W + LEADER_DASH_GAP) * z;
+                                        while x + LEADER_DASH_W * z <= x1 {
+                                            table_quads.push(BodyQuad {
+                                                rect: [x, y, LEADER_DASH_W * z, LEADER_H * z],
+                                                kind: BodyQuadKind::Leader,
+                                            });
+                                            x += step;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !table_quads.is_empty() {
+                            let old = std::mem::take(&mut layout.quads);
+                            layout.quads = table_quads;
+                            layout.quads.extend(old);
+                        }
+                    }
 
                     self.cache.insert(
                         index,
@@ -2191,7 +2546,8 @@ impl TextSystem {
                             result,
                             result_error,
                             result_width_px,
-                            line_results,
+                            rows,
+                            row_guides,
                             zoom_px,
                             width_px,
                             title_text,
@@ -2601,58 +2957,94 @@ impl TextSystem {
                     // ПРАВЫЙ край ЕЁ строки (Numi-стиль). Привязка — блок тела
                     // с source_line этой строки (формульная строка — отдельный
                     // блок, см. body_items).
-                    if !entry.line_results.is_empty() {
+                    // FR-061 этап B (D-4/D-6): ячейки таблицы — значение на
+                    // направляющей чисел, юнит на направляющей юнитов (текст
+                    // прижат вправо: left = right − width), бейдж у правого
+                    // края колонки. Вертикаль — единая формула рядов
+                    // (Param/Calc — та же result_row_y, I-1/T5: порты и
+                    // ячейки не разъезжаются; авто-строки — своя метрика).
+                    if let (Some(guides), false) = (&entry.row_guides, entry.rows.is_empty()) {
                         let (origin, _, _) = body_area(node);
-                        for line_result in &entry.line_results {
-                            let Some(block) = entry.body.as_ref().and_then(|layout| {
-                                layout.blocks.iter().find(|block| {
-                                    block.source_line == Some(line_result.source_line)
-                                })
-                            }) else {
-                                continue;
-                            };
-                            // Вертикальное центрирование результата в ряду
-                            // (FR-025: тот же расчёт, что у построчного порта —
-                            // result_row_y, единый источник вертикали)
-                            let row_y = result_row_y(node, block.offset[1]);
+                        let body_left = node.x + BODY_PADDING;
+                        let node_right = node.x + node.width - BODY_PADDING;
+                        for row in &entry.rows {
+                            let row_y = origin[1]
+                                + row.row_top
+                                + (row.row_line_h - RESULT_LINE_HEIGHT) / 2.0;
                             let top_phys = to_physical([origin[0], row_y])[1];
-                            let right_phys =
-                                to_physical([node.x + node.width - BODY_PADDING, row_y])[0];
-                            let left_phys = (right_phys - line_result.width_px).round();
-                            areas.push(TextArea {
-                                buffer: &line_result.buffer,
-                                left: left_phys,
-                                top: top_phys,
-                                scale: 1.0,
-                                bounds: TextBounds {
-                                    left: (to_physical([node.x + BODY_PADDING, row_y])[0].floor()
-                                        as i32)
-                                        - 1,
-                                    top: top_phys as i32,
-                                    right: (right_phys.round() as i32) + 1,
-                                    bottom: (top_phys + RESULT_LINE_HEIGHT * zoom_px) as i32,
-                                },
-                                default_color: if line_result.error {
-                                    dim_color(on_card(self.theme.error), text_factor)
-                                } else if line_result.whatif {
-                                    // FR-017: дельта сценария — янтарный бейдж.
-                                    dim_color(on_card(self.theme.whatif_badge), text_factor)
-                                } else {
-                                    dim_color(on_card(self.theme.link), text_factor)
-                                },
-                                custom_glyphs: &[],
-                            });
-                            // FR-013 (правка 4): ошибка — расширенная зона
-                            // наведения вокруг бейджа для тултипа
-                            if line_result.error {
-                                error_hits.push(error_hit_rect(
-                                    left_phys,
-                                    top_phys,
-                                    line_result.width_px,
-                                    zoom_px,
-                                    scale_factor,
-                                    line_result.message.clone().unwrap_or_default(),
-                                ));
+                            let bottom_phys = top_phys + RESULT_LINE_HEIGHT * zoom_px;
+                            let bounds_left =
+                                (to_physical([body_left, row_y])[0].floor() as i32) - 1;
+                            // Значение: право на направляющую чисел
+                            if let Some(cell) = &row.value {
+                                let right_phys =
+                                    to_physical([body_left + guides.value_right(), row_y])[0];
+                                let left_phys = (right_phys - cell.width_px).round();
+                                areas.push(TextArea {
+                                    buffer: &cell.buffer,
+                                    left: left_phys,
+                                    top: top_phys,
+                                    scale: 1.0,
+                                    bounds: TextBounds {
+                                        left: bounds_left,
+                                        top: top_phys as i32,
+                                        right: (right_phys.round() as i32) + 1,
+                                        bottom: bottom_phys as i32,
+                                    },
+                                    default_color: dim_color(on_card(cell.color), text_factor),
+                                    custom_glyphs: &[],
+                                });
+                            }
+                            // Юнит: право на направляющую юнитов (O-4)
+                            if let Some(cell) = &row.unit {
+                                let right_phys =
+                                    to_physical([body_left + guides.unit_right(), row_y])[0];
+                                let left_phys = (right_phys - cell.width_px).round();
+                                areas.push(TextArea {
+                                    buffer: &cell.buffer,
+                                    left: left_phys,
+                                    top: top_phys,
+                                    scale: 1.0,
+                                    bounds: TextBounds {
+                                        left: bounds_left,
+                                        top: top_phys as i32,
+                                        right: (right_phys.round() as i32) + 1,
+                                        bottom: bottom_phys as i32,
+                                    },
+                                    default_color: dim_color(on_card(cell.color), text_factor),
+                                    custom_glyphs: &[],
+                                });
+                            }
+                            // Бейдж: правый край колонки (каскад Р-1)
+                            if let Some(cell) = &row.badge {
+                                let right_phys = to_physical([node_right, row_y])[0];
+                                let left_phys = (right_phys - cell.width_px).round();
+                                areas.push(TextArea {
+                                    buffer: &cell.buffer,
+                                    left: left_phys,
+                                    top: top_phys,
+                                    scale: 1.0,
+                                    bounds: TextBounds {
+                                        left: bounds_left,
+                                        top: top_phys as i32,
+                                        right: (right_phys.round() as i32) + 1,
+                                        bottom: bottom_phys as i32,
+                                    },
+                                    default_color: dim_color(on_card(cell.color), text_factor),
+                                    custom_glyphs: &[],
+                                });
+                                // FR-013 (правка 4): ошибка — расширенная зона
+                                // наведения вокруг бейджа «!» для тултипа
+                                if row.error_message.is_some() {
+                                    error_hits.push(error_hit_rect(
+                                        left_phys,
+                                        top_phys,
+                                        cell.width_px,
+                                        zoom_px,
+                                        scale_factor,
+                                        row.error_message.clone().unwrap_or_default(),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -3677,8 +4069,10 @@ mod tests {
         assert_eq!(items[0].gap, 0.0, "первая авто-строка — без зазора");
         assert_eq!(items[1].gap, 2.0, "плотный список переменных");
         assert!(items.iter().all(|item| item.oblique && item.mono));
-        assert_eq!(items[0].text, "Трафик.peak_rps = 1389");
-        assert_eq!(items[1].text, "Курсы.usd = —");
+        // FR-061 этап B: левая часть авто-строки — ТОЛЬКО имя (путь);
+        // значение/юнит — ячейки таблицы на направляющих (D-2/D-4).
+        assert_eq!(items[0].text, "Трафик.peak_rps");
+        assert_eq!(items[1].text, "Курсы.usd");
         assert_eq!(items[0].color, theme.code_text, "пролитое — цвет кода");
         assert_ne!(items[1].color, theme.code_text, "unmapped — янтарь Р-3");
         match &items[0].spill {
@@ -4115,6 +4509,74 @@ mod tests {
             height,
             BODY_LINE_HEIGHT + 8.0 + 12.0 + 8.0 + BODY_LINE_HEIGHT,
             "абзац + зазор 8 + линия 12 + зазор 8 + абзац"
+        );
+    }
+
+    /// FR-061 этап C (D-7): заголовок блока-ведомости появляется при числе
+    /// строк данных > T (Q2, дефолт 4) и наличии расчётных; текст —
+    /// «▸ расчёт · N строк» с плюрализацией; позиция — перед первой
+    /// расчётной строкой. Ниже порога заголовка нет.
+    #[test]
+    fn block_header_inserted_above_threshold_only() {
+        let theme = ThemeColors::dark();
+        let five = "a = 1\nb = 2\nc = 3\nd = 4\nd * 2";
+        let items = body_items(&theme, five, &[0, 1, 2, 3, 4], &[]);
+        let header_pos = items
+            .iter()
+            .position(|item| item.header)
+            .expect("заголовок блока вставлен");
+        assert_eq!(items[header_pos].text, "▸ расчёт · 1 строка");
+        // Следом — первая расчётная строка (source_line 4)
+        assert_eq!(items[header_pos + 1].source_line, Some(4));
+        // Ниже порога (4 строки данных) — заголовка нет
+        let four = "a = 1\nb = 2\nc = 3\nd * 2";
+        let items = body_items(&theme, four, &[0, 1, 2, 3], &[]);
+        assert!(
+            items.iter().all(|item| !item.header),
+            "порог T не достигнут"
+        );
+    }
+
+    /// FR-061 этап C (D-10/I-2): блок-режим меняет высоту тела, и измерение
+    /// (`measure_body_height`) остаётся равным рендер-стеку — заголовок
+    /// вставляется общим `body_items` (CR-012-инвариант).
+    #[test]
+    fn measure_matches_shape_with_block_header() {
+        let text = "a = 1\nb = 2\nc = 3\nd = 4\nd * 2";
+        let lines = &[0usize, 1, 2, 3, 4];
+        let mut fs = FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            300.0,
+            1.0,
+            lines,
+            &[],
+            Vec::new(),
+            &[],
+        );
+        let rendered = layout
+            .blocks
+            .iter()
+            .map(|block| block.offset[1] + block.height)
+            .fold(0.0f32, f32::max);
+        let measured = measure_body_height(text, 300.0, lines);
+        assert_eq!(
+            measured, rendered,
+            "блок-режим: measured {measured}, rendered {rendered}"
+        );
+        // Заголовок добавляет ещё ОДНУ строку тела (плюс 5-я строка
+        // данных и зазоры стека) — рост через общий стек, не магию.
+        let four = measure_body_height("a = 1\nb = 2\nc = 3\nd = 4", 300.0, &[0, 1, 2, 3]);
+        let five_h = measure_body_height(text, 300.0, lines);
+        let diff = five_h - four;
+        assert!(
+            (2.0 * BODY_LINE_HEIGHT + 6.0..=2.0 * BODY_LINE_HEIGHT + 26.0).contains(&diff),
+            "5-я строка + заголовок = две строки тела + зазоры (diff={diff})"
         );
     }
 
