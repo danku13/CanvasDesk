@@ -4998,3 +4998,19 @@ Work Log:
 
 Stage Summary:
 - FR-061 этапы A+B+C+D в main, CI 12/12. Остались: этап E (kit-Row D-15); отложенные этапа D по отдельному согласованию владельца (hit-зоны app.rs): свёрнутость блока Н-2/клик + экспандер описания (motion-токены заморожены), ellipsis формулы, VLM-ревью (T9).
+
+---
+Task ID: FR-061-D1-DUPLICATE
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-061 этап D (волна D-1 по приказу «продолжай fr-061») — реализация выполнена, при слиянии обнаружен дубликат с параллельным агентом; ветка снята в пользу main
+
+Work Log:
+- Ветка feature/fr-061-node-tabular-stage-d: независимо реализованы D-14 токены table.* (cell_gap/leader_min/leader_pad/leader_dash/leader_gap/leader_h/leader_y_frac/zebra_run_min + guide_debug_color), i18n заголовка блока RU/EN (block_header_text(+Language), SceneView.language → TitleFrame.language), DebugOverlay направляющих (GuideDebugLine → debug_overlay::build, подписи «числа»/«юниты»); +4 теста; локальные гейты зелёные (workspace 1725, fmt/clippy/wasm --check).
+- При merge с origin/main обнаружено: параллельный агент уже влил БОЛЕЕ ШИРОКУЮ реализацию этапа D (04b0c2c, CI 12/12): те же токены table.* + motion.{body_block_flip_ms,body_clamp_ms} + TABLE_DESC_CLAMP_LINES, i18n через set_table_language (отпечаток языка в results_key), DebugOverlay-направляющие через BodyQuadKind::GuideDebug + set_table_guides_visible (мир-квады в теле — без отдельного канала данных), ПЛЮС за рамками моего скоупа: O-5 rich-формулы (formula_fn/formula_op) и D-8 зона описания с клампом (desc → манифест шаблона, ensure_result_reserve(+desc)).
+- Решение: дубликат не вливается — два механизма для одной задачи недопустимы; конфликт разрешён в пользу origin/main (их реализация шире, задокументирована, CI зелёный); мои наработки сняты. Из моей ветки сохранён только этот worklog.
+- Идея на будущее (не в deferred main): подписи «числа»/«юниты» у диагностических вертикалей (в прототипе §3.5 вертикали подписаны; в main — квад-пунктир без подписей) — можно добавить тексты в Debug-полосу поверх GuideDebug-квадов отдельным FR/волной.
+
+Stage Summary:
+- FR-061 этап D в main (04b0c2c): токены/i18n/DebugOverlay/O-5/D-8 — шире моей волны; мой дубликат снят.
+- Остаток по CR (main-версия): свёрнутость блока + клик/экспандер (hit-зоны app.rs), ellipsis формулы, VLM-ревью; затем этап E (kit-Row D-15).
+- Урок: перед стартом волны сверять свежий origin/main (fetch) — параллельные агенты в этот день работали в тех же зонах FR-061.
