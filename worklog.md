@@ -4665,3 +4665,21 @@ Stage Summary:
   ux-node-body-fill.html — табличная правка); node-tabular-body-analysis.md
   новый.
 - **Не тронуто:** код продукта; решения Q1–Q9 — за владельцем.
+
+---
+
+Задача: волна 2 UI kit — постановка FR-056…FR-060 для параллельной реализации (приказ владельца «оформить как перечень FR с минимумом зависимостей… отдать разным агентам», сессия 2026-09-23)
+
+Work Log:
+- Гэп-анализ кита после FR-055 (main f781c6b): kit v1 = 8 контрактов слотов (kit.rs, 748 стр.); Painter/cursor_state живут в потребителе kit_ui.rs:400–479; scissor в canvas-render — 0 совпадений; hand-rolled модули (0 обращений к canvas_ui): hints_ui 414, flowmap_ui 355, calc_panel_ui 614, autolink_ui 494, onboarding_ui 520 (заморожен), palette.rs 1869, explain_ui 1751 + хвосты app.rs (dialog_button_rects 15671, menu_open_rect 16391, hotkeys).
+- Созданы 5 FR с замороженными контрактами (сигнатуры можно кодировать до слияния чужих веток) и разведёнными правами на файлы (конфликт-фри):
+  - fr-056-ui-scissor-clipping.md — ScreenBand+clip, scissor-бакет на полосу (R-1), TextBounds-клип текстов, замер wasm ≤100 КБ (G7-остаток); canvas-render + места сборки полос app.rs; сливать первым.
+  - fr-057-ui-kit-painter-widget-state.md — canvas_ui::paint (PaintItem/Painter без wgpu), canvas_ui::widget (WidgetState, приоритет Disabled>Pressed>Hovered>Selected>Normal, clicked()), keyboard::FocusRing (Tab); KitDraw → обёртка, 0 правок app.rs; сливать до FR-058/059/060.
+  - fr-058-ui-kit-v2-components.md — TextFieldModel/text_field (каретка в символах), ScrollState/list_rows/scroll_bar, switch, card, Icon+icon_glyph+icon_button; только добавление в kit.rs; Slider — non-goal; сливать после FR-057.
+  - fr-059-ui-kit-migration-wave1.md — hints/flowmap/calc_panel на кит v2 (паттерн U3/U5: числа дословно), витрина kit_gallery + секции v2; права: только эти модули + их функции app.rs; сливать после FR-056/057/058, строго до FR-060.
+  - fr-060-ui-kit-migration-wave2.md — autolink/palette/explain + dialog→modal (фикс класса дефекта фиксированной высоты), menu→dropdown, hotkeys→panel; non-goals: onboarding (решение владельца), wheel/minimap/HUD; финальный замер wasm; сливать последним.
+- index-cr-fr.md: указатель «следующий номер FR-061» + 5 строк таблицы; docs/prd/README.md: строка prd-0009 (статус PoC выполнено + волна 2 постановка).
+
+Stage Summary:
+- Волна 2 готова к раздаче агентам: параллельный старт — FR-056 (canvas-render), FR-057 (canvas-ui ядро), FR-058 (canvas-ui компоненты, против контрактов FR-057); затем последовательно FR-059 → FR-060 (общий app.rs).
+- Код продукта не тронут; документы только. Гейты не запускались (нет правок кода).
