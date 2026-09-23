@@ -4855,3 +4855,13 @@ Stage Summary:
 - Этап A FR-061 в main: домен и замер готов для этапа B (row_grid.rs + мультибуферный рендер text.rs), C (Н-3 режимы, Q1–Q4), D (полировка), E (kit-Row на RowGuides + Painter/WidgetState из FR-057/058).
 - Волна 2 (FR-056/057/058) + FR-061-A в main; FR-059/060 других агентов — вне зон FR-061.
 - Открытые вопросы к этапам B/C: Q2 (порог T, дефолт 4), Q3 (источник описания), Q5 (политика бейджей, дефолт авто), Q6 (ширина шаблонных нод, дефолт 360–400); Q9 решён владельцем (направляющие — только DebugOverlay).
+
+---
+
+## 2026-09-23 — FR-059: закрытие — слияние в main, CI 12/12 по merge SHA d701748
+
+- **Слияние:** ветка `feature/fr-059-kit-migration-wave1` (7ba0649 feat + merge origin/main 4b540c6 — конфликт worklog.md/index-cr-fr.md разрешён сохранением ОБЕИХ записей FR-059/FR-061-A; гейты на объединённом коде перезапущены: canvas-app 322, canvas-ui 125, canvas-core 379, canvas-render 319, canvas-scene 93, fmt/clippy — зелёные) → merge --no-ff в main **d701748** → push 4b540c6..d701748.
+- **CI по merge SHA d701748 — ПОЛНОСТЬЮ ЗЕЛЁНЫЙ (12/12 check-runs):** gates ×3 (ubuntu/macos/windows), artifacts ×3, build, wasm-check (wasm32-unknown-unknown), web /app+docs, licenses (cargo-deny), deploy, report-build-status.
+- **Гигиена индекса:** index-cr-fr FR-059 — «✅ выполнено (волна 1, 2026-09-23 …)»; документ FR-059 — статус «✅ реализовано».
+- **FR-059 закрыт.** Разблокирован FR-060 (волна 2: autolink/palette/explain + хвосты app.rs) — строго после этого слияния; параллельный FR-061 этап A (табличное тело, D-1/D-3) влит в main между моими гейтами — зоны не пересекались.
+- **Хвост для владельца (наблюдение, вне скоупа):** конвенции координат инстансов полос (сырые лог. px vs pre-converted world) — см. запись FR-059 от 2026-09-23; поведение сохранено байт-в-байт, выравнивание — отдельное решение с визуальной приёмкой.
