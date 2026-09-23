@@ -1040,10 +1040,86 @@ fn push_gfm_blocks(
     }
 }
 
+/// FR-061 этап D (O-5, D-4): rich-раны формульной строки — чисто
+/// визуальная раскраска по прототипу (ux-node-body-fill): идентификатор,
+/// за которым следует «(» — функция (formula_fn, курсив); операторные
+/// символы — приглушённый тон (formula_op); числа/переменные — базовые
+/// атрибуты. РАЗБОР ГРАММАТИКИ НЕ ДУБЛИРУЕТСЯ: оценка строки уже вычислена
+/// движком (line_kind/eval_lines) — здесь только классификация символов
+/// для цвета. Побочный фикс: маркеры GFM (`*`, `==`, `~~`) в формулах
+/// больше не интерпретируются (умножение «a * 2 * 3» раньше попадало в
+/// italic-спан markdown-парсера). Возвращает раны для `set_rich_text`.
+fn formula_rich_runs<'a, 'r>(
+    text: &'a str,
+    base: Attrs<'r>,
+    fn_color: Color,
+    op_color: Color,
+) -> Vec<(&'a str, Attrs<'r>)> {
+    fn is_ident(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '.' || c == '\''
+    }
+    fn is_op(c: char) -> bool {
+        matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | '=' | '<' | '>' | '!')
+    }
+    // (байтовый офсет, символ)
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let byte_at = |idx: usize| chars.get(idx).map(|&(b, _)| b).unwrap_or(text.len());
+    let mut out: Vec<(&'a str, Attrs)> = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let (_, c) = chars[i];
+        if is_op(c) {
+            let start = i;
+            while i < chars.len() && is_op(chars[i].1) {
+                i += 1;
+            }
+            out.push((&text[byte_at(start)..byte_at(i)], base.color(op_color)));
+            continue;
+        }
+        if is_ident(c) && !c.is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && is_ident(chars[i].1) {
+                i += 1;
+            }
+            // Идентификатор, за которым (после пробелов) следует «(» — функция.
+            let mut peek = i;
+            while peek < chars.len() && chars[peek].1 == ' ' {
+                peek += 1;
+            }
+            let is_fn = peek < chars.len() && chars[peek].1 == '(';
+            let attrs = if is_fn {
+                base.color(fn_color).style(Style::Italic)
+            } else {
+                base
+            };
+            out.push((&text[byte_at(start)..byte_at(i)], attrs));
+            continue;
+        }
+        // Прочее (пробелы, скобки, запятые, числа) — базовые атрибуты.
+        let start = i;
+        while i < chars.len()
+            && !is_op(chars[i].1)
+            && !(is_ident(chars[i].1) && !chars[i].1.is_ascii_digit())
+        {
+            i += 1;
+        }
+        out.push((&text[byte_at(start)..byte_at(i)], base));
+    }
+    // Пустые раны не пушим; смежные раны одного стиля не сливаем —
+    // set_rich_text корректно шейпит соседние раны (оптимизация не нужна).
+    let mut merged: Vec<(&'a str, Attrs)> =
+        out.into_iter().filter(|(s, _)| !s.is_empty()).collect();
+    if merged.is_empty() {
+        merged.push((text, base));
+    }
+    merged
+}
+
 /// Зашейпить один текстовый блок тела: буфер с переносами по ширине области
 /// блока (px), высота по layout_runs (px буфера). Квады подсветки/
 /// зачёркивания — в px буфера блока; буллиты/чекбоксы позиционируются по
-/// первой строке снаружи.
+/// первой строке снаружи. `formula` — формульная/параметрская строка
+/// (mono + source_line): раскраска лексем O-5, GFM-маркеры не парсятся.
 #[allow(clippy::too_many_arguments)]
 fn shape_text_block(
     font_system: &mut FontSystem,
@@ -1054,6 +1130,7 @@ fn shape_text_block(
     width_px: f32,
     zoom_px: f32,
     base: Attrs,
+    formula: bool,
 ) -> (Buffer, f32, Vec<([f32; 4], BodyQuadKind)>) {
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     // WordOrGlyph: перенос по словам; слишком длинное слово рвётся по глифам,
@@ -1061,6 +1138,23 @@ fn shape_text_block(
     // ВСЕ строки (scroll_end = бесконечность, buffer.rs cosmic-text).
     buffer.set_wrap(font_system, Wrap::WordOrGlyph);
     buffer.set_size(font_system, Some(width_px), None);
+    // FR-061 этап D (O-5): формульная строка — раскраска лексем БЕЗ
+    // GFM-парсинга (маркеры `*`/`==`/`~~` в формулах — литералы).
+    if formula {
+        let rich = formula_rich_runs(text, base, theme.formula_fn, theme.formula_op);
+        buffer.set_rich_text(
+            font_system,
+            rich.iter().map(|&(s, attrs)| (s, attrs)),
+            base,
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(font_system, false);
+        let height_px = buffer
+            .layout_runs()
+            .last()
+            .map_or(0.0, |run| run.line_top + run.line_height);
+        return (buffer, height_px, Vec::new());
+    }
     // Инлайн-разбор: ссылки (gfm) → сегменты, маркеры (** * == ~~) → спаны.
     let mut plain = String::with_capacity(text.len());
     let mut spans_all: Vec<markdown::StyleSpan> = Vec::new();
@@ -1184,6 +1278,9 @@ fn with_body_stack(
             block_width * zoom_px,
             zoom_px,
             base,
+            // O-5: формульная/параметрская строка (mono + привязка к строке
+            // текста) — раскраска лексем; авто-строки/заголовок — нет.
+            item.mono && item.source_line.is_some() && !item.oblique,
         );
         let height = height_px / zoom_px;
         on_block(
@@ -4106,6 +4203,44 @@ mod tests {
         assert_eq!(quads[1].rect[0], 520.0);
         // Пустой список строк — квадов нет
         assert!(guide_debug_quads(&guides, &[], 1.0).is_empty());
+    }
+
+    /// FR-061 этап D (O-5): раскраска лексем формулы — функция (ident + «(»)
+    /// курсивом и formula_fn, операторы formula_op, переменные/числа — база;
+    /// GFM-маркеры (`*` умножения) — литералы, italic-спанов нет.
+    #[test]
+    fn formula_rich_runs_tints_functions_and_operators() {
+        let base = mono_attrs();
+        let fn_c = Color::rgb(0xc7, 0x92, 0xea);
+        let op_c = Color::rgb(0x66, 0x6a, 0x7c);
+        let runs = formula_rich_runs("rps = max(a, 2) * 3", base, fn_c, op_c);
+        let find = |needle: &str| {
+            runs.iter()
+                .find(|(s, _)| *s == needle)
+                .copied()
+                .unwrap_or_else(|| panic!("ран «{needle}» не найден: {runs:?}"))
+        };
+        let (rps, rps_attrs) = find("rps");
+        assert_eq!(rps, "rps");
+        assert_eq!(rps_attrs.color_opt, None, "переменная — без подкраски");
+        assert_eq!(rps_attrs.style, Style::Normal);
+        let (eq, eq_attrs) = find("=");
+        assert_eq!(eq, "=");
+        assert_eq!(eq_attrs.color_opt, Some(op_c.into()));
+        let (mx, mx_attrs) = find("max");
+        assert_eq!(mx, "max");
+        assert_eq!(
+            mx_attrs.color_opt,
+            Some(fn_c.into()),
+            "функция — formula_fn"
+        );
+        assert_eq!(mx_attrs.style, Style::Italic, "функция — курсив (прототип)");
+        let (star, star_attrs) = find("*");
+        assert_eq!(star, "*");
+        assert_eq!(star_attrs.color_opt, Some(op_c.into()));
+        // Умножение «a * 2 * 3» — оба «*» литеральные операторы, без italic
+        let runs = formula_rich_runs("a * 2 * 3", base, fn_c, op_c);
+        assert!(runs.iter().all(|(_, a)| a.style == Style::Normal));
     }
 
     /// CR-009: формульная строка (source_line) — Numi-расчёт → mono; проза — sans.

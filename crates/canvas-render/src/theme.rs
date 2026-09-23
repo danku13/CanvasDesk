@@ -53,6 +53,11 @@ pub struct ThemeColors {
     pub quote: Color,
     /// Цвет текста фенса кода в теле заметки (GFM).
     pub code_text: Color,
+    /// FR-061 этап D (O-5): цвет имени функции в формуле (прототип
+    /// #c792ea, курсив) — тёмная тема.
+    pub formula_fn: Color,
+    /// FR-061 этап D (O-5): цвет операторов в формуле (прототип #666a7c).
+    pub formula_op: Color,
     /// Фон фенса кода, sRGB 0..1 (GFM).
     pub gfm_code_fill: [f32; 4],
     /// Бар цитаты, sRGB 0..1 (GFM).
@@ -141,6 +146,9 @@ impl ThemeColors {
             link: Color::rgb(0x6c, 0xb6, 0xff),
             quote: Color::rgb(0x9a, 0x9a, 0xa2),
             code_text: Color::rgb(0xa5, 0xd6, 0xff),
+            // FR-061 D (O-5): прототип ux-node-body-fill (.fn/.op).
+            formula_fn: Color::rgb(0xc7, 0x92, 0xea),
+            formula_op: Color::rgb(0x66, 0x6a, 0x7c),
             gfm_code_fill: [0.22, 0.23, 0.27, 1.0],
             gfm_quote_fill: [0.45, 0.48, 0.55, 1.0],
             gfm_muted_fill: [0.55, 0.57, 0.62, 1.0],
@@ -216,6 +224,9 @@ impl ThemeColors {
             link: Color::rgb(0x09, 0x69, 0xda),
             quote: Color::rgb(0x59, 0x63, 0x6e),
             code_text: Color::rgb(0x05, 0x50, 0xae),
+            // FR-061 D (O-5): светлые варианты темнее (контраст на карточке).
+            formula_fn: Color::rgb(0x6b, 0x21, 0xa8),
+            formula_op: Color::rgb(0x4b, 0x55, 0x63),
             gfm_code_fill: [0.93, 0.94, 0.96, 1.0],
             gfm_quote_fill: [0.65, 0.69, 0.76, 1.0],
             gfm_muted_fill: [0.60, 0.63, 0.68, 1.0],
