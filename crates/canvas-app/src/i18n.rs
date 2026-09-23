@@ -92,6 +92,16 @@ pub mod keys {
     pub const STAGE_CALC_UNMAPPED: &str = "stage.calc_unmapped";
     pub const STAGE_CALC_EXT: &str = "stage.calc_ext";
     pub const STAGE_CALC_MORE: &str = "stage.calc_more";
+    /// FR-044 Р-3-а: лейбл слота выхода у истока (прототип drawPort R5).
+    pub const STAGE_OUT_LABEL: &str = "stage.out_label";
+    /// FR-044 Р-3-а: подпись control-ребра у приёмника (инвариант 5 —
+    /// control-рёбра не отображаются value-путями).
+    pub const STAGE_CTRL_LABEL: &str = "stage.ctrl_label";
+    /// FR-044 Р-3-а: адрес control-ребра в пилюле — «to: <метка/приёмник>».
+    pub const STAGE_CTRL_TO: &str = "stage.ctrl_to";
+    /// FR-044 Q2 (Scroll): индикаторы прокрутки окна пилюль.
+    pub const STAGE_PILL_ABOVE: &str = "stage.pill_above";
+    pub const STAGE_PILL_BELOW: &str = "stage.pill_below";
 
     // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
     /// Заголовок окна проверки.
@@ -1136,6 +1146,12 @@ const RU: &[(&str, &str)] = &[
     (keys::STAGE_CALC_UNMAPPED, "не подставлено"),
     (keys::STAGE_CALC_EXT, "+{n} внешн. вход(а/ов)"),
     (keys::STAGE_CALC_MORE, "… ещё {n}"),
+    // FR-044 Р-3-а: лейблы слотов и control-рёбра; Q2: индикаторы окна
+    (keys::STAGE_OUT_LABEL, "out: {name}"),
+    (keys::STAGE_CTRL_LABEL, "управление"),
+    (keys::STAGE_CTRL_TO, "to: {node}"),
+    (keys::STAGE_PILL_ABOVE, "↑ ещё {n}"),
+    (keys::STAGE_PILL_BELOW, "ещё {n} ↓"),
     // --- PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры ---
     (
         keys::ROW_EXPLAIN_DEPTH,
@@ -1794,6 +1810,12 @@ const EN: &[(&str, &str)] = &[
     (keys::STAGE_CALC_UNMAPPED, "not mapped"),
     (keys::STAGE_CALC_EXT, "+{n} external input(s)"),
     (keys::STAGE_CALC_MORE, "… {n} more"),
+    // FR-044 Р-3-а: slot labels and control edges; Q2: window indicators
+    (keys::STAGE_OUT_LABEL, "out: {name}"),
+    (keys::STAGE_CTRL_LABEL, "control"),
+    (keys::STAGE_CTRL_TO, "to: {node}"),
+    (keys::STAGE_PILL_ABOVE, "↑ {n} more"),
+    (keys::STAGE_PILL_BELOW, "{n} more ↓"),
     // --- PRD-0007 (FR-048 X2): calculation chain check window ---
     (keys::ROW_EXPLAIN_DEPTH, "Calculation chain depth"),
     (
@@ -1923,7 +1945,16 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
 pub fn trf(language: Language, key: &'static str, subs: &[(&str, &str)]) -> String {
     let mut text = tr(language, key).to_owned();
     for (placeholder, value) in subs {
-        text = text.replace(placeholder, value);
+        // Плейсхолдер допускается с фигурными скобками и без («{name}» и
+        // «name»): часть вызовов передаёт голое имя — голая replace
+        // оставляла скобки в тексте («{name}» → «{значение}», FR-044:
+        // заголовок stage, счётчик внешних входов, «строка N», «→ param»).
+        let braced = format!("{{{placeholder}}}");
+        if text.contains(&braced) {
+            text = text.replace(&braced, value);
+        } else {
+            text = text.replace(placeholder, value);
+        }
     }
     text
 }
@@ -1931,6 +1962,46 @@ pub fn trf(language: Language, key: &'static str, subs: &[(&str, &str)]) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FR-044 (фикс): trf принимает плейсхолдер и с фигурными скобками,
+    /// и без — голая replace оставляла скобки в тексте («{name}» →
+    /// «{значение}») у вызовов с голым именем (заголовок stage,
+    /// «строка N», счётчик внешних входов).
+    #[test]
+    fn trf_accepts_braced_and_bare_placeholders() {
+        // Таблица «строка {n}»: вызов с голым «n» — скобки не остаются
+        assert_eq!(
+            trf(Language::Ru, keys::STAGE_LINE_LABEL, &[("n", "3")],),
+            "строка 3"
+        );
+        // Вызов со скобками «{n}» — прежнее поведение (T10/тултипы)
+        assert_eq!(
+            trf(Language::Ru, keys::STAGE_LINE_LABEL, &[("{n}", "3")],),
+            "строка 3"
+        );
+        // Несколько подстановок в одной фразе
+        assert_eq!(
+            trf(
+                Language::Ru,
+                keys::STAGE_BUNDLE_TITLE,
+                &[("from", "Заявки"), ("to", "Отчёт"), ("n", "6")],
+            ),
+            "Пучок: Заявки → Отчёт · ×6"
+        );
+        // Новые ключи Р-3-а/Q2
+        assert_eq!(
+            trf(Language::Ru, keys::STAGE_OUT_LABEL, &[("name", "users")]),
+            "out: users"
+        );
+        assert_eq!(
+            trf(Language::Ru, keys::STAGE_CTRL_TO, &[("node", "Отчёт")]),
+            "to: Отчёт"
+        );
+        assert_eq!(
+            trf(Language::Ru, keys::STAGE_PILL_BELOW, &[("n", "4")]),
+            "ещё 4 ↓"
+        );
+    }
 
     /// Инвариант полноты (FR-040): у каждого ключа — непустой RU и непустой
     /// EN перевод; дублей ключей в таблице нет; множества ключей совпадают.

@@ -454,6 +454,73 @@ impl StageCalcFocus {
     }
 }
 
+// --- Зона пилюль веера: переполнение (Q2, v2) -----------------------------
+
+/// Высота двухстрочной пилюли (адрес + значение) — базовый режим.
+pub const PILL_H_TWO_LINE: f32 = 34.0;
+/// Высота однострочной пилюли (адрес · значение) — компактный режим Q2.
+pub const PILL_H_ONE_LINE: f32 = 20.0;
+
+/// Режим зоны пилюль при переполнении стопки (Q2: «сокращение текста →
+/// тултип, или скролл зоны веера»; базовый кламп с уплотнением шага —
+/// [`canvas_core::bundles::stage_fan_label_layout`] — остаётся первым
+/// эшелоном внутри [`canvas_core::bundles::stage_fan_label_layout`]).
+///
+/// Эшелоны (детерминированы, чистая функция):
+/// 1. **Full** — двухстрочные пилюли умещаются в зону (обычный случай);
+/// 2. **Compact** — не умещаются: однострочный текст «адрес · значение»
+///    (полный путь сохраняется — резать его нельзя, инвариант 5; высота
+///    пилюли вдвое меньше — стопка помещается);
+/// 3. **Scroll** — не помогает и компакт: окно стопки с прокруткой
+///    (колесо над зоной веера, клики по индикаторам «↑ ещё N»/«ещё N ↓»).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PillZoneMode {
+    /// Двухстрочные пилюли — все видны (базовый режим Р-1).
+    Full,
+    /// Однострочные пилюли — все видны (первый эшелон Q2).
+    Compact,
+    /// Окно стопки с прокруткой (второй эшелон Q2): `first` — индекс
+    /// первой видимой пилюли (порядок стопки — по вертикали середин),
+    /// `visible` — число видимых, `above`/`below` — скрытые сверху/снизу
+    /// (счётчики индикаторов).
+    Scroll {
+        first: usize,
+        visible: usize,
+        above: usize,
+        below: usize,
+    },
+}
+
+/// Решение режима зоны пилюль (Q2): `count` — число пилюль (рёбер веера),
+/// `zone_h` — высота зоны клампа, `scroll` — текущее смещение окна
+/// (в пилюлях; значимо только в режиме Scroll). Шаг стопки —
+/// [`FAN_LABEL_GAP_PX`] (тот же, что в базовой раскладке).
+pub fn pill_zone_mode(count: usize, zone_h: f32, scroll: usize) -> PillZoneMode {
+    if count == 0 || zone_h <= 0.0 {
+        return PillZoneMode::Full;
+    }
+    let gap = canvas_core::bundles::FAN_LABEL_GAP_PX;
+    let fits = |h: f32| count as f32 * h + gap * (count - 1) as f32 <= zone_h;
+    if fits(PILL_H_TWO_LINE) {
+        return PillZoneMode::Full;
+    }
+    if fits(PILL_H_ONE_LINE) {
+        return PillZoneMode::Compact;
+    }
+    // Scroll: сколько однострочных пилюль умещается (с зазорами;
+    // последняя — без зазора), окно с клампом смещения.
+    let step = PILL_H_ONE_LINE + gap;
+    let visible_max = (((zone_h + gap) / step).floor() as usize).max(1).min(count);
+    let max_first = count - visible_max;
+    let first = scroll.min(max_first);
+    PillZoneMode::Scroll {
+        first,
+        visible: visible_max,
+        above: first,
+        below: count - first - visible_max,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,6 +791,61 @@ mod tests {
                 },
             ],
             ..CalcPanelModel::default()
+        }
+    }
+
+    /// Q2: режим зоны пилюль — Full на обычных высотах, Compact при
+    /// переполнении двухстрочными, Scroll при переполнении и компактными.
+    #[test]
+    fn pill_zone_mode_tiers() {
+        let gap = canvas_core::bundles::FAN_LABEL_GAP_PX;
+        // ×6 (демо-пучок): две строки (34) + зазоры — 6·34 + 5·8 = 244
+        let zone6 = 6.0 * PILL_H_TWO_LINE + 5.0 * gap;
+        assert_eq!(pill_zone_mode(6, zone6, 0), PillZoneMode::Full);
+        // Те же ×6 в зоне ниже: двухстрочные не влезают, однострочные
+        // (6·20 + 5·8 = 160) — влезают → Compact
+        let zone_c = 6.0 * PILL_H_ONE_LINE + 5.0 * gap;
+        assert_eq!(pill_zone_mode(6, zone_c, 0), PillZoneMode::Compact);
+        assert!(pill_zone_mode(6, zone_c - 1.0, 0) != PillZoneMode::Compact);
+        // ×12 в малой зоне: только окно с прокруткой
+        let small = 3.0 * PILL_H_ONE_LINE + 2.0 * gap;
+        match pill_zone_mode(12, small, 0) {
+            PillZoneMode::Scroll {
+                first,
+                visible,
+                above,
+                below,
+            } => {
+                assert_eq!(first, 0);
+                assert_eq!(visible, 3);
+                assert_eq!(above, 0);
+                assert_eq!(below, 9);
+            }
+            other => panic!("ожидался Scroll: {other:?}"),
+        }
+        // Смещение окна с клампом: scroll 5 → first 5, below 4
+        match pill_zone_mode(12, small, 5) {
+            PillZoneMode::Scroll { first, below, .. } => {
+                assert_eq!(first, 5);
+                assert_eq!(below, 4);
+            }
+            other => panic!("ожидался Scroll: {other:?}"),
+        }
+        // Кламп: scroll 99 → first = 12 − 3 = 9, ниже ни одной
+        match pill_zone_mode(12, small, 99) {
+            PillZoneMode::Scroll { first, below, .. } => {
+                assert_eq!(first, 9);
+                assert_eq!(below, 0);
+            }
+            other => panic!("ожидался Scroll: {other:?}"),
+        }
+        // Вырожденные входы — без паники
+        assert_eq!(pill_zone_mode(0, 100.0, 0), PillZoneMode::Full);
+        assert_eq!(pill_zone_mode(3, 0.0, 0), PillZoneMode::Full);
+        // Одна пилюля в слишком низкой зоне — окно из одной
+        match pill_zone_mode(1, 15.0, 0) {
+            PillZoneMode::Scroll { visible, .. } => assert_eq!(visible, 1),
+            other => panic!("ожидался Scroll: {other:?}"),
         }
     }
 }
