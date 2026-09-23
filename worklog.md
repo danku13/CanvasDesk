@@ -4937,3 +4937,22 @@ Work Log:
 
 Stage Summary:
 - Этап D начат; зон FR-059/060 (hints/flowmap/calc_panel/autolink/palette/explain/kit_ui, хвосты app.rs dialog/menu/hotkeys) и онбординга не касаемся; app.rs — только точечная проводка сеттеров рендера в зоне render-вызова.
+
+---
+Task ID: FR-061-D-FINISH
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: см. СТАРТ выше (FR-061 этап D — полировка табличного тела)
+
+Work Log:
+- D-14 токены (коммит 0868119): design/tokens — table.{guide_gap 6, leader_min 8, leader_pad 4, leader_dash 2, leader_gap 3, leader_h 1, leader_y_frac 0.62, zebra_run_min 4, desc_clamp_lines 2} + colors.table.guide_debug [0.549,0.949,0.2,0.851] + motion.{body_block_flip_ms 150, body_clamp_ms 150}; зеркала canvas-core/tokens.rs + parity-тесты JSON↔Rust (token_lint); row_grid.rs/text.rs — константы = токены (значения дословно, I-1: ноль визуального скачка). badge_pad/badge_icon_pad/zebra_alpha не применимы v1 (бейдж — текст без пилюли, зебра — слот темы) — задокументировано в CR, пилюля — этап E.
+- D-14 i18n (3e43a62): row_grid::block_header_text_lang (RU плюрализация «строка/строки/строк» / EN «line/lines»); Renderer/TextSystem::set_table_language (язык — глобальная настройка); threading shape_body/with_body_stack/body_items; отпечаток языка в results_key (точечный перешейп); measure фиксирован RU (высота от языка не зависит — I-2); app.rs — покадровая проводка settings.language (1 строка, зона render-вызова, не хвосты FR-060).
+- D-14/Q9 DebugOverlay-направляющие: BodyQuadKind::GuideDebug + guide_debug_quads (чистая функция, юнит-тест: вертикали на right-краях value/unit через зону строк) + set_table_guides_visible; app.rs проводит self.debug_overlay — в проде невидимы (решение Q9 2026-09-23); цвет — токен вне палитры тем (принцип debug_overlay.rs).
+- O-5 rich-формулы: formula_rich_runs (canvas-render/text.rs) — функция (ident+«(») formula_fn+курсив, операторы formula_op, переменные/числа — база; theme.formula_fn/formula_op (тёмная #c792ea/#666a7c = прототип; светлые #6b21a8/#4b5563; пресеты — link/quote); формульная строка шейпится БЕЗ GFM-парсинга. ПОБОЧНЫЙ ФИКС: «*» умножения в формулах больше не попадает в italic-спан markdown-парсера («a * 2 * 3» раньше давала курсив на « 2 »). Грамматика не дублируется (оценка строки — у движка, здесь только визуальная классификация символов).
+- D-8 описание+кламп: зона описания — САМАЯ первая в стеке тела (до авто-строк и чисел), sans/theme.quote, кламп TABLE_DESC_CLAMP_LINES=2 по фактической верстке (clamp_desc_text: Buffer + Wrap::WordOrGlyph, бинарный поиск по словам, «…» — паритет с мерой CR-012; TextMeasurer сознательно без космических буферов); источник Q3 v1: canvasdesk.desc → template_descs (снимок манифестов id→description в сцену+рендер, sync при построении App и после импорта шаблонов); проза-фолбэк НЕ применён (дублировал бы первый абзац — решение за владельцем); measure_body_height(+desc) — I-2; scene MeasuredReserveFn(+desc)/ensure_result_reserve(+desc) — growth-only (I-6); node_desc_text в сцене; calc_line_at — hit-тест строк смещён на высоту зоны; live-правка — зона скрыта (I-5), после commit высоту догоняет refit; desc в CacheKey (тест: смена описания инвалидирует кэш); fit_template_node_height — desc None (ленивый refit догоняет).
+- Исправление в ходе работы: потерянный items.extend(spill_prefix) при интеграции desc-зоны (тест with_body_stack_prefix_grows_height поймал) — восстановлен.
+- Доки: CR-061 (статус «этапы A+B+C+D выполнены», история этапа D), index-cr-fr.md, docs/prd/README.md (prd-0004), worklog двойная запись.
+
+Stage Summary:
+- Гейты ×5 зелёные: fmt; clippy -D warnings (workspace); cargo test --workspace — 52 сьюта, 0 отказов (canvas-render 335, +12 за этап D: 6 parity/токены, 1 EN-заголовок, 1 guide_debug_quads, 1 formula_rich_runs, 1 clamp_desc/measure, +обновлённые cache_freshness/block_header); wasm_gate; mcp_wasm_gate.
+- Регресс-инварианты: T2 (ширина, tcp-lb 300/384/520) и T5 (порты/якоря без правок, I-1) — зелёные без правок (desc-зона в тестах отсутствует — стек байт-в-байт прежний).
+- Осталось по FR-061: этап E (kit-Row D-15 на RowGuides + Painter/WidgetState); отдельное согласование владельца (hit-зоны app.rs): свёрнутость блока Н-2 + клик, экспандер описания «⋯ целиком ▾» (motion-токены body_block_flip_ms/body_clamp_ms уже заморожены); ellipsis формулы (узкие ноды); VLM-ревью (T9) — визуальная приёмка. Открытые вопросы: Q3-проза-фолбэк, Q6 (ширина шаблонных нод 360–400), Q7 (drag от кромки), Q8-алиасы-обрезка (v1 — раскраска O-5).
