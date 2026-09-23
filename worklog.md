@@ -4746,10 +4746,14 @@ Stage Summary:
 Задача: FR-056 — слияние в main, push, CI, закрытие CR (та же сессия 2026-09-23)
 
 Work Log:
-- (заполняется после merge)
+- Синхронизация с main: за время работы ветки в main легли FR-057 (Painter/WidgetState/FocusRing, f97f66f), FR-058 (компоненты v2, a44e691), FR-013 (канонизация единиц, 2d3cd15) — merge origin/main в ветку; конфликты worklog.md/index-cr-fr.md/prd-0009 (параллельные записи и статусы) разрешены с сохранением обеих сторон; FR-056 «✅ выполнено» + FR-057 «✅ реализовано» сосуществуют в index.
+- Все 5 локальных гейтов перепроверены на объединённом коде (fmt, clippy -D warnings, test --workspace 0 FAILED, wasm_gate, mcp_wasm_gate) — зелёные; 8 тестов FR-056 зелёные; app.rs-диапазон СТАРТ-записи скорректирован (+3 строки после FR-013).
+- Merge --no-ff в main: 2f8ed91; push origin/main a44e691..2f8ed91.
+- CI по merge SHA 2f8ed91 — все 12 проверок success: gates (ubuntu/macos/windows), build, wasm-check, licenses (cargo-deny), artifacts ×3, deploy, web /app + docs, report-build-status.
 
 Stage Summary:
-- (заполняется после merge)
+- FR-056 закрыт: F-5 (scissor-клиппинг) в продукте — ScreenBand.clip + scissor-бакет полосы (R-1) + TextBounds-клип текстов; G7-остаток снят (+4 020 б ≈ 3,9 КБ ≤ 100 КБ); сливался первым из волны 2 — G5-аудит миграций FR-059/060 опирается на системный рендер-клип.
+- Волна 2: FR-056/057/058 в main; остаются FR-059 → FR-060 (последовательность по app.rs).
 Задача: FR-057 — kit-core: Painter в canvas-ui (без wgpu) + WidgetState/фокус (перевод кита из «контрактов слотов» в виджеты; реализация по постановке волны 2, сессия 2026-09-23)
 
 Work Log:
@@ -4832,3 +4836,22 @@ Stage Summary:
 - **Доки:** fr-059 (статус ✅ + Changelog + перечень функций), index-cr-fr (✅), PRD-0009 §16, ui-kit.md §7.3 (состав витрины), ACCEPTANCE FR-059.1–FR-059.10.
 - **Риск/наблюдение (вне скоупа FR-059, для владельца):** у поверхностей-полос рендер конвертирует инстансы screen→world ровно один раз (`screen_instance_to_world`, round-trip тест), при этом витрина kit_gallery/DebugOverlay/автосвязь-бейдж пушат в полосы уже сконвертированные квады (`screen_rect_quad_pub`/KitDraw) — численный зонд даёт сдвиг на −viewport/2 при камере по умолчанию. Поведение сохранено байт-в-байт (миграция не меняет конвенцию витрины); выравнивание конвенций (кит-адаптер → сырые px полос или двойная конверсия в рендере) — отдельное решение владельца с визуальной приёмкой.
 - **Далее:** FR-060 (волна 2: autolink/palette/explain + хвосты app.rs) — строго после слияния этого FR.
+
+---
+
+Задача: FR-061 этап A — табличное тело ноды Н-3 (пре-PRD PRD-0004): CR + D-1 части значения + D-3 колоночные направляющие (приказ владельца «оформи CR-061 и начни этап A… важно, чтобы максимально использовался canvas-ui и вся логика и утилитарные функции правильно структурировались архитектурно, чтобы ui стал максимально декларативным», сессия 2026-09-23)
+
+Work Log:
+- CR: docs/change-requests/fr-061-node-tabular-stage-a.md — программа D-1…D-15 (этапы A–E) по дизайну node-tabular-body-analysis.md; контракты заморожены (Value::display_parts, join_parts, DeltaParts/whatif_delta_parts, AutoRowParts, RowGuides::measure/with_right_edge, measure_row_cells); права на файлы разведены (этап A: canvas-core expr/flow + canvas-ui row_guides; этап B: canvas-render row_grid/text; запрет onboarding и зон FR-059/060); index-cr-fr.md — указатель «следующий № FR-062»; README prd-0004 — упоминание табличного дизайна.
+- Архитектурная слоёвка (директива владельца «максимально canvas-ui, декларативный UI»): домен — canvas-core (части значения как данные), чистая layout-математика — canvas-ui (направляющие без canvas-core-зависимости, G7 сохранён: deps canvas-ui = только cosmic-text), исполнение — canvas-render (этап B). Потребители дают данные (тексты ячеек) — каркас считает max-ширины и x-позиции (декларативная двухпроходная раскладка §3.2).
+- D-1 (expr.rs): `Value::display_parts() -> (num, unit)` — то же форматирование (format_num/unit.display()); `join_parts` — единственная сборка «num unit»|«num»; `Display for Value` и `whatif_full_delta` переписаны композициями над частями — байт-паритет тестом-свойством на корпусе (800 rps, ms·req/s, sec, скаляры, 166.667, NaN-ветка числа); `DeltaParts { base, new, delta }` + `whatif_delta_parts` — бейдж «было → стало (+Δ)» этапа B раскладывается по ячейкам без парсинга строки; спец-логика дельты («пп», знак) не тронута (whatif_delta_str — прежняя точка).
+- D-1 (flow.rs): `AutoRowParts { path, num, unit }` + `AutoRow::display_parts` (unmapped → num «—», unit пуст — диагностика Р-3); `AutoRow::display_text` — композиция над частями (инвариант 2 FR-050 — единая точка сборки, байт-паритет тестом).
+- D-3 (canvas-ui/src/row_guides.rs, новый): `RowCellWidths` (естественные ширины ячеек строки); `RowGuides { value_w, unit_w, badge_w, value_x, unit_x }` — `measure` (проход A: max по всем строкам ноды, None — нет таблицы), `with_right_edge(right_edge, gap)` (проход B: края справа налево бейдж→юнит→значение, gap — параметр потребителя, без магических констант), `value_right/unit_right` (точки прижатия текста = направляющие чисел/юнитов); `measure_row_cells` — замер ячеек через TextMeasurer::width_of (реальный шейпинг, кэш; пустой юнит → 0; badge насквозь). Имя RowGuides — дисциплина Ф-14 (snap-guides заняты FR-038). Фундамент kit-Row (этап E, D-15) и панель FR-044.
+- Тесты +9: canvas-core (display_parts_oracle T1, display_parity_property — свойство на корпусе, whatif_delta_parts_oracle — вкл. «пп»/None-согласованность; auto_row_parts_oracle — mapped/unit/scalar/unmapped) — 379; canvas-ui (measure_takes_max T3, with_right_edge арифметика, детерминизм/порядок-свобода, measure_row_cells реальным шрифтом NotoSansDisplay, сквозной oracle) — 125.
+- Гейты ×5 зелёные: fmt; clippy -D warnings; cargo test --workspace (1688 passed, 0 FAILED); wasm_gate; mcp_wasm_gate. Пользовательских изменений нет (ядро без рендера — онбординг/байты UI не тронуты).
+- Слияние: push был отклонён (origin/main ушёл на лицензионный каркас d6fb7df + README ea1a269 параллельного агента) → merge origin/main (AGPLv3/CLA/CONTRIBUTING; чисто, без конфликтов) → перепроверены clippy/fmt/test (0 FAILED) → merge --no-ff в main 77cbb98 → push ea1a269..77cbb98 → CI по merge SHA.
+
+Stage Summary:
+- Этап A FR-061 в main: домен и замер готов для этапа B (row_grid.rs + мультибуферный рендер text.rs), C (Н-3 режимы, Q1–Q4), D (полировка), E (kit-Row на RowGuides + Painter/WidgetState из FR-057/058).
+- Волна 2 (FR-056/057/058) + FR-061-A в main; FR-059/060 других агентов — вне зон FR-061.
+- Открытые вопросы к этапам B/C: Q2 (порог T, дефолт 4), Q3 (источник описания), Q5 (политика бейджей, дефолт авто), Q6 (ширина шаблонных нод, дефолт 360–400); Q9 решён владельцем (направляющие — только DebugOverlay).

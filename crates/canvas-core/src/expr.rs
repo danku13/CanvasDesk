@@ -393,15 +393,41 @@ fn format_num(num: f64) -> String {
 
 impl fmt::Display for Value {
     /// `{num} {unit}`: `1000 ms·req/s`, `1.5 sec`, `20 ms`; скаляр — число.
+    /// D-1 (FR-061): композиция над [`Value::display_parts`] — единая точка
+    /// сборки отображения значения (инвариант байт-паритета, тест-свойство).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let num = format_num(self.num);
-        let unit = self.unit.display();
-        if unit.is_empty() {
-            f.write_str(&num)
-        } else {
-            write!(f, "{num} {unit}")
-        }
+        f.write_str(&join_parts_of(&self.display_parts()))
     }
+}
+
+impl Value {
+    /// D-1 (FR-061, табличное тело ноды): структурные части значения —
+    /// `(число, юнит)` раздельно. Число — то же форматирование, что в
+    /// [`Display`] (группировка/округление `format_num`); юнит —
+    /// [`Unit::display`], скаляр → пустая строка. Потребители — табличные
+    /// ячейки значения/юнита (этап B row_grid), MCP-тексты остаются на
+    /// `Display` (обратная совместимость).
+    pub fn display_parts(&self) -> (String, String) {
+        (format_num(self.num), self.unit.display())
+    }
+}
+
+/// D-1 (FR-061): единственная сборка отображения значения из частей —
+/// `«num unit»`, для скаляра (пустой юнит) — `«num»`. Используется
+/// `Display for Value`, `whatif_full_delta` и `AutoRow::display_text`:
+/// одна точка сборки гарантирует байт-паритет всех трёх форматов
+/// (тест-свойство `display_parity_property`).
+pub fn join_parts(num: &str, unit: &str) -> String {
+    if unit.is_empty() {
+        num.to_owned()
+    } else {
+        format!("{num} {unit}")
+    }
+}
+
+/// Внутренний хелпер — сборка из кортежа частей (см. [`join_parts`]).
+fn join_parts_of(parts: &(String, String)) -> String {
+    join_parts(&parts.0, &parts.1)
 }
 
 // --- Выражение ---
@@ -1817,10 +1843,41 @@ pub fn whatif_delta_str(base: &Value, whatif: &Value) -> Option<String> {
 
 /// FR-017: полный формат дельта-бейджа «было → стало (+Δ)» (гипотеза Q4) —
 /// то, что рендер показывает вместо голого значения изменившейся строки/
-/// итога. Без изменений — None (бейдж остаётся обычным).
+/// итога. Без изменений — None (бейдж остаётся обычным). D-1 (FR-061):
+/// композиция над [`whatif_delta_parts`] — строковый формат и структурные
+/// части собираются из одной точки (байт-паритет тестом).
 pub fn whatif_full_delta(base: &Value, whatif: &Value) -> Option<String> {
+    let p = whatif_delta_parts(base, whatif)?;
+    Some(format!(
+        "{} → {} ({})",
+        join_parts_of(&p.base),
+        join_parts_of(&p.new),
+        p.delta
+    ))
+}
+
+/// D-1 (FR-061, табличное тело ноды): структурные части what-if бейджа —
+/// `base`/`new` как `(число, юнит)` (те же части, что у [`Value::
+/// display_parts`]) + строка дельты `delta` (единственная точка спец-логики
+/// знака и «пп» — [`whatif_delta_str`], поведение не меняется). Потребитель —
+/// бейдж-колонка таблицы (этап B): «было → стало (+Δ)» раскладывается по
+/// ячейкам без повторного парсинга строки.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeltaParts {
+    pub base: (String, String),
+    pub new: (String, String),
+    pub delta: String,
+}
+
+/// Части what-if дельты; `None` ⇔ дельты нет — тот же предикат, что и
+/// [`whatif_full_delta`] (согласованность тестом).
+pub fn whatif_delta_parts(base: &Value, whatif: &Value) -> Option<DeltaParts> {
     let delta = whatif_delta_str(base, whatif)?;
-    Some(format!("{base} → {whatif} ({delta})"))
+    Some(DeltaParts {
+        base: base.display_parts(),
+        new: whatif.display_parts(),
+        delta,
+    })
 }
 
 // --- FR-021: каталог подсказок и детектор рода строки ---
@@ -2205,6 +2262,90 @@ mod tests {
         assert_eq!(Value::scalar(0.30000000000000004).to_string(), "0.3");
         let rate = eval(&parse("100 req / 2 sec").unwrap(), &Env::empty()).unwrap();
         assert_eq!(rate.to_string(), "50 req/s");
+    }
+
+    /// D-1 (FR-061, T1-oracle): структурные части значения — число и юнит
+    /// раздельно; форматирование числа идентично `Display` (та же
+    /// `format_num`); скаляр → юнит пуст; NaN → «не число».
+    #[test]
+    fn display_parts_oracle() {
+        let (num, unit) = Value::with_unit(800.0, rps_unit()).display_parts();
+        assert_eq!(num, "800");
+        assert_eq!(unit, "rps");
+        // Составная единица — как в Display («1000 ms·req/s»)
+        let composite = eval(&parse("5 ms × 200 req/s").unwrap(), &Env::empty()).unwrap();
+        let (num, unit) = composite.display_parts();
+        assert_eq!(num, "1000");
+        assert_eq!(unit, "ms·req/s");
+        // Скаляр — юнит пуст
+        assert_eq!(
+            Value::scalar(20.0).display_parts(),
+            ("20".to_owned(), String::new())
+        );
+        // Дробное — те же 6 значащих цифр, что в Display
+        assert_eq!(
+            Value::scalar(166.66666666).display_parts(),
+            ("166.667".to_owned(), String::new())
+        );
+        assert_eq!(
+            Value::scalar(f64::NAN).display_parts(),
+            ("не число".to_owned(), String::new())
+        );
+    }
+
+    /// D-1 (FR-061): инвариант байт-паритета — `Display` значения
+    /// восстанавливается из частей `display_parts` через единственную
+    /// сборку `join_parts` на любом значении корпуса (MCP-тексты, которые
+    /// остаются на `Display`, не меняются ни на байт).
+    #[test]
+    fn display_parity_property() {
+        let corpus: Vec<Value> = [
+            "800 rps",
+            "5 ms × 200 req/s",
+            "1.5 sec",
+            "20",
+            "166.66666666",
+            "0.30000000000000004",
+            "1 req / 10 ms",
+            "100 req / 2 sec",
+            "0.5 h",
+        ]
+        .iter()
+        .map(|src| {
+            eval(&parse(src).unwrap(), &Env::empty())
+                .unwrap_or_else(|err| panic!("корпус: {src:?} → {err:?}"))
+        })
+        .collect();
+        for value in &corpus {
+            let (num, unit) = value.display_parts();
+            assert_eq!(value.to_string(), join_parts(&num, &unit));
+        }
+    }
+
+    /// D-1 (FR-061): структурные части what-if дельты — base/new как
+    /// части значения + строка дельты; строковый `whatif_full_delta` —
+    /// композиция над частями (байт-паритет), предикат None совпадает.
+    #[test]
+    fn whatif_delta_parts_oracle() {
+        let base = Value::with_unit(1000.0, rps_unit());
+        let whatif = Value::with_unit(1200.0, rps_unit());
+        let p = whatif_delta_parts(&base, &whatif).unwrap();
+        assert_eq!(p.base, ("1000".to_owned(), "rps".to_owned()));
+        assert_eq!(p.new, ("1200".to_owned(), "rps".to_owned()));
+        assert_eq!(p.delta, "+200 rps");
+        assert_eq!(
+            whatif_full_delta(&base, &whatif).unwrap(),
+            "1000 rps → 1200 rps (+200 rps)"
+        );
+        // Процентная ветка «пп» — спец-логика знака не тронута
+        let base = Value::with_unit(50.0, unit_atom("%").map(Unit::atom).unwrap());
+        let whatif = Value::with_unit(53.0, unit_atom("%").map(Unit::atom).unwrap());
+        let p = whatif_delta_parts(&base, &whatif).unwrap();
+        assert_eq!(p.delta, "+3 пп");
+        assert_eq!(p.new, ("53".to_owned(), "%".to_owned()));
+        // Нет дельты — None у обеих форм (согласованность предиката)
+        assert_eq!(whatif_delta_parts(&base, &base), None);
+        assert_eq!(whatif_full_delta(&base, &base), None);
     }
 
     /// FR-018: деление/умножение с ненормализованным временем — num в

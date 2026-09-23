@@ -19682,8 +19682,16 @@ mod tests {
     ) -> (App, Arc<dyn CanvasStorage>) {
         let scene =
             SceneState::with_storage(Canvas::default(), PathBuf::from(path), Arc::clone(&storage));
-        let cache_dir =
-            std::env::temp_dir().join(format!("canvasdesk-w6-app-{}", std::process::id()));
+        // Уникальный каталог на вызов хелпера: тесты зовут его параллельно,
+        // общий путь «по pid» гонял create_dir_all/remove_dir_all между
+        // потоками — на Windows это PermissionDenied (флак CI gates
+        // windows, merge 77cbb98). Счётчик убирает пересечение путей.
+        static NEXT_CACHE_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let cache_dir = std::env::temp_dir().join(format!(
+            "canvasdesk-w6-app-{}-{}",
+            std::process::id(),
+            NEXT_CACHE_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
         let (search_responder, _rx) = {
             let (tx, rx) = std::sync::mpsc::channel();
