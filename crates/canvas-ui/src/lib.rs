@@ -54,17 +54,47 @@ pub use capture::CapturePolicy;
 pub use frame::{HitRect, Overlap, SurfaceFrame, UiFrame};
 pub use geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 pub use hit::{HitStack, HitTarget};
-pub use keyboard::{Activation, KeyboardRouter};
+pub use keyboard::{Activation, FocusRing, KeyboardRouter};
 pub use layer::UiLayer;
 pub use layout::{
-    constrain, pad, stack, Child, Column, CrossAlign, Custom, HAlign, MainAlign, Row, RowPolicy,
-    VAlign,
+    constrain, grid_cells, pad, stack, Child, Column, CrossAlign, Custom, HAlign, MainAlign,
+    MeasuredItem, Row, RowPolicy, VAlign,
 };
 pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
 pub use registry::{
     DegradationPolicy, KeyboardScopeId, RegistryError, SurfaceDecl, SurfaceId, SurfaceRegistry,
 };
 pub use row_guides::{measure_row_cells, RowCellWidths, RowGuides};
+
+/// FR-062 F-18: тестовый хелпер геометрических golden-снапшотов (только
+/// `cfg(test)`; детерминированный дамп rect'ов — нормализованная строка
+/// с округлением до целого ui px). НЕ пиксельные сравнения (golden-image
+/// отвергнут PRD-0009 Non-goals) — геометрия компонентов фиксируется
+/// строкой, изменение раскладки ловится сравнением с эталоном;
+/// перегенерация эталона — осознанное решение с diff в PR.
+#[cfg(test)]
+pub(crate) mod testing {
+    use crate::geometry::UiRect;
+
+    /// Дамп rect'а: `name x=… y=… w=… h=…` (округление до целого).
+    pub fn snap(name: &str, r: UiRect) -> String {
+        format!(
+            "{name} x={} y={} w={} h={}",
+            r.x.round() as i32,
+            r.y.round() as i32,
+            r.w.round() as i32,
+            r.h.round() as i32
+        )
+    }
+
+    /// Сравнить дамп с эталоном (диагностика — полный diff строки).
+    pub fn assert_snapshot(got: String, expected: &str) {
+        assert_eq!(
+            got, expected,
+            "golden-снапшот геометрии изменился — обнови эталон осознанно (diff в PR)"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
