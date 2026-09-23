@@ -896,12 +896,13 @@ impl SceneState {
         }
     }
 
-    /// FR-061 этап D (D-8): текст описания ноды (Q3, решение владельца
-    /// 2026-09-23 — «desc→манифест→проза»): `canvasdesk.desc` → описание
-    /// манифеста шаблона (`template_descs` по снимку id) → первый
-    /// проза-абзац текста ноды ([`canvas_core::expr::first_prose_paragraph`]
-    /// — та же функция, что в рендере: измерение и рендер не разъезжаются,
-    /// I-2). Пусто — зоны описания нет.
+    /// FR-061 этап D (D-8): текст описания ноды — `canvasdesk.desc` →
+    /// описание манифеста шаблона (`template_descs` по снимку id).
+    /// ПРИЁМКА T9 (фидбэк владельца 2026-09-24): prose-фолбэк «первый
+    /// проза-абзац» УБРАН — синхронно с рендером (text.rs): фолбэк рисовал
+    /// первый абзац тела дважды (зона описания + тело — дублирование
+    /// текста). Измерение и рендер остаются на одном источнике (I-2).
+    /// Пусто — зоны описания нет.
     pub(crate) fn node_desc_text(&self, index: usize) -> Option<String> {
         let node = self.canvas.nodes.get(index)?;
         node.canvasdesk
@@ -910,11 +911,6 @@ impl SceneState {
             .or_else(|| {
                 node.template()
                     .and_then(|t| self.template_descs.get(&t.id).cloned())
-            })
-            .or_else(|| {
-                node.text
-                    .as_deref()
-                    .and_then(canvas_core::expr::first_prose_paragraph)
             })
             .filter(|d| !d.trim().is_empty())
     }

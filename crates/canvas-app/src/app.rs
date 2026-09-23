@@ -17200,6 +17200,8 @@ impl App {
                     family: FAMILY,
                     size: DIALOG_BODY_FS,
                     max_width: f32::INFINITY,
+                    // Диалоги — sans (паритет sans_attrs, вес 500).
+                    weight: cosmic_text::Weight::MEDIUM,
                 },
             )
             .height;
@@ -21979,6 +21981,7 @@ mod fr050_stage_e_tests {
                     family: FAMILY,
                     size: DIALOG_BODY_FS,
                     max_width: f32::INFINITY,
+                    weight: cosmic_text::Weight::MEDIUM,
                 },
             )
             .height;
