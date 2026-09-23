@@ -85,6 +85,8 @@ fn headless_spilled_param_row_draws() {
             param_spills: &spills,
             auto_rows: &Default::default(),
             whatif_nodes: &Default::default(),
+            block_collapsed: &Default::default(),
+            desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
         },

@@ -61,6 +61,8 @@ fn headless_note_body_draws() {
             param_spills: &Default::default(),
             auto_rows: &Default::default(),
             whatif_nodes: &Default::default(),
+            block_collapsed: &Default::default(),
+            desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
         },

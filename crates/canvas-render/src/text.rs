@@ -220,6 +220,29 @@ pub struct SpillHit {
     /// Индекс ноды-приёмника в `canvas.nodes` (чьё тело рисует строку).
     pub node: usize,
 }
+
+/// FR-061 хвосты (D-7/D-8 runtime v1): род кликабельной зоны тела ноды —
+/// тогглы свёрнутости блока-ведомости и экспандера описания (решения
+/// владельца: клик по всей строке + chevron-ховер; автосворачивание описания).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyHitKind {
+    /// Заголовок блока-ведомости (Н-2) — клик тогглит свёрнутость.
+    BlockHeader,
+    /// Аффорданс экспандера описания — клик тогглит раскрытость.
+    DescExpander,
+}
+
+/// FR-061 хвосты: кликабельная зона тела ноды (логические px окна,
+/// паттерн SpillHit/LineErrorHit) — пересобирается каждый кадр в
+/// prepare_titles; приложение вычитывает после рендера для тогглов.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyHit {
+    /// [x, y, w, h] в логических px окна.
+    pub rect: [f32; 4],
+    pub kind: BodyHitKind,
+    /// Индекс ноды в `canvas.nodes` (чьё тело рисует зону).
+    pub node: usize,
+}
 /// Размер шрифта бейджа «=» calc-ноды при дальнем зуме (FR-013) —
 /// физические px (не масштабируется зумом, как HUD) — из design-токенов
 /// (алиасы BADGE_* — в блоке use выше).
@@ -580,6 +603,13 @@ struct BodyBlock {
     source_line: Option<usize>,
     /// FR-061 этап C (D-7): заголовок блока-ведомости — привязка Σ-строки.
     header: bool,
+    /// FR-061 хвосты (D-7 runtime v1): превью-строка СВЁРНУТОЙ ведомости
+    /// («параметры · P · формулы · K» + Σ первого расчёта на направляющей) —
+    /// привязка ячейки превью (RowKind::Preview), как у заголовка (Total).
+    preview: bool,
+    /// FR-061 хвосты (D-8 runtime v1): аффорданс экспандера описания
+    /// «⋯ целиком ▾»/«▴ свернуть» — кликабельная строка (hit-зона app.rs).
+    expander: bool,
     /// FR-050 Н9-2 (этап D): данные тултипа проливания — блок
     /// пролитой строки (авто-строка/параметр); hit-зона собирается
     /// в цикле отрисовки тела.
@@ -631,6 +661,12 @@ struct BodyItem {
     /// FR-061 этап C (D-7): заголовок блока-ведомости «▸ расчёт · N строк»
     /// — привязка Σ-ячейки (RowKind::Total) к своему блоку.
     header: bool,
+    /// FR-061 хвосты (D-7 runtime v1): превью-строка свёрнутой ведомости —
+    /// привязка ячейки «Σ первое-значение» (RowKind::Preview).
+    preview: bool,
+    /// FR-061 хвосты (D-8 runtime v1): аффорданс экспандера описания —
+    /// кликабельная строка (BodyHit::DescExpander, hit-зона app.rs).
+    expander: bool,
 }
 
 /// Метрики заголовка по уровню ATX: 1–3 крупно, 4–6 как bold body.
@@ -698,6 +734,7 @@ fn body_items(
     formula_lines: &[usize],
     spill_params: &[crate::SpillView],
     language: canvas_core::Language,
+    block_expanded: bool,
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
@@ -724,7 +761,13 @@ fn body_items(
     // FR-061 этап C (D-7): заголовок блока-ведомости — вставка перед
     // ПЕРВОЙ расчётной строкой при числе данных > T (Q2); общий расчёт
     // для рендера и измерения (один body_items в общем стеке, I-2).
+    // FR-061 хвосты (D-7 runtime v1): при свёрнутом блоке (дефолт —
+    // развёрнут; свёрнутость = явный клик, сброс при перезагрузке) расчётные
+    // сегменты НЕ рендерятся — ведомость представлена заголовком + превью
+    // (прототип .blk-hdr + .preview-row); блоки расчётных строк исчезают —
+    // строки без блоков выбрасываются циклом привязки (порты тоже).
     let header_plan = block_header_plan(&lines, formula_lines);
+    let collapsed = header_plan.is_some() && !block_expanded;
     for (seg_start, seg_end, source_line) in segments {
         if let Some((header_line, calc_count)) = header_plan {
             if source_line == Some(header_line) {
@@ -732,9 +775,38 @@ fn body_items(
                     &mut out,
                     &mut prev,
                     (true, false, None),
-                    block_header_item(theme, calc_count, language),
+                    block_header_item(theme, calc_count, language, block_expanded),
                 );
+                if collapsed {
+                    // Превью свёрнутой ведомости: «параметры · P · формулы · K».
+                    let param_count = formula_lines
+                        .iter()
+                        .filter(|&i| {
+                            lines.get(*i).is_some_and(|line| {
+                                matches!(line_kind(line), NumiLineKind::Assignment { .. })
+                            })
+                        })
+                        .count();
+                    push_item(
+                        &mut out,
+                        &mut prev,
+                        (true, false, None),
+                        block_preview_item(theme, param_count, calc_count, language),
+                    );
+                }
             }
+        }
+        // Свёрнутый блок: расчётная строка (не-присваивание с исходной
+        // строкой) не рендерится — блок не создаётся (строки без блоков
+        // выбрасываются циклом привязки — ячейки и порты исчезают).
+        if collapsed
+            && source_line.is_some_and(|line| {
+                lines
+                    .get(line)
+                    .is_some_and(|l| !matches!(line_kind(l), NumiLineKind::Assignment { .. }))
+            })
+        {
+            continue;
         }
         let seg_text = lines[seg_start..seg_end].join("\n");
         // FR-050: пролитая строка параметра — наклонное начертание Р-2
@@ -776,18 +848,20 @@ fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, 
     }
 }
 
-/// FR-061 этап C (D-7): элемент-заголовок блока «▸ расчёт · N строк» —
+/// FR-061 этап C (D-7): элемент-заголовок блока «▸/▾ расчёт · N строк» —
 /// моно-жирный, приглушённый цвет кода; высота строки тела (I-1).
 /// D-14 (этап D): текст локализован ([`row_grid::block_header_text_lang`]).
+/// FR-061 хвосты (D-7 runtime v1): шеврон состояния — ▾ развёрнут, ▸ свёрнут.
 fn block_header_item(
     theme: &ThemeColors,
     calc_count: usize,
     language: canvas_core::Language,
+    expanded: bool,
 ) -> BodyItem {
     BodyItem {
         gap: 0.0, // push_item пересчитает по предыдущему блоку
         rule: false,
-        text: row_grid::block_header_text_lang(calc_count, language),
+        text: row_grid::block_header_text_lang(calc_count, language, expanded),
         font_size: BODY_FONT_SIZE,
         line_height: BODY_LINE_HEIGHT,
         color: theme.code_text,
@@ -799,6 +873,38 @@ fn block_header_item(
         oblique: false,
         spill: None,
         header: true,
+        preview: false,
+        expander: false,
+    }
+}
+
+/// FR-061 хвосты (D-7 runtime v1): превью-строка свёрнутой ведомости —
+/// «параметры · P · формулы · K» (прототип .preview-row): sans, приглушённый
+/// тон (слабее заголовка), высота строки тела (I-1). Ячейка значения
+/// («Σ первый-расчёт») добавляется ряд-таблицей RowKind::Preview.
+fn block_preview_item(
+    theme: &ThemeColors,
+    param_count: usize,
+    calc_count: usize,
+    language: canvas_core::Language,
+) -> BodyItem {
+    BodyItem {
+        gap: 0.0, // push_item пересчитает по предыдущему блоку
+        rule: false,
+        text: row_grid::block_preview_text_lang(param_count, calc_count, language),
+        font_size: BODY_FONT_SIZE,
+        line_height: BODY_LINE_HEIGHT,
+        color: theme.quote,
+        indent: 0.0,
+        mono: false,
+        bold: false,
+        deco: ItemDeco::None,
+        source_line: None,
+        oblique: false,
+        spill: None,
+        header: false,
+        preview: true,
+        expander: false,
     }
 }
 
@@ -854,6 +960,8 @@ fn spill_row_items(
                 edge_id: row.edge_id.clone(),
             }),
             header: false,
+            preview: false,
+            expander: false,
         });
     }
     out
@@ -895,6 +1003,8 @@ fn push_gfm_blocks(
                         oblique: false,
                         spill: None,
                         header: false,
+                        preview: false,
+                        expander: false,
                     },
                 );
             }
@@ -923,6 +1033,8 @@ fn push_gfm_blocks(
                         oblique: spill.is_some(),
                         spill: spill.map(spill_hit_param),
                         header: false,
+                        preview: false,
+                        expander: false,
                     },
                 );
             }
@@ -946,6 +1058,8 @@ fn push_gfm_blocks(
                         oblique: false,
                         spill: None,
                         header: false,
+                        preview: false,
+                        expander: false,
                     },
                 );
             }
@@ -969,6 +1083,8 @@ fn push_gfm_blocks(
                         oblique: false,
                         spill: None,
                         header: false,
+                        preview: false,
+                        expander: false,
                     },
                 );
             }
@@ -992,6 +1108,8 @@ fn push_gfm_blocks(
                         oblique: false,
                         spill: None,
                         header: false,
+                        preview: false,
+                        expander: false,
                     },
                 );
             }
@@ -1028,6 +1146,8 @@ fn push_gfm_blocks(
                             oblique: false,
                             spill: None,
                             header: false,
+                            preview: false,
+                            expander: false,
                         },
                     );
                 }
@@ -1221,6 +1341,11 @@ fn with_body_stack(
     spill_params: &[crate::SpillView],
     language: canvas_core::Language,
     desc: Option<&str>,
+    // FR-061 хвосты (D-7/D-8 runtime v1): состояние свёрнутости блока
+    // ведомости и раскрытости описания (решения владельца: дефолты —
+    // развёрнут/кламп; состояние runtime, в .canvas не пишется — Q4).
+    block_expanded: bool,
+    desc_expanded: bool,
     quads_out: &mut Vec<BodyQuad>,
     mut on_block: impl FnMut(
         &BodyItem,
@@ -1238,9 +1363,13 @@ fn with_body_stack(
                                // FR-050 Р-4: авто-строки — префикс стека (до собственного тела).
                                // FR-061 этап D (D-8): зона описания — САМАЯ первая (до чисел/авто-строк),
                                // кламп 2 строки (токен TABLE_DESC_CLAMP_LINES).
+                               // FR-061 хвосты (D-8 runtime v1, «Раскрыть+авто»): desc_expanded —
+                               // кламп не применяется (полный текст); при усечении клампом ИЛИ в
+                               // раскрытом состоянии добавляется аффорданс-строка экспандера
+                               // («⋯ целиком ▾» / «▴ свернуть») — hit-зона BodyHit::DescExpander.
     let desc_items: Vec<BodyItem> = match desc {
         Some(d) if !d.is_empty() => {
-            let clamped = clamp_desc_text(
+            let (clamped, truncated) = clamp_desc_text(
                 font_system,
                 d,
                 body_width * zoom_px,
@@ -1249,7 +1378,16 @@ fn with_body_stack(
             if clamped.is_empty() {
                 Vec::new()
             } else {
-                vec![desc_zone_item(theme, clamped)]
+                let mut items = vec![desc_zone_item(theme, clamped)];
+                if desc_expanded || truncated {
+                    let text = if desc_expanded {
+                        row_grid::desc_collapse_text_lang(language)
+                    } else {
+                        row_grid::desc_expand_text_lang(language)
+                    };
+                    items.push(desc_expander_item(theme, text));
+                }
+                items
             }
         }
         _ => Vec::new(),
@@ -1264,7 +1402,14 @@ fn with_body_stack(
     let mut items: Vec<BodyItem> = desc_items;
     // FR-050 Р-4: авто-строки — после зоны описания, до собственного тела.
     items.extend(spill_prefix);
-    let mut body = body_items(theme, body_text, formula_lines, spill_params, language);
+    let mut body = body_items(
+        theme,
+        body_text,
+        formula_lines,
+        spill_params,
+        language,
+        block_expanded,
+    );
     // Зона «Переменные» отделяется от собственного контента зазором
     // (первый элемент тела в покое имеет gap 0 — переопределяем).
     if !items.is_empty() {
@@ -1337,7 +1482,7 @@ fn clamp_desc_text(
     text: &str,
     width_px: f32,
     max_lines: usize,
-) -> String {
+) -> (String, bool) {
     let wrapped_lines = |fs: &mut FontSystem, s: &str| -> usize {
         let mut buffer = Buffer::new(fs, Metrics::new(BODY_FONT_SIZE, BODY_LINE_HEIGHT));
         buffer.set_wrap(fs, Wrap::WordOrGlyph);
@@ -1347,10 +1492,10 @@ fn clamp_desc_text(
         buffer.layout_runs().count()
     };
     if text.trim().is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
     if wrapped_lines(font_system, text) <= max_lines {
-        return text.to_owned();
+        return (text.to_owned(), false);
     }
     // Обрезка по словам: наибольший префикс, чей кандидат с «…» укладывается
     // в max_lines строк (детерминированный бинарный поиск).
@@ -1367,15 +1512,16 @@ fn clamp_desc_text(
         }
     }
     if lo == 0 {
-        return "…".to_owned();
+        return ("…".to_owned(), true);
     }
-    format!("{} …", words[..lo].join(" "))
+    (format!("{} …", words[..lo].join(" ")), true)
 }
 
 /// FR-061 этап D (D-8): элемент зоны описания — первая зона тела (до
-/// чисел), sans, приглушённый тон цитаты. Источник — Q3 v1:
-/// `canvasdesk.desc` → описание манифеста шаблона; проза-фолбэк НЕ
-/// применяется (дублировал бы первый абзац тела — решение за владельцем).
+/// чисел), sans, приглушённый тон цитаты. Источник — Q3 (решение владельца
+/// 2026-09-23, «desc→манифест→проза»): `canvasdesk.desc` → описание
+/// манифеста шаблона → первый проза-абзац текста
+/// ([`canvas_core::expr::first_prose_paragraph`]).
 fn desc_zone_item(theme: &ThemeColors, text: String) -> BodyItem {
     BodyItem {
         gap: 0.0, // первый в стеке; зазор после зоны — у следующего элемента
@@ -1392,6 +1538,33 @@ fn desc_zone_item(theme: &ThemeColors, text: String) -> BodyItem {
         oblique: false,
         spill: None,
         header: false,
+        preview: false,
+        expander: false,
+    }
+}
+
+/// FR-061 хвосты (D-8 runtime v1): аффорданс экспандера описания — строка
+/// после текста описания («⋯ целиком ▾» при клампе / «▴ свернуть» в
+/// раскрытом состоянии), приглушённый акцент цитаты, sans; кликабельна
+/// (BodyHit::DescExpander, hit-зона app.rs). Высота строки тела (I-1).
+fn desc_expander_item(theme: &ThemeColors, text: String) -> BodyItem {
+    BodyItem {
+        gap: 0.0,
+        rule: false,
+        text,
+        font_size: BODY_FONT_SIZE,
+        line_height: BODY_LINE_HEIGHT,
+        color: theme.link,
+        indent: 0.0,
+        mono: false,
+        bold: false,
+        deco: ItemDeco::None,
+        source_line: None,
+        oblique: false,
+        spill: None,
+        header: false,
+        preview: false,
+        expander: true,
     }
 }
 
@@ -1444,6 +1617,9 @@ fn shape_body(
     spill_params: &[crate::SpillView],
     language: canvas_core::Language,
     desc: Option<&str>,
+    // FR-061 хвосты (D-7/D-8 runtime v1): см. with_body_stack.
+    block_expanded: bool,
+    desc_expanded: bool,
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -1458,6 +1634,8 @@ fn shape_body(
         spill_params,
         language,
         desc,
+        block_expanded,
+        desc_expanded,
         &mut quads,
         |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
             // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
@@ -1552,6 +1730,8 @@ fn shape_body(
                 color: item.color,
                 source_line: item.source_line,
                 header: item.header,
+                preview: item.preview,
+                expander: item.expander,
                 spill: item.spill.clone(),
             });
         },
@@ -1624,6 +1804,11 @@ pub fn measure_body_height(
         canvas_core::Language::Ru,
         // D-8: зона описания — часть стека (I-2: measure = render).
         if desc.is_empty() { None } else { Some(desc) },
+        // FR-061 хвосты: резерв считает РАЗВЁРНУТЫЙ блок и кламп описания
+        // (дефолты) — узел обязан вмещать контент по умолчанию; свёрнутость
+        // высоту не уменьшает (I-6, growth-only).
+        true,
+        false,
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -1643,6 +1828,11 @@ struct CacheKey<'a> {
     results: &'a str,
     /// FR-061 этап D (D-8): текст описания (пустой — зоны нет).
     desc: &'a str,
+    /// FR-061 хвосты (D-7/D-8 runtime v1): биты состояния —
+    /// bit0 = блок ведомости развёрнут, bit1 = описание раскрыто.
+    /// Тоггл меняет стек (свёрнутость режет блоки, экспандер добавляет
+    /// строку) — запись кэша обязана перешейпиться.
+    mode: u8,
 }
 
 /// Запись кэша свежа, если зум, ширина, заголовок, тело и результаты
@@ -1654,6 +1844,7 @@ fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
         && entry.body == current.body
         && entry.results == current.results
         && entry.desc == current.desc
+        && entry.mode == current.mode
 }
 
 /// Оверлей-текст в world-координатах (контекстное меню, T7): шейпится
@@ -1798,6 +1989,14 @@ pub struct TitleFrame<'a> {
     /// дельта-бейджи «было → стало (+Δ)». Пусто — режим выключен или подмен
     /// нет (рельеф базы не тронут, инвариант 2 FR-017).
     pub whatif_nodes: &'a std::collections::HashMap<String, crate::WhatIfNode>,
+    /// FR-061 хвосты (D-7 runtime v1): id нод со СВЁРНУТЫМ блоком-ведомостью
+    /// (дефолт — развёрнут; свёрнутость = явный клик по заголовку, состояние
+    /// runtime, сброс при перезагрузке — Q4). Пусто — все блоки развёрнуты
+    /// (прежний рельеф, I-1/T5 без правок).
+    pub block_collapsed: &'a std::collections::HashSet<String>,
+    /// FR-061 хвосты (D-8 runtime v1): id нод с РАСКРЫТЫМ описанием
+    /// («⋯ целиком ▾» → полный текст; автосворачивание — клик вне/правка).
+    pub desc_expanded: &'a std::collections::HashSet<String>,
     /// FR-016 (CP5): бейджи узких мест видимых нод — шейпятся покадрово,
     /// рисуются в финальной группе (поверх карточек, рядом с лейблами
     /// связей). Пустой список — оверлей выключен или рисков нет.
@@ -1882,6 +2081,8 @@ struct CachedTitle {
     results_key: String,
     /// FR-061 этап D (D-8): текст описания ноды (ключ свежести D-8).
     desc_text: String,
+    /// FR-061 хвосты (D-7/D-8): биты состояния тогглов (см. CacheKey.mode).
+    mode: u8,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
 }
@@ -1959,6 +2160,11 @@ pub struct TextSystem {
     /// каждый кадр; приложение вычитывает после рендера для тултипа
     /// источника («пролито: …»).
     spill_hits: Vec<SpillHit>,
+    /// FR-061 хвосты (D-7/D-8 runtime v1): кликабельные зоны тела
+    /// (заголовок блока-ведомости, экспандер описания; логические px) —
+    /// пересобираются каждый кадр; приложение вычитывает после рендера
+    /// для тогглов свёрнутости/раскрытости (решения владельца).
+    body_hits: Vec<BodyHit>,
     /// Номер кадра для LRU-вытеснения кэша.
     tick: u64,
     /// Палитра темы: цвета заголовка/иконки/тела/лейбла связи.
@@ -1999,6 +2205,7 @@ impl TextSystem {
             label_cache: HashMap::new(),
             line_error_hits: Vec::new(),
             spill_hits: Vec::new(),
+            body_hits: Vec::new(),
             tick: 0,
             theme: ThemeColors::dark(),
             language: canvas_core::Language::Ru,
@@ -2105,6 +2312,12 @@ impl TextSystem {
         &self.spill_hits
     }
 
+    /// FR-061 хвосты (D-7/D-8): кликабельные зоны тела ПОСЛЕДНЕГО кадра
+    /// (заголовок блока-ведомости, экспандер описания; логические px).
+    pub fn body_hits(&self) -> &[BodyHit] {
+        &self.body_hits
+    }
+
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
     /// строки с бейджем результата — [`LinePort`] на правом краю ноды
     /// (вертикаль — [`result_row_y`] ряда бейджа — инвариант вертикали).
@@ -2207,6 +2420,8 @@ impl TextSystem {
         // FR-050 Н9-2 (этап D): зоны пролитых строк — пересобираются каждый
         // кадр (позиции зависят от камеры/зума/раскладки тела)
         let mut spill_hits: Vec<SpillHit> = Vec::new();
+        // FR-061 хвосты (D-7/D-8): кликабельные зоны тела (см. BodyHit).
+        let mut body_hits: Vec<BodyHit> = Vec::new();
         let viewport_physical = frame.viewport_physical;
         let scale_factor = frame.scale_factor;
         self.viewport.update(
@@ -2441,10 +2656,11 @@ impl TextSystem {
                     format!("{results_key}|Lang:{:?}", self.language)
                 };
 
-                // FR-061 этап D (D-8): источник описания Q3 —
-                // canvasdesk.desc → описание манифеста шаблона (снимок
-                // id — template_descs); проза-фолбэк не применяется
-                // (дубль первого абзаца — решение за владельцем).
+                // FR-061 этап D (D-8): источник описания Q3 (решение владельца
+                // 2026-09-23 — «desc→манифест→проза»): canvasdesk.desc →
+                // описание манифеста шаблона (снимок id — template_descs) →
+                // первый проза-абзац текста ноды (canvas-core, чистая функция —
+                // та же в сцене для резерва высоты, I-2).
                 let desc_text = node
                     .canvasdesk
                     .as_ref()
@@ -2453,12 +2669,22 @@ impl TextSystem {
                         node.template()
                             .and_then(|t| self.template_descs.get(&t.id).cloned())
                     })
+                    .or_else(|| {
+                        node.text
+                            .as_deref()
+                            .and_then(canvas_core::expr::first_prose_paragraph)
+                    })
                     .unwrap_or_default();
                 let desc_ref = if desc_text.is_empty() {
                     None
                 } else {
                     Some(desc_text.as_str())
                 };
+                // FR-061 хвосты (D-7/D-8 runtime v1): состояние тогглов ноды
+                // (дефолты — развёрнут/кламп; в ключе свежести — mode).
+                let block_expanded = !frame.block_collapsed.contains(&node.id);
+                let desc_expanded = frame.desc_expanded.contains(&node.id);
+                let mode = (u8::from(block_expanded)) | (u8::from(desc_expanded) << 1);
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
                     cache_fresh(
@@ -2469,6 +2695,7 @@ impl TextSystem {
                             body: &e.body_text,
                             results: &e.results_key,
                             desc: &e.desc_text,
+                            mode: e.mode,
                         },
                         CacheKey {
                             zoom: zoom_px,
@@ -2477,6 +2704,7 @@ impl TextSystem {
                             body: &body_text,
                             results: &results_key,
                             desc: &desc_text,
+                            mode,
                         },
                     )
                 });
@@ -2555,6 +2783,8 @@ impl TextSystem {
                                 spill_views,
                                 self.language,
                                 desc_ref,
+                                block_expanded,
+                                desc_expanded,
                             ))
                         };
 
@@ -2616,6 +2846,10 @@ impl TextSystem {
                         // вставка перед первой расчётной строкой, зеркально
                         // заголовочному блоку в body_items (тот же план —
                         // block_header_plan в общем стеке, I-2).
+                        // FR-061 хвосты (D-7 runtime v1): при свёрнутом блоке
+                        // после Total вставляется превью-строка «Σ первый
+                        // расчёт» (прототип .preview-row); расчётные строки
+                        // блоков не имеют и выбрасываются циклом привязки.
                         if row_grid::block_mode(&rows_data, canvas_core::NODE_BODY_BLOCK_THRESHOLD)
                         {
                             let calc_count = row_grid::calc_row_count(&rows_data);
@@ -2643,6 +2877,40 @@ impl TextSystem {
                                         error_message: None,
                                     },
                                 );
+                                if !block_expanded {
+                                    // Превью: Σ ПЕРВОГО расчёта (значение до
+                                    // выбрасывания — Calc-строки ещё в списке).
+                                    let first = rows_data
+                                        .iter()
+                                        .find(|row| row.kind == row_grid::RowKind::Calc);
+                                    let (value, unit) = first
+                                        .map(|row| (format!("Σ {}", row.value), row.unit.clone()))
+                                        .unwrap_or(("Σ —".to_owned(), String::new()));
+                                    let param_count = rows_data
+                                        .iter()
+                                        .filter(|row| row.kind == row_grid::RowKind::Param)
+                                        .count();
+                                    let after_total = idx + 1;
+                                    rows_data.insert(
+                                        after_total,
+                                        row_grid::RowCells {
+                                            kind: row_grid::RowKind::Preview,
+                                            source_line: None,
+                                            name: row_grid::block_preview_text_lang(
+                                                param_count,
+                                                calc_count,
+                                                self.language,
+                                            ),
+                                            formula: String::new(),
+                                            value,
+                                            unit,
+                                            upstream: false,
+                                            dim_value: false,
+                                            badge: None,
+                                            error_message: None,
+                                        },
+                                    );
+                                }
                             }
                         }
                         // Привязка строк к геометрии блоков: авто-строки —
@@ -2667,6 +2935,12 @@ impl TextSystem {
                             let found = match row.kind {
                                 row_grid::RowKind::Total => {
                                     layout.blocks.iter().position(|block| block.header)
+                                }
+                                // FR-061 хвосты (D-7 runtime v1): превью
+                                // свёрнутой ведомости — блок с маркером
+                                // preview (вставка в body_items, I-2).
+                                row_grid::RowKind::Preview => {
+                                    layout.blocks.iter().position(|block| block.preview)
                                 }
                                 row_grid::RowKind::Auto => {
                                     let pos = auto_blocks.get(auto_i).copied();
@@ -2728,18 +3002,21 @@ impl TextSystem {
                             let mut k = j + 1;
                             while k < geo.len()
                                 && geo[k].3 == geo[k - 1].3 + 1
-                                && !matches!(rows_data[k].kind, row_grid::RowKind::Total)
+                                && !matches!(
+                                    rows_data[k].kind,
+                                    row_grid::RowKind::Total | row_grid::RowKind::Preview
+                                )
                             {
                                 k += 1;
                             }
                             if k - j >= ZEBRA_RUN_MIN {
                                 for (pos, z) in zebra[j..k].iter_mut().enumerate() {
                                     // Заголовок блока зебры не получает (D-5:
-                                    // зебра — фон строк данных).
+                                    // зебра — фон строк данных; превью — тоже).
                                     *z = pos % 2 == 1
                                         && !matches!(
                                             rows_data[j + pos].kind,
-                                            row_grid::RowKind::Total
+                                            row_grid::RowKind::Total | row_grid::RowKind::Preview
                                         );
                                 }
                             }
@@ -2834,9 +3111,13 @@ impl TextSystem {
                                 }
                                 // Лидер: от конца левого текста до направляющей
                                 // чисел, штрихи 2/3 px на базовой линии строки;
-                                // у заголовка блока (Total) лидера нет — Σ стоит
-                                // на направляющей сама (анализ §3.1).
-                                if row.kind != row_grid::RowKind::Total {
+                                // у заголовка блока (Total) и превью лидера нет —
+                                // Σ стоит на направляющей сама (анализ §3.1;
+                                // превью свёрнутой ведомости — как Σ-строка).
+                                if !matches!(
+                                    row.kind,
+                                    row_grid::RowKind::Total | row_grid::RowKind::Preview
+                                ) {
                                     let x0 = (row.left_end + row_grid::LEADER_PAD) * z;
                                     let x1 = (g.value_right() - row_grid::LEADER_PAD) * z;
                                     if x1 - x0 >= 6.0 * z {
@@ -2886,6 +3167,7 @@ impl TextSystem {
                             body_text,
                             results_key,
                             desc_text,
+                            mode,
                             last_used: self.tick,
                         },
                     );
@@ -3284,6 +3566,32 @@ impl TextSystem {
                                     });
                                 }
                             }
+                            // FR-061 хвосты (D-7/D-8 runtime v1): кликабельные
+                            // зоны тела — заголовок блока-ведомости (сворачи-
+                            // вание/разворачивание) и экспандер описания
+                            // («⋯ целиком ▾»/«▴ свернуть»); логические px окна
+                            // (паттерн SpillHit). Только видимые (не ниже клипа).
+                            let body_hit_kind = if block.header {
+                                Some(BodyHitKind::BlockHeader)
+                            } else if block.expander {
+                                Some(BodyHitKind::DescExpander)
+                            } else {
+                                None
+                            };
+                            if let Some(kind) = body_hit_kind {
+                                if bottom > top {
+                                    body_hits.push(BodyHit {
+                                        rect: [
+                                            left / scale_factor,
+                                            top / scale_factor,
+                                            (block.width * zoom_px) / scale_factor,
+                                            (bottom - top) / scale_factor,
+                                        ],
+                                        kind,
+                                        node: index,
+                                    });
+                                }
+                            }
                         }
                     }
                     // FR-013 (правка 2): результат каждой формульной строки —
@@ -3658,6 +3966,7 @@ impl TextSystem {
         // FR-050 Н9-2 (этап D): зоны пролитых строк кадра собраны — тултип
         // источника в оверлее следующего кадра
         self.spill_hits = spill_hits;
+        self.body_hits = body_hits;
         // Screen-тексты ПОЛОС (FR-052 U2): отдельная группа на полосу —
         // рендерер рисует полосы по очереди (квады полосы → тексты полосы),
         // поэтому фон следующей полосы не закрывает строки предыдущей,
@@ -3945,6 +4254,7 @@ mod tests {
             body: "тело",
             results: "",
             desc: "",
+            mode: 0,
         };
         let same = CacheKey { ..entry };
         assert!(cache_fresh(entry, same));
@@ -4189,6 +4499,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         )
     }
 
@@ -4209,6 +4521,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         assert_eq!(
             layout.blocks.len(),
@@ -4244,6 +4558,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         assert!(
             !layout
@@ -4266,6 +4582,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         let whatif = layout
             .quads
@@ -4417,12 +4735,13 @@ mod tests {
                 short,
                 280.0,
                 canvas_core::tokens::TABLE_DESC_CLAMP_LINES
-            ),
+            )
+            .0,
             short,
             "короткий текст не клампится"
         );
         let long = "Длинное описание расчётной модели веб-сервиса, которое заведомо не помещается в две строки узкого тела ноды и потому обязано обрезаться многоточием по словам.";
-        let clamped = clamp_desc_text(
+        let (clamped, truncated) = clamp_desc_text(
             &mut fs,
             long,
             280.0,
@@ -4430,8 +4749,21 @@ mod tests {
         );
         assert!(clamped.ends_with("…"), "кламп завершается «…»: {clamped}");
         assert!(clamped.chars().count() < long.chars().count());
+        // FR-061 хвосты: флаг усечения — true для длинного, false для короткого
+        assert!(truncated, "длинный текст помечен усечённым");
+        let (short_text, short_truncated) = clamp_desc_text(
+            &mut fs,
+            short,
+            280.0,
+            canvas_core::tokens::TABLE_DESC_CLAMP_LINES,
+        );
+        assert!(!short_truncated, "короткий текст не усечён");
+        assert_eq!(short_text, short);
         // Пустой desc — пустая строка (зона не строится)
-        assert_eq!(clamp_desc_text(&mut fs, "   ", 280.0, 2), "");
+        assert_eq!(
+            clamp_desc_text(&mut fs, "   ", 280.0, 2),
+            (String::new(), false)
+        );
         // Мера стека: desc-зона добавляет высоту
         let plain = measure_body_height("deploy = 40 $", 300.0, &[0], "");
         let with_desc = measure_body_height("deploy = 40 $", 300.0, &[0], "Описание схемы.");
@@ -4451,6 +4783,7 @@ mod tests {
             &[1],
             &[],
             canvas_core::Language::Ru,
+            true,
         );
         assert_eq!(items.len(), 2, "проза + формульная строка");
         assert!(!items[0].mono, "проза — sans");
@@ -4499,6 +4832,7 @@ mod tests {
             &[1],
             &spills,
             canvas_core::Language::Ru,
+            true,
         );
         assert_eq!(items.len(), 2);
         assert!(!items[0].oblique, "проза — прямое начертание");
@@ -4592,6 +4926,9 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            // хвосты FR-061: развёрнутый блок, кламп описания (дефолты)
+            true,
+            false,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4616,6 +4953,9 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            // хвосты FR-061: развёрнутый блок, кламп описания (дефолты)
+            true,
+            false,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4644,6 +4984,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
         let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
@@ -5013,20 +5355,52 @@ mod tests {
             &[0, 1, 2, 3, 4],
             &[],
             canvas_core::Language::Ru,
+            true,
         );
         let header_pos = items
             .iter()
             .position(|item| item.header)
             .expect("заголовок блока вставлен");
-        assert_eq!(items[header_pos].text, "▸ расчёт · 1 строка");
+        assert_eq!(items[header_pos].text, "▾ расчёт · 1 строка");
         // Следом — первая расчётная строка (source_line 4)
         assert_eq!(items[header_pos + 1].source_line, Some(4));
         // Ниже порога (4 строки данных) — заголовка нет
         let four = "a = 1\nb = 2\nc = 3\nd * 2";
-        let items = body_items(&theme, four, &[0, 1, 2, 3], &[], canvas_core::Language::Ru);
+        let items = body_items(
+            &theme,
+            four,
+            &[0, 1, 2, 3],
+            &[],
+            canvas_core::Language::Ru,
+            true,
+        );
         assert!(
             items.iter().all(|item| !item.header),
             "порог T не достигнут"
+        );
+        // FR-061 хвосты (D-7 runtime v1): свёрнутый блок — шеврон «▸»,
+        // следом превью-строка, расчётные строки СКРЫТЫ (блоков нет).
+        let collapsed = body_items(
+            &theme,
+            five,
+            &[0, 1, 2, 3, 4],
+            &[],
+            canvas_core::Language::Ru,
+            false,
+        );
+        let header_pos = collapsed
+            .iter()
+            .position(|item| item.header)
+            .expect("заголовок в свёрнутом виде есть");
+        assert_eq!(collapsed[header_pos].text, "▸ расчёт · 1 строка");
+        assert_eq!(
+            collapsed[header_pos + 1].text,
+            "параметры · 4 · формулы · 1 строка"
+        );
+        assert!(collapsed[header_pos + 1].preview, "второй элемент — превью");
+        assert!(
+            collapsed.iter().all(|item| item.source_line != Some(4)),
+            "расчётная строка скрыта"
         );
     }
 
@@ -5053,6 +5427,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         let rendered = layout
             .blocks
@@ -5097,6 +5473,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         let rendered = layout
             .blocks
@@ -5127,6 +5505,8 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             None,
+            true,
+            false,
         );
         let bullet = layout
             .quads

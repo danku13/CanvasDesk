@@ -282,6 +282,14 @@ pub struct SceneState {
     /// подсветка подмен, дельта-бейджи). Runtime-кэш — пересчитывается в
     /// `recompute_flow` вместе с картами потока.
     pub whatif_nodes: HashMap<String, WhatIfNode>,
+    /// FR-061 хвосты (D-7 runtime v1, Q4 — runtime): id нод со СВЁРНУТЫМ
+    /// блоком-ведомостью (дефолт — развёрнут; тоггл — клик по заголовку).
+    /// Очищается при загрузке схемы (сброс к дефолту), в .canvas не пишется.
+    pub block_collapsed: std::collections::HashSet<String>,
+    /// FR-061 хвосты (D-8 runtime v1, «Раскрыть+авто»): id нод с РАСКРЫТЫМ
+    /// описанием («⋯ целиком ▾»). Автосворачивание — клик вне ноды /
+    /// начало правки (метод collapse_descs_except); очистка при загрузке.
+    pub desc_expanded: std::collections::HashSet<String>,
     /// ADR-0012: viewport-зеркало MCP (см. [`Viewport`]).
     pub viewport: Viewport,
     /// PRD-0007 (FR-048 X2, AC-3.3): монотонный счётчик ревизий модели —
@@ -353,6 +361,8 @@ impl SceneState {
             flow_cycle: None,
             whatif_stale: Vec::new(),
             whatif_nodes: HashMap::new(),
+            block_collapsed: std::collections::HashSet::new(),
+            desc_expanded: std::collections::HashSet::new(),
             analysis: AnalysisState::new(),
             viewport: Viewport::default(),
             revision: 0,
@@ -886,10 +896,13 @@ impl SceneState {
         }
     }
 
-    /// FR-061 этап D (D-8): текст описания ноды (Q3 v1) — `canvasdesk.desc`
-    /// → описание манифеста шаблона (`template_descs` по снимку id).
-    /// Пусто — зоны описания нет.
-    fn node_desc_text(&self, index: usize) -> Option<String> {
+    /// FR-061 этап D (D-8): текст описания ноды (Q3, решение владельца
+    /// 2026-09-23 — «desc→манифест→проза»): `canvasdesk.desc` → описание
+    /// манифеста шаблона (`template_descs` по снимку id) → первый
+    /// проза-абзац текста ноды ([`canvas_core::expr::first_prose_paragraph`]
+    /// — та же функция, что в рендере: измерение и рендер не разъезжаются,
+    /// I-2). Пусто — зоны описания нет.
+    pub(crate) fn node_desc_text(&self, index: usize) -> Option<String> {
         let node = self.canvas.nodes.get(index)?;
         node.canvasdesk
             .as_ref()
@@ -898,7 +911,46 @@ impl SceneState {
                 node.template()
                     .and_then(|t| self.template_descs.get(&t.id).cloned())
             })
+            .or_else(|| {
+                node.text
+                    .as_deref()
+                    .and_then(canvas_core::expr::first_prose_paragraph)
+            })
             .filter(|d| !d.trim().is_empty())
+    }
+
+    /// FR-061 хвосты (D-7 runtime v1): тоггл свёрнутости блока-ведомости
+    /// ноды (клик по заголовку; runtime — Q4). Возвращает true, если блок
+    /// после тоггла свёрнут (для отладки/тестов).
+    pub fn toggle_block_collapsed(&mut self, node_id: &str) -> bool {
+        if !self.block_collapsed.remove(node_id) {
+            self.block_collapsed.insert(node_id.to_owned());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// FR-061 хвосты (D-8 runtime v1): тоггл раскрытости описания ноды
+    /// («⋯ целиком ▾» / «▴ свернуть»). Возвращает true, если после тоггла
+    /// описание раскрыто.
+    pub fn toggle_desc_expanded(&mut self, node_id: &str) -> bool {
+        if !self.desc_expanded.remove(node_id) {
+            self.desc_expanded.insert(node_id.to_owned());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// FR-061 хвосты (D-8, «Раскрыть+авто»): автосворачивание раскрытых
+    /// описаний — клик вне ноды `keep` / начало правки. `keep: Some(id)` —
+    /// описание ноды `id` сохраняется (клик по её телу).
+    pub fn collapse_descs_except(&mut self, keep: Option<&str>) {
+        match keep {
+            Some(id) => self.desc_expanded.retain(|x| x == id),
+            None => self.desc_expanded.clear(),
+        }
     }
 
     /// CR-012: ленивый refit всех нод канваса — резерв футера результата
