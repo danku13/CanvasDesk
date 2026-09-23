@@ -433,6 +433,19 @@ pub mod keys {
     pub const KIT_CARD_BODY: &str = "kit.card.body";
     pub const KIT_LIST_ROW: &str = "kit.list.row";
     pub const KIT_STATE_FOCUSED: &str = "kit.state.focused";
+    /// FR-062: секции layout v2 (measured/flex/wrap/grid/focus) + подписи демо.
+    pub const KIT_SECTION_MEASURED: &str = "kit.section.measured";
+    pub const KIT_SECTION_GROW: &str = "kit.section.grow";
+    pub const KIT_SECTION_WRAP: &str = "kit.section.wrap";
+    pub const KIT_SECTION_GRID: &str = "kit.section.grid";
+    pub const KIT_SECTION_FOCUS: &str = "kit.section.focus";
+    pub const KIT_MEASURED_A: &str = "kit.measured.a";
+    pub const KIT_MEASURED_B: &str = "kit.measured.b";
+    pub const KIT_MEASURED_C: &str = "kit.measured.c";
+    pub const KIT_GROW_FIXED: &str = "kit.grow.fixed";
+    pub const KIT_GROW_TWO: &str = "kit.grow.two";
+    pub const KIT_GROW_ONE: &str = "kit.grow.one";
+    pub const KIT_WRAP_CHIP: &str = "kit.wrap.chip";
     /// DebugOverlay (F10): подсказка тогла.
     pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
@@ -906,6 +919,25 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_SECTION_CARD, "Карточка (Card: хедер + тело)"),
     (keys::KIT_SECTION_LIST, "Список и скролл (list_rows + ScrollState)"),
     (keys::KIT_SECTION_ICONS, "Иконки (Icon: глифы существующим шрифтом)"),
+    // FR-062: секции layout v2
+    (
+        keys::KIT_SECTION_MEASURED,
+        "Measured-ряд (F-13: ширины из TextMeasurer)",
+    ),
+    (keys::KIT_SECTION_GROW, "Flex-факторы (F-14: grow 2:1 + End)"),
+    (keys::KIT_SECTION_WRAP, "Перенос ряда (F-15: Wrap в слоте)"),
+    (keys::KIT_SECTION_GRID, "Сетка (F-16: grid_cells 4×2)"),
+    (
+        keys::KIT_SECTION_FOCUS,
+        "Фокус (F-17: FocusRing, Tab/Shift+Tab)",
+    ),
+    (keys::KIT_MEASURED_A, "Введено"),
+    (keys::KIT_MEASURED_B, "Формула"),
+    (keys::KIT_MEASURED_C, "Итог, %"),
+    (keys::KIT_GROW_FIXED, "фикс."),
+    (keys::KIT_GROW_TWO, "grow ×2"),
+    (keys::KIT_GROW_ONE, "grow ×1"),
+    (keys::KIT_WRAP_CHIP, "Чип {n}"),
     (keys::KIT_TEXTFIELD_PLACEHOLDER, "Подсказка…"),
     (keys::KIT_CARD_TITLE, "Карточка"),
     (
@@ -1556,6 +1588,25 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_SECTION_CARD, "Card (header + body)"),
     (keys::KIT_SECTION_LIST, "List & scroll (list_rows + ScrollState)"),
     (keys::KIT_SECTION_ICONS, "Icons (glyphs via the existing font)"),
+    // FR-062: layout v2 sections
+    (
+        keys::KIT_SECTION_MEASURED,
+        "Measured row (F-13: widths from TextMeasurer)",
+    ),
+    (keys::KIT_SECTION_GROW, "Flex factors (F-14: grow 2:1 + End)"),
+    (keys::KIT_SECTION_WRAP, "Row wrap (F-15: Wrap in slot)"),
+    (keys::KIT_SECTION_GRID, "Grid (F-16: grid_cells 4×2)"),
+    (
+        keys::KIT_SECTION_FOCUS,
+        "Focus (F-17: FocusRing, Tab/Shift+Tab)",
+    ),
+    (keys::KIT_MEASURED_A, "Input"),
+    (keys::KIT_MEASURED_B, "Formula"),
+    (keys::KIT_MEASURED_C, "Result, %"),
+    (keys::KIT_GROW_FIXED, "fixed"),
+    (keys::KIT_GROW_TWO, "grow ×2"),
+    (keys::KIT_GROW_ONE, "grow ×1"),
+    (keys::KIT_WRAP_CHIP, "Chip {n}"),
     (keys::KIT_TEXTFIELD_PLACEHOLDER, "Placeholder…"),
     (keys::KIT_CARD_TITLE, "Card"),
     (

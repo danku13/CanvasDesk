@@ -976,6 +976,25 @@ pub fn icon_button(slot: UiRect, _icon: Icon, align: (HAlign, VAlign)) -> UiRect
     icon_button_rect(slot, align)
 }
 
+// --- Фокус контента (FR-062 F-17) -------------------------------------------
+
+/// Текущий фокус [`FocusRing`] в Tab-порядке `rects` поверхности:
+/// `Some((индекс, rect))` — кольцо указывает на rect из `rects`
+/// (совпадение по значению — кольцо живёт в тех же координатах, что и
+/// раскладка: контент-координаты + сдвиг скролла решает потребитель);
+/// `None` — фокус не ставился или rect'ы перестроились (после
+/// [`FocusRing::retain_order`] совпадение восстанавливается).
+///
+/// Потребитель даёт [`crate::widget::WidgetState::set_focused`] и рисует
+/// рамку слотом `accent` (контракт FR-057: FocusRing — только навигация).
+pub fn focus_order(rects: &[UiRect], ring: &crate::keyboard::FocusRing) -> Option<(usize, UiRect)> {
+    let current = *ring.current()?;
+    rects
+        .iter()
+        .position(|r| *r == current)
+        .map(|i| (i, current))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2016,5 +2035,64 @@ mod tests {
                 "{icon:?}: icon_button делегирует icon_button_rect"
             );
         }
+    }
+
+    // === FR-062 F-17: focus_order ===
+
+    /// Текущий фокус кольца находится в Tab-порядке по значению rect'а.
+    #[test]
+    fn focus_order_finds_ring_current_in_tab_order() {
+        use crate::keyboard::FocusRing;
+        let a = UiRect::new(0.0, 0.0, 40.0, 24.0);
+        let b = UiRect::new(50.0, 0.0, 40.0, 24.0);
+        let c = UiRect::new(100.0, 0.0, 40.0, 24.0);
+        let mut ring = FocusRing::new();
+        // пустое кольцо — None
+        assert!(focus_order(&[a, b, c], &ring).is_none());
+        ring.push(a);
+        ring.push(b);
+        ring.push(c);
+        assert_eq!(ring.next(), Some(a));
+        assert_eq!(focus_order(&[a, b, c], &ring), Some((0, a)));
+        assert_eq!(ring.next(), Some(b));
+        assert_eq!(focus_order(&[a, b, c], &ring), Some((1, b)));
+        // rect'ы перестроились (нет совпадения по значению) — None;
+        // retain_order сохраняет индекс — совпадение восстанавливается
+        assert!(focus_order(&[a, c], &ring).is_none());
+        ring.retain_order(&[a, c]);
+        assert_eq!(focus_order(&[a, c], &ring), Some((1, c)));
+    }
+
+    // === FR-062 F-18: геометрический снапшот кит-компонента (без шрифтов) ===
+
+    /// Золотая геометрия Switch (фикс-слоты: трек/курок) и Card
+    /// (хедер/тело) — изменение раскладки ловится эталоном.
+    #[test]
+    fn snapshot_switch_and_card_geometry_golden() {
+        use crate::testing::{assert_snapshot, snap};
+        let p = palette_a();
+        // Switch: трек 36×20 по центру слота; бегунок 16×16 (on — справа)
+        let slot = UiRect::new(10.0, 20.0, 200.0, 40.0);
+        let sw = switch(slot, true, KitState::Normal, &p);
+        assert_snapshot(
+            format!("{}\n{}", snap("track", sw.track), snap("knob", sw.knob)),
+            "track x=92 y=30 w=36 h=20\nknob x=110 y=32 w=16 h=16",
+        );
+        // Card: пад панели SPACING_LG=12; хедер 24, тело — остаток
+        let card = card(
+            UiRect::new(0.0, 0.0, 400.0, 120.0),
+            UiVec2::new(0.0, 120.0),
+            UiVec2::new(400.0, 120.0),
+            24.0,
+            &p,
+        );
+        assert_snapshot(
+            format!(
+                "{}\n{}",
+                snap("card_header", card.header),
+                snap("card_body", card.body)
+            ),
+            "card_header x=12 y=12 w=376 h=24\ncard_body x=12 y=36 w=376 h=72",
+        );
     }
 }
