@@ -732,6 +732,9 @@ fn body_items(
     spill_params: &[crate::SpillView],
     language: canvas_core::Language,
     block_expanded: bool,
+    // FR-061 коммит 3: усечённое отображение формульных строк (план
+    // прохода A — лестница §3.4, Q8): (source_line → текст строки).
+    overrides: &[(usize, String)],
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
@@ -806,6 +809,19 @@ fn body_items(
             continue;
         }
         let seg_text = lines[seg_start..seg_end].join("\n");
+        // FR-061 коммит 3: сегмент формульной строки замещается усечённым
+        // отображением из плана прохода A (лестница §3.4, Q8: алиасы →
+        // хвостовой ellipsis; полное — в тултипе строки). Сегмент
+        // формульной строки — одна строка, шейпится БЕЗ GFM-парсинга
+        // (formula-путь shape_text_block) — подмена безопасна.
+        let seg_text = match source_line.and_then(|line| {
+            overrides
+                .iter()
+                .find_map(|(l, text)| (*l == line).then_some(text))
+        }) {
+            Some(display) => display.clone(),
+            None => seg_text,
+        };
         // FR-050: пролитая строка параметра — наклонное начертание Р-2
         // и данные тултипа источника (Н9-2).
         let spill =
@@ -1343,6 +1359,9 @@ fn with_body_stack(
     // развёрнут/кламп; состояние runtime, в .canvas не пишется — Q4).
     block_expanded: bool,
     desc_expanded: bool,
+    // FR-061 коммит 3: усечённое отображение формульных строк (план
+    // прохода A): (source_line → текст строки). Пусто — без усечения.
+    overrides: &[(usize, String)],
     quads_out: &mut Vec<BodyQuad>,
     mut on_block: impl FnMut(
         &BodyItem,
@@ -1406,6 +1425,7 @@ fn with_body_stack(
         spill_params,
         language,
         block_expanded,
+        overrides,
     );
     // Зона «Переменные» отделяется от собственного контента зазором
     // (первый элемент тела в покое имеет gap 0 — переопределяем).
@@ -1596,6 +1616,61 @@ fn guide_debug_quads(
     ]
 }
 
+/// FR-061 коммит 3: геометрия строк из раскладки (выделено из билда для
+/// повторного прохода усечения формул — два шейпа, одна привязка).
+/// Авто-строки — префиксные блоки (по порядку), Param/Calc — блок своей
+/// строки текста (I-1: те же Y, что у портов). Возвращает
+/// (row_top, line_h, left_end, block_pos); usize::MAX — блока нет
+/// (рассинхрон текста/исходов — строка не рисуется, портов не даёт).
+fn row_geo(
+    layout: &BodyLayout,
+    rows_data: &[row_grid::RowCells],
+    zoom_px: f32,
+) -> Vec<(f32, f32, f32, usize)> {
+    let auto_blocks: Vec<usize> = layout
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, block)| {
+            matches!(block.spill, Some(SpillHitKind::AutoRow { .. })).then_some(pos)
+        })
+        .collect();
+    let mut auto_i = 0usize;
+    let mut geo: Vec<(f32, f32, f32, usize)> = Vec::with_capacity(rows_data.len());
+    for row in rows_data {
+        // FR-061 этап C: заголовок блока (Total) — блок с маркером header
+        // (вставка в body_items, I-2); превью (Preview) — маркер preview.
+        let found = match row.kind {
+            row_grid::RowKind::Total => layout.blocks.iter().position(|block| block.header),
+            row_grid::RowKind::Preview => layout.blocks.iter().position(|block| block.preview),
+            row_grid::RowKind::Auto => {
+                let pos = auto_blocks.get(auto_i).copied();
+                auto_i += 1;
+                pos
+            }
+            _ => row.source_line.and_then(|line| {
+                layout
+                    .blocks
+                    .iter()
+                    .position(|block| block.source_line == Some(line))
+            }),
+        };
+        match found {
+            Some(pos) => {
+                let block = &layout.blocks[pos];
+                let line_h = match row.kind {
+                    row_grid::RowKind::Auto => AUTO_ROW_LINE_HEIGHT,
+                    _ => BODY_LINE_HEIGHT,
+                };
+                let left_end = block.offset[0] + block.line_w / zoom_px.max(1e-6);
+                geo.push((block.offset[1], line_h, left_end, pos));
+            }
+            None => geo.push((f32::NAN, 0.0, 0.0, usize::MAX)),
+        }
+    }
+    geo
+}
+
 /// Зашейпить тело заметки: GFM-блоки → вертикальный стек буферов со своими
 /// метриками/цветами + декоративные квады (в px виртуального буфера тела).
 /// `body_width` — world-px, `zoom_px` — физический зум. GPU не нужен —
@@ -1617,6 +1692,9 @@ fn shape_body(
     // FR-061 хвосты (D-7/D-8 runtime v1): см. with_body_stack.
     block_expanded: bool,
     desc_expanded: bool,
+    // FR-061 коммит 3: усечённое отображение формульных строк (план
+    // прохода A — лестница §3.4, Q8): (source_line → текст строки).
+    overrides: &[(usize, String)],
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -1633,6 +1711,7 @@ fn shape_body(
         desc,
         block_expanded,
         desc_expanded,
+        overrides,
         &mut quads,
         |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
             // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
@@ -1806,6 +1885,10 @@ pub fn measure_body_height(
         // высоту не уменьшает (I-6, growth-only).
         true,
         false,
+        // FR-061 коммит 3: измерение без усечения (план — сторона рендера;
+        // перенос длинной формулы меряется как прежде — рост-only refit
+        // сохраняет запас, документированная цена).
+        &[],
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -2110,6 +2193,9 @@ struct CachedRow {
     badge: Option<CachedCell>,
     /// Полный текст ошибки (тултип «!», механика FR-013 пр.4).
     error_message: Option<String>,
+    /// FR-061 коммит 3: полная формула усечённой строки (лестница §3.4,
+    /// Q8) — тултип строки; None — строка без усечения.
+    left_full: Option<String>,
 }
 
 /// Зашейпленная ячейка строки: буфер + ширина (px буфера) + цвет.
@@ -2157,6 +2243,9 @@ pub struct TextSystem {
     /// каждый кадр; приложение вычитывает после рендера для тултипа
     /// источника («пролито: …»).
     spill_hits: Vec<SpillHit>,
+    /// FR-061 коммит 3: зоны усечённых формул (лестница §3.4, Q8; логические
+    /// px) — пересобираются каждый кадр; тултип строки — полная формула.
+    formula_ellipsis_hits: Vec<LineErrorHit>,
     /// FR-061 хвосты (D-7/D-8 runtime v1): кликабельные зоны тела
     /// (заголовок блока-ведомости, экспандер описания; логические px) —
     /// пересобираются каждый кадр; приложение вычитывает после рендера
@@ -2202,6 +2291,7 @@ impl TextSystem {
             label_cache: HashMap::new(),
             line_error_hits: Vec::new(),
             spill_hits: Vec::new(),
+            formula_ellipsis_hits: Vec::new(),
             body_hits: Vec::new(),
             tick: 0,
             theme: ThemeColors::dark(),
@@ -2307,6 +2397,12 @@ impl TextSystem {
     /// тултип источника в оверлее следующего кадра.
     pub fn spill_hits(&self) -> &[SpillHit] {
         &self.spill_hits
+    }
+
+    /// FR-061 коммит 3: зоны усечённых формул кадра (тултип — полная
+    /// формула, механика [`Self::line_error_hits`]).
+    pub fn formula_ellipsis_hits(&self) -> &[LineErrorHit] {
+        &self.formula_ellipsis_hits
     }
 
     /// FR-061 хвосты (D-7/D-8): кликабельные зоны тела ПОСЛЕДНЕГО кадра
@@ -2417,6 +2513,8 @@ impl TextSystem {
         // FR-050 Н9-2 (этап D): зоны пролитых строк — пересобираются каждый
         // кадр (позиции зависят от камеры/зума/раскладки тела)
         let mut spill_hits: Vec<SpillHit> = Vec::new();
+        // FR-061 коммит 3: зоны усечённых формул — каждый кадр (см. BodyHit).
+        let mut ellipsis_hits: Vec<LineErrorHit> = Vec::new();
         // FR-061 хвосты (D-7/D-8): кликабельные зоны тела (см. BodyHit).
         let mut body_hits: Vec<BodyHit> = Vec::new();
         let viewport_physical = frame.viewport_physical;
@@ -2782,6 +2880,7 @@ impl TextSystem {
                                 desc_ref,
                                 block_expanded,
                                 desc_expanded,
+                                &[],
                             ))
                         };
 
@@ -2910,63 +3009,10 @@ impl TextSystem {
                                 }
                             }
                         }
-                        // Привязка строк к геометрии блоков: авто-строки —
-                        // префиксные блоки (по порядку), Param/Calc — блок
-                        // своей строки текста (I-1: те же Y, что у портов).
-                        let auto_blocks: Vec<usize> = layout
-                            .blocks
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(pos, block)| {
-                                matches!(block.spill, Some(SpillHitKind::AutoRow { .. }))
-                                    .then_some(pos)
-                            })
-                            .collect();
-                        let mut auto_i = 0usize;
-                        // Геометрия строк: (row_top, line_h, left_end, block_idx)
-                        let mut geo: Vec<(f32, f32, f32, usize)> =
-                            Vec::with_capacity(rows_data.len());
-                        for row in &rows_data {
-                            // FR-061 этап C: заголовок блока (Total) — блок с
-                            // маркером header (вставка в body_items, I-2).
-                            let found = match row.kind {
-                                row_grid::RowKind::Total => {
-                                    layout.blocks.iter().position(|block| block.header)
-                                }
-                                // FR-061 хвосты (D-7 runtime v1): превью
-                                // свёрнутой ведомости — блок с маркером
-                                // preview (вставка в body_items, I-2).
-                                row_grid::RowKind::Preview => {
-                                    layout.blocks.iter().position(|block| block.preview)
-                                }
-                                row_grid::RowKind::Auto => {
-                                    let pos = auto_blocks.get(auto_i).copied();
-                                    auto_i += 1;
-                                    pos
-                                }
-                                _ => row.source_line.and_then(|line| {
-                                    layout
-                                        .blocks
-                                        .iter()
-                                        .position(|block| block.source_line == Some(line))
-                                }),
-                            };
-                            match found {
-                                Some(pos) => {
-                                    let block = &layout.blocks[pos];
-                                    let line_h = match row.kind {
-                                        row_grid::RowKind::Auto => AUTO_ROW_LINE_HEIGHT,
-                                        _ => BODY_LINE_HEIGHT,
-                                    };
-                                    let left_end =
-                                        block.offset[0] + block.line_w / zoom_px.max(1e-6);
-                                    geo.push((block.offset[1], line_h, left_end, pos));
-                                }
-                                // Строка без блока (рассинхрон текста/исходов)
-                                // — не рисуется, портов не даёт.
-                                None => geo.push((f32::NAN, 0.0, 0.0, usize::MAX)),
-                            }
-                        }
+                        // Привязка строк к геометрии блоков (вынесено в
+                        // [`row_geo`] — повторный проход усечения формул
+                        // коммита 3 пере-привязывает те же строки).
+                        let mut geo = row_geo(layout, &rows_data, zoom_px);
                         // Строки без блоков выбрасываются (геометрии нет).
                         let mut i = 0;
                         while i < rows_data.len() {
@@ -2980,7 +3026,7 @@ impl TextSystem {
                         // Проход A: направляющие + режим бейджей (детерминизм
                         // — входы уже в ключе кэша: текст/ширина/зум/исходы).
                         let left_max = geo.iter().map(|g| g.2).fold(0.0f32, f32::max);
-                        let pass = row_grid::pass_a(
+                        let mut pass = row_grid::pass_a(
                             &mut self.measurer,
                             &mut self.font_system,
                             &rows_data,
@@ -2988,7 +3034,78 @@ impl TextSystem {
                             body_width,
                             MONO_FAMILY,
                             RESULT_FONT_SIZE,
+                            row_grid::BadgeMode::Text,
+                            &[],
                         );
+                        // FR-061 коммит 3 (лестница §3.4, последняя ступень +
+                        // Q8): если колонка бейджей исчерпана и лидер всё ещё
+                        // не помещается — формулы усекаются (алиасы →
+                        // хвостовой ellipsis; полное — в тултип строки). Тело
+                        // перешейпляется с усечённым отображением (редкий
+                        // путь: узкие ноды с длинными формулами; кэш D-11
+                        // делает его одноразовым), привязка строк и проход A
+                        // повторяются — план стабилен (floor не поднимается,
+                        // prior сохраняется; числа/юниты не деградируют).
+                        if pass.ellipsis.iter().any(|e| e.is_some()) {
+                            let overrides: Vec<(usize, String)> = pass
+                                .ellipsis
+                                .iter()
+                                .zip(&rows_data)
+                                .filter_map(|(e, row)| {
+                                    let display = e.as_ref()?.display.clone();
+                                    Some((row.source_line?, display))
+                                })
+                                .collect();
+                            let whatif_lines: &[usize] = whatif_nodes
+                                .get(&node.id)
+                                .map(|whatif| whatif.overrides.as_slice())
+                                .unwrap_or(&[]);
+                            let spill_prefix = if body_hidden {
+                                Vec::new()
+                            } else {
+                                spill_row_items(&self.theme, auto_rows, node.template().is_some())
+                            };
+                            *layout = shape_body(
+                                &mut self.font_system,
+                                &self.theme,
+                                &body_text,
+                                body_width,
+                                zoom_px,
+                                &formula_lines,
+                                whatif_lines,
+                                spill_prefix,
+                                spill_views,
+                                self.language,
+                                desc_ref,
+                                block_expanded,
+                                desc_expanded,
+                                &overrides,
+                            );
+                            geo = row_geo(layout, &rows_data, zoom_px);
+                            // Строки без блоков выбрасываются заново (тот же
+                            // фильтр, что и до прохода A — блоки те же).
+                            let mut i = 0;
+                            while i < rows_data.len() {
+                                if geo[i].3 == usize::MAX {
+                                    rows_data.remove(i);
+                                    geo.remove(i);
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                            let left_max = geo.iter().map(|g| g.2).fold(0.0f32, f32::max);
+                            pass = row_grid::pass_a(
+                                &mut self.measurer,
+                                &mut self.font_system,
+                                &rows_data,
+                                left_max,
+                                body_width,
+                                MONO_FAMILY,
+                                RESULT_FONT_SIZE,
+                                pass.badge_mode,
+                                &pass.ellipsis,
+                            );
+                        }
                         row_guides = pass.guides;
                         // Зебра (D-5): прогоны ПОДРЯД идущих строк данных —
                         // соседство по индексам блоков (проза между строками
@@ -3024,7 +3141,8 @@ impl TextSystem {
                         // наклонное моно Р-2 (метрики те же — I-1).
                         let area_px = (body_width * zoom_px).max(1.0);
                         let amber = unmapped_color();
-                        for ((row, g), z) in rows_data.iter().zip(&geo).zip(&zebra) {
+                        for (i, ((row, g), z)) in rows_data.iter().zip(&geo).zip(&zebra).enumerate()
+                        {
                             let attrs = if row.upstream {
                                 mono_oblique_attrs()
                             } else {
@@ -3087,6 +3205,10 @@ impl TextSystem {
                                 ),
                                 badge,
                                 error_message: row.error_message.clone(),
+                                left_full: pass
+                                    .ellipsis
+                                    .get(i)
+                                    .and_then(|e| e.as_ref().map(|e| e.full.clone())),
                             });
                         }
                         // Квады хрома (D-5) — НИЖЕ всех существующих квадов
@@ -3614,6 +3736,24 @@ impl TextSystem {
                             let bottom_phys = top_phys + RESULT_LINE_HEIGHT * zoom_px;
                             let bounds_left =
                                 (to_physical([body_left, row_y])[0].floor() as i32) - 1;
+                            // FR-061 коммит 3: усечённая формула — зона наведения
+                            // всей строки левого текста (от края тела до конца
+                            // текста); тултип — полная формула (лестница §3.4,
+                            // Q8; механика LineErrorHit, логические px).
+                            if let Some(full) = &row.left_full {
+                                let left_phys = to_physical([body_left, row_y])[0];
+                                let right_phys =
+                                    to_physical([body_left + row.left_end + 6.0, row_y])[0];
+                                ellipsis_hits.push(LineErrorHit {
+                                    rect: [
+                                        left_phys / scale_factor,
+                                        top_phys / scale_factor,
+                                        (right_phys - left_phys) / scale_factor,
+                                        (bottom_phys - top_phys) / scale_factor,
+                                    ],
+                                    message: full.clone(),
+                                });
+                            }
                             // Значение: право на направляющую чисел
                             if let Some(cell) = &row.value {
                                 let right_phys =
@@ -3964,6 +4104,9 @@ impl TextSystem {
         // FR-050 Н9-2 (этап D): зоны пролитых строк кадра собраны — тултип
         // источника в оверлее следующего кадра
         self.spill_hits = spill_hits;
+        // FR-061 коммит 3: зоны усечённых формул кадра собраны — тултип
+        // полной формулы в оверлее следующего кадра
+        self.formula_ellipsis_hits = ellipsis_hits;
         self.body_hits = body_hits;
         // Screen-тексты ПОЛОС (FR-052 U2): отдельная группа на полосу —
         // рендерер рисует полосы по очереди (квады полосы → тексты полосы),
@@ -4499,6 +4642,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         )
     }
 
@@ -4521,6 +4665,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         assert_eq!(
             layout.blocks.len(),
@@ -4558,6 +4703,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         assert!(
             !layout
@@ -4582,6 +4728,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         let whatif = layout
             .quads
@@ -4664,6 +4811,7 @@ mod tests {
             unit: None,
             badge: None,
             error_message: None,
+            left_full: None,
         };
         let rows = vec![row(&mut fs, 0.0), row(&mut fs, 20.0)];
         let guides = canvas_ui::row_guides::RowGuides {
@@ -4782,6 +4930,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            &[],
         );
         assert_eq!(items.len(), 2, "проза + формульная строка");
         assert!(!items[0].mono, "проза — sans");
@@ -4831,6 +4980,7 @@ mod tests {
             &spills,
             canvas_core::Language::Ru,
             true,
+            &[],
         );
         assert_eq!(items.len(), 2);
         assert!(!items[0].oblique, "проза — прямое начертание");
@@ -4927,6 +5077,7 @@ mod tests {
             // хвосты FR-061: развёрнутый блок, кламп описания (дефолты)
             true,
             false,
+            &[],
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4954,6 +5105,7 @@ mod tests {
             // хвосты FR-061: развёрнутый блок, кламп описания (дефолты)
             true,
             false,
+            &[],
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4984,6 +5136,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
         let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
@@ -5354,6 +5507,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            &[],
         );
         let header_pos = items
             .iter()
@@ -5371,6 +5525,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            &[],
         );
         assert!(
             items.iter().all(|item| !item.header),
@@ -5385,6 +5540,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             false,
+            &[],
         );
         let header_pos = collapsed
             .iter()
@@ -5427,6 +5583,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         let rendered = layout
             .blocks
@@ -5473,6 +5630,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         let rendered = layout
             .blocks
@@ -5505,6 +5663,7 @@ mod tests {
             None,
             true,
             false,
+            &[],
         );
         let bullet = layout
             .quads
