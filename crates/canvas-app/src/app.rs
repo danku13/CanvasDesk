@@ -1549,6 +1549,12 @@ struct StageFrameCtx {
     zone: StageLocalRect,
     /// Активная подсветка (hover-превью перекрывает фиксированную).
     focus: Option<StageCalcFocus>,
+    /// FR-044 Q3: коэффициент затемнения [0..1] — анимация перехода
+    /// подсветки (токен focus_fade_ms); 0 — без приглушения.
+    dim: f32,
+    /// FR-044 Q2: режим зоны пилюль (Full/Compact/Scroll — эшелоны
+    /// переполнения стопки).
+    pill_mode: calc_panel_ui::PillZoneMode,
 }
 
 impl MainStageState {
@@ -1729,6 +1735,18 @@ pub struct App {
     /// FR-044 Р-5: hover-превью подсветки (живой отклик без фиксации;
     /// визуально перекрывает фиксированную, на оставлении курсора гаснет).
     stage_calc_hover: Option<StageCalcFocus>,
+    /// FR-044 Q3: рендер-состояние подсветки — (множество, коэффициент
+    /// затемнения [0..1]); обновляется тиком анимации ([`Self::
+    /// tick_stage_calc_fade`]) до сборки кадра. В фейд-ауте множество —
+    /// снимок последнего активного (гаснет вместе с коэффициентом).
+    stage_calc_render: (Option<StageCalcFocus>, f32),
+    /// FR-044 Q3: активный переход подсветки — (откуда, куда, момент
+    /// старта); длительность — токен `focus_fade_ms` (animate.rs).
+    stage_calc_fade: Option<(f32, f32, Instant)>,
+    /// FR-044 Q2 (v2): смещение окна пилюль веера (режим Scroll —
+    /// второй эшелон [`calc_panel_ui::pill_zone_mode`]); сброс при
+    /// открытии/закрытии stage.
+    stage_pill_scroll: usize,
     /// Тестовый оверрайд logical-вьюпорта: unit-тесты кликов по
     /// screen-space UI без winit-окна (viewport_logical читает первым).
     #[cfg(test)]
@@ -2105,6 +2123,11 @@ impl App {
             main_stage: None,
             stage_calc_focus: None,
             stage_calc_hover: None,
+            // FR-044 Q3: подсветки нет — коэффициент затемнения 0
+            stage_calc_render: (None, 0.0),
+            stage_calc_fade: None,
+            // FR-044 Q2: окно пилюль — с начала
+            stage_pill_scroll: 0,
             #[cfg(test)]
             test_viewport: None,
             // PRD-0007 (X2): окно проверки закрыто, сессионный кэш пуст
@@ -10797,6 +10820,79 @@ impl App {
             .or(self.stage_calc_focus.as_ref())
     }
 
+    /// FR-044 Q3: тик анимации перехода подсветки (вызывается до сборки
+    /// кадра и в about_to_wait). Ведёт коэффициент затемнения к цели
+    /// (1.0 — подсветка активна, 0.0 — сброшена) по ease-out за токен
+    /// `focus_fade_ms` (150 мс, animate.rs T23); во время фейд-аута
+    /// рендер применяет СНИМОК последнего активного множества — приглушение
+    /// возвращается к единице плавно, не мигая границами строк.
+    /// Возвращает true — переход идёт (нужны кадры).
+    fn tick_stage_calc_fade(&mut self) -> bool {
+        if self.main_stage.is_none() {
+            // Stage закрыт — состояние рендера гаснет мгновенно (инвариант 8:
+            // подсветка не переживает stage); анимации нет.
+            self.stage_calc_render = (None, 0.0);
+            self.stage_calc_fade = None;
+            return false;
+        }
+        let live = self.stage_calc_active().cloned();
+        let target_dim = if live.is_some() { 1.0 } else { 0.0 };
+        let (prev_focus, prev_dim) = self.stage_calc_render.clone();
+        // Целевое множество рендера: живое (включение/смена — мгновенно);
+        // при сбросе — снимок (гаснет вместе с коэффициентом).
+        let target_focus = match &live {
+            Some(_) => live.clone(),
+            None if prev_dim > f32::EPSILON => prev_focus.clone(),
+            None => None,
+        };
+        // Смена множества без смены затемнения — мгновенный обмен (Р-5:
+        // переход между строками панели не мигает).
+        if (target_dim - prev_dim).abs() <= f32::EPSILON && target_dim > 0.0 {
+            if target_focus != prev_focus {
+                self.stage_calc_render = (target_focus, prev_dim);
+                self.stage_calc_fade = None;
+            }
+            return false;
+        }
+        // Текущее значение коэффициента: из идущего перехода или устоявшееся.
+        let (in_flight, current_dim) = match self.stage_calc_fade {
+            Some((from, to, at)) => {
+                let t = (at.elapsed().as_millis() as f32 / FOCUS_FADE_MS as f32).clamp(0.0, 1.0);
+                (t < 1.0, from + (to - from) * ease_out_cubic(t))
+            }
+            None => (false, prev_dim),
+        };
+        if (target_dim - current_dim).abs() <= f32::EPSILON {
+            // Затемнение устаканилось: финализация (при сбросе множество
+            // очищается вместе с коэффициентом).
+            self.stage_calc_render = (
+                if target_dim > 0.0 { target_focus } else { None },
+                target_dim,
+            );
+            self.stage_calc_fade = None;
+            return false;
+        }
+        let target_changed = self
+            .stage_calc_fade
+            .as_ref()
+            .is_some_and(|(_, to, _)| (*to - target_dim).abs() > f32::EPSILON);
+        if !in_flight || target_changed {
+            // Новый переход (или смена цели в полёте) — старт от текущего
+            // значения, без скачка; множество применяется сразу.
+            self.stage_calc_fade = Some((current_dim, target_dim, Instant::now()));
+            self.stage_calc_render = (target_focus.clone(), current_dim);
+            return true;
+        }
+        // Переход идёт — продвигаем коэффициент.
+        self.stage_calc_render = (target_focus.clone(), current_dim);
+        true
+    }
+
+    /// FR-044 Q3: переход подсветки ещё идёт (кадры нужны).
+    fn stage_calc_fade_animating(&self) -> bool {
+        self.stage_calc_fade.is_some()
+    }
+
     /// FR-059 (волна 1 кита): колесо над колонкой панели «Как считается»
     /// прокручивает её список (кит список+скролл). Курсор вне окон —
     /// ничего (wheel остаётся погашенным — stage модален).
@@ -10834,6 +10930,27 @@ impl App {
             formulas.clamp();
             self.stage_calc_formulas_scroll = formulas;
             self.request_redraw();
+        } else {
+            // FR-044 Q2 (v2): колесо над зоной веера (вне колонок панели)
+            // прокручивает окно пилюль в режиме Scroll (второй эшелон
+            // переполнения); в Full/Compact колесо глотается — stage модален.
+            let ctx = self.stage_frame_ctx(stage, &rect, stage.scale.max(f32::EPSILON));
+            let local = [
+                (self.cursor[0] - rect.x) / stage.scale.max(f32::EPSILON),
+                (self.cursor[1] - rect.y) / stage.scale.max(f32::EPSILON),
+            ];
+            let in_pill_zone = local[0] >= ctx.zone.x
+                && local[0] <= ctx.zone.x + ctx.zone.w
+                && local[1] >= ctx.zone.y
+                && local[1] <= ctx.zone.y + ctx.zone.h;
+            if in_pill_zone && matches!(ctx.pill_mode, calc_panel_ui::PillZoneMode::Scroll { .. }) {
+                if dy < 0.0 {
+                    self.stage_pill_scroll += 1;
+                } else if dy > 0.0 {
+                    self.stage_pill_scroll = self.stage_pill_scroll.saturating_sub(1);
+                }
+                self.request_redraw();
+            }
         }
     }
 
@@ -10886,6 +11003,12 @@ impl App {
             w: rect.w / s,
             h: ((panel_top_screen - 8.0 - 56.0) / s).max(0.0),
         };
+        // FR-044 Q3: рендер применяет анимированное состояние подсветки
+        // (множество + коэффициент затемнения) — не живое; Q2: режим зоны
+        // пилюль (эшелоны переполнения стопки).
+        let (focus, dim) = self.stage_calc_render.clone();
+        let pill_mode =
+            calc_panel_ui::pill_zone_mode(stage.slice.edges.len(), zone.h, self.stage_pill_scroll);
         StageFrameCtx {
             lines,
             model,
@@ -10893,56 +11016,119 @@ impl App {
             vars_scroll,
             formulas_scroll,
             zone,
-            focus: self.stage_calc_active().cloned(),
+            focus,
+            dim,
+            pill_mode,
         }
     }
 
-    /// FR-044 Р-1: rect'ы пилюль веера (stage-локальные px) — тот же
-    /// расчёт, что в кадре ([`Self::stage_frame_ctx`]); hit-тест клика
-    /// по пилюле (Р-5: клик = выделение ребра + синхронная подсветка).
-    /// `src_label_max`/`dst_label_max` — ширины колонок подписей концов
-    /// (коридор сужается на них — владелец 2026-09-22).
+    /// FR-044 Р-1 + Q2: rect'ы пилюль веера и режим зоны (stage-локальные
+    /// px) — тот же расчёт, что в кадре ([`Self::stage_frame_ctx`]);
+    /// hit-тест клика по пилюле (Р-5: клик = выделение ребра + синхронная
+    /// подсветка). Эшелоны Q2 ([`calc_panel_ui::pill_zone_mode`]): Full —
+    /// двухстрочные пилюли (адрес + значение); Compact — однострочные
+    /// «адрес · значение»; Scroll — окно стопки с прокруткой.
+    fn stage_pill_state(
+        &self,
+        stage: &MainStageState,
+        ctx: &StageFrameCtx,
+    ) -> (Vec<(usize, StageLocalRect)>, calc_panel_ui::PillZoneMode) {
+        // Сортировка по вертикали середин (прототип R7: стопка следует
+        // геометрии веера) с сохранением индекса ребра
+        let mut order: Vec<usize> = (0..ctx.lines.len().min(stage.slice.edges.len())).collect();
+        order.sort_by(|&a, &b| ctx.lines[a].mid[1].total_cmp(&ctx.lines[b].mid[1]));
+        // Тексты и ширины пилюль в порядке стопки; режим — от числа рёбер
+        // и высоты зоны (Q2)
+        let mode = calc_panel_ui::pill_zone_mode(
+            stage.slice.edges.len(),
+            ctx.zone.h,
+            self.stage_pill_scroll,
+        );
+        let one_line = !matches!(mode, calc_panel_ui::PillZoneMode::Full);
+        let pill_h = if one_line {
+            calc_panel_ui::PILL_H_ONE_LINE
+        } else {
+            calc_panel_ui::PILL_H_TWO_LINE
+        };
+        let mut texts: Vec<(usize, String, f32)> = Vec::with_capacity(order.len());
+        for &oi in &order {
+            let edge = &stage.slice.edges[oi];
+            let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
+            let text = if one_line {
+                let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
+                let combined = if value.is_empty() {
+                    addr
+                } else if addr.is_empty() {
+                    value
+                } else {
+                    format!("{addr} · {value}")
+                };
+                truncate_chars(&combined, 56)
+            } else {
+                addr
+            };
+            let w = (text.chars().count() as f32 * 7.2 + 24.0).max(56.0);
+            texts.push((oi, text, w));
+        }
+        // Окно прокрутки (Scroll): подмножество стопки
+        let visible: Vec<(usize, String, f32)> = match mode {
+            calc_panel_ui::PillZoneMode::Scroll { first, visible, .. } => {
+                texts.into_iter().skip(first).take(visible).collect()
+            }
+            _ => texts,
+        };
+        let sorted: Vec<(usize, f32, f32, Option<f32>)> = visible
+            .into_iter()
+            .map(|(item, _text, w)| {
+                let pref = ctx.lines[item].mid[0];
+                (item, w, pill_h, Some(pref))
+            })
+            .collect();
+        let corridor = self.stage_pill_corridor(stage);
+        let axis_y = ctx.zone.y + ctx.zone.h / 2.0;
+        let laid = stage_fan_label_layout(sorted, corridor, ctx.zone, axis_y);
+        let rects = laid
+            .pills
+            .iter()
+            .map(|pill| {
+                (
+                    pill.item,
+                    StageLocalRect {
+                        x: pill.rect.x,
+                        y: pill.rect.y,
+                        w: pill.rect.w,
+                        h: pill.rect.h,
+                    },
+                )
+            })
+            .collect();
+        (rects, mode)
+    }
+
+    /// FR-044 Р-1: rect'ы пилюль веера (обёртка hit-теста над
+    /// [`Self::stage_pill_state`]).
     fn stage_pill_rects(
         &self,
         stage: &MainStageState,
         ctx: &StageFrameCtx,
     ) -> Vec<(usize, StageLocalRect)> {
-        let mut pills_in: Vec<(usize, f32, f32, Option<f32>)> = Vec::new();
-        let mut mids: Vec<[f32; 2]> = Vec::new();
-        for (i, _edge) in stage.slice.edges.iter().enumerate() {
-            let Some(line) = ctx.lines.get(i) else {
-                continue;
-            };
-            mids.push(line.mid);
-            pills_in.push((i, 0.0, 34.0, Some(line.mid[0]))); // ширина после сортировки
-        }
-        // Сортировка по вертикали середин (прототип R7: стопка следует
-        // геометрии веера) с сохранением индекса ребра
-        let mut order: Vec<usize> = (0..mids.len()).collect();
-        order.sort_by(|&a, &b| mids[a][1].total_cmp(&mids[b][1]));
+        self.stage_pill_state(stage, ctx).0
+    }
+
+    /// FR-044 Р-1: коридор пилюль между колонками нод, суженный на зоны
+    /// подписей концов рёбер (7b): пилюли не наезжают на подписи.
+    /// `src_label_max`/`dst_label_max` — ширины колонок подписей концов
+    /// (владелец 2026-09-22).
+    fn stage_pill_corridor(&self, stage: &MainStageState) -> StageLocalRect {
         let src_title = title_for(&stage.slice.nodes[0]);
-        let sorted: Vec<(usize, f32, f32, Option<f32>)> = order
-            .iter()
-            .map(|&oi| {
-                let (item, _, h, pref) = pills_in[oi];
-                let edge = &stage.slice.edges[item];
-                let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
-                let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
-                let w =
-                    (addr.chars().count().max(value.chars().count()) as f32 * 7.2 + 24.0).max(56.0);
-                (item, w, h, pref)
-            })
-            .collect();
-        // Коридор между колонками нод, дополнительно суженый на зоны
-        // подписей концов рёбер (7b): пилюли не наезжают на подписи
-        let src = &stage.slice.nodes[0];
-        let dst = &stage.slice.nodes[1];
         let mut src_label_max = 0.0_f32;
         let mut dst_label_max = 0.0_f32;
         for edge in stage.slice.edges.iter() {
             src_label_max = src_label_max.max(self.stage_src_label_width(edge));
             dst_label_max = dst_label_max.max(self.stage_dst_label_width(edge, &src_title));
         }
+        let src = &stage.slice.nodes[0];
+        let dst = &stage.slice.nodes[1];
         let mut corridor = fan_corridor(
             StageLocalRect {
                 x: src.x,
@@ -10970,32 +11156,81 @@ impl App {
             corridor.w -= over;
         }
         corridor.w = corridor.w.max(0.0);
-        let axis_y = ctx.zone.y + ctx.zone.h / 2.0;
-        let laid = stage_fan_label_layout(sorted, corridor, ctx.zone, axis_y);
-        laid.pills
-            .iter()
-            .map(|pill| {
-                (
-                    pill.item,
-                    StageLocalRect {
-                        x: pill.rect.x,
-                        y: pill.rect.y,
-                        w: pill.rect.w,
-                        h: pill.rect.h,
-                    },
-                )
-            })
-            .collect()
+        corridor
     }
 
-    /// FR-044 (7b): ширина подписи значения у истока (0 — нет значения).
-    fn stage_src_label_width(&self, edge: &Edge) -> f32 {
-        let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
-        if value.is_empty() {
-            0.0
-        } else {
-            value.chars().count() as f32 * 6.3 + 12.0
+    /// FR-044 Q2 (v2): rect'ы индикаторов прокрутки пилюль в режиме Scroll
+    /// — «↑ ещё N» у верхнего края зоны, «ещё N ↓» у нижнего (по центру
+    /// коридора). `None` — индикатора нет (счётчик нулевой).
+    fn stage_pill_scroll_indicators(
+        &self,
+        stage: &MainStageState,
+        ctx: &StageFrameCtx,
+    ) -> (Option<StageLocalRect>, Option<StageLocalRect>) {
+        let calc_panel_ui::PillZoneMode::Scroll { above, below, .. } = ctx.pill_mode else {
+            return (None, None);
+        };
+        let corridor = self.stage_pill_corridor(stage);
+        let w = 84.0_f32.min(corridor.w.max(0.0));
+        let h = 18.0;
+        let cx = corridor.x + (corridor.w - w) / 2.0;
+        let top = (above > 0).then_some(StageLocalRect {
+            x: cx,
+            y: ctx.zone.y + 4.0,
+            w,
+            h,
+        });
+        let bottom = (below > 0).then_some(StageLocalRect {
+            x: cx,
+            y: ctx.zone.y + ctx.zone.h - h - 4.0,
+            w,
+            h,
+        });
+        (top, bottom)
+    }
+
+    /// FR-044 Р-3-а: строки подписи у истока — (верхняя строка, значение).
+    /// У value-ребра с адресацией — лейбл слота выхода (прототип drawPort
+    /// R5/R6: `out: <имя>` / «строка N») над значением; без адресации —
+    /// только значение (прежний вид 7b); control-ребро значения не несёт
+    /// и подписи у истока не имеет (управление — не значение, инвариант 5).
+    fn stage_src_label_lines(&self, edge: &Edge) -> (Option<String>, String) {
+        if edge.flow_kind() != FlowKind::Value {
+            return (None, String::new());
         }
+        let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
+        if let Some(output) = edge.from_output.as_deref() {
+            let slot = i18n::trf(
+                self.settings.language,
+                keys::STAGE_OUT_LABEL,
+                &[("name", output)],
+            );
+            return (Some(slot), value);
+        }
+        if let Some(line_no) = edge.from_line {
+            let slot = i18n::trf(
+                self.settings.language,
+                keys::STAGE_LINE_LABEL,
+                &[("n", &(line_no + 1).to_string())],
+            );
+            return (Some(slot), value);
+        }
+        (None, value)
+    }
+
+    /// FR-044 (7b) + Р-3-а: ширина подписи у истока (максимум строк;
+    /// 0 — подписи нет).
+    fn stage_src_label_width(&self, edge: &Edge) -> f32 {
+        let (slot, value) = self.stage_src_label_lines(edge);
+        let w = |text: &str| text.chars().count() as f32 * 6.3 + 12.0;
+        let mut width = 0.0_f32;
+        if let Some(slot) = slot.as_deref() {
+            width = width.max(w(slot));
+        }
+        if !value.is_empty() {
+            width = width.max(w(&value));
+        }
+        width
     }
 
     /// FR-044 (7b): ширина подписи квалифицированного адреса у приёмника
@@ -11009,10 +11244,14 @@ impl App {
         }
     }
 
-    /// FR-044 (7b): текст подписи адреса у приёмника —
-    /// «{исток} · строка N» / «{исток}.{выход}»; без адресации — имя истока
-    /// (фолбэк прежнего поведения 7b).
+    /// FR-044 (7b) + Р-3-а: текст подписи адреса у приёмника —
+    /// «{исток} · строка N» / «{исток}.{выход}»; control-ребро —
+    /// «управление» (инвариант 5: control-рёбра не отображаются
+    /// value-путями); без адресации — имя истока (фолбэк 7b).
     fn stage_dst_label_text(&self, edge: &Edge, src_title: &str) -> String {
+        if edge.flow_kind() != FlowKind::Value {
+            return self.tr(keys::STAGE_CTRL_LABEL).to_owned();
+        }
         if let Some(line_no) = edge.from_line {
             format!(
                 "{src_title} · {}",
@@ -11061,12 +11300,13 @@ impl App {
         // hit-тест клика пересчитывает те же значения (детерминизм).
         let ctx = self.stage_frame_ctx(stage, &rect, s);
         let lines = &ctx.lines;
-        // FR-044 Р-5: альфа ребра среза по индексу — рёбра вне множества
-        // фокуса приглушены (0.35, паттерн dim_factor)
+        // FR-044 Р-5 + Q3: альфа ребра среза по индексу — рёбра вне множества
+        // фокуса приглушены (0.35, паттерн dim_factor); коэффициент анимирован
+        // (переход подсветки — Q3, токен focus_fade_ms)
         let edge_alpha = |i: usize| -> f32 {
             match &ctx.focus {
                 Some(focus) if focus.edges.contains(&stage.edges[i]) => 1.0,
-                Some(_) => 0.35,
+                Some(_) => 1.0 - (1.0 - 0.35) * ctx.dim,
                 None => 1.0,
             }
         };
@@ -11352,31 +11592,37 @@ impl App {
         }
         // 7b) Подписи на концах рёбер (FR-044, владелец 2026-09-22: «на
         // концах edge — подписи значений», прототип R5/R6 — порты с
-        // подложкой): у истока — ЗНАЧЕНИЕ ребра (своей строки), у приёмника
-        // — квалифицированный адрес «Объект · строка N / Объект.output».
+        // подложкой) + Р-3-а (лейблы слотов): у истока — лейбл слота
+        // выхода («out: <имя>» / «строка N») над ЗНАЧЕНИЕМ ребра; у
+        // приёмника — квалифицированный адрес «Объект · строка N /
+        // Объект.output», control-ребро — «управление» (инвариант 5).
         // Подложка — цвет подложки stage (меню): подписи не сливаются с
         // линиями веера (прототип R6: подложка от рёбер). Оценка ширины —
         // advance ≈ 0.6·шрифта (как у строк карточки). Ширины колонок —
         // те же хелперы, что сужают коридор пилюль (единый расчёт).
-        // FR-044 Р-5: подписи рёбер вне фокуса приглушены.
+        // FR-044 Р-5 + Q3: подписи рёбер вне фокуса приглушены с анимацией.
         let src_title = title_for(&stage.slice.nodes[0]);
         for (i, edge) in stage.slice.edges.iter().enumerate() {
             let Some(line) = lines.get(i) else {
                 continue;
             };
             let alpha = edge_alpha(i);
-            // Исток: значение строки/ноды (подпись значения)
-            let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
-            if !value.is_empty() {
+            // Исток: лейбл слота выхода + значение строки/ноды (Р-3-а)
+            let (slot_line, value) = self.stage_src_label_lines(edge);
+            let two_line = slot_line.is_some() && !value.is_empty();
+            if !value.is_empty() || slot_line.is_some() {
                 let w = self.stage_src_label_width(edge);
-                let bx = line.from[0] + 10.0;
-                let by = line.from[1] - 9.0;
+                let (h, by) = if two_line {
+                    (30.0, line.from[1] - 15.0)
+                } else {
+                    (18.0, line.from[1] - 9.0)
+                };
                 let mut fill = palette.menu_fill;
                 fill[3] *= alpha;
                 quads.push(transform.instance_to_world(
                     &CardInstance {
-                        pos: [bx, by],
-                        size: [w, 18.0],
+                        pos: [line.from[0] + 10.0, by],
+                        size: [w, h],
                         fill,
                         border: [0.0; 4],
                         params: [4.0, 0.0, 0.0, 1.0],
@@ -11384,15 +11630,30 @@ impl App {
                     camera,
                     viewport,
                 ));
-                let color = dim_text_color(palette.body, alpha);
-                texts.push(OwnedScreenText {
-                    text: value,
-                    origin: transform.map_point([bx + 6.0, by + 13.0]),
-                    width: transform.map_size(w),
-                    font_size: font(10.5),
-                    color,
-                    align: TextAlign::Left,
-                });
+                let bx = line.from[0] + 10.0;
+                if let Some(slot) = slot_line.as_deref() {
+                    // Лейбл слота выхода — приглушённый тон (подпись порта)
+                    texts.push(OwnedScreenText {
+                        text: slot.to_owned(),
+                        origin: transform
+                            .map_point([bx + 6.0, by + (if two_line { 3.0 } else { 13.0 })]),
+                        width: transform.map_size(w),
+                        font_size: font(10.5),
+                        color: dim_text_color(palette.quote, alpha),
+                        align: TextAlign::Left,
+                    });
+                }
+                if !value.is_empty() {
+                    texts.push(OwnedScreenText {
+                        text: value,
+                        origin: transform
+                            .map_point([bx + 6.0, by + if two_line { 16.0 } else { 13.0 }]),
+                        width: transform.map_size(w),
+                        font_size: font(10.5),
+                        color: dim_text_color(palette.body, alpha),
+                        align: TextAlign::Left,
+                    });
+                }
             }
             // Приёмник: квалифицированный адрес истока (Объект.Поле)
             let qualified = truncate_chars(&self.stage_dst_label_text(edge, &src_title), 26);
@@ -11424,13 +11685,15 @@ impl App {
                 });
             }
         }
-        // 8) Пилюли подписей веера (FR-044 Р-1): адресация + значение,
+        // 8) Пилюли подписей веера (FR-044 Р-1 + Q2): адресация + значение,
         // лейн-стопка в коридоре между колонками — общий расчёт с hit-
-        // тестом клика ([`Self::stage_pill_rects`], детерминизм); зона
+        // тестом клика ([`Self::stage_pill_state`], детерминизм); зона
         // клампа сжата верхом панели «Как считается» (Р-1 «между
         // заголовком и панелью»); подсветка Р-5 — пилюли вне фокуса
-        // приглушены
-        for (item, pill_rect) in self.stage_pill_rects(stage, &ctx) {
+        // приглушены (Q3: с анимацией); переполнение — эшелоны Q2
+        // (Compact — однострочные, Scroll — окно с индикаторами)
+        let (pill_rects, pill_mode) = self.stage_pill_state(stage, &ctx);
+        for (item, pill_rect) in pill_rects {
             let edge = &stage.slice.edges[item];
             let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
             let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
@@ -11449,24 +11712,84 @@ impl App {
                 camera,
                 viewport,
             ));
-            let addr_color = dim_text_color(palette.title, alpha);
-            texts.push(OwnedScreenText {
-                text: addr,
-                origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 5.0]),
-                width: transform.map_size(pill_rect.w - 16.0),
-                font_size: font(12.0),
-                color: addr_color,
-                align: TextAlign::Left,
-            });
-            if !value.is_empty() {
-                let value_color = dim_text_color(palette.edge_label, alpha);
+            if matches!(pill_mode, calc_panel_ui::PillZoneMode::Full) {
+                let addr_color = dim_text_color(palette.title, alpha);
                 texts.push(OwnedScreenText {
-                    text: value,
-                    origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 18.0]),
+                    text: addr,
+                    origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 5.0]),
+                    width: transform.map_size(pill_rect.w - 16.0),
+                    font_size: font(12.0),
+                    color: addr_color,
+                    align: TextAlign::Left,
+                });
+                if !value.is_empty() {
+                    let value_color = dim_text_color(palette.edge_label, alpha);
+                    texts.push(OwnedScreenText {
+                        text: value,
+                        origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 18.0]),
+                        width: transform.map_size(pill_rect.w - 16.0),
+                        font_size: font(11.0),
+                        color: value_color,
+                        align: TextAlign::Left,
+                    });
+                }
+            } else {
+                // Compact/Scroll: одна строка «адрес · значение»
+                let combined = if value.is_empty() {
+                    addr
+                } else if addr.is_empty() {
+                    value
+                } else {
+                    format!("{addr} · {value}")
+                };
+                let combined = truncate_chars(&combined, 56);
+                texts.push(OwnedScreenText {
+                    text: combined,
+                    origin: transform
+                        .map_point([pill_rect.x + 12.0, pill_rect.y + (pill_rect.h - 12.0) / 2.0]),
                     width: transform.map_size(pill_rect.w - 16.0),
                     font_size: font(11.0),
-                    color: value_color,
+                    color: dim_text_color(palette.title, alpha),
                     align: TextAlign::Left,
+                });
+            }
+        }
+        // 8a) Q2 (Scroll): индикаторы «↑ ещё N» / «ещё N ↓» — клики листают
+        // окно пилюль (hit-тест — те же rect'ы в click_main_stage)
+        if matches!(pill_mode, calc_panel_ui::PillZoneMode::Scroll { .. }) {
+            let (top_ind, bottom_ind) = self.stage_pill_scroll_indicators(stage, &ctx);
+            for (ind, text_key) in [
+                (top_ind, keys::STAGE_PILL_ABOVE),
+                (bottom_ind, keys::STAGE_PILL_BELOW),
+            ] {
+                let Some(ind) = ind else { continue };
+                let counts = match pill_mode {
+                    calc_panel_ui::PillZoneMode::Scroll { above, below, .. } => (above, below),
+                    _ => (0, 0),
+                };
+                let n = if text_key == keys::STAGE_PILL_ABOVE {
+                    counts.0
+                } else {
+                    counts.1
+                };
+                quads.push(transform.instance_to_world(
+                    &CardInstance {
+                        pos: [ind.x, ind.y],
+                        size: [ind.w, ind.h],
+                        fill: palette.menu_fill,
+                        border: palette.palette_border,
+                        params: [9.0, 0.0, 0.0, 1.0],
+                    },
+                    camera,
+                    viewport,
+                ));
+                texts.push(OwnedScreenText {
+                    text: self.trf(text_key, &[("n", &n.to_string())]),
+                    origin: transform.map_point([ind.x + 6.0, ind.y + (ind.h - 11.0) / 2.0]),
+                    width: transform.map_size(ind.w - 12.0),
+                    font_size: font(10.0),
+                    color: palette.quote,
+                    align: TextAlign::Center,
                 });
             }
         }
@@ -11535,12 +11858,20 @@ impl App {
                     .as_ref()
                     .is_some_and(|focus| focus.rows.contains(&row))
             };
+            // FR-044 Q3: приглушение строк вне фокуса — с анимацией перехода
+            // (1.0 − 0.5·dim; токен focus_fade_ms); рамка фокуса гаснет
+            // вместе с коэффициентом
             let row_alpha = |focused: bool| -> f32 {
                 if any_focus && !focused {
-                    0.5
+                    1.0 - 0.5 * ctx.dim
                 } else {
                     1.0
                 }
+            };
+            let focus_border = || {
+                let mut border = SELECTION_BORDER;
+                border[3] *= ctx.dim;
+                border
             };
             let unmapped_text = self.tr(keys::STAGE_CALC_UNMAPPED).to_owned();
             for (index, row) in &panel.var_rows {
@@ -11559,7 +11890,7 @@ impl App {
                 let mut fill = palette.search_row_fill;
                 fill[3] *= alpha;
                 let border = if focused {
-                    SELECTION_BORDER
+                    focus_border()
                 } else if unmapped {
                     // «пунктирная строка не подставлено» (Р-4): пунктир
                     // в примитивах квадов недоступен — янтарный контур
@@ -11639,7 +11970,7 @@ impl App {
                 d.rect(
                     canvas_ui::geometry::UiRect::new(x, y, w, h),
                     fill,
-                    if focused { SELECTION_BORDER } else { [0.0; 4] },
+                    if focused { focus_border() } else { [0.0; 4] },
                     6.0,
                 );
                 // Маркер строки — ƒ (Р-4)
@@ -11696,6 +12027,7 @@ impl App {
         }
         // 8c) Р-8: мини-карточки внешних источников под истоком — панель
         // «Как считается» полна, контекст внешних входов не теряется
+        // (Q3: приглушение вне фокуса — с анимацией)
         if !ctx.model.ext_sources.is_empty() {
             let src = &stage.slice.nodes[0];
             let mut ext_y = src.y + src.height + 10.0;
@@ -11706,10 +12038,13 @@ impl App {
                             var.from_node == ext.from_node && focus.rows.contains(&ri)
                         })
                     });
+                let dim_alpha = if ctx.focus.is_some() && !focused {
+                    1.0 - 0.5 * ctx.dim
+                } else {
+                    1.0
+                };
                 let mut fill = palette.edge_label_fill;
-                if ctx.focus.is_some() && !focused {
-                    fill[3] *= 0.5;
-                }
+                fill[3] *= dim_alpha;
                 let card_w = src.width.min(220.0);
                 quads.push(transform.instance_to_world(
                     &CardInstance {
@@ -11717,7 +12052,9 @@ impl App {
                         size: [card_w, 26.0],
                         fill,
                         border: if focused {
-                            SELECTION_BORDER
+                            let mut border = SELECTION_BORDER;
+                            border[3] *= ctx.dim;
+                            border
                         } else {
                             palette.palette_border
                         },
@@ -11726,11 +12063,7 @@ impl App {
                     camera,
                     viewport,
                 ));
-                let color = if ctx.focus.is_some() && !focused {
-                    dim_text_color(palette.body, 0.5)
-                } else {
-                    palette.body
-                };
+                let color = dim_text_color(palette.body, dim_alpha);
                 texts.push(OwnedScreenText {
                     text: truncate_chars(&ext.title, 26),
                     origin: transform.map_point([src.x + 8.0, ext_y + 4.0]),
@@ -11739,11 +12072,7 @@ impl App {
                     color,
                     align: TextAlign::Left,
                 });
-                let count_color = if ctx.focus.is_some() && !focused {
-                    dim_text_color(palette.quote, 0.5)
-                } else {
-                    palette.quote
-                };
+                let count_color = dim_text_color(palette.quote, dim_alpha);
                 texts.push(OwnedScreenText {
                     text: self.trf(keys::STAGE_CALC_EXT, &[("n", &ext.count.to_string())]),
                     origin: transform.map_point([src.x + 8.0, ext_y + 15.0]),
@@ -11771,9 +12100,25 @@ impl App {
     /// в stage — квалифицированный путь «Объект.Поле» (единая точка
     /// [`canvas_core::dataref::display_ref_for_edge`]: fromLine → «строка N»,
     /// fromOutput → имя выхода, fallback edge.id) и параметр-приёмник
-    /// (toParam). Значение — отдельно, второй строкой пилюли (FR-044).
+    /// (toParam). Control-ребро — «to: <метка|имя приёмника>» (управление,
+    /// не значение — value-путь не показывается). Значение — отдельно,
+    /// второй строкой пилюли (FR-044).
     fn stage_edge_addr_text(&self, edge: &Edge) -> String {
         let language = self.settings.language;
+        if edge.flow_kind() != FlowKind::Value {
+            // Инвариант 5: control-рёбра — «to: <слот>»; слота в модели нет —
+            // метка ребра (если задана) или имя приёмника управления.
+            if let Some(label) = edge.label.as_deref() {
+                return i18n::trf(language, keys::STAGE_CTRL_TO, &[("node", label)]);
+            }
+            let dst_title = self
+                .scene
+                .canvas
+                .node(&edge.to_node)
+                .map(title_for)
+                .unwrap_or_else(|| edge.to_node.clone());
+            return i18n::trf(language, keys::STAGE_CTRL_TO, &[("node", &dst_title)]);
+        }
         let counts = canvas_core::dataref::display_name_counts(&self.scene.canvas);
         let mut parts: Vec<String> =
             vec![
@@ -11794,7 +12139,12 @@ impl App {
     /// fromLine — построчный результат Numi-листа источника, для
     /// fromOutput — именованный выход (исправление FR-044 Р-4: значение
     /// ПО АДРЕСУ ребра, а не узловой итог приёмника-источника)).
+    /// FR-044 Р-3-а/инвариант 5: control-ребро значения не переносит —
+    /// пустая строка (узловой итог истока не показывается на control).
     fn stage_edge_value_text(&self, edge: &Edge) -> String {
+        if edge.flow_kind() != FlowKind::Value {
+            return String::new();
+        }
         if let Some(line) = edge.from_line {
             return self
                 .scene
@@ -11845,6 +12195,10 @@ impl App {
                 // FR-059: скроллы колонок панели — с начала
                 self.stage_calc_vars_scroll = canvas_ui::kit::ScrollState::default();
                 self.stage_calc_formulas_scroll = canvas_ui::kit::ScrollState::default();
+                // FR-044 Q2/Q3: окно пилюль и анимация подсветки — с начала
+                self.stage_pill_scroll = 0;
+                self.stage_calc_render = (None, 0.0);
+                self.stage_calc_fade = None;
                 // PRD-0007 (F-10, У10): stage и окно проверки взаимо-
                 // исключительны; снапшот остаётся в сессионном кэше —
                 // возврат через «?» мгновенный (≤ 1 с)
@@ -11864,6 +12218,10 @@ impl App {
         if self.main_stage.take().is_some() {
             self.stage_calc_focus = None;
             self.stage_calc_hover = None;
+            // FR-044 Q2/Q3: окно пилюль и анимация — состояние stage
+            self.stage_pill_scroll = 0;
+            self.stage_calc_render = (None, 0.0);
+            self.stage_calc_fade = None;
             self.request_redraw();
         }
     }
@@ -12182,6 +12540,34 @@ impl App {
                 // зона (детерминизм: рендер и hit-test совпадают)
                 let ctx = self.stage_frame_ctx(stage, &rect, s);
                 let model = &ctx.model;
+                // 1a) FR-044 Q2 (Scroll): клики по индикаторам прокрутки
+                // пилюль — листание окна на видимое количество
+                let (top_ind, bottom_ind) = self.stage_pill_scroll_indicators(stage, &ctx);
+                let (pill_scroll, redraw) = match (
+                    top_ind.filter(|r| point_in_rect([r.x, r.y, r.w, r.h], local)),
+                    bottom_ind.filter(|r| point_in_rect([r.x, r.y, r.w, r.h], local)),
+                ) {
+                    (Some(_), _) => {
+                        let page = match ctx.pill_mode {
+                            calc_panel_ui::PillZoneMode::Scroll { visible, .. } => visible,
+                            _ => 1,
+                        };
+                        (self.stage_pill_scroll.saturating_sub(page), true)
+                    }
+                    (_, Some(_)) => {
+                        let page = match ctx.pill_mode {
+                            calc_panel_ui::PillZoneMode::Scroll { visible, .. } => visible,
+                            _ => 1,
+                        };
+                        (self.stage_pill_scroll + page, true)
+                    }
+                    _ => (self.stage_pill_scroll, false),
+                };
+                if redraw {
+                    self.stage_pill_scroll = pill_scroll;
+                    self.request_redraw();
+                    return;
+                }
                 // 1) Строки панели «Как считается» — фиксация подсветки
                 // (клик по панели мимо строк — глотается, фокус живёт)
                 if let Some(panel) = &ctx.panel {
@@ -17951,6 +18337,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // и тик времени; ДО сборки сцены — SpillWaveView
                 // заимствует поля App
                 self.update_spill_wave();
+                // FR-044 Q3: тик анимации подсветки stage (до stage_frame —
+                // рендер читает stage_calc_render)
+                self.tick_stage_calc_fade();
                 let spill_wave = self
                     .spill_wave
                     .as_ref()
@@ -18184,6 +18573,8 @@ impl ApplicationHandler<AppEvent> for App {
             || self.pulse.is_some()
             || self.spill_wave_animating()
             || self.focus_animating()
+            // FR-044 Q3: переход подсветки stage — кадры до завершения
+            || self.stage_calc_fade_animating()
             || self.palette_hover.pending()
             || self
                 .template_hover
@@ -19788,6 +20179,189 @@ mod tests {
         app.stage_calc_focus = Some(StageCalcFocus::default());
         app.close_main_stage();
         assert!(app.stage_calc_focus.is_none() && app.stage_calc_hover.is_none());
+    }
+
+    /// FR-044 Q3 (интеграция): анимация перехода подсветки — включение
+    /// наращивает коэффициент затемнения (кадры до завершения), фейд-аут
+    /// гасит его до нуля, снимок множества живёт до конца перехода;
+    /// закрытие stage гасит мгновенно (инвариант 8).
+    #[test]
+    fn stage_calc_focus_fade_animation() {
+        let (canvas, _e1, _e2) = fr044_demo_canvas();
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        let viewport = app.viewport_logical();
+        let rect = main_stage_rect(viewport);
+        let focus_set = |app: &App| -> StageCalcFocus {
+            let stage = app.main_stage.as_ref().expect("stage открыт");
+            let ctx = app.stage_frame_ctx(stage, &rect, stage.scale.max(f32::EPSILON));
+            let _panel = ctx.panel.as_ref().expect("панель построена");
+            StageCalcFocus::for_formula(&ctx.model, 0)
+        };
+        // Включение: тик стартует переход — коэффициент в [0, 1)
+        app.stage_calc_focus = Some(focus_set(&app));
+        assert!(app.tick_stage_calc_fade(), "переход идёт — кадры нужны");
+        let (render_set, dim) = app.stage_calc_render.clone();
+        assert!(render_set.is_some(), "множество применено с первого тика");
+        assert!((0.0..1.0).contains(&dim), "коэффициент анимируется: {dim}");
+        // Догоняем переход (реальное время focus_fade_ms = 150 мс)
+        let mut guard = 0;
+        while app.tick_stage_calc_fade() {
+            guard += 1;
+            assert!(guard < 100_000, "переход не завершается");
+        }
+        let (_, dim) = app.stage_calc_render.clone();
+        assert!((dim - 1.0).abs() < f32::EPSILON, "устаканилось на 1.0");
+        assert!(!app.stage_calc_fade_animating());
+        // Сброс: фейд-аут — снимок множества держится до конца перехода
+        app.stage_calc_focus = None;
+        app.stage_calc_hover = None;
+        assert!(app.tick_stage_calc_fade(), "фейд-аут идёт");
+        let (snapshot, dim) = app.stage_calc_render.clone();
+        assert!(snapshot.is_some(), "снимок множества живёт в фейд-ауте");
+        assert!(dim <= 1.0, "коэффициент уходит от 1.0: {dim}");
+        let mut guard = 0;
+        while app.tick_stage_calc_fade() {
+            guard += 1;
+            assert!(guard < 100_000, "фейд-аут не завершается");
+        }
+        let (snapshot, dim) = app.stage_calc_render.clone();
+        assert!(snapshot.is_none(), "множество очищено после фейд-аута");
+        assert!(dim.abs() < f32::EPSILON, "коэффициент нулевой: {dim}");
+        // Закрытие stage — мгновенный сброс рендер-состояния
+        app.stage_calc_focus = Some(focus_set(&app));
+        let _ = app.tick_stage_calc_fade();
+        app.close_main_stage();
+        assert_eq!(app.stage_calc_render, (None, 0.0));
+        assert!(!app.stage_calc_fade_animating());
+    }
+
+    /// FR-044 Р-3-а (интеграция): лейблы слотов — у value-ребра с адресацией
+    /// подпись истока = «out: <имя>» + значение, у приёмника — путь;
+    /// control-ребро — «управление» у приёмника, без значения/подписи у
+    /// истока и без value-пути в пилюле (инвариант 5).
+    #[test]
+    fn stage_slot_labels_output_and_control() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = 1", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 200.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        let mut e1 = Edge::new("e1", "src", None, "dst", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("users".to_owned());
+        let mut e2 = Edge::new("e2", "src", None, "dst", None);
+        e2.set_flow_kind(FlowKind::Control);
+        canvas.edges.push(e1);
+        canvas.edges.push(e2);
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        assert!(app.main_stage.is_some(), "пучок value+control открыт");
+        // Value-ребро: подпись истока — слот выхода + значение; приёмник — путь
+        let e1 = &app.scene.canvas.edges[0];
+        let (slot, value) = app.stage_src_label_lines(e1);
+        assert_eq!(slot.as_deref(), Some("out: users"), "лейбл слота выхода");
+        assert_eq!(value, "10", "значение по именованному выходу");
+        assert_eq!(
+            app.stage_dst_label_text(e1, "Заявки"),
+            "Заявки.users",
+            "лейбл слота входа — полный путь (Р-3)"
+        );
+        // Control-ребро: у истока подписи нет; у приёмника — «управление»;
+        // в пилюле — «to: <приёмник>», значения нет (инвариант 5)
+        let e2 = &app.scene.canvas.edges[1];
+        assert_eq!(
+            app.stage_src_label_lines(e2),
+            (None, String::new()),
+            "control не несёт значения/подписи у истока"
+        );
+        assert_eq!(
+            app.stage_dst_label_text(e2, "Заявки"),
+            "управление",
+            "control-ребро не отображается value-путём"
+        );
+        assert_eq!(app.stage_edge_value_text(e2), "", "control без значения");
+        assert_eq!(
+            app.stage_edge_addr_text(e2),
+            "to: Отчёт",
+            "адрес control-ребра — «to: <приёмник>»"
+        );
+    }
+
+    /// FR-044 Q2 (интеграция): переполненная стопка пилюль — режим Scroll
+    /// с индикаторами «↑ ещё N»/«ещё N ↓»; клик по нижнему индикатору
+    /// листает окно (счётчики above/below пересчитываются).
+    #[test]
+    fn stage_pill_zone_scroll_window() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Заявки", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = 1", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 200.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        // Пучок ×16 — в зоне stage обычного окна это Scroll (Q2)
+        for i in 0..16 {
+            let mut edge = Edge::new(format!("e{i}"), "src", None, "dst", None);
+            edge.set_flow_kind(FlowKind::Value);
+            edge.from_output = Some(format!("f{i}"));
+            canvas.edges.push(edge);
+        }
+        let mut app = stub_app_with_canvas(canvas);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        let stage = app.main_stage.as_ref().expect("stage открыт");
+        let viewport = app.viewport_logical();
+        let rect = main_stage_rect(viewport);
+        let s = stage.scale.max(f32::EPSILON);
+        let ctx = app.stage_frame_ctx(stage, &rect, s);
+        let (pill_rects, mode) = app.stage_pill_state(stage, &ctx);
+        let (above, below) = match mode {
+            calc_panel_ui::PillZoneMode::Scroll { above, below, .. } => (above, below),
+            other => panic!(
+                "ожидался Scroll для пучка ×16 (zone.h = {}, rect'ов = {}): {other:?}",
+                ctx.zone.h,
+                pill_rects.len()
+            ),
+        };
+        assert_eq!(above, 0, "окно с начала");
+        assert!(below > 0, "есть скрытые снизу");
+        assert_eq!(pill_rects.len() + above + below, 16, "окно + скрытые");
+        // Индикатор «ещё N ↓» — клик листает окно
+        let (top_ind, bottom_ind) = app.stage_pill_scroll_indicators(stage, &ctx);
+        assert!(top_ind.is_none(), "выше окна пусто — индикатора нет");
+        let bottom_ind = bottom_ind.expect("индикатор снизу есть");
+        let transform = StageTransform::new([rect.x, rect.y], stage.scale);
+        app.cursor = transform.map_point([
+            bottom_ind.x + bottom_ind.w / 2.0,
+            bottom_ind.y + bottom_ind.h / 2.0,
+        ]);
+        app.click_main_stage();
+        assert!(app.stage_pill_scroll > 0, "клик по индикатору листает окно");
+        // После листания: выше есть скрытые, снизу — упор
+        let stage = app.main_stage.as_ref().expect("stage открыт");
+        let ctx = app.stage_frame_ctx(stage, &rect, s);
+        match ctx.pill_mode {
+            calc_panel_ui::PillZoneMode::Scroll { above, below, .. } => {
+                assert!(above > 0, "окно сместилось вниз");
+                assert_eq!(below, 0, "клик страницей дошёл до упора");
+            }
+            other => panic!("режим должен остаться Scroll: {other:?}"),
+        }
+        // Закрытие stage сбрасывает окно
+        app.close_main_stage();
+        assert_eq!(app.stage_pill_scroll, 0, "окно сброшено (Q2)");
     }
 
     /// M8/W3 (wasm-port §6, приёмка «трейты покрыты тестами на заглушках»):
