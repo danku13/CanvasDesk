@@ -4746,10 +4746,14 @@ Stage Summary:
 Задача: FR-056 — слияние в main, push, CI, закрытие CR (та же сессия 2026-09-23)
 
 Work Log:
-- (заполняется после merge)
+- Синхронизация с main: за время работы ветки в main легли FR-057 (Painter/WidgetState/FocusRing, f97f66f), FR-058 (компоненты v2, a44e691), FR-013 (канонизация единиц, 2d3cd15) — merge origin/main в ветку; конфликты worklog.md/index-cr-fr.md/prd-0009 (параллельные записи и статусы) разрешены с сохранением обеих сторон; FR-056 «✅ выполнено» + FR-057 «✅ реализовано» сосуществуют в index.
+- Все 5 локальных гейтов перепроверены на объединённом коде (fmt, clippy -D warnings, test --workspace 0 FAILED, wasm_gate, mcp_wasm_gate) — зелёные; 8 тестов FR-056 зелёные; app.rs-диапазон СТАРТ-записи скорректирован (+3 строки после FR-013).
+- Merge --no-ff в main: 2f8ed91; push origin/main a44e691..2f8ed91.
+- CI по merge SHA 2f8ed91 — все 12 проверок success: gates (ubuntu/macos/windows), build, wasm-check, licenses (cargo-deny), artifacts ×3, deploy, web /app + docs, report-build-status.
 
 Stage Summary:
-- (заполняется после merge)
+- FR-056 закрыт: F-5 (scissor-клиппинг) в продукте — ScreenBand.clip + scissor-бакет полосы (R-1) + TextBounds-клип текстов; G7-остаток снят (+4 020 б ≈ 3,9 КБ ≤ 100 КБ); сливался первым из волны 2 — G5-аудит миграций FR-059/060 опирается на системный рендер-клип.
+- Волна 2: FR-056/057/058 в main; остаются FR-059 → FR-060 (последовательность по app.rs).
 Задача: FR-057 — kit-core: Painter в canvas-ui (без wgpu) + WidgetState/фокус (перевод кита из «контрактов слотов» в виджеты; реализация по постановке волны 2, сессия 2026-09-23)
 
 Work Log:
