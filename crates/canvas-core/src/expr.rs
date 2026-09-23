@@ -7,7 +7,10 @@
 //!
 //! Грамматика v1 (Numi-base):
 //! - литералы: числа (`5`, `3.14`, `1k`, `2M`) и единицы (`ms`, `sec`,
-//!   `min`, `h`, `req`, `req/s`, `rps`, `B`, `KB`, `MB`, `GB`, `$`, `%`);
+//!   `min`, `h`, `req`, `req/s`, `rps`, `B`, `KB`, `MB`, `GB`, `$`, `%`;
+//!   кириллические синонимы: `мс`, `сек`, `мин`, `ч`, `запр`, `запр/с`,
+//!   `Б`, `КБ`, `МБ`, `ГБ`) — по одному токену на значение, без
+//!   словоизменительных дублей (`s`/`secs`/`reqs`/`hour` убраны);
 //! - операторы: `+ - * × · ⋅ ✕ ⨯ ÷ /`, скобки, унарный минус; неявное
 //!   умножение (`5 ms` = `5 × ms`, `$5` = `5 × $`); `x`/`х` между
 //!   операндами — тоже умножение (Numi: `35 x 20` = 700);
@@ -176,7 +179,7 @@ impl Unit {
                 .iter_mut()
                 .find(|a| a.dim == Dimension::Count && a.exp == 1)
             {
-                *c = Atom::new(Dimension::Rate, 1, 1.0, "req/s");
+                *c = Atom::new(Dimension::Rate, 1, 1.0, rate_name_for(c.name));
             }
         }
         Unit { atoms }
@@ -218,7 +221,7 @@ impl Unit {
 }
 
 /// Равенство единиц — по мультимножеству (размерность, степень, масштаб):
-/// синоним имени (`s`/`sec`) равенству не мешает.
+/// синоним имени (`sec`/`сек`) равенству не мешает.
 impl PartialEq for Unit {
     fn eq(&self, other: &Self) -> bool {
         let flat = |unit: &Self| -> BTreeMap<(Dimension, i8), (i8, f64)> {
@@ -235,17 +238,25 @@ impl PartialEq for Unit {
 /// Таблица единиц v1 (FR-013, §Changes п.6): `(токен, размерность, масштаб
 /// к базе)`. Базы: Time = sec, Bytes = B, Rate = req/s, Count = req,
 /// Money = $, Percent = %. Килобайты — двоичные (1 GB = 1024 MB).
-/// Кириллические синонимы — v2 (отложено владельцем).
+///
+/// Канонизация (правка владельца, 2026-09-23): один токен на значение —
+/// наиболее наглядная форма без словоизменительных дублей: `sec` (не
+/// `s`/`secs`), `req` (не `reqs`), `h` (не `hour`); основа уже читается
+/// как множественность (`300 req` — триста запросов). Отображение — токен,
+/// которым единица введена (`50 мс` → `50 мс`, `50 ms` → `50 ms`).
+///
+/// Кириллические синонимы (были отложены до v2 — внесены 2026-09-23):
+/// `мс`, `сек`, `мин`, `ч`, `запр`, `запр/с`, `Б`, `КБ`, `МБ`, `ГБ`.
+/// Деньги и проценты нейтральны (`$`, `usd`, `%`); `руб` сознательно НЕ
+/// синоним `$` — другая валюта, алиасинг смешал бы размерности
+/// (`100 руб + 5 $ = 105` — бессмыслица).
 const UNIT_TABLE: &[(&str, Dimension, f64)] = &[
+    // Латиница — канонические формы
     ("ms", Dimension::Time, 0.001),
-    ("s", Dimension::Time, 1.0),
     ("sec", Dimension::Time, 1.0),
-    ("secs", Dimension::Time, 1.0),
     ("min", Dimension::Time, 60.0),
     ("h", Dimension::Time, 3600.0),
-    ("hour", Dimension::Time, 3600.0),
     ("req", Dimension::Count, 1.0),
-    ("reqs", Dimension::Count, 1.0),
     ("rps", Dimension::Rate, 1.0),
     ("req/s", Dimension::Rate, 1.0),
     ("B", Dimension::Bytes, 1.0),
@@ -255,6 +266,17 @@ const UNIT_TABLE: &[(&str, Dimension, f64)] = &[
     ("$", Dimension::Money, 1.0),
     ("usd", Dimension::Money, 1.0),
     ("%", Dimension::Percent, 1.0),
+    // Кириллица — синонимы (v2); отображение — как введено
+    ("мс", Dimension::Time, 0.001),
+    ("сек", Dimension::Time, 1.0),
+    ("мин", Dimension::Time, 60.0),
+    ("ч", Dimension::Time, 3600.0),
+    ("запр", Dimension::Count, 1.0),
+    ("запр/с", Dimension::Rate, 1.0),
+    ("Б", Dimension::Bytes, 1.0),
+    ("КБ", Dimension::Bytes, 1024.0),
+    ("МБ", Dimension::Bytes, 1024.0 * 1024.0),
+    ("ГБ", Dimension::Bytes, 1024.0 * 1024.0 * 1024.0),
 ];
 
 /// Атом по токену таблицы.
@@ -263,6 +285,19 @@ fn unit_atom(token: &str) -> Option<Atom> {
         .iter()
         .find(|(name, _, _)| *name == token)
         .map(|(name, dim, scale)| Atom::new(dim.clone(), 1, *scale, name))
+}
+
+/// Токен Rate для синтеза `Count/Time` по имени Count-атома: `req` →
+/// `req/s`, `запр` → `запр/с` (правка 2026-09-23: деление кириллических
+/// единиц показывает `50 запр/с`, а не смешанный `50 req/s`). Поиск — по
+/// префиксу таблицы (`{count}/…`), fallback — `req/s`.
+fn rate_name_for(count_name: &str) -> &'static str {
+    let prefix = format!("{count_name}/");
+    UNIT_TABLE
+        .iter()
+        .find(|(token, dim, _)| *dim == Dimension::Rate && token.starts_with(&prefix))
+        .map(|(token, _, _)| *token)
+        .unwrap_or("req/s")
 }
 
 /// FR-018: значение с единицей из токена таблицы (`Some("rps")`, `Some("ms")`);
@@ -2199,6 +2234,67 @@ mod tests {
         assert_eq!(value, Value::scalar(2000.0));
     }
 
+    /// Правка владельца (2026-09-23): словоизменительные дубликаты убраны
+    /// из таблицы — один наглядный токен на значение (`sec`, `req`, `h`).
+    #[test]
+    fn unit_table_canonical_no_inflections() {
+        assert!(unit_atom("s").is_none(), "`s` заменён каноном `sec`");
+        assert!(unit_atom("secs").is_none(), "`secs` заменён каноном `sec`");
+        assert!(unit_atom("reqs").is_none(), "`reqs` заменён каноном `req`");
+        assert!(unit_atom("hour").is_none(), "`hour` заменён каноном `h`");
+        assert!(unit_atom("sec").is_some());
+        assert!(unit_atom("req").is_some());
+        // Убранный токен после числа — уже не единица: `300 reqs` —
+        // умножение на неизвестную переменную (диагностика вместо ответа)
+        let parsed = parse("300 reqs").expect("лексер: число + идентификатор");
+        let err = eval(&parsed, &Env::empty()).unwrap_err();
+        assert!(err.to_string().contains("неизвестная переменная"));
+    }
+
+    /// Кириллические единицы (v2, правка 2026-09-23): парсинг после числа,
+    /// конвертация при сложении, деление с синтезом Rate, отображение —
+    /// токен, которым единица введена.
+    #[test]
+    fn cyrillic_units_parse_eval_display() {
+        // Сложение с конвертацией вправо; единица левого операнда
+        let value = eval(&parse("1 сек + 500 мс").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "1.5 сек");
+        let value = eval(&parse("500 мс + 1 сек").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "1500 мс");
+        // Смешанный ввод (латиница + кириллица): ответ — в единице левого
+        let value = eval(&parse("1 sec + 500 мс").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "1.5 sec");
+        let value = eval(&parse("1 сек + 1 sec").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "2 сек");
+        // Деление Count/Time → Rate на языке Count-операнда (`запр/с`)
+        let rate = eval(&parse("100 запр / 2 сек").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(rate.to_string(), "50 запр/с");
+        // Слитный Rate-токен: max-munch `запр/с` раньше `запр`
+        let rate = eval(&parse("50 запр/с").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(rate.to_string(), "50 запр/с");
+        // Байты, часы, гигабайты с конвертацией
+        let value = eval(&parse("2 КБ").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "2 КБ");
+        let value = eval(&parse("2 ч").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "2 ч");
+        let value = eval(&parse("1 ГБ + 512 МБ").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value.to_string(), "1.5 ГБ");
+        // Равенство единиц не зависит от алфавита синонима
+        assert_eq!(
+            eval(&parse("1 сек").unwrap(), &Env::empty()).unwrap(),
+            eval(&parse("1 sec").unwrap(), &Env::empty()).unwrap()
+        );
+    }
+
+    /// Латинская канонизация не сломана: синтез Rate по-прежнему `req/s`.
+    #[test]
+    fn latin_rate_synthesis_unchanged() {
+        let rate = eval(&parse("100 req / 2 sec").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(rate.to_string(), "50 req/s");
+        let rate = eval(&parse("1 req / 10 ms").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(rate.to_string(), "100 req/s");
+    }
+
     /// Ввод-вывод без паники на кириллице и незнакомых символах.
     #[test]
     /// FR-013 (правка 3): буквы Unicode — идентификаторы (`5 μs` — ссылка
@@ -2595,6 +2691,11 @@ mod tests {
         assert!(tokens.contains(&"rps"));
         assert!(tokens.contains(&"KB"));
         assert!(tokens.contains(&"%"));
+        // Кириллические синонимы в каталоге подсказок (правка 2026-09-23)
+        assert!(tokens.contains(&"сек"));
+        assert!(tokens.contains(&"запр"));
+        assert!(tokens.contains(&"запр/с"));
+        assert!(tokens.contains(&"ГБ"));
         for token in &tokens {
             let value = unit_value(1.0, Some(token));
             // Токен таблицы даёт атом-размерность (не скаляр)

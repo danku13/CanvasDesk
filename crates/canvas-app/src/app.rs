@@ -903,15 +903,18 @@ fn slugify(name: &str) -> String {
 }
 
 /// FR-020: тип параметра по токену единицы (подсказка UI в манифесте).
+/// Правка владельца (2026-09-23): таблица канонизирована (`s`/`secs`/
+/// `hour`/`reqs` убраны), добавлены кириллические синонимы (FR-013).
 fn infer_param_type(unit: Option<&str>) -> canvas_core::templates::ParamType {
     use canvas_core::templates::ParamType;
     match unit {
-        Some("rps") | Some("req/s") => ParamType::Rate,
-        Some("ms") | Some("s") | Some("sec") | Some("secs") | Some("min") | Some("h")
-        | Some("hour") => ParamType::Time,
-        Some("B") | Some("KB") | Some("MB") | Some("GB") => ParamType::Bytes,
+        Some("rps") | Some("req/s") | Some("запр/с") => ParamType::Rate,
+        Some("ms") | Some("sec") | Some("min") | Some("h") | Some("мс") | Some("сек")
+        | Some("мин") | Some("ч") => ParamType::Time,
+        Some("B") | Some("KB") | Some("MB") | Some("GB") | Some("Б") | Some("КБ") | Some("МБ")
+        | Some("ГБ") => ParamType::Bytes,
         Some("%") => ParamType::Percent,
-        Some("req") | Some("reqs") => ParamType::Count,
+        Some("req") | Some("запр") => ParamType::Count,
         _ => ParamType::Scalar,
     }
 }
@@ -17070,11 +17073,18 @@ impl ApplicationHandler<AppEvent> for App {
                             .collect()
                     })
                     .collect();
+                let band_viewport = self.viewport_logical();
                 let screen_band_refs: Vec<canvas_render::ScreenBand> = bands
                     .iter()
                     .zip(&band_screen_texts)
                     .map(|((layer, instances, _), texts)| canvas_render::ScreenBand {
                         layer: *layer,
+                        // FR-056 (F-5 PRD-0009): клип полосы = SurfaceFrame.clip
+                        // поверхности в кадре реестра (UiFrame::from_registry —
+                        // сегодня вьюпорт; сужение клипов per-surface — волны
+                        // миграции FR-059/060, аудит G5). Рендер конвертирует
+                        // в физические px и исполняет scissor-бакетом.
+                        clip: canvas_ui::UiRect::new(0.0, 0.0, band_viewport[0], band_viewport[1]),
                         instances,
                         texts,
                     })
