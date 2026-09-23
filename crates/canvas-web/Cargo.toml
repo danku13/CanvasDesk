@@ -4,6 +4,7 @@ name = "canvas-web"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 # каркас W4 (wasm-port §6): console-логирование на tracing — свой слой,
