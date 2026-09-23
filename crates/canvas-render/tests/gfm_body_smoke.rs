@@ -215,24 +215,55 @@ fn headless_gfm_body_quads_draw() {
         "карточка тёмная (опорный пиксель): {card:?}"
     );
 
-    // Чекбокс 1: body-local (0, 26+2=28) → screen (20, 70), 11×11.
-    // Чекбокс 2: body-local (0, 48+2=50) → screen (20, 92).
-    // Буллит: body-local (4, 70+7.5=77.5) → screen (24, 119..120).
-    for (name, x, y) in [
-        ("чекбокс 1", ox, oy + 28 + 5),
-        ("чекбокс 2", ox, oy + 50 + 5),
-        ("буллит", ox + 4 + 2, oy + 77 + 1),
-    ] {
-        let p = px(x, y);
-        assert!(
-            is_muted_gray(p),
-            "{name} светло-серый в позиции ({x},{y}): {p:?}"
-        );
-        assert!(
-            p[0] as i32 > card[0] as i32 + 50,
-            "{name} светлее карточки: quad={p:?} card={card:?}"
-        );
-    }
+    // Чекбокс 1: body-local (0, 26+2=28) → screen (20, 76), 11×11.
+    // Чекбокс 2: body-local (0, 48+2=50) → screen (20, 98), 11×11.
+    // Буллит: body-local (4, 70+7.5=77.5) → screen (24, 123..128).
+    //
+    // Маркеры проверяются ОКНОМ (бокс + запас 4 px), а не одиночным
+    // пикселем: растеризаторы расходятся в степени покрытия граничных
+    // пикселей (регрессия a6c576c — Metal/WARP дали на (20,81) чистую
+    // карточку [108,108,115] при зелёном lavapipe; геометрия квадов на
+    // всех платформах одинакова — CPU-тесты позиций зелёные на тех же
+    // раннерах). Семантика прежняя: маркер рисуется СВЕТЛО-СЕРЫМ
+    // gfm_muted_fill в колонке-gutter у ожидаемого места, светлее
+    // карточки. При провале диагностика печатает счёт и min/max каналы
+    // окна — данные для разбора расхождения бэкендов.
+    let gray_in_window =
+        |wx: std::ops::Range<usize>, wy: std::ops::Range<usize>, threshold: usize, name: &str| {
+            let mut hits = 0usize;
+            let mut min = [255u8; 3];
+            let mut max = [0u8; 3];
+            let mut brightest = [0u8; 3];
+            for y in wy.clone() {
+                for x in wx.clone() {
+                    let p = px(x, y);
+                    for c in 0..3 {
+                        min[c] = min[c].min(p[c]);
+                        max[c] = max[c].max(p[c]);
+                    }
+                    if is_muted_gray(p) {
+                        hits += 1;
+                        if p[0] > brightest[0] {
+                            brightest = p;
+                        }
+                    }
+                }
+            }
+            assert!(
+                hits >= threshold,
+                "{name}: ожидалось ≥{threshold} светло-серых пикселей в окне \
+             x={wx:?} y={wy:?}, найдено {hits} (min={min:?}, max={max:?})"
+            );
+            assert!(
+                brightest[0] as i32 > card[0] as i32 + 50,
+                "{name} светлее карточки: quad={brightest:?} card={card:?}"
+            );
+        };
+    // Правая граница окон x < ox+16 — колонка-gutter (текст с x = 36);
+    // окна чекбоксов не пересекаются (93/94) и не задевают буллит (121+).
+    gray_in_window(ox..ox + 16, oy + 24..oy + 45, 30, "чекбокс 1");
+    gray_in_window(ox..ox + 16, oy + 46..oy + 67, 30, "чекбокс 2");
+    gray_in_window(ox + 2..ox + 14, oy + 73..oy + 86, 6, "буллит");
 
     // Позиционная регрессия: в строке чекбокса 1 (y = 75) «серо-яркие»
     // пиксели (подсветка/чекбокс, но не текст) — только в колонке-gutter
