@@ -35,7 +35,11 @@ pub mod hit;
 pub mod keyboard;
 // FR-055 U4 (F-8): UI kit v1 — модель виджетов поверх примитивов U3.
 pub mod kit;
+// FR-057 (волна 2 кита): Painter — draw-слой крейта (PaintItem-данные, без wgpu — G7).
+pub mod paint;
+// FR-057 (волна 2 кита): WidgetState — машина состояний виджета (KitState + ребро клика).
 pub mod layer;
+pub mod widget;
 // FR-053 U3 (F-7): layout-примитивы — микро-движок вёрстки от слота родителя.
 pub mod layout;
 // FR-053 U3 (F-6): TextMeasurer — измеренный текст (cosmic-text + кэш).
