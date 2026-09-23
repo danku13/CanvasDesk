@@ -147,7 +147,7 @@ mod tests {
     /// graph_apply_assembles_mini_reference_with_oracle) — один источник
     /// oracle-чисел для нативных и wasm-прогонов.
     const MINI_OPS: &str = r#"[
-        {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
+        {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak"},
         {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
         {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
         {"op":"param_set","ref":"traffic","param":"dau","value":200000},
@@ -159,7 +159,7 @@ mod tests {
         {"op":"edge_create","fromRef":"cost","toRef":"cdn"}
     ]"#;
 
-    const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak";
+    const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak";
 
     /// id ноды из created-массива graph_apply по ref-имени.
     fn ref_id<'a>(created: &'a Value, ref_name: &str) -> &'a str {

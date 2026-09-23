@@ -1761,7 +1761,7 @@ fn graph_apply_assembles_mini_reference_with_oracle() {
     let undo_before = scene.undo_stack.len();
 
     let ops = r#"[
-            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
+            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak"},
             {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
             {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
             {"op":"param_set","ref":"traffic","param":"dau","value":200000},
@@ -2008,13 +2008,13 @@ fn graph_apply_param_set_edits_single_line() {
 
     // Единица из операции переопределяет снапшот
     let ops = format!(
-        r#"[{{"op":"param_set","id":"{gw_id}","param":"latency_budget","value":0.005,"unit":"s"}}]"#
+        r#"[{{"op":"param_set","id":"{gw_id}","param":"latency_budget","value":0.005,"unit":"sec"}}]"#
     );
     let out = graph_apply(&mut scene, &ops).expect("батч");
     assert_eq!(out["ok"], true, "ответ: {out}");
     let text = scene.canvas.nodes[0].text.as_deref().expect("текст");
     assert!(
-        text.contains("latency_budget = 0.005 s"),
+        text.contains("latency_budget = 0.005 sec"),
         "единица из операции: {text:?}"
     );
 
@@ -2109,7 +2109,7 @@ fn graph_apply_rejects_value_cycle() {
 fn reference_scene() -> (SceneState, String, String) {
     let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ab1.canvas"));
     let ops = r#"[
-            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"},
+            {"op":"node_create_note","ref":"traffic","x":0,"y":0,"width":280,"text":"dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak"},
             {"op":"template_instantiate","ref":"cdn","template":"com.canvasdesk.cdn","x":360,"y":0,"params":{"cache_hit":0.9,"origin_latency":20}},
             {"op":"template_instantiate","ref":"gw","template":"com.canvasdesk.api-gateway","x":720,"y":0,"params":{"latency_budget":5,"auth_overhead":2}},
             {"op":"edge_create","fromRef":"traffic","toRef":"cdn","kind":"value","toParam":"rps"},
@@ -2527,7 +2527,7 @@ fn mcp_whatif_override_apply_undo() {
 
 /// Текст эталонной ноды «Нагрузка» (эталон №1 ADR-0006: dau=200000,
 /// 3 сессии × 10 req → 69.44 rps avg, peak ×3 → 208.33 rps).
-const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak";
+const TRAFFIC_TEXT: &str = "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\navg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak";
 
 /// M8/W3 (wasm-port §6): SceneState.save_now пишет через инъектированное
 /// хранилище (натив — FsCanvasStorage, тест — MemStorage); содержимое

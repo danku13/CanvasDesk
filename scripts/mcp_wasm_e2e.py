@@ -49,7 +49,7 @@ MINI_OPS = [
     {
         "op": "node_create_note", "ref": "traffic", "x": 0, "y": 0, "width": 280,
         "text": "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\n"
-                "avg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak",
+                "avg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak",
     },
     {
         "op": "template_instantiate", "ref": "cdn", "template": "com.canvasdesk.cdn",
@@ -74,7 +74,7 @@ MINI_OPS = [
 
 TRAFFIC_TEXT = (
     "dau = 200000\nsess = 3\nreq = 10 req\npeak = 3\n"
-    "avg_rps = dau × sess × req / 86400 s\npeak_rps = avg_rps × peak"
+    "avg_rps = dau × sess × req / 86400 sec\npeak_rps = avg_rps × peak"
 )
 
 # Oracle-числа эталона №1 (ADR-0006): ±1 %

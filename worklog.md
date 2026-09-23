@@ -4698,3 +4698,47 @@ Work Log:
 Stage Summary:
 - Живые URL: https://danku13.github.io/CanvasDesk/prototypes/ux-node-body-fill.html (после — табличные направляющие чисел/юнитов) и https://danku13.github.io/CanvasDesk/prototypes/ux-node-body-fill-flow.html (до — поточная вёрстка); перекрёстные ссылки ⇄ в шапках обоих файлов.
 - Содержательно прототипы не менялись: правка = баннер сравнения + ссылка; код продукта не тронут.
+
+## 2026-09-23 — FR-013 (правка 6): канонизация таблицы единиц + кириллические синонимы
+
+- **Задача (запрос владельца):** «нужно доработать Таблица единиц v1 - FR-013.
+  1 - сейчас дублируются значения значащие одно и то же типа: req/reqs или
+  s/sec/secs. нужно принять один наиболее наглядный вариант без лишних символов…
+  Так же надо доработать наличие кириллических символов».
+- **Канонизация `UNIT_TABLE` (canvas-core/src/expr.rs):** убраны
+  словоизменительные дубли — `s`/`secs` (канон `sec`), `reqs` (канон `req`),
+  `hour` (канон `h`); основа читается как множественность (`300 req`).
+  Несловоизменительные пары сохранены (разные роли, не дубли написания):
+  `rps` (токен шаблонов FR-018/019) + `req/s` (дисплей деления), `$` + `usd`
+  (обход `$N`-ссылок FR-014). Отображение — токен, которым единица введена.
+- **Кириллические синонимы (бывший v2):** `мс`, `сек`, `мин`, `ч`, `запр`,
+  `запр/с`, `Б`, `КБ`, `МБ`, `ГБ`; max-munch лексера покрывает `запр/с`
+  раньше `запр`. Rate-синтез `merged()` — `rate_name_for()` по префиксу
+  таблицы: `100 запр / 2 сек` → `50 запр/с`, fallback `req/s`. `руб` не
+  добавлен (другая валюта — алиасинг смешал бы размерности с `$`).
+- **FR-021 (canvas-app/src/hints_ui.rs):** `token_before_caret` — класс
+  символов лексера (буквы Unicode вместо ASCII): префикс `2 се` фильтрует
+  каталог (`сек`), якорь байтовый — замещение char-safe.
+- **FR-020 (canvas-app/src/app.rs):** `infer_param_type` — мёртвые ветки
+  убраны, кириллица добавлена (Rate/Time/Bytes/Count).
+- **Фикстуры:** golden-oracle переведён на канон (`86400 sec`,
+  `unit:"sec"`) в canvas-scene/tests.rs (3), canvas-mcp-headless/lib.rs (2),
+  scripts/mcp_wasm_e2e.py (2) — значения oracle не изменились.
+  После rebase на свежий main (+102 коммита параллельной сессии) найден
+  ещё один потребитель убранного `s`: схема «Ёмкость сервиса»
+  (assets/canvas-schemes/com.canvasdesk.scheme.capacity-service) — нода
+  «Спрос», `think = 30 s` → `think = 30 sec` (иначе параметр think не
+  публикуется и downstream получает «вход не найден: Интенсивность.rps»).
+  Итог: 1609 тестов workspace — зелёные.
+- **Тесты:** новые `unit_table_canonical_no_inflections`,
+  `cyrillic_units_parse_eval_display`, `latin_rate_synthesis_unchanged`,
+  `hints_cyrillic_unit_prefix`; каталог-тест FR-021 расширен. Гейты:
+  cargo test --workspace 1321 зелёных (exit 0), clippy -D warnings 0,
+  fmt чист. Окружение: rustup stable 1.98.1 установлен в сессии; диск
+  чистился (target 9.1 GiB → пересборка с CARGO_PROFILE_*_DEBUG=0).
+- **Документация:** fr-013 CR — Правка 6 + changelog + грамматика (§Changes);
+  исторические ADR/SPEC записи не тронуты.
+- **Файлы:** crates/canvas-core/src/expr.rs, crates/canvas-app/src/app.rs,
+  crates/canvas-app/src/hints_ui.rs, crates/canvas-scene/src/tests.rs,
+  crates/canvas-mcp-headless/src/lib.rs, scripts/mcp_wasm_e2e.py,
+  docs/change-requests/fr-013-text-node-numi-expr.md.
