@@ -4912,3 +4912,15 @@ Stage Summary:
 - **FR-062 (постановка, docs/change-requests/fr-062-ui-kit-layout-v2.md):** F-13 measured-дети (`lay_out_measured` — TextMeasurer внутри раскладки, класс CR-015 защищён по построению), F-14 flex-факторы (`Child.grow` + `MainAlign::End`; SqueezeTail приоритетен), F-15 `RowPolicy::Wrap{max_rows}`, F-16 `grid_cells(slot, cols, row_h, gap)`, F-17 фокус-связка FocusRing×WidgetState (витрина — Tab-навигация), F-18 геометрические golden-снапшоты (не пиксели); только добавление к v1; этапы A/B/C мержатся независимо; гейты TDD + G4/G5 + замер wasm (≤5 КБ этап, ≤15 КБ кумулятив).
 - **Доки:** docs/adr/adr-0013-taffy-vs-layout-primitives.md (новый, предложено); docs/adr/README.md — строка индекса; docs/change-requests/fr-062… (новый) + index-cr-fr — строка FR-062; docs/prd/prd-0009 — §7.4 V-3 дополнен ссылкой на ADR-0013 + §16 запись; docs/ui-kit.md §8 — блок «Решение по layout-движку taffy».
 - **Код не трогался** — документ-задача (анализ/постановка); гейты не требуются; wasm-стенд — вне репо (/tmp, команды воспроизведения в ADR §Валидация).
+
+---
+Task ID: FR-061-B-C-CI
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-061 этапы B+C — закрытие CI
+
+Work Log:
+- Merge 1c83a47 (этапы B+C) + sync-merge 993ef06 (конфликт worklog.md с ADR-0013 другого агента — сохранены обе стороны) + фикс GPU-теста 6cff069 (геометрия направляющих D-4: окна от value_right/unit_right, скалярная строка пуста правее направляющей).
+- CI по merge SHA 6cff069: 12/12 success (gates ubuntu/macos/windows, build, wasm-check, web, licenses, artifacts ×3, deploy, report-build-status).
+
+Stage Summary:
+- FR-061 этапы A+B+C в main, CI 12/12; остались этапы D (полировка/DebugOverlay/D-8/ellipsis/свёрнутость) и E (kit-Row).
