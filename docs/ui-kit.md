@@ -178,6 +178,31 @@ G4-линта в рантайме). Оверлей не участвует в pi
 диагностика не меняет ввод); рисуется полосой `UiLayer::Debug` (L8).
 Модель чистая — headless-тесты.
 
+### 7.2 Компоненты v2 (FR-058)
+
+`canvas_ui::kit` (волна 2) — чистые модели/функции в стиле v1: геометрия +
+стиль + модель состояния; рисование — через Painter (FR-057), ввод не
+перехватывают, событий не владеют. Компоненты — только **добавление** к v1
+(существующие сигнатуры/константы не меняются).
+
+| Компонент | Функция | Контракт |
+|---|---|---|
+| `TextField` | `text_field(slot, min, max, model, placeholder, focused, state, p, m, fs, family, size)` | Модель `TextFieldModel { text, caret, sel }` + раскладка `TextFieldLayout { rect, text_area, caret_x, text_shown }`. `caret_x = -1.0` — каретка не рисуется (не в фокусе). |
+| Список + скролл | `list_rows(area, s, row_h, gap, count) -> Vec<(usize, UiRect)>` + `scroll_bar(area, s, p) -> Option<UiRect>` | `ScrollState { offset, content_h, viewport_h }` — `scroll_by`/`clamp`/`needs_scroll`/`max_offset`. `list_rows` — чистая функция (без мутаций); частичные строки на краях включаются. |
+| `Switch` | `switch(slot, on, state, p)` | `SwitchLayout { track, knob, track_style, knob_fill }`. `on` — позиция бегунка (вправо) и слот заливки трека (`control_primary` on / `control_fill` off); радиус `RADIUS_PILL`. |
+| `Card` | `card(slot, min, max, header_h, p)` | `CardLayout { rect, header, body }`. Хедер и body — внутри пада панели (`panel_style(p).pad` = `SPACING_LG`). |
+| `Icon` | `icon_glyph(i) -> &'static str` + `icon_button(slot, icon, align)` | `enum Icon { Close, Gear, Question, Search, Plus, ArrowLeft, ArrowRight, Refresh }`. Глифы — существующим шрифтом (NotoSansDisplay-Medium): 0 новых зависимостей (G7). `icon_button` делегирует `icon_button_rect` (квадрат `ICON_BUTTON_SIZE`). |
+
+**Инвариант каретки** (зафиксирован в контракте FR-058): позиции `caret`/`sel`
+в `TextFieldModel` — в **СИМВОЛАХ** (`chars().count()`), не байтах.
+Вставка/удаление/движение корректны на юникоде (emoji 4-байтные, кириллица
+2-байтная). IME/UTF-16-конвертация — на стороне ввода потребителя (тестируется
+`text_field_unicode_emoji_and_cyrillic_positions`).
+
+**Non-goals** (выведены в постановку при появлении потребителя): `Slider`
+(спекулятивный компонент без экрана со слайдером). Витрина `kit_gallery`
+обновляется во FR-059 (владелец волны 1 миграции).
+
 ## 8. Статус кита
 
 - Готово (U1–U3, U5): каркас слоёв/реестра, примитивы, TextMeasurer, линты,
