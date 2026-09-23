@@ -5028,3 +5028,47 @@ Stage Summary:
 - FR-061 этап D в main (04b0c2c): токены/i18n/DebugOverlay/O-5/D-8 — шире моей волны; мой дубликат снят.
 - Остаток по CR (main-версия): свёрнутость блока + клик/экспандер (hit-зоны app.rs), ellipsis формулы, VLM-ревью; затем этап E (kit-Row D-15).
 - Урок: перед стартом волны сверять свежий origin/main (fetch) — параллельные агенты в этот день работали в тех же зонах FR-061.
+
+---
+Task ID: FR-060-START
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-060 — миграция волна 2: autolink_ui, palette.rs, explain_ui + хвосты app.rs (dialog/menu/hotkeys) + финальный замер wasm (старт волны)
+
+Work Log:
+- Спека прочитана (fr-060-ui-kit-migration-wave2.md), origin/main подтянут (2cf1af5 — правка индекса); ветка feature/fr-060-wave2 создана от main.
+- Изучены паттерн волны 1 (FR-059: hints_ui/flowmap/calc_panel — геометрия модулей через кит, рендер app.rs через Painter + WidgetState), API кита (modal/panel_rect/dropdown_menu/list_rows/ScrollState/button_size/icon_button/tooltip) и FR-062 layout v2 (уже в main).
+- МАТЕМАТИКА эквивалентности проверена: dialog_rect autolink ≡ kit::modal(slot, [320,240],[760,760],[vw·0.94, vh·0.88]) — прежняя min-маржа (viewport−20) — мёртвый код (доказано для всех vw); window_rect explain ≡ modal(slot=вьюпорт, инсет WIN_MARGIN, …) — инсет-слот сохраняет и кламп-маржу, и центр (симметрия).
+
+Перечень прав на файлы app.rs (зафиксирован по требованию спеки при старте):
+- dialog_rect + dialog_button_rects (+ их ветки подтверждения: confirm_dialog/click-зоны — геометрия та же функция).
+- menu_open_rect (+ ветки в on_left_button/on_key/Esc-лестнице).
+- hotkeys-функции app.rs: блок отрисовки панели хоткеев (hotkeys_panel_rect_at в lib.rs — ВНЕ прав, геометрия заморожена).
+- Трактовка (документирую явно): функции ОТРИСОВКИ трёх мигрируемых поверхностей (autolink_frame, palette_overlay, explain_frame, canvas_menu_overlay — строки) — это функции этих же поверхностей из таблицы «Требуемые изменения» (Painter/WidgetState); модули autolink_ui.rs/palette.rs/explain_ui.rs — полные права (спека ограничений на них не ставит). Файлы вне прав не трогаются: canvas-ui/**, canvas-render/**, hints/flowmap/calc_panel/kit_ui, onboarding, settings/template/docs/whatif/scheme_gallery, lib.rs.
+
+Stage Summary:
+- Волна 2 начата; план: autolink (modal+list_rows) → app.rs dialog (measured, фикс h=150) → menu/hotkeys (list_rows+Painter) → palette (dropdown_menu+list_rows) → explain (modal+G5) → гейты (fmt/clippy/test/G4/G5/замер wasm) → доки → merge.
+
+---
+Task ID: FR-060-FINISH
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-060 — миграция волна 2 (autolink/palette/explain + хвосты app.rs) — реализация, гейты, доки
+
+Work Log:
+- autolink_ui.rs: dialog_rect → kit::modal (min-маржа «viewport−20» — мёртвый код, доказано parity-тестом на 7 вьюпортах; деградация «окно < инварианта» — угол вместо отрицательного сдвига); close_rect → kit::stack (End/Start, 30×30 дословно — icon_button 26 ≠ 30, documented); rows_layout → ScrollState.clamp/max_offset + kit::list_rows на строки каждой группы (локальный offset = scroll − g0; окно видимости кита ≡ прежней попарной проверке краёв; parity-тест на 4 скроллах — строки/чипы/кнопки байт-в-байт, кроме строки с 0 видимых px на кромке — кит исключает, попутно убрано пересечение невидимой hit-зоны с футером).
+- app.rs диалог подтверждения: dialog_rect/dialog_button_rects → kit::modal + kit::button_size (измеренный текст) — ФИКС класса дефектов «h=150»: ширина = clamp(замер+2·20, 280, 440) (пол/потолок/маржа прежние), высота = пады прежних якорей (16/46/30/16) + замер тела + SPACING_LG 12 (~133 вместо 150 — мёртвый слэк устранён), кнопки от текста (зазор 16 дословно), длинные тексты — ellipsis (вместо молчаливого клипа); T21-рендер — показанные тексты + именованные константы DIALOG_*; +2 headless-теста (dialog_measured_in — чистая функция).
+- app.rs canvas_menu_overlay: пункты меню и подменю — kit::list_rows (стопка menu_item_rect дословно) + WidgetState (Hovered) + Painter; панели с тенью (params.w=0) — квады (флаг вне PaintItem); menu_open_rect и hit-тесты lib.rs не тронуты (G1/G2). Хоткеи: строки — list_rows, break-кламп «ниже кромки −2» устранён (частичные строки клипует scissor FR-056), цвета — прежние слоты (link/body вне KitPalette — тексты остались OwnedScreenText).
+- palette.rs: palette_origin → kit::dropdown_menu (якорь-строка ANCHOR_BAR_H = 10 − DROPDOWN_GAP 4; x-клампы ≡ прежним через инсет-вьюпорт PAL_MARGIN; flip бара у нижнего края — прежний кламп перекрывал выделение); palette_layout: колонки — dropdown_menu (якорь-зона = полоса бара ±1: ниже = бар+3 = −1+4, flip = верх бара −3 = +1−4 — прежние числа дословно), строки — list_rows (инсет PAL_DROP_PAD, зазор 0); вырожденный случай «не влезает нигде» — кит прижимает колонку к низу (раньше к верху); тест bar_size_and_origin обновлён (flip), +20 palette-тестов зелёные.
+- app.rs palette_overlay: Painter + WidgetState (строки: Hovered > Selected — прежняя раскраска accent/dim-accent дословно через матрицу кита); icon_quads (SDF-композиции) — остаются квадами, добираются после заливок (пересечений нет).
+- app.rs autolink_frame: полная конверсия на Painter + WidgetState (row/accept/reject/create — Selected → прежние слоты accent/error/white; деградация Rejected — quote) → paint_items_to_band; последовательность квадов/текстов и слоты 1:1.
+- explain_ui.rs: window_rect → kit::modal со слотом-инсетом WIN_MARGIN (симметрия сохраняет центр и клампы — parity-тест ≡ прежней формуле на 7 вьюпортах); crumb_rects — take_while вместо break (политика hide дословно); ancestor_expanded — match-страж вместо break; шапка модуля — FR-060-заметка с отклонениями (дерево — 2D-tidy, list_rows неприменим; chip 28/✕ 30 — числа дословно).
+- explain_frame (отрисовка): НЕ переведена на Painter — остаток волны (screen_rect_quad — тот же band-конвейер без теней; ~600 строк механики при нулевом визуальном эффекте); геометрия/G5 модуля выполнены.
+- G4-линт: +3 состояния ui_layout_lint (lint_autolink_review_open, lint_explain_open — Block-модали с backdrop-проверкой; lint_palette_selected — через app.test_viewport оверрайд: бар+колонка внутри вьюпорта на 3 окнах × RU/EN).
+- Гейты: cargo fmt; clippy --workspace --all-targets -D warnings (почистил mem_replace_option_with_none — Option::take оставлен, задокументирован в аудите); cargo test --workspace — 1732 ok / 0 failed; wasm-gate --check, mcp-wasm-gate --check — зелёные.
+- G5-аудит (grep take(n)/break/truncate_chars по 3 модулям): 0 срезов; Option::take (5 в explain_ui) — перенос владения состояния, не срез контента; 2 break-клампа устранены.
+- Замер wasm (raw cdylib release, cargo, обе стороны одной процедурой; trunk/wasm-bindgen-cli в среде недоступны): main 2cf1af5 = 12 010 850 Б → ветка = 12 012 079 Б; дельта +1 229 Б ≈ 1,2 КБ ≤ 100 КБ (бюджет волны).
+- Доки: fr-060 (статус ✅ + история реализации с 9 решениями), index-cr-fr (статус), ui-kit.md §8 (статус кита: волна 2 завершает перенос; сознательно осталось — wheel/minimap/HUD/onboarding), prd-0009 §16 (запись FR-060).
+
+Stage Summary:
+- FR-060 выполнен: волна 2 миграции закрыта, кастомный UI перенесён на кит (кроме сознательно оставленных world-декораций wheel/minimap/HUD и замороженного онбординга).
+- Проверка спеки: G4 — 3 окна × RU/EN, 0 налезаний/выходов на перенесённых поверхностях (+3 линт-состояния); G5 — чисто; диалог адаптируется под измеренный текст (фикс h=150); 0 визуального скачка — parity-тесты модальных окон/строк/кнопок; все гейты зелёные; замер wasm записан (+1,2 КБ).
+- Остаток волны (documented): Painter-конверсия explain_frame; пины/части спеки, реализованные с documented отклонениями (icon_button 26 vs 30, тени вне PaintItem) — детали в CR-060.
