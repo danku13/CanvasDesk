@@ -41,6 +41,14 @@ use std::fmt;
 
 mod queueing;
 
+// FR-063 (Открытый вопрос № 1): общий разбор аргументов доменных слоёв L2
+// (queueing/stats) — вынесен из queueing.rs без изменения его поведения.
+mod args;
+// FR-063: доменный слой статистики (L2, ADR-0008 M2/S1) — только с фичей
+// `stats`; без неё имена не регистрируются и дают UnknownFunction (fallback).
+#[cfg(feature = "stats")]
+mod stats;
+
 /// Результат вычисления формулы ноды — runtime-состояние приложения
 /// (инвариант 4 FR-013: НЕ сериализуется в `.canvas`, пересчитывается
 /// из формулы при загрузке/правке/undo).
@@ -1729,6 +1737,13 @@ fn eval_call(func: &str, args: &[Expr], env: &Env) -> Result<Value, EvalError> {
         // FR-027: расширение — 4 финансовые функции (npv/cagr/irr/cohort_ltv).
         "utilization" | "mm1" | "mmc" | "littles_law" | "erlang_c" | "npv" | "cagr" | "irr"
         | "cohort_ltv" => queueing::dispatch(func, &values),
+        // FR-063: доменный слой статистики (L2) — только за фичей `stats`
+        // (список имён — единая точка `stats::STATS_FUNCTIONS`, parity-тест с
+        // FN_HINTS обязателен). Без фичи arm не существует и имена падают в
+        // fallback ниже — graceful-деградация UnknownFunction (контракт FR-063
+        // «Контракты на стыках» §5.3: существующие arms не тронуты).
+        #[cfg(feature = "stats")]
+        other if stats::is_stats_function(other) => stats::dispatch(func, &values),
         other => Err(EvalError::UnknownFunction(other.to_owned())),
     }
 }
@@ -1893,7 +1908,8 @@ pub struct FnHint {
 }
 
 /// Каталог функций движка (FR-021): статистика FR-013 + queueing-набор
-/// FR-015. Сигнатуры синхронны `eval_call`/`queueing::dispatch`.
+/// FR-015/FR-027. Сигнатуры синхронны `eval_call`/`queueing::dispatch`.
+/// FR-063: stats-записи за фичей `stats`, parity с диспетчером — тестом.
 pub const FN_HINTS: &[FnHint] = &[
     FnHint {
         name: "sum",
@@ -1944,6 +1960,28 @@ pub const FN_HINTS: &[FnHint] = &[
         name: "erlang_c",
         signature: "erlang_c(λ, μ, c)",
         summary: "вероятность ожидания Эрланга C",
+    },
+    // FR-027: финансовые функции (были в движке с FR-027, но отсутствовали
+    // в каталоге — устранён пробел parity FR-021 при добавлении FR-063).
+    FnHint {
+        name: "npv",
+        signature: "npv(rate, cf, …)",
+        summary: "чистая приведённая стоимость потоков",
+    },
+    FnHint {
+        name: "cagr",
+        signature: "cagr(begin, end, periods)",
+        summary: "среднегодовой темп роста",
+    },
+    FnHint {
+        name: "irr",
+        signature: "irr(cf, …)",
+        summary: "внутренняя норма доходности",
+    },
+    FnHint {
+        name: "cohort_ltv",
+        signature: "cohort_ltv(arpu_m0, margin, r_d1, r_d7, r_d30, months)",
+        summary: "LTV когорты через retention-кривую",
     },
 ];
 
@@ -2865,6 +2903,56 @@ mod tests {
 
     // --- FR-021: каталог подсказок и детектор рода строки ---
 
+    // --- FR-063: parity stats-домена (диспетчер ↔ каталог) ---
+
+    /// FR-063 P1: множество stats-имён в `eval_call` (единая точка
+    /// `stats::STATS_FUNCTIONS`) совпадает со множеством stats-записей в
+    /// `FN_HINTS` (паттерн FR-021). P1: оба множества пусты — тест фиксирует
+    /// контракт до наполнения (P2/P3 расширяют обе стороны синхронно).
+    #[cfg(feature = "stats")]
+    #[test]
+    fn stats_fn_hints_parity_with_eval_call() {
+        let hint_names: std::collections::BTreeSet<&str> =
+            fn_hints().iter().map(|h| h.name).collect();
+        let stats_names: std::collections::BTreeSet<&str> =
+            super::stats::STATS_FUNCTIONS.iter().copied().collect();
+        // Каждое stats-имя диспетчера подсказывается UI
+        for name in &stats_names {
+            assert!(
+                hint_names.contains(name),
+                "{name}: движок знает (stats-arm), каталог подсказок — нет"
+            );
+        }
+        // Обратное направление: полный каталог = встроенные + queueing +
+        // stats, без лишних записей (если тест упал — каталог и диспетчер
+        // разошлись; обнови BUILTIN/hints/stats синхронно).
+        const BUILTIN_AND_QUEUEING: &[&str] = &[
+            "sum",
+            "avg",
+            "max",
+            "min",
+            "percentile",
+            "utilization",
+            "mm1",
+            "mmc",
+            "littles_law",
+            "erlang_c",
+            "npv",
+            "cagr",
+            "irr",
+            "cohort_ltv",
+        ];
+        let expected: std::collections::BTreeSet<&str> = BUILTIN_AND_QUEUEING
+            .iter()
+            .copied()
+            .chain(stats_names.iter().copied())
+            .collect();
+        assert_eq!(
+            hint_names, expected,
+            "FN_HINTS разошёлся с диспетчером eval_call"
+        );
+    }
+
     /// Инвариант 2 FR-021: каждая функция каталога известна грамматике
     /// (parse), а каждый токен единиц — таблице (unit_value).
     #[test]
@@ -2875,6 +2963,18 @@ mod tests {
                 "{} не парсится — каталог разошёлся с движком",
                 hint.name
             );
+        }
+        // FR-063: каждая подсказка — известная ДИСПЕТЧЕРУ функция (не только
+        // грамматике): eval не даёт UnknownFunction (расширенный parity —
+        // закрывает и обратное направление: «движок знает, UI не подсказывает»).
+        for hint in fn_hints() {
+            if let Err(err) = eval(&parse(&format!("{}(1)", hint.name)).unwrap(), &Env::empty()) {
+                assert!(
+                    !matches!(err, EvalError::UnknownFunction(_)),
+                    "{} в каталоге, но диспетчер его не знает",
+                    hint.name
+                );
+            }
         }
         let tokens = unit_tokens();
         assert!(tokens.contains(&"ms"));
