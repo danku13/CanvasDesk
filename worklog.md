@@ -1,3 +1,28 @@
+## 2026-09-23 — FR-058: компоненты кита v2 (TextField, список+скролл, Switch, Card, Icon) в canvas-ui
+
+- **Агент:** Super Z (сессия web-bea0078b, директива «реализуй FR-058»)
+- **Задача:** FR-058 — волна 2 кита (PRD-0009 §8 F-8): чистые модели/функции v2 в `crates/canvas-ui/src/kit.rs` (только добавление) для потребителей FR-059/060: TextField с кареткой/селекцией, список+скролл, Switch, Card, Icon-глифы. Замороженные контракты — в `docs/change-requests/fr-058-ui-kit-v2-components.md`.
+
+### Work Log
+- **kit.rs — метрики v2 (новые константы):** `TEXT_FIELD_HEIGHT/PAD_H/MIN_W`, `LIST_ROW_H/GAP`, `SCROLLBAR_WIDTH/KNOB_MIN`, `SWITCH_W/H/KNOB_PAD` — из spacing/radius-scale токенов (0 новых зависимостей, G7).
+- **TextFieldModel:** структура `{text, caret, sel}` — каретка/селекция в СИМВОЛАХ (`chars().count()`), не байтах (инвариант FR-058). Методы: `insert` (замена селекции), `backspace`/`delete` (с селекцией или одиночный), `move_caret(chars, extend)` (shift+стрелки), `select_all`, `clear_selection`, `set_text`. Приватные хелперы `selection_range`/`delete_selection`. Тест на emoji (🎉 4-байтный) + кириллицу (2-байтная) — `text_field_unicode_emoji_and_cyrillic_positions`.
+- **TextFieldLayout + text_field(...):** 12-арг функция (с `#[allow(clippy::too_many_arguments)]`); `rect` = constrain+stack в слоте, `text_area` = минус SPACING_SM горизонтально, `caret_x` = замер префикса до каретки (кламп к text_area; `-1.0` когда не сфокусировано — каретка не рисуется), `text_shown` = placeholder (если пусто) или текст с `ellipsis` по ширине. `state`/`p` зарезервированы (контракт: цвет отдельно от геометрии — стиль отдельной функцией потребителя).
+- **ScrollState:** `{offset, content_h, viewport_h}` + `scroll_by`/`clamp`/`needs_scroll`/`max_offset`. `list_rows(area, s, row_h, gap, count) -> Vec<(usize, UiRect)>` — чистая функция (без мутаций — тест `list_rows_does_not_mutate_scroll_state`); вычисляет диапазон видимых строк по `offset`/`viewport_h` (частичные строки на краях включаются). `scroll_bar(area, s, _p) -> Option<UiRect>` — бегунок ∝ viewport/content, минимальная высота `SCROLLBAR_KNOB_MIN`; `None` когда `!needs_scroll`.
+- **SwitchLayout + switch(slot, on, state, p):** трек (pill `RADIUS_PILL`) + квадратный бегунок; `on` — позиция бегунка (вправо/влево) и слот заливки трека (`control_primary` on / `control_fill` off; hover/pressed — `primary_hover_fill`/`hover_fill`); `knob_fill` = `text_title` (disabled — `disabled_text`).
+- **CardLayout + card(slot, min, max, header_h, p):** `rect` = constrain+stack; `header`/`body` — внутри пада панели (`panel_style(p).pad` = SPACING_LG); `header_h` клампнут к `inner.h`; body = остаток. Палитра — слот фона/рамки (потребитель рисует через `panel_style(p)`).
+- **Icon enum + icon_glyph + icon_button:** 8 вариантов (Close/Gear/Question/Search/Plus/ArrowLeft/ArrowRight/Refresh); глифы существующим шрифтом NotoSansDisplay-Medium (0 новых зависимостей): «✕»/«⚙»/«?»/«+» — существующие литералы потребителей (I-1 ноль скачка), «⌕»/«←»/«→»/«↻» — стандартные Unicode. `icon_button(slot, _icon, align)` делегирует `icon_button_rect` (квадрат `ICON_BUTTON_SIZE`); `icon` зарезервирован для будущей текстовой раскладки.
+- **Тесты (37 новых, итого 97 в canvas-ui):** TextField — insert (start/middle/end + замена селекции), backspace (no-op start + char + selection), delete (no-op end + char + selection), move_caret (clamp + extend), select_all/clear_selection, set_text, unicode emoji+cyrillic; text_field() layout — empty+placeholder+caret, no-caret-when-not-focused, non-empty+measured-prefix, placeholder-ellipsis, caret-clamp; ScrollState — scroll_by±, clamp краёв, needs_scroll/max_offset; list_rows — empty/no-height, all-visible, offset-skips-hidden, partial-top, partial-bottom, no-mutation; scroll_bar — None когда не нужен, knob ∝ ratio + позиция, min-height; switch — geometry + knob position by on, palette slots (on/off/hover/disabled), RADIUS_PILL; card — geometry with pad, clamp min/max, header_h clamp; icon_glyph — полный маппинг + существующие литералы; icon_button — делегирование.
+- **Доки:** `docs/ui-kit.md` §7.2 (таблица компонентов v2 + инвариант каретки + non-goals Slider); `docs/change-requests/fr-058-ui-kit-v2-components.md` — статус → «реализовано», changelog.
+- **Гейты:** fmt ✓ (workspace), clippy -D warnings ✓ (workspace, all-targets), `cargo test --workspace` ✓ (1642 passed / 0 failed), wasm_gate --check ✓ (canvas-core/render/widgets/mcp/web компилируются под wasm32-unknown-unknown — canvas-ui транзитивно через canvas-render), mcp_wasm_gate --check ✓ (canvas-scene/mcp/mcp-headless под wasm32), token_lint ✓. Wasmtime в песочнице отсутствует — ступень 3 (тесты в wasmtime) запустит CI.
+- **Инцидент:** диск 9.9 ГБ переполнился линковкой тест-бинарников canvas-render (250–350 МБ каждый) — тот же инцидент что в сессии 2026-09-22 (FR-050 C); применён временный `[profile.test] debug=0` для прогона гейтов и откачен ДО коммита (в репозиторий не попал). Cargo.toml в финальном диффе — без правок.
+- **0 правок canvas-app/canvas-render** (проверка `git diff --stat`: только `kit.rs` + 2 док-файла).
+
+### Stage Summary
+- **FR-058 закрыт:** все 5 компонентов v2 (TextField, ScrollState+list_rows+scroll_bar, Switch, Card, Icon) реализованы в `crates/canvas-ui/src/kit.rs` строго по замороженным контрактам (только добавление — существующие сигнатуры/константы v1 не менялись). 37 юнит-тестов покрывают инварианты FR-058 (каретка в символах на юникоде, чистый list_rows, геометрия в слотах, полный маппинг Icon). Гейты зелёные; 0 правок canvas-app/canvas-render.
+- Ключевые решения: `text_field` — `caret_x = -1.0` как сентинель «не рисовать» (вместо Option<f32> — контракт фиксирован); `card` — палитра используется через `panel_style(p).pad` (header/body внутри пада); `scroll_bar` — палитра не используется (геометрия только, цвет — на потребителе); `icon_button` делегирует `icon_button_rect` (квадрат, без замера глифа — v2 с TextMeasurer при появлении потребителя).
+- **Далее:** FR-057 (Painter/WidgetState — слияние до FR-058 в main, но кодирование против контрактов уже возможно), FR-059/060 (миграция пилотов на v2 — hints/flowmap/calc_panel/autolink/explain/галереи).
+
+---
 ## 2026-09-22 — PRD-0007 X4: автосвязь по именам (детектор, бейдж, диалог ревью, undo-бат, тумблер)
 
 - **Агент:** Super Z (сессия web-29b539cb, директива «Продолжай с x4»)
@@ -4725,3 +4750,66 @@ Work Log:
 
 Stage Summary:
 - (заполняется после merge)
+Задача: FR-057 — kit-core: Painter в canvas-ui (без wgpu) + WidgetState/фокус (перевод кита из «контрактов слотов» в виджеты; реализация по постановке волны 2, сессия 2026-09-23)
+
+Work Log:
+- Ветка `feature/fr-057-painter-widget-state` от main (5a16414); прочитаны замороженные контракты FR-057 и права на файлы (запрет app.rs/renderer/kit.rs/чужих _ui.rs — соблюдён, проверено диффом).
+- TDD: сначала тесты, потом реализация. `canvas-ui/src/paint.rs` (новый): `PaintAlign{Left,Center}`, `PaintItem{Rect,Text}`, `Painter{rect,control,panel,label,items,take_items}` — данные без wgpu/winit/внешних зависимостей (G7); 4 теста (порядок items = draw-порядок, payload дословный, take_items очищает, items — plain data).
+- `canvas-ui/src/widget.rs` (новый): `WidgetState` (поля приватные) — `set_pointer/set_selected/set_disabled/set_focused` → `kit_state()` с приоритетом Disabled > Pressed > Hovered > Selected > Normal; фокус в KitState не входит (`is_focused` — потребителю, рамка по слоту accent); ребро клика `clicked(released_now_inside)` — «press был внутри → release внутри», гасится любым вызовом; press вне виджета и press по disabled клик не дают; 12 тестов матрицы переходов и ребра (вкл. drag-out-and-back).
+- `canvas-ui/src/keyboard.rs` — ТОЛЬКО добавление `FocusRing{push,next,prev,current,clear}`: Tab-кольцо focus-rect'ов скоупа (next без текущего — первый, prev — последний; пустое кольцо — None); 6 тестов; сигнатуры KeyboardRouter не тронуты (линт clippy::should_implement_trait на `next` погашен #[allow] с комментарием «имя — замороженный контракт»).
+- `canvas-ui/src/lib.rs` — только строки `pub mod paint; pub mod widget;` (по правам файла).
+- `canvas-app/src/kit_ui.rs`: `KitDraw` — тонкая обёртка над Painter (методы/поведение 1:1): каждый вызов делегирует Painter'у и сразу конвертирует добавленный item (flush_last_quad/flush_last_text) — поля quads/texts актуальны для app.rs после каждого вызова, контракт app.rs сохранён дословно; `cursor_state`/`dropdown_item_state` — делегаты на WidgetState (doc-deprecation: атрибут #[deprecated] НЕ ставился — живы 3 вызова app.rs, гейт clippy -D warnings; миграция потребителей — FR-059/060).
+- Эквивалентность: тест `kitdraw_delegation_matches_direct_path` — quads (по полям; CardInstance без PartialEq) и texts дословно равны прямому пути прежней реализации на фиксированном примере — 0 визуального скачка; `cursor_state_delegates_match_old_matrix` — прежняя таблица состояний.
+- Гейты локально: cargo test -p canvas-ui 83/83 (+22 новых); cargo test -p canvas-app --lib 318/318 (+2, вкл. G4-линт); cargo fmt --check; cargo clippy -p canvas-ui -p canvas-app -- -D warnings (workspace clippy зелёный до чистки таргета); cargo check -p canvas-ui --target wasm32-unknown-unknown (G7). Полный cargo test --workspace и mcp-wasm в песочнице не исполняемы (диск 9.9 ГБ переполнился таргетом — linker Bus error; после cargo clean гейты перезапущены точечно) — прогон на CI пуша.
+- Доки: docs/ui-kit.md §7.1 «Painter и WidgetState» (FR-058 пишет §7.2 — секции не пересекаются); FR-документ — статус «✅ реализовано» + Changelog; index-cr-fr.md — строка FR-057 «✅ реализовано (2026-09-23)»; docs/prd/prd-0009-ui-layering-uikit.md §16 — история волны 2; docs/ACCEPTANCE.md — секция приёмки FR-057.1–FR-057.8.
+
+Stage Summary:
+- FR-057 выполнен: draw-слой (Painter/PaintItem) и машина состояний (WidgetState + ребро клика) живут в крейте canvas-ui как данные (G7 соблюдён — 0 внешних зависимостей); FocusRing — Tab-фокус контента скоупа. KitDraw — тонкая обёртка, app.rs не тронут (0 правок, дифф).
+- Разблокированы потребители: FR-058 (kit v2 против Painter/WidgetState), затем FR-059/060 (миграции на WidgetState/Painter; deprecated-делегаты cursor_state/dropdown_item_state ждут переноса вызовов).
+- Тесты: canvas-ui 63→83, canvas-app lib 316→318; класс дефекта «каждая поверхность копирует адаптер рисования» устранён в крейте.
+
+---
+
+## 2026-09-23 — FR-013 (правка 6): канонизация таблицы единиц + кириллические синонимы
+
+- **Задача (запрос владельца):** «нужно доработать Таблица единиц v1 - FR-013.
+  1 - сейчас дублируются значения значащие одно и то же типа: req/reqs или
+  s/sec/secs. нужно принять один наиболее наглядный вариант без лишних символов…
+  Так же надо доработать наличие кириллических символов».
+- **Канонизация `UNIT_TABLE` (canvas-core/src/expr.rs):** убраны
+  словоизменительные дубли — `s`/`secs` (канон `sec`), `reqs` (канон `req`),
+  `hour` (канон `h`); основа читается как множественность (`300 req`).
+  Несловоизменительные пары сохранены (разные роли, не дубли написания):
+  `rps` (токен шаблонов FR-018/019) + `req/s` (дисплей деления), `$` + `usd`
+  (обход `$N`-ссылок FR-014). Отображение — токен, которым единица введена.
+- **Кириллические синонимы (бывший v2):** `мс`, `сек`, `мин`, `ч`, `запр`,
+  `запр/с`, `Б`, `КБ`, `МБ`, `ГБ`; max-munch лексера покрывает `запр/с`
+  раньше `запр`. Rate-синтез `merged()` — `rate_name_for()` по префиксу
+  таблицы: `100 запр / 2 сек` → `50 запр/с`, fallback `req/s`. `руб` не
+  добавлен (другая валюта — алиасинг смешал бы размерности с `$`).
+- **FR-021 (canvas-app/src/hints_ui.rs):** `token_before_caret` — класс
+  символов лексера (буквы Unicode вместо ASCII): префикс `2 се` фильтрует
+  каталог (`сек`), якорь байтовый — замещение char-safe.
+- **FR-020 (canvas-app/src/app.rs):** `infer_param_type` — мёртвые ветки
+  убраны, кириллица добавлена (Rate/Time/Bytes/Count).
+- **Фикстуры:** golden-oracle переведён на канон (`86400 sec`,
+  `unit:"sec"`) в canvas-scene/tests.rs (3), canvas-mcp-headless/lib.rs (2),
+  scripts/mcp_wasm_e2e.py (2) — значения oracle не изменились.
+  После rebase на свежий main (+102 коммита параллельной сессии) найден
+  ещё один потребитель убранного `s`: схема «Ёмкость сервиса»
+  (assets/canvas-schemes/com.canvasdesk.scheme.capacity-service) — нода
+  «Спрос», `think = 30 s` → `think = 30 sec` (иначе параметр think не
+  публикуется и downstream получает «вход не найден: Интенсивность.rps»).
+  Итог: 1609 тестов workspace — зелёные.
+- **Тесты:** новые `unit_table_canonical_no_inflections`,
+  `cyrillic_units_parse_eval_display`, `latin_rate_synthesis_unchanged`,
+  `hints_cyrillic_unit_prefix`; каталог-тест FR-021 расширен. Гейты:
+  cargo test --workspace 1321 зелёных (exit 0), clippy -D warnings 0,
+  fmt чист. Окружение: rustup stable 1.98.1 установлен в сессии; диск
+  чистился (target 9.1 GiB → пересборка с CARGO_PROFILE_*_DEBUG=0).
+- **Документация:** fr-013 CR — Правка 6 + changelog + грамматика (§Changes);
+  исторические ADR/SPEC записи не тронуты.
+- **Файлы:** crates/canvas-core/src/expr.rs, crates/canvas-app/src/app.rs,
+  crates/canvas-app/src/hints_ui.rs, crates/canvas-scene/src/tests.rs,
+  crates/canvas-mcp-headless/src/lib.rs, scripts/mcp_wasm_e2e.py,
+  docs/change-requests/fr-013-text-node-numi-expr.md.

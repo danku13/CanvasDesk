@@ -6,6 +6,7 @@
 //! Референс семантики — egui `containers/modal.rs` (стек модалей + Esc +
 //! any_popup_open; анализ 2026-09-22).
 
+use crate::geometry::UiRect;
 use crate::registry::{KeyboardScopeId, SurfaceId, SurfaceRegistry};
 
 /// Активация поверхности с keyboard-scope.
@@ -13,6 +14,78 @@ use crate::registry::{KeyboardScopeId, SurfaceId, SurfaceRegistry};
 pub struct Activation {
     pub surface: SurfaceId,
     pub scope: KeyboardScopeId,
+}
+
+/// FR-057 (волна 2 кита): [`FocusRing`] — Tab-порядок focus-rect'ов скоупа.
+///
+/// `KeyboardRouter` маршрутизирует скоупы ПОВЕРХНОСТЕЙ; фокус контента
+/// внутри поверхности (кнопки/строки/поля) до FR-057 нигде не вёлся. Кольцо
+/// rect'ов в порядке Tab: `next` — Tab, `prev` — Shift+Tab, оба идут по
+/// кольцу (egui-семантика: после последнего — первый). Пустое кольцо и
+/// кольцо без текущего фокуса — валидные состояния (`Option`-семантика).
+/// Что делать с выбранным rect'ом (фокус-рамка по слоту `accent`,
+/// Enter-активация) — решает потребитель; `FocusRing` только навигация.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FocusRing {
+    /// Rect'ы в порядке Tab.
+    rects: Vec<UiRect>,
+    /// Индекс текущего фокуса (None — фокус ещё не ставился).
+    index: Option<usize>,
+}
+
+impl FocusRing {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Добавить rect в конец Tab-порядка (порядок регистрации = Tab-порядок).
+    pub fn push(&mut self, r: UiRect) {
+        self.rects.push(r);
+    }
+
+    /// Tab: следующий rect по кольцу; пустое кольцо — None; без текущего
+    /// фокуса — первый.
+    // FR-057: имя `next` — замороженный контракт (FR-058/059/060 кодируют
+    // против него); FocusRing — кольцо навигации, не Iterator.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<UiRect> {
+        let len = self.rects.len();
+        if len == 0 {
+            return None;
+        }
+        let i = match self.index {
+            Some(i) => (i + 1) % len,
+            None => 0,
+        };
+        self.index = Some(i);
+        Some(self.rects[i])
+    }
+
+    /// Shift+Tab: предыдущий rect по кольцу; пустое кольцо — None; без
+    /// текущего фокуса — последний.
+    pub fn prev(&mut self) -> Option<UiRect> {
+        let len = self.rects.len();
+        if len == 0 {
+            return None;
+        }
+        let i = match self.index {
+            Some(i) => (i + len - 1) % len,
+            None => len - 1,
+        };
+        self.index = Some(i);
+        Some(self.rects[i])
+    }
+
+    /// Текущий focus-rect (None — фокус не ставился).
+    pub fn current(&self) -> Option<&UiRect> {
+        self.index.map(|i| &self.rects[i])
+    }
+
+    /// Очистить кольцо (поверхность перестроила контент).
+    pub fn clear(&mut self) {
+        self.rects.clear();
+        self.index = None;
+    }
 }
 
 /// Роутер клавиатуры: стек активаций поверхностей. Верхний скоуп первым
@@ -209,5 +282,93 @@ mod tests {
         let _ = router.pop_surface(&SurfaceId::new("dialog"));
         let _ = router.pop_surface(&SurfaceId::new("gallery"));
         assert!(router.esc_target().is_none());
+    }
+
+    // --- FocusRing (FR-057) ----------------------------------------------------
+
+    const R0: UiRect = UiRect::new(0.0, 0.0, 40.0, 30.0);
+    const R1: UiRect = UiRect::new(50.0, 0.0, 40.0, 30.0);
+    const R2: UiRect = UiRect::new(100.0, 0.0, 40.0, 30.0);
+
+    #[test]
+    fn focus_ring_empty_navigation_is_none() {
+        let mut ring = FocusRing::new();
+        assert!(ring.next().is_none());
+        assert!(ring.prev().is_none());
+        assert!(ring.current().is_none());
+    }
+
+    #[test]
+    fn focus_ring_next_starts_at_first_then_wraps() {
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        ring.push(R2);
+        // первый Tab — первый rect; дальше по порядку; после последнего — кольцо
+        assert_eq!(ring.next(), Some(R0));
+        assert_eq!(ring.current(), Some(&R0));
+        assert_eq!(ring.next(), Some(R1));
+        assert_eq!(ring.next(), Some(R2));
+        assert_eq!(ring.next(), Some(R0));
+    }
+
+    #[test]
+    fn focus_ring_prev_starts_at_last_then_wraps() {
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        ring.push(R2);
+        // Shift+Tab без текущего фокуса — последний; дальше назад; кольцо
+        assert_eq!(ring.prev(), Some(R2));
+        assert_eq!(ring.current(), Some(&R2));
+        assert_eq!(ring.prev(), Some(R1));
+        assert_eq!(ring.prev(), Some(R0));
+        assert_eq!(ring.prev(), Some(R2));
+    }
+
+    #[test]
+    fn focus_ring_next_prev_are_inverse() {
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        ring.push(R2);
+        ring.next();
+        ring.next();
+        assert_eq!(ring.current(), Some(&R1));
+        ring.prev();
+        assert_eq!(ring.current(), Some(&R0));
+        ring.prev(); // кольцо: до R0 назад — R2
+        assert_eq!(ring.current(), Some(&R2));
+    }
+
+    #[test]
+    fn focus_ring_clear_resets() {
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        assert_eq!(ring.next(), Some(R0));
+        ring.clear();
+        assert!(ring.current().is_none());
+        assert!(ring.next().is_none());
+        // после clear кольцо можно собрать заново (контент перестроился)
+        ring.push(R1);
+        assert_eq!(ring.next(), Some(R1));
+    }
+
+    /// Сценарий FR-057: KeyboardRouter выбрал скоуп поверхности — фокус
+    /// контента внутри неё ведёт FocusRing (независимые механизмы).
+    #[test]
+    fn focus_ring_complements_router_scopes() {
+        let (_reg, router) = seed_router();
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        // верхний скоуп (dialog) получил событие Tab → фокус внутри его контента
+        assert_eq!(
+            router.esc_target().map(|a| a.surface.as_str()),
+            Some("dialog")
+        );
+        assert_eq!(ring.next(), Some(R0));
+        assert_eq!(ring.next(), Some(R1));
     }
 }
