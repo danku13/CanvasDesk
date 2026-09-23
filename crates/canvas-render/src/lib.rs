@@ -20,6 +20,9 @@ pub mod minimap;
 pub mod minimap_pass;
 pub mod renderer;
 pub mod renderer_init;
+/// FR-061 этап B (Н-3 пре-PRD PRD-0004): табличная модель тела ноды —
+/// декларативные строки данных (D-2) + проход A направляющих (D-6/D-11).
+pub mod row_grid;
 pub mod search_ui;
 pub mod sectors;
 pub mod stage;
