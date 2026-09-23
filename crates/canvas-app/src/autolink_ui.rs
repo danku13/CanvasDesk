@@ -11,10 +11,23 @@
 //! время диалога); ввод/рендер потребляют только эти layout-функции —
 //! детерминизм pick ≡ кадр. Создание связей — обязанность App (один
 //! undo-бат, AC-5.3); модель диалога связей не создаёт (D1).
+//!
+//! FR-060 (волна 2 миграции кита, паттерн U5 — числа дословно): геометрия
+//! окна — `kit::modal` (constrain+stack; прежние клампы прототипа дословно:
+//! min-маржа «viewport−20» — мёртвый код при всех вьюпортах, устранён),
+//! кнопка ✕ — `kit::stack` (End/Start в слоте шапки), кламп прокрутки —
+//! [`ScrollState`], строки групп — `kit::list_rows` (окно видимости кита:
+//! частичные строки на краях — та же семантика, что прежняя попарная
+//! проверка «верх/низ тела»; строки внутри группы однородны —
+//! [`ROW_H`] с зазором 0, разнородность вносят только заголовки групп —
+//! они остаются в переборе групп). Числа прежние — 0 визуального скачка.
 
 use std::collections::BTreeSet;
 
 use canvas_core::AutolinkProposal;
+use canvas_ui::geometry::{UiRect, UiVec2};
+use canvas_ui::kit::{self, ScrollState};
+use canvas_ui::layout::{stack, HAlign, VAlign};
 
 // --- модель ревью ----------------------------------------------------------
 
@@ -171,6 +184,10 @@ pub const DLG_MIN_W: f32 = 320.0;
 pub const DLG_MIN_H: f32 = 240.0;
 /// Высота шапки (заголовок + мета-строка).
 pub const HEADER_H: f32 = 58.0;
+/// Потолок высоты окна (прежний литерал 760 у клампа высоты).
+pub const DLG_MAX_H: f32 = 760.0;
+/// Верхний пад тела списка (прежний шаг «+8» от верха тела).
+pub const BODY_TOP_PAD: f32 = 8.0;
 /// Высота футера (подсказка + массовые кнопки).
 pub const FOOTER_H: f32 = 52.0;
 /// Высота баннера отклонённых (У8).
@@ -192,16 +209,26 @@ pub const CREATE_W: f32 = 176.0;
 /// Ширина кнопки «Вернуть все» в баннере.
 pub const RESTORE_W: f32 = 110.0;
 
-/// Прямоугольник диалога: центр вьюпорта, клампы прототипа.
+/// Прямоугольник диалога — `kit::modal` (FR-060): слот = вьюпорт,
+/// min = инвариант 320×240, max = потолки прототипа, desired = доли
+/// вьюпорта. Прежняя min-маржа «viewport−20» — мёртвый код (при vw ≥ 340
+/// доля 0.94 уже ≤ vw−20; при vw < 340 оба клампа дают [`DLG_MIN_W`]) —
+/// устранена без изменения результата (parity-тест).
 /// `[x, y, w, h]` в логических px.
 pub fn dialog_rect(viewport: [f32; 2]) -> [f32; 4] {
-    let w = (viewport[0] * DLG_FRAC_W)
-        .clamp(DLG_MIN_W, DLG_W)
-        .min((viewport[0] - 20.0).max(DLG_MIN_W));
-    let h = (viewport[1] * DLG_FRAC_H)
-        .clamp(DLG_MIN_H, 760.0)
-        .min((viewport[1] - 20.0).max(DLG_MIN_H));
-    [(viewport[0] - w) / 2.0, (viewport[1] - h) / 2.0, w, h]
+    let slot = UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+    let layout = kit::modal(
+        slot,
+        UiVec2::new(DLG_MIN_W, DLG_MIN_H),
+        UiVec2::new(DLG_W, DLG_MAX_H),
+        UiVec2::new(viewport[0] * DLG_FRAC_W, viewport[1] * DLG_FRAC_H),
+    );
+    [
+        layout.panel.x,
+        layout.panel.y,
+        layout.panel.w,
+        layout.panel.h,
+    ]
 }
 
 /// Бейдж-индикатор предложений (AC-5.5) — верх по центру вьюпорта,
@@ -215,8 +242,15 @@ pub fn badge_rect(viewport: [f32; 2]) -> [f32; 4] {
 }
 
 /// Кнопка ✕ — правый верхний угол шапки (паттерн explain-окна).
+/// FR-060: позиция — `kit::stack` (End/Start) в слоте шапки с прежними
+/// полями (инсет 14 сверху/справа); размер 30×30 прежний дословно —
+/// `kit::icon_button` даёт квадрат 26 (`ICON_BUTTON_SIZE`), числа
+/// дословно сильнее перечня «замена» (паттерн отклонения kit::card из
+/// FR-059).
 pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
-    [win[0] + win[2] - 30.0 - 14.0, win[1] + 14.0, 30.0, 30.0]
+    let slot = UiRect::new(win[0], win[1] + 14.0, (win[2] - 14.0).max(0.0), 30.0);
+    let rect = stack(slot, UiVec2::new(30.0, 30.0), HAlign::End, VAlign::Start);
+    [rect.x, rect.y, rect.w, rect.h]
 }
 
 /// Баннер отклонённых — под шапкой (У8: виден, пока есть отклонённые).
@@ -299,19 +333,35 @@ pub struct RowsLayout {
 
 /// Раскладка строк с учётом прокрутки `scroll` (клампится внутрь).
 /// Строки вне тела — не попадают в выборку (рендер и hit-тест согласованы).
+///
+/// FR-060: кламп прокрутки — [`ScrollState`] кита (`clamp`/`max_offset` —
+/// прежняя формула дословно); строки группы — `kit::list_rows` (однородный
+/// список [`ROW_H`] с зазором 0; локальный offset группы = scroll − g0,
+/// где g0 — контентный сдвиг группы; окно видимости кита — частичные
+/// строки на краях — та же семантика, что прежняя попарная проверка
+/// «верх/низ тела»: нижняя граница «низ строки ≥ верх тела», верхняя
+/// «верх строки ≤ низ тела»). Заголовки групп — в переборе групп (одна
+/// строка — окно списка избыточно).
 pub fn rows_layout(review: &Review, win: [f32; 4], scroll: f32) -> RowsLayout {
     let body = body_rect(win);
     let content = content_height(review);
     let visible = body[3].max(0.0);
-    let scroll_max = (content - visible).max(0.0);
-    let scroll = scroll.clamp(0.0, scroll_max);
+    let mut list = ScrollState {
+        offset: scroll,
+        content_h: content,
+        viewport_h: visible,
+    };
+    list.clamp();
+    let scroll_max = list.max_offset();
     let mut layout = RowsLayout {
         content_height: content,
         scroll_max,
-        scroll,
+        scroll: list.offset,
         ..RowsLayout::default()
     };
-    let mut y = body[1] + 8.0 - scroll;
+    // Полоса строк группы: прежние инсеты дословно (+20/−40 по горизонтали).
+    let rows_area = UiRect::new(body[0] + 20.0, body[1], (body[2] - 40.0).max(0.0), visible);
+    let mut y = body[1] + BODY_TOP_PAD - list.offset;
     for (gi, group) in review.groups.iter().enumerate() {
         let collapsed = review.collapsed.contains(&gi);
         let head = [body[0] + 16.0, y, body[2] - 32.0, GROUP_H];
@@ -322,25 +372,36 @@ pub fn rows_layout(review: &Review, win: [f32; 4], scroll: f32) -> RowsLayout {
         if collapsed {
             continue;
         }
-        for &item_idx in &group.items {
-            let row = [body[0] + 20.0, y, body[2] - 40.0, ROW_H];
-            if y + ROW_H >= body[1] && y <= body[1] + body[3] {
-                let right = row[0] + row[2] - 8.0;
-                let reject = [right - BTN_W, y + 4.0, BTN_W, ROW_H - 8.0];
-                let accept = [reject[0] - BTN_W - 8.0, y + 4.0, BTN_W, ROW_H - 8.0];
-                let pct = [accept[0] - PCT_W - 10.0, y + 4.0, PCT_W, ROW_H - 8.0];
-                layout.rows.push((
-                    item_idx,
-                    RowRects {
-                        row,
-                        pct,
-                        accept,
-                        reject,
-                    },
-                ));
-            }
-            y += ROW_H;
+        let n = group.items.len();
+        // g0 — контентный сдвиг начала группы (y содержит −offset);
+        // локальный offset группы = scroll − g0 — строки list_rows от
+        // начала группы попадают на прежние экранные y (parity-тест).
+        let g0 = y + list.offset - body[1];
+        let group_list = ScrollState {
+            offset: list.offset - g0,
+            content_h: n as f32 * ROW_H,
+            viewport_h: visible,
+        };
+        for (k, rect) in kit::list_rows(rows_area, &group_list, ROW_H, 0.0, n) {
+            let Some(&item_idx) = group.items.get(k) else {
+                continue;
+            };
+            let row = [rect.x, rect.y, rect.w, rect.h];
+            let right = row[0] + row[2] - 8.0;
+            let reject = [right - BTN_W, row[1] + 4.0, BTN_W, ROW_H - 8.0];
+            let accept = [reject[0] - BTN_W - 8.0, row[1] + 4.0, BTN_W, ROW_H - 8.0];
+            let pct = [accept[0] - PCT_W - 10.0, row[1] + 4.0, PCT_W, ROW_H - 8.0];
+            layout.rows.push((
+                item_idx,
+                RowRects {
+                    row,
+                    pct,
+                    accept,
+                    reject,
+                },
+            ));
         }
+        y += n as f32 * ROW_H;
         y += GROUP_GAP;
     }
     layout
@@ -446,6 +507,121 @@ mod tests {
         review.toggle(0, ItemState::Accepted);
         review.toggle(0, ItemState::Accepted);
         assert_eq!(review.counts(), (0, 0, 3), "повторный клик — Pending");
+    }
+
+    /// FR-060: `kit::modal` ≡ прежние клампы прототипа дословно (доля
+    /// вьюпорта, потолки, инвариант 320×240); min-маржа «viewport−20» —
+    /// мёртвый код при всех вьюпортах (0 визуального скачка).
+    #[test]
+    fn dialog_rect_kit_modal_matches_old_clamps() {
+        let old = |vw: f32, vh: f32| -> [f32; 4] {
+            let w = (vw * DLG_FRAC_W)
+                .clamp(DLG_MIN_W, DLG_W)
+                .min((vw - 20.0).max(DLG_MIN_W));
+            let h = (vh * DLG_FRAC_H)
+                .clamp(DLG_MIN_H, 760.0)
+                .min((vh - 20.0).max(DLG_MIN_H));
+            [(vw - w) / 2.0, (vh - h) / 2.0, w, h]
+        };
+        // Широкие/узкие/крайне узкие окна — и потолки по высоте.
+        // При вьюпорте МЕНЬШЕ инварианта 320×240 прежняя математика давала
+        // отрицательный сдвиг (панель симметрично уходила за окно); кит
+        // (stack, guard ≥ 0) прижимает панель к левому-верхнему углу —
+        // предсказуемая деградация (класс G8), documented отклонение.
+        for &(vw, vh) in &[
+            (1280.0, 800.0),
+            (800.0, 600.0),
+            (500.0, 400.0),
+            (340.0, 300.0),
+            (330.0, 280.0),
+            (2000.0, 1000.0),
+            (360.0, 900.0),
+        ] {
+            assert_eq!(
+                dialog_rect([vw, vh]),
+                old(vw, vh),
+                "kit::modal ≡ прежняя формула при {vw}×{vh}"
+            );
+        }
+        // Деградация: вьюпорт меньше инварианта — панель в углу (x,y ≥ 0),
+        // размер = инвариант
+        let rect = dialog_rect([100.0, 100.0]);
+        assert_eq!(rect, [0.0, 0.0, DLG_MIN_W, DLG_MIN_H]);
+    }
+
+    /// FR-060: строки группы — `kit::list_rows` ≡ прежняя стопка дословно
+    /// (инсеты +20/−40, шаг ROW_H, окно видимости — та же семантика краёв).
+    #[test]
+    fn rows_layout_list_rows_matches_old_stack() {
+        let canvas = canvas_ab();
+        let review = Review::build(
+            &canvas,
+            (0..24)
+                .map(|i| proposal("A", "B", format!("p{i:02}").as_str()))
+                .collect(),
+        );
+        let win = dialog_rect([1280.0, 800.0]);
+        let body = body_rect(win);
+        // Прежняя формула (до миграции) — для сравнения
+        let old = |scroll: f32| -> RowsLayout {
+            let content = content_height(&review);
+            let visible = body[3].max(0.0);
+            let scroll_max = (content - visible).max(0.0);
+            let scroll = scroll.clamp(0.0, scroll_max);
+            let mut lay = RowsLayout {
+                content_height: content,
+                scroll_max,
+                scroll,
+                ..RowsLayout::default()
+            };
+            let mut y = body[1] + 8.0 - scroll;
+            for (gi, group) in review.groups.iter().enumerate() {
+                let head = [body[0] + 16.0, y, body[2] - 32.0, GROUP_H];
+                if y + GROUP_H >= body[1] && y <= body[1] + body[3] {
+                    lay.group_heads.push((gi, head));
+                }
+                y += GROUP_H;
+                for &item_idx in &group.items {
+                    let row = [body[0] + 20.0, y, body[2] - 40.0, ROW_H];
+                    if y + ROW_H >= body[1] && y <= body[1] + body[3] {
+                        let right = row[0] + row[2] - 8.0;
+                        let reject = [right - BTN_W, y + 4.0, BTN_W, ROW_H - 8.0];
+                        let accept = [reject[0] - BTN_W - 8.0, y + 4.0, BTN_W, ROW_H - 8.0];
+                        let pct = [accept[0] - PCT_W - 10.0, y + 4.0, PCT_W, ROW_H - 8.0];
+                        lay.rows.push((
+                            item_idx,
+                            RowRects {
+                                row,
+                                pct,
+                                accept,
+                                reject,
+                            },
+                        ));
+                    }
+                    y += ROW_H;
+                }
+                y += GROUP_GAP;
+            }
+            lay
+        };
+        for &scroll in &[0.0, 100.0, 250.0, 10_000.0] {
+            let new = rows_layout(&review, win, scroll);
+            let mut old = old(scroll);
+            // Отличие окна кита (documented): строка с верхом РОВНО на нижней
+            // кромке тела (0 видимых px) прежним кодом включалась — рендер
+            // клипует её в ноль (визуальной разницы нет); кит исключает,
+            // попутно убирая пересечение невидимой hit-зоны с футером
+            // (клики футера больше не перебиваются невидимой строкой).
+            let body_bottom = body[1] + body[3];
+            old.rows.retain(|(_, r)| r.row[1] < body_bottom);
+            assert_eq!(new.scroll, old.scroll, "кламп scroll ≡ прежний ({scroll})");
+            assert_eq!(new.scroll_max, old.scroll_max);
+            assert_eq!(new.group_heads, old.group_heads, "заголовки ≡ ({scroll})");
+            assert_eq!(
+                new.rows, old.rows,
+                "строки (row/pct/accept/reject) ≡ прежним ({scroll})"
+            );
+        }
     }
 
     /// Свёрнутые группы не дают высоты строк; раскладка клампит прокрутку.
