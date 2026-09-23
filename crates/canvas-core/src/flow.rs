@@ -1114,12 +1114,46 @@ impl AutoRow {
     /// FR-050 Р-4 (этап D): текст авто-строки — единая точка сборки для
     /// рендера (тело приёмника) и подгонки высоты (сцена): «Путь = значение
     /// единица»; unmapped — «Путь = —» (янтарная диагностика Р-3).
+    /// D-1 (FR-061): композиция над [`AutoRow::display_parts`] — строка и
+    /// структурные части собираются из одной точки (инвариант 2 FR-050,
+    /// байт-паритет тестом).
     pub fn display_text(&self) -> String {
-        match &self.value {
-            Some(value) => format!("{} = {}", self.path, value),
-            None => format!("{} = —", self.path),
+        let p = self.display_parts();
+        if p.unit.is_empty() {
+            format!("{} = {}", p.path, p.num)
+        } else {
+            format!("{} = {} {}", p.path, p.num, p.unit)
         }
     }
+
+    /// D-1 (FR-061, табличное тело ноды): структурные части авто-строки —
+    /// `path` (имя), `num` (число), `unit` (юнит) раздельно — ячейки
+    /// таблицы (этап B row_grid) без повторного парсинга строки.
+    /// Unmapped (`value = None`) → `num = "—"`, `unit` пуст (диагностика
+    /// Р-3 сохраняется в той же ячейке числа). Части значения — те же, что
+    /// [`crate::expr::Value::display_parts`]; сборка отображения —
+    /// [`crate::expr::join_parts`].
+    pub fn display_parts(&self) -> AutoRowParts {
+        let (num, unit) = match &self.value {
+            Some(value) => value.display_parts(),
+            None => ("—".to_owned(), String::new()),
+        };
+        AutoRowParts {
+            path: self.path.clone(),
+            num,
+            unit,
+        }
+    }
+}
+
+/// D-1 (FR-061, табличное тело ноды): части авто-строки для табличной
+/// ячейки — путь (имя), число, юнит. `display_text` — композиция над
+/// этими частями (единая точка сборки — инвариант 2 FR-050).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoRowParts {
+    pub path: String,
+    pub num: String,
+    pub unit: String,
 }
 
 /// FR-050 Р-4: авто-строки приёмника — производные данные пересчёта
@@ -3333,6 +3367,44 @@ mod tests {
             auto_rows(&canvas, "gateway", &solutions3).is_empty(),
             "ребра нет — строки нет"
         );
+    }
+
+    /// D-1 (FR-061): части авто-строки (`AutoRowParts`) — путь/число/юнит
+    /// раздельно; unmapped → num «—», unit пуст; `display_text` —
+    /// композиция над частями (байт-паритет строки, инвариант 2 FR-050).
+    #[test]
+    fn auto_row_parts_oracle() {
+        let row = |value: Option<Value>| AutoRow {
+            node_id: "gateway".to_owned(),
+            edge_id: "e1".to_owned(),
+            slot: 0,
+            path: "Трафик.peak_rps".to_owned(),
+            field: "peak_rps".to_owned(),
+            value,
+        };
+        // Пролитое значение с юнитом: ячейки имя/число/юнит
+        let p = row(Some(expr::unit_value(1389.0, Some("rps")))).display_parts();
+        assert_eq!(p.path, "Трафик.peak_rps");
+        assert_eq!(p.num, "1389");
+        assert_eq!(p.unit, "rps");
+        // Строка — байт-в-байт как раньше (единая точка сборки)
+        assert_eq!(
+            row(Some(expr::unit_value(1389.0, Some("rps")))).display_text(),
+            "Трафик.peak_rps = 1389 rps"
+        );
+        // Скаляр — юнит пуст, строка без хвостового пробела
+        let p = row(Some(Value::scalar(20.0))).display_parts();
+        assert_eq!(p.num, "20");
+        assert_eq!(p.unit, "");
+        assert_eq!(
+            row(Some(Value::scalar(20.0))).display_text(),
+            "Трафик.peak_rps = 20"
+        );
+        // Unmapped — «—» в ячейке числа (диагностика Р-3), юнит пуст
+        let p = row(None).display_parts();
+        assert_eq!(p.num, "—");
+        assert_eq!(p.unit, "");
+        assert_eq!(row(None).display_text(), "Трафик.peak_rps = —");
     }
 
     /// FR-050 Р-4: «ожидающий порт» — слот читается формулой (`$in` при
