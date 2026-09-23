@@ -4970,3 +4970,17 @@ Stage Summary:
 - Гейты ×5 зелёные: fmt; clippy -D warnings (workspace); cargo test --workspace — 52 сьюта, 0 отказов (canvas-render 335, +12 за этап D: 6 parity/токены, 1 EN-заголовок, 1 guide_debug_quads, 1 formula_rich_runs, 1 clamp_desc/measure, +обновлённые cache_freshness/block_header); wasm_gate; mcp_wasm_gate.
 - Регресс-инварианты: T2 (ширина, tcp-lb 300/384/520) и T5 (порты/якоря без правок, I-1) — зелёные без правок (desc-зона в тестах отсутствует — стек байт-в-байт прежний).
 - Осталось по FR-061: этап E (kit-Row D-15 на RowGuides + Painter/WidgetState); отдельное согласование владельца (hit-зоны app.rs): свёрнутость блока Н-2 + клик, экспандер описания «⋯ целиком ▾» (motion-токены body_block_flip_ms/body_clamp_ms уже заморожены); ellipsis формулы (узкие ноды); VLM-ревью (T9) — визуальная приёмка. Открытые вопросы: Q3-проза-фолбэк, Q6 (ширина шаблонных нод 360–400), Q7 (drag от кромки), Q8-алиасы-обрезка (v1 — раскраска O-5).
+
+---
+Task ID: FR-061-D-CI
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-061 этап D — закрытие слияния и CI
+
+Work Log:
+- Перед пушем origin/main ушёл на merge FR-062 (c0280f8, другой агент — canvas-ui layout v2 + витрина): main подтянут (ff), затем merge --no-ff ветки этапа D → конфликт worklog.md разрешён сохранением ОБЕИХ записей (FR-062 + FR-061-D-START/FINISH); остальные файлы слились без конфликтов (зоны не пересекались: FR-062 — canvas-ui/kit_ui, этап D — canvas-render/canvas-core/canvas-scene + 3 строки app.rs в зоне render-вызова).
+- Гейты на ОБЪЕДИНЁННОМ коде перезапущены: fmt; clippy -D warnings (workspace); cargo test --workspace — 52 сьюта ok / 0 отказов; wasm_gate; mcp_wasm_gate — зелёные.
+- Merge --no-ff в main: SHA 04b0c2c → push c0280f8..04b0c2c.
+- CI по merge SHA 04b0c2c: 12/12 success (gates ×3 ubuntu/macos/windows, artifacts ×3, build, web/app+docs, wasm-check, licenses, deploy, report-build-status).
+
+Stage Summary:
+- FR-061 этапы A+B+C+D в main, CI 12/12. Остались: этап E (kit-Row D-15); отложенные этапа D по отдельному согласованию владельца (hit-зоны app.rs): свёрнутость блока Н-2/клик + экспандер описания (motion-токены заморожены), ellipsis формулы, VLM-ревью (T9).
