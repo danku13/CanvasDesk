@@ -545,6 +545,10 @@ pub enum BodyQuadKind {
     /// FR-061 этап B (D-5): фон зебры — полупрозрачная подложка через
     /// строку в прогонах ≥ 4 строк данных (прототип O-7).
     RowBg,
+    /// FR-061 этап D (D-14/Q9): вертикальная линия диагностики колоночной
+    /// направляющей (value/unit right-края) — рисуется ТОЛЬКО при
+    /// включённом DebugOverlay (F9/?ui=debug), на ноде невидима (Q9).
+    GuideDebug,
 }
 
 /// Декоративный квад тела заметки: rect — [x, y, w, h] в px виртуального
@@ -1197,6 +1201,37 @@ fn with_body_stack(
     cursor_y
 }
 
+/// FR-061 этап D (D-14/Q9): квады диагностики колоночных направляющих —
+/// вертикальные линии на right-краях колонок (значение/юнит) через зону
+/// строк данных таблицы. Толщина 1 world-px, цвет — токен
+/// TABLE_GUIDE_DEBUG_COLOR (маппинг в renderer::body_quad_fill). Чистая
+/// функция — юнит-тест без GPU.
+fn guide_debug_quads(
+    guides: &canvas_ui::row_guides::RowGuides,
+    rows: &[CachedRow],
+    zoom_px: f32,
+) -> Vec<BodyQuad> {
+    let Some((y0, y1)) = rows.iter().fold(None::<(f32, f32)>, |acc, row| {
+        Some(match acc {
+            None => (row.row_top, row.row_top + row.row_line_h),
+            Some((a, b)) => (a.min(row.row_top), b.max(row.row_top + row.row_line_h)),
+        })
+    }) else {
+        return Vec::new();
+    };
+    let z = zoom_px;
+    vec![
+        BodyQuad {
+            rect: [guides.value_right() * z, y0 * z, z, (y1 - y0) * z],
+            kind: BodyQuadKind::GuideDebug,
+        },
+        BodyQuad {
+            rect: [guides.unit_right() * z, y0 * z, z, (y1 - y0) * z],
+            kind: BodyQuadKind::GuideDebug,
+        },
+    ]
+}
+
 /// Зашейпить тело заметки: GFM-блоки → вертикальный стек буферов со своими
 /// метриками/цветами + декоративные квады (в px виртуального буфера тела).
 /// `body_width` — world-px, `zoom_px` — физический зум. GPU не нужен —
@@ -1724,6 +1759,9 @@ pub struct TextSystem {
     /// Глобальная настройка (не данные кадра) — устанавливается сеттером;
     /// свежесть кэша — через отпечаток языка в results_key.
     language: canvas_core::Language,
+    /// FR-061 этап D (D-14/Q9): диагностика колоночных направляющих —
+    /// рисуется только при включённом DebugOverlay (F9/?ui=debug).
+    guides_visible: bool,
 }
 
 impl TextSystem {
@@ -1753,6 +1791,7 @@ impl TextSystem {
             tick: 0,
             theme: ThemeColors::dark(),
             language: canvas_core::Language::Ru,
+            guides_visible: false,
         }
     }
 
@@ -1771,6 +1810,13 @@ impl TextSystem {
     /// устаревшими точечно — перешейпятся только ноды с таблицей.
     pub fn set_table_language(&mut self, language: canvas_core::Language) {
         self.language = language;
+    }
+
+    /// FR-061 этап D (D-14/Q9): видимость диагностики колоночных направляющих
+    /// (тумблер DebugOverlay F9/?ui=debug). Кэш не сбрасывается — квады
+    /// диагностики добавляются поверх готового кадра без перешейпа.
+    pub fn set_table_guides_visible(&mut self, visible: bool) {
+        self.guides_visible = visible;
     }
 
     /// Зашейпить/обновить запись лейбла связи (T8). Ширина буфера не
@@ -2567,6 +2613,14 @@ impl TextSystem {
                             let old = std::mem::take(&mut layout.quads);
                             layout.quads = table_quads;
                             layout.quads.extend(old);
+                        }
+                        // FR-061 этап D (D-14/Q9): диагностика направляющих —
+                        // поверх хрома, ТОЛЬКО при включённом DebugOverlay
+                        // (F9/?ui=debug); в проде невидима (решение Q9).
+                        if self.guides_visible {
+                            if let Some(g) = row_guides {
+                                layout.quads.extend(guide_debug_quads(&g, &rows, zoom_px));
+                            }
                         }
                     }
 
@@ -4009,6 +4063,51 @@ mod tests {
         assert_eq!(mono.weight, Weight::NORMAL);
     }
 
+    /// FR-061 этап D (D-14/Q9): квады диагностики направляющих — вертикали
+    /// на right-краях value/unit через зону строк данных; пустой список
+    /// строк — квадов нет.
+    #[test]
+    fn guide_debug_quads_span_rows_at_right_edges() {
+        let mut fs = FontSystem::new();
+        let cell = |fs: &mut FontSystem| CachedCell {
+            buffer: Buffer::new(fs, Metrics::new(12.0, 16.0)),
+            width_px: 10.0,
+            color: Color::rgb(0, 0, 0),
+        };
+        let row = |fs: &mut FontSystem, top: f32| CachedRow {
+            kind: row_grid::RowKind::Calc,
+            source_line: Some(0),
+            name: String::new(),
+            row_top: top,
+            row_line_h: BODY_LINE_HEIGHT,
+            left_end: 0.0,
+            zebra: false,
+            value: Some(cell(fs)),
+            unit: None,
+            badge: None,
+            error_message: None,
+        };
+        let rows = vec![row(&mut fs, 0.0), row(&mut fs, 20.0)];
+        let guides = canvas_ui::row_guides::RowGuides {
+            value_w: 30.0,
+            unit_w: 20.0,
+            badge_w: 0.0,
+            value_x: 200.0,
+            unit_x: 240.0,
+        };
+        let quads = guide_debug_quads(&guides, &rows, 2.0);
+        assert_eq!(quads.len(), 2, "линии value и unit");
+        assert!(quads.iter().all(|q| q.kind == BodyQuadKind::GuideDebug));
+        // Вертикаль через обе строки: y0 = 0, высота = (20+20)*зум
+        assert_eq!(quads[0].rect[1], 0.0);
+        assert_eq!(quads[0].rect[3], 80.0);
+        // Линии на right-краях ячеек: (value_x + value_w) * зум
+        assert_eq!(quads[0].rect[0], 460.0);
+        assert_eq!(quads[1].rect[0], 520.0);
+        // Пустой список строк — квадов нет
+        assert!(guide_debug_quads(&guides, &[], 1.0).is_empty());
+    }
+
     /// CR-009: формульная строка (source_line) — Numi-расчёт → mono; проза — sans.
     #[test]
     fn body_items_formula_line_is_mono() {
@@ -4588,13 +4687,7 @@ mod tests {
         assert_eq!(items[header_pos + 1].source_line, Some(4));
         // Ниже порога (4 строки данных) — заголовка нет
         let four = "a = 1\nb = 2\nc = 3\nd * 2";
-        let items = body_items(
-            &theme,
-            four,
-            &[0, 1, 2, 3],
-            &[],
-            canvas_core::Language::Ru,
-        );
+        let items = body_items(&theme, four, &[0, 1, 2, 3], &[], canvas_core::Language::Ru);
         assert!(
             items.iter().all(|item| !item.header),
             "порог T не достигнут"
