@@ -4698,3 +4698,23 @@ Work Log:
 Stage Summary:
 - Живые URL: https://danku13.github.io/CanvasDesk/prototypes/ux-node-body-fill.html (после — табличные направляющие чисел/юнитов) и https://danku13.github.io/CanvasDesk/prototypes/ux-node-body-fill-flow.html (до — поточная вёрстка); перекрёстные ссылки ⇄ в шапках обоих файлов.
 - Содержательно прототипы не менялись: правка = баннер сравнения + ссылка; код продукта не тронут.
+
+---
+
+Задача: FR-057 — kit-core: Painter в canvas-ui (без wgpu) + WidgetState/фокус (перевод кита из «контрактов слотов» в виджеты; реализация по постановке волны 2, сессия 2026-09-23)
+
+Work Log:
+- Ветка `feature/fr-057-painter-widget-state` от main (5a16414); прочитаны замороженные контракты FR-057 и права на файлы (запрет app.rs/renderer/kit.rs/чужих _ui.rs — соблюдён, проверено диффом).
+- TDD: сначала тесты, потом реализация. `canvas-ui/src/paint.rs` (новый): `PaintAlign{Left,Center}`, `PaintItem{Rect,Text}`, `Painter{rect,control,panel,label,items,take_items}` — данные без wgpu/winit/внешних зависимостей (G7); 4 теста (порядок items = draw-порядок, payload дословный, take_items очищает, items — plain data).
+- `canvas-ui/src/widget.rs` (новый): `WidgetState` (поля приватные) — `set_pointer/set_selected/set_disabled/set_focused` → `kit_state()` с приоритетом Disabled > Pressed > Hovered > Selected > Normal; фокус в KitState не входит (`is_focused` — потребителю, рамка по слоту accent); ребро клика `clicked(released_now_inside)` — «press был внутри → release внутри», гасится любым вызовом; press вне виджета и press по disabled клик не дают; 12 тестов матрицы переходов и ребра (вкл. drag-out-and-back).
+- `canvas-ui/src/keyboard.rs` — ТОЛЬКО добавление `FocusRing{push,next,prev,current,clear}`: Tab-кольцо focus-rect'ов скоупа (next без текущего — первый, prev — последний; пустое кольцо — None); 6 тестов; сигнатуры KeyboardRouter не тронуты (линт clippy::should_implement_trait на `next` погашен #[allow] с комментарием «имя — замороженный контракт»).
+- `canvas-ui/src/lib.rs` — только строки `pub mod paint; pub mod widget;` (по правам файла).
+- `canvas-app/src/kit_ui.rs`: `KitDraw` — тонкая обёртка над Painter (методы/поведение 1:1): каждый вызов делегирует Painter'у и сразу конвертирует добавленный item (flush_last_quad/flush_last_text) — поля quads/texts актуальны для app.rs после каждого вызова, контракт app.rs сохранён дословно; `cursor_state`/`dropdown_item_state` — делегаты на WidgetState (doc-deprecation: атрибут #[deprecated] НЕ ставился — живы 3 вызова app.rs, гейт clippy -D warnings; миграция потребителей — FR-059/060).
+- Эквивалентность: тест `kitdraw_delegation_matches_direct_path` — quads (по полям; CardInstance без PartialEq) и texts дословно равны прямому пути прежней реализации на фиксированном примере — 0 визуального скачка; `cursor_state_delegates_match_old_matrix` — прежняя таблица состояний.
+- Гейты локально: cargo test -p canvas-ui 83/83 (+22 новых); cargo test -p canvas-app --lib 318/318 (+2, вкл. G4-линт); cargo fmt --check; cargo clippy -p canvas-ui -p canvas-app -- -D warnings (workspace clippy зелёный до чистки таргета); cargo check -p canvas-ui --target wasm32-unknown-unknown (G7). Полный cargo test --workspace и mcp-wasm в песочнице не исполняемы (диск 9.9 ГБ переполнился таргетом — linker Bus error; после cargo clean гейты перезапущены точечно) — прогон на CI пуша.
+- Доки: docs/ui-kit.md §7.1 «Painter и WidgetState» (FR-058 пишет §7.2 — секции не пересекаются); FR-документ — статус «✅ реализовано» + Changelog; index-cr-fr.md — строка FR-057 «✅ реализовано (2026-09-23)»; docs/prd/prd-0009-ui-layering-uikit.md §16 — история волны 2; docs/ACCEPTANCE.md — секция приёмки FR-057.1–FR-057.8.
+
+Stage Summary:
+- FR-057 выполнен: draw-слой (Painter/PaintItem) и машина состояний (WidgetState + ребро клика) живут в крейте canvas-ui как данные (G7 соблюдён — 0 внешних зависимостей); FocusRing — Tab-фокус контента скоупа. KitDraw — тонкая обёртка, app.rs не тронут (0 правок, дифф).
+- Разблокированы потребители: FR-058 (kit v2 против Painter/WidgetState), затем FR-059/060 (миграции на WidgetState/Painter; deprecated-делегаты cursor_state/dropdown_item_state ждут переноса вызовов).
+- Тесты: canvas-ui 63→83, canvas-app lib 316→318; класс дефекта «каждая поверхность копирует адаптер рисования» устранён в крейте.

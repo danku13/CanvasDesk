@@ -130,6 +130,44 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
 реальный kit-контрол (переключение темы меняет слоты — виджеты
 перерисовываются теми же функциями).
 
+### 7.1 Painter и WidgetState (FR-057, волна 2)
+
+Draw-слой и машина состояний виджета переехали из потребителя (`kit_ui.rs`)
+в крейт `canvas-ui` — миграции FR-058/059/060 кодируют против них, а не
+копируют адаптер:
+
+- **`canvas_ui::paint`** — `Painter` собирает `PaintItem::Rect`/`PaintItem::Text`
+  как ДАННЫЕ (инвариант G7: без wgpu/winit, 0 внешних зависимостей;
+  конвертацию в `CardInstance`/`OwnedText` выполняет крейт-потребитель).
+  Порядок items = draw-порядок; `take_items()` отдаёт накопленное и очищает.
+  `KitDraw` в `canvas-app` — тонкая обёртка над Painter (методы/поведение 1:1,
+  эквивалентность quads/texts — тест `kitdraw_delegation_matches_direct_path`);
+- **`canvas_ui::widget`** — `WidgetState`: переходы указателя/селекции/фокуса
+  → `KitState` по детерминированной матрице приоритетов
+  **Disabled > Pressed > Hovered > Selected > Normal** + ребро клика
+  `clicked()` («press был внутри, release внутри»; press по disabled и press
+  вне виджета клик не дают). `cursor_state`/`dropdown_item_state` в
+  `kit_ui.rs` — deprecated-делегаты на `WidgetState` (потребители мигрируют
+  в FR-059/060);
+- **`canvas_ui::keyboard::FocusRing`** — Tab-порядок focus-rect'ов скоупа
+  (`next`/`prev` по кольцу, `current`, `clear`): `KeyboardRouter` ведёт
+  скоупы ПОВЕРХНОСТЕЙ, `FocusRing` — фокус контента внутри поверхности
+  (рамка по слоту `accent` — решение потребителя). Существующие сигнатуры
+  `keyboard.rs` не менялись (только добавление).
+
+```rust
+let mut p = Painter::new();
+p.control(btn_rect, &button_style(variant, state, &palette));
+p.label(btn_rect, &label, style.text, 13.0, PaintAlign::Center);
+for item in p.take_items() { /* конвертация в инстансы рендера */ }
+
+let mut w = WidgetState::default();
+w.set_pointer(hovered, pressed_now);   // каждый кадр
+w.set_selected(is_on); w.set_focused(ring.current() == Some(&rect));
+let style = button_style(variant, w.kit_state(), &palette); // Disabled>Pressed>Hovered>Selected>Normal
+if w.clicked(released_inside) { /* действие один раз на press→release */ }
+```
+
 ### DebugOverlay (F-10, G6)
 
 Тогл — **F9** (натив) / `?ui=debug` (web). По кадру реестра показывает:
