@@ -127,8 +127,9 @@ use canvas_render::search_ui::{
 };
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, SpillHit, SpillHitKind,
-    TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT, SANS_FAMILY,
+    body_area, measure_body_height, BodyHit, BodyHitKind, LineErrorHit, OverlayText, ScreenText,
+    SpillHit, SpillHitKind, TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP,
+    RESULT_LINE_HEIGHT, SANS_FAMILY,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{
@@ -1813,6 +1814,10 @@ pub struct App {
     /// (логические px + данные тултипа источника). Заполняется после
     /// рендера (паттерн expr_error_hits), оверлей показывает «пролито: …».
     spill_hits: Vec<SpillHit>,
+    /// FR-061 хвосты (D-7/D-8): кликабельные зоны тела (заголовок блока,
+    /// экспандер описания; логические px) — с прошлого кадра (паттерн
+    /// spill_hits; отставание в кадр незаметно).
+    body_hits: Vec<BodyHit>,
     /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
     edge_drag: Option<EdgeDrag>,
     /// FR-050 Н2 (этап C): цель value-drag — шаблонная нода под курсором +
@@ -2163,6 +2168,7 @@ impl App {
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             spill_hits: Vec::new(),
+            body_hits: Vec::new(),
             edge_drag: None,
             param_drop: None,
             choice_menu: None,
@@ -2724,6 +2730,9 @@ impl App {
             node.text.clone().unwrap_or_default()
         };
         let (_, width, height) = body_area(node);
+        // FR-061 хвосты (D-8, «Раскрыть+авто»): начало правки сворачивает
+        // раскрытые описания (тело ноды рисует буфер редактора — I-5).
+        self.scene.collapse_descs_except(None);
         // FR-006: отложенный снапшот «до» правки — шаг закроется на commit
         // с фактическим изменением текста (finish_editing)
         self.begin_pending_undo();
@@ -4912,8 +4921,14 @@ impl App {
                 .hovered
                 .and_then(|i| self.scene.canvas.nodes.get(i))
                 .is_some_and(|node| crate::ui::in_resize_corner(node, world));
+            // FR-061 хвосты (D-7/D-8): курсор Pointer над кликабельными
+            // зонами тела — заголовок блока-ведомости (строка+chevron,
+            // решение владельца) и экспандер описания (прототип .blk-hdr).
+            let body_pointer = !resize && self.body_hit_at(self.cursor).is_some();
             if resize {
                 CursorIcon::NwseResize
+            } else if body_pointer {
+                CursorIcon::Pointer
             } else {
                 CursorIcon::Default
             }
@@ -5004,6 +5019,39 @@ impl App {
     /// прошлого кадра (`spill_hits`); отставание в кадр незаметно.
     fn spill_hit_at(&self, cursor: [f32; 2]) -> Option<&SpillHit> {
         spill_hit_at(&self.spill_hits, cursor)
+    }
+
+    /// FR-061 хвосты (D-7/D-8): кликабельная зона тела под курсором
+    /// (заголовок блока-ведомости / экспандер описания), None — мимо.
+    /// Зоны — с прошлого кадра (`body_hits`); отставание в кадр незаметно.
+    fn body_hit_at(&self, cursor: [f32; 2]) -> Option<&BodyHit> {
+        self.body_hits.iter().find(|hit| {
+            let [x, y, w, h] = hit.rect;
+            cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+        })
+    }
+
+    /// FR-061 хвосты (D-7/D-8 runtime v1): обработать клик по телу ноды —
+    /// тоггл свёрнутости блока (заголовок, вся строка — решение владельца)
+    /// и раскрытости описания (экспандер; «Раскрыть+авто»). true — клик
+    /// поглощён тогглом (не доходит до выделения/драга).
+    fn handle_body_hit_click(&mut self) -> bool {
+        let Some(hit) = self.body_hit_at(self.cursor) else {
+            return false;
+        };
+        let (kind, node) = (hit.kind, hit.node);
+        let Some(node_id) = self.scene.canvas.nodes.get(node).map(|n| n.id.clone()) else {
+            return false;
+        };
+        match kind {
+            BodyHitKind::BlockHeader => {
+                self.scene.toggle_block_collapsed(&node_id);
+            }
+            BodyHitKind::DescExpander => {
+                self.scene.toggle_desc_expanded(&node_id);
+            }
+        }
+        true
     }
 
     /// FR-050 Н9-3 (этап E): открыть контекст-меню проливания по hit-зоне
@@ -15287,9 +15335,26 @@ impl App {
                         return;
                     }
                 }
+                // FR-061 хвосты (D-7/D-8 runtime v1): клик по заголовку
+                // блока-ведомости тогглит свёрнутость, по экспандеру описания
+                // — раскрытость («Раскрыть+авто»); клик поглощается
+                // (не доходит до выделения/драга — решение владельца).
+                if self.handle_body_hit_click() {
+                    self.request_redraw();
+                    return;
+                }
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
+                // FR-061 хвосты (D-8, «Раскрыть+авто»): клик мимо ноды
+                // сворачивает раскрытые описания; клик по телу ноды
+                // сохраняет её раскрытое описание (решение владельца).
+                {
+                    let keep = hit
+                        .and_then(|index| self.scene.canvas.nodes.get(index))
+                        .map(|n| n.id.clone());
+                    self.scene.collapse_descs_except(keep.as_deref());
+                }
                 // Активное редактирование (T7/T8): клик внутри области
                 // редактирования — в курсор, клик снаружи — commit и обычная
                 // обработка
@@ -18694,6 +18759,10 @@ impl ApplicationHandler<AppEvent> for App {
                         // префикс тела (наклонное начертание Р-2)
                         auto_rows: &self.scene.auto_rows,
                         whatif_nodes: &self.scene.whatif_nodes,
+                        // FR-061 хвосты (D-7/D-8 runtime v1): состояние
+                        // тогглов тела — свёрнутые блоки, раскрытые описания
+                        block_collapsed: &self.scene.block_collapsed,
+                        desc_expanded: &self.scene.desc_expanded,
                         analysis: analysis_view,
                         analysis_overlay: self.settings.bottleneck_overlay,
                         // FR-042 (E2): контекст агрегации пучков кадра
@@ -18727,6 +18796,9 @@ impl ApplicationHandler<AppEvent> for App {
                     // тултип источника («пролито: …») в оверлее следующего
                     // кадра (паттерн expr_error_hits)
                     self.spill_hits = renderer.spill_hits().to_vec();
+                    // FR-061 хвосты (D-7/D-8): кликабельные зоны тела кадра —
+                    // тогглы свёрнутости блока/раскрытости описания
+                    self.body_hits = renderer.body_hits().to_vec();
                 }
                 // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
                 // уже установилась; ответы придут через AppEvent::ThumbsReady
