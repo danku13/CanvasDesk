@@ -4914,6 +4914,7 @@ Stage Summary:
 - **Код не трогался** — документ-задача (анализ/постановка); гейты не требуются; wasm-стенд — вне репо (/tmp, команды воспроизведения в ADR §Валидация).
 
 ---
+
 Task ID: FR-061-B-C-CI
 Agent: агент сессии 2026-09-23 (CanvasDesk)
 Task: FR-061 этапы B+C — закрытие CI
@@ -4924,3 +4925,16 @@ Work Log:
 
 Stage Summary:
 - FR-061 этапы A+B+C в main, CI 12/12; остались этапы D (полировка/DebugOverlay/D-8/ellipsis/свёрнутость) и E (kit-Row).
+
+---
+
+## 2026-09-23 — FR-062: усиление кита layout v2 (F-13…F-18) — реализация, витрина, Tab-фокус, гейты зелёные
+
+- **Ветка:** feature/fr-062-ui-kit-layout-v2 (этапы A/B/C одной волной; taffy не подключён — ADR-0013).
+- canvas-ui/layout.rs: F-14 — `Child.grow` (grep-аудит литералов `Child {` вне крейта = 0 — добавление поля безопасно; `Child::flexible(w,h,grow)`; grow=0 — байт-в-байт прежнее поведение), `MainAlign::End` (Row/Column), распределение свободного места пропорционально grow (resolve_grow), приоритеты: SqueezeTail > grow; SpaceBetween/End деградируют при Σgrow>0. F-13 — `MeasuredItem{Fixed,Text,Spacer}` + `Row::lay_out_measured` (TextMeasurer в сигнатуре — эвристики невозможны; кламп ширины только явным max_w — уточнение контракта, G5 строже). F-15 — `RowPolicy::Wrap` (уточнение: без поля max_rows — высота слота задаёт видимые строки; жадная упаковка, высота строки = max детей, cross внутри строки, перелив за нижний край виден линту G4). F-16 — `grid_cells(slot, cols, rows, row_h, gap)`.
+- canvas-ui/keyboard.rs: F-17 — `FocusRing::retain_order` (перестроение порядка с сохранением индекса; вне диапазона — сброс; только добавление). kit.rs: `focus_order(rects, ring) -> Option<(usize, UiRect)>`.
+- canvas-ui/lib.rs: экспорты (grid_cells/MeasuredItem/FocusRing) + cfg(test) `testing::{snap, assert_snapshot}` (F-18); золотые снапшоты: grid_cells+stack (layout.rs), Switch+Card (kit.rs; без шрифтов — детерминизм).
+- canvas-app: витрина +5 секций (measured-ряд, flex 2:1+fixed, wrap 8 чипов, сетка 4×2, фокус-слоты) + i18n RU/EN ×16; `App.kit_gallery_focus` (кольцо) + `gallery_focus_step` (Tab/Shift+Tab в KeyOwner::KitGallery; кольцо в контент-координатах `focus_targets` — без сдвига/фильтра; retain_order на перестроение); рамка фокуса — слот accent (паттерн TextField); сброс кольца при открытии витрины; hit-реестр не тронут (секции декоративные — G1/G2 целы).
+- Тест FR-059 `gallery_layout_has_v2_sections_and_scroll` обновлён: хвост витрины — теперь секции FR-062; v2 — детерминированный скан смещения шагом 8 px (якорь на факт видимости, не на константу высот).
+- Гейты локально: canvas-ui 144/144 (+24 TDD), canvas-app lib 322/322, fmt, clippy -D warnings (canvas-ui/canvas-app all-targets), cargo check canvas-ui --target wasm32-unknown-unknown — зелёные; полный wasm/mcp-wasm — за CI (диск песочницы, прецедент FR-057/059).
+- Доки: FR-062 (✅ + Changelog: уточнения контрактов F-13/F-15), index-cr-fr (✅), ui-kit.md §4/§7.3/§8, PRD-0009 §16, ACCEPTANCE (FR-062), worklog.

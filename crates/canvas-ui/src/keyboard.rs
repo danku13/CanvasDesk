@@ -86,6 +86,16 @@ impl FocusRing {
         self.rects.clear();
         self.index = None;
     }
+
+    /// FR-062 F-17: перестроить порядок, СОХРАНИВ позицию фокуса
+    /// (поверхность перестроила контент: язык/вьюпорт/скролл — индекс
+    /// остаётся, если влезает в новый порядок; вышел — фокус сбрасывается).
+    /// Дополнение к замороженным сигнатурам FR-057 (только добавление).
+    pub fn retain_order(&mut self, rects: &[UiRect]) {
+        self.index = self.index.filter(|&i| i < rects.len());
+        self.rects.clear();
+        self.rects.extend_from_slice(rects);
+    }
 }
 
 /// Роутер клавиатуры: стек активаций поверхностей. Верхний скоуп первым
@@ -353,6 +363,34 @@ mod tests {
         // после clear кольцо можно собрать заново (контент перестроился)
         ring.push(R1);
         assert_eq!(ring.next(), Some(R1));
+    }
+
+    /// FR-062 F-17: retain_order перестраивает порядок, СОХРАНЯЯ позицию
+    /// (индекс) фокуса; индекс вне нового порядка — сброс (Option-семантика).
+    #[test]
+    fn focus_ring_retain_order_preserves_position() {
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        assert_eq!(ring.next(), Some(R0)); // индекс 0
+                                           // контент перестроился: индекс 0 сохраняется (уже на новом rect'е)
+        ring.retain_order(&[R1, R0]);
+        assert_eq!(ring.current(), Some(&R1));
+        // следующий — по НОВОМУ порядку
+        assert_eq!(ring.next(), Some(R0));
+    }
+
+    #[test]
+    fn focus_ring_retain_order_resets_out_of_range_index() {
+        let mut ring = FocusRing::new();
+        ring.push(R0);
+        ring.push(R1);
+        ring.push(R2);
+        assert_eq!(ring.next(), Some(R0));
+        assert_eq!(ring.next(), Some(R1)); // индекс 1
+        ring.retain_order(&[R0]); // len 1 — индекс 1 вне диапазона → сброс
+        assert!(ring.current().is_none());
+        assert_eq!(ring.next(), Some(R0));
     }
 
     /// Сценарий FR-057: KeyboardRouter выбрал скоуп поверхности — фокус
