@@ -693,6 +693,7 @@ fn body_items(
     body_text: &str,
     formula_lines: &[usize],
     spill_params: &[crate::SpillView],
+    language: canvas_core::Language,
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
@@ -727,7 +728,7 @@ fn body_items(
                     &mut out,
                     &mut prev,
                     (true, false, None),
-                    block_header_item(theme, calc_count),
+                    block_header_item(theme, calc_count, language),
                 );
             }
         }
@@ -773,11 +774,16 @@ fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, 
 
 /// FR-061 этап C (D-7): элемент-заголовок блока «▸ расчёт · N строк» —
 /// моно-жирный, приглушённый цвет кода; высота строки тела (I-1).
-fn block_header_item(theme: &ThemeColors, calc_count: usize) -> BodyItem {
+/// D-14 (этап D): текст локализован ([`row_grid::block_header_text_lang`]).
+fn block_header_item(
+    theme: &ThemeColors,
+    calc_count: usize,
+    language: canvas_core::Language,
+) -> BodyItem {
     BodyItem {
         gap: 0.0, // push_item пересчитает по предыдущему блоку
         rule: false,
-        text: row_grid::block_header_text(calc_count),
+        text: row_grid::block_header_text_lang(calc_count, language),
         font_size: BODY_FONT_SIZE,
         line_height: BODY_LINE_HEIGHT,
         color: theme.code_text,
@@ -1115,6 +1121,7 @@ fn with_body_stack(
     formula_lines: &[usize],
     spill_prefix: Vec<BodyItem>,
     spill_params: &[crate::SpillView],
+    language: canvas_core::Language,
     quads_out: &mut Vec<BodyQuad>,
     mut on_block: impl FnMut(
         &BodyItem,
@@ -1131,7 +1138,7 @@ fn with_body_stack(
     let mut cursor_y = 0.0f32; // world-px, верх текущего элемента
                                // FR-050 Р-4: авто-строки — префикс стека (до собственного тела).
     let mut items: Vec<BodyItem> = spill_prefix;
-    let mut body = body_items(theme, body_text, formula_lines, spill_params);
+    let mut body = body_items(theme, body_text, formula_lines, spill_params, language);
     // Зона «Переменные» отделяется от собственного контента зазором
     // (первый элемент тела в покое имеет gap 0 — переопределяем).
     if !items.is_empty() {
@@ -1206,6 +1213,7 @@ fn shape_body(
     whatif_lines: &[usize],
     spill_prefix: Vec<BodyItem>,
     spill_params: &[crate::SpillView],
+    language: canvas_core::Language,
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -1218,6 +1226,7 @@ fn shape_body(
         formula_lines,
         spill_prefix,
         spill_params,
+        language,
         &mut quads,
         |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
             // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
@@ -1374,6 +1383,9 @@ pub fn measure_body_height(text: &str, body_width: f32, formula_lines: &[usize])
         formula_lines,
         Vec::new(),
         &[],
+        // D-14: высота стека от языка не зависит (блок-заголовок — одна
+        // строка в любой локализации) — измерение фиксированным RU.
+        canvas_core::Language::Ru,
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -1708,6 +1720,10 @@ pub struct TextSystem {
     tick: u64,
     /// Палитра темы: цвета заголовка/иконки/тела/лейбла связи.
     theme: ThemeColors,
+    /// FR-061 этап D (D-14): язык таблицы тела (блок-заголовок Н-2).
+    /// Глобальная настройка (не данные кадра) — устанавливается сеттером;
+    /// свежесть кэша — через отпечаток языка в results_key.
+    language: canvas_core::Language,
 }
 
 impl TextSystem {
@@ -1736,6 +1752,7 @@ impl TextSystem {
             spill_hits: Vec::new(),
             tick: 0,
             theme: ThemeColors::dark(),
+            language: canvas_core::Language::Ru,
         }
     }
 
@@ -1747,6 +1764,13 @@ impl TextSystem {
         // CR-007: цвета блоков тела запечены в кэше (BodyItem.color) —
         // без сброса после переключения темы тело остаётся в старых цветах
         self.cache.clear();
+    }
+
+    /// FR-061 этап D (D-14): язык таблицы тела (текст блока-заголовка Н-2).
+    /// Кэш НЕ сбрасываем: отпечаток языка в results_key делает записи
+    /// устаревшими точечно — перешейпятся только ноды с таблицей.
+    pub fn set_table_language(&mut self, language: canvas_core::Language) {
+        self.language = language;
     }
 
     /// Зашейпить/обновить запись лейбла связи (T8). Ширина буфера не
@@ -2140,6 +2164,14 @@ impl TextSystem {
                 } else {
                     format!("{results_key}|R:{auto_key}")
                 };
+                // FR-061 этап D (D-14): язык таблицы — в ключе свежести
+                // (текст блока-заголовка запечён в кэше; смена языка →
+                // точечный перешейп нод с таблицей).
+                let results_key = if results_key.is_empty() {
+                    results_key
+                } else {
+                    format!("{results_key}|Lang:{:?}", self.language)
+                };
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
                     cache_fresh(
@@ -2231,6 +2263,7 @@ impl TextSystem {
                             whatif_lines,
                             spill_prefix,
                             spill_views,
+                            self.language,
                         ))
                     };
 
@@ -3842,6 +3875,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         )
     }
 
@@ -3860,6 +3894,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         assert_eq!(
             layout.blocks.len(),
@@ -3893,6 +3928,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         assert!(
             !layout
@@ -3913,6 +3949,7 @@ mod tests {
             &[1],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         let whatif = layout
             .quads
@@ -3976,7 +4013,13 @@ mod tests {
     #[test]
     fn body_items_formula_line_is_mono() {
         let theme = ThemeColors::dark();
-        let items = body_items(&theme, "Gateway\ndeploy = 40 $", &[1], &[]);
+        let items = body_items(
+            &theme,
+            "Gateway\ndeploy = 40 $",
+            &[1],
+            &[],
+            canvas_core::Language::Ru,
+        );
         assert_eq!(items.len(), 2, "проза + формульная строка");
         assert!(!items[0].mono, "проза — sans");
         assert!(items[1].mono, "Numi-строка — моно");
@@ -4018,7 +4061,13 @@ mod tests {
             path: "Трафик.peak_rps".to_owned(),
             local: Some("500 rps".to_owned()),
         }];
-        let items = body_items(&theme, "Gateway\nrps = 500 rps", &[1], &spills);
+        let items = body_items(
+            &theme,
+            "Gateway\nrps = 500 rps",
+            &[1],
+            &spills,
+            canvas_core::Language::Ru,
+        );
         assert_eq!(items.len(), 2);
         assert!(!items[0].oblique, "проза — прямое начертание");
         assert!(items[1].oblique, "пролитая строка — наклонное (Р-2)");
@@ -4109,6 +4158,7 @@ mod tests {
             &[1],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4131,6 +4181,7 @@ mod tests {
             &[1],
             prefix,
             &[],
+            canvas_core::Language::Ru,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -4157,6 +4208,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
         let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
@@ -4520,7 +4572,13 @@ mod tests {
     fn block_header_inserted_above_threshold_only() {
         let theme = ThemeColors::dark();
         let five = "a = 1\nb = 2\nc = 3\nd = 4\nd * 2";
-        let items = body_items(&theme, five, &[0, 1, 2, 3, 4], &[]);
+        let items = body_items(
+            &theme,
+            five,
+            &[0, 1, 2, 3, 4],
+            &[],
+            canvas_core::Language::Ru,
+        );
         let header_pos = items
             .iter()
             .position(|item| item.header)
@@ -4530,7 +4588,13 @@ mod tests {
         assert_eq!(items[header_pos + 1].source_line, Some(4));
         // Ниже порога (4 строки данных) — заголовка нет
         let four = "a = 1\nb = 2\nc = 3\nd * 2";
-        let items = body_items(&theme, four, &[0, 1, 2, 3], &[]);
+        let items = body_items(
+            &theme,
+            four,
+            &[0, 1, 2, 3],
+            &[],
+            canvas_core::Language::Ru,
+        );
         assert!(
             items.iter().all(|item| !item.header),
             "порог T не достигнут"
@@ -4558,6 +4622,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         let rendered = layout
             .blocks
@@ -4600,6 +4665,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         let rendered = layout
             .blocks
@@ -4628,6 +4694,7 @@ mod tests {
             &[],
             Vec::new(),
             &[],
+            canvas_core::Language::Ru,
         );
         let bullet = layout
             .quads

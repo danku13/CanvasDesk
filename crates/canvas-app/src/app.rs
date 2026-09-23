@@ -17874,6 +17874,10 @@ impl ApplicationHandler<AppEvent> for App {
                         // (F-13: выкл — None, поведение байт-в-байт прежнее)
                         bundles: bundle_ctx,
                     };
+                    // FR-061 этап D (D-14): язык таблицы тела (блок-заголовок
+                    // Н-2) — глобальная настройка, применяется покадрово
+                    // (идемпотентно; кэш точечно устаревает через results_key).
+                    renderer.set_table_language(self.settings.language);
                     match renderer.render(
                         &self.camera,
                         &scene,
