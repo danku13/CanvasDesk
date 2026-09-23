@@ -136,6 +136,71 @@ pub(crate) enum BadgeMode {
 pub(crate) struct TablePass {
     pub guides: Option<RowGuides>,
     pub badge_mode: BadgeMode,
+    /// FR-061 коммит 3 (последняя ступень лестницы §3.4 + Q8): пер-строчный
+    /// план усечения формул узкой ноды — алиасы идентификаторов, затем
+    /// хвостовой ellipsis; полная формула — в тултип строки. Выровнен по
+    /// `rows`; `None` — строка без изменений. Детерминирован входами (D-11).
+    pub ellipsis: Vec<Option<RowEllipsis>>,
+}
+
+/// FR-061 коммит 3: усечённое отображение формулы (лестница §3.4, ступень
+/// «совсем тесно»): `display` — текст строки для рендера (замещает сегмент
+/// блока тела; имя/числа/юниты не трогаются — всегда читаемы), `full` —
+/// полная формула для тултипа строки. Полное имя переменной — в строке
+/// параметра (решение Q8).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RowEllipsis {
+    pub display: String,
+    pub full: String,
+}
+
+/// Q8 FR-061: порог алиаса идентификатора формулы (символов, mono).
+/// Длиннее — «авто-обрезка имени»: первые [`ALIAS_IDENT_KEEP`] симв. + «…».
+pub(crate) const ALIAS_IDENT_MAX: usize = 16;
+/// Q8: сколько символов идентификатора остаётся при алиасе.
+const ALIAS_IDENT_KEEP: usize = 13;
+
+/// Q8 FR-061 («авто-обрезка имени», решение владельца): алиасы длинных
+/// идентификаторов формулы. Идентификатор = токен из букв/цифр/«_»,
+/// начинающийся с буквы или «_» (юникод — кириллица входит); длиннее
+/// [`ALIAS_IDENT_MAX`] — обрезается до [`ALIAS_IDENT_KEEP`] + «…».
+/// Числовые литералы не трогаются (лестница §3.4: числа не деградируют).
+/// Грамматика не дублируется — чисто визуальная классификация символов
+/// (прецедент O-5 `formula_rich_runs`). Полное имя остаётся в строке
+/// параметра, полная формула — в тултипе расчётной строки.
+pub(crate) fn alias_idents(formula: &str) -> String {
+    let mut out = String::with_capacity(formula.len());
+    let mut token = String::new();
+    for c in formula.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            token.push(c);
+        } else {
+            flush_ident(&mut token, &mut out);
+            out.push(c);
+        }
+    }
+    flush_ident(&mut token, &mut out);
+    out
+}
+
+/// Хвост [`alias_idents`]: токен — идентификатор длиннее порога → алиас.
+fn flush_ident(token: &mut String, out: &mut String) {
+    if token.is_empty() {
+        return;
+    }
+    let is_ident = token
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
+        && token.chars().all(|c| c.is_alphanumeric() || c == '_');
+    if is_ident && token.chars().count() > ALIAS_IDENT_MAX {
+        let kept: String = token.chars().take(ALIAS_IDENT_KEEP).collect();
+        out.push_str(&kept);
+        out.push('…');
+    } else {
+        out.push_str(token);
+    }
+    token.clear();
 }
 
 /// Отпечаток прохода A для ключа свежести кэша (D-11): ширины направляющих
@@ -450,10 +515,17 @@ fn cell_widths(
 /// Проход A (§3.2 + лестница §3.4): замер ячеек по всем строкам →
 /// направляющие ноды ([`RowGuides::measure`] + [`RowGuides::with_right_edge`]);
 /// детект переполнения — точная арифметика ширин против `body_width`,
-/// деградация бейджей Text → Icon → None (числа/юниты не деградируют).
+/// деградация бейджей Text → Icon → None (числа/юниты не деградируют);
+/// после исчерпания колонки бейджей — усечение формул (коммит 3: алиасы
+/// Q8 + хвостовой ellipsis, [`plan_row_ellipsis`]).
 /// Детерминизм: одинаковые входы → идентичный [`TablePass`] (D-11).
 /// `left_max` — правый край самого широкого левого текста (имя+формула,
 /// world-px; конец лидера не правее `left_max + [`LEADER_PAD`]`).
+/// `floor` — нижняя ступень лестницы (повторный проход после перешейпа
+/// с усечённым отображением не поднимается обратно — план стабилен).
+/// `prior` — уже применённый план усечения (выравнен по `rows`); строки
+/// с планом не пере-планируются (алиас/ellipsis фиксированы за билд).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pass_a(
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -462,8 +534,14 @@ pub(crate) fn pass_a(
     body_width: f32,
     family: &str,
     size: f32,
+    floor: BadgeMode,
+    prior: &[Option<RowEllipsis>],
 ) -> TablePass {
-    let mut mode = BadgeMode::Text;
+    debug_assert!(
+        prior.is_empty() || prior.len() == rows.len(),
+        "prior выровнен по rows (или пуст)"
+    );
+    let mut mode = floor;
     loop {
         let widths: Vec<canvas_ui::row_guides::RowCellWidths> = rows
             .iter()
@@ -483,13 +561,15 @@ pub(crate) fn pass_a(
             return TablePass {
                 guides,
                 badge_mode: mode,
+                ellipsis: prior.to_vec(),
             };
         }
         match mode {
             BadgeMode::Text => mode = BadgeMode::Icon,
             BadgeMode::Icon => mode = BadgeMode::None,
-            // Совсем тесно: колонка скрыта, лидер сжимается — формулы
-            // остаются целиком (ellipsis — этап C/D). Возврат с None.
+            // Совсем тесно: колонка скрыта; если и после этого лидер не
+            // помещается — последняя ступень §3.4: усечение формул
+            // (алиасы Q8 → хвостовой ellipsis; полное — в тултип).
             BadgeMode::None => {
                 let widths: Vec<canvas_ui::row_guides::RowCellWidths> = rows
                     .iter()
@@ -497,13 +577,64 @@ pub(crate) fn pass_a(
                     .collect();
                 let guides =
                     RowGuides::measure(&widths).map(|g| g.with_right_edge(body_width, GUIDE_GAP));
+                let ellipsis = match &guides {
+                    None => prior.to_vec(),
+                    Some(g) if left_max + LEADER_PAD + LEADER_MIN <= g.value_x => prior.to_vec(),
+                    Some(g) => {
+                        // Доступная дорожка левого текста: до минимума лидера.
+                        let available = g.value_x - LEADER_PAD - LEADER_MIN;
+                        rows.iter()
+                            .enumerate()
+                            .map(|(i, row)| {
+                                prior.get(i).cloned().flatten().or_else(|| {
+                                    plan_row_ellipsis(measurer, fs, row, available, family, size)
+                                })
+                            })
+                            .collect()
+                    }
+                };
                 return TablePass {
                     guides,
                     badge_mode: mode,
+                    ellipsis,
                 };
             }
         }
     }
+}
+
+/// FR-061 коммит 3: план усечения ОДНОЙ строки (последняя ступень §3.4).
+/// Только расчётные строки: имя параметра/путь авто-строки не деградируют
+/// («имя+числа+юниты всегда читаемы»), RHS параметра — числовой литерал.
+/// Порядок: алиасы идентификаторов (Q8) → хвостовой ellipsis
+/// ([`TextMeasurer::ellipsis`], детерминированный бинарный поиск).
+fn plan_row_ellipsis(
+    measurer: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    row: &RowCells,
+    available: f32,
+    family: &str,
+    size: f32,
+) -> Option<RowEllipsis> {
+    if row.kind != RowKind::Calc || row.formula.is_empty() || available <= 0.0 {
+        return None;
+    }
+    if measurer.width_of(fs, &row.formula, family, size) <= available {
+        return None; // влезает целиком — усечение не нужно
+    }
+    let aliased = alias_idents(&row.formula);
+    let display = if measurer.width_of(fs, &aliased, family, size) <= available {
+        aliased
+    } else {
+        measurer.ellipsis(fs, &aliased, family, size, available)
+    };
+    if display.is_empty() || display == row.formula {
+        return None;
+    }
+    Some(RowEllipsis {
+        display,
+        full: row.formula.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -755,8 +886,28 @@ mod tests {
         let rows = build_rows(text, Some(&outcomes(text)), &[], &[], &[]);
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        let pass1 = pass_a(&mut m, &mut fs, &rows, 60.0, 300.0, FAMILY, SIZE);
-        let pass2 = pass_a(&mut m, &mut fs, &rows, 60.0, 300.0, FAMILY, SIZE);
+        let pass1 = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            300.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
+        let pass2 = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            300.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         assert_eq!(pass1, pass2, "детерминизм прохода A");
         let g = pass1.guides.unwrap();
         assert_eq!(g.badge_w, 0.0, "бейджей нет — колонка нулевая");
@@ -766,7 +917,17 @@ mod tests {
         // Широкое значение раздвинуло направляющую чисел
         let wide_text = "rps = 138912345 rps\nlatency = 800 rps / 12";
         let wide_rows = build_rows(wide_text, Some(&outcomes(wide_text)), &[], &[], &[]);
-        let wide = pass_a(&mut m, &mut fs, &wide_rows, 60.0, 300.0, FAMILY, SIZE);
+        let wide = pass_a(
+            &mut m,
+            &mut fs,
+            &wide_rows,
+            60.0,
+            300.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         assert!(wide.guides.unwrap().value_w > g.value_w);
     }
 
@@ -789,14 +950,44 @@ mod tests {
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
         // Широкое тело — текстовые бейджи
-        let wide = pass_a(&mut m, &mut fs, &rows, 60.0, 520.0, FAMILY, SIZE);
+        let wide = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            520.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         assert_eq!(wide.badge_mode, BadgeMode::Text);
         assert!(wide.guides.unwrap().badge_w > 0.0);
         // Узкое тело — иконки: колонка жива, но узкая
-        let narrow = pass_a(&mut m, &mut fs, &rows, 60.0, 190.0, FAMILY, SIZE);
+        let narrow = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            190.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         assert_eq!(narrow.badge_mode, BadgeMode::Icon);
         // Совсем узкое — колонка скрыта, направляющие значений живы
-        let tiny = pass_a(&mut m, &mut fs, &rows, 60.0, 120.0, FAMILY, SIZE);
+        let tiny = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            120.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         assert_eq!(tiny.badge_mode, BadgeMode::None);
         let g = tiny.guides.unwrap();
         assert!(g.value_right() <= 120.0);
@@ -823,7 +1014,17 @@ mod tests {
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
         for body_width in [300.0, 384.0, 520.0] {
-            let pass = pass_a(&mut m, &mut fs, &rows, 140.0, body_width, FAMILY, SIZE);
+            let pass = pass_a(
+                &mut m,
+                &mut fs,
+                &rows,
+                140.0,
+                body_width,
+                FAMILY,
+                SIZE,
+                BadgeMode::Text,
+                &[],
+            );
             let g = pass.guides.unwrap();
             assert!(
                 g.value_x >= 140.0 + LEADER_PAD + LEADER_MIN,
@@ -832,8 +1033,28 @@ mod tests {
             assert!(g.value_right() <= body_width, "значение внутри тела");
         }
         // Деградация детерминирована: 384 → одна и та же ступень
-        let p1 = pass_a(&mut m, &mut fs, &rows, 140.0, 384.0, FAMILY, SIZE);
-        let p2 = pass_a(&mut m, &mut fs, &rows, 140.0, 384.0, FAMILY, SIZE);
+        let p1 = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            140.0,
+            384.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
+        let p2 = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            140.0,
+            384.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         assert_eq!(p1, p2);
     }
 
@@ -844,15 +1065,144 @@ mod tests {
         let empty = TablePass {
             guides: None,
             badge_mode: BadgeMode::Text,
+            ellipsis: Vec::new(),
         };
         assert_eq!(pass_key(&empty), "", "нет таблицы — нет отпечатка");
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
         let text = "rps = 800 rps";
         let rows = build_rows(text, Some(&outcomes(text)), &[], &[], &[]);
-        let pass = pass_a(&mut m, &mut fs, &rows, 60.0, 300.0, FAMILY, SIZE);
+        let pass = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            300.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
         let key = pass_key(&pass);
         assert!(key.starts_with("G:"), "отпечаток направляющих");
         assert!(key.contains("Text"));
+    }
+
+    /// Q8 FR-061: алиасы — длинные идентификаторы (кириллица/латиница/_)
+    /// обрезаются до KEEP+«…», числа и короткие имена не трогаются.
+    #[test]
+    fn alias_idents_truncates_long_idents_only() {
+        let long = "конверсия_в_платящего";
+        assert_eq!(long.chars().count(), 21, "длиннее порога");
+        let aliased = alias_idents(&format!("{long} * 2"));
+        assert_eq!(
+            aliased,
+            format!(
+                "{}… * 2",
+                long.chars().take(ALIAS_IDENT_KEEP).collect::<String>()
+            )
+        );
+        // Числовой литерал не деградирует (лестница §3.4)
+        assert_eq!(
+            alias_idents("12345678901234567890 * 2"),
+            "12345678901234567890 * 2"
+        );
+        // Короткие идентификаторы не трогаются
+        assert_eq!(alias_idents("rps * 2 + _x1"), "rps * 2 + _x1");
+        // Смешанный токен с ведущей цифрой — не идентификатор
+        assert_eq!(alias_idents("2nd_order_term"), "2nd_order_term");
+        // Порог: ровно MAX — не алиасится, MAX+1 — алиасится
+        let max_ident = "a".repeat(ALIAS_IDENT_MAX);
+        assert_eq!(alias_idents(&max_ident), max_ident);
+        let over_ident = format!("{}x", "a".repeat(ALIAS_IDENT_MAX));
+        assert_eq!(
+            alias_idents(&over_ident),
+            format!("{}…", "a".repeat(ALIAS_IDENT_KEEP))
+        );
+    }
+
+    /// Коммит 3 (лестница §3.4, последняя ступень): на узком теле после
+    /// скрытия колонки бейджей длинная формула расчётной строки получает
+    /// план усечения (display короче, full — оригинал); параметр и числа —
+    /// без изменений; план стабилен при повторном проходе (floor + prior).
+    #[test]
+    fn pass_a_plans_formula_ellipsis_on_narrow_body() {
+        let long_formula = "конверсия_в_платящего * входящий_трафик_портов * 2";
+        // Известные переменные — иначе движок молчит (проза) и строки нет.
+        let text =
+            format!("конверсия_в_платящего = 0.05\nвходящий_трафик_портов = 100\n{long_formula}");
+        let rows = build_rows(&text, Some(&outcomes(&text)), &[], &[], &[]);
+        let calc = rows
+            .iter()
+            .find(|r| r.kind == RowKind::Calc)
+            .expect("расчётная строка с исходом");
+        assert_eq!(calc.formula.trim(), long_formula, "формула — вся строка");
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        // Совсем узкое тело: бейджей нет, левый текст заведомо шире дорожки
+        let pass = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            260.0,
+            160.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
+        assert_eq!(pass.badge_mode, BadgeMode::None);
+        let plan: Vec<&RowEllipsis> = pass.ellipsis.iter().flatten().collect();
+        assert!(!plan.is_empty(), "длинная формула получила план");
+        for e in &plan {
+            assert_eq!(e.full, long_formula, "тултип — полная формула");
+            assert_ne!(e.display, e.full, "отображение усечено");
+            assert!(
+                e.display.ends_with('…') || e.display.contains('…'),
+                "алиас/ellipsis"
+            );
+            let w = m.width_of(&mut fs, &e.display, FAMILY, SIZE);
+            let g = pass.guides.unwrap();
+            assert!(
+                w <= g.value_x - LEADER_PAD - LEADER_MIN + 1.0,
+                "усечённое отображение влезает в дорожку"
+            );
+        }
+        // Параметр (имя) не деградирует: у Param-строк плана нет
+        assert!(
+            pass.ellipsis
+                .iter()
+                .zip(&rows)
+                .all(|(e, r)| r.kind != RowKind::Param || e.is_none()),
+            "план только для Calc"
+        );
+        // Повторный проход с floor+prior: план и режим стабильны (перешейп)
+        let repass = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            80.0, // left_max после усечения — меньше
+            160.0,
+            FAMILY,
+            SIZE,
+            pass.badge_mode,
+            &pass.ellipsis,
+        );
+        assert_eq!(repass.badge_mode, pass.badge_mode, "пол лестницы");
+        assert_eq!(repass.ellipsis, pass.ellipsis, "план стабилен");
+        assert_eq!(repass.guides, pass.guides, "направляющие те же");
+        // Широкое тело — плана нет
+        let wide = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            60.0,
+            520.0,
+            FAMILY,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
+        assert!(wide.ellipsis.iter().all(|e| e.is_none()));
     }
 }
