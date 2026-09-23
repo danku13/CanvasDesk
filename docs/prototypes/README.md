@@ -161,7 +161,11 @@ Numi-строки (пре-PRD анализ
 [`docs/interface-objects/node-body-layout-analysis.md`](../interface-objects/node-body-layout-analysis.md);
 доработка 2026-09-23 — табличная концепция, см.
 [`docs/interface-objects/node-tabular-body-analysis.md`](../interface-objects/node-tabular-body-analysis.md))
-— vanilla JS + DOM, одиночный файл, работает офлайн. Центральный сценарий —
+— vanilla JS + DOM, одиночный файл, работает офлайн. Для сверки «до/после»
+рядом опубликован снапшот версии **до** табличной доработки —
+[`ux-node-body-fill-flow.html`](ux-node-body-fill-flow.html) (поточная
+вёрстка, коммит 204a082): баннер ⇄ в его шапке ведёт обратно к табличной
+версии, ссылка «⇄ сравнение» — в подзаголовке шапки табличной. Центральный сценарий —
 **тест наполнения**: одна нода (шаблон `com.canvasdesk.tcp-lb`, самый
 сложный в библиотеке: 6 параметров + 5 выходов) растёт через уровни
 L0 пустая → L1 лёгкая → L2 средняя → L3 максимум, во всех вариантах,

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Тело ноды: текст + Numi-строки — табличные направляющие · 3 варианта (CanvasDesk)</title>
+<title>Тело ноды: текст + Numi-строки — 3 варианта · ДО табличной доработки (CanvasDesk)</title>
 <style>
   :root{
     --bg:#141418; --panel:#1b1b20; --line:#2a2a33; --txt:#e8e8ec; --dim:#9a9aa5;
@@ -46,39 +46,31 @@
   .prose{font-family:var(--sans);font-size:12.5px;color:#b9bcc7;padding:8px 14px 2px;line-height:1.5}
   .prose.note{color:#8b8fa0;font-style:italic;padding-top:2px}
   .prose.clamp{display:-webkit-box;-webkit-box-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .sub a.cmplink{color:var(--accent);text-decoration:none;font-weight:600}
-  .sub a.cmplink:hover{text-decoration:underline}
   .clampbtn{display:block;font-family:var(--sans);font-size:10.5px;color:var(--accent);background:none;border:none;padding:2px 14px 4px;cursor:pointer;text-align:left}
   .placeholder{font-family:var(--sans);color:#565a6b;font-size:12px;padding:12px 14px;font-style:italic}
 
   .mini-label{font-family:var(--sans);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:#74778a;padding:11px 14px 3px;display:flex;gap:8px;align-items:baseline}
   .mini-label .cnt{color:#565a6b;letter-spacing:.02em;text-transform:none}
 
-  /* ═══ Табличная концепция строки: [имя][=][формула][лидер →]|[числа]|[юниты]|[бейджи] ═══
-     Направляющие (колонки) — переменные ноды: --val-w / --unit-w / --bdg-w
-     (max-ширина содержимого по всем строкам таблицы, замер после рендера).
-     Числа прижаты к правому краю СВОЕЙ колонки, юниты — к СВОЕЙ. */
   .row{position:relative;display:flex;align-items:baseline;gap:7px;font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;padding:2.5px 14px;min-height:23px}
   .row.z2{background:rgba(255,255,255,.04)}
   .row:hover{background:rgba(77,163,255,.07)}
-  .row .name{color:#8ab8f0;flex:none;white-space:nowrap}
-  .row .fx{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .name{color:#8ab8f0}
+  .row .fx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .row .fx .v{color:#7fc4ff}
   .row .fx .fn{color:#c792ea;font-style:italic}
   .row .fx .op{color:#666a7c}
-  .row>.op{color:#666a7c;flex:none}
-  .row .lead{flex:1 0 14px;min-width:14px;border-bottom:1px dotted #3a3c48;transform:translateY(-3px)}
-  .row .val{flex:none;width:var(--val-w,auto);text-align:right;color:#e3e8f0;font-weight:600;white-space:nowrap}
-  .row .val s{color:#7a7e90;font-weight:400;text-decoration:line-through;margin-right:2px}
-  .row .unit{flex:none;width:var(--unit-w,auto);text-align:right;color:#71758a;font-size:10px;white-space:nowrap}
-  .row .bslot{flex:none;width:var(--bdg-w,0px);display:flex;justify-content:flex-start}
+  .row>.op{color:#666a7c}
+  .row .lead{flex:1;min-width:14px;border-bottom:1px dotted #3a3c48;transform:translateY(-3px)}
+  .row .val{color:#e3e8f0;font-weight:600;white-space:nowrap}
+  .row .val.cross{color:#7a7e90;font-weight:400;text-decoration:line-through}
+  .row .unit{color:#71758a;font-size:10px;white-space:nowrap}
   .row .badge{font-family:var(--sans);font-size:9.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap;transform:translateY(-1px)}
   .badge.spill{color:var(--flow);border-color:rgba(49,184,166,.5);background:rgba(49,184,166,.09)}
   .badge.whatif{color:var(--accent);border-color:rgba(77,163,255,.5);background:rgba(77,163,255,.09)}
   .badge.warn{color:var(--amber);border-color:rgba(217,161,60,.55);background:rgba(217,161,60,.09)}
-  .row.auto{border:1px dashed rgba(217,161,60,.55);border-radius:7px;margin:4px 10px;padding:2.5px 3px;color:#c8a05e;background:rgba(217,161,60,.05)}
+  .row.auto{border:1px dashed rgba(217,161,60,.55);border-radius:7px;margin:4px 10px;padding:2.5px 10px;color:#c8a05e;background:rgba(217,161,60,.05)}
   .row.auto .name{color:#d9a13c}
-  .row.auto .val{color:#d9a13c;font-weight:400}
   .row.auto .lead{border-bottom-style:dashed;border-color:rgba(217,161,60,.35)}
   .row.total{border-top:1px solid #2f3340;margin-top:3px;padding-top:5px}
   .row.total .name{color:var(--flow)}
@@ -95,47 +87,21 @@
   .grp .cnt{color:#565a6b;letter-spacing:.02em;text-transform:none}
   .grp.click{cursor:pointer;user-select:none}
   .grp.click:hover{color:var(--txt)}
-  .blk-hdr{display:flex;align-items:baseline;gap:7px;font-family:var(--sans);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#8b8fa2;padding:7px 14px 4px;cursor:pointer;user-select:none;border-top:1px solid #2a2b33;background:rgba(49,184,166,.05)}
+  .blk-hdr{display:flex;gap:8px;align-items:baseline;font-family:var(--sans);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#8b8fa2;padding:7px 14px 4px;cursor:pointer;user-select:none;border-top:1px solid #2a2b33;background:rgba(49,184,166,.05);border-radius:0 0 10px 10px}
   .blk-hdr:hover{color:var(--txt)}
-  .blk-hdr .tt{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .blk-hdr .cnt{color:#565a6b;letter-spacing:.02em;text-transform:none}
-  .blk-hdr .lead{flex:1 0 10px;min-width:10px;border-bottom:1px dotted #3a3c48;transform:translateY(-3px)}
-  .blk-hdr .val{flex:none;width:var(--val-w,auto);text-align:right;font-family:var(--mono);text-transform:none;letter-spacing:0;color:var(--flow);font-size:11.5px;font-weight:600;white-space:nowrap}
-  .blk-hdr .unit{flex:none;width:var(--unit-w,auto);text-align:right;color:#71758a;font-size:9px;text-transform:none;letter-spacing:0;white-space:nowrap}
-  .blk-hdr .bslot{flex:none;width:var(--bdg-w,0px);display:flex;justify-content:flex-start}
-  .preview-row{display:flex;align-items:baseline;gap:7px;font-family:var(--sans);font-size:10px;color:#9aa0b2;padding:4px 14px 6px}
-  .preview-row .tt{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .preview-row .lead{flex:1 0 10px;min-width:10px;border-bottom:1px dotted #3a3c48;transform:translateY(-3px)}
-  .preview-row .val{flex:none;width:var(--val-w,auto);text-align:right;font-family:var(--mono);font-size:12px;color:var(--flow);font-weight:600;white-space:nowrap}
-  .preview-row .unit{flex:none;width:var(--unit-w,auto);text-align:right;color:#71758a;font-size:9px;white-space:nowrap}
-  .preview-row .bslot{flex:none;width:var(--bdg-w,0px);display:flex;justify-content:flex-start}
+  .blk-hdr .sum{font-family:var(--mono);text-transform:none;letter-spacing:0;color:var(--flow);font-size:11.5px;flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .preview-row{display:flex;gap:8px;align-items:baseline;font-family:var(--mono);font-size:12px;padding:4px 14px 6px;color:#9aa0b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .preview-row .sv{color:var(--flow);font-weight:600}
 
-  .strip-d{display:flex;align-items:baseline;gap:7px;padding:7px 14px;border-top:1px solid #2a2b33;background:rgba(49,184,166,.06);border-radius:0 0 11px 11px}
-  .strip-d .lbl{font-family:var(--sans);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#74778a;flex:none}
-  .strip-d .lead{flex:1 0 10px;min-width:10px;border-bottom:1px dotted #3a3c48;transform:translateY(-3px)}
-  .strip-d .val{flex:none;width:var(--val-w,auto);text-align:right;font-family:var(--mono);font-size:13px;font-weight:600;color:var(--flow);font-variant-numeric:tabular-nums;white-space:nowrap}
-  .strip-d .unit{flex:none;width:var(--unit-w,auto);text-align:right;color:#71758a;font-size:10px;white-space:nowrap}
-  .strip-d .bslot{flex:none;width:var(--bdg-w,0px);display:flex;justify-content:flex-start}
-  .strip-d .dnote{font-size:10px;color:#9aa0b2;white-space:nowrap;flex:none}
-  .strip-d .dnote b{color:var(--accent)}
-  .strip-d .dnote.warn{color:var(--amber)}
-  .node.empty .strip-d .val{color:#71758a;font-weight:400}
-
-  /* направляющие чисел/юнитов — диагностический оверлей (тумблер «направляющие») */
-  .gwin{position:absolute;left:0;right:0;top:38px;bottom:0;pointer-events:none;display:none;z-index:2}
-  .node.gd .gwin{display:block}
-  .gwin i{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed rgba(77,163,255,.4)}
-  .gwin i.u{border-left:1px dashed rgba(49,184,166,.4)}
-  .gwin i::after{content:attr(data-l);position:absolute;top:0;left:4px;font:italic 9px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:rgba(77,163,255,.85);background:rgba(20,20,24,.85);padding:1px 5px;border-radius:4px}
-  .gwin i.u::after{color:rgba(49,184,166,.9)}
+  .strip-d{display:flex;gap:10px;align-items:baseline;padding:7px 14px;border-top:1px solid #2a2b33;background:rgba(49,184,166,.06);border-radius:0 0 11px 11px}
+  .strip-d .lbl{font-family:var(--sans);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#74778a}
+  .strip-d .res{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--flow);font-variant-numeric:tabular-nums;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .strip-d .warn{font-size:10px;color:var(--amber)}
+  .node.empty .strip-d .res{color:#71758a;font-weight:400}
 
   .hl{outline:1.5px solid var(--accent);outline-offset:1px;border-radius:5px}
   .legend{position:sticky;left:12px;display:flex;gap:14px;font-size:11.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap;background:rgba(20,20,24,.75);padding:6px 10px;border-radius:8px;bottom:10px;width:max-content;z-index:2}
   .legend s{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:-1px;margin-right:5px;text-decoration:none}
-
-  .rsz{position:absolute;right:3px;bottom:3px;width:13px;height:13px;cursor:ew-resize;z-index:4;border-radius:3px;
-    background:
-      linear-gradient(135deg,transparent 0 4px,#4a4c58 4px 6px,transparent 6px 8px,#4a4c58 8px 10px,transparent 10px 13px)}
 
   aside{width:340px;border-left:1px solid var(--line);background:var(--panel);padding:14px;overflow-y:auto}
   aside h2{font-size:14px;margin:0 0 6px}
@@ -154,13 +120,20 @@
   footer{padding:8px 16px;border-top:1px solid var(--line);background:var(--panel);color:var(--dim);font-size:12.5px;min-height:36px}
   footer b{color:var(--txt)}
   .fit{font-size:11px;color:#71758a;margin-top:2px}
+
+  /* баннер сравнения до/после табличной доработки */
+  .cmp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 16px;background:rgba(217,161,60,.08);border-bottom:1px solid rgba(217,161,60,.38);font-size:12px;color:var(--dim)}
+  .cmp b{color:var(--amber);font-weight:600}
+  .cmp a{color:var(--accent);text-decoration:none;font-weight:600;white-space:nowrap}
+  .cmp a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
+<div class="cmp">⇄ <b>Версия ДО табличной доработки</b><span>(поточная вёрстка, снапшот 204a082 от 2026-09-22: числа и юниты идут потоком за формулой, направляющих нет)</span><a href="ux-node-body-fill.html">Открыть табличную версию →</a></div>
 <header>
   <div>
     <h1>Тело ноды: текст + Numi-строки — 3 варианта</h1>
-    <div class="sub">табличные направляющие чисел/юнитов · тест наполнения L0→L3 · шаблон <i>com.canvasdesk.tcp-lb</i> · <i>docs/interface-objects/node-tabular-body-analysis.md</i> · <a href="ux-node-body-fill-flow.html" class="cmplink">⇄ сравнение: версия до доработки</a></div>
+    <div class="sub">тест наполнения L0→L3 · шаблон <i>com.canvasdesk.tcp-lb</i> · <i>docs/interface-objects/node-body-layout-analysis.md</i></div>
   </div>
   <div class="grp-ctl">
     <span class="ctl">Наполнение:
@@ -173,7 +146,6 @@
     </span>
     <label class="ctl"><input type="checkbox" id="whatif"> what-if (FR-017)</label>
     <label class="ctl"><input type="checkbox" id="compact"> компакт (F-9)</label>
-    <label class="ctl"><input type="checkbox" id="guides" checked> направляющие</label>
     <label class="ctl" id="thrCtl">порог выноса:
       <input type="range" id="thr" min="2" max="6" step="1" value="4">
       <span id="thrVal">4</span> строк
@@ -202,9 +174,8 @@
 
     <div class="node small" id="srcNode" style="left:36px; top:70px; width:242px">
       <div class="hdr"><span class="chip note">заметка</span><b>Профиль нагрузки</b></div>
-      <div class="row calc" data-line="peak"><span class="name">пиковые</span><span class="op">=</span><span class="lead"></span><span class="val">2 000</span><span class="unit">conn</span><span class="bslot"></span></div>
-      <div class="row calc" data-line="server_rate"><span class="name">server_rate</span><span class="op">=</span><span class="lead"></span><span class="val">400</span><span class="unit">rps</span><span class="bslot"></span></div>
-      <div class="gwin"><i class="gv" data-l="числа"></i><i class="gu u" data-l="юниты"></i></div>
+      <div class="row calc" data-line="peak"><span class="name">пиковые</span><span class="lead"></span><span class="val">2 000</span><span class="unit">conn</span></div>
+      <div class="row calc" data-line="server_rate"><span class="name">server_rate</span><span class="lead"></span><span class="val">400</span><span class="unit">rps</span></div>
     </div>
 
     <div class="node small" id="fileNode" style="left:36px; top:280px; width:210px">
@@ -222,15 +193,15 @@
   </div>
   <aside id="panel"></aside>
 </main>
-<footer id="hint"><b>Переключайте варианты и наполнение</b> — нода пересобирается на лету. Потяните угол ноды — ширина меняет режим бейджей. Ховер по пунктам «Оптимизации» подсвечивает их прямо на ноде.</footer>
+<footer id="hint"><b>Переключайте варианты и наполнение</b> — нода пересобирается на лету. Ховер по пунктам «Оптимизации» подсвечивает их прямо на ноде.</footer>
 
 <script>
 "use strict";
 const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
 const stage=$("#stage"), hero=$("#hero"), panel=$("#panel"), hint=$("#hint");
 const eSpill=$("#eSpill"), eUnmap=$("#eUnmap");
-const whatifCk=$("#whatif"), compactCk=$("#compact"), guidesCk=$("#guides"), thrEl=$("#thr"), thrVal=$("#thrVal"), thrCtl=$("#thrCtl");
-const S={v:"H3",fill:"L2",whatif:false,compact:false,guides:true,thr:4,blkOpen:false,descOpen:false,bdgIco:false};
+const whatifCk=$("#whatif"), compactCk=$("#compact"), thrEl=$("#thr"), thrVal=$("#thrVal"), thrCtl=$("#thrCtl");
+const S={v:"H3",fill:"L2",whatif:false,compact:false,thr:4,blkOpen:false,descOpen:false};
 
 // ═══════════ Данные наполнения: одна нода «растёт» от L0 к L3 (шаблон tcp-lb) ═══════════
 const P=(name,val,unit,o={})=>Object.assign({name,val,unit},o);
@@ -240,7 +211,7 @@ const DATA={
  L1:{desc:"L4-балансировщик TCP-соединений по серверам.",
      params:[P("connections_per_sec","800","rps"),P("servers","3","")],
      calc:[C("out_gateway",[["v","cps"]],"800","rps")],
-     auto:[],res:{v:"800",u:"rps"}},
+     auto:[],res:"800 rps"},
  L2:{desc:"L4-балансировщик TCP-соединений по серверам. Доли сервисов фиксируем в параметрах.",
      params:[P("connections_per_sec","800","rps"),
              P("server_rate","400","rps",{spill:"Профиль нагрузки"}),
@@ -248,7 +219,7 @@ const DATA={
      calc:[C("out_gateway",[["v","cps"]],"800","rps"),
            C("out_auth",[["v","cps"],["op"," × "],["v","auth"]],"120","rps"),
            C("out_feed",[["v","cps"],["op"," × "],["v","feed"]],"480","rps")],
-     auto:[{name:"Отчёт_q3.медиа_доля",val:null,tag:"не подставлено"}],res:{v:"800",u:"rps"}},
+     auto:[{name:"Отчёт_q3.медиа_доля",val:null,tag:"не подставлено"}],res:"800 rps"},
  L3:{desc:"L4-балансировщик TCP-соединений по серверам. Раскладывает входящий поток по долям сервисов; загрузка серверов — модель mm1.",
      note:"Медиа-долю держим ≤ 25% — выше узкое место на кодировании.",
      params:[P("connections_per_sec","800","rps"),
@@ -260,31 +231,27 @@ const DATA={
            C("out_feed",[["v","cps"],["op"," × "],["v","feed"]],"480","rps"),
            C("out_media",[["v","cps"],["op"," × "],["v","media"]],"200","rps"),
            C("utilization",[["fn","mm1"],["op","("],["v","cps"],["op",", "],["v","rate"],["op",", "],["v","srv"],["op",")"]],"67","%")],
-     auto:[{name:"Отчёт_q3.медиа_доля",val:null,tag:"не подставлено"}],res:{v:"800",u:"rps"}}
+     auto:[{name:"Отчёт_q3.медиа_доля",val:null,tag:"не подставлено"}],res:"800 rps"}
 };
 
-// ═══════════ Рендер строк (табличная концепция) ═══════════
-// Ячейки строки: [имя][=][формула][лидер]|[значение ←направляющая][юнит ←направляющая][бейдж-колонка]
-// Ширины колонок задаёт alignTables() переменными ноды: колонка = max-ширина содержимого.
-const ICO={spill:"⇄",whatif:"▸",warn:"!"};
-const BADGE=(cls,txt)=>S.bdgIco
-  ?`<span class="badge ${cls}" title="${txt}">${ICO[cls]}</span>`
-  :`<span class="badge ${cls}">${txt}</span>`;
-const CELL=(v,u,b)=>`<span class="val">${v}</span><span class="unit">${u||""}</span><span class="bslot">${b||""}</span>`;
+// ═══════════ Рендер строк ═══════════
+const BADGE=(cls,txt)=>`<span class="badge ${cls}">${txt}</span>`;
 const fxHtml=fx=>`<span class="fx">${fx.map(t=>`<span class="${t[0]}">${t[1]}</span>`).join("")}</span>`;
 function paramRow(p,i){
-  const bd=[p.spill?BADGE("spill","← "+p.spill):"",
-            (p.whatif&&S.whatif)?BADGE("whatif","what-if"):""].join("");
-  const val=(p.whatif&&S.whatif)?`<s>${p.val}</s>▸ ${p.whatif}`:p.val;
-  return `<div class="row param ${i%2?"z2":""}" data-param="${p.name}"><span class="name">${p.name}</span><span class="op">=</span><span class="lead"></span>${CELL(val,p.unit,bd)}</div>`;
+  const badges=[p.spill?BADGE("spill","← "+p.spill):"",
+                (p.whatif&&S.whatif)?BADGE("whatif","what-if"):""].join("");
+  const val=(p.whatif&&S.whatif)
+    ?`<span class="val cross">${p.val}</span><span class="val">▸ ${p.whatif}</span>`
+    :`<span class="val">${p.val}</span>`;
+  return `<div class="row param ${i%2?"z2":""}" data-param="${p.name}"><span class="name">${p.name}</span><span class="op">=</span><span class="lead"></span>${val}<span class="unit">${p.unit}</span>${badges}</div>`;
 }
 function calcRow(c,i){
-  let val=c.val,bd="";
-  if(c.name==="utilization"){val=S.whatif?"50":"67";if(S.whatif)bd=BADGE("whatif","what-if −17 п.п.");}
-  return `<div class="row calc ${i%2?"z2":""}" data-line="${c.name}"><span class="name">${c.name}</span><span class="op">=</span>${fxHtml(c.fx)}<span class="lead"></span>${CELL(val,c.unit,bd)}</div>`;
+  let val=c.val,badges="";
+  if(c.name==="utilization"){val=S.whatif?"50":"67";if(S.whatif)badges=BADGE("whatif","what-if −17 п.п.");}
+  return `<div class="row calc ${i%2?"z2":""}" data-line="${c.name}"><span class="name">${c.name}</span><span class="op">=</span>${fxHtml(c.fx)}<span class="lead"></span><span class="val">${val}</span><span class="unit">${c.unit}</span>${badges}</div>`;
 }
-const autoRow=a=>`<div class="row auto"><span class="name">${a.name}</span><span class="op">=</span><span class="lead"></span>${CELL("—","",BADGE("warn",a.tag))}</div>`;
-const totalRow=d=>`<div class="row total"><span class="name">Σ out_gateway</span><span class="lead"></span>${CELL(d.calc[0]?d.calc[0].val:"—","rps","")}</div>`;
+const autoRow=a=>`<div class="row auto"><span class="name">${a.name}</span><span class="op">=</span><span class="lead"></span><span class="val" style="color:#d9a13c">—</span>${BADGE("warn",a.tag)}</div>`;
+const totalRow=d=>`<div class="row total"><span class="name">Σ out_gateway</span><span class="lead"></span><span class="val">${d.calc[0]?d.calc[0].val:"—"}</span><span class="unit">rps</span></div>`;
 function proseZone(d,clamp){
   const c=clamp&&!S.descOpen;let h="";
   if(d.desc)h+=`<div class="prose ${c?"clamp":""}">${d.desc}</div>`;
@@ -313,43 +280,29 @@ function renderH2(d){ // Н-2: текст сверху + ведомость сн
   if(d.calc.length)blk+=`<div class="grp">расчёт <span class="cnt">${d.calc.length}</span></div>`+d.calc.map(calcRow).join("")+totalRow(d);
   return body+(blk?`<div class="zone-calc">${blk}</div>`:"");
 }
-// заголовок блока расчёта: счётчики слева, Σ — на направляющей чисел (как в теле)
-function blkHdr(d,open){
-  const lines=d.params.length+d.calc.length;
-  const sv=d.calc[0]?d.calc[0].val:"—";
-  return `<div class="blk-hdr" data-act="blk"><span class="tt">${open?"▾":"▸"} расчёт <span class="cnt">${lines} строк</span> · Σ out_gateway</span><span class="lead"></span>${CELL(sv,"rps","")}</div>`;
-}
 function renderH3(d){ // Н-3: адаптивная — порог выноса
   const lines=d.params.length+d.calc.length;
   if(lines<=S.thr)return renderH1(d);
   let h=autoZone(d)+proseZone(d,true);
+  const sum=d.calc[0]?`Σ out_gateway = ${d.calc[0].val} rps`:"";
   if(!S.blkOpen){
-    h+=`<div class="zone-calc">${blkHdr(d,false)}<div class="preview-row"><span class="tt">параметры · ${d.params.length} <span style="color:#565a6b">·</span> формулы · ${d.calc.length}</span><span class="lead"></span>${CELL(d.calc[0]?`Σ ${d.calc[0].val}`:"Σ —","rps","")}</div></div>`;
+    h+=`<div class="zone-calc"><div class="blk-hdr" data-act="blk">▸ расчёт <span class="cnt">${lines} строк</span><span class="sum">${sum}</span></div><div class="preview-row">параметры · ${d.params.length} <span style="color:#565a6b">·</span> формулы · ${d.calc.length} <span style="color:#565a6b">·</span> <span class="sv">Σ ${d.calc[0]?d.calc[0].val:"—"} rps</span></div></div>`;
   }else{
-    h+=`<div class="zone-calc">${blkHdr(d,true)}<div class="grp">параметры <span class="cnt">${d.params.length}</span></div>`+d.params.map(paramRow).join("")+`<div class="grp">расчёт <span class="cnt">${d.calc.length}</span></div>`+d.calc.map(calcRow).join("")+totalRow(d)+`</div>`;
+    h+=`<div class="zone-calc"><div class="blk-hdr" data-act="blk">▾ расчёт <span class="cnt">${lines} строк</span><span class="sum">${sum}</span></div><div class="grp">параметры <span class="cnt">${d.params.length}</span></div>`+d.params.map(paramRow).join("")+`<div class="grp">расчёт <span class="cnt">${d.calc.length}</span></div>`+d.calc.map(calcRow).join("")+totalRow(d)+`</div>`;
   }
   return h;
-}
-
-// полоса D: итог — на тех же направляющих (числа/юниты), что и строки тела;
-// диагностическое примечание — слева от лидера (не занимает бейдж-колонку:
-// его ширина не должна резервироваться в каждой строке таблицы)
-function stripD(d){
-  let v="—",u="";
-  if(d.res){v=d.res.v;u=d.res.u;}
-  let note="";
-  if(S.fill==="L3")note=S.whatif?`<span class="dnote">загрузка <b>50%</b></span>`:`<span class="dnote">загрузка <b>67%</b></span>`;
-  else if(d.auto.length)note=`<span class="dnote warn">1 вход не подставлен</span>`;
-  return `<div class="strip-d"><span class="lbl">итог</span>${note}<span class="lead"></span>${CELL(v,u,"")}</div>`;
 }
 
 function nodeChrome(d,inner){
   const st=d.auto.length?`<span class="st" title="1 вход не подставлен"></span>`:"";
   const hdr=`<div class="hdr"><span class="chip cat">сеть</span><b>TCP-балансировщик</b>${st}<span class="meta">шаблон · tcp-lb v1.2</span></div>`;
-  return hdr+inner+stripD(d)+`<div class="gwin"><i class="gv" data-l="числа"></i><i class="gu u" data-l="юниты"></i></div>`;
+  let dres=d.res||"—";
+  if(S.fill==="L3")dres=S.whatif?"800 rps · загрузка 50%":"800 rps · загрузка 67%";
+  const warn=d.auto.length?"<span class='warn'>1 вход не подставлен</span>":"";
+  return hdr+inner+`<div class="strip-d"><span class="lbl">итог</span><span class="res">${dres}</span>${warn}</div>`;
 }
 
-function paint(){
+function renderHero(){
   const d=DATA[S.fill];
   let inner;
   if(S.compact)inner=`<div class="placeholder" style="padding:8px 14px">⋯ тело свёрнуто (компакт F-9) — ${d.params.length+d.calc.length} строк данных</div>`;
@@ -358,56 +311,8 @@ function paint(){
   else inner=renderH3(d);
   hero.innerHTML=nodeChrome(d,inner);
   hero.classList.toggle("empty",S.fill==="L0");
-  hero.insertAdjacentHTML("beforeend",`<span class="rsz" title="ширина ноды — потяните"></span>`);
-  document.querySelectorAll(".node").forEach(n=>n.classList.toggle("gd",S.guides&&!!n.querySelector(".val")));
-}
-
-// ═══════════ Табличные направляющие: замер колонок по max-содержимому ═══════════
-// Два прохода (как в продукте: TextMeasurer → направляющие → раскладка):
-// 1) сброс ширин колонок, замер естественных ширин ячеек;
-// 2) фиксация --val-w / --unit-w / --bdg-w = max по всем строкам ноды.
-// Возвращает true, если у ноды-героя есть переполнение (формула усечена или
-// строка шире карточки) — сигнал деградации бейджей до иконок.
-function alignTables(){
-  let heroOver=false;
-  document.querySelectorAll(".node").forEach(node=>{
-    const vals=[...node.querySelectorAll(".val")],units=[...node.querySelectorAll(".unit")],bdgs=[...node.querySelectorAll(".bslot > *")];
-    // примечания полосы D (загрузка/предупреждение) — тоже контент бейдж-колонки
-    node.style.setProperty("--val-w","auto");
-    node.style.setProperty("--unit-w","auto");
-    node.style.setProperty("--bdg-w","0px");
-    const vw=Math.max(0,...vals.map(e=>e.getBoundingClientRect().width));
-    const uw=Math.max(0,...units.map(e=>e.getBoundingClientRect().width));
-    const bw=Math.max(0,...bdgs.map(e=>e.getBoundingClientRect().width));
-    node.style.setProperty("--val-w",vw+"px");
-    node.style.setProperty("--unit-w",uw+"px");
-    node.style.setProperty("--bdg-w",bw+"px");
-    const gw=node.querySelector(".gwin");
-    if(gw&&vals.length&&units.length){
-      const nr=node.getBoundingClientRect();
-      const vr=vals[0].getBoundingClientRect(),ur=units[0].getBoundingClientRect();
-      gw.children[0].style.left=(vr.right-nr.left)+"px";
-      gw.children[1].style.left=(ur.right-nr.left)+"px";
-    }
-    if(node===hero&&!heroOver){
-      // +5px: порты рядов (FR-025/FR-050) намеренно выступают за край на 4px —
-      // это не переполнение контента
-      heroOver=[...node.querySelectorAll(".row,.strip-d,.blk-hdr,.preview-row")]
-        .some(el=>el.scrollWidth>el.clientWidth+5)||
-        [...node.querySelectorAll(".fx")].some(el=>el.scrollWidth>el.clientWidth+1);
-    }
-  });
-  return heroOver;
-}
-
-function renderHero(){
-  S.bdgIco=false;
-  paint();drawEdges();
-  if(alignTables()){ // лестница деградации: текстовые бейджи не влезают → иконки с тултипом
-    S.bdgIco=true;paint();drawEdges();alignTables();
-  }
   thrCtl.style.opacity=S.v==="H3"?1:.35;
-  updatePanel();updateHint();
+  drawEdges();updatePanel();updateHint();
 }
 
 // ═══════════ Рёбра: проливание (teal) + unmapped (янтарь) ═══════════
@@ -442,9 +347,9 @@ function drawEdges(){
 
 // ═══════════ Панель: концепция + оптимизации + матрица ═══════════
 const PANEL={
- H1:{title:"Н-1 · Сквозной лист",body:"<b>Концепция.</b> Нода — одна колонка «как в Numi»: проза и формулы идут одним потоком. Идентичность строки читается <b>шрифтом</b> (sans/mono), значение — <b>направляющей чисел</b> (колонка = max-ширина значения), юнит — своей направляющей правее. Микро-метки групп — только якоря для сканирования, не блоки. Это эволюция сегодняшней модели (formula_lines внутри GFM-текста).<br><b>Что смотреть:</b> L1 — читается как заметка; L3 — предел потока (11 строк): спасают зебра, метки и Σ-строка."},
- H2:{title:"Н-2 · Двухзонная нода",body:"<b>Концепция.</b> Текст — зоной сверху (что это и почему), расчёт — <b>ведомостью в блоке снизу</b>, припёртой к полосе D. Параметры и формулы — одной таблицей: имя → лидер → значение → юнит; числа всех строк — на одной вертикали, юниты — на своей.<br><b>Что смотреть:</b> L0 — блока не существует (нет мёртвых зон); L3 — числа сканируются одной колонкой, текст не спорит с расчётом."},
- H3:{title:"Н-3 · Адаптивная (порог выноса)",body:"<b>Концепция.</b> До порога T строк — сквозной лист (Н-1). После — система выносит расчёт в блок снизу (Н-2) и клампит описание до 2 строк. Диагностика (unmapped) не сворачивается никогда. <b>Табличная концепция</b>: цифры прижаты к правому краю своей направляющей, доменные юниты — к своей (колонки = max-ширина по всем строкам ноды); бейджи каскада — отдельной колонкой после юнитов и направляющие не сдвигают; тесно → иконки с тултипом. <b>Двигайте «порог»</b>, переключайте наполнение и <b>тяните угол ноды</b> — режимы меняются на глазах."}
+ H1:{title:"Н-1 · Сквозной лист",body:"<b>Концепция.</b> Нода — одна колонка «как в Numi»: проза и формулы идут одним потоком. Идентичность строки читается <b>шрифтом</b> (sans/mono), значение — правым желобом с пунктирным лидером. Микро-метки групп — только якоря для сканирования, не блоки. Это эволюция сегодняшней модели (formula_lines внутри GFM-текста).<br><b>Что смотреть:</b> L1 — читается как заметка; L3 — предел потока (11 строк): спасают зебра, метки и Σ-строка."},
+ H2:{title:"Н-2 · Двухзонная нода",body:"<b>Концепция.</b> Текст — зоной сверху (что это и почему), расчёт — <b>ведомостью в блоке снизу</b>, припёртой к полосе D. Параметры и формулы — одной таблицей: имя → лидер → значение, группы «Параметры / Расчёт».<br><b>Что смотреть:</b> L0 — блока не существует (нет мёртвых зон); L3 — числа сканируются одной колонкой, текст не спорит с расчётом."},
+ H3:{title:"Н-3 · Адаптивная (порог выноса)",body:"<b>Концепция.</b> До порога T строк — сквозной лист (Н-1). После — система выносит расчёт в блок снизу (Н-2) и клампит описание до 2 строк. Диагностика (unmapped) не сворачивается никогда. <b>Двигайте «порог»</b> и переключайте наполнение — режим меняется на глазах.<br><b>Что смотреть:</b> L1 при T=2 — блок появляется уже там; L2/L3 — сравните свёрнутый и развёрнутый вид."}
 };
 const FILLDESC={
  L0:"Нода только создана: заголовок + плейсхолдер. Блока расчёта не существует, итога в D нет.",
@@ -453,17 +358,15 @@ const FILLDESC={
  L3:"Шаблон tcp-lb целиком: описание + заметка · 6 параметров (проливание + what-if) · 5 формул · Σ. Предел одного взгляда."
 };
 const OPTS=[
- ["Два шрифтовых слоя: проза sans, расчёт mono — строка опознаётся до чтения",".row,.prose"],
- ["Табличные направляющие: цифры всегда прижаты к правому краю своей колонки",".val"],
- ["Доменные юниты — своя направляющая (колонка = max-ширина юнита)",".unit"],
- ["Пунктирные лидеры от формулы до направляющей чисел (паттерн чека)",".lead"],
- ["Табличные цифры: разряды совпадают по вертикали (tabular-nums)",".val"],
+ ["Два шрифтовых слоя: проза sans, расчёт mono — строка опознаётся до чтения",".row"],
+ ["Пунктирные лидеры к правому желобу значений (паттерн чека)",".lead"],
+ ["Табличные цифры, значения в одной колонке",".val"],
  ["Юниты приглушены — число читается первым",".unit"],
  ["Синтаксическая подсветка формул + алиасы переменных",".fx"],
- ["Бейджи каскада Р-1 — своей колонкой: не сдвигают ни числа, ни юниты; тесно → иконки",".badge,.bslot"],
+ ["Бейджи каскада Р-1: ← проливание, ▸ what-if",".badge"],
  ["Зебра строк в длинных прогонах",".z2"],
  ["Микро-группы / заголовки секций — якоря сканирования",".mini-label,.grp"],
- ["Σ-строка + полоса D — итог всегда на той же направляющей чисел",".total,.strip-d"],
+ ["Σ-строка + полоса D — итог всегда доступен",".total,.strip-d"],
  ["Unmapped-диагностика янтарная, не сворачивается",".row.auto"],
  ["Пустое состояние: без формул блока нет",".placeholder"],
  ["Компакт (F-9): хедер + D — кликните, чтобы включить","@compact"]
@@ -471,7 +374,6 @@ const OPTS=[
 const MATRIX=[
  ["Читается как документ/заметка","✓✓","~","✓ (до порога)"],
  ["Скан чисел одним взглядом","~","✓✓","✓✓"],
- ["Числа/юниты на своих направляющих (таблица)","✓","✓","✓"],
  ["Пустая нода без мёртвых зон","✓","✓","✓"],
  ["Максимум (L3) не разваливается","~","✓","✓✓"],
  ["Текст ↔ формулы вперемешку","✓✓","~","~ (правило порога)"],
@@ -487,7 +389,7 @@ function updatePanel(){
   <h3>Матрица вариантов</h3>
   <table><tr><th>критерий</th><th>Н-1</th><th>Н-2</th><th>Н-3</th></tr>
   ${MATRIX.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join("")}</table>
-  <p class="fit">Рекомендация анализа: <b>Н-3</b> (порог T≈4): малое наполнение — Numi-заметка, большое — ведомость. Строки — <b>табличная концепция</b> (направляющие чисел/юнитов, бейдж-колонка). Ортогонально выбору портов (В-А/В-B/В-C); доработки нод — <i>node-tabular-body-analysis.md</i>.</p>`;
+  <p class="fit">Рекомендация анализа: <b>Н-3</b> (порог T≈4): малое наполнение — Numi-заметка, большое — ведомость. Ортогонально выбору портов (В-А/В-B/В-C).</p>`;
   panel.querySelectorAll("#opts li").forEach(li=>{
     li.addEventListener("mouseenter",()=>{
       const sel=li.dataset.sel;
@@ -502,11 +404,8 @@ function updateHint(){
   const parts=[];
   if(S.v==="H3"){const d=DATA[S.fill],lines=d.params.length+d.calc.length;
     parts.push(`строк данных ${lines} · порог ${S.thr} → ${lines<=S.thr?"<b>сквозной лист</b>":"<b>блок снизу</b>"}`);}
-  parts.push(`ширина ноды <b>${Math.round(hero.getBoundingClientRect().width)} px</b>`);
-  parts.push(S.bdgIco?"бейджи: <b>иконки</b> (тесно — полный текст в тултипе)":"бейджи: <b>текст</b> в своей колонке");
-  parts.push(S.guides?"направляющие видны: <b>числа</b> · <b>юниты</b>":"направляющие скрыты (тумблер в шапке)");
   if(S.whatif)parts.push("what-if активен: servers 3▸4, загрузка 67%→50%");
-  hint.innerHTML=parts.join(" · ");
+  hint.innerHTML=parts.length?parts.join(" · "):"Точки у рядов — построчные порты FR-025 (справа) и якоря параметров FR-050 (слева). Клик по «расчёт ▾/▸» и «описание ▾» сворачивает/разворачивает.";
 }
 
 // ═══════════ События ═══════════
@@ -514,29 +413,11 @@ $$(".tab").forEach(t=>t.onclick=()=>{S.v=t.dataset.v;$$(".tab").forEach(x=>x.cla
 $$(".fbtn").forEach(b=>b.onclick=()=>{S.fill=b.dataset.fill;$$(".fbtn").forEach(x=>x.classList.toggle("on",x===b));S.blkOpen=S.fill==="L3";S.descOpen=false;renderHero();});
 whatifCk.onchange=()=>{S.whatif=whatifCk.checked;renderHero();};
 compactCk.onchange=()=>{S.compact=compactCk.checked;renderHero();};
-guidesCk.onchange=()=>{S.guides=guidesCk.checked;renderHero();};
 thrEl.oninput=()=>{S.thr=+thrEl.value;thrVal.textContent=S.thr;renderHero();};
 hero.addEventListener("click",ev=>{const t=ev.target.closest("[data-act]");if(!t)return;
   if(t.dataset.act==="blk")S.blkOpen=!S.blkOpen;
   if(t.dataset.act==="desc")S.descOpen=!S.descOpen;
   renderHero();});
-// ширина ноды: тянуть угол — направляющие и режим бейджей пересчитываются на лету
-let dragW=null;
-hero.addEventListener("pointerdown",ev=>{
-  if(!ev.target.classList.contains("rsz"))return;
-  dragW={x:ev.clientX,w:hero.getBoundingClientRect().width};
-  hero.setPointerCapture(ev.pointerId);
-  ev.preventDefault();
-});
-hero.addEventListener("pointermove",ev=>{
-  if(!dragW)return;
-  const w=Math.min(600,Math.max(280,dragW.w+ev.clientX-dragW.x));
-  if(Math.abs(w-hero.getBoundingClientRect().width)>0.5){
-    hero.style.width=w+"px";
-    alignTables();drawEdges();updateHint();
-  }
-});
-hero.addEventListener("pointerup",()=>{if(dragW){dragW=null;renderHero();}});
 addEventListener("resize",drawEdges);
 renderHero();
 </script>
