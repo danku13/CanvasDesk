@@ -4915,6 +4915,19 @@ Stage Summary:
 
 ---
 
+Task ID: FR-061-B-C-CI
+Agent: агент сессии 2026-09-23 (CanvasDesk)
+Task: FR-061 этапы B+C — закрытие CI
+
+Work Log:
+- Merge 1c83a47 (этапы B+C) + sync-merge 993ef06 (конфликт worklog.md с ADR-0013 другого агента — сохранены обе стороны) + фикс GPU-теста 6cff069 (геометрия направляющих D-4: окна от value_right/unit_right, скалярная строка пуста правее направляющей).
+- CI по merge SHA 6cff069: 12/12 success (gates ubuntu/macos/windows, build, wasm-check, web, licenses, artifacts ×3, deploy, report-build-status).
+
+Stage Summary:
+- FR-061 этапы A+B+C в main, CI 12/12; остались этапы D (полировка/DebugOverlay/D-8/ellipsis/свёрнутость) и E (kit-Row).
+
+---
+
 ## 2026-09-23 — FR-062: усиление кита layout v2 (F-13…F-18) — реализация, витрина, Tab-фокус, гейты зелёные
 
 - **Ветка:** feature/fr-062-ui-kit-layout-v2 (этапы A/B/C одной волной; taffy не подключён — ADR-0013).
