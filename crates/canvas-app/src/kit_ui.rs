@@ -14,13 +14,23 @@
 //! Контракт поверхности (реестр U2): Modals/Block — клик мимо панели
 //! (backdrop) закрывает и глотает; Esc — закрыть; «✕» — закрыть.
 //! Отрисовка — полоса `UiLayer::Modals`.
+//!
+//! FR-059 (волна 1 миграции кита): секции компонентов v2 — TextField,
+//! Switch, Card, список+скролл, Icon-глифы (контракт FR-058; состав
+//! витрины FR-055 «компоненты × состояния × RU/EN × темы»). Контент выше
+//! максимальной панели — колонка секций ПРОКРУЧИВАЕТСЯ (кит список+скролл,
+//! [`ScrollState`] — состояние App; шапка фиксирована, при offset 0
+//! прежние секции — в прежних местах, 0 скачка). Видимость секций —
+//! целиком в окне контента (за краем — не рисуется: тексты кита не
+//! клипятся по вертикали). Состояния контролов шапки — [`WidgetState`]
+//! (FR-057) вместо deprecated-делегатов.
 
 use canvas_core::Language;
 use canvas_render::camera::Vec2;
 use canvas_render::cards::CardInstance;
 use canvas_render::text::{measure_font_system, TextAlign, SANS_FAMILY};
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
-use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitState};
+use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState};
 use canvas_ui::measure::TextMeasurer;
 // FR-057 (волна 2 кита): draw-слой и машина состояний — в крейте canvas-ui;
 // этот модуль — тонкий адаптер «items Painter'а → инстансы рендера».
@@ -57,6 +67,23 @@ pub const SECTION_CHIPS: &str = "kit.section.chips";
 pub const SECTION_DROPDOWN: &str = "kit.section.dropdown";
 pub const SECTION_TOAST: &str = "kit.section.toast";
 pub const SECTION_TOOLTIP: &str = "kit.section.tooltip";
+/// FR-059: секции компонентов v2 (FR-058).
+pub const SECTION_TEXT_FIELD: &str = "kit.section.text_field";
+pub const SECTION_SWITCH: &str = "kit.section.switch";
+pub const SECTION_CARD: &str = "kit.section.card";
+pub const SECTION_LIST: &str = "kit.section.list";
+pub const SECTION_ICONS: &str = "kit.section.icons";
+
+/// FR-059: демо-модель текстового поля витрины (обычное — текст без фокуса).
+pub const GALLERY_FIELD_TEXT: &str = "50 rps";
+/// FR-059: демо-модель текстового поля витрины (в фокусе — каретка видна).
+pub const GALLERY_FIELD_FOCUSED_TEXT: &str = "1000 запр/с";
+/// FR-059: строк в демо-списке витрины (в окне 3 — контент 8, скролл виден).
+pub const GALLERY_LIST_ROWS: usize = 8;
+/// FR-059: демо-сдвиг списка витрины (бегунок в середине трека).
+pub const GALLERY_LIST_DEMO_OFFSET: f32 = 64.0;
+/// FR-059: высота окна демо-списка (3 строки с зазорами).
+pub const GALLERY_LIST_VIEWPORT_H: f32 = 3.0 * kit::LIST_ROW_H + 2.0 * kit::LIST_ROW_GAP;
 
 /// Ряд кнопок одного варианта.
 #[derive(Debug, Clone)]
@@ -70,13 +97,20 @@ pub struct ButtonRow {
 }
 
 /// Раскладка витрины (чистая функция от вьюпорта; ширины подписей —
-/// измеренные TextMeasurer'ом).
+/// измеренные TextMeasurer'ом). FR-059: секции v2 + скролл контента —
+/// rect'ы секций уже сдвинуты на `scroll.offset` и отфильтрованы по
+/// полной видимости в окне контента ([`GalleryLayout::sections_viewport`]);
+/// при offset 0 — прежняя раскладка дословно.
 #[derive(Debug, Clone)]
 pub struct GalleryLayout {
     /// Панель витрины (kit Modal).
     pub panel: UiRect,
     /// Контент внутри панели (минус пад).
     pub content: UiRect,
+    /// Окно скролла секций (контент ниже шапки; трек бегунка).
+    pub sections_viewport: UiRect,
+    /// Полная высота колонки секций (для скролла — контент).
+    pub content_h: f32,
     /// Кнопка «✕» (kit IconButton, интерактив).
     pub close: UiRect,
     /// Кнопка темы (kit Button Primary, интерактив).
@@ -103,6 +137,23 @@ pub struct GalleryLayout {
     pub tooltip: UiRect,
     /// Подписи секций (origin + текст).
     pub section_titles: Vec<(UiPoint, &'static str)>,
+    /// FR-059: текстовые поля v2 — 3 демо (Normal/Focused/Disabled):
+    /// (состояние, в фокусе — каретка видна, раскладка `kit::text_field`).
+    pub text_fields: Vec<(KitState, bool, kit::TextFieldLayout)>,
+    /// FR-059: переключатели v2 — (slot, on, состояние).
+    pub switches: Vec<(UiRect, bool, KitState)>,
+    /// FR-059: контентная карточка v2 (rect/header/body).
+    pub card: Option<kit::CardLayout>,
+    /// FR-059: окно демо-списка (вьюпорт скролла).
+    pub list_area: UiRect,
+    /// FR-059: видимые строки демо-списка (индекс, rect).
+    pub list_rows: Vec<(usize, UiRect)>,
+    /// FR-059: выделенная строка демо-списка.
+    pub list_selected: usize,
+    /// FR-059: скролл демо-списка (статичный демо-сдвиг — бегунок в треке).
+    pub list_scroll: kit::ScrollState,
+    /// FR-059: икон-кнопки с глифами v2 (rect, иконка).
+    pub icon_glyphs: Vec<(UiRect, kit::Icon)>,
 }
 
 /// Перевод ключа витрины (ключи — 'static константы модуля).
@@ -127,10 +178,15 @@ pub fn gallery_panel(vp: UiRect) -> UiRect {
 }
 
 /// Раскладка витрины. Секции — Column-поток от контента; высоты — метрики
-/// кита, ширины подписей — измеренные.
+/// кита, ширины подписей — измеренные. FR-059: контент выше максимальной
+/// панели — секции сдвигаются на `scroll.offset` и фильтруются по полной
+/// видимости в окне секций (при offset 0 — прежняя раскладка дословно);
+/// полная высота колонки — в `content_h` (скролл-контракт кита).
 pub fn gallery_layout(
     viewport: [f32; 2],
     lang: Language,
+    scroll: &kit::ScrollState,
+    p: &KitPalette,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> GalleryLayout {
@@ -143,6 +199,7 @@ pub fn gallery_layout(
     let full_w = content.w;
 
     // Шапка: заголовок слева, кнопка темы справа (перед ✕), ✕ — край
+    // (ФИКСИРОВАНА — не скроллится: hit-слоты реестра без изменений)
     let title = UiRect::new(
         content.x,
         y,
@@ -168,6 +225,9 @@ pub fn gallery_layout(
         kit::BUTTON_HEIGHT,
     );
     y += 30.0 + SECTION_GAP;
+    // Окно скролла секций (шапка выше — фиксирована)
+    let sections_viewport = UiRect::new(content.x, y, content.w, (content.bottom() - y).max(0.0));
+    let sections_top = y;
 
     let mut section_titles: Vec<(UiPoint, &'static str)> = Vec::new();
     let mut button_rows: Vec<ButtonRow> = Vec::new();
@@ -330,10 +390,313 @@ pub fn gallery_layout(
     let tooltip = tip
         .map(|t| t.rect)
         .unwrap_or(UiRect::new(0.0, 0.0, 0.0, 0.0));
+    y += 18.0 + 26.0 + SECTION_GAP;
+
+    // === FR-059: секции компонентов v2 (FR-058) — после секций v1 ===
+
+    // --- TextField: Normal / Focused / Disabled (3 поля в ряд) ---
+    section_titles.push((UiPoint::new(content.x, y), SECTION_TEXT_FIELD));
+    y += 18.0;
+    let mut text_fields: Vec<(KitState, bool, kit::TextFieldLayout)> = Vec::new();
+    {
+        let per = ((control_w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(kit::TEXT_FIELD_MIN_W);
+        let models: [(KitState, kit::TextFieldModel, &str); 3] = [
+            (
+                KitState::Normal,
+                kit::TextFieldModel {
+                    text: GALLERY_FIELD_TEXT.to_owned(),
+                    caret: GALLERY_FIELD_TEXT.chars().count(),
+                    sel: None,
+                },
+                "",
+            ),
+            (
+                KitState::Normal,
+                kit::TextFieldModel {
+                    text: GALLERY_FIELD_FOCUSED_TEXT.to_owned(),
+                    caret: GALLERY_FIELD_FOCUSED_TEXT.chars().count(),
+                    sel: None,
+                },
+                "",
+            ),
+            (
+                KitState::Disabled,
+                kit::TextFieldModel::default(),
+                "kit.textfield.placeholder",
+            ),
+        ];
+        for (i, (state, model, placeholder_key)) in models.into_iter().enumerate() {
+            let slot = UiRect::new(
+                control_x + i as f32 * (per + kit::GAP_CONTROLS),
+                y,
+                per,
+                kit::TEXT_FIELD_HEIGHT,
+            );
+            let focused = i == 1; // второе поле — в фокусе (каретка видна)
+            let placeholder = if placeholder_key.is_empty() {
+                ""
+            } else {
+                &tr(lang, "kit.textfield.placeholder")
+            };
+            let lay = kit::text_field(
+                slot,
+                UiVec2::new(kit::TEXT_FIELD_MIN_W, kit::TEXT_FIELD_HEIGHT),
+                UiVec2::new(per, kit::TEXT_FIELD_HEIGHT),
+                &model,
+                placeholder,
+                focused,
+                state,
+                p,
+                m,
+                fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+            );
+            text_fields.push((state, focused, lay));
+        }
+    }
+    y += kit::TEXT_FIELD_HEIGHT + SECTION_GAP;
+
+    // --- Switch: Off/Normal, On/Normal, On/Hovered, Off/Disabled ---
+    section_titles.push((UiPoint::new(content.x, y), SECTION_SWITCH));
+    y += 18.0;
+    let mut switches: Vec<(UiRect, bool, KitState)> = Vec::new();
+    {
+        let demo: [(bool, KitState); 4] = [
+            (false, KitState::Normal),
+            (true, KitState::Normal),
+            (true, KitState::Hovered),
+            (false, KitState::Disabled),
+        ];
+        for (i, (on, state)) in demo.into_iter().enumerate() {
+            let slot = UiRect::new(
+                control_x + i as f32 * (kit::SWITCH_W + kit::GAP_CONTROLS),
+                y,
+                kit::SWITCH_W,
+                kit::SWITCH_H,
+            );
+            switches.push((slot, on, state));
+        }
+    }
+    y += kit::SWITCH_H + SECTION_GAP;
+
+    // --- Card: хедер + тело внутри пада панели (kit::card) ---
+    section_titles.push((UiPoint::new(content.x, y), SECTION_CARD));
+    y += 18.0;
+    let card_slot = UiRect::new(control_x, y, control_w, 64.0);
+    let card = kit::card(
+        card_slot,
+        UiVec2::new(0.0, 64.0),
+        UiVec2::new(600.0, 64.0),
+        20.0,
+        p,
+    );
+    y += 64.0 + SECTION_GAP;
+
+    // --- Список + скролл: 8 строк в окне 3 (бегунок в треке) ---
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LIST));
+    y += 18.0;
+    let list_area = UiRect::new(control_x, y, control_w, GALLERY_LIST_VIEWPORT_H);
+    let mut list_scroll = kit::ScrollState {
+        offset: GALLERY_LIST_DEMO_OFFSET,
+        content_h: GALLERY_LIST_ROWS as f32 * kit::LIST_ROW_H
+            + (GALLERY_LIST_ROWS.saturating_sub(1)) as f32 * kit::LIST_ROW_GAP,
+        viewport_h: GALLERY_LIST_VIEWPORT_H,
+    };
+    list_scroll.clamp();
+    let list_rows = kit::list_rows(
+        list_area,
+        &list_scroll,
+        kit::LIST_ROW_H,
+        kit::LIST_ROW_GAP,
+        GALLERY_LIST_ROWS,
+    );
+    let list_selected = 2usize;
+    y += GALLERY_LIST_VIEWPORT_H + SECTION_GAP;
+
+    // --- Icon-глифы v2: Search/ArrowLeft/ArrowRight/Refresh (Normal) ---
+    section_titles.push((UiPoint::new(content.x, y), SECTION_ICONS));
+    y += 18.0;
+    let mut icon_glyphs: Vec<(UiRect, kit::Icon)> = Vec::new();
+    {
+        let glyphs = [
+            kit::Icon::Search,
+            kit::Icon::ArrowLeft,
+            kit::Icon::ArrowRight,
+            kit::Icon::Refresh,
+        ];
+        for (i, icon) in glyphs.into_iter().enumerate() {
+            let cell = UiRect::new(
+                control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
+                y,
+                kit::ICON_BUTTON_SIZE,
+                kit::ICON_BUTTON_SIZE,
+            );
+            let rect = kit::icon_button(
+                cell,
+                icon,
+                (
+                    canvas_ui::layout::HAlign::Start,
+                    canvas_ui::layout::VAlign::Center,
+                ),
+            );
+            icon_glyphs.push((rect, icon));
+        }
+    }
+    y += kit::ICON_BUTTON_SIZE;
+
+    // Полная высота колонки секций (для скролла)
+    let content_h = (y - sections_top).max(0.0);
+
+    // === FR-059: сдвиг на scroll.offset + фильтр полной видимости ===
+    // Тексты кита не клипятся по вертикали — секция за краем окна не
+    // рисуется вовсе (при offset 0 фильтр ничего не отрезает).
+    let off = scroll.offset;
+    let visible = |r: &UiRect| -> bool {
+        r.y - off >= sections_viewport.y - 0.01
+            && r.bottom() - off <= sections_viewport.bottom() + 0.01
+    };
+    let section_titles: Vec<(UiPoint, &'static str)> = section_titles
+        .into_iter()
+        .filter(|(origin, _)| visible(&UiRect::new(origin.x, origin.y, content.w, 16.0)))
+        .map(|(origin, key)| (UiPoint::new(origin.x, origin.y - off), key))
+        .collect();
+    let button_rows: Vec<ButtonRow> = button_rows
+        .into_iter()
+        .filter(|row| visible(&row.slot))
+        .map(|row| ButtonRow {
+            slot: UiRect::new(row.slot.x, row.slot.y - off, row.slot.w, row.slot.h),
+            buttons: row
+                .buttons
+                .into_iter()
+                .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+                .collect(),
+            ..row
+        })
+        .collect();
+    let icon_buttons: Vec<UiRect> = icon_buttons
+        .into_iter()
+        .filter(|r| visible(r))
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    let chips: Vec<UiRect> = chips
+        .into_iter()
+        .filter(|r| visible(r))
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    let dropdown_anchor = if visible(&dropdown_anchor) {
+        UiRect::new(
+            dropdown_anchor.x,
+            dropdown_anchor.y - off,
+            dropdown_anchor.w,
+            dropdown_anchor.h,
+        )
+    } else {
+        UiRect::new(0.0, 0.0, 0.0, 0.0)
+    };
+    let dropdown_visible = visible(&dropdown_menu);
+    let dropdown_menu = if dropdown_visible {
+        UiRect::new(
+            dropdown_menu.x,
+            dropdown_menu.y - off,
+            dropdown_menu.w,
+            dropdown_menu.h,
+        )
+    } else {
+        UiRect::new(0.0, 0.0, 0.0, 0.0)
+    };
+    let dropdown_items: Vec<UiRect> = if dropdown_visible {
+        dropdown_items
+            .into_iter()
+            .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let toast = if visible(&toast) {
+        UiRect::new(toast.x, toast.y - off, toast.w, toast.h)
+    } else {
+        UiRect::new(0.0, 0.0, 0.0, 0.0)
+    };
+    let tooltip_anchor = if visible(&tooltip_anchor) {
+        UiRect::new(
+            tooltip_anchor.x,
+            tooltip_anchor.y - off,
+            tooltip_anchor.w,
+            tooltip_anchor.h,
+        )
+    } else {
+        UiRect::new(0.0, 0.0, 0.0, 0.0)
+    };
+    let tooltip = if !tooltip.is_empty() && visible(&tooltip) {
+        UiRect::new(tooltip.x, tooltip.y - off, tooltip.w, tooltip.h)
+    } else {
+        UiRect::new(0.0, 0.0, 0.0, 0.0)
+    };
+    let text_fields: Vec<(KitState, bool, kit::TextFieldLayout)> = text_fields
+        .into_iter()
+        .filter(|(_, _, lay)| visible(&lay.rect))
+        .map(|(state, focused, lay)| {
+            (
+                state,
+                focused,
+                kit::TextFieldLayout {
+                    rect: UiRect::new(lay.rect.x, lay.rect.y - off, lay.rect.w, lay.rect.h),
+                    text_area: UiRect::new(
+                        lay.text_area.x,
+                        lay.text_area.y - off,
+                        lay.text_area.w,
+                        lay.text_area.h,
+                    ),
+                    ..lay
+                },
+            )
+        })
+        .collect();
+    let switches: Vec<(UiRect, bool, KitState)> = switches
+        .into_iter()
+        .filter(|(r, _, _)| visible(r))
+        .map(|(r, on, state)| (UiRect::new(r.x, r.y - off, r.w, r.h), on, state))
+        .collect();
+    let card = if visible(&card.rect) {
+        Some(kit::CardLayout {
+            rect: UiRect::new(card.rect.x, card.rect.y - off, card.rect.w, card.rect.h),
+            header: UiRect::new(
+                card.header.x,
+                card.header.y - off,
+                card.header.w,
+                card.header.h,
+            ),
+            body: UiRect::new(card.body.x, card.body.y - off, card.body.w, card.body.h),
+        })
+    } else {
+        None
+    };
+    let list_area = if visible(&list_area) {
+        UiRect::new(list_area.x, list_area.y - off, list_area.w, list_area.h)
+    } else {
+        UiRect::new(0.0, 0.0, 0.0, 0.0)
+    };
+    let list_rows: Vec<(usize, UiRect)> = if list_area.w > 0.0 {
+        list_rows
+            .into_iter()
+            .filter(|(_, r)| visible(r))
+            .map(|(i, r)| (i, UiRect::new(r.x, r.y - off, r.w, r.h)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let icon_glyphs: Vec<(UiRect, kit::Icon)> = icon_glyphs
+        .into_iter()
+        .filter(|(r, _)| visible(r))
+        .map(|(r, icon)| (UiRect::new(r.x, r.y - off, r.w, r.h), icon))
+        .collect();
 
     GalleryLayout {
         panel,
         content,
+        sections_viewport,
+        content_h,
         close,
         theme,
         title,
@@ -347,6 +710,14 @@ pub fn gallery_layout(
         tooltip_anchor,
         tooltip,
         section_titles,
+        text_fields,
+        switches,
+        card,
+        list_area,
+        list_rows,
+        list_selected,
+        list_scroll,
+        icon_glyphs,
     }
 }
 
@@ -378,14 +749,31 @@ pub fn gallery_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect) {
     (theme, close)
 }
 
+/// FR-059: окно скролла секций витрины (для wheel-hit без полной
+/// раскладки — та же математика panel/content/шапки, что в раскладке).
+pub fn gallery_scroll_viewport(viewport: [f32; 2]) -> UiRect {
+    let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let panel = gallery_panel(vp);
+    let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
+    let sections_top = content.y + 30.0 + SECTION_GAP;
+    UiRect::new(
+        content.x,
+        sections_top,
+        content.w,
+        (content.bottom() - sections_top).max(0.0),
+    )
+}
+
 /// Состояние интерактивного контрола по курсору (hover).
 ///
-/// Deprecated (FR-057): канонический путь — [`WidgetState`]
+/// Deprecated (FR-057/FR-059): канонический путь — [`WidgetState`]
 /// (`canvas_ui::widget`) — машина состояний hover/pressed/selected/disabled/
-/// focused → [`KitState`] + ребро клика. Функция оставлена как тонкий
-/// делегат: потребители (app.rs) мигрируют волнами FR-059/FR-060; в FR-057 —
-/// 0 правок app.rs. Атрибут `#[deprecated]` не ставится, пока живы вызовы
-/// app.rs (гейт clippy -D warnings).
+/// focused → [`KitState`] + ребро клика. Все потребители app.rs мигрированы
+/// (FR-059 — витрина на [`WidgetState`]); делегат оставлен для совместимости
+/// внешних вызывателей до FR-060.
+#[deprecated(
+    note = "FR-059: используйте canvas_ui::widget::WidgetState (set_pointer/set_disabled → kit_state)"
+)]
 pub fn cursor_state(hovered: bool, disabled: bool) -> KitState {
     let mut w = WidgetState::default();
     w.set_pointer(hovered, false);
@@ -520,9 +908,13 @@ impl<'a> KitDraw<'a> {
 
 /// Подбор стиля строки dropdown по курсору (hover — реальный слот).
 ///
-/// Deprecated (FR-057): канонический путь — [`WidgetState`] (см.
-/// [`cursor_state`]); делегат сохранён до миграции потребителей FR-059/060.
+/// Deprecated (FR-057/FR-059): канонический путь — [`WidgetState`] (см.
+/// [`cursor_state`]); потребители мигрированы в FR-059.
+#[deprecated(
+    note = "FR-059: используйте canvas_ui::widget::WidgetState (set_pointer(hovered, false) → kit_state)"
+)]
 pub fn dropdown_item_state(hovered: bool) -> KitState {
+    #[allow(deprecated)]
     cursor_state(hovered, false)
 }
 
@@ -677,6 +1069,7 @@ mod tests {
     /// Deprecated-делегаты на WidgetState дают прежние результаты
     /// (эквивалентность таблицы состояний: disabled > hovered > normal).
     #[test]
+    #[allow(deprecated)]
     fn cursor_state_delegates_match_old_matrix() {
         assert_eq!(cursor_state(false, false), KitState::Normal);
         assert_eq!(cursor_state(true, false), KitState::Hovered);
@@ -687,5 +1080,107 @@ mod tests {
         assert_eq!(dropdown_item_state(false), KitState::Normal);
         // контрольный: ButtonVariant по-прежнему различим (делегаты не тронули кит)
         let _ = ButtonVariant::Primary;
+    }
+
+    /// FR-059: палитра-двойка для тестов витрины (значения слотов не важны —
+    /// раскладка от палитры зависит только падом Card).
+    fn gallery_palette() -> KitPalette {
+        KitPalette {
+            panel_fill: [0.1; 4],
+            panel_border: [0.2; 4],
+            control_fill: [0.3; 4],
+            control_border: [0.4; 4],
+            control_primary: [0.5; 4],
+            control_danger: [0.6; 4],
+            hover_fill: [0.7; 4],
+            primary_hover_fill: [0.75; 4],
+            selected_fill: [0.8; 4],
+            text: [0.9; 4],
+            text_title: [0.91; 4],
+            text_muted: [0.92; 4],
+            disabled_text: [0.93; 4],
+            accent: [0.94; 4],
+        }
+    }
+
+    /// FR-059: секции v2 в витрине — при offset 0 видимы только секции v1
+    /// (v2 — за нижним краем); в нижнем положении скролла — TextField ×3,
+    /// Switch ×4, Card, список (строки + бегунок), Icon-глифы ×4.
+    #[test]
+    fn gallery_layout_has_v2_sections_and_scroll() {
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let p = gallery_palette();
+        let scroll = kit::ScrollState::default();
+        let lay0 = gallery_layout([1280.0, 800.0], Language::Ru, &scroll, &p, &mut m, &mut fs);
+        // Контент выше окна секций — скролл контента нужен
+        assert!(
+            lay0.content_h > lay0.sections_viewport.h,
+            "контент {} > окна {}",
+            lay0.content_h,
+            lay0.sections_viewport.h
+        );
+        // При offset 0 v2-секции за краем — не рисуются (тексты кита
+        // не клипятся по вертикали)
+        assert!(lay0.text_fields.is_empty(), "v2 за краем при offset 0");
+        assert!(!lay0.button_rows.is_empty(), "секции v1 видимы");
+        // Окно скролла из хелпера совпадает с раскладкой
+        assert_eq!(
+            gallery_scroll_viewport([1280.0, 800.0]),
+            lay0.sections_viewport
+        );
+        // Нижнее положение скролла — секции v2 видимы целиком
+        let bottom = kit::ScrollState {
+            offset: lay0.content_h - lay0.sections_viewport.h,
+            content_h: lay0.content_h,
+            viewport_h: lay0.sections_viewport.h,
+        };
+        let lay1 = gallery_layout([1280.0, 800.0], Language::Ru, &bottom, &p, &mut m, &mut fs);
+        assert_eq!(lay1.text_fields.len(), 3, "TextField ×3 состояния");
+        assert!(lay1.text_fields[1].2.caret_x >= 0.0, "второе поле в фокусе");
+        assert_eq!(lay1.switches.len(), 4, "Switch ×4 состояния");
+        assert!(lay1.card.is_some(), "Card построена");
+        assert!(!lay1.list_rows.is_empty(), "строки списка видимы");
+        assert!(
+            lay1.list_scroll.needs_scroll(),
+            "демо-список прокручивается"
+        );
+        assert_eq!(lay1.icon_glyphs.len(), 4, "Icon-глифы ×4");
+        assert!(lay1.button_rows.is_empty(), "секции v1 ушли вверх");
+    }
+
+    /// FR-059: скролл витрины — сдвиг секций, шапка на месте; после сдвига
+    /// все видимые подписи — внутри окна секций.
+    #[test]
+    fn gallery_scroll_shifts_sections() {
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let p = gallery_palette();
+        let scroll = kit::ScrollState::default();
+        let lay0 = gallery_layout([1280.0, 800.0], Language::Ru, &scroll, &p, &mut m, &mut fs);
+        let scrolled = kit::ScrollState {
+            offset: 60.0,
+            ..kit::ScrollState::default()
+        };
+        let lay1 = gallery_layout(
+            [1280.0, 800.0],
+            Language::Ru,
+            &scrolled,
+            &p,
+            &mut m,
+            &mut fs,
+        );
+        assert_eq!(lay1.content_h, lay0.content_h, "контент не меняется");
+        // После сдвига первая подпись (Buttons) ушла, ни одна подпись
+        // не осталась выше окна секций
+        assert!(
+            lay1.section_titles
+                .iter()
+                .all(|(origin, _)| { origin.y >= lay1.sections_viewport.y - 0.01 }),
+            "подписи — внутри окна после сдвига"
+        );
+        // Шапка не скроллится
+        assert_eq!(lay1.close, lay0.close);
+        assert_eq!(lay1.theme, lay0.theme);
     }
 }

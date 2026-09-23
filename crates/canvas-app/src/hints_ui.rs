@@ -1,24 +1,45 @@
 //! FR-021: контекстные подсказки при Numi-вводе — чистая модель
 //! (образец [`crate::template_ui`]): токен перед кареткой, фильтрация
-//! каталога движка, клавиатурный popup, кламп геометрии к окну.
+//! каталога движка, клавиатурный popup.
 //!
 //! Рендер и перехват клавиш — приложение (`main.rs`): popup собирается
 //! по кадру из квадов + screen-текстов (паттерн `wheel_overlay`), а
 //! принятие подсказки заменяет токен слева от каретки
 //! ([`canvas_render::edit::EditingSession::replace_token_before_caret`]).
+//!
+//! FR-059 (волна 1 миграции кита, паттерн U5 — числа дословно): геометрия
+//! popup — через кит v2 вместо ручного клампа к окну (класс дефекта
+//! CR-015): `kit::dropdown_menu` («якорь + flip», PRD-0009 §2) + строки —
+//! `kit::list_rows` ([`ScrollState`], окно без прокрутки — лимит
+//! [`HINT_LIMIT`] сохранён). Числа прежние: ширина/высота строки/поля —
+//! 0 визуального скачка; замена только там, где устраняется эвристика
+//! (ручной кламп → flip кита: у нижнего края popup разворачивается НАД
+//! строкой каретки — якорь-строка высотой [`HINT_CARET_LINE_H`], прежняя
+//! формула «−20» = строка 16 + зазор 4).
 
 use canvas_core::{expr, Language};
+use canvas_ui::geometry::{UiRect, UiVec2};
+use canvas_ui::kit::{self, ScrollState};
+use canvas_ui::layout::constrain;
 
 use crate::i18n::{self, keys};
 
-/// Максимум элементов в popup (читабельность, стандарт автокомплитов).
+/// Максимум элементов в popup (читабельность, стандарт автокомплитов) —
+/// именованный лимит списка, не кламп раскладки (срезов «хвоста» нет).
 pub const HINT_LIMIT: usize = 8;
-/// Ширина popup (логические px, клампится к окну).
+/// Ширина popup (логические px; у узкого окна зажимается во вьюпорт —
+/// `constrain`-семантика `dropdown_menu`).
 pub const HINT_WIDTH: f32 = 300.0;
 /// Высота строки popup.
 pub const HINT_ROW_H: f32 = 24.0;
-/// Внутренние поля popup.
+/// Внутренние поля popup (по вертикали; по горизонтали подсветка строки
+/// инсетится на [`HINT_ROW_INSET_H`]).
 pub const HINT_MARGIN: f32 = 6.0;
+/// Горизонтальный инсет подсветки строки от краёв popup (прежние +4/−8).
+pub const HINT_ROW_INSET_H: f32 = 4.0;
+/// Высота строки каретки для якоря dropdown (прежний flip «−20» =
+/// строка 16 + `DROPDOWN_GAP` 4 — числа прежней формулы дословно).
+pub const HINT_CARET_LINE_H: f32 = 16.0;
 
 /// Род подсказки (окраска/семантика в UI).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,17 +88,16 @@ pub struct HintContext {
 pub fn token_before_caret(line: &str, caret: usize) -> (String, usize) {
     let caret = caret.min(line.len());
     let prefix = &line[..caret];
-    let mut start = caret;
-    for (i, ch) in prefix.char_indices().rev() {
-        if ch.is_alphanumeric() || ch == '_' {
-            start = i;
-        } else if ch == '$' {
-            start = i;
-            break;
-        } else {
-            break;
-        }
-    }
+    // FR-059/G5: без `break`-выхода — скан от каретки влево `take_while`
+    // (класс символов прежний: буквы Unicode/цифры/`_`, `$` включает и
+    // завершает токен). Семантика байт-в-байт прежняя (тесты FR-021/FR-013).
+    let start = prefix
+        .char_indices()
+        .rev()
+        .take_while(|&(_, ch)| ch.is_alphanumeric() || ch == '_' || ch == '$')
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(caret);
     (prefix[start..].to_owned(), start)
 }
 
@@ -252,26 +272,56 @@ impl HintPopup {
     }
 }
 
-/// Геометрия popup `[x, y, w, h]` с клампом к окну: ниже якоря; не
-/// влезает снизу — выше строки каретки. `count == 0` — пустой rect
-/// (popup не открывается).
-pub fn popup_layout(anchor: [f32; 2], window: [f32; 2], count: usize) -> [f32; 4] {
+/// Геометрия popup — `kit::dropdown_menu` («якорь + flip», FR-059):
+/// ниже якоря; не влезает снизу — НАД строкой каретки (flip кита);
+/// по горизонтали зажат во вьюпорт с полями [`HINT_MARGIN`].
+/// `count == 0` — `None` (popup не открывается).
+/// Ширина — [`HINT_WIDTH`], зажатая во вьюпорт (узкие окна).
+pub fn popup_rect(anchor: [f32; 2], window: [f32; 2], count: usize) -> Option<UiRect> {
     if count == 0 {
-        return [0.0, 0.0, 0.0, 0.0];
+        return None;
     }
+    let viewport = UiRect::new(
+        HINT_MARGIN,
+        HINT_MARGIN,
+        (window[0] - HINT_MARGIN * 2.0).max(0.0),
+        (window[1] - HINT_MARGIN * 2.0).max(0.0),
+    );
     let height = count as f32 * HINT_ROW_H + HINT_MARGIN * 2.0;
-    let width = HINT_WIDTH.min((window[0] - HINT_MARGIN * 2.0).max(0.0));
-    let mut x = anchor[0];
-    if x + width > window[0] - HINT_MARGIN {
-        x = window[0] - HINT_MARGIN - width;
-    }
-    let x = x.max(HINT_MARGIN);
-    let mut y = anchor[1] + 4.0;
-    if y + height > window[1] - HINT_MARGIN {
-        y = anchor[1] - height - 20.0; // выше строки каретки
-    }
-    let y = y.max(HINT_MARGIN);
-    [x, y, width, height]
+    let content = constrain(
+        UiVec2::new(0.0, 0.0),
+        UiVec2::new(viewport.w, viewport.h),
+        UiVec2::new(HINT_WIDTH, height),
+    );
+    // Якорь — строка каретки: низ каретки (`anchor`) — низ строки высотой
+    // [`HINT_CARET_LINE_H`]; ниже — `+DROPDOWN_GAP` (прежние +4), flip —
+    // над строкой (прежние «−20» = 16 + 4).
+    let anchor_rect = UiRect::new(
+        anchor[0],
+        anchor[1] - HINT_CARET_LINE_H,
+        1.0,
+        HINT_CARET_LINE_H,
+    );
+    Some(kit::dropdown_menu(anchor_rect, viewport, content).menu)
+}
+
+/// Строки popup — `kit::list_rows` ([`ScrollState`], окно без прокрутки:
+/// контент = [`HINT_LIMIT`]·[`HINT_ROW_H`] максимум, зазор 0 — прежняя
+/// стопка дословно). Возвращает `(индекс, rect подсветки)`; rect —
+/// прежняя зона подсветки `[px+4, row_y, pw−8, 24]`.
+pub fn hint_rows(popup: UiRect, count: usize) -> Vec<(usize, UiRect)> {
+    let area = UiRect::new(
+        popup.x + HINT_ROW_INSET_H,
+        popup.y + HINT_MARGIN,
+        (popup.w - HINT_ROW_INSET_H * 2.0).max(0.0),
+        (popup.h - HINT_MARGIN * 2.0).max(0.0),
+    );
+    let scroll = ScrollState {
+        offset: 0.0,
+        content_h: count as f32 * HINT_ROW_H,
+        viewport_h: area.h,
+    };
+    kit::list_rows(area, &scroll, HINT_ROW_H, 0.0, count)
 }
 
 #[cfg(test)]
@@ -392,21 +442,43 @@ mod tests {
         assert!(items.is_empty(), "проза не подсказывает");
     }
 
-    /// `popup_layout`: кламп к окну; у нижнего края — выше якоря; 0
-    /// элементов — пустой rect.
+    /// `popup_rect` (FR-059: `kit::dropdown_menu`): якорь+flip — числа
+    /// прежней раскладки дословно; 0 элементов — `None`.
     #[test]
     fn hints_popup_layout_clamps_to_window() {
-        assert_eq!(popup_layout([100.0, 100.0], [800.0, 600.0], 0), [0.0; 4]);
-        let rect = popup_layout([100.0, 100.0], [800.0, 600.0], 4);
-        assert_eq!(rect[2], HINT_WIDTH);
-        assert!((rect[3] - (4.0 * HINT_ROW_H + HINT_MARGIN * 2.0)).abs() < 0.01);
-        // У правого края — сдвиг внутрь
-        let rect = popup_layout([790.0, 100.0], [800.0, 600.0], 4);
-        assert!(rect[0] + rect[2] <= 800.0 - HINT_MARGIN + 0.01);
-        // У нижнего края — выше якоря
-        let rect = popup_layout([100.0, 590.0], [800.0, 600.0], 4);
-        assert!(rect[1] + rect[3] <= 600.0 - HINT_MARGIN + 0.01);
-        assert!(rect[1] + rect[3] < 590.0, "popup выше строки каретки");
+        assert!(popup_rect([100.0, 100.0], [800.0, 600.0], 0).is_none());
+        let rect = popup_rect([100.0, 100.0], [800.0, 600.0], 4).expect("popup есть");
+        assert_eq!(rect.w, HINT_WIDTH);
+        assert!((rect.h - (4.0 * HINT_ROW_H + HINT_MARGIN * 2.0)).abs() < 0.01);
+        // Ниже якоря: прежний шаг «+4» от низа каретки
+        assert!((rect.y - (100.0 + 4.0)).abs() < 0.01);
+        // У правого края — сдвиг внутрь (кламп во вьюпорт с полями)
+        let rect = popup_rect([790.0, 100.0], [800.0, 600.0], 4).expect("popup есть");
+        assert!(rect.right() <= 800.0 - HINT_MARGIN + 0.01);
+        // У нижнего края — flip НАД строкой каретки: прежняя формула
+        // «anchor − высота − 20» (строка 16 + зазор 4)
+        let rect = popup_rect([100.0, 590.0], [800.0, 600.0], 4).expect("popup есть");
+        assert!(rect.bottom() <= 600.0 - HINT_MARGIN + 0.01);
+        assert!((rect.y - (590.0 - 4.0 * HINT_ROW_H - HINT_MARGIN * 2.0 - 20.0)).abs() < 0.01);
+    }
+
+    /// Строки popup (`kit::list_rows`): прежняя стопка дословно —
+    /// подсветка `[px+4, py+6+i·24, pw−8, 24]`, окно без прокрутки.
+    #[test]
+    fn hints_rows_via_list_rows_match_old_stack() {
+        let popup = popup_rect([100.0, 100.0], [800.0, 600.0], 3).expect("popup есть");
+        let rows = hint_rows(popup, 3);
+        assert_eq!(rows.len(), 3);
+        for (i, (idx, rect)) in rows.iter().enumerate() {
+            assert_eq!(*idx, i);
+            assert!((rect.x - (popup.x + HINT_ROW_INSET_H)).abs() < 0.01);
+            assert!((rect.y - (popup.y + HINT_MARGIN + i as f32 * HINT_ROW_H)).abs() < 0.01);
+            assert!((rect.w - (popup.w - HINT_ROW_INSET_H * 2.0)).abs() < 0.01);
+            assert!((rect.h - HINT_ROW_H).abs() < 0.01);
+        }
+        // Лимит: 8 строк максимум — окно списка без прокрутки
+        let popup = popup_rect([100.0, 100.0], [800.0, 600.0], HINT_LIMIT).expect("popup есть");
+        assert_eq!(hint_rows(popup, HINT_LIMIT).len(), HINT_LIMIT);
     }
 
     /// Клавиатурный контракт popup: выделение закольцовано, sync сохраняет
