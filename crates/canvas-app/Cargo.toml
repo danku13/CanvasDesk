@@ -4,6 +4,7 @@ name = "canvas-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [lib]
 name = "canvas_app"

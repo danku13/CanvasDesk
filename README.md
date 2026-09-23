@@ -1,5 +1,9 @@
 # CanvasDesk
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![CLA](https://img.shields.io/badge/CLA-required-orange.svg)](CLA.md)
+[![cla-check](https://img.shields.io/badge/PR-CLA%20auto--accept-green.svg)](.github/workflows/cla-check.yml)
+
 **Визуальная система математического моделирования** (ADR-0007): бесконечный
 зумируемый канвас, на котором исполняемые математические модели строятся из
 расчётных нод (Numi-листы и шаблоны), значения **проливаются** по
@@ -14,6 +18,42 @@ value-связям (DAG-движок, live-пересчёт), доменная �
 Формат хранения — [JSON Canvas](https://jsoncanvas.org) (`.canvas`): раскладку
 можно открыть в Obsidian и наоборот, неизвестные поля переживают round-trip
 (совместимость формата — часть носителя, не позиционирование).
+
+## Лицензия и правила игры (License & Rules)
+
+**Copyright © 2026 danku13.** Проект распространяется под **[GNU AGPLv3](LICENSE)**. Модель простая: код бесплатный и открытый — навсегда; судьба проекта (включая лицензию) — в руках владельца.
+
+| | |
+|---|---|
+| 💚 **Код бесплатен** | Весь код — под [GNU AGPLv3](LICENSE): свободно используйте, изучайте, изменяйте и распространяйте. Никаких «open core» хитростей — сообщество получает весь проект целиком. |
+| 🔒 **Коммерческие права у владельца** | Исключительные права на проект и **право изменять его лицензию в будущем** сохраняет владелец (**danku13**): можно выпустить коммерческую или проприетарную редакцию, применить dual-licensing, закрыть проект. Код, уже выпущенный под AGPLv3, для сообщества от этого не закроется. |
+| ✍️ **PR = подписание CLA** | Отправляя Pull Request, вы **автоматически принимаете [CLA](CLA.md)**: авторство вашего кода остаётся за вами, но право лицензировать вклад в будущем переходит владельцу. Это защищает проект от юридических рисков при смене лицензии. |
+
+### Мини-FAQ (License FAQ)
+
+**Можно ли использовать CanvasDesk в коммерческих целях? / Can I use it commercially?**
+
+Да — на условиях AGPLv3: коммерческое использование законно, пока соблюдаются условия лицензии (исходники изменений открываются под AGPLv3; для сетевых сервисов действует §13 AGPL — исходники версии, доступной пользователям, должны быть открыты). Разрешение владельца для этого не требуется.
+
+*Yes — under AGPLv3 terms: commercial use is legal as long as you comply with the license (your modifications stay under AGPLv3; for network services §13 applies — the source of the version you serve must be available). No separate permission from the owner is needed.*
+
+**Условия AGPLv3 мне не подходят (закрытая интеграция, OEM, white-label, SaaS без открытия исходников) / AGPLv3 doesn't fit my case**
+
+Напишите владельцу — обсудим **коммерческую лицензию** под ваш сценарий: Telegram [@danku13](https://t.me/danku13) или [danku13@yandex.ru](mailto:danku13@yandex.ru).
+
+*Contact the owner to discuss a **commercial license** for your scenario: Telegram [@danku13](https://t.me/danku13) or [danku13@yandex.ru](mailto:danku13@yandex.ru).*
+
+**Инвестиции и партнёрство / Investment & partnership**
+
+Компании и инвесторы: если хотите обсудить коммерческое использование проекта, инвестиции или партнёрство — свяжитесь любым способом: Telegram [@danku13](https://t.me/danku13), [danku13@yandex.ru](mailto:danku13@yandex.ru).
+
+*Companies and investors: to discuss commercial use, investment or partnership — reach out via Telegram [@danku13](https://t.me/danku13) or [danku13@yandex.ru](mailto:danku13@yandex.ru).*
+
+**Что происходит с моим вкладом? / What happens to my contribution?**
+
+Авторство — ваше (git-история сохранит), но по [CLA](CLA.md) владелец получает право лицензировать вклад на любых условиях в будущем. Правила участия — в [CONTRIBUTING.md](CONTRIBUTING.md); механика автоподписания — чекбокс в [шаблоне PR](.github/PULL_REQUEST_TEMPLATE.md) + [cla-check](.github/workflows/cla-check.yml).
+
+*Authorship stays with you (git history preserves it), but per the [CLA](CLA.md) the owner may license your contribution on any terms in the future. Contribution rules — [CONTRIBUTING.md](CONTRIBUTING.md).*
 
 ## Математическое моделирование
 

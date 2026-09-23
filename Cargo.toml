@@ -6,6 +6,9 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
+# Лицензия проекта — GNU AGPLv3 (см. LICENSE); права на реликенcинг вкладов
+# передаются владельцу по CLA.md
+license = "AGPL-3.0-only"
 
 # Единая точка версий зависимостей (SPEC §3)
 [workspace.dependencies]

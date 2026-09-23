@@ -1,0 +1,76 @@
+name: CLA check
+
+# Автопринятие CLA: PR без отметки чекбокса «Я принимаю CLA» не может быть смержен.
+# CLA auto-acceptance: a PR without the "I accept the CLA" checkbox cannot be merged.
+#
+# Безопасность: workflow не делает checkout кода PR — работает только с метаданными
+# (текст описания PR), поэтому pull_request_target здесь безопасен.
+# Security: this workflow does NOT check out PR code — it only inspects the PR
+# description, so pull_request_target is safe here.
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Проверка принятия CLA / Verify CLA acceptance
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+            // Чекбокс «Я принимаю CLA» в шаблоне PR / the "I accept the CLA" checkbox
+            const accepted = /^\s*[-*]\s*\[x\].*CLA/im.test(body);
+            const marker = '<!-- cla-check-bot-comment -->';
+            const repoUrl = 'https://github.com/' + context.repo.owner + '/' + context.repo.repo;
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const prev = comments.data.find(c => c.body && c.body.includes(marker));
+
+            if (accepted) {
+              core.notice('CLA принят / CLA accepted');
+              if (prev) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: prev.id,
+                  body: marker + '\n✅ **CLA принят / CLA accepted** — спасибо! / thank you! ([CLA.md](' + repoUrl + '/blob/main/CLA.md))',
+                });
+              }
+              return;
+            }
+
+            const warn = marker + '\n'
+              + '⚠️ **CLA не принят / CLA not accepted.**\n\n'
+              + '🇷🇺 Отметьте чекбокс «✍️ CLA — обязательно» в описании этого Pull Request (шаблон подставляется автоматически; при необходимости отредактируйте описание PR). Условия соглашения: [CLA.md](' + repoUrl + '/blob/main/CLA.md). До отметки merge заблокирован.\n\n'
+              + '🇬🇧 Tick the “✍️ CLA — mandatory” checkbox in this pull request description (the template is inserted automatically; edit the PR description if needed). Agreement terms: [CLA.md](' + repoUrl + '/blob/main/CLA.md). Until then, the merge is blocked.';
+
+            if (prev) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prev.id,
+                body: warn,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: warn,
+              });
+            }
+
+            core.setFailed('CLA не принят / CLA not accepted: отметьте чекбокс «Я принимаю CLA» в описании PR / tick the “I accept the CLA” checkbox in the PR description.');
