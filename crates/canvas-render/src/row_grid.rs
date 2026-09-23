@@ -18,6 +18,7 @@
 //! идентичный результат, D-11).
 
 use canvas_core::expr::{line_kind, NumiLineKind};
+use canvas_core::Language;
 use canvas_ui::measure::TextMeasurer;
 use canvas_ui::row_guides::{measure_row_cells, RowGuides};
 
@@ -168,16 +169,33 @@ pub(crate) fn block_mode(rows: &[RowCells], threshold: usize) -> bool {
 
 /// D-7 (этап C): текст заголовка блока-ведомости «▸ расчёт · N строк» —
 /// единая точка сборки для рендера и тестов; русская плюрализация
-/// (1 строка / 2–4 строки / 5+ строк).
+/// (1 строка / 2–4 строки / 5+ строк). D-14 (этап D): обёртка над
+/// [`block_header_text_lang`] с языком по умолчанию (RU) — обратная
+/// совместимость тестов/вызовов.
 pub(crate) fn block_header_text(calc_count: usize) -> String {
-    let noun = match (calc_count % 10, calc_count % 100) {
-        (1, 11) => "строк",
-        (1, _) => "строка",
-        (2..=4, 11..=14) => "строк",
-        (2..=4, _) => "строки",
-        _ => "строк",
-    };
-    format!("▸ расчёт · {calc_count} {noun}")
+    block_header_text_lang(calc_count, Language::Ru)
+}
+
+/// D-14 (этап D): локализованный заголовок блока-ведомости. RU —
+/// плюрализация «строка/строки/строк»; EN — «line/lines». Высота строки
+/// от языка не зависит (одна строка — I-2 не страдает).
+pub(crate) fn block_header_text_lang(calc_count: usize, language: Language) -> String {
+    match language {
+        Language::En => {
+            let noun = if calc_count == 1 { "line" } else { "lines" };
+            format!("▸ calc · {calc_count} {noun}")
+        }
+        Language::Ru => {
+            let noun = match (calc_count % 10, calc_count % 100) {
+                (1, 11) => "строк",
+                (1, _) => "строка",
+                (2..=4, 11..=14) => "строк",
+                (2..=4, _) => "строки",
+                _ => "строк",
+            };
+            format!("▸ расчёт · {calc_count} {noun}")
+        }
+    }
 }
 
 /// «было → стало (+Δ)» → («стало», «Δ») — структурный разбор полного
@@ -609,6 +627,14 @@ mod tests {
         assert_eq!(block_header_text(5), "▸ расчёт · 5 строк");
         assert_eq!(block_header_text(1), "▸ расчёт · 1 строка");
         assert_eq!(block_header_text(12), "▸ расчёт · 12 строк");
+        // D-14: EN-локализация — line/lines (высота строки та же — I-2).
+        assert_eq!(block_header_text_lang(1, Language::En), "▸ calc · 1 line");
+        assert_eq!(block_header_text_lang(5, Language::En), "▸ calc · 5 lines");
+        assert_eq!(
+            block_header_text_lang(2, Language::Ru),
+            "▸ расчёт · 2 строки",
+            "RU — явный язык даёт тот же текст"
+        );
     }
 
     /// Разбор полного дельта-формата: корпус whatif_full_delta — «стало» и

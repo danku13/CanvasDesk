@@ -525,6 +525,13 @@ impl Renderer {
         self.text.set_theme(theme);
     }
 
+    /// FR-061 этап D (D-14): язык таблицы тела ноды (текст блока-заголовка
+    /// Н-2 «▸ расчёт · N строк» / «▸ calc · N lines»). Глобальная настройка
+    /// — вызывается приложением при старте и смене языка.
+    pub fn set_table_language(&mut self, language: canvas_core::Language) {
+        self.text.set_table_language(language);
+    }
+
     /// Включить/выключить сетку канваса (настройки).
     pub fn set_grid_visible(&mut self, visible: bool) {
         self.grid_visible = visible;
