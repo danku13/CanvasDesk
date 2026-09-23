@@ -73,6 +73,11 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         BodyQuadKind::QuoteBar => theme.gfm_quote_fill,
         BodyQuadKind::CodeBg => theme.gfm_code_fill,
         BodyQuadKind::WhatIfBg => theme.whatif_fill,
+        // FR-061 этап B (D-5): пунктир лидера — приглушённый (как линии);
+        // зебра — полупрозрачная подложка строки (тот же слот, что у
+        // невыделенных строк списков).
+        BodyQuadKind::Leader => theme.gfm_muted_fill,
+        BodyQuadKind::RowBg => theme.search_row_fill,
     }
 }
 
