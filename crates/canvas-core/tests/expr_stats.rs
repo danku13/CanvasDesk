@@ -328,3 +328,194 @@ fn stats_in_note_lines_shows_result() {
         other => panic!("ожидался результат P95, получено {other:?}"),
     }
 }
+
+// === P3: доверительные интервалы ===
+
+/// Golden: ci_mean(100, 15, 100, 0.95) = z·σ/√n = 1.959964·15/10 = 2.939946.
+#[test]
+fn ci_mean_golden_normal_approx() {
+    let (num, unit) = eval_num("ci_mean(100, 15, 100, 0.95)");
+    assert!(
+        (num - 2.9399459768100813).abs() < 1e-9,
+        "δ = z·σ/√n, получено {num}"
+    );
+    assert_eq!(unit, "", "размерность результата = размерность mean");
+    // Границы ДИ — формула потребителя: mean ± ci_mean(...)
+    let (lo, _) = eval_num("100 - ci_mean(100, 15, 100, 0.95)");
+    let (hi, _) = eval_num("100 + ci_mean(100, 15, 100, 0.95)");
+    assert!((lo - 97.06005402318992).abs() < 1e-9, "получено {lo}");
+    assert!((hi - 102.93994597681008).abs() < 1e-9, "получено {hi}");
+    // conf = 0 → δ = 0 (вырожденный, но валидный)
+    let (num, _) = eval_num("ci_mean(100, 15, 100, 0)");
+    assert!(num.abs() < 1e-12, "получено {num}");
+}
+
+/// ci_mean с размерностями: mean/σ одной размерности → δ в ней же.
+#[test]
+fn ci_mean_with_units() {
+    // rps: z·15/10 при mean=100 rps
+    let (num, unit) = eval_num("ci_mean(100 rps, 15 rps, 100, 0.95)");
+    assert!((num - 2.9399459768100813).abs() < 1e-9, "получено {num}");
+    assert_eq!(unit, "rps");
+    // ms: z·10/5 = 3.919927969080108 ms
+    let (num, unit) = eval_num("ci_mean(50 ms, 10 ms, 25, 0.95)");
+    assert!((num - 3.919927969080108).abs() < 1e-9, "получено {num}");
+    assert_eq!(unit, "ms");
+}
+
+/// Ошибки ci_mean: σ < 0, n = 0, conf ≥ 1, размерности, arity.
+#[test]
+fn ci_mean_domain_errors() {
+    assert!(matches!(
+        eval_err("ci_mean(100, -1, 100, 0.95)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("ci_mean(100, 15, 0, 0.95)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("ci_mean(100, 15, 1.5, 0.95)"),
+        EvalError::BadCall { .. }
+    ));
+    match eval_err("ci_mean(100, 15, 100, 1)") {
+        EvalError::BadCall { msg, .. } => assert!(msg.contains("< 1"), "{msg}"),
+        other => panic!("ожидался BadCall (conf = 1), получено {other:?}"),
+    }
+    assert!(matches!(
+        eval_err("ci_mean(100 sec, 15 rps, 100, 0.95)"),
+        EvalError::UnitMismatch { .. }
+    ));
+    assert!(matches!(
+        eval_err("ci_mean(100, 15, 100)"),
+        EvalError::BadCall { .. }
+    ));
+}
+
+// === P3: детерминированный RNG — сид-воспроизводимость ===
+
+/// Контракт FR-063/M5: один сид → побитово одна выборка (два вызова
+/// normal_sample с одинаковыми аргументами — равные f64, байт-в-байт).
+#[test]
+fn normal_sample_same_seed_is_bit_identical() {
+    let (a, _) = eval_num("normal_sample(0, 1, 1000, 42)");
+    let (b, _) = eval_num("normal_sample(0, 1, 1000, 42)");
+    assert_eq!(a.to_bits(), b.to_bits(), "один сид → побитово одна выборка");
+    // Другой сид — другая выборка (не совпадает с сидом 42)
+    let (c, _) = eval_num("normal_sample(0, 1, 1000, 43)");
+    assert_ne!(a.to_bits(), c.to_bits());
+    // n = 1: выборка из одной точки — всё равно детерминирована сидом
+    let (x1, _) = eval_num("normal_sample(0, 1, 1, 7)");
+    let (x2, _) = eval_num("normal_sample(0, 1, 1, 7)");
+    assert_eq!(x1.to_bits(), x2.to_bits());
+}
+
+/// Статистическая сансити-проверка: среднее большой выборки ≈ μ
+/// (SE = σ/√n; допуск — 5·SE).
+#[test]
+fn normal_sample_mean_converges_to_mu() {
+    let (num, _) = eval_num("normal_sample(10, 2, 100000, 7)");
+    let se = 2.0 / 100000f64.sqrt();
+    assert!(
+        (num - 10.0).abs() < 5.0 * se,
+        "среднее выборки ≈ μ: получено {num}, допуск 5·SE = {}",
+        5.0 * se
+    );
+    // Размерность: μ в ms → результат в ms (юнит μ), число то же, что
+    // для скалярного случая: N(0 ms, 1 ms) и N(0, 1) — одно распределение
+    // в разных юнитах, z-последовательность сида одна (σ-масштаб cancelling)
+    let (a, _) = eval_num("normal_sample(0, 1, 1000, 42)");
+    let (b, unit) = eval_num("normal_sample(0 ms, 1 ms, 1000, 42)");
+    assert_eq!(unit, "ms", "размерность результата = размерность μ");
+    assert!((b - a).abs() < 1e-12, "ms-выборка в юните μ: {b} ms vs {a}");
+}
+
+/// lognormal_sample: воспроизводимость + сходимость к аналитическому
+/// среднему exp(μ + σ²/2) (LogNormal(0, 0.5) → 1.1331…).
+#[test]
+fn lognormal_sample_reproducible_and_converges() {
+    let (a, _) = eval_num("lognormal_sample(0, 0.5, 100000, 11)");
+    let (b, _) = eval_num("lognormal_sample(0, 0.5, 100000, 11)");
+    assert_eq!(a.to_bits(), b.to_bits(), "один сид → побитово одна выборка");
+    let expected = (0.0 + 0.5f64.powi(2) / 2.0).exp(); // exp(μ + σ²/2) = 1.13315
+                                                       // SE LogNormal(0, 0.5) ≈ 0.0019 → допуск 5·SE ≈ 0.01
+    assert!(
+        (a - expected).abs() < 0.01,
+        "среднее выборки ≈ exp(μ+σ²/2) = {expected}, получено {a}"
+    );
+}
+
+/// Ошибки sampling-функций: σ ≤ 0, n вне 1..MAX, seed, размерности, arity.
+#[test]
+fn sampling_domain_errors() {
+    // σ ≤ 0
+    assert!(matches!(
+        eval_err("normal_sample(0, 0, 100, 42)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("normal_sample(0, -1, 100, 42)"),
+        EvalError::BadCall { .. }
+    ));
+    // n вне домена: 0, дробное, выше капа зависания канваса
+    assert!(matches!(
+        eval_err("normal_sample(0, 1, 0, 42)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("normal_sample(0, 1, 1.5, 42)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("normal_sample(0, 1, 1000001, 42)"),
+        EvalError::BadCall { .. }
+    ));
+    // seed: дробный, отрицательный
+    assert!(matches!(
+        eval_err("normal_sample(0, 1, 100, 1.5)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("normal_sample(0, 1, 100, -1)"),
+        EvalError::BadCall { .. }
+    ));
+    // Размерности μ/σ
+    assert!(matches!(
+        eval_err("normal_sample(5 sec, 1 rps, 100, 42)"),
+        EvalError::UnitMismatch { .. }
+    ));
+    // Логнормальное: параметры строго безразмерны
+    assert!(matches!(
+        eval_err("lognormal_sample(0 sec, 0.5, 100, 42)"),
+        EvalError::BadCall { .. }
+    ));
+    // Arity
+    assert!(matches!(
+        eval_err("normal_sample(0, 1, 100)"),
+        EvalError::BadCall { .. }
+    ));
+    assert!(matches!(
+        eval_err("lognormal_sample(0, 0.5, 100, 42, 5)"),
+        EvalError::BadCall { .. }
+    ));
+}
+
+/// Сценарий волны V (потребитель FR-063): what-if агрегат сценария +
+/// ДИ поверх него — вся цепочка живёт в формуле ноды (MCP прозрачен).
+#[test]
+fn wave_v_scenario_ci_on_aggregate() {
+    // Сценарий: n=1000 замеров, среднее 10 ms, σ=2 ms → 95% ДИ ±0.124 ms
+    let lines = canvas_core::expr::eval_lines(
+        "n = 1000\nmean = 10 ms\nsigma = 2 ms\nhalf = ci_mean(mean, sigma, n, 0.95)\n= mean - half\n= mean + half",
+    );
+    let lo = match &lines[4] {
+        Some(canvas_core::expr::ExprOutcome::Ok(v)) => v.num,
+        other => panic!("ожидалась нижняя граница, получено {other:?}"),
+    };
+    let hi = match &lines[5] {
+        Some(canvas_core::expr::ExprOutcome::Ok(v)) => v.num,
+        other => panic!("ожидалась верхняя граница, получено {other:?}"),
+    };
+    assert!((lo - 9.876040993539087).abs() < 1e-9, "получено {lo}");
+    assert!((hi - 10.123959006460913).abs() < 1e-9, "получено {hi}");
+}
