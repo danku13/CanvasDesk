@@ -26,7 +26,8 @@
 //! (ρ ≥ 1) для `mm1`/`mmc` — [`super::EvalError::Overload`] (красная строка
 //! диагностики на карточке; очередь аналитически не ограничена).
 
-use super::{Atom, Dimension, EvalError, Unit, Value};
+use super::args::{bad_arity, count_unit, is_single_dim, percent_unit, scalar_arg, time_unit};
+use super::{Dimension, EvalError, Unit, Value};
 
 /// Максимум серверов в v1 (рекуррентная Erlang-B устойчива, но arity
 /// и числа выше — за пределами домена; решение FR-015 «Открытые вопросы»).
@@ -247,31 +248,6 @@ fn servers_arg(func: &str, value: Option<&Value>) -> Result<usize, EvalError> {
     Ok(value.num as usize)
 }
 
-/// Размерность значения — ровно одна, указанная, со степенью 1.
-fn is_single_dim(value: &Value, dim: &Dimension) -> bool {
-    let dims = value.dims();
-    dims.len() == 1 && dims.get(dim) == Some(&1)
-}
-
-fn percent_unit() -> Unit {
-    Unit::atom(Atom::new(Dimension::Percent, 1, 1.0, "%"))
-}
-
-fn time_unit() -> Unit {
-    Unit::atom(Atom::new(Dimension::Time, 1, 1.0, "sec"))
-}
-
-fn count_unit() -> Unit {
-    Unit::atom(Atom::new(Dimension::Count, 1, 1.0, "req"))
-}
-
-fn bad_arity(func: &str, usage: &str) -> EvalError {
-    EvalError::BadCall {
-        func: func.to_owned(),
-        msg: usage.to_owned(),
-    }
-}
-
 fn bad_zero_service(func: &str) -> EvalError {
     EvalError::BadCall {
         func: func.to_owned(),
@@ -450,18 +426,4 @@ fn cohort_ltv(values: &[Value]) -> Result<Value, EvalError> {
         values[0].unit.clone()
     };
     Ok(Value { num: ltv, unit })
-}
-
-/// Скалярный аргумент: безразмерное значение (Rate/Count/Money/Percent
-/// приведутся к f64 через `unit.scale()`; скаляр — как есть). Любая
-/// размерность принимается: для финансовых формул единицы — только
-/// семантика (USD для денег, доли для процентов).
-fn scalar_arg(func: &str, value: &Value) -> Result<f64, EvalError> {
-    let _ = func; // для диагностики через panic-сообщение в вызывающем коде
-    if value.unit.is_scalar() {
-        return Ok(value.num);
-    }
-    // Не-скаляр приводим к числу с учётом масштаба единицы (для Money
-    // масштаб = 1.0 для $ и usd, поэтому результат — просто value.num).
-    Ok(value.num * value.unit.scale())
 }
