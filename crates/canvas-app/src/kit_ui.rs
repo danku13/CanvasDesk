@@ -30,7 +30,10 @@ use canvas_render::camera::Vec2;
 use canvas_render::cards::CardInstance;
 use canvas_render::text::{measure_font_system, TextAlign, SANS_FAMILY};
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
+// FR-062 (layout v2): примитивы measured/flex/wrap/grid — раскладка витрины
+// использует те же функции, что и потребители (живой образец).
 use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState};
+use canvas_ui::layout::{grid_cells, Child, MeasuredItem, Row, RowPolicy};
 use canvas_ui::measure::TextMeasurer;
 // FR-057 (волна 2 кита): draw-слой и машина состояний — в крейте canvas-ui;
 // этот модуль — тонкий адаптер «items Painter'а → инстансы рендера».
@@ -73,6 +76,12 @@ pub const SECTION_SWITCH: &str = "kit.section.switch";
 pub const SECTION_CARD: &str = "kit.section.card";
 pub const SECTION_LIST: &str = "kit.section.list";
 pub const SECTION_ICONS: &str = "kit.section.icons";
+/// FR-062: секции layout v2 (measured/flex/wrap/grid/focus).
+pub const SECTION_MEASURED: &str = "kit.section.measured";
+pub const SECTION_GROW: &str = "kit.section.grow";
+pub const SECTION_WRAP: &str = "kit.section.wrap";
+pub const SECTION_GRID: &str = "kit.section.grid";
+pub const SECTION_FOCUS: &str = "kit.section.focus";
 
 /// FR-059: демо-модель текстового поля витрины (обычное — текст без фокуса).
 pub const GALLERY_FIELD_TEXT: &str = "50 rps";
@@ -84,6 +93,13 @@ pub const GALLERY_LIST_ROWS: usize = 8;
 pub const GALLERY_LIST_DEMO_OFFSET: f32 = 64.0;
 /// FR-059: высота окна демо-списка (3 строки с зазорами).
 pub const GALLERY_LIST_VIEWPORT_H: f32 = 3.0 * kit::LIST_ROW_H + 2.0 * kit::LIST_ROW_GAP;
+/// FR-062 F-15: чипов в wrap-демо витрины (в слот на 2 строки влезает
+/// не весь ряд — перенос виден на малых ширинах панели).
+pub const GALLERY_WRAP_CHIPS: usize = 8;
+/// FR-062 F-17: слотов в фокус-секции витрины (Tab-кольцо).
+pub const GALLERY_FOCUS_SLOTS: usize = 4;
+/// FR-062 F-17: ширина слота фокус-секции (фикс — подпись не измеряется).
+pub const GALLERY_FOCUS_W: f32 = 72.0;
 
 /// Ряд кнопок одного варианта.
 #[derive(Debug, Clone)]
@@ -154,6 +170,24 @@ pub struct GalleryLayout {
     pub list_scroll: kit::ScrollState,
     /// FR-059: икон-кнопки с глифами v2 (rect, иконка).
     pub icon_glyphs: Vec<(UiRect, kit::Icon)>,
+    /// FR-062 F-13: measured-ряд — чипы, ширины которых TextMeasurer
+    /// посчитал внутри [`Row::lay_out_measured`] (ручной проводки нет).
+    pub measured_chips: Vec<UiRect>,
+    /// FR-062 F-14: flex-ряд — (rect, ключ подписи): fixed + grow ×2 +
+    /// grow ×1 — свободное место распределено пропорционально.
+    pub grow_cells: Vec<(UiRect, &'static str)>,
+    /// FR-062 F-15: wrap-ряд — (rect, индекс чипа): жадная упаковка
+    /// measured-чипов в строки слота ([`RowPolicy::Wrap`]).
+    pub wrap_chips: Vec<(UiRect, usize)>,
+    /// FR-062 F-16: сетка 4×2 равных колонок ([`grid_cells`]).
+    pub grid_cells: Vec<UiRect>,
+    /// FR-062 F-17: кнопки фокус-секции (сдвинуты/отфильтрованы — для
+    /// отрисовки); рамка фокуса — по совпадению с Tab-кольцом App.
+    pub focus_buttons: Vec<UiRect>,
+    /// FR-062 F-17: Tab-порядок фокус-секции в КОНТЕНТ-координатах (без
+    /// сдвига/фильтра) — кольцо [`canvas_ui::keyboard::FocusRing`] в App
+    /// живёт в этих координатах; отрисовка рамки — сдвиг на offset.
+    pub focus_targets: Vec<UiRect>,
 }
 
 /// Перевод ключа витрины (ключи — 'static константы модуля).
@@ -543,7 +577,159 @@ pub fn gallery_layout(
             icon_glyphs.push((rect, icon));
         }
     }
-    y += kit::ICON_BUTTON_SIZE;
+    y += kit::ICON_BUTTON_SIZE + SECTION_GAP;
+
+    // === FR-062: секции layout v2 (F-13…F-17) — после секций компонентов v2 ===
+
+    // --- Measured-ряд (F-13): ширины чипов — TextMeasurer внутри
+    // раскладки ([`Row::lay_out_measured`]); пад чипа — измеренные
+    // пробелы вокруг подписи (рисуется исходная подпись по центру).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_MEASURED));
+    y += 18.0;
+    let measured_chips: Vec<UiRect> = {
+        let l_a = tr(lang, crate::i18n::keys::KIT_MEASURED_A);
+        let l_b = tr(lang, crate::i18n::keys::KIT_MEASURED_B);
+        let l_c = tr(lang, crate::i18n::keys::KIT_MEASURED_C);
+        let t_a = format!(" {l_a} ");
+        let t_b = format!(" {l_b} ");
+        let t_c = format!(" {l_c} ");
+        Row {
+            gap: kit::GAP_CONTROLS,
+            ..Row::default()
+        }
+        .lay_out_measured(
+            UiRect::new(control_x, y, control_w, kit::CHIP_HEIGHT),
+            &[
+                MeasuredItem::Text {
+                    text: &t_a,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                },
+                MeasuredItem::Text {
+                    text: &t_b,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                },
+                MeasuredItem::Text {
+                    text: &t_c,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                },
+            ],
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+        )
+    };
+    y += kit::CHIP_HEIGHT + SECTION_GAP;
+
+    // --- Flex-факторы (F-14): fixed + grow ×2 + grow ×1 — свободное
+    // место слота распределяется пропорционально grow.
+    section_titles.push((UiPoint::new(content.x, y), SECTION_GROW));
+    y += 18.0;
+    let grow_cells: Vec<(UiRect, &'static str)> = Row {
+        gap: kit::GAP_CONTROLS,
+        ..Row::default()
+    }
+    .lay_out(
+        UiRect::new(control_x, y, control_w, kit::BUTTON_HEIGHT),
+        &[
+            Child::fixed(64.0, kit::BUTTON_HEIGHT),
+            Child::flexible(40.0, kit::BUTTON_HEIGHT, 2.0),
+            Child::flexible(40.0, kit::BUTTON_HEIGHT, 1.0),
+        ],
+    )
+    .into_iter()
+    .zip([
+        crate::i18n::keys::KIT_GROW_FIXED,
+        crate::i18n::keys::KIT_GROW_TWO,
+        crate::i18n::keys::KIT_GROW_ONE,
+    ])
+    .collect();
+    y += kit::BUTTON_HEIGHT + SECTION_GAP;
+
+    // --- Wrap (F-15): жадная упаковка measured-чипов в строки слота
+    // (2 строки видимы; переполнение — за нижний край, видно линту).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_WRAP));
+    y += 18.0;
+    let wrap_slot_h = 2.0 * kit::CHIP_HEIGHT + kit::GAP_CONTROLS;
+    let wrap_chips: Vec<(UiRect, usize)> = {
+        // подписи живут в блоке — MeasuredItem заимствует из них (без leak)
+        let padded_labels: Vec<String> = (0..GALLERY_WRAP_CHIPS)
+            .map(|i| {
+                let label = crate::i18n::trf(
+                    lang,
+                    crate::i18n::keys::KIT_WRAP_CHIP,
+                    &[("{n}", &(i + 1).to_string())],
+                );
+                format!(" {label} ")
+            })
+            .collect();
+        let items: Vec<MeasuredItem> = padded_labels
+            .iter()
+            .map(|s| MeasuredItem::Text {
+                text: s,
+                max_w: None,
+                min_w: kit::CHIP_PAD_H * 2.0,
+            })
+            .collect();
+        Row {
+            gap: kit::GAP_CONTROLS,
+            policy: RowPolicy::Wrap,
+            ..Row::default()
+        }
+        .lay_out_measured(
+            UiRect::new(control_x, y, control_w, wrap_slot_h),
+            &items,
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+        )
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| (r, i))
+        .collect()
+    };
+    y += wrap_slot_h + SECTION_GAP;
+
+    // --- Сетка (F-16): 4 равные колонки × 2 строки ([`grid_cells`]).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_GRID));
+    y += 18.0;
+    let grid_cell_h = 32.0;
+    let grid_col_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
+    let grid_cells: Vec<UiRect> = grid_cells(
+        UiRect::new(
+            control_x,
+            y,
+            control_w,
+            2.0 * grid_cell_h + kit::GAP_CONTROLS,
+        ),
+        &[grid_col_w; 4],
+        2,
+        grid_cell_h,
+        UiVec2::new(kit::GAP_CONTROLS, kit::GAP_CONTROLS),
+    );
+    y += 2.0 * grid_cell_h + kit::GAP_CONTROLS + SECTION_GAP;
+
+    // --- Фокус (F-17): 4 слота фиксированной ширины; Tab-кольцо App
+    // живёт в КОНТЕНТ-координатах ([`Self::focus_targets`]), рамка —
+    // при отрисовке по совпадению с кольцом (слот accent).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_FOCUS));
+    y += 18.0;
+    let focus_targets: Vec<UiRect> = (0..GALLERY_FOCUS_SLOTS)
+        .map(|i| {
+            UiRect::new(
+                control_x + i as f32 * (GALLERY_FOCUS_W + kit::GAP_CONTROLS),
+                y,
+                GALLERY_FOCUS_W,
+                kit::BUTTON_HEIGHT,
+            )
+        })
+        .collect();
+    let focus_buttons: Vec<UiRect> = focus_targets.clone();
+    y += kit::BUTTON_HEIGHT;
 
     // Полная высота колонки секций (для скролла)
     let content_h = (y - sections_top).max(0.0);
@@ -691,6 +877,33 @@ pub fn gallery_layout(
         .filter(|(r, _)| visible(r))
         .map(|(r, icon)| (UiRect::new(r.x, r.y - off, r.w, r.h), icon))
         .collect();
+    // FR-062: секции layout v2 — сдвиг + фильтр полной видимости
+    let measured_chips: Vec<UiRect> = measured_chips
+        .into_iter()
+        .filter(visible)
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    let grow_cells: Vec<(UiRect, &'static str)> = grow_cells
+        .into_iter()
+        .filter(|(r, _)| visible(r))
+        .map(|(r, k)| (UiRect::new(r.x, r.y - off, r.w, r.h), k))
+        .collect();
+    let wrap_chips: Vec<(UiRect, usize)> = wrap_chips
+        .into_iter()
+        .filter(|(r, _)| visible(r))
+        .map(|(r, i)| (UiRect::new(r.x, r.y - off, r.w, r.h), i))
+        .collect();
+    let grid_cells: Vec<UiRect> = grid_cells
+        .into_iter()
+        .filter(visible)
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    let focus_buttons: Vec<UiRect> = focus_buttons
+        .into_iter()
+        .filter(visible)
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    // focus_targets НЕ сдвигаются/фильтруются — контент-координаты Tab-кольца
 
     GalleryLayout {
         panel,
@@ -718,6 +931,12 @@ pub fn gallery_layout(
         list_selected,
         list_scroll,
         icon_glyphs,
+        measured_chips,
+        grow_cells,
+        wrap_chips,
+        grid_cells,
+        focus_buttons,
+        focus_targets,
     }
 }
 
@@ -1121,32 +1340,67 @@ mod tests {
             lay0.sections_viewport.h
         );
         // При offset 0 v2-секции за краем — не рисуются (тексты кита
-        // не клипятся по вертикали)
+        // не клипятся по вертикали); Tab-цели (F-17) — БЕЗ фильтра
         assert!(lay0.text_fields.is_empty(), "v2 за краем при offset 0");
+        assert_eq!(
+            lay0.focus_targets.len(),
+            GALLERY_FOCUS_SLOTS,
+            "Tab-цели не фильтруются (контент-координаты)"
+        );
         assert!(!lay0.button_rows.is_empty(), "секции v1 видимы");
         // Окно скролла из хелпера совпадает с раскладкой
         assert_eq!(
             gallery_scroll_viewport([1280.0, 800.0]),
             lay0.sections_viewport
         );
-        // Нижнее положение скролла — секции v2 видимы целиком
+        // Нижнее положение скролла — хвост витрины (секции FR-062)
+        // видим целиком
         let bottom = kit::ScrollState {
             offset: lay0.content_h - lay0.sections_viewport.h,
             content_h: lay0.content_h,
             viewport_h: lay0.sections_viewport.h,
         };
         let lay1 = gallery_layout([1280.0, 800.0], Language::Ru, &bottom, &p, &mut m, &mut fs);
-        assert_eq!(lay1.text_fields.len(), 3, "TextField ×3 состояния");
-        assert!(lay1.text_fields[1].2.caret_x >= 0.0, "второе поле в фокусе");
-        assert_eq!(lay1.switches.len(), 4, "Switch ×4 состояния");
-        assert!(lay1.card.is_some(), "Card построена");
-        assert!(!lay1.list_rows.is_empty(), "строки списка видимы");
+        assert_eq!(lay1.measured_chips.len(), 3, "measured-ряд ×3 (F-13)");
+        assert_eq!(lay1.grow_cells.len(), 3, "flex-ряд ×3 (F-14)");
+        assert_eq!(lay1.wrap_chips.len(), GALLERY_WRAP_CHIPS, "wrap ×8 (F-15)");
+        assert_eq!(lay1.grid_cells.len(), 8, "сетка 4×2 (F-16)");
+        assert_eq!(
+            lay1.focus_buttons.len(),
+            GALLERY_FOCUS_SLOTS,
+            "фокус ×4 (F-17)"
+        );
+        assert!(lay1.button_rows.is_empty(), "секции v1 ушли вверх");
+        // Секции v2 — середина колонки: детерминированный скан смещения
+        // (хвост витрины растёт — якоримся на факт видимости, не на
+        // константу высот)
+        let max_offset = lay0.content_h - lay0.sections_viewport.h;
+        let mut off = 0.0f32;
+        let lay_v2 = loop {
+            let s = kit::ScrollState {
+                offset: off,
+                content_h: lay0.content_h,
+                viewport_h: lay0.sections_viewport.h,
+            };
+            let lay = gallery_layout([1280.0, 800.0], Language::Ru, &s, &p, &mut m, &mut fs);
+            if (lay.text_fields.len() == 3 && lay.icon_glyphs.len() == 4) || off >= max_offset {
+                break lay;
+            }
+            off += 8.0;
+        };
+        assert_eq!(lay_v2.text_fields.len(), 3, "TextField ×3 состояния");
         assert!(
-            lay1.list_scroll.needs_scroll(),
+            lay_v2.text_fields[1].2.caret_x >= 0.0,
+            "второе поле в фокусе"
+        );
+        assert_eq!(lay_v2.switches.len(), 4, "Switch ×4 состояния");
+        assert!(lay_v2.card.is_some(), "Card построена");
+        assert!(!lay_v2.list_rows.is_empty(), "строки списка видимы");
+        assert!(
+            lay_v2.list_scroll.needs_scroll(),
             "демо-список прокручивается"
         );
-        assert_eq!(lay1.icon_glyphs.len(), 4, "Icon-глифы ×4");
-        assert!(lay1.button_rows.is_empty(), "секции v1 ушли вверх");
+        assert_eq!(lay_v2.icon_glyphs.len(), 4, "Icon-глифы ×4");
     }
 
     /// FR-059: скролл витрины — сдвиг секций, шапка на месте; после сдвига

@@ -1955,6 +1955,10 @@ pub struct App {
     /// FR-059: скролл контента витрины кита (секции v2 — контент выше
     /// панели; сброс при открытии).
     kit_gallery_scroll: canvas_ui::kit::ScrollState,
+    /// FR-062 F-17: Tab-кольцо фокус-секции витрины (живёт в
+    /// КОНТЕНТ-координатах раскладки — `GalleryLayout::focus_targets` в kit_ui;
+    /// сброс при открытии витрины).
+    kit_gallery_focus: canvas_ui::keyboard::FocusRing,
     /// FR-059: скроллы колонок панели «Как считается» (кит список+скролл —
     /// замена среза «… ещё N»; живут с stage, сбрасываются при открытии).
     stage_calc_vars_scroll: canvas_ui::kit::ScrollState,
@@ -2186,6 +2190,7 @@ impl App {
             flow_map_open: false,
             flow_map_scroll: canvas_ui::kit::ScrollState::default(),
             kit_gallery_scroll: canvas_ui::kit::ScrollState::default(),
+            kit_gallery_focus: canvas_ui::keyboard::FocusRing::default(),
             stage_calc_vars_scroll: canvas_ui::kit::ScrollState::default(),
             stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),
             group_drop_target: None,
@@ -6294,6 +6299,73 @@ impl App {
             let area = canvas_ui::geometry::UiRect::new(rect.x, rect.y + 1.0, rect.w, rect.h);
             d.label_center(area, canvas_ui::kit::icon_glyph(*icon), style.text, 13.0);
         }
+        // === FR-062: секции layout v2 (F-13…F-17) ===
+        // Measured-ряд (F-13): чипы, ширины которых посчитал TextMeasurer
+        // внутри Row::lay_out_measured (подписи — те же строки, что в замере)
+        {
+            let style = canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &palette);
+            let keys = [
+                crate::i18n::keys::KIT_MEASURED_A,
+                crate::i18n::keys::KIT_MEASURED_B,
+                crate::i18n::keys::KIT_MEASURED_C,
+            ];
+            for (i, rect) in lay.measured_chips.iter().enumerate() {
+                d.control(*rect, &style);
+                if let Some(key) = keys.get(i) {
+                    d.label_center(*rect, &label(key), style.text, 12.0);
+                }
+            }
+        }
+        // Flex-факторы (F-14): fixed + grow ×2 + grow ×1
+        for (rect, key) in &lay.grow_cells {
+            let style = canvas_ui::kit::button_style(
+                canvas_ui::kit::ButtonVariant::Secondary,
+                canvas_ui::kit::KitState::Normal,
+                &palette,
+            );
+            d.control(*rect, &style);
+            d.label_center(*rect, &label(key), style.text, 13.0);
+        }
+        // Wrap (F-15): жадная упаковка measured-чипов в строки слота
+        for (rect, index) in &lay.wrap_chips {
+            let style = canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &palette);
+            d.control(*rect, &style);
+            let text = crate::i18n::trf(
+                lang,
+                crate::i18n::keys::KIT_WRAP_CHIP,
+                &[("{n}", &(index + 1).to_string())],
+            );
+            d.label_center(*rect, &text, style.text, 12.0);
+        }
+        // Сетка (F-16): 4×2 равных колонок (grid_cells)
+        for (i, rect) in lay.grid_cells.iter().enumerate() {
+            d.rect(
+                *rect,
+                palette.control_fill,
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let text = (i + 1).to_string();
+            d.label_center(*rect, &text, palette.text, 11.0);
+        }
+        // Фокус (F-17): Tab-кольцо — рамка accent на текущем слоте
+        // (кольцо в контент-координатах; слоты здесь уже сдвинуты на off)
+        for rect in &lay.focus_buttons {
+            let unshifted =
+                canvas_ui::geometry::UiRect::new(rect.x, rect.y + scroll.offset, rect.w, rect.h);
+            let focused = self.kit_gallery_focus.current() == Some(&unshifted);
+            let style = canvas_ui::kit::control_style_of(
+                palette.control_fill,
+                if focused {
+                    palette.accent
+                } else {
+                    palette.control_border
+                },
+                palette.text,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.control(*rect, &style);
+        }
         // FR-059: бегунок скролла контента витрины (контент выше панели)
         if let Some(knob) = canvas_ui::kit::scroll_bar(lay.sections_viewport, &scroll, &palette) {
             d.rect(knob, palette.control_border, [0.0; 4], 2.0);
@@ -6314,6 +6386,34 @@ impl App {
             })
             .collect();
         out
+    }
+
+    /// FR-062 F-17: Tab/Shift+Tab — переход по фокус-секции витрины кита.
+    /// Кольцо живёт в КОНТЕНТ-координатах раскладки (offset 0 — без сдвига
+    /// и фильтра видимости: секция может быть за окном скролла); при
+    /// перестроении контента (язык/вьюпорт) `retain_order` сохраняет
+    /// позицию, вне диапазона — сброс. Геометрия — та же `gallery_layout`
+    /// (одна раскладка для ввода и отрисовки); вызов — только на нажатие
+    /// Tab (стоимость раскладки — микросекунды).
+    fn gallery_focus_step(&mut self, backwards: bool) {
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return;
+        }
+        let lang = self.settings.language;
+        let zero_scroll = canvas_ui::kit::ScrollState::default();
+        let palette = self.effective_palette().kit_palette();
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay =
+            crate::kit_ui::gallery_layout(viewport, lang, &zero_scroll, &palette, &mut m, &mut fs);
+        self.kit_gallery_focus.retain_order(&lay.focus_targets);
+        if backwards {
+            self.kit_gallery_focus.prev();
+        } else {
+            self.kit_gallery_focus.next();
+        }
+        self.request_redraw();
     }
 
     /// FR-055 U4: клик по витрине — кнопка темы (реальный kit-контрол:
@@ -10004,14 +10104,22 @@ impl App {
             }
             ui_registry::KeyOwner::KitGallery => {
                 // FR-055 U4: витрина кита — модаль; Esc закрывает, прочие
-                // клавиши глотаются (интерактив — только кнопки шапки)
+                // клавиши глотаются (интерактив — только кнопки шапки).
+                // FR-062 F-17: Tab/Shift+Tab — фокус-секция витрины
+                // (FocusRing по слотам demo-ряда; рамка — accent).
                 if self.kit_gallery_open {
-                    if event.state == ElementState::Pressed
-                        && !event.repeat
-                        && event.logical_key == Key::Named(NamedKey::Escape)
-                    {
-                        self.kit_gallery_open = false;
-                        self.request_redraw();
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.kit_gallery_open = false;
+                                self.request_redraw();
+                            }
+                            Key::Named(NamedKey::Tab) => {
+                                let backwards = self.modifiers.shift_key();
+                                self.gallery_focus_step(backwards);
+                            }
+                            _ => {}
+                        }
                     }
                     return true;
                 }
@@ -12365,6 +12473,9 @@ impl App {
                     self.kit_gallery_open = true;
                     // FR-059: контент витрины — с начала (скролл секций)
                     self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
+                    // FR-062 F-17: фокус секции Tab — с начала (кольцо пустое:
+                    // первый Tab ставит фокус на первый слот)
+                    self.kit_gallery_focus.clear();
                     self.request_redraw();
                 }
                 None => {
