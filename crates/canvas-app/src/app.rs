@@ -903,15 +903,18 @@ fn slugify(name: &str) -> String {
 }
 
 /// FR-020: тип параметра по токену единицы (подсказка UI в манифесте).
+/// Правка владельца (2026-09-23): таблица канонизирована (`s`/`secs`/
+/// `hour`/`reqs` убраны), добавлены кириллические синонимы (FR-013).
 fn infer_param_type(unit: Option<&str>) -> canvas_core::templates::ParamType {
     use canvas_core::templates::ParamType;
     match unit {
-        Some("rps") | Some("req/s") => ParamType::Rate,
-        Some("ms") | Some("s") | Some("sec") | Some("secs") | Some("min") | Some("h")
-        | Some("hour") => ParamType::Time,
-        Some("B") | Some("KB") | Some("MB") | Some("GB") => ParamType::Bytes,
+        Some("rps") | Some("req/s") | Some("запр/с") => ParamType::Rate,
+        Some("ms") | Some("sec") | Some("min") | Some("h") | Some("мс") | Some("сек")
+        | Some("мин") | Some("ч") => ParamType::Time,
+        Some("B") | Some("KB") | Some("MB") | Some("GB") | Some("Б") | Some("КБ") | Some("МБ")
+        | Some("ГБ") => ParamType::Bytes,
         Some("%") => ParamType::Percent,
-        Some("req") | Some("reqs") => ParamType::Count,
+        Some("req") | Some("запр") => ParamType::Count,
         _ => ParamType::Scalar,
     }
 }
