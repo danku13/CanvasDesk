@@ -1,6 +1,6 @@
 # FR-057: kit-core — Painter в canvas-ui (без wgpu) + WidgetState/фокус (перевод кита из «контрактов слотов» в виджеты)
 
-- **Статус:** выявлено (постановка волны 2 кита; реализация по приказу владельца)
+- **Статус:** ✅ реализовано (2026-09-23 — Painter/WidgetState/FocusRing в canvas-ui, делегирование KitDraw, 0 правок app.rs)
 - **Тип:** FR
 - **Приоритет:** критично
 - **Владелец:** не назначен (любой агент — права на файлы см. отдельный раздел)
@@ -105,6 +105,7 @@ impl FocusRing {
 - `cargo test -p canvas-ui` + все гейты (fmt/clippy -D warnings/test/wasm/mcp-wasm) зелёные; **0 правок app.rs** (проверка диффом).
 
 ## История изменений
+- `2026-09-23` — агент: **реализовано** (ветка `feature/fr-057-painter-widget-state`): `canvas-ui/src/paint.rs` (новый) — `PaintAlign`/`PaintItem{Rect,Text}`/`Painter` (rect/control/panel/label/items/take_items) по замороженному контракту; `canvas-ui/src/widget.rs` (новый) — `WidgetState` (set_pointer/set_selected/set_disabled/set_focused → `kit_state()` c приоритетом Disabled > Pressed > Hovered > Selected > Normal; `is_focused`; ребро `clicked()`: press внутри → release внутри, press по disabled и press вне виджета клик не дают); `canvas-ui/src/keyboard.rs` — только добавление `FocusRing` (Tab next/prev по кольцу/current/clear; существующие сигнатуры не тронуты); `canvas-ui/src/lib.rs` — только строки `pub mod paint; pub mod widget;`; `canvas-app/src/kit_ui.rs` — `KitDraw` стал тонкой обёрткой над `Painter` (методы/поведение 1:1, конвертация item'а сразу на вызове — поля quads/texts актуальны для app.rs без правок), `cursor_state`/`dropdown_item_state` — делегаты на `WidgetState` (doc-deprecation: атрибут `#[deprecated]` не ставится, пока живы вызовы app.rs — гейт clippy -D warnings). TDD: 22 новых теста (paint 4, widget 12, FocusRing 6) + эквивалентность `kitdraw_delegation_matches_direct_path` и `cursor_state_delegates_match_old_matrix` (0 визуального скачка). Гейты: cargo test -p canvas-ui 83/83, canvas-app --lib 318/318 (вкл. G4-линт), fmt --check, clippy -p canvas-ui -p canvas-app -D warnings, wasm-check canvas-ui (wasm32-unknown-unknown) — зелёные; дифф: 0 правок app.rs/renderer/kit.rs. Полный workspace-test и mcp-wasm — CI (sandbox: диск/линкер); clippy workspace был зелёным до чистки таргета. Доки: ui-kit.md §7.1, prd-0009 §16, ACCEPTANCE.md.
 - `2026-09-23` — агент: создан документ (постановка волны 2 кита, FR-057), статус «выявлено»; контракты Painter/WidgetState/FocusRing заморожены.
 
 ## Источники истины
