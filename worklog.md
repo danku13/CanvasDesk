@@ -4817,3 +4817,22 @@ Stage Summary:
   crates/canvas-app/src/hints_ui.rs, crates/canvas-scene/src/tests.rs,
   crates/canvas-mcp-headless/src/lib.rs, scripts/mcp_wasm_e2e.py,
   docs/change-requests/fr-013-text-node-numi-expr.md.
+
+---
+
+Задача: FR-061 этап A — табличное тело ноды Н-3 (пре-PRD PRD-0004): CR + D-1 части значения + D-3 колоночные направляющие (приказ владельца «оформи CR-061 и начни этап A… важно, чтобы максимально использовался canvas-ui и вся логика и утилитарные функции правильно структурировались архитектурно, чтобы ui стал максимально декларативным», сессия 2026-09-23)
+
+Work Log:
+- CR: docs/change-requests/fr-061-node-tabular-stage-a.md — программа D-1…D-15 (этапы A–E) по дизайну node-tabular-body-analysis.md; контракты заморожены (Value::display_parts, join_parts, DeltaParts/whatif_delta_parts, AutoRowParts, RowGuides::measure/with_right_edge, measure_row_cells); права на файлы разведены (этап A: canvas-core expr/flow + canvas-ui row_guides; этап B: canvas-render row_grid/text; запрет onboarding и зон FR-059/060); index-cr-fr.md — указатель «следующий № FR-062»; README prd-0004 — упоминание табличного дизайна.
+- Архитектурная слоёвка (директива владельца «максимально canvas-ui, декларативный UI»): домен — canvas-core (части значения как данные), чистая layout-математика — canvas-ui (направляющие без canvas-core-зависимости, G7 сохранён: deps canvas-ui = только cosmic-text), исполнение — canvas-render (этап B). Потребители дают данные (тексты ячеек) — каркас считает max-ширины и x-позиции (декларативная двухпроходная раскладка §3.2).
+- D-1 (expr.rs): `Value::display_parts() -> (num, unit)` — то же форматирование (format_num/unit.display()); `join_parts` — единственная сборка «num unit»|«num»; `Display for Value` и `whatif_full_delta` переписаны композициями над частями — байт-паритет тестом-свойством на корпусе (800 rps, ms·req/s, sec, скаляры, 166.667, NaN-ветка числа); `DeltaParts { base, new, delta }` + `whatif_delta_parts` — бейдж «было → стало (+Δ)» этапа B раскладывается по ячейкам без парсинга строки; спец-логика дельты («пп», знак) не тронута (whatif_delta_str — прежняя точка).
+- D-1 (flow.rs): `AutoRowParts { path, num, unit }` + `AutoRow::display_parts` (unmapped → num «—», unit пуст — диагностика Р-3); `AutoRow::display_text` — композиция над частями (инвариант 2 FR-050 — единая точка сборки, байт-паритет тестом).
+- D-3 (canvas-ui/src/row_guides.rs, новый): `RowCellWidths` (естественные ширины ячеек строки); `RowGuides { value_w, unit_w, badge_w, value_x, unit_x }` — `measure` (проход A: max по всем строкам ноды, None — нет таблицы), `with_right_edge(right_edge, gap)` (проход B: края справа налево бейдж→юнит→значение, gap — параметр потребителя, без магических констант), `value_right/unit_right` (точки прижатия текста = направляющие чисел/юнитов); `measure_row_cells` — замер ячеек через TextMeasurer::width_of (реальный шейпинг, кэш; пустой юнит → 0; badge насквозь). Имя RowGuides — дисциплина Ф-14 (snap-guides заняты FR-038). Фундамент kit-Row (этап E, D-15) и панель FR-044.
+- Тесты +9: canvas-core (display_parts_oracle T1, display_parity_property — свойство на корпусе, whatif_delta_parts_oracle — вкл. «пп»/None-согласованность; auto_row_parts_oracle — mapped/unit/scalar/unmapped) — 379; canvas-ui (measure_takes_max T3, with_right_edge арифметика, детерминизм/порядок-свобода, measure_row_cells реальным шрифтом NotoSansDisplay, сквозной oracle) — 125.
+- Гейты ×5 зелёные: fmt; clippy -D warnings; cargo test --workspace (1688 passed, 0 FAILED); wasm_gate; mcp_wasm_gate. Пользовательских изменений нет (ядро без рендера — онбординг/байты UI не тронуты).
+- Слияние: push был отклонён (origin/main ушёл на лицензионный каркас d6fb7df + README ea1a269 параллельного агента) → merge origin/main (AGPLv3/CLA/CONTRIBUTING; чисто, без конфликтов) → перепроверены clippy/fmt/test (0 FAILED) → merge --no-ff в main 77cbb98 → push ea1a269..77cbb98 → CI по merge SHA.
+
+Stage Summary:
+- Этап A FR-061 в main: домен и замер готов для этапа B (row_grid.rs + мультибуферный рендер text.rs), C (Н-3 режимы, Q1–Q4), D (полировка), E (kit-Row на RowGuides + Painter/WidgetState из FR-057/058).
+- Волна 2 (FR-056/057/058) + FR-061-A в main; FR-059/060 других агентов — вне зон FR-061.
+- Открытые вопросы к этапам B/C: Q2 (порог T, дефолт 4), Q3 (источник описания), Q5 (политика бейджей, дефолт авто), Q6 (ширина шаблонных нод, дефолт 360–400); Q9 решён владельцем (направляющие — только DebugOverlay).
