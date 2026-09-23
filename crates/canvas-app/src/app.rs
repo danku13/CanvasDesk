@@ -51,8 +51,8 @@ use crate::ui::{
     plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
     select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
     toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
-    PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION, DUPLICATE_OFFSET, MENU_LABEL_X,
-    MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
+    PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION, DUPLICATE_OFFSET, MENU_ITEM_HEIGHT,
+    MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
 // PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — модель и
@@ -78,6 +78,9 @@ use canvas_core::{
     StageLayout, StageMetrics, Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
 };
 use canvas_ui::geometry::UiPoint;
+// FR-060 (волна 2 кита): геометрия поверхностей волны 2 — модули кита
+// (modal/button_size/list_rows) поверх Painter/WidgetState волны 1
+use canvas_ui::kit;
 // FR-059 (волна 1 кита): draw-слой Painter (canvas-ui, G7 — данные) +
 // машина состояний виджета WidgetState — поверхности волны 1 рисуются
 // через Painter, состояния — через KitState (0 ручных матриц)
@@ -172,6 +175,21 @@ const PAN_PX_PER_LINE: f32 = 40.0;
 /// Ширина клип-бокса тултипа битой ссылки (T10): длинный путь переносится
 /// на границы этой области, экран не покидает.
 const TOOLTIP_WIDTH: f32 = 380.0;
+
+// FR-060: измеренная геометрия диалога подтверждения — пады/кегли
+// прежней раскладки дословно (см. [`App::dialog_measured_in`])
+const DIALOG_PAD_X: f32 = 20.0;
+const DIALOG_TITLE_Y: f32 = 16.0;
+const DIALOG_BODY_Y: f32 = 46.0;
+const DIALOG_BTN_BOTTOM: f32 = 16.0;
+const DIALOG_BTN_H: f32 = kit::BUTTON_HEIGHT;
+const DIALOG_BTN_GAP: f32 = 16.0;
+const DIALOG_TITLE_FS: f32 = 16.0;
+const DIALOG_BODY_FS: f32 = 13.0;
+const DIALOG_BTN_FS: f32 = 14.0;
+const DIALOG_MIN_W: f32 = 280.0;
+const DIALOG_MAX_W: f32 = 440.0;
+const DIALOG_VIEWPORT_MARGIN: f32 = 40.0;
 
 /// FR-050 Н2 (этап C): высота строки заголовка меню выбора (screen-space,
 /// логические px) — пункты сдвинуты ниже заголовка (клик по заголовку —
@@ -7903,21 +7921,45 @@ impl App {
             params: [6.0, 0.0, 0.0, 0.0],
         });
         // Hover-подсветка пункта (аффорданс — как строки палитры/поиска:
-        // интерактивный элемент отвечает на курсор)
+        // интерактивный элемент отвечает на курсор).
+        // FR-060: пункты — `kit::list_rows` (однородные строки
+        // MENU_ITEM_HEIGHT с зазором 0 — прежняя стопка menu_item_rect
+        // дословно), состояние — WidgetState (Hovered), отрисовка —
+        // Painter (панель с тенью — квад: флаг params.w вне контракта
+        // PaintItem); hit-тест menu_item_at_for — прежний (lib.rs).
         let hovered_item = menu_item_at_for(menu.origin, self.cursor, items.len());
-        for (i, item) in items.iter().enumerate() {
-            let rect = menu_item_rect(menu.origin, i);
-            if hovered_item == Some(i) {
-                instances.push(CardInstance {
-                    pos: [rect[0], rect[1]],
-                    size: [rect[2], rect[3]],
-                    fill: [0.24, 0.30, 0.42, 0.9],
-                    border: [0.0; 4],
-                    params: [4.0, 0.0, 0.0, 1.0],
-                });
+        let kit_palette = palette.kit_palette();
+        let mut d = Painter::new();
+        let rows_area = canvas_ui::geometry::UiRect::new(
+            x + MENU_PADDING,
+            y + MENU_PADDING,
+            (w - MENU_PADDING * 2.0).max(0.0),
+            (h - MENU_PADDING * 2.0).max(0.0),
+        );
+        let rows_scroll = canvas_ui::kit::ScrollState {
+            offset: 0.0,
+            content_h: items.len() as f32 * MENU_ITEM_HEIGHT,
+            viewport_h: rows_area.h,
+        };
+        for (i, rect) in
+            canvas_ui::kit::list_rows(rows_area, &rows_scroll, MENU_ITEM_HEIGHT, 0.0, items.len())
+        {
+            let Some(item) = items.get(i) else {
+                continue;
+            };
+            let mut state = WidgetState::default();
+            state.set_pointer(hovered_item == Some(i), false);
+            if state.kit_state() == kit::KitState::Hovered {
+                d.rect(rect, [0.24, 0.30, 0.42, 0.9], [0.0; 4], 4.0);
             }
-            texts.push(OwnedScreenText {
-                text: canvas_menu_label(
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rect.x + MENU_LABEL_X,
+                    rect.y + 5.0,
+                    (rect.w - MENU_LABEL_X).max(0.0),
+                    MENU_ITEM_HEIGHT,
+                ),
+                &canvas_menu_label(
                     *item,
                     self.settings.focus_mode,
                     self.hotkeys_open,
@@ -7926,12 +7968,10 @@ impl App {
                     self.scene.whatif_active,
                     self.settings.language,
                 ),
-                origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
-                width: rect[2] - MENU_LABEL_X,
-                font_size: 14.0,
-                color: palette.title,
-                align: TextAlign::Left,
-            });
+                kit_palette.text_title,
+                14.0,
+                PaintAlign::Left,
+            );
         }
         // M5 (T20-F): колонка подменю «Виджеты ▸» — справа от меню
         if let Some(submenu) = &menu.submenu {
@@ -7956,29 +7996,51 @@ impl App {
                     align: TextAlign::Left,
                 });
             } else {
+                // FR-060: строки подменю — `kit::list_rows` (те же контракты,
+                // что у главного меню: стопка menu_item_rect дословно)
                 let hovered_sub = submenu_item_at(submenu, self.cursor);
-                for (i, entry) in submenu.entries.iter().enumerate() {
-                    let rect = menu_item_rect(submenu.origin, i);
-                    if hovered_sub == Some(i) {
-                        instances.push(CardInstance {
-                            pos: [rect[0], rect[1]],
-                            size: [rect[2], rect[3]],
-                            fill: [0.24, 0.30, 0.42, 0.9],
-                            border: [0.0; 4],
-                            params: [4.0, 0.0, 0.0, 1.0],
-                        });
+                let sub_area = canvas_ui::geometry::UiRect::new(
+                    sx + MENU_PADDING,
+                    sy + MENU_PADDING,
+                    (sw - MENU_PADDING * 2.0).max(0.0),
+                    (sh - MENU_PADDING * 2.0).max(0.0),
+                );
+                let sub_scroll = canvas_ui::kit::ScrollState {
+                    offset: 0.0,
+                    content_h: submenu.entries.len() as f32 * MENU_ITEM_HEIGHT,
+                    viewport_h: sub_area.h,
+                };
+                for (i, rect) in canvas_ui::kit::list_rows(
+                    sub_area,
+                    &sub_scroll,
+                    MENU_ITEM_HEIGHT,
+                    0.0,
+                    submenu.entries.len(),
+                ) {
+                    let Some(entry) = submenu.entries.get(i) else {
+                        continue;
+                    };
+                    let mut state = WidgetState::default();
+                    state.set_pointer(hovered_sub == Some(i), false);
+                    if state.kit_state() == kit::KitState::Hovered {
+                        d.rect(rect, [0.24, 0.30, 0.42, 0.9], [0.0; 4], 4.0);
                     }
-                    texts.push(OwnedScreenText {
-                        text: entry.label.clone(),
-                        origin: [rect[0] + MENU_LABEL_X, rect[1] + 5.0],
-                        width: rect[2] - MENU_LABEL_X,
-                        font_size: 13.0,
-                        color: palette.title,
-                        align: TextAlign::Left,
-                    });
+                    d.label(
+                        canvas_ui::geometry::UiRect::new(
+                            rect.x + MENU_LABEL_X,
+                            rect.y + 5.0,
+                            (rect.w - MENU_LABEL_X).max(0.0),
+                            MENU_ITEM_HEIGHT,
+                        ),
+                        &entry.label,
+                        kit_palette.text_title,
+                        13.0,
+                        PaintAlign::Left,
+                    );
                 }
             }
         }
+        paint_items_to_band(d.take_items(), &mut instances, &mut texts);
         (instances, texts)
     }
 
@@ -8535,29 +8597,39 @@ impl App {
         let tint = color_to_rgba(palette.icon);
         let title = palette.title;
         let accent = [0.18, 0.29, 0.48, 0.95];
+        // FR-060 (волна 2 кита): заливки/подписи — Painter, состояния —
+        // WidgetState (приоритет Hovered > Selected — матрица кита даёт
+        // прежнюю раскраску строк дословно). Векторные иконки-квады
+        // (icon_quads — SDF-композиции с параметрами вне контракта
+        // PaintItem) остаются квадами и добираются после заливок:
+        // пересечений у них нет — только своя кнопка/строка (0 скачка)
+        let mut d = Painter::new();
+        let mut icon_draws: Vec<(crate::palette::PaletteIcon, [f32; 4])> = Vec::new();
         // Фон бара
-        instances.push(CardInstance {
-            pos: [lay.bar[0], lay.bar[1]],
-            size: [lay.bar[2], lay.bar[3]],
-            fill: palette.menu_fill,
-            border: [0.22, 0.24, 0.30, 0.9],
-            params: [8.0, 0.0, 0.0, 1.0],
-        });
+        d.rect(
+            canvas_ui::geometry::UiRect::new(lay.bar[0], lay.bar[1], lay.bar[2], lay.bar[3]),
+            palette.menu_fill,
+            [0.22, 0.24, 0.30, 0.9],
+            8.0,
+        );
         for (i, group) in groups.iter().enumerate() {
             let button = lay.groups[i].button;
             let hovered = open == Some(i);
-            // Кнопка группы: подсветка при наведении (выпадашка открыта)
-            instances.push(CardInstance {
-                pos: [button[0], button[1]],
-                size: [button[2], button[3]],
-                fill: if hovered {
+            // Кнопка группы: подсветка при наведении (выпадашка открыта) —
+            // WidgetState (Hovered)
+            let mut btn_state = WidgetState::default();
+            btn_state.set_pointer(hovered, false);
+            let btn_hovered = btn_state.kit_state() == kit::KitState::Hovered;
+            d.rect(
+                canvas_ui::geometry::UiRect::new(button[0], button[1], button[2], button[3]),
+                if btn_hovered {
                     [0.24, 0.30, 0.42, 1.0]
                 } else {
                     [0.17, 0.18, 0.22, 1.0]
                 },
-                border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 1.0],
-            });
+                [0.0; 4],
+                6.0,
+            );
             // Иконка группы (текстовый глиф — ScreenText'ом по центру)
             let icon_rect = [
                 button[0] + (button[2] - PAL_ICON) / 2.0,
@@ -8565,54 +8637,64 @@ impl App {
                 PAL_ICON,
                 PAL_ICON,
             ];
-            instances.extend(icon_quads(group.icon, icon_rect, tint, &palette));
+            icon_draws.push((group.icon, icon_rect));
             if let Some(glyph) = icon_text(group.icon) {
-                texts.push(OwnedScreenText {
-                    text: glyph.to_owned(),
-                    origin: [icon_rect[0], icon_rect[1] + 2.0],
-                    width: icon_rect[2],
-                    font_size: 12.0,
-                    color: title,
-                    align: TextAlign::Center,
-                });
+                d.label(
+                    canvas_ui::geometry::UiRect::new(
+                        icon_rect[0],
+                        icon_rect[1] + 2.0,
+                        icon_rect[2],
+                        16.0,
+                    ),
+                    glyph,
+                    color_to_rgba(title),
+                    12.0,
+                    PaintAlign::Center,
+                );
             }
             // Подпись группы под кнопкой
-            texts.push(OwnedScreenText {
-                text: group.label.clone(),
-                origin: lay.groups[i].caption,
-                width: button[2],
-                font_size: 10.0,
-                color: palette.body,
-                align: TextAlign::Center,
-            });
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    lay.groups[i].caption[0],
+                    lay.groups[i].caption[1],
+                    button[2],
+                    12.0,
+                ),
+                &group.label,
+                color_to_rgba(palette.body),
+                10.0,
+                PaintAlign::Center,
+            );
             // Открытая колонка (hover): фон + строки
             if hovered {
                 let drop = lay.groups[i].dropdown;
-                instances.push(CardInstance {
-                    pos: [drop[0], drop[1]],
-                    size: [drop[2], drop[3]],
-                    fill: palette.menu_fill,
-                    border: [0.22, 0.24, 0.30, 0.9],
-                    params: [6.0, 0.0, 0.0, 1.0],
-                });
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(drop[0], drop[1], drop[2], drop[3]),
+                    palette.menu_fill,
+                    [0.22, 0.24, 0.30, 0.9],
+                    6.0,
+                );
                 for (k, entry) in group.entries.iter().enumerate() {
                     let row = lay.groups[i].rows[k];
                     let row_hovered = point_in_rect(row, self.cursor);
-                    let fill = if row_hovered {
-                        accent
-                    } else if entry.current {
-                        [0.18, 0.29, 0.48, 0.45]
-                    } else {
-                        [0.0; 4]
+                    // Состояние строки — WidgetState: Hovered (курсор)
+                    // сильнее Selected (текущее значение) — прежняя
+                    // раскраска accent/dim-accent дословно
+                    let mut row_state = WidgetState::default();
+                    row_state.set_pointer(row_hovered, false);
+                    row_state.set_selected(entry.current);
+                    let fill = match row_state.kit_state() {
+                        kit::KitState::Hovered | kit::KitState::Pressed => accent,
+                        kit::KitState::Selected => [0.18, 0.29, 0.48, 0.45],
+                        _ => [0.0; 4],
                     };
                     if fill[3] > 0.0 {
-                        instances.push(CardInstance {
-                            pos: [row[0], row[1]],
-                            size: [row[2], row[3]],
+                        d.rect(
+                            canvas_ui::geometry::UiRect::new(row[0], row[1], row[2], row[3]),
                             fill,
-                            border: [0.0; 4],
-                            params: [4.0, 0.0, 0.0, 1.0],
-                        });
+                            [0.0; 4],
+                            4.0,
+                        );
                     }
                     if let Some(icon) = entry.icon {
                         let icon_rect = [
@@ -8621,38 +8703,54 @@ impl App {
                             PAL_ICON,
                             PAL_ICON,
                         ];
-                        instances.extend(icon_quads(icon, icon_rect, tint, &palette));
+                        icon_draws.push((icon, icon_rect));
                         if let Some(glyph) = icon_text(icon) {
-                            texts.push(OwnedScreenText {
-                                text: glyph.to_owned(),
-                                origin: [icon_rect[0], icon_rect[1] + 2.0],
-                                width: icon_rect[2],
-                                font_size: 13.0,
-                                color: title,
-                                align: TextAlign::Center,
-                            });
+                            d.label(
+                                canvas_ui::geometry::UiRect::new(
+                                    icon_rect[0],
+                                    icon_rect[1] + 2.0,
+                                    icon_rect[2],
+                                    17.0,
+                                ),
+                                glyph,
+                                color_to_rgba(title),
+                                13.0,
+                                PaintAlign::Center,
+                            );
                         }
-                        texts.push(OwnedScreenText {
-                            text: entry.label.clone(),
-                            origin: [row[0] + 28.0, row[1] + 5.0],
-                            width: row[2] - 32.0,
-                            font_size: 13.0,
-                            color: title,
-                            align: TextAlign::Left,
-                        });
+                        d.label(
+                            canvas_ui::geometry::UiRect::new(
+                                row[0] + 28.0,
+                                row[1] + 5.0,
+                                (row[2] - 32.0).max(0.0),
+                                17.0,
+                            ),
+                            &entry.label,
+                            color_to_rgba(title),
+                            13.0,
+                            PaintAlign::Left,
+                        );
                     } else {
                         // Строка без иконки — текст по всей ширине
-                        texts.push(OwnedScreenText {
-                            text: entry.label.clone(),
-                            origin: [row[0] + 8.0, row[1] + 5.0],
-                            width: row[2] - 12.0,
-                            font_size: 13.0,
-                            color: title,
-                            align: TextAlign::Left,
-                        });
+                        d.label(
+                            canvas_ui::geometry::UiRect::new(
+                                row[0] + 8.0,
+                                row[1] + 5.0,
+                                (row[2] - 12.0).max(0.0),
+                                17.0,
+                            ),
+                            &entry.label,
+                            color_to_rgba(title),
+                            13.0,
+                            PaintAlign::Left,
+                        );
                     }
                 }
             }
+        }
+        paint_items_to_band(d.take_items(), &mut instances, &mut texts);
+        for (icon, rect) in icon_draws {
+            instances.extend(icon_quads(icon, rect, tint, &palette));
         }
         (instances, texts)
     }
@@ -9578,12 +9676,33 @@ impl App {
                 color: palette.title,
                 align: TextAlign::Left,
             });
-            for (i, (key, description)) in crate::ui::HOTKEYS.iter().enumerate() {
-                let y = panel[1] + pad + header_h + i as f32 * row_h + 3.0;
-                // Строки ниже кромки панели (кламп высоты) не рисуем
-                if y + row_h > panel[1] + panel[3] - 2.0 {
-                    break;
-                }
+            // FR-060: строки — `kit::list_rows` (однородные HOTKEYS_ROW_HEIGHT
+            // с зазором 0; прежняя стопка «pad + header + i·row_h» дословно).
+            // Прежний break-кламп «строки ниже кромки −2 не рисуем» (G5 —
+            // молчаливый срез частичных строк) заменён окном кита: частичные
+            // строки у кромки клипует scissor-полоса (FR-056), срезов нет.
+            let rows_area = canvas_ui::geometry::UiRect::new(
+                key_x,
+                panel[1] + pad + header_h,
+                (panel[2] - pad * 2.0).max(0.0),
+                (panel[1] + panel[3] - 2.0 - (panel[1] + pad + header_h)).max(0.0),
+            );
+            let hk_scroll = canvas_ui::kit::ScrollState {
+                offset: 0.0,
+                content_h: crate::ui::HOTKEYS.len() as f32 * row_h,
+                viewport_h: rows_area.h,
+            };
+            for (i, rect) in canvas_ui::kit::list_rows(
+                rows_area,
+                &hk_scroll,
+                row_h,
+                0.0,
+                crate::ui::HOTKEYS.len(),
+            ) {
+                let Some((key, description)) = crate::ui::HOTKEYS.get(i) else {
+                    continue;
+                };
+                let y = rect.y + 3.0;
                 texts.push(OwnedScreenText {
                     text: self.tr(key).to_owned(),
                     origin: [key_x, y],
@@ -13770,308 +13889,365 @@ impl App {
         let Some(review) = self.autolink_review.as_ref() else {
             return (quads, texts);
         };
+        // FR-060 (волна 2 кита): отрисовка — Painter (данные canvas-ui, G7)
+        // + WidgetState (состояния строк/кнопок); конверсия в полосу кадра —
+        // paint_items_to_band (те же screen-квады/тексты — 0 визуального
+        // скачка: та же последовательность квадов/текстов и те же слоты)
+        let mut d = Painter::new();
         let palette = ThemeColors::from_theme(self.settings.theme);
-        let camera = &self.camera;
         let win = autolink_ui::dialog_rect(viewport);
         // Затемнение фона (§6.5: диалог модален поверх канваса)
-        quads.push(screen_rect_quad(
-            camera,
-            viewport,
-            [0.0, 0.0, viewport[0], viewport[1]],
+        d.rect(
+            canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
             palette.stage_dim,
             [0.0; 4],
             0.0,
-        ));
+        );
         // Окно (стиль модалок: радиус 14)
-        quads.push(screen_rect_quad(
-            camera,
-            viewport,
-            win,
+        d.rect(
+            canvas_ui::geometry::UiRect::new(win[0], win[1], win[2], win[3]),
             palette.menu_fill,
             palette.palette_border,
             14.0,
-        ));
+        );
         let (accepted, rejected, pending) = review.counts();
         // Шапка: заголовок + мета + ✕
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::AUTOLINK_TITLE).to_owned(),
-            origin: [win[0] + 16.0, win[1] + 10.0],
-            width: (win[2] - 120.0).max(120.0),
-            font_size: 15.0,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
-        texts.push(OwnedScreenText {
-            text: self.trf(
+        d.label(
+            canvas_ui::geometry::UiRect::new(
+                win[0] + 16.0,
+                win[1] + 10.0,
+                (win[2] - 120.0).max(120.0),
+                20.0,
+            ),
+            self.tr(keys::AUTOLINK_TITLE),
+            color_to_rgba(palette.title),
+            15.0,
+            PaintAlign::Left,
+        );
+        d.label(
+            canvas_ui::geometry::UiRect::new(
+                win[0] + 16.0,
+                win[1] + 32.0,
+                (win[2] - 120.0).max(120.0),
+                15.0,
+            ),
+            &self.trf(
                 keys::AUTOLINK_META,
                 &[("{n}", review.items.len().to_string().as_str())],
             ),
-            origin: [win[0] + 16.0, win[1] + 32.0],
-            width: (win[2] - 120.0).max(120.0),
-            font_size: 11.0,
-            color: palette.quote,
-            align: TextAlign::Left,
-        });
+            color_to_rgba(palette.quote),
+            11.0,
+            PaintAlign::Left,
+        );
         let close = autolink_ui::close_rect(win);
-        quads.push(screen_rect_quad(
-            camera,
-            viewport,
-            close,
+        d.rect(
+            canvas_ui::geometry::UiRect::new(close[0], close[1], close[2], close[3]),
             [0.0; 4],
             palette.palette_border,
             7.0,
-        ));
-        texts.push(OwnedScreenText {
-            text: "×".to_owned(),
-            origin: [close[0], close[1] + 2.0],
-            width: close[2],
-            font_size: 14.0,
-            color: palette.body,
-            align: TextAlign::Center,
-        });
+        );
+        d.label(
+            canvas_ui::geometry::UiRect::new(close[0], close[1] + 2.0, close[2], 18.0),
+            "×",
+            color_to_rgba(palette.body),
+            14.0,
+            PaintAlign::Center,
+        );
         // Баннер отклонённых (У8): виден, пока есть отклонённые
         if rejected > 0 {
             let banner = autolink_ui::banner_rect(win);
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                banner,
+            d.rect(
+                canvas_ui::geometry::UiRect::new(banner[0], banner[1], banner[2], banner[3]),
                 [0.0; 4],
                 color_to_rgba(palette.error),
                 8.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: self.trf(
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    banner[0] + 10.0,
+                    banner[1] + 6.0,
+                    (banner[2] - autolink_ui::RESTORE_W - 30.0).max(0.0),
+                    16.0,
+                ),
+                &self.trf(
                     keys::AUTOLINK_BANNER,
                     &[("{n}", rejected.to_string().as_str())],
                 ),
-                origin: [banner[0] + 10.0, banner[1] + 6.0],
-                width: banner[2] - autolink_ui::RESTORE_W - 30.0,
-                font_size: 11.5,
-                color: palette.error,
-                align: TextAlign::Left,
-            });
+                color_to_rgba(palette.error),
+                11.5,
+                PaintAlign::Left,
+            );
             let restore = autolink_ui::restore_rect(banner);
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                restore,
+            d.rect(
+                canvas_ui::geometry::UiRect::new(restore[0], restore[1], restore[2], restore[3]),
                 [0.0; 4],
                 palette.palette_border,
                 6.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::AUTOLINK_RESTORE_ALL).to_owned(),
-                origin: [restore[0], restore[1] + 4.0],
-                width: restore[2],
-                font_size: 11.0,
-                color: palette.body,
-                align: TextAlign::Center,
-            });
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(restore[0], restore[1] + 4.0, restore[2], 16.0),
+                self.tr(keys::AUTOLINK_RESTORE_ALL),
+                color_to_rgba(palette.body),
+                11.0,
+                PaintAlign::Center,
+            );
         }
         // Строки (группы «исток → приёмник», сортировка по имени — У7)
         let layout = autolink_ui::rows_layout(review, win, self.autolink_scroll);
         for (group_idx, head) in &layout.group_heads {
             let collapsed = review.collapsed.contains(group_idx);
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                *head,
+            d.rect(
+                canvas_ui::geometry::UiRect::new(head[0], head[1], head[2], head[3]),
                 palette.palette_row_fill,
                 palette.palette_border,
                 6.0,
-            ));
+            );
             let group = &review.groups[*group_idx];
-            texts.push(OwnedScreenText {
-                text: format!(
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    head[0] + 10.0,
+                    head[1] + 8.0,
+                    (head[2] - 20.0).max(0.0),
+                    16.0,
+                ),
+                &format!(
                     "{}  →  {} · {}{}",
                     group.from,
                     group.to,
                     group.items.len(),
                     if collapsed { " ▸" } else { " ▾" }
                 ),
-                origin: [head[0] + 10.0, head[1] + 8.0],
-                width: head[2] - 20.0,
-                font_size: 12.0,
-                color: palette.title,
-                align: TextAlign::Left,
-            });
+                color_to_rgba(palette.title),
+                12.0,
+                PaintAlign::Left,
+            );
         }
         for (item_idx, rects) in &layout.rows {
             let item = &review.items[*item_idx];
             // Принятое — акцентная рамка (будет создано); отклонённое —
-            // приглушённый текст; нерешённое — обычная карточка
-            let (row_fill, row_border) = match item.state {
-                ItemState::Accepted => (palette.card_fill, palette.accent),
-                _ => (palette.card_fill, palette.palette_border),
+            // приглушённый текст; нерешённое — обычная карточка.
+            // FR-060: состояние строки — WidgetState → KitState::Selected
+            // (рамка акцентом), деградация отклонённого — текст quote
+            let mut row_state = WidgetState::default();
+            row_state.set_selected(item.state == ItemState::Accepted);
+            let selected = row_state.kit_state() == kit::KitState::Selected;
+            let row_border = if selected {
+                palette.accent
+            } else {
+                palette.palette_border
             };
-            quads.push(screen_rect_quad(
-                camera, viewport, rects.row, row_fill, row_border, 6.0,
-            ));
+            d.rect(
+                canvas_ui::geometry::UiRect::new(
+                    rects.row[0],
+                    rects.row[1],
+                    rects.row[2],
+                    rects.row[3],
+                ),
+                palette.card_fill,
+                row_border,
+                6.0,
+            );
             // «имя → приёмник (параметр)» + процент/единицы
             let param_label = self.trf(
                 keys::AUTOLINK_PARAM,
                 &[("{name}", item.proposal.param.as_str())],
             );
-            texts.push(OwnedScreenText {
-                text: format!(
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rects.row[0] + 10.0,
+                    rects.row[1] + 8.0,
+                    (rects.pct[0] - rects.row[0] - 20.0).max(0.0),
+                    16.0,
+                ),
+                &format!(
                     "{} → {} ({})",
                     item.proposal.param, item.to_title, param_label
                 ),
-                origin: [rects.row[0] + 10.0, rects.row[1] + 8.0],
-                width: rects.pct[0] - rects.row[0] - 20.0,
-                font_size: 11.5,
-                color: if item.state == ItemState::Rejected {
+                color_to_rgba(if item.state == ItemState::Rejected {
                     palette.quote
                 } else {
                     palette.body
-                },
-                align: TextAlign::Left,
-            });
+                }),
+                11.5,
+                PaintAlign::Left,
+            );
             let pct_text = match item.proposal.unit_match {
                 Some(true) => "100% ✓".to_owned(),
                 Some(false) => "100% ✗".to_owned(),
                 None => format!("{}%", item.proposal.percent),
             };
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                rects.pct,
+            d.rect(
+                canvas_ui::geometry::UiRect::new(
+                    rects.pct[0],
+                    rects.pct[1],
+                    rects.pct[2],
+                    rects.pct[3],
+                ),
                 palette.palette_chip_fill,
                 [0.0; 4],
                 9.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: pct_text,
-                origin: [rects.pct[0], rects.pct[1] + 3.0],
-                width: rects.pct[2],
-                font_size: 10.0,
-                color: palette.body,
-                align: TextAlign::Center,
-            });
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rects.pct[0],
+                    rects.pct[1] + 3.0,
+                    rects.pct[2],
+                    14.0,
+                ),
+                &pct_text,
+                color_to_rgba(palette.body),
+                10.0,
+                PaintAlign::Center,
+            );
+            // Кнопки строки — WidgetState::Selected у активной
             let accept_on = item.state == ItemState::Accepted;
             let reject_on = item.state == ItemState::Rejected;
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                rects.accept,
-                if accept_on { palette.accent } else { [0.0; 4] },
-                if accept_on {
+            let mut accept_state = WidgetState::default();
+            accept_state.set_selected(accept_on);
+            let accept_on_kit = accept_state.kit_state() == kit::KitState::Selected;
+            d.rect(
+                canvas_ui::geometry::UiRect::new(
+                    rects.accept[0],
+                    rects.accept[1],
+                    rects.accept[2],
+                    rects.accept[3],
+                ),
+                if accept_on_kit {
+                    palette.accent
+                } else {
+                    [0.0; 4]
+                },
+                if accept_on_kit {
                     palette.accent
                 } else {
                     palette.palette_border
                 },
                 6.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::AUTOLINK_ACCEPT).to_owned(),
-                origin: [rects.accept[0], rects.accept[1] + 3.0],
-                width: rects.accept[2],
-                font_size: 10.5,
-                color: if accept_on {
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rects.accept[0],
+                    rects.accept[1] + 3.0,
+                    rects.accept[2],
+                    15.0,
+                ),
+                self.tr(keys::AUTOLINK_ACCEPT),
+                color_to_rgba(if accept_on_kit {
                     Color::rgb(255, 255, 255)
                 } else {
                     palette.body
-                },
-                align: TextAlign::Center,
-            });
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                rects.reject,
-                if reject_on {
+                }),
+                10.5,
+                PaintAlign::Center,
+            );
+            let mut reject_state = WidgetState::default();
+            reject_state.set_selected(reject_on);
+            let reject_on_kit = reject_state.kit_state() == kit::KitState::Selected;
+            d.rect(
+                canvas_ui::geometry::UiRect::new(
+                    rects.reject[0],
+                    rects.reject[1],
+                    rects.reject[2],
+                    rects.reject[3],
+                ),
+                if reject_on_kit {
                     color_to_rgba(palette.error)
                 } else {
                     [0.0; 4]
                 },
-                if reject_on {
+                if reject_on_kit {
                     color_to_rgba(palette.error)
                 } else {
                     palette.palette_border
                 },
                 6.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::AUTOLINK_REJECT).to_owned(),
-                origin: [rects.reject[0], rects.reject[1] + 3.0],
-                width: rects.reject[2],
-                font_size: 10.5,
-                color: if reject_on {
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rects.reject[0],
+                    rects.reject[1] + 3.0,
+                    rects.reject[2],
+                    15.0,
+                ),
+                self.tr(keys::AUTOLINK_REJECT),
+                color_to_rgba(if reject_on_kit {
                     Color::rgb(255, 255, 255)
                 } else {
                     palette.body
-                },
-                align: TextAlign::Center,
-            });
+                }),
+                10.5,
+                PaintAlign::Center,
+            );
         }
         // Разделитель футера + подсказка + кнопки
         let footer = autolink_ui::footer_rect(win);
-        quads.push(screen_rect_quad(
-            camera,
-            viewport,
-            [footer[0], footer[1], footer[2], 1.0],
+        d.rect(
+            canvas_ui::geometry::UiRect::new(footer[0], footer[1], footer[2], 1.0),
             palette.palette_border,
             [0.0; 4],
             0.0,
-        ));
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::AUTOLINK_HINT).to_owned(),
-            origin: [footer[0] + 16.0, footer[1] + 10.0],
-            width: (footer[2] - 3.0 * autolink_ui::FOOT_BTN_W - 40.0).max(120.0),
-            font_size: 10.5,
-            color: palette.quote,
-            align: TextAlign::Left,
-        });
+        );
+        d.label(
+            canvas_ui::geometry::UiRect::new(
+                footer[0] + 16.0,
+                footer[1] + 10.0,
+                (footer[2] - 3.0 * autolink_ui::FOOT_BTN_W - 40.0).max(120.0),
+                15.0,
+            ),
+            self.tr(keys::AUTOLINK_HINT),
+            color_to_rgba(palette.quote),
+            10.5,
+            PaintAlign::Left,
+        );
         let [create, accept_all, reject_all] = autolink_ui::footer_buttons(win);
-        quads.push(screen_rect_quad(
-            camera,
-            viewport,
-            create,
-            if accepted > 0 {
+        // Кнопка «Создать связи (N)» — WidgetState: Selected при accepted>0
+        let mut create_state = WidgetState::default();
+        create_state.set_selected(accepted > 0);
+        let create_on = create_state.kit_state() == kit::KitState::Selected;
+        d.rect(
+            canvas_ui::geometry::UiRect::new(create[0], create[1], create[2], create[3]),
+            if create_on {
                 palette.accent
             } else {
                 palette.palette_chip_fill
             },
             [0.0; 4],
             7.0,
-        ));
-        texts.push(OwnedScreenText {
-            text: self.trf(
+        );
+        d.label(
+            canvas_ui::geometry::UiRect::new(create[0], create[1] + 6.0, create[2], 16.0),
+            &self.trf(
                 keys::AUTOLINK_CREATE,
                 &[("{n}", accepted.to_string().as_str())],
             ),
-            origin: [create[0], create[1] + 6.0],
-            width: create[2],
-            font_size: 12.0,
-            color: if accepted > 0 {
+            color_to_rgba(if create_on {
                 Color::rgb(255, 255, 255)
             } else {
                 palette.quote
-            },
-            align: TextAlign::Center,
-        });
+            }),
+            12.0,
+            PaintAlign::Center,
+        );
         for (rect, label) in [
             (&accept_all, keys::AUTOLINK_ACCEPT_ALL),
             (&reject_all, keys::AUTOLINK_REJECT_ALL),
         ] {
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                *rect,
+            d.rect(
+                canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
                 [0.0; 4],
                 palette.palette_border,
                 7.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: self.tr(label).to_owned(),
-                origin: [rect[0], rect[1] + 6.0],
-                width: rect[2],
-                font_size: 11.5,
-                color: palette.body,
-                align: TextAlign::Center,
-            });
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(rect[0], rect[1] + 6.0, rect[2], 16.0),
+                self.tr(label),
+                color_to_rgba(palette.body),
+                11.5,
+                PaintAlign::Center,
+            );
         }
         let _ = pending;
+        paint_items_to_band(d.take_items(), &mut quads, &mut texts);
         (quads, texts)
     }
 
@@ -16648,23 +16824,117 @@ impl App {
     }
 
     /// Rect модального диалога (screen-space, логические px): центр окна.
+    ///
+    /// FR-060 (волна 2 кита): `kit::modal` + измеренный текст — панель
+    /// адаптируется под заголовок/тело/подписи кнопок (фикс класса дефекта
+    /// «фиксированные геометрии», PRD-0009 §2: прежние 440×150 не зависели
+    /// от текста; 150 содержало ~17 px мёртвого слэка). Пады/якоря прежней
+    /// раскладки дословно — см. [`App::dialog_measured`].
     fn dialog_rect(&self) -> [f32; 4] {
-        let viewport = self.viewport_logical();
-        let w = 440.0_f32.min(viewport[0] - 40.0).max(280.0);
-        let h = 150.0;
-        [(viewport[0] - w) / 2.0, (viewport[1] - h) / 2.0, w, h]
+        self.dialog_measured().0
     }
 
     /// Rect кнопок диалога: [Да][Нет] внизу панели (индексы как в buttons()).
+    ///
+    /// FR-060: ширины кнопок — от измеренного текста (`kit::button_size`:
+    /// текст + 2·[`kit::BUTTON_PAD_H`], пол [`kit::BUTTON_HEIGHT`] = 30 —
+    /// прежняя высота дословно); прежние 110 были запасом под самую
+    /// длинную подпись. Пара — по центру с прежним зазором 16.
     fn dialog_button_rects(&self) -> [[f32; 4]; 2] {
-        let [x, y, w, h] = self.dialog_rect();
-        let bw = 110.0;
-        let bh = 30.0;
-        let gap = 16.0;
-        let total = bw * 2.0 + gap;
-        let start = x + (w - total) / 2.0;
-        let by = y + h - bh - 16.0;
-        [[start, by, bw, bh], [start + bw + gap, by, bw, bh]]
+        self.dialog_measured().1
+    }
+
+    /// Измеренная раскладка диалога (FR-060): (панель, кнопки, показанные
+    /// тексты [заголовок, тело]). Чистая функция замера —
+    /// [`App::dialog_measured_in`]; `None` у диалога — прежние константы
+    /// 440×150 (вызовы без открытого диалога — airspace-гейт).
+    fn dialog_measured(&self) -> ([f32; 4], [[f32; 4]; 2], [String; 2]) {
+        let Some(dialog) = &self.dialog else {
+            let viewport = self.viewport_logical();
+            let w = 440.0_f32.min(viewport[0] - 40.0).max(280.0);
+            let h = 150.0;
+            let rect = [(viewport[0] - w) / 2.0, (viewport[1] - h) / 2.0, w, h];
+            return (rect, [[0.0; 4]; 2], [String::new(), String::new()]);
+        };
+        let buttons: [String; 2] = dialog
+            .buttons(self.settings.language)
+            .map(|(label, _)| label.to_owned());
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        Self::dialog_measured_in(
+            self.viewport_logical(),
+            &dialog.title(&self.scene.canvas, self.settings.language),
+            &dialog.body(self.settings.language),
+            &buttons,
+            &mut m,
+            &mut fs,
+        )
+    }
+
+    /// Тело [`App::dialog_measured`] — чистая функция от текстов и вьюпорта
+    /// (headless-тесты). Геометрия: ширина — от замера заголовка/тела
+    /// (пол/потолок/маржа прежние 280/440/40; переполнение потолка —
+    /// `ellipsis`, видимая деградация вместо молчаливого клипа — G5/G8);
+    /// высота — пады прежней раскладки дословно (верх 16, тело с 46,
+    /// высота кнопок 30, низ 16) + измеренная строка тела + зазор
+    /// `SPACING_LG` (12); панель — `kit::modal` (центр вьюпорта);
+    /// кнопки — `kit::button_size`, пара по центру, зазор 16 (прежний).
+    fn dialog_measured_in(
+        viewport: [f32; 2],
+        title: &str,
+        body: &str,
+        buttons: &[String; 2],
+        m: &mut canvas_ui::measure::TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+    ) -> ([f32; 4], [[f32; 4]; 2], [String; 2]) {
+        const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+        let title_w = m.width_of(fs, title, FAMILY, DIALOG_TITLE_FS);
+        let body_w = m.width_of(fs, body, FAMILY, DIALOG_BODY_FS);
+        // Ширина: от измеренного текста; пол/потолок/кламп к вьюпорту прежние
+        let w = (title_w.max(body_w) + DIALOG_PAD_X * 2.0)
+            .clamp(DIALOG_MIN_W, DIALOG_MAX_W)
+            .min((viewport[0] - DIALOG_VIEWPORT_MARGIN).max(DIALOG_MIN_W));
+        // Деградация длинных текстов — ellipsis по фактической ширине
+        // (прежний рендер молча клиповал — G5/G8: деградация видима)
+        let avail = w - DIALOG_PAD_X * 2.0;
+        let title_shown = m.ellipsis(fs, title, FAMILY, DIALOG_TITLE_FS, avail);
+        let body_shown = m.ellipsis(fs, body, FAMILY, DIALOG_BODY_FS, avail);
+        // Высота: якоря прежней раскладки + измеренная строка тела
+        let body_h = m
+            .measure(
+                fs,
+                &canvas_ui::measure::TextSpec {
+                    text: body,
+                    family: FAMILY,
+                    size: DIALOG_BODY_FS,
+                    max_width: f32::INFINITY,
+                },
+            )
+            .height;
+        let h = DIALOG_BODY_Y
+            + body_h
+            + canvas_core::tokens::SPACING_LG
+            + DIALOG_BTN_H
+            + DIALOG_BTN_BOTTOM;
+        // Панель — kit::modal (центр вьюпорта; min=max=измеренный размер)
+        let slot = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        let size = canvas_ui::geometry::UiVec2::new(w, h);
+        let panel = kit::modal(slot, size, size, size).panel;
+        // Кнопки: ширина от измеренного текста; пара по центру, зазор 16
+        let gap = DIALOG_BTN_GAP;
+        let bw0 = kit::button_size(&buttons[0], m, fs, FAMILY, DIALOG_BTN_FS).x;
+        let bw1 = kit::button_size(&buttons[1], m, fs, FAMILY, DIALOG_BTN_FS).x;
+        let total = bw0 + gap + bw1;
+        let start = panel.x + ((panel.w - total).max(0.0)) / 2.0;
+        let by = panel.y + panel.h - DIALOG_BTN_H - DIALOG_BTN_BOTTOM;
+        (
+            [panel.x, panel.y, panel.w, panel.h],
+            [
+                [start, by, bw0, DIALOG_BTN_H],
+                [start + bw0 + gap, by, bw1, DIALOG_BTN_H],
+            ],
+            [title_shown, body_shown],
+        )
     }
 
     /// Подтверждение диалога (Enter/клик «Да»): установка или удаление.
@@ -17866,9 +18136,12 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_bands.push(UiLayer::Popups, Vec::new(), tooltip_texts);
                 }
                 // T21: модальный диалог (screen-space): панель + тексты +
-                // кнопки; рендер после битой ссылки — поверх всего канваса
+                // кнопки; рендер после битой ссылки — поверх всего канваса.
+                // FR-060: геометрия — измеренная (kit::modal + button_size),
+                // длинные тексты — ellipsis (деградация видима, G5/G8)
                 if let Some(dialog) = &self.dialog {
-                    let [dx, dy, dw, dh] = self.dialog_rect();
+                    let (d_rect, buttons, shown) = self.dialog_measured();
+                    let [dx, dy, dw, dh] = d_rect;
                     let mut dialog_instances: Vec<CardInstance> = Vec::new();
                     let mut dialog_texts: Vec<OwnedScreenText> = Vec::new();
                     dialog_instances.push(CardInstance {
@@ -17878,7 +18151,6 @@ impl ApplicationHandler<AppEvent> for App {
                         border: canvas_core::tokens::DIALOG_BORDER,
                         params: [10.0, 0.0, 0.0, 1.0],
                     });
-                    let buttons = self.dialog_button_rects();
                     for (i, (label, _)) in dialog.buttons(self.settings.language).iter().enumerate()
                     {
                         let [bx, by, bw, bh] = buttons[i];
@@ -17898,24 +18170,24 @@ impl ApplicationHandler<AppEvent> for App {
                             text: (*label).to_owned(),
                             origin: [btn_box[0], buttons[i][1] + 7.0],
                             width: btn_width,
-                            font_size: 14.0,
+                            font_size: DIALOG_BTN_FS,
                             color: token_color(canvas_core::tokens::DIALOG_TEXT),
                             align: TextAlign::Center,
                         });
                     }
                     dialog_texts.push(OwnedScreenText {
-                        text: dialog.title(&self.scene.canvas, self.settings.language),
-                        origin: [dx + 20.0, dy + 16.0],
-                        width: dw - 40.0,
-                        font_size: 16.0,
+                        text: shown[0].clone(),
+                        origin: [dx + DIALOG_PAD_X, dy + DIALOG_TITLE_Y],
+                        width: dw - DIALOG_PAD_X * 2.0,
+                        font_size: DIALOG_TITLE_FS,
                         color: token_color(canvas_core::tokens::DIALOG_TEXT),
                         align: TextAlign::Left,
                     });
                     dialog_texts.push(OwnedScreenText {
-                        text: dialog.body(self.settings.language),
-                        origin: [dx + 20.0, dy + 46.0],
-                        width: dw - 40.0,
-                        font_size: 13.0,
+                        text: shown[1].clone(),
+                        origin: [dx + DIALOG_PAD_X, dy + DIALOG_BODY_Y],
+                        width: dw - DIALOG_PAD_X * 2.0,
+                        font_size: DIALOG_BODY_FS,
                         color: token_color(canvas_core::tokens::DIALOG_TEXT_MUTED),
                         align: TextAlign::Left,
                     });
@@ -21040,5 +21312,112 @@ mod fr050_stage_e_tests {
             node: 1,
         };
         assert!(spill_hit_target(&canvas, &free_param).is_none());
+    }
+
+    // --- FR-060: измеренная геометрия диалога подтверждения -----------------
+
+    /// Диалог адаптируется под измеренный текст: ширина — от замера
+    /// (пол/потолок прежние), высота — пады прежней раскладки + измеренная
+    /// строка тела; кнопки — `kit::button_size`, пара по центру, зазор 16;
+    /// длинный заголовок — ellipsis (видимая деградация, не молчаливый клип).
+    #[test]
+    fn dialog_measured_adapts_to_text() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+        let viewport = [1280.0, 800.0];
+        let buttons = ["Да".to_owned(), "Нет".to_owned()];
+        let (rect, btns, shown) = App::dialog_measured_in(
+            viewport,
+            "Установить виджет?",
+            "Пакет: clock (1.2.0)",
+            &buttons,
+            &mut m,
+            &mut fs,
+        );
+        // Ширина: измеренный текст + 2·пад X, пол 280 (короткие тексты)
+        let title_w = m.width_of(&mut fs, "Установить виджет?", FAMILY, DIALOG_TITLE_FS);
+        let body_w = m.width_of(&mut fs, "Пакет: clock (1.2.0)", FAMILY, DIALOG_BODY_FS);
+        let expect_w = (title_w.max(body_w) + DIALOG_PAD_X * 2.0).clamp(DIALOG_MIN_W, DIALOG_MAX_W);
+        assert!((rect[2] - expect_w).abs() < 0.01, "ширина от замера");
+        assert!(rect[2] >= DIALOG_MIN_W);
+        // Высота: тело 46 + измеренная строка + SPACING_LG + кнопка 30 + низ 16
+        let body_h = m
+            .measure(
+                &mut fs,
+                &canvas_ui::measure::TextSpec {
+                    text: "Пакет: clock (1.2.0)",
+                    family: FAMILY,
+                    size: DIALOG_BODY_FS,
+                    max_width: f32::INFINITY,
+                },
+            )
+            .height;
+        let expect_h = DIALOG_BODY_Y
+            + body_h
+            + canvas_core::tokens::SPACING_LG
+            + DIALOG_BTN_H
+            + DIALOG_BTN_BOTTOM;
+        assert!(
+            (rect[3] - expect_h).abs() < 0.01,
+            "высота от замера, не h=150"
+        );
+        assert!(rect[3] < 150.0, "мёртвый слэк прежних 150 устранён");
+        // Панель центрирована (kit::modal)
+        assert!((rect[0] - (viewport[0] - rect[2]) / 2.0).abs() < 0.01);
+        assert!((rect[1] - (viewport[1] - rect[3]) / 2.0).abs() < 0.01);
+        // Кнопки: kit::button_size, пара по центру, зазор 16, низ 16
+        let bw0 = m.width_of(&mut fs, "Да", FAMILY, DIALOG_BTN_FS) + kit::BUTTON_PAD_H * 2.0;
+        let bw1 = m.width_of(&mut fs, "Нет", FAMILY, DIALOG_BTN_FS) + kit::BUTTON_PAD_H * 2.0;
+        assert!((btns[0][2] - bw0).abs() < 0.01, "ширина кнопки от текста");
+        assert!((btns[1][2] - bw1).abs() < 0.01);
+        assert!(
+            (btns[0][3] - DIALOG_BTN_H).abs() < 0.01,
+            "высота кнопки 30 дословно"
+        );
+        let total = bw0 + DIALOG_BTN_GAP + bw1;
+        let start = rect[0] + (rect[2] - total) / 2.0;
+        assert!((btns[0][0] - start).abs() < 0.01, "пара по центру");
+        assert!((btns[1][0] - (start + bw0 + DIALOG_BTN_GAP)).abs() < 0.01);
+        assert!((btns[0][1] - (rect[1] + rect[3] - DIALOG_BTN_H - DIALOG_BTN_BOTTOM)).abs() < 0.01);
+        assert_eq!(
+            shown,
+            [
+                "Установить виджет?".to_owned(),
+                "Пакет: clock (1.2.0)".to_owned()
+            ]
+        );
+    }
+
+    /// Потолок ширины 440 + ellipsis длинного текста; кламп к узкому окну.
+    #[test]
+    fn dialog_measured_long_text_ellipsis_and_narrow_viewport() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let long_title = "Цикл: очень длинная цепочка участников расчёта ".repeat(12);
+        let buttons = ["Да".to_owned(), "Нет".to_owned()];
+        // Широкий вьюпорт: ширина = потолок 440, заголовок — ellipsis
+        let (rect, _, shown) = App::dialog_measured_in(
+            [1280.0, 800.0],
+            &long_title,
+            "тело",
+            &buttons,
+            &mut m,
+            &mut fs,
+        );
+        assert!((rect[2] - DIALOG_MAX_W).abs() < 0.01, "потолок 440");
+        assert!(shown[0].ends_with('…'), "ellipsis вместо молчаливого клипа");
+        assert!(shown[0].chars().count() < long_title.chars().count());
+        // Узкий вьюпорт: пол инварианта 280 сильнее клампа к окну —
+        // прежняя формула дословно (w = min(440, vw−40).max(280))
+        let (rect, _, _) = App::dialog_measured_in(
+            [300.0, 600.0],
+            "Установить виджет?",
+            "тело",
+            &buttons,
+            &mut m,
+            &mut fs,
+        );
+        assert!((rect[2] - DIALOG_MIN_W).abs() < 0.01, "пол 280 ≡ прежнему");
     }
 }
