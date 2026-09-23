@@ -68,6 +68,28 @@ Immediate-функции от слота родителя — возвращаю
 - `Custom(rect)` — escape-hatch экзотики (polar wheel, drop-сетка): только с
   комментарием-обоснованием, попадает в grep-аудит G8.
 
+FR-062 (layout v2): расширения тех же примитивов — только добавление:
+
+- `Child.grow` / `Child::flexible(w, h, grow)` — flex-фактор главной оси
+  (свободное место слота распределяется пропорционально grow);
+  `MainAlign::End` — прижать к концу оси. Приоритеты: `SqueezeTail`
+  побеждает grow; при Σgrow > 0 `SpaceBetween`/`End` деградируют (grow
+  съедает свободное место); `grow = 0` — байт-в-байт прежнее поведение.
+- `MeasuredItem` + `Row::lay_out_measured(slot, items, m, fs, family, size)`
+  — размер от контента: ширина/высота текста из TextMeasurer внутри
+  раскладки (эвристики невозможны — measurer в сигнатуре); кламп ширины —
+  только явный `max_w` (молчаливого среза нет — G5); ellipsis — решение
+  потребителя.
+- `RowPolicy::Wrap` — жадная упаковка в строки (высота строки = max детей,
+  gap — по обеим осям, cross — внутри строки); число видимых строк задаёт
+  ВЫСОТА слота, перелив за нижний край не маскируется (линт G4).
+- `grid_cells(slot, cols, rows, row_h, gap)` — 2D-сетка явных колонок
+  (row-major); спаны/авто-треки — триггер T2 ADR-0013 (taffy).
+- Фокус контента: `kit::focus_order(rects, ring)` +
+  `FocusRing::retain_order` (перестроение порядка с сохранением позиции)
+  — Tab-навигация поверхности без ручных индексов; рамка — слот `accent`
+  (паттерн TextField витрины).
+
 Зазоры/радиусы — из токенов `canvas_core::tokens` (`SPACING_S/SM/MD/LG/XL`,
 `RADIUS_CHIP/PANEL/PILL`) — значения синхронизированы с
 `design/tokens/dimensions.json`.
@@ -225,6 +247,13 @@ ArrowRight/Refresh). Контент витрины выше максимальн
 `dropdown_menu`/`stack`/`list_rows`+`ScrollState`/`scroll_bar`, состояния
 строк — `WidgetState`, отрисовка — Painter (§7.1).
 
+FR-062 добавляет секции layout v2: **measured-ряд** (3 чипа — ширины из
+TextMeasurer внутри раскладки), **flex-ряд** (fixed + grow ×2 + grow ×1),
+**wrap-ряд** (8 чипов, жадная упаковка в строки слота), **сетка 4×2**
+(grid_cells) и **фокус-слоты** ×4 — Tab/Shift+Tab ведёт FocusRing (рамка —
+accent; кольцо живёт в контент-координатах `focus_targets`, перестроение —
+`retain_order`). Хвост витрины при нижнем скролле — секции FR-062.
+
 ## 8. Статус кита
 
 - Готово (U1–U3, U5): каркас слоёв/реестра, примитивы, TextMeasurer, линты,
@@ -239,3 +268,8 @@ ArrowRight/Refresh). Контент витрины выше максимальн
   кит усиливается собственными примитивами — постановка **FR-062**
   (measured-дети, flex-факторы, Wrap, grid_cells, фокус-связка,
   геометрические снапшоты); триггеры эскалации T1–T4 — в ADR-0013.
+- Готово (FR-062, 2026-09-23): layout v2 — measured-дети (F-13),
+  flex-факторы + `MainAlign::End` (F-14), `RowPolicy::Wrap` (F-15),
+  `grid_cells` (F-16), фокус-связка FocusRing × WidgetState (F-17),
+  геометрические снапшоты (F-18); витрина — 5 секций layout v2 +
+  Tab-навигация; taffy не подключён (ADR-0013, триггеры T1–T4).
