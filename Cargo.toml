@@ -132,6 +132,18 @@ include_dir = "0.7"
 # декодирование PNG-тамбнейлов виджетов (без default-фич — только png)
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# ADR-0008 S0 (Foundation) / S1: L2-статистика за фичей `stats` в canvas-core
+# (FR-063: expr/stats.rs — распределения, квантили, ДИ, детерминированный RNG).
+# Все четыре — pure-Rust, лицензии в allowlist deny.toml (архдок §7.2),
+# без getrandom-хуков (сиды только через ChaCha8Rng::seed_from_u64 —
+# thread_rng() запрещён архдоком §5.6.2) — wasm-гейт остаётся зелёным.
+statrs = "0.17"          # распределения/квантили/ДИ (MIT)
+# default-features = false: без getrandom (источник ОС-энтропии) — единственный
+# источник случайности ChaCha8Rng::seed_from_u64 (архдок §5.6.2, детерминизм)
+rand = { version = "0.8", default-features = false, features = ["alloc"] } # MIT OR Apache-2.0
+rand_chacha = { version = "0.3", default-features = false } # ChaCha8Rng (MIT OR Apache-2.0)
+rand_distr = { version = "0.4", default-features = false }  # сэмплеры поверх Rng (MIT OR Apache-2.0)
+
 # M8/W12 (wasm-port §6, «Полировка и деплой»): thin LTO в release-профиле —
 # бандл canvas-web заметно компактнее, нативные релизные бинари чуть меньше
 # и быстрее при приемлемом времени линковки (профиль общий для всех целей:
