@@ -42,6 +42,10 @@ use crate::zorder;
 // из реестра поверхностей приложения (UiFrame.draw_bands), а не из
 // последовательности вызовов сборки оверлея.
 use canvas_ui::layer::UiLayer;
+// FR-056 (F-5 PRD-0009): клип полосы — UiRect из каркаса (SurfaceFrame.clip
+// обязателен с U1); рендер исполняет его scissor-бакетами (квады) и
+// TextBounds (тексты).
+use canvas_ui::UiRect;
 
 // FR-046: цветовые константы рендера мигрированы в design-токены:
 // селекция/подсветка/what-if — слоты `ThemeColors` (accent/selection_fill/
@@ -127,6 +131,37 @@ fn screen_sector_to_world(
     }
 }
 
+/// FR-056 (F-5 PRD-0009): scissor-бакет полосы — физический rect клипа
+/// полосы. Логический `clip` × scale_factor: левый/верхний край — ceil,
+/// правый/нижний — floor (максимальный целый rect ПОЛНОСТЬЮ внутри клипа —
+/// scissor никогда не расширяет видимое; инвариант CR FR-056), затем
+/// кламп к вьюпорту. `None` — пустое пересечение с вьюпортом: полоса не
+/// рисуется вовсе (нулевой set_scissor_rect не вызывается). Чистая
+/// функция — единый источник конверсии для квадов (renderer) и текстов
+/// (text.rs, TextBounds-клип).
+pub(crate) fn band_scissor_rect(
+    clip: &UiRect,
+    scale_factor: f32,
+    viewport_w: u32,
+    viewport_h: u32,
+) -> Option<[u32; 4]> {
+    if clip.is_empty() {
+        return None;
+    }
+    let left = (clip.x * scale_factor).ceil().max(0.0);
+    let top = (clip.y * scale_factor).ceil().max(0.0);
+    let right = (clip.right() * scale_factor).floor().min(viewport_w as f32);
+    let bottom = (clip.bottom() * scale_factor)
+        .floor()
+        .min(viewport_h as f32);
+    let w = right - left;
+    let h = bottom - top;
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some([left as u32, top as u32, w as u32, h as u32])
+}
+
 /// Оверлеи кадра от приложения (контекстное меню T7, панель настроек):
 /// дополнительные инстансы квадов (поверх карточек, под текстом) и подписи.
 /// `instances`/`texts` — world-координаты (масштабируются зумом);
@@ -137,6 +172,12 @@ fn screen_sector_to_world(
 /// [`UiLayer`] (поле — подпись debug-оверлея F-10 и контракт сборщика).
 pub struct ScreenBand<'a> {
     pub layer: UiLayer,
+    /// FR-056 (F-5 PRD-0009): клип-прямоугольник поверхности полосы в
+    /// логических (экранных) px — из `SurfaceFrame.clip` кадра реестра.
+    /// Рендер конвертирует в физические (scale_factor) и клампит к
+    /// вьюпорту: квады полосы рисуются под scissor-бакетом клипа, тексты
+    /// клипятся `TextBounds` (scissor на текст не тратится).
+    pub clip: UiRect,
     pub instances: &'a [CardInstance],
     pub texts: &'a [ScreenText<'a>],
 }
@@ -1317,12 +1358,16 @@ impl Renderer {
         // полосы по очереди (квады полосы → тексты полосы).
         let mut band_ranges: Vec<(UiLayer, std::ops::Range<u32>)> =
             Vec::with_capacity(overlay.screen_bands.len());
+        // FR-056 (F-5): клипы полос параллельно диапазонам — scissor-бакет
+        // полосы исполняется в цикле отрисовки ниже (один на полосу, R-1)
+        let mut band_clips: Vec<UiRect> = Vec::with_capacity(overlay.screen_bands.len());
         for band in overlay.screen_bands {
             let start = instances.len() as u32;
             for inst in band.instances {
                 instances.push(screen_instance_to_world(camera, viewport_logical, inst));
             }
             band_ranges.push((band.layer, start..instances.len() as u32));
+            band_clips.push(band.clip);
         }
         // FR-022: donut-сектора wheel-меню — screen → world той же камерой
         // (центр через screen_to_world, радиусы / zoom; углы не трогаем)
@@ -1531,9 +1576,26 @@ impl Renderer {
             // полосы не ложатся поверх квадов верхней (класс дефекта
             // «текст панели поверх модали»); порядок полос — возрастание
             // UiLayer (реестр поверхностей приложения, PRD-0009 F-2).
+            // FR-056 (F-5): квады полосы — под scissor-бакетом её клипа
+            // (один set_scissor_rect на полосу — инвариант R-1, не на
+            // элемент; клип полосы — SurfaceFrame.clip реестра). После
+            // квадов scissor возвращается к полному вьюпорту: тексты полосы
+            // клипятся TextBounds (text.rs), дальнейшие проходы кадра
+            // (миникарта, stage) не ограничены. Пустой клип (None) — полоса
+            // не рисуется вовсе.
             for (band_index, (_, band_range)) in band_ranges.iter().enumerate() {
+                let scissor = band_scissor_rect(
+                    &band_clips[band_index],
+                    self.scale_factor,
+                    self.size.width,
+                    self.size.height,
+                );
                 if !band_range.is_empty() {
-                    self.cards.draw_range(&mut pass, band_range.clone());
+                    if let Some([sx, sy, sw, sh]) = scissor {
+                        pass.set_scissor_rect(sx, sy, sw, sh);
+                        self.cards.draw_range(&mut pass, band_range.clone());
+                    }
+                    pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
                 }
                 if let Err(err) = self
                     .text
@@ -1612,6 +1674,85 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // FR-056 (F-5 PRD-0009): scissor-бакет полосы — конверсия логического
+    // клипа в физический rect. Инвариант CR: scissor никогда не расширяет
+    // видимое (левый/верх — ceil, правый/низ — floor, кламп к вьюпорту).
+    #[test]
+    fn band_scissor_full_viewport_clip_covers_target() {
+        let clip = UiRect::new(0.0, 0.0, 1280.0, 800.0);
+        assert_eq!(
+            band_scissor_rect(&clip, 1.0, 1280, 800),
+            Some([0, 0, 1280, 800])
+        );
+        // дробный scale_factor: 1280×800 логических × 1.25 = 1600×1000 физ.
+        assert_eq!(
+            band_scissor_rect(&clip, 1.25, 1600, 1000),
+            Some([0, 0, 1600, 1000])
+        );
+    }
+
+    #[test]
+    fn band_scissor_never_expands_logical_clip() {
+        // дробные координаты: ceil(10.4×2)=21, floor((10.4+30.6)×2)=82,
+        // ceil(20.6×2)=42, floor((20.6+40.8)×2)=122 — rect строго внутри
+        // физического образа клипа
+        let clip = UiRect::new(10.4, 20.6, 30.6, 40.8);
+        assert_eq!(
+            band_scissor_rect(&clip, 2.0, 1920, 1080),
+            Some([21, 42, 61, 80])
+        );
+    }
+
+    #[test]
+    fn band_scissor_clamps_to_viewport() {
+        // клип шире вьюпорта во все стороны — кламп к границам
+        let clip = UiRect::new(-50.0, -50.0, 2000.0, 2000.0);
+        assert_eq!(
+            band_scissor_rect(&clip, 1.0, 1280, 800),
+            Some([0, 0, 1280, 800])
+        );
+        // частичный выход вправо/вниз
+        let clip = UiRect::new(1200.0, 700.0, 500.0, 500.0);
+        assert_eq!(
+            band_scissor_rect(&clip, 1.0, 1280, 800),
+            Some([1200, 700, 80, 100])
+        );
+    }
+
+    #[test]
+    fn band_scissor_empty_or_disjoint_clip_is_none() {
+        // вырожденный клип (нормализуется в пустой)
+        assert_eq!(
+            band_scissor_rect(&UiRect::new(5.0, 5.0, 0.0, 10.0), 1.0, 1280, 800),
+            None
+        );
+        // полностью за пределами вьюпорта
+        assert_eq!(
+            band_scissor_rect(&UiRect::new(1300.0, 0.0, 50.0, 50.0), 1.0, 1280, 800),
+            None
+        );
+        assert_eq!(
+            band_scissor_rect(&UiRect::new(0.0, 850.0, 50.0, 50.0), 1.0, 1280, 800),
+            None
+        );
+    }
+
+    #[test]
+    fn band_scissor_subset_property_on_fractional_scale() {
+        // инвариант «клип не расширяет видимое»: физический rect полосы
+        // полностью внутри образа логического клипа на любом scale_factor
+        let clip = UiRect::new(3.7, 1.3, 137.9, 55.5);
+        for sf in [1.0, 1.25, 1.5, 2.0, 2.625] {
+            let Some([x, y, w, h]) = band_scissor_rect(&clip, sf, 3840, 2160) else {
+                panic!("scissor потерян при sf={sf}");
+            };
+            assert!((x as f32) >= (clip.x * sf).ceil() - 0.5);
+            assert!((y as f32) >= (clip.y * sf).ceil() - 0.5);
+            assert!(((x + w) as f32) <= (clip.right() * sf).floor() + 0.5);
+            assert!(((y + h) as f32) <= (clip.bottom() * sf).floor() + 0.5);
+        }
+    }
 
     fn inst() -> CardInstance {
         CardInstance {

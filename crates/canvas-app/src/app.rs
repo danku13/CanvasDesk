@@ -17070,11 +17070,18 @@ impl ApplicationHandler<AppEvent> for App {
                             .collect()
                     })
                     .collect();
+                let band_viewport = self.viewport_logical();
                 let screen_band_refs: Vec<canvas_render::ScreenBand> = bands
                     .iter()
                     .zip(&band_screen_texts)
                     .map(|((layer, instances, _), texts)| canvas_render::ScreenBand {
                         layer: *layer,
+                        // FR-056 (F-5 PRD-0009): клип полосы = SurfaceFrame.clip
+                        // поверхности в кадре реестра (UiFrame::from_registry —
+                        // сегодня вьюпорт; сужение клипов per-surface — волны
+                        // миграции FR-059/060, аудит G5). Рендер конвертирует
+                        // в физические px и исполняет scissor-бакетом.
+                        clip: canvas_ui::UiRect::new(0.0, 0.0, band_viewport[0], band_viewport[1]),
                         instances,
                         texts,
                     })

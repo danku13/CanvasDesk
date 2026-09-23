@@ -249,6 +249,29 @@ fn screen_text_area<'a>(
     }
 }
 
+/// FR-056 (F-5 PRD-0009): клип текста полосы — пересечение собственных
+/// `TextBounds` текста со scissor-бакетом полосы (физ. px; конверсия
+/// логического клипа — та же чистая функция [`crate::renderer::
+/// band_scissor_rect`], что и у квадов). Пустое пересечение → `None` —
+/// текст за клипом полосы не готовится вовсе (инвариант «клип не
+/// расширяет видимое»; scissor на текст-группу не тратится).
+fn clip_text_bounds(own: TextBounds, clip: (i32, i32, i32, i32)) -> Option<TextBounds> {
+    let left = own.left.max(clip.0);
+    let top = own.top.max(clip.1);
+    let right = own.right.min(clip.2);
+    let bottom = own.bottom.min(clip.3);
+    if right > left && bottom > top {
+        Some(TextBounds {
+            left,
+            top,
+            right,
+            bottom,
+        })
+    } else {
+        None
+    }
+}
+
 /// Подготовить текст-группу с одним повтором после trim атласа: при
 /// AtlasFull trim() освобождает место — повтор почти всегда успешен;
 /// повторная ошибка уходит вызывающему (рендерер логирует и рисует stale).
@@ -2914,11 +2937,32 @@ impl TextSystem {
         // рендерер рисует полосы по очереди (квады полосы → тексты полосы),
         // поэтому фон следующей полосы не закрывает строки предыдущей,
         // а тексты нижней полосы не ложатся поверх квадов верхней
+        // FR-056 (F-5): scissor-бакеты полос заранее (та же конверсия
+        // клипа, что у квадов) — TextBounds каждого текста пересекается с
+        // бакетом своей полосы; тексты за клипом не готовятся.
+        let band_scissors: Vec<Option<(i32, i32, i32, i32)>> = frame
+            .screen_bands
+            .iter()
+            .map(|band| {
+                crate::renderer::band_scissor_rect(
+                    &band.clip,
+                    scale_factor,
+                    viewport_physical[0],
+                    viewport_physical[1],
+                )
+                .map(|[x, y, w, h]| (x as i32, y as i32, (x + w) as i32, (y + h) as i32))
+            })
+            .collect();
         for (band_index, buffers) in band_buffers.iter().enumerate() {
-            let band = &frame.screen_bands[band_index];
             let mut band_areas: Vec<TextArea> = Vec::with_capacity(buffers.len());
-            for (buffer, st) in buffers.iter().zip(band.texts) {
-                band_areas.push(screen_text_area(buffer, st, scale_factor));
+            for (buffer, st) in buffers.iter().zip(frame.screen_bands[band_index].texts) {
+                let mut area = screen_text_area(buffer, st, scale_factor);
+                if let Some(clip) = band_scissors[band_index] {
+                    if let Some(bounds) = clip_text_bounds(area.bounds, clip) {
+                        area.bounds = bounds;
+                        band_areas.push(area);
+                    }
+                }
             }
             if let Some(renderer) = self.renderers.get_mut(group_count + band_index) {
                 prepare_group(
@@ -3012,6 +3056,61 @@ impl TextSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // FR-056 (F-5): клип текстов полосы — TextBounds = пересечение
+    // собственных границ текста со scissor-бакетом полосы.
+    #[test]
+    fn clip_text_bounds_identity_inside_band_clip() {
+        // текст целиком внутри клипа — границы не меняются (инвариант
+        // «0 визуальных изменений» при клипе-вьюпорте)
+        let own = TextBounds {
+            left: 100,
+            top: 50,
+            right: 220,
+            bottom: 70,
+        };
+        assert_eq!(
+            clip_text_bounds(own, (0, 0, 1280, 800)),
+            Some(TextBounds {
+                left: 100,
+                top: 50,
+                right: 220,
+                bottom: 70
+            })
+        );
+    }
+
+    #[test]
+    fn clip_text_bounds_shrinks_to_band_clip() {
+        // текст высунулся за правый/нижний край полосы — обрезается
+        let own = TextBounds {
+            left: 1200,
+            top: 760,
+            right: 1400,
+            bottom: 850,
+        };
+        assert_eq!(
+            clip_text_bounds(own, (0, 0, 1280, 800)),
+            Some(TextBounds {
+                left: 1200,
+                top: 760,
+                right: 1280,
+                bottom: 800
+            })
+        );
+    }
+
+    #[test]
+    fn clip_text_bounds_disjoint_is_none() {
+        // текст полностью за клипом полосы — не готовится вовсе
+        let own = TextBounds {
+            left: 1300,
+            top: 50,
+            right: 1400,
+            bottom: 70,
+        };
+        assert_eq!(clip_text_bounds(own, (0, 0, 1280, 800)), None);
+    }
 
     /// FR-023 (вилка владельца): кегль заголовка на 10–20 % больше кегля
     /// тела. Инвариант не даёт константам разъехаться при правках.

@@ -36,6 +36,11 @@
    `dispatch_esc` (2-фазные: help-подменю, settings-dropdown).
 5. **Draw-порядок**: `UiFrame::draw_bands` → полосы `ScreenBand` по
    `UiLayer::DRAW_ORDER`; внутри полосы — порядок сборки кадра.
+   Клип полосы — `SurfaceFrame.clip` поверхности (обязателен с U1):
+   рендер исполняет его scissor-бакетом полосы и `TextBounds`-клипом
+   текстов (FR-056, F-5); сегодня клипы поверхностей = вьюпорт —
+   сужение per-surface (compact/scroll/clip/hide) — волны миграции
+   FR-059/060 (аудит G5).
 
 ## 3. Поверхности (U4, 22 идентификатора)
 
