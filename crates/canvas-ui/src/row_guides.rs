@@ -103,10 +103,14 @@ impl RowGuides {
 }
 
 /// Замер естественных ширин ячеек строки (проход A): значение/юнит —
-/// [`TextMeasurer::width_of`] (реальный шейпинг cosmic-text, кэш по
-/// (текст, семейство, кегль); mono-базис CR-009 — семейство передаёт
-/// потребитель), пустой юнит → 0; `badge_w` проходит насквозь. Потребители —
+/// [`TextMeasurer::width_of_weighted`] (реальный шейпинг cosmic-text, кэш по
+/// (текст, семейство, кегль, вес); mono-базис CR-009 — семейство И ВЕС
+/// передаёт потребитель: вес обязан совпадать с шейпингом ячейки —
+/// cosmic-text ищет лицо семейства только среди лиц точного веса, замер
+/// не тем весом даёт метрики чужого системного шрифта — приёмка T9
+/// FR-061), пустой юнит → 0; `badge_w` проходит насквозь. Потребители —
 /// сборка строк ноды (этап B) и kit-Row (этап E, D-15).
+#[allow(clippy::too_many_arguments)] // плоский контракт замера ячеек (frozen FR-061 этап A + вес)
 pub fn measure_row_cells(
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -115,13 +119,14 @@ pub fn measure_row_cells(
     badge_w: f32,
     family: &str,
     size: f32,
+    weight: cosmic_text::Weight,
 ) -> RowCellWidths {
     RowCellWidths {
-        value_w: measurer.width_of(fs, value, family, size),
+        value_w: measurer.width_of_weighted(fs, value, family, size, weight),
         unit_w: if unit.is_empty() {
             0.0
         } else {
-            measurer.width_of(fs, unit, family, size)
+            measurer.width_of_weighted(fs, unit, family, size, weight)
         },
         badge_w,
     }
@@ -229,19 +234,64 @@ mod tests {
     fn measure_row_cells_uses_real_shaping() {
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        let short = measure_row_cells(&mut m, &mut fs, "800", "rps", 14.0, FAMILY, SIZE);
-        let long = measure_row_cells(&mut m, &mut fs, "1389", "ms·req/s", 14.0, FAMILY, SIZE);
+        let short = measure_row_cells(
+            &mut m,
+            &mut fs,
+            "800",
+            "rps",
+            14.0,
+            FAMILY,
+            SIZE,
+            cosmic_text::Weight::MEDIUM,
+        );
+        let long = measure_row_cells(
+            &mut m,
+            &mut fs,
+            "1389",
+            "ms·req/s",
+            14.0,
+            FAMILY,
+            SIZE,
+            cosmic_text::Weight::MEDIUM,
+        );
         assert!(long.value_w > short.value_w, "«1389» шире «800»");
         assert!(long.unit_w > short.unit_w, "«ms·req/s» шире «rps»");
         assert_eq!(short.badge_w, 14.0, "бейдж проходит насквозь");
         // Скалярная строка — юнит пуст → нулевая ширина ячейки
-        let scalar = measure_row_cells(&mut m, &mut fs, "20", "", 0.0, FAMILY, SIZE);
+        let scalar = measure_row_cells(
+            &mut m,
+            &mut fs,
+            "20",
+            "",
+            0.0,
+            FAMILY,
+            SIZE,
+            cosmic_text::Weight::MEDIUM,
+        );
         assert_eq!(scalar.unit_w, 0.0);
         // Пустое значение (unmapped рисуется «—» потребителем) — 0
-        let empty = measure_row_cells(&mut m, &mut fs, "", "", 0.0, FAMILY, SIZE);
+        let empty = measure_row_cells(
+            &mut m,
+            &mut fs,
+            "",
+            "",
+            0.0,
+            FAMILY,
+            SIZE,
+            cosmic_text::Weight::MEDIUM,
+        );
         assert_eq!(empty.value_w, 0.0);
         // Детерминизм кэша: повтор — та же ширина
-        let again = measure_row_cells(&mut m, &mut fs, "800", "rps", 14.0, FAMILY, SIZE);
+        let again = measure_row_cells(
+            &mut m,
+            &mut fs,
+            "800",
+            "rps",
+            14.0,
+            FAMILY,
+            SIZE,
+            cosmic_text::Weight::MEDIUM,
+        );
         assert_eq!(short, again);
     }
 
@@ -256,7 +306,18 @@ mod tests {
             [("800", "rps"), ("1389", "rps"), ("50", "req/s"), ("20", "")];
         let rows: Vec<RowCellWidths> = texts
             .iter()
-            .map(|(v, u)| measure_row_cells(&mut m, &mut fs, v, u, 0.0, FAMILY, SIZE))
+            .map(|(v, u)| {
+                measure_row_cells(
+                    &mut m,
+                    &mut fs,
+                    v,
+                    u,
+                    0.0,
+                    FAMILY,
+                    SIZE,
+                    cosmic_text::Weight::MEDIUM,
+                )
+            })
             .collect();
         let g = RowGuides::measure(&rows)
             .unwrap()

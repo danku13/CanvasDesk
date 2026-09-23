@@ -1838,6 +1838,9 @@ pub struct App {
     /// (логические px + данные тултипа источника). Заполняется после
     /// рендера (паттерн expr_error_hits), оверлей показывает «пролито: …».
     spill_hits: Vec<SpillHit>,
+    /// FR-061 коммит 3: зоны усечённых формул с прошлого кадра (лестница
+    /// §3.4, Q8) — тултип строки показывает полную формулу.
+    ellipsis_hits: Vec<LineErrorHit>,
     /// FR-061 хвосты (D-7/D-8): кликабельные зоны тела (заголовок блока,
     /// экспандер описания; логические px) — с прошлого кадра (паттерн
     /// spill_hits; отставание в кадр незаметно).
@@ -2192,6 +2195,7 @@ impl App {
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             spill_hits: Vec::new(),
+            ellipsis_hits: Vec::new(),
             body_hits: Vec::new(),
             edge_drag: None,
             param_drop: None,
@@ -5183,6 +5187,13 @@ impl App {
     /// с прошлого кадра (`expr_error_hits`); отставание в кадр незаметно.
     fn expr_error_hit_at(&self, cursor: [f32; 2]) -> Option<&LineErrorHit> {
         expr_error_hit_at(&self.expr_error_hits, cursor)
+    }
+
+    /// FR-061 коммит 3: зона наведения усечённой формулы под курсором
+    /// (лестница §3.4, Q8), None — мимо. Зоны — с прошлого кадра
+    /// (`ellipsis_hits`); отставание в кадр незаметно.
+    fn formula_ellipsis_hit_at(&self, cursor: [f32; 2]) -> Option<&LineErrorHit> {
+        expr_error_hit_at(&self.ellipsis_hits, cursor)
     }
 
     /// FR-050 Н9-2 (этап D): зона наведения пролитой строки под курсором
@@ -17189,6 +17200,8 @@ impl App {
                     family: FAMILY,
                     size: DIALOG_BODY_FS,
                     max_width: f32::INFINITY,
+                    // Диалоги — sans (паритет sans_attrs, вес 500).
+                    weight: cosmic_text::Weight::MEDIUM,
                 },
             )
             .height;
@@ -18300,11 +18313,28 @@ impl ApplicationHandler<AppEvent> for App {
                     let port_label = if self.edge_drag.is_none()
                         && self.choice_menu.is_none()
                         && self.expr_error_hit_at(self.cursor).is_none()
+                        && self.formula_ellipsis_hit_at(self.cursor).is_none()
                     {
                         self.port_tooltip_at(self.cursor_world())
                     } else {
                         None
                     };
+                    // FR-061 коммит 3: тултип усечённой формулы (лестница
+                    // §3.4, Q8) — курсор над усечённой строкой узкой ноды:
+                    // полная формула у курсора (нейтральный тон — не ошибка)
+                    if let Some(hit) = self.formula_ellipsis_hit_at(self.cursor) {
+                        let viewport = self.viewport_logical();
+                        let origin_x = (self.cursor[0] + 14.0)
+                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                        tooltip_texts.push(OwnedScreenText {
+                            text: hit.message.clone(),
+                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                            width: TOOLTIP_WIDTH,
+                            font_size: 13.0,
+                            color: Color::rgb(0xd4, 0xd4, 0xd4),
+                            align: TextAlign::Left,
+                        });
+                    }
                     if let Some(lines) = port_label.clone() {
                         let viewport = self.viewport_logical();
                         let origin_x = (self.cursor[0] + 14.0)
@@ -19057,6 +19087,9 @@ impl ApplicationHandler<AppEvent> for App {
                     // тултип источника («пролито: …») в оверлее следующего
                     // кадра (паттерн expr_error_hits)
                     self.spill_hits = renderer.spill_hits().to_vec();
+                    // FR-061 коммит 3: зоны усечённых формул кадра — тултип
+                    // полной формулы в оверлее следующего кадра
+                    self.ellipsis_hits = renderer.formula_ellipsis_hits().to_vec();
                     // FR-061 хвосты (D-7/D-8): кликабельные зоны тела кадра —
                     // тогглы свёрнутости блока/раскрытости описания
                     self.body_hits = renderer.body_hits().to_vec();
@@ -21948,6 +21981,7 @@ mod fr050_stage_e_tests {
                     family: FAMILY,
                     size: DIALOG_BODY_FS,
                     max_width: f32::INFINITY,
+                    weight: cosmic_text::Weight::MEDIUM,
                 },
             )
             .height;
