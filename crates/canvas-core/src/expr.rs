@@ -1983,6 +1983,50 @@ pub const FN_HINTS: &[FnHint] = &[
         signature: "cohort_ltv(arpu_m0, margin, r_d1, r_d7, r_d30, months)",
         summary: "LTV когорты через retention-кривую",
     },
+    // FR-063 P2: распределения и квантили (за фичей `stats`, parity-тест —
+    // stats_fn_hints_parity_with_eval_call).
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "normal_quantile",
+        signature: "normal_quantile(p, μ, σ)",
+        summary: "квантиль N(μ, σ²): P95/P99 на канвасе",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "normal_cdf",
+        signature: "normal_cdf(x, μ, σ)",
+        summary: "вероятность X ≤ x для N(μ, σ²)",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "lognormal_quantile",
+        signature: "lognormal_quantile(p, μ, σ)",
+        summary: "квантиль LogNormal (параметры — лог-пространство)",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "exp_quantile",
+        signature: "exp_quantile(p, λ)",
+        summary: "квантиль экспоненциального распределения",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "poisson_pmf",
+        signature: "poisson_pmf(k, λ)",
+        summary: "вероятность ровно k событий (Пуассон)",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "triangular_quantile",
+        signature: "triangular_quantile(p, a, b, c)",
+        summary: "квантиль треугольного на [a, b] с модой c",
+    },
+    #[cfg(feature = "stats")]
+    FnHint {
+        name: "triangular",
+        signature: "triangular(p, a, b, c)",
+        summary: "алиас triangular_quantile",
+    },
 ];
 
 /// Срез каталога функций для подсказок (FR-021).
