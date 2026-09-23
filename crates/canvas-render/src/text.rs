@@ -142,16 +142,16 @@ const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
 /// центрируются в своей строке по этой высоте (I-1: Y-ряд не меняется).
 const AUTO_ROW_LINE_HEIGHT: f32 = 18.0;
 /// FR-061 этап B (D-5): длина штриха и зазора пунктира лидера (world-px) —
-/// паттерн прототипа 2/3 px (анализ §3.1, O-2).
-const LEADER_DASH_W: f32 = 2.0;
-const LEADER_DASH_GAP: f32 = 3.0;
+/// паттерн прототипа 2/3 px (анализ §3.1, O-2); токены D-14.
+const LEADER_DASH_W: f32 = canvas_core::tokens::TABLE_LEADER_DASH;
+const LEADER_DASH_GAP: f32 = canvas_core::tokens::TABLE_LEADER_GAP;
 /// FR-061 этап B (D-5): зебра — фон через строку в прогонах ≥ 4 строк данных.
-const ZEBRA_RUN_MIN: usize = 4;
+const ZEBRA_RUN_MIN: usize = canvas_core::tokens::TABLE_ZEBRA_RUN_MIN;
 /// FR-061 этап B (D-5): толщина линии лидера (world-px).
-const LEADER_H: f32 = 1.0;
+const LEADER_H: f32 = canvas_core::tokens::TABLE_LEADER_H;
 /// FR-061 этап B (D-5): вертикаль лидера в строке (доля высоты строки —
 /// базовая линия прототипа).
-const LEADER_Y_FRAC: f32 = 0.62;
+const LEADER_Y_FRAC: f32 = canvas_core::tokens::TABLE_LEADER_Y_FRAC;
 
 /// FR-061 этап B: янтарный цвет unmapped-значений (Р-3) — тот же тон,
 /// что пунктир unmapped-ребра (см. spill_row_items).

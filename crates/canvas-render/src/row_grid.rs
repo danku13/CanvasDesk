@@ -24,12 +24,13 @@ use canvas_ui::row_guides::{measure_row_cells, RowGuides};
 use crate::SpillView;
 
 /// Зазор между ячейками «значение»/«юнит»/«бейдж» (world-px) — параметр
-/// [`pass_a`], константа тела (анализ §3.1: единая система отсчёта).
-pub(crate) const GUIDE_GAP: f32 = 6.0;
+/// [`pass_a`]; токен D-14 [`canvas_core::tokens::TABLE_GUIDE_GAP`] (анализ
+/// §3.1: единая система отсчёта).
+pub(crate) const GUIDE_GAP: f32 = canvas_core::tokens::TABLE_GUIDE_GAP;
 /// Минимальная дорожка лидера (world-px): короче — лидер не рисуется.
-pub(crate) const LEADER_MIN: f32 = 8.0;
+pub(crate) const LEADER_MIN: f32 = canvas_core::tokens::TABLE_LEADER_MIN;
 /// Зазор лидера до ячейки значения и от конца левого текста (world-px).
-pub(crate) const LEADER_PAD: f32 = 4.0;
+pub(crate) const LEADER_PAD: f32 = canvas_core::tokens::TABLE_LEADER_PAD;
 
 /// Род строки данных — селектор хрома зоны (фон/начертание). Y-ряд не
 /// меняет (I-1): высота строки задаётся блоком тела, не родом.
