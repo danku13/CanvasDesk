@@ -543,6 +543,13 @@ impl Renderer {
         self.text.set_table_guides_visible(visible);
     }
 
+    /// FR-061 этап D (D-8): описания манифестов шаблонов (id → описание) —
+    /// источник зоны описания шаблонных нод (Q3). Вызывается приложением
+    /// при построении/обновлении реестра шаблонов.
+    pub fn set_template_descs(&mut self, descs: std::collections::HashMap<String, String>) {
+        self.text.set_template_descs(descs);
+    }
+
     /// Включить/выключить сетку канваса (настройки).
     pub fn set_grid_visible(&mut self, visible: bool) {
         self.grid_visible = visible;
