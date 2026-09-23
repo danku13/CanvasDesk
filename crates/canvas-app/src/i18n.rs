@@ -327,6 +327,10 @@ pub mod keys {
     pub const MENU_PICK_PARAM_TITLE: &str = "menu.pick_param.title";
     /// FR-050 Н2 (этап C): меню выбора строки-источника (W-AMBIGUOUS-SRC).
     pub const MENU_PICK_LINE_TITLE: &str = "menu.pick_line.title";
+    /// FR-045 F-5 v1 (PRD-0004 N3, R-5): лейбл якоря параметра шаблонной
+    /// ноды при hover — qualified-адрес «to: Объект.Параметр» (полный путь
+    /// в тултипе; короткая форма — на теле, решение FR-045 Р-5).
+    pub const TOOLTIP_PORT_PARAM: &str = "tooltip.port.param";
     /// FR-050 Р-3 (этап C): тултип unmapped-позиционного входа.
     pub const TOOLTIP_UNMAPPED_SLOT: &str = "tooltip.unmapped.slot";
     /// FR-050 Р-3 (этап C): тултип unmapped-параметра (toParam без значения).
@@ -813,6 +817,10 @@ const RU: &[(&str, &str)] = &[
     (
         keys::TOOLTIP_UNMAPPED_SLOT,
         "Значение не подставлено: связь есть, но источник не отдал значение (строка-источник удалена / стала прозой / колонка отсутствует). Подключите ноду с актуальным значением или исправьте строку-источник.",
+    ),
+    (
+        keys::TOOLTIP_PORT_PARAM,
+        "to: {path}",
     ),
     (
         keys::TOOLTIP_UNMAPPED_PARAM,
@@ -1485,6 +1493,10 @@ const EN: &[(&str, &str)] = &[
     (
         keys::TOOLTIP_UNMAPPED_SLOT,
         "Value not applied: the edge exists but the source yielded no value (source line deleted / became prose / column missing). Connect a node with an up-to-date value or fix the source line.",
+    ),
+    (
+        keys::TOOLTIP_PORT_PARAM,
+        "to: {path}",
     ),
     (
         keys::TOOLTIP_UNMAPPED_PARAM,
