@@ -4,6 +4,8 @@
 //! T5: culling видимых нод по spatial index, замер кадра (HUD).
 //! T13: миникарта (CPU-снимок + GPU-квад). T14: поиск (UI-модель, анимации).
 
+/// PRD-0004 N1: анатомия ноды — контракт зон A–E и LOD-уровней.
+pub mod anatomy;
 pub mod animate;
 pub mod atlas;
 pub mod camera;
