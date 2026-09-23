@@ -173,7 +173,7 @@
     </span>
     <label class="ctl"><input type="checkbox" id="whatif"> what-if (FR-017)</label>
     <label class="ctl"><input type="checkbox" id="compact"> компакт (F-9)</label>
-    <label class="ctl"><input type="checkbox" id="guides" checked> направляющие</label>
+    <label class="ctl" title="Диагностический оверлей вёрстки: пунктирные вертикали колонок чисел/юнитов. В финальном виде направляющие на ноде НЕ отображаются — это невидимые направляющие раскладки, как в вёрстке."><input type="checkbox" id="guides"> направляющие (диагн.)</label>
     <label class="ctl" id="thrCtl">порог выноса:
       <input type="range" id="thr" min="2" max="6" step="1" value="4">
       <span id="thrVal">4</span> строк
@@ -230,7 +230,7 @@ const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
 const stage=$("#stage"), hero=$("#hero"), panel=$("#panel"), hint=$("#hint");
 const eSpill=$("#eSpill"), eUnmap=$("#eUnmap");
 const whatifCk=$("#whatif"), compactCk=$("#compact"), guidesCk=$("#guides"), thrEl=$("#thr"), thrVal=$("#thrVal"), thrCtl=$("#thrCtl");
-const S={v:"H3",fill:"L2",whatif:false,compact:false,guides:true,thr:4,blkOpen:false,descOpen:false,bdgIco:false};
+const S={v:"H3",fill:"L2",whatif:false,compact:false,guides:false,thr:4,blkOpen:false,descOpen:false,bdgIco:false};
 
 // ═══════════ Данные наполнения: одна нода «растёт» от L0 к L3 (шаблон tcp-lb) ═══════════
 const P=(name,val,unit,o={})=>Object.assign({name,val,unit},o);
@@ -504,7 +504,7 @@ function updateHint(){
     parts.push(`строк данных ${lines} · порог ${S.thr} → ${lines<=S.thr?"<b>сквозной лист</b>":"<b>блок снизу</b>"}`);}
   parts.push(`ширина ноды <b>${Math.round(hero.getBoundingClientRect().width)} px</b>`);
   parts.push(S.bdgIco?"бейджи: <b>иконки</b> (тесно — полный текст в тултипе)":"бейджи: <b>текст</b> в своей колонке");
-  parts.push(S.guides?"направляющие видны: <b>числа</b> · <b>юниты</b>":"направляющие скрыты (тумблер в шапке)");
+  parts.push(S.guides?"диагностические направляющие видны: <b>числа</b> · <b>юниты</b>":"направляющие — невидимые (только диагностика, тумблер в шапке)");
   if(S.whatif)parts.push("what-if активен: servers 3▸4, загрузка 67%→50%");
   hint.innerHTML=parts.join(" · ");
 }
