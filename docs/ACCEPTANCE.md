@@ -867,6 +867,25 @@ StageCalcFocus, квалифицированная адресация в под�
 | FR-057.7 | Гейты: `cargo test -p canvas-ui` 83/83 (+22 новых), `cargo test -p canvas-app --lib` 318/318 (вкл. G4-линт), `cargo fmt --check`, clippy `-D warnings` (canvas-ui/canvas-app; workspace — зелёный до чистки таргета) — зелёные; **0 правок app.rs** (проверка диффом); полный workspace-test/mcp-wasm — CI песочницы не тянет (диск/линкер) — прогон CI на push | ✅ |
 | FR-057.8 | Доки: `docs/ui-kit.md` §7.1 «Painter и WidgetState»; FR-документ — статус «✅ реализовано» + Changelog; `index-cr-fr.md`; PRD-0009 §16 | ✅ |
 
+## FR-059 — Волна 2 кита: миграция волна 1 (hints/flowmap/calc_panel) + витрина v2 — выполнено (2026-09-23)
+
+Приёмка FR-059 (по документу `docs/change-requests/fr-059-ui-kit-migration-wave1.md`).
+Паттерн U3/U5: числа дословно (0 визуального скачка), замены только там, где
+устраняется эвристика.
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-059.1 | `hints_ui.rs`: popup — `kit::dropdown_menu` («якорь + flip»; якорь-строка каретки 16 + `DROPDOWN_GAP` 4 — прежние «+4»/«−20» дословно; кламп к окну с полями `HINT_MARGIN`); строки — `kit::list_rows` + `ScrollState` (окно без прокрутки, `HINT_LIMIT` сохранён; подсветка `[px+4, y, pw−8, 24]` дословно); тесты якоря/flip/строк | ✅ |
+| FR-059.2 | `flowmap_ui.rs`: панель — `kit::stack` (End/Start, формулы x/y дословно), строки — `kit::list_rows` + `ScrollState` (`App.flow_map_scroll`, сброс на открытии, клип частичных строк); кап `VISIBLE_CAP` со строкой «… ещё N» и `break`-клампом удалены — окно 12 строк, все строки доступны скроллом (`scroll_bar`); hit-тесты — модельные индексы; колесо над списком скроллит | ✅ |
+| FR-059.3 | `calc_panel_ui.rs`: панель — `kit::stack` (Start/End над `PANEL_BOTTOM_GAP`), обе колонки — `list_rows` + `ScrollState` (`App.stage_calc_{vars,formulas}_scroll`, сброс на открытии stage); срез «… ещё N» удалён (кап высоты — ограничение размера); `var_rows`/`formula_rows` — модельные индексы, `StageCalcFocus` без изменений (инварианты 3/6/7); колесо скроллит колонку под курсором | ✅ |
+| FR-059.4 | Отрисовка трёх поверхностей — через `Painter` (FR-057): `paint_items_to_band` (полосы — сырые лог. px) / `paint_items_to_stage` (stage — world-конвенция); порядок items = draw-порядок; состояния строк — `WidgetState` (Selected/Hovered); цвета — прежние слоты (0 скачка) | ✅ |
+| FR-059.5 | Измеренные ширины (правило «ручная ширина → измеренная»): панель «Как считается» — значение/путь/формула через `TextMeasurer`/`ellipsis` вместо эвристики «6.3·символ» | ✅ |
+| FR-059.6 | Витрина `kit_gallery`: секции v2 — TextField ×3 (Normal/Focused с кареткой/Disabled с placeholder), Switch ×4 (`kit::switch`), Card (`kit::card`), список+скролл (8 строк в окне 3, выделение, демо-сдвиг, бегунок), Icon-глифы ×4 (`icon_glyph`); контент прокручивается (`ScrollState` App, колесо, шапка фиксирована, offset 0 = прежняя раскладка); i18n RU/EN +14 ключей; состояния шапки — `WidgetState`, `cursor_state`/`dropdown_item_state` — `#[deprecated]` | ✅ |
+| FR-059.7 | G1/G2: hit-rect'ы реестра из тех же раскладок (FLOW_MAP — `app.flow_map_layout()`, UiRect); pick-тесты реестра зелёные; G4-линт-матрица (1280×800, 1024×640, 800×560 × RU/EN, вкл. `lint_kit_gallery_open`) — 0 налезаний/0 выходов | ✅ |
+| FR-059.8 | G5-аудит трёх модулей (grep): 0 `take(`-срезов, 0 `break`-клампов раскладки (`token_before_caret` — `take_while`-скан, поведение прежнее), 0 `truncate_chars` | ✅ |
+| FR-059.9 | Гейты: fmt; clippy `-D warnings` (canvas-ui/canvas-app all-targets); canvas-ui 120/120, canvas-app lib 322/322 (+4) + 9 интеграционных бинарей, canvas-core 375, canvas-render 319, canvas-scene 93; wasm-gate `--check` зелёный (G7: 0 новых зависимостей); ступени 2–3 wasm/mcp-wasm — CI песочницы (диск; прецедент FR-057) | ✅ |
+| FR-059.10 | Доки: FR-документ — статус «✅ реализовано» + Changelog + перечень функций app.rs; `index-cr-fr.md`; PRD-0009 §16; `docs/ui-kit.md` §7.3 (состав витрины); `worklog.md` репо | ✅ |
+
 ## FR-048 / PRD-0007 — Цепочка расчёта цифры (PoC X0–X6) — выполнено (2026-09-22)
 
 Приёмка DoD PoC (§15 PRD-0007). Эталон владельца — юнит-экономика
