@@ -78,6 +78,11 @@ use canvas_core::{
     StageLayout, StageMetrics, Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
 };
 use canvas_ui::geometry::UiPoint;
+// FR-059 (волна 1 кита): draw-слой Painter (canvas-ui, G7 — данные) +
+// машина состояний виджета WidgetState — поверхности волны 1 рисуются
+// через Painter, состояния — через KitState (0 ручных матриц)
+use canvas_ui::paint::{PaintAlign, PaintItem, Painter};
+use canvas_ui::widget::WidgetState;
 use canvas_ui::{HitStack, HitTarget, UiLayer};
 // FR-044 Р-1 (стык раскладок): лейн-раскладка пилюль подписей веера —
 // чистые функции core с инвариантами (без пересечений, кламп в зону).
@@ -120,7 +125,7 @@ use canvas_render::search_ui::{
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
     body_area, measure_body_height, LineErrorHit, OverlayText, ScreenText, SpillHit, SpillHitKind,
-    TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT,
+    TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP, RESULT_LINE_HEIGHT, SANS_FAMILY,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{
@@ -255,6 +260,107 @@ pub(crate) fn screen_rect_quad_pub(
     radius: f32,
 ) -> CardInstance {
     screen_rect_quad(camera, viewport, rect, fill, border, radius)
+}
+
+/// FR-059 (волна 1 кита): конвертация items [`Painter`] (canvas-ui — ДАННЫЕ,
+/// инвариант G7) в инстансы screen-полосы кадра — сырые логические px
+/// (конвенция полос: рендер конвертирует screen→world ровно один раз —
+/// `renderer::screen_instance_to_world`; радиус в params — логические px).
+/// Тексты полос рисуются в screen-space — конвертации не требуют.
+/// Порядок items = draw-порядок — сохранён дословно (0 визуального скачка:
+/// та же раскладка, те же слоты, что при прежней ручной сборке квадов).
+fn paint_items_to_band(
+    items: Vec<PaintItem>,
+    quads: &mut Vec<CardInstance>,
+    texts: &mut Vec<OwnedScreenText>,
+) {
+    for item in items {
+        match item {
+            PaintItem::Rect {
+                rect,
+                fill,
+                border,
+                radius,
+            } => quads.push(CardInstance {
+                pos: [rect.x, rect.y],
+                size: [rect.w, rect.h],
+                fill,
+                border,
+                params: [radius, 0.0, 0.0, 1.0],
+            }),
+            PaintItem::Text {
+                area,
+                text,
+                color,
+                size,
+                align,
+            } => texts.push(OwnedScreenText {
+                text,
+                origin: [area.x, area.y],
+                width: area.w,
+                font_size: size,
+                color: crate::kit_ui::color4(color),
+                align: match align {
+                    PaintAlign::Left => TextAlign::Left,
+                    PaintAlign::Center => TextAlign::Center,
+                },
+            }),
+        }
+    }
+}
+
+/// FR-059: вариант [`paint_items_to_band`] для модального прохода main
+/// stage (`stage_instances` — world-конвенция, как прежние ручные пушы):
+/// Rect → screen_to_world + деление на zoom (радиус тоже), Text —
+/// screen-space без конвертации (тексты stage рисуются после квадов).
+fn paint_items_to_stage(
+    items: Vec<PaintItem>,
+    camera: &Camera,
+    viewport: Vec2,
+    zoom: f32,
+    quads: &mut Vec<CardInstance>,
+    texts: &mut Vec<OwnedScreenText>,
+) {
+    for item in items {
+        match item {
+            PaintItem::Rect {
+                rect,
+                fill,
+                border,
+                radius,
+            } => quads.push(CardInstance {
+                pos: camera.screen_to_world([rect.x, rect.y], viewport),
+                size: [rect.w / zoom, rect.h / zoom],
+                fill,
+                border,
+                params: [radius / zoom, 0.0, 0.0, 1.0],
+            }),
+            PaintItem::Text {
+                area,
+                text,
+                color,
+                size,
+                align,
+            } => texts.push(OwnedScreenText {
+                text,
+                origin: [area.x, area.y],
+                width: area.w,
+                font_size: size,
+                color: crate::kit_ui::color4(color),
+                align: match align {
+                    PaintAlign::Left => TextAlign::Left,
+                    PaintAlign::Center => TextAlign::Center,
+                },
+            }),
+        }
+    }
+}
+
+/// FR-059: приглушение цвета текста в f32-представлении (зеркало
+/// `dim_text_color` без промежуточного u8-округления — итоговый округ
+/// делает конвертация в Color на границе кадра).
+fn dim_color4(c: [f32; 4], alpha: f32) -> [f32; 4] {
+    [c[0], c[1], c[2], c[3] * alpha]
 }
 
 /// Кружок с центром в screen-точке → world-инстанс (паттерн `cards::dot`).
@@ -1429,6 +1535,10 @@ struct StageFrameCtx {
     model: calc_panel_ui::CalcPanelModel,
     /// Раскладка панели (None — нет ни переменных, ни формул).
     panel: Option<calc_panel_ui::CalcPanelLayout>,
+    /// FR-059: скроллы колонок панели, синхронизированные раскладкой
+    /// (копии состояния App на кадр — рисование бегунка/детерминизм).
+    vars_scroll: canvas_ui::kit::ScrollState,
+    formulas_scroll: canvas_ui::kit::ScrollState,
     /// Зона клампа пилюль (stage-локальные px; низ — верх панели − 8).
     zone: StageLocalRect,
     /// Активная подсветка (hover-превью перекрывает фиксированную).
@@ -1839,6 +1949,16 @@ pub struct App {
     /// всех проливаний канваса (источник → параметр → значение), клик по
     /// строке — переход к истоку (камера + подсветка Н9-3).
     flow_map_open: bool,
+    /// FR-059 (волна 1 кита): скролл списка карты проливаний (кит
+    /// список+скролл — замена капа «… ещё N»; сброс при закрытии панели).
+    flow_map_scroll: canvas_ui::kit::ScrollState,
+    /// FR-059: скролл контента витрины кита (секции v2 — контент выше
+    /// панели; сброс при открытии).
+    kit_gallery_scroll: canvas_ui::kit::ScrollState,
+    /// FR-059: скроллы колонок панели «Как считается» (кит список+скролл —
+    /// замена среза «… ещё N»; живут с stage, сбрасываются при открытии).
+    stage_calc_vars_scroll: canvas_ui::kit::ScrollState,
+    stage_calc_formulas_scroll: canvas_ui::kit::ScrollState,
     /// FR-012: цель «втягивания» во время drag — группа под центром
     /// перетаскиваемой ноды (зона подсвечивается, отпускание — вставка).
     group_drop_target: Option<usize>,
@@ -2064,6 +2184,10 @@ impl App {
             seen_flow_revision: 0,
             show_source: None,
             flow_map_open: false,
+            flow_map_scroll: canvas_ui::kit::ScrollState::default(),
+            kit_gallery_scroll: canvas_ui::kit::ScrollState::default(),
+            stage_calc_vars_scroll: canvas_ui::kit::ScrollState::default(),
+            stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),
             group_drop_target: None,
             settle_anim: None,
             desktop_mode,
@@ -5388,6 +5512,8 @@ impl App {
     /// выход — повторный тогл/Esc/клик мимо панели/«✕».
     fn toggle_flow_map(&mut self) {
         self.flow_map_open = !self.flow_map_open;
+        // FR-059: скролл списка — на каждое открытие с начала
+        self.flow_map_scroll = canvas_ui::kit::ScrollState::default();
         self.request_redraw();
     }
 
@@ -5402,8 +5528,30 @@ impl App {
     }
 
     /// Н9-4: раскладка панели по текущему вьюпорту и числу строк.
+    /// FR-059: скролл списка — состояние App; раскладка синхронизирует
+    /// КОПИЮ с контентом/вьюпортом (идемпотентно, resize-паттерн docs_ui)
+    /// — детерминизм рендер/hit (одни rect'ы на кадр).
     fn flow_map_layout(&self) -> flowmap_ui::FlowMapLayout {
-        flowmap_ui::flow_map_layout(self.viewport_logical(), self.flow_map_rows().len())
+        let mut scroll = self.flow_map_scroll.clone();
+        flowmap_ui::flow_map_layout(
+            self.viewport_logical(),
+            self.flow_map_rows().len(),
+            &mut scroll,
+        )
+    }
+
+    /// FR-059: скролл списка карты колесом (кит список+скролл).
+    fn flow_map_scroll_by(&mut self, dy: f32) {
+        let mut scroll = self.flow_map_scroll.clone();
+        flowmap_ui::flow_map_layout(
+            self.viewport_logical(),
+            self.flow_map_rows().len(),
+            &mut scroll,
+        );
+        scroll.scroll_by(dy);
+        scroll.clamp();
+        self.flow_map_scroll = scroll;
+        self.request_redraw();
     }
 
     /// Н9-4: текст строки карты «путь → адрес · значение» — адрес параметра
@@ -5422,8 +5570,14 @@ impl App {
 
     /// Н9-4: оверлей панели карты — screen-space квады + тексты (паттерн
     /// search_overlay): панель, заголовок, «✕», строки с hover-подсветкой,
-    /// «… ещё N»; пустой канвас — строка-подсказка. Unmapped-строки —
+    /// скроллбар; пустой канвас — строка-подсказка. Unmapped-строки —
     /// янтарным акцентом анализа (Р-3, тот же тон, что пунктир рёбер).
+    /// FR-059 (волна 1 кита): раскладка — flowmap_ui на ките (stack +
+    /// list_rows/scroll); отрисовка — через [`Painter`] (items → полоса,
+    /// `paint_items_to_band`), состояние строк — [`WidgetState`]
+    /// (Hovered — прежняя подсветка, 0 визуального скачка). Строка
+    /// «… ещё N» удалена — переполнение честно прокручивается (бегунок
+    /// кита, цвет — слот `control_border`).
     fn flow_map_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -5435,95 +5589,90 @@ impl App {
             return (instances, texts);
         }
         let rows = self.flow_map_rows();
-        let lay = flowmap_ui::flow_map_layout(viewport, rows.len());
+        let mut scroll = self.flow_map_scroll.clone();
+        let lay = flowmap_ui::flow_map_layout(viewport, rows.len(), &mut scroll);
         let palette = self.effective_palette();
-        // Панель
-        instances.push(CardInstance {
-            pos: [lay.panel[0], lay.panel[1]],
-            size: [lay.panel[2], lay.panel[3]],
-            fill: palette.menu_fill,
-            border: [0.22, 0.24, 0.30, 0.9],
-            params: [8.0, 0.0, 0.0, 1.0],
-        });
+        let kit_palette = palette.kit_palette();
+        let mut d = Painter::new();
+        // Панель — прежние слоты дословно
+        d.rect(lay.panel, palette.menu_fill, [0.22, 0.24, 0.30, 0.9], 8.0);
         // Заголовок + «✕» (кнопка — тем же стилем, что панель поиска)
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::FLOW_MAP_TITLE).to_owned(),
-            origin: [lay.panel[0] + 12.0, lay.panel[1] + 10.0],
-            width: lay.panel[2] - 48.0,
-            font_size: 13.0,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
-        texts.push(OwnedScreenText {
-            text: "✕".to_owned(),
-            origin: [lay.close[0] + 5.0, lay.close[1] + 3.0],
-            width: lay.close[2] - 8.0,
-            font_size: 14.0,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
+        d.label(
+            canvas_ui::geometry::UiRect::new(
+                lay.panel.x + 12.0,
+                lay.panel.y + 10.0,
+                (lay.panel.w - 48.0).max(0.0),
+                20.0,
+            ),
+            self.tr(keys::FLOW_MAP_TITLE),
+            kit_palette.text_title,
+            13.0,
+            PaintAlign::Left,
+        );
+        d.label(
+            canvas_ui::geometry::UiRect::new(
+                lay.close.x + 5.0,
+                lay.close.y + 3.0,
+                (lay.close.w - 8.0).max(0.0),
+                18.0,
+            ),
+            "✕",
+            kit_palette.text_title,
+            14.0,
+            PaintAlign::Left,
+        );
         // Пустое состояние — подсказка
         if rows.is_empty() {
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::FLOW_MAP_EMPTY).to_owned(),
-                origin: [
-                    lay.panel[0] + 12.0,
-                    lay.panel[1] + flowmap_ui::HEADER_H + 8.0,
-                ],
-                width: lay.panel[2] - 24.0,
-                font_size: 12.0,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    lay.panel.x + 12.0,
+                    lay.panel.y + flowmap_ui::HEADER_H + 8.0,
+                    (lay.panel.w - 24.0).max(0.0),
+                    20.0,
+                ),
+                self.tr(keys::FLOW_MAP_EMPTY),
+                kit_palette.text,
+                12.0,
+                PaintAlign::Left,
+            );
+            paint_items_to_band(d.take_items(), &mut instances, &mut texts);
             return (instances, texts);
         }
         // Строки: hover-подсветка по курсору (аффорданс — как меню T7),
-        // unmapped — янтарь анализа (Р-3)
-        let amber = {
-            let c = canvas_render::cards::UNMAPPED_EDGE_COLOR;
-            Color::rgba(
-                (c[0] * 255.0) as u8,
-                (c[1] * 255.0) as u8,
-                (c[2] * 255.0) as u8,
-                255,
-            )
-        };
+        // unmapped — янтарь анализа (Р-3). Состояние — WidgetState
+        // (Hovered → прежняя подсветка), цвет — прежний (0 скачка)
+        let amber = canvas_render::cards::UNMAPPED_EDGE_COLOR;
         let hovered = flowmap_ui::flow_map_row_at(&lay, self.cursor);
-        for (i, rect) in lay.rows.iter().enumerate() {
-            if hovered == Some(i) {
-                instances.push(CardInstance {
-                    pos: [rect[0], rect[1]],
-                    size: [rect[2], rect[3]],
-                    fill: [0.24, 0.30, 0.42, 0.9],
-                    border: [0.0; 4],
-                    params: [4.0, 0.0, 0.0, 1.0],
-                });
+        for (index, rect) in &lay.rows {
+            let row = &rows[*index];
+            let mut state = WidgetState::default();
+            state.set_pointer(hovered == Some(*index), false);
+            if state.kit_state() == canvas_ui::kit::KitState::Hovered {
+                d.rect(*rect, [0.24, 0.30, 0.42, 0.9], [0.0; 4], 4.0);
             }
-            let row = &rows[i];
-            texts.push(OwnedScreenText {
-                text: self.flow_map_row_text(row),
-                origin: [rect[0] + 6.0, rect[1] + 5.0],
-                width: rect[2] - 10.0,
-                font_size: 12.0,
-                color: if row.value.is_some() {
-                    palette.body
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rect.x + 6.0,
+                    rect.y + 5.0,
+                    (rect.w - 10.0).max(0.0),
+                    flowmap_ui::ROW_H,
+                ),
+                &self.flow_map_row_text(row),
+                if row.value.is_some() {
+                    kit_palette.text
                 } else {
                     amber
                 },
-                align: TextAlign::Left,
-            });
+                12.0,
+                PaintAlign::Left,
+            );
         }
-        // «… ещё N» — скрытые сверх капа/высоты
-        if let Some((rect, hidden)) = lay.more {
-            texts.push(OwnedScreenText {
-                text: self.trf(keys::FLOW_MAP_MORE, &[("{n}", &hidden.to_string())]),
-                origin: [rect[0] + 6.0, rect[1] + 6.0],
-                width: rect[2] - 10.0,
-                font_size: 12.0,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+        // FR-059: бегунок скролла (кит scroll_bar) — цвет прежнего хрома
+        // панелей (слот рамки панелей)
+        if let Some(knob) = canvas_ui::kit::scroll_bar(lay.list, &scroll, &kit_palette) {
+            d.rect(knob, palette.palette_border, [0.0; 4], 2.0);
         }
+        paint_items_to_band(d.take_items(), &mut instances, &mut texts);
         (instances, texts)
     }
 
@@ -5849,6 +5998,10 @@ impl App {
     /// FR-055 (этап U4 PRD-0009, F-8): витрина кита — полоса Modals кадра.
     /// Компоненты × состояния × RU/EN × темы; слоты палитры — из
     /// `effective_palette().kit_palette()` (маппинг render→ui).
+    /// FR-059 (волна 1 кита): секции компонентов v2 — TextField/Switch/
+    /// Card/список+скролл/Icon-глифы (контракт FR-058); контент
+    /// прокручивается ([`WidgetState`] для состояний шапки — вместо
+    /// deprecated-делегатов; бегунок — kit::scroll_bar).
     fn kit_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut out = (Vec::new(), Vec::new());
         let viewport = self.viewport_logical();
@@ -5859,7 +6012,8 @@ impl App {
         let lang = self.settings.language;
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        let lay = crate::kit_ui::gallery_layout(viewport, lang, &mut m, &mut fs);
+        let scroll = self.kit_gallery_scroll.clone();
+        let lay = crate::kit_ui::gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs);
         let mut d = crate::kit_ui::KitDraw::new(&self.camera, viewport);
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
         let cursor = self.cursor;
@@ -5875,19 +6029,22 @@ impl App {
         );
 
         // Шапка: заголовок + кнопка темы (реальный kit::Button Primary) + «✕»
+        // FR-059: состояния — WidgetState (машина состояний FR-057)
         let hover = |r: &canvas_ui::geometry::UiRect| crate::kit_ui::cursor_in(r, cursor);
-        let theme_state = crate::kit_ui::cursor_state(hover(&lay.theme), false);
+        let mut theme_widget = WidgetState::default();
+        theme_widget.set_pointer(hover(&lay.theme), false);
         let theme_style = canvas_ui::kit::button_style(
             canvas_ui::kit::ButtonVariant::Primary,
-            theme_state,
+            theme_widget.kit_state(),
             &palette,
         );
         let (theme_rect, theme_label) =
             crate::kit_ui::theme_button_layout(lay.theme, lang, &mut m, &mut fs);
         d.control(theme_rect, &theme_style);
         d.label_center(theme_rect, &theme_label, theme_style.text, 13.0);
-        let close_state = crate::kit_ui::cursor_state(hover(&lay.close), false);
-        let close_style = canvas_ui::kit::icon_button_style(close_state, &palette);
+        let mut close_widget = WidgetState::default();
+        close_widget.set_pointer(hover(&lay.close), false);
+        let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
         d.control(lay.close, &close_style);
         d.label_center(lay.close, "✕", close_style.text, 13.0);
         d.label_left(
@@ -5986,8 +6143,9 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             for r in &lay.dropdown_items {
-                let state = crate::kit_ui::dropdown_item_state(crate::kit_ui::cursor_in(r, cursor));
-                let style = canvas_ui::kit::chip_style(state, &palette);
+                let mut item_widget = WidgetState::default();
+                item_widget.set_pointer(crate::kit_ui::cursor_in(r, cursor), false);
+                let style = canvas_ui::kit::chip_style(item_widget.kit_state(), &palette);
                 d.rect(*r, style.fill, [0.0; 4], 4.0);
                 let text = label(crate::i18n::keys::KIT_DROPDOWN_ITEM);
                 d.label_left(
@@ -6029,6 +6187,116 @@ impl App {
                     12.0,
                 );
             }
+        }
+
+        // === FR-059: секции компонентов v2 (FR-058) ===
+        // TextField: Normal / Focused (каретка) / Disabled + placeholder
+        for (state, focused, field) in &lay.text_fields {
+            let style = canvas_ui::kit::control_style_of(
+                palette.control_fill,
+                if *focused {
+                    palette.accent
+                } else {
+                    palette.control_border
+                },
+                palette.text,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.control(field.rect, &style);
+            let text_color = if *state == canvas_ui::kit::KitState::Disabled {
+                palette.disabled_text
+            } else {
+                palette.text
+            };
+            d.label_left(field.text_area, &field.text_shown, text_color, 13.0);
+            if *focused && field.caret_x >= 0.0 {
+                // Каретка — рамка 1.5 px слотом accent (фокус-рамка FR-057)
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(
+                        field.caret_x,
+                        field.text_area.y + 4.0,
+                        1.5,
+                        field.text_area.h - 8.0,
+                    ),
+                    palette.accent,
+                    [0.0; 4],
+                    0.0,
+                );
+            }
+        }
+        // Switch: Off/On × Normal/Hovered/Disabled (kit::switch — слоты)
+        for (slot, on, state) in &lay.switches {
+            let sw = canvas_ui::kit::switch(*slot, *on, *state, &palette);
+            d.control(sw.track, &sw.track_style);
+            d.rect(sw.knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
+        }
+        // Card: хедер + тело внутри пада панели (kit::card)
+        if let Some(card) = &lay.card {
+            d.rect(
+                card.rect,
+                panel_style.fill,
+                panel_style.border,
+                panel_style.radius,
+            );
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    card.header.x,
+                    card.header.y + 2.0,
+                    card.header.w,
+                    16.0,
+                ),
+                &label(crate::i18n::keys::KIT_CARD_TITLE),
+                palette.text_title,
+                13.0,
+            );
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(card.body.x, card.body.y, card.body.w, 16.0),
+                &label(crate::i18n::keys::KIT_CARD_BODY),
+                palette.text_muted,
+                12.0,
+            );
+        }
+        // Список + скролл: строки с выделением + бегунок (kit::list_rows)
+        if lay.list_area.w > 0.0 {
+            for (index, row) in &lay.list_rows {
+                let mut row_widget = WidgetState::default();
+                row_widget.set_selected(*index == lay.list_selected);
+                let style = canvas_ui::kit::chip_style(row_widget.kit_state(), &palette);
+                d.rect(*row, style.fill, [0.0; 4], 4.0);
+                let text = crate::i18n::trf(
+                    lang,
+                    crate::i18n::keys::KIT_LIST_ROW,
+                    &[("{n}", &(index + 1).to_string())],
+                );
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        row.x + 8.0,
+                        row.y + 4.0,
+                        row.w - 16.0,
+                        row.h - 6.0,
+                    ),
+                    &text,
+                    style.text,
+                    12.0,
+                );
+            }
+            if let Some(knob) =
+                canvas_ui::kit::scroll_bar(lay.list_area, &lay.list_scroll, &palette)
+            {
+                d.rect(knob, palette.control_border, [0.0; 4], 2.0);
+            }
+        }
+        // Icon-глифы v2: Search/ArrowLeft/ArrowRight/Refresh (icon_glyph)
+        for (rect, icon) in &lay.icon_glyphs {
+            let style =
+                canvas_ui::kit::icon_button_style(canvas_ui::kit::KitState::Normal, &palette);
+            d.control(*rect, &style);
+            let area = canvas_ui::geometry::UiRect::new(rect.x, rect.y + 1.0, rect.w, rect.h);
+            d.label_center(area, canvas_ui::kit::icon_glyph(*icon), style.text, 13.0);
+        }
+        // FR-059: бегунок скролла контента витрины (контент выше панели)
+        if let Some(knob) = canvas_ui::kit::scroll_bar(lay.sections_viewport, &scroll, &palette) {
+            d.rect(knob, palette.control_border, [0.0; 4], 2.0);
         }
 
         // Конвертация владеемых текстов адаптера в OwnedScreenText кадра
@@ -6468,6 +6736,11 @@ impl App {
 
     /// FR-021: оверлей popup подсказок — подложка + строки
     /// (имя + серая деталь), выделение акцентом. Паттерн wheel_overlay.
+    /// FR-059 (волна 1 кита): геометрия — `hints_ui::popup_rect`/
+    /// `hint_rows` (`kit::dropdown_menu` + `kit::list_rows`); отрисовка —
+    /// через [`Painter`] (items → полоса, `paint_items_to_band`);
+    /// выделение строки — [`WidgetState`] → `KitState::Selected`
+    /// (цвет подсветки — прежний, 0 визуального скачка).
     fn hints_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
@@ -6476,46 +6749,53 @@ impl App {
         }
         let palette = self.effective_palette();
         let viewport = self.viewport_logical();
-        let [px, py, pw, ph] =
-            hints_ui::popup_layout(self.hints.anchor, viewport, self.hints.items.len());
-        if pw <= 0.0 {
+        let Some(popup) = hints_ui::popup_rect(self.hints.anchor, viewport, self.hints.items.len())
+        else {
             return (instances, texts);
-        }
-        instances.push(CardInstance {
-            pos: [px, py],
-            size: [pw, ph],
-            fill: palette.menu_fill,
-            border: [0.22, 0.24, 0.30, 0.95],
-            params: [6.0, 0.0, 0.0, 1.0],
-        });
-        for (i, item) in self.hints.items.iter().enumerate() {
-            let row_y = py + hints_ui::HINT_MARGIN + i as f32 * hints_ui::HINT_ROW_H;
-            if i == self.hints.selected {
-                instances.push(CardInstance {
-                    pos: [px + 4.0, row_y],
-                    size: [pw - 8.0, hints_ui::HINT_ROW_H],
-                    fill: [0.18, 0.29, 0.48, 0.95],
-                    border: [0.0; 4],
-                    params: [4.0, 0.0, 0.0, 1.0],
-                });
+        };
+        let mut d = Painter::new();
+        let kit_palette = palette.kit_palette();
+        // Подложка popup — прежние слоты дословно (заливка/рамка/радиус 6)
+        d.rect(popup, palette.menu_fill, [0.22, 0.24, 0.30, 0.95], 6.0);
+        for (index, row) in hints_ui::hint_rows(popup, self.hints.items.len()) {
+            let Some(item) = self.hints.items.get(index) else {
+                continue;
+            };
+            // Состояние строки — машина состояний виджета (FR-057):
+            // клавиатурная селекция → Selected
+            let mut state = WidgetState::default();
+            state.set_selected(index == self.hints.selected);
+            if state.kit_state() == canvas_ui::kit::KitState::Selected {
+                d.rect(row, [0.18, 0.29, 0.48, 0.95], [0.0; 4], 4.0);
             }
-            texts.push(OwnedScreenText {
-                text: item.label.clone(),
-                origin: [px + 10.0, row_y + 4.0],
-                width: 118.0,
-                font_size: 12.0,
-                color: palette.title,
-                align: TextAlign::Left,
-            });
-            texts.push(OwnedScreenText {
-                text: item.detail.clone(),
-                origin: [px + 134.0, row_y + 6.0],
-                width: (pw - 142.0).max(20.0),
-                font_size: 10.0,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+            // Подписи — прежние смещения/кегли/цвета дословно (слоты кита:
+            // title → text_title, body → text)
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    popup.x + 10.0,
+                    row.y + 4.0,
+                    118.0,
+                    hints_ui::HINT_ROW_H,
+                ),
+                &item.label,
+                kit_palette.text_title,
+                12.0,
+                PaintAlign::Left,
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    popup.x + 134.0,
+                    row.y + 6.0,
+                    (popup.w - 142.0).max(20.0),
+                    hints_ui::HINT_ROW_H,
+                ),
+                &item.detail,
+                kit_palette.text,
+                10.0,
+                PaintAlign::Left,
+            );
         }
+        paint_items_to_band(d.take_items(), &mut instances, &mut texts);
         (instances, texts)
     }
 
@@ -10355,6 +10635,46 @@ impl App {
             .or(self.stage_calc_focus.as_ref())
     }
 
+    /// FR-059 (волна 1 кита): колесо над колонкой панели «Как считается»
+    /// прокручивает её список (кит список+скролл). Курсор вне окон —
+    /// ничего (wheel остаётся погашенным — stage модален).
+    fn stage_calc_wheel_scroll(&mut self, delta: MouseScrollDelta) {
+        let Some(stage) = self.main_stage.as_ref() else {
+            return;
+        };
+        let viewport = self.viewport_logical();
+        let rect = main_stage_rect(viewport);
+        if !point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
+            return;
+        }
+        let dy = match delta {
+            MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+            MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+        };
+        // Раскладка синхронизирует КОПИИ скроллов (детерминизм с кадром);
+        // мутация — только у целевой колонки, после конца заимствований
+        let mut vars = self.stage_calc_vars_scroll.clone();
+        let mut formulas = self.stage_calc_formulas_scroll.clone();
+        let panel = {
+            let model = self.stage_calc_model(stage);
+            calc_panel_layout(&model, rect.w, rect.h, 96.0, &mut vars, &mut formulas)
+        };
+        if panel.as_ref().is_some_and(|p| p.vars_area_at(self.cursor)) {
+            vars.scroll_by(dy);
+            vars.clamp();
+            self.stage_calc_vars_scroll = vars;
+            self.request_redraw();
+        } else if panel
+            .as_ref()
+            .is_some_and(|p| p.formulas_area_at(self.cursor))
+        {
+            formulas.scroll_by(dy);
+            formulas.clamp();
+            self.stage_calc_formulas_scroll = formulas;
+            self.request_redraw();
+        }
+    }
+
     /// FR-044 Р-1/Р-4: совместный контекст кадра main stage — геометрия
     /// веера, зона клампа пилюль с учётом панели «Как считается» (панель
     /// съедает низ зоны, Р-1 «между заголовком и панелью») и подсветка.
@@ -10385,7 +10705,18 @@ impl App {
         let model = self.stage_calc_model(stage);
         // Панель: нижняя зона stage; верх доступной зоны — 96 px от верха
         // (заголовок 56 + минимальная зона веера 40)
-        let panel = calc_panel_layout(&model, rect.w, rect.h, 96.0);
+        // FR-059: скроллы колонок синхронизируются раскладкой (копии на
+        // кадр — детерминизм рендер/hit)
+        let mut vars_scroll = self.stage_calc_vars_scroll.clone();
+        let mut formulas_scroll = self.stage_calc_formulas_scroll.clone();
+        let panel = calc_panel_layout(
+            &model,
+            rect.w,
+            rect.h,
+            96.0,
+            &mut vars_scroll,
+            &mut formulas_scroll,
+        );
         let panel_top_screen = panel.as_ref().map_or(rect.h - 46.0, |p| p.top);
         let zone = StageLocalRect {
             x: 0.0,
@@ -10397,6 +10728,8 @@ impl App {
             lines,
             model,
             panel,
+            vars_scroll,
+            formulas_scroll,
             zone,
             focus: self.stage_calc_active().cloned(),
         }
@@ -10981,35 +11314,59 @@ impl App {
         // unmapped — янтарный контур и «не подставлено») и «Расчёт ·
         // формулы» (маркер ƒ, формула с путями операндов). Подсветка Р-5:
         // строки фокуса — акцентная рамка, остальные приглушены (0.5).
+        // FR-059 (волна 1 кита): раскладка строк — kit::list_rows
+        // (calc_panel_ui, скролл вместо среза «… ещё N»); отрисовка —
+        // через [`Painter`] (items → модальный проход stage,
+        // `paint_items_to_stage`); ширины текстов — ИЗМЕРЕННЫЕ
+        // (TextMeasurer/ellipsis — замена эвристики «6.3·символ»,
+        // правило U5); бегунок — kit::scroll_bar (цвет — слот рамки).
         if let Some(panel) = &ctx.panel {
             let px = rect.x + panel.rect[0];
             let py = rect.y + panel.rect[1];
-            quads.push(CardInstance {
-                pos: camera.screen_to_world([px, py], viewport),
-                size: [panel.rect[2] / zoom, panel.rect[3] / zoom],
-                fill: palette.menu_fill,
-                border: palette.palette_border,
-                params: [10.0 / zoom, 0.0, 0.0, 1.0],
-            });
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::STAGE_CALC_VARS).to_owned(),
-                origin: [px + panel.vars_title[0], py + panel.vars_title[1] + 2.0],
-                width: panel.vars_title[2],
-                font_size: font(11.0),
-                color: palette.title,
-                align: TextAlign::Left,
-            });
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::STAGE_CALC_FORMULAS).to_owned(),
-                origin: [
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let mut d = Painter::new();
+            let kit_palette = palette.kit_palette();
+            // quote — вне среза кита (значение/ошибка/unmapped — прежние
+            // слоты); Color → [f32;4] — представление (как в KitPalette)
+            let c4 = |c: Color| {
+                [
+                    c.r() as f32 / 255.0,
+                    c.g() as f32 / 255.0,
+                    c.b() as f32 / 255.0,
+                    c.a() as f32 / 255.0,
+                ]
+            };
+            d.rect(
+                canvas_ui::geometry::UiRect::new(px, py, panel.rect[2], panel.rect[3]),
+                palette.menu_fill,
+                palette.palette_border,
+                10.0,
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    px + panel.vars_title[0],
+                    py + panel.vars_title[1] + 2.0,
+                    panel.vars_title[2],
+                    16.0,
+                ),
+                self.tr(keys::STAGE_CALC_VARS),
+                kit_palette.text_title,
+                font(11.0),
+                PaintAlign::Left,
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
                     px + panel.formulas_title[0],
                     py + panel.formulas_title[1] + 2.0,
-                ],
-                width: panel.formulas_title[2],
-                font_size: font(11.0),
-                color: palette.title,
-                align: TextAlign::Left,
-            });
+                    panel.formulas_title[2],
+                    16.0,
+                ),
+                self.tr(keys::STAGE_CALC_FORMULAS),
+                kit_palette.text_title,
+                font(11.0),
+                PaintAlign::Left,
+            );
             let any_focus = ctx.focus.is_some();
             let row_focused = |row: usize| -> bool {
                 ctx.focus
@@ -11024,9 +11381,13 @@ impl App {
                 }
             };
             let unmapped_text = self.tr(keys::STAGE_CALC_UNMAPPED).to_owned();
-            for (i, row) in panel.var_rows.iter().enumerate() {
-                let var = &ctx.model.vars[i];
-                let focused = row_focused(i);
+            for (index, row) in &panel.var_rows {
+                let var = &ctx.model.vars[*index];
+                // Состояние строки — WidgetState (FR-057): фокус Р-5 →
+                // Selected (рамка/приглушение — прежние слоты дословно)
+                let mut state = WidgetState::default();
+                state.set_selected(row_focused(*index));
+                let focused = state.kit_state() == canvas_ui::kit::KitState::Selected;
                 let alpha = row_alpha(focused);
                 let x = px + row[0];
                 let y = py + row[1];
@@ -11045,57 +11406,67 @@ impl App {
                 } else {
                     [0.0; 4]
                 };
-                quads.push(CardInstance {
-                    pos: camera.screen_to_world([x, y], viewport),
-                    size: [w / zoom, h / zoom],
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(x, y, w, h),
                     fill,
                     border,
-                    params: [6.0 / zoom, 0.0, 0.0, 1.0],
-                });
+                    6.0,
+                );
                 // Маркер строки — value-точка (Р-4)
-                let d = 6.0;
+                let dot_d = 6.0;
                 let mut dot_fill = if unmapped {
                     UNMAPPED_EDGE_COLOR
                 } else {
                     FLOW_EDGE_COLOR
                 };
                 dot_fill[3] *= alpha;
-                quads.push(CardInstance {
-                    pos: camera.screen_to_world([x + 6.0, y + h / 2.0 - d / 2.0], viewport),
-                    size: [d / zoom, d / zoom],
-                    fill: dot_fill,
-                    border: [0.0; 4],
-                    params: [d / 2.0 / zoom, 0.0, 0.0, 1.0],
-                });
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(
+                        x + 6.0,
+                        y + h / 2.0 - dot_d / 2.0,
+                        dot_d,
+                        dot_d,
+                    ),
+                    dot_fill,
+                    [0.0; 4],
+                    dot_d / 2.0,
+                );
                 let (value_text, value_color) = match &var.value {
-                    RowValue::Ok(text) => (text.clone(), palette.body),
-                    RowValue::Err(err) => (err.clone(), palette.error),
-                    RowValue::Unmapped => (unmapped_text.clone(), palette.quote),
+                    RowValue::Ok(text) => (text.clone(), kit_palette.text),
+                    RowValue::Err(err) => (err.clone(), kit_palette.control_danger),
+                    RowValue::Unmapped => (unmapped_text.clone(), c4(palette.quote)),
                 };
-                let vw = value_text.chars().count() as f32 * 6.3;
-                let path_color = dim_text_color(palette.body, alpha);
-                let row_value_color = dim_text_color(value_color, alpha);
-                let fit = ((w - 22.0 - vw - 12.0) / 6.3).max(4.0) as usize;
-                texts.push(OwnedScreenText {
-                    text: truncate_chars(&var.path, fit),
-                    origin: [x + 18.0, y + (h - 12.0) / 2.0],
-                    width: w - 22.0,
-                    font_size: font(11.0),
-                    color: path_color,
-                    align: TextAlign::Left,
-                });
-                texts.push(OwnedScreenText {
-                    text: value_text,
-                    origin: [x + w - 6.0 - vw, y + (h - 12.0) / 2.0],
-                    width: vw + 12.0,
-                    font_size: font(11.0),
-                    color: row_value_color,
-                    align: TextAlign::Left,
-                });
+                // FR-059: ширина значения — измеренная (вместо 6.3·символ),
+                // путь — ellipsis по фактической ширине (класс CR-015)
+                let vw = m.width_of(&mut fs, &value_text, SANS_FAMILY, font(11.0));
+                let path_color = dim_color4(kit_palette.text, alpha);
+                let row_value_color = dim_color4(value_color, alpha);
+                let path_max = (w - 22.0 - vw - 12.0).max(0.0);
+                d.label(
+                    canvas_ui::geometry::UiRect::new(x + 18.0, y + (h - 12.0) / 2.0, w - 22.0, h),
+                    &m.ellipsis(&mut fs, &var.path, SANS_FAMILY, font(11.0), path_max),
+                    path_color,
+                    font(11.0),
+                    PaintAlign::Left,
+                );
+                d.label(
+                    canvas_ui::geometry::UiRect::new(
+                        x + w - 6.0 - vw,
+                        y + (h - 12.0) / 2.0,
+                        vw + 12.0,
+                        h,
+                    ),
+                    &value_text,
+                    row_value_color,
+                    font(11.0),
+                    PaintAlign::Left,
+                );
             }
-            for (i, row) in panel.formula_rows.iter().enumerate() {
-                let formula = &ctx.model.formulas[i];
-                let focused = row_focused(ctx.model.vars.len() + i);
+            for (index, row) in &panel.formula_rows {
+                let formula = &ctx.model.formulas[*index];
+                let mut state = WidgetState::default();
+                state.set_selected(row_focused(ctx.model.vars.len() + *index));
+                let focused = state.kit_state() == canvas_ui::kit::KitState::Selected;
                 let alpha = row_alpha(focused);
                 let x = px + row[0];
                 let y = py + row[1];
@@ -11103,57 +11474,63 @@ impl App {
                 let h = row[3];
                 let mut fill = palette.search_row_fill;
                 fill[3] *= alpha;
-                quads.push(CardInstance {
-                    pos: camera.screen_to_world([x, y], viewport),
-                    size: [w / zoom, h / zoom],
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(x, y, w, h),
                     fill,
-                    border: if focused { SELECTION_BORDER } else { [0.0; 4] },
-                    params: [6.0 / zoom, 0.0, 0.0, 1.0],
-                });
+                    if focused { SELECTION_BORDER } else { [0.0; 4] },
+                    6.0,
+                );
                 // Маркер строки — ƒ (Р-4)
-                let f_color = dim_text_color(palette.title, alpha);
-                let text_color = dim_text_color(palette.body, alpha);
-                texts.push(OwnedScreenText {
-                    text: "ƒ".to_owned(),
-                    origin: [x + 6.0, y + (h - 12.0) / 2.0],
-                    width: 12.0,
-                    font_size: font(11.0),
-                    color: f_color,
-                    align: TextAlign::Left,
-                });
-                texts.push(OwnedScreenText {
-                    text: truncate_chars(&formula.display, (w / 6.3).max(8.0) as usize),
-                    origin: [x + 20.0, y + (h - 12.0) / 2.0],
-                    width: w - 26.0,
-                    font_size: font(11.0),
-                    color: text_color,
-                    align: TextAlign::Left,
-                });
-            }
-            // Индикаторы усечения за капом высоты (Q2 v1)
-            if panel.vars_cut > 0 {
-                texts.push(OwnedScreenText {
-                    text: self.trf(keys::STAGE_CALC_MORE, &[("n", &panel.vars_cut.to_string())]),
-                    origin: [px + panel.vars_title[0], py + panel.rect[3] - 12.0],
-                    width: panel.vars_title[2],
-                    font_size: font(10.0),
-                    color: palette.quote,
-                    align: TextAlign::Left,
-                });
-            }
-            if panel.formulas_cut > 0 {
-                texts.push(OwnedScreenText {
-                    text: self.trf(
-                        keys::STAGE_CALC_MORE,
-                        &[("n", &panel.formulas_cut.to_string())],
+                let f_color = dim_color4(kit_palette.text_title, alpha);
+                let text_color = dim_color4(kit_palette.text, alpha);
+                d.label(
+                    canvas_ui::geometry::UiRect::new(x + 6.0, y + (h - 12.0) / 2.0, 12.0, h),
+                    "ƒ",
+                    f_color,
+                    font(11.0),
+                    PaintAlign::Left,
+                );
+                d.label(
+                    canvas_ui::geometry::UiRect::new(x + 20.0, y + (h - 12.0) / 2.0, w - 26.0, h),
+                    &m.ellipsis(
+                        &mut fs,
+                        &formula.display,
+                        SANS_FAMILY,
+                        font(11.0),
+                        (w - 26.0).max(0.0),
                     ),
-                    origin: [px + panel.formulas_title[0], py + panel.rect[3] - 12.0],
-                    width: panel.formulas_title[2],
-                    font_size: font(10.0),
-                    color: palette.quote,
-                    align: TextAlign::Left,
-                });
+                    text_color,
+                    font(11.0),
+                    PaintAlign::Left,
+                );
             }
+            // FR-059: бегунки скролла колонок (кит scroll_bar) — переполнение
+            // честно прокручивается, срез «… ещё N» удалён (цвет — слот рамки)
+            for (area, scroll) in [
+                (&panel.vars_area, &ctx.vars_scroll),
+                (&panel.formulas_area, &ctx.formulas_scroll),
+            ] {
+                if let Some(knob) = canvas_ui::kit::scroll_bar(
+                    canvas_ui::geometry::UiRect::new(area[0], area[1], area[2], area[3]),
+                    scroll,
+                    &kit_palette,
+                ) {
+                    d.rect(
+                        canvas_ui::geometry::UiRect::new(px + knob.x, py + knob.y, knob.w, knob.h),
+                        palette.palette_border,
+                        [0.0; 4],
+                        2.0,
+                    );
+                }
+            }
+            paint_items_to_stage(
+                d.take_items(),
+                camera,
+                viewport,
+                zoom,
+                &mut quads,
+                &mut texts,
+            );
         }
         // 8c) Р-8: мини-карточки внешних источников под истоком — панель
         // «Как считается» полна, контекст внешних входов не теряется
@@ -11303,6 +11680,9 @@ impl App {
                 // FR-044 Р-5: свежий stage — без подсветки предыдущего
                 self.stage_calc_focus = None;
                 self.stage_calc_hover = None;
+                // FR-059: скроллы колонок панели — с начала
+                self.stage_calc_vars_scroll = canvas_ui::kit::ScrollState::default();
+                self.stage_calc_formulas_scroll = canvas_ui::kit::ScrollState::default();
                 // PRD-0007 (F-10, У10): stage и окно проверки взаимо-
                 // исключительны; снапшот остаётся в сессионном кэше —
                 // возврат через «?» мгновенный (≤ 1 с)
@@ -11983,6 +12363,8 @@ impl App {
                 Some(docs_ui::HelpMenuItem::Interface) => {
                     self.help_menu = None;
                     self.kit_gallery_open = true;
+                    // FR-059: контент витрины — с начала (скролл секций)
+                    self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
                     self.request_redraw();
                 }
                 None => {
@@ -15136,7 +15518,25 @@ impl App {
         // FR-042 (E3, F-9): открытое main stage модально — колесо глушится
         // (пан/зум канваса в stage недоступны, инвариант 8)
         if self.main_stage.is_some() {
+            // FR-059: исключение — колесо над колонками панели «Как
+            // считается» прокручивает список колонки (кит список+скролл);
+            // остальной stage — глушится (инвариант 8)
+            self.stage_calc_wheel_scroll(delta);
             return;
+        }
+        // FR-059: колесо над окном списка карты проливаний прокручивает
+        // список (кит список+скролл — замена капа «… ещё N»); знак —
+        // как у списков: колесо от себя (y<0) увеличивает offset
+        if self.flow_map_open {
+            let lay = self.flow_map_layout();
+            if flowmap_ui::flow_map_list_at(&lay, self.cursor) {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                };
+                self.flow_map_scroll_by(dy);
+                return;
+            }
         }
         // Ревизия FR-025: колесо над flyout свёрнутой палитры прокручивает
         // список шаблонов, а не панорамирует канвас (знак — как у списков:
@@ -15190,6 +15590,40 @@ impl App {
                         self.request_redraw();
                     }
                 }
+                return;
+            }
+        }
+        // FR-059: колесо над контентом витрины кита прокручивает секции
+        // (кит список+скролл; шапка фиксирована; знак — как у списков)
+        if self.kit_gallery_open {
+            let viewport = self.viewport_logical();
+            let sections = crate::kit_ui::gallery_scroll_viewport(viewport);
+            if crate::kit_ui::cursor_in(&sections, self.cursor) {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                };
+                // Контент синхронизируется раскладкой на кадре; здесь —
+                // оценка по полной высоте последнего кадра не нужна:
+                // scroll_by + clamp по фактической высоте раскладки ниже
+                let mut scroll = self.kit_gallery_scroll.clone();
+                let mut m = crate::kit_ui::new_measurer();
+                let mut fs = canvas_render::text::measure_font_system();
+                let palette = self.effective_palette().kit_palette();
+                let lay = crate::kit_ui::gallery_layout(
+                    viewport,
+                    self.settings.language,
+                    &scroll,
+                    &palette,
+                    &mut m,
+                    &mut fs,
+                );
+                scroll.viewport_h = lay.sections_viewport.h;
+                scroll.content_h = lay.content_h;
+                scroll.scroll_by(dy);
+                scroll.clamp();
+                self.kit_gallery_scroll = scroll;
+                self.request_redraw();
                 return;
             }
         }
@@ -19047,7 +19481,7 @@ mod tests {
         let panel = ctx.panel.as_ref().expect("панель построена");
         assert_eq!(panel.formula_rows.len(), 2);
         // Клик по строке формулы 0
-        let f = panel.formula_rows[0];
+        let f = panel.formula_rows[0].1;
         app.cursor = [rect.x + f[0] + 30.0, rect.y + f[1] + 5.0];
         app.click_main_stage();
         let focus = app.stage_calc_focus.as_ref().expect("фокус зафиксирован");
@@ -19085,7 +19519,7 @@ mod tests {
         let panel = ctx.panel.as_ref().expect("панель построена");
         // Геометрия кликов — до мутаций (заимствование stage)
         let var_click = {
-            let v = panel.var_rows[0];
+            let v = panel.var_rows[0].1;
             [rect.x + v[0] + 20.0, rect.y + v[1] + 5.0]
         };
         let (pill_item, pill_center) = {
@@ -19146,7 +19580,7 @@ mod tests {
         let ctx = app.stage_frame_ctx(stage, &rect, s);
         let panel = ctx.panel.as_ref().expect("панель построена");
         // Фиксация подсветки кликом по строке формулы
-        let f = panel.formula_rows[0];
+        let f = panel.formula_rows[0].1;
         app.cursor = [rect.x + f[0] + 30.0, rect.y + f[1] + 5.0];
         app.click_main_stage();
         assert!(app.stage_calc_focus.is_some(), "подсветка активна");
@@ -19164,7 +19598,7 @@ mod tests {
         let stage = app.main_stage.as_ref().expect("stage открыт");
         let ctx = app.stage_frame_ctx(stage, &rect, s);
         let panel = ctx.panel.as_ref().expect("панель");
-        let f = panel.formula_rows[0];
+        let f = panel.formula_rows[0].1;
         app.cursor = [rect.x + f[0] + 30.0, rect.y + f[1] + 5.0];
         app.click_main_stage();
         assert!(app.stage_calc_focus.is_some());
@@ -19248,8 +19682,16 @@ mod tests {
     ) -> (App, Arc<dyn CanvasStorage>) {
         let scene =
             SceneState::with_storage(Canvas::default(), PathBuf::from(path), Arc::clone(&storage));
-        let cache_dir =
-            std::env::temp_dir().join(format!("canvasdesk-w6-app-{}", std::process::id()));
+        // Уникальный каталог на вызов хелпера: тесты зовут его параллельно,
+        // общий путь «по pid» гонял create_dir_all/remove_dir_all между
+        // потоками — на Windows это PermissionDenied (флак CI gates
+        // windows, merge 77cbb98). Счётчик убирает пересечение путей.
+        static NEXT_CACHE_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let cache_dir = std::env::temp_dir().join(format!(
+            "canvasdesk-w6-app-{}-{}",
+            std::process::id(),
+            NEXT_CACHE_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
         let (search_responder, _rx) = {
             let (tx, rx) = std::sync::mpsc::channel();

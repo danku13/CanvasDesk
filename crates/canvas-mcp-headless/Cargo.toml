@@ -4,6 +4,7 @@ name = "canvas-mcp-headless"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 # мост (протокол + stdio-цикл) и модель сцены с MCP-инструментами

@@ -4,6 +4,7 @@ name = "canvas-ui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 # FR-051 U1: чистая геометрия экрана без GPU/ОС (PRD-0009 §7.3/§9.1:
