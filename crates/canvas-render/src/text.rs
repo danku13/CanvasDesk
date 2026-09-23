@@ -1866,6 +1866,14 @@ pub fn measure_body_height(
     desc: &str,
 ) -> f32 {
     let mut guard = measure_font_system();
+    // FR-061 приёмка (T9, I-2): strip-переопределения Param-литералов —
+    // в мере тоже (левый текст короче на литерал — рендер так же); исходы
+    // считаются здесь же (чистый eval_lines, уровень 2 — редкий путь).
+    // Усечение формул (план лестницы) остаётся стороной рендера —
+    // рост-only refit сохраняет запас (документированная цена).
+    let outcomes = canvas_core::expr::eval_lines(text);
+    let rows = row_grid::build_rows(text, Some(&outcomes), &[], &[], &[]);
+    let strip_overrides = row_grid::param_strip_overrides(&rows);
     with_body_stack(
         &mut guard,
         &ThemeColors::dark(),
@@ -1885,10 +1893,7 @@ pub fn measure_body_height(
         // высоту не уменьшает (I-6, growth-only).
         true,
         false,
-        // FR-061 коммит 3: измерение без усечения (план — сторона рендера;
-        // перенос длинной формулы меряется как прежде — рост-only refit
-        // сохраняет запас, документированная цена).
-        &[],
+        &strip_overrides,
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -2751,11 +2756,13 @@ impl TextSystem {
                     format!("{results_key}|Lang:{:?}", self.language)
                 };
 
-                // FR-061 этап D (D-8): источник описания Q3 (решение владельца
-                // 2026-09-23 — «desc→манифест→проза»): canvasdesk.desc →
-                // описание манифеста шаблона (снимок id — template_descs) →
-                // первый проза-абзац текста ноды (canvas-core, чистая функция —
-                // та же в сцене для резерва высоты, I-2).
+                // FR-061 этап D (D-8): источник описания — `canvasdesk.desc` →
+                // описание манифеста шаблона (снимок id — template_descs).
+                // ПРИЁМКА T9 (решение по фидбэку владельца 2026-09-24):
+                // prose-фолбэк «первый проза-абзац» УБРАН — он рисовал первый
+                // абзац тела ДВАЖДЫ (зона описания + тело — дублирование
+                // текста на каждой заметке с прозой; об этом предупреждал
+                // анализ этапа D). Зона описания — только явные источники.
                 let desc_text = node
                     .canvasdesk
                     .as_ref()
@@ -2763,11 +2770,6 @@ impl TextSystem {
                     .or_else(|| {
                         node.template()
                             .and_then(|t| self.template_descs.get(&t.id).cloned())
-                    })
-                    .or_else(|| {
-                        node.text
-                            .as_deref()
-                            .and_then(canvas_core::expr::first_prose_paragraph)
                     })
                     .unwrap_or_default();
                 let desc_ref = if desc_text.is_empty() {
@@ -2851,6 +2853,25 @@ impl TextSystem {
                     // Редактируемая нода / LOD-скрытие тела — как у тела:
                     // тело рисует EditingSession, авто-строки вернутся после.
                     let body_hidden = frame.editing == Some(index) || !body_visible(node, zoom_px);
+                    // FR-061 приёмка (T9, дублирование текста): сборка строк
+                    // ДО первого шейпа — strip-переопределения Param-литералов:
+                    // левый блок «servers = 3» замещается «servers =», литерал
+                    // показывается ТОЛЬКО в ячейке значения (прототип paramRow
+                    // = [имя][=][лидер]|[значение]). Один build_rows на оба
+                    // шейпа (первый и ellipsis-перешейп) — I-2/D-11.
+                    let whatif_deltas: &[(usize, String)] = whatif_nodes
+                        .get(&node.id)
+                        .map(|whatif| whatif.line_deltas.as_slice())
+                        .unwrap_or(&[]);
+                    let mut rows_data = row_grid::build_rows(
+                        &body_text,
+                        line_outcomes.map(|lines| lines.as_slice()),
+                        whatif_deltas,
+                        spill_views,
+                        auto_rows,
+                    );
+                    let strip_overrides: Vec<(usize, String)> =
+                        row_grid::param_strip_overrides(&rows_data);
                     let spill_prefix = if body_hidden {
                         Vec::new()
                     } else {
@@ -2880,7 +2901,7 @@ impl TextSystem {
                                 desc_ref,
                                 block_expanded,
                                 desc_expanded,
-                                &[],
+                                &strip_overrides,
                             ))
                         };
 
@@ -2926,17 +2947,9 @@ impl TextSystem {
                     let mut row_guides = None;
                     if let Some(layout) = body.as_mut() {
                         let (_, body_width, _) = body_area(node);
-                        let whatif_deltas: &[(usize, String)] = whatif_nodes
-                            .get(&node.id)
-                            .map(|whatif| whatif.line_deltas.as_slice())
-                            .unwrap_or(&[]);
-                        let mut rows_data = row_grid::build_rows(
-                            &body_text,
-                            line_outcomes.map(|lines| lines.as_slice()),
-                            whatif_deltas,
-                            spill_views,
-                            auto_rows,
-                        );
+                        // FR-061 этап B (D-2): rows_data собран ДО первого
+                        // шейпа (strip-переопределения Param-литералов) —
+                        // здесь только вставка хрома блока Н-2.
                         // FR-061 этап C (D-7/D-9): заголовок блока-ведомости
                         // (Н-2) — Σ узлового итога на направляющей чисел;
                         // вставка перед первой расчётной строкой, зеркально
@@ -3034,6 +3047,7 @@ impl TextSystem {
                             body_width,
                             MONO_FAMILY,
                             RESULT_FONT_SIZE,
+                            BODY_FONT_SIZE,
                             row_grid::BadgeMode::Text,
                             &[],
                         );
@@ -3047,15 +3061,16 @@ impl TextSystem {
                         // повторяются — план стабилен (floor не поднимается,
                         // prior сохраняется; числа/юниты не деградируют).
                         if pass.ellipsis.iter().any(|e| e.is_some()) {
-                            let overrides: Vec<(usize, String)> = pass
-                                .ellipsis
-                                .iter()
-                                .zip(&rows_data)
-                                .filter_map(|(e, row)| {
+                            // FR-061 приёмка (T9): merged-переопределения —
+                            // strip Param-литералов + план усечения формул
+                            // (строки не пересекаются: Param/Calc).
+                            let mut overrides: Vec<(usize, String)> = strip_overrides.clone();
+                            overrides.extend(pass.ellipsis.iter().zip(&rows_data).filter_map(
+                                |(e, row)| {
                                     let display = e.as_ref()?.display.clone();
                                     Some((row.source_line?, display))
-                                })
-                                .collect();
+                                },
+                            ));
                             let whatif_lines: &[usize] = whatif_nodes
                                 .get(&node.id)
                                 .map(|whatif| whatif.overrides.as_slice())
@@ -3102,6 +3117,7 @@ impl TextSystem {
                                 body_width,
                                 MONO_FAMILY,
                                 RESULT_FONT_SIZE,
+                                BODY_FONT_SIZE,
                                 pass.badge_mode,
                                 &pass.ellipsis,
                             );
@@ -4231,6 +4247,210 @@ impl TextSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Приёмка T9 FR-061 (фикс наложений чисел/юнитов): замер ячейки
+    /// TextMeasurer'ом с весом mono-шейпинга совпадает с фактическим
+    /// шейпингом ячейки. Полная производственная база шрифтов (FONT_DATA
+    /// поверх системных лиц FontSystem::new) — среда, где выбор лица по
+    /// весу реально работает: до фикса замер с MEDIUM промахивался мимо
+    /// Noto Sans Mono (лица 400/700) в системный шрифт того же веса
+    /// («rps» 19.2 px против рендера 21.6 px → зауженные направляющие).
+    #[test]
+    fn table_cell_measure_matches_mono_shaping() {
+        let mut fs = cosmic_text::FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let shaped = |fs: &mut FontSystem, text: &str| {
+            let mut buffer = Buffer::new(fs, Metrics::new(RESULT_FONT_SIZE, RESULT_LINE_HEIGHT));
+            buffer.set_wrap(fs, Wrap::None);
+            buffer.set_size(fs, Some(1_000_000.0), Some(RESULT_LINE_HEIGHT));
+            buffer.set_text(fs, text, mono_attrs(), Shaping::Advanced);
+            buffer.shape_until_scroll(fs, false);
+            buffer
+                .layout_runs()
+                .next()
+                .map(|run| run.line_w)
+                .unwrap_or(0.0)
+        };
+        for text in ["800", "rps", "1388.89", "ms·req/s", "4 687 200"] {
+            let measured = m.width_of_weighted(
+                &mut fs,
+                text,
+                MONO_FAMILY,
+                RESULT_FONT_SIZE,
+                row_grid::MEASURE_WEIGHT,
+            );
+            let rendered = shaped(&mut fs, text);
+            assert!(
+                (measured - rendered).abs() < 1e-3,
+                "«{text}»: замер {measured:.1} ≠ шейпинг {rendered:.1} — направляющие по чужим метрикам"
+            );
+        }
+    }
+
+    /// Приёмка T9 FR-061 (end-to-end CPU-прогон пайплайна таблицы, без GPU):
+    /// (1) литеральные значения Param не дублируются (левый блок strip'ается
+    /// до «имя =»); (2) после лестницы §3.4 левый текст каждой строки
+    /// заканчивается до ячейки значения (leader-инвариант); (3) зазор
+    /// значение→юнит по фактическим ширинам ячеек ≥ GUIDE_GAP − допуск.
+    #[test]
+    fn tabular_rows_fit_and_literal_values_not_duplicated() {
+        let theme = ThemeColors::dark();
+        let mut fs = cosmic_text::FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let sheet = "Балансировщик TCP: очередь M/M/1.\n\n\
+connections_per_sec = 800 rps\nserver_rate = 400 rps\nservers = 3\n\
+load = connections_per_sec / (servers * server_rate)\n";
+        let outcomes = canvas_core::expr::eval_lines(sheet);
+        let formula_lines: Vec<usize> = outcomes
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.is_some())
+            .map(|(i, _)| i)
+            .collect();
+
+        // (1) strip-переопределения: литеральные Param — «имя =».
+        let rows_data = row_grid::build_rows(sheet, Some(&outcomes), &[], &[], &[]);
+        let strip = row_grid::param_strip_overrides(&rows_data);
+        let stripped_lines: Vec<usize> = strip.iter().map(|(l, _)| *l).collect();
+        assert!(stripped_lines.contains(&2), "connections_per_sec = …");
+        assert!(stripped_lines.contains(&3), "server_rate = …");
+        assert!(stripped_lines.contains(&4), "servers = …");
+        assert!(!stripped_lines.contains(&5), "load — выражение, без strip");
+
+        for body_width in [360.0_f32, 300.0] {
+            // Первый шейп — со strip (как prepare_titles).
+            let mut layout = shape_body(
+                &mut fs,
+                &theme,
+                sheet,
+                body_width,
+                1.0,
+                &formula_lines,
+                &[],
+                Vec::new(),
+                &[],
+                canvas_core::Language::Ru,
+                None,
+                true,
+                false,
+                &strip,
+            );
+            let mut rows_data = row_grid::build_rows(sheet, Some(&outcomes), &[], &[], &[]);
+            let mut geo = row_geo(&layout, &rows_data, 1.0);
+            let mut i = 0;
+            while i < rows_data.len() {
+                if geo[i].3 == usize::MAX {
+                    rows_data.remove(i);
+                    geo.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+            let left_max = geo.iter().map(|g| g.2).fold(0.0_f32, f32::max);
+            let mut pass = row_grid::pass_a(
+                &mut measurer,
+                &mut fs,
+                &rows_data,
+                left_max,
+                body_width,
+                MONO_FAMILY,
+                RESULT_FONT_SIZE,
+                BODY_FONT_SIZE,
+                row_grid::BadgeMode::Text,
+                &[],
+            );
+            // Перешейп по плану усечения (как prepare_titles, merged strip).
+            if pass.ellipsis.iter().any(|e| e.is_some()) {
+                let mut overrides = strip.clone();
+                overrides.extend(pass.ellipsis.iter().zip(&rows_data).filter_map(|(e, row)| {
+                    let display = e.as_ref()?.display.clone();
+                    Some((row.source_line?, display))
+                }));
+                layout = shape_body(
+                    &mut fs,
+                    &theme,
+                    sheet,
+                    body_width,
+                    1.0,
+                    &formula_lines,
+                    &[],
+                    Vec::new(),
+                    &[],
+                    canvas_core::Language::Ru,
+                    None,
+                    true,
+                    false,
+                    &overrides,
+                );
+                geo = row_geo(&layout, &rows_data, 1.0);
+                let mut i = 0;
+                while i < rows_data.len() {
+                    if geo[i].3 == usize::MAX {
+                        rows_data.remove(i);
+                        geo.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+                let left_max = geo.iter().map(|g| g.2).fold(0.0_f32, f32::max);
+                pass = row_grid::pass_a(
+                    &mut measurer,
+                    &mut fs,
+                    &rows_data,
+                    left_max,
+                    body_width,
+                    MONO_FAMILY,
+                    RESULT_FONT_SIZE,
+                    BODY_FONT_SIZE,
+                    pass.badge_mode,
+                    &pass.ellipsis,
+                );
+            }
+            let guides = pass.guides.expect("таблица есть");
+            // (2) leader-инвариант для КАЖДОЙ строки после лестницы.
+            for (row, g) in rows_data.iter().zip(&geo) {
+                assert!(
+                    g.2 + row_grid::LEADER_PAD <= guides.value_x + 0.5,
+                    "ширина {body_width}: строка {:?} ({:?}) — левый текст ({:.1}) пересекает ячейку значения ({:.1})",
+                    row.name, row.kind, g.2, guides.value_x
+                );
+            }
+            // (3) фактический зазор значение→юнит по ширинам ячеек.
+            let area_px = body_width;
+            for row in &rows_data {
+                let attrs = if row.upstream {
+                    mono_oblique_attrs()
+                } else {
+                    mono_attrs()
+                };
+                let value = shape_row_cell(
+                    &mut fs,
+                    &row.value,
+                    attrs,
+                    Color::rgb(0, 0, 0),
+                    area_px,
+                    1.0,
+                );
+                let unit =
+                    shape_row_cell(&mut fs, &row.unit, attrs, Color::rgb(0, 0, 0), area_px, 1.0);
+                let uw = unit.as_ref().map(|c| c.width_px).unwrap_or(0.0);
+                let value_right = guides.value_right();
+                let gap = (guides.unit_right() - uw) - value_right;
+                assert!(
+                    gap >= row_grid::GUIDE_GAP - 1.0,
+                    "ширина {body_width}: юнит {:?} налезает на значение (зазор {gap:.1})",
+                    row.unit
+                );
+                let _ = value; // ячейка значения право-прижата — правый край закреплён
+            }
+        }
+    }
 
     // FR-056 (F-5): клип текстов полосы — TextBounds = пересечение
     // собственных границ текста со scissor-бакетом полосы.

@@ -437,6 +437,9 @@ impl MeasuredItem<'_> {
                     family,
                     size,
                     max_width: f32::INFINITY,
+                    // UI-раскладка — пропорциональный sans (Weight 500,
+                    // паритет sans_attrs рендера; см. TextSpec::weight).
+                    weight: cosmic_text::Weight::MEDIUM,
                 };
                 let measured = m.measure(fs, &spec);
                 let mut w = measured.width.max(min_w);
@@ -997,6 +1000,7 @@ mod tests {
             family,
             size: 13.0,
             max_width: f32::INFINITY,
+            weight: cosmic_text::Weight::MEDIUM,
         };
         let measured_h = m.measure(&mut fs, &spec).height;
         approx(measured[0].h, measured_h);

@@ -3681,13 +3681,14 @@ fn desc_expanded_toggle_and_auto_collapse() {
     assert!(scene.desc_expanded.is_empty());
 }
 
-/// FR-061 хвосты (D-8/Q3, «desc→манифест→проза»): описание ноды без
-/// canvasdesk.desc и манифеста — первый проза-абзац текста (числовые
-/// абзацы и фенсы описанием не становятся).
+/// FR-061 приёмка T9 (решение по фидбэку владельца 2026-09-24): prose-
+/// фолбэк описания УБРАН — он рисовал первый абзац тела ДВАЖДЫ (зона
+/// описания + тело). Зона описания — только явные источники:
+/// `canvasdesk.desc` → манифест шаблона; у обычной заметки зоны нет.
 #[test]
-fn node_desc_falls_back_to_first_prose_paragraph() {
+fn node_desc_without_prose_fallback() {
+    // Случай 1: явный desc — зона есть
     let mut canvas = Canvas::default();
-    // Случай 1: явный desc приоритетнее прозы
     let mut node = Node::text("n1", "Проза текста.\n\n800 rps", 0.0, 0.0);
     node.canvasdesk = Some(CanvasdeskExt {
         desc: Some("Явное описание".to_owned()),
@@ -3702,10 +3703,11 @@ fn node_desc_falls_back_to_first_prose_paragraph() {
     assert_eq!(
         scene.node_desc_text(0).as_deref(),
         Some("Явное описание"),
-        "явный desc приоритетнее"
+        "явный desc — источник зоны"
     );
 
-    // Случай 2: без desc — проза-фолбэк (числовой абзац пропускается)
+    // Случай 2: обычная заметка с прозой — зоны НЕТ (первый абзац не
+    // дублируется в зоне описания, он живёт только в теле)
     let mut canvas = Canvas::default();
     canvas.nodes.push(Node::text(
         "n2",
@@ -3714,17 +3716,8 @@ fn node_desc_falls_back_to_first_prose_paragraph() {
         0.0,
     ));
     let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-q3b.canvas"));
-    assert_eq!(
-        scene.node_desc_text(0).as_deref(),
-        Some("Описание нагрузки шлюза."),
-        "проза после числового абзаца"
+    assert!(
+        scene.node_desc_text(0).is_none(),
+        "проза-фолбэк убран: без desc/манифеста зоны нет"
     );
-
-    // Случай 3: только числа — описания нет
-    let mut canvas = Canvas::default();
-    canvas
-        .nodes
-        .push(Node::text("n3", "800 rps\n= 800", 0.0, 0.0));
-    let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-q3c.canvas"));
-    assert!(scene.node_desc_text(0).is_none(), "числа — не описание");
 }

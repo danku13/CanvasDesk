@@ -24,6 +24,15 @@ use canvas_ui::row_guides::{measure_row_cells, RowGuides};
 
 use crate::SpillView;
 
+/// Вес замера ячеек таблицы — паритет `mono_attrs()` рендера (Weight 400).
+/// Приёмка T9 FR-061: cosmic-text ищет лицо семейства только среди лиц
+/// ТОЧНОГО веса запроса (`get_font_matches` → `font_weight_diff == 0`);
+/// у Noto Sans Mono лица 400/700, и запрос MEDIUM промахивался мимо
+/// семейства целиком — замер уходил в системный шрифт того же веса
+/// («rps» 19.2 px против рендера 21.6 px) → направляющие заужены →
+/// юниты/числа налезали на ячейки. Замер ячеек — только NORMAL.
+pub(crate) const MEASURE_WEIGHT: cosmic_text::Weight = cosmic_text::Weight::NORMAL;
+
 /// Зазор между ячейками «значение»/«юнит»/«бейдж» (world-px) — параметр
 /// [`pass_a`]; токен D-14 [`canvas_core::tokens::TABLE_GUIDE_GAP`] (анализ
 /// §3.1: единая система отсчёта).
@@ -498,11 +507,24 @@ fn cell_widths(
     family: &str,
     size: f32,
 ) -> canvas_ui::row_guides::RowCellWidths {
-    let cells = measure_row_cells(measurer, fs, &row.value, &row.unit, 0.0, family, size);
+    let cells = measure_row_cells(
+        measurer,
+        fs,
+        &row.value,
+        &row.unit,
+        0.0,
+        family,
+        size,
+        MEASURE_WEIGHT,
+    );
     let badge_w = match (&row.badge, badge_mode) {
         (None, _) => 0.0,
-        (Some(badge), BadgeMode::Text) => measurer.width_of(fs, badge.text(), family, size),
-        (Some(badge), BadgeMode::Icon) => measurer.width_of(fs, badge.icon(), family, size),
+        (Some(badge), BadgeMode::Text) => {
+            measurer.width_of_weighted(fs, badge.text(), family, size, MEASURE_WEIGHT)
+        }
+        (Some(badge), BadgeMode::Icon) => {
+            measurer.width_of_weighted(fs, badge.icon(), family, size, MEASURE_WEIGHT)
+        }
         (Some(_), BadgeMode::None) => 0.0,
     };
     canvas_ui::row_guides::RowCellWidths {
@@ -525,6 +547,10 @@ fn cell_widths(
 /// с усечённым отображением не поднимается обратно — план стабилен).
 /// `prior` — уже применённый план усечения (выравнен по `rows`); строки
 /// с планом не пере-планируются (алиас/ellipsis фиксированы за билд).
+/// `size` — кегль ЯЧЕЕК (результаты, mono 12); `left_size` — кегль ЛЕВОГО
+/// текста строк (тело, mono 14 — приёмка T9: план усечения обязан мерить
+/// левый текст его фактическим кеглем, иначе бюджет дорожки завышен
+/// на (left_size/size − 1) и усечённая строка всё равно наезжает).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pass_a(
     measurer: &mut TextMeasurer,
@@ -534,6 +560,7 @@ pub(crate) fn pass_a(
     body_width: f32,
     family: &str,
     size: f32,
+    left_size: f32,
     floor: BadgeMode,
     prior: &[Option<RowEllipsis>],
 ) -> TablePass {
@@ -587,7 +614,9 @@ pub(crate) fn pass_a(
                             .enumerate()
                             .map(|(i, row)| {
                                 prior.get(i).cloned().flatten().or_else(|| {
-                                    plan_row_ellipsis(measurer, fs, row, available, family, size)
+                                    plan_row_ellipsis(
+                                        measurer, fs, row, available, family, left_size,
+                                    )
                                 })
                             })
                             .collect()
@@ -604,10 +633,16 @@ pub(crate) fn pass_a(
 }
 
 /// FR-061 коммит 3: план усечения ОДНОЙ строки (последняя ступень §3.4).
-/// Только расчётные строки: имя параметра/путь авто-строки не деградируют
-/// («имя+числа+юниты всегда читаемы»), RHS параметра — числовой литерал.
-/// Порядок: алиасы идентификаторов (Q8) → хвостовой ellipsis
-/// ([`TextMeasurer::ellipsis`], детерминированный бинарный поиск).
+/// Расчётные строки (Calc) — усечение формулы целиком: имя параметра/путь
+/// авто-строки не деградируют («имя+числа+юниты всегда читаемы»).
+/// Приёмка T9 FR-061: присваивания с ВЫРАЖЕНИЕМ в RHS (`load = a / b`) —
+/// тоже формульные строки (прототип: calcRow = [имя][=][формула]); их RHS
+/// деградирует с ЗАЩИЩЁННЫМ префиксом «имя =» (само имя не трогается),
+/// иначе левый текст наезжает на ячейки (нечем спасать — Param ранее не
+/// планировался вовсе). Литеральные RHS — числа: не деградируют никогда
+/// ([`is_literal_rhs`]). Порядок: алиасы идентификаторов (Q8) → хвостовой
+/// ellipsis ([`TextMeasurer::ellipsis_weighted`], детерминированный
+/// бинарный поиск).
 fn plan_row_ellipsis(
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -616,25 +651,105 @@ fn plan_row_ellipsis(
     family: &str,
     size: f32,
 ) -> Option<RowEllipsis> {
-    if row.kind != RowKind::Calc || row.formula.is_empty() || available <= 0.0 {
+    if available <= 0.0 || row.formula.is_empty() {
         return None;
     }
-    if measurer.width_of(fs, &row.formula, family, size) <= available {
+    match row.kind {
+        RowKind::Calc => plan_text_ellipsis(
+            measurer,
+            fs,
+            &row.formula,
+            String::new(),
+            available,
+            family,
+            size,
+        ),
+        RowKind::Param if !is_literal_rhs(row) => {
+            // Префикс «имя =» защищён; деградирует только RHS-формула.
+            let prefix = format!("{} = ", row.name);
+            plan_text_ellipsis(measurer, fs, &row.formula, prefix, available, family, size)
+        }
+        // Параметры с литеральным RHS (числа) и авто-строки не усекаются.
+        _ => None,
+    }
+}
+
+/// Усечь «prefix + formula» в дорожку `available`: алиасы идентификаторов
+/// → хвостовой ellipsis; префикс (например «имя = ») не усекается.
+/// `full` тултипа — prefix + полная формула. `None` — влезает целиком.
+fn plan_text_ellipsis(
+    measurer: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    formula: &str,
+    prefix: String,
+    available: f32,
+    family: &str,
+    size: f32,
+) -> Option<RowEllipsis> {
+    let full = format!("{prefix}{formula}");
+    if measurer.width_of_weighted(fs, &full, family, size, MEASURE_WEIGHT) <= available {
         return None; // влезает целиком — усечение не нужно
     }
-    let aliased = alias_idents(&row.formula);
-    let display = if measurer.width_of(fs, &aliased, family, size) <= available {
-        aliased
-    } else {
-        measurer.ellipsis(fs, &aliased, family, size, available)
-    };
-    if display.is_empty() || display == row.formula {
+    let aliased = alias_idents(formula);
+    let base = format!("{prefix}{aliased}");
+    let display =
+        if measurer.width_of_weighted(fs, &base, family, size, MEASURE_WEIGHT) <= available {
+            base
+        } else {
+            let track = (available
+                - measurer.width_of_weighted(fs, &prefix, family, size, MEASURE_WEIGHT))
+            .max(0.0);
+            let rhs = measurer.ellipsis_weighted(fs, &aliased, family, size, track, MEASURE_WEIGHT);
+            if rhs.is_empty() {
+                return None; // даже «…» не влезает — строку не трогаем (тултип-зона не строится)
+            }
+            format!("{prefix}{rhs}")
+        };
+    if display.is_empty() || display == full {
         return None;
     }
-    Some(RowEllipsis {
-        display,
-        full: row.formula.clone(),
-    })
+    Some(RowEllipsis { display, full })
+}
+
+/// Литеральный RHS присваивания — значение ячейки повторяет формулу
+/// дословно (с точностью до пробелов: «800 rps» = value+unit). У таких
+/// строк RHS — числа/юнит: не деградирует никогда (§3.4), а в левой части
+/// литерал УБИРАЕТСЯ strip-переопределением ([`param_strip_overrides`]) —
+/// значение показывается один раз, в ячейке (прототип: paramRow без
+/// формулы). Выражение в RHS («a + b») литералом не считается.
+pub(crate) fn is_literal_rhs(row: &RowCells) -> bool {
+    if row.kind != RowKind::Param || row.value.is_empty() || row.formula.is_empty() {
+        return false;
+    }
+    let value_unit = if row.unit.is_empty() {
+        row.value.clone()
+    } else {
+        format!("{} {}", row.value, row.unit)
+    };
+    row.formula.split_whitespace().collect::<Vec<_>>().join(" ")
+        == value_unit.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Strip-переопределения левой части Param-строк с литеральным RHS
+/// (приёмка T9 FR-061, дублирование текста): сегмент тела `servers = 3`
+/// замещается «servers =» — литерал показывается ТОЛЬКО в ячейке значения
+/// (прототип: paramRow = [имя][=][лидер]|[значение]). Возвращает список
+/// (source_line, текст); применяется как overrides `body_items` (тот же
+/// канал, что усечение формул — строки не пересекаются: Param/Calc).
+/// Пролитые/what-if строки не трогаются (там левая часть — подпись
+/// источника, литерального дубля нет).
+pub(crate) fn param_strip_overrides(rows: &[RowCells]) -> Vec<(usize, String)> {
+    rows.iter()
+        .filter(|row| {
+            row.source_line.is_some() && row.badge.is_none() && !row.upstream && is_literal_rhs(row)
+        })
+        .map(|row| {
+            (
+                row.source_line.unwrap_or_default(),
+                format!("{} =", row.name),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -894,6 +1009,7 @@ mod tests {
             300.0,
             FAMILY,
             SIZE,
+            SIZE,
             BadgeMode::Text,
             &[],
         );
@@ -904,6 +1020,7 @@ mod tests {
             60.0,
             300.0,
             FAMILY,
+            SIZE,
             SIZE,
             BadgeMode::Text,
             &[],
@@ -924,6 +1041,7 @@ mod tests {
             60.0,
             300.0,
             FAMILY,
+            SIZE,
             SIZE,
             BadgeMode::Text,
             &[],
@@ -958,6 +1076,7 @@ mod tests {
             520.0,
             FAMILY,
             SIZE,
+            SIZE,
             BadgeMode::Text,
             &[],
         );
@@ -972,6 +1091,7 @@ mod tests {
             190.0,
             FAMILY,
             SIZE,
+            SIZE,
             BadgeMode::Text,
             &[],
         );
@@ -984,6 +1104,7 @@ mod tests {
             60.0,
             120.0,
             FAMILY,
+            SIZE,
             SIZE,
             BadgeMode::Text,
             &[],
@@ -1022,6 +1143,7 @@ mod tests {
                 body_width,
                 FAMILY,
                 SIZE,
+                SIZE,
                 BadgeMode::Text,
                 &[],
             );
@@ -1041,6 +1163,7 @@ mod tests {
             384.0,
             FAMILY,
             SIZE,
+            SIZE,
             BadgeMode::Text,
             &[],
         );
@@ -1051,6 +1174,7 @@ mod tests {
             140.0,
             384.0,
             FAMILY,
+            SIZE,
             SIZE,
             BadgeMode::Text,
             &[],
@@ -1080,12 +1204,123 @@ mod tests {
             300.0,
             FAMILY,
             SIZE,
+            SIZE,
             BadgeMode::Text,
             &[],
         );
         let key = pass_key(&pass);
         assert!(key.starts_with("G:"), "отпечаток направляющих");
         assert!(key.contains("Text"));
+    }
+
+    /// Приёмка T9 FR-061: литеральный RHS (значение ячейки повторяет
+    /// формулу) — детект; выражение — не литерал; strip-переопределения —
+    /// только для литеральных Param без бейджа/upstream.
+    #[test]
+    fn literal_rhs_detection_and_strip_overrides() {
+        let text = "servers = 3\nload = servers * 2\nrps = 800 rps";
+        let rows = build_rows(text, Some(&outcomes(text)), &[], &[], &[]);
+        assert!(is_literal_rhs(&rows[0]), "«servers = 3» — литерал");
+        assert!(!is_literal_rhs(&rows[1]), "«servers * 2» — выражение");
+        assert!(is_literal_rhs(&rows[2]), "«800 rps» — литерал с юнитом");
+        let strip = param_strip_overrides(&rows);
+        assert_eq!(
+            strip,
+            vec![
+                (0usize, "servers =".to_owned()),
+                (2usize, "rps =".to_owned())
+            ],
+            "load (выражение) не strip'ается"
+        );
+        // Пролитая строка: бейдж есть, значение upstream — не strip'ается.
+        let spill = SpillView {
+            param: "servers".into(),
+            line: Some(0),
+            from_label: "Профиль".into(),
+            from_output: None,
+            value: Some("50 rps".into()),
+            path: "Профиль.peak".into(),
+            local: Some("3".into()),
+        };
+        let rows = build_rows(text, Some(&outcomes(text)), &[], &[spill], &[]);
+        assert!(
+            param_strip_overrides(&rows)
+                .iter()
+                .all(|(line, _)| *line != 0),
+            "пролитая строка без strip (левая часть — подпись источника)"
+        );
+    }
+
+    /// Приёмка T9 FR-061: Param с выражением в RHS усекается с ЗАЩИЩЁННЫМ
+    /// префиксом «имя =» (лестница §3.4 дошла до последней ступени);
+    /// литеральный Param (числа) не усекается никогда.
+    #[test]
+    fn pass_a_truncates_param_expression_rhs_with_protected_prefix() {
+        let text = "load = connection_per_second_value / server_rate_value";
+        let rows = build_rows(text, Some(&outcomes(text)), &[], &[], &[]);
+        assert!(!is_literal_rhs(&rows[0]));
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        // left_max — ширина полного левого текста строки (заведомо шире
+        // тела 120 px): лестница деградации доходит до последней ступени.
+        let left_max = m.width_of_weighted(
+            &mut fs,
+            "load = connection_per_second_value / server_rate_value",
+            FAMILY,
+            SIZE,
+            MEASURE_WEIGHT,
+        );
+        let pass = pass_a(
+            &mut m,
+            &mut fs,
+            &rows,
+            left_max,
+            120.0,
+            FAMILY,
+            SIZE,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
+        let plan = pass.ellipsis[0]
+            .as_ref()
+            .expect("узкое тело: план усечения для Param-выражения");
+        assert!(
+            plan.display.starts_with("load = "),
+            "префикс «имя =» защищён"
+        );
+        assert!(plan.display.ends_with('…'), "хвост — многоточие");
+        assert_eq!(
+            plan.full, "load = connection_per_second_value / server_rate_value",
+            "тултип — полная строка"
+        );
+        // Усечённое отображение реально влезает в доступную дорожку.
+        let g = pass.guides.expect("строки данных есть");
+        let available = g.value_x - LEADER_PAD - LEADER_MIN;
+        let display_w = m.width_of_weighted(&mut fs, &plan.display, FAMILY, SIZE, MEASURE_WEIGHT);
+        assert!(
+            display_w <= available + 1.0,
+            "display ({display_w}) влезает в дорожку ({available})"
+        );
+        // Литеральный Param — числа не деградируют.
+        let lit_text = "servers = 3";
+        let lit = build_rows(lit_text, Some(&outcomes(lit_text)), &[], &[], &[]);
+        let pass2 = pass_a(
+            &mut m,
+            &mut fs,
+            &lit,
+            0.0,
+            60.0,
+            FAMILY,
+            SIZE,
+            SIZE,
+            BadgeMode::Text,
+            &[],
+        );
+        assert!(
+            pass2.ellipsis.first().is_none_or(|e| e.is_none()),
+            "литеральный RHS не усекается (числа не деградируют)"
+        );
     }
 
     /// Q8 FR-061: алиасы — длинные идентификаторы (кириллица/латиница/_)
@@ -1148,6 +1383,7 @@ mod tests {
             160.0,
             FAMILY,
             SIZE,
+            SIZE,
             BadgeMode::Text,
             &[],
         );
@@ -1185,6 +1421,7 @@ mod tests {
             160.0,
             FAMILY,
             SIZE,
+            SIZE,
             pass.badge_mode,
             &pass.ellipsis,
         );
@@ -1199,6 +1436,7 @@ mod tests {
             60.0,
             520.0,
             FAMILY,
+            SIZE,
             SIZE,
             BadgeMode::Text,
             &[],
