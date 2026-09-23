@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use canvas_core::analyze;
 use canvas_core::expr::ExprOutcome;
 use canvas_core::flow::FlowKind;
-use canvas_core::{Canvas, Edge, Node, NodeKind, Side, SpatialIndex};
+use canvas_core::{Canvas, CanvasdeskExt, Edge, Node, NodeKind, Side, SpatialIndex};
 
 use crate::mcp::{
     mcp_dispatch, mcp_flow_v2, mcp_unwrap_call, whatif_delta_rows, DEFAULT_FILE_CARD_H,
@@ -3634,4 +3634,97 @@ fn line_eval_env_resolves_named_refs() {
         ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "20"),
         other => panic!("построчный итог: {other:?}"),
     }
+}
+
+// --- FR-061 хвосты (D-7/D-8 runtime v1): тогглы блока/описания, Q3-проза ---
+
+/// FR-061 хвосты (D-7 runtime v1, Q4): тоггл свёрнутости — runtime-состояние,
+/// пустое по умолчанию (дефолт — развёрнутый блок), в .canvas не пишется.
+#[test]
+fn block_collapsed_toggle_is_runtime_state() {
+    let canvas = Canvas::default();
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-toggle.canvas"));
+    assert!(scene.block_collapsed.is_empty(), "дефолт — развёрнут");
+
+    let node = Node::text("n1", "текст", 0.0, 0.0);
+    scene.canvas.nodes.push(node);
+
+    assert!(scene.toggle_block_collapsed("n1"), "первый тоггл — свёрнут");
+    assert!(scene.block_collapsed.contains("n1"));
+    assert!(
+        !scene.toggle_block_collapsed("n1"),
+        "второй тоггл — развёрнут"
+    );
+    assert!(scene.block_collapsed.is_empty());
+}
+
+/// FR-061 хвосты (D-8, «Раскрыть+авто»): тоггл раскрытости описания и
+/// автосворачивание (клик вне ноды — collapse_descs_except(None)).
+#[test]
+fn desc_expanded_toggle_and_auto_collapse() {
+    let canvas = Canvas::default();
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-desc.canvas"));
+    scene.canvas.nodes.push(Node::text("n1", "текст", 0.0, 0.0));
+    scene.canvas.nodes.push(Node::text("n2", "текст", 0.0, 0.0));
+
+    assert!(scene.toggle_desc_expanded("n1"));
+    assert!(scene.toggle_desc_expanded("n2"));
+    assert_eq!(scene.desc_expanded.len(), 2);
+
+    // Клик по телу n1 — сохраняется только n1
+    scene.collapse_descs_except(Some("n1"));
+    assert_eq!(scene.desc_expanded.len(), 1);
+    assert!(scene.desc_expanded.contains("n1"));
+
+    // Клик по фону — сворачиваются все
+    scene.collapse_descs_except(None);
+    assert!(scene.desc_expanded.is_empty());
+}
+
+/// FR-061 хвосты (D-8/Q3, «desc→манифест→проза»): описание ноды без
+/// canvasdesk.desc и манифеста — первый проза-абзац текста (числовые
+/// абзацы и фенсы описанием не становятся).
+#[test]
+fn node_desc_falls_back_to_first_prose_paragraph() {
+    let mut canvas = Canvas::default();
+    // Случай 1: явный desc приоритетнее прозы
+    let mut node = Node::text("n1", "Проза текста.\n\n800 rps", 0.0, 0.0);
+    node.canvasdesk = Some(CanvasdeskExt {
+        desc: Some("Явное описание".to_owned()),
+        props: Default::default(),
+        widget_id: None,
+        expr: None,
+        template: None,
+        data: None,
+    });
+    canvas.nodes.push(node);
+    let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-q3a.canvas"));
+    assert_eq!(
+        scene.node_desc_text(0).as_deref(),
+        Some("Явное описание"),
+        "явный desc приоритетнее"
+    );
+
+    // Случай 2: без desc — проза-фолбэк (числовой абзац пропускается)
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text(
+        "n2",
+        "800 rps\n\nОписание нагрузки шлюза.",
+        0.0,
+        0.0,
+    ));
+    let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-q3b.canvas"));
+    assert_eq!(
+        scene.node_desc_text(0).as_deref(),
+        Some("Описание нагрузки шлюза."),
+        "проза после числового абзаца"
+    );
+
+    // Случай 3: только числа — описания нет
+    let mut canvas = Canvas::default();
+    canvas
+        .nodes
+        .push(Node::text("n3", "800 rps\n= 800", 0.0, 0.0));
+    let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-q3c.canvas"));
+    assert!(scene.node_desc_text(0).is_none(), "числа — не описание");
 }
