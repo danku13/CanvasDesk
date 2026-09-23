@@ -17878,6 +17878,9 @@ impl ApplicationHandler<AppEvent> for App {
                     // Н-2) — глобальная настройка, применяется покадрово
                     // (идемпотентно; кэш точечно устаревает через results_key).
                     renderer.set_table_language(self.settings.language);
+                    // FR-061 этап D (D-14/Q9): направляющие таблицы — только
+                    // в DebugOverlay (F9 / ?ui=debug), в проде невидимы.
+                    renderer.set_table_guides_visible(self.debug_overlay);
                     match renderer.render(
                         &self.camera,
                         &scene,
