@@ -232,6 +232,10 @@ pub struct SceneState {
     /// строки для рендера. Runtime-кэш (не сериализуется), пересчитывается
     /// в `recompute_flow` вместе с результатами потока.
     pub param_spills: HashMap<String, Vec<SpillView>>,
+    /// FR-061 этап D (D-8): описания манифестов шаблонов (id → описание)
+    /// — источник зоны описания шаблонных нод (Q3). Runtime-снимок
+    /// реестра (не сериализуется), устанавливается приложением.
+    pub template_descs: HashMap<String, String>,
     /// FR-050 Р-4 (Н10-а — строка-проекция): авто-строки приёмников —
     /// производные строки тела нод для value-рёбер без `toParam` к нодам
     /// без ожидающего порта (слот не читается формулой — W-UNUSED-SLOT).
@@ -337,6 +341,7 @@ impl SceneState {
             expr_results: ExprResults::new(),
             expr_line_results: ExprLineResults::new(),
             param_spills: HashMap::new(),
+            template_descs: HashMap::new(),
             auto_rows: HashMap::new(),
             unmapped_edges: Vec::new(),
             bundles,
@@ -867,12 +872,33 @@ impl SceneState {
         // FR-029: подгонка по показываемому тексту (пролитые строки —
         // подписи источников, длиннее локальных литералов).
         let display = display_body_text(&self.canvas.nodes[index], &self.param_spills);
+        let desc = self.node_desc_text(index);
         let before = self.canvas.nodes[index].height;
-        ensure_result_reserve(&mut self.canvas.nodes[index], &display, &formula_lines);
+        ensure_result_reserve(
+            &mut self.canvas.nodes[index],
+            &display,
+            &formula_lines,
+            desc.as_deref(),
+        );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
             self.spatial.update(index, node);
         }
+    }
+
+    /// FR-061 этап D (D-8): текст описания ноды (Q3 v1) — `canvasdesk.desc`
+    /// → описание манифеста шаблона (`template_descs` по снимку id).
+    /// Пусто — зоны описания нет.
+    fn node_desc_text(&self, index: usize) -> Option<String> {
+        let node = self.canvas.nodes.get(index)?;
+        node.canvasdesk
+            .as_ref()
+            .and_then(|ext| ext.desc.clone())
+            .or_else(|| {
+                node.template()
+                    .and_then(|t| self.template_descs.get(&t.id).cloned())
+            })
+            .filter(|d| !d.trim().is_empty())
     }
 
     /// CR-012: ленивый refit всех нод канваса — резерв футера результата
@@ -920,8 +946,14 @@ impl SceneState {
             .collect();
         let mut formula_lines = formula_lines;
         formula_lines.sort_unstable();
+        let desc = self.node_desc_text(index);
         let before = self.canvas.nodes[index].height;
-        ensure_result_reserve(&mut self.canvas.nodes[index], &display, &formula_lines);
+        ensure_result_reserve(
+            &mut self.canvas.nodes[index],
+            &display,
+            &formula_lines,
+            desc.as_deref(),
+        );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
             self.spatial.update(index, node);
