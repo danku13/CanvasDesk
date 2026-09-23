@@ -77,6 +77,8 @@ fn headless_auto_row_draws_with_spill_hit() {
             param_spills: &Default::default(),
             auto_rows: &auto_rows,
             whatif_nodes: &Default::default(),
+            block_collapsed: &Default::default(),
+            desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
         },

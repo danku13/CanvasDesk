@@ -47,6 +47,10 @@ pub(crate) enum RowKind {
     /// D-7/D-9 (этап C): заголовок блока-ведомости «▸ расчёт · N строк»
     /// (Н-2) — Σ узлового итога на направляющей чисел, как в прототипе.
     Total,
+    /// FR-061 хвосты (D-7, runtime v1): превью-строка СВЁРНУТОЙ ведомости
+    /// «параметры · P · формулы · K» (слева) + «Σ первое-значение» на
+    /// направляющей (прототип §3.5, .preview-row).
+    Preview,
 }
 
 /// Бейдж каскада Р-1 в бейдж-колонке (D-6, анализ §3.1): примечания полосы D
@@ -173,17 +177,24 @@ pub(crate) fn block_mode(rows: &[RowCells], threshold: usize) -> bool {
 /// [`block_header_text_lang`] с языком по умолчанию (RU) — обратная
 /// совместимость тестов/вызовов.
 pub(crate) fn block_header_text(calc_count: usize) -> String {
-    block_header_text_lang(calc_count, Language::Ru)
+    block_header_text_lang(calc_count, Language::Ru, true)
 }
 
 /// D-14 (этап D): локализованный заголовок блока-ведомости. RU —
 /// плюрализация «строка/строки/строк»; EN — «line/lines». Высота строки
 /// от языка не зависит (одна строка — I-2 не страдает).
-pub(crate) fn block_header_text_lang(calc_count: usize, language: Language) -> String {
+/// FR-061 хвосты (D-7 runtime v1): шеврон состояния — «▾» развёрнут
+/// (дефолт продукта), «▸» свёрнут (прототип .blk-hdr, cursor:pointer).
+pub(crate) fn block_header_text_lang(
+    calc_count: usize,
+    language: Language,
+    expanded: bool,
+) -> String {
+    let chevron = if expanded { "▾" } else { "▸" };
     match language {
         Language::En => {
             let noun = if calc_count == 1 { "line" } else { "lines" };
-            format!("▸ calc · {calc_count} {noun}")
+            format!("{chevron} calc · {calc_count} {noun}")
         }
         Language::Ru => {
             let noun = match (calc_count % 10, calc_count % 100) {
@@ -193,8 +204,53 @@ pub(crate) fn block_header_text_lang(calc_count: usize, language: Language) -> S
                 (2..=4, _) => "строки",
                 _ => "строк",
             };
-            format!("▸ расчёт · {calc_count} {noun}")
+            format!("{chevron} расчёт · {calc_count} {noun}")
         }
+    }
+}
+
+/// FR-061 хвосты (D-7 runtime v1): локализованный текст превью-строки
+/// свёрнутой ведомости — «параметры · P · формулы · K» (прототип
+/// .preview-row). RU — плюрализация «строка/строки/строк», EN —
+/// «line/lines».
+pub(crate) fn block_preview_text_lang(
+    param_count: usize,
+    calc_count: usize,
+    language: Language,
+) -> String {
+    match language {
+        Language::En => {
+            let noun = if calc_count == 1 { "line" } else { "lines" };
+            format!("params · {param_count} · formulas · {calc_count} {noun}")
+        }
+        Language::Ru => {
+            let noun = match (calc_count % 10, calc_count % 100) {
+                (1, 11) => "строк",
+                (1, _) => "строка",
+                (2..=4, 11..=14) => "строк",
+                (2..=4, _) => "строки",
+                _ => "строк",
+            };
+            format!("параметры · {param_count} · формулы · {calc_count} {noun}")
+        }
+    }
+}
+
+/// FR-061 хвосты (D-8 runtime v1, «Раскрыть+авто»): аффорданс экспандера
+/// описания — свёрнуто и обрезано («⋯ целиком ▾», клик раскрывает).
+pub(crate) fn desc_expand_text_lang(language: Language) -> String {
+    match language {
+        Language::En => "⋯ show all ▾".to_owned(),
+        Language::Ru => "⋯ целиком ▾".to_owned(),
+    }
+}
+
+/// FR-061 хвосты (D-8 runtime v1): аффорданс экспандера описания —
+/// раскрыто («▴ свернуть»; автосворачивание — клик вне ноды/начало правки).
+pub(crate) fn desc_collapse_text_lang(language: Language) -> String {
+    match language {
+        Language::En => "▴ collapse".to_owned(),
+        Language::Ru => "▴ свернуть".to_owned(),
     }
 }
 
@@ -623,18 +679,46 @@ mod tests {
             "6 строк данных с расчётом — блок"
         );
         assert_eq!(calc_row_count(&mixed), 2);
-        assert_eq!(block_header_text(2), "▸ расчёт · 2 строки");
-        assert_eq!(block_header_text(5), "▸ расчёт · 5 строк");
-        assert_eq!(block_header_text(1), "▸ расчёт · 1 строка");
-        assert_eq!(block_header_text(12), "▸ расчёт · 12 строк");
+        assert_eq!(block_header_text(2), "▾ расчёт · 2 строки");
+        assert_eq!(block_header_text(5), "▾ расчёт · 5 строк");
+        assert_eq!(block_header_text(1), "▾ расчёт · 1 строка");
+        assert_eq!(block_header_text(12), "▾ расчёт · 12 строк");
         // D-14: EN-локализация — line/lines (высота строки та же — I-2).
-        assert_eq!(block_header_text_lang(1, Language::En), "▸ calc · 1 line");
-        assert_eq!(block_header_text_lang(5, Language::En), "▸ calc · 5 lines");
         assert_eq!(
-            block_header_text_lang(2, Language::Ru),
-            "▸ расчёт · 2 строки",
-            "RU — явный язык даёт тот же текст"
+            block_header_text_lang(1, Language::En, true),
+            "▾ calc · 1 line"
         );
+        assert_eq!(
+            block_header_text_lang(5, Language::En, true),
+            "▾ calc · 5 lines"
+        );
+        // FR-061 хвосты (D-7 runtime v1): свёрнутый блок — шеврон «▸».
+        assert_eq!(
+            block_header_text_lang(5, Language::Ru, false),
+            "▸ расчёт · 5 строк"
+        );
+        assert_eq!(
+            block_header_text_lang(5, Language::En, false),
+            "▸ calc · 5 lines"
+        );
+        // Хвосты: превью-строка свёрнутой ведомости (прототип .preview-row).
+        assert_eq!(
+            block_preview_text_lang(3, 5, Language::Ru),
+            "параметры · 3 · формулы · 5 строк"
+        );
+        assert_eq!(
+            block_preview_text_lang(1, 1, Language::Ru),
+            "параметры · 1 · формулы · 1 строка"
+        );
+        assert_eq!(
+            block_preview_text_lang(2, 5, Language::En),
+            "params · 2 · formulas · 5 lines"
+        );
+        // Хвосты (D-8 runtime v1): аффордансы экспандера описания.
+        assert_eq!(desc_expand_text_lang(Language::Ru), "⋯ целиком ▾");
+        assert_eq!(desc_expand_text_lang(Language::En), "⋯ show all ▾");
+        assert_eq!(desc_collapse_text_lang(Language::Ru), "▴ свернуть");
+        assert_eq!(desc_collapse_text_lang(Language::En), "▴ collapse");
     }
 
     /// Разбор полного дельта-формата: корпус whatif_full_delta — «стало» и

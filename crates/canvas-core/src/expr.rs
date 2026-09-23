@@ -2007,6 +2007,56 @@ pub fn line_kind(line: &str) -> NumiLineKind {
     }
 }
 
+/// FR-061 D-8/Q3 (решение владельца 2026-09-23, «desc→манифест→проза»):
+/// первый проза-абзац текста ноды — фолбэк источника описания (после
+/// `canvasdesk.desc` и описания манифеста шаблона). Абзац = подряд идущие
+/// непустые строки; qualifies, если КАЖДАЯ его строка — проза по
+/// [`line_kind`] (числа/присваивания/выражения и код-фенсы описанием не
+/// становятся — иначе зона D-8 дублировала бы тело). Возвращает абзац,
+/// склеенный одинарными пробелами. Чистая функция — сцена (резерв высоты,
+/// CR-012) и рендер (кэш текста) вызывают её с одним входом `node.text`,
+/// поэтому измерение и рендер не разъезжаются (I-2).
+pub fn first_prose_paragraph(text: &str) -> Option<String> {
+    let mut paragraph: Vec<&str> = Vec::new();
+    let mut in_fence = false;
+    let flush = |paragraph: &mut Vec<&str>| -> Option<String> {
+        if paragraph.is_empty() {
+            return None;
+        }
+        let all_prose = paragraph
+            .iter()
+            .all(|line| line_kind(line) == NumiLineKind::Prose);
+        let joined = paragraph.join(" ").trim().to_owned();
+        paragraph.clear();
+        if all_prose && !joined.is_empty() {
+            Some(joined)
+        } else {
+            None
+        }
+    };
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            // Фенс открывает/закрывает абзац — код описанием не является
+            if let Some(found) = flush(&mut paragraph) {
+                return Some(found);
+            }
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if line.trim().is_empty() {
+            if let Some(found) = flush(&mut paragraph) {
+                return Some(found);
+            }
+            continue;
+        }
+        paragraph.push(line);
+    }
+    flush(&mut paragraph)
+}
+
 // --- Тесты (верификационный список FR-013 + регрессии грамматики) ---
 
 #[cfg(test)]
@@ -2999,5 +3049,49 @@ mod tests {
         );
         let env = Env::empty().with_qualified(qualified);
         assert_eq!(eval(&parsed, &env), Ok(super::Value::scalar(42.0)));
+    }
+
+    /// FR-061 Q3: первый проза-абзац — источник описания (фолбэк).
+    #[test]
+    fn first_prose_paragraph_takes_first_all_prose_paragraph() {
+        let text =
+            "Нода считает нагрузку на шлюз.\nВторая строка абзаца.\n\n800 rps\n\nЕщё проза позже.";
+        assert_eq!(
+            first_prose_paragraph(text).as_deref(),
+            Some("Нода считает нагрузку на шлюз. Вторая строка абзаца.")
+        );
+    }
+
+    /// FR-061 Q3: числовой/присваивающий абзац пропускается — следующая проза.
+    #[test]
+    fn first_prose_paragraph_skips_numi_paragraphs() {
+        let text = "800 rps\n\nОписание после расчёта.";
+        assert_eq!(
+            first_prose_paragraph(text).as_deref(),
+            Some("Описание после расчёта.")
+        );
+        let assign = "вход = 800\n\nПроза описания.";
+        assert_eq!(
+            first_prose_paragraph(assign).as_deref(),
+            Some("Проза описания.")
+        );
+    }
+
+    /// FR-061 Q3: код-фенс не описывает ноду; только проза после него.
+    #[test]
+    fn first_prose_paragraph_skips_fences() {
+        let text = "```\nкод внутри фенса\n```\n\nПроза после фенса.";
+        assert_eq!(
+            first_prose_paragraph(text).as_deref(),
+            Some("Проза после фенса.")
+        );
+    }
+
+    /// FR-061 Q3: только Numi-контент — описания нет (None).
+    #[test]
+    fn first_prose_paragraph_none_when_all_numi() {
+        assert_eq!(first_prose_paragraph("800 rps\n= 800\n"), None);
+        assert_eq!(first_prose_paragraph(""), None);
+        assert_eq!(first_prose_paragraph("```\nкод\n```\n"), None);
     }
 }

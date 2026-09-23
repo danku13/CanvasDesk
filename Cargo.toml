@@ -139,3 +139,4 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # wasm-opt -Oz — scripts/web_bundle.sh / Pages-workflow (§6 W12).
 [profile.release]
 lto = "thin"
+

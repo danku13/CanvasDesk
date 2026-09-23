@@ -342,6 +342,12 @@ pub struct SceneView<'a> {
     /// (виртуальный текст, подсветка подмен, дельта-бейджи). Пусто —
     /// режим выключен или подмен нет (рельеф базы не тронут).
     pub whatif_nodes: &'a HashMap<String, WhatIfNode>,
+    /// FR-061 хвосты (D-7 runtime v1): id нод со СВЁРНУТЫМ блоком-ведомостью
+    /// (дефолт — развёрнут; runtime-состояние — Q4). Пусто — прежний рельеф.
+    pub block_collapsed: &'a std::collections::HashSet<String>,
+    /// FR-061 хвосты (D-8 runtime v1): id нод с РАСКРЫТЫМ описанием
+    /// («⋯ целиком ▾»; «Раскрыть+авто» — решение владельца).
+    pub desc_expanded: &'a std::collections::HashSet<String>,
     /// FR-016 (CP5): флаги анализа узких мест по id нод — runtime-кэш
     /// приложения (не сериализуется). None — анализ недоступен (пустая
     /// сцена/цикл потока) — рендер ведёт себя как при severity None.
@@ -725,6 +731,13 @@ impl Renderer {
     /// приложение кэширует после рендера для тултипа источника.
     pub fn spill_hits(&self) -> &[crate::text::SpillHit] {
         self.text.spill_hits()
+    }
+
+    /// FR-061 хвосты (D-7/D-8): кликабельные зоны тела кадра (заголовок
+    /// блока-ведомости, экспандер описания) — приложение кэширует после
+    /// рендера для тогглов свёрнутости/раскрытости.
+    pub fn body_hits(&self) -> &[crate::text::BodyHit] {
+        self.text.body_hits()
     }
 
     /// FR-025: построчные точки выхода ноды из кэша раскладки текста —
@@ -1499,6 +1512,9 @@ impl Renderer {
                 param_spills: scene.param_spills,
                 auto_rows: scene.auto_rows,
                 whatif_nodes: scene.whatif_nodes,
+                // FR-061 хвосты (D-7/D-8 runtime v1): состояние тогглов тела
+                block_collapsed: scene.block_collapsed,
+                desc_expanded: scene.desc_expanded,
                 analysis_badges: &analysis_badges,
                 stage_texts: overlay.stage_texts,
             },
