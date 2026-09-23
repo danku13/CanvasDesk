@@ -141,14 +141,11 @@ const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
 /// метрика префикса «Переменные · входящие значения»; ячейки таблицы
 /// центрируются в своей строке по этой высоте (I-1: Y-ряд не меняется).
 const AUTO_ROW_LINE_HEIGHT: f32 = 18.0;
-/// FR-061 этап B (D-5): длина штриха и зазора пунктира лидера (world-px) —
-/// паттерн прототипа 2/3 px (анализ §3.1, O-2); токены D-14.
-const LEADER_DASH_W: f32 = canvas_core::tokens::TABLE_LEADER_DASH;
-const LEADER_DASH_GAP: f32 = canvas_core::tokens::TABLE_LEADER_GAP;
+// FR-061 этап B (D-5): длина штриха/зазора и толщина линии лидера —
+// с этапа E единая геометрия с китом (`canvas_ui::kit::leader_dash_rects`,
+// токены TABLE_LEADER_*; локальные константы удалены — D-15).
 /// FR-061 этап B (D-5): зебра — фон через строку в прогонах ≥ 4 строк данных.
 const ZEBRA_RUN_MIN: usize = canvas_core::tokens::TABLE_ZEBRA_RUN_MIN;
-/// FR-061 этап B (D-5): толщина линии лидера (world-px).
-const LEADER_H: f32 = canvas_core::tokens::TABLE_LEADER_H;
 /// FR-061 этап B (D-5): вертикаль лидера в строке (доля высоты строки —
 /// базовая линия прототипа).
 const LEADER_Y_FRAC: f32 = canvas_core::tokens::TABLE_LEADER_Y_FRAC;
@@ -3120,17 +3117,18 @@ impl TextSystem {
                                 ) {
                                     let x0 = (row.left_end + row_grid::LEADER_PAD) * z;
                                     let x1 = (g.value_right() - row_grid::LEADER_PAD) * z;
-                                    if x1 - x0 >= 6.0 * z {
-                                        let y = (row.row_top + row.row_line_h * LEADER_Y_FRAC) * z;
-                                        let mut x = x0;
-                                        let step = (LEADER_DASH_W + LEADER_DASH_GAP) * z;
-                                        while x + LEADER_DASH_W * z <= x1 {
-                                            table_quads.push(BodyQuad {
-                                                rect: [x, y, LEADER_DASH_W * z, LEADER_H * z],
-                                                kind: BodyQuadKind::Leader,
-                                            });
-                                            x += step;
-                                        }
+                                    let y = (row.row_top + row.row_line_h * LEADER_Y_FRAC) * z;
+                                    // FR-061 этап E (D-15): штрихи — ЕДИНАЯ геометрия
+                                    // кита (kit::leader_dash_rects); токены и арифметика
+                                    // прежние (I-1, байт-паритет — тест kit.rs
+                                    // leader_dashes_match_node_arithmetic). Минимум
+                                    // дорожки — исторические 6 px тела ноды.
+                                    for dash in canvas_ui::kit::leader_dash_rects(x0, x1, y, z, 6.0)
+                                    {
+                                        table_quads.push(BodyQuad {
+                                            rect: dash,
+                                            kind: BodyQuadKind::Leader,
+                                        });
                                     }
                                 }
                             }

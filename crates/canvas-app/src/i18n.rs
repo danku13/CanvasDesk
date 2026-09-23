@@ -460,6 +460,16 @@ pub mod keys {
     pub const KIT_GROW_TWO: &str = "kit.grow.two";
     pub const KIT_GROW_ONE: &str = "kit.grow.one";
     pub const KIT_WRAP_CHIP: &str = "kit.wrap.chip";
+    /// FR-061 (этап E, D-15): секция kit-Row витрины + демо-строки.
+    pub const KIT_SECTION_ROW: &str = "kit.section.row";
+    pub const KIT_ROW_PRICE: &str = "kit.row.price";
+    pub const KIT_ROW_QTY: &str = "kit.row.qty";
+    pub const KIT_ROW_TOTAL: &str = "kit.row.total";
+    pub const KIT_ROW_SUM: &str = "kit.row.sum";
+    pub const KIT_ROW_UNIT_PRICE: &str = "kit.row.unit.price";
+    pub const KIT_ROW_UNIT_QTY: &str = "kit.row.unit.qty";
+    pub const KIT_ROW_UNIT_MONEY: &str = "kit.row.unit.money";
+    pub const KIT_ROW_BADGE: &str = "kit.row.badge";
     /// DebugOverlay (F10): подсказка тогла.
     pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
@@ -949,6 +959,19 @@ const RU: &[(&str, &str)] = &[
         keys::KIT_SECTION_FOCUS,
         "Фокус (F-17: FocusRing, Tab/Shift+Tab)",
     ),
+    // FR-061: секция kit-Row (этап E, D-15)
+    (
+        keys::KIT_SECTION_ROW,
+        "Строка таблицы (Row: направляющие + лидер)",
+    ),
+    (keys::KIT_ROW_PRICE, "цена"),
+    (keys::KIT_ROW_QTY, "кол-во"),
+    (keys::KIT_ROW_TOTAL, "итого = цена × кол-во"),
+    (keys::KIT_ROW_SUM, "Σ чека"),
+    (keys::KIT_ROW_UNIT_PRICE, "₽/шт"),
+    (keys::KIT_ROW_UNIT_QTY, "шт"),
+    (keys::KIT_ROW_UNIT_MONEY, "₽"),
+    (keys::KIT_ROW_BADGE, "← источник"),
     (keys::KIT_MEASURED_A, "Введено"),
     (keys::KIT_MEASURED_B, "Формула"),
     (keys::KIT_MEASURED_C, "Итог, %"),
@@ -1628,6 +1651,19 @@ const EN: &[(&str, &str)] = &[
         keys::KIT_SECTION_FOCUS,
         "Focus (F-17: FocusRing, Tab/Shift+Tab)",
     ),
+    // FR-061: kit-Row section (stage E, D-15)
+    (
+        keys::KIT_SECTION_ROW,
+        "Table row (Row: column guides + leader)",
+    ),
+    (keys::KIT_ROW_PRICE, "price"),
+    (keys::KIT_ROW_QTY, "qty"),
+    (keys::KIT_ROW_TOTAL, "total = price × qty"),
+    (keys::KIT_ROW_SUM, "receipt Σ"),
+    (keys::KIT_ROW_UNIT_PRICE, "₽/pc"),
+    (keys::KIT_ROW_UNIT_QTY, "pc"),
+    (keys::KIT_ROW_UNIT_MONEY, "₽"),
+    (keys::KIT_ROW_BADGE, "← source"),
     (keys::KIT_MEASURED_A, "Input"),
     (keys::KIT_MEASURED_B, "Formula"),
     (keys::KIT_MEASURED_C, "Result, %"),
