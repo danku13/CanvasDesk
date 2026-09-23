@@ -22,6 +22,10 @@ use canvas_render::text::{measure_font_system, TextAlign, SANS_FAMILY};
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitState};
 use canvas_ui::measure::TextMeasurer;
+// FR-057 (волна 2 кита): draw-слой и машина состояний — в крейте canvas-ui;
+// этот модуль — тонкий адаптер «items Painter'а → инстансы рендера».
+use canvas_ui::paint::{PaintAlign, PaintItem, Painter};
+use canvas_ui::widget::WidgetState;
 
 /// Семейство шрифта подписей витрины (тот же SANS, что у рендера).
 pub const FONT_FAMILY: &str = SANS_FAMILY;
@@ -375,14 +379,18 @@ pub fn gallery_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect) {
 }
 
 /// Состояние интерактивного контрола по курсору (hover).
+///
+/// Deprecated (FR-057): канонический путь — [`WidgetState`]
+/// (`canvas_ui::widget`) — машина состояний hover/pressed/selected/disabled/
+/// focused → [`KitState`] + ребро клика. Функция оставлена как тонкий
+/// делегат: потребители (app.rs) мигрируют волнами FR-059/FR-060; в FR-057 —
+/// 0 правок app.rs. Атрибут `#[deprecated]` не ставится, пока живы вызовы
+/// app.rs (гейт clippy -D warnings).
 pub fn cursor_state(hovered: bool, disabled: bool) -> KitState {
-    if disabled {
-        KitState::Disabled
-    } else if hovered {
-        KitState::Hovered
-    } else {
-        KitState::Normal
-    }
+    let mut w = WidgetState::default();
+    w.set_pointer(hovered, false);
+    w.set_disabled(disabled);
+    w.kit_state()
 }
 
 /// [f32;4] sRGB → glyphon Color (представление, не арифметика цвета).
@@ -397,9 +405,18 @@ pub fn color4(c: [f32; 4]) -> canvas_render::Color {
 
 /// Адаптер: модель кита → квад/текст кадра (screen-rect → world-инстанс —
 /// тот же паттерн `screen_rect_quad` app.rs; camera/viewport даёт App).
+///
+/// FR-057: тонкая обёртка над [`Painter`] (`canvas_ui::paint`) — модель items
+/// собирается в крейте, конвертация в `CardInstance`/`OwnedText` — здесь
+/// (забота потребителя, контракт G7). Методы и поведение 1:1 с прежней
+/// реализацией: каждый вызов делегирует Painter'у и сразу конвертирует
+/// добавленный item — quads/texts актуальны для app.rs после каждого вызова
+/// (поля читаются напрямую — контракт сохранён дословно).
 pub(crate) struct KitDraw<'a> {
     camera: &'a canvas_render::Camera,
     viewport: Vec2,
+    /// Журнал items Painter'а (модель крейта; порядок = draw-порядок).
+    painter: Painter,
     pub quads: Vec<CardInstance>,
     pub texts: Vec<OwnedText>,
 }
@@ -420,6 +437,7 @@ impl<'a> KitDraw<'a> {
         Self {
             camera,
             viewport,
+            painter: Painter::new(),
             quads: Vec::new(),
             texts: Vec::new(),
         }
@@ -427,48 +445,83 @@ impl<'a> KitDraw<'a> {
 
     /// Прямоугольник с заливкой/рамкой/радиусом.
     pub fn rect(&mut self, r: UiRect, fill: [f32; 4], border: [f32; 4], radius: f32) {
-        self.quads.push(crate::app::screen_rect_quad_pub(
-            self.camera,
-            self.viewport,
-            [r.x, r.y, r.w, r.h],
-            fill,
-            border,
-            radius,
-        ));
+        self.painter.rect(r, fill, border, radius);
+        self.flush_last_quad();
     }
 
     /// Стиль контрола (заливка + рамка).
     pub fn control(&mut self, r: UiRect, s: &ControlStyle) {
-        self.rect(r, s.fill, s.border, s.radius);
+        self.painter.control(r, s);
+        self.flush_last_quad();
     }
 
     /// Подпись по центру области (контракт ScreenText: origin — левый край
     /// области выравнивания, Center центрирует в [origin, origin+width]).
     pub fn label_center(&mut self, area: UiRect, text: &str, color: [f32; 4], size: f32) {
-        self.texts.push(OwnedText {
-            text: text.to_owned(),
-            origin: [area.x, area.y],
-            width: area.w,
-            font_size: size,
-            color: color4(color),
-            align: TextAlign::Center,
-        });
+        self.painter
+            .label(area, text, color, size, PaintAlign::Center);
+        self.flush_last_text();
     }
 
     /// Подпись слева.
     pub fn label_left(&mut self, area: UiRect, text: &str, color: [f32; 4], size: f32) {
-        self.texts.push(OwnedText {
-            text: text.to_owned(),
-            origin: [area.x, area.y],
-            width: area.w,
-            font_size: size,
-            color: color4(color),
-            align: TextAlign::Left,
-        });
+        self.painter
+            .label(area, text, color, size, PaintAlign::Left);
+        self.flush_last_text();
+    }
+
+    /// Конвертация последнего Rect-item'а Painter'а в квад кадра
+    /// (screen→world — тот же `screen_rect_quad_pub`, что и до FR-057).
+    fn flush_last_quad(&mut self) {
+        if let Some(PaintItem::Rect {
+            rect,
+            fill,
+            border,
+            radius,
+        }) = self.painter.items().last()
+        {
+            let quad = crate::app::screen_rect_quad_pub(
+                self.camera,
+                self.viewport,
+                [rect.x, rect.y, rect.w, rect.h],
+                *fill,
+                *border,
+                *radius,
+            );
+            self.quads.push(quad);
+        }
+    }
+
+    /// Конвертация последнего Text-item'а Painter'а в владеемый текст кадра.
+    fn flush_last_text(&mut self) {
+        if let Some(PaintItem::Text {
+            area,
+            text,
+            color,
+            size,
+            align,
+        }) = self.painter.items().last()
+        {
+            let owned = OwnedText {
+                text: text.clone(),
+                origin: [area.x, area.y],
+                width: area.w,
+                font_size: *size,
+                color: color4(*color),
+                align: match align {
+                    PaintAlign::Left => TextAlign::Left,
+                    PaintAlign::Center => TextAlign::Center,
+                },
+            };
+            self.texts.push(owned);
+        }
     }
 }
 
 /// Подбор стиля строки dropdown по курсору (hover — реальный слот).
+///
+/// Deprecated (FR-057): канонический путь — [`WidgetState`] (см.
+/// [`cursor_state`]); делегат сохранён до миграции потребителей FR-059/060.
 pub fn dropdown_item_state(hovered: bool) -> KitState {
     cursor_state(hovered, false)
 }
@@ -522,4 +575,117 @@ pub fn theme_button_layout(
 pub fn with_font_system<R>(f: impl FnOnce(&mut cosmic_text::FontSystem) -> R) -> R {
     let mut guard = measure_font_system();
     f(&mut guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canvas_ui::kit::{ButtonVariant, ControlStyle};
+
+    /// FR-057: эквивалентность до/после делегирования — KitDraw через
+    /// Painter даёт те же quads/texts, что прямой путь (прежняя реализация:
+    /// screen_rect_quad_pub + OwnedText вручную) на фиксированном примере —
+    /// 0 визуального скачка (критерий приёмки FR-057).
+    #[test]
+    fn kitdraw_delegation_matches_direct_path() {
+        let camera = canvas_render::Camera::default();
+        let viewport: Vec2 = [800.0, 600.0];
+
+        let fill = [0.2, 0.4, 0.6, 1.0];
+        let border = [0.1, 0.2, 0.3, 0.9];
+        let radius = 4.0;
+        let style = ControlStyle {
+            fill: [0.3, 0.3, 0.3, 1.0],
+            border: [0.4, 0.4, 0.4, 1.0],
+            text: [0.9, 0.9, 0.9, 1.0],
+            radius: 6.0,
+        };
+        let area_c = UiRect::new(10.0, 20.0, 120.0, 30.0);
+        let area_l = UiRect::new(4.0, 8.0, 80.0, 16.0);
+
+        // НОВАЯ реализация (KitDraw → Painter → конвертация)
+        let mut d = KitDraw::new(&camera, viewport);
+        d.rect(UiRect::new(1.0, 2.0, 3.0, 4.0), fill, border, radius);
+        d.control(UiRect::new(5.0, 6.0, 7.0, 8.0), &style);
+        d.label_center(area_c, "Центр", style.text, 13.0);
+        d.label_left(area_l, "Лево", style.text, 11.0);
+
+        // ЭТАЛОН — прямой путь прежней реализации (до рефакторинга)
+        let mut quads = Vec::new();
+        let mut texts = Vec::new();
+        quads.push(crate::app::screen_rect_quad_pub(
+            &camera,
+            viewport,
+            [1.0, 2.0, 3.0, 4.0],
+            fill,
+            border,
+            radius,
+        ));
+        // control = rect со слотами ControlStyle
+        quads.push(crate::app::screen_rect_quad_pub(
+            &camera,
+            viewport,
+            [5.0, 6.0, 7.0, 8.0],
+            style.fill,
+            style.border,
+            style.radius,
+        ));
+        texts.push(OwnedText {
+            text: "Центр".to_owned(),
+            origin: [area_c.x, area_c.y],
+            width: area_c.w,
+            font_size: 13.0,
+            color: color4(style.text),
+            align: TextAlign::Center,
+        });
+        texts.push(OwnedText {
+            text: "Лево".to_owned(),
+            origin: [area_l.x, area_l.y],
+            width: area_l.w,
+            font_size: 11.0,
+            color: color4(style.text),
+            align: TextAlign::Left,
+        });
+
+        // quads: CardInstance без PartialEq — сравнение по полям
+        assert_eq!(d.quads.len(), quads.len());
+        for (a, b) in d.quads.iter().zip(quads.iter()) {
+            assert_eq!(a.pos, b.pos);
+            assert_eq!(a.size, b.size);
+            assert_eq!(a.fill, b.fill);
+            assert_eq!(a.border, b.border);
+            assert_eq!(a.params, b.params);
+        }
+        // texts: дословное равенство
+        assert_eq!(d.texts.len(), texts.len());
+        for (a, b) in d.texts.iter().zip(texts.iter()) {
+            assert_eq!(a.text, b.text);
+            assert_eq!(a.origin, b.origin);
+            assert_eq!(a.width, b.width);
+            assert_eq!(a.font_size, b.font_size);
+            assert_eq!(a.color, b.color);
+            assert_eq!(a.align, b.align);
+        }
+        // Журнал Painter отражает состав и порядок вызовов (модель крейта)
+        assert_eq!(d.painter.items().len(), 4);
+        assert!(matches!(d.painter.items()[0], PaintItem::Rect { .. }));
+        assert!(matches!(d.painter.items()[1], PaintItem::Rect { .. }));
+        assert!(matches!(d.painter.items()[2], PaintItem::Text { .. }));
+        assert!(matches!(d.painter.items()[3], PaintItem::Text { .. }));
+    }
+
+    /// Deprecated-делегаты на WidgetState дают прежние результаты
+    /// (эквивалентность таблицы состояний: disabled > hovered > normal).
+    #[test]
+    fn cursor_state_delegates_match_old_matrix() {
+        assert_eq!(cursor_state(false, false), KitState::Normal);
+        assert_eq!(cursor_state(true, false), KitState::Hovered);
+        assert_eq!(cursor_state(true, true), KitState::Disabled);
+        assert_eq!(cursor_state(false, true), KitState::Disabled);
+        // dropdown-строка: hover без disabled
+        assert_eq!(dropdown_item_state(true), KitState::Hovered);
+        assert_eq!(dropdown_item_state(false), KitState::Normal);
+        // контрольный: ButtonVariant по-прежнему различим (делегаты не тронули кит)
+        let _ = ButtonVariant::Primary;
+    }
 }

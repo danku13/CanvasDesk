@@ -851,6 +851,22 @@ StageCalcFocus, квалифицированная адресация в под�
 | US-5.1 | Контракт поверхности задокументирован (`docs/interface-objects/surface-registry.md`, `docs/ui-kit.md`): defense mode PRD-0007 встаёт одной регистрацией без правок цепочек ввода | ✅ |
 | US-5.2 | Гейты G1–G5, G7, G8 — зелёные; G6 (DebugOverlay) — за не заказанным этапом U4 | ✅ |
 
+## FR-057 — Волна 2 кита: Painter + WidgetState/FocusRing (kit-core) — выполнено (2026-09-23)
+
+Приёмка FR-057 (по документу `docs/change-requests/fr-057-ui-kit-painter-widget-state.md`).
+Контракты заморожены постановкой волны 2; реализация — TDD.
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-057.1 | `canvas-ui/src/paint.rs` — `PaintAlign`/`PaintItem{Rect,Text}`/`Painter` по замороженному контракту; порядок items = draw-порядок, `take_items` очищает (TDD-тесты) | ✅ |
+| FR-057.2 | `canvas-ui/src/widget.rs` — `WidgetState`: матрица переходов указателя/селекции/фокуса → `KitState` с приоритетом **Disabled > Pressed > Hovered > Selected > Normal**; фокус в `KitState` не входит (`is_focused` — потребителю) — 12 TDD-тестов | ✅ |
+| FR-057.3 | Ребро клика `clicked()`: press был внутри → release внутри — один раз на press→release; press вне виджета и press по disabled клик не дают (тесты «внутри→внутри», «внутри→снаружи», «drag out and back», disabled) | ✅ |
+| FR-057.4 | `canvas-ui/src/keyboard.rs` — только добавление `FocusRing` (Tab `next`/`prev` по кольцу, `current`, `clear`); существующие сигнатуры `KeyboardRouter` не менялись (дифф) — 6 тестов | ✅ |
+| FR-057.5 | Эквивалентность: `KitDraw` (kit_ui.rs) — тонкая обёртка над `Painter` (методы/поведение 1:1); тест `kitdraw_delegation_matches_direct_path` — те же quads/texts на фиксированном примере (0 визуального скачка); `cursor_state`/`dropdown_item_state` — делегаты на `WidgetState` (тест матрицы) | ✅ |
+| FR-057.6 | Инвариант G7: `canvas-ui` без новых внешних зависимостей; wasm-check `canvas-ui` (wasm32-unknown-unknown) зелёный | ✅ |
+| FR-057.7 | Гейты: `cargo test -p canvas-ui` 83/83 (+22 новых), `cargo test -p canvas-app --lib` 318/318 (вкл. G4-линт), `cargo fmt --check`, clippy `-D warnings` (canvas-ui/canvas-app; workspace — зелёный до чистки таргета) — зелёные; **0 правок app.rs** (проверка диффом); полный workspace-test/mcp-wasm — CI песочницы не тянет (диск/линкер) — прогон CI на push | ✅ |
+| FR-057.8 | Доки: `docs/ui-kit.md` §7.1 «Painter и WidgetState»; FR-документ — статус «✅ реализовано» + Changelog; `index-cr-fr.md`; PRD-0009 §16 | ✅ |
+
 ## FR-048 / PRD-0007 — Цепочка расчёта цифры (PoC X0–X6) — выполнено (2026-09-22)
 
 Приёмка DoD PoC (§15 PRD-0007). Эталон владельца — юнит-экономика
