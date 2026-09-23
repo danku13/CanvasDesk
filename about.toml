@@ -43,3 +43,13 @@ targets = [
 ignore-build-dependencies = false
 ignore-dev-dependencies = false
 ignore-transitive-dependencies = false
+
+# First-party workspace-крейты (publish = false, license AGPL-3.0-only —
+# собственный код закрытого продукта) исключаются из third-party notices —
+# заявленная выше семантика; без этого ключа cargo-about 0.9 требует
+# лицензию workspace-крейтов из allowlist и падает (проявилось при
+# перегенерации FR-063/S0 — поля license добавлены d6fb7df ПОСЛЕ
+# последней успешной генерации notices b723509). Симметрично deny.toml
+# [licenses] private = { ignore = true }.
+[private]
+ignore = true
