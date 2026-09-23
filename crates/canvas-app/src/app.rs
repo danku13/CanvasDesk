@@ -6490,6 +6490,25 @@ impl App {
             let area = canvas_ui::geometry::UiRect::new(rect.x, rect.y + 1.0, rect.w, rect.h);
             d.label_center(area, canvas_ui::kit::icon_glyph(*icon), style.text, 13.0);
         }
+        // === FR-061 (этап E, D-15): секция Row — табличные строки на
+        // направляющих. Отрисовка — kit::paint_row (строка целиком одним
+        // вызовом кита); зебра — демо слотом hover_fill; состояния —
+        // row_style (Selected — selected_fill + accent).
+        for demo in &lay.row_rows {
+            let mut style = canvas_ui::kit::row_style(demo.state, &palette);
+            if demo.zebra {
+                style.fill = palette.hover_fill;
+            }
+            let mut p = canvas_ui::paint::Painter::new();
+            canvas_ui::kit::paint_row(
+                &mut p,
+                &demo.lay,
+                &demo.parts,
+                &style,
+                crate::kit_ui::LABEL_SIZE,
+            );
+            d.paint_items(p.take_items());
+        }
         // === FR-062: секции layout v2 (F-13…F-17) ===
         // Measured-ряд (F-13): чипы, ширины которых посчитал TextMeasurer
         // внутри Row::lay_out_measured (подписи — те же строки, что в замере)
@@ -12108,7 +12127,47 @@ impl App {
                 border
             };
             let unmapped_text = self.tr(keys::STAGE_CALC_UNMAPPED).to_owned();
+            // FR-061 этап E (D-15): строки панели — kit-Row (row_guides/
+            // row_layout/paint_row): значения — на колоночной направляющей
+            // (max по всем строкам колонки — колонка стабильна при
+            // прокрутке), усечение — ellipsis кита (класс CR-015). Прежняя
+            // семантика панели — переопределением полей RowStyle (plain
+            // data): fill/border/маркер/приглушение — прежние слоты
+            // дословно; лидер выключен (прототип FR-044 без лидера).
+            let kit_size = font(11.0);
+            let kit_opts = canvas_ui::kit::RowOpts {
+                leader: false,
+                ..canvas_ui::kit::RowOpts::default()
+            };
+            // Данные строк «Переменных» (значение unmapped — «не подставлено»)
+            let var_parts: Vec<canvas_ui::kit::RowParts<'_>> = ctx
+                .model
+                .vars
+                .iter()
+                .map(|var| canvas_ui::kit::RowParts {
+                    marker: canvas_ui::kit::RowMarker::Dot,
+                    label: &var.path,
+                    value: match &var.value {
+                        RowValue::Ok(text) => text.as_str(),
+                        RowValue::Err(err) => err.as_str(),
+                        RowValue::Unmapped => unmapped_text.as_str(),
+                    },
+                    unit: "",
+                    badge: "",
+                })
+                .collect();
+            let vars_right = panel.vars_area[0] + panel.vars_area[2] - 6.0;
+            let var_guides = canvas_ui::kit::row_guides(
+                &mut m,
+                &mut fs,
+                SANS_FAMILY,
+                kit_size,
+                &var_parts,
+                vars_right,
+                canvas_core::tokens::TABLE_GUIDE_GAP,
+            );
             for (index, row) in &panel.var_rows {
+                let Some(g) = var_guides else { break };
                 let var = &ctx.model.vars[*index];
                 // Состояние строки — WidgetState (FR-057): фокус Р-5 →
                 // Selected (рамка/приглушение — прежние слоты дословно)
@@ -12116,14 +12175,31 @@ impl App {
                 state.set_selected(row_focused(*index));
                 let focused = state.kit_state() == canvas_ui::kit::KitState::Selected;
                 let alpha = row_alpha(focused);
-                let x = px + row[0];
-                let y = py + row[1];
-                let w = row[2];
-                let h = row[3];
+                let slot =
+                    canvas_ui::geometry::UiRect::new(px + row[0], py + row[1], row[2], row[3]);
+                let lay = canvas_ui::kit::row_layout(
+                    &mut m,
+                    &mut fs,
+                    SANS_FAMILY,
+                    kit_size,
+                    slot,
+                    g,
+                    &var_parts[*index],
+                    &kit_opts,
+                );
                 let unmapped = var.value == RowValue::Unmapped;
                 let mut fill = palette.search_row_fill;
                 fill[3] *= alpha;
-                let border = if focused {
+                let mut style = canvas_ui::kit::row_style(
+                    if focused {
+                        canvas_ui::kit::KitState::Selected
+                    } else {
+                        canvas_ui::kit::KitState::Normal
+                    },
+                    &kit_palette,
+                );
+                style.fill = fill;
+                style.border = if focused {
                     focus_border()
                 } else if unmapped {
                     // «пунктирная строка не подставлено» (Р-4): пунктир
@@ -12133,103 +12209,72 @@ impl App {
                 } else {
                     [0.0; 4]
                 };
-                d.rect(
-                    canvas_ui::geometry::UiRect::new(x, y, w, h),
-                    fill,
-                    border,
-                    6.0,
-                );
-                // Маркер строки — value-точка (Р-4)
-                let dot_d = 6.0;
-                let mut dot_fill = if unmapped {
-                    UNMAPPED_EDGE_COLOR
-                } else {
-                    FLOW_EDGE_COLOR
+                // value-точка (Р-4): FLOW_EDGE, unmapped — янтарная; значение —
+                // слот текста/ошибки/quote; приглушение вне фокуса (Q3)
+                let (dot_fill, value_fill) = match &var.value {
+                    RowValue::Ok(_) => (FLOW_EDGE_COLOR, kit_palette.text),
+                    RowValue::Err(_) => (FLOW_EDGE_COLOR, kit_palette.control_danger),
+                    RowValue::Unmapped => (UNMAPPED_EDGE_COLOR, c4(palette.quote)),
                 };
-                dot_fill[3] *= alpha;
-                d.rect(
-                    canvas_ui::geometry::UiRect::new(
-                        x + 6.0,
-                        y + h / 2.0 - dot_d / 2.0,
-                        dot_d,
-                        dot_d,
-                    ),
-                    dot_fill,
-                    [0.0; 4],
-                    dot_d / 2.0,
-                );
-                let (value_text, value_color) = match &var.value {
-                    RowValue::Ok(text) => (text.clone(), kit_palette.text),
-                    RowValue::Err(err) => (err.clone(), kit_palette.control_danger),
-                    RowValue::Unmapped => (unmapped_text.clone(), c4(palette.quote)),
-                };
-                // FR-059: ширина значения — измеренная (вместо 6.3·символ),
-                // путь — ellipsis по фактической ширине (класс CR-015)
-                let vw = m.width_of(&mut fs, &value_text, SANS_FAMILY, font(11.0));
-                let path_color = dim_color4(kit_palette.text, alpha);
-                let row_value_color = dim_color4(value_color, alpha);
-                let path_max = (w - 22.0 - vw - 12.0).max(0.0);
-                d.label(
-                    canvas_ui::geometry::UiRect::new(x + 18.0, y + (h - 12.0) / 2.0, w - 22.0, h),
-                    &m.ellipsis(&mut fs, &var.path, SANS_FAMILY, font(11.0), path_max),
-                    path_color,
-                    font(11.0),
-                    PaintAlign::Left,
-                );
-                d.label(
-                    canvas_ui::geometry::UiRect::new(
-                        x + w - 6.0 - vw,
-                        y + (h - 12.0) / 2.0,
-                        vw + 12.0,
-                        h,
-                    ),
-                    &value_text,
-                    row_value_color,
-                    font(11.0),
-                    PaintAlign::Left,
-                );
+                style.marker = dim_color4(dot_fill, alpha);
+                style.value = dim_color4(value_fill, alpha);
+                style.label = dim_color4(kit_palette.text, alpha);
+                canvas_ui::kit::paint_row(&mut d, &lay, &var_parts[*index], &style, kit_size);
             }
+            // Строки «Расчёта» — ƒ-маркер + формула с путями операндов
+            // (значения нет — ячейки/лидера нет, текст до края строки)
+            let formula_parts: Vec<canvas_ui::kit::RowParts<'_>> = ctx
+                .model
+                .formulas
+                .iter()
+                .map(|formula| canvas_ui::kit::RowParts {
+                    marker: canvas_ui::kit::RowMarker::Glyph("ƒ"),
+                    label: &formula.display,
+                    value: "",
+                    unit: "",
+                    badge: "",
+                })
+                .collect();
             for (index, row) in &panel.formula_rows {
-                let formula = &ctx.model.formulas[*index];
+                let slot =
+                    canvas_ui::geometry::UiRect::new(px + row[0], py + row[1], row[2], row[3]);
+                // Направляющие не нужны (значения нет) — деградированный вход
+                let g = canvas_ui::row_guides::RowGuides {
+                    value_w: 0.0,
+                    unit_w: 0.0,
+                    badge_w: 0.0,
+                    value_x: slot.right(),
+                    unit_x: slot.right(),
+                };
+                let lay = canvas_ui::kit::row_layout(
+                    &mut m,
+                    &mut fs,
+                    SANS_FAMILY,
+                    kit_size,
+                    slot,
+                    g,
+                    &formula_parts[*index],
+                    &kit_opts,
+                );
                 let mut state = WidgetState::default();
                 state.set_selected(row_focused(ctx.model.vars.len() + *index));
                 let focused = state.kit_state() == canvas_ui::kit::KitState::Selected;
                 let alpha = row_alpha(focused);
-                let x = px + row[0];
-                let y = py + row[1];
-                let w = row[2];
-                let h = row[3];
                 let mut fill = palette.search_row_fill;
                 fill[3] *= alpha;
-                d.rect(
-                    canvas_ui::geometry::UiRect::new(x, y, w, h),
-                    fill,
-                    if focused { focus_border() } else { [0.0; 4] },
-                    6.0,
+                let mut style = canvas_ui::kit::row_style(
+                    if focused {
+                        canvas_ui::kit::KitState::Selected
+                    } else {
+                        canvas_ui::kit::KitState::Normal
+                    },
+                    &kit_palette,
                 );
-                // Маркер строки — ƒ (Р-4)
-                let f_color = dim_color4(kit_palette.text_title, alpha);
-                let text_color = dim_color4(kit_palette.text, alpha);
-                d.label(
-                    canvas_ui::geometry::UiRect::new(x + 6.0, y + (h - 12.0) / 2.0, 12.0, h),
-                    "ƒ",
-                    f_color,
-                    font(11.0),
-                    PaintAlign::Left,
-                );
-                d.label(
-                    canvas_ui::geometry::UiRect::new(x + 20.0, y + (h - 12.0) / 2.0, w - 26.0, h),
-                    &m.ellipsis(
-                        &mut fs,
-                        &formula.display,
-                        SANS_FAMILY,
-                        font(11.0),
-                        (w - 26.0).max(0.0),
-                    ),
-                    text_color,
-                    font(11.0),
-                    PaintAlign::Left,
-                );
+                style.fill = fill;
+                style.border = if focused { focus_border() } else { [0.0; 4] };
+                style.marker = dim_color4(kit_palette.text_title, alpha);
+                style.label = dim_color4(kit_palette.text, alpha);
+                canvas_ui::kit::paint_row(&mut d, &lay, &formula_parts[*index], &style, kit_size);
             }
             // FR-059: бегунки скролла колонок (кит scroll_bar) — переполнение
             // честно прокручивается, срез «… ещё N» удалён (цвет — слот рамки)

@@ -221,6 +221,7 @@ G4-линта в рантайме). Оверлей не участвует в pi
 | `Switch` | `switch(slot, on, state, p)` | `SwitchLayout { track, knob, track_style, knob_fill }`. `on` — позиция бегунка (вправо) и слот заливки трека (`control_primary` on / `control_fill` off); радиус `RADIUS_PILL`. |
 | `Card` | `card(slot, min, max, header_h, p)` | `CardLayout { rect, header, body }`. Хедер и body — внутри пада панели (`panel_style(p).pad` = `SPACING_LG`). |
 | `Icon` | `icon_glyph(i) -> &'static str` + `icon_button(slot, icon, align)` | `enum Icon { Close, Gear, Question, Search, Plus, ArrowLeft, ArrowRight, Refresh }`. Глифы — существующим шрифтом (NotoSansDisplay-Medium): 0 новых зависимостей (G7). `icon_button` делегирует `icon_button_rect` (квадрат `ICON_BUTTON_SIZE`). |
+| `Row` (FR-061 D-15, этап E) | `row_guides(m, fs, family, size, rows, right_edge, gap)` + `row_layout(..., slot, guides, parts, opts)` + `paint_row(p, lay, parts, style, size)` + `row_style(state, p)` + `leader_dash_rects(x0, x1, y, scale, min)` | Табличная строка на колоночных направляющих ([`RowGuides`]): `RowParts` — декларативные данные (маркер `RowMarker::None/Dot/Glyph`, label, value, unit, badge); право-прижатие значения/юнита D-4, лидер D-5 (штрихи — общая геометрия с телом ноды), бейдж — пилюля. `RowOpts { leader, gap }` — панель FR-044 без лидера. `RowStyle` — только слоты (plain data: потребитель переопределяет поля семантикой поверхности — маркер/ошибка/приглушение). Потребители: витрина (секция Row), панель «Как считается» FR-044; тело ноды — `leader_dash_rects`. |
 
 **Инвариант каретки** (зафиксирован в контракте FR-058): позиции `caret`/`sel`
 в `TextFieldModel` — в **СИМВОЛАХ** (`chars().count()`), не байтах.
@@ -253,6 +254,11 @@ TextMeasurer внутри раскладки), **flex-ряд** (fixed + grow ×2
 (grid_cells) и **фокус-слоты** ×4 — Tab/Shift+Tab ведёт FocusRing (рамка —
 accent; кольцо живёт в контент-координатах `focus_targets`, перестроение —
 `retain_order`). Хвост витрины при нижнем скролле — секции FR-062.
+
+FR-061 (этап E, D-15) добавляет секцию **Row** — демо-таблица из 4 строк на
+общих направляющих (параметр ×2 / формула «ƒ» с бейджем «← источник» / Σ),
+состояния Normal/Zebra/Selected; отрисовка — `paint_row` (те же функции
+кита, что у панели «Как считается» и тела ноды).
 
 ## 8. Статус кита
 

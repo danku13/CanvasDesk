@@ -76,6 +76,8 @@ pub const SECTION_SWITCH: &str = "kit.section.switch";
 pub const SECTION_CARD: &str = "kit.section.card";
 pub const SECTION_LIST: &str = "kit.section.list";
 pub const SECTION_ICONS: &str = "kit.section.icons";
+/// FR-061 (этап E, D-15): секция kit-Row — табличные строки на направляющих.
+pub const SECTION_ROW: &str = "kit.section.row";
 /// FR-062: секции layout v2 (measured/flex/wrap/grid/focus).
 pub const SECTION_MEASURED: &str = "kit.section.measured";
 pub const SECTION_GROW: &str = "kit.section.grow";
@@ -100,6 +102,15 @@ pub const GALLERY_WRAP_CHIPS: usize = 8;
 pub const GALLERY_FOCUS_SLOTS: usize = 4;
 /// FR-062 F-17: ширина слота фокус-секции (фикс — подпись не измеряется).
 pub const GALLERY_FOCUS_W: f32 = 72.0;
+/// FR-061 (этап E): высота демо-строки секции Row (панель FR-044 — 22).
+pub const GALLERY_ROW_H: f32 = 24.0;
+/// FR-061 (этап E): демо-значения строк (числа — без i18n).
+pub const GALLERY_ROW_VALUE_PRICE: &str = "50";
+pub const GALLERY_ROW_VALUE_QTY: &str = "12";
+pub const GALLERY_ROW_VALUE_TOTAL: &str = "600";
+pub const GALLERY_ROW_VALUE_SUM: &str = "5 400";
+/// FR-061 (этап E): глиф формульной строки демо (calc-маркер Р-4).
+pub const GALLERY_ROW_FORMULA_GLYPH: &str = "ƒ";
 
 /// Ряд кнопок одного варианта.
 #[derive(Debug, Clone)]
@@ -188,6 +199,44 @@ pub struct GalleryLayout {
     /// сдвига/фильтра) — кольцо [`canvas_ui::keyboard::FocusRing`] в App
     /// живёт в этих координатах; отрисовка рамки — сдвиг на offset.
     pub focus_targets: Vec<UiRect>,
+    /// FR-061 (этап E, D-15): демо-таблица секции Row — 4 строки на общих
+    /// направляющих (параметр ×2 / формула с бейджем / Σ), состояния
+    /// Normal/Zebra/Selected; отрисовка — [`canvas_ui::kit::paint_row`].
+    pub row_rows: Vec<RowDemoRow>,
+}
+
+/// FR-061 (этап E, D-15): строка демо-таблицы витрины — данные кит-Row
+/// + геометрия ([`canvas_ui::kit::row_layout`] на общих направляющих).
+#[derive(Debug, Clone)]
+pub struct RowDemoRow {
+    /// Состояние строки (слоты [`canvas_ui::kit::row_style`]).
+    pub state: KitState,
+    /// Зебра (альтернативный фон — демо слотом hover_fill).
+    pub zebra: bool,
+    /// Данные строки (тексты — &'static: константы/переводы).
+    pub parts: kit::RowParts<'static>,
+    /// Геометрия строки (значение/юнит — на направляющих демо-таблицы).
+    pub lay: kit::RowLayout,
+}
+
+/// Сдвиг геометрии кит-строки по вертикали (скролл витрины — все ячейки
+/// строки в одних координатах, кроме текста).
+fn shift_row_lay(mut lay: kit::RowLayout, dy: f32) -> kit::RowLayout {
+    lay.row.y -= dy;
+    if let Some(r) = lay.dot.as_mut() {
+        r.y -= dy;
+    }
+    if let Some(r) = lay.glyph.as_mut() {
+        r.y -= dy;
+    }
+    lay.label.y -= dy;
+    lay.leader_y -= dy;
+    lay.value.y -= dy;
+    lay.unit.y -= dy;
+    if let Some(r) = lay.badge.as_mut() {
+        r.y -= dy;
+    }
+    lay
 }
 
 /// Перевод ключа витрины (ключи — 'static константы модуля).
@@ -579,6 +628,99 @@ pub fn gallery_layout(
     }
     y += kit::ICON_BUTTON_SIZE + SECTION_GAP;
 
+    // === FR-061 (этап E, D-15): секция Row — табличные строки на
+    // направляющих (параметр ×2 / формула с бейджем / Σ), состояния
+    // Normal/Zebra/Selected — те же функции кита, что у панели
+    // «Как считается» (row_guides/row_layout/paint_row).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_ROW));
+    y += 18.0;
+    let mut row_rows: Vec<RowDemoRow> = Vec::new();
+    {
+        let demo: [(kit::RowParts<'static>, KitState, bool); 4] = [
+            (
+                kit::RowParts {
+                    marker: kit::RowMarker::Dot,
+                    label: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_PRICE),
+                    value: GALLERY_ROW_VALUE_PRICE,
+                    unit: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_PRICE),
+                    badge: "",
+                },
+                KitState::Normal,
+                false,
+            ),
+            (
+                kit::RowParts {
+                    marker: kit::RowMarker::Dot,
+                    label: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_QTY),
+                    value: GALLERY_ROW_VALUE_QTY,
+                    unit: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_QTY),
+                    badge: "",
+                },
+                KitState::Normal,
+                true,
+            ),
+            (
+                kit::RowParts {
+                    marker: kit::RowMarker::Glyph(GALLERY_ROW_FORMULA_GLYPH),
+                    label: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_TOTAL),
+                    value: GALLERY_ROW_VALUE_TOTAL,
+                    unit: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_MONEY),
+                    badge: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_BADGE),
+                },
+                KitState::Normal,
+                false,
+            ),
+            (
+                kit::RowParts {
+                    marker: kit::RowMarker::None,
+                    label: crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_SUM),
+                    value: GALLERY_ROW_VALUE_SUM,
+                    unit: "",
+                    badge: "",
+                },
+                KitState::Selected,
+                false,
+            ),
+        ];
+        let parts: Vec<kit::RowParts<'static>> = demo.iter().map(|(p, _, _)| *p).collect();
+        // Общие направляющие демо-таблицы (право — край контрол-колонки)
+        if let Some(rg) = kit::row_guides(
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+            &parts,
+            control_x + control_w,
+            canvas_core::tokens::TABLE_GUIDE_GAP,
+        ) {
+            for (i, (row_parts, state, zebra)) in demo.into_iter().enumerate() {
+                let slot = UiRect::new(
+                    control_x,
+                    y + i as f32 * GALLERY_ROW_H,
+                    control_w,
+                    GALLERY_ROW_H,
+                );
+                let lay = kit::row_layout(
+                    m,
+                    fs,
+                    FONT_FAMILY,
+                    LABEL_SIZE,
+                    slot,
+                    rg,
+                    &row_parts,
+                    &kit::RowOpts::default(),
+                );
+                row_rows.push(RowDemoRow {
+                    state,
+                    zebra,
+                    parts: row_parts,
+                    lay,
+                });
+            }
+        }
+    }
+    y += 4.0 * GALLERY_ROW_H + SECTION_GAP;
+
     // === FR-062: секции layout v2 (F-13…F-17) — после секций компонентов v2 ===
 
     // --- Measured-ряд (F-13): ширины чипов — TextMeasurer внутри
@@ -903,6 +1045,15 @@ pub fn gallery_layout(
         .filter(visible)
         .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
         .collect();
+    // FR-061: секция Row — сдвиг всех ячеек каждой строки + фильтр
+    let row_rows: Vec<RowDemoRow> = row_rows
+        .into_iter()
+        .filter(|d| visible(&d.lay.row))
+        .map(|d| RowDemoRow {
+            lay: shift_row_lay(d.lay, off),
+            ..d
+        })
+        .collect();
     // focus_targets НЕ сдвигаются/фильтруются — контент-координаты Tab-кольца
 
     GalleryLayout {
@@ -937,6 +1088,7 @@ pub fn gallery_layout(
         grid_cells,
         focus_buttons,
         focus_targets,
+        row_rows,
     }
 }
 
@@ -1075,6 +1227,35 @@ impl<'a> KitDraw<'a> {
         self.painter
             .label(area, text, color, size, PaintAlign::Left);
         self.flush_last_text();
+    }
+
+    /// Конвертация ПАЧКИ items Painter'а в квад/текст кадра (FR-061 этап E:
+    /// составные кит-виджеты — [`canvas_ui::kit::paint_row`] — отдают сразу
+    /// всю строку; порядок items = draw-порядок).
+    pub fn paint_items(&mut self, items: Vec<canvas_ui::paint::PaintItem>) {
+        for item in items {
+            match item {
+                canvas_ui::paint::PaintItem::Rect {
+                    rect,
+                    fill,
+                    border,
+                    radius,
+                } => {
+                    self.painter.rect(rect, fill, border, radius);
+                    self.flush_last_quad();
+                }
+                canvas_ui::paint::PaintItem::Text {
+                    area,
+                    text,
+                    color,
+                    size,
+                    align,
+                } => {
+                    self.painter.label(area, &text, color, size, align);
+                    self.flush_last_text();
+                }
+            }
+        }
     }
 
     /// Конвертация последнего Rect-item'а Painter'а в квад кадра
@@ -1383,7 +1564,9 @@ mod tests {
                 viewport_h: lay0.sections_viewport.h,
             };
             let lay = gallery_layout([1280.0, 800.0], Language::Ru, &s, &p, &mut m, &mut fs);
-            if (lay.text_fields.len() == 3 && lay.icon_glyphs.len() == 4) || off >= max_offset {
+            if (lay.text_fields.len() == 3 && lay.icon_glyphs.len() == 4 && lay.row_rows.len() == 4)
+                || off >= max_offset
+            {
                 break lay;
             }
             off += 8.0;
@@ -1401,6 +1584,27 @@ mod tests {
             "демо-список прокручивается"
         );
         assert_eq!(lay_v2.icon_glyphs.len(), 4, "Icon-глифы ×4");
+        // FR-061 (этап E, D-15): секция Row — 4 демо-строки на общих
+        // направляющих; значения всех строк — на одной направляющей чисел
+        assert_eq!(lay_v2.row_rows.len(), 4, "kit-Row ×4 (D-15)");
+        let value_right = lay_v2.row_rows[0].lay.value.right();
+        assert!(
+            lay_v2
+                .row_rows
+                .iter()
+                .all(|d| d.lay.value.w == 0.0 || (d.lay.value.right() - value_right).abs() < 0.01),
+            "значения — на колоночной направляющей (D-4)"
+        );
+        // Одна строка с бейджем — пилюля построена на бейдж-колонке
+        assert_eq!(
+            lay_v2
+                .row_rows
+                .iter()
+                .filter(|d| d.lay.badge.is_some())
+                .count(),
+            1,
+            "бейдж-демо «← источник» — одна строка"
+        );
     }
 
     /// FR-059: скролл витрины — сдвиг секций, шапка на месте; после сдвига
