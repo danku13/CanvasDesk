@@ -16,6 +16,18 @@
 //!
 //! Всё, кроме фонового приёмника, — чистые функции/структуры; юнит-тесты
 //! внизу (§9.4-подобные сценарии лейаута/видимости/состояний).
+//!
+//! FR-060 (волна 2 миграции кита, паттерн U5 — числа дословно): окно —
+//! `kit::modal` (слот = вьюпорт, сжатый на [`WIN_MARGIN`]; прежние клампы
+//! потолков/полей/инварианта дословно — parity-тест); крошки — отбор по
+//! мета-зоне `take_while` вместо break-клампа (G5: политика hide, семантика
+//! прежняя); `Option::take` в автомате состояния — перенос владения, не
+//! срез контента (аудит G5 — про срезы `take(n)`/break-клампы/`truncate_chars`).
+//! Дерево (`layout_tree`/`fit_scale`) — 2D-tidy-лейаут прототипа: кит
+//! список+скролл однородных строк здесь неприменим (documented отклонение,
+//! как kit::card в FR-059); чип «Данные изменены»/кнопка ✕ — прежние
+//! размеры (kit chip 24/icon_button 26 ≠ прежних 28/30 — числа дословно
+//! сильнее перечня «замена»).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,6 +37,9 @@ use std::collections::{BTreeMap, BTreeSet};
 // E0308 на границе вызовов из app.rs (красный CI по bbcdbc7).
 use canvas_core::time::Instant;
 use canvas_core::{LineageDelta, LineageError, LineageNodeKind, LineageTree, LineageVia};
+
+use canvas_ui::geometry::{UiRect, UiVec2};
+use canvas_ui::kit;
 
 // --- геометрия окна (паттерн main stage: затемнение + плавающее окно) -----
 
@@ -51,17 +66,32 @@ pub const CLOSE_SIZE: f32 = 30.0;
 pub const CHIP_W: f32 = 210.0;
 pub const CHIP_H: f32 = 28.0;
 
-/// Прямоугольник окна проверки: центр вьюпорта, потолки прототипа v4,
-/// кламп к окну с полями [`WIN_MARGIN`], минимум инварианта 320×240.
+/// Прямоугольник окна проверки — `kit::modal` (FR-060): слот = вьюпорт,
+/// сжатый на поля [`WIN_MARGIN`] (симметричный инсет сохраняет и прежний
+/// кламп-отступ от краёв, и центр окна); min = инвариант 320×240,
+/// max = потолки прототипа и ширина слота, desired = доли вьюпорта.
+/// Прежняя формула (доля → кламп потолка → кламп полей → центр)
+/// воспроизводится дословно (parity-тест).
 /// `[x, y, w, h]` в логических px.
 pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
-    let w = (viewport[0] * WIN_FRAC_W)
-        .clamp(WIN_MIN_W, WIN_MAX_W)
-        .min((viewport[0] - WIN_MARGIN * 2.0).max(WIN_MIN_W));
-    let h = (viewport[1] * WIN_FRAC_H)
-        .clamp(WIN_MIN_H, WIN_MAX_H)
-        .min((viewport[1] - WIN_MARGIN * 2.0).max(WIN_MIN_H));
-    [(viewport[0] - w) / 2.0, (viewport[1] - h) / 2.0, w, h]
+    let slot = UiRect::new(
+        WIN_MARGIN,
+        WIN_MARGIN,
+        (viewport[0] - WIN_MARGIN * 2.0).max(0.0),
+        (viewport[1] - WIN_MARGIN * 2.0).max(0.0),
+    );
+    let layout = kit::modal(
+        slot,
+        UiVec2::new(WIN_MIN_W, WIN_MIN_H),
+        UiVec2::new(WIN_MAX_W.min(slot.w), WIN_MAX_H.min(slot.h)),
+        UiVec2::new(viewport[0] * WIN_FRAC_W, viewport[1] * WIN_FRAC_H),
+    );
+    [
+        layout.panel.x,
+        layout.panel.y,
+        layout.panel.w,
+        layout.panel.h,
+    ]
 }
 
 /// Кнопка ✕ — правый верхний угол шапки (паттерн main stage).
@@ -131,14 +161,18 @@ pub fn crumb_rects(win: [f32; 4], count: usize) -> (usize, Vec<[f32; 4]>) {
     let meta_end = meta[0] + meta[2];
     let y = meta[1] + (meta[3] - CRUMB_H) / 2.0;
     let mut rects = Vec::with_capacity(shown);
-    for index in 0..shown {
-        let x = meta[0] + (width + CRUMB_GAP) * index as f32;
-        if x >= meta_end {
-            break; // дальше мета-зоны чипы не отрисовываются и не кликабельны
-        }
-        let w = width.min(meta_end - x);
-        rects.push([x, y, w, CRUMB_H]);
-    }
+    // FR-060/G5: без break-выхода — отбор по мета-зоне через `take_while`
+    // (политика hide: чипы за зоной не отрисовываются и не кликабельны —
+    // семантика прежняя дословно, паттерн token_before_caret из FR-059)
+    rects.extend(
+        (0..shown)
+            .map(|index| meta[0] + (width + CRUMB_GAP) * index as f32)
+            .take_while(|&x| x < meta_end)
+            .map(|x| {
+                let w = width.min(meta_end - x);
+                [x, y, w, CRUMB_H]
+            }),
+    );
     (offset, rects)
 }
 
@@ -242,18 +276,22 @@ pub fn visibility(
         }
     }
     // Раскрытые предки: для каждого узла — есть ли предок в expanded
-    // (в пределах поддерева вида).
+    // (в пределах поддерева вида). FR-060/G5: без break — страж корня
+    // в match-ветке (корень проверяется как предок, дальше цепочки не идём —
+    // семантика прежнего while-break дословно).
     let ancestor_expanded = |mut i: usize| -> bool {
-        while let Some(p) = vis.parent[i] {
-            if expanded.contains(&p) {
-                return true;
-            }
-            i = p;
-            if i == root_idx {
-                break;
+        loop {
+            match vis.parent[i] {
+                Some(p) if p != root_idx => {
+                    if expanded.contains(&p) {
+                        return true;
+                    }
+                    i = p;
+                }
+                Some(p) => return expanded.contains(&p),
+                None => return false,
             }
         }
-        false
     };
     for &i in &order {
         let within_limit = auto_depth == 0 || depth_from_view[i] <= auto_depth as usize;
@@ -748,6 +786,8 @@ impl ExplainState {
     }
 
     /// Забрать дерево (закрытие → сессионный кэш).
+    /// FR-060/G5: `Option::take` — перенос владения состоянием, не срез
+    /// контента (аудит G5 — про срезы `take(n)`/break-клампы/`truncate_chars`)
     pub fn take_tree(&mut self) -> Option<LineageTree> {
         self.tree.take()
     }
@@ -1136,6 +1176,38 @@ mod tests {
         assert!(small[2] >= WIN_MIN_W - 1e-3);
         assert!(small[3] >= WIN_MIN_H - 1e-3);
         assert!(small[0] >= -0.01);
+    }
+
+    /// FR-060: `kit::modal` (слот = вьюпорт с полями [`WIN_MARGIN`]) ≡
+    /// прежней формуле (доля → потолок → поля → центр) дословно при всех
+    /// обычных вьюпортах; деградация «окно меньше инварианта» — панель
+    /// прижата к углу слота (сдвиг ≥ 0), как у диалога ревью (parity-тест).
+    #[test]
+    fn window_rect_kit_modal_matches_old_clamps() {
+        let old = |vw: f32, vh: f32| -> [f32; 4] {
+            let w = (vw * WIN_FRAC_W)
+                .clamp(WIN_MIN_W, WIN_MAX_W)
+                .min((vw - WIN_MARGIN * 2.0).max(WIN_MIN_W));
+            let h = (vh * WIN_FRAC_H)
+                .clamp(WIN_MIN_H, WIN_MAX_H)
+                .min((vh - WIN_MARGIN * 2.0).max(WIN_MIN_H));
+            [(vw - w) / 2.0, (vh - h) / 2.0, w, h]
+        };
+        for &(vw, vh) in &[
+            (1600.0, 1000.0),
+            (1280.0, 800.0),
+            (900.0, 640.0),
+            (420.0, 320.0),
+            (360.0, 300.0),
+            (2400.0, 1200.0),
+            (700.0, 1100.0),
+        ] {
+            assert_eq!(
+                window_rect([vw, vh]),
+                old(vw, vh),
+                "kit::modal ≡ прежняя формула при {vw}×{vh}"
+            );
+        }
     }
 
     /// Видимость: авто-раскрытие 3 уровня (дефолт), глубже — фронтир с

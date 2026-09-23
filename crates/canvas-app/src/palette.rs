@@ -21,6 +21,22 @@
 //! Иконки — векторные композиции квадов (`icon_quads`) через тот же
 //! SDF-пайплайн карточек: без SVG-растеризатора и текстур. Геометрия —
 //! чистые функции (тесты без GPU/окна).
+//!
+//! FR-060 (волна 2 миграции кита, паттерн U5 — числа дословно): ручные
+//! клампы к краям окна заменены `kit::dropdown_menu` («якорь + flip»):
+//! бар — якорь-строка высотой `ANCHOR_BAR_H` (= `PAL_ANCHOR_GAP` −
+//! `DROPDOWN_GAP`: прежний шаг «+10» = 6 + 4 дословно); колонки —
+//! якорь-зона = полоса бара, сжатая на 1 сверху/снизу (низ бара +
+//! `PAL_DROP_GAP` 3 = −1 + зазор кита 4; flip — верх бара − 3: +1 − 4);
+//! строки колонки — `kit::list_rows` (однородный `PAL_ROW_H`, зазор 0 —
+//! прежняя стопка дословно). Отличие окна кита (documented): у нижнего
+//! края бар раскрывается НАД якорем (раньше клампился в низ окна,
+//! перекрывая якорь) — системная политика кита, как у колонок и
+//! popup подсказок (FR-059); в вырожденном случае «не влезает нигде»
+//! колонка прижимается к низу окна (раньше — к верху). Задержки
+//! hover-интента ([`PALETTE_OPEN_DELAY_MS`]/[`PALETTE_CLOSE_DELAY_MS`]) —
+//! именованные константы автомата [`PaletteHover`] (не эвристики; семантика
+//! delay совпадает с `kit::tooltip` — текстовых тултипов в палитре нет).
 
 use std::time::Duration;
 
@@ -28,6 +44,9 @@ use canvas_core::time::Instant;
 use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, Language, NodeKind};
 
 use canvas_render::ThemeColors;
+
+use canvas_ui::geometry::{UiRect, UiVec2};
+use canvas_ui::kit::{self, ScrollState};
 
 use crate::i18n::{self, keys};
 use crate::ui::{point_in_rect, NodeSetting};
@@ -715,27 +734,61 @@ pub fn palette_bar_size(groups: &[PaletteGroup]) -> [f32; 2] {
     [width, height]
 }
 
-/// Origin бара под якорем (screen-точка под выделением): центр по x,
-/// ниже якоря; кламп к краям окна.
+/// Высота якоря-строки бара (FR-060): прежний шаг «низ якоря +
+/// [`PAL_ANCHOR_GAP`]» = низ якоря-строки + зазор кита `DROPDOWN_GAP`
+/// (10 = 6 + 4 — числа прежней формулы дословно, паттерн HINT_CARET_LINE_H).
+const ANCHOR_BAR_H: f32 = PAL_ANCHOR_GAP - kit::DROPDOWN_GAP;
+
+/// Вьюпорт, сжатый на поля [`PAL_MARGIN`] — слот клампов `dropdown_menu`
+/// (прежние клампы к краям окна дословно).
+fn margin_viewport(viewport: [f32; 2]) -> UiRect {
+    UiRect::new(
+        PAL_MARGIN,
+        PAL_MARGIN,
+        (viewport[0] - PAL_MARGIN * 2.0).max(0.0),
+        (viewport[1] - PAL_MARGIN * 2.0).max(0.0),
+    )
+}
+
+/// Origin бара под якорем (screen-точка под выделением) —
+/// `kit::dropdown_menu` (FR-060): центр по x (левый край бара = якорь −
+/// полширины, зажат во вьюпорт с полями), ниже якоря на [`PAL_ANCHOR_GAP`]
+/// (якорь-строка [`ANCHOR_BAR_H`] + зазор кита); не влезает снизу —
+/// НАД якорем (flip кита — прежний ручной кламп к низу окна устранён:
+/// бар больше не перекрывает выделение).
 pub fn palette_origin(anchor: [f32; 2], bar: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
-    let max_x = (viewport[0] - bar[0] - PAL_MARGIN).max(PAL_MARGIN);
-    let max_y = (viewport[1] - bar[1] - PAL_MARGIN).max(PAL_MARGIN);
-    [
-        (anchor[0] - bar[0] / 2.0).clamp(PAL_MARGIN, max_x),
-        (anchor[1] + PAL_ANCHOR_GAP).clamp(PAL_MARGIN, max_y),
-    ]
+    let anchor_rect = UiRect::new(
+        anchor[0] - bar[0] / 2.0,
+        anchor[1],
+        bar[0].max(1.0),
+        ANCHOR_BAR_H,
+    );
+    let menu = kit::dropdown_menu(
+        anchor_rect,
+        margin_viewport(viewport),
+        UiVec2::new(bar[0], bar[1]),
+    )
+    .menu;
+    [menu.x, menu.y]
 }
 
 /// Геометрия палитры: кнопки групп, подписи, колонки выпадашек (геометрия
 /// есть у всех — видимость определяет hover). Колонка, не помещающаяся
 /// под баром, раскрывается над ним.
+///
+/// FR-060: колонка — `kit::dropdown_menu` с якорь-зоной = полоса бара,
+/// сжатая на 1 сверху/снизу (ниже = низ бара + [`PAL_DROP_GAP`] — числа
+/// прежней формулы дословно: «−1 + зазор кита 4»; flip над баром =
+/// верх бара − [`PAL_DROP_GAP`]: «+1 − 4»); строки колонки —
+/// `kit::list_rows` (однородный [`PAL_ROW_H`], зазор 0 — прежняя стопка
+/// дословно, инсет [`PAL_DROP_PAD`]).
 pub fn palette_layout(
     origin: [f32; 2],
     groups: &[PaletteGroup],
     viewport: [f32; 2],
 ) -> PaletteLayout {
     let bar = palette_bar_size(groups);
-    let bar_bottom = origin[1] + bar[1];
+    let inset = margin_viewport(viewport);
     let layout_groups = groups
         .iter()
         .enumerate()
@@ -745,32 +798,38 @@ pub fn palette_layout(
             let button = [bx, by, PAL_BUTTON, PAL_BUTTON];
             let caption = [bx, by + PAL_BUTTON + 1.0];
             let drop_h = PAL_DROP_PAD * 2.0 + group.entries.len() as f32 * PAL_ROW_H;
-            let max_drop_x = (viewport[0] - PAL_ROW_W - PAL_MARGIN).max(PAL_MARGIN);
-            let dx = (bx + PAL_BUTTON / 2.0 - PAL_ROW_W / 2.0).clamp(PAL_MARGIN, max_drop_x);
-            let dy_below = bar_bottom + PAL_DROP_GAP;
-            let dy = if dy_below + drop_h > viewport[1] - PAL_MARGIN {
-                // Снизу не помещается — раскрываем над баром
-                (origin[1] - drop_h - PAL_DROP_GAP).max(PAL_MARGIN)
-            } else {
-                dy_below
+            // Якорь-зона колонки: по x — центр кнопки минус полширины
+            // колонки (зажим во вьюпорт делает dropdown_menu), по y —
+            // полоса бара ±1 (зазоры — см. доку функции)
+            let anchor = UiRect::new(
+                bx + PAL_BUTTON / 2.0 - PAL_ROW_W / 2.0,
+                origin[1] + 1.0,
+                PAL_ROW_W,
+                (bar[1] - 2.0).max(1.0),
+            );
+            let drop = kit::dropdown_menu(anchor, inset, UiVec2::new(PAL_ROW_W, drop_h)).menu;
+            let dropdown = [drop.x, drop.y, PAL_ROW_W, drop_h];
+            // Строки колонки — kit::list_rows: окно = колонка минус пад
+            // (зазор 0 — прежняя стопка дословно)
+            let rows_area = UiRect::new(
+                dropdown[0] + PAL_DROP_PAD,
+                dropdown[1] + PAL_DROP_PAD,
+                (dropdown[2] - PAL_DROP_PAD * 2.0).max(0.0),
+                (dropdown[3] - PAL_DROP_PAD * 2.0).max(0.0),
+            );
+            let rows_scroll = ScrollState {
+                offset: 0.0,
+                content_h: group.entries.len() as f32 * PAL_ROW_H,
+                viewport_h: rows_area.h,
             };
-            let rows = group
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(k, _)| {
-                    [
-                        dx + PAL_DROP_PAD,
-                        dy + PAL_DROP_PAD + k as f32 * PAL_ROW_H,
-                        PAL_ROW_W - PAL_DROP_PAD * 2.0,
-                        PAL_ROW_H,
-                    ]
-                })
+            let rows = kit::list_rows(rows_area, &rows_scroll, PAL_ROW_H, 0.0, group.entries.len())
+                .into_iter()
+                .map(|(_, r)| [r.x, r.y, r.w, r.h])
                 .collect();
             GroupLayout {
                 button,
                 caption,
-                dropdown: [dx, dy, PAL_ROW_W, drop_h],
+                dropdown,
                 rows,
             }
         })
@@ -1377,15 +1436,24 @@ mod tests {
         assert_eq!(h, PAL_BAR_PAD * 2.0 + PAL_BUTTON + PAL_CAPTION_H);
 
         let viewport = [800.0, 600.0];
+        // FR-060: обычный путь ≡ прежней формуле дословно (parity: центр по
+        // x, ниже якоря на PAL_ANCHOR_GAP = якорь-строка 6 + зазор кита 4)
         let origin = palette_origin([400.0, 100.0], [w, h], viewport);
         assert!((origin[0] + w / 2.0 - 400.0).abs() < 1e-4, "центр по x");
         assert_eq!(origin[1], 100.0 + PAL_ANCHOR_GAP, "ниже якоря");
         // Клампы: якорь у правого края — бар внутри окна
         let origin = palette_origin([900.0, 100.0], [w, h], viewport);
         assert_eq!(origin[0], viewport[0] - w - PAL_MARGIN);
-        // Якорь у нижнего края — бар поднят
+        // Якорь у нижнего края — бар раскрывается НАД якорем (flip кита,
+        // FR-060: прежний ручной кламп к низу окна устранён — бар больше
+        // не перекрывает выделение; та же политика, что у колонок/подсказок)
         let origin = palette_origin([400.0, 620.0], [w, h], viewport);
-        assert_eq!(origin[1], viewport[1] - h - PAL_MARGIN);
+        assert_eq!(
+            origin[1],
+            620.0 - kit::DROPDOWN_GAP - h,
+            "flip НАД якорем: прежний шаг «−PAL_DROP_GAP − h» дословно"
+        );
+        assert!(origin[1] + h <= 620.0, "бар не перекрывает якорь");
     }
 
     /// Layout: кнопки групп в баре, колонки выпадашек под баром; строки
