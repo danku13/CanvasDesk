@@ -1,3 +1,62 @@
+## 2026-09-24 — refactor(app): декомпозиция app.rs 22.3k→12.5k строк (этапы support/overlays/input/handler) — main 15b33b5→refactor/app-rs-decompose
+
+- **Агент:** Super Z (сессия web-9c180f6e; директива владельца: проанализировать
+  потребность в рефакторинге `crates/canvas-app/src/app.rs`, план работ — в
+  Telegram, отчёт после каждого этапа, финальное саммари; реализация 4 этапов).
+
+### Work Log
+- **Анализ:** app.rs — 22 287 строк (41% крейта), 5 impl-блоков, 359 методов,
+  struct App ~394 строки полей; топ: window_event 1129, stage_frame 852,
+  explain_frame 597, on_left_button 570, settings_overlay 473; 43 чистые
+  функции-помощника (~1.6k строк). Паттерн дочерних модулей уже заложен
+  (`app/ui_registry.rs` 1310 строк, `app/ui_layout_lint.rs`) — выбран как
+  механизм декомпозиции (доступ к приватным полям App из дочерних модулей).
+- **Этап 1 → `app/support.rs` (1037 строк):** 44 чистых хелпера (геометрия/
+  квады, bezier, snap-кандидаты/привязка, линияж explain, спилл-хиты,
+  template_card_row, slugify и др.). Видимость fn/struct → pub(super),
+  поля перенесённых структур → pub(super) (эквивалент прежней приватности
+  app-поддерева). Pub-контракт `measured_result_reserve_height` сохранён
+  через `pub use` (scheme_cjm_tests без правок). anchor_grid_delta —
+  точечный импорт в tests (используется только там).
+- **Этап 2 → `app/overlays.rs` (4020 строк):** 26 методов оверлеев (палитра,
+  настройки+apply_*, доки, шаблонные панель/полоса, what-if+таблица+бар,
+  галереи kit/scheme, wheel/контекст/choice-меню, диалог подтверждения,
+  онбординг, help/hints/empty-state). Методы, живущие в дочернем модуле,
+  приватны родителю — перенесённым выставлен pub(super) (E0624-фикс).
+- **Этап 3 → `app/input.rs` (3380 строк):** 26 методов ввода — on_key/
+  route_owner_key/dispatch_esc, мышь (5), клики по поверхностям (12),
+  on_autolink_click, on_explain_click.
+- **Этап 4 → `app/handler.rs` (1405 строк):** ApplicationHandler целиком
+  (window_event, user_event, about_to_wait, resumed — все методы трейтовые,
+  приватных хелперов нет).
+- **app.rs сохранил:** struct App (состояние), new(), типы (AppEvent,
+  AppDialog, MainStageState, StageFrameCtx, SettleAnim, DocsViewer...),
+  CLI/stress-хелперы (parse_args/CliArgs — внешние пользователи), тесты
+  (2432 строки), ui_registry/ui_layout_lint декларации.
+- **Гейты:** cargo test --workspace — **1828 passed / 0 failed** (локально,
+  ubuntu, RUSTFLAGS=-C debuginfo=0 — песочница 10GB: debug-линковка тестовых
+  бинарей упиралась в диск; с debuginfo=0 полный прогон проходит);
+  cargo clippy --workspace -- -D warnings — чисто; cargo fmt — файлы
+  canvas-app чисты. Префиксный вывод: дрейф rustfmt 1.9 в
+  canvas-core/templates.rs и canvas-render/cards.rs — пре-экзистинг на main
+  (последние касания a0ec5b2/15b33b5), вне скоупа, НЕ правил.
+- **Инструментарий сессии:** механический перенос кода — Python-скрипты
+  (парсер top-level элементов + экстрактор методов по границам `    }`),
+  каждый этап завершался cargo check (lib+tests) и cargo test -p canvas-app
+  (345 тестов) до перехода к следующему.
+
+### Stage Summary
+- app.rs: 22 287 → 12 528 строк (-8 759, -39%); дерево app/: support (1037),
+  overlays (4020), input (3380), handler (1405), ui_registry (1310),
+  ui_layout_lint (378) — функциональность байт-в-байт прежняя, поведения
+  не менялось, API крейта не изменился (внешние вызовы сохранены).
+- Технический долг для следующих сессий: stage_frame (852) и explain_frame
+  (597) остались в app.rs (кандидаты в app/frames.rs); state-типы оверлеев
+  (AppDialog/ChoiceMenu/DocsViewer) остались в app.rs рядом с полями App;
+  дрейф fmt в core/render — предмет отдельного gates-фикса.
+- Онбординг/пользовательская документация: не затронуты (рефакторинг без
+  изменения поведения, хоткеи/шаги тура прежние).
+
 ## 2026-09-23 — FR-045 F-5 v2: лейблы входных слотов стороны (qualified-истоки + маркер unmapped) — main e0952a2→feature/fr-045-f5-v2-input-labels
 
 - **Агент:** Super Z (сессия web-d5db041d, Task ID: 4; директива: оценка
