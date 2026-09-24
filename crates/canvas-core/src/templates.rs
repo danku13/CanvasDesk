@@ -1124,6 +1124,69 @@ mod tests {
         assert_eq!(registry.by_category("backend").len(), 2);
     }
 
+    /// Регрессионный инвариант: шаблонная нода — НЕ отдельная сущность.
+    /// `instantiate()` возвращает обычную text-ноду (`NodeKind::Text`),
+    /// отличающуюся от `Node::text` ТОЛЬКО наличием снимка `canvasdesk.template`
+    /// и пресетом цвета. Это гарантирует, что:
+    ///   • hit-test, выделение, spatial-index, undo/redo — общий код-путь;
+    ///   • рендер тела/заголовка/футера — общий пайплайн text.rs;
+    ///   • сторонние редакторы (Obsidian) видят ноду как text (round-trip).
+    /// Если тест сломался — значит, кто-то ввёл отдельный NodeKind::Template
+    /// или ветвление в `instantiate()` — откатить изменение.
+    #[test]
+    fn instantiate_yields_plain_text_node_except_template_ext() {
+        let registry = TemplateRegistry::mock();
+        let manifest = registry.find("mock.lb").expect("mock.lb");
+        let node = instantiate(manifest, &BTreeMap::new(), "tpl-1".to_owned(), 12.0, 34.0)
+            .expect("инстанциация");
+
+        // (1) Тип ноды — text, никакого отдельного "template"-типа нет
+        assert_eq!(node.kind(), crate::model::NodeKind::Text);
+        assert_eq!(node.node_type, "text");
+        // Selection у приложения — Node(usize)/Edge(usize), без Template-варианта
+        // (контракт гарантирован в canvas_render::Selection)
+
+        // (2) Тело ноды — обычный текстовый Numi-лист (редактируется как
+        // text), а не сериализованное представление манифеста
+        assert_eq!(
+            node.text.as_deref(),
+            Some("rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2")
+        );
+
+        // (3) Геометрия и id — как у обычной text-ноды (нет спец-логики)
+        assert_eq!(node.id, "tpl-1");
+        assert_eq!(node.x, 12.0);
+        assert_eq!(node.y, 34.0);
+        assert!(node.width >= 260.0, "дефолт ширины — как у text-ноды или шире");
+        assert!(node.height >= 120.0, "дефолт высоты — как у text-ноды или выше");
+
+        // (4) Снапшот template — единственное отличие от Node::text.
+        // Уберём расширение — и нода становится структурно идентична обычной
+        // text-ноде (с тем же цветом пресета, что ставит instantiate).
+        let mut stripped = node.clone();
+        stripped.set_template(None);
+        let mut plain = crate::model::Node::text("tpl-1", node.text.clone().unwrap_or_default(), 12.0, 34.0);
+        plain.width = node.width;
+        plain.height = node.height;
+        plain.color = node.color.clone();
+        // JSON Canvas round-trip: обе ноды идентичны на уровне модели
+        assert_eq!(
+            serde_json::to_value(&stripped).unwrap(),
+            serde_json::to_value(&plain).unwrap(),
+            "без canvasdesk.template нода == обычная text-нода"
+        );
+
+        // (5) Расширение canvasdesk.template — единственное дополнение;
+        // все остальные поля расширения (expr/widgetId/props/desc/data) — None
+        let ext = node.canvasdesk.as_ref().expect("canvasdesk-расширение");
+        assert!(ext.template.is_some(), "template-снапшот присутствует");
+        assert!(ext.expr.is_none(), "expr — отдельное поле (FR-013), не занято");
+        assert!(ext.widget_id.is_none(), "widgetId — для M5-виджетов, не занят");
+        assert!(ext.props.is_empty(), "props — для виджетов, пуст");
+        assert!(ext.desc.is_none(), "desc — FR-045, не занят");
+        assert!(ext.data.is_none(), "data — FR-045, не занят");
+    }
+
     /// Q6 FR-061: лестница дефолтной ширины по числу строк (порог T = 4).
     #[test]
     fn default_template_width_ladder() {

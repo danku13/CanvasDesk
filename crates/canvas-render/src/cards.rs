@@ -1716,6 +1716,91 @@ mod tests {
         assert_ne!(dark, light);
     }
 
+    /// Регрессионный инвариант: БАЗОВАЯ карточка шаблонной ноды идентична
+    /// обычной text-ноде с теми же геометрией/цветом/выделением. Шаблонная
+    /// нода НЕ имеет отдельного код-пути в `card_instance` — отличия
+    /// (полоса категории + квад-иконка) — это декоративные оверлеи,
+    /// добавляемые в renderer.rs ПОСЛЕ основного кадра.
+    ///
+    /// Если тест сломался — значит, в `card_instance` появилось ветвление
+    /// по template (например, отдельная заливка/рамка/радиус/тень), и
+    /// шаблонные ноды перестали верстаться как обычные. Откатить изменение.
+    #[test]
+    fn card_instance_template_node_equals_plain_text_node() {
+        let theme = ThemeColors::dark();
+        let mut tpl = Node::text("tpl", "rps = 1000 rps\nservers = 2", 100.0, 200.0);
+        tpl.width = 300.0;
+        tpl.height = 220.0;
+        tpl.color = Some("1".into()); // синий пресет (тот, что ставит instantiate для #4A90E2)
+        tpl.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps, $service_rate, $servers)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
+            outputs: Vec::new(),
+        }));
+
+        // Та же нода без template-снапшота — обычная text-нода
+        let mut plain = tpl.clone();
+        plain.set_template(None);
+
+        for selected in [false, true] {
+            let tpl_card = card_instance(&tpl, selected, &theme);
+            let plain_card = card_instance(&plain, selected, &theme);
+            assert_eq!(
+                tpl_card.pos, plain_card.pos,
+                "selected={selected}: позиция карточки не зависит от template"
+            );
+            assert_eq!(
+                tpl_card.size, plain_card.size,
+                "selected={selected}: размер карточки не зависит от template"
+            );
+            assert_eq!(
+                tpl_card.fill, plain_card.fill,
+                "selected={selected}: заливка карточки не зависит от template"
+            );
+            assert_eq!(
+                tpl_card.border, plain_card.border,
+                "selected={selected}: рамка/выделение не зависят от template"
+            );
+            assert_eq!(
+                tpl_card.params, plain_card.params,
+                "selected={selected}: SDF-параметры (радиус/тень) не зависят от template"
+            );
+            // Полная эквивалентность CardInstance как_GPU-инстанса
+            let mut tpl_buf = Vec::new();
+            let mut plain_buf = Vec::new();
+            tpl_card.write_to(&mut tpl_buf);
+            plain_card.write_to(&mut plain_buf);
+            assert_eq!(
+                tpl_buf, plain_buf,
+                "selected={selected}: байты GPU-инстанса карточки идентичны"
+            );
+        }
+
+        // Декоративный оверлей — отдельные инстансы, НЕ часть card_instance:
+        // полоса категории (template_band_instance) и квад-иконка
+        // (template_icon_quads) — добавляются в renderer.rs (строки ~1299–1323)
+        // ТОЛЬКО при `node.template().is_some()`. У обычной text-ноды:
+        //   • template_band_instance возвращает None (нет полосы)
+        //   • template_icon_quads НЕ вызывается рендером (нет квад-иконки)
+        // Это НАрост поверх card_instance, не отдельный путь.
+        assert!(template_band_instance(&plain).is_none(), "у обычной ноды нет полосы");
+        assert!(template_band_instance(&tpl).is_some(), "у шаблонной ноды есть полоса");
+        // Иконка lb — композиция из нескольких квадратов (весы); это декор,
+        // не часть карточки. renderer вызывает template_icon_quads только
+        // когда node.template().is_some() — у обычной text-ноды вызова нет.
+        let icon = template_icon_quads(
+            &tpl.template().map(|t| t.icon).unwrap_or_default(),
+            template_icon_rect(&tpl),
+            [1.0; 4],
+        );
+        assert!(!icon.is_empty(), "у шаблонной ноды есть квад-иконка роли");
+    }
+
     /// Заголовок: имя файла из Windows/Unix-пути, первая строка текста, label группы.
     #[test]
     fn title_extraction() {
