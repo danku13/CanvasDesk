@@ -374,6 +374,23 @@ pub fn chip_style(state: KitState, p: &KitPalette) -> ControlStyle {
     }
 }
 
+// --- FR-068 W0: общий кламп rect'а к вьюпорту -------------------------------
+
+/// FR-068 W0: общий хелпер клампа rect'а к вьюпорту — устраняет дублирующие
+/// ручные clamp-выкладки popup-геометрии (`dropdown_menu`/`tooltip`/`modal`/
+/// `toast_area`).
+///
+/// Контракт: непустое пересечение — возвращается `rect`, обрезанный до
+/// вьюпорта (финальная гарантия «не выходим за вьюпорт»); пустое пересечение
+/// (rect ЦЕЛИКОМ вне вьюпорта, включая вырожденный viewport с w/h ≤ 0) —
+/// исходный `rect` возвращается КАК ЕСТЬ: хелпер не маскирует класс выхода
+/// за вьюпорт, такой случай детектируется G4-линтом (`ui_layout_lint`).
+/// Позиционный кламп с сохранением размера (тултипы) хелпером НЕ выражается —
+/// см. [`tooltip`].
+pub fn viewport_clamp(rect: UiRect, viewport: UiRect) -> UiRect {
+    rect.intersection(&viewport).unwrap_or(rect)
+}
+
 // --- Dropdown («якорь + flip») ----------------------------------------------
 
 /// Раскладка открытого dropdown-меню: под якорем, при нехватке места снизу —
@@ -388,7 +405,10 @@ pub struct DropdownLayout {
 
 pub fn dropdown_menu(anchor: UiRect, viewport: UiRect, content: UiVec2) -> DropdownLayout {
     let width = content.x.max(anchor.w);
-    // Горизонталь: левый край якоря, зажат во вьюпорт
+    // Горизонталь: левый край якоря, зажат во вьюпорт. FR-068 W0: это
+    // position-clamp — сохраняет ширину меню (≥ ширины якоря) в нормальном
+    // случае; финальная гарантия [`viewport_clamp`] ниже обрезает до
+    // пересечения только меню, не помещающееся во вьюпорт целиком.
     let x = anchor.x.min((viewport.right() - width).max(viewport.x));
     let below_y = anchor.bottom() + DROPDOWN_GAP;
     let fits_below = below_y + content.y <= viewport.bottom();
@@ -403,7 +423,7 @@ pub fn dropdown_menu(anchor: UiRect, viewport: UiRect, content: UiVec2) -> Dropd
         }
     };
     DropdownLayout {
-        menu: UiRect::new(x, y, width, content.y),
+        menu: viewport_clamp(UiRect::new(x, y, width, content.y), viewport),
         flipped,
     }
 }
@@ -442,6 +462,11 @@ pub fn tooltip(
         y = anchor.y - TOOLTIP_OFFSET.y - size.y;
         flipped = true;
     }
+    // FR-068 W0: семантика position-clamp (сохраняет размер тултипа — текст
+    // не клипается; сдвигаем край, а не обрезаем пузырь) — хелпер
+    // `viewport_clamp` (пересечение) НЕ эквивалентен. Пузырь размером больше
+    // вьюпорта остаётся с полным размером у края — класс выхода за вьюпорт
+    // детектируется G4-линтом, а не маскируется.
     let x = x.max(viewport.x);
     let y = y.max(viewport.y);
     Some(TooltipLayout {
@@ -463,7 +488,11 @@ pub fn toast_area(viewport: UiRect, avoid: Option<UiRect>) -> UiRect {
             y = bar.y - 26.0;
         }
     }
-    UiRect::new(40.0, y, width, 20.0)
+    // FR-068 W0: финальная гарантия — тост не выходит за вьюпорт (подъём
+    // над avoid-баром у верхнего края и смещённый вьюпорт клампятся к
+    // пересечению); пустой тост (вьюпорт уже 80 — ширина 0) возвращается
+    // как есть (пустое пересечение).
+    viewport_clamp(UiRect::new(40.0, y, width, 20.0), viewport)
 }
 
 // --- Modal ------------------------------------------------------------------
@@ -476,6 +505,12 @@ pub struct ModalLayout {
 }
 
 pub fn modal(slot: UiRect, min: UiVec2, max: UiVec2, desired: UiVec2) -> ModalLayout {
+    // FR-068 W0: панель — constrain+stack БЕЗ финального viewport_clamp:
+    // семантика «min-инвариант приоритетен» (parity FR-060) — при слоте
+    // меньше инвариантного min панель прижимается к углу слота, СОХРАНЯЯ
+    // размер min (documented деградация; parity-тесты canvas-app
+    // `dialog_rect_kit_modal_matches_old_clamps` / `window_rect_...`).
+    // Хелпер-пересечение НЕ эквивалентен: клипповал бы инвариантную панель.
     ModalLayout {
         dim: slot,
         panel: panel_rect(slot, min, max, desired),
@@ -1604,6 +1639,111 @@ mod tests {
         let bar = UiRect::new(0.0, 540.0, 800.0, 596.0);
         let lifted = toast_area(vp, Some(bar));
         assert!(lifted.bottom() <= bar.y + 0.01);
+    }
+
+    /// FR-068 W0: контракт хелпера [`viewport_clamp`] — пересечение при
+    /// наличии, иначе исходный rect. (1) rect внутри вьюпорта — без
+    /// изменений; (2) частично вне — обрезан до пересечения; (3) целиком
+    /// вне — исходный rect КАК ЕСТЬ (класс выхода за вьюпорт не маскируется —
+    /// детектируется G4-линтом); (4) вырожденный вьюпорт — исходный rect.
+    #[test]
+    fn viewport_clamp_intersects_or_keeps_original() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        // 1) Внутри — без изменений
+        let inside = UiRect::new(10.0, 20.0, 100.0, 50.0);
+        assert_eq!(viewport_clamp(inside, vp), inside);
+        // 2) Частично вне — пересечение (обрезан до вьюпорта)
+        let partial = UiRect::new(700.0, 500.0, 200.0, 200.0);
+        assert_eq!(
+            viewport_clamp(partial, vp),
+            UiRect::new(700.0, 500.0, 100.0, 100.0)
+        );
+        // 3) Целиком вне — исходный rect как есть
+        let outside = UiRect::new(1000.0, 700.0, 50.0, 50.0);
+        assert_eq!(viewport_clamp(outside, vp), outside);
+        // 4) Вырожденный (пустой) вьюпорт — исходный rect без изменений
+        let degenerate = UiRect::new(0.0, 0.0, 0.0, 600.0);
+        assert_eq!(viewport_clamp(inside, degenerate), inside);
+    }
+
+    /// FR-068 W0: dropdown — ручной position-clamp по горизонтали (ширина
+    /// меню сохраняется) дополнен финальной гарантией [`viewport_clamp`]:
+    /// меню шире/выше вьюпорта обрезается до пересечения (класс выхода
+    /// устранён), flip-контракт не затронут.
+    #[test]
+    fn dropdown_menu_overflow_clamped_to_viewport() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        // Меню шире вьюпорта: горизонталь обрезана до вьюпорта (w = vp.w)
+        let d = dropdown_menu(
+            UiRect::new(100.0, 10.0, 200.0, 40.0),
+            vp,
+            UiVec2::new(1000.0, 90.0),
+        );
+        assert!(!d.flipped);
+        assert_eq!(d.menu, UiRect::new(0.0, 54.0, 800.0, 90.0));
+        // Не влезает ни снизу, ни сверху, и выше вьюпорта: вертикаль обрезана
+        let d = dropdown_menu(
+            UiRect::new(100.0, 290.0, 200.0, 310.0),
+            vp,
+            UiVec2::new(160.0, 900.0),
+        );
+        assert!(!d.flipped);
+        assert_eq!(d.menu, UiRect::new(100.0, 0.0, 200.0, 600.0));
+    }
+
+    /// FR-068 W0: toast — финальная гарантия [`viewport_clamp`]: смещённый
+    /// вьюпорт и подъём над avoid-баром у верхнего края клампятся к
+    /// пересечению; пустой тост (вьюпорт уже 80 — ширина 0) возвращается
+    /// как есть.
+    #[test]
+    fn toast_area_clamped_to_viewport() {
+        // Смещённый вьюпорт: левый край тоста (40) левее вьюпорта — обрезан
+        let vp = UiRect::new(100.0, 0.0, 300.0, 600.0);
+        assert_eq!(toast_area(vp, None), UiRect::new(100.0, 556.0, 260.0, 20.0));
+        // Avoid-бар у самого верха: подъём выше вьюпорта клампится к краю
+        let vp = UiRect::new(0.0, 0.0, 800.0, 100.0);
+        let bar = UiRect::new(0.0, 10.0, 800.0, 90.0);
+        assert_eq!(
+            toast_area(vp, Some(bar)),
+            UiRect::new(40.0, 0.0, 720.0, 4.0),
+            "внутри вьюпорта остался только хвост тоста (4 px)"
+        );
+        // Вьюпорт уже 80 — ширина 0: пустой rect возвращается как есть
+        let vp = UiRect::new(0.0, 0.0, 60.0, 600.0);
+        let t = toast_area(vp, None);
+        assert!(t.is_empty());
+        assert_eq!(t, UiRect::new(40.0, 556.0, 0.0, 20.0));
+    }
+
+    /// FR-068 W0: tooltip — семантика position-clamp СОХРАНЯЕТ размер:
+    /// пузырь, не помещающийся во вьюпорт, прижимается к краю с полным
+    /// размером (текст не клипается; хелпер-пересечение не эквивалентен —
+    /// выход пузыря детектируется G4-линтом).
+    #[test]
+    fn tooltip_position_clamp_keeps_size() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let huge = UiVec2::new(2000.0, 900.0);
+        let t = tooltip(UiPoint::new(5.0, 5.0), huge, vp, 500, TOOLTIP_DELAY_MS).unwrap();
+        // Перенос влево/вверх упирается в край (0,0), размер сохранён
+        assert_eq!(t.rect, UiRect::new(0.0, 0.0, 2000.0, 900.0));
+        assert!(t.flipped);
+    }
+
+    /// FR-068 W0: modal — панель БЕЗ финального [`viewport_clamp`] (семантика
+    /// «min-инвариант приоритетен», parity FR-060): при слоте меньше
+    /// инвариантного min панель прижимается к углу слота, СОХРАНЯЯ размер
+    /// (parity-тесты canvas-app). Пересечение клипповало бы панель.
+    #[test]
+    fn modal_panel_min_invariant_not_clipped() {
+        let slot = UiRect::new(0.0, 0.0, 100.0, 100.0);
+        let m = modal(
+            slot,
+            UiVec2::new(320.0, 240.0),
+            UiVec2::new(640.0, 480.0),
+            UiVec2::new(200.0, 200.0),
+        );
+        assert_eq!(m.panel, UiRect::new(0.0, 0.0, 320.0, 240.0));
+        assert_eq!(m.dim, slot);
     }
 
     #[test]
