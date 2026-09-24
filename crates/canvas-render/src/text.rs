@@ -5603,6 +5603,28 @@ mod tests {
         );
     }
 
+    /// FR-067 (этап F, шаг 3): вес измерения canvas-ui = весу атрибутов
+    /// рендера для всех трёх семейств (sans MEDIUM / моно и наклонное
+    /// моно NORMAL 400) — раскладка не зависит от смены шрифтовой базы.
+    #[test]
+    fn ui_measure_weight_matches_render_attrs() {
+        assert_eq!(
+            canvas_ui::measure::family_weight(MONO_FAMILY),
+            mono_attrs().weight,
+            "моно-ячейки: замер = mono_attrs (400)"
+        );
+        assert_eq!(
+            canvas_ui::measure::family_weight(MONO_OBLIQUE_FAMILY),
+            mono_oblique_attrs().weight,
+            "наклонное моно: замер = mono_oblique_attrs (400)"
+        );
+        assert_eq!(
+            canvas_ui::measure::family_weight(SANS_FAMILY),
+            sans_attrs().weight,
+            "sans: замер = sans_attrs (MEDIUM)"
+        );
+    }
+
     /// FR-067 (этап F): супрессия абзаца описания — измерение и рендер
     /// убирают абзац одинаково (I-2); desc == абзац добавляет МЕНЬШЕ
     /// высоты, чем постороннее описание той же длины (тело схлопнулось
