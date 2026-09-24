@@ -145,3 +145,46 @@ fn provider_traits_are_object_safe() {
     let shell: Box<dyn ShellIntegration> = Box::new(MockShell);
     shell.open_file(Path::new("a.txt")).expect("open_file");
 }
+
+// --- FR-072: canvasdesk.title — явный заголовок ноды ---
+
+/// FR-072: приоритет имени Σ-строки — явный заголовок → имя шаблона →
+/// первая строка текста (заголовок и legacy-фолбэк не конфликтуют).
+#[test]
+fn sigma_row_name_prefers_explicit_title() {
+    let mut note = canvas_core::Node::text("n1", "vm = 40 $\ndb = 25 $", 0.0, 0.0);
+    assert_eq!(note.sigma_row_name(), "vm = 40 $", "legacy: первая строка");
+
+    note.set_title(Some("Смета".to_owned()));
+    assert_eq!(note.sigma_row_name(), "Смета", "явный заголовок выигрывает");
+
+    note.set_title(Some(String::new()));
+    assert_eq!(
+        note.sigma_row_name(),
+        "vm = 40 $",
+        "пустой явный заголовок — фолбэк к первой строке"
+    );
+}
+
+/// FR-072: remove_first_line — перенос первой строки тела в заголовок.
+#[test]
+fn remove_first_line_variants() {
+    let mut note = canvas_core::Node::text("n1", "Смета\nvm = 40 $", 0.0, 0.0);
+    assert_eq!(note.remove_first_line(), Some("Смета".to_owned()));
+    assert_eq!(note.text.as_deref(), Some("vm = 40 $"));
+
+    // Единственная строка — текст становится пустым
+    let mut single = canvas_core::Node::text("n2", "только заголовок", 0.0, 0.0);
+    assert_eq!(
+        single.remove_first_line(),
+        Some("только заголовок".to_owned())
+    );
+    assert_eq!(single.text.as_deref(), Some(""));
+
+    // Пустой/отсутствующий текст — ничего не удаляется
+    let mut empty = canvas_core::Node::text("n3", "", 0.0, 0.0);
+    assert_eq!(empty.remove_first_line(), None);
+    let mut none = canvas_core::Node::text("n4", "", 0.0, 0.0);
+    none.text = None;
+    assert_eq!(none.remove_first_line(), None);
+}

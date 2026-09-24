@@ -63,6 +63,7 @@ fn headless_auto_row_draws_with_spill_hit() {
             indices: &[0],
             hud: None,
             editing: None,
+            editing_title: None,
             editing_buffer: None,
             overlay_texts: &[],
             screen_bands: &[],

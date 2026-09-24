@@ -102,6 +102,8 @@ fn mcp_node_summary(node: &Node, with_text: bool) -> serde_json::Value {
         "color": node.color,
         // FR-013: Numi-формула (null — calc-режим выключен)
         "expr": node.expr(),
+        // FR-072: явный заголовок (null — legacy-фолбэк «первая строка»)
+        "title": node.title(),
     });
     if with_text {
         value["text"] = serde_json::Value::from(node.text.clone());
@@ -293,6 +295,7 @@ pub fn mcp_dispatch(
                 .filter(|node| {
                     [
                         node.text.as_deref(),
+                        node.title(),
                         node.label.as_deref(),
                         node.file.as_deref(),
                     ]
@@ -308,6 +311,11 @@ pub fn mcp_dispatch(
             let y = mcp_req_f32(params, "y")?;
             let text = mcp_node_text(params, "text").unwrap_or_default();
             let mut node = Node::text(next_free_id(&scene.canvas, "note"), &text, x, y);
+            // FR-072: явный заголовок — шапка больше не выводится из первой
+            // строки текста; без параметра — legacy-поведение (фолбэк)
+            if let Some(title) = params.get("title").and_then(|v| v.as_str()) {
+                node.set_title(Some(title.to_owned()));
+            }
             if let Some(width) = mcp_opt_f32(params, "width") {
                 node.width = width;
             }
@@ -401,6 +409,16 @@ pub fn mcp_dispatch(
                     scene.canvas.nodes[index].label = Some(label.clone());
                 }
                 Some(other) => return Err(format!("label должен быть строкой или null: {other}")),
+            }
+            // FR-072: title = строка — явный заголовок; null — сброс к
+            // legacy-фолбэку (первая строка текста)
+            match params.get("title") {
+                None => {}
+                Some(serde_json::Value::Null) => scene.canvas.nodes[index].set_title(None),
+                Some(serde_json::Value::String(title)) => {
+                    scene.canvas.nodes[index].set_title(Some(title.clone()));
+                }
+                Some(other) => return Err(format!("title должен быть строкой или null: {other}")),
             }
             if params.get("color").is_some() {
                 let color = match params

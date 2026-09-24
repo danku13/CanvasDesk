@@ -893,7 +893,7 @@ impl Renderer {
             .as_deref()
             .and_then(|session| match session.target() {
                 EditTarget::Edge(index) => Some(index),
-                EditTarget::Node(_) => None,
+                EditTarget::Node(_) | EditTarget::NodeTitle(_) => None,
             });
 
         // Лейблы связей (T8): центр — середина дуги (при avoid — огибающей
@@ -1082,7 +1082,9 @@ impl Renderer {
         // z-позиции (в z-проходе ниже: над её карточкой, под её текстом и под
         // перекрывающими карточками). У лейбла связи (T8) ноды нет — бокс и
         // квады идут в оверлей-регион поверх карточек, под текстом лейбла.
-        let editing_node = editing.as_deref().and_then(EditingSession::node_index);
+        let editing_node = editing
+            .as_deref()
+            .and_then(|session| session.node_index().or(session.title_index()));
         let mut editing_quads: Vec<CardInstance> = Vec::new();
         let mut edge_edit_quads: Vec<CardInstance> = Vec::new();
         if let Some(session) = editing.as_deref_mut() {
@@ -1136,6 +1138,31 @@ impl Renderer {
                         }
                         if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
                             edge_edit_quads.push(Self::overlay_quad(
+                                origin,
+                                rect,
+                                zoom_px,
+                                self.theme.accent,
+                            ));
+                        }
+                    }
+                }
+                // FR-072: правка заголовка — каретка/выделение в зоне шапки
+                // (origin title_edit_area), на z-позиции ноды (editing_node).
+                EditTarget::NodeTitle(_) => {
+                    if let Some((origin, _, _)) =
+                        session_area(scene.canvas, session, scene.edges_avoid)
+                    {
+                        let zoom_px = camera.zoom() * self.scale_factor;
+                        for rect in session.selection_rects(self.text.font_system_mut()) {
+                            editing_quads.push(Self::overlay_quad(
+                                origin,
+                                rect,
+                                zoom_px,
+                                self.theme.selection_fill,
+                            ));
+                        }
+                        if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
+                            editing_quads.push(Self::overlay_quad(
                                 origin,
                                 rect,
                                 zoom_px,
@@ -1540,8 +1567,14 @@ impl Renderer {
         // Актуальные метрики уже выставлены выше (до сборки оверлеев)
         let editing_ref = editing.as_deref();
         // Из кэша тела исключается только редактируемая НОДА; у лейбла связи
-        // (T8) кэшированного тела нет — исключать нечего
-        let editing_index = editing_ref.and_then(EditingSession::node_index);
+        // (T8) кэшированного тела нет — исключать нечего. FR-072: при правке
+        // заголовка тело кэшируется как обычно (editing = None).
+        let editing_index = editing_ref.and_then(|session| match session.target() {
+            EditTarget::Node(index) => Some(index),
+            _ => None,
+        });
+        // FR-072: правка заголовка — буфер рисуется в шапке, тело не гасится
+        let editing_title = editing_ref.and_then(EditingSession::title_index);
         let editing_buffer = editing_ref.and_then(|session| {
             // (origin, ширина, высота) — clip тексту редактора: тело ноды
             // или бокс лейбла связи (оба таргета, T7/T8)
@@ -1559,6 +1592,7 @@ impl Renderer {
                 indices: &indices,
                 hud,
                 editing: editing_index,
+                editing_title,
                 editing_buffer,
                 overlay_texts: overlay.texts,
                 screen_bands: overlay.screen_bands,

@@ -1,3 +1,63 @@
+## 2026-09-25 — feat(node): FR-072 разделение заголовка ноды и текста тела — явный canvasdesk.title, однострочный редактор в шапке, миграция legacy-первой строки
+
+- **Агент:** Super Z (запрос владельца: «разделить заголовок ноды и текст внутри
+  ноды, чтобы первая строка не становилась заголовком»; план работ — в Telegram,
+  отчёт после каждого этапа, финальное саммари).
+
+### Work Log
+- **Анализ:** `title_for` (cards.rs) выводил заголовок из первой строки `text` —
+  первая строка дублировалась в шапке и теле, «Переименовать» (FR-009) открывал
+  правку всего тела, случайная правка первой строки меняла заголовок.
+- **FR-072** (docs/change-requests/fr-072-node-title-separation.md) — документ
+  замысла: три состояния заголовка, приоритеты разрешения, миграция legacy.
+- **`canvas-core` (модель):** `CanvasdeskExt.title` (опциональное, round-trip
+  чистый), `Node::title()/set_title()` (паттерн `desc`), `Node::remove_first_line()`,
+  `sigma_row_name` (FR-069) с приоритетом явного заголовка. None = legacy,
+  Some("") = задан-но-пуст (плейсхолдер, утечки нет), Some(s) = заголовок s.
+- **`canvas-render`:** приоритет в `title_for` (файл → группа → явный title →
+  имя шаблона → первая строка → label → «—»); плейсхолдер «Заголовок» тоном
+  иконки; `EditTarget::NodeTitle` (new_title: метрики TITLE_*, Wrap::None, без
+  markdown; adapt_command: Enter любой модификацией — коммит, маркеры — заглушены;
+  text()/changed() без parse/emit-экранирования); `title_edit_area` (строка
+  TITLE_LINE_HEIGHT по центру шапки, x — с учётом иконки); TitleFrame.editing_title
+  (тело при правке заголовка НЕ гасится, кэш живёт); каретка/выделение на
+  z-позиции ноды (editing_node = node_index().or(title_index())).
+- **`canvas-app` (UX):** двойной клик по шапке — правка заголовка, по телу —
+  текст (`begin_edit_node`, зона HEADER_HEIGHT); «Переименовать» — заголовок
+  (группы — label как раньше); создание заметки: заголовок → Enter → тело
+  (`title_then_body`, Esc — отмена); коммит заголовка legacy-ноды переносит
+  первую строку в title, если она проза (`expr::line_kind` — не формула) и нода
+  не шаблонная (remove_first_line + set_expr + recompute_flow) — один undo-шаг;
+  prefill legacy-ноды — производный заголовок (без правок — без коммита).
+- **MCP (`canvas-scene`/`canvas-mcp`) + skills:** `title` в `node_create_note`
+  (опциональный) и `node_edit` (строка/null — сброс к legacy); `nodes_search`
+  ищет по заголовку; сводки (nodes_list/search/get/edit) содержат `title`;
+  skills v4 по UPDATE-PROTOCOL: tools.md (3 строки), canvasdesk-model-build v2
+  (правило FR-072 + таблица graph_apply), CHANGELOG v4, README v4.
+- **Документация:** глоссарий `CONTEXT.md` («Заголовок ноды»),
+  `docs/interface-objects/node.md` (анатомия шапки + действие правки заголовка),
+  индекс change-requests.
+- **Тесты:** core — round-trip title (Some("") осознанный, None удаляет поле,
+  чужой файл + соседние поля), sigma-приоритет, remove_first_line; render —
+  приоритет title_for, session_area_title, plain-text, adapt_command (в т.ч.
+  «тело не задето»); scene/mcp — create с/без title, edit (строка/null/тип),
+  поиск по заголовку.
+
+### Stage Summary
+- Приёмка: cargo test -p canvas-core -p canvas-render -p canvas-scene -p
+  canvas-mcp -p canvas-app — зелёные (399+363+115+372+…), skills_sync зелёный,
+  clippy --workspace -D warnings чисто, fmt чисто, wasm-гейт (ADR-0011) чисто.
+- Старые файлы без canvasdesk.title работают как раньше (legacy-фолбэк);
+  формат .canvas совместим с jsoncanvas.org (поле внутри canvasdesk).
+- MCP: состав инструментов не менялся (41), расширены параметры/семантика
+  трёх — skills обновлены в том же коммите (UPDATE-PROTOCOL).
+- Открытый вопрос владельцу: онбординг (FR-028) и user-docs/interface.md —
+  нужен ли шаг/абзац про правку заголовка (по правилу AGENTS.md спросил в
+  итоговом отчёте; правки — отдельным коммитом по решению владельца).
+- WASM UI L2 (браузерный стенд) в этой сессии не выполнялся — ручная проверка:
+  web-версия (Pages/`trunk serve`) → двойной клик по шапке/телу заметки,
+  создание заметки (заголовок → Enter → тело), «Переименовать» — заголовок.
+
 ## 2026-09-25 — feat(scheme): FR-071 умная раскладка нод при инстансировании схем — смысловые кластеры + 0 пересечений edge×node
 
 - **Агент:** Super Z (сессия web-a35ddf61; запрос владельца: «продумать умный

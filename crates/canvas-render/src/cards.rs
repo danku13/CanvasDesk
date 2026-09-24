@@ -195,13 +195,20 @@ pub fn preset_color(preset: &str, theme: &ThemeColors) -> Option<[f32; 4]> {
         .map(|(_, rgba)| *rgba)
 }
 
-/// Заголовок карточки: имя файла из пути / подпись группы / первая строка
-/// текста / label. Подпись группы — как есть: markdown-стриппинг к label
+/// Заголовок карточки: имя файла из пути / подпись группы / явный заголовок
+/// (`canvasdesk.title`, FR-072) / имя шаблона / первая строка текста / label.
+/// Подпись группы — как есть: markdown-стриппинг к label
 /// не применяется (это заголовок, а не тело заметки).
-/// FR-023: у шаблонной ноды — имя шаблона из снапшота (`name`, снимок
-/// манифеста при инстанциации): лист параметров — не заголовок, а тело;
-/// имя переживает правки текста и переименование шаблона в реестре.
-/// Снапшоты без имени (старые файлы) — прежний фолбэк (первая строка).
+/// FR-072: явный заголовок стоит ВЫШЕ имени шаблона (переименование
+/// пользователем побеждает снимок манифеста) и ВЫШЕ первой строки текста
+/// (правка тела больше не двигает заголовок). `Some("")` — «заголовок
+/// задан, но пуст»: никаких фолбэков, первая строка тела в шапку не
+/// протекает (плейсхолдер шапки — text.rs prepare_titles, приглушённый тон).
+/// FR-023: у шаблонной ноды без явного заголовка — имя шаблона из снапшота
+/// (`name`, снимок манифеста при инстанциации): лист параметров — не
+/// заголовок, а тело; имя переживает правки текста и переименование шаблона
+/// в реестре. Снапшоты без имени (старые файлы) — прежний фолбэк (первая
+/// строка).
 pub fn title_for(node: &Node) -> String {
     if let Some(file) = &node.file {
         let name = file
@@ -218,6 +225,13 @@ pub fn title_for(node: &Node) -> String {
             .clone()
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| "Группа".to_owned());
+    }
+    // FR-072: явный заголовок — Some(текст) или осознанная пустота
+    if let Some(title) = node.title() {
+        if !title.is_empty() {
+            return title.to_owned();
+        }
+        return "—".to_owned();
     }
     if let Some(name) = node
         .template()
@@ -1841,6 +1855,42 @@ mod tests {
         assert_eq!(title_for(&empty), "—");
     }
 
+    /// FR-072: явный заголовок (canvasdesk.title) — выше имени шаблона и
+    /// первой строки текста; Some("") — без фолбэков (утечки первой
+    /// строки в шапку нет).
+    #[test]
+    fn explicit_title_precedence() {
+        // Явный заголовок побеждает первую строку тела
+        let mut note = Node::text("n", "Первая строка\nтело", 0.0, 0.0);
+        note.set_title(Some("Смета".to_owned()));
+        assert_eq!(title_for(&note), "Смета");
+
+        // Явный заголовок побеждает имя шаблона (переименование пользователем)
+        let mut tpl = Node::text("n", "rps = 1000 rps", 0.0, 0.0);
+        tpl.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps, $service_rate, $servers)".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
+            outputs: Vec::new(),
+            params: Default::default(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+        }));
+        assert_eq!(title_for(&tpl), "Балансировщик нагрузки");
+        tpl.set_title(Some("Мой шлюз".to_owned()));
+        assert_eq!(title_for(&tpl), "Мой шлюз");
+
+        // Some("") — осознанная пустота: ни шаблона, ни первой строки
+        tpl.set_title(Some(String::new()));
+        assert_eq!(title_for(&tpl), "—", "пустой явный заголовок без фолбэков");
+
+        // None — legacy-поведение (первая строка) не задето
+        let mut legacy = Node::text("n", "Первая строка\nтело", 0.0, 0.0);
+        legacy.set_title(None);
+        assert_eq!(title_for(&legacy), "Первая строка");
+    }
+
     /// Буква иконки по расширению; без расширения/файла — None.
     #[test]
     fn icon_letter() {
@@ -1866,6 +1916,7 @@ mod tests {
                 template: None,
                 desc: None,
                 data: None,
+                title: None,
             },
             "Clock",
             10.0,

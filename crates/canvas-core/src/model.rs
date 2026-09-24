@@ -142,6 +142,13 @@ pub struct CanvasdeskExt {
     /// поля-колонки (= имена выходов). Токены/секреты сюда не пишутся.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<DataRef>,
+    /// FR-072: явный заголовок ноды (`canvasdesk.title`) — отдельная строка
+    /// шапки карточки, не протекающая из текста тела. Семантика:
+    /// `None` — поле не задано (legacy: заголовок — первая строка текста);
+    /// `Some("")` — заголовок задан, но пуст (плейсхолдер, утечки первой
+    /// строки в шапку нет); `Some(s)` — заголовок s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// FR-045 R-2: источник данных ноды «Входные данные» (`canvasdesk.data`).
@@ -171,6 +178,7 @@ impl CanvasdeskExt {
             template: None,
             desc: None,
             data: None,
+            title: None,
         }
     }
 
@@ -182,6 +190,7 @@ impl CanvasdeskExt {
             && self.template.is_none()
             && self.desc.is_none()
             && self.data.is_none()
+            && self.title.is_none()
     }
 
     /// Расширение виджет-ноды: идентификатор пакета + пустые props.
@@ -193,6 +202,7 @@ impl CanvasdeskExt {
             template: None,
             desc: None,
             data: None,
+            title: None,
         }
     }
 }
@@ -318,13 +328,66 @@ impl Node {
         self.canvasdesk.as_ref()?.desc.as_deref()
     }
 
+    /// FR-072: явный заголовок (`canvasdesk.title`) — чтение. `Some("")`
+    /// (заголовок задан, но пуст) читается как есть — решение «показывать
+    /// ли плейсхолдер» принимает рендер; `None` — поле не задано (legacy:
+    /// заголовок — первая строка текста).
+    pub fn title(&self) -> Option<&str> {
+        self.canvasdesk.as_ref()?.title.as_deref()
+    }
+
+    /// FR-072: записать/снять явный заголовок (`canvasdesk.title`). `None`
+    /// удаляет поле (возврат к legacy-фолбэку «первая строка текста»; пустой
+    /// контейнер `canvasdesk` снимается — как [`Node::set_desc`]); чужие
+    /// поля расширения сохраняются. Пустая строка НЕ нормализуется в `None`:
+    /// `Some("")` — осознанное состояние «заголовок задан, но пуст» (новая
+    /// заметка без заголовка не протекает первой строкой в шапку, FR-072).
+    pub fn set_title(&mut self, title: Option<String>) {
+        match title {
+            Some(text) => {
+                let ext = self.canvasdesk.get_or_insert_with(CanvasdeskExt::empty);
+                ext.title = Some(text);
+            }
+            None => {
+                if let Some(ext) = &mut self.canvasdesk {
+                    ext.title = None;
+                    if ext.is_empty() {
+                        self.canvasdesk = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// FR-072: удалить первую строку текста (если он есть) — «настоящее
+    /// переименование» legacy-ноды: первая строка переезжает в явный
+    /// заголовок и больше не дублируется в теле. Возвращает удалённую
+    /// строку; `None` — текста нет/он пуст. Формульность строки проверяет
+    /// вызывающий (решение о переносе — не забота модели).
+    pub fn remove_first_line(&mut self) -> Option<String> {
+        let text = self.text.clone()?;
+        if text.is_empty() {
+            return None;
+        }
+        let (first, rest) = match text.split_once('\n') {
+            Some((first, rest)) => (first, rest),
+            None => (text.as_str(), ""),
+        };
+        self.text = Some(rest.to_owned());
+        Some(first.to_owned())
+    }
+
     /// FR-069 (этап F): имя Σ-строки тела («Σ <имя узла>», прототип
     /// .row.total) — те же источники, что и заголовок карточки
     /// (canvas-render cards::title_for, упрощённо без markdown-стрижки):
-    /// имя снапшота шаблона → имя файла → label → первая строка текста.
+    /// явный заголовок (FR-072) → имя снапшота шаблона → имя файла →
+    /// label → первая строка текста.
     /// Рендер (кэш текста) и сцена (двухуровневый refit) вызывают ОДНУ
     /// функцию — измерение и вёрстка не разъезжаются (I-2).
     pub fn sigma_row_name(&self) -> String {
+        if let Some(title) = self.title().filter(|title| !title.is_empty()) {
+            return title.to_owned();
+        }
         if let Some(name) = self
             .template()
             .and_then(|template| template.name.clone())
@@ -1390,6 +1453,7 @@ mod tests {
             template: None,
             desc: None,
             data: None,
+            title: None,
         };
         let widget = Node::widget("w1", ext, "Clock", 5.0, 6.0, 320.0, 200.0);
         assert_eq!(widget.kind(), NodeKind::Widget);
@@ -1423,6 +1487,7 @@ mod tests {
             template: None,
             desc: None,
             data: None,
+            title: None,
         };
         let mut widget = Node::widget("w9", ext, "Clock", 0.0, 0.0, 320.0, 200.0);
         // Стороннее поле уровня ноды — сохраняется как unknown

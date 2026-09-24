@@ -97,6 +97,11 @@ use canvas_core::tokens::{
 /// FR-023: 8 → 12 — адекватный отступ заголовка от края карточки
 /// (согласован с BODY_PADDING и визуальным ритмом шапки).
 const TITLE_PADDING: f32 = 12.0;
+
+/// FR-072: текст-плейсхолдер шапки для нод с пустым ЯВНЫМ заголовком
+/// (`canvasdesk.title == ""`, новые заметки без названия). Рисуется
+/// приглушённым цветом иконки — affordance «здесь можно задать имя».
+const TITLE_PLACEHOLDER: &str = "Заголовок";
 /// Ширина зоны иконки-заглушки в world-px.
 const ICON_WIDTH: f32 = 22.0;
 /// Минимальный физический размер заголовка: ниже текст нечитаем — не готовим
@@ -392,6 +397,20 @@ pub fn body_area(node: &Node) -> ([f32; 2], f32, f32) {
     let width = (node.width - BODY_PADDING * 2.0).max(0.0);
     let height = (node.height - HEADER_HEIGHT - BODY_TOP_GAP - BODY_PADDING).max(0.0);
     (origin, width, height)
+}
+
+/// FR-072: область правки заголовка — строка внутри шапки карточки:
+/// x — с учётом иконки (как у клипа заголовка), вертикаль — по центру
+/// HEADER_HEIGHT, высота — TITLE_LINE_HEIGHT. Используется session_area
+/// (EditTarget::NodeTitle) и раскладка каретки/выделения рендера.
+pub fn title_edit_area(node: &Node) -> ([f32; 2], f32, f32) {
+    let has_icon = extension_letter(node).is_some() || node.template().is_some();
+    let x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
+    let width =
+        (node.width - TITLE_PADDING * 2.0 - if has_icon { ICON_WIDTH } else { 0.0 }).max(0.0);
+    let height = TITLE_LINE_HEIGHT;
+    let y = node.y + (HEADER_HEIGHT - height) / 2.0;
+    ([x, y], width, height)
 }
 
 /// FR-025: world-вертикаль ряда результата формульной строки — ЕДИНЫЙ
@@ -2259,9 +2278,14 @@ pub struct TitleFrame<'a> {
     /// Индекс редактируемой ноды (T7): её тело рисует EditingSession, из кэша
     /// тела и из выдачи она исключается.
     pub editing: Option<usize>,
+    /// FR-072: индекс ноды при правке ЗАГОЛОВКА (EditTarget::NodeTitle):
+    /// буфер редактора рисуется в шапке карточки; тело кэшируется как обычно
+    /// (в отличие от editing — тело НЕ гасится).
+    pub editing_title: Option<usize>,
     /// Буфер активной EditingSession (T7) и world-прямоугольник области:
     /// левый верхний угол, ширина, высота — текст редактора рисуется поверх
-    /// карточки (тело ноды) или бокса по центру кривой (лейбл связи).
+    /// карточки (тело ноды), бокса по центру кривой (лейбл связи) или шапки
+    /// (заголовок, FR-072).
     pub editing_buffer: Option<(&'a Buffer, [f32; 2], f32, f32)>,
     /// Оверлей-тексты кадра (контекстное меню, T7).
     pub overlay_texts: &'a [OverlayText<'a>],
@@ -2830,9 +2854,20 @@ impl TextSystem {
                     .binary_search_by_key(&index, |(i, _)| *i)
                     .ok()
                     .and_then(|pos| frame.collapsed_counts.get(pos).map(|(_, n)| *n));
+                // FR-072: пустой явный заголовок (canvasdesk.title == "") —
+                // плейсхолдер «Заголовок» вместо «—» (affordance «двойной
+                // клик по шапке — назови ноду»); рисуется приглушённым тоном
+                // (цвет — в prepare_areas ниже). title_for для Some("")
+                // возвращает «—» — подмена только здесь, в шапке.
+                let title_muted = node.title() == Some("");
+                let title_base = if title_muted {
+                    TITLE_PLACEHOLDER.to_owned()
+                } else {
+                    title_for(node)
+                };
                 let title_text = match collapsed_count {
-                    Some(count) => format!("{} +{}", title_for(node), count),
-                    None => title_for(node),
+                    Some(count) => format!("{} +{}", title_base, count),
+                    None => title_base,
                 };
                 // Тело редактируемой ноды рисует EditingSession — не шейпим дубль
                 let body_text = if frame.editing == Some(index) || !body_visible(node, zoom_px) {
@@ -4005,20 +4040,33 @@ impl TextSystem {
                     };
                     let title_x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
                     let pos = to_physical([title_x, node.y]);
-                    areas.push(TextArea {
-                        buffer: &entry.title,
-                        left: pos[0],
-                        top: pos[1],
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: pos[0] as i32,
-                            top: pos[1] as i32,
-                            right: (pos[0] + entry.width_px) as i32,
-                            bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
-                        },
-                        default_color: dim_color(on_card(self.theme.title), text_factor),
-                        custom_glyphs: &[],
-                    });
+                    // FR-072: плейсхолдер пустого явного заголовка — тон иконки
+                    // (приглушённо), читательский — тон заголовка.
+                    let title_muted = node.title() == Some("");
+                    // FR-072: кэшированный заголовок правимой ноды не рисуем —
+                    // его место занимает буфер EditingSession (как у тела).
+                    let title_editing = frame.editing_title == Some(index);
+                    let title_color = if title_muted {
+                        self.theme.icon
+                    } else {
+                        self.theme.title
+                    };
+                    if !title_editing {
+                        areas.push(TextArea {
+                            buffer: &entry.title,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + entry.width_px) as i32,
+                                bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
+                            },
+                            default_color: dim_color(on_card(title_color), text_factor),
+                            custom_glyphs: &[],
+                        });
+                    }
                     if let Some(icon) = &entry.icon {
                         let pos = to_physical([node.x + TITLE_PADDING, node.y]);
                         areas.push(TextArea {
@@ -4375,11 +4423,36 @@ impl TextSystem {
                     });
                 }
             }
+            // FR-072: буфер сессии правки заголовка (EditTarget::NodeTitle):
+            // рисуется в зоне шапки на z-позиции ноды; тело кэшируется как
+            // обычно (frame.editing = None — тело НЕ гасится).
+            if let Some(title_index) = frame.editing_title {
+                if group_contains_node(frame.indices, group, title_index) {
+                    if let Some((buffer, origin, area_w, area_h)) = frame.editing_buffer {
+                        let pos = to_physical(origin);
+                        areas.push(TextArea {
+                            buffer,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: pos[0] as i32,
+                                top: pos[1] as i32,
+                                right: (pos[0] + area_w * zoom_px) as i32,
+                                bottom: (pos[1] + area_h * zoom_px) as i32,
+                            },
+                            default_color: self.theme.title,
+                            custom_glyphs: &[],
+                        });
+                    }
+                }
+            }
             // Буфер сессии редактирования лейбла связи (T8): для EditTarget::Edge
             // `frame.editing` = None (индекс ноды нет), поэтому блок выше не
             // срабатывал и текст лейбла исчезал при входе в редактирование.
             // Бокс по центру кривой — поверх всего кадра, как его подложка.
-            if frame.editing.is_none() {
+            // FR-072: при правке заголовка буфер уже нарисован веткой выше.
+            if frame.editing.is_none() && frame.editing_title.is_none() {
                 if let Some((buffer, origin, area_w, area_h)) = frame.editing_buffer {
                     let pos = to_physical(origin);
                     areas.push(TextArea {

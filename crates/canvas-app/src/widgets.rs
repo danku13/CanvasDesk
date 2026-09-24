@@ -554,6 +554,7 @@ impl WidgetManager {
             template: None,
             desc: None,
             data: None,
+            title: None,
         };
         Some(Node::widget(
             node_id,
@@ -753,6 +754,7 @@ mod tests {
             template: None,
             desc: None,
             data: None,
+            title: None,
         };
         canvas.nodes.push(Node::widget(
             "widget-1", ext, "Clock", 0.0, 0.0, 320.0, 200.0,

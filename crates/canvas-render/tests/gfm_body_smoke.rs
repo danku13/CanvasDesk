@@ -56,6 +56,7 @@ fn headless_gfm_body_quads_draw() {
             indices: &[0],
             hud: None,
             editing: None,
+            editing_title: None,
             editing_buffer: None,
             overlay_texts: &[],
             screen_bands: &[],

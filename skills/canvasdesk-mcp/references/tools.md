@@ -17,7 +17,7 @@
 | `canvas_info` {} | — | Сводка по канвасу: число нод и связей, путь к файлу .canvas, версия приложения |
 | `nodes_list` {text?} | text: boolean | Список нод: id, тип, координаты, размеры, подпись, файл; поле text — только при text=true |
 | `node_get` {id} | id: string | Одна нода по id со всеми полями (включая text) |
-| `nodes_search` {query} | query: string | Поиск нод: подстрока без учёта регистра по text/label/file |
+| `nodes_search` {query} | query: string | Поиск нод: подстрока без учёта регистра по text/title/label/file (title — явный заголовок canvasdesk.title, FR-072) |
 | `edges_list` {} | — | Все связи: {id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide} — восстановление топологии графа |
 | `edge_get` {id} | id: string | Одна связь по id — схема как у элементов edges_list |
 | `template_list` {} | — | Реестр шаблонов: id, name, version, category, expr, params, outputs (именованные выходы для fromOutput) |
@@ -29,10 +29,10 @@
 
 | Инструмент | Сигнатура | Назначение |
 |---|---|---|
-| `node_create_note` {x, y, text?, width?, height?} | x, y: number | Создать ноду-заметку (Numi-лист); возвращает id. Дефолт 260×120 |
+| `node_create_note` {x, y, text?, title?, width?, height?} | x, y: number | Создать ноду-заметку (Numi-лист); возвращает id. Дефолт 260×120. title (FR-072) — явный заголовок карточки; без него заголовок — первая строка текста (legacy) |
 | `node_create_file` {path, x, y, width?, height?} | path: string | Создать файловую ноду по пути (файл на диске НЕ создаётся) |
 | `node_update_text` {id, text} | id, text: string | Заменить текст ноды-заметки целиком |
-| `node_edit` {id, text?, label?, color?, expr?, x?, y?, width?, height?} | id: string | Править ТОЛЬКО переданные поля; label/color/expr = null — сброс; expr — Numi-формула; возвращает обновлённую ноду |
+| `node_edit` {id, text?, title?, label?, color?, expr?, x?, y?, width?, height?} | id: string | Править ТОЛЬКО переданные поля; label/color/expr/title = null — сброс (title = null — возврат к фолбэку «первая строка», FR-072); expr — Numi-формула; возвращает обновлённую ноду |
 | `node_move` {id, x, y} | — | Переместить ноду в world-координаты |
 | `node_resize` {id, width, height} | — | Изменить размеры ноды |
 | `node_delete` {id} | — | Удалить ноду (связи — каскадно; дети группы НЕ удаляются) |

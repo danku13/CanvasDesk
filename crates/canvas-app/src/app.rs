@@ -1056,6 +1056,10 @@ pub struct App {
     /// `Some` — commit сессии редактирования идёт в подмены активного
     /// сценария, а не в текст ноды (инвариант 2: база не мутируется).
     whatif_override_line: Option<usize>,
+    /// FR-072: индекс только что созданной заметки, чей заголовок коммитится
+    /// первым: после commit заголовка автоматически открывается правка тела
+    /// (создание заметки = заголовок → Enter → тело). Esc — флаг снимается.
+    title_then_body: Option<usize>,
     /// T23 (brainstorm-focus): затемнение сцены 0..1 (анимируется фейдом
     /// 150 мс при вкл/выкл и при появлении/исчезновении семени).
     focus_dim: f32,
@@ -1226,6 +1230,8 @@ impl App {
             last_stats: FrameStats::default(),
             thumbs_failed: std::collections::HashSet::new(),
             editing: None,
+            // FR-072: автопереход «заголовок → тело» выключен по умолчанию
+            title_then_body: None,
             editor_dragging: false,
             double_click: DoubleClick::new(),
             clipboard,
@@ -1860,6 +1866,72 @@ impl App {
         self.request_redraw();
     }
 
+    /// FR-072: двойной клик по text-ноде — выбор цели по точке: шапка
+    /// (верхние HEADER_HEIGHT world-px карточки) — правка заголовка,
+    /// тело — правка текста (как раньше). Группы — подпись label,
+    /// файлы/виджеты — прежнее поведение begin_editing (no-op/фильтры).
+    fn begin_edit_node(&mut self, index: usize, world: Vec2) {
+        let title_hit =
+            self.scene.canvas.nodes.get(index).is_some_and(|node| {
+                node.kind() == NodeKind::Text && world[1] < node.y + HEADER_HEIGHT
+            });
+        if title_hit {
+            self.begin_editing_title(index);
+        } else {
+            self.begin_editing(index);
+        }
+    }
+
+    /// FR-072: начать правку ЗАГОЛОВКА text-ноды (EditTarget::NodeTitle):
+    /// однострочный редактор в шапке карточки. Prefill — текущий заголовок:
+    /// явный (canvasdesk.title как есть) либо производный legacy (title_for —
+    /// стрипнутая первая строка); «—» → пустое поле. Группы правят label
+    /// прежним begin_editing; файлы/виджеты не редактируются.
+    fn begin_editing_title(&mut self, index: usize) {
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return;
+        };
+        if node.kind() != NodeKind::Text {
+            return;
+        }
+        let text = match node.title() {
+            Some(title) => title.to_owned(),
+            None => {
+                let derived = title_for(node);
+                if derived == "—" {
+                    String::new()
+                } else {
+                    derived
+                }
+            }
+        };
+        let (_, width, height) = canvas_render::text::title_edit_area(node);
+        // FR-061 хвосты (D-8): начало правки сворачивает раскрытые описания
+        self.scene.collapse_descs_except(None);
+        // FR-006: отложенный снапшот «до» правки — шаг закроется на commit
+        // (finish_editing) с фактическим изменением заголовка/тела
+        self.begin_pending_undo();
+        let zoom_px = self.zoom_px();
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let session = EditingSession::new_title(
+            renderer.font_system_mut(),
+            index,
+            &text,
+            width * zoom_px,
+            height * zoom_px,
+            zoom_px,
+        );
+        self.editing = Some(session);
+        // FR-021: popup подсказок не для заголовка — держим закрытым
+        self.hints.reset();
+        self.selected = Some(Selection::Node(index));
+        self.dragging = None;
+        self.sync_cursor_icon();
+        self.request_redraw();
+    }
+
     /// Начать редактирование лейбла связи (T8): двойной клик по линии.
     /// Бокс редактирования — по центру дуги связи (edge_edit_area).
     fn begin_editing_edge(&mut self, index: usize) {
@@ -2014,7 +2086,7 @@ impl App {
                         .nodes
                         .get(index)
                         .map(|node| node.id.clone()),
-                    EditTarget::Edge(_) => None,
+                    EditTarget::Edge(_) | EditTarget::NodeTitle(_) => None,
                 };
                 if let Some(node_id) = node_id {
                     let expr = session.text();
@@ -2098,12 +2170,62 @@ impl App {
                         // ключ свежести — равенство текста (text.rs)
                     }
                 }
+                // FR-072: коммит заголовка. Пустая строка — осознанное
+                // Some("") (плейсхолдер, утечки первой строки нет), НЕ None.
+                // Настоящее переименование legacy-ноды (заголовка явного не
+                // было, коммит непустой): первая строка тела — если она
+                // проза (не Numi-формула) и нода не шаблонная — переезжает в
+                // заголовок (remove_first_line), дубли в теле не остаётся;
+                // один undo-шаг вместе с заголовком (снапшот «до» общий).
+                EditTarget::NodeTitle(index) => {
+                    let text = session.text();
+                    let text = text.trim().to_owned();
+                    if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                        let migrated = node.title().is_none()
+                            && !text.is_empty()
+                            && node.template().is_none()
+                            && node
+                                .text
+                                .as_deref()
+                                .and_then(|body| body.lines().next())
+                                .filter(|line| !line.is_empty())
+                                .is_some_and(|first| {
+                                    !matches!(
+                                        canvas_core::expr::line_kind(first),
+                                        canvas_core::expr::NumiLineKind::Assignment { .. }
+                                            | canvas_core::expr::NumiLineKind::Expression
+                                    )
+                                });
+                        node.set_title(Some(text));
+                        if migrated {
+                            node.remove_first_line();
+                            let body = node.text.clone().unwrap_or_default();
+                            node.set_expr(split_formula_lines(&body));
+                        }
+                    }
+                    // Тело могло измениться (перенос первой строки) —
+                    // пересчёт потока значений, как после правки текста
+                    self.scene.recompute_flow();
+                }
             }
             self.scene.mark_dirty();
         } else {
             // FR-006: отмена правки — модель не менялась, отложенный
             // снапшот «до» дропается (no-op шагов в истории нет)
             self.pending_undo = None;
+        }
+        // FR-072: после коммита заголовка новой заметки — сразу правка тела
+        // (создание = заголовок → Enter → тело); Esc тело не открывает.
+        if commit {
+            let chain = self.title_then_body.take();
+            if let Some(index) = chain {
+                if self.scene.canvas.nodes.get(index).is_some() {
+                    self.begin_editing(index);
+                    return;
+                }
+            }
+        } else {
+            self.title_then_body = None;
         }
         self.sync_cursor_icon();
         self.request_redraw();
@@ -6305,6 +6427,7 @@ pub fn add_stress_widgets(canvas: &mut Canvas, n: usize) -> usize {
             template: None,
             desc: None,
             data: None,
+            title: None,
         };
         canvas.nodes.push(Node::widget(
             format!("widget-{}", existing + i as u32 + 1),

@@ -536,3 +536,89 @@ fn edge_flow_reads_external_file_and_preserves_siblings() {
         "пустой flow удалён"
     );
 }
+
+// --- FR-072: canvasdesk.title — явный заголовок ноды ---
+
+/// FR-072 (инвариант round-trip): set_title → поле в JSON; `Some("")`
+/// сериализуется осознанно (состояние «заголовок задан, но пуст»);
+/// set_title(None) удаляет поле целиком, не трогая соседние.
+#[test]
+fn title_round_trip_and_reset() {
+    let mut canvas = Canvas::default();
+    let mut note = Node::text("note-1", "vm = 40 $\ndb = 25 $", 0.0, 0.0);
+    note.set_title(Some("Смета на инфраструктуру".to_owned()));
+    canvas.nodes.push(note);
+
+    // Сериализация: поле на месте внутри canvasdesk
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(
+        parsed["nodes"][0]["canvasdesk"]["title"], "Смета на инфраструктуру",
+        "canvasdesk.title в JSON"
+    );
+
+    // Обратное чтение: accessor видит заголовок
+    let restored = Canvas::from_str(&json).expect("парсинг");
+    assert_eq!(
+        restored.nodes[0].title(),
+        Some("Смета на инфраструктуру"),
+        "заголовок пережил round-trip"
+    );
+
+    // Пустой заголовок — осознанное состояние, НЕ нормализуется в None
+    let mut empty = restored;
+    empty.nodes[0].set_title(Some(String::new()));
+    assert_eq!(empty.nodes[0].title(), Some(""), "Some(\"\") сохраняется");
+    let json = empty.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(
+        parsed["nodes"][0]["canvasdesk"]["title"], "",
+        "пустой title сериализуется (утечки первой строки нет)"
+    );
+
+    // Сброс: ключ удалён целиком — пустого canvasdesk в JSON нет
+    let mut cleared = empty;
+    cleared.nodes[0].set_title(None);
+    assert_eq!(cleared.nodes[0].title(), None, "заголовок сброшен");
+    let json = cleared.to_json().expect("сериализация");
+    assert!(
+        !json.contains("canvasdesk"),
+        "пустого расширения в JSON быть не должно: {json}"
+    );
+}
+
+/// FR-072: заголовок из чужого файла (canvasdesk.title) читается; другие
+/// типизированные поля расширения (desc) сохраняются при set_title.
+/// (Кастомные ключи внутри типизированного canvasdesk ноды, как и раньше,
+/// round-trip не переживают — raw-JSON гарантию имеет только ребро.)
+#[test]
+fn title_reads_external_file_and_preserves_siblings() {
+    let source = r#"{
+        "nodes": [
+            {
+                "id": "n1",
+                "type": "text",
+                "text": "vm = 40 $",
+                "x": 0,
+                "y": 0,
+                "width": 260,
+                "height": 120,
+                "canvasdesk": { "title": "Смета", "desc": "описание" }
+            }
+        ],
+        "edges": []
+    }"#;
+    let mut canvas = Canvas::from_str(source).expect("чужой файл парсится");
+    assert_eq!(canvas.nodes[0].title(), Some("Смета"));
+
+    // Перезапись заголовка: соседнее типизированное поле не теряется
+    canvas
+        .nodes
+        .get_mut(0)
+        .expect("нода есть")
+        .set_title(Some("Смета v2".to_owned()));
+    let json = canvas.to_json().expect("сериализация");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("валидный JSON");
+    assert_eq!(parsed["nodes"][0]["canvasdesk"]["title"], "Смета v2");
+    assert_eq!(parsed["nodes"][0]["canvasdesk"]["desc"], "описание");
+}
