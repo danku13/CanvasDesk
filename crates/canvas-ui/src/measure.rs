@@ -22,7 +22,7 @@ use std::collections::HashMap;
 /// `canvas-render/src/text.rs`: `line_height = font_size * 1.3`).
 pub const SCREEN_LINE_FACTOR: f32 = 1.3;
 
-/// FR-067 (этап F, шаг 3 плана): вес шейпинга по семейству — паритет
+/// FR-069 (этап F, шаг 3 плана): вес шейпинга по семейству — паритет
 /// атрибутам рендера (`canvas-render/src/text.rs`): sans
 /// («Noto Sans Display») → [`Weight::MEDIUM`] — `sans_attrs`; моно
 /// («Noto Sans Mono») и наклонное моно («CanvasDesk Mono Oblique») →
@@ -214,7 +214,7 @@ impl TextMeasurer {
 /// Реальное измерение: тот же пайплайн, что screen-тексты рендера
 /// (`text.rs`: Buffer + Metrics(size, size·1.3) + Wrap::None + shape),
 /// семейство/вес — по [`family_weight`] (паритет `sans_attrs`/`mono_attrs`
-/// рендера — FR-067).
+/// рендера — FR-069).
 fn shape_measure(fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured {
     let size = spec.size.max(0.0);
     let line_height = size * SCREEN_LINE_FACTOR;

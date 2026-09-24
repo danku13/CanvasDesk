@@ -960,7 +960,7 @@ pub fn measured_result_reserve_height(
     node_width: f32,
     formula_lines: &[usize],
     desc: &str,
-    // FR-067 (этап F): раскрытое описание («⋯ целиком ▾») растит стек —
+    // FR-069 (этап F): раскрытое описание («⋯ целиком ▾») растит стек —
     // refit по тогглу; футер-резерв — только нодам с футером (подгонка
     // тела работает для ВСЕХ нод — ранний выход сцены снят); Σ-строка —
     // «Σ <имя узла>» (пусто — строки нет).
@@ -3355,7 +3355,7 @@ impl App {
         let desc_zone_h = if desc.trim().is_empty() {
             0.0
         } else {
-            // FR-067: раскрытое описание — полная вёрстка (hit-зоны строк
+            // FR-069: раскрытое описание — полная вёрстка (hit-зоны строк
             // смещаются на фактическую высоту зоны, I-2)
             let expanded = self.scene.desc_expanded.contains(&node.id);
             measure_body_height("", width, &[], &desc, expanded, "")
@@ -5239,14 +5239,14 @@ impl App {
         match kind {
             BodyHitKind::BlockHeader => {
                 self.scene.toggle_block_collapsed(&node_id);
-                // FR-067 (этап F): тоггл запускает refit — разворот блока
+                // FR-069 (этап F): тоггл запускает refit — разворот блока
                 // растит контент, высота подгоняется сразу (growth-only:
                 // свёртывание не усаживает — I-6).
                 self.scene.ensure_reserve_at(node);
             }
             BodyHitKind::DescExpander => {
                 self.scene.toggle_desc_expanded(&node_id);
-                // FR-067: раскрытое описание длиннее клампа растит ноду —
+                // FR-069: раскрытое описание длиннее клампа растит ноду —
                 // мера уровня 2 знает состояние (desc_expanded).
                 self.scene.ensure_reserve_at(node);
             }
@@ -19735,7 +19735,7 @@ mod tests {
             canvas_scene::measure::RESULT_LINE_HEIGHT,
             canvas_render::text::RESULT_LINE_HEIGHT
         );
-        // FR-067 (этап F): высота ряда подписи секции (зеркало ZONE_LABEL_LINE_HEIGHT).
+        // FR-069 (этап F): высота ряда подписи секции (зеркало ZONE_LABEL_LINE_HEIGHT).
         assert_eq!(
             canvas_scene::measure::ZONE_LABEL_LINE_HEIGHT,
             canvas_render::text::ZONE_LABEL_LINE_HEIGHT

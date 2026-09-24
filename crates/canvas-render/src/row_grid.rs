@@ -25,7 +25,7 @@ use canvas_ui::row_guides::{measure_row_cells, RowGuides};
 use crate::SpillView;
 
 /// Зазор между ячейками «значение»/«юнит»/«бейдж» (world-px) — параметр
-/// [`pass_a`]; FR-067 (этап F): узловой токен
+/// [`pass_a`]; FR-069 (этап F): узловой токен
 /// [`canvas_core::tokens::TABLE_NODE_GUIDE_GAP`] (8.0 — воздух прототипа
 /// .row gap 7; китовый `TABLE_GUIDE_GAP` 6.0 не тронут — панель FR-044 и
 /// витрина живут на прежней плотности).
@@ -53,7 +53,7 @@ pub(crate) enum RowKind {
     /// «параметры · P · формулы · K» (слева) + «Σ первое-значение» на
     /// направляющей (прототип §3.5, .preview-row).
     Preview,
-    /// FR-067 (этап F): Σ-строка «Σ <имя узла>» после расчётных строк —
+    /// FR-069 (этап F): Σ-строка «Σ <имя узла>» после расчётных строк —
     /// узловой итог на направляющей чисел, линия сверху (прототип
     /// .row.total 83–85, totalRow 287). Вставляет text.rs (нужны имя узла
     /// и итог), build_rows её не создаёт.
@@ -72,7 +72,7 @@ pub(crate) enum RowBadge {
     Error,
 }
 
-/// Тон пилюли бейджа (FR-067 этап F) — цветовое семейство без данных
+/// Тон пилюли бейджа (FR-069 этап F) — цветовое семейство без данных
 /// (CachedRow хранит тон, цвета решает рендер через тему).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BadgeTone {
@@ -85,7 +85,7 @@ pub(crate) enum BadgeTone {
 }
 
 impl RowBadge {
-    /// Тон пилюли (FR-067) — семейство цвета текста/фона/рамки.
+    /// Тон пилюли (FR-069) — семейство цвета текста/фона/рамки.
     pub(crate) fn tone(&self) -> BadgeTone {
         match self {
             RowBadge::Spill { .. } => BadgeTone::Spill,
@@ -264,7 +264,7 @@ pub(crate) fn block_preview_text_lang(
     }
 }
 
-/// FR-067 (этап F): подписи секций тела (прототип .mini-label/.grp —
+/// FR-069 (этап F): подписи секций тела (прототип .mini-label/.grp —
 /// «параметры · N» / «расчёт · N», uppercase). Единая точка сборки для
 /// рендера и тестов; текст метки высоту ряда не ведёт (line_height —
 /// константа рендера ZONE_LABEL_LINE_HEIGHT).
@@ -308,7 +308,7 @@ pub(crate) fn desc_collapse_text_lang(language: Language) -> String {
     }
 }
 
-/// FR-067 (этап F): метка футера результата (прототип .strip-d .lbl —
+/// FR-069 (этап F): метка футера результата (прототип .strip-d .lbl —
 /// «ИТОГ» слева, uppercase); значение/якорь футера не меняются.
 pub(crate) fn result_footer_label_lang(language: Language) -> String {
     match language {
@@ -497,7 +497,7 @@ fn cell_widths(
     size: f32,
 ) -> canvas_ui::row_guides::RowCellWidths {
     let cells = measure_row_cells(measurer, fs, &row.value, &row.unit, 0.0, family, size);
-    // FR-067 (этап F): бейдж — ПИЛЮЛЯ (прототип .badge, этап E kit-Row):
+    // FR-069 (этап F): бейдж — ПИЛЮЛЯ (прототип .badge, этап E kit-Row):
     // ширина колонки = текст + 2·ROW_BADGE_PAD_H (горизонтальный пад).
     let badge_w = match (&row.badge, badge_mode) {
         (None, _) => 0.0,
@@ -792,7 +792,7 @@ mod tests {
         assert_eq!(desc_collapse_text_lang(Language::En), "▴ collapse");
     }
 
-    /// FR-067 (этап F): подписи секций — uppercase по прототипу (.grp
+    /// FR-069 (этап F): подписи секций — uppercase по прототипу (.grp
     /// text-transform), счётчик через разделитель « · »; RU/EN.
     #[test]
     fn zone_label_text_is_uppercase_with_count() {
@@ -895,7 +895,7 @@ mod tests {
         assert!(g.value_right() <= 120.0);
     }
 
-    /// FR-067 (этап F): ширина бейдж-колонки = текст + 2·ROW_BADGE_PAD_H
+    /// FR-069 (этап F): ширина бейдж-колонки = текст + 2·ROW_BADGE_PAD_H
     /// (пилюля); без бейджей колонка нулевая (детерминизм прохода A).
     #[test]
     fn pass_a_badge_column_includes_pill_padding() {
