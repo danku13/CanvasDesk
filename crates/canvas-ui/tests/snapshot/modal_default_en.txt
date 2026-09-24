@@ -1,0 +1,7 @@
+rect x=0 y=0 w=320 h=240
+rect x=20 y=50 w=280 h=140
+text x=32 y=62 w=256 h=14 text="Settings"
+rect x=63 y=148 w=57 h=30
+text x=63 y=148 w=57 h=30 text="Apply"
+rect x=196 y=148 w=63 h=30
+text x=196 y=148 w=63 h=30 text="Cancel"

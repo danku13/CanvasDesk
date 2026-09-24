@@ -1,0 +1,2 @@
+rect x=131 y=105 w=57 h=30
+text x=131 y=105 w=57 h=30 text="Apply"
