@@ -51,7 +51,7 @@
   "table": {
     "$note": "Хром таблицы тела ноды (FR-061 D-14, анализ §3.1/§3.4). Кегли ячеек — typography.* (result/body); значения = текущим константам row_grid.rs/text.rs (I-1: ноль скачка).",
     "guide_gap": { "$type": "dimension", "$value": 6.0, "$desc": "кит: зазор ячеек значение/юнит/бейдж (kit.rs RowOpts.gap, панель FR-044)" },
-    "node_guide_gap": { "$type": "dimension", "$value": 8.0, "$desc": "FR-067 этап F: узловой зазор колонок тела ноды (row_grid.rs GUIDE_GAP) — воздух прототипа .row gap 7; китовый guide_gap не тронут" },
+    "node_guide_gap": { "$type": "dimension", "$value": 8.0, "$desc": "FR-069 этап F: узловой зазор колонок тела ноды (row_grid.rs GUIDE_GAP) — воздух прототипа .row gap 7; китовый guide_gap не тронут" },
     "leader_min": { "$type": "dimension", "$value": 8.0, "$desc": "row_grid.rs LEADER_MIN — короче дорожка не рисуется" },
     "leader_pad": { "$type": "dimension", "$value": 4.0, "$desc": "row_grid.rs LEADER_PAD — зазор лидера до значения и от левого текста" },
     "leader_dash": { "$type": "dimension", "$value": 2.0, "$desc": "text.rs LEADER_DASH_W — ширина штриха пунктира" },

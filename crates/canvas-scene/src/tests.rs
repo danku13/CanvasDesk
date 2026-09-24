@@ -204,7 +204,7 @@ fn mcp_node_edit_updates_only_given_fields() {
         (100.0, 100.0)
     );
     assert_eq!(scene.canvas.nodes[0].width, 260.0);
-    // FR-067 (этап F): growth-only refit в recompute_flow теперь подгоняет
+    // FR-069 (этап F): growth-only refit в recompute_flow теперь подгоняет
     // высоту для ВСЕХ нод (ранний выход по node_shows_result_footer снят):
     // у ноды без футера высота = тело (1 ряд) + зона описания (проза-фолбэк
     // Q3 «Отредактировано» — кламп+экспандер) + паддинг, без резерва футера:

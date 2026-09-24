@@ -866,7 +866,7 @@ impl SceneState {
         )
     }
 
-    /// CR-012 / FR-067 (этап F): growth-only рост высоты ноды под контент
+    /// CR-012 / FR-069 (этап F): growth-only рост высоты ноды под контент
     /// тела и резерв футера результата; spatial index обновляется только
     /// при реальном росте. formula_lines — из построчных результатов ноды
     /// (тот же источник, что у рендера). Ранний выход по
@@ -887,7 +887,7 @@ impl SceneState {
         let desc = self.node_desc_text(index);
         let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
         let footer_reserve = self.node_shows_result_footer(index);
-        // FR-067 (этап F): Σ-строка — итог есть (footer_reserve) и среди
+        // FR-069 (этап F): Σ-строка — итог есть (footer_reserve) и среди
         // строк с исходами есть расчётные; имя — общая функция ядра (I-2).
         let params = formula_lines
             .iter()
@@ -994,7 +994,7 @@ impl SceneState {
     /// строки-проекции препендятся показываемому тексту (метрики моно
     /// совпадают с формульными строками — префиксные индексы входят в
     /// formula_lines), индексы формул сдвигаются на длину префикса.
-    /// FR-067 (этап F): резерв футера — по флагу
+    /// FR-069 (этап F): резерв футера — по флагу
     /// `node_shows_result_footer` (побочный +RESULT_LINE_HEIGHT у нод без
     /// итога снят — футер-флаг двухуровневого refit). spatial index —
     /// только при реальном росте.
@@ -1028,7 +1028,7 @@ impl SceneState {
         let desc = self.node_desc_text(index);
         let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
         let footer_reserve = self.node_shows_result_footer(index);
-        // FR-067 (этап F): Σ-строка — как в ensure_reserve_at (префиксные
+        // FR-069 (этап F): Σ-строка — как в ensure_reserve_at (префиксные
         // индексы авто-строк — присваивания «путь = значение», в calcs не
         // попадают, счёт согласован с рендером).
         let params = formula_lines
@@ -1310,7 +1310,7 @@ mod reserve_tests {
         SceneState::new(canvas, PathBuf::from("target/tmp/fr067-reserve.canvas"))
     }
 
-    /// FR-067 (этап F): ранний выход снят — нода БЕЗ футера результата
+    /// FR-069 (этап F): ранний выход снят — нода БЕЗ футера результата
     /// (обычный Numi-лист с построчными результатами) растёт под тело;
     /// резерв футера ей не добавляется (нет «пустого хвоста»).
     #[test]
@@ -1360,7 +1360,7 @@ mod reserve_tests {
         );
     }
 
-    /// FR-067 (этап F): тоггл раскрытия описания — уровень 2 знает
+    /// FR-069 (этап F): тоггл раскрытия описания — уровень 2 знает
     /// состояние (desc_expanded): раскрытие растит высоту сразу,
     /// свёртывание её не уменьшает (I-6 growth-only).
     #[test]

@@ -62,7 +62,7 @@ const MAX_TEXT_GROUPS: usize = 16;
 /// Заливка декоративного квада тела (GFM) по его виду — палитра темы.
 /// Чистая функция (юнит-тест на маппинг): подсветка — прежняя константа,
 /// буллиты/чекбоксы/зачёркивание/линия — приглушённый gfm_muted_fill.
-/// FR-067 (этап F): cosmic-text Color → линейный rgba [0..1; 4] — для
+/// FR-069 (этап F): cosmic-text Color → линейный rgba [0..1; 4] — для
 /// пилюль бейджей (цвет текста бейджа — слот темы `Color`).
 fn color_rgba(c: cosmic_text::Color) -> [f32; 4] {
     [
@@ -89,7 +89,7 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         // невыделенных строк списков).
         BodyQuadKind::Leader => theme.gfm_muted_fill,
         BodyQuadKind::RowBg => theme.search_row_fill,
-        // FR-067 (этап F): янтарная хромировка авто-строк приёмника
+        // FR-069 (этап F): янтарная хромировка авто-строк приёмника
         // (прототип .row.auto): фон ≈ 5 %, пунктир ≈ 55 % анализа-амбер
         // (тот же токен, что UNMAPPED_EDGE_COLOR, cards.rs).
         BodyQuadKind::AutoRowBg => {
@@ -100,9 +100,9 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
             let c = canvas_core::tokens::SEVERITY_DARK[0];
             [c[0], c[1], c[2], 0.55]
         }
-        // FR-067 (этап F): линия сверху Σ-строки — приглушённая (как линии).
+        // FR-069 (этап F): линия сверху Σ-строки — приглушённая (как линии).
         BodyQuadKind::SigmaRule => theme.gfm_muted_fill,
-        // FR-067 (этап F): пилюли бейджей — заливка-капсула ≈ 12 % цвета
+        // FR-069 (этап F): пилюли бейджей — заливка-капсула ≈ 12 % цвета
         // текста бейджа (рамка — в body_quad_instance, ≈ 55 %).
         BodyQuadKind::BadgePillSpill => {
             let [r, g, b, a] = color_rgba(theme.link);
@@ -134,7 +134,7 @@ pub fn body_quad_instance(
     entry_zoom: f32,
     theme: &ThemeColors,
 ) -> CardInstance {
-    // FR-067 (этап F): пилюля бейджа — капсула (радиус = h/2) с рамкой
+    // FR-069 (этап F): пилюля бейджа — капсула (радиус = h/2) с рамкой
     // ≈ 55 % цвета текста бейджа (прототип .badge border 1px 50 %).
     let (border, radius) = match quad.kind {
         BodyQuadKind::BadgePillSpill => {
@@ -1972,7 +1972,7 @@ mod fr067_pill_tests {
     use super::*;
     use crate::text::BodyQuadKind;
 
-    /// FR-067 (этап F): пилюля бейджа — капсула (радиус = h/2), фон
+    /// FR-069 (этап F): пилюля бейджа — капсула (радиус = h/2), фон
     /// полупрозрачнее рамки (прототип .badge: bg ≈ 9 %, border ≈ 50 %).
     #[test]
     fn badge_pill_instance_is_capsule_with_translucent_fill() {
