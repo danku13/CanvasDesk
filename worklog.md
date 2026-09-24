@@ -5601,3 +5601,12 @@ Stage Summary:
 - Этап F реализован целиком; гейты зелёные: cargo test --workspace (0 отказов; core 387, render 351, ui 150, scene 101, app lib 342), fmt --check, clippy -D warnings (5 крейтов), wasm_gate.sh --check, mcp_wasm_gate.sh --check.
 - Версiónные инварианты соблюдены: I-1 (Y-ряд хромом не тронут), I-2 (оценка/мера/рендер на общих чистых функциях ядра), I-3/I-6 (текст не мутируется, рост-only).
 - Вопросы владельцу: sans 9.5px для пилюль; подпись «входящие значения · N»; ужимание высоты (шаг 4b) после решения по I-6/T7; вопрос онбординга/документации (правило AGENTS.md).
+
+---
+## 2026-09-24 — FR-069: merge волны S + перенумерация + push в main — сессия web-d435bede
+
+- **Агент:** Super Z (продолжение сессии реализации этапа F; директива владельца: «пушь в main»).
+- Обнаружено: origin/main ушёл вперёд на 22 коммита (FR-063..066 волна S, ADR-0014/0015) — **номер FR-067 занят** taffy-миграцией, FR-068 — UI-рефакторингом. Коммит 1ce6e44: перенумерация нашей постановки **FR-067 → FR-069** (16 файлов: CR-док переименован в `fr-069-node-body-fill-stage-f.md`, реестр, приёмка, комментарии кода).
+- Merge 8a175ff (22 коммита remote × 9 локальных): пересечение 12 файлов, 7 с конфликтами. Ключевые решения: text.rs — протащены оба набора параметров тела (suppress/sigma FR-069 + overrides лестницы §3.4 remote), Σ-привязка — в общем `row_geo` (+arm Sigma), Σ-вставка clone-safe для ellipsis-перешейпа; row_grid `cell_widths` — MEASURE_WEIGHT (T9) + пад пилюли 2·ROW_BADGE_PAD_H; canvas-ui `shape_measure` — `spec.weight` (T9 — обобщение FR-069 `family_weight`, хелпер сохранён); сцена-оценка — супрессия/заголовок/подписи/Σ (FR-069) + **условный** экспандер T9 (наш «всегда +1» заменён на точную семантику remote); mcp_node_edit ожидание 134→120 (prose-фолбэк убран remote, FR-069-супрессия покрывает случай desc==абзац явно).
+- Гейты на объединённом коде: `cargo test --workspace` — 57 сюит / 0 отказов; fmt --check; clippy --workspace --all-targets -D warnings; `wasm_gate.sh --check` OK; `mcp_wasm_gate.sh --check` OK.
+- Push b8e7456..8a175ff → origin/main. Этап F (FR-069) полностью в main.
