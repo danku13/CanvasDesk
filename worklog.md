@@ -56,6 +56,39 @@
   дрейф fmt в core/render — предмет отдельного gates-фикса.
 - Онбординг/пользовательская документация: не затронуты (рефакторинг без
   изменения поведения, хоткеи/шаги тура прежние).
+## 2026-09-25 — FR-070: UI-админпанель (консоль дизайн-системы) — main 15b33b5→feature/ui-admin-panel
+
+- **Агент:** Super Z (сессия web-f29848ef, по прямому запросу владельца в
+  чате; отчёты по этапам — в Telegram владельца)
+- **Координация:** реализация по документу `docs/change-requests/fr-070-ui-admin-panel.md`
+  (состав зафиксирован опросом владельца, 10/10 ответов). Территория —
+  canvas-app (+ new `admin_ui.rs`) и доки; canvas-core/canvas-render/
+  canvas-ui НЕ тронуты (wasm-гейт не затронут), формат `.canvas` не менялся.
+
+### Work Log
+- Этап 1 (каркас): поверхность `admin_panel` (Modals/Block), модуль
+  `admin_ui.rs` — чистая раскладка (панель/шапка/сайдбар/демо-зона, wrap_text),
+  секции Components/Fill/Canvas/Tokens; App-интеграция (клики/Esc/backdrop/
+  колесо/отрисовка по паттерну FR-055); реестр (id, KeyOwner::Admin, hit-rect'ы,
+  G4-линт-состояние); меню «?» → «UI-консоль»; i18n `admin.*` RU/EN.
+- Этап 2 (матрица состояний + наполнение): кнопки 4×6 (ST1 + Focused),
+  икон-кнопки/чипы ×5, поля Normal/Focused/Error/Disabled (Error — примитив
+  ERROR), переключатели; 9 контейнеров × empty/medium/full (список, карточка,
+  поле, чипы, dropdown, kit-Row таблица, тосты, палитра шаблонов, wheel).
+- Этап 3 (канвас ST4 + токены): карточка ноды ×4, рёбра ×4 (EDGE_* примитивы,
+  dimmed α0.35), порты ×3; каталог токенов — 14 слотов KitPalette с live-правкой
+  (cycle_slot по кандидатам, admin_palette_override, «Сброс»/смена темы),
+  размеры/типографика/motion read-only.
+- Этап 4 (доки): user-docs/admin.html-страница (DOCS_PAGES 9, линк-чек ок),
+  онбординг 8→9 шагов, ui-kit.md §8, states.md витрина, surface-registry,
+  index-cr-fr, FR-070 → «выполнено».
+
+### Stage Summary
+- 4 коммита на feature/ui-admin-panel; приёмка: `cargo test -p canvas-app`
+  361 passed / 0 failed (13 новых тестов admin), clippy `-D warnings` чисто,
+  `cargo fmt` применён. Ручная приёмка владельцем — чек-лист FR-070 §Проверка.
+
+---
 
 ## 2026-09-23 — FR-045 F-5 v2: лейблы входных слотов стороны (qualified-истоки + маркер unmapped) — main e0952a2→feature/fr-045-f5-v2-input-labels
 
@@ -5852,3 +5885,22 @@ Stage Summary:
 - main: 15b33b5 → de0044e (fmt-фикс + этапы 5-6 + фикс expr_result_smoke под FR-069)
 - Красный CI починен в двух слоях: fmt-дрейф rustfmt 1.98 и устаревшие окна GPU-тестов после FR-069
 - Гейты локально зелёные; CI нового пуша — под наблюдением
+
+## 2026-09-25 — merge(feature/ui-admin-panel → main): FR-070 влита в main (re-apply после декомпозиции app.rs)
+
+- **Агент:** Super Z (сессия web-f29848ef; директива владельца: «комить в main»).
+- **Контекст:** main ушёл вперёд на 5 коммитов (декомпозиция app.rs 22.3k→12.5k
+  + FR-042 пучки) параллельно feature-ветке FR-070; прямое слияние конфликтует.
+- **Слияние:** конфликт app.rs разрешён в пользу декомпозированной структуры:
+  админ-интеграция FR-070 ре-применена к новым модулям — поля/инициализация
+  (`app.rs`), оверлей и layout-хелперы (`app/overlays.rs`), клики/Esc/KeyOwner/
+  wheel/меню «UI-консоль» (`app/input.rs`), draw dispatch Modals (`app/handler.rs`);
+  i18n и worklog — авто-слияние/union; ui_registry/ui_layout_lint/admin_ui — без
+  изменений (ветка — единственный автор).
+- **Попутные фиксы красного main:** тест `integration_groups` не собирался
+  (сигнатура `palette_groups` +`bundle_weight: Option<usize>` из 7ae53db —
+  вызов в тесте не обновлён) — добавлен `None`; clippy `-D warnings` падал на
+  док-комментарии `edge_groups` (doc_lazy_continuation ×6) — переформатированы.
+- **Приёмка:** `cargo test -p canvas-app` — 412 passed / 0 failed (включая 16
+  admin-тестов FR-070); clippy `-D warnings` чисто; `cargo fmt -p canvas-app`
+  применён. canvas-core/render/ui не тронуты — wasm-гейт не затронут.

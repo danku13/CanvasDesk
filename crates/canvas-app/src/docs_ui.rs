@@ -37,7 +37,7 @@ pub struct DocsPage {
 /// Страницы вшиты в бинарь на этапе сборки (FR-027): отсутствие файла =
 /// ошибка сборки — доки нельзя «забыть»; версия страниц = версия бинарника.
 /// Порядок = порядок подменю (стабилен).
-pub const DOCS_PAGES: [DocsPage; 8] = [
+pub const DOCS_PAGES: [DocsPage; 9] = [
     DocsPage {
         id: "index",
         label_key: keys::DOCS_PAGE_INDEX,
@@ -77,6 +77,12 @@ pub const DOCS_PAGES: [DocsPage; 8] = [
         id: "agent-recipe",
         label_key: keys::DOCS_PAGE_AGENT_RECIPE,
         md: include_str!("../../../user-docs/agent-recipe.md"),
+    },
+    // FR-070: страница «UI-консоль» (админпанель дизайн-системы)
+    DocsPage {
+        id: "admin",
+        label_key: keys::DOCS_PAGE_ADMIN,
+        md: include_str!("../../../user-docs/admin.md"),
     },
 ];
 
@@ -170,14 +176,18 @@ pub enum HelpMenuItem {
     Schemes,
     /// «О интерфейсе» — витрина кита (FR-055 U4, Q5-a: доступна всегда).
     Interface,
+    /// «UI-консоль» — админпанель дизайн-системы (FR-070: матрица
+    /// состояний, наполнение, сущности канваса, токены с live-правкой).
+    Admin,
 }
 
 /// Пункты меню помощи (порядок отображения).
-pub const HELP_MENU_ITEMS: [HelpMenuItem; 4] = [
+pub const HELP_MENU_ITEMS: [HelpMenuItem; 5] = [
     HelpMenuItem::Docs,
     HelpMenuItem::Onboarding,
     HelpMenuItem::Schemes,
     HelpMenuItem::Interface,
+    HelpMenuItem::Admin,
 ];
 
 /// Подпись пункта меню помощи (таблица [`crate::i18n`] — FR-040).
@@ -187,6 +197,7 @@ pub fn help_menu_item_label(item: HelpMenuItem, language: Language) -> &'static 
         HelpMenuItem::Onboarding => i18n::tr(language, keys::HELP_ONBOARDING),
         HelpMenuItem::Schemes => i18n::tr(language, keys::HELP_SCHEMES),
         HelpMenuItem::Interface => i18n::tr(language, keys::HELP_INTERFACE),
+        HelpMenuItem::Admin => i18n::tr(language, keys::ADMIN_HELP_ITEM),
     }
 }
 
@@ -869,7 +880,7 @@ mod tests {
     /// непусты — пункт подменю ↔ страница, без пропусков и дублей.
     #[test]
     fn pages_complete_and_unique() {
-        assert_eq!(DOCS_PAGES.len(), 8, "8 страниц документации");
+        assert_eq!(DOCS_PAGES.len(), 9, "9 страниц документации");
         let mut ids = Vec::new();
         let mut labels = Vec::new();
         for page in &DOCS_PAGES {
