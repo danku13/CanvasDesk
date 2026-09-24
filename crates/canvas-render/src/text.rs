@@ -793,7 +793,9 @@ fn body_items(
     // сегменты НЕ рендерятся — ведомость представлена заголовком + превью
     // (прототип .blk-hdr + .preview-row); блоки расчётных строк исчезают —
     // строки без блоков выбрасываются циклом привязки (порты тоже).
-    let header_plan = block_header_plan(&lines, formula_lines);
+    // FR-067 (этап F): план перенесён в ядро — общая функция сцены
+    // (оценка уровня 1 refit учитывает ряд заголовка, I-2).
+    let header_plan = canvas_core::expr::block_header_plan(&lines, formula_lines);
     let collapsed = header_plan.is_some() && !block_expanded;
     for (seg_start, seg_end, source_line) in segments {
         if let Some((header_line, calc_count)) = header_plan {
@@ -851,28 +853,6 @@ fn body_items(
         );
     }
     out
-}
-
-/// FR-061 этап C (D-7): план заголовка блока-ведомости — `Some((первая
-/// расчётная строка, число расчётных))`, когда строк данных (параметры +
-/// расчёт — все строки с исходами; авто-строки не входят по построению)
-/// больше порога T (Q2, дефолт 4) и среди них есть расчётные. Чистая
-/// функция — рендер и измерение не разъезжаются (I-2).
-fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, usize)> {
-    let calc: Vec<usize> = formula_lines
-        .iter()
-        .copied()
-        .filter(|&i| {
-            lines
-                .get(i)
-                .is_some_and(|line| !matches!(line_kind(line), NumiLineKind::Assignment { .. }))
-        })
-        .collect();
-    if formula_lines.len() > canvas_core::NODE_BODY_BLOCK_THRESHOLD && !calc.is_empty() {
-        Some((*calc.first()?, calc.len()))
-    } else {
-        None
-    }
 }
 
 /// FR-061 этап C (D-7): элемент-заголовок блока «▸/▾ расчёт · N строк» —
@@ -1436,13 +1416,11 @@ fn with_body_stack(
     // индексы формул/портов/проливаний стабильны (I-1/I-3). Деривация по
     // равенству через ОБЩИЕ чистые функции ядра — рендер и измерение
     // супрессируют одинаково (I-2), контракты стека не расширяются.
-    let suppress = desc
-        .filter(|d| !d.is_empty())
-        .and_then(|d| {
-            canvas_core::expr::first_prose_paragraph(body_text)
-                .filter(|para| para == d)
-                .and_then(|_| canvas_core::expr::first_prose_paragraph_span(body_text))
-        });
+    let suppress = desc.filter(|d| !d.is_empty()).and_then(|d| {
+        canvas_core::expr::first_prose_paragraph(body_text)
+            .filter(|para| para == d)
+            .and_then(|_| canvas_core::expr::first_prose_paragraph_span(body_text))
+    });
     let mut body = body_items(
         theme,
         body_text,
@@ -1825,11 +1803,17 @@ pub fn measure_font_system() -> MutexGuard<'static, FontSystem> {
 /// FR-050 (этап D): проливания НЕ входят — наклонное начертание имеет те же
 /// авансы/метрики (генерация шрифта), высота стека не меняется; рост высоты
 /// под авто-строки делает сцена (CR-012-механизм, текст-префикс).
+/// FR-067 (этап F): `desc_expanded` — состояние раскрытости описания
+/// («⋯ целиком ▾»): кламп — дефолт (контент по умолчанию обязан влезать),
+/// раскрытие растит стек — измерение обязано его видеть (refit по тогглу).
+/// Блок всегда считается РАЗВЁРНУТЫМ: свёрнутость высоту не уменьшает
+/// (I-6, growth-only).
 pub fn measure_body_height(
     text: &str,
     body_width: f32,
     formula_lines: &[usize],
     desc: &str,
+    desc_expanded: bool,
 ) -> f32 {
     let mut guard = measure_font_system();
     with_body_stack(
@@ -1846,11 +1830,11 @@ pub fn measure_body_height(
         canvas_core::Language::Ru,
         // D-8: зона описания — часть стека (I-2: measure = render).
         if desc.is_empty() { None } else { Some(desc) },
-        // FR-061 хвосты: резерв считает РАЗВЁРНУТЫЙ блок и кламп описания
-        // (дефолты) — узел обязан вмещать контент по умолчанию; свёрнутость
-        // высоту не уменьшает (I-6, growth-only).
+        // FR-061 хвосты: резерв считает РАЗВЁРНУТЫЙ блок (дефолт) — узел
+        // обязан вмещать контент по умолчанию; свёрнутость высоту не
+        // уменьшает (I-6, growth-only). Описание — по состоянию тоггла.
         true,
-        false,
+        desc_expanded,
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -4808,8 +4792,8 @@ mod tests {
             (String::new(), false)
         );
         // Мера стека: desc-зона добавляет высоту
-        let plain = measure_body_height("deploy = 40 $", 300.0, &[0], "");
-        let with_desc = measure_body_height("deploy = 40 $", 300.0, &[0], "Описание схемы.");
+        let plain = measure_body_height("deploy = 40 $", 300.0, &[0], "", false);
+        let with_desc = measure_body_height("deploy = 40 $", 300.0, &[0], "Описание схемы.", false);
         assert!(
             with_desc > plain,
             "desc-зона добавляет высоту: {plain} → {with_desc}"
@@ -4909,7 +4893,10 @@ mod tests {
         let text = "шлюз обрабатывает поток\n\nrps = 800 rps\n800 rps / 12 ms";
         let formula_lines = [2, 3];
         // Границы абзаца по общим функциям ядра (как в with_body_stack)
-        assert_eq!(canvas_core::expr::first_prose_paragraph_span(text), Some((0, 1)));
+        assert_eq!(
+            canvas_core::expr::first_prose_paragraph_span(text),
+            Some((0, 1))
+        );
         let suppress = Some((0, 1));
         let items = body_items(
             &theme,
@@ -4921,7 +4908,9 @@ mod tests {
             suppress,
         );
         assert!(
-            items.iter().all(|item| !item.text.contains("шлюз обрабатывает")),
+            items
+                .iter()
+                .all(|item| !item.text.contains("шлюз обрабатывает")),
             "абзац описания из тела убран"
         );
         // Формульные строки на месте, привязка к исходным строкам не сдвинулась
@@ -5398,7 +5387,7 @@ mod tests {
     #[test]
     fn measure_body_height_numi_list_exact() {
         let text = "rps = 200 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min";
-        let height = measure_body_height(text, 280.0, &[0, 1, 2], "");
+        let height = measure_body_height(text, 280.0, &[0, 1, 2], "", false);
         assert_eq!(
             height,
             3.0 * BODY_LINE_HEIGHT + 2.0 * 6.0,
@@ -5413,7 +5402,7 @@ mod tests {
     #[test]
     fn measure_body_height_mono_wraps_to_two_rows() {
         let line = format!("{} = 5", "a".repeat(28)); // 32 символа
-        let height = measure_body_height(&line, 240.0, &[0], "");
+        let height = measure_body_height(&line, 240.0, &[0], "", false);
         assert_eq!(
             height,
             2.0 * BODY_LINE_HEIGHT,
@@ -5428,8 +5417,8 @@ mod tests {
     #[test]
     fn measure_body_height_prose_uses_sans_metrics() {
         let line = "a".repeat(30); // 30 символов — между двумя метриками
-        let sans_height = measure_body_height(&line, 240.0, &[], "");
-        let mono_height = measure_body_height(&line, 240.0, &[0], "");
+        let sans_height = measure_body_height(&line, 240.0, &[], "", false);
+        let mono_height = measure_body_height(&line, 240.0, &[0], "", false);
         assert_eq!(
             sans_height, BODY_LINE_HEIGHT,
             "sans: 30 символов при ширине 240 — один ряд"
@@ -5445,7 +5434,7 @@ mod tests {
     /// (зазоры вокруг линии — по 8, как у рендера).
     #[test]
     fn measure_body_height_counts_rule() {
-        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[], "");
+        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[], "", false);
         assert_eq!(
             height,
             BODY_LINE_HEIGHT + 8.0 + 12.0 + 8.0 + BODY_LINE_HEIGHT,
@@ -5550,15 +5539,21 @@ mod tests {
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 300.0, lines, "");
+        let measured = measure_body_height(text, 300.0, lines, "", false);
         assert_eq!(
             measured, rendered,
             "блок-режим: measured {measured}, rendered {rendered}"
         );
         // Заголовок добавляет ещё ОДНУ строку тела (плюс 5-я строка
         // данных и зазоры стека) — рост через общий стек, не магию.
-        let four = measure_body_height("a = 1\nb = 2\nc = 3\nd = 4", 300.0, &[0, 1, 2, 3], "");
-        let five_h = measure_body_height(text, 300.0, lines, "");
+        let four = measure_body_height(
+            "a = 1\nb = 2\nc = 3\nd = 4",
+            300.0,
+            &[0, 1, 2, 3],
+            "",
+            false,
+        );
+        let five_h = measure_body_height(text, 300.0, lines, "", false);
         let diff = five_h - four;
         assert!(
             (2.0 * BODY_LINE_HEIGHT + 6.0..=2.0 * BODY_LINE_HEIGHT + 26.0).contains(&diff),
@@ -5596,7 +5591,7 @@ mod tests {
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 300.0, &[2], "");
+        let measured = measure_body_height(text, 300.0, &[2], "", false);
         assert_eq!(
             measured, rendered,
             "измерение = рендер-стек: measured {measured}, rendered {rendered}"
@@ -5659,14 +5654,11 @@ mod tests {
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 420.0, &[3], &para);
-        assert_eq!(
-            measured, rendered,
-            "паритет стека при супрессии абзаца"
-        );
+        let measured = measure_body_height(text, 420.0, &[3], &para, false);
+        assert_eq!(measured, rendered, "паритет стека при супрессии абзаца");
         // Абзац, показанный зоной описания, дешевле постороннего описания:
         // тело без абзаца против полного тела
-        let other = measure_body_height(text, 420.0, &[3], "постороннее описание ноды");
+        let other = measure_body_height(text, 420.0, &[3], "постороннее описание ноды", false);
         assert!(
             measured < other,
             "супрессия убрала абзац из тела: {measured} < {other}"

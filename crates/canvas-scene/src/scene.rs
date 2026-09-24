@@ -866,14 +866,16 @@ impl SceneState {
         )
     }
 
-    /// CR-012: growth-only рост высоты ноды под резерв футера результата
-    /// (по [`SceneState::node_shows_result_footer]); spatial index
-    /// обновляется только при реальном росте. formula_lines — из построчных
-    /// результатов ноды (тот же источник, что у рендера).
+    /// CR-012 / FR-067 (этап F): growth-only рост высоты ноды под контент
+    /// тела и резерв футера результата; spatial index обновляется только
+    /// при реальном росте. formula_lines — из построчных результатов ноды
+    /// (тот же источник, что у рендера). Ранний выход по
+    /// `node_shows_result_footer` СНЯТ: подгонка работает для ВСЕХ нод —
+    /// текст без футера больше не вылезает за низ карточки; резерв футера
+    /// (`RESULT_LINE_HEIGHT + 2.0`) добавляется только нодам с футером —
+    /// без «пустого хвоста» у нод без итога. Состояние тогглов учитывается:
+    /// раскрытое описание («⋯ целиком ▾») измеряется целиком.
     pub fn ensure_reserve_at(&mut self, index: usize) {
-        if !self.node_shows_result_footer(index) {
-            return;
-        }
         let formula_lines = self
             .expr_line_results
             .get(&self.canvas.nodes[index].id)
@@ -883,12 +885,16 @@ impl SceneState {
         // подписи источников, длиннее локальных литералов).
         let display = display_body_text(&self.canvas.nodes[index], &self.param_spills);
         let desc = self.node_desc_text(index);
+        let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
+        let footer_reserve = self.node_shows_result_footer(index);
         let before = self.canvas.nodes[index].height;
         ensure_result_reserve(
             &mut self.canvas.nodes[index],
             &display,
             &formula_lines,
             desc.as_deref(),
+            desc_expanded,
+            footer_reserve,
         );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
@@ -968,9 +974,10 @@ impl SceneState {
     /// строки-проекции препендятся показываемому тексту (метрики моно
     /// совпадают с формульными строками — префиксные индексы входят в
     /// formula_lines), индексы формул сдвигаются на длину префикса.
-    /// Резерв футера у нод без итога — побочный +RESULT_LINE_HEIGHT
-    /// (задокументированная цена: growth-only, один раз при появлении
-    /// связи). spatial index — только при реальном росте.
+    /// FR-067 (этап F): резерв футера — по флагу
+    /// `node_shows_result_footer` (побочный +RESULT_LINE_HEIGHT у нод без
+    /// итога снят — футер-флаг двухуровневого refit). spatial index —
+    /// только при реальном росте.
     pub fn ensure_spill_rows_reserve(&mut self, index: usize) {
         let Some(rows) = self
             .auto_rows
@@ -999,12 +1006,16 @@ impl SceneState {
         let mut formula_lines = formula_lines;
         formula_lines.sort_unstable();
         let desc = self.node_desc_text(index);
+        let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
+        let footer_reserve = self.node_shows_result_footer(index);
         let before = self.canvas.nodes[index].height;
         ensure_result_reserve(
             &mut self.canvas.nodes[index],
             &display,
             &formula_lines,
             desc.as_deref(),
+            desc_expanded,
+            footer_reserve,
         );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
@@ -1238,5 +1249,113 @@ impl SceneState {
         let after = self.redo_stack.pop()?;
         self.undo_stack.push_back(self.canvas.clone());
         Some(after)
+    }
+}
+
+#[cfg(test)]
+mod reserve_tests {
+    use super::*;
+    use crate::measure::install_measured_reserve;
+    use canvas_core::Node;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Параллельные тесты меняют глобальный уровень 2 (install) — сериализуем.
+    static INSTALL_LOCK: Mutex<()> = Mutex::new(());
+
+    fn scene_with(node: Node) -> SceneState {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node);
+        SceneState::new(canvas, PathBuf::from("target/tmp/fr067-reserve.canvas"))
+    }
+
+    /// FR-067 (этап F): ранний выход снят — нода БЕЗ футера результата
+    /// (обычный Numi-лист с построчными результатами) растёт под тело;
+    /// резерв футера ей не добавляется (нет «пустого хвоста»).
+    #[test]
+    fn ensure_reserve_at_fits_body_without_footer() {
+        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // Уровень 2 — отключаем (None): работает консервативная оценка,
+        // детерминированная и без шрифтов (wasm-путь).
+        install_measured_reserve(|text, width, lines, desc, expanded, footer| {
+            crate::measure::estimated_result_reserve_height(
+                text, width, lines, desc, expanded, footer,
+            )
+        });
+        let mut node = Node::text(
+            "n1",
+            format!("{} = 5\n{} = 6", "a".repeat(30), "b".repeat(30)),
+            0.0,
+            0.0,
+        );
+        node.width = 260.0;
+        node.height = 80.0; // занижено — тело не влезает
+        let mut scene = scene_with(node);
+        // Построчные результаты есть, шаблона нет → футера нет (правило
+        // node_shows_result_footer), но подгонка тела обязана сработать.
+        scene.recompute_flow();
+        scene.ensure_reserve_at(0);
+        let grown = scene.canvas.nodes[0].height;
+        assert!(grown > 80.0, "нода без футера выросла под тело: {grown}");
+        // Высота НЕ включает резерв футера: ровно как оценка с footer=false
+        let expected = crate::measure::estimated_result_reserve_height(
+            &display_body_text(&scene.canvas.nodes[0], &std::collections::HashMap::new()),
+            scene.canvas.nodes[0].width,
+            &crate::measure::formula_line_indices(
+                scene
+                    .expr_line_results
+                    .get("n1")
+                    .map(|l| l.as_slice())
+                    .unwrap_or(&[]),
+            ),
+            "",
+            false,
+            false,
+        );
+        assert!(
+            (grown - expected).abs() < 1.0,
+            "рост без «пустого хвоста» футера: {grown} ≈ {expected}"
+        );
+    }
+
+    /// FR-067 (этап F): тоггл раскрытия описания — уровень 2 знает
+    /// состояние (desc_expanded): раскрытие растит высоту сразу,
+    /// свёртывание её не уменьшает (I-6 growth-only).
+    #[test]
+    fn ensure_reserve_at_respects_desc_expanded() {
+        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_measured_reserve(|text, width, lines, desc, expanded, footer| {
+            let base = crate::measure::estimated_result_reserve_height(
+                text, width, lines, desc, expanded, footer,
+            );
+            if expanded {
+                base + 60.0 // имитация полного описания (3 ряда)
+            } else {
+                base
+            }
+        });
+        let mut node = Node::text("n2", "rps = 800 rps", 0.0, 0.0);
+        node.width = 260.0;
+        node.height = 100.0; // занижено — кламп-оценка тоже растит
+        let mut scene = scene_with(node);
+        scene.recompute_flow();
+        scene.ensure_reserve_at(0);
+        let clamped = scene.canvas.nodes[0].height;
+        if let Some(n) = scene.canvas.nodes.get_mut(0) {
+            n.set_desc(Some("длинное описание ноды для раскрытия".into()));
+        }
+        scene.toggle_desc_expanded("n2");
+        scene.ensure_reserve_at(0);
+        let expanded_h = scene.canvas.nodes[0].height;
+        assert!(
+            expanded_h >= clamped + 40.0,
+            "раскрытие описания выросло: {expanded_h} ≥ {clamped} + 40"
+        );
+        scene.toggle_desc_expanded("n2");
+        scene.ensure_reserve_at(0);
+        assert_eq!(
+            scene.canvas.nodes[0].height, expanded_h,
+            "свёртывание не усаживает (I-6 growth-only)"
+        );
     }
 }
