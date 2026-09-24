@@ -6526,6 +6526,8 @@ impl App {
             theme_widget.kit_state(),
             &palette,
         );
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
         let (theme_rect, theme_label) =
             crate::kit_ui::theme_button_layout(lay.theme, lang, &mut m, &mut fs);
         d.control(theme_rect, &theme_style);
@@ -6902,8 +6904,6 @@ impl App {
         }
         let palette = self.admin_effective_palette();
         let lang = self.settings.language;
-        let mut m = crate::kit_ui::new_measurer();
-        let mut fs = canvas_render::text::measure_font_system();
         let lay = self.admin_layout_current();
         let mut d = crate::kit_ui::KitDraw::new(&self.camera, viewport);
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
@@ -6942,6 +6942,9 @@ impl App {
             reset_style.text,
             13.0,
         );
+        // Измеритель для кнопки темы (тот же паттерн витрины)
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
         let mut theme_widget = WidgetState::default();
         theme_widget.set_pointer(hover(&lay.theme), false);
         let theme_style = canvas_ui::kit::button_style(
@@ -7027,6 +7030,13 @@ impl App {
                 crate::admin_ui::LABEL_SIZE,
             );
         }
+        // Тело секции (этап 2): «Компоненты» / «Наполнение»
+        if let Some(comp) = &lay.components {
+            crate::admin_ui::draw_components(&mut d, comp, &palette, lang);
+        }
+        if let Some(fill) = &lay.fill {
+            crate::admin_ui::draw_fill(&mut d, fill, &palette, lang);
+        }
         // Бегунок скролла демо-зоны (контент выше окна)
         if let Some(knob) = canvas_ui::kit::scroll_bar(lay.demo, &self.admin_scroll, &palette) {
             d.rect(knob, palette.control_border, [0.0; 4], 2.0);
@@ -7086,11 +7096,24 @@ impl App {
     /// FR-070: раскладка админпанели текущего состояния (один источник
     /// геометрии для hit-rect'ов реестра и отрисовки).
     pub(crate) fn admin_layout_current(&self) -> crate::admin_ui::AdminLayout {
-        let viewport = self.viewport_logical();
+        self.admin_layout_at(self.viewport_logical())
+    }
+
+    /// FR-070: раскладка админпанели на явном вьюпорте (headless-тесты —
+    /// G4: 1280×800 / 800×560).
+    pub(crate) fn admin_layout_at(&self, viewport: [f32; 2]) -> crate::admin_ui::AdminLayout {
         let palette = self.admin_effective_palette();
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        crate::admin_ui::admin_layout(viewport, self.admin_section, &palette, &mut m, &mut fs)
+        crate::admin_ui::admin_layout(
+            viewport,
+            self.admin_section,
+            self.admin_scroll.offset,
+            &palette,
+            self.settings.language,
+            &mut m,
+            &mut fs,
+        )
     }
 
     /// FR-070: клик по админпанели — сайдбар/сброс/тема/«✕»; прочий клик
