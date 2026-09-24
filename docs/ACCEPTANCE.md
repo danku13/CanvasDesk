@@ -958,6 +958,49 @@ users/arpu/rent/other/npl; оракул 810 000 − 430 − 97 200 = 712 370.
 | FR-044.10 | i18n FR-040: инвариант полноты RU/EN; +5 ключей stage (out_label/ctrl_label/ctrl_to/pill_above/pill_below) | ✅ |
 | FR-044.11 | Гейты: fmt ✓, clippy `-D warnings` ✓, `cargo test --workspace` 1732/0 ✓, wasm-check (core/render/widgets/mcp/scene/mcp-headless/web под wasm32-unknown-unknown) ✓, token_lint ✓ (0 новых токенов); LOD-0 агрегация не изменена (инвариант 9 — регресс-щит `bundles.rs`) | ✅ |
 
+## FR-063 — Доменный слой статистики: распределения, квантили, ДИ, детерминированный RNG (M2/S1) — выполнено (2026-09-24)
+
+Приёмка FR-063 (по документу `docs/change-requests/fr-063-stats-layer.md`;
+коммиты S0 → P1 → P2 → P3, ветка `feature/fr-063-stats-layer`). Тесты:
+`crates/canvas-core/src/expr/stats.rs` (unit), `tests/expr_stats.rs`
+(golden, фича `stats`), `tests/expr_stats_compat.rs` (без фичи).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-063.1 | S0: deps `statrs` 0.17 (MIT) + `rand` 0.8 / `rand_chacha` 0.3 / `rand_distr` 0.4 (MIT OR Apache-2.0) — optional в `[workspace.dependencies]` и canvas-core; фича `stats` активирована; `cargo build -p canvas-core --no-default-features` зелёный (zero-dep инвариант B2B-сборки) | ✅ |
+| FR-063.2 | P1: `stats::dispatch` по образцу `queueing::dispatch`; `mod stats` + arm в `eval_call` за `#[cfg(feature = "stats")]` (guard по единой точке `STATS_FUNCTIONS`); существующие arms и fallback не тронуты; parity-тест stats-домена | ✅ |
+| FR-063.3 | P2: `normal_quantile`/`normal_cdf`/`lognormal_quantile`/`exp_quantile`/`poisson_pmf`/`triangular_quantile` (+ алиас `triangular`) поверх statrs; размерностные проверки (`p` строго скаляр, μ/σ одной размерности → `UnitMismatch`, σ > 0 → `BadCall`); результат в единице μ; вероятности → `%` | ✅ |
+| FR-063.4 | Golden ±1e-9: `normal_cdf(1.96, 0, 1) = 0.9750021048517795`; `normal_quantile(0.975, 0, 1) = 1.9599639845400542`; `lognormal_quantile(0.5, 0, 1) = 1.0`; `exp_quantile(0.6321205588285577, 1) = 1.0`; `poisson_pmf(3, 2) = 0.1804470443154836`; `triangular_quantile(0.5, 0, 1, 0.5) = 0.5`; round-trip quantile↔cdf | ✅ |
+| FR-063.5 | P3: `ci_mean(mean, σ, n, conf)` — полуширина ДИ (норм. аппроксимация, z·σ/√n через statrs; golden 2.9399459768100813 ±1e-9; границы — формулой потребителя `mean ± ci_mean(...)`); conf ∈ [0, 1); n целое ≥ 1 | ✅ |
+| FR-063.6 | P3: `normal_sample`/`lognormal_sample` — детерминированные выборки через `ChaCha8Rng::seed_from_u64` (scalar-агрегат — среднее, Открытый вопрос № 4; кап n ≤ 1e6); `thread_rng()` отсутствует в коде и не компилируется (rand без getrandom-фич) | ✅ |
+| FR-063.7 | Сид-контракт M5: `seed_from_parts(content, scenario_seed) = FNV-1a 64(content) ⊕ scenario_seed`; векторы FNV-1a зафиксированы тестом (`fnv1a64_known_vectors`); один сид → побитово одна выборка (`to_bits`, n=1 и n=1000) | ✅ |
+| FR-063.8 | FN_HINTS parity (паттерн FR-021): `stats_fn_hints_parity_with_eval_call` — множество `STATS_FUNCTIONS` == stats-записи каталога; полный каталог = встроенные + queueing + stats; попутно закрыт предсуществующий пробел (4 финансовые функции FR-027 не были в каталоге) | ✅ |
+| FR-063.9 | Обратная совместимость: без фичи `stats` все 10 stats-имён → `EvalError::UnknownFunction` (no panic, no abort), встроенные/queueing/финансовые функции штатны (`expr_stats_compat.rs`, зеркальный `cfg(not(feature))`) | ✅ |
+| FR-063.10 | Доки: `user-docs/calculations.md` — раздел «Вероятностные оценки» (синтаксис, единицы, детерминизм, кап выборки); `docs/DEPENDENCIES.md` §3→§2 (statrs/rand/rand_chacha/rand_distr с версиями и лицензиями); `docs/SPEC.md` §3 — строка L2-статистики; THIRD-PARTY-NOTICES перегенерирован (попутно починен about.toml `[private] ignore` — предсуществующий баг генерации с d6fb7df) | ✅ |
+| FR-063.11 | Гейты: `cargo test -p canvas-core --features stats` 390+22/0 ✓; `cargo test -p canvas-core` 384+2/0 ✓; `cargo test -p canvas-app --lib` 342/0 ✓ (потребитель каталога подсказок); `scripts/wasm_gate.sh --check` ✓; `cargo deny check` ✓; `cargo fmt --check` ✓; `cargo clippy --features stats -D warnings` ✓; находка зафиксирована в Changelog FR-063: getrandom 0.2 (транзитив statrs→rand(std)) не компилируется под wasm при включённой фиче — гейты (default-фичи) не заданы, решение по web-сборке с stats — за владельцем | ✅ |
+
+## FR-064 — Сценарный воркер: вынос пересчёта с UI-треда (double buffer) + FR-017 v2 freeze/сравнение (M3/S2) — выполнено (2026-09-24)
+
+Приёмка FR-064 (по документу `docs/change-requests/fr-064-scenario-worker.md`;
+коммиты P1 → P2 → docs, ветка `feature/fr-064-scenario-worker`). Тесты:
+`crates/canvas-scene/tests/worker_smoke.rs` (6), полный `cargo test
+--workspace`. Ручной части подлежит п. FR-064.10 (60 fps на пакетах
+сценариев — визуальная проверка владельца).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-064.1 | P1: воркер `canvas-scene/src/worker.rs` — `std::thread` + `mpsc` (desktop-only, `cfg(not(target_arch = "wasm32"))`), задание `(Arc<Canvas>, WhatIfOverrides)` → `Result<FlowSolutions, CycleError>`; паника вычисления ловится `catch_unwind` (воркер жив); spawn в `main()` по образцу `McpPipeServer::spawn`/`ThumbService::spawn` — wake через `EventLoopProxy<AppEvent>` | ✅ |
+| FR-064.2 | Double buffer `Arc<RwLock<FlowSolutions>>` (`flow_baseline`/`flow_active`), без `arc_swap` (архдок §5.2 «без новых зависимостей»); публикация снимков — конвейер пересчёта атомарно с выводкой O(N) (torn-frame исключён); читатели (рендер/UI/MCP) — через `canvas_scene::read_flow` | ✅ |
+| FR-064.3 | `recompute_flow` — единственный редактор (план §5.4): на воркер уходят ТОЛЬКО прогоны `propagate_with_lines` (сигнатура не тронута — контракт §5.1), выводка O(N) (`expr_results`, diff волны, `analyze`, `expr_line_results`, `param_spills`, `auto_rows`, `unmapped_edges`, `bundles`) — на UI-треде в `complete_flow_recompute`/`apply_flow_pair` | ✅ |
+| FR-064.4 | Поколения запросов: правка во время пересчёта перезаказывает прогон, устаревшие ответы отбрасываются (тест `stale_generation_is_discarded` — итог по последней правке) | ✅ |
+| FR-064.5 | Live-инвариант: правка → результат ≤ 2 кадров (smoke-тест `worker_delivers_result_within_two_frames`); таймаут воркера 3 с → sync-фолбэк + `warn` (`flow_worker_tick` в `about_to_wait`) | ✅ |
+| FR-064.6 | Sync-фолбэк + warn (правило AGENTS «фолбэк + warn»): отказ/паника воркера → синхронный пересчёт, результат побитово идентичен (тесты `worker_panic_falls_back_to_sync`, `worker_result_matches_sync_bitwise`); на wasm — sync-путь штатно (модуль воркера не собирается) | ✅ |
+| FR-064.7 | P2: freeze — `FrozenScenario` (снимок за `Arc<FlowSolutions>`), `freeze_scenario` (детерминированный пересчёт с активными подменами); персистентность имён `canvasdesk.whatif.frozen` (соседний `scenarios` сохраняется, пустой ключ удаляется — round-trip чистый, тест `frozen_names_round_trip`); восстановление при загрузке — `SceneState::restore_frozen` | ✅ |
+| FR-064.8 | P2: сравнение — `compare_scenarios` (диф `lines`+`outputs` в ядре): таблица «переменная \| База \| С1 \| С2» — union построчных переменных + изменившиеся узловые итоги (дельты downstream, формат `whatif_delta_str`); e2e в духе эталона ADR-0006 №2: смена `rps` → дельты cdn/pool, freeze 2 сценариев (тест `freeze_two_scenarios_and_compare_deltas`); pinned-семантика: правка канваса не двигает снимок | ✅ |
+| FR-064.9 | UI: кнопка «❄ Заморозить/Разморозить» в баре FR-017 (лейбл по состоянию, измерение той же строки, что рисуется — FR-053), маркер «❄» в чипе замороженного сценария и шапке колонки таблицы; i18n RU/EN (5 ключей) | ✅ |
+| FR-064.10 | Демо-критерий владельца: 20 прогонов сценарной сетки на воркере — UI 60 fps; freeze 2 сценариев → таблица с дельтами; kill воркера → sync-фолбэк + toast-warn, числа идентичны | ☐ ручная |
+| FR-064.11 | MCP не задет: инструменты `whatif_*` (9 шт, FR-017 v1) без изменений, новые не добавлены (skills/ не требует обновления); `whatif_delta_rows` читает double buffer через read-гарды | ✅ |
+| FR-064.12 | Гейты: `cargo fmt --check` ✓; `cargo clippy --workspace -D warnings` ✓; `cargo test --workspace` ✓ (canvas-scene 97+6, canvas-app 342+, canvas-core 385+43+…); `scripts/wasm_gate.sh --check` ✓; `scripts/mcp_wasm_gate.sh --check` ✓; `cargo deny check` ✓ (новых зависимостей нет — только std) | ✅ |
 ## FR-069 — Тело ноды, этап F: выравнивание с ux-node-body-fill + дефекты подгонки высоты — выполнено (2026-09-24)
 
 Приёмка по документу `docs/change-requests/fr-069-node-body-fill-stage-f.md`

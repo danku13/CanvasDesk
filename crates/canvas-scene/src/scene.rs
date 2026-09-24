@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use canvas_core::analyze::AnalysisConfig;
@@ -20,8 +20,23 @@ use canvas_core::{
 use crate::measure::{ensure_result_reserve, formula_line_indices};
 use crate::view::{SpillView, WhatIfNode};
 
+/// FR-064 P1 (документ §5.2, вариант P1): двойная буферизация решений
+/// потока — снимок [`flow::FlowSolutions`] за `Arc<RwLock>`. Писатель —
+/// конвейер пересчёта (публикация снимка атомарна с выводкой O(N) —
+/// читатель не видит рассинхрона), читатель — рендер/UI/MCP через
+/// `RwLock::read()`. Без `arc_swap` (архдок §5.2 «без новых зависимостей»;
+/// вариант v2 — по бенчмарку). На wasm ведёт себя как обычная обёртка
+/// (sync-путь — единственный писатель).
+pub type FlowBuffer = Arc<RwLock<flow::FlowSolutions>>;
+
 /// Debounce автосейва (SPEC §9).
 pub const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// FR-064 P1: бюджет ожидания воркера — если пара снимков не готова за
+/// это время (зависание вычисления), пересчёт падает на sync-фолбэк +
+/// `warn` (правило AGENTS «фолбэк + warn», live-инвариант не нарушается).
+#[cfg(not(target_arch = "wasm32"))]
+const FLOW_WORKER_TIMEOUT: Duration = Duration::from_secs(3);
 /// Глубина истории undo (FR-006): не менее 50 последних действий (запрос
 /// пользователя «не менее 50»); старейшие шаги вытесняются.
 pub const UNDO_LIMIT: usize = 50;
@@ -267,10 +282,13 @@ pub struct SceneState {
     /// дельты нулевые).
     pub active_scenario: Option<usize>,
     /// FR-017: базовый пересчёт БЕЗ подмен — источник дельт (гипотеза Q9:
-    /// чистый пересчёт на каждом ревале, не снапшот при входе).
-    pub flow_baseline: flow::FlowSolutions,
+    /// чистый пересчёт на каждом ревале, не снапшот при входе). FR-064 P1:
+    /// double buffer [`FlowBuffer`] — снимок за Arc<RwLock>, читатель
+    /// (рендер/UI/MCP) берёт его через `read()`.
+    pub flow_baseline: FlowBuffer,
     /// FR-017: пересчёт с подменами активного сценария — видимый канвасом.
-    pub flow_active: flow::FlowSolutions,
+    /// FR-064 P1: double buffer (см. [`SceneState::flow_baseline`]).
+    pub flow_active: FlowBuffer,
     /// PRD-0007 (AC-2.4): ошибка цикла последнего пересчёта — explain-дерево
     /// строится в режиме [`canvas_core::LineageFlow::Cycled`] (топология без
     /// значений). None — пересчёт прошёл. Runtime-поле, не сериализуется.
@@ -282,6 +300,11 @@ pub struct SceneState {
     /// подсветка подмен, дельта-бейджи). Runtime-кэш — пересчитывается в
     /// `recompute_flow` вместе с картами потока.
     pub whatif_nodes: HashMap<String, WhatIfNode>,
+    /// FR-064 P2 (FR-017 v2): замороженные снимки сценариев — pinned
+    /// значения потока на момент заморозки (правки канваса их не двигают).
+    /// Runtime-кэш (не сериализуется); имена — в `canvasdesk.whatif.frozen`,
+    /// восстанавливаются при загрузке ([`SceneState::restore_frozen`]).
+    pub frozen: Vec<canvas_core::whatif::FrozenScenario>,
     /// FR-061 хвосты (D-7 runtime v1, Q4 — runtime): id нод со СВЁРНУТЫМ
     /// блоком-ведомостью (дефолт — развёрнут; тоггл — клик по заголовку).
     /// Очищается при загрузке схемы (сброс к дефолту), в .canvas не пишется.
@@ -322,6 +345,71 @@ pub struct SceneState {
     undo_tags: VecDeque<Option<&'static str>>,
     /// Отложенный тег для СЛЕДУЮЩЕГО `push_undo` (см. [`SceneState::undo_tags`]).
     pending_undo_tag: Option<&'static str>,
+    /// FR-064 P1: хэндл сценарного воркера (desktop-only, подключает
+    /// приложение в main()). None — sync-режим: wasm/тесты/headless —
+    /// тяжёлый пересчёт выполняется на вызывающем треде (штатный путь,
+    /// контракт плана §5.8).
+    #[cfg(not(target_arch = "wasm32"))]
+    flow_worker: Option<crate::worker::FlowWorkerHandle>,
+    /// FR-064 P1: пересчёт в полёте (запрос отправлен воркеру, ждём пару
+    /// снимков; выводка O(N) выполнится в
+    /// [`SceneState::complete_flow_recompute`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    flow_pending: Option<FlowPending>,
+    /// FR-064 P1: счётчик поколений запросов воркеру — ответы устаревших
+    /// поколений (правки чаще, чем воркер успевает) отбрасываются.
+    #[cfg(not(target_arch = "wasm32"))]
+    flow_generation: u64,
+}
+
+/// FR-064 P1: слот pending-запроса — исход одного прогона воркера.
+#[cfg(not(target_arch = "wasm32"))]
+enum FlowSlot {
+    /// Готовый исход: снимок или цикл value-рёбер.
+    Done(Result<flow::FlowSolutions, flow::CycleError>),
+    /// Паника вычисления воркером — sync-фолбэк + warn.
+    Panicked,
+    /// Активное решение зеркалит базу (подмен нет — отдельный прогон не
+    /// заказывался).
+    MirrorsBaseline,
+}
+
+/// FR-064 P1: пересчёт в полёте — контекст, необходимый хвосту выводки
+/// O(N) (см. [`SceneState::apply_flow_pair`]) после получения пары снимков
+/// от воркера. Поколение отбрасывает ответы устаревших запросов (правки
+/// чаще, чем воркер успевает: новое поколение подменяет старое).
+#[cfg(not(target_arch = "wasm32"))]
+struct FlowPending {
+    generation: u64,
+    /// Подмены активного сценария на момент запроса (для виртуального
+    /// текста построчных результатов и whatif-представлений нод).
+    whatif: flow::WhatIfOverrides,
+    /// Протухшие подмены (маркеры панели, Q5c).
+    stale: Vec<StaleOverride>,
+    /// Снапшоты «до» для волны каскада (FR-050 Н9-1).
+    prev_results: ExprResults,
+    prev_solutions: flow::FlowSolutions,
+    /// Исходы слотов (None — ещё считается воркером).
+    baseline: Option<FlowSlot>,
+    active: Option<FlowSlot>,
+    /// Бюджет ожидания воркера (таймаут → sync-фолбэк + warn).
+    deadline: Instant,
+}
+
+/// FR-064 P1: чтение снимка double buffer (рендер/UI/MCP). Ядовитый замок
+/// (паника под write-гардом) — восстановление через into_inner: писатель
+/// один и паник под гардом не оставляет частичной публикации, в худшем
+/// случае читатель увидит прежний консистентный снимок. Без unwrap/expect
+/// (правило AGENTS).
+pub fn read_flow(buf: &FlowBuffer) -> std::sync::RwLockReadGuard<'_, flow::FlowSolutions> {
+    buf.read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// FR-064 P1: публикация снимка double buffer (см. [`read_flow`]).
+fn write_flow(buf: &FlowBuffer) -> std::sync::RwLockWriteGuard<'_, flow::FlowSolutions> {
+    buf.write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl SceneState {
@@ -356,11 +444,12 @@ impl SceneState {
             whatif_active: false,
             scenarios,
             active_scenario: None,
-            flow_baseline: flow::FlowSolutions::default(),
-            flow_active: flow::FlowSolutions::default(),
+            flow_baseline: Arc::new(RwLock::new(flow::FlowSolutions::default())),
+            flow_active: Arc::new(RwLock::new(flow::FlowSolutions::default())),
             flow_cycle: None,
             whatif_stale: Vec::new(),
             whatif_nodes: HashMap::new(),
+            frozen: Vec::new(),
             block_collapsed: std::collections::HashSet::new(),
             desc_expanded: std::collections::HashSet::new(),
             analysis: AnalysisState::new(),
@@ -371,21 +460,42 @@ impl SceneState {
             storage,
             undo_tags: VecDeque::new(),
             pending_undo_tag: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            flow_worker: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            flow_pending: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            flow_generation: 0,
         };
         // FR-013: первичный пересчёт формул при загрузке (результат не
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
         // FR-014: пересчёт — живой propagator графа потока
         scene.recompute_flow();
+        // FR-064 P2: восстановление freeze-снимков по persisted именам
+        // (пересчёт каждого сценария против персистентного канваса).
+        let frozen_names = canvas_core::whatif::frozen_from_canvas(&scene.canvas);
+        if !frozen_names.is_empty() {
+            scene.restore_frozen(&frozen_names);
+        }
         scene
     }
 
     /// FR-014: живой пересчёт графа потока значений (инвариант live — в
-    /// пределах одного кадра). Заполняет `expr_results` (результаты формул
-    /// всех expr-нод, с входами value-рёбер) и `expr_line_results`
+    /// пределах 1–2 кадров, FR-064). Заполняет `expr_results` (результаты
+    /// формул всех expr-нод, с входами value-рёбер) и `expr_line_results`
     /// (построчные результаты Numi-листов — строки видят входы ноды).
     /// Запускается после ЛЮБОЙ мутации формул или топологии (правка
     /// текста/формулы, рёбра, удаление нод, undo) — propagator чистый,
     /// полный пересчёт ≤1000 нод <10 мс (SPEC §6.3).
+    ///
+    /// FR-064 P1: при подключённом воркере тяжёлые прогоны
+    /// [`flow::propagate_with_lines`] (baseline + active) уезжают на
+    /// воркер-тред, метод возвращается сразу; выводка O(N)
+    /// (`expr_results`/`analysis`/`bundles`/diff волны) выполняется в
+    /// [`SceneState::complete_flow_recompute`] по готовности пары снимков.
+    /// Метод остаётся ЕДИНСТВЕННЫМ редактором производных кэшей (план §5.4).
+    /// Без воркера (wasm/тесты/headless/фолбэк) — синхронный путь как
+    /// раньше.
     pub fn recompute_flow(&mut self) {
         // PRD-0007 (AC-3.3): любая мутация модели — новая ревизия (обе ветки
         // выхода: цикл и штатная); кэш explain-оверлея сравнивает её со
@@ -399,7 +509,25 @@ impl SceneState {
         // даёт волну вниз — демо-критерий FR-050: «изменил DAU → видно
         // распространение»).
         let prev_results = self.expr_results.clone();
-        let prev_solutions = self.flow_active.clone();
+        let prev_solutions = read_flow(&self.flow_active).clone();
+        // FR-017: активный сценарий → построчные подмены (протухшие
+        // отфильтрованы — тихая деградация, маркеры в whatif_stale).
+        let (whatif, stale) = self.active_whatif_overrides();
+        // FR-064 P1: воркер подключён — запрос тяжёлых прогонов ему,
+        // лёгкий выход (производные кэши обновятся по готовности снимков).
+        // Клоны контекста — только при живом воркере (sync-путь без воркера
+        // забирает значения по значению, лишних копий нет).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.flow_worker.is_some()
+            && self.request_flow_recompute(
+                &whatif,
+                stale.clone(),
+                prev_results.clone(),
+                prev_solutions.clone(),
+            )
+        {
+            return;
+        }
         // FR-017 (гипотеза Q9): дельты — против ЧИСТОГО базового пересчёта
         // (не снапшота при входе): любая мутация канваса пересчитывает обе
         // карты заново, дельты консистентны текущему `.canvas`.
@@ -407,41 +535,66 @@ impl SceneState {
             match flow::propagate_with_lines(&self.canvas, &flow::WhatIfOverrides::default()) {
                 Ok(solutions) => solutions,
                 Err(cycle) => {
-                    // UI и MCP блокируют создание value-циклов; сюда попадаем
-                    // только из чужих .canvas-файлов — деградация до изолированного
-                    // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
-                    tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
-                    self.flow_baseline = flow::FlowSolutions::default();
-                    self.flow_active = flow::FlowSolutions::default();
-                    self.flow_cycle = Some(cycle);
-                    self.whatif_stale = Vec::new();
-                    self.whatif_nodes.clear();
-                    self.recompute_all_expr();
-                    self.param_spills.clear();
-                    self.auto_rows.clear();
-                    self.unmapped_edges.clear();
-                    // FR-050 Н9-1 (этап E): поток недоступен (цикл) — волна
-                    // каскада не строится (нет топологии потока); сравнение
-                    // итогов продолжится со следующего штатного пересчёта.
-                    self.flow_changed_nodes.clear();
-                    // FR-016: поток недоступен (цикл) — анализ пуст: без
-                    // FlowSolutions детекции не на чем (честное отсутствие, не
-                    // ложное «всё здорово»).
-                    self.analysis.clear();
-                    // FR-042: кэш пучков — в обеих ветках выхода пересчёта
-                    // (мутация возможна и при цикле потока)
-                    self.bundles = EdgeBundleIndex::build(&self.canvas);
-                    self.apply_result_reserve();
+                    self.apply_flow_cycle(cycle);
                     return;
                 }
             };
-        // FR-017: активный сценарий → построчные подмены (протухшие
-        // отфильтрованы — тихая деградация, маркеры в whatif_stale).
-        let (whatif, stale) = self.active_whatif_overrides();
-        let active = if whatif.line_exprs.is_empty() && whatif.node_values.is_empty() {
+        let active = self.compute_active(&whatif, &baseline);
+        self.apply_flow_pair(
+            baseline,
+            active,
+            whatif,
+            stale,
+            prev_results,
+            prev_solutions,
+        );
+    }
+
+    /// FR-064 P1: деградация при цикле value-рёбер — общая для sync-пути и
+    /// для ветки воркера (база не считается): изолированный расчёт (FR-013)
+    /// с предупреждением (правило AGENTS: фолбэк + warn).
+    fn apply_flow_cycle(&mut self, cycle: flow::CycleError) {
+        // UI и MCP блокируют создание value-циклов; сюда попадаем
+        // только из чужих .canvas-файлов — деградация до изолированного
+        // расчёта (FR-013) с предупреждением (правило AGENTS: фолбэк + warn)
+        tracing::warn!(cycle = %cycle, "цикл value-рёбер — расчёт без потока");
+        *write_flow(&self.flow_baseline) = flow::FlowSolutions::default();
+        *write_flow(&self.flow_active) = flow::FlowSolutions::default();
+        self.flow_cycle = Some(cycle);
+        self.whatif_stale = Vec::new();
+        self.whatif_nodes.clear();
+        self.recompute_all_expr();
+        self.param_spills.clear();
+        self.auto_rows.clear();
+        self.unmapped_edges.clear();
+        // FR-050 Н9-1 (этап E): поток недоступен (цикл) — волна
+        // каскада не строится (нет топологии потока); сравнение
+        // итогов продолжится со следующего штатного пересчёта.
+        self.flow_changed_nodes.clear();
+        // FR-016: поток недоступен (цикл) — анализ пуст: без
+        // FlowSolutions детекции не на чем (честное отсутствие, не
+        // ложное «всё здорово»).
+        self.analysis.clear();
+        // FR-042: кэш пучков — в обеих ветках выхода пересчёта
+        // (мутация возможна и при цикле потока)
+        self.bundles = EdgeBundleIndex::build(&self.canvas);
+        self.apply_result_reserve();
+    }
+
+    /// FR-017: пересчёт активного сценария. Пустые подмены — база (нулевая
+    /// дельта); цикл из подмен невозможен (граф тот же), но страховка:
+    /// показываем базу, не падая. Общая точка sync-пути и fallback'а
+    /// воркера — одинаковое поведение обоих путей (контракт FR-064:
+    /// «sync-результат побитово идентичен»).
+    fn compute_active(
+        &self,
+        whatif: &flow::WhatIfOverrides,
+        baseline: &flow::FlowSolutions,
+    ) -> flow::FlowSolutions {
+        if whatif.line_exprs.is_empty() && whatif.node_values.is_empty() {
             baseline.clone()
         } else {
-            match flow::propagate_with_lines(&self.canvas, &whatif) {
+            match flow::propagate_with_lines(&self.canvas, whatif) {
                 Ok(solutions) => solutions,
                 // Цикл из подмен невозможен (граф тот же), но страховка:
                 // показываем базу, не падая
@@ -450,13 +603,32 @@ impl SceneState {
                     baseline.clone()
                 }
             }
-        };
-        self.flow_baseline = baseline;
-        self.flow_active = active;
+        }
+    }
+
+    /// FR-064 P1: хвост пересчёта — публикация пары снимков в double buffer
+    /// + выводка O(N) (остаётся на UI-треде, план §5.4).
+    ///
+    /// Единая точка и для sync-пути, и для завершения запроса воркера —
+    /// оба пути дают идентичное состояние сцены.
+    fn apply_flow_pair(
+        &mut self,
+        baseline: flow::FlowSolutions,
+        active: flow::FlowSolutions,
+        whatif: flow::WhatIfOverrides,
+        stale: Vec<StaleOverride>,
+        prev_results: ExprResults,
+        prev_solutions: flow::FlowSolutions,
+    ) {
+        // FR-064 P1: публикация снимков double buffer — до выводки, чтобы
+        // читатели увидели новую пару атомарно (RwLock гарантирует
+        // целостность каждого снимка; выводка ниже консистентна ей же).
+        *write_flow(&self.flow_baseline) = baseline;
+        *write_flow(&self.flow_active) = active;
         // PRD-0007 (AC-2.4): цикл кончился — explain строится по значениям.
         self.flow_cycle = None;
         self.whatif_stale = stale;
-        let solutions = &self.flow_active;
+        let solutions = read_flow(&self.flow_active);
         self.expr_results = outputs_to_results(&solutions.outputs);
         // FR-050 Н9-1 (этап E): детект изменений значений — seeds волны
         // каскада. Три наблюдаемых вывода: узловой итог (expr_results),
@@ -495,7 +667,7 @@ impl SceneState {
         // FR-016 (CP5): анализ узких мест — чистая функция над теми же
         // решениями (значения + именованные выходы utilization). Пороги —
         // дефолт документа FR-016; кастомизация — v2 (конфиг в .canvas).
-        self.analysis = analyze::analyze(&self.canvas, solutions, &AnalysisConfig::default());
+        self.analysis = analyze::analyze(&self.canvas, &solutions, &AnalysisConfig::default());
         self.expr_line_results.clear();
         for node in &self.canvas.nodes {
             let text = node.text.clone().unwrap_or_default();
@@ -542,7 +714,7 @@ impl SceneState {
                 .map(|spill| {
                     // Значение ребра-источника — что реально пролито
                     // в параметр (не локальный RHS строки).
-                    let value = spill_edge_value(solutions, &spill).map(|v| v.to_string());
+                    let value = spill_edge_value(&solutions, &spill).map(|v| v.to_string());
                     // Н9-2: путь «Объект.Поле» для тултипа «пролито: …».
                     let obj = canvas_core::dataref::qualified_obj_name(
                         &self.canvas,
@@ -587,7 +759,7 @@ impl SceneState {
         // рендер — этап D.
         let mut auto_rows: HashMap<String, Vec<flow::AutoRow>> = HashMap::new();
         for node in &self.canvas.nodes {
-            let rows = flow::auto_rows(&self.canvas, &node.id, solutions);
+            let rows = flow::auto_rows(&self.canvas, &node.id, &solutions);
             if rows.is_empty() {
                 continue;
             }
@@ -599,17 +771,18 @@ impl SceneState {
         // ровно одну ноду, но фильтр стоит дёшево и страхует порядок).
         let mut unmapped_edges: Vec<String> = Vec::new();
         for node in &self.canvas.nodes {
-            for input in flow::unmapped_inputs(&self.canvas, &node.id, solutions) {
+            for input in flow::unmapped_inputs(&self.canvas, &node.id, &solutions) {
                 if !unmapped_edges.contains(&input.edge_id) {
                     unmapped_edges.push(input.edge_id);
                 }
             }
         }
         self.unmapped_edges = unmapped_edges;
+        // Заимствование `solutions` закончено — ниже мутации сцены.
+        drop(solutions);
         // FR-050 Р-4 (этап D): рост высоты под авто-строки — growth-only
         // (как CR-012): карточка обязана вместить строку-проекцию, иначе
         // она обрежется клипом тела; достаточная высота не трогается.
-        // Здесь — после конца заимствования `solutions` (мутация канваса).
         for index in 0..self.canvas.nodes.len() {
             self.ensure_spill_rows_reserve(index);
         }
@@ -645,6 +818,223 @@ impl SceneState {
         self.flow_computed = true;
     }
 
+    // --- FR-064 P1: сценарный воркер (desktop-only) ------------------------
+
+    /// FR-064 P1: подключить воркер (вызывает приложение в main() после
+    /// создания `EventLoopProxy`; sync-фолбэк остаётся на все случаи
+    /// отказа/таймаута/паники воркера). Повторный вызов подменяет хэндл.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn attach_flow_worker(&mut self, worker: crate::worker::FlowWorkerHandle) {
+        self.flow_worker = Some(worker);
+    }
+
+    /// FR-064 P1: отправить тяжёлые прогоны воркеру. `true` — запрос ушёл,
+    /// выводка отложена до готовности пары; `false` — воркера нет/он мёртв,
+    /// вызывающий выполняет sync-путь.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_flow_recompute(
+        &mut self,
+        whatif: &flow::WhatIfOverrides,
+        stale: Vec<StaleOverride>,
+        prev_results: ExprResults,
+        prev_solutions: flow::FlowSolutions,
+    ) -> bool {
+        let Some(worker) = self.flow_worker.as_ref() else {
+            return false;
+        };
+        self.flow_generation = self.flow_generation.wrapping_add(1);
+        let generation = self.flow_generation;
+        let canvas = Arc::new(self.canvas.clone());
+        // База — всегда (дельты против чистого пересчёта, гипотеза Q9);
+        // активный сценарий — только с непустыми подменами (иначе активное
+        // решение зеркалит базу, лишний прогон не нужен).
+        let mut sent = worker.request(crate::worker::FlowJob {
+            generation,
+            kind: crate::worker::FlowKind::Baseline,
+            canvas: Arc::clone(&canvas),
+            whatif: flow::WhatIfOverrides::default(),
+        });
+        let has_overrides = !whatif.line_exprs.is_empty() || !whatif.node_values.is_empty();
+        if has_overrides {
+            sent &= worker.request(crate::worker::FlowJob {
+                generation,
+                kind: crate::worker::FlowKind::Active,
+                canvas,
+                whatif: whatif.clone(),
+            });
+        }
+        if !sent {
+            // Воркер мёртв (канал закрыт) — sync-фолбэк + warn (правило
+            // AGENTS «фолбэк + warn»; не молчаливое падение).
+            tracing::warn!("воркер потока недоступен — синхронный пересчёт (фолбэк)");
+            return false;
+        }
+        self.flow_pending = Some(FlowPending {
+            generation,
+            whatif: whatif.clone(),
+            stale,
+            prev_results,
+            prev_solutions,
+            baseline: None,
+            active: if has_overrides {
+                None
+            } else {
+                Some(FlowSlot::MirrorsBaseline)
+            },
+            deadline: Instant::now() + FLOW_WORKER_TIMEOUT,
+        });
+        true
+    }
+
+    /// FR-064 P1: завершить пересчёт по готовности снимков воркера (вызывается
+    /// из обработчика `AppEvent::FlowReady`). Забирает исходы из канала,
+    /// отбрасывает устаревшие поколения; когда пара собрана — публикует
+    /// снимки в double buffer и выполняет выводку O(N) (единый редактор,
+    /// план §5.4). Возвращает `true` — состояние сцены обновилось (нужен
+    /// кадр). При панике/отказе воркера — sync-фолбэк + `warn`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn complete_flow_recompute(&mut self) -> bool {
+        let Some(worker) = self.flow_worker.as_ref() else {
+            return false;
+        };
+        let Some(mut pending) = self.flow_pending.take() else {
+            // Нечего завершать; попутно дреним чужие/устаревшие исходы.
+            let _ = worker.take_outcomes();
+            return false;
+        };
+        for outcome in worker.take_outcomes() {
+            match outcome {
+                crate::worker::FlowOutcome::Done {
+                    generation,
+                    kind,
+                    solutions,
+                } if generation == pending.generation => match kind {
+                    crate::worker::FlowKind::Baseline => {
+                        pending.baseline = Some(FlowSlot::Done(solutions));
+                    }
+                    crate::worker::FlowKind::Active => {
+                        pending.active = Some(FlowSlot::Done(solutions));
+                    }
+                },
+                crate::worker::FlowOutcome::Panicked { generation, kind }
+                    if generation == pending.generation =>
+                {
+                    match kind {
+                        crate::worker::FlowKind::Baseline => {
+                            pending.baseline = Some(FlowSlot::Panicked);
+                        }
+                        crate::worker::FlowKind::Active => {
+                            pending.active = Some(FlowSlot::Panicked);
+                        }
+                    }
+                }
+                // Чужое поколение (пересчёт уже перезаказан) — отброс.
+                _ => {}
+            }
+        }
+        let Some(baseline_slot) = pending.baseline.take() else {
+            // База ещё считается — ждём следующие FlowReady.
+            self.flow_pending = Some(pending);
+            return false;
+        };
+        let Some(active_slot) = pending.active.take() else {
+            self.flow_pending = Some(pending);
+            return false;
+        };
+        // База: цикл value-рёбер (чужой .canvas) — та же деградация, что в
+        // sync-ветке (изолированный расчёт + warn); паника/неполный ответ
+        // воркера — полный sync-фолбэк (контракт FR-064: «воркер паникует →
+        // sync-результат побитово идентичный»).
+        let baseline = match baseline_slot {
+            FlowSlot::Done(Ok(solutions)) => solutions,
+            FlowSlot::Done(Err(cycle)) => {
+                self.apply_flow_cycle(cycle);
+                return true;
+            }
+            FlowSlot::Panicked => {
+                tracing::warn!("паника воркера потока — синхронный пересчёт (фолбэк)");
+                return self.sync_flow_fallback(pending);
+            }
+            FlowSlot::MirrorsBaseline => {
+                // База не может зеркалить саму себя — некорректный ответ
+                // воркера; деградация как при панике.
+                tracing::warn!(
+                    "воркер потока вернул неполный ответ — синхронный пересчёт (фолбэк)"
+                );
+                return self.sync_flow_fallback(pending);
+            }
+        };
+        // Активное решение: цикл из подмен невозможен (граф тот же), но
+        // страховка — показываем базу (симметрия sync-пути).
+        let active = match active_slot {
+            FlowSlot::Done(Ok(solutions)) => solutions,
+            FlowSlot::Done(Err(cycle)) => {
+                tracing::warn!(cycle = %cycle, "what-if пересчёт отклонён — показана база");
+                baseline.clone()
+            }
+            FlowSlot::MirrorsBaseline => baseline.clone(),
+            FlowSlot::Panicked => {
+                tracing::warn!("паника воркера потока — синхронный пересчёт (фолбэк)");
+                return self.sync_flow_fallback(pending);
+            }
+        };
+        self.apply_flow_pair(
+            baseline,
+            active,
+            pending.whatif,
+            pending.stale,
+            pending.prev_results,
+            pending.prev_solutions,
+        );
+        true
+    }
+
+    /// FR-064 P1: тик обслуживания воркера (вызывается из `about_to_wait`):
+    /// таймаут зависшего запроса → sync-фолбэк + `warn`; попутный дренаж
+    /// готовых исходов (если wake-событие потерялось). `true` — сцена
+    /// обновилась (нужен кадр).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn flow_worker_tick(&mut self) -> bool {
+        if self
+            .flow_pending
+            .as_ref()
+            .is_some_and(|pending| Instant::now() >= pending.deadline)
+        {
+            tracing::warn!("таймаут воркера потока — синхронный пересчёт (фолбэк)");
+            if let Some(pending) = self.flow_pending.take() {
+                return self.sync_flow_fallback(pending);
+            }
+            return false;
+        }
+        self.complete_flow_recompute()
+    }
+
+    /// FR-064 P1: sync-фолбэк — тяжёлые прогоны на вызвавшем (UI) треде,
+    /// состояние идентично штатному пути (тест worker_smoke проверяет
+    /// побитовую идентичность). Правило AGENTS: деградация = sync + warn
+    /// (warn уже отправлен вызывающим).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_flow_fallback(&mut self, pending: FlowPending) -> bool {
+        let baseline =
+            match flow::propagate_with_lines(&self.canvas, &flow::WhatIfOverrides::default()) {
+                Ok(solutions) => solutions,
+                Err(cycle) => {
+                    self.apply_flow_cycle(cycle);
+                    return true;
+                }
+            };
+        let active = self.compute_active(&pending.whatif, &baseline);
+        self.apply_flow_pair(
+            baseline,
+            active,
+            pending.whatif,
+            pending.stale,
+            pending.prev_results,
+            pending.prev_solutions,
+        );
+        true
+    }
+
     /// FR-017: собрать what-if представления нод активного сценария
     /// (рендер): виртуальный исходник, индексы подменённых строк, дельты
     /// строк и узлового итога в полном формате «было → стало (+Δ)».
@@ -670,11 +1060,14 @@ impl SceneState {
             let refs: Vec<(usize, &String)> = lines.iter().map(|(l, e)| (*l, e)).collect();
             let text = flow::whatif_virtual_text(&base_text, &refs);
             let mut line_deltas = Vec::new();
+            // FR-064 P1: double buffer — чтение снимков через read()-гарды.
+            let base_solutions = read_flow(&self.flow_baseline);
+            let active_solutions = read_flow(&self.flow_active);
             for (line, _) in &lines {
                 let key = (node_id.clone(), *line);
                 let (Some(base), Some(whatif_value)) = (
-                    self.flow_baseline.lines.get(&key),
-                    self.flow_active.lines.get(&key),
+                    base_solutions.lines.get(&key),
+                    active_solutions.lines.get(&key),
                 ) else {
                     continue;
                 };
@@ -692,8 +1085,8 @@ impl SceneState {
                 .position(|node| node.id == node_id)
                 .filter(|index| self.node_shows_result_footer(*index))
                 .and_then(|_| {
-                    let base = self.flow_baseline.outputs.get(&node_id);
-                    let whatif_value = self.flow_active.outputs.get(&node_id);
+                    let base = base_solutions.outputs.get(&node_id);
+                    let whatif_value = active_solutions.outputs.get(&node_id);
                     match (base, whatif_value) {
                         (Some(Ok(base)), Some(Ok(whatif_value))) => {
                             whatif_full_delta(base, whatif_value)
@@ -701,6 +1094,8 @@ impl SceneState {
                         _ => None,
                     }
                 });
+            drop(base_solutions);
+            drop(active_solutions);
             map.insert(
                 node_id.clone(),
                 WhatIfNode {
@@ -754,6 +1149,74 @@ impl SceneState {
     pub fn whatif_activate(&mut self, index: Option<usize>) {
         self.active_scenario = index;
         self.recompute_flow();
+    }
+
+    // --- FR-064 P2 (FR-017 v2): freeze/сравнение ---------------------------
+
+    /// FR-064 P2: заморозить активный сценарий — снимок активных решений
+    /// потока за Arc (правки канваса значения не двигают). Runtime-действие:
+    /// персистентность имён — вызывающий (`frozen_to_canvas` + undo-шаг,
+    /// паттерн whatif_create_scenario). `Err` — сценария нет / уже заморожен.
+    pub fn whatif_freeze_active(&mut self) -> Result<String, String> {
+        let name = match self.active_scenario {
+            Some(index) => self
+                .scenarios
+                .get(index)
+                .map(|scenario| scenario.name.clone())
+                .ok_or_else(|| "сценарий не найден".to_owned())?,
+            None => "База".to_owned(),
+        };
+        if self.frozen.iter().any(|snapshot| snapshot.name == name) {
+            return Err(format!("сценарий уже заморожен: {name}"));
+        }
+        // Снимок — копия текущих активных решений (активное решение при
+        // «Базе» зеркалит базу — заморозка честная в обоих случаях).
+        let solutions = read_flow(&self.flow_active).clone();
+        self.frozen.push(canvas_core::whatif::FrozenScenario {
+            name: name.clone(),
+            solutions: Arc::new(solutions),
+        });
+        Ok(name)
+    }
+
+    /// FR-064 P2: снять заморозку по имени. `true` — снято (заморозки не
+    /// было — `false`, no-op).
+    pub fn whatif_unfreeze(&mut self, name: &str) -> bool {
+        let before = self.frozen.len();
+        self.frozen.retain(|snapshot| snapshot.name != name);
+        self.frozen.len() != before
+    }
+
+    /// FR-064 P2: имена замороженных снимков (порядок заморозки).
+    pub fn whatif_frozen_names(&self) -> Vec<String> {
+        self.frozen
+            .iter()
+            .map(|snapshot| snapshot.name.clone())
+            .collect()
+    }
+
+    /// FR-064 P2: заморожен ли сценарий с таким именем.
+    pub fn whatif_is_frozen(&self, name: &str) -> bool {
+        self.frozen.iter().any(|snapshot| snapshot.name == name)
+    }
+
+    /// FR-064 P2: восстановить freeze-снимки по persisted именам (при
+    /// загрузке сцены): пересчёт каждого сценария против персистентного
+    /// канваса (детерминизм propagator'а — значения воспроизводятся).
+    /// Отсутствующий сценарий пропускается (имя не восстанавливается).
+    pub fn restore_frozen(&mut self, names: &[String]) {
+        for name in names {
+            let snapshot = self
+                .scenarios
+                .iter()
+                .find(|scenario| &scenario.name == name)
+                .and_then(|scenario| {
+                    canvas_core::whatif::freeze_scenario(&self.canvas, scenario).ok()
+                });
+            if let Some(snapshot) = snapshot {
+                self.frozen.push(snapshot);
+            }
+        }
     }
 
     /// FR-017: новый именованный сценарий (лимит 2–3 пользовательских —
@@ -922,12 +1385,13 @@ impl SceneState {
         }
     }
 
-    /// FR-061 этап D (D-8): текст описания ноды (Q3, решение владельца
-    /// 2026-09-23 — «desc→манифест→проза»): `canvasdesk.desc` → описание
-    /// манифеста шаблона (`template_descs` по снимку id) → первый
-    /// проза-абзац текста ноды ([`canvas_core::expr::first_prose_paragraph`]
-    /// — та же функция, что в рендере: измерение и рендер не разъезжаются,
-    /// I-2). Пусто — зоны описания нет.
+    /// FR-061 этап D (D-8): текст описания ноды — `canvasdesk.desc` →
+    /// описание манифеста шаблона (`template_descs` по снимку id).
+    /// ПРИЁМКА T9 (фидбэк владельца 2026-09-24): prose-фолбэк «первый
+    /// проза-абзац» УБРАН — синхронно с рендером (text.rs): фолбэк рисовал
+    /// первый абзац тела дважды (зона описания + тело — дублирование
+    /// текста). Измерение и рендер остаются на одном источнике (I-2).
+    /// Пусто — зоны описания нет.
     pub(crate) fn node_desc_text(&self, index: usize) -> Option<String> {
         let node = self.canvas.nodes.get(index)?;
         node.canvasdesk
@@ -936,11 +1400,6 @@ impl SceneState {
             .or_else(|| {
                 node.template()
                     .and_then(|t| self.template_descs.get(&t.id).cloned())
-            })
-            .or_else(|| {
-                node.text
-                    .as_deref()
-                    .and_then(canvas_core::expr::first_prose_paragraph)
             })
             .filter(|d| !d.trim().is_empty())
     }

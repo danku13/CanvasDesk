@@ -137,8 +137,7 @@ use canvas_render::{
     SpillView, StageTransform,
 };
 use canvas_scene::{
-    fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
-    SceneState,
+    fit_template_node_height, formula_line_indices, split_formula_lines, SceneState,
 };
 
 /// FR-052 (этап U2 PRD-0009): реестр поверхностей экрана — единый диспетчер.
@@ -1246,6 +1245,17 @@ pub enum AppEvent {
     /// На не-Windows листенера нет — вариант не конструируется (dead_code).
     #[cfg_attr(not(windows), allow(dead_code))]
     InstanceExit,
+    /// FR-064 P1: воркер потока отдал снимок решений — UI-тред завершает
+    /// пересчёт (публикация double buffer + выводка O(N)) в
+    /// `SceneState::complete_flow_recompute` (истина — в outcomes-канале
+    /// воркера; полезная нагрузка события — информационный снимок для
+    /// wake-up, паттерн EventLoopProxy). Desktop-only: на wasm воркера нет
+    /// (sync-путь — контракт плана волны S §5.8).
+    #[cfg(not(target_arch = "wasm32"))]
+    FlowReady {
+        solutions: Arc<canvas_core::flow::FlowSolutions>,
+        kind: canvas_scene::worker::FlowKind,
+    },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -1857,6 +1867,9 @@ pub struct App {
     /// (логические px + данные тултипа источника). Заполняется после
     /// рендера (паттерн expr_error_hits), оверлей показывает «пролито: …».
     spill_hits: Vec<SpillHit>,
+    /// FR-061 коммит 3: зоны усечённых формул с прошлого кадра (лестница
+    /// §3.4, Q8) — тултип строки показывает полную формулу.
+    ellipsis_hits: Vec<LineErrorHit>,
     /// FR-061 хвосты (D-7/D-8): кликабельные зоны тела (заголовок блока,
     /// экспандер описания; логические px) — с прошлого кадра (паттерн
     /// spill_hits; отставание в кадр незаметно).
@@ -2211,6 +2224,7 @@ impl App {
             bundle_hover: None,
             expr_error_hits: Vec::new(),
             spill_hits: Vec::new(),
+            ellipsis_hits: Vec::new(),
             body_hits: Vec::new(),
             edge_drag: None,
             param_drop: None,
@@ -3090,17 +3104,46 @@ impl App {
     /// считается по ТОЙ ЖЕ строке, что рисуется).
     fn whatif_bar_layout(&self) -> whatif_ui::BarLayout {
         let viewport = self.viewport_logical();
+        // FR-064 P2: замороженные сценарии — маркер «❄» в подписи чипа
+        // (ширина чипа измеряется по той же строке, что рисуется).
         let names: Vec<String> = self
             .scene
             .scenarios
             .iter()
-            .map(|scenario| scenario.name.clone())
+            .map(|scenario| {
+                if self.scene.whatif_is_frozen(&scenario.name) {
+                    format!("{} ❄", scenario.name)
+                } else {
+                    scenario.name.clone()
+                }
+            })
             .collect();
         let count = self.scene.whatif_override_count();
         let counter_label = self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
+        // FR-064 P2: лейбл кнопки заморозки — по состоянию активного сценария
+        // (измеряется та же строка, что рисуется — фикс FR-053).
+        let freeze_label = match self.scene.active_scenario {
+            Some(index)
+                if self
+                    .scene
+                    .scenarios
+                    .get(index)
+                    .is_some_and(|scenario| self.scene.whatif_is_frozen(&scenario.name)) =>
+            {
+                self.tr(keys::WHATIF_UNFREEZE)
+            }
+            _ => self.tr(keys::WHATIF_FREEZE),
+        };
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        whatif_ui::bar_layout(&names, &counter_label, viewport, &mut measurer, &mut fs)
+        whatif_ui::bar_layout(
+            &names,
+            &counter_label,
+            freeze_label,
+            viewport,
+            &mut measurer,
+            &mut fs,
+        )
     }
 
     /// Подпись ноды для панелей what-if: первая строка текста (обрезка),
@@ -3182,73 +3225,95 @@ impl App {
     /// подменённых переменных всех сценариев; значения — прогон
     /// `propagate_with_lines` с подменами каждого сценария (по прогону на
     /// сценарий — 3–5 прогонов <10 мс, допустимо по роадмапу).
+    ///
+    /// FR-064 P2 (FR-017 v2): замороженный сценарий показывается ПО
+    /// СНИМКУ (pinned значения — правки канваса их не двигают); строки
+    /// таблицы строит ядро ([`canvas_core::whatif::compare_scenarios`]):
+    /// построчные переменные + изменившиеся узловые итоги (дельты
+    /// downstream — эталон ADR-0006 №2), дельты — формат FR-017.
+    /// Замороженные сценарии — маркер «❄» в шапке колонки.
     fn whatif_compare_table(&self) -> (Vec<String>, Vec<Vec<String>>) {
         let mut columns = vec![
             self.tr(keys::WHATIF_COLUMN_VAR).to_owned(),
             self.tr(keys::WHATIF_BASE).to_owned(),
         ];
+        // Снимок на колонку: заморожен — pinned-снимок; иначе свежий прогон
+        // (пустые подмены — значения базы: колонка честно равна базе).
+        let mut snapshots: Vec<canvas_core::whatif::FrozenScenario> = Vec::new();
         for scenario in &self.scene.scenarios {
-            columns.push(scenario.name.clone());
-        }
-        // Ключи: union валидных подмен всех сценариев.
-        let mut keys: Vec<(String, usize)> = Vec::new();
-        for scenario in &self.scene.scenarios {
-            for key in canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario).keys() {
-                if !keys.contains(key) {
-                    keys.push(key.clone());
-                }
-            }
-        }
-        keys.sort();
-        // Одно решение на сценарий (пустой сценарий — None: все ячейки «—»).
-        let per_scenario: Vec<Option<flow::FlowSolutions>> = self
-            .scene
-            .scenarios
-            .iter()
-            .map(|scenario| {
+            let marker = if self.scene.whatif_is_frozen(&scenario.name) {
+                " ❄"
+            } else {
+                ""
+            };
+            columns.push(format!("{}{}", scenario.name, marker));
+            if let Some(frozen) = self
+                .scene
+                .frozen
+                .iter()
+                .find(|snapshot| snapshot.name == scenario.name)
+            {
+                snapshots.push(canvas_core::whatif::FrozenScenario {
+                    name: scenario.name.clone(),
+                    solutions: Arc::clone(&frozen.solutions),
+                });
+            } else {
                 let line_exprs =
                     canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario);
-                if line_exprs.is_empty() {
-                    return None;
-                }
                 let overrides = flow::WhatIfOverrides {
                     line_exprs,
                     ..Default::default()
                 };
-                flow::propagate_with_lines(&self.scene.canvas, &overrides).ok()
-            })
-            .collect();
-        let base_lines = &self.scene.flow_baseline.lines;
-        let rows: Vec<Vec<String>> = keys
+                let solutions =
+                    flow::propagate_with_lines(&self.scene.canvas, &overrides).unwrap_or_default();
+                snapshots.push(canvas_core::whatif::FrozenScenario {
+                    name: scenario.name.clone(),
+                    solutions: Arc::new(solutions),
+                });
+            }
+        }
+        // Ключи: union валидных подмен всех сценариев (построчные
+        // переменные таблицы; узловые итоги добавит ядро по дифу).
+        let mut line_keys: Vec<(String, usize)> = Vec::new();
+        for scenario in &self.scene.scenarios {
+            for key in canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario).keys() {
+                if !line_keys.contains(key) {
+                    line_keys.push(key.clone());
+                }
+            }
+        }
+        line_keys.sort();
+        // FR-064 P2: диф базы со снимками — единый источник в ядре.
+        let base_solutions = canvas_scene::read_flow(&self.scene.flow_baseline);
+        let comparison =
+            canvas_core::whatif::compare_scenarios(&base_solutions, &snapshots, &line_keys);
+        let rows: Vec<Vec<String>> = comparison
+            .rows
             .iter()
-            .map(|(node_id, line)| {
-                let label = format!("{} : стр. {}", self.whatif_node_label(node_id), line + 1);
-                let key = (node_id.clone(), *line);
-                let base = base_lines.get(&key);
-                let mut row = vec![
-                    label,
-                    base.map(|value| value.to_string())
-                        .unwrap_or_else(|| "—".to_owned()),
-                ];
-                for solutions in &per_scenario {
-                    let Some(solutions) = solutions else {
-                        row.push("—".to_owned());
+            .map(|row| {
+                let label = match row.line {
+                    Some(line) => {
+                        format!("{} : стр. {}", self.whatif_node_label(&row.node), line + 1)
+                    }
+                    None => format!(
+                        "{} · {}",
+                        self.whatif_node_label(&row.node),
+                        self.tr(keys::WHATIF_ROW_TOTAL)
+                    ),
+                };
+                let mut cells = vec![label];
+                for (index, value) in row.values.iter().enumerate() {
+                    let Some(value) = value else {
+                        cells.push("—".to_owned());
                         continue;
                     };
-                    let Some(value) = solutions.lines.get(&key) else {
-                        row.push("—".to_owned());
-                        continue;
-                    };
-                    let cell = match base {
-                        Some(base) => match whatif_delta_str(base, value) {
-                            Some(delta) => format!("{value} ({delta})"),
-                            None => value.to_string(),
-                        },
+                    let cell = match &row.deltas[index] {
+                        Some(delta) => format!("{value} ({delta})"),
                         None => value.to_string(),
                     };
-                    row.push(cell);
+                    cells.push(cell);
                 }
-                row
+                cells
             })
             .collect();
         (columns, rows)
@@ -3318,6 +3383,38 @@ impl App {
                     }
                     self.scene.recompute_flow();
                 }
+            }
+            BarAction::Freeze => {
+                // FR-064 P2: заморозка/разморозка активного сценария —
+                // снимок решений за Arc (runtime); имена — в
+                // `canvasdesk.whatif.frozen` (персистентность, тот же
+                // undo-шаг паттерн, что у create-scenario).
+                let Some(index) = self.scene.active_scenario else {
+                    return;
+                };
+                let Some(name) = self.scene.scenarios.get(index).map(|s| s.name.clone()) else {
+                    return;
+                };
+                let snapshot = self.scene.canvas.clone();
+                let was_frozen = self.scene.whatif_is_frozen(&name);
+                if was_frozen {
+                    self.scene.whatif_unfreeze(&name);
+                } else if let Err(err) = self.scene.whatif_freeze_active() {
+                    self.show_toast(err);
+                    self.request_redraw();
+                    return;
+                }
+                let frozen_names = self.scene.whatif_frozen_names();
+                canvas_core::whatif::frozen_to_canvas(&mut self.scene.canvas, &frozen_names);
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                    self.scene.mark_dirty();
+                }
+                self.show_toast(if was_frozen {
+                    self.trf(keys::WHATIF_UNFROZEN_TOAST, &[("{name}", &name)])
+                } else {
+                    self.trf(keys::WHATIF_FROZEN_TOAST, &[("{name}", &name)])
+                });
             }
             BarAction::Compare => {
                 self.whatif_compare_open = !self.whatif_compare_open;
@@ -3594,10 +3691,26 @@ impl App {
             self.whatif_list_open && count > 0,
         );
         // Кнопки. Apply/Сброс — без активного сценария/подмен приглушены.
+        // FR-064 P2: лейбл заморозки — по состоянию (та же строка, что в
+        // раскладке); кнопка приглушена без активного сценария.
         let has_overrides = active.is_some() && count > 0;
+        let has_active = active.is_some();
+        let freeze_label = match active {
+            Some(index)
+                if self
+                    .scene
+                    .scenarios
+                    .get(index)
+                    .is_some_and(|scenario| self.scene.whatif_is_frozen(&scenario.name)) =>
+            {
+                self.tr(keys::WHATIF_UNFREEZE)
+            }
+            _ => self.tr(keys::WHATIF_FREEZE),
+        };
         let buttons = [
             (layout.apply, self.tr(keys::WHATIF_APPLY), has_overrides),
             (layout.reset, self.tr(keys::WHATIF_RESET), has_overrides),
+            (layout.freeze, freeze_label, has_active),
             (
                 layout.compare,
                 self.tr(keys::WHATIF_COMPARE),
@@ -4720,7 +4833,9 @@ impl App {
         else {
             return None;
         };
-        let solutions = &self.scene.flow_active;
+        // FR-064 P1: double buffer — снимок активных решений (рендер
+        // читает через read()-гард вместо owned-поля).
+        let solutions = canvas_scene::read_flow(&self.scene.flow_active);
         if let Some(port) = from_port {
             // Построчный исток — значение строки; футер шаблона
             // (line = None) — узловое значение (ниже, как у ноды целиком)
@@ -4781,7 +4896,8 @@ impl App {
     /// подпись «имя = значение»). Пусто — источник не текстовая нода или
     /// строк без результата (ambiguity нет).
     fn source_formula_lines(&self, from_node: &str) -> Vec<(usize, String)> {
-        let solutions = &self.scene.flow_active;
+        // FR-064 P1: double buffer — снимок активных решений через read()-гард.
+        let solutions = canvas_scene::read_flow(&self.scene.flow_active);
         let Some(node) = self.scene.canvas.node(from_node) else {
             return Vec::new();
         };
@@ -5205,6 +5321,13 @@ impl App {
     /// с прошлого кадра (`expr_error_hits`); отставание в кадр незаметно.
     fn expr_error_hit_at(&self, cursor: [f32; 2]) -> Option<&LineErrorHit> {
         expr_error_hit_at(&self.expr_error_hits, cursor)
+    }
+
+    /// FR-061 коммит 3: зона наведения усечённой формулы под курсором
+    /// (лестница §3.4, Q8), None — мимо. Зоны — с прошлого кадра
+    /// (`ellipsis_hits`); отставание в кадр незаметно.
+    fn formula_ellipsis_hit_at(&self, cursor: [f32; 2]) -> Option<&LineErrorHit> {
+        expr_error_hit_at(&self.ellipsis_hits, cursor)
     }
 
     /// FR-050 Н9-2 (этап D): зона наведения пролитой строки под курсором
@@ -11184,10 +11307,12 @@ impl App {
     /// ВСЕ входы приёмника канваса (панель полная, Р-8) + значения по
     /// адресации из активных решений потока (what-if подмены видны).
     fn stage_calc_model(&self, stage: &MainStageState) -> calc_panel_ui::CalcPanelModel {
+        // FR-064 P1: double buffer — снимок активных решений через read()-гард.
+        let active = canvas_scene::read_flow(&self.scene.flow_active);
         let values = PanelValues {
-            lines: &self.scene.flow_active.lines,
-            named: &self.scene.flow_active.named,
-            outputs: &self.scene.flow_active.outputs,
+            lines: &active.lines,
+            named: &active.named,
+            outputs: &active.outputs,
         };
         calc_panel_ui::build_model(
             &self.scene.canvas,
@@ -12571,9 +12696,8 @@ impl App {
                 .unwrap_or_default();
         }
         if let Some(output) = edge.from_output.as_deref() {
-            return self
-                .scene
-                .flow_active
+            // FR-064 P1: double buffer — снимок активных решений.
+            return canvas_scene::read_flow(&self.scene.flow_active)
                 .named
                 .get(&(edge.from_node.clone(), output.to_owned()))
                 .map(|value| value.to_string())
@@ -13896,17 +14020,24 @@ impl App {
         }
         // X3 (AC-4.2): при активном what-if база (flow_baseline) строится
         // тем же фоновым проходом — дельты в дереве Ready.
-        let base = self
-            .scene
-            .whatif_active
-            .then_some(&self.scene.flow_baseline);
-        let build = spawn_lineage_build(
-            &self.scene.canvas,
-            &self.scene.flow_active,
-            base,
-            self.scene.flow_cycle.as_ref(),
-            root.clone(),
-        );
+        // FR-064 P1: double buffer — снимки через read()-гарды; spawn_
+        // lineage_build клонирует их под гардом (потоку — собственные копии).
+        // Гард'ы — в блоке: после клонирования они не нужны (Drop-типы
+        // держат заимствование до конца скоупа).
+        let build = {
+            let base_buf = self
+                .scene
+                .whatif_active
+                .then(|| canvas_scene::read_flow(&self.scene.flow_baseline));
+            let active_buf = canvas_scene::read_flow(&self.scene.flow_active);
+            spawn_lineage_build(
+                &self.scene.canvas,
+                &active_buf,
+                base_buf.as_deref(),
+                self.scene.flow_cycle.as_ref(),
+                root.clone(),
+            )
+        };
         self.explain = Some(ExplainState::loading(root, revision, build));
         self.request_redraw();
     }
@@ -17218,6 +17349,8 @@ impl App {
                     family: FAMILY,
                     size: DIALOG_BODY_FS,
                     max_width: f32::INFINITY,
+                    // Диалоги — sans (паритет sans_attrs, вес 500).
+                    weight: cosmic_text::Weight::MEDIUM,
                 },
             )
             .height;
@@ -18329,11 +18462,28 @@ impl ApplicationHandler<AppEvent> for App {
                     let port_label = if self.edge_drag.is_none()
                         && self.choice_menu.is_none()
                         && self.expr_error_hit_at(self.cursor).is_none()
+                        && self.formula_ellipsis_hit_at(self.cursor).is_none()
                     {
                         self.port_tooltip_at(self.cursor_world())
                     } else {
                         None
                     };
+                    // FR-061 коммит 3: тултип усечённой формулы (лестница
+                    // §3.4, Q8) — курсор над усечённой строкой узкой ноды:
+                    // полная формула у курсора (нейтральный тон — не ошибка)
+                    if let Some(hit) = self.formula_ellipsis_hit_at(self.cursor) {
+                        let viewport = self.viewport_logical();
+                        let origin_x = (self.cursor[0] + 14.0)
+                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
+                        tooltip_texts.push(OwnedScreenText {
+                            text: hit.message.clone(),
+                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
+                            width: TOOLTIP_WIDTH,
+                            font_size: 13.0,
+                            color: Color::rgb(0xd4, 0xd4, 0xd4),
+                            align: TextAlign::Left,
+                        });
+                    }
                     if let Some(lines) = port_label.clone() {
                         let viewport = self.viewport_logical();
                         let origin_x = (self.cursor[0] + 14.0)
@@ -19086,6 +19236,9 @@ impl ApplicationHandler<AppEvent> for App {
                     // тултип источника («пролито: …») в оверлее следующего
                     // кадра (паттерн expr_error_hits)
                     self.spill_hits = renderer.spill_hits().to_vec();
+                    // FR-061 коммит 3: зоны усечённых формул кадра — тултип
+                    // полной формулы в оверлее следующего кадра
+                    self.ellipsis_hits = renderer.formula_ellipsis_hits().to_vec();
                     // FR-061 хвосты (D-7/D-8): кликабельные зоны тела кадра —
                     // тогглы свёрнутости блока/раскрытости описания
                     self.body_hits = renderer.body_hits().to_vec();
@@ -19136,6 +19289,15 @@ impl ApplicationHandler<AppEvent> for App {
             #[cfg(windows)]
             AppEvent::McpWake => self.on_mcp_wake(),
             AppEvent::Widget(event) => self.on_widget_event(event),
+            // FR-064 P1: воркер отдал снимки — завершить пересчёт
+            // (публикация double buffer + выводка O(N) на UI-треде);
+            // кадр нужен, если состояние сцены обновилось.
+            #[cfg(not(target_arch = "wasm32"))]
+            AppEvent::FlowReady { .. } => {
+                if self.scene.complete_flow_recompute() {
+                    self.request_redraw();
+                }
+            }
             // T15-relaunch: exit-сигнал от нового запуска (single-instance
             // handoff) — штатное завершение: форс-сейв сцены, восстановление
             // иконок, exit. Мьютекс освободится смертью процесса, новый
@@ -19146,6 +19308,13 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.scene.autosave_if_due();
+        // FR-064 P1: тик воркера потока — таймаут зависшего запроса →
+        // sync-фолбэк + warn; попутный дренаж готовых снимков (если
+        // wake-событие потерялось). Дешёвая проверка (Instant-сравнение).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.scene.flow_worker_tick() {
+            self.request_redraw();
+        }
         // M8/W6 (wasm-port §4.2): пока сцена грязная, цикл не засыпает —
         // запланированный кадр держит rAF-цепочку web-цикла живой, иначе
         // about_to_wait не вызывается после последнего события ввода и
@@ -21998,6 +22167,7 @@ mod fr050_stage_e_tests {
                     family: FAMILY,
                     size: DIALOG_BODY_FS,
                     max_width: f32::INFINITY,
+                    weight: cosmic_text::Weight::MEDIUM,
                 },
             )
             .height;

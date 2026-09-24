@@ -214,8 +214,8 @@ mod tests {
     }
 
     /// tools/list отдаёт каталог моста — каждый инструмент диспетчера
-    /// объявлен (40: 26 базовых + analyze_bottlenecks + 9 whatif_* +
-    /// schemes_list/schemes_apply + lineage + explain_number).
+    /// объявлен (native: 41 = 40 + monte_carlo_run FR-066; wasm: 40 —
+    /// реестр без qmc, §5.8: сессия headless не исполняет MC на wasm).
     #[test]
     fn tools_list_advertises_full_catalog() {
         let mut transport = Some(HeadlessSession::new());
@@ -225,10 +225,16 @@ mod tests {
         };
         let parsed: Value = serde_json::from_str(&reply).expect("JSON");
         let tools = parsed["result"]["tools"].as_array().expect("массив tools");
+        // FR-066 §5.8: monte_carlo_run — native-only (фича qmc не
+        // собирается на wasm32)
+        #[cfg(not(target_arch = "wasm32"))]
+        let expected_count = 41;
+        #[cfg(target_arch = "wasm32")]
+        let expected_count = 40;
         assert_eq!(
             tools.len(),
-            40,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 (PRD-0008 Q5 + FR-048 X2 lineage + X6 explain_number)"
+            expected_count,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 (PRD-0008 Q5 + FR-048 X2 lineage + X6 explain_number) + monte_carlo_run (FR-066, native)"
         );
     }
 

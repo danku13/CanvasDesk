@@ -62,6 +62,7 @@
 | Текст | `glyphon` (поверх `cosmic-text`) | Нативная интеграция с wgpu, шейпинг, эмодзи |
 | Пространственный индекс | `rstar` (R-tree) | Hit-testing, viewport culling на 5–10 тыс. нод |
 | Формат канваса | JSON Canvas spec 1.0 (`serde_json`) | Совместимость с Obsidian, human-readable |
+| Статистика (L2, ADR-0008) | `statrs` 0.17 + `rand`/`rand_chacha`/`rand_distr` — за cargo-фичей `stats` в `canvas-core` (FR-063) | Распределения, квантили, доверительные интервалы, детерминированный RNG (ChaCha8, сид `FNV-1a(content) ⊕ scenario_seed`); B2B-сборка без фичи — zero-dep |
 | Метаданные/кэш | `rusqlite` (bundled) | Тамбнейлы-кэш, индекс поиска, сессии |
 | Файловый вотчер | `notify` 6+ | Три бэкенда одним API: ReadDirectoryChangesW (Win), inotify (Linux), FSEvents (macOS); различия нормализуются в canvas-shell |
 | Win32/COM | `windows-rs` (features: Win32_UI_Shell, Win32_Graphics_Dwm, System_Com) | Тамбнейлы, preview handlers, WorkerW — Windows-слой |
@@ -89,7 +90,7 @@ canvasdesk/
 │   ├── canvas-shell/        # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW (cfg(windows))
 │   ├── canvas-preview-host/ # отдельный exe — песочница для IPreviewHandler
 │   ├── canvas-widgets/      # M5: WebView2-хост, bridge, манифесты, снапшоты (cfg(windows))
-│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 39 инструментов канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks; FR-017: whatif_*; PRD-0008 Q5: schemes_list/schemes_apply; PRD-0007 X2/FR-048: lineage)
+│   ├── canvas-mcp/          # MCP-посредник: stdio JSON-RPC ↔ named pipe, 41 инструмент канваса (FR-032: edges_list/edge_get/graph_validate; FR-033: graph_apply; FR-016: analyze_bottlenecks; FR-017: whatif_*; PRD-0008 Q5: schemes_list/schemes_apply; PRD-0007 X2/FR-048: lineage; FR-066: monte_carlo_run — native-only, §5.8)
 │   ├── canvas-scene/        # модель сцены (SceneState) + mcp_dispatch — платформенно-нейтральный, wasm (FR-037/ADR-0012)
 │   ├── canvas-mcp-headless/ # headless MCP-сервер для wasmtime/wasip1 (FR-037) — верификация сессий без Windows
 │   └── canvas-app/          # приложение: event loop, команды, UI-состояние, mcp_dispatch, main()
@@ -202,6 +203,27 @@ input → camera update → world-space culling (rstar query по viewport)
   итеративный обход); в UI — асинхронно (натив — фоновый поток, G5),
   переоткрытие из сессионного кэша ≤ 1 с (G1); индикатор покрытия цепочками
   (F-12, opt-in) — пересчёт по ревизии модели, не на кадр
+- Пересчёт потока (FR-014/FR-064): полный `propagate_with_lines` ≤ 10 мс на
+  1 000 нод. Натив — тяжёлые прогоны (baseline + активный what-if) на
+  воркер-треде с double buffer `Arc<RwLock<FlowSolutions>>`; на UI-треде —
+  выводка O(N) (`expr_results`/`analyze`/`bundles`/diff); live-инвариант:
+  правка → результат в пределах 1–2 кадров (wake `AppEvent::FlowReady`).
+  Деградация = sync-пересчёт на UI-треде + `warn` (отказ/таймаут 3 с/паника
+  воркера; на wasm — штатный sync-путь). Детерминизм: воркер-путь даёт
+  побитово те же числа, что sync (golden-тесты `worker_smoke.rs`).
+- Пересчёт DAG `flow::propagate_with_lines_data` (FR-013/014/029): однопоточный
+  flatten-путь ≤ 10 мс на 1 000 нод (эталоны ADR-0005/0006 ≤45 нод — менее
+  10 мс); параллельный путь (фича `parallel`, `rayon` `par_iter` по ярусам
+  `topo_levels` FR-065) — выигрыш на тяжёлых режимах (сценарные пакеты FR-017
+  v2 сетки 20+ прогонов, Monte Carlo FR-066 10⁴×1000 нод), не на одиночном
+  reval. Критерий архдока §9 M4: ≥2× на 1 000 нод / 4 ядра. Побитово
+  идентичен однопоточному (контракт §5.7.3 collect-then-reduce).
+- MC/QMC-движок (FR-066, фича `qmc`, `flow::propagate_monte_carlo`): 10⁴
+  прогонов эталона ADR-0006 №5 (unit economics, ~45 нод) — **< 1 с / 4 ядра**
+  (чанки 256/задача, rayon; гейт-тест `mc_perf_10k_etalon5_under_budget`,
+  canvas-core). Сид-воспроизводимость first-class: тот же `McConfig.seed` →
+  побитово те же квантили P50/P90/P99 (гейт-тест
+  `mc_seed_reproducibility_is_bitwise`).
 
 ### 6.4. Текстуры
 
@@ -628,6 +650,43 @@ badge}], thresholds}` — те же флаги, что видит пользов
 0.7/0.9; Time-значение (W) → 100 ms/1 s; именованные выходы
 `queue_length`/`wait_time` — точки расширения манифестов. Порядок —
 `canvas.nodes` (детерминизм).
+
+### monte_carlo_run (FR-066) — Monte Carlo/QMC и квантили P50/P90/P99
+
+Схема вызова: `monte_carlo_run {runs, params, mode?, seed?, quantiles?}`.
+**Native-only** (фича `qmc` канвас-сцены: stats+parallel+sobol_burley;
+wasm-сборка инструмент не отдаёт, §5.8 FR-066; сборка без фичи —
+`tools/list` не объявляет, вызов — isError).
+
+- `runs` — целое 1..=10⁶ (эталонная норма FR-066 — 10⁴); `mode` —
+  `"qmc"` (дефолт: Owen-scrambled Sobol → inverse-CDF `statrs`, меньшая
+  дисперсия при том же N; лимит длины 2¹⁶ = 65536) | `"mc"` (ChaCha8);
+  `seed` — u64 (дефолт 0; **тот же seed → побитово те же квантили** —
+  воспроизводимость first-class, сида §5.7.2: `hash(content) ⊕
+  scenario_seed ⊕ run_idx` с FNV-смешиванием); `quantiles` — доли 0..1,
+  дефолт `[0.5, 0.9, 0.99]` (P10 — «runway»-кейс: `[0.1, …]`).
+- `params` — `{"node_id:param": {"dist": "normal"|"lognormal"|"exp"|
+  "poisson", …}}`: normal/lognormal — `{mean, sd}` в натуральном
+  пространстве, exp/poisson — `{lambda}` (λ Пуассона ≤ 1000 — бюджет
+  inverse-CDF). Параметр — строка «param = …» Numi-листа ноды (подменяется
+  на каждый прогон, паттерн `whatif_set_param`); единица придаётся
+  формулой-потребителем (Numi-семантика FR-050 Н5: `rho = load × 1 %`).
+- **Ответ:** `{runs, failed_runs, mode, seed, stale, duration_ms,
+  quantiles, outputs{node:{P50:{value,unit},…}}, lines{"node:line":{…}},
+  named{"node:выход":{…}}, analysis{quantile, nodes, thresholds},
+  severity}` — квантили итогов нод, построчных и именованных выходов
+  (collect-then-reduce §5.7.3, builtin `percentile`).
+- `analysis` — узкие места (формат `analyze_bottlenecks`) на ХВОСТОВОМ
+  квантиле (P90): синтетический `FlowSolutions` → `analyze::analyze`
+  **без правок анализатора** (§5.5) — severity эскалирует на хвосте
+  («докритично на медиане, критично на P90»).
+- Мутация: engine-метаданные `canvas.extra["canvasdesk"]["engine"] =
+  {version: "M5.0", seed, stats, parallel, qmc}` (raw JSON, паттерн
+  `whatif.rs`; §5.7.4) — undo-шаг + автосейв при фактическом изменении;
+  рассинхрон версии → `stale: true`.
+- Ошибки вызова: цикл потока; параметры не из листа ноды (строгая
+  валидация ДО прогонов); невалидные dist/quantiles/режим (см. тест
+  `mcp_fr066_monte_carlo_run_strict_validation`).
 
 ### Транспорт stdio (FR-034, ADR-0009)
 

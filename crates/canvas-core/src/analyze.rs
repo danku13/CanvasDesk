@@ -105,8 +105,9 @@ impl Severity {
         }
     }
 
-    /// максимум двух серьёзностей (усиление).
-    const fn max(self, other: Self) -> Self {
+    /// Максимум двух серьёзностей (усиление). Публичен с FR-066: MCP-слой
+    /// monte_carlo_run агрегирует худшую серьёзность P90-снимка.
+    pub const fn max(self, other: Self) -> Self {
         use Severity::*;
         match (self, other) {
             (Overload, _) | (_, Overload) => Overload,

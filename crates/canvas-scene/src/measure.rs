@@ -103,7 +103,7 @@ pub fn estimated_result_reserve_height(
 ) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     // FR-069 (этап F): супрессия абзаца описания — зона описания показывает
-    // первый проза-абзац → эти строки из верстки тела убраны; без учёта
+    // первый проза-абзац → эти строки из вёрстки тела убраны; без учёта
     // оценка дважды считала абзац (завышение → лишние refit'ы уровня 2).
     let rows_text: String = match desc_paragraph_suppress_span(text, desc) {
         None => text.to_owned(),
@@ -132,14 +132,23 @@ pub fn estimated_result_reserve_height(
     };
     // FR-061 этап D (D-8) / FR-069: зона описания — кламп ≤ 2 строк (токен
     // TABLE_DESC_CLAMP_LINES) либо полная вёрстка при раскрытии («⋯ целиком
-    // ▾») + строка аффорданса экспандера + зазор после зоны; консервативная
-    // оценка (без усечения экспандера нет — завышение безопасно).
+    // ▾») + строка аффорданса экспандера + зазор после зоны. ПРИЁМКА T9
+    // (remote FR-061): экспандер — при вёрстке описания В КЛАМП И БОЛЬШЕ
+    // (на границе — консервативно в большую сторону; уровень 2 — точное
+    // измерение — скорректирует при раннем выходе).
     let desc_rows = if desc.trim().is_empty() {
         0.0
     } else if desc_expanded {
         (wrapped_body_rows(desc, body_width) as f32 + 1.0) * BODY_LINE_HEIGHT + 6.0
     } else {
-        (canvas_core::tokens::TABLE_DESC_CLAMP_LINES as f32 + 1.0) * BODY_LINE_HEIGHT + 6.0
+        let clamp = canvas_core::tokens::TABLE_DESC_CLAMP_LINES as f32;
+        let wrapped = wrapped_body_rows(desc, body_width) as f32;
+        let expander = if wrapped >= clamp {
+            BODY_LINE_HEIGHT
+        } else {
+            0.0
+        };
+        wrapped.min(clamp) * BODY_LINE_HEIGHT + expander + 6.0
     };
     // FR-069 (этап F): резерв футера — только нодам, которым рендер его
     // покажет (footer_reserve = node_shows_result_footer); у прочих нод
@@ -435,6 +444,38 @@ mod tests {
         assert!(
             expanded > clamped,
             "раскрытое описание оценок выше клампа: {expanded} > {clamped}"
+        );
+    }
+
+    /// Приёмка T9 FR-061 (фикс подреза высоты): оценка резерва для
+    /// описания, верстающегося в CLAMP строк и больше, включает строку
+    /// экспандера («⋯ целиком ▾») — раньше она не учитывалась, ранний
+    /// выход уровня 1 оставлял ноду на строку короче.
+    #[test]
+    fn estimate_includes_desc_expander_row() {
+        let width = 360.0;
+        let short_desc = "Короткое описание."; // одна строка — без экспандера
+        let long_desc = "Длинное описание узла расчёта нагрузки, которое заведомо \
+не помещается в две строки клампа и потому сворачивается с аффордансом \
+«⋯ целиком ▾» — строка экспандера обязана войти в резерв высоты.";
+        let base = estimated_result_reserve_height("текст", width, &[], "", false, true, "");
+        let with_short =
+            estimated_result_reserve_height("текст", width, &[], short_desc, false, true, "");
+        let with_long =
+            estimated_result_reserve_height("текст", width, &[], long_desc, false, true, "");
+        // Короткое описание (1 строка): только строки клампа + зазор.
+        assert!(
+            with_short - base
+                < canvas_core::tokens::TABLE_DESC_CLAMP_LINES as f32 * BODY_LINE_HEIGHT + 6.0,
+            "короткое описание без экспандера"
+        );
+        // Длинное описание: кламп + ЭКСПАНДЕР — как минимум на строку больше
+        // короткого (рост-only: занижать нельзя).
+        assert!(
+            with_long - with_short >= BODY_LINE_HEIGHT,
+            "экспандер описания учтён в оценке ({} против {})",
+            with_long - base,
+            with_short - base
         );
     }
 }
