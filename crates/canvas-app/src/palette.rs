@@ -143,6 +143,14 @@ pub enum PaletteAction {
     /// (`~/.canvasdesk/templates/<id>/template.json`). Файловая операция —
     /// НЕ undo-able.
     SaveAsTemplate { node_index: usize },
+    /// FR-042 (правка 2026-09-24): явный вход в main stage из палитры связи
+    /// пучка (заменяет перехват ПКМ). Применим к любому ребру пучка —
+    /// `MainStageState::open` сам выведет весь пучок по упорядоченной паре.
+    EdgeOpenMainStage { edge_index: usize },
+    /// FR-042 (правка 2026-09-24): удалить конкретное ребро (в т.ч. из
+    /// пучка) из палитры — аналог Del после выделения. Undo-шаг (FR-006).
+    /// Доступно и одиночным рёбрам (раньше — только через Del).
+    EdgeDelete { edge_index: usize },
 }
 
 /// Векторная иконка кнопки: композиция квадов (`icon_quads`) и/или
@@ -288,14 +296,19 @@ pub fn template_update_group(
 }
 
 /// Группы палитры для цели. Ноды: [Цвет][Раскладка][Действия][Ветвление?];
-/// мультивыделение — [Цвет][Раскладка]; связь — [Стиль][Толщина][Цвет].
+/// мультивыделение — [Цвет][Раскладка]; связь — [Стиль][Толщина][Цвет]
+/// [Поток][Порты] + (если пучок N ≥ 2) [Пучок] с явным входом в main stage
+/// и удалением конкретного ребра (правка FR-042, сессия 2026-09-24).
 pub fn palette_groups(
     canvas: &Canvas,
     target: &PaletteTarget,
+    bundle_weight: Option<usize>,
     language: Language,
 ) -> Vec<PaletteGroup> {
     match target {
-        PaletteTarget::Edge(edge_index) => edge_groups(canvas, *edge_index, language),
+        PaletteTarget::Edge(edge_index) => {
+            edge_groups(canvas, *edge_index, bundle_weight, language)
+        }
         PaletteTarget::Nodes { primary, selected } => {
             node_groups(canvas, *primary, selected, language)
         }
@@ -559,8 +572,18 @@ fn branch_group(index: usize, collapsed: bool, language: Language) -> PaletteGro
     }
 }
 
-/// Группы для выделенной связи: [Стиль][Толщина][Цвет] с иконками.
-fn edge_groups(canvas: &Canvas, edge_index: usize, language: Language) -> Vec<PaletteGroup> {
+/// Группы для выделенной связи: [Стиль][Толщина][Цвет][Поток][Порты]
+/// + (если `bundle_weight` ≥ 2) [Пучок] с явным входом в main stage и
+/// удалением конкретного ребра. Ранее ПКМ по пучку перехватывалась
+/// открытием main stage — теперь палитра показывается всегда, а stage
+/// открывается явным действием из группы «Пучок» (правка FR-042,
+/// сессия 2026-09-24).
+fn edge_groups(
+    canvas: &Canvas,
+    edge_index: usize,
+    bundle_weight: Option<usize>,
+    language: Language,
+) -> Vec<PaletteGroup> {
     let Some(edge) = canvas.edges.get(edge_index) else {
         return Vec::new();
     };
@@ -602,7 +625,7 @@ fn edge_groups(canvas: &Canvas, edge_index: usize, language: Language) -> Vec<Pa
         icon: Some(PaletteIcon::Swatch(None)),
         current: current.is_none(),
     });
-    vec![
+    let mut groups = vec![
         PaletteGroup {
             label: i18n::tr(language, keys::PAL_GROUP_STYLE).to_owned(),
             icon: PaletteIcon::LineSolid,
@@ -720,7 +743,33 @@ fn edge_groups(canvas: &Canvas, edge_index: usize, language: Language) -> Vec<Pa
                 },
             ],
         },
-    ]
+    ];
+    // FR-042 (правка 2026-09-24): у пучка N ≥ 2 — дополнительная группа
+    // «Пучок»: явный вход в main stage (заменяет перехват ПКМ) + удаление
+    // конкретного ребра из палитры (раньше — только через Del). У
+    // одиночного ребра этой группы нет — stage не открывается (нечего
+    // детализировать), а удаление доступно клавишей Del.
+    if bundle_weight.is_some_and(|w| w >= 2) {
+        groups.push(PaletteGroup {
+            label: i18n::tr(language, keys::PAL_GROUP_BUNDLE).to_owned(),
+            icon: PaletteIcon::Flow,
+            entries: vec![
+                PaletteEntry {
+                    action: PaletteAction::EdgeOpenMainStage { edge_index },
+                    label: i18n::tr(language, keys::PAL_ACTION_OPEN_STAGE).to_owned(),
+                    icon: Some(PaletteIcon::Flow),
+                    current: false,
+                },
+                PaletteEntry {
+                    action: PaletteAction::EdgeDelete { edge_index },
+                    label: i18n::tr(language, keys::PAL_ACTION_DELETE_EDGE).to_owned(),
+                    icon: None,
+                    current: false,
+                },
+            ],
+        });
+    }
+    groups
 }
 
 // --- Геометрия ---
@@ -1301,6 +1350,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let viewport = [1200.0, 800.0];
@@ -1319,6 +1369,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
@@ -1355,6 +1406,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
@@ -1377,6 +1429,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0, 1],
             },
+            None,
             Language::Ru,
         );
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
@@ -1399,7 +1452,7 @@ mod tests {
         edge.thickness = Some(EdgeThickness::Thick);
         edge.color = Some("3".into());
         canvas.edges.push(edge);
-        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), Language::Ru);
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), None, Language::Ru);
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, vec!["Стиль", "Толщина", "Цвет", "Поток", "Порты"]);
         let style_current: Vec<bool> = groups[0].entries.iter().map(|e| e.current).collect();
@@ -1467,6 +1520,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let viewport = [1200.0, 800.0];
@@ -1668,6 +1722,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let viewport = [800.0, 400.0];
@@ -1759,7 +1814,7 @@ mod tests {
         );
         edge.set_port_pin(canvas_core::EdgeEnd::To, true);
         canvas.edges.push(edge);
-        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), Language::Ru);
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), None, Language::Ru);
         let ports = groups
             .iter()
             .find(|g| g.label == "Порты")
@@ -1795,7 +1850,7 @@ mod tests {
         both.set_port_pin(canvas_core::EdgeEnd::From, true);
         both.set_port_pin(canvas_core::EdgeEnd::To, true);
         canvas.edges.push(both);
-        let groups = palette_groups(&canvas, &PaletteTarget::Edge(1), Language::Ru);
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(1), None, Language::Ru);
         let ports = groups.iter().find(|g| g.label == "Порты").expect("группа");
         assert!(!ports.entries[0].current, "авто не текущий при пинах");
         match &ports.entries[0].action {
@@ -1898,6 +1953,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let actions = groups
@@ -1920,6 +1976,7 @@ mod tests {
                 primary: 0,
                 selected: vec![0],
             },
+            None,
             Language::Ru,
         );
         let actions = groups
@@ -1933,5 +1990,195 @@ mod tests {
                 .any(|e| e.label == "Сохранить как шаблон"),
             "пункта нет у обычной ноды"
         );
+    }
+
+    // --- Правка FR-042 (сессия 2026-09-24): пучок рёбер редактируется
+    // через палитру связи, а не перехватывается открытием main stage. ---
+
+    /// Сцена с пучком: 2 ноды A, B + 3 ребра A→B (вес 3).
+    fn bundle_scene() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "A", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "B", 300.0, 0.0));
+        canvas.add_edge(Edge::new(
+            "e1",
+            "a",
+            Some(canvas_core::Side::Right),
+            "b",
+            Some(canvas_core::Side::Left),
+        ));
+        canvas.add_edge(Edge::new(
+            "e2",
+            "a",
+            Some(canvas_core::Side::Top),
+            "b",
+            Some(canvas_core::Side::Top),
+        ));
+        canvas.add_edge(Edge::new(
+            "e3",
+            "a",
+            Some(canvas_core::Side::Bottom),
+            "b",
+            Some(canvas_core::Side::Bottom),
+        ));
+        canvas
+    }
+
+    /// Сцена с одиночным ребром: 2 ноды + 1 ребро A→B.
+    fn single_edge_scene() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "A", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "B", 300.0, 0.0));
+        canvas.add_edge(Edge::new(
+            "e1",
+            "a",
+            Some(canvas_core::Side::Right),
+            "b",
+            Some(canvas_core::Side::Left),
+        ));
+        canvas
+    }
+
+    /// Правка FR-042: palette_groups с bundle_weight ≥ 2 показывает
+    /// дополнительную группу «Пучок» с действиями EdgeOpenMainStage
+    /// (явный вход в stage, замена перехвата ПКМ) и EdgeDelete (удаление
+    /// конкретного ребра из палитры — ранее только через Del).
+    #[test]
+    fn palette_groups_show_bundle_group_for_weight_ge_2() {
+        let canvas = bundle_scene();
+        let groups = palette_groups(
+            &canvas,
+            &PaletteTarget::Edge(0),
+            Some(3),
+            Language::Ru,
+        );
+        let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["Стиль", "Толщина", "Цвет", "Поток", "Порты", "Пучок"],
+            "пучок N ≥ 2: доп. группа «Пучок» в конце"
+        );
+        let bundle = groups
+            .iter()
+            .find(|g| g.label == "Пучок")
+            .expect("группа «Пучок»");
+        assert_eq!(bundle.entries.len(), 2, "две записи: OpenMainStage + Delete");
+        // OpenMainStage — явный вход в stage (замена перехвата ПКМ)
+        assert!(matches!(
+            &bundle.entries[0].action,
+            PaletteAction::EdgeOpenMainStage { edge_index: 0 }
+        ));
+        // Delete — удаление конкретного ребра
+        assert!(matches!(
+            &bundle.entries[1].action,
+            PaletteAction::EdgeDelete { edge_index: 0 }
+        ));
+    }
+
+    /// Правка FR-042: palette_groups с weight = None (одиночное ребро)
+    /// или Some(1) НЕ показывает группу «Пучок» — stage не открывается
+    /// (нечего детализировать), а удаление доступно клавишей Del.
+    #[test]
+    fn palette_groups_no_bundle_group_for_single_edge() {
+        let canvas = single_edge_scene();
+        // weight = None — одиночное ребро (bundle_of_edge вернул None)
+        let groups = palette_groups(
+            &canvas,
+            &PaletteTarget::Edge(0),
+            None,
+            Language::Ru,
+        );
+        let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["Стиль", "Толщина", "Цвет", "Поток", "Порты"],
+            "без пучка: БЕЗ группы «Пучок»"
+        );
+        // weight = Some(1) — пучок из одного ребра (не должно быть)
+        let groups = palette_groups(
+            &canvas,
+            &PaletteTarget::Edge(0),
+            Some(1),
+            Language::Ru,
+        );
+        let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["Стиль", "Толщина", "Цвет", "Поток", "Порты"],
+            "вес 1: тоже БЕЗ «Пучок» (только N ≥ 2)"
+        );
+    }
+
+    /// Двуязычность: RU и EN дают ту же структуру (Bundle появляется
+    /// только при weight ≥ 2); надписи различаются («Пучок» vs «Bundle»).
+    #[test]
+    fn bundle_group_label_is_bilingual() {
+        let canvas = bundle_scene();
+        let ru = palette_groups(&canvas, &PaletteTarget::Edge(0), Some(3), Language::Ru);
+        let en = palette_groups(&canvas, &PaletteTarget::Edge(0), Some(3), Language::En);
+        let ru_bundle = ru
+            .iter()
+            .find(|g| g.label == "Пучок")
+            .expect("RU «Пучок»");
+        let en_bundle = en
+            .iter()
+            .find(|g| g.label == "Bundle")
+            .expect("EN «Bundle»");
+        assert_eq!(ru_bundle.entries.len(), 2);
+        assert_eq!(en_bundle.entries.len(), 2);
+        // Действия идентичны по структуре
+        assert!(matches!(
+            &ru_bundle.entries[0].action,
+            PaletteAction::EdgeOpenMainStage { .. }
+        ));
+        assert!(matches!(
+            &en_bundle.entries[0].action,
+            PaletteAction::EdgeOpenMainStage { .. }
+        ));
+        // Delete — в обеих локализациях
+        assert!(matches!(
+            &ru_bundle.entries[1].action,
+            PaletteAction::EdgeDelete { .. }
+        ));
+        assert!(matches!(
+            &en_bundle.entries[1].action,
+            PaletteAction::EdgeDelete { .. }
+        ));
+    }
+
+    /// Инвариант FR-042: пучок веса 3 — все три ребра в одном пучке.
+    /// Проверка через EdgeBundleIndex (canvas-core, чистая функция) —
+    /// это база, на которой palette_groups решает показать «Пучок».
+    #[test]
+    fn bundle_index_reports_weight_3_for_three_parallel_edges() {
+        let canvas = bundle_scene();
+        let index = canvas_core::EdgeBundleIndex::build(&canvas);
+        for i in 0..3 {
+            let bundle = index.bundle_of_edge(i).expect("ребро в пучке");
+            assert_eq!(bundle.weight, 3, "ребро {i}: вес 3");
+            assert_eq!(bundle.edges.len(), 3, "три ребра в пучке");
+        }
+    }
+
+    /// Симуляция App::apply_palette_action(EdgeDelete): палитра удаляет
+    /// конкретное ребро из канваса. После удаления e1 — пучок худеет
+    /// до веса 2 (e2, e3 выживают).
+    #[test]
+    fn palette_delete_edge_action_removes_specific_edge_from_bundle() {
+        let mut canvas = bundle_scene();
+        assert_eq!(canvas.edges.len(), 3, "исходно 3 ребра");
+        // Симуляция: пользователь открыл палитру по ПКМ (edge_at → idx 0),
+        // выбрал «Удалить ребро» — App вызывает remove_edge("e1").
+        assert!(canvas.remove_edge("e1"), "ребро e1 удалено");
+        assert_eq!(canvas.edges.len(), 2, "осталось 2 ребра");
+        // Bundles перестроены — вес 2 (пучок ещё есть)
+        let index = canvas_core::EdgeBundleIndex::build(&canvas);
+        let bundle = index
+            .bundle_of_edge(0)
+            .expect("ребро ещё в пучке");
+        assert_eq!(bundle.weight, 2, "пучок похудел до веса 2");
+        // Идентификаторы выживших рёбер
+        assert!(canvas.edges.iter().any(|e| e.id == "e2"));
+        assert!(canvas.edges.iter().any(|e| e.id == "e3"));
     }
 }
