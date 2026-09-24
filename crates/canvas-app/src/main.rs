@@ -130,6 +130,22 @@ fn main() -> anyhow::Result<()> {
     // event loop через proxy — иначе при ControlFlow::Wait результаты
     // лежали бы в канале до следующего ввода
     let proxy: EventLoopProxy<AppEvent> = event_loop.create_proxy();
+    // FR-064 P1: сценарный воркер — тяжёлый propagate_with_lines (baseline +
+    // active what-if) вне UI-треда; double buffer Arc<RwLock<FlowSolutions>>
+    // в сцене, завершение пересчёта — по AppEvent::FlowReady (выводка O(N)
+    // остаётся на UI-треде, план ADR-0008 §5.4). Wake — существующий паттерн
+    // EventLoopProxy (образец ThumbService/McpPipeServer). Sync-фолбэк +
+    // warn — на отказ/таймаут/панику воркера (правило AGENTS «фолбэк +
+    // warn»); на wasm воркер не спавнится (план §5.8).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let proxy = proxy.clone();
+        scene.attach_flow_worker(canvas_scene::FlowWorkerHandle::spawn(Arc::new(
+            move |kind, solutions| {
+                let _ = proxy.send_event(AppEvent::FlowReady { solutions, kind });
+            },
+        )));
+    }
     // Exit-листенер single-instance (T15-relaunch): новый запуск (в т.ч.
     // перезапуск на --desktop из меню канваса) сигналит событие — поток будит
     // event loop через AppEvent::InstanceExit, приложение штатно сохраняется

@@ -203,6 +203,14 @@ input → camera update → world-space culling (rstar query по viewport)
   итеративный обход); в UI — асинхронно (натив — фоновый поток, G5),
   переоткрытие из сессионного кэша ≤ 1 с (G1); индикатор покрытия цепочками
   (F-12, opt-in) — пересчёт по ревизии модели, не на кадр
+- Пересчёт потока (FR-014/FR-064): полный `propagate_with_lines` ≤ 10 мс на
+  1 000 нод. Натив — тяжёлые прогоны (baseline + активный what-if) на
+  воркер-треде с double buffer `Arc<RwLock<FlowSolutions>>`; на UI-треде —
+  выводка O(N) (`expr_results`/`analyze`/`bundles`/diff); live-инвариант:
+  правка → результат в пределах 1–2 кадров (wake `AppEvent::FlowReady`).
+  Деградация = sync-пересчёт на UI-треде + `warn` (отказ/таймаут 3 с/паника
+  воркера; на wasm — штатный sync-путь). Детерминизм: воркер-путь даёт
+  побитово те же числа, что sync (golden-тесты `worker_smoke.rs`).
 
 ### 6.4. Текстуры
 
