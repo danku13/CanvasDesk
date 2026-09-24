@@ -86,13 +86,21 @@ S3/M5 (FR-066) выполнен 2026-09-24: `sobol_burley` перенесён в
 — без фичи, контракт §5.8 FR-066).
 Волна 3 UI kit: ADR-0014 (2026-09-24, переоткрыл ADR-0013) + FR-067 —
 план staged миграции `canvas-ui` на `taffy` opt-in за cargo-фичей
-(`NativeBackend` default, `TaffyBackend` opt-in); после merge P1 FR-067
+(`NativeBackend` default, `TaffyBackend` opt-in); после merge W1 FR-068
 `taffy` мигрирует из §3 кандидатов в §2 прямых прод-зависимостей
 (аналогично `rayon` после FR-065).
+**Долгосрочная стратегия (ADR-0015 + FR-068, 2026-09-24):** taffy —
+переходное решение, вырезается к W4. Волны: W0 UI hygiene → W1 taffy
+opt-in (поглощает FR-067) → W2 cosmic-text trait boundary + `FlexLayoutEngine`
+(свой layout, flexbox + overflow/clip/scroll, побитовая идентичность с taffy
+на совместимых политиках) → W3 своя UI-библиотека (`Component` trait, kit.rs
+2757 → 6 компонентов × ~500 строк, retained-state) → W4 dep-минимизация
+(taffy вырезается; cosmic-text за `Shaper` trait; `cargo build
+--no-default-features` = 0 внешних UI-runtime-deps кроме cosmic-text).
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
-| L4 | `taffy` | CSS Flexbox+Grid layout-движок (retained-дерево, Servo/Bevy/Zed) | MIT OR Apache-2.0 | волна 3 UI kit: ADR-0014 + FR-067 P1 (за фичей `taffy`, default off; после merge P1 — §2 прямая прод-зависимость, прирост wasm ~376 КБ raw / ~180 КБ gzip; уже транзитивно в дереве через `cosmic-text`) |
+| L4 | `taffy` | CSS Flexbox+Grid layout-движок (retained-дерево, Servo/Bevy/Zed) | MIT OR Apache-2.0 | волна 3 UI kit: ADR-0014 + FR-068 W1 (за фичей `taffy`, default off; после merge W1 — §2 прямая прод-зависимость, прирост wasm ~376 КБ raw / ~180 КБ gzip; уже транзитивно в дереве через `cosmic-text`). **Переходное решение (ADR-0015):** вырезается к W4 FR-068, если `FlexLayoutEngine` (W2) покрывает использованные фичи (flexbox + overflow/clip/scroll); Grid-only остаётся за фичей, если используется >3 мест (S7). |
 | L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 (FR-066, за фичей `qmc`) |
 | L2 | `argmin` | численная оптимизация | MIT OR Apache-2.0 | первый домен с оптимизацией |
 | L2 | `gauss-quad` / `quadrature` | квадратуры | MIT OR Apache-2.0 / BSD-2 | интегралы SLA |
