@@ -293,6 +293,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "rand_distr",
+ "rayon",
  "rstar",
  "serde",
  "serde_json",
