@@ -63,8 +63,10 @@ pub const PANEL_HEADER_H: f32 = 30.0;
 pub const INPUT_HEIGHT: f32 = 32.0;
 /// Высота строки категории (чипы-фильтры).
 pub const CATEGORY_ROW_H: f32 = 26.0;
-/// Шаг строки шаблона: карточка + зазор.
-pub const ROW_HEIGHT: f32 = 46.0;
+/// Шаг строки шаблона: карточка + зазор. 46 → 52 (wasm-аудит 2026-09-25):
+/// описание строки переносится на 2 строки (11px) — раньше рвалось
+/// кромкой панели без эллипсиса («латентность вы|»).
+pub const ROW_HEIGHT: f32 = 52.0;
 /// Высота заголовка секции категории (Miro-стиль группировки).
 pub const SECTION_HEIGHT: f32 = 24.0;
 /// Максимум видимых строк-шаблонов (далее — прокрутка стрелками).
@@ -725,19 +727,24 @@ pub fn panel_layout(
     let input_rect = [input.x, input.y, input.w, input.h];
     let chips_y = chip_strip.y;
 
-    // Чипы категорий: одна строка, ширина по имени (измеренная), политика
-    // SqueezeTail — именованная деградация узкой панели вместо прежнего
-    // молчаливого `break`-клампа (не влезающий хвост сжимается до нулевой
-    // ширины — переполнение видно линту, категории не «исчезают» silently).
-    // Переноса нет — в v1 категорий ≤ 6.
+    // Чипы категорий: ширина по имени (измеренная), политика Wrap —
+    // не влезающие чипы переносятся на второй ряд (wasm-аудит 2026-09-25,
+    // скриншот 13_palette: SqueezeTail сжимал «unit-economics» до нуля —
+    // срезанный текст выглядел браком). Слоту отдаётся высота до 2 рядов;
+    // строки шаблонов стартуют ниже фактического низа чипов.
     let categories = registry.categories();
     let chip_rects = Row {
         gap,
-        policy: RowPolicy::SqueezeTail,
+        policy: RowPolicy::Wrap,
         ..Row::default()
     }
     .lay_out(
-        UiRect::new(inner.x, chips_y, inner_w, CATEGORY_ROW_H),
+        UiRect::new(
+            inner.x,
+            chips_y,
+            inner_w,
+            (CATEGORY_ROW_H * 2.0 + gap).max(CATEGORY_ROW_H),
+        ),
         &categories
             .iter()
             .map(|c| Child::fixed(category_chip_width(c, m, fs), CATEGORY_ROW_H))
@@ -751,8 +758,12 @@ pub fn panel_layout(
             ([r.x, r.y, r.w, r.h], (*category).to_owned(), active)
         })
         .collect();
+    let chips_bottom = chip_rects
+        .iter()
+        .map(|r| r.y + r.h)
+        .fold(chips_y + CATEGORY_ROW_H, f32::max);
 
-    let rows_top = chips_y + CATEGORY_ROW_H + gap;
+    let rows_top = chips_bottom + gap;
     // CR-011: резерв под футер-подсказку — строки в неё не заходят
     let footer = stack(
         UiRect::new(inner.x, inner.y, inner_w, inner.h),

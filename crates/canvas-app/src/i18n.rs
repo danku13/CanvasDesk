@@ -682,6 +682,7 @@ const RU: &[(&str, &str)] = &[
     (keys::TAB_CANVAS, "Канвас"),
     (keys::TAB_EDGES, "Связи и порты"),
     (keys::TAB_APPEARANCE, "Внешний вид"),
+    (keys::TAB_SNAP, "Привязка"),
     (keys::ROW_BUTTON_CORNER, "Угол кнопки"),
     (
         keys::DESC_BUTTON_CORNER,
@@ -1458,6 +1459,7 @@ const EN: &[(&str, &str)] = &[
     (keys::TAB_CANVAS, "Canvas"),
     (keys::TAB_EDGES, "Edges & ports"),
     (keys::TAB_APPEARANCE, "Appearance"),
+    (keys::TAB_SNAP, "Snapping"),
     (keys::ROW_BUTTON_CORNER, "Button corner"),
     (
         keys::DESC_BUTTON_CORNER,
@@ -2434,6 +2436,11 @@ mod tests {
         for key in row_keys.into_iter().chain(desc_keys).chain(tab_keys) {
             assert!(!tr(Language::Ru, key).is_empty(), "RU пуст: {key}");
             assert!(!tr(Language::En, key).is_empty(), "EN пуст: {key}");
+            // Усиление 2026-09-25 (wasm-аудит: сырой «settings.tab.snap» в
+            // сайдбаре настроек — ключ без записи в таблицах проходит
+            // «непустой» фолбэк на сам ключ). Перевод ОБЯЗАН отличаться.
+            assert_ne!(tr(Language::Ru, key), key, "RU = сырой ключ: {key}");
+            assert_ne!(tr(Language::En, key), key, "EN = сырой ключ: {key}");
         }
     }
 

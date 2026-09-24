@@ -168,6 +168,18 @@ pub mod ui {
     pub const SETTINGS_BUTTON: f32 = 36.0;
     /// Отступ кнопки и панели настроек от краёв окна (логические px).
     pub const SETTINGS_MARGIN: f32 = 12.0;
+
+    /// Верхний отступ под DOM-панель хранилища (W6) на web. Тулбар
+    /// «Открыть с диска… / Недавние / Экспорт .canvas» занимает полосу
+    /// 8..36 px в правом верхнем углу и ПЕРЕКРЫВАЛ угловые GPU-кнопки
+    /// (обрезка иконок) и первый пункт меню «?» — «Документация» был
+    /// недоступен кликом (wasm-аудит 2026-09-25, скриншоты corner_3x,
+    /// 02_help_menu). На десктопе DOM-тулбара нет — 0.
+    #[cfg(target_arch = "wasm32")]
+    pub const WEB_TOOLBAR_INSET: f32 = 36.0;
+    #[cfg(not(target_arch = "wasm32"))]
+    pub const WEB_TOOLBAR_INSET: f32 = 0.0;
+
     /// Зазор между кнопкой и панелью настроек.
     pub const SETTINGS_GAP: f32 = 8.0;
     /// Ширина панели настроек.
@@ -202,13 +214,19 @@ pub mod ui {
     }
 
     /// Rect летающей кнопки настроек в логических px от угла окна.
+    /// WEB_TOOLBAR_INSET: на web кнопки правого ВЕРХНЕГО угла опускаются
+    /// под DOM-тулбар хранилища (иначе он их обрезает — wasm-аудит).
     pub fn button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
         let x = match corner {
             Corner::TopLeft | Corner::BottomLeft => SETTINGS_MARGIN,
             _ => viewport[0] - SETTINGS_MARGIN - SETTINGS_BUTTON,
         };
+        let top = SETTINGS_MARGIN + WEB_TOOLBAR_INSET;
         let y = match corner {
-            Corner::TopLeft | Corner::TopRight => SETTINGS_MARGIN,
+            // DOM-тулбар хранилища — только в правом верхнем углу: inset
+            // нужен ТОЛЬКО там (TopLeft-кнопки с ним не пересекаются)
+            Corner::TopRight => top,
+            Corner::TopLeft => SETTINGS_MARGIN,
             _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON,
         };
         [x, y, SETTINGS_BUTTON, SETTINGS_BUTTON]

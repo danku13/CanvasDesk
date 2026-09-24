@@ -994,7 +994,7 @@ pub enum Icon {
 /// полон (все варианты `Icon` покрыты — тест `icon_glyph_mapping_is_complete`).
 pub fn icon_glyph(i: Icon) -> &'static str {
     match i {
-        Icon::Close => "✕",
+        Icon::Close => "×",
         Icon::Gear => "⚙",
         Icon::Question => "?",
         Icon::Search => "⌕",
@@ -2542,7 +2542,7 @@ mod tests {
             assert!(!g.is_empty(), "{icon:?} — пустой глиф");
         }
         // Существующие литералы потребителей сохранены (I-1 ноль скачка)
-        assert_eq!(icon_glyph(Icon::Close), "✕");
+        assert_eq!(icon_glyph(Icon::Close), "×");
         assert_eq!(icon_glyph(Icon::Gear), "⚙");
         assert_eq!(icon_glyph(Icon::Question), "?");
         assert_eq!(icon_glyph(Icon::Plus), "+");

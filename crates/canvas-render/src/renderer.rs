@@ -64,6 +64,44 @@ const MAX_TEXT_GROUPS: usize = 16;
 /// буллиты/чекбоксы/зачёркивание/линия — приглушённый gfm_muted_fill.
 /// FR-069 (этап F): cosmic-text Color → линейный rgba [0..1; 4] — для
 /// пилюль бейджей (цвет текста бейджа — слот темы `Color`).
+/// Разводка перекрывающихся value-меток рёбер (wasm-аудит 2026-09-25):
+/// параллельные рёбра пучка имеют одинаковый midpoint — их бэкдропы и
+/// тексты печатались друг на друге. Метки сортируются по (y, x), каждая
+/// следующая, пересекающаяся с уже размещённой, опускается на высоту
+/// бэкдропа + 2 px (детерминированно, порядок рисования не важен — кэш
+/// шейпинга по id ребра). `backdrops[i]` ↔ `labels[i]` — парные.
+fn stagger_value_labels(backdrops: &mut [CardInstance], labels: &mut [EdgeLabel<'_>]) {
+    let overlaps = |a: [f32; 2], b: [f32; 2], half: [f32; 2]| {
+        (a[0] - b[0]).abs() < half[0] * 2.0 && (a[1] - b[1]).abs() < half[1] * 2.0
+    };
+    // Центры и полуразмеры в порядке исходного сбора.
+    let mut order: Vec<usize> = (0..labels.len()).collect();
+    order.sort_by(|&i, &j| {
+        backdrops[i].pos[1]
+            .partial_cmp(&backdrops[j].pos[1])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                backdrops[i].pos[0]
+                    .partial_cmp(&backdrops[j].pos[0])
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    let mut placed: Vec<([f32; 2], [f32; 2])> = Vec::with_capacity(labels.len());
+    for &i in &order {
+        let half = [backdrops[i].size[0] / 2.0, backdrops[i].size[1] / 2.0];
+        let mut center = [backdrops[i].pos[0] + half[0], backdrops[i].pos[1] + half[1]];
+        while placed.iter().any(|(c, _h)| overlaps(center, *c, half)) {
+            center[1] += half[1] * 2.0 + 2.0;
+        }
+        // Сдвиг от исходного центра = (новый − исходный) — бэкдроп
+        // хранит ЛЕВЫЙ ВЕРХНИЙ угол, текст — центр.
+        let dy = center[1] - (backdrops[i].pos[1] + half[1]);
+        backdrops[i].pos[1] += dy;
+        labels[i].center[1] += dy;
+        placed.push((center, half));
+    }
+}
+
 fn color_rgba(c: cosmic_text::Color) -> [f32; 4] {
     [
         c.r() as f32 / 255.0,
@@ -975,6 +1013,12 @@ impl Renderer {
                 });
             }
         }
+        // Фикс налезания value-меток 2026-09-25 (wasm-аудит 34_editor:
+        // «4 $$ $», «×2×2») — у параллельных рёбер одного пучка совпадает
+        // midpoint, обе метки печатались друг на друге. Детерминированный
+        // stagger: перекрывающиеся метки разводятся по вертикали на высоту
+        // бэкдропа + 2 (порядок (y, x) стабилен → картина воспроизводима).
+        stagger_value_labels(&mut label_backdrops, &mut edge_labels);
         // FR-042 (E2): бейджи кратности пучков ×N (LOD-0) — независимо от
         // порога заголовков: вес соединения виден и при дальнем зуме, в этом
         // смысл структурной агрегации (PRD-0002 F-3). Рисуются по
@@ -1815,6 +1859,68 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Фикс налезания value-меток (wasm-аудит 2026-09-25, «4 $$ $» у
+    /// параллельных рёбер пучка): перекрывающиеся метки разводятся по
+    /// вертикали, непересекающиеся остаются на местах, бэкдроп и центр
+    /// текста сдвигаются согласованно.
+    #[test]
+    fn stagger_value_labels_separates_overlaps() {
+        let mk = |y: f32| CardInstance {
+            pos: [100.0, y],
+            size: [40.0, 18.0],
+            fill: [0.0; 4],
+            border: [0.0; 4],
+            params: [4.0, 0.0, 0.0, 1.0],
+        };
+        let center = |y: f32| [120.0, y + 9.0];
+        // Две метки в одной точке + одна далеко ниже (не пересекается).
+        let mut backdrops = vec![mk(200.0), mk(200.0), mk(400.0)];
+        let mut labels = vec![
+            EdgeLabel {
+                id: "a",
+                text: "4 $",
+                center: center(200.0),
+                factor: 1.0,
+            },
+            EdgeLabel {
+                id: "b",
+                text: "$",
+                center: center(200.0),
+                factor: 1.0,
+            },
+            EdgeLabel {
+                id: "c",
+                text: "36",
+                center: center(400.0),
+                factor: 1.0,
+            },
+        ];
+        stagger_value_labels(&mut backdrops, &mut labels);
+        // Метка «b» уехала вниз ровно на высоту бэкдропа + 2.
+        assert!(
+            (labels[1].center[1] - labels[0].center[1] - 20.0).abs() < 0.01,
+            "центры разъехались на 20 px: {:?} vs {:?}",
+            labels[0].center,
+            labels[1].center
+        );
+        assert_eq!(labels[1].center[1], backdrops[1].pos[1] + 9.0);
+        // Третья метка не тронута.
+        assert_eq!(labels[2].center, [120.0, 409.0]);
+        assert_eq!(backdrops[2].pos, [100.0, 400.0]);
+        // Пересечений после разводки нет (попарно).
+        for i in 0..labels.len() {
+            for j in i + 1..labels.len() {
+                let (a, b) = (&labels[i].center, &labels[j].center);
+                let dx = (a[0] - b[0]).abs();
+                let dy = (a[1] - b[1]).abs();
+                assert!(
+                    dx >= 40.0 || dy >= 18.0,
+                    "метки {i},{j} всё ещё пересекаются: {a:?} {b:?}"
+                );
+            }
+        }
+    }
 
     // FR-056 (F-5 PRD-0009): scissor-бакет полосы — конверсия логического
     // клипа в физический rect. Инвариант CR: scissor никогда не расширяет

@@ -308,6 +308,11 @@ pub enum AppEvent {
         json: String,
         storage: Option<Arc<dyn CanvasStorage>>,
     },
+    /// Ввод текста через DOM (canvas-web, wasm-аудит 2026-09-25): Chromium
+    /// шлёт кириллицу insertText'ом, который winit-web (только keydown)
+    /// теряет; web-слой ловит beforeinput и доставляет текст сюда —
+    /// маршрут в активный текстовый приёмник тот же, что у Ime::Commit.
+    ImeCommit(String),
     /// События шины системных событий (T16): сессия (lock/unlock, R8),
     /// suspend/resume, ExplorerStarted (TaskbarCreated, R7/R11),
     /// shell-hook/clipboard (потребители T18/будущее), SHCNE-мост в
@@ -4266,6 +4271,51 @@ impl App {
         if changed {
             self.search_pending = Some((self.search.input.query().to_owned(), Instant::now()));
             self.request_redraw();
+        }
+    }
+
+    /// Ввод через IME (WindowEvent::Ime, фикс 2026-09-25): текст коммита
+    /// уходит в АКТИВНЫЙ текстовый приёмник — приоритет как у клавиатурного
+    /// владельца реестра: редактор заметки → панель поиска → поле подмены
+    /// окна проверки. Вне текстовых приёмников коммит игнорируется
+    /// (IME-статусы/предильт — не текст, панорамирование не трогаем).
+    pub(crate) fn on_ime(&mut self, ime: winit::event::Ime) {
+        let winit::event::Ime::Commit(text) = ime else {
+            return; // Enabled/Disabled/Preedit — v1 не обрабатывает
+        };
+        self.insert_committed_text(&text);
+    }
+
+    /// Общий маршрут текста коммита (Ime::Commit + web-мост AppEvent::ImeCommit):
+    /// 1) редактор заметки (EditingSession) — та же вставка, что Paste;
+    /// 2) панель поиска; 3) inline-поле подмены окна проверки (FR-048 X3).
+    pub fn insert_committed_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        // 1) Редактор заметки (EditingSession)
+        if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut()) {
+            session.insert_text(renderer.font_system_mut(), text);
+            self.fit_note_size();
+            self.update_hints();
+            self.request_redraw();
+            return;
+        }
+        // 2) Панель поиска (открыта — она владеет клавиатурой)
+        if self.search.is_open() {
+            let text = text.to_owned();
+            self.edit_search_input(move |input| {
+                input.insert_str(&text);
+                true
+            });
+            return;
+        }
+        // 3) Inline-поле подмены окна проверки цепочки (FR-048 X3)
+        if let Some(state) = self.explain.as_mut() {
+            if let Some(edit) = state.edit.as_mut() {
+                edit.type_str(text);
+                self.request_redraw();
+            }
         }
     }
 

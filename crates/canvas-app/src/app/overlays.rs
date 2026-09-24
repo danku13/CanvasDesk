@@ -362,7 +362,7 @@ impl App {
                 self.tr(keys::WHATIF_COMPARE),
                 !self.scene.scenarios.is_empty(),
             ),
-            (layout.close, "✕", true),
+            (layout.close, "×", true),
         ];
         for (rect, label, enabled) in buttons {
             instances.push(chip(
@@ -433,7 +433,7 @@ impl App {
                 });
                 let remove = whatif_ui::remove_button_rect(list, i);
                 texts.push(OwnedScreenText {
-                    text: "✕".to_owned(),
+                    text: "×".to_owned(),
                     origin: [remove[0], remove[1] + 2.0],
                     width: remove[2],
                     font_size: 13.0,
@@ -555,7 +555,7 @@ impl App {
                 (lay.close.w - 8.0).max(0.0),
                 18.0,
             ),
-            "✕",
+            "×",
             kit_palette.text_title,
             14.0,
             PaintAlign::Left,
@@ -763,7 +763,7 @@ impl App {
         close_widget.set_pointer(hover(&lay.close), false);
         let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
         d.control(lay.close, &close_style);
-        d.label_center(lay.close, "✕", close_style.text, 13.0);
+        d.label_center(lay.close, "×", close_style.text, 13.0);
 
         // Сайдбар: пункты — реальные kit-кнопки (активная — слот Selected)
         for (i, item) in lay.sidebar_items.iter().enumerate() {
@@ -950,7 +950,7 @@ impl App {
         close_widget.set_pointer(hover(&lay.close), false);
         let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
         d.control(lay.close, &close_style);
-        d.label_center(lay.close, "✕", close_style.text, 13.0);
+        d.label_center(lay.close, "×", close_style.text, 13.0);
         d.label_left(
             canvas_ui::geometry::UiRect::new(lay.title.x, lay.title.y + 6.0, lay.title.w, 20.0),
             crate::i18n::tr(lang, crate::i18n::keys::KIT_GALLERY_TITLE),
@@ -1004,7 +1004,7 @@ impl App {
             }
         }
         // IconButtons: 4 состояния
-        let icons = ["✕", "⚙", "?", "+"];
+        let icons = ["×", "•••", "?", "+"];
         for (i, r) in lay.icon_buttons.iter().enumerate() {
             let state = match i {
                 0 => canvas_ui::kit::KitState::Normal,
@@ -1475,7 +1475,7 @@ impl App {
             texts.push(OwnedScreenText {
                 // FR-053 (U3): метка из раскладки — измеренный Ellipsis.
                 text: label.title.clone(),
-                origin: [rect[0] + 10.0, rect[1] + 8.0],
+                origin: [rect[0] + 10.0, rect[1] + 7.0],
                 width: rect[2] - 20.0,
                 font_size: 13.0,
                 color: palette.title,
@@ -1483,12 +1483,15 @@ impl App {
             });
             texts.push(OwnedScreenText {
                 text: label.desc.clone(),
-                origin: [rect[0] + 10.0, rect[1] + 28.0],
+                origin: [rect[0] + 10.0, rect[1] + 26.0],
                 width: rect[2] - 20.0,
                 font_size: 11.0,
                 color: palette.body,
                 align: TextAlign::Left,
             });
+            // Фикс 2026-09-25 (wasm-аудит 17_gallery): мета «нод: N, связей: M»
+            // прижималась к нижней кромке карточки (y+44 при inner 48) —
+            // ROW_H 56 → 62, мета на y+40 с полным нижним полем.
             texts.push(OwnedScreenText {
                 text: i18n::trf(
                     self.settings.language,
@@ -1498,7 +1501,7 @@ impl App {
                         ("edges", scheme.content.edges.len().to_string().as_str()),
                     ],
                 ),
-                origin: [rect[0] + 10.0, rect[1] + 44.0],
+                origin: [rect[0] + 10.0, rect[1] + 40.0],
                 width: rect[2] - 20.0,
                 font_size: 10.0,
                 color: palette.body,
@@ -1543,14 +1546,29 @@ impl App {
             color: palette.title,
             align: TextAlign::Left,
         });
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::GALLERY_EMPTY_BODY).to_owned(),
-            origin: [card[0] + 20.0, card[1] + 46.0],
-            width: card[2] - 40.0,
-            font_size: 12.0,
-            color: palette.body,
-            align: TextAlign::Left,
-        });
+        // Фикс среза 2026-09-25 (wasm-аудит 01_idle): подзаголовок
+        // «Готовые схемы со связями и расчётами: …» рвался кромкой
+        // карточки без переноса — теперь до 2 строк тем же кеглем.
+        {
+            let body = self.tr(keys::GALLERY_EMPTY_BODY);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let body_w = (card[2] - 40.0).max(10.0);
+            for (line_idx, line) in crate::admin_ui::wrap_text(&mut m, &mut fs, body, body_w, 12.0)
+                .into_iter()
+                .take(2)
+                .enumerate()
+            {
+                texts.push(OwnedScreenText {
+                    text: line,
+                    origin: [card[0] + 20.0, card[1] + 46.0 + line_idx as f32 * 15.0],
+                    width: body_w,
+                    font_size: 12.0,
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
+        }
         let (open_btn, dismiss_btn) = scheme_gallery_ui::empty_buttons(card);
         for (rect, label_key, accent) in [
             (open_btn, keys::GALLERY_EMPTY_OPEN, true),
@@ -2012,6 +2030,8 @@ impl App {
                             icon_tint,
                             &mut instances,
                             &mut texts,
+                            &mut measurer,
+                            &mut fs,
                         );
                     }
                 }
@@ -2168,6 +2188,8 @@ impl App {
                     icon_tint,
                     &mut instances,
                     &mut texts,
+                    &mut measurer,
+                    &mut fs,
                 );
             }
             // Индикаторы прокрутки: стрелки ▲/▼ у правого края flyout
@@ -3503,16 +3525,29 @@ impl App {
             // params.y = рамка выделения: подсветка кнопки при открытой панели
             params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
         });
-        // Иконка-шестерёнка: горизонтально по центру кнопки (Align::Center
-        // в области width = ширине кнопки) — не зависит от метрик глифа.
-        texts.push(OwnedScreenText {
-            text: "⚙".to_owned(),
-            origin: [button[0], icon_top(button, 18.0)],
-            width: button[2],
-            font_size: 18.0,
-            color: palette.title,
-            align: TextAlign::Center,
-        });
+        // Иконка настроек — КВАДАМИ, не текстовым глифом: «⚙» (U+2699)
+        // отсутствует в Noto Sans Display/Mono и рисовалась тофу-квадом
+        // (wasm-аудит 2026-09-25, v2_corner). Ползунки: 2 трека + 2 ручки.
+        {
+            let icon = [button[0] + 9.0, button[1] + 12.0, 18.0, 12.0];
+            let track_fill = color_to_rgba(palette.icon);
+            for (row, knob_x) in [(0.0_f32, 4.0_f32), (7.0_f32, 10.0_f32)] {
+                instances.push(CardInstance {
+                    pos: [icon[0], icon[1] + row],
+                    size: [icon[2], 2.0],
+                    fill: track_fill,
+                    border: [0.0; 4],
+                    params: [1.0, 0.0, 0.0, 1.0],
+                });
+                instances.push(CardInstance {
+                    pos: [icon[0] + knob_x, icon[1] + row - 2.0],
+                    size: [6.0, 6.0],
+                    fill: track_fill,
+                    border: [0.0; 4],
+                    params: [3.0, 0.0, 0.0, 1.0],
+                });
+            }
+        }
         // Кнопка переключения темы — рядом с кнопкой настроек (в тот же угол).
         // Иконка показывает ЦЕЛЬ: в тёмной теме «солнце» (клик — светлая).
         let theme_button = theme_button_rect(self.settings.button_corner, viewport);
@@ -3528,17 +3563,19 @@ impl App {
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
         });
-        let theme_icon = match self.settings.theme {
-            Theme::Dark => "☀",
-            Theme::Light => "🌙",
+        // Иконка темы — квадами: «☀»/«🌙» (U+2600/U+1F319) тоже вне
+        // покрытия шрифтов (тофу). Показ цели: тёмная тема — залитый круг
+        // («переключить на светлый»), светлая — контурный.
+        let theme_circle_fill = match self.settings.theme {
+            Theme::Dark => color_to_rgba(palette.title),
+            Theme::Light => [0.0; 4],
         };
-        texts.push(OwnedScreenText {
-            text: theme_icon.to_owned(),
-            origin: [theme_button[0], icon_top(theme_button, 16.0)],
-            width: theme_button[2],
-            font_size: 16.0,
-            color: palette.title,
-            align: TextAlign::Center,
+        instances.push(CardInstance {
+            pos: [theme_button[0] + 10.0, theme_button[1] + 10.0],
+            size: [16.0, 16.0],
+            fill: theme_circle_fill,
+            border: color_to_rgba(palette.title),
+            params: [8.0, 0.0, 0.0, 1.0],
         });
         // FR-027: кнопка «?» — третий элемент кластера (настройки/тема/помощь):
         // вход в меню документации и онбординга; hover-аффорданс как у ⚙
@@ -3566,7 +3603,26 @@ impl App {
         // Панель горячих клавиш (FR-004): у левого края, по центру;
         // рендерится независимо от панели настроек
         if self.hotkeys_open {
-            let panel = hotkeys_panel_rect_at(viewport, self.hotkeys_left_offset(viewport));
+            let mut panel = hotkeys_panel_rect_at(viewport, self.hotkeys_left_offset(viewport));
+            // Фикс среза 2026-09-25 (wasm-аудит, скриншот 11_hotkeys):
+            // константная ширина 340 рвала самое длинное описание
+            // («…режим защиты: раскрыть следующий уровень») у кромки —
+            // панель ДОТЯГИВАЕТСЯ до самого длинного описания
+            // (измерение тем же лицом, что рисует строки).
+            {
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let hk_pad = crate::ui::HOTKEYS_PADDING;
+                let longest = crate::ui::HOTKEYS
+                    .iter()
+                    .map(|(_, d)| {
+                        m.width_of(&mut fs, self.tr(d), crate::admin_ui::FONT_FAMILY, 12.0)
+                    })
+                    .fold(0.0_f32, f32::max);
+                panel[2] = panel[2].max(
+                    (hk_pad * 2.0 + crate::ui::HOTKEYS_KEY_COLUMN + longest + 2.0).min(viewport[0]),
+                );
+            }
             instances.push(CardInstance {
                 pos: [panel[0], panel[1]],
                 size: [panel[2], panel[3]],
@@ -3802,14 +3858,32 @@ impl App {
                 color: palette.body,
                 align: TextAlign::Left,
             });
-            texts.push(OwnedScreenText {
-                text: self.tr(row_desc_key(*row)).to_owned(),
-                origin: [rect[0] + 2.0, rect[1] + 22.0],
-                width: rect[2] - MODAL_ROW_LABEL_W,
-                font_size: 11.0,
-                color: palette.icon,
-                align: TextAlign::Left,
-            });
+            // Фикс среза описаний 2026-09-25 (wasm-аудит 15/15b/04): текст
+            // «В каком углу экрана прижата лета|» рвался границей текст-арии
+            // у dropdown'а — теперь описание переносится (до 2 строк, тем же
+            // кеглем; высота строки MODAL_ROW_HEIGHT 52). Третья строка не
+            // влезает в строку настройки — хвост обрезается как прежде.
+            {
+                let desc = self.tr(row_desc_key(*row));
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let desc_w = (rect[2] - MODAL_ROW_LABEL_W).max(10.0);
+                for (line_idx, line) in
+                    crate::admin_ui::wrap_text(&mut m, &mut fs, desc, desc_w, 11.0)
+                        .into_iter()
+                        .take(2)
+                        .enumerate()
+                {
+                    texts.push(OwnedScreenText {
+                        text: line,
+                        origin: [rect[0] + 2.0, rect[1] + 22.0 + line_idx as f32 * 14.0],
+                        width: desc_w,
+                        font_size: 11.0,
+                        color: palette.icon,
+                        align: TextAlign::Left,
+                    });
+                }
+            }
             let kind = row_kind(*row);
             let control = control_rect(*rect, kind);
             match kind {
