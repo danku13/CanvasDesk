@@ -954,6 +954,13 @@ fn hit_subtitle(path: &Path) -> String {
 /// аванса принципиально хрупка — измерение устраняет класс дефектов
 /// «футер налезает на перенос». Формула та же, что и у
 /// [`estimated_result_reserve_height`], с измеренной высотой тела.
+///
+/// FR-069 хвосты (T9-сессия 2026-09-24): `auto_rows` — число авто-строк
+/// приёмника. Уровень 2 (шейпинг тела) не видит ни авто-строки, ни их
+/// подпись зоны (мера вызывает `with_body_stack` с `spill_prefix =
+/// Vec::new()`); добавляем ряд подписи зоны здесь, чтобы уровень 2 не
+/// занизил против рендера (I-2).
+#[allow(clippy::too_many_arguments)] // FR-069 хвосты: 8 согласованных входов резерва (I-2)
 pub fn measured_result_reserve_height(
     text: &str,
     node_width: f32,
@@ -966,6 +973,7 @@ pub fn measured_result_reserve_height(
     desc_expanded: bool,
     footer_reserve: bool,
     sigma_name: &str,
+    auto_rows: usize,
 ) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     // FR-061 этап D (D-8): зона описания — часть стека (I-2: measure = render).
@@ -977,12 +985,20 @@ pub fn measured_result_reserve_height(
         desc_expanded,
         sigma_name,
     );
+    // FR-069 хвосты: ряд подписи зоны авто-строк — мера его не видит
+    // (spill_prefix пуст), но рендер вставляет. ZONE_LABEL_LINE_HEIGHT
+    // — тот же токен, что у оценки уровня 1 (canvas-scene::measure).
+    let auto_label = if auto_rows > 0 {
+        canvas_scene::measure::ZONE_LABEL_LINE_HEIGHT
+    } else {
+        0.0
+    };
     let footer = if footer_reserve {
         RESULT_LINE_HEIGHT + 2.0
     } else {
         0.0
     };
-    HEADER_HEIGHT + BODY_TOP_GAP + body + BODY_PADDING + footer
+    HEADER_HEIGHT + BODY_TOP_GAP + body + auto_label + BODY_PADDING + footer
 }
 
 /// FR-020: slug из имени шаблона: латиница/цифры/дефисы, кириллица —
@@ -19990,20 +20006,20 @@ mod tests {
         low.width = 260.0;
         low.height = 80.0; // занижено: 2 ряда тела + резерв футера не влезают
                            // CR-012 (правка 2): formula_lines для присваивания — [0].
-        ensure_result_reserve(&mut low, &line, &[0], None, false, true, "");
-        let needed = measured_result_reserve_height(&line, low.width, &[0], "", false, true, "");
+        ensure_result_reserve(&mut low, &line, &[0], None, false, true, "", 0);
+        let needed = measured_result_reserve_height(&line, low.width, &[0], "", false, true, "", 0);
         assert!(
             low.height >= needed - 1e-3,
             "высота {} выросла минимум до измеренного резерва футера {needed}",
             low.height
         );
         let grown = low.height;
-        ensure_result_reserve(&mut low, &line, &[0], None, false, true, "");
+        ensure_result_reserve(&mut low, &line, &[0], None, false, true, "", 0);
         assert_eq!(low.height, grown, "повторный вызов — no-op (growth-only)");
         let mut tall = Node::text("n2", line.clone(), 0.0, 0.0);
         tall.width = 260.0;
         tall.height = 1000.0;
-        ensure_result_reserve(&mut tall, &line, &[0], None, false, true, "");
+        ensure_result_reserve(&mut tall, &line, &[0], None, false, true, "", 0);
         assert_eq!(tall.height, 1000.0, "достаточная высота не сжимается");
     }
 
@@ -20039,6 +20055,7 @@ mod tests {
             false,
             true,
             "",
+            0,
         );
         assert!(
             node.height >= needed - 1e-3,
@@ -20114,7 +20131,7 @@ mod tests {
                 .get(&node.id)
                 .map(|lines| formula_line_indices(lines))
                 .unwrap_or_default();
-            measured_result_reserve_height(text, node.width, &formula_lines, "", false, true, "")
+            measured_result_reserve_height(text, node.width, &formula_lines, "", false, true, "", 0)
         };
         let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
         assert!(
@@ -20203,6 +20220,7 @@ mod tests {
             false,
             true,
             "",
+            0,
         );
         assert!(
             (tpl_node.height - needed).abs() < 1e-3,

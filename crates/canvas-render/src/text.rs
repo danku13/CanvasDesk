@@ -1113,13 +1113,35 @@ fn spill_hit_param(view: &crate::SpillView) -> SpillHitKind {
 /// одна строка-блок на каждое ребро без ожидающего порта. Наклонное моно
 /// начертание Р-2; unmapped — янтарный акцент анализа (Р-3). Зазоры:
 /// первый — 0, между строками — 2 (плотный список переменных).
+///
+/// FR-069 хвосты (T9-сессия 2026-09-24): перед ПЕРВОЙ авто-строкой
+/// вставляется подпись зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» (прототип §3.1 —
+/// авто-строки идут с префиксом «входящие значения», единая таблица
+/// ноды). Метка — sans-строка без source_line (порты/ячейки не даёт,
+/// I-1); высота ряда — `ZONE_LABEL_LINE_HEIGHT` (как у Params/Calc).
+/// Зазор метки от предыдущей зоны (описание/тело) — 6 px; от первой
+/// авто-строки — 2 px (плотный список переменных).
 fn spill_row_items(
     theme: &ThemeColors,
     rows: &[canvas_core::flow::AutoRow],
     template: bool,
+    language: canvas_core::Language,
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
-    for (i, row) in rows.iter().enumerate() {
+    if rows.is_empty() {
+        return out;
+    }
+    // FR-069 хвосты: подпись зоны авто-строк — первая строка префикса.
+    // gap = 0 (push_item не вызывается — ручная сборка); зазор от
+    // предыдущей зоны (описание/шапка) задаётся в with_body_stack через
+    // first.gap.max(6.0) (тот же механизм, что у body-сегмента после
+    // авто-строк). Между меткой и первой авто-строкой — 2 px (плотный
+    // список переменных, та же высота, что между авто-строками).
+    out.push(zone_label_item(
+        theme,
+        row_grid::zone_label_text_lang(row_grid::ZoneKind::Auto, rows.len(), language),
+    ));
+    for row in rows.iter() {
         let unmapped = row.value.is_none();
         // Р-3: unmapped — янтарный акцент анализа (тот же тон, что
         // пунктир unmapped-ребра UNMAPPED_EDGE_COLOR, f32 → u8).
@@ -1129,7 +1151,7 @@ fn spill_row_items(
         // высота строки прежняя (I-1). display_text сохранён для ключа
         // кэша (значение upstream меняет строку → перешейп).
         out.push(BodyItem {
-            gap: if i == 0 { 0.0 } else { 2.0 },
+            gap: 2.0, // плотный список переменных (между меткой и первой строкой тоже 2 px)
             rule: false,
             text: row.path.clone(),
             font_size: 13.0,
@@ -3101,7 +3123,12 @@ impl TextSystem {
                     let spill_prefix = if body_hidden {
                         Vec::new()
                     } else {
-                        spill_row_items(&self.theme, auto_rows, node.template().is_some())
+                        spill_row_items(
+                            &self.theme,
+                            auto_rows,
+                            node.template().is_some(),
+                            self.language,
+                        )
                     };
                     // FR-069 (этап F): Σ-строка «Σ <имя узла>» — узловой итог
                     // после расчётных строк (прототип .row.total/totalRow):
@@ -3364,7 +3391,12 @@ impl TextSystem {
                             let spill_prefix = if body_hidden {
                                 Vec::new()
                             } else {
-                                spill_row_items(&self.theme, auto_rows, node.template().is_some())
+                                spill_row_items(
+                                    &self.theme,
+                                    auto_rows,
+                                    node.template().is_some(),
+                                    self.language,
+                                )
                             };
                             *layout = shape_body(
                                 &mut self.font_system,
@@ -5796,18 +5828,25 @@ load = connections_per_sec / (servers * server_rate)\n";
                 value: None,
             },
         ];
-        let items = spill_row_items(&theme, &rows, false);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].gap, 0.0, "первая авто-строка — без зазора");
-        assert_eq!(items[1].gap, 2.0, "плотный список переменных");
-        assert!(items.iter().all(|item| item.oblique && item.mono));
+        let items = spill_row_items(&theme, &rows, false, canvas_core::Language::Ru);
+        // FR-069 хвосты: подпись зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · 2» + 2 авто-строки.
+        assert_eq!(items.len(), 3, "метка зоны + 2 авто-строки");
+        assert_eq!(items[0].text, "ВХОДЯЩИЕ ЗНАЧЕНИЯ · 2");
+        assert_eq!(items[0].line_height, ZONE_LABEL_LINE_HEIGHT);
+        assert!(!items[0].oblique, "метка — sans");
+        assert_eq!(
+            items[1].gap, 2.0,
+            "первая авто-строка — после метки (зазор 2)"
+        );
+        assert_eq!(items[2].gap, 2.0, "плотный список переменных");
+        assert!(items[1..].iter().all(|item| item.oblique && item.mono));
         // FR-061 этап B: левая часть авто-строки — ТОЛЬКО имя (путь);
         // значение/юнит — ячейки таблицы на направляющих (D-2/D-4).
-        assert_eq!(items[0].text, "Трафик.peak_rps");
-        assert_eq!(items[1].text, "Курсы.usd");
-        assert_eq!(items[0].color, theme.code_text, "пролитое — цвет кода");
-        assert_ne!(items[1].color, theme.code_text, "unmapped — янтарь Р-3");
-        match &items[0].spill {
+        assert_eq!(items[1].text, "Трафик.peak_rps");
+        assert_eq!(items[2].text, "Курсы.usd");
+        assert_eq!(items[1].color, theme.code_text, "пролитое — цвет кода");
+        assert_ne!(items[2].color, theme.code_text, "unmapped — янтарь Р-3");
+        match &items[1].spill {
             Some(SpillHitKind::AutoRow {
                 path,
                 slot,
@@ -5824,9 +5863,49 @@ load = connections_per_sec / (servers * server_rate)\n";
         }
     }
 
+    /// FR-069 хвосты (T9-сессия 2026-09-24): подпись зоны авто-строк
+    /// «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» — первая строка префикса; EN-локализация —
+    /// «INCOMING VALUES · N». Счётчик = число авто-строк; пустой список —
+    /// метка не рисуется (ранний возврат, 0 элементов).
+    #[test]
+    fn spill_row_items_zone_label_localized_and_counted() {
+        let theme = ThemeColors::dark();
+        let row = |slot: usize, path: &str, value: Option<f64>| canvas_core::flow::AutoRow {
+            node_id: "n".to_owned(),
+            edge_id: format!("e{slot}"),
+            slot,
+            path: path.to_owned(),
+            field: path.split('.').next().unwrap_or("").to_owned(),
+            value: value.map(canvas_core::Value::scalar),
+        };
+        // RU — «ВХОДЯЩИЕ ЗНАЧЕНИЯ · 3», три авто-строки после метки.
+        let rows_ru = vec![
+            row(0, "Трафик.rps", Some(800.0)),
+            row(1, "Курсы.usd", Some(95.5)),
+            row(2, "Кэш.hit_rate", None),
+        ];
+        let items_ru = spill_row_items(&theme, &rows_ru, false, canvas_core::Language::Ru);
+        assert_eq!(items_ru.len(), 4, "метка + 3 авто-строки");
+        assert_eq!(items_ru[0].text, "ВХОДЯЩИЕ ЗНАЧЕНИЯ · 3");
+        assert!(!items_ru[0].mono, "метка — sans");
+        assert!(!items_ru[0].oblique, "метка — не наклонная");
+        assert_eq!(items_ru[0].line_height, ZONE_LABEL_LINE_HEIGHT);
+        // EN — «INCOMING VALUES · 2», две авто-строки.
+        let rows_en = vec![row(0, "T.rps", Some(1.0)), row(1, "T.usd", Some(2.0))];
+        let items_en = spill_row_items(&theme, &rows_en, false, canvas_core::Language::En);
+        assert_eq!(items_en.len(), 3, "метка + 2 авто-строки");
+        assert_eq!(items_en[0].text, "INCOMING VALUES · 2");
+        // Пустой список — пустой префикс (метка без авто-строк не рисуется).
+        let empty = spill_row_items(&theme, &[], false, canvas_core::Language::Ru);
+        assert!(empty.is_empty(), "нет авто-строк — нет метки зоны");
+    }
+
     /// FR-050 Р-4 (этап D): префикс авто-строк растит высоту стека тела
     /// (карточка обязана вместить строку-проекцию — рост в сцене, метрики
     /// здесь); пустой префикс — высота прежняя (байт-в-байт инвариант).
+    /// FR-069 хвосты (T9-сессия 2026-09-24): префикс теперь включает
+    /// подпись зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» — высота ряда метки входит в
+    /// стек (I-2: measure = render).
     #[test]
     fn with_body_stack_prefix_grows_height() {
         let mut fs = FontSystem::new();
@@ -5860,7 +5939,7 @@ load = connections_per_sec / (servers * server_rate)\n";
             field: "peak_rps".to_owned(),
             value: Some(canvas_core::Value::scalar(1389.0)),
         }];
-        let prefix = spill_row_items(&theme, &rows, false);
+        let prefix = spill_row_items(&theme, &rows, false, canvas_core::Language::Ru);
         let with_rows = with_body_stack(
             &mut fs,
             &theme,
