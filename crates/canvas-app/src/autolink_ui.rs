@@ -274,8 +274,13 @@ pub fn restore_rect(banner: [f32; 4]) -> [f32; 4] {
 }
 
 /// Тело прокрутки — между шапкой/баннером и футером.
-pub fn body_rect(win: [f32; 4]) -> [f32; 4] {
-    let top = win[1] + HEADER_H + 8.0;
+/// `banner_visible` — виден ли баннер отклонённых (У8): когда виден,
+/// тело сдвигается вниз на [`BANNER_H`], иначе строки и заголовки групп
+/// рисуются поверх баннера (баг вёрстки — баннер и body начинались на
+/// одном Y). Вызывающий (сцена/рендер) вычисляет флаг из `review.counts()`.
+pub fn body_rect(win: [f32; 4], banner_visible: bool) -> [f32; 4] {
+    let banner_off = if banner_visible { BANNER_H } else { 0.0 };
+    let top = win[1] + HEADER_H + 8.0 + banner_off;
     [
         win[0],
         top,
@@ -343,7 +348,9 @@ pub struct RowsLayout {
 /// «верх строки ≤ низ тела»). Заголовки групп — в переборе групп (одна
 /// строка — окно списка избыточно).
 pub fn rows_layout(review: &Review, win: [f32; 4], scroll: f32) -> RowsLayout {
-    let body = body_rect(win);
+    // Баннер отклонённых (У8) сдвигает тело вниз — body_rect с флагом.
+    let (_, rejected, _) = review.counts();
+    let body = body_rect(win, rejected > 0);
     let content = content_height(review);
     let visible = body[3].max(0.0);
     let mut list = ScrollState {
@@ -561,7 +568,7 @@ mod tests {
                 .collect(),
         );
         let win = dialog_rect([1280.0, 800.0]);
-        let body = body_rect(win);
+        let body = body_rect(win, false);
         // Прежняя формула (до миграции) — для сравнения
         let old = |scroll: f32| -> RowsLayout {
             let content = content_height(&review);
@@ -666,5 +673,78 @@ mod tests {
             "нижняя строка видна на максимальной прокрутке"
         );
         assert!(layout.rows.last().map(|(i, _)| *i) != Some(39));
+    }
+
+    /// Баннер отклонённых (У8) сдвигает тело вниз на `BANNER_H` — строки
+    /// и заголовки групп НЕ перекрывают баннер. Без фиксa `body_rect`
+    /// всегда начинался с `HEADER_H + 8` (как без баннера) — первая строка
+    /// рисовалась поверх баннера.
+    #[test]
+    fn body_rect_shifts_down_when_banner_visible() {
+        let win = dialog_rect([1280.0, 800.0]);
+        let without_banner = body_rect(win, false);
+        let with_banner = body_rect(win, true);
+        // Тело сдвигается вниз на BANNER_H (42px) — баннер занимает место.
+        assert_eq!(
+            with_banner[1] - without_banner[1],
+            BANNER_H,
+            "тело сдвинуто вниз на BANNER_H при видимом баннере"
+        );
+        // Высота тела уменьшается на BANNER_H — контент влезает под баннер.
+        assert_eq!(
+            without_banner[3] - with_banner[3],
+            BANNER_H,
+            "высота тела уменьшена на BANNER_H"
+        );
+    }
+
+    /// `rows_layout` с отклонёнными элементами: строки начинаются НИЖЕ
+    /// баннера — первая строка не перекрывает баннер. Баннер рисуется на
+    /// `win[1] + HEADER_H + 8` с высотой `BANNER_H - 8` = 34px. Без фиксы
+    /// первая строка группы начиналась на том же Y — перекрытие.
+    #[test]
+    fn rows_layout_with_banner_does_not_overlap() {
+        let canvas = canvas_ab();
+        let mut review = Review::build(&canvas, vec![proposal("A", "B", "rate")]);
+        // Отклонить все → баннер виден, body_rect сдвигается вниз.
+        review.set_all(ItemState::Rejected);
+        let win = dialog_rect([1280.0, 800.0]);
+        let layout = rows_layout(&review, win, 0.0);
+        let banner = banner_rect(win);
+        let banner_bottom = banner[1] + banner[3];
+        // Первая строка (или заголовок группы) начинается НИЖЕ баннера.
+        if let Some((_, head)) = layout.group_heads.first() {
+            assert!(
+                head[1] >= banner_bottom - 0.5,
+                "заголовок группы ({}) ниже низа баннера ({})",
+                head[1],
+                banner_bottom
+            );
+        }
+        for (_, rects) in &layout.rows {
+            assert!(
+                rects.row[1] >= banner_bottom - 0.5,
+                "строка ({}) ниже низа баннера ({})",
+                rects.row[1],
+                banner_bottom
+            );
+        }
+    }
+
+    /// `rows_layout` без отклонённых: баннера нет, body на прежнем месте.
+    #[test]
+    fn rows_layout_without_banner_uses_plain_body() {
+        let canvas = canvas_ab();
+        let review = Review::build(&canvas, vec![proposal("A", "B", "rate")]);
+        let win = dialog_rect([1280.0, 800.0]);
+        let layout = rows_layout(&review, win, 0.0);
+        let body = body_rect(win, false);
+        // Заголовок группы начинается на BODY_TOP_PAD ниже верха тела.
+        if let Some((_, head)) = layout.group_heads.first() {
+            assert!(
+                (head[1] - body[1] - BODY_TOP_PAD).abs() < 0.5,
+                "заголовок на BODY_TOP_PAD ниже верха тела (без баннера)"
+            );
+        }
     }
 }

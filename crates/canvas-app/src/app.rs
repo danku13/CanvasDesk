@@ -14493,7 +14493,11 @@ impl App {
                 row_border,
                 6.0,
             );
-            // «имя → приёмник (параметр)» + процент/единицы
+            // «имя → приёмник» + процент/единицы.
+            // БЕЗ дублирования имени параметра: прежний формат
+            // `param → to (параметр param)` показывал имя дважды.
+            // Локализованная подпись «параметр {name}» используется как
+            // левая часть (информативнее голого имени).
             let param_label = self.trf(
                 keys::AUTOLINK_PARAM,
                 &[("{name}", item.proposal.param.as_str())],
@@ -14505,10 +14509,7 @@ impl App {
                     (rects.pct[0] - rects.row[0] - 20.0).max(0.0),
                     16.0,
                 ),
-                &format!(
-                    "{} → {} ({})",
-                    item.proposal.param, item.to_title, param_label
-                ),
+                &format!("{} → {}", param_label, item.to_title),
                 color_to_rgba(if item.state == ItemState::Rejected {
                     palette.quote
                 } else {
@@ -14637,7 +14638,20 @@ impl App {
             canvas_ui::geometry::UiRect::new(
                 footer[0] + 16.0,
                 footer[1] + 10.0,
-                (footer[2] - 3.0 * autolink_ui::FOOT_BTN_W - 40.0).max(120.0),
+                // Ширина подсказки: не перекрывать кнопки футера.
+                // Прежняя формула `footer[2] - 3*FOOT_BTN_W - 40` давала
+                // 366px — подсказка наезжала на «Отклонить все» (левая
+                // кнопка начинается на 448px от правого края). Корректная
+                // ширина = footer_w − правый отступ (16) − CREATE_W − 2·(
+                // FOOT_BTN_W + 10) − левый отступ (16) − зазор (10).
+                (footer[2]
+                    - autolink_ui::CREATE_W
+                    - 2.0 * autolink_ui::FOOT_BTN_W
+                    - 2.0 * 10.0
+                    - 16.0
+                    - 16.0
+                    - 10.0)
+                    .max(120.0),
                 15.0,
             ),
             self.tr(keys::AUTOLINK_HINT),
@@ -16689,7 +16703,15 @@ impl App {
         if self.autolink_review.is_some() {
             let viewport = self.viewport_logical();
             let win = autolink_ui::dialog_rect(viewport);
-            let body = autolink_ui::body_rect(win);
+            // Баннер отклонённых сдвигает тело вниз — тот же флаг, что у
+            // rows_layout (review.counts). Без этого hit-test body_rect
+            // не совпадал бы с раскладкой строк (баннер не учтён).
+            let (_, rejected, _) = self
+                .autolink_review
+                .as_ref()
+                .map(|r| r.counts())
+                .unwrap_or((0, 0, 0));
+            let body = autolink_ui::body_rect(win, rejected > 0);
             if point_in_rect(body, self.cursor) {
                 let max = self
                     .autolink_review
