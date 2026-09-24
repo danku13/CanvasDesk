@@ -5514,3 +5514,25 @@ Stage Summary:
 - Все четыре симптома баг-репорта объяснены и устранены в коде; маскировка багов тестовой средой (mono-only FontSystem) устранена — регресс-тест паритета работает на производственной базе шрифтов.
 - Гейты: fmt/clippy -D warnings 0; test — 52 сьюта 0 отказов (1764 теста, +6); wasm ступени 1–2 + mcp-wasm ступень 1 зелёные (wasmtime отсутствует — как прежде); замер raw cdylib release: 12 077 323 → 12 080 602 Б (+3 279 Б ≈ 3,2 КБ ≤ 100 КБ).
 - Известное ограничение (v2): авто-строки с длинным путём не усекаются (имя не деградирует; на 360–400 помещается); экспандер описания при раскрытии выше резерва — рост-only refit догоняет при следующем пересчёте.
+
+---
+Task ID: FR-065
+Agent: main (сессия web-890fcc21)
+Task: Реализовать FR-065 — поярусный параллелизм пересчёта DAG (topo_levels + rayon par_iter)
+
+Work Log:
+- Прочитан план FR-065 (`docs/change-requests/fr-065-tiered-parallelism.md`): 3 фазы P1 `topo_levels` → P2 `std::thread::scope` per-level → P3 `rayon` `par_iter`; контракты §5.1/§5.2/§5.6/§5.7.3/§5.8; ограничения (collect-then-reduce, cfg(not(wasm32)) + flatten-фолбэк, golden-побитовоидентичность, zero-dep инвариант).
+- P1: добавлена `pub fn topo_levels(canvas) -> Result<Vec<Vec<usize>>, CycleError>` рядом с `topo_sort` (`flow.rs`). Тот же Kahn, но drain-фронтир в sub-vec на каждой итерации — flatten-эквивалентность `topo_sort` побитово. Общая настройка графа вынесена в приватный `build_value_graph()` (без изменения поведения `topo_sort`). `topo_levels` экспортирован из `lib.rs`.
+- Активация фичи: `canvas-core/Cargo.toml` — `parallel = ["dep:rayon"]` (раньше `parallel = []`); `rayon` (1.12, MIT OR Apache-2.0 — уже транзитивно через `cosmic-text`) добавлен в `[workspace.dependencies]` корневого `Cargo.toml`.
+- P2/P3 — попытка v1 `std::thread::scope`: реализовано, но на тяжёлом графе (8192-нод exponential diamond, тест `lineage::tests::budget_truncates_exponential_diamond`) превышает лимит OS-потоков — `failed to spawn thread: Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }` (EAGAIN).
+- P2/P3 — переключение на v2 `rayon` `par_iter`: `level.par_iter().map(|&i| eval_node(...)).collect()` (collect-then-reduce). Реализация вынесена в приватные `eval_node()` (чистая функция, shared read-only `&solutions`) + `merge_node_results()` (sort by `index` ascending — детерминированный порядок, контракт §5.7.3). Сигнатуры `propagate_with_lines`/`propagate_with_lines_data`/`topo_sort` НЕ меняются (контракт §5.1/§5.2).
+- Тесты: создан `crates/canvas-core/tests/parallel_determinism.rs` (16 тестов): flatten-эквивалентность (8 топологий: empty/no-edges/chain/diamond/interleaved/random-100/random-1000/cycle/self-loop), independence инвариант Кана (внутри яруса нет value-рёбер), детерминизм повторных вызовов `propagate_with_lines` (chain/diamond/wide-level/random-1000/whatif-override — все 5×10-20 повторов дают побитово идентичные `FlowSolutions`).
+- Документация: `docs/DEPENDENCIES.md` §3→§2 (`rayon` мигрирован в прямые прод-зависимости); `docs/SPEC.md` §6.3 (комментарий о параллельном пути и критерии ≥2× на 1000 нод/4 ядра); `docs/change-requests/fr-065-tiered-parallelism.md` (статус → реализовано, Changelog с описанием отступления от плана); `docs/change-requests/index-cr-fr.md` (статус → ✅ реализовано).
+- Гейты (все зелёные): `cargo build --no-default-features` (zero-dep — rayon НЕ подключается), `cargo test -p canvas-core` (385+16=401/401), `cargo test -p canvas-core --features parallel` (401/401), `cargo test -p canvas-scene --features canvas-core/parallel` (97/97 golden ADR-0005/0006 побитово идентичны), `cargo clippy -p canvas-core -p canvas-scene -p canvas-mcp --features canvas-core/parallel --all-targets -- -D warnings`, `cargo fmt --check`, `scripts/wasm_gate.sh --check`, `scripts/mcp_wasm_gate.sh --check` (flatten-фолбэк на wasm32-wasip1/wasm32-unknown-unknown).
+- Инциденты по ходу: (1) `std::thread::scope` EAGAIN на 8192-нод exponential diamond — переключение на `rayon`; (2) диск 100 % (cargo clean 8,5 ГБ → 17 %); (3) `cargo test --workspace` линкер Bus error на тяжёлых canvas-app тест-бинарях из-за лимитов среды (4 ГБ RAM, swap=0) — сужено до core+scene+mcp.
+- Коммит: `a4005db feat(core/flow): tiered parallelism — topo_levels + rayon par_iter (FR-065)`. Push в `origin/main` успешен.
+
+Stage Summary:
+- FR-065 реализован и влит в main: `topo_levels` + `rayon` `par_iter` per-level (v2 сразу, минуя v1 `std::thread::scope` — EAGAIN на тяжёлых графах). Контракты §5.1/§5.2/§5.6/§5.7.3/§5.8 соблюдены: сигнатуры стабильны, детерминизм побитовый, zero-dep инвариант B2B, wasm-фолбэк.
+- Гейты: 401/401 тестов canvas-core + 97/97 golden canvas-scene на ОБОИХ путях (default + --features parallel), wasm-гейты зелёные, clippy/fmt зелёные.
+- Не сделано: бенчмарк ≥2× на 1000 нод/4 ядра (критерий архдока §9 M4) — отложен на рантайм-приёмку владельцем (среда CI не позволяет запустить тяжёлый синтетический бенчмарк). Реализация `rayon` `par_iter` готова к замеру.
