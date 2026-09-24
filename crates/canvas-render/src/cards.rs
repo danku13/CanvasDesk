@@ -1788,8 +1788,14 @@ mod tests {
         //   • template_band_instance возвращает None (нет полосы)
         //   • template_icon_quads НЕ вызывается рендером (нет квад-иконки)
         // Это НАрост поверх card_instance, не отдельный путь.
-        assert!(template_band_instance(&plain).is_none(), "у обычной ноды нет полосы");
-        assert!(template_band_instance(&tpl).is_some(), "у шаблонной ноды есть полоса");
+        assert!(
+            template_band_instance(&plain).is_none(),
+            "у обычной ноды нет полосы"
+        );
+        assert!(
+            template_band_instance(&tpl).is_some(),
+            "у шаблонной ноды есть полоса"
+        );
         // Иконка lb — композиция из нескольких квадратов (весы); это декор,
         // не часть карточки. renderer вызывает template_icon_quads только
         // когда node.template().is_some() — у обычной text-ноды вызова нет.
