@@ -318,6 +318,35 @@ impl Node {
         self.canvasdesk.as_ref()?.desc.as_deref()
     }
 
+    /// FR-067 (этап F): имя Σ-строки тела («Σ <имя узла>», прототип
+    /// .row.total) — те же источники, что и заголовок карточки
+    /// (canvas-render cards::title_for, упрощённо без markdown-стрижки):
+    /// имя снапшота шаблона → имя файла → label → первая строка текста.
+    /// Рендер (кэш текста) и сцена (двухуровневый refit) вызывают ОДНУ
+    /// функцию — измерение и вёрстка не разъезжаются (I-2).
+    pub fn sigma_row_name(&self) -> String {
+        if let Some(name) = self
+            .template()
+            .and_then(|template| template.name.clone())
+            .filter(|name| !name.is_empty())
+        {
+            return name;
+        }
+        if let Some(file) = &self.file {
+            let stem = file.rsplit(['/', '\\']).next().unwrap_or(file);
+            return stem.to_owned();
+        }
+        if let Some(label) = self.label.clone().filter(|label| !label.is_empty()) {
+            return label;
+        }
+        self.text
+            .as_deref()
+            .and_then(|text| text.lines().next())
+            .filter(|line| !line.is_empty())
+            .unwrap_or("—")
+            .to_owned()
+    }
+
     /// FR-045 R-1: записать/снять описание (`canvasdesk.desc`). `None`
     /// удаляет поле (и пустой контейнер `canvasdesk` — как
     /// [`Node::set_expr`]); чужие поля расширения сохраняются.

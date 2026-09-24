@@ -580,6 +580,13 @@ pub enum BodyQuadKind {
     /// сверху/снизу ряда и её лидер (прототип .row.auto border dashed +
     /// .lead dashed amber). Штрихи — единая геометрия leader_dash_rects.
     AutoRowDash,
+    /// FR-067 (этап F): линия сверху Σ-строки (прототип .row.total).
+    SigmaRule,
+    /// FR-067 (этап F): пилюля бейджа — капсула (радиус = h/2); тон задаёт
+    /// цветовую семью текста/фона/рамки (прототип .badge).
+    BadgePillSpill,
+    BadgePillDelta,
+    BadgePillError,
     /// FR-061 этап D (D-14/Q9): вертикальная линия диагностики колоночной
     /// направляющей (value/unit right-края) — рисуется ТОЛЬКО при
     /// включённом DebugOverlay (F9/?ui=debug), на ноде невидима (Q9).
@@ -622,6 +629,8 @@ struct BodyBlock {
     /// FR-061 хвосты (D-8 runtime v1): аффорданс экспандера описания
     /// «⋯ целиком ▾»/«▴ свернуть» — кликабельная строка (hit-зона app.rs).
     expander: bool,
+    /// FR-067 (этап F): Σ-строка (RowKind::Sigma) — привязка по маркеру.
+    sigma: bool,
     /// FR-050 Н9-2 (этап D): данные тултипа проливания — блок
     /// пролитой строки (авто-строка/параметр); hit-зона собирается
     /// в цикле отрисовки тела.
@@ -679,6 +688,9 @@ struct BodyItem {
     /// FR-061 хвосты (D-8 runtime v1): аффорданс экспандера описания —
     /// кликабельная строка (BodyHit::DescExpander, hit-зона app.rs).
     expander: bool,
+    /// FR-067 (этап F): Σ-строка «Σ <имя узла>» — привязка ячейки узлового
+    /// итога (RowKind::Sigma) к своему блоку.
+    sigma: bool,
 }
 
 /// Метрики заголовка по уровню ATX: 1–3 крупно, 4–6 как bold body.
@@ -740,6 +752,7 @@ fn push_item(
 /// FR-050 Р-2 (этап D): строка-присваивание пролитого параметра
 /// (spill_params — строка с подписью источника «param ← Источник · выход»)
 /// помечается наклонным моно-начертанием + данными тултипа Н9-2.
+#[allow(clippy::too_many_arguments)] // FR-067: стек тела — 8 согласованных входов (I-2)
 fn body_items(
     theme: &ThemeColors,
     body_text: &str,
@@ -751,6 +764,11 @@ fn body_items(
     // зоной описания — из вёрстки тела он убран (супрессия дубликата),
     // сам текст ноды не меняется (I-1/I-3). None — супрессии нет.
     suppress: Option<(usize, usize)>,
+    // FR-067 (этап F): текст Σ-строки («Σ <имя узла>») — вставляется
+    // ПОСЛЕ последней расчётной строки; None/пусто — строки нет
+    // (нет итога/ошибка/свёрнутый блок). I-2: параметр общий
+    // у рендера и измерения.
+    sigma: Option<String>,
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
@@ -829,6 +847,9 @@ fn body_items(
     let calc_count = formula_lines.len() - param_count;
     let mut param_label_shown = false;
     let mut calc_label_shown = false;
+    // FR-067: расчётные строки действительно отрендерены (не свёрнуты) —
+    // условие вставки Σ-строки.
+    let mut calc_rendered = false;
     for (seg_start, seg_end, source_line) in segments {
         if let Some((header_line, calc_count)) = header_plan {
             if source_line == Some(header_line) {
@@ -922,6 +943,26 @@ fn body_items(
             &mut prev,
             &mut list_id,
         );
+        if source_line.is_some_and(|line| {
+            lines
+                .get(line)
+                .is_some_and(|l| !matches!(line_kind(l), NumiLineKind::Assignment { .. }))
+        }) {
+            calc_rendered = true;
+        }
+    }
+    // FR-067 (этап F): Σ-строка — после последней расчётной строки
+    // (прототип: totalRow замыкает ведомость).
+    if let Some(text) = sigma
+        .filter(|text| !text.is_empty())
+        .filter(|_| calc_rendered)
+    {
+        push_item(
+            &mut out,
+            &mut prev,
+            (false, false, None),
+            sigma_row_item(theme, text),
+        );
     }
     out
 }
@@ -953,6 +994,7 @@ fn block_header_item(
         header: true,
         preview: false,
         expander: false,
+        sigma: false,
     }
 }
 
@@ -984,6 +1026,7 @@ fn block_preview_item(
         header: false,
         preview: true,
         expander: false,
+        sigma: false,
     }
 }
 
@@ -1009,6 +1052,32 @@ fn zone_label_item(theme: &ThemeColors, text: String) -> BodyItem {
         header: false,
         preview: false,
         expander: false,
+        sigma: false,
+    }
+}
+
+/// FR-067 (этап F): Σ-строка «Σ <имя узла>» (прототип .row.total) — моно,
+/// цвет потока; узловой итог идёт ячейкой на направляющей чисел
+/// (RowKind::Sigma), линия сверху — квад SigmaRule в хроме таблицы.
+fn sigma_row_item(theme: &ThemeColors, text: String) -> BodyItem {
+    BodyItem {
+        gap: 0.0, // push_item пересчитает по предыдущему блоку
+        rule: false,
+        text,
+        font_size: BODY_FONT_SIZE,
+        line_height: BODY_LINE_HEIGHT,
+        color: theme.link,
+        indent: 0.0,
+        mono: true,
+        bold: false,
+        deco: ItemDeco::None,
+        source_line: None,
+        oblique: false,
+        spill: None,
+        header: false,
+        preview: false,
+        expander: false,
+        sigma: true,
     }
 }
 
@@ -1066,6 +1135,7 @@ fn spill_row_items(
             header: false,
             preview: false,
             expander: false,
+            sigma: false,
         });
     }
     out
@@ -1109,6 +1179,7 @@ fn push_gfm_blocks(
                         header: false,
                         preview: false,
                         expander: false,
+                        sigma: false,
                     },
                 );
             }
@@ -1139,6 +1210,7 @@ fn push_gfm_blocks(
                         header: false,
                         preview: false,
                         expander: false,
+                        sigma: false,
                     },
                 );
             }
@@ -1164,6 +1236,7 @@ fn push_gfm_blocks(
                         header: false,
                         preview: false,
                         expander: false,
+                        sigma: false,
                     },
                 );
             }
@@ -1189,6 +1262,7 @@ fn push_gfm_blocks(
                         header: false,
                         preview: false,
                         expander: false,
+                        sigma: false,
                     },
                 );
             }
@@ -1214,6 +1288,7 @@ fn push_gfm_blocks(
                         header: false,
                         preview: false,
                         expander: false,
+                        sigma: false,
                     },
                 );
             }
@@ -1252,6 +1327,7 @@ fn push_gfm_blocks(
                             header: false,
                             preview: false,
                             expander: false,
+                            sigma: false,
                         },
                     );
                 }
@@ -1450,6 +1526,8 @@ fn with_body_stack(
     // развёрнут/кламп; состояние runtime, в .canvas не пишется — Q4).
     block_expanded: bool,
     desc_expanded: bool,
+    // FR-067 (этап F): текст Σ-строки («Σ <имя узла>») — см. body_items.
+    sigma: Option<String>,
     quads_out: &mut Vec<BodyQuad>,
     mut on_block: impl FnMut(
         &BodyItem,
@@ -1526,6 +1604,7 @@ fn with_body_stack(
         language,
         block_expanded,
         suppress,
+        sigma,
     );
     // Зона «Переменные» отделяется от собственного контента зазором
     // (первый элемент тела в покое имеет gap 0 — переопределяем).
@@ -1657,6 +1736,7 @@ fn desc_zone_item(theme: &ThemeColors, text: String) -> BodyItem {
         header: false,
         preview: false,
         expander: false,
+        sigma: false,
     }
 }
 
@@ -1682,6 +1762,7 @@ fn desc_expander_item(theme: &ThemeColors, text: String) -> BodyItem {
         header: false,
         preview: false,
         expander: true,
+        sigma: false,
     }
 }
 
@@ -1737,6 +1818,8 @@ fn shape_body(
     // FR-061 хвосты (D-7/D-8 runtime v1): см. with_body_stack.
     block_expanded: bool,
     desc_expanded: bool,
+    // FR-067 (этап F): Σ-строка («Σ <имя узла>»), см. body_items.
+    sigma: Option<String>,
 ) -> BodyLayout {
     let mut blocks: Vec<BodyBlock> = Vec::new();
     let mut quads: Vec<BodyQuad> = Vec::new();
@@ -1753,6 +1836,7 @@ fn shape_body(
         desc,
         block_expanded,
         desc_expanded,
+        sigma,
         &mut quads,
         |item, buffer, height_px, height, block_width, cursor_y, block_quads, quads| {
             // Маркеры пункта (буллит/чекбокс) — в колонке-gutter СЛЕВА от текста:
@@ -1849,6 +1933,7 @@ fn shape_body(
                 header: item.header,
                 preview: item.preview,
                 expander: item.expander,
+                sigma: item.sigma,
                 spill: item.spill.clone(),
             });
         },
@@ -1911,6 +1996,7 @@ pub fn measure_body_height(
     formula_lines: &[usize],
     desc: &str,
     desc_expanded: bool,
+    sigma_name: &str,
 ) -> f32 {
     let mut guard = measure_font_system();
     with_body_stack(
@@ -1932,6 +2018,11 @@ pub fn measure_body_height(
         // уменьшает (I-6, growth-only). Описание — по состоянию тоггла.
         true,
         desc_expanded,
+        if sigma_name.is_empty() {
+            None
+        } else {
+            Some(sigma_name.to_owned())
+        },
         // Измерению квады и буферы не нужны — нужна только высота стека.
         &mut Vec::new(),
         |_, _, _, _, _, _, _, _| {},
@@ -2186,6 +2277,9 @@ struct CachedTitle {
     result: Option<Buffer>,
     /// FR-013: программный итог — диагностика (красный цвет строки).
     result_error: bool,
+    /// FR-067 (этап F): метка «ИТОГ» слева в строке футера (прототип
+    /// .strip-d .lbl) — sans, приглушённый тон; None — итога нет.
+    result_label: Option<Buffer>,
     /// FR-013: ширина зашейпленного программного итога в px буфера — для
     /// выравнивания по правому краю футера (TextArea.left = right − width).
     result_width_px: f32,
@@ -2234,6 +2328,9 @@ struct CachedRow {
     value: Option<CachedCell>,
     unit: Option<CachedCell>,
     badge: Option<CachedCell>,
+    /// FR-067 (этап F): тон пилюли бейджа (None — бейджа нет) — квад-капсула
+    /// рисуется в хроме таблицы (renderer решает цвета по теме).
+    badge_tone: Option<row_grid::BadgeTone>,
     /// Полный текст ошибки (тултип «!», механика FR-013 пр.4).
     error_message: Option<String>,
 }
@@ -2884,6 +2981,17 @@ impl TextSystem {
                     } else {
                         spill_row_items(&self.theme, auto_rows, node.template().is_some())
                     };
+                    // FR-067 (этап F): Σ-строка «Σ <имя узла>» — узловой итог
+                    // после расчётных строк (прототип .row.total/totalRow):
+                    // есть итог (не ошибка), блок развёрнут, тело рисуется.
+                    // Имя — общая функция ядра (I-2 с оценкой/измерением).
+                    let sigma_text =
+                        if body_hidden || !block_expanded || result_text.is_empty() || result_error
+                        {
+                            None
+                        } else {
+                            Some(format!("Σ {}", node.sigma_row_name()))
+                        };
                     let mut body =
                         if body_text.is_empty() && spill_prefix.is_empty() && desc_ref.is_none() {
                             None
@@ -2908,14 +3016,15 @@ impl TextSystem {
                                 desc_ref,
                                 block_expanded,
                                 desc_expanded,
+                                sigma_text.clone(),
                             ))
                         };
 
                     // FR-013: строка результата — одна строка в футере
                     // карточки, шейпится вместе с остальным кэшем ноды;
                     // ширина строки замеряется для правого выравнивания
-                    let (result, result_width_px) = if result_text.is_empty() {
-                        (None, 0.0)
+                    let (result, result_width_px, result_label) = if result_text.is_empty() {
+                        (None, 0.0, None)
                     } else {
                         let (_, body_width, _) = body_area(node);
                         let mut buffer = Buffer::new(
@@ -2940,7 +3049,27 @@ impl TextSystem {
                             .next()
                             .map(|run| run.line_w)
                             .unwrap_or(0.0);
-                        (Some(buffer), result_width_px)
+                        // FR-067 (этап F): метка «ИТОГ» (прототип .strip-d
+                        // .lbl): sans, приглушённый тон, слева в футере.
+                        let mut label = Buffer::new(
+                            &mut self.font_system,
+                            Metrics::new(BADGE_FONT_SIZE * zoom_px, BADGE_LINE_HEIGHT * zoom_px),
+                        );
+                        label.set_wrap(&mut self.font_system, Wrap::None);
+                        label.set_size(
+                            &mut self.font_system,
+                            Some(body_width * zoom_px),
+                            Some(BADGE_LINE_HEIGHT * zoom_px),
+                        );
+                        let label_text = row_grid::result_footer_label_lang(self.language);
+                        label.set_text(
+                            &mut self.font_system,
+                            &label_text,
+                            sans_attrs(),
+                            Shaping::Advanced,
+                        );
+                        label.shape_until_scroll(&mut self.font_system, false);
+                        (Some(buffer), result_width_px, Some(label))
                     };
 
                     // FR-061 этап B (D-2/D-4/D-5/D-6): табличные строки ноды —
@@ -3036,6 +3165,33 @@ impl TextSystem {
                                 }
                             }
                         }
+                        // FR-067 (этап F): Σ-строка «Σ <имя узла>» — после
+                        // ПОСЛЕДНЕЙ расчётной строки (прототип totalRow);
+                        // итог — узловое значение (result_text), ошибок не
+                        // показываем (там футер-диагностика). Условие — те
+                        // же, что для sigma_text в body_items (I-2).
+                        if let Some(sigma_name) = sigma_text {
+                            if let Some(idx) = rows_data
+                                .iter()
+                                .rposition(|row| row.kind == row_grid::RowKind::Calc)
+                            {
+                                rows_data.insert(
+                                    idx + 1,
+                                    row_grid::RowCells {
+                                        kind: row_grid::RowKind::Sigma,
+                                        source_line: None,
+                                        name: sigma_name.clone(),
+                                        formula: String::new(),
+                                        value: result_text.clone(),
+                                        unit: String::new(),
+                                        upstream: false,
+                                        dim_value: false,
+                                        badge: None,
+                                        error_message: None,
+                                    },
+                                );
+                            }
+                        }
                         // Привязка строк к геометрии блоков: авто-строки —
                         // префиксные блоки (по порядку), Param/Calc — блок
                         // своей строки текста (I-1: те же Y, что у портов).
@@ -3064,6 +3220,11 @@ impl TextSystem {
                                 // preview (вставка в body_items, I-2).
                                 row_grid::RowKind::Preview => {
                                     layout.blocks.iter().position(|block| block.preview)
+                                }
+                                // FR-067 (этап F): Σ-строка — блок с маркером
+                                // sigma (элемент «Σ <имя узла>» в body_items).
+                                row_grid::RowKind::Sigma => {
+                                    layout.blocks.iter().position(|block| block.sigma)
                                 }
                                 row_grid::RowKind::Auto => {
                                     let pos = auto_blocks.get(auto_i).copied();
@@ -3127,7 +3288,9 @@ impl TextSystem {
                                 && geo[k].3 == geo[k - 1].3 + 1
                                 && !matches!(
                                     rows_data[k].kind,
-                                    row_grid::RowKind::Total | row_grid::RowKind::Preview
+                                    row_grid::RowKind::Total
+                                        | row_grid::RowKind::Preview
+                                        | row_grid::RowKind::Sigma
                                 )
                             {
                                 k += 1;
@@ -3139,7 +3302,9 @@ impl TextSystem {
                                     *z = pos % 2 == 1
                                         && !matches!(
                                             rows_data[j + pos].kind,
-                                            row_grid::RowKind::Total | row_grid::RowKind::Preview
+                                            row_grid::RowKind::Total
+                                                | row_grid::RowKind::Preview
+                                                | row_grid::RowKind::Sigma
                                         );
                                 }
                             }
@@ -3162,6 +3327,9 @@ impl TextSystem {
                                 } else {
                                     self.theme.link
                                 };
+                            // FR-067 (этап F): тон пилюли — для квада-капсулы
+                            // (цвета решает рендер по теме, см. renderer).
+                            let badge_tone = row.badge.as_ref().map(row_grid::RowBadge::tone);
                             let badge = match (&row.badge, pass.badge_mode) {
                                 (
                                     Some(badge),
@@ -3195,6 +3363,7 @@ impl TextSystem {
                                 row_line_h: g.1,
                                 left_end: g.2,
                                 zebra: *z,
+                                badge_tone,
                                 value: shape_row_cell(
                                     &mut self.font_system,
                                     &row.value,
@@ -3291,6 +3460,38 @@ impl TextSystem {
                                         table_quads.push(BodyQuad { rect: dash, kind });
                                     }
                                 }
+                                // FR-067 (этап F): Σ-строка — линия сверху
+                                // (прототип .row.total border-top, 1px).
+                                if row.kind == row_grid::RowKind::Sigma {
+                                    table_quads.push(BodyQuad {
+                                        rect: [0.0, row.row_top * z, body_width * z, z],
+                                        kind: BodyQuadKind::SigmaRule,
+                                    });
+                                }
+                                // FR-067 (этап F): пилюля бейджа — капсула
+                                // (радиус = h/2) в бейдж-колонке (прототип
+                                // .badge: фон ≈ 9 %, рамка ≈ 50 % цвета текста).
+                                // Ширина колонки уже включает 2·ROW_BADGE_PAD_H.
+                                if let Some(tone) = row.badge_tone {
+                                    const BADGE_PILL_H: f32 = 14.0;
+                                    let pill_x = (body_width - g.badge_w).max(0.0) * z;
+                                    let pill_y =
+                                        (row.row_top + (row.row_line_h - BADGE_PILL_H) / 2.0) * z;
+                                    table_quads.push(BodyQuad {
+                                        rect: [pill_x, pill_y, g.badge_w * z, BADGE_PILL_H * z],
+                                        kind: match tone {
+                                            row_grid::BadgeTone::Spill => {
+                                                BodyQuadKind::BadgePillSpill
+                                            }
+                                            row_grid::BadgeTone::Delta => {
+                                                BodyQuadKind::BadgePillDelta
+                                            }
+                                            row_grid::BadgeTone::Error => {
+                                                BodyQuadKind::BadgePillError
+                                            }
+                                        },
+                                    });
+                                }
                             }
                         }
                         if !table_quads.is_empty() {
@@ -3319,6 +3520,7 @@ impl TextSystem {
                             result_width_px,
                             rows,
                             row_guides,
+                            result_label,
                             zoom_px,
                             width_px,
                             title_text,
@@ -3910,6 +4112,29 @@ impl TextSystem {
                     // карточки, выравнивание по ПРАВОМУ краю ноды:
                     // TextArea.left = правая граница футера − ширина строки.
                     // Успех — акцентный цвет, ошибка — красная диагностика.
+                    // FR-067 (этап F): метка «ИТОГ» слева в строке футера
+                    // (прототип .strip-d .lbl): sans 10, приглушённый тон,
+                    // вертикально отцентрована в полосе футера.
+                    if let Some(label) = &entry.result_label {
+                        let top_world = node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT;
+                        let left_world = node.x + BODY_PADDING;
+                        let pos = to_physical([left_world, top_world]);
+                        let v_center = ((RESULT_LINE_HEIGHT - BADGE_LINE_HEIGHT) / 2.0) * zoom_px;
+                        areas.push(TextArea {
+                            buffer: label,
+                            left: pos[0],
+                            top: pos[1] + v_center,
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: (pos[0].floor() as i32) - 1,
+                                top: pos[1].floor() as i32,
+                                right: (pos[0] + BADGE_FONT_SIZE * 6.0 * zoom_px) as i32,
+                                bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
+                            },
+                            default_color: dim_color(on_card(self.theme.quote), text_factor),
+                            custom_glyphs: &[],
+                        });
+                    }
                     if let Some(result) = &entry.result {
                         let top_world = node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT;
                         let left_world = node.x + BODY_PADDING;
@@ -4659,6 +4884,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         )
     }
 
@@ -4681,6 +4907,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         assert_eq!(
             layout.blocks.len(),
@@ -4718,6 +4945,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         assert!(
             !layout
@@ -4742,6 +4970,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         let whatif = layout
             .quads
@@ -4820,6 +5049,7 @@ mod tests {
             row_line_h: BODY_LINE_HEIGHT,
             left_end: 0.0,
             zebra: false,
+            badge_tone: None,
             value: Some(cell(fs)),
             unit: None,
             badge: None,
@@ -4923,8 +5153,9 @@ mod tests {
             (String::new(), false)
         );
         // Мера стека: desc-зона добавляет высоту
-        let plain = measure_body_height("deploy = 40 $", 300.0, &[0], "", false);
-        let with_desc = measure_body_height("deploy = 40 $", 300.0, &[0], "Описание схемы.", false);
+        let plain = measure_body_height("deploy = 40 $", 300.0, &[0], "", false, "");
+        let with_desc =
+            measure_body_height("deploy = 40 $", 300.0, &[0], "Описание схемы.", false, "");
         assert!(
             with_desc > plain,
             "desc-зона добавляет высоту: {plain} → {with_desc}"
@@ -4942,6 +5173,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            None,
             None,
         );
         assert_eq!(items.len(), 3, "проза + подпись секции + формульная строка");
@@ -4994,6 +5226,7 @@ mod tests {
             canvas_core::Language::Ru,
             true,
             None,
+            None,
         );
         assert_eq!(items.len(), 3, "проза + подпись секции + пролитый параметр");
         assert!(!items[0].oblique, "проза — прямое начертание");
@@ -5038,6 +5271,7 @@ mod tests {
             canvas_core::Language::Ru,
             true,
             suppress,
+            None,
         );
         assert!(
             items
@@ -5061,6 +5295,7 @@ mod tests {
             canvas_core::Language::Ru,
             true,
             None,
+            None,
         );
         assert!(items[0].text.contains("шлюз обрабатывает"));
     }
@@ -5081,6 +5316,7 @@ mod tests {
             canvas_core::Language::Ru,
             true,
             suppress,
+            None,
         );
         assert!(
             items.iter().all(|item| !item.text.contains("это описание")),
@@ -5089,6 +5325,73 @@ mod tests {
         // Сегмент дробится: вступление и хвост живут отдельными блоками
         assert!(items.iter().any(|item| item.text == "вступление"));
         assert!(items.iter().any(|item| item.text == "хвост"));
+    }
+
+    /// FR-067 (этап F): Σ-строка — замыкает ведомость после расчётных
+    /// строк, mono; измерение (уровень 2) учитывает ряд и зазор — паритет
+    /// с shape_body.
+    #[test]
+    fn body_items_sigma_row_after_calc_and_measured() {
+        let theme = ThemeColors::dark();
+        let text = "rps = 800 rps\n800 rps / 2 ms";
+        let items = body_items(
+            &theme,
+            text,
+            &[0, 1],
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            None,
+            Some("Σ out_gateway".to_owned()),
+        );
+        let sigma = items
+            .iter()
+            .position(|item| item.sigma)
+            .expect("Σ-строка вставлена");
+        assert!(items[sigma].mono, "Σ-строка — моно (прототип .row)");
+        assert_eq!(items[sigma].text, "Σ out_gateway");
+        assert_eq!(sigma + 1, items.len(), "Σ-строка замыкает стек");
+        // Без итога/свёрнутый блок — строки нет
+        let items = body_items(
+            &theme,
+            text,
+            &[0, 1],
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            None,
+            None,
+        );
+        assert!(items.iter().all(|item| !item.sigma));
+
+        // Паритет measure = shape при наличии Σ-строки
+        let mut fs = FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            300.0,
+            1.0,
+            &[0, 1],
+            &[],
+            Vec::new(),
+            &[],
+            canvas_core::Language::Ru,
+            None,
+            true,
+            false,
+            Some("Σ out_gateway".to_owned()),
+        );
+        let rendered = layout
+            .blocks
+            .iter()
+            .map(|block| block.offset[1] + block.height)
+            .fold(0.0f32, f32::max);
+        let measured = measure_body_height(text, 300.0, &[0, 1], "", false, "Σ out_gateway");
+        assert_eq!(measured, rendered, "measure = render при Σ-строке");
     }
 
     /// FR-050 Р-4 (этап D): элементы авто-строк приёмника — префикс тела:
@@ -5165,6 +5468,7 @@ mod tests {
             // хвосты FR-061: развёрнутый блок, кламп описания (дефолты)
             true,
             false,
+            None,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -5192,6 +5496,7 @@ mod tests {
             // хвосты FR-061: развёрнутый блок, кламп описания (дефолты)
             true,
             false,
+            None,
             &mut Vec::new(),
             |_, _, _, _, _, _, _, _| {},
             |_, _| {},
@@ -5222,6 +5527,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         assert_eq!(
             layout.blocks.len(),
@@ -5527,7 +5833,7 @@ mod tests {
     #[test]
     fn measure_body_height_numi_list_exact() {
         let text = "rps = 200 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min";
-        let height = measure_body_height(text, 280.0, &[0, 1, 2], "", false);
+        let height = measure_body_height(text, 280.0, &[0, 1, 2], "", false, "");
         assert_eq!(
             height,
             ZONE_LABEL_LINE_HEIGHT + 3.0 * BODY_LINE_HEIGHT + 3.0 * 6.0,
@@ -5542,7 +5848,7 @@ mod tests {
     #[test]
     fn measure_body_height_mono_wraps_to_two_rows() {
         let line = format!("{} = 5", "a".repeat(28)); // 32 символа
-        let height = measure_body_height(&line, 240.0, &[0], "", false);
+        let height = measure_body_height(&line, 240.0, &[0], "", false, "");
         // FR-067: подпись «ПАРАМЕТРЫ · 1» (16) + зазор 6 + два ряда строки
         assert_eq!(
             ZONE_LABEL_LINE_HEIGHT + 6.0 + 2.0 * BODY_LINE_HEIGHT,
@@ -5558,8 +5864,8 @@ mod tests {
     #[test]
     fn measure_body_height_prose_uses_sans_metrics() {
         let line = "a".repeat(30); // 30 символов — между двумя метриками
-        let sans_height = measure_body_height(&line, 240.0, &[], "", false);
-        let mono_height = measure_body_height(&line, 240.0, &[0], "", false);
+        let sans_height = measure_body_height(&line, 240.0, &[], "", false, "");
+        let mono_height = measure_body_height(&line, 240.0, &[0], "", false, "");
         assert_eq!(
             sans_height, BODY_LINE_HEIGHT,
             "sans: 30 символов при ширине 240 — один ряд (без исходов метки нет)"
@@ -5577,7 +5883,7 @@ mod tests {
     /// (зазоры вокруг линии — по 8, как у рендера).
     #[test]
     fn measure_body_height_counts_rule() {
-        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[], "", false);
+        let height = measure_body_height("a\n\n---\n\nb", 300.0, &[], "", false, "");
         assert_eq!(
             height,
             BODY_LINE_HEIGHT + 8.0 + 12.0 + 8.0 + BODY_LINE_HEIGHT,
@@ -5601,6 +5907,7 @@ mod tests {
             canvas_core::Language::Ru,
             true,
             None,
+            None,
         );
         let header_pos = items
             .iter()
@@ -5619,6 +5926,7 @@ mod tests {
             canvas_core::Language::Ru,
             true,
             None,
+            None,
         );
         assert!(
             items.iter().all(|item| !item.header),
@@ -5633,6 +5941,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             false,
+            None,
             None,
         );
         let header_pos = collapsed
@@ -5676,13 +5985,14 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         let rendered = layout
             .blocks
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 300.0, lines, "", false);
+        let measured = measure_body_height(text, 300.0, lines, "", false, "");
         assert_eq!(
             measured, rendered,
             "блок-режим: measured {measured}, rendered {rendered}"
@@ -5695,8 +6005,9 @@ mod tests {
             &[0, 1, 2, 3],
             "",
             false,
+            "",
         );
-        let five_h = measure_body_height(text, 300.0, lines, "", false);
+        let five_h = measure_body_height(text, 300.0, lines, "", false, "");
         let diff = five_h - four;
         assert!(
             (2.0 * BODY_LINE_HEIGHT + 6.0..=2.0 * BODY_LINE_HEIGHT + 26.0).contains(&diff),
@@ -5728,13 +6039,14 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         let rendered = layout
             .blocks
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 300.0, &[2], "", false);
+        let measured = measure_body_height(text, 300.0, &[2], "", false, "");
         assert_eq!(
             measured, rendered,
             "измерение = рендер-стек: measured {measured}, rendered {rendered}"
@@ -5791,17 +6103,18 @@ mod tests {
             Some(para.as_str()),
             true,
             false,
+            None,
         );
         let rendered = layout
             .blocks
             .iter()
             .map(|block| block.offset[1] + block.height)
             .fold(0.0f32, f32::max);
-        let measured = measure_body_height(text, 420.0, &[3], &para, false);
+        let measured = measure_body_height(text, 420.0, &[3], &para, false, "");
         assert_eq!(measured, rendered, "паритет стека при супрессии абзаца");
         // Абзац, показанный зоной описания, дешевле постороннего описания:
         // тело без абзаца против полного тела
-        let other = measure_body_height(text, 420.0, &[3], "постороннее описание ноды", false);
+        let other = measure_body_height(text, 420.0, &[3], "постороннее описание ноды", false, "");
         assert!(
             measured < other,
             "супрессия убрала абзац из тела: {measured} < {other}"
@@ -5827,6 +6140,7 @@ mod tests {
             None,
             true,
             false,
+            None,
         );
         let bullet = layout
             .quads

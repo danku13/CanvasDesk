@@ -962,13 +962,22 @@ pub fn measured_result_reserve_height(
     desc: &str,
     // FR-067 (этап F): раскрытое описание («⋯ целиком ▾») растит стек —
     // refit по тогглу; футер-резерв — только нодам с футером (подгонка
-    // тела работает для ВСЕХ нод — ранний выход сцены снят).
+    // тела работает для ВСЕХ нод — ранний выход сцены снят); Σ-строка —
+    // «Σ <имя узла>» (пусто — строки нет).
     desc_expanded: bool,
     footer_reserve: bool,
+    sigma_name: &str,
 ) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     // FR-061 этап D (D-8): зона описания — часть стека (I-2: measure = render).
-    let body = measure_body_height(text, body_width, formula_lines, desc, desc_expanded);
+    let body = measure_body_height(
+        text,
+        body_width,
+        formula_lines,
+        desc,
+        desc_expanded,
+        sigma_name,
+    );
     let footer = if footer_reserve {
         RESULT_LINE_HEIGHT + 2.0
     } else {
@@ -2886,7 +2895,7 @@ impl App {
         let body_width = (node.width - BODY_PADDING * 2.0).max(0.0);
         // D-8: при правке тело И зона описания скрыты (I-5 деградация) —
         // мера без desc; после commit высоту догонит refit сцены.
-        let body_h = measure_body_height(&live_text, body_width, &formula_lines, "", false);
+        let body_h = measure_body_height(&live_text, body_width, &formula_lines, "", false, "");
         let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + body_h + BODY_PADDING + expr_footer;
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
             return;
@@ -3349,7 +3358,7 @@ impl App {
             // FR-067: раскрытое описание — полная вёрстка (hit-зоны строк
             // смещаются на фактическую высоту зоны, I-2)
             let expanded = self.scene.desc_expanded.contains(&node.id);
-            measure_body_height("", width, &[], &desc, expanded)
+            measure_body_height("", width, &[], &desc, expanded, "")
         };
         let rel_y = world[1] - origin[1] - desc_zone_h;
         if rel_y < 0.0 {
@@ -3361,7 +3370,7 @@ impl App {
         for k in 0..line_count {
             let prefix = text.split('\n').take(k + 1).collect::<Vec<_>>().join("\n");
             let formula_prefix: Vec<usize> = formula.iter().copied().filter(|i| *i <= k).collect();
-            let cumulative = measure_body_height(&prefix, width, &formula_prefix, "", false);
+            let cumulative = measure_body_height(&prefix, width, &formula_prefix, "", false, "");
             let is_last = k == line_count - 1;
             if rel_y < cumulative || is_last {
                 let calc = results.get(k).is_some_and(Option::is_some)
@@ -19812,20 +19821,20 @@ mod tests {
         low.width = 260.0;
         low.height = 80.0; // занижено: 2 ряда тела + резерв футера не влезают
                            // CR-012 (правка 2): formula_lines для присваивания — [0].
-        ensure_result_reserve(&mut low, &line, &[0], None, false, true);
-        let needed = measured_result_reserve_height(&line, low.width, &[0], "", false, true);
+        ensure_result_reserve(&mut low, &line, &[0], None, false, true, "");
+        let needed = measured_result_reserve_height(&line, low.width, &[0], "", false, true, "");
         assert!(
             low.height >= needed - 1e-3,
             "высота {} выросла минимум до измеренного резерва футера {needed}",
             low.height
         );
         let grown = low.height;
-        ensure_result_reserve(&mut low, &line, &[0], None, false, true);
+        ensure_result_reserve(&mut low, &line, &[0], None, false, true, "");
         assert_eq!(low.height, grown, "повторный вызов — no-op (growth-only)");
         let mut tall = Node::text("n2", line.clone(), 0.0, 0.0);
         tall.width = 260.0;
         tall.height = 1000.0;
-        ensure_result_reserve(&mut tall, &line, &[0], None, false, true);
+        ensure_result_reserve(&mut tall, &line, &[0], None, false, true, "");
         assert_eq!(tall.height, 1000.0, "достаточная высота не сжимается");
     }
 
@@ -19853,8 +19862,15 @@ mod tests {
         // CR-012 (правка 2): высота покрывает измеренную высоту тела
         // (formula_lines — из eval_lines, тот же источник, что у refit).
         let formula_lines = formula_line_indices(&expr::eval_lines(&mono_line));
-        let needed =
-            measured_result_reserve_height(&mono_line, node.width, &formula_lines, "", false, true);
+        let needed = measured_result_reserve_height(
+            &mono_line,
+            node.width,
+            &formula_lines,
+            "",
+            false,
+            true,
+            "",
+        );
         assert!(
             node.height >= needed - 1e-3,
             "высота {} меньше измеренной нужной {needed}",
@@ -19929,7 +19945,7 @@ mod tests {
                 .get(&node.id)
                 .map(|lines| formula_line_indices(lines))
                 .unwrap_or_default();
-            measured_result_reserve_height(text, node.width, &formula_lines, "", false, true)
+            measured_result_reserve_height(text, node.width, &formula_lines, "", false, true, "")
         };
         let tpl_node = scene.canvas.node("tpl1").expect("нода tpl1");
         assert!(
@@ -20010,8 +20026,15 @@ mod tests {
             vec![0, 1, 2],
             "все три строки-присваивания — формульные"
         );
-        let needed =
-            measured_result_reserve_height(&text, tpl_node.width, &formula_lines, "", false, true);
+        let needed = measured_result_reserve_height(
+            &text,
+            tpl_node.width,
+            &formula_lines,
+            "",
+            false,
+            true,
+            "",
+        );
         assert!(
             (tpl_node.height - needed).abs() < 1e-3,
             "высота ровно измеренная: {} vs {needed} (growth-only от 120)",
