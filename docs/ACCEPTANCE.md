@@ -957,3 +957,24 @@ users/arpu/rent/other/npl; оракул 810 000 − 430 − 97 200 = 712 370.
 | FR-044.9 | Фикс `trf`: плейсхолдеры с «{name}» и без — заголовок stage/«строка N»/счётчик внешних без лишних скобок (тест `trf_accepts_braced_and_bare_placeholders`) | ✅ |
 | FR-044.10 | i18n FR-040: инвариант полноты RU/EN; +5 ключей stage (out_label/ctrl_label/ctrl_to/pill_above/pill_below) | ✅ |
 | FR-044.11 | Гейты: fmt ✓, clippy `-D warnings` ✓, `cargo test --workspace` 1732/0 ✓, wasm-check (core/render/widgets/mcp/scene/mcp-headless/web под wasm32-unknown-unknown) ✓, token_lint ✓ (0 новых токенов); LOD-0 агрегация не изменена (инвариант 9 — регресс-щит `bundles.rs`) | ✅ |
+
+## FR-067 — Тело ноды, этап F: выравнивание с ux-node-body-fill + дефекты подгонки высоты — выполнено (2026-09-24)
+
+Приёмка по документу `docs/change-requests/fr-067-node-body-fill-stage-f.md`
+(этап F FR-061; прототип `docs/prototypes/ux-node-body-fill.html`; гейты —
+fmt/clippy `-D warnings`/`cargo test --workspace` (0 отказов)/wasm --check/mcp-wasm --check).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-067.1 | Дедупликация описания: зона описания (Q3 «desc→манифест→проза») не дублируется телом — супрессия диапазона первого проза-абзаца (`first_prose_paragraph_span`, ядро) в общем `body_items`; индексы строк/портов/проливаний не сдвигаются (I-1/I-3); `canvasdesk.desc`, дословно равный абзацу, тоже не дублируется (тесты `body_items_suppresses_desc_paragraph`, `measure_and_shape_suppress_desc_paragraph_alike`) | ✅ |
+| FR-067.2 | Подгонка высоты для ВСЕХ нод: ранний выход `node_shows_result_footer` снят; резерв футера — по флагу (без «пустого хвоста»); тогглы блока/описания запускают refit; раскрытое описание длиннее клампа измеряется целиком (`MeasuredReserveFn` +desc_expanded/+footer_reserve); ужимание НЕ реализовано (I-6 growth-only сохранён — отдельное решение владельца) (тесты `ensure_reserve_at_fits_body_without_footer`, `ensure_reserve_at_respects_desc_expanded`) | ✅ |
+| FR-067.3 | Оценка уровня 1: +ряд заголовка блока-ведомости (общая `expr::block_header_plan`), +ряд экспандера, полная вёрстка раскрытого описания, ряды подписей секций, Σ-строка (тесты `estimate_counts_block_header_row`, `estimate_footer_flag_and_desc_expanded`) | ✅ |
+| FR-067.4 | Подписи секций «ПАРАМЕТРЫ · N»/«РАСЧЁТ · N» (RU/EN, uppercase) в общем `body_items`; «расчёт» — только в режиме листа; ZONE_LABEL_LINE_HEIGHT 16 + parity-тест app (тесты `body_items_suppresses_desc_paragraph`, `zone_label_text_is_uppercase_with_count`) | ✅ |
+| FR-067.5 | Пунктирная амбер-хромировка авто-строк: фон ≈5 %, пунктир сверху/снизу + амбер-лидер (AutoRowBg/AutoRowDash, единая `leader_dash_rects`); Y-ряд не меняется (I-1) | ✅ |
+| FR-067.6 | Σ-строка «Σ <имя узла>» после расчётных строк: итог на направляющей чисел, линия сверху; имя — общая `Node::sigma_row_name()`; нет — при свёрнутом блоке/без итога/ошибке; паритет measure=render (тест `body_items_sigma_row_after_calc_and_measured`) | ✅ |
+| FR-067.7 | Метка «ИТОГ»/«TOTAL» слева в футере результата; значение/якорь `result_footer_y` не тронуты | ✅ |
+| FR-067.8 | Пилюли бейджей: колонка = текст + 2·ROW_BADGE_PAD_H; капсула (радиус h/2), заливка ≈12 % / рамка ≈55 % цвета текста по тону (Spill/Delta/Error); детерминизм прохода A сохранён (тесты `pass_a_badge_column_includes_pill_padding`, `badge_pill_instance_is_capsule_with_translucent_fill`) | ✅ |
+| FR-067.9 | Узловой зазор колонок `table.node_guide_gap = 8.0` (JSON↔Rust parity); китовый `table.guide_gap = 6.0` не изменён (панель FR-044/витрина) | ✅ |
+| FR-067.10 | Вес замера по семейству: моно → NORMAL 400 = `mono_attrs`, sans → MEDIUM = `sans_attrs` (тест `ui_measure_weight_matches_render_attrs`) | ✅ |
+| FR-067.11 | Онбординг/пользовательская документация: вопрос владельцу задан в итоговом ответе (шаги тура не затронуты — дефекты высоты меняют только авторазмер карточек) | ✅ |
+| FR-067.12 | Открытые пункты v2 (вне этапа F, к владельцу): sans 9.5px для текста пилюль; подпись «входящие значения · N»; ужимание высоты (шаг 4b) после решения по I-6/T7 | ⏳ |
