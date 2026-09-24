@@ -40,6 +40,10 @@ pub mod lineage;
 pub mod mcp_text;
 mod model;
 mod providers;
+/// FR-071: умная раскладка нод при инстансировании схем — семантические
+/// кластеры, слоистая DAG-раскладка, минимизация пересечений рёбер с нодами;
+/// чистые функции (wasm-гейт ADR-0011).
+pub mod scheme_layout;
 /// FR-049 (PRD-0008 T1): реестр шаблонов готовых схем — манифесты
 /// `assets/canvas-schemes/*/scheme.json`, валидатор, кэш OnceLock.
 pub mod schemes;
@@ -141,6 +145,11 @@ pub use providers::{
     Priority, ShellIntegration, ThumbBackend, Thumbnail, ThumbnailProvider, WatchBackend,
     WidgetStateBackend,
 };
+pub use scheme_layout::{
+    count_edge_node_crossings, plan_scheme_layout, SchemeLayoutPlan, ANNOT_GAP, CLUSTER_GAP,
+    CROSSING_MARGIN, GROUP_PAD, LAYER_GAP, MAX_REFINE_PASSES, ROW_GAP,
+};
+pub use schemes::SchemeRegistry;
 pub use search::{
     IndexEntry, MemSearch, SearchBackend, SearchCommand, SearchEvent, SearchHit, SearchResponder,
 };
