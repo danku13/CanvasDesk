@@ -188,12 +188,15 @@ pub(crate) fn whatif_delta_rows(scene: &SceneState) -> Vec<WhatIfDeltaRow> {
     let Some(scenario) = scene.scenarios.get(index) else {
         return rows;
     };
-    // Подменённые строки: сравнение построчных значений base vs active
+    // Подменённые строки: сравнение построчных значений base vs active.
+    // FR-064 P1: double buffer — чтение снимков через read()-гарды.
+    let base_solutions = crate::scene::read_flow(&scene.flow_baseline);
+    let active_solutions = crate::scene::read_flow(&scene.flow_active);
     let mut keys: Vec<&(String, usize)> = scenario.line_exprs.keys().collect();
     keys.sort();
     for (node, line) in keys {
-        let base = scene.flow_baseline.lines.get(&(node.clone(), *line));
-        let whatif = scene.flow_active.lines.get(&(node.clone(), *line));
+        let base = base_solutions.lines.get(&(node.clone(), *line));
+        let whatif = active_solutions.lines.get(&(node.clone(), *line));
         if let (Some(base), Some(whatif)) = (base, whatif) {
             rows.push(WhatIfDeltaRow {
                 node: node.clone(),
@@ -205,16 +208,11 @@ pub(crate) fn whatif_delta_rows(scene: &SceneState) -> Vec<WhatIfDeltaRow> {
         }
     }
     // Итоги нод, пересчитанные каскадом (downstream по value-рёбрам)
-    let mut node_ids: Vec<&String> = scene.flow_active.outputs.keys().collect();
+    let mut node_ids: Vec<&String> = active_solutions.outputs.keys().collect();
     node_ids.sort();
     for id in node_ids {
-        let base = scene
-            .flow_baseline
-            .outputs
-            .get(id)
-            .and_then(|r| r.as_ref().ok());
-        let whatif = scene
-            .flow_active
+        let base = base_solutions.outputs.get(id).and_then(|r| r.as_ref().ok());
+        let whatif = active_solutions
             .outputs
             .get(id)
             .and_then(|r| r.as_ref().ok());
