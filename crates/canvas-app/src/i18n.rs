@@ -574,11 +574,11 @@ pub mod keys {
     pub const PAL_ACTION_WIDGET_RELOAD: &str = "palette.action.widget_reload";
     pub const PAL_ACTION_WIDGET_PERMISSIONS: &str = "palette.action.widget_permissions";
     pub const PAL_TEMPLATE_UPDATE_TO: &str = "palette.template.update_to";
-    /// FR-042 (правка сессии 2026-09-24): палитра связи пучка — явный вход в
-    /// main stage (вместо перехвата ПКМ) и удаление конкретного ребра.
+    /// FR-042 (правка сессии 2026-09-25): палитра связи пучка — удалить
+    /// весь пучок одним действием (N ≥ 2 рёбер между упорядоченной парой
+    /// нод). Удаление отдельного ребра — внутри main stage (ПКМ) + Del.
     pub const PAL_GROUP_BUNDLE: &str = "palette.group.bundle";
-    pub const PAL_ACTION_OPEN_STAGE: &str = "palette.action.open_stage";
-    pub const PAL_ACTION_DELETE_EDGE: &str = "palette.action.delete_edge";
+    pub const PAL_ACTION_DELETE_BUNDLE: &str = "palette.action.delete_bundle";
 
     // --- Тосты (T21-A, FR-016, CR-008 и др.) ---
     pub const TOAST_PORT_PINNED: &str = "toast.port_pinned";
@@ -1137,8 +1137,7 @@ const RU: &[(&str, &str)] = &[
     (keys::PAL_ACTION_WIDGET_PERMISSIONS, "Разрешения виджета…"),
     (keys::PAL_TEMPLATE_UPDATE_TO, "Обновить до v{version} (была v{old})"),
     (keys::PAL_GROUP_BUNDLE, "Пучок"),
-    (keys::PAL_ACTION_OPEN_STAGE, "Открыть main stage…"),
-    (keys::PAL_ACTION_DELETE_EDGE, "Удалить ребро"),
+    (keys::PAL_ACTION_DELETE_BUNDLE, "Удалить пучок"),
     // --- Тосты ---
     (keys::TOAST_PORT_PINNED, "Порт связи закреплён"),
     (keys::TOAST_PORT_AUTO, "Порты связи: авто (кратчайший путь)"),
@@ -1836,8 +1835,7 @@ const EN: &[(&str, &str)] = &[
     (keys::PAL_ACTION_WIDGET_PERMISSIONS, "Widget permissions…"),
     (keys::PAL_TEMPLATE_UPDATE_TO, "Update to v{version} (was v{old})"),
     (keys::PAL_GROUP_BUNDLE, "Bundle"),
-    (keys::PAL_ACTION_OPEN_STAGE, "Open main stage…"),
-    (keys::PAL_ACTION_DELETE_EDGE, "Delete edge"),
+    (keys::PAL_ACTION_DELETE_BUNDLE, "Delete bundle"),
     // --- Toasts ---
     (keys::TOAST_PORT_PINNED, "Edge port pinned"),
     (keys::TOAST_PORT_AUTO, "Edge ports: auto (shortest path)"),

@@ -143,14 +143,12 @@ pub enum PaletteAction {
     /// (`~/.canvasdesk/templates/<id>/template.json`). Файловая операция —
     /// НЕ undo-able.
     SaveAsTemplate { node_index: usize },
-    /// FR-042 (правка 2026-09-24): явный вход в main stage из палитры связи
-    /// пучка (заменяет перехват ПКМ). Применим к любому ребру пучка —
-    /// `MainStageState::open` сам выведет весь пучок по упорядоченной паре.
-    EdgeOpenMainStage { edge_index: usize },
-    /// FR-042 (правка 2026-09-24): удалить конкретное ребро (в т.ч. из
-    /// пучка) из палитры — аналог Del после выделения. Undo-шаг (FR-006).
-    /// Доступно и одиночным рёбрам (раньше — только через Del).
-    EdgeDelete { edge_index: usize },
+    /// FR-042 (правка 2026-09-25): удалить весь пучок N ≥ 2 рёбер сразу.
+    /// Доступно из палитры связи (группа «Пучок») после ЛКМ по любому
+    /// ребру пучка. Undo-шаг (FR-006), пересчёт потока. Внутри main
+    /// stage удаление отдельного ребра — клавишей Del на выделенной
+    /// кликом связи (stage валидируется и закрывается при потере ребра).
+    EdgeBundleDelete { edge_index: usize },
 }
 
 /// Векторная иконка кнопки: композиция квадов (`icon_quads`) и/или
@@ -573,11 +571,13 @@ fn branch_group(index: usize, collapsed: bool, language: Language) -> PaletteGro
 }
 
 /// Группы для выделенной связи: [Стиль][Толщина][Цвет][Поток][Порты]
-/// + (если `bundle_weight` ≥ 2) [Пучок] с явным входом в main stage и
-/// удалением конкретного ребра. Ранее ПКМ по пучку перехватывалась
-/// открытием main stage — теперь палитра показывается всегда, а stage
-/// открывается явным действием из группы «Пучок» (правка FR-042,
-/// сессия 2026-09-24).
+/// + (если `bundle_weight` ≥ 2) [Пучок] с действием «Удалить пучок»
+/// (все N рёбер сразу). ЛКМ по пучку показывает палитру как для
+/// одиночного ребра; ПКМ открывает main stage (детализация с веером и
+/// удалением отдельного ребра через Del). Правка FR-042, сессия
+/// 2026-09-25: ранее ПКМ по пучку также открывал main stage, а ЛКМ —
+/// тоже (перехват), что блокировало палитру; теперь ЛКМ — палитра,
+/// ПКМ — stage (AC-3.1 сохранён для ПКМ, ЛКМ — для правки).
 fn edge_groups(
     canvas: &Canvas,
     edge_index: usize,
@@ -744,29 +744,22 @@ fn edge_groups(
             ],
         },
     ];
-    // FR-042 (правка 2026-09-24): у пучка N ≥ 2 — дополнительная группа
-    // «Пучок»: явный вход в main stage (заменяет перехват ПКМ) + удаление
-    // конкретного ребра из палитры (раньше — только через Del). У
-    // одиночного ребра этой группы нет — stage не открывается (нечего
-    // детализировать), а удаление доступно клавишей Del.
+    // FR-042 (правка 2026-09-25): у пучка N ≥ 2 — дополнительная группа
+    // «Пучок» с действием «Удалить пучок» (все N рёбер сразу). ЛКМ по
+    // пучку уже открыл палитру — даём быстрый способ снести весь пучок
+    // одним undo-шагом. Для удаления отдельного ребра — ПКМ (main stage)
+    // + Del на выделенной кликом связи. У одиночного ребра этой группы
+    // нет (нечего группировать; удаление — клавишей Del).
     if bundle_weight.is_some_and(|w| w >= 2) {
         groups.push(PaletteGroup {
             label: i18n::tr(language, keys::PAL_GROUP_BUNDLE).to_owned(),
             icon: PaletteIcon::Flow,
-            entries: vec![
-                PaletteEntry {
-                    action: PaletteAction::EdgeOpenMainStage { edge_index },
-                    label: i18n::tr(language, keys::PAL_ACTION_OPEN_STAGE).to_owned(),
-                    icon: Some(PaletteIcon::Flow),
-                    current: false,
-                },
-                PaletteEntry {
-                    action: PaletteAction::EdgeDelete { edge_index },
-                    label: i18n::tr(language, keys::PAL_ACTION_DELETE_EDGE).to_owned(),
-                    icon: None,
-                    current: false,
-                },
-            ],
+            entries: vec![PaletteEntry {
+                action: PaletteAction::EdgeBundleDelete { edge_index },
+                label: i18n::tr(language, keys::PAL_ACTION_DELETE_BUNDLE).to_owned(),
+                icon: None,
+                current: false,
+            }],
         });
     }
     groups
@@ -2039,10 +2032,12 @@ mod tests {
         canvas
     }
 
-    /// Правка FR-042: palette_groups с bundle_weight ≥ 2 показывает
-    /// дополнительную группу «Пучок» с действиями EdgeOpenMainStage
-    /// (явный вход в stage, замена перехвата ПКМ) и EdgeDelete (удаление
-    /// конкретного ребра из палитры — ранее только через Del).
+    /// Правка FR-042 (сессия 2026-09-25): palette_groups с bundle_weight ≥ 2
+    /// показывает дополнительную группу «Пучок» с действием «Удалить
+    /// пучок» (EdgeBundleDelete — все N рёбер между упорядоченной парой
+    /// нод одним undo-шагом). ЛКМ по пучку уже открыл палитру — это
+    /// быстрый способ снести весь пучок. Для удаления отдельного ребра
+    /// — ПКМ (main stage) + Del на выделенной связи.
     #[test]
     fn palette_groups_show_bundle_group_for_weight_ge_2() {
         let canvas = bundle_scene();
@@ -2062,22 +2057,17 @@ mod tests {
             .iter()
             .find(|g| g.label == "Пучок")
             .expect("группа «Пучок»");
-        assert_eq!(bundle.entries.len(), 2, "две записи: OpenMainStage + Delete");
-        // OpenMainStage — явный вход в stage (замена перехвата ПКМ)
+        assert_eq!(bundle.entries.len(), 1, "одна запись: DeleteBundle");
+        // EdgeBundleDelete — удалить весь пучок
         assert!(matches!(
             &bundle.entries[0].action,
-            PaletteAction::EdgeOpenMainStage { edge_index: 0 }
-        ));
-        // Delete — удаление конкретного ребра
-        assert!(matches!(
-            &bundle.entries[1].action,
-            PaletteAction::EdgeDelete { edge_index: 0 }
+            PaletteAction::EdgeBundleDelete { edge_index: 0 }
         ));
     }
 
     /// Правка FR-042: palette_groups с weight = None (одиночное ребро)
-    /// или Some(1) НЕ показывает группу «Пучок» — stage не открывается
-    /// (нечего детализировать), а удаление доступно клавишей Del.
+    /// или Some(1) НЕ показывает группу «Пучок» — нет пучка, нечего
+    /// удалять целиком. Удаление одиночного ребра — клавишей Del.
     #[test]
     fn palette_groups_no_bundle_group_for_single_edge() {
         let canvas = single_edge_scene();
@@ -2124,26 +2114,20 @@ mod tests {
             .iter()
             .find(|g| g.label == "Bundle")
             .expect("EN «Bundle»");
-        assert_eq!(ru_bundle.entries.len(), 2);
-        assert_eq!(en_bundle.entries.len(), 2);
-        // Действия идентичны по структуре
+        assert_eq!(ru_bundle.entries.len(), 1);
+        assert_eq!(en_bundle.entries.len(), 1);
+        // Действие идентично по структуре
         assert!(matches!(
             &ru_bundle.entries[0].action,
-            PaletteAction::EdgeOpenMainStage { .. }
+            PaletteAction::EdgeBundleDelete { .. }
         ));
         assert!(matches!(
             &en_bundle.entries[0].action,
-            PaletteAction::EdgeOpenMainStage { .. }
+            PaletteAction::EdgeBundleDelete { .. }
         ));
-        // Delete — в обеих локализациях
-        assert!(matches!(
-            &ru_bundle.entries[1].action,
-            PaletteAction::EdgeDelete { .. }
-        ));
-        assert!(matches!(
-            &en_bundle.entries[1].action,
-            PaletteAction::EdgeDelete { .. }
-        ));
+        // Текст действия — RU vs EN
+        assert_eq!(ru_bundle.entries[0].label, "Удалить пучок");
+        assert_eq!(en_bundle.entries[0].label, "Delete bundle");
     }
 
     /// Инвариант FR-042: пучок веса 3 — все три ребра в одном пучке.
@@ -2160,25 +2144,30 @@ mod tests {
         }
     }
 
-    /// Симуляция App::apply_palette_action(EdgeDelete): палитра удаляет
-    /// конкретное ребро из канваса. После удаления e1 — пучок худеет
-    /// до веса 2 (e2, e3 выживают).
+    /// Симуляция App::apply_palette_action(EdgeBundleDelete): палитра
+    /// удаляет ВСЕ N рёбер пучка одним undo-шагом. После удаления —
+    /// пучок исчезает (bundle_of_edge возвращает None, рёбер нет).
     #[test]
-    fn palette_delete_edge_action_removes_specific_edge_from_bundle() {
+    fn palette_delete_bundle_action_removes_all_edges_in_bundle() {
         let mut canvas = bundle_scene();
         assert_eq!(canvas.edges.len(), 3, "исходно 3 ребра");
-        // Симуляция: пользователь открыл палитру по ПКМ (edge_at → idx 0),
-        // выбрал «Удалить ребро» — App вызывает remove_edge("e1").
-        assert!(canvas.remove_edge("e1"), "ребро e1 удалено");
-        assert_eq!(canvas.edges.len(), 2, "осталось 2 ребра");
-        // Bundles перестроены — вес 2 (пучок ещё есть)
+        // Симуляция: пользователь открыл палитру по ЛКМ (edge_at → idx 0),
+        // выбрал «Удалить пучок» — App собирает все рёбра пучка и
+        // удаляет их по id (один undo-шаг).
         let index = canvas_core::EdgeBundleIndex::build(&canvas);
-        let bundle = index
-            .bundle_of_edge(0)
-            .expect("ребро ещё в пучке");
-        assert_eq!(bundle.weight, 2, "пучок похудел до веса 2");
-        // Идентификаторы выживших рёбер
-        assert!(canvas.edges.iter().any(|e| e.id == "e2"));
-        assert!(canvas.edges.iter().any(|e| e.id == "e3"));
+        let bundle = index.bundle_of_edge(0).expect("ребро в пучке");
+        let ids: Vec<String> = bundle
+            .edges
+            .iter()
+            .filter_map(|&idx| canvas.edges.get(idx).map(|e| e.id.clone()))
+            .collect();
+        assert_eq!(ids.len(), 3, "три id рёбер пучка");
+        for id in &ids {
+            assert!(canvas.remove_edge(id), "ребро {id} удалено");
+        }
+        assert_eq!(canvas.edges.len(), 0, "все рёбра пучка удалены");
+        // Пучок больше не существует
+        let index_after = canvas_core::EdgeBundleIndex::build(&canvas);
+        assert!(index_after.bundle_of_edge(0).is_none(), "пучка нет");
     }
 }
