@@ -1157,15 +1157,22 @@ mod tests {
         assert_eq!(node.id, "tpl-1");
         assert_eq!(node.x, 12.0);
         assert_eq!(node.y, 34.0);
-        assert!(node.width >= 260.0, "дефолт ширины — как у text-ноды или шире");
-        assert!(node.height >= 120.0, "дефолт высоты — как у text-ноды или выше");
+        assert!(
+            node.width >= 260.0,
+            "дефолт ширины — как у text-ноды или шире"
+        );
+        assert!(
+            node.height >= 120.0,
+            "дефолт высоты — как у text-ноды или выше"
+        );
 
         // (4) Снапшот template — единственное отличие от Node::text.
         // Уберём расширение — и нода становится структурно идентична обычной
         // text-ноде (с тем же цветом пресета, что ставит instantiate).
         let mut stripped = node.clone();
         stripped.set_template(None);
-        let mut plain = crate::model::Node::text("tpl-1", node.text.clone().unwrap_or_default(), 12.0, 34.0);
+        let mut plain =
+            crate::model::Node::text("tpl-1", node.text.clone().unwrap_or_default(), 12.0, 34.0);
         plain.width = node.width;
         plain.height = node.height;
         plain.color = node.color.clone();
@@ -1180,8 +1187,14 @@ mod tests {
         // все остальные поля расширения (expr/widgetId/props/desc/data) — None
         let ext = node.canvasdesk.as_ref().expect("canvasdesk-расширение");
         assert!(ext.template.is_some(), "template-снапшот присутствует");
-        assert!(ext.expr.is_none(), "expr — отдельное поле (FR-013), не занято");
-        assert!(ext.widget_id.is_none(), "widgetId — для M5-виджетов, не занят");
+        assert!(
+            ext.expr.is_none(),
+            "expr — отдельное поле (FR-013), не занято"
+        );
+        assert!(
+            ext.widget_id.is_none(),
+            "widgetId — для M5-виджетов, не занят"
+        );
         assert!(ext.props.is_empty(), "props — для виджетов, пуст");
         assert!(ext.desc.is_none(), "desc — FR-045, не занят");
         assert!(ext.data.is_none(), "data — FR-045, не занят");
