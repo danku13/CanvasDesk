@@ -349,6 +349,63 @@ pub fn ensure_result_reserve(
     }
 }
 
+/// Динамический перерасчёт высоты ноды по фактической высоте содержимого —
+/// вызывается сценой при изменении контента (правка текста, what-if,
+/// проливания, авто-строки, Σ-строка, появление/исчезновение футера).
+/// В отличие от [`ensure_result_reserve`] (growth-only, I-6 для mode-тогглов),
+/// эта функция допускает И рост, И усадку — контент-чейндж не подпадает
+/// под I-6 («обратной усадки под руками пользователя нет» относится к
+/// смене режима Н-3, не к правке текста).
+///
+/// Механика: вызывает [`measured_reserve`] НАПРЯМУЮ (минуя оценку уровня 1 —
+/// оценка консервативна и не видит усадку); рост — до `needed`, усадка —
+/// до `max(needed, MIN_CONTENT_HEIGHT)`. MIN_CONTENT_HEIGHT — шапка +
+/// зазор + один ряд тела + паддинг (карточка с пустым телом всё равно
+/// имеет минимальный рельеф). Сценарии:
+/// • Контент вырос → `needed > height` → рост (идемпотентен к `ensure_result_reserve`).
+/// • Контент уселся → `needed < height` → усадка до `needed` (или MIN).
+/// • Контент прежний → `needed == height` → no-op.
+///
+/// Вызывающий (сцена) обязан гарантировать content-change через хеш-гейт
+/// ([`SceneState::refit_node_to_content`]) — иначе реальный шейпинг
+/// запускался бы на каждом `recompute_flow` (дорого). Mode-тогглы
+/// (`block_collapsed`/`desc_expanded`) НЕ вызывают эту функцию — они
+/// остаются на `ensure_reserve_at` (growth-only, I-6).
+#[allow(clippy::too_many_arguments)] // 8 согласованных входов резерва (I-2, mirrors ensure_result_reserve)
+pub fn refit_to_measured_content(
+    node: &mut Node,
+    display_text: &str,
+    formula_lines: &[usize],
+    desc: Option<&str>,
+    desc_expanded: bool,
+    footer_reserve: bool,
+    sigma_name: &str,
+    auto_rows: usize,
+) -> bool {
+    let desc_text = desc.unwrap_or_default();
+    let needed = measured_reserve(
+        display_text,
+        node.width,
+        formula_lines,
+        desc_text,
+        desc_expanded,
+        footer_reserve,
+        sigma_name,
+        auto_rows,
+    );
+    /// Минимальная высота карточки: шапка + зазор + один ряд тела + паддинг.
+    /// Карточка с пустым/однострочным телом всё равно имеет рельеф — усадка
+    /// ниже этого порога бессмысленна (контент бы обрезался клипом шапки).
+    const MIN_CONTENT_HEIGHT: f32 = HEADER_HEIGHT + BODY_TOP_GAP + BODY_LINE_HEIGHT + BODY_PADDING;
+    let target = needed.max(MIN_CONTENT_HEIGHT);
+    if (target - node.height).abs() >= 1.0 {
+        node.height = target;
+        true
+    } else {
+        false
+    }
+}
+
 /// CR-012 (правка 2): индексы строк с результатом из построчных исходов —
 /// тот же источник, что у рендера (`expr_line_results` → formula_lines,
 /// text.rs): по ним `body_items` ставит mono-флаг `source_line`.
@@ -557,5 +614,97 @@ mod tests {
         let zero =
             estimated_result_reserve_height("rps = 800 rps", width, &[0], "", false, true, "", 0);
         assert_eq!(zero, base, "auto_rows = 0 — метка зоны не вставляется");
+    }
+
+    /// Динамический перерасчёт `MeasuredReserveFn` (T9-сессия 2026-09-24):
+    /// `refit_to_measured_content` допускает И рост, И усадку (в отличие от
+    /// growth-only `ensure_result_reserve`). Тест: нода с заниженной
+    /// высотой растёт до measured; нода с завышенной высотой уселась до
+    /// measured (но не ниже MIN_CONTENT_HEIGHT). Установка `MeasuredReserveFn`
+    /// не требуется — fallback на `estimated_result_reserve_height` (та же
+    /// формула, детерминированно).
+    #[test]
+    fn refit_to_measured_content_grows_and_shrinks() {
+        // Установка уровня 2 = None → fallback на оценку уровня 1 (без
+        // шейпинга, детерминированно). Для теста достаточно: measured_reserve
+        // = estimated_result_reserve_height при None.
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                )
+            },
+        );
+        let text = "a = 1\nb = 2\nc = 3\nd = 4\ne = 5";
+        let lines = vec![0, 1, 2, 3, 4];
+        let measured = estimated_result_reserve_height(text, 260.0, &lines, "", false, true, "", 0);
+
+        // Рост: заниженная высота → растёт до measured.
+        let mut low = Node::text("n", text.to_owned(), 0.0, 0.0);
+        low.width = 260.0;
+        low.height = 50.0; // занижено
+        let grew = refit_to_measured_content(&mut low, text, &lines, None, false, true, "", 0);
+        assert!(grew, "рост состоялся");
+        assert!(
+            low.height >= measured - 1.0,
+            "высота {} выросла до measured {}",
+            low.height,
+            measured
+        );
+
+        // Усадка: завышенная высота → уселась до measured.
+        let mut high = Node::text("n", text.to_owned(), 0.0, 0.0);
+        high.width = 260.0;
+        high.height = measured + 200.0; // завышено
+        let shrank = refit_to_measured_content(&mut high, text, &lines, None, false, true, "", 0);
+        assert!(shrank, "усадка состоялась");
+        assert!(
+            (high.height - measured).abs() < 5.0,
+            "высота {} уселась до measured {}",
+            high.height,
+            measured
+        );
+
+        // No-op: точная высота → без изменений (|delta| < 1.0).
+        let mut exact = Node::text("n", text.to_owned(), 0.0, 0.0);
+        exact.width = 260.0;
+        exact.height = measured;
+        let noop = refit_to_measured_content(&mut exact, text, &lines, None, false, true, "", 0);
+        assert!(!noop, "точная высота — no-op");
+        assert_eq!(exact.height, measured, "высота не изменилась");
+    }
+
+    /// Динамический перерасчёт: MIN_CONTENT_HEIGHT — нижний порог усадки.
+    /// Карточка с пустым/однострочным телом всё равно имеет рельеф
+    /// (шапка + зазор + один ряд + паддинг); усадка ниже порога бессмысленна.
+    #[test]
+    fn refit_to_measured_content_respects_min_bound() {
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                )
+            },
+        );
+        // Пустой текст — measured будет около HEADER+TOP_GAP+1row+padding.
+        let measured = estimated_result_reserve_height("", 260.0, &[], "", false, false, "", 0);
+        let mut node = Node::text("n", String::new(), 0.0, 0.0);
+        node.width = 260.0;
+        node.height = 500.0; // завышено
+        refit_to_measured_content(&mut node, "", &[], None, false, false, "", 0);
+        const MIN_CONTENT_HEIGHT: f32 =
+            HEADER_HEIGHT + BODY_TOP_GAP + BODY_LINE_HEIGHT + BODY_PADDING;
+        assert!(
+            node.height >= MIN_CONTENT_HEIGHT - 1.0,
+            "усадка не ниже MIN_CONTENT_HEIGHT ({}),got {}",
+            MIN_CONTENT_HEIGHT,
+            node.height
+        );
+        assert!(
+            (node.height - measured.max(MIN_CONTENT_HEIGHT)).abs() < 5.0,
+            "уселась до max(measured, MIN) = {}, got {}",
+            measured.max(MIN_CONTENT_HEIGHT),
+            node.height
+        );
     }
 }

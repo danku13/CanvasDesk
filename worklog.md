@@ -5689,3 +5689,85 @@ Stage Summary:
   владельца): sans 9.5px текст пилюль бейджей; ужимание высоты (I-6
   reversal); port re-anchoring slots заголовка блока; drag-разворот
   (Q7, после редизайна портов); ellipsis длинных путей авто-строк.
+
+---
+## 2026-09-24 — Динамический перерасчёт MeasuredReserveFn с учётом фактической высоты содержимого
+
+- **Агент:** Super Z (сессия web-28293c48, Task ID: dyn-refit)
+- **Директива:** «Реализуй динамический перерасчёт MeasuredReserveFn с
+  учётом фактической высоты содержимого»
+
+### Work Log
+- **Аудит текущего состояния:** `MeasuredReserveFn` вызывается только
+  когда `estimated_result_reserve_height > node.height` (growth-only
+  гейт). Усадка невозможна — `ensure_result_reserve` только растит.
+  Mode-тогглы (block/desc) и content-changes (text edit, whatif, spill)
+  идут через один путь `ensure_reserve_at` → growth-only (I-6).
+- **Дизайн:** разделить пути — mode-тогглы остаются на growth-only
+  `ensure_reserve_at` (I-6 сохранён), content-changes получают новый
+  путь `refit_to_measured_content` с усадкой/ростом. Хеш-гейт по
+  контенту (text, formula_lines, desc, auto_rows, sigma, footer_reserve,
+  width) — пропуск реального замера только при фактическом изменении
+  (перф). Самовосстановление: пара (hash, height_at_measurement) —
+  если текущая высота не совпадает с сохранённой, канвас заменён
+  (undo/redo/прямая замена) → доверяем текущей, без refit.
+- **Реализация:**
+  (1) `refit_to_measured_content` (canvas-scene/measure.rs) — вызывает
+  `measured_reserve` напрямую (минуя оценку), допускает И рост, И усадку
+  (min bound = HEADER + TOP_GAP + 1 row + PADDING). Возвращает bool
+  (изменилась ли высота).
+  (2) `SceneState::content_height_state: HashMap<String, (u64, f32)>` —
+  отпечаток контента + высота на момент замера. Не сериализуется.
+  (3) `SceneState::content_height_hash(index)` — хеш входов контента
+  (display_text, formula_lines, desc, auto_rows, footer_reserve,
+  sigma_name, width). БЕЗ mode-тогглов (I-6).
+  (4) `SceneState::refit_node_to_content(index)` — реальный замер с
+  усадкой/ростом; входы те же, что у ensure_spill_rows_reserve (auto_rows
+  → spill-prefixed display + сдвинутые formula_lines).
+  (5) `SceneState::refit_node_to_content_if_changed(index)` — хеш-гейт
+  с самовосстановлением: 4 ветви (первая встреча / hash+height те же /
+  hash тот же но height другой / hash и height оба другие → канвас
+  заменён → доверяем / hash другой + height тот же → content-change →
+  refit).
+  (6) В `recompute_flow` после `apply_result_reserve` — цикл по всем
+  нодам с `refit_node_to_content_if_changed`. Поверх growth-only —
+  ловит усадку (и подтверждает рост, если оценка уровня 1 пропустила).
+  (7) `SceneState::reset_content_height_state()` — явный сброс для
+  `App::restore_canvas` (undo/redo) — дешевле, чем самовосстановление
+  для каждой ноды.
+  (8) `App::restore_canvas` вызывает `reset_content_height_state`
+  после замены канваса.
+- **Тесты +5:**
+  - `refit_to_measured_content_grows_and_shrinks` (measure.rs) — рост,
+    усадка, no-op.
+  - `refit_to_measured_content_respects_min_bound` (measure.rs) —
+    нижний порог усадки.
+  - `refit_node_to_content_shrinks_on_text_edit` (scene.rs) — правка
+    текста → усадка (content-change).
+  - `refit_node_to_content_self_heals_on_canvas_restore` (scene.rs) —
+    undo через `scene.canvas = saved` → высота восстановлена.
+  - `refit_node_to_content_preserves_i6_for_mode_toggles` (scene.rs) —
+    mode-тогглы остаются growth-only (I-6 сохранён).
+- **Гейты:** `cargo test --workspace` (lib + integration, кроме GPU) —
+  31/31 сьютов, 0 отказов; clippy --workspace --tests -D warnings ✓;
+  `cargo fmt --check` ✓; `token_lint` ✓ (G1).
+
+### Stage Summary
+- **Динамический перерасчёт реализован:** `MeasuredReserveFn` вызывается
+  при каждом content-change (text edit, whatif, spill, sigma, footer
+  appear/disappear) с усадкой/ростом до фактической высоты. Хеш-гейт
+  гарантирует перф (при прежнем контенте — no-op).
+- **I-6 сохранён:** mode-тогглы (block/desc) остаются на growth-only
+  `ensure_reserve_at` — «обратной усадки под руками пользователя нет»
+  для смены режима Н-3. Усадка разрешена только при фактическом
+  content-change.
+- **Самовосстановление:** undo/redo/прямая замена канваса — канвас
+  заменён, высоты восстановлены из снапшота, хеш-гейт через
+  `height_at_measurement` доверяет текущим высотам (без refit).
+  Дополнительный явный сброс в `App::restore_canvas` для надёжности.
+- **Артефакты:** +566/−1 по 4 файлам (canvas-scene measure.rs/scene.rs/
+  lib.rs, canvas-app app.rs); +5 тестов.
+- **Отложено** (вне скоупа): min-bound может быть скользящим (учитывать
+  минимальную высоту шаблона); хеши удалённых нод не чистятся (мелкий
+  memory-leak); интеграция с canvas-web (wasm) — там свой
+  `measured_result_reserve_height`.

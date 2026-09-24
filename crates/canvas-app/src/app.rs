@@ -4341,6 +4341,12 @@ impl App {
         self.group_drop_target = None;
         self.scene.canvas = canvas;
         self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
+        // Динамический перерасчёт MeasuredReserveFn (T9-сессия 2026-09-24):
+        // снапшот восстановил высоты нод; состояние (hash, height) хранит
+        // значения ДО отката. Механизм самовосстанавливается через проверку
+        // height_at_measurement, но явный сброс дешевле (не сравнивать
+        // высоты каждой ноды) и безопаснее (undo/redo — частый путь).
+        self.scene.reset_content_height_state();
         // FR-017: сценарии персистентны в снапшоте (undo whatif_apply
         // возвращает удалённый сценарий, undo create — убирает) —
         // синхронизируем runtime-список с восстановленным канвасом
