@@ -23,7 +23,7 @@ pub use mcp::{
 };
 pub use measure::{
     ensure_result_reserve, estimated_result_reserve_height, fit_template_node_height,
-    formula_line_indices, install_measured_reserve, wrapped_body_rows,
+    formula_line_indices, install_measured_reserve, refit_to_measured_content, wrapped_body_rows,
 };
 pub use scene::{
     next_free_id, outputs_to_results, read_flow, seed_canvas, split_formula_lines,

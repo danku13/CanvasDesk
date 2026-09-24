@@ -332,6 +332,20 @@ pub struct SceneState {
     pub flow_changed_nodes: Vec<String>,
     /// Был ли хотя бы один пересчёт до текущего (первый — без волны).
     flow_computed: bool,
+    /// Динамический перерасчёт `MeasuredReserveFn` (T9-сессия 2026-09-24):
+    /// отпечаток контента ноды (text, formula_lines, desc, auto_rows,
+    /// sigma, footer_reserve) И высота на момент замера — для хеш-гейта
+    /// `refit_node_to_content`. Пара (hash, height): когда хеш меняется
+    /// → контент факт-изменился → запускается реальный замер с
+    /// усадкой/ростом. Когда хеш прежний → no-op (замер не запускается,
+    /// перф). Когда текущая высота не совпадает с сохранённой — канвас
+    /// заменён внешне (undo/redo/прямая замена) → доверяем текущей высоте,
+    /// обновляем хеш без замера (самовосстановление). Mode-тогглы
+    /// (block_collapsed/desc_expanded) в хеш НЕ входят — они остаются
+    /// на growth-only `ensure_reserve_at` (I-6). Записи удалённых нод
+    /// не чистятся (мелкий memory-leak, безопасно — ключ стабильный id).
+    /// Не сериализуется.
+    content_height_state: std::collections::HashMap<String, (u64, f32)>,
     /// M8/W3 (wasm-port §3.2/§6): хранилище `.canvas` как сервис — нативно
     /// `FsCanvasStorage` (диск + `.bak`, сегодняшнее поведение), web (W6) —
     /// FS Access/OPFS через `with_storage`.
@@ -457,6 +471,7 @@ impl SceneState {
             revision: 0,
             flow_changed_nodes: Vec::new(),
             flow_computed: false,
+            content_height_state: std::collections::HashMap::new(),
             storage,
             undo_tags: VecDeque::new(),
             pending_undo_tag: None,
@@ -808,6 +823,16 @@ impl SceneState {
         );
         // CR-012: ленивый refit высоты — резерв футера результата.
         self.apply_result_reserve();
+        // Динамический перерасчёт `MeasuredReserveFn` (T9-сессия 2026-09-24):
+        // для нод с изменившимся хешем контента — реальный замер с усадкой
+        // и ростом. Mode-тогглы (block_collapsed/desc_expanded) сюда НЕ
+        // попадают — они на growth-only `ensure_reserve_at` (I-6). Хеш-гейт
+        // гарантирует перф: при прежнем контенте замер не запускается.
+        // Поверх `apply_result_reserve` — рост уже учтён, здесь ловим усадку
+        // (и подтверждаем рост, если оценка уровня 1 его пропустила).
+        for index in 0..self.canvas.nodes.len() {
+            self.refit_node_to_content_if_changed(index);
+        }
         // FR-042 (E2): перестройка индекса пучков — единственная точка
         // синхронизации (хвост recompute_flow): все мутации топологии
         // завершаются пересчётом потока; O(edges) поверх него, вне кадра.
@@ -1534,6 +1559,249 @@ impl SceneState {
         }
     }
 
+    /// Динамический перерасчёт `MeasuredReserveFn` (T9-сессия 2026-09-24):
+    /// отпечаток контента ноды для хеш-гейта. Входы — те же, что у
+    /// [`ensure_reserve_at`]/[`ensure_spill_rows_reserve`] (I-2: мера =
+    /// рендер), БЕЗ mode-тогглов (`block_collapsed`/`desc_expanded`) —
+    /// они на growth-only пути (I-6). Когда хеш меняется, контент
+    /// факт-изменился → [`refit_node_to_content`] запускает реальный замер
+    /// с усадкой/ростом; прежний хеш → no-op (замер не запускается, перф).
+    fn content_height_hash(&self, index: usize) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let node = &self.canvas.nodes[index];
+        // display_body_text (со вставленными проливаниями — FR-029):
+        // именно этот текст шейпится рендером, его длина/содержание
+        // определяют высоту стека.
+        let display = display_body_text(node, &self.param_spills);
+        display.hash(&mut hasher);
+        // formula_lines: индексы строк с исходами (Numi-стиль) — влияют
+        // на mono-флаг, переносы, число рядов. Что-if меняет результаты
+        // строк → формула_lines меняется → хеш меняется → рефит.
+        let formula_lines: Vec<usize> = self
+            .expr_line_results
+            .get(&node.id)
+            .map(|lines| formula_line_indices(lines))
+            .unwrap_or_default();
+        formula_lines.hash(&mut hasher);
+        // desc — зона описания (canvasdesk.desc → манифест шаблона);
+        // длина/наличие влияет на высоту (кламп 2 строки + экспандер).
+        let desc = self.node_desc_text(index);
+        desc.hash(&mut hasher);
+        // auto_rows — число авто-строк приёмника (FR-050 Р-4); влияет
+        // на +1 ряд подписи зоны + сами авто-строки.
+        let auto_rows = self
+            .auto_rows
+            .get(&node.id)
+            .map(|rows| rows.len())
+            .unwrap_or(0);
+        auto_rows.hash(&mut hasher);
+        // footer_reserve — есть ли футер результата; что-if/правка могут
+        // убрать/вернуть итог → футер появляется/исчезает → высота.
+        let footer_reserve = self.node_shows_result_footer(index);
+        footer_reserve.hash(&mut hasher);
+        // sigma_name — Σ-строка после расчётных строк; зависит от
+        // footer_reserve + наличия расчётных строк (см. ensure_reserve_at).
+        let params = formula_lines
+            .iter()
+            .copied()
+            .filter(|&i| {
+                display.lines().nth(i).is_some_and(|line| {
+                    matches!(
+                        canvas_core::expr::line_kind(line),
+                        canvas_core::expr::NumiLineKind::Assignment { .. }
+                    )
+                })
+            })
+            .count();
+        let sigma_name = if footer_reserve && formula_lines.len() > params {
+            format!("Σ {}", node.sigma_row_name())
+        } else {
+            String::new()
+        };
+        sigma_name.hash(&mut hasher);
+        // width — пользовательский ресайз меняет ширину → переносы → высота.
+        node.width.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Динамический перерасчёт `MeasuredReserveFn` (T9-сессия 2026-09-24):
+    /// вызывается из [`recompute_flow`] для нод с изменившимся хешем
+    /// контента. Реальный замер (`refit_to_measured_content`) — с усадкой
+    /// и ростом; mode-тогглы (`block_collapsed`/`desc_expanded`) сюда НЕ
+    /// попадают (они на growth-only `ensure_reserve_at`, I-6).
+    ///
+    /// Входы те же, что у `ensure_spill_rows_reserve` (auto_rows →
+    /// spill-prefixed display + сдвинутые formula_lines + auto_rows count)
+    /// — I-2: мера = рендер. `desc_expanded` берётся из текущего
+    /// состояния — если пользователь раскрыл описание (mode-toggle,
+    /// growth-only), последующий content-change замерит с раскрытым
+    /// описанием (усадка возможна, если новый контент короче).
+    pub(crate) fn refit_node_to_content(&mut self, index: usize) -> bool {
+        let node_id = match self.canvas.nodes.get(index) {
+            Some(n) => n.id.clone(),
+            None => return false,
+        };
+        let formula_lines: Vec<usize> = self
+            .expr_line_results
+            .get(&node_id)
+            .map(|lines| formula_line_indices(lines))
+            .unwrap_or_default();
+        let display_body = display_body_text(&self.canvas.nodes[index], &self.param_spills);
+        let desc = self.node_desc_text(index);
+        let desc_expanded = self.desc_expanded.contains(&node_id);
+        let footer_reserve = self.node_shows_result_footer(index);
+        let params = formula_lines
+            .iter()
+            .copied()
+            .filter(|&i| {
+                display_body.lines().nth(i).is_some_and(|line| {
+                    matches!(
+                        canvas_core::expr::line_kind(line),
+                        canvas_core::expr::NumiLineKind::Assignment { .. }
+                    )
+                })
+            })
+            .count();
+        let sigma_name = if footer_reserve && formula_lines.len() > params {
+            format!("Σ {}", self.canvas.nodes[index].sigma_row_name())
+        } else {
+            String::new()
+        };
+        let auto_rows = self
+            .auto_rows
+            .get(&node_id)
+            .map(|rows| rows.len())
+            .unwrap_or(0);
+        // Для нод с авто-строками — тот же ввод, что у
+        // `ensure_spill_rows_reserve`: spill-prefixed display + сдвинутые
+        // formula_lines + auto_rows count. Иначе — как `ensure_reserve_at`.
+        let (display, formula_lines_arg, auto_rows_arg) = if auto_rows > 0 {
+            let rows = self.auto_rows.get(&node_id).cloned().unwrap_or_default();
+            let prefix: Vec<String> = rows.iter().map(|r| r.display_text()).collect();
+            let display = if display_body.is_empty() {
+                prefix.join("\n")
+            } else {
+                format!("{}\n{}", prefix.join("\n"), display_body)
+            };
+            let shift = prefix.len();
+            let mut fl: Vec<usize> = formula_lines
+                .into_iter()
+                .map(|i| i + shift)
+                .chain(0..shift)
+                .collect();
+            fl.sort_unstable();
+            (display, fl, auto_rows)
+        } else {
+            (display_body, formula_lines, 0)
+        };
+        let before = self.canvas.nodes[index].height;
+        let changed = crate::measure::refit_to_measured_content(
+            &mut self.canvas.nodes[index],
+            &display,
+            &formula_lines_arg,
+            desc.as_deref(),
+            desc_expanded,
+            footer_reserve,
+            &sigma_name,
+            auto_rows_arg,
+        );
+        if changed && (self.canvas.nodes[index].height - before).abs() >= 1.0 {
+            let node = &self.canvas.nodes[index];
+            self.spatial.update(index, node);
+        }
+        changed
+    }
+
+    /// Динамический перерасчёт `MeasuredReserveFn`: сброс состояния хешей
+    /// контента — вызывается приложением при undo/redo (`restore_canvas`).
+    /// Снапшот восстановил канвас (включая высоты нод), но
+    /// `content_height_state` хранит пары (hash, height) ДО отката —
+    /// следующий `recompute_flow` посчитал бы хеш изменившимся и запустил
+    /// refit, испортив восстановленные высоты. Сброс = «первая встреча»:
+    /// доверяем восстановленным высотам, хеши перевычисляются на ближайшем
+    /// `recompute_flow` без refit.
+    ///
+    /// ВНИМАНИЕ: при нормальной работе вызывать НЕ нужно — механизм
+    /// самовосстанавливается через проверку `height_at_measurement` (если
+    /// текущая высота не совпадает с сохранённой — канвас заменён, доверяем
+    /// текущей). Этот метод — для явного сброса (например, при загрузке
+    /// нового файла).
+    pub fn reset_content_height_state(&mut self) {
+        self.content_height_state.clear();
+    }
+
+    /// Динамический перерасчёт `MeasuredReserveFn`: проверить хеш контента
+    /// ноды, и если он изменился — запустить [`refit_node_to_content`]
+    /// (реальный замер с усадкой/ростом). Вызывается из `recompute_flow`
+    /// ПОСЛЕ growth-only `apply_result_reserve` — рост уже учтён, здесь
+    /// ловим усадку (и подтверждаем рост, если хеш изменился). no-op при
+    /// прежнем хеше (перф: реальный шейпинг не запускается).
+    ///
+    /// Самовосстановление: если текущая высота ноды не совпадает с
+    /// `height_at_measurement` из сохранённого состояния — канвас был
+    /// заменён внешне (undo/redo/прямая замена `scene.canvas = ...`).
+    /// Доверяем текущей высоте, обновляем хеш без замера. Иначе undo/redo
+    /// ломали бы восстановленные высоты: снапшот вернул height=120, но хеш
+    /// хранит «users=1200» → следующий recompute_flow запустил бы refit и
+    /// усел ноду до актуального контента.
+    ///
+    /// Первая встреча ноды (`prev = None`): доверяем текущей высоте
+    /// (user-set/default/MCP-заданной), запоминаем (hash, height). Иначе
+    /// свежесозданная нода с дефолтной высотой 120 уселась бы до min —
+    /// UX-регрессия. Усадка разрешена только при фактическом content-change
+    /// (правка текста, what-if, spill, sigma) — когда пользователь меняет
+    /// именно контент, а не размеры.
+    fn refit_node_to_content_if_changed(&mut self, index: usize) -> bool {
+        let node_id = match self.canvas.nodes.get(index).map(|n| n.id.clone()) {
+            Some(id) => id,
+            None => return false,
+        };
+        let new_hash = self.content_height_hash(index);
+        let current_height = self.canvas.nodes[index].height;
+        let prev = self.content_height_state.get(&node_id).copied();
+        match prev {
+            None => {
+                // Первая встреча: доверяем текущей высоте, запоминаем.
+                self.content_height_state
+                    .insert(node_id, (new_hash, current_height));
+                false
+            }
+            Some((prev_hash, prev_height))
+                if prev_hash == new_hash && (prev_height - current_height).abs() < 1.0 =>
+            {
+                // Контент прежний И высота та же — no-op (перф).
+                false
+            }
+            Some((prev_hash, prev_height))
+                if prev_hash == new_hash && (prev_height - current_height).abs() >= 1.0 =>
+            {
+                // Хеш тот же, но высота другая — канвас заменён (undo/redo
+                // вернул ту же формулу, но другую высоту). Доверяем текущей,
+                // обновляем height_at_measurement.
+                self.content_height_state
+                    .insert(node_id, (new_hash, current_height));
+                false
+            }
+            Some((_, prev_height)) if (prev_height - current_height).abs() >= 1.0 => {
+                // Хеш изменился, но высота тоже другая — канвас заменён
+                // (undo/redo). Доверяем текущей высоте, обновляем хеш.
+                self.content_height_state
+                    .insert(node_id, (new_hash, current_height));
+                false
+            }
+            Some(_) => {
+                // Хеш изменился, высота та же — контент факт-изменился.
+                // Реальный замер с усадкой/ростом.
+                let changed = self.refit_node_to_content(index);
+                let new_height = self.canvas.nodes[index].height;
+                self.content_height_state
+                    .insert(node_id, (new_hash, new_height));
+                changed
+            }
+        }
+    }
+
     /// FR-014: тогл типа потока связи (Value ↔ Control) из палитры
     /// (ПКМ по связи) — единая точка с MCP `flow_set_kind` по инвариантам:
     /// undo-шаг «до» (FR-006), mark_dirty, живой пересчёт downstream.
@@ -1873,6 +2141,148 @@ mod reserve_tests {
         assert_eq!(
             scene.canvas.nodes[0].height, expanded_h,
             "свёртывание не усаживает (I-6 growth-only)"
+        );
+    }
+
+    /// Динамический перерасчёт `MeasuredReserveFn` (T9-сессия 2026-09-24):
+    /// правка текста ноды (content-change) → `recompute_flow` →
+    /// `refit_node_to_content` ДОПУСКАЕТ усадку (в отличие от growth-only
+    /// `ensure_reserve_at`). Сценарий: нода с длинным текстом → высота
+    /// выросла; правка в короткий текст → высота УСЕЛАСЬ.
+    #[test]
+    fn refit_node_to_content_shrinks_on_text_edit() {
+        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                crate::measure::estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                )
+            },
+        );
+        // Длинный текст (5 формул) → нода вырастет под контент.
+        let long_text = format!(
+            "{} = 1\n{} = 2\n{} = 3\n{} = 4\n{} = 5",
+            "a".repeat(20),
+            "b".repeat(20),
+            "c".repeat(20),
+            "d".repeat(20),
+            "e".repeat(20)
+        );
+        let mut node = Node::text("n1", long_text.clone(), 0.0, 0.0);
+        node.width = 260.0;
+        node.height = 60.0; // занижено — вырастет
+        let mut scene = scene_with(node);
+        scene.recompute_flow();
+        let grown = scene.canvas.nodes[0].height;
+        assert!(grown > 60.0, "нода выросла под длинный контент: {grown}");
+
+        // Правка в короткий текст (1 формула) → recompute_flow →
+        // refit_node_to_content УСЕЛА ноду (content-change, не mode-toggle).
+        scene.canvas.nodes[0].text = Some("x = 1".to_owned());
+        scene.canvas.nodes[0].set_expr(crate::split_formula_lines("x = 1"));
+        scene.recompute_flow();
+        let shrunken = scene.canvas.nodes[0].height;
+        assert!(
+            shrunken < grown - 50.0,
+            "нода уселась после правки (content-change): {shrunken} < {grown} - 50"
+        );
+    }
+
+    /// Динамический перерасчёт: самовосстановление при undo/redo. Сценарий:
+    /// нода с высотой H1 → правка (height → H2) → откат канваса (height → H1)
+    /// → recompute_flow → высота остаётся H1 (НЕ пересчитывается, т.к.
+    /// текущая высота не совпадает с сохранённой H2 → канвас заменён,
+    /// доверяем текущей). Без самовосстановления undo ломал бы высоты.
+    #[test]
+    fn refit_node_to_content_self_heals_on_canvas_restore() {
+        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                crate::measure::estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                )
+            },
+        );
+        let mut node = Node::text("n1", "x = 1".to_owned(), 0.0, 0.0);
+        node.width = 260.0;
+        node.height = 120.0; // user-set
+        let mut scene = scene_with(node);
+        scene.recompute_flow();
+        let initial_h = scene.canvas.nodes[0].height;
+        // Первая встреча → доверяем 120, запоминаем (hash, 120).
+
+        // Правка в длинный текст → height растёт.
+        let long_text = format!(
+            "{} = 1\n{} = 2\n{} = 3\n{} = 4",
+            "a".repeat(20),
+            "b".repeat(20),
+            "c".repeat(20),
+            "d".repeat(20)
+        );
+        let saved_canvas = scene.canvas.clone(); // снапшот «до» для undo
+        scene.canvas.nodes[0].text = Some(long_text.clone());
+        scene.canvas.nodes[0].set_expr(crate::split_formula_lines(&long_text));
+        scene.recompute_flow();
+        let grown_h = scene.canvas.nodes[0].height;
+        assert!(grown_h > initial_h, "нода выросла: {grown_h} > {initial_h}");
+
+        // Undo: восстанавливаем канвас (включая height = initial_h) —
+        // симулируем model-level undo (как в integration_explain_x6).
+        // Без самовосстановления следующий recompute_flow запустил бы
+        // refit (хеш изменился: long_text → "x = 1") и усел ноду.
+        scene.canvas = saved_canvas;
+        scene.recompute_flow();
+        let restored_h = scene.canvas.nodes[0].height;
+        assert_eq!(
+            restored_h, initial_h,
+            "undo восстановил высоту (самовосстановление): {restored_h} == {initial_h}"
+        );
+    }
+
+    /// Динамический перерасчёт: I-6 для mode-тогглов сохранён. Mode-тогглы
+    /// (block_collapsed/desc_expanded) идут через `ensure_reserve_at`
+    /// (growth-only), НЕ через `refit_node_to_content`. Сценарий: раскрыть
+    /// описание → высота растёт; свернуть → высота НЕ усаживается.
+    #[test]
+    fn refit_node_to_content_preserves_i6_for_mode_toggles() {
+        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                crate::measure::estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                )
+            },
+        );
+        let mut node = Node::text("n2", "x = 1".to_owned(), 0.0, 0.0);
+        node.width = 260.0;
+        node.height = 120.0;
+        // Длинное описание — заведомо больше клампа (2 строки), чтобы
+        // раскрытие растянуло высоту (кламп → +экспандер → раскрыто → +ряды).
+        node.set_desc(Some(
+            "Очень длинное описание ноды для проверки раскрытия: оно заведомо \
+             не помещается в две строки клампа и потому сворачивается с \
+             аффордансом «⋯ целиком ▾» — раскрытие растит стек на ряды."
+                .into(),
+        ));
+        let mut scene = scene_with(node);
+        scene.recompute_flow();
+        let clamped_h = scene.canvas.nodes[0].height;
+
+        // Раскрыть описание → growth-only растит высоту.
+        scene.toggle_desc_expanded("n2");
+        scene.ensure_reserve_at(0);
+        let expanded_h = scene.canvas.nodes[0].height;
+        assert!(
+            expanded_h >= clamped_h + 20.0,
+            "раскрытие растит высоту: {expanded_h} >= {clamped_h} + 20"
+        );
+
+        // Свернуть описание → I-6: высота НЕ усаживается.
+        scene.toggle_desc_expanded("n2");
+        scene.ensure_reserve_at(0);
+        assert_eq!(
+            scene.canvas.nodes[0].height, expanded_h,
+            "свёртывание не усаживает (I-6 growth-only для mode-тогглов)"
         );
     }
 }
