@@ -5536,3 +5536,26 @@ Stage Summary:
 - FR-065 реализован и влит в main: `topo_levels` + `rayon` `par_iter` per-level (v2 сразу, минуя v1 `std::thread::scope` — EAGAIN на тяжёлых графах). Контракты §5.1/§5.2/§5.6/§5.7.3/§5.8 соблюдены: сигнатуры стабильны, детерминизм побитовый, zero-dep инвариант B2B, wasm-фолбэк.
 - Гейты: 401/401 тестов canvas-core + 97/97 golden canvas-scene на ОБОИХ путях (default + --features parallel), wasm-гейты зелёные, clippy/fmt зелёные.
 - Не сделано: бенчмарк ≥2× на 1000 нод/4 ядра (критерий архдока §9 M4) — отложен на рантайм-приёмку владельцем (среда CI не позволяет запустить тяжёлый синтетический бенчмарк). Реализация `rayon` `par_iter` готова к замеру.
+
+---
+Task ID: FR-066
+Agent: main (сессия web-6d0952be)
+Task: Реализовать FR-066 — Monte Carlo + QMC-движок (M5 волна S ADR-0008): propagate_monte_carlo, sobol QMC, P50/P90/P99, MCP monte_carlo_run
+
+Work Log:
+- Контекст: реализация FR-066 (все три фазы P1/P2/P3 одним слоем) была завершена в рабочей директории предыдущей сессией, но НЕ закоммичена (25 файлов, +2565/−52: новый expr/mc.rs ~700 строк, новый tests/mc_engine.rs, фича qmc в Cargo, MCP monte_carlo_run, доки/точки входа по чек-листу FR). Задача сессии — верификация гейтов, коммит, push, фиксация в worklog.
+- Ревизия кода перед гейтами: git diff flow.rs — ТОЛЬКО добавления (сиблинги propagate_monte_carlo + propagate_monte_carlo_with_progress за #[cfg(feature = "qmc")]); propagate_with_lines/propagate_with_lines_data/topo_sort сигнатуры НЕ тронуты (контракт §5.1). FlowSolutions не изменена (§5.5).
+- Гейты прогнаны заново (всё зелёное):
+  - cargo test -p canvas-core --features qmc — 560/560 (403 юнит + интеграции; mc_engine.rs 7 гейтов за 7.3 с: побитовая seed-воспроизводимость, квантили эталона №5 ±1 %, QMC-дисперсия < MC, severity на P90, stale, деградация skipped_params/failed_runs, бюджет 10^4 < 1 с).
+  - cargo test -p canvas-scene --features qmc — 102/102 (97 golden побитово + 5 e2e monte_carlo_run: валидация парамов, сид-повтор, P-метки в named, severity, счётчики).
+  - cargo test -p canvas-mcp — 20/20; cargo test -p canvas-mcp-headless — 13/13 (реестр 41 native / 40 wasm, skills_sync контракт).
+  - cargo clippy -p canvas-core -p canvas-scene -p canvas-mcp -p canvas-mcp-headless --features qmc --all-targets -- -D warnings — 0; cargo fmt --check — чисто.
+  - cargo deny check — advisories/bans/licenses/sources ok (sobol_burley MIT OR Apache-2.0 разрешена).
+  - scripts/wasm_gate.sh --check — зелёный (core/render/widgets/mcp/web под wasm32-unknown-unknown без qmc); scripts/mcp_wasm_gate.sh --check — зелёный (scene/mcp/headless, реестр без monte_carlo_run на wasm, §5.8).
+- Коммит (один, конвенция AGENTS.md «задача = сессия = коммит», новые депсы обоснованы в теле): 5b35c86 feat(core/mc): monte carlo + qmc engine — propagate_monte_carlo, sobol QMC, P50/P90/P99, MCP monte_carlo_run (FR-066). 25 файлов, 2565 insertions(+), 52 deletions(-).
+- Отступления от плана FR (зафиксированы в истории FR-066 до этой сессии): сид §5.7.2 — FNV-1a поверх LE-байтов тройки вместо буквального XOR (коллапс при N = 2^k); LogNormal { mean, sd } — натуральное пространство; params → построчные подмены line_exprs (не node_values); ядро деградирует тихо, MCP валидирует строго.
+
+Stage Summary:
+- FR-066 (M5/S3, волна S ADR-0008) закрыт полностью: движок MC/QMC за фичей qmc = ["stats", "parallel", "dep:sobol_burley"], wasm-чистота core сохранена, MCP monte_carlo_run (41 native / 40 wasm), skills синхронизированы тем же коммитом, доки-точки входа обновлены (node.md, calculations.md, SPEC §MCP/§6.3, DEPENDENCIES §3→§2, math-computing-stack §5.4/§5.6/§9, index-cr-fr, FR-066 статус «выполнено»).
+- Гейты сессии: 560+102+20+13 тестов зелёные, clippy/fmt/deny зелёные, оба wasm-гейта зелёные, propagate_with_lines signature audit — только добавления.
+- Коммит 5b35c86 в main; push в origin/main (совместно с этим worklog-коммитом).
