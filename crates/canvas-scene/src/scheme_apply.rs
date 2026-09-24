@@ -60,6 +60,10 @@ fn alloc_node_id(
 /// id рёбер — `edge-N` (образец `Canvas::next_edge_id`). Стороны value-
 /// рёбер — right→left (чтение слева направо). Дети групп ремапятся по той
 /// же карте.
+///
+/// FR-071: геометрия строится умной раскладкой (`canvas_core::scheme_layout`)
+/// — семантические кластеры, слоистая DAG-раскладка, минимизация пересечений
+/// рёбер с нодами; координаты пакета остаются только подсказками порядка.
 pub fn instantiate_scheme(
     manifest: &SchemeManifest,
     canvas: &canvas_core::Canvas,
@@ -68,22 +72,6 @@ pub fn instantiate_scheme(
     if manifest.content.nodes.is_empty() {
         return Err(SchemeInstantiateError::Empty);
     }
-
-    // Bounding box в координатах схемы.
-    let mut min_x = f32::MAX;
-    let mut min_y = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut max_y = f32::MIN;
-    for node in &manifest.content.nodes {
-        min_x = min_x.min(node.x);
-        min_y = min_y.min(node.y);
-        max_x = max_x.max(node.x + node.width);
-        max_y = max_y.max(node.y + node.height);
-    }
-    let center_x = (min_x + max_x) / 2.0;
-    let center_y = (min_y + max_y) / 2.0;
-    let dx = origin[0] - center_x;
-    let dy = origin[1] - center_y;
 
     // Генератор свободных id (образец next_free_id: canvas + уже выданные).
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -104,8 +92,10 @@ pub fn instantiate_scheme(
     let mut nodes = Vec::with_capacity(manifest.content.nodes.len());
     for node in &manifest.content.nodes {
         let new_id = &id_map[node.id.as_str()];
-        let x = node.x + dx;
-        let y = node.y + dy;
+        // Сырые координаты пакета: раскладка FR-071 ниже переопределит их
+        // (остаются семантическими подсказками порядка).
+        let x = node.x;
+        let y = node.y;
         let mut built = if node.node_type == "group" {
             Node::group(new_id.clone(), x, y, node.width, node.height)
         } else {
@@ -165,9 +155,49 @@ pub fn instantiate_scheme(
         edges.push(built);
     }
 
-    Ok(SchemeInstance {
+    // FR-071: умная раскладка — план позиций от семантики графа (кластеры
+    // по смыслу, слои DAG, barycenter, минимизация пересечений рёбер с
+    // нодами); рамки групп пересчитываются по bbox детей.
+    let mut laid = canvas_core::Canvas {
         nodes,
         edges,
+        ..canvas_core::Canvas::default()
+    };
+    let plan = canvas_core::scheme_layout::plan_scheme_layout(&laid);
+    for (index, [x, y]) in plan.positions {
+        if let Some(node) = laid.nodes.get_mut(index) {
+            node.x = x;
+            node.y = y;
+        }
+    }
+    for (index, [width, height]) in plan.group_sizes {
+        if let Some(node) = laid.nodes.get_mut(index) {
+            node.width = width;
+            node.height = height;
+        }
+    }
+
+    // Сдвиг bbox раскладки к origin (контракт zoom-to-fit прежний).
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for node in &laid.nodes {
+        min_x = min_x.min(node.x);
+        min_y = min_y.min(node.y);
+        max_x = max_x.max(node.x + node.width);
+        max_y = max_y.max(node.y + node.height);
+    }
+    let dx = origin[0] - (min_x + max_x) / 2.0;
+    let dy = origin[1] - (min_y + max_y) / 2.0;
+    for node in &mut laid.nodes {
+        node.x += dx;
+        node.y += dy;
+    }
+
+    Ok(SchemeInstance {
+        nodes: laid.nodes,
+        edges: laid.edges,
         bbox: [min_x + dx, min_y + dy, max_x + dx, max_y + dy],
     })
 }
@@ -748,5 +778,116 @@ mod tests {
             serde_json::from_str(r#"{"id": "g", "type": "group", "x": 0, "y": 0, "width": 10, "height": 10, "label": "Команда"}"#)
                 .unwrap();
         assert_eq!(node.label.as_deref(), Some("Команда"));
+    }
+
+    // --- FR-071: oracle-инварианты умной раскладки -----------------------
+
+    /// Канвас инстанса схемы (нативно и под wasip1 — чистые функции ядра).
+    fn laid_canvas(id: &str) -> (canvas_core::Canvas, SchemeInstance) {
+        let instance = instance_of(id);
+        let mut canvas = canvas_core::Canvas::default();
+        canvas.nodes = instance.nodes.clone();
+        canvas.edges = instance.edges.clone();
+        (canvas, instance)
+    }
+
+    /// Oracle G-раскладка: во всех built-in схемах после умной раскладки
+    /// 0 пересечений «ребро × нода» (прямые отрезки порт→порт, bbox
+    /// инфлирован на CROSSING_MARGIN — метрика `count_edge_node_crossings`).
+    #[test]
+    fn smart_layout_zero_edge_node_crossings() {
+        for scheme in SchemeRegistry::embedded().list() {
+            let (canvas, _) = laid_canvas(&scheme.id);
+            let crossings = canvas_core::scheme_layout::count_edge_node_crossings(&canvas);
+            assert_eq!(
+                crossings, 0,
+                "{}: {crossings} пересечений рёбер с нодами после раскладки",
+                scheme.id
+            );
+        }
+    }
+
+    /// Oracle G-раскладка: bbox не-групповых нод не пересекаются.
+    #[test]
+    fn smart_layout_no_bbox_overlaps() {
+        for scheme in SchemeRegistry::embedded().list() {
+            let (canvas, _) = laid_canvas(&scheme.id);
+            for (i, a) in canvas.nodes.iter().enumerate() {
+                if a.kind() == canvas_core::NodeKind::Group {
+                    continue;
+                }
+                for b in canvas.nodes.iter().skip(i + 1) {
+                    if b.kind() == canvas_core::NodeKind::Group {
+                        continue;
+                    }
+                    assert!(
+                        !(a.x < b.x + b.width
+                            && b.x < a.x + a.width
+                            && a.y < b.y + b.height
+                            && b.y < a.y + a.height),
+                        "{}: ноды {} и {} пересекаются",
+                        scheme.id,
+                        a.id,
+                        b.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// Oracle G-раскладка: дети каждой явной группы геометрически внутри
+    /// рамки (инвариант FR-012; рамка = bbox детей + GROUP_PAD).
+    #[test]
+    fn smart_layout_groups_contain_children() {
+        for scheme in SchemeRegistry::embedded().list() {
+            let (canvas, _) = laid_canvas(&scheme.id);
+            for (gi, group) in canvas.nodes.iter().enumerate() {
+                if group.kind() != canvas_core::NodeKind::Group {
+                    continue;
+                }
+                let Some(children) = &group.children else {
+                    continue;
+                };
+                assert!(
+                    !children.is_empty(),
+                    "{}: группа {} без детей",
+                    scheme.id,
+                    group.id
+                );
+                for child_id in children {
+                    let Some(child) = canvas.node(child_id) else {
+                        panic!(
+                            "{}: группа {}: висячий ребёнок {child_id}",
+                            scheme.id, group.id
+                        );
+                    };
+                    assert!(
+                        child.x >= group.x - f32::EPSILON
+                            && child.y >= group.y - f32::EPSILON
+                            && child.x + child.width <= group.x + group.width + f32::EPSILON
+                            && child.y + child.height <= group.y + group.height + f32::EPSILON,
+                        "{}: ребёнок {child_id} вне рамки группы {}",
+                        scheme.id,
+                        group.id
+                    );
+                }
+                let _ = gi;
+            }
+        }
+    }
+
+    /// Oracle G-раскладка: раскладка детерминирована — два инстанса одной
+    /// схемы в пустой канвас дают идентичные позиции (после нормировки
+    /// сдвигом к origin — совпадают побитово).
+    #[test]
+    fn smart_layout_is_deterministic() {
+        for scheme in SchemeRegistry::embedded().list() {
+            let (a, _) = laid_canvas(&scheme.id);
+            let (b, _) = laid_canvas(&scheme.id);
+            for (na, nb) in a.nodes.iter().zip(b.nodes.iter()) {
+                assert_eq!(na.id, nb.id, "{}: порядок нод стабилен", scheme.id);
+                assert_eq!((na.x, na.y), (nb.x, nb.y), "{}: нода {}", scheme.id, na.id);
+            }
+        }
     }
 }
