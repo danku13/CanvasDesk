@@ -887,6 +887,25 @@ impl SceneState {
         let desc = self.node_desc_text(index);
         let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
         let footer_reserve = self.node_shows_result_footer(index);
+        // FR-067 (этап F): Σ-строка — итог есть (footer_reserve) и среди
+        // строк с исходами есть расчётные; имя — общая функция ядра (I-2).
+        let params = formula_lines
+            .iter()
+            .copied()
+            .filter(|&i| {
+                display.lines().nth(i).is_some_and(|line| {
+                    matches!(
+                        canvas_core::expr::line_kind(line),
+                        canvas_core::expr::NumiLineKind::Assignment { .. }
+                    )
+                })
+            })
+            .count();
+        let sigma_name = if footer_reserve && formula_lines.len() > params {
+            format!("Σ {}", self.canvas.nodes[index].sigma_row_name())
+        } else {
+            String::new()
+        };
         let before = self.canvas.nodes[index].height;
         ensure_result_reserve(
             &mut self.canvas.nodes[index],
@@ -895,6 +914,7 @@ impl SceneState {
             desc.as_deref(),
             desc_expanded,
             footer_reserve,
+            &sigma_name,
         );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
@@ -1008,6 +1028,26 @@ impl SceneState {
         let desc = self.node_desc_text(index);
         let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
         let footer_reserve = self.node_shows_result_footer(index);
+        // FR-067 (этап F): Σ-строка — как в ensure_reserve_at (префиксные
+        // индексы авто-строк — присваивания «путь = значение», в calcs не
+        // попадают, счёт согласован с рендером).
+        let params = formula_lines
+            .iter()
+            .copied()
+            .filter(|&i| {
+                display.lines().nth(i).is_some_and(|line| {
+                    matches!(
+                        canvas_core::expr::line_kind(line),
+                        canvas_core::expr::NumiLineKind::Assignment { .. }
+                    )
+                })
+            })
+            .count();
+        let sigma_name = if footer_reserve && formula_lines.len() > params {
+            format!("Σ {}", self.canvas.nodes[index].sigma_row_name())
+        } else {
+            String::new()
+        };
         let before = self.canvas.nodes[index].height;
         ensure_result_reserve(
             &mut self.canvas.nodes[index],
@@ -1016,6 +1056,7 @@ impl SceneState {
             desc.as_deref(),
             desc_expanded,
             footer_reserve,
+            &sigma_name,
         );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
@@ -1277,9 +1318,9 @@ mod reserve_tests {
         let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Уровень 2 — отключаем (None): работает консервативная оценка,
         // детерминированная и без шрифтов (wasm-путь).
-        install_measured_reserve(|text, width, lines, desc, expanded, footer| {
+        install_measured_reserve(|text, width, lines, desc, expanded, footer, sigma| {
             crate::measure::estimated_result_reserve_height(
-                text, width, lines, desc, expanded, footer,
+                text, width, lines, desc, expanded, footer, sigma,
             )
         });
         let mut node = Node::text(
@@ -1311,6 +1352,7 @@ mod reserve_tests {
             "",
             false,
             false,
+            "",
         );
         assert!(
             (grown - expected).abs() < 1.0,
@@ -1324,9 +1366,9 @@ mod reserve_tests {
     #[test]
     fn ensure_reserve_at_respects_desc_expanded() {
         let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        install_measured_reserve(|text, width, lines, desc, expanded, footer| {
+        install_measured_reserve(|text, width, lines, desc, expanded, footer, sigma| {
             let base = crate::measure::estimated_result_reserve_height(
-                text, width, lines, desc, expanded, footer,
+                text, width, lines, desc, expanded, footer, sigma,
             );
             if expanded {
                 base + 60.0 // имитация полного описания (3 ряда)

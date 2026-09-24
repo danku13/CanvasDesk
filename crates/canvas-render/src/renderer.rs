@@ -62,6 +62,17 @@ const MAX_TEXT_GROUPS: usize = 16;
 /// Заливка декоративного квада тела (GFM) по его виду — палитра темы.
 /// Чистая функция (юнит-тест на маппинг): подсветка — прежняя константа,
 /// буллиты/чекбоксы/зачёркивание/линия — приглушённый gfm_muted_fill.
+/// FR-067 (этап F): cosmic-text Color → линейный rgba [0..1; 4] — для
+/// пилюль бейджей (цвет текста бейджа — слот темы `Color`).
+fn color_rgba(c: cosmic_text::Color) -> [f32; 4] {
+    [
+        c.r() as f32 / 255.0,
+        c.g() as f32 / 255.0,
+        c.b() as f32 / 255.0,
+        c.a() as f32 / 255.0,
+    ]
+}
+
 pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
     match kind {
         BodyQuadKind::Highlight => theme.highlight,
@@ -89,6 +100,22 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
             let c = canvas_core::tokens::SEVERITY_DARK[0];
             [c[0], c[1], c[2], 0.55]
         }
+        // FR-067 (этап F): линия сверху Σ-строки — приглушённая (как линии).
+        BodyQuadKind::SigmaRule => theme.gfm_muted_fill,
+        // FR-067 (этап F): пилюли бейджей — заливка-капсула ≈ 12 % цвета
+        // текста бейджа (рамка — в body_quad_instance, ≈ 55 %).
+        BodyQuadKind::BadgePillSpill => {
+            let [r, g, b, a] = color_rgba(theme.link);
+            [r, g, b, a * 0.12]
+        }
+        BodyQuadKind::BadgePillDelta => {
+            let [r, g, b, a] = color_rgba(theme.whatif_badge);
+            [r, g, b, a * 0.12]
+        }
+        BodyQuadKind::BadgePillError => {
+            let [r, g, b, a] = color_rgba(theme.error);
+            [r, g, b, a * 0.12]
+        }
         // FR-061 этап D (D-14/Q9): диагностика направляющих — вне палитры
         // тем (принцип debug_overlay.rs: отладочные цвета отличаются от
         // продуктовых), токен TABLE_GUIDE_DEBUG_COLOR.
@@ -107,6 +134,23 @@ pub fn body_quad_instance(
     entry_zoom: f32,
     theme: &ThemeColors,
 ) -> CardInstance {
+    // FR-067 (этап F): пилюля бейджа — капсула (радиус = h/2) с рамкой
+    // ≈ 55 % цвета текста бейджа (прототип .badge border 1px 50 %).
+    let (border, radius) = match quad.kind {
+        BodyQuadKind::BadgePillSpill => {
+            let [r, g, b, a] = color_rgba(theme.link);
+            ([r, g, b, a * 0.55], quad.rect[3] / 2.0)
+        }
+        BodyQuadKind::BadgePillDelta => {
+            let [r, g, b, a] = color_rgba(theme.whatif_badge);
+            ([r, g, b, a * 0.55], quad.rect[3] / 2.0)
+        }
+        BodyQuadKind::BadgePillError => {
+            let [r, g, b, a] = color_rgba(theme.error);
+            ([r, g, b, a * 0.55], quad.rect[3] / 2.0)
+        }
+        _ => ([0.0; 4], 0.0),
+    };
     CardInstance {
         pos: [
             origin[0] + quad.rect[0] / entry_zoom,
@@ -114,8 +158,8 @@ pub fn body_quad_instance(
         ],
         size: [quad.rect[2] / entry_zoom, quad.rect[3] / entry_zoom],
         fill: body_quad_fill(quad.kind, theme),
-        border: [0.0; 4],
-        params: [0.0, 0.0, 0.0, 1.0],
+        border,
+        params: [radius / entry_zoom, 0.0, 0.0, 1.0],
     }
 }
 
@@ -1920,5 +1964,34 @@ mod tests {
             // Радиус скругления тоже константен на экране
             assert!((world.params[0] * camera.zoom() - 8.0).abs() < 0.01);
         }
+    }
+}
+
+#[cfg(test)]
+mod fr067_pill_tests {
+    use super::*;
+    use crate::text::BodyQuadKind;
+
+    /// FR-067 (этап F): пилюля бейджа — капсула (радиус = h/2), фон
+    /// полупрозрачнее рамки (прототип .badge: bg ≈ 9 %, border ≈ 50 %).
+    #[test]
+    fn badge_pill_instance_is_capsule_with_translucent_fill() {
+        let theme = ThemeColors::dark();
+        let quad = BodyQuad {
+            rect: [10.0, 20.0, 60.0, 14.0],
+            kind: BodyQuadKind::BadgePillSpill,
+        };
+        let inst = body_quad_instance([0.0, 0.0], &quad, 1.0, &theme);
+        assert!(
+            (inst.params[0] - 7.0).abs() < 1e-4,
+            "радиус = h/2 (капсула)"
+        );
+        let fill = body_quad_fill(quad.kind, &theme);
+        assert!(
+            fill[3] > 0.0 && fill[3] < 0.2,
+            "фон пилюли ≈ 12 %: {}",
+            fill[3]
+        );
+        assert!(inst.border[3] > fill[3], "рамка плотнее фона");
     }
 }

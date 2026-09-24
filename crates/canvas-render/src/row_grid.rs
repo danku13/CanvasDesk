@@ -53,6 +53,11 @@ pub(crate) enum RowKind {
     /// «параметры · P · формулы · K» (слева) + «Σ первое-значение» на
     /// направляющей (прототип §3.5, .preview-row).
     Preview,
+    /// FR-067 (этап F): Σ-строка «Σ <имя узла>» после расчётных строк —
+    /// узловой итог на направляющей чисел, линия сверху (прототип
+    /// .row.total 83–85, totalRow 287). Вставляет text.rs (нужны имя узла
+    /// и итог), build_rows её не создаёт.
+    Sigma,
 }
 
 /// Бейдж каскада Р-1 в бейдж-колонке (D-6, анализ §3.1): примечания полосы D
@@ -67,7 +72,28 @@ pub(crate) enum RowBadge {
     Error,
 }
 
+/// Тон пилюли бейджа (FR-067 этап F) — цветовое семейство без данных
+/// (CachedRow хранит тон, цвета решает рендер через тему).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BadgeTone {
+    /// Проливание — flow/ссылка.
+    Spill,
+    /// What-if дельта — акцент.
+    Delta,
+    /// Ошибка строки — диагностика.
+    Error,
+}
+
 impl RowBadge {
+    /// Тон пилюли (FR-067) — семейство цвета текста/фона/рамки.
+    pub(crate) fn tone(&self) -> BadgeTone {
+        match self {
+            RowBadge::Spill { .. } => BadgeTone::Spill,
+            RowBadge::Delta(_) => BadgeTone::Delta,
+            RowBadge::Error => BadgeTone::Error,
+        }
+    }
+
     /// Текст бейджа в текстовом режиме.
     pub(crate) fn text(&self) -> &str {
         match self {
@@ -282,6 +308,15 @@ pub(crate) fn desc_collapse_text_lang(language: Language) -> String {
     }
 }
 
+/// FR-067 (этап F): метка футера результата (прототип .strip-d .lbl —
+/// «ИТОГ» слева, uppercase); значение/якорь футера не меняются.
+pub(crate) fn result_footer_label_lang(language: Language) -> String {
+    match language {
+        Language::En => "TOTAL".to_owned(),
+        Language::Ru => "ИТОГ".to_owned(),
+    }
+}
+
 /// «было → стало (+Δ)» → («стало», «Δ») — структурный разбор полного
 /// дельта-формата [`canvas_core::expr::whatif_full_delta`] для бейдж-колонки
 /// этапа B (D-1: структурные части. Приложение передаёт строку — рендер
@@ -462,10 +497,18 @@ fn cell_widths(
     size: f32,
 ) -> canvas_ui::row_guides::RowCellWidths {
     let cells = measure_row_cells(measurer, fs, &row.value, &row.unit, 0.0, family, size);
+    // FR-067 (этап F): бейдж — ПИЛЮЛЯ (прототип .badge, этап E kit-Row):
+    // ширина колонки = текст + 2·ROW_BADGE_PAD_H (горизонтальный пад).
     let badge_w = match (&row.badge, badge_mode) {
         (None, _) => 0.0,
-        (Some(badge), BadgeMode::Text) => measurer.width_of(fs, badge.text(), family, size),
-        (Some(badge), BadgeMode::Icon) => measurer.width_of(fs, badge.icon(), family, size),
+        (Some(badge), BadgeMode::Text) => {
+            measurer.width_of(fs, badge.text(), family, size)
+                + 2.0 * canvas_ui::kit::ROW_BADGE_PAD_H
+        }
+        (Some(badge), BadgeMode::Icon) => {
+            measurer.width_of(fs, badge.icon(), family, size)
+                + 2.0 * canvas_ui::kit::ROW_BADGE_PAD_H
+        }
         (Some(_), BadgeMode::None) => 0.0,
     };
     canvas_ui::row_guides::RowCellWidths {
@@ -850,6 +893,34 @@ mod tests {
         assert_eq!(tiny.badge_mode, BadgeMode::None);
         let g = tiny.guides.unwrap();
         assert!(g.value_right() <= 120.0);
+    }
+
+    /// FR-067 (этап F): ширина бейдж-колонки = текст + 2·ROW_BADGE_PAD_H
+    /// (пилюля); без бейджей колонка нулевая (детерминизм прохода A).
+    #[test]
+    fn pass_a_badge_column_includes_pill_padding() {
+        let text = "rps = 800 rps";
+        let outcomes = outcomes(text);
+        let spill = SpillView {
+            param: "rps".into(),
+            line: Some(0),
+            from_label: "Профиль".into(),
+            from_output: None,
+            value: Some("1200 rps".into()),
+            path: "Профиль.peak_rps".into(),
+            local: Some("800 rps".into()),
+        };
+        let rows = build_rows(text, Some(&outcomes), &[], &[spill], &[]);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let pass = pass_a(&mut m, &mut fs, &rows, 60.0, 520.0, FAMILY, SIZE);
+        let expected =
+            m.width_of(&mut fs, "← Профиль", FAMILY, SIZE) + 2.0 * canvas_ui::kit::ROW_BADGE_PAD_H;
+        assert_eq!(
+            pass.guides.unwrap().badge_w,
+            expected,
+            "колонка бейджей — текст пилюли + 2·пад"
+        );
     }
 
     /// T2-инвариант (§7): на корпусе tcp-lb (имя 19 симв. + формула 18 +

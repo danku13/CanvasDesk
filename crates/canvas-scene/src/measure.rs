@@ -99,6 +99,7 @@ pub fn estimated_result_reserve_height(
     desc: &str,
     desc_expanded: bool,
     footer_reserve: bool,
+    sigma_name: &str,
 ) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     // FR-067 (этап F): супрессия абзаца описания — зона описания показывает
@@ -166,6 +167,15 @@ pub fn estimated_result_reserve_height(
     if calcs > 0 && header_rows == 0.0 {
         label_rows += ZONE_LABEL_LINE_HEIGHT;
     }
+    // FR-067 (этап F): Σ-строка «Σ <имя узла>» после расчётных строк —
+    // ряд тела (20) + зазор (6); условие то же, что у рендера (итог есть,
+    // блок развёрнут — в оценке блок всегда развёрнут, I-6). Имя не
+    // влияет на высоту ряда, только на факт наличия строки (sigma_name).
+    let sigma_rows = if footer_reserve && !sigma_name.is_empty() && calcs > 0 {
+        BODY_LINE_HEIGHT + 6.0
+    } else {
+        0.0
+    };
     let footer = if footer_reserve {
         RESULT_LINE_HEIGHT + 2.0
     } else {
@@ -175,6 +185,7 @@ pub fn estimated_result_reserve_height(
         + BODY_TOP_GAP
         + desc_rows
         + label_rows
+        + sigma_rows
         + (rows as f32 + header_rows) * BODY_LINE_HEIGHT
         + BODY_PADDING
         + footer
@@ -196,6 +207,7 @@ pub type MeasuredReserveFn = fn(
     desc: &str,
     desc_expanded: bool,
     footer_reserve: bool,
+    sigma_name: &str,
 ) -> f32;
 
 static MEASURED_RESERVE: std::sync::RwLock<Option<MeasuredReserveFn>> =
@@ -218,6 +230,7 @@ fn measured_reserve(
     desc: &str,
     desc_expanded: bool,
     footer_reserve: bool,
+    sigma_name: &str,
 ) -> f32 {
     let guard = MEASURED_RESERVE.read().unwrap_or_else(|p| p.into_inner());
     match *guard {
@@ -228,6 +241,7 @@ fn measured_reserve(
             desc,
             desc_expanded,
             footer_reserve,
+            sigma_name,
         ),
         None => estimated_result_reserve_height(
             text,
@@ -236,6 +250,7 @@ fn measured_reserve(
             desc,
             desc_expanded,
             footer_reserve,
+            sigma_name,
         ),
     }
 }
@@ -256,6 +271,7 @@ pub fn ensure_result_reserve(
     desc: Option<&str>,
     desc_expanded: bool,
     footer_reserve: bool,
+    sigma_name: &str,
 ) {
     let desc_text = desc.unwrap_or_default();
     if estimated_result_reserve_height(
@@ -265,6 +281,7 @@ pub fn ensure_result_reserve(
         desc_text,
         desc_expanded,
         footer_reserve,
+        sigma_name,
     ) <= node.height
     {
         return;
@@ -276,6 +293,7 @@ pub fn ensure_result_reserve(
         desc_text,
         desc_expanded,
         footer_reserve,
+        sigma_name,
     );
     if needed > node.height {
         node.height = needed;
@@ -316,7 +334,16 @@ pub fn fit_template_node_height(node: &mut Node) {
     // FR-067: desc — None (реестр манифестов недоступен здесь, оценка без
     // супрессии консервативна); desc_expanded — дефолт (кламп);
     // footer_reserve — шаблонная нода показывает футер итога.
-    ensure_result_reserve(node, &text, &formula_lines, None, false, true);
+    let sigma_name = if formula_lines.iter().any(|&i| {
+        text.lines()
+            .nth(i)
+            .is_some_and(|line| !matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+    }) {
+        format!("Σ {}", node.sigma_row_name())
+    } else {
+        String::new()
+    };
+    ensure_result_reserve(node, &text, &formula_lines, None, false, true, &sigma_name);
 }
 
 #[cfg(test)]
@@ -330,10 +357,17 @@ mod tests {
     fn estimate_suppresses_desc_paragraph() {
         let text = "шлюз обрабатывает поток\n\nrps = 800 rps\nlatency = 12 ms";
         let para = canvas_core::expr::first_prose_paragraph(text).unwrap();
-        let with_para = estimated_result_reserve_height(text, 300.0, &[], &para, false, true);
-        let other =
-            estimated_result_reserve_height(text, 300.0, &[], "постороннее описание", false, true);
-        let none = estimated_result_reserve_height(text, 300.0, &[], "", false, true);
+        let with_para = estimated_result_reserve_height(text, 300.0, &[], &para, false, true, "");
+        let other = estimated_result_reserve_height(
+            text,
+            300.0,
+            &[],
+            "постороннее описание",
+            false,
+            true,
+            "",
+        );
+        let none = estimated_result_reserve_height(text, 300.0, &[], "", false, true, "");
         // Абзац в зоне описания + супрессия тела: дешевле постороннего desc
         // (тело сохранило абзац — двойной счёт) и дороже отсутствия desc.
         assert!(with_para < other, "{with_para} < {other}");
@@ -352,15 +386,19 @@ mod tests {
     fn estimate_counts_block_header_row() {
         let five = "a = 1\nb = 2\nc = 3\nd = 4\nd * 2";
         let lines: Vec<usize> = vec![0, 1, 2, 3, 4];
-        let with_header = estimated_result_reserve_height(five, 300.0, &lines, "", false, true);
-        let without = estimated_result_reserve_height(five, 300.0, &[], "", false, true);
+        let with_header =
+            estimated_result_reserve_height(five, 300.0, &lines, "", false, true, "Σ n");
+        let without = estimated_result_reserve_height(five, 300.0, &[], "", false, true, "");
         // FR-067: с исходами появляется и подпись «ПАРАМЕТРЫ · 4» (16):
         // различие = ряд заголовка (20) + ряд подписи (16). «Расчёт» в
         // блоке не вставляется — его роль играет заголовок ведомости.
+        // FR-067: Σ-строка (итог + расчётные есть, футер есть) — ряд (20) +
+        // зазор (6); «расчёт» в блоке не вставляется — его роль играет
+        // заголовок ведомости.
         assert_eq!(
             with_header - without,
-            BODY_LINE_HEIGHT + ZONE_LABEL_LINE_HEIGHT,
-            "план блока: +1 ряд заголовка, исходы: +1 ряд подписи параметров"
+            BODY_LINE_HEIGHT + ZONE_LABEL_LINE_HEIGHT + BODY_LINE_HEIGHT + 6.0,
+            "план блока: +ряд заголовка, +ряд подписи параметров, +Σ-строка"
         );
         // Ниже порога T (4 строки данных) — заголовка нет
         let four = "a = 1\nb = 2\nc = 3\nd * 2";
@@ -368,10 +406,10 @@ mod tests {
         // Ниже порога T заголовка нет, но обе метки (параметры + расчёт
         // в режиме листа) появляются: различие = 2 ряда подписи.
         assert_eq!(
-            estimated_result_reserve_height(four, 300.0, &four_lines, "", false, true)
-                - estimated_result_reserve_height(four, 300.0, &[], "", false, true),
-            2.0 * ZONE_LABEL_LINE_HEIGHT,
-            "порог T не достигнут: заголовка нет, метки секций есть"
+            estimated_result_reserve_height(four, 300.0, &four_lines, "", false, true, "Σ n")
+                - estimated_result_reserve_height(four, 300.0, &[], "", false, true, ""),
+            2.0 * ZONE_LABEL_LINE_HEIGHT + BODY_LINE_HEIGHT + 6.0,
+            "порог T не достигнут: метки секций + Σ-строка (режим листа)"
         );
     }
 
@@ -381,16 +419,19 @@ mod tests {
     fn estimate_footer_flag_and_desc_expanded() {
         let text = "a = 1\nb = 2";
         let lines: Vec<usize> = vec![0, 1];
-        let with_footer = estimated_result_reserve_height(text, 300.0, &lines, "", false, true);
-        let without_footer = estimated_result_reserve_height(text, 300.0, &lines, "", false, false);
+        let with_footer = estimated_result_reserve_height(text, 300.0, &lines, "", false, true, "");
+        let without_footer =
+            estimated_result_reserve_height(text, 300.0, &lines, "", false, false, "");
         assert_eq!(
             with_footer - without_footer,
             RESULT_LINE_HEIGHT + 2.0,
             "футер-флаг убирает «пустой хвост» у нод без футера"
         );
         let long_desc = "очень длинное описание ноды, которое точно не укладывается в кламп двух строк и раскрывается целиком по клику";
-        let clamped = estimated_result_reserve_height(text, 300.0, &lines, long_desc, false, true);
-        let expanded = estimated_result_reserve_height(text, 300.0, &lines, long_desc, true, true);
+        let clamped =
+            estimated_result_reserve_height(text, 300.0, &lines, long_desc, false, true, "");
+        let expanded =
+            estimated_result_reserve_height(text, 300.0, &lines, long_desc, true, true, "");
         assert!(
             expanded > clamped,
             "раскрытое описание оценок выше клампа: {expanded} > {clamped}"
