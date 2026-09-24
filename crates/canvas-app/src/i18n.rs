@@ -515,6 +515,22 @@ pub mod keys {
     pub const ADMIN_WHEEL_EMPTY: &str = "admin.wheel.empty";
     pub const ADMIN_TOAST_SHORT: &str = "admin.toast.short";
     pub const ADMIN_TOAST_LONG: &str = "admin.toast.long";
+    /// Этап 3: сущности канваса (ST4) и каталог токенов.
+    pub const ADMIN_NODE_NORMAL: &str = "admin.node.normal";
+    pub const ADMIN_NODE_SELECTED: &str = "admin.node.selected";
+    pub const ADMIN_NODE_BROKEN: &str = "admin.node.broken";
+    pub const ADMIN_NODE_GROUP: &str = "admin.node.group";
+    pub const ADMIN_EDGE_DEFAULT: &str = "admin.edge.default";
+    pub const ADMIN_EDGE_FLOW: &str = "admin.edge.flow";
+    pub const ADMIN_EDGE_DRAFT: &str = "admin.edge.draft";
+    pub const ADMIN_EDGE_DIMMED: &str = "admin.edge.dimmed";
+    pub const ADMIN_PORT_IDLE: &str = "admin.port.idle";
+    pub const ADMIN_PORT_HOVER: &str = "admin.port.hover";
+    pub const ADMIN_PORT_ACTIVE: &str = "admin.port.active";
+    pub const ADMIN_TOK_GROUP_SLOTS: &str = "admin.tok.group_slots";
+    pub const ADMIN_TOK_GROUP_DIMS: &str = "admin.tok.group_dims";
+    pub const ADMIN_TOK_GROUP_TYPE: &str = "admin.tok.group_type";
+    pub const ADMIN_TOK_GROUP_MOTION: &str = "admin.tok.group_motion";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -1088,6 +1104,22 @@ const RU: &[(&str, &str)] = &[
     (keys::ADMIN_WHEEL_EMPTY, "Нет категорий"),
     (keys::ADMIN_TOAST_SHORT, "Сохранено"),
     (keys::ADMIN_TOAST_LONG, "Схема применена: 12 нод обновлено"),
+    // Этап 3: сущности канваса (ST4)
+    (keys::ADMIN_NODE_NORMAL, "Обычная"),
+    (keys::ADMIN_NODE_SELECTED, "Выбрана"),
+    (keys::ADMIN_NODE_BROKEN, "Битая ссылка"),
+    (keys::ADMIN_NODE_GROUP, "В группе"),
+    (keys::ADMIN_EDGE_DEFAULT, "Обычное"),
+    (keys::ADMIN_EDGE_FLOW, "Поток значения"),
+    (keys::ADMIN_EDGE_DRAFT, "Черновик (drag)"),
+    (keys::ADMIN_EDGE_DIMMED, "Приглушённое"),
+    (keys::ADMIN_PORT_IDLE, "Точка"),
+    (keys::ADMIN_PORT_HOVER, "Курсор"),
+    (keys::ADMIN_PORT_ACTIVE, "Активный драфт"),
+    (keys::ADMIN_TOK_GROUP_SLOTS, "Слоты палитры — клик по свотчу меняет цвет"),
+    (keys::ADMIN_TOK_GROUP_DIMS, "Размеры (px)"),
+    (keys::ADMIN_TOK_GROUP_TYPE, "Типографика (px)"),
+    (keys::ADMIN_TOK_GROUP_MOTION, "Движение (мс)"),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
     (keys::ONBOARDING_DONE, "Готово"),
@@ -1834,6 +1866,22 @@ const EN: &[(&str, &str)] = &[
     (keys::ADMIN_WHEEL_EMPTY, "No categories"),
     (keys::ADMIN_TOAST_SHORT, "Saved"),
     (keys::ADMIN_TOAST_LONG, "Scheme applied: 12 nodes updated"),
+    // FR-070 stage 3: canvas entities (ST4) and token catalog
+    (keys::ADMIN_NODE_NORMAL, "Normal"),
+    (keys::ADMIN_NODE_SELECTED, "Selected"),
+    (keys::ADMIN_NODE_BROKEN, "Broken link"),
+    (keys::ADMIN_NODE_GROUP, "In group"),
+    (keys::ADMIN_EDGE_DEFAULT, "Default"),
+    (keys::ADMIN_EDGE_FLOW, "Value flow"),
+    (keys::ADMIN_EDGE_DRAFT, "Draft (drag)"),
+    (keys::ADMIN_EDGE_DIMMED, "Dimmed"),
+    (keys::ADMIN_PORT_IDLE, "Dot"),
+    (keys::ADMIN_PORT_HOVER, "Cursor"),
+    (keys::ADMIN_PORT_ACTIVE, "Active draft"),
+    (keys::ADMIN_TOK_GROUP_SLOTS, "Palette slots — click a swatch to change color"),
+    (keys::ADMIN_TOK_GROUP_DIMS, "Dimensions (px)"),
+    (keys::ADMIN_TOK_GROUP_TYPE, "Typography (px)"),
+    (keys::ADMIN_TOK_GROUP_MOTION, "Motion (ms)"),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
     (keys::ONBOARDING_DONE, "Done"),

@@ -126,6 +126,10 @@ pub struct AdminLayout {
     pub components: Option<ComponentsLayout>,
     /// Тело «Наполнение» (Some для AdminSection::Fill — этап 2).
     pub fill: Option<FillLayout>,
+    /// Тело «Канвас» (Some для AdminSection::Canvas — этап 3).
+    pub canvas: Option<CanvasLayout>,
+    /// Тело «Токены» (Some для AdminSection::Tokens — этап 3).
+    pub tokens: Option<TokensLayout>,
 }
 
 /// Панель админпанели, зажатая во вьюпорт (тот же контракт, что у витрины:
@@ -196,6 +200,7 @@ pub fn admin_layout(
     section: AdminSection,
     scroll_offset: f32,
     p: &KitPalette,
+    card_fill: [f32; 4],
     lang: Language,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -252,16 +257,23 @@ pub fn admin_layout(
 
     // Тело секции (этапы 2–4): у реализованных секций — своё, у остальных —
     // подсказка о составе (этап 1)
-    let (demo_content_h, components, fill) = match section {
+    let (demo_content_h, components, fill, canvas, tokens) = match section {
         AdminSection::Components => {
             let body = components_body(demo, scroll_offset, p, lang, m, fs);
-            (hint_h.max(body.h), Some(body), None)
+            (hint_h.max(body.h), Some(body), None, None, None)
         }
         AdminSection::Fill => {
             let body = fill_body(demo, scroll_offset, p, lang, m, fs);
-            (hint_h.max(body.h), None, Some(body))
+            (hint_h.max(body.h), None, Some(body), None, None)
         }
-        AdminSection::Canvas | AdminSection::Tokens => (hint_h, None, None),
+        AdminSection::Canvas => {
+            let body = canvas_body(demo, scroll_offset, p, card_fill);
+            (hint_h.max(body.h), None, None, Some(body), None)
+        }
+        AdminSection::Tokens => {
+            let body = tokens_body(demo, scroll_offset, p, lang, m, fs);
+            (hint_h.max(body.h), None, None, None, Some(body))
+        }
     };
 
     AdminLayout {
@@ -279,6 +291,8 @@ pub fn admin_layout(
         hint_lines,
         components,
         fill,
+        canvas,
+        tokens,
     }
 }
 
@@ -1620,6 +1634,550 @@ fn draw_wheel_demo(
     }
 }
 
+// === FR-070 этап 3: секция «Канвас» — состояния сущностей (ST4) ============
+
+/// Слоты демо карточки ноды.
+pub const NODE_DEMO_W: f32 = 150.0;
+pub const NODE_DEMO_H: f32 = 54.0;
+/// Толщина линии демо-ребра.
+pub const EDGE_DEMO_H: f32 = 3.0;
+
+/// Тело секции «Канвас»: карточка ноды ×4, рёбра ×4, порты ×3 (ST4).
+/// Цвета — слоты палитры + примитивы design/tokens (контракт F-8).
+#[derive(Debug, Clone, Default)]
+pub struct CanvasLayout {
+    /// Демо карточки ноды: (ключ i18n, слот, рамка, заливка).
+    pub node_demos: Vec<(&'static str, UiRect, [f32; 4], [f32; 4])>,
+    /// Демо рёбер: (ключ i18n, зона линии, цвет).
+    pub edge_demos: Vec<(&'static str, UiRect, [f32; 4])>,
+    /// Демо портов: (ключ i18n, зона, диаметр точки, цвет).
+    pub port_demos: Vec<(&'static str, UiRect, f32, [f32; 4])>,
+    /// Полная высота тела (для скролла).
+    pub h: f32,
+}
+
+/// Тело секции «Канвас». `card_fill` — слот заливки карточки из темы
+/// (ThemeColors.card_fill, извлекает вызывающий — кит без конкретных цветов).
+pub fn canvas_body(demo: UiRect, offset: f32, p: &KitPalette, card_fill: [f32; 4]) -> CanvasLayout {
+    let mut lay = CanvasLayout::default();
+    let content_x = demo.x + 8.0;
+    let top = demo.y - offset;
+    let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
+    let mut y = 0.0f32;
+
+    // Карточка ноды: обычная / selected / broken / в группе (ST4)
+    for (key, border, fill) in [
+        (
+            crate::i18n::keys::ADMIN_NODE_NORMAL,
+            p.control_border,
+            card_fill,
+        ),
+        (crate::i18n::keys::ADMIN_NODE_SELECTED, p.accent, card_fill),
+        (
+            crate::i18n::keys::ADMIN_NODE_BROKEN,
+            canvas_core::tokens::BROKEN_BORDER,
+            card_fill,
+        ),
+        (
+            crate::i18n::keys::ADMIN_NODE_GROUP,
+            p.control_border,
+            [
+                card_fill[0].max(p.accent[0] * 0.08),
+                card_fill[1].max(p.accent[1] * 0.08),
+                card_fill[2].max(p.accent[2] * 0.08),
+                1.0,
+            ],
+        ),
+    ] {
+        let sy = demo.y + y - offset;
+        let rect = UiRect::new(content_x, sy, NODE_DEMO_W, NODE_DEMO_H);
+        if fully(rect.y, rect.h) {
+            lay.node_demos.push((key, rect, border, fill));
+        }
+        y += NODE_DEMO_H + 8.0;
+    }
+    y += 8.0;
+
+    // Рёбра: default / flow / draft / dimmed (α floor 0.35 — ST4)
+    let dimmed = [
+        canvas_core::tokens::EDGE_DEFAULT[0],
+        canvas_core::tokens::EDGE_DEFAULT[1],
+        canvas_core::tokens::EDGE_DEFAULT[2],
+        0.35,
+    ];
+    let edge_w = (demo.w - 16.0 - VARIANT_LABEL_W).max(60.0);
+    for (key, color) in [
+        (
+            crate::i18n::keys::ADMIN_EDGE_DEFAULT,
+            canvas_core::tokens::EDGE_DEFAULT,
+        ),
+        (
+            crate::i18n::keys::ADMIN_EDGE_FLOW,
+            canvas_core::tokens::EDGE_FLOW,
+        ),
+        (
+            crate::i18n::keys::ADMIN_EDGE_DRAFT,
+            canvas_core::tokens::EDGE_DRAFT,
+        ),
+        (crate::i18n::keys::ADMIN_EDGE_DIMMED, dimmed),
+    ] {
+        let sy = demo.y + y - offset;
+        let rect = UiRect::new(content_x + VARIANT_LABEL_W, sy, edge_w, 20.0);
+        if fully(rect.y, rect.h) {
+            lay.edge_demos.push((key, rect, color));
+        }
+        y += 28.0;
+    }
+    y += 8.0;
+
+    // Порты: idle (точка 10) / hover (26) / active draft (ST4)
+    for (key, size, color) in [
+        (
+            crate::i18n::keys::ADMIN_PORT_IDLE,
+            10.0,
+            canvas_core::tokens::ACCENT,
+        ),
+        (
+            crate::i18n::keys::ADMIN_PORT_HOVER,
+            26.0,
+            canvas_core::tokens::ACCENT,
+        ),
+        (
+            crate::i18n::keys::ADMIN_PORT_ACTIVE,
+            26.0,
+            canvas_core::tokens::EDGE_DRAFT,
+        ),
+    ] {
+        let sy = demo.y + y - offset;
+        let rect = UiRect::new(content_x + VARIANT_LABEL_W, sy, 40.0, 40.0);
+        if fully(rect.y, rect.h) {
+            lay.port_demos.push((key, rect, size, color));
+        }
+        y += 48.0;
+    }
+
+    lay.h = y;
+    lay
+}
+
+/// Отрисовка тела «Канвас».
+pub(crate) fn draw_canvas(
+    d: &mut crate::kit_ui::KitDraw,
+    lay: &CanvasLayout,
+    p: &KitPalette,
+    lang: Language,
+) {
+    for (key, rect, border, fill) in &lay.node_demos {
+        d.rect(
+            *rect,
+            *fill,
+            *border,
+            canvas_core::tokens::CARD_CORNER_RADIUS,
+        );
+        d.label_left(
+            UiRect::new(rect.x + 10.0, rect.y + 6.0, rect.w - 20.0, 16.0),
+            crate::i18n::tr(lang, crate::i18n::keys::KIT_CARD_TITLE),
+            p.text_title,
+            12.0,
+        );
+        d.label_left(
+            UiRect::new(
+                rect.right() + 8.0,
+                rect.y + 8.0,
+                VARIANT_LABEL_W * 2.0,
+                16.0,
+            ),
+            crate::i18n::tr(lang, key),
+            p.text_muted,
+            12.0,
+        );
+    }
+    for (key, area, color) in &lay.edge_demos {
+        d.label_left(
+            UiRect::new(
+                area.x - VARIANT_LABEL_W,
+                area.y + 2.0,
+                VARIANT_LABEL_W,
+                16.0,
+            ),
+            crate::i18n::tr(lang, key),
+            p.text_muted,
+            12.0,
+        );
+        let line = UiRect::new(
+            area.x,
+            area.y + area.h / 2.0 - EDGE_DEMO_H / 2.0,
+            area.w - 10.0,
+            EDGE_DEMO_H,
+        );
+        d.rect(line, *color, [0.0; 4], 1.0);
+        // Стрелка — точка-бусина на конце (диаметр EDGE_DOT ×2)
+        let dot = UiRect::new(
+            line.right(),
+            area.y + area.h / 2.0 - canvas_core::tokens::EDGE_DOT,
+            canvas_core::tokens::EDGE_DOT * 2.0,
+            canvas_core::tokens::EDGE_DOT * 2.0,
+        );
+        d.rect(dot, *color, [0.0; 4], canvas_core::tokens::EDGE_DOT);
+    }
+    for (key, area, size, color) in &lay.port_demos {
+        d.label_left(
+            UiRect::new(
+                area.right() + 8.0,
+                area.y + 8.0,
+                VARIANT_LABEL_W * 2.0,
+                16.0,
+            ),
+            crate::i18n::tr(lang, key),
+            p.text_muted,
+            12.0,
+        );
+        let dot = UiRect::new(area.x, area.y + (40.0 - size) / 2.0, *size, *size);
+        d.rect(dot, *color, [0.0; 4], size / 2.0);
+    }
+}
+
+// === FR-070 этап 3: секция «Токены» — каталог + live-правка слотов =========
+
+/// Слоты KitPalette в порядке каталога (14; индекс = hit-суффикс).
+pub const PALETTE_SLOTS: [&str; 14] = [
+    "panel_fill",
+    "panel_border",
+    "control_fill",
+    "control_border",
+    "control_primary",
+    "control_danger",
+    "hover_fill",
+    "primary_hover_fill",
+    "selected_fill",
+    "text",
+    "text_title",
+    "text_muted",
+    "disabled_text",
+    "accent",
+];
+
+/// Цвет слота по индексу каталога.
+pub fn slot_color(p: &KitPalette, i: usize) -> [f32; 4] {
+    match i {
+        0 => p.panel_fill,
+        1 => p.panel_border,
+        2 => p.control_fill,
+        3 => p.control_border,
+        4 => p.control_primary,
+        5 => p.control_danger,
+        6 => p.hover_fill,
+        7 => p.primary_hover_fill,
+        8 => p.selected_fill,
+        9 => p.text,
+        10 => p.text_title,
+        11 => p.text_muted,
+        12 => p.disabled_text,
+        _ => p.accent,
+    }
+}
+
+/// Записать цвет слота по индексу каталога (live-правка).
+pub fn set_slot_color(p: &mut KitPalette, i: usize, c: [f32; 4]) {
+    match i {
+        0 => p.panel_fill = c,
+        1 => p.panel_border = c,
+        2 => p.control_fill = c,
+        3 => p.control_border = c,
+        4 => p.control_primary = c,
+        5 => p.control_danger = c,
+        6 => p.hover_fill = c,
+        7 => p.primary_hover_fill = c,
+        8 => p.selected_fill = c,
+        9 => p.text = c,
+        10 => p.text_title = c,
+        11 => p.text_muted = c,
+        12 => p.disabled_text = c,
+        _ => p.accent = c,
+    }
+}
+
+/// Кандидаты live-правки (курсор по клику; первый — базовый акцент темы).
+pub const TOKEN_CANDIDATES: [[f32; 4]; 12] = [
+    [0.396, 0.612, 0.969, 1.0], // blue (базовый акцент)
+    [0.130, 0.660, 0.550, 1.0], // teal
+    [0.290, 0.680, 0.310, 1.0], // green
+    [0.960, 0.650, 0.140, 1.0], // amber
+    [0.900, 0.280, 0.300, 1.0], // red
+    [0.830, 0.270, 0.620, 1.0], // magenta
+    [0.550, 0.360, 0.900, 1.0], // purple
+    [0.140, 0.660, 0.860, 1.0], // cyan
+    [0.950, 0.950, 0.970, 1.0], // near-white
+    [0.600, 0.610, 0.640, 1.0], // gray
+    [0.230, 0.240, 0.280, 1.0], // dark gray
+    [0.080, 0.090, 0.110, 1.0], // near-black
+];
+
+/// Следующий кандидат цвета слота по текущему значению (чистая функция —
+/// клик по свотчу в каталоге: совпадение с точностью 0.5/255, иначе —
+/// первый кандидат).
+pub fn cycle_slot(current: [f32; 4]) -> [f32; 4] {
+    const EPS: f32 = 0.002;
+    TOKEN_CANDIDATES
+        .iter()
+        .position(|c| {
+            c.iter()
+                .zip(current.iter())
+                .all(|(a, b)| (a - b).abs() <= EPS)
+        })
+        .map(|pos| TOKEN_CANDIDATES[(pos + 1) % TOKEN_CANDIDATES.len()])
+        .unwrap_or(TOKEN_CANDIDATES[0])
+}
+
+/// Hex-представление цвета (#rrggbb; альфа — отдельной колонкой).
+pub fn hex_of(c: [f32; 4]) -> String {
+    let to = |v: f32| ((v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", to(c[0]), to(c[1]), to(c[2]))
+}
+
+/// Строка каталога токенов.
+#[derive(Debug, Clone)]
+pub struct TokenRow {
+    /// Индекс слота палитры (Some — интерактивный свотч live-правки).
+    pub slot_index: Option<usize>,
+    /// Имя (идентификатор слота/токена).
+    pub name: &'static str,
+    /// Значение (hex / px / мс) — строкой (форматирование на раскладке).
+    pub value: String,
+    /// Слот строки (контент-координаты, уже сдвинут/отфильтрован).
+    pub rect: UiRect,
+    /// Свотч (Some — рисуется и пикается).
+    pub swatch: Option<UiRect>,
+}
+
+/// Группа каталога.
+#[derive(Debug, Clone)]
+pub struct TokenGroup {
+    /// Ключ i18n заголовка.
+    pub title_key: &'static str,
+    pub rows: Vec<TokenRow>,
+}
+
+/// Тело секции «Токены»: слоты палитры (live-правка) + размеры +
+/// типографика + движение (read-only).
+#[allow(clippy::too_many_arguments)]
+pub fn tokens_body(
+    demo: UiRect,
+    offset: f32,
+    p: &KitPalette,
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> TokensLayout {
+    let _ = (p, lang, m, fs);
+    let mut lay = TokensLayout::default();
+    let content_x = demo.x + 8.0;
+    let top = demo.y - offset;
+    let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
+    let row_h = 22.0;
+    let mut y = 0.0f32;
+
+    let push_group =
+        |lay: &mut TokensLayout, y: &mut f32, title_key: &'static str, rows: Vec<TokenRow>| {
+            let ty = demo.y + *y - offset;
+            let mut g = TokenGroup {
+                title_key,
+                rows: Vec::new(),
+            };
+            if fully(ty, MATRIX_HEADER_H) {
+                g.rows.push(TokenRow {
+                    slot_index: None,
+                    name: "",
+                    value: String::new(),
+                    rect: UiRect::new(content_x, ty, 0.0, MATRIX_HEADER_H),
+                    swatch: None,
+                });
+            }
+            *y += MATRIX_HEADER_H + 4.0;
+            for mut row in rows {
+                let ry = demo.y + *y - offset;
+                row.rect = UiRect::new(content_x, ry, demo.w - 16.0, row_h);
+                row.swatch = row
+                    .slot_index
+                    .map(|_| UiRect::new(content_x, ry + 3.0, 16.0, 16.0));
+                if fully(row.rect.y, row_h) {
+                    g.rows.push(row);
+                }
+                *y += row_h;
+            }
+            *y += 10.0;
+            lay.groups.push(g);
+        };
+
+    // Группа 1: слоты палитры (live-правка)
+    let slot_rows: Vec<TokenRow> = PALETTE_SLOTS
+        .iter()
+        .enumerate()
+        .map(|(i, name)| TokenRow {
+            slot_index: Some(i),
+            name,
+            value: hex_of(slot_color(p, i)),
+            rect: UiRect::default(),
+            swatch: None,
+        })
+        .collect();
+    push_group(
+        &mut lay,
+        &mut y,
+        crate::i18n::keys::ADMIN_TOK_GROUP_SLOTS,
+        slot_rows,
+    );
+
+    // Группа 2: размеры (read-only) — spacing/radius/card из design/tokens
+    let dims: Vec<(&'static str, String)> = vec![
+        ("spacing.s", format!("{}", canvas_core::tokens::SPACING_S)),
+        ("spacing.sm", format!("{}", canvas_core::tokens::SPACING_SM)),
+        ("spacing.md", format!("{}", canvas_core::tokens::SPACING_MD)),
+        ("spacing.lg", format!("{}", canvas_core::tokens::SPACING_LG)),
+        ("spacing.xl", format!("{}", canvas_core::tokens::SPACING_XL)),
+        (
+            "radius.chip",
+            format!("{}", canvas_core::tokens::RADIUS_CHIP),
+        ),
+        (
+            "radius.card",
+            format!("{}", canvas_core::tokens::CARD_CORNER_RADIUS),
+        ),
+        (
+            "radius.panel",
+            format!("{}", canvas_core::tokens::RADIUS_PANEL),
+        ),
+        (
+            "radius.pill",
+            format!("{}", canvas_core::tokens::RADIUS_PILL),
+        ),
+        (
+            "card.header_h",
+            format!("{}", canvas_core::tokens::CARD_HEADER_HEIGHT),
+        ),
+        ("button.h", format!("{}", kit::BUTTON_HEIGHT)),
+        ("field.h", format!("{}", kit::TEXT_FIELD_HEIGHT)),
+    ];
+    let dim_rows = dims
+        .into_iter()
+        .map(|(name, value)| TokenRow {
+            slot_index: None,
+            name,
+            value,
+            rect: UiRect::default(),
+            swatch: None,
+        })
+        .collect();
+    push_group(
+        &mut lay,
+        &mut y,
+        crate::i18n::keys::ADMIN_TOK_GROUP_DIMS,
+        dim_rows,
+    );
+
+    // Группа 3: типографика (read-only)
+    let typo: Vec<(&'static str, String)> = vec![
+        ("title.size", format!("{}", canvas_core::tokens::TYPE_TITLE)),
+        ("body.size", format!("{}", canvas_core::tokens::TYPE_BODY)),
+        (
+            "result.size",
+            format!("{}", canvas_core::tokens::TYPE_RESULT),
+        ),
+        ("badge.size", format!("{}", canvas_core::tokens::TYPE_BADGE)),
+    ];
+    let typo_rows = typo
+        .into_iter()
+        .map(|(name, value)| TokenRow {
+            slot_index: None,
+            name,
+            value,
+            rect: UiRect::default(),
+            swatch: None,
+        })
+        .collect();
+    push_group(
+        &mut lay,
+        &mut y,
+        crate::i18n::keys::ADMIN_TOK_GROUP_TYPE,
+        typo_rows,
+    );
+
+    // Группа 4: движение (read-only, мс)
+    let motion: Vec<(&'static str, String)> = vec![
+        ("focus_fade_ms", "150".to_owned()),
+        ("camera_flight_ms", "300".to_owned()),
+        ("tooltip_delay_ms", "500".to_owned()),
+        ("result_pulse_ms", "1200".to_owned()),
+    ];
+    let motion_rows = motion
+        .into_iter()
+        .map(|(name, value)| TokenRow {
+            slot_index: None,
+            name,
+            value,
+            rect: UiRect::default(),
+            swatch: None,
+        })
+        .collect();
+    push_group(
+        &mut lay,
+        &mut y,
+        crate::i18n::keys::ADMIN_TOK_GROUP_MOTION,
+        motion_rows,
+    );
+
+    lay.h = y;
+    lay
+}
+
+/// Тело секции «Токены».
+#[derive(Debug, Clone, Default)]
+pub struct TokensLayout {
+    pub groups: Vec<TokenGroup>,
+    /// Полная высота тела (для скролла).
+    pub h: f32,
+}
+
+/// Отрисовка тела «Токены» (свотчи слотов — реальные текущие значения
+/// эффективной палитры: live-правка видна сразу).
+pub(crate) fn draw_tokens(
+    d: &mut crate::kit_ui::KitDraw,
+    lay: &TokensLayout,
+    p: &KitPalette,
+    lang: Language,
+) {
+    for group in &lay.groups {
+        for row in &group.rows {
+            if row.slot_index.is_none() && row.name.is_empty() {
+                // Заголовок группы
+                d.label_left(
+                    UiRect::new(row.rect.x, row.rect.y, row.rect.w.max(200.0), 16.0),
+                    crate::i18n::tr(lang, group.title_key),
+                    p.text_title,
+                    12.0,
+                );
+                continue;
+            }
+            if let Some(swatch) = row.swatch {
+                let color = row.slot_index.map(|i| slot_color(p, i)).unwrap_or([0.0; 4]);
+                d.rect(swatch, color, p.control_border, 4.0);
+            }
+            d.label_left(
+                UiRect::new(row.rect.x + 24.0, row.rect.y + 3.0, 190.0, 16.0),
+                row.name,
+                p.text,
+                12.0,
+            );
+            d.label_left(
+                UiRect::new(row.rect.x + 220.0, row.rect.y + 3.0, 120.0, 16.0),
+                &row.value,
+                p.text_muted,
+                12.0,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1638,6 +2196,7 @@ mod tests {
                 AdminSection::Components,
                 0.0,
                 &palette,
+                [0.2, 0.2, 0.25, 1.0],
                 Language::Ru,
                 &mut m,
                 &mut fs,
@@ -1694,6 +2253,7 @@ mod tests {
                 AdminSection::Tokens,
                 0.0,
                 &palette,
+                [0.2, 0.2, 0.25, 1.0],
                 Language::Ru,
                 &mut m,
                 &mut fs,
@@ -1721,6 +2281,7 @@ mod tests {
             AdminSection::Fill,
             0.0,
             &palette,
+            [0.2, 0.2, 0.25, 1.0],
             Language::Ru,
             &mut m,
             &mut fs,
@@ -1882,7 +2443,11 @@ mod tests {
             .iter()
             .find(|dd| dd.level == FillLevel::Full)
             .expect("dropdown full");
-        assert_eq!(full_dd.items.len(), 4, "видимых пунктов не больше окна меню");
+        assert_eq!(
+            full_dd.items.len(),
+            4,
+            "видимых пунктов не больше окна меню"
+        );
         // Таблица: среднее 2 строки, полное 4 строки
         let med = all
             .row_table
@@ -1920,6 +2485,99 @@ mod tests {
         let mut d2 = KitDraw::new(&camera, viewport);
         draw_fill(&mut d2, &fill, &palette, Language::Ru);
         assert!(d2.quads.len() > 30 && d2.texts.len() > 10);
+    }
+
+    /// Тело «Канвас»: 4 карточки-состояния, 4 ребра, 3 порта (ST4);
+    /// цвета рёбер — примитивы EDGE_*, dimmed — α 0.35.
+    #[test]
+    fn canvas_body_st4_states() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let body = canvas_body(demo, 0.0, &palette, [0.2, 0.2, 0.25, 1.0]);
+        assert_eq!(body.node_demos.len(), 4, "normal/selected/broken/group");
+        // Selected — рамка accent
+        assert_eq!(body.node_demos[1].2, palette.accent);
+        // Broken — примитив BROKEN_BORDER
+        assert_eq!(body.node_demos[2].2, canvas_core::tokens::BROKEN_BORDER);
+        assert_eq!(body.edge_demos.len(), 4);
+        assert_eq!(body.edge_demos[0].2, canvas_core::tokens::EDGE_DEFAULT);
+        assert_eq!(body.edge_demos[1].2, canvas_core::tokens::EDGE_FLOW);
+        assert_eq!(body.edge_demos[2].2, canvas_core::tokens::EDGE_DRAFT);
+        // Dimmed — альфа 0.35
+        assert!((body.edge_demos[3].2[3] - 0.35).abs() < 0.001);
+        assert_eq!(body.port_demos.len(), 3, "idle/hover/active");
+        // Порты: точки 10 → 26
+        assert_eq!(body.port_demos[0].2, 10.0);
+        assert_eq!(body.port_demos[1].2, 26.0);
+    }
+
+    /// Тело «Токены»: 4 группы; группа слотов — 14 интерактивных свотчей;
+    /// read-only группы — размеры/типографика/движение.
+    #[test]
+    fn tokens_body_catalog() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let big = UiRect::new(0.0, 0.0, demo.w, 1600.0);
+        let body = tokens_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        assert_eq!(body.groups.len(), 4);
+        let slots = &body.groups[0];
+        let slot_rows: Vec<&TokenRow> = slots
+            .rows
+            .iter()
+            .filter(|r| r.slot_index.is_some())
+            .collect();
+        assert_eq!(slot_rows.len(), PALETTE_SLOTS.len(), "все 14 слотов");
+        assert!(slot_rows.iter().all(|r| r.swatch.is_some()));
+        // Значение — hex текущего слота
+        assert_eq!(slot_rows[13].value, hex_of(palette.accent));
+        // Размеры: 12 строк, типографика 4, движение 4 (плюс заголовок-
+        // псевдострока группы — строки данных без пустого имени)
+        let data_rows = |g: &TokenGroup| g.rows.iter().filter(|r| !r.name.is_empty()).count();
+        assert_eq!(data_rows(&body.groups[1]), 12);
+        assert_eq!(data_rows(&body.groups[2]), 4);
+        assert_eq!(data_rows(&body.groups[3]), 4);
+        // У группы слотов псевдостроки нет данных — все строки слоты
+        assert_eq!(
+            body.groups[0]
+                .rows
+                .iter()
+                .filter(|r| !r.name.is_empty())
+                .count(),
+            14
+        );
+    }
+
+    /// Live-правка: cycle_slot идёт по кандидатам по кругу; неизвестный
+    /// цвет → первый кандидат; hex_of — корректный формат.
+    #[test]
+    fn token_edit_cycles_candidates() {
+        let first = TOKEN_CANDIDATES[0];
+        let second = cycle_slot(first);
+        assert_eq!(second, TOKEN_CANDIDATES[1]);
+        // Полный круг
+        let mut cur = first;
+        for _ in 0..TOKEN_CANDIDATES.len() {
+            cur = cycle_slot(cur);
+        }
+        assert_eq!(cur, first);
+        // Неизвестный цвет — первый кандидат
+        assert_eq!(cycle_slot([0.123, 0.456, 0.789, 1.0]), TOKEN_CANDIDATES[0]);
+        // hex
+        assert_eq!(hex_of([1.0, 0.0, 0.0, 0.5]), "#ff0000");
+        assert_eq!(hex_of([0.0, 1.0, 0.0, 1.0]), "#00ff00");
+    }
+
+    /// slot_color/set_slot_color: полный цикл по каталогу — запись читается.
+    #[test]
+    fn slot_accessors_roundtrip() {
+        let mut p = test_palette();
+        for i in 0..PALETTE_SLOTS.len() {
+            let c = [0.1 * i as f32, 0.2, 0.3, 1.0];
+            set_slot_color(&mut p, i, c);
+            assert_eq!(slot_color(&p, i), c);
+        }
     }
 
     /// Тестовая палитра (значения не важны — важны различные слоты).
