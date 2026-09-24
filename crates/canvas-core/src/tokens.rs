@@ -258,8 +258,16 @@ pub const BODY_CLAMP_MS: u64 = 150;
 // текущим константам row_grid.rs/text.rs этапа B (I-1: ноль скачка).
 // ---------------------------------------------------------------------------
 
-/// Зазор между ячейками «значение»/«юнит»/«бейдж». Источник: row_grid.rs GUIDE_GAP.
+/// Зазор между ячейками «значение»/«юнит»/«бейдж» КИТА (kit.rs
+/// RowOpts.gap — панель FR-044, витрина). Источник: kit.rs.
 pub const TABLE_GUIDE_GAP: f32 = 6.0;
+/// FR-067 (этап F): узловой зазор колонок тела ноды — воздух прототипа
+/// (`ux-node-body-fill.html` .row gap 7 → округление вилки владельца
+/// «GUIDE_GAP 6→8»). Отдельный токен: TABLE_GUIDE_GAP — общий токен кита
+/// (kit.rs/kit_ui.rs/app.rs + parity), глобальная правка изменила бы
+/// панель «Как считается» и витрину; тело ноды — своя плотность.
+/// Источник: row_grid.rs GUIDE_GAP.
+pub const TABLE_NODE_GUIDE_GAP: f32 = 8.0;
 /// Минимальная дорожка лидера — короче не рисуется. Источник: row_grid.rs LEADER_MIN.
 pub const TABLE_LEADER_MIN: f32 = 8.0;
 /// Зазор лидера до значения и от левого текста. Источник: row_grid.rs LEADER_PAD.
@@ -607,6 +615,8 @@ mod parity_tests {
         assert_eq!(dim("radius.pill.$value"), RADIUS_PILL);
         // FR-061 (D-14): хром таблицы тела ноды.
         assert_eq!(dim("table.guide_gap.$value"), TABLE_GUIDE_GAP);
+        // FR-067 (этап F): узловой зазор колонок тела ноды.
+        assert_eq!(dim("table.node_guide_gap.$value"), TABLE_NODE_GUIDE_GAP);
         assert_eq!(dim("table.leader_min.$value"), TABLE_LEADER_MIN);
         assert_eq!(dim("table.leader_pad.$value"), TABLE_LEADER_PAD);
         assert_eq!(dim("table.leader_dash.$value"), TABLE_LEADER_DASH);

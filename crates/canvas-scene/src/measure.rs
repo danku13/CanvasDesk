@@ -24,6 +24,9 @@ pub const BODY_PADDING: f32 = 10.0;
 pub const BODY_TOP_GAP: f32 = 4.0;
 /// Высота ряда футера результата (canvas-render/text.rs).
 pub const RESULT_LINE_HEIGHT: f32 = 16.0;
+/// FR-067 (этап F): высота ряда подписи секции («ПАРАМЕТРЫ · N» /
+/// «РАСЧЁТ · N», canvas-render/text.rs ZONE_LABEL_LINE_HEIGHT).
+pub const ZONE_LABEL_LINE_HEIGHT: f32 = 16.0;
 
 /// FR-067 (этап F): деривация супрессии первого проза-абзаца — зеркало
 /// `with_body_stack` (canvas-render): зона описания показывает ЕГО ЖЕ
@@ -140,6 +143,29 @@ pub fn estimated_result_reserve_height(
     // FR-067 (этап F): резерв футера — только нодам, которым рендер его
     // покажет (footer_reserve = node_shows_result_footer); у прочих нод
     // футера нет — без флага высота росла с «пустым хвостом».
+    // FR-067 (этап F): подписи секций — по ряду на присутствующую секцию:
+    // «параметры» — есть присваивания с исходами; «расчёт» — есть
+    // расчётные строки и режим ЛИСТА (в блоке его роль играет ряд
+    // заголовка, уже учтённый в header_rows). Логика — зеркально
+    // body_items (canvas-render), I-2.
+    let lines: Vec<&str> = text.lines().collect();
+    let params = formula_lines
+        .iter()
+        .copied()
+        .filter(|&i| {
+            lines
+                .get(i)
+                .is_some_and(|line| matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+        })
+        .count();
+    let calcs = formula_lines.len().saturating_sub(params);
+    let mut label_rows = 0.0;
+    if params > 0 {
+        label_rows += ZONE_LABEL_LINE_HEIGHT;
+    }
+    if calcs > 0 && header_rows == 0.0 {
+        label_rows += ZONE_LABEL_LINE_HEIGHT;
+    }
     let footer = if footer_reserve {
         RESULT_LINE_HEIGHT + 2.0
     } else {
@@ -148,6 +174,7 @@ pub fn estimated_result_reserve_height(
     HEADER_HEIGHT
         + BODY_TOP_GAP
         + desc_rows
+        + label_rows
         + (rows as f32 + header_rows) * BODY_LINE_HEIGHT
         + BODY_PADDING
         + footer
@@ -327,18 +354,24 @@ mod tests {
         let lines: Vec<usize> = vec![0, 1, 2, 3, 4];
         let with_header = estimated_result_reserve_height(five, 300.0, &lines, "", false, true);
         let without = estimated_result_reserve_height(five, 300.0, &[], "", false, true);
+        // FR-067: с исходами появляется и подпись «ПАРАМЕТРЫ · 4» (16):
+        // различие = ряд заголовка (20) + ряд подписи (16). «Расчёт» в
+        // блоке не вставляется — его роль играет заголовок ведомости.
         assert_eq!(
             with_header - without,
-            BODY_LINE_HEIGHT,
-            "план блока добавляет ровно один ряд в оценку"
+            BODY_LINE_HEIGHT + ZONE_LABEL_LINE_HEIGHT,
+            "план блока: +1 ряд заголовка, исходы: +1 ряд подписи параметров"
         );
         // Ниже порога T (4 строки данных) — заголовка нет
         let four = "a = 1\nb = 2\nc = 3\nd * 2";
         let four_lines: Vec<usize> = vec![0, 1, 2, 3];
+        // Ниже порога T заголовка нет, но обе метки (параметры + расчёт
+        // в режиме листа) появляются: различие = 2 ряда подписи.
         assert_eq!(
-            estimated_result_reserve_height(four, 300.0, &four_lines, "", false, true),
-            estimated_result_reserve_height(four, 300.0, &[], "", false, true),
-            "порог T не достигнут — ряда заголовка в оценке нет"
+            estimated_result_reserve_height(four, 300.0, &four_lines, "", false, true)
+                - estimated_result_reserve_height(four, 300.0, &[], "", false, true),
+            2.0 * ZONE_LABEL_LINE_HEIGHT,
+            "порог T не достигнут: заголовка нет, метки секций есть"
         );
     }
 
