@@ -25,6 +25,22 @@ pub const BODY_TOP_GAP: f32 = 4.0;
 /// Высота ряда футера результата (canvas-render/text.rs).
 pub const RESULT_LINE_HEIGHT: f32 = 16.0;
 
+/// FR-067 (этап F): деривация супрессии первого проза-абзаца — зеркало
+/// `with_body_stack` (canvas-render): зона описания показывает ЕГО ЖЕ
+/// первый проза-абзац текста (фолбэк Q3 «desc→манифест→проза», либо
+/// canvasdesk.desc/манифест, дословно равный абзацу) → эти строки из
+/// вёрстки тела убраны. Общие чистые функции ядра
+/// ([`canvas_core::expr::first_prose_paragraph`]/`_span`) не дают рендеру
+/// и оценке разъехаться (I-2).
+fn desc_paragraph_suppress_span(text: &str, desc: &str) -> Option<(usize, usize)> {
+    if desc.trim().is_empty() {
+        return None;
+    }
+    canvas_core::expr::first_prose_paragraph(text)
+        .filter(|para| para == desc)
+        .and_then(|_| canvas_core::expr::first_prose_paragraph_span(text))
+}
+
 /// CR-010: оценка числа визуальных рядов тела с учётом переносов. Рендер
 /// шейпит тело с `Wrap::WordOrGlyph` в области шириной `body_width`, поэтому
 /// длинная строка параметра даёт несколько рядов, хотя `\n`-строка одна.
@@ -75,7 +91,20 @@ const MONO_AVG_CHAR_W: f32 = 0.614 * BODY_FONT_SIZE;
 /// если оценка влезает в текущую высоту, точное измерение не нужно.
 pub fn estimated_result_reserve_height(text: &str, node_width: f32, desc: &str) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
-    let rows = wrapped_body_rows(text, body_width);
+    // FR-067 (этап F): супрессия абзаца описания — зона описания показывает
+    // первый проза-абзац → эти строки из верстки тела убраны; без учёта
+    // оценка дважды считала абзац (завышение → лишние refit'ы уровня 2).
+    let rows_text: String = match desc_paragraph_suppress_span(text, desc) {
+        None => text.to_owned(),
+        Some((start, end)) => text
+            .lines()
+            .enumerate()
+            .filter(|(i, _)| *i < start || *i >= end)
+            .map(|(_, line)| line)
+            .collect::<Vec<&str>>()
+            .join("\n"),
+    };
+    let rows = wrapped_body_rows(&rows_text, body_width);
     // FR-061 этап D (D-8): зона описания — кламп ≤ 2 строк (токен
     // TABLE_DESC_CLAMP_LINES) + зазор после зоны; консервативная оценка
     // (факт — фактическая верстка клампа, ≤ этой суммы).
@@ -179,4 +208,31 @@ pub fn fit_template_node_height(node: &mut Node) {
     // growth-only при следующем пересчёте — документированная цена.
     let text = node.text.clone().unwrap_or_default();
     ensure_result_reserve(node, &text, &formula_lines, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FR-067 (этап F): супрессия абзаца описания в оценке уровня 1 —
+    /// desc == первый проза-абзац убирает его строки из счёта (зона
+    /// описания уже показывает их); посторонний desc — нет.
+    #[test]
+    fn estimate_suppresses_desc_paragraph() {
+        let text = "шлюз обрабатывает поток\n\nrps = 800 rps\nlatency = 12 ms";
+        let para = canvas_core::expr::first_prose_paragraph(text).unwrap();
+        let with_para = estimated_result_reserve_height(text, 300.0, &para);
+        let other = estimated_result_reserve_height(text, 300.0, "постороннее описание");
+        let none = estimated_result_reserve_height(text, 300.0, "");
+        // Абзац в зоне описания + супрессия тела: дешевле постороннего desc
+        // (тело сохранило абзац — двойной счёт) и дороже отсутствия desc.
+        assert!(with_para < other, "{with_para} < {other}");
+        assert!(with_para > none, "{with_para} > {none}");
+        // Деривация видна напрямую (зеркало with_body_stack)
+        assert_eq!(desc_paragraph_suppress_span(text, &para), Some((0, 1)));
+        assert_eq!(
+            desc_paragraph_suppress_span(text, "постороннее описание"),
+            None
+        );
+    }
 }

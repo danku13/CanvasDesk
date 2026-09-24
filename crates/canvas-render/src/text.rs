@@ -732,6 +732,10 @@ fn body_items(
     spill_params: &[crate::SpillView],
     language: canvas_core::Language,
     block_expanded: bool,
+    // FR-067 (этап F): диапазон строк первого проза-абзаца, показанного
+    // зоной описания — из вёрстки тела он убран (супрессия дубликата),
+    // сам текст ноды не меняется (I-1/I-3). None — супрессии нет.
+    suppress: Option<(usize, usize)>,
 ) -> Vec<BodyItem> {
     let mut out = Vec::new();
     let mut prev: Option<(bool, bool, Option<usize>)> = None;
@@ -755,6 +759,32 @@ fn body_items(
     if seg_start < lines.len() {
         segments.push((seg_start, lines.len(), None));
     }
+    // FR-067 (этап F): супрессия — None-сегменты, пересекающие диапазон
+    // абзаца, дробятся на части ДО/ПОСЛЕ диапазона (сами строки абзаца
+    // не рендерятся). Формульные сегменты (Some) не трогаются: строки
+    // абзаца — проза, в формула-строки не попадают (по построению
+    // first_prose_paragraph_span). Привязки блоков/портов не страдают:
+    // у None-сегментов source_line нет, hit-зоны и порты живут только на
+    // строках с исходами (прецедент — выбрасывание свёрнутых строк).
+    let segments: Vec<(usize, usize, Option<usize>)> = match suppress {
+        None => segments,
+        Some((sup_start, sup_end)) => segments
+            .into_iter()
+            .flat_map(|(start, end, source_line)| {
+                if source_line.is_some() || end <= sup_start || start >= sup_end {
+                    return vec![(start, end, source_line)];
+                }
+                let mut parts = Vec::with_capacity(2);
+                if start < sup_start {
+                    parts.push((start, sup_start, None));
+                }
+                if sup_end < end {
+                    parts.push((sup_end, end, None));
+                }
+                parts
+            })
+            .collect(),
+    };
     // FR-061 этап C (D-7): заголовок блока-ведомости — вставка перед
     // ПЕРВОЙ расчётной строкой при числе данных > T (Q2); общий расчёт
     // для рендера и измерения (один body_items в общем стеке, I-2).
@@ -1399,6 +1429,20 @@ fn with_body_stack(
     let mut items: Vec<BodyItem> = desc_items;
     // FR-050 Р-4: авто-строки — после зоны описания, до собственного тела.
     items.extend(spill_prefix);
+    // FR-067 (этап F): супрессия первого проза-абзаца — зона описания
+    // показывает ЕГО ЖЕ текст (фолбэк Q3 «desc→манифест→проза», либо
+    // canvasdesk.desc/манифест, дословно равный абзацу) → из вёрстки тела
+    // абзац убран, зона не дублируется. Сам текст ноды не меняется —
+    // индексы формул/портов/проливаний стабильны (I-1/I-3). Деривация по
+    // равенству через ОБЩИЕ чистые функции ядра — рендер и измерение
+    // супрессируют одинаково (I-2), контракты стека не расширяются.
+    let suppress = desc
+        .filter(|d| !d.is_empty())
+        .and_then(|d| {
+            canvas_core::expr::first_prose_paragraph(body_text)
+                .filter(|para| para == d)
+                .and_then(|_| canvas_core::expr::first_prose_paragraph_span(body_text))
+        });
     let mut body = body_items(
         theme,
         body_text,
@@ -1406,6 +1450,7 @@ fn with_body_stack(
         spill_params,
         language,
         block_expanded,
+        suppress,
     );
     // Зона «Переменные» отделяется от собственного контента зазором
     // (первый элемент тела в покое имеет gap 0 — переопределяем).
@@ -4782,6 +4827,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            None,
         );
         assert_eq!(items.len(), 2, "проза + формульная строка");
         assert!(!items[0].mono, "проза — sans");
@@ -4831,6 +4877,7 @@ mod tests {
             &spills,
             canvas_core::Language::Ru,
             true,
+            None,
         );
         assert_eq!(items.len(), 2);
         assert!(!items[0].oblique, "проза — прямое начертание");
@@ -4851,6 +4898,73 @@ mod tests {
             other => panic!("нет данных тултипа Н9-2: {other:?}"),
         }
         assert!(items[0].spill.is_none(), "у прозы payload нет");
+    }
+
+    /// FR-067 (этап F): супрессия абзаца описания — строки диапазона не
+    /// рендерятся, формульная строка жива с прежним source_line; без
+    /// супрессии абзац в теле (регресс двойного показа).
+    #[test]
+    fn body_items_suppresses_desc_paragraph() {
+        let theme = ThemeColors::dark();
+        let text = "шлюз обрабатывает поток\n\nrps = 800 rps\n800 rps / 12 ms";
+        let formula_lines = [2, 3];
+        // Границы абзаца по общим функциям ядра (как в with_body_stack)
+        assert_eq!(canvas_core::expr::first_prose_paragraph_span(text), Some((0, 1)));
+        let suppress = Some((0, 1));
+        let items = body_items(
+            &theme,
+            text,
+            &formula_lines,
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            suppress,
+        );
+        assert!(
+            items.iter().all(|item| !item.text.contains("шлюз обрабатывает")),
+            "абзац описания из тела убран"
+        );
+        // Формульные строки на месте, привязка к исходным строкам не сдвинулась
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].source_line, Some(2));
+        assert_eq!(items[1].source_line, Some(3));
+        // Без супрессии — абзац в теле (прежнее поведение с дубликатом)
+        let items = body_items(
+            &theme,
+            text,
+            &formula_lines,
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            None,
+        );
+        assert!(items[0].text.contains("шлюз обрабатывает"));
+    }
+
+    /// FR-067: супрессия внутри смешанного сегмента — соседние строки
+    /// сегмента (до/после абзаца) остаются, строки абзаца уходят.
+    #[test]
+    fn body_items_suppress_splits_mixed_segment() {
+        let theme = ThemeColors::dark();
+        // Один None-сегмент: проза-вступление, пустая строка, абзац, пустая, хвост
+        let text = "вступление\n\nэто описание ноды\n\nхвост";
+        let suppress = Some((2, 3));
+        let items = body_items(
+            &theme,
+            text,
+            &[],
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            suppress,
+        );
+        assert!(
+            items.iter().all(|item| !item.text.contains("это описание")),
+            "строка абзаца не рендерится"
+        );
+        // Сегмент дробится: вступление и хвост живут отдельными блоками
+        assert!(items.iter().any(|item| item.text == "вступление"));
+        assert!(items.iter().any(|item| item.text == "хвост"));
     }
 
     /// FR-050 Р-4 (этап D): элементы авто-строк приёмника — префикс тела:
@@ -5354,6 +5468,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            None,
         );
         let header_pos = items
             .iter()
@@ -5371,6 +5486,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             true,
+            None,
         );
         assert!(
             items.iter().all(|item| !item.header),
@@ -5385,6 +5501,7 @@ mod tests {
             &[],
             canvas_core::Language::Ru,
             false,
+            None,
         );
         let header_pos = collapsed
             .iter()
@@ -5483,6 +5600,54 @@ mod tests {
         assert_eq!(
             measured, rendered,
             "измерение = рендер-стек: measured {measured}, rendered {rendered}"
+        );
+    }
+
+    /// FR-067 (этап F): супрессия абзаца описания — измерение и рендер
+    /// убирают абзац одинаково (I-2); desc == абзац добавляет МЕНЬШЕ
+    /// высоты, чем постороннее описание той же длины (тело схлопнулось
+    /// на высоту абзаца), и стект-паритет сохраняется.
+    #[test]
+    fn measure_and_shape_suppress_desc_paragraph_alike() {
+        let text = "шлюз обрабатывает поток\nиз двух строк\n\ndeploy = 40 $";
+        let para = canvas_core::expr::first_prose_paragraph(text).unwrap();
+        let mut fs = FontSystem::new();
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        // Ширина с запасом: абзац укладывается в ОДНУ строку зоны описания
+        // (сравниваем именно супрессию тела, а не клампы описания)
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            text,
+            420.0,
+            1.0,
+            &[3],
+            &[],
+            Vec::new(),
+            &[],
+            canvas_core::Language::Ru,
+            Some(para.as_str()),
+            true,
+            false,
+        );
+        let rendered = layout
+            .blocks
+            .iter()
+            .map(|block| block.offset[1] + block.height)
+            .fold(0.0f32, f32::max);
+        let measured = measure_body_height(text, 420.0, &[3], &para);
+        assert_eq!(
+            measured, rendered,
+            "паритет стека при супрессии абзаца"
+        );
+        // Абзац, показанный зоной описания, дешевле постороннего описания:
+        // тело без абзаца против полного тела
+        let other = measure_body_height(text, 420.0, &[3], "постороннее описание ноды");
+        assert!(
+            measured < other,
+            "супрессия убрала абзац из тела: {measured} < {other}"
         );
     }
 
