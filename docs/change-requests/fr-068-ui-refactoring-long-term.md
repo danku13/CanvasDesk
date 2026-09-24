@@ -1,13 +1,13 @@
 # FR-068: Поэтапный рефакторинг UI — волны W0–W4 (стратегия ADR-0015)
 
-- **Статус:** выявлено (план; ADR-0015 предложен, утверждается владельцем)
+- **Статус:** в работе (W0 выполнено 2026-09-25 — гейты зелёные; ADR-0015 принят владельцем — приказ «начинай первый этап внедрения» сессии 2026-09-25; W1–W4 — по плану)
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (планирование); решения — владелец проекта
 - **Источник:** запрос владельца 2026-09-24: «проанализировать ADR-0014 критическим взглядом группы экспертов. Кроме реализации внедрения taffy, должен быть спланирован дальнейший рефакторинг и переход на полностью свою UI библиотеку, который будет иметь все сильные стороны и минимизирует внешние зависимости. Первично нам надо причесать UI, далее пойти по пути поэтапного рефакторинга с проверяемыми результатами». Ответы на clarifying questions: taffy временно (переход), приоритеты — UI-паритет + минимум deps + архитектура, cosmic-text — trait boundary, свой layout — минимум (flexbox + overflow/clip/scroll; Grid за taffy-опцией), проверка — layout-линт + snapshot-тесты + perf-бюджет, форма — ADR + FR (ADR-0015 + FR-068).
 - **Связанные задачи:** ADR-0015 (стратегия долгосрочного UI-стека — критический разбор ADR-0014 + план волн W0–W4), ADR-0014 (taffy hybrid — переходное решение, поглощается W1), ADR-0013 (заменено ADR-0014 — основа `NativeBackend`/`FlexLayoutEngine`), PRD-0009 §7 V-3/V-4/V-5/V-6/V-7 (каркас UI), FR-051 (UiLayer/реестр — ортогонален), FR-053 (layout-примитивы F-7 — основа `NativeBackend`), FR-056 (scissor — переиспользуется W1 `PaintItem::ClipRect`), FR-057 (Painter/WidgetState — расширяется W1), FR-062 (собственные layout v2 — основа `NativeBackend`/`FlexLayoutEngine`), FR-067 (план staged миграции на taffy — поглощается W1), FR-061 этап E (kit-Row — pilot W1), SPEC §6.3 (бюджеты UI), `docs/DEPENDENCIES.md` (taffy/cosmic-text/rustybuzz/ttf-parser — транзитивные), `docs/ui-kit.md`, `docs/plans/wasm-port.md` §8.8 (≤8 МБ raw / ≤4 МБ brotli).
 - **Создан:** 2026-09-24
-- **Обновлён:** 2026-09-24
+- **Обновлён:** 2026-09-25
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
 
 ---
@@ -254,12 +254,12 @@
 
 ### W0
 
-- [ ] `cargo test -p canvas-ui --test g4_lint` — 30 прогонов, 0 нарушений (выход за parent/viewport/silent-clips).
-- [ ] `cargo test -p canvas-ui --test snapshot` — 60 эталонов зелёные (или осознанный diff).
-- [ ] `cargo test -p canvas-ui -- --ignored perf_baseline` — baseline зафиксирован.
-- [ ] `cargo test --workspace` — все тесты зелёные.
-- [ ] `cargo clippy -D warnings`; `cargo fmt --check`.
-- [ ] `scripts/wasm_gate.sh --check` — зелёный (0 прироста).
+- [x] `cargo test -p canvas-ui --test g4_lint` — 30 прогонов, 0 нарушений (выход за parent/viewport/silent-clips) — 2026-09-25, 6 тестов (5 сцен + счётчик 30), 0 нарушений; SqueezeTail-деградация на 800×560 подтверждена (хвостовой чип вырождается и исключается как невидимый — F-11c, без молчаливого среза).
+- [x] `cargo test -p canvas-ui --test snapshot` — 60 эталонов зелёные (или осознанный diff) — 2026-09-25, 61 тест (60 сравнений по матрице 10×3×2 + счётчик), эталоны в `tests/snapshot/*.txt`, регенерация `CANVAS_UI_UPDATE_SNAPSHOTS=1`.
+- [x] `cargo test -p canvas-ui -- --ignored perf_baseline` — baseline зафиксирован — 2026-09-25, медиана reflow 1000 узлов 45.1 μs (бюджет §8 < 1 мс — запас ×22; debug-профиль, black_box, медиана 200 итераций); регресс-гейт > 20% активен.
+- [x] `cargo test --workspace` — все тесты зелёные — 2026-09-25, 1941 passed / 0 failed.
+- [x] `cargo clippy -D warnings`; `cargo fmt --check` — 2026-09-25, чисто (canvas-ui + потребители canvas-app/canvas-render).
+- [x] `scripts/wasm_gate.sh --check` — зелёный (0 прироста) — 2026-09-25.
 
 ### W1
 
@@ -320,6 +320,7 @@
 
 ## История изменений (Changelog)
 
+- `2026-09-25` — агент (4 параллельных агента, изолированные git-worktree + последовательный merge): **W0 выполнено**. (1) kit.rs hygiene — `viewport_clamp` (пересечение при наличии, иначе исходный rect); применён как финальная гарантия в `dropdown_menu`/`toast_area`; в `tooltip`/`modal` оставлены position-clamp/constrain-семантики с W0-комментариями (size-preserving контракты; parity-тесты canvas-app `dialog_rect_kit_modal_matches_old_clamps` пинят min-инвариант панели — пересечение клипповало бы панель 320×240→100×100); +5 тестов. (2) snapshot-тесты `tests/snapshot.rs` — 60 эталонов (10 компонентов × Normal/Hovered/Disabled × RU/EN), дамп `Painter.items()` с округлением до целого ui px и сортировкой по `(x,y,w,h,type)`, эталоны `tests/snapshot/*.txt`, регенерация `CANVAS_UI_UPDATE_SNAPSHOTS=1`. (3) G4-линт `tests/g4_lint.rs` — 5 canonical сцен × 3 окна × 2 языка = 30 прогонов: parent-пересечение всех видимых элементов, viewport-пересечение L4+, 0 пересечений интерактивных rect'ов одной полосы, hit-rect'ы во вьюпорте — 0 нарушений; silent-clips grep-аудит kit.rs — чисто. (4) perf baseline `tests/perf_baseline.rs` (`#[ignore]`) — reflow 1000 узлов (Fit/Wrap/SqueezeTail/grid_cells) медиана 45.1 μs, гейт < 1 мс, регрессия > 20% — fail, baseline `tests/perf_baseline.txt`, регенерация `CANVAS_UI_UPDATE_PERF=1`. (5) G4-нарушений не найдено (0–10 ожидание — фактический 0). Гейты: canvas-ui 155 lib + 61 snapshot + 6 g4_lint (+1 ignored perf), workspace 1941 passed, clippy/fmt чисто, wasm-gate --check зелёный. Статусы: ADR-0015 → принят владельцем (приказ «начинай первый этап внедрения»); ADR-0014 — переходное решение (см. ADR-0015).
 - `2026-09-24` — агент: создан документ (план, статус `выявлено`). Зафиксированы 5 волн (W0 hygiene, W1 taffy opt-in, W2 cosmic-text trait + FlexLayoutEngine, W3 своя UI-библиотека, W4 dep-минимизация), контракты на стыках (§Контракты 1–9), ограничения для агента-реализатора (поэтапность, гибрид не замена, `SqueezeTail` решает `FlexLayoutEngine`, cosmic-text trait, zero-dep инвариант, не трогать UiLayer/Painter/geometry). Привязан к ADR-0015 (стратегия); ADR-0014 — переходное решение (статус дополняется «переходное, см. ADR-0015»). FR-067 (план staged миграции на taffy) поглощается W1. Решения за владельцем — до гейта W0.
 
 ## Источники истины (References)
