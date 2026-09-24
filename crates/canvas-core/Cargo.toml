@@ -24,6 +24,13 @@ statrs = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 rand_chacha = { workspace = true, optional = true }
 rand_distr = { workspace = true, optional = true }
+# ADR-0008 S3/M4 (FR-065): поярусный параллелизм пересчёта DAG — optional,
+# только за фичей `parallel` (P3 `rayon` `par_iter`; P2 `std::thread::scope`
+# не требует dep). Уже в дереве транзитивно через cosmic-text (MIT OR
+# Apache-2.0; архдок §5.3, §4.2); прямое включение НЕ добавляет новых
+# лицензий. Без фичи `parallel` — zero-dep инвариант B2B (контракт
+# `docs/plans/adr-0008-wave-s-plan.md` §5.6).
+rayon = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -40,4 +47,8 @@ default = []
 # FR-063 P1: фича активирована — deps S0 прописаны, модуль expr/stats.rs
 # включается только с фичей (cargo build --no-default-features — zero-dep).
 stats = ["dep:statrs", "dep:rand", "dep:rand_chacha", "dep:rand_distr"]
-parallel = []
+# FR-065 P2: фича активирована — `parallel` включает optional-dep `rayon`
+# (P3 `par_iter`); P2 `std::thread::scope` не требует dep, но включается
+# тем же cfg-гейтом `#[cfg(all(feature="parallel", not(target_arch="wasm32")))]`.
+# НЕ подразумевает `stats` (контракт §5.6 — фичи независимы).
+parallel = ["dep:rayon"]

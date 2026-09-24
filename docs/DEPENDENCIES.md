@@ -62,6 +62,7 @@ dev-зависимости); полный состав с текстами ли�
 | `rand` | 0.8 | MIT OR Apache-2.0 | Rng-трейты, SeedableRng (FR-063, за фичей `stats`; default-features = false — без getrandom) |
 | `rand_chacha` | 0.3 | MIT OR Apache-2.0 | ChaCha8Rng — единственный источник случайности (FR-063, за фичей `stats`) |
 | `rand_distr` | 0.4 | MIT OR Apache-2.0 | сэмплирование Normal/LogNormal (FR-063, за фичей `stats`) |
+| `rayon` | 1.12 | MIT OR Apache-2.0 | L4-параллелизм: поярусный пересчёт DAG `flow::propagate_with_lines_data` (FR-065, за фичей `parallel` в canvas-core — в сборку по умолчанию не входит). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий. |
 
 **Выбор опции дуальных лицензий.** Для крейтов `MIT OR Apache-2.0`
 продукт следует обязательствам обеих сторон консервативно: сохранение
@@ -75,7 +76,11 @@ notices (MIT) и NOTICE-механики (Apache-2.0) обеспечены ге�
 `parallel` в `canvas-core` (см. `crates/canvas-core/Cargo.toml`), чтобы
 B2B-сборка могла отключить неиспользуемые слои. S0 (Foundation) и S1
 (FR-063, M2) выполнены 2026-09-24: `statrs`/`rand`/`rand_chacha`/
-`rand_distr` перенесены в §2.
+`rand_distr` перенесены в §2. S3/M4 (FR-065) выполнен 2026-09-24:
+`rayon` перенесён в §2 (поярусный параллелизм пересчёта DAG за фичей
+`parallel`; std::thread::scope заменён на `rayon` `par_iter` — bounded
+thread pool, иначе 8192-нод exponential diamond превышает лимит
+OS-потоков, тест `lineage::tests::budget_truncates_exponential_diamond`).
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
@@ -84,7 +89,6 @@ B2B-сборка могла отключить неиспользуемые сл
 | L2 | `gauss-quad` / `quadrature` | квадратуры | MIT OR Apache-2.0 / BSD-2 | интегралы SLA |
 | L2 | `puruspe` / `special` | спецфункции | MIT OR Apache-2.0 | при выходе за `statrs` |
 | L3 | `ndarray` / `faer` / `nalgebra` | линейная алгебра | MIT / MIT / Apache-2.0 | M6: домен с матричной математикой |
-| L4 | `rayon` | поярусный параллелизм | MIT OR Apache-2.0 | S3 (уже транзитивно в дереве через `cosmic-text`) |
 | L4 | `crossbeam-channel`, `parking_lot` | примитивы синхронизации | MIT OR Apache-2.0 | S2/S3 при недостатке std |
 | L5 | `chrono` / `jiff` | календарные сетки финдоменов | MIT OR Apache-2.0 | первый домен с датами |
 | L5 | `cargo-deny` / `cargo-about` / `cargo-auditable` | CI-контроль | MIT OR Apache-2.0 | уже внедрены (CP0) — вне бинарника |

@@ -144,6 +144,15 @@ rand = { version = "0.8", default-features = false, features = ["alloc"] } # MIT
 rand_chacha = { version = "0.3", default-features = false } # ChaCha8Rng (MIT OR Apache-2.0)
 rand_distr = { version = "0.4", default-features = false }  # сэмплеры поверх Rng (MIT OR Apache-2.0)
 
+# ADR-0008 S3 (M4): поярусный параллелизм пересчёта DAG (FR-065 P2 `std::thread::scope`
+# per-level → P3 `rayon` `par_iter` по профилированию). Уже в дереве транзитивно
+# через cosmic-text (Cargo.lock §3 реестра кандидатов `docs/DEPENDENCIES.md`);
+# прямое включение НЕ добавляет новых лицензий (MIT OR Apache-2.0; архдок §5.3,
+# §4.2). Активируется только за фичей `parallel` (`canvas-core/Cargo.toml`),
+# НЕ подразумевает `stats` (контракт `docs/plans/adr-0008-wave-s-plan.md` §5.6);
+# `cargo build --no-default-features` — zero-dep инвариант B2B.
+rayon = "1.12"
+
 # M8/W12 (wasm-port §6, «Полировка и деплой»): thin LTO в release-профиле —
 # бандл canvas-web заметно компактнее, нативные релизные бинари чуть меньше
 # и быстрее при приемлемом времени линковки (профиль общий для всех целей:
