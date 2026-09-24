@@ -1227,6 +1227,17 @@ pub enum AppEvent {
     /// На не-Windows листенера нет — вариант не конструируется (dead_code).
     #[cfg_attr(not(windows), allow(dead_code))]
     InstanceExit,
+    /// FR-064 P1: воркер потока отдал снимок решений — UI-тред завершает
+    /// пересчёт (публикация double buffer + выводка O(N)) в
+    /// `SceneState::complete_flow_recompute` (истина — в outcomes-канале
+    /// воркера; полезная нагрузка события — информационный снимок для
+    /// wake-up, паттерн EventLoopProxy). Desktop-only: на wasm воркера нет
+    /// (sync-путь — контракт плана волны S §5.8).
+    #[cfg(not(target_arch = "wasm32"))]
+    FlowReady {
+        solutions: Arc<canvas_core::flow::FlowSolutions>,
+        kind: canvas_scene::worker::FlowKind,
+    },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -3203,7 +3214,10 @@ impl App {
                 flow::propagate_with_lines(&self.scene.canvas, &overrides).ok()
             })
             .collect();
-        let base_lines = &self.scene.flow_baseline.lines;
+        // FR-064 P1: double buffer — снимок базы через read()-гард (гард
+        // живёт до конца работы со строками базы).
+        let base_buf = canvas_scene::read_flow(&self.scene.flow_baseline);
+        let base_lines = &base_buf.lines;
         let rows: Vec<Vec<String>> = keys
             .iter()
             .map(|(node_id, line)| {
@@ -4702,7 +4716,9 @@ impl App {
         else {
             return None;
         };
-        let solutions = &self.scene.flow_active;
+        // FR-064 P1: double buffer — снимок активных решений (рендер
+        // читает через read()-гард вместо owned-поля).
+        let solutions = canvas_scene::read_flow(&self.scene.flow_active);
         if let Some(port) = from_port {
             // Построчный исток — значение строки; футер шаблона
             // (line = None) — узловое значение (ниже, как у ноды целиком)
@@ -4763,7 +4779,8 @@ impl App {
     /// подпись «имя = значение»). Пусто — источник не текстовая нода или
     /// строк без результата (ambiguity нет).
     fn source_formula_lines(&self, from_node: &str) -> Vec<(usize, String)> {
-        let solutions = &self.scene.flow_active;
+        // FR-064 P1: double buffer — снимок активных решений через read()-гард.
+        let solutions = canvas_scene::read_flow(&self.scene.flow_active);
         let Some(node) = self.scene.canvas.node(from_node) else {
             return Vec::new();
         };
@@ -11166,10 +11183,12 @@ impl App {
     /// ВСЕ входы приёмника канваса (панель полная, Р-8) + значения по
     /// адресации из активных решений потока (what-if подмены видны).
     fn stage_calc_model(&self, stage: &MainStageState) -> calc_panel_ui::CalcPanelModel {
+        // FR-064 P1: double buffer — снимок активных решений через read()-гард.
+        let active = canvas_scene::read_flow(&self.scene.flow_active);
         let values = PanelValues {
-            lines: &self.scene.flow_active.lines,
-            named: &self.scene.flow_active.named,
-            outputs: &self.scene.flow_active.outputs,
+            lines: &active.lines,
+            named: &active.named,
+            outputs: &active.outputs,
         };
         calc_panel_ui::build_model(
             &self.scene.canvas,
@@ -12553,9 +12572,8 @@ impl App {
                 .unwrap_or_default();
         }
         if let Some(output) = edge.from_output.as_deref() {
-            return self
-                .scene
-                .flow_active
+            // FR-064 P1: double buffer — снимок активных решений.
+            return canvas_scene::read_flow(&self.scene.flow_active)
                 .named
                 .get(&(edge.from_node.clone(), output.to_owned()))
                 .map(|value| value.to_string())
@@ -13878,17 +13896,24 @@ impl App {
         }
         // X3 (AC-4.2): при активном what-if база (flow_baseline) строится
         // тем же фоновым проходом — дельты в дереве Ready.
-        let base = self
-            .scene
-            .whatif_active
-            .then_some(&self.scene.flow_baseline);
-        let build = spawn_lineage_build(
-            &self.scene.canvas,
-            &self.scene.flow_active,
-            base,
-            self.scene.flow_cycle.as_ref(),
-            root.clone(),
-        );
+        // FR-064 P1: double buffer — снимки через read()-гарды; spawn_
+        // lineage_build клонирует их под гардом (потоку — собственные копии).
+        // Гард'ы — в блоке: после клонирования они не нужны (Drop-типы
+        // держат заимствование до конца скоупа).
+        let build = {
+            let base_buf = self
+                .scene
+                .whatif_active
+                .then(|| canvas_scene::read_flow(&self.scene.flow_baseline));
+            let active_buf = canvas_scene::read_flow(&self.scene.flow_active);
+            spawn_lineage_build(
+                &self.scene.canvas,
+                &active_buf,
+                base_buf.as_deref(),
+                self.scene.flow_cycle.as_ref(),
+                root.clone(),
+            )
+        };
         self.explain = Some(ExplainState::loading(root, revision, build));
         self.request_redraw();
     }
@@ -19140,6 +19165,15 @@ impl ApplicationHandler<AppEvent> for App {
             #[cfg(windows)]
             AppEvent::McpWake => self.on_mcp_wake(),
             AppEvent::Widget(event) => self.on_widget_event(event),
+            // FR-064 P1: воркер отдал снимки — завершить пересчёт
+            // (публикация double buffer + выводка O(N) на UI-треде);
+            // кадр нужен, если состояние сцены обновилось.
+            #[cfg(not(target_arch = "wasm32"))]
+            AppEvent::FlowReady { .. } => {
+                if self.scene.complete_flow_recompute() {
+                    self.request_redraw();
+                }
+            }
             // T15-relaunch: exit-сигнал от нового запуска (single-instance
             // handoff) — штатное завершение: форс-сейв сцены, восстановление
             // иконок, exit. Мьютекс освободится смертью процесса, новый
@@ -19150,6 +19184,13 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.scene.autosave_if_due();
+        // FR-064 P1: тик воркера потока — таймаут зависшего запроса →
+        // sync-фолбэк + warn; попутный дренаж готовых снимков (если
+        // wake-событие потерялось). Дешёвая проверка (Instant-сравнение).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.scene.flow_worker_tick() {
+            self.request_redraw();
+        }
         // M8/W6 (wasm-port §4.2): пока сцена грязная, цикл не засыпает —
         // запланированный кадр держит rAF-цепочку web-цикла живой, иначе
         // about_to_wait не вызывается после последнего события ввода и

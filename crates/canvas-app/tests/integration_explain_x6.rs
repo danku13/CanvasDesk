@@ -93,7 +93,7 @@ fn tree_of(scene: &SceneState, root: LineageNodeId) -> LineageTree {
     build_lineage(
         &scene.canvas,
         LineageFlow::Ready {
-            solutions: &scene.flow_active,
+            solutions: &canvas_scene::read_flow(&scene.flow_active),
             data: &data,
         },
         root,
@@ -124,7 +124,9 @@ fn explain_panel_lifecycle_leaves_model_untouched() {
             .value
             .as_ref()
             .and_then(|v| v.as_ref().ok()),
-        scene.flow_active.outputs["unit"].as_ref().ok(),
+        canvas_scene::read_flow(&scene.flow_active).outputs["unit"]
+            .as_ref()
+            .ok(),
         "корень дерева — то же значение, что полоса D"
     );
 
@@ -242,7 +244,7 @@ fn coverage_indicator_on_demo_model() {
     let stat = chain_coverage(
         &scene.canvas,
         LineageFlow::Ready {
-            solutions: &scene.flow_active,
+            solutions: &canvas_scene::read_flow(&scene.flow_active),
             data: &data,
         },
     );
@@ -258,7 +260,7 @@ fn coverage_indicator_on_demo_model() {
     let stat = chain_coverage(
         &scene.canvas,
         LineageFlow::Ready {
-            solutions: &scene.flow_active,
+            solutions: &canvas_scene::read_flow(&scene.flow_active),
             data: &data,
         },
     );
@@ -280,7 +282,7 @@ fn coverage_indicator_on_demo_model() {
     let stat = chain_coverage(
         &empty.canvas,
         LineageFlow::Ready {
-            solutions: &empty.flow_active,
+            solutions: &canvas_scene::read_flow(&empty.flow_active),
             data: &data,
         },
     );
