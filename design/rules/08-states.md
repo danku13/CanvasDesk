@@ -1,0 +1,69 @@
+# 08 — Состояния контролов
+
+> Код: `crates/canvas-ui/src/widget.rs` (WidgetState), `kit.rs` (button_style/
+> chip_style), слоты — `01-colors.md §C7`.
+
+## ST1. Матрица состояний
+
+`KitState::Normal | Hovered | Selected | Pressed | Disabled`
+
+Приоритет при вычислении (верхний глотает нижние):
+
+```
+Disabled > Pressed > Hovered > Selected > Normal
+```
+
+Правила:
+- `Pressed` = кнопка зажата и курсор над ней; ушел курсор → возврат в
+  Hovered (отмена нажатия).
+- `Selected` — постоянное состояние выбора (выбранная строка галереи, чип
+  фильтра), ортогонально hover.
+- `Disabled` — никогда не подсвечивается hover'ом; нажатие на disabled не
+  «заряжает» клик (press на disabled не армит release-событие).
+
+## ST2. Слоты состояний
+
+Цвет выбирается сопоставлением состояния → слот палитры (никакой арифметики):
+
+| Состояние | Слот (обычные контролы) | Слот (primary) |
+|---|---|---|
+| Normal | control_fill | control_primary |
+| Hovered | control_hover_fill | control_primary_hover_fill |
+| Selected | control_selected_fill | — |
+| Pressed | = Normal (визуально не дифференцируется в v1) | = Normal |
+| Disabled | control_fill + text → control_disabled_text | ← |
+
+Инвариант I-1: сегодня selected_fill = hover_fill (строка галереи не
+различает выбор/hover) — семантика уже разделена слотами, визуальная
+дифференциация — управляемое изменение v2 через правку этой папки и токенов.
+
+## ST3. Клик-контракт
+
+Клик срабатывает один раз: press внутри + release внутри (`clicked =
+released_inside`). Press вне → release внутри НЕ срабатывает. Press внутри →
+release вне — не срабатывает. Это контракт всех интерактивных rect'ов кита.
+
+## ST4. Состояния не-контрольных сущностей
+
+| Сущность | Состояния |
+|---|---|
+| Карточка ноды | обычная / selected (рамка accent) / broken (рамка #737373) / в группе (заливка accent α0.08) — приоритет рамки: selected > broken > group |
+| Ребро | default / flow (teal) / draft (accent α0.70) / focus (accent + breath) / dimmed (α floor 0.35) / amber (unmapped) |
+| Порт | idle (точка 10) / hover (растёт до 26 max) / active draft |
+| Поверхность | открыта / закрыта / скрыта по HideBelow |
+
+## ST5. Ховер-тайминги
+
+| Поведение | Значение |
+|---|---|
+| Задержка тултипа | 500 мс |
+| Открытие flyout палитры | 150 мс (hover) |
+| Закрытие flyout | 300 мс (после ухода курсора) |
+| Дабл-клик | 500 мс окно & ≤5 px смещения |
+
+## ST6. Что считается контролом
+
+Контрол = интерактивный rect с состоянием из ST1. Не-контролы (текст,
+иконки, разделители) не имеют hover-состояний и не пикются как
+interactive (`HitRect::decoration`). Если декорация должна ловить клик —
+это контрол, и он обязан иметь все состояния матрицы.

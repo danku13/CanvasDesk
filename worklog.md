@@ -5610,3 +5610,21 @@ Stage Summary:
 - Merge 8a175ff (22 коммита remote × 9 локальных): пересечение 12 файлов, 7 с конфликтами. Ключевые решения: text.rs — протащены оба набора параметров тела (suppress/sigma FR-069 + overrides лестницы §3.4 remote), Σ-привязка — в общем `row_geo` (+arm Sigma), Σ-вставка clone-safe для ellipsis-перешейпа; row_grid `cell_widths` — MEASURE_WEIGHT (T9) + пад пилюли 2·ROW_BADGE_PAD_H; canvas-ui `shape_measure` — `spec.weight` (T9 — обобщение FR-069 `family_weight`, хелпер сохранён); сцена-оценка — супрессия/заголовок/подписи/Σ (FR-069) + **условный** экспандер T9 (наш «всегда +1» заменён на точную семантику remote); mcp_node_edit ожидание 134→120 (prose-фолбэк убран remote, FR-069-супрессия покрывает случай desc==абзац явно).
 - Гейты на объединённом коде: `cargo test --workspace` — 57 сюит / 0 отказов; fmt --check; clippy --workspace --all-targets -D warnings; `wasm_gate.sh --check` OK; `mcp_wasm_gate.sh --check` OK.
 - Push b8e7456..8a175ff → origin/main. Этап F (FR-069) полностью в main.
+
+---
+Task ID: design-system-docs (сессия web-ebcc8418)
+Agent: Super Z (прямая задача владельца: собрать правила дизайн-системы в /design)
+Task: Собрать в /design правила дизайн-системы и UI-системы (отступы, цвета, контраст и т.д.), по которым строится интерфейс; отдельными файлами — use cases поведения конкретных компонентов. Файлы предназначены для правки владельцем с последующим переносом правок в код.
+
+Work Log:
+- Клонирован репозиторий, изучены: design/tokens/*.json (примитивы), canvas-core/tokens.rs (зеркало, I-5), canvas-render/theme.rs (ThemeColors, 36 слотов), theme_presets.rs (7 пресетов), canvas-ui (layer/capture/registry/hit/layout/measure/kit/anim/row_guides), canvas-render (cards/text/contrast/minimap/search_ui), canvas-app (whatif_ui/scheme_gallery_ui/template_ui/settings_ui/docs_ui/snap/edgegeom), docs/ui-kit.md, docs/prd/prd-0006+0009, docs/interface-objects.
+- Создан каркас: design/README.md (индекс 3 контуров tokens/rules/use-cases, таблица «правишь файл → что происходит в коде», шпаргалка значений, приоритет источников).
+- design/rules/ — 9 нормативных файлов: 00-principles (3 слоя токенов, I-1/I-5, slot-only кит, ввод=видимому, измеренный текст, линты G1–G8, деградация HideBelow, два масштаба world/screen), 01-colors (акцент-семья, 16 альфа-ступеней, семантические состояния, рёбра, диалоги, wheel, слоты hover/selected, запреты), 02-typography (5 семейств, шкала кеглей 10/10.5/11/12/13/14/16, SCREEN_LINE_FACTOR 1.3, паритет веса замера/рендера), 03-spacing-radius (6/8/10/12/24, радиусы 6/8/10/12, высоты компонентов, hit-зоны, сетка 20/100), 04-contrast-a11y (4.5:1/3:1/7:1, auto-contrast pick_ink/ensure_contrast, hit ≥ визуал, клавиатура/FocusRing), 05-layering (L0–L8, Block/Capture/PassThrough/Passive, Esc-стек, scissor), 06-motion (150/300/600/1200/1600/2500 мс, dt-детерминизм), 07-theming (темы как данные, 36 слотов, derived-слоты, is_dark, мост KitPalette), 08-states (Disabled>Pressed>Hovered>Selected>Normal, слоты, клик-контракт).
+- design/use-cases/ — 20 файлов по компонентам с единой структурой (назначение/анатомия/токены/состояния/взаимодействие/граничные случаи/код/правка): кнопка, чип-бейдж, поле, свитч, дропдаун, тултип, тост, модалка/confirm, скроллбар, иконки, карточка ноды, рёбра, минимапа, wheel-меню, контекстное меню, поиск, дока палитры, галерея+empty state, what-if бар, HUD/debug.
+- Все значения сняты с фактических констант кода (инвариант I-1) с координатами источников; расхождения файлов с кодом = целевое состояние (приоритет design/ по README).
+- Код, тесты, токены-JSON не менялись — только документация в design/ (+ запись в worklog).
+
+Stage Summary:
+- design/ = единый источник правил UI для правки владельцем: 30 файлов, ~1900 строк (README + rules/9 + use-cases/20).
+- Контракты зафиксированы явно: клик = press+release внутри; тултип/тост не крадут клик (Passive/пассивное рисование); галерея Modals/Block с клавиатурным scope; what-if бар HideBelow{900,600}; Esc-стек из реестра; hit ≥ визуал; slot-only кит без цветовой арифметики.
+- Вопрос владельцу (правило AGENTS.md): требуется ли доработка онбординга/user-docs под появление design/ — визуального изменения нет, предполагаю «нет».
