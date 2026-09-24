@@ -228,3 +228,155 @@ fn stale_generation_is_discarded() {
         "итог по последней правке (8×2+1), промежуточная (6) отброшена"
     );
 }
+
+// --- FR-064 P2 (FR-017 v2): freeze/сравнение -------------------------------
+
+/// Сценарий-конструктор: named what-if сценарий с одной построчной подменой.
+fn scenario_of(name: &str, node: &str, line: usize, expr: &str) -> canvas_core::Scenario {
+    let mut line_exprs = std::collections::HashMap::new();
+    line_exprs.insert((node.to_owned(), line), expr.to_owned());
+    canvas_core::Scenario {
+        name: name.to_owned(),
+        line_exprs,
+    }
+}
+
+/// Freeze/diff e2e (гейт FR-064 P2, модель в духе эталона ADR-0006 №2):
+/// смена входного `rps` в сценарии → заморозка ДВУХ сценариев → таблица
+/// сравнения с дельтами по построчным переменным И по downstream-итогам;
+/// после правки канваса снимки НЕ двигаются (pinned).
+#[test]
+fn freeze_two_scenarios_and_compare_deltas() {
+    // Ландшафт: Нагрузка (rps = 1000) → CDN ($in × 2 + 100) → Пул (× 3).
+    let mut canvas = Canvas::default();
+    calc_node(&mut canvas, "load", "rps = 1000", 0.0);
+    calc_node(&mut canvas, "cdn", "cap = $in × 2 + 100", 300.0);
+    calc_node(&mut canvas, "pool", "units = $in × 3", 600.0);
+    for (id, from, to) in [("e1", "load", "cdn"), ("e2", "cdn", "pool")] {
+        let mut edge = canvas_core::Edge::new(id, from, None, to, None);
+        edge.set_flow_kind(canvas_core::flow::FlowKind::Value);
+        canvas.add_edge(edge);
+    }
+    let mut scene = scene_of(canvas, "freeze-compare");
+    // Сценарии: С1 — rps = 1500, С2 — rps = 2000 (смена входа → downstream).
+    // Режим what-if включён (whatif_activate не включает его сам — паттерн
+    // X3-тестов).
+    scene.whatif_active = true;
+    scene
+        .scenarios
+        .push(scenario_of("С1", "load", 0, "rps = 1500"));
+    scene
+        .scenarios
+        .push(scenario_of("С2", "load", 0, "rps = 2000"));
+
+    // Заморозка С1: активируем, пересчитываем, замораживаем активное.
+    scene.whatif_activate(Some(0));
+    assert_eq!(
+        result_of(&scene, "pool"),
+        "9300",
+        "С1: 1500×2+100=3100 → ×3"
+    );
+    let frozen_c1 = scene.whatif_freeze_active().expect("С1 заморожен");
+    assert_eq!(frozen_c1, "С1");
+    // Заморозка С2: то же для второго сценария.
+    scene.whatif_activate(Some(1));
+    assert_eq!(
+        result_of(&scene, "pool"),
+        "12300",
+        "С2: 2000×2+100=4100 → ×3"
+    );
+    scene.whatif_freeze_active().expect("С2 заморожен");
+    assert_eq!(
+        scene.whatif_frozen_names(),
+        vec!["С1".to_owned(), "С2".to_owned()]
+    );
+
+    // Возврат на базу и сравнение замороженных снимков с базой.
+    scene.whatif_activate(None);
+    let base_solutions = canvas_scene::read_flow(&scene.flow_baseline).clone();
+    let line_keys: Vec<(String, usize)> = vec![("load".to_owned(), 0)];
+    let comparison =
+        canvas_core::whatif::compare_scenarios(&base_solutions, &scene.frozen, &line_keys);
+    assert_eq!(comparison.columns, vec!["С1".to_owned(), "С2".to_owned()]);
+    // Построчная переменная: rps 1000 → 1500 / 2000 с дельтами.
+    let var_row = comparison
+        .rows
+        .iter()
+        .find(|row| row.node == "load" && row.line == Some(0))
+        .expect("строка переменной rps");
+    assert_eq!(
+        var_row.values[0].as_ref().map(|v| v.to_string()),
+        Some("1000".to_owned())
+    );
+    assert_eq!(
+        var_row.values[1].as_ref().map(|v| v.to_string()),
+        Some("1500".to_owned())
+    );
+    assert_eq!(
+        var_row.values[2].as_ref().map(|v| v.to_string()),
+        Some("2000".to_owned())
+    );
+    assert!(var_row.deltas[1].is_some(), "дельта С1 против базы");
+    assert!(var_row.deltas[2].is_some(), "дельта С2 против базы");
+    // Дельты downstream: итоги cdn/pool изменились — строки-итоги в таблице.
+    for node in ["cdn", "pool"] {
+        let row = comparison
+            .rows
+            .iter()
+            .find(|row| row.node == node && row.line.is_none())
+            .unwrap_or_else(|| panic!("downstream-итог {node} в таблице"));
+        assert!(row.deltas[1].is_some(), "дельта {node} в С1");
+        assert!(row.deltas[2].is_some(), "дельта {node} в С2");
+    }
+
+    // Pinned-семантика: правка канваса после заморозки НЕ двигает снимки.
+    set_text(&mut scene, "load", "rps = 999");
+    scene.recompute_flow();
+    let after_edit = scene.frozen[0]
+        .solutions
+        .outputs
+        .get("pool")
+        .and_then(|outcome| outcome.as_ref().ok())
+        .map(|value| value.num);
+    assert_eq!(after_edit, Some(9300.0), "снимок С1 не двигается правкой");
+}
+
+/// Персистентность freeze: имена переживают round-trip через
+/// `canvasdesk.whatif.frozen`; соседний `scenarios` не затирается;
+/// пустой список удаляет ключ (round-trip чистый).
+#[test]
+fn frozen_names_round_trip() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("a", "rps = 1000", 0.0, 0.0));
+    let scenarios = vec![scenario_of("С1", "a", 0, "rps = 1500")];
+    canvas_core::whatif::scenarios_to_canvas(&mut canvas, &scenarios);
+    canvas_core::whatif::frozen_to_canvas(&mut canvas, &["С1".to_owned()]);
+    // Round-trip serialize → deserialize.
+    let json = serde_json::to_string(&canvas).expect("сериализация");
+    let restored: Canvas = serde_json::from_str(&json).expect("десериализация");
+    assert_eq!(
+        canvas_core::whatif::scenarios_from_canvas(&restored),
+        scenarios,
+        "сценарии не потеряны"
+    );
+    assert_eq!(
+        canvas_core::whatif::frozen_from_canvas(&restored),
+        vec!["С1".to_owned()],
+        "имена замороженных восстановлены"
+    );
+    // Пустой список удаляет ключ; сценарии при этом живут.
+    let mut canvas = restored;
+    canvas_core::whatif::frozen_to_canvas(&mut canvas, &[]);
+    assert!(canvas_core::whatif::frozen_from_canvas(&canvas).is_empty());
+    assert_eq!(
+        canvas_core::whatif::scenarios_from_canvas(&canvas).len(),
+        1,
+        "сценарии пережили удаление заморозок"
+    );
+    // Полная очистка (без сценариев и заморозок) — extra байт-в-байт пуст.
+    canvas_core::whatif::scenarios_to_canvas(&mut canvas, &[]);
+    assert!(
+        canvas.extra.is_empty(),
+        "пустой whatif не оставляет контейнеров"
+    );
+}

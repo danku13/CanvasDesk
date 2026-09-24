@@ -523,6 +523,11 @@ pub mod keys {
     pub const WHATIF_COLUMN_VAR: &str = "whatif.column.var";
     pub const WHATIF_SCENARIO_DEFAULT: &str = "whatif.scenario_default";
     pub const WHATIF_ONLY_CALC_LINES: &str = "whatif.only_calc_lines";
+    pub const WHATIF_FREEZE: &str = "whatif.freeze";
+    pub const WHATIF_UNFREEZE: &str = "whatif.unfreeze";
+    pub const WHATIF_FROZEN_TOAST: &str = "whatif.frozen_toast";
+    pub const WHATIF_UNFROZEN_TOAST: &str = "whatif.unfrozen_toast";
+    pub const WHATIF_ROW_TOTAL: &str = "whatif.row_total";
 
     // --- Палитра выделения (FR-009/010, FR-014, FR-019/020, FR-025, CR-008) ---
     pub const PAL_GROUP_COLOR: &str = "palette.group.color";
@@ -1076,6 +1081,11 @@ const RU: &[(&str, &str)] = &[
     (keys::WHATIF_COLUMN_VAR, "переменная"),
     (keys::WHATIF_SCENARIO_DEFAULT, "Сценарий {n}"),
     (keys::WHATIF_ONLY_CALC_LINES, "в what-if подменяются только строки расчёта"),
+    (keys::WHATIF_FREEZE, "❄ Заморозить"),
+    (keys::WHATIF_UNFREEZE, "Разморозить"),
+    (keys::WHATIF_FROZEN_TOAST, "Снимок заморожен: {name} — правки канваса его не сдвинут"),
+    (keys::WHATIF_UNFROZEN_TOAST, "Заморозка снята: {name}"),
+    (keys::WHATIF_ROW_TOTAL, "итог"),
     // --- Палитра выделения ---
     (keys::PAL_GROUP_COLOR, "Цвет"),
     (keys::PAL_GROUP_LAYOUT, "Раскладка"),
@@ -1767,6 +1777,11 @@ const EN: &[(&str, &str)] = &[
     (keys::WHATIF_COLUMN_VAR, "Variable"),
     (keys::WHATIF_SCENARIO_DEFAULT, "Scenario {n}"),
     (keys::WHATIF_ONLY_CALC_LINES, "only calculation lines can be overridden in what-if"),
+    (keys::WHATIF_FREEZE, "❄ Freeze"),
+    (keys::WHATIF_UNFREEZE, "Unfreeze"),
+    (keys::WHATIF_FROZEN_TOAST, "Snapshot frozen: {name} — canvas edits will not move it"),
+    (keys::WHATIF_UNFROZEN_TOAST, "Snapshot released: {name}"),
+    (keys::WHATIF_ROW_TOTAL, "total"),
     // --- Selection palette ---
     (keys::PAL_GROUP_COLOR, "Color"),
     (keys::PAL_GROUP_LAYOUT, "Layout"),

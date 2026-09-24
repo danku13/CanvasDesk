@@ -300,6 +300,11 @@ pub struct SceneState {
     /// подсветка подмен, дельта-бейджи). Runtime-кэш — пересчитывается в
     /// `recompute_flow` вместе с картами потока.
     pub whatif_nodes: HashMap<String, WhatIfNode>,
+    /// FR-064 P2 (FR-017 v2): замороженные снимки сценариев — pinned
+    /// значения потока на момент заморозки (правки канваса их не двигают).
+    /// Runtime-кэш (не сериализуется); имена — в `canvasdesk.whatif.frozen`,
+    /// восстанавливаются при загрузке ([`SceneState::restore_frozen`]).
+    pub frozen: Vec<canvas_core::whatif::FrozenScenario>,
     /// FR-061 хвосты (D-7 runtime v1, Q4 — runtime): id нод со СВЁРНУТЫМ
     /// блоком-ведомостью (дефолт — развёрнут; тоггл — клик по заголовку).
     /// Очищается при загрузке схемы (сброс к дефолту), в .canvas не пишется.
@@ -444,6 +449,7 @@ impl SceneState {
             flow_cycle: None,
             whatif_stale: Vec::new(),
             whatif_nodes: HashMap::new(),
+            frozen: Vec::new(),
             block_collapsed: std::collections::HashSet::new(),
             desc_expanded: std::collections::HashSet::new(),
             analysis: AnalysisState::new(),
@@ -465,6 +471,12 @@ impl SceneState {
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
         // FR-014: пересчёт — живой propagator графа потока
         scene.recompute_flow();
+        // FR-064 P2: восстановление freeze-снимков по persisted именам
+        // (пересчёт каждого сценария против персистентного канваса).
+        let frozen_names = canvas_core::whatif::frozen_from_canvas(&scene.canvas);
+        if !frozen_names.is_empty() {
+            scene.restore_frozen(&frozen_names);
+        }
         scene
     }
 
@@ -1137,6 +1149,74 @@ impl SceneState {
     pub fn whatif_activate(&mut self, index: Option<usize>) {
         self.active_scenario = index;
         self.recompute_flow();
+    }
+
+    // --- FR-064 P2 (FR-017 v2): freeze/сравнение ---------------------------
+
+    /// FR-064 P2: заморозить активный сценарий — снимок активных решений
+    /// потока за Arc (правки канваса значения не двигают). Runtime-действие:
+    /// персистентность имён — вызывающий (`frozen_to_canvas` + undo-шаг,
+    /// паттерн whatif_create_scenario). `Err` — сценария нет / уже заморожен.
+    pub fn whatif_freeze_active(&mut self) -> Result<String, String> {
+        let name = match self.active_scenario {
+            Some(index) => self
+                .scenarios
+                .get(index)
+                .map(|scenario| scenario.name.clone())
+                .ok_or_else(|| "сценарий не найден".to_owned())?,
+            None => "База".to_owned(),
+        };
+        if self.frozen.iter().any(|snapshot| snapshot.name == name) {
+            return Err(format!("сценарий уже заморожен: {name}"));
+        }
+        // Снимок — копия текущих активных решений (активное решение при
+        // «Базе» зеркалит базу — заморозка честная в обоих случаях).
+        let solutions = read_flow(&self.flow_active).clone();
+        self.frozen.push(canvas_core::whatif::FrozenScenario {
+            name: name.clone(),
+            solutions: Arc::new(solutions),
+        });
+        Ok(name)
+    }
+
+    /// FR-064 P2: снять заморозку по имени. `true` — снято (заморозки не
+    /// было — `false`, no-op).
+    pub fn whatif_unfreeze(&mut self, name: &str) -> bool {
+        let before = self.frozen.len();
+        self.frozen.retain(|snapshot| snapshot.name != name);
+        self.frozen.len() != before
+    }
+
+    /// FR-064 P2: имена замороженных снимков (порядок заморозки).
+    pub fn whatif_frozen_names(&self) -> Vec<String> {
+        self.frozen
+            .iter()
+            .map(|snapshot| snapshot.name.clone())
+            .collect()
+    }
+
+    /// FR-064 P2: заморожен ли сценарий с таким именем.
+    pub fn whatif_is_frozen(&self, name: &str) -> bool {
+        self.frozen.iter().any(|snapshot| snapshot.name == name)
+    }
+
+    /// FR-064 P2: восстановить freeze-снимки по persisted именам (при
+    /// загрузке сцены): пересчёт каждого сценария против персистентного
+    /// канваса (детерминизм propagator'а — значения воспроизводятся).
+    /// Отсутствующий сценарий пропускается (имя не восстанавливается).
+    pub fn restore_frozen(&mut self, names: &[String]) {
+        for name in names {
+            let snapshot = self
+                .scenarios
+                .iter()
+                .find(|scenario| &scenario.name == name)
+                .and_then(|scenario| {
+                    canvas_core::whatif::freeze_scenario(&self.canvas, scenario).ok()
+                });
+            if let Some(snapshot) = snapshot {
+                self.frozen.push(snapshot);
+            }
+        }
     }
 
     /// FR-017: новый именованный сценарий (лимит 2–3 пользовательских —
