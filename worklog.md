@@ -5830,3 +5830,25 @@ Stage Summary:
   минимальную высоту шаблона); хеши удалённых нод не чистятся (мелкий
   memory-leak); интеграция с canvas-web (wasm) — там свой
   `measured_result_reserve_height`.
+
+---
+Task ID: 2
+Agent: Super Z (main)
+Task: Пуш рефакторинга в main, контроль CI, техдолг (продолжение декомпозиции app.rs + починка красного CI)
+
+Work Log:
+- Отправлен план сессии в Telegram; обнаружено: main красный с пуша 15b33b5 — все 3 gates-джобы падали на fmt (дрейф rustfmt 1.98 в canvas-core/templates.rs + canvas-render/cards.rs; вне зоны рефакторинга)
+- cargo fmt применён, коммит 8e6ee74, merge --ff-only в main, push — 15b33b5..8e6ee74
+- Локальные гейты перед пушем: fmt/clippy/test 1828 passed 0 failed (RUSTFLAGS=-C debuginfo=0)
+- Этап 5: app/stage.rs (1606 строк) — stage_frame + calc + pill/edge-лейблы + minimap + open/close (24 метода)
+- Этап 6: app/explain.rs (1151 строка) — explain_frame, autolink_frame, hover-pill, open_explain, create_autolink_edges
+- Экстрактор: scripts/stage56_extract.py (вне репо); pub(super) для приватных методов, паттерн FR-052
+- Диагностика второго красного CI (8e6ee74, gates win/mac): 3 GPU-теста expr_result_smoke падают с мерджа 8a175ff; ubuntu/локально skip — маскировка (прецедент 3dfca46)
+- Причины из волны FR-069: метка секции сдвинула ряды на +28 (якорь: hit-rect 62..98 → result_row_y 72), «ИТОГ» слева в футере (assert left==0 устарел, lit=124)
+- Окна трёх тестов пересчитаны под константы рендера; метрики win/mac идентичны — детерминизм (встроенные шрифты)
+- app.rs: 12 528 → 9 802 строки; суммарно 22 287 → 9 802 (-56%)
+
+Stage Summary:
+- main: 15b33b5 → de0044e (fmt-фикс + этапы 5-6 + фикс expr_result_smoke под FR-069)
+- Красный CI починен в двух слоях: fmt-дрейф rustfmt 1.98 и устаревшие окна GPU-тестов после FR-069
+- Гейты локально зелёные; CI нового пуша — под наблюдением
