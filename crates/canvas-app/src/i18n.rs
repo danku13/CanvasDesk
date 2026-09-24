@@ -492,6 +492,29 @@ pub mod keys {
     pub const ADMIN_HINT_FILL: &str = "admin.hint.fill";
     pub const ADMIN_HINT_CANVAS: &str = "admin.hint.canvas";
     pub const ADMIN_HINT_TOKENS: &str = "admin.hint.tokens";
+    /// Этап 2: матрица состояний и уровни наполнения.
+    pub const ADMIN_STATE_ERROR: &str = "admin.state.error";
+    pub const ADMIN_FILL_EMPTY: &str = "admin.fill.empty";
+    pub const ADMIN_FILL_MEDIUM: &str = "admin.fill.medium";
+    pub const ADMIN_FILL_FULL: &str = "admin.fill.full";
+    pub const ADMIN_ROW_LIST: &str = "admin.row.list";
+    pub const ADMIN_ROW_CARD: &str = "admin.row.card";
+    pub const ADMIN_ROW_FIELD: &str = "admin.row.field";
+    pub const ADMIN_ROW_CHIPS: &str = "admin.row.chips";
+    pub const ADMIN_ROW_DROPDOWN: &str = "admin.row.dropdown";
+    pub const ADMIN_ROW_ROWS: &str = "admin.row.rows";
+    pub const ADMIN_ROW_TOAST: &str = "admin.row.toast";
+    pub const ADMIN_ROW_PALETTE: &str = "admin.row.palette";
+    pub const ADMIN_ROW_WHEEL: &str = "admin.row.wheel";
+    pub const ADMIN_EMPTY_PLACEHOLDER: &str = "admin.empty.placeholder";
+    pub const ADMIN_CHIPS_EMPTY: &str = "admin.chips.empty";
+    pub const ADMIN_ROWS_EMPTY: &str = "admin.rows.empty";
+    pub const ADMIN_DROPDOWN_EMPTY: &str = "admin.dropdown.empty";
+    pub const ADMIN_TOAST_EMPTY: &str = "admin.toast.empty";
+    pub const ADMIN_PALETTE_EMPTY: &str = "admin.palette.empty";
+    pub const ADMIN_WHEEL_EMPTY: &str = "admin.wheel.empty";
+    pub const ADMIN_TOAST_SHORT: &str = "admin.toast.short";
+    pub const ADMIN_TOAST_LONG: &str = "admin.toast.long";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -1042,6 +1065,29 @@ const RU: &[(&str, &str)] = &[
         keys::ADMIN_HINT_TOKENS,
         "Каталог design-токенов: цвета-свотчи, размеры, типографика, движение; live-правка слотов палитры (этап 4 FR-070).",
     ),
+    // Этап 2: матрица состояний и наполнение
+    (keys::ADMIN_STATE_ERROR, "Ошибка"),
+    (keys::ADMIN_FILL_EMPTY, "Пустое"),
+    (keys::ADMIN_FILL_MEDIUM, "Среднее"),
+    (keys::ADMIN_FILL_FULL, "Полное"),
+    (keys::ADMIN_ROW_LIST, "Список"),
+    (keys::ADMIN_ROW_CARD, "Карточка"),
+    (keys::ADMIN_ROW_FIELD, "Текстовое поле"),
+    (keys::ADMIN_ROW_CHIPS, "Чипы"),
+    (keys::ADMIN_ROW_DROPDOWN, "Dropdown"),
+    (keys::ADMIN_ROW_ROWS, "Строки таблицы"),
+    (keys::ADMIN_ROW_TOAST, "Тосты"),
+    (keys::ADMIN_ROW_PALETTE, "Палитра шаблонов"),
+    (keys::ADMIN_ROW_WHEEL, "Wheel-меню"),
+    (keys::ADMIN_EMPTY_PLACEHOLDER, "Нет данных"),
+    (keys::ADMIN_CHIPS_EMPTY, "Нет меток"),
+    (keys::ADMIN_ROWS_EMPTY, "Нет строк"),
+    (keys::ADMIN_DROPDOWN_EMPTY, "Пусто"),
+    (keys::ADMIN_TOAST_EMPTY, "Тостов нет"),
+    (keys::ADMIN_PALETTE_EMPTY, "Нет шаблонов"),
+    (keys::ADMIN_WHEEL_EMPTY, "Нет категорий"),
+    (keys::ADMIN_TOAST_SHORT, "Сохранено"),
+    (keys::ADMIN_TOAST_LONG, "Схема применена: 12 нод обновлено"),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
     (keys::ONBOARDING_DONE, "Готово"),
@@ -1765,6 +1811,29 @@ const EN: &[(&str, &str)] = &[
         keys::ADMIN_HINT_TOKENS,
         "Design token catalog: color swatches, dimensions, typography, motion; live editing of palette slots (FR-070 stage 4).",
     ),
+    // FR-070 stage 2: state matrix and fill levels
+    (keys::ADMIN_STATE_ERROR, "Error"),
+    (keys::ADMIN_FILL_EMPTY, "Empty"),
+    (keys::ADMIN_FILL_MEDIUM, "Medium"),
+    (keys::ADMIN_FILL_FULL, "Full"),
+    (keys::ADMIN_ROW_LIST, "List"),
+    (keys::ADMIN_ROW_CARD, "Card"),
+    (keys::ADMIN_ROW_FIELD, "Text field"),
+    (keys::ADMIN_ROW_CHIPS, "Chips"),
+    (keys::ADMIN_ROW_DROPDOWN, "Dropdown"),
+    (keys::ADMIN_ROW_ROWS, "Table rows"),
+    (keys::ADMIN_ROW_TOAST, "Toasts"),
+    (keys::ADMIN_ROW_PALETTE, "Template palette"),
+    (keys::ADMIN_ROW_WHEEL, "Wheel menu"),
+    (keys::ADMIN_EMPTY_PLACEHOLDER, "No data"),
+    (keys::ADMIN_CHIPS_EMPTY, "No labels"),
+    (keys::ADMIN_ROWS_EMPTY, "No rows"),
+    (keys::ADMIN_DROPDOWN_EMPTY, "Empty"),
+    (keys::ADMIN_TOAST_EMPTY, "No toasts"),
+    (keys::ADMIN_PALETTE_EMPTY, "No templates"),
+    (keys::ADMIN_WHEEL_EMPTY, "No categories"),
+    (keys::ADMIN_TOAST_SHORT, "Saved"),
+    (keys::ADMIN_TOAST_LONG, "Scheme applied: 12 nodes updated"),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
     (keys::ONBOARDING_DONE, "Done"),

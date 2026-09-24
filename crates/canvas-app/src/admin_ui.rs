@@ -18,7 +18,7 @@
 
 use canvas_core::Language;
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
-use canvas_ui::kit::{self, KitPalette};
+use canvas_ui::kit::{self, ButtonVariant, KitPalette, KitState};
 use canvas_ui::layout::{HAlign, VAlign};
 use canvas_ui::measure::TextMeasurer;
 
@@ -122,6 +122,10 @@ pub struct AdminLayout {
     /// Подсказка тела: wrapped-строки (описание состава секции; перенос —
     /// [`wrap_text`], размер [`LABEL_SIZE`]).
     pub hint_lines: Vec<String>,
+    /// Тело «Компоненты» (Some для AdminSection::Components — этап 2).
+    pub components: Option<ComponentsLayout>,
+    /// Тело «Наполнение» (Some для AdminSection::Fill — этап 2).
+    pub fill: Option<FillLayout>,
 }
 
 /// Панель админпанели, зажатая во вьюпорт (тот же контракт, что у витрины:
@@ -186,10 +190,13 @@ pub fn admin_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect, UiRect) {
 /// Раскладка админпанели. Шапка фиксирована (hit-слоты реестра —
 /// [`admin_hit_slots`]); сайдбар и демо-зона — ниже шапки; тело секции
 /// (этап 1) — заголовок + подсказка.
+#[allow(clippy::too_many_arguments)]
 pub fn admin_layout(
     viewport: [f32; 2],
     section: AdminSection,
-    _p: &KitPalette,
+    scroll_offset: f32,
+    p: &KitPalette,
+    lang: Language,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> AdminLayout {
@@ -241,7 +248,21 @@ pub fn admin_layout(
     let hint_text = crate::i18n::tr(Language::Ru, hint_key);
     let hint_w = (demo.w - 2.0 * 10.0).max(0.0);
     let hint_lines = wrap_text(m, fs, hint_text, hint_w, LABEL_SIZE);
-    let demo_content_h = 24.0 + hint_lines.len() as f32 * 18.0 + ZONE_GAP;
+    let hint_h = 24.0 + hint_lines.len() as f32 * 18.0 + ZONE_GAP;
+
+    // Тело секции (этапы 2–4): у реализованных секций — своё, у остальных —
+    // подсказка о составе (этап 1)
+    let (demo_content_h, components, fill) = match section {
+        AdminSection::Components => {
+            let body = components_body(demo, scroll_offset, p, lang, m, fs);
+            (hint_h.max(body.h), Some(body), None)
+        }
+        AdminSection::Fill => {
+            let body = fill_body(demo, scroll_offset, p, lang, m, fs);
+            (hint_h.max(body.h), None, Some(body))
+        }
+        AdminSection::Canvas | AdminSection::Tokens => (hint_h, None, None),
+    };
 
     AdminLayout {
         panel,
@@ -256,6 +277,8 @@ pub fn admin_layout(
         demo_content_h,
         section_title,
         hint_lines,
+        components,
+        fill,
     }
 }
 
@@ -292,6 +315,1311 @@ pub fn wrap_text(
     lines
 }
 
+// === FR-070 этап 2: секция «Компоненты» — полная матрица состояний =========
+
+/// Подписи состояний матрицы (5 из ST1 + Focused; Error — TextField).
+pub const STATE_MATRIX_LABELS: [&str; 6] = [
+    "kit.state.normal",
+    "kit.state.hover",
+    "kit.state.selected",
+    "kit.state.pressed",
+    "kit.state.disabled",
+    "kit.state.focused",
+];
+
+/// Ширина колонки подписи варианта/контейнера слева.
+pub const VARIANT_LABEL_W: f32 = 96.0;
+/// Высота строки-заголовка колонок матрицы.
+pub const MATRIX_HEADER_H: f32 = 16.0;
+
+/// Ячейка матрицы состояний (контент-координаты; сдвиг/фильтр — при раскладке).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateCell {
+    /// Состояние (Normal для Focused-ячейки — рамка accent сверху).
+    pub state: KitState,
+    /// В фокусе (рамка accent).
+    pub focused: bool,
+    pub rect: UiRect,
+}
+
+/// Ряд кнопок одного варианта (6 состояний матрицы).
+#[derive(Debug, Clone)]
+pub struct VariantRow {
+    pub variant: ButtonVariant,
+    /// Ключ i18n названия варианта.
+    pub label_key: &'static str,
+    pub slot: UiRect,
+    pub cells: Vec<StateCell>,
+}
+
+/// Демо текстового поля (расширенная матрица: Normal/Focused/Error/Disabled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldDemo {
+    Normal,
+    Focused,
+    Error,
+    Disabled,
+}
+
+impl FieldDemo {
+    /// Ключ i18n подписи демо.
+    pub fn label_key(self) -> &'static str {
+        match self {
+            FieldDemo::Normal => "kit.state.normal",
+            FieldDemo::Focused => "kit.state.focused",
+            FieldDemo::Error => crate::i18n::keys::ADMIN_STATE_ERROR,
+            FieldDemo::Disabled => "kit.state.disabled",
+        }
+    }
+}
+
+/// Демо-тексты полей (числа/формулы — без i18n).
+pub const DEMO_FIELD_TEXT: &str = "50 rps";
+pub const DEMO_FIELD_LONG: &str = "latency = 50 ms; rps = 1000; replicas = 8";
+pub const DEMO_FIELD_ERROR: &str = "rps = abc";
+
+/// Тело секции «Компоненты» (контент-координаты демо-зоны, уже сдвинуты
+/// на скролл и отфильтрованы по полной видимости).
+#[derive(Debug, Clone, Default)]
+pub struct ComponentsLayout {
+    /// Подписи колонок матрицы (6 состояний).
+    pub headers: Vec<(UiPoint, &'static str)>,
+    /// Ряды кнопок: 4 варианта × 6 состояний.
+    pub button_rows: Vec<VariantRow>,
+    /// Икон-кнопки: 6 состояний.
+    pub icon_cells: Vec<StateCell>,
+    /// Чипы: 6 состояний.
+    pub chip_cells: Vec<StateCell>,
+    /// Поля: (демо, раскладка kit::text_field).
+    pub fields: Vec<(FieldDemo, kit::TextFieldLayout)>,
+    /// Переключатели: (on, состояние, слот).
+    pub switches: Vec<(bool, KitState, UiRect)>,
+    /// Полная высота тела (для скролла).
+    pub h: f32,
+}
+
+/// Тело секции «Компоненты»: матрица 4 варианта × 6 состояний + икон-кнопки
+/// + чипы + поля (Normal/Focused/Error/Disabled) + переключатели.
+#[allow(clippy::too_many_arguments)]
+pub fn components_body(
+    demo: UiRect,
+    offset: f32,
+    p: &KitPalette,
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> ComponentsLayout {
+    let _ = p;
+    let mut lay = ComponentsLayout::default();
+    let content_x = demo.x + 8.0;
+    let content_w = (demo.w - 16.0).max(0.0);
+    // Координаты в КОНТЕНТЕ демо-зоны (y от 0), сдвиг на offset в конце.
+    let mut y = 0.0f32;
+    let top = demo.y;
+    let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
+
+    let matrix_y = y;
+    y += MATRIX_HEADER_H + 6.0;
+    let control_x = content_x + VARIANT_LABEL_W + canvas_core::tokens::SPACING_SM;
+    let cells_w = (content_x + content_w - control_x).max(0.0);
+    let per = ((cells_w - 5.0 * kit::GAP_CONTROLS) / 6.0).max(0.0);
+
+    // Заголовки колонок (6 состояний)
+    for (i, key) in STATE_MATRIX_LABELS.iter().enumerate() {
+        let hy = demo.y + matrix_y - offset;
+        if fully(hy, MATRIX_HEADER_H) {
+            lay.headers.push((
+                UiPoint::new(control_x + i as f32 * (per + kit::GAP_CONTROLS), hy),
+                key,
+            ));
+        }
+    }
+
+    // Ряды кнопок: Primary/Secondary/Ghost/Danger × 6 состояний
+    let variants = [
+        (ButtonVariant::Primary, crate::i18n::keys::KIT_BTN_PRIMARY),
+        (
+            ButtonVariant::Secondary,
+            crate::i18n::keys::KIT_BTN_SECONDARY,
+        ),
+        (ButtonVariant::Ghost, crate::i18n::keys::KIT_BTN_GHOST),
+        (ButtonVariant::Danger, crate::i18n::keys::KIT_BTN_DANGER),
+    ];
+    for (variant, label_key) in variants {
+        let slot_y = demo.y + y - offset;
+        let mut cells = Vec::with_capacity(6);
+        for (i, matrix_state) in STATE_MATRIX
+            .iter()
+            .copied()
+            .enumerate()
+            .chain([(5usize, KitState::Normal)])
+        {
+            let focused = i == 5;
+            let state = if focused {
+                KitState::Normal
+            } else {
+                matrix_state
+            };
+            let rect = UiRect::new(
+                control_x + i as f32 * (per + kit::GAP_CONTROLS),
+                slot_y,
+                per,
+                kit::BUTTON_HEIGHT,
+            );
+            if fully(rect.y, rect.h) {
+                cells.push(StateCell {
+                    state,
+                    focused,
+                    rect,
+                });
+            }
+        }
+        if !cells.is_empty() {
+            lay.button_rows.push(VariantRow {
+                variant,
+                label_key,
+                slot: UiRect::new(content_x, slot_y, content_w, kit::BUTTON_HEIGHT),
+                cells,
+            });
+        }
+        y += kit::BUTTON_HEIGHT + 8.0;
+    }
+    y += 6.0;
+
+    // Икон-кнопки: 5 состояний ST1 (Focused — не применим к икон-кнопкам v1)
+    let icons_y = demo.y + y - offset;
+    for (i, st) in STATE_MATRIX.iter().copied().enumerate() {
+        let rect = UiRect::new(
+            control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
+            icons_y,
+            kit::ICON_BUTTON_SIZE,
+            kit::ICON_BUTTON_SIZE,
+        );
+        if fully(rect.y, rect.h) {
+            lay.icon_cells.push(StateCell {
+                state: st,
+                focused: false,
+                rect,
+            });
+        }
+    }
+    y += kit::ICON_BUTTON_SIZE + 10.0;
+
+    // Чипы: 6 состояний (измеренные ширины)
+    let chips_y = demo.y + y - offset;
+    let mut cx = control_x;
+    for i in 0..6 {
+        let focused = i == 5;
+        let st = if focused {
+            KitState::Normal
+        } else {
+            STATE_MATRIX[i]
+        };
+        let label = crate::i18n::tr(lang, STATE_MATRIX_LABELS[i]);
+        let cl = kit::chip_layout(
+            UiPoint::new(cx, chips_y),
+            label,
+            per * 1.5,
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+        );
+        if fully(cl.rect.y, cl.rect.h) {
+            lay.chip_cells.push(StateCell {
+                state: st,
+                focused,
+                rect: cl.rect,
+            });
+        }
+        cx += cl.rect.w + kit::GAP_CONTROLS;
+    }
+    y += kit::CHIP_HEIGHT + 12.0;
+
+    // Поля: Normal / Focused / Error / Disabled
+    let field_w = (cells_w - 2.0 * kit::GAP_CONTROLS).min(320.0);
+    for demo_kind in [
+        FieldDemo::Normal,
+        FieldDemo::Focused,
+        FieldDemo::Error,
+        FieldDemo::Disabled,
+    ] {
+        let ty = demo.y + y - offset;
+        if fully(ty, 14.0) {
+            lay.headers
+                .push((UiPoint::new(content_x, ty), demo_kind.label_key()));
+        }
+        y += 16.0;
+        let fy = demo.y + y - offset;
+        let slot = UiRect::new(content_x, fy, field_w, kit::TEXT_FIELD_HEIGHT);
+        let model = match demo_kind {
+            FieldDemo::Normal => kit::TextFieldModel {
+                text: DEMO_FIELD_TEXT.to_owned(),
+                caret: DEMO_FIELD_TEXT.chars().count(),
+                sel: None,
+            },
+            FieldDemo::Focused => kit::TextFieldModel {
+                text: DEMO_FIELD_TEXT.to_owned(),
+                caret: 2,
+                sel: None,
+            },
+            FieldDemo::Error => kit::TextFieldModel {
+                text: DEMO_FIELD_ERROR.to_owned(),
+                caret: DEMO_FIELD_ERROR.chars().count(),
+                sel: None,
+            },
+            FieldDemo::Disabled => kit::TextFieldModel::default(),
+        };
+        let fl = kit::text_field(
+            slot,
+            UiVec2::new(kit::TEXT_FIELD_MIN_W, kit::TEXT_FIELD_HEIGHT),
+            UiVec2::new(field_w, kit::TEXT_FIELD_HEIGHT),
+            &model,
+            crate::i18n::tr(lang, "kit.textfield.placeholder"),
+            demo_kind == FieldDemo::Focused,
+            KitState::Normal,
+            p,
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+        );
+        if fully(fl.rect.y, fl.rect.h) {
+            lay.fields.push((demo_kind, fl));
+        }
+        y += kit::TEXT_FIELD_HEIGHT + 6.0;
+    }
+    y += 6.0;
+
+    // Переключатели: on/off × Normal/Hover/Disabled
+    let sw_y = demo.y + y - offset;
+    let sw_states = [
+        (true, KitState::Normal),
+        (false, KitState::Normal),
+        (true, KitState::Hovered),
+        (false, KitState::Disabled),
+    ];
+    for (i, (on, st)) in sw_states.iter().copied().enumerate() {
+        let rect = UiRect::new(
+            control_x + i as f32 * (kit::SWITCH_W + kit::GAP_CONTROLS + 12.0),
+            sw_y,
+            kit::SWITCH_W,
+            kit::BUTTON_HEIGHT,
+        );
+        if fully(rect.y, rect.h) {
+            lay.switches.push((on, st, rect));
+        }
+    }
+    y += kit::BUTTON_HEIGHT + 4.0;
+
+    lay.h = y;
+    lay
+}
+
+/// Отрисовка тела «Компоненты» (ячейки уже сдвинуты/отфильтрованы).
+pub(crate) fn draw_components(
+    d: &mut crate::kit_ui::KitDraw,
+    comp: &ComponentsLayout,
+    p: &KitPalette,
+    lang: Language,
+) {
+    let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
+    // Заголовки колонок
+    for (origin, key) in &comp.headers {
+        d.label_left(
+            UiRect::new(origin.x, origin.y, VARIANT_LABEL_W, MATRIX_HEADER_H),
+            &label(key),
+            p.text_muted,
+            11.0,
+        );
+    }
+    // Ряды кнопок
+    for row in &comp.button_rows {
+        d.label_left(
+            UiRect::new(row.slot.x, row.slot.y + 8.0, VARIANT_LABEL_W, 16.0),
+            &label(row.label_key),
+            p.text_muted,
+            11.0,
+        );
+        for cell in &row.cells {
+            let style = kit::button_style(row.variant, cell.state, p);
+            d.control(cell.rect, &style);
+            let text = if cell.focused {
+                label(STATE_MATRIX_LABELS[5])
+            } else {
+                label(STATE_MATRIX_LABELS[STATE_INDEX[cell.state as usize]])
+            };
+            d.label_center(cell.rect, &text, style.text, LABEL_SIZE);
+            if cell.focused {
+                d.rect(cell.rect, [0.0; 4], p.accent, style.radius);
+            }
+        }
+    }
+    // Икон-кнопки
+    let icons = ["✕", "⚙", "?", "+", "+"];
+    for (i, cell) in comp.icon_cells.iter().enumerate() {
+        let style = kit::icon_button_style(cell.state, p);
+        d.control(cell.rect, &style);
+        let area = UiRect::new(cell.rect.x, cell.rect.y + 1.0, cell.rect.w, cell.rect.h);
+        d.label_center(area, icons[i], style.text, LABEL_SIZE);
+        if cell.focused {
+            d.rect(cell.rect, [0.0; 4], p.accent, style.radius);
+        }
+    }
+    // Чипы
+    for cell in &comp.chip_cells {
+        let style = kit::chip_style(cell.state, p);
+        d.control(cell.rect, &style);
+        let text = if cell.focused {
+            label(STATE_MATRIX_LABELS[5])
+        } else {
+            label(STATE_MATRIX_LABELS[STATE_INDEX[cell.state as usize]])
+        };
+        d.label_center(cell.rect, &text, style.text, 12.0);
+        if cell.focused {
+            d.rect(cell.rect, [0.0; 4], p.accent, style.radius);
+        }
+    }
+    // Поля: заливка/рамка по демо; Error — примитив ERROR из design/tokens
+    // (слот error в палитре кита не заведён — ST2; демо показывает примитив)
+    for (demo_kind, fl) in &comp.fields {
+        let (fill, border, text_color) = match demo_kind {
+            FieldDemo::Normal | FieldDemo::Focused => (p.control_fill, p.control_border, p.text),
+            FieldDemo::Error => (
+                p.control_fill,
+                [
+                    canvas_core::tokens::ERROR[0] as f32 / 255.0,
+                    canvas_core::tokens::ERROR[1] as f32 / 255.0,
+                    canvas_core::tokens::ERROR[2] as f32 / 255.0,
+                    1.0,
+                ],
+                [
+                    canvas_core::tokens::ERROR[0] as f32 / 255.0,
+                    canvas_core::tokens::ERROR[1] as f32 / 255.0,
+                    canvas_core::tokens::ERROR[2] as f32 / 255.0,
+                    1.0,
+                ],
+            ),
+            FieldDemo::Disabled => (p.control_fill, p.control_border, p.disabled_text),
+        };
+        d.rect(fl.rect, fill, border, canvas_core::tokens::RADIUS_CHIP);
+        if *demo_kind == FieldDemo::Focused {
+            d.rect(
+                fl.rect,
+                [0.0; 4],
+                p.accent,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+        }
+        d.label_left(fl.text_area, &fl.text_shown, text_color, LABEL_SIZE);
+        if *demo_kind == FieldDemo::Focused && fl.caret_x >= 0.0 {
+            d.rect(
+                UiRect::new(
+                    fl.text_area.x + fl.caret_x,
+                    fl.text_area.y + 6.0,
+                    1.0,
+                    fl.text_area.h - 12.0,
+                ),
+                p.accent,
+                [0.0; 4],
+                0.0,
+            );
+        }
+    }
+    // Переключатели
+    for (on, st, rect) in &comp.switches {
+        let sw = kit::switch(*rect, *on, *st, p);
+        d.control(sw.track, &sw.track_style);
+        d.rect(sw.knob, sw.knob_fill, [0.0; 4], 4.0);
+    }
+}
+
+/// Матрица состояний ST1 (5) — порядок колонок.
+const STATE_MATRIX: [KitState; 5] = [
+    KitState::Normal,
+    KitState::Hovered,
+    KitState::Selected,
+    KitState::Pressed,
+    KitState::Disabled,
+];
+
+/// Маппинг KitState (порядок объявления: Normal/Hovered/Pressed/Disabled/
+/// Selected) → индекс колонки матрицы (Normal/Hover/Selected/Pressed/
+/// Disabled) — для подписи ячейки по состоянию.
+const STATE_INDEX: [usize; 5] = [0, 1, 3, 4, 2];
+
+// === FR-070 этап 2: секция «Наполнение» — empty/medium/full ================
+
+/// Уровень наполнения контейнера.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillLevel {
+    /// Пустое (0 элементов — placeholder/empty-state).
+    Empty,
+    /// Среднее (несколько элементов).
+    Medium,
+    /// Полное (много элементов / скролл).
+    Full,
+}
+
+/// Все уровни наполнения (порядок колонок).
+pub const FILL_LEVELS: [FillLevel; 3] = [FillLevel::Empty, FillLevel::Medium, FillLevel::Full];
+
+impl FillLevel {
+    /// Ключ i18n подписи уровня.
+    pub fn label_key(self) -> &'static str {
+        match self {
+            FillLevel::Empty => crate::i18n::keys::ADMIN_FILL_EMPTY,
+            FillLevel::Medium => crate::i18n::keys::ADMIN_FILL_MEDIUM,
+            FillLevel::Full => crate::i18n::keys::ADMIN_FILL_FULL,
+        }
+    }
+
+    /// Индекс колонки.
+    pub fn index(self) -> usize {
+        FILL_LEVELS.iter().position(|l| *l == self).unwrap_or(0)
+    }
+}
+
+/// Высота демо-ячейки контейнера.
+pub const FILL_CELL_H: f32 = 96.0;
+/// Зазор между демо-ячейками.
+pub const FILL_CELL_GAP: f32 = 8.0;
+
+/// Ячейка уровня наполнения (контент-координаты).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FillCell {
+    pub level: FillLevel,
+    pub rect: UiRect,
+}
+
+/// Ряд контейнера (3 уровня наполнения).
+#[derive(Debug, Clone)]
+pub struct FillRow {
+    /// Ключ i18n названия контейнера.
+    pub title_key: &'static str,
+    pub slot: UiRect,
+    pub cells: Vec<FillCell>,
+}
+
+/// Демо dropdown: уровень, якорь, меню, видимые пункты с подписями.
+#[derive(Debug, Clone)]
+pub struct DropdownDemo {
+    pub level: FillLevel,
+    pub anchor: UiRect,
+    pub menu: UiRect,
+    pub items: Vec<UiRect>,
+    pub labels: Vec<String>,
+}
+
+/// Демо-строка таблицы (kit-Row на общих направляющих).
+#[derive(Debug, Clone)]
+pub struct FillTableDemo {
+    pub level: FillLevel,
+    /// Состояние строки (Σ — Selected, зебра — hover_fill).
+    pub state: KitState,
+    pub zebra: bool,
+    pub parts: kit::RowParts<'static>,
+    pub lay: kit::RowLayout,
+}
+
+/// Тело секции «Наполнение»: 9 контейнеров × empty/medium/full. Геометрия
+/// измеряемых демо (поля/чипы/dropdown/таблица) — предвычислена здесь;
+/// простая (список/карточка/палитра/wheel/тост) — в отрисовке.
+#[derive(Debug, Clone, Default)]
+pub struct FillLayout {
+    /// Подписи колонок уровней.
+    pub headers: Vec<(UiPoint, &'static str)>,
+    /// Ряды контейнеров.
+    pub rows: Vec<FillRow>,
+    /// Поля: (уровень, раскладка).
+    pub field_lays: Vec<(FillLevel, kit::TextFieldLayout)>,
+    /// Чипы: (уровень, rect).
+    pub chip_lays: Vec<(FillLevel, UiRect)>,
+    /// Dropdown: якорь + меню + видимые пункты.
+    pub dropdown: Vec<DropdownDemo>,
+    /// Таблица строк: демо kit-Row.
+    pub row_table: Vec<FillTableDemo>,
+    /// Полная высота тела (для скролла).
+    pub h: f32,
+}
+
+/// Тело секции «Наполнение».
+#[allow(clippy::too_many_arguments)]
+pub fn fill_body(
+    demo: UiRect,
+    offset: f32,
+    p: &KitPalette,
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> FillLayout {
+    let _ = p;
+    let mut lay = FillLayout::default();
+    let content_x = demo.x + 8.0;
+    let content_w = (demo.w - 16.0).max(0.0);
+    let top = demo.y;
+    let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
+
+    let mut y = 0.0f32;
+    let control_x = content_x + VARIANT_LABEL_W + canvas_core::tokens::SPACING_SM;
+    let cells_w = (content_x + content_w - control_x).max(0.0);
+    let per = ((cells_w - 2.0 * FILL_CELL_GAP) / 3.0).max(0.0);
+
+    // Заголовки колонок (3 уровня)
+    let header_y = demo.y + y - offset;
+    for (i, level) in FILL_LEVELS.iter().copied().enumerate() {
+        if fully(header_y, MATRIX_HEADER_H) {
+            lay.headers.push((
+                UiPoint::new(control_x + i as f32 * (per + FILL_CELL_GAP), header_y),
+                level.label_key(),
+            ));
+        }
+    }
+    y += MATRIX_HEADER_H + 6.0;
+
+    // Контейнеры: (ключ названия, высота ряда)
+    let row_specs: [(&'static str, f32); 9] = [
+        (crate::i18n::keys::ADMIN_ROW_LIST, FILL_CELL_H + 6.0),
+        (crate::i18n::keys::ADMIN_ROW_CARD, FILL_CELL_H + 6.0),
+        (
+            crate::i18n::keys::ADMIN_ROW_FIELD,
+            2.0 * 14.0 + kit::TEXT_FIELD_HEIGHT + 10.0,
+        ),
+        (
+            crate::i18n::keys::ADMIN_ROW_CHIPS,
+            2.0 * kit::CHIP_HEIGHT + 12.0,
+        ),
+        (
+            crate::i18n::keys::ADMIN_ROW_DROPDOWN,
+            2.4 * kit::BUTTON_HEIGHT + 4.0 * 26.0,
+        ),
+        (
+            crate::i18n::keys::ADMIN_ROW_ROWS,
+            5.0 * kit::LIST_ROW_H + 10.0,
+        ),
+        (crate::i18n::keys::ADMIN_ROW_TOAST, 2.0 * 24.0 + 10.0),
+        (crate::i18n::keys::ADMIN_ROW_PALETTE, FILL_CELL_H + 6.0),
+        (crate::i18n::keys::ADMIN_ROW_WHEEL, FILL_CELL_H + 6.0),
+    ];
+
+    for (title_key, row_h) in row_specs {
+        let slot_y = demo.y + y - offset;
+        let mut cells = Vec::with_capacity(3);
+        for (i, level) in FILL_LEVELS.iter().copied().enumerate() {
+            let rect = UiRect::new(
+                control_x + i as f32 * (per + FILL_CELL_GAP),
+                slot_y,
+                per,
+                row_h - 6.0,
+            );
+            if fully(rect.y, rect.h) {
+                cells.push(FillCell { level, rect });
+            }
+        }
+        if !cells.is_empty() {
+            lay.rows.push(FillRow {
+                title_key,
+                slot: UiRect::new(content_x, slot_y, content_w, row_h),
+                cells,
+            });
+        }
+        y += row_h;
+    }
+
+    // Предвычисление измеряемых демо (в тех же слотах, что в lay.rows —
+    // поиск по title_key и уровню)
+    let cell_rect = |title_key: &str, level: FillLevel| -> UiRect {
+        lay.rows
+            .iter()
+            .find(|r| r.title_key == title_key)
+            .and_then(|r| r.cells.iter().find(|c| c.level == level))
+            .map(|c| c.rect)
+            .unwrap_or(UiRect::new(0.0, 0.0, 0.0, 0.0))
+    };
+
+    // Поля: пустое (placeholder) / среднее / полное (длинный текст)
+    for (level, model, placeholder) in [
+        (FillLevel::Empty, kit::TextFieldModel::default(), true),
+        (
+            FillLevel::Medium,
+            kit::TextFieldModel {
+                text: DEMO_FIELD_TEXT.to_owned(),
+                caret: 0,
+                sel: None,
+            },
+            false,
+        ),
+        (
+            FillLevel::Full,
+            kit::TextFieldModel {
+                text: DEMO_FIELD_LONG.to_owned(),
+                caret: 0,
+                sel: None,
+            },
+            false,
+        ),
+    ] {
+        let rect = cell_rect(crate::i18n::keys::ADMIN_ROW_FIELD, level);
+        let fl = kit::text_field(
+            rect,
+            UiVec2::new(kit::TEXT_FIELD_MIN_W, kit::TEXT_FIELD_HEIGHT),
+            UiVec2::new(rect.w, kit::TEXT_FIELD_HEIGHT),
+            &model,
+            if placeholder {
+                crate::i18n::tr(lang, "kit.textfield.placeholder")
+            } else {
+                ""
+            },
+            false,
+            KitState::Normal,
+            p,
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+        );
+        lay.field_lays.push((level, fl));
+    }
+
+    // Чипы: пустое (нет) / 2 / 5 — метрики единиц измерения (без i18n)
+    let chip_labels: [&str; 5] = ["rps", "ms", "$/mo", "MB/s", "%"];
+    for (level, count) in [(FillLevel::Medium, 2usize), (FillLevel::Full, 5usize)] {
+        let rect = cell_rect(crate::i18n::keys::ADMIN_ROW_CHIPS, level);
+        let mut cx = rect.x;
+        for label in chip_labels.iter().take(count) {
+            let cl = kit::chip_layout(
+                UiPoint::new(cx, rect.y),
+                label,
+                rect.w,
+                m,
+                fs,
+                FONT_FAMILY,
+                12.0,
+            );
+            lay.chip_lays.push((level, cl.rect));
+            cx += cl.rect.w + kit::GAP_CONTROLS;
+        }
+    }
+
+    // Dropdown: пустое (0 пунктов) / 3 / 6
+    for (level, count) in [
+        (FillLevel::Empty, 0usize),
+        (FillLevel::Medium, 3),
+        (FillLevel::Full, 6),
+    ] {
+        let rect = cell_rect(crate::i18n::keys::ADMIN_ROW_DROPDOWN, level);
+        let anchor = UiRect::new(rect.x, rect.y, rect.w.min(170.0), kit::BUTTON_HEIGHT);
+        let menu_h = (count.min(4) as f32 * 26.0 + 8.0).max(8.0);
+        let menu = UiRect::new(
+            anchor.x,
+            anchor.bottom() + kit::DROPDOWN_GAP,
+            anchor.w,
+            menu_h,
+        );
+        let mut items = Vec::new();
+        let mut labels = Vec::new();
+        for i in 0..count.min(4) {
+            let ir = UiRect::new(
+                menu.x + 4.0,
+                menu.y + 4.0 + i as f32 * 26.0,
+                menu.w - 8.0,
+                22.0,
+            );
+            items.push(ir);
+            labels.push(crate::i18n::trf(
+                lang,
+                crate::i18n::keys::KIT_DROPDOWN_ITEM,
+                &[("{n}", &(i + 1).to_string())],
+            ));
+        }
+        lay.dropdown.push(DropdownDemo {
+            level,
+            anchor,
+            menu,
+            items,
+            labels,
+        });
+    }
+
+    // Таблица строк: kit-Row на общих направляющих (пустое/2/4+Σ)
+    type TableRowSpec = (
+        FillLevel,
+        Vec<(&'static str, &'static str, &'static str, kit::RowMarker)>,
+    );
+    let table_specs: [TableRowSpec; 3] = [
+        (FillLevel::Empty, vec![]),
+        (
+            FillLevel::Medium,
+            vec![
+                ("Цена", "50", "$", kit::RowMarker::Dot),
+                ("Кол-во", "12", "шт", kit::RowMarker::Dot),
+            ],
+        ),
+        (
+            FillLevel::Full,
+            vec![
+                ("Цена", "50", "$", kit::RowMarker::Dot),
+                ("Кол-во", "12", "шт", kit::RowMarker::Dot),
+                ("Итого", "600", "$", kit::RowMarker::Glyph("ƒ")),
+                ("Маржа", "38", "%", kit::RowMarker::Dot),
+            ],
+        ),
+    ];
+    for (level, specs) in table_specs {
+        let rect = cell_rect(crate::i18n::keys::ADMIN_ROW_ROWS, level);
+        if specs.is_empty() || rect.w <= 0.0 {
+            continue;
+        }
+        let parts: Vec<kit::RowParts<'static>> = specs
+            .iter()
+            .map(|(label, value, unit, marker)| kit::RowParts {
+                marker: *marker,
+                label,
+                value,
+                unit,
+                badge: "",
+            })
+            .collect();
+        let Some(guides) = kit::row_guides(
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+            &parts,
+            rect.right() - 8.0,
+            canvas_core::tokens::TABLE_GUIDE_GAP,
+        ) else {
+            continue;
+        };
+        let opts = kit::RowOpts::default();
+        for (i, part) in parts.iter().copied().enumerate() {
+            let row_slot = UiRect::new(
+                rect.x,
+                rect.y + i as f32 * (kit::LIST_ROW_H + 2.0),
+                rect.w,
+                kit::LIST_ROW_H,
+            );
+            let rl = kit::row_layout(
+                m,
+                fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+                row_slot,
+                guides,
+                &part,
+                &opts,
+            );
+            let is_sum = i + 1 == parts.len() && level == FillLevel::Full;
+            lay.row_table.push(FillTableDemo {
+                level,
+                state: if is_sum {
+                    KitState::Selected
+                } else {
+                    KitState::Normal
+                },
+                zebra: i % 2 == 1,
+                parts: part,
+                lay: rl,
+            });
+        }
+    }
+
+    lay.h = y;
+    lay
+}
+
+/// Подпись-заглушка пустого контейнера (слот text_muted, по центру).
+fn draw_empty_hint(d: &mut crate::kit_ui::KitDraw, cell: UiRect, p: &KitPalette, text: &str) {
+    d.label_center(cell, text, p.text_muted, 12.0);
+}
+
+/// Отрисовка тела «Наполнение» (ячейки уже сдвинуты/отфильтрованы).
+pub(crate) fn draw_fill(
+    d: &mut crate::kit_ui::KitDraw,
+    fill: &FillLayout,
+    p: &KitPalette,
+    lang: Language,
+) {
+    let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
+    let empty_hint = label(crate::i18n::keys::ADMIN_EMPTY_PLACEHOLDER);
+    for (origin, key) in &fill.headers {
+        d.label_left(
+            UiRect::new(origin.x, origin.y, VARIANT_LABEL_W, MATRIX_HEADER_H),
+            &label(key),
+            p.text_muted,
+            11.0,
+        );
+    }
+    // Названия контейнеров (левая колонка)
+    for row in &fill.rows {
+        d.label_left(
+            UiRect::new(row.slot.x, row.slot.y + 4.0, VARIANT_LABEL_W, 16.0),
+            &label(row.title_key),
+            p.text_muted,
+            11.0,
+        );
+    }
+
+    for row in &fill.rows {
+        for cell in &row.cells {
+            match row.title_key {
+                k if k == crate::i18n::keys::ADMIN_ROW_LIST => {
+                    draw_list_demo(d, cell.rect, cell.level, p, lang, &empty_hint);
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_CARD => {
+                    draw_card_demo(d, cell.rect, cell.level, p, &empty_hint);
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_CHIPS => {
+                    if cell.level == FillLevel::Empty {
+                        draw_empty_hint(
+                            d,
+                            cell.rect,
+                            p,
+                            &label(crate::i18n::keys::ADMIN_CHIPS_EMPTY),
+                        );
+                    }
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_DROPDOWN => {
+                    let anchor_style =
+                        kit::button_style(ButtonVariant::Secondary, KitState::Normal, p);
+                    if let Some(dd) = fill.dropdown.iter().find(|dd| dd.level == cell.level) {
+                        let (anchor, menu, items, labels) =
+                            (&dd.anchor, &dd.menu, &dd.items, &dd.labels);
+                        d.control(*anchor, &anchor_style);
+                        d.label_center(*anchor, "▼", anchor_style.text, LABEL_SIZE);
+                        d.rect(
+                            *menu,
+                            p.panel_fill,
+                            p.control_border,
+                            canvas_core::tokens::RADIUS_CHIP,
+                        );
+                        if items.is_empty() {
+                            draw_empty_hint(
+                                d,
+                                *menu,
+                                p,
+                                &label(crate::i18n::keys::ADMIN_DROPDOWN_EMPTY),
+                            );
+                        }
+                        for (ir, text) in items.iter().zip(labels.iter()) {
+                            d.rect(*ir, [0.0; 4], [0.0; 4], 0.0);
+                            d.label_left(
+                                UiRect::new(ir.x + 8.0, ir.y + 3.0, ir.w - 16.0, ir.h),
+                                text,
+                                p.text,
+                                12.0,
+                            );
+                        }
+                    }
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_ROWS => {
+                    if cell.level == FillLevel::Empty {
+                        draw_empty_hint(
+                            d,
+                            cell.rect,
+                            p,
+                            &label(crate::i18n::keys::ADMIN_ROWS_EMPTY),
+                        );
+                    }
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_TOAST => {
+                    draw_toast_demo(d, cell.rect, cell.level, p, lang, &empty_hint);
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_PALETTE => {
+                    draw_palette_demo(d, cell.rect, cell.level, p, lang, &empty_hint);
+                }
+                k if k == crate::i18n::keys::ADMIN_ROW_WHEEL => {
+                    draw_wheel_demo(
+                        d,
+                        cell.rect,
+                        cell.level,
+                        p,
+                        &label(crate::i18n::keys::ADMIN_WHEEL_EMPTY),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Поля (предвычисленные раскладки)
+    for (level, fl) in &fill.field_lays {
+        d.rect(
+            fl.rect,
+            p.control_fill,
+            p.control_border,
+            canvas_core::tokens::RADIUS_CHIP,
+        );
+        let color = if fl.text_shown.is_empty() {
+            p.text_muted
+        } else {
+            p.text
+        };
+        d.label_left(fl.text_area, &fl.text_shown, color, LABEL_SIZE);
+        let _ = level;
+    }
+    // Чипы (предвычисленные rect'ы)
+    for (_, rect) in &fill.chip_lays {
+        let style = kit::chip_style(KitState::Normal, p);
+        d.control(*rect, &style);
+    }
+    // Таблица строк (kit::paint_row — строка целиком одним вызовом)
+    for demo in &fill.row_table {
+        let mut style = kit::row_style(demo.state, p);
+        if demo.zebra {
+            style.fill = p.hover_fill;
+        }
+        let mut painter = canvas_ui::paint::Painter::new();
+        kit::paint_row(&mut painter, &demo.lay, &demo.parts, &style, LABEL_SIZE);
+        d.paint_items(painter.take_items());
+    }
+}
+
+/// Демо списка: пустое (заглушка) / 3 строки / 8 строк + скролл-бегунок.
+fn draw_list_demo(
+    d: &mut crate::kit_ui::KitDraw,
+    cell: UiRect,
+    level: FillLevel,
+    p: &KitPalette,
+    lang: Language,
+    empty_hint: &str,
+) {
+    d.rect(
+        cell,
+        p.control_fill,
+        p.control_border,
+        canvas_core::tokens::RADIUS_CHIP,
+    );
+    match level {
+        FillLevel::Empty => {
+            draw_empty_hint(d, cell, p, empty_hint);
+        }
+        FillLevel::Medium => {
+            for i in 0..3 {
+                let r = UiRect::new(
+                    cell.x + 4.0,
+                    cell.y + 4.0 + i as f32 * (kit::LIST_ROW_H + kit::LIST_ROW_GAP),
+                    cell.w - 8.0,
+                    kit::LIST_ROW_H,
+                );
+                d.rect(r, p.hover_fill, [0.0; 4], canvas_core::tokens::RADIUS_CHIP);
+                let text = crate::i18n::trf(
+                    lang,
+                    crate::i18n::keys::KIT_LIST_ROW,
+                    &[("{n}", &(i + 1).to_string())],
+                );
+                d.label_left(
+                    UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
+                    &text,
+                    p.text,
+                    12.0,
+                );
+            }
+        }
+        FillLevel::Full => {
+            for i in 0..3 {
+                let r = UiRect::new(
+                    cell.x + 4.0,
+                    cell.y + 4.0 + i as f32 * (kit::LIST_ROW_H + kit::LIST_ROW_GAP),
+                    cell.w - 10.0,
+                    kit::LIST_ROW_H,
+                );
+                d.rect(
+                    r,
+                    if i == 1 {
+                        p.selected_fill
+                    } else {
+                        p.hover_fill
+                    },
+                    [0.0; 4],
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                let text = crate::i18n::trf(
+                    lang,
+                    crate::i18n::keys::KIT_LIST_ROW,
+                    &[("{n}", &(i + 1).to_string())],
+                );
+                d.label_left(
+                    UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
+                    &text,
+                    p.text,
+                    12.0,
+                );
+            }
+            // Скролл-бегунок: контент 8 строк — окно 3
+            let knob = UiRect::new(
+                cell.right() - 5.0,
+                cell.y + 4.0,
+                3.0,
+                (cell.h - 8.0) * 3.0 / 8.0,
+            );
+            d.rect(knob, p.control_border, [0.0; 4], 2.0);
+        }
+    }
+}
+
+/// Демо карточки: пустое (хедер + «Нет данных») / 2 строки тела / полное.
+fn draw_card_demo(
+    d: &mut crate::kit_ui::KitDraw,
+    cell: UiRect,
+    level: FillLevel,
+    p: &KitPalette,
+    empty_hint: &str,
+) {
+    let card = kit::card(
+        cell,
+        UiVec2::new(cell.w, 70.0),
+        UiVec2::new(cell.w, cell.h),
+        24.0,
+        p,
+    );
+    d.rect(
+        card.rect,
+        p.control_fill,
+        p.control_border,
+        canvas_core::tokens::CARD_CORNER_RADIUS,
+    );
+    d.rect(
+        UiRect::new(card.header.x, card.header.y, card.header.w, card.header.h),
+        p.hover_fill,
+        [0.0; 4],
+        0.0,
+    );
+    d.label_left(
+        UiRect::new(
+            card.header.x + 8.0,
+            card.header.y + 5.0,
+            card.header.w - 16.0,
+            16.0,
+        ),
+        crate::i18n::tr(canvas_core::Language::Ru, crate::i18n::keys::KIT_CARD_TITLE),
+        p.text_title,
+        12.0,
+    );
+    match level {
+        FillLevel::Empty => {
+            draw_empty_hint(d, card.body, p, empty_hint);
+        }
+        FillLevel::Medium => {
+            d.label_left(
+                UiRect::new(
+                    card.body.x + 8.0,
+                    card.body.y + 4.0,
+                    card.body.w - 16.0,
+                    16.0,
+                ),
+                "rps = 1000",
+                p.text,
+                12.0,
+            );
+            d.label_left(
+                UiRect::new(
+                    card.body.x + 8.0,
+                    card.body.y + 22.0,
+                    card.body.w - 16.0,
+                    16.0,
+                ),
+                "latency = 50 ms",
+                p.text,
+                12.0,
+            );
+        }
+        FillLevel::Full => {
+            for (i, line) in [
+                "rps = 1000",
+                "latency = 50 ms",
+                "replicas = 8",
+                "cost = $0.01/req",
+            ]
+            .iter()
+            .enumerate()
+            {
+                d.label_left(
+                    UiRect::new(
+                        card.body.x + 8.0,
+                        card.body.y + 4.0 + i as f32 * 18.0,
+                        card.body.w - 16.0,
+                        16.0,
+                    ),
+                    line,
+                    p.text,
+                    12.0,
+                );
+            }
+            // Результат — полный GFM-результат (слот EDGE_FLOW — расчётное)
+            d.rect(
+                UiRect::new(
+                    card.body.x + 4.0,
+                    card.body.bottom() - 20.0,
+                    card.body.w - 8.0,
+                    18.0,
+                ),
+                p.selected_fill,
+                [0.0; 4],
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_center(
+                UiRect::new(
+                    card.body.x + 4.0,
+                    card.body.bottom() - 20.0,
+                    card.body.w - 8.0,
+                    18.0,
+                ),
+                "= $600/mo",
+                p.text_title,
+                12.0,
+            );
+        }
+    }
+}
+
+/// Демо тостов: пустое (нет) / короткий / длинный.
+fn draw_toast_demo(
+    d: &mut crate::kit_ui::KitDraw,
+    cell: UiRect,
+    level: FillLevel,
+    p: &KitPalette,
+    lang: Language,
+    empty_hint: &str,
+) {
+    match level {
+        FillLevel::Empty => draw_empty_hint(d, cell, p, empty_hint),
+        FillLevel::Medium | FillLevel::Full => {
+            let key = if level == FillLevel::Medium {
+                crate::i18n::keys::ADMIN_TOAST_SHORT
+            } else {
+                crate::i18n::keys::ADMIN_TOAST_LONG
+            };
+            let text = crate::i18n::tr(lang, key);
+            d.rect(
+                cell,
+                p.panel_fill,
+                p.accent,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_center(cell, text, p.text, 12.0);
+        }
+    }
+}
+
+/// Демо палитры шаблонов: пустое / 3 плитки / 6 плиток (сетка 3×2).
+fn draw_palette_demo(
+    d: &mut crate::kit_ui::KitDraw,
+    cell: UiRect,
+    level: FillLevel,
+    p: &KitPalette,
+    lang: Language,
+    empty_hint: &str,
+) {
+    d.rect(
+        cell,
+        p.panel_fill,
+        p.control_border,
+        canvas_core::tokens::RADIUS_PANEL,
+    );
+    match level {
+        FillLevel::Empty => draw_empty_hint(d, cell, p, empty_hint),
+        FillLevel::Medium | FillLevel::Full => {
+            let count = if level == FillLevel::Medium { 3 } else { 6 };
+            let tile_w = (cell.w - 16.0 - 2.0 * 6.0) / 3.0;
+            let tile_h = ((cell.h - 16.0 - 6.0) / 2.0).min(34.0);
+            for i in 0..count {
+                let col = i % 3;
+                let row = i / 3;
+                let tile = UiRect::new(
+                    cell.x + 8.0 + col as f32 * (tile_w + 6.0),
+                    cell.y + 8.0 + row as f32 * (tile_h + 6.0),
+                    tile_w,
+                    tile_h,
+                );
+                d.rect(
+                    tile,
+                    p.control_fill,
+                    p.control_border,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                // Иконка-плитка (слот palette_tile_fill ≈ hover_fill кита)
+                d.rect(
+                    UiRect::new(tile.x + 4.0, tile.y + 4.0, tile_h - 8.0, tile_h - 8.0),
+                    p.hover_fill,
+                    [0.0; 4],
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                let text = crate::i18n::trf(
+                    lang,
+                    crate::i18n::keys::KIT_LIST_ROW,
+                    &[("{n}", &(i + 1).to_string())],
+                );
+                d.label_left(
+                    UiRect::new(
+                        tile.x + tile_h,
+                        tile.y + (tile.h - 16.0) / 2.0,
+                        (tile.w - tile_h - 4.0).max(0.0),
+                        16.0,
+                    ),
+                    &text,
+                    p.text,
+                    11.0,
+                );
+            }
+        }
+    }
+}
+
+/// Демо wheel-меню (слоты WHEEL_* из design/tokens): хаб + категории +
+/// шаблоны; сектора упрощены до квадов (демо слотов, не геометрии).
+fn draw_wheel_demo(
+    d: &mut crate::kit_ui::KitDraw,
+    cell: UiRect,
+    level: FillLevel,
+    p: &KitPalette,
+    empty_hint: &str,
+) {
+    let hub = UiRect::new(cell.x + cell.w / 2.0 - 14.0, cell.y + 6.0, 28.0, 28.0);
+    d.rect(
+        hub,
+        canvas_core::tokens::WHEEL_HUB_ACTIVE,
+        canvas_core::tokens::WHEEL_BORDER,
+        14.0,
+    );
+    match level {
+        FillLevel::Empty => {
+            d.label_center(
+                UiRect::new(cell.x, hub.bottom() + 4.0, cell.w, cell.h - 34.0),
+                empty_hint,
+                p.text_muted,
+                12.0,
+            );
+        }
+        FillLevel::Medium | FillLevel::Full => {
+            let cat_w = (cell.w - 16.0 - 2.0 * 6.0) / 3.0;
+            for i in 0..3 {
+                let cat = UiRect::new(
+                    cell.x + 8.0 + i as f32 * (cat_w + 6.0),
+                    hub.bottom() + 4.0,
+                    cat_w,
+                    24.0,
+                );
+                d.rect(
+                    cat,
+                    canvas_core::tokens::WHEEL_CATEGORY,
+                    canvas_core::tokens::WHEEL_BORDER,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                d.label_center(cat, "A", p.text, 11.0);
+                if level == FillLevel::Full {
+                    for j in 0..2 {
+                        let tpl =
+                            UiRect::new(cat.x, cat.bottom() + 3.0 + j as f32 * 17.0, cat.w, 15.0);
+                        d.rect(tpl, canvas_core::tokens::WHEEL_TEMPLATE, [0.0; 4], 4.0);
+                        d.label_center(tpl, "·", p.text_muted, 10.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +1633,15 @@ mod tests {
         for vp in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
             let mut m = new_measurer();
             let mut fs = canvas_render::text::measure_font_system();
-            let lay = admin_layout(vp, AdminSection::Components, &palette, &mut m, &mut fs);
+            let lay = admin_layout(
+                vp,
+                AdminSection::Components,
+                0.0,
+                &palette,
+                Language::Ru,
+                &mut m,
+                &mut fs,
+            );
             let vp_rect = UiRect::new(0.0, 0.0, vp[0], vp[1]);
             assert!(
                 vp_rect.contains(UiPoint::new(lay.panel.x, lay.panel.y)),
@@ -353,7 +1689,15 @@ mod tests {
         for vp in [[1280.0, 800.0], [800.0, 560.0]] {
             let mut m = new_measurer();
             let mut fs = canvas_render::text::measure_font_system();
-            let lay = admin_layout(vp, AdminSection::Tokens, &palette, &mut m, &mut fs);
+            let lay = admin_layout(
+                vp,
+                AdminSection::Tokens,
+                0.0,
+                &palette,
+                Language::Ru,
+                &mut m,
+                &mut fs,
+            );
             let (theme, reset, close) = admin_hit_slots(vp);
             assert_eq!(theme, lay.theme);
             assert_eq!(reset, lay.reset);
@@ -375,7 +1719,9 @@ mod tests {
         let lay = admin_layout(
             [1280.0, 800.0],
             AdminSection::Fill,
+            0.0,
             &palette,
+            Language::Ru,
             &mut m,
             &mut fs,
         );
@@ -446,6 +1792,134 @@ mod tests {
             wrap_text(&mut m, &mut fs, "одно", 140.0, LABEL_SIZE).len(),
             1
         );
+    }
+
+    /// Тело «Компоненты»: заголовки колонок, 4 ряда кнопок × 6 состояний,
+    /// икон-кнопки, чипы, поля (4 демо), переключатели — на 1280×800 всё
+    /// видно целиком (offset 0).
+    #[test]
+    fn components_body_full_matrix() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let body = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        assert_eq!(body.headers.len(), 10, "6 состояний + 4 подписи полей");
+        assert_eq!(body.button_rows.len(), 4);
+        for row in &body.button_rows {
+            assert_eq!(row.cells.len(), 6, "5 из ST1 + Focused");
+            let focused = row.cells.iter().filter(|c| c.focused).count();
+            assert_eq!(focused, 1, "одна Focused-ячейка в ряду");
+        }
+        assert_eq!(body.icon_cells.len(), 5, "ST1 без Focused");
+        assert_eq!(body.chip_cells.len(), 6);
+        assert_eq!(body.fields.len(), 4, "Normal/Focused/Error/Disabled");
+        assert_eq!(body.switches.len(), 4);
+        // Каретка видна только у Focused-поля
+        let caret_fields = body
+            .fields
+            .iter()
+            .filter(|(_, fl)| fl.caret_x >= 0.0)
+            .count();
+        assert_eq!(caret_fields, 1);
+    }
+
+    /// Скролл тела: при большом offset ячейки за окном демо-зоны
+    /// отфильтрованы (контракт видимости витрины FR-059).
+    #[test]
+    fn components_body_filters_by_scroll() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let full = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        let shifted = components_body(demo, full.h, &palette, Language::Ru, &mut m, &mut fs);
+        assert!(shifted.button_rows.is_empty(), "весь контент выше окна");
+        assert!(shifted.fields.is_empty());
+    }
+
+    /// Тело «Наполнение»: 9 контейнеров × 3 уровня, все демо-геометрии
+    /// предвычислены (поля/чипы/dropdown/таблица).
+    #[test]
+    fn fill_body_all_containers() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let body = fill_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        assert_eq!(body.headers.len(), 3, "empty/medium/full");
+        assert!(
+            body.rows.len() >= 5,
+            "первый экран: часть рядов, остальные — скроллом"
+        );
+        // Полный состав 9 контейнеров — на синтетическом высоком окне
+        // (fill_body — чистая функция от окна, вьюпорт панели не обязан)
+        let big = UiRect::new(0.0, 0.0, demo.w, 1200.0);
+        let all = fill_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        assert_eq!(all.rows.len(), 9, "9 контейнеров");
+        for row in &all.rows {
+            assert_eq!(row.cells.len(), 3, "все уровни видны при offset 0");
+        }
+        assert_eq!(all.field_lays.len(), 3);
+        // Среднее — 2 чипа, полное — 5
+        assert_eq!(
+            all.chip_lays
+                .iter()
+                .filter(|(l, _)| *l == FillLevel::Medium)
+                .count(),
+            2
+        );
+        assert_eq!(
+            all.chip_lays
+                .iter()
+                .filter(|(l, _)| *l == FillLevel::Full)
+                .count(),
+            5
+        );
+        assert_eq!(all.dropdown.len(), 3);
+        let full_dd = all
+            .dropdown
+            .iter()
+            .find(|dd| dd.level == FillLevel::Full)
+            .expect("dropdown full");
+        assert_eq!(full_dd.items.len(), 4, "видимых пунктов не больше окна меню");
+        // Таблица: среднее 2 строки, полное 4 строки
+        let med = all
+            .row_table
+            .iter()
+            .filter(|d| d.level == FillLevel::Medium)
+            .count();
+        let full_rows = all
+            .row_table
+            .iter()
+            .filter(|d| d.level == FillLevel::Full)
+            .count();
+        assert_eq!(med, 2);
+        assert_eq!(full_rows, 4);
+        // Σ в полном ряду — Selected
+        assert!(all
+            .row_table
+            .iter()
+            .any(|d| d.level == FillLevel::Full && d.state == KitState::Selected));
+    }
+
+    /// Отрисовка тел непуста (smoke: quads/texts от draw_components/draw_fill).
+    #[test]
+    fn draw_bodies_smoke() {
+        let camera = canvas_render::Camera::default();
+        let viewport: canvas_render::camera::Vec2 = [1280.0, 800.0];
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let comp = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        let mut d = KitDraw::new(&camera, viewport);
+        draw_components(&mut d, &comp, &palette, Language::Ru);
+        assert!(d.quads.len() > 20 && d.texts.len() > 20);
+        let fill = fill_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        let mut d2 = KitDraw::new(&camera, viewport);
+        draw_fill(&mut d2, &fill, &palette, Language::Ru);
+        assert!(d2.quads.len() > 30 && d2.texts.len() > 10);
     }
 
     /// Тестовая палитра (значения не важны — важны различные слоты).
