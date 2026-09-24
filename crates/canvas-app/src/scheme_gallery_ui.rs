@@ -38,7 +38,7 @@ pub const INPUT_H: f32 = 34.0;
 /// Высота чипа категории.
 pub const CHIP_H: f32 = 28.0;
 /// Полный шаг строки списка (строка + зазор).
-pub const ROW_H: f32 = 56.0;
+pub const ROW_H: f32 = 62.0;
 /// Высота видимой части строки (шаг минус зазор `SPACING_S`).
 pub const ROW_INNER_H: f32 = ROW_H - canvas_core::tokens::SPACING_S;
 /// Высота футера.
@@ -172,9 +172,12 @@ pub fn layout(
 ) -> GalleryLayout {
     let max_w = (viewport[0] - canvas_core::tokens::SPACING_XL).max(280.0);
     let panel_w = PANEL_W.min(max_w);
-    // Сколько строк влезает: высота панели — от вьюпорта.
+    // Сколько строк влезает: высота панели — от вьюпорта. Маржа XL
+    // учитывается С ОБЕИХ сторон (панель центрируется по вертикали:
+    // иначе при ROW_H 62 панель 536 в 560-окне давала y=12 < маржи —
+    // поймано G4-линтом после wasm-аудита 2026-09-25).
     let chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
-    let max_h = (viewport[1] - canvas_core::tokens::SPACING_XL).max(160.0);
+    let max_h = (viewport[1] - canvas_core::tokens::SPACING_XL * 2.0).max(160.0);
     // Панель растёт под список, но не выше вьюпорта (строки скроллятся).
     let panel_h = max_h.min(chrome + ROW_H * list.len().max(1) as f32);
     let avail_rows_h = (panel_h - chrome).max(0.0);

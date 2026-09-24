@@ -769,10 +769,19 @@ fn edge_groups(
 
 // --- Геометрия ---
 
+/// Ширина кнопки группы: минимум иконки, но НЕ УЖЕ подписи под ней —
+/// раньше «Раскладка/Действия/Ветвление» срезались слотом 30px
+/// (wasm-аудит 2026-09-25, скриншот 36_ctx_menu). Измерителя на входе нет
+/// (бар строится чистой геометрией в hit-тестах) — оценочная ширина
+/// 10px-подписи: ~0.55 em на глиф кириллицы (Noto) + 2px хвостовой запас.
+fn group_button_w(label: &str) -> f32 {
+    PAL_BUTTON.max(label.chars().count() as f32 * 5.5 + 2.0)
+}
+
 /// Размер бара по числу групп: [ширина, высота].
 pub fn palette_bar_size(groups: &[PaletteGroup]) -> [f32; 2] {
     let width = PAL_BAR_PAD * 2.0
-        + groups.len() as f32 * PAL_BUTTON
+        + groups.iter().map(|g| group_button_w(&g.label)).sum::<f32>()
         + groups.len().saturating_sub(1) as f32 * PAL_GAP;
     let height = PAL_BAR_PAD * 2.0 + PAL_BUTTON + PAL_CAPTION_H;
     [width, height]
@@ -833,20 +842,20 @@ pub fn palette_layout(
 ) -> PaletteLayout {
     let bar = palette_bar_size(groups);
     let inset = margin_viewport(viewport);
+    let mut bx = origin[0] + PAL_BAR_PAD;
     let layout_groups = groups
         .iter()
-        .enumerate()
-        .map(|(i, group)| {
-            let bx = origin[0] + PAL_BAR_PAD + i as f32 * (PAL_BUTTON + PAL_GAP);
+        .map(|group| {
+            let w = group_button_w(&group.label);
             let by = origin[1] + PAL_BAR_PAD;
-            let button = [bx, by, PAL_BUTTON, PAL_BUTTON];
+            let button = [bx, by, w, PAL_BUTTON];
             let caption = [bx, by + PAL_BUTTON + 1.0];
             let drop_h = PAL_DROP_PAD * 2.0 + group.entries.len() as f32 * PAL_ROW_H;
             // Якорь-зона колонки: по x — центр кнопки минус полширины
             // колонки (зажим во вьюпорт делает dropdown_menu), по y —
             // полоса бара ±1 (зазоры — см. доку функции)
             let anchor = UiRect::new(
-                bx + PAL_BUTTON / 2.0 - PAL_ROW_W / 2.0,
+                bx + w / 2.0 - PAL_ROW_W / 2.0,
                 origin[1] + 1.0,
                 PAL_ROW_W,
                 (bar[1] - 2.0).max(1.0),
@@ -870,6 +879,7 @@ pub fn palette_layout(
                 .into_iter()
                 .map(|(_, r)| [r.x, r.y, r.w, r.h])
                 .collect();
+            bx += w + PAL_GAP;
             GroupLayout {
                 button,
                 caption,
@@ -1458,6 +1468,50 @@ mod tests {
         assert_eq!(
             color_current,
             vec![false, false, true, false, false, false, false]
+        );
+    }
+
+    /// Фикс среза подписей 2026-09-25 (wasm-аудит 36_ctx_menu): кнопка
+    /// группы НЕ У́ЖЕ подписи — «Раскладка/Действия/Ветвление» раньше
+    /// срезались слотом 30 px. Длинная подпись расширяет кнопку, короткая
+    /// («Цвет») остаётся на минимуме.
+    #[test]
+    fn palette_bar_widens_for_captions() {
+        let groups = vec![
+            PaletteGroup {
+                label: "Цвет".into(),
+                icon: PaletteIcon::Swatch(None),
+                entries: vec![PaletteEntry {
+                    action: PaletteAction::NodeGroup(0),
+                    label: "x".into(),
+                    icon: None,
+                    current: false,
+                }],
+            },
+            PaletteGroup {
+                label: "Раскладка".into(),
+                icon: PaletteIcon::TreeHorizontal,
+                entries: vec![PaletteEntry {
+                    action: PaletteAction::NodeGroup(0),
+                    label: "y".into(),
+                    icon: None,
+                    current: false,
+                }],
+            },
+        ];
+        let [w, h] = palette_bar_size(&groups);
+        let expected_w = PAL_BAR_PAD * 2.0 + PAL_BUTTON + (9.0 * 5.5 + 2.0) + PAL_GAP;
+        assert_eq!(w, expected_w, "бар шире за счёт длинной подписи");
+        assert_eq!(h, PAL_BAR_PAD * 2.0 + PAL_BUTTON + PAL_CAPTION_H);
+        let lay = palette_layout(
+            palette_origin([400.0, 300.0], [w, h], [1280.0, 800.0]),
+            &groups,
+            [1280.0, 800.0],
+        );
+        assert_eq!(lay.groups[0].button[2], PAL_BUTTON, "«Цвет» — минимум");
+        assert!(
+            lay.groups[1].button[2] >= 9.0 * 5.5 + 2.0,
+            "кнопка «Раскладка» вмещает подпись"
         );
     }
 

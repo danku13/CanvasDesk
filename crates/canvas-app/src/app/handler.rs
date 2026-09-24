@@ -34,6 +34,13 @@ impl ApplicationHandler<AppEvent> for App {
                 self.modifiers = modifiers.state();
             }
             WindowEvent::KeyboardInput { event, .. } => self.on_key(&event),
+            // Фикс ввода кириллицы 2026-09-25 (wasm-аудит): Chromium шлёт
+            // кириллицу из keyboard.type()/IME через insertText → winit
+            // отдаёт Ime::Commit, которое раньше ТЕРЯЛОСЬ молча — на web
+            // кириллица не вводилась ни в поиск, ни в редактор (латиница
+            // шла Key::Character и работала). Маршрут — в активный
+            // текстовый приёмник (см. on_ime).
+            WindowEvent::Ime(ime) => self.on_ime(ime),
             WindowEvent::MouseInput { state, button, .. } => match button {
                 MouseButton::Middle => {
                     self.middle_pressed = state == ElementState::Pressed;
@@ -1164,6 +1171,9 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Drag(event) => self.on_drag_event(event),
             AppEvent::FileEvents(events) => self.on_file_events(events),
             AppEvent::Search(event) => self.on_search_event(event),
+            // Web-мост ввода кириллицы/IME (canvas-web beforeinput): тот же
+            // маршрут приёмника, что у Ime::Commit (wasm-аудит 2026-09-25)
+            AppEvent::ImeCommit(text) => self.insert_committed_text(&text),
             AppEvent::OpenScene {
                 path,
                 json,

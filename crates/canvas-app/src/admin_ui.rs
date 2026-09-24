@@ -256,23 +256,27 @@ pub fn admin_layout(
     let hint_h = 24.0 + hint_lines.len() as f32 * 18.0 + ZONE_GAP;
 
     // Тело секции (этапы 2–4): у реализованных секций — своё, у остальных —
-    // подсказка о составе (этап 1)
+    // подсказка о составе (этап 1). Фикс налезания 2026-09-25: тело строится
+    // ПОД подсказкой (demo, сдвинутый на hint_h) — раньше матрица/контент
+    // начинались с demo.y и текст подсказки налезал на заголовки колонок и
+    // первую строку контента (скриншот wasm-аудита 19_admin).
+    let body_demo = UiRect::new(demo.x, demo.y + hint_h, demo.w, (demo.h - hint_h).max(0.0));
     let (demo_content_h, components, fill, canvas, tokens) = match section {
         AdminSection::Components => {
-            let body = components_body(demo, scroll_offset, p, lang, m, fs);
-            (hint_h.max(body.h), Some(body), None, None, None)
+            let body = components_body(body_demo, scroll_offset, p, lang, m, fs);
+            (hint_h + body.h, Some(body), None, None, None)
         }
         AdminSection::Fill => {
-            let body = fill_body(demo, scroll_offset, p, lang, m, fs);
-            (hint_h.max(body.h), None, Some(body), None, None)
+            let body = fill_body(body_demo, scroll_offset, p, lang, m, fs);
+            (hint_h + body.h, None, Some(body), None, None)
         }
         AdminSection::Canvas => {
-            let body = canvas_body(demo, scroll_offset, p, card_fill);
-            (hint_h.max(body.h), None, None, Some(body), None)
+            let body = canvas_body(body_demo, scroll_offset, p, card_fill);
+            (hint_h + body.h, None, None, Some(body), None)
         }
         AdminSection::Tokens => {
-            let body = tokens_body(demo, scroll_offset, p, lang, m, fs);
-            (hint_h.max(body.h), None, None, None, Some(body))
+            let body = tokens_body(body_demo, scroll_offset, p, lang, m, fs);
+            (hint_h + body.h, None, None, None, Some(body))
         }
     };
 
@@ -670,7 +674,7 @@ pub(crate) fn draw_components(
         }
     }
     // Икон-кнопки
-    let icons = ["✕", "⚙", "?", "+", "+"];
+    let icons = ["×", "•••", "?", "+", "+"];
     for (i, cell) in comp.icon_cells.iter().enumerate() {
         let style = kit::icon_button_style(cell.state, p);
         d.control(cell.rect, &style);
@@ -2573,6 +2577,43 @@ mod tests {
             let c = [0.1 * i as f32, 0.2, 0.3, 1.0];
             set_slot_color(&mut p, i, c);
             assert_eq!(slot_color(&p, i), c);
+        }
+    }
+
+    /// Фикс налезания 2026-09-25 (wasm-аудит 19_admin): тело секции
+    /// строится ПОД подсказкой — верх матрицы ниже низа последней строки
+    /// hint'а, налезания текста на колонки/кнопки нет (3 вьюпорта × RU/EN).
+    #[test]
+    fn components_body_starts_below_hint() {
+        for vp in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
+            for lang in [Language::Ru, Language::En] {
+                let mut m = new_measurer();
+                let mut fs = canvas_render::text::measure_font_system();
+                let lay = admin_layout(
+                    vp,
+                    AdminSection::Components,
+                    0.0,
+                    &test_palette(),
+                    [0.2, 0.2, 0.25, 1.0],
+                    lang,
+                    &mut m,
+                    &mut fs,
+                );
+                let Some(comp) = &lay.components else {
+                    panic!("нет тела компонентов при {vp:?}/{lang:?}");
+                };
+                // Низ hint'а — формула рисования: demo.y + 24 + n·18.
+                let hint_bottom = lay.demo.y + 24.0 + lay.hint_lines.len() as f32 * 18.0;
+                let first_header_y = comp
+                    .headers
+                    .iter()
+                    .map(|(p, _)| p.y)
+                    .fold(f32::INFINITY, f32::min);
+                assert!(
+                    first_header_y >= hint_bottom - 0.01,
+                    "{vp:?}/{lang:?}: заголовок колонки {first_header_y} выше низа подсказки {hint_bottom}"
+                );
+            }
         }
     }
 

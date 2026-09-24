@@ -200,7 +200,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     crate::widgets_web::web::install_tick(widget_sender);
     // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop
     crate::toolbar::install(proxy.clone());
-    crate::drop_files::install(proxy);
+    crate::drop_files::install(proxy.clone());
+    // Мост ввода кириллицы/IME (wasm-аудит 2026-09-25): winit-web теряет
+    // insertText — DOM beforeinput доставляет текст в App через proxy.
+    crate::ime::install(proxy);
     // winit web: цикл не блокирует поток — spawn_app ставит обработчики
     // (rAF/ResizeObserver) и возвращает управление браузеру.
     use winit::platform::web::EventLoopExtWebSys;

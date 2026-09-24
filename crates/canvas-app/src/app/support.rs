@@ -637,6 +637,8 @@ pub(super) fn template_card_row(
     icon_tint: [f32; 4],
     instances: &mut Vec<CardInstance>,
     texts: &mut Vec<OwnedScreenText>,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
 ) {
     instances.push(CardInstance {
         pos: [rect[0], rect[1]],
@@ -677,14 +679,33 @@ pub(super) fn template_card_row(
         color: palette.title,
         align: TextAlign::Left,
     });
-    texts.push(OwnedScreenText {
-        text: manifest.description.clone(),
-        origin: [tile[0] + tile[2] + 8.0, rect[1] + 21.0],
-        width: rect[2] - (tile[2] + 24.0),
-        font_size: 11.0,
-        color: palette.body,
-        align: TextAlign::Left,
-    });
+    // Фикс среза 2026-09-25 (wasm-аудит 13_palette): описание шаблона
+    // рвалось кромкой панели без эллипсиса — перенос на 2 строки
+    // (ROW_HEIGHT 46 → 52). Хвост длиннее 2 строк не рисуется.
+    // m/fs приходят от вызова: в кадре глобальный measure_font_system
+    // уже захвачен оверлеем — повторный захват на wasm паникует
+    // (recursive mutex, no_threads std; выловлено wasm-аудитом).
+    {
+        let desc = manifest.description.clone();
+        let desc_w = (rect[2] - (tile[2] + 24.0)).max(10.0);
+        for (line_idx, line) in crate::admin_ui::wrap_text(m, fs, &desc, desc_w, 11.0)
+            .into_iter()
+            .take(2)
+            .enumerate()
+        {
+            texts.push(OwnedScreenText {
+                text: line,
+                origin: [
+                    tile[0] + tile[2] + 8.0,
+                    rect[1] + 21.0 + line_idx as f32 * 14.0,
+                ],
+                width: desc_w,
+                font_size: 11.0,
+                color: palette.body,
+                align: TextAlign::Left,
+            });
+        }
+    }
 }
 
 /// Заголовок ноды для поиска/результатов (T14): имя файла или текст заметки.
