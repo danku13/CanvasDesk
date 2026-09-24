@@ -4111,8 +4111,23 @@ impl App {
     ) {
         use crate::ui::NodeSetting;
         match setting {
-            // FR-009: переименовать = вход в редактирование (двойной клик)
-            NodeSetting::Rename => self.begin_editing(node_index),
+            // FR-009: переименовать = вход в редактирование (двойной клик).
+            // FR-072: у text-ноды переименование правит ЗАГОЛОВОК (однострочный
+            // редактор в шапке, с переносом legacy-первой строки); группа —
+            // подпись label прежним begin_editing.
+            NodeSetting::Rename => {
+                let is_group = self
+                    .scene
+                    .canvas
+                    .nodes
+                    .get(node_index)
+                    .is_some_and(|node| node.kind() == NodeKind::Group);
+                if is_group {
+                    self.begin_editing(node_index);
+                } else {
+                    self.begin_editing_title(node_index);
+                }
+            }
             NodeSetting::Duplicate => {
                 // Дублирование одной ноды (паттерн duplicate_selection)
                 let Some(node) = self.scene.canvas.nodes.get(node_index).cloned() else {

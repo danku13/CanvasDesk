@@ -785,9 +785,11 @@ mod tests {
     /// Канвас инстанса схемы (нативно и под wasip1 — чистые функции ядра).
     fn laid_canvas(id: &str) -> (canvas_core::Canvas, SchemeInstance) {
         let instance = instance_of(id);
-        let mut canvas = canvas_core::Canvas::default();
-        canvas.nodes = instance.nodes.clone();
-        canvas.edges = instance.edges.clone();
+        let canvas = canvas_core::Canvas {
+            nodes: instance.nodes.clone(),
+            edges: instance.edges.clone(),
+            ..Default::default()
+        };
         (canvas, instance)
     }
 

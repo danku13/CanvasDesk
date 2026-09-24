@@ -71,6 +71,7 @@ fn headless_spilled_param_row_draws() {
             indices: &[0],
             hud: None,
             editing: None,
+            editing_title: None,
             editing_buffer: None,
             overlay_texts: &[],
             screen_bands: &[],

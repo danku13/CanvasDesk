@@ -98,6 +98,7 @@ fn line_ports_template_and_note() {
             indices: &[0, 1],
             hud: None,
             editing: None,
+            editing_title: None,
             editing_buffer: None,
             overlay_texts: &[],
             screen_bands: &[],

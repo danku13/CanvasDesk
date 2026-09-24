@@ -1,7 +1,7 @@
 ---
 name: canvasdesk-model-build
 description: Сборка исполняемой математической модели на канвасе CanvasDesk через MCP — ноды, value-связи с адресацией портов (fromOutput/fromLine/toParam), атомарный батч graph_apply, вставка схем. Используйте, когда нужно создать или изменить модель, связать ноды, задать параметры. Triggers: build model, create nodes, edges, value flow, graph_apply, param_set, template_instantiate, schemes_apply.
-version: 1
+version: 2
 ---
 
 # Сборка модели на CanvasDesk
@@ -36,6 +36,10 @@ value-связям. Требуется подключённый MCP-сервер
   с формулами (`avg_rps = dau × sess × req / 86400`) — вычисляемыми.
   Это единственное место, где числа вводятся руками. Переменные ноды
   становятся её именованными выходами (для fromOutput).
+- **Заголовок карточки** (FR-072) — `node_create_note` {…, title} /
+  `node_edit` {id, title}: явный заголовок живёт отдельно от текста и
+  не меняется при правках тела. Без title заголовок — первая строка
+  текста (legacy); title = null возвращает фолбэк.
 - **Расчётные роли** — `template_instantiate` {id, x, y, params}:
   id шаблона из `template_list`; params — {имя: число} или
   {имя: {num, unit}}; значение вне min/max — ошибка.
@@ -43,8 +47,8 @@ value-связям. Требуется подключённый MCP-сервер
   на файл (сам файл на диске не создаётся).
 - Правки: `node_update_text` {id, text} — заменить текст целиком;
   `node_edit` {id, …} — точечная правка ТОЛЬКО переданных полей
-  (text, label, color, expr, x, y, width, height; null сбрасывает
-  label/color/expr; expr — Numi-формула, рендерится под текстом ноды).
+  (text, title, label, color, expr, x, y, width, height; null сбрасывает
+  label/color/expr/title; expr — Numi-формула, рендерится под текстом ноды).
 
 **Многострочный текст:** перенос в JSON — настоящий `\n`
 (`"text": "dau = 1000000\nsess = 4"`); двухсимвольный вариант
@@ -96,7 +100,7 @@ value-связям. Требуется подключённый MCP-сервер
 
 | op | Поля | Примечание |
 |---|---|---|
-| `node_create_note` | ref?, x, y, text?, width?, height? | Numi-лист |
+| `node_create_note` | ref?, x, y, text?, title?, width?, height? | Numi-лист |
 | `node_create_file` | ref?, x, y, path | файл не создаётся |
 | `template_instantiate` | ref?, template, params?, x, y | вне min/max — ошибка |
 | `edge_create` | fromRef\|from, toRef\|to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide? | порты как у шага 3, НО `fromOutput` в батче валидируется только по выходам шаблонов: текстовый исток адресуйте `fromLine` (переменная Numi-листа в батче — `E-PORT-UNKNOWN`) |

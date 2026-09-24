@@ -24,6 +24,7 @@ use crate::markdown::{self, StyleFlag, StyleSpan};
 use crate::text::{
     body_area, mono_attrs, rich_spans, sans_attrs, BODY_FONT_SIZE, BODY_LINE_HEIGHT,
 };
+use canvas_core::tokens::{TYPE_TITLE as TITLE_FONT_SIZE, TYPE_TITLE_LINE as TITLE_LINE_HEIGHT};
 
 /// Восстановить хвостовые пустые строки буфера после `set_rich_text`:
 /// cosmic-text дробит текст через BidiParagraphs (параграфы UAX#9) и
@@ -204,12 +205,14 @@ impl PendingStyle {
     }
 }
 
-/// Цель инлайн-редактирования: тело текстовой ноды (T7) или лейбл связи (T8).
+/// Цель инлайн-редактирования: тело текстовой ноды (T7), лейбл связи (T8)
+/// или заголовок ноды (FR-072 — однострочная правка в шапке карточки).
 /// Индексы — позиции в `canvas.nodes` / `canvas.edges`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditTarget {
     Node(usize),
     Edge(usize),
+    NodeTitle(usize),
 }
 
 /// Ширина бокса редактирования лейбла связи в world-px (T8).
@@ -236,7 +239,7 @@ pub fn edge_edit_area(
 
 /// Область редактирования сессии в world-координатах (левый верхний угол,
 /// ширина, высота): тело карточки для ноды, бокс у середины связи — для
-/// лейбла связи (T8).
+/// лейбла связи (T8), строка внутри шапки — для заголовка (FR-072).
 pub fn session_area(
     canvas: &Canvas,
     session: &EditingSession,
@@ -245,6 +248,7 @@ pub fn session_area(
     match session.target() {
         EditTarget::Node(index) => canvas.nodes.get(index).map(body_area),
         EditTarget::Edge(index) => edge_edit_area(canvas, index, avoid),
+        EditTarget::NodeTitle(index) => canvas.nodes.get(index).map(crate::text::title_edit_area),
     }
 }
 
@@ -357,7 +361,7 @@ pub struct EditingSession {
     buffer: Buffer,
     cursor: Cursor,
     selection: Selection,
-    /// Что редактируется: нода или лейбл связи (индекс в модели).
+    /// Что редактируется: нода, лейбл связи или заголовок ноды (индекс в модели).
     target: EditTarget,
     /// Исходный текст с маркерами — для отката по Esc.
     original: String,
@@ -368,6 +372,9 @@ pub struct EditingSession {
     pending: PendingStyle,
     /// Высота строки текущего кадра (физ. px) — для каретки.
     line_height_px: f32,
+    /// Метрики цели в world-px: (кегль, высота строки) — тело/лейбл —
+    /// BODY_*, заголовок (FR-072) — TITLE_*; set_layout не хардкодит.
+    metrics: (f32, f32),
     /// Последние применённые размеры/зум — set_layout без изменений не
     /// перешейпывает буфер.
     layout: (f32, f32, f32),
@@ -427,6 +434,41 @@ impl EditingSession {
             spans,
             pending: PendingStyle::default(),
             line_height_px: line_height,
+            metrics: (BODY_FONT_SIZE, BODY_LINE_HEIGHT),
+            layout: (width_px, height_px, zoom_px),
+        }
+    }
+
+    /// FR-072: начать правку заголовка ноды (EditTarget::NodeTitle).
+    /// Отличия от тела заметки: метрики шапки (TITLE_*), без переноса
+    /// (Wrap::None — строка одна), без markdown-парсинга (заголовок —
+    /// чистый текст, маркеры не интерпретируются и не.emit-ятся).
+    pub fn new_title(
+        font_system: &mut FontSystem,
+        index: usize,
+        text: &str,
+        width_px: f32,
+        height_px: f32,
+        zoom_px: f32,
+    ) -> Self {
+        let font_size = TITLE_FONT_SIZE * zoom_px;
+        let line_height = TITLE_LINE_HEIGHT * zoom_px;
+        let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
+        buffer.set_wrap(font_system, Wrap::None);
+        buffer.set_size(font_system, Some(width_px), Some(height_px));
+        buffer.set_text(font_system, text, sans_attrs(), Shaping::Advanced);
+        buffer.shape_until_scroll(font_system, false);
+        Self {
+            buffer,
+            cursor: Cursor::new(0, text.len()),
+            selection: Selection::None,
+            target: EditTarget::NodeTitle(index),
+            original: text.to_owned(),
+            plain: text.to_owned(),
+            spans: Vec::new(),
+            pending: PendingStyle::default(),
+            line_height_px: line_height,
+            metrics: (TITLE_FONT_SIZE, TITLE_LINE_HEIGHT),
             layout: (width_px, height_px, zoom_px),
         }
     }
@@ -443,21 +485,49 @@ impl EditingSession {
         result
     }
 
-    /// Цель редактирования (нода или лейбл связи).
+    /// Цель редактирования (нода, лейбл связи или заголовок ноды).
     pub fn target(&self) -> EditTarget {
         self.target
     }
 
     /// Индекс ноды, если редактируется нода; None для лейбла связи.
+    /// FR-072: заголовок — тоже нода (каретка/выделение садятся на её
+    /// z-позицию), потребителям тела ноды — проверять `target()`.
     pub fn node_index(&self) -> Option<usize> {
         match self.target {
-            EditTarget::Node(index) => Some(index),
+            EditTarget::Node(index) | EditTarget::NodeTitle(index) => Some(index),
             EditTarget::Edge(_) => None,
+        }
+    }
+
+    /// FR-072: индекс ноды при правке заголовка (EditTarget::NodeTitle).
+    pub fn title_index(&self) -> Option<usize> {
+        match self.target {
+            EditTarget::NodeTitle(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    /// FR-072: адаптация команды под цель. Заголовок — однострочный:
+    /// Enter (в любой комбинации) завершает правку (новых строк нет);
+    /// маркеры форматирования не применяются (заголовок — чистый текст).
+    pub fn adapt_command(&self, command: KeyCommand) -> Option<KeyCommand> {
+        match self.target {
+            EditTarget::NodeTitle(_) => match command {
+                KeyCommand::Commit | KeyCommand::Action(Action::Enter) => Some(KeyCommand::Commit),
+                KeyCommand::ToggleMarker(_) => None,
+                other => Some(other),
+            },
+            _ => Some(command),
         }
     }
 
     /// Текст для сохранения в модель: чистый текст + маркеры (emit).
     pub fn text(&self) -> String {
+        // FR-072: заголовок — чистый текст без emit-экранирования маркеров
+        if matches!(self.target, EditTarget::NodeTitle(_)) {
+            return self.plain.clone();
+        }
         markdown::emit(&self.plain, &self.spans)
     }
 
@@ -469,6 +539,11 @@ impl EditingSession {
     /// Текст/стили изменились относительно исходного (сравнение в
     /// plain-координатах — каноническая запись маркеров не считается правкой).
     pub fn changed(&self) -> bool {
+        // FR-072: заголовок — чистый текст (без markdown-модели): сравнение
+        // с исходником напрямую; parse/emit экранировал бы маркеры
+        if matches!(self.target, EditTarget::NodeTitle(_)) {
+            return self.plain != self.original;
+        }
         let (plain, spans) = markdown::parse(&self.original);
         plain != self.plain || spans != self.spans
     }
@@ -491,12 +566,12 @@ impl EditingSession {
             return;
         }
         self.layout = new_layout;
-        let line_height = BODY_LINE_HEIGHT * zoom_px;
+        // FR-072: метрики — по цели (тело/лейбл — BODY, заголовок — TITLE)
+        let (font, line) = self.metrics;
+        let line_height = line * zoom_px;
         self.line_height_px = line_height;
-        self.buffer.set_metrics(
-            font_system,
-            Metrics::new(BODY_FONT_SIZE * zoom_px, line_height),
-        );
+        self.buffer
+            .set_metrics(font_system, Metrics::new(font * zoom_px, line_height));
         self.buffer
             .set_size(font_system, Some(width_px), Some(height_px));
     }
@@ -1360,4 +1435,84 @@ mod tests {
         // Прочие клавиши редактору не нужны
         assert_eq!(map_key(&Key::Named(NamedKey::F5), false, false), None);
     }
+}
+
+// --- FR-072: правка заголовка (EditTarget::NodeTitle) ---
+
+/// FR-072: session_area для NodeTitle — строка внутри шапки карточки
+/// (вертикаль по центру HEADER_HEIGHT, высота TITLE_LINE_HEIGHT).
+#[test]
+fn session_area_title_target() {
+    use canvas_core::Node;
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("a", "тело", 10.0, 20.0));
+    canvas.nodes[0].width = 260.0;
+    canvas.nodes[0].height = 140.0;
+    let mut fs = FontSystem::new();
+    let session = EditingSession::new_title(&mut fs, 0, "Смета", 200.0, 22.0, 1.0);
+    let (origin, width, height) = session_area(&canvas, &session, false).expect("нода есть");
+    assert_eq!(height, TITLE_LINE_HEIGHT, "высота зоны — строка заголовка");
+    assert!(
+        origin[1] > canvas.nodes[0].y,
+        "зона внутри карточки: {origin:?}"
+    );
+    assert!(
+        origin[1] + height < canvas.nodes[0].y + 34.0,
+        "зона не выходит из шапки: {origin:?}"
+    );
+    assert!(width > 0.0);
+}
+
+/// FR-072: заголовок — чистый текст: маркеры не интерпретируются
+/// (в отличие от тела), text() возвращает введённое как есть.
+#[test]
+fn title_session_plain_text() {
+    let mut fs = FontSystem::new();
+    let s = EditingSession::new_title(&mut fs, 0, "**жирный**", 300.0, 22.0, 1.0);
+    assert_eq!(
+        s.text(),
+        "**жирный**",
+        "markdown-маркеры в заголовке не канонизируются"
+    );
+    // Prefill равен original — без правок changed() false (legacy-нода
+    // остаётся legacy, пока пользователь реально не переименовал)
+    assert!(!s.changed(), "без правок изменения нет");
+}
+
+/// FR-072: однострочность — Enter в любой комбинации коммитит,
+/// новых строк нет; маркеры стиля заглушены; обычная навигация живёт.
+#[test]
+fn title_adapt_command() {
+    use winit::keyboard::{Key, NamedKey};
+    let mut fs = FontSystem::new();
+    let s = EditingSession::new_title(&mut fs, 0, "Имя", 300.0, 22.0, 1.0);
+    let enter = map_key(&Key::Named(NamedKey::Enter), false, false).expect("команда");
+    assert_eq!(
+        s.adapt_command(enter),
+        Some(KeyCommand::Commit),
+        "Enter — коммит"
+    );
+    let shift_enter = map_key(&Key::Named(NamedKey::Enter), false, true).expect("команда");
+    assert_eq!(
+        s.adapt_command(shift_enter),
+        Some(KeyCommand::Commit),
+        "Shift+Enter в заголовке — тоже коммит (однострочность)"
+    );
+    let bold = map_key(&Key::Character("b".into()), true, false).expect("команда");
+    assert_eq!(
+        s.adapt_command(bold),
+        None,
+        "маркеры форматирования в заголовке не применяются"
+    );
+    let left = map_key(&Key::Named(NamedKey::ArrowLeft), false, false).expect("команда");
+    assert!(s.adapt_command(left).is_some(), "навигация не глушится");
+    // Тело — поведение прежнее (Shift+Enter — новая строка)
+    let body = EditingSession::new(&mut fs, EditTarget::Node(0), "", 300.0, 100.0, 1.0);
+    let shift_enter_body = map_key(&Key::Named(NamedKey::Enter), false, true).expect("команда");
+    let expected = shift_enter_body.clone();
+    assert_eq!(
+        body.adapt_command(shift_enter_body),
+        Some(expected),
+        "у тела адаптации нет"
+    );
 }

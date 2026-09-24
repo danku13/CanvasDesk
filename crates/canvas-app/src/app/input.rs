@@ -489,7 +489,16 @@ impl App {
                             _ => {}
                         }
                     }
-                    let Some(command) = map_key(&event.logical_key, ctrl, shift) else {
+                    let Some(command) =
+                        map_key(&event.logical_key, ctrl, shift).and_then(|command| {
+                            match self.editing.as_ref() {
+                                // FR-072: заголовок — однострочный (Enter — всегда
+                                // коммит), маркеры стиля не применяются
+                                Some(session) => session.adapt_command(command),
+                                None => Some(command),
+                            }
+                        })
+                    else {
                         return true;
                     };
                     match command {
@@ -2496,6 +2505,19 @@ impl App {
                     let avoid = self.settings.edges_avoid_nodes;
                     let inside = match target {
                         EditTarget::Node(index) => hit == Some(index),
+                        // FR-072: у заголовка зона клика — строка в шапке
+                        EditTarget::NodeTitle(index) => self
+                            .scene
+                            .canvas
+                            .nodes
+                            .get(index)
+                            .map(canvas_render::text::title_edit_area)
+                            .is_some_and(|(origin, width, height)| {
+                                world[0] >= origin[0]
+                                    && world[0] <= origin[0] + width
+                                    && world[1] >= origin[1]
+                                    && world[1] <= origin[1] + height
+                            }),
                         EditTarget::Edge(index) => edge_edit_area(&self.scene.canvas, index, avoid)
                             .is_some_and(|(origin, width, height)| {
                                 world[0] >= origin[0]
@@ -2622,7 +2644,11 @@ impl App {
                             }
                             None => {
                                 let index = self.create_note_at(world);
-                                self.begin_editing(index);
+                                // FR-072: новая заметка стартует с заголовка:
+                                // Enter после коммита заголовка откроет тело
+                                // (цепочка title_then_body, см. finish_editing)
+                                self.title_then_body = Some(index);
+                                self.begin_editing_title(index);
                             }
                         },
                         // T17 (SPEC §7.4 п.7): двойной клик по файловой
@@ -2666,10 +2692,10 @@ impl App {
                                     );
                                 }
                             } else {
-                                self.begin_editing(index);
+                                self.begin_edit_node(index, world);
                             }
                             #[cfg(not(windows))]
-                            self.begin_editing(index);
+                            self.begin_edit_node(index, world);
                         }
                     }
                     self.request_redraw();

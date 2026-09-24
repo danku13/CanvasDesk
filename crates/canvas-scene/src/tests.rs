@@ -3701,6 +3701,7 @@ fn node_desc_without_prose_fallback() {
         expr: None,
         template: None,
         data: None,
+        title: None,
     });
     canvas.nodes.push(node);
     let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-q3a.canvas"));
@@ -3982,4 +3983,88 @@ fn mcp_fr066_monte_carlo_run_stale_on_version_mismatch() {
     );
     let out2 = dispatch(&mut scene, "monte_carlo_run", &request).expect("повтор");
     assert_eq!(out2["stale"], false, "метаданные актуальны");
+}
+
+// --- FR-072: title в MCP-инструментах ---
+
+/// FR-072: node_create_note с title — явный заголовок в canvasdesk;
+/// без title — legacy-поведение (поле не создаётся).
+#[test]
+fn mcp_node_create_note_with_title() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":0.0,"y":0.0,"text":"vm = 40 $","title":"Смета"}"#,
+    )
+    .expect("create_note с title");
+    let node = scene.canvas.nodes.last().expect("нода");
+    assert_eq!(node.title(), Some("Смета"), "явный заголовок записан");
+    assert_eq!(node.text.as_deref(), Some("vm = 40 $"), "тело не тронуто");
+
+    // Без title — поле не создаётся (legacy-фолбэк живёт)
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":10.0,"y":10.0,"text":"заметка"}"#,
+    )
+    .expect("create_note без title");
+    let node = scene.canvas.nodes.last().expect("нода");
+    assert_eq!(node.title(), None, "без title поле не создаётся");
+}
+
+/// FR-072: node_edit — title меняет заголовок, не трогая text;
+/// title = null — сброс к legacy; другие поля обновляются независимо.
+#[test]
+fn mcp_node_edit_title_field() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_edit",
+        r#"{"id":"n1","title":"Итоговая смета"}"#,
+    )
+    .expect("node_edit title");
+    let node = &scene.canvas.nodes[0];
+    assert_eq!(node.title(), Some("Итоговая смета"));
+    assert_ne!(
+        node.text.as_deref().map(str::trim),
+        Some("Итоговая смета"),
+        "текст не затронут правкой заголовка"
+    );
+
+    // Совместно с text: оба поля применяются
+    dispatch(
+        &mut scene,
+        "node_edit",
+        r#"{"id":"n1","text":"новое тело","title":"Новый заголовок"}"#,
+    )
+    .expect("node_edit text+title");
+    let node = &scene.canvas.nodes[0];
+    assert_eq!(node.text.as_deref(), Some("новое тело"));
+    assert_eq!(node.title(), Some("Новый заголовок"));
+
+    // title = null — сброс к legacy-фолбэку
+    dispatch(&mut scene, "node_edit", r#"{"id":"n1","title":null}"#).expect("сброс title");
+    assert_eq!(scene.canvas.nodes[0].title(), None, "title сброшен");
+
+    // Неверный тип — ошибка вызова
+    assert!(dispatch(&mut scene, "node_edit", r#"{"id":"n1","title":42}"#).is_err());
+}
+
+/// FR-072: nodes_search находит ноду по явному заголовку.
+#[test]
+fn mcp_nodes_search_by_title() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x":0.0,"y":0.0,"text":"vm = 40 $","title":"Смета на инфраструктуру"}"#,
+    )
+    .expect("create_note");
+    let found = dispatch(&mut scene, "nodes_search", r#"{"query":"смета"}"#).expect("поиск");
+    assert_eq!(
+        found.as_array().map(Vec::len),
+        Some(1),
+        "поиск по заголовку (регистр не важен): {found}"
+    );
 }
