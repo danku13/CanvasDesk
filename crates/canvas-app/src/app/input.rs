@@ -692,11 +692,32 @@ impl App {
                 }
             }
             ui_registry::KeyOwner::Stage => {
-                // Любая клавиша закрывает stage (8233–8239; Esc — 8141):
-                // нужный оверлей откроется следующим нажатием
-                self.main_stage = None;
-                self.request_redraw();
-                true
+                // FR-042 (правка 2026-09-25): только Esc закрывает stage.
+                // Ранее любая клавиша закрывала (комментарий про «нужный
+                // оверлей откроется следующим нажатием» — устарел: после
+                // рефакторинга PRD-0009 overlay-openers сами закрывают
+                // stage по инварианту Q6 — см. try_open_main_stage /
+                // close_main_stage в каждом overlay-open). Закрытие на
+                // любую клавишу блокировало Del внутри stage (FR-042
+                // правка 2026-09-25: ЛКМ → палитра, ПКМ → stage + Del).
+                // Esc — здесь явно (для discoverability); Esc-лестница
+                // ниже (registry.esc_stack()) срабатывает когда Stage
+                // возвращает false (но для Esc возвращаем true —
+                // поглощено, чтобы лестница не дублировала).
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && event.logical_key == Key::Named(NamedKey::Escape)
+                {
+                    self.close_main_stage();
+                    self.request_redraw();
+                    true
+                } else {
+                    // Любая другая клавиша — НЕ поглощать: событие идёт
+                    // вниз по скоупам в Canvas (Del, Ctrl+P, F, и т.д.).
+                    // Если клавиша открывает overlay (поиск/wheel/…),
+                    // overlay-opener сам закроет stage (Q6 инвариант).
+                    false
+                }
             }
             ui_registry::KeyOwner::Canvas => false,
         }
