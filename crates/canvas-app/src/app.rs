@@ -4956,7 +4956,23 @@ impl App {
         PaletteTarget,
     )> {
         let target = self.palette_target()?;
-        let mut groups = palette_groups(&self.scene.canvas, &target, self.settings.language);
+        // FR-042 (правка 2026-09-24): вес пучка рёбер цели — для группы
+        // «Пучок» в edge_groups (явный вход в main stage + удаление ребра).
+        // У нод и одиночных рёбер — None (группа не показывается).
+        let bundle_weight = match &target {
+            PaletteTarget::Edge(edge_index) => self
+                .scene
+                .bundles
+                .bundle_of_edge(*edge_index)
+                .map(|bundle| bundle.weight),
+            PaletteTarget::Nodes { .. } => None,
+        };
+        let mut groups = palette_groups(
+            &self.scene.canvas,
+            &target,
+            bundle_weight,
+            self.settings.language,
+        );
         // FR-019: linked-связь с шаблоном — при несовпадении версии ноды
         // с реестром группа «Шаблон» с ручным update
         if let PaletteTarget::Nodes { primary, .. } = &target {

@@ -2637,12 +2637,18 @@ impl App {
                     // финал на отпускании (порог клик/драг отсекает клики)
                     // FR-042 (E3, F-5/F-6): клик по агрегированной линии
                     // пучка — открытие main stage; одиночное ребро —
-                    // выделение, как раньше (F-10)
+                    // выделение, как раньше (F-10).
+                    // FR-042 (правка 2026-09-24): Alt+ЛКМ по пучку —
+                    // байпас: выделить конкретное ребро без открытия
+                    // stage (для drag-rebind, Del, прямой правки через
+                    // палитру). Тот же edge_at возвращает индекс
+                    // конкретного ребра пучка.
                     None => {
                         if let Some(edge_index) =
                             edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
                         {
-                            if !self.try_open_main_stage(edge_index) {
+                            let bypass_stage = self.modifiers.alt_key();
+                            if !(bypass_stage || self.try_open_main_stage(edge_index)) {
                                 self.selected = Some(Selection::Edge(edge_index));
                             }
                         } else {
@@ -2917,19 +2923,20 @@ impl App {
                 self.selected = Some(Selection::Node(index));
                 self.menu = None;
             }
-            // Связь: выделить → палитра связи (Стиль/Толщина/Цвет);
-            // мимо — меню пустого канваса или закрытие (десктоп-меню T17)
-            // FR-042 (E3): ПКМ по агрегированной линии — main stage (единый
-            // вход AC-3.1; палитра применяется к конкретному ребру изнутри
-            // stage); одиночное ребро — выделение + палитра, как раньше
+            // Связь: выделить → палитра связи (Стиль/Толщина/Цвет/Поток/
+            // Порты; для пучка N ≥ 2 — дополнительно «Пучок» с явным входом
+            // в main stage и удалением конкретного ребра); мимо — меню
+            // пустого канваса или закрытие (десктоп-меню T17).
+            // FR-042 (правка 2026-09-24): ПКМ по пучку БОЛЕЕ НЕ открывает
+            // main stage автоматически — пользователь редактирует ребро
+            // через палитру (стиль/толщина/цвет/поток/порты/удаление).
+            // Явный вход в stage — кнопка «Открыть main stage» в группе
+            // «Пучок» (AC-3.1 «единый вход» переосмыслен: входов два, но
+            // оба осознанные — ЛКМ для детализации, ПКМ для правки).
             None => {
                 let avoid = self.settings.edges_avoid_nodes;
                 match edge_at(&self.scene.canvas, world, avoid) {
                     Some(edge_index) => {
-                        if self.try_open_main_stage(edge_index) {
-                            self.request_redraw();
-                            return;
-                        }
                         self.selected = Some(Selection::Edge(edge_index));
                         self.selected_nodes.clear();
                         self.menu = None;
