@@ -2007,6 +2007,58 @@ pub fn line_kind(line: &str) -> NumiLineKind {
     }
 }
 
+/// FR-067 (этап F, шаг 2 плана владельца): строковый диапазон первого
+/// проза-абзаца — `[start, end)` по индексам `\n`-строк исходного текста.
+/// Общий источник сцены (оценка уровня 1) и рендера (супрессия дубликата
+/// зоны описания): измерение и рендер супрессируют один и тот же диапазон
+/// (I-2), индексы прочих строк не сдвигаются (I-1/I-3 — строки никуда не
+/// исчезают из текста, только из верстки тела). Границы прогонов и вердикт
+/// «весь прогон — проза» — в точности как в [`first_prose_paragraph`]:
+/// прогон обрывается пустой строкой или фенсом, прогон с любой
+/// не-прозой (числа/присваивания/выражения) не qualifies, сканирование
+/// продолжается до конца текста.
+pub fn first_prose_paragraph_span(text: &str) -> Option<(usize, usize)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let flush = |start: Option<usize>, end: usize| -> Option<(usize, usize)> {
+        let start = start?;
+        let all_prose = lines[start..end]
+            .iter()
+            .all(|line| line_kind(line) == NumiLineKind::Prose);
+        if all_prose {
+            Some((start, end))
+        } else {
+            None
+        }
+    };
+    let mut run_start: Option<usize> = None;
+    let mut in_fence = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            // Фенс открывает/закрывает прогон — код описанием не является
+            if let Some(found) = flush(run_start, i) {
+                return Some(found);
+            }
+            run_start = None;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if line.trim().is_empty() {
+            if let Some(found) = flush(run_start, i) {
+                return Some(found);
+            }
+            run_start = None;
+            continue;
+        }
+        if run_start.is_none() {
+            run_start = Some(i);
+        }
+    }
+    flush(run_start, lines.len())
+}
+
 /// FR-061 D-8/Q3 (решение владельца 2026-09-23, «desc→манифест→проза»):
 /// первый проза-абзац текста ноды — фолбэк источника описания (после
 /// `canvasdesk.desc` и описания манифеста шаблона). Абзац = подряд идущие
@@ -2016,45 +2068,20 @@ pub fn line_kind(line: &str) -> NumiLineKind {
 /// склеенный одинарными пробелами. Чистая функция — сцена (резерв высоты,
 /// CR-012) и рендер (кэш текста) вызывают её с одним входом `node.text`,
 /// поэтому измерение и рендер не разъезжаются (I-2).
+/// FR-067: композиция над [`first_prose_paragraph_span`] (байт-паритет
+/// прежней формулировки — тестом); диапазон — для супрессии дубликата
+/// абзаца в теле (этап F).
 pub fn first_prose_paragraph(text: &str) -> Option<String> {
-    let mut paragraph: Vec<&str> = Vec::new();
-    let mut in_fence = false;
-    let flush = |paragraph: &mut Vec<&str>| -> Option<String> {
-        if paragraph.is_empty() {
-            return None;
-        }
-        let all_prose = paragraph
-            .iter()
-            .all(|line| line_kind(line) == NumiLineKind::Prose);
-        let joined = paragraph.join(" ").trim().to_owned();
-        paragraph.clear();
-        if all_prose && !joined.is_empty() {
-            Some(joined)
-        } else {
-            None
-        }
-    };
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-            // Фенс открывает/закрывает абзац — код описанием не является
-            if let Some(found) = flush(&mut paragraph) {
-                return Some(found);
-            }
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        if line.trim().is_empty() {
-            if let Some(found) = flush(&mut paragraph) {
-                return Some(found);
-            }
-            continue;
-        }
-        paragraph.push(line);
-    }
-    flush(&mut paragraph)
+    let (start, end) = first_prose_paragraph_span(text)?;
+    Some(
+        text.lines()
+            .skip(start)
+            .take(end - start)
+            .collect::<Vec<&str>>()
+            .join(" ")
+            .trim()
+            .to_owned(),
+    )
 }
 
 // --- Тесты (верификационный список FR-013 + регрессии грамматики) ---
@@ -3093,5 +3120,49 @@ mod tests {
         assert_eq!(first_prose_paragraph("800 rps\n= 800\n"), None);
         assert_eq!(first_prose_paragraph(""), None);
         assert_eq!(first_prose_paragraph("```\nкод\n```\n"), None);
+    }
+
+    /// FR-067 (этап F): диапазон абзаца — [start, end) по строкам текста;
+    /// склейка диапазона даёт байт-паритет с first_prose_paragraph.
+    #[test]
+    fn first_prose_paragraph_span_matches_paragraph() {
+        let text = "Нода считает нагрузку.\nВторая строка.\n\n800 rps\n\nЕщё проза.";
+        assert_eq!(first_prose_paragraph_span(text), Some((0, 2)));
+        let joined = text
+            .lines()
+            .skip(0)
+            .take(2)
+            .collect::<Vec<&str>>()
+            .join(" ")
+            .trim()
+            .to_owned();
+        assert_eq!(first_prose_paragraph(text).as_deref(), Some(joined.as_str()));
+        // Абзац после формул — индексы считаются от начала текста
+        let text = "rps = 800\n\nэто описание системы\nв две строки\n\n800 * 2";
+        assert_eq!(first_prose_paragraph_span(text), Some((2, 4)));
+        assert_eq!(first_prose_paragraph(text).as_deref(), Some("это описание системы в две строки"));
+    }
+
+    /// FR-067: прогон с любой не-прозой не qualifies — диапазон ищется
+    /// дальше (границы прогонов те же, что у first_prose_paragraph).
+    #[test]
+    fn first_prose_paragraph_span_skips_mixed_run() {
+        let text = "заметка\n42 ms\n\nчистый абзац";
+        assert_eq!(first_prose_paragraph_span(text), Some((3, 4)));
+        // Присваивание внутри прогона — тоже не проза
+        let text = "вход = 800\nи снова проза";
+        assert_eq!(first_prose_paragraph_span(text), None);
+    }
+
+    /// FR-067: фенс обрывает прогон с обеих сторон; абзац у конца текста
+    /// (без пустой строки) закрывается концом строк.
+    #[test]
+    fn first_prose_paragraph_span_fence_and_eof() {
+        let text = "```\ncode = 1\n```\n\nабзац у фенса";
+        assert_eq!(first_prose_paragraph_span(text), Some((4, 5)));
+        let text = "x = 1\n\nхвост без пустой строки\nвторой ряд";
+        assert_eq!(first_prose_paragraph_span(text), Some((2, 4)));
+        assert_eq!(first_prose_paragraph_span("rps = 800"), None);
+        assert_eq!(first_prose_paragraph_span(""), None);
     }
 }
