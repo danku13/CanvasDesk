@@ -1,0 +1,8 @@
+# CanvasDesk FR-068 W0 — perf baseline reflow (crates/canvas-ui/tests/perf_baseline.rs)
+# Граф: viewport 1280×800 → constrain/stack (stage 1200×760) → pad(16) → Column(10) →
+# 5×Row Fit + 2×Row Wrap + 2×Row SqueezeTail (по 100 Child) + grid_cells 10×10 = РОВНО 1000 листовых rect'ов за reflow;
+# размеры детерминированы формулами от индекса (без RNG). Контейнерные rect'ы строк в 1000 не входят.
+# Метрика: медиана 200 reflow-прогонов после 20 прогревочных, μs; профиль cargo test (debug).
+# Baseline МАШИННО-ЗАВИСИМ — референс dev-машины; сравнение: регрессия > 20% — fail, улучшение > 20% — warn (§8 FR-068).
+# Дата записи: 2026-09-24
+median_us=45.121
