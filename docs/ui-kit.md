@@ -126,6 +126,27 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
   скрывает нижний») — не состояние линта: канонические состояния не комбинируют
   фичи; реальные коллизии (хоткеи × полоса палитры, модаль настроек × полоса)
   найдены и устранены на U5 — см. историю PRD-0009.
+- **G4+ на уровне крейта (FR-068 W0, `canvas-ui/tests/g4_lint.rs`, исполняется `cargo test -p canvas-ui`)**:
+  5 канонических сцен (main canvas + whatif-бар, palette dropdown, explain modal,
+  search overlay, settings panel) × 3 окна × RU/EN = 30 прогонов: каждый видимый
+  элемент пересекает своего parent (корень — viewport), элементы L4+ (Popups и
+  выше) пересекают viewport, 0 пересечений интерактивных rect'ов одной полосы
+  (`overlaps_within_layer`), hit-rect'ы во вьюпорте. Ширины — реальные
+  (TextMeasurer), поэтому язык влияет на геометрию. Число прогонов залочено
+  тестом `lint_covers_30_scenarios` (30).
+- **Snapshot-тесты Painter.items (FR-068 W0, `canvas-ui/tests/snapshot.rs`)**:
+  60 эталонов — 10 kit-компонентов (Panel/Button/IconButton/Dropdown/Chip/Toast/
+  Tooltip/Modal/TextField/Switch) × Normal/Hovered/Disabled × RU/EN;
+  `Painter.items()` → нормализованный дамп (округление до целого ui px,
+  сортировка по `(x,y,w,h,type)`, цвета вне дампа — слоты темы). Эталоны —
+  `canvas-ui/tests/snapshot/*.txt`; сравнение точное строковое; изменение —
+  осознанный PR с diff (§9 Контракт-9 FR-068). Регенерация:
+  `CANVAS_UI_UPDATE_SNAPSHOTS=1 cargo test -p canvas-ui --test snapshot`.
+- **Perf baseline (FR-068 W0, `canvas-ui/tests/perf_baseline.rs`, `#[ignore]`)**:
+  reflow синтетического графа из 1000 узлов (Fit/flex/Wrap/SqueezeTail/grid_cells)
+  — медиана 200 итераций, гейт < 1 мс (§Контракт-8 FR-068), регрессия > 20%
+  к `tests/perf_baseline.txt` — fail. Baseline машинно-зависим (референс dev-машины);
+  обновление — `CANVAS_UI_UPDATE_PERF=1 cargo test -p canvas-ui --test perf_baseline -- --ignored`.
 - **Scissor-политика рендера (FR-056, F-5)**: каждая полоса `ScreenBand`
   несёт клип `UiRect` (лог. px из `SurfaceFrame.clip` кадра реестра);
   рендер исполняет его scissor-бакетом полосы (один `set_scissor_rect`
