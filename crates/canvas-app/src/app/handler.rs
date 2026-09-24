@@ -225,13 +225,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // верх по центру, ненавязчивый (та же видимость, что у hit-rect)
                 if self.autolink_badge_visible() {
                     let palette = self.effective_palette();
-                    let camera = &self.camera;
                     let badge_viewport = self.viewport_logical();
                     let badge = crate::autolink_ui::badge_rect(badge_viewport);
                     let mut badge_quads = Vec::with_capacity(2);
-                    badge_quads.push(screen_rect_quad(
-                        camera,
-                        badge_viewport,
+                    // Правка дрейфа 2026-09-25: квад полосы — сырые screen-px (единственный
+                    // screen→world делает рендер; бейдж не едет с камерой)
+                    badge_quads.push(crate::app::band_rect_quad_pub(
                         badge,
                         palette.palette_chip_fill,
                         palette.accent,
@@ -254,12 +253,10 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.coverage_indicator_visible() {
                     if let Some(percent) = self.coverage_percent() {
                         let palette = self.effective_palette();
-                        let camera = &self.camera;
                         let cov_viewport = self.viewport_logical();
                         let chip = [16.0, cov_viewport[1] - 44.0, 132.0, 26.0];
-                        let cov_quads = vec![screen_rect_quad(
-                            camera,
-                            cov_viewport,
+                        // Правка дрейфа 2026-09-25: квад полосы — сырые screen-px (как у бейджа)
+                        let cov_quads = vec![crate::app::band_rect_quad_pub(
                             chip,
                             palette.palette_chip_fill,
                             palette.palette_border,
@@ -699,7 +696,6 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.debug_overlay {
                     let ui_frame = ui_registry::build_frame(self);
                     let (dbg_instances, dbg_texts) = crate::debug_overlay::build(
-                        &self.camera,
                         self.viewport_logical(),
                         self.cursor,
                         &ui_frame,

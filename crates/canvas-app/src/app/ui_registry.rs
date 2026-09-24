@@ -1386,6 +1386,87 @@ mod tests {
         }
     }
 
+    /// Регресс дрейфа панелей (правка 2026-09-25): квады полос админпанели — СЫРЫЕ
+    /// screen-px, совпадающие с hit-раскладкой реестра при ЛЮБОЙ камере.
+    /// Прежняя двойная конверсия (KitDraw screen→world + рендер screen→world)
+    /// сдвигала квад на `P+(s−V/2)/z` относительно текстов/hit-rect'ов —
+    /// панель «разъезжалась» при панорамировании канваса.
+    #[test]
+    fn admin_overlay_quads_are_raw_screen_space() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.test_viewport = Some([1280.0_f32, 800.0]);
+        // Ненулевые пан/зум — квад-затемнение обязан остаться в origin
+        // вьюпорта (сырой px), а не уехать в world-координаты
+        app.camera.set_zoom(1.7);
+        app.camera.pan([137.0, -64.0]);
+        app.admin_open = true;
+        let (quads, _) = app.admin_panel_overlay();
+        assert!(!quads.is_empty(), "админпанель рисует затемнение + панель");
+        // Затемнение: сырой px — origin (0,0), размер = вьюпорт
+        assert_eq!(quads[0].pos, [0.0, 0.0]);
+        assert_eq!(quads[0].size, [1280.0, 800.0]);
+        // Панель: совпадает с hit-раскладкой реестра (одна геометрия)
+        let lay = app.admin_layout_at([1280.0, 800.0]);
+        assert_eq!(quads[1].pos, [lay.panel.x, lay.panel.y]);
+        assert_eq!(quads[1].size, [lay.panel.w, lay.panel.h]);
+    }
+
+    /// Регресс дрейфа панелей (правка 2026-09-25): витрина кита — та же конвенция
+    /// полос (сырые screen-px) при пан/зуме камеры.
+    #[test]
+    fn kit_gallery_overlay_quads_are_raw_screen_space() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.test_viewport = Some([1280.0_f32, 800.0]);
+        app.camera.set_zoom(1.7);
+        app.camera.pan([137.0, -64.0]);
+        app.kit_gallery_open = true;
+        let (quads, _) = app.kit_gallery_overlay();
+        assert!(!quads.is_empty(), "витрина рисует затемнение + панель");
+        assert_eq!(quads[0].pos, [0.0, 0.0]);
+        assert_eq!(quads[0].size, [1280.0, 800.0]);
+    }
+
+    /// Регресс дрейфа панелей (правка 2026-09-25): диалог ревью автосвязи живёт в
+    /// СТАДИЙНОМ проходе (world-конвенция) — квад затемнения обязан быть
+    /// сконвертирован screen→world ЗДЕСЬ (иначе рендер рисует его как world:
+    /// диалог «приклеивается» к канвасу и разъезжается со screen-текстами).
+    #[test]
+    fn autolink_review_quads_are_world_space() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.test_viewport = Some([1280.0_f32, 800.0]);
+        app.camera.set_zoom(1.7);
+        app.camera.pan([137.0, -64.0]);
+        let mut canvas = canvas_core::Canvas::default();
+        canvas
+            .nodes
+            .push(canvas_core::Node::text("A", "Исток", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(canvas_core::Node::text("B", "Приёмник", 300.0, 0.0));
+        let proposal = canvas_core::AutolinkProposal {
+            from_node: "A".into(),
+            from_line: 1,
+            to_node: "B".into(),
+            param: "rate".into(),
+            percent: 100,
+            unit_match: None,
+        };
+        app.autolink_review = Some(crate::autolink_ui::Review::build(&canvas, vec![proposal]));
+        let viewport = [1280.0_f32, 800.0];
+        let (insts, _) = app.autolink_frame(viewport);
+        assert!(!insts.is_empty(), "диалог рисует затемнение + окно");
+        // Затемнение: квад в WORLD-координатах (screen_to_world от (0,0))
+        assert_eq!(
+            insts[0].pos,
+            app.camera.screen_to_world([0.0, 0.0], viewport)
+        );
+        // Размер поделен на зум (константный экранный размер)
+        assert_eq!(insts[0].size, [1280.0 / 1.7, 800.0 / 1.7]);
+    }
+
     /// G6: DebugOverlay показывает рамки/подписи слоёв и имя под курсором.
     /// Модель чистая (кадр + геометрия) — headless.
     #[test]
@@ -1407,8 +1488,7 @@ mod tests {
             .expect("✕ витрины")
             .rect;
         let cursor = [close.x + close.w / 2.0, close.y + close.h / 2.0];
-        let (quads, texts) =
-            crate::debug_overlay::build(&app.camera, [1280.0, 800.0], cursor, &frame);
+        let (quads, texts) = crate::debug_overlay::build([1280.0, 800.0], cursor, &frame);
         // Рамка на каждый hit-rect кадра + плашка под курсором
         let rect_count: usize = frame.surfaces.iter().map(|s| s.hit_rects.len()).sum();
         assert!(
@@ -1454,8 +1534,7 @@ mod tests {
         frame.surfaces.push(b);
         assert_eq!(frame.overlaps_within_layer().len(), 1);
 
-        let (quads, texts) =
-            crate::debug_overlay::build(&app.camera, [1280.0, 800.0], [10.0, 10.0], &frame);
+        let (quads, texts) = crate::debug_overlay::build([1280.0, 800.0], [10.0, 10.0], &frame);
         // 2 рамки rect'ов + 1 плашка пересечения
         assert_eq!(quads.len(), 3, "рамки + пересечение: {quads:?}");
         assert!(texts

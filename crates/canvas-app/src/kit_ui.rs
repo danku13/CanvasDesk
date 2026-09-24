@@ -26,7 +26,6 @@
 //! (FR-057) вместо deprecated-делегатов.
 
 use canvas_core::Language;
-use canvas_render::camera::Vec2;
 use canvas_render::cards::CardInstance;
 use canvas_render::text::{measure_font_system, TextAlign, SANS_FAMILY};
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
@@ -1162,8 +1161,9 @@ pub fn color4(c: [f32; 4]) -> canvas_render::Color {
     )
 }
 
-/// Адаптер: модель кита → квад/текст кадра (screen-rect → world-инстанс —
-/// тот же паттерн `screen_rect_quad` app.rs; camera/viewport даёт App).
+/// Адаптер: модель кита → квад/текст ПОЛОСЫ кадра (правка дрейфа 2026-09-25: сырые
+/// логические px — конвенция полос; единственный screen→world делает
+/// рендер — `renderer::screen_instance_to_world`).
 ///
 /// FR-057: тонкая обёртка над [`Painter`] (`canvas_ui::paint`) — модель items
 /// собирается в крейте, конвертация в `CardInstance`/`OwnedText` — здесь
@@ -1171,9 +1171,14 @@ pub fn color4(c: [f32; 4]) -> canvas_render::Color {
 /// реализацией: каждый вызов делегирует Painter'у и сразу конвертирует
 /// добавленный item — quads/texts актуальны для app.rs после каждого вызова
 /// (поля читаются напрямую — контракт сохранён дословно).
-pub(crate) struct KitDraw<'a> {
-    camera: &'a canvas_render::Camera,
-    viewport: Vec2,
+///
+/// Правка дрейфа 2026-09-25: раньше квад здесь конвертировался screen→world
+/// (`screen_rect_quad_pub`), а рендер полос делал это ВТОРОЙ раз — квады
+/// поверхностей на KitDraw (витрина кита/админпанель/DebugOverlay/бейдж
+/// автосвязи/чип покрытия) уезжали с камерой относительно screen-текстов
+/// той же полосы («разъезжается при движении канваса»). Теперь квад —
+/// сырой px полосы, как у не-дрейфующих поверхностей (settings/docs/…).
+pub(crate) struct KitDraw {
     /// Журнал items Painter'а (модель крейта; порядок = draw-порядок).
     painter: Painter,
     pub quads: Vec<CardInstance>,
@@ -1191,11 +1196,9 @@ pub struct OwnedText {
     pub align: TextAlign,
 }
 
-impl<'a> KitDraw<'a> {
-    pub fn new(camera: &'a canvas_render::Camera, viewport: Vec2) -> Self {
+impl KitDraw {
+    pub fn new() -> Self {
         Self {
-            camera,
-            viewport,
             painter: Painter::new(),
             quads: Vec::new(),
             texts: Vec::new(),
@@ -1259,7 +1262,9 @@ impl<'a> KitDraw<'a> {
     }
 
     /// Конвертация последнего Rect-item'а Painter'а в квад кадра
-    /// (screen→world — тот же `screen_rect_quad_pub`, что и до FR-057).
+    /// (правка дрейфа 2026-09-25: сырые screen-px — конвенция полос; единственный
+    /// screen→world делает рендер — двойная конверсия сюда не вернётся,
+    /// см. `band_rect_quad_pub` в app.rs).
     fn flush_last_quad(&mut self) {
         if let Some(PaintItem::Rect {
             rect,
@@ -1268,9 +1273,7 @@ impl<'a> KitDraw<'a> {
             radius,
         }) = self.painter.items().last()
         {
-            let quad = crate::app::screen_rect_quad_pub(
-                self.camera,
-                self.viewport,
+            let quad = crate::app::band_rect_quad_pub(
                 [rect.x, rect.y, rect.w, rect.h],
                 *fill,
                 *border,
@@ -1375,14 +1378,11 @@ mod tests {
     use canvas_ui::kit::{ButtonVariant, ControlStyle};
 
     /// FR-057: эквивалентность до/после делегирования — KitDraw через
-    /// Painter даёт те же quads/texts, что прямой путь (прежняя реализация:
-    /// screen_rect_quad_pub + OwnedText вручную) на фиксированном примере —
-    /// 0 визуального скачка (критерий приёмки FR-057).
+    /// Painter даёт те же quads/texts, что прямой путь Painter-пути полос
+    /// (правка дрейфа 2026-09-25: band_rect_quad_pub + OwnedText вручную) на фиксированном
+    /// примере — 0 визуального скачка (критерий приёмки FR-057).
     #[test]
     fn kitdraw_delegation_matches_direct_path() {
-        let camera = canvas_render::Camera::default();
-        let viewport: Vec2 = [800.0, 600.0];
-
         let fill = [0.2, 0.4, 0.6, 1.0];
         let border = [0.1, 0.2, 0.3, 0.9];
         let radius = 4.0;
@@ -1395,28 +1395,25 @@ mod tests {
         let area_c = UiRect::new(10.0, 20.0, 120.0, 30.0);
         let area_l = UiRect::new(4.0, 8.0, 80.0, 16.0);
 
-        // НОВАЯ реализация (KitDraw → Painter → конвертация)
-        let mut d = KitDraw::new(&camera, viewport);
+        // НОВАЯ реализация (KitDraw → Painter → сырые px полосы)
+        let mut d = KitDraw::new();
         d.rect(UiRect::new(1.0, 2.0, 3.0, 4.0), fill, border, radius);
         d.control(UiRect::new(5.0, 6.0, 7.0, 8.0), &style);
         d.label_center(area_c, "Центр", style.text, 13.0);
         d.label_left(area_l, "Лево", style.text, 11.0);
 
-        // ЭТАЛОН — прямой путь прежней реализации (до рефакторинга)
+        // ЭТАЛОН — прямой путь Painter-пути полос (support::paint_items_to_band:
+        // сырые логические px — единственный screen→world делает рендер)
         let mut quads = Vec::new();
         let mut texts = Vec::new();
-        quads.push(crate::app::screen_rect_quad_pub(
-            &camera,
-            viewport,
+        quads.push(crate::app::band_rect_quad_pub(
             [1.0, 2.0, 3.0, 4.0],
             fill,
             border,
             radius,
         ));
         // control = rect со слотами ControlStyle
-        quads.push(crate::app::screen_rect_quad_pub(
-            &camera,
-            viewport,
+        quads.push(crate::app::band_rect_quad_pub(
             [5.0, 6.0, 7.0, 8.0],
             style.fill,
             style.border,

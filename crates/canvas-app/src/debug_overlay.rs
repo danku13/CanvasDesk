@@ -58,7 +58,6 @@ const CURSOR_LABEL: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 /// чистые параметры (камера/вьюпорт/курсор/кадр): модель без App —
 /// headless-тестируема (G6).
 pub(crate) fn build(
-    camera: &canvas_render::Camera,
     viewport: Vec2,
     cursor_screen: [f32; 2],
     frame: &UiFrame,
@@ -74,16 +73,14 @@ pub(crate) fn build(
     let mut m = TextMeasurer::new();
     let mut fs = measure_font_system();
 
+    // правка дрейфа 2026-09-25: квад полосы — сырые логические px (единственный screen→world
+    // делает рендер; двойная конверсия = дрейф рамок при панорамировании)
     let push_quad = |quads: &mut Vec<CardInstance>,
-                     camera: &canvas_render::Camera,
-                     vp: Vec2,
                      rect: [f32; 4],
                      fill: [f32; 4],
                      border: [f32; 4],
                      radius: f32| {
-        quads.push(crate::app::screen_rect_quad_pub(
-            camera, vp, rect, fill, border, radius,
-        ));
+        quads.push(crate::app::band_rect_quad_pub(rect, fill, border, radius));
     };
     let push_label = |texts: &mut Vec<OwnedScreenText>,
                       m: &mut TextMeasurer,
@@ -105,8 +102,6 @@ pub(crate) fn build(
         });
     };
 
-    let vp: Vec2 = viewport;
-
     // 1. Рамки + подписи поверхностей (кадр в визуальном порядке —
     //    подписи верхних поверхностей рисуются последними и читаются
     //    поверх нижних)
@@ -118,8 +113,6 @@ pub(crate) fn build(
             // Рамка: прозрачная заливка + цветная рамка (2px — params)
             push_quad(
                 &mut quads,
-                camera,
-                vp,
                 [r.x, r.y, r.w, r.h],
                 [0.0, 0.0, 0.0, 0.0],
                 color,
@@ -171,8 +164,6 @@ pub(crate) fn build(
         let ly = (cursor_screen[1] + 14.0).min((viewport[1] - 22.0).max(0.0));
         push_quad(
             &mut quads,
-            camera,
-            vp,
             [lx, ly, 232.0, 18.0],
             [0.0, 0.0, 0.0, 0.75],
             LAYER_COLORS[8],
@@ -195,8 +186,6 @@ pub(crate) fn build(
         let at = overlap.at;
         push_quad(
             &mut quads,
-            camera,
-            vp,
             [at.x, at.y, at.w, at.h],
             INTERSECTION_FILL,
             INTERSECTION_BORDER,

@@ -5904,3 +5904,33 @@ Stage Summary:
 - **Приёмка:** `cargo test -p canvas-app` — 412 passed / 0 failed (включая 16
   admin-тестов FR-070); clippy `-D warnings` чисто; `cargo fmt -p canvas-app`
   применён. canvas-core/render/ui не тронуты — wasm-гейт не затронут.
+
+## 2026-09-25 — fix(ui): конвенция координат полос — панели не дрейфуют при панорамировании (директива владельца)
+
+- **Агент:** Super Z (сессия web-f29848ef; жалоба владельца: «UI-консоль и панель
+  связей разъезжаются при движении канваса — панели должны открываться выше канваса»).
+- **Диагноз (две зеркальные ошибки конвенции):**
+  1. KitDraw-поверхности (админпанель FR-070, витрина кита FR-055, DebugOverlay,
+     бейдж автосвязи, чип покрытия): квад конвертировался screen→world в
+     `KitDraw::flush_last_quad` (`screen_rect_quad_pub`), а рендер полос делал
+     это ВТОРОЙ раз (`renderer::screen_instance_to_world`) → квад уезжал с
+     камерой (`P+(s−V/2)/z`), screen-тексты полосы оставались — разъезд при
+     пане/зуме. Отмечено ещё в worklog FR-059 (стр. 5269) как «выравнивание
+     конвенций — отдельное решение владельца»; FR-070 воспроизвёл паттерн витрины.
+  2. Диалог ревью автосвязи (панель связей): регрессия a18879b (FR-060) —
+     `autolink_frame` собирал СЫРЫЕ screen-квады (`paint_items_to_band`), но
+     пуш drove в `stage_instances` (world-проход БЕЗ конверсии в рендере) →
+     диалог «приклеивался» к канвасу, тексты стояли.
+- **Фикс (единая конвенция: полоса = сырые screen-px; stage = world):**
+  - `KitDraw` без камеры; `flush_last_quad` → новый `band_rect_quad_pub`
+    (app.rs) — сырые логические px; комментарий-контракт против регресса;
+  - debug_overlay/bейдж/чип — сырые квады (камера из сигнатур удалена);
+  - `autolink_frame` → `paint_items_to_stage` (screen→world на сборке, как
+    explain_window/stage_frame);
+  - `screen_rect_quad_pub` удалён (стал ненужным); `screen_rect_quad` (support)
+    остался только для stage-пути explain/stage.
+- **Регресс-тесты (ui_registry):** admin/kit_gallery — quads[0] затемнение в
+  origin (0,0) и quads[1] панель == hit-раскладке реестра при пан/зуме 1.7/+137/−64;
+  autolink — quads[0] == screen_to_world((0,0)) и размер /zoom (world-конвенция).
+- **Приёмка:** cargo test -p canvas-app 415 passed / 0 failed (+3 регресса),
+  clippy -D warnings чисто, fmt чисто. canvas-core/render/ui не тронуты.
