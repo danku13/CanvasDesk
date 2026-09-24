@@ -978,3 +978,26 @@ users/arpu/rent/other/npl; оракул 810 000 − 430 − 97 200 = 712 370.
 | FR-063.9 | Обратная совместимость: без фичи `stats` все 10 stats-имён → `EvalError::UnknownFunction` (no panic, no abort), встроенные/queueing/финансовые функции штатны (`expr_stats_compat.rs`, зеркальный `cfg(not(feature))`) | ✅ |
 | FR-063.10 | Доки: `user-docs/calculations.md` — раздел «Вероятностные оценки» (синтаксис, единицы, детерминизм, кап выборки); `docs/DEPENDENCIES.md` §3→§2 (statrs/rand/rand_chacha/rand_distr с версиями и лицензиями); `docs/SPEC.md` §3 — строка L2-статистики; THIRD-PARTY-NOTICES перегенерирован (попутно починен about.toml `[private] ignore` — предсуществующий баг генерации с d6fb7df) | ✅ |
 | FR-063.11 | Гейты: `cargo test -p canvas-core --features stats` 390+22/0 ✓; `cargo test -p canvas-core` 384+2/0 ✓; `cargo test -p canvas-app --lib` 342/0 ✓ (потребитель каталога подсказок); `scripts/wasm_gate.sh --check` ✓; `cargo deny check` ✓; `cargo fmt --check` ✓; `cargo clippy --features stats -D warnings` ✓; находка зафиксирована в Changelog FR-063: getrandom 0.2 (транзитив statrs→rand(std)) не компилируется под wasm при включённой фиче — гейты (default-фичи) не заданы, решение по web-сборке с stats — за владельцем | ✅ |
+
+## FR-064 — Сценарный воркер: вынос пересчёта с UI-треда (double buffer) + FR-017 v2 freeze/сравнение (M3/S2) — выполнено (2026-09-24)
+
+Приёмка FR-064 (по документу `docs/change-requests/fr-064-scenario-worker.md`;
+коммиты P1 → P2 → docs, ветка `feature/fr-064-scenario-worker`). Тесты:
+`crates/canvas-scene/tests/worker_smoke.rs` (6), полный `cargo test
+--workspace`. Ручной части подлежит п. FR-064.10 (60 fps на пакетах
+сценариев — визуальная проверка владельца).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-064.1 | P1: воркер `canvas-scene/src/worker.rs` — `std::thread` + `mpsc` (desktop-only, `cfg(not(target_arch = "wasm32"))`), задание `(Arc<Canvas>, WhatIfOverrides)` → `Result<FlowSolutions, CycleError>`; паника вычисления ловится `catch_unwind` (воркер жив); spawn в `main()` по образцу `McpPipeServer::spawn`/`ThumbService::spawn` — wake через `EventLoopProxy<AppEvent>` | ✅ |
+| FR-064.2 | Double buffer `Arc<RwLock<FlowSolutions>>` (`flow_baseline`/`flow_active`), без `arc_swap` (архдок §5.2 «без новых зависимостей»); публикация снимков — конвейер пересчёта атомарно с выводкой O(N) (torn-frame исключён); читатели (рендер/UI/MCP) — через `canvas_scene::read_flow` | ✅ |
+| FR-064.3 | `recompute_flow` — единственный редактор (план §5.4): на воркер уходят ТОЛЬКО прогоны `propagate_with_lines` (сигнатура не тронута — контракт §5.1), выводка O(N) (`expr_results`, diff волны, `analyze`, `expr_line_results`, `param_spills`, `auto_rows`, `unmapped_edges`, `bundles`) — на UI-треде в `complete_flow_recompute`/`apply_flow_pair` | ✅ |
+| FR-064.4 | Поколения запросов: правка во время пересчёта перезаказывает прогон, устаревшие ответы отбрасываются (тест `stale_generation_is_discarded` — итог по последней правке) | ✅ |
+| FR-064.5 | Live-инвариант: правка → результат ≤ 2 кадров (smoke-тест `worker_delivers_result_within_two_frames`); таймаут воркера 3 с → sync-фолбэк + `warn` (`flow_worker_tick` в `about_to_wait`) | ✅ |
+| FR-064.6 | Sync-фолбэк + warn (правило AGENTS «фолбэк + warn»): отказ/паника воркера → синхронный пересчёт, результат побитово идентичен (тесты `worker_panic_falls_back_to_sync`, `worker_result_matches_sync_bitwise`); на wasm — sync-путь штатно (модуль воркера не собирается) | ✅ |
+| FR-064.7 | P2: freeze — `FrozenScenario` (снимок за `Arc<FlowSolutions>`), `freeze_scenario` (детерминированный пересчёт с активными подменами); персистентность имён `canvasdesk.whatif.frozen` (соседний `scenarios` сохраняется, пустой ключ удаляется — round-trip чистый, тест `frozen_names_round_trip`); восстановление при загрузке — `SceneState::restore_frozen` | ✅ |
+| FR-064.8 | P2: сравнение — `compare_scenarios` (диф `lines`+`outputs` в ядре): таблица «переменная \| База \| С1 \| С2» — union построчных переменных + изменившиеся узловые итоги (дельты downstream, формат `whatif_delta_str`); e2e в духе эталона ADR-0006 №2: смена `rps` → дельты cdn/pool, freeze 2 сценариев (тест `freeze_two_scenarios_and_compare_deltas`); pinned-семантика: правка канваса не двигает снимок | ✅ |
+| FR-064.9 | UI: кнопка «❄ Заморозить/Разморозить» в баре FR-017 (лейбл по состоянию, измерение той же строки, что рисуется — FR-053), маркер «❄» в чипе замороженного сценария и шапке колонки таблицы; i18n RU/EN (5 ключей) | ✅ |
+| FR-064.10 | Демо-критерий владельца: 20 прогонов сценарной сетки на воркере — UI 60 fps; freeze 2 сценариев → таблица с дельтами; kill воркера → sync-фолбэк + toast-warn, числа идентичны | ☐ ручная |
+| FR-064.11 | MCP не задет: инструменты `whatif_*` (9 шт, FR-017 v1) без изменений, новые не добавлены (skills/ не требует обновления); `whatif_delta_rows` читает double buffer через read-гарды | ✅ |
+| FR-064.12 | Гейты: `cargo fmt --check` ✓; `cargo clippy --workspace -D warnings` ✓; `cargo test --workspace` ✓ (canvas-scene 97+6, canvas-app 342+, canvas-core 385+43+…); `scripts/wasm_gate.sh --check` ✓; `scripts/mcp_wasm_gate.sh --check` ✓; `cargo deny check` ✓ (новых зависимостей нет — только std) | ✅ |
