@@ -1,0 +1,7 @@
+rect x=0 y=0 w=320 h=240
+rect x=20 y=50 w=280 h=140
+text x=32 y=62 w=256 h=14 text="Настройки"
+rect x=45 y=148 w=95 h=30
+text x=45 y=148 w=95 h=30 text="Применить"
+rect x=192 y=148 w=71 h=30
+text x=192 y=148 w=71 h=30 text="Отмена"

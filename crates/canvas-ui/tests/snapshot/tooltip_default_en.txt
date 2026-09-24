@@ -1,0 +1,2 @@
+rect x=224 y=174 w=41 h=18
+text x=224 y=174 w=41 h=18 text="Hint"
