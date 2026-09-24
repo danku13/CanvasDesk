@@ -570,14 +570,16 @@ fn branch_group(index: usize, collapsed: bool, language: Language) -> PaletteGro
     }
 }
 
-/// Группы для выделенной связи: [Стиль][Толщина][Цвет][Поток][Порты]
-/// + (если `bundle_weight` ≥ 2) [Пучок] с действием «Удалить пучок»
-/// (все N рёбер сразу). ЛКМ по пучку показывает палитру как для
-/// одиночного ребра; ПКМ открывает main stage (детализация с веером и
-/// удалением отдельного ребра через Del). Правка FR-042, сессия
-/// 2026-09-25: ранее ПКМ по пучку также открывал main stage, а ЛКМ —
-/// тоже (перехват), что блокировало палитру; теперь ЛКМ — палитра,
-/// ПКМ — stage (AC-3.1 сохранён для ПКМ, ЛКМ — для правки).
+/// Группы для выделенной связи: [Стиль][Толщина][Цвет][Поток][Порты];
+/// при `bundle_weight` ≥ 2 — ещё [Пучок] с действием «Удалить пучок»
+/// (все N рёбер сразу).
+///
+/// ЛКМ по пучку показывает палитру как для одиночного ребра; ПКМ
+/// открывает main stage (детализация с веером и удалением отдельного
+/// ребра через Del). Правка FR-042, сессия 2026-09-25: ранее ПКМ по
+/// пучку также открывал main stage, а ЛКМ — тоже (перехват), что
+/// блокировало палитру; теперь ЛКМ — палитра, ПКМ — stage (AC-3.1
+/// сохранён для ПКМ, ЛКМ — для правки).
 fn edge_groups(
     canvas: &Canvas,
     edge_index: usize,
@@ -2041,12 +2043,7 @@ mod tests {
     #[test]
     fn palette_groups_show_bundle_group_for_weight_ge_2() {
         let canvas = bundle_scene();
-        let groups = palette_groups(
-            &canvas,
-            &PaletteTarget::Edge(0),
-            Some(3),
-            Language::Ru,
-        );
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), Some(3), Language::Ru);
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -2072,12 +2069,7 @@ mod tests {
     fn palette_groups_no_bundle_group_for_single_edge() {
         let canvas = single_edge_scene();
         // weight = None — одиночное ребро (bundle_of_edge вернул None)
-        let groups = palette_groups(
-            &canvas,
-            &PaletteTarget::Edge(0),
-            None,
-            Language::Ru,
-        );
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), None, Language::Ru);
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -2085,12 +2077,7 @@ mod tests {
             "без пучка: БЕЗ группы «Пучок»"
         );
         // weight = Some(1) — пучок из одного ребра (не должно быть)
-        let groups = palette_groups(
-            &canvas,
-            &PaletteTarget::Edge(0),
-            Some(1),
-            Language::Ru,
-        );
+        let groups = palette_groups(&canvas, &PaletteTarget::Edge(0), Some(1), Language::Ru);
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -2106,10 +2093,7 @@ mod tests {
         let canvas = bundle_scene();
         let ru = palette_groups(&canvas, &PaletteTarget::Edge(0), Some(3), Language::Ru);
         let en = palette_groups(&canvas, &PaletteTarget::Edge(0), Some(3), Language::En);
-        let ru_bundle = ru
-            .iter()
-            .find(|g| g.label == "Пучок")
-            .expect("RU «Пучок»");
+        let ru_bundle = ru.iter().find(|g| g.label == "Пучок").expect("RU «Пучок»");
         let en_bundle = en
             .iter()
             .find(|g| g.label == "Bundle")

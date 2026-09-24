@@ -1007,6 +1007,16 @@ pub struct App {
     /// FR-055 (этап U4 PRD-0009): витрина кита открыта (поверхность
     /// kit_gallery, Modals/Block) — пункт «?» «О интерфейсе» (Q5-a).
     pub(crate) kit_gallery_open: bool,
+    /// FR-070: UI-админпанель открыта (поверхность admin_panel,
+    /// Modals/Block) — пункт «?» «UI-консоль».
+    pub(crate) admin_open: bool,
+    /// FR-070: активная секция сайдбара админпанели.
+    pub(crate) admin_section: crate::admin_ui::AdminSection,
+    /// FR-070: скролл демо-зоны админпанели.
+    admin_scroll: canvas_ui::kit::ScrollState,
+    /// FR-070: live-переопределение слотов палитры (None — палитра темы;
+    /// «Сброс»/смена темы очищают; сохранение в конфиг — вне рамок v1).
+    admin_palette_override: Option<canvas_ui::kit::KitPalette>,
     /// FR-055 (этап U4, F-10): DebugOverlay виден (тогл F9 / `?ui=debug`).
     pub(crate) debug_overlay: bool,
     /// FR-049: empty-state скрыт кнопкой «Пустой холст» до следующего
@@ -1263,6 +1273,9 @@ impl App {
             // FR-055 U4: витрина кита закрыта, DebugOverlay выключен
             // (в web включается параметром `?ui=debug` — url_params).
             kit_gallery_open: false,
+            admin_open: false,
+            admin_section: crate::admin_ui::AdminSection::Components,
+            admin_palette_override: None,
             debug_overlay: false,
             empty_state_dismissed: false,
             pending_scheme: None,
@@ -1317,6 +1330,7 @@ impl App {
             flow_map_open: false,
             flow_map_scroll: canvas_ui::kit::ScrollState::default(),
             kit_gallery_scroll: canvas_ui::kit::ScrollState::default(),
+            admin_scroll: canvas_ui::kit::ScrollState::default(),
             kit_gallery_focus: canvas_ui::keyboard::FocusRing::default(),
             stage_calc_vars_scroll: canvas_ui::kit::ScrollState::default(),
             stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),

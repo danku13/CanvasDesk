@@ -162,7 +162,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // (Modals/Block: pick через реестр, backdrop закрывает);
                 // взаимоисключима с галереей схем/empty-state (прежняя
                 // цепочка if/else сохранена — 0 дельт канонических состояний)
-                if self.kit_gallery_open {
+                // FR-070: админпанель — модаль поверх всего (Modals/Block);
+                // взаимоисключима с витриной кита/галереей схем
+                if self.admin_open {
+                    let (admin_instances, admin_texts) = self.admin_panel_overlay();
+                    screen_bands.push(UiLayer::Modals, admin_instances, admin_texts);
+                } else if self.kit_gallery_open {
                     let (kit_instances, kit_texts) = self.kit_gallery_overlay();
                     screen_bands.push(UiLayer::Modals, kit_instances, kit_texts);
                 } else if self.scheme_gallery.open {

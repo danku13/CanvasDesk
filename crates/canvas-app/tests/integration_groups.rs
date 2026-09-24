@@ -46,12 +46,14 @@ fn test_group_via_node_menu() {
 
     // Палитра выделения для ноды child-1 (индекс 1): группа «Действия»
     // содержит действие NodeGroup (старое текстовое меню заменено палитрой)
+    // FR-042 (правка пучков): bundle_weight — None (цель — ноды, не ребро)
     let groups = palette_groups(
         &canvas,
         &PaletteTarget::Nodes {
             primary: 1,
             selected: vec![1],
         },
+        None,
         canvas_core::Language::Ru,
     );
     let actions = groups

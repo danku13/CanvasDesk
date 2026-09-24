@@ -83,6 +83,9 @@ pub mod id {
     /// FR-055 (этап U4, F-8): витрина кита (L5, Block — мимо панели
     /// закрывается и глотает; вход — пункт «?» «О интерфейсе», Q5-a).
     pub const KIT_GALLERY: &str = "kit_gallery";
+    /// FR-070: UI-админпанель (L5, Block — мимо панели закрывается и
+    /// глотает; вход — пункт «?» «UI-консоль»).
+    pub const ADMIN: &str = "admin_panel";
     /// Empty-state карточка пустого канваса (L3, Capture — мимо карточки
     /// канвас жив, AC-1.1 FR-049).
     pub const EMPTY: &str = "empty";
@@ -113,6 +116,9 @@ pub enum KeyOwner {
     /// Витрина кита (FR-055 U4): Esc закрывает, прочие клавиши глотаются
     /// (модаль поверх канваса; интерактив — только кнопки шапки).
     KitGallery,
+    /// Админпанель (FR-070): Esc закрывает, прочие клавиши глотаются
+    /// (модаль; интерактив — шапка + сайдбар).
+    Admin,
     /// Клавиатура идёт в канвас-лестницу (прежнее поведение).
     Canvas,
 }
@@ -126,6 +132,8 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
         id::GALLERY => Some(KeyOwner::Gallery),
         // FR-055 U4: витрина кита — модаль (Esc закрывает, прочие глотаются)
         id::KIT_GALLERY => Some(KeyOwner::KitGallery),
+        // FR-070: админпанель — модаль (Esc закрывает, прочие глотаются)
+        id::ADMIN => Some(KeyOwner::Admin),
         id::EDITOR => Some(KeyOwner::Editor),
         id::SEARCH => Some(KeyOwner::Search),
         id::DIALOG => Some(KeyOwner::Dialog),
@@ -328,6 +336,14 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::KIT_GALLERY),
         );
     }
+    // FR-070: UI-админпанель — Modals/Block (мимо панели закрывается и
+    // глотает; вход — пункт «?» «UI-консоль»; клавиатура — только Esc).
+    if app.admin_open {
+        reg.add(
+            SurfaceDecl::new(id::ADMIN, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::ADMIN),
+        );
+    }
     if app.onboarding.is_some() {
         reg.add(
             SurfaceDecl::new(id::ONBOARDING, UiLayer::Modals, CapturePolicy::Block)
@@ -382,6 +398,7 @@ const VISUAL_ORDER: &[&str] = &[
     id::DOCS,
     id::GALLERY,
     id::KIT_GALLERY,
+    id::ADMIN,
     id::ONBOARDING,
     id::DIALOG,
     id::EXPLAIN,
@@ -702,6 +719,43 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 UiRect::new(close.x, close.y, close.w, close.h),
                 "kit-gallery-close",
             ));
+        }
+        // FR-070: админпанель — интерактивные зоны шапки (те же слоты, что
+        // у отрисовки) + пункты сайдбара; демо-контент — декоративный
+        id::ADMIN => {
+            let (theme, reset, close) = crate::admin_ui::admin_hit_slots(viewport);
+            surface.hit_rects.push(HitRect::interactive(
+                UiRect::new(theme.x, theme.y, theme.w, theme.h),
+                "admin-theme",
+            ));
+            surface.hit_rects.push(HitRect::interactive(
+                UiRect::new(reset.x, reset.y, reset.w, reset.h),
+                "admin-reset",
+            ));
+            surface.hit_rects.push(HitRect::interactive(
+                UiRect::new(close.x, close.y, close.w, close.h),
+                "admin-close",
+            ));
+            let admin_lay_frame = app.admin_layout_at([vw, vh]);
+            for (i, item) in admin_lay_frame.sidebar_items.iter().enumerate() {
+                surface.hit_rects.push(HitRect::interactive(
+                    UiRect::new(item.x, item.y, item.w, item.h),
+                    format!("admin-section-{i}"),
+                ));
+            }
+            // Свотчи слотов палитры (live-правка, FR-070) — интерактивные
+            let admin_lay = app.admin_layout_at([vw, vh]);
+            if let Some(tokens) = &admin_lay.tokens {
+                for group in &tokens.groups {
+                    for row in &group.rows {
+                        if let (Some(i), Some(swatch)) = (row.slot_index, row.swatch) {
+                            surface
+                                .hit_rects
+                                .push(HitRect::interactive(swatch, format!("admin-token-{i}")));
+                        }
+                    }
+                }
+            }
         }
         id::ONBOARDING => {
             if let Some(state) = &app.onboarding {
@@ -1229,6 +1283,107 @@ mod tests {
         }
         // Esc-стек: витрина — верх (открыта последней из модалей)
         assert_eq!(key_owner(&reg), KeyOwner::KitGallery);
+    }
+
+    /// FR-070: админпанель — Block-модаль; pick по кнопкам шапки и пунктам
+    /// сайдбара даёт Element поверхности admin_panel; Esc-владелец — Admin.
+    #[test]
+    fn admin_panel_surface_pickable() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.admin_open = true;
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::ADMIN)
+            .expect("admin_panel в реестре");
+        assert_eq!(decl.layer, UiLayer::Modals);
+        assert_eq!(decl.capture, CapturePolicy::Block);
+
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::ADMIN)
+            .expect("admin_panel в кадре");
+        let elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        for expected in [
+            "admin-theme",
+            "admin-reset",
+            "admin-close",
+            "admin-section-0",
+            "admin-section-1",
+            "admin-section-2",
+            "admin-section-3",
+        ] {
+            assert!(elements.contains(&expected), "нет hit-rect {expected}");
+        }
+
+        // Курсор в центр пункта сайдбара «Токены» (индекс 3) → Element
+        let tokens = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "admin-section-3")
+            .expect("пункт сайдбара");
+        let c = UiPoint::new(
+            tokens.rect.x + tokens.rect.w / 2.0,
+            tokens.rect.y + tokens.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::ADMIN);
+                assert_eq!(rect.element, "admin-section-3");
+            }
+            other => panic!("пункт сайдбара не пикается: {other:?}"),
+        }
+        // Esc-стек: админпанель — верх
+        assert_eq!(key_owner(&reg), KeyOwner::Admin);
+    }
+
+    /// FR-070 (этап 3): секция «Токены» — свотчи слотов пикаются
+    /// (live-правка: element admin-token-{i}).
+    #[test]
+    fn admin_token_swatch_pickable() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.admin_open = true;
+        app.admin_section = crate::admin_ui::AdminSection::Tokens;
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::ADMIN)
+            .expect("admin_panel в кадре");
+        let token_elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .filter(|e| e.starts_with("admin-token-"))
+            .collect();
+        assert_eq!(token_elements.len(), 14, "14 свотчей слотов");
+
+        // Первый видимый свотч — пик https:// как Element admin-token-N
+        let first = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "admin-token-0")
+            .expect("свотч первого слота");
+        let c = UiPoint::new(
+            first.rect.x + first.rect.w / 2.0,
+            first.rect.y + first.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::ADMIN);
+                assert_eq!(rect.element, "admin-token-0");
+            }
+            other => panic!("свотч не пикается: {other:?}"),
+        }
     }
 
     /// G6: DebugOverlay показывает рамки/подписи слоёв и имя под курсором.

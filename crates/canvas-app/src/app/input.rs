@@ -160,6 +160,54 @@ impl App {
         self.request_redraw();
     }
 
+    /// FR-070: клик по админпанели — сайдбар/сброс/тема/«✕»; прочий клик
+    /// по панели глотается (Block-модаль, паттерн витрины FR-055).
+    fn click_admin_panel(&mut self, element: &str) {
+        match element {
+            "admin-close" => {
+                self.admin_open = false;
+            }
+            "admin-theme" => {
+                // Смена темы — сброс live-переопределения (слоты снова от
+                // темы; иначе поверх новой темы остались бы старые правки)
+                self.toggle_theme();
+                self.admin_palette_override = None;
+            }
+            "admin-reset" => {
+                self.admin_palette_override = None;
+            }
+            other => {
+                if let Some(idx) = other
+                    .strip_prefix("admin-section-")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    if let Some(sec) = crate::admin_ui::AdminSection::at(idx) {
+                        self.admin_section = sec;
+                        // Смена секции — контент с начала
+                        self.admin_scroll = canvas_ui::kit::ScrollState::default();
+                    }
+                } else if let Some(idx) = other
+                    .strip_prefix("admin-token-")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    // FR-070: live-правка слота — следующий кандидат цвета;
+                    // применяется ко всей админпанели до «Сброса»
+                    let mut pal = self
+                        .admin_palette_override
+                        .unwrap_or_else(|| self.effective_palette().kit_palette());
+                    let current = crate::admin_ui::slot_color(&pal, idx);
+                    crate::admin_ui::set_slot_color(
+                        &mut pal,
+                        idx,
+                        crate::admin_ui::cycle_slot(current),
+                    );
+                    self.admin_palette_override = Some(pal);
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
     /// FR-055 U4: клик по витрине — кнопка темы (реальный kit-контрол:
     /// переключение темы — смена слотов палитры) или «✕»/паддинг (глотается).
     pub(super) fn click_kit_gallery(&mut self, element: &str) {
@@ -234,6 +282,15 @@ impl App {
             ui_registry::id::KIT_GALLERY => {
                 if self.kit_gallery_open {
                     self.kit_gallery_open = false;
+                    true
+                } else {
+                    false
+                }
+            }
+            // FR-070: админпанель — Esc закрывает (один шаг, модаль)
+            ui_registry::id::ADMIN => {
+                if self.admin_open {
+                    self.admin_open = false;
                     true
                 } else {
                     false
@@ -373,6 +430,22 @@ impl App {
                             }
                             _ => {}
                         }
+                    }
+                    return true;
+                }
+                true
+            }
+            ui_registry::KeyOwner::Admin => {
+                // FR-070: админпанель — модаль; Esc закрывает, прочие
+                // клавиши глотаются (интерактив — только контролы шапки
+                // и сайдбара; фокус-кольцо — этап 2+ FR-070).
+                if self.admin_open {
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                    {
+                        self.admin_open = false;
+                        self.request_redraw();
                     }
                     return true;
                 }
@@ -988,6 +1061,12 @@ impl App {
                 self.click_kit_gallery(element);
                 true
             }
+            // FR-070: админпанель — сайдбар/сброс/тема/«✕»; прочий клик
+            // по панели глотается (Block-модаль)
+            ui_registry::id::ADMIN => {
+                self.click_admin_panel(element);
+                true
+            }
             ui_registry::id::ONBOARDING => {
                 self.click_onboarding();
                 true
@@ -1086,6 +1165,13 @@ impl App {
             // Block-поверхности, паттерн галереи схем)
             ui_registry::id::KIT_GALLERY => {
                 self.kit_gallery_open = false;
+                self.request_redraw();
+                true
+            }
+            // FR-070: клик мимо админпанели — закрыть и глотнуть (паттерн
+            // Block-поверхностей)
+            ui_registry::id::ADMIN => {
+                self.admin_open = false;
                 self.request_redraw();
                 true
             }
@@ -1565,12 +1651,24 @@ impl App {
                 // (модаль; вход из меню «?», доступна всегда)
                 Some(docs_ui::HelpMenuItem::Interface) => {
                     self.help_menu = None;
+                    // FR-070: админпанель и витрина взаимоисключимы
+                    self.admin_open = false;
                     self.kit_gallery_open = true;
                     // FR-059: контент витрины — с начала (скролл секций)
                     self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
                     // FR-062 F-17: фокус секции Tab — с начала (кольцо пустое:
                     // первый Tab ставит фокус на первый слот)
                     self.kit_gallery_focus.clear();
+                    self.request_redraw();
+                }
+                // FR-070: «UI-консоль» — админпанель (модаль; вход из
+                // меню «?», доступна всегда)
+                Some(docs_ui::HelpMenuItem::Admin) => {
+                    self.help_menu = None;
+                    // Витрина и админпанель взаимоисключимы
+                    self.kit_gallery_open = false;
+                    self.admin_open = true;
+                    self.admin_scroll = canvas_ui::kit::ScrollState::default();
                     self.request_redraw();
                 }
                 None => {
@@ -3323,6 +3421,26 @@ impl App {
                 scroll.scroll_by(dy);
                 scroll.clamp();
                 self.kit_gallery_scroll = scroll;
+                self.request_redraw();
+                return;
+            }
+        }
+        // FR-070: колесо над демо-зоной админпанели прокручивает тело
+        // секции (кит список+скролл; шапка/сайдбар фиксированы)
+        if self.admin_open {
+            let viewport = self.viewport_logical();
+            let demo = crate::admin_ui::admin_demo_viewport(viewport);
+            if crate::kit_ui::cursor_in(&demo, self.cursor) {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                };
+                let mut scroll = self.admin_scroll.clone();
+                scroll.viewport_h = demo.h;
+                scroll.content_h = self.admin_layout_current().demo_content_h;
+                scroll.scroll_by(dy);
+                scroll.clamp();
+                self.admin_scroll = scroll;
                 self.request_redraw();
                 return;
             }
