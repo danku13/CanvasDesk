@@ -137,8 +137,7 @@ use canvas_render::{
     SpillView, StageTransform,
 };
 use canvas_scene::{
-    fit_template_node_height, formula_line_indices, split_formula_lines, whatif_delta_str,
-    SceneState,
+    fit_template_node_height, formula_line_indices, split_formula_lines, SceneState,
 };
 
 /// FR-052 (этап U2 PRD-0009): реестр поверхностей экрана — единый диспетчер.
@@ -3086,17 +3085,46 @@ impl App {
     /// считается по ТОЙ ЖЕ строке, что рисуется).
     fn whatif_bar_layout(&self) -> whatif_ui::BarLayout {
         let viewport = self.viewport_logical();
+        // FR-064 P2: замороженные сценарии — маркер «❄» в подписи чипа
+        // (ширина чипа измеряется по той же строке, что рисуется).
         let names: Vec<String> = self
             .scene
             .scenarios
             .iter()
-            .map(|scenario| scenario.name.clone())
+            .map(|scenario| {
+                if self.scene.whatif_is_frozen(&scenario.name) {
+                    format!("{} ❄", scenario.name)
+                } else {
+                    scenario.name.clone()
+                }
+            })
             .collect();
         let count = self.scene.whatif_override_count();
         let counter_label = self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
+        // FR-064 P2: лейбл кнопки заморозки — по состоянию активного сценария
+        // (измеряется та же строка, что рисуется — фикс FR-053).
+        let freeze_label = match self.scene.active_scenario {
+            Some(index)
+                if self
+                    .scene
+                    .scenarios
+                    .get(index)
+                    .is_some_and(|scenario| self.scene.whatif_is_frozen(&scenario.name)) =>
+            {
+                self.tr(keys::WHATIF_UNFREEZE)
+            }
+            _ => self.tr(keys::WHATIF_FREEZE),
+        };
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        whatif_ui::bar_layout(&names, &counter_label, viewport, &mut measurer, &mut fs)
+        whatif_ui::bar_layout(
+            &names,
+            &counter_label,
+            freeze_label,
+            viewport,
+            &mut measurer,
+            &mut fs,
+        )
     }
 
     /// Подпись ноды для панелей what-if: первая строка текста (обрезка),
@@ -3178,76 +3206,95 @@ impl App {
     /// подменённых переменных всех сценариев; значения — прогон
     /// `propagate_with_lines` с подменами каждого сценария (по прогону на
     /// сценарий — 3–5 прогонов <10 мс, допустимо по роадмапу).
+    ///
+    /// FR-064 P2 (FR-017 v2): замороженный сценарий показывается ПО
+    /// СНИМКУ (pinned значения — правки канваса их не двигают); строки
+    /// таблицы строит ядро ([`canvas_core::whatif::compare_scenarios`]):
+    /// построчные переменные + изменившиеся узловые итоги (дельты
+    /// downstream — эталон ADR-0006 №2), дельты — формат FR-017.
+    /// Замороженные сценарии — маркер «❄» в шапке колонки.
     fn whatif_compare_table(&self) -> (Vec<String>, Vec<Vec<String>>) {
         let mut columns = vec![
             self.tr(keys::WHATIF_COLUMN_VAR).to_owned(),
             self.tr(keys::WHATIF_BASE).to_owned(),
         ];
+        // Снимок на колонку: заморожен — pinned-снимок; иначе свежий прогон
+        // (пустые подмены — значения базы: колонка честно равна базе).
+        let mut snapshots: Vec<canvas_core::whatif::FrozenScenario> = Vec::new();
         for scenario in &self.scene.scenarios {
-            columns.push(scenario.name.clone());
-        }
-        // Ключи: union валидных подмен всех сценариев.
-        let mut keys: Vec<(String, usize)> = Vec::new();
-        for scenario in &self.scene.scenarios {
-            for key in canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario).keys() {
-                if !keys.contains(key) {
-                    keys.push(key.clone());
-                }
-            }
-        }
-        keys.sort();
-        // Одно решение на сценарий (пустой сценарий — None: все ячейки «—»).
-        let per_scenario: Vec<Option<flow::FlowSolutions>> = self
-            .scene
-            .scenarios
-            .iter()
-            .map(|scenario| {
+            let marker = if self.scene.whatif_is_frozen(&scenario.name) {
+                " ❄"
+            } else {
+                ""
+            };
+            columns.push(format!("{}{}", scenario.name, marker));
+            if let Some(frozen) = self
+                .scene
+                .frozen
+                .iter()
+                .find(|snapshot| snapshot.name == scenario.name)
+            {
+                snapshots.push(canvas_core::whatif::FrozenScenario {
+                    name: scenario.name.clone(),
+                    solutions: Arc::clone(&frozen.solutions),
+                });
+            } else {
                 let line_exprs =
                     canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario);
-                if line_exprs.is_empty() {
-                    return None;
-                }
                 let overrides = flow::WhatIfOverrides {
                     line_exprs,
                     ..Default::default()
                 };
-                flow::propagate_with_lines(&self.scene.canvas, &overrides).ok()
-            })
-            .collect();
-        // FR-064 P1: double buffer — снимок базы через read()-гард (гард
-        // живёт до конца работы со строками базы).
-        let base_buf = canvas_scene::read_flow(&self.scene.flow_baseline);
-        let base_lines = &base_buf.lines;
-        let rows: Vec<Vec<String>> = keys
+                let solutions =
+                    flow::propagate_with_lines(&self.scene.canvas, &overrides).unwrap_or_default();
+                snapshots.push(canvas_core::whatif::FrozenScenario {
+                    name: scenario.name.clone(),
+                    solutions: Arc::new(solutions),
+                });
+            }
+        }
+        // Ключи: union валидных подмен всех сценариев (построчные
+        // переменные таблицы; узловые итоги добавит ядро по дифу).
+        let mut line_keys: Vec<(String, usize)> = Vec::new();
+        for scenario in &self.scene.scenarios {
+            for key in canvas_core::whatif::active_line_exprs(&self.scene.canvas, scenario).keys() {
+                if !line_keys.contains(key) {
+                    line_keys.push(key.clone());
+                }
+            }
+        }
+        line_keys.sort();
+        // FR-064 P2: диф базы со снимками — единый источник в ядре.
+        let base_solutions = canvas_scene::read_flow(&self.scene.flow_baseline);
+        let comparison =
+            canvas_core::whatif::compare_scenarios(&base_solutions, &snapshots, &line_keys);
+        let rows: Vec<Vec<String>> = comparison
+            .rows
             .iter()
-            .map(|(node_id, line)| {
-                let label = format!("{} : стр. {}", self.whatif_node_label(node_id), line + 1);
-                let key = (node_id.clone(), *line);
-                let base = base_lines.get(&key);
-                let mut row = vec![
-                    label,
-                    base.map(|value| value.to_string())
-                        .unwrap_or_else(|| "—".to_owned()),
-                ];
-                for solutions in &per_scenario {
-                    let Some(solutions) = solutions else {
-                        row.push("—".to_owned());
+            .map(|row| {
+                let label = match row.line {
+                    Some(line) => {
+                        format!("{} : стр. {}", self.whatif_node_label(&row.node), line + 1)
+                    }
+                    None => format!(
+                        "{} · {}",
+                        self.whatif_node_label(&row.node),
+                        self.tr(keys::WHATIF_ROW_TOTAL)
+                    ),
+                };
+                let mut cells = vec![label];
+                for (index, value) in row.values.iter().enumerate() {
+                    let Some(value) = value else {
+                        cells.push("—".to_owned());
                         continue;
                     };
-                    let Some(value) = solutions.lines.get(&key) else {
-                        row.push("—".to_owned());
-                        continue;
-                    };
-                    let cell = match base {
-                        Some(base) => match whatif_delta_str(base, value) {
-                            Some(delta) => format!("{value} ({delta})"),
-                            None => value.to_string(),
-                        },
+                    let cell = match &row.deltas[index] {
+                        Some(delta) => format!("{value} ({delta})"),
                         None => value.to_string(),
                     };
-                    row.push(cell);
+                    cells.push(cell);
                 }
-                row
+                cells
             })
             .collect();
         (columns, rows)
@@ -3317,6 +3364,38 @@ impl App {
                     }
                     self.scene.recompute_flow();
                 }
+            }
+            BarAction::Freeze => {
+                // FR-064 P2: заморозка/разморозка активного сценария —
+                // снимок решений за Arc (runtime); имена — в
+                // `canvasdesk.whatif.frozen` (персистентность, тот же
+                // undo-шаг паттерн, что у create-scenario).
+                let Some(index) = self.scene.active_scenario else {
+                    return;
+                };
+                let Some(name) = self.scene.scenarios.get(index).map(|s| s.name.clone()) else {
+                    return;
+                };
+                let snapshot = self.scene.canvas.clone();
+                let was_frozen = self.scene.whatif_is_frozen(&name);
+                if was_frozen {
+                    self.scene.whatif_unfreeze(&name);
+                } else if let Err(err) = self.scene.whatif_freeze_active() {
+                    self.show_toast(err);
+                    self.request_redraw();
+                    return;
+                }
+                let frozen_names = self.scene.whatif_frozen_names();
+                canvas_core::whatif::frozen_to_canvas(&mut self.scene.canvas, &frozen_names);
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                    self.scene.mark_dirty();
+                }
+                self.show_toast(if was_frozen {
+                    self.trf(keys::WHATIF_UNFROZEN_TOAST, &[("{name}", &name)])
+                } else {
+                    self.trf(keys::WHATIF_FROZEN_TOAST, &[("{name}", &name)])
+                });
             }
             BarAction::Compare => {
                 self.whatif_compare_open = !self.whatif_compare_open;
@@ -3590,10 +3669,26 @@ impl App {
             self.whatif_list_open && count > 0,
         );
         // Кнопки. Apply/Сброс — без активного сценария/подмен приглушены.
+        // FR-064 P2: лейбл заморозки — по состоянию (та же строка, что в
+        // раскладке); кнопка приглушена без активного сценария.
         let has_overrides = active.is_some() && count > 0;
+        let has_active = active.is_some();
+        let freeze_label = match active {
+            Some(index)
+                if self
+                    .scene
+                    .scenarios
+                    .get(index)
+                    .is_some_and(|scenario| self.scene.whatif_is_frozen(&scenario.name)) =>
+            {
+                self.tr(keys::WHATIF_UNFREEZE)
+            }
+            _ => self.tr(keys::WHATIF_FREEZE),
+        };
         let buttons = [
             (layout.apply, self.tr(keys::WHATIF_APPLY), has_overrides),
             (layout.reset, self.tr(keys::WHATIF_RESET), has_overrides),
+            (layout.freeze, freeze_label, has_active),
             (
                 layout.compare,
                 self.tr(keys::WHATIF_COMPARE),
