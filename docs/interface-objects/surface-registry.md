@@ -67,6 +67,7 @@
 | `gallery` | Modals | Block | gallery | FR-049 |
 | `onboarding` | Modals | Block | onboarding | FR-028 |
 | `kit_gallery` | Modals | Block | kit_gallery | FR-055 U4: витрина кита («?» → «О интерфейсе», Q5-a); Esc/backdrop/✕ закрывают |
+| `admin_panel` | Modals | Block | admin_panel | FR-070: UI-админпанель («?» → «UI-консоль»); Esc/backdrop/✕ закрывают; сайдбар секций; свотчи токенов — live-правка |
 | `empty` | Panels | Capture | — | empty-state (AC-1.1 FR-049) |
 | `minimap` | Panels | Capture | — | рисуется проходом рендерера |
 
