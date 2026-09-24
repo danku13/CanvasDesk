@@ -531,6 +531,11 @@ pub mod keys {
     pub const ADMIN_TOK_GROUP_DIMS: &str = "admin.tok.group_dims";
     pub const ADMIN_TOK_GROUP_TYPE: &str = "admin.tok.group_type";
     pub const ADMIN_TOK_GROUP_MOTION: &str = "admin.tok.group_motion";
+    /// Страница user-docs «UI-консоль» (FR-070, FR-031).
+    pub const DOCS_PAGE_ADMIN: &str = "docs.page.admin";
+    /// Этап 4: шаг 9 онбординга — UI-консоль.
+    pub const ONBOARDING_STEP9_TITLE: &str = "onboarding.step9.title";
+    pub const ONBOARDING_STEP9_BODY: &str = "onboarding.step9.body";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -1067,19 +1072,19 @@ const RU: &[(&str, &str)] = &[
     (keys::ADMIN_SECTION_TOKENS, "Токены"),
     (
         keys::ADMIN_HINT_COMPONENTS,
-        "Матрица состояний контролов кита: обычное / hover / выбрано / нажато / недоступно + в фокусе / ошибка (этап 2 FR-070).",
+        "Матрица состояний контролов кита: обычное / hover / выбрано / нажато / недоступно + в фокусе / ошибка.",
     ),
     (
         keys::ADMIN_HINT_FILL,
-        "Контейнеры с разным наполнением: пустое / среднее / полное — список, карточка, поле, чипы, dropdown, строки, тосты, палитра, wheel (этап 3 FR-070).",
+        "Контейнеры с разным наполнением: пустое / среднее / полное — список, карточка, поле, чипы, dropdown, строки, тосты, палитра, wheel.",
     ),
     (
         keys::ADMIN_HINT_CANVAS,
-        "Состояния сущностей канваса (ST4): карточка ноды, рёбра, порты (этап 4 FR-070).",
+        "Состояния сущностей канваса (ST4): карточка ноды, рёбра, порты.",
     ),
     (
         keys::ADMIN_HINT_TOKENS,
-        "Каталог design-токенов: цвета-свотчи, размеры, типографика, движение; live-правка слотов палитры (этап 4 FR-070).",
+        "Каталог design-токенов: цвета-свотчи, размеры, типографика, движение; live-правка слотов палитры — клик по свотчу, «Сброс» в шапке.",
     ),
     // Этап 2: матрица состояний и наполнение
     (keys::ADMIN_STATE_ERROR, "Ошибка"),
@@ -1120,6 +1125,15 @@ const RU: &[(&str, &str)] = &[
     (keys::ADMIN_TOK_GROUP_DIMS, "Размеры (px)"),
     (keys::ADMIN_TOK_GROUP_TYPE, "Типографика (px)"),
     (keys::ADMIN_TOK_GROUP_MOTION, "Движение (мс)"),
+    (keys::DOCS_PAGE_ADMIN, "UI-консоль"),
+    (
+        keys::ONBOARDING_STEP9_TITLE,
+        "UI-консоль для владельца",
+    ),
+    (
+        keys::ONBOARDING_STEP9_BODY,
+        "Меню «?» → «UI-консоль» — весь интерфейс в одном месте: контролы во всех состояниях, контейнеры с разным наполнением, состояния объектов канваса и каталог дизайн-токенов с живой правкой цветов. Удобно для приёмки изменений и баг-репортов.",
+    ),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
     (keys::ONBOARDING_DONE, "Готово"),
@@ -1829,19 +1843,19 @@ const EN: &[(&str, &str)] = &[
     (keys::ADMIN_SECTION_TOKENS, "Tokens"),
     (
         keys::ADMIN_HINT_COMPONENTS,
-        "Kit control state matrix: normal / hover / selected / pressed / disabled + focused / error (FR-070 stage 2).",
+        "Kit control state matrix: normal / hover / selected / pressed / disabled + focused / error.",
     ),
     (
         keys::ADMIN_HINT_FILL,
-        "Containers at different fill levels: empty / medium / full — list, card, field, chips, dropdown, rows, toasts, palette, wheel (FR-070 stage 3).",
+        "Containers at different fill levels: empty / medium / full — list, card, field, chips, dropdown, rows, toasts, palette, wheel.",
     ),
     (
         keys::ADMIN_HINT_CANVAS,
-        "Canvas entity states (ST4): node card, edges, ports (FR-070 stage 4).",
+        "Canvas entity states (ST4): node card, edges, ports.",
     ),
     (
         keys::ADMIN_HINT_TOKENS,
-        "Design token catalog: color swatches, dimensions, typography, motion; live editing of palette slots (FR-070 stage 4).",
+        "Design token catalog: color swatches, dimensions, typography, motion; live editing of palette slots — click a swatch, Reset in the header.",
     ),
     // FR-070 stage 2: state matrix and fill levels
     (keys::ADMIN_STATE_ERROR, "Error"),
@@ -1882,6 +1896,12 @@ const EN: &[(&str, &str)] = &[
     (keys::ADMIN_TOK_GROUP_DIMS, "Dimensions (px)"),
     (keys::ADMIN_TOK_GROUP_TYPE, "Typography (px)"),
     (keys::ADMIN_TOK_GROUP_MOTION, "Motion (ms)"),
+    (keys::DOCS_PAGE_ADMIN, "UI console"),
+    (keys::ONBOARDING_STEP9_TITLE, "UI console for the owner"),
+    (
+        keys::ONBOARDING_STEP9_BODY,
+        "The ? menu → UI console shows the whole interface in one place: controls in every state, containers at different fill levels, canvas object states and a design token catalog with live color editing. Handy for acceptance and bug reports.",
+    ),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
     (keys::ONBOARDING_DONE, "Done"),

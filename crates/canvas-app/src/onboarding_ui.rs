@@ -65,7 +65,7 @@ pub struct OnboardingStep {
 /// Шаги тура (FR-028, скоуп владельца — база + расчёты + шаблоны; NN/g:
 /// 8±2 шага, «один шаг = одна мысль», выход виден всегда). Порядок
 /// стабилен; «Готово» — на последнем.
-pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
+pub const ONBOARDING_STEPS: [OnboardingStep; 9] = [
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP1_TITLE,
         body_key: keys::ONBOARDING_STEP1_BODY,
@@ -104,6 +104,12 @@ pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP8_TITLE,
         body_key: keys::ONBOARDING_STEP8_BODY,
+        action_key: None,
+    },
+    // FR-070: шаг 9 — UI-консоль (приёмка/баг-репорты, доступна всегда)
+    OnboardingStep {
+        title_key: keys::ONBOARDING_STEP9_TITLE,
+        body_key: keys::ONBOARDING_STEP9_BODY,
         action_key: None,
     },
 ];
