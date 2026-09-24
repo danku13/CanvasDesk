@@ -203,10 +203,14 @@ fn mcp_node_edit_updates_only_given_fields() {
         (scene.canvas.nodes[0].x, scene.canvas.nodes[0].y),
         (100.0, 100.0)
     );
-    assert_eq!(
-        (scene.canvas.nodes[0].width, scene.canvas.nodes[0].height),
-        (260.0, 120.0)
-    );
+    assert_eq!(scene.canvas.nodes[0].width, 260.0);
+    // FR-067 (этап F): growth-only refit в recompute_flow теперь подгоняет
+    // высоту для ВСЕХ нод (ранний выход по node_shows_result_footer снят):
+    // у ноды без футера высота = тело (1 ряд) + зона описания (проза-фолбэк
+    // Q3 «Отредактировано» — кламп+экспандер) + паддинг, без резерва футера:
+    // 34 + 4 + (3·20 + 6) + 20 + 10 = 134. Правка поля text высоту НЕ меняет
+    // сам (геометрия не передана) — это отдельный документированный refit.
+    assert_eq!(scene.canvas.nodes[0].height, 134.0);
     assert_eq!(scene.canvas.nodes[0].label, None);
     // Только геометрия: text не тронут
     dispatch(

@@ -2007,6 +2007,31 @@ pub fn line_kind(line: &str) -> NumiLineKind {
     }
 }
 
+/// FR-061 D-7 / FR-067 (этап F, перенос из canvas-render::text в ядро):
+/// план заголовка блока-ведомости — `Some((первая расчётная строка, число
+/// расчётных))`, когда строк данных (параметры + расчёт — все строки с
+/// исходами; авто-строки не входят по построению) больше порога T
+/// (Q2, дефолт [`crate::settings::NODE_BODY_BLOCK_THRESHOLD`]) и среди них
+/// есть расчётные. Чистая функция — рендер и измерение (canvas-render) и
+/// консервативная оценка высоты (canvas-scene, уровень 1 refit) считают
+/// ОДИН план: оценка не занижает высоту на ряд заголовка (I-2).
+pub fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, usize)> {
+    let calc: Vec<usize> = formula_lines
+        .iter()
+        .copied()
+        .filter(|&i| {
+            lines
+                .get(i)
+                .is_some_and(|line| !matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+        })
+        .collect();
+    if formula_lines.len() > crate::settings::NODE_BODY_BLOCK_THRESHOLD && !calc.is_empty() {
+        Some((*calc.first()?, calc.len()))
+    } else {
+        None
+    }
+}
+
 /// FR-067 (этап F, шаг 2 плана владельца): строковый диапазон первого
 /// проза-абзаца — `[start, end)` по индексам `\n`-строк исходного текста.
 /// Общий источник сцены (оценка уровня 1) и рендера (супрессия дубликата
@@ -3130,17 +3155,22 @@ mod tests {
         assert_eq!(first_prose_paragraph_span(text), Some((0, 2)));
         let joined = text
             .lines()
-            .skip(0)
             .take(2)
             .collect::<Vec<&str>>()
             .join(" ")
             .trim()
             .to_owned();
-        assert_eq!(first_prose_paragraph(text).as_deref(), Some(joined.as_str()));
+        assert_eq!(
+            first_prose_paragraph(text).as_deref(),
+            Some(joined.as_str())
+        );
         // Абзац после формул — индексы считаются от начала текста
         let text = "rps = 800\n\nэто описание системы\nв две строки\n\n800 * 2";
         assert_eq!(first_prose_paragraph_span(text), Some((2, 4)));
-        assert_eq!(first_prose_paragraph(text).as_deref(), Some("это описание системы в две строки"));
+        assert_eq!(
+            first_prose_paragraph(text).as_deref(),
+            Some("это описание системы в две строки")
+        );
     }
 
     /// FR-067: прогон с любой не-прозой не qualifies — диапазон ищется
