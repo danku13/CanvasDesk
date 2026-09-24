@@ -5965,3 +5965,14 @@ Stage Summary:
 - **Приёмка:** cargo test -p canvas-app 418 passed / 0 failed (+3 регресса),
   clippy -D warnings чисто, fmt применён. Обработчики кликов не тронуты
   (no-op-ветки уже существовали); контракты backdrop/Esc не изменены.
+
+## 2026-09-25 — verify(web): фикс «панели закрываются при клике на себя» проверен на WASM-сборке в headless-браузере (директива владельца)
+
+- **Агент:** Super Z (сессия web-f29848ef; вопрос владельца: «сам можешь протестировать на WASM версии?»).
+- **Стенд:** canvas-web собран вручную (trunk-релизы недоступны: GitHub release-ассеты 404 — как в pages-web.yml; wasm-bindgen-cli 0.2.127 из cargo, wasm32-unknown-unknown, dev-профиль, `wasm-bindgen --target web` + init-скрипт в index.html — эквивалент rust-пайплайна trunk). Chromium 153 (playwright) с WebGPU на SwiftShader: `--enable-unsafe-webgpu --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader`; headless captureScreenshot НЕ композитит WebGPU-канвасы (контрольный красный clear не виден) → рендер под Xvfb (headed, живой композитор). Бэкенд подтверждён логом: `renderer инициализирован backend=BrowserWebGpu`; web-шим maxInterStageShaderComponents сработал.
+- **Сценарий (playwright, клики по канвасу):** пропустить онбординг → «?» → «UI-консоль» → клик по ТЕЛУ панели (1180,745 — паддинг, вне интерактивных rect'ов) → клик по фону (30,770); то же для «О интерфейсе» (пункт меню (1035,117), тело (1078,708)).
+- **Результат (пиксельные диффы скриншотов):**
+  - UI-консоль: после клика по телу 0 изменённых пикселей — панель осталась открыта; клик по фону закрыл (729k px);
+  - «О интерфейсе»: после клика по телу панель на месте (3551 px = залипший hover кнопки «Переключить тему» — кадр не перерисовался по mouse-move, гаснет при следующем redraw; косметика доставки кадров, к фиксу отношения не имеет); клик по фону закрыл (508k px);
+  - backdrop-контракт и Esc-путь не нарушены.
+- **Артефакты:** scripts/wasm_probe*.mjs, scripts/wasm_scenario.mjs (параметры ADMIN_ITEM/ADMIN_BODY), скриншоты download/wasm_test/. Регрессов не найдено; фикс 52027bc подтверждён на web-платформе.
