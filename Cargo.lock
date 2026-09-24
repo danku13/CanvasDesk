@@ -297,6 +297,7 @@ dependencies = [
  "rstar",
  "serde",
  "serde_json",
+ "sobol_burley",
  "statrs",
  "thiserror 2.0.20",
  "toml",
@@ -2614,6 +2615,12 @@ checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "sobol_burley"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09f37cae1d97c4078377153ede7a26f7813b689ad5c6b76ff45dc52e53afe1d1"
 
 [[package]]
 name = "spirv"

@@ -1254,6 +1254,23 @@ pub fn mcp_dispatch(
                 "thresholds": serde_json::to_value(config).unwrap_or(serde_json::json!({})),
             }))
         }
+        // FR-066 (M5/S3, волна S ADR-0008): Monte Carlo + QMC-прогон —
+        // N ≥ 10⁴ прогонов propagate_with_lines с распределёнными
+        // параметрами → квантили P50/P90/P99 (collect-then-reduce §5.7.3,
+        // сид-контракт §5.7.2 — воспроизводимость first-class) + анализ
+        // узких мест на ХВОСТОВОМ квантиле (P90) по синтетическому снимку
+        // (§5.5: analyze.rs без правок). Чистая функция над канвасом +
+        // engine-метаданные §5.7.4 (raw JSON в canvas.extra, паттерн
+        // whatif.rs:39–115, undo-шаг как у edge_ports).
+        #[cfg(feature = "qmc")]
+        "monte_carlo_run" => mcp_monte_carlo_run(scene, params),
+        // Сборка без фичи `qmc` (wasm §5.8; нативный default zero-dep):
+        // внятная ошибка вместо «неизвестный инструмент» — native-реестр
+        // canvas-mcp инструмент объявляет (FR-066 §5.8).
+        #[cfg(not(feature = "qmc"))]
+        "monte_carlo_run" => {
+            Err("monte_carlo_run недоступен: сборка без фичи qmc (FR-066 §5.8)".to_owned())
+        }
         // FR-018: список шаблонов реестра — те же, что в палитре/wheel
         // (инвариант 4: MCP-видимость эквивалентна UI)
         "template_list" => {
@@ -1489,6 +1506,225 @@ pub fn mcp_dispatch(
         "graph_apply" => mcp_graph_apply(scene, templates, params),
         other => Err(format!("неизвестный инструмент: {other}")),
     }
+}
+
+// --- FR-066 (M5/S3): monte_carlo_run — MC/QMC-прогон -------------------------
+
+/// Лимит прогонов MCP-инструмента (FR-066): защита live-бюджета агента
+/// (бюджет эталона — 10⁴ < 1 с; 10⁶ — верхняя разумная граница).
+#[cfg(feature = "qmc")]
+const MC_MAX_RUNS: u64 = 1_000_000;
+
+/// FR-066 (P3): `monte_carlo_run` — N прогонов расчётного графа с
+/// распределёнными параметрами (MC: ChaCha8 §5.7.2 / QMC: Owen-scrambled
+/// Sobol → inverse-CDF) → квантили P50/P90/P99 итогов нод, построчных и
+/// именованных выходов + `analyze_bottlenecks`-отчёт на ХВОСТОВОМ
+/// квантиле (P90 по умолчанию) по синтетическому снимку
+/// [`canvas_core::expr::mc::synthetic_solutions`] — `analyze.rs` без
+/// правок (контракт §5.5). Engine-метаданные пишутся в
+/// `canvas.extra["canvasdesk"]["engine"]` (§5.7.4, паттерн whatif.rs) —
+/// мутация с undo-шагом и автосейвом при фактическом изменении.
+#[cfg(feature = "qmc")]
+fn mcp_monte_carlo_run(
+    scene: &mut SceneState,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use canvas_core::expr::mc::{self, Distribution, McConfig, McMode};
+    use canvas_core::time::Instant;
+    use canvas_core::Value as FlowValue;
+
+    // runs (обязательный): целое 1..=10⁶
+    let runs = params
+        .get("runs")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("monte_carlo_run: обязательный параметр runs — целое 1..=1000000".to_owned())?;
+    if !(1..=MC_MAX_RUNS).contains(&runs) {
+        return Err(format!(
+            "monte_carlo_run: runs вне диапазона 1..={MC_MAX_RUNS}: {runs}"
+        ));
+    }
+    // mode: "qmc" (дефолт — меньшая дисперсия при том же N) | "mc"
+    let mode = match params.get("mode").and_then(serde_json::Value::as_str) {
+        None | Some("qmc") => McMode::Qmc,
+        Some("mc") => McMode::Mc,
+        Some(other) => {
+            return Err(format!(
+                "monte_carlo_run: mode должен быть \"qmc\" или \"mc\", получено {other:?}"
+            ))
+        }
+    };
+    // seed: u64 ≥ 0, дефолт 0 — полная воспроизводимость по умолчанию
+    let seed = match params.get("seed") {
+        None => 0u64,
+        Some(serde_json::Value::Number(num)) => num
+            .as_u64()
+            .ok_or_else(|| "monte_carlo_run: seed — неотрицательное целое (u64)".to_owned())?,
+        Some(other) => {
+            return Err(format!(
+                "monte_carlo_run: seed — неотрицательное целое, получено {other}"
+            ))
+        }
+    };
+    // quantiles: доли (0..1), дефолт [0.5, 0.9, 0.99]
+    let quantiles: Vec<f64> = match params.get("quantiles") {
+        None => vec![0.5, 0.9, 0.99],
+        Some(serde_json::Value::Array(list)) => list
+            .iter()
+            .map(|v| {
+                v.as_f64()
+                    .ok_or_else(|| "quantiles — массив чисел 0..1".to_owned())
+            })
+            .collect::<Result<_, _>>()?,
+        Some(other) => return Err(format!("quantiles — массив чисел 0..1, получено {other}")),
+    };
+    // params (обязательный): {"node_id:param": {"dist": "normal"|…, …}}
+    let params_obj = params
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(
+            "monte_carlo_run: обязательный параметр params — объект \
+             {\"node:param\": {\"dist\": \"normal\"|\"lognormal\"|\"exp\"|\"poisson\", …}}"
+                .to_owned(),
+        )?;
+    let mut mc_params: HashMap<(String, String), Distribution> =
+        HashMap::with_capacity(params_obj.len());
+    for (key, spec) in params_obj {
+        let (node, param) = key
+            .split_once(':')
+            .ok_or_else(|| format!("params: ключ {key:?} — форма \"node_id:param\""))?;
+        let dist: Distribution =
+            serde_json::from_value(spec.clone()).map_err(|err| format!("params[{key}]: {err}"))?;
+        mc_params.insert((node.to_owned(), param.to_owned()), dist);
+    }
+    let config = McConfig {
+        runs: runs as usize,
+        params: mc_params,
+        seed,
+        quantiles,
+        mode,
+    };
+    config
+        .validate()
+        .map_err(|err| format!("monte_carlo_run: {err}"))?;
+    // Строгое разрешение параметров ДО прогонов (нода/строка «param = …»
+    // обязаны существовать — как whatif_set_param, тираж ошибок раньше N
+    // прогонов)
+    let (_, skipped) = mc::resolve_params(&scene.canvas, &config.params);
+    if !skipped.is_empty() {
+        let list: Vec<String> = skipped
+            .iter()
+            .map(|(node, param)| format!("{node}:{param}"))
+            .collect();
+        return Err(format!(
+            "monte_carlo_run: параметры не разрешены (нода или строка \
+             «param = …» не найдены): {}",
+            list.join(", ")
+        ));
+    }
+
+    // Прогон (чистая функция над канвасом; сид-контракт §5.7.2)
+    let started = Instant::now();
+    let result = canvas_core::flow::propagate_monte_carlo(&scene.canvas, &config)
+        .map_err(|cycle| format!("цикл потока значений: {cycle}"))?;
+    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    // §5.7.4: engine-метаданные — raw JSON в canvas.extra (паттерн
+    // whatif.rs:39–115); мутация канваса = undo-шаг + автосейв (как
+    // edge_ports), только при фактическом изменении
+    let snapshot = scene.canvas.clone();
+    mc::engine_to_canvas(&mut scene.canvas, &mc::current_engine_meta(config.seed));
+    if scene.canvas != snapshot {
+        scene.push_undo(snapshot);
+        scene.mark_dirty();
+    }
+
+    // Анализ узких мест на хвостовом квантиле (P90 по умолчанию) —
+    // синтетический FlowSolutions → analyze::analyze без правок (§5.5);
+    // формат узлов — как analyze_bottlenecks (инвариант «MCP-видимость = UI»)
+    let mut analysis = serde_json::Value::Null;
+    let mut severity = "none";
+    if let Some(tail) = mc::tail_quantile(&result.quantiles) {
+        if let Some(synthetic) = mc::synthetic_solutions(&result, tail) {
+            let analysis_config = AnalysisConfig::default();
+            let state = analyze::analyze(&scene.canvas, &synthetic, &analysis_config);
+            let mut worst = canvas_core::AnalysisSeverity::None;
+            let nodes: Vec<serde_json::Value> = scene
+                .canvas
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let flags = state.get(&node.id)?;
+                    worst = worst.max(flags.severity);
+                    let mut entry = serde_json::Map::new();
+                    entry.insert("id".into(), serde_json::json!(node.id));
+                    if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(flags) {
+                        entry.extend(map);
+                    }
+                    entry.insert(
+                        "badge".into(),
+                        serde_json::json!(analyze::badge_text(flags)),
+                    );
+                    Some(serde_json::Value::Object(entry))
+                })
+                .collect();
+            severity = worst.as_str();
+            analysis = serde_json::json!({
+                "quantile": tail,
+                "nodes": nodes,
+                "thresholds": serde_json::to_value(analysis_config)
+                    .unwrap_or(serde_json::json!({})),
+            });
+        }
+    }
+
+    // Квантильные карты: {"P50": {value, unit}, …} (те же поля, что у
+    // flow_recalc-значений)
+    let value_json = |v: &FlowValue| -> serde_json::Value {
+        serde_json::json!({ "value": v.num, "unit": v.unit.display() })
+    };
+    let series_json = |values: &[FlowValue]| -> serde_json::Value {
+        result
+            .quantiles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, q)| {
+                values
+                    .get(index)
+                    .map(|v| (mc::quantile_label(*q), value_json(v)))
+            })
+            .collect::<serde_json::Map<String, serde_json::Value>>()
+            .into()
+    };
+    let outputs: serde_json::Map<String, serde_json::Value> = result
+        .outputs
+        .iter()
+        .map(|(node, values)| (node.clone(), series_json(values)))
+        .collect();
+    let lines: serde_json::Map<String, serde_json::Value> = result
+        .lines
+        .iter()
+        .map(|((node, line), values)| (format!("{node}:{line}"), series_json(values)))
+        .collect();
+    let named: serde_json::Map<String, serde_json::Value> = result
+        .named
+        .iter()
+        .map(|((node, name), values)| (format!("{node}:{name}"), series_json(values)))
+        .collect();
+
+    Ok(serde_json::json!({
+        "runs": result.runs,
+        "failed_runs": result.failed_runs,
+        "mode": result.mode.as_str(),
+        "seed": result.seed,
+        "stale": result.stale,
+        "duration_ms": duration_ms,
+        "quantiles": result.quantiles,
+        "outputs": outputs,
+        "lines": lines,
+        "named": named,
+        "analysis": analysis,
+        "severity": severity,
+    }))
 }
 
 // --- FR-033: graph_apply — атомарная батч-композиция графа ---

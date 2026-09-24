@@ -3721,3 +3721,261 @@ fn node_desc_without_prose_fallback() {
         "проза-фолбэк убран: без desc/манифеста зоны нет"
     );
 }
+
+// --- FR-066 (M5/S3): monte_carlo_run — MC/QMC-прогон ---------------------------
+
+/// Хелпер: эталон №5 ADR-0006 (unit economics) одним Numi-листом —
+/// сборка через MCP (агентный путь), как эталон Instagram MVP.
+#[cfg(feature = "qmc")]
+fn fr066_etalon5_scene() -> (SceneState, String) {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr066.canvas"));
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 0, "y": 0, "width": 340, "text": "spend = 60000\nnew_customers = 3000\ncac = spend / new_customers\narpu = 12\nmargin = 0.8\nchurn = 0.1\nltv = arpu * margin / churn\nratio = ltv / cac\npayback = cac / (arpu * margin)"}"#,
+    )
+    .expect("unit-economics лист");
+    let id = scene.canvas.nodes.last().expect("нода").id.clone();
+    (scene, id)
+}
+
+/// FR-066 e2e: monte_carlo_run на эталоне №5 — квантили против oracle ±1 %
+/// (cac = 60000/N(3000, 100): медиана 20, P90 20.895, P99 21.684),
+/// сид-воспроизводимость (повтор — побитово те же квантили),
+/// engine-метаданные §5.7.4, анализ на P90.
+#[cfg(feature = "qmc")]
+#[test]
+fn mcp_fr066_monte_carlo_run_etalon5_reference() {
+    let (mut scene, ue) = fr066_etalon5_scene();
+    let request = format!(
+        r#"{{"runs": 4096, "mode": "qmc", "seed": 7, "params": {{"{ue}:new_customers": {{"dist": "normal", "mean": 3000, "sd": 100}}}}}}"#
+    );
+    let out = dispatch(&mut scene, "monte_carlo_run", &request).expect("monte_carlo_run");
+    assert_eq!(out["runs"], 4096);
+    assert_eq!(out["failed_runs"], 0);
+    assert_eq!(out["mode"], "qmc");
+    assert_eq!(out["seed"], 7);
+    assert_eq!(out["stale"], false, "первый прогон — не протух");
+    assert!(out["duration_ms"].as_f64().is_some_and(|ms| ms > 0.0));
+    assert_eq!(
+        out["quantiles"],
+        serde_json::json!([0.5, 0.9, 0.99]),
+        "дефолтные квантили"
+    );
+
+    // квантили cac (переменная листа — именованный выход) против oracle
+    let close_1pct = |actual: f64, oracle: f64| (actual - oracle).abs() <= oracle.abs() * 0.01;
+    let cac = out["named"][format!("{ue}:cac")]
+        .as_object()
+        .expect("named-серия cac");
+    let p50 = cac["P50"]["value"].as_f64().expect("P50");
+    let p90 = cac["P90"]["value"].as_f64().expect("P90");
+    let p99 = cac["P99"]["value"].as_f64().expect("P99");
+    assert!(close_1pct(p50, 20.0), "P50(cac) = {p50} vs 20.0");
+    assert!(close_1pct(p90, 20.895), "P90(cac) = {p90} vs 20.895");
+    assert!(close_1pct(p99, 21.684), "P99(cac) = {p99} vs 21.684");
+    assert!(p50 < p90 && p90 < p99, "монотонность квантилей");
+    // построчная серия: строка 2 — «cac = spend / new_customers»
+    assert!(
+        out["lines"][format!("{ue}:2")]["P90"]["value"]
+            .as_f64()
+            .is_some_and(|v| close_1pct(v, 20.895)),
+        "P90 строки cac"
+    );
+
+    // сид-воспроизводимость: повторный вызов с тем же seed — идентичные
+    // квантили (визуально дельт нет, diff снимков = 0)
+    let out2 = dispatch(&mut scene, "monte_carlo_run", &request).expect("повтор");
+    assert_eq!(out["named"], out2["named"], "квантили идентичны");
+    assert_eq!(out["outputs"], out2["outputs"]);
+    assert_eq!(out["lines"], out2["lines"]);
+
+    // engine-метаданные §5.7.4: raw JSON в canvasdesk.engine
+    assert_eq!(
+        scene.canvas.extra["canvasdesk"]["engine"]["version"],
+        "M5.0"
+    );
+    assert_eq!(
+        scene.canvas.extra["canvasdesk"]["engine"]["seed"].as_str(),
+        Some("7"),
+        "seed канонически строкой (JS-safe)"
+    );
+    assert_eq!(scene.canvas.extra["canvasdesk"]["engine"]["qmc"], true);
+
+    // анализ на хвостовом квантиле (P90): утилизаций нет — severity none
+    assert_eq!(out["severity"], "none");
+    assert!((out["analysis"]["quantile"].as_f64().unwrap_or(0.0) - 0.9).abs() < 1e-12);
+    assert!(
+        out["analysis"]["thresholds"].is_object(),
+        "пороги как у analyze_bottlenecks"
+    );
+
+    // undo: engine-метаданные — один undo-шаг на ПЕРВОМ прогоне
+    // (второй не менял канвас), снимок до мутации
+    let before = scene.take_undo().expect("undo-шаг engine-метаданных");
+    assert!(
+        before
+            .extra
+            .get("canvasdesk")
+            .and_then(|v| v.get("engine"))
+            .is_none(),
+        "снимок — до записи engine"
+    );
+}
+
+/// FR-066: режим mc — работает и детерминирован; кастомные квантили
+/// (P10 «runway»-кейс) и именованные серии ответа.
+#[cfg(feature = "qmc")]
+#[test]
+fn mcp_fr066_monte_carlo_run_mc_mode_and_custom_quantiles() {
+    let (mut scene, ue) = fr066_etalon5_scene();
+    let request = format!(
+        r#"{{"runs": 2048, "mode": "mc", "seed": 3, "quantiles": [0.1, 0.5], "params": {{"{ue}:new_customers": {{"dist": "normal", "mean": 3000, "sd": 100}}}}}}"#
+    );
+    let out = dispatch(&mut scene, "monte_carlo_run", &request).expect("mc-режим");
+    assert_eq!(out["mode"], "mc");
+    assert_eq!(out["quantiles"], serde_json::json!([0.1, 0.5]));
+    // P10(cac) = 60000/(3000 − 100·Φ⁻¹(0.1)) = 60000/3128.2 = 19.182
+    let p10 = out["named"][format!("{ue}:cac")]["P10"]["value"]
+        .as_f64()
+        .expect("P10");
+    assert!(
+        (p10 - 19.182).abs() <= 19.182 * 0.01,
+        "P10(cac) = {p10} vs 19.182"
+    );
+    // детерминизм MC-режима: тот же seed — те же квантили
+    let out2 = dispatch(&mut scene, "monte_carlo_run", &request).expect("mc-повтор");
+    assert_eq!(out["named"], out2["named"], "MC: сид-воспроизводимость");
+}
+
+/// FR-066: строгая валидация MCP — неизвестная нода/параметр, мусорный
+/// mode/dist/quantiles, QMC за 2^16 — ошибки ДО прогонов (канвас не
+/// помечается грязным).
+#[cfg(feature = "qmc")]
+#[test]
+fn mcp_fr066_monte_carlo_run_strict_validation() {
+    let (mut scene, ue) = fr066_etalon5_scene();
+    let before = scene.canvas.clone();
+    for (label, request) in [
+        (
+            "ghost-нода",
+            r#"{"runs": 100, "params": {"ghost:x": {"dist": "exp", "lambda": 1}}}"#,
+        ),
+        (
+            "параметр без строки",
+            &format!(
+                r#"{{"runs": 100, "params": {{"{ue}:no_such": {{"dist": "exp", "lambda": 1}}}}}}"#
+            ),
+        ),
+        (
+            "мусорный dist",
+            &format!(
+                r#"{{"runs": 100, "params": {{"{ue}:churn": {{"dist": "weibull", "lambda": 1}}}}}}"#
+            ),
+        ),
+        (
+            "ключ без двоеточия",
+            r#"{"runs": 100, "params": {"ue churn": {"dist": "exp", "lambda": 1}}}"#,
+        ),
+        ("runs = 0", r#"{"runs": 0, "params": {}}"#),
+        ("QMC за 2^16", r#"{"runs": 65537, "params": {}}"#),
+        (
+            "мусорный mode",
+            r#"{"runs": 100, "mode": "rng", "params": {}}"#,
+        ),
+        (
+            "квантиль вне (0,1)",
+            r#"{"runs": 100, "quantiles": [1.5], "params": {}}"#,
+        ),
+        (
+            "σ ≤ 0",
+            &format!(
+                r#"{{"runs": 100, "params": {{"{ue}:churn": {{"dist": "normal", "mean": 1, "sd": 0}}}}}}"#
+            ),
+        ),
+    ] {
+        let err = dispatch(&mut scene, "monte_carlo_run", request)
+            .unwrap_err()
+            .to_lowercase();
+        assert!(!err.is_empty(), "{label}: ошибка обязана быть");
+    }
+    assert_eq!(scene.canvas, before, "невалидные вызовы канвас не меняют");
+    // без обязательного params — ошибка
+    assert!(dispatch(&mut scene, "monte_carlo_run", r#"{"runs": 100}"#).is_err());
+    // без runs — ошибка
+    assert!(dispatch(&mut scene, "monte_carlo_run", r#"{"params": {}}"#).is_err());
+}
+
+/// FR-066 (P3): анализ узких мест на P90 — severity эскалирует на хвосте
+/// (P50 → warn, P90 → critical), FR-016 без правок: ρ-канвас
+/// «load = 0.85 / rho = load × 1 %», load ~ N(0.85, 0.05).
+#[cfg(feature = "qmc")]
+#[test]
+fn mcp_fr066_monte_carlo_run_severity_escalates_on_p90() {
+    let mut scene = SceneState::new(
+        Canvas::default(),
+        PathBuf::from("target/tmp/fr066-rho.canvas"),
+    );
+    dispatch(
+        &mut scene,
+        "node_create_note",
+        r#"{"x": 0, "y": 0, "text": "load = 0.85\nrho = load × 1 %"}"#,
+    )
+    .expect("ρ-лист");
+    let srv = scene.canvas.nodes.last().expect("нода").id.clone();
+
+    // P50-снимок: severity none/warn — но инструмент анализирует ХВОСТ,
+    // поэтому проверяем эскалацию через сам ответ: P90 ρ ≈ 0.914 → critical
+    let request = format!(
+        r#"{{"runs": 4096, "seed": 11, "params": {{"{srv}:load": {{"dist": "normal", "mean": 0.85, "sd": 0.05}}}}}}"#
+    );
+    let out = dispatch(&mut scene, "monte_carlo_run", &request).expect("monte_carlo_run");
+    assert_eq!(out["severity"], "critical", "P90 ρ ≈ 0.914 — critical");
+    let node = out["analysis"]["nodes"]
+        .as_array()
+        .expect("узлы анализа")
+        .iter()
+        .find(|n| n["id"] == srv.as_str())
+        .expect("флаги srv")
+        .clone();
+    assert_eq!(node["severity"], "critical");
+    assert!(
+        node["utilization"]
+            .as_f64()
+            .is_some_and(|u| u > 0.9 && u < 1.0),
+        "ρ из P90-снимка: {node}"
+    );
+    // квантили значения ноды (ρ): P50 < 0.9 ≤ P90
+    let rho = out["outputs"][&srv].as_object().expect("серия ρ");
+    let p50 = rho["P50"]["value"].as_f64().expect("P50 ρ");
+    let p90 = rho["P90"]["value"].as_f64().expect("P90 ρ");
+    assert!(
+        (p50 - 0.85).abs() < 0.02 && (p90 - 0.914).abs() < 0.02,
+        "P50 ρ = {p50}, P90 ρ = {p90}"
+    );
+    assert!(p50 < 0.9 && p90 >= 0.9, "эскалация именно на хвосте");
+}
+
+/// FR-066 §5.7.4: рассинхрон версии движка в extra → stale = true.
+#[cfg(feature = "qmc")]
+#[test]
+fn mcp_fr066_monte_carlo_run_stale_on_version_mismatch() {
+    let (mut scene, ue) = fr066_etalon5_scene();
+    let request = format!(
+        r#"{{"runs": 256, "seed": 0, "params": {{"{ue}:new_customers": {{"dist": "normal", "mean": 3000, "sd": 100}}}}}}"#
+    );
+    // протухшие метаданные версии M4.9 (симуляция прогона старой версией)
+    scene.canvas.extra.insert(
+        "canvasdesk".to_owned(),
+        serde_json::json!({"engine": {"version": "M4.9", "seed": "1", "stats": true, "parallel": true, "qmc": false}}),
+    );
+    let out = dispatch(&mut scene, "monte_carlo_run", &request).expect("прогон");
+    assert_eq!(out["stale"], true, "версия M4.9 ≠ M5.0 — протух");
+    // после прогона метаданные обновлены актуальной версией
+    assert_eq!(
+        scene.canvas.extra["canvasdesk"]["engine"]["version"],
+        "M5.0"
+    );
+    let out2 = dispatch(&mut scene, "monte_carlo_run", &request).expect("повтор");
+    assert_eq!(out2["stale"], false, "метаданные актуальны");
+}

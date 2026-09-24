@@ -202,7 +202,8 @@ const SIDE_PROP: &str =
 /// 40 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
 /// FR-029 — адресация портов; FR-032 — edges_list/edge_get/graph_validate;
 /// FR-033 — graph_apply; FR-016 — analyze_bottlenecks; FR-017/CP6 — 9 whatif_*;
-/// PRD-0008 Q5 — schemes_*; PRD-0007 — lineage + explain_number F-9).
+/// PRD-0008 Q5 — schemes_*; PRD-0007 — lineage + explain_number F-9)
+/// + 1 native-only FR-066 (monte_carlo_run — см. [`MC_TOOLS`]).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "canvas_info",
@@ -488,10 +489,52 @@ const TOOLS: &[ToolSpec] = &[
     },
 ];
 
+/// FR-066 (M5/S3, §5.8): имя native-only MC/QMC-инструмента. Реестр
+/// wasm-сборки его НЕ отдаёт (фича `qmc` не собирается на wasm), но
+/// скиллы описывают весь (native) продукт — каноническое имя участвует
+/// в тестах синхронности на обеих платформах. `allow(dead_code)` на
+/// wasm: константа используется тестами и native-реестром.
+#[allow(dead_code)]
+const MC_TOOL_NAME: &str = "monte_carlo_run";
+
+/// Native-only инструменты (FR-066 §5.8): monte_carlo_run — за фичей
+/// `qmc` канвас-сцены (stats+parallel+sobol_burley, не собирается на
+/// wasm32; диспетчер сцены без фичи отвечает внятной ошибкой).
+#[cfg(not(target_arch = "wasm32"))]
+const MC_TOOLS: &[ToolSpec] = &[ToolSpec {
+    name: MC_TOOL_NAME,
+    description: "FR-066: Monte Carlo/QMC-прогон модели — N прогонов расчётного графа с распределёнными параметрами и квантили P50/P90/P99 результатов (runway/LTV-риски: «с какой вероятностью уйдёт в ноль» — глубже ±20 %-сеток whatif). params: {\"node:param\": {\"dist\": \"normal\"|\"lognormal\"|\"exp\"|\"poisson\", …}} — normal/lognormal: {mean, sd} (натуральное пространство), exp/poisson: {lambda}; параметр — строка «param = …» Numi-листа ноды (подменяется на каждый прогон, паттерн whatif_set_param; единица придаётся формулой-потребителем). mode: \"qmc\" (дефолт — Owen-scrambled Sobol, меньшая дисперсия) | \"mc\" (ChaCha8); seed — u64 (дефолт 0; тот же seed → те же квантили — воспроизводимость first-class); quantiles — дефолт [0.5, 0.9, 0.99]. Ответ: {runs, failed_runs, mode, seed, stale, duration_ms, quantiles, outputs{node:{P50:{value,unit}…}}, lines{node:line:{…}}, named{node:out:{…}}, analysis{quantile, nodes (как analyze_bottlenecks), thresholds}, severity}. analysis — узкие места FR-016 на ХВОСТОВОМ квантиле (P90): severity none|warn|critical|overload. Лимиты: runs ≤ 10⁶; qmc ≤ 65536 (2¹⁶ — длина Sobol); poisson λ ≤ 1000. Цикл потока — ошибка вызова; параметры не из листа — ошибка ДО прогонов",
+    required: &["runs", "params"],
+    properties: &[
+        (
+            "runs",
+            r#"{"type":"integer","minimum":1,"maximum":1000000}"#,
+        ),
+        (
+            "params",
+            r#"{"type":"object","additionalProperties":{"type":"object","required":["dist"],"properties":{"dist":{"type":"string","enum":["normal","lognormal","exp","poisson"]},"mean":{"type":"number"},"sd":{"type":"number"},"lambda":{"type":"number"}}}}"#,
+        ),
+        (
+            "mode",
+            r#"{"type":"string","enum":["qmc","mc"],"default":"qmc"}"#,
+        ),
+        ("seed", r#"{"type":"integer","minimum":0}"#),
+        (
+            "quantiles",
+            r#"{"type":"array","items":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":1},"default":[0.5,0.9,0.99]}"#,
+        ),
+    ],
+}];
+#[cfg(target_arch = "wasm32")]
+const MC_TOOLS: &[ToolSpec] = &[];
+
 /// tools/list: массив дескрипторов с name/description/inputSchema.
+/// Native: 41 (40 + monte_carlo_run FR-066); wasm: 40 (§5.8 — qmc не
+/// собирается на wasm, реестр без native-only инструментов).
 pub fn tools_list() -> Value {
     let tools: Vec<Value> = TOOLS
         .iter()
+        .chain(MC_TOOLS.iter())
         .map(|tool| {
             let properties: serde_json::Map<String, Value> = tool
                 .properties
@@ -555,7 +598,8 @@ pub fn unwrap_app_payload(payload: &str) -> Result<Value, String> {
 ///   ВСЕГДА успешный (ADR-0009: состояние приложения не влияет на handshake);
 /// - `notifications/initialized`, `notifications/cancelled` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 40 инструментов с inputSchema;
+/// - `tools/list` → 41 инструмент с inputSchema (40 + monte_carlo_run
+///   FR-066; на wasm32 — 40, реестр без qmc);
 /// - `tools/call` → форвард строки на pipe, конверт приложения разворачивается
 ///   в чистый результат (text-контент + structuredContent, FR-034);
 ///   isError-результат приложения проходит насквозь; pipe мёртв → isError
@@ -1170,17 +1214,22 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: ровно 40 инструментов (FR-032: +3, FR-033: +graph_apply,
-    /// FR-016: +analyze_bottlenecks, FR-017/CP6: +9 whatif_*), у каждого
-    /// inputSchema с required.
+    /// tools/list: 41 инструмент native (40 + monte_carlo_run FR-066;
+    /// wasm: 40 — реестр без qmc, §5.8), у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().expect("массив tools");
+        // FR-066 §5.8: monte_carlo_run — native-only (фича qmc не
+        // собирается на wasm32 — реестр wasm-сборки без него)
+        #[cfg(not(target_arch = "wasm32"))]
+        let expected_count = 41;
+        #[cfg(target_arch = "wasm32")]
+        let expected_count = 40;
         assert_eq!(
             tools.len(),
-            40,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9)"
+            expected_count,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9) + monte_carlo_run (FR-066, native)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
@@ -1228,6 +1277,12 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "нет инструмента {expected}");
         }
+        // FR-066: monte_carlo_run — только в native-реестре
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(
+            names.contains(&MC_TOOL_NAME),
+            "native-реестр обязан объявлять monte_carlo_run (FR-066)"
+        );
         // required по сигнатурам
         let by_name = |name: &str| -> Value {
             tools
@@ -1333,6 +1388,16 @@ mod tests {
     // Файлы встраиваются include_str! (компайл-тайм — работает и под wasm);
     // новый файл скилла добавляется в списки ниже осознанно.
 
+    /// Канонические имена всех инструментов native-продукта (FR-066 §5.8:
+    /// wasm-реестр — подмножество без monte_carlo_run, но скиллы описывают
+    /// весь продукт — синхронность проверяется по native-виду на обеих
+    /// платформах).
+    fn canonical_tool_names() -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = TOOLS.iter().map(|tool| tool.name).collect();
+        names.push(MC_TOOL_NAME);
+        names
+    }
+
     /// Все markdown-файлы пакета скиллов (для call-позиций).
     fn skills_package_text() -> String {
         [
@@ -1395,53 +1460,56 @@ mod tests {
     const CALL_POSITION_OPS: &[&str] = &["param_set"];
 
     /// Правило 1 (полнота): каталог skills/ описывает каждый инструмент
-    /// реестра TOOLS.
+    /// native-реестра (FR-066: wasm-сборка отдаёт подмножество — каталог
+    /// описывает продукт целиком).
     #[test]
     fn skills_catalog_covers_every_tool() {
         let catalog = include_str!("../../../skills/canvasdesk-mcp/references/tools.md");
-        for tool in TOOLS {
+        for tool in canonical_tool_names() {
             assert!(
-                catalog.contains(tool.name),
-                "skills: каталог references/tools.md не описывает инструмент {} — \
+                catalog.contains(tool),
+                "skills: каталог references/tools.md не описывает инструмент {tool} — \
                  обновите пакет (skills/UPDATE-PROTOCOL.md)",
-                tool.name
             );
         }
     }
 
-    /// Правило 2 (покрытие): каждый инструмент упомянут хотя бы в одном
-    /// SKILL.md — новый инструмент обязан получить зону ответственности.
+    /// Правило 2 (покрытие): каждый инструмент native-продукта упомянут
+    /// хотя бы в одном SKILL.md — новый инструмент обязан получить зону
+    /// ответственности (FR-066: monte_carlo_run — canvasdesk-model-verify).
     #[test]
     fn skills_bodies_mention_every_tool() {
         let bodies = skills_bodies_text();
-        for tool in TOOLS {
+        for tool in canonical_tool_names() {
             assert!(
-                bodies.contains(tool.name),
-                "skills: инструмент {} не упомянут ни в одном SKILL.md — \
+                bodies.contains(tool),
+                "skills: инструмент {tool} не упомянут ни в одном SKILL.md — \
                  отнесите его к зоне скилла (skills/UPDATE-PROTOCOL.md)",
-                tool.name
             );
         }
     }
 
     /// Правило 3 (счётчик): README пакета несёт актуальное число
-    /// инструментов («N инструмент…» — с любым окончанием слова).
+    /// инструментов native-продукта («N инструмент…» — с любым окончанием
+    /// слова; FR-066: 41 — включая native-only monte_carlo_run).
     #[test]
     fn skills_readme_tool_counter_is_current() {
         let readme = include_str!("../../../skills/README.md");
+        let count = canonical_tool_names().len();
         assert!(
-            readme.contains(&format!("{} инструмент", TOOLS.len())),
+            readme.contains(&format!("{} инструмент", count)),
             "skills/README.md не содержит актуальный счётчик «{} инструмент(ов…)» — \
              обновите пакет (skills/UPDATE-PROTOCOL.md)",
-            TOOLS.len()
+            count
         );
     }
 
     /// Правило 4 (call-позиции): форма `` `имя` {…} `` в пакете — вызов;
-    /// имя обязано быть инструментом реестра или операцией батча. Ловит
-    /// вызовы удалённых/переименованных инструментов.
+    /// имя обязано быть инструментом native-продукта или операцией батча.
+    /// Ловит вызовы удалённых/переименованных инструментов.
     #[test]
     fn skills_call_positions_are_registered_tools() {
+        let known_names = canonical_tool_names();
         for token in call_position_tokens(&skills_package_text()) {
             let looks_like_identifier =
                 token.chars().next().is_some_and(|c| c.is_ascii_lowercase())
@@ -1451,7 +1519,7 @@ mod tests {
             if !looks_like_identifier {
                 continue; // проза в бэктиках перед '{' — не вызов
             }
-            let known = TOOLS.iter().any(|t| t.name == token)
+            let known = known_names.contains(&token.as_str())
                 || CALL_POSITION_OPS.contains(&token.as_str());
             assert!(
                 known,
@@ -1492,10 +1560,15 @@ mod tests {
             panic!("tools/list должен ответить");
         };
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
+        // FR-066 §5.8: monte_carlo_run — native-only (wasm: 40 без qmc)
+        #[cfg(not(target_arch = "wasm32"))]
+        let expected_count = 41;
+        #[cfg(target_arch = "wasm32")]
+        let expected_count = 40;
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
-            40,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9)"
+            expected_count,
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9) + monte_carlo_run (FR-066, native)"
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

@@ -48,6 +48,12 @@ mod args;
 // `stats`; без неё имена не регистрируются и дают UnknownFunction (fallback).
 #[cfg(feature = "stats")]
 mod stats;
+// FR-066: Monte Carlo + QMC-движок (L4/P3, ADR-0008 M5/S3) — только с
+// фичей `qmc` (implies stats+parallel+sobol_burley, §5.6); wasm-сборка
+// идёт без фичи (§5.8). Публичный модуль: McConfig/McResult/Distribution,
+// сэмплы, квантили, синтетический FlowSolutions, engine-метаданные.
+#[cfg(feature = "qmc")]
+pub mod mc;
 
 /// Результат вычисления формулы ноды — runtime-состояние приложения
 /// (инвариант 4 FR-013: НЕ сериализуется в `.canvas`, пересчитывается

@@ -553,6 +553,42 @@ pub fn propagate_with_lines_data(
     Ok(solutions)
 }
 
+// --- FR-066 (M5/S3): Monte Carlo + QMC-движок ----------------------------------
+
+/// FR-066 (M5/S3, волна S ADR-0008): Monte Carlo + QMC-прогон — слой
+/// L4/P3 поверх [`propagate_with_lines`]. Выполняет `N ≥ 10⁴` прогонов
+/// расчётного графа с распределёнными параметрами
+/// ([`crate::expr::mc::McConfig::params`] → построчные what-if подмены,
+/// Normal/LogNormal/Exp/Poisson из FR-063) и сводит результаты к
+/// квантилям P50/P90/P99 (collect-then-reduce, §5.7.3).
+///
+/// **СИБЛИНГ** (контракт §5.1): `propagate_with_lines` НЕ трогается —
+/// сигнатура и поведение стабильны; M5 только добавляет эту функцию.
+/// Реализация и контракты детерминизма — [`crate::expr::mc`]
+/// (сид `hash(content) ⊕ scenario_seed ⊕ run_idx` §5.7.2, ChaCha8,
+/// чанки 256/задача за фичей `parallel`, версия движка в `canvas.extra`
+/// §5.7.4). Фича `qmc` не собирается на wasm (§5.8).
+#[cfg(feature = "qmc")]
+pub fn propagate_monte_carlo(
+    canvas: &Canvas,
+    mc_config: &crate::expr::mc::McConfig,
+) -> Result<crate::expr::mc::McResult, CycleError> {
+    crate::expr::mc::propagate_monte_carlo(canvas, mc_config)
+}
+
+/// [`propagate_monte_carlo`] с прогрессом `(completed, total)` после
+/// каждого завершённого прогона (FR-066 P1: «прогресс через callback/
+/// AppEvent» — UI показывает N/total и ETA; AppEvent-интеграция —
+/// ответственность приложения).
+#[cfg(feature = "qmc")]
+pub fn propagate_monte_carlo_with_progress(
+    canvas: &Canvas,
+    mc_config: &crate::expr::mc::McConfig,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<crate::expr::mc::McResult, CycleError> {
+    crate::expr::mc::propagate_monte_carlo_with_progress(canvas, mc_config, progress)
+}
+
 /// FR-065 P2: результат вычисления одной ноды — собирается в параллельном
 /// пути каждым потоком в свой аккумулятор, затем merge-ится в `solutions`
 /// в детерминированном порядке (sort by `index` ascending — контракт §5.7.3

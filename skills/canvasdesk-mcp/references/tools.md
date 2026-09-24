@@ -1,4 +1,4 @@
-# Каталог инструментов CanvasDesk MCP — 39 инструментов
+# Каталог инструментов CanvasDesk MCP — 41 инструмент
 
 Полный реестр инструментов MCP-сервера CanvasDesk по группам. Канонический
 источник — ответ `tools/list` живого сервера (реестр `TOOLS` в
@@ -60,7 +60,7 @@
 | `template_instantiate` {id, x, y, params?} | id: id шаблона | Создать text-ноду из шаблона; params — {имя: число \| {num, unit}}; вне min/max — ошибка |
 | `schemes_apply` {id, x?, y?} | id: id схемы | Вставить схему галереи в текущий канвас: ремап id без коллизий, один undo-шаг, ответ {applied, name, nodes, edges, bbox, flow} |
 
-## Вычисление и проверка (6)
+## Вычисление и проверка (7)
 
 | Инструмент | Сигнатура | Назначение |
 |---|---|---|
@@ -70,6 +70,7 @@
 | `flow_cycle_check` {} | — | Проверка DAG-инварианта value-рёбер: [] — циклов нет, иначе список id участников |
 | `graph_validate` {} | — | Валидация модели: {valid, issues: [{severity, code, node_id, edge_id, message}]} — коды E-CYCLE, E-OVERLOAD, E-UNIT, E-PORT-UNKNOWN, E-DOUBLE-INPUT, W-AMBIGUOUS-SRC, W-UNUSED-SLOT |
 | `analyze_bottlenecks` {} | — | Узкие места и риск очередей АКТИВНОГО состояния: {nodes: [{id, severity, utilization?, queue_length?, wait_sec?, badge}], thresholds} |
+| `monte_carlo_run` {runs, params, mode?, seed?, quantiles?} | runs: integer 1..10⁶; params: {"node:param": {dist, mean/sd \| lambda}}; mode: qmc \| mc (дефолт qmc); seed: u64 (дефолт 0); quantiles: [0..1] | FR-066: MC/QMC-прогон N ≥ 10⁴ с распределёнными параметрами → квантили P50/P90/P99 итогов/строк/именованных выходов + analysis (узкие места на хвостовом P90); dist: normal/lognormal {mean, sd} (натуральное пространство), exp/poisson {lambda}; параметр — строка «param = …» листа; тот же seed → те же квантили (native-only: wasm без qmc, §5.8) |
 
 ## What-if сценарии (9)
 

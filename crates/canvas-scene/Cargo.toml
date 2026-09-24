@@ -11,3 +11,10 @@ canvas-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[features]
+# FR-066 (M5/S3, ADR-0008 волна S): Monte Carlo/QMC-движок — проброс фичи
+# canvas-core/qmc в MCP-диспетчер сцены (monte_carlo_run). wasm-сборка —
+# без фичи (контракт §5.8 FR-066: qmc не собирается на wasm32); нативный
+# default — тоже (zero-dep; включается явно: --features canvas-scene/qmc).
+qmc = ["canvas-core/qmc"]
