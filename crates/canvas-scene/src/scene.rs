@@ -1369,6 +1369,10 @@ impl SceneState {
         } else {
             String::new()
         };
+        // FR-069 хвосты (T9-сессия 2026-09-24): `auto_rows = 0` — этот
+        // путь НЕ видит авто-строк (они в ensure_spill_rows_reserve);
+        // подпись зоны авто-строк не нужна.
+        let auto_rows = 0;
         let before = self.canvas.nodes[index].height;
         ensure_result_reserve(
             &mut self.canvas.nodes[index],
@@ -1378,6 +1382,7 @@ impl SceneState {
             desc_expanded,
             footer_reserve,
             &sigma_name,
+            auto_rows,
         );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
@@ -1507,6 +1512,11 @@ impl SceneState {
         } else {
             String::new()
         };
+        // FR-069 хвосты (T9-сессия 2026-09-24): авто-строки есть — рендер
+        // вставляет подпись зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N»; уровень 1
+        // обязан учесть её ряд (I-2). Сами строки уже в `display` как
+        // префикс «путь = значение» — +1 ряд только на метку.
+        let auto_rows = rows.len();
         let before = self.canvas.nodes[index].height;
         ensure_result_reserve(
             &mut self.canvas.nodes[index],
@@ -1516,6 +1526,7 @@ impl SceneState {
             desc_expanded,
             footer_reserve,
             &sigma_name,
+            auto_rows,
         );
         if self.canvas.nodes[index].height > before {
             let node = &self.canvas.nodes[index];
@@ -1777,11 +1788,13 @@ mod reserve_tests {
         let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Уровень 2 — отключаем (None): работает консервативная оценка,
         // детерминированная и без шрифтов (wasm-путь).
-        install_measured_reserve(|text, width, lines, desc, expanded, footer, sigma| {
-            crate::measure::estimated_result_reserve_height(
-                text, width, lines, desc, expanded, footer, sigma,
-            )
-        });
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                crate::measure::estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                )
+            },
+        );
         let mut node = Node::text(
             "n1",
             format!("{} = 5\n{} = 6", "a".repeat(30), "b".repeat(30)),
@@ -1812,6 +1825,7 @@ mod reserve_tests {
             false,
             false,
             "",
+            0,
         );
         assert!(
             (grown - expected).abs() < 1.0,
@@ -1825,16 +1839,18 @@ mod reserve_tests {
     #[test]
     fn ensure_reserve_at_respects_desc_expanded() {
         let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        install_measured_reserve(|text, width, lines, desc, expanded, footer, sigma| {
-            let base = crate::measure::estimated_result_reserve_height(
-                text, width, lines, desc, expanded, footer, sigma,
-            );
-            if expanded {
-                base + 60.0 // имитация полного описания (3 ряда)
-            } else {
-                base
-            }
-        });
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                let base = crate::measure::estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                );
+                if expanded {
+                    base + 60.0 // имитация полного описания (3 ряда)
+                } else {
+                    base
+                }
+            },
+        );
         let mut node = Node::text("n2", "rps = 800 rps", 0.0, 0.0);
         node.width = 260.0;
         node.height = 100.0; // занижено — кламп-оценка тоже растит

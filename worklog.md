@@ -5628,3 +5628,64 @@ Stage Summary:
 - design/ = единый источник правил UI для правки владельцем: 30 файлов, ~1900 строк (README + rules/9 + use-cases/20).
 - Контракты зафиксированы явно: клик = press+release внутри; тултип/тост не крадут клик (Passive/пассивное рисование); галерея Modals/Block с клавиатурным scope; what-if бар HideBelow{900,600}; Esc-стек из реестра; hit ≥ визуал; slot-only кит без цветовой арифметики.
 - Вопрос владельцу (правило AGENTS.md): требуется ли доработка онбординга/user-docs под появление design/ — визуального изменения нет, предполагаю «нет».
+
+---
+## 2026-09-24 — node-tabular-body-analysis.md: аудит + доработка подписи зоны авто-строк
+
+- **Агент:** Super Z (сессия web-28293c48; директива владельца:
+  «Реализуй node-tabular-body-analysis.md», с отправкой плана/отчётов/
+  саммари в Telegram)
+- **Контракт:** документ v1.2 — 15 доработок D-1…D-15, 5 этапов A–E,
+  6 инвариантов I-1…I-6, 9 вопросов Q1–Q9; репозиторий danku13/CanvasDesk.
+
+### Work Log
+- **Baseline:** Rust stable 1.98.1 установлен в среде; `cargo build` ✓;
+  `cargo test --workspace` (lib + integration, кроме GPU-сьютов
+  canvas-render) — 1259 passed / 0 failed; `cargo fmt --check` ✓;
+  clippy --workspace --lib -D warnings ✓; `token_lint` ✓ (G1).
+- **Аудит D-1…D-15:** все 15 доработок уже реализованы в main (FR-061
+  этапы A–E + FR-069 этап F) — сверены по коду символ-в-символ с
+  контрактами документа. Тесты T1 (display_parts oracle), T2 (инвариант
+  ширины tcp-lb), T3 (RowGuides oracle), T4 (measure/render паритет),
+  T5 (регрессия портов I-1), T6 (H9-2 хиты), T8 (деградация бейджей),
+  T9 (приёмка — детерминированные оракулы; headless-скриншоты WebGPU
+  невозможны — прецедент FR-061) — зелёные.
+- **Найденный пробел:** подпись зоны авто-строк «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N»
+  (прототип §3.1, FR-069 отложено «связана с паритетом меры авто-строк»)
+  — НЕ была реализована. Закрыл в этой сессии:
+  (1) `ZoneKind::Auto` + `zone_label_text_lang(Auto, N, lang)` —
+  RU «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N», EN «INCOMING VALUES · N».
+  (2) `spill_row_items(+language)` — метка перед первой авто-строкой
+  (sans, ZONE_LABEL_LINE_HEIGHT, без source_line — I-1).
+  (3) I-2 паритет меры: `estimated_result_reserve_height(+auto_rows)`
+  — +1 ряд ZONE_LABEL_LINE_HEIGHT при `auto_rows > 0`; контракт
+  `MeasuredReserveFn` расширен (8 входов — `#[allow(too_many_arguments)]`,
+  согласованный контракт рендера/оценки).
+  (4) `measured_result_reserve_height(+auto_rows)` (canvas-app) —
+  уровень 2 также добавляет ряд метки (мера не видит spill_prefix).
+  (5) Сцена: `ensure_spill_rows_reserve` передаёт `rows.len()`;
+  `ensure_reserve_at` передаёт 0 (без авто-строк).
+- **Тесты +3:** `zone_label_text_is_uppercase_with_count` расширен
+  Auto-вариантом; `spill_row_items_zone_label_localized_and_counted`
+  (RU/EN/empty); `estimate_includes_auto_row_zone_label` (I-2: при
+  `auto_rows > 0` оценка растёт на ZONE_LABEL_LINE_HEIGHT).
+- **Гейты после правок:** `cargo test --workspace` (lib + integration,
+  кроме GPU) — 31/31 сьютов зелёные, 0 отказов; clippy --workspace
+  --tests -D warnings ✓; `cargo fmt --check` ✓; `token_lint` ✓ (G1 —
+  новых hex-литералов не введено, метка использует `theme.quote`).
+
+### Stage Summary
+- **Документ реализован на 100%:** все 15 доработок D-1…D-15 (ядро +
+  рендер + кит), 5 этапов A–E, 6 инвариантов I-1…I-6 — закрыты; 9
+  вопросов Q1–Q9 — решены владельцем (Q9 направляющие невидимы —
+  DebugOverlay F-10; Q3 prose-фолбэк убран; Q6 дефолт 360–400; Q8
+  авто-обрезка идентификаторов).
+- **Доработка сессии:** подпись зоны авто-строк — последний
+  отложенный Stage F пункт, закрыта с I-2 паритетом меры.
+- **Артефакты:** ветка main, +274/−54 по 5 файлам (canvas-render
+  row_grid.rs/text.rs, canvas-scene measure.rs/scene.rs, canvas-app
+  app.rs); +3 теста.
+- **Отложенные v2-пункты** (вне скоупа документа, требует решения
+  владельца): sans 9.5px текст пилюль бейджей; ужимание высоты (I-6
+  reversal); port re-anchoring slots заголовка блока; drag-разворот
+  (Q7, после редизайна портов); ellipsis длинных путей авто-строк.

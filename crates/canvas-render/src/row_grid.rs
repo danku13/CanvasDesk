@@ -342,18 +342,29 @@ pub(crate) fn block_preview_text_lang(
 /// «параметры · N» / «расчёт · N», uppercase). Единая точка сборки для
 /// рендера и тестов; текст метки высоту ряда не ведёт (line_height —
 /// константа рендера ZONE_LABEL_LINE_HEIGHT).
+///
+/// FR-069 хвосты (T9-сессия 2026-09-24): `Auto` — подпись зоны авто-строк
+/// «входящие значения · N» (прототип §3.1: авто-строки идут с префиксом
+/// «входящие значения», единая таблица ноды). Раньше отложена (CR-069
+/// «подпись зоны “входящие значения” отложена»); сейчас закрыта — рендер
+/// вставляет метку перед ПЕРВОЙ авто-строкой, оценка уровня 1 учитывает
+/// ряд метки (I-2 measure = render).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ZoneKind {
     /// Строки-присваивания (`name = литерал`) — «параметры».
     Params,
     /// Расчётные строки (выражения) — «расчёт».
     Calc,
+    /// Авто-строки приёмника (FR-050 Р-4, префикс тела) — «входящие
+    /// значения». Счётчик — число пролитых рёбер (`Vec<AutoRow>::len()`).
+    Auto,
 }
 
 pub(crate) fn zone_label_text_lang(kind: ZoneKind, count: usize, language: Language) -> String {
     let (ru, en) = match kind {
         ZoneKind::Params => ("параметры", "params"),
         ZoneKind::Calc => ("расчёт", "calc"),
+        ZoneKind::Auto => ("входящие значения", "incoming values"),
     };
     let label = match language {
         Language::Ru => ru,
@@ -1036,6 +1047,8 @@ mod tests {
 
     /// FR-069 (этап F): подписи секций — uppercase по прототипу (.grp
     /// text-transform), счётчик через разделитель « · »; RU/EN.
+    /// FR-069 хвосты (T9-сессия 2026-09-24): `Auto` — «входящие значения · N»
+    /// (RU) / «INCOMING VALUES · N» (EN), счётчик — число авто-строк.
     #[test]
     fn zone_label_text_is_uppercase_with_count() {
         assert_eq!(
@@ -1053,6 +1066,20 @@ mod tests {
         assert_eq!(
             zone_label_text_lang(ZoneKind::Calc, 2, Language::En),
             "CALC · 2"
+        );
+        // FR-069 хвосты: зона авто-строк — «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» (RU) /
+        // «INCOMING VALUES · N» (EN). N = число пролитых рёбер приёмника.
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Auto, 4, Language::Ru),
+            "ВХОДЯЩИЕ ЗНАЧЕНИЯ · 4"
+        );
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Auto, 1, Language::En),
+            "INCOMING VALUES · 1"
+        );
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Auto, 0, Language::Ru),
+            "ВХОДЯЩИЕ ЗНАЧЕНИЯ · 0"
         );
     }
 

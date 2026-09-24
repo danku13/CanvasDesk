@@ -92,6 +92,15 @@ const MONO_AVG_CHAR_W: f32 = 0.614 * BODY_FONT_SIZE;
 /// дешевая метрика среднего аванса символа. Оценка только РАСТИТ высоту
 /// (завышение безопасно), поэтому годится воротами двухуровневого refit:
 /// если оценка влезает в текущую высоту, точное измерение не нужно.
+///
+/// FR-069 хвосты (T9-сессия 2026-09-24): `auto_rows` — число авто-строк
+/// приёмника (FR-050 Р-4). Когда `auto_rows > 0`, рендер вставляет перед
+/// ними подпись зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» (отдельный ряд
+/// `ZONE_LABEL_LINE_HEIGHT`) — оценка обязана его учесть (I-2 measure =
+/// render), иначе уровень 1 пропускал переполнение на высоту ряда метки.
+/// Сами авто-строки в `text` уже есть (сцена готовит `display_text` с
+/// префиксом «путь = значение»), поэтому +1 ряд — только на метку.
+#[allow(clippy::too_many_arguments)] // FR-069 хвосты: 8 согласованных входов резерва (I-2)
 pub fn estimated_result_reserve_height(
     text: &str,
     node_width: f32,
@@ -100,6 +109,7 @@ pub fn estimated_result_reserve_height(
     desc_expanded: bool,
     footer_reserve: bool,
     sigma_name: &str,
+    auto_rows: usize,
 ) -> f32 {
     let body_width = (node_width - BODY_PADDING * 2.0).max(BODY_PADDING);
     // FR-069 (этап F): супрессия абзаца описания — зона описания показывает
@@ -185,6 +195,14 @@ pub fn estimated_result_reserve_height(
     } else {
         0.0
     };
+    // FR-069 хвосты (T9-сессия 2026-09-24): подпись зоны авто-строк —
+    // ряд `ZONE_LABEL_LINE_HEIGHT`, если авто-строки есть. Сами строки
+    // уже посчитаны в `rows` (они в `text` как «путь = значение»).
+    let auto_label_rows = if auto_rows > 0 {
+        ZONE_LABEL_LINE_HEIGHT
+    } else {
+        0.0
+    };
     let footer = if footer_reserve {
         RESULT_LINE_HEIGHT + 2.0
     } else {
@@ -194,6 +212,7 @@ pub fn estimated_result_reserve_height(
         + BODY_TOP_GAP
         + desc_rows
         + label_rows
+        + auto_label_rows
         + sigma_rows
         + (rows as f32 + header_rows) * BODY_LINE_HEIGHT
         + BODY_PADDING
@@ -205,10 +224,12 @@ pub fn estimated_result_reserve_height(
 /// реализация (canvas-app) шейпит реальными Noto-шрифтами через
 /// canvas-render::text::measure_body_height; без установки — оценка
 /// уровня 1 (консервативная, только растит высоту).
-/// FR-069 (этап F): расширение запроса резерва — `desc_expanded`
-/// (раскрытое описание «⋯ целиком ▾» растит стек — refit по тогглу) и
-/// `footer_reserve` (резерв футера — только нодам с футером; подгонка
-/// тела работает для ВСЕХ нод — ранний выход снят в ensure_reserve_at).
+/// FR-069 хвосты (T9-сессия 2026-09-24): расширение запроса резерва —
+/// `desc_expanded` (раскрытое описание «⋯ целиком ▾» растит стек — refit
+/// по тогглу) и `footer_reserve` (резерв футера — только нодам с футером;
+/// подгонка тела работает для ВСЕХ нод — ранний выход снят в
+/// ensure_reserve_at). `auto_rows` — число авто-строк приёмника (для
+/// учёта ряда подписи зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N», I-2).
 pub type MeasuredReserveFn = fn(
     text: &str,
     node_width: f32,
@@ -217,6 +238,7 @@ pub type MeasuredReserveFn = fn(
     desc_expanded: bool,
     footer_reserve: bool,
     sigma_name: &str,
+    auto_rows: usize,
 ) -> f32;
 
 static MEASURED_RESERVE: std::sync::RwLock<Option<MeasuredReserveFn>> =
@@ -232,6 +254,9 @@ pub fn install_measured_reserve(f: MeasuredReserveFn) {
 }
 
 /// Текущее измерение уровня 2: установленное приложением или оценка.
+/// FR-069 хвосты (T9-сессия 2026-09-24): `auto_rows` — зеркало
+/// `estimated_result_reserve_height` (ряд подписи зоны авто-строк).
+#[allow(clippy::too_many_arguments)] // FR-069 хвосты: 8 согласованных входов резерва
 fn measured_reserve(
     text: &str,
     node_width: f32,
@@ -240,6 +265,7 @@ fn measured_reserve(
     desc_expanded: bool,
     footer_reserve: bool,
     sigma_name: &str,
+    auto_rows: usize,
 ) -> f32 {
     let guard = MEASURED_RESERVE.read().unwrap_or_else(|p| p.into_inner());
     match *guard {
@@ -251,6 +277,7 @@ fn measured_reserve(
             desc_expanded,
             footer_reserve,
             sigma_name,
+            auto_rows,
         ),
         None => estimated_result_reserve_height(
             text,
@@ -260,6 +287,7 @@ fn measured_reserve(
             desc_expanded,
             footer_reserve,
             sigma_name,
+            auto_rows,
         ),
     }
 }
@@ -273,6 +301,15 @@ fn measured_reserve(
 /// без фантомных рядов. `display_text` — текст как на карточке (FR-029:
 /// пролитые строки показаны подписями источников — они длиннее локальных
 /// литералов, подгонка идёт по ним, иначе подпись вылезет за низ карточки).
+///
+/// FR-069 хвосты (T9-сессия 2026-09-24): `auto_rows` — число авто-строк
+/// приёмника (FR-050 Р-4). Когда `auto_rows > 0`, рендер вставляет перед
+/// ними подпись зоны «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» (`ZONE_LABEL_LINE_HEIGHT`);
+/// оценка уровня 1 обязана её учесть (I-2 measure = render), иначе
+/// гейт проходил, а контент (метка) вылезал за низ карточки. Сами
+/// авто-строки уже в `display_text` (сцена готовит префикс «путь =
+/// значение»), поэтому +1 ряд — на метку.
+#[allow(clippy::too_many_arguments)] // FR-069 хвосты: 8 согласованных входов резерва (I-2)
 pub fn ensure_result_reserve(
     node: &mut Node,
     display_text: &str,
@@ -281,6 +318,7 @@ pub fn ensure_result_reserve(
     desc_expanded: bool,
     footer_reserve: bool,
     sigma_name: &str,
+    auto_rows: usize,
 ) {
     let desc_text = desc.unwrap_or_default();
     if estimated_result_reserve_height(
@@ -291,6 +329,7 @@ pub fn ensure_result_reserve(
         desc_expanded,
         footer_reserve,
         sigma_name,
+        auto_rows,
     ) <= node.height
     {
         return;
@@ -303,6 +342,7 @@ pub fn ensure_result_reserve(
         desc_expanded,
         footer_reserve,
         sigma_name,
+        auto_rows,
     );
     if needed > node.height {
         node.height = needed;
@@ -352,7 +392,16 @@ pub fn fit_template_node_height(node: &mut Node) {
     } else {
         String::new()
     };
-    ensure_result_reserve(node, &text, &formula_lines, None, false, true, &sigma_name);
+    ensure_result_reserve(
+        node,
+        &text,
+        &formula_lines,
+        None,
+        false,
+        true,
+        &sigma_name,
+        0,
+    );
 }
 
 #[cfg(test)]
@@ -366,7 +415,8 @@ mod tests {
     fn estimate_suppresses_desc_paragraph() {
         let text = "шлюз обрабатывает поток\n\nrps = 800 rps\nlatency = 12 ms";
         let para = canvas_core::expr::first_prose_paragraph(text).unwrap();
-        let with_para = estimated_result_reserve_height(text, 300.0, &[], &para, false, true, "");
+        let with_para =
+            estimated_result_reserve_height(text, 300.0, &[], &para, false, true, "", 0);
         let other = estimated_result_reserve_height(
             text,
             300.0,
@@ -375,8 +425,9 @@ mod tests {
             false,
             true,
             "",
+            0,
         );
-        let none = estimated_result_reserve_height(text, 300.0, &[], "", false, true, "");
+        let none = estimated_result_reserve_height(text, 300.0, &[], "", false, true, "", 0);
         // Абзац в зоне описания + супрессия тела: дешевле постороннего desc
         // (тело сохранило абзац — двойной счёт) и дороже отсутствия desc.
         assert!(with_para < other, "{with_para} < {other}");
@@ -396,8 +447,8 @@ mod tests {
         let five = "a = 1\nb = 2\nc = 3\nd = 4\nd * 2";
         let lines: Vec<usize> = vec![0, 1, 2, 3, 4];
         let with_header =
-            estimated_result_reserve_height(five, 300.0, &lines, "", false, true, "Σ n");
-        let without = estimated_result_reserve_height(five, 300.0, &[], "", false, true, "");
+            estimated_result_reserve_height(five, 300.0, &lines, "", false, true, "Σ n", 0);
+        let without = estimated_result_reserve_height(five, 300.0, &[], "", false, true, "", 0);
         // FR-069: с исходами появляется и подпись «ПАРАМЕТРЫ · 4» (16):
         // различие = ряд заголовка (20) + ряд подписи (16). «Расчёт» в
         // блоке не вставляется — его роль играет заголовок ведомости.
@@ -415,8 +466,8 @@ mod tests {
         // Ниже порога T заголовка нет, но обе метки (параметры + расчёт
         // в режиме листа) появляются: различие = 2 ряда подписи.
         assert_eq!(
-            estimated_result_reserve_height(four, 300.0, &four_lines, "", false, true, "Σ n")
-                - estimated_result_reserve_height(four, 300.0, &[], "", false, true, ""),
+            estimated_result_reserve_height(four, 300.0, &four_lines, "", false, true, "Σ n", 0)
+                - estimated_result_reserve_height(four, 300.0, &[], "", false, true, "", 0),
             2.0 * ZONE_LABEL_LINE_HEIGHT + BODY_LINE_HEIGHT + 6.0,
             "порог T не достигнут: метки секций + Σ-строка (режим листа)"
         );
@@ -428,9 +479,10 @@ mod tests {
     fn estimate_footer_flag_and_desc_expanded() {
         let text = "a = 1\nb = 2";
         let lines: Vec<usize> = vec![0, 1];
-        let with_footer = estimated_result_reserve_height(text, 300.0, &lines, "", false, true, "");
+        let with_footer =
+            estimated_result_reserve_height(text, 300.0, &lines, "", false, true, "", 0);
         let without_footer =
-            estimated_result_reserve_height(text, 300.0, &lines, "", false, false, "");
+            estimated_result_reserve_height(text, 300.0, &lines, "", false, false, "", 0);
         assert_eq!(
             with_footer - without_footer,
             RESULT_LINE_HEIGHT + 2.0,
@@ -438,9 +490,9 @@ mod tests {
         );
         let long_desc = "очень длинное описание ноды, которое точно не укладывается в кламп двух строк и раскрывается целиком по клику";
         let clamped =
-            estimated_result_reserve_height(text, 300.0, &lines, long_desc, false, true, "");
+            estimated_result_reserve_height(text, 300.0, &lines, long_desc, false, true, "", 0);
         let expanded =
-            estimated_result_reserve_height(text, 300.0, &lines, long_desc, true, true, "");
+            estimated_result_reserve_height(text, 300.0, &lines, long_desc, true, true, "", 0);
         assert!(
             expanded > clamped,
             "раскрытое описание оценок выше клампа: {expanded} > {clamped}"
@@ -458,11 +510,11 @@ mod tests {
         let long_desc = "Длинное описание узла расчёта нагрузки, которое заведомо \
 не помещается в две строки клампа и потому сворачивается с аффордансом \
 «⋯ целиком ▾» — строка экспандера обязана войти в резерв высоты.";
-        let base = estimated_result_reserve_height("текст", width, &[], "", false, true, "");
+        let base = estimated_result_reserve_height("текст", width, &[], "", false, true, "", 0);
         let with_short =
-            estimated_result_reserve_height("текст", width, &[], short_desc, false, true, "");
+            estimated_result_reserve_height("текст", width, &[], short_desc, false, true, "", 0);
         let with_long =
-            estimated_result_reserve_height("текст", width, &[], long_desc, false, true, "");
+            estimated_result_reserve_height("текст", width, &[], long_desc, false, true, "", 0);
         // Короткое описание (1 строка): только строки клампа + зазор.
         assert!(
             with_short - base
@@ -477,5 +529,33 @@ mod tests {
             with_long - base,
             with_short - base
         );
+    }
+
+    /// FR-069 хвосты (T9-сессия 2026-09-24): подпись зоны авто-строк
+    /// «ВХОДЯЩИЕ ЗНАЧЕНИЯ · N» — отдельный ряд в оценке уровня 1 (I-2:
+    /// measure = render). Когда `auto_rows > 0`, оценка растёт на
+    /// `ZONE_LABEL_LINE_HEIGHT`; пустой список авто-строк — ряд не нужен.
+    /// Сами авто-строки в `text` уже есть (сцена готовит префикс
+    /// «путь = значение»), поэтому +1 ряд — на метку.
+    #[test]
+    fn estimate_includes_auto_row_zone_label() {
+        let width = 360.0;
+        // Текст «без авто-строк» — базовая оценка.
+        let base =
+            estimated_result_reserve_height("rps = 800 rps", width, &[0], "", false, true, "", 0);
+        // Те же данные + флаг `auto_rows = 3` — рендер вставит метку
+        // «ВХОДЯЩИЕ ЗНАЧЕНИЯ · 3» (ZONE_LABEL_LINE_HEIGHT).
+        let with_label =
+            estimated_result_reserve_height("rps = 800 rps", width, &[0], "", false, true, "", 3);
+        assert!(
+            with_label - base == ZONE_LABEL_LINE_HEIGHT,
+            "ряд метки зоны авто-строк учтён в оценке ({}), ожидалось {}",
+            with_label - base,
+            ZONE_LABEL_LINE_HEIGHT
+        );
+        // `auto_rows = 0` — метки нет (избыточный флаг 0 эквивалентен отсутствию).
+        let zero =
+            estimated_result_reserve_height("rps = 800 rps", width, &[0], "", false, true, "", 0);
+        assert_eq!(zero, base, "auto_rows = 0 — метка зоны не вставляется");
     }
 }
