@@ -32,9 +32,9 @@ B2B-контрактом/EULA; в SBOM first-party — сам бинарник `
 | `canvas-mcp-headless` | headless MCP-сервер для wasmtime/wasip1 (FR-037) |
 | `canvas-web` | web-платформенный слой: bindgen-обвязка, web-сервисы (M8/W4) |
 
-## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-19)
+## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-24)
 
-Всего в графе сборки — 382 сторонних крейта (включая транзитивные и
+Всего в графе сборки — 402 сторонних крейта (включая транзитивные и
 dev-зависимости); полный состав с текстами лицензий —
 `THIRD-PARTY-NOTICES.md`, машиночитаемый контроль — `deny.toml`.
 Криптозависимостей нет; нативный C — только bundled SQLite внутри
@@ -58,6 +58,11 @@ dev-зависимости); полный состав с текстами ли�
 | `pollster` | 0.3 | Apache-2.0/MIT | блокирующий запуск async GPU |
 | `wasm-bindgen` | 0.2.127 | MIT OR Apache-2.0 | JS-глю браузерной сборки `canvas-web` (M8/W4); семейство уже было в дереве транзитивно (winit, wasm-цели) — с W4 прямая зависимость, компилируется и нативно (заглушки макросов) |
 | `windows` / `windows-core` | 0.62 | MIT OR Apache-2.0 | Win32/COM (только Windows-таргеты) |
+| `statrs` | 0.17 | MIT | L2-статистика: распределения/квантили/ДИ (FR-063, за фичей `stats` в canvas-core — в сборку по умолчанию не входит) |
+| `rand` | 0.8 | MIT OR Apache-2.0 | Rng-трейты, SeedableRng (FR-063, за фичей `stats`; default-features = false — без getrandom) |
+| `rand_chacha` | 0.3 | MIT OR Apache-2.0 | ChaCha8Rng — единственный источник случайности (FR-063, за фичей `stats`) |
+| `rand_distr` | 0.4 | MIT OR Apache-2.0 | сэмплирование Normal/LogNormal (FR-063, за фичей `stats`) |
+| `rayon` | 1.12 | MIT OR Apache-2.0 | L4-параллелизм: поярусный пересчёт DAG `flow::propagate_with_lines_data` (FR-065, за фичей `parallel` в canvas-core — в сборку по умолчанию не входит). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий. |
 
 **Выбор опции дуальных лицензий.** Для крейтов `MIT OR Apache-2.0`
 продукт следует обязательствам обеих сторон консервативно: сохранение
@@ -67,22 +72,40 @@ notices (MIT) и NOTICE-механики (Apache-2.0) обеспечены ге�
 
 ## 3. Кандидаты на будущее (archdoc §4.2, только по продуктовому триггеру)
 
-Волна S роадмапа (после гейта Go): подключение — только через cargo-фичи
-`stats` / `parallel` в `canvas-core` (введены CP0 как пустые гейты,
-см. `crates/canvas-core/Cargo.toml`), чтобы B2B-сборка могла отключить
-неиспользуемые слои.
+Волна S роадмапа: подключение — только через cargo-фичи `stats` /
+`parallel` в `canvas-core` (см. `crates/canvas-core/Cargo.toml`), чтобы
+B2B-сборка могла отключить неиспользуемые слои. S0 (Foundation) и S1
+(FR-063, M2) выполнены 2026-09-24: `statrs`/`rand`/`rand_chacha`/
+`rand_distr` перенесены в §2. S3/M4 (FR-065) выполнен 2026-09-24:
+`rayon` перенесён в §2 (поярусный параллелизм пересчёта DAG за фичей
+`parallel`; std::thread::scope заменён на `rayon` `par_iter` — bounded
+thread pool, иначе 8192-нод exponential diamond превышает лимит
+OS-потоков, тест `lineage::tests::budget_truncates_exponential_diamond`).
+S3/M5 (FR-066) выполнен 2026-09-24: `sobol_burley` перенесён в §2
+(QMC-режим MC-движка за фичей `qmc`, implies stats+parallel; wasm-сборка
+— без фичи, контракт §5.8 FR-066).
+Волна 3 UI kit: ADR-0014 (2026-09-24, переоткрыл ADR-0013) + FR-067 —
+план staged миграции `canvas-ui` на `taffy` opt-in за cargo-фичей
+(`NativeBackend` default, `TaffyBackend` opt-in); после merge W1 FR-068
+`taffy` мигрирует из §3 кандидатов в §2 прямых прод-зависимостей
+(аналогично `rayon` после FR-065).
+**Долгосрочная стратегия (ADR-0015 + FR-068, 2026-09-24):** taffy —
+переходное решение, вырезается к W4. Волны: W0 UI hygiene → W1 taffy
+opt-in (поглощает FR-067) → W2 cosmic-text trait boundary + `FlexLayoutEngine`
+(свой layout, flexbox + overflow/clip/scroll, побитовая идентичность с taffy
+на совместимых политиках) → W3 своя UI-библиотека (`Component` trait, kit.rs
+2757 → 6 компонентов × ~500 строк, retained-state) → W4 dep-минимизация
+(taffy вырезается; cosmic-text за `Shaper` trait; `cargo build
+--no-default-features` = 0 внешних UI-runtime-deps кроме cosmic-text).
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
-| L2 | `statrs` | распределения, квантили, ДИ | MIT | S1: вероятностные оценки волны V |
-| L2 | `rand` + `rand_chacha` | детерминированная случайность | MIT OR Apache-2.0 | S1/S3 |
-| L2 | `rand_distr` | сэмплирование распределений | MIT OR Apache-2.0 | S3 |
-| L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 |
+| L4 | `taffy` | CSS Flexbox+Grid layout-движок (retained-дерево, Servo/Bevy/Zed) | MIT OR Apache-2.0 | волна 3 UI kit: ADR-0014 + FR-068 W1 (за фичей `taffy`, default off; после merge W1 — §2 прямая прод-зависимость, прирост wasm ~376 КБ raw / ~180 КБ gzip; уже транзитивно в дереве через `cosmic-text`). **Переходное решение (ADR-0015):** вырезается к W4 FR-068, если `FlexLayoutEngine` (W2) покрывает использованные фичи (flexbox + overflow/clip/scroll); Grid-only остаётся за фичей, если используется >3 мест (S7). |
+| L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 (FR-066, за фичей `qmc`) |
 | L2 | `argmin` | численная оптимизация | MIT OR Apache-2.0 | первый домен с оптимизацией |
 | L2 | `gauss-quad` / `quadrature` | квадратуры | MIT OR Apache-2.0 / BSD-2 | интегралы SLA |
 | L2 | `puruspe` / `special` | спецфункции | MIT OR Apache-2.0 | при выходе за `statrs` |
 | L3 | `ndarray` / `faer` / `nalgebra` | линейная алгебра | MIT / MIT / Apache-2.0 | M6: домен с матричной математикой |
-| L4 | `rayon` | поярусный параллелизм | MIT OR Apache-2.0 | S3 (уже транзитивно в дереве через `cosmic-text`) |
 | L4 | `crossbeam-channel`, `parking_lot` | примитивы синхронизации | MIT OR Apache-2.0 | S2/S3 при недостатке std |
 | L5 | `chrono` / `jiff` | календарные сетки финдоменов | MIT OR Apache-2.0 | первый домен с датами |
 | L5 | `cargo-deny` / `cargo-about` / `cargo-auditable` | CI-контроль | MIT OR Apache-2.0 | уже внедрены (CP0) — вне бинарника |
@@ -155,3 +178,10 @@ auditable-extract target/release/canvasdesk > canvasdesk-sbom.json
 - `2026-09-18` — создан при выполнении CP0 волны 0 (роадмап §4.1): факт
   прямых зависимостей (23, включая 7 workspace), кандидаты волны S из
   архдока §4.2, долг сопровождения рендер-стека, рецепты notices/SBOM.
+- `2026-09-24` — S0/S1 (FR-063): `statrs` 0.17 (MIT), `rand` 0.8 /
+  `rand_chacha` 0.3 / `rand_distr` 0.4 (MIT OR Apache-2.0) перенесены
+  из §3 в §2 — optional за фичей `stats` в canvas-core (default-сборка
+  их не резолвит); отмечена находка: транзитивный getrandom 0.2 от
+  statrs→rand(std) не компилируется под wasm32-unknown-unknown — не
+  влияет на гейты (они идут с default-фичами), решение по web-сборке
+  с `stats` — точка решения владельца.

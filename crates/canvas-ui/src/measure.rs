@@ -57,6 +57,31 @@ pub struct TextSpec<'a> {
     /// Ограничение ширины для переносимых измерений; `f32::INFINITY` —
     /// без ограничения (однострочная ширина).
     pub max_width: f32,
+    /// FR-061 приёмка (T9, фикс наложений): вес, каким текст РЕНДЕРИТСЯ.
+    /// Замер обязан совпадать с шейпингом не только семейством, но и весом:
+    /// cosmic-text ищет «дефолтный» шрифт семейства только среди лиц с ТОЧНО
+    /// совпадающим весом (`get_font_matches` → `font_weight_diff == 0`);
+    /// у Noto Sans Mono лица 400/700 — запрос MEDIUM промахивался мимо
+    /// семейства целиком и уходил в системный шрифт того же веса (замер
+    /// «rps» 19.2 px против рендера 21.6 px → зауженные направляющие →
+    /// юниты налезали на числа). Дефолт конструктора — [`Weight::MEDIUM`]
+    /// (паритет `sans_attrs` рендера); моно-ячейки таблицы замеряются с
+    /// [`Weight::NORMAL`] (паритет `mono_attrs`).
+    pub weight: Weight,
+}
+
+impl<'a> TextSpec<'a> {
+    /// Спека без ограничения ширины (однострочный замер), вес — MEDIUM
+    /// (паритет `sans_attrs`).
+    pub fn single_line(text: &'a str, family: &'a str, size: f32) -> Self {
+        Self {
+            text,
+            family,
+            size,
+            max_width: f32::INFINITY,
+            weight: Weight::MEDIUM,
+        }
+    }
 }
 
 /// Результат измерения.
@@ -146,13 +171,29 @@ impl TextMeasurer {
         measured
     }
 
-    /// Однострочная ширина текста (замена эвристик `0.62·кегль`).
+    /// Однострочная ширина текста (замена эвристик `0.62·кегль`). Вес —
+    /// MEDIUM (паритет `sans_attrs` рендера); моно-текст замеряйте
+    /// [`width_of_weighted`] с [`Weight::NORMAL`].
     pub fn width_of(
         &mut self,
         fs: &mut cosmic_text::FontSystem,
         text: &str,
         family: &str,
         size: f32,
+    ) -> f32 {
+        self.width_of_weighted(fs, text, family, size, Weight::MEDIUM)
+    }
+
+    /// Однострочная ширина текста с ЯВНЫМ весом — паритет с шейпингом
+    /// потребителя (см. [`TextSpec::weight`]: вес участвует в выборе лица,
+    /// замер не тем весом — замер чужого шрифта).
+    pub fn width_of_weighted(
+        &mut self,
+        fs: &mut cosmic_text::FontSystem,
+        text: &str,
+        family: &str,
+        size: f32,
+        weight: Weight,
     ) -> f32 {
         self.measure(
             fs,
@@ -161,6 +202,7 @@ impl TextMeasurer {
                 family,
                 size,
                 max_width: f32::INFINITY,
+                weight,
             },
         )
         .width
@@ -169,7 +211,7 @@ impl TextMeasurer {
     /// Политика Ellipsis (AC-4.2): самая длинная граница символов
     /// префикса, чья ширина с хвостом «…» укладывается в `max_width`;
     /// текст целиком, если помещается. Бинарный поиск по префиксам —
-    /// ширины кэшируются.
+    /// ширины кэшируются. Вес — MEDIUM (см. [`width_of`]).
     pub fn ellipsis(
         &mut self,
         fs: &mut cosmic_text::FontSystem,
@@ -178,15 +220,30 @@ impl TextMeasurer {
         size: f32,
         max_width: f32,
     ) -> String {
+        self.ellipsis_weighted(fs, text, family, size, max_width, Weight::MEDIUM)
+    }
+
+    /// [`Self::ellipsis`] с явным весом замера (моно-ячейки таблицы —
+    /// [`Weight::NORMAL`], паритет `mono_attrs`).
+    pub fn ellipsis_weighted(
+        &mut self,
+        fs: &mut cosmic_text::FontSystem,
+        text: &str,
+        family: &str,
+        size: f32,
+        max_width: f32,
+        weight: Weight,
+    ) -> String {
         if max_width <= 0.0 {
             return String::new();
         }
-        let full = self.width_of(fs, text, family, size);
+        let full = self.width_of_weighted(fs, text, family, size, weight);
         if full <= max_width + FIT_EPS {
             return text.to_owned();
         }
         let ell = '\u{2026}';
-        if self.width_of(fs, &ell.to_string(), family, size) > max_width + FIT_EPS {
+        if self.width_of_weighted(fs, &ell.to_string(), family, size, weight) > max_width + FIT_EPS
+        {
             return String::new();
         }
         let chars: Vec<char> = text.chars().collect();
@@ -197,8 +254,8 @@ impl TextMeasurer {
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
             let prefix: String = chars[..mid].iter().collect();
-            let w = self.width_of(fs, &prefix, family, size)
-                + self.width_of(fs, &ell.to_string(), family, size);
+            let w = self.width_of_weighted(fs, &prefix, family, size, weight)
+                + self.width_of_weighted(fs, &ell.to_string(), family, size, weight);
             if w <= max_width + FIT_EPS {
                 lo = mid;
             } else {
@@ -213,8 +270,9 @@ impl TextMeasurer {
 
 /// Реальное измерение: тот же пайплайн, что screen-тексты рендера
 /// (`text.rs`: Buffer + Metrics(size, size·1.3) + Wrap::None + shape),
-/// семейство/вес — по [`family_weight`] (паритет `sans_attrs`/`mono_attrs`
-/// рендера — FR-069).
+/// семейство/вес — из спеки (паритет с шейпингом потребителя); FR-069:
+/// вес ячеек по семейству задают вызывающие хелперы (моно — NORMAL,
+/// sans — MEDIUM) — см. width_of / MEASURE_WEIGHT row_grid.
 fn shape_measure(fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured {
     let size = spec.size.max(0.0);
     let line_height = size * SCREEN_LINE_FACTOR;
@@ -223,9 +281,11 @@ fn shape_measure(fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured 
     // Ограничение ширины: для Wrap::None строки не переносятся, ширина
     // задаёт только область (бесконечность — без ограничения).
     buffer.set_size(fs, Some(spec.max_width), Some(line_height));
+    // Вес — из спеки (паритет с рендером потребителя; см. TextSpec::weight:
+    // cosmic-text ищет лицо семейства только среди лиц точного веса).
     let attrs = Attrs::new()
         .family(Family::Name(spec.family))
-        .weight(family_weight(spec.family));
+        .weight(spec.weight);
     buffer.set_text(fs, spec.text, attrs, Shaping::Advanced);
     buffer.shape_until_scroll(fs, false);
     let mut width = 0.0f32;
@@ -269,6 +329,7 @@ mod tests {
                 family: FAMILY,
                 size: 13.0,
                 max_width: f32::INFINITY,
+                weight: Weight::MEDIUM,
             },
         );
         assert_eq!(r.width, 0.0);
@@ -353,6 +414,7 @@ mod tests {
                 family: FAMILY,
                 size: 13.0,
                 max_width: 50.0,
+                weight: Weight::MEDIUM,
             },
         );
         assert_eq!(r.lines, 1, "Wrap::None — без переноса");

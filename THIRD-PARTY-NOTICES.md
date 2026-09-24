@@ -19,7 +19,7 @@ CanvasDesk использует сторонние Rust-крейты с перм
 
 | Лицензия | Крейтов |
 |---|---|
-| MIT License | 281 |
+| MIT License | 288 |
 | Apache License 2.0 | 15 |
 | ISC License | 3 |
 | BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License | 2 |
@@ -1749,7 +1749,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Используется: `cc 1.4.5`, `cfg-if 1.0.4`, `find-msvc-tools 0.1.12`, `pkg-config 0.3.34`, `scoped-tls 1.0.1`, `wasm-bindgen-macro-support 0.2.127`, `wasm-bindgen-macro 0.2.127`, `wasm-bindgen-shared 0.2.127`, `wasm-bindgen 0.2.127`, 
+Используется: `cc 1.4.5`, `cfg-if 1.0.4`, `find-msvc-tools 0.1.12`, `js-sys 0.3.104`, `pkg-config 0.3.34`, `scoped-tls 1.0.1`, `wasm-bindgen-futures 0.4.77`, `wasm-bindgen-macro-support 0.2.127`, `wasm-bindgen-macro 0.2.127`, `wasm-bindgen-shared 0.2.127`, `wasm-bindgen 0.2.127`, `web-sys 0.3.104`, 
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -2200,6 +2200,42 @@ SOFTWARE.
 
 ```text
 Copyright (c) 2016 ASH
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+---
+
+### MIT License
+
+Используется: `futures-core 0.3.34`, `futures-task 0.3.34`, `futures-util 0.3.34`, 
+
+```text
+Copyright (c) 2016 Alex Crichton
+Copyright (c) 2017 The Tokio Authors
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4231,6 +4267,37 @@ SOFTWARE.
 MIT License
 
 Copyright (c) 2023 The gfx-rs developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+---
+
+### MIT License
+
+Используется: `web-time 1.1.0`, 
+
+```text
+MIT License
+
+Copyright (c) 2023 dAxpeDDa
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

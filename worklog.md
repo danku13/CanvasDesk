@@ -5400,6 +5400,186 @@ Stage Summary:
 - FR-060 в main (35a1b70), CI 12/12. Волна 2 миграции кита завершена (FR-056+FR-057+FR-058+FR-059+FR-060): весь панельный UI — на ките (кроме сознательно оставленных world-декораций wheel/minimap/HUD и замороженного онбординга).
 - Остаток FR-060 (documented в CR): Painter-конверсия explain_frame (отрисовка на screen_rect_quad — эквивалентный конвейер без теней).
 - Открытые следующие шаги: FR-061 этап E (kit-Row D-15 на RowGuides, зависит от FR-062 F-13/F-14/F-16 — они в main); отложенные пункты этапа D FR-061 по отдельному согласованию владельца (свёрнутость блока/клик, экспандер, ellipsis формулы, VLM-ревью).
+---
+## 2026-09-24 — FR-063: доменный слой статистики (L2) — main aa33d92→feature/fr-063-stats-layer
+
+- **Агент:** Super Z (сессия web-133c38b2; директива: «Реализуй
+  fr-063-stats-layer.md» — реализация по документу, фазы-коммиты)
+- **Координация:** база aa33d92 (main, план волны S). Коллизий нет:
+  территория FR-063 — canvas-core expr (stats/args + три правки expr.rs);
+  файлы FR-061/render/app не тронуты; queueing.rs — только вынос приватных
+  хелперов в shared args.rs (вариант (a) FR, поведение не изменено —
+  expr_queueing 43/0 зелёные).
+
+### Work Log
+- **Сметчивание:** S0 не выполнена — deps statrs/rand/rand_chacha/rand_distr
+  не были прописаны (Открытый вопрос № 5 FR: «P1 может быть выполнен с
+  пустой фичей, P2/P3 блокируются»). Решение: S0 выполнена в этом же цикле
+  отдельным коммитом перед P1 (чисто аддитивный Cargo.lock +196/−0).
+- **S0 (ca9da12):** optional-deps в [workspace.dependencies] + canvas-core;
+  фича stats активирована точной строкой FR; мои rand/rand_chacha/rand_distr
+  — default-features=false (без getrandom).
+- **P1 (0c1f30f):** expr/stats.rs skeleton; mod stats + arm в eval_call за
+  cfg (guard по is_stats_function — единая точка списка имён); expr/args.rs
+  (is_single_dim/scalar_arg/bad_arity/percent_unit/time_unit/count_unit
+  вынесены из queueing дословно); parity-тест stats-домена; попутно закрыт
+  ПРЕДСУЩЕСТВУЮЩИЙ пробел parity FR-021 — npv/cagr/irr/cohort_ltv
+  отсутствовали в FN_HINTS (обратное направление parity теперь тоже
+  проверяется: каждая подсказка — известная диспетчеру функция).
+- **P2 (a1367a2):** 6 функций поверх statrs 0.17 (inverse_cdf/cdf standard
+  normal, Discrete::pmf Пуассона); края p=0/1 явно (statrs паникует вне
+  [0,1] — вход валидируется); triangular_quantile + алиас triangular
+  (расхождение имён внутри самого FR); golden ±1e-9 (14 тестов), размерности
+  rps/ms/scalar, BadCall/UnitMismatch, eval_lines-сценарий P95.
+- **P3 (8ea9776):** ChaCha8Rng::seed_from_u64; сид-контракт M5 в коде —
+  seed_from_parts = FNV-1a 64(content) ⊕ scenario_seed (DefaultHasher
+  забракован FR, векторы FNV тестом); ci_mean (полуширина, норм.
+  аппроксимация — Открытый вопрос № 3); normal/lognormal_sample —
+  scalar-агрегат (Открытый вопрос № 4), кап n≤1e6; тесты to_bits
+  (один сид → побитово одна выборка), сходимость 5·SE, сценарий волны V.
+- **Compat (2cc6b94 + docs):** expr_stats_compat.rs (зеркальный cfg) —
+  без фичи 10 имён → UnknownFunction, остальное штатно; попутно починен
+  ПРЕДСУЩЕСТВУЮЩИЙ баг about.toml: без [private] ignore=true генерация
+  notices падала на AGPL-workspace-крейтах с d6fb7df (неuxioустранимый
+  релизной джобой) — перегенерировано cargo-about 0.9.2.
+- **Доки:** FR-063 (статус ✅ + развёрнутый changelog с отклонениями и
+  находкой wasm+stats), index-cr-fr (строка FR-063), DEPENDENCIES.md
+  (§3→§2, changelog, счётчик 401), SPEC.md §3 (строка L2-статистики),
+  user-docs/calculations.md (раздел «Вероятностные оценки» + буллет в
+  «Что можно в выражениях»), ACCEPTANCE.md (FR-063.1–11).
+- **Гейты:** core --features stats 390/0 + 22 golden ✓; core default
+  384/0 + 2 compat ✓; app lib 342/0 ✓; fmt ✓; clippy -D warnings ✓;
+  wasm_gate.sh --check ✓; cargo deny check ✓ (licenses/bans/sources/
+  advisories); cargo build --no-default-features ✓ (zero-dep).
+
+### Stage Summary
+- **FR-063 закрыт целиком (S0+P1+P2+P3):** слой L2 статистики за фичей
+  `stats` — 10 функций (6 распределений/квантилей + алиас, ДИ, 2 выборки),
+  детерминированный RNG с контрактом сида для M5, parity всех трёх
+  поверхностей (dispatch/FN_HINTS/STATS_FUNCTIONS) тестом.
+- **Находка владельцу (вне скоупа):** getrandom 0.2 (транзитив statrs→
+  rand(std)) не компилируется под wasm32-unknown-unknown при ВКЛЮЧЁННОЙ
+  фиче stats — все формальные гейты зелёные (default-фичи), но web-сборка
+  с stats требует решения (getrandom/js-фича через web-sys — санкционировано
+  формулировкой FR, либо чистая математика без statrs). Прецедент
+  no-wasm-фичи уже запланирован (qmc/FR-066).
+- **Два предсуществующих бага починены попутно:** FN_HINTS без финансовых
+  функций FR-021-parity; about.toml без [private] ignore → генерация
+  notices падала с d6fb7df.
+- **Далее:** FR-064 (воркер, S2) / FR-065 (parallel, S2) — параллельные
+  фронты волны S; FR-066 (M5) после них — потребитель seed_from_parts;
+  CI по push — проверить следующим заходом.
+
+---
+Task ID: FR-061-C3
+Agent: агент сессии web-85edad2d (CanvasDesk)
+Task: FR-061 коммит 3/3 — хвосты лестницы деградации: ellipsis формулы (узкие ноды), Q6 (360–400 тяжёлым шаблонам), Q8 (алиасы), T9
+
+Work Log:
+- Разведка: коммит 2 влит (1aa60fe, этап E kit-Row D-15); спецификация остатка — статус-строка CR-061 + §3.4/§9 анализа (Q6 «360–400 по числу строк», Q8 «авто-обрезка с полным именем в строке параметра и tooltip»).
+- row_grid.rs: `alias_idents` (Q8) — идентификатор = токен буква/«_» + буквы/цифры/«_» (юникод, кириллица входит); длиннее ALIAS_IDENT_MAX=16 → первые 13 + «…»; числовые литералы не трогаются (лестница §3.4); грамматика не дублируется (визуальная классификация, прецедент O-5).
+- row_grid.rs: `RowEllipsis{display, full}` в `TablePass.ellipsis` (выровнен по строкам), `plan_row_ellipsis` — только Calc-строки (имя параметра/путь авто-строки не деградируют); порядок: алиасы → `TextMeasurer::ellipsis` (детерминированный бинарный поиск); `pass_a(..., floor, prior)` — пол лестницы + prior-план: повторный проход после перешейпа не поднимается по лестнице и не пере-планирует строки (стабильность, без осцилляций).
+- text.rs: `body_items/with_body_stack/shape_body` принимают overrides (source_line→текст строки) — сегмент формульной строки замещается усечённым отображением (formula-путь шейпа без GFM-парсинга — подсветка O-5 сохраняется); двухпроходный билд: pass_a #1 → при активном плане перешейп тела → row_geo → pass_a #2 (floor+prior); привязка строк выделена в `row_geo` (два шейпа — одна привязка, I-1).
+- text.rs: тултип усечённой строки — `CachedRow.left_full` (полная формула) + `formula_ellipsis_hits` (паттерн LineErrorHit; зоны строки левого текста, логические px); Renderer::formula_ellipsis_hits → App (`ellipsis_hits`, `formula_ellipsis_hit_at`), нейтральный тон тултипа (не ошибка), приоритет — гасит лейбл порта как тултип ошибки.
+- templates.rs: `default_template_width` (Q6): R<T=4 → 300 (как прежде), T≤R<T+4 → 360, R≥T+4 → 400; видимые ряды шаблонной ноды — параметры; применяется в `instantiate` (все пути: UI, preview, MCP); существующие ноды в .canvas не трогаются.
+- I-2 (measure=render): `measure_body_height` БЕЗ усечения — план на стороне рендера; усечённый блок короче меры → growth-only refit сохраняет запас (документированная цена, зеркально «desc None» этапа D).
+- Гейты: fmt OK; clippy -D warnings 0; test 52 сьюта 0 отказов (T5 портов — регресс без правок, I-1); wasm ступени 1–2 + mcp-wasm ступень 1 зелёные (wasmtime отсутствует в среде — как в предыдущих сессиях); замер raw cdylib release (процедура FR-060): 12 064 421 → 12 077 323 Б (+12 902 Б ≈ 12,6 КБ ≤ 100 КБ).
+- Тесты +4: `alias_idents_truncates_long_idents_only` (кириллица/числа/порог MAX/KEEP), `pass_a_plans_formula_ellipsis_on_narrow_body` (display влезает в дорожку, full — оригинал, режим None, план стабилен при повторном проходе, Param без плана), `default_template_width_ladder`, instantiate-ширина в `instantiate_applies_manifest_defaults`.
+- Доки: CR-061 (статус + история коммита 3), index-cr-fr.md (статус FR-061), двойная запись worklog. Инцидент по ходу: диск 100% (дубликаты rlib от прошлых сессий — чистка 3,9 ГБ; Bus error линкера устранён).
+
+Stage Summary:
+- Лестница деградации §3.4 ЗАВЕРШЕНА: бейджи Text→Icon→None → алиасы Q8 → хвостовой ellipsis формулы; числа/юниты/имена не деградируют никогда; полная формула — в тултипе строки, полное имя — в строке параметра.
+- Q6 закрыт: тяжёлые шаблоны (≥4 параметров) инстанцируются 360–400 px — режим «иконки» на дефолтной ширине больше не постоянный.
+- T9: детерминированные оракулы зелёные; VLM-ревью — визуальная приёмка владельцем (headless-скриншоты WebGPU-канваса невозможны — ограничение W4, прецедент этапа D).
+- Отложено (v2, по согласованию): пере-якорение портов слотами заголовка свёрнутого блока (D-7 распределение полосы); ресайз нод из UI (отдельный FR — решение Q6).
+
+---
+Task ID: 1
+Agent: main (сессия web-85edad2d)
+Task: FR-061 приёмка T9 — отладка баг-репорта владельца («вёрстка кривая, высота ноды не адаптируется под размеры наполнения, числа и units налезают друг на друга, есть дублирование текста на нодах»)
+
+Work Log:
+- Воспроизведение: GPU-адаптер в среде недоступен (W4, headless() → None) — собран CPU-прогон пайплайна таблицы prepare_titles из приватных функций (shape_body → row_geo → pass_a → shape_row_cell) в юнит-тесте text.rs; числовой дамп геометрии строк (left_end, guides, ширины ячеек) + зонд шрифтовой базы (fontdb-лица, QUERY по весам).
+- Симптом «числа/units налезают»: замер ячеек TextMeasurer'ом (Weight::MEDIUM из shape_measure) расходится с шейпингом (mono_attrs = 400): «rps» 19,2 px против 21,6 px. Причина — cosmic-text get_font_matches выбирает «дефолтный» шрифт семейства только среди лиц ТОЧНОГО веса (font_weight_diff == 0); у Noto Sans Mono лица 400/700 → замер уходил в системный шрифт того же веса (WenQuanYi 500 в этой среде). Прежние тесты с mono-only FontSystem маскировали баг.
+- Симптом «дублирование текста» №1: левый блок Param-строки — полная строка «servers = 3» + ячейка «3» (прототип paramRow — [имя][=][лидер]|[значение]).
+- Симптом «дублирование текста» №2: prose-фолбэк зоны описания (Q3, коммит 1) рисовал первый проза-абзац ДВАЖДЫ (зона + тело) на каждой заметке с прозой.
+- Симптом «высота не адаптируется»: оценка уровня 1 (estimated_result_reserve_height) не учитывала строку экспандера описания → ранний выход оставлял ноду на 20 px короче стека (контент вылезал за низ); плюс фантомная высота от плана усечения (документированная цена, сохранена).
+- Попутно найдено: план усечения мерил левый текст кеглем ячеек (12) при шейпинге тела 14 → бюджет дорожки завышен на 17 %; Param-строки с выражением в RHS вообще не усекались (left_fits=false, нечем спасать).
+- Фиксы: (1) TextSpec.weight + width_of_weighted/ellipsis_weighted (canvas-ui), measure_row_cells(+weight), MEASURE_WEIGHT=NORMAL в row_grid; (2) is_literal_rhs + param_strip_overrides — левый блок «имя =», один build_rows до первого шейпа, merged overrides (strip ++ ellipsis) в оба шейпа, мера со strip (I-2); (3) prose-фолбэк убран синхронно в text.rs и scene.rs (Q3 пересмотрен по фидбэку владельца: зона = desc → манифест); (4) экспандер в оценке резерва (wrapped >= CLAMP); (5) plan_row_ellipsis для Param-выражений с защищённым префиксом «имя =»; (6) pass_a(+left_size) — план меряет левый текст BODY_FONT_SIZE.
+- Тесты +6: table_cell_measure_matches_mono_shaping (полная база шрифтов + системные decoy-лица), tabular_rows_fit_and_literal_values_not_duplicated (end-to-end CPU, тела 360/300: strip-набор, leader-инвариант, зазор value→unit), literal_rhs_detection_and_strip_overrides, pass_a_truncates_param_expression_rhs_with_protected_prefix, estimate_includes_desc_expander_row (canvas-scene), node_desc_without_prose_fallback (замена старого Q3-теста).
+- Диски: снова 100 % (Bus error) — чистка 2115 старых дублей rlib/rmeta/exe в target/debug/deps (2,4 ГБ).
+- Доки: FR-061 история (коммит 4) + статусная строка; index-cr-fr.md; node-tabular-body-analysis.md (§9 Q3 пересмотрен, §12 v1.2).
+
+Stage Summary:
+- Все четыре симптома баг-репорта объяснены и устранены в коде; маскировка багов тестовой средой (mono-only FontSystem) устранена — регресс-тест паритета работает на производственной базе шрифтов.
+- Гейты: fmt/clippy -D warnings 0; test — 52 сьюта 0 отказов (1764 теста, +6); wasm ступени 1–2 + mcp-wasm ступень 1 зелёные (wasmtime отсутствует — как прежде); замер raw cdylib release: 12 077 323 → 12 080 602 Б (+3 279 Б ≈ 3,2 КБ ≤ 100 КБ).
+- Известное ограничение (v2): авто-строки с длинным путём не усекаются (имя не деградирует; на 360–400 помещается); экспандер описания при раскрытии выше резерва — рост-only refit догоняет при следующем пересчёте.
+
+---
+Task ID: FR-065
+Agent: main (сессия web-890fcc21)
+Task: Реализовать FR-065 — поярусный параллелизм пересчёта DAG (topo_levels + rayon par_iter)
+
+Work Log:
+- Прочитан план FR-065 (`docs/change-requests/fr-065-tiered-parallelism.md`): 3 фазы P1 `topo_levels` → P2 `std::thread::scope` per-level → P3 `rayon` `par_iter`; контракты §5.1/§5.2/§5.6/§5.7.3/§5.8; ограничения (collect-then-reduce, cfg(not(wasm32)) + flatten-фолбэк, golden-побитовоидентичность, zero-dep инвариант).
+- P1: добавлена `pub fn topo_levels(canvas) -> Result<Vec<Vec<usize>>, CycleError>` рядом с `topo_sort` (`flow.rs`). Тот же Kahn, но drain-фронтир в sub-vec на каждой итерации — flatten-эквивалентность `topo_sort` побитово. Общая настройка графа вынесена в приватный `build_value_graph()` (без изменения поведения `topo_sort`). `topo_levels` экспортирован из `lib.rs`.
+- Активация фичи: `canvas-core/Cargo.toml` — `parallel = ["dep:rayon"]` (раньше `parallel = []`); `rayon` (1.12, MIT OR Apache-2.0 — уже транзитивно через `cosmic-text`) добавлен в `[workspace.dependencies]` корневого `Cargo.toml`.
+- P2/P3 — попытка v1 `std::thread::scope`: реализовано, но на тяжёлом графе (8192-нод exponential diamond, тест `lineage::tests::budget_truncates_exponential_diamond`) превышает лимит OS-потоков — `failed to spawn thread: Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }` (EAGAIN).
+- P2/P3 — переключение на v2 `rayon` `par_iter`: `level.par_iter().map(|&i| eval_node(...)).collect()` (collect-then-reduce). Реализация вынесена в приватные `eval_node()` (чистая функция, shared read-only `&solutions`) + `merge_node_results()` (sort by `index` ascending — детерминированный порядок, контракт §5.7.3). Сигнатуры `propagate_with_lines`/`propagate_with_lines_data`/`topo_sort` НЕ меняются (контракт §5.1/§5.2).
+- Тесты: создан `crates/canvas-core/tests/parallel_determinism.rs` (16 тестов): flatten-эквивалентность (8 топологий: empty/no-edges/chain/diamond/interleaved/random-100/random-1000/cycle/self-loop), independence инвариант Кана (внутри яруса нет value-рёбер), детерминизм повторных вызовов `propagate_with_lines` (chain/diamond/wide-level/random-1000/whatif-override — все 5×10-20 повторов дают побитово идентичные `FlowSolutions`).
+- Документация: `docs/DEPENDENCIES.md` §3→§2 (`rayon` мигрирован в прямые прод-зависимости); `docs/SPEC.md` §6.3 (комментарий о параллельном пути и критерии ≥2× на 1000 нод/4 ядра); `docs/change-requests/fr-065-tiered-parallelism.md` (статус → реализовано, Changelog с описанием отступления от плана); `docs/change-requests/index-cr-fr.md` (статус → ✅ реализовано).
+- Гейты (все зелёные): `cargo build --no-default-features` (zero-dep — rayon НЕ подключается), `cargo test -p canvas-core` (385+16=401/401), `cargo test -p canvas-core --features parallel` (401/401), `cargo test -p canvas-scene --features canvas-core/parallel` (97/97 golden ADR-0005/0006 побитово идентичны), `cargo clippy -p canvas-core -p canvas-scene -p canvas-mcp --features canvas-core/parallel --all-targets -- -D warnings`, `cargo fmt --check`, `scripts/wasm_gate.sh --check`, `scripts/mcp_wasm_gate.sh --check` (flatten-фолбэк на wasm32-wasip1/wasm32-unknown-unknown).
+- Инциденты по ходу: (1) `std::thread::scope` EAGAIN на 8192-нод exponential diamond — переключение на `rayon`; (2) диск 100 % (cargo clean 8,5 ГБ → 17 %); (3) `cargo test --workspace` линкер Bus error на тяжёлых canvas-app тест-бинарях из-за лимитов среды (4 ГБ RAM, swap=0) — сужено до core+scene+mcp.
+- Коммит: `a4005db feat(core/flow): tiered parallelism — topo_levels + rayon par_iter (FR-065)`. Push в `origin/main` успешен.
+
+Stage Summary:
+- FR-065 реализован и влит в main: `topo_levels` + `rayon` `par_iter` per-level (v2 сразу, минуя v1 `std::thread::scope` — EAGAIN на тяжёлых графах). Контракты §5.1/§5.2/§5.6/§5.7.3/§5.8 соблюдены: сигнатуры стабильны, детерминизм побитовый, zero-dep инвариант B2B, wasm-фолбэк.
+- Гейты: 401/401 тестов canvas-core + 97/97 golden canvas-scene на ОБОИХ путях (default + --features parallel), wasm-гейты зелёные, clippy/fmt зелёные.
+- Не сделано: бенчмарк ≥2× на 1000 нод/4 ядра (критерий архдока §9 M4) — отложен на рантайм-приёмку владельцем (среда CI не позволяет запустить тяжёлый синтетический бенчмарк). Реализация `rayon` `par_iter` готова к замеру.
+
+---
+Task ID: 1
+Agent: main (сессия web-133c38b2)
+Task: FR-064 — сценарный воркер: вынос пересчёта `propagate_with_lines` с UI-треда (P1 double buffer) + FR-017 v2 (freeze/сравнение сценариев)
+
+Work Log:
+- Реализация P1 (коммит `feat(scene): FlowWorker spawn + AppEvent::FlowReady, sync fallback (FR-064 P1)`): новый модуль `canvas-scene/src/worker.rs` — `std::thread` + `mpsc` (desktop-only, `cfg(not(target_arch = "wasm32"))`), задание `(Arc<Canvas>, WhatIfOverrides)` → `Result<FlowSolutions, CycleError>`, паника вычисления ловится `catch_unwind` (воркер жив), wake — существующий паттерн `EventLoopProxy<AppEvent>` (`AppEvent::FlowReady { solutions, kind }`), spawn в `main()` по образцу `McpPipeServer::spawn`/`ThumbService::spawn`. `FlowCompute` — инъекция вычислителя для fallback-теста.
+- Double buffer: `flow_baseline`/`flow_active` — `Arc<RwLock<FlowSolutions>>` (алиас `FlowBuffer`, без `arc_swap` — архдок §5.2); читатели (рендер/UI/MCP/тесты) — через публичный `canvas_scene::read_flow` (восстановление от PoisonError через `into_inner`, без unwrap — правило AGENTS). Read-path app.rs (6 мест) + mcp.rs (`whatif_delta_rows`) + 3 интеграционных теста переведены на read-гарды.
+- `recompute_flow` — единственный редактор (план §5.4): при живом воркере отправляет прогоны (baseline + active при непустых подменах) и возвращается; выводка O(N) — в `apply_flow_pair` (единый хвост sync-пути и FlowReady-пути): публикация буфера атомарно с выводкой (torn-frame исключён — отклонение от буквального «писатель = воркер» задокументировано в Changelog FR-064 и архдоке §5.2). Поколения запросов: правки чаще, чем воркер успевает, подменяют pending — устаревшие ответы отбрасываются. Таймаут 3 с (`flow_worker_tick` в `about_to_wait`) → sync-фолбэк + warn; паника/отказ — sync-фолбэк + warn (правило AGENTS).
+- Реализация P2 (коммит `feat(scene): FR-017 v2 — scenario freeze + comparison table (FR-064 P2)`): `whatif.rs` — `FrozenScenario` (снимок за `Arc<FlowSolutions>`), `freeze_scenario` (детерминированный пересчёт с активными подменами), `compare_scenarios` (диф `lines`+`outputs`: union построчных переменных + изменившиеся узловые итоги — downstream-дельты, формат `whatif_delta_str`); персистентность `canvasdesk.whatif.frozen` через общий `set_whatif_key` (соседний `scenarios` сохраняется, пустой ключ удаляется — round-trip чистый; баг первого варианта — удаление без записи обратно — пойман тестом). `SceneState`: `frozen` + `whatif_freeze_active/unfreeze/frozen_names/is_frozen/restore_frozen` (восстановление при загрузке пересчётом персистентного канваса).
+- UI: `whatif_ui.rs` — `BarAction::Freeze` + rect в `BarLayout` (`bar_layout` принимает лейбл заморозки — измеряется та же строка, что рисуется, фикс-паттерн FR-053; порядок элементов и hit-тесты обновлены); `app.rs` — кнопка «❄ Заморозить/Разморозить» (приглушена без активного сценария), маркер «❄» на чипе замороженного сценария и в шапке колонки, таблица сравнения v2 (замороженная колонка — по снимку, иначе свежий прогон; строки строит ядро), undo-шаг + mark_dirty при изменении `frozen`; i18n RU/EN (5 ключей: freeze/unfreeze/frozen_toast/unfrozen_toast/row_total).
+- Тесты `crates/canvas-scene/tests/worker_smoke.rs` (6): smoke «правка → результат через воркер ≤ 2 кадра»; побитовая идентичность воркер-пути sync-пути (сравнение по отпечаткам — HashMap Debug недетерминирован по порядку); fallback-паника → sync идентичен, канвас жив; discard устаревшего поколения; freeze 2 сценариев → таблица с дельтами downstream (модель в духе эталона ADR-0006 №2: смена `rps` → дельты cdn/pool) + pinned-семантика (правка канваса не двигает снимок); round-trip имён заморозок.
+- Доки (коммит `docs(...)`): статус FR-064 → «выполнено» + Changelog + чек-лист Verification; index-cr-fr.md; ACCEPTANCE.md (FR-064.1–.12, ручной пункт — 60 fps демо); архдок math-computing-stack.md §5.2 (P1 «план» → «реализовано», зафиксировано отклонение «публикация — конвейер пересчёта»); product-roadmap.md §4.5 (S2) + §5 (M3); wave-s-plan.md §7 (обе фазы отмечены, `ScenarioGrid` не потребовался); SPEC.md §6.3 (бюджет пересчёта, live-инвариант, деградация); user-docs/calculations.md (заморозка, таблица v2, фоновой пересчёт); interface-objects/node.md (строка what-if ноды: override/freeze/таблица); AGENTS.md (п.4 — воркер FR-064 как пример «фолбэк + warn»).
+
+Stage Summary:
+- FR-064 выполнен целиком (P1+P2): тяжёлый пересчёт — на воркере, UI-тред — выводка O(N); live-инвариант ≤ 2 кадров; деградация = sync + warn с побитовой идентичностью; freeze/сравнение сценариев FR-017 v2 (таблица «переменная | База | С1 | С2» с downstream-дельтами, pinned-снимки, персистентность имён).
+- MCP не задет (9 инструментов whatif_* без изменений — skills/ обновления не требует); flow.rs/expr.rs/canvas-mcp не тронуты; новых зависимостей нет (только std).
+- Гейты: fmt ✓, clippy -D warnings 0, test --workspace 0 отказов (canvas-core 385+43+, canvas-scene 97+6, canvas-app 342+), wasm_gate --check ✓, mcp_wasm_gate --check ✓, cargo deny ✓.
+- Среда: диск 100 % (дважды) — чистка target/incremental + wasm-артефактов; rust-toolchain stable 1.98.1 установлен локально.
+- Далее по плану волны S: FR-065 (M4 параллелизм, контракт сигнатуры соблюдён) / FR-066 (M5 Monte Carlo — потребитель воркера и stats-сид-контракта FR-063).
+
+---
+Task ID: FR-066
+Agent: main (сессия web-6d0952be)
+Task: Реализовать FR-066 — Monte Carlo + QMC-движок (M5 волна S ADR-0008): propagate_monte_carlo, sobol QMC, P50/P90/P99, MCP monte_carlo_run
+
+Work Log:
+- Контекст: реализация FR-066 (все три фазы P1/P2/P3 одним слоем) была завершена в рабочей директории предыдущей сессией, но НЕ закоммичена (25 файлов, +2565/−52: новый expr/mc.rs ~700 строк, новый tests/mc_engine.rs, фича qmc в Cargo, MCP monte_carlo_run, доки/точки входа по чек-листу FR). Задача сессии — верификация гейтов, коммит, push, фиксация в worklog.
+- Ревизия кода перед гейтами: git diff flow.rs — ТОЛЬКО добавления (сиблинги propagate_monte_carlo + propagate_monte_carlo_with_progress за #[cfg(feature = "qmc")]); propagate_with_lines/propagate_with_lines_data/topo_sort сигнатуры НЕ тронуты (контракт §5.1). FlowSolutions не изменена (§5.5).
+- Гейты прогнаны заново (всё зелёное):
+  - cargo test -p canvas-core --features qmc — 560/560 (403 юнит + интеграции; mc_engine.rs 7 гейтов за 7.3 с: побитовая seed-воспроизводимость, квантили эталона №5 ±1 %, QMC-дисперсия < MC, severity на P90, stale, деградация skipped_params/failed_runs, бюджет 10^4 < 1 с).
+  - cargo test -p canvas-scene --features qmc — 102/102 (97 golden побитово + 5 e2e monte_carlo_run: валидация парамов, сид-повтор, P-метки в named, severity, счётчики).
+  - cargo test -p canvas-mcp — 20/20; cargo test -p canvas-mcp-headless — 13/13 (реестр 41 native / 40 wasm, skills_sync контракт).
+  - cargo clippy -p canvas-core -p canvas-scene -p canvas-mcp -p canvas-mcp-headless --features qmc --all-targets -- -D warnings — 0; cargo fmt --check — чисто.
+  - cargo deny check — advisories/bans/licenses/sources ok (sobol_burley MIT OR Apache-2.0 разрешена).
+  - scripts/wasm_gate.sh --check — зелёный (core/render/widgets/mcp/web под wasm32-unknown-unknown без qmc); scripts/mcp_wasm_gate.sh --check — зелёный (scene/mcp/headless, реестр без monte_carlo_run на wasm, §5.8).
+- Коммит (один, конвенция AGENTS.md «задача = сессия = коммит», новые депсы обоснованы в теле): 5b35c86 feat(core/mc): monte carlo + qmc engine — propagate_monte_carlo, sobol QMC, P50/P90/P99, MCP monte_carlo_run (FR-066). 25 файлов, 2565 insertions(+), 52 deletions(-).
+- Отступления от плана FR (зафиксированы в истории FR-066 до этой сессии): сид §5.7.2 — FNV-1a поверх LE-байтов тройки вместо буквального XOR (коллапс при N = 2^k); LogNormal { mean, sd } — натуральное пространство; params → построчные подмены line_exprs (не node_values); ядро деградирует тихо, MCP валидирует строго.
+
+Stage Summary:
+- FR-066 (M5/S3, волна S ADR-0008) закрыт полностью: движок MC/QMC за фичей qmc = ["stats", "parallel", "dep:sobol_burley"], wasm-чистота core сохранена, MCP monte_carlo_run (41 native / 40 wasm), skills синхронизированы тем же коммитом, доки-точки входа обновлены (node.md, calculations.md, SPEC §MCP/§6.3, DEPENDENCIES §3→§2, math-computing-stack §5.4/§5.6/§9, index-cr-fr, FR-066 статус «выполнено»).
+- Гейты сессии: 560+102+20+13 тестов зелёные, clippy/fmt/deny зелёные, оба wasm-гейта зелёные, propagate_with_lines signature audit — только добавления.
+- Коммит 5b35c86 в main; push в origin/main (совместно с этим worklog-коммитом).
 
 ---
 Task ID: FR-069 (этап F, сессия web-d435bede)

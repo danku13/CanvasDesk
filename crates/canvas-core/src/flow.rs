@@ -76,13 +76,98 @@ pub type FlowOutputs = HashMap<String, Result<Value, EvalError>>;
 /// детерминирован (очередь по возрастанию индексов). Цикл —
 /// `Err(CycleError)` с участниками (SCC размера > 1 и петли).
 pub fn topo_sort(canvas: &Canvas) -> Result<Vec<usize>, CycleError> {
+    let ValueGraph {
+        n,
+        adj,
+        mut indegree,
+        self_loops,
+    } = build_value_graph(canvas);
+    // Кан: очередь заполняется по возрастанию индексов — детерминизм
+    let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+    let mut order = Vec::with_capacity(n);
+    while let Some(i) = queue.pop_front() {
+        order.push(i);
+        for &j in &adj[i] {
+            indegree[j] -= 1;
+            if indegree[j] == 0 {
+                queue.push_back(j);
+            }
+        }
+    }
+    if order.len() == n {
+        return Ok(order);
+    }
+    // Остаток — циклы и их окрестности: участники — SCC размера > 1 и петли
+    Err(CycleError {
+        nodes: cycle_participants(canvas, n, &adj, &self_loops),
+    })
+}
+
+/// FR-065 P1 (M4/S3 волны S): топосортировка ярусами — Kahn с drain-фронтиром
+/// в `sub-vec` на каждой итерации `while !queue.is_empty()`. Любые два узла
+/// одного яруса не связаны value-рёбрами по построению (фронтир Кана) —
+/// могут вычисляться параллельно без блокировок (контракт
+/// `docs/plans/adr-0008-wave-s-plan.md` §5.2). Порядок внутри яруса —
+/// детерминирован (тот же Kahn с очередью по возрастанию индексов, что и
+/// [`topo_sort`]); flatten-эквивалентность:
+/// `topo_levels(canvas)?.into_iter().flatten().collect::<Vec<_>>()` ==
+/// `topo_sort(canvas)?` (инвариант-тест — `tests/parallel_determinism.rs`).
+/// Цикл — `Err(CycleError)` (переиспользует [`cycle_participants`]).
+pub fn topo_levels(canvas: &Canvas) -> Result<Vec<Vec<usize>>, CycleError> {
+    let ValueGraph {
+        n,
+        adj,
+        mut indegree,
+        self_loops,
+    } = build_value_graph(canvas);
+    // Тот же Kahn, что и topo_sort — но drain-фронтир в sub-vec на каждой
+    // итерации внешнего цикла. queue инициализируется по возрастанию
+    // индексов (детерминизм); внутри яруса порядок = порядок очереди Кана
+    // (FIFO преемников), что побитово совпадает с topo_sort при flatten.
+    let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+    let mut levels: Vec<Vec<usize>> = Vec::new();
+    let mut total = 0usize;
+    while !queue.is_empty() {
+        // drain-фронтир: все готовые к этому ярусу ноды (Кahn-фронтир).
+        // порядок — FIFO queue (детерминизм: queue инициализирован по
+        // возрастанию индексов, преемники push_back в порядке обхода).
+        let level: Vec<usize> = queue.drain(..).collect();
+        total += level.len();
+        for &i in &level {
+            for &j in &adj[i] {
+                indegree[j] -= 1;
+                if indegree[j] == 0 {
+                    queue.push_back(j);
+                }
+            }
+        }
+        levels.push(level);
+    }
+    if total == n {
+        return Ok(levels);
+    }
+    Err(CycleError {
+        nodes: cycle_participants(canvas, n, &adj, &self_loops),
+    })
+}
+
+/// Граф value-рёбер: смежность + полустепени захода + петли. Висячие рёбра
+/// (конец не в `canvas.nodes`) пропускаются — они не создают циклов.
+/// Используется и [`topo_sort`], и [`topo_levels`] (общая настройка графа,
+/// инвариант flatten-эквивалентности: обе функции видят одинаковую топологию).
+struct ValueGraph {
+    n: usize,
+    adj: Vec<Vec<usize>>,
+    indegree: Vec<usize>,
+    self_loops: Vec<usize>,
+}
+
+fn build_value_graph(canvas: &Canvas) -> ValueGraph {
     let n = canvas.nodes.len();
     let mut index_of: HashMap<&str, usize> = HashMap::with_capacity(n);
     for (i, node) in canvas.nodes.iter().enumerate() {
         index_of.insert(node.id.as_str(), i);
     }
-    // Граф value-рёбер: смежность + полустепени захода. Висячие рёбра
-    // (конец не в canvas.nodes) пропускаются — они не создают циклов.
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut indegree = vec![0usize; n];
     let mut self_loops: Vec<usize> = Vec::new();
@@ -106,25 +191,12 @@ pub fn topo_sort(canvas: &Canvas) -> Result<Vec<usize>, CycleError> {
         adj[from].push(to);
         indegree[to] += 1;
     }
-    // Кан: очередь заполняется по возрастанию индексов — детерминизм
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
-    let mut order = Vec::with_capacity(n);
-    while let Some(i) = queue.pop_front() {
-        order.push(i);
-        for &j in &adj[i] {
-            indegree[j] -= 1;
-            if indegree[j] == 0 {
-                queue.push_back(j);
-            }
-        }
+    ValueGraph {
+        n,
+        adj,
+        indegree,
+        self_loops,
     }
-    if order.len() == n {
-        return Ok(order);
-    }
-    // Остаток — циклы и их окрестности: участники — SCC размера > 1 и петли
-    Err(CycleError {
-        nodes: cycle_participants(canvas, n, &adj, &self_loops),
-    })
 }
 
 /// Участники циклов value-графа: ноды SCC размера > 1 (Тарьян) + петли.
@@ -402,44 +474,186 @@ pub fn propagate_with_lines(
 /// — колонки data-нод проливаются в поток (см.
 /// [`edge_source_value_with_data`]). Пустая карта — поведение идентично
 /// [`propagate_with_lines`] (обратная совместимость всех вызовов).
+///
+/// FR-065 (M4/S3 волны S): за фичей `parallel` (desktop-only,
+/// `cfg(not(target_arch="wasm32"))`) цикл пересчёта идёт по ярусам
+/// [`topo_levels`] — каждый ярус вычисляется параллельно через
+/// `rayon` `par_iter` (bounded thread pool, automatic parallelism-threshold
+/// для мелких ярусов). Каждый вызов `eval_node` клонирует свой `Env`
+/// (expr.rs `Env` — `Clone`); барьер между ярусами — по построению фронтира
+/// Кана. На wasm/без `parallel` — однопоточный flatten-путь (контракт
+/// `docs/plans/adr-0008-wave-s-plan.md` §5.1/§5.8: сигнатура СТАБИЛЬНА,
+/// меняется только внутренность цикла). collect-then-reduce (контракт
+/// §5.7.3): `par_iter().reduce()` ЗАПРЕЩЁН — только
+/// `par_iter().collect() → sort by index → merge` в детерминированном порядке.
 pub fn propagate_with_lines_data(
     canvas: &Canvas,
     whatif: &WhatIfOverrides,
     data: &DataSnapshots,
 ) -> Result<FlowSolutions, CycleError> {
-    let order = topo_sort(canvas)?;
     // FR-050 Р-6: адресные имена нод для qualified-резолва — один расчёт
     // на весь пересчёт (коллизии: «Заявки (2)»/«Заявки (id)», порядок
     // `canvas.nodes` — детерминизм, инвариант 6).
     let obj_names = QualifiedNames::build(canvas);
     let mut solutions = FlowSolutions::default();
-    for index in order {
-        let node = &canvas.nodes[index];
-        let id = &node.id;
-        // FR-014/FR-017: value-level подмена заменяет формулу целиком
-        if let Some(value) = whatif.node_values.get(id) {
-            solutions.outputs.insert(id.clone(), Ok(value.clone()));
-            continue;
+
+    // FR-065 P2/P3: параллельный путь — desktop + feature `parallel`.
+    // Ярусы topo_levels — карта независимости: любые два узла одного яруса
+    // не связаны value-рёбрами (фронтир Кана), значит могут вычисляться
+    // параллельно без блокировок. Барьер между ярусами — end of par_iter.
+    //
+    // Реализация: `rayon` `par_iter` (P3) вместо изначального плана P2
+    // `std::thread::scope` — scope спавнит ОДИН OS-поток на узел, что на
+    // тяжёлых графах (8192-нод exponential diamond, тест
+    // `lineage::tests::budget_truncates_exponential_diamond`) превышает
+    // лимит OS-потоков (EAGAIN). `rayon` использует bounded thread pool
+    // (default = num_cpus), автоматический parallelism-threshold для
+    // мелких ярусов (5–10 узлов — sequential) и naturally реализует
+    // collect-then-reduce (контракт §5.7.3 — `par_iter().collect()` →
+    // sort by index → merge; `par_iter().reduce()` ЗАПРЕЩЁН).
+    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+    {
+        use rayon::prelude::*;
+        let levels = topo_levels(canvas)?;
+        for level in &levels {
+            // rayon par_iter по узлам яруса: каждый вызов eval_node
+            // клонирует свой Env (expr.rs Env — Clone). references на
+            // canvas/whatif/data/obj_names/solutions — shared read-only
+            // (Sync: plain structs + HashMap), writes — в ЛОКАЛЬНЫЙ
+            // NodeResults каждого потока (no overlap by construction —
+            // фронтир Кана гарантирует независимость узлов яруса).
+            // rayon slice::par_iter().map().collect() — это и есть
+            // collect-then-reduce: fixed order после sort_by_key(index).
+            let mut results: Vec<NodeResults> = level
+                .par_iter()
+                .map(|&index| eval_node(canvas, whatif, data, &obj_names, &solutions, index))
+                .collect();
+            // Контракт §5.7.3: sort by index ascending перед merge —
+            // детерминированный порядок (побитовая идентичность чисел
+            // эталонов ADR-0005/0006). rayon par_iter preserve order
+            // для slice, но sort — defensive (контракт явный).
+            // Никакого par_iter().reduce() — недетерминированный порядок
+            // float-агрегатов (архдок §5.6).
+            results.sort_by_key(|r| r.index);
+            for r in results {
+                merge_node_results(&mut solutions, canvas, r);
+            }
         }
-        // FR-017: построчные подмены → виртуальный исходник текста
-        // (пустой список — persisted-текст как есть, нулевой оверхед).
-        let line_overrides = whatif.line_overrides(id);
-        let text = whatif_virtual_text(&node.text.clone().unwrap_or_default(), &line_overrides);
-        // FR-029: входы по адресации — позиционные слоты (рёбра без
-        // toParam) и карта проливания в параметры (рёбра с toParam)
-        // FR-045: снапшоты CSV — колонки data-нод адресуются fromOutput
-        // FR-050 Р-6: + таблица резолва именованных путей «Объект.Поле»
-        let inbound = inbound_values(
-            canvas,
-            id,
-            &solutions.outputs,
-            &solutions.lines,
-            &solutions.named,
-            data,
-            &obj_names,
-        );
-        if !inbound.conflicts.is_empty() {
-            let warnings = inbound
+    }
+    // Однопоточный flatten-путь: wasm32 (нет std::thread) или без фичи
+    // `parallel` (B2B zero-dep инвариант, контракт §5.6/§5.8).
+    #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+    {
+        let order = topo_sort(canvas)?;
+        for index in order {
+            let r = eval_node(canvas, whatif, data, &obj_names, &solutions, index);
+            merge_node_results(&mut solutions, canvas, r);
+        }
+    }
+    Ok(solutions)
+}
+
+// --- FR-066 (M5/S3): Monte Carlo + QMC-движок ----------------------------------
+
+/// FR-066 (M5/S3, волна S ADR-0008): Monte Carlo + QMC-прогон — слой
+/// L4/P3 поверх [`propagate_with_lines`]. Выполняет `N ≥ 10⁴` прогонов
+/// расчётного графа с распределёнными параметрами
+/// ([`crate::expr::mc::McConfig::params`] → построчные what-if подмены,
+/// Normal/LogNormal/Exp/Poisson из FR-063) и сводит результаты к
+/// квантилям P50/P90/P99 (collect-then-reduce, §5.7.3).
+///
+/// **СИБЛИНГ** (контракт §5.1): `propagate_with_lines` НЕ трогается —
+/// сигнатура и поведение стабильны; M5 только добавляет эту функцию.
+/// Реализация и контракты детерминизма — [`crate::expr::mc`]
+/// (сид `hash(content) ⊕ scenario_seed ⊕ run_idx` §5.7.2, ChaCha8,
+/// чанки 256/задача за фичей `parallel`, версия движка в `canvas.extra`
+/// §5.7.4). Фича `qmc` не собирается на wasm (§5.8).
+#[cfg(feature = "qmc")]
+pub fn propagate_monte_carlo(
+    canvas: &Canvas,
+    mc_config: &crate::expr::mc::McConfig,
+) -> Result<crate::expr::mc::McResult, CycleError> {
+    crate::expr::mc::propagate_monte_carlo(canvas, mc_config)
+}
+
+/// [`propagate_monte_carlo`] с прогрессом `(completed, total)` после
+/// каждого завершённого прогона (FR-066 P1: «прогресс через callback/
+/// AppEvent» — UI показывает N/total и ETA; AppEvent-интеграция —
+/// ответственность приложения).
+#[cfg(feature = "qmc")]
+pub fn propagate_monte_carlo_with_progress(
+    canvas: &Canvas,
+    mc_config: &crate::expr::mc::McConfig,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<crate::expr::mc::McResult, CycleError> {
+    crate::expr::mc::propagate_monte_carlo_with_progress(canvas, mc_config, progress)
+}
+
+/// FR-065 P2: результат вычисления одной ноды — собирается в параллельном
+/// пути каждым потоком в свой аккумулятор, затем merge-ится в `solutions`
+/// в детерминированном порядке (sort by `index` ascending — контракт §5.7.3
+/// collect-then-reduce). Поля `lines`/`named` хранят ключи БЕЗ `id`
+/// (id восстанавливается из `index` при merge — экономия на clone).
+struct NodeResults {
+    index: usize,
+    /// `Some(outcome)` — значение ноды (Ok/Err); `None` — нода без формулы
+    /// и без последней формульной строки (поведение `continue` оригинального
+    /// цикла: `outputs.insert` не выполнялся).
+    output: Option<Result<Value, EvalError>>,
+    /// Построчные выходы: (line_index, value).
+    lines: Vec<(usize, Value)>,
+    /// Именованные выходы: (name, value).
+    named: Vec<(String, Value)>,
+    /// `Some(vec)` — есть предупреждения о конфликтах toParam; `None` — нет.
+    warnings: Option<Vec<String>>,
+}
+
+/// FR-065 P2: вычисление одной ноды в подгонке окружения (чистая функция,
+/// не мутирует `solutions` — только читает входы predecessors из
+/// `&solutions`). Та же логика, что в оригинальном цикле `for index in order`
+/// (`flow.rs:488` до рефактора) — вынесена в функцию для параллельного
+/// вызова из `std::thread::scope`. Контракт §5.1: сигнатуры внешних
+/// `propagate_with_lines`/`propagate_with_lines_data` НЕ меняются.
+fn eval_node(
+    canvas: &Canvas,
+    whatif: &WhatIfOverrides,
+    data: &DataSnapshots,
+    obj_names: &QualifiedNames,
+    solutions: &FlowSolutions,
+    index: usize,
+) -> NodeResults {
+    let node = &canvas.nodes[index];
+    let id = &node.id;
+    // FR-014/FR-017: value-level подмена заменяет формулу целиком
+    if let Some(value) = whatif.node_values.get(id) {
+        return NodeResults {
+            index,
+            output: Some(Ok(value.clone())),
+            lines: Vec::new(),
+            named: Vec::new(),
+            warnings: None,
+        };
+    }
+    // FR-017: построчные подмены → виртуальный исходник текста
+    // (пустой список — persisted-текст как есть, нулевой оверхед).
+    let line_overrides = whatif.line_overrides(id);
+    let text = whatif_virtual_text(&node.text.clone().unwrap_or_default(), &line_overrides);
+    // FR-029: входы по адресации — позиционные слоты (рёбра без
+    // toParam) и карта проливания в параметры (рёбра с toParam)
+    // FR-045: снапшоты CSV — колонки data-нод адресуются fromOutput
+    // FR-050 Р-6: + таблица резолва именованных путей «Объект.Поле»
+    let inbound = inbound_values(
+        canvas,
+        id,
+        &solutions.outputs,
+        &solutions.lines,
+        &solutions.named,
+        data,
+        obj_names,
+    );
+    let warnings = if !inbound.conflicts.is_empty() {
+        Some(
+            inbound
                 .conflicts
                 .iter()
                 .map(|name| {
@@ -447,148 +661,184 @@ pub fn propagate_with_lines_data(
                         "несколько value-рёбер в параметр {name}: побеждает последнее по canvas.edges"
                     )
                 })
-                .collect();
-            solutions.warnings.insert(id.clone(), warnings);
-        }
-        let env = if inbound.slots.is_empty() {
-            Env::empty()
-        } else {
-            Env::with_inbound(inbound.slots.clone())
-        };
-        // FR-050 Р-6 (таблица резолва имён): именованные пути «Объект.Поле»
-        // → значения входящих рёбер — доступны и формулам шаблона, и
-        // строкам листа, и what-if-подменам (RHS считается в этом же
-        // окружении каскада Р-1).
-        let env = if inbound.qualified.is_empty() {
-            env
-        } else {
-            env.with_qualified(inbound.qualified.clone().into_iter().collect())
-        };
-        // FR-050 Р-1 (приоритет источников значения): параметры собираются
-        // каскадом «локальный дефолт → проливание (`toParam`, «проливание
-        // сильнее дефолта», FR-029) → what-if подмена строки-параметра
-        // (перекрывает всё, FR-017 поверх, runtime-only)». Инвариант Р-1:
-        // снятие what-if возвращает проливание, удаление ребра — локальное
-        // значение. Н5: безразмерное пролитое значение трактуется в
-        // единицах приёмника (Numi-семантика: «500» в параметр rps =
-        // 500 rps); значение с единицей приходит как есть (в том числе в
-        // безразмерный параметр); E-UNIT — только несовместимые размерности
-        // (validate, FR-032).
-        let template = node.template();
-        let env = match &template {
-            Some(tpl) => {
-                let mut params = tpl.param_values();
-                // Каскад, шаг 2: проливание перекрывает локальные значения.
-                for (name, value) in &inbound.spill {
-                    if let Some(v) = value {
-                        params.insert(name.clone(), spill_value_in_param_units(tpl, name, v));
-                    }
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let env = if inbound.slots.is_empty() {
+        Env::empty()
+    } else {
+        Env::with_inbound(inbound.slots.clone())
+    };
+    // FR-050 Р-6 (таблица резолва имён): именованные пути «Объект.Поле»
+    // → значения входящих рёбер — доступны и формулам шаблона, и
+    // строкам листа, и what-if-подменам (RHS считается в этом же
+    // окружении каскада Р-1).
+    let env = if inbound.qualified.is_empty() {
+        env
+    } else {
+        env.with_qualified(inbound.qualified.clone().into_iter().collect())
+    };
+    // FR-050 Р-1 (приоритет источников значения): параметры собираются
+    // каскадом «локальный дефолт → проливание (`toParam`, «проливание
+    // сильнее дефолта», FR-029) → what-if подмена строки-параметра
+    // (перекрывает всё, FR-017 поверх, runtime-only)». Инвариант Р-1:
+    // снятие what-if возвращает проливание, удаление ребра — локальное
+    // значение. Н5: безразмерное пролитое значение трактуется в
+    // единицах приёмника (Numi-семантика: «500» в параметр rps =
+    // 500 rps); значение с единицей приходит как есть (в том числе в
+    // безразмерный параметр); E-UNIT — только несовместимые размерности
+    // (validate, FR-032).
+    let template = node.template();
+    let env = match &template {
+        Some(tpl) => {
+            let mut params = tpl.param_values();
+            // Каскад, шаг 2: проливание перекрывает локальные значения.
+            for (name, value) in &inbound.spill {
+                if let Some(v) = value {
+                    params.insert(name.clone(), spill_value_in_param_units(tpl, name, v));
                 }
-                // Каскад, шаг 3: what-if подмена перекрывает всё; RHS
-                // вычисляется последовательно в окружении каскада (входы +
-                // локальные + проливание + уже подменённые параметры).
-                if !line_overrides.is_empty() {
-                    let mut env_params = env.clone().with_param_map(params.clone());
-                    for (_, expr) in &line_overrides {
-                        if let Some((name, value)) = override_assignment(expr, &env_params) {
-                            params.insert(name.clone(), value.clone());
-                            env_params = env_params.with_param_map(params.clone());
-                        }
-                    }
-                }
-                env.with_param_map(params)
             }
-            None => {
-                // Текстовая нода: спецификаций параметров нет — проливание
-                // напрямую в карту окружения (what-if действует через
-                // виртуальный исходник текста выше, FR-017).
-                if inbound.spill.is_empty() {
-                    env
-                } else {
-                    let resolved: BTreeMap<String, Value> = inbound
-                        .spill
+            // Каскад, шаг 3: what-if подмена перекрывает всё; RHS
+            // вычисляется последовательно в окружении каскада (входы +
+            // локальные + проливание + уже подменённые параметры).
+            if !line_overrides.is_empty() {
+                let mut env_params = env.clone().with_param_map(params.clone());
+                for (_, expr) in &line_overrides {
+                    if let Some((name, value)) = override_assignment(expr, &env_params) {
+                        params.insert(name.clone(), value.clone());
+                        env_params = env_params.with_param_map(params.clone());
+                    }
+                }
+            }
+            env.with_param_map(params)
+        }
+        None => {
+            // Текстовая нода: спецификаций параметров нет — проливание
+            // напрямую в карту окружения (what-if действует через
+            // виртуальный исходник текста выше, FR-017).
+            if inbound.spill.is_empty() {
+                env
+            } else {
+                let resolved: BTreeMap<String, Value> = inbound
+                    .spill
+                    .iter()
+                    .filter_map(|(name, value)| value.as_ref().map(|v| (name.clone(), v.clone())))
+                    .collect();
+                env.with_param_map(resolved)
+            }
+        }
+    };
+    // FR-025 (правка 2): значение КАЖДОЙ формульной строки текста —
+    // кандидат построчной точки выхода, теперь и у шаблонных нод
+    // (лист параметров — присваивания со значениями). Ошибки строк
+    // и проза значений не дают. FR-029: финальное окружение листа
+    // (переменные) сохраняется — именованные выходы текстовой ноды.
+    // FR-017: вычисляется ВИРТУАЛЬНЫЙ исходник (подменённые строки).
+    let (line_outcomes, sheet_env) = expr::eval_lines_with_env(&text, &env);
+    let mut lines: Vec<(usize, Value)> = Vec::new();
+    for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
+        if let Some(ExprOutcome::Ok(value)) = line_outcome {
+            lines.push((line_index, value.clone()));
+        }
+    }
+    // FR-029: именованные выходы ноды — адресация `fromOutput`.
+    // Шаблонная нода: снапшот outputs манифеста (Line(i) — из
+    // построчных значений; Expr(s) — вычисление в окружении ноды —
+    // входы + параметры + проливание). Текстовая нода: переменные
+    // Numi-листа (последнее определение имени — «строка сдвинулась,
+    // связь жива").
+    let mut named: Vec<(String, Value)> = Vec::new();
+    match &template {
+        Some(tpl) => {
+            for spec in &tpl.outputs {
+                let value = match &spec.source {
+                    // OutputSource::Line(line) в оригинале смотрит в
+                    // solutions.lines — туда только что insert-нуты
+                    // строки ЭТОЙ же ноды. Локально: look-up в MY OWN lines.
+                    OutputSource::Line(line) => lines
                         .iter()
-                        .filter_map(|(name, value)| {
-                            value.as_ref().map(|v| (name.clone(), v.clone()))
-                        })
-                        .collect();
-                    env.with_param_map(resolved)
-                }
-            }
-        };
-        // FR-025 (правка 2): значение КАЖДОЙ формульной строки текста —
-        // кандидат построчной точки выхода, теперь и у шаблонных нод
-        // (лист параметров — присваивания со значениями). Ошибки строк
-        // и проза значений не дают. FR-029: финальное окружение листа
-        // (переменные) сохраняется — именованные выходы текстовой ноды.
-        // FR-017: вычисляется ВИРТУАЛЬНЫЙ исходник (подменённые строки).
-        let (line_outcomes, sheet_env) = expr::eval_lines_with_env(&text, &env);
-        for (line_index, line_outcome) in line_outcomes.iter().enumerate() {
-            if let Some(ExprOutcome::Ok(value)) = line_outcome {
-                solutions
-                    .lines
-                    .insert((id.clone(), line_index), value.clone());
-            }
-        }
-        // FR-029: именованные выходы ноды — адресация `fromOutput`.
-        // Шаблонная нода: снапшот outputs манифеста (Line(i) — из
-        // построчных значений; Expr(s) — вычисление в окружении ноды —
-        // входы + параметры + проливание). Текстовая нода: переменные
-        // Numi-листа (последнее определение имени — «строка сдвинулась,
-        // связь жива").
-        match &template {
-            Some(tpl) => {
-                for spec in &tpl.outputs {
-                    let value = match &spec.source {
-                        OutputSource::Line(line) => {
-                            solutions.lines.get(&(id.clone(), *line)).cloned()
-                        }
-                        OutputSource::Expr(source) => expr::parse(source)
-                            .ok()
-                            .and_then(|parsed| expr::eval(&parsed, &env).ok()),
-                    };
-                    if let Some(value) = value {
-                        solutions
-                            .named
-                            .insert((id.clone(), spec.name.clone()), value);
-                    }
-                }
-            }
-            None => {
-                for (name, value) in sheet_env.vars_iter() {
-                    solutions
-                        .named
-                        .insert((id.clone(), name.clone()), value.clone());
+                        .find(|(i, _)| i == line)
+                        .map(|(_, v)| v.clone()),
+                    OutputSource::Expr(source) => expr::parse(source)
+                        .ok()
+                        .and_then(|parsed| expr::eval(&parsed, &env).ok()),
+                };
+                if let Some(value) = value {
+                    named.push((spec.name.clone(), value));
                 }
             }
         }
-        // Значение ноды: шаблонная формула (FR-018), явная формула
-        // `canvasdesk.expr` (MCP) или — для обычных заметок — последняя
-        // формульная строка Numi-листа (FR-013: «итог заметки — последняя
-        // формульная строка»; живой UI-путь: пользователь пишет
-        // «1200 + 480» в заметке и тянет value-ребро). Проза/пустой текст
-        // значения не дают — нода не участвует в потоке.
-        let outcome = match &template {
-            Some(tpl) => expr::parse(&tpl.expr)
+        None => {
+            for (name, value) in sheet_env.vars_iter() {
+                named.push((name.clone(), value.clone()));
+            }
+        }
+    }
+    // Значение ноды: шаблонная формула (FR-018), явная формула
+    // `canvasdesk.expr` (MCP) или — для обычных заметок — последняя
+    // формульная строка Numi-листа (FR-013: «итог заметки — последняя
+    // формульная строка»; живой UI-путь: пользователь пишет
+    // «1200 + 480» в заметке и тянет value-ребро). Проза/пустой текст
+    // значения не дают — нода не участвует в потоке.
+    let outcome = match &template {
+        Some(tpl) => expr::parse(&tpl.expr)
+            .map_err(|err| EvalError::BadFormula(err.to_string()))
+            .and_then(|parsed| expr::eval(&parsed, &env)),
+        None => match node.expr() {
+            Some(formula) => expr::parse(formula)
                 .map_err(|err| EvalError::BadFormula(err.to_string()))
                 .and_then(|parsed| expr::eval(&parsed, &env)),
-            None => match node.expr() {
-                Some(formula) => expr::parse(formula)
-                    .map_err(|err| EvalError::BadFormula(err.to_string()))
-                    .and_then(|parsed| expr::eval(&parsed, &env)),
-                None => {
-                    let last = line_outcomes.into_iter().flatten().last();
-                    match last {
-                        Some(ExprOutcome::Ok(value)) => Ok(value),
-                        Some(ExprOutcome::Err(msg)) => Err(EvalError::BadFormula(msg)),
-                        None => continue,
+            None => {
+                let last = line_outcomes.into_iter().flatten().last();
+                match last {
+                    Some(ExprOutcome::Ok(value)) => Ok(value),
+                    Some(ExprOutcome::Err(msg)) => Err(EvalError::BadFormula(msg)),
+                    None => {
+                        // Поведение `continue` оригинального цикла: нода
+                        // без формулы и без последней строки — нет output,
+                        // но lines/named/warnings сохраняются.
+                        return NodeResults {
+                            index,
+                            output: None,
+                            lines,
+                            named,
+                            warnings,
+                        };
                     }
                 }
-            },
-        };
+            }
+        },
+    };
+    NodeResults {
+        index,
+        output: Some(outcome),
+        lines,
+        named,
+        warnings,
+    }
+}
+
+/// FR-065 P2: слияние `NodeResults` в `FlowSolutions` (детерминированный
+/// порядок — caller sort-ит по `index` ascending). Вставки ключей по `id`
+/// ноды (id восстанавливается из `canvas.nodes[index]`); коллизий БЕЗ по
+/// построению (одна нода = один id; в параллельном пути ярус не содержит
+/// повторов индексов).
+fn merge_node_results(solutions: &mut FlowSolutions, canvas: &Canvas, r: NodeResults) {
+    let id = canvas.nodes[r.index].id.clone();
+    if let Some(outcome) = r.output {
         solutions.outputs.insert(id.clone(), outcome);
     }
-    Ok(solutions)
+    for (line_index, value) in r.lines {
+        solutions.lines.insert((id.clone(), line_index), value);
+    }
+    for (name, value) in r.named {
+        solutions.named.insert((id.clone(), name), value);
+    }
+    if let Some(warnings) = r.warnings {
+        solutions.warnings.insert(id, warnings);
+    }
 }
 
 /// Значения входящих value-рёбер ноды (в порядке `canvas.edges`) по карте

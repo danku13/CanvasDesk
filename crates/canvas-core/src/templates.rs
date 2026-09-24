@@ -917,6 +917,26 @@ pub enum InstantiateError {
     BadParams(String),
 }
 
+/// Q6 FR-061: дефолтная ширина шаблонной ноды — 360–400 «тяжёлым» по числу
+/// строк (анализ §3.4/§9 Q6: tcp-lb на 300 px живёт в режиме иконок
+/// постоянно; решение владельца — ширина по числу строк, ресайз из UI —
+/// отдельный FR). Видимые ряды таблицы шаблонной ноды при инстанциате —
+/// строки параметров (текст ноды — Numi-лист присваиваний).
+/// Порог согласован с блок-порогом T = [`NODE_BODY_BLOCK_THRESHOLD`] (4):
+/// R < T → 300 (как прежде), T ≤ R < T+4 → 360, R ≥ T+4 → 400.
+/// Существующие ноды (уже в `.canvas`) не трогаются — меняется только
+/// дефолт новых инстанциатов.
+pub fn default_template_width(param_rows: usize) -> f32 {
+    let t = crate::NODE_BODY_BLOCK_THRESHOLD;
+    if param_rows >= t + 4 {
+        400.0
+    } else if param_rows >= t {
+        360.0
+    } else {
+        300.0
+    }
+}
+
 /// Создать text-ноду из шаблона (чистая функция, инвариант 2 FR-018):
 /// текст — Numi-лист присваиваний параметров (`rps = 1000 rps`), расширение
 /// `canvasdesk.template` — [`TemplateRef`] со снимком формулы. Переопределения
@@ -977,8 +997,9 @@ pub fn instantiate(
     }
 
     let mut node = Node::text(node_id, text, x, y);
-    // Чуть шире обычной заметки — под шапку шаблона
-    node.width = 300.0;
+    // Q6 FR-061: дефолт ширины — 360–400 «тяжёлым» шаблонам по числу строк
+    // (анализ §3.4: tcp-lb на 300 px живёт в режиме иконок постоянно).
+    node.width = default_template_width(manifest.params.len());
     node.color = Some(color_to_preset(&manifest.color));
     node.set_template(Some(TemplateRef {
         id: manifest.id.clone(),
@@ -1103,6 +1124,17 @@ mod tests {
         assert_eq!(registry.by_category("backend").len(), 2);
     }
 
+    /// Q6 FR-061: лестница дефолтной ширины по числу строк (порог T = 4).
+    #[test]
+    fn default_template_width_ladder() {
+        assert_eq!(default_template_width(0), 300.0);
+        assert_eq!(default_template_width(3), 300.0, "R < T — как прежде");
+        assert_eq!(default_template_width(4), 360.0, "R ≥ T (блок-порог)");
+        assert_eq!(default_template_width(7), 360.0);
+        assert_eq!(default_template_width(8), 400.0, "R ≥ T+4");
+        assert_eq!(default_template_width(12), 400.0);
+    }
+
     /// Инстанциация: дефолты манифеста → Numi-лист + template-ссылка.
     #[test]
     fn instantiate_applies_manifest_defaults() {
@@ -1110,6 +1142,9 @@ mod tests {
         let manifest = registry.find("mock.lb").expect("mock.lb");
         let node = instantiate(manifest, &BTreeMap::new(), "n1".to_owned(), 100.0, 200.0)
             .expect("инстанциация");
+        // Q6: дефолт ширины — 360–400 «тяжёлым» по числу строк (3 параметра
+        // mock.lb < T=4 — прежние 300).
+        assert_eq!(node.width, 300.0);
         assert_eq!(node.kind(), crate::model::NodeKind::Text);
         assert_eq!(node.x, 100.0);
         assert_eq!(node.y, 200.0);
