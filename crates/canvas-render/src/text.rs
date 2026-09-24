@@ -141,6 +141,14 @@ const LINE_ERROR_HIT_PAD_PX: f32 = 10.0;
 /// метрика префикса «Переменные · входящие значения»; ячейки таблицы
 /// центрируются в своей строке по этой высоте (I-1: Y-ряд не меняется).
 const AUTO_ROW_LINE_HEIGHT: f32 = 18.0;
+/// FR-067 (этап F): кегль подписи секций (прототип .mini-label/.grp
+/// 9.5px при строке 12.5px → ≈0.76·тела; тело 14 → 10.5). Высота ряда —
+/// [`ZONE_LABEL_LINE_HEIGHT`] (зеркало в canvas-scene::measure, паритет —
+/// тест app measure_layout_consts_match_render).
+const ZONE_LABEL_FONT_SIZE: f32 = 10.5;
+/// Высота ряда подписи секции (компактнее строки тела — прототип
+/// padding 7px). Зеркало в canvas-scene::measure.
+pub const ZONE_LABEL_LINE_HEIGHT: f32 = 16.0;
 // FR-061 этап B (D-5): длина штриха/зазора и толщина линии лидера —
 // с этапа E единая геометрия с китом (`canvas_ui::kit::leader_dash_rects`,
 // токены TABLE_LEADER_*; локальные константы удалены — D-15).
@@ -565,6 +573,13 @@ pub enum BodyQuadKind {
     /// FR-061 этап B (D-5): фон зебры — полупрозрачная подложка через
     /// строку в прогонах ≥ 4 строк данных (прототип O-7).
     RowBg,
+    /// FR-067 (этап F): фон авто-строки приёмника — янтарный тинт
+    /// (прототип .row.auto background rgba(amber,.05)).
+    AutoRowBg,
+    /// FR-067 (этап F): пунктирная амбер-хромировка авто-строки — линии
+    /// сверху/снизу ряда и её лидер (прототип .row.auto border dashed +
+    /// .lead dashed amber). Штрихи — единая геометрия leader_dash_rects.
+    AutoRowDash,
     /// FR-061 этап D (D-14/Q9): вертикальная линия диагностики колоночной
     /// направляющей (value/unit right-края) — рисуется ТОЛЬКО при
     /// включённом DebugOverlay (F9/?ui=debug), на ноде невидима (Q9).
@@ -797,6 +812,23 @@ fn body_items(
     // (оценка уровня 1 refit учитывает ряд заголовка, I-2).
     let header_plan = canvas_core::expr::block_header_plan(&lines, formula_lines);
     let collapsed = header_plan.is_some() && !block_expanded;
+    // FR-067 (этап F): подписи секций (прототип .mini-label/.grp) —
+    // считаются по строкам С ИСХОДАМИ: присваивания → «параметры · N»,
+    // остальные → «расчёт · N». «Расчёт» вставляется только в режиме
+    // листа (header_plan.is_none()): в блоке-ведомости его роль играет
+    // заголовок «▾ расчёт · N строк». Свёрнутый блок расчётные строки
+    // скрывает — метка не нужна (проверка ниже, после continue).
+    let param_count = formula_lines
+        .iter()
+        .filter(|&i| {
+            lines
+                .get(*i)
+                .is_some_and(|line| matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+        })
+        .count();
+    let calc_count = formula_lines.len() - param_count;
+    let mut param_label_shown = false;
+    let mut calc_label_shown = false;
     for (seg_start, seg_end, source_line) in segments {
         if let Some((header_line, calc_count)) = header_plan {
             if source_line == Some(header_line) {
@@ -836,6 +868,45 @@ fn body_items(
             })
         {
             continue;
+        }
+        // FR-067 (этап F): метка секции — перед ПЕРВЫМ рядом своего рода
+        // (см. комментарий выше). Сама метка — sans-строка без source_line
+        // (порты/ячейки не даёт, I-1).
+        if let Some(line) = source_line {
+            let is_param = lines
+                .get(line)
+                .is_some_and(|l| matches!(line_kind(l), NumiLineKind::Assignment { .. }));
+            if is_param && !param_label_shown {
+                param_label_shown = true;
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (false, false, None),
+                    zone_label_item(
+                        theme,
+                        row_grid::zone_label_text_lang(
+                            row_grid::ZoneKind::Params,
+                            param_count,
+                            language,
+                        ),
+                    ),
+                );
+            } else if !is_param && header_plan.is_none() && !calc_label_shown {
+                calc_label_shown = true;
+                push_item(
+                    &mut out,
+                    &mut prev,
+                    (false, false, None),
+                    zone_label_item(
+                        theme,
+                        row_grid::zone_label_text_lang(
+                            row_grid::ZoneKind::Calc,
+                            calc_count,
+                            language,
+                        ),
+                    ),
+                );
+            }
         }
         let seg_text = lines[seg_start..seg_end].join("\n");
         // FR-050: пролитая строка параметра — наклонное начертание Р-2
@@ -909,8 +980,34 @@ fn block_preview_item(
         source_line: None,
         oblique: false,
         spill: None,
+
         header: false,
         preview: true,
+        expander: false,
+    }
+}
+
+/// FR-067 (этап F): элемент-подпись секции («ПАРАМЕТРЫ · N» / «РАСЧЁТ · N»)
+/// — sans, приглушённый тон цитаты, компактный ряд (I-1: Y-ряд данных
+/// смещается целиком стеком, как заголовок блока). Текст — общая
+/// [`row_grid::zone_label_text_lang`].
+fn zone_label_item(theme: &ThemeColors, text: String) -> BodyItem {
+    BodyItem {
+        gap: 0.0, // push_item пересчитает по предыдущему блоку
+        rule: false,
+        text,
+        font_size: ZONE_LABEL_FONT_SIZE,
+        line_height: ZONE_LABEL_LINE_HEIGHT,
+        color: theme.quote,
+        indent: 0.0,
+        mono: false,
+        bold: false,
+        deco: ItemDeco::None,
+        source_line: None,
+        oblique: false,
+        spill: None,
+        header: false,
+        preview: false,
         expander: false,
     }
 }
@@ -3140,6 +3237,37 @@ impl TextSystem {
                                 // у заголовка блока (Total) и превью лидера нет —
                                 // Σ стоит на направляющей сама (анализ §3.1;
                                 // превью свёрнутой ведомости — как Σ-строка).
+                                // FR-067 (этап F): авто-строка приёмника — янтарная
+                                // хромировка прототипа .row.auto: фон-тинт +
+                                // пунктирные линии сверху/снизу ряда + амбер-лидер
+                                // (Y-ряд не меняется, I-1).
+                                if row.kind == row_grid::RowKind::Auto {
+                                    table_quads.push(BodyQuad {
+                                        rect: [
+                                            0.0,
+                                            row.row_top * z,
+                                            body_width * z,
+                                            row.row_line_h * z,
+                                        ],
+                                        kind: BodyQuadKind::AutoRowBg,
+                                    });
+                                    for y in
+                                        [row.row_top * z, (row.row_top + row.row_line_h) * z - z]
+                                    {
+                                        for dash in canvas_ui::kit::leader_dash_rects(
+                                            0.0,
+                                            body_width * z,
+                                            y,
+                                            z,
+                                            6.0,
+                                        ) {
+                                            table_quads.push(BodyQuad {
+                                                rect: dash,
+                                                kind: BodyQuadKind::AutoRowDash,
+                                            });
+                                        }
+                                    }
+                                }
                                 if !matches!(
                                     row.kind,
                                     row_grid::RowKind::Total | row_grid::RowKind::Preview
@@ -3152,12 +3280,15 @@ impl TextSystem {
                                     // прежние (I-1, байт-паритет — тест kit.rs
                                     // leader_dashes_match_node_arithmetic). Минимум
                                     // дорожки — исторические 6 px тела ноды.
+                                    // FR-067: лидер авто-строки — амбер (AutoRowDash).
+                                    let kind = if row.kind == row_grid::RowKind::Auto {
+                                        BodyQuadKind::AutoRowDash
+                                    } else {
+                                        BodyQuadKind::Leader
+                                    };
                                     for dash in canvas_ui::kit::leader_dash_rects(x0, x1, y, z, 6.0)
                                     {
-                                        table_quads.push(BodyQuad {
-                                            rect: dash,
-                                            kind: BodyQuadKind::Leader,
-                                        });
+                                        table_quads.push(BodyQuad { rect: dash, kind });
                                     }
                                 }
                             }
@@ -4553,14 +4684,14 @@ mod tests {
         );
         assert_eq!(
             layout.blocks.len(),
-            3,
-            "проза + две формульные строки-абзаца"
+            4,
+            "проза + подпись «ПАРАМЕТРЫ · 2» + две формульные строки-абзаца"
         );
         assert_eq!(layout.blocks[0].source_line, None, "проза");
-        assert_eq!(layout.blocks[1].source_line, Some(1), "формульная строка 1");
-        assert_eq!(layout.blocks[2].source_line, Some(2), "формульная строка 2");
+        assert_eq!(layout.blocks[2].source_line, Some(1), "формульная строка 1");
+        assert_eq!(layout.blocks[3].source_line, Some(2), "формульная строка 2");
         assert!(
-            layout.blocks[1].offset[1] < layout.blocks[2].offset[1],
+            layout.blocks[2].offset[1] < layout.blocks[3].offset[1],
             "ряды формульных строк идут сверху вниз"
         );
     }
@@ -4813,10 +4944,11 @@ mod tests {
             true,
             None,
         );
-        assert_eq!(items.len(), 2, "проза + формульная строка");
+        assert_eq!(items.len(), 3, "проза + подпись секции + формульная строка");
         assert!(!items[0].mono, "проза — sans");
-        assert!(items[1].mono, "Numi-строка — моно");
-        assert_eq!(items[1].source_line, Some(1));
+        assert!(!items[1].mono, "подпись секции — sans");
+        assert!(items[2].mono, "Numi-строка — моно");
+        assert_eq!(items[2].source_line, Some(1));
     }
 
     /// FR-050 Р-2 (этап D): наклонное семейство CanvasDesk Mono Oblique
@@ -4863,11 +4995,11 @@ mod tests {
             true,
             None,
         );
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 3, "проза + подпись секции + пролитый параметр");
         assert!(!items[0].oblique, "проза — прямое начертание");
-        assert!(items[1].oblique, "пролитая строка — наклонное (Р-2)");
-        assert!(items[1].mono);
-        match &items[1].spill {
+        assert!(items[2].oblique, "пролитая строка — наклонное (Р-2)");
+        assert!(items[2].mono);
+        match &items[2].spill {
             Some(SpillHitKind::Param {
                 param,
                 path,
@@ -4913,10 +5045,13 @@ mod tests {
                 .all(|item| !item.text.contains("шлюз обрабатывает")),
             "абзац описания из тела убран"
         );
-        // Формульные строки на месте, привязка к исходным строкам не сдвинулась
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].source_line, Some(2));
-        assert_eq!(items[1].source_line, Some(3));
+        // Формульные строки на месте (привязка не сдвинулась); метки секций
+        // «ПАРАМЕТРЫ · 1» / «РАСЧЁТ · 1» — по ряду перед своей секцией.
+        assert_eq!(items.len(), 4);
+        assert!(items[0].text.starts_with("ПАРАМЕТРЫ · 1"));
+        assert_eq!(items[1].source_line, Some(2));
+        assert!(items[2].text.starts_with("РАСЧЁТ · 1"));
+        assert_eq!(items[3].source_line, Some(3));
         // Без супрессии — абзац в теле (прежнее поведение с дубликатом)
         let items = body_items(
             &theme,
@@ -5088,14 +5223,18 @@ mod tests {
             true,
             false,
         );
-        assert_eq!(layout.blocks.len(), 3, "заголовок + проза + формула");
+        assert_eq!(
+            layout.blocks.len(),
+            4,
+            "заголовок + проза + подпись + формула"
+        );
         let head = layout.blocks[0].buffer.lines[0].attrs_list().defaults();
         assert_eq!(head.family, Family::Name(SANS_FAMILY), "заголовок — sans");
         assert_eq!(head.weight, Weight::BOLD, "заголовок — bold 700");
         let prose = layout.blocks[1].buffer.lines[0].attrs_list().defaults();
         assert_eq!(prose.family, Family::Name(SANS_FAMILY), "проза — sans");
         assert_eq!(prose.weight, Weight::MEDIUM, "проза — medium 500");
-        let mono = layout.blocks[2].buffer.lines[0].attrs_list().defaults();
+        let mono = layout.blocks[3].buffer.lines[0].attrs_list().defaults();
         assert_eq!(mono.family, Family::Name(MONO_FAMILY), "формула — mono");
         assert_eq!(mono.weight, Weight::NORMAL, "формула — regular 400");
     }
@@ -5382,16 +5521,17 @@ mod tests {
 
     /// Скриншотный Numi-лист из CR-012: три формульные строки при ширине
     /// тела 280 — каждая строка свой mono-блок (BODY_LINE_HEIGHT), между
-    /// абзацами зазор 6 (body_gap). Измерение — зеркало shape_body при
-    /// zoom=1.0: ровно 3·BODY_LINE_HEIGHT + 2·6.
+    /// абзацами зазор 6 (body_gap). FR-067: перед секцией — ряд подписи
+    /// «ПАРАМЕТРЫ · 3» (16). Измерение — зеркало shape_body при zoom=1.0:
+    /// ровно 16 + 3·BODY_LINE_HEIGHT + 3·6 (метка тоже абзац).
     #[test]
     fn measure_body_height_numi_list_exact() {
         let text = "rps = 200 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min";
         let height = measure_body_height(text, 280.0, &[0, 1, 2], "", false);
         assert_eq!(
             height,
-            3.0 * BODY_LINE_HEIGHT + 2.0 * 6.0,
-            "три mono-блока по {BODY_LINE_HEIGHT} с зазорами 6 между абзацами"
+            ZONE_LABEL_LINE_HEIGHT + 3.0 * BODY_LINE_HEIGHT + 3.0 * 6.0,
+            "подпись секции + три mono-блока по {BODY_LINE_HEIGHT} с зазорами 6"
         );
     }
 
@@ -5403,9 +5543,10 @@ mod tests {
     fn measure_body_height_mono_wraps_to_two_rows() {
         let line = format!("{} = 5", "a".repeat(28)); // 32 символа
         let height = measure_body_height(&line, 240.0, &[0], "", false);
+        // FR-067: подпись «ПАРАМЕТРЫ · 1» (16) + зазор 6 + два ряда строки
         assert_eq!(
+            ZONE_LABEL_LINE_HEIGHT + 6.0 + 2.0 * BODY_LINE_HEIGHT,
             height,
-            2.0 * BODY_LINE_HEIGHT,
             "mono-строка из 32 символов при ширине 240 — ровно 2 ряда"
         );
     }
@@ -5421,11 +5562,13 @@ mod tests {
         let mono_height = measure_body_height(&line, 240.0, &[0], "", false);
         assert_eq!(
             sans_height, BODY_LINE_HEIGHT,
-            "sans: 30 символов при ширине 240 — один ряд"
+            "sans: 30 символов при ширине 240 — один ряд (без исходов метки нет)"
         );
+        // FR-067: с исходом строка становится «параметром» — появляется ряд
+        // подписи «ПАРАМЕТРЫ · 1» (16) + зазор 6.
         assert_eq!(
             mono_height,
-            2.0 * BODY_LINE_HEIGHT,
+            ZONE_LABEL_LINE_HEIGHT + 6.0 + 2.0 * BODY_LINE_HEIGHT,
             "mono: тот же текст — два ряда"
         );
     }

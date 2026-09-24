@@ -25,9 +25,11 @@ use canvas_ui::row_guides::{measure_row_cells, RowGuides};
 use crate::SpillView;
 
 /// Зазор между ячейками «значение»/«юнит»/«бейдж» (world-px) — параметр
-/// [`pass_a`]; токен D-14 [`canvas_core::tokens::TABLE_GUIDE_GAP`] (анализ
-/// §3.1: единая система отсчёта).
-pub(crate) const GUIDE_GAP: f32 = canvas_core::tokens::TABLE_GUIDE_GAP;
+/// [`pass_a`]; FR-067 (этап F): узловой токен
+/// [`canvas_core::tokens::TABLE_NODE_GUIDE_GAP`] (8.0 — воздух прототипа
+/// .row gap 7; китовый `TABLE_GUIDE_GAP` 6.0 не тронут — панель FR-044 и
+/// витрина живут на прежней плотности).
+pub(crate) const GUIDE_GAP: f32 = canvas_core::tokens::TABLE_NODE_GUIDE_GAP;
 /// Минимальная дорожка лидера (world-px): короче — лидер не рисуется.
 pub(crate) const LEADER_MIN: f32 = canvas_core::tokens::TABLE_LEADER_MIN;
 /// Зазор лидера до ячейки значения и от конца левого текста (world-px).
@@ -234,6 +236,32 @@ pub(crate) fn block_preview_text_lang(
             format!("параметры · {param_count} · формулы · {calc_count} {noun}")
         }
     }
+}
+
+/// FR-067 (этап F): подписи секций тела (прототип .mini-label/.grp —
+/// «параметры · N» / «расчёт · N», uppercase). Единая точка сборки для
+/// рендера и тестов; текст метки высоту ряда не ведёт (line_height —
+/// константа рендера ZONE_LABEL_LINE_HEIGHT).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZoneKind {
+    /// Строки-присваивания (`name = литерал`) — «параметры».
+    Params,
+    /// Расчётные строки (выражения) — «расчёт».
+    Calc,
+}
+
+pub(crate) fn zone_label_text_lang(kind: ZoneKind, count: usize, language: Language) -> String {
+    let (ru, en) = match kind {
+        ZoneKind::Params => ("параметры", "params"),
+        ZoneKind::Calc => ("расчёт", "calc"),
+    };
+    let label = match language {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    // Прототип верхний регистр берёт CSS-ом (text-transform) — здесь
+    // честный uppercase кода; letter-spacing cosmic-text не умеет (v1).
+    format!("{} · {}", label.to_uppercase(), count)
 }
 
 /// FR-061 хвосты (D-8 runtime v1, «Раскрыть+авто»): аффорданс экспандера
@@ -719,6 +747,28 @@ mod tests {
         assert_eq!(desc_expand_text_lang(Language::En), "⋯ show all ▾");
         assert_eq!(desc_collapse_text_lang(Language::Ru), "▴ свернуть");
         assert_eq!(desc_collapse_text_lang(Language::En), "▴ collapse");
+    }
+
+    /// FR-067 (этап F): подписи секций — uppercase по прототипу (.grp
+    /// text-transform), счётчик через разделитель « · »; RU/EN.
+    #[test]
+    fn zone_label_text_is_uppercase_with_count() {
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Params, 3, Language::Ru),
+            "ПАРАМЕТРЫ · 3"
+        );
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Calc, 5, Language::Ru),
+            "РАСЧЁТ · 5"
+        );
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Params, 1, Language::En),
+            "PARAMS · 1"
+        );
+        assert_eq!(
+            zone_label_text_lang(ZoneKind::Calc, 2, Language::En),
+            "CALC · 2"
+        );
     }
 
     /// Разбор полного дельта-формата: корпус whatif_full_delta — «стало» и

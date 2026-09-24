@@ -78,6 +78,17 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         // невыделенных строк списков).
         BodyQuadKind::Leader => theme.gfm_muted_fill,
         BodyQuadKind::RowBg => theme.search_row_fill,
+        // FR-067 (этап F): янтарная хромировка авто-строк приёмника
+        // (прототип .row.auto): фон ≈ 5 %, пунктир ≈ 55 % анализа-амбер
+        // (тот же токен, что UNMAPPED_EDGE_COLOR, cards.rs).
+        BodyQuadKind::AutoRowBg => {
+            let c = canvas_core::tokens::SEVERITY_DARK[0];
+            [c[0], c[1], c[2], 0.05]
+        }
+        BodyQuadKind::AutoRowDash => {
+            let c = canvas_core::tokens::SEVERITY_DARK[0];
+            [c[0], c[1], c[2], 0.55]
+        }
         // FR-061 этап D (D-14/Q9): диагностика направляющих — вне палитры
         // тем (принцип debug_overlay.rs: отладочные цвета отличаются от
         // продуктовых), токен TABLE_GUIDE_DEBUG_COLOR.

@@ -19726,6 +19726,11 @@ mod tests {
             canvas_scene::measure::RESULT_LINE_HEIGHT,
             canvas_render::text::RESULT_LINE_HEIGHT
         );
+        // FR-067 (этап F): высота ряда подписи секции (зеркало ZONE_LABEL_LINE_HEIGHT).
+        assert_eq!(
+            canvas_scene::measure::ZONE_LABEL_LINE_HEIGHT,
+            canvas_render::text::ZONE_LABEL_LINE_HEIGHT
+        );
         assert_eq!(canvas_scene::MIN_ZOOM, canvas_render::camera::MIN_ZOOM);
         assert_eq!(canvas_scene::MAX_ZOOM, canvas_render::camera::MAX_ZOOM);
         assert_eq!(canvas_scene::DEFAULT_FILE_CARD_W, crate::ui::DROP_CARD_W);
