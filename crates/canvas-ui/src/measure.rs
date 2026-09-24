@@ -22,6 +22,24 @@ use std::collections::HashMap;
 /// `canvas-render/src/text.rs`: `line_height = font_size * 1.3`).
 pub const SCREEN_LINE_FACTOR: f32 = 1.3;
 
+/// FR-067 (этап F, шаг 3 плана): вес шейпинга по семейству — паритет
+/// атрибутам рендера (`canvas-render/src/text.rs`): sans
+/// («Noto Sans Display») → [`Weight::MEDIUM`] — `sans_attrs`; моно
+/// («Noto Sans Mono») и наклонное моно («CanvasDesk Mono Oblique») →
+/// [`Weight::NORMAL`] (400) — `mono_attrs`/`mono_oblique_attrs`.
+/// Прежний жёсткий MEDIUM компенсировался отсутствием Medium-лица у
+/// Noto Sans Mono (CSS-подбор давал Regular 400) — паритет сделан
+/// явным, чтобы смена шрифтовой базы не меняла раскладку. Имена
+/// семейств — те же строковые данные, что в `Family::Name` рендера;
+/// живой паритет залочен тестом `ui_measure_weight_matches_render_attrs`
+/// (canvas-render).
+pub fn family_weight(family: &str) -> Weight {
+    match family {
+        "Noto Sans Mono" | "CanvasDesk Mono Oblique" => Weight::NORMAL,
+        _ => Weight::MEDIUM,
+    }
+}
+
 /// Суб-пиксельный допуск «помещается»: раскладка гоняет ширины через
 /// арифметику rect'ов (w+pad−pad) — отмена разрядов f32 даёт расхождение
 /// порядка 1e-5; допуск отсекает ложные ellipsis на точной подгонке.
@@ -195,7 +213,8 @@ impl TextMeasurer {
 
 /// Реальное измерение: тот же пайплайн, что screen-тексты рендера
 /// (`text.rs`: Buffer + Metrics(size, size·1.3) + Wrap::None + shape),
-/// семейство/вес — как `sans_attrs` (Family::Name + Weight::MEDIUM).
+/// семейство/вес — по [`family_weight`] (паритет `sans_attrs`/`mono_attrs`
+/// рендера — FR-067).
 fn shape_measure(fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured {
     let size = spec.size.max(0.0);
     let line_height = size * SCREEN_LINE_FACTOR;
@@ -206,7 +225,7 @@ fn shape_measure(fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured 
     buffer.set_size(fs, Some(spec.max_width), Some(line_height));
     let attrs = Attrs::new()
         .family(Family::Name(spec.family))
-        .weight(Weight::MEDIUM);
+        .weight(family_weight(spec.family));
     buffer.set_text(fs, spec.text, attrs, Shaping::Advanced);
     buffer.shape_until_scroll(fs, false);
     let mut width = 0.0f32;
