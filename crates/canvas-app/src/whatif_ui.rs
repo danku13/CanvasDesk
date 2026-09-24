@@ -87,6 +87,9 @@ pub enum BarAction {
     Apply,
     /// Сброс подмен активного сценария.
     Reset,
+    /// FR-064 P2: заморозка/разморозка активного сценария (снимок
+    /// решений для сравнения сценариев).
+    Freeze,
     /// Таблица сравнения сценариев.
     Compare,
     /// Кнопка «✕» — выход из режима.
@@ -112,6 +115,9 @@ pub struct BarLayout {
     pub apply: [f32; 4],
     /// Кнопка «Сброс».
     pub reset: [f32; 4],
+    /// FR-064 P2: кнопка «Заморозить»/«Разморозить» (лейбл — состояние
+    /// активного сценария, измеряется та же строка, что рисуется).
+    pub freeze: [f32; 4],
     /// Кнопка «Сравнить».
     pub compare: [f32; 4],
     /// Кнопка «✕».
@@ -153,6 +159,7 @@ fn btn_width(label: &str, m: &mut TextMeasurer, fs: &mut cosmic_text::FontSystem
 pub fn bar_layout(
     scenario_names: &[String],
     counter_label: &str,
+    freeze_label: &str,
     viewport: [f32; 2],
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -169,8 +176,9 @@ pub fn bar_layout(
         + CLOSE_WIDTH
         + btn_width("Apply", measurer, fs)
         + btn_width("Сброс", measurer, fs)
+        + btn_width(freeze_label, measurer, fs)
         + btn_width("Сравнить", measurer, fs);
-    let elements = scenario_names.len() as f32 + 7.0; // чипы+База+«+»+инд+счёт+3кн+✕
+    let elements = scenario_names.len() as f32 + 8.0; // чипы+База+«+»+инд+счёт+4кн+✕
     let desired = BAR_PADDING * 2.0 + chips_w + controls_w + BAR_GAP * (elements - 1.0).max(0.0);
     // Ширина бара: желаемая, сжатая к вьюпорту (примитив Constrain).
     let avail = (viewport[0] - BAR_MARGIN * 2.0).max(0.0);
@@ -211,7 +219,7 @@ pub fn bar_layout(
     // элемент получает min(желаемое, остаток), хвост сжимается до нуля
     // (вырожденные rect'ы невидимы и не пикаются); дословная семантика
     // прежнего замыкания `take` (CR-015).
-    let mut items: Vec<canvas_ui::layout::Child> = Vec::with_capacity(scenario_names.len() + 7);
+    let mut items: Vec<canvas_ui::layout::Child> = Vec::with_capacity(scenario_names.len() + 8);
     items.push(canvas_ui::layout::Child::fixed(
         INDICATOR_WIDTH,
         CHIP_HEIGHT,
@@ -237,6 +245,10 @@ pub fn bar_layout(
     ));
     items.push(canvas_ui::layout::Child::fixed(
         btn_width("Сброс", measurer, fs),
+        CHIP_HEIGHT,
+    ));
+    items.push(canvas_ui::layout::Child::fixed(
+        btn_width(freeze_label, measurer, fs),
         CHIP_HEIGHT,
     ));
     items.push(canvas_ui::layout::Child::fixed(
@@ -272,8 +284,9 @@ pub fn bar_layout(
         overrides: as_rect(&rects[3 + n]),
         apply: as_rect(&rects[4 + n]),
         reset: as_rect(&rects[5 + n]),
-        compare: as_rect(&rects[6 + n]),
-        close: as_rect(&rects[7 + n]),
+        freeze: as_rect(&rects[6 + n]),
+        compare: as_rect(&rects[7 + n]),
+        close: as_rect(&rects[8 + n]),
         scenario_labels,
     }
 }
@@ -293,6 +306,9 @@ pub fn bar_action_at(layout: &BarLayout, point: [f32; 2]) -> Option<BarAction> {
     }
     if point_in_rect(layout.compare, point) {
         return Some(BarAction::Compare);
+    }
+    if point_in_rect(layout.freeze, point) {
+        return Some(BarAction::Freeze);
     }
     if point_in_rect(layout.overrides, point) {
         return Some(BarAction::ToggleOverrides);
@@ -438,7 +454,7 @@ mod tests {
     fn layout(names: &[String], counter: &str, viewport: [f32; 2]) -> BarLayout {
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        bar_layout(names, counter, viewport, &mut m, &mut fs)
+        bar_layout(names, counter, "❄ Заморозить", viewport, &mut m, &mut fs)
     }
 
     fn names() -> Vec<String> {
@@ -462,7 +478,7 @@ mod tests {
         let layout = layout(&names(), "подмен: 3", viewport);
         assert!(layout.rect[1] + layout.rect[3] <= viewport[1] - BAR_MARGIN + 0.01);
         // Порядок слева направо: индикатор < База < С1 < С2 < «+» < счётчик
-        // < Apply < Сброс < Сравнить < ✕
+        // < Apply < Сброс < Заморозить < Сравнить < ✕
         let xs = |r: [f32; 4]| r[0];
         assert!(xs(layout.indicator) < xs(layout.base));
         assert!(xs(layout.base) < xs(layout.scenarios[0]));
@@ -471,7 +487,8 @@ mod tests {
         assert!(xs(layout.new_scenario) < xs(layout.overrides));
         assert!(xs(layout.overrides) < xs(layout.apply));
         assert!(xs(layout.apply) < xs(layout.reset));
-        assert!(xs(layout.reset) < xs(layout.compare));
+        assert!(xs(layout.reset) < xs(layout.freeze));
+        assert!(xs(layout.freeze) < xs(layout.compare));
         assert!(xs(layout.compare) < xs(layout.close));
         // Hit-тесты
         let hit = |r: [f32; 4]| [r[0] + 3.0, r[1] + 3.0];
@@ -486,6 +503,10 @@ mod tests {
         assert_eq!(
             bar_action_at(&layout, hit(layout.reset)),
             Some(BarAction::Reset)
+        );
+        assert_eq!(
+            bar_action_at(&layout, hit(layout.freeze)),
+            Some(BarAction::Freeze)
         );
         assert_eq!(
             bar_action_at(&layout, hit(layout.compare)),

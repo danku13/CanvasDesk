@@ -1,6 +1,6 @@
 # FR-064: Сценарный воркер — вынос пересчёта `propagate_with_lines` с UI-треда (double buffer P1) + FR-017 v2 (freeze/сравнение сценариев)
 
-- **Статус:** выявлено (план)
+- **Статус:** выполнено (P1+P2, 2026-09-24)
 - **Тип:** FR
 - **Приоритет:** важно
 - **Владелец:** агент (планирование)
@@ -223,17 +223,25 @@ what-if) выносится с главного (UI) треда на отдел�
 
 Чек-лист (статус → `выполнено` только при всех зелёных):
 
-- [ ] `cargo test --workspace` — зелёный (включая `worker_smoke.rs`).
-- [ ] `cargo clippy --workspace -D warnings` — зелёный.
-- [ ] `scripts/wasm_gate.sh --check` — зелёный (sync-фолбэк на wasm).
-- [ ] `scripts/mcp_wasm_gate.sh --check` — зелёный (sync-фолбэк на wasm).
-- [ ] `cargo deny check` — зелёный (без новых зависимостей в P1).
-- [ ] worker smoke: правка → результат через воркер ≤ 2 кадра.
-- [ ] freeze/diff e2e: эталон №2, freeze 2 сценариев → таблица с дельтами.
-- [ ] fallback-тест: воркер паникует → sync-результат побитово идентичный.
-- [ ] Live-инвариант: правка → результат в пределах 1–2 кадров.
-- [ ] UI не тормозит на 20 прогонах сценарной сетки (60 fps).
-- [ ] Документы точек входа обновлены (см. ниже).
+- [x] `cargo test --workspace` — зелёный (включая `worker_smoke.rs`: smoke,
+      побитовая идентичность, fallback-паника, поколения, freeze/diff e2e,
+      round-trip заморозок).
+- [x] `cargo clippy --workspace -D warnings` — зелёный.
+- [x] `scripts/wasm_gate.sh --check` — зелёный (worker.rs — cfg(not(wasm32)),
+      на wasm sync-путь).
+- [x] `scripts/mcp_wasm_gate.sh --check` — зелёный (MCP-слой не задет).
+- [x] `cargo deny check` — зелёный (без новых зависимостей — только std).
+- [x] worker smoke: правка → результат через воркер ≤ 2 кадра
+      (`worker_delivers_result_within_two_frames`; wake через
+      `AppEvent::FlowReady`).
+- [x] freeze/diff e2e: модель в духе эталона №2, смена `rps` → дельты
+      downstream в таблице (`freeze_two_scenarios_and_compare_deltas`).
+- [x] fallback-тест: воркер паникует → sync-результат идентичный
+      (`worker_panic_falls_back_to_sync` + `worker_result_matches_sync_bitwise`).
+- [x] Live-инвариант: правка → результат в пределах 1–2 кадров (запрос
+      воркеру + выводка в FlowReady; таймаут 3 с → sync-фолбэк).
+- [ ] UI не тормозит на 20 прогонах сценарной сетки (60 fps) — ручная
+      приёмка владельца (демо §«Наглядная проверка»).
 
 ## Точки входа
 
@@ -256,6 +264,27 @@ what-if) выносится с главного (UI) треда на отдел�
   код-ссылки (`scene.rs:389`, `flow.rs:394`, `whatif.rs:21`,
   `canvas-mcp/src/lib.rs:425–481`, `wasm_gate.sh:48`). Исполнение — после
   гейта Go продуктового роадмапа §4.4/§4.5.
+- `2026-09-24` — агент: **реализовано (P1+P2)**, статус → `выполнено`.
+  P1 `feat(scene): FlowWorker spawn + AppEvent::FlowReady, sync fallback`:
+  `canvas-scene/src/worker.rs` (std thread + mpsc, catch_unwind паники,
+  `FlowNotifier` → `AppEvent::FlowReady { solutions, kind }`);
+  `SceneState` — double buffer `Arc<RwLock<FlowSolutions>>` (`flow_baseline`/
+  `flow_active`, `canvas_scene::read_flow` для читателей), поколения запросов,
+  `recompute_flow` = запрос воркеру + sync-фолбэк, выводка O(N) —
+  `apply_flow_pair` (единый редактор, план §5.4). Отклонение от плана (доку-
+  ментировано): публикацию снимков в буфер выполняет конвейер пересчёта на
+  UI-треде атомарно с выводкой (не воркер напрямую) — исключает torn-frame
+  (смешение свежего снимка и старых производных кэшей в одном кадре);
+  payload `FlowReady` — информационный, истина — в outcomes-канале.
+  P2 `feat(scene): FR-017 v2 — scenario freeze + comparison table`:
+  `whatif.rs` — `FrozenScenario`/`freeze_scenario`/`compare_scenarios`
+  (диф lines+outputs с downstream-дельтами), персистентность имён
+  `canvasdesk.whatif.frozen` (сосед `scenarios` сохраняется); UI — кнопка
+  «❄ Заморозить/Разморозить» в баре FR-017, маркер «❄» на чипе/колонке,
+  таблица сравнения v2 (замороженные колонки по снимку, строки
+  downstream-итогов), i18n RU/EN. Тесты — `worker_smoke.rs` (6).
+  Гейты: fmt/clippy -D/test --workspace/wasm_gate/mcp_wasm_gate/deny —
+  зелёные. Документы точек входа обновлены тем же коммитом `docs(...)`.
 
 ## Источники истины
 

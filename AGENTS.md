@@ -125,7 +125,12 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-request
    (`scale_factor`). DPI awareness — Per-Monitor V2. После репарентинга в десктоп
    (M4) `window.scale_factor()` не доверять — поллинг `GetDpiForWindow` (RECIPES R10).
 4. Не блокировать рендер-поток: весь I/O, COM и тяжёлые декодеры — в worker-потоки
-   (пул тамбнейлов — 4 потока, результаты через каналы).
+   (пул тамбнейлов — 4 потока, результаты через каналы). Тяжёлый пересчёт потока
+   значений — сценарный воркер FR-064 (`canvas-scene/src/worker.rs`: double buffer
+   `Arc<RwLock<FlowSolutions>>`, wake через `EventLoopProxy<AppEvent>`; выводка O(N) —
+   на UI-треде). Правило «фолбэк + warn» на этом стыке: при отказе/таймауте (3 с)/
+   панике воркера — синхронный пересчёт на UI-треде + `tracing::warn!` (результат
+   побитово идентичен — golden-тесты `worker_smoke.rs`); на wasm — sync-путь штатно.
 5. Раскладка (координаты, размеры, связи) — только в `.canvas`-файле. SQLite
    (`~/.canvasdesk/cache.db`) — пересоздаваемый кэш, его удаление ничего не ломает.
 6. Автосейв `.canvas` с debounce 2 с + `.bak` предыдущей версии.

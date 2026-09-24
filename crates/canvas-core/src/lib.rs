@@ -144,8 +144,9 @@ pub use settings::{
 pub use spatial::{SpatialIndex, WorldRect};
 pub use validate::{has_errors, validate, IssueCode, Severity, ValidationIssue};
 pub use whatif::{
-    active_line_exprs, scenarios_from_canvas, scenarios_to_canvas, validate_scenario, Scenario,
-    StaleOverride,
+    active_line_exprs, compare_scenarios, freeze_scenario, frozen_from_canvas, frozen_to_canvas,
+    scenarios_from_canvas, scenarios_to_canvas, validate_scenario, ComparisonRow, FrozenScenario,
+    Scenario, ScenarioComparison, StaleOverride,
 };
 
 // --- FR-036: тестовая песочница ------------------------------------------

@@ -99,7 +99,13 @@ fn autolink_batch_create_and_undo() {
     );
 
     // Значения переносятся: итог B считается без ошибок (обе ссылки живы)
-    let b_out = scene.flow_active.outputs.get("B").expect("итог B");
+    // FR-064 P1: double buffer — снимок активных решений через read().
+    let b_out = canvas_scene::read_flow(&scene.flow_active)
+        .outputs
+        .get("B")
+        .expect("итог B")
+        .clone();
+    let b_out = &b_out;
     assert!(
         b_out.is_ok(),
         "ссылки $npl_annual/$recovery_rate закрыты: {b_out:?}"
