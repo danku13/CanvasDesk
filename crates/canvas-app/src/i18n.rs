@@ -479,6 +479,19 @@ pub mod keys {
     pub const KIT_ROW_BADGE: &str = "kit.row.badge";
     /// DebugOverlay (F10): подсказка тогла.
     pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
+
+    // --- FR-070: UI-админпанель (консоль дизайн-системы) ---
+    pub const ADMIN_TITLE: &str = "admin.title";
+    pub const ADMIN_HELP_ITEM: &str = "help.admin";
+    pub const ADMIN_RESET: &str = "admin.reset";
+    pub const ADMIN_SECTION_COMPONENTS: &str = "admin.section.components";
+    pub const ADMIN_SECTION_FILL: &str = "admin.section.fill";
+    pub const ADMIN_SECTION_CANVAS: &str = "admin.section.canvas";
+    pub const ADMIN_SECTION_TOKENS: &str = "admin.section.tokens";
+    pub const ADMIN_HINT_COMPONENTS: &str = "admin.hint.components";
+    pub const ADMIN_HINT_FILL: &str = "admin.hint.fill";
+    pub const ADMIN_HINT_CANVAS: &str = "admin.hint.canvas";
+    pub const ADMIN_HINT_TOKENS: &str = "admin.hint.tokens";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -1004,6 +1017,30 @@ const RU: &[(&str, &str)] = &[
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): рамки слоёв, имя под курсором, пересечения",
+    ),
+    // --- FR-070: UI-админпанель ---
+    (keys::ADMIN_TITLE, "UI-консоль"),
+    (keys::ADMIN_HELP_ITEM, "UI-консоль (дизайн-система)"),
+    (keys::ADMIN_RESET, "Сброс"),
+    (keys::ADMIN_SECTION_COMPONENTS, "Компоненты"),
+    (keys::ADMIN_SECTION_FILL, "Наполнение"),
+    (keys::ADMIN_SECTION_CANVAS, "Канвас"),
+    (keys::ADMIN_SECTION_TOKENS, "Токены"),
+    (
+        keys::ADMIN_HINT_COMPONENTS,
+        "Матрица состояний контролов кита: обычное / hover / выбрано / нажато / недоступно + в фокусе / ошибка (этап 2 FR-070).",
+    ),
+    (
+        keys::ADMIN_HINT_FILL,
+        "Контейнеры с разным наполнением: пустое / среднее / полное — список, карточка, поле, чипы, dropdown, строки, тосты, палитра, wheel (этап 3 FR-070).",
+    ),
+    (
+        keys::ADMIN_HINT_CANVAS,
+        "Состояния сущностей канваса (ST4): карточка ноды, рёбра, порты (этап 4 FR-070).",
+    ),
+    (
+        keys::ADMIN_HINT_TOKENS,
+        "Каталог design-токенов: цвета-свотчи, размеры, типографика, движение; live-правка слотов палитры (этап 4 FR-070).",
     ),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
@@ -1703,6 +1740,30 @@ const EN: &[(&str, &str)] = &[
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): layer rects, name under cursor, intersections",
+    ),
+    // --- FR-070: UI admin panel ---
+    (keys::ADMIN_TITLE, "UI console"),
+    (keys::ADMIN_HELP_ITEM, "UI console (design system)"),
+    (keys::ADMIN_RESET, "Reset"),
+    (keys::ADMIN_SECTION_COMPONENTS, "Components"),
+    (keys::ADMIN_SECTION_FILL, "Fill levels"),
+    (keys::ADMIN_SECTION_CANVAS, "Canvas"),
+    (keys::ADMIN_SECTION_TOKENS, "Tokens"),
+    (
+        keys::ADMIN_HINT_COMPONENTS,
+        "Kit control state matrix: normal / hover / selected / pressed / disabled + focused / error (FR-070 stage 2).",
+    ),
+    (
+        keys::ADMIN_HINT_FILL,
+        "Containers at different fill levels: empty / medium / full — list, card, field, chips, dropdown, rows, toasts, palette, wheel (FR-070 stage 3).",
+    ),
+    (
+        keys::ADMIN_HINT_CANVAS,
+        "Canvas entity states (ST4): node card, edges, ports (FR-070 stage 4).",
+    ),
+    (
+        keys::ADMIN_HINT_TOKENS,
+        "Design token catalog: color swatches, dimensions, typography, motion; live editing of palette slots (FR-070 stage 4).",
     ),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
