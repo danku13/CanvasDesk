@@ -642,8 +642,13 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         }
         id::STAGE => {
             let r = main_stage_rect(viewport);
+            // Rect::xywh → UiRect::xywh напрямую: прежняя конверсия
+            // UiRect::new(r.x, r.y, r.x + r.w, r.y + r.h) трактовала xywh
+            // как xyxy и ЗАВЫШАЛА pick-зону до краёв экрана (класс дефекта
+            // линта F-11) — клики рядом с окном глотались как Element{stage}
+            // вместо Backdrop-контракта «клик мимо окна закрывает».
             surface.hit_rects.push(HitRect::interactive(
-                UiRect::new(r.x, r.y, r.x + r.w, r.y + r.h),
+                UiRect::new(r.x, r.y, r.w, r.h),
                 "stage",
             ));
         }
@@ -708,8 +713,18 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         }
         // FR-055 (этап U4): витрина кита — интерактивные зоны шапки (одни
         // слоты, что у отрисовки — kit_ui::gallery_hit_slots); прочий контент
-        // витрины — декоративный (состояния показываются статически)
+        // витрины — декоративный (состояния показываются статически).
+        // ТЕЛО панели — базовая pick-зона (первой — кнопки выше выигрывают):
+        // Block-модаль без тела классифицировала клик по контенту как
+        // Backdrop и ЗАКРЫВАЛА панель при нажатии на себя (жалоба владельца
+        // 2026-09-25) — теперь поведение main stage: клик внутри окна
+        // глотается (click_kit_gallery, элемент мимо кнопок — no-op).
         id::KIT_GALLERY => {
+            let body =
+                crate::kit_ui::gallery_panel(UiRect::new(0.0, 0.0, vw.max(0.0), vh.max(0.0)));
+            surface
+                .hit_rects
+                .push(HitRect::interactive(body, "kit-gallery-panel"));
             let (theme, close) = crate::kit_ui::gallery_hit_slots(viewport);
             surface.hit_rects.push(HitRect::interactive(
                 UiRect::new(theme.x, theme.y, theme.w, theme.h),
@@ -721,8 +736,18 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             ));
         }
         // FR-070: админпанель — интерактивные зоны шапки (те же слоты, что
-        // у отрисовки) + пункты сайдбара; демо-контент — декоративный
+        // у отрисовки) + пункты сайдбара; демо-контент — декоративный.
+        // ТЕЛО панели — базовая pick-зона (первой — кнопки/сайдбар/свотчи
+        // выше выигрывают): клик по контенту UI-консоли глотается, панель
+        // не закрывается (поведение main stage; прежде тело отсутствовало
+        // в кадре — Block-модаль трактовала такой клик как Backdrop и
+        // закрывала панель при нажатии на себя — жалоба владельца
+        // 2026-09-25).
         id::ADMIN => {
+            let admin_body = app.admin_layout_at([vw, vh]).panel;
+            surface
+                .hit_rects
+                .push(HitRect::interactive(admin_body, "admin-panel"));
             let (theme, reset, close) = crate::admin_ui::admin_hit_slots(viewport);
             surface.hit_rects.push(HitRect::interactive(
                 UiRect::new(theme.x, theme.y, theme.w, theme.h),
@@ -1383,6 +1408,145 @@ mod tests {
                 assert_eq!(rect.element, "admin-token-0");
             }
             other => panic!("свотч не пикается: {other:?}"),
+        }
+    }
+
+    /// Регресс (жалоба владельца 2026-09-25): клик по ТЕЛУ UI-консоли (мимо
+    /// кнопок/сайдбара/свотчей) не закрывает панель — поведение main stage
+    /// (клик внутри окна глотается, модаль жива). Прежде тело панели не было
+    /// pick-зоной: Block-модаль классифицировала клик как Backdrop —
+    /// dispatch_surface_backdrop закрывал панель при любом нажатии на себя.
+    #[test]
+    fn admin_panel_body_click_is_not_backdrop() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.admin_open = true;
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::ADMIN)
+            .expect("admin_panel в кадре");
+        let body = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "admin-panel")
+            .expect("тело панели — pick-зона (admin-panel)");
+        // Точка у нижне-правого угла панели (паддинг): внутри тела, но вне
+        // интерактивных rect'ов (сайдбар слева, шапка сверху, свотчи в сетке)
+        let p = UiPoint::new(body.rect.right() - 4.0, body.rect.bottom() - 4.0);
+        assert!(
+            !surface
+                .hit_rects
+                .iter()
+                .any(|r| r.element != "admin-panel" && r.rect.contains(p)),
+            "точка теста попала на интерактивный rect — сдвинуть точку"
+        );
+        match HitStack::pick(&frame, p) {
+            Some(HitTarget::Element { surface, .. }) => {
+                assert_eq!(surface.surface.as_str(), id::ADMIN);
+            }
+            Some(HitTarget::Backdrop { .. }) => {
+                panic!("клик по телу панели — Backdrop: панель закрывается при нажатии на себя");
+            }
+            None => panic!("клик по телу панели ушёл в канвас"),
+        }
+        // Контракт Block-модали сохранён: клик МИМО панели — Backdrop
+        // (закрыть и глотнуть)
+        match HitStack::pick(&frame, UiPoint::new(4.0, 4.0)) {
+            Some(HitTarget::Backdrop { surface }) => {
+                assert_eq!(surface.surface.as_str(), id::ADMIN);
+            }
+            other => panic!("клик мимо панели обязан закрывать (Backdrop), получено {other:?}"),
+        }
+    }
+
+    /// Регресс (жалоба владельца 2026-09-25): витрина «О интерфейсе» — та же
+    /// болезнь: клик по телу витрины (мимо кнопки темы/«✕») не закрывает
+    /// панель; мимо панели — Backdrop (контракт Block-модали сохранён).
+    #[test]
+    fn kit_gallery_body_click_is_not_backdrop() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.kit_gallery_open = true;
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::KIT_GALLERY)
+            .expect("kit_gallery в кадре");
+        let body = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "kit-gallery-panel")
+            .expect("тело витрины — pick-зона (kit-gallery-panel)");
+        // Нижне-правый угол панели (паддинг): кнопки темы/«✕» — в шапке
+        let p = UiPoint::new(body.rect.right() - 4.0, body.rect.bottom() - 4.0);
+        assert!(
+            !surface
+                .hit_rects
+                .iter()
+                .any(|r| r.element != "kit-gallery-panel" && r.rect.contains(p)),
+            "точка теста попала на интерактивный rect — сдвинуть точку"
+        );
+        match HitStack::pick(&frame, p) {
+            Some(HitTarget::Element { surface, .. }) => {
+                assert_eq!(surface.surface.as_str(), id::KIT_GALLERY);
+            }
+            Some(HitTarget::Backdrop { .. }) => {
+                panic!("клик по телу витрины — Backdrop: панель закрывается при нажатии на себя");
+            }
+            None => panic!("клик по телу витрины ушёл в канвас"),
+        }
+        match HitStack::pick(&frame, UiPoint::new(4.0, 4.0)) {
+            Some(HitTarget::Backdrop { surface }) => {
+                assert_eq!(surface.surface.as_str(), id::KIT_GALLERY);
+            }
+            other => panic!("клик мимо витрины обязан закрывать (Backdrop), получено {other:?}"),
+        }
+    }
+
+    /// Регресс: pick-зона main stage — ТОЧНО окно stage (xywh), а не
+    /// завышенный rect (x+w / y+h в полях w/h — класс дефекта линта F-11).
+    /// Прежняя конверсия UiRect::new(r.x, r.y, r.x + r.w, r.y + r.h)
+    /// раздувала зону до правого/нижнего края экрана: клики РЯДОМ с окном
+    /// глотались как Element{stage} вместо Backdrop-контракта.
+    #[test]
+    fn stage_pick_zone_matches_window() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.main_stage = Some(MainStageState {
+            key: ("a".to_owned(), "b".to_owned()),
+            edges: Vec::new(),
+            slice: Canvas::default(),
+            scale: 1.0,
+        });
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::STAGE)
+            .expect("stage в кадре");
+        let hit = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "stage")
+            .expect("pick-зона окна stage");
+        let r = main_stage_rect([1280.0, 800.0]);
+        assert_eq!(
+            (hit.rect.x, hit.rect.y, hit.rect.w, hit.rect.h),
+            (r.x, r.y, r.w, r.h),
+            "pick-зона stage обязана совпадать с видимым окном"
+        );
+        // Точка справа окна (в завышенном rect попадала): после фикса —
+        // Backdrop stage (клик мимо окна закрывает модаль), не Element
+        let px = r.x + r.w + 8.0;
+        assert!(px < 1280.0, "тест рассчитан на окно уже вьюпорта");
+        match HitStack::pick(&frame, UiPoint::new(px, r.y + r.h / 2.0)) {
+            Some(HitTarget::Backdrop { surface }) => {
+                assert_eq!(surface.surface.as_str(), id::STAGE);
+            }
+            other => panic!("клик рядом с окном stage — не Element: {other:?}"),
         }
     }
 

@@ -5934,3 +5934,34 @@ Stage Summary:
   autolink — quads[0] == screen_to_world((0,0)) и размер /zoom (world-конвенция).
 - **Приёмка:** cargo test -p canvas-app 415 passed / 0 failed (+3 регресса),
   clippy -D warnings чисто, fmt чисто. canvas-core/render/ui не тронуты.
+
+## 2026-09-25 — fix(ui): клик по телу UI-консоли и витрины «О интерфейсе» больше не закрывает панели (директива владельца)
+
+- **Агент:** Super Z (сессия web-f29848ef; жалоба владельца: «О интерфейсе и UI-консоль
+  закрываются при любом нажатии на себя, но не должны — поведение как main stage»).
+- **Диагноз (реестр поверхностей FR-052):** `HitStack::pick` для `CapturePolicy::Block`
+  возвращает `Backdrop`, если точка не попала ни в один hit-rect поверхности. У
+  admin_panel (FR-070) и kit_gallery (FR-055, пункт «?» «О интерфейсе») были
+  зарегистрированы ТОЛЬКО интерактивные зоны (кнопки шапки/сайдбар/свотчи токенов) —
+  клик по телу панели (демо-контент, паддинг) классифицировался как
+  `HitTarget::Backdrop` → `dispatch_surface_backdrop` закрывал панель. Договор в коде
+  («прочий клик по панели глотается — Block-модаль») был, а pick-зоны тела — нет.
+  Эталон main stage регистрирует весь rect окна — потому «живёт» при кликах по себе.
+- **Фикс (app/ui_registry.rs, fill_hit_rects):**
+  - ADMIN: тело панели — базовая pick-зона `admin-panel` (`admin_layout_at().panel`),
+    пушится ПЕРВОЙ — интерактивные rect'ы (кнопки/сайдбар/свотчи) выше и выигрывают
+    (top_hit_at — last wins); клик по телу глотается в `click_admin_panel` (no-op);
+  - KIT_GALLERY: тело `kit-gallery-panel` (`kit_ui::gallery_panel`) — то же;
+  - попутный фикс того же класса: pick-зона STAGE была ЗАВЫШЕНА
+    (`UiRect::new(r.x, r.y, r.x + r.w, r.y + r.h)` — xywh трактован как xyxy, класс
+    дефекта линта F-11): зона доходила до правого/нижнего края экрана, клики рядом с
+    окном stage глотались как `Element{stage}` вместо Backdrop-контракта «мимо окна —
+    закрыть». Теперь прямая конверсия `UiRect::new(r.x, r.y, r.w, r.h)`.
+- **Регресс-тесты (ui_registry, +3):** admin_panel_body_click_is_not_backdrop,
+  kit_gallery_body_click_is_not_backdrop (точка в паддинге панели: Element, не
+  Backdrop; мимо панели — Backdrop, контракт Block сохранён),
+  stage_pick_zone_matches_window (hit-rect == main_stage_rect; точка справа окна —
+  Backdrop, не Element).
+- **Приёмка:** cargo test -p canvas-app 418 passed / 0 failed (+3 регресса),
+  clippy -D warnings чисто, fmt применён. Обработчики кликов не тронуты
+  (no-op-ветки уже существовали); контракты backdrop/Esc не изменены.
