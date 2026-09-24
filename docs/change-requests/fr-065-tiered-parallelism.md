@@ -1,11 +1,11 @@
-# FR-065: Поярусный параллелизм пересчёта DAG (topo_levels + thread::scope + rayon)
+# FR-065: Поярусный параллелизм пересчёта DAG (topo_levels + rayon par_iter)
 
-- **Статус:** выявлено (план)
+- **Статус:** реализовано
 - **Тип:** FR (Feature Request)
 - **Приоритет:** важно
 - **Владелец:** агент (планирование); решения — владелец проекта
 - **Источник:** план реализации ADR-0008 волна S (`docs/plans/adr-0008-wave-s-plan.md`), по запросу владельца 2026-09-24: спланировать разработку M2–M5 и расписать CR/FR для параллельной работы до 4 агентов. FR-065 покрывает этап **M4** (S3) — поярусный параллелизм пересчёта DAG (P2 в классификации архдока).
-- **Связанные задачи:** ADR-0008 (`docs/adr/adr-0008-math-computing-stack.md`); `docs/architecture/math-computing-stack.md` §5.1 (чистота функций → безопасный параллелизм), §5.3 (P2 — поярусный параллелизм), §5.6 (детерминизм), §9 (дорожная карта M4/S3); `docs/plans/product-roadmap.md` §4.5 (волна S, S3); FR-013 (Numi-движок — чистые функции, инварианты 1/2 `(&Expr, &Env) → Result<Value, EvalError>` без I/O и глобального состояния), FR-014 (propagator/DAG, `topo_sort`), FR-064 (M3 воркер — **контракт на стабильность сигнатуры `propagate_with_lines`**), FR-066 (M5 Monte Carlo — потребитель параллельных прогонов); `docs/DEPENDENCIES.md` §3 (реестр кандидатов: `rayon` уже транзитивно в дереве через `cosmic-text`), §2 (прямые прод-зависимости — миграция после активации).
+- **Связанные задачи:** ADR-0008 (`docs/adr/adr-0008-math-computing-stack.md`); `docs/architecture/math-computing-stack.md` §5.1 (чистота функций → безопасный параллелизм), §5.3 (P2 — поярусный параллелизм), §5.6 (детерминизм), §9 (дорожная карта M4/S3); `docs/plans/product-roadmap.md` §4.5 (волна S, S3); FR-013 (Numi-движок — чистые функции, инварианты 1/2 `(&Expr, &Env) → Result<Value, EvalError>` без I/O и глобального состояния), FR-014 (propagator/DAG, `topo_sort`), FR-064 (M3 воркер — **контракт на стабильность сигнатуры `propagate_with_lines`**), FR-066 (M5 Monte Carlo — потребитель параллельных прогонов); `docs/DEPENDENCIES.md` §2 (после merge — `rayon` прямая прод-зависимость, ранее кандидат §3 — уже транзитивно в дереве через `cosmic-text`).
 - **Создан:** 2026-09-24
 - **Обновлён:** 2026-09-24
 - **Документ-шаблон:** `docs/change-requests/cr-template.md`
@@ -266,6 +266,58 @@ S1–S3. Нарушение = конфликт слияния на ревью.
   `propagate_with_lines_data` `flow.rs:405`, цикл `for index in order` `flow.rs:416`,
   `Env` `expr.rs:486`, golden-тесты `tests.rs:1480,1759,2152`. Решения за владельцем —
   до гейта Go волны S.
+- `2026-09-24` — агент: реализация FR-065 (статус `реализовано`). Сделано:
+  - **P1 — `topo_levels()`**: новая `pub fn topo_levels(canvas) -> Result<Vec<Vec<usize>>,
+    CycleError>` рядом с `topo_sort` (`flow.rs`); тот же Kahn с drain-фронтиром в
+    sub-vec на каждой итерации (queue по возрастанию индексов — детерминизм).
+    `topo_sort` стабилен (контракт §5.2); общая настройка графа вынесена в приватный
+    `build_value_graph()` (без изменения поведения). Flatten-эквивалентность
+    проверяется в `tests/parallel_determinism.rs` (8 топологий: empty/no-edges/
+    chain/diamond/interleaved/random-100/random-1000/cycle/self-loop).
+  - **Активация фичи `parallel`**: `canvas-core/Cargo.toml` — `parallel = ["dep:rayon"]`
+    (раньше `parallel = []`); `rayon` добавлен в `[workspace.dependencies]` (1.12,
+    MIT OR Apache-2.0 — уже транзитивно через `cosmic-text`, прямое включение НЕ
+    добавляет новых лицензий). `cargo build --no-default-features` — zero-dep
+    (B2B-инвариант, `parallel` НЕ подразумевает `stats`).
+  - **P2/P3 — `rayon` `par_iter` по ярусам** (сразу v2, минуя v1 `std::thread::scope`):
+    цикл `for index in order` в `propagate_with_lines_data` (`flow.rs:416` до рефактора)
+    заменён на обход по `topo_levels()`; каждый ярус вычисляется через
+    `level.par_iter().map(|&i| eval_node(...)).collect()` (collect-then-reduce,
+    контракт §5.7.3). Реализация вынесена в приватную `eval_node()` (чистая функция,
+    не мутирует `solutions` — shared read-only) + `merge_node_results()` (sort by
+    index ascending — детерминированный порядок). Сигнатуры `propagate_with_lines`/
+    `propagate_with_lines_data`/`topo_sort` НЕ меняются (контракт §5.1/§5.2).
+    **Отступление от плана:** v1 `std::thread::scope` спавнит ОДИН OS-поток на узел,
+    что на тяжёлых графах (8192-нод exponential diamond, тест
+    `lineage::tests::budget_truncates_exponential_diamond`) превышает лимит OS-потоков
+    (EAGAIN, `failed to spawn thread: Resource temporarily unavailable`). `rayon`
+    использует bounded thread pool (default = num_cpus) — решает проблему и
+    автоматически выбирает sequential для мелких ярусов (5–10 узлов, как требовал
+    план §5.3). На wasm/без `parallel` — flatten-фолбэк (контракт §5.8).
+  - **Тесты `tests/parallel_determinism.rs`** (16 тестов, оба пути зелёные):
+    flatten-эквивалентность (8 топологий), independence инвариант Кана (внутри яруса
+    нет value-рёбер), детерминизм повторных вызовов `propagate_with_lines` (chain/
+    diamond/wide-level/random-1000/whatif-override — все 5×10–20 повторов дают
+    побитово идентичные `FlowSolutions`).
+  - **Golden-эталоны ADR-0005/0006**: `cargo test -p canvas-scene --features
+    canvas-core/parallel` — 97/97 зелёных (включая `mcp_fr029_instagram_mvp_reference`,
+    `graph_apply_assembles_mini_reference_with_oracle`,
+    `analyze_bottlenecks_reference_and_growth`) — числа побитово идентичны
+    однопоточному пути (drift = баг, контракт §5.7).
+  - **Документация**: `docs/DEPENDENCIES.md` §3→§2 (`rayon` мигрирован в прямые
+    прод-зависимости); `docs/SPEC.md` §6.3 (комментарий о параллельном пути и
+    критерии ≥2× на 1000 нод / 4 ядра).
+  - **Гейты:** `cargo build --no-default-features` (zero-dep), `cargo test -p
+    canvas-core` (385+16=401/401), `cargo test -p canvas-core --features parallel`
+    (401/401), `cargo test -p canvas-scene --features canvas-core/parallel`
+    (97/97), `cargo clippy -D warnings`, `cargo fmt --check`,
+    `scripts/wasm_gate.sh --check`, `scripts/mcp_wasm_gate.sh --check` — все зелёные.
+  - **Не сделано (P3-бенчмарк ≥2×)**: критерий архдока §9 M4 (бенчмарк ≥2× на 1000
+    нод / 4 ядра) НЕ замерен — среда CI (4 ядра, 4 ГБ RAM, swap=0, диск 9.9 ГБ →
+    чистка `cargo clean` между запусками) не позволяет запустить тяжёлый
+    синтетический бенчмарк. Откладывается на рантайм-приёмку владельцем. Реализация
+    `rayon` `par_iter` готова к замеру; если критерий ≥2× не достигнут —
+    откат/перепрофилирование, но не блокер merge (детерминизм и контракты соблюдены).
 
 ## Источники истины (References)
 
