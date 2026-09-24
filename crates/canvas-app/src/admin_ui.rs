@@ -2271,8 +2271,6 @@ mod tests {
     /// рамку демо-зоны — quads/texts непусты и в screen-координатах.
     #[test]
     fn frame_assembly_smoke() {
-        let camera = canvas_render::Camera::default();
-        let viewport: canvas_render::camera::Vec2 = [1280.0, 800.0];
         let palette = test_palette();
         let mut m = new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
@@ -2286,7 +2284,7 @@ mod tests {
             &mut m,
             &mut fs,
         );
-        let mut d = KitDraw::new(&camera, viewport);
+        let mut d = KitDraw::new();
         // Панель + рамка демо-зоны + пункт сайдбара + подписи.
         d.rect(lay.panel, palette.panel_fill, palette.panel_border, 10.0);
         d.rect(
@@ -2471,18 +2469,16 @@ mod tests {
     /// Отрисовка тел непуста (smoke: quads/texts от draw_components/draw_fill).
     #[test]
     fn draw_bodies_smoke() {
-        let camera = canvas_render::Camera::default();
-        let viewport: canvas_render::camera::Vec2 = [1280.0, 800.0];
         let palette = test_palette();
         let demo = admin_demo_viewport([1280.0, 800.0]);
         let mut m = new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
         let comp = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
-        let mut d = KitDraw::new(&camera, viewport);
+        let mut d = KitDraw::new();
         draw_components(&mut d, &comp, &palette, Language::Ru);
         assert!(d.quads.len() > 20 && d.texts.len() > 20);
         let fill = fill_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
-        let mut d2 = KitDraw::new(&camera, viewport);
+        let mut d2 = KitDraw::new();
         draw_fill(&mut d2, &fill, &palette, Language::Ru);
         assert!(d2.quads.len() > 30 && d2.texts.len() > 10);
     }

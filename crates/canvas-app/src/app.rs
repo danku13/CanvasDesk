@@ -241,17 +241,26 @@ const AUTOLINK_UNDO_TAG: &str = "autolink_batch";
 /// правок модели (мс) — бурст правок считается одной сессией.
 const AUTOLINK_DEBOUNCE_MS: u128 = 700;
 
-/// FR-055 U4: pub(crate)-мост для kit_ui/debug_overlay (тот же паттерн
-/// screen→world; адаптеры кита живут в соседних модулях, камера — в App).
-pub(crate) fn screen_rect_quad_pub(
-    camera: &Camera,
-    viewport: Vec2,
+/// Правка дрейфа 2026-09-25: квад полосы кадра из screen-прямоугольника — СЫРЫЕ логические
+/// px (конвенция полос: единственный screen→world делает рендер —
+/// `renderer::screen_instance_to_world` текущей камерой). Зеркало
+/// Painter-пути `app::support::paint_items_to_band`; КОНВЕРТАЦИЮ ЗДЕСЬ
+/// ДЕЛАТЬ ЗАПРЕЩЕНО — двойной screen→world сдвигает квад на
+/// `P + (s − V/2)/z` относительно screen-текстов той же полосы (дрейф
+/// панелей при панорамировании/зуме — FR-059 worklog, FR-070 приёмка).
+pub(crate) fn band_rect_quad_pub(
     rect: [f32; 4],
     fill: [f32; 4],
     border: [f32; 4],
     radius: f32,
 ) -> CardInstance {
-    screen_rect_quad(camera, viewport, rect, fill, border, radius)
+    CardInstance {
+        pos: [rect[0], rect[1]],
+        size: [rect[2], rect[3]],
+        fill,
+        border,
+        params: [radius, 0.0, 0.0, 1.0],
+    }
 }
 
 // --- FR-038 (T-038.4): интеграция магнитной раскладки ----------------------

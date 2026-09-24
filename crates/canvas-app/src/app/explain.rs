@@ -115,9 +115,13 @@ impl App {
             return (quads, texts);
         };
         // FR-060 (волна 2 кита): отрисовка — Painter (данные canvas-ui, G7)
-        // + WidgetState (состояния строк/кнопок); конверсия в полосу кадра —
-        // paint_items_to_band (те же screen-квады/тексты — 0 визуального
-        // скачка: та же последовательность квадов/текстов и те же слоты)
+        // + WidgetState (состояния строк/кнопок). Правка дрейфа 2026-09-25:
+        // кадр диалога уходит в СТАДИЙНЫЙ проход (stage_instances —
+        // world-конвенция, рендерер дописывает без конверсии), поэтому
+        // конвертация — paint_items_to_stage (screen→world здесь, как у
+        // explain_window/stage_frame). Прежний paint_items_to_band оставлял
+        // квад СЫРЫМ — рендер рисовал его как world, и при панорамировании
+        // диалог «приклеивался» к канвасу, расъезжаясь со screen-текстами.
         let mut d = Painter::new();
         let palette = ThemeColors::from_theme(self.settings.theme);
         let win = autolink_ui::dialog_rect(viewport);
@@ -486,7 +490,16 @@ impl App {
             );
         }
         let _ = pending;
-        paint_items_to_band(d.take_items(), &mut quads, &mut texts);
+        // Правка дрейфа 2026-09-25: stage-проход — world-конвенция (см. комментарий выше)
+        let zoom = self.camera.zoom();
+        paint_items_to_stage(
+            d.take_items(),
+            &self.camera,
+            viewport,
+            zoom,
+            &mut quads,
+            &mut texts,
+        );
         (quads, texts)
     }
 

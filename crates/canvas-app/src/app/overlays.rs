@@ -708,7 +708,7 @@ impl App {
         let palette = self.admin_effective_palette();
         let lang = self.settings.language;
         let lay = self.admin_layout_current();
-        let mut d = crate::kit_ui::KitDraw::new(&self.camera, viewport);
+        let mut d = crate::kit_ui::KitDraw::new();
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
         let cursor = self.cursor;
         let hover = |r: &canvas_ui::geometry::UiRect| crate::kit_ui::cursor_in(r, cursor);
@@ -918,7 +918,7 @@ impl App {
         let mut fs = canvas_render::text::measure_font_system();
         let scroll = self.kit_gallery_scroll.clone();
         let lay = crate::kit_ui::gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs);
-        let mut d = crate::kit_ui::KitDraw::new(&self.camera, viewport);
+        let mut d = crate::kit_ui::KitDraw::new();
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
         let cursor = self.cursor;
 
