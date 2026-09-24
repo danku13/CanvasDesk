@@ -31,6 +31,11 @@ rand_distr = { workspace = true, optional = true }
 # лицензий. Без фичи `parallel` — zero-dep инвариант B2B (контракт
 # `docs/plans/adr-0008-wave-s-plan.md` §5.6).
 rayon = { workspace = true, optional = true }
+# ADR-0008 S3/M5 (FR-066): Owen-scrambled Sobol для QMC-режима Monte
+# Carlo-движка (expr/mc.rs) — optional, только за фичей `qmc`
+# (вместе с stats+parallel, контракт §5.6 FR-066; §3→§2
+# `docs/DEPENDENCIES.md`). Без фичи — zero-dep инвариант B2B.
+sobol_burley = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -52,3 +57,10 @@ stats = ["dep:statrs", "dep:rand", "dep:rand_chacha", "dep:rand_distr"]
 # тем же cfg-гейтом `#[cfg(all(feature="parallel", not(target_arch="wasm32")))]`.
 # НЕ подразумевает `stats` (контракт §5.6 — фичи независимы).
 parallel = ["dep:rayon"]
+# FR-066 (M5/S3): Monte Carlo + QMC-движок (expr/mc.rs + sibling
+# flow::propagate_monte_carlo). Подразумевает ОБЕ обязательные зависимости
+# (контракт §5.6): `stats` — распределения/квантили/RNG FR-063,
+# `parallel` — чанкование прогонов 256/задача FR-065 + `sobol_burley`
+# (Owen-scrambled Sobol, inverse-CDF через statrs). НЕ собирается на
+# wasm-целях (§5.8: wasm-сборка без фичи — гейт scripts/wasm_gate.sh).
+qmc = ["stats", "parallel", "dep:sobol_burley"]

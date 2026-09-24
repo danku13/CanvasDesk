@@ -34,7 +34,7 @@ B2B-контрактом/EULA; в SBOM first-party — сам бинарник `
 
 ## 2. Прямые прод-зависимости (факт, `Cargo.lock` 2026-09-24)
 
-Всего в графе сборки — 401 сторонний крейт (включая транзитивные и
+Всего в графе сборки — 402 сторонних крейта (включая транзитивные и
 dev-зависимости); полный состав с текстами лицензий —
 `THIRD-PARTY-NOTICES.md`, машиночитаемый контроль — `deny.toml`.
 Криптозависимостей нет; нативный C — только bundled SQLite внутри
@@ -81,10 +81,12 @@ B2B-сборка могла отключить неиспользуемые сл
 `parallel`; std::thread::scope заменён на `rayon` `par_iter` — bounded
 thread pool, иначе 8192-нод exponential diamond превышает лимит
 OS-потоков, тест `lineage::tests::budget_truncates_exponential_diamond`).
+S3/M5 (FR-066) выполнен 2026-09-24: `sobol_burley` перенесён в §2
+(QMC-режим MC-движка за фичей `qmc`, implies stats+parallel; wasm-сборка
+— без фичи, контракт §5.8 FR-066).
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
-| L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 (FR-066, за фичей `qmc`) |
 | L2 | `argmin` | численная оптимизация | MIT OR Apache-2.0 | первый домен с оптимизацией |
 | L2 | `gauss-quad` / `quadrature` | квадратуры | MIT OR Apache-2.0 / BSD-2 | интегралы SLA |
 | L2 | `puruspe` / `special` | спецфункции | MIT OR Apache-2.0 | при выходе за `statrs` |

@@ -98,6 +98,15 @@ pub use error::CoreError;
 pub use expr::{
     Env, EvalError, Expr, ExprLineResults, ExprOutcome, ExprResults, ParseError, Value,
 };
+// FR-066 (M5/S3, ADR-0008 волна S): MC/QMC-движок — только с фичей `qmc`
+// (§5.6: implies stats+parallel; §5.8: wasm-сборка без фичи).
+#[cfg(feature = "qmc")]
+pub use expr::mc::{
+    current_engine_meta, engine_from_canvas, engine_to_canvas, quantile_label, run_solutions,
+    synthetic_solutions, tail_quantile, Distribution, EngineMeta, McConfig, McMode, McResult,
+    ResolvedParam, ENGINE_VERSION, MC_CHUNK, POISSON_LAMBDA_MAX, SOBOL_MAX_DIMS, SOBOL_MAX_RUNS,
+};
+// FR-066 (M5/S3): MC/QMC-движок — только с фичей `qmc` (§5.6/§5.8)
 pub use flow::{
     creates_value_cycle, inbound_slots, inbound_slots_with_lines, outputs_display, param_spills,
     propagate, propagate_with_lines, propagate_with_lines_data, substitute_spilled_lines,
@@ -105,6 +114,9 @@ pub use flow::{
     DataSnapshots, FlowKind, FlowOutputs, FlowSolutions, LineOutputs, ParamSpill, UnmappedInput,
     WhatIfOverrides,
 };
+// FR-066 (M5/S3): сиблинги MC/QMC-движка — только с фичей `qmc` (§5.6/§5.8)
+#[cfg(feature = "qmc")]
+pub use flow::{propagate_monte_carlo, propagate_monte_carlo_with_progress};
 pub use focus::{focus_set, FocusSeed, FocusSet};
 pub use fs_events::{
     apply_file_events, normalize_path, path_matches, relative_if_inside, resolve_node_path,

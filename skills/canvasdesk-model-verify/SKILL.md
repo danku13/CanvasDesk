@@ -1,7 +1,7 @@
 ---
 name: canvasdesk-model-verify
 description: Проверка чисел и корректности модели на канвасе CanvasDesk через MCP — flow_recalc (карта значений), lineage (дерево происхождения цифры), explain_number (готовое текстовое объяснение), graph_validate (коды ошибок), flow_cycle_check, analyze_bottlenecks (узкие места). Используйте после сборки или правки модели, для сверки с ожиданиями/оракулами и для ответа «почему цифра такая». Triggers: verify model, recalculate, flow, lineage, explain number, why this value, validation, bottleneck analysis, overload.
-version: 2
+version: 3
 ---
 
 # Проверка модели: числа, происхождение, валидность
@@ -113,6 +113,43 @@ queue_length?, wait_sec?, badge}], thresholds}` — те же флаги, что
 секундах; badge — строка бейджа канваса. Пороги дефолта: ρ 0.7/0.9,
 W 100 ms/1 s, queue 1/10. Чистая функция — канвас не мутируется.
 
+## monte_carlo_run — квантили при неопределённости
+
+`monte_carlo_run` {runs, params} — N ≥ 10⁴ прогонов модели с
+распределёнными параметрами (Monte Carlo / QMC) и квантили P50/P90/P99
+результатов. Отвечает на вопросы, недоступные одному прогону: «с какой
+вероятностью runway уйдёт в ноль», «какой LTV в pessimistic-сценарии» —
+глубже ±20 %-сеток what-if.
+
+```
+monte_carlo_run {
+  "runs": 10000,
+  "params": {
+    "<node_id>:<param>": {"dist": "normal",  "mean": 3000, "sd": 300},
+    "<node_id>:<param>": {"dist": "lognormal", "mean": 120, "sd": 15},
+    "<node_id>:<param>": {"dist": "exp", "lambda": 0.05},
+    "<node_id>:<param>": {"dist": "poisson", "lambda": 10}
+  },
+  "mode": "qmc",          // дефолт: Sobol (меньшая дисперсия) | "mc"
+  "seed": 0,              // дефолт 0: тот же seed → те же квантили
+  "quantiles": [0.5, 0.9, 0.99]   // дефолт; P10 → [0.1, ...]
+}
+```
+
+- Параметр — строка «param = …» Numi-листа ноды (как whatif_set_param);
+  единица придаётся формулой-потребителем («rho = load × 1 %»).
+- Ответ: `{runs, failed_runs, mode, seed, stale, duration_ms, quantiles,
+  outputs{node:{P50:{value,unit},…}}, lines{"node:line":{…}},
+  named{"node:выход":{…}}, analysis{quantile, nodes, thresholds},
+  severity}`.
+- `analysis` — узкие места (формат analyze_bottlenecks) на ХВОСТОВОМ
+  квантиле P90: severity эскалирует на хвосте — «докритично на медиане,
+  критично на P90».
+- Воспроизводимость first-class: тот же seed — побитово те же квантили;
+  фиксируйте seed в отчётах. Лимиты: runs ≤ 10⁶; qmc ≤ 65536; poisson
+  λ ≤ 1000. Мутирует `canvasdesk.engine` в .canvas (undo-шаг).
+- Доступен в native-сборке (wasm-цель — без qmc, FR-066 §5.8).
+
 ## Порядок верификации после сборки/правки
 
 1. `flow_cycle_check` {} — топология вычислима.
@@ -123,6 +160,9 @@ W 100 ms/1 s, queue 1/10. Чистая функция — канвас не му
    не знаете.
 5. Для спорной цифры — `lineage` {node_id, line} — до листа-источника;
    для ответа пользователю — `explain_number` {node_id, line} готовым текстом.
+6. Параметры с неопределённостью — `monte_carlo_run` {runs, params}:
+   квантили P50/P90/P99 и severity на P90; seed в отчёт для
+   воспроизводимости.
 
 ## Дисциплина ответов пользователю
 
