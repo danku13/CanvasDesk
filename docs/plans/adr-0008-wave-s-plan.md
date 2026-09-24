@@ -396,13 +396,16 @@ zero new deps (инвариант чистого дерева для B2B-сбо�
 3. `feat(core/stats): deterministic ChaCha8 RNG + confidence intervals (FR-063 P3)`
    — `rand_chacha` сидирование, ДИ, тест воспроизводимости (один сид → одна выборка).
 
-**FR-064 (M3):**
-1. `feat(scene): FlowWorker spawn + AppEvent::FlowReady, sync fallback (FR-064 P1)`
+**FR-064 (M3):** ✅ выполнено (2026-09-24, ветка `feature/fr-064-scenario-worker`,
+обе фазы зелёными гейтами: fmt/clippy/test --workspace/wasm_gate/mcp_wasm_gate/deny)
+1. ✅ `feat(scene): FlowWorker spawn + AppEvent::FlowReady, sync fallback (FR-064 P1)`
    — воркер + double buffer, `cfg(not(wasm32))`, sync-фолбэк, smoke-тест
    «правка → результат через воркер».
-2. `feat(scene): FR-017 v2 — scenario freeze + comparison table (FR-064 P2)`
-   — `ScenarioGrid`/freeze-снимки, diff `outputs`/`lines`, таблица сравнения;
-   e2e на эталоне №2 (смена `rps` → дельты downstream).
+2. ✅ `feat(scene): FR-017 v2 — scenario freeze + comparison table (FR-064 P2)`
+   — freeze-снимки, diff `outputs`/`lines`, таблица сравнения;
+   e2e в духе эталона №2 (смена `rps` → дельты downstream). `ScenarioGrid`
+   не потребовался (лимит 3 сценариев FR-017 покрывает пакет; матрица — при
+   появлении потребности в >3 прогонах, FR-017 v3/FR-066).
 
 **FR-065 (M4):**
 1. `feat(core/flow): topo_levels() — tiered topo sort (FR-065 P1)`

@@ -8,11 +8,22 @@
 //! сценария применяются через [`crate::flow::WhatIfOverrides`] — модуль
 //! только хранение, сериализация и деградация протухших подмен
 //! (инвариант 5 FR-017).
+//!
+//! FR-064 P2 (FR-017 v2): freeze/сравнение — заморозка активного сценария
+//! в `Arc<FlowSolutions>`-снимок ([`FrozenScenario`], [`freeze_scenario`])
+//! и диф снимков по `outputs`/`lines` ([`compare_scenarios`], таблица
+//! «переменная | База | С1 | С2»). Имена замороженных персистентны рядом
+//! со сценариями: `canvasdesk.whatif.frozen` (тот же паттерн хранения;
+//! сами снимки — runtime, восстанавливаются пересчётом персистентного
+//! канваса при загрузке). MCP `whatif_*` не расширяются (FR-064).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
+use crate::expr;
+use crate::flow::{self, CycleError, FlowSolutions, WhatIfOverrides};
 use crate::model::Canvas;
 
 /// Именованный what-if сценарий (FR-017 Фаза B): набор построчных подмен.
@@ -63,36 +74,115 @@ pub fn scenarios_from_canvas(canvas: &Canvas) -> Vec<Scenario> {
         .collect()
 }
 
-/// Запись сценариев в `canvas.extra["canvasdesk"]["whatif"]`. Чужие поля
-/// `canvasdesk` сохраняются; пустой список УДАЛЯЕТ поле (и пустой
-/// контейнер) — файл без сценариев байт-в-байт как раньше (round-trip
+/// Запись сценариев в `canvas.extra["canvasdesk"]["whatif"]` (ключ
+/// `scenarios`; FR-064 P2: соседний ключ `frozen` сохраняется). Чужие поля
+/// `canvasdesk` сохраняются; пустой список УДАЛЯЕТ ключ (и пустые
+/// контейнеры) — файл без сценариев байт-в-байт как раньше (round-trip
 /// чистый, инвариант 5).
 pub fn scenarios_to_canvas(canvas: &mut Canvas, scenarios: &[Scenario]) {
-    let Some(ext) = canvas
+    let value = if scenarios.is_empty() {
+        None
+    } else {
+        Some(whatif_value(scenarios))
+    };
+    set_whatif_key(canvas, "scenarios", value);
+}
+
+/// FR-064 P2: имена замороженных сценариев из
+/// `canvas.extra["canvasdesk"]["whatif"]["frozen"]` (порядок заморозки).
+/// Толерантно: мусор/отсутствие поля — пустой список.
+pub fn frozen_from_canvas(canvas: &Canvas) -> Vec<String> {
+    canvas
         .extra
-        .get_mut("canvasdesk")
-        .and_then(Value::as_object_mut)
-    else {
-        if !scenarios.is_empty() {
-            let mut ext = Map::new();
-            ext.insert("whatif".to_owned(), whatif_value(scenarios));
-            canvas
-                .extra
-                .insert("canvasdesk".to_owned(), Value::Object(ext));
+        .get("canvasdesk")
+        .and_then(|ext| ext.get("whatif"))
+        .and_then(|whatif| whatif.get("frozen"))
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// FR-064 P2: запись имён замороженных (ключ `frozen`; соседний
+/// `scenarios` сохраняется). Пустой список удаляет ключ — файл без
+/// заморозок байт-в-байт как раньше.
+pub fn frozen_to_canvas(canvas: &mut Canvas, names: &[String]) {
+    let value = if names.is_empty() {
+        None
+    } else {
+        Some(Value::Array(
+            names
+                .iter()
+                .map(|name| Value::String(name.clone()))
+                .collect(),
+        ))
+    };
+    set_whatif_key(canvas, "frozen", value);
+}
+
+/// FR-064 P2: аккуратно обновить один ключ объекта
+/// `canvasdesk.whatif` (scenarios/frozen — соседи не затираются;
+/// чужие поля `canvasdesk` сохраняются). `value: None` — удалить ключ;
+/// опустевший `whatif`/`canvasdesk` удаляется целиком (round-trip чистый).
+fn set_whatif_key(canvas: &mut Canvas, key: &str, value: Option<Value>) {
+    // Читаем ТЕКУЩИЙ объект whatif (или создаём при записи значения).
+    let existing = canvas
+        .extra
+        .get("canvasdesk")
+        .and_then(Value::as_object)
+        .and_then(|ext| ext.get("whatif"))
+        .and_then(Value::as_object)
+        .cloned();
+    let Some(value) = value else {
+        // Удаление: только если объект существует.
+        let Some(mut whatif) = existing else {
+            return;
+        };
+        whatif.remove(key);
+        if whatif.is_empty() {
+            // whatif опустел — удалить его (и пустой canvasdesk).
+            remove_whatif_object(canvas);
+        } else {
+            // Записать обратно с удалённым ключом (соседи сохраняются).
+            if let Some(Value::Object(ext)) = canvas.extra.get_mut("canvasdesk") {
+                ext.insert("whatif".to_owned(), Value::Object(whatif));
+            }
         }
         return;
     };
-    if scenarios.is_empty() {
-        ext.remove("whatif");
-        if ext.is_empty() {
-            canvas.extra.remove("canvasdesk");
-        }
-        return;
-    }
-    ext.insert("whatif".to_owned(), whatif_value(scenarios));
+    let mut whatif = existing.unwrap_or_default();
+    whatif.insert(key.to_owned(), value);
+    // canvasdesk-объект: существующий (чужие поля сохраняются) или новый.
+    let mut ext = canvas
+        .extra
+        .get("canvasdesk")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    ext.insert("whatif".to_owned(), Value::Object(whatif));
+    canvas
+        .extra
+        .insert("canvasdesk".to_owned(), Value::Object(ext));
 }
 
-/// JSON-представление блока `whatif`.
+/// FR-064 P2: удалить опустевший объект `whatif` (и `canvasdesk`, если
+/// он тоже опустел — инвариант 5: пустых контейнеров не остаётся).
+fn remove_whatif_object(canvas: &mut Canvas) {
+    let Some(Value::Object(ext)) = canvas.extra.get_mut("canvasdesk") else {
+        return;
+    };
+    ext.remove("whatif");
+    if ext.is_empty() {
+        canvas.extra.remove("canvasdesk");
+    }
+}
+
+/// JSON-представление массива сценариев (ключ `scenarios` объекта
+/// `whatif`); сортировка подмен — детерминизм.
 fn whatif_value(scenarios: &[Scenario]) -> Value {
     let list: Vec<Value> = scenarios
         .iter()
@@ -111,7 +201,7 @@ fn whatif_value(scenarios: &[Scenario]) -> Value {
             })
         })
         .collect();
-    serde_json::json!({ "scenarios": list })
+    Value::Array(list)
 }
 
 /// Валидация сценария против канваса: протухшие подмены (нода удалена,
@@ -175,6 +265,151 @@ pub fn active_line_exprs(canvas: &Canvas, scenario: &Scenario) -> HashMap<(Strin
         })
         .map(|(key, expr)| (key.clone(), expr.clone()))
         .collect()
+}
+
+// --- FR-064 P2 (FR-017 v2): freeze/сравнение -------------------------------
+
+/// Замороженный снимок сценария: pinned значения потока на момент
+/// заморозки (правки канваса их не двигают — снимок за Arc). Имя — имя
+/// сценария (или «База»); персистентно только ИМЯ (`canvasdesk.whatif.frozen`),
+/// сами значения — runtime (восстанавливаются пересчётом при загрузке).
+#[derive(Debug, Clone)]
+pub struct FrozenScenario {
+    pub name: String,
+    pub solutions: Arc<FlowSolutions>,
+}
+
+/// Одна строка таблицы сравнения сценариев «переменная | База | С1 | С2».
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComparisonRow {
+    /// Переменная: id ноды.
+    pub node: String,
+    /// `Some(i)` — построчный выход (строка i); `None` — узловой итог.
+    pub line: Option<usize>,
+    /// Значения по колонкам [База, С1, С2, …]; `None` — нет значения
+    /// (ошибка/отсутствие — ячейка «—»).
+    pub values: Vec<Option<expr::Value>>,
+    /// Дельты против базы (формат [`expr::whatif_delta_str`]), индексы
+    /// совпадают с `values`; у колонки «База» — всегда `None`.
+    pub deltas: Vec<Option<String>>,
+}
+
+/// Результат сравнения ([`compare_scenarios`]): колонки сценариев
+/// (без «Базы») и строки — union построчных переменных + изменившиеся
+/// узловые итоги (дельты downstream).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScenarioComparison {
+    /// Имена колонок-сценариев в порядке заморозки/передачи.
+    pub columns: Vec<String>,
+    /// Построчные переменные (union ключей), затем узловые итоги,
+    /// изменившиеся хотя бы в одной колонке против базы; обе группы —
+    /// в отсортированном порядке (детерминизм).
+    pub rows: Vec<ComparisonRow>,
+}
+
+/// FR-064 P2: заморозить сценарий — пересчёт канваса с его активными
+/// (непротухшими) подменами → снимок. Детерминирован: тот же канвас и
+/// сценарий дают побитово одинаковый снимок (инвариант 2 FR-050).
+pub fn freeze_scenario(canvas: &Canvas, scenario: &Scenario) -> Result<FrozenScenario, CycleError> {
+    let overrides = WhatIfOverrides {
+        line_exprs: active_line_exprs(canvas, scenario),
+        node_values: HashMap::new(),
+    };
+    let solutions = Arc::new(flow::propagate_with_lines(canvas, &overrides)?);
+    Ok(FrozenScenario {
+        name: scenario.name.clone(),
+        solutions,
+    })
+}
+
+/// FR-064 P2: сравнить снимки двух и более сценариев с базой — диф
+/// `lines` и `outputs`. `line_keys` — union построчных переменных
+/// (обычно union активных подмен — задаёт вызывающий); узловые итоги
+/// добавляются автоматически, если хотя бы одна колонка отличается от
+/// базы (дельты downstream). Формат дельт — [`expr::whatif_delta_str`].
+pub fn compare_scenarios(
+    base: &FlowSolutions,
+    frozen: &[FrozenScenario],
+    line_keys: &[(String, usize)],
+) -> ScenarioComparison {
+    let columns: Vec<String> = frozen.iter().map(|f| f.name.clone()).collect();
+    let mut rows: Vec<ComparisonRow> = Vec::new();
+    // 1) Построчные переменные (union override-ключей, отсортированы).
+    let mut keys: Vec<(String, usize)> = line_keys.to_vec();
+    keys.sort();
+    keys.dedup();
+    for (node, line) in keys {
+        let key = (node.clone(), line);
+        let base_value = base.lines.get(&key);
+        let mut values = vec![base_value.cloned()];
+        let mut deltas = vec![None];
+        for snapshot in frozen {
+            let value = snapshot.solutions.lines.get(&key);
+            let delta = match (base_value, value) {
+                (Some(base), Some(value)) => expr::whatif_delta_str(base, value),
+                _ => None,
+            };
+            values.push(value.cloned());
+            deltas.push(delta);
+        }
+        rows.push(ComparisonRow {
+            node,
+            line: Some(line),
+            values,
+            deltas,
+        });
+    }
+    // 2) Узловые итоги, изменившиеся хотя бы в одной колонке против базы
+    // (дельты downstream — эталон ADR-0006 №2: смена rps видна ниже).
+    // Сравнение — по Ok-значениям (ошибка в колонке против значения базы —
+    // тоже изменение).
+    let mut nodes: Vec<String> = frozen
+        .iter()
+        .flat_map(|snapshot| snapshot.solutions.outputs.keys().cloned())
+        .chain(base.outputs.keys().cloned())
+        .collect();
+    nodes.sort();
+    nodes.dedup();
+    for node in nodes {
+        let base_out = base.outputs.get(&node).and_then(|r| r.as_ref().ok());
+        let changed = frozen.iter().any(|snapshot| {
+            let col = snapshot
+                .solutions
+                .outputs
+                .get(&node)
+                .and_then(|r| r.as_ref().ok());
+            match (base_out, col) {
+                (Some(base), Some(col)) => base != col,
+                (None, None) => false,
+                _ => true,
+            }
+        });
+        if !changed {
+            continue;
+        }
+        let mut values = vec![base_out.cloned()];
+        let mut deltas = vec![None];
+        for snapshot in frozen {
+            let col = snapshot
+                .solutions
+                .outputs
+                .get(&node)
+                .and_then(|r| r.as_ref().ok());
+            let delta = match (base_out, col) {
+                (Some(base), Some(col)) => expr::whatif_delta_str(base, col),
+                _ => None,
+            };
+            values.push(col.cloned());
+            deltas.push(delta);
+        }
+        rows.push(ComparisonRow {
+            node,
+            line: None,
+            values,
+            deltas,
+        });
+    }
+    ScenarioComparison { columns, rows }
 }
 
 #[cfg(test)]

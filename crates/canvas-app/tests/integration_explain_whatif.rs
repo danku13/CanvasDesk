@@ -52,7 +52,7 @@ fn tree_of(scene: &SceneState, root: LineageNodeId) -> LineageTree {
     build_lineage(
         &scene.canvas,
         LineageFlow::Ready {
-            solutions: &scene.flow_active,
+            solutions: &canvas_scene::read_flow(&scene.flow_active),
             data: &data,
         },
         root,
@@ -83,7 +83,10 @@ fn explain_edit_produces_deltas_and_keeps_base() {
 
     // Живая модель: пересчитанные значения на канвасе (полоса D).
     assert_eq!(
-        scene.flow_active.outputs["C"].as_ref().unwrap().to_string(),
+        canvas_scene::read_flow(&scene.flow_active).outputs["C"]
+            .as_ref()
+            .unwrap()
+            .to_string(),
         "15",
         "C: 11 → 15 (живая модель)"
     );
@@ -147,7 +150,7 @@ fn explain_scenario_survives_reload() {
     scene2.active_scenario = Some(0);
     scene2.recompute_flow();
     assert_eq!(
-        scene2.flow_active.outputs["B"]
+        canvas_scene::read_flow(&scene2.flow_active).outputs["B"]
             .as_ref()
             .unwrap()
             .to_string(),
@@ -182,7 +185,10 @@ fn back_to_base_clears_deltas() {
     // Возврат к базе одним действием (пилюля «База» бара FR-017).
     scene.whatif_activate(None);
     assert_eq!(
-        scene.flow_active.outputs["C"].as_ref().unwrap().to_string(),
+        canvas_scene::read_flow(&scene.flow_active).outputs["C"]
+            .as_ref()
+            .unwrap()
+            .to_string(),
         "11",
         "значение вернулось к базе"
     );
