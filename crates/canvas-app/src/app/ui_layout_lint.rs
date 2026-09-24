@@ -239,6 +239,20 @@ fn lint_kit_gallery_open() {
     assert_backdrop_is(&frame, ui_registry::id::KIT_GALLERY);
 }
 
+/// FR-070 (этап 1): админпанель — каноническое состояние G4-линта:
+/// шапка + сайдбар во вьюпортах и на обоих языках; Block-модаль.
+#[test]
+fn lint_admin_open() {
+    lint_state("admin_panel", |app, _vp| {
+        app.admin_open = true;
+    });
+    // Block-модаль: угол экрана — её backdrop
+    let mut app = lint_stub(Language::Ru);
+    app.admin_open = true;
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert_backdrop_is(&frame, ui_registry::id::ADMIN);
+}
+
 #[test]
 fn lint_onboarding_open() {
     lint_state("onboarding", |app, _vp| {

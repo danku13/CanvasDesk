@@ -170,14 +170,18 @@ pub enum HelpMenuItem {
     Schemes,
     /// «О интерфейсе» — витрина кита (FR-055 U4, Q5-a: доступна всегда).
     Interface,
+    /// «UI-консоль» — админпанель дизайн-системы (FR-070: матрица
+    /// состояний, наполнение, сущности канваса, токены с live-правкой).
+    Admin,
 }
 
 /// Пункты меню помощи (порядок отображения).
-pub const HELP_MENU_ITEMS: [HelpMenuItem; 4] = [
+pub const HELP_MENU_ITEMS: [HelpMenuItem; 5] = [
     HelpMenuItem::Docs,
     HelpMenuItem::Onboarding,
     HelpMenuItem::Schemes,
     HelpMenuItem::Interface,
+    HelpMenuItem::Admin,
 ];
 
 /// Подпись пункта меню помощи (таблица [`crate::i18n`] — FR-040).
@@ -187,6 +191,7 @@ pub fn help_menu_item_label(item: HelpMenuItem, language: Language) -> &'static 
         HelpMenuItem::Onboarding => i18n::tr(language, keys::HELP_ONBOARDING),
         HelpMenuItem::Schemes => i18n::tr(language, keys::HELP_SCHEMES),
         HelpMenuItem::Interface => i18n::tr(language, keys::HELP_INTERFACE),
+        HelpMenuItem::Admin => i18n::tr(language, keys::ADMIN_HELP_ITEM),
     }
 }
 

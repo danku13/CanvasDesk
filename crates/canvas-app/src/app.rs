@@ -2006,6 +2006,16 @@ pub struct App {
     /// FR-055 (этап U4 PRD-0009): витрина кита открыта (поверхность
     /// kit_gallery, Modals/Block) — пункт «?» «О интерфейсе» (Q5-a).
     pub(crate) kit_gallery_open: bool,
+    /// FR-070: UI-админпанель открыта (поверхность admin_panel,
+    /// Modals/Block) — пункт «?» «UI-консоль».
+    pub(crate) admin_open: bool,
+    /// FR-070: активная секция сайдбара админпанели.
+    pub(crate) admin_section: crate::admin_ui::AdminSection,
+    /// FR-070: скролл демо-зоны админпанели.
+    admin_scroll: canvas_ui::kit::ScrollState,
+    /// FR-070: live-переопределение слотов палитры (None — палитра темы;
+    /// «Сброс»/смена темы очищают; сохранение в конфиг — вне рамок v1).
+    admin_palette_override: Option<canvas_ui::kit::KitPalette>,
     /// FR-055 (этап U4, F-10): DebugOverlay виден (тогл F9 / `?ui=debug`).
     pub(crate) debug_overlay: bool,
     /// FR-049: empty-state скрыт кнопкой «Пустой холст» до следующего
@@ -2262,6 +2272,9 @@ impl App {
             // FR-055 U4: витрина кита закрыта, DebugOverlay выключен
             // (в web включается параметром `?ui=debug` — url_params).
             kit_gallery_open: false,
+            admin_open: false,
+            admin_section: crate::admin_ui::AdminSection::Components,
+            admin_palette_override: None,
             debug_overlay: false,
             empty_state_dismissed: false,
             pending_scheme: None,
@@ -2316,6 +2329,7 @@ impl App {
             flow_map_open: false,
             flow_map_scroll: canvas_ui::kit::ScrollState::default(),
             kit_gallery_scroll: canvas_ui::kit::ScrollState::default(),
+            admin_scroll: canvas_ui::kit::ScrollState::default(),
             kit_gallery_focus: canvas_ui::keyboard::FocusRing::default(),
             stage_calc_vars_scroll: canvas_ui::kit::ScrollState::default(),
             stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),
@@ -6876,6 +6890,164 @@ impl App {
         out
     }
 
+    /// FR-070 (этап 1): оверлей админпанели — затемнение, панель, шапка
+    /// (заголовок / «Сброс» / тема / «✕»), сайдбар секций (реальные
+    /// kit-кнопки), демо-зона с заголовком секции и подсказкой; тела секций
+    /// — этапы 2–4 FR-070. Эффективная палитра — с live-переопределением.
+    fn admin_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut out = (Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let palette = self.admin_effective_palette();
+        let lang = self.settings.language;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = self.admin_layout_current();
+        let mut d = crate::kit_ui::KitDraw::new(&self.camera, viewport);
+        let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        let cursor = self.cursor;
+        let hover = |r: &canvas_ui::geometry::UiRect| crate::kit_ui::cursor_in(r, cursor);
+
+        // Затемнение + панель (kit Modal — паттерн витрины)
+        d.rect(vp, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let panel_style = canvas_ui::kit::modal_style(&palette);
+        d.rect(
+            lay.panel,
+            panel_style.fill,
+            panel_style.border,
+            panel_style.radius,
+        );
+
+        // Шапка: заголовок + «Сброс» (Disabled без переопределения) + тема + «✕»
+        d.label_left(
+            lay.title,
+            crate::i18n::tr(lang, crate::i18n::keys::ADMIN_TITLE),
+            palette.text_title,
+            14.0,
+        );
+        let mut reset_widget = WidgetState::default();
+        reset_widget.set_pointer(hover(&lay.reset), false);
+        reset_widget.set_disabled(self.admin_palette_override.is_none());
+        let reset_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Danger,
+            reset_widget.kit_state(),
+            &palette,
+        );
+        d.control(lay.reset, &reset_style);
+        d.label_center(
+            lay.reset,
+            crate::i18n::tr(lang, crate::i18n::keys::ADMIN_RESET),
+            reset_style.text,
+            13.0,
+        );
+        let mut theme_widget = WidgetState::default();
+        theme_widget.set_pointer(hover(&lay.theme), false);
+        let theme_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Primary,
+            theme_widget.kit_state(),
+            &palette,
+        );
+        let (theme_rect, theme_label) =
+            crate::kit_ui::theme_button_layout(lay.theme, lang, &mut m, &mut fs);
+        d.control(theme_rect, &theme_style);
+        d.label_center(theme_rect, &theme_label, theme_style.text, 13.0);
+        let mut close_widget = WidgetState::default();
+        close_widget.set_pointer(hover(&lay.close), false);
+        let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
+        d.control(lay.close, &close_style);
+        d.label_center(lay.close, "✕", close_style.text, 13.0);
+
+        // Сайдбар: пункты — реальные kit-кнопки (активная — слот Selected)
+        for (i, item) in lay.sidebar_items.iter().enumerate() {
+            let active = crate::admin_ui::AdminSection::at(i) == Some(self.admin_section);
+            let state = if active {
+                canvas_ui::kit::KitState::Selected
+            } else if hover(item) {
+                canvas_ui::kit::KitState::Hovered
+            } else {
+                canvas_ui::kit::KitState::Normal
+            };
+            let style = canvas_ui::kit::button_style(
+                canvas_ui::kit::ButtonVariant::Secondary,
+                state,
+                &palette,
+            );
+            d.control(*item, &style);
+            if let Some(sec) = crate::admin_ui::AdminSection::at(i) {
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        item.x + kit::BUTTON_PAD_H,
+                        item.y,
+                        (item.w - kit::BUTTON_PAD_H).max(0.0),
+                        item.h,
+                    ),
+                    crate::i18n::tr(lang, sec.label_key()),
+                    style.text,
+                    13.0,
+                );
+            }
+        }
+
+        // Демо-зона: рамка + заголовок секции + подсказка (этап 1)
+        d.rect(
+            lay.demo,
+            [0.0; 4],
+            palette.control_border,
+            canvas_core::tokens::RADIUS_PANEL,
+        );
+        let (origin, title_key) = lay.section_title;
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(
+                origin.x + 10.0,
+                origin.y + 6.0,
+                (lay.demo.w - 20.0).max(0.0),
+                18.0,
+            ),
+            crate::i18n::tr(lang, title_key),
+            palette.text_title,
+            13.0,
+        );
+        // Подсказка: wrapped-строки раскладки (сдвиг на скролл демо-зоны)
+        for (line_idx, line) in lay.hint_lines.iter().enumerate() {
+            let y = origin.y + 24.0 + line_idx as f32 * 18.0 - self.admin_scroll.offset;
+            if y + 18.0 < lay.demo.y || y > lay.demo.bottom() {
+                continue;
+            }
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    origin.x + 10.0,
+                    y,
+                    (lay.demo.w - 20.0).max(0.0),
+                    18.0,
+                ),
+                line,
+                palette.text_muted,
+                crate::admin_ui::LABEL_SIZE,
+            );
+        }
+        // Бегунок скролла демо-зоны (контент выше окна)
+        if let Some(knob) = canvas_ui::kit::scroll_bar(lay.demo, &self.admin_scroll, &palette) {
+            d.rect(knob, palette.control_border, [0.0; 4], 2.0);
+        }
+
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        out
+    }
+
     /// FR-062 F-17: Tab/Shift+Tab — переход по фокус-секции витрины кита.
     /// Кольцо живёт в КОНТЕНТ-координатах раскладки (offset 0 — без сдвига
     /// и фильтра видимости: секция может быть за окном скролла); при
@@ -6900,6 +7072,55 @@ impl App {
             self.kit_gallery_focus.prev();
         } else {
             self.kit_gallery_focus.next();
+        }
+        self.request_redraw();
+    }
+
+    /// FR-070: эффективная палитра админпанели — live-переопределение
+    /// слотов (если есть) или палитра темы.
+    pub(crate) fn admin_effective_palette(&self) -> canvas_ui::kit::KitPalette {
+        self.admin_palette_override
+            .unwrap_or_else(|| self.effective_palette().kit_palette())
+    }
+
+    /// FR-070: раскладка админпанели текущего состояния (один источник
+    /// геометрии для hit-rect'ов реестра и отрисовки).
+    pub(crate) fn admin_layout_current(&self) -> crate::admin_ui::AdminLayout {
+        let viewport = self.viewport_logical();
+        let palette = self.admin_effective_palette();
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        crate::admin_ui::admin_layout(viewport, self.admin_section, &palette, &mut m, &mut fs)
+    }
+
+    /// FR-070: клик по админпанели — сайдбар/сброс/тема/«✕»; прочий клик
+    /// по панели глотается (Block-модаль, паттерн витрины FR-055).
+    fn click_admin_panel(&mut self, element: &str) {
+        match element {
+            "admin-close" => {
+                self.admin_open = false;
+            }
+            "admin-theme" => {
+                // Смена темы — сброс live-переопределения (слоты снова от
+                // темы; иначе поверх новой темы остались бы старые правки)
+                self.toggle_theme();
+                self.admin_palette_override = None;
+            }
+            "admin-reset" => {
+                self.admin_palette_override = None;
+            }
+            other => {
+                if let Some(idx) = other
+                    .strip_prefix("admin-section-")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    if let Some(sec) = crate::admin_ui::AdminSection::at(idx) {
+                        self.admin_section = sec;
+                        // Смена секции — контент с начала
+                        self.admin_scroll = canvas_ui::kit::ScrollState::default();
+                    }
+                }
+            }
         }
         self.request_redraw();
     }
@@ -10598,6 +10819,15 @@ impl App {
                     false
                 }
             }
+            // FR-070: админпанель — Esc закрывает (один шаг, модаль)
+            ui_registry::id::ADMIN => {
+                if self.admin_open {
+                    self.admin_open = false;
+                    true
+                } else {
+                    false
+                }
+            }
             // Раскрытая колонка палитры закрывается без снятия выделения
             ui_registry::id::PALETTE => {
                 if self.palette_hover.open.is_some() || self.palette_hover.pending() {
@@ -10728,6 +10958,22 @@ impl App {
                             }
                             _ => {}
                         }
+                    }
+                    return true;
+                }
+                true
+            }
+            ui_registry::KeyOwner::Admin => {
+                // FR-070: админпанель — модаль; Esc закрывает, прочие
+                // клавиши глотаются (интерактив — только контролы шапки
+                // и сайдбара; фокус-кольцо — этап 2+ FR-070).
+                if self.admin_open {
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                    {
+                        self.admin_open = false;
+                        self.request_redraw();
                     }
                     return true;
                 }
@@ -12802,6 +13048,12 @@ impl App {
                 self.click_kit_gallery(element);
                 true
             }
+            // FR-070: админпанель — сайдбар/сброс/тема/«✕»; прочий клик
+            // по панели глотается (Block-модаль)
+            ui_registry::id::ADMIN => {
+                self.click_admin_panel(element);
+                true
+            }
             ui_registry::id::ONBOARDING => {
                 self.click_onboarding();
                 true
@@ -12900,6 +13152,13 @@ impl App {
             // Block-поверхности, паттерн галереи схем)
             ui_registry::id::KIT_GALLERY => {
                 self.kit_gallery_open = false;
+                self.request_redraw();
+                true
+            }
+            // FR-070: клик мимо админпанели — закрыть и глотнуть (паттерн
+            // Block-поверхностей)
+            ui_registry::id::ADMIN => {
+                self.admin_open = false;
                 self.request_redraw();
                 true
             }
@@ -13468,12 +13727,24 @@ impl App {
                 // (модаль; вход из меню «?», доступна всегда)
                 Some(docs_ui::HelpMenuItem::Interface) => {
                     self.help_menu = None;
+                    // FR-070: админпанель и витрина взаимоисключимы
+                    self.admin_open = false;
                     self.kit_gallery_open = true;
                     // FR-059: контент витрины — с начала (скролл секций)
                     self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
                     // FR-062 F-17: фокус секции Tab — с начала (кольцо пустое:
                     // первый Tab ставит фокус на первый слот)
                     self.kit_gallery_focus.clear();
+                    self.request_redraw();
+                }
+                // FR-070: «UI-консоль» — админпанель (модаль; вход из
+                // меню «?», доступна всегда)
+                Some(docs_ui::HelpMenuItem::Admin) => {
+                    self.help_menu = None;
+                    // Витрина и админпанель взаимоисключимы
+                    self.kit_gallery_open = false;
+                    self.admin_open = true;
+                    self.admin_scroll = canvas_ui::kit::ScrollState::default();
                     self.request_redraw();
                 }
                 None => {
@@ -16839,6 +17110,26 @@ impl App {
                 return;
             }
         }
+        // FR-070: колесо над демо-зоной админпанели прокручивает тело
+        // секции (кит список+скролл; шапка/сайдбар фиксированы)
+        if self.admin_open {
+            let viewport = self.viewport_logical();
+            let demo = crate::admin_ui::admin_demo_viewport(viewport);
+            if crate::kit_ui::cursor_in(&demo, self.cursor) {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                };
+                let mut scroll = self.admin_scroll.clone();
+                scroll.viewport_h = demo.h;
+                scroll.content_h = self.admin_layout_current().demo_content_h;
+                scroll.scroll_by(dy);
+                scroll.clamp();
+                self.admin_scroll = scroll;
+                self.request_redraw();
+                return;
+            }
+        }
         // Колесо над screen-space UI (панели/меню/палитра/миникарта) холст
         // не двигает — практика canvas-приложений (Miro/Figma)
         if self.cursor_over_screen_surface() {
@@ -18320,7 +18611,12 @@ impl ApplicationHandler<AppEvent> for App {
                 // (Modals/Block: pick через реестр, backdrop закрывает);
                 // взаимоисключима с галереей схем/empty-state (прежняя
                 // цепочка if/else сохранена — 0 дельт канонических состояний)
-                if self.kit_gallery_open {
+                // FR-070: админпанель — модаль поверх всего (Modals/Block);
+                // взаимоисключима с витриной кита/галереей схем
+                if self.admin_open {
+                    let (admin_instances, admin_texts) = self.admin_panel_overlay();
+                    screen_bands.push(UiLayer::Modals, admin_instances, admin_texts);
+                } else if self.kit_gallery_open {
                     let (kit_instances, kit_texts) = self.kit_gallery_overlay();
                     screen_bands.push(UiLayer::Modals, kit_instances, kit_texts);
                 } else if self.scheme_gallery.open {
