@@ -3143,28 +3143,33 @@ impl App {
                 }
                 self.request_redraw();
             }
-            // FR-042 (правка 2026-09-24): явный вход в main stage из
-            // палитры связи пучка. Заменяет перехват ПКМ — пользователь
-            // сам выбирает, когда открыть детализацию. AC-3.1 сохранён:
-            // одиночный ЛКМ по пучку по-прежнему открывает stage.
-            PaletteAction::EdgeOpenMainStage { edge_index } => {
-                self.try_open_main_stage(edge_index);
-            }
-            // FR-042 (правка 2026-09-24): удалить конкретное ребро (в т.ч.
-            // из пучка) — аналог Del после выделения, но доступный из
-            // палитры. Undo-шаг, пересчёт потока (downstream теряет
-            // вход). Удаление последнего ребра пучка закрыто: try_open
-            // более не валиден, выделение сбрасывается.
-            PaletteAction::EdgeDelete { edge_index } => {
-                let Some(edge) = self.scene.canvas.edges.get(edge_index) else {
+            // FR-042 (правка 2026-09-25): удалить весь пучок N ≥ 2 рёбер
+            // одним действием из палитры связи (группа «Пучок»). Все N
+            // рёбер между упорядоченной парой (from, to) удаляются; один
+            // undo-шаг (FR-006); пересчёт потока (downstream теряет
+            // входы). Открытый stage закрылся бы валидацией при потере
+            // любого ребра среза — закрываем сразу, без фантома на кадре.
+            PaletteAction::EdgeBundleDelete { edge_index } => {
+                // Все N рёбер пучка по edge_index (один undo-шаг)
+                let bundle_edges: Vec<usize> = self
+                    .scene
+                    .bundles
+                    .bundle_of_edge(edge_index)
+                    .map(|b| b.edges.clone())
+                    .unwrap_or_else(|| vec![edge_index]);
+                // Собираем id рёбер (индексы могут сдвинуться после remove)
+                let ids: Vec<String> = bundle_edges
+                    .iter()
+                    .filter_map(|&idx| self.scene.canvas.edges.get(idx).map(|e| e.id.clone()))
+                    .collect();
+                if ids.is_empty() {
                     return;
-                };
-                let id = edge.id.clone();
+                }
                 self.push_undo();
-                self.scene.canvas.remove_edge(&id);
+                for id in &ids {
+                    self.scene.canvas.remove_edge(id);
+                }
                 self.selected = None;
-                // Открытый stage мог держать срез этого ребра — закрыть,
-                // иначе кадр покажет фантом (валидация среза опоздает).
                 self.close_main_stage();
                 self.scene.mark_dirty();
                 self.scene.recompute_flow();
