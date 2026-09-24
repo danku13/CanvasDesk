@@ -736,11 +736,25 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 UiRect::new(close.x, close.y, close.w, close.h),
                 "admin-close",
             ));
-            for (i, item) in app.admin_layout_current().sidebar_items.iter().enumerate() {
+            let admin_lay_frame = app.admin_layout_at([vw, vh]);
+            for (i, item) in admin_lay_frame.sidebar_items.iter().enumerate() {
                 surface.hit_rects.push(HitRect::interactive(
                     UiRect::new(item.x, item.y, item.w, item.h),
                     format!("admin-section-{i}"),
                 ));
+            }
+            // Свотчи слотов палитры (live-правка, FR-070) — интерактивные
+            let admin_lay = app.admin_layout_at([vw, vh]);
+            if let Some(tokens) = &admin_lay.tokens {
+                for group in &tokens.groups {
+                    for row in &group.rows {
+                        if let (Some(i), Some(swatch)) = (row.slot_index, row.swatch) {
+                            surface
+                                .hit_rects
+                                .push(HitRect::interactive(swatch, format!("admin-token-{i}")));
+                        }
+                    }
+                }
             }
         }
         id::ONBOARDING => {
@@ -1329,6 +1343,47 @@ mod tests {
         }
         // Esc-стек: админпанель — верх
         assert_eq!(key_owner(&reg), KeyOwner::Admin);
+    }
+
+    /// FR-070 (этап 3): секция «Токены» — свотчи слотов пикаются
+    /// (live-правка: element admin-token-{i}).
+    #[test]
+    fn admin_token_swatch_pickable() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.admin_open = true;
+        app.admin_section = crate::admin_ui::AdminSection::Tokens;
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::ADMIN)
+            .expect("admin_panel в кадре");
+        let token_elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .filter(|e| e.starts_with("admin-token-"))
+            .collect();
+        assert_eq!(token_elements.len(), 14, "14 свотчей слотов");
+
+        // Первый видимый свотч — пик https:// как Element admin-token-N
+        let first = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "admin-token-0")
+            .expect("свотч первого слота");
+        let c = UiPoint::new(
+            first.rect.x + first.rect.w / 2.0,
+            first.rect.y + first.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::ADMIN);
+                assert_eq!(rect.element, "admin-token-0");
+            }
+            other => panic!("свотч не пикается: {other:?}"),
+        }
     }
 
     /// G6: DebugOverlay показывает рамки/подписи слоёв и имя под курсором.

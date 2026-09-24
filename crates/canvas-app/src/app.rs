@@ -7037,6 +7037,12 @@ impl App {
         if let Some(fill) = &lay.fill {
             crate::admin_ui::draw_fill(&mut d, fill, &palette, lang);
         }
+        if let Some(canvas) = &lay.canvas {
+            crate::admin_ui::draw_canvas(&mut d, canvas, &palette, lang);
+        }
+        if let Some(tokens) = &lay.tokens {
+            crate::admin_ui::draw_tokens(&mut d, tokens, &palette, lang);
+        }
         // Бегунок скролла демо-зоны (контент выше окна)
         if let Some(knob) = canvas_ui::kit::scroll_bar(lay.demo, &self.admin_scroll, &palette) {
             d.rect(knob, palette.control_border, [0.0; 4], 2.0);
@@ -7103,6 +7109,7 @@ impl App {
     /// G4: 1280×800 / 800×560).
     pub(crate) fn admin_layout_at(&self, viewport: [f32; 2]) -> crate::admin_ui::AdminLayout {
         let palette = self.admin_effective_palette();
+        let theme = self.effective_palette();
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
         crate::admin_ui::admin_layout(
@@ -7110,6 +7117,7 @@ impl App {
             self.admin_section,
             self.admin_scroll.offset,
             &palette,
+            theme.card_fill,
             self.settings.language,
             &mut m,
             &mut fs,
@@ -7142,6 +7150,22 @@ impl App {
                         // Смена секции — контент с начала
                         self.admin_scroll = canvas_ui::kit::ScrollState::default();
                     }
+                } else if let Some(idx) = other
+                    .strip_prefix("admin-token-")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    // FR-070: live-правка слота — следующий кандидат цвета;
+                    // применяется ко всей админпанели до «Сброса»
+                    let mut pal = self
+                        .admin_palette_override
+                        .unwrap_or_else(|| self.effective_palette().kit_palette());
+                    let current = crate::admin_ui::slot_color(&pal, idx);
+                    crate::admin_ui::set_slot_color(
+                        &mut pal,
+                        idx,
+                        crate::admin_ui::cycle_slot(current),
+                    );
+                    self.admin_palette_override = Some(pal);
                 }
             }
         }
