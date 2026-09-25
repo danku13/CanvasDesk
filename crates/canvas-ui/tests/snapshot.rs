@@ -589,9 +589,15 @@ fn run_snapshot_case(comp: Comp, state: KitState, state_id: &str, lang: Lang, la
             path.display()
         )
     });
+    // FR-068 W0 §9: Windows CI — git autocrlf конвертирует .txt-эталоны
+    // в CRLF при checkout; тест-дамп всегда пишется через '\n'. Без
+    // нормализации Windows-сборка паникует на эталонах (FR-068 W2 fix:
+    // html5_demos — тот же паттерн; здесь — превентивно).
+    let dump_norm = dump.replace("\r\n", "\n");
+    let expected_norm = expected.replace("\r\n", "\n");
     assert_eq!(
-        dump,
-        expected,
+        dump_norm,
+        expected_norm,
         "golden-снапшот изменился — обнови эталон осознанно (FR-068 W0 §9): {}",
         path.display()
     );
