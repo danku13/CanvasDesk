@@ -1425,6 +1425,245 @@ pub fn leader_dash_rects(x0: f32, x1: f32, y: f32, scale: f32, min_track: f32) -
     out
 }
 
+// === FR-068 W1 (ADR-0014 §Решение п.3): opt-in taffy-пути kit-функций =======
+//
+// Позиция/скролл-геометрия scroll-area/dropdown/tooltip/toast/modal,
+// решаемая через `TaffyBackend` (сцена [`SceneNode`] / `TaffyBackend::
+// centered`). Каждый taffy-путь:
+// - OPT-IN: только за фичей `taffy`; default-сборка использует native-
+//   функцию этого файла — поведение default НЕ меняется (§Контракт-2
+//   FR-068, zero-dep G7);
+// - parity с native зафиксирован тестами (`mod tests::taffy_parity`;
+//   побитово на целых входах, документированные расхождения — отдельно);
+// - финальные гарантии W0 сохранены ([`viewport_clamp`]-пересечение либо
+//   position-clamp — ровно как у соответствующей native-функции).
+// Решающая логика (flip/клампы/constrain) скопирована с native 1:1 — через
+// taffy-сцену проводится только финальный rect (позиция absolute /
+// центрирование), поэтому parity сводится к прозрачности транспорта.
+//
+// Известное свойство транспорта: `compute_layout` taffy ОКРУГЛЯЕТ позиции к
+// целому ui px (round_layout, taffy 0.14; конфиг дерева фиксирован в
+// `layout::taffy_backend`) — поэтому parity побитовый на ЦЕЛЫХ входах;
+// дробные позиции — документированное расхождение ≤ 0.5 ui px (то же
+// семейство, что дробные grow-доли, см. доку `taffy_backend`), фиксируется
+// отдельным тестом (`tooltip_taffy_fractional_position_is_documented_divergence`).
+
+#[cfg(feature = "taffy")]
+use crate::layout::{SceneNode, ScenePosition, TaffyBackend};
+
+/// ZST-backend taffy-путей (immediate-mode, без состояния — см. доку
+/// `layout::taffy_backend`).
+#[cfg(feature = "taffy")]
+const TAFFY: TaffyBackend = TaffyBackend;
+
+/// Провести rect через taffy-сцену «viewport (definite) + absolute-ребёнок»
+/// (FR-068 W1): `x`/`y` — АБСОЛЮТНЫЕ экранные координаты (кандидат позиции
+/// native-логики живёт в том же пространстве, что `anchor`/`viewport`);
+/// внутри переводятся в относительные inset'ы ([`ScenePosition::Absolute`]
+/// отсчитывается от border-box родителя — корень сцены стоит в origin
+/// вьюпорта). Размер задан вызовом и сценой не меняется. Возвращает rect
+/// ребёнка в абсолютных координатах (индекс `[1]` DFS pre-order; `[0]` —
+/// корень == viewport). На целых входах транспорт побитово прозрачен
+/// (дробные — округление taffy, см. доку секции).
+#[cfg(feature = "taffy")]
+fn scene_absolute(viewport: UiRect, x: f32, y: f32, w: f32, h: f32) -> UiRect {
+    let scene = SceneNode::column(
+        viewport.w,
+        viewport.h,
+        0.0,
+        vec![SceneNode::leaf(w, h).at(ScenePosition::Absolute {
+            x: x - viewport.x,
+            y: y - viewport.y,
+        })],
+    );
+    let rects = TAFFY.lay_out_scene(viewport, &scene);
+    rects[1]
+}
+
+/// Результат opt-in taffy-пути scroll-area (FR-068 W1): клип-область +
+/// rect'ы строк (content-shift −offset уже применён сценой).
+#[cfg(feature = "taffy")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollAreaTaffy {
+    /// Клип-область == `viewport`: потребитель оборачивает строки в
+    /// `Painter::ClipRect`/scissor (FR-056) — `SceneOverflow::Hidden`
+    /// сцены rect'ы потомков НЕ режет (клип — draw-семантика потребителя).
+    pub clip: UiRect,
+    /// Rect'ы строк в координатах вьюпорта — ВСЕ строки сцены (не только
+    /// видимые; см. доку [`scroll_area_taffy`] о материализации).
+    pub rows: Vec<UiRect>,
+}
+
+/// Opt-in taffy-путь (FR-068 W1) scroll-area списка: строки раскладывает
+/// `TaffyBackend::lay_out_scene` — колонка размером `viewport`
+/// (`SceneOverflow::Hidden` + scroll-offset = content-shift), листья
+/// высотой `row_h` шириной `viewport.w`. Default-сборка использует native
+/// [`list_rows`]; parity зафиксирован тестами (`scroll_area_taffy_*` в
+/// `mod tests::taffy_parity`); финальные гарантии W0: `clip == viewport`
+/// (клип на потребителе — Painter::ClipRect/scissor FR-056), offset клампится
+/// семантикой [`ScrollState::clamp`].
+///
+/// Материализация (задокументированное отличие W1): taffy-путь материализует
+/// ВСЕ строки сцены — `ceil(content_h/(row_h+gap))` rect'ов, включая
+/// невидимые (отрицательный y / за нижним краем вьюпорта), native
+/// [`list_rows`] — только видимое окно (частичные строки краёв включены).
+/// Потребитель taffy-пути клипует сам; память O(числа строк) — аргумент за
+/// ленивую материализацию в W2 (FR-068). Клип rect'ы потомков не меняет —
+/// «лишние» строки за краями вычисляются полностью, как в HTML
+/// overflow:hidden.
+///
+/// Контракт листьев: число = `ceil(content_h/(row_h+gap))`, кламп ≥ 1
+/// (`content_h ≤ 0` — один лист); вырожденный вход `row_h ≤ 0`/`row_h+gap
+/// ≤ 0` — пустой `rows` (native [`list_rows`] при `row_h ≤ 0` тоже пуст).
+/// `offset` клампится в `[0, (content_h − viewport.h).max(0)]` — семантика
+/// [`ScrollState::clamp`] (`max_offset`, не меньше 0).
+#[cfg(feature = "taffy")]
+pub fn scroll_area_taffy(
+    viewport: UiRect,
+    content_h: f32,
+    row_h: f32,
+    gap: f32,
+    offset: f32,
+) -> ScrollAreaTaffy {
+    let gap = gap.max(0.0);
+    let stride = row_h + gap;
+    if row_h <= 0.0 || stride <= 0.0 {
+        return ScrollAreaTaffy {
+            clip: viewport,
+            rows: Vec::new(),
+        };
+    }
+    let content_h = if content_h.is_finite() {
+        content_h.max(0.0)
+    } else {
+        0.0
+    };
+    let count = ((content_h / stride).ceil() as usize).max(1);
+    // Кламп offset — семантика ScrollState::clamp: [0, max_offset],
+    // max_offset = (content − viewport).max(0).
+    let max_offset = (content_h - viewport.h).max(0.0);
+    let offset = offset.max(0.0).min(max_offset);
+    let leaves: Vec<SceneNode> = (0..count)
+        .map(|_| SceneNode::leaf(viewport.w, row_h))
+        .collect();
+    let scene = SceneNode::column(viewport.w, viewport.h, gap, leaves)
+        .clipped()
+        .scrolled(offset);
+    let rects = TAFFY.lay_out_scene(viewport, &scene);
+    ScrollAreaTaffy {
+        clip: viewport,
+        rows: rects.into_iter().skip(1).collect(),
+    }
+}
+
+/// Opt-in taffy-путь (FR-068 W1) [`dropdown_menu`]: решающая логика native
+/// скопирована 1:1 (ширина ≥ якоря, горизонтальный position-clamp, flip
+/// вверх при нехватке места снизу, иначе прижатие к низу вьюпорта);
+/// финальный rect меню проводится через taffy-сцену — корень = viewport
+/// (definite), меню = [`ScenePosition::Absolute`] с кандидатной позицией
+/// (taffy даёт позицию absolute + тот же rect; размер меню задан `content`),
+/// затем ОБЯЗАТЕЛЬНАЯ финальная гарантия [`viewport_clamp`] (W0). Default-
+/// сборка использует native-функцию; parity зафиксирован тестами — побитово
+/// на целых входах (матрица якорей: края/центр/низ-флип + W0-переполнения).
+#[cfg(feature = "taffy")]
+pub fn dropdown_menu_taffy(anchor: UiRect, viewport: UiRect, content: UiVec2) -> DropdownLayout {
+    let width = content.x.max(anchor.w);
+    // Горизонталь — как native: position-clamp, ширина меню сохраняется
+    // (обрезка до пересечения — только финальным viewport_clamp ниже).
+    let x = anchor.x.min((viewport.right() - width).max(viewport.x));
+    let below_y = anchor.bottom() + DROPDOWN_GAP;
+    let fits_below = below_y + content.y <= viewport.bottom();
+    let (x0, y, flipped) = if fits_below {
+        (x, below_y, false)
+    } else {
+        let above_y = anchor.y - DROPDOWN_GAP - content.y;
+        if above_y >= viewport.y {
+            (x, above_y, true)
+        } else {
+            (x, viewport.bottom() - content.y, false)
+        }
+    };
+    let menu = scene_absolute(viewport, x0, y, width, content.y);
+    DropdownLayout {
+        menu: viewport_clamp(menu, viewport),
+        flipped,
+    }
+}
+
+/// Opt-in taffy-путь (FR-068 W1) [`tooltip`] — БЕЗ delay-семантики
+/// (гистерезис `hovered_ms ≥ delay` — забота потребителя; `anchor` — точка
+/// курсора `anchor.x`/`anchor.y`, w/h якоря не используются, как у native
+/// [`tooltip`]). Логика position-clamp native скопирована 1:1: у правого
+/// края — перенос влево (якорь остаётся правым краем), у нижнего — flip
+/// вверх, финальный сдвиг внутрь вьюпорта СОХРАНЯЕТ размер (W0: НЕ
+/// [`viewport_clamp`]-пересечение — текст не клипается). Кандидатная позиция
+/// проводится через taffy-сцену ([`ScenePosition::Absolute`]). Default-сборка
+/// использует native-функцию; parity зафиксирован тестами (побитово на
+/// матрице якорей, включая пузырь больше вьюпорта).
+#[cfg(feature = "taffy")]
+pub fn tooltip_taffy(anchor: UiRect, viewport: UiRect, text_w: f32, text_h: f32) -> UiRect {
+    let size = UiVec2::new(text_w.max(1.0), text_h.max(1.0));
+    let mut x = anchor.x + TOOLTIP_OFFSET.x;
+    let mut y = anchor.y + TOOLTIP_OFFSET.y;
+    if x + size.x > viewport.right() {
+        // Перенос влево: якорь-точка остаётся правым краем тултипа
+        x = (anchor.x - size.x).max(viewport.x);
+    }
+    if y + size.y > viewport.bottom() {
+        // Flip вверх
+        y = anchor.y - TOOLTIP_OFFSET.y - size.y;
+    }
+    // Position-clamp (W0): сдвиг внутрь вьюпорта, размер сохранён
+    let x = x.max(viewport.x);
+    let y = y.max(viewport.y);
+    scene_absolute(viewport, x, y, size.x, size.y)
+}
+
+/// Opt-in taffy-путь (FR-068 W1) [`toast_area`]: зона тоста (строка внизу по
+/// центру: x = 40, ширина [0, viewport−80], отступ 44 от низа, avoid-подъём
+/// CR-016) — логика native 1:1; финальный rect проводится через taffy-сцену
+/// ([`ScenePosition::Absolute`]) с последующей финальной гарантией
+/// [`viewport_clamp`] (W0: смещённый вьюпорт и подъём над avoid-баром
+/// клампятся к пересечению; пустой тост (ширина 0) возвращается как есть).
+/// Default-сборка использует native-функцию; parity зафиксирован тестами
+/// (побитово: с avoid и без, смещённый/узкий вьюпорт).
+#[cfg(feature = "taffy")]
+pub fn toast_area_taffy(viewport: UiRect, avoid: Option<UiRect>) -> UiRect {
+    let width = (viewport.right() - 80.0).max(0.0);
+    let mut y = viewport.bottom() - 44.0;
+    if let Some(bar) = avoid {
+        if bar.bottom() + 26.0 > y && bar.y < y {
+            y = bar.y - 26.0;
+        }
+    }
+    let rect = scene_absolute(viewport, 40.0, y, width, 20.0);
+    viewport_clamp(rect, viewport)
+}
+
+/// Opt-in taffy-путь (FR-068 W1) [`modal`]: размер панели — тот же
+/// [`constrain`] (min-инвариант приоритетен, parity FR-060); позиция панели —
+/// `TaffyBackend::centered` (CSS justify/align Center) вместо
+/// `stack(Center, Center)`. При помещении панели в слот — паритет с native
+/// (тесты, побитово на целых входах). Переполнение Center (панель больше
+/// слота, напр. min > слот) — ДОКУМЕНТИРОВАННОЕ расхождение (как у
+/// `TaffyBackend::centered`): taffy сжимает ребёнка по ГЛАВНОЙ оси до слота
+/// (flex_shrink 1 — CSS-семантика, родня расхождения C3) и центрирует по
+/// поперечной с выходом за ОБА края; native [`stack`] клампит левый/верхний
+/// край к слоту, СОХРАНЯЯ min-размер (parity FR-060). Из parity-матрицы
+/// исключено, фиксируется отдельным тестом; pilot-поверхности держат
+/// min ≤ слот через constrain (переполнение — деградация, ловимая G4).
+/// Default-сборка использует native-функцию; финальные гарантии W0
+/// сохранены: native-семантика БЕЗ [`viewport_clamp`] (min-инвариант —
+/// пересечение клипповало бы инвариантную панель, см. [`modal`]).
+#[cfg(feature = "taffy")]
+pub fn modal_taffy(slot: UiRect, min: UiVec2, max: UiVec2, desired: UiVec2) -> ModalLayout {
+    let size = constrain(min, max, desired);
+    ModalLayout {
+        dim: slot,
+        panel: TAFFY.centered(slot, size),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2893,5 +3132,410 @@ mod tests {
         let disabled = row_style(KitState::Disabled, &p);
         assert_eq!(disabled.label, p.disabled_text);
         assert_eq!(disabled.badge_fill, [0.0; 4]);
+    }
+
+    // === FR-068 W1: taffy-пути kit-функций (parity-тесты) ===================
+    //
+    // Компилируются только при feature = "taffy" (opt-in, FR-068 W1):
+    // default-сборка тестирует native-функции выше — поведение default
+    // не меняется. Parity — побитовый на целых входах; документированные
+    // расхождения фиксируются отдельными тестами (как в taffy_backend).
+
+    #[cfg(feature = "taffy")]
+    mod taffy_parity {
+        use super::*;
+
+        /// Геометрия scroll-матрицы: строки row_h=26, gap=6 (stride 32) в
+        /// вьюпорте 200×100 со смещением; content_h — ровно под `total` строк.
+        fn scroll_vp() -> UiRect {
+            UiRect::new(10.0, 20.0, 200.0, 100.0)
+        }
+
+        fn content_h_for(total: usize) -> f32 {
+            total as f32 * 26.0 + (total as f32 - 1.0) * 6.0
+        }
+
+        /// (а) offset=0: строки на местах потока — y = vp.y, vp.y+stride,
+        /// vp.y+2·stride… (полная материализация: ceil(154/32) = 5 строк).
+        #[test]
+        fn scroll_area_taffy_flow_positions_at_zero_offset() {
+            let vp = scroll_vp();
+            let a = scroll_area_taffy(vp, content_h_for(5), 26.0, 6.0, 0.0);
+            assert_eq!(a.clip, vp, "clip == viewport (клип — на потребителе)");
+            assert_eq!(a.rows.len(), 5, "все 5 строк материализованы");
+            for (i, r) in a.rows.iter().enumerate() {
+                assert_eq!(
+                    (r.x, r.y, r.w, r.h),
+                    (vp.x, vp.y + i as f32 * 32.0, vp.w, 26.0),
+                    "row {i}: место потока"
+                );
+            }
+        }
+
+        /// (б) offset = k·(row_h+gap) — сдвиг ровно на k шагов: строки
+        /// 0..k уходят выше вьюпорта (материализуются с отрицательным y —
+        /// клип на потребителе), остальные встают на k шагов вверх.
+        /// (8 строк: content 250, max_offset 150 — offset 64 в границах.)
+        #[test]
+        fn scroll_area_taffy_offset_shifts_by_whole_steps() {
+            let vp = scroll_vp();
+            let a = scroll_area_taffy(vp, content_h_for(8), 26.0, 6.0, 2.0 * 32.0);
+            assert_eq!(a.rows.len(), 8);
+            for (i, r) in a.rows.iter().enumerate() {
+                assert_eq!(
+                    r.y,
+                    vp.y + (i as f32 - 2.0) * 32.0,
+                    "row {i}: сдвиг ровно 2 шага"
+                );
+            }
+            assert!(
+                a.rows[0].y < vp.y,
+                "строки 0..2 выше вьюпорта — материализованы"
+            );
+        }
+
+        /// (в) offset больше максимума клампится в
+        /// [0, (content_h − viewport.h).max(0)] — семантика
+        /// [`ScrollState::clamp`]; отрицательный — к 0.
+        #[test]
+        fn scroll_area_taffy_offset_clamped() {
+            let vp = scroll_vp();
+            let content_h = content_h_for(5); // 154
+            let max_off = (content_h - vp.h).max(0.0); // 54
+            let a = scroll_area_taffy(vp, content_h, 26.0, 6.0, 10_000.0);
+            for (i, r) in a.rows.iter().enumerate() {
+                assert_eq!(
+                    r.y,
+                    vp.y + i as f32 * 32.0 - max_off,
+                    "row {i}: сдвиг клампнут к max_offset"
+                );
+            }
+            let neg = scroll_area_taffy(vp, content_h, 26.0, 6.0, -5.0);
+            let zero = scroll_area_taffy(vp, content_h, 26.0, 6.0, 0.0);
+            assert_eq!(neg.rows, zero.rows, "отрицательный offset → 0");
+        }
+
+        /// (г) PARITY с native [`list_rows`] — побитово на целых входах:
+        /// для каждого видимого rect'а native taffy-путь даёт идентичный
+        /// rect (x/y/w/h, допуск 0.0). Разница материализации (см. доку
+        /// [`scroll_area_taffy`]): taffy-путь возвращает ВСЕ строки сцены,
+        /// native — только видимое окно; сравнивается пересечение видимого
+        /// окна (нативные индексы индексируются в полную материализацию).
+        #[test]
+        fn scroll_area_taffy_parity_with_list_rows() {
+            let area = scroll_vp();
+            for total in [1usize, 3, 5, 8] {
+                let content_h = content_h_for(total);
+                for offset in [0.0, 12.0, 32.0, 40.0, 54.0, 96.0] {
+                    // native: offset клампится ScrollState::clamp — та же
+                    // семантика, что внутри taffy-пути (сверка контрактов).
+                    let mut s = ScrollState {
+                        offset,
+                        content_h,
+                        viewport_h: area.h,
+                    };
+                    s.clamp();
+                    let native = list_rows(area, &s, 26.0, 6.0, total);
+                    let taffy = scroll_area_taffy(area, content_h, 26.0, 6.0, offset);
+                    assert_eq!(taffy.clip, area);
+                    assert_eq!(
+                        taffy.rows.len(),
+                        total,
+                        "материализация всех строк: total={total}"
+                    );
+                    for (i, rect) in native {
+                        assert_eq!(
+                            (
+                                taffy.rows[i].x,
+                                taffy.rows[i].y,
+                                taffy.rows[i].w,
+                                taffy.rows[i].h
+                            ),
+                            (rect.x, rect.y, rect.w, rect.h),
+                            "parity: total={total} offset={offset} row={i} (допуск 0.0)"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// dropdown: parity с native [`dropdown_menu`] — ПОБИТОВО на матрице
+        /// якорей (все размеры целые): центр/обычный, правый край
+        /// (сдвиг влево), низ (флип вверх), правый низ, якорь левее
+        /// вьюпорта, широкий якорь; плюс W0-переполнения (меню шире/выше
+        /// вьюпорта, точное прилегание к низу).
+        #[test]
+        fn dropdown_menu_taffy_parity_with_native() {
+            let content = UiVec2::new(160.0, 90.0);
+            let anchors = [
+                UiRect::new(100.0, 10.0, 200.0, 40.0),  // под якорем
+                UiRect::new(360.0, 280.0, 80.0, 30.0),  // центр вьюпорта
+                UiRect::new(680.0, 100.0, 40.0, 30.0),  // правый край: сдвиг влево
+                UiRect::new(100.0, 520.0, 200.0, 30.0), // низ: флип вверх
+                UiRect::new(100.0, 570.0, 200.0, 30.0), // у самого низа: флип
+                UiRect::new(620.0, 560.0, 60.0, 30.0),  // правый низ: флип + кламп
+                UiRect::new(-50.0, 100.0, 60.0, 30.0),  // левее вьюпорта
+                UiRect::new(700.0, 10.0, 790.0, 40.0),  // широкий якорь (w > content.x)
+            ];
+            for anchor in anchors {
+                let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+                let native = dropdown_menu(anchor, vp, content);
+                let taffy = dropdown_menu_taffy(anchor, vp, content);
+                assert_eq!(
+                    (taffy.menu.x, taffy.menu.y, taffy.menu.w, taffy.menu.h),
+                    (native.menu.x, native.menu.y, native.menu.w, native.menu.h),
+                    "parity меню: anchor={anchor:?}"
+                );
+                assert_eq!(
+                    taffy.flipped, native.flipped,
+                    "parity флипа: anchor={anchor:?}"
+                );
+            }
+            // Смещённый вьюпорт: флип вверх; кандидат позиции — в АБСОЛЮТНЫХ
+            // координатах (транспорт переводит их в относительные inset'ы
+            // сцены — контракт ScenePosition::Absolute от origin вьюпорта)
+            let vp = UiRect::new(100.0, 50.0, 300.0, 400.0);
+            let anchor = UiRect::new(150.0, 400.0, 60.0, 30.0);
+            {
+                let native = dropdown_menu(anchor, vp, content);
+                let taffy = dropdown_menu_taffy(anchor, vp, content);
+                assert!(native.flipped);
+                assert_eq!(
+                    (taffy.menu.x, taffy.menu.y, taffy.menu.w, taffy.menu.h),
+                    (native.menu.x, native.menu.y, native.menu.w, native.menu.h),
+                    "parity меню (смещённый вьюпорт)"
+                );
+                assert_eq!(taffy.flipped, native.flipped);
+            }
+            // W0-переполнения: меню шире/выше вьюпорта, точное прилегание
+            let contents = [
+                UiVec2::new(1000.0, 90.0), // шире вьюпорта: клип до vp.w
+                UiVec2::new(160.0, 900.0), // выше вьюпорта: клип до vp.h
+                UiVec2::new(160.0, 600.0), // ни снизу ни сверху: прижат к низу
+                UiVec2::new(160.0, 496.0), // впритык снизу (без клипа)
+            ];
+            let anchor = UiRect::new(100.0, 10.0, 200.0, 40.0);
+            for content in contents {
+                let native = dropdown_menu(anchor, vp, content);
+                let taffy = dropdown_menu_taffy(anchor, vp, content);
+                assert_eq!(
+                    (taffy.menu.x, taffy.menu.y, taffy.menu.w, taffy.menu.h),
+                    (native.menu.x, native.menu.y, native.menu.w, native.menu.h),
+                    "parity W0: content={content:?}"
+                );
+                assert_eq!(taffy.flipped, native.flipped);
+            }
+        }
+
+        /// tooltip: parity с native [`tooltip`] — ПОБИТОВО на матрице якорей
+        /// (ЦЕЛЫЕ входы: центр, правый край — перенос влево, нижний — флип,
+        /// угол, пузырь больше вьюпорта — position-clamp W0 с сохранением
+        /// размера, смещённый вьюпорт). taffy-путь без delay-семантики —
+        /// native сравнивается с hovered_ms = delay (всегда Some).
+        #[test]
+        fn tooltip_taffy_parity_with_native() {
+            let cases = [
+                (
+                    UiRect::new(0.0, 0.0, 800.0, 600.0),
+                    400.0,
+                    300.0,
+                    120.0,
+                    18.0,
+                ), // центр
+                (
+                    UiRect::new(0.0, 0.0, 800.0, 600.0),
+                    795.0,
+                    300.0,
+                    120.0,
+                    18.0,
+                ), // правый край: влево
+                (
+                    UiRect::new(0.0, 0.0, 800.0, 600.0),
+                    400.0,
+                    595.0,
+                    120.0,
+                    18.0,
+                ), // низ: флип вверх
+                (
+                    UiRect::new(0.0, 0.0, 800.0, 600.0),
+                    795.0,
+                    595.0,
+                    120.0,
+                    18.0,
+                ), // угол: влево + флип
+                (UiRect::new(0.0, 0.0, 800.0, 600.0), 5.0, 5.0, 2000.0, 900.0), // пузырь больше вьюпорта (W0)
+                (UiRect::new(0.0, 0.0, 800.0, 600.0), 0.0, 0.0, 100.0, 20.0),   // угол вьюпорта
+                (
+                    UiRect::new(100.0, 50.0, 300.0, 400.0),
+                    350.0,
+                    430.0,
+                    120.0,
+                    18.0,
+                ), // смещённый вьюпорт: влево + флип
+            ];
+            for (vp, ax, ay, tw, th) in cases {
+                let native = tooltip(
+                    UiPoint::new(ax, ay),
+                    UiVec2::new(tw, th),
+                    vp,
+                    TOOLTIP_DELAY_MS,
+                    TOOLTIP_DELAY_MS,
+                )
+                .unwrap()
+                .rect;
+                let taffy = tooltip_taffy(UiRect::new(ax, ay, 0.0, 0.0), vp, tw, th);
+                assert_eq!(
+                    (taffy.x, taffy.y, taffy.w, taffy.h),
+                    (native.x, native.y, native.w, native.h),
+                    "parity тултипа: anchor=({ax},{ay}) size=({tw},{th})"
+                );
+            }
+        }
+
+        /// Документированное расхождение (taffy-транспорт): `compute_layout`
+        /// taffy округляет позиции к целому ui px (round_layout) — дробная
+        /// позиция кандидата (якорь .5) даёт ±0.5 ui px к native (native
+        /// арифметику не округляет). Фиксируется, чтобы расхождение было
+        /// видимым; parity-матрица выше — на целых входах.
+        #[test]
+        fn tooltip_taffy_fractional_position_is_documented_divergence() {
+            let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+            let native = tooltip(
+                UiPoint::new(100.5, 200.5),
+                UiVec2::new(60.0, 16.0),
+                vp,
+                TOOLTIP_DELAY_MS,
+                TOOLTIP_DELAY_MS,
+            )
+            .unwrap()
+            .rect;
+            assert_eq!(native, UiRect::new(114.5, 218.5, 60.0, 16.0));
+            let taffy = tooltip_taffy(UiRect::new(100.5, 200.5, 0.0, 0.0), vp, 60.0, 16.0);
+            // taffy: округление half-away-from-zero к целому ui px
+            assert_eq!(
+                (taffy.x, taffy.y, taffy.w, taffy.h),
+                (115.0, 219.0, 60.0, 16.0),
+                "round_layout taffy: (114.5, 218.5) → (115, 219)"
+            );
+        }
+
+        /// toast: parity с native [`toast_area`] — ПОБИТОВО: без avoid,
+        /// с what-if баром (CR-016), смещённый вьюпорт, подъём у верхнего
+        /// края, узкий вьюпорт (ширина 0 — пустой rect возвращается как
+        /// есть).
+        #[test]
+        fn toast_area_taffy_parity_with_native() {
+            let cases: [(UiRect, Option<UiRect>); 5] = [
+                (UiRect::new(0.0, 0.0, 800.0, 600.0), None),
+                (
+                    UiRect::new(0.0, 0.0, 800.0, 600.0),
+                    Some(UiRect::new(0.0, 540.0, 800.0, 596.0)),
+                ),
+                (UiRect::new(100.0, 0.0, 300.0, 600.0), None),
+                (
+                    UiRect::new(0.0, 0.0, 800.0, 100.0),
+                    Some(UiRect::new(0.0, 10.0, 800.0, 90.0)),
+                ),
+                (UiRect::new(0.0, 0.0, 60.0, 600.0), None),
+            ];
+            for (vp, avoid) in cases {
+                let native = toast_area(vp, avoid);
+                let taffy = toast_area_taffy(vp, avoid);
+                assert_eq!(
+                    (taffy.x, taffy.y, taffy.w, taffy.h),
+                    (native.x, native.y, native.w, native.h),
+                    "parity тоста: vp={vp:?} avoid={avoid:?}"
+                );
+            }
+        }
+
+        /// modal: parity с native [`modal`] — ПОБИТОВО при ПОМЕЩЕНИИ панели
+        /// в слот (центрирование `TaffyBackend::centered` ≡
+        /// `stack(Center, Center)` на целых входах): desired > max
+        /// (сжатие constrain), desired < min (min-кламп), смещённый слот,
+        /// нечётная разница (x.5 — точное f32). Переполненный Center
+        /// (панель больше слота) ИСКЛЮЧЁН из матрицы — документированное
+        /// расхождение (следующий тест).
+        #[test]
+        fn modal_taffy_parity_with_native() {
+            let cases = [
+                (
+                    UiRect::new(0.0, 0.0, 1280.0, 800.0),
+                    UiVec2::new(200.0, 100.0),
+                    UiVec2::new(600.0, 400.0),
+                    UiVec2::new(900.0, 500.0),
+                ), // desired > max → 600×400
+                (
+                    UiRect::new(0.0, 0.0, 1280.0, 800.0),
+                    UiVec2::new(280.0, 150.0),
+                    UiVec2::new(440.0, 150.0),
+                    UiVec2::new(440.0, 150.0),
+                ), // впритык
+                (
+                    UiRect::new(0.0, 0.0, 1280.0, 800.0),
+                    UiVec2::new(100.0, 80.0),
+                    UiVec2::new(600.0, 400.0),
+                    UiVec2::new(50.0, 40.0),
+                ), // desired < min → min
+                (
+                    UiRect::new(50.0, 40.0, 400.0, 300.0),
+                    UiVec2::new(100.0, 80.0),
+                    UiVec2::new(380.0, 280.0),
+                    UiVec2::new(900.0, 500.0),
+                ), // смещённый слот, desired > max
+                (
+                    UiRect::new(50.0, 40.0, 401.0, 301.0),
+                    UiVec2::new(100.0, 80.0),
+                    UiVec2::new(379.0, 279.0),
+                    UiVec2::new(379.0, 279.0),
+                ), // нечётная разница: (401−379)/2 = 11
+            ];
+            for (slot, min, max, desired) in cases {
+                let native = modal(slot, min, max, desired);
+                let taffy = modal_taffy(slot, min, max, desired);
+                assert_eq!(
+                    (taffy.panel.x, taffy.panel.y, taffy.panel.w, taffy.panel.h),
+                    (
+                        native.panel.x,
+                        native.panel.y,
+                        native.panel.w,
+                        native.panel.h
+                    ),
+                    "parity модали: slot={slot:?}"
+                );
+                assert_eq!(taffy.dim, native.dim, "dim == slot");
+            }
+        }
+
+        /// Документированное расхождение (исключено из parity-матрицы):
+        /// переполненный Center (панель больше слота, напр. min-инвариант
+        /// при слоте меньше min) — taffy сжимает ребёнка по ГЛАВНОЙ оси до
+        /// слота (flex_shrink 1 — CSS flex, родня C3) и центрирует по
+        /// ПОПЕРЕЧНОЙ с выходом за ОБА края; native [`stack`] клампит
+        /// левый/верхний край к слоту, СОХРАНЯЯ min-размер (parity FR-060).
+        /// Тест ФИКСИРУЕТ поведение, чтобы расхождение было видимым.
+        #[test]
+        fn modal_taffy_center_overflow_is_documented_divergence() {
+            let slot = UiRect::new(0.0, 0.0, 100.0, 100.0);
+            let (min, max, desired) = (
+                UiVec2::new(320.0, 240.0),
+                UiVec2::new(640.0, 480.0),
+                UiVec2::new(200.0, 200.0),
+            );
+            let native = modal(slot, min, max, desired);
+            let taffy = modal_taffy(slot, min, max, desired);
+            // native: кламп левого/верхнего края к слоту, размер = min
+            // (min-инвариант, parity FR-060)
+            assert_eq!(native.panel, UiRect::new(0.0, 0.0, 320.0, 240.0));
+            // taffy (CSS): главная ось — ребёнок СЖИМАЕТСЯ до слота
+            // (flex_shrink 1 у `centered`), поперечная — центрируется с
+            // выходом за ОБА края: x = 0 (ширина = слоту), y = (100−240)/2
+            assert_eq!(
+                (taffy.panel.x, taffy.panel.y, taffy.panel.w, taffy.panel.h),
+                (0.0, -70.0, 100.0, 240.0),
+                "CSS-переполнение: shrink по главной оси + unsafe Center по поперечной"
+            );
+            assert_ne!(native.panel, taffy.panel, "расхождение зафиксировано");
+        }
     }
 }
