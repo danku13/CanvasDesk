@@ -302,6 +302,9 @@ pub fn admin_layout(
 
 /// Перенос текста по словам под заданную ширину (чистая функция —
 /// измерение TextMeasurer'ом; длинное слово не рвётся — строка шире слота).
+/// FR-068 W3.3 (каталог §9.3.1): тело — делегат [`TextMeasurer::wrap`]
+/// (ручной жадный цикл удалён — семантика бит-в-бит идентична, оракул
+/// canvas-ui `measure::wrap_matches_manual_greedy_oracle` пинит паритет).
 pub fn wrap_text(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -309,28 +312,7 @@ pub fn wrap_text(
     max_w: f32,
     size: f32,
 ) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current.push_str(word);
-            continue;
-        }
-        let candidate = format!("{current} {word}");
-        if m.width_of(fs, &candidate, FONT_FAMILY, size) <= max_w {
-            current = candidate;
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current.push_str(word);
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
+    m.wrap(fs, text, FONT_FAMILY, size, max_w)
 }
 
 // === FR-070 этап 2: секция «Компоненты» — полная матрица состояний =========

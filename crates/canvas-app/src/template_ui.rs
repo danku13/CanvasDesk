@@ -87,11 +87,15 @@ pub const SCROLL_WINDOW: usize = 14;
 /// строки списка под неё не заходят.
 pub const PANEL_FOOTER_H: f32 = 24.0;
 
-/// Ширина чипа категории по имени (CR-011): измеренный текст (FR-054,
-/// TextMeasurer — реальный шейпинг cosmic-text тем же семейством/кеглем,
+/// Измеренная ширина чипа категории по имени (CR-011): измеренный текст
+/// (FR-054, TextMeasurer — реальный шейпинг cosmic-text тем же семейством/кеглем,
 /// что отрисовка). Прежняя символьная эвристика `chars·7.5+20` удалена
 /// (урок CR-015: символьные оценки дрейфуют с текстом и шрифтом); паддинг
 /// чипа — прежний (20 px).
+/// FR-068 W3.3: в [`panel_layout`] чипы категорий сами себя измеряют
+/// ([`MeasuredItem::Text`] c `pad_x: 20.0`); функция осталась для
+/// контейнерного замера [`dock_strip_layout`] (ширина полосы — по самому
+/// длинному чипу) и прямых вызовов в тестах.
 pub fn category_chip_width(
     name: &str,
     m: &mut TextMeasurer,
@@ -466,6 +470,10 @@ pub fn dock_strip_layout(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> StripLayout {
+    // Ширина полосы — КОНТЕЙЕРНЫЙ замер (первый проход): максимум ширин
+    // самых широких чипов (+ запас под счётчик). Это не проводка в ребёнка —
+    // строки полосы получают готовую ширину полосы (ниже), поэтому
+    // width_of здесь легитимен (FR-068 W3.3).
     let width = categories
         .iter()
         .map(|name| category_chip_width(name, m, fs) + STRIP_COUNT_SLACK)
@@ -774,9 +782,11 @@ pub fn panel_layout(
     // скриншот 13_palette: SqueezeTail сжимал «unit-economics» до нуля —
     // срезанный текст выглядел браком). Слоту отдаётся высота до 2 рядов;
     // строки шаблонов стартуют ниже фактического низа чипов.
-    // W3.1-паттерн whatif-бара: ширина чипа = текст + пад — MeasuredItem::Fixed
-    // с ТЕМ ЖЕ замером (category_chip_width) — rect'ы бит-в-бит прежние
-    // (пад-семантики в F-13 нет — Text изменил бы ширины).
+    // FR-068 W3.3 (каталог §9.3.1): чип сам себя измеряет —
+    // [`MeasuredItem::Text`] c `pad_x: 20.0` (тот же пад, что был в
+    // [`category_chip_width`]) вместо проводки «width_of → Fixed»;
+    // `Text` резолвится в `Fixed { w: width_of + pad_x }` — rect'ы
+    // бит-в-бит прежние (оракулы canvas-ui `measured_text_pad_x_*`).
     let categories = registry.categories();
     let chip_rects = Row {
         gap,
@@ -792,9 +802,12 @@ pub fn panel_layout(
         ),
         &categories
             .iter()
-            .map(|c| MeasuredItem::Fixed {
-                w: category_chip_width(c, m, fs),
-                h: CATEGORY_ROW_H,
+            .map(|c| MeasuredItem::Text {
+                text: c,
+                max_w: None,
+                min_w: 0.0,
+                pad_x: 20.0,
+                h: Some(CATEGORY_ROW_H),
             })
             .collect::<Vec<_>>(),
         m,
