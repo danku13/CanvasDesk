@@ -171,8 +171,9 @@ use support::{
     infer_param_type, node_display_label, node_subtitle, node_text, node_title, nudge_step_world,
     paint_items_to_band, paint_items_to_stage, rect_xywh, rects_intersect, screen_dot,
     screen_rect_quad, slugify, snap_candidates, snap_tolerance_world, snap_with_anchor,
-    spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key, template_card_row,
-    token_color, truncate_chars, unique_custom_id, BatchOp, PortLabelLine, PortTarget, SnapFrame,
+    spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key, stage_close_button_rect,
+    template_card_row, token_color, truncate_chars, unique_custom_id, BatchOp, PortLabelLine,
+    PortTarget, SnapFrame,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
