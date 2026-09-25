@@ -116,9 +116,13 @@ pub enum SceneOverflow {
 
 /// Трек колонки/строки CSS Grid в расширенной сцене (FR-068 W1; неравные/
 /// процентные/дробные треки — T2-триггер ADR-0013, территория taffy).
+///
+/// FR-074 (W4-подготовка): [`SceneTrack::Auto`] — sizing по контенту ячеек
+/// (оба движка), [`SceneTrack::MinMax`] — CSS `minmax(min, max)`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SceneTrack {
-    /// Авто-трек (по контенту; default).
+    /// Авто-трек: размер по max-content ячеек трека (span 1; FR-074).
+    /// До FR-074 в FlexLayoutEngine давал 0 (территория taffy — T2).
     #[default]
     Auto,
     /// Фиксированная ширина (ui px).
@@ -127,12 +131,61 @@ pub enum SceneTrack {
     Percent(f32),
     /// Доля свободного места (CSS `1fr`).
     Fill,
+    /// CSS `minmax(min, max)` (FR-074): трек занимает размер контента,
+    /// зажатый в `[min, max]`; `max: Fill` — гибкий трек (fr) с полом
+    /// `min`. Компоненты — [`TrackMin`]/[`TrackMax`] (CSS-ограничения:
+    /// min без fr, max с fr).
+    MinMax { min: TrackMin, max: TrackMax },
+}
+
+/// Минимум CSS `minmax()` (FR-074): CSS запрещает `fr` в min-позиции.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TrackMin {
+    /// Контент трека (max-content; упрощение CSS `auto`/`min-content` —
+    /// min-content не моделируется, см. доку FlexLayoutEngine).
+    #[default]
+    Auto,
+    /// Фиксированный минимум (ui px).
+    Length(f32),
+    /// Процент от внутреннего размера контейнера.
+    Percent(f32),
+}
+
+/// Максимум CSS `minmax()` (FR-074): `fr` разрешён (CSS `minmax(a, 1fr)`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TrackMax {
+    /// Контент трека (max-content; CSS `auto` в max-позиции).
+    #[default]
+    Auto,
+    /// Фиксированный максимум (ui px).
+    Length(f32),
+    /// Процент от внутреннего размера контейнера.
+    Percent(f32),
+    /// Доля свободного места (CSS `1fr`); пол трека — `min`.
+    Fill,
 }
 
 impl SceneTrack {
     /// Фиксированный трек (сокращение).
     pub fn fixed(px: f32) -> Self {
         Self::Length(px.max(0.0))
+    }
+
+    /// CSS `minmax(min, max)` (FR-074; отрицательные — в 0).
+    pub fn minmax(min: TrackMin, max: TrackMax) -> Self {
+        let norm = |v: f32| v.max(0.0);
+        Self::MinMax {
+            min: match min {
+                TrackMin::Length(v) => TrackMin::Length(norm(v)),
+                TrackMin::Percent(p) => TrackMin::Percent(p),
+                TrackMin::Auto => TrackMin::Auto,
+            },
+            max: match max {
+                TrackMax::Length(v) => TrackMax::Length(norm(v)),
+                TrackMax::Percent(p) => TrackMax::Percent(p),
+                TrackMax::Fill | TrackMax::Auto => max,
+            },
+        }
     }
 }
 

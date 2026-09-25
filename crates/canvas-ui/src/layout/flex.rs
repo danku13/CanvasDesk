@@ -36,16 +36,43 @@
 //!   grow 1 basis 0; поперечная — stretch до линии), aspect-ratio,
 //!   Absolute (от border-box родителя) / Fixed (от корневого слота —
 //!   ре-парент к корню) / Sticky (в потоке + пост-кламп с трансляцией
-//!   поддерева), scroll-offset content-shift, overflow (rect'ы не меняет —
-//!   клип у потребителя, `PaintItem::ClipRect` FR-056), Grid (треки
-//!   Length/Percent/Fill + span + definite/Auto высоты строк).
-//! - Grid-ячейки тянутся в область трека (default stretch taffy);
-//!   Auto-треки не поддерживаются (территория taffy — T2 ADR-0013).
+//!   поддерева; FR-074 — по ОБОИМ осям: `top` против Y-scroll-предка,
+//!   `left` против X-scroll-предка), scroll-offset content-shift,
+//!   overflow (rect'ы не меняет — клип у потребителя, `PaintItem::ClipRect`
+//!   FR-056), Grid (треки Length/Percent/Fill + FR-074: Auto по контенту
+//!   span-1 ячеек, `minmax(min, max)` — кламп контента в границы,
+//!   `max: Fill` — гибкий трек с полом min) + span + definite/Auto высоты
+//!   строк.
+//! - Grid-ячейки: Fill/Auto тянутся в область трека (default stretch
+//!   taffy); definite/Percent — собственный размер (CSS grid-item,
+//!   старт-выравнивание, переполнение видно).
 //! - Sticky/scroll — пост-обработка формул 1:1 из `taffy_backend.rs`.
+//!
+//! # Grid-треки: авторасчёт и minmax (FR-074)
+//!
+//! Колонки — шаги CSS Grid §11.5–11.8 в порядке taffy 0.14 (паритет
+//! подтверждён parity-тестами; контент = max-content span-1 ячеек,
+//! min-content отдельно не моделируется):
+//! 1. Плейсмент row-major (sparse cursor со спанами) — [`grid_placements`].
+//! 2. Контент-вклад трека = max max-content ширин ЯЧЕЕК SPAN 1 трека
+//!    (span>1 не растят авторасчётные треки — упрощение, докурировано;
+//!    ячейка всё равно тянется на область спана).
+//! 3. База/лимит: Length/Percent — base=limit=definite; Auto — base=
+//!    limit=контент; Fill — base 0, limit ∞ (Fr); MinMax{min,max} —
+//!    base = min (definite или контент), limit = max definite | контент
+//!    (max Auto) | ∞ (max Fill → Fr).
+//! 4. §11.6 Maximise: свободное место (inner − Σбаз − зазоры) поровну
+//!    трекам с конечным лимитом, с заморозкой достигших лимита.
+//! 5. §11.7 Expand Flexible (taffy find_size_of_fr, факторы = 1): fr —
+//!    наибольший, при котором Σ max(base, fr) ≤ inner; база больше fr —
+//!    трек остаётся на базе (переполнение видно, G4).
+//! 6. §11.8 Stretch auto (taffy default STRETCH): остаток поровну
+//!    AutoMax-трекам (поверх лимитов — как в браузерах по умолчанию).
 
 use super::{
     Child, Column, CrossAlign, LayoutBackend, LayoutFeatures, MainAlign, MeasuredItem, Row,
-    RowPolicy, SceneDim, SceneKind, SceneNode, ScenePosition, SceneTrack, UiRect, UiVec2,
+    RowPolicy, SceneDim, SceneKind, SceneNode, ScenePosition, SceneTrack, TrackMax, TrackMin,
+    UiRect, UiVec2,
 };
 use crate::measure::TextMeasurer;
 
@@ -291,6 +318,63 @@ fn finish_line(placed: &[Placed], axis: Axis, slot: UiRect) -> Vec<UiRect> {
 /// Сумма главных зазоров (taffy sum_axis_gaps: n−1 зазоров).
 fn total_main_axis_gap(gap: f32, n: usize) -> f32 {
     gap * n.saturating_sub(1) as f32
+}
+
+/// Плейсмент row-major auto-flow (sparse cursor со спанами) — ЕДИНЫЙ
+/// оракул для measure/layout/row-count (FR-074: раньше курсор был
+/// продублирован трижды). Возвращает `(col, row, span)` в ПОРЯДКЕ детей.
+/// `n_cols == 0` — вырожденная сетка: каждый ребёнок на своей строке
+/// нулевой ширины (col = 0, span = 1).
+fn grid_placements(
+    spans: impl Iterator<Item = usize>,
+    n_cols: usize,
+) -> Vec<(usize, usize, usize)> {
+    let mut out = Vec::new();
+    let mut cursor_col = 0usize;
+    let mut cursor_row = 0usize;
+    for span in spans {
+        let span = span.max(1);
+        if n_cols == 0 {
+            out.push((0, out.len(), 1));
+            continue;
+        }
+        let mut col = cursor_col;
+        let mut row = cursor_row;
+        while col + span > n_cols {
+            col = 0;
+            row += 1;
+        }
+        out.push((col, row, span));
+        cursor_col = col + span;
+        cursor_row = row;
+    }
+    out
+}
+
+/// Вклад трека в max-content ширину grid-контейнера (FR-074):
+/// Length — definite; Percent — 0 (база неопределена в max-content, как
+/// раньше); Auto — контент трека; Fill — 0 (гибкий); MinMax — кламп
+/// контента в границы (max definite) или минимум (max Auto).
+fn track_max_content(track: &SceneTrack, content_w: f32) -> f32 {
+    match track {
+        SceneTrack::Length(v) => v.max(0.0),
+        SceneTrack::Percent(_) => 0.0,
+        SceneTrack::Auto => content_w,
+        SceneTrack::Fill => 0.0,
+        SceneTrack::MinMax { min, max } => {
+            let min_size = match min {
+                TrackMin::Length(v) => v.max(0.0),
+                TrackMin::Percent(_) => 0.0,
+                TrackMin::Auto => content_w,
+            };
+            match max {
+                TrackMax::Length(m) => min_size.max(content_w.min(m.max(0.0))),
+                TrackMax::Percent(_) => min_size,
+                TrackMax::Auto => min_size.max(content_w),
+                TrackMax::Fill => min_size,
+            }
+        }
+    }
 }
 
 /// CSS §9.7 «Resolving Flexible Lengths» (порядок операций taffy 0.14,
@@ -615,42 +699,44 @@ impl SceneTree {
                 (max_cross, sum)
             }
             SceneKind::Grid { cols, row_h, gap } => {
-                // Ширина — Σ треков (Length; Percent/Fill в max-content — 0)
-                // + зазоры; высота — Σ строк (Length; Percent → 0 без базы;
-                // Fill/Auto → контент строк) + зазоры.
+                // Ширина — Σ вкладов треков + зазоры (Length/Percent
+                // definite; Auto — контент span-1 ячеек трека; MinMax —
+                // кламп контента в границы; Fill — 0, гибкий); высота —
+                // Σ строк (Length; Percent → 0 без базы; Fill/Auto →
+                // контент строк) + зазоры.
                 let gap_x = gap.x.max(0.0);
                 let gap_y = gap.y.max(0.0);
+                let flow = &self.nodes[idx].flow;
+                let spans = flow
+                    .iter()
+                    .map(|&ci| (self.nodes[ci].node.span as usize).max(1));
+                let placements = grid_placements(spans, cols.len());
+                let mut content_w: Vec<f32> = vec![0.0; cols.len()];
+                let mut row_h_max: Vec<f32> = Vec::new();
+                for (k, &(col, row, span)) in placements.iter().enumerate() {
+                    let ci = flow[k];
+                    let c = self.measure_content(ci);
+                    if span == 1 && col < cols.len() {
+                        content_w[col] = content_w[col].max(c.0);
+                    }
+                    if row_h_max.len() <= row {
+                        row_h_max.resize(row + 1, 0.0);
+                    }
+                    row_h_max[row] = row_h_max[row].max(c.1);
+                }
                 let w_sum: f32 = cols
                     .iter()
-                    .map(|t| match t {
-                        SceneTrack::Length(v) => v.max(0.0),
-                        _ => 0.0,
-                    })
+                    .enumerate()
+                    .map(|(i, t)| track_max_content(t, content_w[i]))
                     .sum::<f32>()
                     + gap_x * cols.len().saturating_sub(1) as f32;
-                let rows = self.grid_row_count(idx, cols.len());
+                let rows = placements.iter().map(|&(_, r, _)| r + 1).max().unwrap_or(0);
                 let h_sum = match row_h {
                     SceneDim::Length(v) => {
                         v.max(0.0) * rows as f32 + gap_y * rows.saturating_sub(1) as f32
                     }
                     SceneDim::Percent(_) => 0.0,
                     SceneDim::Fill | SceneDim::Auto => {
-                        // Контент строк: max высот ячеек по размещению.
-                        let mut row_h_max: Vec<f32> = vec![0.0; rows.max(1)];
-                        let mut col = 0usize;
-                        let mut row = 0usize;
-                        for &ci in &self.nodes[idx].flow {
-                            let span = (self.nodes[ci].node.span as usize).max(1);
-                            if cols.is_empty() {
-                                continue;
-                            }
-                            while col + span > cols.len() {
-                                col = 0;
-                                row += 1;
-                            }
-                            row_h_max[row] = row_h_max[row].max(self.measure_content(ci).1);
-                            col += span;
-                        }
                         row_h_max.iter().sum::<f32>() + gap_y * rows.saturating_sub(1) as f32
                     }
                 };
@@ -676,26 +762,6 @@ impl SceneTree {
             }
         }
         (ww, hh)
-    }
-
-    /// Число строк grid-размещения (row-major sparse cursor со спанами).
-    fn grid_row_count(&self, idx: usize, n_cols: usize) -> usize {
-        let mut col = 0usize;
-        let mut row = 0usize;
-        let mut rows = 0usize;
-        for &ci in &self.nodes[idx].flow {
-            let span = (self.nodes[ci].node.span as usize).max(1);
-            if n_cols == 0 {
-                continue;
-            }
-            while col + span > n_cols {
-                col = 0;
-                row += 1;
-            }
-            col += span;
-            rows = rows.max(row + 1);
-        }
-        rows
     }
 
     // --- Фаза B: top-down раскладка -----------------------------------------
@@ -948,9 +1014,11 @@ impl SceneTree {
         }
     }
 
-    /// Раскладка grid-детей: треки (Length/Percent/Fill; Auto — 0,
-    /// taffy-территория T2), span, definite/Auto высоты строк. Ячейки
-    /// тянутся в область трека (default stretch taffy).
+    /// Раскладка grid-детей: треки (Length/Percent/Fill; FR-074 — Auto по
+    /// контенту span-1 ячеек, `minmax(min, max)`), span, definite/Auto
+    /// высоты строк. Ячейки тянутся в область трека (default stretch
+    /// taffy). Алгоритм треков — модульная дока «Grid-треки» (CSS §7.5
+    /// в упрощении: один проход, fr = 1, пол вместо итераций).
     fn layout_grid_children(
         &mut self,
         idx: usize,
@@ -964,67 +1032,195 @@ impl SceneTree {
         let gap_y = gap.y.max(0.0);
         let n_cols = cols.len();
         let flow: Vec<usize> = self.nodes[idx].flow.clone();
+        let spans = flow
+            .iter()
+            .map(|&ci| (self.nodes[ci].node.span as usize).max(1));
+        // 1. Плейсмент (единый оракул с measure — FR-074).
+        let placements = grid_placements(spans, n_cols);
 
-        // 1. Ширины треков: fixed/percent от inner.0; Fill — доля остатка.
-        let mut widths: Vec<f32> = Vec::with_capacity(n_cols);
-        let mut fixed_sum = 0.0f32;
-        let mut fr_count = 0usize;
-        for t in cols {
+        // 2. Контент-вклады треков: max max-content ширин span-1 ячеек
+        //    (span>1 авторасчётные треки не растят — докурировано).
+        let mut content_w: Vec<f32> = vec![0.0; n_cols];
+        for (k, &ci) in flow.iter().enumerate() {
+            let (col, _, span) = placements[k];
+            if span == 1 && col < n_cols {
+                let cw = self.measure_content(ci).0;
+                content_w[col] = content_w[col].max(cw);
+            }
+        }
+
+        // 3. База/лимит/вид трека (CSS §7.5-спецификации в терминах
+        //    движка; контент = max-content span-1 ячеек):
+        //      Length/Percent  — base = limit = definite;
+        //      Auto            — base = limit = контент (интринсик);
+        //      Fill            — base = 0, limit = ∞, вид Fr;
+        //      MinMax{min,max} — base = min (definite/контент), limit =
+        //                        max definite | контент (max Auto) | ∞
+        //                        (max Fill, вид Fr).
+        enum Kind {
+            Fixed,
+            AutoMax,
+            Fr,
+        }
+        let mut bases: Vec<f32> = Vec::with_capacity(n_cols);
+        let mut limits: Vec<f32> = Vec::with_capacity(n_cols);
+        let mut kinds: Vec<Kind> = Vec::with_capacity(n_cols);
+        for (i, t) in cols.iter().enumerate() {
             match t {
                 SceneTrack::Length(v) => {
                     let v = v.max(0.0);
-                    fixed_sum += v;
-                    widths.push(v);
+                    bases.push(v);
+                    limits.push(v);
+                    kinds.push(Kind::Fixed);
                 }
                 SceneTrack::Percent(p) => {
                     let v = inner.0 * p.clamp(0.0, 1.0);
-                    fixed_sum += v;
-                    widths.push(v);
+                    bases.push(v);
+                    limits.push(v);
+                    kinds.push(Kind::Fixed);
+                }
+                SceneTrack::Auto => {
+                    bases.push(content_w[i]);
+                    limits.push(content_w[i]);
+                    kinds.push(Kind::AutoMax);
                 }
                 SceneTrack::Fill => {
-                    fr_count += 1;
-                    widths.push(0.0);
+                    bases.push(0.0);
+                    limits.push(f32::INFINITY);
+                    kinds.push(Kind::Fr);
                 }
-                SceneTrack::Auto => widths.push(0.0),
+                SceneTrack::MinMax { min, max } => {
+                    let min_size = match min {
+                        TrackMin::Length(v) => v.max(0.0),
+                        TrackMin::Percent(p) => inner.0 * p.clamp(0.0, 1.0),
+                        TrackMin::Auto => content_w[i],
+                    };
+                    match max {
+                        TrackMax::Length(m) => {
+                            bases.push(min_size);
+                            limits.push(min_size.max(m.max(0.0)));
+                            kinds.push(Kind::Fixed);
+                        }
+                        TrackMax::Percent(p) => {
+                            let m = inner.0 * p.clamp(0.0, 1.0);
+                            bases.push(min_size);
+                            limits.push(min_size.max(m));
+                            kinds.push(Kind::Fixed);
+                        }
+                        TrackMax::Auto => {
+                            // Лимит ≥ базы (min Length может превысить
+                            // max-content контента — CSS клампит).
+                            bases.push(min_size);
+                            limits.push(min_size.max(content_w[i]));
+                            kinds.push(Kind::AutoMax);
+                        }
+                        TrackMax::Fill => {
+                            bases.push(min_size);
+                            limits.push(f32::INFINITY);
+                            kinds.push(Kind::Fr);
+                        }
+                    }
+                }
             }
         }
-        if fr_count > 0 {
-            let free = (inner.0 - fixed_sum - gap_x * n_cols.saturating_sub(1) as f32).max(0.0);
-            let each = free / fr_count as f32;
-            for (i, t) in cols.iter().enumerate() {
-                if matches!(t, SceneTrack::Fill) {
-                    widths[i] = each;
+        let gap_total = gap_x * n_cols.saturating_sub(1) as f32;
+        // 4. CSS 11.6 «Maximise Tracks»: свободное место (inner − Σ баз −
+        //    зазоры) распределяется ПОРОВНУ трекам с конечным лимитом,
+        //    с заморозкой достигших лимита (итеративно; fr с бесконечным
+        //    лимитом не участвует).
+        {
+            let mut free = inner.0 - bases.iter().sum::<f32>() - gap_total;
+            if free.is_finite() && free > 0.0 {
+                // Заморожены: Fr (taffy resolve_intrinsic_track_sizes
+                // step 5: бесконечный лимит fr = base — «Maximise не
+                // трогает гибкие треки») и достигшие лимита (Fixed —
+                // limit == base — сюда же).
+                let mut frozen: Vec<bool> = limits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| matches!(kinds[i], Kind::Fr) || *l <= bases[i])
+                    .collect();
+                loop {
+                    let open: Vec<usize> = (0..n_cols).filter(|&i| !frozen[i]).collect();
+                    if open.is_empty() || free <= f32::EPSILON {
+                        break;
+                    }
+                    let share = free / open.len() as f32;
+                    let mut all_frozen = true;
+                    for &i in &open {
+                        let room = limits[i] - bases[i];
+                        let take = share.min(room);
+                        bases[i] += take;
+                        free -= take;
+                        if take < room - f32::EPSILON {
+                            all_frozen = false;
+                        } else {
+                            frozen[i] = true;
+                        }
+                    }
+                    if all_frozen {
+                        break;
+                    }
                 }
             }
         }
-        // 2. Позиции треков (накопление слева направо — как taffy).
+        // 5. CSS 11.7 «Expand Flexible Tracks» (taffy find_size_of_fr,
+        //    факторы все = 1): fr = наибольший размер, при котором
+        //    Σ max(base, fr) по fr-трекам ≤ inner; треки, чья база больше
+        //    fr, остаются на базе (переполнение видно — G4).
+        {
+            let fr_count = kinds.iter().filter(|k| matches!(k, Kind::Fr)).count();
+            if fr_count > 0 {
+                let mut fr = f32::INFINITY;
+                for _ in 0..=fr_count {
+                    let mut used = gap_total;
+                    let mut flex_sum = 0.0f32;
+                    for (i, k) in kinds.iter().enumerate() {
+                        match k {
+                            Kind::Fr if bases[i] <= fr || fr.is_infinite() => flex_sum += 1.0,
+                            _ => used += bases[i],
+                        }
+                    }
+                    fr = (inner.0 - used) / flex_sum.max(1.0);
+                    let consistent = kinds
+                        .iter()
+                        .enumerate()
+                        .all(|(i, k)| !matches!(k, Kind::Fr) || bases[i] <= fr || fr <= 0.0);
+                    if consistent {
+                        break;
+                    }
+                }
+                for (i, k) in kinds.iter().enumerate() {
+                    if matches!(k, Kind::Fr) {
+                        bases[i] = bases[i].max(fr);
+                    }
+                }
+            }
+        }
+        // 6. CSS 11.8 «Stretch auto Tracks» (taffy default STRETCH —
+        //    модульная докa): остаток делится поровну между AutoMax-
+        //    треками (поверх лимитов — как в браузерах по умолчанию).
+        {
+            let leftover = inner.0 - bases.iter().sum::<f32>() - gap_total;
+            let auto_n = kinds.iter().filter(|k| matches!(k, Kind::AutoMax)).count();
+            if leftover > 0.0 && auto_n > 0 {
+                let each = leftover / auto_n as f32;
+                for (i, k) in kinds.iter().enumerate() {
+                    if matches!(k, Kind::AutoMax) {
+                        bases[i] += each;
+                    }
+                }
+            }
+        }
+        let widths = bases;
+        // 7. Позиции треков (накопление слева направо — как taffy).
         let mut track_x: Vec<f32> = Vec::with_capacity(n_cols);
         let mut x = 0.0f32;
         for &w in &widths {
             track_x.push(x);
             x += w + gap_x;
         }
-        // 3. Размещение: row-major авто-поток со спанами (sparse cursor).
-        let mut placements: Vec<(usize, usize, usize)> = Vec::with_capacity(flow.len()); // (col,row,span)
-        let mut cursor_col = 0usize;
-        let mut cursor_row = 0usize;
-        for &ci in &flow {
-            let span = (self.nodes[ci].node.span as usize).max(1);
-            if n_cols == 0 {
-                placements.push((0, 0, 1));
-                continue;
-            }
-            let mut col = cursor_col;
-            let mut row = cursor_row;
-            while col + span > n_cols {
-                col = 0;
-                row += 1;
-            }
-            placements.push((col, row, span));
-            cursor_col = col + span;
-            cursor_row = row;
-        }
-        // 4. Высоты строк: definite (Length/Percent) или контент ячеек.
+        // 6. Высоты строк: definite (Length/Percent) или контент ячеек.
         let n_rows = placements.iter().map(|&(_, r, _)| r + 1).max().unwrap_or(0);
         let mut heights: Vec<f32> = vec![0.0; n_rows.max(1)];
         match row_h {
@@ -1047,21 +1243,37 @@ impl SceneTree {
                 }
             }
         }
-        // 5. Размещение ячеек: loc = (track_x, Σ предыдущих строк+зазоры),
-        //    размер = область спана × высота строки; рекурсия в поддерево.
+        // 8. Размещение ячеек: loc = (track_x, Σ предыдущих строк+зазоры);
+        //    размер ячейки — CSS-семантика grid-item: Length — definite
+        //    (старт-выравнена в области, переполнение видно), Percent —
+        //    доля области, Fill/Auto — stretch на всю область (default
+        //    justify-self: stretch). Рекурсия в поддерево от размера
+        //    ячейки (percent потомков — от неё же).
         for (k, &ci) in flow.iter().enumerate() {
             let (col, row, span) = placements[k];
-            let mut cell_w = widths[col];
+            let track_w = |c: usize| widths.get(c).copied().unwrap_or(0.0);
+            let mut area_w = track_w(col);
             for s in 1..span {
-                cell_w += widths[col + s] + gap_x;
+                area_w += track_w(col + s) + gap_x;
             }
+            let area_h = heights[row];
             let mut y = 0.0f32;
             // Тот же порядок операций, что у наивного накопления (биты).
             for &h in heights[..row].iter() {
                 y += h + gap_y;
             }
-            let (cw, ch) = (cell_w, heights[row]);
-            self.nodes[ci].loc = (track_x[col], y);
+            let cell_node = &self.nodes[ci].node;
+            let cw = match cell_node.size.w {
+                SceneDim::Length(v) => v.max(0.0),
+                SceneDim::Percent(p) => area_w * p.clamp(0.0, 1.0),
+                SceneDim::Fill | SceneDim::Auto => area_w,
+            };
+            let ch = match cell_node.size.h {
+                SceneDim::Length(v) => v.max(0.0),
+                SceneDim::Percent(p) => area_h * p.clamp(0.0, 1.0),
+                SceneDim::Fill | SceneDim::Auto => area_h,
+            };
+            self.nodes[ci].loc = (track_x.get(col).copied().unwrap_or(0.0), y);
             self.nodes[ci].size = (cw, ch);
             // Aspect-листья: derive внутри layout_node по definite осям.
             self.layout_node(ci, Some((cw, ch)), (cw, ch), root_inner);
