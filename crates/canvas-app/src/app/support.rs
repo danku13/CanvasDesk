@@ -59,6 +59,15 @@ pub(super) fn screen_rect_quad(
     }
 }
 
+/// FR-044 + FR-068 (W3-продолжение): rect кнопки ✕ main stage в
+/// логических px окна — ЕДИНЫЙ источник геометрии для рендера
+/// (`stage_frame`) и hit-теста (`click_main_stage`): закрытие класса
+/// дублированных формул CR-015 (правка одной стороны не расходится
+/// с другой). Прежняя формула ([w−36, 12, 24, 24]) сохранена дословно.
+pub(super) fn stage_close_button_rect(rect: &StageLocalRect) -> [f32; 4] {
+    [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0]
+}
+
 /// FR-059 (волна 1 кита): конвертация items [`Painter`] (canvas-ui — ДАННЫЕ,
 /// инвариант G7) в инстансы screen-полосы кадра — сырые логические px
 /// (конвенция полос: рендер конвертирует screen→world ровно один раз —
@@ -1090,4 +1099,41 @@ pub(super) fn hover_fill(c: [f32; 4]) -> [f32; 4] {
 /// панели, перекрытых выпадающим меню (квады рисуются до screen-текстов).
 pub(super) fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canvas_core::bundles::main_stage_rect;
+
+    /// FR-068 (W3-продолжение): геометрия кнопки ✕ stage — та же формула,
+    /// что была в рендере и hit-тесте ДО выделения единого источника
+    /// ([w−36, 12, 24, 24]): пин против случайного сдвига.
+    #[test]
+    fn stage_close_button_rect_matches_legacy_formula() {
+        for viewport in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
+            let rect = main_stage_rect(viewport);
+            let close = stage_close_button_rect(&rect);
+            assert_eq!(close, [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0]);
+            // Кнопка внутри rect stage (правый верхний угол)
+            assert!(close[0] > rect.x && close[0] + close[2] <= rect.x + rect.w);
+            assert!(close[1] > rect.y && close[1] + close[3] <= rect.y + rect.h);
+        }
+    }
+
+    /// Отступы кнопки от углов stage: 12 px от верха и правого края
+    /// (инвариант вёрстки заголовка; рендер и hit-test берут ЕДИНЫЙ
+    /// rect из stage_close_button_rect — расхождение исключено).
+    #[test]
+    fn stage_close_button_insets_are_stable() {
+        for viewport in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
+            let rect = main_stage_rect(viewport);
+            let close = stage_close_button_rect(&rect);
+            assert!((close[1] - (rect.y + 12.0)).abs() < 1e-4, "12 px от верха");
+            assert!(
+                ((rect.x + rect.w - (close[0] + close[2])) - 12.0).abs() < 1e-4,
+                "12 px от правого края"
+            );
+        }
+    }
 }

@@ -1339,11 +1339,10 @@ impl App {
             let viewport = self.viewport_logical();
             let rect = main_stage_rect(viewport);
             // FR-044 (прототип): кнопка ✕ в правом верхнем углу —
-            // закрытие stage; rect по той же формуле, что в рендере
-            if point_in_rect(
-                [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0],
-                self.cursor,
-            ) {
+            // закрытие stage; геометрия — единый источник с рендером
+            // stage_close_button_rect (FR-068 W3-продолжение — закрытие
+            // класса дублированных формул CR-015)
+            if point_in_rect(stage_close_button_rect(&rect), self.cursor) {
                 self.close_main_stage();
                 self.request_redraw();
                 return;

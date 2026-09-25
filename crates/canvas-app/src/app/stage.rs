@@ -10,6 +10,17 @@
 
 use super::*;
 
+use canvas_ui::geometry::UiRect;
+
+/// FR-068 (W3-продолжение): stage-локальный прямоугольник → экранная
+/// область Painter-пути хрома stage (map_point/map_size — тот же
+/// StageTransform, что у quad-пути). Высоты label-областей — номинал
+/// (конвертацией не используются — семантика OwnedScreenText).
+fn stage_area(t: &StageTransform, x: f32, y: f32, w: f32, h: f32) -> UiRect {
+    let p = t.map_point([x, y]);
+    UiRect::new(p[0], p[1], t.map_size(w), t.map_size(h))
+}
+
 impl App {
     /// Пересобрать/обновить миникарту (T13, SPEC §6.1): не каждый кадр, а по
     /// dirty-условиям — правки сцены (dirty_until save), движение камеры
@@ -634,19 +645,43 @@ impl App {
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 1.0],
         });
-        // 2) Подложка и рамка stage — стиль модалок FR-039 (радиус 14)
-        quads.push(CardInstance {
-            pos: camera.screen_to_world([rect.x, rect.y], viewport),
-            size: [rect.w / zoom, rect.h / zoom],
-            fill: palette.menu_fill,
-            border: palette.palette_border,
-            params: [14.0 / zoom, 0.0, 0.0, 1.0],
-        });
-        // 3) Заголовок «Пучок: A → B · ×N», подсказка Esc и кнопка ✕
+        // 2) Подложка и рамка stage — стиль модалок FR-039 (радиус 14).
+        // FR-068 (W3-продолжение): каркас stage — компонентный путь
+        // (Painter + panel_style_of — явные слоты темы F-8); конвертация
+        // paint_items_to_stage даёт те же world-квады (screen_to_world,
+        // радиус/зум), порядок кадра сохранён дословно (I-1)
+        {
+            let mut chrome = Painter::new();
+            chrome.panel(
+                UiRect::new(rect.x, rect.y, rect.w, rect.h),
+                &kit::panel_style_of(palette.menu_fill, palette.palette_border, 14.0, 0.0),
+            );
+            paint_items_to_stage(
+                chrome.take_items(),
+                camera,
+                viewport,
+                zoom,
+                &mut quads,
+                &mut texts,
+            );
+        }
+        // 3) Заголовок «Пучок: A → B · ×N», подсказка Esc и кнопка ✕.
+        // FR-068 (W3-продолжение): блок — Painter-путь компонентной модели;
+        // геометрия ✕ — единый источник stage_close_button_rect (ТОТ ЖЕ rect
+        // в hit-тесте click_main_stage — закрытие класса CR-015), стиль
+        // кнопки — control_style_of (явные слоты, F-8)
         let from_title = title_for(&stage.slice.nodes[0]);
         let to_title = title_for(&stage.slice.nodes[1]);
-        texts.push(OwnedScreenText {
-            text: self.trf(
+        let mut chrome = Painter::new();
+        let title_origin = transform.map_point([16.0, 12.0]);
+        chrome.label(
+            UiRect::new(
+                title_origin[0],
+                title_origin[1],
+                transform.map_size(rect.w) - 200.0,
+                18.0,
+            ),
+            &self.trf(
                 keys::STAGE_BUNDLE_TITLE,
                 &[
                     ("from", from_title.as_str()),
@@ -654,54 +689,68 @@ impl App {
                     ("n", stage.slice.edges.len().to_string().as_str()),
                 ],
             ),
-            origin: transform.map_point([16.0, 12.0]),
-            width: transform.map_size(rect.w) - 200.0,
-            font_size: font(13.0),
-            color: palette.title,
-            align: TextAlign::Left,
-        });
+            color_to_rgba(palette.title),
+            font(13.0),
+            PaintAlign::Left,
+        );
         // FR-044 Р-8: счётчик внешних входов приёмника (вне пучка) —
         // «+N внешн. вход(а/ов)» под заголовком (панель полная, источники
         // видны мини-карточками под истоком)
         if ctx.model.ext_count > 0 {
-            texts.push(OwnedScreenText {
-                text: self.trf(
+            let ext_origin = transform.map_point([16.0, 30.0]);
+            chrome.label(
+                UiRect::new(
+                    ext_origin[0],
+                    ext_origin[1],
+                    transform.map_size(rect.w) - 200.0,
+                    14.0,
+                ),
+                &self.trf(
                     keys::STAGE_CALC_EXT,
                     &[("n", &ctx.model.ext_count.to_string())],
                 ),
-                origin: transform.map_point([16.0, 30.0]),
-                width: transform.map_size(rect.w) - 200.0,
-                font_size: font(10.5),
-                color: palette.quote,
-                align: TextAlign::Left,
-            });
+                color_to_rgba(palette.quote),
+                font(10.5),
+                PaintAlign::Left,
+            );
         }
-        // Кнопка ✕ — правый верхний угол (rect пересчитывается в клике —
-        // та же формула, состояния не требует)
-        let close = [rect.x + rect.w - 36.0, rect.y + 12.0, 24.0, 24.0];
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::STAGE_HINT).to_owned(),
-            origin: [close[0] - 160.0, close[1] + 5.0],
-            width: 152.0,
-            font_size: font(11.0),
-            color: palette.quote,
-            align: TextAlign::Left,
-        });
-        quads.push(CardInstance {
-            pos: camera.screen_to_world([close[0], close[1]], viewport),
-            size: [close[2] / zoom, close[3] / zoom],
-            fill: [0.0; 4],
-            border: palette.palette_border,
-            params: [7.0 / zoom, 0.0, 0.0, 1.0],
-        });
-        texts.push(OwnedScreenText {
-            text: "×".to_owned(),
-            origin: [close[0], close[1] + 3.0],
-            width: close[2],
-            font_size: font(12.0),
-            color: palette.body,
-            align: TextAlign::Center,
-        });
+        // Кнопка ✕ — правый верхний угол (rect — единый источник с
+        // hit-тестом: stage_close_button_rect)
+        let close = stage_close_button_rect(&rect);
+        let hint_origin = [close[0] - 160.0, close[1] + 5.0];
+        chrome.label(
+            UiRect::new(hint_origin[0], hint_origin[1], 152.0, 14.0),
+            self.tr(keys::STAGE_HINT),
+            color_to_rgba(palette.quote),
+            font(11.0),
+            PaintAlign::Left,
+        );
+        // Рамка кнопки — прозрачный контрол (заливка 0 — прежний вид;
+        // стиль из явных слотов control_style_of, не сырые поля квада)
+        chrome.control(
+            UiRect::new(close[0], close[1], close[2], close[3]),
+            &kit::control_style_of(
+                [0.0; 4],
+                palette.palette_border,
+                color_to_rgba(palette.body),
+                7.0,
+            ),
+        );
+        chrome.label(
+            UiRect::new(close[0], close[1] + 3.0, close[2], 14.0),
+            "×",
+            color_to_rgba(palette.body),
+            font(12.0),
+            PaintAlign::Center,
+        );
+        paint_items_to_stage(
+            chrome.take_items(),
+            camera,
+            viewport,
+            zoom,
+            &mut quads,
+            &mut texts,
+        );
         // 4) Рёбра среза веером (stage-локальные px → мир); выделение
         // ребра среза — live-индекс из Selection. Геометрия — те же линии,
         // что у точек портов и hit-test'а (единый источник)
@@ -917,7 +966,10 @@ impl App {
         // advance ≈ 0.6·шрифта (как у строк карточки). Ширины колонок —
         // те же хелперы, что сужают коридор пилюль (единый расчёт).
         // FR-044 Р-5 + Q3: подписи рёбер вне фокуса приглушены с анимацией.
+        // FR-068 (W3-продолжение): Painter-путь (stage_area — тот же
+        // StageTransform; радиус 4 — stage-локальные px, масштаб s)
         let src_title = title_for(&stage.slice.nodes[0]);
+        let mut chrome = Painter::new();
         for (i, edge) in stage.slice.edges.iter().enumerate() {
             let Some(line) = lines.get(i) else {
                 continue;
@@ -935,40 +987,43 @@ impl App {
                 };
                 let mut fill = palette.menu_fill;
                 fill[3] *= alpha;
-                quads.push(transform.instance_to_world(
-                    &CardInstance {
-                        pos: [line.from[0] + 10.0, by],
-                        size: [w, h],
-                        fill,
-                        border: [0.0; 4],
-                        params: [4.0, 0.0, 0.0, 1.0],
-                    },
-                    camera,
-                    viewport,
-                ));
                 let bx = line.from[0] + 10.0;
+                chrome.rect(
+                    stage_area(&transform, bx, by, w, h),
+                    fill,
+                    [0.0; 4],
+                    4.0 * s,
+                );
                 if let Some(slot) = slot_line.as_deref() {
                     // Лейбл слота выхода — приглушённый тон (подпись порта)
-                    texts.push(OwnedScreenText {
-                        text: slot.to_owned(),
-                        origin: transform
-                            .map_point([bx + 6.0, by + (if two_line { 3.0 } else { 13.0 })]),
-                        width: transform.map_size(w),
-                        font_size: font(10.5),
-                        color: dim_text_color(palette.quote, alpha),
-                        align: TextAlign::Left,
-                    });
+                    chrome.label(
+                        stage_area(
+                            &transform,
+                            bx + 6.0,
+                            by + if two_line { 3.0 } else { 13.0 },
+                            w,
+                            12.0,
+                        ),
+                        slot,
+                        color_to_rgba(dim_text_color(palette.quote, alpha)),
+                        font(10.5),
+                        PaintAlign::Left,
+                    );
                 }
                 if !value.is_empty() {
-                    texts.push(OwnedScreenText {
-                        text: value,
-                        origin: transform
-                            .map_point([bx + 6.0, by + if two_line { 16.0 } else { 13.0 }]),
-                        width: transform.map_size(w),
-                        font_size: font(10.5),
-                        color: dim_text_color(palette.body, alpha),
-                        align: TextAlign::Left,
-                    });
+                    chrome.label(
+                        stage_area(
+                            &transform,
+                            bx + 6.0,
+                            by + if two_line { 16.0 } else { 13.0 },
+                            w,
+                            12.0,
+                        ),
+                        &value,
+                        color_to_rgba(dim_text_color(palette.body, alpha)),
+                        font(10.5),
+                        PaintAlign::Left,
+                    );
                 }
             }
             // Приёмник: квалифицированный адрес истока (Объект.Поле)
@@ -979,36 +1034,40 @@ impl App {
                 let by = line.to[1] - 9.0;
                 let mut fill = palette.menu_fill;
                 fill[3] *= alpha;
-                quads.push(transform.instance_to_world(
-                    &CardInstance {
-                        pos: [bx, by],
-                        size: [w, 18.0],
-                        fill,
-                        border: [0.0; 4],
-                        params: [4.0, 0.0, 0.0, 1.0],
-                    },
-                    camera,
-                    viewport,
-                ));
-                let color = dim_text_color(palette.edge_label, alpha);
-                texts.push(OwnedScreenText {
-                    text: qualified,
-                    origin: transform.map_point([bx + 6.0, by + 13.0]),
-                    width: transform.map_size(w),
-                    font_size: font(10.5),
-                    color,
-                    align: TextAlign::Left,
-                });
+                chrome.rect(
+                    stage_area(&transform, bx, by, w, 18.0),
+                    fill,
+                    [0.0; 4],
+                    4.0 * s,
+                );
+                chrome.label(
+                    stage_area(&transform, bx + 6.0, by + 13.0, w, 12.0),
+                    &qualified,
+                    color_to_rgba(dim_text_color(palette.edge_label, alpha)),
+                    font(10.5),
+                    PaintAlign::Left,
+                );
             }
         }
+        paint_items_to_stage(
+            chrome.take_items(),
+            camera,
+            viewport,
+            zoom,
+            &mut quads,
+            &mut texts,
+        );
         // 8) Пилюли подписей веера (FR-044 Р-1 + Q2): адресация + значение,
         // лейн-стопка в коридоре между колонками — общий расчёт с hit-
         // тестом клика ([`Self::stage_pill_state`], детерминизм); зона
         // клампа сжата верхом панели «Как считается» (Р-1 «между
         // заголовком и панелью»); подсветка Р-5 — пилюли вне фокуса
         // приглушены (Q3: с анимацией); переполнение — эшелоны Q2
-        // (Compact — однострочные, Scroll — окно с индикаторами)
+        // (Compact — однострочные, Scroll — окно с индикаторами).
+        // FR-068 (W3-продолжение): Painter-путь (stage_area; радиус 9 —
+        // stage-локальные px, масштаб s)
         let (pill_rects, pill_mode) = self.stage_pill_state(stage, &ctx);
+        let mut chrome = Painter::new();
         for (item, pill_rect) in pill_rects {
             let edge = &stage.slice.edges[item];
             let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
@@ -1017,37 +1076,46 @@ impl App {
             let alpha = edge_alpha(item);
             let mut fill = palette.edge_label_fill;
             fill[3] *= alpha;
-            quads.push(transform.instance_to_world(
-                &CardInstance {
-                    pos: [pill_rect.x, pill_rect.y],
-                    size: [pill_rect.w, pill_rect.h],
-                    fill,
-                    border: if sel { SELECTION_BORDER } else { [0.0; 4] },
-                    params: [9.0, 0.0, 0.0, 1.0],
-                },
-                camera,
-                viewport,
-            ));
+            chrome.rect(
+                stage_area(
+                    &transform,
+                    pill_rect.x,
+                    pill_rect.y,
+                    pill_rect.w,
+                    pill_rect.h,
+                ),
+                fill,
+                if sel { SELECTION_BORDER } else { [0.0; 4] },
+                9.0 * s,
+            );
             if matches!(pill_mode, calc_panel_ui::PillZoneMode::Full) {
-                let addr_color = dim_text_color(palette.title, alpha);
-                texts.push(OwnedScreenText {
-                    text: addr,
-                    origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 5.0]),
-                    width: transform.map_size(pill_rect.w - 16.0),
-                    font_size: font(12.0),
-                    color: addr_color,
-                    align: TextAlign::Left,
-                });
+                chrome.label(
+                    stage_area(
+                        &transform,
+                        pill_rect.x + 12.0,
+                        pill_rect.y + 5.0,
+                        pill_rect.w - 16.0,
+                        14.0,
+                    ),
+                    &addr,
+                    color_to_rgba(dim_text_color(palette.title, alpha)),
+                    font(12.0),
+                    PaintAlign::Left,
+                );
                 if !value.is_empty() {
-                    let value_color = dim_text_color(palette.edge_label, alpha);
-                    texts.push(OwnedScreenText {
-                        text: value,
-                        origin: transform.map_point([pill_rect.x + 12.0, pill_rect.y + 18.0]),
-                        width: transform.map_size(pill_rect.w - 16.0),
-                        font_size: font(11.0),
-                        color: value_color,
-                        align: TextAlign::Left,
-                    });
+                    chrome.label(
+                        stage_area(
+                            &transform,
+                            pill_rect.x + 12.0,
+                            pill_rect.y + 18.0,
+                            pill_rect.w - 16.0,
+                            13.0,
+                        ),
+                        &value,
+                        color_to_rgba(dim_text_color(palette.edge_label, alpha)),
+                        font(11.0),
+                        PaintAlign::Left,
+                    );
                 }
             } else {
                 // Compact/Scroll: одна строка «адрес · значение»
@@ -1059,15 +1127,19 @@ impl App {
                     format!("{addr} · {value}")
                 };
                 let combined = truncate_chars(&combined, 56);
-                texts.push(OwnedScreenText {
-                    text: combined,
-                    origin: transform
-                        .map_point([pill_rect.x + 12.0, pill_rect.y + (pill_rect.h - 12.0) / 2.0]),
-                    width: transform.map_size(pill_rect.w - 16.0),
-                    font_size: font(11.0),
-                    color: dim_text_color(palette.title, alpha),
-                    align: TextAlign::Left,
-                });
+                chrome.label(
+                    stage_area(
+                        &transform,
+                        pill_rect.x + 12.0,
+                        pill_rect.y + (pill_rect.h - 12.0) / 2.0,
+                        pill_rect.w - 16.0,
+                        13.0,
+                    ),
+                    &combined,
+                    color_to_rgba(dim_text_color(palette.title, alpha)),
+                    font(11.0),
+                    PaintAlign::Left,
+                );
             }
         }
         // 8a) Q2 (Scroll): индикаторы «↑ ещё N» / «ещё N ↓» — клики листают
@@ -1088,27 +1160,35 @@ impl App {
                 } else {
                     counts.1
                 };
-                quads.push(transform.instance_to_world(
-                    &CardInstance {
-                        pos: [ind.x, ind.y],
-                        size: [ind.w, ind.h],
-                        fill: palette.menu_fill,
-                        border: palette.palette_border,
-                        params: [9.0, 0.0, 0.0, 1.0],
-                    },
-                    camera,
-                    viewport,
-                ));
-                texts.push(OwnedScreenText {
-                    text: self.trf(text_key, &[("n", &n.to_string())]),
-                    origin: transform.map_point([ind.x + 6.0, ind.y + (ind.h - 11.0) / 2.0]),
-                    width: transform.map_size(ind.w - 12.0),
-                    font_size: font(10.0),
-                    color: palette.quote,
-                    align: TextAlign::Center,
-                });
+                chrome.rect(
+                    stage_area(&transform, ind.x, ind.y, ind.w, ind.h),
+                    palette.menu_fill,
+                    palette.palette_border,
+                    9.0 * s,
+                );
+                chrome.label(
+                    stage_area(
+                        &transform,
+                        ind.x + 6.0,
+                        ind.y + (ind.h - 11.0) / 2.0,
+                        ind.w - 12.0,
+                        12.0,
+                    ),
+                    &self.trf(text_key, &[("n", &n.to_string())]),
+                    color_to_rgba(palette.quote),
+                    font(10.0),
+                    PaintAlign::Center,
+                );
             }
         }
+        paint_items_to_stage(
+            chrome.take_items(),
+            camera,
+            viewport,
+            zoom,
+            &mut quads,
+            &mut texts,
+        );
         // 8b) Панель «Как считается» (FR-044 Р-4): screen-space каркас
         // у приёмника (низ stage), две группы — «Переменные · входящие
         // значения» (value-точка, квалифицированный адрес + значение,
@@ -1138,11 +1218,12 @@ impl App {
                     c.a() as f32 / 255.0,
                 ]
             };
-            d.rect(
+            // FR-068 (W3-продолжение): каркас панели — Panel-стиль
+            // компонентной модели (panel_style_of — явные слоты, F-8);
+            // вывод тот же (fill/border/radius 10 — прежние)
+            d.panel(
                 canvas_ui::geometry::UiRect::new(px, py, panel.rect[2], panel.rect[3]),
-                palette.menu_fill,
-                palette.palette_border,
-                10.0,
+                &kit::panel_style_of(palette.menu_fill, palette.palette_border, 10.0, 0.0),
             );
             d.label(
                 canvas_ui::geometry::UiRect::new(
@@ -1373,6 +1454,9 @@ impl App {
         if !ctx.model.ext_sources.is_empty() {
             let src = &stage.slice.nodes[0];
             let mut ext_y = src.y + src.height + 10.0;
+            // FR-068 (W3-продолжение): Painter-путь мини-карточек (как у
+            // пилюль/подписей — stage_area; радиус 8 — stage-локальные px)
+            let mut chrome = Painter::new();
             for ext in &ctx.model.ext_sources {
                 let focused =
                     ctx.focus.as_ref().is_some_and(|focus| {
@@ -1388,53 +1472,60 @@ impl App {
                 let mut fill = palette.edge_label_fill;
                 fill[3] *= dim_alpha;
                 let card_w = src.width.min(220.0);
-                quads.push(transform.instance_to_world(
-                    &CardInstance {
-                        pos: [src.x, ext_y],
-                        size: [card_w, 26.0],
-                        fill,
-                        border: if focused {
-                            let mut border = SELECTION_BORDER;
-                            border[3] *= ctx.dim;
-                            border
-                        } else {
-                            palette.palette_border
-                        },
-                        params: [8.0, 0.0, 0.0, 1.0],
+                chrome.rect(
+                    stage_area(&transform, src.x, ext_y, card_w, 26.0),
+                    fill,
+                    if focused {
+                        let mut border = SELECTION_BORDER;
+                        border[3] *= ctx.dim;
+                        border
+                    } else {
+                        palette.palette_border
                     },
-                    camera,
-                    viewport,
-                ));
-                let color = dim_text_color(palette.body, dim_alpha);
-                texts.push(OwnedScreenText {
-                    text: truncate_chars(&ext.title, 26),
-                    origin: transform.map_point([src.x + 8.0, ext_y + 4.0]),
-                    width: transform.map_size(card_w - 16.0),
-                    font_size: font(10.5),
-                    color,
-                    align: TextAlign::Left,
-                });
-                let count_color = dim_text_color(palette.quote, dim_alpha);
-                texts.push(OwnedScreenText {
-                    text: self.trf(keys::STAGE_CALC_EXT, &[("n", &ext.count.to_string())]),
-                    origin: transform.map_point([src.x + 8.0, ext_y + 15.0]),
-                    width: transform.map_size(card_w - 16.0),
-                    font_size: font(9.5),
-                    color: count_color,
-                    align: TextAlign::Left,
-                });
+                    8.0 * s,
+                );
+                chrome.label(
+                    stage_area(&transform, src.x + 8.0, ext_y + 4.0, card_w - 16.0, 12.0),
+                    &truncate_chars(&ext.title, 26),
+                    color_to_rgba(dim_text_color(palette.body, dim_alpha)),
+                    font(10.5),
+                    PaintAlign::Left,
+                );
+                chrome.label(
+                    stage_area(&transform, src.x + 8.0, ext_y + 15.0, card_w - 16.0, 11.0),
+                    &self.trf(keys::STAGE_CALC_EXT, &[("n", &ext.count.to_string())]),
+                    color_to_rgba(dim_text_color(palette.quote, dim_alpha)),
+                    font(9.5),
+                    PaintAlign::Left,
+                );
                 ext_y += 32.0;
             }
+            paint_items_to_stage(
+                chrome.take_items(),
+                camera,
+                viewport,
+                zoom,
+                &mut quads,
+                &mut texts,
+            );
         }
-        // 9) Подсказка внизу stage (i18n, §7.2)
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::STAGE_FOOT_HINT).to_owned(),
-            origin: [rect.x + 40.0, rect.y + rect.h - 26.0],
-            width: rect.w - 80.0,
-            font_size: font(11.5),
-            color: palette.quote,
-            align: TextAlign::Center,
-        });
+        // 9) Подсказка внизу stage (i18n, §7.2) — Painter-путь
+        let mut chrome = Painter::new();
+        chrome.label(
+            UiRect::new(rect.x + 40.0, rect.y + rect.h - 26.0, rect.w - 80.0, 14.0),
+            self.tr(keys::STAGE_FOOT_HINT),
+            color_to_rgba(palette.quote),
+            font(11.5),
+            PaintAlign::Center,
+        );
+        paint_items_to_stage(
+            chrome.take_items(),
+            camera,
+            viewport,
+            zoom,
+            &mut quads,
+            &mut texts,
+        );
         (quads, texts)
     }
 
