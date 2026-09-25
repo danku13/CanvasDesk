@@ -36,3 +36,14 @@ pollster.workspace = true
 wgpu = { workspace = true, features = ["webgl"] }
 
 [dev-dependencies]
+# FR-WASM-02 §7: wasm-тесты чистой логики рендера (clamp_surface_extent и
+# др.). wasm_bindgen_test исполняется в браузере/wasm-рантайме через
+# wasm-bindgen-test-runner; на нативных целях макрос раскрывается в
+# заглушки (контрольная сборка под x86_64 зелёная). cargo test --target
+# wasm32-unknown-unknown -p canvas-render --test wasm_clamp запускает
+# эти тесты; для компиляции без запуска — wasm_gate.sh ступень 1.
+# Через target-specific dependency — wasm-bindgen-test не тащится в
+# нативные сборки (его JS-only крейт jemalloc-sys иначе провоцирует
+# разовые сбои на свежих nightly).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true
