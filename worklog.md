@@ -6399,3 +6399,18 @@ Stage Summary:
 - Каталог миграции §9 (срез v2, маппинг W3.2, кандидаты W4, Table v2, «не мигрировать»); worklog. FR-068 — без правок статуса (W3-продолжение, не новая волна).
 - **Telegram:** план → отчёт этапа 2 → отчёт этапа 3 → финальное саммари.
 - **Открытый вопрос владельцу:** по правилу AGENTS.md — нужна ли доработка онбординга/user-docs под пересборку main stage? Поведенческих изменений нет (бит-в-бит), ожидаемый ответ — «не требуется».
+
+## 2026-09-26 — docs(plan): дизайн Table-компонента v2 (табличные строки на общих направляющих; FR-068 W3-продолжение)
+
+- **Агент:** Super Z (сессия web-3e2a9c55; запрос владельца: «спроектировать Table-компонент v2 — строки панели stage первый кандидат»).
+
+### Work Log
+- **Анализ базы (5e9e2c6):** Row v1 (component/row.rs — Component-слой, кегль/семейство захардкожены ROW_DEFAULT_SIZE/FAMILY, «не-дефолтный кегль — расширение в v2»), RowGuides (row_guides.rs — двухпроходная раскладка D-3, cells_with — Grid/taffy W1), окно видимости list_rows/scroll_bar (component/list.rs — List-прецедент бегунка в paint), 18 мест ручной оркестрации (stage.rs:1274–1422 vars+formulas, kit_ui 637–716, admin_ui 1085–1135, overlays 1240–1252).
+- **Ключевые находки для бит-в-бит:** (1) vars-таблица stage: right_edge = vars_area.right() − 6, unit/badge пустые у всех строк → value_right = right − gap — воспроизводится implicit-колонками 1:1; (2) формулы stage: ручная деградация RowGuides{0,0,0, value_x=unit_x=slot.right()} — «наивный» with_right_edge сдвинул бы label_right на gap → нужно ПРАВИЛО ДЕГРАДАЦИИ (все правые пусты → None → деградированные направляющие от slot.right()); (3) частичные строки: stage усекает пересечением (центр текста в усечённом слоте), List::layout возвращает полные rect'ы — Table принимает stage-семантику (иначе не бит-в-бит); (4) кегль stage 11.0 ≠ ROW_DEFAULT_SIZE 12.0 → TableProps{size, family}.
+- **Дизайн:** `docs/plans/fr-068-table-v2.md` — 10 разделов: мотивация, срез дублирования (таблица потребителей), принципы (I-1/F-8/KISS/прецеденты/G7), API (TableRow/TableRowStyle-override/TableOpts/TableProps; guides/visible_rows/row_layout_at/model_index_at; set_rows синхронизирует content_h), эскиз скелета, отклонение от эскиза каталога (columns implicit — §6, обоснование бит-в-бит/YAGNI), оракулы T1–T7, план миграции M1–M6 (M2 — stage, первый кандидат), риски/non-goals, гейты приёмки.
+- **Каталог:** §9.5 п.2 — ссылка на дизайн (статус «Дизайн готов»).
+
+### Статусы
+- Каталог миграции §9.5; новый план fr-068-table-v2.md; worklog. Kit-функции/RowGuides/Row v1 не тронуты (код — только docs).
+- **Telegram:** план этапа (msg 279) → отчёт результата.
+- **Следующая очередь (за владельцем):** M1 (canvas-ui, additive + T1–T6) → M2 (stage.rs, 2×Table, оракулы T4/T7).
