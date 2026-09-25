@@ -7,7 +7,7 @@
  "category": "planning",
  "category_ru": "Планирование",
  "category_en": "Planning",
- "version": "1.1.0",
+ "version": "1.2.0",
  "content": {
   "nodes": [
    {
@@ -157,7 +157,7 @@
     "y": 60,
     "width": 320,
     "height": 200,
-    "text": "Вердикт\nРезерв — пятнадцать процентов от команды: страховка планов.\nПучок «Подытоги → Итог» открывает веер значений обеих групп.\nПопробуйте сценарий на статьях: дельты увидите в потоке.",
+    "text": "Вердикт\nРезерв — пятнадцать процентов от команды, бюджет — 16925: страховка планов.\nПучок «Подытоги → Итог» открывает веер значений обеих групп.\nПопробуйте сценарий на статьях: дельты увидите в потоке.",
     "color": "4"
    }
   ],
@@ -406,7 +406,7 @@
     "y": 60,
     "width": 320,
     "height": 200,
-    "text": "Verdict\nThe reserve is fifteen percent of the team: a plan’s insurance.\nThe “Subtotals → Total” bundle opens a fan of values for both groups.\nTry a scenario on the line items: deltas will show up in the flow.",
+    "text": "Verdict\nThe reserve is fifteen percent of the team, the budget is 16925: a plan’s insurance.\nThe “Subtotals → Total” bundle opens a fan of values for both groups.\nTry a scenario on the line items: deltas will show up in the flow.",
     "color": "4"
    }
   ],

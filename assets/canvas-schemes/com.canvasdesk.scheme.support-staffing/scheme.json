@@ -1,0 +1,445 @@
+{
+ "id": "com.canvasdesk.scheme.support-staffing",
+ "name_ru": "Штат поддержки",
+ "name_en": "Support staffing",
+ "description_ru": "Поток обращений против штата операторов: загрузка, доля ожиданий по Эрлангу C, время ответа и обращения в системе одновременно.",
+ "description_en": "Call flow versus agent staffing: occupancy, the Erlang-C waiting share, response time and calls in the system at once.",
+ "category": "architecture",
+ "category_ru": "Архитектура",
+ "category_en": "Architecture",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 240,
+    "text": "Штат поддержки\nПоток обращений сравнивается со штатом: загрузка операторов, доля ожидающих по Эрлангу C, время ответа и обращения в системе одновременно.\nПоменяйте обращения, обработку или штат — всё пересчитается. Пучок «Обращения → Поток» открывается кликом в main stage.",
+    "color": "4"
+   },
+   {
+    "id": "demand",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 180,
+    "text": "Обращения\nОбращения пользователей за час и длина часа.\n\ncalls = 240 req\nperiod = 1 h",
+    "color": "5"
+   },
+   {
+    "id": "service",
+    "type": "text",
+    "x": 440,
+    "y": 240,
+    "width": 260,
+    "height": 180,
+    "text": "Обработка\nСреднее время оператора на одно обращение.\n\nhandle = 180 sec",
+    "color": "5"
+   },
+   {
+    "id": "staff",
+    "type": "text",
+    "x": 440,
+    "y": 480,
+    "width": 260,
+    "height": 160,
+    "text": "Штат\nОператоров на линии в смену.\n\nagents = 15",
+    "color": "5"
+   },
+   {
+    "id": "flow",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Поток\nИнтенсивность обращений: обращения, делённые на длину часа.\n\nlambda = Обращения.calls / Обращения.period",
+    "color": "2"
+   },
+   {
+    "id": "speed",
+    "type": "text",
+    "x": 800,
+    "y": 240,
+    "width": 280,
+    "height": 180,
+    "text": "Скорость\nПроизводительность оператора: обращение за время обработки.\n\nmu = 1 req / Обработка.handle",
+    "color": "2"
+   },
+   {
+    "id": "occupancy",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Загрузка\nДоля занятых операторов: значения приходят в параметры по имени.\n\nrho = utilization($lambda, $mu, $agents)",
+    "color": "2"
+   },
+   {
+    "id": "wait_prob",
+    "type": "text",
+    "x": 1160,
+    "y": 240,
+    "width": 280,
+    "height": 180,
+    "text": "Ожидание\nДоля обращений, которым придётся подождать (Эрланг C).\n\np_wait = erlang_c(Поток.lambda, Скорость.mu, Штат.agents)",
+    "color": "2"
+   },
+   {
+    "id": "response",
+    "type": "text",
+    "x": 1160,
+    "y": 480,
+    "width": 280,
+    "height": 180,
+    "text": "Ответ\nСреднее время от прихода обращения до завершения (модель M/M/c).\n\nwait = mmc(Поток.lambda, Скорость.mu, Штат.agents)",
+    "color": "2"
+   },
+   {
+    "id": "wip",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Одновременно\nСколько обращений висит в системе в среднем: закон Литтла.\n\nwip = littles_law(Поток.lambda, Ответ.wait)",
+    "color": "6"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 240,
+    "width": 320,
+    "height": 220,
+    "text": "Вердикт\nОператоры заняты на 80 процентов, треть обращений ждёт, ответ занимает около трёх минут.\nПоднимите поток — время ответа вырастет резко: у модели есть предел, перегрузка подсветится рамкой.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "demand",
+    "toNode": "flow",
+    "flowKind": "value",
+    "fromOutput": "calls"
+   },
+   {
+    "id": "e2",
+    "fromNode": "demand",
+    "toNode": "flow",
+    "flowKind": "value",
+    "fromOutput": "period"
+   },
+   {
+    "id": "e3",
+    "fromNode": "service",
+    "toNode": "speed",
+    "flowKind": "value",
+    "fromOutput": "handle"
+   },
+   {
+    "id": "e4",
+    "fromNode": "flow",
+    "toNode": "occupancy",
+    "flowKind": "value",
+    "fromOutput": "lambda",
+    "toParam": "lambda"
+   },
+   {
+    "id": "e5",
+    "fromNode": "speed",
+    "toNode": "occupancy",
+    "flowKind": "value",
+    "fromOutput": "mu",
+    "toParam": "mu"
+   },
+   {
+    "id": "e6",
+    "fromNode": "staff",
+    "toNode": "occupancy",
+    "flowKind": "value",
+    "fromOutput": "agents",
+    "toParam": "agents"
+   },
+   {
+    "id": "e7",
+    "fromNode": "flow",
+    "toNode": "wait_prob",
+    "flowKind": "value",
+    "fromOutput": "lambda"
+   },
+   {
+    "id": "e8",
+    "fromNode": "speed",
+    "toNode": "wait_prob",
+    "flowKind": "value",
+    "fromOutput": "mu"
+   },
+   {
+    "id": "e9",
+    "fromNode": "staff",
+    "toNode": "wait_prob",
+    "flowKind": "value",
+    "fromOutput": "agents"
+   },
+   {
+    "id": "e10",
+    "fromNode": "flow",
+    "toNode": "response",
+    "flowKind": "value",
+    "fromOutput": "lambda"
+   },
+   {
+    "id": "e11",
+    "fromNode": "speed",
+    "toNode": "response",
+    "flowKind": "value",
+    "fromOutput": "mu"
+   },
+   {
+    "id": "e12",
+    "fromNode": "staff",
+    "toNode": "response",
+    "flowKind": "value",
+    "fromOutput": "agents"
+   },
+   {
+    "id": "e13",
+    "fromNode": "flow",
+    "toNode": "wip",
+    "flowKind": "value",
+    "fromOutput": "lambda"
+   },
+   {
+    "id": "e14",
+    "fromNode": "response",
+    "toNode": "wip",
+    "flowKind": "value",
+    "fromOutput": "wait"
+   }
+  ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 240,
+    "text": "Startup runway\nExpense items roll into the monthly burn, revenue offsets the net burn, and cash divided by it gives the runway.\nChange any item or the cash and everything recomputes. The “Costs → Burn” bundle opens with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "demand",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 180,
+    "text": "Calls\nUser calls per hour and the length of the hour.\n\ncalls = 240 req\nperiod = 1 h",
+    "color": "5"
+   },
+   {
+    "id": "service",
+    "type": "text",
+    "x": 440,
+    "y": 240,
+    "width": 260,
+    "height": 180,
+    "text": "Handling\nAverage operator time per call.\n\nhandle = 180 sec",
+    "color": "5"
+   },
+   {
+    "id": "staff",
+    "type": "text",
+    "x": 440,
+    "y": 480,
+    "width": 260,
+    "height": 160,
+    "text": "Staff\nAgents on the line per shift.\n\nagents = 15",
+    "color": "5"
+   },
+   {
+    "id": "flow",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Flow\nCall intensity: calls divided by the hour.\n\nlambda = Calls.calls / Calls.period",
+    "color": "2"
+   },
+   {
+    "id": "speed",
+    "type": "text",
+    "x": 800,
+    "y": 240,
+    "width": 280,
+    "height": 180,
+    "text": "Speed\nOperator productivity: one call per handling time.\n\nmu = 1 req / Handling.handle",
+    "color": "2"
+   },
+   {
+    "id": "occupancy",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Occupancy\nShare of busy agents: values arrive in parameters by name.\n\nrho = utilization($lambda, $mu, $agents)",
+    "color": "2"
+   },
+   {
+    "id": "wait_prob",
+    "type": "text",
+    "x": 1160,
+    "y": 240,
+    "width": 280,
+    "height": 180,
+    "text": "Waiting\nShare of calls that will have to wait (Erlang C).\n\np_wait = erlang_c(Flow.lambda, Speed.mu, Staff.agents)",
+    "color": "2"
+   },
+   {
+    "id": "response",
+    "type": "text",
+    "x": 1160,
+    "y": 480,
+    "width": 280,
+    "height": 180,
+    "text": "Response\nAverage time from call arrival to completion (M/M/c model).\n\nwait = mmc(Flow.lambda, Speed.mu, Staff.agents)",
+    "color": "2"
+   },
+   {
+    "id": "wip",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Concurrent\nHow many calls sit in the system on average: Little’s law.\n\nwip = littles_law(Flow.lambda, Response.wait)",
+    "color": "6"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 240,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nThe horizon is 54 months at a net burn of 22 thousand per month: more than four years of headroom.\nRaise marketing and the runway shifts at once; a scenario on the items shows deltas without touching the base.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "demand",
+    "toNode": "flow",
+    "flowKind": "value",
+    "fromOutput": "calls"
+   },
+   {
+    "id": "e2",
+    "fromNode": "demand",
+    "toNode": "flow",
+    "flowKind": "value",
+    "fromOutput": "period"
+   },
+   {
+    "id": "e3",
+    "fromNode": "service",
+    "toNode": "speed",
+    "flowKind": "value",
+    "fromOutput": "handle"
+   },
+   {
+    "id": "e4",
+    "fromNode": "flow",
+    "toNode": "occupancy",
+    "flowKind": "value",
+    "fromOutput": "lambda",
+    "toParam": "lambda"
+   },
+   {
+    "id": "e5",
+    "fromNode": "speed",
+    "toNode": "occupancy",
+    "flowKind": "value",
+    "fromOutput": "mu",
+    "toParam": "mu"
+   },
+   {
+    "id": "e6",
+    "fromNode": "staff",
+    "toNode": "occupancy",
+    "flowKind": "value",
+    "fromOutput": "agents",
+    "toParam": "agents"
+   },
+   {
+    "id": "e7",
+    "fromNode": "flow",
+    "toNode": "wait_prob",
+    "flowKind": "value",
+    "fromOutput": "lambda"
+   },
+   {
+    "id": "e8",
+    "fromNode": "speed",
+    "toNode": "wait_prob",
+    "flowKind": "value",
+    "fromOutput": "mu"
+   },
+   {
+    "id": "e9",
+    "fromNode": "staff",
+    "toNode": "wait_prob",
+    "flowKind": "value",
+    "fromOutput": "agents"
+   },
+   {
+    "id": "e10",
+    "fromNode": "flow",
+    "toNode": "response",
+    "flowKind": "value",
+    "fromOutput": "lambda"
+   },
+   {
+    "id": "e11",
+    "fromNode": "speed",
+    "toNode": "response",
+    "flowKind": "value",
+    "fromOutput": "mu"
+   },
+   {
+    "id": "e12",
+    "fromNode": "staff",
+    "toNode": "response",
+    "flowKind": "value",
+    "fromOutput": "agents"
+   },
+   {
+    "id": "e13",
+    "fromNode": "flow",
+    "toNode": "wip",
+    "flowKind": "value",
+    "fromOutput": "lambda"
+   },
+   {
+    "id": "e14",
+    "fromNode": "response",
+    "toNode": "wip",
+    "flowKind": "value",
+    "fromOutput": "wait"
+   }
+  ]
+ }
+}

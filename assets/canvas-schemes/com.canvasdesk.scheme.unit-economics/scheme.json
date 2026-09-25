@@ -7,7 +7,7 @@
  "category": "business",
  "category_ru": "Бизнес",
  "category_en": "Business",
- "version": "1.1.0",
+ "version": "1.2.0",
  "content": {
   "nodes": [
    {
@@ -99,7 +99,7 @@
     "y": 300,
     "width": 320,
     "height": 220,
-    "text": "Вердикт\nСоотношение ниже здоровой нормы: привлечение дорогое.\nСценарий на цене покажет дельты маржи и окупаемости без правки базы.\nПоднимите цену — маржа и LTV пересчитаются по всей цепочке.",
+    "text": "Вердикт\nСоотношение 1.8 ниже здоровой нормы: привлечение дорогое.\nСценарий на цене покажет дельты маржи и окупаемости без правки базы.\nПоднимите цену — маржа и LTV пересчитаются по всей цепочке.",
     "color": "4"
    }
   ],
@@ -258,7 +258,7 @@
     "y": 300,
     "width": 320,
     "height": 220,
-    "text": "Verdict\nThe ratio is below the healthy norm: acquisition is expensive.\nA scenario on the price will show deltas in margin and payback without touching the base.\nRaise the price and margin and LTV recompute through the whole chain.",
+    "text": "Verdict\nThe ratio of 1.8 is below the healthy norm: acquisition is expensive.\nA scenario on the price will show deltas in margin and payback without touching the base.\nRaise the price and margin and LTV recompute through the whole chain.",
     "color": "4"
    }
   ],
