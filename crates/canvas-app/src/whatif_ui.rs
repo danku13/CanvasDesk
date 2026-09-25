@@ -16,6 +16,11 @@
 //! хвост бара — примитив [`RowPolicy::SqueezeTail`] (бывшее замыкание
 //! `take`), ширина бара — [`constrain`] к вьюпорту, поля — spacing-scale
 //! `canvas_core::tokens::SPACING_*`.
+//!
+//! FR-068 W3.3: элементы бара — самоизмерение [`MeasuredItem::Text`]
+//! (текст + пад, высота/мин-ширина — дизайн-константы); ручная проводка
+//! «width_of → размер ребёнка» удалена, [`chip_width`]/[`btn_width`] —
+//! только первый проход расчёта ширины бара.
 
 use crate::ui::point_in_rect;
 use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
@@ -43,7 +48,8 @@ pub const BAR_GAP: f32 = canvas_core::tokens::SPACING_S;
 /// Ширина индикатора «WHAT-IF».
 pub const INDICATOR_WIDTH: f32 = 78.0;
 /// Минимальная ширина кнопок Apply/Сброс/Сравнить (фактическая — по
-/// измеренной подписи, [`btn_width`]).
+/// измеренной подписи: [`MeasuredItem::Text`] c `min_w`; [`btn_width`] —
+/// первый проход ширины бара).
 pub const BTN_WIDTH: f32 = 74.0;
 /// Горизонтальные поля кнопки (spacing-scale).
 pub const BTN_PAD_X: f32 = canvas_core::tokens::SPACING_LG;
@@ -142,12 +148,19 @@ pub fn enter_pill_rect(viewport: [f32; 2]) -> [f32; 4] {
 
 /// Измеренная ширина чипа по подписи: ширина текста + поля `CHIP_PAD_X`
 /// (запас не нужен: ширина реальная, CR-015-эвристика удалена).
+/// FR-068 W3.3: элементы бара сами себя измеряют ([`MeasuredItem::Text`]) —
+/// функция осталась ТОЛЬКО для первого прохода (расчёт желаемой ширины
+/// бара `desired` ниже, аналог двухпроходных направляющих); замер тот же
+/// ключ кэша [`TextMeasurer`], что у резолва items — значения совпадают
+/// бит-в-бит (одна точка измерения на подпись).
 fn chip_width(label: &str, m: &mut TextMeasurer, fs: &mut cosmic_text::FontSystem) -> f32 {
     m.width_of(fs, label, FAMILY, CHIP_FONT) + CHIP_PAD_X * 2.0
 }
 
 /// Ширина кнопки по подписи: не уже `BTN_WIDTH`, поля `BTN_PAD_X`
 /// (CR-015: «Сравнить» шире прежнего фикса 74 px и обрезалась).
+/// FR-068 W3.3: первый проход (см. [`chip_width`]) — сами items кнопок
+/// измеряются [`MeasuredItem::Text`] c `min_w: BTN_WIDTH`.
 fn btn_width(label: &str, m: &mut TextMeasurer, fs: &mut cosmic_text::FontSystem) -> f32 {
     BTN_WIDTH.max(m.width_of(fs, label, FAMILY, CHIP_FONT) + BTN_PAD_X * 2.0)
 }
@@ -221,54 +234,80 @@ pub fn bar_layout(
     // элемент получает min(желаемое, остаток), хвост сжимается до нуля
     // (вырожденные rect'ы невидимы и не пикаются); дословная семантика
     // прежнего замыкания `take` (CR-015).
-    // FR-068 W3.1 (staged-миграция потребителей, каталог
-    // docs/plans/fr-068-w3-consumer-migration.md, топ-1): элементы бара
-    // переведены с ручной проводки «width_of → фиксированный ребёнок» на
-    // семейство measured-API ([`MeasuredItem`] через [`Row::lay_out_measured`]).
-    // Чип/кнопка = текст + пад (`CHIP_PAD_X`/`BTN_PAD_X`) — точную ширину
-    // даёт [`MeasuredItem::Fixed`] (замер ОДИН раз выше, строки те же);
-    // авто-размер [`MeasuredItem::Text`] — после появления пад-семантики
-    // в F-13 (без изменения ширины чипов — отдельное решение владельца).
-    // Геометрия бит-в-бит с прежней: `MeasuredItem::Fixed` резолвится в
-    // тот же фиксированный `Child` и тот же движок SqueezeTail (оракул F-13).
+    // FR-068 W3.3 (каталог docs/plans/fr-068-w3-consumer-migration.md
+    // §9.3.1/§9.5): класс проводок «width_of → размер ребёнка» закрыт —
+    // чип/кнопка сами себя измеряют ([`MeasuredItem::Text`]: текст + пад
+    // `CHIP_PAD_X`/`BTN_PAD_X`, высота — дизайн-константа [`CHIP_HEIGHT`];
+    // у кнопок пол ширины `BTN_WIDTH`). Пад-семантика появилась в F-13,
+    // ручные замеры в items ушли. Геометрия бит-в-бит с прежней: `Text`
+    // резолвится в `Fixed { w: width_of + pad_x }` (оракулы canvas-ui
+    // `measured_text_pad_x_*`) и тот же движок SqueezeTail; подпись — та
+    // же строка, что рисуется (counter_label/freeze_label — фикс FR-053).
+    // Ширина бара (`desired` выше) считается по тому же замеру в первом
+    // проходе ([`chip_width`]/[`btn_width`] — одна точка измерения).
+    // Индикатор/«✕» — константные ширины (не текст) — остаются `Fixed`.
     let mut items: Vec<MeasuredItem> = Vec::with_capacity(scenario_names.len() + 8);
     items.push(MeasuredItem::Fixed {
         w: INDICATOR_WIDTH,
         h: CHIP_HEIGHT,
     });
-    items.push(MeasuredItem::Fixed {
-        w: chip_width("База", measurer, fs),
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: "База",
+        max_w: None,
+        min_w: 0.0,
+        pad_x: CHIP_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
     for name in scenario_names {
-        items.push(MeasuredItem::Fixed {
-            w: chip_width(name, measurer, fs),
-            h: CHIP_HEIGHT,
+        items.push(MeasuredItem::Text {
+            text: name.as_str(),
+            max_w: None,
+            min_w: 0.0,
+            pad_x: CHIP_PAD_X * 2.0,
+            h: Some(CHIP_HEIGHT),
         });
     }
-    items.push(MeasuredItem::Fixed {
-        w: chip_width("+", measurer, fs),
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: "+",
+        max_w: None,
+        min_w: 0.0,
+        pad_x: CHIP_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
-    items.push(MeasuredItem::Fixed {
-        w: counter_w,
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: counter_label,
+        max_w: None,
+        min_w: 0.0,
+        pad_x: CHIP_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
-    items.push(MeasuredItem::Fixed {
-        w: btn_width("Apply", measurer, fs),
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: "Apply",
+        max_w: None,
+        min_w: BTN_WIDTH,
+        pad_x: BTN_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
-    items.push(MeasuredItem::Fixed {
-        w: btn_width("Сброс", measurer, fs),
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: "Сброс",
+        max_w: None,
+        min_w: BTN_WIDTH,
+        pad_x: BTN_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
-    items.push(MeasuredItem::Fixed {
-        w: btn_width(freeze_label, measurer, fs),
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: freeze_label,
+        max_w: None,
+        min_w: BTN_WIDTH,
+        pad_x: BTN_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
-    items.push(MeasuredItem::Fixed {
-        w: btn_width("Сравнить", measurer, fs),
-        h: CHIP_HEIGHT,
+    items.push(MeasuredItem::Text {
+        text: "Сравнить",
+        max_w: None,
+        min_w: BTN_WIDTH,
+        pad_x: BTN_PAD_X * 2.0,
+        h: Some(CHIP_HEIGHT),
     });
     items.push(MeasuredItem::Fixed {
         w: CLOSE_WIDTH,
