@@ -45,6 +45,46 @@ pub enum PaintItem {
         size: f32,
         align: PaintAlign,
     },
+    /// Клип-контейнер (FR-068 W1): содержимое рисуется только внутри `rect`
+    /// (overflow:hidden-семантика в draw-слое). Вложенность — произвольная
+    /// (клип в клипе — сужение области). Painter остаётся ДАННЫМИ (G7):
+    /// отсечение исполняет потребитель — конвертация в scissor FR-056 на
+    /// своём кадре (canvas-app kit_ui); UiLayer не затрагивается —
+    /// слои/capture/draw-порядок без изменений (§Контракт-5 FR-068,
+    /// D8 ADR-0013).
+    ClipRect { rect: UiRect, items: Vec<PaintItem> },
+}
+
+/// Шаг плоского обхода дерева items ([`walk`]): контейнер клипа или лист.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipStep<'a> {
+    /// Rect клип-контейнера ([`PaintItem::ClipRect`]); следующие шаги —
+    /// его поддерево в draw-порядке.
+    Clip(UiRect),
+    /// Листовой item (Rect/Text) в draw-порядке.
+    Item(&'a PaintItem),
+}
+
+/// Плоский обход дерева items в draw-порядке (FR-068 W1):
+/// [`PaintItem::ClipRect`] разворачивается — сначала сам rect-контейнер как
+/// [`ClipStep::Clip`], затем дети (клип в клипе — DFS: вложенный `Clip`
+/// идёт перед оставшимися детьми внешнего). Порядок детерминирован порядком
+/// вызовов Painter'а; хелпер — потребителям (дампы/конвертация в scissor
+/// FR-056) и тестам.
+pub fn walk(items: &[PaintItem]) -> Vec<ClipStep<'_>> {
+    fn push_steps<'a>(items: &'a [PaintItem], out: &mut Vec<ClipStep<'a>>) {
+        for item in items {
+            if let PaintItem::ClipRect { rect, items } = item {
+                out.push(ClipStep::Clip(*rect));
+                push_steps(items, out);
+            } else {
+                out.push(ClipStep::Item(item));
+            }
+        }
+    }
+    let mut steps = Vec::new();
+    push_steps(items, &mut steps);
+    steps
 }
 
 /// Сборщик примитивов отрисовки (журнал items в порядке вызовов).
@@ -94,6 +134,19 @@ impl Painter {
             color,
             size,
             align,
+        });
+    }
+
+    /// Клип-контейнер: items, нарисованные в `paint`, оборачиваются в
+    /// [`PaintItem::ClipRect`] с rect `r` (порядок вложенных = порядок
+    /// вызовов; см. [`walk`] для плоского обхода). Отсечение — забота
+    /// потребителя (scissor FR-056), Painter копит данные (G7).
+    pub fn clip_rect(&mut self, r: UiRect, paint: impl FnOnce(&mut Painter)) {
+        let mut inner = Painter::new();
+        paint(&mut inner);
+        self.items.push(PaintItem::ClipRect {
+            rect: r,
+            items: inner.take_items(),
         });
     }
 
@@ -247,5 +300,185 @@ mod tests {
         assert_eq!(p, snapshot);
         let moved = p.items()[0].clone();
         assert_eq!(moved, snapshot.items()[0]);
+    }
+
+    /// clip_rect оборачивает вложенные items в ClipRect: rect — дословно,
+    /// порядок детей = порядок вызовов внутри замыкания; соседние items
+    /// идут в общем draw-порядке журнала (клип — один item).
+    #[test]
+    fn clip_rect_wraps_inner_items_in_call_order() {
+        let mut p = Painter::new();
+        p.rect(UiRect::new(0.0, 0.0, 100.0, 100.0), FILL, BORDER, 0.0);
+        p.clip_rect(UiRect::new(10.0, 20.0, 50.0, 60.0), |inner| {
+            inner.label(
+                UiRect::new(12.0, 22.0, 40.0, 16.0),
+                "В клипе",
+                TEXT,
+                12.0,
+                PaintAlign::Left,
+            );
+            inner.rect(UiRect::new(14.0, 24.0, 8.0, 8.0), FILL, BORDER, 2.0);
+        });
+        p.label(
+            UiRect::new(0.0, 0.0, 10.0, 10.0),
+            "После",
+            TEXT,
+            12.0,
+            PaintAlign::Left,
+        );
+
+        let items = p.items();
+        assert_eq!(
+            items.len(),
+            3,
+            "rect + ClipRect + label — в порядке вызовов"
+        );
+        assert!(matches!(items[0], PaintItem::Rect { .. }));
+        assert!(matches!(items[2], PaintItem::Text { .. }));
+        assert_eq!(
+            items[1],
+            PaintItem::ClipRect {
+                rect: UiRect::new(10.0, 20.0, 50.0, 60.0),
+                items: vec![
+                    PaintItem::Text {
+                        area: UiRect::new(12.0, 22.0, 40.0, 16.0),
+                        text: "В клипе".to_owned(),
+                        color: TEXT,
+                        size: 12.0,
+                        align: PaintAlign::Left,
+                    },
+                    PaintItem::Rect {
+                        rect: UiRect::new(14.0, 24.0, 8.0, 8.0),
+                        fill: FILL,
+                        border: BORDER,
+                        radius: 2.0,
+                    },
+                ],
+            }
+        );
+    }
+
+    /// Вложенные клипы (клип в клипе): структура дерева сохраняется дословно,
+    /// `walk` даёт детерминированный DFS-порядок — Clip внешнего, Clip
+    /// внутреннего, его дети, затем оставшиеся дети внешнего.
+    #[test]
+    fn nested_clips_keep_structure_and_walk_is_dfs() {
+        let mut p = Painter::new();
+        p.clip_rect(UiRect::new(0.0, 0.0, 100.0, 100.0), |outer| {
+            outer.clip_rect(UiRect::new(10.0, 10.0, 40.0, 40.0), |inner| {
+                inner.label(
+                    UiRect::new(12.0, 12.0, 20.0, 10.0),
+                    "Глубоко",
+                    TEXT,
+                    11.0,
+                    PaintAlign::Left,
+                );
+            });
+            outer.label(
+                UiRect::new(50.0, 50.0, 30.0, 10.0),
+                "Рядом",
+                TEXT,
+                11.0,
+                PaintAlign::Left,
+            );
+        });
+
+        // Структура: ClipRect(outer) → [ClipRect(inner) → [Text], Text]
+        let items = p.items();
+        assert_eq!(items.len(), 1, "вложенный клип — один корневой item");
+        let PaintItem::ClipRect {
+            rect: outer,
+            items: outer_items,
+        } = &items[0]
+        else {
+            panic!("ожидался ClipRect снаружи");
+        };
+        assert_eq!(*outer, UiRect::new(0.0, 0.0, 100.0, 100.0));
+        assert_eq!(outer_items.len(), 2);
+        let PaintItem::ClipRect {
+            rect: inner,
+            items: inner_items,
+        } = &outer_items[0]
+        else {
+            panic!("ожидался вложенный ClipRect");
+        };
+        assert_eq!(*inner, UiRect::new(10.0, 10.0, 40.0, 40.0));
+        assert_eq!(inner_items.len(), 1);
+        assert!(matches!(inner_items[0], PaintItem::Text { .. }));
+        assert!(matches!(outer_items[1], PaintItem::Text { .. }));
+
+        // walk: DFS draw-порядок
+        let steps = walk(&items);
+        assert_eq!(steps.len(), 4, "2 клипа + 2 листа");
+        assert_eq!(
+            steps[0],
+            ClipStep::Clip(UiRect::new(0.0, 0.0, 100.0, 100.0))
+        );
+        assert_eq!(
+            steps[1],
+            ClipStep::Clip(UiRect::new(10.0, 10.0, 40.0, 40.0))
+        );
+        assert!(matches!(
+            steps[2],
+            ClipStep::Item(PaintItem::Text { text, .. }) if text == "Глубоко"
+        ));
+        assert!(matches!(
+            steps[3],
+            ClipStep::Item(PaintItem::Text { text, .. }) if text == "Рядом"
+        ));
+    }
+
+    /// take_items отдаёт ClipRect как ЕДИНЫЙ item (дети — внутри, не
+    /// всплывают в журнал) и очищает журнал — потребитель конвертирует
+    /// дерево клипов за один кадр.
+    #[test]
+    fn take_items_hands_clip_as_single_item_and_clears() {
+        let mut p = Painter::new();
+        p.clip_rect(UiRect::new(0.0, 0.0, 80.0, 40.0), |inner| {
+            inner.rect(UiRect::new(2.0, 2.0, 10.0, 10.0), FILL, BORDER, 1.0);
+        });
+        p.rect(UiRect::new(90.0, 0.0, 10.0, 10.0), FILL, BORDER, 0.0);
+        assert_eq!(p.items().len(), 2);
+
+        let taken = p.take_items();
+        assert_eq!(taken.len(), 2, "клип — один item, дети не всплывают");
+        let PaintItem::ClipRect { rect, items } = &taken[0] else {
+            panic!("ожидался ClipRect");
+        };
+        assert_eq!(*rect, UiRect::new(0.0, 0.0, 80.0, 40.0));
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], PaintItem::Rect { .. }));
+        // Журнал пуст после take
+        assert!(p.items().is_empty());
+        assert!(p.take_items().is_empty());
+    }
+
+    /// Контракт G7 (items_are_plain_data) распространяется на ClipRect:
+    /// Clone/PartialEq выведены — потребитель клонирует/сравнивает деревья
+    /// клипов как данные (дамп-тесты, конвертация в scissor FR-056).
+    #[test]
+    fn cliprect_is_plain_data() {
+        let mut p = Painter::new();
+        p.clip_rect(UiRect::new(1.0, 2.0, 30.0, 40.0), |inner| {
+            inner.label(
+                UiRect::new(3.0, 4.0, 20.0, 10.0),
+                "К",
+                TEXT,
+                11.0,
+                PaintAlign::Center,
+            );
+        });
+        let snapshot = p.clone();
+        assert_eq!(p, snapshot);
+        let moved = p.items()[0].clone();
+        assert_eq!(moved, snapshot.items()[0]);
+        // PartialEq различает детей клипа (данные, а не синглтон)
+        assert_ne!(
+            moved,
+            PaintItem::ClipRect {
+                rect: UiRect::new(1.0, 2.0, 30.0, 40.0),
+                items: Vec::new(),
+            }
+        );
     }
 }

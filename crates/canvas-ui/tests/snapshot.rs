@@ -5,9 +5,13 @@
 //! Tooltip/Modal/TextField/Switch) × 3 состояния (default/hover/disabled) ×
 //! 2 языка (RU/EN) = **60 эталонов** + тест счётчика = 61 тест.
 //!
-//! Формат дампа (нормализованная строка, одна строка на `PaintItem`):
+//! Формат дампа (нормализованная строка на Rect/Text-лист; клип — строка
+//! контейнера + дети рекурсивно в общий отсортированный список):
 //! - Rect: `rect x=… y=… w=… h=…`
 //! - Text: `text x=… y=… w=… h=… text="…"`
+//! - ClipRect (FR-068 W1): `clip x=… y=… w=… h=…` + рекурсивно дети
+//!   (клип не отсекает детей в дампе — это данные; отсечение исполняет
+//!   consumer/scissor FR-056)
 //!
 //! Координаты/размеры округляются до целого ui px (`f32::round() as i32`);
 //! строки сортируются по `(x, y, w, h, type)` — дамп устойчив к порядку
@@ -196,30 +200,46 @@ fn px(v: f32) -> i32 {
 
 /// Нормализованный дамп items: строка на item, сортировка по
 /// `(x, y, w, h, type)`; цвета/радиусы (слоты темы) не включаются.
+/// ClipRect (FR-068 W1) — строка `clip` самого rect'а + рекурсивно дети
+/// (в общий список; клип в дампе не отсекает детей — отсечение исполняет
+/// consumer/scissor FR-056).
 fn dump_items(items: &[PaintItem]) -> String {
     struct Line {
         key: (i32, i32, i32, i32, &'static str),
         body: String,
     }
-    let mut lines: Vec<Line> = items
-        .iter()
-        .map(|item| match item {
+    fn push_item_lines(item: &PaintItem, out: &mut Vec<Line>) {
+        match item {
             PaintItem::Rect { rect, .. } => {
                 let (x, y, w, h) = (px(rect.x), px(rect.y), px(rect.w), px(rect.h));
-                Line {
+                out.push(Line {
                     key: (x, y, w, h, "rect"),
                     body: format!("rect x={x} y={y} w={w} h={h}"),
-                }
+                });
             }
             PaintItem::Text { area, text, .. } => {
                 let (x, y, w, h) = (px(area.x), px(area.y), px(area.w), px(area.h));
-                Line {
+                out.push(Line {
                     key: (x, y, w, h, "text"),
                     body: format!("text x={x} y={y} w={w} h={h} text=\"{text}\""),
+                });
+            }
+            PaintItem::ClipRect { rect, items } => {
+                let (x, y, w, h) = (px(rect.x), px(rect.y), px(rect.w), px(rect.h));
+                out.push(Line {
+                    key: (x, y, w, h, "clip"),
+                    body: format!("clip x={x} y={y} w={w} h={h}"),
+                });
+                for child in items {
+                    push_item_lines(child, out);
                 }
             }
-        })
-        .collect();
+        }
+    }
+    let mut lines: Vec<Line> = Vec::new();
+    for item in items {
+        push_item_lines(item, &mut lines);
+    }
     lines.sort_by_key(|l| l.key);
     let mut out = String::new();
     for line in &lines {
