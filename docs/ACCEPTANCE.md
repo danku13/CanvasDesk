@@ -1022,3 +1022,38 @@ fmt/clippy `-D warnings`/`cargo test --workspace` (0 отказов)/wasm --chec
 | FR-069.10 | Вес замера по семейству: моно → NORMAL 400 = `mono_attrs`, sans → MEDIUM = `sans_attrs` (тест `ui_measure_weight_matches_render_attrs`) | ✅ |
 | FR-069.11 | Онбординг/пользовательская документация: вопрос владельцу задан в итоговом ответе (шаги тура не затронуты — дефекты высоты меняют только авторазмер карточек) | ✅ |
 | FR-069.12 | Открытые пункты v2 (вне этапа F, к владельцу): sans 9.5px для текста пилюль; подпись «входящие значения · N»; ужимание высоты (шаг 4b) после решения по I-6/T7 | ⏳ |
+
+## FR-074 — Расширения CSS-паритета canvas-ui: Auto/minmax-треки Grid, Horizontal sticky, Transform (rotate), Z-index per-element — выполнено (2026-09-25)
+
+Приёмка FR-074 (по документу `docs/change-requests/fr-074-canvas-ui-css-parity-extensions.md`).
+Реализация выполнена ДО вырезания taffy (W4) — parity-оракул против taffy 0.14
+10/10 сцен бит-в-бит; временный parity-тест удалён вместе с taffy в W4.
+Отложено владельцем: Auto-flow dense/column (masonry-галереи).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-074.1 | Grid Auto-треки + minmax(): `SceneTrack::MinMax{min: TrackMin, max: TrackMax}` (min ∈ {Auto, Length, Percent}; max ∈ {Auto, Length, Percent, Fill}); `FlexLayoutEngine` — шаги CSS Grid §11.5–11.8 в порядке taffy: единый оракул плейсмента `grid_placements` (курсор больше не дублируется), §11.6 maximize (поровну с заморозкой лимитов; fr не участвует), §11.7 find_size_of_fr (floored-треки → «inflexible», пол min побеждает), §11.8 stretch auto (остаток поровну AutoMax) — 11 контрактных тестов `flex_grid_tracks` | ✅ |
+| FR-074.2 | Паритет с taffy ДО вырезания: временный `tests/grid_tracks_parity.rs` — 10/10 сцен ПОБИТОВО (Auto/Length/Fill, два Auto, Auto+span, minmax definite/Auto-min/Fill-пол/percent, полный микс, переполнение полов; обе стороны — round-layout); тест удалён вместе с taffy в W4 | ✅ |
+| FR-074.3 | Grid-item семантика уточнена до CSS: definite/Percent ячейки НЕ растягиваются в трек (раньше ячейка всегда получала область трека), Fill/Auto — stretch (тесты `flex_grid_tracks`/`flex_scene`) | ✅ |
+| FR-074.4 | Horizontal sticky: `ScenePosition::Sticky{top: Option, left: Option}` — оси независимы; ось-зависимый scroll-предок (top → Y-контейнер Column/Grid, left → X-контейнер Row); кламп транслирует поддерево (fixed исключены) — 4 теста `flex_scene_sticky`; Golden 01 (sticky header column) не изменился | ✅ |
+| FR-074.5 | Попутный фикс: ось корня сцены в taffy_backend — content-shift Row-корня уходил в чужую ось (теперь по kind сцены); фикс удалён вместе с taffy в W4 | ✅ |
+| FR-074.6 | Transform (rotate): `PaintItem::Transform{deg, origin, items}` — rotate как данные (G7: без f32-матриц в API), layout не меняет; `Painter::rotated`/`rotated_centered`; `walk()` — прозрачный спуск; конверсия в инстансы рендера — отдельная задача | ✅ |
+| FR-074.7 | Z-index per-element: `PaintItem::ZGroup{z, items}` + `Painter::z_group`; `take_items()` — стабильная z-сортировка журнала (больше — поверх; равные — порядок вызовов; вложенность = stacking context); потребители кита (kit_ui/support.rs) — прозрачный проход (прецедент ClipRect W1) — тесты paint +4 | ✅ |
+| FR-074.8 | Попутный фикс main: `tests/snapshot.rs` — match дампа дополнен `PaintItem::Icon` (предсуществующий compile-fail теста на main) + маркеры rotate/zgroup | ✅ |
+| FR-074.9 | Гейты: fmt, clippy `-D warnings`, workspace-тесты зелёные (финальная отметка — в W4: 2047/0); html5_demos 16/16 | ✅ |
+
+## FR-068 — Поэтапный рефакторинг UI, волны W0–W4 (стратегия ADR-0015) — выполнено (2026-09-25)
+
+Приёмка FR-068 (по документу `docs/change-requests/fr-068-ui-refactoring-long-term.md`;
+W0–W3 закрыты 2026-09-25 ранее, W4 — финальная волна dep-минимизации; стратегия —
+ADR-0015, конечная цель — своя UI-библиотека с zero-dep инвариантом G7).
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-068.1 | W0–W3 выполнены: W0 UI hygiene (G4-линт 5 canonical сцен × 3 окна × RU/EN, 60 snapshot-эталонов Painter.items, perf baseline); W1 taffy opt-in (`trait LayoutBackend` + `NativeBackend`/`TaffyBackend`, pilots, 10 HTML5 demos, `PaintItem::ClipRect`); W2 `Shaper` trait (cosmic-text за границей) + `FlexLayoutEngine` (flexbox grow/shrink/basis/wrap + overflow/clip/scroll); W3 компонентный слой (7 модулей, kit.rs → фасад, пилот-миграция whatif_ui) | ✅ |
+| FR-068.2 | W4: taffy вырезан целиком — `taffy_backend.rs` (1240 строк), фича `taffy`, workspace-dep, passthrough canvas-app/canvas-web, taffy-пути кит-функций (dropdown/tooltip/toast/scroll_area/modal + scene_absolute), parity/perf-гейты и taffy-golden; `FlexLayoutEngine` — единственный движок: `default_backend()` → Flex, `pilot_backend()` → `NativeBackend` (API пилотов сохранён); `html5_demos` — единый оракул Flex | ✅ |
+| FR-068.3 | Zero-dep инвариант G7 (конечная цель FR-068/ADR-0015): `cargo build -p canvas-ui --no-default-features` зелёный; `cargo tree -p canvas-ui --no-default-features` = canvas-core + cosmic-text — 0 внешних UI-runtime-deps (B2B-инвариант) | ✅ |
+| FR-068.4 | Гейты W4: `cargo test --workspace` 2047 passed / 0 failed; html5_demos 16/16; snapshot 60; g4_lint 6; clippy `--workspace --all-targets -D warnings`; fmt `--check`; deny licenses; `wasm_gate.sh --check` | ✅ |
+| FR-068.5 | Perf-бюджет: reflow 1000 узлов = 29.4 μs (release-медиана; < 1 мс SPEC §6.3); baseline перегенерирован осознанно (машинно-зависимый, аннотирован) | ✅ |
+| FR-068.6 | Доки: FR-068 (статус/чеклист W4/changelog), FR-074 (создан), ADR-0014 (закрыт W4), ADR-0015 (волны ✅), DEPENDENCIES.md (taffy вырезан, история), ui-kit.md (движок один), index-cr-fr, worklog репо | ✅ |
+| FR-068.7 | Открытые пункты: замер wasm-бандла (§Контракт-7) отложен — release-сборка не помещается в диск среды (решение за владельцем; ожидаемая дельта ≈ −376 КБ raw); Auto-flow dense/column (masonry) отложено владельцем | ⏳ |
