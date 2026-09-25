@@ -11,14 +11,14 @@
       "name": "cash_start",
       "type": "scalar",
       "default": 1000000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "cash_end",
       "type": "scalar",
       "default": 850000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {

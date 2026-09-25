@@ -143,10 +143,10 @@ fn whatif_journey_intro_whatif() {
     let index = scene.whatif_create_scenario("Рост маркетинга").unwrap();
     scene.whatif_activate(Some(index));
     // Подмена «поднимите маркетинг до полутора тысяч»: строка 3 текста
-    // costs («marketing = 1200 $») — как делает begin_whatif_override.
+    // costs («marketing = 1200 руб») — как делает begin_whatif_override.
     scene.scenarios[index]
         .line_exprs
-        .insert((costs_id.clone(), 3), "marketing = 1500 $".into());
+        .insert((costs_id.clone(), 3), "marketing = 1500 руб".into());
     scene.recompute_flow();
     assert_eq!(
         value_of(&scene, &total_id),
@@ -170,7 +170,7 @@ fn whatif_journey_intro_whatif() {
             .text
             .as_deref()
             .unwrap()
-            .contains("marketing = 1200 $"),
+            .contains("marketing = 1200 руб"),
         "persisted-текст не мутирован"
     );
 

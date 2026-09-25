@@ -17,7 +17,7 @@
       "name": "arpu",
       "type": "scalar",
       "default": 20,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

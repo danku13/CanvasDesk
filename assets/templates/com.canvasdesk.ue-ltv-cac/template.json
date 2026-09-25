@@ -11,14 +11,14 @@
       "name": "ltv",
       "type": "scalar",
       "default": 320,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "cac",
       "type": "scalar",
       "default": 50,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0.0001
     }
   ],

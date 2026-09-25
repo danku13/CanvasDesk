@@ -4,21 +4,21 @@
   "name_ru": "Burn Multiple (множитель сжигания)",
   "version": "1.0.0",
   "category": "unit-economics",
-  "description": "Сколько долларов кэша сжигается на каждый доллар нового ARR: net burn / net new ARR. Метрика Дэвида Сакса — качество роста: ≤ 1 — отлично, 1–2 — нормально, 2–3 — тревожно, > 3 — рост слишком дорогой. В отличие от magic number учитывает весь burn, а не только S&M — честнее для компаний с тяжёлым R&D.",
-  "description_en": "How many dollars of cash are burned per dollar of new ARR: net burn / net new ARR. David Sacks' metric of growth quality: ≤ 1 — excellent, 1–2 — acceptable, 2–3 — concerning, > 3 — growth is too expensive. Unlike the magic number it accounts for the whole burn, not just S&M — fairer for heavy-R&D companies.",
+  "description": "Сколько рублей кэша сжигается на каждый рубль нового ARR: net burn / net new ARR. Метрика Дэвида Сакса — качество роста: ≤ 1 — отлично, 1–2 — нормально, 2–3 — тревожно, > 3 — рост слишком дорогой. В отличие от magic number учитывает весь burn, а не только S&M — честнее для компаний с тяжёлым R&D.",
+  "description_en": "How many rubles of cash are burned per ruble of new ARR: net burn / net new ARR. David Sacks' metric of growth quality: ≤ 1 — excellent, 1–2 — acceptable, 2–3 — concerning, > 3 — growth is too expensive. Unlike the magic number it accounts for the whole burn, not just S&M — fairer for heavy-R&D companies.",
   "params": [
     {
       "name": "net_burn",
       "type": "scalar",
       "default": 40000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "net_new_arr",
       "type": "scalar",
       "default": 80000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

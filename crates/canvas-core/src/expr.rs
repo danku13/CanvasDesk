@@ -11,6 +11,8 @@
 //!   кириллические синонимы: `мс`, `сек`, `мин`, `ч`, `запр`, `запр/с`,
 //!   `Б`, `КБ`, `МБ`, `ГБ`) — по одному токену на значение, без
 //!   словоизменительных дублей (`s`/`secs`/`reqs`/`hour` убраны);
+//!   рубли — отдельной размерностью MoneyRub (`руб`, `₽`, `rub`):
+//!   доллар (`$`/`usd`) и рубль НЕ конвертируются друг в друга
 //! - операторы: `+ - * × · ⋅ ✕ ⨯ ÷ /`, скобки, унарный минус; неявное
 //!   умножение (`5 ms` = `5 × ms`, `$5` = `5 × $`); `x`/`х` между
 //!   операндами — тоже умножение (Numi: `35 x 20` = 700);
@@ -34,7 +36,9 @@
 //! Валюта и ссылки на вход: `$5` — валюта (5 долларов), пока окружение НЕ
 //! содержит входов; в окружении со входами целое `$N` (N ≥ 1) — ссылка на
 //! N-е входящее значение (для валюты в calc-ноде потока пишите `5 usd`).
-//! Дробные суммы (`$2.5`) и `$0` — всегда валюта.
+//! Дробные суммы (`$2.5`) и `$0` — всегда валюта. Рубли — постфиксными
+//! unit-ами другой размерности (`5 руб`, `5 ₽`, `5 rub`); смешение валют
+//! в одном выражении (`5 usd + 100 руб`) — ошибка UnitMismatch.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -85,6 +89,10 @@ pub enum Dimension {
     Count,
     Bytes,
     Money,
+    /// Рубль — ОТДЕЛЬНАЯ от [`Dimension::Money`] размерность: другая
+    /// валюта, конвертация «по таблице» невозможна, сложение `руб + $`
+    /// даёт [`EvalError::UnitMismatch`] (решение владельца, 2026-09-26).
+    MoneyRub,
     Percent,
     Custom(String),
 }
@@ -251,7 +259,8 @@ impl PartialEq for Unit {
 
 /// Таблица единиц v1 (FR-013, §Changes п.6): `(токен, размерность, масштаб
 /// к базе)`. Базы: Time = sec, Bytes = B, Rate = req/s, Count = req,
-/// Money = $, Percent = %. Килобайты — двоичные (1 GB = 1024 MB).
+/// Money = $, MoneyRub = руб, Percent = %. Килобайты — двоичные
+/// (1 GB = 1024 MB).
 ///
 /// Канонизация (правка владельца, 2026-09-23): один токен на значение —
 /// наиболее наглядная форма без словоизменительных дублей: `sec` (не
@@ -261,9 +270,14 @@ impl PartialEq for Unit {
 ///
 /// Кириллические синонимы (были отложены до v2 — внесены 2026-09-23):
 /// `мс`, `сек`, `мин`, `ч`, `запр`, `запр/с`, `Б`, `КБ`, `МБ`, `ГБ`.
-/// Деньги и проценты нейтральны (`$`, `usd`, `%`); `руб` сознательно НЕ
-/// синоним `$` — другая валюта, алиасинг смешал бы размерности
-/// (`100 руб + 5 $ = 105` — бессмыслица).
+/// Деньги и проценты нейтральны (`$`, `usd`, `%`).
+///
+/// Рубли (решение владельца, 2026-09-26): токены `руб`, `₽`, `rub` —
+/// ОТДЕЛЬНАЯ размерность [`Dimension::MoneyRub`], НЕ синонимы `$` —
+/// другая валюта: алиасинг смешал бы размерности (`100 руб + 5 $ = 105`
+/// — бессмыслица). Внутри размерности синонимы равны и складываются
+/// (`100 руб + 50 ₽ = 150 руб`), между валютами сложение — ошибка
+/// [`EvalError::UnitMismatch`].
 const UNIT_TABLE: &[(&str, Dimension, f64)] = &[
     // Латиница — канонические формы
     ("ms", Dimension::Time, 0.001),
@@ -279,6 +293,11 @@ const UNIT_TABLE: &[(&str, Dimension, f64)] = &[
     ("GB", Dimension::Bytes, 1024.0 * 1024.0 * 1024.0),
     ("$", Dimension::Money, 1.0),
     ("usd", Dimension::Money, 1.0),
+    // Рубли — отдельная размерность MoneyRub (НЕ синоним $): токены
+    // `руб`/`₽`/`rub` — синонимы внутри размерности
+    ("руб", Dimension::MoneyRub, 1.0),
+    ("₽", Dimension::MoneyRub, 1.0),
+    ("rub", Dimension::MoneyRub, 1.0),
     ("%", Dimension::Percent, 1.0),
     // Кириллица — синонимы (v2); отображение — как введено
     ("мс", Dimension::Time, 0.001),
@@ -1024,6 +1043,15 @@ impl<'a> Lexer<'a> {
                 self.after_number = false;
                 self.operand_ended = true;
                 Tok::Unit("%")
+            }
+            _ if self.rest_starts("\u{20bd}") && self.after_number => {
+                // ₽ (U+20BD) — рубль, суффиксная единица (симметрия с `%`):
+                // в таблице единиц (`руб`/`rub` — идент/латиница, они через
+                // lex_ident); ₽ — символ, отдельная ветка лексера
+                self.pos += 3;
+                self.after_number = false;
+                self.operand_ended = true;
+                Tok::Unit("₽")
             }
             b'0'..=b'9' | b'.' => self.lex_number()?,
             // Идентификатор: ASCII-буквы/`_` и ЛЮБАЯ Unicode-буква
@@ -2239,6 +2267,10 @@ mod tests {
         Unit::atom(unit_atom("req").unwrap())
     }
 
+    fn rub_unit() -> Unit {
+        Unit::atom(unit_atom("руб").unwrap())
+    }
+
     fn reqps_unit() -> Unit {
         Unit::atom(unit_atom("req/s").unwrap())
     }
@@ -2324,6 +2356,53 @@ mod tests {
                 rhs: "3 rps".to_owned()
             }
         );
+    }
+
+    /// Рубли (решение владельца, 2026-09-26): токены `руб`/`₽`/`rub` —
+    /// одна размерность MoneyRub; отображение — токеном введения.
+    #[test]
+    fn eval_ruble_tokens_are_synonyms() {
+        // Кириллический токен — основная форма
+        let value = eval(&parse("50000 руб").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(50000.0, rub_unit()));
+        // Символ ₽ и латиница rub — синонимы той же размерности
+        let value = eval(&parse("50000 ₽").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(50000.0, rub_unit()));
+        let value = eval(&parse("50000 rub").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(50000.0, rub_unit()));
+    }
+
+    /// Рубли: сложение внутри размерности — единица левого операнда
+    /// (`100 руб + 50 ₽ == 150 руб`, синоним `rub` → токен левого).
+    #[test]
+    fn eval_ruble_add_within_dimension() {
+        let value = eval(&parse("100 руб + 50 ₽").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(150.0, rub_unit()));
+        let value = eval(&parse("100 руб + 50 rub").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(150.0, rub_unit()));
+    }
+
+    /// Рубли против доллара: `$`/`usd` — размерность Money, `руб` —
+    /// MoneyRub; сложение валют — ошибка (алиасинг смешал бы валюты:
+    /// `100 руб + 5 $ = 105` — бессмыслица).
+    #[test]
+    fn eval_ruble_dollar_mismatch() {
+        let parsed = parse("100 руб + 5 $").expect("синтаксически корректно");
+        let err = eval(&parsed, &Env::empty()).expect_err("разные валюты");
+        assert!(matches!(err, EvalError::UnitMismatch { .. }));
+        let parsed = parse("5 usd + 100 руб").expect("синтаксически корректно");
+        let err = eval(&parsed, &Env::empty()).expect_err("разные валюты");
+        assert!(matches!(err, EvalError::UnitMismatch { .. }));
+    }
+
+    /// Рубли в арифметике: деление на скаляр сохраняет размерность,
+    /// деление руб на руб даёт скаляр (синонимы сокращаются).
+    #[test]
+    fn eval_ruble_arithmetic() {
+        let value = eval(&parse("50000 руб / 1000").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(50.0, rub_unit()));
+        let value = eval(&parse("100 руб / 20 ₽").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::scalar(5.0));
     }
 
     /// Переменные: результат программы — значение последнего утверждения.

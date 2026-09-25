@@ -11,7 +11,7 @@
       "name": "marketing_spend",
       "type": "scalar",
       "default": 50000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {

@@ -18,25 +18,25 @@
       "name": "cf1",
       "type": "scalar",
       "default": -100000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf2",
       "type": "scalar",
       "default": 40000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf3",
       "type": "scalar",
       "default": 50000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf4",
       "type": "scalar",
       "default": 60000,
-      "unit": "usd"
+      "unit": "руб"
     }
   ],
   "expr": "npv($discount_rate, $cf1, $cf2, $cf3, $cf4)",

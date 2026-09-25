@@ -11,35 +11,35 @@
       "name": "mrr_start",
       "type": "scalar",
       "default": 100000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0.0001
     },
     {
       "name": "expansion",
       "type": "scalar",
       "default": 15000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "contraction",
       "type": "scalar",
       "default": 5000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "churn_lost",
       "type": "scalar",
       "default": 8000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "reactivation",
       "type": "scalar",
       "default": 2000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

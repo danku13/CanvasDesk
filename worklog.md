@@ -1,3 +1,13 @@
+## 2026-09-26 — feat(core/templates): unit-ы в рублях (MoneyRub: `руб`/`₽`/`rub`) + дефолтные шаблоны и схемы переведены с долларов на рубли
+
+- **Запрос владельца:** «Нужно добавить unit-ы в рублях и в шаблонах по умолчанию на русском языке исправить доллары на рубли».
+- **Units (expr.rs, FR-013):** новая размерность `Dimension::MoneyRub` + токены `руб`/`₽`/`rub` (синонимы внутри размерности, отображение — токеном введения). Рубль — НЕ синоним `$` (по решению 2026-09-23 против алиасинга валют): `100 руб + 5 $` → `EvalError::UnitMismatch`, внутри размерности `100 руб + 50 ₽ = 150 руб`. Лексер: `₽` (U+20BD) — суффиксная единица отдельной веткой (симметрия с `%`; `руб`/`rub` идут через lex_ident). Префиксный `$5` не тронут (FR-013/FR-014 семантика).
+- **Шаблоны (25 манифестов UE):** `"unit": "usd"` → `"unit": "руб"`; описание Burn Multiple — «долларов/доллар» → «рублей/рубль» (RU+EN). Учитывающие деньги схемы gallery — см. ниже.
+- **Схемы (7 из 10, RU+EN секции):** валютный постфикс ` N $` → ` N руб`/` N rub` (runway, investment-case, unit-economics, project-budget, renovation-estimate, cohort-launch, intro-whatif), проза «доллар*» → «рубль*» с падежами (рублей/рубль), "dollar*" → "ruble*". Ссылки на параметры/входы (`$npv`, `$team`, `$1`) не тронуты; round-trip JSON байт-в-байт (indent=1, кроме отсутствовавшего trailing NL — сохранён).
+- **Тесты:** +4 в expr.rs (`eval_ruble_tokens_are_synonyms`, `eval_ruble_add_within_dimension`, `eval_ruble_dollar_mismatch`, `eval_ruble_arithmetic`); scheme_cjm_tests::whatif_journey_intro_whatif — what-if подмена и persisted-чек переведены на рубли (`marketing = 1500 руб` — смешение валют теперь честно даёт ошибку, тест обновлён на консистентную валюту); комментарии templates_schema.rs (390/4.9 руб).
+- **Доки:** user-docs/calculations.md (таблица единиц + `5 usd`/`5 руб`, npv/cohort_ltv «валюта потоков»), user-docs/templates.md («скаляры в рублях», Burn Multiple).
+- **Гейты:** workspace **2067 passed / 0 failed** (было 2061+4 новых), fmt --check, clippy canvas-core/canvas-app — 0 warnings, cargo check --workspace зелёный.
+
 ## 2026-09-25 — feat(ui/component): FR-068 W3 — Component-слой: kit.rs → фасад (58 строк) + component/* (7 модулей), лид + 4 параллельных агента
 
 - **Агент:** Super Z (лид волны W3 + агенты 3-a..3-d, git-worktree, безконфликтный последовательный merge). Запрос владельца: «продолжай волну W3».

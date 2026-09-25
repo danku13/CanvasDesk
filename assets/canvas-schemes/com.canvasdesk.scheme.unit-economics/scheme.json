@@ -27,7 +27,7 @@
     "y": 0,
     "width": 260,
     "height": 220,
-    "text": "Продуктовая единица\nЭкономика пользователя в месяц: цена подписки и себестоимость обслуживания.\n\nprice = 10 $\ncogs = 4 $",
+    "text": "Продуктовая единица\nЭкономика пользователя в месяц: цена подписки и себестоимость обслуживания.\n\nprice = 10 руб\ncogs = 4 руб",
     "color": "5",
     "label": "Единица"
    },
@@ -69,7 +69,7 @@
     "y": 300,
     "width": 280,
     "height": 180,
-    "text": "CAC\nЦена привлечения одного пользователя.\n\ncac = 120 $",
+    "text": "CAC\nЦена привлечения одного пользователя.\n\ncac = 120 руб",
     "color": "5"
    },
    {
@@ -181,7 +181,7 @@
     "y": 0,
     "width": 260,
     "height": 220,
-    "text": "Product unit\nPer-user economics per month: subscription price and servicing cost.\n\nprice = 10 $\ncogs = 4 $",
+    "text": "Product unit\nPer-user economics per month: subscription price and servicing cost.\n\nprice = 10 rub\ncogs = 4 rub",
     "color": "5",
     "label": "Unit"
    },
@@ -225,7 +225,7 @@
     "y": 300,
     "width": 280,
     "height": 180,
-    "text": "CAC\nCost of acquiring a single user.\n\ncac = 120 $",
+    "text": "CAC\nCost of acquiring a single user.\n\ncac = 120 rub",
     "color": "5",
     "label": "CAC"
    },

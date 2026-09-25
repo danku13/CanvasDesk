@@ -11,31 +11,31 @@
       "name": "cf0",
       "type": "scalar",
       "default": -100000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf1",
       "type": "scalar",
       "default": 30000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf2",
       "type": "scalar",
       "default": 40000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf3",
       "type": "scalar",
       "default": 45000,
-      "unit": "usd"
+      "unit": "руб"
     },
     {
       "name": "cf4",
       "type": "scalar",
       "default": 50000,
-      "unit": "usd"
+      "unit": "руб"
     }
   ],
   "expr": "irr($cf0, $cf1, $cf2, $cf3, $cf4)",

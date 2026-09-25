@@ -11,7 +11,7 @@
       "name": "arpu_m0",
       "type": "scalar",
       "default": 20,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {

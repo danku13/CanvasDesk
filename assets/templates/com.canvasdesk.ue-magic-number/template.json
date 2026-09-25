@@ -11,14 +11,14 @@
       "name": "net_new_arr",
       "type": "scalar",
       "default": 15000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "s_and_m_spend",
       "type": "scalar",
       "default": 50000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0.0001
     }
   ],

@@ -27,7 +27,7 @@
     "y": 0,
     "width": 260,
     "height": 240,
-    "text": "Расходы\nЕжемесячные статьи: команда, облако, маркетинг и офис.\n\nsalaries = 38000 $\ncloud = 6200 $\nmarketing = 15000 $\noffice = 4000 $",
+    "text": "Расходы\nЕжемесячные статьи: команда, облако, маркетинг и офис.\n\nsalaries = 38000 руб\ncloud = 6200 руб\nmarketing = 15000 руб\noffice = 4000 руб",
     "color": "5"
    },
    {
@@ -37,7 +37,7 @@
     "y": 320,
     "width": 260,
     "height": 180,
-    "text": "Кэш\nДеньги на счету и выручка за месяц.\n\nbalance = 1200000 $\nrevenue = 41000 $",
+    "text": "Кэш\nДеньги на счету и выручка за месяц.\n\nbalance = 1200000 руб\nrevenue = 41000 руб",
     "color": "5"
    },
    {
@@ -182,7 +182,7 @@
     "y": 0,
     "width": 260,
     "height": 240,
-    "text": "Costs\nMonthly items: team, cloud, marketing and office.\n\nsalaries = 38000 $\ncloud = 6200 $\nmarketing = 15000 $\noffice = 4000 $",
+    "text": "Costs\nMonthly items: team, cloud, marketing and office.\n\nsalaries = 38000 rub\ncloud = 6200 rub\nmarketing = 15000 rub\noffice = 4000 rub",
     "color": "5"
    },
    {
@@ -192,7 +192,7 @@
     "y": 320,
     "width": 260,
     "height": 180,
-    "text": "Cash\nMoney in the bank and monthly revenue.\n\nbalance = 1200000 $\nrevenue = 41000 $",
+    "text": "Cash\nMoney in the bank and monthly revenue.\n\nbalance = 1200000 rub\nrevenue = 41000 rub",
     "color": "5"
    },
    {

@@ -17,7 +17,7 @@
       "name": "server_cost",
       "type": "scalar",
       "default": 50,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
@@ -30,7 +30,7 @@
       "name": "storage_cost_gb",
       "type": "scalar",
       "default": 0.02,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
@@ -43,7 +43,7 @@
       "name": "egress_cost_tb",
       "type": "scalar",
       "default": 90,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],
@@ -53,17 +53,17 @@
   "outputs": [
     {
       "name": "compute_cost",
-      "unit": "usd",
+      "unit": "руб",
       "expr": "$servers × $server_cost"
     },
     {
       "name": "storage_cost",
-      "unit": "usd",
+      "unit": "руб",
       "expr": "$storage_gb × $storage_cost_gb"
     },
     {
       "name": "egress_cost",
-      "unit": "usd",
+      "unit": "руб",
       "expr": "$egress_tb × $egress_cost_tb"
     }
   ]

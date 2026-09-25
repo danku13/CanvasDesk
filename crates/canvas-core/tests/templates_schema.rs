@@ -470,7 +470,7 @@ fn expansion_templates_default_values() {
         value.num
     );
 
-    // infra-cost: 4×50 + 500×0.02 + 2×90 = 390 usd.
+    // infra-cost: 4×50 + 500×0.02 + 2×90 = 390 руб.
     let value = eval_template_default(&registry, "com.canvasdesk.infra-cost");
     assert!(
         (value.num - 390.0).abs() < 1e-9,
@@ -490,8 +490,8 @@ fn expansion_templates_default_values() {
     let value = eval_template_default(&registry, "com.canvasdesk.ue-irr");
     assert!((0.21..=0.22).contains(&value.num), "ue-irr = {}", value.num);
 
-    // ue-ltv-cohort: когортный LTV при затухающем retention ≈ 4.9 usd
-    // (заметно ниже наивного 320 usd из ue-ltv — это и есть смысл шаблона).
+    // ue-ltv-cohort: когортный LTV при затухающем retention ≈ 4.9 руб
+    // (заметно ниже наивного 320 руб из ue-ltv — это и есть смысл шаблона).
     let value = eval_template_default(&registry, "com.canvasdesk.ue-ltv-cohort");
     assert!(
         (4.0..=6.0).contains(&value.num),
