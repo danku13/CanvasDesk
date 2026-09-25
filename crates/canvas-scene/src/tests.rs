@@ -2788,16 +2788,16 @@ fn scene_auto_rows_cache_populated() {
 }
 
 /// PRD-0008 (Q5 v2 — «подтянуть MCP под обновления», запрос владельца
-/// 2026-09-22): schemes_list — реестр галереи виден агенту: те же 6
-/// пакетов, что в галерее (Ctrl+T), с размерами графа; чтение — канвас
-/// и undo не тронуты.
+/// 2026-09-22): schemes_list — реестр галереи виден агенту: те же пакеты,
+/// что в галерее (Ctrl+T), с размерами графа; чтение — канвас
+/// и undo не тронуты. Расширение каталога (аудит 2026-09-25): 6 → 10.
 #[test]
 fn mcp_schemes_list_embedded_registry() {
     let mut scene = mcp_scene();
     let undo_before = scene.undo_stack.len();
     let list = dispatch(&mut scene, "schemes_list", "{}").expect("schemes_list");
     let schemes = list.as_array().expect("массив схем");
-    assert_eq!(schemes.len(), 6, "6 пакетов PRD-0008 §7.2: {list}");
+    assert_eq!(schemes.len(), 10, "10 пакетов PRD-0008 §7.2: {list}");
     let ids: Vec<&str> = schemes.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(
         ids.contains(&"com.canvasdesk.scheme.intro-calculations"),
