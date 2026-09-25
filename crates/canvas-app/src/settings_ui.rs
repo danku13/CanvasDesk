@@ -939,14 +939,33 @@ fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
 /// (вне диапазона — первый таб; состояние `App::settings_tab` клампится
 /// на вызывающей стороне).
 ///
-/// Раскладка — примитивами `canvas_ui` (FR-054, миграция U5): размер —
-/// `constrain`, центрирование — `stack`, скелет — `Row` [навигация |
-/// контент], пункты навигации и строки — `Column`, карточки тем — `Row`
-/// (зазор — токен `SPACING_MD`, значение прежнего литерала 10). Числа —
-/// дословно прежние (тесты фиксируют структуру и клампы).
+/// Раскладка — measured-семейством `canvas_ui` (FR-054 миграция U5; W3.2 —
+/// каталог `docs/plans/fr-068-w3-consumer-migration.md`): размер —
+/// `constrain`, центрирование — `stack`, скелет — `Row::lay_out_measured`
+/// [навигация | контент], пункты навигации и строки —
+/// `Column::lay_out_measured`, карточки тем — `Row::lay_out_measured`
+/// (зазор — токен `SPACING_MD`, значение прежнего литерала 10); дети
+/// выражаются [`MeasuredItem::Fixed`] (константы скелета, Text-детей нет —
+/// замерщик не участвует в геометрии). Числа — дословно прежние (тесты
+/// фиксируют структуру и клампы).
 pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
+    // W3.2: замерщик — канонические shared-точки на вызов (прецедент
+    // `ui_registry`/`template_panel_layout`); Fixed-дети его не читают.
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    modal_layout_with(tab, viewport, &mut m, &mut fs)
+}
+
+/// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
+/// `measure_font_system` — двойной лок глобального FontSystem невозможен).
+pub fn modal_layout_with(
+    tab: usize,
+    viewport: [f32; 2],
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> ModalLayout {
     use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
-    use canvas_ui::layout::{stack, Child, Column, HAlign, Row, VAlign};
+    use canvas_ui::layout::{stack, Column, HAlign, MeasuredItem, Row, VAlign};
 
     let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
     let [w, h] = modal_size(viewport);
@@ -967,16 +986,27 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
     )
     .x;
     // Скелет: навигация | контент (Row gap 0 — колонки вплотную).
+    let family = crate::admin_ui::FONT_FAMILY;
     let columns = Row {
         gap: 0.0,
         ..Row::default()
     }
-    .lay_out(
+    .lay_out_measured(
         panel,
         &[
-            Child::fixed(nav_w, panel.h),
-            Child::fixed(panel.w - nav_w, panel.h),
+            MeasuredItem::Fixed {
+                w: nav_w,
+                h: panel.h,
+            },
+            MeasuredItem::Fixed {
+                w: panel.w - nav_w,
+                h: panel.h,
+            },
         ],
+        m,
+        fs,
+        family,
+        12.0,
     );
     let nav_area = columns[0];
     let content_area = columns[1];
@@ -988,15 +1018,24 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
         right: 0.0,
         bottom: MODAL_PADDING,
     });
-    let nav_children: Vec<Child> = SETTINGS_TABS
-        .iter()
-        .map(|_| Child::fixed(nav_w, MODAL_NAV_ITEM_H))
-        .collect();
     let nav_items: Vec<[f32; 4]> = Column {
         gap: 0.0,
         ..Column::default()
     }
-    .lay_out(nav_slot, &nav_children)
+    .lay_out_measured(
+        nav_slot,
+        &SETTINGS_TABS
+            .iter()
+            .map(|_| MeasuredItem::Fixed {
+                w: nav_w,
+                h: MODAL_NAV_ITEM_H,
+            })
+            .collect::<Vec<_>>(),
+        m,
+        fs,
+        family,
+        12.0,
+    )
     .iter()
     .map(|r| [r.x, r.y, r.w, r.h])
     .collect();
@@ -1035,14 +1074,31 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
         gap: 0.0,
         ..Column::default()
     }
-    .lay_out(
+    .lay_out_measured(
         content_area,
         &[
-            Child::fixed(0.0, MODAL_PADDING),
-            Child::fixed(0.0, MODAL_TITLE_HEIGHT),
-            Child::fixed(0.0, 4.0), // зазор заголовок/контент (вне spacing-scale)
-            Child::fixed(content_w, content_h),
+            MeasuredItem::Fixed {
+                w: 0.0,
+                h: MODAL_PADDING,
+            },
+            MeasuredItem::Fixed {
+                w: 0.0,
+                h: MODAL_TITLE_HEIGHT,
+            },
+            // Зазор заголовок/контент (вне spacing-scale): вертикальный
+            // зазор — именно Fixed{w: 0, h} (Spacer в колонке места
+            // не занимает — main-ось колонки высота, см. тест оракула
+            // measured_column_matches_manual_fixed_oracle).
+            MeasuredItem::Fixed { w: 0.0, h: 4.0 },
+            MeasuredItem::Fixed {
+                w: content_w,
+                h: content_h,
+            },
         ],
+        m,
+        fs,
+        family,
+        12.0,
     );
     let content = content_flow[3];
     let content_rect = [content.x, content.y, content.w, content.h];
@@ -1051,7 +1107,7 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
     // MODAL_THEME_GAP).
     let inner = content.inset(&EdgeInsets::uniform(MODAL_PADDING));
     let row_w = inner.w;
-    let mut flow: Vec<Child> = Vec::new();
+    let mut flow: Vec<MeasuredItem> = Vec::new();
     let mut card_strip = [[0.0f32; 4]; 2];
     if tab_def.theme_cards {
         // Карточки темы: две рядом («тёмная»/«светлая» — паттерн Obsidian
@@ -1062,31 +1118,45 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
             gap,
             ..Row::default()
         }
-        .lay_out(
+        .lay_out_measured(
             inner,
             &[
-                Child::fixed(card_w, MODAL_THEME_CARD_H),
-                Child::fixed(card_w, MODAL_THEME_CARD_H),
+                MeasuredItem::Fixed {
+                    w: card_w,
+                    h: MODAL_THEME_CARD_H,
+                },
+                MeasuredItem::Fixed {
+                    w: card_w,
+                    h: MODAL_THEME_CARD_H,
+                },
             ],
+            m,
+            fs,
+            family,
+            12.0,
         );
         card_strip = [
             [cards[0].x, cards[0].y, cards[0].w, cards[0].h],
             [cards[1].x, cards[1].y, cards[1].w, cards[1].h],
         ];
-        flow.push(Child::fixed(row_w, MODAL_THEME_CARD_H));
-        flow.push(Child::fixed(0.0, MODAL_THEME_GAP));
+        flow.push(MeasuredItem::Fixed {
+            w: row_w,
+            h: MODAL_THEME_CARD_H,
+        });
+        flow.push(MeasuredItem::Fixed {
+            w: 0.0,
+            h: MODAL_THEME_GAP,
+        });
     }
-    flow.extend(
-        tab_def
-            .rows
-            .iter()
-            .map(|_| Child::fixed(row_w, MODAL_ROW_HEIGHT)),
-    );
+    flow.extend(tab_def.rows.iter().map(|_| MeasuredItem::Fixed {
+        w: row_w,
+        h: MODAL_ROW_HEIGHT,
+    }));
     let rows = Column {
         gap: 0.0,
         ..Column::default()
     }
-    .lay_out(inner, &flow)
+    .lay_out_measured(inner, &flow, m, fs, family, 12.0)
     .iter()
     .skip(if tab_def.theme_cards { 2 } else { 0 })
     .enumerate()

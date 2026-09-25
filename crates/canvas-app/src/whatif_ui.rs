@@ -223,14 +223,14 @@ pub fn bar_layout(
     // прежнего замыкания `take` (CR-015).
     // FR-068 W3.1 (staged-миграция потребителей, каталог
     // docs/plans/fr-068-w3-consumer-migration.md, топ-1): элементы бара
-    // переведены с ручной проводки `Child::fixed(width_of…)` на семейство
-    // measured-API ([`MeasuredItem`] через [`Row::lay_out_measured`]).
+    // переведены с ручной проводки «width_of → фиксированный ребёнок» на
+    // семейство measured-API ([`MeasuredItem`] через [`Row::lay_out_measured`]).
     // Чип/кнопка = текст + пад (`CHIP_PAD_X`/`BTN_PAD_X`) — точную ширину
     // даёт [`MeasuredItem::Fixed`] (замер ОДИН раз выше, строки те же);
     // авто-размер [`MeasuredItem::Text`] — после появления пад-семантики
     // в F-13 (без изменения ширины чипов — отдельное решение владельца).
     // Геометрия бит-в-бит с прежней: `MeasuredItem::Fixed` резолвится в
-    // тот же `Child::fixed` и тот же движок SqueezeTail (оракул F-13).
+    // тот же фиксированный `Child` и тот же движок SqueezeTail (оракул F-13).
     let mut items: Vec<MeasuredItem> = Vec::with_capacity(scenario_names.len() + 8);
     items.push(MeasuredItem::Fixed {
         w: INDICATOR_WIDTH,

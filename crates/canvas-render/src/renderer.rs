@@ -20,7 +20,9 @@ use crate::cards::{
     template_icon_quads, template_icon_rect, widget_header_hover_instance, BundleContext,
     CardInstance, CardsPipeline, FocusView, SpillWaveView,
 };
-use crate::config::{choose_present_mode, choose_surface_format, clamp_surface_extent, surface_size_valid};
+use crate::config::{
+    choose_present_mode, choose_surface_format, clamp_surface_extent, surface_size_valid,
+};
 use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
@@ -924,8 +926,7 @@ impl Renderer {
             return;
         }
         let max_extent = self.gpu.device.limits().max_texture_dimension_2d;
-        let (clamped_w, clamped_h, was_clamped) =
-            clamp_surface_extent(width, height, max_extent);
+        let (clamped_w, clamped_h, was_clamped) = clamp_surface_extent(width, height, max_extent);
         if was_clamped {
             tracing::warn!(
                 requested_w = width,

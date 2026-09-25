@@ -719,7 +719,7 @@ pub fn panel_layout(
     fs: &mut cosmic_text::FontSystem,
 ) -> PanelLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
-    use canvas_ui::layout::{pad, stack, Child, Column, HAlign, Row, RowPolicy, VAlign};
+    use canvas_ui::layout::{pad, stack, Column, HAlign, MeasuredItem, Row, RowPolicy, VAlign};
 
     let width = PANEL_WIDTH.min((window_w - PANEL_MARGIN * 2.0).max(0.0));
     // FR-024: док у ЛЕВОГО края, во всю высоту окна (как Miro)
@@ -734,19 +734,33 @@ pub fn panel_layout(
     let inner_w = inner.w;
 
     // Скелет содержимого: колонка [шапка, поле, чипы] с зазором SPACING_S
-    // (значение прежнего литерала 6).
+    // (значение прежнего литерала 6). W3.2: дети — MeasuredItem (см.
+    // каталог docs/plans/fr-068-w3-consumer-migration.md).
     let gap = canvas_core::tokens::SPACING_S;
     let head_flow = Column {
         gap,
         ..Column::default()
     }
-    .lay_out(
+    .lay_out_measured(
         UiRect::new(inner.x, inner.y, inner_w, f32::INFINITY),
         &[
-            Child::fixed(inner_w, PANEL_HEADER_H),
-            Child::fixed(inner_w, INPUT_HEIGHT),
-            Child::fixed(inner_w, CATEGORY_ROW_H),
+            MeasuredItem::Fixed {
+                w: inner_w,
+                h: PANEL_HEADER_H,
+            },
+            MeasuredItem::Fixed {
+                w: inner_w,
+                h: INPUT_HEIGHT,
+            },
+            MeasuredItem::Fixed {
+                w: inner_w,
+                h: CATEGORY_ROW_H,
+            },
         ],
+        m,
+        fs,
+        FAMILY,
+        CHIP_FONT,
     );
     let header = head_flow[0];
     let input = head_flow[1];
@@ -760,13 +774,16 @@ pub fn panel_layout(
     // скриншот 13_palette: SqueezeTail сжимал «unit-economics» до нуля —
     // срезанный текст выглядел браком). Слоту отдаётся высота до 2 рядов;
     // строки шаблонов стартуют ниже фактического низа чипов.
+    // W3.1-паттерн whatif-бара: ширина чипа = текст + пад — MeasuredItem::Fixed
+    // с ТЕМ ЖЕ замером (category_chip_width) — rect'ы бит-в-бит прежние
+    // (пад-семантики в F-13 нет — Text изменил бы ширины).
     let categories = registry.categories();
     let chip_rects = Row {
         gap,
         policy: RowPolicy::Wrap,
         ..Row::default()
     }
-    .lay_out(
+    .lay_out_measured(
         UiRect::new(
             inner.x,
             chips_y,
@@ -775,8 +792,15 @@ pub fn panel_layout(
         ),
         &categories
             .iter()
-            .map(|c| Child::fixed(category_chip_width(c, m, fs), CATEGORY_ROW_H))
+            .map(|c| MeasuredItem::Fixed {
+                w: category_chip_width(c, m, fs),
+                h: CATEGORY_ROW_H,
+            })
             .collect::<Vec<_>>(),
+        m,
+        fs,
+        FAMILY,
+        CHIP_FONT,
     );
     let category_rects: Vec<([f32; 4], String, bool)> = categories
         .iter()
@@ -829,9 +853,16 @@ pub fn panel_layout(
         gap: 0.0,
         ..Row::default()
     }
-    .lay_out(
+    .lay_out_measured(
         UiRect::new(inner.x, header.y + 4.0, inner_w, 22.0),
-        &[Child::spacer(inner_w - 22.0), Child::fixed(22.0, 22.0)],
+        &[
+            MeasuredItem::Spacer(inner_w - 22.0),
+            MeasuredItem::Fixed { w: 22.0, h: 22.0 },
+        ],
+        m,
+        fs,
+        FAMILY,
+        CHIP_FONT,
     );
     PanelLayout {
         panel_rect: [x, y, width, height],

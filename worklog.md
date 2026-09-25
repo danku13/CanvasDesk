@@ -6358,3 +6358,16 @@ Stage Summary:
 - **README.md:** раздел «Стек» дополнен собственным UI-стеком (слои, кит, FlexLayoutEngine — подмножество CSS Flexbox/Grid: auto/minmax-треки, sticky, rotate, z-index — без внешних layout-зависимостей).
 - **Проверка:** упоминания taffy вне исторических документов (ADR-0013/0014, FR-062/067/068/074, prd-0009, ui-kit §история) не противоречат конечному состоянию; SPEC.md/AGENTS.md/CONTEXT.md чистые.
 - **Гейты:** только документация — код не менялся.
+
+---
+
+## 2026-09-25 — feat(ui/app/render): FR-068 W3.2 — миграция потребителей на measured-API
+
+- **Запрос владельца:** «кажется ты ещё не доделал: W3.2 не начиналась — settings_ui (12), scheme_gallery_ui (10), template_ui (5), search_ui (3)» — подтверждено: W3.1 закрыла только пилот whatif_ui (42→32 Child::fixed), W3.2 не начиналась.
+- **canvas-ui (additive):** `Column::lay_out_measured/_with` — вертикальный симметричный аналог F-13 (resolve `MeasuredItem` → `Child` единой точкой `MeasuredItem::resolve` до backend — политика Column только Fit, эквивалентно разрешению внутри backend'а; trait/backend'ы НЕ тронуты). +2 оракула бит-в-бит: `measured_column_matches_manual_fixed_oracle`, `measured_column_with_backend_matches_default`.
+- **Миграция (бит-в-бит, ноль визуального скачка):** settings_ui (`modal_layout` → wrapper + `modal_layout_with(m, fs)`; 2-колоночный Row, nav-колонка, content-flow, карточки тем, flow строк), scheme_gallery_ui (`layout`/`empty_buttons` → wrapper+_with; скелет Column, чипы Row, строки Column, empty-кнопки), template_ui (panel_layout уже с m/fs: скелет Column, чипы Wrap через `MeasuredItem::Fixed{category_chip_width}` — W3.1-паттерн, collapse Row), search_ui (canvas-render; `layout` → wrapper+_with; колонка оверлея).
+- **Отклонения от каталога §3 (документированы в §7):** nav/строки галереи — `Column::lay_out_measured`, НЕ `list_rows` (list_rows клипует окно видимости и даёт частичные строки — другое поведение в вырожденных клампах; окно видимости уже управляется scroll_top/clamp_scroll).
+- **Находка:** `Child::spacer` в Column занимает 0 по высоте (main-ось — высота, длина spacer'а — это w; оба backend'а) — «распорки SPACING_S» скелета галереи фактических зазоров не давали (латентный дефект с FR-049); перенос бит-в-бит сохраняет статус-кво, зафиксировано оракулом — решение по зазорам за владельцем.
+- **Гейт W3 (перефиксированный §4):** `Child::fixed` в canvas-app/canvas-render 32 → **1** (демо kit_ui F-14 — рекомендация каталога «оставить», решение W3.3 за владельцем); глобальный grep — 61 (оракулы/фикстуры движка).
+- **Гейты:** canvas-ui 190, canvas-app 376, canvas-render 376 — 0 failed; workspace **2061/0**; fmt --check; clippy --workspace --all-targets -D warnings; wasm_gate.sh --check — зелёные.
+- **Доки:** план W3 (статус/§4 факт/§7 чек-лист), FR-068 (W3-чеклист + W3.2), index-cr-fr (FR-068 строка), ui-kit.md (миграция W3.2), ACCEPTANCE.md (FR-068.1 ревизия + FR-068.8).

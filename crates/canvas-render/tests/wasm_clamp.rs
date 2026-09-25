@@ -97,5 +97,8 @@ fn clamp_is_idempotent_wasm() {
     let (w1, h1, _) = clamp_surface_extent(3000, 4000, max);
     let (w2, h2, was_clamped_2) = clamp_surface_extent(w1, h1, max);
     assert_eq!((w1, h1), (w2, h2));
-    assert!(!was_clamped_2, "повторный clamp уже-clamped размера не должен сработать");
+    assert!(
+        !was_clamped_2,
+        "повторный clamp уже-clamped размера не должен сработать"
+    );
 }
