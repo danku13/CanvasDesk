@@ -21,8 +21,8 @@
 //! рендера — паритет замера с текущим кодом); компонентный — `impl
 //! [`Component`]` с собственными `RefCell`-замерщиками (прецедент
 //! [`Row`](crate::component::row::Row)). Направляющие строятся по ВСЕМ
-//! строкам модели (не окна видимости) от ширины ВЬЮПОРТА
-//! (`viewport_w − opts.right_pad`) — §4.2.
+//! строкам модели (не окна видимости) от ПРАВОГО КРАЯ ВЬЮПОРТА
+//! (`viewport_right − opts.right_pad`) — §4.2.
 
 use std::cell::RefCell;
 
@@ -272,7 +272,13 @@ impl Table {
     /// Проход A+B: направляющие по ВСЕМ строкам модели (не окна видимости!)
     /// — колонка значений стабильна при прокрутке (§3.1 FR-061).
     /// Делегирование: [`row_guides`] (семейство/кегль — Props), правый край
-    /// `viewport_w − opts.right_pad`, зазор `opts.gap`.
+    /// `viewport_right − opts.right_pad`, зазор `opts.gap`.
+    ///
+    /// `viewport_right` — ПРАВЫЙ КРАЙ вьюпорта В СИСТЕМЕ КООРДИНАТ СЛОТОВ
+    /// (те же координаты, что у rect'ов [`Table::visible_rows`]; при
+    /// вьюпорте с x=0 совпадает с шириной). НЕ ширина: направляющие должны
+    /// попадать в ту же систему координат, что слоты (у stage слоты
+    /// экранные, x≠0 — «ширина» дала бы сдвиг на x вьюпорта).
     ///
     /// Правило деградации (§4.2, обязательное — иначе бит-в-бит не
     /// сходится): строк нет ИЛИ правые колонки пусты у всех строк
@@ -285,7 +291,7 @@ impl Table {
         &self,
         m: &mut TextMeasurer,
         fs: &mut cosmic_text::FontSystem,
-        viewport_w: f32,
+        viewport_right: f32,
     ) -> Option<RowGuides> {
         let parts: Vec<RowParts<'_>> = self
             .rows
@@ -298,7 +304,7 @@ impl Table {
                 badge: row.badge.as_deref().unwrap_or(""),
             })
             .collect();
-        let right_edge = viewport_w - self.props.opts.right_pad;
+        let right_edge = viewport_right - self.props.opts.right_pad;
         let guides = row_guides(
             m,
             fs,
@@ -337,9 +343,10 @@ impl Table {
     }
 
     /// Геометрия одной строки ([`row_layout`]) в слоте `slot`.
-    /// Направляющие — ОБЩИЕ, от ширины ВЬЮПОРТА (`viewport_w`), а не от
-    /// слота: слот строки full-width (возможно усечён по вертикали —
-    /// [`Table::visible_rows`]), поэтому `right_edge = viewport_w −
+    /// Направляющие — ОБЩИЕ, от ПРАВОГО КРАЯ ВЬЮПОРТА (`viewport_right`,
+    /// в координатах слотов — см. [`Table::guides_with`]), а не от слота:
+    /// слот строки full-width (возможно усечён по вертикали —
+    /// [`Table::visible_rows`]), поэтому `right_edge = viewport_right −
     /// opts.right_pad` (§4.2). Деградация (§4.2): направляющие не
     /// построены ([`Table::guides_with`] = `None`) — вход от правого края
     /// строки `RowGuides { value_w:0, unit_w:0, badge_w:0, value_x:
@@ -351,7 +358,7 @@ impl Table {
         &self,
         m: &mut TextMeasurer,
         fs: &mut cosmic_text::FontSystem,
-        viewport_w: f32,
+        viewport_right: f32,
         slot: UiRect,
         index: usize,
     ) -> Option<RowLayout> {
@@ -359,7 +366,7 @@ impl Table {
             return None;
         }
         let parts = self.parts_of(index);
-        let guides = self.guides_with(m, fs, viewport_w).unwrap_or_else(|| {
+        let guides = self.guides_with(m, fs, viewport_right).unwrap_or_else(|| {
             // Деградация §4.2 — паритет stage.rs:1386–1392: правый край
             // строки, без структурного зазора (иначе label_right ушёл бы
             // на gap влево от текущего рендера формул).
@@ -394,7 +401,7 @@ impl Table {
     /// sb formulas); [`Table::paint_with`] (строки → бегунок своей
     /// таблицы) перемешал бы порядок items журнала (I-1). Для каждой
     /// видимой строки — полный стиль ([`Table::merged_style`]), геометрия
-    /// ([`Table::row_layout_with`] от ширины вьюпорта), kit [`paint_row`].
+    /// ([`Table::row_layout_with`] от правого края вьюпорта), kit [`paint_row`].
     ///
     /// Основной слой замера: замерщик — ВНЕШНИЙ (продакшн-потребители с
     /// общим FontSystem рендера — §4.7).
@@ -407,7 +414,7 @@ impl Table {
     ) {
         for (index, slot) in self.visible_rows(viewport) {
             let style = self.merged_style(index);
-            if let Some(lay) = self.row_layout_with(m, fs, viewport.w, slot, index) {
+            if let Some(lay) = self.row_layout_with(m, fs, viewport.right(), slot, index) {
                 paint_row(p, &lay, &self.parts_of(index), &style, self.props.size);
             }
         }
@@ -460,17 +467,22 @@ impl Table {
 
     /// [`Table::guides_with`] на СОБСТВЕННЫХ замерщиках компонента
     /// (потребители без общего замерщика; §4.7.2).
-    pub fn guides(&self, viewport_w: f32) -> Option<RowGuides> {
+    pub fn guides(&self, viewport_right: f32) -> Option<RowGuides> {
         let mut m = self.measurer.borrow_mut();
         let mut fs = self.font_system.borrow_mut();
-        self.guides_with(&mut m, &mut fs, viewport_w)
+        self.guides_with(&mut m, &mut fs, viewport_right)
     }
 
     /// [`Table::row_layout_with`] на СОБСТВЕННЫХ замерщиках компонента.
-    pub fn row_layout_at(&self, viewport_w: f32, slot: UiRect, index: usize) -> Option<RowLayout> {
+    pub fn row_layout_at(
+        &self,
+        viewport_right: f32,
+        slot: UiRect,
+        index: usize,
+    ) -> Option<RowLayout> {
         let mut m = self.measurer.borrow_mut();
         let mut fs = self.font_system.borrow_mut();
-        self.row_layout_with(&mut m, &mut fs, viewport_w, slot, index)
+        self.row_layout_with(&mut m, &mut fs, viewport_right, slot, index)
     }
 }
 
@@ -628,7 +640,7 @@ mod tests {
     // === T1 (дизайн §7): направляющие ≡ kit row_guides =======================
 
     /// T1: `guides_with` ≡ `row_guides` на тех же частях (право =
-    /// `viewport_w − right_pad`, зазор `opts.gap`) — побитово на целочисленных
+    /// `viewport_right − right_pad`, зазор `opts.gap`) — побитово на целочисленных
     /// ширинах (прецедент тестов `cells_with` row_guides.rs); owned `guides`
     /// ≡ `guides_with`. Два датасета: kit-демо (4 строки с бейджем) и
     /// stage-подобный (только label+value, кегль 11.0, right_pad 6).
@@ -707,7 +719,26 @@ mod tests {
         assert_eq!(
             stage.guides_with(&mut m, &mut fs, W),
             expected,
-            "stage-подобные: right_edge = viewport_w − right_pad"
+            "stage-подобные: right_edge = viewport_right − right_pad"
+        );
+
+        // Вьюпорт со сдвигом x≠0: `viewport_right` — ПРАВЫЙ КРАЙ в
+        // координатах слотов (НЕ ширина): right_edge = right − pad, ячейки
+        // в той же системе, что слоты (stage — экранные координаты)
+        let shifted = UiRect::new(50.0, 0.0, 240.0, 60.0);
+        let expected = row_guides(
+            &mut m,
+            &mut fs,
+            FAMILY,
+            11.0,
+            &parts_of_rows(&stage.rows),
+            shifted.right() - stage.props.opts.right_pad,
+            stage.props.opts.gap,
+        );
+        assert_eq!(
+            stage.guides_with(&mut m, &mut fs, shifted.right()),
+            expected,
+            "x≠0: right_edge от правого края вьюпорта в координатах слотов"
         );
 
         // owned-слой ≡ kit-оракул: собственные замерщики компонента
@@ -917,7 +948,7 @@ mod tests {
                 .style
                 .apply(row_style(table.rows[index].state, &table.props.palette));
             let lay = table
-                .row_layout_with(&mut m, &mut fs, viewport.w, slot, index)
+                .row_layout_with(&mut m, &mut fs, viewport.right(), slot, index)
                 .unwrap();
             paint_row(
                 &mut ref_p,
@@ -984,7 +1015,7 @@ mod tests {
                 .style
                 .apply(row_style(plain.rows[index].state, &plain.props.palette));
             let lay = plain
-                .row_layout_with(&mut m, &mut fs, viewport.w, slot, index)
+                .row_layout_with(&mut m, &mut fs, viewport.right(), slot, index)
                 .unwrap();
             paint_row(
                 &mut ref_p,
