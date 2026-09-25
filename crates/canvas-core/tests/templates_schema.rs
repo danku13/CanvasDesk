@@ -87,7 +87,16 @@ fn builtin_manifests_are_bilingual() {
     let lb = registry.find("com.canvasdesk.lb").expect("lb");
     assert_eq!(lb.name, "Load Balancer");
     assert_eq!(lb.name_ru.as_deref(), Some("Балансировщик нагрузки"));
-    assert_eq!(lb.display_name(), "Балансировщик нагрузки");
+    assert_eq!(
+        lb.display_name(canvas_core::Language::Ru),
+        "Балансировщик нагрузки"
+    );
+    assert_eq!(lb.display_name(canvas_core::Language::En), "Load Balancer");
+    // EN description'ы присутствуют у всех built-in шаблонов (FR-040 v2)
+    assert_eq!(
+        lb.display_description(canvas_core::Language::En),
+        "L7 load balancer: M/M/c cluster response time."
+    );
 }
 
 /// Schema каждого манифеста: id/version/params/expr/icon (перебор всех 15).
@@ -209,7 +218,7 @@ fn every_expr_evaluates_with_defaults_without_overload() {
                 expr: manifest.expr.clone(),
                 icon: manifest.icon.clone(),
                 color: manifest.color.clone(),
-                name: Some(manifest.display_name().to_owned()),
+                name: Some(manifest.display_name(canvas_core::Language::Ru).to_owned()),
                 outputs: Vec::new(),
                 params: manifest
                     .params

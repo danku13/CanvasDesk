@@ -1498,7 +1498,11 @@ impl App {
     /// Док палитры: collapse/поиск/категории/строки.
     pub(super) fn click_template_panel(&mut self) {
         let viewport = self.viewport_logical();
-        let rows = template_panel_rows(&self.templates, &self.template_panel);
+        let rows = template_panel_rows(
+            &self.templates,
+            &self.template_panel,
+            self.settings.language,
+        );
         // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
@@ -1764,6 +1768,15 @@ impl App {
             self.cursor,
         ) {
             self.toggle_theme();
+            self.request_redraw();
+            return;
+        }
+        // FR-040 v2: кнопка переключения языка (RU/EN) — между темой и «?»
+        if point_in_rect(
+            language_button_rect(self.settings.button_corner, viewport),
+            self.cursor,
+        ) {
+            self.toggle_language();
             self.request_redraw();
             return;
         }
