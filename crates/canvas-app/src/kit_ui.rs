@@ -1240,14 +1240,7 @@ impl KitDraw {
     /// RGBA). Иначе (Glyph fallback) — рисуется Unicode-глиф через
     /// `label_center` (прежнее поведение). Неизвестная пара (set, name) —
     /// fallback на глиф (мягкая деградация).
-    pub fn icon(
-        &mut self,
-        rect: UiRect,
-        name: &str,
-        glyph: &str,
-        tint: [f32; 4],
-        glyph_size: f32,
-    ) {
+    pub fn icon(&mut self, rect: UiRect, name: &str, glyph: &str, tint: [f32; 4], glyph_size: f32) {
         if let Some(set) = self.icon_set {
             if let Some((uv_min, uv_max)) = canvas_render::icon_uv(set, name) {
                 // Квадратная вписка по центру: размер = min(w, h), pos —

@@ -276,7 +276,11 @@ pub const SETTINGS_TABS: [SettingsTab; 6] = [
         title_key: keys::TAB_APPEARANCE,
         icon: "◐",
         theme_cards: true,
-        rows: &[SettingsRow::ThemePreset, SettingsRow::IconStyle, SettingsRow::Language],
+        rows: &[
+            SettingsRow::ThemePreset,
+            SettingsRow::IconStyle,
+            SettingsRow::Language,
+        ],
     },
 ];
 
@@ -1253,7 +1257,11 @@ mod tests {
         );
         assert_eq!(
             SETTINGS_TABS[5].rows,
-            &[SettingsRow::ThemePreset, SettingsRow::IconStyle, SettingsRow::Language]
+            &[
+                SettingsRow::ThemePreset,
+                SettingsRow::IconStyle,
+                SettingsRow::Language
+            ]
         );
     }
 
