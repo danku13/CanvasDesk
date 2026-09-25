@@ -1,3 +1,24 @@
+## 2026-09-25 — feat(ui/component): FR-068 W3 — Component-слой: kit.rs → фасад (58 строк) + component/* (7 модулей), лид + 4 параллельных агента
+
+- **Агент:** Super Z (лид волны W3 + агенты 3-a..3-d, git-worktree, безконфликтный последовательный merge). Запрос владельца: «продолжай волну W3».
+
+### Work Log
+- **База (лид):** механический сплит `kit.rs` 3541 → **58 строк** (фасад-реэкспорт, API 1:1 — §Контракт-1) → `component/mod.rs` (`Component` trait: Props/props/layout(backend,slot)->Vec<UiRect>/paint/hit_test->Option<ComponentHit>; общие типы KitState/KitPalette/стили/константы) + `component/{button,panel,dropdown,modal,text_field,list,row}.rs` (row — FR-061 suite) + `test_support.rs`. Перенос 1:1 — snapshot 61/g4/demos зелёные без регенерации. Сплит — скриптом `scripts/w3_split_kit.py` (вне репо), докрутка импортов до clippy -D warnings ×3 конфигурации.
+- **3-a (Button+Panel):** ButtonProps/PanelProps + WidgetState (button), paint через слоты палитры (0 новых цветов), +6 тестов (layout/paint/hit_test).
+- **3-b (Dropdown+Modal):** Dropdown (layout → dropdown_menu().menu), Modal (layout [dim, panel] — контракт индексов тестом; paint — только панель; hit_test panel→1/dim→0/мимо→None), +6 тестов.
+- **3-c (TextField+List):** TextField (Props+model+WidgetState, paint — контейнер, thread-lazy FontSystem), List (count из инварианта content_h, paint — скроллбар), +6 тестов.
+- **3-d (Row + каталог):** RowProps+Row (layout-паритет с row_layout — тест; paint через paint_row; retained TextMeasurer/FontSystem) + `docs/plans/fr-068-w3-consumer-migration.md` (факт: 42 Child::fixed у потребителей, ~497 в плане — завышение ~9×; 142 из 184 глобально — оракулы; гейт «−30–50%» → решение владельцу: перефиксация на «0 у потребителей»; топ-5 мест; волны W3.1–W3.3).
+- **W3.1 (лид, пилот):** whatif_ui бар → `MeasuredItem::Fixed` × `Row::lay_out_measured` (бит-в-бит; Text — после пад-семантики F-13); Child::fixed canvas-app 42 → 32 (−24%).
+- **Retained-state:** НЕ введён (perf W2 ~0.2 мс < 1 мс — KISS).
+- **wasm (§Контракт-7):** wasm_gate --check зелёный; замер размера ОТЛОЖЕН (диск среды 100%, release не помещается); ожидаемая дельта ≤ ~10 КБ raw (0 новых deps).
+- **Предсуществующие фейлы:** 2 taffy-теста whatif_ui (bar_layout_no_overlap_and_covers_labels, scenario_labels_ellipsis_by_measured_width) — воспроизведены на origin/main 48ab7fc — семейство taffy-округлений W1, фикс отдельным CR (не блокирует W3).
+
+### Гейты
+- workspace default **2001 passed / 0 failed**; taffy 373+2 (предсуществующие); canvas-ui default 267 / taffy 314 / mock-shaper 278; snapshot 61; g4_lint 6+12; demos 16; parity(taffy) 2; perf_flex_reflow_1000 ok; clippy -D warnings ×3; fmt; wasm_gate --check.
+
+### Статусы
+- FR-068 (статус/чеклист W3 ✅/changelog), ui-kit §10 (новый), каталог миграции (W3.1 ✅), ADR-0015 — без изменений (принят), worklog.
+
 ## 2026-09-25 — feat(node): FR-072 разделение заголовка ноды и текста тела — явный canvasdesk.title, однострочный редактор в шапке, миграция legacy-первой строки
 
 ---
