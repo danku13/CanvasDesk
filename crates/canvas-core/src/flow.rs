@@ -3605,7 +3605,10 @@ mod tests {
         assert_eq!(rows[0].path, "Трафик.peak_rps");
         assert_eq!(rows[0].field, "peak_rps");
         let value = rows[0].value.as_ref().expect("значение пролито");
-        assert!(value.to_string().contains("1389"), "значение: {value}");
+        assert!(
+            value.to_string().contains("1\u{a0}389"),
+            "значение: {value}"
+        );
         // Детерминизм: повторный пересчёт — идентичные строки
         let solutions2 = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
         let rows2 = auto_rows(&canvas, "gateway", &solutions2);
@@ -3635,12 +3638,12 @@ mod tests {
         // Пролитое значение с юнитом: ячейки имя/число/юнит
         let p = row(Some(expr::unit_value(1389.0, Some("rps")))).display_parts();
         assert_eq!(p.path, "Трафик.peak_rps");
-        assert_eq!(p.num, "1389");
+        assert_eq!(p.num, "1\u{a0}389");
         assert_eq!(p.unit, "rps");
         // Строка — байт-в-байт как раньше (единая точка сборки)
         assert_eq!(
             row(Some(expr::unit_value(1389.0, Some("rps")))).display_text(),
-            "Трафик.peak_rps = 1389 rps"
+            "Трафик.peak_rps = 1\u{a0}389 rps"
         );
         // Скаляр — юнит пуст, строка без хвостового пробела
         let p = row(Some(Value::scalar(20.0))).display_parts();

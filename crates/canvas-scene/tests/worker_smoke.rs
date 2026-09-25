@@ -273,7 +273,7 @@ fn freeze_two_scenarios_and_compare_deltas() {
     scene.whatif_activate(Some(0));
     assert_eq!(
         result_of(&scene, "pool"),
-        "9300",
+        "9\u{a0}300",
         "С1: 1500×2+100=3100 → ×3"
     );
     let frozen_c1 = scene.whatif_freeze_active().expect("С1 заморожен");
@@ -282,7 +282,7 @@ fn freeze_two_scenarios_and_compare_deltas() {
     scene.whatif_activate(Some(1));
     assert_eq!(
         result_of(&scene, "pool"),
-        "12300",
+        "12\u{a0}300",
         "С2: 2000×2+100=4100 → ×3"
     );
     scene.whatif_freeze_active().expect("С2 заморожен");
@@ -306,15 +306,15 @@ fn freeze_two_scenarios_and_compare_deltas() {
         .expect("строка переменной rps");
     assert_eq!(
         var_row.values[0].as_ref().map(|v| v.to_string()),
-        Some("1000".to_owned())
+        Some("1\u{a0}000".to_owned())
     );
     assert_eq!(
         var_row.values[1].as_ref().map(|v| v.to_string()),
-        Some("1500".to_owned())
+        Some("1\u{a0}500".to_owned())
     );
     assert_eq!(
         var_row.values[2].as_ref().map(|v| v.to_string()),
-        Some("2000".to_owned())
+        Some("2\u{a0}000".to_owned())
     );
     assert!(var_row.deltas[1].is_some(), "дельта С1 против базы");
     assert!(var_row.deltas[2].is_some(), "дельта С2 против базы");

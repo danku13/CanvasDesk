@@ -90,7 +90,10 @@ fn merged_flows_indexed_by_edge_order() {
     value_edge(&mut canvas, "e1", "in1", "sum");
     value_edge(&mut canvas, "e2", "in2", "sum");
     let outputs = flow::propagate(&canvas, &HashMap::new()).expect("DAG");
-    assert_eq!(outputs["sum"].as_ref().unwrap().to_string(), "1250 rps");
+    assert_eq!(
+        outputs["sum"].as_ref().unwrap().to_string(),
+        "1\u{a0}250 rps"
+    );
 
     // in2 без формулы (значения нет) — слот Some(None): ошибка входа,
     // индексация $1/$2 не схлопывается

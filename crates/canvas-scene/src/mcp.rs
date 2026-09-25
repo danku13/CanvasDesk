@@ -2203,8 +2203,16 @@ fn batch_apply_op(
                     .map(|(name, _)| name.trim() == param)
                     .unwrap_or(false);
                 if matches && !replaced {
-                    let value =
-                        canvas_core::expr::unit_value(num, unit.as_deref()).to_string();
+                    // МАШИННЫЙ формат (format_num_raw, НЕ Value::to_string):
+                    // строка «param = value unit» идёт в ТЕКСТ ноды, который
+                    // движок парсит обратно (eval_lines/params_from_text) —
+                    // NBSP-группа разрядов `1 000` разобралась бы как
+                    // неявное умножение `1 × 0` (см. format_num_raw).
+                    let num_str = canvas_core::expr::format_num_raw(num);
+                    let value = match unit.as_deref() {
+                        Some(u) if !u.is_empty() => format!("{num_str} {u}"),
+                        _ => num_str,
+                    };
                     *line = format!("{param} = {value}");
                     replaced = true;
                 }

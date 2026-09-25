@@ -27,7 +27,7 @@ fn service_landscape_formula_evaluates() {
     let value = expr::eval(&parsed, &Env::empty()).expect("вычисляется");
     // Результат программы — значение последнего утверждения (cpu);
     // replicas — скалярная переменная, итог — в ms
-    assert_eq!(value.to_string(), "16666.7 ms");
+    assert_eq!(value.to_string(), "16\u{a0}666.7 ms");
     assert!((value.num - 16666.666666666668).abs() < 1e-6);
 }
 
@@ -85,7 +85,7 @@ fn formula_serializes_result_does_not() {
         Err(err) => ExprOutcome::Err(err.to_string()),
     };
     match outcome {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000 rps"),
         other => panic!("ожидалось значение: {other:?}"),
     }
 }
@@ -96,6 +96,6 @@ fn formula_serializes_result_does_not() {
 fn env_seeding_is_the_fr014_hook() {
     let env = Env::empty().set("in", expr::Value::scalar(500.0));
     let value = expr::eval(&expr::parse("in × 2 ms").unwrap(), &env).unwrap();
-    assert_eq!(value.to_string(), "1000 ms");
+    assert_eq!(value.to_string(), "1\u{a0}000 ms");
     assert!((value.num - 1000.0).abs() < 1e-9);
 }

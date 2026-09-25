@@ -633,11 +633,14 @@ fn mcp_node_edit_expr_computes_result() {
     // Результат — runtime-кэш, в модели его нет
     let value = scene.expr_results.get("n1").expect("результат есть");
     match value {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000 ms·req/s"),
         other => panic!("ожидался результат, получено: {other:?}"),
     }
     let json = scene.canvas.to_json().expect("сериализация");
-    assert!(!json.contains("1000 ms"), "результат не сериализуется");
+    assert!(
+        !json.contains("1\u{a0}000 ms"),
+        "результат не сериализуется"
+    );
     assert!(json.contains("5 ms × 200 req/s"), "формула сериализуется");
 }
 
@@ -764,7 +767,7 @@ fn expr_undo_redo_restores_formula() {
         .get("calc")
         .expect("результат при загрузке")
     {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000 rps"),
         other => panic!("ожидалось значение: {other:?}"),
     }
 }
@@ -793,7 +796,7 @@ fn per_line_results_numi_sheet() {
     // строка «latency × rps»); показ футера гасится построчными
     // результатами — правило рендера, не карты
     match scene.expr_results.get("n1").expect("итог в карте потока") {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "50000 ms"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "50\u{a0}000 ms"),
         other => panic!("ожидалось значение: {other:?}"),
     };
     let lines = scene
@@ -803,7 +806,7 @@ fn per_line_results_numi_sheet() {
     assert_eq!(lines.len(), 5, "Vec выровнен по строкам текста");
     assert_eq!(lines[0], None, "проза");
     match lines[1].as_ref().expect("присваивание — результат") {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000"),
         other => panic!("ожидалось значение: {other:?}"),
     }
     assert_eq!(lines[2], None, "пустая строка");
@@ -811,7 +814,7 @@ fn per_line_results_numi_sheet() {
         .as_ref()
         .expect("выражение с переменными — результат")
     {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "50000 ms"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "50\u{a0}000 ms"),
         other => panic!("ожидалось значение: {other:?}"),
     }
 }
@@ -832,7 +835,7 @@ fn mcp_program_result_fallback_for_prose_text() {
         "в прозе формульных строк нет — построчных результатов нет"
     );
     match scene.expr_results.get("n1").expect("программный итог") {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000 ms·req/s"),
         other => panic!("ожидалось значение: {other:?}"),
     }
 }
@@ -860,7 +863,7 @@ fn auto_lines_compute_without_equal_prefix() {
         .expect("построчные результаты есть");
     assert_eq!(lines[0], None, "проза — не формула");
     match lines[1].as_ref().expect("результат авто-строки") {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "2000 rps"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "2\u{a0}000 rps"),
         other => panic!("ожидалось значение: {other:?}"),
     }
 
@@ -888,7 +891,7 @@ fn auto_lines_compute_without_equal_prefix() {
         .get("auto")
         .expect("построчные результаты при загрузке");
     match lines[0].as_ref().expect("результат") {
-        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 ms·req/s"),
+        ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000 ms·req/s"),
         other => panic!("ожидалось значение: {other:?}"),
     }
 }
@@ -918,10 +921,10 @@ fn per_line_results_owner_sheets_v4() {
             other => panic!("ожидалось значение: {other:?}"),
         })
         .collect();
-    assert_eq!(texts[0], "5246", "хвостовое присваивание a");
-    assert_eq!(texts[1], "2558", "хвостовое присваивание b");
+    assert_eq!(texts[0], "5\u{a0}246", "хвостовое присваивание a");
+    assert_eq!(texts[1], "2\u{a0}558", "хвостовое присваивание b");
     assert_eq!(texts[2], "200", "чистое присваивание x");
-    assert_eq!(texts[3], "7804", "ссылки на переменные c = a + b");
+    assert_eq!(texts[3], "7\u{a0}804", "ссылки на переменные c = a + b");
     assert_eq!(texts[4], "400", "ссылка на x");
 
     // Нода 2 владельца
@@ -2371,7 +2374,7 @@ fn recompute_fills_param_spills_with_edge_value() {
     assert_eq!(spill.from_output, Some("peak_rps".to_owned()));
     assert_eq!(
         spill.value,
-        Some("1388.89 rps".to_owned()),
+        Some("1\u{a0}388.89 rps".to_owned()),
         "бейдж — пролитое значение ребра, а не локальный литерал 100 rps"
     );
     // Текст как на карточке: присваивание заменено подписью источника.
@@ -2766,7 +2769,10 @@ fn scene_auto_rows_cache_populated() {
     assert_eq!(rows[0].field, "peak_rps");
     assert_eq!(rows[0].slot, 0);
     let value = rows[0].value.as_ref().expect("значение пролито");
-    assert!(value.to_string().contains("1389"), "значение: {value}");
+    assert!(
+        value.to_string().contains("1\u{a0}389"),
+        "значение: {value}"
+    );
     // Удаление ребра → пересчёт → строка исчезла
     let edge_id = scene
         .canvas
@@ -3320,7 +3326,11 @@ fn spill_view_carries_path_and_local() {
     assert_eq!(view.param, "rps");
     assert_eq!(view.line, Some(0), "первая строка листа CDN — rps");
     assert_eq!(view.path, "Трафик.peak_rps", "квалифицированный путь Н9-2");
-    assert_eq!(view.value.as_deref(), Some("1389 rps"), "значение ребра");
+    assert_eq!(
+        view.value.as_deref(),
+        Some("1\u{a0}389 rps"),
+        "значение ребра"
+    );
     assert_eq!(
         view.local.as_deref(),
         Some("50 rps"),
@@ -3369,7 +3379,7 @@ fn auto_rows_grow_node_height() {
     assert_eq!(rows[0].slot, 0);
     assert_eq!(
         rows[0].value.clone().map(|v| v.to_string()),
-        Some("1389 rps".to_owned())
+        Some("1\u{a0}389 rps".to_owned())
     );
     let after = scene
         .canvas

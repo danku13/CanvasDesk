@@ -365,8 +365,19 @@ impl TemplateParam {
         expr::unit_value(self.num, self.unit.as_deref())
     }
 
+    /// МАШИННЫЙ формат параметра (`rps = 1000 rps`) — без группировки
+    /// разрядов ([`expr::format_num_raw`], не [`expr::Value::to_string`]).
+    /// Единственный потребитель — `instantiate`: строка идёт в ТЕКСТ ноды,
+    /// который движок парсит обратно (`params_from_text`, `eval_lines`);
+    /// NBSP-группа `1 000` в тексте сломала бы повторный разбор
+    /// (`1 000` → `1 × 0`). Отображение значений (ячейки/тултипы) идёт
+    /// через `Value` — там группировка есть.
     pub fn display(&self) -> String {
-        expr::unit_value(self.num, self.unit.as_deref()).to_string()
+        let num = expr::format_num_raw(self.num);
+        match &self.unit {
+            Some(unit) if !unit.is_empty() => format!("{num} {unit}"),
+            _ => num,
+        }
     }
 
     fn to_json(&self) -> Json {

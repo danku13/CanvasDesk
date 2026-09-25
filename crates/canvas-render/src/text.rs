@@ -5929,7 +5929,7 @@ load = connections_per_sec / (servers * server_rate)\n";
             }) => {
                 assert_eq!(path, "Трафик.peak_rps");
                 assert_eq!(*slot, 0);
-                assert_eq!(value.as_deref(), Some("1389"));
+                assert_eq!(value.as_deref(), Some("1\u{a0}389"));
                 assert!(!template, "приёмник — текстовая нода");
             }
             other => panic!("нет данных тултипа Н9-2: {other:?}"),
