@@ -1,15 +1,18 @@
 //! FR-068 W3: кнопка/чип/свитч/иконка — перенос из kit.rs 1:1 (W3).
 //!
-//! Владелец волны (агент 3-a): дополнить `Props` + `impl Component` для
-//! кнопки (см. worklog/FR-068 §W3); существующие функции — стабильный API.
+//! Владелец волны (агент 3-a): [`ButtonProps`]/[`Button`] + `impl
+//! Component` добавлены (см. секцию «Component» внизу файла);
+//! существующие функции — стабильный API кита (§Контракт-1 PRD-0009 V-5).
 
 use super::{
-    ButtonVariant, ControlStyle, KitPalette, KitState, BUTTON_HEIGHT, BUTTON_PAD_H, CHIP_HEIGHT,
-    CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
+    ButtonVariant, Component, ControlStyle, KitPalette, KitState, BUTTON_HEIGHT, BUTTON_PAD_H,
+    CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
 };
 use crate::geometry::{UiPoint, UiRect, UiVec2};
-use crate::layout::{stack, HAlign, VAlign};
+use crate::layout::{stack, HAlign, LayoutBackend, VAlign};
 use crate::measure::TextMeasurer;
+use crate::paint::Painter;
+use crate::widget::WidgetState;
 
 // --- Button -----------------------------------------------------------------
 
@@ -317,6 +320,121 @@ pub fn icon_button(slot: UiRect, _icon: Icon, align: (HAlign, VAlign)) -> UiRect
     icon_button_rect(slot, align)
 }
 
+// === Component (FR-068 W3, агент 3-a) =======================================
+
+/// Семейство подписи по умолчанию для [`Component::layout`] кнопки — то же
+/// имя, что `Family::Name` screen-текстов рендера (паритет `sans_attrs`,
+/// CR-015: замер тем же лицом, что и отрисовка).
+pub const BUTTON_FAMILY: &str = "Noto Sans Display";
+
+/// Кегль подписи по умолчанию для [`Component::layout`] кнопки (ui px) —
+/// прежний кегль подписей контролов поверхностей (13.0). Потребитель с
+/// собственным шрифтовым пулом передаёт свой кегль напрямую в
+/// [`button_layout`] — значения здесь только для standalone-пути.
+pub const BUTTON_FONT_SIZE: f32 = 13.0;
+
+/// Свойства кнопки — декларативный вход кадра (FR-068 W3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ButtonProps {
+    /// Подпись (узкий слот — ellipsis в [`button_layout`], деградация
+    /// видна потребителю, не молчаливый срез).
+    pub label: String,
+    /// Вариант (семантика действия → слот заливки [`button_style`]).
+    pub variant: ButtonVariant,
+    /// Палитра-срез: цвета — только слоты (контракт F-8 PRD-0009 §8).
+    pub palette: KitPalette,
+    /// Недоступна: [`Button::new`] транслирует флаг в
+    /// [`WidgetState::set_disabled`] (клик игнорируется — контракт
+    /// [`KitState::Disabled`]).
+    pub disabled: bool,
+}
+
+/// Кнопка как [`Component`] — retained-объект (FR-068 §W3): `props` —
+/// вход кадра, `state` — машина состояний FR-057 (потребитель двигает
+/// `set_pointer`/`clicked` по событиям указателя; интерактивность —
+/// потому `WidgetState` обязателен).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Button {
+    /// Свойства кадра.
+    pub props: ButtonProps,
+    /// Состояние виджета (hover/pressed/disabled/... — матрица
+    /// приоритетов [`WidgetState::kit_state`]).
+    pub state: WidgetState,
+}
+
+impl Button {
+    /// Новая кнопка: `props.disabled` прошивается в состояние виджета —
+    /// дальше стиль (`paint`) и ребро клика (`WidgetState::clicked`)
+    /// читают одно и то же состояние. Смена `disabled` между кадрами —
+    /// через пересоздание или `state.set_disabled` потребителем.
+    pub fn new(props: ButtonProps) -> Self {
+        let mut state = WidgetState::default();
+        state.set_disabled(props.disabled);
+        Self { props, state }
+    }
+}
+
+impl Component for Button {
+    type Props = ButtonProps;
+
+    fn props(&self) -> &ButtonProps {
+        &self.props
+    }
+
+    /// Один rect — сама кнопка: делегирование [`button_layout`] 1:1
+    /// (размер = подпись + 2·[`BUTTON_PAD_H`], минимум [`BUTTON_HEIGHT`];
+    /// узкий слот — сжатие до ширины слота + ellipsis подписи). Порядок
+    /// rects: `rects[0]` — кнопка; других rect'ов нет.
+    ///
+    /// Выравнивание в слоте — Center/Center (как у кнопок диалога/шапки);
+    /// семейство/кегль — [`BUTTON_FAMILY`]/[`BUTTON_FONT_SIZE`].
+    /// `backend` не участвует: `button_layout` — stack одного блока,
+    /// контейнерной вёрстки нет (сигнатура kit-функции НЕ менялась —
+    /// §Контракт-1 FR-068).
+    ///
+    /// Standalone-семантика: измеритель и шрифтовой пул создаются на
+    /// вызов (immediate, без retained-состояния — решение FR-068 §W3);
+    /// горячий путь потребителя — [`button_layout`] с собственным пулом
+    /// (владелец пула — canvas-render::text, PRD-0009 §14/Q6).
+    fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
+        let mut m = TextMeasurer::new();
+        let mut fs = cosmic_text::FontSystem::new();
+        let bl = button_layout(
+            slot,
+            &self.props.label,
+            (HAlign::Center, VAlign::Center),
+            &mut m,
+            &mut fs,
+            BUTTON_FAMILY,
+            BUTTON_FONT_SIZE,
+        );
+        vec![bl.rect]
+    }
+
+    /// Рисует `rects[0]` (rect из [`Component::layout`]) контролом:
+    /// заливка/рамка/радиус — [`button_style`] по варианту и состоянию
+    /// [`WidgetState::kit_state`] (disabled прошит в state при
+    /// [`Button::new`]). Подпись — забота потребителя (`Painter::label`
+    /// слотом `style.text`; усечённая подпись живёт в [`button_layout`],
+    /// кит цвет от геометрии не отделяет — F-8). Пустой `rects` — no-op
+    /// (деградация, не паника).
+    fn paint(&self, painter: &mut Painter, rects: &[UiRect]) {
+        let Some(&rect) = rects.first() else {
+            return;
+        };
+        let style = button_style(
+            self.props.variant,
+            self.state.kit_state(),
+            &self.props.palette,
+        );
+        painter.control(rect, &style);
+    }
+
+    // hit_test — дефолтный из [`Component`] (первый rect, содержащий
+    // точку): у кнопки rect один — этого достаточно, переопределение
+    // не требуется (план FR-068 §W3).
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,4 +677,121 @@ mod tests {
     }
 
     // === FR-062 F-17: focus_order ===
+
+    // === FR-068 W3: Component Button (агент 3-a) ============================
+    use crate::component::ComponentHit;
+    use crate::layout::default_backend;
+    use crate::paint::PaintItem;
+
+    /// Component::layout: ровно один rect (сама кнопка), внутри слота,
+    /// по центру (Center/Center); пустая подпись — минимальный квадрат
+    /// BUTTON_HEIGHT (шрифто-независимо: 0 ширина текста).
+    #[test]
+    fn component_button_layout_single_rect_in_slot() {
+        let slot = UiRect::new(10.0, 20.0, 400.0, 60.0);
+        let btn = Button::new(ButtonProps {
+            label: "ОО".to_owned(),
+            variant: ButtonVariant::Primary,
+            palette: palette_a(),
+            disabled: false,
+        });
+        let rects = btn.layout(default_backend(), slot);
+        assert_eq!(rects.len(), 1, "кнопка — один rect");
+        let r = rects[0];
+        assert_eq!(r.h, BUTTON_HEIGHT);
+        assert!(r.w >= BUTTON_HEIGHT, "ширина не ниже минимума");
+        assert!(
+            r.x >= slot.x && r.right() <= slot.right() + 0.01,
+            "в слоте по X"
+        );
+        assert!(
+            r.y >= slot.y && r.bottom() <= slot.bottom() + 0.01,
+            "в слоте по Y"
+        );
+        // Center/Center: слева/сверху поровну свободного места.
+        assert!((r.x - slot.x - (slot.w - r.w) / 2.0).abs() < 0.01);
+        assert!((r.y - slot.y - (slot.h - r.h) / 2.0).abs() < 0.01);
+        // Пустая подпись — квадрат BUTTON_HEIGHT×BUTTON_HEIGHT (без
+        // шейпинга: ширина текста 0 — детерминировано на любом CI).
+        let empty = Button::new(ButtonProps {
+            label: String::new(),
+            ..btn.props.clone()
+        });
+        let rects = empty.layout(default_backend(), slot);
+        assert_eq!(rects[0].w, BUTTON_HEIGHT);
+        assert_eq!(rects[0].h, BUTTON_HEIGHT);
+    }
+
+    /// Component::paint: один Rect со слотами [`button_style`] —
+    /// Primary/Normal → control_primary, hover (из WidgetState) →
+    /// primary_hover_fill; props.disabled прошит в состояние при new;
+    /// пустой rects — no-op.
+    #[test]
+    fn component_button_paint_emits_style_rect() {
+        let pal = palette_a();
+        let mut btn = Button::new(ButtonProps {
+            label: "ОК".to_owned(),
+            variant: ButtonVariant::Primary,
+            palette: pal,
+            disabled: false,
+        });
+        let rects = vec![UiRect::new(0.0, 0.0, 100.0, BUTTON_HEIGHT)];
+        let mut painter = Painter::new();
+        btn.paint(&mut painter, &rects);
+        assert_eq!(painter.items().len(), 1, "контрольный rect — один item");
+        assert_eq!(
+            painter.items()[0],
+            PaintItem::Rect {
+                rect: rects[0],
+                fill: pal.control_primary,
+                border: pal.control_border,
+                radius: canvas_core::tokens::RADIUS_CHIP,
+            }
+        );
+        // Hover — из WidgetState (state и props разделены: стиль меняет
+        // состояние, а не свойства).
+        btn.state.set_pointer(true, false);
+        let mut painter = Painter::new();
+        btn.paint(&mut painter, &rects);
+        assert_eq!(
+            painter.items()[0],
+            PaintItem::Rect {
+                rect: rects[0],
+                fill: pal.primary_hover_fill,
+                border: pal.control_border,
+                radius: canvas_core::tokens::RADIUS_CHIP,
+            }
+        );
+        // disabled-проп → KitState::Disabled (прошивка в new).
+        let dis = Button::new(ButtonProps {
+            disabled: true,
+            ..btn.props.clone()
+        });
+        assert_eq!(dis.state.kit_state(), KitState::Disabled);
+        // Пустой rects — no-op, не паника.
+        let mut painter = Painter::new();
+        dis.paint(&mut painter, &[]);
+        assert!(painter.items().is_empty());
+    }
+
+    /// Component::hit_test (дефолт из трейта): точка внутри rect →
+    /// `ComponentHit { index: 0 }`, вне — None.
+    #[test]
+    fn component_button_hit_test_picks_first_rect() {
+        let btn = Button::new(ButtonProps {
+            label: "ОК".to_owned(),
+            variant: ButtonVariant::Secondary,
+            palette: palette_a(),
+            disabled: false,
+        });
+        let rects = btn.layout(default_backend(), UiRect::new(0.0, 0.0, 400.0, 60.0));
+        assert_eq!(rects.len(), 1);
+        let inside = UiPoint::new(rects[0].x + 1.0, rects[0].y + 1.0);
+        assert_eq!(
+            btn.hit_test(&rects, inside),
+            Some(ComponentHit { index: 0 })
+        );
+        let outside = UiPoint::new(rects[0].right() + 10.0, rects[0].y + 1.0);
+        assert_eq!(btn.hit_test(&rects, outside), None);
+    }
 }
