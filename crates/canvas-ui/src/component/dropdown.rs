@@ -1,10 +1,12 @@
 //! FR-068 W3: dropdown/tooltip/toast (+ taffy-пути) — перенос из kit.rs 1:1 (W3).
 //!
-//! Владелец волны (агент 3-b): дополнить `Props` + `impl Component` для
-//! dropdown; taffy-варианты — opt-in parity-пути W1 (семантику не менять).
+//! Владелец волны (агент 3-b): `Props` + `impl Component` для dropdown
+//! добавлены (секция «Component» ниже); taffy-варианты — opt-in parity-пути
+//! W1 (семантика не менялась).
 
-use super::{DROPDOWN_GAP, TOOLTIP_OFFSET};
+use super::{Component, KitPalette, DROPDOWN_GAP, TOOLTIP_OFFSET};
 use crate::geometry::{UiPoint, UiRect, UiVec2};
+use crate::widget::WidgetState;
 
 // --- FR-068 W0: общий кламп rect'а к вьюпорту -------------------------------
 
@@ -266,10 +268,79 @@ pub fn toast_area_taffy(viewport: UiRect, avoid: Option<UiRect>) -> UiRect {
     viewport_clamp(rect, viewport)
 }
 
+// === FR-068 W3: Component (агент 3-b) =======================================
+//
+// [`Dropdown`] — retained-обёртка над kit-функцией [`dropdown_menu`]: Props —
+// декларативный вход кадра, layout делегирует в kit-функцию (паритет
+// геометрии 1:1, §Контракт-3 FR-068), paint — хром-поверхность меню из СЛОТОВ
+// палитры (контракт «цвета — только слоты», F-8). Интерактивность —
+// [`WidgetState`] (FR-057): переходы указателя ведёт потребитель, кит —
+// машина состояний.
+
+/// Свойства dropdown-компонента (декларативный вход кадра).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DropdownProps {
+    /// Якорь — rect контрола, открывшего меню (flip/клампы от него).
+    pub anchor: UiRect,
+    /// Вьюпорт поверхности — финальная гарантия «меню не выходит за вьюпорт».
+    pub viewport: UiRect,
+    /// Желаемый размер меню (ширина ≥ ширины якоря — внутри [`dropdown_menu`]).
+    pub content: UiVec2,
+    /// Палитра-срез: меню — та же хром-поверхность, что панель/модаль
+    /// (слоты `panel_fill`/`panel_border`, радиус RADIUS_PANEL).
+    pub palette: KitPalette,
+}
+
+/// Dropdown-компонент (FR-068 W3): retained — Props + [`WidgetState`].
+/// Popup-геометрия задаётся `anchor`/`viewport` из Props, родительский слот
+/// в [`Component::layout`] не участвует (меню живёт НАД сценой).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dropdown {
+    /// Свойства кадра.
+    pub props: DropdownProps,
+    /// Состояние интерактивного виджета (set_* — вызовы потребителя;
+    /// hover/pressed пунктов меню — поверх, у контейнера своей хром-реакции
+    /// на состояния нет — paint не зависит от `state`).
+    pub state: WidgetState,
+}
+
+impl Component for Dropdown {
+    type Props = DropdownProps;
+
+    fn props(&self) -> &Self::Props {
+        &self.props
+    }
+
+    fn layout(&self, _backend: &dyn crate::layout::LayoutBackend, _slot: UiRect) -> Vec<UiRect> {
+        // Делегация в kit-функцию 1:1 (flip/клампы/[`viewport_clamp`] —
+        // внутри неё): паритет геометрии с прямым вызовом гарантируется
+        // тестом. Native-путь — default-семантика; taffy-вариант — opt-in
+        // W1 ([`dropdown_menu_taffy`], parity зафиксирован там же), backend
+        // popup-геометрией не пользуется (rect определяется якорем/вьюпортом).
+        vec![dropdown_menu(self.props.anchor, self.props.viewport, self.props.content).menu]
+    }
+
+    fn paint(&self, painter: &mut crate::paint::Painter, rects: &[UiRect]) {
+        // Меню — панельная хрома из слотов палитры (panel_fill == menu_fill
+        // исторически; радиус RADIUS_PANEL — шкала токенов): никаких новых
+        // цветов/смешиваний (контракт F-8, [`crate::component::KitPalette`]).
+        // Порядок rects = порядок [`Component::layout`] (один rect — меню).
+        let style = crate::component::panel::panel_style(&self.props.palette);
+        if let Some(menu) = rects.first() {
+            painter.panel(*menu, &style);
+        }
+    }
+
+    // hit_test — дефолтный ([`ComponentHit::pick`]): rect один — меню.
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component::TOOLTIP_DELAY_MS;
+    use crate::component::test_support::{palette_a, palette_b};
+    use crate::component::{ComponentHit, KitState, TOOLTIP_DELAY_MS};
+    use crate::paint::{PaintItem, Painter};
+
     #[test]
     fn dropdown_flips_when_bottom_full() {
         let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
@@ -407,6 +478,104 @@ mod tests {
         // Перенос влево/вверх упирается в край (0,0), размер сохранён
         assert_eq!(t.rect, UiRect::new(0.0, 0.0, 2000.0, 900.0));
         assert!(t.flipped);
+    }
+
+    // === FR-068 W3: Component (Dropdown) ====================================
+
+    /// Component::layout — rect меню из kit-функции [`dropdown_menu`] 1:1
+    /// (паритет геометрии) с финальной гарантией вьюпорта W0: меню в
+    /// пределах viewport (сценарий «правый низ»: флип вверх + сдвиг влево —
+    /// как в `dropdown_flips_when_bottom_full`). Слот родителя popup-
+    /// геометрией не участвует (якорь/вьюпорт — в Props).
+    #[test]
+    fn dropdown_component_layout_returns_kit_menu_within_viewport() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let d = Dropdown {
+            props: DropdownProps {
+                anchor: UiRect::new(700.0, 560.0, 90.0, 30.0),
+                viewport: vp,
+                content: UiVec2::new(160.0, 90.0),
+                palette: palette_a(),
+            },
+            state: WidgetState::default(),
+        };
+        // golden: width = 160 (≥ якоря), x = 640 (кламп правого края),
+        // флип вверх: y = 560 − 4 − 90 = 466
+        assert_eq!(
+            d.layout(crate::layout::default_backend(), vp),
+            vec![UiRect::new(640.0, 466.0, 160.0, 90.0)]
+        );
+        assert_eq!(
+            d.layout(crate::layout::default_backend(), vp)[0],
+            dropdown_menu(d.props.anchor, d.props.viewport, d.props.content).menu,
+            "Component::layout делегирует в kit-функцию 1:1"
+        );
+        let menu = d.layout(crate::layout::default_backend(), vp)[0];
+        assert!(menu.x >= vp.x && menu.right() <= vp.right());
+        assert!(menu.y >= vp.y && menu.bottom() <= vp.bottom());
+        assert_eq!(*d.props(), d.props, "props() — доступ к свойствам");
+    }
+
+    /// Component::paint — меню рисуется панельной хромой из СЛОТОВ палитры
+    /// (panel_fill/panel_border, радиус RADIUS_PANEL — шкала токенов):
+    /// смена палитры меняет item (стиль выбирает слот, не вычисляет цвет —
+    /// контракт F-8), порядок rects = порядок layout (один rect — меню).
+    #[test]
+    fn dropdown_component_paint_emits_panel_slots() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        for palette in [palette_a(), palette_b()] {
+            let d = Dropdown {
+                props: DropdownProps {
+                    anchor: UiRect::new(100.0, 10.0, 200.0, 40.0),
+                    viewport: vp,
+                    content: UiVec2::new(160.0, 90.0),
+                    palette,
+                },
+                state: WidgetState::default(),
+            };
+            let rects = d.layout(crate::layout::default_backend(), vp);
+            let mut painter = Painter::new();
+            d.paint(&mut painter, &rects);
+            let items = painter.items();
+            assert_eq!(items.len(), 1, "меню — один Rect-item");
+            assert_eq!(
+                items[0],
+                PaintItem::Rect {
+                    rect: rects[0],
+                    fill: palette.panel_fill,
+                    border: palette.panel_border,
+                    radius: canvas_core::tokens::RADIUS_PANEL,
+                }
+            );
+        }
+    }
+
+    /// Component: hit_test — дефолтный (первый содержащий rect — он же
+    /// единственный): точка в меню — index 0, вне — None. WidgetState
+    /// (FR-057) доступен потребителю: переход указателя даёт hover.
+    #[test]
+    fn dropdown_component_default_hit_test_and_state() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let mut d = Dropdown {
+            props: DropdownProps {
+                anchor: UiRect::new(100.0, 10.0, 200.0, 40.0),
+                viewport: vp,
+                content: UiVec2::new(160.0, 90.0),
+                palette: palette_a(),
+            },
+            state: WidgetState::default(),
+        };
+        let rects = d.layout(crate::layout::default_backend(), vp);
+        assert_eq!(
+            d.hit_test(&rects, UiPoint::new(150.0, 60.0)),
+            Some(ComponentHit { index: 0 })
+        );
+        assert_eq!(d.hit_test(&rects, UiPoint::new(5.0, 5.0)), None);
+        // Пустой срез rects (потребитель не вызвал layout) — None, не паника.
+        assert_eq!(d.hit_test(&[], UiPoint::new(150.0, 60.0)), None);
+        // WidgetState — машина состояний потребителя (кит не ведёт ввод).
+        d.state.set_pointer(true, false);
+        assert_eq!(d.state.kit_state(), KitState::Hovered);
     }
 }
 
