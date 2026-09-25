@@ -799,10 +799,15 @@ pub(crate) fn is_literal_rhs(row: &RowCells) -> bool {
     if row.kind != RowKind::Param || row.value.is_empty() || row.formula.is_empty() {
         return false;
     }
+    // Группировка разрядов в ячейке значения (`1 200`, NBSP U+00A0) —
+    // украшение отображения: формула хранит «сырое» `1200`. Перед сравнением
+    // «значение = формула дословно» разделители групп убираются, иначе
+    // литеральные RHS ≥ 1000 перестают распознаваться (дубль значения).
+    let value = row.value.replace('\u{a0}', "");
     let value_unit = if row.unit.is_empty() {
-        row.value.clone()
+        value
     } else {
-        format!("{} {}", row.value, row.unit)
+        format!("{value} {}", row.unit)
     };
     row.formula.split_whitespace().collect::<Vec<_>>().join(" ")
         == value_unit.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -894,7 +899,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, RowKind::Auto);
         assert_eq!(rows[0].name, "Профиль.peak_rps");
-        assert_eq!(rows[0].value, "1200");
+        assert_eq!(rows[0].value, "1\u{a0}200");
         assert_eq!(rows[0].unit, "rps");
         assert!(rows[0].upstream);
         assert!(!rows[0].dim_value);
@@ -1405,6 +1410,21 @@ mod tests {
                 .all(|(line, _)| *line != 0),
             "пролитая строка без strip (левая часть — подпись источника)"
         );
+    }
+
+    /// Группировка разрядов в ячейке значения (`1 200`, NBSP) не ломает
+    /// детект литерального RHS: формула хранит `1200` — strip применяется
+    /// (регресс группировки разрядов в format_num).
+    #[test]
+    fn literal_rhs_detection_ignores_thousand_groups() {
+        let text = "rps = 1200 rps\ntotal = 50000";
+        let rows = build_rows(text, Some(&outcomes(text)), &[], &[], &[]);
+        assert!(
+            is_literal_rhs(&rows[0]),
+            "«1200 rps» с группой в ячейке — литерал: {:?}",
+            rows[0].value
+        );
+        assert!(is_literal_rhs(&rows[1]), "«50000» — литерал");
     }
 
     /// Приёмка T9 FR-061: Param с выражением в RHS усекается с ЗАЩИЩЁННЫМ

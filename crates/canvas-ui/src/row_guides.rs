@@ -186,6 +186,52 @@ pub fn measure_row_cells(
     }
 }
 
+/// Зебра-маска строк табличного тела (D-5 FR-061, аудит выравнивания с
+/// китом 2026-09-26): прогоны ПОДРЯД идущих строк данных — соседство по
+/// индексам блоков вёрстки (проза между строками рвёт прогон), чётные
+/// позиции внутри прогона ≥ `run_min` получают фон. Перенос из
+/// `canvas-render/text.rs` 1:1 (та же арифметика — байт-паритет, I-1):
+/// кит считает ГЕОМЕТРИЮ/решение, ЦВЕТ остаётся у потребителя (F-8 —
+/// слот фона зебры подставляет тема потребителя).
+///
+/// Аргументы — параллельные срезы одной длины (по числу строк данных):
+/// - `block_pos` — индекс блока вёрстки каждой строки (соседство `b[k] ==
+///   b[k−1] + 1` продолжает прогон; индексы — реальные позиции блоков,
+///   `usize::MAX` договором исключён — строки без блоков выбрасываются
+///   до вызова);
+/// - `is_chrome_row` — «хромовая» строка (заголовок блока/превью/Σ):
+///   разрывает прогон (кроме ПОЗИЦИИ начала прогона — семантика прежнего
+///   цикла) и сама фона не получает, но в чётность внутри прогона входит.
+///
+/// Порог `run_min` — токен потребителя (тело ноды —
+/// `canvas_core::tokens::TABLE_ZEBRA_RUN_MIN` = 4, прототип O-7); кит
+/// значения не знает (экранные списки могут деградировать иначе).
+/// Детерминизм: одинаковые входы → идентичная маска.
+pub fn zebra_run_flags(block_pos: &[usize], is_chrome_row: &[bool], run_min: usize) -> Vec<bool> {
+    debug_assert_eq!(
+        block_pos.len(),
+        is_chrome_row.len(),
+        "zebra_run_flags: параллельные срезы block_pos/is_chrome_row"
+    );
+    let mut zebra: Vec<bool> = vec![false; block_pos.len()];
+    let mut j = 0;
+    while j < block_pos.len() {
+        let mut k = j + 1;
+        while k < block_pos.len() && block_pos[k] == block_pos[k - 1] + 1 && !is_chrome_row[k] {
+            k += 1;
+        }
+        if k - j >= run_min {
+            for (pos, z) in zebra[j..k].iter_mut().enumerate() {
+                // Хромовая строка зебры не получает (D-5: зебра — фон строк
+                // данных; заголовок/превью/Σ — тоже).
+                *z = pos % 2 == 1 && !is_chrome_row[j + pos];
+            }
+        }
+        j = k;
+    }
+    zebra
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,6 +523,87 @@ mod tests {
             (cf[3].right() - 280.6).abs() <= 1e-3,
             "right-edge: {} vs 280.6",
             cf[3].right()
+        );
+    }
+
+    /// D-5 (аудит 2026-09-26): зебра — чётные позиции внутри прогона
+    /// ≥ run_min (прототип O-7: прогон 4 → подсвечены 2-я и 4-я).
+    #[test]
+    fn zebra_flags_alternate_within_min_run() {
+        let flags = zebra_run_flags(&[0, 1, 2, 3, 4], &[false; 5], 4);
+        assert_eq!(
+            flags,
+            vec![false, true, false, true, false],
+            "прогон 5 ≥ 4 — чётные позиции подсвечены"
+        );
+        // Прогон короче порога — фона нет нигде
+        assert_eq!(
+            zebra_run_flags(&[0, 1, 2], &[false; 3], 4),
+            vec![false, false, false],
+            "прогон 3 < 4 — зебры нет"
+        );
+    }
+
+    /// D-5: проза между строками (дыра в индексах блоков) рвёт прогон —
+    /// два коротких прогона зебры не дают.
+    #[test]
+    fn zebra_flags_break_on_block_gap() {
+        // Блоки 0,1 затем проза (дыра), затем 3,4 — два прогона по 2 < 4.
+        let flags = zebra_run_flags(&[0, 1, 3, 4], &[false; 4], 4);
+        assert_eq!(flags, vec![false; 4], "разрыв соседства рвёт прогон");
+        // Сплошной прогон 6 строк — обычная зебра
+        let solid = zebra_run_flags(&[0, 1, 2, 3, 4, 5], &[false; 6], 4);
+        assert_eq!(solid, vec![false, true, false, true, false, true]);
+    }
+
+    /// D-5: хромовая строка (заголовок блока/превью/Σ) разрывает прогон,
+    /// фона не получает; прогоны по обе стороны зебрятся независимо.
+    #[test]
+    fn zebra_flags_skip_chrome_rows() {
+        // Хром в середине сплошного прогона 8: два прогона по 4;
+        // в каждом подсвечены 2-я и 4-я позиции.
+        let mut chrome = [false; 8];
+        chrome[4] = true;
+        let flags = zebra_run_flags(&(0..8).collect::<Vec<_>>(), &chrome, 4);
+        assert_eq!(
+            flags,
+            vec![false, true, false, true, false, true, false, true],
+            "прогоны [0..4) и [4..8) независимы, хром-строка без фона"
+        );
+        // Хром ближе к концу: первый прогон [0..5) зебрится, хвост [5..8)
+        // короче порога — без фона; сама хром-строка фона не получает.
+        let mut late = [false; 8];
+        late[5] = true;
+        let flags = zebra_run_flags(&(0..8).collect::<Vec<_>>(), &late, 4);
+        assert_eq!(
+            flags,
+            vec![false, true, false, true, false, false, false, false],
+            "прогон [0..5) ≥ 4 — зебра; хвост [5..8) < 4 — нет"
+        );
+    }
+
+    /// D-5: хромовая строка МОЖЕТ открывать прогон (семантика прежнего
+    /// цикла text.rs): она входит в чётность прогона, но фона не получает.
+    #[test]
+    fn zebra_flags_chrome_row_can_open_run() {
+        let flags = zebra_run_flags(&[0, 1, 2, 3], &[true, false, false, false], 4);
+        assert_eq!(
+            flags,
+            vec![false, true, false, true],
+            "прогон открыт хром-строкой: позиции 1/3 зебра, сама — нет"
+        );
+    }
+
+    /// D-5: пустой вход — пустая маска; детерминизм повторного вызова.
+    #[test]
+    fn zebra_flags_empty_and_deterministic() {
+        assert!(zebra_run_flags(&[], &[], 4).is_empty());
+        let blocks = [0usize, 1, 2, 3];
+        let chrome = [false; 4];
+        assert_eq!(
+            zebra_run_flags(&blocks, &chrome, 4),
+            zebra_run_flags(&blocks, &chrome, 4),
+            "повторный вызов — та же маска"
         );
     }
 }
