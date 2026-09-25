@@ -264,7 +264,7 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
     <li><b>Проверка цепочки</b> — клик по цифре полосы результата; режим защиты ×1.5 с пошаговым раскрытием (FR-039)</li>
     <li><b>Ревью автосвязей</b> — группировка по парам, массовые действия, undo-бат одним шагом (AC-5.3)</li>
     <li><b>Esc-лестница</b> — меню → drag → ревью → защита → цепочка → stage → выделение</li>
-    <li><b>Расталкивание при драге</b> — тяните ноду сквозь соседей: они уступают дорогу (якорь + ореол MTV) и съезжаются обратно; если активная встала «между» — уехавшие получают новые якоря (пульт «Драг · расталкивание»)</li>
+    <li><b>Расталкивание при драге</b> — тяните ноду сквозь соседей: они уступают дорогу (якорь + ореол MTV) и съезжаются обратно; сейф-зазор держит дистанцию между любыми нодами; если активная встала «между» — уехавшие получают новые якоря (пульт «Драг · расталкивание»)</li>
   </ul>
   <div class="legend">
     <s><span class="dotv"></span>value / проливание</s>
@@ -322,6 +322,10 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
   <div class="row">
     <span class="thr-lb">ореол <b id="pushMarginV">12</b>px</span>
     <input type="range" id="pushMargin" min="0" max="36" step="2" value="12">
+  </div>
+  <div class="row">
+    <span class="thr-lb">сейф-зазор <b id="pushGapV">16</b>px</span>
+    <input type="range" id="pushGap" min="0" max="48" step="2" value="16">
   </div>
   <div class="row">
     <span class="thr-lb">жёсткость возврата <b id="pushRetV">0,16</b></span>
@@ -3171,8 +3175,13 @@ function resetAll(){
    ЧАСТЬ X. Физика драга — «расталкивание» с якорями
    Модель: у каждой ноды есть якорь (её зафиксированное место).
    Активная (таскаемая) нода жёстко следует за курсором; соседние
-   ноды мягко выталкиваются её ореолом (минимальный сдвиг по AABB),
-   а пружина возврата тянет их назад к якорю. Если после отпускания
+   ноды мягко выталкиваются её ореолом (минимальный сдвиг по AABB).
+   СЕЙФ-ЗОНА: каждая нода носит вокруг себя буфер gap/2 со всех
+   сторон — расталкивание срабатывает при соприкосновении буферов,
+   поэтому между границами любых двух нод всегда остаётся зазор ≥ gap
+   (активная↔пассивная: ≥ margin+gap). Прилипание невозможно ни в
+   каком состоянии, включая перезакрепление якорей на drop.
+   Пружина возврата тянет вытесненных назад к якорю. Если после отпускания
    ореол активной накрывает старый якорь ноды — она получает новый
    якорь на вытесненной позиции; остальные съезжаются обратно.
    Без сил/скоростей: только позиционные коррекции со сглаживанием
@@ -3182,6 +3191,7 @@ function resetAll(){
 const PH = {
   enabled:true, showAnchors:false, predictive:true,
   margin:12,      // ореол вокруг активной ноды, world px
+  gap:16,         // сейф-зазор между границами любых нод, world px (буфер gap/2 вокруг каждой)
   ret:0.16,       // жёсткость возврата к якорю (доля за кадр)
   pushFrac:0.45,  // доля выталкивания из ореола за кадр
   pairFrac:0.30,  // доля расталкивания соседей между собой
@@ -3203,8 +3213,8 @@ function phMtv(a,b){ // минимальный вектор выталкиван
   return {x:0,y:t};               // вниз
 }
 function phInitAnchors(){ NODES.forEach(n=>{ PH.anchors[n.id]={x:n.x,y:n.y}; }); }
-function phActiveRect(n){ // ореол активной + предиктивное упреждение по скорости
-  const pad=PH.margin;
+function phActiveRect(n){ // ореол активной (поверх сейф-зоны) + предиктивное упреждение
+  const pad=PH.margin+PH.gap/2;
   let x1=n.x-pad, y1=n.y-pad, x2=n.x+n.w+pad, y2=n.y+phH(n)+pad;
   if (PH.predictive){
     const dx=clamp(PH.vel.x*3,-110,110), dy=clamp(PH.vel.y*3,-110,110);
@@ -3212,6 +3222,20 @@ function phActiveRect(n){ // ореол активной + предиктивн�
     if (dy<0) y1+=dy; else y2+=dy;
   }
   return {x:x1,y:y1,w:x2-x1,h:y2-y1};
+}
+function phPushOut(n, other, pad, frac){
+  // выталкивает ноду n из прямоугольника other: мягкая доля frac за кадр,
+  // затем ЖЁСТКИЙ дожим до границы — сейф-зона непроницаема даже при
+  // удержании активной ноды с давлением (пружина возврата не продавит)
+  const r = phRect(n, pad);
+  if (!phOverlap(r, other)) return;
+  const p = phMtv(r, other);
+  n.x += p.x*frac; n.y += p.y*frac;
+  const r2 = phRect(n, pad);
+  if (phOverlap(r2, other)){
+    const p2 = phMtv(r2, other);
+    n.x += p2.x; n.y += p2.y;
+  }
 }
 function phStep(){
   if (!PH.enabled) return;
@@ -3223,26 +3247,22 @@ function phStep(){
     const a=PH.anchors[n.id]; if (!a) continue;
     n.x += (a.x-n.x)*PH.ret; n.y += (a.y-n.y)*PH.ret;
   }
-  // 2) выталкивание ореолом активной ноды
+  // 2) выталкивание ореолом активной ноды (жёсткая сейф-зона)
+  const ar = A ? phActiveRect(A) : null;
   if (A){
-    const ar = phActiveRect(A);
     for (const n of NODES){
       if (n.id===A.id) continue;
-      const r = phRect(n, 0);
-      if (phOverlap(ar, r)){
-        const p = phMtv(r, ar);
-        n.x += p.x*PH.pushFrac; n.y += p.y*PH.pushFrac;
-      }
+      phPushOut(n, ar, PH.gap/2, PH.pushFrac); // сейф-зона пассивной + дожим
     }
   }
   // 3) взаимное расталкивание соседей (цепочки нод)
   for (let it=0; it<PH.iters; it++){
     for (let i=0;i<NODES.length;i++){
       const a=NODES[i]; if (A && a.id===A.id) continue;
-      const ra=phRect(a,0);
+      const ra=phRect(a,PH.gap/2);
       for (let j=i+1;j<NODES.length;j++){
         const b=NODES[j]; if (A && b.id===A.id) continue;
-        const rb=phRect(b,0);
+        const rb=phRect(b,PH.gap/2);
         if (phOverlap(ra,rb)){
           const p=phMtv(ra,rb);
           const hx=p.x*0.5*PH.pairFrac, hy=p.y*0.5*PH.pairFrac;
@@ -3252,6 +3272,13 @@ function phStep(){
       }
     }
   }
+  // 4) финальный дожим ореолом: парная фаза не должна пробивать сейф-зону
+  if (A){
+    for (const n of NODES){
+      if (n.id===A.id) continue;
+      phPushOut(n, ar, PH.gap/2, 1.0); // полное выталкивание до границы
+    }
+  }
 }
 function phCommitDrop(A){
   // активная нода закрепляется на новом месте; чей старый якорь накрыт её
@@ -3259,16 +3286,30 @@ function phCommitDrop(A){
   // плавно съезжаются обратно на прежние места
   if (!PH.enabled) return;
   PH.anchors[A.id] = {x:A.x, y:A.y};
-  const ar = {x:A.x-PH.margin, y:A.y-PH.margin, w:A.w+2*PH.margin, h:phH(A)+2*PH.margin};
+  const hp = PH.margin+PH.gap/2; // ореол поверх сейф-зоны
+  const ar = {x:A.x-hp, y:A.y-hp, w:A.w+2*hp, h:phH(A)+2*hp};
   for (const n of NODES){
     if (n.id===A.id) continue;
     const a = PH.anchors[n.id];
     const old = {x:a.x, y:a.y, w:n.w, h:phH(n)};
     if (phOverlap(ar, old)){
-      const cur = phRect(n, 0);
+      const cur = phRect(n, PH.gap/2);
       if (phOverlap(ar, cur)){
         const p = phMtv(cur, ar);
         n.x += p.x; n.y += p.y;
+      }
+      // сейф-зазор: новый якорь не должен упираться в чужие сейф-зоны
+      for (let pass=0; pass<3; pass++){
+        const rn = phRect(n, PH.gap/2); let moved=false;
+        for (const m of NODES){
+          if (m.id===n.id || m.id===A.id) continue;
+          const rm = phRect(m, PH.gap/2);
+          if (phOverlap(rn, rm)){
+            const p = phMtv(rn, rm);
+            n.x += p.x; n.y += p.y; rn.x += p.x; rn.y += p.y; moved=true;
+          }
+        }
+        if (!moved) break;
       }
       PH.anchors[n.id] = {x:n.x, y:n.y};
     }
@@ -3280,6 +3321,11 @@ function drawAnchorGhosts(){
   ctx.setLineDash([4,3]); ctx.lineWidth=1;
   for (const n of NODES){
     const a = PH.anchors[n.id]; if (!a) continue;
+    if (PH.gap>0){ // сейф-зона вокруг текущей позиции
+      const g2=PH.gap/2;
+      ctx.strokeStyle = PAL.sel; ctx.globalAlpha = 0.15;
+      ctx.strokeRect(n.x-g2, n.y-g2, n.w+PH.gap, phH(n)+PH.gap);
+    }
     if (Math.hypot(a.x-n.x, a.y-n.y) <= 2) continue;
     ctx.strokeStyle = PAL.sel; ctx.globalAlpha = 0.5;
     ctx.strokeRect(a.x, a.y, n.w, phH(n));
@@ -3369,6 +3415,10 @@ document.getElementById('pushPredTgl').addEventListener('change', e=>{ PH.predic
 document.getElementById('pushMargin').addEventListener('input', e=>{
   PH.margin = +e.target.value;
   document.getElementById('pushMarginV').textContent = e.target.value;
+});
+document.getElementById('pushGap').addEventListener('input', e=>{
+  PH.gap = +e.target.value;
+  document.getElementById('pushGapV').textContent = e.target.value;
 });
 document.getElementById('pushRet').addEventListener('input', e=>{
   PH.ret = +e.target.value/100;
