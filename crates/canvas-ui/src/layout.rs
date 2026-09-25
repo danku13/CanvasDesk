@@ -49,6 +49,20 @@
 use crate::geometry::{EdgeInsets, UiRect, UiVec2};
 use crate::measure::TextMeasurer;
 
+// FR-068 W1: подмодули backend'ов вёрстки. `scene` — нейтральное к backend'ам
+// дерево расширенной сцены (percent/aspect/position/overflow — за пределами
+// V-5 примитивов); `taffy_backend` — opt-in TaffyBackend за фичей `taffy`
+// (default off — zero-dep инвариант G7, §Контракт-2 FR-068).
+mod scene;
+#[cfg(feature = "taffy")]
+mod taffy_backend;
+
+pub use scene::{
+    SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneSize, SceneTrack,
+};
+#[cfg(feature = "taffy")]
+pub use taffy_backend::TaffyBackend;
+
 /// Выравнивание по поперечной оси контейнера (вертикаль в `Row`,
 /// горизонталь в `Column`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -154,12 +168,22 @@ pub struct Row {
 
 impl Row {
     /// Раскладка детей в слоте: возвращает rect'ы (параллельно `items`).
+    /// FR-068 W1: делегирует в [`default_backend`] (NativeBackend — поведение
+    /// байт-в-байт прежнее; §Контракт-1 — сигнатура стабильна до W3).
     pub fn lay_out(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
-        match self.policy {
-            RowPolicy::Fit => self.fit(slot, items),
-            RowPolicy::SqueezeTail => self.squeeze_tail(slot, items),
-            RowPolicy::Wrap => self.wrap(slot, items),
-        }
+        default_backend().lay_out_row(*self, slot, items)
+    }
+
+    /// Раскладка детей в слоте через ЯВНО выбранный backend (FR-068 W1,
+    /// ADR-0014 «потребитель выбирает backend осознанно»): pilot-поверхности
+    /// передают [`pilot_backend`], остальные — [`default_backend`].
+    pub fn lay_out_with(
+        &self,
+        backend: &dyn LayoutBackend,
+        slot: UiRect,
+        items: &[Child],
+    ) -> Vec<UiRect> {
+        backend.lay_out_row(*self, slot, items)
     }
 
     /// `Fit`: дети подряд с зазором; свободное место — flex-детям по
@@ -306,11 +330,25 @@ impl Row {
         family: &str,
         size: f32,
     ) -> Vec<UiRect> {
-        let children: Vec<Child> = items
-            .iter()
-            .map(|item| item.resolve(m, fs, family, size))
-            .collect();
-        self.lay_out(slot, &children)
+        default_backend().lay_out_measured(*self, slot, items, m, fs, family, size)
+    }
+
+    /// FR-062 F-13 через ЯВНО выбранный backend (FR-068 W1): см.
+    /// [`Row::lay_out_with`]. Замер текста ([`MeasuredItem::resolve`], тот же
+    /// [`TextMeasurer`]) выполняется ДО адаптера у обоих backend'ов — шейпинг
+    /// идентичен, golden-оракул побитовый.
+    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+    pub fn lay_out_measured_with(
+        &self,
+        backend: &dyn LayoutBackend,
+        slot: UiRect,
+        items: &[MeasuredItem],
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        family: &str,
+        size: f32,
+    ) -> Vec<UiRect> {
+        backend.lay_out_measured(*self, slot, items, m, fs, family, size)
     }
 
     fn cross_y(&self, slot: UiRect, h: f32) -> f32 {
@@ -335,31 +373,20 @@ pub struct Column {
 
 impl Column {
     /// Раскладка детей в слоте: возвращает rect'ы (параллельно `items`).
+    /// FR-068 W1: делегирует в [`default_backend`] (NativeBackend —
+    /// поведение байт-в-байт прежнее; §Контракт-1).
     pub fn lay_out(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
-        let sizes = self.resolve_grow(slot.h, items);
-        let n = items.len();
-        let total: f32 = sizes.iter().sum();
-        let gaps_total = self.gap * n.saturating_sub(1) as f32;
-        let extra = (slot.h - total - gaps_total).max(0.0);
-        let gap = match self.main {
-            MainAlign::Start => self.gap,
-            MainAlign::SpaceBetween if n > 1 => self.gap + extra / (n - 1) as f32,
-            MainAlign::SpaceBetween => self.gap,
-            MainAlign::End => self.gap,
-        };
-        let mut y = match self.main {
-            MainAlign::End => (slot.bottom() - total - gaps_total).max(slot.y),
-            _ => slot.y,
-        };
-        items
-            .iter()
-            .zip(&sizes)
-            .map(|(c, &h)| {
-                let rect = UiRect::new(self.cross_x(slot, c.w), y, c.w, h);
-                y += h + gap;
-                rect
-            })
-            .collect()
+        default_backend().lay_out_column(*self, slot, items)
+    }
+
+    /// Раскладка детей в слоте через ЯВНО выбранный backend (FR-068 W1).
+    pub fn lay_out_with(
+        &self,
+        backend: &dyn LayoutBackend,
+        slot: UiRect,
+        items: &[Child],
+    ) -> Vec<UiRect> {
+        backend.lay_out_column(*self, slot, items)
     }
 
     /// Распределение свободного места слота по `grow` по высоте
@@ -458,18 +485,21 @@ impl MeasuredItem<'_> {
 /// табличного тела), высота строки общая. Спаны/авто-треки — вне
 /// контракта (территория taffy по триггерам ADR-0013 T2).
 pub fn grid_cells(slot: UiRect, cols: &[f32], rows: usize, row_h: f32, gap: UiVec2) -> Vec<UiRect> {
-    let mut rects = Vec::with_capacity(cols.len().saturating_mul(rows));
-    let row_h = row_h.max(0.0);
-    for r in 0..rows {
-        let y = slot.y + r as f32 * (row_h + gap.y.max(0.0));
-        let mut x = slot.x;
-        for &w in cols {
-            let w = w.max(0.0);
-            rects.push(UiRect::new(x, y, w, row_h));
-            x += w + gap.x.max(0.0);
-        }
-    }
-    rects
+    grid_cells_with(default_backend(), slot, cols, rows, row_h, gap)
+}
+
+/// 2D-сетка через ЯВНО выбранный backend (FR-068 W1): pilot-поверхности
+/// передают [`pilot_backend`] (TaffyBackend — Grid с неравными явными
+/// треками, T2-триггер ADR-0013/ADR-0014), остальные — [`default_backend`].
+pub fn grid_cells_with(
+    backend: &dyn LayoutBackend,
+    slot: UiRect,
+    cols: &[f32],
+    rows: usize,
+    row_h: f32,
+    gap: UiVec2,
+) -> Vec<UiRect> {
+    backend.lay_out_grid(slot, cols, rows, row_h, gap)
 }
 
 /// Выравнивание фиксированного блока в слоте по горизонтали/вертикали
@@ -533,6 +563,242 @@ pub struct Custom(pub UiRect);
 impl From<Custom> for UiRect {
     fn from(c: Custom) -> UiRect {
         c.0
+    }
+}
+
+// =============================================================================
+// FR-068 W1 (ADR-0014 §Решение п.1–4): абстракция движка вёрстки.
+//
+// `trait LayoutBackend` — одна модель вёрстки для потребителя (R-6 ADR-0014):
+// потребитель пишет `Row{..}.lay_out(slot, &children)` независимо от того,
+// кто считает rect'ы. `NativeBackend` (default) — перенос текущих
+// `Row/Column/grid_cells` (FR-062 F-13…F-18) в методы трейта 1:1 — поведение
+// байт-в-байт прежнее (24 юнит-теста этого файла пинят результаты через
+// делегирование). `TaffyBackend` — за фичей `taffy` (layout/taffy_backend.rs).
+//
+// §Контракт-1 FR-068: сигнатуры `Row::lay_out`/`Column::lay_out`/
+// `grid_cells`/`Child`/`MeasuredItem`/`RowPolicy` НЕ меняются до W3 —
+// потребители не переписываются.
+// =============================================================================
+
+/// Битовая маска возможностей движка вёрстки (FR-068 W1, ADR-0014
+/// §Решение п.1: `available_features()`). Потребитель проверяет поддержку
+/// перед вызовом расширенных политик ([`SceneNode`], percent и т.п.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutFeatures(u32);
+
+impl LayoutFeatures {
+    /// Flex-grow: распределение свободного места главной оси (FR-062 F-14).
+    pub const FLEX_GROW: Self = Self(1 << 0);
+    /// Flex-shrink: сжатие детей при переполнении (CSS-семантика). У
+    /// [`NativeBackend`] нет — `SqueezeTail` не flex_shrink (§Контракт-4
+    /// FR-068); TaffyBackend мапит `SqueezeTail` на `flex_shrink` —
+    /// документированное расхождение C3.
+    pub const FLEX_SHRINK: Self = Self(1 << 1);
+    /// Flex-basis: базовый размер flex-ребёнка до распределения.
+    pub const FLEX_BASIS: Self = Self(1 << 2);
+    /// Перенос по строкам ([`RowPolicy::Wrap`], FR-062 F-15).
+    pub const FLEX_WRAP: Self = Self(1 << 3);
+    /// 2D-сетка ([`grid_cells`]; TaffyBackend — ещё и неравные/процентные
+    /// треки со span'ами, T2-триггер ADR-0013).
+    pub const GRID_2D: Self = Self(1 << 4);
+    /// Авто-размер от контента ([`MeasuredItem::Text`], FR-062 F-13).
+    pub const AUTO_SIZE: Self = Self(1 << 5);
+    /// Клип переполнения контейнера (overflow:hidden — [`SceneOverflow::Hidden`]).
+    pub const OVERFLOW_CLIP: Self = Self(1 << 6);
+    /// Процентные размеры ([`SceneDim::Percent`]).
+    pub const PERCENT: Self = Self(1 << 7);
+    /// Соотношение сторон (поле `aspect` [`SceneNode`]).
+    pub const ASPECT_RATIO: Self = Self(1 << 8);
+    /// Sticky-позиционирование (вариант `Sticky` [`ScenePosition`];
+    /// TaffyBackend — эмуляция post-processing'ом, см. доку `taffy_backend`).
+    pub const STICKY: Self = Self(1 << 9);
+
+    /// Объединение масок.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Содержит ли маска все биты `other`.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Сырые биты (для тестов/логов).
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+}
+
+/// Движок вёрстки (FR-068 W1, ADR-0014 §Решение п.1): немедленный (immediate)
+/// расчёт rect'ов от слота родителя. Реализации не хранят состояния
+/// раскладки между вызовами — каждый вызов самодостаточен (D2 immediate-mode
+/// ADR-0013; retained-кэш — опция W3, FR-068).
+///
+/// Объектная безопасность (`dyn LayoutBackend`) — сознательная: backend
+/// выбирается в рантайме ([`default_backend`]/[`pilot_backend`]/pilot-
+/// поверхностями), цена — vtable-вызов на контейнер, не на ребёнка
+/// (§Обоснование ADR-0014 «Цена адаптера» — десятки мкс на кадр).
+pub trait LayoutBackend {
+    /// Возможности движка (битовая маска [`LayoutFeatures`]).
+    fn features(&self) -> LayoutFeatures;
+
+    /// Раскладка горизонтального контейнера (политики [`RowPolicy`]).
+    fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect>;
+
+    /// Раскладка вертикального контейнера (политика `Fit`, FR-062 F-14).
+    fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect>;
+
+    /// Раскладка measured-детей (FR-062 F-13): замер текста выполняется
+    /// одинаково у всех backend'ов (единый [`TextMeasurer`] ДО адаптера) —
+    /// шейпинг идентичен, golden-оракул побитовый.
+    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+    fn lay_out_measured(
+        &self,
+        row: Row,
+        slot: UiRect,
+        items: &[MeasuredItem],
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        family: &str,
+        size: f32,
+    ) -> Vec<UiRect>;
+
+    /// 2D-сетка равных явных колонок ([`grid_cells`], FR-062 F-16).
+    fn lay_out_grid(
+        &self,
+        slot: UiRect,
+        cols: &[f32],
+        rows: usize,
+        row_h: f32,
+        gap: UiVec2,
+    ) -> Vec<UiRect>;
+}
+
+/// Backend по умолчанию (FR-068 W1): [`NativeBackend`] — собственные
+/// примитивы FR-062 без внешних зависимостей (zero-dep инвариант G7).
+/// W2: переключение на `FlexLayoutEngine`/`TaffyBackend` (FR-068 §W2).
+pub fn default_backend() -> &'static dyn LayoutBackend {
+    &NATIVE
+}
+
+/// Backend pilot-поверхностей (FR-068 W1, ADR-0014 §Решение п.5 P1):
+/// с фичей `taffy` — [`TaffyBackend`], без — [`NativeBackend`] (opt-in:
+/// pilot-поверхности вызывают `lay_out_with(pilot_backend(), ..)` и
+/// автоматически переключаются фичей; остальные потребители продолжают
+/// идти через [`default_backend`]).
+pub fn pilot_backend() -> &'static dyn LayoutBackend {
+    #[cfg(feature = "taffy")]
+    {
+        &TAFFY
+    }
+    #[cfg(not(feature = "taffy"))]
+    {
+        &NATIVE
+    }
+}
+
+/// Backend'ы — ZST без состояния раскладки (immediate-mode): статика
+/// безопасна. `TaffyBackend` компилируется только за фичей `taffy`.
+static NATIVE: NativeBackend = NativeBackend;
+#[cfg(feature = "taffy")]
+static TAFFY: TaffyBackend = TaffyBackend;
+
+/// Собственный backend (FR-062 F-13…F-18, ADR-0014 §Решение п.2): перенос
+/// текущих `Row/Column/grid_cells` в методы [`LayoutBackend`] 1:1 —
+/// поведение байт-в-байт прежнее (24 юнит-теста layout.rs — оракул).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeBackend;
+
+impl LayoutBackend for NativeBackend {
+    fn features(&self) -> LayoutFeatures {
+        // Native: grow/basis/wrap/grid/measured — есть; CSS flex_shrink —
+        // нет (`SqueezeTail` — именованная деградация, не flex_shrink,
+        // §Контракт-4); percent/aspect/overflow/sticky — нет (территория
+        // расширенной сцены [`SceneNode`], в W1 — TaffyBackend).
+        LayoutFeatures::FLEX_GROW
+            .union(LayoutFeatures::FLEX_BASIS)
+            .union(LayoutFeatures::FLEX_WRAP)
+            .union(LayoutFeatures::GRID_2D)
+            .union(LayoutFeatures::AUTO_SIZE)
+    }
+
+    fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+        match row.policy {
+            RowPolicy::Fit => row.fit(slot, items),
+            RowPolicy::SqueezeTail => row.squeeze_tail(slot, items),
+            RowPolicy::Wrap => row.wrap(slot, items),
+        }
+    }
+
+    fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+        // Тело перенесено из `Column::lay_out` 1:1 (FR-062 F-14).
+        let sizes = column.resolve_grow(slot.h, items);
+        let n = items.len();
+        let total: f32 = sizes.iter().sum();
+        let gaps_total = column.gap * n.saturating_sub(1) as f32;
+        let extra = (slot.h - total - gaps_total).max(0.0);
+        let gap = match column.main {
+            MainAlign::Start => column.gap,
+            MainAlign::SpaceBetween if n > 1 => column.gap + extra / (n - 1) as f32,
+            MainAlign::SpaceBetween => column.gap,
+            MainAlign::End => column.gap,
+        };
+        let mut y = match column.main {
+            MainAlign::End => (slot.bottom() - total - gaps_total).max(slot.y),
+            _ => slot.y,
+        };
+        items
+            .iter()
+            .zip(&sizes)
+            .map(|(c, &h)| {
+                let rect = UiRect::new(column.cross_x(slot, c.w), y, c.w, h);
+                y += h + gap;
+                rect
+            })
+            .collect()
+    }
+
+    fn lay_out_measured(
+        &self,
+        row: Row,
+        slot: UiRect,
+        items: &[MeasuredItem],
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        family: &str,
+        size: f32,
+    ) -> Vec<UiRect> {
+        // Тот же resolve, что до W1 (`MeasuredItem::resolve` — единая точка
+        // замера): backend получает уже фиксированные Child'ы.
+        let children: Vec<Child> = items
+            .iter()
+            .map(|item| item.resolve(m, fs, family, size))
+            .collect();
+        self.lay_out_row(row, slot, &children)
+    }
+
+    fn lay_out_grid(
+        &self,
+        slot: UiRect,
+        cols: &[f32],
+        rows: usize,
+        row_h: f32,
+        gap: UiVec2,
+    ) -> Vec<UiRect> {
+        // Тело перенесено из `grid_cells` 1:1 (FR-062 F-16).
+        let mut rects = Vec::with_capacity(cols.len().saturating_mul(rows));
+        let row_h = row_h.max(0.0);
+        for r in 0..rows {
+            let y = slot.y + r as f32 * (row_h + gap.y.max(0.0));
+            let mut x = slot.x;
+            for &w in cols {
+                let w = w.max(0.0);
+                rects.push(UiRect::new(x, y, w, row_h));
+                x += w + gap.x.max(0.0);
+            }
+        }
+        rects
     }
 }
 
