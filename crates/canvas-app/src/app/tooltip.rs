@@ -89,15 +89,21 @@ impl TooltipCard {
 /// Перенос текста по словам: строка — не больше `max_words` слов.
 ///
 /// Явные `\n` уважаются (параграфы переносятся независимо); слово —
-/// токен по whitespace (CSS-подобная семантика `split_whitespace`):
-/// неразрывный токен длиннее лимита остаётся целой строкой — его клампит
-/// только ширина окна (вырожденный случай: путь файла без пробелов).
-/// Пустой текст → пустой вектор (карточка без строк не рисуется).
+/// токен по whitespace (CSS-подобная семантика `split_whitespace`),
+/// КРОМЕ неразрывного пробела U+00A0: им группируются разряды чисел
+/// (`1 234 567`, `format_num` в canvas-core) — NBSP-токен не рвётся,
+/// число всегда переносится целиком. Неразрывный токен длиннее лимита
+/// остаётся целой строкой — его клампит только ширина окна (вырожденный
+/// случай: путь файла без пробелов). Пустой текст → пустой вектор
+/// (карточка без строк не рисуется).
 pub(crate) fn wrap_words(text: &str, max_words: usize) -> Vec<String> {
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line: Vec<&str> = Vec::new();
-        for word in para.split_whitespace() {
+        for word in para
+            .split(|c: char| c.is_whitespace() && c != '\u{a0}')
+            .filter(|word| !word.is_empty())
+        {
             if line.len() >= max_words {
                 out.push(line.join(" "));
                 line.clear();
@@ -221,6 +227,24 @@ mod tests {
     fn wrap_keeps_explicit_newlines() {
         let lines = wrap_words("строка раз\nстрока два", TOOLTIP_MAX_WORDS);
         assert_eq!(lines, vec!["строка раз", "строка два"]);
+    }
+
+    /// Разряды чисел (NBSP-группы `format_num`) не переносятся по частям:
+    /// NBSP — не точка разбиения, число — один токен.
+    #[test]
+    fn wrap_keeps_nbsp_digit_groups_whole() {
+        let lines = wrap_words("итог 1\u{a0}234\u{a0}567 руб", 2);
+        assert_eq!(
+            lines,
+            vec!["итог 1\u{a0}234\u{a0}567".to_owned(), "руб".to_owned()],
+            "NBSP-число — один токен"
+        );
+        // Даже при переполнении строки число не рвётся посреди групп
+        let lines = wrap_words("1\u{a0}000\u{a0}000 2\u{a0}000 3", 2);
+        assert_eq!(
+            lines,
+            vec!["1\u{a0}000\u{a0}000 2\u{a0}000".to_owned(), "3".to_owned()]
+        );
     }
 
     #[test]

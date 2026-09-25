@@ -191,7 +191,7 @@ fn explain_number_follows_whatif_and_returns() {
     assert_eq!(out["render"], "text");
     let text = out["text"].as_str().expect("текст");
     assert!(!text.contains("Режим what-if"), "{text}");
-    assert!(text.contains("= 712370"), "{text}");
+    assert!(text.contains("= 712\u{a0}370"), "{text}");
     assert_eq!(scene.canvas.nodes, before_nodes, "чтение MCP — без следов");
 
     // Подмена листа через MCP (тот же WhatIfOverrides, что UI): режим
@@ -208,7 +208,7 @@ fn explain_number_follows_whatif_and_returns() {
     let text = out["text"].as_str().expect("текст");
     assert!(text.starts_with("Режим what-if"), "{text}");
     assert!(
-        text.contains("= 1425170"),
+        text.contains("= 1\u{a0}425\u{a0}170"),
         "2000·810 − 430 − 2000·810·0.12: {text}"
     );
 
@@ -226,7 +226,7 @@ fn explain_number_follows_whatif_and_returns() {
         .expect("explain_number база");
     let text = out["text"].as_str().expect("текст");
     assert!(!text.contains("Режим what-if"), "{text}");
-    assert!(text.contains("= 712370"), "{text}");
+    assert!(text.contains("= 712\u{a0}370"), "{text}");
     assert_eq!(scene.canvas.nodes, before_nodes, "ноды возвращены");
     assert_eq!(scene.canvas.edges, before_edges, "связи возвращены");
 }
@@ -343,5 +343,5 @@ fn autolink_precision_recall_on_demo_tables() {
         .as_ref()
         .and_then(|v| v.as_ref().ok())
         .expect("итог вычислен");
-    assert_eq!(profit.to_string(), "712370", "оракул юнит-экономики");
+    assert_eq!(profit.to_string(), "712\u{a0}370", "оракул юнит-экономики");
 }

@@ -1391,12 +1391,12 @@ mod tests {
         canvas.add_edge(edge);
         let tree = tree(&canvas, LineageNodeId::total("t"));
         // Итог = единственная формульная строка.
-        assert_eq!(shown(&tree, 0), "2000");
+        assert_eq!(shown(&tree, 0), "2\u{a0}000");
         let line = kids(&tree, 0)[0];
         assert_eq!(tree.nodes[line].line, Some(0));
         let source = kids(&tree, line)[0];
         assert_eq!(tree.nodes[source].node_id, "s");
-        assert_eq!(shown(&tree, source), "1000");
+        assert_eq!(shown(&tree, source), "1\u{a0}000");
         let via = tree.nodes[line].children[0].via.as_ref().expect("ребро");
         assert_eq!(via.to_param.as_deref(), Some("rps"));
         assert_eq!(via.edge_id, "e1");
@@ -1463,11 +1463,11 @@ mod tests {
         let tree_a = tree(&canvas, LineageNodeId::total("a"));
         assert_eq!(tree_a.nodes.len(), 1);
         assert_eq!(tree_a.nodes[0].kind, LineageNodeKind::Leaf);
-        assert_eq!(shown(&tree_a, 0), "1240");
+        assert_eq!(shown(&tree_a, 0), "1\u{a0}240");
         // Numi-лист: итог → последняя формульная строка → лист.
         let tree_b = tree(&canvas, LineageNodeId::total("b"));
         assert_eq!(tree_b.nodes.len(), 2);
-        assert_eq!(shown(&tree_b, 0), "1240");
+        assert_eq!(shown(&tree_b, 0), "1\u{a0}240");
         let line = kids(&tree_b, 0)[0];
         assert_eq!(tree_b.nodes[line].line, Some(0));
         assert_eq!(tree_b.nodes[line].kind, LineageNodeKind::Leaf);
@@ -1635,7 +1635,7 @@ mod tests {
             );
         }
         let tree = tree(&canvas, LineageNodeId::total("n1004"));
-        assert_eq!(shown(&tree, 0), "1005");
+        assert_eq!(shown(&tree, 0), "1\u{a0}005");
         assert!(tree.nodes.len() >= 1001);
         assert!(tree.nodes.len() <= LINEAGE_MAX_NODES);
         // Линейная цепочка: каждый узел — ровно один ребёнок, глубина
@@ -1940,7 +1940,7 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         // Корень — заголовок без номера; статистика в последней строке.
         assert!(
-            lines[0].starts_with("Цепочка расчёта: Итог [cost] = 1240"),
+            lines[0].starts_with("Цепочка расчёта: Итог [cost] = 1\u{a0}240"),
             "{}",
             lines[0]
         );

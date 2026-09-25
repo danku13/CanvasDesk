@@ -392,9 +392,51 @@ impl Value {
     }
 }
 
-/// Формат числа: целые без дробной части, дробные — до 6 значащих цифр
-/// без хвостовых нулей (`1.5`, `166.667`, `1000`).
-fn format_num(num: f64) -> String {
+/// Разделитель групп разрядов — неразрывный пробел U+00A0. NBSP, а не
+/// обычный пробел: пробел — точка переноса строки для любого переносчика
+/// (тултип `wrap_words` в canvas-app, верстка ячеек), число разъезжалось
+/// бы посреди строки; U+00A0 глифом от пробела не отличается, но точкой
+/// переноса не является.
+const NBSP: char = '\u{a0}';
+
+/// Разбить целую часть числа на группы по 3 цифры (разделитель —
+/// [`NBSP`]): `1234567` → `1 234 567`. Группируются только целые части
+/// длиннее 3 цифр (|целая часть| ≥ 1000); знак и дробная часть не
+/// трогаются (`-1234.5` → `-1 234.5`, `999` → `999`). Строки без чисто
+/// цифровой целой части (особые значения — «не число», «∞») проходят
+/// без изменений.
+fn group_thousands(num_str: &str) -> String {
+    let (sign, rest) = match num_str.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", num_str),
+    };
+    let (int_part, frac) = match rest.split_once('.') {
+        Some((int_part, frac)) => (int_part, Some(frac)),
+        None => (rest, None),
+    };
+    if int_part.len() <= 3 || !int_part.bytes().all(|b| b.is_ascii_digit()) {
+        return num_str.to_owned();
+    }
+    let mut grouped = String::with_capacity(int_part.len() + int_part.len() / 3);
+    for (i, ch) in int_part.chars().enumerate() {
+        if i > 0 && (int_part.len() - i) % 3 == 0 {
+            grouped.push(NBSP);
+        }
+        grouped.push(ch);
+    }
+    match frac {
+        Some(frac) => format!("{sign}{grouped}.{frac}"),
+        None => format!("{sign}{grouped}"),
+    }
+}
+
+/// «Машинный» формат числа — то же округление, что в [`format_num`]
+/// (целые без дробной части, дробные — до 6 значащих цифр без хвостовых
+/// нулей), но БЕЗ группировки разрядов. Для текстов, которые движок
+/// парсит обратно (лист параметров шаблона — `templates::instantiate`,
+/// MCP `param_set` — пишут `rps = 1000 rps` в текст ноды): NBSP-группа
+/// в тексте сломала бы повторный разбор (`1 000` → `1 × 0`).
+pub fn format_num_raw(num: f64) -> String {
     if num.is_nan() {
         return "не число".to_owned();
     }
@@ -424,8 +466,26 @@ fn format_num(num: f64) -> String {
     }
 }
 
+/// Формат числа для отображения: целые без дробной части, дробные — до 6
+/// значащих цифр без хвостовых нулей (`1.5`, `166.667`, `1000`).
+///
+/// Визуальная разбивка на порядки (правка владельца): целая часть числа
+/// группируется по 3 цифры, разделитель — неразрывный пробел U+00A0
+/// ([`NBSP`]): `1234567.89` → `1 234 570` (сначала 6 значащих цифр, потом
+/// группировка), `1000` → `1 000`, `999` → `999`. Дробная часть после
+/// точки не группируется. NBSP выбран вместо обычного пробела, чтобы
+/// переносчики строк (тултип, ячейки) не разрывали число на «слова» —
+/// см. [`group_thousands`]. NaN/±∞/округление/`-0` — как раньше.
+/// Текстам, парсящимся обратно движком, — [`format_num_raw`].
+fn format_num(num: f64) -> String {
+    // Особые значения проходят без групп (защита внутри group_thousands:
+    // некоревые строки не трогаются)
+    group_thousands(&format_num_raw(num))
+}
+
 impl fmt::Display for Value {
-    /// `{num} {unit}`: `1000 ms·req/s`, `1.5 sec`, `20 ms`; скаляр — число.
+    /// `{num} {unit}`: `1 000 ms·req/s` (целая часть — [`format_num`],
+    /// группы по 3 цифры c NBSP), `1.5 sec`, `20 ms`; скаляр — число.
     /// D-1 (FR-061): композиция над [`Value::display_parts`] — единая точка
     /// сборки отображения значения (инвариант байт-паритета, тест-свойство).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2539,13 +2599,13 @@ mod tests {
         assert_eq!(value, Value::scalar(6.0));
     }
 
-    /// Отображение значений: `1000 ms·req/s`, `1.5 sec`, скаляр, 6 значащих.
+    /// Отображение значений: `1 000 ms·req/s` (NBSP), `1.5 sec`, скаляр, 6 значащих.
     #[test]
     fn display_formatting() {
         let value = eval(&parse("5 ms × 200 req/s").unwrap(), &Env::empty()).unwrap();
-        assert_eq!(value.to_string(), "1000 ms·req/s");
+        assert_eq!(value.to_string(), "1\u{a0}000 ms·req/s");
         assert_eq!(Value::with_unit(1.5, sec_unit()).to_string(), "1.5 sec");
-        assert_eq!(Value::scalar(1000.0).to_string(), "1000");
+        assert_eq!(Value::scalar(1000.0).to_string(), "1\u{a0}000");
         assert_eq!(Value::scalar(166.66666666).to_string(), "166.667");
         assert_eq!(Value::scalar(0.30000000000000004).to_string(), "0.3");
         let rate = eval(&parse("100 req / 2 sec").unwrap(), &Env::empty()).unwrap();
@@ -2560,10 +2620,10 @@ mod tests {
         let (num, unit) = Value::with_unit(800.0, rps_unit()).display_parts();
         assert_eq!(num, "800");
         assert_eq!(unit, "rps");
-        // Составная единица — как в Display («1000 ms·req/s»)
+        // Составная единица — как в Display («1 000 ms·req/s»)
         let composite = eval(&parse("5 ms × 200 req/s").unwrap(), &Env::empty()).unwrap();
         let (num, unit) = composite.display_parts();
-        assert_eq!(num, "1000");
+        assert_eq!(num, "1\u{a0}000");
         assert_eq!(unit, "ms·req/s");
         // Скаляр — юнит пуст
         assert_eq!(
@@ -2618,12 +2678,13 @@ mod tests {
         let base = Value::with_unit(1000.0, rps_unit());
         let whatif = Value::with_unit(1200.0, rps_unit());
         let p = whatif_delta_parts(&base, &whatif).unwrap();
-        assert_eq!(p.base, ("1000".to_owned(), "rps".to_owned()));
-        assert_eq!(p.new, ("1200".to_owned(), "rps".to_owned()));
+        assert_eq!(p.base, ("1\u{a0}000".to_owned(), "rps".to_owned()));
+        assert_eq!(p.new, ("1\u{a0}200".to_owned(), "rps".to_owned()));
         assert_eq!(p.delta, "+200 rps");
         assert_eq!(
             whatif_full_delta(&base, &whatif).unwrap(),
-            "1000 rps → 1200 rps (+200 rps)"
+            // Дельта — отдельная точка форматирования (знак/«пп»), без групп
+            "1\u{a0}000 rps → 1\u{a0}200 rps (+200 rps)"
         );
         // Процентная ветка «пп» — спец-логика знака не тронута
         let base = Value::with_unit(50.0, unit_atom("%").map(Unit::atom).unwrap());
@@ -2689,7 +2750,7 @@ mod tests {
         let value = eval(&parse("1 сек + 500 мс").unwrap(), &Env::empty()).unwrap();
         assert_eq!(value.to_string(), "1.5 сек");
         let value = eval(&parse("500 мс + 1 сек").unwrap(), &Env::empty()).unwrap();
-        assert_eq!(value.to_string(), "1500 мс");
+        assert_eq!(value.to_string(), "1\u{a0}500 мс");
         // Смешанный ввод (латиница + кириллица): ответ — в единице левого
         let value = eval(&parse("1 sec + 500 мс").unwrap(), &Env::empty()).unwrap();
         assert_eq!(value.to_string(), "1.5 sec");
@@ -2754,14 +2815,14 @@ mod tests {
         assert_eq!(lines[0], None, "проза — не формула");
         assert_eq!(
             ok_text(&lines[1]),
-            "1000",
+            "1\u{a0}000",
             "присваивание возвращает присвоенное значение (скаляр)"
         );
         assert_eq!(lines[2], None, "пустая строка");
         assert_eq!(ok_text(&lines[3]), "50 ms");
         assert_eq!(
             ok_text(&lines[4]),
-            "50000 ms",
+            "50\u{a0}000 ms",
             "переменные протекают между строками"
         );
     }
@@ -2849,9 +2910,9 @@ mod tests {
     #[test]
     fn eval_lines_auto_expressions() {
         let lines = eval_lines("1000 rps * 2\n5 ms × 200 req/s\n2k");
-        assert_eq!(ok_text(&lines[0]), "2000 rps");
-        assert_eq!(ok_text(&lines[1]), "1000 ms·req/s");
-        assert_eq!(ok_text(&lines[2]), "2000");
+        assert_eq!(ok_text(&lines[0]), "2\u{a0}000 rps");
+        assert_eq!(ok_text(&lines[1]), "1\u{a0}000 ms·req/s");
+        assert_eq!(ok_text(&lines[2]), "2\u{a0}000");
     }
 
     /// FR-013 (правка 3, Numi): хвостовое присваивание `выражение = имя`
@@ -2865,12 +2926,16 @@ mod tests {
             other => panic!("ожидалось присваивание, получено: {other:?}"),
         }
         let lines = eval_lines("123 + 5123 = a\n235 + 2323 = b\nc = a + b");
-        assert_eq!(ok_text(&lines[0]), "5246", "результат строки — значение");
-        assert_eq!(ok_text(&lines[1]), "2558");
-        assert_eq!(ok_text(&lines[2]), "7804", "a и b видны ниже");
+        assert_eq!(
+            ok_text(&lines[0]),
+            "5\u{a0}246",
+            "результат строки — значение"
+        );
+        assert_eq!(ok_text(&lines[1]), "2\u{a0}558");
+        assert_eq!(ok_text(&lines[2]), "7\u{a0}804", "a и b видны ниже");
         // «В обе стороны»: то же имя в конце игнорируется
         let lines = eval_lines("b = 235 + 2323 = b");
-        assert_eq!(ok_text(&lines[0]), "2558");
+        assert_eq!(ok_text(&lines[0]), "2\u{a0}558");
         // Имя после «=» обязано завершать утверждение; не-имя — тихая ошибка
         assert_eq!(eval_lines("2 = 3")[0], None);
         assert_eq!(eval_lines("2 = 3 + 1")[0], None);
@@ -2891,8 +2956,16 @@ mod tests {
         let lines = eval_lines("x = 200\n200 + x\nx 20\n35 x");
         assert_eq!(ok_text(&lines[0]), "200");
         assert_eq!(ok_text(&lines[1]), "400", "x в конце строки — переменная");
-        assert_eq!(ok_text(&lines[2]), "4000", "x в начале строки — переменная");
-        assert_eq!(ok_text(&lines[3]), "7000", "x в конце строки — переменная");
+        assert_eq!(
+            ok_text(&lines[2]),
+            "4\u{a0}000",
+            "x в начале строки — переменная"
+        );
+        assert_eq!(
+            ok_text(&lines[3]),
+            "7\u{a0}000",
+            "x в конце строки — переменная"
+        );
         // После переменной: перед числом — умножение, перед именем — переменная
         let lines = eval_lines("latency = 50 ms\nlatency х 3\nlatency х y");
         assert_eq!(ok_text(&lines[1]), "150 ms");
@@ -2915,8 +2988,8 @@ mod tests {
     fn cyrillic_variable_names() {
         let lines = eval_lines("х = 200\nа = 123 + 5123\nс = а + х\n200 + х");
         assert_eq!(ok_text(&lines[0]), "200");
-        assert_eq!(ok_text(&lines[1]), "5246");
-        assert_eq!(ok_text(&lines[2]), "5446");
+        assert_eq!(ok_text(&lines[1]), "5\u{a0}246");
+        assert_eq!(ok_text(&lines[2]), "5\u{a0}446");
         assert_eq!(ok_text(&lines[3]), "400");
     }
 
@@ -2940,14 +3013,14 @@ mod tests {
              123 + 23 * 5",
         );
         assert_eq!(lines.len(), 12, "Vec выровнен по строкам текста");
-        assert_eq!(ok_text(&lines[0]), "5246");
-        assert_eq!(ok_text(&lines[1]), "2558");
+        assert_eq!(ok_text(&lines[0]), "5\u{a0}246");
+        assert_eq!(ok_text(&lines[1]), "2\u{a0}558");
         assert_eq!(lines[2], None, "пустая строка");
         assert_eq!(ok_text(&lines[3]), "200");
-        assert_eq!(ok_text(&lines[4]), "5246");
-        assert_eq!(ok_text(&lines[5]), "2558", "форма «в обе стороны»");
+        assert_eq!(ok_text(&lines[4]), "5\u{a0}246");
+        assert_eq!(ok_text(&lines[5]), "2\u{a0}558", "форма «в обе стороны»");
         assert_eq!(lines[6], None, "пустая строка");
-        assert_eq!(ok_text(&lines[7]), "7804");
+        assert_eq!(ok_text(&lines[7]), "7\u{a0}804");
         assert_eq!(lines[8], None, "пустая строка");
         assert_eq!(ok_text(&lines[9]), "400");
         assert_eq!(ok_text(&lines[10]), "725");
@@ -2966,9 +3039,9 @@ mod tests {
         assert_eq!(ok_text(&lines[2]), "400", "ссылка на объявленную x");
         // Полный лист во «взрослой» форме
         let lines = eval_lines("123 + 5123 \\= a\n235 + 2323 \\= b\nc \\= a + b");
-        assert_eq!(ok_text(&lines[0]), "5246");
-        assert_eq!(ok_text(&lines[1]), "2558");
-        assert_eq!(ok_text(&lines[2]), "7804");
+        assert_eq!(ok_text(&lines[0]), "5\u{a0}246");
+        assert_eq!(ok_text(&lines[1]), "2\u{a0}558");
+        assert_eq!(ok_text(&lines[2]), "7\u{a0}804");
     }
 
     /// FR-013 (правка 5): ссылка на НЕОБЪЯВЛЕННУЮ переменную видна, если
@@ -3442,5 +3515,179 @@ mod tests {
         assert_eq!(first_prose_paragraph_span(text), Some((2, 4)));
         assert_eq!(first_prose_paragraph_span("rps = 800"), None);
         assert_eq!(first_prose_paragraph_span(""), None);
+    }
+
+    // --- Визуальная разбивка цифр на порядки (правка владельца) ---
+
+    /// Разбивка целой части на порядки: группы по 3 цифры, разделитель —
+    /// NBSP U+00A0; границы `999`/`1000`.
+    #[test]
+    fn format_num_groups_thousands_integer() {
+        assert_eq!(Value::scalar(1234567.0).to_string(), "1\u{a0}234\u{a0}567");
+        assert_eq!(Value::scalar(1000.0).to_string(), "1\u{a0}000");
+        assert_eq!(Value::scalar(999.0).to_string(), "999");
+        assert_eq!(Value::scalar(12_345.0).to_string(), "12\u{a0}345");
+        assert_eq!(
+            Value::scalar(1_000_000.0).to_string(),
+            "1\u{a0}000\u{a0}000"
+        );
+        // Точный символ-разделитель — NBSP, обычного пробела внутри нет
+        let grouped = Value::scalar(1000.0).to_string();
+        assert!(
+            grouped.chars().any(|c| c == NBSP),
+            "NBSP-разделитель: {grouped:?}"
+        );
+        assert!(
+            !grouped.contains(' '),
+            "обычного пробела в числе нет: {grouped:?}"
+        );
+    }
+
+    /// Группировка с дробной частью: дробная часть после точки не
+    /// группируется; 6 значащих цифр применяются ДО группировки
+    /// (`1234567.89` → `1234570` → `1 234 570`).
+    #[test]
+    fn format_num_groups_thousands_fraction() {
+        assert_eq!(Value::scalar(1234.5).to_string(), "1\u{a0}234.5");
+        assert_eq!(Value::scalar(12345.6789).to_string(), "12\u{a0}345.7");
+        assert_eq!(Value::scalar(1234567.89).to_string(), "1\u{a0}234\u{a0}570");
+        // Без целой части ≥ 1000 — как раньше
+        assert_eq!(Value::scalar(0.5).to_string(), "0.5");
+        assert_eq!(Value::scalar(166.66666666).to_string(), "166.667");
+    }
+
+    /// Отрицательные: знак перед группами; `-0` и NaN/±∞ — как раньше.
+    #[test]
+    fn format_num_grouping_negative_and_specials() {
+        assert_eq!(Value::scalar(-1234.0).to_string(), "-1\u{a0}234");
+        assert_eq!(Value::scalar(-1234.5).to_string(), "-1\u{a0}234.5");
+        assert_eq!(
+            Value::scalar(-1234567.0).to_string(),
+            "-1\u{a0}234\u{a0}567"
+        );
+        assert_eq!(Value::scalar(-999.0).to_string(), "-999");
+        assert_eq!(Value::scalar(0.0).to_string(), "0");
+        assert_eq!(Value::scalar(-0.0).to_string(), "-0");
+        assert_eq!(Value::scalar(f64::NAN).to_string(), "не число");
+        assert_eq!(Value::scalar(f64::INFINITY).to_string(), "∞");
+        assert_eq!(Value::scalar(f64::NEG_INFINITY).to_string(), "-∞");
+    }
+
+    /// Граница 1e15: до — целая ветка (точные цифры), от — ветка 6 значащих;
+    /// сами цифры не менялись, добавились только группы.
+    #[test]
+    fn format_num_1e15_boundary_unchanged() {
+        // Целая ветка: чуть меньше 1e15
+        assert_eq!(
+            Value::scalar(999_999_999_999_999.0).to_string(),
+            "999\u{a0}999\u{a0}999\u{a0}999\u{a0}999"
+        );
+        // 1e15 и больше — ветка 6 значащих (`1000000000000000` и раньше),
+        // группировка поверх
+        assert_eq!(
+            Value::scalar(1e15).to_string(),
+            "1\u{a0}000\u{a0}000\u{a0}000\u{a0}000\u{a0}000"
+        );
+        assert_eq!(
+            Value::scalar(1.5e15).to_string(),
+            "1\u{a0}500\u{a0}000\u{a0}000\u{a0}000\u{a0}000"
+        );
+    }
+
+    /// D-1: паритет частей и Display на корпусе с крупными числами —
+    /// группировка живёт в одной точке (`format_num`), части и строка
+    /// собираются без расхождений.
+    #[test]
+    fn display_parity_with_grouping() {
+        for src in [
+            "1234567",
+            "1000 rps",
+            "1234.5 ms",
+            "-1234",
+            "2k",
+            "999",
+            "1000000",
+        ] {
+            let value = eval(&parse(src).unwrap(), &Env::empty())
+                .unwrap_or_else(|err| panic!("корпус: {src:?} → {err:?}"));
+            let (num, unit) = value.display_parts();
+            assert_eq!(
+                value.to_string(),
+                join_parts(&num, &unit),
+                "корпус: {src:?}"
+            );
+        }
+        // Части крупного значения согласованы с Display и по отдельности
+        let (num, unit) = Value::with_unit(1234567.0, rps_unit()).display_parts();
+        assert_eq!(num, "1\u{a0}234\u{a0}567");
+        assert_eq!(unit, "rps");
+        assert_eq!(
+            Value::with_unit(1234567.0, rps_unit()).to_string(),
+            "1\u{a0}234\u{a0}567 rps"
+        );
+    }
+
+    // --- Звёздочка как явное умножение (регрессия вопроса владельца) ---
+
+    /// `*` — явное умножение: с пробелами и слитно, единицы, приоритет и
+    /// лево-ассоциативность; неявное сопоставление не сломано.
+    #[test]
+    fn star_multiplication_eval() {
+        let value = eval(&parse("2 * 3").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::scalar(6.0));
+        let value = eval(&parse("2*3").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::scalar(6.0), "слитно, без пробелов");
+        // Классический пример Numi
+        let value = eval(&parse("35 * 20").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::scalar(700.0));
+        // Единицы: `2 * 3 ms` → 6 ms; юнит левого сохраняется при `5 ms * 2`
+        let value = eval(&parse("2 * 3 ms").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(6.0, ms_unit()));
+        let value = eval(&parse("5 ms * 2").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::with_unit(10.0, ms_unit()));
+        // Приоритет: умножение старше сложения; / и * лево-ассоциативны
+        let value = eval(&parse("2 + 3 * 4").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::scalar(14.0));
+        let value = eval(&parse("10 / 2 * 5").unwrap(), &Env::empty()).unwrap();
+        assert_eq!(value, Value::scalar(25.0));
+        // Дерево: `*` — явный Bin::Mul
+        assert_eq!(
+            parse("2 * 3"),
+            Ok(Expr::Bin {
+                op: BinOp::Mul,
+                lhs: Box::new(Expr::Num(2.0, Unit::Scalar)),
+                rhs: Box::new(Expr::Num(3.0, Unit::Scalar)),
+            })
+        );
+        // Неявное сопоставление не пострадало (`2 3` — тоже умножение)
+        assert!(matches!(parse("2 3"), Ok(Expr::Bin { op: BinOp::Mul, .. })));
+    }
+
+    /// `*` с переменными и в Numi-листе: имя `x` не конфликтует с
+    /// x-умножением; строка со `*` — Numi-выражение (не проза); вместе
+    /// с группировкой разрядов (`1000 * 2` → `2 000`).
+    #[test]
+    fn star_multiplication_variables_and_lines() {
+        let lines = eval_lines("price = 100\ncount = 3\nprice * count");
+        assert_eq!(ok_text(&lines[0]), "100");
+        assert_eq!(ok_text(&lines[1]), "3");
+        assert_eq!(ok_text(&lines[2]), "300", "price * count");
+        // Переменная x со звёздочкой: явный оператор не путается с
+        // x-умножением (lex-эвристика `x` между операндами)
+        let lines = eval_lines("x = 5\n3 * x\nx * 3");
+        assert_eq!(ok_text(&lines[1]), "15", "3 * x");
+        assert_eq!(ok_text(&lines[2]), "15", "x * 3");
+        // Совместно с группировкой разрядов (задача 1)
+        let lines = eval_lines("1000 * 2");
+        assert_eq!(ok_text(&lines[0]), "2\u{a0}000");
+        // Род линии: выражение со `*` — Numi-выражение
+        assert_eq!(line_kind("2 * 3"), NumiLineKind::Expression);
+        assert_eq!(line_kind("1000 * 2"), NumiLineKind::Expression);
+        assert_eq!(
+            line_kind("total = 35 * 20"),
+            NumiLineKind::Assignment {
+                name: "total".to_owned()
+            }
+        );
     }
 }
