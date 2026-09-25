@@ -1316,9 +1316,9 @@ fn mcp_edge_ports_pins_and_auto() {
     assert!(dispatch(&mut scene, "edge_ports", r#"{"id":"ghost","pin":"auto"}"#).is_err());
 }
 
-/// FR-019: template_list — built-in реестр отдаёт 45 шаблонов с полной
-/// схемой (FR-019: 15 + FR-027: 30; инвариант 4: MCP-видимость
-/// эквивалентна UI; двуязычные имена).
+/// FR-019: template_list — built-in реестр отдаёт 61 шаблон с полной
+/// схемой (FR-019: 15 + FR-027: 30 + audit-2026-09: 16; инвариант 4:
+/// MCP-видимость эквивалентна UI; двуязычные имена).
 #[test]
 fn mcp_template_list_builtin_registry() {
     let mut scene = mcp_scene();
@@ -1326,8 +1326,8 @@ fn mcp_template_list_builtin_registry() {
     let templates = list.as_array().expect("массив");
     assert_eq!(
         templates.len(),
-        45,
-        "все built-in шаблоны (FR-019: 15 + FR-027: 30)"
+        61,
+        "все built-in шаблоны (FR-019: 15 + FR-027: 30 + audit-2026-09: 16)"
     );
     let lb = templates
         .iter()
@@ -1337,7 +1337,7 @@ fn mcp_template_list_builtin_registry() {
     assert_eq!(lb["name_ru"], "Балансировщик нагрузки");
     // FR-029: секция outputs — версия схемы 1.1; FR-016 (CP5):
     // utilization-выход — минорный подъём до 1.2
-    assert_eq!(lb["version"], "1.2.0");
+    assert_eq!(lb["version"], "1.2.1");
     let lb_outputs = lb["outputs"].as_array().expect("outputs у lb (FR-029)");
     assert!(lb_outputs.iter().any(|o| o["name"] == "next_hop_rps"));
     // FR-016: named-выход utilization — источник ρ для анализатора
@@ -1355,10 +1355,11 @@ fn mcp_template_list_builtin_registry() {
     assert_eq!(lb["color"], "#4A90E2");
     // FR-020: источник каждого шаблона в списке
     assert_eq!(lb["source"], "builtin");
-    // Категории: 10 backend + 5 network
+    // Категории: 14 backend + 6 network (+ product-analytics/unit-economics
+    // из аудита 2026-09 — не проверяются здесь, см. реестр).
     let by_cat = |cat: &str| templates.iter().filter(|t| t["category"] == cat).count();
-    assert_eq!(by_cat("backend"), 10);
-    assert_eq!(by_cat("network"), 5);
+    assert_eq!(by_cat("backend"), 14);
+    assert_eq!(by_cat("network"), 6);
 }
 
 /// FR-018: template_instantiate — text-нода с Numi-листом параметров
@@ -1389,7 +1390,7 @@ fn mcp_template_instantiate_creates_linked_node() {
     // Снимок template-ссылки
     let template = node.template().expect("template");
     assert_eq!(template.id, "com.canvasdesk.lb");
-    assert_eq!(template.version, "1.2.0");
+    assert_eq!(template.version, "1.2.1");
     assert_eq!(template.expr, "mm1($rps, $service_rate, $servers)");
     assert_eq!(template.params["rps"].num, 2000.0);
     assert_eq!(template.icon, "lb");

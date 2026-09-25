@@ -1512,12 +1512,12 @@ mod tests {
         save_custom(&custom_extra, &root).expect("сохранение custom");
 
         let merged = TemplateRegistry::all_with_custom(&root);
-        // 45 built-in (FR-019: 15 + FR-027: 30): один перекрыт + один
-        // добавленный custom → 46 в merged-реестре.
+        // 61 built-in (FR-019: 15 + FR-027: 30 + audit-2026-09: 16): один
+        // перекрыт + один добавленный custom → 62 в merged-реестре.
         assert_eq!(
             merged.list().len(),
-            46,
-            "45 built-in + 1 custom (FR-027 расширил built-in с 15 до 45)"
+            62,
+            "61 built-in + 1 custom (audit 2026-09 расширил каталог до 61)"
         );
         let lb = merged.find("com.canvasdesk.lb").expect("lb");
         assert_eq!(
@@ -1581,8 +1581,8 @@ mod tests {
         let merged = TemplateRegistry::all_with_custom(&root);
         assert_eq!(
             merged.list().len(),
-            45,
-            "только built-in (FR-019: 15 + FR-027: 30)"
+            61,
+            "только built-in (FR-019: 15 + FR-027: 30 + audit-2026-09: 16)"
         );
     }
 
