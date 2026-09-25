@@ -2,15 +2,10 @@
 //! HTML5 demo-layout'ов — топовые web-паттерны W1 + 5 CanvasDesk-специфичных
 //! W2 — выраженные деревом [`SceneNode`].
 //!
-//! Тесты идут на ОБОИХ сборках (§Гейты W2: `default` и `--features taffy`);
-//! оракул выбирается СБОРКОЙ — cfg-хелпер [`lay_out_scene`]: default →
-//! `FlexLayoutEngine` (собственный 0-dep движок W2), `--features taffy` →
-//! `TaffyBackend` (переходный оракул ADR-0014). На совместимых политиках
-//! эталоны общие и побитово одинаковые (гейт паритета —
-//! `flex_vs_taffy_parity.rs`); исключение — demo 12 (документированное
-//! расхождение C3 `SqueezeTail` ≠ flex_shrink): у неё ДВОЙНОЙ golden —
-//! `<name>.txt` (оракул Flex: дословная семантика, §Контракт-4) и
-//! `<name>.taffy.txt` (оракул taffy: flex_shrink).
+//! Оракул — `FlexLayoutEngine` (FR-068 W4: единственный движок вёрстки,
+//! taffy вырезан; исторически W1–W3 оракул выбирался сборкой — TaffyBackend
+//! за фичей). Эталоны пинят семантику собственного движка (SqueezeTail —
+//! дословная, §Контракт-4).
 //!
 //! Golden-снапшоты UiRect-дампов: `tests/html5_demos/<name>.txt` (методология
 //! F-18, паттерн snapshot.rs: регенерация env-переменной, осознанный diff).
@@ -20,21 +15,13 @@
 //! до целого ui px (`f32::round()` — half-away-from-zero, как в snapshot.rs).
 //! Порядок ПОЗИЦИОННЫЙ (без сортировки): дерево сцены = структура вёрстки.
 //!
-//! Регенерация (env `CANVAS_UI_UPDATE_HTML5=1`; для demo 12 ПОРЯДОК важен):
-//! 1. `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos
-//!    --features taffy` — taffy-оракулы (11/13/14/15 + `12_*.taffy.txt`);
-//!    `12_*.txt` при этом пишется Flex-дампом (движок встроен всегда).
-//! 2. `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`
-//!    — Flex-оракулы default-сборки (перезаписывает `<name>.txt`; taffy-
-//!    эталон `12_*.taffy.txt` не трогает — не в матрице).
+//! Регенерация (env `CANVAS_UI_UPDATE_HTML5=1`):
+//! `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`.
 //!
 //! Детерминизм: вьюпорт — константа 1280×800 ui px, входные размеры целые,
-//! БЕЗ текст-замера (шрифто-независимость); версия taffy зафиксирована
-//! Cargo.lock. `overflow: hidden` ([`.clipped()`]) rect'ы НЕ меняет (клип —
+//! БЕЗ текст-замера (шрифто-независимость). `overflow: hidden` ([`.clipped()`]) rect'ы НЕ меняет (клип —
 //! draw-семантика FR-056), поэтому хвосты переполнения честно видны в дампе.
 
-#[cfg(feature = "taffy")]
-use canvas_ui::layout::TaffyBackend;
 use canvas_ui::layout::{
     Child, CrossAlign, FlexLayoutEngine, LayoutBackend, MainAlign, Row, RowPolicy, SceneDim,
     SceneKind, SceneNode, ScenePosition, SceneSize, SceneTrack,
@@ -416,18 +403,11 @@ fn demo_10_complex_form_layout() -> SceneNode {
     SceneNode::column(1280.0, 800.0, 0.0, vec![fill_w_leaf(56.0), form, footer])
 }
 
-// --- Оракул по сборке + 5 W2 demo-сцен ---------------------------------------
+// --- Оракул + 5 W2 demo-сцен --------------------------------------------------
 
-/// Оракул сцены по СБОРКЕ (§Гейты W2: тесты идут на обеих): default →
-/// `FlexLayoutEngine` (собственный движок W2), `--features taffy` →
-/// `TaffyBackend`. Возвращает rect'ы всех узлов в DFS pre-order (`[0]` —
-/// корень; контракт — модульная дока `scene`).
-#[cfg(feature = "taffy")]
-fn lay_out_scene(slot: UiRect, scene: &SceneNode) -> Vec<UiRect> {
-    TaffyBackend.lay_out_scene(slot, scene)
-}
-
-#[cfg(not(feature = "taffy"))]
+/// Оракул сцены — `FlexLayoutEngine` (FR-068 W4: единственный движок).
+/// Возвращает rect'ы всех узлов в DFS pre-order (`[0]` — корень; контракт —
+/// модульная дока `scene`).
 fn lay_out_scene(slot: UiRect, scene: &SceneNode) -> Vec<UiRect> {
     FlexLayoutEngine.lay_out_scene(slot, scene)
 }
@@ -664,7 +644,7 @@ fn golden_dir() -> std::path::PathBuf {
         .join("html5_demos")
 }
 
-/// Путь эталона по имени файла (`<demo>.txt` / `<demo>.taffy.txt`).
+/// Путь эталона по имени файла (`<demo>.txt`).
 fn golden_path(file_name: &str) -> std::path::PathBuf {
     golden_dir().join(file_name)
 }
@@ -683,7 +663,7 @@ fn check_or_write(path: &std::path::Path, dump: &str, demo_id: &str) {
     let expected = std::fs::read_to_string(path).unwrap_or_else(|e| {
         panic!(
             "эталон {} не читается ({e}) — сгенерируй: CANVAS_UI_UPDATE_HTML5=1 \
-             cargo test -p canvas-ui --test html5_demos [--features taffy]",
+             cargo test -p canvas-ui --test html5_demos",
             path.display()
         )
     });
@@ -789,18 +769,13 @@ fn dump_rects_v5(rects: &[UiRect]) -> String {
     out
 }
 
-/// Demo 12 — V-5 уровень с ДВОЙНЫМ golden (расхождение C3). Логика: ВСЕГДА
-/// считаем Flex-дамп (`FlexLayoutEngine` компилируется на обеих сборках —
-/// дословная семантика SqueezeTail §Контракт-4) → сравниваем с
-/// `<name>.txt`; на `--features taffy` ДОПОЛНИТЕЛЬНО taffy-дамп
-/// (`lay_out_with(TaffyBackend, …)` — flex_shrink) → сравниваем с
-/// `<name>.taffy.txt`. Два эталона потому, что при переполнении семантики
-/// ЗАДАННО расходятся (C3): Flex-хвост вырождается в невидимый rect, taffy
-/// делит дефицит между всеми чипами (см. доку demo-функции выше).
+/// Demo 12 — V-5 уровень (SqueezeTail, §Контракт-4). FR-068 W4: единый
+/// golden — оракул один (`FlexLayoutEngine`); исторически (W1–W3) был
+/// двойной эталон (`<name>.taffy.txt` — flex_shrink taffy), вырезан вместе
+/// с taffy.
 #[test]
 fn golden_12_cd_whatif_bar_squeeze_tail() {
     let name = DEMOS[11];
-    // Flex-оракул: дословная семантика — на ОБОИХ сборках в `<name>.txt`.
     let flex = demo_12_cd_whatif_bar_squeeze_tail(&FlexLayoutEngine);
     assert_eq!(flex.len(), 5, "whatif-бар: 5 чипов");
     check_or_write(
@@ -808,17 +783,6 @@ fn golden_12_cd_whatif_bar_squeeze_tail() {
         &dump_rects_v5(&flex),
         name,
     );
-
-    // taffy-оракул (C3): только на сборке с taffy — свой файл эталона.
-    #[cfg(feature = "taffy")]
-    {
-        let taffy = demo_12_cd_whatif_bar_squeeze_tail(&TaffyBackend);
-        check_or_write(
-            &golden_path(&format!("{name}.taffy.txt")),
-            &dump_rects_v5(&taffy),
-            name,
-        );
-    }
 }
 
 #[test]
@@ -872,13 +836,6 @@ fn html5_demo_count_is_15() {
             "нет эталона {name} — demo без эталона"
         );
     }
-    // Двойной golden C3 (demo 12): taffy-оракул лежит рядом и обязателен.
-    let dual_taffy = golden_path(&format!("{}.taffy.txt", DEMOS[11]));
-    assert!(
-        dual_taffy.exists(),
-        "нет двойного эталона {} (оракул C3: flex_shrink) — сгенерируй: \
-         CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos \
-         --features taffy",
-        dual_taffy.display()
-    );
+    // FR-068 W4: двойной golden C3 (`12_*.taffy.txt`) вырезан вместе с
+    // taffy — эталон ровно один на demo (оракул — FlexLayoutEngine).
 }

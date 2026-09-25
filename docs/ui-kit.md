@@ -84,7 +84,8 @@ FR-062 (layout v2): расширения тех же примитивов — т
   gap — по обеим осям, cross — внутри строки); число видимых строк задаёт
   ВЫСОТА слота, перелив за нижний край не маскируется (линт G4).
 - `grid_cells(slot, cols, rows, row_h, gap)` — 2D-сетка явных колонок
-  (row-major); спаны/авто-треки — триггер T2 ADR-0013 (taffy).
+  (row-major); спаны — [`SceneNode::span`], авторасчётные треки и
+  minmax — FR-074 (ниже, сцена + FlexLayoutEngine).
 - Фокус контента: `kit::focus_order(rects, ring)` +
   `FocusRing::retain_order` (перестроение порядка с сохранением позиции)
   — Tab-навигация поверхности без ручных индексов; рамка — слот `accent`
@@ -162,59 +163,52 @@ trait-границей `Shaper` (`shape` + `font_system`) — единствен
   navbar-space-between, grid-12-col, masonry-lite, aspect-ratio,
   modal-fixed-clip, dropdown-flip, virtualization, complex-form) + 5 W2
   CanvasDesk-специфичных: `11_cd_palette_grid_multiline`,
-  `12_cd_whatif_bar_squeeze_tail` (двойной эталон Flex/taffy —
-  расхождение C3 `SqueezeTail` vs `flex_shrink` на одной сцене),
+  `12_cd_whatif_bar_squeeze_tail` (исторически — двойной эталон C3,
+  W4: единый golden),
   `13_cd_kit_gallery_tab_focus`, `14_cd_search_overlay_viewport_clip`,
   `15_cd_fr061_tabular_body_grid`. Dual-backend прогон (W2): default
-  сборка → `FlexLayoutEngine::lay_out_scene`, `--features taffy` →
-  `TaffyBackend::lay_out_scene` — golden-файлы ОБЩИЕ (побитовый оракул
-  на совместимых политиках). Эталоны —
+  Эталоны —
   `canvas-ui/tests/html5_demos/*.txt`; регенерация
-  `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`
-  (и с `--features taffy` для taffy-прогона). Изменение эталона —
-  осознанный PR с diff.
-- **Backend'ы вёрстки (FR-068 W1, ADR-0014)**: `trait LayoutBackend` +
-  `NativeBackend` (default, 1:1 примитивы §4) + `TaffyBackend` за фичей
-  `taffy` (default off — zero-dep G7). Потребитель выбирает backend явно:
-  `Row::lay_out_with(backend, slot, &items)` / `grid_cells_with(...)` /
-  `lay_out_measured_with(...)`; pilot-поверхности — `pilot_backend()`
-  (TaffyBackend при фиче, иначе Native). Расширенные CSS-возможности
-  (percent/fill/aspect-ratio/position absolute|fixed|sticky/overflow/
-  scroll-offset) — сцена `SceneNode` + `TaffyBackend::lay_out_scene`.
-  Документированные расхождения taffy: C3 `SqueezeTail` ≠ `flex_shrink`
-  (§Контракт-4); `compute_layout` округляет координаты к целому ui px
-  (round on freeze) — паритет побитовый на целых входах; `End`+переполнение
-  (unsafe alignment); sticky — эмуляция. Паритет-сюита:
-  `cargo test -p canvas-ui --features taffy --test backend_parity` (13);
-  W2: + `cargo test -p canvas-ui --features taffy --test flex_vs_taffy_parity`
-  — 1000 случайных деревьев Flex vs taffy, побитово идентичные rect'ы
-  на совместимых политиках ≥ 80% (гейт §W2 FR-068).
+  `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`.
+  Изменение эталона — осознанный PR с diff.
+- **Backend'ы вёрстки (FR-068 W1→W4, ADR-0014→ADR-0015)**: `trait
+  LayoutBackend` + `NativeBackend` (1:1 примитивы §4) + `FlexLayoutEngine`
+  (собственный движок, §ниже). **W4: taffy/TaffyBackend вырезаны — движок
+  один:** `default_backend()` → `FlexLayoutEngine`, `pilot_backend()` →
+  `NativeBackend` (API пилотов сохранён). Потребитель может выбрать
+  backend явно: `Row::lay_out_with(backend, slot, &items)` /
+  `grid_cells_with(...)` / `lay_out_measured_with(...)`. Расширенные
+  CSS-возможности (percent/fill/aspect-ratio/position absolute|fixed|
+  sticky{top,left}|overflow/scroll-offset/grid-треки Auto|MinMax — FR-074)
+  — сцена `SceneNode` + `FlexLayoutEngine::lay_out_scene`. Исторические
+  расхождения с taffy (C3 `SqueezeTail` ≠ `flex_shrink`, unsafe `End`,
+  round on freeze) — зафиксированы в §Контрактах FR-068; parity-оракулы
+  taffy (backend_parity/flex_vs_taffy_parity, 10/10 бит-в-бит на Auto/
+  Minmax-треках FR-074) удалены вместе с taffy.
 - **Свой layout-движок — FlexLayoutEngine (FR-068 W2, ADR-0015)**:
   собственный backend вёрстки БЕЗ внешних зависимостей (0 deps —
   zero-dep инвариант G7; `layout/flex.rs`, маркер-фича `flex-engine`
   в default). Контракт: CSS flexbox (grow/shrink/basis/wrap — resolve
   flexible lengths §9.7 с freeze-округлением) + `round-layout`
   приведение к целой px-сетке (позиции — parent-relative round,
-  размеры — round краёв по кумулятивным координатам; зеркало
-  `taffy::compute::round_layout`). Побитовый паритет с taffy на
-  совместимых политиках (Fit/Start/End/SpaceBetween/Wrap/равная сетка)
-  — гейт ≥ 80% в `tests/flex_vs_taffy_parity` (1000 деревьев).
+  размеры — round краёв по кумулятивным координатам; алгоритм — дословное
+  зеркало `taffy::compute::round_layout`, вырезанного в W4). Паритет
+  с taffy на совместимых политиках был зафиксирован гейтом
+  `tests/flex_vs_taffy_parity` (1000 деревьев, ≥ 80% побитово) — удалён
+  вместе с taffy в W4.
   `SqueezeTail` — ДОСЛОВНО (§Контракт-4 FR-068 «Flex решает»;
-  расхождение C3 с taffy `flex_shrink` документировано, не fail в
-  parity). Расширенная сцена (`SceneNode`:
+  расхождение C3 с taffy `flex_shrink` — историческая справка).
+  Расширенная сцена (`SceneNode`:
   percent/aspect/absolute/fixed/sticky/scroll/grid) —
-  `FlexLayoutEngine::lay_out_scene`, побитово с `TaffyBackend` на
-  сценах demo-goldens. Выбор движка — `default_backend()`: фича
-  `taffy` → `TaffyBackend`, иначе → `FlexLayoutEngine` (§W2); W4:
-  taffy вырезается, Flex остаётся единственным. Статус W2: стаб
-  (V-5-методы делегируют `NativeBackend` 1:1, сцена — todo) заменяется
-  собственной реализацией в этой же волне; perf-гейт — `perf_flex.rs`
-  (ниже).
-- **Perf-taffy (FR-068 W1, `canvas-ui/tests/perf_taffy.rs`, `#[ignore]`)**:
-  reflow 1000 узлов на TaffyBackend — release-медиана 264.8 μs (гейт < 1 мс,
-  §Контракт-8); dev-профиль ~2.7 мс — артефакт неоптимизированного taffy
-  (относительный гейт дрейфа ±20% против `tests/perf_taffy_baseline.txt`).
-  Прогон: `cargo test -p canvas-ui --features taffy --test perf_taffy -- --ignored`.
+  `FlexLayoutEngine::lay_out_scene` — единственный оракул (W4: сцены
+  demo-goldens 16/16). Выбор движка — `default_backend()` →
+  `FlexLayoutEngine` всегда (W4 выполнен 2026-09-25). Grid-треки —
+  FR-074: `Auto` (контент span-1 ячеек + §11.8 stretch) и
+  `minmax(min, max)` (`TrackMin`/`TrackMax`, `max: Fill` — fr с полом;
+  §11.5–11.8 в порядке taffy, parity 10/10 бит-в-бит ДО вырезания taffy).
+  Perf-гейт — `perf_flex.rs` (ниже).
+- **Perf-taffy** — удалён в W4 вместе с taffy (историческая медиана
+  264.8 μs — в worklog W1).
 - **Perf baseline (FR-068 W0, `canvas-ui/tests/perf_baseline.rs`, `#[ignore]`)**:
   reflow синтетического графа из 1000 узлов (Fit/flex/Wrap/SqueezeTail/grid_cells)
   — медиана 200 итераций, гейт < 1 мс (§Контракт-8 FR-068), регрессия > 20%
@@ -449,7 +443,7 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
   `docs/plans/fr-068-w3-consumer-migration.md`): пилот W3.1 — what-if бар
   (`whatif_ui.rs`) переведён на measured-API (`MeasuredItem` ×
   `Row::lay_out_measured`, бит-в-бит); `Child::fixed` в canvas-app 42→32.
-- **Известные проблемы**: 2 taffy-теста whatif_ui
-  (`bar_layout_no_overlap_and_covers_labels`,
-  `scenario_labels_ellipsis_by_measured_width`) — ПРЕДСУЩЕСТВУЮЩИЕ на main,
-  семейство документированных taffy-округлений W1 — фикс отдельным CR.
+- **Известные проблемы (W4-ревизия)**: 2 taffy-теста whatif_ui, отмеченные
+  в W3 как предсуществующие красные, шли за фичей `taffy` и удалены вместе
+  с ней (W4) — семейство taffy-округлений больше не существует;
+  native-оракулы (`bar_layout_no_overlap_and_covers_labels` и др.) зелёные.

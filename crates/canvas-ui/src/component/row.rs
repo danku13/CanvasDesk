@@ -842,7 +842,7 @@ mod tests {
     /// W3: паритет `Component::layout` ↔ прямой `row_layout` (те же части из
     /// тех же props, тот же инстанс FontSystem — метрики идентичны):
     /// плоская выдача совпадает дословно, индекс 0 — слот строки. Backend —
-    /// [`crate::layout::default_backend`] (на `--features taffy` —
+    /// [`crate::layout::default_backend`] (исторически: на `--features taffy` —
     /// TaffyBackend): в геометрию Row backend не входит — паритет обязателен
     /// на обеих сборках (§Контракт-3 FR-068).
     #[test]
@@ -966,11 +966,4 @@ mod tests {
             "вне слота — мимо"
         );
     }
-
-    // === FR-068 W1: taffy-пути kit-функций (parity-тесты) ===================
-    //
-    // Компилируются только при feature = "taffy" (opt-in, FR-068 W1):
-    // default-сборка тестирует native-функции выше — поведение default
-    // не меняется. Parity — побитовый на целых входах; документированные
-    // расхождения фиксируются отдельными тестами (как в taffy_backend).
 }

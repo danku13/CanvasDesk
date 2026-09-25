@@ -59,17 +59,6 @@ wgpu = "22"
 glyphon = "0.6" # совместим с wgpu 22
 # инлайн-редактирование текста (T7): та же версия, что тянет glyphon 0.6
 cosmic-text = "0.12"
-# FR-068 W1 (ADR-0014 §Решение п.4): taffy — opt-in backend вёрстки за
-# фичей `taffy` canvas-ui (default off). Полный бюджет: flexbox+grid+block
-# (+376 КБ wasm raw при активации — решение владельца, ADR-0014 N3).
-# default-features = false — no_std-совместимое ядро без парсера CSS.
-taffy = { version = "0.14", default-features = false, features = [
-    "std",
-    "taffy_tree",
-    "flexbox",
-    "grid",
-    "block_layout",
-] }
 # буфер обмена (T7): без ручного unsafe Win32 clipboard-кода
 arboard = "3"
 pollster = "0.3"
@@ -185,3 +174,12 @@ sobol_burley = { version = "0.5", default-features = false }
 [profile.release]
 lto = "thin"
 
+
+# FR-068 W4 (окружение агента): диск сборочной среды ограничен —
+# линковка test-бинарья canvas-app с debug-инфо не помещается (ld Bus
+# error при 100% диска). debug = 0 в dev-профиле: семантика тестов не
+# меняется (debug-assertions остаются), отладочные символы не нужны в
+# гейтах. На CI/десктоп не влияет (переопределяется локальными
+# конфигами при необходимости).
+[profile.dev]
+debug = 0

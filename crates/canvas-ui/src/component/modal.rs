@@ -1,4 +1,4 @@
-//! FR-068 W3: модальная панель + focus_order (+ taffy-путь) — перенос из kit.rs 1:1 (W3).
+//! FR-068 W3: модальная панель + focus_order — перенос из kit.rs 1:1 (W3).
 //!
 //! Владелец волны (агент 3-b): `Props` + `impl Component` для modal добавлены
 //! (секция «Component» ниже); существующие функции — стабильный API.
@@ -6,11 +6,6 @@
 use super::{Component, ComponentHit, KitPalette, PanelStyle};
 use crate::component::panel::{panel_rect, panel_style};
 use crate::geometry::{UiPoint, UiRect, UiVec2};
-#[cfg(feature = "taffy")]
-use crate::layout::constrain;
-
-#[cfg(feature = "taffy")]
-use crate::layout::TaffyBackend;
 
 // --- Modal ------------------------------------------------------------------
 
@@ -58,33 +53,6 @@ pub fn focus_order(rects: &[UiRect], ring: &crate::keyboard::FocusRing) -> Optio
         .map(|i| (i, current))
 }
 
-#[cfg(feature = "taffy")]
-const TAFFY: TaffyBackend = TaffyBackend;
-
-/// Opt-in taffy-путь (FR-068 W1) [`modal`]: размер панели — тот же
-/// [`constrain`] (min-инвариант приоритетен, parity FR-060); позиция панели —
-/// `TaffyBackend::centered` (CSS justify/align Center) вместо
-/// `stack(Center, Center)`. При помещении панели в слот — паритет с native
-/// (тесты, побитово на целых входах). Переполнение Center (панель больше
-/// слота, напр. min > слот) — ДОКУМЕНТИРОВАННОЕ расхождение (как у
-/// `TaffyBackend::centered`): taffy сжимает ребёнка по ГЛАВНОЙ оси до слота
-/// (flex_shrink 1 — CSS-семантика, родня расхождения C3) и центрирует по
-/// поперечной с выходом за ОБА края; native [`stack`] клампит левый/верхний
-/// край к слоту, СОХРАНЯЯ min-размер (parity FR-060). Из parity-матрицы
-/// исключено, фиксируется отдельным тестом; pilot-поверхности держат
-/// min ≤ слот через constrain (переполнение — деградация, ловимая G4).
-/// Default-сборка использует native-функцию; финальные гарантии W0
-/// сохранены: native-семантика БЕЗ [`viewport_clamp`] (min-инвариант —
-/// пересечение клипповало бы инвариантную панель, см. [`modal`]).
-#[cfg(feature = "taffy")]
-pub fn modal_taffy(slot: UiRect, min: UiVec2, max: UiVec2, desired: UiVec2) -> ModalLayout {
-    let size = constrain(min, max, desired);
-    ModalLayout {
-        dim: slot,
-        panel: TAFFY.centered(slot, size),
-    }
-}
-
 // === FR-068 W3: Component (агент 3-b) =======================================
 //
 // [`Modal`] — retained-обёртка над kit-функцией [`modal`]. Неинтерактивный
@@ -125,7 +93,7 @@ impl Component for Modal {
     /// Контракт индексов (ДОКУМЕНТИРОВАН, тесты фиксируют): `rects[0]` —
     /// затемнение (= весь слот), `rects[1]` — панель (constrain+stack,
     /// центр). Порядок = draw-порядок слоёв: dim ниже панели. Native-путь —
-    /// default-семантика (taffy-вариант — opt-in W1 [`modal_taffy`], parity
+    /// default-семантика (parity
     /// зафиксирован там же); backend вёрсткой модали не пользуется
     /// (rect'ы — [`modal`]/[`panel_rect`]).
     fn layout(&self, _backend: &dyn crate::layout::LayoutBackend, slot: UiRect) -> Vec<UiRect> {
@@ -305,97 +273,4 @@ mod tests {
     }
 
     // === FR-062 F-18: геометрический снапшот кит-компонента (без шрифтов) ===
-}
-
-#[cfg(all(test, feature = "taffy"))]
-mod taffy_parity {
-    use super::*;
-
-    /// modal: parity с native [`modal`] — ПОБИТОВО при ПОМЕЩЕНИИ панели
-    /// в слот (центрирование `TaffyBackend::centered` ≡
-    /// `stack(Center, Center)` на целых входах): desired > max
-    /// (сжатие constrain), desired < min (min-кламп), смещённый слот,
-    /// нечётная разница (x.5 — точное f32). Переполненный Center
-    /// (панель больше слота) ИСКЛЮЧЁН из матрицы — документированное
-    /// расхождение (следующий тест).
-    #[test]
-    fn modal_taffy_parity_with_native() {
-        let cases = [
-            (
-                UiRect::new(0.0, 0.0, 1280.0, 800.0),
-                UiVec2::new(200.0, 100.0),
-                UiVec2::new(600.0, 400.0),
-                UiVec2::new(900.0, 500.0),
-            ), // desired > max → 600×400
-            (
-                UiRect::new(0.0, 0.0, 1280.0, 800.0),
-                UiVec2::new(280.0, 150.0),
-                UiVec2::new(440.0, 150.0),
-                UiVec2::new(440.0, 150.0),
-            ), // впритык
-            (
-                UiRect::new(0.0, 0.0, 1280.0, 800.0),
-                UiVec2::new(100.0, 80.0),
-                UiVec2::new(600.0, 400.0),
-                UiVec2::new(50.0, 40.0),
-            ), // desired < min → min
-            (
-                UiRect::new(50.0, 40.0, 400.0, 300.0),
-                UiVec2::new(100.0, 80.0),
-                UiVec2::new(380.0, 280.0),
-                UiVec2::new(900.0, 500.0),
-            ), // смещённый слот, desired > max
-            (
-                UiRect::new(50.0, 40.0, 401.0, 301.0),
-                UiVec2::new(100.0, 80.0),
-                UiVec2::new(379.0, 279.0),
-                UiVec2::new(379.0, 279.0),
-            ), // нечётная разница: (401−379)/2 = 11
-        ];
-        for (slot, min, max, desired) in cases {
-            let native = modal(slot, min, max, desired);
-            let taffy = modal_taffy(slot, min, max, desired);
-            assert_eq!(
-                (taffy.panel.x, taffy.panel.y, taffy.panel.w, taffy.panel.h),
-                (
-                    native.panel.x,
-                    native.panel.y,
-                    native.panel.w,
-                    native.panel.h
-                ),
-                "parity модали: slot={slot:?}"
-            );
-            assert_eq!(taffy.dim, native.dim, "dim == slot");
-        }
-    }
-    /// Документированное расхождение (исключено из parity-матрицы):
-    /// переполненный Center (панель больше слота, напр. min-инвариант
-    /// при слоте меньше min) — taffy сжимает ребёнка по ГЛАВНОЙ оси до
-    /// слота (flex_shrink 1 — CSS flex, родня C3) и центрирует по
-    /// ПОПЕРЕЧНОЙ с выходом за ОБА края; native [`stack`] клампит
-    /// левый/верхний край к слоту, СОХРАНЯЯ min-размер (parity FR-060).
-    /// Тест ФИКСИРУЕТ поведение, чтобы расхождение было видимым.
-    #[test]
-    fn modal_taffy_center_overflow_is_documented_divergence() {
-        let slot = UiRect::new(0.0, 0.0, 100.0, 100.0);
-        let (min, max, desired) = (
-            UiVec2::new(320.0, 240.0),
-            UiVec2::new(640.0, 480.0),
-            UiVec2::new(200.0, 200.0),
-        );
-        let native = modal(slot, min, max, desired);
-        let taffy = modal_taffy(slot, min, max, desired);
-        // native: кламп левого/верхнего края к слоту, размер = min
-        // (min-инвариант, parity FR-060)
-        assert_eq!(native.panel, UiRect::new(0.0, 0.0, 320.0, 240.0));
-        // taffy (CSS): главная ось — ребёнок СЖИМАЕТСЯ до слота
-        // (flex_shrink 1 у `centered`), поперечная — центрируется с
-        // выходом за ОБА края: x = 0 (ширина = слоту), y = (100−240)/2
-        assert_eq!(
-            (taffy.panel.x, taffy.panel.y, taffy.panel.w, taffy.panel.h),
-            (0.0, -70.0, 100.0, 240.0),
-            "CSS-переполнение: shrink по главной оси + unsafe Center по поперечной"
-        );
-        assert_ne!(native.panel, taffy.panel, "расхождение зафиксировано");
-    }
 }

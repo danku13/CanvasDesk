@@ -111,6 +111,12 @@ pub(super) fn paint_items_to_band(
             // полноты match; если PaintItem::Icon всё же попадёт сюда —
             // игнорируем (icons рисуются отдельным слоем через FrameOverlay).
             PaintItem::Icon { .. } => {}
+            // FR-074: Transform (rotate) / ZGroup — прозрачный проход
+            // (ZGroup-дети уже z-отсортированы Painter::take_items);
+            // поворот пока не применяется рендером (формат инстансов
+            // без rotation — конвертация в rotate-инстансы отдельно).
+            PaintItem::Transform { items, .. } => paint_items_to_band(items, quads, texts),
+            PaintItem::ZGroup { items, .. } => paint_items_to_band(items, quads, texts),
         }
     }
 }
@@ -166,6 +172,13 @@ pub(super) fn paint_items_to_stage(
             }
             // FR-ICONS: иконки в stage — через `KitDraw::icon`; arm для полноты.
             PaintItem::Icon { .. } => {}
+            // FR-074: прозрачный проход (см. paint_items_to_band).
+            PaintItem::Transform { items, .. } => {
+                paint_items_to_stage(items, camera, viewport, zoom, quads, texts)
+            }
+            PaintItem::ZGroup { items, .. } => {
+                paint_items_to_stage(items, camera, viewport, zoom, quads, texts)
+            }
         }
     }
 }

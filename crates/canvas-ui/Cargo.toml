@@ -17,21 +17,11 @@ cosmic-text.workspace = true
 # кит-стили — только spacing/radius-scale токенов canvas-core (внутренняя
 # зависимость, 0 новых внешних — G7; цикла нет: canvas-core самодостаточен).
 canvas-core.workspace = true
-# FR-068 W1 (ADR-0014): taffy — opt-in backend вёрстки за фичей `taffy`
-# (default off — zero-dep инвариант PRD-0009 G7 сохранён: default сборка
-# НЕ содержит taffy, `cargo build --no-default-features` не компилирует
-# `TaffyBackend`). Полный бюджет flexbox+grid+block — решение владельца
-# (ADR-0014 N3: +376 КБ wasm raw при активации, ≤8 МБ raw / ≤4 МБ brotli
-# сохраняется). W4 FR-068: taffy вырезается (FlexLayoutEngine W2).
-taffy = { workspace = true, optional = true }
-
 [features]
 # FR-068 W2: default — flex-engine (встроенный, 0 deps; §Контракт-2:
-# default сборка — 0 внешних UI-runtime-deps). `taffy`/`mock-shaper` — off.
+# default сборка — 0 внешних UI-runtime-deps). `mock-shaper` — off.
+# FR-068 W4: фича `taffy` вырезана вместе с TaffyBackend — движок один.
 default = ["flex-engine"]
-# FR-068 W1: включает `TaffyBackend` (layout/taffy_backend.rs). Default —
-# выключено: `default_backend()` без фичи уходит в `FlexLayoutEngine`.
-taffy = ["dep:taffy"]
 # FR-068 W2: маркер-фича собственного движка `FlexLayoutEngine`
 # (layout/flex.rs). ПУСТАЯ ([]) и в default: движок встроен в крейт
 # (0 deps — zero-dep инвариант G7 не зависит от флага), фича — семантический

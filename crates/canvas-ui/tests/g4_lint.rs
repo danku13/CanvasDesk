@@ -76,8 +76,6 @@ use canvas_ui::registry::{DegradationPolicy, SurfaceDecl, SurfaceRegistry};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SceneBackend {
     Native,
-    #[cfg(feature = "taffy")]
-    Taffy,
 }
 
 /// Семейство UI-шрифта — паритет с unit-тестами кита (`kit.rs`).
@@ -435,8 +433,6 @@ impl Ctx {
     fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
         match self.backend {
             SceneBackend::Native => row.lay_out(slot, items),
-            #[cfg(feature = "taffy")]
-            SceneBackend::Taffy => row.lay_out_with(&canvas_ui::layout::TaffyBackend, slot, items),
         }
     }
 
@@ -444,10 +440,6 @@ impl Ctx {
     fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
         match self.backend {
             SceneBackend::Native => column.lay_out(slot, items),
-            #[cfg(feature = "taffy")]
-            SceneBackend::Taffy => {
-                column.lay_out_with(&canvas_ui::layout::TaffyBackend, slot, items)
-            }
         }
     }
 }
@@ -1474,138 +1466,5 @@ fn lint_covers_30_scenarios() {
                 lang.tag()
             );
         }
-    }
-}
-
-// --- Taffy-прогоны (FR-068 W1, Контракт-3 «G4-линты × N backend'ов») ----------
-
-/// Те же 5 canonical сцен × 3 окна × 2 языка, построенные через
-/// `TaffyBackend` (Row/Column — `lay_out_with`; kit-функции остаются
-/// native — они не flex), с ТЕМИ ЖЕ G4-проверками (parent-пересечение,
-/// viewport L4+, overlaps пуст, hit-rect'ы во вьюпорте). Компилируется
-/// только под фичей `taffy` (default-сборка не тянет taffy — G7).
-///
-/// Сцены подобраны так, что помещаются в самое малое окно 800×560;
-/// SqueezeTail-деградация what-if бара под taffy сжимает детей без
-/// выхода за пределы слота (flex_shrink распределяет сжатие
-/// пропорционально — C3) — G4-свойства сохраняются. Числа могут
-/// отличаться от native-прогонов (rounding px-сетки taffy на дробных
-/// measured-размерах, ≤ 0.5 ui px) — побитовое равенство с native
-/// пинится отдельно в `backend_parity.rs`; здесь проверяются СВОЙСТВА
-/// вёрстки, а не совпадение значений.
-#[cfg(feature = "taffy")]
-mod taffy_backend_runs {
-    use super::*;
-
-    /// Ctx с taffy-путём примитивов Row/Column.
-    fn taffy_ctx() -> Ctx {
-        let mut ctx = Ctx::new();
-        ctx.backend = SceneBackend::Taffy;
-        ctx
-    }
-
-    #[test]
-    fn taffy_scene_1_main_canvas_whatif() {
-        let mut ctx = taffy_ctx();
-        let mut runs = 0;
-        for combo in matrix().into_iter().filter(|c| c.scene == 0) {
-            let built = build(combo, &mut ctx);
-            lint_combo(&built, combo.vp, combo.lang);
-            runs += 1;
-        }
-        assert_eq!(
-            runs, RUNS_PER_SCENE,
-            "taffy: сцена должна покрывать все комбинации окно×язык"
-        );
-    }
-
-    #[test]
-    fn taffy_scene_2_palette_dropdown() {
-        let mut ctx = taffy_ctx();
-        let mut runs = 0;
-        for combo in matrix().into_iter().filter(|c| c.scene == 1) {
-            let built = build(combo, &mut ctx);
-            lint_combo(&built, combo.vp, combo.lang);
-            runs += 1;
-        }
-        assert_eq!(runs, RUNS_PER_SCENE);
-    }
-
-    #[test]
-    fn taffy_scene_3_explain_modal() {
-        let mut ctx = taffy_ctx();
-        let mut runs = 0;
-        for combo in matrix().into_iter().filter(|c| c.scene == 2) {
-            let built = build(combo, &mut ctx);
-            lint_combo(&built, combo.vp, combo.lang);
-            runs += 1;
-        }
-        assert_eq!(runs, RUNS_PER_SCENE);
-    }
-
-    #[test]
-    fn taffy_scene_4_search_overlay() {
-        let mut ctx = taffy_ctx();
-        let mut runs = 0;
-        for combo in matrix().into_iter().filter(|c| c.scene == 3) {
-            let built = build(combo, &mut ctx);
-            lint_combo(&built, combo.vp, combo.lang);
-            runs += 1;
-        }
-        assert_eq!(runs, RUNS_PER_SCENE);
-    }
-
-    #[test]
-    fn taffy_scene_5_settings_panel() {
-        let mut ctx = taffy_ctx();
-        let mut runs = 0;
-        for combo in matrix().into_iter().filter(|c| c.scene == 4) {
-            let built = build(combo, &mut ctx);
-            lint_combo(&built, combo.vp, combo.lang);
-            runs += 1;
-        }
-        assert_eq!(runs, RUNS_PER_SCENE);
-    }
-
-    /// Счётчик матрицы taffy-прогонов (паттерн `lint_covers_30_scenarios`):
-    /// полнота 5×3×2 = 30, уникальность, покрытие окон/языков — плюс
-    /// сквозной прогон ВСЕХ 30 комбинаций через taffy-путь с линтом.
-    #[test]
-    fn taffy_lint_covers_30_scenarios() {
-        assert_eq!(
-            SCENES.len() * VIEWPORTS.len() * Lang::ALL.len(),
-            30,
-            "постановка FR-068 W0: ровно 30 прогонов (та же матрица под taffy)"
-        );
-        let combos = matrix();
-        assert_eq!(combos.len(), 30, "счётчик комбинаций должен быть 30");
-
-        let mut seen = HashSet::new();
-        for combo in &combos {
-            assert!(
-                seen.insert(format!(
-                    "{}|{:?}|{}",
-                    combo.scene,
-                    combo.vp,
-                    combo.lang.tag()
-                )),
-                "дубликат комбинации: сцена {} {:?} {}",
-                combo.scene,
-                combo.vp,
-                combo.lang.tag()
-            );
-        }
-
-        let mut ctx = taffy_ctx();
-        let mut runs = 0;
-        for combo in combos {
-            let built = build(combo, &mut ctx);
-            lint_combo(&built, combo.vp, combo.lang);
-            runs += 1;
-        }
-        assert_eq!(
-            runs, 30,
-            "taffy-прогон должен покрыть все 30 комбинаций (5 сцен × 3 окна × 2 языка)"
-        );
     }
 }

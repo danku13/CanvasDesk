@@ -51,22 +51,20 @@ use crate::measure::TextMeasurer;
 
 // FR-068 W1: подмодули backend'ов вёрстки. `scene` — нейтральное к backend'ам
 // дерево расширенной сцены (percent/aspect/position/overflow — за пределами
-// V-5 примитивов); `taffy_backend` — opt-in TaffyBackend за фичей `taffy`
-// (default off — zero-dep инвариант G7, §Контракт-2 FR-068).
+// V-5 примитивов).
 // FR-068 W2: `flex` — собственный движок `FlexLayoutEngine` (0 deps,
 // встроен в крейт; маркер-фича `flex-engine` в default, §Контракт-2).
+// FR-068 W4: `taffy_backend` ВЫРЕЗАН — `FlexLayoutEngine` единственный
+// движок (zero-dep инвариант G7: 0 внешних UI-runtime-deps, кроме
+// cosmic-text за `Shaper` trait).
 mod flex;
 mod scene;
-#[cfg(feature = "taffy")]
-mod taffy_backend;
 
 pub use flex::FlexLayoutEngine;
 pub use scene::{
     SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneSize, SceneTrack, TrackMax,
     TrackMin,
 };
-#[cfg(feature = "taffy")]
-pub use taffy_backend::TaffyBackend;
 
 /// Выравнивание по поперечной оси контейнера (вертикаль в `Row`,
 /// горизонталь в `Column`).
@@ -680,51 +678,26 @@ pub trait LayoutBackend {
     ) -> Vec<UiRect>;
 }
 
-/// Backend по умолчанию (FR-068 §W2, файловая таблица W2 + §Контракт-4):
-/// с фичей `taffy` — [`TaffyBackend`] (полный бюджет flexbox+grid —
-/// переходное решение ADR-0014); без — [`FlexLayoutEngine`] — собственный
-/// движок (0 deps; zero-dep инвариант G7). W4: `taffy` вырезается,
-/// `FlexLayoutEngine` — единственный.
+/// Backend по умолчанию (FR-068 §W4): [`FlexLayoutEngine`] — собственный
+/// движок (0 deps; zero-dep инвариант G7). taffy вырезан (W4):
+/// `FlexLayoutEngine` — единственный движок вёрстки.
 pub fn default_backend() -> &'static dyn LayoutBackend {
-    #[cfg(feature = "taffy")]
-    {
-        &TAFFY
-    }
-    #[cfg(not(feature = "taffy"))]
-    {
-        &FLEX
-    }
+    &FLEX
 }
 
-/// Backend pilot-поверхностей (FR-068 W1, ADR-0014 §Решение п.5 P1):
-/// с фичей `taffy` — [`TaffyBackend`], без — [`NativeBackend`] (opt-in:
-/// pilot-поверхности вызывают `lay_out_with(pilot_backend(), ..)` и
-/// автоматически переключаются фичей; остальные потребители продолжают
-/// идти через [`default_backend`]). W2: без фичи остаётся Native —
-/// pilot-golden'ы W1 пинят Native-семантику на default-сборке
-/// (перевод пилотов на Flex — W3, staged миграция потребителей).
+/// Backend pilot-поверхностей (FR-068 W1): исторически — TaffyBackend за
+/// фичей `taffy`, без — Native. W4: taffy вырезан, функция сохранена для
+/// API-стабильности пилотов — возвращает [`NativeBackend`] (pilot-golden'ы
+/// W1 пинят Native-семантику).
 pub fn pilot_backend() -> &'static dyn LayoutBackend {
-    #[cfg(feature = "taffy")]
-    {
-        &TAFFY
-    }
-    #[cfg(not(feature = "taffy"))]
-    {
-        &NATIVE
-    }
+    &NATIVE
 }
 
 /// Backend'ы — ZST без состояния раскладки (immediate-mode): статика
-/// безопасна. `TaffyBackend` компилируется только за фичей `taffy`;
-/// `FlexLayoutEngine` (W2) — встроен всегда. Статики NATIVE/FLEX
-/// используются в ветках `pilot_backend`/`default_backend` без фичи
-/// `taffy` — под фичей мертвы (гейт dead_code).
-#[cfg(not(feature = "taffy"))]
+/// безопасна. `FlexLayoutEngine` — встроен всегда; `NativeBackend`
+/// используется `pilot_backend`.
 static NATIVE: NativeBackend = NativeBackend;
-#[cfg(not(feature = "taffy"))]
 static FLEX: FlexLayoutEngine = FlexLayoutEngine;
-#[cfg(feature = "taffy")]
-static TAFFY: TaffyBackend = TaffyBackend;
 
 /// Собственный backend (FR-062 F-13…F-18, ADR-0014 §Решение п.2): перенос
 /// текущих `Row/Column/grid_cells` в методы [`LayoutBackend`] 1:1 —

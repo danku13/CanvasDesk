@@ -193,10 +193,10 @@ impl LayoutBackend for FlexLayoutEngine {
             .map(|r| {
                 let (x, y, w, h) = (r.x, r.y, r.w, r.h);
                 UiRect::new(
-                    slot.x + taffy_round(x),
-                    slot.y + taffy_round(y),
-                    taffy_round(x + w) - taffy_round(x),
-                    taffy_round(y + h) - taffy_round(y),
+                    slot.x + round_px(x),
+                    slot.y + round_px(y),
+                    round_px(x + w) - round_px(x),
+                    round_px(y + h) - round_px(y),
                 )
             })
             .collect()
@@ -267,9 +267,10 @@ struct FlexChild {
     grow: f32,
 }
 
-/// Округление taffy (`util::sys::round`, std-путь) — дословная копия для
-/// побитового паритета round-layout (half-away-from-zero).
-fn taffy_round(value: f32) -> f32 {
+/// Округление к целой px-сетке (half-away-from-zero) — дословная копия
+/// `taffy::util::sys::round` (std-путь; провenance алгоритма round-layout
+/// W2; FR-068 W4: taffy вырезан, функция — часть собственного движка).
+fn round_px(value: f32) -> f32 {
     let f = if value == 0.0 { 0.0 } else { value % 1.0 };
     if f.is_nan() || f == 0.0 {
         value
@@ -306,10 +307,10 @@ fn finish_line(placed: &[Placed], axis: Axis, slot: UiRect) -> Vec<UiRect> {
                 Axis::Y => (p.cross, p.main, p.size_cross, p.size_main),
             };
             UiRect::new(
-                slot.x + taffy_round(x),
-                slot.y + taffy_round(y),
-                taffy_round(x + w) - taffy_round(x),
-                taffy_round(y + h) - taffy_round(y),
+                slot.x + round_px(x),
+                slot.y + round_px(y),
+                round_px(x + w) - round_px(x),
+                round_px(y + h) - round_px(y),
             )
         })
         .collect()
@@ -1294,14 +1295,14 @@ impl SceneTree {
             };
             cum[i] = (cx, cy);
             let (ax, ay) = match e.parent {
-                None => (slot.x + taffy_round(e.loc.0), slot.y + taffy_round(e.loc.1)),
+                None => (slot.x + round_px(e.loc.0), slot.y + round_px(e.loc.1)),
                 Some(p) => (
-                    rects[p].x + taffy_round(e.loc.0),
-                    rects[p].y + taffy_round(e.loc.1),
+                    rects[p].x + round_px(e.loc.0),
+                    rects[p].y + round_px(e.loc.1),
                 ),
             };
-            let w = taffy_round(cx + e.size.0) - taffy_round(cx);
-            let h = taffy_round(cy + e.size.1) - taffy_round(cy);
+            let w = round_px(cx + e.size.0) - round_px(cx);
+            let h = round_px(cy + e.size.1) - round_px(cy);
             rects[i] = UiRect::new(ax, ay, w, h);
         }
         rects

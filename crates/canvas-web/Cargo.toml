@@ -98,8 +98,3 @@ name = "canvas_web"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# FR-068 W1 (ADR-0014): passthrough фичи taffy (через canvas-app →
-# canvas-ui) для замера wasm-бандла с TaffyBackend (гейт W1: прирост
-# +370…380 КБ raw к default; §Контракт-7 FR-068 — замер на canvas-web
-# cdylib). Default — off (zero-dep, G7).
-taffy = ["canvas-app/taffy"]

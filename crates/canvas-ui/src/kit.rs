@@ -33,13 +33,7 @@ pub use crate::component::button::{
 pub use crate::component::dropdown::{
     dropdown_menu, toast_area, tooltip, viewport_clamp, DropdownLayout, TooltipLayout,
 };
-#[cfg(feature = "taffy")]
-pub use crate::component::dropdown::{dropdown_menu_taffy, toast_area_taffy, tooltip_taffy};
 pub use crate::component::list::{list_rows, scroll_bar, ScrollState};
-#[cfg(feature = "taffy")]
-pub use crate::component::list::{scroll_area_taffy, ScrollAreaTaffy};
-#[cfg(feature = "taffy")]
-pub use crate::component::modal::modal_taffy;
 pub use crate::component::modal::{focus_order, modal, modal_style, ModalLayout};
 pub use crate::component::panel::{
     card, control_style_of, panel_content, panel_rect, panel_style, panel_style_of, CardLayout,
