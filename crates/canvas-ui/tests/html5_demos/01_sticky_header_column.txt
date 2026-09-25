@@ -1,7 +1,7 @@
 00 root x=0 y=0 w=1280 h=800
 01 row x=0 y=0 w=1280 h=64
-02 leaf x=0 y=-120 w=120 h=64
-03 leaf x=136 y=-120 w=300 h=64
+02 leaf x=0 y=0 w=120 h=64
+03 leaf x=136 y=0 w=300 h=64
 04 col x=0 y=-56 w=1280 h=1364
 05 leaf x=0 y=-56 w=1280 h=160
 06 leaf x=0 y=116 w=1280 h=160

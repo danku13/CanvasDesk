@@ -114,14 +114,9 @@ fn form_section(rows: usize) -> SceneNode {
 /// `header { position: sticky; top: 0 }` внутри scroll-контейнера
 /// (mdn CSS `position: sticky`; css-tricks «Sticky Header»).
 /// Корень — scroll-контейнер (`.scrolled(120)`): sticky-заголовок клампится
-/// к `container_y + top` (y=0), контентные строки уезжают на −offset.
-///
-/// ЗАДОКУМЕНТИРОВАННОЕ расхождение с CSS (golden ФИКСИРУЕТ поведение,
-/// осознанный diff при починке): кламп sticky в `lay_out_scene` правит
-/// ТОЛЬКО rect самого sticky-узла — поддерево (логотип/навигация в шапке)
-/// остаётся на сдвинутых flow-позициях (y=−120), тогда как в HTML дети
-/// движутся вместе со sticky-родителем (позиционируются от него). Починка —
-/// трансляция поддерева на дельту клампа; см. отчёт FR-068 W1.
+/// к `container_y + top` (y=0) ВМЕСТЕ С ПОДДЕРЕВОМ (логотип/навигация
+/// движутся с шапкой, как в HTML — трансляция поддерева на дельту клампа),
+/// контентные строки уезжают на −offset.
 fn demo_01_sticky_header_column() -> SceneNode {
     let header = SceneNode::row(
         1280.0,
