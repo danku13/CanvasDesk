@@ -53,10 +53,14 @@ use crate::measure::TextMeasurer;
 // дерево расширенной сцены (percent/aspect/position/overflow — за пределами
 // V-5 примитивов); `taffy_backend` — opt-in TaffyBackend за фичей `taffy`
 // (default off — zero-dep инвариант G7, §Контракт-2 FR-068).
+// FR-068 W2: `flex` — собственный движок `FlexLayoutEngine` (0 deps,
+// встроен в крейт; маркер-фича `flex-engine` в default, §Контракт-2).
+mod flex;
 mod scene;
 #[cfg(feature = "taffy")]
 mod taffy_backend;
 
+pub use flex::FlexLayoutEngine;
 pub use scene::{
     SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneSize, SceneTrack,
 };
@@ -675,18 +679,29 @@ pub trait LayoutBackend {
     ) -> Vec<UiRect>;
 }
 
-/// Backend по умолчанию (FR-068 W1): [`NativeBackend`] — собственные
-/// примитивы FR-062 без внешних зависимостей (zero-dep инвариант G7).
-/// W2: переключение на `FlexLayoutEngine`/`TaffyBackend` (FR-068 §W2).
+/// Backend по умолчанию (FR-068 §W2, файловая таблица W2 + §Контракт-4):
+/// с фичей `taffy` — [`TaffyBackend`] (полный бюджет flexbox+grid —
+/// переходное решение ADR-0014); без — [`FlexLayoutEngine`] — собственный
+/// движок (0 deps; zero-dep инвариант G7). W4: `taffy` вырезается,
+/// `FlexLayoutEngine` — единственный.
 pub fn default_backend() -> &'static dyn LayoutBackend {
-    &NATIVE
+    #[cfg(feature = "taffy")]
+    {
+        &TAFFY
+    }
+    #[cfg(not(feature = "taffy"))]
+    {
+        &FLEX
+    }
 }
 
 /// Backend pilot-поверхностей (FR-068 W1, ADR-0014 §Решение п.5 P1):
 /// с фичей `taffy` — [`TaffyBackend`], без — [`NativeBackend`] (opt-in:
 /// pilot-поверхности вызывают `lay_out_with(pilot_backend(), ..)` и
 /// автоматически переключаются фичей; остальные потребители продолжают
-/// идти через [`default_backend`]).
+/// идти через [`default_backend`]). W2: без фичи остаётся Native —
+/// pilot-golden'ы W1 пинят Native-семантику на default-сборке
+/// (перевод пилотов на Flex — W3, staged миграция потребителей).
 pub fn pilot_backend() -> &'static dyn LayoutBackend {
     #[cfg(feature = "taffy")]
     {
@@ -699,8 +714,14 @@ pub fn pilot_backend() -> &'static dyn LayoutBackend {
 }
 
 /// Backend'ы — ZST без состояния раскладки (immediate-mode): статика
-/// безопасна. `TaffyBackend` компилируется только за фичей `taffy`.
+/// безопасна. `TaffyBackend` компилируется только за фичей `taffy`;
+/// `FlexLayoutEngine` (W2) — встроен всегда. Статики NATIVE/FLEX
+/// используются в ветках `pilot_backend`/`default_backend` без фичи
+/// `taffy` — под фичей мертвы (гейт dead_code).
+#[cfg(not(feature = "taffy"))]
 static NATIVE: NativeBackend = NativeBackend;
+#[cfg(not(feature = "taffy"))]
+static FLEX: FlexLayoutEngine = FlexLayoutEngine;
 #[cfg(feature = "taffy")]
 static TAFFY: TaffyBackend = TaffyBackend;
 
@@ -869,7 +890,10 @@ mod tests {
 
     /// SqueezeTail — дословная семантика бывшего `take`: каждый элемент
     /// получает min(desired, остаток); хвост — нулевой ширины; за слот
-    /// ничего не выходит.
+    /// ничего не выходит. FR-068 W2: пин на ЯВНЫХ backend'ах с дословной
+    /// семантикой — NativeBackend и FlexLayoutEngine (§Контракт-4:
+    /// «FlexLayoutEngine реализует SqueezeTail дословно»); taffy —
+    /// flex_shrink (расхождение C3, parity-тест — не fail).
     #[test]
     fn row_squeeze_tail_matches_take_semantics() {
         let r = Row {
@@ -878,13 +902,16 @@ mod tests {
             ..Row::default()
         };
         let small = UiRect::new(0.0, 0.0, 100.0, 30.0);
-        let rects = r.lay_out(
-            small,
-            &[
-                Child::fixed(60.0, 30.0),
-                Child::fixed(60.0, 30.0),
-                Child::fixed(60.0, 30.0),
-            ],
+        let items = [
+            Child::fixed(60.0, 30.0),
+            Child::fixed(60.0, 30.0),
+            Child::fixed(60.0, 30.0),
+        ];
+        let rects = NativeBackend.lay_out_row(r, small, &items);
+        let rects_flex = FlexLayoutEngine.lay_out_row(r, small, &items);
+        assert_eq!(
+            rects, rects_flex,
+            "§Контракт-4: SqueezeTail FlexLayoutEngine дословен как Native"
         );
         // Первый: 60 (0..60), x → 66; второй: min(60, 34) = 34 (66..100),
         // x → 106 (за слот); третий: остаток 0.
@@ -982,7 +1009,11 @@ mod tests {
     // === FR-062 F-14: flex-факторы ===
 
     /// Свободное место распределяется пропорционально grow (2:1);
-    /// сумма ширин + зазоры = слот ровно.
+    /// сумма ширин + зазоры = слот ровно. FR-068 W2: пин на NativeBackend
+    /// (без округления) — FlexLayoutEngine/taffy округляют целевые
+    /// main-размеры по CSS §9.7 (rounding on freeze — расхождение ≤ 0.5
+    /// ui px на долю, задокументировано в тестах taffy_backend); Flex-пин
+    /// округления — отдельный тест ниже (после реализации движка).
     #[test]
     fn row_grow_distributes_free_space_proportionally() {
         let r = Row {
@@ -990,7 +1021,8 @@ mod tests {
             ..Row::default()
         };
         let slot = slot(); // 300
-        let rects = r.lay_out(
+        let rects = NativeBackend.lay_out_row(
+            r,
             slot,
             &[
                 Child::fixed(80.0, 30.0),
@@ -1089,31 +1121,41 @@ mod tests {
         approx(rects[1].bottom(), 250.0);
     }
 
-    /// Деградация приоритетна: SqueezeTail игнорирует grow.
+    /// Деградация приоритетна: SqueezeTail игнорирует grow. FR-068 W2:
+    /// пин на ЯВНЫХ backend'ах с дословной семантикой (NativeBackend +
+    /// FlexLayoutEngine, §Контракт-4); taffy — flex_shrink (C3).
     #[test]
     fn squeeze_tail_ignores_grow() {
-        let fixed = Row {
-            gap: 6.0,
-            policy: RowPolicy::SqueezeTail,
-            ..Row::default()
+        let slot = UiRect::new(0.0, 0.0, 100.0, 30.0);
+        let fixed_items = [Child::fixed(60.0, 30.0), Child::fixed(60.0, 30.0)];
+        let flex_items = [
+            Child::flexible(60.0, 30.0, 10.0),
+            Child::flexible(60.0, 30.0, 5.0),
+        ];
+        for (name, backend) in [
+            ("Native", &NativeBackend as &dyn LayoutBackend),
+            ("Flex", &FlexLayoutEngine as &dyn LayoutBackend),
+        ] {
+            let fixed = backend.lay_out_row(
+                Row {
+                    gap: 6.0,
+                    policy: RowPolicy::SqueezeTail,
+                    ..Row::default()
+                },
+                slot,
+                &fixed_items,
+            );
+            let flex = backend.lay_out_row(
+                Row {
+                    gap: 6.0,
+                    policy: RowPolicy::SqueezeTail,
+                    ..Row::default()
+                },
+                slot,
+                &flex_items,
+            );
+            assert_eq!(fixed, flex, "grow игнорируется ({name})");
         }
-        .lay_out(
-            UiRect::new(0.0, 0.0, 100.0, 30.0),
-            &[Child::fixed(60.0, 30.0), Child::fixed(60.0, 30.0)],
-        );
-        let flex = Row {
-            gap: 6.0,
-            policy: RowPolicy::SqueezeTail,
-            ..Row::default()
-        }
-        .lay_out(
-            UiRect::new(0.0, 0.0, 100.0, 30.0),
-            &[
-                Child::flexible(60.0, 30.0, 10.0),
-                Child::flexible(60.0, 30.0, 5.0),
-            ],
-        );
-        assert_eq!(fixed, flex);
     }
 
     // === FR-062 F-15: Wrap ===
@@ -1260,7 +1302,10 @@ mod tests {
             approx(mr.w, mn.w);
             assert!(mr.x >= mn.x - 0.01 && mr.x <= mn.x + 0.01, "x[{i}]");
         }
-        // высота текст-ребёнка — из измерения (kегль·фактор строки)
+        // высота текст-ребёнка — из измерения (кегль·фактор строки).
+        // FR-068 W2: на taffy-default сборке высота приведена к px-сетке
+        // (round_layout ≤ 0.5 ui px, пин (g2) backend_parity) — допуск 0.5
+        // документированного расхождения; на Native/Flex-стабе — дословно.
         let spec = crate::measure::TextSpec {
             text: labels[0],
             family,
@@ -1269,7 +1314,12 @@ mod tests {
             weight: cosmic_text::Weight::MEDIUM,
         };
         let measured_h = m.measure(&mut fs, &spec).height;
-        approx(measured[0].h, measured_h);
+        assert!(
+            (measured[0].h - measured_h).abs() <= 0.5 + 1e-4,
+            "высота text-ребёнка ≈ измеренной (допуск round_layout 0.5): {} vs {}",
+            measured[0].h,
+            measured_h
+        );
     }
 
     /// Кламп ширины — только явный max_w; min_w поднимает короткие.

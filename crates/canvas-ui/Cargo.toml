@@ -26,6 +26,19 @@ canvas-core.workspace = true
 taffy = { workspace = true, optional = true }
 
 [features]
+# FR-068 W2: default — flex-engine (встроенный, 0 deps; §Контракт-2:
+# default сборка — 0 внешних UI-runtime-deps). `taffy`/`mock-shaper` — off.
+default = ["flex-engine"]
 # FR-068 W1: включает `TaffyBackend` (layout/taffy_backend.rs). Default —
-# выключено: все потребители идут через `default_backend()` = NativeBackend.
+# выключено: `default_backend()` без фичи уходит в `FlexLayoutEngine`.
 taffy = ["dep:taffy"]
+# FR-068 W2: маркер-фича собственного движка `FlexLayoutEngine`
+# (layout/flex.rs). ПУСТАЯ ([]) и в default: движок встроен в крейт
+# (0 deps — zero-dep инвариант G7 не зависит от флага), фича — семантический
+# маркер выбора движка для потребителей/CI (`--features flex-engine`).
+flex-engine = []
+# FR-068 W2: `MockShaper` (shaper.rs) — детерминированный шейпер для
+# тестов (не для продакшна). Добавляет реализацию, НЕ меняет default:
+# `TextMeasurer::new()` всегда CosmicShaper (реальный шейпинг = метрики
+# рендера, CR-015); мок — только через `TextMeasurer::with_shaper`.
+mock-shaper = []

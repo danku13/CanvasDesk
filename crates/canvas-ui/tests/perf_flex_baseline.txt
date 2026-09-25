@@ -1,0 +1,11 @@
+# CanvasDesk FR-068 W2 — perf baseline reflow на FlexLayoutEngine (crates/canvas-ui/tests/perf_flex.rs)
+# Граф (идентичен perf_baseline.rs): viewport 1280×800 → constrain/stack (stage 1200×760) → pad(16) →
+# Column(10) через ЯВНЫЙ FlexLayoutEngine → 5×Row Fit + 2×Row Wrap + 2×Row SqueezeTail (по 100 Child) +
+# grid_cells 10×10 = РОВНО 1000 листовых rect'ов за reflow; размеры детерминированы формулами от индекса (без RNG).
+# Контейнерные rect'ы строк в 1000 не входят. SqueezeTail в графе осознанно: Flex реализует политику дословно (§Контракт-4).
+# Метрика: медиана 200 reflow-прогонов после 20 прогревочных, μs; профиль cargo test (debug).
+# Baseline МАШИННО-ЗАВИСИМ — референс dev-машины; сравнение: регрессия > 20% — fail, улучшение > 20% — warn (§8 FR-068).
+# ⚠️ W2-стаб: FlexLayoutEngine может делегировать NativeBackend — финальный baseline перегенерируется лидом
+# на интеграции волны W2 (CANVAS_UI_UPDATE_PERF_FLEX=1).
+# Дата записи: 2026-09-25
+median_us=203.056
