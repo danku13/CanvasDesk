@@ -12,6 +12,17 @@
 target = "index.html"
 dist = "../../target/dist"
 
+# FR-028 v2: копирование inline-tour bundle (sdk/web-onboarding/) в dist —
+# index.html подключает `<script src="canvasdesk-tour.js">` (относительно
+# dist-корня). Без этой директивы bundle при dev-сервере не находится,
+# движок тура не инициализируется. Источник — vanilla JS (не требует
+# сборки), копия в dist — всегда свежая (mtime обновляется при trunk
+# build/serve). См. sdk/web-onboarding/README.md.
+[[hooks]]
+stage = "build"
+command = "sh"
+command_arguments = ["-c", "cp ../../sdk/web-onboarding/canvasdesk-tour.js ${TRUNK_STAGING_DIR:-../../target/dist}/canvasdesk-tour.js"]
+
 [serve]
 # приёмка прошивки W4: `trunk serve` → http://127.0.0.1:8080
 port = 8080

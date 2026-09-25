@@ -21,6 +21,7 @@ pub mod opfs;
 pub mod panic_hook;
 pub mod recent;
 pub mod renderer_launch;
+pub mod tour_signal;
 pub mod url_params;
 pub mod web_clipboard;
 pub mod web_log;

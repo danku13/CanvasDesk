@@ -170,9 +170,30 @@ window.__canvasdeskTour.signal("canvas:note-created", { id: "n_1" });
 
 ## Запуск
 
+### Standalone smoke test (без Rust/WASM)
+
+`sdk/web-onboarding/standalone-test.html` — отдельная HTML-страница для
+ручной проверки движка. Грузит `canvasdesk-tour.js`, эмулирует
+mock-панель хранилища (#w6-toolbar с кнопками) и предлагает кнопки
+запуска каждого сценария + ручную отправку сигналов в tour-bus.
+
+Открыть можно двумя способами:
+
+```sh
+# Вариант 1: file:// (browser открывает напрямую)
+$BROWSER sdk/web-onboarding/standalone-test.html
+
+# Вариант 2: через http-сервер (для тестирования fetch и т.п.)
+cd sdk/web-onboarding
+python3 -m http.server 8090
+# → http://localhost:8090/standalone-test.html
+```
+
 ### Vanilla (canvas-web `index.html`)
 
-Кнопка «Тур» в `#w6-toolbar` открывает picker сценария. URL-hash
+Кнопка «Тур» в `#w6-toolbar` открывает **dropdown-меню** со списком
+сценариев (раньше был `prompt()` — заменили на стилизуемый DOM-menu
+с aria-haspopup / role=menu / Esc для закрытия). URL-hash
 `#tour=cd-toolbar-tour` запускает автоматически — точка входа для
 deeplink-онбординга из маркетинговых писем или подсказок.
 

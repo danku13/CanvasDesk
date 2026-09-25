@@ -600,7 +600,15 @@
 
     var rect = resolveAnchor(step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, step.highlight || undefined);
+    // Passive steps (no Next button) — user must perform an action on
+    // the host surface. Disable dim so clicks reach the canvas.
+    var highlightOpts = step.highlight || {};
+    if (step.passive) {
+      if (highlightOpts.dim === undefined || highlightOpts.dim === null) {
+        highlightOpts.dim = false;
+      }
+    }
+    this.highlight.setAnchor(rect, highlightOpts);
 
     var ctx = {
       container: this.container, step: step, index: index, total: a.scenario.steps.length,
@@ -643,7 +651,11 @@
       wait.promise.then(function () {
         if (!a.wait) return;
         a.wait.resolved = true;
-        if (a.scenario.autoAdvance) self.next();
+        // Passive step (no Next button) — waitFor resolving is the
+        // only path forward. Always advance, regardless of
+        // scenario.autoAdvance. For non-passive steps, respect the
+        // scenario.autoAdvance flag (default false — user clicks Next).
+        if (a.scenario.autoAdvance || step.passive) self.next();
       }).catch(function (e) {
         if (e instanceof WaitForError) self.log("warn", "waitFor soft-failed: " + e.message);
         else self.log("error", "waitFor crashed: " + e.message);
@@ -687,7 +699,13 @@
     var a = this.active;
     var rect = resolveAnchor(a.step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, a.step.highlight || undefined);
+    // Same passive-dim logic as activateStep — rAF refresh must not
+    // re-enable dim (would re-block canvas clicks every frame).
+    var rOpts = a.step.highlight ? Object.assign({}, a.step.highlight) : {};
+    if (a.step.passive && (rOpts.dim === undefined || rOpts.dim === null)) {
+      rOpts.dim = false;
+    }
+    this.highlight.setAnchor(rect, rOpts);
     if (a.tooltipEl) this.placeTooltip(a.tooltipEl, a.step.side || "bottom", rect);
   };
 
