@@ -17,3 +17,15 @@ cosmic-text.workspace = true
 # кит-стили — только spacing/radius-scale токенов canvas-core (внутренняя
 # зависимость, 0 новых внешних — G7; цикла нет: canvas-core самодостаточен).
 canvas-core.workspace = true
+# FR-068 W1 (ADR-0014): taffy — opt-in backend вёрстки за фичей `taffy`
+# (default off — zero-dep инвариант PRD-0009 G7 сохранён: default сборка
+# НЕ содержит taffy, `cargo build --no-default-features` не компилирует
+# `TaffyBackend`). Полный бюджет flexbox+grid+block — решение владельца
+# (ADR-0014 N3: +376 КБ wasm raw при активации, ≤8 МБ raw / ≤4 МБ brotli
+# сохраняется). W4 FR-068: taffy вырезается (FlexLayoutEngine W2).
+taffy = { workspace = true, optional = true }
+
+[features]
+# FR-068 W1: включает `TaffyBackend` (layout/taffy_backend.rs). Default —
+# выключено: все потребители идут через `default_backend()` = NativeBackend.
+taffy = ["dep:taffy"]
