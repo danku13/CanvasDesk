@@ -201,6 +201,7 @@ pub fn body_quad_instance(
         fill: body_quad_fill(quad.kind, theme),
         border,
         params: [radius / entry_zoom, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -213,6 +214,13 @@ fn screen_instance_to_world(camera: &Camera, viewport: Vec2, inst: &CardInstance
     out.size = [inst.size[0] / zoom, inst.size[1] / zoom];
     // Радиус скругления (params.x) тоже задан в логических px
     out.params[0] /= zoom;
+    // FR-075: пер-угловые радиусы — та же размерность, что params.x
+    out.corners = [
+        inst.corners[0] / zoom,
+        inst.corners[1] / zoom,
+        inst.corners[2] / zoom,
+        inst.corners[3] / zoom,
+    ];
     out
 }
 
@@ -909,6 +917,7 @@ impl Renderer {
             // мелкие (2px), мягкая тень карточек (−6..+6px, offset 4) даёт
             // размытое тёмное пятно, мешающее вводу текста (приёмка п.6)
             params: [0.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         }
     }
 
@@ -1150,6 +1159,7 @@ impl Renderer {
                     fill: self.theme.edge_label_fill,
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 };
                 dim_instance(&mut backdrop, label_factor);
                 label_backdrops.push(backdrop);
@@ -1237,6 +1247,7 @@ impl Renderer {
                     fill: self.theme.edge_label_fill,
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
                 edge_labels.push(EdgeLabel {
                     id,
@@ -1318,6 +1329,7 @@ impl Renderer {
                             fill: self.theme.edge_edit_fill,
                             border: self.theme.accent,
                             params: [6.0, 1.0, 0.0, 0.0],
+                            corners: [0.0; 4],
                         });
                         let zoom_px = camera.zoom() * self.scale_factor;
                         for rect in session.selection_rects(self.text.font_system_mut()) {
@@ -2034,6 +2046,7 @@ mod tests {
             fill: [0.0; 4],
             border: [0.0; 4],
             params: [4.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         };
         let center = |y: f32| [120.0, y + 9.0];
         // Две метки в одной точке + одна далеко ниже (не пересекается).
@@ -2170,6 +2183,7 @@ mod tests {
             fill: [0.1, 0.1, 0.1, 1.0],
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         }
     }
 

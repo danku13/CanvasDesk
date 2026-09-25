@@ -1121,6 +1121,7 @@ fn icon_quad(
         fill: fill.unwrap_or([0.0; 4]),
         border: border.unwrap_or([0.0; 4]),
         params: [radius, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     });
 }
 

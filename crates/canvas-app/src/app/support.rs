@@ -56,6 +56,7 @@ pub(super) fn screen_rect_quad(
         fill,
         border,
         params: [radius / zoom, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -93,6 +94,7 @@ pub(super) fn paint_items_to_band(
                 fill,
                 border,
                 params: [radius, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             }),
             PaintItem::Text {
                 area,
@@ -155,6 +157,7 @@ pub(super) fn paint_items_to_stage(
                 fill,
                 border,
                 params: [radius / zoom, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             }),
             PaintItem::Text {
                 area,
@@ -216,6 +219,7 @@ pub(super) fn screen_dot(
         fill,
         border: [0.0; 4],
         params: [r, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -689,6 +693,7 @@ pub(super) fn template_card_row(
         fill,
         border,
         params: [6.0, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     });
     // Плитка иконки (скруглённый квадрат) + квад-иконка роли
     let tile = [
@@ -703,6 +708,7 @@ pub(super) fn template_card_row(
         fill: palette.palette_tile_fill,
         border: [0.0; 4],
         params: [6.0, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     });
     instances.extend(template_icon_quads(
         template_ui::icon_key(manifest),

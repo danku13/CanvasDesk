@@ -268,6 +268,7 @@ pub(crate) fn band_rect_quad_pub(
         fill,
         border,
         params: [radius, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 

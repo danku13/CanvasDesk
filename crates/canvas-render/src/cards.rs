@@ -111,6 +111,7 @@ pub fn analysis_ring_instance(node: &Node, border: [f32; 4]) -> CardInstance {
         fill: [0.0; 4],
         border,
         params: [CORNER_RADIUS + GROW, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -273,10 +274,18 @@ pub struct CardInstance {
     /// x — радиус (world px), y — selected (0/1), z — broken (0/1),
     /// w — без тени (0/1, мелкие квады связей/портов, T8).
     pub params: [f32; 4],
+    /// FR-075 W0: пер-угловой радиус (world px) в CSS-порядке
+    /// `border-radius`: [top-left, top-right, bottom-right, bottom-left].
+    /// Все нули — шейдер использует `params.x` (обратная совместимость:
+    /// существующие строители не задают corners — вид прежний). Отличие от
+    /// CSS: радиусы НЕ редуцируются при перекрытии (клип-семантика SDF) —
+    /// полоса категории высотой 6 px с верхним радиусом 8 повторяет дугу
+    /// карточки, а не обрезается по полувысоте (fr-075 §5 W0).
+    pub corners: [f32; 4],
 }
 
 impl CardInstance {
-    const FLOATS: usize = 16;
+    const FLOATS: usize = 20;
 
     fn write_to(&self, out: &mut Vec<u8>) {
         for group in [
@@ -285,11 +294,30 @@ impl CardInstance {
             &self.fill[..],
             &self.border[..],
             &self.params[..],
+            &self.corners[..],
         ] {
             for value in group {
                 out.extend_from_slice(&value.to_ne_bytes());
             }
         }
+    }
+}
+
+/// Радиус скругления в квадранте точки `p` (физ. px относительно центра,
+/// y-вниз — та же система, что в `cards.wgsl::fs_main`). Зеркалит шейдерную
+/// `corner_radius` (cards.wgsl): все нули corners → `fallback` (params.x),
+/// иначе выбор по квадранту. Чистая функция — юнит-тесты пинят согласие
+/// Rust-оракула с шейдером (шейдер юнит-тестами не покрывается).
+pub fn corner_radius_at(corners: [f32; 4], fallback: f32, p: [f32; 2]) -> f32 {
+    let [tl, tr, br, bl] = corners;
+    if tl + tr + br + bl <= 0.0 {
+        return fallback;
+    }
+    match (p[1] < 0.0, p[0] < 0.0) {
+        (true, true) => tl,
+        (true, false) => tr,
+        (false, false) => br,
+        (false, true) => bl,
     }
 }
 
@@ -319,6 +347,7 @@ pub fn card_instance(node: &Node, selected: bool, theme: &ThemeColors) -> CardIn
         },
         border,
         params: [CORNER_RADIUS, f32::from(selected), f32::from(broken), 0.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -375,7 +404,11 @@ pub fn template_band_instance(node: &Node) -> Option<CardInstance> {
         size: [node.width, TEMPLATE_BAND_H.min(node.height)],
         fill,
         border: [0.0; 4],
-        params: [0.0, 0.0, 0.0, 1.0], // без скругления и тени
+        params: [0.0, 0.0, 0.0, 1.0], // без тени
+        // FR-075 W0: верхние углы повторяют дугу карточки (радиус карточки),
+        // нижние прямые — квадратные «уголки» полосы больше не выступают
+        // за скруглённый силуэт карточки (дефект ревизии fr-075 §2).
+        corners: [CORNER_RADIUS, CORNER_RADIUS, 0.0, 0.0],
     })
 }
 
@@ -395,6 +428,7 @@ pub fn template_icon_quads(icon: &str, rect: [f32; 4], tint: [f32; 4]) -> Vec<Ca
             fill: if outline { [0.0; 4] } else { fill },
             border: if outline { fill } else { [0.0; 4] },
             params: [1.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
     };
     let fill = tint;
@@ -626,6 +660,7 @@ pub fn widget_header_hover_instance(node: &Node) -> CardInstance {
         fill: WIDGET_CHROME_HOVER_FILL,
         border: [0.0; 4],
         params: [CORNER_RADIUS, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -825,6 +860,7 @@ fn dot(center: [f32; 2], d: f32, fill: [f32; 4]) -> CardInstance {
         fill,
         border: [0.0; 4],
         params: [d / 2.0, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -1422,6 +1458,7 @@ pub fn drop_ghost(pos: Vec2, card_size: [f32; 2]) -> CardInstance {
         fill: DROP_GHOST_FILL,
         border: DROP_GHOST_BORDER,
         params: [CORNER_RADIUS, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     }
 }
 
@@ -1458,6 +1495,7 @@ pub fn drop_zone_frame(positions: &[Vec2], card_size: [f32; 2], gap: f32) -> Opt
         fill: [0.0; 4],
         border: DROP_ZONE_BORDER,
         params: [CORNER_RADIUS, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
     })
 }
 
@@ -1543,6 +1581,7 @@ impl CardsPipeline {
                 2 => Float32x4, // fill
                 3 => Float32x4, // border
                 4 => Float32x4, // params
+                5 => Float32x4, // corners (FR-075 W0)
             ],
         };
 
@@ -2128,6 +2167,7 @@ mod tests {
             fill: [1.0, 0.5, 0.25, 1.0],
             border: [1.0, 1.0, 1.0, 0.5],
             params: [5.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         };
         dim_instance(&mut inst, 1.0);
         assert_eq!(inst.fill[3], 1.0, "фактор 1 — нет изменений");
@@ -2422,12 +2462,56 @@ mod tests {
             fill: [0.1, 0.2, 0.3, 1.0],
             border: [0.0; 4],
             params: [8.0, 1.0, 0.0, 0.0],
+            corners: [2.0, 3.0, 4.0, 5.0],
         };
         let mut bytes = Vec::new();
         instance.write_to(&mut bytes);
         assert_eq!(bytes.len(), CardInstance::FLOATS * 4);
         assert_eq!(&bytes[0..4], &1.0f32.to_ne_bytes());
         assert_eq!(&bytes[48..52], &8.0f32.to_ne_bytes());
+        // FR-075 W0: corners сериализуются 6-й группой (байты 64..80)
+        assert_eq!(&bytes[64..68], &2.0f32.to_ne_bytes());
+        assert_eq!(&bytes[76..80], &5.0f32.to_ne_bytes());
+    }
+
+    /// FR-075 W0: полоса категории скругляет только ВЕРХНИЕ углы (радиус
+    /// карточки) — квадратные «уголки» больше не выступают за силуэт.
+    #[test]
+    fn template_band_has_top_corner_radius() {
+        let mut node = Node::text("tpl", "rps = 1000", 0.0, 0.0);
+        node.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps, $service_rate, $servers)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик нагрузки".to_owned()),
+            outputs: Vec::new(),
+        }));
+        let band = template_band_instance(&node).expect("у шаблонной ноды полоса есть");
+        assert_eq!(band.corners, [CORNER_RADIUS, CORNER_RADIUS, 0.0, 0.0]);
+        assert_eq!(band.params, [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    /// FR-075 W0: Rust-оракул `corner_radius_at` зеркалит шейдерную
+    /// `corner_radius` (cards.wgsl): fallback при нулевых corners,
+    /// выбор по квадранту при заданных (p в физ. px, y-вниз).
+    #[test]
+    fn corner_radius_quadrant_selection() {
+        // нулевые corners → fallback (params.x)
+        assert_eq!(corner_radius_at([0.0; 4], 8.0, [-1.0, -1.0]), 8.0);
+        assert_eq!(corner_radius_at([0.0; 4], 8.0, [5.0, 5.0]), 8.0);
+        // заданы все: [tl, tr, br, bl]; y-вниз → верх = p.y<0, лево = p.x<0
+        let c = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(corner_radius_at(c, 9.0, [-1.0, -1.0]), 1.0); // top-left
+        assert_eq!(corner_radius_at(c, 9.0, [1.0, -1.0]), 2.0); // top-right
+        assert_eq!(corner_radius_at(c, 9.0, [1.0, 1.0]), 3.0); // bottom-right
+        assert_eq!(corner_radius_at(c, 9.0, [-1.0, 1.0]), 4.0); // bottom-left
+                                                                // частичные corners (полоса: верх скруглён, низ прямые)
+        let band = [8.0, 8.0, 0.0, 0.0];
+        assert_eq!(corner_radius_at(band, 0.0, [-1.0, -1.0]), 8.0);
+        assert_eq!(corner_radius_at(band, 0.0, [1.0, 1.0]), 0.0);
     }
 
     /// Паттерн «сплошная»: плотная цепочка от начала до конца с шагом 0.8d.

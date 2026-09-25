@@ -244,6 +244,7 @@ impl App {
                 fill: pill_style.fill,
                 border: pill_style.border,
                 params: [pill_style.radius, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             let (pill_box, pill_width) = centered_box(pill, 4.0);
             texts.push(OwnedScreenText {
@@ -263,6 +264,7 @@ impl App {
             fill,
             border,
             params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         };
         // FR-055 (этап U4): контейнер бара — через кит (kit::panel_style_of:
         // явные слоты menu_fill + DIALOG-рамка, канонический радиус 8 —
@@ -279,6 +281,7 @@ impl App {
             fill: bar_style.fill,
             border: bar_style.border,
             params: [bar_style.radius, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         // Индикатор режима.
         texts.push(OwnedScreenText {
@@ -394,6 +397,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: [0.35, 0.40, 0.50, 1.0],
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             if rows.is_empty() {
                 texts.push(OwnedScreenText {
@@ -452,6 +456,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: [0.35, 0.40, 0.50, 1.0],
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             for (c, rect) in table.header.iter().enumerate() {
                 texts.push(OwnedScreenText {
@@ -633,6 +638,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.22, 0.24, 0.30, 0.9],
             params: [8.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         let input = rect_xywh(lay.input_rect);
         instances.push(CardInstance {
@@ -641,6 +647,7 @@ impl App {
             fill: palette.search_input_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         // Каретка — литерал «|» в конце текста (MVP, без мерцания)
         let query_with_caret = format!("{}|", self.search.input.query());
@@ -674,6 +681,7 @@ impl App {
                 },
                 border: [0.0; 4],
                 params: [4.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
                 text: entry.title.clone(),
@@ -1488,6 +1496,7 @@ impl App {
             fill: palette.menu_fill,
             border: palette.palette_border,
             params: [10.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         // Шапка + счётчик
         texts.push(OwnedScreenText {
@@ -1525,6 +1534,7 @@ impl App {
             fill: close_style.fill,
             border: close_style.border,
             params: [close_style.radius, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: "×".to_owned(),
@@ -1541,6 +1551,7 @@ impl App {
             fill: palette.search_input_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: if self.scheme_gallery.filter.is_empty() {
@@ -1567,6 +1578,7 @@ impl App {
                 },
                 border: palette.palette_border,
                 params: [12.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             let label = match category {
                 None => self.tr(keys::GALLERY_ALL).to_owned(),
@@ -1620,6 +1632,7 @@ impl App {
                 },
                 border: palette.palette_border,
                 params: [8.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
                 // FR-053 (U3): метка из раскладки — измеренный Ellipsis.
@@ -1686,6 +1699,7 @@ impl App {
             fill: palette.menu_fill,
             border: palette.palette_border,
             params: [10.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: self.tr(keys::GALLERY_EMPTY_TITLE).to_owned(),
@@ -1742,6 +1756,7 @@ impl App {
                 },
                 border: palette.palette_border,
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
                 text: self.tr(label_key).to_owned(),
@@ -2061,6 +2076,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: palette.palette_border,
                 params: [8.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             // Шапка: название + счётчик шаблонов
             let total = template_ui::template_row_count(&rows);
@@ -2091,6 +2107,7 @@ impl App {
                 fill: palette.palette_chip_fill,
                 border: [0.0; 4],
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
                 text: "‹".to_owned(),
@@ -2108,6 +2125,7 @@ impl App {
                 fill: palette.search_input_fill,
                 border: [0.0; 4],
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
                 text: if self.template_panel.filter.is_empty() {
@@ -2137,6 +2155,7 @@ impl App {
                     },
                     border: [0.0; 4],
                     params: [11.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
                 texts.push(OwnedScreenText {
                     text: name.clone(),
@@ -2241,6 +2260,7 @@ impl App {
                             fill: ghost.fill,
                             border: ghost.border,
                             params: ghost.params,
+                            corners: [0.0; 4],
                         });
                     }
                 }
@@ -2276,6 +2296,7 @@ impl App {
             fill: palette.menu_fill,
             border: palette.palette_border,
             params: [8.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         // Строки категорий: hover-подсветка под курсором и у раскрытой
         for (i, (rect, name)) in strip.rows.iter().enumerate() {
@@ -2290,6 +2311,7 @@ impl App {
                 },
                 border: [0.0; 4],
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             let count = self.templates.by_category(name).len();
             texts.push(OwnedScreenText {
@@ -2308,6 +2330,7 @@ impl App {
             fill: palette.palette_chip_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: "»".to_owned(),
@@ -2332,6 +2355,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: palette.palette_border,
                 params: [8.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             for (v, rect) in fly.row_rects.iter().enumerate() {
                 let Some(manifest) = items.get(fly.scroll_top + v) else {
@@ -2530,6 +2554,7 @@ impl App {
             },
             border: BORDER,
             params: [hw / 2.0, 0.0, 0.0, 1.0], // круг — радиус = половина стороны
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: if let Some(category) = &menu.category {
@@ -2571,6 +2596,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // Заголовок — приглушённым тоном (не пункт, не интерактивен)
         texts.push(OwnedScreenText {
@@ -2594,6 +2620,7 @@ impl App {
                     fill: [0.24, 0.30, 0.42, 0.9],
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
             }
             texts.push(OwnedScreenText {
@@ -2623,6 +2650,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // Hover-подсветка пункта (аффорданс — как строки палитры/поиска:
         // интерактивный элемент отвечает на курсор).
@@ -2686,6 +2714,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: [0.0; 4],
                 params: [6.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
             if submenu.entries.is_empty() {
                 texts.push(OwnedScreenText {
@@ -2765,6 +2794,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         let hovered = docs_ui::help_menu_item_at(menu.origin, self.cursor);
         for (i, item) in docs_ui::HELP_MENU_ITEMS.iter().enumerate() {
@@ -2776,6 +2806,7 @@ impl App {
                     fill: [0.24, 0.30, 0.42, 0.9],
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
             }
             texts.push(OwnedScreenText {
@@ -2796,6 +2827,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: [0.0; 4],
                 params: [6.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
             let hovered_sub = docs_ui::help_submenu_item_at(sub, self.cursor);
             for (i, page) in docs_ui::DOCS_PAGES.iter().enumerate() {
@@ -2807,6 +2839,7 @@ impl App {
                         fill: [0.24, 0.30, 0.42, 0.9],
                         border: [0.0; 4],
                         params: [4.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                 }
                 texts.push(OwnedScreenText {
@@ -2850,6 +2883,7 @@ impl App {
                 fill: [0.02, 0.02, 0.04, 0.45],
                 border: [0.0; 4],
                 params: [0.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
         }
         // Панель
@@ -2859,6 +2893,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // Шапка: раздел + × (hover-аффорданс)
         let close = docs_ui::viewer_close_rect(panel);
@@ -2873,6 +2908,7 @@ impl App {
             },
             border: [0.0; 4],
             params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: "×".to_owned(),
@@ -2949,6 +2985,7 @@ impl App {
                 },
                 border: [0.0; 4],
                 params: [0.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
         }
         // Подчёркивания внутренних ссылок (кликабельный аффорданс)
@@ -2963,6 +3000,7 @@ impl App {
                 fill: color_to_rgba(palette.link),
                 border: [0.0; 4],
                 params: [0.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
         }
         // Скроллбар-аффорданс справа (ползунок по пропорции offset/max)
@@ -2980,6 +3018,7 @@ impl App {
                 fill: [0.35, 0.38, 0.46, 0.7],
                 border: [0.0; 4],
                 params: [3.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
         }
         // Футер-подсказка
@@ -3018,6 +3057,7 @@ impl App {
             fill: [0.02, 0.02, 0.04, 0.55],
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
         instances.push(CardInstance {
@@ -3026,6 +3066,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [10.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         let text_x = card[0] + onboarding_ui::ONBOARDING_PAD;
         let text_w = card[2] - onboarding_ui::ONBOARDING_PAD * 2.0;
@@ -3053,6 +3094,7 @@ impl App {
                 },
                 border: [0.0; 4],
                 params: [r, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
         }
         // Тело шага (строки переноса — тот же источник, что высота карточки)
@@ -3121,6 +3163,7 @@ impl App {
                     },
                 ],
                 params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
                 text: label,
@@ -3718,6 +3761,7 @@ impl App {
             border: [0.0; 4],
             // params.y = рамка выделения: подсветка кнопки при открытой панели
             params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // Иконка настроек — КВАДАМИ, не текстовым глифом: «⚙» (U+2699)
         // отсутствует в Noto Sans Display/Mono и рисовалась тофу-квадом
@@ -3732,6 +3776,7 @@ impl App {
                     fill: track_fill,
                     border: [0.0; 4],
                     params: [1.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
                 instances.push(CardInstance {
                     pos: [icon[0] + knob_x, icon[1] + row - 2.0],
@@ -3739,6 +3784,7 @@ impl App {
                     fill: track_fill,
                     border: [0.0; 4],
                     params: [3.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
             }
         }
@@ -3756,6 +3802,7 @@ impl App {
             },
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // Иконка темы — квадами: «☀»/«🌙» (U+2600/U+1F319) тоже вне
         // покрытия шрифтов (тофу). Показ цели: тёмная тема — залитый круг
@@ -3770,6 +3817,7 @@ impl App {
             fill: theme_circle_fill,
             border: color_to_rgba(palette.title),
             params: [8.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         // FR-040 v2: кнопка переключения языка (RU/EN) — третий элемент
         // кластера (⚙ → ☼ → RU/EN → ?). Иконка — короткий код активного
@@ -3787,6 +3835,7 @@ impl App {
             },
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             // Код языка — на языке самого языка («RU»/«EN»), конвенция
@@ -3815,6 +3864,7 @@ impl App {
             },
             border: [0.0; 4],
             params: [8.0, self.help_menu.is_some() as u8 as f32, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: "?".to_owned(),
@@ -3853,6 +3903,7 @@ impl App {
                 fill: palette.menu_fill,
                 border: [0.0; 4],
                 params: [8.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
             let pad = crate::ui::HOTKEYS_PADDING;
             let header_h = crate::ui::HOTKEYS_HEADER_HEIGHT;
@@ -3925,6 +3976,7 @@ impl App {
             fill: [0.02, 0.02, 0.04, 0.45],
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // FR-039: модалка по центру — layout несёт rect'ы навигации,
         // заголовка раздела, строк активного таба и карточек темы
@@ -3936,6 +3988,7 @@ impl App {
             fill: palette.menu_fill,
             border: [0.0; 4],
             params: [8.0, 0.0, 0.0, 0.0],
+            corners: [0.0; 4],
         });
         // Левая колонка: пункты «иконка + название» (Obsidian); активный
         // раздел — акцентная подложка, неактивные — hover-подсветка
@@ -3953,6 +4006,7 @@ impl App {
                     fill: palette.palette_selected_fill,
                     border: [0.0; 4],
                     params: [6.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
             } else if hovered {
                 instances.push(CardInstance {
@@ -3961,6 +4015,7 @@ impl App {
                     fill: palette.palette_hover_fill,
                     border: [0.0; 4],
                     params: [6.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
             }
             // FR-ICONS: иконка таба — SVG если активен набор, иначе глиф.
@@ -4079,6 +4134,7 @@ impl App {
                         palette.palette_border
                     },
                     params: [8.0, selected as u8 as f32, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
                 texts.push(OwnedScreenText {
                     text: self.tr(label_key).to_owned(),
@@ -4110,6 +4166,7 @@ impl App {
                     fill: [0.24, 0.30, 0.42, 0.35],
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
                 });
             }
             texts.push(OwnedScreenText {
@@ -4200,6 +4257,7 @@ impl App {
                         },
                         border: [0.0; 4],
                         params: [control[3] / 2.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                     let knob = pill_knob_rect(control, on);
                     instances.push(CardInstance {
@@ -4208,6 +4266,7 @@ impl App {
                         fill: [0.92, 0.92, 0.94, 1.0],
                         border: [0.0; 4],
                         params: [knob[2] / 2.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                 }
                 RowKind::Dropdown => {
@@ -4222,6 +4281,7 @@ impl App {
                         },
                         border: palette.palette_border,
                         params: [6.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                     if let Some(value) = dropdown_value(*row, &self.settings) {
                         texts.push(OwnedScreenText {
@@ -4253,6 +4313,7 @@ impl App {
                 fill: hover_fill(palette.menu_fill),
                 border: [0.0; 4],
                 params: [8.0, 0.0, 0.0, 0.0],
+                corners: [0.0; 4],
             });
             let hovered_item = dropdown_item_at(*menu_rect, items.len(), self.cursor);
             for (i, (label, current)) in items.iter().enumerate() {
@@ -4267,6 +4328,7 @@ impl App {
                         fill: [0.24, 0.30, 0.42, 0.6],
                         border: [0.0; 4],
                         params: [4.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                 }
                 if *current {

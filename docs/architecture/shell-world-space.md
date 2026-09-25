@@ -79,7 +79,7 @@ screen → world:  camera.position + (screen − viewport / 2) / zoom
 |---|---|---|
 | Карточка: заливка, радиус, тень, рамка selected/broken/group | `card_instance` | `node.x/y/w/h`, радиус `tokens::CARD_CORNER_RADIUS` |
 | Рамка серьёзности (FR-016) | `card.border` / `analysis_ring_instance` (внешнее кольцо +3 px) | LOD: рамка ≥ `0.25` zoom, бейджи ≥ `0.6` эффективного zoom |
-| Полоса категории шаблона | `template_band_instance` | `TEMPLATE_BAND_H = 6` world-px, цвет — hex-снимок `canvasdesk.template.color` |
+| Полоса категории шаблона | `template_band_instance` | `TEMPLATE_BAND_H = 6` world-px, цвет — hex-снимок `canvasdesk.template.color`; FR-075 W0: верхние углы скруглены радиусом карточки (`corners: [R,R,0,0]`) — «уголки» не выступают за силуэт |
 | Квад-иконка роли | `template_icon_rect` + `template_icon_quads` | 16×16 world-px у правого края шапки; композиция плоских квадов на сетке `u = w/16` (коды `lb/db/cache/http/queue/gateway/worker/…`) |
 | Хром тела | `body_quad_instance` (renderer) | GFM-квады, пилюли бейджей, Σ-линия, авто-строки; радиус/размер делятся на `entry_zoom` — масштаб тела «заморожен» на влёте ноды |
 | Порты/якоря | `line_ports` / `param_ports` (text.rs) → world-«хвост» кадра | точки на краях ноды |
@@ -94,9 +94,11 @@ screen → world:  camera.position + (screen − viewport / 2) / zoom
 
 ### 5.1 Инстанс
 
-`CardInstance` — 16 f32: `pos` (world), `size` (world), `fill`, `border`,
+`CardInstance` — 20 f32: `pos` (world), `size` (world), `fill`, `border`,
 `params` (`x` — радиус world-px; `y` — selected; `z` — broken; `w` — флаг
-«без тени» для мелких квадов связей/портов, T8). Инстансы кадра собираются
+«без тени» для мелких квадов связей/портов, T8) и `corners` (FR-075 W0 —
+пер-угловой радиус в CSS-порядке `[tl,tr,br,bl]`; все нули → шейдер использует
+`params.x`, прежние строители бит-в-бит). Инстансы кадра собираются
 чистыми функциями-строителями в `Vec<CardInstance>`, сегментируются по
 z-плану и заливаются одним `queue.write_buffer` в instance-буфер
 (стартовая ёмкость 256, рост `next_power_of_two`).
@@ -186,6 +188,7 @@ instancing, и SDF-хром (см. §9).
 
 Обратная конвертация (renderer.rs:209) даёт ровно обратное свойство: экранная
 полоса имеет **постоянный размер на экране при любом зуме** — деление на zoom
+(`pos` через `screen_to_world`, `size`/`params.x`/`corners` ÷ zoom)
 компенсирует world→screen-масштаб шейдера. Клипы полос исполняются
 `band_scissor_rect` (ceil сверху/слева, floor снизу/справа — scissor никогда не
 расширяет видимое, FR-056). Wheel-меню (FR-022) идёт тем же мостом:
@@ -255,3 +258,8 @@ instanced SDF); **геометрия тела ноды** при этом жив�
   логика живет рядом с мировыми константами, не в ките.
 - **I-токены (FR-046)**: формы/цвета карточки — `canvas_core::tokens`, у кита
   и рендера один источник значений.
+- **I-corner (FR-075 W0)**: пер-угловой радиус — единый контракт «все нули
+  corners → `params.x`»; Rust-оракул `corner_radius_at` зеркалит шейдерную
+  `corner_radius`, конверторы делят corners на зум (screen/stage-мосты).
+  Дальнейший паритет примитивов (z-порты, SVG-иконки, ClipRect, состояния,
+  rotate) — план FR-075 W1–W5.
