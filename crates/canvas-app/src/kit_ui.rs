@@ -1257,6 +1257,10 @@ impl KitDraw {
                     self.painter.label(area, &text, color, size, align);
                     self.flush_last_text();
                 }
+                // FR-068 W1: клип — прозрачный проход для consumer-обхода:
+                // дети конвертируются как обычные items (draw-порядок
+                // сохранён); отсечение — scissor FR-056 на стороне рендера.
+                canvas_ui::paint::PaintItem::ClipRect { items, .. } => self.paint_items(items),
             }
         }
     }
