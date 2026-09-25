@@ -6414,3 +6414,14 @@ Stage Summary:
 - Каталог миграции §9.5; новый план fr-068-table-v2.md; worklog. Kit-функции/RowGuides/Row v1 не тронуты (код — только docs).
 - **Telegram:** план этапа (msg 279) → отчёт результата.
 - **Следующая очередь (за владельцем):** M1 (canvas-ui, additive + T1–T6) → M2 (stage.rs, 2×Table, оракулы T4/T7).
+---
+
+## 2026-09-26 — fix(app): хотфикс W3.2 — рекурсивный лок measure_font_system (паника prod-web)
+
+- **Симптом (консоль prod-сборки):** `canvas-web: паника в .../std/src/sys/sync/mutex/no_threads.rs:19: cannot recursively acquire mutex` + `Uncaught RuntimeError: unreachable` (abort) — крах страницы при работе с приложением. Вторая ошибка лога (`chrome.action.show is not a function`) — от расширения браузера, к приложению отношения не имеет (прецедент FR-WASM-01).
+- **Воспроизведение:** headless-Chromium (playwright, dev-бандл trunk с name-section) — сценарий «заметка → what-if → настройки → поиск → галерея схем + ввод фильтра» ронял билд **3/3 прогонов** на шаге «галерея+фильтр»; подъём `Error.stackTraceLimit` дал полный символизированный стек.
+- **Корень (по стеку):** `App::window_event (RedrawRequested)` → `App::scheme_gallery_overlay` (держит guard `measure_font_system`, overlays.rs:1366) → `scheme_gallery_ui::row_labels` → **`layout()`** — лочащая W3.2-обёртка → второй лок того же глобального FontSystem. W3.2-ревизия сделала `layout()` лочащей (`measure_font_system` + `layout_with`), а внутренний вызов в `row_labels` не перевела на `layout_with` — паника на wasm (std no_threads Mutex при повторном `lock()`), дедлок кадра на нативе.
+- **Фикс:** `scheme_gallery_ui::row_labels` — `layout_with(viewport, list, state, measurer, fs)` с переданным замерщиком (то же тело функции — геометрия бит-в-бит; контракт «вызывающий держит guard» соблюдён); doc-комментарий с прецедентом.
+- **Аудит аналогов:** скрипт scripts/audit_fs_locks.py (все функции с `fs: &mut FontSystem` × лочащие sibling'ы `layout`/`modal_layout`/`empty_buttons`) — `row_labels` была единственным местом; остальные вызовы лочащих версий — либо до взятия guard'а, либо в тестах.
+- **Верификация:** тот же headless-сценарий после фикса — чисто (mutex=False; остаточная ошибка swiftshader `createBuffer ... mappedAtCreation` — артефакт GPU-эмуляции среды, был и до фикса). Гейты: workspace tests 0 failed, fmt --check, clippy --workspace --all-targets -D warnings, wasm_gate.sh --check — зелёные.
+- **Доки:** ACCEPTANCE.md (FR-068.9), план W3 §7 (хотфикс-примечание), worklog репо.

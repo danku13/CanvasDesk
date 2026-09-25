@@ -344,6 +344,15 @@ pub struct RowLabel {
 }
 
 /// Измеренные подписи строк (параллелен `GalleryLayout.row_rects`).
+///
+/// Контракт W3.2: вызывающий держит guard `measure_font_system` (передаёт
+/// `fs` явно) — внутренняя раскладка обязана брать `layout_with`, а НЕ
+/// лочащую `layout`. Прецедент бага 2026-09-26: вызов `layout` здесь давал
+/// второй лок того же глобального FontSystem — wasm падал паникой
+/// «cannot recursively acquire mutex» (std no_threads Mutex), натив —
+/// дедлоком кадра RedrawRequested (галерея схем открыта → кадр стоит
+/// навсегда). `layout_with` даёт бит-в-бит ту же геометрию (то же тело
+/// функции), замерщик переиспользуется.
 pub fn row_labels(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
@@ -352,7 +361,7 @@ pub fn row_labels(
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> Vec<RowLabel> {
-    let lay = layout(viewport, list, state);
+    let lay = layout_with(viewport, list, state, measurer, fs);
     let max_w = (lay.row_rects.first().map(|r| r[2]).unwrap_or(0.0) - ROW_TEXT_PAD * 2.0).max(0.0);
     lay.visible_rows
         .iter()
