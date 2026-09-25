@@ -214,6 +214,11 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
 /// W6 (web): конфиг из localStorage (`canvasdesk.config`, TOML — тот же
 /// формат, что config.toml натива). Битый текст — дефолт + warn
 /// (страница открывается всегда); клампы CR-003/FR-028 — как в `load`.
+///
+/// FR-040 v2: запись конфига обратно (при `toggle_language`/`toggle_theme`/
+/// `persist_palette_dock`/`save_settings`) — `App::persist_settings` →
+/// `persist_settings_web` (canvas-app), тот же ключ/формат. До v2 конфиг
+/// загружался, но не сохранялся (W12-долг, теперь закрыт).
 #[cfg(target_arch = "wasm32")]
 fn load_settings() -> Settings {
     let Some(storage) = web_sys::window().and_then(|window| window.local_storage().ok().flatten())
