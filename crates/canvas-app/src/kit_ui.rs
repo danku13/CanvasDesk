@@ -32,7 +32,10 @@ use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 // FR-062 (layout v2): примитивы measured/flex/wrap/grid — раскладка витрины
 // использует те же функции, что и потребители (живой образец).
 use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState};
-use canvas_ui::layout::{grid_cells, Child, MeasuredItem, Row, RowPolicy};
+// FR-068 W1 (ADR-0014 §Решение п.5 P1): витрина — pilot-поверхность, раскладка
+// секций v2 идёт через [`pilot_backend`] (taffy за фичей — opt-in; на default
+// сборке backend тот же Native — геометрия байт-в-байт прежняя).
+use canvas_ui::layout::{grid_cells_with, pilot_backend, Child, MeasuredItem, Row, RowPolicy};
 use canvas_ui::measure::TextMeasurer;
 // FR-057 (волна 2 кита): draw-слой и машина состояний — в крейте canvas-ui;
 // этот модуль — тонкий адаптер «items Painter'а → инстансы рендера».
@@ -189,7 +192,8 @@ pub struct GalleryLayout {
     /// FR-062 F-15: wrap-ряд — (rect, индекс чипа): жадная упаковка
     /// measured-чипов в строки слота ([`RowPolicy::Wrap`]).
     pub wrap_chips: Vec<(UiRect, usize)>,
-    /// FR-062 F-16: сетка 4×2 равных колонок ([`grid_cells`]).
+    /// FR-062 F-16: сетка 4×2 равных колонок ([`grid_cells_with`],
+    /// FR-068 W1 — через [`pilot_backend`]).
     pub grid_cells: Vec<UiRect>,
     /// FR-062 F-17: кнопки фокус-секции (сдвинуты/отфильтрованы — для
     /// отрисовки); рамка фокуса — по совпадению с Tab-кольцом App.
@@ -738,7 +742,8 @@ pub fn gallery_layout(
             gap: kit::GAP_CONTROLS,
             ..Row::default()
         }
-        .lay_out_measured(
+        .lay_out_measured_with(
+            pilot_backend(),
             UiRect::new(control_x, y, control_w, kit::CHIP_HEIGHT),
             &[
                 MeasuredItem::Text {
@@ -773,7 +778,8 @@ pub fn gallery_layout(
         gap: kit::GAP_CONTROLS,
         ..Row::default()
     }
-    .lay_out(
+    .lay_out_with(
+        pilot_backend(),
         UiRect::new(control_x, y, control_w, kit::BUTTON_HEIGHT),
         &[
             Child::fixed(64.0, kit::BUTTON_HEIGHT),
@@ -820,7 +826,8 @@ pub fn gallery_layout(
             policy: RowPolicy::Wrap,
             ..Row::default()
         }
-        .lay_out_measured(
+        .lay_out_measured_with(
+            pilot_backend(),
             UiRect::new(control_x, y, control_w, wrap_slot_h),
             &items,
             m,
@@ -835,12 +842,15 @@ pub fn gallery_layout(
     };
     y += wrap_slot_h + SECTION_GAP;
 
-    // --- Сетка (F-16): 4 равные колонки × 2 строки ([`grid_cells`]).
+    // --- Сетка (F-16): 4 равные колонки × 2 строки ([`grid_cells_with`],
+    // FR-068 W1 — через [`pilot_backend`]; T2-триггер ADR-0013 — Grid
+    // с явными треками в TaffyBackend).
     section_titles.push((UiPoint::new(content.x, y), SECTION_GRID));
     y += 18.0;
     let grid_cell_h = 32.0;
     let grid_col_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
-    let grid_cells: Vec<UiRect> = grid_cells(
+    let grid_cells: Vec<UiRect> = grid_cells_with(
+        pilot_backend(),
         UiRect::new(
             control_x,
             y,
@@ -1641,5 +1651,213 @@ mod tests {
         // Шапка не скроллится
         assert_eq!(lay1.close, lay0.close);
         assert_eq!(lay1.theme, lay0.theme);
+    }
+
+    /// FR-068 W1 (ADR-0014 §Решение п.5 P1): parity-тест витрины —
+    /// taffy-путь (pilot_backend() за фичей `taffy`) против native-пути В
+    /// РАНТАЙМЕ. Эталонные rect'ы считаются здесь же через
+    /// `lay_out_with(&NativeBackend)` / `grid_cells_with(&NativeBackend)`
+    /// с теми же входами (слоты восстанавливаются из самой раскладки +
+    /// pub-констант модуля и кита). Ожидания: сетка (целые треки на всех
+    /// вьюпортах матрицы) — ПОБИТОВО; measured/wrap-ряды (дробные
+    /// measured-ширины/высоты) и grow-ряд (дробные grow-доли) — допуск
+    /// ≤ 1.0 ui px — документированное rounding-расхождение taffy
+    /// (round_layout в taffy 0.14 выполняется всегда: все координаты и
+    /// размеры округляются к целым ui px, CSS spec rounding; размер =
+    /// разность двух округлённых позиций — ошибка до 1.0 ui px). Допуск
+    /// 1.0 — теоретическая граница (не эмпирическая): фактические
+    /// расхождения на матрице ≤ 0.9 ui px.
+    #[cfg(feature = "taffy")]
+    #[test]
+    fn gallery_layout_taffy_parity() {
+        use canvas_ui::layout::NativeBackend;
+
+        /// Сравнение одного rect'а с допуском — сообщение называет ряд и
+        /// индекс (какой ряд разошёлся сильнее допуска).
+        fn assert_rect_close(which: &str, i: usize, got: UiRect, native: UiRect, tol: f32) {
+            let dx = (got.x - native.x).abs();
+            let dy = (got.y - native.y).abs();
+            let dw = (got.w - native.w).abs();
+            let dh = (got.h - native.h).abs();
+            assert!(
+                dx <= tol && dy <= tol && dw <= tol && dh <= tol,
+                "{which}[{i}] разошёлся сильнее {tol} ui px \
+                 (dx={dx}, dy={dy}, dw={dw}, dh={dh}): taffy={got:?}, native={native:?}"
+            );
+        }
+
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let p = gallery_palette();
+        for vp in [[1280.0, 800.0], [1024.0, 640.0], [900.0, 600.0]] {
+            // Нижнее положение скролла — секции FR-062 видимы целиком
+            // (сама раскладка — уже через pilot_backend(): taffy за фичей)
+            let top = gallery_layout(
+                vp,
+                Language::Ru,
+                &kit::ScrollState::default(),
+                &p,
+                &mut m,
+                &mut fs,
+            );
+            let bottom = kit::ScrollState {
+                offset: top.content_h - top.sections_viewport.h,
+                content_h: top.content_h,
+                viewport_h: top.sections_viewport.h,
+            };
+            let lay = gallery_layout(vp, Language::Ru, &bottom, &p, &mut m, &mut fs);
+
+            // Контрольная колонка витрины (pub-константы + panel geometry)
+            let panel = gallery_panel(UiRect::new(0.0, 0.0, vp[0], vp[1]));
+            let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
+            let control_x = content.x + STATE_LABEL_W + canvas_core::tokens::SPACING_SM;
+            let control_w = content.right() - control_x;
+
+            // --- F-13 measured-ряд: 3 чипа, ширины от TextMeasurer ---
+            assert_eq!(lay.measured_chips.len(), 3);
+            let t_a = format!(" {} ", tr(Language::Ru, crate::i18n::keys::KIT_MEASURED_A));
+            let t_b = format!(" {} ", tr(Language::Ru, crate::i18n::keys::KIT_MEASURED_B));
+            let t_c = format!(" {} ", tr(Language::Ru, crate::i18n::keys::KIT_MEASURED_C));
+            let items = [
+                MeasuredItem::Text {
+                    text: &t_a,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                },
+                MeasuredItem::Text {
+                    text: &t_b,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                },
+                MeasuredItem::Text {
+                    text: &t_c,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                },
+            ];
+            let native = Row {
+                gap: kit::GAP_CONTROLS,
+                ..Row::default()
+            }
+            .lay_out_measured_with(
+                &NativeBackend,
+                UiRect::new(
+                    control_x,
+                    lay.measured_chips[0].y,
+                    control_w,
+                    kit::CHIP_HEIGHT,
+                ),
+                &items,
+                &mut m,
+                &mut fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+            );
+            for (i, (got, native)) in lay.measured_chips.iter().zip(&native).enumerate() {
+                assert_rect_close("measured-ряд", i, *got, *native, 1.0);
+            }
+
+            // --- F-14 flex-ряд: fixed + grow ×2 + grow ×1 ---
+            assert_eq!(lay.grow_cells.len(), 3);
+            let native = Row {
+                gap: kit::GAP_CONTROLS,
+                ..Row::default()
+            }
+            .lay_out_with(
+                &NativeBackend,
+                UiRect::new(
+                    control_x,
+                    lay.grow_cells[0].0.y,
+                    control_w,
+                    kit::BUTTON_HEIGHT,
+                ),
+                &[
+                    Child::fixed(64.0, kit::BUTTON_HEIGHT),
+                    Child::flexible(40.0, kit::BUTTON_HEIGHT, 2.0),
+                    Child::flexible(40.0, kit::BUTTON_HEIGHT, 1.0),
+                ],
+            );
+            for (i, ((got, _), native)) in lay.grow_cells.iter().zip(&native).enumerate() {
+                assert_rect_close("grow-ряд", i, *got, *native, 1.0);
+            }
+
+            // --- F-15 wrap-ряд: 8 measured-чипов, жадная упаковка ---
+            assert_eq!(lay.wrap_chips.len(), GALLERY_WRAP_CHIPS);
+            let labels: Vec<String> = (0..GALLERY_WRAP_CHIPS)
+                .map(|i| {
+                    let label = crate::i18n::trf(
+                        Language::Ru,
+                        crate::i18n::keys::KIT_WRAP_CHIP,
+                        &[("{n}", &(i + 1).to_string())],
+                    );
+                    format!(" {label} ")
+                })
+                .collect();
+            let items: Vec<MeasuredItem> = labels
+                .iter()
+                .map(|s| MeasuredItem::Text {
+                    text: s,
+                    max_w: None,
+                    min_w: kit::CHIP_PAD_H * 2.0,
+                })
+                .collect();
+            let native = Row {
+                gap: kit::GAP_CONTROLS,
+                policy: RowPolicy::Wrap,
+                ..Row::default()
+            }
+            .lay_out_measured_with(
+                &NativeBackend,
+                UiRect::new(
+                    control_x,
+                    lay.wrap_chips[0].0.y,
+                    control_w,
+                    2.0 * kit::CHIP_HEIGHT + kit::GAP_CONTROLS,
+                ),
+                &items,
+                &mut m,
+                &mut fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+            );
+            assert_eq!(
+                native.len(),
+                lay.wrap_chips.len(),
+                "перенос по строкам совпал (та же resolved-ширина — \
+                 замер до backend'а бит-в-бит)"
+            );
+            for (i, ((got, idx), native)) in lay.wrap_chips.iter().zip(&native).enumerate() {
+                assert_eq!(*idx, i, "порядок чипов сохранён");
+                assert_rect_close("wrap-ряд", i, *got, *native, 1.0);
+            }
+
+            // --- F-16 сетка 4×2: целые треки на всех вьюпортах матрицы ---
+            // (panel 900/876 → control_w 784/760 → колонка 190/184)
+            assert_eq!(lay.grid_cells.len(), 8);
+            let grid_cell_h = 32.0;
+            let grid_col_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
+            assert_eq!(
+                grid_col_w,
+                grid_col_w.trunc(),
+                "колонка целая — эталон побитового паритета Grid"
+            );
+            let native = grid_cells_with(
+                &NativeBackend,
+                UiRect::new(
+                    control_x,
+                    lay.grid_cells[0].y,
+                    control_w,
+                    2.0 * grid_cell_h + kit::GAP_CONTROLS,
+                ),
+                &[grid_col_w; 4],
+                2,
+                grid_cell_h,
+                UiVec2::new(kit::GAP_CONTROLS, kit::GAP_CONTROLS),
+            );
+            assert_eq!(
+                lay.grid_cells, native,
+                "сетка 4×2 побитово (целые Points-треки, {vp:?})"
+            );
+        }
     }
 }
