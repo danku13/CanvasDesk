@@ -699,7 +699,13 @@ impl App {
     /// (заголовок / «Сброс» / тема / «✕»), сайдбар секций (реальные
     /// kit-кнопки), демо-зона с заголовком секции и подсказкой; тела секций
     /// — этапы 2–4 FR-070. Эффективная палитра — с live-переопределением.
-    pub(super) fn admin_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>, Vec<canvas_render::IconInstance>) {
+    pub(super) fn admin_panel_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
         let mut out = (Vec::new(), Vec::new(), Vec::new());
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
@@ -922,7 +928,13 @@ impl App {
     /// Card/список+скролл/Icon-глифы (контракт FR-058); контент
     /// прокручивается ([`WidgetState`] для состояний шапки — вместо
     /// deprecated-делегатов; бегунок — kit::scroll_bar).
-    pub(super) fn kit_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>, Vec<canvas_render::IconInstance>) {
+    pub(super) fn kit_gallery_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
         let mut out = (Vec::new(), Vec::new(), Vec::new());
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
