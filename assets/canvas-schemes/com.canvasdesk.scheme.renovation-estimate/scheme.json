@@ -7,7 +7,7 @@
  "category": "planning",
  "category_ru": "Планирование",
  "category_en": "Planning",
- "version": "1.1.0",
+ "version": "1.2.0",
  "content": {
   "nodes": [
    {
@@ -117,7 +117,7 @@
     "y": 40,
     "width": 320,
     "height": 220,
-    "text": "Вердикт\nКлючевая ручка — ставка: она питает обе комнаты сразу.\nПучок «Площади → Общая площадь» открывает веер обеих комнат.\nПопробуйте сценарий на площади: дельту увидите сразу.",
+    "text": "Вердикт\nКлючевая ручка — ставка: она питает обе комнаты сразу, смета со скидкой — 1305.\nПучок «Площади → Общая площадь» открывает веер обеих комнат.\nПопробуйте сценарий на площади: дельту увидите сразу.",
     "color": "4"
    }
   ],
@@ -319,7 +319,7 @@
     "y": 40,
     "width": 320,
     "height": 220,
-    "text": "Verdict\nThe key handle is the rate: it feeds both rooms at once.\nThe “Areas → Total area” bundle opens a fan of both rooms.\nTry a scenario on an area: the delta shows up immediately.",
+    "text": "Verdict\nThe key handle is the rate: it feeds both rooms at once, the discounted estimate is 1305.\nThe “Areas → Total area” bundle opens a fan of both rooms.\nTry a scenario on an area: the delta shows up immediately.",
     "color": "4"
    }
   ],

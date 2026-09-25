@@ -462,6 +462,112 @@ mod tests {
         assert!((value_of(&scene, &map, "final") - 1305.0).abs() < 1e-6);
     }
 
+    /// Erlang-B/C рекуррентность (образец queueing.rs) — для оракула штата.
+    fn erlang_c_probability(offered_load: f64, servers: usize) -> f64 {
+        let mut b = 1.0f64;
+        for n in 1..=servers {
+            b = offered_load * b / (n as f64 + offered_load * b);
+        }
+        let rho = offered_load / servers as f64;
+        b / (1.0 - rho * (1.0 - b))
+    }
+
+    #[test]
+    fn oracle_support_staffing() {
+        let (scene, map) = scene_with("com.canvasdesk.scheme.support-staffing");
+        // λ = 240 req / 1 h = 1/15 req/s; μ = 1/180 req/s.
+        let lambda = value_of(&scene, &map, "flow");
+        assert!((lambda - 240.0 / 3600.0).abs() < 1e-9, "lambda = {lambda}");
+        let mu = value_of(&scene, &map, "speed");
+        assert!((mu - 1.0 / 180.0).abs() < 1e-9, "mu = {mu}");
+        // ρ = λ/(c·μ) = 0.8 ровно.
+        let rho = value_of(&scene, &map, "occupancy");
+        assert!((rho - 0.8).abs() < 1e-9, "rho = {rho}");
+        // Эрланг C: доля ожидающих при a = λ/μ = 12, c = 15.
+        let expected_p = erlang_c_probability(12.0, 15);
+        let p_wait = value_of(&scene, &map, "wait_prob");
+        assert!((p_wait - expected_p).abs() < 1e-9, "p_wait = {p_wait}");
+        // M/M/c: W = C/(c·μ − λ) + 1/μ (без перегрузки: ρ = 0.8 < 1).
+        let wait = value_of(&scene, &map, "response");
+        let expected_w = expected_p / (15.0 * mu - lambda) + 1.0 / mu;
+        assert!((wait - expected_w).abs() < 1e-9, "wait = {wait}");
+        // Литтл: L = λ·W.
+        let wip = value_of(&scene, &map, "wip");
+        assert!((wip - lambda * expected_w).abs() < 1e-9, "wip = {wip}");
+    }
+
+    #[test]
+    fn oracle_investment_case() {
+        let (scene, map) = scene_with("com.canvasdesk.scheme.investment-case");
+        // PV: y1..y4 дисконтированы степенями 1.12 (нулевой год — 0 $).
+        let flows = [150000.0, 220000.0, 280000.0, 320000.0];
+        let expected_pv: f64 = flows
+            .iter()
+            .enumerate()
+            .map(|(i, cf)| cf / 1.12f64.powi(i as i32 + 1))
+            .sum();
+        let pv = value_of(&scene, &map, "pv");
+        assert!((pv - expected_pv).abs() < 1e-6, "pv = {pv}");
+        // Ретрансляция вложений: последняя строка узла NPV — capex.
+        let npv_last = value_of(&scene, &map, "npv");
+        assert!((npv_last - 500000.0).abs() < 1e-9, "npv relay = {npv_last}");
+        // Проливание: $npv и $capex приходят в индекс по имени;
+        // pi = npv_sum/capex + 1 = PV/capex.
+        let pi = value_of(&scene, &map, "pi");
+        assert!((pi - (expected_pv / 500000.0)).abs() < 1e-6, "pi = {pi}");
+        // IRR: корень между ставкой (0.12) и утроенной ставкой; NPV в
+        // найденной точке ≈ 0 — бизнес-смысл «проект окупается быстрее».
+        let irr = value_of(&scene, &map, "irr");
+        assert!(
+            irr > 0.12 && irr < 0.36 && (irr - 0.284).abs() < 0.01,
+            "irr = {irr}"
+        );
+        // CAGR потоков: (y4/y1)^(1/3) − 1.
+        let growth = value_of(&scene, &map, "growth");
+        let expected_g = (320000.0f64 / 150000.0).powf(1.0 / 3.0) - 1.0;
+        assert!((growth - expected_g).abs() < 1e-9, "growth = {growth}");
+    }
+
+    #[test]
+    fn oracle_cohort_launch() {
+        let (scene, map) = scene_with("com.canvasdesk.scheme.cohort-launch");
+        // Кривая удержания: контрольная точка движка (см. scratch-валидацию
+        // и queueing::cohort_ltv — интеграл по дням с хвостом 0.35^(t/30)).
+        let ltv = value_of(&scene, &map, "ltv");
+        assert!((ltv - 7.476760194027841).abs() < 1e-9, "ltv = {ltv}");
+        // Проливание: $users и $ltv приходят в волну по имени.
+        let wave = value_of(&scene, &map, "wave");
+        assert!((wave - 10000.0 * ltv).abs() < 1e-6, "wave = {wave}");
+        let cac = value_of(&scene, &map, "cac");
+        assert!((cac - 1.2).abs() < 1e-9, "cac = {cac}");
+        let ratio = value_of(&scene, &map, "ratio");
+        assert!((ratio - ltv / 1.2).abs() < 1e-9, "ratio = {ratio}");
+        let net = value_of(&scene, &map, "net");
+        assert!(
+            (net - (10000.0 * ltv - 12000.0)).abs() < 1e-6,
+            "net = {net}"
+        );
+    }
+
+    #[test]
+    fn oracle_runway() {
+        let (scene, map) = scene_with("com.canvasdesk.scheme.runway");
+        // sum по четырём статьям.
+        let burn = value_of(&scene, &map, "burn");
+        assert!((burn - 63200.0).abs() < 1e-9, "burn = {burn}");
+        // Проливание: $burn − $revenue = 63200 − 41000.
+        let net = value_of(&scene, &map, "net");
+        assert!((net - 22200.0).abs() < 1e-9, "net = {net}");
+        let yearly = value_of(&scene, &map, "yearly");
+        assert!((yearly - 266400.0).abs() < 1e-9, "yearly = {yearly}");
+        // Проливание: $balance / $net = 1200000 / 22200.
+        let runway = value_of(&scene, &map, "runway");
+        assert!(
+            (runway - 1200000.0 / 22200.0).abs() < 1e-9,
+            "runway = {runway}"
+        );
+    }
+
     /// FR-016: capacity-service демонстрирует анализ узких мест: средняя
     /// утилизация — Warn (ρ ≈ 0.83 ≥ 0.7), пиковая — Overload (2.5 ≥ 1).
     #[test]
@@ -759,6 +865,34 @@ mod tests {
                 "{}: hint обязан быть чистой прозой (тишина)",
                 scheme.id
             );
+        }
+    }
+
+    /// Усиление тишины (аудит схем 2026-09-25): подсказки и вердикты —
+    /// пресет «4» (hint/verdict/try) — обязаны молчать ЦЕЛИКОМ во всех
+    /// схемах: проза с числами («83 процента», «итог — 16925») не имеет
+    /// права вычисляться (иначе вердикт превращается в «живую» карточку).
+    #[test]
+    fn hint_and_verdict_notes_stay_silent() {
+        for scheme in all_schemes() {
+            let (scene, map) = scene_with(&scheme.id);
+            for node in &scheme.content.nodes {
+                if node.color.as_deref() != Some("4") || node.node_type != "text" {
+                    continue;
+                }
+                let id = &map[&node.id];
+                let lines = scene.expr_line_results.get(id);
+                if let Some(lines) = lines {
+                    for (i, line) in lines.iter().enumerate() {
+                        assert!(
+                            line.is_none(),
+                            "{}: проза-нода {} строка {i} вычислилась: {line:?}",
+                            scheme.id,
+                            node.id
+                        );
+                    }
+                }
+            }
         }
     }
 

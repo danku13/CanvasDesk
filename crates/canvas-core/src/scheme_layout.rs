@@ -511,10 +511,12 @@ fn layout_cluster(
     }
 
     // --- Оптимизация пересечений: swap соседей в колонке, сдвиги колонок,
-    // финальный проход swap-ами (порядок стадий фиксирован — детерминизм)
+    // переносы на другие строки, финальный проход swap-ами (порядок стадий
+    // фиксирован — детерминизм)
     refine_by_swaps(&edges, &mut columns, &mut rects_local);
     refine_by_column_shifts(verts, &edges, &mut columns, &mut rects_local);
     refine_by_swaps(&edges, &mut columns, &mut rects_local);
+    refine_by_insertions(&edges, &mut columns, &mut rects_local);
 
     rects_local
 }
@@ -583,11 +585,84 @@ fn barycenter_pass(
     }
 }
 
+/// Стоимость двух состояний колонки: пересечения всех рёбер с
+/// прямоугольниками колонки (старое состояние — `rects`, гипотетическое —
+/// `new_rects`; концы рёбер и чужие колонки — из `rects`) + суммарная длина
+/// инцидентных колонке отрезков в обоих состояниях.
+fn column_state_cost(
+    edges: &[(usize, usize)],
+    col: &[usize],
+    rects: &HashMap<usize, Rect>,
+    new_rects: &HashMap<usize, Rect>,
+) -> (u32, u32, f32, f32) {
+    let rect_of = |node: usize, new: bool| -> Rect {
+        if new {
+            new_rects
+                .get(&node)
+                .copied()
+                .unwrap_or_else(|| rects.get(&node).copied().unwrap_or([0.0; 4]))
+        } else {
+            rects.get(&node).copied().unwrap_or([0.0; 4])
+        }
+    };
+    let (mut cross_old, mut cross_new) = (0u32, 0u32);
+    let (mut len_old, mut len_new) = (0.0f32, 0.0f32);
+    for &(u, v) in edges {
+        let seg_old = (
+            right_center(rect_of(u, false)),
+            left_center(rect_of(v, false)),
+        );
+        let seg_new = (
+            right_center(rect_of(u, true)),
+            left_center(rect_of(v, true)),
+        );
+        for &idx in col {
+            if idx != u && idx != v {
+                if seg_intersects_rect(seg_old.0, seg_old.1, rect_of(idx, false), CROSSING_MARGIN) {
+                    cross_old += 1;
+                }
+                if seg_intersects_rect(seg_new.0, seg_new.1, rect_of(idx, true), CROSSING_MARGIN) {
+                    cross_new += 1;
+                }
+            }
+        }
+        if col.contains(&u) || col.contains(&v) {
+            len_old += seg_len(seg_old.0, seg_old.1);
+            len_new += seg_len(seg_new.0, seg_new.1);
+        }
+    }
+    (cross_old, cross_new, len_old, len_new)
+}
+
+/// Пере-стек колонки от текущего верха (порядок `order`) — гипотетические
+/// прямоугольники с сохранением накопительного зазора [`ROW_GAP`].
+fn restacked_column(col: &[usize], rects: &HashMap<usize, Rect>) -> HashMap<usize, Rect> {
+    let mut out = HashMap::new();
+    if let Some(&first) = col.first() {
+        let (x, top) = match rects.get(&first) {
+            Some(r) => (r[0], r[1]),
+            None => (0.0, 0.0),
+        };
+        let mut y = top;
+        for &v in col {
+            let (w, h) = match rects.get(&v) {
+                Some(r) => (r[2], r[3]),
+                None => (0.0, 0.0),
+            };
+            out.insert(v, [x, y, w, h]);
+            y += h + ROW_GAP;
+        }
+    }
+    out
+}
+
 /// Оптимизация пересечений перестановками соседних нод внутри колонки.
-/// Дельта стоимости ТОЧНА: обмен меняет только прямоугольники пары, поэтому
-/// пересечения считаются всех рёбер против пары прямоугольников (старые vs
-/// новые); ход принимается при строгом падении (пересечения, тай-брейк —
-/// суммарная длина инцидентных отрезков). Ограничено [`MAX_REFINE_PASSES`].
+/// Дельта стоимости ТОЧНА: обмен пере-стекует всю колонку от текущего
+/// верха (прямой обмен y-позициями валиден только при равных высотах),
+/// поэтому пересечения считаются всех рёбер против всех прямоугольников
+/// колонки (старые vs новые); ход принимается при строгом падении
+/// (пересечения, тай-брейк — суммарная длина инцидентных отрезков).
+/// Ограничено [`MAX_REFINE_PASSES`].
 fn refine_by_swaps(
     edges: &[(usize, usize)],
     columns: &mut BTreeMap<usize, Vec<usize>>,
@@ -600,60 +675,19 @@ fn refine_by_swaps(
             let col = columns.get(&lv).cloned().unwrap_or_default();
             for pair in col.windows(2) {
                 let (a, b) = (pair[0], pair[1]);
-                let (Some(&ra), Some(&rb)) = (rects.get(&a), rects.get(&b)) else {
+                if rects.get(&a).is_none() || rects.get(&b).is_none() {
                     continue;
-                };
-                // обмен y-позициями (колонка общая, x и размеры свои)
-                let new_a = [ra[0], rb[1], ra[2], ra[3]];
-                let new_b = [rb[0], ra[1], rb[2], rb[3]];
-                let (mut cross_old, mut cross_new) = (0u32, 0u32);
-                let (mut len_old, mut len_new) = (0.0f32, 0.0f32);
-                for &(u, v) in edges {
-                    // эффективные прямоугольники концов (учёт обмена a/b)
-                    let eff = |node: usize, swapped: bool| -> Rect {
-                        if node == a {
-                            if swapped {
-                                new_a
-                            } else {
-                                ra
-                            }
-                        } else if node == b {
-                            if swapped {
-                                new_b
-                            } else {
-                                rb
-                            }
-                        } else {
-                            rects.get(&node).copied().unwrap_or([0.0; 4])
-                        }
-                    };
-                    let (su_old, sv_old) = (eff(u, false), eff(v, false));
-                    let (su_new, sv_new) = (eff(u, true), eff(v, true));
-                    let seg_old = (right_center(su_old), left_center(sv_old));
-                    let seg_new = (right_center(su_new), left_center(sv_new));
-                    let obstacles_old = [(a, ra), (b, rb)];
-                    let obstacles_new = [(a, new_a), (b, new_b)];
-                    for (idx, r) in obstacles_old {
-                        if idx != u
-                            && idx != v
-                            && seg_intersects_rect(seg_old.0, seg_old.1, r, CROSSING_MARGIN)
-                        {
-                            cross_old += 1;
-                        }
-                    }
-                    for (idx, r) in obstacles_new {
-                        if idx != u
-                            && idx != v
-                            && seg_intersects_rect(seg_new.0, seg_new.1, r, CROSSING_MARGIN)
-                        {
-                            cross_new += 1;
-                        }
-                    }
-                    if u == a || u == b || v == a || v == b {
-                        len_old += seg_len(seg_old.0, seg_old.1);
-                        len_new += seg_len(seg_new.0, seg_new.1);
-                    }
                 }
+                let mut swapped_order = col.clone();
+                if let (Some(pa), Some(pb)) = (
+                    swapped_order.iter().position(|&x| x == a),
+                    swapped_order.iter().position(|&x| x == b),
+                ) {
+                    swapped_order.swap(pa, pb);
+                }
+                let new_rects = restacked_column(&swapped_order, rects);
+                let (cross_old, cross_new, len_old, len_new) =
+                    column_state_cost(edges, &col, rects, &new_rects);
                 let improves =
                     cross_new < cross_old || (cross_new == cross_old && len_new < len_old);
                 if improves {
@@ -665,8 +699,9 @@ fn refine_by_swaps(
                             c.swap(pa, pb);
                         }
                     }
-                    rects.insert(a, new_a);
-                    rects.insert(b, new_b);
+                    for (v, r) in new_rects {
+                        rects.insert(v, r);
+                    }
                     changed = true;
                 }
             }
@@ -675,6 +710,110 @@ fn refine_by_swaps(
             break;
         }
     }
+}
+
+/// Оптимизация пересечений переносом ноды на другую строку её колонки
+/// (обобщение swap: тянущаяся через колонку диагональ находит междурядный
+/// канал, которого нет у соседних обменов). Стоимость — та же модель
+/// пере-стека колонки, что в [`refine_by_swaps`]; ход — строгое улучшение.
+/// Ограничено [`MAX_REFINE_PASSES`].
+fn refine_by_insertions(
+    edges: &[(usize, usize)],
+    columns: &mut BTreeMap<usize, Vec<usize>>,
+    rects: &mut HashMap<usize, Rect>,
+) {
+    for _pass in 0..MAX_REFINE_PASSES {
+        let mut changed = false;
+        let layers: Vec<usize> = columns.keys().copied().collect();
+        for lv in layers {
+            let col = columns.get(&lv).cloned().unwrap_or_default();
+            if col.len() < 2 {
+                continue;
+            }
+            'node: for &v in &col {
+                let Some(_) = rects.get(&v) else {
+                    continue;
+                };
+                let from = match col.iter().position(|&x| x == v) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let (cross_old, _, _, _) = column_state_cost(edges, &col, rects, rects);
+                let mut best: Option<InsertionMove> = None;
+                for to in 0..col.len() {
+                    if to == from {
+                        continue;
+                    }
+                    let mut order = col.clone();
+                    order.remove(from);
+                    order.insert(to, v);
+                    let new_rects = restacked_column(&order, rects);
+                    let (_, cross_new, _, len_new) =
+                        column_state_cost(edges, &col, rects, &new_rects);
+                    // строгое улучшение против текущего состояния
+                    let cur = (cross_old, total_len(edges, &col, rects));
+                    let cand = (cross_new, len_new);
+                    if cand >= cur {
+                        continue;
+                    }
+                    let better = match &best {
+                        None => true,
+                        Some(InsertionMove { cost, len, .. }) => cand < (*cost, *len),
+                    };
+                    if better {
+                        best = Some(InsertionMove {
+                            cost: cross_new,
+                            len: len_new,
+                            order,
+                            rects: new_rects,
+                        });
+                    }
+                }
+                if let Some(InsertionMove {
+                    order,
+                    rects: new_rects,
+                    ..
+                }) = best
+                {
+                    if let Some(c) = columns.get_mut(&lv) {
+                        *c = order;
+                    }
+                    for (u, r) in new_rects {
+                        rects.insert(u, r);
+                    }
+                    changed = true;
+                    continue 'node;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Лучший ход переноса: стоимость (пересечения, длина) + порядок колонки
+/// и гипотетические прямоугольники.
+struct InsertionMove {
+    cost: u32,
+    len: f32,
+    order: Vec<usize>,
+    rects: HashMap<usize, Rect>,
+}
+
+/// Суммарная длина инцидентных колонке отрезков (тай-брейк стоимости).
+fn total_len(edges: &[(usize, usize)], col: &[usize], rects: &HashMap<usize, Rect>) -> f32 {
+    let mut length = 0.0f32;
+    for &(u, v) in edges {
+        if !col.contains(&u) && !col.contains(&v) {
+            continue;
+        }
+        let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
+            continue;
+        };
+        length += seg_len(right_center(ru), left_center(rv));
+    }
+    length
 }
 
 /// Оптимизация пересечений вертикальными сдвигами колонок целиком
@@ -1262,6 +1401,59 @@ mod tests {
             plan.positions
         );
         assert!(!node_rects_overlap(&out));
+    }
+
+    /// Регресс (аудит схем 2026-09-25): обмен соседей при РАЗНЫХ высотах
+    /// не рвёт стек колонки — зазоры в каждой колонке ≥ [`ROW_GAP`],
+    /// наложений нет. Старый refine_by_swaps обменивал y-позиции дословно
+    /// и давал наложения-«внахлёст» (cohort-launch: план × удержание).
+    #[test]
+    fn swap_refine_keeps_row_gaps_with_unequal_heights() {
+        let mut canvas = Canvas::default();
+        // Колонка источников трёх разных высот с общим родителем —
+        // barycenter стянет их к центру родителя, refine обязан
+        // сохранять стек.
+        let a = sized(&mut canvas, "a", 0.0, 0.0, 260.0, 202.0);
+        let b = sized(&mut canvas, "b", 0.0, 266.0, 260.0, 254.0);
+        let c = sized(&mut canvas, "c", 0.0, 584.0, 260.0, 182.0);
+        let d = sized(&mut canvas, "d", 370.0, 100.0, 280.0, 256.0);
+        let e = sized(&mut canvas, "e", 370.0, 520.0, 280.0, 176.0);
+        link(&mut canvas, "e1", a, d);
+        link(&mut canvas, "e2", b, d);
+        link(&mut canvas, "e3", c, d);
+        link(&mut canvas, "e4", a, e);
+        link(&mut canvas, "e5", c, e);
+        let plan = plan_scheme_layout(&canvas);
+        let out = apply_plan(&canvas, &plan);
+        assert!(
+            !node_rects_overlap(&out),
+            "наложений нет: {:?}",
+            plan.positions
+        );
+        // Зазоры внутри каждой x-колонки: сортировка по y даёт шаги
+        // ≥ ROW_GAP (минус численный эпсилон).
+        let mut texts: Vec<&Node> = out
+            .nodes
+            .iter()
+            .filter(|n| n.kind() == NodeKind::Text)
+            .collect();
+        texts.sort_by_key(|n| (n.x as i32, n.y as i32));
+        for pair in texts.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let same_col = (a.x - b.x).abs() < 1.0;
+            if !same_col {
+                continue;
+            }
+            let gap_top_down = b.y - (a.y + a.height);
+            if gap_top_down >= 0.0 {
+                assert!(
+                    gap_top_down + 1.0 >= ROW_GAP,
+                    "зазор {gap_top_down} < ROW_GAP между {} и {}",
+                    a.id,
+                    b.id
+                );
+            }
+        }
     }
 
     #[test]

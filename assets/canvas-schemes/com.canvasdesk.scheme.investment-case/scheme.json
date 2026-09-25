@@ -1,0 +1,454 @@
+{
+ "id": "com.canvasdesk.scheme.investment-case",
+ "name_ru": "Инвесткейс",
+ "name_en": "Investment case",
+ "description_ru": "Приведённая стоимость потоков против вложений: NPV, индекс прибыльности, IRR и темп роста потоков на четырёх годах денежного потока.",
+ "description_en": "Present value of flows against the outlay: NPV, profitability index, IRR and the flow growth rate on a four-year cash flow.",
+ "category": "business",
+ "category_ru": "Бизнес",
+ "category_en": "Business",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 240,
+    "text": "Инвесткейс\nПотоки дисконтируются по ставке: приведённая стоимость сравнивается с вложениями, дальше индекс прибыльности, IRR и темп роста потоков.\nПоменяйте ставку, вложения или потоки — всё пересчитается. Пучок «Потоки → PV» открывается кликом в main stage.",
+    "color": "4"
+   },
+   {
+    "id": "invest",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 200,
+    "text": "Вложения\nРазовая инвестиция и зеркальный поток со знаком минус для IRR.\n\ncapex = 500000 $\noutflow = 0 $ - capex",
+    "color": "5"
+   },
+   {
+    "id": "discount",
+    "type": "text",
+    "x": 440,
+    "y": 280,
+    "width": 260,
+    "height": 160,
+    "text": "Ставка\nГодовая ставка дисконтирования: цена денег для проекта.\n\nrate = 0.12",
+    "color": "5"
+   },
+   {
+    "id": "flows",
+    "type": "text",
+    "x": 440,
+    "y": 500,
+    "width": 260,
+    "height": 200,
+    "text": "Потоки\nПоложительные денежные потоки по годам проекта.\n\ny1 = 150000 $\ny2 = 220000 $\ny3 = 280000 $\ny4 = 320000 $",
+    "color": "5"
+   },
+   {
+    "id": "pv",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "PV\nПриведённая стоимость потоков: нулевой год — старт, каждый год дисконтирован своей степенью ставки.\n\npv = npv(Ставка.rate, 0 $, Потоки.y1, Потоки.y2, Потоки.y3, Потоки.y4)",
+    "color": "2"
+   },
+   {
+    "id": "npv",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 220,
+    "text": "NPV\nЧистая приведённая стоимость: потоки минус вложения; вложения передаются дальше в индекс прибыльности.\n\nnpv_sum = PV.pv - Вложения.capex\ncapex = Вложения.capex",
+    "color": "6"
+   },
+   {
+    "id": "pi",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Индекс\nИндекс прибыльности: приведённые потоки на каждый вложенный доллар — значения приходят в параметры.\n\npi = $npv / $capex + 1",
+    "color": "2"
+   },
+   {
+    "id": "irr",
+    "type": "text",
+    "x": 800,
+    "y": 280,
+    "width": 280,
+    "height": 200,
+    "text": "IRR\nВнутренняя норма доходности: ставка, при которой NPV обращается в ноль.\n\nirr_rate = irr(Вложения.outflow, Потоки.y1, Потоки.y2, Потоки.y3, Потоки.y4)",
+    "color": "2"
+   },
+   {
+    "id": "growth",
+    "type": "text",
+    "x": 800,
+    "y": 560,
+    "width": 280,
+    "height": 180,
+    "text": "Рост\nСреднегодовой темп роста потоков от первого года к четвёртому.\n\ngrowth = cagr(Потоки.y1, Потоки.y4, 3)",
+    "color": "2"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 280,
+    "width": 320,
+    "height": 220,
+    "text": "Вердикт\nПроект приносит на 212 тысяч долларов приведённой ценности больше вложений: индекс 1.4, IRR около 28 процентов против ставки 12.\nСценарий на ставке покажет чувствительность NPV и индекса без правки базы.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "discount",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "rate"
+   },
+   {
+    "id": "e2",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y1"
+   },
+   {
+    "id": "e3",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y2"
+   },
+   {
+    "id": "e4",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y3"
+   },
+   {
+    "id": "e5",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y4"
+   },
+   {
+    "id": "e6",
+    "fromNode": "pv",
+    "toNode": "npv",
+    "flowKind": "value",
+    "fromOutput": "pv"
+   },
+   {
+    "id": "e7",
+    "fromNode": "invest",
+    "toNode": "npv",
+    "flowKind": "value",
+    "fromOutput": "capex"
+   },
+   {
+    "id": "e8",
+    "fromNode": "npv",
+    "toNode": "pi",
+    "flowKind": "value",
+    "fromOutput": "npv_sum",
+    "toParam": "npv"
+   },
+   {
+    "id": "e9",
+    "fromNode": "npv",
+    "toNode": "pi",
+    "flowKind": "value",
+    "fromOutput": "capex",
+    "toParam": "capex"
+   },
+   {
+    "id": "e10",
+    "fromNode": "invest",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "outflow"
+   },
+   {
+    "id": "e11",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y1"
+   },
+   {
+    "id": "e12",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y2"
+   },
+   {
+    "id": "e13",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y3"
+   },
+   {
+    "id": "e14",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y4"
+   },
+   {
+    "id": "e15",
+    "fromNode": "flows",
+    "toNode": "growth",
+    "flowKind": "value",
+    "fromOutput": "y1"
+   },
+   {
+    "id": "e16",
+    "fromNode": "flows",
+    "toNode": "growth",
+    "flowKind": "value",
+    "fromOutput": "y4"
+   }
+  ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 240,
+    "text": "Startup runway\nExpense items roll into the monthly burn, revenue offsets the net burn, and cash divided by it gives the runway.\nChange any item or the cash and everything recomputes. The “Costs → Burn” bundle opens with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "invest",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 200,
+    "text": "Outlay\nA one-time investment and its mirrored negative flow for IRR.\n\ncapex = 500000 $\noutflow = 0 $ - capex",
+    "color": "5",
+    "label": "Outlay"
+   },
+   {
+    "id": "discount",
+    "type": "text",
+    "x": 440,
+    "y": 280,
+    "width": 260,
+    "height": 160,
+    "text": "Rate\nAnnual discount rate: the price of money for the project.\n\nrate = 0.12",
+    "color": "5",
+    "label": "Rate"
+   },
+   {
+    "id": "flows",
+    "type": "text",
+    "x": 440,
+    "y": 500,
+    "width": 260,
+    "height": 200,
+    "text": "Flows\nPositive cash flows by project year.\n\ny1 = 150000 $\ny2 = 220000 $\ny3 = 280000 $\ny4 = 320000 $",
+    "color": "5",
+    "label": "Flows"
+   },
+   {
+    "id": "pv",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "PV\nPresent value of the flows: year zero is the start, every year is discounted by its power of the rate.\n\npv = npv(Rate.rate, 0 $, Flows.y1, Flows.y2, Flows.y3, Flows.y4)",
+    "color": "2"
+   },
+   {
+    "id": "npv",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 220,
+    "text": "NPV\nNet present value: flows minus the outlay; the outlay is passed on to the profitability index.\n\nnpv_sum = PV.pv - Outlay.capex\ncapex = Outlay.capex",
+    "color": "6"
+   },
+   {
+    "id": "pi",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Index\nProfitability index: discounted flows per each invested dollar — values arrive in parameters.\n\npi = $npv / $capex + 1",
+    "color": "2"
+   },
+   {
+    "id": "irr",
+    "type": "text",
+    "x": 800,
+    "y": 280,
+    "width": 280,
+    "height": 200,
+    "text": "IRR\nInternal rate of return: the rate at which NPV turns to zero.\n\nirr_rate = irr(Outlay.outflow, Flows.y1, Flows.y2, Flows.y3, Flows.y4)",
+    "color": "2"
+   },
+   {
+    "id": "growth",
+    "type": "text",
+    "x": 800,
+    "y": 560,
+    "width": 280,
+    "height": 180,
+    "text": "Growth\nAverage annual growth rate of the flows from year one to year four.\n\ngrowth = cagr(Flows.y1, Flows.y4, 3)",
+    "color": "2"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 280,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nThe horizon is 54 months at a net burn of 22 thousand per month: more than four years of headroom.\nRaise marketing and the runway shifts at once; a scenario on the items shows deltas without touching the base.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "discount",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "rate"
+   },
+   {
+    "id": "e2",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y1"
+   },
+   {
+    "id": "e3",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y2"
+   },
+   {
+    "id": "e4",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y3"
+   },
+   {
+    "id": "e5",
+    "fromNode": "flows",
+    "toNode": "pv",
+    "flowKind": "value",
+    "fromOutput": "y4"
+   },
+   {
+    "id": "e6",
+    "fromNode": "pv",
+    "toNode": "npv",
+    "flowKind": "value",
+    "fromOutput": "pv"
+   },
+   {
+    "id": "e7",
+    "fromNode": "invest",
+    "toNode": "npv",
+    "flowKind": "value",
+    "fromOutput": "capex"
+   },
+   {
+    "id": "e8",
+    "fromNode": "npv",
+    "toNode": "pi",
+    "flowKind": "value",
+    "fromOutput": "npv_sum",
+    "toParam": "npv"
+   },
+   {
+    "id": "e9",
+    "fromNode": "npv",
+    "toNode": "pi",
+    "flowKind": "value",
+    "fromOutput": "capex",
+    "toParam": "capex"
+   },
+   {
+    "id": "e10",
+    "fromNode": "invest",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "outflow"
+   },
+   {
+    "id": "e11",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y1"
+   },
+   {
+    "id": "e12",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y2"
+   },
+   {
+    "id": "e13",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y3"
+   },
+   {
+    "id": "e14",
+    "fromNode": "flows",
+    "toNode": "irr",
+    "flowKind": "value",
+    "fromOutput": "y4"
+   },
+   {
+    "id": "e15",
+    "fromNode": "flows",
+    "toNode": "growth",
+    "flowKind": "value",
+    "fromOutput": "y1"
+   },
+   {
+    "id": "e16",
+    "fromNode": "flows",
+    "toNode": "growth",
+    "flowKind": "value",
+    "fromOutput": "y4"
+   }
+  ]
+ }
+}
