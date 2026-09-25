@@ -243,17 +243,30 @@ pub mod ui {
         [x, button[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
     }
 
-    /// Rect кнопки помощи «?» (FR-027): третий элемент кластера — тот же
-    /// угол/ряд, внутрь экрана от кнопки темы ещё на один шаг
-    /// (SETTINGS_BUTTON + SETTINGS_GAP; зеркально для правых углов).
-    /// Кластер ⚙/тема/«?» целиком переносится настройкой `button_corner`.
-    pub fn help_button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
+    /// FR-040 v2: Rect кнопки переключения языка (RU/EN) — третий элемент
+    /// углового кластера, вплотную к кнопке темы (внутрь экрана по
+    /// горизонтали через SETTINGS_GAP). Зеркально для правых углов.
+    /// Кластер: ⚙(настройки) → ☀(тема) → «RU/EN»(язык) → «?»(помощь).
+    pub fn language_button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
         let theme = theme_button_rect(corner, viewport);
         let x = match corner {
             Corner::TopLeft | Corner::BottomLeft => theme[0] + SETTINGS_BUTTON + SETTINGS_GAP,
             _ => theme[0] - SETTINGS_GAP - SETTINGS_BUTTON,
         };
         [x, theme[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
+    }
+
+    /// Rect кнопки помощи «?» (FR-027): четвёртый элемент кластера — тот же
+    /// угол/ряд, внутрь экрана от кнопки языка ещё на один шаг
+    /// (SETTINGS_BUTTON + SETTINGS_GAP; зеркально для правых углов).
+    /// Кластер ⚙/тема/язык/«?» целиком переносится настройкой `button_corner`.
+    pub fn help_button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
+        let language = language_button_rect(corner, viewport);
+        let x = match corner {
+            Corner::TopLeft | Corner::BottomLeft => language[0] + SETTINGS_BUTTON + SETTINGS_GAP,
+            _ => language[0] - SETTINGS_GAP - SETTINGS_BUTTON,
+        };
+        [x, language[1], SETTINGS_BUTTON, SETTINGS_BUTTON]
     }
 
     /// Точка в зоне resize (правый нижний угол ноды)? Чистая функция для тестов.
@@ -2810,11 +2823,11 @@ pub mod ui {
             assert!(tl_theme[0] > tl[0] + tl[2]);
         }
 
-        /// FR-027: кнопка «?» — третий элемент кластера: тот же ряд, зазор
-        /// SETTINGS_GAP от кнопки темы, целиком в viewport на 4 углах
-        /// (образец — theme_button_next_to_settings_button).
+        /// FR-027 + FR-040 v2: кнопка «?» — четвёртый элемент кластера
+        /// (⚙ → ☼ → RU/EN → ?). Тот же ряд, зазор SETTINGS_GAP от кнопки
+        /// языка, целиком в viewport на 4 углах.
         #[test]
-        fn help_button_next_to_theme_button() {
+        fn help_button_next_to_language_button() {
             let viewport = [1600.0, 900.0];
             for corner in [
                 Corner::TopLeft,
@@ -2822,29 +2835,29 @@ pub mod ui {
                 Corner::BottomLeft,
                 Corner::BottomRight,
             ] {
-                let theme = theme_button_rect(corner, viewport);
+                let language = language_button_rect(corner, viewport);
                 let help = help_button_rect(corner, viewport);
                 // Тот же ряд и размер
-                assert_eq!(help[1], theme[1]);
+                assert_eq!(help[1], language[1]);
                 assert_eq!(help[3], SETTINGS_BUTTON);
                 assert_eq!(help[2], SETTINGS_BUTTON);
                 // Целиком в viewport
                 assert!(help[0] >= 0.0 && help[0] + help[2] <= viewport[0]);
                 // Зазор ровно SETTINGS_GAP, пересечения нет
-                let gap = (help[0] - (theme[0] + theme[2])).abs();
-                let gap_left = (theme[0] - (help[0] + help[2])).abs();
+                let gap = (help[0] - (language[0] + language[2])).abs();
+                let gap_left = (language[0] - (help[0] + help[2])).abs();
                 assert!(
                     (gap - SETTINGS_GAP).abs() < 1e-3 || (gap_left - SETTINGS_GAP).abs() < 1e-3,
-                    "зазор SETTINGS_GAP: help={help:?} theme={theme:?}"
+                    "зазор SETTINGS_GAP: help={help:?} language={language:?}"
                 );
             }
-            // Правый угол: «?» левее темы; левый — правее
+            // Правый угол: «?» левее языка; левый — правее
             let tr_help = help_button_rect(Corner::TopRight, viewport);
-            let tr_theme = theme_button_rect(Corner::TopRight, viewport);
-            assert!(tr_help[0] + tr_help[2] < tr_theme[0]);
+            let tr_language = language_button_rect(Corner::TopRight, viewport);
+            assert!(tr_help[0] + tr_help[2] < tr_language[0]);
             let tl_help = help_button_rect(Corner::TopLeft, viewport);
-            let tl_theme = theme_button_rect(Corner::TopLeft, viewport);
-            assert!(tl_help[0] > tl_theme[0] + tl_theme[2]);
+            let tl_language = language_button_rect(Corner::TopLeft, viewport);
+            assert!(tl_help[0] > tl_language[0] + tl_language[2]);
             // На узком окне 320×240 кластер не вылезает за экран
             for corner in [
                 Corner::TopLeft,
@@ -2854,6 +2867,56 @@ pub mod ui {
             ] {
                 let help = help_button_rect(corner, [320.0, 240.0]);
                 assert!(help[0] >= 0.0 && help[0] + help[2] <= 320.0, "{corner:?}");
+            }
+        }
+
+        /// FR-040 v2: кнопка «RU/EN» — третий элемент кластера между
+        /// темой и «?»: тот же ряд, зазор SETTINGS_GAP от темы, целиком
+        /// в viewport на 4 углах (образец — theme_button_next_to_settings_button).
+        #[test]
+        fn language_button_next_to_theme_button() {
+            let viewport = [1600.0, 900.0];
+            for corner in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let theme = theme_button_rect(corner, viewport);
+                let language = language_button_rect(corner, viewport);
+                // Тот же ряд и размер
+                assert_eq!(language[1], theme[1]);
+                assert_eq!(language[3], SETTINGS_BUTTON);
+                assert_eq!(language[2], SETTINGS_BUTTON);
+                // Целиком в viewport
+                assert!(language[0] >= 0.0 && language[0] + language[2] <= viewport[0]);
+                // Зазор ровно SETTINGS_GAP, пересечения нет
+                let gap = (language[0] - (theme[0] + theme[2])).abs();
+                let gap_left = (theme[0] - (language[0] + language[2])).abs();
+                assert!(
+                    (gap - SETTINGS_GAP).abs() < 1e-3 || (gap_left - SETTINGS_GAP).abs() < 1e-3,
+                    "зазор SETTINGS_GAP: language={language:?} theme={theme:?}"
+                );
+            }
+            // Правый угол: язык левее темы; левый — правее
+            let tr_language = language_button_rect(Corner::TopRight, viewport);
+            let tr_theme = theme_button_rect(Corner::TopRight, viewport);
+            assert!(tr_language[0] + tr_language[2] < tr_theme[0]);
+            let tl_language = language_button_rect(Corner::TopLeft, viewport);
+            let tl_theme = theme_button_rect(Corner::TopLeft, viewport);
+            assert!(tl_language[0] > tl_theme[0] + tl_theme[2]);
+            // На узком окне 320×240 кластер не вылезает за экран
+            for corner in [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ] {
+                let language = language_button_rect(corner, [320.0, 240.0]);
+                assert!(
+                    language[0] >= 0.0 && language[0] + language[2] <= 320.0,
+                    "{corner:?}"
+                );
             }
         }
 

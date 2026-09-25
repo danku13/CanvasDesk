@@ -669,6 +669,9 @@ pub mod keys {
     pub const TOAST_ANALYSIS_ON: &str = "toast.analysis_on";
     pub const TOAST_FILE_UNAVAILABLE: &str = "toast.file_unavailable";
     pub const TOAST_WIDGET_OPEN_FAILED: &str = "toast.widget_open_failed";
+    /// FR-040 v2: тост переключения языка кнопкой-иконкой. Подстановка
+    /// `{lang}` — название языка в его собственной локали (`русский`/`English`).
+    pub const TOAST_LANGUAGE_TOGGLED: &str = "toast.language_toggled";
     pub const GROUP_DEFAULT_LABEL: &str = "group.default_label";
     pub const FILE_NEW_NOTE: &str = "file.new_note";
 }
@@ -1306,6 +1309,7 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::TOAST_FILE_UNAVAILABLE, "Файл недоступен: {file}"),
     (keys::TOAST_WIDGET_OPEN_FAILED, "Виджет: не удалось открыть {path}"),
+    (keys::TOAST_LANGUAGE_TOGGLED, "Язык интерфейса: {lang}"),
     (keys::GROUP_DEFAULT_LABEL, "Группа"),
     (keys::FILE_NEW_NOTE, "Новая заметка"),
     (keys::ROW_EDGE_AGGREGATION, "Агрегация связей"),
@@ -2068,6 +2072,7 @@ const EN: &[(&str, &str)] = &[
     (keys::TOAST_ANALYSIS_ON, "Analysis mode enabled (Ctrl+B to disable)"),
     (keys::TOAST_FILE_UNAVAILABLE, "File unavailable: {file}"),
     (keys::TOAST_WIDGET_OPEN_FAILED, "Widget: failed to open {path}"),
+    (keys::TOAST_LANGUAGE_TOGGLED, "Interface language: {lang}"),
     (keys::GROUP_DEFAULT_LABEL, "Group"),
     (keys::FILE_NEW_NOTE, "New note"),
     (keys::ROW_EDGE_AGGREGATION, "Edge aggregation"),
