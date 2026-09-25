@@ -142,6 +142,33 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
   `canvas-ui/tests/snapshot/*.txt`; сравнение точное строковое; изменение —
   осознанный PR с diff (§9 Контракт-9 FR-068). Регенерация:
   `CANVAS_UI_UPDATE_SNAPSHOTS=1 cargo test -p canvas-ui --test snapshot`.
+- **HTML5 demo-goldens (FR-068 W1, `canvas-ui/tests/html5_demos.rs`)**:
+  10 эталонных web-layouts (mdn/css-tricks топ-10: sticky-header,
+  sidebar-overflow, navbar-space-between, grid-12-col, masonry-lite,
+  aspect-ratio, modal-fixed-clip, dropdown-flip, virtualization,
+  complex-form) — сцены `SceneNode`, раскладка `TaffyBackend::lay_out_scene`,
+  дамп rect'ов всех узлов в DFS pre-order. Эталоны —
+  `canvas-ui/tests/html5_demos/*.txt`; регенерация
+  `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos --features taffy`.
+  Изменение эталона — осознанный PR с diff.
+- **Backend'ы вёрстки (FR-068 W1, ADR-0014)**: `trait LayoutBackend` +
+  `NativeBackend` (default, 1:1 примитивы §4) + `TaffyBackend` за фичей
+  `taffy` (default off — zero-dep G7). Потребитель выбирает backend явно:
+  `Row::lay_out_with(backend, slot, &items)` / `grid_cells_with(...)` /
+  `lay_out_measured_with(...)`; pilot-поверхности — `pilot_backend()`
+  (TaffyBackend при фиче, иначе Native). Расширенные CSS-возможности
+  (percent/fill/aspect-ratio/position absolute|fixed|sticky/overflow/
+  scroll-offset) — сцена `SceneNode` + `TaffyBackend::lay_out_scene`.
+  Документированные расхождения taffy: C3 `SqueezeTail` ≠ `flex_shrink`
+  (§Контракт-4); `compute_layout` округляет координаты к целому ui px
+  (round on freeze) — паритет побитовый на целых входах; `End`+переполнение
+  (unsafe alignment); sticky — эмуляция. Паритет-сюита:
+  `cargo test -p canvas-ui --features taffy --test backend_parity` (13).
+- **Perf-taffy (FR-068 W1, `canvas-ui/tests/perf_taffy.rs`, `#[ignore]`)**:
+  reflow 1000 узлов на TaffyBackend — release-медиана 264.8 μs (гейт < 1 мс,
+  §Контракт-8); dev-профиль ~2.7 мс — артефакт неоптимизированного taffy
+  (относительный гейт дрейфа ±20% против `tests/perf_taffy_baseline.txt`).
+  Прогон: `cargo test -p canvas-ui --features taffy --test perf_taffy -- --ignored`.
 - **Perf baseline (FR-068 W0, `canvas-ui/tests/perf_baseline.rs`, `#[ignore]`)**:
   reflow синтетического графа из 1000 узлов (Fit/flex/Wrap/SqueezeTail/grid_cells)
   — медиана 200 итераций, гейт < 1 мс (§Контракт-8 FR-068), регрессия > 20%

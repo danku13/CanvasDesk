@@ -1155,14 +1155,21 @@ mod tests {
     /// найден демо 01 — golden 01 пересоздан осознанно).
     #[test]
     fn scene_sticky_clamps_subtree() {
-        let scene = SceneNode::column(100.0, 80.0, 0.0, vec![
-            SceneNode::row(100.0, 40.0, 8.0, vec![
-                SceneNode::leaf(30.0, 40.0),
-                SceneNode::leaf(30.0, 40.0),
-            ])
-            .at(ScenePosition::Sticky { top: 0.0 }),
-            SceneNode::leaf(100.0, 40.0),
-        ])
+        let scene = SceneNode::column(
+            100.0,
+            80.0,
+            0.0,
+            vec![
+                SceneNode::row(
+                    100.0,
+                    40.0,
+                    8.0,
+                    vec![SceneNode::leaf(30.0, 40.0), SceneNode::leaf(30.0, 40.0)],
+                )
+                .at(ScenePosition::Sticky { top: 0.0 }),
+                SceneNode::leaf(100.0, 40.0),
+            ],
+        )
         .scrolled(30.0);
         let rects = TAFFY.lay_out_scene(UiRect::new(0.0, 0.0, 300.0, 200.0), &scene);
         // шапка: flow 0 − shift 30 = −30 → кламп к 0 (dy = +30)
