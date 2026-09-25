@@ -41,7 +41,8 @@
  */
 
 import type {
-  AnchorSpec, TourHandle, TourHooks, TourOptions, TourScenario, TourStep,
+  AnchorSpec, HighlightOptions, RunOptions, TourHandle, TourHooks,
+  TourOptions, TourScenario, TourStep,
 } from "./types";
 import {
   computePlacement, getElementRect, measureTooltip,
@@ -65,6 +66,7 @@ export class Tour {
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
   private refreshRaf: number | null = null;
   private signalBus: Set<SignalListener> = new Set();
+  private storageKey: string | null;
 
   // Singleton bus for cross-engine use (rare; the engine is normally
   // a single instance per page).
@@ -75,18 +77,72 @@ export class Tour {
     this.zIndex = opts.baseZIndex ?? 10000;
     this.log = opts.log ?? ((lvl, msg) => console[lvl]?.(`[tour] ${msg}`));
     this.hooks = {};
+    this.storageKey = opts.storageKey === undefined ? "cd-tour:" : opts.storageKey;
     this.highlight = createHighlight(this.container, this.zIndex + 1);
     injectStyles(this.container, opts.styles ?? DEFAULT_STYLES);
     Tour.instance = this;
   }
 
-  /** Run a scenario. Returns a handle for programmatic control. */
-  run(scenario: TourScenario): TourHandle {
+  // ── persistence ────────────────────────────────────────────────
+
+  /** Check if scenario was previously completed. */
+  isCompleted(id: string): boolean {
+    return this.getCompletedAt(id) !== null;
+  }
+
+  /** Get completion timestamp (ms epoch) or null. */
+  getCompletedAt(id: string): number | null {
+    const raw = this.readStorage(`${this.storageKey}done:${id}`);
+    if (raw === null) return null;
+    const ts = Number(raw);
+    return Number.isFinite(ts) ? ts : null;
+  }
+
+  /** Mark scenario as completed (manual override — also called
+   *  automatically by the engine on normal completion). */
+  markCompleted(id: string): void {
+    this.writeStorage(`${this.storageKey}done:${id}`, String(Date.now()));
+  }
+
+  /** Reset completion + resume state for a scenario (re-enable
+   *  auto-show, fresh start). */
+  resetCompleted(id: string): void {
+    this.removeStorage(`${this.storageKey}done:${id}`);
+    this.clearResume(id);
+  }
+
+  /** Get the saved step index for a scenario (resume), or null. */
+  getResumeIndex(id: string): number | null {
+    const raw = this.readStorage(`${this.storageKey}resume:${id}`);
+    if (raw === null) return null;
+    const idx = Number(raw);
+    return Number.isFinite(idx) && idx >= 0 ? idx : null;
+  }
+
+  /** Clear resume state for a scenario (called on completion). */
+  clearResume(id: string): void {
+    this.removeStorage(`${this.storageKey}resume:${id}`);
+  }
+
+  // ── run ─────────────────────────────────────────────────────────
+
+  /** Run a scenario. Returns a handle for programmatic control, or
+   *  null if `skipIfCompleted` was set and the scenario was already
+   *  completed. */
+  run(scenario: TourScenario, opts: RunOptions = {}): TourHandle | null {
+    if (opts.skipIfCompleted && this.isCompleted(scenario.id)) {
+      this.log("info", `scenario "${scenario.id}" already completed; skipping (use force to re-run)`);
+      return null;
+    }
     if (this.active) {
       this.log("warn", `scenario "${this.active.scenario.id}" still active; cancelling`);
       this.cancel();
     }
-    const handle = this.start(scenario);
+    const startIdx = opts.resume ? (this.getResumeIndex(scenario.id) ?? 0) : 0;
+    if (opts.resume && startIdx > 0) {
+      this.log("info", `resuming "${scenario.id}" from step ${startIdx + 1}`);
+    }
+    const handle = this.start(scenario, startIdx, opts);
     scenario.onStart?.(handle);
     return handle;
   }
@@ -110,13 +166,20 @@ export class Tour {
     const a = this.active;
     const rect = resolveAnchor(a.step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, a.step.highlight ?? undefined);
+    // Same passive-dim logic as activateStep — rAF refresh must not
+    // re-enable dim (would re-block canvas clicks every frame).
+    const opts: HighlightOptions = a.step.highlight ? { ...a.step.highlight } : {};
+    if (a.step.passive && (opts.dim === undefined || opts.dim === null)) {
+      opts.dim = false;
+    }
+    this.highlight.setAnchor(rect, opts);
     if (a.tooltipEl) {
       this.placeTooltip(a.tooltipEl, a.step.side ?? "bottom", rect);
     }
   }
 
-  private start(scenario: TourScenario): TourHandle {
+  private start(scenario: TourScenario, startIdx: number = 0, runOpts: RunOptions = {}): TourHandle {
+    const safeIdx = Math.max(0, Math.min(startIdx, scenario.steps.length - 1));
     const handle: TourHandle = {
       scenario,
       get step() { return active.step; },
@@ -131,13 +194,16 @@ export class Tour {
 
     const active: ActiveState = {
       scenario,
-      step: scenario.steps[0],
-      index: 0,
+      step: scenario.steps[safeIdx],
+      index: safeIdx,
       tooltipEl: null,
       lastAnchorRect: null,
       wait: null,
       advanceUnsub: null,
       handle,
+      runOpts: {
+        markCompletedOnSkip: runOpts.markCompletedOnSkip ?? false,
+      },
     };
     this.active = active;
 
@@ -149,8 +215,8 @@ export class Tour {
     // resizes or the host app scrolls/animates).
     this.startRefreshRaf();
 
-    // Activate the first step.
-    this.activateStep(0);
+    // Activate the initial step (may be > 0 if resuming).
+    this.activateStep(safeIdx);
 
     return handle;
   }
@@ -179,6 +245,15 @@ export class Tour {
   private skip(): void {
     if (!this.active) return;
     const a = this.active;
+    // Persist resume state — user can come back and finish.
+    this.writeStorage(
+      `${this.storageKey}resume:${a.scenario.id}`,
+      String(a.index),
+    );
+    if (a.runOpts?.markCompletedOnSkip) {
+      this.markCompleted(a.scenario.id);
+      this.clearResume(a.scenario.id);
+    }
     this.cleanup();
     a.scenario.onSkip?.(a.handle);
   }
@@ -186,6 +261,11 @@ export class Tour {
   private complete(): void {
     if (!this.active) return;
     const a = this.active;
+    // Mark completed in localStorage + clear resume state.
+    if (this.storageKey) {
+      this.markCompleted(a.scenario.id);
+      this.clearResume(a.scenario.id);
+    }
     this.cleanup();
     a.scenario.onComplete?.(a.handle);
     this.signal(`tour:${a.scenario.id}:complete`);
@@ -253,10 +333,30 @@ export class Tour {
     a.step = step;
     a.scenario.onStep?.(step, index, a.handle);
 
+    // Persist resume state (so a refresh / re-open can pick up here).
+    // Cleared on completion (and on skip unless markCompletedOnSkip is
+    // false — in which case the user can still resume from this step).
+    if (this.storageKey) {
+      this.writeStorage(
+        `${this.storageKey}resume:${a.scenario.id}`,
+        String(index),
+      );
+    }
+
     // Resolve anchor.
     const rect = resolveAnchor(step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, step.highlight ?? undefined);
+    // Passive steps (no Next button) — user must perform an action on the
+    // host surface. The dim overlay must NOT block pointer events, so
+    // clicks reach the underlying canvas (e.g. "create a note"). When
+    // the step has both `passive` and `waitFor`, the engine also forces
+    // auto-advance on resolve (see waitFor .then below) — otherwise the
+    // user would be stuck without a Next button.
+    const highlightOpts = step.highlight ?? {};
+    if (step.passive) {
+      highlightOpts.dim ??= false;
+    }
+    this.highlight.setAnchor(rect, highlightOpts);
 
     // Build the tooltip.
     const ctx = {
@@ -321,7 +421,11 @@ export class Tour {
         .then(() => {
           if (!a.wait) return;
           a.wait.resolved = true;
-          if (a.scenario.autoAdvance) this.next();
+          // Passive step (no Next button) — waitFor resolving is the
+          // only path forward. Always advance, regardless of
+          // scenario.autoAdvance. For non-passive steps, respect the
+          // scenario.autoAdvance flag (default false — user clicks Next).
+          if (a.scenario.autoAdvance || step.passive) this.next();
         })
         .catch((e) => {
           if (e instanceof WaitForError) {
@@ -406,6 +510,36 @@ export class Tour {
     }
     this.active = null;
   }
+
+  // ── storage helpers (graceful degradation when no localStorage) ──
+
+  private readStorage(key: string): string | null {
+    if (!this.storageKey) return null;
+    try {
+      return globalThis.localStorage?.getItem(key) ?? null;
+    } catch {
+      // Private mode / storage disabled — degrade gracefully.
+      return null;
+    }
+  }
+
+  private writeStorage(key: string, value: string): void {
+    if (!this.storageKey) return;
+    try {
+      globalThis.localStorage?.setItem(key, value);
+    } catch {
+      this.log("warn", `localStorage write failed for key ${key}`);
+    }
+  }
+
+  private removeStorage(key: string): void {
+    if (!this.storageKey) return;
+    try {
+      globalThis.localStorage?.removeItem(key);
+    } catch {
+      // No-op.
+    }
+  }
 }
 
 interface ActiveState {
@@ -417,6 +551,8 @@ interface ActiveState {
   wait: { resolved: boolean; cancel?: () => void } | null;
   advanceUnsub: (() => void) | null;
   handle: TourHandle;
+  /** Run options — currently only markCompletedOnSkip is consumed. */
+  runOpts?: { markCompletedOnSkip?: boolean };
 }
 
 type AnchorRectish = import("./types").Rect | null;
