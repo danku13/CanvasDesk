@@ -62,7 +62,8 @@ mod taffy_backend;
 
 pub use flex::FlexLayoutEngine;
 pub use scene::{
-    SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneSize, SceneTrack,
+    SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneSize, SceneTrack, TrackMax,
+    TrackMin,
 };
 #[cfg(feature = "taffy")]
 pub use taffy_backend::TaffyBackend;

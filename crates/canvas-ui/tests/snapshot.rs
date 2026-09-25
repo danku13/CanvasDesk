@@ -224,6 +224,17 @@ fn dump_items(items: &[PaintItem]) -> String {
                     body: format!("text x={x} y={y} w={w} h={h} text=\"{text}\""),
                 });
             }
+            PaintItem::Icon { rect, name, .. } => {
+                // FR-ICONS: иконка в дампе — rect + имя (tint — слот темы).
+                // Попутный фикс 2026-09-25 (FR-074): вариант добавлен в
+                // PaintItem ранее, match дампа не обновили — тест не
+                // компилировался на main (предсуществующий красный).
+                let (x, y, w, h) = (px(rect.x), px(rect.y), px(rect.w), px(rect.h));
+                out.push(Line {
+                    key: (x, y, w, h, "icon"),
+                    body: format!("icon x={x} y={y} w={w} h={h} name=\"{name}\""),
+                });
+            }
             PaintItem::ClipRect { rect, items } => {
                 let (x, y, w, h) = (px(rect.x), px(rect.y), px(rect.w), px(rect.h));
                 out.push(Line {

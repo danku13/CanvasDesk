@@ -50,8 +50,8 @@ use taffy::style::Overflow;
 
 use super::{
     Child, Column, CrossAlign, LayoutBackend, LayoutFeatures, MainAlign, MeasuredItem, Row,
-    RowPolicy, SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneTrack, UiRect,
-    UiVec2,
+    RowPolicy, SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneTrack, TrackMax,
+    TrackMin, UiRect, UiVec2,
 };
 use crate::measure::TextMeasurer;
 
@@ -728,6 +728,28 @@ fn scene_style(node: &SceneNode, parent: ParentCtx) -> Style {
                         GridTemplateComponent::Single(TrackSizingFunction::from_fr(1.0))
                     }
                     SceneTrack::Auto => GridTemplateComponent::Single(TrackSizingFunction::AUTO),
+                    // FR-074: CSS minmax(min, max) — нативный MinMax taffy
+                    // (min без fr — MinTrackSizingFunction; max с fr —
+                    // MaxTrackSizingFunction, Fill = 1fr).
+                    SceneTrack::MinMax { min, max } => {
+                        GridTemplateComponent::Single(TrackSizingFunction {
+                            min: match min {
+                                TrackMin::Auto => MinTrackSizingFunction::AUTO,
+                                TrackMin::Length(v) => MinTrackSizingFunction::length(v.max(0.0)),
+                                TrackMin::Percent(p) => {
+                                    MinTrackSizingFunction::percent(p.clamp(0.0, 1.0))
+                                }
+                            },
+                            max: match max {
+                                TrackMax::Auto => MaxTrackSizingFunction::AUTO,
+                                TrackMax::Length(v) => MaxTrackSizingFunction::length(v.max(0.0)),
+                                TrackMax::Percent(p) => {
+                                    MaxTrackSizingFunction::percent(p.clamp(0.0, 1.0))
+                                }
+                                TrackMax::Fill => MaxTrackSizingFunction::fr(1.0),
+                            },
+                        })
+                    }
                 })
                 .collect();
             // Строки — неявные (auto-flow row) с высотой row_h.
