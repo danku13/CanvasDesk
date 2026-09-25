@@ -14,3 +14,4 @@ export { toolbarTourScenario } from "./toolbar";
 export { firstRunInlineScenario } from "./first-run-inline";
 export { paletteTourScenario } from "./palette-tour";
 export { calculationsTourScenario } from "./calculations-tour";
+export { schemeGalleryTourScenario } from "./scheme-gallery";

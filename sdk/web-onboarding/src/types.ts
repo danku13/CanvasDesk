@@ -231,6 +231,22 @@ export interface TourOptions {
   baseZIndex?: number;
   /** Telemetry sink. */
   log?: (level: "info" | "warn" | "error", message: string) => void;
+  /** localStorage key prefix for completion + resume state.
+   *  Default: "cd-tour:". Set to null to disable persistence. */
+  storageKey?: string | null;
+}
+
+/** Options for `Tour.run()`. */
+export interface RunOptions {
+  /** If true and the scenario was previously completed (recorded in
+   *  localStorage), don't run — return null. Default: false (always run). */
+  skipIfCompleted?: boolean;
+  /** If true, resume from the saved step index (if any). Cleared on
+   *  completion. Default: false. */
+  resume?: boolean;
+  /** If true, mark the scenario completed even on skip (default false:
+   *  skip preserves resume state for later). */
+  markCompletedOnSkip?: boolean;
 }
 
 /** Optional engine-level hooks. */

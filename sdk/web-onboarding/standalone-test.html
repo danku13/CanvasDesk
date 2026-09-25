@@ -135,6 +135,25 @@
           tour.run(CanvasDeskTour.scenarios.toolbarTourScenario);
         });
 
+        // URL hash #tour=<id> — auto-launch (mirrors canvas-web index.html).
+        if (location.hash && location.hash.indexOf("#tour=") === 0) {
+          var id = location.hash.slice("#tour=".length);
+          var found = null;
+          for (var k in CanvasDeskTour.scenarios) {
+            if (CanvasDeskTour.scenarios[k].id === id) {
+              found = CanvasDeskTour.scenarios[k];
+              break;
+            }
+          }
+          if (found) {
+            tour.run(found);
+            log("info", "auto-launched scenario via URL hash: " + id);
+          } else {
+            console.warn("[onboarding-v2] scenario not found: " + id);
+            log("warn", "scenario not found for hash: " + id);
+          }
+        }
+
         // Build the scenario cards.
         var scenarios = [
           { s: CanvasDeskTour.scenarios.toolbarTourScenario,
@@ -149,6 +168,9 @@
           { s: CanvasDeskTour.scenarios.calculationsTourScenario,
             title: "Расчёты Numi",
             desc: "7 шагов, anchor: rect (canvas-internal), tooltip сверху" },
+          { s: CanvasDeskTour.scenarios.schemeGalleryTourScenario,
+            title: "Галерея схем",
+            desc: "8 шагов, 3 passive+waitFor (gallery-opened, preview-shown, applied)" },
         ];
 
         var host = document.getElementById("scenarios");
@@ -165,7 +187,8 @@
         // Manual signal sender (for testing waitFor(signal) gates).
         var sigBar = document.createElement("div");
         sigBar.style.cssText = "margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap;";
-        ["canvas:note-created", "canvas:note-activated", "canvas:palette-opened"]
+        ["canvas:note-created", "canvas:note-activated", "canvas:palette-opened",
+         "canvas:scheme-gallery-opened", "canvas:scheme-preview-shown", "canvas:scheme-applied"]
           .forEach(function (sig) {
             var b = document.createElement("button");
             b.type = "button";

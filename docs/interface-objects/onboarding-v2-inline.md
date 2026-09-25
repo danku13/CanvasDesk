@@ -99,6 +99,7 @@ interface TourStep {
 | `cd-first-run-inline`    | Первый запуск: интерактив       | `waitFor(signal)`: `canvas:note-created`        |
 | `cd-palette-tour`        | Палитра шаблонов (FR-018)        | Ctrl+P, колесо категорий, Shift+клик            |
 | `cd-calculations-tour`   | Расчёты Numi (FR-013/014/015)    | Переменные / единицы / value-flow / what-if / MC |
+| `cd-scheme-gallery-tour` | Галерея схем (FR-049)           | 8 шагов, 3 passive+waitFor (open/preview/apply) |
 
 Сценарии живут в `sdk/web-onboarding/src/scenarios/`. Расширение —
 новый `.ts`-файл + export в `scenarios/index.ts`. Хост-приложение
