@@ -48,9 +48,18 @@ pub(crate) fn palette_b() -> KitPalette {
     p
 }
 
-pub(crate) fn font_system() -> cosmic_text::FontSystem {
-    let mut fs = cosmic_text::FontSystem::new();
+/// Загрузить вшитый шрифт рендера (`NotoSansDisplay-Medium.ttf`) в ЧУЖОЙ
+/// `FontSystem` — метрики тестов = метрикам рендера и одинаковы на всех
+/// платформах CI (практика `measure.rs`/`row_guides.rs`). Компоненты W3
+/// владеют своим инстансом `FontSystem` (retained-контракт) — тесты
+/// домешивают шрифт в инстанс компонента.
+pub(crate) fn load_display_font(fs: &mut cosmic_text::FontSystem) {
     const FONT: &[u8] = include_bytes!("../../../../assets/fonts/NotoSansDisplay-Medium.ttf");
     fs.db_mut().load_font_data(FONT.to_vec());
+}
+
+pub(crate) fn font_system() -> cosmic_text::FontSystem {
+    let mut fs = cosmic_text::FontSystem::new();
+    load_display_font(&mut fs);
     fs
 }
