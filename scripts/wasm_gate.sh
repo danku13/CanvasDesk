@@ -14,6 +14,11 @@
 #   2/3 build: артефакт — rlib ядра под wasm32-unknown-unknown
 #   3/3 test:  тесты canvas-core и моста canvas-mcp исполняются под wasm32-wasip1 (wasmtime)
 #
+# FR-WASM-02 §7 (panic-guard): отдельно ступень 1.5 — компиляция wasm-тестов
+# canvas-render (чистая логика clamp_surface_extent и др.). Без установленного
+# wasm-bindgen-test-runner это «только компилируется»; при наличии бинарника
+# (cargo install wasm-bindgen-cli) — исполняется в браузере headless.
+#
 # Использование:
 #   scripts/wasm_gate.sh           # все три ступени
 #   scripts/wasm_gate.sh --check   # только ступень 1 (wasmtime не нужен)
@@ -24,6 +29,27 @@ CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canva
 
 echo "[wasm-gate 1/3] cargo check --target wasm32-unknown-unknown $CRATES"
 cargo check --target wasm32-unknown-unknown $CRATES
+
+# FR-WASM-02 §7: проверка компиляции wasm-тестов canvas-render. Без --tests
+# cargo не компилирует tests/-директорию; здесь мы убеждаемся, что
+# wasm-bindgen_test-макрос раскрывается без ошибок под wasm32-unknown-unknown.
+echo "[wasm-gate 1.5/3] cargo check --target wasm32-unknown-unknown --tests -p canvas-render (wasm-тесты компилируются)"
+cargo check --target wasm32-unknown-unknown --tests -p canvas-render
+
+# FR-WASM-02 §7: если доступен wasm-bindgen-test-runner — исполняем wasm-тесты
+# в браузере (по умолчанию Chrome headless через chromedriver). runner должен
+# совпадать по версии с wasm-bindgen в Cargo.lock (0.2.127 в дереве на W4).
+# Установка: cargo install wasm-bindgen-cli --version 0.2.127.
+if command -v wasm-bindgen-test-runner >/dev/null 2>&1; then
+    echo "[wasm-gate 1.6/3] cargo test --target wasm32-unknown-unknown -p canvas-render --test wasm_clamp (wasm-bindgen-test-runner)"
+    CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="wasm-bindgen-test-runner" \
+        cargo test --target wasm32-unknown-unknown -p canvas-render --test wasm_clamp
+else
+    echo "[wasm-gate 1.6/3] wasm-bindgen-test-runner не найден — wasm-тесты скомпилированы, но не исполнены"
+    echo "  установить: cargo install wasm-bindgen-cli --version 0.2.127"
+    echo "  затем: CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \\"
+    echo "         cargo test --target wasm32-unknown-unknown -p canvas-render --test wasm_clamp"
+fi
 
 echo "[wasm-gate 2/3] cargo build --target wasm32-unknown-unknown -p canvas-core (артефакт rlib)"
 cargo build --target wasm32-unknown-unknown -p canvas-core
