@@ -193,10 +193,34 @@ impl OutputSpec {
 }
 
 impl TemplateManifest {
-    /// Имя для интерфейса: русское, если задано (язык приложения), иначе
-    /// каноническое английское.
-    pub fn display_name(&self) -> &str {
-        self.name_ru.as_deref().unwrap_or(&self.name)
+    /// Имя для интерфейса по языку приложения (FR-040 расширение v2):
+    /// `Language::En` — каноническое английское имя (`name_en`/`name`),
+    /// `Language::Ru` — русское (`name_ru`), при отсутствии русского —
+    /// английское (старые манифесты и моки без `name_ru`).
+    ///
+    /// До v2 метод возвращал всегда `name_ru.unwrap_or(name)` — английский
+    /// интерфейс показывал русские имена шаблонов. Паритет с
+    /// [`crate::schemes::SchemeManifest::display_name`].
+    pub fn display_name(&self, language: crate::Language) -> &str {
+        match language {
+            crate::Language::Ru => self.name_ru.as_deref().unwrap_or(&self.name),
+            crate::Language::En => &self.name,
+        }
+    }
+
+    /// Описание для интерфейса по языку приложения (FR-040 расширение v2):
+    /// `Language::En` — `description_en` (если задан), иначе `description`
+    /// (fallback на русский — инвариант полноты: показ всегда есть).
+    /// `Language::Ru` — `description`.
+    pub fn display_description(&self, language: crate::Language) -> &str {
+        match language {
+            crate::Language::Ru => &self.description,
+            crate::Language::En => self
+                .description_en
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&self.description),
+        }
     }
 
     /// Парсинг манифеста из JSON (схема FR-019 `template.json`).
@@ -941,12 +965,31 @@ pub fn default_template_width(param_rows: usize) -> f32 {
 /// текст — Numi-лист присваиваний параметров (`rps = 1000 rps`), расширение
 /// `canvasdesk.template` — [`TemplateRef`] со снимком формулы. Переопределения
 /// `overrides` (MCP `template_instantiate`) заменяют дефолты по имени.
+///
+/// Язык имени снапшота — [`crate::Language::Ru`] (обратная
+/// совместимость; для UI-пути — [`instantiate_with_language`]).
 pub fn instantiate(
     manifest: &TemplateManifest,
     overrides: &BTreeMap<String, TemplateParam>,
     node_id: String,
     x: f32,
     y: f32,
+) -> Result<Node, InstantiateError> {
+    instantiate_with_language(manifest, overrides, node_id, x, y, crate::Language::Ru)
+}
+
+/// FR-040 расширение v2: инстанциация с явным языком — снапшот имени
+/// (`TemplateRef.name`) берётся из [`TemplateManifest::display_name`] для
+/// выбранного языка. Паритет с UI-рендером палитры/wheel-меню. MCP-путь
+/// остаётся на [`instantiate`] (дефолт `Ru`) — у MCP нет контекста языка
+/// пользователя; GUI-путь передаёт `settings.language`.
+pub fn instantiate_with_language(
+    manifest: &TemplateManifest,
+    overrides: &BTreeMap<String, TemplateParam>,
+    node_id: String,
+    x: f32,
+    y: f32,
+    language: crate::Language,
 ) -> Result<Node, InstantiateError> {
     // Значения параметров: дефолты манифеста + переопределения
     let mut params = BTreeMap::new();
@@ -1008,8 +1051,10 @@ pub fn instantiate(
         params,
         icon: manifest.icon.clone(),
         color: manifest.color.clone(),
-        // FR-023: имя — в заголовок ноды (переживает правки текста)
-        name: Some(manifest.display_name().to_owned()),
+        // FR-023: имя — в заголовок ноды (переживает правки текста).
+        // FR-040 v2: язык имени — передан в `instantiate_with_language`
+        // (отображаемое имя по текущей локали интерфейса).
+        name: Some(manifest.display_name(language).to_owned()),
         // FR-029: снимок именованных выходов (переживает удаление шаблона
         // из реестра — как expr/icon/color)
         outputs: manifest.outputs.clone(),
@@ -1237,8 +1282,12 @@ mod tests {
         // Снапшоты иконки/цвета — рендер шапки без реестра
         assert_eq!(template.icon, "lb");
         assert_eq!(template.color, "#4A90E2");
-        // FR-023: имя манифеста — в снапшот (заголовок ноды)
-        assert_eq!(template.name.as_deref(), Some(manifest.display_name()));
+        // FR-023: имя манифеста — в снапшот (заголовок ноды).
+        // FR-040 v2: `instantiate` (без указания языка) — дефолт `Ru`.
+        assert_eq!(
+            template.name.as_deref(),
+            Some(manifest.display_name(crate::Language::Ru))
+        );
     }
 
     /// Инстанциация с переопределениями (MCP-путь).
@@ -1315,7 +1364,7 @@ mod tests {
                     expr: manifest.expr.clone(),
                     icon: manifest.icon.clone(),
                     color: manifest.color.clone(),
-                    name: Some(manifest.display_name().to_owned()),
+                    name: Some(manifest.display_name(crate::Language::Ru).to_owned()),
                     outputs: Vec::new(),
                     params: manifest
                         .params

@@ -264,6 +264,7 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
     <li><b>Проверка цепочки</b> — клик по цифре полосы результата; режим защиты ×1.5 с пошаговым раскрытием (FR-039)</li>
     <li><b>Ревью автосвязей</b> — группировка по парам, массовые действия, undo-бат одним шагом (AC-5.3)</li>
     <li><b>Esc-лестница</b> — меню → drag → ревью → защита → цепочка → stage → выделение</li>
+    <li><b>Расталкивание при драге</b> — тяните ноду сквозь соседей: они уступают дорогу (якорь + ореол MTV) и съезжаются обратно; сейф-зазор держит дистанцию между любыми нодами; если активная встала «между» — уехавшие получают новые якоря (пульт «Драг · расталкивание»)</li>
   </ul>
   <div class="legend">
     <s><span class="dotv"></span>value / проливание</s>
@@ -314,6 +315,24 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
     <button class="ctl" id="minusBtn">−связь</button>
   </div>
 
+  <div class="grp-title">Драг · расталкивание</div>
+  <div class="row"><label class="toggle"><input type="checkbox" id="pushTgl" checked>расталкивание при драге</label></div>
+  <div class="row"><label class="toggle"><input type="checkbox" id="pushAnchorsTgl">якоря и ореол (диагн.)</label></div>
+  <div class="row"><label class="toggle"><input type="checkbox" id="pushPredTgl" checked>предиктивное упреждение</label></div>
+  <div class="row">
+    <span class="thr-lb">ореол <b id="pushMarginV">12</b>px</span>
+    <input type="range" id="pushMargin" min="0" max="36" step="2" value="12">
+  </div>
+  <div class="row">
+    <span class="thr-lb">сейф-зазор <b id="pushGapV">16</b>px</span>
+    <input type="range" id="pushGap" min="0" max="48" step="2" value="16">
+  </div>
+  <div class="row">
+    <span class="thr-lb">жёсткость возврата <b id="pushRetV">0,16</b></span>
+    <input type="range" id="pushRet" min="4" max="40" step="1" value="16">
+  </div>
+  <div class="btns row"><button class="ctl" id="pushResetBtn">вернуть все якоря</button></div>
+
   <div class="grp-title">Сцена</div>
   <div class="btns row">
     <button class="ctl" id="themeBtn">тема</button>
@@ -340,7 +359,7 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
   <button class="ctl" id="tourSkip">Закрыть</button>
 </div>
 
-<div id="hint">Колесо — зум к курсору · drag фона — пан · клик по пучку — <b>main stage</b> · клик по цифре итога — <b>проверка цепочки</b> · тяните кромку ноды — <b>новая связь (В-C)</b></div>
+<div id="hint">Колесо — зум к курсору · drag фона — пан · клик по пучку — <b>main stage</b> · клик по цифре итога — <b>проверка цепочки</b> · тяните кромку ноды — <b>новая связь (В-C)</b> · тяните ноду сквозь другие — <b>расталкивание</b></div>
 
 <div id="drawer" class="panel">
   <button class="ctl" id="dclose">✕</button>
@@ -2098,7 +2117,11 @@ window.addEventListener('mousemove', e=>{
   }
   if (dragNode){
     const n = nodeById(dragNode.id);
-    n.x = wx-dragNode.dx; n.y = wy-dragNode.dy;
+    const nx = wx-dragNode.dx, ny = wy-dragNode.dy;
+    if (PH.lastActiveId!==n.id){ PH.vel={x:0,y:0}; PH.lastActiveId=n.id; }
+    PH.vel.x = PH.vel.x*0.5 + (nx-n.x)*0.5;   // сглаженная скорость для упреждения
+    PH.vel.y = PH.vel.y*0.5 + (ny-n.y)*0.5;
+    n.x = nx; n.y = ny;
     dragNode.moved = true;
     return;
   }
@@ -2119,7 +2142,9 @@ window.addEventListener('mouseup', e=>{
   }
   if (drag){ finishEdgeDrag(e); return; }
   if (dragNode){
+    const n = nodeById(dragNode.id);
     const moved = dragNode.moved; dragNode = null;
+    if (moved) phCommitDrop(n);   // закрепление активной + перезакрепление накрытых якорей
     if (!moved){
       const n = nodeAt(s2wx(e.clientX), s2wy(e.clientY));
       if (n && stripHit(n, s2wx(e.clientX), s2wy(e.clientY))){
@@ -2974,7 +2999,7 @@ rvInit();
    ЧАСТЬ L. Оболочка: пульт, тур, hint, readout, fit, цикл
    ============================================================ */
 const hintEl = document.getElementById('hint');
-const HINT_DEFAULT = 'Колесо — зум к курсору · drag фона — пан · клик по пучку — <b>main stage</b> · клик по цифре итога — <b>проверка цепочки</b> · тяните кромку ноды — <b>новая связь (В-C)</b>';
+const HINT_DEFAULT = 'Колесо — зум к курсору · drag фона — пан · клик по пучку — <b>main stage</b> · клик по цифре итога — <b>проверка цепочки</b> · тяните кромку ноды — <b>новая связь (В-C)</b> · тяните ноду сквозь другие — <b>расталкивание</b>';
 function hint(html){ hintEl.innerHTML = html; }
 function hintDefault(){ hint(HINT_DEFAULT); }
 
@@ -3119,6 +3144,7 @@ function resetAll(){
   NODES.forEach(n=>{
     if (INIT_POS[n.id]){ n.x = INIT_POS[n.id].x; n.y = INIT_POS[n.id].y; n.w = INIT_POS[n.id].w; }
   });
+  phInitAnchors();
   if (chain) closeChain();
   if (stage) closeStage();
   if (rdvOpen) closeReview();
@@ -3145,6 +3171,176 @@ function resetAll(){
   hintDefault();
 }
 
+/* ============================================================
+   ЧАСТЬ X. Физика драга — «расталкивание» с якорями
+   Модель: у каждой ноды есть якорь (её зафиксированное место).
+   Активная (таскаемая) нода жёстко следует за курсором; соседние
+   ноды мягко выталкиваются её ореолом (минимальный сдвиг по AABB).
+   СЕЙФ-ЗОНА: каждая нода носит вокруг себя буфер gap/2 со всех
+   сторон — расталкивание срабатывает при соприкосновении буферов,
+   поэтому между границами любых двух нод всегда остаётся зазор ≥ gap
+   (активная↔пассивная: ≥ margin+gap). Прилипание невозможно ни в
+   каком состоянии, включая перезакрепление якорей на drop.
+   Пружина возврата тянет вытесненных назад к якорю. Если после отпускания
+   ореол активной накрывает старый якорь ноды — она получает новый
+   якорь на вытесненной позиции; остальные съезжаются обратно.
+   Без сил/скоростей: только позиционные коррекции со сглаживанием
+   — стабильно, предсказуемо, 60 fps. Переносится в canvas-core
+   один-в-один (pure-функция шага над позициями).
+   ============================================================ */
+const PH = {
+  enabled:true, showAnchors:false, predictive:true,
+  margin:12,      // ореол вокруг активной ноды, world px
+  gap:16,         // сейф-зазор между границами любых нод, world px (буфер gap/2 вокруг каждой)
+  ret:0.16,       // жёсткость возврата к якорю (доля за кадр)
+  pushFrac:0.45,  // доля выталкивания из ореола за кадр
+  pairFrac:0.30,  // доля расталкивания соседей между собой
+  iters:3,        // итерации взаимного расталкивания за кадр
+  eps:0.05,
+  anchors:{},     // id -> {x,y}
+  vel:{x:0,y:0},  // сглаженная скорость активной ноды (world px/кадр)
+  lastActiveId:null
+};
+function phH(n){ return nodeGeom(n, curLod()).h; }
+function phRect(n, pad){ return {x:n.x-pad, y:n.y-pad, w:n.w+pad*2, h:phH(n)+pad*2}; }
+function phOverlap(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+function phMtv(a,b){ // минимальный вектор выталкивания a из b
+  const l=b.x+b.w-a.x, r=a.x+a.w-b.x, t=b.y+b.h-a.y, bo=a.y+a.h-b.y;
+  const m=Math.min(l,r,t,bo);
+  if (m===r) return {x:-r,y:0};   // влево (правый край a уходит на левый край b)
+  if (m===l) return {x:l,y:0};    // вправо
+  if (m===bo) return {x:0,y:-bo}; // вверх
+  return {x:0,y:t};               // вниз
+}
+function phInitAnchors(){ NODES.forEach(n=>{ PH.anchors[n.id]={x:n.x,y:n.y}; }); }
+function phActiveRect(n){ // ореол активной (поверх сейф-зоны) + предиктивное упреждение
+  const pad=PH.margin+PH.gap/2;
+  let x1=n.x-pad, y1=n.y-pad, x2=n.x+n.w+pad, y2=n.y+phH(n)+pad;
+  if (PH.predictive){
+    const dx=clamp(PH.vel.x*3,-110,110), dy=clamp(PH.vel.y*3,-110,110);
+    if (dx<0) x1+=dx; else x2+=dx;
+    if (dy<0) y1+=dy; else y2+=dy;
+  }
+  return {x:x1,y:y1,w:x2-x1,h:y2-y1};
+}
+function phPushOut(n, other, pad, frac){
+  // выталкивает ноду n из прямоугольника other: мягкая доля frac за кадр,
+  // затем ЖЁСТКИЙ дожим до границы — сейф-зона непроницаема даже при
+  // удержании активной ноды с давлением (пружина возврата не продавит)
+  const r = phRect(n, pad);
+  if (!phOverlap(r, other)) return;
+  const p = phMtv(r, other);
+  n.x += p.x*frac; n.y += p.y*frac;
+  const r2 = phRect(n, pad);
+  if (phOverlap(r2, other)){
+    const p2 = phMtv(r2, other);
+    n.x += p2.x; n.y += p2.y;
+  }
+}
+function phStep(){
+  if (!PH.enabled) return;
+  PH.vel.x*=0.85; PH.vel.y*=0.85; // затухание, если курсор замер
+  const A = dragNode ? nodeById(dragNode.id) : null;
+  // 1) мягкий возврат к якорям
+  for (const n of NODES){
+    if (A && n.id===A.id) continue;
+    const a=PH.anchors[n.id]; if (!a) continue;
+    n.x += (a.x-n.x)*PH.ret; n.y += (a.y-n.y)*PH.ret;
+  }
+  // 2) выталкивание ореолом активной ноды (жёсткая сейф-зона)
+  const ar = A ? phActiveRect(A) : null;
+  if (A){
+    for (const n of NODES){
+      if (n.id===A.id) continue;
+      phPushOut(n, ar, PH.gap/2, PH.pushFrac); // сейф-зона пассивной + дожим
+    }
+  }
+  // 3) взаимное расталкивание соседей (цепочки нод)
+  for (let it=0; it<PH.iters; it++){
+    for (let i=0;i<NODES.length;i++){
+      const a=NODES[i]; if (A && a.id===A.id) continue;
+      const ra=phRect(a,PH.gap/2);
+      for (let j=i+1;j<NODES.length;j++){
+        const b=NODES[j]; if (A && b.id===A.id) continue;
+        const rb=phRect(b,PH.gap/2);
+        if (phOverlap(ra,rb)){
+          const p=phMtv(ra,rb);
+          const hx=p.x*0.5*PH.pairFrac, hy=p.y*0.5*PH.pairFrac;
+          a.x+=hx; a.y+=hy; b.x-=hx; b.y-=hy;
+          ra.x+=hx; ra.y+=hy; rb.x-=hx; rb.y-=hy;
+        }
+      }
+    }
+  }
+  // 4) финальный дожим ореолом: парная фаза не должна пробивать сейф-зону
+  if (A){
+    for (const n of NODES){
+      if (n.id===A.id) continue;
+      phPushOut(n, ar, PH.gap/2, 1.0); // полное выталкивание до границы
+    }
+  }
+}
+function phCommitDrop(A){
+  // активная нода закрепляется на новом месте; чей старый якорь накрыт её
+  // ореолом — получают новый якорь на вытесненной позиции, остальные
+  // плавно съезжаются обратно на прежние места
+  if (!PH.enabled) return;
+  PH.anchors[A.id] = {x:A.x, y:A.y};
+  const hp = PH.margin+PH.gap/2; // ореол поверх сейф-зоны
+  const ar = {x:A.x-hp, y:A.y-hp, w:A.w+2*hp, h:phH(A)+2*hp};
+  for (const n of NODES){
+    if (n.id===A.id) continue;
+    const a = PH.anchors[n.id];
+    const old = {x:a.x, y:a.y, w:n.w, h:phH(n)};
+    if (phOverlap(ar, old)){
+      const cur = phRect(n, PH.gap/2);
+      if (phOverlap(ar, cur)){
+        const p = phMtv(cur, ar);
+        n.x += p.x; n.y += p.y;
+      }
+      // сейф-зазор: новый якорь не должен упираться в чужие сейф-зоны
+      for (let pass=0; pass<3; pass++){
+        const rn = phRect(n, PH.gap/2); let moved=false;
+        for (const m of NODES){
+          if (m.id===n.id || m.id===A.id) continue;
+          const rm = phRect(m, PH.gap/2);
+          if (phOverlap(rn, rm)){
+            const p = phMtv(rn, rm);
+            n.x += p.x; n.y += p.y; rn.x += p.x; rn.y += p.y; moved=true;
+          }
+        }
+        if (!moved) break;
+      }
+      PH.anchors[n.id] = {x:n.x, y:n.y};
+    }
+  }
+}
+function drawAnchorGhosts(){
+  if (!PH.enabled || !PH.showAnchors) return;
+  ctx.save();
+  ctx.setLineDash([4,3]); ctx.lineWidth=1;
+  for (const n of NODES){
+    const a = PH.anchors[n.id]; if (!a) continue;
+    if (PH.gap>0){ // сейф-зона вокруг текущей позиции
+      const g2=PH.gap/2;
+      ctx.strokeStyle = PAL.sel; ctx.globalAlpha = 0.15;
+      ctx.strokeRect(n.x-g2, n.y-g2, n.w+PH.gap, phH(n)+PH.gap);
+    }
+    if (Math.hypot(a.x-n.x, a.y-n.y) <= 2) continue;
+    ctx.strokeStyle = PAL.sel; ctx.globalAlpha = 0.5;
+    ctx.strokeRect(a.x, a.y, n.w, phH(n));
+    ctx.globalAlpha = 0.9; ctx.fillStyle = PAL.sel;
+    ctx.beginPath(); ctx.arc(a.x+5, a.y+5, 2.2, 0, Math.PI*2); ctx.fill();
+  }
+  if (dragNode){ // диагностический ореол активной ноды
+    const A = nodeById(dragNode.id);
+    const r = phActiveRect(A);
+    ctx.strokeStyle = PAL.accent; ctx.globalAlpha = 0.8;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+  }
+  ctx.restore();
+}
+
 /* ---------- главный цикл ---------- */
 let __frame = 0, __renderErr = null;
 function render(){
@@ -3156,6 +3352,8 @@ function render(){
   ctx.fillRect(0,0,W,H);
   ctx.translate(cam.x, cam.y); ctx.scale(cam.z, cam.z);
   drawGrid();
+  phStep();
+  drawAnchorGhosts();
   const lod = curLod();
   const bundles = computeBundles();
   drawEdges(bundles, lod);
@@ -3209,6 +3407,28 @@ function drawEdgeDragPreview(){
 
 /* ---------- инициализация ---------- */
 NODES.forEach(n=>INIT_POS[n.id] = {x:n.x, y:n.y, w:n.w});
+phInitAnchors();
+/* ---- пульт «Драг · расталкивание» ---- */
+document.getElementById('pushTgl').addEventListener('change', e=>{ PH.enabled = e.target.checked; });
+document.getElementById('pushAnchorsTgl').addEventListener('change', e=>{ PH.showAnchors = e.target.checked; });
+document.getElementById('pushPredTgl').addEventListener('change', e=>{ PH.predictive = e.target.checked; });
+document.getElementById('pushMargin').addEventListener('input', e=>{
+  PH.margin = +e.target.value;
+  document.getElementById('pushMarginV').textContent = e.target.value;
+});
+document.getElementById('pushGap').addEventListener('input', e=>{
+  PH.gap = +e.target.value;
+  document.getElementById('pushGapV').textContent = e.target.value;
+});
+document.getElementById('pushRet').addEventListener('input', e=>{
+  PH.ret = +e.target.value/100;
+  document.getElementById('pushRetV').textContent = (+e.target.value/100).toFixed(2).replace('.',',');
+});
+document.getElementById('pushResetBtn').addEventListener('click', ()=>{
+  NODES.forEach(n=>{ if (INIT_POS[n.id]){ n.x = INIT_POS[n.id].x; n.y = INIT_POS[n.id].y; } });
+  phInitAnchors();
+  hintDefault();
+});
 window.addEventListener('resize', ()=>{ resize(); if (chain) renderChain(); });
 rebuildEdges();
 recalcDAU();

@@ -637,6 +637,9 @@ pub(super) fn rect_xywh(rect: [f32; 4]) -> [f32; 4] {
 /// Карточка строки шаблона палитры (FR-024/FR-025): подложка + плитка
 /// квад-иконки + имя + описание. Общий рендер строк развёрнутого дока и
 /// flyout свёрнутой полосы — WYSIWYG: клик по нарисованному. `rect` — xywh.
+///
+/// FR-040 v2: `language` управляет выбором имени/описания (`name_en`/`name_ru`,
+/// `description_en`/`description`) — паритет с wheel-меню и toast-ами.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn template_card_row(
     manifest: &canvas_core::templates::TemplateManifest,
@@ -645,6 +648,7 @@ pub(super) fn template_card_row(
     border: [f32; 4],
     palette: &ThemeColors,
     icon_tint: [f32; 4],
+    language: canvas_core::Language,
     instances: &mut Vec<CardInstance>,
     texts: &mut Vec<OwnedScreenText>,
     m: &mut canvas_ui::measure::TextMeasurer,
@@ -682,7 +686,7 @@ pub(super) fn template_card_row(
         icon_tint,
     ));
     texts.push(OwnedScreenText {
-        text: manifest.display_name().to_owned(),
+        text: manifest.display_name(language).to_owned(),
         origin: [tile[0] + tile[2] + 8.0, rect[1] + 5.0],
         width: rect[2] - (tile[2] + 24.0),
         font_size: 13.0,
@@ -695,8 +699,9 @@ pub(super) fn template_card_row(
     // m/fs приходят от вызова: в кадре глобальный measure_font_system
     // уже захвачен оверлеем — повторный захват на wasm паникует
     // (recursive mutex, no_threads std; выловлено wasm-аудитом).
+    // FR-040 v2: описание берётся по языку интерфейса (description_en при En).
     {
-        let desc = manifest.description.clone();
+        let desc = manifest.display_description(language).to_owned();
         let desc_w = (rect[2] - (tile[2] + 24.0)).max(10.0);
         for (line_idx, line) in crate::admin_ui::wrap_text(m, fs, &desc, desc_w, 11.0)
             .into_iter()
