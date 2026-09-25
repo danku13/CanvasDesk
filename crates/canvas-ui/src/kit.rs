@@ -43,6 +43,9 @@ pub use crate::component::row::{
     RowParts, RowStyle, ROW_BADGE_PAD_H, ROW_DOT, ROW_DOT_PAD, ROW_GLYPH_GAP, ROW_GLYPH_MIN_W,
     ROW_LINE_FRAC, ROW_TEXT_GAP,
 };
+// FR-068 W3-продолжение (M1): Table v2 — retained-компонент таблицы
+// (дизайн docs/plans/fr-068-table-v2.md; фасад 1:1, §Контракт-1).
+pub use crate::component::table::{Table, TableOpts, TableProps, TableRow, TableRowStyle};
 pub use crate::component::text_field::{text_field, TextFieldLayout, TextFieldModel};
 pub use crate::component::{
     ButtonVariant, ControlStyle, KitPalette, KitState, PanelStyle, BUTTON_HEIGHT, BUTTON_PAD_H,

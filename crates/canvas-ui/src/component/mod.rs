@@ -17,6 +17,7 @@ pub mod list;
 pub mod modal;
 pub mod panel;
 pub mod row;
+pub mod table;
 #[cfg(test)]
 pub mod test_support;
 pub mod text_field;
