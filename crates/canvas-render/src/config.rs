@@ -57,3 +57,30 @@ pub fn choose_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
 pub fn surface_size_valid(width: u32, height: u32) -> bool {
     width > 0 && height > 0
 }
+
+/// Защитный clamp физических размеров surface под `max_texture_dimension_2d`
+/// адаптера. На web canvas растянут на 100vw/100vh (CSS), а winit репортит
+/// физический размер = CSS × DPR. На 2K+ мониторах с DPR>1 размер бэкинг-
+/// текстуры легко уходит за лимит GPU (2048 в WebGL2/downlevel-конфигах,
+/// 8192/16384 на нативе) — wgpu 22.x в `Surface::configure` паникует по
+/// Validation Error → в WASM это trap `unreachable` (см. FR-WASM-02 §7).
+///
+/// Поведение:
+/// - `width`/`height` < 1 → `(1, 1)` (нуль недопустим для wgpu::Extent3d).
+/// - `width`/`height` > `max_extent` → клампится к `max_extent`.
+/// - Возврат: `(clamped_width, clamped_height, was_clamped)` — флаг
+///   `was_clamped` поднимается, если хотя бы одна размерность ужалась
+///   (логируется вызывающим для отладки «размазанного» canvas).
+///
+/// `max_extent` берётся из `device.limits().max_texture_dimension_2d`.
+pub fn clamp_surface_extent(
+    width: u32,
+    height: u32,
+    max_extent: u32,
+) -> (u32, u32, bool) {
+    let max_extent = max_extent.max(1);
+    let clamped_w = width.clamp(1, max_extent);
+    let clamped_h = height.clamp(1, max_extent);
+    let was_clamped = clamped_w != width || clamped_h != height;
+    (clamped_w, clamped_h, was_clamped)
+}

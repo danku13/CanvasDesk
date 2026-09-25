@@ -2,8 +2,8 @@
 //! Спецификация: docs/TASKS.md T1 — vsync, тёмный фон #1e1e22, ресайз без артефактов.
 
 use canvas_render::config::{
-    background_color, choose_present_mode, choose_surface_format, srgb_to_linear,
-    surface_size_valid,
+    background_color, choose_present_mode, choose_surface_format, clamp_surface_extent,
+    srgb_to_linear, surface_size_valid,
 };
 
 /// Формат surface: предпочитаем sRGB (SPEC §6.5 — корректный цвет текста и карточек).
@@ -78,4 +78,62 @@ fn resize_with_zero_size_is_skipped() {
     assert!(!surface_size_valid(100, 0));
     assert!(!surface_size_valid(0, 0));
     assert!(surface_size_valid(100, 100));
+}
+
+/// FR-WASM-02 §7 (panic-guard): clamp размеров surface под max_texture_dimension_2d.
+/// Базовый сценарий — размеры в пределах лимита, ничего не меняется.
+#[test]
+fn clamp_surface_extent_within_limit_is_noop() {
+    let (w, h, clamped) = clamp_surface_extent(1920, 1080, 2048);
+    assert_eq!((w, h, clamped), (1920, 1080, false));
+}
+
+/// Размер canvas уходит за лимит GPU (типичный WebGL2/downlevel = 2048)
+/// — воспроизводит кейс из баг-репорта: canvas 2053×1305, лимит 2048.
+/// Width клампится, height в пределах — was_clamped=true.
+#[test]
+fn clamp_surface_extent_above_limit_clamps_width() {
+    let (w, h, clamped) = clamp_surface_extent(2053, 1305, 2048);
+    assert_eq!((w, h), (2048, 1305));
+    assert!(clamped);
+}
+
+/// Обе размерности превышают лимит — клампятся обе.
+#[test]
+fn clamp_surface_extent_above_limit_clamps_both() {
+    let (w, h, clamped) = clamp_surface_extent(3000, 4000, 2048);
+    assert_eq!((w, h), (2048, 2048));
+    assert!(clamped);
+}
+
+/// Превышена только одна размерность — was_clamped всё равно поднимается.
+#[test]
+fn clamp_surface_extent_one_dim_above_limit() {
+    let (w, h, clamped) = clamp_surface_extent(4096, 1080, 2048);
+    assert_eq!((w, h), (2048, 1080));
+    assert!(clamped);
+}
+
+/// Нулевая размерность (свёрнутое окно) — clamp к 1 (нуль недопустим для
+/// wgpu::Extent3d), был кламп.
+#[test]
+fn clamp_surface_extent_zero_dimension_to_one() {
+    let (w, h, clamped) = clamp_surface_extent(0, 100, 2048);
+    assert_eq!((w, h), (1, 100));
+    assert!(clamped);
+}
+
+/// Нулевой max_extent (повреждённые лимиты) — fallback к 1, без деления на 0.
+#[test]
+fn clamp_surface_extent_zero_max_falls_back_to_one() {
+    let (w, h, clamped) = clamp_surface_extent(100, 100, 0);
+    assert_eq!((w, h), (1, 1));
+    assert!(clamped);
+}
+
+/// На нативе лимит большой (8192) — типичные размеры мониторов проходят без clamp.
+#[test]
+fn clamp_surface_extent_native_limit_no_clamp() {
+    let (w, h, clamped) = clamp_surface_extent(3840, 2160, 8192);
+    assert_eq!((w, h, clamped), (3840, 2160, false));
 }
