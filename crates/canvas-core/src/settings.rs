@@ -322,6 +322,33 @@ pub struct Settings {
     /// старые конфиги без поля грузятся выключенными (serde default).
     #[serde(default)]
     pub explain_coverage: bool,
+    /// FR-073: мастер-тумблер расталкивания при драге. false — ноды
+    /// движутся как раньше (никто никого не выталкивает); остальные
+    /// drag_push-настройки НЕ сбрасываются (паттерн snap_enabled). Старые
+    /// конфиги без поля грузятся как true (serde default).
+    pub drag_push_enabled: bool,
+    /// FR-073: сейф-зазор между границами любых двух нод, world px.
+    /// Пресеты + кламп — по образцу `port_zone_px` (CR-003).
+    pub drag_push_gap_px: f32,
+    /// FR-073: ореол активной ноды поверх её сейф-зоны, world px
+    /// (итоговый отступ активная↔пассивная = ореол + сейф-зазор).
+    pub drag_push_halo_px: f32,
+    /// FR-073: предиктивное упреждение ореола по скорости курсора.
+    pub drag_push_predictive: bool,
+    /// FR-073: перезакрепление якорей накрытых нод на drop (false — все
+    /// вытесненные всегда съезжаются обратно).
+    pub drag_push_rebase: bool,
+    /// FR-073 (advanced, config.toml): жёсткость возврата к якорю
+    /// (доля за шаг). Клампится [`Settings::normalize`].
+    pub drag_push_ret: f32,
+    /// FR-073 (advanced, config.toml): мягкая доля выталкивания из ореола
+    /// за шаг (остаток дожимается жёстко).
+    pub drag_push_push_frac: f32,
+    /// FR-073 (advanced, config.toml): доля парного расталкивания за
+    /// итерацию.
+    pub drag_push_pair_frac: f32,
+    /// FR-073 (advanced, config.toml): итераций парной фазы за шаг.
+    pub drag_push_iters: u32,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -404,6 +431,17 @@ impl Default for Settings {
             autolink_enabled: true,
             // PRD-0007 (F-12): индикатор покрытия — opt-in (дефолт выкл).
             explain_coverage: false,
+            // FR-073: расталкивание при драге включено (поведение прототипа
+            // prototype-unified.html — дефолт-значения физики).
+            drag_push_enabled: true,
+            drag_push_gap_px: DRAG_PUSH_GAP_PRESETS[2],
+            drag_push_halo_px: DRAG_PUSH_HALO_PRESETS[2],
+            drag_push_predictive: true,
+            drag_push_rebase: true,
+            drag_push_ret: DRAG_PUSH_RET_DEFAULT,
+            drag_push_push_frac: DRAG_PUSH_PUSH_FRAC_DEFAULT,
+            drag_push_pair_frac: DRAG_PUSH_PAIR_FRAC_DEFAULT,
+            drag_push_iters: DRAG_PUSH_ITERS_DEFAULT,
         }
     }
 }
@@ -511,6 +549,70 @@ pub fn validated_grid_zoom_thresholds(sub: f32, coarse: f32) -> (f32, f32) {
     }
 }
 
+// --- FR-073: расталкивание при драге — константы и пресеты ----------------
+
+/// Пресеты сейф-зазора (FR-073, панель настроек): 0 — старое поведение
+/// («вплотную»), дефолт — 16.
+pub const DRAG_PUSH_GAP_PRESETS: [f32; 5] = [0.0, 8.0, 16.0, 24.0, 40.0];
+/// Границы клампа сейф-зазора (ручные правки config.toml).
+pub const DRAG_PUSH_GAP_MIN: f32 = 0.0;
+/// Границы клампа сейф-зазора.
+pub const DRAG_PUSH_GAP_MAX: f32 = 64.0;
+/// Пресеты ореола активной ноды (FR-073, панель настроек).
+pub const DRAG_PUSH_HALO_PRESETS: [f32; 5] = [0.0, 6.0, 12.0, 20.0, 32.0];
+/// Границы клампа ореола.
+pub const DRAG_PUSH_HALO_MIN: f32 = 0.0;
+/// Границы клампа ореола.
+pub const DRAG_PUSH_HALO_MAX: f32 = 64.0;
+/// Дефолт жёсткости возврата (FR-073, тонкая настройка config.toml).
+pub const DRAG_PUSH_RET_DEFAULT: f32 = 0.16;
+/// Границы клампа жёсткости возврата.
+pub const DRAG_PUSH_RET_MIN: f32 = 0.02;
+/// Границы клампа жёсткости возврата.
+pub const DRAG_PUSH_RET_MAX: f32 = 0.6;
+/// Дефолт мягкой доли выталкивания за шаг.
+pub const DRAG_PUSH_PUSH_FRAC_DEFAULT: f32 = 0.45;
+/// Дефолт доли парного расталкивания за итерацию.
+pub const DRAG_PUSH_PAIR_FRAC_DEFAULT: f32 = 0.30;
+/// Границы клампа долей выталкивания (push/pair).
+pub const DRAG_PUSH_FRAC_MIN: f32 = 0.05;
+/// Границы клампа долей выталкивания (push/pair).
+pub const DRAG_PUSH_FRAC_MAX: f32 = 1.0;
+/// Дефолт итераций парной фазы за шаг.
+pub const DRAG_PUSH_ITERS_DEFAULT: u32 = 3;
+/// Границы клампа итераций парной фазы.
+pub const DRAG_PUSH_ITERS_MIN: u32 = 1;
+/// Границы клампа итераций парной фазы.
+pub const DRAG_PUSH_ITERS_MAX: u32 = 8;
+
+/// Следующий пресет сейф-зазора по циклу (FR-073, панель настроек).
+pub fn next_drag_push_gap(value: f32) -> f32 {
+    let current = DRAG_PUSH_GAP_PRESETS
+        .iter()
+        .rposition(|preset| *preset <= value)
+        .unwrap_or(0);
+    DRAG_PUSH_GAP_PRESETS[(current + 1) % DRAG_PUSH_GAP_PRESETS.len()]
+}
+
+/// Следующий пресет ореола по циклу (FR-073, панель настроек).
+pub fn next_drag_push_halo(value: f32) -> f32 {
+    let current = DRAG_PUSH_HALO_PRESETS
+        .iter()
+        .rposition(|preset| *preset <= value)
+        .unwrap_or(0);
+    DRAG_PUSH_HALO_PRESETS[(current + 1) % DRAG_PUSH_HALO_PRESETS.len()]
+}
+
+/// Кламп сейф-зазора в допустимые границы (FR-073).
+pub fn clamp_drag_push_gap(value: f32) -> f32 {
+    value.clamp(DRAG_PUSH_GAP_MIN, DRAG_PUSH_GAP_MAX)
+}
+
+/// Кламп ореола в допустимые границы (FR-073).
+pub fn clamp_drag_push_halo(value: f32) -> f32 {
+    value.clamp(DRAG_PUSH_HALO_MIN, DRAG_PUSH_HALO_MAX)
+}
+
 impl Settings {
     /// FR-047: активный пресет темы — валидный id из реестра
     /// [`crate::theme_presets::PRESETS`] или `None` (пустое/неизвестное
@@ -558,7 +660,7 @@ impl Settings {
     /// Клампы/валидация числовых полей после разбора конфига: ручные правки
     /// config.toml не роняют UX (CR-003 — зона портов, FR-028 — откладывания
     /// онбординга, FR-038 — допуск и пара порогов сетки).
-    fn normalize(&mut self) {
+    pub fn normalize(&mut self) {
         self.port_zone_px = clamp_port_zone(self.port_zone_px);
         self.onboarding_defers = clamp_onboarding_defers(self.onboarding_defers);
         // PRD-0007: лимит глубины explain-дерева (0 — «всё», 1..=12).
@@ -568,6 +670,21 @@ impl Settings {
             validated_grid_zoom_thresholds(self.snap_grid_sub_zoom, self.snap_grid_coarse_zoom);
         self.snap_grid_sub_zoom = sub;
         self.snap_grid_coarse_zoom = coarse;
+        // FR-073: расталкивание — пресеты зазора/ореола + клампы тюнинга.
+        self.drag_push_gap_px = clamp_drag_push_gap(self.drag_push_gap_px);
+        self.drag_push_halo_px = clamp_drag_push_halo(self.drag_push_halo_px);
+        self.drag_push_ret = self
+            .drag_push_ret
+            .clamp(DRAG_PUSH_RET_MIN, DRAG_PUSH_RET_MAX);
+        self.drag_push_push_frac = self
+            .drag_push_push_frac
+            .clamp(DRAG_PUSH_FRAC_MIN, DRAG_PUSH_FRAC_MAX);
+        self.drag_push_pair_frac = self
+            .drag_push_pair_frac
+            .clamp(DRAG_PUSH_FRAC_MIN, DRAG_PUSH_FRAC_MAX);
+        self.drag_push_iters = self
+            .drag_push_iters
+            .clamp(DRAG_PUSH_ITERS_MIN, DRAG_PUSH_ITERS_MAX);
     }
 
     /// Разбор из строки (тесты; логика общая с load, включая клампы
@@ -624,6 +741,16 @@ mod tests {
             autolink_enabled: false,
             // PRD-0007 (F-12, X6): индикатор покрытия цепочками round-trip
             explain_coverage: true,
+            // FR-073: расталкивание при драге round-trip (включая тюнинг)
+            drag_push_enabled: false,
+            drag_push_gap_px: 24.0,
+            drag_push_halo_px: 6.0,
+            drag_push_predictive: false,
+            drag_push_rebase: false,
+            drag_push_ret: 0.25,
+            drag_push_push_frac: 0.8,
+            drag_push_pair_frac: 0.5,
+            drag_push_iters: 5,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");

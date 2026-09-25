@@ -27,6 +27,19 @@ pub mod keys {
     pub const TAB_EDGES: &str = "settings.tab.edges";
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
     pub const TAB_SNAP: &str = "settings.tab.snap";
+    pub const TAB_DRAG: &str = "settings.tab.drag";
+
+    pub const ROW_DRAG_PUSH_ENABLED: &str = "settings.row.drag_push_enabled";
+    pub const ROW_DRAG_PUSH_GAP: &str = "settings.row.drag_push_gap";
+    pub const ROW_DRAG_PUSH_HALO: &str = "settings.row.drag_push_halo";
+    pub const ROW_DRAG_PUSH_PREDICTIVE: &str = "settings.row.drag_push_predictive";
+    pub const ROW_DRAG_PUSH_REBASE: &str = "settings.row.drag_push_rebase";
+
+    pub const DESC_DRAG_PUSH_ENABLED: &str = "settings.desc.drag_push_enabled";
+    pub const DESC_DRAG_PUSH_GAP: &str = "settings.desc.drag_push_gap";
+    pub const DESC_DRAG_PUSH_HALO: &str = "settings.desc.drag_push_halo";
+    pub const DESC_DRAG_PUSH_PREDICTIVE: &str = "settings.desc.drag_push_predictive";
+    pub const DESC_DRAG_PUSH_REBASE: &str = "settings.desc.drag_push_rebase";
 
     pub const ROW_SNAP_ENABLED: &str = "settings.row.snap_enabled";
     pub const ROW_SNAP_GRID: &str = "settings.row.snap_grid";
@@ -683,6 +696,12 @@ const RU: &[(&str, &str)] = &[
     (keys::SETTINGS_HINT, "Ctrl+, — открыть/закрыть"),
     (keys::TAB_GENERAL, "Общие"),
     (keys::TAB_CANVAS, "Канвас"),
+    (keys::TAB_DRAG, "Драг"),
+    (keys::ROW_DRAG_PUSH_ENABLED, "Расталкивание при драге"),
+    (keys::ROW_DRAG_PUSH_GAP, "Сейф-зазор"),
+    (keys::ROW_DRAG_PUSH_HALO, "Ореол активной ноды"),
+    (keys::ROW_DRAG_PUSH_PREDICTIVE, "Предиктивное упреждение"),
+    (keys::ROW_DRAG_PUSH_REBASE, "Новые якоря на drop"),
     (keys::TAB_EDGES, "Связи и порты"),
     (keys::TAB_APPEARANCE, "Внешний вид"),
     (keys::TAB_SNAP, "Привязка"),
@@ -778,6 +797,26 @@ const RU: &[(&str, &str)] = &[
     (
         keys::DESC_SNAP_COARSE_ZOOM,
         "При зуме ниже порога линии укрупняются до major-шага для крупной компоновки.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_ENABLED,
+        "Соседи уступают дорогу таскаемой ноде и съезжаются обратно; накрытые получают новые якоря. Выключено — прежнее поведение (проход сквозь).",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_GAP,
+        "Минимальная дистанция между границами любых двух нод, px сцены. 0 — вплотную (прежнее поведение). Не зависит от зума.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_HALO,
+        "Зона отчуждения вокруг таскаемой ноды поверх сейф-зазора, px сцены. Итоговый отступ от активной = ореол + зазор.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_PREDICTIVE,
+        "Ореол расширяется по направлению быстрого движения курсора — соседи готовятся заранее.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_REBASE,
+        "Нода, чьё место занято таскаемой, закрепляется на вытесненной позиции. Выключено — все вытесненные всегда съезжаются обратно.",
     ),
     (keys::VALUE_ON, "вкл"),
     (keys::VALUE_OFF, "выкл"),
@@ -1461,6 +1500,12 @@ const EN: &[(&str, &str)] = &[
     (keys::SETTINGS_HINT, "Ctrl+, — open/close"),
     (keys::TAB_GENERAL, "General"),
     (keys::TAB_CANVAS, "Canvas"),
+    (keys::TAB_DRAG, "Drag"),
+    (keys::ROW_DRAG_PUSH_ENABLED, "Push-apart while dragging"),
+    (keys::ROW_DRAG_PUSH_GAP, "Safe gap"),
+    (keys::ROW_DRAG_PUSH_HALO, "Active-node halo"),
+    (keys::ROW_DRAG_PUSH_PREDICTIVE, "Predictive lead"),
+    (keys::ROW_DRAG_PUSH_REBASE, "Re-anchor on drop"),
     (keys::TAB_EDGES, "Edges & ports"),
     (keys::TAB_APPEARANCE, "Appearance"),
     (keys::TAB_SNAP, "Snapping"),
@@ -1550,6 +1595,26 @@ const EN: &[(&str, &str)] = &[
     (
         keys::DESC_SNAP_COARSE_ZOOM,
         "Below this zoom, lines coarsen to the major step for large-scale composition.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_ENABLED,
+        "Neighbors yield to the dragged node and slide back; covered ones get new anchors. Off — legacy pass-through behavior.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_GAP,
+        "Minimum distance between borders of any two nodes, scene px. 0 — flush (legacy). Zoom-independent.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_HALO,
+        "Exclusion zone around the dragged node on top of the safe gap, scene px. Active clearance = halo + gap.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_PREDICTIVE,
+        "The halo extends toward fast cursor movement — neighbors prepare in advance.",
+    ),
+    (
+        keys::DESC_DRAG_PUSH_REBASE,
+        "A node whose place is taken by the dragged one anchors at the displaced position. Off — everything slides back.",
     ),
     (keys::VALUE_ON, "on"),
     (keys::VALUE_OFF, "off"),

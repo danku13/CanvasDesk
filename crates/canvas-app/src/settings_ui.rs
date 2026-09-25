@@ -19,8 +19,9 @@
 //! меняется — это реорганизация UI.
 
 use canvas_core::{
-    theme_presets, Corner, GridDensity, GridStyle, Language, Settings, Theme, PORT_ZONE_PRESETS,
-    SNAP_COARSE_ZOOM_PRESETS, SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_PRESETS,
+    theme_presets, Corner, GridDensity, GridStyle, Language, Settings, Theme,
+    DRAG_PUSH_GAP_PRESETS, DRAG_PUSH_HALO_PRESETS, PORT_ZONE_PRESETS, SNAP_COARSE_ZOOM_PRESETS,
+    SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_PRESETS,
 };
 
 use crate::i18n::{self, keys};
@@ -137,12 +138,23 @@ pub enum SettingsRow {
     /// PRD-0007 (FR-048 X6, F-12): индикатор покрытия цепочками «Цепочки:
     /// N%» в углу канваса — opt-in тумблер в табе «Канвас».
     ExplainCoverage,
+
+    /// FR-073: мастер-тумблер расталкивания при драге.
+    DragPushEnabled,
+    /// FR-073: сейф-зазор между нодами — цикл по пресетам.
+    DragPushSafeGap,
+    /// FR-073: ореол активной ноды — цикл по пресетам.
+    DragPushHalo,
+    /// FR-073: предиктивное упреждение ореола.
+    DragPushPredictive,
+    /// FR-073: перезакрепление якорей накрытых нод на drop.
+    DragPushRebase,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 23] = [
+pub const SETTINGS_ROWS: [SettingsRow; 28] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -166,6 +178,11 @@ pub const SETTINGS_ROWS: [SettingsRow; 23] = [
     SettingsRow::ExplainDepthLimit,
     SettingsRow::AutolinkEnabled,
     SettingsRow::ExplainCoverage,
+    SettingsRow::DragPushEnabled,
+    SettingsRow::DragPushSafeGap,
+    SettingsRow::DragPushHalo,
+    SettingsRow::DragPushPredictive,
+    SettingsRow::DragPushRebase,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -186,7 +203,7 @@ pub struct SettingsTab {
 /// «Канвас» — сетка и оверлей узких мест; «Связи и порты» — связи/порты/
 /// фокус + построчные точки выхода FR-025; «Внешний вид» — карточки темы
 /// и язык FR-040. FR-038 дополнит модель пятым табом «Snap».
-pub const SETTINGS_TABS: [SettingsTab; 5] = [
+pub const SETTINGS_TABS: [SettingsTab; 6] = [
     SettingsTab {
         title_key: keys::TAB_GENERAL,
         icon: "◎",
@@ -221,6 +238,19 @@ pub const SETTINGS_TABS: [SettingsTab; 5] = [
             SettingsRow::SnapTolerance,
             SettingsRow::SnapSubZoom,
             SettingsRow::SnapCoarseZoom,
+        ],
+    },
+    SettingsTab {
+        // FR-073: поведение драга нод — расталкивание и его параметры
+        title_key: keys::TAB_DRAG,
+        icon: "✥",
+        theme_cards: false,
+        rows: &[
+            SettingsRow::DragPushEnabled,
+            SettingsRow::DragPushSafeGap,
+            SettingsRow::DragPushHalo,
+            SettingsRow::DragPushPredictive,
+            SettingsRow::DragPushRebase,
         ],
     },
     SettingsTab {
@@ -273,6 +303,11 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::ExplainDepthLimit => keys::ROW_EXPLAIN_DEPTH,
         SettingsRow::AutolinkEnabled => keys::ROW_AUTOLINK,
         SettingsRow::ExplainCoverage => keys::ROW_EXPLAIN_COVERAGE,
+        SettingsRow::DragPushEnabled => keys::ROW_DRAG_PUSH_ENABLED,
+        SettingsRow::DragPushSafeGap => keys::ROW_DRAG_PUSH_GAP,
+        SettingsRow::DragPushHalo => keys::ROW_DRAG_PUSH_HALO,
+        SettingsRow::DragPushPredictive => keys::ROW_DRAG_PUSH_PREDICTIVE,
+        SettingsRow::DragPushRebase => keys::ROW_DRAG_PUSH_REBASE,
     }
 }
 
@@ -303,6 +338,11 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::ExplainDepthLimit => keys::DESC_EXPLAIN_DEPTH,
         SettingsRow::AutolinkEnabled => keys::DESC_AUTOLINK,
         SettingsRow::ExplainCoverage => keys::DESC_EXPLAIN_COVERAGE,
+        SettingsRow::DragPushEnabled => keys::DESC_DRAG_PUSH_ENABLED,
+        SettingsRow::DragPushSafeGap => keys::DESC_DRAG_PUSH_GAP,
+        SettingsRow::DragPushHalo => keys::DESC_DRAG_PUSH_HALO,
+        SettingsRow::DragPushPredictive => keys::DESC_DRAG_PUSH_PREDICTIVE,
+        SettingsRow::DragPushRebase => keys::DESC_DRAG_PUSH_REBASE,
     }
 }
 
@@ -329,7 +369,9 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::ExplainDepthLimit
         | SettingsRow::SnapTolerance
         | SettingsRow::SnapSubZoom
-        | SettingsRow::SnapCoarseZoom => RowKind::Dropdown,
+        | SettingsRow::SnapCoarseZoom
+        | SettingsRow::DragPushSafeGap
+        | SettingsRow::DragPushHalo => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -342,7 +384,10 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart
         | SettingsRow::ExplainCoverage
-        | SettingsRow::AutolinkEnabled => RowKind::Toggle,
+        | SettingsRow::AutolinkEnabled
+        | SettingsRow::DragPushEnabled
+        | SettingsRow::DragPushPredictive
+        | SettingsRow::DragPushRebase => RowKind::Toggle,
     }
 }
 
@@ -384,6 +429,14 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
             None => i18n::tr(language, keys::THEME_PRESET_CLASSIC).to_owned(),
         }),
         SettingsRow::SnapTolerance => Some(format!("{} px", settings.snap_tolerance_px as i32)),
+        // FR-073: зазор/ореол — пресеты в px сцены; 0 показываем как «0 px»
+        // (старое поведение «вплотную» описано в описании строки)
+        SettingsRow::DragPushSafeGap => {
+            Some(format!("{} px", settings.drag_push_gap_px as i32))
+        }
+        SettingsRow::DragPushHalo => {
+            Some(format!("{} px", settings.drag_push_halo_px as i32))
+        }
         // PRD-0007 (AC-2.3): «0» показывается как «без ограничения».
         SettingsRow::ExplainDepthLimit => Some(if settings.explain_depth_limit == 0 {
             i18n::tr(language, keys::VALUE_EXPLAIN_ALL).to_owned()
@@ -409,7 +462,11 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::EdgeAggregation
         | SettingsRow::AutolinkEnabled
         | SettingsRow::ExplainCoverage
-        | SettingsRow::HudOnStart => None,
+        | SettingsRow::HudOnStart
+        // FR-073: тумблеры — состояние видно по позиции pill-ручки
+        | SettingsRow::DragPushEnabled
+        | SettingsRow::DragPushPredictive
+        | SettingsRow::DragPushRebase => None,
     }
 }
 
@@ -529,6 +586,30 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
                 .map(|(i, preset)| (format!("{}%", (*preset * 100.0) as i32), i == current))
                 .collect()
         }
+        // FR-073: пресеты сейф-зазора и ореола (px сцены); «текущий» —
+        // последний пресет ≤ значения (кламп к пресету-кандидату)
+        SettingsRow::DragPushSafeGap => {
+            let current = DRAG_PUSH_GAP_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.drag_push_gap_px)
+                .unwrap_or(0);
+            DRAG_PUSH_GAP_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("{} px", *preset as i32), i == current))
+                .collect()
+        }
+        SettingsRow::DragPushHalo => {
+            let current = DRAG_PUSH_HALO_PRESETS
+                .iter()
+                .rposition(|preset| *preset <= settings.drag_push_halo_px)
+                .unwrap_or(0);
+            DRAG_PUSH_HALO_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, preset)| (format!("{} px", *preset as i32), i == current))
+                .collect()
+        }
         // PRD-0007 (AC-2.3): пресеты глубины [2, 3, 4, без ограничения].
         // Порядок опций = порядку apply_dropdown_value (инвариант, тест).
         SettingsRow::ExplainDepthLimit => {
@@ -556,7 +637,11 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::EdgeAggregation
         | SettingsRow::AutolinkEnabled
         | SettingsRow::ExplainCoverage
-        | SettingsRow::HudOnStart => Vec::new(),
+        | SettingsRow::HudOnStart
+        // FR-073: тумблеры — dropdown не открывает (RowKind::Toggle)
+        | SettingsRow::DragPushEnabled
+        | SettingsRow::DragPushPredictive
+        | SettingsRow::DragPushRebase => Vec::new(),
     }
 }
 
@@ -626,6 +711,17 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.snap_grid_coarse_zoom = *preset;
             }
         }
+        // FR-073: пресеты сейф-зазора и ореола
+        SettingsRow::DragPushSafeGap => {
+            if let Some(preset) = DRAG_PUSH_GAP_PRESETS.get(index) {
+                settings.drag_push_gap_px = *preset;
+            }
+        }
+        SettingsRow::DragPushHalo => {
+            if let Some(preset) = DRAG_PUSH_HALO_PRESETS.get(index) {
+                settings.drag_push_halo_px = *preset;
+            }
+        }
         // PRD-0007 (AC-2.3): порядок опций — [2, 3, 4, без ограничения].
         SettingsRow::ExplainDepthLimit => {
             if let Some(value) = [2u8, 3, 4, 0].get(index) {
@@ -644,7 +740,10 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::EdgeAggregation
         | SettingsRow::AutolinkEnabled
         | SettingsRow::ExplainCoverage
-        | SettingsRow::HudOnStart => {}
+        | SettingsRow::HudOnStart
+        | SettingsRow::DragPushEnabled
+        | SettingsRow::DragPushPredictive
+        | SettingsRow::DragPushRebase => {}
     }
 }
 
@@ -1092,8 +1191,19 @@ mod tests {
                 SettingsRow::SnapCoarseZoom
             ]
         );
+        // FR-073: таб «Драг» — расталкивание и параметры физики
         assert_eq!(
             SETTINGS_TABS[3].rows,
+            &[
+                SettingsRow::DragPushEnabled,
+                SettingsRow::DragPushSafeGap,
+                SettingsRow::DragPushHalo,
+                SettingsRow::DragPushPredictive,
+                SettingsRow::DragPushRebase
+            ]
+        );
+        assert_eq!(
+            SETTINGS_TABS[4].rows,
             &[
                 SettingsRow::EdgesAvoid,
                 SettingsRow::PortZone,
@@ -1104,7 +1214,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            SETTINGS_TABS[4].rows,
+            SETTINGS_TABS[5].rows,
             &[SettingsRow::ThemePreset, SettingsRow::Language]
         );
     }
@@ -1188,6 +1298,19 @@ mod tests {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.snap_collision;
                 }
+                // FR-073: тумблеры расталкивания — булевы поля Settings
+                SettingsRow::DragPushEnabled => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.drag_push_enabled;
+                }
+                SettingsRow::DragPushPredictive => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.drag_push_predictive;
+                }
+                SettingsRow::DragPushRebase => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.drag_push_rebase;
+                }
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
@@ -1197,7 +1320,9 @@ mod tests {
                 | SettingsRow::ExplainDepthLimit
                 | SettingsRow::SnapTolerance
                 | SettingsRow::SnapSubZoom
-                | SettingsRow::SnapCoarseZoom => {
+                | SettingsRow::SnapCoarseZoom
+                | SettingsRow::DragPushSafeGap
+                | SettingsRow::DragPushHalo => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
@@ -1551,8 +1676,16 @@ mod tests {
             ),
             None
         );
-        // Таб 4 (Внешний вид): карточки темы + строки пресета и языка ниже
+        // Таб 3 (Драг, FR-073): 3 тумблера + 2 dropdown-пресета
+        let layout = modal_layout(3, viewport);
+        assert_eq!(layout.rows.len(), 5);
+        assert_eq!(layout.rows[0].0, SettingsRow::DragPushEnabled);
+        // Таб 4 (Связи и порты): прежний таб 3
         let layout = modal_layout(4, viewport);
+        assert_eq!(layout.rows.len(), 6);
+        assert_eq!(layout.rows[0].0, SettingsRow::EdgesAvoid);
+        // Таб 5 (Внешний вид): карточки темы + строки пресета и языка ниже
+        let layout = modal_layout(5, viewport);
         assert_eq!(layout.rows.len(), 2);
         assert_eq!(layout.rows[0].0, SettingsRow::ThemePreset);
         assert_eq!(layout.rows[1].0, SettingsRow::Language);
