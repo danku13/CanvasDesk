@@ -260,14 +260,27 @@ impl TaffyBackend {
             }
         }
         // Sticky-кламп по ближайшему scroll-предку (после shift'ов: кламп
-        // считается от отображаемой позиции контейнера).
+        // считается от отображаемой позиции контейнера). Кламп двигает
+        // узел и ВСЁ его поддерево (CSS sticky: дети движутся вместе с
+        // родителем); дельта применяется к потомкам по цепочке parent
+        // (fixed-потомки исключены — их контекст корень, они не скроллятся).
         for i in 1..order.len() {
             if let ScenePosition::Sticky { top } = order[i].position {
                 if let Some(ai) = scroll_ancestor(&order, i) {
                     let off = order[ai].offset;
                     let target = rects[ai].y + top;
                     if off > 0.0 && rects[i].y < target {
+                        let dy = target - rects[i].y;
                         rects[i].y = target;
+                        for j in i + 1..order.len() {
+                            if !is_descendant_of(&order, j, i) {
+                                continue;
+                            }
+                            if matches!(order[j].position, ScenePosition::Fixed { .. }) {
+                                continue; // fixed-потомок — viewport-контекст
+                            }
+                            rects[j].y += dy;
+                        }
                     }
                 }
             }
@@ -278,9 +291,11 @@ impl TaffyBackend {
     /// Центрирование блока фиксированного размера в слоте через taffy
     /// (pilot explain-modal, FR-068 W1): CSS-семантика justify/align
     /// Center. Паритет с `stack(slot, size, Center, Center)` при
-    /// помещении в слот; при переполнении CSS центрирует с выходом за
-    /// ОБА края (Native клампит левый/верхний — документированное
-    /// расхождение; у pilot-поверхностей размер ограничен constrain).
+    /// помещении в слот; при НЕПОМЕЩЕНИИ taffy сжимает ребёнка по главной
+    /// оси до слота (flex-семантика default flex_shrink) и центрирует по
+    /// поперечной за оба края (задокументировано тестом kit.rs; Native
+    /// stack клампит левый/верхний край — у pilot-поверхностей размер
+    /// ограничен constrain, переполнение не достигается).
     pub fn centered(&self, slot: UiRect, size: UiVec2) -> UiRect {
         let mut tree = TaffyTree::<()>::new();
         let root = tree
@@ -603,6 +618,22 @@ fn scroll_ancestor(order: &[SceneEntry], i: usize) -> Option<usize> {
         p = order[pidx].parent;
     }
     None
+}
+
+/// Является ли узел `j` потомком узла `i` (по цепочке parent; DFS pre-order
+/// гарантирует j > i для потомков). Sticky-кламп транслирует поддерево.
+fn is_descendant_of(order: &[SceneEntry], j: usize, i: usize) -> bool {
+    let mut p = order[j].parent;
+    while let Some(pidx) = p {
+        if pidx == i {
+            return true;
+        }
+        if pidx < i {
+            return false; // предок выше i — дальше идти бессмысленно
+        }
+        p = order[pidx].parent;
+    }
+    false
 }
 
 /// Style узла сцены (контейнерные свойства по [`SceneKind`] + общие
@@ -1117,6 +1148,30 @@ mod tests {
         assert_eq!(rects[2], UiRect::new(0.0, 10.0, 100.0, 40.0));
         // третий: 80 − 30 = 50
         assert_eq!(rects[3], UiRect::new(0.0, 50.0, 100.0, 40.0));
+    }
+
+    /// Сцена: sticky-кламп транслирует ПОДДЕРЕВО (CSS-семантика: дети
+    /// движутся вместе со sticky-родителем; регресс дефекта W1-фазы-2,
+    /// найден демо 01 — golden 01 пересоздан осознанно).
+    #[test]
+    fn scene_sticky_clamps_subtree() {
+        let scene = SceneNode::column(100.0, 80.0, 0.0, vec![
+            SceneNode::row(100.0, 40.0, 8.0, vec![
+                SceneNode::leaf(30.0, 40.0),
+                SceneNode::leaf(30.0, 40.0),
+            ])
+            .at(ScenePosition::Sticky { top: 0.0 }),
+            SceneNode::leaf(100.0, 40.0),
+        ])
+        .scrolled(30.0);
+        let rects = TAFFY.lay_out_scene(UiRect::new(0.0, 0.0, 300.0, 200.0), &scene);
+        // шапка: flow 0 − shift 30 = −30 → кламп к 0 (dy = +30)
+        assert_eq!(rects[1].y, 0.0);
+        // дети шапки: flow 0/38? (внутри ряда: x=0 и 38) — y тоже −30 → +30 = 0
+        assert_eq!(rects[2].y, 0.0, "потомок sticky движется с родителем");
+        assert_eq!(rects[3].y, 0.0, "потомок sticky движется с родителем");
+        // второй лист (НЕ в поддереве): flow 40 − 30 = 10 — без клампа
+        assert_eq!(rects[4].y, 10.0);
     }
 
     /// Сцена: fixed-позиция (viewport-семантика — относительно корня,
