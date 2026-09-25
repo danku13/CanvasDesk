@@ -71,6 +71,10 @@ user stories → решение → non-goals → roadmap). CJM с трасси�
   рядом — кроссплатформенность (M7) и продуктовый роадмап.
 - [`architecture/math-computing-stack.html`](architecture/math-computing-stack.html) —
   архитектурный обзор стека математических вычислений.
+- [`architecture/shell-world-space.html`](architecture/shell-world-space.html) —
+  архитектура рендера: шелл карточки в world-space (камера, instanced SDF,
+  z-сегменты), screen-space домен canvas-ui и граница владения
+  «геометрия ↔ исполнение» (см. также `plans/fr-061-template-node-kit-alignment.html`).
 - [`articles/fr-013-silent-calculator.html`](articles/fr-013-silent-calculator.html) —
   статьи («тихий калькулятор» Numi и др.).
 - [`interface-objects/node.html`](interface-objects/node.html) —
