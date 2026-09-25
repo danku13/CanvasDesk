@@ -1,0 +1,70 @@
+{
+  "id": "com.canvasdesk.infra-cost",
+  "name_en": "Infra Monthly Cost",
+  "name_ru": "Стоимость инфраструктуры в месяц",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Месячная стоимость инфраструктуры: compute (инстансы × цена) + хранение (ГБ × цена ГБ) + egress (ТБ × цена ТБ) в одной формуле. Быстрая прикидка бюджета до счёта облака и what-if при смене тарифов или региона. Добавьте слагаемые под свою архитектуру — формула это обычный Numi-список.",
+  "description_en": "Monthly infrastructure cost: compute (instances × price) + storage (GB × GB price) + egress (TB × TB price) in one formula. Quick budget estimate before the cloud bill arrives and a what-if tool when plans or regions change. Extend the summands to your architecture — the formula is a plain Numi sheet.",
+  "params": [
+    {
+      "name": "servers",
+      "type": "count",
+      "default": 4,
+      "min": 0
+    },
+    {
+      "name": "server_cost",
+      "type": "scalar",
+      "default": 50,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "storage_gb",
+      "type": "count",
+      "default": 500,
+      "min": 0
+    },
+    {
+      "name": "storage_cost_gb",
+      "type": "scalar",
+      "default": 0.02,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "egress_tb",
+      "type": "count",
+      "default": 2,
+      "min": 0
+    },
+    {
+      "name": "egress_cost_tb",
+      "type": "scalar",
+      "default": 90,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$servers × $server_cost + $storage_gb × $storage_cost_gb + $egress_tb × $egress_cost_tb",
+  "color": "#4A90E2",
+  "icon": "money",
+  "outputs": [
+    {
+      "name": "compute_cost",
+      "unit": "usd",
+      "expr": "$servers × $server_cost"
+    },
+    {
+      "name": "storage_cost",
+      "unit": "usd",
+      "expr": "$storage_gb × $storage_cost_gb"
+    },
+    {
+      "name": "egress_cost",
+      "unit": "usd",
+      "expr": "$egress_tb × $egress_cost_tb"
+    }
+  ]
+}

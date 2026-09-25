@@ -1,3 +1,23 @@
+## 2026-09-25 — audit(templates): перепроверка всех 45 шаблонных нод + расширение каталога до 61 (3 дефекта найдено/исправлено)
+
+- **Запрос владельца:** «перепроверить все шаблонные ноды и предложить их расширение по каждому направлению для максимизации доступных расчётов на базе именно готовых шаблонных нод».
+- **Аудит 45 манифестов (авто + ручная семантика):** структура, ссылки на параметры, вычислимость на дефолтах (ρ<1), семантика формул по домену, иконки против рендера, RU/EN паритет. Главные формулы 45/45 корректны; найдено 3 дефекта:
+  1. **lb v1.2.0 — битые outputs:** `next_hop_rps=$connections_per_sec`, `effective_service_rate=$server_rate × $servers` — copy-paste из tcp-lb, параметров у lb нет; flow.rs вычисляет outputs через `eval().ok()` и МОЛЧА выбрасывает битые → 2 из 3 выходов не работали. Исправлено (`$rps` / `$service_rate × $servers`), версия → 1.2.1 (старые ноды получают кнопку «Обновить до 1.2.1»).
+  2. **Иконка `clock` не реализована:** pa-session-duration/pa-ttfv ссылались на неё, рендер падал в custom-фолбэк. Добавлен arm «циферблат со стрелками» в `canvas_render::cards::template_icon_quads`.
+  3. **Allowlist иконок палитры/wheel** (`template_ui::icon_key`) содержал только 11 infra-ключей — все 30 FR-027-шаблонов UE/PA показывали generic-иконку в палитре/wheel (на карточках — корректно). Синхронизирован с рендером (19 ключей).
+- **Новый постоянный гейт** `every_output_evaluates_and_declares_params` (templates_schema.rs): outputs до аудита не проверялись schema-тестами вовсе; теперь: ссылки только на объявленные $params, вычислимость на дефолтах, валидность токенов единиц (UNIT_TABLE), уникальность имён выходов.
+- **Расширение каталога +16 (45 → 61)** — приоритет доменным функциям движка, которые НЕ использовал ни один шаблон (littles_law, erlang_c, irr, cohort_ltv, min/max):
+  - backend +4: capacity-planner (флот = littles_law/ёмкость инстанса), support-staffing (Эрланг C, SLA), infra-cost (месячный счёт compute+storage+egress, money), db-nosql (M/M/c по шардам);
+  - network +1: rate-limiter (min(поток, лимит) + перебор сверх квоты);
+  - unit-economics +6: ue-ltv-cohort (cohort_ltv — мост pa↔ue, честная LTV через retention-кривую), ue-irr, ue-roi, ue-break-even, ue-magic-number, ue-burn-multiple;
+  - product-analytics +5: pa-mau-projection (закон Литтла для аудитории), pa-k-factor, pa-funnel-step, pa-sessions-per-user, pa-avg-lifetime (1/churn — вход для LTV).
+  - Грабли парсера: имена параметров с префиксом `in` зарезервированы валютной семантикой FR-013 (`$instances`, `$investment`, `$invite_*` молча НЕ параметры) — переименованы в servers/server_cost/capital/referrals_*.
+- **Гейты:** schema-тесты обновлены (61 = 14 backend + 6 network + 24 UE + 17 PA) + новый golden-тест `expansion_templates_default_values` (пин ключевых значений: capacity-planner=2, Эрланг C≈0.063 — воспроизведено независимо рекуррентной Erlang-B, infra-cost=390, IRR≈21.5%, cohort-LTV≈4.9); canvas-core 375 / canvas-render 364+ / canvas-app 11 сюит — зелёные; fmt --check и clippy -D warnings чисто.
+- **Доки:** user-docs/templates.md (61, счётчики категорий, новые строки таблиц, «справочные» параметры дополнены working_set/burst); этот worklog.
+- **Telegram:** план сессии → отчёт аудита/фиксов → отчёт расширения → финальное саммари.
+
+---
+
 ## 2026-09-25 — feat(node): FR-072 разделение заголовка ноды и текста тела — явный canvasdesk.title, однострочный редактор в шапке, миграция legacy-первой строки
 
 ---

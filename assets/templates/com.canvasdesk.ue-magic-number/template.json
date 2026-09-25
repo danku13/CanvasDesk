@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-magic-number",
+  "name_en": "Magic Number (SaaS)",
+  "name_ru": "Magic Number (эффективность продаж SaaS)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Эффективность продаж SaaS: новые ARR за квартал × 4 (аннуализировано) / расходы на продажи и маркетинг за прошлый квартал. Бенчмарки: ≥ 1 — продажи окупаются в течение года, 0.5–1 — нормально для ранней стадии, < 0.5 — рост покупается слишком дорого. Задержка на квартал важна: траты этого квартала дают выручку в следующем.",
+  "description_en": "SaaS sales efficiency: net new ARR this quarter × 4 (annualized) divided by S&M spend of the previous quarter. Benchmarks: ≥ 1 — sales pay back within a year, 0.5–1 — fine for early stage, < 0.5 — growth is bought too expensively. The one-quarter lag matters: this quarter's spend produces next quarter's revenue.",
+  "params": [
+    {
+      "name": "net_new_arr",
+      "type": "scalar",
+      "default": 15000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "s_and_m_spend",
+      "type": "scalar",
+      "default": 50000,
+      "unit": "usd",
+      "min": 0.0001
+    }
+  ],
+  "expr": "$net_new_arr × 4 / $s_and_m_spend",
+  "color": "#F5A623",
+  "icon": "money"
+}

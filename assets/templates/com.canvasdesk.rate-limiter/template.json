@@ -1,0 +1,46 @@
+{
+  "id": "com.canvasdesk.rate-limiter",
+  "name_en": "Rate Limiter",
+  "name_ru": "Ограничитель скорости (rate limiter)",
+  "version": "1.0.0",
+  "category": "network",
+  "description": "Пропускаемый поток при квоте: min(входящий поток, лимит) — что реально пройдёт, остальное троттлится. Выходы: загрузка квоты и перебор сверх лимита. Ставьте лимит ниже ёмкости нижестоящего сервиса — это автоматический предохранитель каскадных отказов.",
+  "description_en": "Throughput that passes under a quota: min(incoming rate, limit) — the rest gets throttled. Outputs: quota utilization and excess above the limit. Keep the limit below downstream capacity — it is the automatic fuse against cascading failures.",
+  "params": [
+    {
+      "name": "rps",
+      "type": "rate",
+      "default": 800,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "limit_rate",
+      "type": "rate",
+      "default": 1000,
+      "unit": "rps",
+      "min": 0.001
+    },
+    {
+      "name": "burst",
+      "type": "count",
+      "default": 100,
+      "min": 0
+    }
+  ],
+  "expr": "min($rps, $limit_rate)",
+  "color": "#7ED321",
+  "icon": "gateway",
+  "outputs": [
+    {
+      "name": "quota_utilization",
+      "unit": "%",
+      "expr": "utilization($rps, $limit_rate)"
+    },
+    {
+      "name": "throttled_rps",
+      "unit": "rps",
+      "expr": "max($rps - $limit_rate, 0 rps)"
+    }
+  ]
+}

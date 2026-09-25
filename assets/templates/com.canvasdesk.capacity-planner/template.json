@@ -1,0 +1,46 @@
+{
+  "id": "com.canvasdesk.capacity-planner",
+  "name_en": "Capacity Planner",
+  "name_ru": "Планировщик мощности",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Сколько экземпляров сервиса нужно: закон Литтла L = λ × W даёт число параллельных запросов в системе, деление на concurrent-ёмкость инстанса — искомый флот. Планирование перед релизом и промо: подставьте ожидаемый RPS и время ответа — получите число машин, а не догадку. Запас: закладывайте target utilization 60–70% от результата.",
+  "description_en": "How many service instances you need: Little's law L = λ × W gives concurrent requests in system; dividing by per-instance concurrency capacity yields the fleet size. Plan before launches and promos: plug in expected RPS and response time — get a number, not a guess. Headroom: target 60–70% utilization of the result.",
+  "params": [
+    {
+      "name": "rps",
+      "type": "rate",
+      "default": 1000,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "response_time",
+      "type": "time",
+      "default": 100,
+      "unit": "ms",
+      "min": 1
+    },
+    {
+      "name": "concurrency_per_instance",
+      "type": "count",
+      "default": 50,
+      "min": 1,
+      "max": 10000
+    }
+  ],
+  "expr": "littles_law($rps, $response_time) / $concurrency_per_instance",
+  "color": "#4A90E2",
+  "icon": "worker",
+  "outputs": [
+    {
+      "name": "concurrent_requests",
+      "unit": "req",
+      "expr": "littles_law($rps, $response_time)"
+    },
+    {
+      "name": "fleet_with_70pct_headroom",
+      "expr": "littles_law($rps, $response_time) / $concurrency_per_instance / 0.7"
+    }
+  ]
+}

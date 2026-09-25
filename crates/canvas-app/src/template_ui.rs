@@ -37,11 +37,16 @@ const CHIP_FONT: f32 = 12.0;
 /// Ключ квад-иконки шаблона: известные ключи манифестов (`lb`, `db`,
 /// `cache`, `http`, `queue`), прочее — `custom` (рамка с ядром). Геометрия
 /// самих иконок — `canvas_render::cards::template_icon_quads` (общая с
-/// шапкой карточки).
+/// шапкой карточки). Аудит шаблонов 2026-09-25: allowlist синхронизирован
+/// с arms `template_icon_quads` — прежде FR-027-ключи (`money`, `burn`,
+/// `users`, `retention`, `churn`, `funnel`, `chart`) и `clock` падали в
+/// custom-фолбэк, и все UE/PA-шаблоны показывали generic-иконку в
+/// палитре и wheel-меню.
 pub fn icon_key(manifest: &TemplateManifest) -> &str {
     match manifest.icon.as_str() {
         "lb" | "db" | "cache" | "http" | "queue" | "gateway" | "worker" | "storage" | "auth"
-        | "grpc" | "graphql" => manifest.icon.as_str(),
+        | "grpc" | "graphql" | "money" | "burn" | "users" | "retention" | "churn" | "funnel"
+        | "chart" | "clock" => manifest.icon.as_str(),
         _ => "custom",
     }
 }

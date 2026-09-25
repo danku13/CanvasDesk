@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.ue-roi",
+  "name_en": "ROI (Return on Investment)",
+  "name_ru": "ROI (возврат на инвестиции)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Возврат на инвестиции: (доход − вложения) / вложения. Универсальный язык отчётности: ROI 0.8 = +80% за период. Учитывайте период и полноту затрат — ROI без горизонта и без скрытых издержек завышает картину; для сравнения разнопериодных проектов используйте IRR/NPV.",
+  "description_en": "Return on investment: (gain − investment) / investment. The universal reporting language: ROI 0.8 = +80% over the period. Watch the horizon and cost completeness — ROI without a time frame or hidden costs overstates the picture; for cross-period comparisons use IRR/NPV.",
+  "params": [
+    {
+      "name": "gain",
+      "type": "scalar",
+      "default": 180000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "capital",
+      "type": "scalar",
+      "default": 100000,
+      "unit": "usd",
+      "min": 0.0001
+    }
+  ],
+  "expr": "($gain - $capital) / $capital",
+  "color": "#F5A623",
+  "icon": "money"
+}

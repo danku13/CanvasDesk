@@ -1,0 +1,44 @@
+{
+  "id": "com.canvasdesk.ue-irr",
+  "name_en": "IRR (Internal Rate of Return)",
+  "name_ru": "IRR (внутренняя норма доходности)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Внутренняя норма доходности проекта: ставка, при которой NPV = 0. Первый поток — инвестиция (отрицательный), дальше — поступления. Правило решения: IRR выше стоимости капитала (WACC/hurdle rate) — проект создаёт стоимость; сравнение проектов — по IRR при сопоставимом масштабе и риске. Дополняет NPV-шаблон: NPV отвечает «сколько», IRR — «под какой процент».",
+  "description_en": "Project's internal rate of return: the discount rate at which NPV = 0. The first cash flow is the investment (negative), the rest are inflows. Decision rule: IRR above the cost of capital (WACC/hurdle rate) means the project creates value; compare projects by IRR at comparable scale and risk. Complements the NPV template: NPV answers 'how much', IRR answers 'at what rate'.",
+  "params": [
+    {
+      "name": "cf0",
+      "type": "scalar",
+      "default": -100000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf1",
+      "type": "scalar",
+      "default": 30000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf2",
+      "type": "scalar",
+      "default": 40000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf3",
+      "type": "scalar",
+      "default": 45000,
+      "unit": "usd"
+    },
+    {
+      "name": "cf4",
+      "type": "scalar",
+      "default": 50000,
+      "unit": "usd"
+    }
+  ],
+  "expr": "irr($cf0, $cf1, $cf2, $cf3, $cf4)",
+  "color": "#F5A623",
+  "icon": "money"
+}

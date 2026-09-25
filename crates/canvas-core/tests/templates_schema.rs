@@ -23,24 +23,32 @@ fn builtin() -> TemplateRegistry {
 
 /// Все манифесты каталога загружаются из встроенной статики:
 /// FR-019 — 15 шаблонов (10 backend + 5 network), FR-027 — 30 шаблонов
-/// (18 unit-economics + 12 product-analytics); итого 45.
+/// (18 unit-economics + 12 product-analytics); аудит-расширение 2026-09-25 —
+/// +16 (backend +4, network +1, unit-economics +6, product-analytics +5);
+/// итого 61.
 #[test]
-fn builtin_library_has_45_templates() {
+fn builtin_library_has_61_templates() {
     let registry = builtin();
     assert_eq!(
         registry.list().len(),
-        45,
-        "каталог FR-019+FR-027: 45 шаблонов (15 + 30)"
+        61,
+        "каталог FR-019+FR-027+аудит 2026-09-25: 61 шаблон (15 + 30 + 16)"
     );
-    // Категории: 10 backend + 5 network + 18 unit-economics + 12 product-analytics.
+    // Категории: 14 backend + 6 network + 24 unit-economics + 17 product-analytics.
     let backend = registry.by_category("backend").len();
     let network = registry.by_category("network").len();
     let unit_econ = registry.by_category("unit-economics").len();
     let product_analytics = registry.by_category("product-analytics").len();
-    assert_eq!(backend, 10, "10 backend-ролей");
-    assert_eq!(network, 5, "5 network/transport-ролей");
-    assert_eq!(unit_econ, 18, "18 unit-economics (FR-027)");
-    assert_eq!(product_analytics, 12, "12 product-analytics (FR-027)");
+    assert_eq!(backend, 14, "14 backend-ролей (10 FR-019 + 4 аудита)");
+    assert_eq!(
+        network, 6,
+        "6 network/transport-ролей (5 FR-019 + rate-limiter)"
+    );
+    assert_eq!(unit_econ, 24, "24 unit-economics (18 FR-027 + 6 аудита)");
+    assert_eq!(
+        product_analytics, 17,
+        "17 product-analytics (12 FR-027 + 5 аудита)"
+    );
     // Детерминизм: порядок по id
     let ids: Vec<&str> = registry.list().iter().map(|m| m.id.as_str()).collect();
     let mut sorted = ids.clone();
@@ -48,7 +56,8 @@ fn builtin_library_has_45_templates() {
     assert_eq!(ids, sorted, "порядок реестра — сортировка по id");
 }
 
-/// Каталог FR-019: все 15 фиксированных id присутствуют.
+/// Каталог FR-019: все 15 фиксированных id присутствуют; аудит 2026-09-25:
+/// +16 новых id (по одному представителю нового расчётного класса).
 #[test]
 fn builtin_catalog_ids_complete() {
     let registry = builtin();
@@ -68,6 +77,23 @@ fn builtin_catalog_ids_complete() {
         "com.canvasdesk.websocket",
         "com.canvasdesk.graphql",
         "com.canvasdesk.tcp-lb",
+        // Аудит-расширение 2026-09-25 (+16)
+        "com.canvasdesk.capacity-planner",
+        "com.canvasdesk.support-staffing",
+        "com.canvasdesk.infra-cost",
+        "com.canvasdesk.db-nosql",
+        "com.canvasdesk.rate-limiter",
+        "com.canvasdesk.ue-ltv-cohort",
+        "com.canvasdesk.ue-irr",
+        "com.canvasdesk.ue-roi",
+        "com.canvasdesk.ue-break-even",
+        "com.canvasdesk.ue-magic-number",
+        "com.canvasdesk.ue-burn-multiple",
+        "com.canvasdesk.pa-mau-projection",
+        "com.canvasdesk.pa-k-factor",
+        "com.canvasdesk.pa-funnel-step",
+        "com.canvasdesk.pa-sessions-per-user",
+        "com.canvasdesk.pa-avg-lifetime",
     ];
     for id in expected {
         assert!(registry.find(id).is_some(), "нет шаблона {id}");
@@ -204,6 +230,91 @@ fn every_expr_references_declared_params_only() {
     }
 }
 
+/// Аудит шаблонов 2026-09-25: секция `outputs` (FR-29) не проверялась
+/// schema-тестами — битая ссылка молча выбрасывала выход из потока
+/// (`flow.rs`: `eval(...).ok()` без диагностики). Реальный случай: lb
+/// v1.2.0 с `$connections_per_sec`/`$server_rate` из tcp-lb — 2 из 3
+/// выходов тихо пропадали. Гейт: (1) каждый output-expr ссылается только
+/// на объявленные $params; (2) вычисляется на дефолтах; (3) `unit`, если
+/// задан, — токен таблицы единиц FR-013; (4) имена выходов уникальны.
+#[test]
+fn every_output_evaluates_and_declares_params() {
+    let registry = builtin();
+    for manifest in registry.list() {
+        let declared: std::collections::HashSet<String> = manifest
+            .params
+            .iter()
+            .map(|spec| spec.name.clone())
+            .collect();
+        let mut seen_names = std::collections::HashSet::new();
+        for spec in &manifest.outputs {
+            assert!(
+                seen_names.insert(spec.name.clone()),
+                "{}: дубликат имени выхода {}",
+                manifest.id,
+                spec.name
+            );
+            let source = match &spec.source {
+                canvas_core::templates::OutputSource::Expr(source) => source,
+                canvas_core::templates::OutputSource::Line(_) => continue,
+            };
+            let parsed = expr::parse(source).unwrap_or_else(|err| {
+                panic!("{}: output «{}» не парсится: {err}", manifest.id, spec.name)
+            });
+            for name in collect_params(&parsed) {
+                assert!(
+                    declared.contains(&name),
+                    "{}: output «{}» использует ${name}, не объявленный в params",
+                    manifest.id,
+                    spec.name
+                );
+            }
+            // Вычислимость на дефолтах (то же окружение, что в потоке)
+            let env = Env::with_params(
+                TemplateRef {
+                    id: manifest.id.clone(),
+                    version: manifest.version.clone(),
+                    expr: manifest.expr.clone(),
+                    icon: manifest.icon.clone(),
+                    color: manifest.color.clone(),
+                    name: None,
+                    outputs: Vec::new(),
+                    params: manifest
+                        .params
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.name.clone(),
+                                TemplateParam {
+                                    num: p.default,
+                                    unit: p.unit.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                }
+                .param_values(),
+            );
+            let value = expr::eval(&parsed, &env)
+                .unwrap_or_else(|err| panic!("{}: output «{}»: {err}", manifest.id, spec.name));
+            assert!(
+                value.num.is_finite(),
+                "{}: output «{}» — неконечный результат",
+                manifest.id,
+                spec.name
+            );
+            if let Some(unit) = &spec.unit {
+                assert!(
+                    expr::unit_tokens().contains(&unit.as_str()),
+                    "{}: output «{}» — неизвестный токен единицы {unit}",
+                    manifest.id,
+                    spec.name
+                );
+            }
+        }
+    }
+}
+
 /// Формула каждого шаблона вычисляется на дефолтах БЕЗ перегрузки
 /// (дефолты каталога согласованы с ρ < 1, FR-015).
 #[test]
@@ -331,4 +442,102 @@ fn golden_flow_value_matches_mm1_constant() {
         }
         Err(err) => panic!("формула шаблона упала: {err}"),
     }
+}
+
+/// Аудит-расширение 2026-09-25: золотые дефолты шаблонов на доменных
+/// функциях, ранее не покрытых каталогом (littles_law/erlang_c/irr/
+/// cohort_ltv/min). Пинят порядок величины — дрейф формул или дефолтов
+/// ловится здесь.
+#[test]
+fn expansion_templates_default_values() {
+    let registry = builtin();
+
+    // capacity-planner: littles_law(1000 rps, 100 ms) = 100 req;
+    // 100 / 50 = 2 экземпляра.
+    let value = eval_template_default(&registry, "com.canvasdesk.capacity-planner");
+    assert!(
+        (value.num - 2.0).abs() < 1e-9,
+        "capacity-planner = {}",
+        value.num
+    );
+
+    // support-staffing: Erlang C(a=48, c=60, ρ=0.8) — ожидание ≈ 6.3%
+    // (значение независимо воспроизведено рекуррентной Erlang-B).
+    let value = eval_template_default(&registry, "com.canvasdesk.support-staffing");
+    assert!(
+        (0.05..=0.08).contains(&value.num),
+        "support-staffing P_wait = {}",
+        value.num
+    );
+
+    // infra-cost: 4×50 + 500×0.02 + 2×90 = 390 usd.
+    let value = eval_template_default(&registry, "com.canvasdesk.infra-cost");
+    assert!(
+        (value.num - 390.0).abs() < 1e-9,
+        "infra-cost = {}",
+        value.num
+    );
+
+    // rate-limiter: min(800, 1000) = 800 rps.
+    let value = eval_template_default(&registry, "com.canvasdesk.rate-limiter");
+    assert!(
+        (value.num - 800.0).abs() < 1e-9,
+        "rate-limiter = {}",
+        value.num
+    );
+
+    // ue-irr: IRR(-100k, 30k, 40k, 45k, 50k) ≈ 21–22%.
+    let value = eval_template_default(&registry, "com.canvasdesk.ue-irr");
+    assert!((0.21..=0.22).contains(&value.num), "ue-irr = {}", value.num);
+
+    // ue-ltv-cohort: когортный LTV при затухающем retention ≈ 4.9 usd
+    // (заметно ниже наивного 320 usd из ue-ltv — это и есть смысл шаблона).
+    let value = eval_template_default(&registry, "com.canvasdesk.ue-ltv-cohort");
+    assert!(
+        (4.0..=6.0).contains(&value.num),
+        "ue-ltv-cohort = {}",
+        value.num
+    );
+
+    // pa-avg-lifetime: 1 / 0.05 = 20 месяцев.
+    let value = eval_template_default(&registry, "com.canvasdesk.pa-avg-lifetime");
+    assert!(
+        (value.num - 20.0).abs() < 1e-9,
+        "pa-avg-lifetime = {}",
+        value.num
+    );
+}
+
+/// Вычислить expr шаблона на дефолтах (вспомогательная для golden-тестов).
+fn eval_template_default(registry: &TemplateRegistry, id: &str) -> expr::Value {
+    let manifest = registry
+        .find(id)
+        .unwrap_or_else(|| panic!("{id} в каталоге"));
+    let parsed = expr::parse(&manifest.expr).unwrap_or_else(|err| panic!("{id}: {err}"));
+    let env = Env::with_params(
+        TemplateRef {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            expr: manifest.expr.clone(),
+            icon: manifest.icon.clone(),
+            color: manifest.color.clone(),
+            name: None,
+            outputs: Vec::new(),
+            params: manifest
+                .params
+                .iter()
+                .map(|spec| {
+                    (
+                        spec.name.clone(),
+                        TemplateParam {
+                            num: spec.default,
+                            unit: spec.unit.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+        .param_values(),
+    );
+    expr::eval(&parsed, &env).unwrap_or_else(|err| panic!("{id}: {err}"))
 }
