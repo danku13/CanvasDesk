@@ -1,0 +1,483 @@
+{
+  "id": "com.canvasdesk.scheme.ab-testing",
+  "name_ru": "A/B тест",
+  "name_en": "A/B testing",
+  "description_ru": "Конверсии двух групп превращаются в вердикт: доли, значимость z-теста, лифт, эффект и срок теста. Пересчёт при правке любой цифры.",
+  "description_en": "Conversions of two groups become a verdict: shares, z-test significance, lift, effect and test duration. Instant recalculation of any number.",
+  "category": "business",
+  "category_ru": "Бизнес",
+  "category_en": "Business",
+  "version": "1.0.0",
+  "content": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 360,
+        "height": 250,
+        "text": "A/B тест\nПуть от двух групп до вердикта: визиты и конверсии групп → доли, значимость и эффект → срок теста. Поменяйте любую цифру — цепочка пересчитается сама.\nДвойная линия «Контроль → Конверсии» — пучок value-связей: клик открывает main stage с адресами «Объект.Поле».",
+        "color": "4"
+      },
+      {
+        "id": "control",
+        "type": "text",
+        "x": 420,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Контроль\nТекущая версия: визиты и конверсии группы A — сырые данные из аналитики.\n\nvisitors_a = 10000\nconversions_a = 200",
+        "color": "5"
+      },
+      {
+        "id": "variant",
+        "type": "text",
+        "x": 760,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Вариант\nНовая версия: визиты и конверсии группы B — то, что проверяем.\n\nvisitors_b = 10000\nconversions_b = 260",
+        "color": "5"
+      },
+      {
+        "id": "verdict",
+        "type": "text",
+        "x": 1100,
+        "y": 0,
+        "width": 340,
+        "height": 250,
+        "text": "Вердикт\np ≈ 0.0047 < 0.05: вариант B значимо лучше — лифт +30%, на том же трафике это +60 конверсий, за год +720.\nПродолжайте: подставьте фактические визиты; при p ≥ 0.05 эффекта нет — продолжайте тест или увеличьте выборку (карточка «Планирование»).",
+        "color": "4"
+      },
+      {
+        "id": "rates",
+        "type": "text",
+        "x": 420,
+        "y": 300,
+        "width": 280,
+        "height": 190,
+        "text": "Конверсии\nДоли групп — значения приходят построчно value-рёбрами.\n\ncr_a = $conversions_a / $visitors_a\ncr_b = $conversions_b / $visitors_b",
+        "color": "2"
+      },
+      {
+        "id": "significance",
+        "type": "text",
+        "x": 760,
+        "y": 300,
+        "width": 320,
+        "height": 210,
+        "text": "Значимость\nДвусторонний p-value pooled z-теста и относительный лифт: p < 0.05 — различие значимо.\n\np_value = ab_pvalue($ca, $na, $cb, $nb)\nlift = ab_lift($ca, $na, $cb, $nb)",
+        "color": "2"
+      },
+      {
+        "id": "effect",
+        "type": "text",
+        "x": 1140,
+        "y": 300,
+        "width": 300,
+        "height": 210,
+        "text": "Эффект\nПрирост в пунктах и доп. конверсии на том же трафике — из долей и лифта.\n\nextra_pp = ($cr_b - $cr_a) × 100\nmonthly = $lift × $conversions_a",
+        "color": "2"
+      },
+      {
+        "id": "projection",
+        "type": "text",
+        "x": 1500,
+        "y": 300,
+        "width": 280,
+        "height": 200,
+        "text": "Прогноз\nЭкстраполяция эффекта на квартал и год.\n\nquarter = $monthly × 3\nyear = $monthly × 12",
+        "color": "2"
+      },
+      {
+        "id": "planner",
+        "type": "text",
+        "x": 1100,
+        "y": 570,
+        "width": 300,
+        "height": 200,
+        "text": "Планирование\nМинимальная выборка на группу ДО старта: база 2%, MDE +10%, alpha 5%, мощность 80%.\n\nn = ab_sample_size(0.02, 0.10, 0.05, 0.80)",
+        "color": "5"
+      },
+      {
+        "id": "traffic",
+        "type": "text",
+        "x": 1460,
+        "y": 570,
+        "width": 260,
+        "height": 180,
+        "text": "Трафик\nДоступный трафик в день на обе группы суммарно.\n\ndaily = 2400",
+        "color": "5"
+      },
+      {
+        "id": "duration",
+        "type": "text",
+        "x": 1780,
+        "y": 570,
+        "width": 280,
+        "height": 190,
+        "text": "Срок теста\nСколько дней нужно: обе группы × n к дневному трафику.\n\ndays = 2 × $n / $daily\nweeks = days / 7",
+        "color": "2"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "control",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "conversions_a",
+        "toParam": "conversions_a"
+      },
+      {
+        "id": "e2",
+        "fromNode": "control",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "visitors_a",
+        "toParam": "visitors_a"
+      },
+      {
+        "id": "e3",
+        "fromNode": "variant",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "conversions_b",
+        "toParam": "conversions_b"
+      },
+      {
+        "id": "e4",
+        "fromNode": "variant",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "visitors_b",
+        "toParam": "visitors_b"
+      },
+      {
+        "id": "e5",
+        "fromNode": "control",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "conversions_a",
+        "toParam": "ca"
+      },
+      {
+        "id": "e6",
+        "fromNode": "control",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "visitors_a",
+        "toParam": "na"
+      },
+      {
+        "id": "e7",
+        "fromNode": "variant",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "conversions_b",
+        "toParam": "cb"
+      },
+      {
+        "id": "e8",
+        "fromNode": "variant",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "visitors_b",
+        "toParam": "nb"
+      },
+      {
+        "id": "e9",
+        "fromNode": "rates",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "cr_a",
+        "toParam": "cr_a"
+      },
+      {
+        "id": "e10",
+        "fromNode": "rates",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "cr_b",
+        "toParam": "cr_b"
+      },
+      {
+        "id": "e11",
+        "fromNode": "significance",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "lift",
+        "toParam": "lift"
+      },
+      {
+        "id": "e12",
+        "fromNode": "control",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "conversions_a",
+        "toParam": "conversions_a"
+      },
+      {
+        "id": "e13",
+        "fromNode": "effect",
+        "toNode": "projection",
+        "flowKind": "value",
+        "fromOutput": "monthly",
+        "toParam": "monthly"
+      },
+      {
+        "id": "e14",
+        "fromNode": "planner",
+        "toNode": "duration",
+        "flowKind": "value",
+        "fromOutput": "n",
+        "toParam": "n"
+      },
+      {
+        "id": "e15",
+        "fromNode": "traffic",
+        "toNode": "duration",
+        "flowKind": "value",
+        "fromOutput": "daily",
+        "toParam": "daily"
+      }
+    ]
+  },
+  "content_en": {
+    "nodes": [
+      {
+        "id": "hint",
+        "type": "text",
+        "x": 0,
+        "y": 0,
+        "width": 360,
+        "height": 250,
+        "text": "A/B testing\nThe path from two groups to a verdict: visits and conversions of the groups → shares, significance and effect → test duration. Change any number — the chain recomputes itself.\nThe double line «Control → Conversions» is a bundle of value edges: click opens the main stage with «Object.Field» addresses.",
+        "color": "4"
+      },
+      {
+        "id": "control",
+        "type": "text",
+        "x": 420,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Control\nCurrent version: visits and conversions of group A — raw data from analytics.\n\nvisitors_a = 10000\nconversions_a = 200",
+        "color": "5"
+      },
+      {
+        "id": "variant",
+        "type": "text",
+        "x": 760,
+        "y": 0,
+        "width": 280,
+        "height": 200,
+        "text": "Variant\nNew version: visits and conversions of group B — the thing under test.\n\nvisitors_b = 10000\nconversions_b = 260",
+        "color": "5"
+      },
+      {
+        "id": "verdict",
+        "type": "text",
+        "x": 1100,
+        "y": 0,
+        "width": 340,
+        "height": 250,
+        "text": "Verdict\np ≈ 0.0047 < 0.05: variant B is significantly better — lift +30%, on the same traffic that is +60 conversions, +720 per year.\nKeep going: plug in the actual visits; at p ≥ 0.05 there is no effect — continue the test or grow the sample (the «Planning» card).",
+        "color": "4"
+      },
+      {
+        "id": "rates",
+        "type": "text",
+        "x": 420,
+        "y": 300,
+        "width": 280,
+        "height": 190,
+        "text": "Conversions\nGroup shares — values arrive line by line via value edges.\n\ncr_a = $conversions_a / $visitors_a\ncr_b = $conversions_b / $visitors_b",
+        "color": "2"
+      },
+      {
+        "id": "significance",
+        "type": "text",
+        "x": 760,
+        "y": 300,
+        "width": 320,
+        "height": 210,
+        "text": "Significance\nTwo-sided p-value of the pooled z-test and the relative lift: p < 0.05 — the difference is significant.\n\np_value = ab_pvalue($ca, $na, $cb, $nb)\nlift = ab_lift($ca, $na, $cb, $nb)",
+        "color": "2"
+      },
+      {
+        "id": "effect",
+        "type": "text",
+        "x": 1140,
+        "y": 300,
+        "width": 300,
+        "height": 210,
+        "text": "Effect\nGain in percentage points and extra conversions on the same traffic — from shares and lift.\n\nextra_pp = ($cr_b - $cr_a) × 100\nmonthly = $lift × $conversions_a",
+        "color": "2"
+      },
+      {
+        "id": "projection",
+        "type": "text",
+        "x": 1500,
+        "y": 300,
+        "width": 280,
+        "height": 200,
+        "text": "Projection\nExtrapolation of the effect to a quarter and a year.\n\nquarter = $monthly × 3\nyear = $monthly × 12",
+        "color": "2"
+      },
+      {
+        "id": "planner",
+        "type": "text",
+        "x": 1100,
+        "y": 570,
+        "width": 300,
+        "height": 200,
+        "text": "Planning\nMinimum sample per group BEFORE the start: baseline 2%, MDE +10%, alpha 5%, power 80%.\n\nn = ab_sample_size(0.02, 0.10, 0.05, 0.80)",
+        "color": "5"
+      },
+      {
+        "id": "traffic",
+        "type": "text",
+        "x": 1460,
+        "y": 570,
+        "width": 260,
+        "height": 180,
+        "text": "Traffic\nAvailable traffic per day, both groups combined.\n\ndaily = 2400",
+        "color": "5"
+      },
+      {
+        "id": "duration",
+        "type": "text",
+        "x": 1780,
+        "y": 570,
+        "width": 280,
+        "height": 190,
+        "text": "Duration\nHow many days are needed: both groups × n over the daily traffic.\n\ndays = 2 × $n / $daily\nweeks = days / 7",
+        "color": "2"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "fromNode": "control",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "conversions_a",
+        "toParam": "conversions_a"
+      },
+      {
+        "id": "e2",
+        "fromNode": "control",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "visitors_a",
+        "toParam": "visitors_a"
+      },
+      {
+        "id": "e3",
+        "fromNode": "variant",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "conversions_b",
+        "toParam": "conversions_b"
+      },
+      {
+        "id": "e4",
+        "fromNode": "variant",
+        "toNode": "rates",
+        "flowKind": "value",
+        "fromOutput": "visitors_b",
+        "toParam": "visitors_b"
+      },
+      {
+        "id": "e5",
+        "fromNode": "control",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "conversions_a",
+        "toParam": "ca"
+      },
+      {
+        "id": "e6",
+        "fromNode": "control",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "visitors_a",
+        "toParam": "na"
+      },
+      {
+        "id": "e7",
+        "fromNode": "variant",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "conversions_b",
+        "toParam": "cb"
+      },
+      {
+        "id": "e8",
+        "fromNode": "variant",
+        "toNode": "significance",
+        "flowKind": "value",
+        "fromOutput": "visitors_b",
+        "toParam": "nb"
+      },
+      {
+        "id": "e9",
+        "fromNode": "rates",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "cr_a",
+        "toParam": "cr_a"
+      },
+      {
+        "id": "e10",
+        "fromNode": "rates",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "cr_b",
+        "toParam": "cr_b"
+      },
+      {
+        "id": "e11",
+        "fromNode": "significance",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "lift",
+        "toParam": "lift"
+      },
+      {
+        "id": "e12",
+        "fromNode": "control",
+        "toNode": "effect",
+        "flowKind": "value",
+        "fromOutput": "conversions_a",
+        "toParam": "conversions_a"
+      },
+      {
+        "id": "e13",
+        "fromNode": "effect",
+        "toNode": "projection",
+        "flowKind": "value",
+        "fromOutput": "monthly",
+        "toParam": "monthly"
+      },
+      {
+        "id": "e14",
+        "fromNode": "planner",
+        "toNode": "duration",
+        "flowKind": "value",
+        "fromOutput": "n",
+        "toParam": "n"
+      },
+      {
+        "id": "e15",
+        "fromNode": "traffic",
+        "toNode": "duration",
+        "flowKind": "value",
+        "fromOutput": "daily",
+        "toParam": "daily"
+      }
+    ]
+  }
+}

@@ -5420,6 +5420,17 @@ impl App {
             .collect()
     }
 
+    /// FR-040 v2: локализованные подписи категорий дока (порядок реестра).
+    /// Единая точка для геометрии рендера И hit-test: оба зовут хелпер
+    /// с одним языком — расхождений измерений нет; поиск по реестру
+    /// остаётся на raw-токенах ([`Self::template_category_names`]).
+    fn template_category_display_names(&self) -> Vec<String> {
+        self.template_category_names()
+            .iter()
+            .map(|c| template_ui::category_display_name(self.settings.language, c))
+            .collect()
+    }
+
     /// Ревизия FR-025: геометрия flyout раскрытой категории свёрнутой полосы
     /// (None — палитра развёрнута/nothing раскрыто/индекс протух). Единый
     /// источник для рендера, hit-test и прокрутки: расхождений быть не может.
@@ -5451,7 +5462,7 @@ impl App {
             return false;
         }
         let viewport = self.viewport_logical();
-        let categories = self.template_category_names();
+        let categories = self.template_category_display_names();
         // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
@@ -5901,7 +5912,7 @@ impl App {
         if self.template_panel.open {
             return 0.0; // док развёрнут — полосы нет, панель у левого края
         }
-        let categories = self.template_category_names();
+        let categories = self.template_category_display_names();
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
         let strip =

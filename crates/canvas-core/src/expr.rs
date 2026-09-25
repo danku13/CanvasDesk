@@ -48,6 +48,10 @@ mod queueing;
 // FR-063 (Открытый вопрос № 1): общий разбор аргументов доменных слоёв L2
 // (queueing/stats) — вынесен из queueing.rs без изменения его поведения.
 mod args;
+// Доменный слой A/B тестирования — по образцу queueing (НЕ за фичей):
+// built-in шаблон/схема A/B обязаны работать во всех сборках (zero-dep
+// инвариант B2B); Φ/Φ⁻¹ реализованы чисто (erfc ряд + цепная дробь).
+mod abtest;
 // FR-063: доменный слой статистики (L2, ADR-0008 M2/S1) — только с фичей
 // `stats`; без неё имена не регистрируются и дают UnknownFunction (fallback).
 #[cfg(feature = "stats")]
@@ -1831,6 +1835,9 @@ fn eval_call(func: &str, args: &[Expr], env: &Env) -> Result<Value, EvalError> {
         // FR-027: расширение — 4 финансовые функции (npv/cagr/irr/cohort_ltv).
         "utilization" | "mm1" | "mmc" | "littles_law" | "erlang_c" | "npv" | "cagr" | "irr"
         | "cohort_ltv" => queueing::dispatch(func, &values),
+        // Доменный слой A/B тестирования (без фичи — как queueing):
+        // размер выборки, pooled z-тест, p-value, лифт, ДИ доли.
+        other if abtest::is_abtest_function(other) => abtest::dispatch(func, &values),
         // FR-063: доменный слой статистики (L2) — только за фичей `stats`
         // (список имён — единая точка `stats::STATS_FUNCTIONS`, parity-тест с
         // FN_HINTS обязателен). Без фичи arm не существует и имена падают в
@@ -2076,6 +2083,33 @@ pub const FN_HINTS: &[FnHint] = &[
         name: "cohort_ltv",
         signature: "cohort_ltv(arpu_m0, margin, r_d1, r_d7, r_d30, months)",
         summary: "LTV когорты через retention-кривую",
+    },
+    // Доменный слой A/B тестирования (без фичи — как queueing): планирование
+    // выборки и анализ результата теста двух пропорций.
+    FnHint {
+        name: "ab_sample_size",
+        signature: "ab_sample_size(p0, mde, alpha, power)",
+        summary: "размер выборки на группу (mde — относительный эффект)",
+    },
+    FnHint {
+        name: "ab_zscore",
+        signature: "ab_zscore(conv_a, n_a, conv_b, n_b)",
+        summary: "pooled z-статистика двух пропорций",
+    },
+    FnHint {
+        name: "ab_pvalue",
+        signature: "ab_pvalue(conv_a, n_a, conv_b, n_b)",
+        summary: "двусторонний p-value A/B теста (значимость)",
+    },
+    FnHint {
+        name: "ab_lift",
+        signature: "ab_lift(conv_a, n_a, conv_b, n_b)",
+        summary: "относительный лифт конверсии b над a",
+    },
+    FnHint {
+        name: "ab_ci",
+        signature: "ab_ci(conv, n, conf)",
+        summary: "полуширина доверительного интервала доли",
     },
     // FR-063 P2: распределения и квантили (за фичей `stats`, parity-тест —
     // stats_fn_hints_parity_with_eval_call).
@@ -3214,6 +3248,12 @@ mod tests {
             "cagr",
             "irr",
             "cohort_ltv",
+            // Доменный слой A/B тестирования (без фичи — как queueing).
+            "ab_sample_size",
+            "ab_zscore",
+            "ab_pvalue",
+            "ab_lift",
+            "ab_ci",
         ];
         let expected: std::collections::BTreeSet<&str> = BUILTIN_AND_QUEUEING
             .iter()
