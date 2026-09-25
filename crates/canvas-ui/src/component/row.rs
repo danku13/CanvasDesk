@@ -3,11 +3,15 @@
 //! Владелец волны (агент 3-d): дополнить `impl Component` для строки + каталог
 //! миграции потребителей (см. worklog); функции — стабильный API.
 
-use super::{KitPalette, KitState};
+use std::cell::RefCell;
+
+use super::{Component, KitPalette, KitState};
 use crate::geometry::UiRect;
+use crate::layout::LayoutBackend;
 use crate::measure::TextMeasurer;
 use crate::paint::{PaintAlign, Painter};
 use crate::row_guides::{RowCellWidths, RowGuides};
+use crate::widget::WidgetState;
 
 // --- Row (FR-061 D-15, этап E) ----------------------------------------------
 //
@@ -402,10 +406,183 @@ pub fn leader_dash_rects(x0: f32, x1: f32, y: f32, scale: f32, min_track: f32) -
     out
 }
 
+// --- FR-068 W3: компонент Row (Component-слой поверх kit-функций) ------------
+//
+// Компонент — retained-объект: владеет свойствами ([`RowProps`]), машиной
+// состояний ([`WidgetState`]) и замерщиком текста ([`TextMeasurer`] +
+// `cosmic_text::FontSystem` — владелец инстанса компонент, практика
+// measure.rs §14/Q6: общий пул потребителя не churn'ится). Вёрстка/отрисовка
+// — immediate-делегирование в kit-функции ([`row_guides`]/[`row_layout`]/
+// [`paint_row`]) — побитовый паритет с прямым вызовом (тест-оракул в
+// `mod tests`).
+
+/// Кегль кит-строки компонента (захардкожен как в тестах `component/*` —
+/// `ROW_SIZE` 12.0; не-дефолтный кегль — расширение `RowProps` в v2).
+pub const ROW_DEFAULT_SIZE: f32 = 12.0;
+
+/// Семейство кит-строки компонента (паритет `FAMILY` тестов `component/*`;
+/// то же строковое имя, что `Family::Name` рендера).
+pub const ROW_DEFAULT_FAMILY: &str = "Noto Sans Display";
+
+/// Свойства компонента [`Row`] (декларативный вход кадра). Строки владеет
+/// компонент (`String`) — Props переживают кадр (retained-контракт W3).
+/// Юнит-колонка вне Props v1 (пустая ячейка: потребители юнитов — тело ноды
+/// FR-061 — остаются на kit-функциях); кегль/семейство — константы
+/// компонента ([`ROW_DEFAULT_SIZE`]/[`ROW_DEFAULT_FAMILY`], паритет тестам
+/// 12.0 / "Noto Sans Display").
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowProps {
+    /// Маркер левой колонки (точка/глиф/нет — прототип Р-4).
+    pub marker: RowMarker,
+    /// Левый текст (имя/формула/путь) — усекается ellipsis'ом (класс CR-015).
+    pub label: String,
+    /// Значение (прижато вправо на направляющей чисел, D-4); пустое —
+    /// ячейки нет и лидера нет.
+    pub value: String,
+    /// Бейдж (пилюля в бейдж-колонке; `None` — колонки нет).
+    pub badge: Option<String>,
+    /// Опции строки (лидер/зазор направляющих).
+    pub opts: RowOpts,
+    /// Палитра-срез (слоты состояний FR-053; контракт F-8 — без арифметики
+    /// над цветами, стиль выбирает [`row_style`]).
+    pub palette: KitPalette,
+}
+
+/// Компонент строки табличного тела (FR-061 D-15): retained-объект с
+/// [`Component`]-интерфейсом поверх kit-функций. `props`/`state` — публичные
+/// (потребитель читает Props/ведёт состояние через `set_*`); замерщик —
+/// приватный (RefCell: `Component::layout`/`paint` принимают `&self` —
+/// immediate-вёрстка поверх retained-компонента, §`component/mod.rs`).
+pub struct Row {
+    /// Свойства кадра.
+    pub props: RowProps,
+    /// Машина состояний виджета (FR-057): hover/pressed/selected/disabled
+    /// → [`KitState`] → слоты [`row_style`].
+    pub state: WidgetState,
+    /// Замерщик текста (кэш ширин по ключу текст/семейство/кегль).
+    measurer: RefCell<TextMeasurer>,
+    /// Владелец `FontSystem` (реальный шейпинг cosmic-text — метрики рендера,
+    /// CR-015); `FontSystem::new()` дорог — создаётся один раз на компонент,
+    /// не на кадр.
+    font_system: RefCell<cosmic_text::FontSystem>,
+}
+
+impl Row {
+    /// Компонент из свойств; состояние — [`WidgetState::default`] (Normal).
+    pub fn new(props: RowProps) -> Self {
+        Self {
+            props,
+            state: WidgetState::default(),
+            measurer: RefCell::new(TextMeasurer::new()),
+            font_system: RefCell::new(cosmic_text::FontSystem::new()),
+        }
+    }
+
+    /// Части строки из props (вид [`RowParts`] kit-функций). Юнит — вне
+    /// Props v1: пустая ячейка.
+    fn parts(&self) -> RowParts<'_> {
+        RowParts {
+            marker: self.props.marker,
+            label: &self.props.label,
+            value: &self.props.value,
+            unit: "",
+            badge: self.props.badge.as_deref().unwrap_or(""),
+        }
+    }
+
+    /// Полная геометрия строки в слоте (вид [`RowLayout`] kit-функций):
+    /// направляющие одной строки ([`row_guides`]; правый край — край слота,
+    /// зазор — `props.opts.gap`) + [`row_layout`]. `Component::layout`
+    /// возвращает плоский срез ([`row_rects`]); этот метод оставляет
+    /// потребителю именованные ячейки (лидер, `label_shown`).
+    pub fn layout_row(&self, slot: UiRect) -> RowLayout {
+        let parts = self.parts();
+        let rows = [parts];
+        let mut m = self.measurer.borrow_mut();
+        let mut fs = self.font_system.borrow_mut();
+        // Одна строка — направляющие всегда построены (RowGuides::measure
+        // возвращает None только на пустом списке строк).
+        let guides = row_guides(
+            &mut m,
+            &mut fs,
+            ROW_DEFAULT_FAMILY,
+            ROW_DEFAULT_SIZE,
+            &rows,
+            slot.right(),
+            self.props.opts.gap,
+        )
+        .expect("одна строка — направляющие всегда построены");
+        row_layout(
+            &mut m,
+            &mut fs,
+            ROW_DEFAULT_FAMILY,
+            ROW_DEFAULT_SIZE,
+            slot,
+            guides,
+            &rows[0],
+            &self.props.opts,
+        )
+    }
+}
+
+/// Плоский порядок rect'ов компонента [`Row`] (выдача `Component::layout`):
+/// слот строки (индекс 0 — hit-цель строки), затем точка/глиф-зона (если
+/// есть), левый текст, значение, юнит, бейдж (если есть). Лидер и
+/// `label_shown` в плоской выдаче не участвуют (штрихи/тексты — данные
+/// [`RowLayout`], не hit-цели).
+pub fn row_rects(lay: &RowLayout) -> Vec<UiRect> {
+    let mut out = Vec::with_capacity(6);
+    out.push(lay.row);
+    if let Some(dot) = lay.dot {
+        out.push(dot);
+    }
+    if let Some(glyph) = lay.glyph {
+        out.push(glyph);
+    }
+    out.push(lay.label);
+    out.push(lay.value);
+    out.push(lay.unit);
+    if let Some(badge) = lay.badge {
+        out.push(badge);
+    }
+    out
+}
+
+impl Component for Row {
+    type Props = RowProps;
+
+    fn props(&self) -> &RowProps {
+        &self.props
+    }
+
+    /// Вёрстка строки в слоте — делегирование в [`Row::layout_row`] (kit-
+    /// функции [`row_guides`]/[`row_layout`]). Backend в геометрии Row не
+    /// участвует: раскладка — направляющие от замера текста, а замер един у
+    /// всех backend'ов (§F-13 FR-062 — TextMeasurer ДО адаптера), паритет
+    /// Native/Flex/Taffy тривиален; параметр — контракт `Component` (W3).
+    fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
+        row_rects(&self.layout_row(slot))
+    }
+
+    /// Отрисовка строки — делегирование в [`paint_row`] со стилем из слотов
+    /// состояний ([`row_style`] по [`WidgetState::kit_state`]). Геометрия
+    /// пересчитывается от rect'а строки (immediate-контракт: `rects` —
+    /// выдача `Component::layout`, индекс 0 — слот строки).
+    fn paint(&self, painter: &mut Painter, rects: &[UiRect]) {
+        let Some(&slot) = rects.first() else {
+            return;
+        };
+        let lay = self.layout_row(slot);
+        let parts = self.parts();
+        let style = row_style(self.state.kit_state(), &self.props.palette);
+        paint_row(painter, &lay, &parts, &style, ROW_DEFAULT_SIZE);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component::test_support::{font_system, palette_a, FAMILY};
+    use crate::component::test_support::{font_system, load_display_font, palette_a, FAMILY};
     use crate::paint::PaintItem;
     const ROW_SIZE: f32 = 12.0;
     fn row_parts<'a>(
@@ -658,6 +835,136 @@ mod tests {
         let disabled = row_style(KitState::Disabled, &p);
         assert_eq!(disabled.label, p.disabled_text);
         assert_eq!(disabled.badge_fill, [0.0; 4]);
+    }
+
+    // === FR-068 W3: компонент Row (Component-слой) ==========================
+
+    /// W3: паритет `Component::layout` ↔ прямой `row_layout` (те же части из
+    /// тех же props, тот же инстанс FontSystem — метрики идентичны):
+    /// плоская выдача совпадает дословно, индекс 0 — слот строки. Backend —
+    /// [`crate::layout::default_backend`] (на `--features taffy` —
+    /// TaffyBackend): в геометрию Row backend не входит — паритет обязателен
+    /// на обеих сборках (§Контракт-3 FR-068).
+    #[test]
+    fn component_layout_matches_row_layout_oracle() {
+        let slot = UiRect::new(10.0, 20.0, 300.0, 22.0);
+        let row = Row::new(RowProps {
+            marker: RowMarker::Dot,
+            label: "путь /api/rps".to_owned(),
+            value: "1389".to_owned(),
+            badge: Some("← источник".to_owned()),
+            opts: RowOpts::default(),
+            palette: palette_a(),
+        });
+        load_display_font(&mut row.font_system.borrow_mut());
+
+        let rects = row.layout(crate::layout::default_backend(), slot);
+
+        // Оракул: прямые row_guides/row_layout с теми же частями (build из
+        // тех же props) и тем же инстансом FontSystem.
+        let parts = row.parts();
+        let lay = {
+            let rows = [parts];
+            let mut m = row.measurer.borrow_mut();
+            let mut fs = row.font_system.borrow_mut();
+            let g = row_guides(
+                &mut m,
+                &mut fs,
+                ROW_DEFAULT_FAMILY,
+                ROW_DEFAULT_SIZE,
+                &rows,
+                slot.right(),
+                row.props.opts.gap,
+            )
+            .unwrap();
+            row_layout(
+                &mut m,
+                &mut fs,
+                ROW_DEFAULT_FAMILY,
+                ROW_DEFAULT_SIZE,
+                slot,
+                g,
+                &rows[0],
+                &row.props.opts,
+            )
+        };
+        assert_eq!(rects, row_rects(&lay), "плоская выдача = oracle row_layout");
+        assert_eq!(rects[0], slot, "индекс 0 — слот строки (hit-цель)");
+        assert_eq!(rects.len(), 6, "row, dot, label, value, unit, badge");
+    }
+
+    /// W3: `Component::paint` эмитит элементы строки (draw-порядок
+    /// [`paint_row`]: фон → маркер → тексты), и состояние виджета ведёт
+    /// стиль — Normal даёт прозрачный фон строки (зебру решает потребитель),
+    /// hover — слот `hover_fill` палитры (интеграция `WidgetState` FR-057).
+    #[test]
+    fn component_paint_emits_items_and_uses_state() {
+        let slot = UiRect::new(0.0, 0.0, 300.0, 22.0);
+        let mut row = Row::new(RowProps {
+            marker: RowMarker::Dot,
+            label: "задержка p99".to_owned(),
+            value: "42".to_owned(),
+            badge: None,
+            opts: RowOpts::default(),
+            palette: palette_a(),
+        });
+        load_display_font(&mut row.font_system.borrow_mut());
+
+        let rects = row.layout(crate::layout::default_backend(), slot);
+        let mut p = Painter::new();
+        row.paint(&mut p, &rects);
+        let items = p.items();
+        assert!(!items.is_empty(), "paint эмитит элементы строки");
+        let fill_of = |item: &PaintItem| match item {
+            PaintItem::Rect { fill, .. } => Some(*fill),
+            _ => None,
+        };
+        assert!(
+            matches!(items[0], PaintItem::Rect { .. }),
+            "фон строки — rect"
+        );
+        assert_eq!(
+            fill_of(&items[0]),
+            Some([0.0; 4]),
+            "Normal — прозрачный фон строки"
+        );
+        // hover → слот hover_fill (WidgetState → KitState → row_style)
+        row.state.set_pointer(true, false);
+        let mut p = Painter::new();
+        row.paint(&mut p, &rects);
+        assert_eq!(
+            fill_of(&p.items()[0]),
+            Some(palette_a().hover_fill),
+            "hover — слот hover_fill"
+        );
+    }
+
+    /// W3: hit-test компонента (дефолтный — [`ComponentHit::pick`]): точка
+    /// внутри слота — строка (индекс 0 — первый rect плоской выдачи), вне
+    /// слота — None.
+    #[test]
+    fn component_hit_test_finds_row_at_index_0() {
+        use crate::component::ComponentHit;
+        use crate::geometry::UiPoint;
+        let slot = UiRect::new(0.0, 0.0, 300.0, 22.0);
+        let row = Row::new(RowProps {
+            marker: RowMarker::None,
+            label: "строка".to_owned(),
+            value: "20".to_owned(),
+            badge: None,
+            opts: RowOpts::default(),
+            palette: palette_a(),
+        });
+        let rects = row.layout(crate::layout::default_backend(), slot);
+        assert_eq!(
+            row.hit_test(&rects, UiPoint::new(150.0, 11.0)),
+            Some(ComponentHit { index: 0 }),
+            "внутри слота — строка (index 0)"
+        );
+        assert!(
+            row.hit_test(&rects, UiPoint::new(500.0, 11.0)).is_none(),
+            "вне слота — мимо"
+        );
     }
 
     // === FR-068 W1: taffy-пути kit-функций (parity-тесты) ===================
