@@ -10,7 +10,7 @@
 //!   viewport-контекст, не двигаются);
 //! - оси независимы: `None` — нет прилипания по оси.
 
-use canvas_ui::layout::{FlexLayoutEngine, LayoutBackend, SceneNode, ScenePosition};
+use canvas_ui::layout::{FlexLayoutEngine, SceneNode, ScenePosition};
 use canvas_ui::UiRect;
 
 const SLOT: UiRect = UiRect::new(0.0, 0.0, 300.0, 200.0);
