@@ -14,9 +14,16 @@
 //! Кэш ограничен по ёмкости: переполнение → полная очистка (профиль
 //! «просадка после всплеска уникальных строк» дешевле LRU и
 //! детерминирован).
+//!
+//! FR-068 W2: сам пайплайн шейпинга вынесен за trait boundary
+//! (`crate::shaper::Shaper`, default impl — `CosmicShaper`, пайплайн
+//! перенесён бит-в-бит — метрики неизменны); этот модуль — кэш и
+//! политика измерения (ellipsis и т.п.).
 
-use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, Weight, Wrap};
+use crate::shaper::{CosmicShaper, Shaper};
+use cosmic_text::Weight;
 use std::collections::HashMap;
+use std::fmt;
 
 /// Фактор высоты строки screen-текстов рендера (зеркало
 /// `canvas-render/src/text.rs`: `line_height = font_size * 1.3`).
@@ -109,10 +116,33 @@ struct MeasureKey {
 /// Измеритель текста с кэшем. Дешёвое создание на кадр (пул строк кадра
 /// короткий; шейпинг dominates), кэш переиспользует ширины внутри кадра
 /// (ellipsis-поиск префиксов).
-#[derive(Debug, Clone)]
+///
+/// FR-068 W2: шейпинг за trait boundary (dyn Shaper); cosmic-text —
+/// default impl ([`CosmicShaper`], real-метрики рендера), тесты —
+/// `MockShaper` через [`TextMeasurer::with_shaper`]. `Clone` снят с
+/// derive: `Box<dyn Shaper>` не `Clone`, а grep по репо на момент W2
+/// дал 0 вызовов `.clone()` на `TextMeasurer` (клоны не требовались —
+/// measurer дешёвый, создаётся `new()` на кадр) — breaking-потребителей
+/// нет.
 pub struct TextMeasurer {
     cache: HashMap<MeasureKey, Measured>,
     cap: usize,
+    /// Шейпер за границей (FR-068 W2): `new()` — `CosmicShaper`,
+    /// `with_shaper` — явная подмена (мок в тестах).
+    shaper: Box<dyn Shaper>,
+}
+
+/// Ручной `Debug`: `Box<dyn Shaper>` не `Debug` (трейт не требует
+/// реализации от подменяемых шейперов) — печатаем состав кэша и тип-метку
+/// шейпера без требования `Debug` у реализации.
+impl fmt::Debug for TextMeasurer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextMeasurer")
+            .field("cache", &self.cache)
+            .field("cap", &self.cap)
+            .field("shaper", &"Box<dyn Shaper>")
+            .finish()
+    }
 }
 
 impl Default for TextMeasurer {
@@ -130,6 +160,9 @@ impl TextMeasurer {
         Self {
             cache: HashMap::new(),
             cap: Self::DEFAULT_CAP,
+            // Default impl — реальный шейпинг cosmic-text (метрики
+            // рендера, CR-015); мок — только явно через with_shaper.
+            shaper: Box::new(CosmicShaper::new()),
         }
     }
 
@@ -138,6 +171,19 @@ impl TextMeasurer {
         Self {
             cache: HashMap::new(),
             cap: cap.max(1),
+            shaper: Box::new(CosmicShaper::new()),
+        }
+    }
+
+    /// FR-068 W2: измеритель с ЯВНЫМ шейпером (подмена реализации за
+    /// границей [`Shaper`]): `Box::new(MockShaper::default())` в тестах —
+    /// шрифто-независимая детерминированная геометрия; продакшн —
+    /// [`TextMeasurer::new`] (CosmicShaper, real-метрики рендера).
+    pub fn with_shaper(shaper: Box<dyn Shaper>) -> Self {
+        Self {
+            cache: HashMap::new(),
+            cap: Self::DEFAULT_CAP,
+            shaper,
         }
     }
 
@@ -150,7 +196,7 @@ impl TextMeasurer {
     }
 
     /// Измерить текст реальным шейпингом cosmic-text (кэш: hit — без
-    /// шейпинга).
+    /// шейпинга; miss — шейпер за границей [`Shaper`], FR-068 W2).
     pub fn measure(&mut self, fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured {
         let key = MeasureKey {
             text: spec.text.into(),
@@ -161,7 +207,9 @@ impl TextMeasurer {
         if let Some(hit) = self.cache.get(&key) {
             return *hit;
         }
-        let measured = shape_measure(fs, spec);
+        // `text` — источник истины по строке (контракт FR-068 §W2):
+        // передаём spec.text — данные идентичны.
+        let measured = self.shaper.shape(fs, spec.text, spec);
         // Переполнение ёмкости → очистка (кэш — ускоритель, не источник
         // истины: очистка не меняет результаты измерения).
         if self.cache.len() >= self.cap {
@@ -268,38 +316,12 @@ impl TextMeasurer {
     }
 }
 
-/// Реальное измерение: тот же пайплайн, что screen-тексты рендера
-/// (`text.rs`: Buffer + Metrics(size, size·1.3) + Wrap::None + shape),
-/// семейство/вес — из спеки (паритет с шейпингом потребителя); FR-069:
-/// вес ячеек по семейству задают вызывающие хелперы (моно — NORMAL,
-/// sans — MEDIUM) — см. width_of / MEASURE_WEIGHT row_grid.
-fn shape_measure(fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured {
-    let size = spec.size.max(0.0);
-    let line_height = size * SCREEN_LINE_FACTOR;
-    let mut buffer = Buffer::new(fs, Metrics::new(size, line_height));
-    buffer.set_wrap(fs, Wrap::None);
-    // Ограничение ширины: для Wrap::None строки не переносятся, ширина
-    // задаёт только область (бесконечность — без ограничения).
-    buffer.set_size(fs, Some(spec.max_width), Some(line_height));
-    // Вес — из спеки (паритет с рендером потребителя; см. TextSpec::weight:
-    // cosmic-text ищет лицо семейства только среди лиц точного веса).
-    let attrs = Attrs::new()
-        .family(Family::Name(spec.family))
-        .weight(spec.weight);
-    buffer.set_text(fs, spec.text, attrs, Shaping::Advanced);
-    buffer.shape_until_scroll(fs, false);
-    let mut width = 0.0f32;
-    let mut lines = 0usize;
-    for run in buffer.layout_runs() {
-        width = width.max(run.line_w);
-        lines += 1;
-    }
-    Measured {
-        width,
-        height: lines as f32 * line_height,
-        lines,
-    }
-}
+// =============================================================================
+// Пайплайн реального шейпинга (`shape_measure`) ПЕРЕНЕСЁН в `shaper.rs`
+// (FR-068 W2, trait boundary): `CosmicShaper` — бит-в-бит тот же код
+// (Buffer + Metrics + Wrap::None + set_size + Attrs + Shaping::Advanced +
+// shape_until_scroll + layout_runs) — метрики измерений не изменились.
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
