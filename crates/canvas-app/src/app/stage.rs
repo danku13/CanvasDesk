@@ -21,6 +21,218 @@ fn stage_area(t: &StageTransform, x: f32, y: f32, w: f32, h: f32) -> UiRect {
     UiRect::new(p[0], p[1], t.map_size(w), t.map_size(h))
 }
 
+/// FR-068 этап M2 (Table v2, `docs/plans/fr-068-table-v2.md` §8 — первый
+/// кандидат): строки панели «Как считается» — 2×retained-Table
+/// («Переменные»/«Расчёт»). Пересборка [`canvas_ui::kit::TableRow`] из
+/// модели кадра (строки-владения — приёмлемая цена; state и
+/// переопределения слотов — те же вычисления, что в прежнем ручном
+/// kit-цикле FR-061 D-15, дословно: fill = search_row_fill с
+/// `alpha·a`; border — фокус/`UNMAPPED_EDGE_COLOR`/прозрачный; маркер —
+/// value-точка `FLOW_EDGE`/янтарная либо ƒ = `text_title`; значение —
+/// text/danger/quote; label — text; всё с приглушением Q3
+/// `1.0 − 0.5·dim`), затем синхронизация скролла (источник истины —
+/// контекст кадра `ctx.vars_scroll`/`ctx.formulas_scroll`,
+/// синхронизированные раскладкой панели; `content_h` держит
+/// [`canvas_ui::kit::Table::set_rows`] — инвариант sync_scroll §4.3) и
+/// отрисовка ТОЛЬКО строк ([`canvas_ui::kit::Table::paint_rows_with`])
+/// в порядке stage: строки vars → строки формул. Бегунки рисует
+/// существующий блок stage (цвет — слот `palette_border`, НЕ
+/// `control_border` [`canvas_ui::kit::Table::paint_scrollbar`] —
+/// бит-в-бит цвета), draw-порядок кадра сохранён дословно.
+///
+/// Замер — внешний общий (§4.7 дизайна): `m` + `fs`
+/// (`canvas_render::text::measure_font_system`) передаются снаружи —
+/// паритет замера с прежним kit-путём; собственные замерщики Table
+/// (Component-слой) здесь не используются. Таблицы создаются при первом
+/// кадре панели (`FontSystem::new()` дорогой — один раз, не на кадр,
+/// §4.6); Props (кегль/палитра/opts) — кадровые, синхронизируются здесь.
+///
+/// Вьюпорты колонок — ЭКРАННЫЕ (`px/py` + площади раскладки); слоты —
+/// экранные (x≠0), поэтому направляющие строятся от ПРАВОГО КРАЯ
+/// ВЬЮПОРТА В КООРДИНАТАХ СЛОТОВ (`viewport_right`, не ширина):
+/// vars — `right_pad = 6` (прежний `vars_right`), формулы —
+/// `right_pad = 0`: правых ячеек нет → правило деградации §4.2 внутри
+/// Table (паритет прежнего ручного входа `RowGuides { value_x:
+/// unit_x: slot.right() }`, stage.rs:1386–1392).
+#[allow(clippy::too_many_arguments)] // плоский контракт кадра панели (все слоты явные — I-1)
+fn paint_calc_panel_rows(
+    tables: &mut Option<(canvas_ui::kit::Table, canvas_ui::kit::Table)>,
+    d: &mut Painter,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    ctx: &StageFrameCtx,
+    panel: &calc_panel_ui::CalcPanelLayout,
+    px: f32,
+    py: f32,
+    kit_size: f32,
+    kit_palette: &canvas_ui::kit::KitPalette,
+    row_fill: [f32; 4],
+    quote: [f32; 4],
+    unmapped_text: &str,
+) {
+    // FR-044 Q3: приглушение строк вне фокуса — с анимацией перехода
+    // (1.0 − 0.5·dim; токен focus_fade_ms); рамка фокуса гаснет вместе
+    // с коэффициентом (прежние замыкания кадра — дословно)
+    let any_focus = ctx.focus.is_some();
+    let row_focused = |row: usize| -> bool {
+        ctx.focus
+            .as_ref()
+            .is_some_and(|focus| focus.rows.contains(&row))
+    };
+    let row_alpha = |focused: bool| -> f32 {
+        if any_focus && !focused {
+            1.0 - 0.5 * ctx.dim
+        } else {
+            1.0
+        }
+    };
+    let focus_border = || {
+        let mut border = SELECTION_BORDER;
+        border[3] *= ctx.dim;
+        border
+    };
+    // Вьюпорты колонок (экранные координаты; совпадают с площадями
+    // раскладки, смещёнными на px/py — те же слоты, что прежде)
+    let vars_viewport = UiRect::new(
+        px + panel.vars_area[0],
+        py + panel.vars_area[1],
+        panel.vars_area[2],
+        panel.vars_area[3],
+    );
+    let formulas_viewport = UiRect::new(
+        px + panel.formulas_area[0],
+        py + panel.formulas_area[1],
+        panel.formulas_area[2],
+        panel.formulas_area[3],
+    );
+    // Retained-таблицы: создание при первом кадре панели (§4.6 —
+    // FontSystem::new() дорогой); кегль/палитра/opts — кадровые Props
+    // (масштаб раскладки и тема меняются) — синхронизация каждый кадр
+    let (vars_table, formulas_table) = tables.get_or_insert_with(|| {
+        (
+            canvas_ui::kit::Table::new(canvas_ui::kit::TableProps::default()),
+            canvas_ui::kit::Table::new(canvas_ui::kit::TableProps::default()),
+        )
+    });
+    for (table, right_pad) in [
+        // «Переменные»: отступ направляющих от правого края — 6 (прежний
+        // `vars_right`); «Расчёт»: 0 — направляющие не строятся (деградация)
+        (&mut *vars_table, 6.0),
+        (&mut *formulas_table, 0.0),
+    ] {
+        table.props.size = kit_size;
+        table.props.palette = *kit_palette;
+        table.props.opts = canvas_ui::kit::TableOpts {
+            leader: false, // прототип FR-044 без лидера
+            gap: canvas_core::tokens::TABLE_GUIDE_GAP,
+            row_h: calc_panel_ui::PANEL_ROW_H,
+            row_gap: 0.0,
+            right_pad,
+        };
+    }
+    // Строки «Переменных» (значение unmapped — «не подставлено»): маркер —
+    // value-точка (Р-4), Ok/Err — FLOW_EDGE, Unmapped — янтарная
+    let var_rows: Vec<canvas_ui::kit::TableRow> = ctx
+        .model
+        .vars
+        .iter()
+        .enumerate()
+        .map(|(i, var)| {
+            let focused = row_focused(i);
+            let alpha = row_alpha(focused);
+            let unmapped = var.value == RowValue::Unmapped;
+            let mut fill = row_fill;
+            fill[3] *= alpha;
+            let (dot_fill, value_fill) = match &var.value {
+                RowValue::Ok(_) => (FLOW_EDGE_COLOR, kit_palette.text),
+                RowValue::Err(_) => (FLOW_EDGE_COLOR, kit_palette.control_danger),
+                RowValue::Unmapped => (UNMAPPED_EDGE_COLOR, quote),
+            };
+            canvas_ui::kit::TableRow {
+                marker: canvas_ui::kit::RowMarker::Dot,
+                label: var.path.clone(),
+                value: match &var.value {
+                    RowValue::Ok(text) => text.clone(),
+                    RowValue::Err(err) => err.clone(),
+                    RowValue::Unmapped => unmapped_text.to_owned(),
+                },
+                unit: String::new(),
+                badge: None,
+                // Состояние строки — фокус Р-5 → Selected (прежний
+                // WidgetState::set_selected → kit_state, дословно)
+                state: if focused {
+                    canvas_ui::kit::KitState::Selected
+                } else {
+                    canvas_ui::kit::KitState::Normal
+                },
+                style: canvas_ui::kit::TableRowStyle {
+                    fill: Some(fill),
+                    border: Some(if focused {
+                        focus_border()
+                    } else if unmapped {
+                        // «пунктирная строка не подставлено» (Р-4): пунктир
+                        // в примитивах квадов недоступен — янтарный контур
+                        // (UNMAPPED_EDGE_COLOR, семантика Р-3 FR-050)
+                        UNMAPPED_EDGE_COLOR
+                    } else {
+                        [0.0; 4]
+                    }),
+                    marker: Some(dim_color4(dot_fill, alpha)),
+                    label: Some(dim_color4(kit_palette.text, alpha)),
+                    value: Some(dim_color4(value_fill, alpha)),
+                    ..canvas_ui::kit::TableRowStyle::default()
+                },
+            }
+        })
+        .collect();
+    // Строки «Расчёта» — ƒ-маркер + формула с путями операндов (значения
+    // нет — ячейки/лидера нет, текст до края строки)
+    let formula_rows: Vec<canvas_ui::kit::TableRow> = ctx
+        .model
+        .formulas
+        .iter()
+        .enumerate()
+        .map(|(i, formula)| {
+            let focused = row_focused(ctx.model.vars.len() + i);
+            let alpha = row_alpha(focused);
+            let mut fill = row_fill;
+            fill[3] *= alpha;
+            canvas_ui::kit::TableRow {
+                marker: canvas_ui::kit::RowMarker::Glyph("ƒ"),
+                label: formula.display.clone(),
+                value: String::new(),
+                unit: String::new(),
+                badge: None,
+                state: if focused {
+                    canvas_ui::kit::KitState::Selected
+                } else {
+                    canvas_ui::kit::KitState::Normal
+                },
+                style: canvas_ui::kit::TableRowStyle {
+                    fill: Some(fill),
+                    border: Some(if focused { focus_border() } else { [0.0; 4] }),
+                    marker: Some(dim_color4(kit_palette.text_title, alpha)),
+                    label: Some(dim_color4(kit_palette.text, alpha)),
+                    ..canvas_ui::kit::TableRowStyle::default()
+                },
+            }
+        })
+        .collect();
+    // Скролл — источник истины КОНТЕКСТ КАДРА (offset/clamp —
+    // потребитель; раскладка панели синхронизирует копии ctx);
+    // set_rows держит content_h (n·row_h + (n−1)·row_gap = инвариант
+    // sync_scroll — row_gap 0), затем полная синхронизация с ctx
+    vars_table.set_rows(var_rows);
+    vars_table.scroll = ctx.vars_scroll.clone();
+    formulas_table.set_rows(formula_rows);
+    formulas_table.scroll = ctx.formulas_scroll.clone();
+    // ТОЛЬКО строки (paint_rows_with) — бегунки рисует существующий блок
+    // stage ниже: draw-порядок кадра дословно (строки vars → строки
+    // формул → бегунки)
+    vars_table.paint_rows_with(d, m, fs, vars_viewport);
+    formulas_table.paint_rows_with(d, m, fs, formulas_viewport);
+}
+
 impl App {
     /// Пересобрать/обновить миникарту (T13, SPEC §6.1): не каждый кадр, а по
     /// dirty-условиям — правки сцены (dirty_until save), движение камеры
@@ -1201,6 +1413,9 @@ impl App {
         // `paint_items_to_stage`); ширины текстов — ИЗМЕРЕННЫЕ
         // (TextMeasurer/ellipsis — замена эвристики «6.3·символ»,
         // правило U5); бегунок — kit::scroll_bar (цвет — слот рамки).
+        // FR-068 этап M2 (Table v2): строки обеих колонок — 2×Table
+        // (retained; см. [`paint_calc_panel_rows`] — геометрия/стили
+        // прежнего kit-цикла дословно, I-1; оракул T7).
         if let Some(panel) = &ctx.panel {
             let px = rect.x + panel.rect[0];
             let py = rect.y + panel.rect[1];
@@ -1249,177 +1464,32 @@ impl App {
                 font(11.0),
                 PaintAlign::Left,
             );
-            let any_focus = ctx.focus.is_some();
-            let row_focused = |row: usize| -> bool {
-                ctx.focus
-                    .as_ref()
-                    .is_some_and(|focus| focus.rows.contains(&row))
-            };
-            // FR-044 Q3: приглушение строк вне фокуса — с анимацией перехода
-            // (1.0 − 0.5·dim; токен focus_fade_ms); рамка фокуса гаснет
-            // вместе с коэффициентом
-            let row_alpha = |focused: bool| -> f32 {
-                if any_focus && !focused {
-                    1.0 - 0.5 * ctx.dim
-                } else {
-                    1.0
-                }
-            };
-            let focus_border = || {
-                let mut border = SELECTION_BORDER;
-                border[3] *= ctx.dim;
-                border
-            };
             let unmapped_text = self.tr(keys::STAGE_CALC_UNMAPPED).to_owned();
-            // FR-061 этап E (D-15): строки панели — kit-Row (row_guides/
-            // row_layout/paint_row): значения — на колоночной направляющей
-            // (max по всем строкам колонки — колонка стабильна при
-            // прокрутке), усечение — ellipsis кита (класс CR-015). Прежняя
-            // семантика панели — переопределением полей RowStyle (plain
-            // data): fill/border/маркер/приглушение — прежние слоты
-            // дословно; лидер выключен (прототип FR-044 без лидера).
+            // FR-068 этап M2 (Table v2): строки панели — 2×retained-Table
+            // (создание при первом кадре панели — FontSystem::new() дорогой,
+            // §4.6 дизайна; Props кегля/палитры — кадровые). Пересборка
+            // rows из модели кадра + отрисовка ТОЛЬКО строк
+            // ([`paint_calc_panel_rows`]); бегунки — прежний блок ниже
+            // (draw-порядок кадра дословно: строки vars → строки формул →
+            // оба бегунка). Ширины текстов — ИЗМЕРЕННЫЕ (TextMeasurer +
+            // общий FontSystem рендера — §4.7).
             let kit_size = font(11.0);
-            let kit_opts = canvas_ui::kit::RowOpts {
-                leader: false,
-                ..canvas_ui::kit::RowOpts::default()
-            };
-            // Данные строк «Переменных» (значение unmapped — «не подставлено»)
-            let var_parts: Vec<canvas_ui::kit::RowParts<'_>> = ctx
-                .model
-                .vars
-                .iter()
-                .map(|var| canvas_ui::kit::RowParts {
-                    marker: canvas_ui::kit::RowMarker::Dot,
-                    label: &var.path,
-                    value: match &var.value {
-                        RowValue::Ok(text) => text.as_str(),
-                        RowValue::Err(err) => err.as_str(),
-                        RowValue::Unmapped => unmapped_text.as_str(),
-                    },
-                    unit: "",
-                    badge: "",
-                })
-                .collect();
-            let vars_right = panel.vars_area[0] + panel.vars_area[2] - 6.0;
-            let var_guides = canvas_ui::kit::row_guides(
+            let mut calc_tables = self.stage_calc_tables.borrow_mut();
+            paint_calc_panel_rows(
+                &mut calc_tables,
+                &mut d,
                 &mut m,
                 &mut fs,
-                SANS_FAMILY,
+                &ctx,
+                panel,
+                px,
+                py,
                 kit_size,
-                &var_parts,
-                vars_right,
-                canvas_core::tokens::TABLE_GUIDE_GAP,
+                &kit_palette,
+                palette.search_row_fill,
+                c4(palette.quote),
+                &unmapped_text,
             );
-            for (index, row) in &panel.var_rows {
-                let Some(g) = var_guides else { break };
-                let var = &ctx.model.vars[*index];
-                // Состояние строки — WidgetState (FR-057): фокус Р-5 →
-                // Selected (рамка/приглушение — прежние слоты дословно)
-                let mut state = WidgetState::default();
-                state.set_selected(row_focused(*index));
-                let focused = state.kit_state() == canvas_ui::kit::KitState::Selected;
-                let alpha = row_alpha(focused);
-                let slot =
-                    canvas_ui::geometry::UiRect::new(px + row[0], py + row[1], row[2], row[3]);
-                let lay = canvas_ui::kit::row_layout(
-                    &mut m,
-                    &mut fs,
-                    SANS_FAMILY,
-                    kit_size,
-                    slot,
-                    g,
-                    &var_parts[*index],
-                    &kit_opts,
-                );
-                let unmapped = var.value == RowValue::Unmapped;
-                let mut fill = palette.search_row_fill;
-                fill[3] *= alpha;
-                let mut style = canvas_ui::kit::row_style(
-                    if focused {
-                        canvas_ui::kit::KitState::Selected
-                    } else {
-                        canvas_ui::kit::KitState::Normal
-                    },
-                    &kit_palette,
-                );
-                style.fill = fill;
-                style.border = if focused {
-                    focus_border()
-                } else if unmapped {
-                    // «пунктирная строка не подставлено» (Р-4): пунктир
-                    // в примитивах квадов недоступен — янтарный контур
-                    // (UNMAPPED_EDGE_COLOR, семантика Р-3 FR-050)
-                    UNMAPPED_EDGE_COLOR
-                } else {
-                    [0.0; 4]
-                };
-                // value-точка (Р-4): FLOW_EDGE, unmapped — янтарная; значение —
-                // слот текста/ошибки/quote; приглушение вне фокуса (Q3)
-                let (dot_fill, value_fill) = match &var.value {
-                    RowValue::Ok(_) => (FLOW_EDGE_COLOR, kit_palette.text),
-                    RowValue::Err(_) => (FLOW_EDGE_COLOR, kit_palette.control_danger),
-                    RowValue::Unmapped => (UNMAPPED_EDGE_COLOR, c4(palette.quote)),
-                };
-                style.marker = dim_color4(dot_fill, alpha);
-                style.value = dim_color4(value_fill, alpha);
-                style.label = dim_color4(kit_palette.text, alpha);
-                canvas_ui::kit::paint_row(&mut d, &lay, &var_parts[*index], &style, kit_size);
-            }
-            // Строки «Расчёта» — ƒ-маркер + формула с путями операндов
-            // (значения нет — ячейки/лидера нет, текст до края строки)
-            let formula_parts: Vec<canvas_ui::kit::RowParts<'_>> = ctx
-                .model
-                .formulas
-                .iter()
-                .map(|formula| canvas_ui::kit::RowParts {
-                    marker: canvas_ui::kit::RowMarker::Glyph("ƒ"),
-                    label: &formula.display,
-                    value: "",
-                    unit: "",
-                    badge: "",
-                })
-                .collect();
-            for (index, row) in &panel.formula_rows {
-                let slot =
-                    canvas_ui::geometry::UiRect::new(px + row[0], py + row[1], row[2], row[3]);
-                // Направляющие не нужны (значения нет) — деградированный вход
-                let g = canvas_ui::row_guides::RowGuides {
-                    value_w: 0.0,
-                    unit_w: 0.0,
-                    badge_w: 0.0,
-                    value_x: slot.right(),
-                    unit_x: slot.right(),
-                };
-                let lay = canvas_ui::kit::row_layout(
-                    &mut m,
-                    &mut fs,
-                    SANS_FAMILY,
-                    kit_size,
-                    slot,
-                    g,
-                    &formula_parts[*index],
-                    &kit_opts,
-                );
-                let mut state = WidgetState::default();
-                state.set_selected(row_focused(ctx.model.vars.len() + *index));
-                let focused = state.kit_state() == canvas_ui::kit::KitState::Selected;
-                let alpha = row_alpha(focused);
-                let mut fill = palette.search_row_fill;
-                fill[3] *= alpha;
-                let mut style = canvas_ui::kit::row_style(
-                    if focused {
-                        canvas_ui::kit::KitState::Selected
-                    } else {
-                        canvas_ui::kit::KitState::Normal
-                    },
-                    &kit_palette,
-                );
-                style.fill = fill;
-                style.border = if focused { focus_border() } else { [0.0; 4] };
-                style.marker = dim_color4(kit_palette.text_title, alpha);
-                style.label = dim_color4(kit_palette.text, alpha);
-                canvas_ui::kit::paint_row(&mut d, &lay, &formula_parts[*index], &style, kit_size);
-            }
             // FR-059: бегунки скролла колонок (кит scroll_bar) — переполнение
             // честно прокручивается, срез «… ещё N» удалён (цвет — слот рамки)
             for (area, scroll) in [
@@ -1693,5 +1763,305 @@ impl App {
                 self.request_redraw();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // T7: семейство замера — то же, что шейпинг (прежний kit-цикл панели
+    // брал SANS_FAMILY из импортов app.rs; после M2 production-путь берёт
+    // семейство из TableProps — импорт нужен только референсу теста).
+    use canvas_render::text::SANS_FAMILY;
+
+    /// T7 (дизайн `fr-068-table-v2.md` §7, оракул M2): журнал Painter
+    /// пути Table ([`paint_calc_panel_rows`]: `paint_rows_with` обеих
+    /// таблиц в порядке stage) ≡ референсу — ручному kit-циклу прежнего
+    /// кода панели (row_guides → row_layout → paint_row с теми же
+    /// стилями). Равенство `Vec<PaintItem>` — побитовое (I-1).
+    /// Параметры — точно stage: row_h 22 (`PANEL_ROW_H`), right_pad
+    /// 6/0, кегль 11, leader off; направляющие — от ПРАВОГО КРАЯ
+    /// ВЬЮПОРТА в координатах слотов (слоты панели — экранные, x≠0);
+    /// формулы — деградация §4.2 (ручной вход
+    /// `RowGuides{value_x: unit_x: slot.right()}` в референсе).
+    /// Модель синтетическая: vars Ok/Err/Unmapped с прокруткой на
+    /// полстроки (частичные строки — клип-семантика §4.3), формулы без
+    /// значений, фокус (var 0 + formula 0) и dim 0.5 (приглушение Q3 +
+    /// рамка фокуса с коэффициентом).
+    #[test]
+    fn t7_panel_rows_table_path_matches_manual_kit_loop() {
+        // Модель: 20 vars (окно 13 строк — прокрутка активна), 2 формулы
+        let mut model = calc_panel_ui::CalcPanelModel::default();
+        for i in 0..20 {
+            let value = match i % 3 {
+                0 => RowValue::Ok(format!("{i}0")),
+                1 => RowValue::Err(format!("ошибка {i}")),
+                _ => RowValue::Unmapped,
+            };
+            model.vars.push(calc_panel_ui::VarRow {
+                edge_index: i,
+                from_node: format!("n{i}"),
+                slot: Some(0),
+                param: None,
+                path: format!("Заявки.поле{i}"),
+                in_bundle: true,
+                value,
+            });
+        }
+        model.formulas.push(calc_panel_ui::FormulaRow {
+            line: 0,
+            name: "x".into(),
+            display: "x = Заявки.поле0 · Заявки.поле1".into(),
+            operand_edges: vec![0, 1],
+        });
+        model.formulas.push(calc_panel_ui::FormulaRow {
+            line: 1,
+            name: "y".into(),
+            display: "y = x + Заявки.поле2".into(),
+            operand_edges: vec![2],
+        });
+        // Раскладка панели — реальная чистая функция; скролл vars — на
+        // полстроки (частичные строки сверху/снизу — усечение §4.3)
+        let mut vars_scroll = canvas_ui::kit::ScrollState::default();
+        let mut formulas_scroll = canvas_ui::kit::ScrollState::default();
+        vars_scroll.scroll_by(11.0);
+        let panel = calc_panel_layout(
+            &model,
+            1344.0,
+            756.0,
+            96.0,
+            &mut vars_scroll,
+            &mut formulas_scroll,
+        )
+        .expect("панель построена");
+        assert!(vars_scroll.offset > 0.0, "прокрутка vars активна");
+        // Фокус: var 0 + formula 0 (индекс vars.len()); dim 0.5
+        let ctx = StageFrameCtx {
+            lines: Vec::new(),
+            model: model.clone(),
+            panel: Some(panel.clone()),
+            vars_scroll: vars_scroll.clone(),
+            formulas_scroll: formulas_scroll.clone(),
+            zone: StageLocalRect {
+                x: 0.0,
+                y: 56.0,
+                w: 1344.0,
+                h: 400.0,
+            },
+            focus: Some(StageCalcFocus {
+                rows: std::collections::BTreeSet::from([0, model.vars.len()]),
+                edges: std::collections::BTreeSet::from([0]),
+            }),
+            dim: 0.5,
+            pill_mode: calc_panel_ui::PillZoneMode::Full,
+        };
+        let settings = Settings::default();
+        let palette = ThemeColors::from_theme(settings.theme);
+        let kit_palette = palette.kit_palette();
+        // quote — вне среза кита (Color → [f32;4], как c4 в stage_frame)
+        let quote = {
+            let c = palette.quote;
+            [
+                c.r() as f32 / 255.0,
+                c.g() as f32 / 255.0,
+                c.b() as f32 / 255.0,
+                c.a() as f32 / 255.0,
+            ]
+        };
+        let unmapped_text = i18n::tr(settings.language, keys::STAGE_CALC_UNMAPPED);
+        // Слоты панели — экранные (px/py — те же, что в stage_frame)
+        let rect = main_stage_rect([1920.0, 1080.0]);
+        let px = rect.x + panel.rect[0];
+        let py = rect.y + panel.rect[1];
+        let kit_size = 11.0; // font(11.0) при scale = 1
+
+        // --- путь Table (stage): paint_calc_panel_rows (lazy-таблицы) ---
+        let mut tables: Option<(canvas_ui::kit::Table, canvas_ui::kit::Table)> = None;
+        let mut d_table = Painter::new();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        paint_calc_panel_rows(
+            &mut tables,
+            &mut d_table,
+            &mut m,
+            &mut fs,
+            &ctx,
+            &panel,
+            px,
+            py,
+            kit_size,
+            &kit_palette,
+            palette.search_row_fill,
+            quote,
+            unmapped_text,
+        );
+        let table_items = d_table.take_items();
+        assert!(!table_items.is_empty(), "журнал Table-пути не пуст");
+        {
+            // Retained-таблицы созданы при первом использовании; скролл —
+            // источник истины ctx; content_h — инвариант set_rows
+            let (vars_table, _) = tables.as_ref().expect("таблицы созданы lazy");
+            assert_eq!(
+                vars_table.scroll.offset, vars_scroll.offset,
+                "offset — из ctx (источник истины)"
+            );
+            assert_eq!(
+                vars_table.scroll.content_h,
+                model.vars.len() as f32 * calc_panel_ui::PANEL_ROW_H
+            );
+        }
+
+        // --- референс: ручной kit-цикл (прежний код stage, D-15) ---
+        let mut d_ref = Painter::new();
+        let mut m_ref = canvas_ui::measure::TextMeasurer::new();
+        let kit_opts = canvas_ui::kit::RowOpts {
+            leader: false,
+            ..canvas_ui::kit::RowOpts::default()
+        };
+        let row_focused = |row: usize| ctx.focus.as_ref().is_some_and(|f| f.rows.contains(&row));
+        let row_alpha = |focused: bool| -> f32 {
+            if ctx.focus.is_some() && !focused {
+                1.0 - 0.5 * ctx.dim
+            } else {
+                1.0
+            }
+        };
+        let focus_border = || {
+            let mut border = SELECTION_BORDER;
+            border[3] *= ctx.dim;
+            border
+        };
+        let vars_viewport = UiRect::new(
+            px + panel.vars_area[0],
+            py + panel.vars_area[1],
+            panel.vars_area[2],
+            panel.vars_area[3],
+        );
+        let var_parts: Vec<canvas_ui::kit::RowParts<'_>> = model
+            .vars
+            .iter()
+            .map(|var| canvas_ui::kit::RowParts {
+                marker: canvas_ui::kit::RowMarker::Dot,
+                label: &var.path,
+                value: match &var.value {
+                    RowValue::Ok(text) => text.as_str(),
+                    RowValue::Err(err) => err.as_str(),
+                    RowValue::Unmapped => unmapped_text,
+                },
+                unit: "",
+                badge: "",
+            })
+            .collect();
+        // Направляющие — от правого края ВЬЮПОРТА минус right_pad 6
+        // (viewport_right в координатах слотов — те же, что у Table)
+        let var_guides = canvas_ui::kit::row_guides(
+            &mut m_ref,
+            &mut fs,
+            SANS_FAMILY,
+            kit_size,
+            &var_parts,
+            vars_viewport.right() - 6.0,
+            canvas_core::tokens::TABLE_GUIDE_GAP,
+        );
+        for (index, row) in &panel.var_rows {
+            let Some(g) = var_guides else { break };
+            let var = &model.vars[*index];
+            let focused = row_focused(*index);
+            let alpha = row_alpha(focused);
+            let slot = UiRect::new(px + row[0], py + row[1], row[2], row[3]);
+            let lay = canvas_ui::kit::row_layout(
+                &mut m_ref,
+                &mut fs,
+                SANS_FAMILY,
+                kit_size,
+                slot,
+                g,
+                &var_parts[*index],
+                &kit_opts,
+            );
+            let unmapped = var.value == RowValue::Unmapped;
+            let mut fill = palette.search_row_fill;
+            fill[3] *= alpha;
+            let mut style = canvas_ui::kit::row_style(
+                if focused {
+                    canvas_ui::kit::KitState::Selected
+                } else {
+                    canvas_ui::kit::KitState::Normal
+                },
+                &kit_palette,
+            );
+            style.fill = fill;
+            style.border = if focused {
+                focus_border()
+            } else if unmapped {
+                UNMAPPED_EDGE_COLOR
+            } else {
+                [0.0; 4]
+            };
+            let (dot_fill, value_fill) = match &var.value {
+                RowValue::Ok(_) => (FLOW_EDGE_COLOR, kit_palette.text),
+                RowValue::Err(_) => (FLOW_EDGE_COLOR, kit_palette.control_danger),
+                RowValue::Unmapped => (UNMAPPED_EDGE_COLOR, quote),
+            };
+            style.marker = dim_color4(dot_fill, alpha);
+            style.value = dim_color4(value_fill, alpha);
+            style.label = dim_color4(kit_palette.text, alpha);
+            canvas_ui::kit::paint_row(&mut d_ref, &lay, &var_parts[*index], &style, kit_size);
+        }
+        let formula_parts: Vec<canvas_ui::kit::RowParts<'_>> = model
+            .formulas
+            .iter()
+            .map(|formula| canvas_ui::kit::RowParts {
+                marker: canvas_ui::kit::RowMarker::Glyph("ƒ"),
+                label: &formula.display,
+                value: "",
+                unit: "",
+                badge: "",
+            })
+            .collect();
+        for (index, row) in &panel.formula_rows {
+            let slot = UiRect::new(px + row[0], py + row[1], row[2], row[3]);
+            // Направляющие не нужны (значения нет) — деградированный вход
+            let g = canvas_ui::row_guides::RowGuides {
+                value_w: 0.0,
+                unit_w: 0.0,
+                badge_w: 0.0,
+                value_x: slot.right(),
+                unit_x: slot.right(),
+            };
+            let lay = canvas_ui::kit::row_layout(
+                &mut m_ref,
+                &mut fs,
+                SANS_FAMILY,
+                kit_size,
+                slot,
+                g,
+                &formula_parts[*index],
+                &kit_opts,
+            );
+            let focused = row_focused(model.vars.len() + *index);
+            let alpha = row_alpha(focused);
+            let mut fill = palette.search_row_fill;
+            fill[3] *= alpha;
+            let mut style = canvas_ui::kit::row_style(
+                if focused {
+                    canvas_ui::kit::KitState::Selected
+                } else {
+                    canvas_ui::kit::KitState::Normal
+                },
+                &kit_palette,
+            );
+            style.fill = fill;
+            style.border = if focused { focus_border() } else { [0.0; 4] };
+            style.marker = dim_color4(kit_palette.text_title, alpha);
+            style.label = dim_color4(kit_palette.text, alpha);
+            canvas_ui::kit::paint_row(&mut d_ref, &lay, &formula_parts[*index], &style, kit_size);
+        }
+        // Оракул T7: журналы равны побитово (строки vars → строки формул)
+        let ref_items = d_ref.take_items();
+        assert_eq!(
+            table_items, ref_items,
+            "журнал Table-пути ≡ ручному kit-циклу (I-1)"
+        );
     }
 }
