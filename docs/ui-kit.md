@@ -421,3 +421,35 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
   осталось hand-rolled (world-декорации/вне скоупа): wheel/minimap/HUD/onboarding
   (заморожен владельцем); explain_frame — отрисовка на screen_rect_quad
   (эквивалент Painter-конверсии, без теней) — остаток волны.
+
+## 10. Компонентный слой (FR-068 W3, ADR-0015)
+
+Готово (W3, 2026-09-25): `canvas-ui` получил компонентную модель —
+`crate::component` (`component/mod.rs`): `Component` trait
+(`type Props`; `props()`; `layout(backend, slot) -> Vec<UiRect>`;
+`paint(painter, rects)`; `hit_test(rects, point) -> Option<ComponentHit>`
+— дефолт: первый rect по `UiRect::contains`). Реализация перенесена из
+`kit.rs` (теперь тонкий фасад-реэкспорт — публичное API кита 1:1,
+потребители не переписываются, §Контракт-1 PRD-0009 V-5):
+
+| Модуль | Компонент | State | Примечания |
+|---|---|---|---|
+| `component/button.rs` | `Button` | `WidgetState` | paint — `button_style(kit_state())`; disabled прошивается в `new` |
+| `component/panel.rs` | `Panel` | — (неинтерактивный) | layout → `[панель, контент]` |
+| `component/dropdown.rs` | `Dropdown` | `WidgetState` | layout → `dropdown_menu().menu`; flip/viewport_clamp внутри |
+| `component/modal.rs` | `Modal` | — | layout → `[dim, panel]` (контракт индексов, тест); paint — только панель; hit_test: panel→1/dim→0 |
+| `component/text_field.rs` | `TextField` | `WidgetState` + `TextFieldModel` | paint — контейнер (текст/каретка — потребитель: детерминированность замера) |
+| `component/list.rs` | `List` | `ScrollState` | layout → `list_rows`; paint — скроллбар |
+| `component/row.rs` | `Row` | `WidgetState` | FR-061 строка; layout-паритет с `row_layout` (тест); paint через `paint_row` |
+
+- **Retained-state** — НЕ введён (профиль W2: reflow 1000 узлов ~0.2 мс <
+  1 мс порога — KISS, решение зафиксировано в FR-068). `Row` держит
+  `TextMeasurer`/`FontSystem` retained (раз на компонент).
+- **Миграция потребителей** — staged (каталог
+  `docs/plans/fr-068-w3-consumer-migration.md`): пилот W3.1 — what-if бар
+  (`whatif_ui.rs`) переведён на measured-API (`MeasuredItem` ×
+  `Row::lay_out_measured`, бит-в-бит); `Child::fixed` в canvas-app 42→32.
+- **Известные проблемы**: 2 taffy-теста whatif_ui
+  (`bar_layout_no_overlap_and_covers_labels`,
+  `scenario_labels_ellipsis_by_measured_width`) — ПРЕДСУЩЕСТВУЮЩИЕ на main,
+  семейство документированных taffy-округлений W1 — фикс отдельным CR.
