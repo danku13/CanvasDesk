@@ -2424,6 +2424,14 @@ impl App {
     }
 
     pub(super) fn on_left_button(&mut self, state: ElementState) {
+        // Оракул браузерного дыма: приход события кнопки (координатная
+        // сверка headless-тестов, ?log=debug)
+        tracing::debug!(
+            target: "canvas_app",
+            pressed = matches!(state, ElementState::Pressed),
+            cursor = ?self.cursor,
+            "mouse: левая кнопка"
+        );
         self.left_pressed = state == ElementState::Pressed;
         // T15: первый клик по канвасу снимает WS_EX_NOACTIVATE — с этого
         // момента окно может получать фокус («WS_EX_NOACTIVATE до первого
@@ -2464,6 +2472,17 @@ impl App {
                 // транзиентов и прежняя canvas-цепочка (мир L0).
                 let ui_frame = ui_registry::build_frame(self);
                 let pick = HitStack::pick(&ui_frame, UiPoint::new(self.cursor[0], self.cursor[1]));
+                // Оракул браузерного дыма: кто забрал клик в точке (или None
+                // — клик уходит канвасу), ?log=debug
+                tracing::debug!(
+                    target: "canvas_app",
+                    pick = ?match &pick {
+                        Some(HitTarget::Element { surface, .. }) => Some(surface.surface.as_str()),
+                        Some(HitTarget::Backdrop { surface }) => Some(surface.surface.as_str()),
+                        None => None,
+                    },
+                    "mouse: pick поверхностей"
+                );
                 match pick {
                     Some(HitTarget::Element { surface, rect }) => {
                         let surface_id = surface.surface.as_str().to_owned();
@@ -2502,6 +2521,15 @@ impl App {
                 // Выборочный hit-test (T5 + группы): ребёнок группы раньше
                 // самой группы, не-group с меньшей площадью в приоритете
                 let hit = self.selective_hit(world);
+                // Оракул браузерного дыма: вход Pressed — cursor/world/hit
+                // (координатная сверка headless-тестов, ?log=debug)
+                tracing::debug!(
+                    target: "canvas_app",
+                    cursor = ?self.cursor,
+                    world = ?world,
+                    hit = ?hit.map(|i| self.scene.canvas.nodes[i].id.clone()),
+                    "press: вход в канвас"
+                );
                 // FR-061 хвосты (D-8, «Раскрыть+авто»): клик мимо ноды
                 // сворачивает раскрытые описания; клик по телу ноды
                 // сохраняет её раскрытое описание (решение владельца).
@@ -3018,6 +3046,13 @@ impl App {
                         &active,
                         &mut self.drag_push,
                         &params,
+                    );
+                    // Оракул браузерного дыма: якоря после коммита (финал
+                    // сессии — где кто закреплён)
+                    tracing::debug!(
+                        target: "canvas_app",
+                        anchors = ?self.scene.canvas.nodes.iter().map(|n| (n.id.as_str(), self.drag_push.anchors.get(&n.id).copied().unwrap_or([n.x, n.y]))).collect::<Vec<_>>(),
+                        "drag_push: drop — якоря закоммичены"
                     );
                 }
                 self.dragging = None;
