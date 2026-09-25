@@ -6425,3 +6425,22 @@ Stage Summary:
 - **Аудит аналогов:** скрипт scripts/audit_fs_locks.py (все функции с `fs: &mut FontSystem` × лочащие sibling'ы `layout`/`modal_layout`/`empty_buttons`) — `row_labels` была единственным местом; остальные вызовы лочащих версий — либо до взятия guard'а, либо в тестах.
 - **Верификация:** тот же headless-сценарий после фикса — чисто (mutex=False; остаточная ошибка swiftshader `createBuffer ... mappedAtCreation` — артефакт GPU-эмуляции среды, был и до фикса). Гейты: workspace tests 0 failed, fmt --check, clippy --workspace --all-targets -D warnings, wasm_gate.sh --check — зелёные.
 - **Доки:** ACCEPTANCE.md (FR-068.9), план W3 §7 (хотфикс-примечание), worklog репо.
+- **Интеракция с хотфиксом a11f6c9 (рекурсивный лок FontSystem):** Table v2 следует тому же паттерну — `*_with` принимают внешний замерщик и НЕ лочат глобальный FontSystem внутри canvas-ui; Component-слой использует СОБСТВЕННЫЕ FontSystem (RefCell); в paint_calc_panel_rows ровно один guard `measure_font_system()` на кадр — рекурсивных локов нет.
+
+## 2026-09-26 — feat(ui)+refactor(app): реализация Table-компонента v2, волна 4 субагентов (FR-068 W3, M1–M6)
+
+- **Агент:** Super Z (сессия web-3e2a9c55; запрос владельца: «реализуй 4 сабагентами»; base a6ad0d6 → волна коммитов c8640f0…33948d4).
+- **3-a (M1, последовательный):** `component/table.rs` (Table/TableRow/TableRowStyle/TableOpts/TableProps; два слоя замера §4.7 — *_with с общим FontSystem рендера и impl Component с собственными RefCell; деградация пустых правых колонок; visible_rows = list_rows+пересечение; set_rows держит content_h; model_index_at) + реэкспорт kit.rs + оракулы T1–T6. canvas-ui 196/0, clippy 0, wasm OK. Коммиты c8640f0, 198cfb5 (гранулярные paint_rows_with/paint_scrollbar — составной draw-порядок stage, I-1), 6e9708a (fix: viewport_right — правый край вьюпорта В КООРДИНАТАХ СЛОТОВ, не ширина; stage-слоты экранные x≠0; +T1 x≠0).
+- **3-b (M2):** stage.rs 8 мест → paint_calc_panel_rows: 2×retained-Table (app.rs stage_calc_tables), vars right_pad 6 / формулы 0 (деградация), стили дословно (dim Q3/фокус/unmapped), скролл — ctx источник истины, paint_rows_with + прежний блок бегунков (palette_border), draw-порядок дословно. Оракул T7 — журналы равны. Коммит ca34587.
+- **3-c (M3+M4):** kit_ui — секция Table рядом с витриной Row (общие gallery_row_demo, отрисовка через row_rows — ноль правок render; i18n RU/EN; тест скролла учёл рост колонки); admin_ui — fill_body строит row_table через Table (параметры паритет прежних). Оракул «Row ≡ Table на одних данных» (лид добавил — хвост 3-c). Коммит 49ba26e.
+- **3-d (M5+M6):** overlays — аудит: единственное kit-row место (2 kit-вызова секции Row витрины) НЕ кандидат (геометрия в kit_ui::gallery_layout; фильтр полных строк ≠ клипу Table; дублируемой оркестрации нет) — статус-абзац у места (9b19e12); доки: дизайн-план «исполнено» + исправление арифметики (value_right = right − 2·gap) + гранулярные методы/viewport_right, каталог §9.3.5/§9.5 исполнено, ui-kit.md +Table (33948d4).
+- **Координация волны:** 3-b/3-c упали по таймауту tool-вызова, оставив in-flight правки (компилируемые, тесты зелёные) — лид довёл: добавил оракул Row ≡ Table, rustfmt изменённых файлов, полные гейты, stage-wise коммиты.
+
+### Гейты (финал волны)
+- workspace: 66 наборов «ok», 0 failed (canvas-app 380/0 = 378+T7+оракул Row≡Table; canvas-ui 196/0 = 190+T1–T6); clippy --workspace --all-targets -D warnings; rustfmt изменённых файлов; wasm_gate.sh --check OK.
+- Ручная проверка владельцу: открыть панель «Как считается» (клик по пучку) — строки/скролл/фокус/янтарные unmapped выглядят как прежде (бит-в-бит); витрина кита — новая секция «Таблица (Table)» после секции Row.
+
+### Статусы
+- Каталог §9.3.5/§9.5 п.2 — исполнено; дизайн-план fr-068-table-v2.md — исполнено; ui-kit.md — Table. Row v1/RowGuides/kit-функции не тронуты (Table — additive-потребитель).
+- **Telegram:** план волны (281) → M1 (283) → финальное саммари.
+- **Открытый вопрос владельцу:** замена витрины Row v1 на Table (сейчас рядом) — решение за владельцем; остаток бэклога W3: width_of → MeasuredItem (34 места, §9.3.1).
