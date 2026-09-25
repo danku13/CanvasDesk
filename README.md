@@ -123,7 +123,10 @@ canvasdesk mcp                                         # MCP-посредник 
 ## Стек
 
 Rust · wgpu (WebGPU) · winit · cosmic-text · rstar (spatial index) ·
-rusqlite · serde · MCP-протокол. Один бинарь — весь стек: GUI + MCP-посредник
+rusqlite · serde · MCP-протокол. UI-стек — собственный: слои поверхностей,
+компонентный кит и layout-движок FlexLayoutEngine (подмножество CSS
+Flexbox/Grid: auto/minmax-треки, sticky, rotate, z-index) без внешних
+layout-зависимостей. Один бинарь — весь стек: GUI + MCP-посредник
 для AI-клиентов.
 
 ## Статус

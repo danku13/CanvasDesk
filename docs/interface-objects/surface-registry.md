@@ -38,9 +38,11 @@
    `UiLayer::DRAW_ORDER`; внутри полосы — порядок сборки кадра.
    Клип полосы — `SurfaceFrame.clip` поверхности (обязателен с U1):
    рендер исполняет его scissor-бакетом полосы и `TextBounds`-клипом
-   текстов (FR-056, F-5); сегодня клипы поверхностей = вьюпорт —
-   сужение per-surface (compact/scroll/clip/hide) — волны миграции
-   FR-059/060 (аудит G5).
+   текстов (FR-056, F-5); сужение per-surface (compact/scroll/clip/hide)
+   исполнено волнами миграции FR-059/060 (аудит G5 закрыт).
+   Внутри полосы кит может поднимать элементы точечно: `PaintItem::ZGroup`
+   (z-index per-element, стабильная сортировка `take_items`) и
+   `PaintItem::Transform` (rotate) — FR-074.
 
 ## 3. Поверхности (U4, 22 идентификатора)
 
@@ -74,7 +76,17 @@
 ## 4. Точки входа
 
 - `crates/canvas-app/src/app/ui_registry.rs` — декларации, кадр, маршрутизация.
-- `crates/canvas-ui/src/` — каркас (layers/registry/capture/frame/hit/keyboard/layout/measure).
+- `crates/canvas-ui/src/` — каркас (layers/registry/capture/frame/hit/keyboard/layout/measure); вёрстка поверхностей — `layout/flex.rs` (`FlexLayoutEngine`, сцена — `layout/scene.rs`: grid-треки Auto/MinMax, sticky{top,left} — FR-074).
 - `crates/canvas-render/src/renderer.rs` — исполнение `ScreenBand`.
 - `docs/ui-kit.md` — «поверхность за 3 шага».
 - `docs/prd/prd-0009-ui-layering-uikit.md` — архитектура и гейты G1–G8.
+
+## 5. Актуальность стека (2026-09-25)
+
+После FR-068 W4 движок вёрстки поверхностей один — `FlexLayoutEngine`
+(ADR-0015; taffy/`TaffyBackend` вырезаны из workspace целиком);
+`default_backend()` → Flex, `pilot_backend()` → `NativeBackend` (API пилотов
+сохранён). CSS-паритет вёрстки расширен FR-074: Auto/minmax-треки Grid,
+горизонтальный sticky (`ScenePosition::Sticky{top,left}`), rotate и
+z-index per-element в paint-слое. Контракт разделов 1–4 не меняется:
+слои/реестр/capture/keyboard ортогональны выбору движка вёрстки.

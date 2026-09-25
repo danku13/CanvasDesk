@@ -24,6 +24,7 @@ value-связям (DAG-движок), а ИИ-агент строит и про
 | [DEMO.md](DEMO.html) | Демо-стенд под Linux: скриншоты и GIF |
 | [BYOK.md](BYOK.html) | Подключение своей LLM-модели (BYOK) |
 | [DEPENDENCIES.md](DEPENDENCIES.html) | Заметки о зависимостях |
+| [ui-kit.md](ui-kit.html) | UI-кит `canvas-ui`: слои и реестр поверхностей, layout-движок `FlexLayoutEngine` (подмножество CSS Flexbox/Grid — auto/minmax-треки, sticky, rotate, z-index), компонентный слой, гайд «поверхность за 3 шага» |
 | [ENVIRONMENT.md](ENVIRONMENT.html) | Окружение разработки и сборки |
 
 ## PRD — требования продукта
@@ -61,7 +62,9 @@ user stories → решение → non-goals → roadmap). CJM с трасси�
 
 ## Разделы
 
-- [`adr/`](adr/) — архитектурные решения (ADR-0001…0012, индекс — `adr/README.md`).
+- [`adr/`](adr/) — архитектурные решения (ADR-0001…0015, индекс — `adr/README.md`):
+  UI-стек — ADR-0013→0014→0015 (taffy отвергнут → переходный opt-in → своя
+  библиотека; после W4 FR-068 движок вёрстки один — `FlexLayoutEngine`).
 - [Индекс CR/FR](change-requests/index-cr-fr.html) — постановки задач и
   дефектов, статусы, история изменений.
 - [`plans/wasm-port.html`](plans/wasm-port.html) — план wasm-порта (M8);
