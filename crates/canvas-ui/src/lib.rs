@@ -34,6 +34,7 @@ pub mod geometry;
 pub mod hit;
 pub mod keyboard;
 // FR-055 U4 (F-8): UI kit v1 — модель виджетов поверх примитивов U3.
+pub mod component;
 pub mod kit;
 // FR-057 (волна 2 кита): Painter — draw-слой крейта (PaintItem-данные, без wgpu — G7).
 pub mod paint;
