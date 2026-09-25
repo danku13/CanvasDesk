@@ -185,6 +185,103 @@ fn mcp_node_update_move_resize() {
     assert!(dispatch(&mut scene, "node_resize", r#"{"id":"n1","width":1.0}"#).is_err());
 }
 
+/// node_resize: валидация width/height > 0 (parity с node_edit, FR-005).
+#[test]
+fn mcp_node_resize_rejects_non_positive() {
+    let mut scene = mcp_scene();
+    // width = 0 — ошибка
+    let err = dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":0.0,"height":100.0}"#,
+    )
+    .unwrap_err();
+    assert!(err.contains("width должен быть > 0"), "{err}");
+    // height отрицательный — ошибка
+    let err = dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":100.0,"height":-50.0}"#,
+    )
+    .unwrap_err();
+    assert!(err.contains("height должен быть > 0"), "{err}");
+    // Нода не изменилась (валидация до push_undo)
+    assert_eq!(
+        (scene.canvas.nodes[0].width, scene.canvas.nodes[0].height),
+        (260.0, 120.0),
+        "невалидный resize не меняет геометрию"
+    );
+}
+
+/// node_resize: fit:true — подгонка высоты под контент (фон не сжимается
+/// меньше видимого). Ответ содержит {id, width, height, fit_applied}.
+#[test]
+fn mcp_node_resize_fit_adjusts_height_to_content() {
+    let mut scene = mcp_scene();
+    // Дать ноде текст — несколько строк Numi-листа
+    dispatch(
+        &mut scene,
+        "node_update_text",
+        r#"{"id":"n1","text":"a = 100\nb = 200\nc = a + b\nd = c * 2"}"#,
+    )
+    .expect("update_text");
+    // Пересчёт — чтобы refit_node_to_content имел формулы/spills
+    dispatch(&mut scene, "flow_recalc", r#"{}"#).expect("flow_recalc");
+    let content_height = scene.canvas.nodes[0].height;
+    assert!(content_height > 50.0, "контент требует >50px: {content_height}");
+    // resize с fit:true + height=50 (меньше контента) — высота должна
+    // подогнаться под контент (не остаться 50.0)
+    let result = dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":500.0,"height":50.0,"fit":true}"#,
+    )
+    .expect("resize+fit");
+    // width остаётся как задан агентом
+    assert_eq!(scene.canvas.nodes[0].width, 500.0);
+    // height подогнан под контент (точно — зависит от замера, но не 50.0)
+    assert_ne!(
+        scene.canvas.nodes[0].height, 50.0,
+        "fit:true скорректировал height с 50.0 под контент"
+    );
+    assert!(
+        scene.canvas.nodes[0].height >= content_height - 1.0,
+        "height >= content_height (фон не сжимается меньше контента): {} vs {}",
+        scene.canvas.nodes[0].height,
+        content_height
+    );
+    // Ответ содержит fit_applied: true
+    let fit_applied = result.get("fit_applied").and_then(|v| v.as_bool());
+    assert_eq!(fit_applied, Some(true), "fit_applied: true в ответе");
+    // Ответ содержит финальные width/height
+    assert!(result.get("width").is_some());
+    assert!(result.get("height").is_some());
+}
+
+/// node_resize: fit:false (default) — высота НЕ подгоняется, остаётся как
+/// задан агентом (прежнее поведение).
+#[test]
+fn mcp_node_resize_without_fit_keeps_height() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_update_text",
+        r#"{"id":"n1","text":"a = 100\nb = 200"}"#,
+    )
+    .expect("update_text");
+    dispatch(&mut scene, "flow_recalc", r#"{}"#).expect("flow_recalc");
+    // resize БЕЗ fit — height остаётся 400.0 как задано
+    let result = dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":500.0,"height":400.0}"#,
+    )
+    .expect("resize");
+    assert_eq!(scene.canvas.nodes[0].height, 400.0);
+    let fit_applied = result.get("fit_applied").and_then(|v| v.as_bool());
+    assert_eq!(fit_applied, Some(false), "fit_applied: false (default)");
+}
+
 /// FR-005 node_edit: обновляются ТОЛЬКО переданные поля; label/color
 /// null — сброс; геометрия — с обновлением spatial; ответ — сводка.
 #[test]

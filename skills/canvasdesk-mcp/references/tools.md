@@ -34,7 +34,7 @@
 | `node_update_text` {id, text} | id, text: string | Заменить текст ноды-заметки целиком |
 | `node_edit` {id, text?, title?, label?, color?, expr?, x?, y?, width?, height?} | id: string | Править ТОЛЬКО переданные поля; label/color/expr/title = null — сброс (title = null — возврат к фолбэку «первая строка», FR-072); expr — Numi-формула; возвращает обновлённую ноду |
 | `node_move` {id, x, y} | — | Переместить ноду в world-координаты |
-| `node_resize` {id, width, height} | — | Изменить размеры ноды |
+| `node_resize` {id, width, height, fit?} | width/height: number > 0; fit: boolean (опц., default false) | Изменить размеры ноды. fit:true — подогнать высоту под видимый контент (фон не сжимается меньше контента). Возвращает {id, width, height, fit_applied} |
 | `node_delete` {id} | — | Удалить ноду (связи — каскадно; дети группы НЕ удаляются) |
 | `node_set_color` {id, color} | color: "1".."6" \| null | Пресет цвета ноды или null для сброса |
 

@@ -79,6 +79,11 @@ fn mcp_opt_f32(params: &serde_json::Value, name: &str) -> Option<f32> {
         .map(|value| value as f32)
 }
 
+/// Опциональный булев параметр MCP-инструмента.
+fn mcp_opt_bool(params: &serde_json::Value, name: &str) -> Option<bool> {
+    params.get(name).and_then(serde_json::Value::as_bool)
+}
+
 /// Индекс ноды по строковому id (MCP-инструменты адресуют ноды id).
 fn mcp_node_index(canvas: &Canvas, id: &str) -> Result<usize, String> {
     canvas
@@ -491,6 +496,17 @@ pub fn mcp_dispatch(
             let id = mcp_req_str(params, "id")?;
             let width = mcp_req_f32(params, "width")?;
             let height = mcp_req_f32(params, "height")?;
+            // FR-005: валидация > 0 — parity с node_edit (прежде absence
+            // принимал 0/отрицательные молча, latent bug).
+            if width <= 0.0 {
+                return Err(format!("width должен быть > 0, получено {width}"));
+            }
+            if height <= 0.0 {
+                return Err(format!("height должен быть > 0, получено {height}"));
+            }
+            // Опциональный fit: true — после geometry-write вызвать
+            // refit_node_to_content (фон не сжимается меньше контента).
+            let fit = mcp_opt_bool(params, "fit").unwrap_or(false);
             let index = mcp_node_index(&scene.canvas, id)?;
             // FR-006: MCP-мутация — undo-шаг
             scene.push_undo(scene.canvas.clone());
@@ -498,8 +514,20 @@ pub fn mcp_dispatch(
             node.width = width;
             node.height = height;
             scene.spatial.update(index, node);
+            // fit: подгонка высоты под контент (two-way: и растёт, и сжимает).
+            // width остаётся как задан агентом; height корректируется под
+            // видимый контент (стрелка FR-069 refit_node_to_content).
+            if fit {
+                scene.refit_node_to_content(index);
+            }
             scene.mark_dirty();
-            Ok(serde_json::json!({ "id": id }))
+            let node = &scene.canvas.nodes[index];
+            Ok(serde_json::json!({
+                "id": id,
+                "width": node.width,
+                "height": node.height,
+                "fit_applied": fit,
+            }))
         }
         "node_delete" => {
             let id = mcp_req_str(params, "id")?;

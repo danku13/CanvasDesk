@@ -1,8 +1,8 @@
 //! FR-ICONS: screen-space wgpu-пайплайн SVG-иконок.
 //!
 //! Атлас собирается один раз при init из растеризованных байт (`icon_data.rs`):
-//! 4 набора × 13 иконок × 32×32 px (bootstrap 24×24 дополнен до 32×32)
-//! = 13×4 сетка = 416×128 px атлас. Все 4 набора в одном атласе — переключение
+//! 4 набора × 16 иконок × 32×32 px (bootstrap 24×24 дополнен до 32×32)
+//! = 16×4 сетка = 512×128 px атлас. Все 4 набора в одном атласе — переключение
 //! набора не требует ребинда bind-группы (выбор набора = выбор UV в атласе).
 //!
 //! Инстанс = pos/size в экранных px + UV в атласе + tint (RGBA). Shader —
@@ -250,7 +250,7 @@ impl IconPipeline {
     }
 
     /// Загрузить атлас из вшитых байт. Вызывается один раз при init рендера
-    /// (после `new()`). Загружает все 4 набора × 13 иконок в общий атлас.
+    /// (после `new()`). Загружает все 4 набора × 16 иконок в общий атлас.
     pub fn upload_atlas(&self, queue: &wgpu::Queue) {
         for (set_idx, set_name) in ICON_SETS.iter().enumerate() {
             for (name_idx, icon_name) in ICON_NAMES.iter().enumerate() {
@@ -378,8 +378,8 @@ mod tests {
     /// UV-координаты иконки в конце атласа — правый нижний угол.
     #[test]
     fn uv_last_icon_is_corner() {
-        let (min, max) = icon_uv("bootstrap", "tab_appearance")
-            .expect("bootstrap/tab_appearance есть в реестре");
+        let (min, max) = icon_uv("bootstrap", "chevron_right")
+            .expect("bootstrap/chevron_right есть в реестре");
         let cell_w = ICON_CELL_PX as f32 / ATLAS_W as f32;
         let cell_h = ICON_CELL_PX as f32 / ATLAS_H as f32;
         // Последняя колонка + последняя строка
@@ -424,12 +424,12 @@ mod tests {
         assert_eq!(bytes.len(), 48, "12 float × 4 bytes");
     }
 
-    /// Атлас вмещает все 4 набора × 13 иконок = 52 ячейки 32×32.
+    /// Атлас вмещает все 4 набора × 16 иконок = 64 ячейки 32×32.
     #[test]
     fn atlas_size_matches_repositories() {
         let total_cells = ICONS_PER_ROW * ICON_SETS.len() as u32;
-        assert_eq!(total_cells, 52, "4 набора × 13 иконок");
-        assert_eq!(ATLAS_W, 13 * 32);
+        assert_eq!(total_cells, 64, "4 набора × 16 иконок");
+        assert_eq!(ATLAS_W, 16 * 32);
         assert_eq!(ATLAS_H, 4 * 32);
     }
 

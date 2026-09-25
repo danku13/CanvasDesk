@@ -1747,6 +1747,9 @@ pub fn icon_name_to_glyph(name: &str) -> &'static str {
         "tab_snap" => "≡",
         "tab_edges" => "⇄",
         "tab_appearance" => "◐",
+        "more" => "•••",
+        "chevron_down" => "▾",
+        "chevron_right" => "▸",
         _ => "",
     }
 }
