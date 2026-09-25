@@ -25,4 +25,14 @@ tracing.workspace = true
 # но не вызывается (web — spawn_local в canvas-web)
 pollster.workspace = true
 
+# FR-WASM-02: WebGL2-фолбэк на web. wgpu 22 по умолчанию собирает на wasm
+# ТОЛЬКО BrowserWebGPU (features: wgsl/dx12/metal/webgpu) — браузеры без
+# WebGPU (Firefox/Safari, Chrome с выключенным аппаратным ускорением)
+# получали «GPU-адаптер не найден» → тихий чёрный экран. Фича webgl
+# добавляет GLES-бэкенд (WebGL2). Только для wasm-цели: натив не тянет
+# GLES-зависимости wgpu-hal. Storage-буферы не используются (ни здесь,
+# ни в glyphon 0.6) — рендер укладывается в downlevel-лимиты (gpu.rs).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgl"] }
+
 [dev-dependencies]
