@@ -131,7 +131,7 @@ use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
     body_area, measure_body_height, BodyHit, BodyHitKind, LineErrorHit, OverlayText, ScreenText,
     SpillHit, SpillHitKind, TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP,
-    RESULT_LINE_HEIGHT, SANS_FAMILY,
+    RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
 use canvas_render::{
@@ -1126,6 +1126,15 @@ pub struct App {
     /// замена среза «… ещё N»; живут с stage, сбрасываются при открытии).
     stage_calc_vars_scroll: canvas_ui::kit::ScrollState,
     stage_calc_formulas_scroll: canvas_ui::kit::ScrollState,
+    /// FR-068 этап M2 (Table v2, `docs/plans/fr-068-table-v2.md` §8):
+    /// retained-таблицы панели «Как считается» (vars, formulas) —
+    /// создаются при ПЕРВОМ кадре панели
+    /// ([`canvas_ui::kit::Table::new`] поднимает `FontSystem` — дорого,
+    /// один раз, не на кадр; §4.6 дизайна). `RefCell`, т.к. `stage_frame`
+    /// работает на `&self` (mut-заём среза `main_stage` живёт весь кадр —
+    /// второй mut-заём `App` несовместим); Props (кегль/палитра/opts) —
+    /// кадровые, синхронизируются в `paint_calc_panel_rows` (stage.rs).
+    stage_calc_tables: std::cell::RefCell<Option<(canvas_ui::kit::Table, canvas_ui::kit::Table)>>,
     /// FR-012: цель «втягивания» во время drag — группа под центром
     /// перетаскиваемой ноды (зона подсвечивается, отпускание — вставка).
     group_drop_target: Option<usize>,
@@ -1378,6 +1387,9 @@ impl App {
             kit_gallery_focus: canvas_ui::keyboard::FocusRing::default(),
             stage_calc_vars_scroll: canvas_ui::kit::ScrollState::default(),
             stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),
+            // FR-068 M2: retained-таблицы панели — lazy при первом кадре
+            // панели (см. поле); Props синхронизируются кадром
+            stage_calc_tables: std::cell::RefCell::new(None),
             group_drop_target: None,
             settle_anim: None,
             drag_push: DragPushState::new(),
