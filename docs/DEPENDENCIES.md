@@ -63,6 +63,7 @@ dev-зависимости); полный состав с текстами ли�
 | `rand_chacha` | 0.3 | MIT OR Apache-2.0 | ChaCha8Rng — единственный источник случайности (FR-063, за фичей `stats`) |
 | `rand_distr` | 0.4 | MIT OR Apache-2.0 | сэмплирование Normal/LogNormal (FR-063, за фичей `stats`) |
 | `rayon` | 1.12 | MIT OR Apache-2.0 | L4-параллелизм: поярусный пересчёт DAG `flow::propagate_with_lines_data` (FR-065, за фичей `parallel` в canvas-core — в сборку по умолчанию не входит). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий. |
+| `taffy` | 0.14 | MIT OR Apache-2.0 | CSS Flexbox+Grid layout-движок `TaffyBackend` в `canvas-ui` (FR-068 W1, ADR-0014) — за фичей `taffy`, default off (в default-сборку не входит, zero-dep инвариант G7). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий (транзитивные `arrayvec`/`slotmap`/`smallvec` — MIT OR Apache-2.0 ± Zlib, покрыты allowlist `deny.toml`). **Переходное решение (ADR-0015):** вырезается к W4 FR-068 после `FlexLayoutEngine` (W2). |
 
 **Выбор опции дуальных лицензий.** Для крейтов `MIT OR Apache-2.0`
 продукт следует обязательствам обеих сторон консервативно: сохранение
@@ -86,9 +87,10 @@ S3/M5 (FR-066) выполнен 2026-09-24: `sobol_burley` перенесён в
 — без фичи, контракт §5.8 FR-066).
 Волна 3 UI kit: ADR-0014 (2026-09-24, переоткрыл ADR-0013) + FR-067 —
 план staged миграции `canvas-ui` на `taffy` opt-in за cargo-фичей
-(`NativeBackend` default, `TaffyBackend` opt-in); после merge W1 FR-068
-`taffy` мигрирует из §3 кандидатов в §2 прямых прод-зависимостей
-(аналогично `rayon` после FR-065).
+(`NativeBackend` default, `TaffyBackend` opt-in). W1 FR-068 выполнен
+2026-09-25: `taffy` перенесён в §2 (opt-in backend вёрстки за фичей
+`taffy` в `canvas-ui`, default off; parity-оракул `backend_parity.rs`,
+perf-гейт `perf_taffy.rs`, G4-линт × backend'ов — `g4_lint.rs`).
 **Долгосрочная стратегия (ADR-0015 + FR-068, 2026-09-24):** taffy —
 переходное решение, вырезается к W4. Волны: W0 UI hygiene → W1 taffy
 opt-in (поглощает FR-067) → W2 cosmic-text trait boundary + `FlexLayoutEngine`
@@ -100,7 +102,6 @@ opt-in (поглощает FR-067) → W2 cosmic-text trait boundary + `FlexLayo
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
-| L4 | `taffy` | CSS Flexbox+Grid layout-движок (retained-дерево, Servo/Bevy/Zed) | MIT OR Apache-2.0 | волна 3 UI kit: ADR-0014 + FR-068 W1 (за фичей `taffy`, default off; после merge W1 — §2 прямая прод-зависимость, прирост wasm ~376 КБ raw / ~180 КБ gzip; уже транзитивно в дереве через `cosmic-text`). **Переходное решение (ADR-0015):** вырезается к W4 FR-068, если `FlexLayoutEngine` (W2) покрывает использованные фичи (flexbox + overflow/clip/scroll); Grid-only остаётся за фичей, если используется >3 мест (S7). |
 | L2 | `sobol_burley` | QMC (Соболь, Owen-scrambled) | MIT OR Apache-2.0 | S3 (FR-066, за фичей `qmc`) |
 | L2 | `argmin` | численная оптимизация | MIT OR Apache-2.0 | первый домен с оптимизацией |
 | L2 | `gauss-quad` / `quadrature` | квадратуры | MIT OR Apache-2.0 / BSD-2 | интегралы SLA |
