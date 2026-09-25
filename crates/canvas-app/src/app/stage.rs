@@ -47,9 +47,12 @@ fn stage_area(t: &StageTransform, x: f32, y: f32, w: f32, h: f32) -> UiRect {
 /// кадре панели (`FontSystem::new()` дорогой — один раз, не на кадр,
 /// §4.6); Props (кегль/палитра/opts) — кадровые, синхронизируются здесь.
 ///
-/// Вьюпорты колонок — ЭКРАННЫЕ (`px/py` + площади раскладки); слоты —
-/// экранные (x≠0), поэтому направляющие строятся от ПРАВОГО КРАЯ
-/// ВЬЮПОРТА В КООРДИНАТАХ СЛОТОВ (`viewport_right`, не ширина):
+/// Вьюпорты колонок — ЭКРАННЫЕ: `ox/oy` — НАЧАЛО STAGE в вьюпорте
+/// (`rect.x/rect.y`), площади раскладки (`vars_area`/`formulas_area`)
+/// — stage-локальные (та же база, что у hit-тестов input.rs: курсор −
+/// начало stage). Слоты — экранные (x≠0), поэтому направляющие
+/// строятся от ПРАВОГО КРАЯ ВЬЮПОРТА В КООРДИНАТАХ СЛОТОВ
+/// (`viewport_right`, не ширина):
 /// vars — `right_pad = 6` (прежний `vars_right`), формулы —
 /// `right_pad = 0`: правых ячеек нет → правило деградации §4.2 внутри
 /// Table (паритет прежнего ручного входа `RowGuides { value_x:
@@ -62,8 +65,8 @@ fn paint_calc_panel_rows(
     fs: &mut cosmic_text::FontSystem,
     ctx: &StageFrameCtx,
     panel: &calc_panel_ui::CalcPanelLayout,
-    px: f32,
-    py: f32,
+    ox: f32,
+    oy: f32,
     kit_size: f32,
     kit_palette: &canvas_ui::kit::KitPalette,
     row_fill: [f32; 4],
@@ -91,17 +94,17 @@ fn paint_calc_panel_rows(
         border[3] *= ctx.dim;
         border
     };
-    // Вьюпорты колонок (экранные координаты; совпадают с площадями
-    // раскладки, смещёнными на px/py — те же слоты, что прежде)
+    // Вьюпорты колонок (экранные координаты: начало stage + площади
+    // раскладки — та же база, что у hit-тестов input.rs)
     let vars_viewport = UiRect::new(
-        px + panel.vars_area[0],
-        py + panel.vars_area[1],
+        ox + panel.vars_area[0],
+        oy + panel.vars_area[1],
         panel.vars_area[2],
         panel.vars_area[3],
     );
     let formulas_viewport = UiRect::new(
-        px + panel.formulas_area[0],
-        py + panel.formulas_area[1],
+        ox + panel.formulas_area[0],
+        oy + panel.formulas_area[1],
         panel.formulas_area[2],
         panel.formulas_area[3],
     );
@@ -456,15 +459,15 @@ impl App {
             let model = self.stage_calc_model(stage);
             calc_panel_layout(&model, rect.w, rect.h, 96.0, &mut vars, &mut formulas)
         };
-        if panel.as_ref().is_some_and(|p| p.vars_area_at(self.cursor)) {
+        // Площади колонок (`vars_area`/`formulas_area`) — stage-локальные
+        // (та же база, что у кликов input.rs): курсор переводим в stage
+        let rel = [self.cursor[0] - rect.x, self.cursor[1] - rect.y];
+        if panel.as_ref().is_some_and(|p| p.vars_area_at(rel)) {
             vars.scroll_by(dy);
             vars.clamp();
             self.stage_calc_vars_scroll = vars;
             self.request_redraw();
-        } else if panel
-            .as_ref()
-            .is_some_and(|p| p.formulas_area_at(self.cursor))
-        {
+        } else if panel.as_ref().is_some_and(|p| p.formulas_area_at(rel)) {
             formulas.scroll_by(dy);
             formulas.clamp();
             self.stage_calc_formulas_scroll = formulas;
@@ -1421,8 +1424,16 @@ impl App {
         // (retained; см. [`paint_calc_panel_rows`] — геометрия/стили
         // прежнего kit-цикла дословно, I-1; оракул T7).
         if let Some(panel) = &ctx.panel {
+            // Фон панели — от НАЧАЛА ПАНЕЛИ (panel.rect — stage-локальный)
             let px = rect.x + panel.rect[0];
             let py = rect.y + panel.rect[1];
+            // Заголовки/строки/бегунки — от НАЧАЛА STAGE: площади
+            // раскладки (`vars_title`/`vars_area`/…) stage-локальные —
+            // та же база, что у hit-тестов input.rs (`cursor − rect.x/y`);
+            // до фикса они смещались на panel.rect дважды и рисовались за
+            // нижней границей stage (контент панели не был виден).
+            let ox = rect.x;
+            let oy = rect.y;
             let mut m = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
             let mut d = Painter::new();
@@ -1446,8 +1457,8 @@ impl App {
             );
             d.label(
                 canvas_ui::geometry::UiRect::new(
-                    px + panel.vars_title[0],
-                    py + panel.vars_title[1] + 2.0,
+                    ox + panel.vars_title[0],
+                    oy + panel.vars_title[1] + 2.0,
                     panel.vars_title[2],
                     16.0,
                 ),
@@ -1458,8 +1469,8 @@ impl App {
             );
             d.label(
                 canvas_ui::geometry::UiRect::new(
-                    px + panel.formulas_title[0],
-                    py + panel.formulas_title[1] + 2.0,
+                    ox + panel.formulas_title[0],
+                    oy + panel.formulas_title[1] + 2.0,
                     panel.formulas_title[2],
                     16.0,
                 ),
@@ -1486,8 +1497,8 @@ impl App {
                 &mut fs,
                 &ctx,
                 panel,
-                px,
-                py,
+                ox,
+                oy,
                 kit_size,
                 &kit_palette,
                 palette.search_row_fill,
@@ -1506,7 +1517,7 @@ impl App {
                     &kit_palette,
                 ) {
                     d.rect(
-                        canvas_ui::geometry::UiRect::new(px + knob.x, py + knob.y, knob.w, knob.h),
+                        canvas_ui::geometry::UiRect::new(ox + knob.x, oy + knob.y, knob.w, knob.h),
                         palette.palette_border,
                         [0.0; 4],
                         2.0,
@@ -1873,10 +1884,11 @@ mod tests {
             ]
         };
         let unmapped_text = i18n::tr(settings.language, keys::STAGE_CALC_UNMAPPED);
-        // Слоты панели — экранные (px/py — те же, что в stage_frame)
+        // Слоты панели — stage-локальные (раскладка), отрисовка — от
+        // начала stage (та же база, что в stage_frame: ox/oy = rect.x/y)
         let rect = main_stage_rect([1920.0, 1080.0]);
-        let px = rect.x + panel.rect[0];
-        let py = rect.y + panel.rect[1];
+        let ox = rect.x;
+        let oy = rect.y;
         let kit_size = 11.0; // font(11.0) при scale = 1
 
         // --- путь Table (stage): paint_calc_panel_rows (lazy-таблицы) ---
@@ -1891,8 +1903,8 @@ mod tests {
             &mut fs,
             &ctx,
             &panel,
-            px,
-            py,
+            ox,
+            oy,
             kit_size,
             &kit_palette,
             palette.search_row_fill,
@@ -1936,8 +1948,8 @@ mod tests {
             border
         };
         let vars_viewport = UiRect::new(
-            px + panel.vars_area[0],
-            py + panel.vars_area[1],
+            ox + panel.vars_area[0],
+            oy + panel.vars_area[1],
             panel.vars_area[2],
             panel.vars_area[3],
         );
@@ -1972,7 +1984,7 @@ mod tests {
             let var = &model.vars[*index];
             let focused = row_focused(*index);
             let alpha = row_alpha(focused);
-            let slot = UiRect::new(px + row[0], py + row[1], row[2], row[3]);
+            let slot = UiRect::new(ox + row[0], oy + row[1], row[2], row[3]);
             let lay = canvas_ui::kit::row_layout(
                 &mut m_ref,
                 &mut fs,
@@ -2024,7 +2036,7 @@ mod tests {
             })
             .collect();
         for (index, row) in &panel.formula_rows {
-            let slot = UiRect::new(px + row[0], py + row[1], row[2], row[3]);
+            let slot = UiRect::new(ox + row[0], oy + row[1], row[2], row[3]);
             // Направляющие не нужны (значения нет) — деградированный вход
             let g = canvas_ui::row_guides::RowGuides {
                 value_w: 0.0,
