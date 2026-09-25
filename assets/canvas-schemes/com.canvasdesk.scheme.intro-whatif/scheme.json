@@ -102,5 +102,100 @@
     "toParam": "months"
    }
   ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 230,
+    "text": "What-if scenarios\nTurn on What-if mode with the button at the bottom of the screen, then double-click a number row to override it: deltas recompute on top of the base, the file stays untouched.\nThe annual budget is built from the monthly total and the horizon: values flow in by parameter name.",
+    "color": "4"
+   },
+   {
+    "id": "costs",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 220,
+    "text": "Budget items\nMonthly direct costs: marketing and tools.\n\nmarketing = 1200 $\ntools = 300 $",
+    "color": "5",
+    "label": "Items"
+   },
+   {
+    "id": "total",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Monthly total\nSum of line items: marketing plus tools.\n\ntotal = Items.marketing + Items.tools",
+    "color": "2"
+   },
+   {
+    "id": "months",
+    "type": "text",
+    "x": 440,
+    "y": 300,
+    "width": 260,
+    "height": 180,
+    "text": "Horizon\nProject duration in months.\n\nmonths = 12",
+    "color": "5"
+   },
+   {
+    "id": "annual",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Annual budget\nMonthly total times the horizon: values arrive in parameters by name.\n\n$spend * $months",
+    "color": "2"
+   },
+   {
+    "id": "try",
+    "type": "text",
+    "x": 440,
+    "y": 560,
+    "width": 360,
+    "height": 200,
+    "text": "Try it\nPush marketing to one and a half thousand in scenario mode — the total and the annual budget will show deltas.\nClick the double line “Items → Total” to open the main stage with a fan of values.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "costs",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "marketing"
+   },
+   {
+    "id": "e2",
+    "fromNode": "costs",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "tools"
+   },
+   {
+    "id": "e3",
+    "fromNode": "total",
+    "toNode": "annual",
+    "flowKind": "value",
+    "toParam": "spend"
+   },
+   {
+    "id": "e4",
+    "fromNode": "months",
+    "toNode": "annual",
+    "flowKind": "value",
+    "toParam": "months"
+   }
+  ]
  }
 }

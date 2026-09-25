@@ -280,8 +280,11 @@ dependencies = [
  "canvas-widgets",
  "cosmic-text",
  "serde_json",
+ "toml",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
+ "web-sys",
  "winit",
 ]
 

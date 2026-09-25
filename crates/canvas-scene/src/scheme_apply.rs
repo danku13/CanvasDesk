@@ -64,12 +64,29 @@ fn alloc_node_id(
 /// FR-071: геометрия строится умной раскладкой (`canvas_core::scheme_layout`)
 /// — семантические кластеры, слоистая DAG-раскладка, минимизация пересечений
 /// рёбер с нодами; координаты пакета остаются только подсказками порядка.
+///
+/// FR-040 v2: `language` выбирает контент (`content_en` при En и наличии,
+/// иначе `content` — RU). Дефолт — без указания языка = `Ru` (обратная
+/// совместимость; MCP-путь и тесты без контекста языка — на дефолте).
 pub fn instantiate_scheme(
     manifest: &SchemeManifest,
     canvas: &canvas_core::Canvas,
     origin: [f32; 2],
 ) -> Result<SchemeInstance, SchemeInstantiateError> {
-    if manifest.content.nodes.is_empty() {
+    instantiate_scheme_with_language(manifest, canvas, origin, canvas_core::Language::Ru)
+}
+
+/// FR-040 v2: инстанс с явным языком — контент берётся из
+/// [`SchemeManifest::display_content`] (En → `content_en`, Ru → `content`).
+/// GUI-путь передаёт `settings.language`; MCP-путь остаётся на дефолте.
+pub fn instantiate_scheme_with_language(
+    manifest: &SchemeManifest,
+    canvas: &canvas_core::Canvas,
+    origin: [f32; 2],
+    language: canvas_core::Language,
+) -> Result<SchemeInstance, SchemeInstantiateError> {
+    let content = manifest.display_content(language);
+    if content.nodes.is_empty() {
         return Err(SchemeInstantiateError::Empty);
     }
 
@@ -79,7 +96,7 @@ pub fn instantiate_scheme(
 
     // Ремап id нод (порядок пакета стабилен → карта полна до рёбер).
     let mut id_map: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
-    for node in &manifest.content.nodes {
+    for node in &content.nodes {
         let prefix = if node.node_type == "group" {
             "group"
         } else {
@@ -89,8 +106,8 @@ pub fn instantiate_scheme(
         id_map.insert(node.id.as_str(), new_id);
     }
 
-    let mut nodes = Vec::with_capacity(manifest.content.nodes.len());
-    for node in &manifest.content.nodes {
+    let mut nodes = Vec::with_capacity(content.nodes.len());
+    for node in &content.nodes {
         let new_id = &id_map[node.id.as_str()];
         // Сырые координаты пакета: раскладка FR-071 ниже переопределит их
         // (остаются семантическими подсказками порядка).
@@ -132,8 +149,8 @@ pub fn instantiate_scheme(
         .max()
         .unwrap_or(0)
         + 1;
-    let mut edges = Vec::with_capacity(manifest.content.edges.len());
-    for edge in &manifest.content.edges {
+    let mut edges = Vec::with_capacity(content.edges.len());
+    for edge in &content.edges {
         let mut candidate;
         loop {
             candidate = format!("edge-{edge_counter}");

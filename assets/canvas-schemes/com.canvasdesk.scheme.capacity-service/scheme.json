@@ -184,5 +184,189 @@
     "fromOutput": "capacity"
    }
   ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 260,
+    "text": "Service capacity\nDemand becomes requests per second and is compared to throughput; utilization is computed as a percent — the yellow bottleneck frame lights up at 70, the red one at 100.\nChange demand or throughput and everything recomputes. The double line “Demand → Intensity” is a bundle: a click opens the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "demand",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 200,
+    "text": "Demand\nConcurrent requests and the think time of each one.\n\nrequests = 5000 req\nthink = 30 sec",
+    "color": "5",
+    "label": "Demand"
+   },
+   {
+    "id": "factor",
+    "type": "text",
+    "x": 440,
+    "y": 260,
+    "width": 260,
+    "height": 180,
+    "text": "Peak\nHeadroom for the peak hour: a multiplier on the average flow.\n\nfactor = 3",
+    "color": "5",
+    "label": "Peak"
+   },
+   {
+    "id": "capacity",
+    "type": "text",
+    "x": 440,
+    "y": 520,
+    "width": 260,
+    "height": 180,
+    "text": "Throughput\nService capacity in requests per second.\n\ncapacity = 200 req/s",
+    "color": "5",
+    "label": "Throughput"
+   },
+   {
+    "id": "intensity",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Intensity\nRequest flow: demand divided by think time.\n\nrps = Demand.requests / Demand.think",
+    "color": "2",
+    "label": "Intensity"
+   },
+   {
+    "id": "peak",
+    "type": "text",
+    "x": 800,
+    "y": 420,
+    "width": 280,
+    "height": 200,
+    "text": "Peak flow\nIntensity multiplied by the peak headroom: values arrive in parameters by name.\n\npeak_rps = $rps * $factor",
+    "color": "2",
+    "label": "Flow"
+   },
+   {
+    "id": "util",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Utilization\nThroughput occupation as a fraction; the norm is no higher than one.\n\nutil = utilization(Intensity.rps, Throughput.capacity)",
+    "color": "2",
+    "label": "Utilization"
+   },
+   {
+    "id": "wait",
+    "type": "text",
+    "x": 1160,
+    "y": 220,
+    "width": 280,
+    "height": 180,
+    "text": "Response time\nAverage time a request spends in the system (M/M/1 model).\n\nwait = mm1(Intensity.rps, Throughput.capacity)",
+    "color": "2",
+    "label": "Wait"
+   },
+   {
+    "id": "peak_util",
+    "type": "text",
+    "x": 1160,
+    "y": 440,
+    "width": 280,
+    "height": 200,
+    "text": "Peak utilization\nPeak flow to throughput: overload is visible at a glance.\n\npeak_util = utilization(Flow.peak_rps, Throughput.capacity)",
+    "color": "6",
+    "label": "Peak util"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 220,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nAverage occupation is 83 percent: the headroom is thin.\nAt peak utilization spikes — metrics will highlight the bottleneck.\nChange demand or throughput and everything recomputes, the frames will cool down.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "demand",
+    "toNode": "intensity",
+    "flowKind": "value",
+    "fromOutput": "requests"
+   },
+   {
+    "id": "e2",
+    "fromNode": "demand",
+    "toNode": "intensity",
+    "flowKind": "value",
+    "fromOutput": "think"
+   },
+   {
+    "id": "e3",
+    "fromNode": "factor",
+    "toNode": "peak",
+    "flowKind": "value",
+    "toParam": "factor"
+   },
+   {
+    "id": "e4",
+    "fromNode": "intensity",
+    "toNode": "peak",
+    "flowKind": "value",
+    "toParam": "rps"
+   },
+   {
+    "id": "e5",
+    "fromNode": "intensity",
+    "toNode": "util",
+    "flowKind": "value",
+    "fromOutput": "rps"
+   },
+   {
+    "id": "e6",
+    "fromNode": "capacity",
+    "toNode": "util",
+    "flowKind": "value",
+    "fromOutput": "capacity"
+   },
+   {
+    "id": "e7",
+    "fromNode": "intensity",
+    "toNode": "wait",
+    "flowKind": "value",
+    "fromOutput": "rps"
+   },
+   {
+    "id": "e8",
+    "fromNode": "capacity",
+    "toNode": "wait",
+    "flowKind": "value",
+    "fromOutput": "capacity"
+   },
+   {
+    "id": "e9",
+    "fromNode": "peak",
+    "toNode": "peak_util",
+    "flowKind": "value",
+    "fromOutput": "peak_rps"
+   },
+   {
+    "id": "e10",
+    "fromNode": "capacity",
+    "toNode": "peak_util",
+    "flowKind": "value",
+    "fromOutput": "capacity"
+   }
+  ]
  }
 }

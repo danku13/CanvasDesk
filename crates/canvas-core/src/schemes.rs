@@ -57,8 +57,15 @@ pub struct SchemeManifest {
     pub category_en: String,
     /// Semver пакета (`1.0.0`).
     pub version: String,
-    /// Граф схемы: ноды и рёбра в подмножестве JSON Canvas.
+    /// Граф схемы (RU): ноды и рёбра в подмножестве JSON Canvas.
     pub content: SchemeContent,
+    /// FR-040 v2: граф схемы на английском (опционально). При `Language::En`
+    /// инстансер берёт этот блок; при отсутствии — фолбэк на `content` (RU)
+    /// — инвариант полноты: вставка всегда есть. Имена переменных Numi и
+    /// `id` нод НЕ переводятся (машинные токены), переводятся только
+    /// человекочитаемые `text`/`label` (проза, описания).
+    #[serde(default)]
+    pub content_en: Option<SchemeContent>,
 }
 
 /// Граф схемы (подмножество JSON Canvas; расширения формата запрещены).
@@ -279,6 +286,21 @@ impl SchemeManifest {
             &self.name_ru
         } else {
             &self.name_en
+        }
+    }
+
+    /// FR-040 v2: граф схемы по языку — `content_en` при `Language::En`
+    /// (если задан и не пуст), иначе `content` (RU). Фолбэк — инвариант
+    /// полноты: вставка всегда есть (даже для схем без переведённого
+    /// контента — старые/частично переведённые пакеты не падают).
+    pub fn display_content(&self, language: crate::Language) -> &SchemeContent {
+        match language {
+            crate::Language::Ru => &self.content,
+            crate::Language::En => self
+                .content_en
+                .as_ref()
+                .filter(|c| !c.nodes.is_empty())
+                .unwrap_or(&self.content),
         }
     }
 }
@@ -527,6 +549,7 @@ mod tests {
                     to_param: None,
                 }],
             },
+            content_en: None,
         }
     }
 }
