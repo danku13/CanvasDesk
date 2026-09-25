@@ -209,7 +209,13 @@ impl TaffyBackend {
             parent: None,
             position: ScenePosition::InFlow,
             offset: scene.offset,
-            axis: MainAxis::Y,
+            // FR-074: ось корня — по kind сцены (как у flex-движка):
+            // Row → X, иначе Y. Прежде корень всегда был Y — content-shift
+            // Row-корня уходил в Y (неверно).
+            axis: match &scene.kind {
+                SceneKind::Row { .. } => MainAxis::X,
+                _ => MainAxis::Y,
+            },
         });
         b.build_children(root, scene, 0);
         // Разобрать builder (заканчиваем mutable borrow дерева) и прикрепить
@@ -259,14 +265,16 @@ impl TaffyBackend {
                 rects[i].y -= sy;
             }
         }
-        // Sticky-кламп по ближайшему scroll-предку (после shift'ов: кламп
-        // считается от отображаемой позиции контейнера). Кламп двигает
-        // узел и ВСЁ его поддерево (CSS sticky: дети движутся вместе с
-        // родителем); дельта применяется к потомкам по цепочке parent
-        // (fixed-потомки исключены — их контекст корень, они не скроллятся).
+        // Sticky-кламп по ближайшему scroll-предку СООТВЕТСТВУЮЩЕЙ ОСИ
+        // (после shift'ов: кламп считается от отображаемой позиции
+        // контейнера). Кламп двигает узел и ВСЁ его поддерево (CSS
+        // sticky: дети движутся вместе с родителем); дельта применяется
+        // к потомкам по цепочке parent (fixed-потомки исключены — их
+        // контекст корень, они не скроллятся). FR-074: обе оси — top
+        // против Y-scroll-предка, left против X-scroll-предка.
         for i in 1..order.len() {
-            if let ScenePosition::Sticky { top } = order[i].position {
-                if let Some(ai) = scroll_ancestor(&order, i) {
+            if let ScenePosition::Sticky { top, left } = order[i].position {
+                if let (Some(top), Some(ai)) = (top, scroll_ancestor(&order, i, MainAxis::Y)) {
                     let off = order[ai].offset;
                     let target = rects[ai].y + top;
                     if off > 0.0 && rects[i].y < target {
@@ -280,6 +288,23 @@ impl TaffyBackend {
                                 continue; // fixed-потомок — viewport-контекст
                             }
                             rects[j].y += dy;
+                        }
+                    }
+                }
+                if let (Some(left), Some(ai)) = (left, scroll_ancestor(&order, i, MainAxis::X)) {
+                    let off = order[ai].offset;
+                    let target = rects[ai].x + left;
+                    if off > 0.0 && rects[i].x < target {
+                        let dx = target - rects[i].x;
+                        rects[i].x = target;
+                        for j in i + 1..order.len() {
+                            if !is_descendant_of(&order, j, i) {
+                                continue;
+                            }
+                            if matches!(order[j].position, ScenePosition::Fixed { .. }) {
+                                continue; // fixed-потомок — viewport-контекст
+                            }
+                            rects[j].x += dx;
                         }
                     }
                 }
@@ -606,13 +631,13 @@ fn shift_for(order: &[SceneEntry], i: usize) -> (f32, f32) {
 /// Ближайший scroll-предок — индекс в `order` (для sticky-клампа;
 /// отображаемый y контейнера caller берёт из уже сдвинутых rect'ов).
 /// Fixed-предок обрывает цепочку (viewport-контекст).
-fn scroll_ancestor(order: &[SceneEntry], i: usize) -> Option<usize> {
+fn scroll_ancestor(order: &[SceneEntry], i: usize, axis: MainAxis) -> Option<usize> {
     let mut p = order[i].parent;
     while let Some(pidx) = p {
         if matches!(order[pidx].position, ScenePosition::Fixed { .. }) {
             return None;
         }
-        if order[pidx].offset > 0.0 {
+        if order[pidx].offset > 0.0 && order[pidx].axis == axis {
             return Some(pidx);
         }
         p = order[pidx].parent;
@@ -1146,6 +1171,62 @@ mod tests {
         assert_eq!(rects[2], UiRect::new(40.0, 0.0, 60.0, 20.0));
     }
 
+    /// Сцена (FR-074): горизонтальный sticky — Row-scroll-предок, кламп
+    /// к container_x + left, поддерево транслируется.
+    #[test]
+    fn scene_sticky_horizontal() {
+        let scene = SceneNode::row(
+            300.0,
+            80.0,
+            0.0,
+            vec![
+                SceneNode::leaf(100.0, 40.0).at(ScenePosition::Sticky {
+                    top: None,
+                    left: Some(0.0),
+                }),
+                SceneNode::leaf(100.0, 40.0),
+                SceneNode::leaf(100.0, 40.0),
+            ],
+        )
+        .scrolled(50.0);
+        let rects = TAFFY.lay_out_scene(UiRect::new(0.0, 0.0, 300.0, 200.0), &scene);
+        // shift = −50: sticky-лист: flow 0 − 50 = −50 → кламп к 0+0 = 0.
+        assert_eq!(
+            rects[1],
+            UiRect::new(0.0, 0.0, 100.0, 40.0),
+            "sticky прилип к левому краю"
+        );
+        // второй: 100 − 50 = 50; третий: 200 − 50 = 150.
+        assert_eq!(rects[2], UiRect::new(50.0, 0.0, 100.0, 40.0));
+        assert_eq!(rects[3], UiRect::new(150.0, 0.0, 100.0, 40.0));
+    }
+
+    /// Сцена (FR-074): sticky по ОБОИМ осям одновременно (top + left)
+    /// в Column(X-обёртка) — вертикаль против Column, горизонталь
+    /// не срабатывает без X-scroll-предка.
+    #[test]
+    fn scene_sticky_both_axes_independent() {
+        let scene = SceneNode::column(
+            200.0,
+            120.0,
+            0.0,
+            vec![
+                SceneNode::leaf(200.0, 40.0).at(ScenePosition::Sticky {
+                    top: Some(0.0),
+                    left: Some(0.0),
+                }),
+                SceneNode::leaf(200.0, 40.0),
+            ],
+        )
+        .scrolled(20.0);
+        let rects = TAFFY.lay_out_scene(UiRect::new(0.0, 0.0, 300.0, 200.0), &scene);
+        // Вертикаль: flow 0 − 20 = −20 → кламп к 0. Горизонталь: нет
+        // X-scroll-предка — x без изменений (0).
+        assert_eq!(rects[1], UiRect::new(0.0, 0.0, 200.0, 40.0));
+        // второй: 40 − 20 = 20.
+        assert_eq!(rects[2], UiRect::new(0.0, 20.0, 200.0, 40.0));
+    }
+
     /// Сцена: scroll content-shift (offset сдвигает потомков по −Y) и
     /// sticky-кламп (прилипание к container_y + top).
     #[test]
@@ -1155,7 +1236,10 @@ mod tests {
             80.0,
             0.0,
             vec![
-                SceneNode::leaf(100.0, 40.0).at(ScenePosition::Sticky { top: 0.0 }),
+                SceneNode::leaf(100.0, 40.0).at(ScenePosition::Sticky {
+                    top: Some(0.0),
+                    left: None,
+                }),
                 SceneNode::leaf(100.0, 40.0),
                 SceneNode::leaf(100.0, 40.0),
             ],
@@ -1188,7 +1272,10 @@ mod tests {
                     8.0,
                     vec![SceneNode::leaf(30.0, 40.0), SceneNode::leaf(30.0, 40.0)],
                 )
-                .at(ScenePosition::Sticky { top: 0.0 }),
+                .at(ScenePosition::Sticky {
+                    top: Some(0.0),
+                    left: None,
+                }),
                 SceneNode::leaf(100.0, 40.0),
             ],
         )

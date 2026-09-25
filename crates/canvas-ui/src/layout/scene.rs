@@ -97,9 +97,12 @@ pub enum ScenePosition {
     /// в taffy — re-parent в root-overlay при конвертации).
     Fixed { x: f32, y: f32 },
     /// В потоке, но при прокрутке предка со [`SceneNode::offset`]
-    /// прилипает: `y = max(flow_y − offset, container_y + top)`
-    /// (эмуляция CSS sticky; см. модульную доку).
-    Sticky { top: f32 },
+    /// прилипает: `y = max(flow_y − offset, container_y + top)` и/или
+    /// `x = max(flow_x − offset, container_x + left)` (CSS sticky;
+    /// каждая ось независима — `None` — нет прилипания по оси). Вертикаль
+    /// клампится против ближайшего Y-scroll-предка (Column/Grid),
+    /// горизонталь — против X-scroll-предка (Row); см. модульную доку.
+    Sticky { top: Option<f32>, left: Option<f32> },
 }
 
 /// Политика переполнения контейнера сцены (CSS overflow). Rect'ы потомков

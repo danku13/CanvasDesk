@@ -1311,7 +1311,9 @@ impl SceneTree {
 // Пост-обработка: content-shift + sticky (формулы taffy_backend 1:1)
 // =============================================================================
 
-/// Content-shift scroll-предков + sticky-кламп (taffy_backend.rs 1:1).
+/// Content-shift scroll-предков + sticky-кламп (taffy_backend.rs 1:1;
+/// FR-074 — sticky по ОБОИМ осям: top против Y-scroll-предка, left против
+/// X-scroll-предка, кламп двигает узел и всё его поддерево).
 fn post_process(tree: &SceneTree, mut rects: Vec<UiRect>) -> Vec<UiRect> {
     let nodes = &tree.nodes;
     // Content-shift: сумма offset'ов scroll-предков по их главным осям
@@ -1327,30 +1329,49 @@ fn post_process(tree: &SceneTree, mut rects: Vec<UiRect>) -> Vec<UiRect> {
             rects[i].y -= sy;
         }
     }
-    // Sticky-кламп по ближайшему scroll-предку (после shift'ов); кламп
-    // двигает узел и ВСЁ его поддерево; fixed-потомки исключены.
+    // Sticky-кламп по ближайшему scroll-предку СООТВЕТСТВУЮЩЕЙ ОСИ
+    // (после shift'ов); кламп двигает узел и ВСЁ его поддерево;
+    // fixed-потомки исключены.
     for i in 1..nodes.len() {
-        if let ScenePosition::Sticky { top } = nodes[i].position {
-            if let Some(ai) = scroll_ancestor(nodes, i) {
+        if let ScenePosition::Sticky { top, left } = nodes[i].position {
+            // Вертикаль: Y-scroll-предок (Column/Grid).
+            if let (Some(top), Some(ai)) = (top, scroll_ancestor(nodes, i, Axis::Y)) {
                 let off = nodes[ai].offset;
                 let target = rects[ai].y + top;
                 if off > 0.0 && rects[i].y < target {
                     let dy = target - rects[i].y;
                     rects[i].y = target;
-                    for j in i + 1..nodes.len() {
-                        if !is_descendant_of(nodes, j, i) {
-                            continue;
-                        }
-                        if matches!(nodes[j].position, ScenePosition::Fixed { .. }) {
-                            continue;
-                        }
-                        rects[j].y += dy;
-                    }
+                    translate_subtree(nodes, &mut rects, i, 0.0, dy);
+                }
+            }
+            // Горизонталь (FR-074): X-scroll-предок (Row).
+            if let (Some(left), Some(ai)) = (left, scroll_ancestor(nodes, i, Axis::X)) {
+                let off = nodes[ai].offset;
+                let target = rects[ai].x + left;
+                if off > 0.0 && rects[i].x < target {
+                    let dx = target - rects[i].x;
+                    rects[i].x = target;
+                    translate_subtree(nodes, &mut rects, i, dx, 0.0);
                 }
             }
         }
     }
     rects
+}
+
+/// Трансляция поддерева узла `i` на (dx, dy) (fixed-потомки исключены —
+/// viewport-контекст).
+fn translate_subtree(nodes: &[SceneEntry], rects: &mut [UiRect], i: usize, dx: f32, dy: f32) {
+    for j in i + 1..nodes.len() {
+        if !is_descendant_of(nodes, j, i) {
+            continue;
+        }
+        if matches!(nodes[j].position, ScenePosition::Fixed { .. }) {
+            continue;
+        }
+        rects[j].x += dx;
+        rects[j].y += dy;
+    }
 }
 
 /// Суммарный content-shift предков (по их главным осям) для узла `i`.
@@ -1375,14 +1396,16 @@ fn shift_for(nodes: &[SceneEntry], i: usize) -> (f32, f32) {
     (sx, sy)
 }
 
-/// Ближайший scroll-предок (для sticky-клампа); fixed обрывает цепочку.
-fn scroll_ancestor(nodes: &[SceneEntry], i: usize) -> Option<usize> {
+/// Ближайший scroll-предок вдоль оси `axis` (для sticky-клампа; fixed
+/// обрывает цепочку). FR-074: ось-зависимо — вертикальный sticky ищет
+/// Y-контейнер (Column/Grid), горизонтальный — X (Row).
+fn scroll_ancestor(nodes: &[SceneEntry], i: usize, axis: Axis) -> Option<usize> {
     let mut p = nodes[i].parent;
     while let Some(pidx) = p {
         if matches!(nodes[pidx].position, ScenePosition::Fixed { .. }) {
             return None;
         }
-        if nodes[pidx].offset > 0.0 {
+        if nodes[pidx].offset > 0.0 && nodes[pidx].axis == axis {
             return Some(pidx);
         }
         p = nodes[pidx].parent;
