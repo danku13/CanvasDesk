@@ -46,13 +46,14 @@ use crate::template_ui::{
 };
 use crate::ui::{
     button_rect, canvas_menu_label, canvas_menu_visible_items, drag_origins, focus_seed_of,
-    help_button_rect, hotkeys_panel_rect_at, in_resize_corner, menu_item_at_for, menu_item_rect,
-    menu_rect_for, next_free_id, nodes_in_rect, paste_nodes, plan_group_around,
-    plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids, rubber_band_rect,
-    select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect, theme_button_rect,
-    toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick, DragState, EdgeDrag,
-    PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION, DUPLICATE_OFFSET, MENU_ITEM_HEIGHT,
-    MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
+    help_button_rect, hotkeys_panel_rect_at, in_resize_corner, language_button_rect,
+    menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect, paste_nodes,
+    plan_group_around, plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids,
+    rubber_band_rect, select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect,
+    theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick,
+    DragState, EdgeDrag, PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION,
+    DUPLICATE_OFFSET, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
+    MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
 // PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — модель и
@@ -4525,12 +4526,13 @@ impl App {
     ) -> usize {
         self.push_undo();
         let id = next_free_id(&self.scene.canvas, "tpl");
-        let mut node = canvas_core::templates::instantiate(
+        let mut node = canvas_core::templates::instantiate_with_language(
             manifest,
             &BTreeMap::new(),
             id.clone(),
             world[0],
             world[1],
+            self.settings.language,
         )
         .expect("дефолты манифеста в границах");
         // FR-023: авто-высота шаблонной ноды при инстанциации — по числу
@@ -5290,6 +5292,29 @@ impl App {
         }
     }
 
+    /// FR-040 v2: переключить язык интерфейса (Ru ↔ En) кнопкой-иконкой в
+    /// угловом кластере. Сохранение в `config.toml` (поле `language`),
+    /// применение — на лету: тексты читаются по кадру через `tr()`, имена
+    /// шаблонов — `TemplateManifest::display_name(language)` в палитре/
+    /// wheel-меню; ноды-шаблоны, уже созданные ранее, сохраняют снапшот
+    /// имени (FR-023: snapshot переживает правки; выбор языка в момент
+    /// инстанциации зафиксирован в `TemplateRef.name`).
+    fn toggle_language(&mut self) {
+        self.settings.language = self.settings.language.next();
+        // Toast-подтверждение на новом языке (как Obsidian/VS Code — язык
+        // применён сразу, индикатор — собственная локаль).
+        self.show_toast(i18n::trf(
+            self.settings.language,
+            keys::TOAST_LANGUAGE_TOGGLED,
+            &[("{lang}", self.settings.language.native_label())],
+        ));
+        if let Some(path) = &self.config_path {
+            if let Err(err) = self.settings.save(path) {
+                tracing::warn!(%err, "не удалось сохранить конфиг");
+            }
+        }
+    }
+
     /// FR-025: сохранить развёрнутость палитры-дока в конфиг
     /// (сворачивание по Esc/кнопке «‹», разворачивание по ручке/Ctrl+P).
     fn persist_palette_dock(&mut self) {
@@ -5886,6 +5911,21 @@ impl App {
                     self.cursor,
                 ) {
                     self.toggle_theme();
+                    self.request_redraw();
+                    return true;
+                }
+                false
+            }
+            // FR-040 v2: кнопка переключения языка — циклический toggle
+            // Ru→En→Ru с toast-подтверждением и сохранением в config.toml
+            // (паттерн toggle_theme). Применение — на лету (тексты читаются
+            // по кадру; шаблоны — display_name(language) в палитре/wheel).
+            "language-button" => {
+                if point_in_rect(
+                    language_button_rect(self.settings.button_corner, viewport),
+                    self.cursor,
+                ) {
+                    self.toggle_language();
                     self.request_redraw();
                     return true;
                 }
