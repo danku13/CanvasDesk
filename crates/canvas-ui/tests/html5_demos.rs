@@ -149,7 +149,10 @@ fn demo_01_sticky_header_column() -> SceneNode {
             SceneNode::leaf(300.0, 64.0), // навигация
         ],
     )
-    .at(ScenePosition::Sticky { top: 0.0 });
+    .at(ScenePosition::Sticky {
+        top: Some(0.0),
+        left: None,
+    });
     // Контент: 8 секций по 160px + gap 12 → высота 1364 (≫ вьюпорта).
     let rows: Vec<SceneNode> = (0..8).map(|_| SceneNode::leaf(1280.0, 160.0)).collect();
     let content = SceneNode::column(1280.0, 1364.0, 12.0, rows);

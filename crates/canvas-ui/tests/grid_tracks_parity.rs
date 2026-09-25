@@ -13,8 +13,8 @@
 #![cfg(feature = "taffy")]
 
 use canvas_ui::layout::{
-    FlexLayoutEngine, LayoutBackend, SceneDim, SceneKind, SceneNode, SceneSize, SceneTrack,
-    TaffyBackend, TrackMax, TrackMin,
+    FlexLayoutEngine, SceneDim, SceneKind, SceneNode, SceneSize, SceneTrack, TaffyBackend,
+    TrackMax, TrackMin,
 };
 use canvas_ui::{UiRect, UiVec2};
 
