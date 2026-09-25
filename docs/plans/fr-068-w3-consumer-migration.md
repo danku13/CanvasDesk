@@ -199,6 +199,18 @@ FR-068: гейт W3 по `Child::fixed` считать выполненным п
   бит-в-бит сохраняет статус-кво, решение по зазорам — за владельцем.
   Гейты: canvas-ui 190, canvas-app 376, canvas-render 376 — 0 failed;
   workspace 2061/0; fmt; clippy -D warnings; wasm_gate --check — зелёные.
+  🔧 **Хотфикс 2026-09-26 (паника prod-web):** `row_labels` звал лочащую
+  `layout()` под уже удерживаемым вызывающим (`App::scheme_gallery_overlay`
+  в RedrawRequested) guard'ом `measure_font_system` → второй лок того же
+  глобального FontSystem: wasm падал паникой std no_threads-мьютекса
+  «cannot recursively acquire mutex» (пересборка/abort), натив — дедлоком
+  кадра при открытой галерее схем. Фикс: `layout_with(viewport, list,
+  state, m, fs)` с переданным замерщиком (то же тело функции — геометрия
+  бит-в-бит). Аудит (scripts/audit_fs_locks.py: все функции с
+  fs-параметром × лочащие sibling'ы `layout`/`modal_layout`/
+  `empty_buttons`) — других мест нет. Верификация headless-Chromium
+  (playwright): сценарий «заметка → what-if → settings → поиск → галерея
+  + ввод фильтра» — паника 3/3 прогонов до фикса, чисто после.
 - **W3.3** (доводка/аудит): kit_ui demo (опционально), docs_ui/debug_overlay
   (ручные проводки), аудит kit-строк на общих направляющих (Table v2 —
   решение владельца). Гейт-перефиксация §4 в FR-068.
