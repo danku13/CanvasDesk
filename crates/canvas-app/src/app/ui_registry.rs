@@ -514,6 +514,11 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 rect(theme_button_rect(app.settings.button_corner, viewport)),
                 "theme-button",
             ));
+            // FR-040 v2: кнопка переключения языка (RU/EN) — между темой и «?»
+            surface.hit_rects.push(HitRect::interactive(
+                rect(language_button_rect(app.settings.button_corner, viewport)),
+                "language-button",
+            ));
             surface.hit_rects.push(HitRect::interactive(
                 rect(help_button_rect(app.settings.button_corner, viewport)),
                 "help-button",
@@ -571,7 +576,8 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             }
         }
         id::TEMPLATE_PANEL => {
-            let rows = template_panel_rows(&app.templates, &app.template_panel);
+            let rows =
+                template_panel_rows(&app.templates, &app.template_panel, app.settings.language);
             // FR-054: ширины чипов — измеренные (measurer на вызов).
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
