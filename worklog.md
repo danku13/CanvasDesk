@@ -6283,3 +6283,15 @@ Stage Summary:
 - **Тесты:** +3 юнит (group_frame_is_not_pushed, pair_phase_ignores_groups, commit_drop_keeps_group_anchor) — 11 в модуле; core 410, app 376 — зелёные; fmt/clippy -D warnings чисто.
 - **Попутно починены 2 красных теста на main (b7d3047 расширил каталог шаблонов 45→61, счётчики не обновил):** templates::tests::custom_overrides_builtin_in_merged_registry (46→62), missing_custom_root_gives_empty_customs (45→61).
 - **Браузерный дым scripts/wasm_groups_test.py (SMOKE OK):** moved-кадры = только ноды [b,c1,c2]; якорь группы не изменился; 0 ошибок страницы. Окружение: rustup восстановлен, trunk 0.21.14 (musl) + wasm-bindgen-cli 0.2.127 (вне cargo); фоновые процессы Bash-сессии не переживают — сервер/сборки в одной команде; свёрнутый стрип палитры ловит клик у левого края (учтено в сценарии).
+
+---
+
+## FR-WASM-01 — fix(render): чёрный экран wasm (GitHub Pages /app) — паника viewport-юниформа иконок (2026-09-25, сессия агента)
+
+- **Запрос владельца:** «протестируй локальный wasm, в wasm на github я вижу только чёрный экран».
+- **Диагностика (рецепт WASM-TESTING L2: Chromium + WebGPU/SwiftShader под Xvfb, стенд target/dist):** матрица 3 теста — (A) локальный стенд + WebGPU: рендер инициализируется (BrowserWebGpu, Rgba8Unorm), затем паника `icon_pipeline.rs:308` + wasm-трап «unreachable» → канвас чёрный; (B) задеплоенный Pages + WebGPU: та же паника — баг не в деплое, а в коде; (C) Pages без WebGPU: чистый фейл «GPU-адаптер не найден» → тоже чёрный (отдельная проблема, см. ниже). Скриншоты и логи — scripts/ сессии (download/wasm_diag).
+- **Причина:** регресс 4e0764c (SVG-иконки): `f32::to_ne_bytes()` (4 байта) копировался в 8-байтные срезы `uniform_bytes[0..8]/[8..16]` — безусловная паника `copy_from_slice` при первом же `icons.update()` (renderer.rs зовёт его каждый кадр). Натив затронут так же — CI без GPU-адаптера рантайм-путь не проверяет (wasm-гейт проверяет только компиляцию).
+- **Фикс (5407fe0, ветка fix/icons-viewport-uniform-panic, merge f4e8409 в main):** упаковка вынесена в чистую `pack_viewport_uniform([f32;2]) -> [u8;16]` (vec2 на смещении 0 + 2 пад-флоата — раскладка ViewportUniform shaders/icons.wgsl) + регресс-тест `viewport_uniform_packs_vec2_plus_pad` (без GPU) + fmt-дрейф импорта из 4e0764c.
+- **Гейты:** clippy -D warnings 0; fmt чисто; cargo test -p canvas-render 371 passed. Приёмка wasm после фикса: полный рендер (сетка, диалог шаблонов, полоса категорий, GPU-тулбар), консоль без паник.
+- **Открытый CR (вне фикса):** браузеры без WebGPU (Firefox/Safari) — тихий чёрный экран: wgpu 22 собран без фичи `webgl` (дефолт features: wgsl/dx12/metal/webgpu), фолбэка нет; ошибка уходит только в консоль (`RendererLaunch::Failed` → event_loop.exit, handler.rs:1428). Предложение: читаемая DOM-заглушка в canvas-web (правило §3.1) и/или включение webgl (риск: storage buffers в WebGL2 недоступны — нужен GPU-прогон).
+- **Инфра:** wasm-bindgen-cli 0.2.127 установлен из пребилд-тарбалла (404 из CI не воспроизвёлся); trunk не требовался (ручная сборка стенда по wasm_ui_test.sh).
