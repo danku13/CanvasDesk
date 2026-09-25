@@ -387,16 +387,18 @@ impl Table {
         ))
     }
 
-    /// Отрисовка в Painter (§4.4): для каждой видимой строки — полный стиль
-    /// ([`Table::merged_style`]), геометрия ([`Table::row_layout_with`]
-    /// от ширины вьюпорта), kit [`paint_row`]; ПОСЛЕ строк — бегунок
-    /// [`scroll_bar`] (draw-порядок stage:1313–1436; rect слотом
-    /// `control_border`, радиус w/2 — паритет `List::paint` и
-    /// stage:1429–1436; `None` — 0 items).
+    /// ТОЛЬКО строки таблицы (без бегунка) — гранулярная половина
+    /// [`Table::paint_with`]. Нужна потребителям с составным draw-порядком:
+    /// панель «Как считается» рисует СТРОКИ обеих колонок, затем оба
+    /// бегунка (stage.rs:1313–1436 — rows vars, rows formulas, sb vars,
+    /// sb formulas); [`Table::paint_with`] (строки → бегунок своей
+    /// таблицы) перемешал бы порядок items журнала (I-1). Для каждой
+    /// видимой строки — полный стиль ([`Table::merged_style`]), геометрия
+    /// ([`Table::row_layout_with`] от ширины вьюпорта), kit [`paint_row`].
     ///
     /// Основной слой замера: замерщик — ВНЕШНИЙ (продакшн-потребители с
     /// общим FontSystem рендера — §4.7).
-    pub fn paint_with(
+    pub fn paint_rows_with(
         &self,
         p: &mut Painter,
         m: &mut TextMeasurer,
@@ -409,6 +411,13 @@ impl Table {
                 paint_row(p, &lay, &self.parts_of(index), &style, self.props.size);
             }
         }
+    }
+
+    /// ТОЛЬКО бегунок ([`scroll_bar`]; `None` — 0 items) — гранулярная
+    /// половина [`Table::paint_with`] (см. [`Table::paint_rows_with`]).
+    /// Использует [`Table::scroll`]; rect слотом `control_border`, радиус
+    /// w/2 — паритет `List::paint` и stage:1429–1436.
+    pub fn paint_scrollbar(&self, p: &mut Painter, viewport: UiRect) {
         if let Some(knob) = scroll_bar(viewport, &self.scroll, &self.props.palette) {
             p.rect(
                 knob,
@@ -417,6 +426,23 @@ impl Table {
                 knob.w / 2.0,
             );
         }
+    }
+
+    /// Отрисовка в Painter (§4.4): строки ([`Table::paint_rows_with`]) →
+    /// бегунок ([`Table::paint_scrollbar`]; draw-порядок stage:1313–1436;
+    /// `None` — 0 items).
+    ///
+    /// Основной слой замера: замерщик — ВНЕШНИЙ (продакшн-потребители с
+    /// общим FontSystem рендера — §4.7).
+    pub fn paint_with(
+        &self,
+        p: &mut Painter,
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        viewport: UiRect,
+    ) {
+        self.paint_rows_with(p, m, fs, viewport);
+        self.paint_scrollbar(p, viewport);
     }
 
     /// Модельный индекс строки под точкой (§4.5): по [`Table::visible_rows`]
@@ -928,6 +954,20 @@ mod tests {
                 radius: knob.w / 2.0,
             }),
             "бегунок: слот control_border, прозрачная рамка, радиус w/2"
+        );
+        // Композиция гранулярных половин: paint_with ≡ paint_rows_with +
+        // paint_scrollbar (потребители с составным draw-порядком — строки
+        // обеих таблиц панели, затем оба бегунка — stage.rs:1313–1436)
+        let mut rows_p = Painter::new();
+        table.paint_rows_with(&mut rows_p, &mut m, &mut fs, viewport);
+        let mut sb_p = Painter::new();
+        table.paint_scrollbar(&mut sb_p, viewport);
+        let mut composed = rows_p.items().to_vec();
+        composed.extend(sb_p.items().iter().cloned());
+        assert_eq!(
+            composed,
+            p.items(),
+            "paint_with ≡ paint_rows_with + paint_scrollbar"
         );
 
         // Датасет 2: без переопределений (все Normal, default style)
