@@ -935,6 +935,11 @@ pub struct App {
     /// Настройки приложения (config.toml).
     settings: Settings,
     /// Путь конфига (None — не сохраняем, работаем на дефолтах).
+    /// FR-040 v2: на wasm32 поле не используется (persist через localStorage
+    /// в `persist_settings_web`); сохранено в API для нативных callers —
+    /// `App::new` вызывается одинаково с веб и натива, `Some(path)`/`None`
+    /// передаётся caller'ом.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     config_path: Option<PathBuf>,
     /// Панель настроек открыта.
     settings_open: bool,
@@ -4593,12 +4598,15 @@ impl App {
 
     /// Открыть схему из галереи: чистый инстансер → один undo-шаг →
     /// вставка → recompute_flow → zoom-to-fit (US-3, G3/G7).
+    /// FR-040 v2: язык контента — `settings.language` (En → `content_en`,
+    /// при отсутствии — фолбэк на `content` RU).
     fn apply_scheme(&mut self, manifest: &canvas_core::schemes::SchemeManifest) {
         let center = self.viewport_center_world();
-        let instance = match canvas_scene::scheme_apply::instantiate_scheme(
+        let instance = match canvas_scene::scheme_apply::instantiate_scheme_with_language(
             manifest,
             &self.scene.canvas,
             center,
+            self.settings.language,
         ) {
             Ok(instance) => instance,
             Err(err) => {
@@ -5273,6 +5281,53 @@ impl App {
         i18n::trf(self.settings.language, key, subs)
     }
 
+    /// FR-040 v2: персист конфига (натив — `config.toml` через
+    /// `Settings::save`; web — TOML-текст в localStorage
+    /// `canvasdesk.config`). 4 точки изменения настроек (тема/язык/
+    /// палитра/apply_dropdown) вызывают этот метод — единый источник
+    /// правды; до этого в каждой точке был свой блок `if let Some(path)`.
+    fn persist_settings(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(path) = &self.config_path {
+                if let Err(err) = self.settings.save(path) {
+                    tracing::warn!(%err, "не удалось сохранить конфиг");
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.persist_settings_web();
+        }
+    }
+
+    /// Web (wasm32): TOML-сериализация `Settings` и запись в localStorage
+    /// браузера (`canvasdesk.config` — тот же ключ/формат, что читается
+    /// в `canvas_web::app_spawn::load_settings`). Фолбэк на дефолт при
+    /// ошибке — никогда: любой браузер без localStorage (приватный режим)
+    /// молча игнорируется, страница не падает.
+    #[cfg(target_arch = "wasm32")]
+    fn persist_settings_web(&self) {
+        let Some(window) = web_sys::window() else {
+            tracing::warn!("localStorage: нет window (вне браузера)");
+            return;
+        };
+        let Ok(Some(storage)) = window.local_storage() else {
+            tracing::warn!("localStorage недоступен (приватный режим?)");
+            return;
+        };
+        match toml::to_string(&self.settings) {
+            Ok(text) => {
+                if let Err(err) = storage.set_item("canvasdesk.config", &text) {
+                    tracing::warn!("set_item localStorage упал: {}", wasm_js_err_display(&err));
+                }
+            }
+            Err(err) => {
+                tracing::warn!(%err, "сериализация настроек в TOML упала");
+            }
+        }
+    }
+
     /// Переключить тему (кнопка-иконка рядом с кнопкой настроек) и сохранить конфиг.
     fn toggle_theme(&mut self) {
         self.settings.theme = self.settings.theme.next();
@@ -5285,20 +5340,16 @@ impl App {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_theme(palette);
         }
-        if let Some(path) = &self.config_path {
-            if let Err(err) = self.settings.save(path) {
-                tracing::warn!(%err, "не удалось сохранить конфиг");
-            }
-        }
+        self.persist_settings();
     }
 
     /// FR-040 v2: переключить язык интерфейса (Ru ↔ En) кнопкой-иконкой в
-    /// угловом кластере. Сохранение в `config.toml` (поле `language`),
-    /// применение — на лету: тексты читаются по кадру через `tr()`, имена
-    /// шаблонов — `TemplateManifest::display_name(language)` в палитре/
-    /// wheel-меню; ноды-шаблоны, уже созданные ранее, сохраняют снапшот
-    /// имени (FR-023: snapshot переживает правки; выбор языка в момент
-    /// инстанциации зафиксирован в `TemplateRef.name`).
+    /// угловом кластере. Сохранение в `config.toml`/localStorage (поле
+    /// `language`), применение — на лету: тексты читаются по кадру через
+    /// `tr()`, имена шаблонов — `TemplateManifest::display_name(language)`
+    /// в палитре/wheel-меню; ноды-шаблоны, уже созданные ранее, сохраняют
+    /// снапшот имени (FR-023: snapshot переживает правки; выбор языка в
+    /// момент инстанциации зафиксирован в `TemplateRef.name`).
     fn toggle_language(&mut self) {
         self.settings.language = self.settings.language.next();
         // Toast-подтверждение на новом языке (как Obsidian/VS Code — язык
@@ -5308,22 +5359,14 @@ impl App {
             keys::TOAST_LANGUAGE_TOGGLED,
             &[("{lang}", self.settings.language.native_label())],
         ));
-        if let Some(path) = &self.config_path {
-            if let Err(err) = self.settings.save(path) {
-                tracing::warn!(%err, "не удалось сохранить конфиг");
-            }
-        }
+        self.persist_settings();
     }
 
     /// FR-025: сохранить развёрнутость палитры-дока в конфиг
     /// (сворачивание по Esc/кнопке «‹», разворачивание по ручке/Ctrl+P).
     fn persist_palette_dock(&mut self) {
         self.settings.template_palette_open = self.template_panel.open;
-        if let Some(path) = &self.config_path {
-            if let Err(err) = self.settings.save(path) {
-                tracing::warn!(%err, "не удалось сохранить конфиг");
-            }
-        }
+        self.persist_settings();
     }
 
     /// Ревизия FR-025: имена категорий реестра шаблонов (порядок реестра) —
@@ -5650,13 +5693,10 @@ impl App {
         }
     }
 
-    /// FR-026: общий хвост применения настроек — сохранение config.toml.
+    /// FR-026: общий хвост применения настроек — сохранение config.toml /
+    /// localStorage (FR-040 v2: web persist через `persist_settings`).
     fn save_settings(&self) {
-        if let Some(path) = &self.config_path {
-            if let Err(err) = self.settings.save(path) {
-                tracing::warn!(%err, "не удалось сохранить конфиг");
-            }
-        }
+        self.persist_settings();
     }
 
     /// FR-027: открыть просмотрщик документации на странице (подменю «?»
@@ -6368,6 +6408,15 @@ pub struct CliArgs {
     /// иконками рабочего стола. На не-Windows — warn и оконный режим.
     pub desktop: bool,
     pub path: PathBuf,
+}
+
+/// FR-040 v2 (web persist): человекочитаемая строка из `wasm_bindgen::JsValue`
+/// для `tracing::warn` — `JsValue` не реализует `Display` (трейт запрещён
+/// политикой wasm-bindgen: значение может быть любым JS-типом). Берём debug-
+/// представление (`JsValue::debug_string`) — короткое строковое описание.
+#[cfg(target_arch = "wasm32")]
+fn wasm_js_err_display(err: &wasm_bindgen::JsValue) -> String {
+    format!("{err:?}")
 }
 
 /// Разбор аргументов вручную — две опции не оправдывают зависимость от clap.

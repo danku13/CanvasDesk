@@ -248,5 +248,254 @@
     "fromLine": 4
    }
   ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 240,
+    "text": "Project budget\nLine items in groups roll up into subtotals, a reserve is added and the total is computed; then the cash flow by payment stages.\nChange any line item and the whole chain recomputes. The “Subtotals → Total” and “Schedule → Flow” bundles open with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "group-team",
+    "type": "group",
+    "x": 420,
+    "y": 0,
+    "width": 330,
+    "height": 400,
+    "color": "3",
+    "label": "Team: people and tools",
+    "children": [
+     "salaries",
+     "teamtools"
+    ]
+   },
+   {
+    "id": "salaries",
+    "type": "text",
+    "x": 450,
+    "y": 60,
+    "width": 270,
+    "height": 150,
+    "text": "Salaries\nMonthly payroll of the team.\n\nsalaries = 12000 $",
+    "color": "5",
+    "label": "Salaries"
+   },
+   {
+    "id": "teamtools",
+    "type": "text",
+    "x": 450,
+    "y": 220,
+    "width": 270,
+    "height": 150,
+    "text": "Team tools\nServices and subscriptions for development.\n\ntools = 1500 $",
+    "color": "5",
+    "label": "Tools"
+   },
+   {
+    "id": "group-infra",
+    "type": "group",
+    "x": 420,
+    "y": 440,
+    "width": 330,
+    "height": 400,
+    "color": "3",
+    "label": "Infrastructure: hosting and licenses",
+    "children": [
+     "hosting",
+     "licenses"
+    ]
+   },
+   {
+    "id": "hosting",
+    "type": "text",
+    "x": 450,
+    "y": 500,
+    "width": 270,
+    "height": 150,
+    "text": "Hosting\nServers and cloud for production.\n\nhosting = 800 $",
+    "color": "5",
+    "label": "Hosting"
+   },
+   {
+    "id": "licenses",
+    "type": "text",
+    "x": 450,
+    "y": 660,
+    "width": 270,
+    "height": 150,
+    "text": "Licenses\nSoftware and licenses for the year.\n\nlicenses = 600 $",
+    "color": "5",
+    "label": "Licenses"
+   },
+   {
+    "id": "subtotals",
+    "type": "text",
+    "x": 840,
+    "y": 60,
+    "width": 290,
+    "height": 220,
+    "text": "Subtotals\nSums by group: team and infrastructure.\n\nteam = Salaries.salaries + Tools.tools\ninfra = Hosting.hosting + Licenses.licenses",
+    "color": "2",
+    "label": "Subtotals"
+   },
+   {
+    "id": "share",
+    "type": "text",
+    "x": 840,
+    "y": 420,
+    "width": 290,
+    "height": 150,
+    "text": "Reserve share\nContingency: a share of the team subtotal.\n\nshare = 0.15",
+    "color": "5",
+    "label": "Share"
+   },
+   {
+    "id": "reserve",
+    "type": "text",
+    "x": 840,
+    "y": 600,
+    "width": 290,
+    "height": 180,
+    "text": "Reserve\nA buffer for the unexpected: the team subtotal arrives via an edge into the parameter and is multiplied by the share.\n\nreserve_sum = $team * $share",
+    "color": "2",
+    "label": "Reserve"
+   },
+   {
+    "id": "total",
+    "type": "text",
+    "x": 1220,
+    "y": 60,
+    "width": 290,
+    "height": 180,
+    "text": "Total\nSubtotals plus reserve: the full budget.\n\ntotal = Subtotals.team + Subtotals.infra + Reserve.reserve_sum",
+    "color": "6",
+    "label": "Total"
+   },
+   {
+    "id": "payment",
+    "type": "text",
+    "x": 1220,
+    "y": 420,
+    "width": 290,
+    "height": 200,
+    "text": "Payment schedule\nPayment shares by stage: advance and final — values are read line by line.\n\nadvance = 0.6\nfinal = 0.4",
+    "color": "5",
+    "label": "Schedule"
+   },
+   {
+    "id": "cash",
+    "type": "text",
+    "x": 1600,
+    "y": 420,
+    "width": 300,
+    "height": 220,
+    "text": "Cash flow\nPayment by stage: total multiplied by the schedule shares.\n\nadvance_sum = Total.total * Schedule.advance\nfinal_sum = advance_sum + Total.total * Schedule.final",
+    "color": "2",
+    "label": "Cash flow"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1600,
+    "y": 60,
+    "width": 320,
+    "height": 200,
+    "text": "Verdict\nThe reserve is fifteen percent of the team: a plan’s insurance.\nThe “Subtotals → Total” bundle opens a fan of values for both groups.\nTry a scenario on the line items: deltas will show up in the flow.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "salaries",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "salaries"
+   },
+   {
+    "id": "e2",
+    "fromNode": "teamtools",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "tools"
+   },
+   {
+    "id": "e3",
+    "fromNode": "hosting",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "hosting"
+   },
+   {
+    "id": "e4",
+    "fromNode": "licenses",
+    "toNode": "subtotals",
+    "flowKind": "value",
+    "fromOutput": "licenses"
+   },
+   {
+    "id": "e5",
+    "fromNode": "subtotals",
+    "toNode": "reserve",
+    "flowKind": "value",
+    "fromOutput": "team",
+    "toParam": "team"
+   },
+   {
+    "id": "e6",
+    "fromNode": "share",
+    "toNode": "reserve",
+    "flowKind": "value",
+    "toParam": "share"
+   },
+   {
+    "id": "e7",
+    "fromNode": "subtotals",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "team"
+   },
+   {
+    "id": "e8",
+    "fromNode": "subtotals",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "infra"
+   },
+   {
+    "id": "e9",
+    "fromNode": "reserve",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "reserve_sum"
+   },
+   {
+    "id": "e10",
+    "fromNode": "total",
+    "toNode": "cash",
+    "flowKind": "value",
+    "fromOutput": "total"
+   },
+   {
+    "id": "e11",
+    "fromNode": "payment",
+    "toNode": "cash",
+    "flowKind": "value",
+    "fromLine": 3
+   },
+   {
+    "id": "e12",
+    "fromNode": "payment",
+    "toNode": "cash",
+    "flowKind": "value",
+    "fromLine": 4
+   }
+  ]
  }
 }
