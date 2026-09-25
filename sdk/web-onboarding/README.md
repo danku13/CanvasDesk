@@ -62,11 +62,41 @@ tour.run(myScenario);
 ```ts
 class Tour {
   constructor(opts?: TourOptions);
-  run(scenario: TourScenario): TourHandle;
+  run(scenario: TourScenario, opts?: RunOptions): TourHandle | null;
   onSignal(listener: (name: string, payload?: unknown) => void): () => void;
   signal(name: string, payload?: unknown): void;
   refresh(): void;
+  // persistence (localStorage-backed):
+  isCompleted(id: string): boolean;
+  getCompletedAt(id: string): number | null;
+  markCompleted(id: string): void;
+  resetCompleted(id: string): void;
+  getResumeIndex(id: string): number | null;
+  clearResume(id: string): void;
   static instance: Tour | null;
+}
+```
+
+### RunOptions
+
+```ts
+interface RunOptions {
+  skipIfCompleted?: boolean;       // don't run if isCompleted(id) — default false
+  resume?: boolean;                 // start from saved step index — default false
+  markCompletedOnSkip?: boolean;   // skip also marks completed — default false
+}
+```
+
+### TourOptions
+
+```ts
+interface TourOptions {
+  container?: HTMLElement;          // default document.body
+  styles?: string;                 // inline CSS (DEFAULT_STYLES used if omitted)
+  baseZIndex?: number;             // default 10000
+  log?: (level, message) => void;  // default console
+  storageKey?: string | null;      // localStorage prefix, default "cd-tour:"
+                                   // set to null to disable persistence
 }
 ```
 
@@ -167,6 +197,7 @@ window.__canvasdeskTour.signal("canvas:note-created", { id: "n_1" });
 | `cd-first-run-inline`  | Интерактивный первый запуск      | Канвас целиком, `waitFor(signal)` для note-created |
 | `cd-palette-tour`      | Палитра шаблонов (FR-018)        | Ctrl+P, колесо категорий, Shift+клик               |
 | `cd-calculations-tour` | Numi-формулы (FR-013/014/015)    | Переменные, единицы, value-flow, what-if, MC       |
+| `cd-scheme-gallery-tour` | Галерея схем (FR-049)         | 8 шагов, 3 passive+waitFor (open/preview/apply)   |
 
 ## Запуск
 
@@ -254,10 +285,46 @@ npm run typecheck   # tsc --noEmit
 
 ## Тестирование
 
-Smoke-проверки: открыть `crates/canvas-web/index.html` после
-`trunk serve` (см. `scripts/web_bundle.sh`), нажать «Тур», выбрать
-сценарий, пройти шаги. Esc — выход. URL `#tour=cd-toolbar-tour` —
-авто-запуск.
+### Smoke (ручной)
+
+Открыть `crates/canvas-web/index.html` после `trunk serve` (см.
+`scripts/web_bundle.sh`), нажать «Тур», выбрать сценарий, пройти
+шаги. Esc — выход. URL `#tour=cd-toolbar-tour` — авто-запуск.
+
+### Standalone HTML (без Rust/WASM)
+
+`sdk/web-onboarding/standalone-test.html` — отдельная страница с mock
+toolbar + кнопками запуска сценариев + manual signal-emit buttons.
+Открывается напрямую через `file://` или `python3 -m http.server 8090`.
+
+### Регрессионные тесты (Playwright)
+
+`sdk/web-onboarding/tests/test_tour_regression.py` — 11 автоматических
+тестов через headless Chromium, покрывают:
+
+| Тест                                | Что проверяет                                       |
+|-------------------------------------|-----------------------------------------------------|
+| `toolbar_tour_full_flow`            | 5 шагов + Done → tour:complete signal              |
+| `passive_step_auto_advances_on_signal` | passive+waitFor auto-advance + dim disabled      |
+| `palette_tour_passive_advance`      | canvas:palette-opened → step 3                     |
+| `calculations_tour_navigation`      | 7 шагов tooltip сверху на rect-anchor              |
+| `deeplink_url_hash_auto_launches`   | #tour=cd-toolbar-tour → auto-start                 |
+| `deeplink_unknown_id_warns`         | неизвестный id → console.warn, no tooltip         |
+| `esc_skip_closes_tour`              | Esc → skip → unmount                               |
+| `back_button_navigation`            | Back → step N-1                                    |
+| `arrow_keys_navigation`             | ArrowRight/Left → next/back                       |
+| `persistence_completion`            | isCompleted после Done; skipIfCompleted refuses    |
+| `persistence_resume`                | Esc на шаге 2 → resumeIndex=1; run(resume) → шаг 2 |
+
+Запуск:
+
+```sh
+python3 sdk/web-onboarding/tests/test_tour_regression.py
+```
+
+CI: тест можно подключить в `.github/workflows/` через
+`pip install playwright && playwright install chromium` + запуск
+скрипта.
 
 См. `docs/ACCEPTANCE.md` §19 для v2 чек-листа.
 
