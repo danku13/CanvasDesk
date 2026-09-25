@@ -3469,6 +3469,22 @@ impl App {
             SettingsRow::SnapCollision => {
                 self.settings.snap_collision = !self.settings.snap_collision;
             }
+            // FR-073: тумблеры расталкивания — физика читает флаги на кадр
+            // (тик/пайплайн драга), синхронизация рендера не нужна;
+            // мастер-тумблер гасит сессию физики (как snap_enabled — гасит
+            // снап) без сброса остальных настроек
+            SettingsRow::DragPushEnabled => {
+                self.settings.drag_push_enabled = !self.settings.drag_push_enabled;
+                if !self.settings.drag_push_enabled {
+                    self.drag_push_live = false;
+                }
+            }
+            SettingsRow::DragPushPredictive => {
+                self.settings.drag_push_predictive = !self.settings.drag_push_predictive;
+            }
+            SettingsRow::DragPushRebase => {
+                self.settings.drag_push_rebase = !self.settings.drag_push_rebase;
+            }
             // T23: состояние синхронно с settings — сохранение общим хвостом
             SettingsRow::FocusMode => self.toggle_focus_mode(),
             // FR-042 (F-13): агрегация рендер/ввод читают на кадр
@@ -3508,6 +3524,9 @@ impl App {
             | SettingsRow::SnapTolerance
             | SettingsRow::SnapSubZoom
             | SettingsRow::SnapCoarseZoom
+            // FR-073: зазор/ореол — dropdown, применяется в apply_dropdown_choice
+            | SettingsRow::DragPushSafeGap
+            | SettingsRow::DragPushHalo
             // PRD-0007 (AC-2.3): dropdown «Лимит глубины explain-дерева» —
             // применяется в apply_dropdown_choice, тумблером не является
             | SettingsRow::ExplainDepthLimit => {
@@ -3957,6 +3976,10 @@ impl App {
                         // PRD-0007 (X6, F-12): индикатор покрытия цепочками
                         SettingsRow::ExplainCoverage => self.settings.explain_coverage,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
+                        // FR-073: тумблеры расталкивания
+                        SettingsRow::DragPushEnabled => self.settings.drag_push_enabled,
+                        SettingsRow::DragPushPredictive => self.settings.drag_push_predictive,
+                        SettingsRow::DragPushRebase => self.settings.drag_push_rebase,
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
                         | SettingsRow::GridDensity
@@ -3966,6 +3989,8 @@ impl App {
                         | SettingsRow::SnapTolerance
                         | SettingsRow::SnapSubZoom
                         | SettingsRow::SnapCoarseZoom
+                        | SettingsRow::DragPushSafeGap
+                        | SettingsRow::DragPushHalo
                         // PRD-0007: dropdown-строка в ветку Toggle не
                         // попадает (row_kind = Dropdown), arm — для полноты
                         | SettingsRow::ExplainDepthLimit => false,

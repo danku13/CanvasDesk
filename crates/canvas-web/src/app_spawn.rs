@@ -213,7 +213,8 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
 
 /// W6 (web): конфиг из localStorage (`canvasdesk.config`, TOML — тот же
 /// формат, что config.toml натива). Битый текст — дефолт + warn
-/// (страница открывается всегда); клампы CR-003/FR-028 — как в `load`.
+/// (страница открывается всегда); клампы — общий `Settings::normalize`
+/// (FR-073: паритет с `load` натива — один набор валидаций на платформах).
 ///
 /// FR-040 v2: запись конфига обратно (при `toggle_language`/`toggle_theme`/
 /// `persist_palette_dock`/`save_settings`) — `App::persist_settings` →
@@ -233,9 +234,7 @@ fn load_settings() -> Settings {
     };
     match toml::from_str::<Settings>(&text) {
         Ok(mut settings) => {
-            settings.port_zone_px = canvas_core::clamp_port_zone(settings.port_zone_px);
-            settings.onboarding_defers =
-                canvas_core::clamp_onboarding_defers(settings.onboarding_defers);
+            settings.normalize();
             settings
         }
         Err(err) => {

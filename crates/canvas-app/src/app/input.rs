@@ -2783,6 +2783,10 @@ impl App {
                         // сбрасывает цель втягивания
                         self.settle_anim = None;
                         self.group_drop_target = None;
+                        // FR-073: сессия расталкивания — якоря всех нод =
+                        // текущие позиции (внешние сдвиги между драгами
+                        // поглощаются)
+                        self.drag_push_begin();
                         self.dragging = Some(DragState {
                             primary: index,
                             grab_world: world,
@@ -3002,6 +3006,19 @@ impl App {
                 // FR-038 (п.9): направляющие не переживают отпускание
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.clear_guides();
+                }
+                // FR-073: drop — активные закрепляются где брошены (включая
+                // snap-коррекцию выше), накрытые ореолом получают новые
+                // якоря; остальные расселяются пружиной (кадровый тик)
+                if self.settings.drag_push_enabled {
+                    let active = self.drag_push_active();
+                    let params = self.drag_push_params();
+                    canvas_core::drag_push::commit_drop(
+                        &self.scene.canvas,
+                        &active,
+                        &mut self.drag_push,
+                        &params,
+                    );
                 }
                 self.dragging = None;
                 self.editor_dragging = false;

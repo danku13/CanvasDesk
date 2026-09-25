@@ -1011,6 +1011,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // FR-044 Q3: тик анимации подсветки stage (до stage_frame —
                 // рендер читает stage_calc_render)
                 self.tick_stage_calc_fade();
+                // FR-073: кадр физики расталкивания (пружина возврата,
+                // ореол, парная фаза) — до сборки сцены
+                if self.tick_drag_push() {
+                    self.request_redraw();
+                }
                 let spill_wave = self
                     .spill_wave
                     .as_ref()
@@ -1275,6 +1280,8 @@ impl ApplicationHandler<AppEvent> for App {
             || self.focus_animating()
             // FR-044 Q3: переход подсветки stage — кадры до завершения
             || self.stage_calc_fade_animating()
+            // FR-073: расселение после drop — кадры до успокоения пружины
+            || self.drag_push_animating()
             || self.palette_hover.pending()
             || self
                 .template_hover

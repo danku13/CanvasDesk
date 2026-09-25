@@ -74,9 +74,10 @@ use canvas_core::{
     analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
     nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at_lines,
     stage_edge_geometry, stage_layout, watched_dirs, AnalysisState, Canvas, CanvasStorage,
-    ClipboardBackend, Edge, FileEvent, FocusSeed, FocusSet, GridStyle, Language, LineageNodeId,
-    Node, NodeChange, NodeKind, Priority, SearchBackend, Settings, Side, SnapAnchor, SpatialIndex,
-    StageLayout, StageMetrics, Theme, ThumbBackend, WatchBackend, COLLISION_GAP,
+    ClipboardBackend, DragPushParams, DragPushState, Edge, FileEvent, FocusSeed, FocusSet,
+    GridStyle, Language, LineageNodeId, Node, NodeChange, NodeKind, Priority, SearchBackend,
+    Settings, Side, SnapAnchor, SpatialIndex, StageLayout, StageMetrics, Theme, ThumbBackend,
+    WatchBackend, COLLISION_GAP,
 };
 use canvas_ui::geometry::UiPoint;
 // FR-060 (волна 2 кита): геометрия поверхностей волны 2 — модули кита
@@ -1123,6 +1124,12 @@ pub struct App {
     /// FR-012: settle-анимация после вставки в группу — плавный проезд
     /// группы и раздвинутых соседей к целевым позициям (~250 мс).
     settle_anim: Option<SettleAnim>,
+    /// FR-073: состояние физики расталкивания (якоря + скорость курсора).
+    drag_push: DragPushState,
+    /// FR-073: живая сессия физики — true от старта drag до полного
+    /// расселения после drop; между драгами физика не тикает (внешние
+    /// сдвиги нод — автораскладка/MCP — якоря не трогают).
+    drag_push_live: bool,
     /// Режим десктопа (T15, флаг --desktop): окно встраивается в WorkerW
     /// (Windows; на других ОС — warn и обычный оконный режим, SPEC §9).
     desktop_mode: bool,
@@ -1362,6 +1369,8 @@ impl App {
             stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),
             group_drop_target: None,
             settle_anim: None,
+            drag_push: DragPushState::new(),
+            drag_push_live: false,
             desktop_mode,
             #[cfg(windows)]
             desktop_hierarchy: None,
@@ -3023,6 +3032,9 @@ impl App {
         self.editing = None;
         self.editor_dragging = false;
         self.settle_anim = None; // FR-012: анимация не валидна после отката
+                                 // FR-073: якоря не валидны после отката — сессия физики закрывается
+        self.drag_push_live = false;
+        self.drag_push.anchors.clear();
         self.group_drop_target = None;
         self.scene.canvas = canvas;
         self.scene.spatial = SpatialIndex::build(&self.scene.canvas);
@@ -5607,6 +5619,96 @@ impl App {
         })
     }
 
+    // --- FR-073: расталкивание при драге -----------------------------------
+
+    /// FR-073: параметры физики из настроек (мост Settings → drag_push).
+    fn drag_push_params(&self) -> DragPushParams {
+        DragPushParams {
+            halo: self.settings.drag_push_halo_px,
+            gap: self.settings.drag_push_gap_px,
+            ret: self.settings.drag_push_ret,
+            push_frac: self.settings.drag_push_push_frac,
+            pair_frac: self.settings.drag_push_pair_frac,
+            iters: self.settings.drag_push_iters,
+            predictive: self.settings.drag_push_predictive,
+            rebase: self.settings.drag_push_rebase,
+        }
+    }
+
+    /// FR-073: индексы активных нод текущего drag (мультивыделение тянется
+    /// жёстко — физика их не двигает).
+    fn drag_push_active(&self) -> Vec<usize> {
+        match self.dragging.as_ref() {
+            Some(drag) => {
+                let mut active = Vec::with_capacity(drag.origins.len() + 1);
+                active.push(drag.primary);
+                active.extend(drag.origins.iter().map(|(index, _)| *index));
+                active
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// FR-073: открыть сессию физики — якоря всех нод = текущие позиции
+    /// (вызывается на старте drag; поглощает внешние сдвиги между драгами).
+    fn drag_push_begin(&mut self) {
+        self.drag_push.reanchor_all(&self.scene.canvas);
+        self.drag_push_live = true;
+    }
+
+    /// FR-073: кадр физики — true, если были сдвиги (spatial/перерисовка).
+    /// Тикает только в живой сессии (от старта drag до расселения после
+    /// drop) — внешние сдвиги нод между драгами якоря не тревожат.
+    fn tick_drag_push(&mut self) -> bool {
+        if !self.drag_push_live || !self.settings.drag_push_enabled {
+            return false;
+        }
+        let params = self.drag_push_params();
+        let active = self.drag_push_active();
+        let touched = canvas_core::drag_push::step(
+            &mut self.scene.canvas,
+            &active,
+            &mut self.drag_push,
+            &params,
+        );
+        if touched.is_empty() {
+            if self.dragging.is_none() {
+                self.drag_push_live = false; // расселилось — сессия закрыта
+            }
+            return false;
+        }
+        for index in touched {
+            if let Some(node) = self.scene.canvas.nodes.get(index) {
+                self.scene.spatial.update(index, node);
+            }
+        }
+        self.scene.mark_dirty();
+        true
+    }
+
+    /// FR-073: максимальное отклонение нод от якорей, world px.
+    fn drag_push_displacement(&self) -> f32 {
+        self.scene.canvas.nodes.iter().fold(0.0_f32, |max, node| {
+            let anchor = self
+                .drag_push
+                .anchors
+                .get(&node.id)
+                .copied()
+                .unwrap_or([node.x, node.y]);
+            let d = ((anchor[0] - node.x).powi(2) + (anchor[1] - node.y).powi(2)).sqrt();
+            max.max(d)
+        })
+    }
+
+    /// FR-073: физика ещё анимируется (кадры держит about_to_wait)? Во
+    /// время drag — всегда (ореол давит, упреждение живёт); после drop —
+    /// пока ноды не расселились по якорям.
+    fn drag_push_animating(&self) -> bool {
+        self.drag_push_live
+            && self.settings.drag_push_enabled
+            && (self.dragging.is_some() || self.drag_push_displacement() > 0.5)
+    }
+
     /// T23: переключить режим фокуса связей (хоткей F / ПКМ-меню / панель
     /// настроек — панель сохраняет конфиг общим хвостом apply_settings_row,
     /// хоткей и меню — рантайм-переключение без записи).
@@ -7297,6 +7399,14 @@ impl App {
             moves.push((index, from, to_target));
         }
         if !moves.is_empty() {
+            // FR-073: settle-анимация ведёт ноды к целям — их якоря =
+            // целевые позиции, чтобы пружина расталкивания не боролась
+            // с анимацией
+            for (index, _, to_target) in &moves {
+                if let Some(node) = self.scene.canvas.nodes.get(*index) {
+                    self.drag_push.anchors.insert(node.id.clone(), *to_target);
+                }
+            }
             self.settle_anim = Some(SettleAnim {
                 moves,
                 start: Instant::now(),
@@ -8865,6 +8975,72 @@ mod tests {
         app.stage_calc_focus = Some(StageCalcFocus::default());
         app.close_main_stage();
         assert!(app.stage_calc_focus.is_none() && app.stage_calc_hover.is_none());
+    }
+
+    /// FR-073 (интеграция): драг через соседа — вытеснение с жёстким
+    /// зазором, drop на место соседа перезакрепляет его якорь, расселение
+    /// закрывает сессию физики.
+    #[test]
+    fn drag_push_displaces_rebases_and_settles() {
+        let mut canvas = Canvas::default();
+        for (id, x) in [("a", 0.0), ("b", 260.0)] {
+            let mut n = Node::text(id, id, x, 0.0);
+            n.width = 200.0;
+            n.height = 80.0;
+            canvas.nodes.push(n);
+        }
+        let mut app = stub_app_with_canvas(canvas);
+        // Старт drag (путь on_cursor_pressed): якоря = текущие позиции
+        app.drag_push_begin();
+        app.dragging = Some(DragState {
+            primary: 0,
+            grab_world: [0.0, 0.0],
+            origins: vec![(0, [0.0, 0.0])],
+        });
+        // Кадр ввода привёл активную внахлёст с "b"
+        app.scene.canvas.nodes[0].x = 240.0;
+        let params = app.drag_push_params();
+        // Кадры физики: b вытесняется (MTV — кратчайший выход, любая ось),
+        // 2D-зазор активная↔пассивная не ниже halo+gap
+        for _ in 0..30 {
+            app.tick_drag_push();
+            let (a, b) = (&app.scene.canvas.nodes[0], &app.scene.canvas.nodes[1]);
+            let gx = (b.x - (a.x + a.width)).max(a.x - (b.x + b.width));
+            let gy = (b.y - (a.y + a.height)).max(a.y - (b.y + b.height));
+            let clearance = gx.max(gy);
+            assert!(
+                clearance >= params.halo + params.gap - 0.5,
+                "зазор {clearance} < {}",
+                params.halo + params.gap
+            );
+        }
+        // Drop на место "b": активная закреплена где брошена, накрытая b
+        // получает новый якорь
+        let active = app.drag_push_active();
+        canvas_core::drag_push::commit_drop(
+            &app.scene.canvas,
+            &active,
+            &mut app.drag_push,
+            &params,
+        );
+        app.dragging = None;
+        assert_eq!(app.drag_push.anchors["a"], [240.0, 0.0]);
+        assert!(
+            app.drag_push.anchors["b"][0] > 260.0 || app.drag_push.anchors["b"][1] != 0.0,
+            "накрытая b перезакреплена: {:?}",
+            app.drag_push.anchors["b"]
+        );
+        // Расселение: кадры до успокоения, сессия закрывается
+        let mut guard = 0;
+        while app.drag_push_animating() {
+            app.tick_drag_push();
+            guard += 1;
+            assert!(guard < 600, "расселение не завершается");
+        }
+        // Завершающий тик: если расселось само (animating=false сразу),
+        // сессия закрывается следующим холостым кадром физики
+        assert!(!app.tick_drag_push(), "тик вне сессии — no-op");
+        assert!(!app.drag_push_live, "сессия закрыта после расселения");
     }
 
     /// FR-044 Q3 (интеграция): анимация перехода подсветки — включение
