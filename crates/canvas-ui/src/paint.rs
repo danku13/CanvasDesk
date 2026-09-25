@@ -12,7 +12,7 @@
 //! поверх ранних). `take_items` отдаёт накопленное и очищает журнал —
 //! потребитель конвертирует items в инстансы рендера на своём кадре.
 
-use crate::geometry::UiRect;
+use crate::geometry::{UiPoint, UiRect};
 use crate::kit::{ControlStyle, PanelStyle};
 
 /// Выравнивание текста внутри области (зеркало `TextAlign` рендера —
@@ -64,9 +64,32 @@ pub enum PaintItem {
     /// слои/capture/draw-порядок без изменений (§Контракт-5 FR-068,
     /// D8 ADR-0013).
     ClipRect { rect: UiRect, items: Vec<PaintItem> },
+    /// Transform-контейнер (FR-074): CSS `transform: rotate(deg)` —
+    /// поворот вложенных items на `deg` градусов (по часовой —
+    /// экранные координаты y-вниз) вокруг точки `origin` (ui px,
+    /// обычно центр элемента — см. [`Painter::rotated_centered`]).
+    /// CSS-семантика: layout НЕ меняет (геометрия rect'ов внутри —
+    /// до-трансформационная; позиция/размер для хит-теста и клипа —
+    /// забота потребителя). Аналог ClipRect — данные (G7): исполняет
+    /// потребитель (конвертация в rotate-инстансы рендера — отдельная
+    /// задача; до неё — прозрачный проход, как ClipRect в W1 до scissor).
+    Transform {
+        deg: f32,
+        origin: UiPoint,
+        items: Vec<PaintItem>,
+    },
+    /// z-index группа (FR-074): поддерево с явным z-порядком внутри
+    /// stacking context'а Painter'а (CSS z-index). `take_items`
+    /// стабильно сортирует журнал по z (больше z — позже = поверх;
+    /// равные z — порядок вызовов); [`Painter::z_group`] вкладывает
+    /// контекст в контекст (CSS stacking context). Данные (G7):
+    /// потребитель рисует в уже отсортированном порядке.
+    ZGroup { z: i32, items: Vec<PaintItem> },
 }
 
 /// Шаг плоского обхода дерева items ([`walk`]): контейнер клипа или лист.
+/// Transform/ZGroup (FR-074) — прозрачные контейнеры: walk спускается
+/// в них без шага (не клипы; порядок draw сохраняется).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ClipStep<'a> {
     /// Rect клип-контейнера ([`PaintItem::ClipRect`]); следующие шаги —
@@ -87,6 +110,12 @@ pub fn walk(items: &[PaintItem]) -> Vec<ClipStep<'_>> {
         for item in items {
             if let PaintItem::ClipRect { rect, items } = item {
                 out.push(ClipStep::Clip(*rect));
+                push_steps(items, out);
+            } else if let PaintItem::Transform { items, .. } | PaintItem::ZGroup { items, .. } =
+                item
+            {
+                // FR-074: прозрачный спуск — не клип, draw-порядок детей
+                // в общем обходе сохраняется.
                 push_steps(items, out);
             } else {
                 out.push(ClipStep::Item(item));
@@ -172,13 +201,55 @@ impl Painter {
         });
     }
 
+    /// Transform-контейнер (FR-074): CSS `transform: rotate(deg)` вокруг
+    /// точки `origin` (ui px; положительный угол — по часовой в экранной
+    /// системе y-вниз). Layout не меняет; данные — G7 (исполняет
+    /// потребитель). Вложенность — произвольная (композиция поворотов —
+    /// забота потребителя).
+    pub fn rotated(&mut self, deg: f32, origin: UiPoint, paint: impl FnOnce(&mut Painter)) {
+        let mut inner = Painter::new();
+        paint(&mut inner);
+        self.items.push(PaintItem::Transform {
+            deg,
+            origin,
+            items: inner.take_items(),
+        });
+    }
+
+    /// Поворот вокруг ЦЕНТРА области (частый случай: иконка/бейдж на
+    /// карточке) — `origin` = центр `area`.
+    pub fn rotated_centered(&mut self, area: UiRect, deg: f32, paint: impl FnOnce(&mut Painter)) {
+        let origin = UiPoint::new(area.x + area.w / 2.0, area.y + area.h / 2.0);
+        self.rotated(deg, origin, paint);
+    }
+
+    /// z-index группа (FR-074): CSS z-index — поддерево с явным z-порядком
+    /// внутри текущего stacking context'а (журнал Painter'а). `take_items`
+    /// стабильно сортирует по z: больше — поверх; равные — порядок вызовов.
+    /// Вложенный z_group — свой контекст (как CSS stacking context).
+    pub fn z_group(&mut self, z: i32, paint: impl FnOnce(&mut Painter)) {
+        let mut inner = Painter::new();
+        paint(&mut inner);
+        self.items.push(PaintItem::ZGroup {
+            z,
+            items: inner.take_items(),
+        });
+    }
+
     /// Журнал items (порядок = draw-порядок).
     pub fn items(&self) -> &[PaintItem] {
         &self.items
     }
 
     /// Отдать накопленное и очистить журнал (одна конвертация на кадр).
+    /// FR-074: перед отдачей журнал СТАБИЛЬНО сортируется по z (CSS
+    /// z-index): ZGroup-ы — по их z, остальные items (z = 0) сохраняют
+    /// относительный порядок между собой и относительно ZGroup с z = 0.
     pub fn take_items(&mut self) -> Vec<PaintItem> {
+        self.items.sort_by_key(|item| match item {
+            PaintItem::ZGroup { z, .. } => *z,
+            _ => 0,
+        });
         std::mem::take(&mut self.items)
     }
 }
@@ -502,5 +573,157 @@ mod tests {
                 items: Vec::new(),
             }
         );
+    }
+
+    /// FR-074: rotated оборачивает items в Transform с дословными
+    /// deg/origin; rotated_centered берёт origin = центр области;
+    /// вложенные порядок и payload сохранены.
+    #[test]
+    fn rotated_wraps_items_and_centered_takes_area_center() {
+        let mut p = Painter::new();
+        let area = UiRect::new(10.0, 20.0, 40.0, 20.0);
+        p.rotated(45.0, UiPoint::new(5.0, 6.0), |inner| {
+            inner.rect(UiRect::new(0.0, 0.0, 8.0, 8.0), FILL, BORDER, 1.0);
+        });
+        p.rotated_centered(area, -30.0, |inner| {
+            inner.label(
+                UiRect::new(12.0, 22.0, 20.0, 10.0),
+                "Стрелка",
+                TEXT,
+                11.0,
+                PaintAlign::Center,
+            );
+        });
+        let items = p.items();
+        assert_eq!(items.len(), 2, "два Transform-контейнера в порядке вызовов");
+        assert_eq!(
+            items[0],
+            PaintItem::Transform {
+                deg: 45.0,
+                origin: UiPoint::new(5.0, 6.0),
+                items: vec![PaintItem::Rect {
+                    rect: UiRect::new(0.0, 0.0, 8.0, 8.0),
+                    fill: FILL,
+                    border: BORDER,
+                    radius: 1.0,
+                }],
+            }
+        );
+        // origin центра: (10+40/2, 20+20/2) = (30, 30).
+        assert_eq!(
+            items[1],
+            PaintItem::Transform {
+                deg: -30.0,
+                origin: UiPoint::new(30.0, 30.0),
+                items: vec![PaintItem::Text {
+                    area: UiRect::new(12.0, 22.0, 20.0, 10.0),
+                    text: "Стрелка".to_owned(),
+                    color: TEXT,
+                    size: 11.0,
+                    align: PaintAlign::Center,
+                }],
+            }
+        );
+    }
+
+    /// FR-074: walk прозрачно спускается в Transform/ZGroup (не клипы) —
+    /// дети в общем draw-порядке, без Clip-шага.
+    #[test]
+    fn walk_descends_into_transform_and_zgroup() {
+        let mut p = Painter::new();
+        p.clip_rect(UiRect::new(0.0, 0.0, 100.0, 100.0), |inner| {
+            inner.rotated(90.0, UiPoint::new(50.0, 50.0), |rot| {
+                rot.rect(UiRect::new(1.0, 1.0, 4.0, 4.0), FILL, BORDER, 0.0);
+            });
+            inner.z_group(2, |zg| {
+                zg.label(
+                    UiRect::new(2.0, 2.0, 10.0, 8.0),
+                    "Z",
+                    TEXT,
+                    10.0,
+                    PaintAlign::Left,
+                );
+            });
+        });
+        let steps = walk(p.items());
+        assert_eq!(
+            steps.len(),
+            3,
+            "Clip + (rect сквозь Transform) + (label сквозь ZGroup)"
+        );
+        assert_eq!(
+            steps[0],
+            ClipStep::Clip(UiRect::new(0.0, 0.0, 100.0, 100.0))
+        );
+        assert!(matches!(steps[1], ClipStep::Item(PaintItem::Rect { .. })));
+        assert!(matches!(steps[2], ClipStep::Item(PaintItem::Text { .. })));
+    }
+
+    /// FR-074: z_group + take_items — стабильная сортировка по z:
+    /// A(z=0), B(z=2), C(z=1) → draw-порядок A, C, B (CSS z-index).
+    #[test]
+    fn z_group_reorders_take_items_stably() {
+        let mut p = Painter::new();
+        let rect = |x| UiRect::new(x, 0.0, 10.0, 10.0);
+        p.rect(rect(0.0), FILL, BORDER, 0.0); // A (z = 0)
+        p.z_group(2, |g| {
+            g.rect(rect(10.0), FILL, BORDER, 0.0); // B (z = 2)
+        });
+        p.z_group(1, |g| {
+            g.rect(rect(20.0), FILL, BORDER, 0.0); // C (z = 1)
+        });
+        p.rect(rect(30.0), FILL, BORDER, 0.0); // D (z = 0, после групп)
+        let items = p.take_items();
+        // Стабильный порядок равных z: A, D остаются вокруг групп.
+        let xs: Vec<f32> = items
+            .iter()
+            .map(|it| match it {
+                PaintItem::Rect { rect, .. } => rect.x,
+                PaintItem::ZGroup { items, .. } => match items[0] {
+                    PaintItem::Rect { rect, .. } => rect.x,
+                    _ => f32::NAN,
+                },
+                _ => f32::NAN,
+            })
+            .collect();
+        assert_eq!(
+            xs,
+            vec![0.0, 30.0, 20.0, 10.0],
+            "A, D (z=0), C (z=1), B (z=2)"
+        );
+        // Журнал очищен.
+        assert!(p.items().is_empty());
+    }
+
+    /// FR-074: вложенные z_group — внутренний take сортирует свой
+    /// контекст; внешний — свой (семантика CSS stacking context).
+    #[test]
+    fn nested_z_groups_sort_within_context() {
+        let mut p = Painter::new();
+        p.z_group(5, |outer| {
+            outer.rect(UiRect::new(0.0, 0.0, 4.0, 4.0), FILL, BORDER, 0.0); // a (z0 внутри)
+            outer.z_group(-1, |inner| {
+                inner.rect(UiRect::new(8.0, 0.0, 4.0, 4.0), FILL, BORDER, 0.0); // b
+            });
+            outer.rect(UiRect::new(12.0, 0.0, 4.0, 4.0), FILL, BORDER, 0.0); // c (z0)
+        });
+        let items = p.take_items();
+        assert_eq!(items.len(), 1);
+        let PaintItem::ZGroup {
+            z,
+            items: inner_items,
+        } = &items[0]
+        else {
+            panic!("ожидался ZGroup");
+        };
+        assert_eq!(*z, 5);
+        // Внутри: a (0), ZGroup(-1) → b, c (0)? НЕТ: сортировка по z
+        // ставит ZGroup(-1) ПЕРЕД z=0-элементами: b, a, c.
+        let first = &inner_items[0];
+        assert!(
+            matches!(first, PaintItem::ZGroup { z: -1, .. }),
+            "отрицательный z — глубже (раньше) в порядке отрисовки"
+        );
+        assert_eq!(inner_items.len(), 3);
     }
 }
