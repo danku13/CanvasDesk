@@ -5664,6 +5664,16 @@ impl App {
     fn drag_push_begin(&mut self) {
         self.drag_push.reanchor_all(&self.scene.canvas);
         self.drag_push_live = true;
+        // Оракул браузерного дыма (по образцу W7/W9): старт сессии — якоря,
+        // камера и viewport (screen↔world для headless-проверок, ?log=debug)
+        tracing::debug!(
+            target: "canvas_app",
+            anchors = ?self.scene.canvas.nodes.iter().map(|n| (n.id.as_str(), [n.x, n.y])).collect::<Vec<_>>(),
+            center = ?self.camera.position(),
+            zoom = self.camera.zoom(),
+            viewport = ?self.viewport_logical(),
+            "drag_push: сессия открыта (якоря = текущие позиции)"
+        );
     }
 
     /// FR-073: кадр физики — true, если были сдвиги (spatial/перерисовка).
@@ -5687,6 +5697,14 @@ impl App {
             }
             return false;
         }
+        // Оракул браузерного дыма: кто и где сдвинулся на этом шаге
+        // (id/позиции пассивных нод; группы в touched не должны попадать
+        // никогда — рамки непрозрачны для физики, см. drag_push::step)
+        tracing::debug!(
+            target: "canvas_app",
+            moved = ?touched.iter().filter_map(|&i| self.scene.canvas.nodes.get(i).map(|n| (n.id.as_str(), n.x, n.y))).collect::<Vec<_>>(),
+            "drag_push: шаг физики"
+        );
         for index in touched {
             if let Some(node) = self.scene.canvas.nodes.get(index) {
                 self.scene.spatial.update(index, node);
