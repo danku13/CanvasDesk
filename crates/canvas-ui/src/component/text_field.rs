@@ -1,12 +1,17 @@
 //! FR-068 W3: текстовое поле (модель/каретка/выделение/вёрстка) — перенос из kit.rs 1:1 (W3).
 //!
-//! Владелец волны (агент 3-c): дополнить `Props` + `impl Component` для
-//! text_field; TextFieldModel — стабильный API (FR-058).
+//! W3 (агент 3-c): слой компонентной модели ДОБАВЛЕН — [`TextFieldProps`]/
+//! [`TextField`] + `impl Component` (layout/paint/hit_test); [`TextFieldModel`]
+//! и [`text_field`] — стабильный API (FR-058), не менялись.
 
-use super::{KitPalette, KitState, TEXT_FIELD_PAD_H};
+use super::{
+    Component, KitPalette, KitState, TEXT_FIELD_HEIGHT, TEXT_FIELD_MIN_W, TEXT_FIELD_PAD_H,
+};
 use crate::geometry::{UiRect, UiVec2};
-use crate::layout::{constrain, stack, HAlign, VAlign};
+use crate::layout::{constrain, stack, HAlign, LayoutBackend, VAlign};
 use crate::measure::TextMeasurer;
+use crate::paint::Painter;
+use crate::widget::WidgetState;
 
 // === FR-058: Компоненты кита v2 ============================================
 //
@@ -223,11 +228,154 @@ pub fn text_field(
     }
 }
 
+// --- TextField: компонентная модель (FR-068 W3) -----------------------------
+
+/// Семейство дежурной раскладки [`TextField::layout`] — те же строковые
+/// данные, что в тестах кита (`test_support::FAMILY`) и `Family::Name`
+/// рендера (`canvas-render/text.rs`, CR-015).
+const FONT_FAMILY: &str = "Noto Sans Display";
+
+/// Кегль дежурной раскладки [`TextField::layout`] — как в тестах кита и в
+/// пилоте (`canvas-app/overlays.rs`: label текстового поля 13.0).
+const FONT_SIZE: f32 = 13.0;
+
+thread_local! {
+    /// Дежурный пул шрифтов standalone-раскладки [`TextField::layout`].
+    ///
+    /// `FontSystem::new()` дорогой (скан системных шрифтов — см. доку
+    /// `shaper.rs` «Почему собственный пул — lazy»), а сигнатура
+    /// [`Component::layout`] пул потребителя НЕ передаёт (инвариант «замер
+    /// тем же пулом, что рендер», CR-015, на компонентном уровне W3 даёт
+    /// потребитель, вызывающий [`text_field`] напрямую со своим пулом —
+    /// горячий путь). Standalone-путь лениво создаёт ОДИН пул на поток:
+    /// стоимость — первый вызов, далее переиспользуется.
+    static FONT_POOL: std::cell::RefCell<Option<cosmic_text::FontSystem>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Выполнить `f` с дежурным пулом ([`FONT_POOL`], ленивая инициализация).
+fn with_font_pool<R>(f: impl FnOnce(&mut cosmic_text::FontSystem) -> R) -> R {
+    FONT_POOL.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        f(slot.get_or_insert_with(cosmic_text::FontSystem::new))
+    })
+}
+
+/// Свойства [`TextField`] (декларативный вход кадра; FR-068 W3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFieldProps {
+    /// Подсказка пустого поля (рисует потребитель — `Painter::label` по
+    /// `text_area` из [`TextFieldLayout`]).
+    pub placeholder: String,
+    /// Желаемая ширина поля (ui px); клампится к [`TEXT_FIELD_MIN_W`]
+    /// (высота — [`TEXT_FIELD_HEIGHT`], константы кита).
+    pub width: f32,
+    /// Срез слотов палитры (контракт F-8: цвета — только слоты).
+    pub palette: KitPalette,
+}
+
+/// Текстовое поле — retained-компонент (FR-068 W3): `Props` + стабильная
+/// [`TextFieldModel`] (FR-058) + [`WidgetState`] (FR-057; `is_focused` →
+/// видимость каретки, `kit_state` — слот стиля состояния).
+///
+/// Разделение труда (контракт кита «цвет отдельно от геометрии», ввод
+/// компонент не перехватывает): [`Component::layout`] — rect КОНТЕЙНЕРА
+/// ([`text_field`]); [`Component::paint`] — ТОЛЬКО контейнер (заливка/рамка
+/// слотами + радиус шкалы). Текст/placeholder/каретку рисует ПОТРЕБИТЕЛЬ
+/// (`Painter::label` по `text_area` из [`TextFieldLayout`], каретка 1.5 px
+/// слотом `accent` — образец `canvas-app/overlays.rs`, секция TextField):
+/// усечение `ellipsis`/замер префикса — layout-данные с `TextMeasurer`,
+/// у paint замера нет — рисовать текст здесь недетерминированно по усечению.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextField {
+    /// Свойства кадра.
+    pub props: TextFieldProps,
+    /// Модель текста/каретки/селекции (стабильный API FR-058).
+    pub model: TextFieldModel,
+    /// Состояние виджета (hover/press/focus/…; FR-057).
+    pub state: WidgetState,
+}
+
+impl TextField {
+    /// Новое поле: модель и состояние — дефолтные (пустой текст, Normal).
+    pub fn new(props: TextFieldProps) -> Self {
+        Self {
+            props,
+            model: TextFieldModel::default(),
+            state: WidgetState::default(),
+        }
+    }
+}
+
+impl Component for TextField {
+    type Props = TextFieldProps;
+
+    fn props(&self) -> &Self::Props {
+        &self.props
+    }
+
+    /// Rect контейнера в слоте: [`text_field`] (constrain+stack по центру;
+    /// ширина — `props.width` с клампом к [`TEXT_FIELD_MIN_W`], высота —
+    /// [`TEXT_FIELD_HEIGHT`]). Backend не используется: геометрия поля —
+    /// чистая функция слота (паритет Native/Flex/Taffy тривиален, §Контракт-3
+    /// FR-068). Фокус каретки — `state.is_focused()`, состояние стиля —
+    /// `state.kit_state()` (сейчас `text_field` резервирует оба входа).
+    fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
+        let min = UiVec2::new(TEXT_FIELD_MIN_W, TEXT_FIELD_HEIGHT);
+        let max = UiVec2::new(self.props.width, TEXT_FIELD_HEIGHT);
+        let mut m = TextMeasurer::new();
+        let lay = with_font_pool(|fs| {
+            text_field(
+                slot,
+                min,
+                max,
+                &self.model,
+                &self.props.placeholder,
+                self.state.is_focused(),
+                self.state.kit_state(),
+                &self.props.palette,
+                &mut m,
+                fs,
+                FONT_FAMILY,
+                FONT_SIZE,
+            )
+        });
+        vec![lay.rect]
+    }
+
+    /// ТОЛЬКО контейнер (см. доку [`TextField`]): слоты `control_fill` /
+    /// (`control_border`, в фокусе — `accent`) / радиус RADIUS_CHIP — те же,
+    /// что у потребителя-пилота (`canvas-app/overlays.rs`). Пустой `rects` —
+    /// 0 items (нечего рисовать). Текст/каретку НЕ рисует.
+    fn paint(&self, painter: &mut Painter, rects: &[UiRect]) {
+        let Some(&rect) = rects.first() else {
+            return;
+        };
+        let border = if self.state.is_focused() {
+            self.props.palette.accent
+        } else {
+            self.props.palette.control_border
+        };
+        let style = super::panel::control_style_of(
+            self.props.palette.control_fill,
+            border,
+            self.props.palette.text,
+            canvas_core::tokens::RADIUS_CHIP,
+        );
+        painter.control(rect, &style);
+    }
+
+    // hit_test — дефолтный: ComponentHit::pick по rects (index 0 — контейнер).
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component::test_support::{font_system, palette_a, FAMILY};
-    use crate::component::{TEXT_FIELD_HEIGHT, TEXT_FIELD_MIN_W};
+    use crate::component::test_support::{font_system, palette_a, palette_b, FAMILY};
+    use crate::component::ComponentHit;
+    use crate::geometry::UiPoint;
+    use crate::layout::default_backend;
+    use crate::paint::{PaintItem, Painter};
     #[test]
     fn text_field_insert_at_start_middle_end() {
         let mut m = TextFieldModel::default();
@@ -538,6 +686,99 @@ mod tests {
         // Каретка клампнута к правому краю text_area
         assert!(lay.caret_x <= lay.text_area.right() + 0.01);
         assert!(lay.caret_x >= lay.text_area.x);
+    }
+
+    // --- TextField: компонентная модель (FR-068 W3) --------------------------
+    #[test]
+    fn text_field_component_layout_returns_container_rect_in_slot() {
+        let tf = TextField::new(TextFieldProps {
+            placeholder: "Поиск…".to_owned(),
+            width: 200.0,
+            palette: palette_a(),
+        });
+        let slot = UiRect::new(0.0, 0.0, 300.0, 60.0);
+        let rects = tf.layout(default_backend(), slot);
+        assert_eq!(rects.len(), 1, "layout — один rect контейнера");
+        // Ширина = props.width, высота = TEXT_FIELD_HEIGHT, центр слота.
+        assert!((rects[0].w - 200.0).abs() < 0.01);
+        assert!((rects[0].h - TEXT_FIELD_HEIGHT).abs() < 0.01);
+        assert!((rects[0].x - (300.0 - 200.0) / 2.0).abs() < 0.01);
+        let cy = slot.y + (slot.h - TEXT_FIELD_HEIGHT) / 2.0;
+        assert!((rects[0].y - cy).abs() < 0.01);
+        // Ширина клампится к TEXT_FIELD_MIN_W (width=10 → 80).
+        let narrow = TextField::new(TextFieldProps {
+            placeholder: String::new(),
+            width: 10.0,
+            palette: palette_b(),
+        });
+        let rects = narrow.layout(default_backend(), slot);
+        assert!((rects[0].w - TEXT_FIELD_MIN_W).abs() < 0.01, "кламп к min");
+    }
+    #[test]
+    fn text_field_component_paint_emits_container_only() {
+        let palette = palette_a();
+        let mut focused = TextField::new(TextFieldProps {
+            placeholder: "Поиск…".to_owned(),
+            width: 200.0,
+            palette,
+        });
+        focused.state.set_focused(true);
+        let slot = UiRect::new(0.0, 0.0, 300.0, TEXT_FIELD_HEIGHT);
+        let rects = focused.layout(default_backend(), slot);
+        let mut p = Painter::new();
+        focused.paint(&mut p, &rects);
+        assert!(!p.items().is_empty(), "paint эмитит контейнер");
+        assert_eq!(
+            p.items()[0],
+            PaintItem::Rect {
+                rect: rects[0],
+                fill: palette.control_fill,
+                border: palette.accent,
+                radius: canvas_core::tokens::RADIUS_CHIP,
+            },
+            "в фокусе: fill control_fill, рамка accent, радиус шкалы"
+        );
+        // Без фокуса — рамка control_border; ТЕКСТА/каретки в items нет
+        // (paint рисует только контейнер — доку TextField).
+        let unfocused = TextField::new(TextFieldProps {
+            placeholder: String::new(),
+            width: 200.0,
+            palette,
+        });
+        let mut p = Painter::new();
+        unfocused.paint(&mut p, &rects);
+        assert_eq!(
+            p.items()[0],
+            PaintItem::Rect {
+                rect: rects[0],
+                fill: palette.control_fill,
+                border: palette.control_border,
+                radius: canvas_core::tokens::RADIUS_CHIP,
+            }
+        );
+        // Пустой rects — 0 items (defensive: рисовать нечего).
+        let mut p = Painter::new();
+        focused.paint(&mut p, &[]);
+        assert!(p.items().is_empty(), "пустой rects — ничего не рисуем");
+    }
+    #[test]
+    fn text_field_component_hit_test_finds_container() {
+        let tf = TextField::new(TextFieldProps {
+            placeholder: String::new(),
+            width: 120.0,
+            palette: palette_b(),
+        });
+        let slot = UiRect::new(40.0, 50.0, 300.0, 60.0);
+        let rects = tf.layout(default_backend(), slot);
+        let r = rects[0];
+        let inside = UiPoint::new(r.x + r.w / 2.0, r.y + r.h / 2.0);
+        assert_eq!(
+            tf.hit_test(&rects, inside),
+            Some(ComponentHit { index: 0 }),
+            "hit_test дефолтный: контейнер — index 0"
+        );
+        let outside = UiPoint::new(slot.x - 1.0, slot.y - 1.0);
+        assert_eq!(tf.hit_test(&rects, outside), None);
     }
 
     // --- ScrollState: scroll_by/clamp/needs_scroll/max_offset ----------------
