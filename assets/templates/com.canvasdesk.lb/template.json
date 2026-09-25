@@ -2,7 +2,7 @@
   "id": "com.canvasdesk.lb",
   "name_en": "Load Balancer",
   "name_ru": "Балансировщик нагрузки",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "category": "backend",
   "description": "L7-балансировщик: модель M/M/c, время ответа кластера.",
   "description_en": "L7 load balancer: M/M/c cluster response time.",
@@ -36,12 +36,12 @@
     {
       "name": "next_hop_rps",
       "unit": "rps",
-      "expr": "$connections_per_sec"
+      "expr": "$rps"
     },
     {
       "name": "effective_service_rate",
       "unit": "rps",
-      "expr": "$server_rate × $servers"
+      "expr": "$service_rate × $servers"
     },
     {
       "name": "utilization",

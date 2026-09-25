@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-funnel-step",
+  "name_en": "Funnel Step Conversion",
+  "name_ru": "Пошаговая конверсия воронки",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Конверсия между двумя соседними шагами воронки — где именно теряются пользователи. В отличие от сквозной pa-funnel-conv (итог/старт) локализует проблемный шаг: правило приоритезации — чинить самый провальный шаг, а не самый заметный. Дополнительные шаги считайте каскадом нод: конверсия воронки = произведение пошаговых.",
+  "description_en": "Conversion between two adjacent funnel steps — pinpointing where users drop. Unlike the end-to-end pa-funnel-conv (final/first), it localizes the problem step: prioritization rule — fix the leakiest step, not the loudest one. Chain nodes for extra steps: overall funnel conversion = product of step conversions.",
+  "params": [
+    {
+      "name": "step_prev",
+      "type": "count",
+      "default": 5000,
+      "min": 0
+    },
+    {
+      "name": "step_next",
+      "type": "count",
+      "default": 2000,
+      "min": 0
+    }
+  ],
+  "expr": "$step_next / $step_prev",
+  "color": "#4A90E2",
+  "icon": "funnel"
+}

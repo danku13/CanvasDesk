@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-mau-projection",
+  "name_en": "MAU Projection",
+  "name_ru": "MAU-прогноз (закон Литтла)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Прогноз месячной аудитории без симуляций: MAU = установки в день × среднее время жизни пользователя в днях (закон Литтла для пользователей). Время жизни = 1 / месячный отток — подставьте из pa-avg-lifetime. Показывает главный рычаг роста MAU: не только приток, но и удержание — минус один день жизни часто стоит как +N установок.",
+  "description_en": "Monthly audience forecast without simulations: MAU = daily installs × average user lifetime in days (Little's law applied to users). Lifetime = 1 / monthly churn — take it from pa-avg-lifetime. Exposes the main MAU lever: not only inflow but retention — one extra lifetime day often equals +N installs.",
+  "params": [
+    {
+      "name": "daily_installs",
+      "type": "count",
+      "default": 500,
+      "min": 0
+    },
+    {
+      "name": "avg_lifetime_days",
+      "type": "count",
+      "default": 40,
+      "min": 1
+    }
+  ],
+  "expr": "$daily_installs × $avg_lifetime_days",
+  "color": "#4A90E2",
+  "icon": "users"
+}
