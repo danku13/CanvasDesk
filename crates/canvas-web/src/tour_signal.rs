@@ -11,8 +11,8 @@
 //!
 //! НЕ ВТОРГАЕТСЯ в `canvas-app`: весь вызов — через `web_sys::window()`
 //! + `js_sys::Reflect::get`, как и `js_glue::call`. App остаётся
-//! platform-нейтральным; вызов `emit(...)` идёт из `canvas-web` слоёв
-//! (toolbar / app_spawn / ime / fs_access…), не из App.
+//!   platform-нейтральным; вызов `emit(...)` идёт из `canvas-web` слоёв
+//!   (toolbar / app_spawn / ime / fs_access…), не из App.
 //!
 //! Сигналы (контракт): см. `docs/interface-objects/onboarding-v2-inline.md` §5.
 //!
@@ -45,8 +45,7 @@ pub fn emit_with_payload(name: &str, payload: &Option<String>) {
     // подключает bundle в конце body — теоретически возможен вызов
     // до DOMContentLoaded). Reflect::get возвращает undefined —
     // gracefully выходим.
-    let tour = js_sys::Reflect::get(&window, &"__canvasdeskTour".into())
-        .ok();
+    let tour = js_sys::Reflect::get(&window, &"__canvasdeskTour".into()).ok();
     let Some(tour) = tour else { return };
     if tour.is_undefined() || tour.is_null() {
         return;
