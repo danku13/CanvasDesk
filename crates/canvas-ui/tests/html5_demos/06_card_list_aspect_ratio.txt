@@ -1,0 +1,13 @@
+00 root x=0 y=0 w=1280 h=800
+01 col x=0 y=0 w=280 h=242
+02 leaf x=0 y=0 w=280 h=210
+03 leaf x=0 y=218 w=280 h=24
+04 col x=304 y=0 w=320 h=212
+05 leaf x=304 y=0 w=320 h=180
+06 leaf x=304 y=188 w=320 h=24
+07 col x=648 y=0 w=280 h=242
+08 leaf x=648 y=0 w=280 h=210
+09 leaf x=648 y=218 w=280 h=24
+10 col x=952 y=0 w=320 h=212
+11 leaf x=952 y=0 w=320 h=180
+12 leaf x=952 y=188 w=320 h=24
