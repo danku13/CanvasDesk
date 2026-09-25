@@ -1,0 +1,198 @@
+<!doctype html>
+<!-- Standalone HTML test page for the CanvasDesk inline-onboarding engine.
+     No Rust/WASM required — pure JS smoke test of the engine.
+
+     Usage:
+       1. Open this file directly in a browser (file://), or
+       2. Serve via `python3 -m http.server` from sdk/web-onboarding/.
+
+     Each button launches a scenario. The toolbar-tour anchors point at
+     real buttons on this page (their #ids are mocked to match the
+     real canvas-web ids). The other scenarios anchor on rect/canvas
+     regions; for the demo they degrade to centered tooltips (no
+     cutout) because there is no real canvas — that's fine for visual
+     inspection.
+-->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CanvasDesk Tour — standalone smoke test</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #14161a;
+        color: #d5d9e0;
+        font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .container { max-width: 980px; margin: 0 auto; padding: 24px; }
+      h1 { color: #f3f5f8; font-weight: 600; margin: 0 0 4px; }
+      h1 + p { color: #6b7480; margin: 0 0 24px; font-size: 13px; }
+      h2 {
+        color: #f3f5f8; font-size: 14px; font-weight: 600;
+        margin: 24px 0 8px;
+        border-bottom: 1px solid #2a3138; padding-bottom: 4px;
+      }
+      .scenarios {
+        display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+        margin-bottom: 24px;
+      }
+      .scenarios button {
+        background: #1d2128; color: #d5d9e0; border: 1px solid #333a44;
+        border-radius: 6px; font: inherit; padding: 12px 14px;
+        cursor: pointer; text-align: left;
+        display: flex; flex-direction: column; gap: 4px;
+      }
+      .scenarios button:hover { background: #262c35; }
+      .scenarios button b { color: #f3f5f8; font-weight: 600; font-size: 13px; }
+      .scenarios button small { color: #6b7480; font-size: 11px; }
+      .scenarios button:focus-visible {
+        outline: 2px solid #8ab4ff; outline-offset: 1px;
+      }
+
+      /* Mock w6-toolbar — same ids as the real canvas-web index.html. */
+      #w6-toolbar {
+        position: relative;
+        top: auto; right: auto;
+        display: flex; flex-wrap: wrap; justify-content: flex-end;
+        gap: 6px; max-width: 100%; margin-bottom: 24px;
+        padding: 8px; background: #1d2128; border: 1px solid #333a44;
+        border-radius: 8px;
+      }
+      #w6-toolbar button {
+        background: #262c35; color: #d5d9e0; border: 1px solid #333a44;
+        border-radius: 6px; font: 12px/1.4 system-ui, sans-serif;
+        padding: 6px 12px; cursor: pointer;
+      }
+      #w6-toolbar button:hover { background: #2e353f; }
+      #w6-toolbar #btn-tour { background: #2f6fda; border-color: #2f6fda; color: #fff; }
+
+      .canvas-mock {
+        background: #1a1c20; border: 1px dashed #333a44; border-radius: 8px;
+        height: 280px; display: flex; align-items: center; justify-content: center;
+        color: #6b7480; font-style: italic;
+      }
+      .canvas-mock::before { content: "mock canvas (real one renders via WebGPU)"; }
+
+      .log {
+        background: #0f1115; border: 1px solid #2a3138; border-radius: 6px;
+        padding: 8px 12px; font-family: monospace; font-size: 12px;
+        max-height: 200px; overflow-y: auto;
+      }
+      .log div { padding: 1px 0; }
+      .log .info { color: #8ab4ff; }
+      .log .warn { color: #ffb454; }
+      .log .error { color: #ff6b6b; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>CanvasDesk — inline-onboarding smoke test</h1>
+      <p>
+        Standalone HTML для проверки движка без Rust/WASM. Bundle:
+        <code>sdk/web-onboarding/canvasdesk-tour.js</code>.
+      </p>
+
+      <h2>Mock панели хранилища (W6)</h2>
+      <div id="w6-toolbar">
+        <button id="btn-tour" title="Открыть выбор тура">Тур</button>
+        <button id="btn-open" title="Открыть .canvas с диска">Открыть с диска…</button>
+        <button id="btn-recent" title="Переоткрыть последний канвас">Недавние</button>
+        <button id="btn-export" title="Скачать последнюю сохранённую версию">Экспорт .canvas</button>
+      </div>
+
+      <h2>Запуск сценариев</h2>
+      <div class="scenarios" id="scenarios"></div>
+
+      <h2>Mock canvas</h2>
+      <div class="canvas-mock"></div>
+
+      <h2>Лог движка</h2>
+      <div class="log" id="log"></div>
+    </div>
+
+    <script src="canvasdesk-tour.js"></script>
+    <script>
+      (function () {
+        if (!window.CanvasDeskTour) {
+          log("error", "CanvasDeskTour bundle missing — ensure canvasdesk-tour.js is served");
+          return;
+        }
+
+        // Tour instance with logging hook.
+        var tour = new CanvasDeskTour.Tour({
+          log: function (lvl, msg) { log(lvl, msg); },
+        });
+        window.__canvasdeskTour = tour;
+
+        // Wire the W6 "Тур" button to a simple picker (one-scenario
+        // default — for the multi-scenario picker see canvas-web
+        // index.html).
+        var btnTour = document.getElementById("btn-tour");
+        btnTour.addEventListener("click", function () {
+          tour.run(CanvasDeskTour.scenarios.toolbarTourScenario);
+        });
+
+        // Build the scenario cards.
+        var scenarios = [
+          { s: CanvasDeskTour.scenarios.toolbarTourScenario,
+            title: "Тур по панели хранилища",
+            desc: "5 шагов, anchor: #w6-toolbar / #btn-open / #btn-recent / #btn-export" },
+          { s: CanvasDeskTour.scenarios.firstRunInlineScenario,
+            title: "Первый запуск (интерактив)",
+            desc: "8 шагов, passive+waitFor(signal: canvas:note-created). Шаг 3 ждёт." },
+          { s: CanvasDeskTour.scenarios.paletteTourScenario,
+            title: "Палитра шаблонов",
+            desc: "5 шагов, passive+waitFor(signal: canvas:palette-opened)" },
+          { s: CanvasDeskTour.scenarios.calculationsTourScenario,
+            title: "Расчёты Numi",
+            desc: "7 шагов, anchor: rect (canvas-internal), tooltip сверху" },
+        ];
+
+        var host = document.getElementById("scenarios");
+        scenarios.forEach(function (it) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.innerHTML = "<b>" + escapeHtml(it.title) + "</b><small>" + escapeHtml(it.desc) + "</small>";
+          b.addEventListener("click", function () {
+            tour.run(it.s);
+          });
+          host.appendChild(b);
+        });
+
+        // Manual signal sender (for testing waitFor(signal) gates).
+        var sigBar = document.createElement("div");
+        sigBar.style.cssText = "margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap;";
+        ["canvas:note-created", "canvas:note-activated", "canvas:palette-opened"]
+          .forEach(function (sig) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.textContent = "emit: " + sig;
+            b.style.cssText = "background:#1d2128;color:#d5d9e0;border:1px solid #333a44;border-radius:6px;padding:6px 10px;cursor:pointer;font:12px monospace;";
+            b.addEventListener("click", function () {
+              tour.signal(sig);
+              log("info", "manual signal: " + sig);
+            });
+            sigBar.appendChild(b);
+          });
+        host.appendChild(sigBar);
+
+        function escapeHtml(s) {
+          return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+        function log(lvl, msg) {
+          var el = document.getElementById("log");
+          var line = document.createElement("div");
+          line.className = lvl;
+          line.textContent = "[" + lvl + "] " + msg;
+          el.appendChild(line);
+          el.scrollTop = el.scrollHeight;
+          if (window.console) (console[lvl] || console.log)("[tour] " + msg);
+        }
+        log("info", "CanvasDeskTour engine loaded — " + scenarios.length + " scenarios available");
+      })();
+    </script>
+  </body>
+</html>

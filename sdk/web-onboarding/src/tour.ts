@@ -41,7 +41,8 @@
  */
 
 import type {
-  AnchorSpec, TourHandle, TourHooks, TourOptions, TourScenario, TourStep,
+  AnchorSpec, HighlightOptions, TourHandle, TourHooks,
+  TourOptions, TourScenario, TourStep,
 } from "./types";
 import {
   computePlacement, getElementRect, measureTooltip,
@@ -110,7 +111,13 @@ export class Tour {
     const a = this.active;
     const rect = resolveAnchor(a.step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, a.step.highlight ?? undefined);
+    // Same passive-dim logic as activateStep — rAF refresh must not
+    // re-enable dim (would re-block canvas clicks every frame).
+    const opts: HighlightOptions = a.step.highlight ? { ...a.step.highlight } : {};
+    if (a.step.passive && (opts.dim === undefined || opts.dim === null)) {
+      opts.dim = false;
+    }
+    this.highlight.setAnchor(rect, opts);
     if (a.tooltipEl) {
       this.placeTooltip(a.tooltipEl, a.step.side ?? "bottom", rect);
     }
@@ -256,7 +263,17 @@ export class Tour {
     // Resolve anchor.
     const rect = resolveAnchor(step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, step.highlight ?? undefined);
+    // Passive steps (no Next button) — user must perform an action on the
+    // host surface. The dim overlay must NOT block pointer events, so
+    // clicks reach the underlying canvas (e.g. "create a note"). When
+    // the step has both `passive` and `waitFor`, the engine also forces
+    // auto-advance on resolve (see waitFor .then below) — otherwise the
+    // user would be stuck without a Next button.
+    const highlightOpts = step.highlight ?? {};
+    if (step.passive) {
+      highlightOpts.dim ??= false;
+    }
+    this.highlight.setAnchor(rect, highlightOpts);
 
     // Build the tooltip.
     const ctx = {
@@ -321,7 +338,11 @@ export class Tour {
         .then(() => {
           if (!a.wait) return;
           a.wait.resolved = true;
-          if (a.scenario.autoAdvance) this.next();
+          // Passive step (no Next button) — waitFor resolving is the
+          // only path forward. Always advance, regardless of
+          // scenario.autoAdvance. For non-passive steps, respect the
+          // scenario.autoAdvance flag (default false — user clicks Next).
+          if (a.scenario.autoAdvance || step.passive) this.next();
         })
         .catch((e) => {
           if (e instanceof WaitForError) {
