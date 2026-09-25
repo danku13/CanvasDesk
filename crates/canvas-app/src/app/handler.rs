@@ -309,12 +309,15 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме.
+                // Правка владельца 2026-09-26: тултипы — на НЕПРОЗРАЧНОЙ
+                // подложке (меню-тон, α 1.0) с переносом ≤ 10 слов в строке
+                // (app::tooltip) — голый текст не читался на фоне канваса.
                 // Main stage — модален: тултипы живого канваса глушатся
                 // (иначе тултип «просвечивает» поверх затемнения, дефект
                 // скриншота — stage должен быть единственным источником
                 // контента поверх затемнения)
                 if self.main_stage.is_none() {
-                    let mut tooltip_texts: Vec<OwnedScreenText> = Vec::new();
+                    let mut tooltip_cards: Vec<tooltip::TooltipCard> = Vec::new();
                     if let Some(file) = self.hovered.and_then(|index| {
                         self.scene.canvas.nodes.get(index).and_then(|node| {
                             (node.broken_link == Some(true))
@@ -322,35 +325,19 @@ impl ApplicationHandler<AppEvent> for App {
                                 .flatten()
                         })
                     }) {
-                        // Ограничиваем правым краём окна, чтобы длинный путь
-                        // не вылез за экран (width — только клип-бounds)
-                        let viewport = self.viewport_logical();
-                        let origin_x = (self.cursor[0] + 14.0)
-                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        tooltip_texts.push(OwnedScreenText {
-                            text: self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
-                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                            width: TOOLTIP_WIDTH,
-                            font_size: 13.0,
-                            color: Color::rgb(0xd4, 0xd4, 0xd4),
-                            align: TextAlign::Left,
-                        });
+                        tooltip_cards.push(tooltip::TooltipCard::single(
+                            self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
+                            Color::rgb(0xd4, 0xd4, 0xd4),
+                        ));
                     }
                     // Тултип ошибки формульной строки (FR-013, правка 4): курсор
                     // над бейджем «!» (зоны — с прошлого кадра) — сообщение об
                     // ошибке у курсора; так видно, ЧТО именно не так в расчёте
                     if let Some(hit) = self.expr_error_hit_at(self.cursor) {
-                        let viewport = self.viewport_logical();
-                        let origin_x = (self.cursor[0] + 14.0)
-                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        tooltip_texts.push(OwnedScreenText {
-                            text: hit.message.clone(),
-                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                            width: TOOLTIP_WIDTH,
-                            font_size: 13.0,
-                            color: Color::rgb(0xe5, 0x5c, 0x5c),
-                            align: TextAlign::Left,
-                        });
+                        tooltip_cards.push(tooltip::TooltipCard::single(
+                            hit.message.clone(),
+                            Color::rgb(0xe5, 0x5c, 0x5c),
+                        ));
                     }
                     // FR-045 F-5 v1/v2: лейблы порта канваса (qualified-адрес
                     // R-5) — точечная цель, приоритет над линейными тултипами:
@@ -371,43 +358,29 @@ impl ApplicationHandler<AppEvent> for App {
                     // §3.4, Q8) — курсор над усечённой строкой узкой ноды:
                     // полная формула у курсора (нейтральный тон — не ошибка)
                     if let Some(hit) = self.formula_ellipsis_hit_at(self.cursor) {
-                        let viewport = self.viewport_logical();
-                        let origin_x = (self.cursor[0] + 14.0)
-                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        tooltip_texts.push(OwnedScreenText {
-                            text: hit.message.clone(),
-                            origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                            width: TOOLTIP_WIDTH,
-                            font_size: 13.0,
-                            color: Color::rgb(0xd4, 0xd4, 0xd4),
-                            align: TextAlign::Left,
-                        });
+                        tooltip_cards.push(tooltip::TooltipCard::single(
+                            hit.message.clone(),
+                            Color::rgb(0xd4, 0xd4, 0xd4),
+                        ));
                     }
                     if let Some(lines) = port_label.clone() {
-                        let viewport = self.viewport_logical();
-                        let origin_x = (self.cursor[0] + 14.0)
-                            .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                        for (row, line) in lines.iter().enumerate() {
-                            tooltip_texts.push(OwnedScreenText {
-                                text: line.text.clone(),
-                                origin: [
-                                    origin_x.max(0.0),
-                                    self.cursor[1] + 18.0 + (row as f32) * 16.0,
-                                ],
-                                width: TOOLTIP_WIDTH,
-                                font_size: 13.0,
-                                // Тон строки (v2): unmapped-исток — янтарный
-                                // акцент анализа (тот же, что у тултипа
-                                // unmapped-ребра); значения — спокойный
-                                // сине-серый акцент потока значений (v1)
-                                color: if line.unmapped {
-                                    Color::rgb(0xf5, 0xa6, 0x23)
-                                } else {
-                                    Color::rgb(0x9c, 0xc3, 0xe6)
-                                },
-                                align: TextAlign::Left,
-                            });
-                        }
+                        // Тон строки (v2): unmapped-исток — янтарный
+                        // акцент анализа (тот же, что у тултипа
+                        // unmapped-ребра); значения — спокойный
+                        // сине-серый акцент потока значений (v1)
+                        tooltip_cards.push(tooltip::TooltipCard::rows(
+                            lines
+                                .into_iter()
+                                .map(|line| {
+                                    let color = if line.unmapped {
+                                        Color::rgb(0xf5, 0xa6, 0x23)
+                                    } else {
+                                        Color::rgb(0x9c, 0xc3, 0xe6)
+                                    };
+                                    (line.text, color)
+                                })
+                                .collect(),
+                        ));
                     }
                     // FR-050 Р-3 (этап C): тултип unmapped-ребра «проблема +
                     // решение» (контракт Р-3 — ровно два пункта): курсор над
@@ -445,18 +418,11 @@ impl ApplicationHandler<AppEvent> for App {
                                 } else {
                                     self.tr(keys::TOOLTIP_UNMAPPED_SLOT).to_owned()
                                 };
-                                let viewport = self.viewport_logical();
-                                let origin_x = (self.cursor[0] + 14.0)
-                                    .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                                tooltip_texts.push(OwnedScreenText {
+                                // Янтарный акцент анализа (severity warning)
+                                tooltip_cards.push(tooltip::TooltipCard::single(
                                     text,
-                                    origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                                    width: TOOLTIP_WIDTH,
-                                    font_size: 13.0,
-                                    // Янтарный акцент анализа (severity warning)
-                                    color: Color::rgb(0xf5, 0xa6, 0x23),
-                                    align: TextAlign::Left,
-                                });
+                                    Color::rgb(0xf5, 0xa6, 0x23),
+                                ));
                             }
                         }
                     }
@@ -522,22 +488,27 @@ impl ApplicationHandler<AppEvent> for App {
                                     }
                                 }
                             };
-                            let viewport = self.viewport_logical();
-                            let origin_x = (self.cursor[0] + 14.0)
-                                .min(viewport[0].max(0.0) - TOOLTIP_WIDTH.max(0.0));
-                            tooltip_texts.push(OwnedScreenText {
+                            // Спокойный сине-серый акцент потока значений
+                            // (тултип источника, не диагностика)
+                            tooltip_cards.push(tooltip::TooltipCard::single(
                                 text,
-                                origin: [origin_x.max(0.0), self.cursor[1] + 18.0],
-                                width: TOOLTIP_WIDTH,
-                                font_size: 13.0,
-                                // Спокойный сине-серый акцент потока значений
-                                // (тултип источника, не диагностика)
-                                color: Color::rgb(0x9c, 0xc3, 0xe6),
-                                align: TextAlign::Left,
-                            });
+                                Color::rgb(0x9c, 0xc3, 0xe6),
+                            ));
                         }
                     }
-                    screen_bands.push(UiLayer::Popups, Vec::new(), tooltip_texts);
+                    // Сборка тултипов: измеренные подложки + перенесённые
+                    // строки (app::tooltip; замер под глобальным guard в
+                    // коротком скоупе — locking-функций внутри нет)
+                    let palette = self.effective_palette();
+                    let (tooltip_quads, tooltip_texts) = tooltip::layout_tooltips(
+                        tooltip_cards,
+                        self.cursor,
+                        self.viewport_logical(),
+                        self.scale_factor(),
+                        palette.menu_fill,
+                        palette.palette_border,
+                    );
+                    screen_bands.push(UiLayer::Popups, tooltip_quads, tooltip_texts);
                 }
                 // T21: модальный диалог (screen-space): панель + тексты +
                 // кнопки; рендер после битой ссылки — поверх всего канваса.
