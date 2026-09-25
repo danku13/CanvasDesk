@@ -1,5 +1,44 @@
 ## 2026-09-25 — feat(node): FR-072 разделение заголовка ноды и текста тела — явный canvasdesk.title, однострочный редактор в шапке, миграция legacy-первой строки
 
+---
+
+## 2026-09-25 — feat(i18n/templates): FR-040 v2 — англоязычные шаблоны + кнопка переключения языка в угловом кластере
+
+- **Агент:** Super Z (запрос владельца: «реализовать англоязычные шаблоны и вставлять англоязычные шаблоны при включении английского языка; вынести кнопку переключения языка в интерфейс рядом с переключением тёмной/светлого стиля»; план — в Telegram, отчёт после каждого этапа, финальное саммари).
+
+### Work Log
+- **Модель (`canvas-core/templates.rs`):**
+  - `TemplateManifest::display_name(language: Language) -> &str` — было `display_name()` (всегда Ru); теперь `Language::En` возвращает `name` (каноническое `name_en`/`name`), `Ru` — `name_ru` с фолбэком на `name` (старые моки/манифесты без `name_ru`). Паритет с `SchemeManifest::display_name(ru)`.
+  - `TemplateManifest::display_description(language: Language) -> &str` — новое: `Language::En` → `description_en` (если задан и не пуст), иначе `description` (фолбэк — инвариант полноты: показ всегда есть). `Ru` → `description`.
+  - `instantiate_with_language(manifest, overrides, node_id, x, y, language) -> Result<Node, InstantiateError>` — новое: снапшот имени (`TemplateRef.name`) берётся по языку. `instantiate(...)` — тонкая обёртка с `Language::Ru` (обратная совместимость; MCP-путь остаётся на дефолте — у MCP нет контекста языка пользователя).
+- **Вызовы (`canvas-app`):**
+  - `app/overlays.rs` (wheel-меню): `display_name(self.settings.language)` для подписи сектора шаблона.
+  - `app/overlays.rs` (drag-превью): `instantiate_with_language(..., self.settings.language)` — ghost-превью с именем на текущем языке.
+  - `app/overlays.rs` (update шаблона): `updated.name = display_name(self.settings.language)`, toast «Шаблон обновлён» с `{name}` на текущем языке.
+  - `app/support.rs` (`template_card_row`): принимает `language`, рисует имя/описание по языку (было: всегда `name_ru`/`description`).
+  - `app.rs` (`instantiate_template_at`): `instantiate_with_language(..., self.settings.language)` — ноды, созданные через GUI, получают имя по языку.
+  - `template_ui.rs` (`panel_rows`): принимает `language`, фильтр — двуязычный: совпадение по `name_en` ИЛИ `name_ru` ИЛИ `description` ИЛИ `description_en` ИЛИ `id`. Английский пользователь, набирающий «load», находит «Load Balancer»; русский — «баланс» — находит по `name_ru`/`description`.
+- **Кнопка переключения языка (новый угловой элемент):**
+  - `lib.rs`: `language_button_rect(corner, viewport)` — между `theme_button_rect` и `help_button_rect`. Кластер: ⚙(настройки) → ☼(тема) → «RU/EN»(язык) → «?»(помощь). `help_button_rect` теперь отсчитывается от `language_button_rect` (сдвиг на одну позицию внутрь экрана).
+  - `app/ui_registry.rs`: hit-rect `language-button` зарегистрирован в `CORNER_BUTTONS` (поверх всего — Block-политика).
+  - `app/overlays.rs`: рендер кнопки — подложка + hover-аффорданс (как у соседей) + screen-текст «RU»/«EN» (код активного языка; конвенция FR-040 §4 — подпись языка собой).
+  - `app/input.rs` + `app.rs`: клик по `language-button` → `toggle_language()` (Ru↔En, toast «Язык интерфейса: {lang}» с подстановкой `native_label()`, persist `config.toml`). Применение — на лету (тексты читаются по кадру; шаблоны — `display_name(language)` в палитре/wheel; ноды-шаблоны, созданные ранее, сохраняют снапшот имени — FR-023).
+  - `lib.rs` (тесты): `help_button_next_to_language_button` (новое имя; было `help_button_next_to_theme_button` — обновлено), `language_button_next_to_theme_button` (новый тест — паритет с `theme_button_next_to_settings_button`).
+  - `i18n.rs`: ключ `TOAST_LANGUAGE_TOGGLED` + RU/EN значения (`Язык интерфейса: {lang}` / `Interface language: {lang}`).
+- **Верстка:**
+  - `canvas-render/search_ui.rs::layout`: на узких окнах (< 1024 px) целевая ширина панели поиска уменьшается на 40 px (PANEL_WIDTH 460 → 420). Без этого угловой кластер из 4 кнопок (вырос на одну с добавлением кнопки языка) пересекался с панелью поиска на 800×560 (G4-линт FR-054).
+- **Тесты:**
+  - `templates_schema.rs::builtin_manifests_are_bilingual`: добавлены ассерты `display_name(Ru)=="Балансировщик нагрузки"`, `display_name(En)=="Load Balancer"`, `display_description(En)` для `com.canvasdesk.lb`.
+  - `templates.rs::instantiate_yields_plain_text_node_except_template_ext`: добавлены ассерты `instantiate` (дефолт Ru) и `instantiate_with_language(..., En)` — снапшот имени по языку.
+  - Гейты: `cargo test -p canvas-core` (399+8 ok), `-p canvas-app --lib` (375 ok) + integration (43 ok), `-p canvas-scene` (115 ok), `-p canvas-mcp` (20 ok), `-p canvas-render --lib` (364 ok), `-p canvas-ui --lib` (163 ok). clippy --workspace -D warnings — чисто. fmt --check — чисто. wasm_gate --check — зелёный (компиляция под wasm32-unknown-unknown OK, артефакт rlib 41M).
+
+### Stage Summary
+- При EN-локали интерфейс показывает английские имена и описания шаблонов: палитра (Ctrl+P), wheel-меню (Shift+клик), drag-превью, тост «Шаблон обновлён», новые ноды — с английским снапшотом имени в заголовке. Поиск работает двуязычно. Названия шаблонов в `assets/templates/*/template.json` не правились — все 45 уже имели `name_en`/`name_ru`/`description_en`.
+- Кнопка «RU/EN» в угловом кластере между темой и «?» — клик циклически переключает Ru↔En с toast-подтверждением, persist `language = "en"`/`"ru"` в `config.toml`. Старые конфиги без поля `language` продолжают работать (serde default `Ru`). Переключатель в модалке настроек (FR-039) сохранён — не убран, теперь дубль: быстрый toggle в кластере + точный выбор в настройках.
+- Известные ограничения (v1): (1) существующие ноды-шаблоны сохраняют снапшот имени, выбранный в момент инстанциации (FR-023) — переключение языка НЕ переименовывает уже созданные ноды; (2) MCP-путь (`canvas-scene/mcp.rs::template_instantiate`) остаётся на дефолт Ru — у MCP нет контекста языка пользователя; (3) контент `user-docs/*.md` и названия схем в `schemes.rs` — отдельная история (у схем уже был `display_name(ru: bool)`, в этом FR не трогалось).
+- Файлы: `crates/canvas-core/src/templates.rs`, `crates/canvas-core/tests/templates_schema.rs`, `crates/canvas-app/src/lib.rs`, `crates/canvas-app/src/app.rs`, `crates/canvas-app/src/app/support.rs`, `crates/canvas-app/src/app/overlays.rs`, `crates/canvas-app/src/app/input.rs`, `crates/canvas-app/src/app/ui_registry.rs`, `crates/canvas-app/src/i18n.rs`, `crates/canvas-app/src/template_ui.rs`, `crates/canvas-render/src/search_ui.rs`.
+
+
 - **Агент:** Super Z (запрос владельца: «разделить заголовок ноды и текст внутри
   ноды, чтобы первая строка не становилась заголовком»; план работ — в Telegram,
   отчёт после каждого этапа, финальное саммари).
@@ -6172,3 +6211,11 @@ Stage Summary:
 - **Паритет:** `flex_vs_taffy_parity` — 1000/1000 = 100% побитово (splitmix64, ≥80% гейт); 15/15 golden demos (10 HTML5 W1 + 5 CD W2) общие для обоих backend'ов; demo-12 — двойной эталон C3.
 - **Гейты:** canvas-ui default 163+61+6+16 / taffy 189+61+12+13+16 / mock-shaper 163+6+16+11; workspace зелёный; clippy ×3 конфигурации; fmt; deny; no-default zero-dep; perf-flex 201.5 μs < 1 мс (baseline осознанно перегенерирован со стаба); wasm дельта +692 байта raw / −33 gzip (8.83 МБ raw / 3.85 gzip; raw ≤8 превышен ДО W2 — решение владельца; RUSTFLAGS `--cfg=web_sys_unstable_apis` восстановлен для web-sys 0.3.104 FS-Access).
 - **Доки:** ui-kit §5/§6, DEPENDENCIES.md, FR-068 (статус + чеклист W2 ✅ + changelog), этот worklog; `.cargo/config.toml` incremental=false (диск dev-машины).
+
+## 2026-09-25 — feat(prototypes): «расталкивание при драге» в prototype-unified.html (якоря + MTV-ореол + возврат)
+
+- **Запрос владельца:** при перетаскивании одной ноды остальные не должны перекрываться/блокироваться коллизией — они «расталкиваются» force-directed-стилем: якорятся на своих местах, уступают дорогу, съезжаются обратно после ухода активной ноды; если активная встала «между» — уехавшие получают новые якоря.
+- **Реализация (ЧАСТЬ X в prototype-unified.html, ~120 строк, без зависимостей):** модель «якорь + позиционные коррекции»: у каждой ноды якорь = зафиксированная позиция (`PH.anchors`); активная нода жёстко следует за курсором; на соседей действует (1) пружина возврата к якорю (lerp `ret`), (2) выталкивание ореолом активной (минимальный сдвиг по AABB, доля `pushFrac` за кадр, ореол = margin + предиктивное упреждение по сглаженной скорости курсора, cap 110px), (3) взаимное расталкивание соседей 3 итерации (цепочки). Без сил/скоростей — только lerp + MTV: стабильно, 60 fps, детерминированно переносится в canvas-core один-в-один. `phCommitDrop` на mouseup: якорь активной фиксируется; чей старый якорь накрыт ореолом брошенной ноды — получают новый якорь на вытесненной позиции, остальные плавно возвращаются.
+- **Пульт:** новая группа «Драг · расталкивание» — тумблеры (расталкивание, якоря/ореол-диагностика, предиктивное упреждение), слайдеры «ореол» 0–36px и «жёсткость возврата» 0,04–0,40, кнопка «вернуть все якоря»; resetAll тоже пересоздаёт якоря. Пунктирные призраки якорей (фиолетовый, `PAL.sel`) + диагностический контур ореола (accent).
+- **Самопроверка (headless Chromium, agent-browser):** 0 ошибок консоли; сценарии мышью: драг `b` сквозь `o` → o вытолкнута на 70px с якоря (1020,90→1020,160), после ухода активной o вернулась (disp=0); drop `b` прямо на якорь `lb` (899,584) → lb вытолкнут и перезакреплён на (899,754); повторный драг lb → возврат прочих на якоря подтверждён. Выловлено и исправлено: инверсия направлений в MTV (пуш по минимальной оси) и NaN ореола (`n.h` не существует — высота из layout `phH(n)`).
+- **Гейты:** Rust-код не тронут; прототип проверен живым прогоном в браузере (скриншоты середины драга с панелями/подсказками в scripts/ сессии).

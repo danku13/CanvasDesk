@@ -1792,7 +1792,11 @@ impl App {
             return true;
         }
         if event.logical_key == Key::Named(NamedKey::Enter) && !event.repeat {
-            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            let rows = template_panel_rows(
+                &self.templates,
+                &self.template_panel,
+                self.settings.language,
+            );
             // FR-024: выделение — ординал среди строк-шаблонов (секции —
             // заголовки, не цели)
             if let Some(row_idx) = template_row_of_ordinal(&rows, self.template_panel.selected) {
@@ -1808,13 +1812,21 @@ impl App {
             return true;
         }
         if event.logical_key == Key::Named(NamedKey::ArrowDown) && !event.repeat {
-            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            let rows = template_panel_rows(
+                &self.templates,
+                &self.template_panel,
+                self.settings.language,
+            );
             self.template_panel.move_selection(1, &rows);
             self.request_redraw();
             return true;
         }
         if event.logical_key == Key::Named(NamedKey::ArrowUp) && !event.repeat {
-            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            let rows = template_panel_rows(
+                &self.templates,
+                &self.template_panel,
+                self.settings.language,
+            );
             self.template_panel.move_selection(-1, &rows);
             self.request_redraw();
             return true;
@@ -1873,7 +1885,11 @@ impl App {
             instances.append(&mut strip_instances);
             texts.append(&mut strip_texts);
         } else {
-            let rows = template_panel_rows(&self.templates, &self.template_panel);
+            let rows = template_panel_rows(
+                &self.templates,
+                &self.template_panel,
+                self.settings.language,
+            );
             // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
@@ -2028,6 +2044,7 @@ impl App {
                             border,
                             &palette,
                             icon_tint,
+                            self.settings.language,
                             &mut instances,
                             &mut texts,
                             &mut measurer,
@@ -2053,12 +2070,13 @@ impl App {
         if let Some(drag) = &self.template_drag {
             if drag.active {
                 if let Some(manifest) = self.templates.list().get(drag.index) {
-                    if let Ok(mut preview) = canvas_core::templates::instantiate(
+                    if let Ok(mut preview) = canvas_core::templates::instantiate_with_language(
                         manifest,
                         &BTreeMap::new(),
                         "preview".to_owned(),
                         0.0,
                         0.0,
+                        self.settings.language,
                     ) {
                         fit_template_node_height(&mut preview);
                         let world = self.cursor_world();
@@ -2186,6 +2204,7 @@ impl App {
                     },
                     palette,
                     icon_tint,
+                    self.settings.language,
                     &mut instances,
                     &mut texts,
                     &mut measurer,
@@ -2327,8 +2346,10 @@ impl App {
                         [px - 8.0, py - 14.0, 16.0, 16.0],
                         icon_tint,
                     ));
-                    let (line1, line2) =
-                        split_two_lines(manifest.display_name(), template_ui::WHEEL_TPL_TEXT_CHARS);
+                    let (line1, line2) = split_two_lines(
+                        manifest.display_name(self.settings.language),
+                        template_ui::WHEEL_TPL_TEXT_CHARS,
+                    );
                     let push_line = |text: String, dy: f32| OwnedScreenText {
                         text,
                         origin: [px - 32.0, py + dy],
@@ -3270,8 +3291,9 @@ impl App {
                 updated.icon = manifest.icon.clone();
                 updated.color = manifest.color.clone();
                 // FR-023: имя шаблона тоже синхронизируется с манифестом
-                // (заголовок ноды — актуальное имя из реестра)
-                updated.name = Some(manifest.display_name().to_owned());
+                // (заголовок ноды — актуальное имя из реестра).
+                // FR-040 v2: имя берётся по текущему языку интерфейса.
+                updated.name = Some(manifest.display_name(self.settings.language).to_owned());
                 let mut params = BTreeMap::new();
                 for spec in &manifest.params {
                     let value = template.params.get(&spec.name).cloned().unwrap_or(
@@ -3295,7 +3317,7 @@ impl App {
                 self.show_toast(self.trf(
                     keys::TOAST_TEMPLATE_UPDATED,
                     &[
-                        ("{name}", manifest.display_name()),
+                        ("{name}", manifest.display_name(self.settings.language)),
                         ("{version}", manifest.version.as_str()),
                     ],
                 ));
@@ -3577,7 +3599,37 @@ impl App {
             border: color_to_rgba(palette.title),
             params: [8.0, 0.0, 0.0, 1.0],
         });
-        // FR-027: кнопка «?» — третий элемент кластера (настройки/тема/помощь):
+        // FR-040 v2: кнопка переключения языка (RU/EN) — третий элемент
+        // кластера (⚙ → ☼ → RU/EN → ?). Иконка — короткий код активного
+        // языка (2 буквы), чтобы не зависеть от покрытия шрифтов глифами
+        // эмодзи. Hover-аффорданс как у соседних кнопок.
+        let language_button = language_button_rect(self.settings.button_corner, viewport);
+        let language_hovered = point_in_rect(language_button, self.cursor);
+        instances.push(CardInstance {
+            pos: [language_button[0], language_button[1]],
+            size: [language_button[2], language_button[3]],
+            fill: if language_hovered {
+                hover_fill(palette.menu_fill)
+            } else {
+                palette.menu_fill
+            },
+            border: [0.0; 4],
+            params: [8.0, 0.0, 0.0, 0.0],
+        });
+        texts.push(OwnedScreenText {
+            // Код языка — на языке самого языка («RU»/«EN»), конвенция
+            // FR-040 §4 (названия в переключателе — на языке самого языка).
+            text: match self.settings.language {
+                canvas_core::Language::Ru => "RU".to_owned(),
+                canvas_core::Language::En => "EN".to_owned(),
+            },
+            origin: [language_button[0], icon_top(language_button, 13.0)],
+            width: language_button[2],
+            font_size: 13.0,
+            color: palette.title,
+            align: TextAlign::Center,
+        });
+        // FR-027: кнопка «?» — четвёртый элемент кластера (⚙/тема/язык/помощь):
         // вход в меню документации и онбординга; hover-аффорданс как у ⚙
         let help_button = help_button_rect(self.settings.button_corner, viewport);
         let help_hovered = point_in_rect(help_button, self.cursor);

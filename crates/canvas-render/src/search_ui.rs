@@ -321,10 +321,19 @@ pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout 
     }
 
     // Ширина: желаемая PANEL_WIDTH, потолок — полезная ширина окна.
+    // FR-040 v2: на узких окнах (< 1024 px) сужаем панель на 40 px —
+    // освобождаем место угловому кластеру (⚙/☼/RU-EN/?), выросшему на
+    // одну кнопку (язык). Панель топ-центр, кластер — в углу; на 800 px
+    // без сужения они пересекаются (G4-линт FR-054; WASM-аудит верстки).
+    let width_target = if window_w < 1024.0 {
+        PANEL_WIDTH - 40.0
+    } else {
+        PANEL_WIDTH
+    };
     let width = constrain(
         UiVec2::new(0.0, 0.0),
         UiVec2::new(available, f32::INFINITY),
-        UiVec2::new(PANEL_WIDTH, 1.0),
+        UiVec2::new(width_target, 1.0),
     )
     .x;
     // Окно прокрутки клампится к длине списка (scroll_top задаётся извне).

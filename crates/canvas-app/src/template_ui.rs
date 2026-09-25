@@ -326,7 +326,19 @@ pub fn row_of_ordinal(rows: &[PanelRow], ordinal: usize) -> Option<usize> {
 /// группировка по категориям с заголовками секций (порядок реестра,
 /// паттерн Miro Template picker); при поиске/фильтре — плоский список
 /// совпадений (секции не имеют смысла в результатах поиска).
-pub fn panel_rows(registry: &TemplateRegistry, panel: &TemplatePanel) -> Vec<PanelRow> {
+///
+/// FR-040 v2: фильтр — двуязычный: совпадение по `name_en` ИЛИ `name_ru` ИЛИ
+/// `description` ИЛИ `description_en` ИЛИ `id`. Английский пользователь,
+/// набирающий «load», находит «Load Balancer» (`name_en`) и шаблоны с
+/// этим словом в `description_en`; русский — «баланс» — находит по
+/// `name_ru`/`description`. Снапшот имени на момент вставки берётся
+/// по активному языку (`TemplateManifest::display_name(language)` в
+/// рендере карточки и `instantiate_with_language`).
+pub fn panel_rows(
+    registry: &TemplateRegistry,
+    panel: &TemplatePanel,
+    language: canvas_core::Language,
+) -> Vec<PanelRow> {
     let query = panel.filter.to_lowercase();
     let matches = |manifest: &TemplateManifest| -> bool {
         if let Some(category) = &panel.category {
@@ -336,9 +348,20 @@ pub fn panel_rows(registry: &TemplateRegistry, panel: &TemplatePanel) -> Vec<Pan
         }
         query.is_empty()
             || manifest.name.to_lowercase().contains(&query)
+            || manifest
+                .name_ru
+                .as_deref()
+                .is_some_and(|n| n.to_lowercase().contains(&query))
             || manifest.description.to_lowercase().contains(&query)
+            || manifest
+                .description_en
+                .as_deref()
+                .is_some_and(|d| d.to_lowercase().contains(&query))
             || manifest.id.to_lowercase().contains(&query)
     };
+    // (аргумент language — индикатор намерения: фильтр билингвален и
+    //  работает для любого языка; в будущем — упреждающее ранжирование)
+    let _ = language;
     let grouped = panel.filter.is_empty() && panel.category.is_none();
     if !grouped {
         return registry
@@ -1139,7 +1162,7 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.open = true;
         // Пустой фильтр — секции по категориям + все 5 шаблонов
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         assert_eq!(template_indexes(&rows).len(), 5);
         assert_eq!(
             rows.iter()
@@ -1149,22 +1172,28 @@ mod tests {
         );
         // По имени (регистр не важен) — плоский список без секций
         panel.insert_str("load");
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         assert_eq!(template_indexes(&rows), vec![0]);
         assert!(rows.iter().all(|r| matches!(r, PanelRow::Template(_))));
         // По id
         panel.filter.clear();
         panel.cursor = 0;
         panel.insert_str("mock.db");
-        assert_eq!(template_indexes(&panel_rows(&registry, &panel)), vec![1]);
+        assert_eq!(
+            template_indexes(&panel_rows(&registry, &panel, canvas_core::Language::Ru)),
+            vec![1]
+        );
         // По описанию
         panel.filter.clear();
         panel.cursor = 0;
         panel.insert_str("партиции");
-        assert_eq!(template_indexes(&panel_rows(&registry, &panel)), vec![4]);
+        assert_eq!(
+            template_indexes(&panel_rows(&registry, &panel, canvas_core::Language::Ru)),
+            vec![4]
+        );
         // Мимо — пусто
         panel.filter = "ghost".to_owned();
-        assert!(panel_rows(&registry, &panel).is_empty());
+        assert!(panel_rows(&registry, &panel, canvas_core::Language::Ru).is_empty());
     }
 
     #[test]
@@ -1173,7 +1202,7 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.open = true;
         panel.category = Some("backend".to_owned());
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         let indexes = template_indexes(&rows);
         assert_eq!(indexes.len(), 2);
         assert_eq!(registry.list()[indexes[0]].category, "backend");
@@ -1185,7 +1214,7 @@ mod tests {
         // Секции — в порядке реестра; шаблоны внутри — свои индексы
         let registry = registry();
         let panel = TemplatePanel::new();
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         let categories: Vec<&str> = rows
             .iter()
             .filter_map(|row| match row {
@@ -1279,7 +1308,7 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
         let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
@@ -1509,7 +1538,7 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         let total = template_row_count(&rows);
         assert!(panel.move_selection(1, &rows));
         assert_eq!(panel.selected, 1);
@@ -1533,7 +1562,7 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
         let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
