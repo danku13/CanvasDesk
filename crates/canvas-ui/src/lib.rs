@@ -57,8 +57,8 @@ pub use hit::{HitStack, HitTarget};
 pub use keyboard::{Activation, FocusRing, KeyboardRouter};
 pub use layer::UiLayer;
 pub use layout::{
-    constrain, grid_cells, pad, stack, Child, Column, CrossAlign, Custom, HAlign, MainAlign,
-    MeasuredItem, Row, RowPolicy, VAlign,
+    constrain, grid_cells, pad, stack, Child, Column, CrossAlign, Custom, FlexLayoutEngine,
+    HAlign, MainAlign, MeasuredItem, Row, RowPolicy, VAlign,
 };
 pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
 pub use registry::{
