@@ -856,6 +856,7 @@ impl App {
             fill: palette.stage_dim,
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         // 2) Подложка и рамка stage — стиль модалок FR-039 (радиус 14).
         // FR-068 (W3-продолжение): каркас stage — компонентный путь
@@ -1005,6 +1006,7 @@ impl App {
                         fill,
                         border: [0.0; 4],
                         params: [d / 2.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     },
                     camera,
                     viewport,
@@ -1133,6 +1135,7 @@ impl App {
                         fill: palette.search_row_fill,
                         border: [0.0; 4],
                         params: [6.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     },
                     camera,
                     viewport,
@@ -1149,6 +1152,7 @@ impl App {
                         fill: FLOW_EDGE_COLOR,
                         border: [0.0; 4],
                         params: [d / 2.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     },
                     camera,
                     viewport,

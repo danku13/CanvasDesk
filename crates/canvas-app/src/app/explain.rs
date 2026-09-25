@@ -1151,6 +1151,7 @@ impl App {
             fill: palette.accent,
             border: [0.0; 4],
             params: [5.0 / zoom, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
             text: "?".to_owned(),

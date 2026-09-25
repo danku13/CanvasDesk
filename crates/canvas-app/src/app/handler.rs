@@ -528,6 +528,7 @@ impl ApplicationHandler<AppEvent> for App {
                         fill: canvas_core::tokens::DIALOG_FILL,
                         border: canvas_core::tokens::DIALOG_BORDER,
                         params: [10.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                     for (i, (label, _)) in dialog.buttons(self.settings.language).iter().enumerate()
                     {
@@ -542,6 +543,7 @@ impl ApplicationHandler<AppEvent> for App {
                             },
                             border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
                             params: [6.0, 0.0, 0.0, 1.0],
+                            corners: [0.0; 4],
                         });
                         let (btn_box, btn_width) = centered_box(buttons[i], 4.0);
                         dialog_texts.push(OwnedScreenText {
@@ -795,6 +797,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 alpha,
                             ],
                             params: [6.0, 0.0, 0.0, 1.0],
+                            corners: [0.0; 4],
                         });
                     }
                 }
@@ -808,6 +811,7 @@ impl ApplicationHandler<AppEvent> for App {
                         fill: crate::ui::SELECT_RECT_FILL,
                         border: crate::ui::SELECT_RECT_BORDER,
                         params: [4.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
                     });
                 }
                 // FR-012: подсветка зоны втягивания — группа под drag-нодой
@@ -829,6 +833,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 canvas_core::tokens::ALPHA_90,
                             ],
                             params: [8.0, 0.0, 0.0, 1.0],
+                            corners: [0.0; 4],
                         });
                     }
                 }

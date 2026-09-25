@@ -74,6 +74,15 @@ impl StageTransform {
             fill: inst.fill,
             border: inst.border,
             params: [inst.params[0] * self.scale / zoom, 0.0, 0.0, 1.0],
+            // FR-075: пер-угловые радиусы в той же размерности, что params[0] —
+            // делим на зум (и масштабируем scale'ом stage), иначе экранная
+            // геометрия «зазумится» шейдером дважды.
+            corners: [
+                inst.corners[0] * self.scale / zoom,
+                inst.corners[1] * self.scale / zoom,
+                inst.corners[2] * self.scale / zoom,
+                inst.corners[3] * self.scale / zoom,
+            ],
         }
     }
 }

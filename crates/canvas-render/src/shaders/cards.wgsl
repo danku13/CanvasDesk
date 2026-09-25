@@ -19,6 +19,9 @@ struct VertexInput {
     @location(2) fill: vec4<f32>,
     @location(3) border: vec4<f32>,
     @location(4) params: vec4<f32>, // x: radius (world), y: selected, z: broken, w: без тени
+    // FR-075 W0: пер-угловой радиус (world px), CSS-порядок
+    // [top-left, top-right, bottom-right, bottom-left]; все нули → params.x
+    @location(5) corners: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -28,6 +31,7 @@ struct VertexOutput {
     @location(2) fill: vec4<f32>,
     @location(3) border: vec4<f32>,
     @location(4) params: vec4<f32>,
+    @location(5) corners: vec4<f32>,
 };
 
 fn world_to_screen(world: vec2<f32>) -> vec2<f32> {
@@ -59,6 +63,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.fill = in.fill;
     out.border = in.border;
     out.params = in.params;
+    out.corners = in.corners;
     return out;
 }
 
@@ -68,6 +73,19 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// FR-075 W0: радиус в квадранте точки p (физ. px, y-вниз — верх = p.y<0).
+// Зеркало Rust-оракула `corner_radius_at` (cards.rs) — юнит-тесты крейта
+// пинят семантику (шейдер юнит-тестами не покрывается).
+fn corner_radius(corners: vec4<f32>, fallback: f32, p: vec2<f32>) -> f32 {
+    if (corners.x + corners.y + corners.z + corners.w <= 0.0) {
+        return fallback;
+    }
+    if (p.y < 0.0) {
+        return select(corners.y, corners.x, p.x < 0.0); // tr | tl
+    }
+    return select(corners.z, corners.w, p.x < 0.0);     // br | bl
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // @builtin(position) во фрагментном шейдере — координата фрагмента в физ. px
@@ -75,7 +93,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let half_size = in.size_screen * 0.5;
     let center = in.origin_screen + half_size;
     let p = frag - center;
-    let radius = in.params.x * camera.effective_zoom;
+    let radius = corner_radius(
+        in.corners * camera.effective_zoom,
+        in.params.x * camera.effective_zoom,
+        p,
+    );
 
     // Тело карточки: alpha заливки учитывается (T14) — оверлеи
     // (меню 0.97, призраки дропа T9 a=0.10, пульс поиска) задумывались
