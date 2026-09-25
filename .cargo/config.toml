@@ -1,18 +1,5 @@
-# FR-036 (ADR-0011): runner для wasm-тестов. Активируется ТОЛЬКО при явном
-# --target wasm32-wasip1 и не влияет на нативные цели. wasmtime маппит
-# текущий каталог (корень пакета при cargo test) на гостевой / и системный
-# /tmp — тесты canvas-core читают fixtures и пишут песочницу через
-# test_scratch_root/scratch_root (см. crates/canvas-core/src/lib.rs).
-[target.wasm32-wasip1]
-runner = "wasmtime run -S inherit-env --dir .::/ --dir /tmp::/tmp"
-
-# M8/W4 (прошивка, wasm-port §3.2): браузерный WebGPU-бэкенд wgpu 22 —
-# нестабильные типы web-sys/wgpu-webgpu_sys (GPUAdapter/GPUDevice/…)
-# требуют --cfg=web_sys_unstable_apis (стандартное требование wgpu-web,
-# wiki «Running wgpu on the web»). Без cfg привязки компилируются, но
-# JS-глю wasm-bindgen не «узнаёт» объекты (instanceof-маппинги не
-# генерируются) — request_adapter разрешается адаптером, а Rust видит
-# None («GPU-адаптер не найден»); найдено браузерным дымом W4. Скоуп —
-# только цель wasm32-unknown-unknown (нативным сборкам cfg не виден).
-[target.wasm32-unknown-unknown]
-rustflags = ["--cfg=web_sys_unstable_apis"]
+# FR-068 W2: диск dev-машины ограничен — инкрементальные сессии
+# раздувает target (гигабайты на прогон тестов). Отключено локально,
+# CI не зависит (полные сборки).
+[build]
+incremental = false

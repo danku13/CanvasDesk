@@ -687,12 +687,13 @@ fn features_masks_match_documented_contract() {
         taffy.contains(expected_native),
         "TaffyBackend: надмножество возможностей Native"
     );
-    // `default_backend()` = Native (zero-dep default), `pilot_backend()` =
-    // Taffy под фичей — маппинг статиков не перепутан.
+    // FR-068 W2: `default_backend()` под фичей taffy — TaffyBackend
+    // (файловая таблица W2); без фичи — FlexLayoutEngine (собственный
+    // движок, 0 deps). `pilot_backend()` — TaffyBackend (W1-поведение).
     assert_eq!(
         canvas_ui::layout::default_backend().features().bits(),
-        native.bits(),
-        "default_backend() — NativeBackend"
+        taffy.bits(),
+        "default_backend() под фичей taffy — TaffyBackend (FR-068 W2)"
     );
     assert_eq!(
         canvas_ui::layout::pilot_backend().features().bits(),

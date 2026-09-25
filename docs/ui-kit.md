@@ -111,6 +111,19 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
 - эвристики «символов × коэффициент» и `chars.truncate` запрещены (класс
   дефекта CR-015; усечение — только `ellipsis` по фактической ширине).
 
+**Shaper trait (FR-068 W2, ADR-0015)**: cosmic-text изолирован за
+trait-границей `Shaper` (`shape` + `font_system`) — единственной точкой
+контакта крейта с шейпером (W4: замена шейпера — отдельный ADR, код
+потребителей не меняется). `CosmicShaper` — default impl (тот же пайплайн
+шейпинга, что у screen-текстов рендера, — метрики совпадают, класс CR-015
+защищён по построению); `MockShaper` — детерминированный мок за фичей
+`mock-shaper` (только тесты, не продакшн: `TextMeasurer::new()` всегда
+реальный шейпинг, мок — только через `TextMeasurer::with_shaper`).
+`TextMeasurer` внутри ходит через `dyn Shaper` — публичный API потребителей
+НЕ изменился (`fs` — по-прежнему аргумент методов, владелец пула шрифтов —
+`canvas-render::text`, PRD-0009 §14/Q6). W2: `TextMeasurer` больше не
+`Clone` (внутри — `Box<dyn Shaper>`; клон-точек в репо не было).
+
 ## 6. Линты (CI)
 
 - **G4** (`app::ui_layout_lint`, исполняется `cargo test --workspace`):
@@ -142,15 +155,24 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
   `canvas-ui/tests/snapshot/*.txt`; сравнение точное строковое; изменение —
   осознанный PR с diff (§9 Контракт-9 FR-068). Регенерация:
   `CANVAS_UI_UPDATE_SNAPSHOTS=1 cargo test -p canvas-ui --test snapshot`.
-- **HTML5 demo-goldens (FR-068 W1, `canvas-ui/tests/html5_demos.rs`)**:
-  10 эталонных web-layouts (mdn/css-tricks топ-10: sticky-header,
-  sidebar-overflow, navbar-space-between, grid-12-col, masonry-lite,
-  aspect-ratio, modal-fixed-clip, dropdown-flip, virtualization,
-  complex-form) — сцены `SceneNode`, раскладка `TaffyBackend::lay_out_scene`,
-  дамп rect'ов всех узлов в DFS pre-order. Эталоны —
+- **HTML5 demo-goldens (FR-068 W1+W2, `canvas-ui/tests/html5_demos.rs`)**:
+  канонический список 15 эталонных web-layouts (ADR-0015 §Решение п.4)
+  — сцены `SceneNode`, дамп rect'ов всех узлов в DFS pre-order. 10 W1
+  (mdn/css-tricks топ-10: sticky-header, sidebar-overflow,
+  navbar-space-between, grid-12-col, masonry-lite, aspect-ratio,
+  modal-fixed-clip, dropdown-flip, virtualization, complex-form) + 5 W2
+  CanvasDesk-специфичных: `11_cd_palette_grid_multiline`,
+  `12_cd_whatif_bar_squeeze_tail` (двойной эталон Flex/taffy —
+  расхождение C3 `SqueezeTail` vs `flex_shrink` на одной сцене),
+  `13_cd_kit_gallery_tab_focus`, `14_cd_search_overlay_viewport_clip`,
+  `15_cd_fr061_tabular_body_grid`. Dual-backend прогон (W2): default
+  сборка → `FlexLayoutEngine::lay_out_scene`, `--features taffy` →
+  `TaffyBackend::lay_out_scene` — golden-файлы ОБЩИЕ (побитовый оракул
+  на совместимых политиках). Эталоны —
   `canvas-ui/tests/html5_demos/*.txt`; регенерация
-  `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos --features taffy`.
-  Изменение эталона — осознанный PR с diff.
+  `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`
+  (и с `--features taffy` для taffy-прогона). Изменение эталона —
+  осознанный PR с diff.
 - **Backend'ы вёрстки (FR-068 W1, ADR-0014)**: `trait LayoutBackend` +
   `NativeBackend` (default, 1:1 примитивы §4) + `TaffyBackend` за фичей
   `taffy` (default off — zero-dep G7). Потребитель выбирает backend явно:
@@ -163,7 +185,31 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
   (§Контракт-4); `compute_layout` округляет координаты к целому ui px
   (round on freeze) — паритет побитовый на целых входах; `End`+переполнение
   (unsafe alignment); sticky — эмуляция. Паритет-сюита:
-  `cargo test -p canvas-ui --features taffy --test backend_parity` (13).
+  `cargo test -p canvas-ui --features taffy --test backend_parity` (13);
+  W2: + `cargo test -p canvas-ui --features taffy --test flex_vs_taffy_parity`
+  — 1000 случайных деревьев Flex vs taffy, побитово идентичные rect'ы
+  на совместимых политиках ≥ 80% (гейт §W2 FR-068).
+- **Свой layout-движок — FlexLayoutEngine (FR-068 W2, ADR-0015)**:
+  собственный backend вёрстки БЕЗ внешних зависимостей (0 deps —
+  zero-dep инвариант G7; `layout/flex.rs`, маркер-фича `flex-engine`
+  в default). Контракт: CSS flexbox (grow/shrink/basis/wrap — resolve
+  flexible lengths §9.7 с freeze-округлением) + `round-layout`
+  приведение к целой px-сетке (позиции — parent-relative round,
+  размеры — round краёв по кумулятивным координатам; зеркало
+  `taffy::compute::round_layout`). Побитовый паритет с taffy на
+  совместимых политиках (Fit/Start/End/SpaceBetween/Wrap/равная сетка)
+  — гейт ≥ 80% в `tests/flex_vs_taffy_parity` (1000 деревьев).
+  `SqueezeTail` — ДОСЛОВНО (§Контракт-4 FR-068 «Flex решает»;
+  расхождение C3 с taffy `flex_shrink` документировано, не fail в
+  parity). Расширенная сцена (`SceneNode`:
+  percent/aspect/absolute/fixed/sticky/scroll/grid) —
+  `FlexLayoutEngine::lay_out_scene`, побитово с `TaffyBackend` на
+  сценах demo-goldens. Выбор движка — `default_backend()`: фича
+  `taffy` → `TaffyBackend`, иначе → `FlexLayoutEngine` (§W2); W4:
+  taffy вырезается, Flex остаётся единственным. Статус W2: стаб
+  (V-5-методы делегируют `NativeBackend` 1:1, сцена — todo) заменяется
+  собственной реализацией в этой же волне; perf-гейт — `perf_flex.rs`
+  (ниже).
 - **Perf-taffy (FR-068 W1, `canvas-ui/tests/perf_taffy.rs`, `#[ignore]`)**:
   reflow 1000 узлов на TaffyBackend — release-медиана 264.8 μs (гейт < 1 мс,
   §Контракт-8); dev-профиль ~2.7 мс — артефакт неоптимизированного taffy
@@ -174,6 +220,16 @@ let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
   — медиана 200 итераций, гейт < 1 мс (§Контракт-8 FR-068), регрессия > 20%
   к `tests/perf_baseline.txt` — fail. Baseline машинно-зависим (референс dev-машины);
   обновление — `CANVAS_UI_UPDATE_PERF=1 cargo test -p canvas-ui --test perf_baseline -- --ignored`.
+- **Perf-flex (FR-068 W2, `canvas-ui/tests/perf_flex.rs`, `#[ignore]`)**:
+  тот же синтетический граф 1000 узлов (Fit/Wrap/SqueezeTail/grid —
+  SqueezeTail осознанно: Flex реализует политику дословно, §Контракт-4),
+  но все вызовы — через ЯВНЫЙ `FlexLayoutEngine`
+  (`Row::lay_out_with`/`Column::lay_out_with`/`grid_cells_with`) —
+  медиана 200 итераций, гейт < 1 мс (§W2: «reflow 1000 узлов < 1 мс на
+  FlexLayoutEngine»), регрессия > 20% к `tests/perf_flex_baseline.txt`
+  — fail. ⚠️ W2-стаб может замерять Native-делегацию — финальный
+  baseline перегенерируется лидом на интеграции волны. Обновление —
+  `CANVAS_UI_UPDATE_PERF_FLEX=1 cargo test -p canvas-ui --test perf_flex -- --ignored`.
 - **Scissor-политика рендера (FR-056, F-5)**: каждая полоса `ScreenBand`
   несёт клип `UiRect` (лог. px из `SurfaceFrame.clip` кадра реестра);
   рендер исполняет его scissor-бакетом полосы (один `set_scissor_rect`
