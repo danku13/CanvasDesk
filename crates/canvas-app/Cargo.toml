@@ -48,6 +48,15 @@ winit.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 canvas-shell.workspace = true
 
+# FR-040 v2 (web persist): на wasm32 настройки сохраняются в localStorage
+# браузера (натив — config.toml через `Settings::save(path)`). Трейты
+# core (ClipboardBackend/…) — аналогичный паттерн, но конфиг меняется
+# редко и в 4 точках — простая cfg-специализация без инъекции трейта.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["Window", "Storage"] }
+wasm-bindgen.workspace = true
+toml.workspace = true
+
 [dev-dependencies]
 
 # FR-068 W1: passthrough фичи taffy для pilot-паритет-тестов (default off).

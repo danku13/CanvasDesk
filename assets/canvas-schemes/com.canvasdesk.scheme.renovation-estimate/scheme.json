@@ -200,5 +200,207 @@
     "toParam": "discount"
    }
   ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 60,
+    "width": 360,
+    "height": 260,
+    "text": "Renovation estimate\nRoom areas are multiplied by a shared rate, work is added to materials and the total takes a discount.\nThe rate feeds both rooms: change it and the whole estimate recomputes. The “Areas → Total area” bundle opens with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "areas",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 200,
+    "text": "Areas\nRooms to finish: living room and bedroom, square meters.\n\nliving = 18\nbedroom = 12",
+    "color": "5",
+    "label": "Areas"
+   },
+   {
+    "id": "rate",
+    "type": "text",
+    "x": 440,
+    "y": 240,
+    "width": 260,
+    "height": 180,
+    "text": "Rate\nCost of finishing per square meter.\n\nrate = 25 $",
+    "color": "5",
+    "label": "Rate"
+   },
+   {
+    "id": "materials",
+    "type": "text",
+    "x": 440,
+    "y": 480,
+    "width": 260,
+    "height": 180,
+    "text": "Materials\nRough and finish materials for all rooms.\n\nmaterials = 700 $",
+    "color": "5",
+    "label": "Materials"
+   },
+   {
+    "id": "discount",
+    "type": "text",
+    "x": 440,
+    "y": 720,
+    "width": 260,
+    "height": 180,
+    "text": "Discount\nA contractor discount on volume: a share of the total.\n\ndiscount = 0.1",
+    "color": "5",
+    "label": "Discount"
+   },
+   {
+    "id": "space",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Total area\nSum of room areas.\n\ntotal_area = Areas.living + Areas.bedroom",
+    "color": "2",
+    "label": "Total area"
+   },
+   {
+    "id": "cost-living",
+    "type": "text",
+    "x": 800,
+    "y": 200,
+    "width": 280,
+    "height": 180,
+    "text": "Living room\nCost of finishing the living room: area times rate.\n\nliving_cost = Areas.living * Rate.rate",
+    "color": "2",
+    "label": "Living room"
+   },
+   {
+    "id": "cost-bedroom",
+    "type": "text",
+    "x": 800,
+    "y": 400,
+    "width": 280,
+    "height": 180,
+    "text": "Bedroom\nCost of finishing the bedroom: area times rate.\n\nbedroom_cost = Areas.bedroom * Rate.rate",
+    "color": "2",
+    "label": "Bedroom"
+   },
+   {
+    "id": "total",
+    "type": "text",
+    "x": 1160,
+    "y": 300,
+    "width": 280,
+    "height": 180,
+    "text": "Total\nWork by rooms plus materials.\n\ntotal = Living room.living_cost + Bedroom.bedroom_cost + Materials.materials",
+    "color": "6",
+    "label": "Total"
+   },
+   {
+    "id": "final",
+    "type": "text",
+    "x": 1520,
+    "y": 300,
+    "width": 300,
+    "height": 200,
+    "text": "Discounted total\nWork and materials minus the discount: total and share arrive in parameters.\n\n$total * (1 - $discount)",
+    "color": "2",
+    "label": "Final"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 40,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nThe key handle is the rate: it feeds both rooms at once.\nThe “Areas → Total area” bundle opens a fan of both rooms.\nTry a scenario on an area: the delta shows up immediately.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "areas",
+    "toNode": "space",
+    "flowKind": "value",
+    "fromOutput": "living"
+   },
+   {
+    "id": "e2",
+    "fromNode": "areas",
+    "toNode": "space",
+    "flowKind": "value",
+    "fromOutput": "bedroom"
+   },
+   {
+    "id": "e3",
+    "fromNode": "areas",
+    "toNode": "cost-living",
+    "flowKind": "value",
+    "fromOutput": "living"
+   },
+   {
+    "id": "e4",
+    "fromNode": "rate",
+    "toNode": "cost-living",
+    "flowKind": "value",
+    "fromOutput": "rate"
+   },
+   {
+    "id": "e5",
+    "fromNode": "areas",
+    "toNode": "cost-bedroom",
+    "flowKind": "value",
+    "fromOutput": "bedroom"
+   },
+   {
+    "id": "e6",
+    "fromNode": "rate",
+    "toNode": "cost-bedroom",
+    "flowKind": "value",
+    "fromOutput": "rate"
+   },
+   {
+    "id": "e7",
+    "fromNode": "cost-living",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "living_cost"
+   },
+   {
+    "id": "e8",
+    "fromNode": "cost-bedroom",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "bedroom_cost"
+   },
+   {
+    "id": "e9",
+    "fromNode": "materials",
+    "toNode": "total",
+    "flowKind": "value",
+    "fromOutput": "materials"
+   },
+   {
+    "id": "e10",
+    "fromNode": "total",
+    "toNode": "final",
+    "flowKind": "value",
+    "toParam": "total"
+   },
+   {
+    "id": "e11",
+    "fromNode": "discount",
+    "toNode": "final",
+    "flowKind": "value",
+    "toParam": "discount"
+   }
+  ]
  }
 }

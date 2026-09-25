@@ -161,5 +161,164 @@
     "toParam": "margin"
    }
   ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 240,
+    "text": "Unit economics\nMargin is built from price and COGS, value is margin over lifetime, then the ratio against acquisition cost and payback.\nChange the price or COGS and everything recomputes. Payback takes margin and acquisition in parameters by name. The “Unit → Margin” bundle opens with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "unit",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 220,
+    "text": "Product unit\nPer-user economics per month: subscription price and servicing cost.\n\nprice = 10 $\ncogs = 4 $",
+    "color": "5",
+    "label": "Unit"
+   },
+   {
+    "id": "margin",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Margin\nProfit per user per month: price minus COGS.\n\nmargin = Unit.price - Unit.cogs",
+    "color": "2",
+    "label": "Margin"
+   },
+   {
+    "id": "lifetime",
+    "type": "text",
+    "x": 440,
+    "y": 300,
+    "width": 260,
+    "height": 180,
+    "text": "Lifetime\nHow many months the user stays with the product.\n\nmonths = 36",
+    "color": "5",
+    "label": "Term"
+   },
+   {
+    "id": "ltv",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "LTV\nLifetime value: margin over the lifetime.\n\nltv = Margin.margin * Term.months",
+    "color": "2",
+    "label": "LTV"
+   },
+   {
+    "id": "cac",
+    "type": "text",
+    "x": 800,
+    "y": 300,
+    "width": 280,
+    "height": 180,
+    "text": "CAC\nCost of acquiring a single user.\n\ncac = 120 $",
+    "color": "5",
+    "label": "CAC"
+   },
+   {
+    "id": "ratio",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "LTV to CAC\nRatio of value to acquisition cost.\n\nratio = LTV.ltv / CAC.cac",
+    "color": "6",
+    "label": "Ratio"
+   },
+   {
+    "id": "payback",
+    "type": "text",
+    "x": 1160,
+    "y": 300,
+    "width": 280,
+    "height": 180,
+    "text": "Payback\nMonths to recover acquisition: margin arrives in the parameter.\n\n$cac / $margin",
+    "color": "2",
+    "label": "Payback"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 300,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nThe ratio is below the healthy norm: acquisition is expensive.\nA scenario on the price will show deltas in margin and payback without touching the base.\nRaise the price and margin and LTV recompute through the whole chain.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "unit",
+    "toNode": "margin",
+    "flowKind": "value",
+    "fromOutput": "price"
+   },
+   {
+    "id": "e2",
+    "fromNode": "unit",
+    "toNode": "margin",
+    "flowKind": "value",
+    "fromOutput": "cogs"
+   },
+   {
+    "id": "e3",
+    "fromNode": "margin",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "margin"
+   },
+   {
+    "id": "e4",
+    "fromNode": "lifetime",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "months"
+   },
+   {
+    "id": "e5",
+    "fromNode": "ltv",
+    "toNode": "ratio",
+    "flowKind": "value",
+    "fromOutput": "ltv"
+   },
+   {
+    "id": "e6",
+    "fromNode": "cac",
+    "toNode": "ratio",
+    "flowKind": "value",
+    "fromOutput": "cac"
+   },
+   {
+    "id": "e7",
+    "fromNode": "cac",
+    "toNode": "payback",
+    "flowKind": "value",
+    "toParam": "cac"
+   },
+   {
+    "id": "e8",
+    "fromNode": "margin",
+    "toNode": "payback",
+    "flowKind": "value",
+    "toParam": "margin"
+   }
+  ]
  }
 }
