@@ -105,6 +105,16 @@ pub fn spawn_desk() -> anyhow::Result<()> {
 /// → сцена → App → DOM-панель и drop-листенеры → `spawn_app`.
 #[cfg(target_arch = "wasm32")]
 async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
+    // FR-WASM-02: pre-flight — если браузер не дал ни WebGPU, ни WebGL2,
+    // показываем читаемую DOM-заглушку вместо молчаливого чёрного экрана
+    // (приложение не стартует: у wgpu всё равно не было бы адаптера).
+    if !crate::gpu_gate::ensure_gpu_or_show_overlay().await {
+        tracing::error!(
+            target: "canvas_web",
+            "GPU недоступен (ни WebGPU, ни WebGL2) — показана DOM-заглушка"
+        );
+        return Ok(());
+    }
     let init = crate::opfs::init_scene(&params).await;
     // Общее OPFS-хранилище для DOM-drop/reopen — только если оно
     // действительно OPFS (stress/fallback-MemStorage копии не сохраняют)
