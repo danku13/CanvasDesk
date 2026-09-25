@@ -14,7 +14,7 @@
 //!
 //! wasm-gate (ADR-0011): байты вшиты в бинарник, ноль runtime FS-доступа.
 
-use crate::icon_data::{icon_rgba, ICON_NAMES, ICON_SETS, icon_set_px};
+use crate::icon_data::{icon_rgba, icon_set_px, ICON_NAMES, ICON_SETS};
 
 /// Сторона ячейки иконки в атласе, px (максимальный размер растра — 32 для
 /// lucide/material/feather; bootstrap 24 дополнен до 32).
@@ -82,12 +82,24 @@ pub fn icon_uv(set: &str, name: &str) -> Option<([f32; 2], [f32; 2])> {
     let name_idx = ICON_NAMES.iter().position(|n| *n == name)?;
     let cell_w = ICON_CELL_PX as f32 / ATLAS_W as f32;
     let cell_h = ICON_CELL_PX as f32 / ATLAS_H as f32;
-    let min = [
-        (name_idx as f32) * cell_w,
-        (set_idx as f32) * cell_h,
-    ];
+    let min = [(name_idx as f32) * cell_w, (set_idx as f32) * cell_h];
     let max = [min[0] + cell_w, min[1] + cell_h];
     Some((min, max))
+}
+
+/// Упаковка viewport-юниформа иконок: `[f32; 2]` → 16 байт
+/// (`vec2<f32>` на смещении 0 + 2 пад-флоата — раскладка `ViewportUniform`
+/// в shaders/icons.wgsl).
+///
+/// Чистая функция (без GPU) — тестируется без устройства. История: здесь
+/// была инлайн-упаковка с 8-байтными срезами под 4-байтный `to_ne_bytes()`
+/// — безусловная паника `copy_from_slice` на ПЕРВОМ кадре любого рантайма
+/// (wasm — чёрный экран после трапа; натив не поймала CI без GPU).
+pub fn pack_viewport_uniform(viewport: [f32; 2]) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0..4].copy_from_slice(&viewport[0].to_ne_bytes());
+    bytes[4..8].copy_from_slice(&viewport[1].to_ne_bytes());
+    bytes // 8..16 — пад, остаётся нулевым
 }
 
 /// GPU-пайплайн иконок: атлас-текстура + instanced draw (screen-space).
@@ -243,11 +255,19 @@ impl IconPipeline {
         for (set_idx, set_name) in ICON_SETS.iter().enumerate() {
             for (name_idx, icon_name) in ICON_NAMES.iter().enumerate() {
                 let Some(rgba) = icon_rgba(set_name, icon_name) else {
-                    tracing::warn!(set = set_name, icon = icon_name, "иконка отсутствует в реестре");
+                    tracing::warn!(
+                        set = set_name,
+                        icon = icon_name,
+                        "иконка отсутствует в реестре"
+                    );
                     continue;
                 };
                 let px = icon_set_px(set_name) as usize;
-                debug_assert_eq!(rgba.len(), px * px * 4, "размер растра не совпадает с заявленным");
+                debug_assert_eq!(
+                    rgba.len(),
+                    px * px * 4,
+                    "размер растра не совпадает с заявленным"
+                );
                 // Bootstrap (24×24) дополняем до 32×32 прозрачными полями
                 // по центру; остальные наборы уже 32×32.
                 let target_px = ICON_CELL_PX as usize;
@@ -303,10 +323,7 @@ impl IconPipeline {
         viewport: [f32; 2],
         instances: &[IconInstance],
     ) -> u32 {
-        // Viewport uniform: 2 float + 2 pad = 16 bytes
-        let mut uniform_bytes = [0u8; 16];
-        uniform_bytes[0..8].copy_from_slice(&viewport[0].to_ne_bytes());
-        uniform_bytes[8..16].copy_from_slice(&viewport[1].to_ne_bytes());
+        let uniform_bytes = pack_viewport_uniform(viewport);
         queue.write_buffer(&self.uniform_buffer, 0, &uniform_bytes);
 
         if instances.len() > self.instance_capacity {
@@ -361,8 +378,8 @@ mod tests {
     /// UV-координаты иконки в конце атласа — правый нижний угол.
     #[test]
     fn uv_last_icon_is_corner() {
-        let (min, max) =
-            icon_uv("bootstrap", "tab_appearance").expect("bootstrap/tab_appearance есть в реестре");
+        let (min, max) = icon_uv("bootstrap", "tab_appearance")
+            .expect("bootstrap/tab_appearance есть в реестре");
         let cell_w = ICON_CELL_PX as f32 / ATLAS_W as f32;
         let cell_h = ICON_CELL_PX as f32 / ATLAS_H as f32;
         // Последняя колонка + последняя строка
@@ -414,5 +431,19 @@ mod tests {
         assert_eq!(total_cells, 52, "4 набора × 13 иконок");
         assert_eq!(ATLAS_W, 13 * 32);
         assert_eq!(ATLAS_H, 4 * 32);
+    }
+
+    /// Регрессия wasm-чёрного экрана: упаковка юниформа — vec2 на смещении 0
+    /// (два f32 по 4 байта), пад 8..16 нулевой; раскладка ViewportUniform
+    /// в shaders/icons.wgsl. Прежняя инлайн-версия писала 4 байта в
+    /// 8-байтный срез — паника на первом кадре.
+    #[test]
+    fn viewport_uniform_packs_vec2_plus_pad() {
+        let bytes = pack_viewport_uniform([1280.0, 800.0]);
+        assert_eq!(bytes.len(), 16, "vec2 + 2 pad = 16 байт");
+        let w = f32::from_ne_bytes(bytes[0..4].try_into().unwrap());
+        let h = f32::from_ne_bytes(bytes[4..8].try_into().unwrap());
+        assert_eq!((w, h), (1280.0, 800.0), "viewport в первых 8 байтах");
+        assert!(bytes[8..16].iter().all(|&b| b == 0), "пад 8..16 нулевой");
     }
 }

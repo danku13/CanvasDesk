@@ -25,6 +25,7 @@ use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
 use crate::guides::{self, GuidePalette, GuidesFrame, GuidesPipeline};
+use crate::icon_pipeline::{IconInstance, IconPipeline};
 use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::sectors::{SectorInstance, SectorsPipeline};
@@ -34,7 +35,6 @@ use crate::text::{
 };
 use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
-use crate::icon_pipeline::{IconInstance, IconPipeline};
 use crate::zorder;
 
 // FR-052 (U2 PRD-0009): полосы слоёв экрана — тип полосы и тип слоя из
