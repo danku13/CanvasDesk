@@ -839,18 +839,21 @@ pub fn gallery_layout(
                     max_w: None,
                     min_w: kit::CHIP_PAD_H * 2.0,
                     pad_x: 0.0,
+                    h: None,
                 },
                 MeasuredItem::Text {
                     text: &t_b,
                     max_w: None,
                     min_w: kit::CHIP_PAD_H * 2.0,
                     pad_x: 0.0,
+                    h: None,
                 },
                 MeasuredItem::Text {
                     text: &t_c,
                     max_w: None,
                     min_w: kit::CHIP_PAD_H * 2.0,
                     pad_x: 0.0,
+                    h: None,
                 },
             ],
             m,
@@ -911,6 +914,7 @@ pub fn gallery_layout(
                 max_w: None,
                 min_w: kit::CHIP_PAD_H * 2.0,
                 pad_x: 0.0,
+                h: None,
             })
             .collect();
         Row {

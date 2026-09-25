@@ -478,8 +478,9 @@ pub enum MeasuredItem<'a> {
     /// эквивалентности с ручной проводкой `width_of → Child::fixed`.
     Fixed { w: f32, h: f32 },
     /// Размер от текста: ширина = `width_of` + `pad_x` (кламп в `max_w`,
-    /// если задан, и подъём до `min_w`), высота = измеренная (строки ·
-    /// кегль · `SCREEN_LINE_FACTOR`).
+    /// если задан, и подъём до `min_w`); высота = явная `h` (дизайн-константа
+    /// потребителя, например `CHIP_HEIGHT`) или измеренная (строки · кегль ·
+    /// `SCREEN_LINE_FACTOR`).
     Text {
         text: &'a str,
         /// Явный потолок ширины (ellipsis — решение потребителя).
@@ -494,6 +495,12 @@ pub enum MeasuredItem<'a> {
         /// бит-в-бит эквивалент `Fixed { w: width_of + pad_x }`;
         /// `pad_x: 0.0` — прежняя семантика дословно).
         pad_x: f32,
+        /// Явная высота (дизайн-константа чипа/кнопки — `Some(h)`);
+        /// `None` — измеренная (прежнее поведение дословно). Нужно там,
+        /// где константа высоты ≠ измеренной (чип whatif:
+        /// `CHIP_HEIGHT 26` ≠ `13·1.3 = 16.9`) — иначе миграция меняет
+        /// визуал (нарушение I-1).
+        h: Option<f32>,
     },
     /// Распорка (эквивалент [`Child::spacer`]).
     Spacer(f32),
@@ -517,6 +524,7 @@ impl MeasuredItem<'_> {
                 max_w,
                 min_w,
                 pad_x,
+                h,
             } => {
                 let spec = crate::measure::TextSpec {
                     text,
@@ -532,7 +540,7 @@ impl MeasuredItem<'_> {
                 if let Some(max) = max_w {
                     w = w.min(max.max(min_w));
                 }
-                Child::fixed(w, measured.height)
+                Child::fixed(w, h.unwrap_or(measured.height))
             }
         }
     }
@@ -1310,18 +1318,21 @@ mod tests {
                     max_w: None,
                     min_w: 0.0,
                     pad_x: 0.0,
+                    h: None,
                 },
                 MeasuredItem::Text {
                     text: labels[1],
                     max_w: None,
                     min_w: 0.0,
                     pad_x: 0.0,
+                    h: None,
                 },
                 MeasuredItem::Text {
                     text: labels[2],
                     max_w: None,
                     min_w: 0.0,
                     pad_x: 0.0,
+                    h: None,
                 },
             ],
             &mut m,
@@ -1452,12 +1463,14 @@ mod tests {
                     max_w: Some(50.0),
                     min_w: 0.0,
                     pad_x: 0.0,
+                    h: None,
                 },
                 MeasuredItem::Text {
                     text: "Σ",
                     max_w: None,
                     min_w: 24.0,
                     pad_x: 0.0,
+                    h: None,
                 },
             ],
             &mut m,
@@ -1484,7 +1497,8 @@ mod tests {
         // Проводка: замер вручную → фиксированный ребёнок.
         let manual_w = m.width_of(&mut fs, label, family, 13.0) + pad;
         let manual = Row::default().lay_out(slot, &[Child::fixed(manual_w, 18.0)]);
-        // Компонентный путь: текст с падом, замер внутри resolve.
+        // Компонентный путь: текст с падом и ЯВНОЙ высотой (18.0 — как в
+        // проводке), замер внутри resolve.
         let measured = Row::default().lay_out_measured(
             slot,
             &[MeasuredItem::Text {
@@ -1492,6 +1506,7 @@ mod tests {
                 max_w: None,
                 min_w: 0.0,
                 pad_x: pad,
+                h: Some(18.0),
             }],
             &mut m,
             &mut fs,
@@ -1499,14 +1514,9 @@ mod tests {
             13.0,
         );
         assert_eq!(
-            measured[0].w.to_bits(),
-            manual[0].w.to_bits(),
-            "ширина Text{{pad_x}} ≡ Fixed{{width_of+pad}} бит-в-бит"
-        );
-        assert_eq!(
-            (measured[0].x, measured[0].y),
-            (manual[0].x, manual[0].y),
-            "позиции совпадают"
+            (measured[0].x, measured[0].y, measured[0].w, measured[0].h),
+            (manual[0].x, manual[0].y, manual[0].w, manual[0].h),
+            "Text{{pad_x, h}} ≡ Fixed{{width_of+pad, h}} бит-в-бит (полный rect)"
         );
     }
 
@@ -1530,12 +1540,14 @@ mod tests {
                     max_w: None,
                     min_w,
                     pad_x: pad,
+                    h: Some(18.0),
                 },
                 MeasuredItem::Text {
                     text: long,
                     max_w: None,
                     min_w,
                     pad_x: pad,
+                    h: Some(18.0),
                 },
             ],
             &mut m,
@@ -1557,13 +1569,13 @@ mod tests {
             ],
         );
         assert_eq!(
-            (rects[0].x, rects[0].y, rects[0].w),
-            (manual[0].x, manual[0].y, manual[0].w),
-            "короткая кнопка: Text{{pad_x, min_w}} ≡ проводке max(min_w, w+pad)"
+            (rects[0].x, rects[0].y, rects[0].w, rects[0].h),
+            (manual[0].x, manual[0].y, manual[0].w, manual[0].h),
+            "короткая кнопка: Text{{pad_x, min_w, h}} ≡ проводке max(min_w, w+pad)"
         );
         assert_eq!(
-            (rects[1].x, rects[1].y, rects[1].w),
-            (manual[1].x, manual[1].y, manual[1].w),
+            (rects[1].x, rects[1].y, rects[1].w, rects[1].h),
+            (manual[1].x, manual[1].y, manual[1].w, manual[1].h),
             "длинная кнопка: ширина = текст+пад (min_w не мешает)"
         );
         // Санити семантики: короткая поднята до min_w (до округления),

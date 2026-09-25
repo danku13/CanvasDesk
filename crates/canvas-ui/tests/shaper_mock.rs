@@ -217,6 +217,7 @@ fn mock_measured_item_text_resolve_exact_width() {
         max_w: None,
         min_w: 0.0,
         pad_x: 0.0,
+        h: None,
     }
     .resolve(&mut m, &mut fs, FAMILY, size);
     assert_eq!(child.w, mock_w(4, size), "мок-ширина без искажений");
@@ -228,6 +229,7 @@ fn mock_measured_item_text_resolve_exact_width() {
         max_w: None,
         min_w: 100.0,
         pad_x: 0.0,
+        h: None,
     }
     .resolve(&mut m, &mut fs, FAMILY, size);
     assert_eq!(child.w, 100.0);
@@ -237,6 +239,7 @@ fn mock_measured_item_text_resolve_exact_width() {
         max_w: Some(20.0),
         min_w: 0.0,
         pad_x: 0.0,
+        h: None,
     }
     .resolve(&mut m, &mut fs, FAMILY, size);
     assert_eq!(child.w, 20.0);
@@ -258,6 +261,7 @@ fn mock_row_layout_deterministic_on_both_backends() {
             max_w: None,
             min_w: 0.0,
             pad_x: 0.0,
+            h: None,
         },
         MeasuredItem::Fixed { w: 50.0, h: 20.0 },
         MeasuredItem::Spacer(10.0),
@@ -314,6 +318,7 @@ fn mock_row_layout_text_max_w_clamp() {
             max_w: Some(20.0),
             min_w: 0.0,
             pad_x: 0.0,
+            h: None,
         },
         MeasuredItem::Fixed { w: 30.0, h: 10.0 },
     ];
