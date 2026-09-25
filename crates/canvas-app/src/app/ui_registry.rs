@@ -1571,7 +1571,7 @@ mod tests {
         app.camera.set_zoom(1.7);
         app.camera.pan([137.0, -64.0]);
         app.admin_open = true;
-        let (quads, _) = app.admin_panel_overlay();
+        let (quads, _, _) = app.admin_panel_overlay();
         assert!(!quads.is_empty(), "админпанель рисует затемнение + панель");
         // Затемнение: сырой px — origin (0,0), размер = вьюпорт
         assert_eq!(quads[0].pos, [0.0, 0.0]);
@@ -1592,7 +1592,7 @@ mod tests {
         app.camera.set_zoom(1.7);
         app.camera.pan([137.0, -64.0]);
         app.kit_gallery_open = true;
-        let (quads, _) = app.kit_gallery_overlay();
+        let (quads, _, _) = app.kit_gallery_overlay();
         assert!(!quads.is_empty(), "витрина рисует затемнение + панель");
         assert_eq!(quads[0].pos, [0.0, 0.0]);
         assert_eq!(quads[0].size, [1280.0, 800.0]);

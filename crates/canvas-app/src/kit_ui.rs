@@ -1193,6 +1193,14 @@ pub(crate) struct KitDraw {
     painter: Painter,
     pub quads: Vec<CardInstance>,
     pub texts: Vec<OwnedText>,
+    /// FR-ICONS: инстансы SVG-иконок кадра (screen-space, поверх всех полос).
+    /// Накапливаются при вызовах `icon()` (если активный набор — SVG; для
+    /// Glyph — fallback через `label_center`, в `icons` ничего не падает).
+    pub icons: Vec<canvas_render::IconInstance>,
+    /// FR-ICONS: активный набор иконок (None = Glyph fallback; Some(set_id)
+    /// = SVG-набор из `IconStyle::id()`). Устанавливается потребителем через
+    /// `set_icon_set` после `KitDraw::new()`.
+    icon_set: Option<&'static str>,
 }
 
 /// Владеемый screen-текст кадра (зеркало `app::OwnedScreenText` — модуль
@@ -1212,7 +1220,57 @@ impl KitDraw {
             painter: Painter::new(),
             quads: Vec::new(),
             texts: Vec::new(),
+            icons: Vec::new(),
+            icon_set: None,
         }
+    }
+
+    /// FR-ICONS: установить активный набор иконок для последующих вызовов
+    /// `icon()`. `None` = Glyph fallback (Unicode-глиф шрифтом); `Some(set_id)`
+    /// = SVG-набор (`"lucide"`/`"material"`/`"feather"`/`"bootstrap"`).
+    /// Вызывается потребителем после `KitDraw::new()` на основе
+    /// `settings.icon_style`.
+    pub fn set_icon_set(&mut self, set: Option<&'static str>) {
+        self.icon_set = set;
+    }
+
+    /// FR-ICONS: иконка в области. Если активный набор — SVG (`set_icon_set`
+    /// был вызван с `Some(set_id)`), ищется UV в атласе и в `self.icons`
+    /// пушится `IconInstance` (квадратная вписка по центру `rect`, tint —
+    /// RGBA). Иначе (Glyph fallback) — рисуется Unicode-глиф через
+    /// `label_center` (прежнее поведение). Неизвестная пара (set, name) —
+    /// fallback на глиф (мягкая деградация).
+    pub fn icon(
+        &mut self,
+        rect: UiRect,
+        name: &str,
+        glyph: &str,
+        tint: [f32; 4],
+        glyph_size: f32,
+    ) {
+        if let Some(set) = self.icon_set {
+            if let Some((uv_min, uv_max)) = canvas_render::icon_uv(set, name) {
+                // Квадратная вписка по центру: размер = min(w, h), pos —
+                // центрирован в rect. Сохраняем пропорции SVG-силуэта.
+                let size = rect.w.min(rect.h);
+                let pos = [
+                    rect.x + (rect.w - size) * 0.5,
+                    rect.y + (rect.h - size) * 0.5,
+                ];
+                self.icons.push(canvas_render::IconInstance {
+                    pos,
+                    size: [size, size],
+                    uv_min,
+                    uv_max,
+                    tint,
+                });
+                return;
+            }
+            // Неизвестная пара (set, name) — fallback на глиф с предупреждением.
+            tracing::warn!(set, name, "иконка не найдена в атласе — глиф-фолбэк");
+        }
+        // Glyph fallback (прежнее поведение): глиф шрифтом через label_center.
+        self.label_center(rect, glyph, tint, glyph_size);
     }
 
     /// Прямоугольник с заливкой/рамкой/радиусом.
@@ -1266,6 +1324,18 @@ impl KitDraw {
                 } => {
                     self.painter.label(area, &text, color, size, align);
                     self.flush_last_text();
+                }
+                // FR-ICONS: иконка из составного кит-виджета (FR-061 строка
+                // и т.п.) — делегирует `icon()` (SVG-атлас или глиф-фолбэк).
+                // Глиф-фолбэк берётся из `icon_name` → `icon_glyph` (canvas-ui):
+                // иконка типизирована, имя — стабильный идентификатор.
+                canvas_ui::paint::PaintItem::Icon { rect, name, tint } => {
+                    // Глиф для fallback: имя → Icon (если в реестре) → glyph.
+                    // Неизвестное имя — пустой глиф (SVG уже отрисован, если
+                    // набор активен; Glyph-набор с неизвестным именем —
+                    // невалидная пара, Glyph fallback ничего не рисует).
+                    let glyph = icon_name_to_glyph(&name);
+                    self.icon(rect, &name, glyph, tint, 13.0);
                 }
                 // FR-068 W1: клип — прозрачный проход для consumer-обхода:
                 // дети конвертируются как обычные items (draw-порядок
@@ -1338,6 +1408,41 @@ pub fn dropdown_item_state(hovered: bool) -> KitState {
 /// Проверка «курсор внутри rect'а» (xywh UiRect).
 pub fn cursor_in(r: &UiRect, cursor: [f32; 2]) -> bool {
     r.contains(UiPoint::new(cursor[0], cursor[1]))
+}
+
+/// FR-ICONS: обратное отображение `icon_name → glyph` для Glyph-fallback
+/// (когда активный набор — Glyph, или пара (set, name) неизвестна). Имя —
+/// стабильный идентификатор из `canvas_ui::kit::icon_name`; для табов
+/// настроек (имена `tab_*`) — Unicode-глифы табов (прежнее поведение).
+/// Неизвестное имя — пустой глиф (ничего не рисуется; SVG уже отрисован
+/// для SVG-наборов, для Glyph — невалидная пара).
+pub fn icon_name_to_glyph(name: &str) -> &'static str {
+    use canvas_ui::kit::{icon_glyph, icon_name, Icon};
+    // Сначала проверяем kit::Icon варианты (close/gear/question/search/plus/
+    // arrow_left/arrow_right/refresh).
+    for icon in [
+        Icon::Close,
+        Icon::Gear,
+        Icon::Question,
+        Icon::Search,
+        Icon::Plus,
+        Icon::ArrowLeft,
+        Icon::ArrowRight,
+        Icon::Refresh,
+    ] {
+        if icon_name(icon) == name {
+            return icon_glyph(icon);
+        }
+    }
+    // Иконки табов настроек (прежние Unicode-глифы) — fallback для Glyph-набора.
+    match name {
+        "tab_general" => "◎",
+        "tab_canvas" => "▦",
+        "tab_snap" => "≡",
+        "tab_edges" => "⇄",
+        "tab_appearance" => "◐",
+        _ => "",
+    }
 }
 
 /// Публичный доступ к измерителю для сборки в app.rs (единый кадр —

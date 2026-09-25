@@ -804,6 +804,13 @@ pub struct App {
     last_frame: Option<Instant>,
     /// Счётчики последнего кадра (для HUD).
     last_stats: FrameStats,
+    /// FR-ICONS: инстансы SVG-иконок текущего кадра (screen-space px).
+    /// Собираются в `KitDraw::icon` (kit_ui.rs) при отрисовке полос; drains
+    /// в `FrameOverlay::icons` каждого кадра (`std::mem::take` — App мутабелен
+    /// между сборкой полос и рендером). Активный набор читается каждый кадр
+    /// из `settings.icon_style` через `App::icon_set_active` (overlays.rs) —
+    /// смена набора применяется на следующем кадре без инвалидации кэшей.
+    icon_instances: Vec<canvas_render::IconInstance>,
     /// Ноды, чей тамбнейл не удалось получить (битая ссылка и т.п.) —
     /// не перезаказывать каждый кадр; ретрай — при изменении файла вотчером (T10).
     thumbs_failed: std::collections::HashSet<usize>,
@@ -1246,6 +1253,9 @@ impl App {
             frame_meter: FrameMeter::new(),
             last_frame: None,
             last_stats: FrameStats::default(),
+            // FR-ICONS: пустой буфер инстансов; активный набор читается каждый
+            // кадр из `settings.icon_style` (через `App::icon_set_active`).
+            icon_instances: Vec::new(),
             thumbs_failed: std::collections::HashSet::new(),
             editing: None,
             // FR-072: автопереход «заголовок → тело» выключен по умолчанию

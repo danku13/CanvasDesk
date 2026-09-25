@@ -45,6 +45,17 @@ pub enum PaintItem {
         size: f32,
         align: PaintAlign,
     },
+    /// FR-ICONS: SVG-иконка в области (квадратная, вписывается в `rect` по
+    /// центру; tint — RGBA). `name` — строковый идентификатор (напр. "close",
+    /// "gear"); набор (`IconStyle`) разрешает потребителем — Painter данных
+    /// о наборе не хранит (G7: чистые данные, 0 зависимостей). Потребитель
+    /// (KitDraw в canvas-app) решает: SVG-атлас или глиф-фолбэк (по
+    /// `settings.icon_style`).
+    Icon {
+        rect: UiRect,
+        name: String,
+        tint: [f32; 4],
+    },
     /// Клип-контейнер (FR-068 W1): содержимое рисуется только внутри `rect`
     /// (overflow:hidden-семантика в draw-слое). Вложенность — произвольная
     /// (клип в клипе — сужение области). Painter остаётся ДАННЫМИ (G7):
@@ -134,6 +145,17 @@ impl Painter {
             color,
             size,
             align,
+        });
+    }
+
+    /// FR-ICONS: SVG-иконка в области (квадратная, по центру; tint — RGBA).
+    /// `name` — строковый идентификатор (напр. "close", "gear"). Набор
+    /// (`IconStyle`) разрешает потребитель — Painter только копит данные (G7).
+    pub fn icon(&mut self, rect: UiRect, name: &str, tint: [f32; 4]) {
+        self.items.push(PaintItem::Icon {
+            rect,
+            name: name.to_owned(),
+            tint,
         });
     }
 
