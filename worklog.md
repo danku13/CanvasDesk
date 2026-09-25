@@ -6295,3 +6295,18 @@ Stage Summary:
 - **Гейты:** clippy -D warnings 0; fmt чисто; cargo test -p canvas-render 371 passed. Приёмка wasm после фикса: полный рендер (сетка, диалог шаблонов, полоса категорий, GPU-тулбар), консоль без паник.
 - **Открытый CR (вне фикса):** браузеры без WebGPU (Firefox/Safari) — тихий чёрный экран: wgpu 22 собран без фичи `webgl` (дефолт features: wgsl/dx12/metal/webgpu), фолбэка нет; ошибка уходит только в консоль (`RendererLaunch::Failed` → event_loop.exit, handler.rs:1428). Предложение: читаемая DOM-заглушка в canvas-web (правило §3.1) и/или включение webgl (риск: storage buffers в WebGL2 недоступны — нужен GPU-прогон).
 - **Инфра:** wasm-bindgen-cli 0.2.127 установлен из пребилд-тарбалла (404 из CI не воспроизвёлся); trunk не требовался (ручная сборка стенда по wasm_ui_test.sh).
+
+---
+
+## FR-WASM-02 — fix(render/web): WebGL2-фолбэк + DOM-заглушка вместо тихого чёрного экрана (2026-09-25, сессия агента)
+
+- **Запрос владельца:** консоль прод-версии после FR-WASM-01 — «не удалось инициализировать рендер (async): GPU-адаптер не найден»: браузер без WebGPU-адаптера получал молчаливый чёрный экран (ошибка — только в консоли). (Вторая ошибка в присланном логе — `chrome.action.show is not a function` — от расширения браузера, к приложению отношения не имеет.)
+- **Причины на слое wgpu 22:** (1) дефолтные фичи wgpu 22 = wgsl/dx12/metal/webgpu — GLES/WebGL2-бэкенд не собирался вовсе; (2) даже с фичей webgl фолбэк внутри одного `Instance` невозможен: при наличии `navigator.gpu` `Instance::new(all())` жёстко создаёт `ContextWebGpu` (wgpu src/lib.rs), а webgpu-бэкенд при `instance_create_surface` сразу захватывает `canvas.get_context("webgpu")` (webgpu.rs) — после этого `getContext("webgl2")` на том же канвасе возвращает null («canvas already in use»).
+- **Решение:**
+  - `canvas-render/Cargo.toml`: target-gated `features = ["webgl"]` для wasm32 (натив GLES-зависимости не тянет);
+  - `renderer.rs::create_gpu_web` (wasm-only): ступень 1 — `Instance(BROWSER_WEBGPU)` + адаптер БЕЗ surface (канвас не трогаем), surface — после победы бэкенда; ступень 2 — `Instance(GL)`: surface ДО адаптера (в WebGL2 контекст канваса = адаптер — gles/web.rs `enumerate_adapters` без surface_hint пуст);
+  - `gpu.rs`: для GL-адаптера — `Limits::downlevel_webgl2_defaults()` (дефолтные лимиты требуют storage-буферы, которых в WebGL2 нет; приложение и glyphon 0.6 их не используют; текстуры ≤2048, glyphon сам клампится);
+  - `canvas-web/gpu_gate.rs` (новый, §3.1): pre-flight зеркалит две ступени (raw `requestAdapter` + throwaway-канвас `webgl2`) — при полном отсутствии GPU-возможностей показывается читаемая DOM-заглушка (ru+en, палитра продукта), приложение не стартует; `spawn_desk_web` вызывает гейт до построения App.
+- **Приёмка (Chromium 1243 под Xvfb, SwiftShader):** WebGPU-режим — `backend=BrowserWebGpu` (без регресса); NO_WEBGPU (Chrome с выключенным аппаратным ускорением) — `backend=Gl adapter=ANGLE…SwiftShader`, полный рендер (сетка/диалоги/тулбары); NO_GPU (`--disable-webgl --disable-webgl2`) — DOM-заглушка, канвас не создаётся. Гейты: clippy -D warnings 0 (render/web/app), fmt 0, cargo test canvas-render 371 / canvas-web 48, wasm check 0; canvas-app — check 0 (линк тест-бинарья не влезает в диск среды — известное ограничение).
+- **Формат Rgba8UnormSrgb на GL** — выбор `choose_surface_format` из caps GL-поверхности (на WebGPU остаётся Rgba8Unorm) — штатная логика, тестов не меняет.
+- **Не зафиксировано как баг:** локальная проверка вердикта — meanLum тёмной темы 11–22 (порог «мёртвой» страницы ~1–4); скрипт диагностики скорректирован (scripts/ сессии, вне репо).

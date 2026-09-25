@@ -27,10 +27,29 @@ impl GpuContext {
                 force_fallback_adapter: false,
             })
             .await?;
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
-            .await
-            .ok()?;
+        let (device, queue) = {
+            // FR-WASM-02: downlevel-адаптер (WebGL2/GLES) не предоставляет
+            // дефолтный набор лимитов (storage-буферы и пр.) — request_device
+            // с Limits::default() упал бы на валидации. Приложение и glyphon
+            // 0.6 storage-буферы не используют — для GL просим downlevel-
+            // дефолты (все пайплайны и текстуры в них укладываются: атласы
+            // 2048/416×128/220×140, glyphon сам клампится к лимитам).
+            let limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+                wgpu::Limits::downlevel_webgl2_defaults()
+            } else {
+                wgpu::Limits::default()
+            };
+            adapter
+                .request_device(
+                    &wgpu::DeviceDescriptor {
+                        required_limits: limits,
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .await
+                .ok()?
+        };
         Some(Self {
             instance,
             adapter,

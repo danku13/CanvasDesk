@@ -35,6 +35,8 @@ pub mod drop_files;
 #[cfg(target_arch = "wasm32")]
 pub mod export;
 #[cfg(target_arch = "wasm32")]
+pub mod gpu_gate;
+#[cfg(target_arch = "wasm32")]
 pub mod ime;
 #[cfg(target_arch = "wasm32")]
 pub mod js_glue;

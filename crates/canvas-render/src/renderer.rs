@@ -519,6 +519,62 @@ pub struct Renderer {
     theme: ThemeColors,
 }
 
+/// Web (wasm32): двухступенчатый выбор GPU-бэкенда (FR-WASM-02).
+///
+/// wgpu 22 на web не умеет фолбэк внутри одного `Instance`: если в браузере
+/// есть `navigator.gpu`, `Instance::new(all())` жёстко создаёт
+/// `ContextWebGpu` (wgpu src/lib.rs: `requested_webgpu && support_webgpu`),
+/// и при отказе `request_adapter` (выключено аппаратное ускорение, блок-лист
+/// драйвера, старый Chromium) приложение умирало с чёрным экраном — до
+/// webgl-фичи GL-бэкенд вообще не собирался, после — добраться до него было
+/// невозможно. Поэтому два чистых инстанса.
+///
+/// Канвас не должен быть тронут до выбора бэкенда: webgpu-бэкенд при
+/// `instance_create_surface` СРАЗУ зовёт `canvas.get_context("webgpu")`
+/// (webgpu.rs), после чего `getContext("webgl2")` на том же канвасе
+/// возвращает null («canvas already in use») — и GL-ступень умирала бы
+/// всегда. Поэтому: ступень 1 ищет адаптер БЕЗ surface (requestAdapter()
+/// канваса не требует; surface создаётся для выигравшего бэкенда), а в
+/// ступени 2 — наоборот, surface ДО адаптера: в WebGL2 контекст канваса и
+/// есть адаптер (gles/web.rs `enumerate_adapters` без surface_hint
+/// возвращает пустой список).
+/// `None` — не работает ни один бэкенд (canvas-web покажет DOM-заглушку).
+#[cfg(target_arch = "wasm32")]
+async fn create_gpu_web(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Surface<'static>)> {
+    // Ступень 1 — WebGPU: адаптер без surface, канвас не трогаем.
+    let webgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::BROWSER_WEBGPU,
+        ..Default::default()
+    });
+    if let Some(gpu) = GpuContext::new(webgpu_instance, None).await {
+        // GpuContext владеет тем же Instance (gpu.instance) — surface из него
+        match gpu.instance.create_surface(window.clone()) {
+            Ok(surface) => {
+                tracing::info!(backend = ?wgpu::Backends::BROWSER_WEBGPU, "web GPU-бэкенд выбран");
+                return Some((gpu, surface));
+            }
+            Err(err) => {
+                tracing::warn!(%err, "web: surface WebGPU не создан — фолбэк на GL (WebGL2)");
+            }
+        }
+    } else {
+        tracing::warn!(
+            backend = ?wgpu::Backends::BROWSER_WEBGPU,
+            "web WebGPU-адаптер недоступен — фолбэк на GL (WebGL2)"
+        );
+    }
+    // Ступень 2 — GL (WebGL2): surface до адаптера; канвас к этому моменту
+    // не занят ни одним контекстом. Лимиты устройства — downlevel (gpu.rs).
+    let gl_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::GL,
+        ..Default::default()
+    });
+    let surface = gl_instance.create_surface(window.clone()).ok()?;
+    let gpu = GpuContext::new(gl_instance, Some(&surface)).await?;
+    tracing::info!(backend = ?wgpu::Backends::GL, "web GPU-бэкенд выбран");
+    Some((gpu, surface))
+}
+
 impl Renderer {
     /// Создать рендерер для окна. Вызывается один раз при старте
     /// (блокирующе, через `pollster` в canvas-app).
@@ -532,32 +588,49 @@ impl Renderer {
     /// бэкенды по умолчанию.
     pub async fn new(window: Arc<Window>, prefer_dx12: bool) -> anyhow::Result<Self> {
         let scale_factor = window.scale_factor();
-        let backends = match std::env::var("WGPU_BACKEND") {
-            Ok(name) => match name.to_ascii_lowercase().as_str() {
-                "vulkan" => wgpu::Backends::VULKAN,
-                "dx12" => wgpu::Backends::DX12,
-                "gl" => wgpu::Backends::GL,
-                other => {
-                    tracing::warn!(
-                        backend = other,
-                        "неизвестный WGPU_BACKEND — бэкенды по умолчанию"
-                    );
-                    wgpu::Backends::all()
-                }
-            },
-            Err(_) if prefer_dx12 => wgpu::Backends::DX12,
-            Err(_) => wgpu::Backends::all(),
-        };
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            ..Default::default()
-        });
-        let surface = instance
-            .create_surface(window.clone())
-            .context("создание surface")?;
-        let gpu = GpuContext::new(instance, Some(&surface))
+        // FR-WASM-02: на web выбор бэкенда — двухступенчатый create_gpu_web;
+        // desktop-переключение prefer_dx12 (T15) — только натив.
+        #[cfg(target_arch = "wasm32")]
+        let _ = prefer_dx12;
+
+        // FR-WASM-02: (gpu, surface) — неразрывная пара (surface живёт в том
+        // же Instance, что выдал адаптер; пересечение инстансов запрещено
+        // валидатором wgpu).
+        #[cfg(target_arch = "wasm32")]
+        let (gpu, surface) = create_gpu_web(&window)
             .await
-            .context("GPU-адаптер не найден")?;
+            .context("GPU-адаптер не найден (ни WebGPU, ни WebGL2)")?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let (gpu, surface) = {
+            let backends = match std::env::var("WGPU_BACKEND") {
+                Ok(name) => match name.to_ascii_lowercase().as_str() {
+                    "vulkan" => wgpu::Backends::VULKAN,
+                    "dx12" => wgpu::Backends::DX12,
+                    "gl" => wgpu::Backends::GL,
+                    other => {
+                        tracing::warn!(
+                            backend = other,
+                            "неизвестный WGPU_BACKEND — бэкенды по умолчанию"
+                        );
+                        wgpu::Backends::all()
+                    }
+                },
+                Err(_) if prefer_dx12 => wgpu::Backends::DX12,
+                Err(_) => wgpu::Backends::all(),
+            };
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends,
+                ..Default::default()
+            });
+            let surface = instance
+                .create_surface(window.clone())
+                .context("создание surface")?;
+            let gpu = GpuContext::new(instance, Some(&surface))
+                .await
+                .context("GPU-адаптер не найден")?;
+            (gpu, surface)
+        };
 
         // M8/W4 (wasm-port §3.4): размер читается ПОСЛЕ async-ожиданий —
         // на web за инициализацию адаптера/устройства успевает отработать
