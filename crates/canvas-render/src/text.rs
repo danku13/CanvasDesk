@@ -14,14 +14,16 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use canvas_core::{Canvas, Node, NodeKind};
+use canvas_core::{Canvas, Language, Node, NodeKind};
 use glyphon::{
     Attrs, Buffer, Cache, Color, Cursor, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
 };
 
 use crate::camera::Camera;
-use crate::cards::{dim_color, extension_letter, title_for, FocusView, HEADER_HEIGHT};
+use crate::cards::{
+    dim_color, extension_letter, title_for, ChipKind, FocusView, HEADER_HEIGHT, RESULT_STRIP_H,
+};
 use crate::gfm;
 use crate::markdown;
 /// FR-061 этап B: табличная модель тела ноды (D-2) + проход A (D-6/D-11).
@@ -108,12 +110,110 @@ const ICON_WIDTH: f32 = 22.0;
 /// (LOD-порог, уточняется в T11 по SPEC §6.2).
 const MIN_TITLE_PX: f32 = 4.0;
 
+/// FR-075 (вёрстка prototype-unified): кегль метки чипа категории шапки
+/// (`F.chip` — «600 10px»; вес SEMIBOLD 600, family — как у заголовка).
+const CHIP_FONT_SIZE: f32 = 10.0;
+/// Высота строки метки чипа (10 px кегль → строка 12).
+const CHIP_LINE_HEIGHT: f32 = 12.0;
+/// FR-075: цвет текста метки чипа — тёмный на ЛЮБОЙ теме (прототип
+/// `chipTxt` #14161c на цветной заливке чипа).
+fn chip_text_color() -> Color {
+    Color::rgb(0x14, 0x16, 0x1c)
+}
+/// Атрибуты метки чипа: Noto Sans Display Semibold 600 (прототип 600).
+fn chip_attrs() -> Attrs<'static> {
+    Attrs::new()
+        .family(Family::Name(SANS_FAMILY))
+        .weight(Weight::SEMIBOLD)
+}
+
+/// FR-075: род чипа категории шапки. Widget/Group/Link/Unknown — чипа нет
+/// (None); шаблон — категория манифеста; файл — «ФАЙЛ»; Text — «РАСЧЁТ»
+/// при формульном содержимом (line_outcomes/результат), иначе «ЗАМЕТКА»
+/// (семантика prototype-unified CAT_LABEL: calc/note).
+fn chip_kind(node: &Node, has_calc: bool) -> Option<crate::cards::ChipKind> {
+    if node.template().is_some() {
+        return Some(crate::cards::ChipKind::Template);
+    }
+    match node.kind() {
+        NodeKind::File => Some(crate::cards::ChipKind::File),
+        NodeKind::Text if has_calc => Some(crate::cards::ChipKind::Calc),
+        NodeKind::Text => Some(crate::cards::ChipKind::Note),
+        _ => None,
+    }
+}
+
+/// Метка чипа (uppercase — прототип `chipTxt.toUpperCase()`): шаблон —
+/// «ШАБЛОН»/«TEMPLATE» (в снапшоте `canvasdesk.template` категории нет —
+/// категория читается по ЦВЕТУ чипа, преемника полосы; подпись категории —
+/// после включения реестра в кэш — deferred FR-075), остальные — по языку
+/// (RU: РАСЧЁТ/ЗАМЕТКА/ФАЙЛ; EN: CALC/NOTE/FILE).
+fn chip_label(kind: crate::cards::ChipKind, _node: &Node, lang: Language) -> String {
+    match kind {
+        crate::cards::ChipKind::Template => match lang {
+            Language::Ru => "ШАБЛОН",
+            Language::En => "TEMPLATE",
+        }
+        .to_string(),
+        crate::cards::ChipKind::Calc => match lang {
+            Language::Ru => "РАСЧЁТ",
+            Language::En => "CALC",
+        }
+        .to_string(),
+        crate::cards::ChipKind::Note => match lang {
+            Language::Ru => "ЗАМЕТКА",
+            Language::En => "NOTE",
+        }
+        .to_string(),
+        crate::cards::ChipKind::File => match lang {
+            Language::Ru => "ФАЙЛ",
+            Language::En => "FILE",
+        }
+        .to_string(),
+    }
+}
+
+/// Зашейпить метку чипа: физический кегль `CHIP_FONT_SIZE·zoom_px`, без
+/// переноса; возвращает буфер и ширину метки в px буфера (физ.).
+fn shape_chip_buffer(font_system: &mut FontSystem, label: &str, zoom_px: f32) -> (Buffer, f32) {
+    let mut buffer = Buffer::new(
+        font_system,
+        Metrics::new(CHIP_FONT_SIZE * zoom_px, CHIP_LINE_HEIGHT * zoom_px),
+    );
+    buffer.set_wrap(font_system, Wrap::None);
+    buffer.set_size(font_system, None, Some(CHIP_LINE_HEIGHT * zoom_px));
+    buffer.set_text(font_system, label, chip_attrs(), Shaping::Advanced);
+    buffer.shape_until_scroll(font_system, false);
+    let width_px = buffer
+        .layout_runs()
+        .next()
+        .map(|run| run.line_w)
+        .unwrap_or(0.0);
+    (buffer, width_px)
+}
+
+/// FR-075: смещение заголовка от левого края карточки: с чипом — конец
+/// чипа + 8 px (прототип: title на `x + chipW + 18` при чипе на `x+10`,
+/// ширина чипа = метка + 14), без чипа — прежнее поле `TITLE_PADDING`.
+fn title_left_offset(chip_w: f32) -> f32 {
+    if chip_w > 0.0 {
+        10.0 + chip_w + 14.0 + 8.0
+    } else {
+        TITLE_PADDING
+    }
+}
+
 /// Ширина клипа заголовка (CR-010): резерв под иконку вычитается и для
 /// файловой ноды (буква расширения слева), и для шаблонной (квад-иконка
 /// справа, `cards::template_icon_rect`) — иначе длинное имя шаблона
-/// рисовалось под иконкой. Рендер и шейпинг используют одну формулу.
-pub(crate) fn title_clip_width(node_width: f32, reserves_icon: bool) -> f32 {
-    (node_width - TITLE_PADDING * 2.0 - if reserves_icon { ICON_WIDTH } else { 0.0 }).max(0.0)
+/// рисовалось под иконкой. FR-075: вычитается и чип категории (метка
+/// по вёрстке прототипа). Рендер и шейпинг используют одну формулу.
+pub(crate) fn title_clip_width(node_width: f32, reserves_icon: bool, chip_w: f32) -> f32 {
+    (node_width
+        - title_left_offset(chip_w)
+        - TITLE_PADDING
+        - if reserves_icon { ICON_WIDTH } else { 0.0 })
+    .max(0.0)
 }
 
 /// Размер тела заметки в world-px (T7) — из design-токенов (FR-046).
@@ -472,9 +572,11 @@ fn shape_row_cell(
 }
 
 /// FR-025: world-вертикаль ряда результата шаблонной/expr-ноды — центр
-/// футера результата (FR-023): узловое значение сидит в футере карточки.
+/// футера результата: узловое значение сидит в полосе «ИТОГ».
+/// FR-075: полоса результата — 32 px по вёрстке prototype-unified
+/// (`M.STRIP`; прежний футер — 16 px у нижнего края), центр полосы.
 pub fn result_footer_y(node: &Node) -> f32 {
-    node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT / 2.0
+    node.y + node.height - RESULT_STRIP_H.min(node.height) / 2.0
 }
 
 /// Байтовый offset в тексте → курсор (строка, байтовый индекс в строке).
@@ -1101,7 +1203,7 @@ fn sigma_row_item(theme: &ThemeColors, text: String) -> BodyItem {
         text,
         font_size: BODY_FONT_SIZE,
         line_height: BODY_LINE_HEIGHT,
-        color: theme.link,
+        color: theme.result_value,
         indent: 0.0,
         mono: true,
         bold: false,
@@ -2406,6 +2508,8 @@ fn error_hit_rect(
 struct CachedTitle {
     title: Buffer,
     icon: Option<Buffer>,
+    /// FR-075: чип категории шапки (prototype-unified) — метка/род/ширина.
+    chip: Option<CachedChip>,
     /// Тело заметки (T7, GFM) — вертикальный стек блоков: только у text-нод
     /// с непустым текстом.
     body: Option<BodyLayout>,
@@ -2439,6 +2543,16 @@ struct CachedTitle {
     mode: u8,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
+}
+
+/// FR-075: чип категории шапки в кэше ноды — метка (uppercase), род
+/// (цвет решает рендер по теме/манифесту), ширина метки в px буфера
+/// (физ.; мир-ширина = /zoom_px) и зашейпленный буфер метки.
+struct CachedChip {
+    kind: ChipKind,
+    label: String,
+    width_px: f32,
+    buffer: Buffer,
 }
 
 /// FR-061 этап B: строка таблицы ноды в кэше (D-2/D-4): левой частью
@@ -2688,6 +2802,15 @@ impl TextSystem {
         &self.body_hits
     }
 
+    /// FR-075: чип категории шапки — род и ширина метки в world px
+    /// (кэш раскладки; нет кэша/чипа — None). Квад чипа строит рендер
+    /// ([`crate::cards::header_chip_instance`], цвет — [`crate::cards::chip_fill`]).
+    pub fn chip(&self, index: usize) -> Option<(ChipKind, f32)> {
+        let entry = self.cache.get(&index)?;
+        let chip = entry.chip.as_ref()?;
+        Some((chip.kind, chip.width_px / entry.zoom_px.max(0.001)))
+    }
+
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
     /// строки с бейджем результата — [`LinePort`] на правом краю ноды
     /// (вертикаль — [`result_row_y`] ряда бейджа — инвариант вертикали).
@@ -2845,7 +2968,19 @@ impl TextSystem {
                 // расширения), и у шаблонной (квад-иконка справа): без
                 // резерва длинное имя шаблона рисовалось под иконкой
                 let has_icon = extension_letter(node).is_some() || node.template().is_some();
-                let title_width = title_clip_width(node.width, has_icon);
+                // FR-075: ширина чипа — из кэша (первый кадр/новая нода — 0:
+                // на следующем кадре кэш содержит точную ширину метки)
+                let chip_w = self
+                    .cache
+                    .get(&index)
+                    .and_then(|entry| {
+                        entry
+                            .chip
+                            .as_ref()
+                            .map(|c| c.width_px / entry.zoom_px.max(0.001))
+                    })
+                    .unwrap_or(0.0);
+                let title_width = title_clip_width(node.width, has_icon, chip_w);
                 let width_px = title_width * zoom_px;
                 // FR-011: у свернутой ноды в заголовке бейдж «+N» — число
                 // скрытых потомков
@@ -3256,6 +3391,24 @@ impl TextSystem {
                         label.shape_until_scroll(&mut self.font_system, false);
                         (Some(buffer), result_width_px, Some(label))
                     };
+
+                    // FR-075 (вёрстка prototype-unified): чип категории шапки —
+                    // метка/род/ширина вместе с кэшем ноды (буфер — физический
+                    // кегль 10·zoom_px; мир-ширина = /zoom_px). Род — из ноды и
+                    // формульности (line_outcomes/результат).
+                    let has_calc = !result_text.is_empty()
+                        || line_outcomes.is_some_and(|outs| outs.iter().any(|o| o.is_some()));
+                    let chip = chip_kind(node, has_calc).map(|kind| {
+                        let label = chip_label(kind, node, self.language);
+                        let (buffer, width_px) =
+                            shape_chip_buffer(&mut self.font_system, &label, zoom_px);
+                        CachedChip {
+                            kind,
+                            label,
+                            width_px,
+                            buffer,
+                        }
+                    });
 
                     // FR-061 этап B (D-2/D-4/D-5/D-6): табличные строки ноды —
                     // декларативная сборка ячеек (row_grid::build_rows),
@@ -3708,6 +3861,7 @@ impl TextSystem {
                         CachedTitle {
                             title,
                             icon,
+                            chip,
                             body,
                             result,
                             result_error,
@@ -3728,6 +3882,32 @@ impl TextSystem {
                 }
                 if let Some(entry) = self.cache.get_mut(&index) {
                     entry.last_used = self.tick;
+                    // FR-075: дрейф метки чипа без полного перевейпа кэша
+                    // (категория манифеста/род изменились — карточка та же,
+                    // ключ кэша не меняется): перешейп одного буфера чипа.
+                    let has_calc = !result_text.is_empty()
+                        || line_outcomes.is_some_and(|outs| outs.iter().any(|o| o.is_some()));
+                    let expected = chip_kind(node, has_calc)
+                        .map(|kind| (kind, chip_label(kind, node, self.language)));
+                    let drifted = match (&entry.chip, &expected) {
+                        (Some(existing), Some((kind, label))) => {
+                            existing.kind != *kind || existing.label != *label
+                        }
+                        (None, None) => false,
+                        _ => true,
+                    };
+                    if drifted {
+                        entry.chip = expected.map(|(kind, label)| {
+                            let (buffer, width_px) =
+                                shape_chip_buffer(&mut self.font_system, &label, zoom_px);
+                            CachedChip {
+                                kind,
+                                label,
+                                width_px,
+                                buffer,
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -4027,7 +4207,15 @@ impl TextSystem {
                     } else {
                         1.0
                     };
-                    let title_x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
+                    let title_x = node.x
+                        + title_left_offset(
+                            entry
+                                .chip
+                                .as_ref()
+                                .map(|c| c.width_px / entry.zoom_px.max(0.001))
+                                .unwrap_or(0.0),
+                        )
+                        + if has_icon { ICON_WIDTH } else { 0.0 };
                     let pos = to_physical([title_x, node.y]);
                     // FR-072: плейсхолдер пустого явного заголовка — тон иконки
                     // (приглушённо), читательский — тон заголовка.
@@ -4057,7 +4245,17 @@ impl TextSystem {
                         });
                     }
                     if let Some(icon) = &entry.icon {
-                        let pos = to_physical([node.x + TITLE_PADDING, node.y]);
+                        // FR-075: буква расширения — после чипа (чип слева —
+                        // по вёрстке прототипа; без чипа — прежнее поле)
+                        let letter_x = node.x
+                            + title_left_offset(
+                                entry
+                                    .chip
+                                    .as_ref()
+                                    .map(|c| c.width_px / entry.zoom_px.max(0.001))
+                                    .unwrap_or(0.0),
+                            );
+                        let pos = to_physical([letter_x, node.y]);
                         areas.push(TextArea {
                             buffer: icon,
                             left: pos[0],
@@ -4070,6 +4268,28 @@ impl TextSystem {
                                 bottom: (pos[1] + HEADER_HEIGHT * zoom_px) as i32,
                             },
                             default_color: dim_color(on_card(self.theme.icon), text_factor),
+                            custom_glyphs: &[],
+                        });
+                    }
+                    // FR-075 (вёрстка prototype-unified): текст метки чипа —
+                    // тёмный на цветной заливке, пад 7 px слева, v-center в
+                    // пилюле 16 px (строка 12 → сдвиг 2).
+                    if let Some(chip) = &entry.chip {
+                        let chip_w = chip.width_px / entry.zoom_px.max(0.001);
+                        let rect = crate::cards::header_chip_rect(node, chip_w);
+                        let pos = to_physical([rect[0] + 7.0, rect[1] + 2.0]);
+                        areas.push(TextArea {
+                            buffer: &chip.buffer,
+                            left: pos[0],
+                            top: pos[1],
+                            scale: 1.0,
+                            bounds: TextBounds {
+                                left: (pos[0].floor() as i32) - 1,
+                                top: pos[1] as i32,
+                                right: (pos[0] + chip.width_px + 1.0) as i32,
+                                bottom: (pos[1] + CHIP_LINE_HEIGHT * zoom_px) as i32,
+                            },
+                            default_color: dim_color(chip_text_color(), text_factor),
                             custom_glyphs: &[],
                         });
                     }
@@ -4341,10 +4561,13 @@ impl TextSystem {
                     // (прототип .strip-d .lbl): sans 10, приглушённый тон,
                     // вертикально отцентрована в полосе футера.
                     if let Some(label) = &entry.result_label {
-                        let top_world = node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT;
+                        // FR-075: метка «ИТОГ» — в полосе результата 32 px
+                        // (вёрстка prototype-unified .strip-d), v-center.
+                        let strip_h = RESULT_STRIP_H.min(node.height);
+                        let top_world = node.y + node.height - strip_h;
                         let left_world = node.x + BODY_PADDING;
                         let pos = to_physical([left_world, top_world]);
-                        let v_center = ((RESULT_LINE_HEIGHT - BADGE_LINE_HEIGHT) / 2.0) * zoom_px;
+                        let v_center = ((strip_h - BADGE_LINE_HEIGHT) / 2.0) * zoom_px;
                         areas.push(TextArea {
                             buffer: label,
                             left: pos[0],
@@ -4361,27 +4584,38 @@ impl TextSystem {
                         });
                     }
                     if let Some(result) = &entry.result {
-                        let top_world = node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT;
+                        let strip_h = RESULT_STRIP_H.min(node.height);
+                        let top_world = node.y + node.height - strip_h;
                         let left_world = node.x + BODY_PADDING;
-                        let right_world = node.x + node.width - BODY_PADDING;
+                        // FR-075: право значения — на направляющей чисел
+                        // (прототип .strip-d .val: width var(--val-w), цифры
+                        // прижаты к колонке чисел); без направляющих —
+                        // правый пад карточки (как раньше).
+                        let right_world = entry
+                            .row_guides
+                            .as_ref()
+                            .map(|g| node.x + BODY_PADDING + g.value_right())
+                            .unwrap_or(node.x + node.width - BODY_PADDING);
                         let right_phys = to_physical([right_world, top_world])[0];
                         let pos = to_physical([left_world, top_world]);
                         let left_phys = (right_phys - entry.result_width_px).round();
                         areas.push(TextArea {
                             buffer: result,
                             left: left_phys,
-                            top: pos[1],
+                            top: pos[1] + ((strip_h - RESULT_LINE_HEIGHT) / 2.0) * zoom_px,
                             scale: 1.0,
                             bounds: TextBounds {
                                 left: (pos[0].floor() as i32) - 1,
                                 top: pos[1] as i32,
                                 right: (right_phys.round() as i32) + 1,
-                                bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
+                                bottom: (pos[1] + strip_h * zoom_px) as i32,
                             },
                             default_color: if entry.result_error {
                                 dim_color(on_card(self.theme.error), text_factor)
                             } else {
-                                dim_color(on_card(self.theme.link), text_factor)
+                                // FR-075: бирюзовый тон значения — прототип
+                                // `--flow`/PAL.value (семейство value-рёбер)
+                                dim_color(on_card(self.theme.result_value), text_factor)
                             },
                             custom_glyphs: &[],
                         });
@@ -5082,7 +5316,7 @@ load = connections_per_sec / (servers * server_rate)\n";
         }));
         // Ширина клипа — с резервом под иконку (как в фазе шейпинга)
         let reserves_icon = node.template().is_some();
-        let title_width = title_clip_width(node.width, reserves_icon);
+        let title_width = title_clip_width(node.width, reserves_icon, 0.0);
         let title_right = node.x + TITLE_PADDING + title_width;
         let icon = template_icon_rect(&node);
         assert!(
@@ -5097,7 +5331,7 @@ load = connections_per_sec / (servers * server_rate)\n";
         // У ноды без иконки резерва нет — клип по полям с двух сторон
         let plain = Node::text("n", "text", 0.0, 0.0);
         assert!(
-            (title_clip_width(plain.width, false) - (plain.width - TITLE_PADDING * 2.0)).abs()
+            (title_clip_width(plain.width, false, 0.0) - (plain.width - TITLE_PADDING * 2.0)).abs()
                 < 0.01
         );
     }

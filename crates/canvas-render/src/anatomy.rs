@@ -23,9 +23,9 @@ use canvas_core::{Node, Side};
 
 // --- Единая точка импорта констант зон (значения — design-токены FR-046) ---
 
-/// Высота цветной полосы категории шаблонной ноды (чип F-2 сегодня) —
-/// `cards.rs`.
-pub use crate::cards::TEMPLATE_BAND_H;
+/// Высота полосы результата «ИТОГ» внизу карточки (зона D, FR-075 —
+/// вёрстка prototype-unified M.STRIP=32) — `cards.rs`.
+pub use crate::cards::RESULT_STRIP_H;
 /// Горизонтальный пад тела (границы зоны C по x) — `text.rs`.
 pub use crate::text::BODY_PADDING;
 /// Зазор хедер→тело — `text.rs`.
@@ -114,16 +114,20 @@ pub fn ports_rail_rect(node: &Node, side: Side) -> [f32; 4] {
 
 /// Зона **D** — полоса результата. СЕГОДНЯ: у шаблонной ноды значение
 /// сидит в футере (FR-023/FR-025: [`crate::text::result_footer_y`]) —
-/// полоса = строка результата над нижним падом; у text-ноды результаты
+/// полоса «ИТОГ» — зона D высотой 32 у нижнего края (FR-075, вёрстка
+/// prototype-unified); у text-ноды результаты
 /// инлайн (построчные [`crate::text::result_row_y`]) — полосы нет
 /// (`None`). Единая полоса F-6 для обоих типов — N2 (демо-точка
 /// владельцу Q6, ноль скачка через F-12).
 pub fn result_strip_rect(node: &Node) -> Option<[f32; 4]> {
     node.template()?;
-    let height = RESULT_LINE_HEIGHT.min(node.height.max(0.0));
+    // FR-075: полоса результата — зона D высотой 32 (вёрстка
+    // prototype-unified M.STRIP), у нижнего края карточки; центр =
+    // result_footer_y (инвариант с портом футера line=None).
+    let height = RESULT_STRIP_H.min(node.height.max(0.0));
     Some([
         node.x,
-        node.y + node.height - BODY_PADDING - height,
+        node.y + node.height - height,
         node.width.max(0.0),
         height,
     ])
@@ -218,9 +222,9 @@ mod tests {
         assert!(body[0] >= n.x && body[0] + body[2] <= n.x + n.width + 1e-3);
     }
 
-    /// Зона D — у шаблонной ноды: строка результата над нижним падом,
-    /// центр = result_footer_y (паритет с рендером футера); у text — None
-    /// (результаты инлайн).
+    /// Зона D — у шаблонной ноды: полоса результата «ИТОГ» 32 px у нижнего
+    /// края (FR-075, вёрстка prototype-unified), центр = result_footer_y
+    /// (паритет с рендером футера); у text — None (результаты инлайн).
     #[test]
     fn result_strip_template_only_and_footer_parity() {
         let text = node(0.0, 0.0, 300.0, 200.0);
@@ -232,15 +236,15 @@ mod tests {
         let strip = result_strip_rect(&tpl).expect("у шаблона полоса есть");
         assert_eq!(strip[0], 0.0);
         assert_eq!(strip[2], 300.0);
-        assert_eq!(strip[3], RESULT_LINE_HEIGHT);
+        assert_eq!(strip[3], RESULT_STRIP_H);
         let center = strip[1] + strip[3] / 2.0;
         assert!(
             (center - crate::text::result_footer_y(&tpl)).abs() < 1e-3,
             "центр полосы = вертикаль футера (инвариант с портом line=None)"
         );
         assert!(
-            (strip[1] + strip[3] - (tpl.y + tpl.height - BODY_PADDING)).abs() < 1e-3,
-            "низ полосы на линии нижнего пада"
+            (strip[1] + strip[3] - (tpl.y + tpl.height)).abs() < 1e-3,
+            "низ полосы — нижний край карточки"
         );
     }
 

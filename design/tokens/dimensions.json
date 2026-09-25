@@ -13,14 +13,15 @@
   "radius": {
     "$note": "Radius-scale квадов UI-оверлеев (FR-053 U3): первый параметр CardInstance.params (скругление углов); card.corner_radius — общий радиус карточек.",
     "chip": { "$type": "dimension", "$value": 6.0, "$desc": "Квад чипа/кнопки what-if бара app.rs (params [6.0,…]) и empty/фильтра галереи" },
-    "card": { "$type": "dimension", "$value": 8.0, "$desc": "CORNER_RADIUS cards.rs:21 (общий радиус карточек)" },
+    "card": { "$type": "dimension", "$value": 10.0, "$desc": "CORNER_RADIUS cards.rs:21 (общий радиус карточек; FR-075: 8→10 — prototype-unified)" },
     "panel": { "$type": "dimension", "$value": 10.0, "$desc": "Панель галереи app.rs (params [10.0,…])" },
     "pill": { "$type": "dimension", "$value": 12.0, "$desc": "Чипы категорий галереи app.rs (params [12.0,…]) — пилюли" }
   },
 
   "card": {
-    "corner_radius": { "$type": "dimension", "$value": 8.0, "$desc": "CORNER_RADIUS cards.rs:21" },
-    "header_height": { "$type": "dimension", "$value": 34.0, "$desc": "HEADER_HEIGHT cards.rs:19 (FR-023: 28 → 34)" }
+    "corner_radius": { "$type": "dimension", "$value": 10.0, "$desc": "CORNER_RADIUS cards.rs:21 (FR-075: 8→10 — радиус силуэта prototype-unified roundRect 10)" },
+    "header_height": { "$type": "dimension", "$value": 34.0, "$desc": "HEADER_HEIGHT cards.rs:19 (FR-023: 28 → 34)" },
+    "result_strip": { "$type": "dimension", "$value": 32.0, "$desc": "RESULT_STRIP_H cards.rs (FR-075: полоса «ИТОГ» — M.STRIP=32 prototype-unified)" }
   },
 
   "edge": {

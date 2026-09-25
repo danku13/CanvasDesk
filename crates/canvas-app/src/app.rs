@@ -104,9 +104,10 @@ use canvas_render::animate::{
 };
 use canvas_render::camera::Vec2;
 use canvas_render::cards::{
-    build_stage_edge_instances_with_alpha, card_instance, drop_ghost, template_band_instance,
-    template_icon_quads, title_for, BundleContext, CardInstance, FocusView, SpillWaveView,
-    EDGE_COLOR, FLOW_EDGE_COLOR, HEADER_HEIGHT, SELECTION_BORDER, UNMAPPED_EDGE_COLOR,
+    build_stage_edge_instances_with_alpha, card_instance, chip_fill, drop_ghost,
+    header_chip_instance, header_chip_rect, template_icon_quads, title_for, BundleContext,
+    CardInstance, ChipKind, FocusView, SpillWaveView, EDGE_COLOR, FLOW_EDGE_COLOR, HEADER_HEIGHT,
+    SELECTION_BORDER, UNMAPPED_EDGE_COLOR,
 };
 use canvas_render::edit::{
     edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,

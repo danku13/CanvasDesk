@@ -335,7 +335,12 @@ pub fn card_instance(node: &Node, selected: bool, theme: &ThemeColors) -> CardIn
     } else if group {
         theme.group_border
     } else {
-        [0.0; 4]
+        // FR-075 (вёрстка prototype-unified): волосяной контур cardEdge
+        // 1.25 px на КАЖДОЙ карточке (силуэт читается на любом фоне).
+        // Шейдер: ширина = 1.5 · border.a ≈ 1.28 px при a = 0.85.
+        let mut edge = theme.card_edge;
+        edge[3] = 0.85;
+        edge
     };
     CardInstance {
         pos: [node.x, node.y],
@@ -370,46 +375,155 @@ pub fn build_instances(
 }
 
 // --- Шаблонные ноды (FR-018) ---
-
-/// Высота цветной полосы категории вверху шаблонной ноды (world px).
-pub const TEMPLATE_BAND_H: f32 = 6.0;
 /// Сторона квад-иконки роли (world px).
 pub const TEMPLATE_ICON_SIZE: f32 = 16.0;
 /// Горизонтальный отступ иконки от края ноды (world px).
 /// CR-010: равен левому полю заголовка (`TITLE_PADDING` в text.rs) — шапка
 /// симметрична; прежние 6 px визуально «уезжали» вправо.
 pub const TEMPLATE_ICON_MARGIN_H: f32 = 12.0;
-/// Вертикальный отступ иконки от полосы категории (world px).
-pub const TEMPLATE_ICON_MARGIN: f32 = 6.0;
 
-/// Rect квад-иконки роли: правый верхний угол шапки (заголовок слева,
+/// Rect квад-иконки роли: правый верхний угол шапки, вертикально
+/// центрирована в полосе заголовка (FR-075: полосы категории больше нет —
+/// чип в шапке по вёрстке `prototype-unified.html`; заголовок слева,
 /// иконка справа — не пересекаются: клип заголовка резервирует ICON_WIDTH).
 pub fn template_icon_rect(node: &Node) -> [f32; 4] {
     [
         node.x + node.width - TEMPLATE_ICON_SIZE - TEMPLATE_ICON_MARGIN_H,
-        node.y + TEMPLATE_BAND_H + TEMPLATE_ICON_MARGIN,
+        node.y + (HEADER_HEIGHT - TEMPLATE_ICON_SIZE) / 2.0,
         TEMPLATE_ICON_SIZE,
         TEMPLATE_ICON_SIZE,
     ]
 }
 
-/// Цветная полоса категории вверху шаблонной ноды: цвет — снимок
-/// `canvasdesk.template.color` (`#RRGGBB` из манифеста категории).
-/// Не-шаблонная нода или битый hex — None (полосы нет).
-pub fn template_band_instance(node: &Node) -> Option<CardInstance> {
-    let template = node.template()?;
-    let fill = parse_hex(&template.color)?;
-    Some(CardInstance {
-        pos: [node.x, node.y],
-        size: [node.width, TEMPLATE_BAND_H.min(node.height)],
+// --- Хедер по вёрстке прототипа (FR-075; prototype-unified drawNode) ---
+
+/// Геометрия чипа категории в шапке (prototype-unified: `roundRect(x+10,
+/// y+8, chipW, 16, 8)` — пилюля-капсула, `chipW` = ширина текста + 14).
+/// `label_w` — ширина ЗАШЕЙПЛЕННОГО текста метки в world px (кэш text.rs).
+pub fn header_chip_rect(node: &Node, label_w: f32) -> [f32; 4] {
+    [node.x + 10.0, node.y + 8.0, label_w + 14.0, 16.0]
+}
+
+/// Инстанс чипа категории: сплошная заливка цветом категории, без тени и
+/// рамки (текст метки — отдельная glyphon-группа шапки, цвет — тёмный
+/// `CHIP_TEXT` на любой теме, как в прототипе).
+pub fn header_chip_instance(node: &Node, label_w: f32, fill: [f32; 4]) -> CardInstance {
+    let rect = header_chip_rect(node, label_w);
+    CardInstance {
+        pos: [rect[0], rect[1]],
+        size: [rect[2], rect[3]],
         fill,
         border: [0.0; 4],
+        params: [0.0, 0.0, 0.0, 1.0], // без тени; радиус — corners ниже
+        // Капсула: радиус = полувысота (16/2 = 8) на всех углах.
+        corners: [8.0, 8.0, 8.0, 8.0],
+    }
+}
+
+/// Род чипа категории шапки (метку и ширину считает text.rs — там кэш
+/// раскладки и line_outcomes; цвет — рендер по теме).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipKind {
+    /// Шаблонная нода: метка — категория манифеста, цвет —
+    /// `canvasdesk.template.color` (семантика цвета прежней полосы).
+    Template,
+    /// Расчётная нота (Text с формульными строками) — прототип `calc`.
+    Calc,
+    /// Заметка (Text без формул) — прототип `note`.
+    Note,
+    /// Файл-нода — прототип `file`.
+    File,
+}
+
+/// Заливка чипа по роду и теме (prototype-unified `PAL.chips`):
+/// шаблон — цвет манифеста (преемник полосы категории; битый hex —
+/// бирюза `chips.template`), остальные — слоты темы.
+pub fn chip_fill(node: &Node, kind: ChipKind, theme: &ThemeColors) -> [f32; 4] {
+    match kind {
+        ChipKind::Template => node
+            .template()
+            .and_then(|t| parse_hex(&t.color))
+            .unwrap_or([0.192, 0.722, 0.651, 1.0]), // #31b8a6
+        ChipKind::Calc => theme.chip_calc,
+        ChipKind::Note => theme.chip_note,
+        ChipKind::File => theme.chip_file,
+    }
+}
+
+/// Линия-разделитель зон прототипа (`zoneTop`, 1 px): низ шапки
+/// (`y + HEADER − 1`). Толщина — 1 физический пиксель на любом зуме
+/// (высота квада = 1/effective_zoom world px, как запас тени в шейдере).
+pub fn header_separator_instance(
+    node: &Node,
+    effective_zoom: f32,
+    color: [f32; 4],
+) -> CardInstance {
+    let h = 1.0 / effective_zoom.max(0.001);
+    CardInstance {
+        pos: [node.x, node.y + HEADER_HEIGHT.min(node.height) - h],
+        size: [node.width, h],
+        fill: color,
+        border: [0.0; 4],
         params: [0.0, 0.0, 0.0, 1.0], // без тени
-        // FR-075 W0: верхние углы повторяют дугу карточки (радиус карточки),
-        // нижние прямые — квадратные «уголки» полосы больше не выступают
-        // за скруглённый силуэт карточки (дефект ревизии fr-075 §2).
-        corners: [CORNER_RADIUS, CORNER_RADIUS, 0.0, 0.0],
-    })
+        corners: [0.0; 4],
+    }
+}
+
+/// Высота полосы результата «ИТОГ» внизу карточки (design-токены):
+/// вёрстка prototype-unified `M.STRIP = 32` (DOM `.strip-d`).
+pub use canvas_core::tokens::CARD_RESULT_STRIP_H as RESULT_STRIP_H;
+
+/// Фон полосы результата «ИТОГ»: тинт потока (`theme.strip_tint`),
+/// нижние углы повторяют дугу карточки (`[0,0,R,R]` — прототип
+/// `roundRect(x, y+h−STRIP, w, STRIP, [0,0,10,10])`), без тени/рамки.
+pub fn result_strip_instance(node: &Node, tint: [f32; 4]) -> CardInstance {
+    let h = RESULT_STRIP_H.min(node.height);
+    CardInstance {
+        pos: [node.x, node.y + node.height - h],
+        size: [node.width, h],
+        fill: tint,
+        border: [0.0; 4],
+        params: [0.0, 0.0, 0.0, 1.0], // без тени
+        corners: [0.0, 0.0, CORNER_RADIUS, CORNER_RADIUS],
+    }
+}
+
+/// Линия-разделитель над полосой результата («ИТОГ») — тот же `zoneTop`
+/// 1 физ. px (прототип: `border-top` полосы `.strip-d` / `zoneTop` канвы).
+pub fn result_strip_line_instance(
+    node: &Node,
+    effective_zoom: f32,
+    color: [f32; 4],
+) -> CardInstance {
+    let h = 1.0 / effective_zoom.max(0.001);
+    CardInstance {
+        pos: [
+            node.x,
+            node.y + node.height - RESULT_STRIP_H.min(node.height),
+        ],
+        size: [node.width, h],
+        fill: color,
+        border: [0.0; 4],
+        params: [0.0, 0.0, 0.0, 1.0], // без тени
+        corners: [0.0; 4],
+    }
+}
+
+/// FR-075 (вёрстка prototype-unified): внешнее кольцо выделения —
+/// `roundRect(x−3.5, y−3.5, w+7, h+7, 12)`, штрих `sel` 1.2 px. Рисуется
+/// рядом с карточкой выделенной ноды (подобно кольцу серьёзности FR-016).
+pub fn selection_ring_instance(node: &Node, accent: [f32; 4]) -> CardInstance {
+    const GROW: f32 = 3.5;
+    let mut border = accent;
+    border[3] = 0.8; // шейдер: ширина = 1.5 · a ≈ 1.2 px
+    CardInstance {
+        pos: [node.x - GROW, node.y - GROW],
+        size: [node.width + 2.0 * GROW, node.height + 2.0 * GROW],
+        fill: [0.0; 4],
+        border,
+        params: [CORNER_RADIUS + GROW, 0.0, 0.0, 1.0], // без тени, радиус + GROW
+        corners: [0.0; 4],
+    }
 }
 
 /// Квад-иконка роли шаблонной ноды (решение владельца FR-018: квад-иконки
@@ -1340,10 +1454,12 @@ pub fn build_edge_handle_instances(
 pub const LINE_PORT_DOT: f32 = 7.0;
 
 /// Построчные точки выхода (FR-025): кружок на правом краю ноды у ряда
-/// каждой формульной строки с результатом; финальная строка (значение
-/// ноды) — цветом value-ребра (`FLOW_EDGE_COLOR`), промежуточные —
-/// нейтральным (`EDGE_COLOR`). `hovered` — нода под курсором: все её
-/// порты растут до узлового размера (аффорданс drag, как T8).
+/// каждой формульной строки с результатом. FR-075 (вёрстка
+/// prototype-unified): в покое — бирюзовый кружок с тёмным кольцом
+/// ([`row_port_dot`], точки рядов прототипа; финальность строки остаётся
+/// в данных `LinePort::is_final` для семантики связей). `hovered` — нода
+/// под курсором: все её порты растут до узлового размера и подсвечиваются
+/// акцентом (аффорданс drag, как T8).
 pub fn build_line_port_instances(
     ports: &[canvas_core::LinePort],
     zone_px: f32,
@@ -1357,16 +1473,36 @@ pub fn build_line_port_instances(
     ports
         .iter()
         .map(|port| {
-            let fill = if hovered {
-                SELECTION_BORDER
-            } else if port.is_final {
-                FLOW_EDGE_COLOR
+            if hovered {
+                dot(port.point, dot_d, SELECTION_BORDER)
             } else {
-                EDGE_COLOR
-            };
-            dot(port.point, dot_d, fill)
+                // FR-075 (вёрстка prototype-unified drawRowPort): точки
+                // рядов — бирюзовый кружок α0.5 с тёмным кольцом 1 px
+                // (форма/цвет по прототипу; прежнее различие
+                // final/промежуточная не несёт вёрстка прототипа).
+                row_port_dot(port.point, dot_d)
+            }
         })
         .collect()
+}
+
+/// Заливка точки ряда по прототипу: rgba(49,184,166,.5).
+const ROW_PORT_FILL: [f32; 4] = [0.192, 0.722, 0.651, 0.5];
+/// Тёмное кольцо точки ряда по прототипу: stroke `#0f2c29`, 1 px
+/// (шейдер: ширина = 1.5 · a ≈ 1.35 при a = 0.9).
+const ROW_PORT_RING: [f32; 4] = [0.059, 0.173, 0.161, 0.9];
+
+/// Кружок построчного порта/якоря параметра по вёрстке прототипа
+/// (`drawRowPort`): заливка [`ROW_PORT_FILL`] + кольцо [`ROW_PORT_RING`].
+fn row_port_dot(center: [f32; 2], d: f32) -> CardInstance {
+    CardInstance {
+        pos: [center[0] - d / 2.0, center[1] - d / 2.0],
+        size: [d, d],
+        fill: ROW_PORT_FILL,
+        border: ROW_PORT_RING,
+        params: [d / 2.0, 0.0, 0.0, 1.0],
+        corners: [0.0; 4],
+    }
 }
 
 /// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды — кружки на
@@ -1387,21 +1523,22 @@ pub fn build_param_port_instances(
         .enumerate()
         .map(|(i, port)| {
             let compat = drop_compat.and_then(|flags| flags.get(i).copied());
-            let (dot_d, fill) = match compat {
+            match compat {
                 // Drag активен: допустимая цель — акцент потока значений и
                 // узловой размер (независимо от hover); несовместимая —
                 // маленький тусклый кружок
-                Some(true) => (port_dot_diameter(zone_px), FLOW_EDGE_COLOR),
-                Some(false) => (LINE_PORT_DOT, EDGE_COLOR),
+                Some(true) => dot(port.point, port_dot_diameter(zone_px), FLOW_EDGE_COLOR),
+                Some(false) => dot(port.point, LINE_PORT_DOT, EDGE_COLOR),
                 None => {
                     if hovered {
-                        (port_dot_diameter(zone_px), SELECTION_BORDER)
+                        dot(port.point, port_dot_diameter(zone_px), SELECTION_BORDER)
                     } else {
-                        (LINE_PORT_DOT, EDGE_COLOR)
+                        // FR-075: бирюзовый кружок с кольцом — как точки
+                        // рядов прототипа (зеркало build_line_port_instances)
+                        row_port_dot(port.point, LINE_PORT_DOT)
                     }
                 }
-            };
-            dot(port.point, dot_d, fill)
+            }
         })
         .collect()
 }
@@ -1846,22 +1983,15 @@ mod tests {
         }
 
         // Декоративный оверлей — отдельные инстансы, НЕ часть card_instance:
-        // полоса категории (template_band_instance) и квад-иконка
-        // (template_icon_quads) — добавляются в renderer.rs (строки ~1299–1323)
-        // ТОЛЬКО при `node.template().is_some()`. У обычной text-ноды:
-        //   • template_band_instance возвращает None (нет полосы)
-        //   • template_icon_quads НЕ вызывается рендером (нет квад-иконки)
-        // Это НАрост поверх card_instance, не отдельный путь.
-        assert!(
-            template_band_instance(&plain).is_none(),
-            "у обычной ноды нет полосы"
-        );
-        assert!(
-            template_band_instance(&tpl).is_some(),
-            "у шаблонной ноды есть полоса"
-        );
+        // чип категории (header_chip_instance), линия-разделитель зон,
+        // полоса результата «ИТОГ» (result_strip_instance) и квад-иконка
+        // (template_icon_quads) — добавляются в renderer.rs поверх карточки.
+        // Это НАрост поверх card_instance, не отдельный путь (оракул
+        // байт-в-байт выше — инвариант I-шаблон). FR-075: полосы категории
+        // больше нет — чип в шапке по вёрстке prototype-unified; иконка
+        // роли — прежний декор FR-018.
         // Иконка lb — композиция из нескольких квадратов (весы); это декор,
-        // не часть карточки. renderer вызывает template_icon_quads только
+        // не часть карточки: renderer вызывает template_icon_quads только
         // когда node.template().is_some() — у обычной text-ноды вызова нет.
         let icon = template_icon_quads(
             &tpl.template().map(|t| t.icon).unwrap_or_default(),
@@ -1869,6 +1999,18 @@ mod tests {
             [1.0; 4],
         );
         assert!(!icon.is_empty(), "у шаблонной ноды есть квад-иконка роли");
+        // Чип — капсула в верхнем левом углу шапки (prototype-unified:
+        // roundRect(x+10, y+8, метка+14, 16, 8)); иконка — в центре шапки.
+        let chip = header_chip_instance(&tpl, 42.0, [0.3, 0.6, 1.0, 1.0]);
+        assert_eq!(chip.pos, [tpl.x + 10.0, tpl.y + 8.0]);
+        assert_eq!(chip.size, [42.0 + 14.0, 16.0]);
+        assert_eq!(chip.corners, [8.0, 8.0, 8.0, 8.0]);
+        let icon_rect = template_icon_rect(&tpl);
+        assert_eq!(
+            icon_rect[0],
+            tpl.x + tpl.width - TEMPLATE_ICON_SIZE - TEMPLATE_ICON_MARGIN_H
+        );
+        assert!((icon_rect[1] - (tpl.y + (HEADER_HEIGHT - TEMPLATE_ICON_SIZE) / 2.0)).abs() < 1e-3);
     }
 
     /// Заголовок: имя файла из Windows/Unix-пути, первая строка текста, label группы.
@@ -2474,24 +2616,54 @@ mod tests {
         assert_eq!(&bytes[76..80], &5.0f32.to_ne_bytes());
     }
 
-    /// FR-075 W0: полоса категории скругляет только ВЕРХНИЕ углы (радиус
-    /// карточки) — квадратные «уголки» больше не выступают за силуэт.
+    /// FR-075: полоса результата «ИТОГ» — нижние углы повторяют дугу
+    /// карточки, высота 32 (M.STRIP prototype-unified); линии зон —
+    /// 1 физ. px на любом зуме.
     #[test]
-    fn template_band_has_top_corner_radius() {
-        let mut node = Node::text("tpl", "rps = 1000", 0.0, 0.0);
-        node.set_template(Some(canvas_core::templates::TemplateRef {
-            id: "mock.lb".to_owned(),
-            version: "1.0.0".to_owned(),
-            expr: "mm1($rps, $service_rate, $servers)".to_owned(),
-            params: std::collections::BTreeMap::new(),
-            icon: "lb".to_owned(),
-            color: "#4A90E2".to_owned(),
-            name: Some("Балансировщик нагрузки".to_owned()),
-            outputs: Vec::new(),
-        }));
-        let band = template_band_instance(&node).expect("у шаблонной ноды полоса есть");
-        assert_eq!(band.corners, [CORNER_RADIUS, CORNER_RADIUS, 0.0, 0.0]);
-        assert_eq!(band.params, [0.0, 0.0, 0.0, 1.0]);
+    fn result_strip_geometry() {
+        let node = Node::text("n", "a = 1", 0.0, 0.0);
+        let strip = result_strip_instance(&node, [0.1, 0.7, 0.6, 0.06]);
+        assert_eq!(strip.pos, [0.0, node.height - RESULT_STRIP_H]);
+        assert_eq!(strip.size, [node.width, RESULT_STRIP_H]);
+        assert_eq!(strip.corners, [0.0, 0.0, CORNER_RADIUS, CORNER_RADIUS]);
+        assert_eq!(strip.params, [0.0, 0.0, 0.0, 1.0]);
+        let line = result_strip_line_instance(&node, 2.0, [1.0; 4]);
+        assert_eq!(line.pos, [0.0, node.height - RESULT_STRIP_H]);
+        assert!((line.size[1] - 0.5).abs() < 1e-3, "1 физ. px при zoom 2");
+        let sep = header_separator_instance(&node, 0.5, [1.0; 4]);
+        assert!((sep.size[1] - 2.0).abs() < 1e-3, "1 физ. px при zoom 0.5");
+        assert!((sep.pos[1] - (HEADER_HEIGHT - 2.0)).abs() < 1e-3);
+    }
+
+    /// FR-075: внешнее кольцо выделения — x−3.5..+7, радиус +3.5,
+    /// штрих-акцент (prototype-unified: roundRect(x−3.5, y−3.5, w+7, h+7, 12)).
+    #[test]
+    fn selection_ring_geometry() {
+        let node = Node::text("n", "a = 1", 0.0, 0.0);
+        let ring = selection_ring_instance(&node, [0.5, 0.5, 1.0, 1.0]);
+        assert_eq!(ring.pos, [-3.5, -3.5]);
+        assert_eq!(ring.size, [node.width + 7.0, node.height + 7.0]);
+        assert_eq!(ring.params, [CORNER_RADIUS + 3.5, 0.0, 0.0, 1.0]);
+        assert_eq!(ring.fill, [0.0; 4]);
+        assert!((ring.border[3] - 0.8).abs() < 1e-3, "штрих ≈ 1.2 px");
+    }
+
+    /// FR-075 (вёрстка prototype-unified drawRowPort): точки рядов/якоря —
+    /// бирюзовый кружок α0.5 с тёмным кольцом; hover — акцент выделения.
+    #[test]
+    fn row_ports_use_prototype_style() {
+        let ports = vec![canvas_core::LinePort {
+            line: Some(0),
+            point: [10.0, 20.0],
+            is_final: true,
+        }];
+        let inst = build_line_port_instances(&ports, 26.0, false);
+        assert_eq!(inst.len(), 1);
+        assert_eq!(inst[0].fill, ROW_PORT_FILL);
+        assert_eq!(inst[0].border, ROW_PORT_RING);
+        assert_eq!(inst[0].params[0], LINE_PORT_DOT / 2.0);
+        let hovered = build_line_port_instances(&ports, 26.0, true);
+        assert_eq!(hovered[0].fill, SELECTION_BORDER, "hover — акцент");
     }
 
     /// FR-075 W0: Rust-оракул `corner_radius_at` зеркалит шейдерную
@@ -2854,15 +3026,17 @@ mod fr050_stage_c_tests {
         ]
     }
 
-    /// Н2: якоря без drag — маленькие нейтральные кружки; hover ноды —
-    /// рост до узлового размера + рамка выделения (аффорданс портов T8).
+    /// Н2: якоря без drag — бирюзовые кружки с тёмным кольцом по вёрстке
+    /// прототипа (FR-075 drawRowPort); hover ноды — рост до узлового
+    /// размера + акцент выделения (аффорданс портов T8).
     #[test]
     fn param_port_instances_plain_and_hovered() {
         let ports = ports();
         let plain = build_param_port_instances(&ports, 20.0, false, None);
         assert_eq!(plain.len(), 2);
         assert!((plain[0].size[0] - LINE_PORT_DOT).abs() < 1e-4);
-        assert_eq!(plain[0].fill, EDGE_COLOR);
+        assert_eq!(plain[0].fill, ROW_PORT_FILL);
+        assert_eq!(plain[0].border, ROW_PORT_RING);
         let hovered = build_param_port_instances(&ports, 20.0, true, None);
         assert!((hovered[0].size[0] - port_dot_diameter(20.0)).abs() < 1e-4);
         assert_eq!(hovered[0].fill, SELECTION_BORDER);
@@ -2882,10 +3056,12 @@ mod fr050_stage_c_tests {
         // Несовместимый — нейтральный маленький
         assert_eq!(inst[1].fill, EDGE_COLOR);
         assert!((inst[1].size[0] - LINE_PORT_DOT).abs() < 1e-4);
-        // Укороченный список флагов: хвост — обычный аффорданс
+        // Укороченный список флагов: хвост — обычный аффорданс (вёрстка
+        // прототипа — бирюза с кольцом)
         let short = [true];
         let inst = build_param_port_instances(&ports, 20.0, false, Some(&short));
-        assert_eq!(inst[1].fill, EDGE_COLOR);
+        assert_eq!(inst[1].fill, ROW_PORT_FILL);
+        assert_eq!(inst[1].border, ROW_PORT_RING);
         assert!((inst[1].size[0] - LINE_PORT_DOT).abs() < 1e-4);
     }
 

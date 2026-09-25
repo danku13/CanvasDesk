@@ -146,9 +146,17 @@ pub const MINIMAP_BG: [u8; 4] = [30, 32, 38, 184];
 // ---------------------------------------------------------------------------
 
 /// Радиус скругления карточки, world px. Источник: `CORNER_RADIUS` cards.rs:21.
-pub const CARD_CORNER_RADIUS: f32 = 8.0;
+/// FR-075 (выравнивание с прототипом): 8 → 10 — `prototype-unified.html`
+/// рисует карточку `roundRect(x, y, w, h, 10)` (и полосу результата
+/// `[0,0,10,10]`) — единый радиус силуэта по вёрстке прототипа.
+pub const CARD_CORNER_RADIUS: f32 = 10.0;
 /// Высота шапки карточки, world px (FR-023). Источник: `HEADER_HEIGHT` cards.rs:19.
 pub const CARD_HEADER_HEIGHT: f32 = 34.0;
+/// Высота полосы результата «ИТОГ» внизу карточки, world px. Источник:
+/// вёрстка прототипа — `prototype-unified.html` `M.STRIP = 32` (DOM
+/// `.strip-d`: `padding 7px 14px`, фон-тинт потока, линия-разделитель
+/// сверху; FR-075). Источник в рендере: `RESULT_STRIP_H` cards.rs.
+pub const CARD_RESULT_STRIP_H: f32 = 32.0;
 
 // ---------------------------------------------------------------------------
 // Spacing/radius-scale UI-оверлеев (design/tokens/dimensions.json — FR-053
@@ -586,6 +594,7 @@ mod parity_tests {
         let dim = |path: &str| -> f32 { color(&root, path).as_f64().unwrap() as f32 };
         assert_eq!(dim("card.corner_radius.$value"), CARD_CORNER_RADIUS);
         assert_eq!(dim("card.header_height.$value"), CARD_HEADER_HEIGHT);
+        assert_eq!(dim("card.result_strip.$value"), CARD_RESULT_STRIP_H);
         assert_eq!(dim("edge.dot.$value"), EDGE_DOT);
         assert_eq!(dim("edge.arrow_len.$value"), EDGE_ARROW_LEN);
         assert_eq!(dim("typography.title_size.$value"), TYPE_TITLE);

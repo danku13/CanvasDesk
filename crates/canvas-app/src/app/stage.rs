@@ -1035,8 +1035,44 @@ impl App {
                 camera,
                 viewport,
             ));
-            if let Some(band) = template_band_instance(node) {
-                quads.push(transform.instance_to_world(&band, camera, viewport));
+            // FR-075 (вёрстка prototype-unified): чип категории в шапке —
+            // у шаблонных нод main stage (полосы категории больше нет).
+            // Метка — «ШАБЛОН» (в снапшоте canvasdesk.template категории
+            // нет — категория читается по цвету чипа); ширина — замер тем
+            // же шрифтом, что рендер чипа (TextMeasurer + статический
+            // FontSystem рендера).
+            if node.template().is_some() {
+                let label = "ШАБЛОН".to_string();
+                let label_px = {
+                    let mut measure_fs = canvas_render::text::measure_font_system();
+                    let mut measurer = canvas_ui::measure::TextMeasurer::new();
+                    measurer.width_of_weighted(
+                        &mut measure_fs,
+                        &label,
+                        canvas_render::text::SANS_FAMILY,
+                        font(10.0),
+                        cosmic_text::Weight::SEMIBOLD,
+                    )
+                };
+                let label_w = label_px / s; // world px (замер — логические px stage)
+                let chip = header_chip_instance(
+                    node,
+                    label_w,
+                    chip_fill(node, ChipKind::Template, &palette),
+                );
+                quads.push(transform.instance_to_world(&chip, camera, viewport));
+                // Текст метки — screen-space, тёмный на цветной заливке
+                // (прототип chipTxt #14161c)
+                let rect = header_chip_rect(node, label_w);
+                let origin = transform.map_point([rect[0] + 7.0, rect[1] + 2.0]);
+                texts.push(OwnedScreenText {
+                    text: label,
+                    origin,
+                    width: label_px + 2.0,
+                    font_size: font(10.0),
+                    color: canvas_render::Color::rgb(0x14, 0x16, 0x1c),
+                    align: TextAlign::Left,
+                });
             }
         }
         // 7) Контент нод среза (анатомия C/D, PRD-0004): заголовок,

@@ -77,18 +77,22 @@ screen → world:  camera.position + (screen − viewport / 2) / zoom
 
 | Элемент | Строитель (`cards.rs`) | Геометрия |
 |---|---|---|
-| Карточка: заливка, радиус, тень, рамка selected/broken/group | `card_instance` | `node.x/y/w/h`, радиус `tokens::CARD_CORNER_RADIUS` |
+| Карточка: заливка, радиус, тень, рамки | `card_instance` | `node.x/y/w/h`, радиус `tokens::CARD_CORNER_RADIUS = 10` (FR-075: 8→10, вёрстка prototype-unified); тень offsetY 3/blur 10/сила 0.25; волосяной контур `card_edge` на каждой карточке |
 | Рамка серьёзности (FR-016) | `card.border` / `analysis_ring_instance` (внешнее кольцо +3 px) | LOD: рамка ≥ `0.25` zoom, бейджи ≥ `0.6` эффективного zoom |
-| Полоса категории шаблона | `template_band_instance` | `TEMPLATE_BAND_H = 6` world-px, цвет — hex-снимок `canvasdesk.template.color`; FR-075 W0: верхние углы скруглены радиусом карточки (`corners: [R,R,0,0]`) — «уголки» не выступают за силуэт |
-| Квад-иконка роли | `template_icon_rect` + `template_icon_quads` | 16×16 world-px у правого края шапки; композиция плоских квадов на сетке `u = w/16` (коды `lb/db/cache/http/queue/gateway/worker/…`) |
-| Хром тела | `body_quad_instance` (renderer) | GFM-квады, пилюли бейджей, Σ-линия, авто-строки; радиус/размер делятся на `entry_zoom` — масштаб тела «заморожен» на влёте ноды |
-| Порты/якоря | `line_ports` / `param_ports` (text.rs) → world-«хвост» кадра | точки на краях ноды |
+| Внешнее кольцо выделения | `selection_ring_instance` | x−3.5..+7, радиус +3.5, штрих accent ≈1.2 px (вёрстка прототипа); не рисуется при кольце серьёзности |
+| Чип категории (вместо полосы — FR-075) | `header_chip_rect` / `header_chip_instance` + текст из `TextSystem::chip` | пилюля `x+10, y+8, метка+14, 16`, corners 8; цвет: template → `canvasdesk.template.color`, РАСЧЁТ/ЗАМЕТКА/ФАЙЛ — слоты `chip_*` темы (палитра chips прототипа); метка — тёмный `#14161c`, 10 SEMIBOLD, uppercase |
+| Линия-разделитель зон | `header_separator_instance` | `y+HEADER−1`, высота 1/effective_zoom (1 физ. px на любом зуме), цвет `zone_top` |
+| Полоса результата «ИТОГ» (зона D) | `result_strip_instance` + `result_strip_line_instance` | высота `CARD_RESULT_STRIP_H = 32` у нижнего края, corners `[0,0,R,R]`, тинт `strip_tint`; значение — на направляющей чисел (text.rs), цвет `result_value` |
+| Квад-иконка роли | `template_icon_rect` + `template_icon_quads` | 16×16 world-px у правого края шапки (v-центр); композиция плоских квадов на сетке `u = w/16` (коды `lb/db/cache/http/queue/gateway/worker/…`) |
+| Хром тела | `body_quad_instance` (renderer) | GFM-квады, пилюли бейджей, Σ-линия, авто-строки; радиус/размер делятся на `entry_zoom`; зебра — светлые прогонки `zebra_fill` α.04 (вёрстка прототипа) |
+| Порты/якоря | `line_ports` / `param_ports` (text.rs) → z-сегмент своей ноды (FR-075 W1) | точки на краях ноды: бирюзовый кружок α0.5 с тёмным кольцом (drawRowPort прототипа); LOD: скрыты при zoom < 0.6 |
 
 **Отдельного «шаблонного» пути вёрстки нет.** Базовый шелл шаблонной ноды
 байт-в-байт равен шеллу обычной text-ноды — это пинит регрессионный оракул
-`card_instance_template_node_equals_plain_text_node` (cards.rs); полоса и
-иконка — декоративные оверлеи поверх `card_instance`, добавляемые в кадре
-рендерера (renderer.rs ~1518–1543) при `node.template().is_some()`.
+`card_instance_template_node_equals_plain_text_node` (cards.rs); чип,
+линии зон, полоса «ИТОГ» и иконка — декоративные оверлеи поверх
+`card_instance`, добавляемые в кадре рендерера (renderer.rs, z-цикл) при
+`node.template().is_some()` / наличии чипа в кэше text.
 
 ## 5. GPU-путь: instanced SDF-пайплайн
 
@@ -106,8 +110,9 @@ z-плану и заливаются одним `queue.write_buffer` в instance
 ### 5.2 Вершинный шейдер (cards.wgsl)
 
 Единичный квад из 6 вершин на инстанс; тень выступает за край, поэтому квад
-расширяется на `margin = 12 / effective_zoom` (тень фиксированной ширины на
-экране при любом зуме). Далее вершинный шейдер повторяет формулу камеры:
+расширяется на `margin = 16 / effective_zoom` (тень фиксированной ширины на
+экране при любом зуме; FR-075: blur 10 + offsetY 3 прототипа). Далее вершинный
+шейдер повторяет формулу камеры:
 
 ```wgsl
 fn world_to_screen(world) { return (world − camera.position) × effective_zoom + viewport × 0.5; }
@@ -119,8 +124,9 @@ clip = screen / viewport × (2, −2) + (−1, 1)
 SDF скруглённого прямоугольника `sd_rounded_box` в **физических** px:
 
 - **слои**: тень → заливка → рамка, композит альф по `over`;
-- **тень**: тот же SDF со смещением `(0, 2)` и размытием `smoothstep(−4, 6)`,
-  сила `0.35`, гасится `params.w`;
+- **тень**: тот же SDF со смещением `(0, 3)` и размытием `smoothstep(−5, 7)`,
+  сила `0.25` (FR-075: shadowBlur 10/offsetY 3/α0.25 prototype-unified),
+  гасится `params.w`;
 - **антиалиасинг**: `aa = max(fwidth(sd), 1)` — производная SDF даёт ровную
   кромку на любом зуме без MSAA;
 - **рамки** по приоритету: selected (полоса `|sd| ≤ 1.5` ≈ 2 px) → broken
@@ -147,12 +153,20 @@ instancing, и SDF-хром (см. §9).
 кадр (один render pass)
 ├─ сетка (grid.wgsl, world)
 ├─ связи (инстансы карточек-линий: edges_end)
-├─ для каждого z-сегмента:  карточки → тамбнейлы → текст-группа (glyphon)
-├─ world-хвост: порты hover-ноды, резиновая линия, подложки лейблов
+├─ для каждого z-сегмента:  карточки+оверлеи шапки/полосы → тамбнейлы →
+│   построчные порты/якоря (FR-075 W1 — в z-сегменте своей ноды) → текст-группа
+├─ world-хвост: порты сторон hover-ноды, хэндлы выделенной связи, резиновая
+│   линия, подложки лейблов (интеракционные аффордансы — поверх ожидаемо)
 ├─ screen-полосы (kit-поверхности): инстансы → scissor-бакет → текст TextBounds
 ├─ main stage (FR-042/044), wheel-сектора (FR-022)
 └─ минимапа, SVG-иконки (FR-ICONS), HUD
 ```
+
+FR-075 W1: построчные порты/якоря переехали из мир-хвоста в z-сегменты своих
+нод — порт фоновой ноды больше не рисуется поверх карточек переднего плана
+(тот же класс дефекта, что сегментация чинила для тамбнейлов); culling
+бесплатно (сегменты — из видимых нод); при zoom < 0.6 портов нет (силуэт,
+`anatomy::LOD_L0_MAX_ZOOM`).
 
 Хвостовые диапазоны планирует `zorder::plan_tail_ranges` — регрессия 136e9fb
 (квады, не вошедшие ни в один диапазон, исчезали) пинится тестами.

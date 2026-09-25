@@ -16,9 +16,11 @@ use crate::cards::{
     analysis_badges_visible, analysis_border_visible, analysis_ring_instance,
     build_draft_instances, build_edge_handle_instances, build_edge_instances_ctx,
     build_line_port_instances, build_param_port_instances, build_port_instances, card_instance,
-    dim_instance, make_widget_transparent, severity_border, severity_text, template_band_instance,
-    template_icon_quads, template_icon_rect, widget_header_hover_instance, BundleContext,
-    CardInstance, CardsPipeline, FocusView, SpillWaveView,
+    chip_fill, dim_instance, header_chip_instance, header_separator_instance,
+    make_widget_transparent, result_strip_instance, result_strip_line_instance,
+    selection_ring_instance, severity_border, severity_text, template_icon_quads,
+    template_icon_rect, widget_header_hover_instance, BundleContext, CardInstance, CardsPipeline,
+    FocusView, SpillWaveView,
 };
 use crate::config::{
     choose_present_mode, choose_surface_format, clamp_surface_extent, surface_size_valid,
@@ -125,11 +127,12 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         BodyQuadKind::QuoteBar => theme.gfm_quote_fill,
         BodyQuadKind::CodeBg => theme.gfm_code_fill,
         BodyQuadKind::WhatIfBg => theme.whatif_fill,
-        // FR-061 этап B (D-5): пунктир лидера — приглушённый (как линии);
-        // зебра — полупрозрачная подложка строки (тот же слот, что у
-        // невыделенных строк списков).
+        // FR-061 этап B (D-5): пунктир лидера — приглушённый (как линии).
         BodyQuadKind::Leader => theme.gfm_muted_fill,
-        BodyQuadKind::RowBg => theme.search_row_fill,
+        // FR-075: зебра — светлые прогонки по вёрстке prototype-unified
+        // (zebra rgba(255,255,255,.04); прежняя заливка затемняла строки —
+        // в прототипе прогонки СВЕТЛЕЕ фона карточки). Поиск — свой слот.
+        BodyQuadKind::RowBg => theme.zebra_fill,
         // FR-069 (этап F): янтарная хромировка авто-строк приёмника
         // (прототип .row.auto): фон ≈ 5 %, пунктир ≈ 55 % анализа-амбер
         // (тот же токен, что UNMAPPED_EDGE_COLOR, cards.rs).
@@ -1452,6 +1455,18 @@ impl Renderer {
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
         let mut draw_ranges: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
             Vec::new();
+        // FR-075 W1: построчные порты/якоря параметров строятся ВНУТРИ
+        // z-сегмента своей ноды (после её тамбнейла, до карточек перекрывающих
+        // нод): порт фоновой ноды больше не рисуется поверх карточек
+        // переднего плана (класс дефекта z-плана — fixes T5/136e9fb для
+        // тамбнейлов); culling бесплатно — сегменты из видимых нод. Инстансы
+        // идут в общий буфер: диапазон карточек сегмента покрывает их
+        // автоматически (plan_tail_ranges не тронут).
+        // FR-075: LOD портов по прототипу (lod ≥ 1 — anatomy: порты видны
+        // при zoom ≥ 0.6; ниже — силуэт, рёбра крепятся к контуру).
+        let row_ports_visible = camera.zoom() >= crate::anatomy::LOD_L0_MAX_ZOOM;
+        // Эффективный зум для screen-константных линий-разделителей (1 физ. px).
+        let effective_zoom = (camera.zoom() * self.scale_factor).max(0.001);
         for seg in &zplan.segments {
             let cards_start = instances.len() as u32;
             let thumbs_start = thumb_instances.len() as u32;
@@ -1523,17 +1538,52 @@ impl Renderer {
                         dim_instance(&mut ring, dim_factor);
                     }
                     instances.push(ring);
-                }
-                // FR-018: шапка шаблонной ноды — цветная полоса категории +
-                // квад-иконка роли (снимки из canvasdesk.template — реестр
-                // рендеру не нужен). Гаснут в фокус-режиме вместе с карточкой.
-                if node.template().is_some() {
-                    if let Some(mut band) = template_band_instance(node) {
-                        if dim_it {
-                            dim_instance(&mut band, dim_factor);
-                        }
-                        instances.push(band);
+                } else if is_selected && !widget_seethrough {
+                    // FR-075 (вёрстка prototype-unified): внешнее кольцо
+                    // выделения (x−3.5..+7, штрих sel 1.2 px) — когда кольцо
+                    // серьёзности не заняло этот слот (иначе двойное кольцо).
+                    let mut sel_ring = selection_ring_instance(node, self.theme.accent);
+                    if dim_it {
+                        dim_instance(&mut sel_ring, dim_factor);
                     }
+                    instances.push(sel_ring);
+                }
+                // FR-075 (вёрстка prototype-unified): шапка — чип категории
+                // (метка/род — кэш text, цвет — тема/манифест) + линия-
+                // разделитель зон под шапкой (zoneTop, 1 физ. px); внизу —
+                // полоса результата «ИТОГ» (тинт потока + линия сверху).
+                // Виджетам-прозрачкам (CR-004) и группам-контейнерам — не
+                // рисуем. Гаснут в фокус-режиме вместе с карточкой.
+                if !widget_seethrough && node.kind() != NodeKind::Group {
+                    if let Some((kind, label_w)) = self.text.chip(index) {
+                        let mut chip =
+                            header_chip_instance(node, label_w, chip_fill(node, kind, &self.theme));
+                        if dim_it {
+                            dim_instance(&mut chip, dim_factor);
+                        }
+                        instances.push(chip);
+                    }
+                    let mut sep =
+                        header_separator_instance(node, effective_zoom, self.theme.zone_top);
+                    if dim_it {
+                        dim_instance(&mut sep, dim_factor);
+                    }
+                    instances.push(sep);
+                    let mut strip = result_strip_instance(node, self.theme.strip_tint);
+                    if dim_it {
+                        dim_instance(&mut strip, dim_factor);
+                    }
+                    instances.push(strip);
+                    let mut strip_line =
+                        result_strip_line_instance(node, effective_zoom, self.theme.zone_top);
+                    if dim_it {
+                        dim_instance(&mut strip_line, dim_factor);
+                    }
+                    instances.push(strip_line);
+                }
+                // FR-018: квад-иконка роли шаблонной ноды справа в шапке
+                // (снимки canvasdesk.template — реестр рендеру не нужен).
+                if node.template().is_some() {
                     // Tint иконки — theme.icon (glyphon Color → rgba)
                     let tint = self.theme.icon;
                     let mut icon = template_icon_quads(
@@ -1585,6 +1635,47 @@ impl Renderer {
                 {
                     thumb_instances.push(inst);
                 }
+                // FR-075 W1: построчные порты (FR-025) и якоря параметров
+                // (FR-050 Н2) — в z-сегменте своей ноды (см. коммент к
+                // port_instances). LOD: ниже 0.6 — силуэт, портов нет.
+                if row_ports_visible {
+                    if scene.line_ports {
+                        let ports = self.text.line_ports(index, node);
+                        if !ports.is_empty() {
+                            instances.extend(build_line_port_instances(
+                                &ports,
+                                scene.port_zone_px,
+                                scene.hovered == Some(index),
+                            ));
+                        }
+                    }
+                    if node.template().is_some() {
+                        let ports = self.text.param_ports(index, node);
+                        if !ports.is_empty() {
+                            // Подсветка drag: флаги совместимости якорей
+                            // ноды-цели (Н5/E-UNIT)
+                            let drop_compat: Option<Vec<bool>> = scene
+                                .param_drop
+                                .filter(|drop| drop.node_index == index)
+                                .map(|drop| {
+                                    ports
+                                        .iter()
+                                        .map(|port| {
+                                            drop.params.iter().any(|(name, _)| {
+                                                name.as_str() == port.param.as_str()
+                                            })
+                                        })
+                                        .collect()
+                                });
+                            instances.extend(build_param_port_instances(
+                                &ports,
+                                scene.port_zone_px,
+                                scene.hovered == Some(index),
+                                drop_compat.as_deref(),
+                            ));
+                        }
+                    }
+                }
             }
             draw_ranges.push((
                 cards_start..instances.len() as u32,
@@ -1592,78 +1683,23 @@ impl Renderer {
                 seg.group,
             ));
         }
-        // T8: порты hover-ноды, резиновая линия новой связи, подложки лейблов и
-        // бокс редактирования лейбла — мировой «хвост» кадра: расширяют
-        // диапазон карточек ПОСЛЕДНЕГО сегмента (рисуются под его текстом;
-        // лейблы — финальной текст-группой ниже). Регрессия 136e9fb: без
-        // расширения квады не входили ни в один draw-диапазон и исчезали.
+        // T8: порты hover-ноды (стороны), резиновая линия новой связи,
+        // подложки лейблов и бокс редактирования лейбла — мировой «хвост»
+        // кадра: расширяют диапазон карточек ПОСЛЕДНЕГО сегмента (рисуются
+        // под его текстом; лейблы — финальной текст-группой ниже).
+        // Регрессия 136e9fb: без расширения квады не входили ни в один
+        // draw-диапазон и исчезали.
+        // FR-075 W1: ПОСТРОЧНЫЕ порты/якоря в «хвосте» БОЛЬШЕ НЕ СТРОЯТСЯ —
+        // они переехали в z-сегменты своих нод (port_instances выше): порт
+        // фоновой ноды не должен быть поверх карточек переднего плана.
+        // В хвосте остаются только интеракционные аффордансы (hover-нода,
+        // выделенная связь, draft) — их поверх карточек и ожидаемо.
         let world_tail_start = instances.len() as u32;
         if let Some(hovered) = scene.hovered {
             instances.extend(build_port_instances(
                 scene.canvas,
                 hovered,
                 scene.port_zone_px,
-            ));
-        }
-        // FR-025: построчные точки выхода (флаг line_ports) — для ВСЕХ нод
-        // с результатами строк (не только hover — это постоянный аффорданс);
-        // хост под курсором — кружки укрупняются как порты сторон. Идут в
-        // мировой хвост: поверх карточек, под текстами. У скрытых нод
-        // (FR-011) портов нет. Кэш раскладки — единый источник вертикалей
-        // с бейджами результатов (инвариант вертикали FR-025).
-        if scene.line_ports {
-            for (index, node) in scene.canvas.nodes.iter().enumerate() {
-                if node.kind() == NodeKind::Group || scene.hidden_nodes.contains(&index) {
-                    continue;
-                }
-                let ports = self.text.line_ports(index, node);
-                if ports.is_empty() {
-                    continue;
-                }
-                let hovered = scene.hovered == Some(index);
-                instances.extend(build_line_port_instances(
-                    &ports,
-                    scene.port_zone_px,
-                    hovered,
-                ));
-            }
-        }
-        // FR-050 Н2 (этап C): входные якоря параметров шаблонных нод —
-        // постоянный аффорданс на ЛЕВОМ краю (зеркало FR-025); во время
-        // value-drag у ноды-цели совместимые параметры (Н5/E-UNIT)
-        // подсвечиваются ярче, несовместимые — приглушены. Без drag кадр
-        // отличается только аффордансом якорей (инвариант). Скрытые ноды
-        // (FR-011) якорей не имеют; кэш раскладки — единый источник
-        // вертикалей (инвариант вертикали).
-        for (index, node) in scene.canvas.nodes.iter().enumerate() {
-            if node.template().is_none() || scene.hidden_nodes.contains(&index) {
-                continue;
-            }
-            let ports = self.text.param_ports(index, node);
-            if ports.is_empty() {
-                continue;
-            }
-            let hovered = scene.hovered == Some(index);
-            // Подсветка drag: флаги совместимости якорей ноды-цели
-            let drop_compat: Option<Vec<bool>> = scene
-                .param_drop
-                .filter(|drop| drop.node_index == index)
-                .map(|drop| {
-                    ports
-                        .iter()
-                        .map(|port| {
-                            drop.params
-                                .iter()
-                                .find(|(name, _)| name.as_str() == port.param.as_str())
-                                .is_some_and(|(_, compatible)| *compatible)
-                        })
-                        .collect()
-                });
-            instances.extend(build_param_port_instances(
-                &ports,
-                scene.port_zone_px,
-                hovered,
-                drop_compat.as_deref(),
             ));
         }
         // CR-002: хэндлы концов выделенной связи — кружки на обоих концах
