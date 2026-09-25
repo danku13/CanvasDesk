@@ -210,6 +210,14 @@ pub mod keys {
     /// Настройка FR-039 (F-12, X6): opt-in тумблер индикатора покрытия.
     pub const ROW_EXPLAIN_COVERAGE: &str = "settings.row.explain_coverage";
     pub const DESC_EXPLAIN_COVERAGE: &str = "settings.desc.explain_coverage";
+    /// FR-ICONS: набор иконок UI (Glyph/Lucide/Material/Feather/Bootstrap).
+    pub const ROW_ICON_STYLE: &str = "settings.row.icon_style";
+    pub const DESC_ICON_STYLE: &str = "settings.desc.icon_style";
+    pub const ICON_STYLE_GLYPH: &str = "settings.value.icon_style.glyph";
+    pub const ICON_STYLE_LUCIDE: &str = "settings.value.icon_style.lucide";
+    pub const ICON_STYLE_MATERIAL: &str = "settings.value.icon_style.material";
+    pub const ICON_STYLE_FEATHER: &str = "settings.value.icon_style.feather";
+    pub const ICON_STYLE_BOOTSTRAP: &str = "settings.value.icon_style.bootstrap";
     /// Индикатор покрытия цепочками (F-12, X6): текст в углу канваса.
     pub const EXPLAIN_COVERAGE: &str = "explain.coverage";
     /// Подтверждение отката пачки (AC-5.3): заголовок/текст/кнопка.
@@ -1485,6 +1493,17 @@ const RU: &[(&str, &str)] = &[
         "Показывает «Цепочки: N%» в углу канваса — долю вычисляемых цифр, чья цепочка доходит до листьев.",
     ),
     (keys::EXPLAIN_COVERAGE, "Цепочки: {n}%"),
+    // FR-ICONS: набор иконок UI — RU
+    (keys::ROW_ICON_STYLE, "Набор иконок"),
+    (
+        keys::DESC_ICON_STYLE,
+        "Монохромные SVG-иконки взамен Unicode-глифов. «Глифы» — системный фолбэк (шрифт NotoSansDisplay).",
+    ),
+    (keys::ICON_STYLE_GLYPH, "Глифы (системный)"),
+    (keys::ICON_STYLE_LUCIDE, "Lucide"),
+    (keys::ICON_STYLE_MATERIAL, "Material Symbols"),
+    (keys::ICON_STYLE_FEATHER, "Feather"),
+    (keys::ICON_STYLE_BOOTSTRAP, "Bootstrap Icons"),
     (keys::AUTOLINK_UNDO_TITLE, "Откатить пачку автосвязи ({n})?"),
     (
         keys::AUTOLINK_UNDO_BODY,
@@ -2263,6 +2282,17 @@ const EN: &[(&str, &str)] = &[
         "Shows “Chains: N%” in a canvas corner — the share of computed digits whose chain reaches leaves.",
     ),
     (keys::EXPLAIN_COVERAGE, "Chains: {n}%"),
+    // FR-ICONS: icon set — EN
+    (keys::ROW_ICON_STYLE, "Icon set"),
+    (
+        keys::DESC_ICON_STYLE,
+        "Monochrome SVG icons in place of Unicode glyphs. “Glyphs” is the system fallback (NotoSansDisplay font).",
+    ),
+    (keys::ICON_STYLE_GLYPH, "Glyphs (system)"),
+    (keys::ICON_STYLE_LUCIDE, "Lucide"),
+    (keys::ICON_STYLE_MATERIAL, "Material Symbols"),
+    (keys::ICON_STYLE_FEATHER, "Feather"),
+    (keys::ICON_STYLE_BOOTSTRAP, "Bootstrap Icons"),
     (keys::AUTOLINK_UNDO_TITLE, "Roll back the autolink batch ({n})?"),
     (
         keys::AUTOLINK_UNDO_BODY,

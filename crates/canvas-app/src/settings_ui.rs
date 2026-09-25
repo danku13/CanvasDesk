@@ -19,7 +19,7 @@
 //! меняется — это реорганизация UI.
 
 use canvas_core::{
-    theme_presets, Corner, GridDensity, GridStyle, Language, Settings, Theme,
+    theme_presets, Corner, GridDensity, GridStyle, IconStyle, Language, Settings, Theme,
     DRAG_PUSH_GAP_PRESETS, DRAG_PUSH_HALO_PRESETS, PORT_ZONE_PRESETS, SNAP_COARSE_ZOOM_PRESETS,
     SNAP_SUB_ZOOM_PRESETS, SNAP_TOLERANCE_PRESETS,
 };
@@ -149,12 +149,15 @@ pub enum SettingsRow {
     DragPushPredictive,
     /// FR-073: перезакрепление якорей накрытых нод на drop.
     DragPushRebase,
+    /// FR-ICONS: набор иконок UI (Glyph/Lucide/Material/Feather/Bootstrap) —
+    /// dropdown в табе «Внешний вид».
+    IconStyle,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 28] = [
+pub const SETTINGS_ROWS: [SettingsRow; 29] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -183,6 +186,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 28] = [
     SettingsRow::DragPushHalo,
     SettingsRow::DragPushPredictive,
     SettingsRow::DragPushRebase,
+    SettingsRow::IconStyle,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -272,7 +276,7 @@ pub const SETTINGS_TABS: [SettingsTab; 6] = [
         title_key: keys::TAB_APPEARANCE,
         icon: "◐",
         theme_cards: true,
-        rows: &[SettingsRow::ThemePreset, SettingsRow::Language],
+        rows: &[SettingsRow::ThemePreset, SettingsRow::IconStyle, SettingsRow::Language],
     },
 ];
 
@@ -308,6 +312,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::DragPushHalo => keys::ROW_DRAG_PUSH_HALO,
         SettingsRow::DragPushPredictive => keys::ROW_DRAG_PUSH_PREDICTIVE,
         SettingsRow::DragPushRebase => keys::ROW_DRAG_PUSH_REBASE,
+        SettingsRow::IconStyle => keys::ROW_ICON_STYLE,
     }
 }
 
@@ -343,6 +348,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::DragPushHalo => keys::DESC_DRAG_PUSH_HALO,
         SettingsRow::DragPushPredictive => keys::DESC_DRAG_PUSH_PREDICTIVE,
         SettingsRow::DragPushRebase => keys::DESC_DRAG_PUSH_REBASE,
+        SettingsRow::IconStyle => keys::DESC_ICON_STYLE,
     }
 }
 
@@ -371,7 +377,8 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::SnapSubZoom
         | SettingsRow::SnapCoarseZoom
         | SettingsRow::DragPushSafeGap
-        | SettingsRow::DragPushHalo => RowKind::Dropdown,
+        | SettingsRow::DragPushHalo
+        | SettingsRow::IconStyle => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -467,6 +474,8 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
         | SettingsRow::DragPushRebase => None,
+        // FR-ICONS: текущий набор — локализованное имя варианта.
+        SettingsRow::IconStyle => Some(i18n::tr(language, icon_style_key(settings.icon_style)).to_owned()),
     }
 }
 
@@ -642,6 +651,28 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
         | SettingsRow::DragPushRebase => Vec::new(),
+        // FR-ICONS: порядок опций = порядок IconStyle::ALL (инвариант, тест) =
+        // порядку apply_dropdown_value (тест). Локализованные имена наборов.
+        SettingsRow::IconStyle => IconStyle::ALL
+            .iter()
+            .map(|&style| {
+                (
+                    i18n::tr(language, icon_style_key(style)).to_owned(),
+                    settings.icon_style == style,
+                )
+            })
+            .collect(),
+    }
+}
+
+/// FR-ICONS: i18n-ключ локализованного имени варианта `IconStyle`.
+pub fn icon_style_key(style: IconStyle) -> &'static str {
+    match style {
+        IconStyle::Glyph => keys::ICON_STYLE_GLYPH,
+        IconStyle::Lucide => keys::ICON_STYLE_LUCIDE,
+        IconStyle::Material => keys::ICON_STYLE_MATERIAL,
+        IconStyle::Feather => keys::ICON_STYLE_FEATHER,
+        IconStyle::Bootstrap => keys::ICON_STYLE_BOOTSTRAP,
     }
 }
 
@@ -744,6 +775,13 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
         | SettingsRow::DragPushRebase => {}
+        // FR-ICONS: индекс в `IconStyle::ALL` (порядок = dropdown_options,
+        // инвариант теста). Вне диапазона — без изменений (как остальные).
+        SettingsRow::IconStyle => {
+            if let Some(&style) = IconStyle::ALL.get(index) {
+                settings.icon_style = style;
+            }
+        }
     }
 }
 
@@ -1215,7 +1253,7 @@ mod tests {
         );
         assert_eq!(
             SETTINGS_TABS[5].rows,
-            &[SettingsRow::ThemePreset, SettingsRow::Language]
+            &[SettingsRow::ThemePreset, SettingsRow::IconStyle, SettingsRow::Language]
         );
     }
 
@@ -1322,7 +1360,8 @@ mod tests {
                 | SettingsRow::SnapSubZoom
                 | SettingsRow::SnapCoarseZoom
                 | SettingsRow::DragPushSafeGap
-                | SettingsRow::DragPushHalo => {
+                | SettingsRow::DragPushHalo
+                | SettingsRow::IconStyle => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
@@ -1684,11 +1723,13 @@ mod tests {
         let layout = modal_layout(4, viewport);
         assert_eq!(layout.rows.len(), 6);
         assert_eq!(layout.rows[0].0, SettingsRow::EdgesAvoid);
-        // Таб 5 (Внешний вид): карточки темы + строки пресета и языка ниже
+        // Таб 5 (Внешний вид): карточки темы + строки пресета, иконок и языка ниже
         let layout = modal_layout(5, viewport);
-        assert_eq!(layout.rows.len(), 2);
+        // FR-ICONS: 3 строки — ThemePreset, IconStyle, Language.
+        assert_eq!(layout.rows.len(), 3);
         assert_eq!(layout.rows[0].0, SettingsRow::ThemePreset);
-        assert_eq!(layout.rows[1].0, SettingsRow::Language);
+        assert_eq!(layout.rows[1].0, SettingsRow::IconStyle);
+        assert_eq!(layout.rows[2].0, SettingsRow::Language);
         let card_dark = layout.theme_card_rect(Theme::Dark);
         let card_light = layout.theme_card_rect(Theme::Light);
         assert!(card_dark[2] > 0.0 && card_light[2] > 0.0);

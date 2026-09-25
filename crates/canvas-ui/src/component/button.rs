@@ -312,6 +312,25 @@ pub fn icon_glyph(i: Icon) -> &'static str {
     }
 }
 
+/// FR-ICONS: строковый идентификатор иконки для SVG-атласа (без набора —
+/// набор задаётся отдельной настройкой `IconStyle`). Маппинг 1:1 с `Icon`
+/// (тест `icon_name_mapping_is_complete`). Идентификаторы стабильны:
+/// `close`, `gear`, `question`, `search`, `plus`, `arrow_left`,
+/// `arrow_right`, `refresh` — соответствуют именам файлов в
+/// `assets/icons/<set>/<name>.svg`.
+pub fn icon_name(i: Icon) -> &'static str {
+    match i {
+        Icon::Close => "close",
+        Icon::Gear => "gear",
+        Icon::Question => "question",
+        Icon::Search => "search",
+        Icon::Plus => "plus",
+        Icon::ArrowLeft => "arrow_left",
+        Icon::ArrowRight => "arrow_right",
+        Icon::Refresh => "refresh",
+    }
+}
+
 /// Квадратная кнопка с иконкой в слоте — делегирует [`icon_button_rect`]
 /// (та же геометрия; иконка — отдельным вызовом [`icon_glyph`] для замера/
 /// отрисовки потребителем). `icon` зарезервирован для будущей текстовой

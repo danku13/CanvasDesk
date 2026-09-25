@@ -17,6 +17,10 @@ pub mod gfm;
 pub mod gpu;
 pub mod grid;
 pub mod guides;
+/// FR-ICONS: растеризованные байты SVG-иконок (build-time сгенерированный файл).
+pub mod icon_data;
+/// FR-ICONS: screen-space wgpu-пайплайн SVG-иконок (атлас + tint + instanced).
+pub mod icon_pipeline;
 pub mod markdown;
 pub mod minimap;
 pub mod minimap_pass;
@@ -41,6 +45,7 @@ pub mod zorder;
 pub use camera::Camera;
 pub use glyphon::Color;
 pub use guides::{GuideLine, GuideSource, GuidesFrame};
+pub use icon_pipeline::{icon_uv, IconInstance, IconPipeline, ATLAS_H, ATLAS_W, ICON_CELL_PX};
 pub use renderer::{
     FrameOverlay, FrameStats, ParamDropView, Renderer, SceneView, ScreenBand, Selection, SpillView,
     WhatIfNode,

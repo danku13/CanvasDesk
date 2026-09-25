@@ -106,6 +106,11 @@ pub(super) fn paint_items_to_band(
             // дети конвертируются как обычные items (draw-порядок сохранён);
             // отсечение — scissor FR-056 на стороне рендера, не здесь.
             PaintItem::ClipRect { items, .. } => paint_items_to_band(items, quads, texts),
+            // FR-ICONS: иконки в полосе — через `KitDraw::icon` (минуя Painter),
+            // Painter::icon пока не вызывается из кода полос. Arm добавлен для
+            // полноты match; если PaintItem::Icon всё же попадёт сюда —
+            // игнорируем (icons рисуются отдельным слоем через FrameOverlay).
+            PaintItem::Icon { .. } => {}
         }
     }
 }
@@ -159,6 +164,8 @@ pub(super) fn paint_items_to_stage(
             PaintItem::ClipRect { items, .. } => {
                 paint_items_to_stage(items, camera, viewport, zoom, quads, texts)
             }
+            // FR-ICONS: иконки в stage — через `KitDraw::icon`; arm для полноты.
+            PaintItem::Icon { .. } => {}
         }
     }
 }

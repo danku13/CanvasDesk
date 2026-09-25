@@ -172,11 +172,15 @@ impl ApplicationHandler<AppEvent> for App {
                 // FR-070: админпанель — модаль поверх всего (Modals/Block);
                 // взаимоисключима с витриной кита/галереей схем
                 if self.admin_open {
-                    let (admin_instances, admin_texts) = self.admin_panel_overlay();
+                    let (admin_instances, admin_texts, admin_icons) = self.admin_panel_overlay();
                     screen_bands.push(UiLayer::Modals, admin_instances, admin_texts);
+                    // FR-ICONS: иконки админпанели (SVG-атлас; пусто для Glyph).
+                    self.icon_instances.extend(admin_icons);
                 } else if self.kit_gallery_open {
-                    let (kit_instances, kit_texts) = self.kit_gallery_overlay();
+                    let (kit_instances, kit_texts, kit_icons) = self.kit_gallery_overlay();
                     screen_bands.push(UiLayer::Modals, kit_instances, kit_texts);
+                    // FR-ICONS: иконки витрины кита (SVG-атлас; пусто для Glyph).
+                    self.icon_instances.extend(kit_icons);
                 } else if self.scheme_gallery.open {
                     let (gal_instances, gal_texts) = self.scheme_gallery_overlay();
                     screen_bands.push(UiLayer::Modals, gal_instances, gal_texts);
@@ -967,6 +971,11 @@ impl ApplicationHandler<AppEvent> for App {
                     .map(|(i, _)| (i, canvas_core::subtree_ids(&self.scene.canvas, i).len()))
                     .filter(|(_, count)| *count > 0)
                     .collect();
+                // FR-ICONS: забираем инстансы иконок текущего кадра во
+                // владение (Vec) — `self` больше не заимствован, можно
+                // мутировать (tick_stage_calc_fade и др.). Буфер снова
+                // накопится при следующей отрисовке полос (kit_ui.rs).
+                let icon_instances = std::mem::take(&mut self.icon_instances);
                 let overlay = FrameOverlay {
                     instances: &overlay_instances,
                     texts: &overlay_texts,
@@ -975,6 +984,8 @@ impl ApplicationHandler<AppEvent> for App {
                     stage_texts: &stage_screen_texts,
                     screen_sectors: &overlay_sectors,
                     widget_quads: &widget_quad_refs,
+                    // FR-ICONS: SVG-иконки UI (screen-space, поверх всех полос).
+                    icons: &icon_instances,
                 };
                 // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
                 // курсору; исходная линия перепривязываемой связи скрыта

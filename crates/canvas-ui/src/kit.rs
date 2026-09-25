@@ -27,7 +27,8 @@
 
 pub use crate::component::button::{
     button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button,
-    icon_button_rect, icon_button_style, icon_glyph, switch, ChipLayout, Icon, SwitchLayout,
+    icon_button_rect, icon_button_style, icon_glyph, icon_name, switch, ChipLayout, Icon,
+    SwitchLayout,
 };
 pub use crate::component::dropdown::{
     dropdown_menu, toast_area, tooltip, viewport_clamp, DropdownLayout, TooltipLayout,

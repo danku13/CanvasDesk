@@ -160,6 +160,57 @@ pub enum SnapAnchor {
     Center,
 }
 
+/// FR-ICONS (svg-иконки): набор монохромных SVG-иконок, используемый
+/// взамен Unicode-глифов в кнопках/табах/панелях. `Glyph` — фолбэк
+/// (прежнее поведение: глифы шрифтом NotoSansDisplay). Остальные
+/// варианты — растеризованные build-time SVG из svgrepo.com / svgapi.com.
+///
+/// Сериализация — snake_case (единообразно с `GridStyle`/`Language`).
+/// `#[serde(default)]` на struct гарантирует, что старые конфиги без
+/// поля грузятся как `Glyph` (прежнее поведение).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IconStyle {
+    /// Unicode-глифы шрифтом NotoSansDisplay (прежнее поведение, фолбэк).
+    #[default]
+    Glyph,
+    /// Lucide (https://lucide.dev) — тонкие монохромные 24×24, MIT.
+    Lucide,
+    /// Material Symbols (https://fonts.google.com/icons) — средние 24×24, Apache 2.0.
+    Material,
+    /// Feather (https://feathericons.com) — лёгкие 24×24, MIT.
+    Feather,
+    /// Bootstrap Icons (https://icons.getbootstrap.com) — 16×16, MIT.
+    Bootstrap,
+}
+
+impl IconStyle {
+    /// Идентификатор набора (используется рендером для выбора атласа).
+    pub fn id(self) -> &'static str {
+        match self {
+            IconStyle::Glyph => "glyph",
+            IconStyle::Lucide => "lucide",
+            IconStyle::Material => "material",
+            IconStyle::Feather => "feather",
+            IconStyle::Bootstrap => "bootstrap",
+        }
+    }
+
+    /// Реестр всех вариантов (порядок = порядку dropdown в настройках).
+    pub const ALL: [IconStyle; 5] = [
+        IconStyle::Glyph,
+        IconStyle::Lucide,
+        IconStyle::Material,
+        IconStyle::Feather,
+        IconStyle::Bootstrap,
+    ];
+
+    /// True, если набор требует SVG-атласа (не glyph-фолбэк).
+    pub fn is_svg(self) -> bool {
+        !matches!(self, IconStyle::Glyph)
+    }
+}
+
 /// Плотность сетки: шаг линий/точек относительно базового (20/100 world-px).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -349,6 +400,14 @@ pub struct Settings {
     pub drag_push_pair_frac: f32,
     /// FR-073 (advanced, config.toml): итераций парной фазы за шаг.
     pub drag_push_iters: u32,
+
+    /// FR-ICONS: набор иконок UI (Glyph/Lucide/Material/Feather/Bootstrap).
+    /// `Glyph` — прежнее поведение (Unicode-глифы NotoSansDisplay), SVG-наборы
+    /// — растеризованные build-time монохромные иконки из svgrepo/svgapi.
+    /// Старые конфиги без поля грузятся как `Glyph` (serde default) —
+    /// обратная совместимость со всеми существующими config.toml.
+    #[serde(default)]
+    pub icon_style: IconStyle,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -442,6 +501,8 @@ impl Default for Settings {
             drag_push_push_frac: DRAG_PUSH_PUSH_FRAC_DEFAULT,
             drag_push_pair_frac: DRAG_PUSH_PAIR_FRAC_DEFAULT,
             drag_push_iters: DRAG_PUSH_ITERS_DEFAULT,
+            // FR-ICONS: дефолт — Unicode-глифы (прежнее поведение, фолбэк).
+            icon_style: IconStyle::Glyph,
         }
     }
 }
@@ -751,6 +812,9 @@ mod tests {
             drag_push_push_frac: 0.8,
             drag_push_pair_frac: 0.5,
             drag_push_iters: 5,
+            // FR-ICONS: набор иконок проходит round-trip (Lucide — не дефолт,
+            // проверяет что значение сохраняется без потерь).
+            icon_style: IconStyle::Lucide,
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");

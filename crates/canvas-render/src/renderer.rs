@@ -34,6 +34,7 @@ use crate::text::{
 };
 use crate::theme::ThemeColors;
 use crate::thumbs::{thumb_instance, ThumbsPipeline, THUMB_MIN_ZOOM};
+use crate::icon_pipeline::{IconInstance, IconPipeline};
 use crate::zorder;
 
 // FR-052 (U2 PRD-0009): полосы слоёв экрана — тип полосы и тип слоя из
@@ -309,6 +310,9 @@ pub struct FrameOverlay<'a> {
     /// Квады снапшотов виджетов (M5 T20-D): id ноды + область контента
     /// (world). Рисуются поверх карточек, под screen-оверлеями.
     pub widget_quads: &'a [crate::widget_pass::WidgetQuad<'a>],
+    /// FR-ICONS: инстансы SVG-иконок (screen-space, поверх всех полос).
+    /// Пустой срез — набор Glyph (фолбэк), иконки не рисуются.
+    pub icons: &'a [IconInstance],
 }
 
 impl FrameOverlay<'_> {
@@ -321,6 +325,7 @@ impl FrameOverlay<'_> {
         stage_texts: &[],
         screen_sectors: &[],
         widget_quads: &[],
+        icons: &[],
     };
 }
 
@@ -489,6 +494,9 @@ pub struct Renderer {
     guides_frame: GuidesFrame,
     /// Атлас тамбнейлов + их пайплайн (T6).
     thumbs: ThumbsPipeline,
+    /// FR-ICONS: атлас SVG-иконок + screen-space пайплайн (instanced + tint).
+    /// Рисуется поверх всех полос/текстов (как виджет-снапшоты/направляющие).
+    icons: IconPipeline,
     text: TextSystem,
     /// Пайплайн миникарты (T13-B) + текущий кадр (None — не задан).
     minimap_pipeline: MinimapPipeline,
@@ -594,6 +602,9 @@ impl Renderer {
         let sectors = SectorsPipeline::new(&gpu.device, format);
         let guides = GuidesPipeline::new(&gpu.device, format);
         let thumbs = ThumbsPipeline::new(&gpu.device, format);
+        let icons = IconPipeline::new(&gpu.device, format);
+        // FR-ICONS: загрузка атласа из вшитых байт — один раз при init.
+        icons.upload_atlas(&gpu.queue);
         let minimap_pipeline = MinimapPipeline::new(&gpu.device, format);
         let widget_pass = crate::widget_pass::WidgetPass::new(&gpu.device, format);
         let text = TextSystem::new(&gpu.device, &gpu.queue, format);
@@ -608,6 +619,7 @@ impl Renderer {
             guides,
             guides_frame: GuidesFrame::default(),
             thumbs,
+            icons,
             text,
             minimap_pipeline,
             minimap: None,
@@ -1690,6 +1702,14 @@ impl Renderer {
             self.scale_factor,
             overlay.widget_quads,
         );
+        // FR-ICONS: инстансы SVG-иконок — screen-space, обновление до encoder
+        // (как виджет-квады: пересоздание буфера требует device без pass).
+        let icon_count = self.icons.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            [self.size.width as f32, self.size.height as f32],
+            overlay.icons,
+        );
         let mut encoder = self
             .gpu
             .device
@@ -1809,6 +1829,12 @@ impl Renderer {
                 TextSystem::stage_group(&zplan, band_ranges.len()),
             ) {
                 tracing::warn!(?err, "отрисовка текстов stage пропущена");
+            }
+            // FR-ICONS: SVG-иконки UI — финальный слой кадра, поверх всех
+            // полос/текстов/main-stage (кнопки закрытия, шестерёнки, иконки
+            // табов настроек и т.д.). Tint = цвет слота `icon` темы.
+            if icon_count > 0 {
+                self.icons.draw(&mut pass, icon_count);
             }
         }
         self.gpu.queue.submit([encoder.finish()]);

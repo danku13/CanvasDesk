@@ -699,8 +699,8 @@ impl App {
     /// (заголовок / «Сброс» / тема / «✕»), сайдбар секций (реальные
     /// kit-кнопки), демо-зона с заголовком секции и подсказкой; тела секций
     /// — этапы 2–4 FR-070. Эффективная палитра — с live-переопределением.
-    pub(super) fn admin_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
-        let mut out = (Vec::new(), Vec::new());
+    pub(super) fn admin_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>, Vec<canvas_render::IconInstance>) {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return out;
@@ -709,6 +709,8 @@ impl App {
         let lang = self.settings.language;
         let lay = self.admin_layout_current();
         let mut d = crate::kit_ui::KitDraw::new();
+        // FR-ICONS: установить активный набор (None = Glyph fallback).
+        d.set_icon_set(self.icon_set_active());
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
         let cursor = self.cursor;
         let hover = |r: &canvas_ui::geometry::UiRect| crate::kit_ui::cursor_in(r, cursor);
@@ -864,6 +866,8 @@ impl App {
                 align: t.align,
             })
             .collect();
+        // FR-ICONS: иконки текущего кадра (SVG-атлас; пусто для Glyph).
+        out.2 = d.icons;
         out
     }
 
@@ -872,6 +876,18 @@ impl App {
     pub(crate) fn admin_effective_palette(&self) -> canvas_ui::kit::KitPalette {
         self.admin_palette_override
             .unwrap_or_else(|| self.effective_palette().kit_palette())
+    }
+
+    /// FR-ICONS: активный набор иконок как `Option<&'static str>` для
+    /// `KitDraw::set_icon_set`. `None` = Glyph fallback (прежнее поведение),
+    /// `Some(set_id)` = SVG-набор (`"lucide"`/`"material"`/`"feather"`/
+    /// `"bootstrap"`). Читается из `settings.icon_style` каждый кадр.
+    pub(crate) fn icon_set_active(&self) -> Option<&'static str> {
+        if self.settings.icon_style.is_svg() {
+            Some(self.settings.icon_style.id())
+        } else {
+            None
+        }
     }
 
     /// FR-070: раскладка админпанели текущего состояния (один источник
@@ -906,8 +922,8 @@ impl App {
     /// Card/список+скролл/Icon-глифы (контракт FR-058); контент
     /// прокручивается ([`WidgetState`] для состояний шапки — вместо
     /// deprecated-делегатов; бегунок — kit::scroll_bar).
-    pub(super) fn kit_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
-        let mut out = (Vec::new(), Vec::new());
+    pub(super) fn kit_gallery_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>, Vec<canvas_render::IconInstance>) {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
             return out;
@@ -919,6 +935,8 @@ impl App {
         let scroll = self.kit_gallery_scroll.clone();
         let lay = crate::kit_ui::gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs);
         let mut d = crate::kit_ui::KitDraw::new();
+        // FR-ICONS: установить активный набор (None = Glyph fallback).
+        d.set_icon_set(self.icon_set_active());
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
         let cursor = self.cursor;
 
@@ -1190,13 +1208,21 @@ impl App {
                 d.rect(knob, palette.control_border, [0.0; 4], 2.0);
             }
         }
-        // Icon-глифы v2: Search/ArrowLeft/ArrowRight/Refresh (icon_glyph)
+        // Icon-глифы v2: Search/ArrowLeft/ArrowRight/Refresh (icon_glyph).
+        // FR-ICONS: если активный набор — SVG, рисуется SVG-иконка из атласа
+        // (tint = слот text контрола); иначе — глиф шрифтом (прежнее поведение).
         for (rect, icon) in &lay.icon_glyphs {
             let style =
                 canvas_ui::kit::icon_button_style(canvas_ui::kit::KitState::Normal, &palette);
             d.control(*rect, &style);
             let area = canvas_ui::geometry::UiRect::new(rect.x, rect.y + 1.0, rect.w, rect.h);
-            d.label_center(area, canvas_ui::kit::icon_glyph(*icon), style.text, 13.0);
+            d.icon(
+                area,
+                canvas_ui::kit::icon_name(*icon),
+                canvas_ui::kit::icon_glyph(*icon),
+                style.text,
+                13.0,
+            );
         }
         // === FR-061 (этап E, D-15): секция Row — табличные строки на
         // направляющих. Отрисовка — kit::paint_row (строка целиком одним
@@ -1303,6 +1329,8 @@ impl App {
                 align: t.align,
             })
             .collect();
+        // FR-ICONS: иконки текущего кадра (SVG-атлас; пусто для Glyph).
+        out.2 = d.icons;
         out
     }
 
@@ -3529,7 +3557,10 @@ impl App {
             | SettingsRow::DragPushHalo
             // PRD-0007 (AC-2.3): dropdown «Лимит глубины explain-дерева» —
             // применяется в apply_dropdown_choice, тумблером не является
-            | SettingsRow::ExplainDepthLimit => {
+            | SettingsRow::ExplainDepthLimit
+            // FR-ICONS: dropdown «Набор иконок» — применяется в
+            // apply_dropdown_choice, тумблером не является
+            | SettingsRow::IconStyle => {
                 debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
                 return;
             }
@@ -3993,7 +4024,9 @@ impl App {
                         | SettingsRow::DragPushHalo
                         // PRD-0007: dropdown-строка в ветку Toggle не
                         // попадает (row_kind = Dropdown), arm — для полноты
-                        | SettingsRow::ExplainDepthLimit => false,
+                        | SettingsRow::ExplainDepthLimit
+                        // FR-ICONS: dropdown-строка (row_kind = Dropdown)
+                        | SettingsRow::IconStyle => false,
                     };
                     // Pill-тумблер: трек (включён — акцент) + ручка-квад,
                     // позиция отражает значение (рисуется квадами)
