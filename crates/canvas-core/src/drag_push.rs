@@ -15,13 +15,22 @@
 //! ореол активной дожимается жёстко (мягкая доля + полный дожим до
 //! границы), включая финальный проход после парной фазы.
 //!
+//! ГРУППЫ (рамки FR-012) прозрачны для физики: не выталкиваются и не
+//! выталкивают. Рамка не должна разлетаться от драга соседей/детей, а
+//! дети геометрически лежат ВНУТРИ рамки — участвуй группа как тело,
+//! «ребёнок против своей группы» толкался бы вечно. Драг группы ведёт
+//! её drag-пайплайн (группа + дети — активные), физика её позиции не
+//! касается. Якоря групп не перезакрепляются, в разрешении сейф-зазора
+//! рамки не участвуют (нода, занесённая поверх группы — жест вставки
+//! FR-012, а не коллизия).
+//!
 //! Без сил/скоростей: только позиционные коррекции со сглаживанием —
 //! стабильно, предсказуемо, детерминированно (pure-функция шага над
 //! позициями). Zero-dep (ADR-0008); wasm-совместимо (без std-эксклюзива).
 
 use std::collections::HashMap;
 
-use crate::model::Canvas;
+use crate::model::{Canvas, NodeKind};
 
 /// Затухание сглаженной скорости активной ноды за шаг (доля остатка).
 const VEL_DECAY: f32 = 0.85;
@@ -236,6 +245,12 @@ pub fn step(
         }
     }
     let is_active = |i: usize| active.contains(&i);
+    // Группы прозрачны для физики (см. док модуля): не пассивные и не тела
+    let pushable: Vec<bool> = canvas
+        .nodes
+        .iter()
+        .map(|node| node.kind() != NodeKind::Group)
+        .collect();
     let mut touched: Vec<usize> = Vec::new();
     // Якоря собираются до мутации (borrow-разделение)
     let anchors: Vec<[f32; 2]> = (0..canvas.nodes.len())
@@ -244,7 +259,7 @@ pub fn step(
 
     // 1) мягкий возврат к якорям
     for (i, node) in canvas.nodes.iter_mut().enumerate() {
-        if is_active(i) {
+        if is_active(i) || !pushable[i] {
             continue;
         }
         let anchor = anchors[i];
@@ -275,7 +290,7 @@ pub fn step(
     // 2) выталкивание ореолом активных (жёсткая сейф-зона)
     if let Some(halo) = &halo {
         for (i, node) in canvas.nodes.iter_mut().enumerate() {
-            if is_active(i) {
+            if is_active(i) || !pushable[i] {
                 continue;
             }
             let before = (node.x, node.y);
@@ -286,14 +301,17 @@ pub fn step(
         }
     }
 
-    // 3) взаимное расталкивание пассивных (цепочки нод)
+    // 3) взаимное расталкивание пассивных (цепочки нод); группы — не
+    //    участники: ни толкаются, ни толкают
     for _ in 0..params.iters {
         for i in 0..canvas.nodes.len() {
-            if is_active(i) {
+            if is_active(i) || !pushable[i] {
                 continue;
             }
+            #[allow(clippy::needless_range_loop)]
+            // split_at_mut(i,j): мутабельный доступ к паре (i,j); pushable — булев фильтр тех же индексов
             for j in (i + 1)..canvas.nodes.len() {
-                if is_active(j) {
+                if is_active(j) || !pushable[j] {
                     continue;
                 }
                 let (ri, rj) = (
@@ -322,7 +340,7 @@ pub fn step(
     //    сейф-зону активных (полное выталкивание до границы)
     if let Some(halo) = &halo {
         for (i, node) in canvas.nodes.iter_mut().enumerate() {
-            if is_active(i) {
+            if is_active(i) || !pushable[i] {
                 continue;
             }
             let before = (node.x, node.y);
@@ -349,6 +367,11 @@ pub fn commit_drop(
     params: &DragPushParams,
 ) {
     let is_active = |i: usize| active.contains(&i);
+    let pushable: Vec<bool> = canvas
+        .nodes
+        .iter()
+        .map(|node| node.kind() != NodeKind::Group)
+        .collect();
     for (i, node) in canvas.nodes.iter().enumerate() {
         if is_active(i) {
             state.anchors.insert(node.id.clone(), [node.x, node.y]);
@@ -376,8 +399,8 @@ pub fn commit_drop(
     };
     let gap2 = params.gap / 2.0;
     for (i, n) in canvas.nodes.iter().enumerate() {
-        if is_active(i) {
-            continue;
+        if is_active(i) || !pushable[i] {
+            continue; // группы не перезакрепляются (рамка неподвижна)
         }
         let anchor = state.anchor_of(canvas, i);
         let old = Rect {
@@ -400,11 +423,13 @@ pub fn commit_drop(
             cur.x += p[0];
             cur.y += p[1];
         }
-        // Сейф-зазор: новый якорь не должен упираться в чужие сейф-зоны.
+        // Сейф-зазор: новый якорь не должен упираться в чужие сейф-зоны
+        // (группы — не препятствия: рамка не eject'ит ноду из своей области,
+        // занесение поверх группы — жест вставки FR-012, не коллизия)
         for _ in 0..GAP_RESOLVE_PASSES {
             let mut moved = false;
             for (j, m) in canvas.nodes.iter().enumerate() {
-                if is_active(j) || j == i {
+                if is_active(j) || j == i || !pushable[j] {
                     continue;
                 }
                 let rm = Rect::of(m, gap2);
@@ -613,6 +638,101 @@ mod tests {
         }
         commit_drop(&canvas, &[0], &mut state, &params);
         assert_eq!(state.anchors["b"], [240.0, 0.0], "b держит старый якорь");
+    }
+
+    /// Сцена «группа с ребёнком + сосед»: a (индекс 0) — будущая активная,
+    /// b (1) — нода над рамкой, g (2) — группа, c1 (3) — ребёнок внутри
+    /// рамки (геометрически).
+    fn canvas_group() -> Canvas {
+        let mut canvas = Canvas::default();
+        let mut a = crate::model::Node::text("a", "A", 0.0, 0.0);
+        a.width = 200.0;
+        a.height = 80.0;
+        let mut b = crate::model::Node::text("b", "B", 360.0, -180.0);
+        b.width = 200.0;
+        b.height = 80.0;
+        let mut g = crate::model::Node::group("g", 360.0, 0.0, 400.0, 200.0);
+        g.label = Some("Группа".to_owned());
+        g.children = Some(vec!["c1".to_owned()]);
+        let mut c1 = crate::model::Node::text("c1", "C1", 400.0, 40.0);
+        c1.width = 200.0;
+        c1.height = 80.0;
+        canvas.nodes.extend([a, b, g, c1]);
+        canvas
+    }
+
+    /// Группа (рамка FR-012) прозрачна для физики: ореол активной и парная
+    /// фаза рамку не двигают; накрытый ребёнок при этом выталкивается.
+    #[test]
+    fn group_frame_is_not_pushed() {
+        let mut canvas = canvas_group();
+        let mut state = DragPushState::new();
+        state.reanchor_all(&canvas);
+        let params = DragPushParams::default();
+        // активная a наехала на левый край рамки: ореол (halo 12 + gap/2 8)
+        // перекрывает полосу g (360..760) и ребёнка c1 (400..600)
+        canvas.nodes[0].x = 200.0;
+        let g_before = (canvas.nodes[2].x, canvas.nodes[2].y);
+        for _ in 0..60 {
+            step(&mut canvas, &[0], &mut state, &params);
+            assert_eq!(
+                (canvas.nodes[2].x, canvas.nodes[2].y),
+                g_before,
+                "рамка группы неподвижна под давлением ореола"
+            );
+        }
+        let (c1_x, c1_y) = (canvas.nodes[3].x, canvas.nodes[3].y);
+        assert!(
+            c1_x > 400.0 || c1_y != 40.0,
+            "накрытый ребёнок выталкивается: {c1_x}, {c1_y}"
+        );
+    }
+
+    /// Группа — не тело и в парной фазе: без драга «ребёнок внутри рамки»
+    /// не расталкивается со своей группой (физика спит — иначе вечная
+    /// борьба «ребёнок против своей рамки»).
+    #[test]
+    fn pair_phase_ignores_groups() {
+        let mut canvas = canvas_group();
+        let mut state = DragPushState::new();
+        state.reanchor_all(&canvas);
+        let params = DragPushParams::default();
+        let touched = step(&mut canvas, &[], &mut state, &params);
+        assert!(
+            touched.is_empty(),
+            "без драга ничего не движется: {touched:?}"
+        );
+        assert_eq!(
+            (canvas.nodes[2].x, canvas.nodes[2].y),
+            (360.0, 0.0),
+            "рамка на месте"
+        );
+        assert_eq!(
+            (canvas.nodes[3].x, canvas.nodes[3].y),
+            (400.0, 40.0),
+            "ребёнок на месте"
+        );
+    }
+
+    /// Якорь группы не перезакрепляется: drop с ореолом поверх рамки
+    /// оставляет якорь группы на месте; накрытая нода перезакрепляется.
+    #[test]
+    fn commit_drop_keeps_group_anchor() {
+        let mut canvas = canvas_group();
+        let mut state = DragPushState::new();
+        state.reanchor_all(&canvas);
+        let params = DragPushParams::default();
+        canvas.nodes[0].x = 200.0;
+        for _ in 0..15 {
+            step(&mut canvas, &[0], &mut state, &params);
+        }
+        commit_drop(&canvas, &[0], &mut state, &params);
+        assert_eq!(state.anchors["g"], [360.0, 0.0], "якорь группы на месте");
+        assert_ne!(
+            state.anchors["c1"],
+            [400.0, 40.0],
+            "накрытый ребёнок перезакреплён"
+        );
     }
 
     /// Пустой канвас/пустой active — без паник и без движения.
