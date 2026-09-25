@@ -20,7 +20,7 @@ use crate::cards::{
     template_icon_quads, template_icon_rect, widget_header_hover_instance, BundleContext,
     CardInstance, CardsPipeline, FocusView, SpillWaveView,
 };
-use crate::config::{choose_present_mode, choose_surface_format, surface_size_valid};
+use crate::config::{choose_present_mode, choose_surface_format, clamp_surface_extent, surface_size_valid};
 use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
@@ -639,7 +639,31 @@ impl Renderer {
         // пропущено; читанное ДО ожиданий 0×0 оставляло surface
         // несконфигурированным (canvas 300×150). Натив: ожидания не меняют
         // размер (block_on в том же кадре) — поведение то же.
-        let size = window.inner_size();
+        let window_size = window.inner_size();
+
+        // FR-WASM-02 §7 (panic-guard): clamp физического размера surface под
+        // max_texture_dimension_2d адаптера. На web canvas растянут на 100vw/
+        // 100vh (CSS), а winit репортит физический размер = CSS × DPR — на
+        // 2K+ мониторах с DPR>1 это уходит за лимит GPU (2048 в WebGL2/
+        // downlevel-конфигах) и wgpu 22.x в Surface::configure паникует по
+        // Validation Error → в WASM это trap `unreachable` (whole-page crash).
+        // После clamp'а canvas-DOM остаётся 100vw/100vh, браузер масштабирует
+        // backing-texture на CSS-бокс — лёгкое размытие, без падения.
+        let max_extent = gpu.device.limits().max_texture_dimension_2d;
+        let (clamped_w, clamped_h, was_clamped) =
+            clamp_surface_extent(window_size.width, window_size.height, max_extent);
+        if was_clamped {
+            tracing::warn!(
+                window_w = window_size.width,
+                window_h = window_size.height,
+                clamped_w,
+                clamped_h,
+                max_extent,
+                "физический размер canvas превышает max_texture_dimension_2d \
+                 GPU — surface клампится (canvas будет отмасштабирован браузером)"
+            );
+        }
+        let size = PhysicalSize::new(clamped_w, clamped_h);
 
         let caps = surface.get_capabilities(&gpu.adapter);
         let format = choose_surface_format(&caps.formats);
@@ -647,8 +671,8 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: clamped_w,
+            height: clamped_h,
             present_mode,
             alpha_mode: caps
                 .alpha_modes
@@ -658,7 +682,7 @@ impl Renderer {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        if surface_size_valid(size.width, size.height) {
+        if surface_size_valid(clamped_w, clamped_h) {
             surface.configure(&gpu.device, &config);
         }
 
@@ -888,13 +912,34 @@ impl Renderer {
 
     /// Переконфигурировать surface под новый размер окна.
     /// Нулевой размер (свёрнутое окно) игнорируется — кадр пропускается.
+    ///
+    /// FR-WASM-02 §7 (panic-guard): входной размер клампится к
+    /// `max_texture_dimension_2d` устройства. winit-web на web репортит
+    /// физический размер = CSS × DPR — на 2K+ мониторах с DPR>1 он уходит за
+    /// лимит GPU (2048 в WebGL2/downlevel), и `Surface::configure` паникует
+    /// в wgpu 22.x → WASM trap `unreachable`. После clamp'а surface-текстура
+    /// меньше CSS-бокса canvas, браузер её масштабирует — без падения.
     pub fn resize(&mut self, width: u32, height: u32) {
         if !surface_size_valid(width, height) {
             return;
         }
-        self.size = PhysicalSize::new(width, height);
-        self.config.width = width;
-        self.config.height = height;
+        let max_extent = self.gpu.device.limits().max_texture_dimension_2d;
+        let (clamped_w, clamped_h, was_clamped) =
+            clamp_surface_extent(width, height, max_extent);
+        if was_clamped {
+            tracing::warn!(
+                requested_w = width,
+                requested_h = height,
+                clamped_w,
+                clamped_h,
+                max_extent,
+                "resize: физический размер canvas превышает max_texture_dimension_2d \
+                 GPU — surface клампится (browser scaled backing texture)"
+            );
+        }
+        self.size = PhysicalSize::new(clamped_w, clamped_h);
+        self.config.width = clamped_w;
+        self.config.height = clamped_h;
         self.surface.configure(&self.gpu.device, &self.config);
     }
 
