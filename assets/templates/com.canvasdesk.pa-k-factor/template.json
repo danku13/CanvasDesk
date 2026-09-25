@@ -1,0 +1,28 @@
+{
+  "id": "com.canvasdesk.pa-k-factor",
+  "name_en": "K-Factor (Virality)",
+  "name_ru": "K-фактор (виральность)",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Виральный коэффициент: приглашений (рефералов) на пользователя × конверсия приглашения. K > 1 — каждый пользователь приводит больше одного нового, рост самоподдерживается и CAC стремится к нулю; K < 1 — виральность лишь снижает CAC, но не заменяет платный трафик. Измеряется по цепочке: приглашение → регистрация → активация, иначе конверсия завышена.",
+  "description_en": "Viral coefficient: referrals (invites) per user × invite conversion. K > 1 — each user brings more than one new one, growth is self-sustaining and CAC trends to zero; K < 1 — virality merely lowers CAC, it does not replace paid acquisition. Measure across the chain: invite → signup → activation, otherwise conversion is overstated.",
+  "params": [
+    {
+      "name": "referrals_per_user",
+      "type": "scalar",
+      "default": 2,
+      "min": 0,
+      "max": 100
+    },
+    {
+      "name": "referral_conversion",
+      "type": "scalar",
+      "default": 0.3,
+      "min": 0,
+      "max": 1
+    }
+  ],
+  "expr": "$referrals_per_user × $referral_conversion",
+  "color": "#4A90E2",
+  "icon": "funnel"
+}

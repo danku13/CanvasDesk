@@ -1,0 +1,21 @@
+{
+  "id": "com.canvasdesk.pa-avg-lifetime",
+  "name_en": "Average User Lifetime",
+  "name_ru": "Среднее время жизни клиента",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Средняя продолжительность жизни пользователя: 1 / месячный отток — в месяцах. Прямой вход для LTV (ARPU × margin × lifetime) и MAU-прогноза. Чувствителен к малому оттоку: снижение churn с 5% до 4% удлиняет жизнь с 20 до 25 месяцев (+25%) — поэтому retention-работа часто выгоднее роста притока.",
+  "description_en": "Average user lifetime: 1 / monthly churn — in months. Direct input for LTV (ARPU × margin × lifetime) and MAU projections. Highly sensitive to small churn: cutting churn from 5% to 4% extends life from 20 to 25 months (+25%) — which is why retention work often beats acquisition growth.",
+  "params": [
+    {
+      "name": "monthly_churn",
+      "type": "scalar",
+      "default": 0.05,
+      "min": 0.0001,
+      "max": 1
+    }
+  ],
+  "expr": "1 / $monthly_churn",
+  "color": "#4A90E2",
+  "icon": "retention"
+}

@@ -1,0 +1,54 @@
+{
+  "id": "com.canvasdesk.db-nosql",
+  "name_en": "NoSQL DB (Mongo)",
+  "name_ru": "БД NoSQL (Mongo)",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Документная БД: шарды как каналы обслуживания, модель M/M/c по операциям. Рабочий набор (working set) — справочный параметр: если он не влезает в RAM, реальная латентность выше модельной. Используется парой с db-sql-master при выборе хранилища под профиль нагрузки.",
+  "description_en": "Document store: shards act as service channels, M/M/c over operations. The working set is advisory — if it doesn't fit in RAM, real latency exceeds the model. Pairs with db-sql-master when choosing a store for your load profile.",
+  "params": [
+    {
+      "name": "ops_per_sec",
+      "type": "rate",
+      "default": 2000,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "doc_latency",
+      "type": "time",
+      "default": 4,
+      "unit": "ms",
+      "min": 0.001
+    },
+    {
+      "name": "shards",
+      "type": "count",
+      "default": 10,
+      "min": 1,
+      "max": 100
+    },
+    {
+      "name": "working_set_gb",
+      "type": "bytes",
+      "default": 8,
+      "unit": "GB",
+      "min": 0
+    }
+  ],
+  "expr": "mm1($ops_per_sec, 1 req / $doc_latency, $shards)",
+  "color": "#4A90E2",
+  "icon": "db",
+  "outputs": [
+    {
+      "name": "capacity_ops",
+      "unit": "rps",
+      "expr": "1 req / $doc_latency × $shards"
+    },
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($ops_per_sec, 1 req / $doc_latency, $shards)"
+    }
+  ]
+}

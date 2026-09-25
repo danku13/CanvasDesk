@@ -1,0 +1,35 @@
+{
+  "id": "com.canvasdesk.ue-break-even",
+  "name_en": "Break-Even Point",
+  "name_ru": "Точка безубыточности",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "Точка безубыточности: сколько единиц в месяц нужно продавать, чтобы маржинальная прибыль покрыла постоянные затраты: fixed / (price − variable). Цена должна быть выше переменных издержек — иначе бизнес теряет на каждой единице и точка не существует. Пары с contribution margin: чем выше доля маржи, тем ниже точка и устойчивее модель.",
+  "description_en": "Break-even point: how many units per month must be sold for the contribution to cover fixed costs: fixed / (price − variable). Price must exceed variable cost — otherwise the business loses money on every unit and the point does not exist. Pairs with contribution margin: the higher the margin share, the lower the break-even and the sturdier the model.",
+  "params": [
+    {
+      "name": "fixed_costs",
+      "type": "scalar",
+      "default": 20000,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "price",
+      "type": "scalar",
+      "default": 50,
+      "unit": "usd",
+      "min": 0.0001
+    },
+    {
+      "name": "variable_cost",
+      "type": "scalar",
+      "default": 30,
+      "unit": "usd",
+      "min": 0
+    }
+  ],
+  "expr": "$fixed_costs / ($price - $variable_cost)",
+  "color": "#F5A623",
+  "icon": "money"
+}

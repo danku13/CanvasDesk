@@ -1,0 +1,56 @@
+{
+  "id": "com.canvasdesk.ue-ltv-cohort",
+  "name_en": "Cohort LTV",
+  "name_ru": "LTV по когорте (retention-кривая)",
+  "version": "1.0.0",
+  "category": "unit-economics",
+  "description": "LTV через retention-кривую вместо 1/churn: когортная модель интегрирует реальное затухание удержания (D1, D7, D30 с экспоненциальным хвостом) и обычно даёт заметно меньшую — и более честную — оценку, чем ARPU × margin / churn. Мост между продуктовой аналитикой и юнит-экономикой: подставьте retention из pa-шаблонов. Если когортный LTV сильно ниже наивного — продукт теряет пользователей быстрее, чем предполагает churn-модель.",
+  "description_en": "LTV from a retention curve instead of 1/churn: the cohort model integrates real retention decay (D1, D7, D30 with an exponential tail) and usually yields a much lower — and more honest — estimate than ARPU × margin / churn. The bridge between product analytics and unit economics: plug in retention from the pa templates. If cohort LTV is far below the naive one, users churn faster than the churn model assumes.",
+  "params": [
+    {
+      "name": "arpu_m0",
+      "type": "scalar",
+      "default": 20,
+      "unit": "usd",
+      "min": 0
+    },
+    {
+      "name": "margin",
+      "type": "scalar",
+      "default": 0.8,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "r_d1",
+      "type": "scalar",
+      "default": 0.4,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "r_d7",
+      "type": "scalar",
+      "default": 0.25,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "r_d30",
+      "type": "scalar",
+      "default": 0.12,
+      "min": 0.0001,
+      "max": 1
+    },
+    {
+      "name": "months",
+      "type": "count",
+      "default": 12,
+      "min": 0,
+      "max": 60
+    }
+  ],
+  "expr": "cohort_ltv($arpu_m0, $margin, $r_d1, $r_d7, $r_d30, $months)",
+  "color": "#F5A623",
+  "icon": "money"
+}

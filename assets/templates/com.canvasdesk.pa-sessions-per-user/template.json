@@ -1,0 +1,26 @@
+{
+  "id": "com.canvasdesk.pa-sessions-per-user",
+  "name_en": "Sessions per User",
+  "name_ru": "Сессии на пользователя",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Частота сессий: сессий / пользователей за период. Глубина привычки: вместе с длительностью сессии и stickiness образует триаду вовлечённости. Бенчмарки сильно зависят от жанра: ежедневные утилиты — 15+ сессий в неделю, социальные — 5–10, e-commerce — 1–2. Растёт чаще от триггеров и уведомлений, чем от новых фич.",
+  "description_en": "Session frequency: sessions / users per period. Habit depth: together with session duration and stickiness it forms the engagement triad. Benchmarks vary by genre: daily utilities 15+ sessions/week, social 5–10, e-commerce 1–2. Frequency usually moves by triggers and notifications, not new features.",
+  "params": [
+    {
+      "name": "sessions",
+      "type": "count",
+      "default": 45000,
+      "min": 0
+    },
+    {
+      "name": "users",
+      "type": "count",
+      "default": 9000,
+      "min": 1
+    }
+  ],
+  "expr": "$sessions / $users",
+  "color": "#4A90E2",
+  "icon": "clock"
+}

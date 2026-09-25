@@ -1,0 +1,42 @@
+{
+  "id": "com.canvasdesk.support-staffing",
+  "name_en": "Support Staffing (Erlang C)",
+  "name_ru": "Штат поддержки (Эрланг C)",
+  "version": "1.0.0",
+  "category": "backend",
+  "description": "Вероятность ожидания ответа оператора (M/M/c, формула Эрланга C): поток обращений, среднее время обработки и число агентов → доля клиентов, которые будут ждать в очереди. Классика контакт-центров и SLA-планирования: при P_wait > 30% клиенты массово бросают очередь. Подбором агентов добейтесь целевого уровня сервиса (например, 80/20).",
+  "description_en": "Probability of waiting for an agent (M/M/c, Erlang C): ticket inflow, average handling time and number of agents → share of customers who will have to wait. Contact-center classic for SLA planning: at P_wait > 30% customers increasingly abandon the queue. Tune the agent count to hit your service-level target (e.g. 80/20).",
+  "params": [
+    {
+      "name": "calls_per_sec",
+      "type": "rate",
+      "default": 0.2,
+      "unit": "rps",
+      "min": 0
+    },
+    {
+      "name": "handle_time",
+      "type": "time",
+      "default": 240,
+      "unit": "sec",
+      "min": 1
+    },
+    {
+      "name": "agents",
+      "type": "count",
+      "default": 60,
+      "min": 1,
+      "max": 1000
+    }
+  ],
+  "expr": "erlang_c($calls_per_sec, 1 req / $handle_time, $agents)",
+  "color": "#4A90E2",
+  "icon": "users",
+  "outputs": [
+    {
+      "name": "utilization",
+      "unit": "%",
+      "expr": "utilization($calls_per_sec, 1 req / $handle_time, $agents)"
+    }
+  ]
+}
