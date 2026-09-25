@@ -271,7 +271,7 @@ pub fn admin_layout(
             (hint_h + body.h, None, Some(body), None, None)
         }
         AdminSection::Canvas => {
-            let body = canvas_body(body_demo, scroll_offset, p, card_fill);
+            let body = canvas_body(body_demo, scroll_offset, p, card_fill, lang, m, fs);
             (hint_h + body.h, None, None, Some(body), None)
         }
         AdminSection::Tokens => {
@@ -392,10 +392,48 @@ pub struct ComponentsLayout {
     pub chip_cells: Vec<StateCell>,
     /// Поля: (демо, раскладка kit::text_field).
     pub fields: Vec<(FieldDemo, kit::TextFieldLayout)>,
-    /// Переключатели: (on, состояние, слот).
-    pub switches: Vec<(bool, KitState, UiRect)>,
+    /// Переключатели: (on, состояние, слот, в фокусе — рамка accent).
+    pub switches: Vec<(bool, KitState, UiRect, bool)>,
+    /// Пересборка поверхностей (волна 2): dropdown закрытый (якорь).
+    pub dropdown_closed: Option<UiRect>,
+    /// Пересборка поверхностей (волна 2): dropdown открытый (якорь + меню).
+    pub dropdown_open: Option<DropdownOpenDemo>,
+    /// Пересборка поверхностей (волна 2): tooltip (якорь-чип, пузырь).
+    pub tooltip: Option<(UiRect, UiRect)>,
+    /// Пересборка поверхностей (волна 2): toast (хром panel_fill + accent).
+    pub toast: Option<UiRect>,
+    /// Пересборка поверхностей (волна 2): строки списка в состояниях
+    /// Normal/Hovered/Selected (статическая демо-матрица).
+    pub list_state_rows: Vec<(KitState, UiRect)>,
+    /// Пересборка поверхностей (волна 2): бегунок скролла демо-списка
+    /// (kit::scroll_bar на демо-ScrollState).
+    pub list_scroll_knob: Option<UiRect>,
+    /// Пересборка поверхностей (волна 2): строки таблицы — зебра/фокус/
+    /// выбор (kit-Row на общих направляющих, Table как источник геометрии).
+    pub row_state_rows: Vec<RowStateDemo>,
     /// Полная высота тела (для скролла).
     pub h: f32,
+}
+
+/// Пересборка поверхностей (волна 2): открытый dropdown матрицы состояний.
+#[derive(Debug, Clone)]
+pub struct DropdownOpenDemo {
+    pub anchor: UiRect,
+    pub menu: UiRect,
+    pub items: Vec<UiRect>,
+    pub labels: Vec<String>,
+}
+
+/// Пересборка поверхностей (волна 2): строка таблицы в состоянии матрицы
+/// (зебра/фокус/выбор) — данные + предвычисленная геометрия kit-Row.
+#[derive(Debug, Clone)]
+pub struct RowStateDemo {
+    pub state: KitState,
+    pub zebra: bool,
+    /// В фокусе (рамка accent рисуется потребителем поверх строки).
+    pub focused: bool,
+    pub parts: kit::RowParts<'static>,
+    pub lay: kit::RowLayout,
 }
 
 /// Тело секции «Компоненты»: матрица 4 варианта × 6 состояний + икон-кнопки
@@ -409,7 +447,6 @@ pub fn components_body(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> ComponentsLayout {
-    let _ = p;
     let mut lay = ComponentsLayout::default();
     let content_x = demo.x + 8.0;
     let content_w = (demo.w - 16.0).max(0.0);
@@ -591,15 +628,17 @@ pub fn components_body(
     }
     y += 6.0;
 
-    // Переключатели: on/off × Normal/Hover/Disabled
+    // Переключатели: on/off × Normal/Hover/Disabled + Pressed/в фокусе
     let sw_y = demo.y + y - offset;
     let sw_states = [
-        (true, KitState::Normal),
-        (false, KitState::Normal),
-        (true, KitState::Hovered),
-        (false, KitState::Disabled),
+        (true, KitState::Normal, false),
+        (false, KitState::Normal, false),
+        (true, KitState::Hovered, false),
+        (false, KitState::Disabled, false),
+        (true, KitState::Pressed, false),
+        (true, KitState::Normal, true),
     ];
-    for (i, (on, st)) in sw_states.iter().copied().enumerate() {
+    for (i, (on, st, focused)) in sw_states.iter().copied().enumerate() {
         let rect = UiRect::new(
             control_x + i as f32 * (kit::SWITCH_W + kit::GAP_CONTROLS + 12.0),
             sw_y,
@@ -607,10 +646,272 @@ pub fn components_body(
             kit::BUTTON_HEIGHT,
         );
         if fully(rect.y, rect.h) {
-            lay.switches.push((on, st, rect));
+            lay.switches.push((on, st, rect, focused));
         }
     }
     y += kit::BUTTON_HEIGHT + 4.0;
+
+    // === Пересборка поверхностей (волна 2): хвост матрицы состояний ===
+    // Popup-контролы, строки списка и строки таблицы — состояния, которые
+    // кит стилизует, но базовая матрица не показывала (аудит инвентаря).
+
+    // Dropdown: закрытый (якорь) / открытый (якорь + меню + пункты).
+    let dd_y = demo.y + y - offset;
+    if fully(dd_y, 14.0) {
+        lay.headers.push((
+            UiPoint::new(content_x, dd_y),
+            crate::i18n::keys::ADMIN_MATRIX_DROPDOWN,
+        ));
+    }
+    y += 16.0;
+    let closed_anchor = UiRect::new(control_x, demo.y + y - offset, 170.0, kit::BUTTON_HEIGHT);
+    if fully(closed_anchor.y, closed_anchor.h) {
+        lay.dropdown_closed = Some(closed_anchor);
+    }
+    let open_anchor = UiRect::new(
+        control_x + 186.0,
+        demo.y + y - offset,
+        170.0,
+        kit::BUTTON_HEIGHT,
+    );
+    let menu_h = 3.0 * 26.0 + 8.0;
+    // Вьюпорт меню — демо-зона (flip/клампы от неё; якорь в середине зоны —
+    // меню открывается вниз без flip).
+    let dd = kit::dropdown_menu(open_anchor, demo, UiVec2::new(190.0, menu_h));
+    let mut dd_items = Vec::new();
+    let mut dd_labels = Vec::new();
+    for i in 0..3 {
+        let ir = UiRect::new(
+            dd.menu.x + 4.0,
+            dd.menu.y + 4.0 + i as f32 * 26.0,
+            dd.menu.w - 8.0,
+            22.0,
+        );
+        if fully(ir.y, ir.h) {
+            dd_items.push(ir);
+            dd_labels.push(crate::i18n::trf(
+                lang,
+                crate::i18n::keys::KIT_DROPDOWN_ITEM,
+                &[("{n}", &(i + 1).to_string())],
+            ));
+        }
+    }
+    if fully(open_anchor.y, open_anchor.h + kit::DROPDOWN_GAP + menu_h) {
+        lay.dropdown_open = Some(DropdownOpenDemo {
+            anchor: open_anchor,
+            menu: dd.menu,
+            items: dd_items,
+            labels: dd_labels,
+        });
+    }
+    y += kit::BUTTON_HEIGHT + kit::DROPDOWN_GAP + menu_h + 10.0;
+
+    // Tooltip: якорь-чип + пузырь (delay пройден — показан).
+    let tip_y = demo.y + y - offset;
+    if fully(tip_y, 14.0) {
+        lay.headers.push((
+            UiPoint::new(content_x, tip_y),
+            crate::i18n::keys::ADMIN_MATRIX_TOOLTIP,
+        ));
+    }
+    y += 16.0;
+    let tip_anchor_label = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_ANCHOR);
+    let tip_anchor = kit::chip_layout(
+        UiPoint::new(control_x, demo.y + y - offset),
+        tip_anchor_label,
+        140.0,
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    );
+    let tip_text = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_BODY);
+    let tip_w = (m.width_of(fs, tip_text, FONT_FAMILY, 12.0) + 16.0).min(240.0);
+    let tip = kit::tooltip(
+        UiPoint::new(tip_anchor.rect.right(), tip_anchor.rect.y + 4.0),
+        UiVec2::new(tip_w, 18.0),
+        demo,
+        kit::TOOLTIP_DELAY_MS,
+        kit::TOOLTIP_DELAY_MS,
+    );
+    if fully(tip_anchor.rect.y, tip_anchor.rect.h) {
+        lay.tooltip = Some((
+            tip_anchor.rect,
+            tip.map(|t| t.rect)
+                .unwrap_or(UiRect::new(0.0, 0.0, 0.0, 0.0)),
+        ));
+    }
+    y += 26.0 + 12.0;
+
+    // Toast: хром тоста (panel_fill + accent-рамка) — статическая демо-строка.
+    let toast_y = demo.y + y - offset;
+    if fully(toast_y, 14.0) {
+        lay.headers.push((
+            UiPoint::new(content_x, toast_y),
+            crate::i18n::keys::ADMIN_MATRIX_TOAST,
+        ));
+    }
+    y += 16.0;
+    let toast_rect = UiRect::new(control_x, demo.y + y - offset, 260.0, 24.0);
+    if fully(toast_rect.y, toast_rect.h) {
+        lay.toast = Some(toast_rect);
+    }
+    y += 24.0 + 12.0;
+
+    // Строки списка: Normal / Hovered / Selected + бегунок скролла
+    // (kit::scroll_bar — контент 8 строк в окне 3).
+    let list_y = demo.y + y - offset;
+    if fully(list_y, 14.0) {
+        lay.headers.push((
+            UiPoint::new(content_x, list_y),
+            crate::i18n::keys::ADMIN_MATRIX_LIST,
+        ));
+    }
+    y += 16.0;
+    let list_area = UiRect::new(
+        control_x,
+        demo.y + y - offset,
+        (cells_w * 0.6).max(160.0),
+        3.0 * kit::LIST_ROW_H + 2.0 * kit::LIST_ROW_GAP,
+    );
+    for (i, st) in [KitState::Normal, KitState::Hovered, KitState::Selected]
+        .into_iter()
+        .enumerate()
+    {
+        let r = UiRect::new(
+            list_area.x + 4.0,
+            list_area.y + 4.0 + i as f32 * (kit::LIST_ROW_H + kit::LIST_ROW_GAP),
+            list_area.w - 12.0,
+            kit::LIST_ROW_H,
+        );
+        if fully(r.y, r.h) {
+            lay.list_state_rows.push((st, r));
+        }
+    }
+    if fully(list_area.y, list_area.h) {
+        let scroll = canvas_ui::kit::ScrollState {
+            offset: 24.0,
+            content_h: 8.0 * kit::LIST_ROW_H + 7.0 * kit::LIST_ROW_GAP,
+            viewport_h: list_area.h - 8.0,
+        };
+        lay.list_scroll_knob = canvas_ui::kit::scroll_bar(
+            UiRect::new(
+                list_area.x + 4.0,
+                list_area.y + 4.0,
+                list_area.w - 8.0,
+                list_area.h - 8.0,
+            ),
+            &scroll,
+            p,
+        );
+    }
+    y += list_area.h + 12.0;
+
+    // Строки таблицы: зебра (fill слотом hover_fill) / фокус (рамка accent
+    // поверх строки) / выбор (Selected) — источник геометрии Table (M4).
+    let rows_y = demo.y + y - offset;
+    if fully(rows_y, 14.0) {
+        lay.headers.push((
+            UiPoint::new(content_x, rows_y),
+            crate::i18n::keys::ADMIN_MATRIX_ROWS,
+        ));
+    }
+    y += 16.0;
+    {
+        let row_specs: [(kit::RowMarker, &str, &str, &str, &str); 3] = [
+            (
+                kit::RowMarker::Dot,
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_PRICE),
+                "50",
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_PRICE),
+                "",
+            ),
+            (
+                kit::RowMarker::Dot,
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_QTY),
+                "12",
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_QTY),
+                "",
+            ),
+            (
+                kit::RowMarker::Glyph("ƒ"),
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_TOTAL),
+                "600",
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_MONEY),
+                crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_BADGE),
+            ),
+        ];
+        let row_h = kit::LIST_ROW_H;
+        let mut table = kit::Table::new(kit::TableProps {
+            size: LABEL_SIZE,
+            family: FONT_FAMILY,
+            opts: kit::TableOpts {
+                leader: true,
+                gap: canvas_core::tokens::TABLE_GUIDE_GAP,
+                row_h,
+                row_gap: 2.0,
+                right_pad: 0.0,
+            },
+            palette: *p,
+        });
+        table.set_rows(
+            row_specs
+                .iter()
+                .enumerate()
+                .map(|(i, (marker, label, value, unit, badge))| kit::TableRow {
+                    marker: *marker,
+                    label: (*label).to_owned(),
+                    value: (*value).to_owned(),
+                    unit: (*unit).to_owned(),
+                    badge: (!badge.is_empty()).then(|| (*badge).to_owned()),
+                    state: if i == 2 {
+                        KitState::Selected
+                    } else {
+                        KitState::Normal
+                    },
+                    style: kit::TableRowStyle {
+                        fill: (i == 0).then_some(p.hover_fill),
+                        ..kit::TableRowStyle::default()
+                    },
+                })
+                .collect(),
+        );
+        let viewport_right = control_x + cells_w;
+        if table.guides_with(m, fs, viewport_right).is_some() {
+            for (i, (marker, label, value, unit, badge)) in row_specs.into_iter().enumerate() {
+                let slot = UiRect::new(
+                    control_x,
+                    demo.y + y - offset + i as f32 * (row_h + 2.0),
+                    cells_w,
+                    row_h,
+                );
+                if !fully(slot.y, slot.h) {
+                    continue;
+                }
+                let Some(rl) = table.row_layout_with(m, fs, viewport_right, slot, i) else {
+                    continue;
+                };
+                lay.row_state_rows.push(RowStateDemo {
+                    state: if i == 2 {
+                        KitState::Selected
+                    } else {
+                        KitState::Normal
+                    },
+                    zebra: i == 0,
+                    focused: i == 1,
+                    parts: kit::RowParts {
+                        marker,
+                        label,
+                        value,
+                        unit,
+                        badge,
+                    },
+                    lay: rl,
+                });
+            }
+        }
+        y += 3.0 * (row_h + 2.0) + 12.0;
+    }
 
     lay.h = y;
     lay
@@ -727,10 +1028,128 @@ pub(crate) fn draw_components(
         }
     }
     // Переключатели
-    for (on, st, rect) in &comp.switches {
+    for (on, st, rect, focused) in &comp.switches {
         let sw = kit::switch(*rect, *on, *st, p);
         d.control(sw.track, &sw.track_style);
         d.rect(sw.knob, sw.knob_fill, [0.0; 4], 4.0);
+        if *focused {
+            d.rect(*rect, [0.0; 4], p.accent, canvas_core::tokens::RADIUS_CHIP);
+        }
+    }
+
+    // === Пересборка поверхностей (волна 2): хвост матрицы состояний ===
+    // Dropdown закрытый / открытый (kit::dropdown_menu — хром меню слотами)
+    if let Some(anchor) = &comp.dropdown_closed {
+        let style = kit::button_style(ButtonVariant::Secondary, KitState::Normal, p);
+        d.control(*anchor, &style);
+        let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_DROPDOWN_ANCHOR).to_owned();
+        d.label_center(*anchor, &text, style.text, LABEL_SIZE);
+    }
+    if let Some(dd) = &comp.dropdown_open {
+        let style = kit::button_style(ButtonVariant::Secondary, KitState::Normal, p);
+        d.control(dd.anchor, &style);
+        let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_DROPDOWN_ANCHOR).to_owned();
+        d.label_center(dd.anchor, &text, style.text, LABEL_SIZE);
+        d.rect(
+            dd.menu,
+            p.panel_fill,
+            p.control_border,
+            canvas_core::tokens::RADIUS_CHIP,
+        );
+        for (i, (ir, text)) in dd.items.iter().zip(dd.labels.iter()).enumerate() {
+            // Демо состояний пунктов: первый — hover (статическая матрица).
+            let item_style = kit::chip_style(
+                if i == 0 {
+                    KitState::Hovered
+                } else {
+                    KitState::Normal
+                },
+                p,
+            );
+            d.rect(*ir, item_style.fill, [0.0; 4], 4.0);
+            d.label_left(
+                UiRect::new(ir.x + 8.0, ir.y + 3.0, ir.w - 16.0, ir.h),
+                text,
+                item_style.text,
+                12.0,
+            );
+        }
+    }
+    // Tooltip: якорь-чип + пузырь (панельная хрома + accent-рамка)
+    if let Some((anchor, bubble)) = &comp.tooltip {
+        let style = kit::chip_style(KitState::Normal, p);
+        d.control(*anchor, &style);
+        let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_ANCHOR).to_owned();
+        d.label_center(*anchor, &text, style.text, 12.0);
+        if !bubble.is_empty() {
+            d.rect(
+                *bubble,
+                p.panel_fill,
+                p.accent,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_BODY).to_owned();
+            d.label_left(
+                UiRect::new(bubble.x + 8.0, bubble.y + 2.0, bubble.w - 16.0, 14.0),
+                &text,
+                p.text,
+                12.0,
+            );
+        }
+    }
+    // Toast: хром тоста (панельная заливка + accent-рамка, слот текста)
+    if let Some(rect) = &comp.toast {
+        d.rect(
+            *rect,
+            p.panel_fill,
+            p.accent,
+            canvas_core::tokens::RADIUS_CHIP,
+        );
+        let text = crate::i18n::tr(lang, crate::i18n::keys::ADMIN_TOAST_SHORT).to_owned();
+        d.label_center(*rect, &text, p.text, 12.0);
+    }
+    // Строки списка: Normal/Hovered/Selected + бегунок (kit::scroll_bar)
+    for (i, (st, rect)) in comp.list_state_rows.iter().enumerate() {
+        let style = kit::chip_style(*st, p);
+        d.rect(*rect, style.fill, [0.0; 4], 4.0);
+        let text = crate::i18n::trf(
+            lang,
+            crate::i18n::keys::KIT_LIST_ROW,
+            &[("{n}", &(i + 1).to_string())],
+        );
+        d.label_left(
+            UiRect::new(rect.x + 8.0, rect.y + 4.0, rect.w - 16.0, rect.h - 8.0),
+            &text,
+            style.text,
+            12.0,
+        );
+    }
+    if let Some(knob) = &comp.list_scroll_knob {
+        d.rect(*knob, p.control_border, [0.0; 4], 2.0);
+    }
+    // Строки таблицы: зебра/фокус/выбор (paint_row по готовой геометрии)
+    for demo_row in &comp.row_state_rows {
+        let mut style = kit::row_style(demo_row.state, p);
+        if demo_row.zebra {
+            style.fill = p.hover_fill;
+        }
+        let mut painter = canvas_ui::paint::Painter::new();
+        kit::paint_row(
+            &mut painter,
+            &demo_row.lay,
+            &demo_row.parts,
+            &style,
+            LABEL_SIZE,
+        );
+        d.paint_items(painter.take_items());
+        if demo_row.focused {
+            d.rect(
+                demo_row.lay.row,
+                [0.0; 4],
+                p.accent,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+        }
     }
 }
 
@@ -1672,13 +2091,42 @@ pub struct CanvasLayout {
     pub edge_demos: Vec<(&'static str, UiRect, [f32; 4])>,
     /// Демо портов: (ключ i18n, зона, диаметр точки, цвет).
     pub port_demos: Vec<(&'static str, UiRect, f32, [f32; 4])>,
+    /// Пересборка поверхностей (волна 2): карточка ноды с табличным телом
+    /// (FR-061 хром: направляющие/лидер/зебра/бейдж) — зеркало текущего
+    /// рендера шаблонных нод.
+    pub node_table: Option<NodeTableDemo>,
     /// Полная высота тела (для скролла).
     pub h: f32,
 }
 
+/// Пересборка поверхностей (волна 2): демо табличного тела ноды (FR-061) —
+/// карточка (хедер + строки kit-Row на общих направляющих).
+#[derive(Debug, Clone)]
+pub struct NodeTableDemo {
+    /// Карточка (внешний rect) и хедер.
+    pub card: UiRect,
+    pub header: UiRect,
+    /// Строки тела: (данные, состояние, зебра, геометрия kit-Row).
+    pub rows: Vec<(kit::RowParts<'static>, KitState, bool, kit::RowLayout)>,
+}
+
+/// Размеры демо карточки с табличным телом (хедер CARD_HEADER_HEIGHT +
+/// 3 строки LIST_ROW_H + пад 4).
+pub const NODE_TABLE_CARD_W: f32 = 250.0;
+pub const NODE_TABLE_ROWS: usize = 3;
+
 /// Тело секции «Канвас». `card_fill` — слот заливки карточки из темы
 /// (ThemeColors.card_fill, извлекает вызывающий — кит без конкретных цветов).
-pub fn canvas_body(demo: UiRect, offset: f32, p: &KitPalette, card_fill: [f32; 4]) -> CanvasLayout {
+#[allow(clippy::too_many_arguments)]
+pub fn canvas_body(
+    demo: UiRect,
+    offset: f32,
+    p: &KitPalette,
+    card_fill: [f32; 4],
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> CanvasLayout {
     let mut lay = CanvasLayout::default();
     let content_x = demo.x + 8.0;
     let top = demo.y - offset;
@@ -1775,6 +2223,101 @@ pub fn canvas_body(demo: UiRect, offset: f32, p: &KitPalette, card_fill: [f32; 4
         }
         y += 48.0;
     }
+    y += 8.0;
+
+    // === Пересборка поверхностей (волна 2): карточка ноды с табличным
+    // телом (FR-061) — хедер + 3 строки kit-Row на общих направляющих
+    // (Dot/цена, Dot/кол-во + зебра, Glyph ƒ/итого + бейдж) — зеркало
+    // текущего рендера шаблонных нод (row_guides/row_layout кита). ===
+    {
+        let header_h = canvas_core::tokens::CARD_HEADER_HEIGHT;
+        let card_h = header_h + NODE_TABLE_ROWS as f32 * kit::LIST_ROW_H + 8.0;
+        let card = UiRect::new(content_x, demo.y + y - offset, NODE_TABLE_CARD_W, card_h);
+        if fully(card.y, card.h) {
+            let header = UiRect::new(card.x, card.y, card.w, header_h);
+            let specs: [(kit::RowMarker, &str, &str, &str, &str); NODE_TABLE_ROWS] = [
+                (
+                    kit::RowMarker::Dot,
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_PRICE),
+                    "50",
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_PRICE),
+                    "",
+                ),
+                (
+                    kit::RowMarker::Dot,
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_QTY),
+                    "12",
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_QTY),
+                    "",
+                ),
+                (
+                    kit::RowMarker::Glyph("ƒ"),
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_TOTAL),
+                    "600",
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_UNIT_MONEY),
+                    crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_BADGE),
+                ),
+            ];
+            let parts: Vec<kit::RowParts<'static>> = specs
+                .iter()
+                .map(|(marker, label, value, unit, badge)| kit::RowParts {
+                    marker: *marker,
+                    label,
+                    value,
+                    unit,
+                    badge,
+                })
+                .collect();
+            // Общие направляющие тела карточки (право — внутренний край
+            // карточки, зазор — TABLE_GUIDE_GAP, лидер on).
+            let inner_right = card.right() - 8.0;
+            let rows: Vec<_> = if let Some(rg) = kit::row_guides(
+                m,
+                fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+                &parts,
+                inner_right,
+                canvas_core::tokens::TABLE_GUIDE_GAP,
+            ) {
+                specs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        let slot = UiRect::new(
+                            card.x + 4.0,
+                            header.bottom() + 4.0 + i as f32 * kit::LIST_ROW_H,
+                            card.w - 8.0,
+                            kit::LIST_ROW_H,
+                        );
+                        (
+                            parts[i],
+                            if i + 1 == NODE_TABLE_ROWS {
+                                KitState::Selected
+                            } else {
+                                KitState::Normal
+                            },
+                            i == 1,
+                            kit::row_layout(
+                                m,
+                                fs,
+                                FONT_FAMILY,
+                                LABEL_SIZE,
+                                slot,
+                                rg,
+                                &parts[i],
+                                &kit::RowOpts::default(),
+                            ),
+                        )
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            lay.node_table = Some(NodeTableDemo { card, header, rows });
+        }
+        y += card_h + 8.0;
+    }
 
     lay.h = y;
     lay
@@ -1854,6 +2397,58 @@ pub(crate) fn draw_canvas(
         );
         let dot = UiRect::new(area.x, area.y + (40.0 - size) / 2.0, *size, *size);
         d.rect(dot, *color, [0.0; 4], size / 2.0);
+    }
+    // Пересборка поверхностей (волна 2): карточка с табличным телом
+    // (FR-061) — хром карточки + строки paint_row по готовой геометрии.
+    if let Some(table) = &lay.node_table {
+        d.label_left(
+            UiRect::new(
+                table.card.right() + 8.0,
+                table.card.y + 8.0,
+                VARIANT_LABEL_W * 2.0,
+                16.0,
+            ),
+            crate::i18n::tr(lang, crate::i18n::keys::ADMIN_NODE_TABLE),
+            p.text_muted,
+            12.0,
+        );
+        d.rect(
+            table.card,
+            p.control_fill,
+            p.control_border,
+            canvas_core::tokens::CARD_CORNER_RADIUS,
+        );
+        d.rect(
+            UiRect::new(
+                table.header.x,
+                table.header.y,
+                table.header.w,
+                table.header.h,
+            ),
+            p.hover_fill,
+            [0.0; 4],
+            0.0,
+        );
+        d.label_left(
+            UiRect::new(
+                table.header.x + 8.0,
+                table.header.y + 3.0,
+                table.header.w - 16.0,
+                16.0,
+            ),
+            crate::i18n::tr(lang, crate::i18n::keys::KIT_CARD_TITLE),
+            p.text_title,
+            12.0,
+        );
+        for (parts, state, zebra, lay_row) in &table.rows {
+            let mut style = kit::row_style(*state, p);
+            if *zebra {
+                style.fill = p.hover_fill;
+            }
+            let mut painter = canvas_ui::paint::Painter::new();
+            kit::paint_row(&mut painter, lay_row, parts, &style, LABEL_SIZE);
+            d.paint_items(painter.take_items());
+        }
     }
 }
 
@@ -2383,7 +2978,11 @@ mod tests {
         let mut m = new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
         let body = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
-        assert_eq!(body.headers.len(), 10, "6 состояний + 4 подписи полей");
+        assert!(
+            body.headers.len() >= 10,
+            "6 состояний + 4 подписи полей (хвост матрицы — по видимости): {}",
+            body.headers.len()
+        );
         assert_eq!(body.button_rows.len(), 4);
         for row in &body.button_rows {
             assert_eq!(row.cells.len(), 6, "5 из ST1 + Focused");
@@ -2393,7 +2992,7 @@ mod tests {
         assert_eq!(body.icon_cells.len(), 5, "ST1 без Focused");
         assert_eq!(body.chip_cells.len(), 6);
         assert_eq!(body.fields.len(), 4, "Normal/Focused/Error/Disabled");
-        assert_eq!(body.switches.len(), 4);
+        assert_eq!(body.switches.len(), 6, "4 прежних + Pressed + фокус");
         // Каретка видна только у Focused-поля
         let caret_fields = body
             .fields
@@ -2401,6 +3000,89 @@ mod tests {
             .filter(|(_, fl)| fl.caret_x >= 0.0)
             .count();
         assert_eq!(caret_fields, 1);
+    }
+
+    /// Пересборка поверхностей (волна 2): хвост матрицы состояний —
+    /// dropdown закрыт/открыт, tooltip, toast, строки списков в состояниях
+    /// и бегунок, строки таблицы (зебра/фокус/выбор). На синтетическом
+    /// высоком окне всё видно при offset 0.
+    #[test]
+    fn components_body_extended_matrix() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let big = UiRect::new(0.0, 0.0, demo.w, 2400.0);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let body = components_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        // Popup-контролы
+        assert!(body.dropdown_closed.is_some(), "закрытый dropdown");
+        let dd = body.dropdown_open.expect("открытый dropdown");
+        assert_eq!(dd.items.len(), 3, "3 видимых пункта");
+        assert_eq!(dd.items.len(), dd.labels.len());
+        assert!(dd.menu.bottom() >= dd.anchor.bottom(), "меню под якорем");
+        let (tip_anchor, tip_bubble) = body.tooltip.expect("tooltip-демо");
+        assert!(tip_bubble.w > 0.0, "пузырь показан (delay пройден)");
+        assert!(tip_bubble.x >= tip_anchor.right() - 1.0, "пузырь у якоря");
+        assert!(body.toast.is_some(), "toast-хром");
+        // Строки списка: Normal/Hovered/Selected + бегунок
+        let states: Vec<KitState> = body.list_state_rows.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            states,
+            vec![KitState::Normal, KitState::Hovered, KitState::Selected]
+        );
+        assert!(body.list_scroll_knob.is_some(), "бегунок скролла списка");
+        // Строки таблицы: зебра / фокус / выбор; значения на направляющей
+        assert_eq!(body.row_state_rows.len(), 3);
+        assert!(body.row_state_rows[0].zebra, "первая строка — зебра");
+        assert!(body.row_state_rows[1].focused, "вторая — в фокусе");
+        assert_eq!(
+            body.row_state_rows[2].state,
+            KitState::Selected,
+            "Σ — выбор"
+        );
+        assert!(
+            body.row_state_rows[2].lay.badge.is_some(),
+            "бейдж у Σ-строки"
+        );
+        let value_right = body.row_state_rows[0].lay.value.right();
+        assert!(
+            body.row_state_rows.iter().all(|r| {
+                r.lay.value.w == 0.0 || (r.lay.value.right() - value_right).abs() < 0.01
+            }),
+            "значения строк — на колоночной направляющей (D-4)"
+        );
+        // Заголовки хвостовых групп присутствуют
+        let header_keys: Vec<&str> = body.headers.iter().map(|(_, k)| *k).collect();
+        for key in [
+            crate::i18n::keys::ADMIN_MATRIX_DROPDOWN,
+            crate::i18n::keys::ADMIN_MATRIX_TOOLTIP,
+            crate::i18n::keys::ADMIN_MATRIX_TOAST,
+            crate::i18n::keys::ADMIN_MATRIX_LIST,
+            crate::i18n::keys::ADMIN_MATRIX_ROWS,
+        ] {
+            assert!(header_keys.contains(&key), "нет заголовка {key}");
+        }
+    }
+
+    /// Пересборка поверхностей (волна 2): скролл хвоста матрицы — popup-
+    /// контролы и строки за окном отфильтрованы целиком (контракт
+    /// полной видимости).
+    #[test]
+    fn components_body_extended_filters_by_scroll() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let big = UiRect::new(0.0, 0.0, demo.w, 2400.0);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let full = components_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+        let shifted = components_body(big, full.h, &palette, Language::Ru, &mut m, &mut fs);
+        assert!(shifted.dropdown_closed.is_none());
+        assert!(shifted.dropdown_open.is_none());
+        assert!(shifted.tooltip.is_none());
+        assert!(shifted.toast.is_none());
+        assert!(shifted.list_state_rows.is_empty());
+        assert!(shifted.list_scroll_knob.is_none());
+        assert!(shifted.row_state_rows.is_empty());
     }
 
     /// Скролл тела: при большом offset ячейки за окном демо-зоны
@@ -2536,7 +3218,17 @@ mod tests {
     fn canvas_body_st4_states() {
         let palette = test_palette();
         let demo = admin_demo_viewport([1280.0, 800.0]);
-        let body = canvas_body(demo, 0.0, &palette, [0.2, 0.2, 0.25, 1.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let body = canvas_body(
+            demo,
+            0.0,
+            &palette,
+            [0.2, 0.2, 0.25, 1.0],
+            Language::Ru,
+            &mut m,
+            &mut fs,
+        );
         assert_eq!(body.node_demos.len(), 4, "normal/selected/broken/group");
         // Selected — рамка accent
         assert_eq!(body.node_demos[1].2, palette.accent);
@@ -2552,6 +3244,68 @@ mod tests {
         // Порты: точки 10 → 26
         assert_eq!(body.port_demos[0].2, 10.0);
         assert_eq!(body.port_demos[1].2, 26.0);
+    }
+
+    /// Пересборка поверхностей (волна 2): демо табличного тела ноды
+    /// (FR-061) — карточка с хедером, 3 строки на общих направляющих,
+    /// зебра + бейдж у Σ-строки; строки внутри карточки.
+    #[test]
+    fn canvas_body_node_table_demo() {
+        let palette = test_palette();
+        let demo = admin_demo_viewport([1280.0, 800.0]);
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let body = canvas_body(
+            demo,
+            0.0,
+            &palette,
+            [0.2, 0.2, 0.25, 1.0],
+            Language::Ru,
+            &mut m,
+            &mut fs,
+        );
+        let table = body.node_table.expect("демо табличного тела построено");
+        assert_eq!(table.rows.len(), NODE_TABLE_ROWS);
+        // Хедер — верх карточки, строки — под ним и внутри карточки.
+        assert_eq!(table.header.y, table.card.y);
+        assert!(table
+            .rows
+            .iter()
+            .all(|(.., lay)| lay.row.x >= table.card.x
+                && lay.row.right() <= table.card.right() + 0.01));
+        // Общие направляющие: значения всех строк — на одной оси (D-4).
+        let value_right = table.rows[0].3.value.right();
+        assert!(table
+            .rows
+            .iter()
+            .all(|(.., lay)| lay.value.w == 0.0 || (lay.value.right() - value_right).abs() < 0.01));
+        // Зебра (вторая) + бейдж/Selected (третья).
+        assert!(table.rows[1].2, "вторая строка — зебра");
+        assert!(table.rows[2].1 == KitState::Selected, "Σ — выбор");
+        assert!(!table.rows[2].0.badge.is_empty(), "у Σ — бейдж-демо");
+    }
+
+    /// Пересборка поверхностей (волна 2): новые ключи i18n админпанели
+    /// существуют в ОБОИХ языках.
+    #[test]
+    fn extended_admin_i18n_keys_exist() {
+        let keys = [
+            crate::i18n::keys::ADMIN_MATRIX_DROPDOWN,
+            crate::i18n::keys::ADMIN_MATRIX_TOOLTIP,
+            crate::i18n::keys::ADMIN_MATRIX_TOAST,
+            crate::i18n::keys::ADMIN_MATRIX_LIST,
+            crate::i18n::keys::ADMIN_MATRIX_ROWS,
+            crate::i18n::keys::ADMIN_NODE_TABLE,
+        ];
+        for lang in [Language::Ru, Language::En] {
+            for key in keys {
+                assert_ne!(
+                    crate::i18n::tr(lang, key),
+                    key,
+                    "нет перевода {key} для {lang:?}"
+                );
+            }
+        }
     }
 
     /// Тело «Токены»: 4 группы; группа слотов — 14 интерактивных свотчей;

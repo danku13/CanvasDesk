@@ -500,6 +500,18 @@ pub mod keys {
     pub const KIT_ROW_UNIT_QTY: &str = "kit.row.unit.qty";
     pub const KIT_ROW_UNIT_MONEY: &str = "kit.row.unit.money";
     pub const KIT_ROW_BADGE: &str = "kit.row.badge";
+    /// Пересборка поверхностей (волна 2): демо компонентного слоя
+    /// (`component::Row`/`component::Panel`) и недостающие layout-примитивы
+    /// (SqueezeTail, MainAlign::SpaceBetween, Column) в витрине кита.
+    pub const KIT_SECTION_COMPONENT_ROW: &str = "kit.section.component_row";
+    pub const KIT_SECTION_COMPONENT_PANEL: &str = "kit.section.component_panel";
+    pub const KIT_SECTION_SQUEEZE: &str = "kit.section.squeeze";
+    pub const KIT_SECTION_ALIGN: &str = "kit.section.align";
+    pub const KIT_COMPONENT_ROW_LABEL: &str = "kit.component.row_label";
+    pub const KIT_COMPONENT_PANEL_BODY: &str = "kit.component.panel_body";
+    pub const KIT_ALIGN_A: &str = "kit.align.a";
+    pub const KIT_ALIGN_B: &str = "kit.align.b";
+    pub const KIT_ALIGN_C: &str = "kit.align.c";
     /// DebugOverlay (F10): подсказка тогла.
     pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
 
@@ -554,6 +566,15 @@ pub mod keys {
     pub const ADMIN_TOK_GROUP_DIMS: &str = "admin.tok.group_dims";
     pub const ADMIN_TOK_GROUP_TYPE: &str = "admin.tok.group_type";
     pub const ADMIN_TOK_GROUP_MOTION: &str = "admin.tok.group_motion";
+    /// Пересборка поверхностей (волна 2): расширение матрицы «Компоненты»
+    /// (popup-контролы, состояния строк списков/таблиц) и демо табличного
+    /// тела ноды (FR-061) в секции «Канвас».
+    pub const ADMIN_MATRIX_DROPDOWN: &str = "admin.matrix.dropdown";
+    pub const ADMIN_MATRIX_TOOLTIP: &str = "admin.matrix.tooltip";
+    pub const ADMIN_MATRIX_TOAST: &str = "admin.matrix.toast";
+    pub const ADMIN_MATRIX_LIST: &str = "admin.matrix.list";
+    pub const ADMIN_MATRIX_ROWS: &str = "admin.matrix.rows";
+    pub const ADMIN_NODE_TABLE: &str = "admin.node.table";
     /// Страница user-docs «UI-консоль» (FR-070, FR-031).
     pub const DOCS_PAGE_ADMIN: &str = "docs.page.admin";
     /// Этап 4: шаг 9 онбординга — UI-консоль.
@@ -1117,6 +1138,31 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::KIT_LIST_ROW, "Строка {n}"),
     (keys::KIT_STATE_FOCUSED, "В фокусе"),
+    // Пересборка поверхностей: демо компонентного слоя + layout-примитивы
+    (
+        keys::KIT_SECTION_COMPONENT_ROW,
+        "Компонент Row (component::Row: Props + состояние)",
+    ),
+    (
+        keys::KIT_SECTION_COMPONENT_PANEL,
+        "Компонент Panel (component::Panel: панель + контент)",
+    ),
+    (
+        keys::KIT_SECTION_SQUEEZE,
+        "Деградация ряда (SqueezeTail: хвост сжимается до нуля)",
+    ),
+    (
+        keys::KIT_SECTION_ALIGN,
+        "Выравнивание и колонка (SpaceBetween / Column + распорка)",
+    ),
+    (keys::KIT_COMPONENT_ROW_LABEL, "Компонентная строка"),
+    (
+        keys::KIT_COMPONENT_PANEL_BODY,
+        "Контент компонента Panel (panel_content — минус пад SPACING_LG)",
+    ),
+    (keys::KIT_ALIGN_A, "Начало"),
+    (keys::KIT_ALIGN_B, "Центр"),
+    (keys::KIT_ALIGN_C, "Конец"),
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): рамки слоёв, имя под курсором, пересечения",
@@ -1184,6 +1230,22 @@ const RU: &[(&str, &str)] = &[
     (keys::ADMIN_TOK_GROUP_DIMS, "Размеры (px)"),
     (keys::ADMIN_TOK_GROUP_TYPE, "Типографика (px)"),
     (keys::ADMIN_TOK_GROUP_MOTION, "Движение (мс)"),
+    // Пересборка поверхностей: расширение матрицы «Компоненты» + канвас
+    (
+        keys::ADMIN_MATRIX_DROPDOWN,
+        "Dropdown (закрыт / открыт)",
+    ),
+    (keys::ADMIN_MATRIX_TOOLTIP, "Tooltip (delay пройден)"),
+    (keys::ADMIN_MATRIX_TOAST, "Toast"),
+    (
+        keys::ADMIN_MATRIX_LIST,
+        "Строки списка (обычное / hover / выбор + скролл)",
+    ),
+    (
+        keys::ADMIN_MATRIX_ROWS,
+        "Строки таблицы (зебра / фокус / выбор)",
+    ),
+    (keys::ADMIN_NODE_TABLE, "Таблица в теле (FR-061)"),
     (keys::DOCS_PAGE_ADMIN, "UI-консоль"),
     (
         keys::ONBOARDING_STEP9_TITLE,
@@ -1930,6 +1992,31 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::KIT_LIST_ROW, "Row {n}"),
     (keys::KIT_STATE_FOCUSED, "Focused"),
+    // Surface rebuild wave: component-layer demos + layout primitives
+    (
+        keys::KIT_SECTION_COMPONENT_ROW,
+        "Row component (component::Row: Props + state)",
+    ),
+    (
+        keys::KIT_SECTION_COMPONENT_PANEL,
+        "Panel component (component::Panel: panel + content)",
+    ),
+    (
+        keys::KIT_SECTION_SQUEEZE,
+        "Row degradation (SqueezeTail: tail squeezed to zero)",
+    ),
+    (
+        keys::KIT_SECTION_ALIGN,
+        "Alignment and column (SpaceBetween / Column + spacer)",
+    ),
+    (keys::KIT_COMPONENT_ROW_LABEL, "Component row"),
+    (
+        keys::KIT_COMPONENT_PANEL_BODY,
+        "Panel component content (panel_content — minus SPACING_LG pad)",
+    ),
+    (keys::KIT_ALIGN_A, "Start"),
+    (keys::KIT_ALIGN_B, "Center"),
+    (keys::KIT_ALIGN_C, "End"),
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): layer rects, name under cursor, intersections",
@@ -1997,6 +2084,19 @@ const EN: &[(&str, &str)] = &[
     (keys::ADMIN_TOK_GROUP_DIMS, "Dimensions (px)"),
     (keys::ADMIN_TOK_GROUP_TYPE, "Typography (px)"),
     (keys::ADMIN_TOK_GROUP_MOTION, "Motion (ms)"),
+    // Surface rebuild wave: extended Components matrix + canvas
+    (keys::ADMIN_MATRIX_DROPDOWN, "Dropdown (closed / open)"),
+    (keys::ADMIN_MATRIX_TOOLTIP, "Tooltip (delay elapsed)"),
+    (keys::ADMIN_MATRIX_TOAST, "Toast"),
+    (
+        keys::ADMIN_MATRIX_LIST,
+        "List rows (normal / hover / selected + scroll)",
+    ),
+    (
+        keys::ADMIN_MATRIX_ROWS,
+        "Table rows (zebra / focus / selected)",
+    ),
+    (keys::ADMIN_NODE_TABLE, "Table body (FR-061)"),
     (keys::DOCS_PAGE_ADMIN, "UI console"),
     (keys::ONBOARDING_STEP9_TITLE, "UI console for the owner"),
     (
