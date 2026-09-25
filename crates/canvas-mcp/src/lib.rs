@@ -272,9 +272,9 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "node_resize",
-        description: "Изменить размеры ноды (width, height)",
+        description: "Изменить размеры ноды (width, height). fit:true — подогнать высоту под контент (фон не сжимается меньше видимого)",
         required: &["id", "width", "height"],
-        properties: &[("id", STR), ("width", NUM), ("height", NUM)],
+        properties: &[("id", STR), ("width", NUM), ("height", NUM), ("fit", BOOL)],
     },
     ToolSpec {
         name: "node_delete",

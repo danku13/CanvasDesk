@@ -771,7 +771,7 @@ impl App {
         close_widget.set_pointer(hover(&lay.close), false);
         let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
         d.control(lay.close, &close_style);
-        d.label_center(lay.close, "×", close_style.text, 13.0);
+        d.icon(lay.close, "close", "×", close_style.text, 13.0);
 
         // Сайдбар: пункты — реальные kit-кнопки (активная — слот Selected)
         for (i, item) in lay.sidebar_items.iter().enumerate() {
@@ -980,7 +980,7 @@ impl App {
         close_widget.set_pointer(hover(&lay.close), false);
         let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
         d.control(lay.close, &close_style);
-        d.label_center(lay.close, "×", close_style.text, 13.0);
+        d.icon(lay.close, "close", "×", close_style.text, 13.0);
         d.label_left(
             canvas_ui::geometry::UiRect::new(lay.title.x, lay.title.y + 6.0, lay.title.w, 20.0),
             crate::i18n::tr(lang, crate::i18n::keys::KIT_GALLERY_TITLE),
@@ -3692,12 +3692,13 @@ impl App {
 
     /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
     /// открыта. Координаты — логические px от левого верхнего угла окна.
-    pub(super) fn settings_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+    pub(super) fn settings_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>, Vec<canvas_render::IconInstance>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
+        let mut icons = Vec::new();
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
-            return (instances, texts);
+            return (instances, texts, icons);
         }
         let palette = self.effective_palette();
         // Вертикальная центровка иконки: лайн-бокс высотой font*1.3 по центру
@@ -3914,7 +3915,7 @@ impl App {
             }
         }
         if !self.settings_open {
-            return (instances, texts);
+            return (instances, texts, icons);
         }
         // FR-039: затемнение канваса под модалкой (паттерн онбординга
         // FR-028) — фокус на диалоге настроек, ввод под ним глушится
@@ -3962,14 +3963,52 @@ impl App {
                     params: [6.0, 0.0, 0.0, 1.0],
                 });
             }
-            texts.push(OwnedScreenText {
-                text: tab.icon.to_owned(),
-                origin: [item[0] + 12.0, item[1] + (item[3] - 14.0 * 1.3) / 2.0],
-                width: 20.0,
-                font_size: 14.0,
-                color: if active { palette.link } else { palette.icon },
-                align: TextAlign::Left,
-            });
+            // FR-ICONS: иконка таба — SVG если активен набор, иначе глиф.
+            let icon_name = match tab.title_key {
+                keys::TAB_GENERAL => "tab_general",
+                keys::TAB_CANVAS => "tab_canvas",
+                keys::TAB_SNAP => "tab_snap",
+                keys::TAB_EDGES => "tab_edges",
+                keys::TAB_APPEARANCE => "tab_appearance",
+                _ => "",
+            };
+            let icon_color = if active { palette.link } else { palette.icon };
+            let icon_tint = crate::palette::color_to_rgba(icon_color);
+            let icon_set = self.icon_set_active();
+            if icon_set.is_some() && !icon_name.is_empty() {
+                if let Some(set) = icon_set {
+                    if let Some((uv_min, uv_max)) = canvas_render::icon_uv(set, icon_name) {
+                        let icon_size = 16.0f32.min(item[3] - 4.0);
+                        let icon_x = item[0] + 12.0 + (20.0 - icon_size) / 2.0;
+                        let icon_y = item[1] + (item[3] - icon_size) / 2.0;
+                        icons.push(canvas_render::IconInstance {
+                            pos: [icon_x, icon_y],
+                            size: [icon_size, icon_size],
+                            uv_min,
+                            uv_max,
+                            tint: icon_tint,
+                        });
+                    } else {
+                        texts.push(OwnedScreenText {
+                            text: tab.icon.to_owned(),
+                            origin: [item[0] + 12.0, item[1] + (item[3] - 14.0 * 1.3) / 2.0],
+                            width: 20.0,
+                            font_size: 14.0,
+                            color: icon_color,
+                            align: TextAlign::Left,
+                        });
+                    }
+                }
+            } else {
+                texts.push(OwnedScreenText {
+                    text: tab.icon.to_owned(),
+                    origin: [item[0] + 12.0, item[1] + (item[3] - 14.0 * 1.3) / 2.0],
+                    width: 20.0,
+                    font_size: 14.0,
+                    color: icon_color,
+                    align: TextAlign::Left,
+                });
+            }
             texts.push(OwnedScreenText {
                 text: self.tr(tab.title_key).to_owned(),
                 origin: [item[0] + 36.0, item[1] + (item[3] - 13.0 * 1.3) / 2.0],
@@ -4250,7 +4289,7 @@ impl App {
                 });
             }
         }
-        (instances, texts)
+        (instances, texts, icons)
     }
 
     /// Подтверждение диалога (Enter/клик «Да»): установка или удаление.

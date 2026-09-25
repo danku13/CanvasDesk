@@ -1639,7 +1639,7 @@ pub(crate) fn draw_fill(
                         let (anchor, menu, items, labels) =
                             (&dd.anchor, &dd.menu, &dd.items, &dd.labels);
                         d.control(*anchor, &anchor_style);
-                        d.label_center(*anchor, "▼", anchor_style.text, LABEL_SIZE);
+                        d.icon(*anchor, "chevron_down", "▼", anchor_style.text, LABEL_SIZE);
                         d.rect(
                             *menu,
                             p.panel_fill,

@@ -162,8 +162,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // не меняется.
                 let mut screen_bands = ui_registry::ScreenBands::default();
                 {
-                    let (settings_instances, settings_texts) = self.settings_overlay();
+                    let (settings_instances, settings_texts, settings_icons) =
+                        self.settings_overlay();
                     screen_bands.push(UiLayer::Panels, settings_instances, settings_texts);
+                    // FR-ICONS: иконки табов настроек (SVG-атлас; пусто для Glyph).
+                    self.icon_instances.extend(settings_icons);
                 }
                 // FR-055 (этап U4): витрина кита — модаль поверх всего
                 // (Modals/Block: pick через реестр, backdrop закрывает);

@@ -39,6 +39,7 @@ ICON_NAMES = [
     "close", "gear", "question", "search", "plus",
     "arrow_left", "arrow_right", "refresh",
     "tab_general", "tab_canvas", "tab_snap", "tab_edges", "tab_appearance",
+    "more", "chevron_down", "chevron_right",
 ]
 SETS = ["lucide", "material", "feather", "bootstrap"]
 # Размер растеризации в px (для каждого набора).

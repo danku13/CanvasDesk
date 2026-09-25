@@ -59,6 +59,9 @@ LUCIDE = {
     "tab_snap": '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
     "tab_edges": '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
     "tab_appearance": '<path d="M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z"/><path d="M12 2v20"/>',
+    "more": '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    "chevron_down": '<path d="m6 9 6 6 6-6"/>',
+    "chevron_right": '<path d="m9 18 6-6-6-6"/>',
 }
 
 # Material-style: заполненные пути (filled), 24×24
@@ -78,6 +81,9 @@ MATERIAL = {
     "tab_snap": '<path d="M3 18h18v2H3v-2zm0-7h18v3H3v-3zm0-7h18v4H3V4z"/>',
     "tab_edges": '<path d="M9 3 5 7l4 4V8h11V6H9V3zm6 18 4-4-4-4v3H4v2h11v3z"/>',
     "tab_appearance": '<path d="M12 2a10 10 0 1 0 0 20V2z"/><path d="M12 2v20" fill="none" stroke="currentColor" stroke-width="0"/>',
+    "more": '<path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>',
+    "chevron_down": '<path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>',
+    "chevron_right": '<path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>',
 }
 
 # Feather-style: тонкие линии, как Lucide, но с упрощённой геометрией
@@ -102,6 +108,9 @@ FEATHER = {
     "tab_snap": '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
     "tab_edges": '<polyline points="7 17 3 13 7 9"/><polyline points="17 7 21 11 17 15"/><line x1="3" y1="13" x2="21" y2="13"/><line x1="3" y1="11" x2="21" y2="11"/>',
     "tab_appearance": '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+    "more": '<circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>',
+    "chevron_down": '<polyline points="6 9 12 15 18 9"/>',
+    "chevron_right": '<polyline points="9 18 15 12 9 6"/>',
 }
 
 # Bootstrap-style: 16×16 viewbox, более компактные пути (mix fill/stroke)
@@ -122,6 +131,9 @@ BOOTSTRAP = {
     "tab_snap": '<path d="M2 4h12v1H2zm0 3h12v1H2zm0 3h12v1H2zm0 3h12v1H2z"/>',
     "tab_edges": '<path d="M1 4.5 4 7v-2h8v2l3-2.5L12 2v2H4V2zM1 11.5 4 9v2h8V9l3 2.5L12 14v-2H4v2z"/>',
     "tab_appearance": '<path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="M8 1v14" fill="none" stroke="currentColor" stroke-width="0"/>',
+    "more": '<path d="M3 9.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm5 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zM13 9.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>',
+    "chevron_down": '<path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"/>',
+    "chevron_right": '<path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/>',
 }
 
 # Какой тип атрибута использовать (stroke / fill / mixed)
@@ -143,6 +155,7 @@ ICON_NAMES = [
     "close", "gear", "question", "search", "plus",
     "arrow_left", "arrow_right", "refresh",
     "tab_general", "tab_canvas", "tab_snap", "tab_edges", "tab_appearance",
+    "more", "chevron_down", "chevron_right",
 ]
 
 
