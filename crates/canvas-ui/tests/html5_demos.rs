@@ -1,7 +1,16 @@
-#![cfg(feature = "taffy")]
-//! FR-068 W1 (ADR-0014 §Решение п.6 «mdn/css-tricks топ-10»): 10 эталонных
-//! HTML5 demo-layout'ов — топовые web-паттерны вёрстки, выраженные деревом
-//! [`SceneNode`] и раскладанные [`TaffyBackend::lay_out_scene`].
+//! FR-068 W2 (файловая таблица §W2 + §«Наглядная проверка»): 15 эталонных
+//! HTML5 demo-layout'ов — топовые web-паттерны W1 + 5 CanvasDesk-специфичных
+//! W2 — выраженные деревом [`SceneNode`].
+//!
+//! Тесты идут на ОБОИХ сборках (§Гейты W2: `default` и `--features taffy`);
+//! оракул выбирается СБОРКОЙ — cfg-хелпер [`lay_out_scene`]: default →
+//! `FlexLayoutEngine` (собственный 0-dep движок W2), `--features taffy` →
+//! `TaffyBackend` (переходный оракул ADR-0014). На совместимых политиках
+//! эталоны общие и побитово одинаковые (гейт паритета —
+//! `flex_vs_taffy_parity.rs`); исключение — demo 12 (документированное
+//! расхождение C3 `SqueezeTail` ≠ flex_shrink): у неё ДВОЙНОЙ golden —
+//! `<name>.txt` (оракул Flex: дословная семантика, §Контракт-4) и
+//! `<name>.taffy.txt` (оракул taffy: flex_shrink).
 //!
 //! Golden-снапшоты UiRect-дампов: `tests/html5_demos/<name>.txt` (методология
 //! F-18, паттерн snapshot.rs: регенерация env-переменной, осознанный diff).
@@ -11,17 +20,24 @@
 //! до целого ui px (`f32::round()` — half-away-from-zero, как в snapshot.rs).
 //! Порядок ПОЗИЦИОННЫЙ (без сортировки): дерево сцены = структура вёрстки.
 //!
-//! Регенерация: `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test
-//! html5_demos --features taffy`.
+//! Регенерация (env `CANVAS_UI_UPDATE_HTML5=1`; для demo 12 ПОРЯДОК важен):
+//! 1. `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos
+//!    --features taffy` — taffy-оракулы (11/13/14/15 + `12_*.taffy.txt`);
+//!    `12_*.txt` при этом пишется Flex-дампом (движок встроен всегда).
+//! 2. `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`
+//!    — Flex-оракулы default-сборки (перезаписывает `<name>.txt`; taffy-
+//!    эталон `12_*.taffy.txt` не трогает — не в матрице).
 //!
 //! Детерминизм: вьюпорт — константа 1280×800 ui px, входные размеры целые,
 //! БЕЗ текст-замера (шрифто-независимость); версия taffy зафиксирована
 //! Cargo.lock. `overflow: hidden` ([`.clipped()`]) rect'ы НЕ меняет (клип —
 //! draw-семантика FR-056), поэтому хвосты переполнения честно видны в дампе.
 
+#[cfg(feature = "taffy")]
+use canvas_ui::layout::TaffyBackend;
 use canvas_ui::layout::{
-    CrossAlign, MainAlign, SceneDim, SceneKind, SceneNode, ScenePosition, SceneSize, SceneTrack,
-    TaffyBackend,
+    Child, CrossAlign, FlexLayoutEngine, LayoutBackend, MainAlign, Row, RowPolicy, SceneDim,
+    SceneKind, SceneNode, ScenePosition, SceneSize, SceneTrack,
 };
 use canvas_ui::{UiRect, UiVec2};
 
@@ -30,8 +46,9 @@ const VIEWPORT_W: f32 = 1280.0;
 const VIEWPORT_H: f32 = 800.0;
 const VIEWPORT: UiRect = UiRect::new(0.0, 0.0, VIEWPORT_W, VIEWPORT_H);
 
-/// Имена эталонов (порядок = порядок demo-функций).
-const DEMOS: [&str; 10] = [
+/// Имена эталонов (порядок = порядок demo-функций; 01–10 — W1 web-паттерны,
+/// 11–15 — W2 CanvasDesk-специфичные).
+const DEMOS: [&str; 15] = [
     "01_sticky_header_column",
     "02_sidebar_content_overflow_auto",
     "03_flexbox_navbar_space_between",
@@ -42,6 +59,11 @@ const DEMOS: [&str; 10] = [
     "08_dropdown_flip",
     "09_scrollable_list_virtualization",
     "10_complex_form_layout",
+    "11_cd_palette_grid_multiline",
+    "12_cd_whatif_bar_squeeze_tail",
+    "13_cd_kit_gallery_tab_focus",
+    "14_cd_search_overlay_viewport_clip",
+    "15_cd_fr061_tabular_body_grid",
 ];
 
 // --- Хелперы сцены -----------------------------------------------------------
@@ -391,6 +413,200 @@ fn demo_10_complex_form_layout() -> SceneNode {
     SceneNode::column(1280.0, 800.0, 0.0, vec![fill_w_leaf(56.0), form, footer])
 }
 
+// --- Оракул по сборке + 5 W2 demo-сцен ---------------------------------------
+
+/// Оракул сцены по СБОРКЕ (§Гейты W2: тесты идут на обеих): default →
+/// `FlexLayoutEngine` (собственный движок W2), `--features taffy` →
+/// `TaffyBackend`. Возвращает rect'ы всех узлов в DFS pre-order (`[0]` —
+/// корень; контракт — модульная дока `scene`).
+#[cfg(feature = "taffy")]
+fn lay_out_scene(slot: UiRect, scene: &SceneNode) -> Vec<UiRect> {
+    TaffyBackend.lay_out_scene(slot, scene)
+}
+
+#[cfg(not(feature = "taffy"))]
+fn lay_out_scene(slot: UiRect, scene: &SceneNode) -> Vec<UiRect> {
+    FlexLayoutEngine.lay_out_scene(slot, scene)
+}
+
+/// CanvasDesk: палитра шаблонов (design/use-cases/template-palette.md,
+/// FR-024). Корень — вьюпорт-колонка `overflow: hidden`; панель палитры —
+/// Fill/Fill; внутри — wrap-row ([`SceneKind::Row`] с `wrap: true`) с чипами
+/// шаблонов 60–110 px × 40, gap 8. Чипов достаточно для переноса на ≥ 3
+/// строки, и ХВОСТ строк уходит ЗА НИЗ панели — rect'ы хвоста честно видны
+/// в дампе (клип — отрисовка FR-056, layout не меняется; ловится линтом G4
+/// на потребителе).
+fn demo_11_cd_palette_grid_multiline() -> SceneNode {
+    // Детерминированный цикл ширин 60..=110 (без PRNG — golden стабильный).
+    const CHIP_W: [f32; 14] = [
+        96.0, 72.0, 110.0, 60.0, 88.0, 104.0, 68.0, 92.0, 76.0, 108.0, 64.0, 100.0, 84.0, 70.0,
+    ];
+    let chips: Vec<SceneNode> = (0..240)
+        .map(|i| SceneNode::leaf(CHIP_W[i % CHIP_W.len()], 40.0))
+        .collect();
+    let wrap_row = SceneNode {
+        kind: SceneKind::Row {
+            gap: 8.0,
+            main: MainAlign::Start,
+            cross: CrossAlign::Start,
+            wrap: true,
+        },
+        size: SceneSize {
+            w: SceneDim::Fill,
+            h: SceneDim::Fill,
+        },
+        children: chips,
+        ..SceneNode::default()
+    };
+    let palette = SceneNode::column(0.0, 0.0, 0.0, vec![wrap_row]).sized(SceneSize {
+        w: SceneDim::Fill,
+        h: SceneDim::Fill,
+    });
+    SceneNode::column(1280.0, 800.0, 0.0, vec![palette]).clipped()
+}
+
+/// Слот what-if бара (demo 12): 360×40 — чипы с зазорами ровно заполняют.
+const WHATIF_SLOT: UiRect = UiRect::new(0.0, 0.0, 360.0, 40.0);
+
+/// `Row{gap: 6, policy: SqueezeTail}` what-if бара (demo 12).
+const WHATIF_ROW: Row = Row {
+    gap: 6.0,
+    main: MainAlign::Start,
+    cross: CrossAlign::Start,
+    policy: RowPolicy::SqueezeTail,
+};
+
+/// Чипы what-if бара (demo 12): фиксированные 80/64/72/96/24 × 40 — с зазорами
+/// 4·6 ровно 360 (слот без переполнения; переполненный случай C3 запинен
+/// в `flex_vs_taffy_parity::squeeze_tail_c3_divergence_documented`).
+fn whatif_items() -> [Child; 5] {
+    [
+        Child::fixed(80.0, 40.0),
+        Child::fixed(64.0, 40.0),
+        Child::fixed(72.0, 40.0),
+        Child::fixed(96.0, 40.0),
+        Child::fixed(24.0, 40.0),
+    ]
+}
+
+/// CanvasDesk: what-if бар (design/use-cases/whatif-bar.md, FR-017/CR-015).
+/// ОСОБЫЙ demo — уровень V-5 примитивов (НЕ сцена): `Row{gap: 6,
+/// policy: SqueezeTail}` на слоте 360×40 с чипами [80, 64, 72, 96, 24]
+/// (фиксированные, h = 40) через `lay_out_with(backend, …)` — backend
+/// выбирает вызывающий (Flex — всегда, TaffyBackend — под фичей; о двойном
+/// golden см. golden_12).
+fn demo_12_cd_whatif_bar_squeeze_tail(backend: &dyn LayoutBackend) -> Vec<UiRect> {
+    WHATIF_ROW.lay_out_with(backend, WHATIF_SLOT, &whatif_items())
+}
+
+/// CanvasDesk: галерея схем с фокусом таба (design/use-cases/scheme-gallery.md,
+/// план T23): корень — вьюпорт-колонка (clipped), заголовок 56, список из
+/// 6 строк-карточек (48 px, gap 8, ширина Fill). У ВТОРОЙ строки — рамка
+/// фокуса: Absolute-узел Percent(1.0)×Percent(1.0) в позиции
+/// [`ScenePosition::Absolute`]{0, 0} внутри строки-обёртки — percent
+/// абсолютного узла выражается от содержащего блока-родителя (CSS abs-pos:
+/// percentage against containing block), рамка накрывает строку точно.
+fn demo_13_cd_kit_gallery_tab_focus() -> SceneNode {
+    let mut rows: Vec<SceneNode> = Vec::with_capacity(6);
+    for i in 0..6 {
+        if i == 1 {
+            // строка-обёртка: карточка (Fill/Fill) + рамка фокуса поверх
+            let card = SceneNode::default().sized(SceneSize {
+                w: SceneDim::Fill,
+                h: SceneDim::Fill,
+            });
+            let frame = SceneNode::default()
+                .sized(SceneSize {
+                    w: SceneDim::Percent(1.0),
+                    h: SceneDim::Percent(1.0),
+                })
+                .at(ScenePosition::Absolute { x: 0.0, y: 0.0 });
+            rows.push(
+                SceneNode::column(0.0, 0.0, 0.0, vec![card, frame]).sized(SceneSize {
+                    w: SceneDim::Fill,
+                    h: SceneDim::fixed(48.0),
+                }),
+            );
+        } else {
+            rows.push(fill_w_leaf(48.0));
+        }
+    }
+    let mut root_children = vec![fill_w_leaf(56.0)];
+    root_children.extend(rows);
+    SceneNode::column(1280.0, 800.0, 8.0, root_children).clipped()
+}
+
+/// CanvasDesk: поиск (design/use-cases/search.md, план T14): корень —
+/// вьюпорт-колонка (clipped); контент — Fill/Fill со строками по 96 (хвост
+/// за вьюпорт — root clip); панель поиска — `position: fixed` (440, 96)
+/// 400×360 (горизонтально по центру вьюпорта) с внутренним clipped-списком
+/// из 8 строк по 40 (gap 8 → 376 > 360 — хвост строк виден в rect'ах);
+/// подложка-backdrop — `position: absolute` Percent(1.0)×Percent(1.0) от
+/// корня (поверх контента, под панелью).
+fn demo_14_cd_search_overlay_viewport_clip() -> SceneNode {
+    let content_rows: Vec<SceneNode> = (0..10).map(|_| fill_w_leaf(96.0)).collect();
+    let content = SceneNode::column(0.0, 0.0, 12.0, content_rows).sized(SceneSize {
+        w: SceneDim::Fill,
+        h: SceneDim::Fill,
+    });
+    let backdrop = SceneNode::default()
+        .sized(SceneSize {
+            w: SceneDim::Percent(1.0),
+            h: SceneDim::Percent(1.0),
+        })
+        .at(ScenePosition::Absolute { x: 0.0, y: 0.0 });
+    let results: Vec<SceneNode> = (0..8).map(|_| fill_w_leaf(40.0)).collect();
+    let list = SceneNode::column(0.0, 0.0, 8.0, results)
+        .sized(SceneSize {
+            w: SceneDim::Fill,
+            h: SceneDim::Fill,
+        })
+        .clipped();
+    let panel = SceneNode::column(400.0, 360.0, 0.0, vec![list])
+        .at(ScenePosition::Fixed { x: 440.0, y: 96.0 });
+    SceneNode::column(1280.0, 800.0, 0.0, vec![content, backdrop, panel]).clipped()
+}
+
+/// CanvasDesk: табличное тело FR-061 (interface-objects/node-tabular):
+/// корень — вьюпорт-колонка (clipped); шапка — grid 4×Fill-трек, row_h 32;
+/// тело — grid 4×Fill × 6 строк row_h 28, gap {8, 4}; числовая колонка —
+/// ячейка [`SceneNode::spanning`] (2) первой строки тела (24 слота →
+/// 23 ячейки).
+fn demo_15_cd_fr061_tabular_body_grid() -> SceneNode {
+    let header = SceneNode {
+        kind: SceneKind::Grid {
+            cols: vec![SceneTrack::Fill; 4],
+            row_h: SceneDim::fixed(32.0),
+            gap: UiVec2::new(8.0, 4.0),
+        },
+        size: SceneSize {
+            w: SceneDim::Fill,
+            h: SceneDim::Auto,
+        },
+        children: (0..4).map(|_| grid_cell()).collect(),
+        ..SceneNode::default()
+    };
+    let mut body_cells: Vec<SceneNode> = Vec::with_capacity(23);
+    for i in 0..23 {
+        let cell = grid_cell();
+        body_cells.push(if i == 2 { cell.spanning(2) } else { cell });
+    }
+    let body = SceneNode {
+        kind: SceneKind::Grid {
+            cols: vec![SceneTrack::Fill; 4],
+            row_h: SceneDim::fixed(28.0),
+            gap: UiVec2::new(8.0, 4.0),
+        },
+        size: SceneSize {
+            w: SceneDim::Fill,
+            h: SceneDim::Auto,
+        },
+        children: body_cells,
+        ..SceneNode::default()
+    };
+    SceneNode::column(1280.0, 800.0, 8.0, vec![header, body]).clipped()
+}
+
 // --- Golden-харнесс (паттерн snapshot.rs, F-18) -------------------------------
 
 /// Короткий тег узла дампа (root/row/col/grid/leaf).
@@ -445,37 +661,51 @@ fn golden_dir() -> std::path::PathBuf {
         .join("html5_demos")
 }
 
-/// Один эталонный прогон: сцена → `lay_out_scene(1280×800)` → дамп →
-/// сравнение с golden побайтно (или запись в режиме обновления).
-fn run_demo(demo_id: &str, scene: &SceneNode) {
-    let rects = TaffyBackend.lay_out_scene(VIEWPORT, scene);
-    let dump = dump_scene(scene, &rects);
+/// Путь эталона по имени файла (`<demo>.txt` / `<demo>.taffy.txt`).
+fn golden_path(file_name: &str) -> std::path::PathBuf {
+    golden_dir().join(file_name)
+}
+
+/// Сравнение дампа с golden побайтно (или запись в режиме обновления).
+fn check_or_write(path: &std::path::Path, dump: &str, demo_id: &str) {
     assert!(
         !dump.is_empty(),
-        "сцена {demo_id} дала 0 узлов — сцена сломана"
+        "demo {demo_id} дала 0 узлов — сцена/вход сломаны"
     );
-    let path = golden_dir().join(format!("{demo_id}.txt"));
     if update_mode() {
         std::fs::create_dir_all(golden_dir()).expect("создать каталог эталонов tests/html5_demos");
-        std::fs::write(&path, dump).expect("записать эталон");
+        std::fs::write(path, dump).expect("записать эталон");
         return;
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+    let expected = std::fs::read_to_string(path).unwrap_or_else(|e| {
         panic!(
             "эталон {} не читается ({e}) — сгенерируй: CANVAS_UI_UPDATE_HTML5=1 \
-             cargo test -p canvas-ui --test html5_demos --features taffy",
+             cargo test -p canvas-ui --test html5_demos [--features taffy]",
             path.display()
         )
     });
     assert_eq!(
         dump,
         expected,
-        "golden-снапшот изменился — обнови эталон осознанно (FR-068 W1): {}",
+        "golden-снапшот изменился — обнови эталон осознанно (FR-068 W2): {}",
         path.display()
     );
 }
 
-// --- Тесты: 10 demo + счётчик матрицы -----------------------------------------
+/// Один эталонный прогон: сцена → `lay_out_scene(1280×800)` (оракул по
+/// сборке) → дамп → сравнение с golden побайтно (или запись в режиме
+/// обновления).
+fn run_demo(demo_id: &str, scene: &SceneNode) {
+    let rects = lay_out_scene(VIEWPORT, scene);
+    let dump = dump_scene(scene, &rects);
+    assert!(
+        !dump.is_empty(),
+        "сцена {demo_id} дала 0 узлов — сцена сломана"
+    );
+    check_or_write(&golden_path(&format!("{demo_id}.txt")), &dump, demo_id);
+}
+
+// --- Тесты: 15 demo + счётчик матрицы -----------------------------------------
 
 #[test]
 fn golden_01_sticky_header_column() {
@@ -527,27 +757,103 @@ fn golden_10_complex_form_layout() {
     run_demo(DEMOS[9], &demo_10_complex_form_layout());
 }
 
-/// Счётчик матрицы: РОВНО 10 demo-эталонов — каждая demo-функция имеет файл
-/// на диске и лишних .txt нет (паттерн `snapshot_count_is_60`). Защита от
-/// случайного удаления demo/эталона; в режиме обновления подсчёт пропускается
-/// (файлы пишутся параллельными тестами).
 #[test]
-fn html5_demo_count_is_10() {
-    assert_eq!(DEMOS.len(), 10, "матрица: 10 HTML5 demo-сцен");
+fn golden_11_cd_palette_grid_multiline() {
+    run_demo(DEMOS[10], &demo_11_cd_palette_grid_multiline());
+}
+
+/// Дамп V-5 rect'ов без сцены (demo 12 — whatif-бар): строки
+/// `{i:02} chip x=… y=… w=… h=…` в порядке детей (округление как в дампе
+/// сцены).
+fn dump_rects_v5(rects: &[UiRect]) -> String {
+    let mut out = String::new();
+    for (i, r) in rects.iter().enumerate() {
+        out.push_str(&format!(
+            "{i:02} chip x={} y={} w={} h={}\n",
+            px(r.x),
+            px(r.y),
+            px(r.w),
+            px(r.h)
+        ));
+    }
+    out
+}
+
+/// Demo 12 — V-5 уровень с ДВОЙНЫМ golden (расхождение C3). Логика: ВСЕГДА
+/// считаем Flex-дамп (`FlexLayoutEngine` компилируется на обеих сборках —
+/// дословная семантика SqueezeTail §Контракт-4) → сравниваем с
+/// `<name>.txt`; на `--features taffy` ДОПОЛНИТЕЛЬНО taffy-дамп
+/// (`lay_out_with(TaffyBackend, …)` — flex_shrink) → сравниваем с
+/// `<name>.taffy.txt`. Два эталона потому, что при переполнении семантики
+/// ЗАДАННО расходятся (C3): Flex-хвост вырождается в невидимый rect, taffy
+/// делит дефицит между всеми чипами (см. доку demo-функции выше).
+#[test]
+fn golden_12_cd_whatif_bar_squeeze_tail() {
+    let name = DEMOS[11];
+    // Flex-оракул: дословная семантика — на ОБОИХ сборках в `<name>.txt`.
+    let flex = demo_12_cd_whatif_bar_squeeze_tail(&FlexLayoutEngine);
+    assert_eq!(flex.len(), 5, "whatif-бар: 5 чипов");
+    check_or_write(
+        &golden_path(&format!("{name}.txt")),
+        &dump_rects_v5(&flex),
+        name,
+    );
+
+    // taffy-оракул (C3): только на сборке с taffy — свой файл эталона.
+    #[cfg(feature = "taffy")]
+    {
+        let taffy = demo_12_cd_whatif_bar_squeeze_tail(&TaffyBackend);
+        check_or_write(
+            &golden_path(&format!("{name}.taffy.txt")),
+            &dump_rects_v5(&taffy),
+            name,
+        );
+    }
+}
+
+#[test]
+fn golden_13_cd_kit_gallery_tab_focus() {
+    run_demo(DEMOS[12], &demo_13_cd_kit_gallery_tab_focus());
+}
+
+#[test]
+fn golden_14_cd_search_overlay_viewport_clip() {
+    run_demo(DEMOS[13], &demo_14_cd_search_overlay_viewport_clip());
+}
+
+#[test]
+fn golden_15_cd_fr061_tabular_body_grid() {
+    run_demo(DEMOS[14], &demo_15_cd_fr061_tabular_body_grid());
+}
+
+/// Счётчик матрицы: РОВНО 15 demo-эталонов — каждая demo-функция имеет файл
+/// на диске и лишних основных .txt нет (паттерн `snapshot_count_is_60`).
+/// Второй оракул demo 12 хранится рядом как `12_….taffy.txt`: фильтр СТРОГИЙ
+/// по полному имени `<demo>.txt`, поэтому двойной эталон C3 счётчиком НЕ
+/// считается (его наличие проверяется отдельно). Защита от случайного
+/// удаления demo/эталона; в режиме обновления подсчёт пропускается (файлы
+/// пишутся параллельными тестами).
+#[test]
+fn html5_demo_count_is_15() {
+    assert_eq!(DEMOS.len(), 15, "матрица: 15 HTML5 demo-сцен");
     if update_mode() {
         return;
     }
+    let main_names: std::collections::HashSet<String> =
+        DEMOS.iter().map(|d| format!("{d}.txt")).collect();
     let mut files: Vec<String> = std::fs::read_dir(golden_dir())
         .expect("каталог эталонов tests/html5_demos существует")
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|x| x == "txt"))
         .filter_map(|e| e.file_name().into_string().ok())
+        // строгий `<demo>.txt`: `12_*.taffy.txt` не проходит
+        .filter(|name| main_names.contains(name))
         .collect();
     files.sort();
     assert_eq!(
         files.len(),
-        10,
-        "в tests/html5_demos должно лежать ровно 10 эталонов (.txt)"
+        15,
+        "в tests/html5_demos должно лежать ровно 15 эталонов (.txt)"
     );
     for demo in DEMOS {
         let name = format!("{demo}.txt");
@@ -556,4 +862,13 @@ fn html5_demo_count_is_10() {
             "нет эталона {name} — demo без эталона"
         );
     }
+    // Двойной golden C3 (demo 12): taffy-оракул лежит рядом и обязателен.
+    let dual_taffy = golden_path(&format!("{}.taffy.txt", DEMOS[11]));
+    assert!(
+        dual_taffy.exists(),
+        "нет двойного эталона {} (оракул C3: flex_shrink) — сгенерируй: \
+         CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos \
+         --features taffy",
+        dual_taffy.display()
+    );
 }

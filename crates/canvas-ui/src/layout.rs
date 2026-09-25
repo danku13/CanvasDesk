@@ -715,8 +715,12 @@ pub fn pilot_backend() -> &'static dyn LayoutBackend {
 
 /// Backend'ы — ZST без состояния раскладки (immediate-mode): статика
 /// безопасна. `TaffyBackend` компилируется только за фичей `taffy`;
-/// `FlexLayoutEngine` (W2) — встроен всегда.
+/// `FlexLayoutEngine` (W2) — встроен всегда. Статики NATIVE/FLEX
+/// используются в ветках `pilot_backend`/`default_backend` без фичи
+/// `taffy` — под фичей мертвы (гейт dead_code).
+#[cfg(not(feature = "taffy"))]
 static NATIVE: NativeBackend = NativeBackend;
+#[cfg(not(feature = "taffy"))]
 static FLEX: FlexLayoutEngine = FlexLayoutEngine;
 #[cfg(feature = "taffy")]
 static TAFFY: TaffyBackend = TaffyBackend;

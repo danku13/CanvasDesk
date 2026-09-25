@@ -45,6 +45,9 @@ pub mod layout;
 // FR-053 U3 (F-6): TextMeasurer — измеренный текст (cosmic-text + кэш).
 pub mod measure;
 pub mod registry;
+// FR-068 W2: Shaper — trait boundary над cosmic-text (CosmicShaper —
+// default impl с real-метриками рендера; MockShaper — за фичей mock-shaper).
+pub mod shaper;
 // FR-061 (D-3, Н-3 пре-PRD): колоночные направляющие табличного тела
 // ноды — проход A/B двухпроходной раскладки (Ф-14: имя RowGuides).
 pub mod row_guides;
@@ -57,14 +60,18 @@ pub use hit::{HitStack, HitTarget};
 pub use keyboard::{Activation, FocusRing, KeyboardRouter};
 pub use layer::UiLayer;
 pub use layout::{
-    constrain, grid_cells, pad, stack, Child, Column, CrossAlign, Custom, FlexLayoutEngine,
-    HAlign, MainAlign, MeasuredItem, Row, RowPolicy, VAlign,
+    constrain, grid_cells, pad, stack, Child, Column, CrossAlign, Custom, FlexLayoutEngine, HAlign,
+    MainAlign, MeasuredItem, Row, RowPolicy, VAlign,
 };
 pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
+// FR-068 W2: шейпинг за trait boundary (cosmic-text — default impl).
 pub use registry::{
     DegradationPolicy, KeyboardScopeId, RegistryError, SurfaceDecl, SurfaceId, SurfaceRegistry,
 };
 pub use row_guides::{measure_row_cells, RowCellWidths, RowGuides};
+#[cfg(feature = "mock-shaper")]
+pub use shaper::MockShaper;
+pub use shaper::{CosmicShaper, Shaper};
 
 /// FR-062 F-18: тестовый хелпер геометрических golden-снапшотов (только
 /// `cfg(test)`; детерминированный дамп rect'ов — нормализованная строка

@@ -53,7 +53,7 @@ dev-зависимости); полный состав с текстами ли�
 | `winit` | 0.30 | Apache-2.0 OR MIT | окно, ввод, цикл событий |
 | `wgpu` | 22 | MIT OR Apache-2.0 | GPU-рендер |
 | `glyphon` | 0.6 | MIT OR Apache-2.0 OR Zlib | текст на GPU |
-| `cosmic-text` | 0.12 | MIT OR Apache-2.0 | шейпинг/редактирование текста |
+| `cosmic-text` | 0.12 | MIT OR Apache-2.0 | шейпинг/редактирование текста. FR-068 W2: изолирован за trait-границей `Shaper` в `canvas-ui` (`CosmicShaper` — default impl с тем же пайплайном шейпинга, что у рендера, CR-015; `MockShaper` — детерминированный тестовый мок за фичей `mock-shaper`). Сам по себе остаётся ЕДИНСТВЕННОЙ внешней UI-runtime-dep (zero-dep default); замена/вырезание — отдельный ADR при триггере (RUSTSEC-эскалация, W4+). |
 | `arboard` | 3.x | MIT OR Apache-2.0 | буфер обмена (T7) |
 | `pollster` | 0.3 | Apache-2.0/MIT | блокирующий запуск async GPU |
 | `wasm-bindgen` | 0.2.127 | MIT OR Apache-2.0 | JS-глю браузерной сборки `canvas-web` (M8/W4); семейство уже было в дереве транзитивно (winit, wasm-цели) — с W4 прямая зависимость, компилируется и нативно (заглушки макросов) |
@@ -63,7 +63,7 @@ dev-зависимости); полный состав с текстами ли�
 | `rand_chacha` | 0.3 | MIT OR Apache-2.0 | ChaCha8Rng — единственный источник случайности (FR-063, за фичей `stats`) |
 | `rand_distr` | 0.4 | MIT OR Apache-2.0 | сэмплирование Normal/LogNormal (FR-063, за фичей `stats`) |
 | `rayon` | 1.12 | MIT OR Apache-2.0 | L4-параллелизм: поярусный пересчёт DAG `flow::propagate_with_lines_data` (FR-065, за фичей `parallel` в canvas-core — в сборку по умолчанию не входит). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий. |
-| `taffy` | 0.14 | MIT OR Apache-2.0 | CSS Flexbox+Grid layout-движок `TaffyBackend` в `canvas-ui` (FR-068 W1, ADR-0014) — за фичей `taffy`, default off (в default-сборку не входит, zero-dep инвариант G7). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий (транзитивные `arrayvec`/`slotmap`/`smallvec` — MIT OR Apache-2.0 ± Zlib, покрыты allowlist `deny.toml`). **Переходное решение (ADR-0015):** вырезается к W4 FR-068 после `FlexLayoutEngine` (W2). |
+| `taffy` | 0.14 | MIT OR Apache-2.0 | CSS Flexbox+Grid layout-движок `TaffyBackend` в `canvas-ui` (FR-068 W1, ADR-0014) — за фичей `taffy`, default off (в default-сборку не входит, zero-dep инвариант G7). Уже в дереве транзитивно через `cosmic-text`; прямое включение НЕ добавляет новых лицензий (транзитивные `arrayvec`/`slotmap`/`smallvec` — MIT OR Apache-2.0 ± Zlib, покрыты allowlist `deny.toml`). **Переходное решение (ADR-0015):** период W1..W4, вырезается к W4 FR-068. W2 (текущая волна): в крейт встроен собственный `FlexLayoutEngine` (0 deps, маркер-фича `flex-engine`, default on) — `default_backend()` без фичи `taffy` уходит в него; zero-dep default подтверждается `cargo build --no-default-features` (`TaffyBackend` не компилируется, Flex встроен). |
 
 **Выбор опции дуальных лицензий.** Для крейтов `MIT OR Apache-2.0`
 продукт следует обязательствам обеих сторон консервативно: сохранение
@@ -99,6 +99,13 @@ opt-in (поглощает FR-067) → W2 cosmic-text trait boundary + `FlexLayo
 2757 → 6 компонентов × ~500 строк, retained-state) → W4 dep-минимизация
 (taffy вырезается; cosmic-text за `Shaper` trait; `cargo build
 --no-default-features` = 0 внешних UI-runtime-deps кроме cosmic-text).
+W2 FR-068 (текущая волна, ветка `feature/fr-068-w2-flex-shaper`):
+в `canvas-ui` добавлены фичи `flex-engine` (маркер, default) и
+`mock-shaper`; собственный `FlexLayoutEngine` встроен в крейт (0 deps —
+новых строк в §2 не добавляет), cosmic-text изолирован за `Shaper`
+trait и остаётся единственной внешней UI-runtime-dep. Рецепт проверки
+zero-dep default — `cargo build --no-default-features`
+(`TaffyBackend` не компилируется, Flex встроен).
 
 | Слой | Крейт | Назначение | Лицензия | Триггер (роадмап §4.5) |
 |---|---|---|---|---|
@@ -186,3 +193,12 @@ auditable-extract target/release/canvasdesk > canvasdesk-sbom.json
   statrs→rand(std) не компилируется под wasm32-unknown-unknown — не
   влияет на гейты (они идут с default-фичами), решение по web-сборке
   с `stats` — точка решения владельца.
+- `2026-09-25` — W2 FR-068 (волна flex-shaper, ADR-0015): taffy
+  остаётся переходным (период W1..W4, вырезается к W4); в `canvas-ui`
+  встроен собственный `FlexLayoutEngine` (0 deps, маркер-фича
+  `flex-engine`, default on) — новых зависимостей НЕ добавлено;
+  cosmic-text изолирован за trait-границей `Shaper` (`CosmicShaper` —
+  default impl, `MockShaper` — тестовый мок за фичей `mock-shaper`) и
+  остаётся единственной внешней UI-runtime-dep. Zero-dep default
+  подтверждается `cargo build --no-default-features` (`TaffyBackend`
+  не компилируется, Flex встроен).
