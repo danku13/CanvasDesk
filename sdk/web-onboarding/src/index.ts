@@ -16,7 +16,7 @@
 
 export { Tour } from "./tour";
 export type {
-  TourHandle, TourOptions, TourScenario, TourStep,
+  TourHandle, TourOptions, RunOptions, TourScenario, TourStep,
   AnchorSpec, AnchorSelector, AnchorElement, AnchorRect,
   Rect, TooltipSide, HighlightOptions,
   WaitForSpec, WaitForSelector, WaitForPredicate, WaitForEvent, WaitForSignal,

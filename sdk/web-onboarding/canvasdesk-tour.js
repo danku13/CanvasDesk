@@ -454,6 +454,7 @@
       if (global.console && global.console[lvl]) global.console[lvl]("[tour] " + msg);
     };
     this.hooks = {};
+    this.storageKey = opts.storageKey === undefined ? "cd-tour:" : opts.storageKey;
     this.highlight = createHighlight(this.container, this.zIndex + 1);
     this.active = null;
     this.keyHandler = null;
@@ -474,27 +475,85 @@
     this.signalBus.forEach(function (l) { l(name, payload); });
   };
 
-  Tour.prototype.run = function (scenario) {
+  // ── persistence ──────────────────────────────────────────────
+
+  Tour.prototype.isCompleted = function (id) {
+    return this.getCompletedAt(id) !== null;
+  };
+  Tour.prototype.getCompletedAt = function (id) {
+    var raw = this.readStorage(this.storageKey + "done:" + id);
+    if (raw === null) return null;
+    var ts = Number(raw);
+    return Number.isFinite(ts) ? ts : null;
+  };
+  Tour.prototype.markCompleted = function (id) {
+    this.writeStorage(this.storageKey + "done:" + id, String(Date.now()));
+  };
+  Tour.prototype.resetCompleted = function (id) {
+    this.removeStorage(this.storageKey + "done:" + id);
+    this.clearResume(id);
+  };
+  Tour.prototype.getResumeIndex = function (id) {
+    var raw = this.readStorage(this.storageKey + "resume:" + id);
+    if (raw === null) return null;
+    var idx = Number(raw);
+    return Number.isFinite(idx) && idx >= 0 ? idx : null;
+  };
+  Tour.prototype.clearResume = function (id) {
+    this.removeStorage(this.storageKey + "resume:" + id);
+  };
+
+  Tour.prototype.readStorage = function (key) {
+    if (!this.storageKey) return null;
+    try { return globalThis.localStorage ? globalThis.localStorage.getItem(key) : null; }
+    catch (e) { return null; }
+  };
+  Tour.prototype.writeStorage = function (key, value) {
+    if (!this.storageKey) return;
+    try { if (globalThis.localStorage) globalThis.localStorage.setItem(key, value); }
+    catch (e) { this.log("warn", "localStorage write failed for " + key); }
+  };
+  Tour.prototype.removeStorage = function (key) {
+    if (!this.storageKey) return;
+    try { if (globalThis.localStorage) globalThis.localStorage.removeItem(key); }
+    catch (e) { /* noop */ }
+  };
+
+  // ── run ───────────────────────────────────────────────────────
+
+  Tour.prototype.run = function (scenario, opts) {
+    opts = opts || {};
+    if (opts.skipIfCompleted && this.isCompleted(scenario.id)) {
+      this.log("info", "scenario already completed; skipping");
+      return null;
+    }
     if (this.active) {
       this.log("warn", "scenario still active; cancelling");
       this.cancel();
     }
-    var handle = this.start(scenario);
+    var startIdx = opts.resume ? (this.getResumeIndex(scenario.id) || 0) : 0;
+    if (opts.resume && startIdx > 0) {
+      this.log("info", "resuming from step " + (startIdx + 1));
+    }
+    var handle = this.start(scenario, startIdx, opts);
     if (scenario.onStart) scenario.onStart(handle);
     return handle;
   };
 
-  Tour.prototype.start = function (scenario) {
+  Tour.prototype.start = function (scenario, startIdx, runOpts) {
     var self = this;
+    startIdx = startIdx || 0;
+    var safeIdx = Math.max(0, Math.min(startIdx, scenario.steps.length - 1));
     var active = {
       scenario: scenario,
-      step: scenario.steps[0],
-      index: 0,
+      step: scenario.steps[safeIdx],
+      index: safeIdx,
       tooltipEl: null,
       lastAnchorRect: null,
       wait: null,
       advanceUnsub: null,
-      handle: null
+      handle: null,
+      runOpts: { markCompletedOnSkip: !!(runOpts && runOpts.markCompletedOnSkip) }
     };
     var handle = {
       scenario: scenario,
@@ -514,7 +573,8 @@
     document.addEventListener("keydown", this.keyHandler, true);
 
     this.startRefreshRaf();
-    this.activateStep(0);
+    // Activate the initial step (may be > 0 if resuming).
+    this.activateStep(safeIdx);
     return handle;
   };
 
@@ -537,6 +597,12 @@
   Tour.prototype.skip = function () {
     if (!this.active) return;
     var a = this.active;
+    // Persist resume state — user can come back and finish.
+    this.writeStorage(this.storageKey + "resume:" + a.scenario.id, String(a.index));
+    if (a.runOpts && a.runOpts.markCompletedOnSkip) {
+      this.markCompleted(a.scenario.id);
+      this.clearResume(a.scenario.id);
+    }
     this.cleanup();
     if (a.scenario.onSkip) a.scenario.onSkip(a.handle);
   };
@@ -544,6 +610,11 @@
   Tour.prototype.complete = function () {
     if (!this.active) return;
     var a = this.active;
+    // Mark completed in localStorage + clear resume state.
+    if (this.storageKey) {
+      this.markCompleted(a.scenario.id);
+      this.clearResume(a.scenario.id);
+    }
     this.cleanup();
     if (a.scenario.onComplete) a.scenario.onComplete(a.handle);
     this.signal("tour:" + a.scenario.id + ":complete");
@@ -598,9 +669,22 @@
     a.step = step;
     if (a.scenario.onStep) a.scenario.onStep(step, index, a.handle);
 
+    // Persist resume state (cleared on completion).
+    if (this.storageKey) {
+      this.writeStorage(this.storageKey + "resume:" + a.scenario.id, String(index));
+    }
+
     var rect = resolveAnchor(step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, step.highlight || undefined);
+    // Passive steps (no Next button) — user must perform an action on
+    // the host surface. Disable dim so clicks reach the canvas.
+    var highlightOpts = step.highlight || {};
+    if (step.passive) {
+      if (highlightOpts.dim === undefined || highlightOpts.dim === null) {
+        highlightOpts.dim = false;
+      }
+    }
+    this.highlight.setAnchor(rect, highlightOpts);
 
     var ctx = {
       container: this.container, step: step, index: index, total: a.scenario.steps.length,
@@ -643,7 +727,11 @@
       wait.promise.then(function () {
         if (!a.wait) return;
         a.wait.resolved = true;
-        if (a.scenario.autoAdvance) self.next();
+        // Passive step (no Next button) — waitFor resolving is the
+        // only path forward. Always advance, regardless of
+        // scenario.autoAdvance. For non-passive steps, respect the
+        // scenario.autoAdvance flag (default false — user clicks Next).
+        if (a.scenario.autoAdvance || step.passive) self.next();
       }).catch(function (e) {
         if (e instanceof WaitForError) self.log("warn", "waitFor soft-failed: " + e.message);
         else self.log("error", "waitFor crashed: " + e.message);
@@ -687,7 +775,13 @@
     var a = this.active;
     var rect = resolveAnchor(a.step.anchor, this.hooks);
     a.lastAnchorRect = rect;
-    this.highlight.setAnchor(rect, a.step.highlight || undefined);
+    // Same passive-dim logic as activateStep — rAF refresh must not
+    // re-enable dim (would re-block canvas clicks every frame).
+    var rOpts = a.step.highlight ? Object.assign({}, a.step.highlight) : {};
+    if (a.step.passive && (rOpts.dim === undefined || rOpts.dim === null)) {
+      rOpts.dim = false;
+    }
+    this.highlight.setAnchor(rect, rOpts);
     if (a.tooltipEl) this.placeTooltip(a.tooltipEl, a.step.side || "bottom", rect);
   };
 
@@ -890,11 +984,66 @@
     ]
   };
 
+  var schemeGalleryTourScenario = {
+    id: "cd-scheme-gallery-tour",
+    name: "Галерея схем",
+    primaryLabel: "Далее", skipLabel: "Пропустить",
+    backLabel: "Назад", doneLabel: "Готово", skippable: true,
+    steps: [
+      {
+        id: "intro", title: "Галерея схем",
+        body: "Готовые модели: cohort-launch, intro-whatif, investment-case, runway, support-staffing, capacity-service, unit-economics, project-budget, renovation-estimate. Каждая — стартовая точка для своей задачи, не нужно собирать с нуля.",
+        side: "center"
+      },
+      {
+        id: "open", title: "Откройте галерею",
+        body: "Ctrl+P (или ⌘+P на Mac) открывает галерею. Альтернатива — кнопка «Попробовать» в финале v1 карусели онбординга. Шаг активируется, когда галерея видна.",
+        side: "center", passive: true, primaryLabel: "Жду открытия галереи…",
+        waitFor: { kind: "signal", signals: ["canvas:scheme-gallery-opened", "canvas:palette-opened"], timeout: 60000 }
+      },
+      {
+        id: "categories", title: "Категории схем",
+        body: "Слева — список категорий: Unit Economics (ARPU, LTV, CAC, retention, funnel), Product Analytics (NPS, MAU, stickiness), Infrastructure (DB, API-gateway, LB, queue), Patterns (cohort-launch, intro-whatif, investment-case).",
+        side: "right", anchor: { kind: "rect", rect: { x: 0, y: 0, width: 240, height: 800 } },
+        primaryLabel: "Понятно"
+      },
+      {
+        id: "preview", title: "Превью схемы",
+        body: "Клик по карточке схемы открывает превью: мини-схема с заметками, формулами, связями. Можно прочитать структуру до применения. Шаг активируется, когда превью открыто.",
+        side: "center", passive: true, primaryLabel: "Откройте превью…",
+        waitFor: { kind: "signal", signals: ["canvas:scheme-preview-shown"], timeout: 120000 }
+      },
+      {
+        id: "apply", title: "Применить схему",
+        body: "В превью — кнопка «Применить». Схема становится активным канвасом (с заменой текущей сцены — undo работает). Все формулы и связи сохраняются, можно редактировать под свою задачу. Шаг активируется, когда схема применена.",
+        side: "center", passive: true, primaryLabel: "Жду применения схемы…",
+        waitFor: { kind: "signal", signals: ["canvas:scheme-applied"], timeout: 180000 }
+      },
+      {
+        id: "edit", title: "Редактируйте под себя",
+        body: "После применения — канал тот же, что у обычного канваса: двойной клик создаёт заметки, drag от края — связи, ПКМ — палитра цвета и параметров. Менять значения переменных — прямо в заметках с формулами.",
+        side: "top", anchor: { kind: "rect", rect: { x: 80, y: 80, width: 400, height: 120 } },
+        primaryLabel: "Понятно"
+      },
+      {
+        id: "save", title: "Сохранение",
+        body: "Канвас автосохраняется в выбранный файл (W6: «Открыть с диска» → File System Access) или в OPFS (по умолчанию). Экспорт в .canvas — для бэкапа или шеринга.",
+        side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" }
+      },
+      {
+        id: "done", title: "Готово",
+        body: "Галерея схем — быстрый старт для типовых моделей. Большинство пользовательских сценариев покрывается готовыми схемами; кастомные — собирайте из шаблонов палитры (Ctrl+P).",
+        side: "center"
+      }
+    ]
+  };
+
   var scenarios = {
     toolbarTourScenario: toolbarTourScenario,
     firstRunInlineScenario: firstRunInlineScenario,
     paletteTourScenario: paletteTourScenario,
-    calculationsTourScenario: calculationsTourScenario
+    calculationsTourScenario: calculationsTourScenario,
+    schemeGalleryTourScenario: schemeGalleryTourScenario
   };
 
   // ── exports ─────────────────────────────────────────────────────
