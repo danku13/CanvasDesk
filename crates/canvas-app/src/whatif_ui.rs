@@ -19,7 +19,9 @@
 
 use crate::ui::point_in_rect;
 use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
-use canvas_ui::layout::{constrain, pad, stack, CrossAlign, HAlign, Row, RowPolicy, VAlign};
+use canvas_ui::layout::{
+    constrain, pad, stack, CrossAlign, HAlign, MeasuredItem, Row, RowPolicy, VAlign,
+};
 use canvas_ui::measure::TextMeasurer;
 
 /// Маржа бара от нижнего края окна (логические px; spacing-scale).
@@ -219,50 +221,66 @@ pub fn bar_layout(
     // элемент получает min(желаемое, остаток), хвост сжимается до нуля
     // (вырожденные rect'ы невидимы и не пикаются); дословная семантика
     // прежнего замыкания `take` (CR-015).
-    let mut items: Vec<canvas_ui::layout::Child> = Vec::with_capacity(scenario_names.len() + 8);
-    items.push(canvas_ui::layout::Child::fixed(
-        INDICATOR_WIDTH,
-        CHIP_HEIGHT,
-    ));
-    items.push(canvas_ui::layout::Child::fixed(
-        chip_width("База", measurer, fs),
-        CHIP_HEIGHT,
-    ));
+    // FR-068 W3.1 (staged-миграция потребителей, каталог
+    // docs/plans/fr-068-w3-consumer-migration.md, топ-1): элементы бара
+    // переведены с ручной проводки `Child::fixed(width_of…)` на семейство
+    // measured-API ([`MeasuredItem`] через [`Row::lay_out_measured`]).
+    // Чип/кнопка = текст + пад (`CHIP_PAD_X`/`BTN_PAD_X`) — точную ширину
+    // даёт [`MeasuredItem::Fixed`] (замер ОДИН раз выше, строки те же);
+    // авто-размер [`MeasuredItem::Text`] — после появления пад-семантики
+    // в F-13 (без изменения ширины чипов — отдельное решение владельца).
+    // Геометрия бит-в-бит с прежней: `MeasuredItem::Fixed` резолвится в
+    // тот же `Child::fixed` и тот же движок SqueezeTail (оракул F-13).
+    let mut items: Vec<MeasuredItem> = Vec::with_capacity(scenario_names.len() + 8);
+    items.push(MeasuredItem::Fixed {
+        w: INDICATOR_WIDTH,
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: chip_width("База", measurer, fs),
+        h: CHIP_HEIGHT,
+    });
     for name in scenario_names {
-        items.push(canvas_ui::layout::Child::fixed(
-            chip_width(name, measurer, fs),
-            CHIP_HEIGHT,
-        ));
+        items.push(MeasuredItem::Fixed {
+            w: chip_width(name, measurer, fs),
+            h: CHIP_HEIGHT,
+        });
     }
-    items.push(canvas_ui::layout::Child::fixed(
-        chip_width("+", measurer, fs),
-        CHIP_HEIGHT,
-    ));
-    items.push(canvas_ui::layout::Child::fixed(counter_w, CHIP_HEIGHT));
-    items.push(canvas_ui::layout::Child::fixed(
-        btn_width("Apply", measurer, fs),
-        CHIP_HEIGHT,
-    ));
-    items.push(canvas_ui::layout::Child::fixed(
-        btn_width("Сброс", measurer, fs),
-        CHIP_HEIGHT,
-    ));
-    items.push(canvas_ui::layout::Child::fixed(
-        btn_width(freeze_label, measurer, fs),
-        CHIP_HEIGHT,
-    ));
-    items.push(canvas_ui::layout::Child::fixed(
-        btn_width("Сравнить", measurer, fs),
-        CHIP_HEIGHT,
-    ));
-    items.push(canvas_ui::layout::Child::fixed(CLOSE_WIDTH, CHIP_HEIGHT));
+    items.push(MeasuredItem::Fixed {
+        w: chip_width("+", measurer, fs),
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: counter_w,
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: btn_width("Apply", measurer, fs),
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: btn_width("Сброс", measurer, fs),
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: btn_width(freeze_label, measurer, fs),
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: btn_width("Сравнить", measurer, fs),
+        h: CHIP_HEIGHT,
+    });
+    items.push(MeasuredItem::Fixed {
+        w: CLOSE_WIDTH,
+        h: CHIP_HEIGHT,
+    });
     let rects = Row {
         gap: BAR_GAP,
         cross: CrossAlign::Center,
         policy: RowPolicy::SqueezeTail,
         ..Row::default()
     }
-    .lay_out(items_slot, &items);
+    .lay_out_measured(items_slot, &items, measurer, fs, FAMILY, CHIP_FONT);
     let n = scenario_names.len();
     let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
     // Подписи сценариев — Ellipsis по фактической (возможно сжатой)
