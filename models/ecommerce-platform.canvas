@@ -1,0 +1,1895 @@
+{
+ "nodes": [
+  {
+   "id": "g5",
+   "type": "group",
+   "label": "5 · Мощность и стоимость",
+   "x": 3600,
+   "y": -60,
+   "width": 1420,
+   "height": 1180,
+   "children": [
+    "fleetweb",
+    "fleetoms",
+    "fleetbg",
+    "fleet",
+    "cost",
+    "managed",
+    "summary"
+   ],
+   "color": "4"
+  },
+  {
+   "id": "g4",
+   "type": "group",
+   "label": "4 · Данные и фон",
+   "x": 2020,
+   "y": 1640,
+   "width": 1180,
+   "height": 560,
+   "children": [
+    "queue",
+    "workers",
+    "dbcatalog",
+    "dborders",
+    "dbreplica"
+   ],
+   "color": "3"
+  },
+  {
+   "id": "g3",
+   "type": "group",
+   "label": "3 · Доменные сервисы",
+   "x": 2020,
+   "y": -60,
+   "width": 1440,
+   "height": 1860,
+   "children": [
+    "router",
+    "oms",
+    "omsapi",
+    "payments",
+    "auth",
+    "catalog",
+    "search",
+    "cart",
+    "wms",
+    "tms",
+    "erp",
+    "support"
+   ],
+   "color": "1"
+  },
+  {
+   "id": "g2",
+   "type": "group",
+   "label": "2 · Доставка трафика",
+   "x": 860,
+   "y": -60,
+   "width": 1120,
+   "height": 780,
+   "children": [
+    "cdn",
+    "lb",
+    "gateway",
+    "media",
+    "s3"
+   ],
+   "color": "2"
+  },
+  {
+   "id": "g1",
+   "type": "group",
+   "label": "1 · Спрос и сценарии",
+   "x": 0,
+   "y": -60,
+   "width": 860,
+   "height": 900,
+   "children": [
+    "assumptions",
+    "mode",
+    "traffic",
+    "peak"
+   ],
+   "color": "1"
+  },
+  {
+   "id": "hint",
+   "type": "text",
+   "text": "E-commerce Capacity Model\nПолный расчётный контур: спрос → доставка (CDN/LB/Gateway) → доменные сервисы (OMS, WMS, TMS, ERP, платежи) → данные (SQL/NoSQL/Kafka/воркеры) → мощность → стоимость.\nБаза — обычный день. Сценарии «Чёрная пятница ×3» и «×5» уже в файле: **Ctrl+Shift+I** → чипы сценариев → «Сравнить». Узкие места — **Ctrl+B**.",
+   "x": 0,
+   "y": -260,
+   "width": 620,
+   "height": 200,
+   "color": "4"
+  },
+  {
+   "id": "assumptions",
+   "type": "text",
+   "text": "Допущения\nБаза — обычный день. Единственное место с ручными числами: правьте здесь, дальше всё проливается по value-связям.\n\nvisitors_day = 800000\npages_per_visit = 12\napi_per_page = 4\npeak_factor = 2.5\norders_day = 20000\nitems_per_order = 2.5\nsku_count = 120000",
+   "x": 40,
+   "y": 120,
+   "width": 330,
+   "height": 380,
+   "color": "5"
+  },
+  {
+   "id": "mode",
+   "type": "text",
+   "text": "Режим\nМножитель нагрузки к обычному дню. What-if сценарии подменяют эту строку: Чёрная пятница ×3 и ×5.\n\nmult = 1",
+   "x": 40,
+   "y": 580,
+   "width": 330,
+   "height": 220,
+   "color": "3"
+  },
+  {
+   "id": "traffic",
+   "type": "text",
+   "text": "Трафик\nАудитория → страницы → API-вызовы. Средний поток и обычный пиковый час.\n\napi_day = Допущения.visitors_day × Допущения.pages_per_visit × Допущения.api_per_page\navg_rps = api_day × 1 rps / 86400\npeak_rps = avg_rps × Допущения.peak_factor",
+   "x": 460,
+   "y": 120,
+   "width": 330,
+   "height": 260,
+   "color": "2"
+  },
+  {
+   "id": "peak",
+   "type": "text",
+   "text": "Пик\nРасчётный поток под активный сценарий: средний день × пиковый час × множитель режима. Этим значением питается весь ландшафт.\n\ndesign_rps = Трафик.avg_rps × Допущения.peak_factor × Режим.mult",
+   "x": 460,
+   "y": 470,
+   "width": 330,
+   "height": 230,
+   "color": "2"
+  },
+  {
+   "id": "cdn",
+   "type": "text",
+   "text": "rps = 1111.11 rps\ncache_hit = 0.8\norigin_latency = 2 ms",
+   "x": 900,
+   "y": 120,
+   "width": 300.0,
+   "height": 208,
+   "color": "2",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.cdn",
+     "version": "1.2.0",
+     "expr": "mm1($rps × (1 - $cache_hit), 1 req / $origin_latency)",
+     "params": {
+      "rps": {
+       "num": 1111.11,
+       "unit": "rps"
+      },
+      "cache_hit": {
+       "num": 0.8
+      },
+      "origin_latency": {
+       "num": 2,
+       "unit": "ms"
+      }
+     },
+     "icon": "http",
+     "color": "#7ED321",
+     "name": "CDN",
+     "outputs": [
+      {
+       "name": "origin_rps",
+       "unit": "rps",
+       "expr": "$rps × (1 - $cache_hit)"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps × (1 - $cache_hit), 1 req / $origin_latency)"
+      }
+     ]
+    },
+    "title": "CDN"
+   }
+  },
+  {
+   "id": "lb",
+   "type": "text",
+   "text": "connections_per_sec = 222.222 rps\nserver_rate = 400 rps\nservers = 3\nauth_share = 0.06\nfeed_share = 0.7\nmedia_share = 0.24",
+   "x": 1280,
+   "y": 100,
+   "width": 360.0,
+   "height": 286,
+   "color": "2",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.tcp-lb",
+     "version": "1.2.0",
+     "expr": "mm1($connections_per_sec, $server_rate, $servers)",
+     "params": {
+      "connections_per_sec": {
+       "num": 222.222,
+       "unit": "rps"
+      },
+      "server_rate": {
+       "num": 400,
+       "unit": "rps"
+      },
+      "servers": {
+       "num": 3
+      },
+      "auth_share": {
+       "num": 0.06
+      },
+      "feed_share": {
+       "num": 0.7
+      },
+      "media_share": {
+       "num": 0.24
+      }
+     },
+     "icon": "lb",
+     "color": "#7ED321",
+     "name": "TCP-балансировщик",
+     "outputs": [
+      {
+       "name": "out_gateway",
+       "unit": "rps",
+       "expr": "$connections_per_sec"
+      },
+      {
+       "name": "out_auth",
+       "unit": "rps",
+       "expr": "$connections_per_sec × $auth_share"
+      },
+      {
+       "name": "out_feed",
+       "unit": "rps",
+       "expr": "$connections_per_sec × $feed_share"
+      },
+      {
+       "name": "out_media",
+       "unit": "rps",
+       "expr": "$connections_per_sec × $media_share"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($connections_per_sec, $server_rate, $servers)"
+      }
+     ]
+    },
+    "title": "Балансировщик L4"
+   }
+  },
+  {
+   "id": "gateway",
+   "type": "text",
+   "text": "rps = 155.556 rps\nlatency_budget = 10 ms\nauth_overhead = 8 ms",
+   "x": 1660,
+   "y": 120,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.api-gateway",
+     "version": "1.2.0",
+     "expr": "mm1($rps, 1 req / ($latency_budget - $auth_overhead))",
+     "params": {
+      "rps": {
+       "num": 155.556,
+       "unit": "rps"
+      },
+      "latency_budget": {
+       "num": 10,
+       "unit": "ms"
+      },
+      "auth_overhead": {
+       "num": 8,
+       "unit": "ms"
+      }
+     },
+     "icon": "gateway",
+     "color": "#4A90E2",
+     "name": "API-шлюз",
+     "outputs": [
+      {
+       "name": "upstream_rps",
+       "unit": "rps",
+       "expr": "$rps"
+      },
+      {
+       "name": "effective_service_rate",
+       "unit": "rps",
+       "expr": "1 req / ($latency_budget - $auth_overhead)"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps, 1 req / ($latency_budget - $auth_overhead))"
+      }
+     ]
+    },
+    "title": "API-шлюз"
+   }
+  },
+  {
+   "id": "media",
+   "type": "text",
+   "text": "Медиа\nOrigin-трафик изображений: доля промахов CDN уходит в объектное хранилище.\n\nimg_rps = $1 × 0.8",
+   "x": 1280,
+   "y": 470,
+   "width": 300,
+   "height": 190,
+   "color": "2"
+  },
+  {
+   "id": "s3",
+   "type": "text",
+   "text": "requests_per_sec = 42.6667 rps\nlatency = 5 ms\nobject_size = 120 KB",
+   "x": 1660,
+   "y": 470,
+   "width": 300.0,
+   "height": 208,
+   "color": "3",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.storage-s3",
+     "version": "1.0.0",
+     "expr": "mm1($requests_per_sec, 1 req / $latency)",
+     "params": {
+      "requests_per_sec": {
+       "num": 42.6667,
+       "unit": "rps"
+      },
+      "latency": {
+       "num": 5,
+       "unit": "ms"
+      },
+      "object_size": {
+       "num": 120,
+       "unit": "KB"
+      }
+     },
+     "icon": "storage",
+     "color": "#F5A623",
+     "name": "Хранилище (S3)",
+     "outputs": []
+    },
+    "title": "Хранилище (S3)"
+   }
+  },
+  {
+   "id": "router",
+   "type": "text",
+   "text": "Маршрутизация\nДоли потока шлюза по доменным сервисам (в сумме 100%) и операции БД каталога.\n\nin_rps = $1\ncatalog_share = 0.40\nsearch_share = 0.18\ncart_share = 0.14\ncheckout_share = 0.06\naccount_share = 0.05\ncatalog_rps = in_rps × catalog_share\nsearch_rps = in_rps × search_share\ncart_rps = in_rps × cart_share\ncheckout_rps = in_rps × checkout_share\naccount_rps = in_rps × account_share\ncatalog_ops = catalog_rps × 0.8 + search_rps × 1.5",
+   "x": 2080,
+   "y": 100,
+   "width": 360,
+   "height": 470,
+   "color": "2"
+  },
+  {
+   "id": "oms",
+   "type": "text",
+   "text": "OMS\nOrder Management: оформление заказа, резервация стока, платёж, события в шину. Заказы масштабируются множителем режима.\n\norder_rps = Допущения.orders_day × 1 rps / 86400 × Режим.mult\nevents_per_order = 6\nevents_rps = order_rps × events_per_order\ndb_write_rps = order_rps × 6\npayments_rps = order_rps × 1.2\nticket_rps = order_rps × 0.04\noms_peak_rps = Маршрутизация.checkout_rps × 3",
+   "x": 2080,
+   "y": 640,
+   "width": 360,
+   "height": 380,
+   "color": "1"
+  },
+  {
+   "id": "omsapi",
+   "type": "text",
+   "text": "rps = 9.33333 rps\ntimeout = 30 ms\nstream_window = 64 KB",
+   "x": 2560,
+   "y": 100,
+   "width": 300.0,
+   "height": 208,
+   "color": "2",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.grpc-service",
+     "version": "1.1.0",
+     "expr": "mm1($rps, 1 req / $timeout)",
+     "params": {
+      "rps": {
+       "num": 9.33333,
+       "unit": "rps"
+      },
+      "timeout": {
+       "num": 30,
+       "unit": "ms"
+      },
+      "stream_window": {
+       "num": 64,
+       "unit": "KB"
+      }
+     },
+     "icon": "grpc",
+     "color": "#7ED321",
+     "name": "gRPC-сервис",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps, 1 req / $timeout)"
+      }
+     ]
+    },
+    "title": "Checkout API (gRPC)"
+   }
+  },
+  {
+   "id": "payments",
+   "type": "text",
+   "text": "rps = 0.277778 rps\ntimeout = 100 ms\nstream_window = 64 KB",
+   "x": 2560,
+   "y": 300,
+   "width": 300.0,
+   "height": 208,
+   "color": "2",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.grpc-service",
+     "version": "1.1.0",
+     "expr": "mm1($rps, 1 req / $timeout)",
+     "params": {
+      "rps": {
+       "num": 0.277778,
+       "unit": "rps"
+      },
+      "timeout": {
+       "num": 100,
+       "unit": "ms"
+      },
+      "stream_window": {
+       "num": 64,
+       "unit": "KB"
+      }
+     },
+     "icon": "grpc",
+     "color": "#7ED321",
+     "name": "gRPC-сервис",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps, 1 req / $timeout)"
+      }
+     ]
+    },
+    "title": "Платежи (gRPC)"
+   }
+  },
+  {
+   "id": "auth",
+   "type": "text",
+   "text": "rps = 7.77778 rps\ntoken_verify = 2 ms\ncache_ttl = 5 min",
+   "x": 2560,
+   "y": 500,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.auth-service",
+     "version": "1.1.0",
+     "expr": "mm1($rps, 1 req / $token_verify)",
+     "params": {
+      "rps": {
+       "num": 7.77778,
+       "unit": "rps"
+      },
+      "token_verify": {
+       "num": 2,
+       "unit": "ms"
+      },
+      "cache_ttl": {
+       "num": 5,
+       "unit": "min"
+      }
+     },
+     "icon": "auth",
+     "color": "#4A90E2",
+     "name": "Сервис аутентификации",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps, 1 req / $token_verify)"
+      }
+     ]
+    },
+    "title": "Auth-сервис"
+   }
+  },
+  {
+   "id": "catalog",
+   "type": "text",
+   "text": "rps = 62.2222 rps\ntimeout = 2 ms\nstream_window = 64 KB",
+   "x": 2560,
+   "y": 700,
+   "width": 300.0,
+   "height": 208,
+   "color": "2",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.grpc-service",
+     "version": "1.1.0",
+     "expr": "mm1($rps, 1 req / $timeout)",
+     "params": {
+      "rps": {
+       "num": 62.2222,
+       "unit": "rps"
+      },
+      "timeout": {
+       "num": 2,
+       "unit": "ms"
+      },
+      "stream_window": {
+       "num": 64,
+       "unit": "KB"
+      }
+     },
+     "icon": "grpc",
+     "color": "#7ED321",
+     "name": "gRPC-сервис",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps, 1 req / $timeout)"
+      }
+     ]
+    },
+    "title": "Каталог (gRPC)"
+   }
+  },
+  {
+   "id": "search",
+   "type": "text",
+   "text": "rps = 28 rps\ntimeout = 5 ms\nstream_window = 64 KB",
+   "x": 2560,
+   "y": 900,
+   "width": 300.0,
+   "height": 208,
+   "color": "2",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.grpc-service",
+     "version": "1.1.0",
+     "expr": "mm1($rps, 1 req / $timeout)",
+     "params": {
+      "rps": {
+       "num": 28,
+       "unit": "rps"
+      },
+      "timeout": {
+       "num": 5,
+       "unit": "ms"
+      },
+      "stream_window": {
+       "num": 64,
+       "unit": "KB"
+      }
+     },
+     "icon": "grpc",
+     "color": "#7ED321",
+     "name": "gRPC-сервис",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($rps, 1 req / $timeout)"
+      }
+     ]
+    },
+    "title": "Поиск (gRPC)"
+   }
+  },
+  {
+   "id": "cart",
+   "type": "text",
+   "text": "qps = 21.7778 rps\nhit_rate = 0.85\neviction_latency = 0.2 ms",
+   "x": 2560,
+   "y": 1100,
+   "width": 300.0,
+   "height": 208,
+   "color": "5",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.cache-redis",
+     "version": "1.2.0",
+     "expr": "mm1($qps × $hit_rate, 1 req / $eviction_latency)",
+     "params": {
+      "qps": {
+       "num": 21.7778,
+       "unit": "rps"
+      },
+      "hit_rate": {
+       "num": 0.85
+      },
+      "eviction_latency": {
+       "num": 0.2,
+       "unit": "ms"
+      }
+     },
+     "icon": "cache",
+     "color": "#BD10E0",
+     "name": "Кэш (Redis)",
+     "outputs": [
+      {
+       "name": "hit_qps",
+       "unit": "rps",
+       "expr": "$qps × $hit_rate"
+      },
+      {
+       "name": "miss_qps",
+       "unit": "rps",
+       "expr": "$qps × (1 - $hit_rate)"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($qps × $hit_rate, 1 req / $eviction_latency)"
+      }
+     ]
+    },
+    "title": "Корзина (Redis)"
+   }
+  },
+  {
+   "id": "wms",
+   "type": "text",
+   "text": "WMS\nWarehouse Management: линии заказов на отборку, сборщики — каналы обслуживания (Эрланг C). Штат масштабируется операционно, не инстансами.\n\nlines_rps = OMS.order_rps × Допущения.items_per_order\npick_time = 90 sec\npickers = 70\nwait_prob = erlang_c(lines_rps, 1 req / pick_time, pickers)\nrho = utilization(lines_rps, 1 req / pick_time, pickers)\npickers_needed = littles_law(lines_rps, pick_time) / 1 req / 0.85\nbg_rps = lines_rps × 2 + OMS.events_rps",
+   "x": 2080,
+   "y": 1120,
+   "width": 380,
+   "height": 400,
+   "color": "1"
+  },
+  {
+   "id": "tms",
+   "type": "text",
+   "text": "TMS\nTransportation Management: посылки в пути (закон Литтла) и курьеры на последний километр.\n\nshipments_rps = OMS.order_rps × 0.98\ntransit_time = 36 h\nin_transit = littles_law(shipments_rps, transit_time)\nparcels_per_courier_day = 80\ncouriers = littles_law(shipments_rps, 86400 sec) / parcels_per_courier_day\ncouriers_needed = couriers / 0.85",
+   "x": 3040,
+   "y": 640,
+   "width": 360,
+   "height": 330,
+   "color": "1"
+  },
+  {
+   "id": "erp",
+   "type": "text",
+   "text": "ERP\nСинхронизация со справочниками и учётом: сток по SKU, проводки по заказам. Батчевые джобы поверх шины.\n\nstock_sync_rps = Допущения.sku_count × 1 req / 4 h\nledger_rps = OMS.order_rps × 2\ntotal_rps = stock_sync_rps + ledger_rps\nwait = mmc(total_rps, 1 req / 200 ms, 4)\nrho = utilization(total_rps, 1 req / 200 ms, 4)",
+   "x": 3040,
+   "y": 1040,
+   "width": 360,
+   "height": 330,
+   "color": "1"
+  },
+  {
+   "id": "support",
+   "type": "text",
+   "text": "calls_per_sec = 0.009259 rps\nhandle_time = 360 sec\nagents = 4",
+   "x": 3040,
+   "y": 1440,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.support-staffing",
+     "version": "1.0.0",
+     "expr": "erlang_c($calls_per_sec, 1 req / $handle_time, $agents)",
+     "params": {
+      "calls_per_sec": {
+       "num": 0.00925926,
+       "unit": "rps"
+      },
+      "handle_time": {
+       "num": 360,
+       "unit": "sec"
+      },
+      "agents": {
+       "num": 4
+      }
+     },
+     "icon": "users",
+     "color": "#4A90E2",
+     "name": "Штат поддержки (Эрланг C)",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($calls_per_sec, 1 req / $handle_time, $agents)"
+      }
+     ]
+    },
+    "title": "Поддержка (Erlang C)"
+   }
+  },
+  {
+   "id": "queue",
+   "type": "text",
+   "text": "produce_rate = 1.38889 rps\npartition_consume = 100 rps\npartitions = 3\nretention = 168 h",
+   "x": 2080,
+   "y": 1720,
+   "width": 360.0,
+   "height": 234,
+   "color": "4",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.queue-kafka",
+     "version": "1.2.0",
+     "expr": "mm1($produce_rate / $partitions, $partition_consume)",
+     "params": {
+      "produce_rate": {
+       "num": 1.38889,
+       "unit": "rps"
+      },
+      "partition_consume": {
+       "num": 100,
+       "unit": "rps"
+      },
+      "partitions": {
+       "num": 3
+      },
+      "retention": {
+       "num": 168,
+       "unit": "h"
+      }
+     },
+     "icon": "queue",
+     "color": "#9013FE",
+     "name": "Очередь (Kafka)",
+     "outputs": [
+      {
+       "name": "consume_rate",
+       "unit": "rps",
+       "expr": "min($produce_rate, $partition_consume × $partitions)"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($produce_rate / $partitions, $partition_consume)"
+      }
+     ]
+    },
+    "title": "Шина заказов (Kafka)"
+   }
+  },
+  {
+   "id": "workers",
+   "type": "text",
+   "text": "tasks_per_sec = 1.38889 rps\nprocessing_time = 200 ms\nworkers = 2",
+   "x": 2460,
+   "y": 1720,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.worker",
+     "version": "1.1.0",
+     "expr": "mm1($tasks_per_sec, 1 req / $processing_time, $workers)",
+     "params": {
+      "tasks_per_sec": {
+       "num": 1.38889,
+       "unit": "rps"
+      },
+      "processing_time": {
+       "num": 200,
+       "unit": "ms"
+      },
+      "workers": {
+       "num": 2
+      }
+     },
+     "icon": "worker",
+     "color": "#4A90E2",
+     "name": "Воркер",
+     "outputs": [
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($tasks_per_sec, 1 req / $processing_time, $workers)"
+      }
+     ]
+    },
+    "title": "Фоновые воркеры"
+   }
+  },
+  {
+   "id": "dbcatalog",
+   "type": "text",
+   "text": "ops_per_sec = 91.7778 rps\ndoc_latency = 4 ms\nshards = 3\nworking_set_gb = 8 GB",
+   "x": 2840,
+   "y": 1720,
+   "width": 360.0,
+   "height": 234,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.db-nosql",
+     "version": "1.0.0",
+     "expr": "mm1($ops_per_sec, 1 req / $doc_latency, $shards)",
+     "params": {
+      "ops_per_sec": {
+       "num": 91.7778,
+       "unit": "rps"
+      },
+      "doc_latency": {
+       "num": 4,
+       "unit": "ms"
+      },
+      "shards": {
+       "num": 3
+      },
+      "working_set_gb": {
+       "num": 8,
+       "unit": "GB"
+      }
+     },
+     "icon": "db",
+     "color": "#4A90E2",
+     "name": "БД NoSQL (Mongo)",
+     "outputs": [
+      {
+       "name": "capacity_ops",
+       "unit": "rps",
+       "expr": "1 req / $doc_latency × $shards"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($ops_per_sec, 1 req / $doc_latency, $shards)"
+      }
+     ]
+    },
+    "title": "БД каталога (Mongo)"
+   }
+  },
+  {
+   "id": "dborders",
+   "type": "text",
+   "text": "qps = 1.38889 rps\nquery_time = 8 ms\nreplicas = 2\nreplica_share = 0.5",
+   "x": 2080,
+   "y": 1980,
+   "width": 360.0,
+   "height": 234,
+   "color": "3",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.db-sql-master",
+     "version": "1.2.0",
+     "expr": "mm1($qps, 1 req / $query_time, $replicas)",
+     "params": {
+      "qps": {
+       "num": 1.38889,
+       "unit": "rps"
+      },
+      "query_time": {
+       "num": 8,
+       "unit": "ms"
+      },
+      "replicas": {
+       "num": 2
+      },
+      "replica_share": {
+       "num": 0.5
+      }
+     },
+     "icon": "db",
+     "color": "#F5A623",
+     "name": "БД SQL (мастер)",
+     "outputs": [
+      {
+       "name": "replica_load",
+       "unit": "rps",
+       "expr": "$qps × $replica_share"
+      },
+      {
+       "name": "capacity_qps",
+       "unit": "rps",
+       "expr": "1 req / $query_time × $replicas"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($qps, 1 req / $query_time, $replicas)"
+      }
+     ]
+    },
+    "title": "БД заказов (SQL)"
+   }
+  },
+  {
+   "id": "dbreplica",
+   "type": "text",
+   "text": "qps = 0.694444 rps\nquery_time = 12 ms\nreplicas = 3\nlag = 100 ms",
+   "x": 2460,
+   "y": 1980,
+   "width": 360.0,
+   "height": 234,
+   "color": "3",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.db-sql-replica",
+     "version": "1.2.0",
+     "expr": "mm1($qps, 1 req / $query_time, $replicas)",
+     "params": {
+      "qps": {
+       "num": 0.694444,
+       "unit": "rps"
+      },
+      "query_time": {
+       "num": 12,
+       "unit": "ms"
+      },
+      "replicas": {
+       "num": 3
+      },
+      "lag": {
+       "num": 100,
+       "unit": "ms"
+      }
+     },
+     "icon": "db",
+     "color": "#F5A623",
+     "name": "БД SQL (реплика)",
+     "outputs": [
+      {
+       "name": "headroom_qps",
+       "unit": "rps",
+       "expr": "1 req / $query_time × $replicas - $qps"
+      },
+      {
+       "name": "utilization",
+       "unit": "%",
+       "expr": "utilization($qps, 1 req / $query_time, $replicas)"
+      }
+     ]
+    },
+    "title": "Реплика БД заказов"
+   }
+  },
+  {
+   "id": "fleetweb",
+   "type": "text",
+   "text": "rps = 1111.11 rps\nresponse_time = 120 ms\nconcurrency_per_instance = 50",
+   "x": 3660,
+   "y": 100,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.capacity-planner",
+     "version": "1.0.0",
+     "expr": "littles_law($rps, $response_time) / $concurrency_per_instance",
+     "params": {
+      "rps": {
+       "num": 1111.11,
+       "unit": "rps"
+      },
+      "response_time": {
+       "num": 120,
+       "unit": "ms"
+      },
+      "concurrency_per_instance": {
+       "num": 50
+      }
+     },
+     "icon": "worker",
+     "color": "#4A90E2",
+     "name": "Планировщик мощности",
+     "outputs": [
+      {
+       "name": "concurrent_requests",
+       "unit": "req",
+       "expr": "littles_law($rps, $response_time)"
+      },
+      {
+       "name": "fleet_with_70pct_headroom",
+       "expr": "littles_law($rps, $response_time) / $concurrency_per_instance / 0.7"
+      }
+     ]
+    },
+    "title": "Планировщик: веб-тир"
+   }
+  },
+  {
+   "id": "fleetoms",
+   "type": "text",
+   "text": "rps = 28 rps\nresponse_time = 200 ms\nconcurrency_per_instance = 30",
+   "x": 3660,
+   "y": 330,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.capacity-planner",
+     "version": "1.0.0",
+     "expr": "littles_law($rps, $response_time) / $concurrency_per_instance",
+     "params": {
+      "rps": {
+       "num": 28,
+       "unit": "rps"
+      },
+      "response_time": {
+       "num": 200,
+       "unit": "ms"
+      },
+      "concurrency_per_instance": {
+       "num": 30
+      }
+     },
+     "icon": "worker",
+     "color": "#4A90E2",
+     "name": "Планировщик мощности",
+     "outputs": [
+      {
+       "name": "concurrent_requests",
+       "unit": "req",
+       "expr": "littles_law($rps, $response_time)"
+      },
+      {
+       "name": "fleet_with_70pct_headroom",
+       "expr": "littles_law($rps, $response_time) / $concurrency_per_instance / 0.7"
+      }
+     ]
+    },
+    "title": "Планировщик: OMS"
+   }
+  },
+  {
+   "id": "fleetbg",
+   "type": "text",
+   "text": "rps = 2.5463 rps\nresponse_time = 500 ms\nconcurrency_per_instance = 20",
+   "x": 3660,
+   "y": 560,
+   "width": 300.0,
+   "height": 208,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.capacity-planner",
+     "version": "1.0.0",
+     "expr": "littles_law($rps, $response_time) / $concurrency_per_instance",
+     "params": {
+      "rps": {
+       "num": 2.5463,
+       "unit": "rps"
+      },
+      "response_time": {
+       "num": 500,
+       "unit": "ms"
+      },
+      "concurrency_per_instance": {
+       "num": 20
+      }
+     },
+     "icon": "worker",
+     "color": "#4A90E2",
+     "name": "Планировщик мощности",
+     "outputs": [
+      {
+       "name": "concurrent_requests",
+       "unit": "req",
+       "expr": "littles_law($rps, $response_time)"
+      },
+      {
+       "name": "fleet_with_70pct_headroom",
+       "expr": "littles_law($rps, $response_time) / $concurrency_per_instance / 0.7"
+      }
+     ]
+    },
+    "title": "Планировщик: фон"
+   }
+  },
+  {
+   "id": "fleet",
+   "type": "text",
+   "text": "Флот\nСуммарные серверы трёх контуров (запас 30%) плюс фиксированные узлы БД. Egress — от месячного API-трафика под активный режим.\n\ndb_servers = 8 req\nservers = (sum($1, $2, $3) + db_servers) / 1 req\napi_day_scaled = Трафик.api_day × Режим.mult\negress_tb = api_day_scaled × 8 KB × 30 / 1 TB",
+   "x": 4060,
+   "y": 160,
+   "width": 380,
+   "height": 340,
+   "color": "4"
+  },
+  {
+   "id": "cost",
+   "type": "text",
+   "text": "servers = 12.1667\nserver_cost = 45 usd\nstorage_gb = 600\nstorage_cost_gb = 0.02 usd\negress_tb = 8.58307\negress_cost_tb = 90 usd",
+   "x": 4500,
+   "y": 160,
+   "width": 360.0,
+   "height": 286,
+   "color": "1",
+   "canvasdesk": {
+    "template": {
+     "id": "com.canvasdesk.infra-cost",
+     "version": "1.0.0",
+     "expr": "$servers × $server_cost + $storage_gb × $storage_cost_gb + $egress_tb × $egress_cost_tb",
+     "params": {
+      "servers": {
+       "num": 12.1667
+      },
+      "server_cost": {
+       "num": 45,
+       "unit": "usd"
+      },
+      "storage_gb": {
+       "num": 600
+      },
+      "storage_cost_gb": {
+       "num": 0.02,
+       "unit": "usd"
+      },
+      "egress_tb": {
+       "num": 8.58307
+      },
+      "egress_cost_tb": {
+       "num": 90,
+       "unit": "usd"
+      }
+     },
+     "icon": "money",
+     "color": "#4A90E2",
+     "name": "Стоимость инфраструктуры в месяц",
+     "outputs": [
+      {
+       "name": "compute_cost",
+       "unit": "usd",
+       "expr": "$servers × $server_cost"
+      },
+      {
+       "name": "storage_cost",
+       "unit": "usd",
+       "expr": "$storage_gb × $storage_cost_gb"
+      },
+      {
+       "name": "egress_cost",
+       "unit": "usd",
+       "expr": "$egress_tb × $egress_cost_tb"
+      }
+     ]
+    },
+    "title": "Стоимость инфраструктуры"
+   }
+  },
+  {
+   "id": "managed",
+   "type": "text",
+   "text": "Управляемые\nManaged-сервисы: Kafka, Redis, Mongo, S3, наблюдаемость. Растут медленнее нагрузки — коэффициент 0.4 от роста режима.\n\nkafka = 220 usd\nredis = 150 usd\nmongo = 270 usd\ns3_storage = 30 usd\nobservability = 120 usd\nscale = 1 + (Режим.mult - 1) × 0.3\ntotal = sum(kafka, redis, mongo, s3_storage, observability) × scale",
+   "x": 4060,
+   "y": 560,
+   "width": 380,
+   "height": 380,
+   "color": "4"
+  },
+  {
+   "id": "summary",
+   "type": "text",
+   "text": "Итоги\nМесячный счёт и требования под активный сценарий. Дельты Base/×3/×5 — в what-if сравнении (Ctrl+Shift+I → «Сравнить»). Стоимостные рёбра: смета инфраструктуры и managed-сервисы.\n\ninfra_month = $1\nmanaged_month = $2\ntotal_month = $1 + $2\nservers = Флот.servers\npickers_needed = WMS.pickers_needed\ncouriers_needed = TMS.couriers_needed",
+   "x": 4500,
+   "y": 560,
+   "width": 400,
+   "height": 400,
+   "color": "3"
+  }
+ ],
+ "edges": [
+  {
+   "id": "e-01",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "traffic",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "visitors_day"
+  },
+  {
+   "id": "e-02",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "traffic",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "pages_per_visit"
+  },
+  {
+   "id": "e-03",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "traffic",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "api_per_page"
+  },
+  {
+   "id": "e-04",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "traffic",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "peak_factor"
+  },
+  {
+   "id": "e-05",
+   "fromNode": "mode",
+   "fromSide": "right",
+   "toNode": "peak",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "mult"
+  },
+  {
+   "id": "e-06",
+   "fromNode": "traffic",
+   "fromSide": "right",
+   "toNode": "peak",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "avg_rps"
+  },
+  {
+   "id": "e-07",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "peak",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "peak_factor"
+  },
+  {
+   "id": "e-08",
+   "fromNode": "peak",
+   "fromSide": "right",
+   "toNode": "cdn",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "design_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-09",
+   "fromNode": "cdn",
+   "fromSide": "right",
+   "toNode": "lb",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "origin_rps",
+   "toParam": "connections_per_sec"
+  },
+  {
+   "id": "e-10",
+   "fromNode": "lb",
+   "fromSide": "right",
+   "toNode": "gateway",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "out_feed",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-11",
+   "fromNode": "lb",
+   "fromSide": "right",
+   "toNode": "media",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "out_media"
+  },
+  {
+   "id": "e-12",
+   "fromNode": "media",
+   "fromSide": "right",
+   "toNode": "s3",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "img_rps",
+   "toParam": "requests_per_sec"
+  },
+  {
+   "id": "e-13",
+   "fromNode": "gateway",
+   "fromSide": "right",
+   "toNode": "router",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "upstream_rps"
+  },
+  {
+   "id": "e-14",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "omsapi",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "checkout_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-15",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "payments",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "checkout_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-16",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "auth",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "account_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-17",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "catalog",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "catalog_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-18",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "search",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "search_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-19",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "cart",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "cart_rps",
+   "toParam": "qps"
+  },
+  {
+   "id": "e-20",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "oms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "checkout_rps"
+  },
+  {
+   "id": "e-21",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "oms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "orders_day"
+  },
+  {
+   "id": "e-22",
+   "fromNode": "mode",
+   "fromSide": "right",
+   "toNode": "oms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "mult"
+  },
+  {
+   "id": "e-23",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "payments",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "payments_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-24",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "queue",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "events_rps",
+   "toParam": "produce_rate"
+  },
+  {
+   "id": "e-25",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "dborders",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "db_write_rps",
+   "toParam": "qps"
+  },
+  {
+   "id": "e-26",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "support",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "ticket_rps",
+   "toParam": "calls_per_sec"
+  },
+  {
+   "id": "e-27",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "wms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "order_rps"
+  },
+  {
+   "id": "e-28",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "wms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "events_rps"
+  },
+  {
+   "id": "e-29",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "wms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "items_per_order"
+  },
+  {
+   "id": "e-30",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "tms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "order_rps"
+  },
+  {
+   "id": "e-31",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "erp",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "order_rps"
+  },
+  {
+   "id": "e-32",
+   "fromNode": "assumptions",
+   "fromSide": "right",
+   "toNode": "erp",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "sku_count"
+  },
+  {
+   "id": "e-33",
+   "fromNode": "router",
+   "fromSide": "right",
+   "toNode": "dbcatalog",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "catalog_ops",
+   "toParam": "ops_per_sec"
+  },
+  {
+   "id": "e-34",
+   "fromNode": "queue",
+   "fromSide": "right",
+   "toNode": "workers",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "consume_rate",
+   "toParam": "tasks_per_sec"
+  },
+  {
+   "id": "e-35",
+   "fromNode": "dborders",
+   "fromSide": "right",
+   "toNode": "dbreplica",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "replica_load",
+   "toParam": "qps"
+  },
+  {
+   "id": "e-36",
+   "fromNode": "fleetweb",
+   "fromSide": "right",
+   "toNode": "fleet",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "fleet_with_70pct_headroom"
+  },
+  {
+   "id": "e-37",
+   "fromNode": "fleetoms",
+   "fromSide": "right",
+   "toNode": "fleet",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "fleet_with_70pct_headroom"
+  },
+  {
+   "id": "e-38",
+   "fromNode": "fleetbg",
+   "fromSide": "right",
+   "toNode": "fleet",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "fleet_with_70pct_headroom"
+  },
+  {
+   "id": "e-39",
+   "fromNode": "traffic",
+   "fromSide": "right",
+   "toNode": "fleet",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "api_day"
+  },
+  {
+   "id": "e-40",
+   "fromNode": "mode",
+   "fromSide": "right",
+   "toNode": "fleet",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "mult"
+  },
+  {
+   "id": "e-41",
+   "fromNode": "peak",
+   "fromSide": "right",
+   "toNode": "fleetweb",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "design_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-42",
+   "fromNode": "oms",
+   "fromSide": "right",
+   "toNode": "fleetoms",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "oms_peak_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-43",
+   "fromNode": "wms",
+   "fromSide": "right",
+   "toNode": "fleetbg",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "bg_rps",
+   "toParam": "rps"
+  },
+  {
+   "id": "e-44",
+   "fromNode": "fleet",
+   "fromSide": "right",
+   "toNode": "cost",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "servers",
+   "toParam": "servers"
+  },
+  {
+   "id": "e-45",
+   "fromNode": "fleet",
+   "fromSide": "right",
+   "toNode": "cost",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "egress_tb",
+   "toParam": "egress_tb"
+  },
+  {
+   "id": "e-46",
+   "fromNode": "mode",
+   "fromSide": "right",
+   "toNode": "managed",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "mult"
+  },
+  {
+   "id": "e-47",
+   "fromNode": "cost",
+   "fromSide": "right",
+   "toNode": "summary",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   }
+  },
+  {
+   "id": "e-48",
+   "fromNode": "managed",
+   "fromSide": "right",
+   "toNode": "summary",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   }
+  },
+  {
+   "id": "e-49",
+   "fromNode": "fleet",
+   "fromSide": "right",
+   "toNode": "summary",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "servers"
+  },
+  {
+   "id": "e-50",
+   "fromNode": "wms",
+   "fromSide": "right",
+   "toNode": "summary",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "pickers_needed"
+  },
+  {
+   "id": "e-51",
+   "fromNode": "tms",
+   "fromSide": "right",
+   "toNode": "summary",
+   "toSide": "left",
+   "canvasdesk": {
+    "flow": {
+     "kind": "value"
+    }
+   },
+   "fromOutput": "couriers_needed"
+  }
+ ],
+ "canvasdesk": {
+  "whatif": {
+   "scenarios": [
+    {
+     "name": "Чёрная пятница ×3",
+     "overrides": [
+      {
+       "node": "mode",
+       "line": 3,
+       "expr": "mult = 3"
+      }
+     ]
+    },
+    {
+     "name": "Чёрная пятница ×5",
+     "overrides": [
+      {
+       "node": "mode",
+       "line": 3,
+       "expr": "mult = 5"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
