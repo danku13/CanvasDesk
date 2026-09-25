@@ -256,6 +256,48 @@ impl TextMeasurer {
         .width
     }
 
+    /// Жадный перенос текста по словам (W3.3, каталог §9.3.1: общий
+    /// replacement ручных циклов переноса потребителей). Слова —
+    /// `split_whitespace` (подряд идущие пробелы схлопываются, явные
+    /// переносы источника — на совести потребителя); строка набирается,
+    /// пока кандидат «строка + пробел + слово» укладывается в `max_w`,
+    /// иначе строка закрывается; слово шире `max_w` — отдельной строкой
+    /// (без разрыва по глифам — семантика прежнего `admin_ui::wrap_text`,
+    /// CR-прецедент). Пустой текст → одна пустая строка. Вес — MEDIUM
+    /// (паритет [`width_of`]). Тот же замер, что и отрисовка строки, —
+    /// ширины строк согласованы с рендером (F-6).
+    pub fn wrap(
+        &mut self,
+        fs: &mut cosmic_text::FontSystem,
+        text: &str,
+        family: &str,
+        size: f32,
+        max_w: f32,
+    ) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for word in text.split_whitespace() {
+            if current.is_empty() {
+                current.push_str(word);
+                continue;
+            }
+            let candidate = format!("{current} {word}");
+            if self.width_of(fs, &candidate, family, size) <= max_w {
+                current = candidate;
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current.push_str(word);
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
+    }
+
     /// Политика Ellipsis (AC-4.2): самая длинная граница символов
     /// префикса, чья ширина с хвостом «…» укладывается в `max_width`;
     /// текст целиком, если помещается. Бинарный поиск по префиксам —
@@ -339,6 +381,77 @@ mod tests {
     }
 
     const FAMILY: &str = "Noto Sans Display";
+
+    /// W3.3: `wrap` — жадный перенос по словам. Оракул — ручной жадный
+    /// цикл (прецедент `admin_ui::wrap_text`): строки совпадают бит-в-бит
+    /// (посимвольно) на корпусе RU/EN с короткими/длинными словами.
+    #[test]
+    fn wrap_matches_manual_greedy_oracle() {
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let corpus = [
+            "Короткая строка",
+            "Перенос слов по измеренной ширине строки с русским и English mix",
+            "однодлинноесловобезпробеловвнутри",
+            "a b c d e f g h i j k l m n o p",
+            "Сверхдлинное слово «в prismах» переноса не рвётся по глифам",
+        ];
+        for text in corpus {
+            for max_w in [40.0, 120.0, 300.0, 1000.0] {
+                // Ручной оракул — дословно прежний цикл потребителя.
+                let mut expected: Vec<String> = Vec::new();
+                let mut current = String::new();
+                for word in text.split_whitespace() {
+                    if current.is_empty() {
+                        current.push_str(word);
+                        continue;
+                    }
+                    let candidate = format!("{current} {word}");
+                    if m.width_of(&mut fs, &candidate, FAMILY, 13.0) <= max_w {
+                        current = candidate;
+                    } else {
+                        expected.push(std::mem::take(&mut current));
+                        current.push_str(word);
+                    }
+                }
+                if !current.is_empty() {
+                    expected.push(current);
+                }
+                if expected.is_empty() {
+                    expected.push(String::new());
+                }
+                let got = m.wrap(&mut fs, text, FAMILY, 13.0, max_w);
+                assert_eq!(got, expected, "text={text:?} max_w={max_w}");
+                // Каждая строка с пробелами (набранная из ≥2 слов)
+                // укладывается в max_w; строка-одиночное слово может быть
+                // шире max_w — семантика «длинное слово не рвётся».
+                for line in &got {
+                    let w = m.width_of(&mut fs, line, FAMILY, 13.0);
+                    if line.contains(' ') {
+                        assert!(w <= max_w, "набранная строка шире max_w: {line:?} w={w}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// W3.3: пустой текст → одна пустая строка; переносы строк источника
+    /// НЕ интерпретируются (split_whitespace схлопывает любые пробелы,
+    /// включая \n) — многострочный источник дробит потребитель.
+    #[test]
+    fn wrap_empty_text_and_newlines() {
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        assert_eq!(m.wrap(&mut fs, "", FAMILY, 13.0, 100.0), vec![""]);
+        assert_eq!(m.wrap(&mut fs, "   ", FAMILY, 13.0, 100.0), vec![""]);
+        // Слово шире max_w — отдельной строкой, не пустой список.
+        let got = m.wrap(&mut fs, "сверхдлинное", FAMILY, 13.0, 10.0);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], "сверхдлинное");
+        // Несколько слов, каждое шире max_w — по строке на слово.
+        let got = m.wrap(&mut fs, "первое второе", FAMILY, 13.0, 10.0);
+        assert_eq!(got, vec!["первое", "второе"]);
+    }
 
     #[test]
     fn empty_text_has_zero_width() {

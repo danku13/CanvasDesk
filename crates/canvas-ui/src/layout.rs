@@ -477,15 +477,23 @@ pub enum MeasuredItem<'a> {
     /// Фиксированный размер (эквивалент [`Child::fixed`]) — оракул
     /// эквивалентности с ручной проводкой `width_of → Child::fixed`.
     Fixed { w: f32, h: f32 },
-    /// Размер от текста: ширина = `width_of` (кламп в `max_w`, если
-    /// задан, и подъём до `min_w`), высота = измеренная (строки · кегль ·
-    /// `SCREEN_LINE_FACTOR`).
+    /// Размер от текста: ширина = `width_of` + `pad_x` (кламп в `max_w`,
+    /// если задан, и подъём до `min_w`), высота = измеренная (строки ·
+    /// кегль · `SCREEN_LINE_FACTOR`).
     Text {
         text: &'a str,
         /// Явный потолок ширины (ellipsis — решение потребителя).
         max_w: Option<f32>,
-        /// Пол ширины (например, пад чипа) — шире текста не будет уже.
+        /// Пол ширины (например, минимальная ширина кнопки) — уже текста
+        /// с падом не будет.
         min_w: f32,
+        /// Суммарный горизонтальный пад (лево+право), добавляемый к
+        /// измеренной ширине текста (W3.3 — пад-семантика F-13, названное
+        /// условие миграции проводок «width_of → размер ребёнка»:
+        /// чип/кнопка = один `Text { pad_x }` без ручного замера;
+        /// бит-в-бит эквивалент `Fixed { w: width_of + pad_x }`;
+        /// `pad_x: 0.0` — прежняя семантика дословно).
+        pad_x: f32,
     },
     /// Распорка (эквивалент [`Child::spacer`]).
     Spacer(f32),
@@ -504,7 +512,12 @@ impl MeasuredItem<'_> {
         match *self {
             MeasuredItem::Fixed { w, h } => Child::fixed(w, h),
             MeasuredItem::Spacer(len) => Child::spacer(len),
-            MeasuredItem::Text { text, max_w, min_w } => {
+            MeasuredItem::Text {
+                text,
+                max_w,
+                min_w,
+                pad_x,
+            } => {
                 let spec = crate::measure::TextSpec {
                     text,
                     family,
@@ -515,7 +528,7 @@ impl MeasuredItem<'_> {
                     weight: cosmic_text::Weight::MEDIUM,
                 };
                 let measured = m.measure(fs, &spec);
-                let mut w = measured.width.max(min_w);
+                let mut w = (measured.width + pad_x).max(min_w);
                 if let Some(max) = max_w {
                     w = w.min(max.max(min_w));
                 }
@@ -1296,16 +1309,19 @@ mod tests {
                     text: labels[0],
                     max_w: None,
                     min_w: 0.0,
+                    pad_x: 0.0,
                 },
                 MeasuredItem::Text {
                     text: labels[1],
                     max_w: None,
                     min_w: 0.0,
+                    pad_x: 0.0,
                 },
                 MeasuredItem::Text {
                     text: labels[2],
                     max_w: None,
                     min_w: 0.0,
+                    pad_x: 0.0,
                 },
             ],
             &mut m,
@@ -1435,11 +1451,13 @@ mod tests {
                     text: "длинная подпись которая заведомо шире потолка",
                     max_w: Some(50.0),
                     min_w: 0.0,
+                    pad_x: 0.0,
                 },
                 MeasuredItem::Text {
                     text: "Σ",
                     max_w: None,
                     min_w: 24.0,
+                    pad_x: 0.0,
                 },
             ],
             &mut m,
@@ -1449,6 +1467,109 @@ mod tests {
         );
         approx(rects[0].w, 50.0);
         assert!(rects[1].w >= 24.0);
+    }
+
+    /// W3.3 пад-семантика (каталог §9.3.1): `Text { pad_x }` бит-в-бит
+    /// эквивалентен ручной проводке `Fixed { w: width_of(text) + pad }`
+    /// (тот же шейпер, та же арифметика) — закрытие класса проводок
+    /// «width_of → размер ребёнка» (чип whatif/template).
+    #[test]
+    fn measured_text_pad_x_matches_manual_fixed_wire() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = TextMeasurer::new();
+        let family = "Noto Sans Display";
+        let label = "Сценарий A";
+        let pad = 2.0 * 6.0; // CHIP_PAD_X × 2 (чтоф-паттерн)
+        let slot = UiRect::new(0.0, 0.0, 600.0, 30.0);
+        // Проводка: замер вручную → фиксированный ребёнок.
+        let manual_w = m.width_of(&mut fs, label, family, 13.0) + pad;
+        let manual = Row::default().lay_out(slot, &[Child::fixed(manual_w, 18.0)]);
+        // Компонентный путь: текст с падом, замер внутри resolve.
+        let measured = Row::default().lay_out_measured(
+            slot,
+            &[MeasuredItem::Text {
+                text: label,
+                max_w: None,
+                min_w: 0.0,
+                pad_x: pad,
+            }],
+            &mut m,
+            &mut fs,
+            family,
+            13.0,
+        );
+        assert_eq!(
+            measured[0].w.to_bits(),
+            manual[0].w.to_bits(),
+            "ширина Text{{pad_x}} ≡ Fixed{{width_of+pad}} бит-в-бит"
+        );
+        assert_eq!(
+            (measured[0].x, measured[0].y),
+            (manual[0].x, manual[0].y),
+            "позиции совпадают"
+        );
+    }
+
+    /// Пад + пол ширины (кнопка whatif): `Text { pad_x, min_w }` ≡
+    /// `max(min_w, width_of + pad_x)` бит-в-бит — короткая подпись поднята
+    /// до `min_w`, длинная — текст+пад.
+    #[test]
+    fn measured_text_pad_x_min_w_button_parity() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = TextMeasurer::new();
+        let family = "Noto Sans Display";
+        let pad = 2.0 * 8.0; // BTN_PAD_X × 2
+        let min_w = 74.0; // BTN_WIDTH (чтоф-паттерн)
+        let short = "Да";
+        let long = "Сравнить сценарии";
+        let rects = Row::default().lay_out_measured(
+            UiRect::new(0.0, 0.0, 600.0, 30.0),
+            &[
+                MeasuredItem::Text {
+                    text: short,
+                    max_w: None,
+                    min_w,
+                    pad_x: pad,
+                },
+                MeasuredItem::Text {
+                    text: long,
+                    max_w: None,
+                    min_w,
+                    pad_x: pad,
+                },
+            ],
+            &mut m,
+            &mut fs,
+            family,
+            13.0,
+        );
+        let short_w = m.width_of(&mut fs, short, family, 13.0) + pad;
+        let long_w = m.width_of(&mut fs, long, family, 13.0) + pad;
+        // Оракул — прежняя проводка «btn_width → Fixed» через ТОТ ЖЕ
+        // движок (выход движка округляется round_px — сравнивать нужно
+        // на одном уровне абстракции; см. flex.rs round_px on freeze).
+        let slot = UiRect::new(0.0, 0.0, 600.0, 30.0);
+        let manual = Row::default().lay_out(
+            slot,
+            &[
+                Child::fixed(min_w.max(short_w), 18.0),
+                Child::fixed(min_w.max(long_w), 18.0),
+            ],
+        );
+        assert_eq!(
+            (rects[0].x, rects[0].y, rects[0].w),
+            (manual[0].x, manual[0].y, manual[0].w),
+            "короткая кнопка: Text{{pad_x, min_w}} ≡ проводке max(min_w, w+pad)"
+        );
+        assert_eq!(
+            (rects[1].x, rects[1].y, rects[1].w),
+            (manual[1].x, manual[1].y, manual[1].w),
+            "длинная кнопка: ширина = текст+пад (min_w не мешает)"
+        );
+        // Санити семантики: короткая поднята до min_w (до округления),
+        // длинная — шире min_w.
+        assert_eq!(rects[0].w, min_w.max(short_w).round());
+        assert!(rects[1].w > min_w);
     }
 
     // === FR-062 F-16: grid_cells ===
