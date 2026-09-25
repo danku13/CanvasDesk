@@ -11,14 +11,14 @@
       "name": "revenue",
       "type": "scalar",
       "default": 100000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "variable_costs",
       "type": "scalar",
       "default": 60000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

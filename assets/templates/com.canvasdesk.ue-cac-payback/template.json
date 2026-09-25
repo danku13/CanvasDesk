@@ -11,14 +11,14 @@
       "name": "cac",
       "type": "scalar",
       "default": 50,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "arpa",
       "type": "scalar",
       "default": 25,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {

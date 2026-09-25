@@ -11,7 +11,7 @@
       "name": "mrr",
       "type": "scalar",
       "default": 100000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

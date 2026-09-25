@@ -27,7 +27,7 @@
     "y": 0,
     "width": 260,
     "height": 220,
-    "text": "Статьи бюджета\nПрямые расходы за месяц: маркетинг и инструменты.\n\nmarketing = 1200 $\ntools = 300 $",
+    "text": "Статьи бюджета\nПрямые расходы за месяц: маркетинг и инструменты.\n\nmarketing = 1200 руб\ntools = 300 руб",
     "color": "5",
     "label": "Статьи"
    },
@@ -122,7 +122,7 @@
     "y": 0,
     "width": 260,
     "height": 220,
-    "text": "Budget items\nMonthly direct costs: marketing and tools.\n\nmarketing = 1200 $\ntools = 300 $",
+    "text": "Budget items\nMonthly direct costs: marketing and tools.\n\nmarketing = 1200 rub\ntools = 300 rub",
     "color": "5",
     "label": "Items"
    },

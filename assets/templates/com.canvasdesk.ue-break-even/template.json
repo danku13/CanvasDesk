@@ -11,21 +11,21 @@
       "name": "fixed_costs",
       "type": "scalar",
       "default": 20000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "price",
       "type": "scalar",
       "default": 50,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0.0001
     },
     {
       "name": "variable_cost",
       "type": "scalar",
       "default": 30,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

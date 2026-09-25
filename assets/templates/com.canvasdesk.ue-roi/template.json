@@ -11,14 +11,14 @@
       "name": "gain",
       "type": "scalar",
       "default": 180000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "capital",
       "type": "scalar",
       "default": 100000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0.0001
     }
   ],

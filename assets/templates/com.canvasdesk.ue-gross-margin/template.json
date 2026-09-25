@@ -11,14 +11,14 @@
       "name": "revenue",
       "type": "scalar",
       "default": 100000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "cogs",
       "type": "scalar",
       "default": 40000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     }
   ],

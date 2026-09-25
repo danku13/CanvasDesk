@@ -41,7 +41,7 @@
     "y": 60,
     "width": 270,
     "height": 150,
-    "text": "Зарплаты\nЕжемесячный фонд оплаты труда команды.\n\nsalaries = 12000 $",
+    "text": "Зарплаты\nЕжемесячный фонд оплаты труда команды.\n\nsalaries = 12000 руб",
     "color": "5"
    },
    {
@@ -51,7 +51,7 @@
     "y": 220,
     "width": 270,
     "height": 150,
-    "text": "Инструменты команды\nСервисы и подписки для разработки.\n\ntools = 1500 $",
+    "text": "Инструменты команды\nСервисы и подписки для разработки.\n\ntools = 1500 руб",
     "color": "5",
     "label": "Инструменты"
    },
@@ -76,7 +76,7 @@
     "y": 500,
     "width": 270,
     "height": 150,
-    "text": "Хостинг\nСерверы и облако под продакшн.\n\nhosting = 800 $",
+    "text": "Хостинг\nСерверы и облако под продакшн.\n\nhosting = 800 руб",
     "color": "5"
    },
    {
@@ -86,7 +86,7 @@
     "y": 660,
     "width": 270,
     "height": 150,
-    "text": "Лицензии\nСофт и лицензии на год.\n\nlicenses = 600 $",
+    "text": "Лицензии\nСофт и лицензии на год.\n\nlicenses = 600 руб",
     "color": "5"
    },
    {
@@ -282,7 +282,7 @@
     "y": 60,
     "width": 270,
     "height": 150,
-    "text": "Salaries\nMonthly payroll of the team.\n\nsalaries = 12000 $",
+    "text": "Salaries\nMonthly payroll of the team.\n\nsalaries = 12000 rub",
     "color": "5",
     "label": "Salaries"
    },
@@ -293,7 +293,7 @@
     "y": 220,
     "width": 270,
     "height": 150,
-    "text": "Team tools\nServices and subscriptions for development.\n\ntools = 1500 $",
+    "text": "Team tools\nServices and subscriptions for development.\n\ntools = 1500 rub",
     "color": "5",
     "label": "Tools"
    },
@@ -318,7 +318,7 @@
     "y": 500,
     "width": 270,
     "height": 150,
-    "text": "Hosting\nServers and cloud for production.\n\nhosting = 800 $",
+    "text": "Hosting\nServers and cloud for production.\n\nhosting = 800 rub",
     "color": "5",
     "label": "Hosting"
    },
@@ -329,7 +329,7 @@
     "y": 660,
     "width": 270,
     "height": 150,
-    "text": "Licenses\nSoftware and licenses for the year.\n\nlicenses = 600 $",
+    "text": "Licenses\nSoftware and licenses for the year.\n\nlicenses = 600 rub",
     "color": "5",
     "label": "Licenses"
    },

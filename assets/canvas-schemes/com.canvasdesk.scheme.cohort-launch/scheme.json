@@ -27,7 +27,7 @@
     "y": 0,
     "width": 260,
     "height": 202,
-    "text": "Запуск\nРазовая волна привлечения: сколько пользователей пришло и сколько на это потрачено.\n\nusers = 10000\nspend = 12000 $",
+    "text": "Запуск\nРазовая волна привлечения: сколько пользователей пришло и сколько на это потрачено.\n\nusers = 10000\nspend = 12000 руб",
     "color": "5"
    },
    {
@@ -37,7 +37,7 @@
     "y": 280,
     "width": 260,
     "height": 182,
-    "text": "Тариф\nПодписка: цена на пользователя в месяц и доля маржи.\n\narpu = 12 $\nmargin = 0.7",
+    "text": "Тариф\nПодписка: цена на пользователя в месяц и доля маржи.\n\narpu = 12 руб\nmargin = 0.7",
     "color": "5"
    },
    {
@@ -107,7 +107,7 @@
     "y": 280,
     "width": 320,
     "height": 220,
-    "text": "Вердикт\nПользователь приносит около семи с половиной долларов при цене привлечения 1.2: соотношение выше здоровой нормы.\nПоднимите расход волны — эффект и здоровье пересчитаются; сценарий на удержании покажет чувствительность LTV.",
+    "text": "Вердикт\nПользователь приносит около семи с половиной рублей при цене привлечения 1.2: соотношение выше здоровой нормы.\nПоднимите расход волны — эффект и здоровье пересчитаются; сценарий на удержании покажет чувствительность LTV.",
     "color": "4"
    }
   ],
@@ -235,7 +235,7 @@
     "y": 0,
     "width": 260,
     "height": 202,
-    "text": "Launch\nA one-time acquisition wave: how many users came and how much was spent.\n\nusers = 10000\nspend = 12000 $",
+    "text": "Launch\nA one-time acquisition wave: how many users came and how much was spent.\n\nusers = 10000\nspend = 12000 rub",
     "color": "5",
     "label": "Launch"
    },
@@ -246,7 +246,7 @@
     "y": 280,
     "width": 260,
     "height": 182,
-    "text": "Plan\nSubscription: price per user per month and the margin share.\n\narpu = 12 $\nmargin = 0.7",
+    "text": "Plan\nSubscription: price per user per month and the margin share.\n\narpu = 12 rub\nmargin = 0.7",
     "color": "5",
     "label": "Plan"
    },

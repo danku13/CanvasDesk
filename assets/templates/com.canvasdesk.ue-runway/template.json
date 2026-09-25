@@ -11,14 +11,14 @@
       "name": "cash",
       "type": "scalar",
       "default": 1000000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0
     },
     {
       "name": "monthly_burn",
       "type": "scalar",
       "default": 50000,
-      "unit": "usd",
+      "unit": "руб",
       "min": 0.0001
     }
   ],

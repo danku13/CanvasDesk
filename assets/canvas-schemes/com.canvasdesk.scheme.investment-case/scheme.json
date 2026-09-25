@@ -27,7 +27,7 @@
     "y": 0,
     "width": 260,
     "height": 200,
-    "text": "Вложения\nРазовая инвестиция и зеркальный поток со знаком минус для IRR.\n\ncapex = 500000 $\noutflow = 0 $ - capex",
+    "text": "Вложения\nРазовая инвестиция и зеркальный поток со знаком минус для IRR.\n\ncapex = 500000 руб\noutflow = 0 руб - capex",
     "color": "5"
    },
    {
@@ -47,7 +47,7 @@
     "y": 500,
     "width": 260,
     "height": 200,
-    "text": "Потоки\nПоложительные денежные потоки по годам проекта.\n\ny1 = 150000 $\ny2 = 220000 $\ny3 = 280000 $\ny4 = 320000 $",
+    "text": "Потоки\nПоложительные денежные потоки по годам проекта.\n\ny1 = 150000 руб\ny2 = 220000 руб\ny3 = 280000 руб\ny4 = 320000 руб",
     "color": "5"
    },
    {
@@ -57,7 +57,7 @@
     "y": 0,
     "width": 280,
     "height": 200,
-    "text": "PV\nПриведённая стоимость потоков: нулевой год — старт, каждый год дисконтирован своей степенью ставки.\n\npv = npv(Ставка.rate, 0 $, Потоки.y1, Потоки.y2, Потоки.y3, Потоки.y4)",
+    "text": "PV\nПриведённая стоимость потоков: нулевой год — старт, каждый год дисконтирован своей степенью ставки.\n\npv = npv(Ставка.rate, 0 руб, Потоки.y1, Потоки.y2, Потоки.y3, Потоки.y4)",
     "color": "2"
    },
    {
@@ -77,7 +77,7 @@
     "y": 0,
     "width": 280,
     "height": 180,
-    "text": "Индекс\nИндекс прибыльности: приведённые потоки на каждый вложенный доллар — значения приходят в параметры.\n\npi = $npv / $capex + 1",
+    "text": "Индекс\nИндекс прибыльности: приведённые потоки на каждый вложенный рубль — значения приходят в параметры.\n\npi = $npv / $capex + 1",
     "color": "2"
    },
    {
@@ -107,7 +107,7 @@
     "y": 280,
     "width": 320,
     "height": 220,
-    "text": "Вердикт\nПроект приносит на 212 тысяч долларов приведённой ценности больше вложений: индекс 1.4, IRR около 28 процентов против ставки 12.\nСценарий на ставке покажет чувствительность NPV и индекса без правки базы.",
+    "text": "Вердикт\nПроект приносит на 212 тысяч рублей приведённой ценности больше вложений: индекс 1.4, IRR около 28 процентов против ставки 12.\nСценарий на ставке покажет чувствительность NPV и индекса без правки базы.",
     "color": "4"
    }
   ],
@@ -247,7 +247,7 @@
     "y": 0,
     "width": 260,
     "height": 200,
-    "text": "Outlay\nA one-time investment and its mirrored negative flow for IRR.\n\ncapex = 500000 $\noutflow = 0 $ - capex",
+    "text": "Outlay\nA one-time investment and its mirrored negative flow for IRR.\n\ncapex = 500000 rub\noutflow = 0 rub - capex",
     "color": "5",
     "label": "Outlay"
    },
@@ -269,7 +269,7 @@
     "y": 500,
     "width": 260,
     "height": 200,
-    "text": "Flows\nPositive cash flows by project year.\n\ny1 = 150000 $\ny2 = 220000 $\ny3 = 280000 $\ny4 = 320000 $",
+    "text": "Flows\nPositive cash flows by project year.\n\ny1 = 150000 rub\ny2 = 220000 rub\ny3 = 280000 rub\ny4 = 320000 rub",
     "color": "5",
     "label": "Flows"
    },
@@ -280,7 +280,7 @@
     "y": 0,
     "width": 280,
     "height": 200,
-    "text": "PV\nPresent value of the flows: year zero is the start, every year is discounted by its power of the rate.\n\npv = npv(Rate.rate, 0 $, Flows.y1, Flows.y2, Flows.y3, Flows.y4)",
+    "text": "PV\nPresent value of the flows: year zero is the start, every year is discounted by its power of the rate.\n\npv = npv(Rate.rate, 0 rub, Flows.y1, Flows.y2, Flows.y3, Flows.y4)",
     "color": "2"
    },
    {
@@ -300,7 +300,7 @@
     "y": 0,
     "width": 280,
     "height": 180,
-    "text": "Index\nProfitability index: discounted flows per each invested dollar — values arrive in parameters.\n\npi = $npv / $capex + 1",
+    "text": "Index\nProfitability index: discounted flows per each invested ruble — values arrive in parameters.\n\npi = $npv / $capex + 1",
     "color": "2"
    },
    {

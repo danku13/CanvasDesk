@@ -37,7 +37,7 @@
     "y": 240,
     "width": 260,
     "height": 180,
-    "text": "Ставка\nСтоимость отделки за квадратный метр.\n\nrate = 25 $",
+    "text": "Ставка\nСтоимость отделки за квадратный метр.\n\nrate = 25 руб",
     "color": "5"
    },
    {
@@ -47,7 +47,7 @@
     "y": 480,
     "width": 260,
     "height": 180,
-    "text": "Материалы\nЧерновые и чистовые материалы на все комнаты.\n\nmaterials = 700 $",
+    "text": "Материалы\nЧерновые и чистовые материалы на все комнаты.\n\nmaterials = 700 руб",
     "color": "5"
    },
    {
@@ -231,7 +231,7 @@
     "y": 240,
     "width": 260,
     "height": 180,
-    "text": "Rate\nCost of finishing per square meter.\n\nrate = 25 $",
+    "text": "Rate\nCost of finishing per square meter.\n\nrate = 25 rub",
     "color": "5",
     "label": "Rate"
    },
@@ -242,7 +242,7 @@
     "y": 480,
     "width": 260,
     "height": 180,
-    "text": "Materials\nRough and finish materials for all rooms.\n\nmaterials = 700 $",
+    "text": "Materials\nRough and finish materials for all rooms.\n\nmaterials = 700 rub",
     "color": "5",
     "label": "Materials"
    },
