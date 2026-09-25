@@ -830,6 +830,10 @@ pub struct DropdownDemo {
 }
 
 /// Демо-строка таблицы (kit-Row на общих направляющих).
+/// FR-068 W3 (этап M4): источник значений/геометрии — компонент Table
+/// ([`kit::Table::set_rows`] + [`kit::Table::row_layout_with`] в
+/// `fill_body`); структура сохранена (предвычисленный [`kit::RowLayout`]) —
+/// отрисовка прежняя ([`kit::paint_row`] в `draw_fill`).
 #[derive(Debug, Clone)]
 pub struct FillTableDemo {
     pub level: FillLevel,
@@ -855,7 +859,7 @@ pub struct FillLayout {
     pub chip_lays: Vec<(FillLevel, UiRect)>,
     /// Dropdown: якорь + меню + видимые пункты.
     pub dropdown: Vec<DropdownDemo>,
-    /// Таблица строк: демо kit-Row.
+    /// Таблица строк: демо kit-Row (геометрия — Table, FR-068 M4).
     pub row_table: Vec<FillTableDemo>,
     /// Полная высота тела (для скролла).
     pub h: f32,
@@ -871,7 +875,6 @@ pub fn fill_body(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> FillLayout {
-    let _ = p;
     let mut lay = FillLayout::default();
     let content_x = demo.x + 8.0;
     let content_w = (demo.w - 16.0).max(0.0);
@@ -1059,7 +1062,15 @@ pub fn fill_body(
         });
     }
 
-    // Таблица строк: kit-Row на общих направляющих (пустое/2/4+Σ)
+    // Таблица строк: компонент Table (FR-068 W3, этап M4) — источник
+    // значений/геометрии демо (set_rows + row_layout_with per слот);
+    // «пустое/2/4+Σ». Параметры — паритет прежнего ручного пути:
+    // right_pad 8 (правый край направляющих был rect.right() − 8;
+    // viewport_right = rect.right() — ПРАВЫЙ КРАЙ КОНТРОЛ-КОЛОНКИ В
+    // КООРДИНАТАХ СЛОТОВ), шаг слотов LIST_ROW_H + 2, лидер on
+    // (RowOpts::default), зазор направляющих TABLE_GUIDE_GAP. Геометрия/
+    // стили демо не меняются: FillTableDemo хранит тот же предвычисленный
+    // RowLayout, отрисовка — прежняя (paint_row в draw_fill).
     type TableRowSpec = (
         FillLevel,
         Vec<(&'static str, &'static str, &'static str, kit::RowMarker)>,
@@ -1083,6 +1094,18 @@ pub fn fill_body(
             ],
         ),
     ];
+    let mut table = kit::Table::new(kit::TableProps {
+        size: LABEL_SIZE,
+        family: FONT_FAMILY,
+        opts: kit::TableOpts {
+            leader: true,
+            gap: canvas_core::tokens::TABLE_GUIDE_GAP,
+            row_h: kit::LIST_ROW_H,
+            row_gap: 2.0,
+            right_pad: 8.0,
+        },
+        palette: *p,
+    });
     for (level, specs) in table_specs {
         let rect = cell_rect(crate::i18n::keys::ADMIN_ROW_ROWS, level);
         if specs.is_empty() || rect.w <= 0.0 {
@@ -1098,18 +1121,36 @@ pub fn fill_body(
                 badge: "",
             })
             .collect();
-        let Some(guides) = kit::row_guides(
-            m,
-            fs,
-            FONT_FAMILY,
-            LABEL_SIZE,
-            &parts,
-            rect.right() - 8.0,
-            canvas_core::tokens::TABLE_GUIDE_GAP,
-        ) else {
+        // Строки Table — те же данные (+ состояния/зебра-override: Σ
+        // полного ряда — Selected, нечётные — fill слотом hover_fill, F-8:
+        // готовый слот, без арифметики).
+        table.set_rows(
+            parts
+                .iter()
+                .enumerate()
+                .map(|(i, part)| kit::TableRow {
+                    marker: part.marker,
+                    label: part.label.to_owned(),
+                    value: part.value.to_owned(),
+                    unit: part.unit.to_owned(),
+                    badge: (!part.badge.is_empty()).then(|| part.badge.to_owned()),
+                    state: if i + 1 == parts.len() && level == FillLevel::Full {
+                        KitState::Selected
+                    } else {
+                        KitState::Normal
+                    },
+                    style: kit::TableRowStyle {
+                        fill: (i % 2 == 1).then_some(p.hover_fill),
+                        ..kit::TableRowStyle::default()
+                    },
+                })
+                .collect(),
+        );
+        // Деградация §4.2 (guides None) — паритет прежнего пути
+        // (row_guides None → ряд пропускался).
+        if table.guides_with(m, fs, rect.right()).is_none() {
             continue;
-        };
-        let opts = kit::RowOpts::default();
+        }
         for (i, part) in parts.iter().copied().enumerate() {
             let row_slot = UiRect::new(
                 rect.x,
@@ -1117,16 +1158,9 @@ pub fn fill_body(
                 rect.w,
                 kit::LIST_ROW_H,
             );
-            let rl = kit::row_layout(
-                m,
-                fs,
-                FONT_FAMILY,
-                LABEL_SIZE,
-                row_slot,
-                guides,
-                &part,
-                &opts,
-            );
+            let Some(rl) = table.row_layout_with(m, fs, rect.right(), row_slot, i) else {
+                continue;
+            };
             let is_sum = i + 1 == parts.len() && level == FillLevel::Full;
             lay.row_table.push(FillTableDemo {
                 level,
@@ -2468,6 +2502,33 @@ mod tests {
             .row_table
             .iter()
             .any(|d| d.level == FillLevel::Full && d.state == KitState::Selected));
+        // FR-068 W3 (M4): геометрия — компонент Table (set_rows +
+        // row_layout_with): общие направляющие уровня сохранены — значения
+        // и юниты всех строк полного ряда на одних осях (проход A/B §4.2)
+        let full_lays: Vec<&FillTableDemo> = all
+            .row_table
+            .iter()
+            .filter(|d| d.level == FillLevel::Full)
+            .collect();
+        let value_right = full_lays[0].lay.value.right();
+        let unit_right = full_lays[0].lay.unit.right();
+        assert!(
+            full_lays
+                .iter()
+                .all(|d| (d.lay.value.right() - value_right).abs() < 0.01),
+            "значения полного ряда — на колоночной направляющей (D-4)"
+        );
+        assert!(
+            full_lays
+                .iter()
+                .all(|d| (d.lay.unit.right() - unit_right).abs() < 0.01),
+            "юниты полного ряда — на направляющей юнитов"
+        );
+        // Зебра-override демо (нечётные строки) — как прежде
+        assert!(full_lays
+            .iter()
+            .enumerate()
+            .all(|(i, d)| d.zebra == (i % 2 == 1)));
     }
 
     /// Отрисовка тел непуста (smoke: quads/texts от draw_components/draw_fill).

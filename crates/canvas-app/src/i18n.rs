@@ -490,6 +490,9 @@ pub mod keys {
     pub const KIT_WRAP_CHIP: &str = "kit.wrap.chip";
     /// FR-061 (этап E, D-15): секция kit-Row витрины + демо-строки.
     pub const KIT_SECTION_ROW: &str = "kit.section.row";
+    /// FR-068 W3 (этап M3): секция Table витрины — те же демо-данные через
+    /// компонент [`canvas_ui::kit::Table`] (рядом с секцией Row).
+    pub const KIT_SECTION_TABLE: &str = "kit.section.table";
     pub const KIT_ROW_PRICE: &str = "kit.row.price";
     pub const KIT_ROW_QTY: &str = "kit.row.qty";
     pub const KIT_ROW_TOTAL: &str = "kit.row.total";
@@ -1090,6 +1093,11 @@ const RU: &[(&str, &str)] = &[
     (
         keys::KIT_SECTION_ROW,
         "Строка таблицы (Row: направляющие + лидер)",
+    ),
+    // FR-068 W3 (M3): секция Table — те же строки через компонент Table
+    (
+        keys::KIT_SECTION_TABLE,
+        "Таблица (Table: строки на общих направляющих)",
     ),
     (keys::KIT_ROW_PRICE, "цена"),
     (keys::KIT_ROW_QTY, "кол-во"),
@@ -1902,6 +1910,11 @@ const EN: &[(&str, &str)] = &[
     (
         keys::KIT_SECTION_ROW,
         "Table row (Row: column guides + leader)",
+    ),
+    // FR-068 W3 (M3): Table section — same rows via the Table component
+    (
+        keys::KIT_SECTION_TABLE,
+        "Table (rows on shared guides)",
     ),
     (keys::KIT_ROW_PRICE, "price"),
     (keys::KIT_ROW_QTY, "qty"),
