@@ -1,10 +1,13 @@
 //! FR-068 W3: список/скролл (ScrollState/list_rows/scroll_bar + taffy scroll-area) — перенос из kit.rs 1:1 (W3).
 //!
-//! Владелец волны (агент 3-c): дополнить `Props` + `impl Component` для
-//! list; ScrollState — стабильный API (FR-058).
+//! W3 (агент 3-c): слой компонентной модели ДОБАВЛЕН: [`ListProps`],
+//! [`List`] и `impl Component` (layout/paint/hit_test). Стабильный API
+//! (FR-058) не менялся: [`ScrollState`], [`list_rows`], [`scroll_bar`].
 
-use super::{KitPalette, SCROLLBAR_KNOB_MIN, SCROLLBAR_WIDTH};
+use super::{Component, KitPalette, SCROLLBAR_KNOB_MIN, SCROLLBAR_WIDTH};
 use crate::geometry::UiRect;
+use crate::layout::LayoutBackend;
+use crate::paint::Painter;
 
 #[cfg(feature = "taffy")]
 use crate::layout::{SceneNode, TaffyBackend};
@@ -184,11 +187,125 @@ pub fn scroll_area_taffy(
     }
 }
 
+// --- List: компонентная модель (FR-068 W3) ----------------------------------
+
+/// Свойства [`List`] (декларативный вход кадра; FR-068 W3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ListProps {
+    /// Высота строки (ui px) — параметр потребителя (кит-константы
+    /// `LIST_ROW_H`/`LIST_ROW_GAP` — лишь дефолты кита).
+    pub row_h: f32,
+    /// Зазор между строками (ui px).
+    pub gap: f32,
+    /// Срез слотов палитры (бегунок — слот `control_border`).
+    pub palette: KitPalette,
+}
+
+/// Список — retained-компонент (FR-068 W3): `Props` + стабильный
+/// [`ScrollState`] (FR-058; поле `scroll` публично — потребитель ведёт
+/// offset/content_h/viewport_h через `scroll_by`/`clamp`).
+///
+/// Разделение труда (контракт кита «list_rows — чистая геометрия»):
+/// [`Component::layout`] — ТОЛЬКО rect'ы видимых строк ([`list_rows`], в
+/// порядке модельных индексов); фон/зебру/выделение/тексты строк рисует
+/// ПОТРЕБИТЕЛЬ слотами своей темы (hover/selected — его WidgetState'ы —
+/// W3 без hover-логики в List, образец `canvas-app/overlays.rs`:
+/// `chip_style(row_widget.kit_state(), …)` по rect'ам list_rows).
+/// [`Component::paint`] — только хром скроллбара: бегунок [`scroll_bar`]
+/// слотом `control_border`. Строки НЕ рисуются: прозрачный rect строки —
+/// мусорный item в draw-журнале Painter (G7-данные).
+#[derive(Debug, Clone, PartialEq)]
+pub struct List {
+    /// Свойства кадра.
+    pub props: ListProps,
+    /// Состояние скролла (стабильное поле; FR-058).
+    pub scroll: ScrollState,
+}
+
+impl List {
+    /// Новый список: скролл — дефолтный (offset 0; content/viewport — 0:
+    /// потребитель заполняет `scroll` своей моделью до layout).
+    pub fn new(props: ListProps) -> Self {
+        Self {
+            props,
+            scroll: ScrollState::default(),
+        }
+    }
+
+    /// Число строк модели из инварианта `scroll.content_h` («полная высота
+    /// контента — сумма высот всех строк + зазоры»):
+    /// `content_h = n·row_h + (n−1)·gap ⇒ n = (content_h + gap)/(row_h+gap)`;
+    /// округление гасит ошибку f32 авторского `content_h`. `row_h+gap ≤ 0`
+    /// (и NaN) — 0. Сигнатура [`Component::layout`] числа строк не принимает,
+    /// а `ListProps` по постановке W3 его не содержит — восстанавливаем из
+    /// `content_h`, который потребитель и так ведёт рядом с моделью строк.
+    fn row_count(&self) -> usize {
+        let stride = self.props.row_h + self.props.gap;
+        if stride <= 0.0 || stride.is_nan() {
+            return 0;
+        }
+        ((self.scroll.content_h + self.props.gap) / stride)
+            .round()
+            .max(0.0) as usize
+    }
+}
+
+impl Component for List {
+    type Props = ListProps;
+
+    fn props(&self) -> &Self::Props {
+        &self.props
+    }
+
+    /// Видимые строки: [`list_rows`] в слоте (offset/viewport — из
+    /// `self.scroll`; row_h/gap — из `self.props`; контракт: потребитель
+    /// держит `scroll.viewport_h == slot.h`). Backend не используется:
+    /// [`list_rows`] — чистая функция слота (паритет движков тривиален,
+    /// §Контракт-3 FR-068; opt-in taffy-путь — [`scroll_area_taffy`]).
+    fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
+        let count = self.row_count();
+        list_rows(slot, &self.scroll, self.props.row_h, self.props.gap, count)
+            .into_iter()
+            .map(|(_, rect)| rect)
+            .collect()
+    }
+
+    /// ТОЛЬКО бегунок скроллбара ([`scroll_bar`]; `None` — 0 items):
+    /// слот `control_border`, прозрачная рамка, радиус = w/2 (пилюля —
+    /// как у потребителя-пилота: `d.rect(knob, control_border, [0;4], 2.0)`).
+    /// Область бегунка восстанавливается из `rects` (строки [`list_rows`]
+    /// full-width в вьюпорте): x/w — от первой видимой строки; y — её верх
+    /// (точен при offset = 0 и выровненном по stride offset); h —
+    /// `scroll.viewport_h` (окно видимости — точно по контракту). Точный
+    /// якорь по слоту — потребитель вызывает [`scroll_bar`] сам.
+    fn paint(&self, painter: &mut Painter, rects: &[UiRect]) {
+        let Some(&first) = rects.first() else {
+            return;
+        };
+        let area = UiRect::new(first.x, first.y, first.w, self.scroll.viewport_h);
+        if let Some(knob) = scroll_bar(area, &self.scroll, &self.props.palette) {
+            painter.rect(
+                knob,
+                self.props.palette.control_border,
+                [0.0; 4],
+                knob.w / 2.0,
+            );
+        }
+    }
+
+    // hit_test — дефолтный: ComponentHit::pick по rects — индекс строки,
+    // содержащей точку (зазор между строками — None: строка не перекрывает
+    // свой stride).
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component::test_support::palette_a;
-    use crate::component::{LIST_ROW_GAP, LIST_ROW_H};
+    use crate::component::test_support::{palette_a, palette_b};
+    use crate::component::{ComponentHit, LIST_ROW_GAP, LIST_ROW_H};
+    use crate::geometry::UiPoint;
+    use crate::layout::default_backend;
+    use crate::paint::{PaintItem, Painter};
     #[test]
     fn scroll_state_scroll_by_positive_and_negative() {
         let mut s = ScrollState {
@@ -430,6 +547,120 @@ mod tests {
         };
         let knob = scroll_bar(area, &s, &palette_a()).unwrap();
         assert!(knob.h >= SCROLLBAR_KNOB_MIN, "минимальная высота бегунка");
+    }
+
+    // --- List: компонентная модель (FR-068 W3) -------------------------------
+    #[test]
+    fn list_component_layout_matches_list_rows_directly() {
+        let slot = UiRect::new(10.0, 20.0, 200.0, 100.0);
+        // 5 строк: content_h = 5·26 + 4·6 = 154 > viewport 100 — нужен скролл.
+        let scroll = ScrollState {
+            offset: 0.0,
+            content_h: 154.0,
+            viewport_h: 100.0,
+        };
+        let mut list = List {
+            props: ListProps {
+                row_h: LIST_ROW_H,
+                gap: LIST_ROW_GAP,
+                palette: palette_a(),
+            },
+            scroll,
+        };
+        let rects = list.layout(default_backend(), slot);
+        let direct = list_rows(slot, &list.scroll, LIST_ROW_H, LIST_ROW_GAP, 5);
+        assert!(!rects.is_empty(), "видимые строки есть");
+        assert_eq!(
+            rects.len(),
+            direct.len(),
+            "количество согласовано с list_rows напрямую"
+        );
+        for (got, (_, expected)) in rects.iter().zip(&direct) {
+            assert_eq!(got, expected, "rect строки = list_rows");
+        }
+        // Смещённый offset (частичные строки краёв включены) — тоже согласован.
+        list.scroll.offset = 40.0;
+        let rects = list.layout(default_backend(), slot);
+        let direct = list_rows(slot, &list.scroll, LIST_ROW_H, LIST_ROW_GAP, 5);
+        assert_eq!(rects.len(), direct.len());
+        for (got, (_, expected)) in rects.iter().zip(&direct) {
+            assert_eq!(got, expected);
+        }
+    }
+    #[test]
+    fn list_component_paint_emits_scrollbar_knob_when_needed() {
+        let palette = palette_a();
+        let slot = UiRect::new(10.0, 20.0, 200.0, 100.0);
+        let mut list = List {
+            props: ListProps {
+                row_h: LIST_ROW_H,
+                gap: LIST_ROW_GAP,
+                palette,
+            },
+            scroll: ScrollState {
+                offset: 0.0,
+                content_h: 154.0,
+                viewport_h: 100.0,
+            },
+        };
+        let rects = list.layout(default_backend(), slot);
+        let mut p = Painter::new();
+        list.paint(&mut p, &rects);
+        assert_eq!(
+            p.items().len(),
+            1,
+            "needs_scroll — ровно один item: бегунок"
+        );
+        let expected = scroll_bar(slot, &list.scroll, &palette).unwrap();
+        assert_eq!(
+            p.items()[0],
+            PaintItem::Rect {
+                rect: expected,
+                fill: palette.control_border,
+                border: [0.0; 4],
+                radius: expected.w / 2.0,
+            },
+            "бегунок: слот control_border, прозрачная рамка, радиус w/2"
+        );
+        // Контент меньше вьюпорта — скроллбара нет (0 items; строки рисует
+        // потребитель — paint строк не эмитит никогда).
+        list.scroll = ScrollState {
+            offset: 0.0,
+            content_h: 90.0,
+            viewport_h: 100.0,
+        };
+        let rects = list.layout(default_backend(), slot);
+        let mut p = Painter::new();
+        list.paint(&mut p, &rects);
+        assert!(p.items().is_empty(), "без переполнения — 0 items");
+    }
+    #[test]
+    fn list_component_hit_test_finds_visible_row() {
+        let slot = UiRect::new(0.0, 0.0, 200.0, 100.0);
+        let list = List {
+            props: ListProps {
+                row_h: LIST_ROW_H,
+                gap: LIST_ROW_GAP,
+                palette: palette_b(),
+            },
+            scroll: ScrollState {
+                offset: 0.0,
+                content_h: 154.0,
+                viewport_h: 100.0,
+            },
+        };
+        let rects = list.layout(default_backend(), slot);
+        // Центр второй строки (stride 32: y=32..58) — индекс 1.
+        let row1 = rects[1];
+        let inside = UiPoint::new(row1.x + row1.w / 2.0, row1.y + row1.h / 2.0);
+        assert_eq!(
+            list.hit_test(&rects, inside),
+            Some(ComponentHit { index: 1 }),
+            "hit_test дефолтный: индекс строки-rect'а"
+        );
+        // Точка в зазоре между строками (y = 26..32) — ни одна не содержит.
+        let gap_point = UiPoint::new(100.0, 29.0);
+        assert_eq!(list.hit_test(&rects, gap_point), None);
     }
 
     // --- switch: on/off позиция, геометрия в слоте, стили --------------------
