@@ -102,6 +102,10 @@ pub(super) fn paint_items_to_band(
                     PaintAlign::Center => TextAlign::Center,
                 },
             }),
+            // FR-068 W1: клип — прозрачный проход для consumer-обхода:
+            // дети конвертируются как обычные items (draw-порядок сохранён);
+            // отсечение — scissor FR-056 на стороне рендера, не здесь.
+            PaintItem::ClipRect { items, .. } => paint_items_to_band(items, quads, texts),
         }
     }
 }
@@ -149,6 +153,12 @@ pub(super) fn paint_items_to_stage(
                     PaintAlign::Center => TextAlign::Center,
                 },
             }),
+            // FR-068 W1: клип — прозрачный проход для consumer-обхода:
+            // дети конвертируются как обычные items (draw-порядок сохранён);
+            // отсечение — scissor FR-056 на стороне рендера, не здесь.
+            PaintItem::ClipRect { items, .. } => {
+                paint_items_to_stage(items, camera, viewport, zoom, quads, texts)
+            }
         }
     }
 }
