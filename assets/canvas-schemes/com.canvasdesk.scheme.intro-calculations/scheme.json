@@ -101,5 +101,103 @@
     "fromOutput": "limit"
    }
   ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 240,
+    "text": "Live calculations\nChange a number in any card and the chain recomputes on its own: formulas are read line by line, units are preserved.\nThe double line “Demand → Load” is a bundle of two edges: a click opens the main stage with values and “Object.Field” addresses.",
+    "color": "4"
+   },
+   {
+    "id": "demand",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 200,
+    "text": "Demand\nInputs: users and sessions per user.\n\nusers = 1000\nsessions = 5",
+    "color": "5",
+    "label": "Demand"
+   },
+   {
+    "id": "load",
+    "type": "text",
+    "x": 800,
+    "y": 20,
+    "width": 280,
+    "height": 200,
+    "text": "Load\nTotal sessions over the period: users times sessions.\n\ntotal = Demand.users * Demand.sessions",
+    "color": "2",
+    "label": "Load"
+   },
+   {
+    "id": "limit",
+    "type": "text",
+    "x": 440,
+    "y": 300,
+    "width": 260,
+    "height": 180,
+    "text": "Limit\nThroughput: how many sessions the service can sustain.\n\nlimit = 8000",
+    "color": "5",
+    "label": "Limit"
+   },
+   {
+    "id": "share",
+    "type": "text",
+    "x": 1160,
+    "y": 20,
+    "width": 280,
+    "height": 200,
+    "text": "Share of limit\nUtilization: load to throughput.\n\nshare = Load.total / Limit.limit",
+    "color": "2",
+    "label": "Share"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 20,
+    "width": 320,
+    "height": 200,
+    "text": "Verdict\nThe limit is occupied just under two thirds: there is still headroom.\nDouble the users in the demand card and the share will cross the limit; the “Demand → Load” bundle shows where the values come from.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "demand",
+    "toNode": "load",
+    "flowKind": "value",
+    "fromOutput": "users"
+   },
+   {
+    "id": "e2",
+    "fromNode": "demand",
+    "toNode": "load",
+    "flowKind": "value",
+    "fromOutput": "sessions"
+   },
+   {
+    "id": "e3",
+    "fromNode": "load",
+    "toNode": "share",
+    "flowKind": "value",
+    "fromOutput": "total"
+   },
+   {
+    "id": "e4",
+    "fromNode": "limit",
+    "toNode": "share",
+    "flowKind": "value",
+    "fromOutput": "limit"
+   }
+  ]
  }
 }
