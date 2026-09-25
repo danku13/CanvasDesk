@@ -79,7 +79,12 @@ FR-062 (layout v2): расширения тех же примитивов — т
   — размер от контента: ширина/высота текста из TextMeasurer внутри
   раскладки (эвристики невозможны — measurer в сигнатуре); кламп ширины —
   только явный `max_w` (молчаливого среза нет — G5); ellipsis — решение
-  потребителя.
+  потребителя. W3.3 (пад-семантика F-13): `Text { pad_x, h }` —
+  `pad_x` — суммарный горизонтальный пад, добавляемый к измеренной ширине
+  (бит-в-бит ≡ проводке `Fixed { w: width_of + pad_x }` — чип/кнопка =
+  один `Text` без ручного замера: whatif/template); `h: Some(константа)` —
+  явная высота дизайн-константой (чип `CHIP_HEIGHT 26` ≠ измеренной
+  `13·1.3 = 16.9`), `None` — измеренная; оракулы бит-в-бит в layout.rs.
 - `RowPolicy::Wrap` — жадная упаковка в строки (высота строки = max детей,
   gap — по обеим осям, cross — внутри строки); число видимых строк задаёт
   ВЫСОТА слота, перелив за нижний край не маскируется (линт G4).
@@ -105,12 +110,19 @@ let mut measurer = canvas_ui::measure::TextMeasurer::new();
 let mut fs = canvas_render::text::measure_font_system();
 let w = measurer.width_of(&mut fs, label, canvas_render::text::SANS_FAMILY, 13.0);
 let cut = measurer.ellipsis(&mut fs, label, FAMILY, 13.0, max_width);
+let lines = measurer.wrap(&mut fs, paragraph, FAMILY, 13.0, max_w); // W3.3
 ```
 
 - measurer создаётся на перекомпоновку/кадр (дешёвый; кэш внутри кадра);
 - `FontSystem` — владение рендера (`measure_font_system`), аргументом;
 - эвристики «символов × коэффициент» и `chars.truncate` запрещены (класс
-  дефекта CR-015; усечение — только `ellipsis` по фактической ширине).
+  дефекта CR-015; усечение — только `ellipsis` по фактической ширине);
+- `wrap(fs, text, family, size, max_w)` (W3.3) — жадный перенос по словам
+  (`split_whitespace`; слово шире `max_w` — отдельной строкой, без разрыва
+  по глифам; пустой текст → одна пустая строка; вес MEDIUM) — замена
+  ручных циклов переноса потребителей (прецедент `admin_ui::wrap_text`;
+  span-aware перенос docs-вьюера — отдельный контентный движок, не
+  конкурент).
 
 **Shaper trait (FR-068 W2, ADR-0015)**: cosmic-text изолирован за
 trait-границей `Shaper` (`shape` + `font_system`) — единственной точкой
