@@ -43,7 +43,8 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
     // светлый фон → затемнённый слот EXPLAIN_LEAF_LIGHT, тёмный → EXPLAIN_LEAF
     // (те же константы, что dark()/light() в theme.rs; контраст ≥ 3:1).
     let [br, bg, bb, _] = c["background"];
-    let explain_leaf = if 0.2126 * br + 0.7152 * bg + 0.0722 * bb > 0.5 {
+    let is_light_bg = 0.2126 * br + 0.7152 * bg + 0.0722 * bb > 0.5;
+    let explain_leaf = if is_light_bg {
         canvas_core::tokens::EXPLAIN_LEAF_LIGHT
     } else {
         canvas_core::tokens::EXPLAIN_LEAF
@@ -66,6 +67,34 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         grid_minor: rgb3("grid_minor"),
         grid_major: rgb3("grid_major"),
         card_fill: rgba("card_fill"),
+        // FR-075: слоты вёрстки карточки в JSON-пресетах не хранятся
+        // (валидатор I-47.1 фиксирует набор ключей) — выводятся из соседних
+        // тонов: контур карточки/линии зон — тона сетки (средние тона
+        // пресета), тинт полосы «ИТОГ» — акцент α0.06, значение — тон link,
+        // чипы — гарантированно-контрастные тона пресета (accent/hud/
+        // whatif_badge — те же, что в тестах графики ≥ 3:1), зебра —
+        // прозрачные прогонки по знаку фона.
+        card_edge: {
+            let g = rgb3("grid_major");
+            [g[0], g[1], g[2], 1.0]
+        },
+        zone_top: {
+            let g = rgb3("grid_minor");
+            [g[0], g[1], g[2], 1.0]
+        },
+        strip_tint: {
+            let a = rgba("accent");
+            [a[0], a[1], a[2], 0.06]
+        },
+        result_value: color("link"),
+        chip_calc: rgba("accent"),
+        chip_note: rgba("hud"),
+        chip_file: rgba("whatif_badge"),
+        zebra_fill: if is_light_bg {
+            [0.078, 0.094, 0.157, 0.03]
+        } else {
+            [1.0, 1.0, 1.0, 0.04]
+        },
         edge_edit_fill: rgba("edge_edit_fill"),
         edge_label_fill: rgba("edge_label_fill"),
         menu_fill: rgba("menu_fill"),

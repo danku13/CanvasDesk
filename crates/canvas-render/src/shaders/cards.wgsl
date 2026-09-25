@@ -48,7 +48,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let corner = corners[in.vertex_index % 6u];
 
     // Тень выступает за край карточки — расширяем квадрат на запас
-    let margin = 12.0 / camera.effective_zoom; // world px
+    // (FR-075: blur 10 + offsetY 3 прототипа — запас 16 world px)
+    let margin = 16.0 / camera.effective_zoom; // world px
     let world = in.pos + (corner * (in.size + 2.0 * margin) - margin);
     let screen = world_to_screen(world);
 
@@ -107,10 +108,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fill_alpha = (1.0 - smoothstep(-aa, aa, sd)) * in.fill.a;
 
     // Мягкая тень: тот же SDF со смещением и размытием; params.w = 1 — без тени
-    // (мелкие кружки связей/портов, T8: тень крупнее самого кружка)
-    let shadow_offset = vec2<f32>(0.0, 2.0);
+    // (мелкие кружки связей/портов, T8: тень крупнее самого кружка).
+    // FR-075 (вёрстка prototype-unified): shadowBlur 10, offsetY 3,
+    // rgba(0,0,0,.25) — смещение 3 физ. px, размытие шире (−5..7), сила 0.25.
+    let shadow_offset = vec2<f32>(0.0, 3.0);
     let shadow_sd = sd_rounded_box(p - shadow_offset, half_size, radius) - 1.0;
-    let shadow_alpha = (1.0 - smoothstep(-4.0, 6.0, shadow_sd)) * 0.35 * (1.0 - in.params.w);
+    let shadow_alpha = (1.0 - smoothstep(-5.0, 7.0, shadow_sd)) * 0.25 * (1.0 - in.params.w);
 
     // Рамка: выделение (2px) или broken (1px серая) — как раньше; иначе —
     // оверлейная рамка по border.a (зона дропа T9, пульс подсветки T14)
