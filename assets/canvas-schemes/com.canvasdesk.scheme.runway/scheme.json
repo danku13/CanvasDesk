@@ -1,0 +1,321 @@
+{
+ "id": "com.canvasdesk.scheme.runway",
+ "name_ru": "Рунвей стартапа",
+ "name_en": "Startup runway",
+ "description_ru": "Статьи расходов складываются в расход месяца, выручка снижает чистую дыру, кэш делится на неё и даёт горизонт жизни.",
+ "description_en": "Expense items roll into the monthly burn, revenue offsets the net burn, and cash divided by it gives the runway.",
+ "category": "planning",
+ "category_ru": "Планирование",
+ "category_en": "Planning",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 240,
+    "text": "Рунвей стартапа\nСтатьи расходов складываются в расход месяца, выручка снижает чистую дыру, кэш делится на неё и даёт горизонт жизни.\nПоменяйте любую статью или кэш — всё пересчитается. Пучок «Расходы → Расход» открывается кликом в main stage.",
+    "color": "4"
+   },
+   {
+    "id": "costs",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 240,
+    "text": "Расходы\nЕжемесячные статьи: команда, облако, маркетинг и офис.\n\nsalaries = 38000 $\ncloud = 6200 $\nmarketing = 15000 $\noffice = 4000 $",
+    "color": "5"
+   },
+   {
+    "id": "cash",
+    "type": "text",
+    "x": 440,
+    "y": 320,
+    "width": 260,
+    "height": 180,
+    "text": "Кэш\nДеньги на счету и выручка за месяц.\n\nbalance = 1200000 $\nrevenue = 41000 $",
+    "color": "5"
+   },
+   {
+    "id": "burn",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Расход\nСумма статей за месяц: значения приходят построчно.\n\nburn = sum(Расходы.salaries, Расходы.cloud, Расходы.marketing, Расходы.office)",
+    "color": "2"
+   },
+   {
+    "id": "net",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Чистый расход\nКассовая дыра месяца: расход за вычетом выручки — значения приходят в параметры.\n\nnet = $burn - $revenue",
+    "color": "2",
+    "label": "Дыра"
+   },
+   {
+    "id": "yearly",
+    "type": "text",
+    "x": 1160,
+    "y": 280,
+    "width": 280,
+    "height": 160,
+    "text": "Годовая дыра\nЧистая дыра в годовом выражении.\n\nyearly = Дыра.net * 12",
+    "color": "2",
+    "label": "Год"
+   },
+   {
+    "id": "runway",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Рунвей\nГоризонт жизни: кэш, делённый на чистый расход месяца.\n\nrunway = $balance / $net",
+    "color": "6"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 260,
+    "width": 320,
+    "height": 220,
+    "text": "Вердикт\nГоризонт — 54 месяца при чистой дыре 22 тысячи в месяц: запас больше четырёх лет.\nПоднимите маркетинг — рунвей сдвинется сразу; сценарий на статьях покажет дельты без правки базы.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "salaries"
+   },
+   {
+    "id": "e2",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "cloud"
+   },
+   {
+    "id": "e3",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "marketing"
+   },
+   {
+    "id": "e4",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "office"
+   },
+   {
+    "id": "e5",
+    "fromNode": "burn",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "burn",
+    "toParam": "burn"
+   },
+   {
+    "id": "e6",
+    "fromNode": "cash",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "revenue",
+    "toParam": "revenue"
+   },
+   {
+    "id": "e7",
+    "fromNode": "net",
+    "toNode": "yearly",
+    "flowKind": "value",
+    "fromOutput": "net"
+   },
+   {
+    "id": "e8",
+    "fromNode": "cash",
+    "toNode": "runway",
+    "flowKind": "value",
+    "fromOutput": "balance",
+    "toParam": "balance"
+   },
+   {
+    "id": "e9",
+    "fromNode": "net",
+    "toNode": "runway",
+    "flowKind": "value",
+    "fromOutput": "net",
+    "toParam": "net"
+   }
+  ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 240,
+    "text": "Startup runway\nExpense items roll into the monthly burn, revenue offsets the net burn, and cash divided by it gives the runway.\nChange any item or the cash and everything recomputes. The “Costs → Burn” bundle opens with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "costs",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 240,
+    "text": "Costs\nMonthly items: team, cloud, marketing and office.\n\nsalaries = 38000 $\ncloud = 6200 $\nmarketing = 15000 $\noffice = 4000 $",
+    "color": "5"
+   },
+   {
+    "id": "cash",
+    "type": "text",
+    "x": 440,
+    "y": 320,
+    "width": 260,
+    "height": 180,
+    "text": "Cash\nMoney in the bank and monthly revenue.\n\nbalance = 1200000 $\nrevenue = 41000 $",
+    "color": "5"
+   },
+   {
+    "id": "burn",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Burn\nSum of the items per month: values arrive line by line.\n\nburn = sum(Costs.salaries, Costs.cloud, Costs.marketing, Costs.office)",
+    "color": "2"
+   },
+   {
+    "id": "net",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 200,
+    "text": "Net burn\nMonthly cash hole: burn minus revenue — values arrive in parameters.\n\nnet = $burn - $revenue",
+    "color": "2",
+    "label": "Net"
+   },
+   {
+    "id": "yearly",
+    "type": "text",
+    "x": 1160,
+    "y": 280,
+    "width": 280,
+    "height": 160,
+    "text": "Yearly burn\nNet burn per year.\n\nyearly = Net.net * 12",
+    "color": "2",
+    "label": "Year"
+   },
+   {
+    "id": "runway",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Runway\nSurvival horizon: cash divided by the net monthly burn.\n\nrunway = $balance / $net",
+    "color": "6"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 260,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nThe horizon is 54 months at a net burn of 22 thousand per month: more than four years of headroom.\nRaise marketing and the runway shifts at once; a scenario on the items shows deltas without touching the base.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "salaries"
+   },
+   {
+    "id": "e2",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "cloud"
+   },
+   {
+    "id": "e3",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "marketing"
+   },
+   {
+    "id": "e4",
+    "fromNode": "costs",
+    "toNode": "burn",
+    "flowKind": "value",
+    "fromOutput": "office"
+   },
+   {
+    "id": "e5",
+    "fromNode": "burn",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "burn",
+    "toParam": "burn"
+   },
+   {
+    "id": "e6",
+    "fromNode": "cash",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "revenue",
+    "toParam": "revenue"
+   },
+   {
+    "id": "e7",
+    "fromNode": "net",
+    "toNode": "yearly",
+    "flowKind": "value",
+    "fromOutput": "net"
+   },
+   {
+    "id": "e8",
+    "fromNode": "cash",
+    "toNode": "runway",
+    "flowKind": "value",
+    "fromOutput": "balance",
+    "toParam": "balance"
+   },
+   {
+    "id": "e9",
+    "fromNode": "net",
+    "toNode": "runway",
+    "flowKind": "value",
+    "fromOutput": "net",
+    "toParam": "net"
+   }
+  ]
+ }
+}

@@ -70,7 +70,7 @@ Web-порт: `?template=<id>` — авто-вставка схемы на пе�
 - I-G4: лимиты пакета ≤ 200 нод / ≤ 400 рёбер; вставка ≤ 50 мс на
   200 нод (G7, release-замер).
 
-## 5. Стартовый набор (6 схем, 4 категории — oracle-тесты + инварианты v2)
+## 5. Каталог (10 схем, 4 категории — oracle-тесты + инварианты v2)
 
 Контент v2 (переделка по запросу владельца 2026-09-22, PRD-0008 §7.2.1
 «шаблон = витрина фич»): в каждой текстовой ноде — заголовок-объект
@@ -85,12 +85,20 @@ Web-порт: `?template=<id>` — авто-вставка схемы на пе�
 (`every_text_node_is_documented`, `every_scheme_opens_main_stage`,
 `every_scheme_has_multi_connected_nodes`, `schemes_cover_addressing_features`,
 `schemes_have_deep_value_chains`, `schemes_never_show_red_lines`,
-`every_scheme_invites_to_edit`, `capacity_service_triggers_bottleneck_analysis`).
+`every_scheme_invites_to_edit`, `hint_and_verdict_notes_stay_silent`,
+`capacity_service_triggers_bottleneck_analysis` + value-оракулы 10 схем).
 Инварианты аудита CJM (2026-09-22): все чипы «Все» + N категорий видны
 без среза (ширина чипа 108 при панели 560 — тест `chips_all_categories_fit`);
 пресет «1» (красный) в заливках нод схем запрещён — красный занят рамкой
 перегрузки FR-016 (входы — «5» циан, тест `schemes_avoid_red_node_fills`);
 описания карточек — язык задачи без жаргона движка (D3).
+Аудит схем (2026-09-25): подсказки и вердикты (пресет «4») обязаны молчать
+во всех схемах целиком — проза с числами («83 процента», «итог — 16925»)
+не имеет права вычисляться (`hint_and_verdict_notes_stay_silent`); каталог
+расширен 6 → 10 по направлениям шаблонного аудита (backend/network →
+контакт-центр, финансы UE → инвесткейс, PA → когорта, planning → рунвей);
+при 10 строках галерея на 1280×800 прокручивается (`clamp_scroll`, тест
+`layout_clamps_to_small_viewport`).
 
 | id | Категория | Оракул |
 |---|---|---|
@@ -100,3 +108,7 @@ Web-порт: `?template=<id>` — авто-вставка схемы на пе�
 | `project-budget` | Планирование | subtotals: team = 13500 $, infra = 1400 $; reserve = 2025 $ (`$team` × 0.15); total = 16925 $; cash = 16925 $ (доли 0.6/0.4 по `fromLine`) |
 | `unit-economics` | Бизнес | margin = 6 $; ltv = 216 $; ratio = 1.8; payback = 20 мес (`$cac`/`$margin`) |
 | `renovation-estimate` | Планирование | space = 30 m²; cost-living = 450 $; cost-bedroom = 300 $; total = 1450 $; final = 1305 $ (скидка `$discount`) |
+| `support-staffing` | Архитектура | lambda = 240/3600 ≈ 0.0667 req/s; mu = 1/180 req/s; rho = 0.8 (utilization c=15); p_wait = Эрланг C(12,15) ≈ 0.319; wait = mmc ≈ 199 сек; wip = Литтл ≈ 13.3 |
+| `investment-case` | Бизнес | pv = npv(0.12, 0, y1..y4) ≈ 711 976 $; npv_sum = pv − 500 000 $; pi = $npv/$capex + 1 = pv/capex ≈ 1.424; irr ≈ 0.284 (Newton); growth = cagr ≈ 0.287 |
+| `cohort-launch` | Бизнес | ltv = cohort_ltv(12 $, 0.7, 0.85, 0.6, 0.35, 24) ≈ 7.477 $; wave = $users × $ltv ≈ 74 768 $; cac = 1.2 $; ratio ≈ 6.23; net ≈ 62 768 $ |
+| `runway` | Планирование | burn = sum(38k, 6.2k, 15k, 4k) = 63 200 $; net = $burn − $revenue = 22 200 $; yearly = 266 400 $; runway = $balance/$net ≈ 54.05 мес |
