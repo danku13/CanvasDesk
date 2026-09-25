@@ -1579,7 +1579,11 @@ impl App {
         // по шеврону или полосе мимо строк — развернуть док;
         // мимо полосы — закрыть flyout, клик уходит в канвас.
         let viewport = self.viewport_logical();
-        let categories = self.template_category_names();
+        // FR-040 v2: геометрия по локализованным подписям — ТЕМ ЖЕ,
+        // что в рендере дока (overlays.rs) — расхождений hit-test нет;
+        // поиск по реестру — по raw-токену (zip по индексу).
+        let raw_categories = self.template_category_names();
+        let categories = self.template_category_display_names();
         // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
@@ -1592,8 +1596,8 @@ impl App {
             .and_then(|fly| {
                 self.template_hover.as_ref().and_then(|hover| {
                     hover.open.and_then(|cat| {
-                        strip.rows.get(cat).and_then(|(_, name)| {
-                            let items = self.templates.by_category(name);
+                        raw_categories.get(cat).and_then(|raw| {
+                            let items = self.templates.by_category(raw);
                             fly.row_rects
                                 .iter()
                                 .enumerate()
@@ -3452,7 +3456,9 @@ impl App {
         // колесо от себя, y<0, увеличивает scroll_top)
         if !self.template_panel.open {
             let viewport = self.viewport_logical();
-            let categories = self.template_category_names();
+            // FR-040 v2: геометрия по локализованным подписям — паритет
+            // с рендером дока и предыдущим hit-test блоком.
+            let categories = self.template_category_display_names();
             // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();

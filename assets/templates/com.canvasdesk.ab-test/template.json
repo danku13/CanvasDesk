@@ -1,0 +1,59 @@
+{
+  "id": "com.canvasdesk.ab-test",
+  "name_en": "A/B Test Significance",
+  "name_ru": "Значимость A/B теста",
+  "version": "1.0.0",
+  "category": "product-analytics",
+  "description": "Статистическая значимость A/B теста: pooled z-тест двух пропорций — двусторонний p-value различия конверсий контроля и варианта. p < 0.05 — различие значимо (стандарт alpha = 5%); p < 0.01 — сильно значимо; p ≥ 0.05 — эффекта нет или выборка мала (проверьте размер выборки ab_sample_size до старта теста). Дефолты: 200/10000 (2%) против 260/10000 (2.6%) → p ≈ 0.0047, значимый рост. Выходы для value-рёбер: lift — относительный прирост (+30% в дефолте), zscore — z-статистика, ci_a/ci_b — полуширины 95% ДИ конверсий. Тест запускают только после фиксации гипотезы и MDE — подглядывание на промежуточных данных завышает ложные срабатывания. Метрика growth/PM для оценки результатов экспериментов.",
+  "description_en": "Statistical significance of an A/B test: pooled two-proportion z-test — two-sided p-value of the conversion difference between control and variant. p < 0.05 — significant (standard alpha = 5%); p < 0.01 — highly significant; p ≥ 0.05 — no effect or the sample is too small (check the sample size with ab_sample_size before starting the test). Defaults: 200/10000 (2%) vs 260/10000 (2.6%) → p ≈ 0.0047, significant lift. Outputs for value edges: lift — relative gain (+30% in defaults), zscore — z-statistic, ci_a/ci_b — half-widths of 95% CIs for both conversions. Run the test only after fixing the hypothesis and MDE — peeking at intermediate data inflates false positives. A growth/PM metric for experiment readouts.",
+  "params": [
+    {
+      "name": "conversions_a",
+      "type": "count",
+      "default": 200,
+      "min": 0
+    },
+    {
+      "name": "visitors_a",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    },
+    {
+      "name": "conversions_b",
+      "type": "count",
+      "default": 260,
+      "min": 0
+    },
+    {
+      "name": "visitors_b",
+      "type": "count",
+      "default": 10000,
+      "min": 1
+    }
+  ],
+  "expr": "ab_pvalue($conversions_a, $visitors_a, $conversions_b, $visitors_b)",
+  "outputs": [
+    {
+      "name": "lift",
+      "unit": "%",
+      "expr": "ab_lift($conversions_a, $visitors_a, $conversions_b, $visitors_b)"
+    },
+    {
+      "name": "zscore",
+      "expr": "ab_zscore($conversions_a, $visitors_a, $conversions_b, $visitors_b)"
+    },
+    {
+      "name": "ci_a",
+      "unit": "%",
+      "expr": "ab_ci($conversions_a, $visitors_a, 0.95)"
+    },
+    {
+      "name": "ci_b",
+      "unit": "%",
+      "expr": "ab_ci($conversions_b, $visitors_b, 0.95)"
+    }
+  ],
+  "color": "#4A90E2",
+  "icon": "chart"
+}

@@ -595,7 +595,9 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 .push(HitRect::interactive(rect(lay.panel_rect), "template-panel"));
         }
         id::TEMPLATE_STRIP => {
-            let categories = app.template_category_names();
+            // FR-040 v2: геометрия по локализованным подписям (паритет
+            // с рендером/hit-test дока).
+            let categories = app.template_category_display_names();
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
             let strip = template_ui::dock_strip_layout(&categories, vh, &mut measurer, &mut fs);

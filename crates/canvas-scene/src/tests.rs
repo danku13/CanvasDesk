@@ -1429,8 +1429,8 @@ fn mcp_template_list_builtin_registry() {
     let templates = list.as_array().expect("массив");
     assert_eq!(
         templates.len(),
-        61,
-        "все built-in шаблоны (FR-019: 15 + FR-027: 30 + audit-2026-09: 16)"
+        62,
+        "все built-in шаблоны (FR-019: 15 + FR-027: 30 + audit-2026-09: 16 + A/B: 1)"
     );
     let lb = templates
         .iter()
@@ -2896,18 +2896,23 @@ fn scene_auto_rows_cache_populated() {
 /// PRD-0008 (Q5 v2 — «подтянуть MCP под обновления», запрос владельца
 /// 2026-09-22): schemes_list — реестр галереи виден агенту: те же пакеты,
 /// что в галерее (Ctrl+T), с размерами графа; чтение — канвас
-/// и undo не тронуты. Расширение каталога (аудит 2026-09-25): 6 → 10.
+/// и undo не тронуты. Расширение каталога (аудит 2026-09-25): 6 → 10;
+/// A/B тестирование: 10 → 11.
 #[test]
 fn mcp_schemes_list_embedded_registry() {
     let mut scene = mcp_scene();
     let undo_before = scene.undo_stack.len();
     let list = dispatch(&mut scene, "schemes_list", "{}").expect("schemes_list");
     let schemes = list.as_array().expect("массив схем");
-    assert_eq!(schemes.len(), 10, "10 пакетов PRD-0008 §7.2: {list}");
+    assert_eq!(schemes.len(), 11, "11 пакетов PRD-0008 §7.2 + A/B: {list}");
     let ids: Vec<&str> = schemes.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(
         ids.contains(&"com.canvasdesk.scheme.intro-calculations"),
         "intro-схема в реестре: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"com.canvasdesk.scheme.ab-testing"),
+        "A/B схема в реестре: {ids:?}"
     );
     for scheme in schemes {
         assert!(!scheme["name"].as_str().expect("имя RU").is_empty());
@@ -3007,6 +3012,110 @@ fn mcp_schemes_apply_inserts_flow_and_undo() {
         undo_after,
         "fail-fast без undo-шага"
     );
+}
+
+/// A/B схема (доменные формулы abtest): вставка + оракулы расчёта —
+/// p-value 0.004651… (значимость), лифт 0.3, конверсии 0.02/0.026,
+/// планирование 80682 на группу; value-рёбра проливают параметры
+/// (spilled); имена/тексты двуязычны (RU/EN контент по языку).
+#[test]
+fn mcp_schemes_apply_ab_testing_oracle() {
+    let mut scene = mcp_scene();
+    let out = dispatch(
+        &mut scene,
+        "schemes_apply",
+        r#"{"id": "com.canvasdesk.scheme.ab-testing", "x": 0.0, "y": 0.0}"#,
+    )
+    .expect("schemes_apply ab-testing");
+    assert_eq!(out["applied"], "com.canvasdesk.scheme.ab-testing");
+    let nodes = out["nodes"].as_array().expect("ноды").clone();
+    let edges = out["edges"].as_array().expect("рёбра").clone();
+    assert_eq!(nodes.len(), 11, "11 нод A/B схемы: {out}");
+    assert_eq!(edges.len(), 15, "15 value-рёбер A/B схемы");
+    let flow = out["flow"].as_object().expect("карта flow");
+
+    // Ремап id: nodes[i] — i-я нода контента схемы (порядок instantiation).
+    let scheme_ids = [
+        "hint",
+        "control",
+        "variant",
+        "verdict",
+        "rates",
+        "significance",
+        "effect",
+        "projection",
+        "planner",
+        "traffic",
+        "duration",
+    ];
+    let map: std::collections::HashMap<&str, String> = scheme_ids
+        .iter()
+        .enumerate()
+        .map(|(i, key)| (*key, nodes[i].as_str().expect("remap id").to_owned()))
+        .collect();
+
+    // Хелпер: числовое значение именованного выхода ноды.
+    let output_value = |node: &str, name: &str| -> f64 {
+        flow[map[node].as_str()]["outputs"][name]["value"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{node}.{name} в flow: {}", flow[map[node].as_str()]))
+    };
+    // Хелпер: узловое значение (итог последней строки).
+    let node_value = |node: &str| -> f64 {
+        flow[map[node].as_str()]["value"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{node} value: {}", flow[map[node].as_str()]))
+    };
+
+    // Конверсии групп (построчный лист).
+    assert!((output_value("rates", "cr_a") - 0.02).abs() < 1e-12);
+    assert!((output_value("rates", "cr_b") - 0.026).abs() < 1e-12);
+
+    // Значимость: pooled z-тест 200/10000 vs 260/10000.
+    assert!(
+        (output_value("significance", "p_value") - 0.004_651_140_450_960_618).abs() < 1e-14,
+        "p_value = {}",
+        output_value("significance", "p_value")
+    );
+    assert!((output_value("significance", "lift") - 0.3).abs() < 1e-12);
+
+    // Планирование: n = 80682 на группу (значение ноды — последняя строка).
+    assert!(
+        (node_value("planner") - 80682.0).abs() < 1.0,
+        "planner = {}",
+        node_value("planner")
+    );
+
+    // Эффект: доп. конверсии на том же трафике = лифт × конверсии контроля.
+    assert!(
+        (output_value("effect", "monthly") - 60.0).abs() < 1e-9,
+        "effect.monthly = {}",
+        output_value("effect", "monthly")
+    );
+    // Прогноз: экстраполяция на год (значение ноды — последняя строка).
+    assert!(
+        (node_value("projection") - 720.0).abs() < 1e-9,
+        "projection = {}",
+        node_value("projection")
+    );
+    // Срок теста: 2 × 80682 / 2400 = 67.235 дней = 9.605 недель.
+    assert!(
+        (output_value("duration", "weeks") - 9.605).abs() < 1e-9,
+        "duration.weeks = {}",
+        output_value("duration", "weeks")
+    );
+
+    // Проливание параметров: significance видит $ca/$na/$cb/$nb
+    // (источники — ремапнутые id control/variant).
+    let spilled = flow[map["significance"].as_str()]["spilled"]
+        .as_object()
+        .expect("spilled significance")
+        .clone();
+    for param in ["ca", "na", "cb", "nb"] {
+        assert!(spilled.contains_key(param), "пролит {param}: {spilled:?}");
+    }
+    assert_eq!(spilled["ca"]["from"], map["control"].as_str());
+    assert_eq!(spilled["cb"]["from"], map["variant"].as_str());
 }
 
 /// PRD-0007 (X2, FR-048): lineage — дерево происхождения для агента,

@@ -51,6 +51,41 @@ pub fn icon_key(manifest: &TemplateManifest) -> &str {
     }
 }
 
+/// Отображаемое имя категории по языку приложения (FR-040 v2 —
+/// локализация поверхности шаблонов): сырой токен манифеста → подпись
+/// чипов/секций палитры и строк дока. Имена синхронны между поверхностями
+/// (рендер и hit-test зовут один хелпер с одним языком — расхождения
+/// геометрии нет). Неизвестные токены (custom-каталоги FR-020) — как есть
+/// (fallback-инвариант: показ всегда есть).
+pub fn category_display_name(language: canvas_core::Language, category: &str) -> String {
+    let ru = matches!(language, canvas_core::Language::Ru);
+    match category {
+        "backend" => (if ru { "Бэкенд" } else { "Backend" }).to_owned(),
+        "network" => (if ru { "Сеть" } else { "Network" }).to_owned(),
+        "cache" => (if ru { "Кэш" } else { "Cache" }).to_owned(),
+        "queue" => (if ru { "Очереди" } else { "Queues" }).to_owned(),
+        "unit-economics" => (if ru {
+            "Юнит-экономика"
+        } else {
+            "Unit Economics"
+        })
+        .to_owned(),
+        "product-analytics" => (if ru {
+            "Продуктовая аналитика"
+        } else {
+            "Product Analytics"
+        })
+        .to_owned(),
+        "custom" => (if ru {
+            "Свои шаблоны"
+        } else {
+            "Custom"
+        })
+        .to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 // --- Панель шаблонов (Ctrl+P, FR-024 — в стиле Miro) ---
 
 /// Ширина панели, логические px (клампится к окну).
@@ -1192,6 +1227,32 @@ mod tests {
 
     fn registry() -> TemplateRegistry {
         TemplateRegistry::mock()
+    }
+
+    // --- FR-040 v2: локализация категорий палитры ---
+
+    /// Известные токены — двуязычные подписи (RU/EN по языку).
+    #[test]
+    fn category_display_name_bilingual() {
+        use canvas_core::Language;
+        assert_eq!(
+            category_display_name(Language::Ru, "product-analytics"),
+            "Продуктовая аналитика"
+        );
+        assert_eq!(
+            category_display_name(Language::En, "product-analytics"),
+            "Product Analytics"
+        );
+        assert_eq!(category_display_name(Language::Ru, "backend"), "Бэкенд");
+        assert_eq!(
+            category_display_name(Language::En, "unit-economics"),
+            "Unit Economics"
+        );
+        // Неизвестный токен (custom-каталог FR-020) — как есть (fallback)
+        assert_eq!(
+            category_display_name(Language::Ru, "my-domain"),
+            "my-domain"
+        );
     }
 
     // --- Панель (FR-024: секции, левый док) ---

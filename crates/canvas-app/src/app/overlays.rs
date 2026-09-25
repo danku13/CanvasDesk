@@ -2158,7 +2158,9 @@ impl App {
                     corners: [0.0; 4],
                 });
                 texts.push(OwnedScreenText {
-                    text: name.clone(),
+                    // FR-040 v2: чипы категорий — по языку приложения
+                    // (raw-токен — только для поиска по реестру)
+                    text: template_ui::category_display_name(self.settings.language, name),
                     origin: [rect[0] + 10.0, rect[1] + 6.0],
                     width: rect[2] - 12.0,
                     font_size: 12.0,
@@ -2171,7 +2173,8 @@ impl App {
                 match row {
                     PanelRow::Section(name) => {
                         texts.push(OwnedScreenText {
-                            text: name.clone(),
+                            // FR-040 v2: секции — по языку приложения
+                            text: template_ui::category_display_name(self.settings.language, name),
                             origin: [rect[0] + 2.0, rect[1] + 5.0],
                             width: rect[2] - 4.0,
                             font_size: 11.0,
@@ -2281,7 +2284,11 @@ impl App {
     ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
-        let categories = self.template_category_names();
+        let raw_categories = self.template_category_names();
+        // FR-040 v2: подписи строк дока — по языку приложения; геометрия
+        // мерится по ТЕМ ЖЕ локализованным строкам, что и hit-test
+        // (единая точка template_category_display_names — расхождений нет).
+        let categories = self.template_category_display_names();
         // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
@@ -2299,7 +2306,7 @@ impl App {
             corners: [0.0; 4],
         });
         // Строки категорий: hover-подсветка под курсором и у раскрытой
-        for (i, (rect, name)) in strip.rows.iter().enumerate() {
+        for (i, ((rect, name), raw)) in strip.rows.iter().zip(raw_categories.iter()).enumerate() {
             let row_hover = point_in_rect(*rect, self.cursor) || open_category == Some(i);
             instances.push(CardInstance {
                 pos: [rect[0], rect[1]],
@@ -2313,7 +2320,7 @@ impl App {
                 params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
-            let count = self.templates.by_category(name).len();
+            let count = self.templates.by_category(raw).len();
             texts.push(OwnedScreenText {
                 text: format!("{name} · {count}"),
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
@@ -2345,10 +2352,11 @@ impl App {
             open_category,
             self.template_flyout_geometry(viewport, &strip),
         ) {
-            let Some((_, name)) = strip.rows.get(cat) else {
+            // Поиск по реестру — по raw-токену (имена в strip — локализованные)
+            let Some(raw) = raw_categories.get(cat) else {
                 return (instances, texts);
             };
-            let items = self.templates.by_category(name);
+            let items = self.templates.by_category(raw);
             instances.push(CardInstance {
                 pos: [fly.rect[0], fly.rect[1]],
                 size: [fly.rect[2], fly.rect[3]],

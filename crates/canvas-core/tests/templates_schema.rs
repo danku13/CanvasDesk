@@ -25,16 +25,16 @@ fn builtin() -> TemplateRegistry {
 /// FR-019 — 15 шаблонов (10 backend + 5 network), FR-027 — 30 шаблонов
 /// (18 unit-economics + 12 product-analytics); аудит-расширение 2026-09-25 —
 /// +16 (backend +4, network +1, unit-economics +6, product-analytics +5);
-/// итого 61.
+/// A/B тестирование — +1 (product-analytics); итого 62.
 #[test]
 fn builtin_library_has_61_templates() {
     let registry = builtin();
     assert_eq!(
         registry.list().len(),
-        61,
-        "каталог FR-019+FR-027+аудит 2026-09-25: 61 шаблон (15 + 30 + 16)"
+        62,
+        "каталог FR-019+FR-027+аудит 2026-09-25+A/B: 62 шаблона (15 + 30 + 16 + 1)"
     );
-    // Категории: 14 backend + 6 network + 24 unit-economics + 17 product-analytics.
+    // Категории: 14 backend + 6 network + 24 unit-economics + 18 product-analytics.
     let backend = registry.by_category("backend").len();
     let network = registry.by_category("network").len();
     let unit_econ = registry.by_category("unit-economics").len();
@@ -46,8 +46,8 @@ fn builtin_library_has_61_templates() {
     );
     assert_eq!(unit_econ, 24, "24 unit-economics (18 FR-027 + 6 аудита)");
     assert_eq!(
-        product_analytics, 17,
-        "17 product-analytics (12 FR-027 + 5 аудита)"
+        product_analytics, 18,
+        "18 product-analytics (12 FR-027 + 5 аудита + A/B тест)"
     );
     // Детерминизм: порядок по id
     let ids: Vec<&str> = registry.list().iter().map(|m| m.id.as_str()).collect();
@@ -94,6 +94,8 @@ fn builtin_catalog_ids_complete() {
         "com.canvasdesk.pa-funnel-step",
         "com.canvasdesk.pa-sessions-per-user",
         "com.canvasdesk.pa-avg-lifetime",
+        // A/B тестирование (доменные формулы expr/abtest.rs)
+        "com.canvasdesk.ab-test",
     ];
     for id in expected {
         assert!(registry.find(id).is_some(), "нет шаблона {id}");
@@ -504,6 +506,16 @@ fn expansion_templates_default_values() {
     assert!(
         (value.num - 20.0).abs() < 1e-9,
         "pa-avg-lifetime = {}",
+        value.num
+    );
+
+    // ab-test: p-value pooled z-теста 200/10000 vs 260/10000 = 0.004651…
+    // (значимый рост +30% лифта при alpha = 0.05) — golden через
+    // math.erfc Python 3.12 (см. tests/expr_abtest.rs).
+    let value = eval_template_default(&registry, "com.canvasdesk.ab-test");
+    assert!(
+        (value.num - 0.004_651_140_450_960_618).abs() < 1e-14,
+        "ab-test p-value = {}",
         value.num
     );
 }
