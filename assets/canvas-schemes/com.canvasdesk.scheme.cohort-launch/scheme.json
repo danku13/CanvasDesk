@@ -1,0 +1,433 @@
+{
+ "id": "com.canvasdesk.scheme.cohort-launch",
+ "name_ru": "Когорта запуска",
+ "name_en": "Launch cohort",
+ "description_ru": "Удержание когорты по дням превращается в LTV, ценность волны сравнивается с ценой привлечения и даёт эффект запуска.",
+ "description_en": "Day-by-day cohort retention becomes LTV, the value of the wave is compared against the acquisition cost and gives the launch effect.",
+ "category": "business",
+ "category_ru": "Бизнес",
+ "category_en": "Business",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 240,
+    "text": "Когорта запуска\nУдержание когорты превращается в LTV: кривая удержания сворачивается в месяцы, ценность волны сравнивается с расходом на привлечение.\nПоменяйте удержание или тариф — всё пересчитается. Пучок «Удержание → LTV» открывается кликом в main stage.",
+    "color": "4"
+   },
+   {
+    "id": "launch",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 202,
+    "text": "Запуск\nРазовая волна привлечения: сколько пользователей пришло и сколько на это потрачено.\n\nusers = 10000\nspend = 12000 $",
+    "color": "5"
+   },
+   {
+    "id": "plan",
+    "type": "text",
+    "x": 440,
+    "y": 280,
+    "width": 260,
+    "height": 182,
+    "text": "Тариф\nПодписка: цена на пользователя в месяц и доля маржи.\n\narpu = 12 $\nmargin = 0.7",
+    "color": "5"
+   },
+   {
+    "id": "retention",
+    "type": "text",
+    "x": 440,
+    "y": 520,
+    "width": 260,
+    "height": 254,
+    "text": "Удержание\nДоля активных пользователей на день 1, 7 и 30, горизонт расчёта в месяцах.\n\nr_d1 = 0.85\nr_d7 = 0.6\nr_d30 = 0.35\nmonths = 24",
+    "color": "5"
+   },
+   {
+    "id": "ltv",
+    "type": "text",
+    "x": 800,
+    "y": 280,
+    "width": 280,
+    "height": 256,
+    "text": "LTV\nЦенность пользователя: кривая удержания сворачивается в месяцы и умножается на цену и маржу.\n\nltv = cohort_ltv(Тариф.arpu, Тариф.margin, Удержание.r_d1, Удержание.r_d7, Удержание.r_d30, Удержание.months)",
+    "color": "2"
+   },
+   {
+    "id": "wave",
+    "type": "text",
+    "x": 1160,
+    "y": 280,
+    "width": 280,
+    "height": 180,
+    "text": "Волна\nЦенность всей волны: пользователи на LTV — значения приходят в параметры.\n\nvalue = $users * $ltv",
+    "color": "2"
+   },
+   {
+    "id": "cac",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 176,
+    "text": "CAC\nСтоимость привлечения одного пользователя в волне.\n\ncac = Запуск.spend / Запуск.users",
+    "color": "5"
+   },
+   {
+    "id": "ratio",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Здоровье\nLTV к цене привлечения: здоровая норма — от трёх.\n\nratio = $ltv / $cac",
+    "color": "6"
+   },
+   {
+    "id": "net",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Эффект\nЦенность волны за вычетом расхода на привлечение.\n\nnet = Волна.value - Запуск.spend",
+    "color": "2"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 280,
+    "width": 320,
+    "height": 220,
+    "text": "Вердикт\nПользователь приносит около семи с половиной долларов при цене привлечения 1.2: соотношение выше здоровой нормы.\nПоднимите расход волны — эффект и здоровье пересчитаются; сценарий на удержании покажет чувствительность LTV.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "plan",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "arpu"
+   },
+   {
+    "id": "e2",
+    "fromNode": "plan",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "margin"
+   },
+   {
+    "id": "e3",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "r_d1"
+   },
+   {
+    "id": "e4",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "r_d7"
+   },
+   {
+    "id": "e5",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "r_d30"
+   },
+   {
+    "id": "e6",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "months"
+   },
+   {
+    "id": "e7",
+    "fromNode": "launch",
+    "toNode": "wave",
+    "flowKind": "value",
+    "fromOutput": "users",
+    "toParam": "users"
+   },
+   {
+    "id": "e8",
+    "fromNode": "ltv",
+    "toNode": "wave",
+    "flowKind": "value",
+    "fromOutput": "ltv",
+    "toParam": "ltv"
+   },
+   {
+    "id": "e9",
+    "fromNode": "launch",
+    "toNode": "cac",
+    "flowKind": "value",
+    "fromOutput": "spend"
+   },
+   {
+    "id": "e10",
+    "fromNode": "launch",
+    "toNode": "cac",
+    "flowKind": "value",
+    "fromOutput": "users"
+   },
+   {
+    "id": "e11",
+    "fromNode": "ltv",
+    "toNode": "ratio",
+    "flowKind": "value",
+    "fromOutput": "ltv",
+    "toParam": "ltv"
+   },
+   {
+    "id": "e12",
+    "fromNode": "cac",
+    "toNode": "ratio",
+    "flowKind": "value",
+    "fromOutput": "cac",
+    "toParam": "cac"
+   },
+   {
+    "id": "e13",
+    "fromNode": "wave",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "value"
+   },
+   {
+    "id": "e14",
+    "fromNode": "launch",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "spend"
+   }
+  ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 240,
+    "text": "Startup runway\nExpense items roll into the monthly burn, revenue offsets the net burn, and cash divided by it gives the runway.\nChange any item or the cash and everything recomputes. The “Costs → Burn” bundle opens with a click in the main stage.",
+    "color": "4"
+   },
+   {
+    "id": "launch",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 202,
+    "text": "Launch\nA one-time acquisition wave: how many users came and how much was spent.\n\nusers = 10000\nspend = 12000 $",
+    "color": "5",
+    "label": "Launch"
+   },
+   {
+    "id": "plan",
+    "type": "text",
+    "x": 440,
+    "y": 280,
+    "width": 260,
+    "height": 182,
+    "text": "Plan\nSubscription: price per user per month and the margin share.\n\narpu = 12 $\nmargin = 0.7",
+    "color": "5",
+    "label": "Plan"
+   },
+   {
+    "id": "retention",
+    "type": "text",
+    "x": 440,
+    "y": 520,
+    "width": 260,
+    "height": 254,
+    "text": "Retention\nShare of active users on day 1, 7 and 30, the horizon in months.\n\nr_d1 = 0.85\nr_d7 = 0.6\nr_d30 = 0.35\nmonths = 24",
+    "color": "5",
+    "label": "Retention"
+   },
+   {
+    "id": "ltv",
+    "type": "text",
+    "x": 800,
+    "y": 280,
+    "width": 280,
+    "height": 256,
+    "text": "LTV\nUser value: the retention curve collapses into months and is multiplied by price and margin.\n\nltv = cohort_ltv(Plan.arpu, Plan.margin, Retention.r_d1, Retention.r_d7, Retention.r_d30, Retention.months)",
+    "color": "2"
+   },
+   {
+    "id": "wave",
+    "type": "text",
+    "x": 1160,
+    "y": 280,
+    "width": 280,
+    "height": 180,
+    "text": "Wave\nValue of the whole wave: users times LTV — values arrive in parameters.\n\nvalue = $users * $ltv",
+    "color": "2",
+    "label": "Wave"
+   },
+   {
+    "id": "cac",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 176,
+    "text": "CAC\nCost of acquiring one user in the wave.\n\ncac = Launch.spend / Launch.users",
+    "color": "5",
+    "label": "CAC"
+   },
+   {
+    "id": "ratio",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Health\nLTV to acquisition cost: the healthy norm is three and above.\n\nratio = $ltv / $cac",
+    "color": "6"
+   },
+   {
+    "id": "net",
+    "type": "text",
+    "x": 1520,
+    "y": 0,
+    "width": 280,
+    "height": 180,
+    "text": "Net burn\nMonthly cash hole: burn minus revenue — values arrive in parameters.\n\nnet = $burn - $revenue",
+    "color": "2",
+    "label": "Net"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1520,
+    "y": 280,
+    "width": 320,
+    "height": 220,
+    "text": "Verdict\nThe horizon is 54 months at a net burn of 22 thousand per month: more than four years of headroom.\nRaise marketing and the runway shifts at once; a scenario on the items shows deltas without touching the base.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "plan",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "arpu"
+   },
+   {
+    "id": "e2",
+    "fromNode": "plan",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "margin"
+   },
+   {
+    "id": "e3",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "r_d1"
+   },
+   {
+    "id": "e4",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "r_d7"
+   },
+   {
+    "id": "e5",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "r_d30"
+   },
+   {
+    "id": "e6",
+    "fromNode": "retention",
+    "toNode": "ltv",
+    "flowKind": "value",
+    "fromOutput": "months"
+   },
+   {
+    "id": "e7",
+    "fromNode": "launch",
+    "toNode": "wave",
+    "flowKind": "value",
+    "fromOutput": "users",
+    "toParam": "users"
+   },
+   {
+    "id": "e8",
+    "fromNode": "ltv",
+    "toNode": "wave",
+    "flowKind": "value",
+    "fromOutput": "ltv",
+    "toParam": "ltv"
+   },
+   {
+    "id": "e9",
+    "fromNode": "launch",
+    "toNode": "cac",
+    "flowKind": "value",
+    "fromOutput": "spend"
+   },
+   {
+    "id": "e10",
+    "fromNode": "launch",
+    "toNode": "cac",
+    "flowKind": "value",
+    "fromOutput": "users"
+   },
+   {
+    "id": "e11",
+    "fromNode": "ltv",
+    "toNode": "ratio",
+    "flowKind": "value",
+    "fromOutput": "ltv",
+    "toParam": "ltv"
+   },
+   {
+    "id": "e12",
+    "fromNode": "cac",
+    "toNode": "ratio",
+    "flowKind": "value",
+    "fromOutput": "cac",
+    "toParam": "cac"
+   },
+   {
+    "id": "e13",
+    "fromNode": "wave",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "value"
+   },
+   {
+    "id": "e14",
+    "fromNode": "launch",
+    "toNode": "net",
+    "flowKind": "value",
+    "fromOutput": "spend"
+   }
+  ]
+ }
+}

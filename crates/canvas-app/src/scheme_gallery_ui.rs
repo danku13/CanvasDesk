@@ -466,9 +466,28 @@ mod tests {
         assert!(lay.panel_rect[2] <= 320.0);
         assert!(lay.panel_rect[3] <= 240.0);
         assert_eq!(lay.visible_rows.len(), 1, "одна строка в окне");
-        // Стандартный вьюпорт — все схемы видимы без скролла.
+        // Стандартный вьюпорт: панель помещается целиком; каталог из 10
+        // схем (аудит 2026-09: 6 → 10) выше окна — окно видимости
+        // показывает вместившиеся строки, остальное добирает скролл
+        // (clamp_scroll приводит последнюю схему в видимость).
         let lay = layout([1280.0, 800.0], &list, &st);
-        assert_eq!(lay.visible_rows.len(), list.len());
+        assert!(
+            !lay.visible_rows.is_empty() && lay.visible_rows.len() <= list.len(),
+            "окно видимости непустое и не больше списка"
+        );
+        assert!(
+            lay.visible_rows.len() < list.len(),
+            "10 строк по {}px выше вьюпорта 800 — скролл обязан существовать",
+            ROW_H
+        );
+        let mut scrolled = st.clone();
+        scrolled.selected = list.len() - 1;
+        clamp_scroll(&mut scrolled, lay.visible_rows.len());
+        let lay2 = layout([1280.0, 800.0], &list, &scrolled);
+        assert!(
+            lay2.visible_rows.contains(&(list.len() - 1)),
+            "последняя схема доступна прокруткой"
+        );
     }
 
     /// D2 CJM: полный ряд «Все» + N категорий обязан раскладываться на
