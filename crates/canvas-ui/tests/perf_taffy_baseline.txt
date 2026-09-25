@@ -1,0 +1,12 @@
+# CanvasDesk FR-068 W1 — perf baseline reflow на TaffyBackend (crates/canvas-ui/tests/perf_taffy.rs)
+# Граф: viewport 1280×800 → constrain/stack (stage 1200×760) → pad(16) → Column(10) через TaffyBackend →
+# 5×Row Fit+flex + 2×Row Wrap + 2×Column (по 100 Child) + grid_cells 10×10 = РОВНО 1000 листовых rect'ов за reflow.
+# БЕЗ SqueezeTail: маппинг в flex_shrink — документированное расхождение C3 (§Контракт-4 FR-068);
+# каждый контейнер = одноразовое TaffyTree (immediate-mode D2 ADR-0014). Размеры детерминированы формулами от индекса.
+# Метрика: медиана 200 reflow-прогонов после 20 прогревочных, μs.
+# Абсолютный бюджет §8 (< 1 мс) валидируется в RELEASE-профиле (dev: deps без оптимизаций — см. доку теста);
+# гейт дрейфа: регрессия > 20% против строки СВОЕГО профиля — fail, улучшение > 20% — warn.
+# Baseline МАШИННО-ЗАВИСИМ — референс dev-машины.
+# Дата записи: 2026-09-25
+median_us_debug=2713.855
+median_us_release=266.358

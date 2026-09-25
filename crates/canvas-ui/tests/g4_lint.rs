@@ -38,6 +38,17 @@
 //! Пункт (3) FR-068 — grep-аудит silent-clips (`take(`/`break`/`truncate`
 //! в мигрированном коде) — выполняется вручную по kit.rs, не здесь
 //! (см. worklog сессии FR-068 W0, Task 2-c).
+//!
+//! # Backend'ы вёрстки (FR-068 W1, Контракт-3 «G4-линты × N backend'ов»)
+//!
+//! Та же матрица прогоняется через ВЫБРАННЫЙ backend вёрстки
+//! ([`SceneBackend`]): по умолчанию — `NativeBackend` (числа существующих
+//! 6 тестов неизменны), под фичей `taffy` — дополнительные тесты строят
+//! те же 5 сцен × 3 окна × 2 языка через `Row/Column::lay_out_with`
+//! (&TaffyBackend) с ТЕМИ ЖЕ проверками G4. kit-функции (panel_rect,
+//! dropdown_menu, list_rows…) идут мимо выбора — это rect-математика,
+//! не flex; через backend идут только примитивы Row/Column (5 Row-мест
+//! + 2 Column-места в сценах).
 
 use std::collections::HashSet;
 
@@ -56,6 +67,18 @@ use canvas_ui::layout::{
 };
 use canvas_ui::measure::TextMeasurer;
 use canvas_ui::registry::{DegradationPolicy, SurfaceDecl, SurfaceRegistry};
+
+/// Выбор backend'а вёрстки сцен (FR-068 W1, Контракт-3 «G4-линты × N
+/// backend'ов»): один и тот же код сцен строится через любой backend.
+/// `Native` — default (zero-dep инвариант G7; существующие тесты и их
+/// числа неизменны); `Taffy` — только под фичей `taffy` (opt-in,
+/// ADR-0014) — TaffyBackend в default-сборке не существует.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SceneBackend {
+    Native,
+    #[cfg(feature = "taffy")]
+    Taffy,
+}
 
 /// Семейство UI-шрифта — паритет с unit-тестами кита (`kit.rs`).
 const FAMILY: &str = "Noto Sans Display";
@@ -390,6 +413,10 @@ struct Ctx {
     m: TextMeasurer,
     fs: cosmic_text::FontSystem,
     palette: KitPalette,
+    /// Backend примитивов Row/Column при сборке сцен (kit-функции —
+    /// всегда native). Default — [`SceneBackend::Native`] (§Контракт-1:
+    /// поведение существующих прогонов байт-в-байт прежнее).
+    backend: SceneBackend,
 }
 
 impl Ctx {
@@ -398,6 +425,29 @@ impl Ctx {
             m: TextMeasurer::new(),
             fs: cosmic_text::FontSystem::new(),
             palette: palette_stub(),
+            backend: SceneBackend::Native,
+        }
+    }
+
+    /// `Row::lay_out` через backend сцены (Контракт-3 FR-068): все
+    /// Row-места сцен идут через этот хелпер — смена backend'а
+    /// локализована в одном match.
+    fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+        match self.backend {
+            SceneBackend::Native => row.lay_out(slot, items),
+            #[cfg(feature = "taffy")]
+            SceneBackend::Taffy => row.lay_out_with(&canvas_ui::layout::TaffyBackend, slot, items),
+        }
+    }
+
+    /// `Column::lay_out` через backend сцены (симметрично [`Ctx::lay_out_row`]).
+    fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+        match self.backend {
+            SceneBackend::Native => column.lay_out(slot, items),
+            #[cfg(feature = "taffy")]
+            SceneBackend::Taffy => {
+                column.lay_out_with(&canvas_ui::layout::TaffyBackend, slot, items)
+            }
         }
     }
 }
@@ -691,13 +741,16 @@ fn scene_main_canvas_whatif(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
         true,
     ));
     let items: Vec<Child> = kids.iter().map(|(_, c, _)| *c).collect();
-    let rects = Row {
-        gap: 8.0,
-        cross: CrossAlign::Center,
-        policy: RowPolicy::SqueezeTail,
-        ..Row::default()
-    }
-    .lay_out(content, &items);
+    let rects = ctx.lay_out_row(
+        Row {
+            gap: 8.0,
+            cross: CrossAlign::Center,
+            policy: RowPolicy::SqueezeTail,
+            ..Row::default()
+        },
+        content,
+        &items,
+    );
     for ((name, _, interactive), rect) in kids.into_iter().zip(rects) {
         s.elem(
             "whatif",
@@ -774,12 +827,15 @@ fn scene_palette_dropdown(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
         kids.push((format!("palette-chip[{cat}]"), Child::fixed(size.x, size.y)));
     }
     let items: Vec<Child> = kids.iter().map(|(_, c)| *c).collect();
-    let rects = Row {
-        gap: 8.0,
-        cross: CrossAlign::Center,
-        ..Row::default()
-    }
-    .lay_out(content, &items);
+    let rects = ctx.lay_out_row(
+        Row {
+            gap: 8.0,
+            cross: CrossAlign::Center,
+            ..Row::default()
+        },
+        content,
+        &items,
+    );
     for ((name, _), &rect) in kids.iter().zip(rects.iter()) {
         s.elem(
             "palette_bar",
@@ -899,11 +955,11 @@ fn scene_explain_modal(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
     let title_w = ctx
         .m
         .width_of(&mut ctx.fs, l.explain_title, FAMILY, UI_FONT);
-    let col_rects = Column {
-        gap: 8.0,
-        ..Column::default()
-    }
-    .lay_out(
+    let col_rects = ctx.lay_out_column(
+        Column {
+            gap: 8.0,
+            ..Column::default()
+        },
         content,
         &[
             Child::fixed(title_w, 20.0),
@@ -941,13 +997,13 @@ fn scene_explain_modal(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
 
     let w_close = button_size(l.explain_close, &mut ctx.m, &mut ctx.fs, FAMILY, UI_FONT);
     let w_show = button_size(l.explain_show, &mut ctx.m, &mut ctx.fs, FAMILY, UI_FONT);
-    let btn_rects = Row {
-        gap: 8.0,
-        main: MainAlign::End,
-        cross: CrossAlign::Center,
-        ..Row::default()
-    }
-    .lay_out(
+    let btn_rects = ctx.lay_out_row(
+        Row {
+            gap: 8.0,
+            main: MainAlign::End,
+            cross: CrossAlign::Center,
+            ..Row::default()
+        },
         buttons_rect,
         &[
             Child::fixed(w_close.x, w_close.y),
@@ -1037,12 +1093,12 @@ fn scene_search_overlay(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
         Some("search-panel-content".into()),
         false,
     );
-    let cell_rects = Row {
-        gap: 8.0,
-        cross: CrossAlign::Center,
-        ..Row::default()
-    }
-    .lay_out(
+    let cell_rects = ctx.lay_out_row(
+        Row {
+            gap: 8.0,
+            cross: CrossAlign::Center,
+            ..Row::default()
+        },
         row_rect,
         &[
             Child::flexible(200.0, TEXT_FIELD_HEIGHT, 1.0),
@@ -1216,11 +1272,14 @@ fn scene_settings_panel(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
         Some("settings-panel-content".into()),
         false,
     );
-    let row_rects = Column {
-        gap: 8.0,
-        ..Column::default()
-    }
-    .lay_out(rows_area, &[Child::fixed(content.w, 24.0); 5]);
+    let row_rects = ctx.lay_out_column(
+        Column {
+            gap: 8.0,
+            ..Column::default()
+        },
+        rows_area,
+        &[Child::fixed(content.w, 24.0); 5],
+    );
     let on_flags = [true, false, true, false, false];
     for (i, row_rect) in row_rects.iter().enumerate() {
         let row_name = format!("settings-row[{}]", l.settings_rows[i]);
@@ -1235,13 +1294,13 @@ fn scene_settings_panel(ctx: &mut Ctx, vp: UiRect, l: &Labels) -> Scene {
         let label_w = ctx
             .m
             .width_of(&mut ctx.fs, l.settings_rows[i], FAMILY, UI_FONT);
-        let cells = Row {
-            gap: 8.0,
-            main: MainAlign::SpaceBetween,
-            cross: CrossAlign::Center,
-            ..Row::default()
-        }
-        .lay_out(
+        let cells = ctx.lay_out_row(
+            Row {
+                gap: 8.0,
+                main: MainAlign::SpaceBetween,
+                cross: CrossAlign::Center,
+                ..Row::default()
+            },
             *row_rect,
             &[
                 Child::fixed(label_w, 16.0),
@@ -1415,5 +1474,138 @@ fn lint_covers_30_scenarios() {
                 lang.tag()
             );
         }
+    }
+}
+
+// --- Taffy-прогоны (FR-068 W1, Контракт-3 «G4-линты × N backend'ов») ----------
+
+/// Те же 5 canonical сцен × 3 окна × 2 языка, построенные через
+/// `TaffyBackend` (Row/Column — `lay_out_with`; kit-функции остаются
+/// native — они не flex), с ТЕМИ ЖЕ G4-проверками (parent-пересечение,
+/// viewport L4+, overlaps пуст, hit-rect'ы во вьюпорте). Компилируется
+/// только под фичей `taffy` (default-сборка не тянет taffy — G7).
+///
+/// Сцены подобраны так, что помещаются в самое малое окно 800×560;
+/// SqueezeTail-деградация what-if бара под taffy сжимает детей без
+/// выхода за пределы слота (flex_shrink распределяет сжатие
+/// пропорционально — C3) — G4-свойства сохраняются. Числа могут
+/// отличаться от native-прогонов (rounding px-сетки taffy на дробных
+/// measured-размерах, ≤ 0.5 ui px) — побитовое равенство с native
+/// пинится отдельно в `backend_parity.rs`; здесь проверяются СВОЙСТВА
+/// вёрстки, а не совпадение значений.
+#[cfg(feature = "taffy")]
+mod taffy_backend_runs {
+    use super::*;
+
+    /// Ctx с taffy-путём примитивов Row/Column.
+    fn taffy_ctx() -> Ctx {
+        let mut ctx = Ctx::new();
+        ctx.backend = SceneBackend::Taffy;
+        ctx
+    }
+
+    #[test]
+    fn taffy_scene_1_main_canvas_whatif() {
+        let mut ctx = taffy_ctx();
+        let mut runs = 0;
+        for combo in matrix().into_iter().filter(|c| c.scene == 0) {
+            let built = build(combo, &mut ctx);
+            lint_combo(&built, combo.vp, combo.lang);
+            runs += 1;
+        }
+        assert_eq!(
+            runs, RUNS_PER_SCENE,
+            "taffy: сцена должна покрывать все комбинации окно×язык"
+        );
+    }
+
+    #[test]
+    fn taffy_scene_2_palette_dropdown() {
+        let mut ctx = taffy_ctx();
+        let mut runs = 0;
+        for combo in matrix().into_iter().filter(|c| c.scene == 1) {
+            let built = build(combo, &mut ctx);
+            lint_combo(&built, combo.vp, combo.lang);
+            runs += 1;
+        }
+        assert_eq!(runs, RUNS_PER_SCENE);
+    }
+
+    #[test]
+    fn taffy_scene_3_explain_modal() {
+        let mut ctx = taffy_ctx();
+        let mut runs = 0;
+        for combo in matrix().into_iter().filter(|c| c.scene == 2) {
+            let built = build(combo, &mut ctx);
+            lint_combo(&built, combo.vp, combo.lang);
+            runs += 1;
+        }
+        assert_eq!(runs, RUNS_PER_SCENE);
+    }
+
+    #[test]
+    fn taffy_scene_4_search_overlay() {
+        let mut ctx = taffy_ctx();
+        let mut runs = 0;
+        for combo in matrix().into_iter().filter(|c| c.scene == 3) {
+            let built = build(combo, &mut ctx);
+            lint_combo(&built, combo.vp, combo.lang);
+            runs += 1;
+        }
+        assert_eq!(runs, RUNS_PER_SCENE);
+    }
+
+    #[test]
+    fn taffy_scene_5_settings_panel() {
+        let mut ctx = taffy_ctx();
+        let mut runs = 0;
+        for combo in matrix().into_iter().filter(|c| c.scene == 4) {
+            let built = build(combo, &mut ctx);
+            lint_combo(&built, combo.vp, combo.lang);
+            runs += 1;
+        }
+        assert_eq!(runs, RUNS_PER_SCENE);
+    }
+
+    /// Счётчик матрицы taffy-прогонов (паттерн `lint_covers_30_scenarios`):
+    /// полнота 5×3×2 = 30, уникальность, покрытие окон/языков — плюс
+    /// сквозной прогон ВСЕХ 30 комбинаций через taffy-путь с линтом.
+    #[test]
+    fn taffy_lint_covers_30_scenarios() {
+        assert_eq!(
+            SCENES.len() * VIEWPORTS.len() * Lang::ALL.len(),
+            30,
+            "постановка FR-068 W0: ровно 30 прогонов (та же матрица под taffy)"
+        );
+        let combos = matrix();
+        assert_eq!(combos.len(), 30, "счётчик комбинаций должен быть 30");
+
+        let mut seen = HashSet::new();
+        for combo in &combos {
+            assert!(
+                seen.insert(format!(
+                    "{}|{:?}|{}",
+                    combo.scene,
+                    combo.vp,
+                    combo.lang.tag()
+                )),
+                "дубликат комбинации: сцена {} {:?} {}",
+                combo.scene,
+                combo.vp,
+                combo.lang.tag()
+            );
+        }
+
+        let mut ctx = taffy_ctx();
+        let mut runs = 0;
+        for combo in combos {
+            let built = build(combo, &mut ctx);
+            lint_combo(&built, combo.vp, combo.lang);
+            runs += 1;
+        }
+        assert_eq!(
+            runs, 30,
+            "taffy-прогон должен покрыть все 30 комбинаций (5 сцен × 3 окна × 2 языка)"
+        );
     }
 }
