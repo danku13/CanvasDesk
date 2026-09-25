@@ -69,7 +69,7 @@ pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
 pub use registry::{
     DegradationPolicy, KeyboardScopeId, RegistryError, SurfaceDecl, SurfaceId, SurfaceRegistry,
 };
-pub use row_guides::{measure_row_cells, RowCellWidths, RowGuides};
+pub use row_guides::{measure_row_cells, zebra_run_flags, RowCellWidths, RowGuides};
 #[cfg(feature = "mock-shaper")]
 pub use shaper::MockShaper;
 pub use shaper::{CosmicShaper, Shaper};

@@ -357,6 +357,13 @@ scheme_gallery_ui → settings_ui** (модалка — последний, са
 - Карточки среза/веер/точки портов main stage — канвас-домен
   (`canvas-render::cards`), рендерятся квадами по нодной геометрии;
   компонентная модель — для экранного UI, не для world-space контента.
+  Уточнение границы (аудит шаблонных нод, 2026-09-26 —
+  `docs/plans/fr-061-template-node-kit-alignment.md`): правило касается
+  ШЕЛЛА карточки (шелл-квад/полоса категории/квад-иконка/порты — world-space,
+  камера + instanced SDF); ГЕОМЕТРИЯ табличного тела ноды при этом остаётся
+  на ките (`RowGuides`/`measure_row_cells`/`leader_dash_rects`/
+  `ROW_BADGE_PAD_H`/`zebra_run_flags` — «единая геометрия, разные
+  исполнения»: Painter у экрана, glyphon+GPU-квады у канваса).
 - `kit_ui` демо `Child::fixed(64)` — часть демонстрации flex-grow (F-14).
 - Оракулы/фикстуры canvas-ui (`g4_lint`, `backend_parity`, perf) — пинят
   семантику `Child`; перевод ослабляет гейты.

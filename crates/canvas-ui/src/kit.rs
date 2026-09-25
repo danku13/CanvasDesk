@@ -43,6 +43,11 @@ pub use crate::component::row::{
     RowParts, RowStyle, ROW_BADGE_PAD_H, ROW_DOT, ROW_DOT_PAD, ROW_GLYPH_GAP, ROW_GLYPH_MIN_W,
     ROW_LINE_FRAC, ROW_TEXT_GAP,
 };
+// FR-061 D-5 (аудит выравнивания 2026-09-26, docs/plans/
+// fr-061-template-node-kit-alignment.md): зебра-маска прогонов строк данных —
+// единое РЕШЕНИЕ с телом ноды (перенос 1:1 из canvas-render/text.rs); цвет
+// зебры — у потребителя (F-8: слот темы, не кит).
+pub use crate::row_guides::zebra_run_flags;
 // FR-068 W3-продолжение (M1): Table v2 — retained-компонент таблицы
 // (дизайн docs/plans/fr-068-table-v2.md; фасад 1:1, §Контракт-1).
 pub use crate::component::table::{Table, TableOpts, TableProps, TableRow, TableRowStyle};

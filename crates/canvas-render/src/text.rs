@@ -3480,36 +3480,25 @@ impl TextSystem {
                         // Зебра (D-5): прогоны ПОДРЯД идущих строк данных —
                         // соседство по индексам блоков (проза между строками
                         // рвёт прогон), чётные позиции внутри прогона ≥ 4.
-                        let mut zebra: Vec<bool> = vec![false; rows_data.len()];
-                        let mut j = 0;
-                        while j < geo.len() {
-                            let mut k = j + 1;
-                            while k < geo.len()
-                                && geo[k].3 == geo[k - 1].3 + 1
-                                && !matches!(
-                                    rows_data[k].kind,
+                        // FR-061 аудит выравнивания (2026-09-26): правило
+                        // прогонов — ЕДИНОЕ с китом (canvas_ui::kit::
+                        // zebra_run_flags; перенос 1:1, байт-паритет с прежним
+                        // inline-циклом — тест zebra_run_matches_inline_oracle);
+                        // цвет зебры остаётся здесь (слот темы, F-8).
+                        let chrome: Vec<bool> = rows_data
+                            .iter()
+                            .map(|row| {
+                                matches!(
+                                    row.kind,
                                     row_grid::RowKind::Total
                                         | row_grid::RowKind::Preview
                                         | row_grid::RowKind::Sigma
                                 )
-                            {
-                                k += 1;
-                            }
-                            if k - j >= ZEBRA_RUN_MIN {
-                                for (pos, z) in zebra[j..k].iter_mut().enumerate() {
-                                    // Заголовок блока зебры не получает (D-5:
-                                    // зебра — фон строк данных; превью — тоже).
-                                    *z = pos % 2 == 1
-                                        && !matches!(
-                                            rows_data[j + pos].kind,
-                                            row_grid::RowKind::Total
-                                                | row_grid::RowKind::Preview
-                                                | row_grid::RowKind::Sigma
-                                        );
-                                }
-                            }
-                            j = k;
-                        }
+                            })
+                            .collect();
+                        let block_pos: Vec<usize> = geo.iter().map(|g| g.3).collect();
+                        let zebra =
+                            canvas_ui::kit::zebra_run_flags(&block_pos, &chrome, ZEBRA_RUN_MIN);
                         // Шейп ячеек (D-4): значение/юнит — по частям D-1,
                         // бейдж — по режиму лестницы (D-6). Пролитые/авто —
                         // наклонное моно Р-2 (метрики те же — I-1).
@@ -4941,6 +4930,65 @@ load = connections_per_sec / (servers * server_rate)\n";
                 );
                 let _ = value; // ячейка значения право-прижата — правый край закреплён
             }
+        }
+    }
+
+    /// FR-061 аудит выравнивания с китом (2026-09-26, D-5): зебра-маска
+    /// прогонов — `canvas_ui::kit::zebra_run_flags` бит-в-бит с прежним
+    /// inline-циклом text.rs (оракул — дословная копия прежнего алгоритма,
+    /// прецедент kit `leader_dashes_match_node_arithmetic`). Корпус —
+    /// реальные прогоны тела ноды: сплошная таблица, проза-разрыв, хром
+    /// (Total/Preview/Sigma) в начале/середине, пороговые длины 3/4.
+    #[test]
+    fn zebra_run_matches_inline_oracle() {
+        // Оракул: прежний inline-цикл prepare_titles (до переноса в кит).
+        let oracle = |block_pos: &[usize], chrome: &[bool], run_min: usize| -> Vec<bool> {
+            let mut zebra: Vec<bool> = vec![false; block_pos.len()];
+            let mut j = 0;
+            while j < block_pos.len() {
+                let mut k = j + 1;
+                while k < block_pos.len() && block_pos[k] == block_pos[k - 1] + 1 && !chrome[k] {
+                    k += 1;
+                }
+                if k - j >= run_min {
+                    for (pos, z) in zebra[j..k].iter_mut().enumerate() {
+                        *z = pos % 2 == 1 && !chrome[j + pos];
+                    }
+                }
+                j = k;
+            }
+            zebra
+        };
+        let run_min = ZEBRA_RUN_MIN;
+        let corpus: Vec<(Vec<usize>, Vec<bool>)> = vec![
+            (vec![0, 1, 2, 3], vec![false; 4]),       // порог ровно 4
+            (vec![0, 1, 2], vec![false; 3]),          // короче порога
+            ((0..9).collect(), vec![false; 9]),       // сплошная таблица
+            (vec![0, 1, 4, 5, 6, 7], vec![false; 6]), // проза-разрыв
+            (
+                (0..8).collect(),
+                vec![true, false, false, false, false, false, false, false],
+            ), // Total открывает прогон
+            (
+                (0..8).collect(),
+                vec![false, false, false, false, true, false, false, false],
+            ), // Total в середине
+            (
+                (0..8).collect(),
+                vec![false, false, false, false, false, true, false, false],
+            ), // Preview ближе к концу
+            (
+                (0..7).collect(),
+                vec![false, false, false, false, false, false, true],
+            ), // Sigma замыкает
+            (vec![3, 4, 5, 6, 10], vec![false; 5]),   // блоки не с нуля + хвост
+        ];
+        for (blocks, chrome) in corpus {
+            assert_eq!(
+                canvas_ui::kit::zebra_run_flags(&blocks, &chrome, run_min),
+                oracle(&blocks, &chrome, run_min),
+                "маска кита ≠ прежний inline-цикл на {blocks:?}/{chrome:?}"
+            );
         }
     }
 
