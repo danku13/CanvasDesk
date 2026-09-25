@@ -378,8 +378,8 @@ mod tests {
     /// UV-координаты иконки в конце атласа — правый нижний угол.
     #[test]
     fn uv_last_icon_is_corner() {
-        let (min, max) = icon_uv("bootstrap", "chevron_right")
-            .expect("bootstrap/chevron_right есть в реестре");
+        let (min, max) =
+            icon_uv("bootstrap", "chevron_right").expect("bootstrap/chevron_right есть в реестре");
         let cell_w = ICON_CELL_PX as f32 / ATLAS_W as f32;
         let cell_h = ICON_CELL_PX as f32 / ATLAS_H as f32;
         // Последняя колонка + последняя строка

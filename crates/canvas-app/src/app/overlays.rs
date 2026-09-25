@@ -3735,7 +3735,13 @@ impl App {
 
     /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
     /// открыта. Координаты — логические px от левого верхнего угла окна.
-    pub(super) fn settings_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>, Vec<canvas_render::IconInstance>) {
+    pub(super) fn settings_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
         let mut icons = Vec::new();

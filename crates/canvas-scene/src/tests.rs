@@ -228,7 +228,10 @@ fn mcp_node_resize_fit_adjusts_height_to_content() {
     // Пересчёт — чтобы refit_node_to_content имел формулы/spills
     dispatch(&mut scene, "flow_recalc", r#"{}"#).expect("flow_recalc");
     let content_height = scene.canvas.nodes[0].height;
-    assert!(content_height > 50.0, "контент требует >50px: {content_height}");
+    assert!(
+        content_height > 50.0,
+        "контент требует >50px: {content_height}"
+    );
     // resize с fit:true + height=50 (меньше контента) — высота должна
     // подогнаться под контент (не остаться 50.0)
     let result = dispatch(
