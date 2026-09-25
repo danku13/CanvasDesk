@@ -435,6 +435,7 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
 | `component/text_field.rs` | `TextField` | `WidgetState` + `TextFieldModel` | paint — контейнер (текст/каретка — потребитель: детерминированность замера) |
 | `component/list.rs` | `List` | `ScrollState` | layout → `list_rows`; paint — скроллбар |
 | `component/row.rs` | `Row` | `WidgetState` | FR-061 строка; layout-паритет с `row_layout` (тест); paint через `paint_row` |
+| `component/table.rs` | `Table` | `ScrollState` + `Vec<TableRow>` | FR-068 Table v2: таблица на ОБЩИХ направляющих (проход A max-по-колонке + проход B от правого края — колонка значений стабильна при прокрутке); kit-реэкспорт (`Table`/`TableRow`/`TableRowStyle`/`TableOpts`/`TableProps` поверх kit-Row v1 — Row/List не меняются); implicit-колонки, деградация пустых правых колонок, клип-семантика окна видимости (усечение пересечением); два слоя замера (`*_with` — внешний замерщик, компонентный — собственный; параметр направляющих `viewport_right` — правый край вьюпорта в координатах слотов); гранулярно `paint_rows_with`/`paint_scrollbar`; оракулы бит-в-бит T1–T6 (≡ kit `row_guides`/ручному циклу). Дизайн — `docs/plans/fr-068-table-v2.md` |
 
 - **Retained-state** — НЕ введён (профиль W2: reflow 1000 узлов ~0.2 мс <
   1 мс порога — KISS, решение зафиксировано в FR-068). `Row` держит
@@ -447,6 +448,13 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
   (в т.ч. НОВЫЙ `Column::lay_out_measured/_with` — вертикальный
   симметричный аналог F-13); `Child::fixed` в canvas-app/canvas-render
   42 → 1 (демо kit_ui F-14 — решение W3.3 за владельцем).
+- **Table v2** (FR-068 W3-продолжение, 2026-09-26) — компонент таблиц
+  на общих направляющих (`component/table.rs`, kit-реэкспорт; дизайн +
+  оракулы бит-в-бит — `docs/plans/fr-068-table-v2.md`). Миграция
+  потребителей M1–M6 дизайна исполнена (панель «Как считается» stage —
+  2×Table, демо-таблицы витрины/админки; место overlays — аудит: не
+  кандидат — paint-половина демо-таблицы витрины уже на направляющих
+  `kit_ui::gallery_layout`, см. §8 дизайна).
 - **Известные проблемы (W4-ревизия)**: 2 taffy-теста whatif_ui, отмеченные
   в W3 как предсуществующие красные, шли за фичей `taffy` и удалены вместе
   с ней (W4) — семейство taffy-округлений больше не существует;
