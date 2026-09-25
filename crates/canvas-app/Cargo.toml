@@ -59,9 +59,3 @@ toml.workspace = true
 
 [dev-dependencies]
 
-# FR-068 W1: passthrough фичи taffy для pilot-паритет-тестов (default off).
-# Без фичи pilot_backend() == NativeBackend (default-сборка — native-путь);
-# с фичей parity-тесты витрины/объяснения сравнивают taffy-путь с native
-# в рантайме (ADR-0014 §Решение п.5 P1).
-[features]
-taffy = ["canvas-ui/taffy"]

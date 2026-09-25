@@ -1101,11 +1101,6 @@ impl ExplainState {
 mod tests {
     use super::*;
     use canvas_core::{LineageChild, LineageNode, LineageNodeId};
-    // FR-068 W1 (pilot-проверка позиционирования): TaffyBackend::centered —
-    // только для parity-теста за фичей (kit::modal — чужой домен canvas-ui,
-    // полный перевод — W3).
-    #[cfg(feature = "taffy")]
-    use canvas_ui::layout::TaffyBackend;
 
     /// Дерево-цепочка A → B → C(лист) + лист-константа D у A.
     fn sample_tree() -> LineageTree {
@@ -1215,73 +1210,6 @@ mod tests {
         }
     }
 
-    /// FR-068 W1 (pilot-проверка позиционирования, ADR-0014 §Решение п.5
-    /// P1): панель окна проверки (`kit::modal` = constrain+stack Center)
-    /// управляется taffy-центрированием БЕЗ изменения геометрии —
-    /// `TaffyBackend::centered(slot, panel_size)` против фактического
-    /// panel rect на матрице вьюпортов. Панель помещается в слот всегда
-    /// (desired ограничен constrain: max ≤ слот) — переполненный Center
-    /// (документированное расхождение CSS «за оба края» vs кламп Native)
-    /// не достигается ни на одном вьюпорте матрицы. Геометрия: на вьюпортах
-    /// с ЦЕЛОЙ панелью (1200×900, 1000×1000) — ПОБИТОВО; на дробных
-    /// (0.88/0.86 доли вьюпорта — 1280×800, 1024×640, 800×560) — допуск
-    /// ≤ 1.0 ui px: taffy 0.14 выполняет round_layout всегда (округление
-    /// всех координат/размеров к целым ui px, CSS spec rounding — то же
-    /// документированное расхождение W1, что у grow-долей; ширина панели =
-    /// разность двух округлённых позиций, ошибка до 1.0). Полный перевод
-    /// kit::modal на backend — W3 (kit.rs — чужой домен, не трогаем).
-    #[cfg(feature = "taffy")]
-    #[test]
-    fn explain_modal_centering_taffy_parity() {
-        // (вьюпорт, допуск: 0.0 — побитово, иначе ≤ tol ui px)
-        for &(vw, vh, tol) in &[
-            (1280.0, 800.0, 1.0),
-            (1024.0, 640.0, 1.0),
-            (800.0, 560.0, 1.0),
-            // целая геометрия панели — эталон побитового паритета
-            (1200.0, 900.0, 0.0),
-            (1000.0, 1000.0, 0.0),
-        ] {
-            let slot = UiRect::new(
-                WIN_MARGIN,
-                WIN_MARGIN,
-                (vw - WIN_MARGIN * 2.0).max(0.0),
-                (vh - WIN_MARGIN * 2.0).max(0.0),
-            );
-            let layout = kit::modal(
-                slot,
-                UiVec2::new(WIN_MIN_W, WIN_MIN_H),
-                UiVec2::new(WIN_MAX_W.min(slot.w), WIN_MAX_H.min(slot.h)),
-                UiVec2::new(vw * WIN_FRAC_W, vh * WIN_FRAC_H),
-            );
-            let panel = layout.panel;
-            assert!(
-                panel.w <= slot.w && panel.h <= slot.h,
-                "{vw}×{vh}: панель {}×{} помещается в слот {}×{}",
-                panel.w,
-                panel.h,
-                slot.w,
-                slot.h
-            );
-            let centered = TaffyBackend.centered(slot, UiVec2::new(panel.w, panel.h));
-            assert!(
-                (centered.x - panel.x).abs() <= tol
-                    && (centered.y - panel.y).abs() <= tol
-                    && (centered.w - panel.w).abs() <= tol
-                    && (centered.h - panel.h).abs() <= tol,
-                "{vw}×{vh} (допуск {tol}): taffy-centered {centered:?} != panel {panel:?}"
-            );
-            if tol == 0.0 {
-                assert_eq!(
-                    centered, panel,
-                    "{vw}×{vh}: целая панель — побитовый паритет центрирования"
-                );
-            }
-        }
-    }
-
-    /// Видимость: авто-раскрытие 3 уровня (дефолт), глубже — фронтир с
-    /// бейджем; ручное раскрытие делает потомков видимыми (AC-2.3).
     #[test]
     fn visibility_depth_limit_and_expand() {
         // Цепочка 5 узлов: 0→1→2→3→4.

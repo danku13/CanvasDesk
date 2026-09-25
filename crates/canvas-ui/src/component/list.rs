@@ -1,4 +1,4 @@
-//! FR-068 W3: список/скролл (ScrollState/list_rows/scroll_bar + taffy scroll-area) — перенос из kit.rs 1:1 (W3).
+//! FR-068 W3: список/скролл (ScrollState/list_rows/scroll_bar) — перенос из kit.rs 1:1 (W3).
 //!
 //! W3 (агент 3-c): слой компонентной модели ДОБАВЛЕН: [`ListProps`],
 //! [`List`] и `impl Component` (layout/paint/hit_test). Стабильный API
@@ -8,9 +8,6 @@ use super::{Component, KitPalette, SCROLLBAR_KNOB_MIN, SCROLLBAR_WIDTH};
 use crate::geometry::UiRect;
 use crate::layout::LayoutBackend;
 use crate::paint::Painter;
-
-#[cfg(feature = "taffy")]
-use crate::layout::{SceneNode, TaffyBackend};
 
 // --- Список + скролл ---------------------------------------------------------
 
@@ -108,85 +105,6 @@ pub fn scroll_bar(area: UiRect, s: &ScrollState, _p: &KitPalette) -> Option<UiRe
     Some(UiRect::new(track_x, knob_y, SCROLLBAR_WIDTH, knob_h))
 }
 
-#[cfg(feature = "taffy")]
-const TAFFY: TaffyBackend = TaffyBackend;
-
-/// Результат opt-in taffy-пути scroll-area (FR-068 W1): клип-область +
-/// rect'ы строк (content-shift −offset уже применён сценой).
-#[cfg(feature = "taffy")]
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScrollAreaTaffy {
-    /// Клип-область == `viewport`: потребитель оборачивает строки в
-    /// `Painter::ClipRect`/scissor (FR-056) — `SceneOverflow::Hidden`
-    /// сцены rect'ы потомков НЕ режет (клип — draw-семантика потребителя).
-    pub clip: UiRect,
-    /// Rect'ы строк в координатах вьюпорта — ВСЕ строки сцены (не только
-    /// видимые; см. доку [`scroll_area_taffy`] о материализации).
-    pub rows: Vec<UiRect>,
-}
-
-/// Opt-in taffy-путь (FR-068 W1) scroll-area списка: строки раскладывает
-/// `TaffyBackend::lay_out_scene` — колонка размером `viewport`
-/// (`SceneOverflow::Hidden` + scroll-offset = content-shift), листья
-/// высотой `row_h` шириной `viewport.w`. Default-сборка использует native
-/// [`list_rows`]; parity зафиксирован тестами (`scroll_area_taffy_*` в
-/// `mod tests::taffy_parity`); финальные гарантии W0: `clip == viewport`
-/// (клип на потребителе — Painter::ClipRect/scissor FR-056), offset клампится
-/// семантикой [`ScrollState::clamp`].
-///
-/// Материализация (задокументированное отличие W1): taffy-путь материализует
-/// ВСЕ строки сцены — `ceil(content_h/(row_h+gap))` rect'ов, включая
-/// невидимые (отрицательный y / за нижним краем вьюпорта), native
-/// [`list_rows`] — только видимое окно (частичные строки краёв включены).
-/// Потребитель taffy-пути клипует сам; память O(числа строк) — аргумент за
-/// ленивую материализацию в W2 (FR-068). Клип rect'ы потомков не меняет —
-/// «лишние» строки за краями вычисляются полностью, как в HTML
-/// overflow:hidden.
-///
-/// Контракт листьев: число = `ceil(content_h/(row_h+gap))`, кламп ≥ 1
-/// (`content_h ≤ 0` — один лист); вырожденный вход `row_h ≤ 0`/`row_h+gap
-/// ≤ 0` — пустой `rows` (native [`list_rows`] при `row_h ≤ 0` тоже пуст).
-/// `offset` клампится в `[0, (content_h − viewport.h).max(0)]` — семантика
-/// [`ScrollState::clamp`] (`max_offset`, не меньше 0).
-#[cfg(feature = "taffy")]
-pub fn scroll_area_taffy(
-    viewport: UiRect,
-    content_h: f32,
-    row_h: f32,
-    gap: f32,
-    offset: f32,
-) -> ScrollAreaTaffy {
-    let gap = gap.max(0.0);
-    let stride = row_h + gap;
-    if row_h <= 0.0 || stride <= 0.0 {
-        return ScrollAreaTaffy {
-            clip: viewport,
-            rows: Vec::new(),
-        };
-    }
-    let content_h = if content_h.is_finite() {
-        content_h.max(0.0)
-    } else {
-        0.0
-    };
-    let count = ((content_h / stride).ceil() as usize).max(1);
-    // Кламп offset — семантика ScrollState::clamp: [0, max_offset],
-    // max_offset = (content − viewport).max(0).
-    let max_offset = (content_h - viewport.h).max(0.0);
-    let offset = offset.max(0.0).min(max_offset);
-    let leaves: Vec<SceneNode> = (0..count)
-        .map(|_| SceneNode::leaf(viewport.w, row_h))
-        .collect();
-    let scene = SceneNode::column(viewport.w, viewport.h, gap, leaves)
-        .clipped()
-        .scrolled(offset);
-    let rects = TAFFY.lay_out_scene(viewport, &scene);
-    ScrollAreaTaffy {
-        clip: viewport,
-        rows: rects.into_iter().skip(1).collect(),
-    }
-}
-
 // --- List: компонентная модель (FR-068 W3) ----------------------------------
 
 /// Свойства [`List`] (декларативный вход кадра; FR-068 W3).
@@ -261,7 +179,7 @@ impl Component for List {
     /// `self.scroll`; row_h/gap — из `self.props`; контракт: потребитель
     /// держит `scroll.viewport_h == slot.h`). Backend не используется:
     /// [`list_rows`] — чистая функция слота (паритет движков тривиален,
-    /// §Контракт-3 FR-068; opt-in taffy-путь — [`scroll_area_taffy`]).
+    /// §Контракт-3 FR-068).
     fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
         let count = self.row_count();
         list_rows(slot, &self.scroll, self.props.row_h, self.props.gap, count)
@@ -664,118 +582,4 @@ mod tests {
     }
 
     // --- switch: on/off позиция, геометрия в слоте, стили --------------------
-}
-
-#[cfg(all(test, feature = "taffy"))]
-mod taffy_parity {
-
-    use super::*;
-    /// Геометрия scroll-матрицы: строки row_h=26, gap=6 (stride 32) в
-    /// вьюпорте 200×100 со смещением; content_h — ровно под `total` строк.
-    fn scroll_vp() -> UiRect {
-        UiRect::new(10.0, 20.0, 200.0, 100.0)
-    }
-    fn content_h_for(total: usize) -> f32 {
-        total as f32 * 26.0 + (total as f32 - 1.0) * 6.0
-    }
-    /// (а) offset=0: строки на местах потока — y = vp.y, vp.y+stride,
-    /// vp.y+2·stride… (полная материализация: ceil(154/32) = 5 строк).
-    #[test]
-    fn scroll_area_taffy_flow_positions_at_zero_offset() {
-        let vp = scroll_vp();
-        let a = scroll_area_taffy(vp, content_h_for(5), 26.0, 6.0, 0.0);
-        assert_eq!(a.clip, vp, "clip == viewport (клип — на потребителе)");
-        assert_eq!(a.rows.len(), 5, "все 5 строк материализованы");
-        for (i, r) in a.rows.iter().enumerate() {
-            assert_eq!(
-                (r.x, r.y, r.w, r.h),
-                (vp.x, vp.y + i as f32 * 32.0, vp.w, 26.0),
-                "row {i}: место потока"
-            );
-        }
-    }
-    /// (б) offset = k·(row_h+gap) — сдвиг ровно на k шагов: строки
-    /// 0..k уходят выше вьюпорта (материализуются с отрицательным y —
-    /// клип на потребителе), остальные встают на k шагов вверх.
-    /// (8 строк: content 250, max_offset 150 — offset 64 в границах.)
-    #[test]
-    fn scroll_area_taffy_offset_shifts_by_whole_steps() {
-        let vp = scroll_vp();
-        let a = scroll_area_taffy(vp, content_h_for(8), 26.0, 6.0, 2.0 * 32.0);
-        assert_eq!(a.rows.len(), 8);
-        for (i, r) in a.rows.iter().enumerate() {
-            assert_eq!(
-                r.y,
-                vp.y + (i as f32 - 2.0) * 32.0,
-                "row {i}: сдвиг ровно 2 шага"
-            );
-        }
-        assert!(
-            a.rows[0].y < vp.y,
-            "строки 0..2 выше вьюпорта — материализованы"
-        );
-    }
-    /// (в) offset больше максимума клампится в
-    /// [0, (content_h − viewport.h).max(0)] — семантика
-    /// [`ScrollState::clamp`]; отрицательный — к 0.
-    #[test]
-    fn scroll_area_taffy_offset_clamped() {
-        let vp = scroll_vp();
-        let content_h = content_h_for(5); // 154
-        let max_off = (content_h - vp.h).max(0.0); // 54
-        let a = scroll_area_taffy(vp, content_h, 26.0, 6.0, 10_000.0);
-        for (i, r) in a.rows.iter().enumerate() {
-            assert_eq!(
-                r.y,
-                vp.y + i as f32 * 32.0 - max_off,
-                "row {i}: сдвиг клампнут к max_offset"
-            );
-        }
-        let neg = scroll_area_taffy(vp, content_h, 26.0, 6.0, -5.0);
-        let zero = scroll_area_taffy(vp, content_h, 26.0, 6.0, 0.0);
-        assert_eq!(neg.rows, zero.rows, "отрицательный offset → 0");
-    }
-    /// (г) PARITY с native [`list_rows`] — побитово на целых входах:
-    /// для каждого видимого rect'а native taffy-путь даёт идентичный
-    /// rect (x/y/w/h, допуск 0.0). Разница материализации (см. доку
-    /// [`scroll_area_taffy`]): taffy-путь возвращает ВСЕ строки сцены,
-    /// native — только видимое окно; сравнивается пересечение видимого
-    /// окна (нативные индексы индексируются в полную материализацию).
-    #[test]
-    fn scroll_area_taffy_parity_with_list_rows() {
-        let area = scroll_vp();
-        for total in [1usize, 3, 5, 8] {
-            let content_h = content_h_for(total);
-            for offset in [0.0, 12.0, 32.0, 40.0, 54.0, 96.0] {
-                // native: offset клампится ScrollState::clamp — та же
-                // семантика, что внутри taffy-пути (сверка контрактов).
-                let mut s = ScrollState {
-                    offset,
-                    content_h,
-                    viewport_h: area.h,
-                };
-                s.clamp();
-                let native = list_rows(area, &s, 26.0, 6.0, total);
-                let taffy = scroll_area_taffy(area, content_h, 26.0, 6.0, offset);
-                assert_eq!(taffy.clip, area);
-                assert_eq!(
-                    taffy.rows.len(),
-                    total,
-                    "материализация всех строк: total={total}"
-                );
-                for (i, rect) in native {
-                    assert_eq!(
-                        (
-                            taffy.rows[i].x,
-                            taffy.rows[i].y,
-                            taffy.rows[i].w,
-                            taffy.rows[i].h
-                        ),
-                        (rect.x, rect.y, rect.w, rect.h),
-                        "parity: total={total} offset={offset} row={i} (допуск 0.0)"
-                    );
-                }
-            }
-        }
-    }
 }
