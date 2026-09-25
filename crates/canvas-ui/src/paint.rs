@@ -408,7 +408,7 @@ mod tests {
         assert!(matches!(outer_items[1], PaintItem::Text { .. }));
 
         // walk: DFS draw-порядок
-        let steps = walk(&items);
+        let steps = walk(items);
         assert_eq!(steps.len(), 4, "2 клипа + 2 листа");
         assert_eq!(
             steps[0],
