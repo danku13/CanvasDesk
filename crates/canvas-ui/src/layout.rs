@@ -421,6 +421,49 @@ impl Column {
             CrossAlign::End => slot.x + (slot.w - w).max(0.0),
         }
     }
+
+    /// FR-068 W3.2: measured-раскладка колонки — вертикальный симметричный
+    /// аналог [`Row::lay_out_measured`] (F-13): resolve [`MeasuredItem`] →
+    /// [`Child`] единой точкой [`MeasuredItem::resolve`] (тот же шейпинг
+    /// [`TextMeasurer`]), затем [`LayoutBackend::lay_out_column`] на
+    /// [`default_backend`]. Политика `Column` — только `Fit` (F-7), поэтому
+    /// resolve до backend'а эквивалентен разрешению внутри него. Скелеты
+    /// панелей (константы + распорки) выражаются [`MeasuredItem::Fixed`]/
+    /// [`MeasuredItem::Spacer`] без ручных `Child::fixed`; flex-факторы
+    /// (`Child.grow`) через measured-дети недоступны — такие потоки
+    /// остаются на [`Column::lay_out`].
+    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+    pub fn lay_out_measured(
+        &self,
+        slot: UiRect,
+        items: &[MeasuredItem],
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        family: &str,
+        size: f32,
+    ) -> Vec<UiRect> {
+        self.lay_out_measured_with(default_backend(), slot, items, m, fs, family, size)
+    }
+
+    /// FR-068 W3.2 через ЯВНО выбранный backend (см.
+    /// [`Column::lay_out_measured`]; симметрично [`Row::lay_out_measured_with`]).
+    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+    pub fn lay_out_measured_with(
+        &self,
+        backend: &dyn LayoutBackend,
+        slot: UiRect,
+        items: &[MeasuredItem],
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        family: &str,
+        size: f32,
+    ) -> Vec<UiRect> {
+        let children: Vec<Child> = items
+            .iter()
+            .map(|item| item.resolve(m, fs, family, size))
+            .collect();
+        backend.lay_out_column(*self, slot, &children)
+    }
 }
 
 /// Ребёнок measured-раскладки (FR-062 F-13): размер от контента.
@@ -1294,6 +1337,89 @@ mod tests {
             measured[0].h,
             measured_h
         );
+    }
+
+    /// FR-068 W3.2: measured-колонка == ручная проводка
+    /// MeasuredItem::resolve → Child → lay_out (те же rect'ы дословно;
+    /// Fixed/Spacer-скелеты панелей без ручных `Child::fixed`).
+    #[test]
+    fn measured_column_matches_manual_fixed_oracle() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = TextMeasurer::new();
+        // Скелет панели: [шапка, поле, распорка 6, ряд чипов, распорка 6,
+        // окно строк] — зазор 0, крестовой прижим к левому краю (Start).
+        let items = [
+            MeasuredItem::Fixed { w: 260.0, h: 40.0 },
+            MeasuredItem::Fixed { w: 260.0, h: 30.0 },
+            MeasuredItem::Spacer(6.0),
+            MeasuredItem::Fixed { w: 260.0, h: 24.0 },
+            MeasuredItem::Spacer(6.0),
+            MeasuredItem::Fixed { w: 260.0, h: 120.0 },
+        ];
+        // Оракул: те же дети, собранные вручную (как до W3.2).
+        let manual_children: Vec<Child> = items
+            .iter()
+            .map(|it| it.resolve(&mut m, &mut fs, "Noto Sans Display", 12.0))
+            .collect();
+        let manual = Column {
+            cross: CrossAlign::Start,
+            ..Column::default()
+        }
+        .lay_out(slot(), &manual_children);
+        // W3.2: тот же скелет через measured-детей.
+        let measured = Column {
+            cross: CrossAlign::Start,
+            ..Column::default()
+        }
+        .lay_out_measured(slot(), &items, &mut m, &mut fs, "Noto Sans Display", 12.0);
+        assert_eq!(measured.len(), manual.len());
+        for (i, (mr, mn)) in measured.iter().zip(manual.iter()).enumerate() {
+            assert_eq!(mr, mn, "rect[{i}] бит-в-бит с ручной проводкой");
+        }
+        // Семантика распорки в колонке (пин движка, оба backend'а): main-ось
+        // колонки — высота, `Spacer(len)` задаёт w — по высоте ребёнок
+        // нулевой (симметрично `spacer_takes_room_without_height` для Row).
+        // ВАЖНО для потребителей: вертикальные зазоры выражаются
+        // `MeasuredItem::Fixed{w: 0.0, h: <зазор>}` (как в settings_ui),
+        // а не `Spacer` — тот в колонке места не занимает.
+        assert_eq!(measured[2].h, 0.0, "Spacer в колонке — нулевая высота");
+        assert_eq!(
+            measured[2].y,
+            measured[1].y + 30.0,
+            "нет вертикального зазора"
+        );
+        assert_eq!(measured[0].x, slot().x);
+    }
+
+    /// FR-068 W3.2: lay_out_measured (default backend) ≡
+    /// lay_out_measured_with(ЯВНЫЙ default backend).
+    #[test]
+    fn measured_column_with_backend_matches_default() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = TextMeasurer::new();
+        let items = [
+            MeasuredItem::Fixed { w: 100.0, h: 20.0 },
+            MeasuredItem::Spacer(4.0),
+            MeasuredItem::Fixed { w: 100.0, h: 20.0 },
+        ];
+        let a = Column::default().lay_out_measured(
+            slot(),
+            &items,
+            &mut m,
+            &mut fs,
+            "Noto Sans Display",
+            12.0,
+        );
+        let b = Column::default().lay_out_measured_with(
+            default_backend(),
+            slot(),
+            &items,
+            &mut m,
+            &mut fs,
+            "Noto Sans Display",
+            12.0,
+        );
+        assert_eq!(a, b);
     }
 
     /// Кламп ширины — только явный max_w; min_w поднимает короткие.

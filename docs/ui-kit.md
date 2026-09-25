@@ -442,7 +442,11 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
 - **Миграция потребителей** — staged (каталог
   `docs/plans/fr-068-w3-consumer-migration.md`): пилот W3.1 — what-if бар
   (`whatif_ui.rs`) переведён на measured-API (`MeasuredItem` ×
-  `Row::lay_out_measured`, бит-в-бит); `Child::fixed` в canvas-app 42→32.
+  `Row::lay_out_measured`, бит-в-бит); W3.2 (2026-09-25) — settings_ui,
+  scheme_gallery_ui, template_ui, search_ui → measured-семейство
+  (в т.ч. НОВЫЙ `Column::lay_out_measured/_with` — вертикальный
+  симметричный аналог F-13); `Child::fixed` в canvas-app/canvas-render
+  42 → 1 (демо kit_ui F-14 — решение W3.3 за владельцем).
 - **Известные проблемы (W4-ревизия)**: 2 taffy-теста whatif_ui, отмеченные
   в W3 как предсуществующие красные, шли за фичей `taffy` и удалены вместе
   с ней (W4) — семейство taffy-округлений больше не существует;

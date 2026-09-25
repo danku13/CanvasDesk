@@ -172,10 +172,7 @@ impl GpuContext {
 ///
 /// Чистая функция (без GPU) — тестируется без устройства; вызывается из
 /// `GpuContext::new` только для `Backend::Gl` (WebGL2 path).
-pub fn boost_gl_limits(
-    mut downlevel: wgpu::Limits,
-    adapter: &wgpu::Limits,
-) -> wgpu::Limits {
+pub fn boost_gl_limits(mut downlevel: wgpu::Limits, adapter: &wgpu::Limits) -> wgpu::Limits {
     downlevel.max_texture_dimension_2d = downlevel
         .max_texture_dimension_2d
         .max(adapter.max_texture_dimension_2d);

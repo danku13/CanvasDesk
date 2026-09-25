@@ -23,7 +23,9 @@
 
 use canvas_core::schemes::{SchemeManifest, SchemeRegistry};
 use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
-use canvas_ui::layout::{constrain, pad, stack, Child, Column, CrossAlign, HAlign, Row, VAlign};
+use canvas_ui::layout::{
+    constrain, pad, stack, Column, CrossAlign, HAlign, MeasuredItem, Row, VAlign,
+};
 use canvas_ui::measure::TextMeasurer;
 
 /// Семейство измерения = семейство screen-текстов рендера (parity метрик).
@@ -164,11 +166,29 @@ pub struct GalleryLayout {
 /// примитивами `canvas-ui::layout` — вертикальный ритм дословно прежний
 /// (зазоры header→input 0, input→chips `SPACING_S`, chips→rows
 /// `SPACING_S`, строки примыкают к футеру), позиция панели/размер —
-/// Stack/Constrain.
+/// Stack/Constrain. W3.2 (каталог `docs/plans/fr-068-w3-consumer-migration.md`):
+/// дети скелета/чипов/строк выражаются [`MeasuredItem`] —
+/// `Row/Column::lay_out_measured` без ручных фиксированных детей.
 pub fn layout(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
     state: &SchemeGalleryState,
+) -> GalleryLayout {
+    // W3.2: замерщик — канонические shared-точки на вызов (Text-детей
+    // нет — замерщик геометрию не читает).
+    let mut m = TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    layout_with(viewport, list, state, &mut m, &mut fs)
+}
+
+/// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
+/// `measure_font_system` — двойной лок глобального FontSystem невозможен).
+pub fn layout_with(
+    viewport: [f32; 2],
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
 ) -> GalleryLayout {
     let max_w = (viewport[0] - canvas_core::tokens::SPACING_XL).max(280.0);
     let panel_w = PANEL_W.min(max_w);
@@ -197,23 +217,41 @@ pub fn layout(
     // Вертикальный ритм панели: Column без базового зазора + явные
     // распорки `SPACING_S` там, где прежняя геометрия имела зазор
     // (header→input 0, input→chips 6, chips→rows 6, rows→footer 0 —
-    // ноль визуального скачка).
+    // ноль визуального скачка). W3.2: дети — MeasuredItem (Fixed/Spacer);
+    // Семантика Spacer в колонке — нулевая высота (main-ось — высота;
+    // см. оракул measured_column_matches_manual_fixed_oracle) — бит-в-бит
+    // с прежней проводкой.
     let items = vec![
         // Шапка: место под заголовок (кнопка «×» — в правом крае панели).
-        Child::fixed(inner_w - 32.0, HEADER_H),
-        Child::fixed(inner_w, INPUT_H),
-        Child::spacer(canvas_core::tokens::SPACING_S),
-        Child::fixed(inner_w, CHIP_H),
-        Child::spacer(canvas_core::tokens::SPACING_S),
-        Child::fixed(inner_w, avail_rows_h),
-        Child::fixed(inner_w, FOOTER_H),
+        MeasuredItem::Fixed {
+            w: inner_w - 32.0,
+            h: HEADER_H,
+        },
+        MeasuredItem::Fixed {
+            w: inner_w,
+            h: INPUT_H,
+        },
+        MeasuredItem::Spacer(canvas_core::tokens::SPACING_S),
+        MeasuredItem::Fixed {
+            w: inner_w,
+            h: CHIP_H,
+        },
+        MeasuredItem::Spacer(canvas_core::tokens::SPACING_S),
+        MeasuredItem::Fixed {
+            w: inner_w,
+            h: avail_rows_h,
+        },
+        MeasuredItem::Fixed {
+            w: inner_w,
+            h: FOOTER_H,
+        },
     ];
     let col = Column {
         gap: 0.0,
         cross: CrossAlign::Start,
         ..Column::default()
     }
-    .lay_out(inner, &items);
+    .lay_out_measured(inner, &items, m, fs, FAMILY, 12.0);
     let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
     let header_rect = as_rect(&col[0]);
     let input_rect = as_rect(&col[1]);
@@ -235,10 +273,16 @@ pub fn layout(
     // тестом `chips_all_categories_fit`/G4-линтом; прежний молчаливый
     // `break`-кламп удалён). Ширина «Все» всегда влезает: панель ≥ 280,
     // слот чипов ≥ 256.
-    let mut chip_children = vec![Child::fixed(CHIP_ALL_W, CHIP_H)];
+    let mut chip_children = vec![MeasuredItem::Fixed {
+        w: CHIP_ALL_W,
+        h: CHIP_H,
+    }];
     let mut chip_keys: Vec<Option<String>> = vec![None];
     for (key, _, _) in categories(SchemeRegistry::embedded()) {
-        chip_children.push(Child::fixed(CHIP_W, CHIP_H));
+        chip_children.push(MeasuredItem::Fixed {
+            w: CHIP_W,
+            h: CHIP_H,
+        });
         chip_keys.push(Some(key));
     }
     let chip_layout = Row {
@@ -246,7 +290,7 @@ pub fn layout(
         cross: CrossAlign::Start,
         ..Row::default()
     }
-    .lay_out(chips_slot, &chip_children);
+    .lay_out_measured(chips_slot, &chip_children, m, fs, FAMILY, 12.0);
     let chip_rects: Vec<([f32; 4], Option<String>)> = chip_layout
         .iter()
         .zip(chip_keys)
@@ -255,15 +299,18 @@ pub fn layout(
 
     // Строки окна видимости: Column с зазором `SPACING_S`, видимая часть
     // строки `ROW_INNER_H` (полный шаг ROW_H — дословно прежний ритм).
-    let row_children: Vec<Child> = (0..shown)
-        .map(|_| Child::fixed(inner_w, ROW_INNER_H))
+    let row_children: Vec<MeasuredItem> = (0..shown)
+        .map(|_| MeasuredItem::Fixed {
+            w: inner_w,
+            h: ROW_INNER_H,
+        })
         .collect();
     let row_layout = Column {
         gap: canvas_core::tokens::SPACING_S,
         cross: CrossAlign::Start,
         ..Column::default()
     }
-    .lay_out(rows_slot, &row_children);
+    .lay_out_measured(rows_slot, &row_children, m, fs, FAMILY, 12.0);
     let mut row_rects = Vec::with_capacity(shown);
     let mut visible_rows = Vec::with_capacity(shown);
     // Инвариант: `shown <= list.len() - scroll_top` (кламп выше), поэтому
@@ -380,6 +427,18 @@ pub fn empty_card_rect(viewport: [f32; 2]) -> [f32; 4] {
 /// прижим к низу (cross End), ширина каждой — половина слота минус
 /// зазор `SPACING_MD` (дословно прежняя геометрия).
 pub fn empty_buttons(card: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    // W3.2: замерщик — канонические shared-точки на вызов.
+    let mut m = TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    empty_buttons_with(card, &mut m, &mut fs)
+}
+
+/// То же с ЯВНЫМ замерщиком (см. [`empty_buttons`]).
+pub fn empty_buttons_with(
+    card: [f32; 4],
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> ([f32; 4], [f32; 4]) {
     let slot = UiRect::new(card[0], card[1], card[2], card[3]).inset(&EdgeInsets {
         left: canvas_core::tokens::SPACING_MD,
         top: 0.0,
@@ -392,12 +451,22 @@ pub fn empty_buttons(card: [f32; 4]) -> ([f32; 4], [f32; 4]) {
         cross: CrossAlign::End,
         ..Row::default()
     }
-    .lay_out(
+    .lay_out_measured(
         slot,
         &[
-            Child::fixed(btn_w, EMPTY_BTN_H),
-            Child::fixed(btn_w, EMPTY_BTN_H),
+            MeasuredItem::Fixed {
+                w: btn_w,
+                h: EMPTY_BTN_H,
+            },
+            MeasuredItem::Fixed {
+                w: btn_w,
+                h: EMPTY_BTN_H,
+            },
         ],
+        m,
+        fs,
+        FAMILY,
+        12.0,
     );
     let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
     (as_rect(&rects[0]), as_rect(&rects[1]))

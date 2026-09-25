@@ -73,11 +73,7 @@ pub fn surface_size_valid(width: u32, height: u32) -> bool {
 ///   (логируется вызывающим для отладки «размазанного» canvas).
 ///
 /// `max_extent` берётся из `device.limits().max_texture_dimension_2d`.
-pub fn clamp_surface_extent(
-    width: u32,
-    height: u32,
-    max_extent: u32,
-) -> (u32, u32, bool) {
+pub fn clamp_surface_extent(width: u32, height: u32, max_extent: u32) -> (u32, u32, bool) {
     let max_extent = max_extent.max(1);
     let clamped_w = width.clamp(1, max_extent);
     let clamped_h = height.clamp(1, max_extent);

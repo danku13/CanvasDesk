@@ -2,7 +2,11 @@
 
 - **Статус:** в исполнении — W3.1 выполнено 2026-09-25 (пилот: whatif_ui бар
   → `MeasuredItem` × `Row::lay_out_measured`, бит-в-бит; Child::fixed в
-  canvas-app 42 → 32; W3.2/W3.3 — план)
+  canvas-app 42 → 32). **W3.2 выполнено 2026-09-25:** settings_ui (12),
+  scheme_gallery_ui (10), template_ui (5), search_ui (3) → `MeasuredItem`
+  через `Row::lay_out_measured` (F-13) и НОВЫЙ `Column::lay_out_measured/_with`
+  (вертикальный симметричный аналог F-13); потребители canvas-app/canvas-render:
+  32 → 1 (демо kit_ui F-14 — решение W3.3 за владельцем); W3.3 — план.
 - **Дата:** 2026-09-25
 - **Задача-источник:** FR-068 (`docs/change-requests/fr-068-ui-refactoring-long-term.md`),
   §Волна W3 «своя UI-библиотека», строка таблицы «Миграция canvas-app/render
@@ -116,6 +120,11 @@ FR-068: гейт W3 по `Child::fixed` считать выполненным п
 (достижимо W3.1+W3.2, W3.3 — опционально), глобальный счётчик —
 вести как наблюдательный (информационный), а не как порог.
 
+**Факт после W3.2 (2026-09-25):** потребители canvas-app/canvas-render —
+1 `Child::fixed` (демо kit_ui F-14, рекомендация каталога «оставить»);
+перефиксированный гейт достигнут с оговоркой демо. Глобальный grep — 61
+(остальное — оракулы/фикстуры движка, мигрировать не рекомендуется §4).
+
 ## 5. ТОП-5 мест первичной миграции (минимальный риск)
 
 1. **`crates/canvas-app/src/whatif_ui.rs:222–265`** — сборка `items` и
@@ -164,8 +173,32 @@ FR-068: гейт W3 по `Child::fixed` считать выполненным п
 - **W3.1** (measured-перевод, ~−15 fixed): whatif_ui; template_ui чипы +
   collapse; search_ui. Гейты: workspace зелёный, integration_whatif,
   golden demos 12/14.
+  ✅ выполнено 2026-09-25 частично (пилот whatif_ui; чипы template ушли в
+  W3.2, search — в W3.2 по запросу владельца).
 - **W3.2** (скелеты на компоненты, ~−25 fixed): settings_ui; scheme_gallery_ui;
   template_ui скелет. Гейты: settings/gallery тесты, G4 × 2 backend'а.
+  ✅ выполнено 2026-09-25 (вместе с search_ui — перенесён сюда из W3.1;
+  после W4 гейт «G4 × 2 backend'а» выродился: taffy вырезан, оракулы —
+  Flex-единственный + Native-пилоты). Реализация: `Row::lay_out_measured`
+  (существующий F-13) + НОВЫЙ `Column::lay_out_measured/_with`
+  (вертикальный симметричный аналог: resolve `MeasuredItem` → `Child`
+  единой точкой `MeasuredItem::resolve` до backend — политика Column
+  только Fit, эквивалентно разрешению внутри backend'а; +2 оракула
+  бит-в-бит в layout.rs). Чипы template — W3.1-паттерн whatif-бара:
+  `MeasuredItem::Fixed{category_chip_width}` (тот же замер — rect'ы
+  бит-в-бит; пад-семантики в F-13 нет). Отклонения от предложений
+  каталога §3: nav-колонка settings и строки галереи —
+  `Column::lay_out_measured`, НЕ `list_rows` (list_rows клипует окно
+  видимости и даёт частичные строки на краях — другое поведение в
+  вырожденных клампах 320×240; окно видимости уже управляется
+  scroll_top/clamp_scroll — раскладка ВИДИМОГО списка целиком сохраняет
+  ритм бит-в-бит). Находка (зафиксирована оракулом): `Child::spacer`
+  в `Column` занимает 0 по высоте (main-ось колонки — высота, длина
+  spacer'а — это w) — «распорки SPACING_S» скелета галереи фактических
+  вертикальных зазоров не давали (латентный дефект с FR-049); перенос
+  бит-в-бит сохраняет статус-кво, решение по зазорам — за владельцем.
+  Гейты: canvas-ui 190, canvas-app 376, canvas-render 376 — 0 failed;
+  workspace 2061/0; fmt; clippy -D warnings; wasm_gate --check — зелёные.
 - **W3.3** (доводка/аудит): kit_ui demo (опционально), docs_ui/debug_overlay
   (ручные проводки), аудит kit-строк на общих направляющих (Table v2 —
   решение владельца). Гейт-перефиксация §4 в FR-068.

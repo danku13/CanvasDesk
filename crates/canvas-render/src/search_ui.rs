@@ -304,8 +304,25 @@ pub struct PanelLayout {
 /// боковых отступов) схлопывает панель в точку — без паники. Высота окна
 /// панель не ограничивает (геометрия топ-центра).
 pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout {
+    // W3.2 (каталог docs/plans/fr-068-w3-consumer-migration.md): замерщик —
+    // канонические shared-точки на вызов (Text-детей нет — замерщик
+    // геометрию не читает).
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = crate::text::measure_font_system();
+    layout_with(window_w, window_h, panel, &mut m, &mut fs)
+}
+
+/// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
+/// `measure_font_system` — двойной лок глобального FontSystem невозможен).
+pub fn layout_with(
+    window_w: f32,
+    window_h: f32,
+    panel: &SearchPanel,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> PanelLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
-    use canvas_ui::layout::{constrain, stack, Child, Column};
+    use canvas_ui::layout::{constrain, stack, Column, MeasuredItem};
 
     let window_w = window_w.max(0.0);
     let available = (window_w - 2.0 * PANEL_SIDE_MARGIN).max(0.0);
@@ -358,20 +375,32 @@ pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout 
         canvas_ui::geometry::EdgeInsets::uniform(PANEL_PADDING),
     );
     let inner_w = inner.w.max(0.0);
-    // Колонка gap 0: зазор после поля — ребёнок-распорка (между строками
-    // зазора нет — они касаются).
-    let mut items = vec![Child::fixed(inner_w, INPUT_HEIGHT)];
+    // Колонка gap 0: зазор после поля — вертикальный зазор. W3.2: дети —
+    // MeasuredItem; высоты — дизайн-константы (каталог W3.2). ВАЖНО:
+    // вертикальный зазор — именно Fixed{w: 0, h} — Spacer в колонке места
+    // НЕ занимает (main-ось колонки — высота; см. оракул
+    // measured_column_matches_manual_fixed_oracle в canvas-ui).
+    let mut items = vec![MeasuredItem::Fixed {
+        w: inner_w,
+        h: INPUT_HEIGHT,
+    }];
     if visible > 0 {
-        items.push(Child::fixed(0.0, PANEL_PADDING));
+        items.push(MeasuredItem::Fixed {
+            w: 0.0,
+            h: PANEL_PADDING,
+        });
         for _ in 0..visible {
-            items.push(Child::fixed(inner_w, ROW_HEIGHT));
+            items.push(MeasuredItem::Fixed {
+                w: inner_w,
+                h: ROW_HEIGHT,
+            });
         }
     }
     let rects = Column {
         gap: 0.0,
         ..Column::default()
     }
-    .lay_out(inner, &items);
+    .lay_out_measured(inner, &items, m, fs, crate::text::SANS_FAMILY, 12.0);
 
     let input = &rects[0];
     let input_rect = [input.x, input.y, input.right(), input.bottom()];
