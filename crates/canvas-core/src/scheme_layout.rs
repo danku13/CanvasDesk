@@ -73,7 +73,7 @@ pub struct SchemeLayoutPlan {
 }
 
 /// Прямоугольник [x, y, width, height].
-type Rect = [f32; 4];
+pub(crate) type Rect = [f32; 4];
 
 /// Построить план умной раскладки для канваса-сцены (инстанс схемы до
 /// сдвига к точке вставки). Детерминирован: два вызова на одном входе
@@ -983,21 +983,24 @@ fn union(parent: &mut [usize], a: usize, b: usize) {
     }
 }
 
-fn right_center(r: Rect) -> [f32; 2] {
+/// Правый-центр прямоугольника (порт истока при потоке слева→справа).
+pub(crate) fn right_center(r: Rect) -> [f32; 2] {
     [r[0] + r[2], r[1] + r[3] / 2.0]
 }
 
-fn left_center(r: Rect) -> [f32; 2] {
+/// Левый-центр прямоугольника (порт приёмника при потоке слева→справа).
+pub(crate) fn left_center(r: Rect) -> [f32; 2] {
     [r[0], r[1] + r[3] / 2.0]
 }
 
-fn seg_len(p0: [f32; 2], p1: [f32; 2]) -> f32 {
+/// Длина отрезка.
+pub(crate) fn seg_len(p0: [f32; 2], p1: [f32; 2]) -> f32 {
     (p1[0] - p0[0]).hypot(p1[1] - p0[1])
 }
 
 /// Пересекает ли отрезок AABB, инфлированный на `margin` (slab-тест
 /// Лианга–Барски + проверка концов внутри).
-fn seg_intersects_rect(p0: [f32; 2], p1: [f32; 2], rect: Rect, margin: f32) -> bool {
+pub(crate) fn seg_intersects_rect(p0: [f32; 2], p1: [f32; 2], rect: Rect, margin: f32) -> bool {
     let min_x = rect[0] - margin;
     let min_y = rect[1] - margin;
     let max_x = rect[0] + rect[2] + margin;
