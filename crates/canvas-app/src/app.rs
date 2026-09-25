@@ -8139,7 +8139,7 @@ mod tests {
             "шаблонная нода выросла под резерв футера"
         );
         match scene.expr_results.get("tpl1").expect("результат tpl1") {
-            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1000 rps"),
+            ExprOutcome::Ok(value) => assert_eq!(value.to_string(), "1\u{a0}000 rps"),
             other => panic!("ожидалось значение: {other:?}"),
         }
         assert_eq!(
@@ -8506,10 +8506,14 @@ mod tests {
             .get("n1")
             .expect("построчные результаты после commit");
         assert_eq!(committed.len(), live.len());
-        expect_ok(&committed[0], "5246", "commit: хвостовое присваивание");
-        expect_ok(&committed[1], "2558", "commit: b");
+        expect_ok(
+            &committed[0],
+            "5\u{a0}246",
+            "commit: хвостовое присваивание",
+        );
+        expect_ok(&committed[1], "2\u{a0}558", "commit: b");
         expect_ok(&committed[2], "200", "commit: x");
-        expect_ok(&committed[3], "7804", "commit: c = a + b");
+        expect_ok(&committed[3], "7\u{a0}804", "commit: c = a + b");
         expect_ok(&committed[4], "400", "commit: 200 + x");
         // Совместимость: заметка прежних сборок с `\=` в модели оживает
         scene.canvas.nodes[0].text = Some("x \\= 200\n200 + x".to_owned());

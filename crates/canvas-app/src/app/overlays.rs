@@ -1158,11 +1158,20 @@ impl App {
                 );
             }
         }
-        // Switch: Off/On × Normal/Hovered/Disabled (kit::switch — слоты)
-        for (slot, on, state) in &lay.switches {
+        // Switch: Off/On × Normal/Hovered/Pressed/Disabled (kit::switch —
+        // слоты) + состояние «в фокусе» (рамка accent — контракт FR-057)
+        for (slot, on, state, focused) in &lay.switches {
             let sw = canvas_ui::kit::switch(*slot, *on, *state, &palette);
             d.control(sw.track, &sw.track_style);
             d.rect(sw.knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
+            if *focused {
+                d.rect(
+                    *slot,
+                    [0.0; 4],
+                    palette.accent,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+            }
         }
         // Card: хедер + тело внутри пада панели (kit::card)
         if let Some(card) = &lay.card {
@@ -1317,11 +1326,14 @@ impl App {
             d.label_center(*rect, &text, palette.text, 11.0);
         }
         // Фокус (F-17): Tab-кольцо — рамка accent на текущем слоте
-        // (кольцо в контент-координатах; слоты здесь уже сдвинуты на off)
-        for rect in &lay.focus_buttons {
-            let unshifted =
-                canvas_ui::geometry::UiRect::new(rect.x, rect.y + scroll.offset, rect.w, rect.h);
-            let focused = self.kit_gallery_focus.current() == Some(&unshifted);
+        // (кольцо в контент-координатах; слоты здесь уже сдвинуты на off).
+        // Пересборка поверхностей: текущий индекс — kit::focus_order (кит-
+        // функция сопоставления кольца с Tab-порядком) + нумерация порядка
+        // (визуальный порядок Tab-кольца, digits — без i18n).
+        let focus_idx = canvas_ui::kit::focus_order(&lay.focus_targets, &self.kit_gallery_focus)
+            .map(|(i, _)| i);
+        for (i, rect) in lay.focus_buttons.iter().enumerate() {
+            let focused = focus_idx == Some(i);
             let style = canvas_ui::kit::control_style_of(
                 palette.control_fill,
                 if focused {
@@ -1333,6 +1345,91 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             d.control(*rect, &style);
+            d.label_center(
+                *rect,
+                &(i + 1).to_string(),
+                if focused {
+                    palette.accent
+                } else {
+                    palette.text_muted
+                },
+                11.0,
+            );
+        }
+
+        // === Пересборка поверхностей (волна 2): демо компонентного слоя и
+        // недостающих layout-примитивов ===
+        // Компонент Row (FR-068 W3): retained-компонент из Props раскладки —
+        // Component::layout + Component::paint (строка рисуется китом);
+        // нулевой слот — секция за краем окна (компонент не собирается).
+        if lay.component_row_slot.w > 0.0 {
+            // Component trait в скоупе — вызовы Component::layout/paint.
+            use canvas_ui::component::Component as _;
+            let row = canvas_ui::component::row::Row::new(lay.component_row_props.clone());
+            let rects = row.layout(canvas_ui::layout::default_backend(), lay.component_row_slot);
+            let mut painter = canvas_ui::paint::Painter::new();
+            row.paint(&mut painter, &rects);
+            d.paint_items(painter.take_items());
+        }
+        // Компонент Panel (FR-068 W3): хром панели — слоты panel_style,
+        // контент — подпись (panel_content — минус пад SPACING_LG).
+        if let Some((prect, crect)) = &lay.component_panel {
+            let ps = canvas_ui::kit::panel_style(&palette);
+            d.rect(*prect, ps.fill, ps.border, ps.radius);
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(crect.x, crect.y + 2.0, crect.w, 16.0),
+                &label(crate::i18n::keys::KIT_COMPONENT_PANEL_BODY),
+                palette.text_muted,
+                12.0,
+            );
+        }
+        // SqueezeTail: рамка слота + боксы; хвост сжат политикой (у нулевой
+        // ширины не рисуется — именованная деградация вместо переполнения).
+        if lay.squeeze_slot.w > 0.0 {
+            d.rect(
+                lay.squeeze_slot,
+                [0.0; 4],
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let n = lay.squeeze_cells.len();
+            for (i, rect) in lay.squeeze_cells.iter().enumerate() {
+                if rect.w < 0.5 {
+                    continue;
+                }
+                let border = if i + 1 == n {
+                    palette.accent
+                } else {
+                    palette.control_border
+                };
+                d.rect(
+                    *rect,
+                    palette.control_fill,
+                    border,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+            }
+        }
+        // SpaceBetween: чипы с подписями — свободное место распределено
+        // в зазоры (Fit-ряд с базовым gap для сравнения — секция Grow).
+        for (rect, key) in &lay.align_between {
+            let style = canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &palette);
+            d.control(*rect, &style);
+            d.label_center(*rect, &label(key), style.text, 12.0);
+        }
+        // Column + распорка: ячейки вертикального стека с номерами;
+        // распорка (нулевая ширина) — не рисуется.
+        for (i, rect) in lay.column_cells.iter().enumerate() {
+            if rect.w < 0.5 {
+                continue;
+            }
+            d.rect(
+                *rect,
+                palette.control_fill,
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_center(*rect, &(i + 1).to_string(), palette.text, 11.0);
         }
         // FR-059: бегунок скролла контента витрины (контент выше панели)
         if let Some(knob) = canvas_ui::kit::scroll_bar(lay.sections_viewport, &scroll, &palette) {
