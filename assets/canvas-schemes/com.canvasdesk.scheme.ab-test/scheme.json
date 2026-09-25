@@ -1,0 +1,499 @@
+{
+ "id": "com.canvasdesk.scheme.ab-test",
+ "name_ru": "A/B-тест",
+ "name_en": "A/B test",
+ "description_ru": "Планирование и оценка A/B-теста: размер выборки и длительность от базовой конверсии и минимального эффекта, стоимость теста деньгами трафика, а по фактическим замерам — прирост и проверка значимости через квадрат z-статистики.",
+ "description_en": "Plan and evaluate an A/B test: sample size and duration from the baseline conversion and the minimum effect, the cost of the test in traffic money, and from actual measurements — the uplift and a significance check through the squared z-statistic.",
+ "category": "business",
+ "category_ru": "Бизнес",
+ "category_en": "Business",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 260,
+    "text": "A/B-тест\nДве ветки: планирование отвечает, сколько трафика и дней нужно тесту, оценка говорит, что показали замеры. Значения текут по бирюзовым связям слева направо.\nz-значения уровней заданы константами: 1.96 держит альфу 5 процентов, 0.84 — мощность 80 процентов; таблицу замен смотрите в вердикте.\nПоменяйте конверсию, эффект или замер — план, бюджет и значимость пересчитаются.",
+    "color": "4"
+   },
+   {
+    "id": "traffic",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 250,
+    "text": "Трафик\nСколько посетителей приходит в день, какая доля из них участвует в тесте (поровну на каждый вариант) и во сколько обходится день теста.\n\nvisitors_day = 8000\nshare = 0.5\nrate_day = 500 $",
+    "color": "5"
+   },
+   {
+    "id": "hypothesis",
+    "type": "text",
+    "x": 440,
+    "y": 300,
+    "width": 260,
+    "height": 296,
+    "text": "Гипотеза\nБазовая конверсия варианта A и относительный минимальный эффект, который тест обязан заметить: 0.1 значит «плюс десять процентов к базе».\n\nconv_a = 0.05\nlift = 0.1\nzcrit = 1.96\nzpower = 0.84",
+    "color": "5"
+   },
+   {
+    "id": "target",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 284,
+    "text": "Цель\nКонверсия варианта B, которую тест обязан заметить: база плюс относительный эффект — и абсолютная дельта между вариантами.\n\nconv_b = Гипотеза.conv_a * (1 + Гипотеза.lift)\ndelta = conv_b - Гипотеза.conv_a",
+    "color": "2"
+   },
+   {
+    "id": "plan",
+    "type": "text",
+    "x": 800,
+    "y": 300,
+    "width": 300,
+    "height": 416,
+    "text": "План\nРазмер выборки на каждый вариант — формула долей для двустороннего z-теста; дни — сколько держать тест при доступном трафике, две группы делят поток пополам.\n\npbar = (Гипотеза.conv_a + Цель.conv_b) / 2\nzsum = Гипотеза.zcrit + Гипотеза.zpower\nn_variant = 2 * pbar * (1 - pbar) * zsum * zsum / (Цель.delta * Цель.delta)\ndays = 2 * n_variant / (Трафик.visitors_day * Трафик.share)",
+    "color": "2"
+   },
+   {
+    "id": "budget",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 218,
+    "text": "Бюджет\nСтоимость всего теста: дни из плана умножаются на цену дня трафика. Дробные дни округляйте вверх до целых.\n\ncost = План.days * Трафик.rate_day",
+    "color": "6"
+   },
+   {
+    "id": "measurement",
+    "type": "text",
+    "x": 1160,
+    "y": 300,
+    "width": 280,
+    "height": 254,
+    "text": "Замер\nФактические числа после остановки теста: посетители и целевые действия по каждому варианту.\n\nusers_a = 20000\norders_a = 1000\nusers_b = 20000\norders_b = 1100",
+    "color": "5"
+   },
+   {
+    "id": "results",
+    "type": "text",
+    "x": 1520,
+    "y": 300,
+    "width": 300,
+    "height": 356,
+    "text": "Результаты\nКонверсии вариантов и дисперсия дельты: пул-доля умножается на её дополнение и на сумму обратных размеров групп.\n\nrate_a = Замер.orders_a / Замер.users_a\nrate_b = Замер.orders_b / Замер.users_b\npbar = (rate_a + rate_b) / 2\nse2 = pbar * (1 - pbar) * (1 / Замер.users_a + 1 / Замер.users_b)",
+    "color": "2"
+   },
+   {
+    "id": "outcome",
+    "type": "text",
+    "x": 1880,
+    "y": 300,
+    "width": 300,
+    "height": 342,
+    "text": "Итог\nОтносительный прирост и проверка значимости: квадрат z-статистики сравнивается с квадратом порога альфы — запас выше нуля значит, что дельта значима.\n\nd = Результаты.rate_b - Результаты.rate_a\nuplift = d / Результаты.rate_a\nz2 = d * d / Результаты.se2\nzcrit2 = $zcrit * $zcrit\nmargin = z2 - zcrit2",
+    "color": "6"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1880,
+    "y": 0,
+    "width": 320,
+    "height": 250,
+    "text": "Вердикт\nЗапас 1.18 при пороге 3.84 — различие значимо. Поднимите orders_b до 1050, и запас уйдёт в минус: эффект ещё не увидели, тест нужно продолжать.\nТаблица z-порогов: альфа 10/5/1 процент — 1.64/1.96/2.58; мощность 70/80/90 процентов — 0.52/0.84/1.28.\nПрирост умножьте на базу — получите абсолютные пункты конверсии.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "hypothesis",
+    "toNode": "target",
+    "flowKind": "value",
+    "fromOutput": "conv_a"
+   },
+   {
+    "id": "e2",
+    "fromNode": "hypothesis",
+    "toNode": "target",
+    "flowKind": "value",
+    "fromOutput": "lift"
+   },
+   {
+    "id": "e3",
+    "fromNode": "hypothesis",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "conv_a"
+   },
+   {
+    "id": "e4",
+    "fromNode": "hypothesis",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "zcrit"
+   },
+   {
+    "id": "e5",
+    "fromNode": "hypothesis",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "zpower"
+   },
+   {
+    "id": "e6",
+    "fromNode": "target",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "conv_b"
+   },
+   {
+    "id": "e7",
+    "fromNode": "target",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "delta"
+   },
+   {
+    "id": "e8",
+    "fromNode": "traffic",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "visitors_day"
+   },
+   {
+    "id": "e9",
+    "fromNode": "traffic",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "share"
+   },
+   {
+    "id": "e10",
+    "fromNode": "plan",
+    "toNode": "budget",
+    "flowKind": "value",
+    "fromOutput": "days"
+   },
+   {
+    "id": "e11",
+    "fromNode": "traffic",
+    "toNode": "budget",
+    "flowKind": "value",
+    "fromOutput": "rate_day"
+   },
+   {
+    "id": "e12",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "users_a"
+   },
+   {
+    "id": "e13",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "orders_a"
+   },
+   {
+    "id": "e14",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "users_b"
+   },
+   {
+    "id": "e15",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "orders_b"
+   },
+   {
+    "id": "e16",
+    "fromNode": "results",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "rate_a"
+   },
+   {
+    "id": "e17",
+    "fromNode": "results",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "rate_b"
+   },
+   {
+    "id": "e18",
+    "fromNode": "results",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "se2"
+   },
+   {
+    "id": "e19",
+    "fromNode": "hypothesis",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "zcrit",
+    "toParam": "zcrit"
+   }
+  ]
+ },
+ "content_en": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 40,
+    "width": 360,
+    "height": 260,
+    "text": "A/B test\nTwo branches: planning answers how much traffic and how many days the test needs, evaluation tells what the measurements showed. Values flow along the teal edges from left to right.\nThe z-values of the levels are constants: 1.96 holds alpha at 5 percent, 0.84 holds power at 80 percent; see the verdict for the replacement table.\nChange the conversion, the effect or the measurement — the plan, the budget and the significance recompute.",
+    "color": "4"
+   },
+   {
+    "id": "traffic",
+    "type": "text",
+    "x": 440,
+    "y": 0,
+    "width": 260,
+    "height": 250,
+    "text": "Traffic\nHow many visitors arrive per day, what share of them takes part in the test (split evenly between the variants) and what a test day costs.\n\nvisitors_day = 8000\nshare = 0.5\nrate_day = 500 $",
+    "color": "5",
+    "label": "Traffic"
+   },
+   {
+    "id": "hypothesis",
+    "type": "text",
+    "x": 440,
+    "y": 300,
+    "width": 260,
+    "height": 296,
+    "text": "Hypothesis\nThe baseline conversion of variant A and the relative minimum effect the test must detect: 0.1 means «plus ten percent of the baseline».\n\nconv_a = 0.05\nlift = 0.1\nzcrit = 1.96\nzpower = 0.84",
+    "color": "5",
+    "label": "Hypothesis"
+   },
+   {
+    "id": "target",
+    "type": "text",
+    "x": 800,
+    "y": 0,
+    "width": 280,
+    "height": 284,
+    "text": "Target\nThe conversion of variant B the test must detect: the baseline plus the relative effect — and the absolute delta between the variants.\n\nconv_b = Hypothesis.conv_a * (1 + Hypothesis.lift)\ndelta = conv_b - Hypothesis.conv_a",
+    "color": "2",
+    "label": "Target"
+   },
+   {
+    "id": "plan",
+    "type": "text",
+    "x": 800,
+    "y": 300,
+    "width": 300,
+    "height": 416,
+    "text": "Plan\nThe sample size per variant — the proportions formula for a two-sided z-test; days — how long to keep the test running with the available traffic, the two groups split the flow in half.\n\npbar = (Hypothesis.conv_a + Target.conv_b) / 2\nzsum = Hypothesis.zcrit + Hypothesis.zpower\nn_variant = 2 * pbar * (1 - pbar) * zsum * zsum / (Target.delta * Target.delta)\ndays = 2 * n_variant / (Traffic.visitors_day * Traffic.share)",
+    "color": "2",
+    "label": "Plan"
+   },
+   {
+    "id": "budget",
+    "type": "text",
+    "x": 1160,
+    "y": 0,
+    "width": 280,
+    "height": 218,
+    "text": "Budget\nThe cost of the whole test: the days from the plan times the price of a traffic day. Round fractional days up to whole ones.\n\ncost = Plan.days * Traffic.rate_day",
+    "color": "6",
+    "label": "Budget"
+   },
+   {
+    "id": "measurement",
+    "type": "text",
+    "x": 1160,
+    "y": 300,
+    "width": 280,
+    "height": 254,
+    "text": "Measurement\nThe actual numbers after the test stops: visitors and conversions per variant.\n\nusers_a = 20000\norders_a = 1000\nusers_b = 20000\norders_b = 1100",
+    "color": "5",
+    "label": "Measurement"
+   },
+   {
+    "id": "results",
+    "type": "text",
+    "x": 1520,
+    "y": 300,
+    "width": 300,
+    "height": 356,
+    "text": "Results\nThe conversions of the variants and the variance of the delta: the pooled share times its complement times the sum of inverse group sizes.\n\nrate_a = Measurement.orders_a / Measurement.users_a\nrate_b = Measurement.orders_b / Measurement.users_b\npbar = (rate_a + rate_b) / 2\nse2 = pbar * (1 - pbar) * (1 / Measurement.users_a + 1 / Measurement.users_b)",
+    "color": "2",
+    "label": "Results"
+   },
+   {
+    "id": "outcome",
+    "type": "text",
+    "x": 1880,
+    "y": 300,
+    "width": 300,
+    "height": 342,
+    "text": "Outcome\nThe relative uplift and the significance check: the squared z-statistic is compared with the squared alpha threshold — a margin above zero means the delta is significant.\n\nd = Results.rate_b - Results.rate_a\nuplift = d / Results.rate_a\nz2 = d * d / Results.se2\nzcrit2 = $zcrit * $zcrit\nmargin = z2 - zcrit2",
+    "color": "6",
+    "label": "Outcome"
+   },
+   {
+    "id": "verdict",
+    "type": "text",
+    "x": 1880,
+    "y": 0,
+    "width": 320,
+    "height": 250,
+    "text": "Verdict\nThe margin is 1.18 against a threshold of 3.84 — the difference is significant. Raise orders_b to 1050 and the margin goes negative: the effect is not seen yet, the test should keep running.\nThe z-threshold table: alpha 10/5/1 percent — 1.64/1.96/2.58; power 70/80/90 percent — 0.52/0.84/1.28.\nMultiply the uplift by the baseline — you get absolute conversion points.",
+    "color": "4"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e1",
+    "fromNode": "hypothesis",
+    "toNode": "target",
+    "flowKind": "value",
+    "fromOutput": "conv_a"
+   },
+   {
+    "id": "e2",
+    "fromNode": "hypothesis",
+    "toNode": "target",
+    "flowKind": "value",
+    "fromOutput": "lift"
+   },
+   {
+    "id": "e3",
+    "fromNode": "hypothesis",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "conv_a"
+   },
+   {
+    "id": "e4",
+    "fromNode": "hypothesis",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "zcrit"
+   },
+   {
+    "id": "e5",
+    "fromNode": "hypothesis",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "zpower"
+   },
+   {
+    "id": "e6",
+    "fromNode": "target",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "conv_b"
+   },
+   {
+    "id": "e7",
+    "fromNode": "target",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "delta"
+   },
+   {
+    "id": "e8",
+    "fromNode": "traffic",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "visitors_day"
+   },
+   {
+    "id": "e9",
+    "fromNode": "traffic",
+    "toNode": "plan",
+    "flowKind": "value",
+    "fromOutput": "share"
+   },
+   {
+    "id": "e10",
+    "fromNode": "plan",
+    "toNode": "budget",
+    "flowKind": "value",
+    "fromOutput": "days"
+   },
+   {
+    "id": "e11",
+    "fromNode": "traffic",
+    "toNode": "budget",
+    "flowKind": "value",
+    "fromOutput": "rate_day"
+   },
+   {
+    "id": "e12",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "users_a"
+   },
+   {
+    "id": "e13",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "orders_a"
+   },
+   {
+    "id": "e14",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "users_b"
+   },
+   {
+    "id": "e15",
+    "fromNode": "measurement",
+    "toNode": "results",
+    "flowKind": "value",
+    "fromOutput": "orders_b"
+   },
+   {
+    "id": "e16",
+    "fromNode": "results",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "rate_a"
+   },
+   {
+    "id": "e17",
+    "fromNode": "results",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "rate_b"
+   },
+   {
+    "id": "e18",
+    "fromNode": "results",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "se2"
+   },
+   {
+    "id": "e19",
+    "fromNode": "hypothesis",
+    "toNode": "outcome",
+    "flowKind": "value",
+    "fromOutput": "zcrit",
+    "toParam": "zcrit"
+   }
+  ]
+ }
+}

@@ -568,6 +568,108 @@ mod tests {
         );
     }
 
+    #[test]
+    fn oracle_ab_test() {
+        let (scene, map) = scene_with("com.canvasdesk.scheme.ab-test");
+        // Значения вычисляющих строк ноды в порядке следования (проза и
+        // пустые строки молчат — Some(Ok) собираются по порядку).
+        let lines_of = |manifest_id: &str| -> Vec<f64> {
+            let node_id = &map[manifest_id];
+            match scene.expr_line_results.get(node_id) {
+                Some(lines) => lines
+                    .iter()
+                    .filter_map(|l| match l {
+                        Some(canvas_core::expr::ExprOutcome::Ok(v)) => Some(v.num),
+                        Some(other) => {
+                            panic!("{manifest_id}: строка в ошибке: {other:?}")
+                        }
+                        None => None,
+                    })
+                    .collect(),
+                None => panic!("{manifest_id}: нет построчных результатов"),
+            }
+        };
+
+        // Цель: [conv_b = 0.05×1.1, delta = 0.005].
+        let target = lines_of("target");
+        assert_eq!(target.len(), 2, "цель: 2 расчётные строки");
+        assert!((target[0] - 0.055).abs() < 1e-12, "conv_b = {}", target[0]);
+        assert!((target[1] - 0.005).abs() < 1e-12, "delta = {}", target[1]);
+
+        // План: [pbar, zsum, n_variant, days] — 2·p̄·(1−p̄)·(zα+zβ)²/Δ².
+        let plan = lines_of("plan");
+        assert_eq!(plan.len(), 4, "план: 4 расчётные строки");
+        assert!((plan[0] - 0.0525).abs() < 1e-12, "pbar = {}", plan[0]);
+        assert!((plan[1] - 2.80).abs() < 1e-12, "zsum = {}", plan[1]);
+        let expected_n = 2.0 * 0.0525 * 0.9475 * 2.80 * 2.80 / (0.005 * 0.005);
+        assert!(
+            (plan[2] - expected_n).abs() < 1e-6,
+            "n_variant = {}",
+            plan[2]
+        );
+        // Дни: две группы делят поток пополам — 2·n / (8000·0.5) ≈ 15.6.
+        let expected_days = 2.0 * expected_n / (8000.0 * 0.5);
+        assert!((plan[3] - expected_days).abs() < 1e-6, "days = {}", plan[3]);
+
+        // Бюджет: [cost = days × rate_day] — деньги трафика.
+        let budget = lines_of("budget");
+        assert_eq!(budget.len(), 1, "бюджет: 1 расчётная строка");
+        assert!(
+            (budget[0] - expected_days * 500.0).abs() < 1e-6,
+            "cost = {}",
+            budget[0]
+        );
+
+        // Результаты: [rate_a, rate_b, pbar, se2].
+        let results = lines_of("results");
+        assert_eq!(results.len(), 4, "результаты: 4 расчётные строки");
+        assert!((results[0] - 0.05).abs() < 1e-12, "rate_a = {}", results[0]);
+        assert!(
+            (results[1] - 0.055).abs() < 1e-12,
+            "rate_b = {}",
+            results[1]
+        );
+        let expected_se2 = 0.0525 * 0.9475 * (1.0 / 20000.0 + 1.0 / 20000.0);
+        assert!(
+            (results[3] - expected_se2).abs() < 1e-15,
+            "se2 = {}",
+            results[3]
+        );
+
+        // Итог: [d, uplift, z2, zcrit2, margin] — порог² приходит
+        // проливанием $zcrit из Гипотезы (toParam).
+        let outcome = lines_of("outcome");
+        assert_eq!(outcome.len(), 5, "итог: 5 расчётных строк");
+        assert!((outcome[0] - 0.005).abs() < 1e-12, "d = {}", outcome[0]);
+        assert!((outcome[1] - 0.1).abs() < 1e-12, "uplift = {}", outcome[1]);
+        let expected_z2 = 0.005 * 0.005 / expected_se2;
+        assert!(
+            (outcome[2] - expected_z2).abs() < 1e-9,
+            "z2 = {}",
+            outcome[2]
+        );
+        assert!(
+            (outcome[3] - 1.96 * 1.96).abs() < 1e-12,
+            "zcrit2 = {}",
+            outcome[3]
+        );
+        let expected_margin = expected_z2 - 1.96 * 1.96;
+        assert!(
+            (outcome[4] - expected_margin).abs() < 1e-9,
+            "margin = {}",
+            outcome[4]
+        );
+        assert!(
+            outcome[4] > 0.0,
+            "дефолтный замер значим: margin = {}",
+            outcome[4]
+        );
+
+        // Узловые итоги (значение ноды = последняя строка листа).
+        assert!((value_of(&scene, &map, "budget") - expected_days * 500.0).abs() < 1e-6);
+        assert!((value_of(&scene, &map, "outcome") - expected_margin).abs() < 1e-9);
+    }
+
     /// FR-016: capacity-service демонстрирует анализ узких мест: средняя
     /// утилизация — Warn (ρ ≈ 0.83 ≥ 0.7), пиковая — Overload (2.5 ≥ 1).
     #[test]
