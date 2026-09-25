@@ -78,10 +78,10 @@ pub const SECTION_SWITCH: &str = "kit.section.switch";
 pub const SECTION_CARD: &str = "kit.section.card";
 pub const SECTION_LIST: &str = "kit.section.list";
 pub const SECTION_ICONS: &str = "kit.section.icons";
-/// FR-061 (этап E, D-15): секция kit-Row — табличные строки на направляющих.
-pub const SECTION_ROW: &str = "kit.section.row";
-/// FR-068 W3 (этап M3): секция Table — ТЕ ЖЕ демо-данные через компонент
-/// [`canvas_ui::kit::Table`] (витрина примитива Row остаётся рядом).
+/// FR-068 W3 (этап M3): секция Table — табличные строки через компонент
+/// [`canvas_ui::kit::Table`]. W3.3 (решение владельца): витрина Row v1
+/// (FR-061) заменена компонентом — секция единственная; паритет Row-пути
+/// («Row ≡ Table на одних данных») — оракул в тестах модуля.
 pub const SECTION_TABLE: &str = "kit.section.table";
 /// FR-062: секции layout v2 (measured/flex/wrap/grid/focus).
 pub const SECTION_MEASURED: &str = "kit.section.measured";
@@ -107,14 +107,16 @@ pub const GALLERY_WRAP_CHIPS: usize = 8;
 pub const GALLERY_FOCUS_SLOTS: usize = 4;
 /// FR-062 F-17: ширина слота фокус-секции (фикс — подпись не измеряется).
 pub const GALLERY_FOCUS_W: f32 = 72.0;
-/// FR-061 (этап E): высота демо-строки секции Row (панель FR-044 — 22).
+/// FR-068 (W3.3): высота демо-строки табличной секции Table
+/// (панель FR-044 — 22; унаследована от демо Row FR-061).
 pub const GALLERY_ROW_H: f32 = 24.0;
-/// FR-061 (этап E): демо-значения строк (числа — без i18n).
+/// FR-068 (W3.3): демо-значения строк Table-секции (числа — без i18n;
+/// те же данные строит оракул «Row ≡ Table» в тестах модуля).
 pub const GALLERY_ROW_VALUE_PRICE: &str = "50";
 pub const GALLERY_ROW_VALUE_QTY: &str = "12";
 pub const GALLERY_ROW_VALUE_TOTAL: &str = "600";
 pub const GALLERY_ROW_VALUE_SUM: &str = "5 400";
-/// FR-061 (этап E): глиф формульной строки демо (calc-маркер Р-4).
+/// FR-068 (W3.3): глиф формульной строки демо (calc-маркер Р-4).
 pub const GALLERY_ROW_FORMULA_GLYPH: &str = "ƒ";
 
 /// Ряд кнопок одного варианта.
@@ -205,18 +207,18 @@ pub struct GalleryLayout {
     /// сдвига/фильтра) — кольцо [`canvas_ui::keyboard::FocusRing`] в App
     /// живёт в этих координатах; отрисовка рамки — сдвиг на offset.
     pub focus_targets: Vec<UiRect>,
-    /// FR-061 (этап E, D-15) + FR-068 W3 (M3): демо-строки табличных секций
-    /// Row (витрина примитива) и Table (компонент v2) — ТЕ ЖЕ данные на
-    /// общих направляющих; отрисовка — [`canvas_ui::kit::paint_row`] по
-    /// предвычисленному [`canvas_ui::kit::RowLayout`] (app/overlays.rs).
+    /// FR-068 W3 (M3, W3.3): демо-строки табличной секции Table — данные
+    /// [`gallery_row_demo`] на направляющих компонента Table; отрисовка —
+    /// [`canvas_ui::kit::paint_row`] по предвычисленному
+    /// [`canvas_ui::kit::RowLayout`] (app/overlays.rs).
     pub row_rows: Vec<RowDemoRow>,
 }
 
-/// FR-061 (этап E, D-15) + FR-068 W3 (M3): демо-данные табличных секций
-/// витрины — единый источник для Row и Table (4 строки: Dot/цена,
-/// Dot/кол-во + зебра, Glyph ƒ/итого + бейдж, Σ Selected). Возвращает
-/// `(части строки кит-Row, состояние, зебра)` — Table-версия строится
-/// из тех же значений ([`TableRow`](canvas_ui::kit::TableRow)).
+/// FR-068 (W3.3): демо-данные табличной секции витрины (Table) — 4 строки:
+/// Dot/цена, Dot/кол-во + зебра, Glyph ƒ/итого + бейдж, Σ Selected.
+/// Возвращает `(части строки кит-Row, состояние, зебра)` — Table-версия
+/// строится из тех же значений ([`TableRow`](canvas_ui::kit::TableRow));
+/// те же данные использует оракул «Row ≡ Table» в тестах модуля.
 fn gallery_row_demo(lang: Language) -> [(kit::RowParts<'static>, KitState, bool); 4] {
     [
         (
@@ -266,12 +268,11 @@ fn gallery_row_demo(lang: Language) -> [(kit::RowParts<'static>, KitState, bool)
     ]
 }
 
-/// FR-061 (этап E, D-15): строка демо-таблицы витрины — данные кит-Row
-/// + геометрия ([`canvas_ui::kit::row_layout`] на общих направляющих).
-///
-/// FR-068 W3 (M3): структура используется ОБЕИМИ табличными секциями —
-/// Row (витрина примитива) и Table (компонент: геометрия из
-/// [`canvas_ui::kit::Table::row_layout_with`]).
+/// FR-068 (W3.3): строка демо-таблицы витрины — данные кит-строки +
+/// геометрия ([`canvas_ui::kit::Table::row_layout_with`]). Структуру
+/// наполняет секция Table (единый vec [`GalleryLayout::row_rows`]);
+/// оракул бит-в-бит «Row ≡ Table на одних данных» (kit::row_guides/
+/// row_layout против Table) — в тестах модуля.
 #[derive(Debug, Clone)]
 pub struct RowDemoRow {
     /// Состояние строки (слоты [`canvas_ui::kit::row_style`]).
@@ -693,68 +694,24 @@ pub fn gallery_layout(
     }
     y += kit::ICON_BUTTON_SIZE + SECTION_GAP;
 
-    // === FR-061 (этап E, D-15): секция Row — табличные строки на
-    // направляющих (параметр ×2 / формула с бейджем / Σ), состояния
-    // Normal/Zebra/Selected — те же функции кита, что у панели
-    // «Как считается» (row_guides/row_layout/paint_row).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_ROW));
-    y += 18.0;
-    let mut row_rows: Vec<RowDemoRow> = Vec::new();
-    {
-        let demo = gallery_row_demo(lang);
-        let parts: Vec<kit::RowParts<'static>> = demo.iter().map(|(p, _, _)| *p).collect();
-        // Общие направляющие демо-таблицы (право — край контрол-колонки)
-        if let Some(rg) = kit::row_guides(
-            m,
-            fs,
-            FONT_FAMILY,
-            LABEL_SIZE,
-            &parts,
-            control_x + control_w,
-            canvas_core::tokens::TABLE_GUIDE_GAP,
-        ) {
-            for (i, (row_parts, state, zebra)) in demo.into_iter().enumerate() {
-                let slot = UiRect::new(
-                    control_x,
-                    y + i as f32 * GALLERY_ROW_H,
-                    control_w,
-                    GALLERY_ROW_H,
-                );
-                let lay = kit::row_layout(
-                    m,
-                    fs,
-                    FONT_FAMILY,
-                    LABEL_SIZE,
-                    slot,
-                    rg,
-                    &row_parts,
-                    &kit::RowOpts::default(),
-                );
-                row_rows.push(RowDemoRow {
-                    state,
-                    zebra,
-                    parts: row_parts,
-                    lay,
-                });
-            }
-        }
-    }
-    y += 4.0 * GALLERY_ROW_H + SECTION_GAP;
-
-    // === FR-068 W3 (этап M3): секция Table — ТЕ ЖЕ демо-данные, что у
-    // секции Row выше, через компонент Table (retained-вход кадра:
-    // set_rows + row_layout_with по фиксированным слотам GALLERY_ROW_H).
-    // Параметры — паритет Row-секции: right_pad 0 (правый край направляющих
-    // — край контрол-колонки; viewport_right — ПРАВЫЙ КРАЙ В КООРДИНАТАХ
-    // СЛОТОВ, слоты здесь x=control_x), зазор TABLE_GUIDE_GAP, лидер on
-    // (RowOpts::default), кегль LABEL_SIZE. Зебра — переопределением слота
-    // fill (TableRowStyle { fill: Some(hover_fill) }, F-8 — готовый слот,
-    // без арифметики), Σ — state: Selected. Отрисовка — общий путь секции
-    // Row (paint_row по предвычисленному RowLayout в app/overlays.rs):
-    // строки попадают в `row_rows` — ноль правок в отрисовке; оракул
-    // бит-в-бит «Row ≡ Table на одних данных» — в тестах модуля.
+    // === FR-068 W3 (этап M3): секция Table — табличные строки через
+    // компонент Table (retained-вход кадра: set_rows + row_layout_with по
+    // фиксированным слотам GALLERY_ROW_H). W3.3 (решение владельца):
+    // витрина Row v1 (FR-061) заменена компонентом — табличная секция
+    // одна, следует за Icons. Параметры: right_pad 0 (правый край
+    // направляющих — край контрол-колонки; viewport_right — ПРАВЫЙ КРАЙ
+    // В КООРДИНАТАХ СЛОТОВ, слоты здесь x=control_x), зазор
+    // TABLE_GUIDE_GAP, лидер on (RowOpts::default), кегль LABEL_SIZE.
+    // Зебра — переопределением слота fill (TableRowStyle {
+    // fill: Some(hover_fill) }, F-8 — готовый слот, без арифметики),
+    // Σ — state: Selected. Отрисовка — общий путь `row_rows` (paint_row
+    // по предвычисленному RowLayout в app/overlays.rs) — ноль правок в
+    // отрисовке; оракул бит-в-бит «Row ≡ Table на одних данных»
+    // (kit::row_guides/row_layout против Table::row_layout_with) — в
+    // тестах модуля.
     section_titles.push((UiPoint::new(content.x, y), SECTION_TABLE));
     y += 18.0;
+    let mut row_rows: Vec<RowDemoRow> = Vec::new();
     {
         let viewport_right = control_x + control_w;
         let mut table = kit::Table::new(kit::TableProps {
@@ -781,8 +738,8 @@ pub fn gallery_layout(
                     badge: (!parts.badge.is_empty()).then(|| parts.badge.to_owned()),
                     state,
                     style: kit::TableRowStyle {
-                        // Зебра — слот hover_fill (паритет демо Row: тот же
-                        // слот подставляется в row_style в отрисовке).
+                        // Зебра — слот hover_fill (тот же слот подставляется
+                        // в row_style при отрисовке).
                         fill: zebra.then_some(p.hover_fill),
                         ..kit::TableRowStyle::default()
                     },
@@ -790,7 +747,7 @@ pub fn gallery_layout(
                 .collect(),
         );
         // Деградация §4.2 (guides None — правые колонки пусты у всех
-        // строк): паритет Row-секции (row_guides None → строки не строятся).
+        // строк): паритет Row-пути (row_guides None → строки не строятся).
         if table.guides_with(m, fs, viewport_right).is_some() {
             for (i, (row_parts, state, zebra)) in demo.into_iter().enumerate() {
                 let slot = UiRect::new(
@@ -1150,7 +1107,7 @@ pub fn gallery_layout(
         .filter(visible)
         .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
         .collect();
-    // FR-061: секция Row — сдвиг всех ячеек каждой строки + фильтр
+    // FR-068: табличная секция Table — сдвиг всех ячеек каждой строки + фильтр
     let row_rows: Vec<RowDemoRow> = row_rows
         .into_iter()
         .filter(|d| visible(&d.lay.row))
@@ -1768,8 +1725,8 @@ mod tests {
         // Секции v2 — середина колонки: детерминированный скан смещения
         // (хвост витрины растёт — якоримся на факт видимости, не на
         // константу высот). FR-068 M3: колонка выросла (+ секция Table) —
-        // блок TextField…Icons и табличные секции (Row+Table) не влезают в
-        // окно ОДНИМ смещением; каждое семейство сканируется отдельно.
+        // блок TextField…Icons и табличная секция Table не влезают в окно
+        // ОДНИМ смещением; каждое семейство сканируется отдельно.
         let max_offset = lay0.content_h - lay0.sections_viewport.h;
         fn scan_offset(
             want: &dyn Fn(&GalleryLayout) -> bool,
@@ -1816,11 +1773,11 @@ mod tests {
             "демо-список прокручивается"
         );
         assert_eq!(lay_v2.icon_glyphs.len(), 4, "Icon-глифы ×4");
-        // Табличные секции (FR-061 D-15 Row + FR-068 M3 Table) — отдельный
-        // скан: 4 демо-строки Row + 4 строки Table (те же данные через
-        // компонент Table), значения всех 8 — на одной направляющей чисел
+        // Табличная секция (FR-068 M3 Table; W3.3 — единственная) — скан
+        // вместе с Icons (секция непосредственно выше): 4 строки Table на
+        // одной направляющей чисел.
         let lay_rows = scan_offset(
-            &|lay| lay.row_rows.len() == 8,
+            &|lay| lay.row_rows.len() == 4 && lay.icon_glyphs.len() == 4,
             &p,
             &mut m,
             &mut fs,
@@ -1830,8 +1787,8 @@ mod tests {
         );
         assert_eq!(
             lay_rows.row_rows.len(),
-            8,
-            "kit-Row ×4 + Table ×4 (D-15, M3)"
+            4,
+            "Table ×4 (M3; W3.3 — секция Row удалена)"
         );
         let value_right = lay_rows.row_rows[0].lay.value.right();
         assert!(
@@ -1841,52 +1798,43 @@ mod tests {
                 .all(|d| d.lay.value.w == 0.0 || (d.lay.value.right() - value_right).abs() < 0.01),
             "значения — на колоночной направляющей (D-4)"
         );
-        // По одной строке с бейджем в КАЖДОЙ секции — пилюля на
-        // бейдж-колонке
+        // Строка с бейджем — пилюля на бейдж-колонке
         assert_eq!(
             lay_rows
                 .row_rows
                 .iter()
                 .filter(|d| d.lay.badge.is_some())
                 .count(),
-            2,
-            "бейдж-демо «← источник» — по одной строке в Row и Table"
+            1,
+            "бейдж-демо «← источник» — строка Table"
         );
-        // Состояния/зебра демо — в обеих секциях (порядок: 4 строки Row,
-        // затем 4 строки Table)
-        for section in lay_rows.row_rows.chunks(4) {
-            assert!(section[1].zebra, "вторая строка — зебра (hover_fill)");
-            assert_eq!(section[3].state, KitState::Selected, "Σ — Selected");
-        }
-        // FR-068 W3 (M3) — оракул бит-в-бит на уровне приложения: Table
-        // (row_layout_with) ≡ Row v1 (row_guides+row_layout) на ТЕХ ЖЕ
-        // данных, слотах и замерщике — геометрия строк совпадает дословно
-        // с точностью до вертикального сдвига секций (прецедент T1
-        // canvas-ui; RowLayout — PartialEq, включая label_shown). Пустые
-        // ячейки value/unit — сентинел (0,0,0,0) в координатах кадра
-        // (после сдвига скролла y = −offset) — нормализуются: w=0 → нули.
-        let dy = lay_rows.row_rows[4].lay.row.y - lay_rows.row_rows[0].lay.row.y;
+        // Состояния/зебра демо Table
         assert!(
-            (dy - (4.0 * GALLERY_ROW_H + SECTION_GAP + 18.0)).abs() < 0.01,
-            "Table-секция следует за Row с шагом секции (18 + 4·row_h + gap)"
+            lay_rows.row_rows[1].zebra,
+            "вторая строка — зебра (hover_fill)"
         );
-        let normalize = |lay: &kit::RowLayout| -> kit::RowLayout {
-            let mut l = lay.clone();
-            if l.value.w == 0.0 {
-                l.value = UiRect::new(0.0, 0.0, 0.0, 0.0);
-            }
-            if l.unit.w == 0.0 {
-                l.unit = UiRect::new(0.0, 0.0, 0.0, 0.0);
-            }
-            l
-        };
-        for i in 0..4 {
-            assert_eq!(
-                normalize(&shift_row_lay(lay_rows.row_rows[i + 4].lay.clone(), dy)),
-                normalize(&lay_rows.row_rows[i].lay),
-                "строка {i}: Table ≡ Row (бит-в-бит, M3)"
-            );
-        }
+        assert_eq!(
+            lay_rows.row_rows[3].state,
+            KitState::Selected,
+            "Σ — Selected"
+        );
+        // W3.3 (переписанный пин шага секций): Table следует за Icons —
+        // фактический шаг SECTION_GAP (после контента Icons) + 18.0
+        // (заголовок секции Table) — пин бит-в-бит; шаг строк —
+        // GALLERY_ROW_H (row_gap 0).
+        let last_glyph_bottom = lay_rows.icon_glyphs[3].0.bottom();
+        let step = lay_rows.row_rows[0].lay.row.y - last_glyph_bottom;
+        assert!(
+            (step - (SECTION_GAP + 18.0)).abs() < 0.01,
+            "Table-секция следует за Icons с шагом SECTION_GAP + 18 (заголовок): {} != {}",
+            step,
+            SECTION_GAP + 18.0
+        );
+        assert!(
+            (lay_rows.row_rows[1].lay.row.y - lay_rows.row_rows[0].lay.row.y - GALLERY_ROW_H).abs()
+                < 0.01,
+            "шаг строк Table — GALLERY_ROW_H (row_gap 0)"
+        );
     }
 
     /// FR-059: скролл витрины — сдвиг секций, шапка на месте; после сдвига
@@ -1923,12 +1871,14 @@ mod tests {
         assert_eq!(lay1.close, lay0.close);
         assert_eq!(lay1.theme, lay0.theme);
     }
-    /// FR-068 W3 (этап M3, оракул бит-в-бит): секция Table ≡ секция Row на
-    /// ОДНИХ демо-данных и параметрах — раскладки строк ([`kit::RowLayout`],
-    /// включая `label_shown`) равны дословно: [`kit::Table::row_layout_with`]
-    /// делегирует тем же kit-функциям ([`kit::row_guides`]/[`kit::row_layout`]).
+    /// FR-068 W3 (этап M3, оракул бит-в-бит; W3.3 — паритет Row-пути после
+    /// замены витрины Row компонентом): путь Table
+    /// ([`kit::Table::row_layout_with`]) ≡ путь Row ([`kit::row_guides`] +
+    /// [`kit::row_layout`]) на ОДНИХ демо-данных и параметрах — раскладки
+    /// строк ([`kit::RowLayout`], включая `label_shown`) равны дословно:
+    /// Table делегирует тем же kit-функциям.
     #[test]
-    fn table_section_row_layouts_match_row_section() {
+    fn table_row_layouts_match_row_path() {
         let mut m = new_measurer();
         let mut fs = measure_font_system();
         let p = gallery_palette();
@@ -1936,7 +1886,8 @@ mod tests {
         let (control_x, control_w, y0) = (40.0, 300.0, 100.0);
         let viewport_right = control_x + control_w;
 
-        // Путь Row (витрина примитива): row_guides + row_layout per слот
+        // Путь Row (kit-функции, бывший путь витрины FR-061):
+        // row_guides + row_layout per слот
         let parts: Vec<kit::RowParts<'_>> = demo.iter().map(|(parts, _, _)| *parts).collect();
         let rg = kit::row_guides(
             &mut m,
@@ -1971,7 +1922,7 @@ mod tests {
             })
             .collect();
 
-        // Путь Table (M3-секция): set_rows + row_layout_with (те же слоты)
+        // Путь Table (компонент витрины): set_rows + row_layout_with (те же слоты)
         let mut table = kit::Table::new(kit::TableProps {
             size: LABEL_SIZE,
             family: FONT_FAMILY,

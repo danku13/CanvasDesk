@@ -488,10 +488,9 @@ pub mod keys {
     pub const KIT_GROW_TWO: &str = "kit.grow.two";
     pub const KIT_GROW_ONE: &str = "kit.grow.one";
     pub const KIT_WRAP_CHIP: &str = "kit.wrap.chip";
-    /// FR-061 (этап E, D-15): секция kit-Row витрины + демо-строки.
-    pub const KIT_SECTION_ROW: &str = "kit.section.row";
-    /// FR-068 W3 (этап M3): секция Table витрины — те же демо-данные через
-    /// компонент [`canvas_ui::kit::Table`] (рядом с секцией Row).
+    /// FR-068 W3 (этап M3): секция Table витрины — табличные строки через
+    /// компонент [`canvas_ui::kit::Table`] (W3.3: витрина Row v1 заменена
+    /// компонентом — секция единственная).
     pub const KIT_SECTION_TABLE: &str = "kit.section.table";
     pub const KIT_ROW_PRICE: &str = "kit.row.price";
     pub const KIT_ROW_QTY: &str = "kit.row.qty";
@@ -1089,12 +1088,8 @@ const RU: &[(&str, &str)] = &[
         keys::KIT_SECTION_FOCUS,
         "Фокус (F-17: FocusRing, Tab/Shift+Tab)",
     ),
-    // FR-061: секция kit-Row (этап E, D-15)
-    (
-        keys::KIT_SECTION_ROW,
-        "Строка таблицы (Row: направляющие + лидер)",
-    ),
-    // FR-068 W3 (M3): секция Table — те же строки через компонент Table
+    // FR-068 W3 (M3): секция Table — строки через компонент Table
+    // (W3.3: единственная табличная секция витрины)
     (
         keys::KIT_SECTION_TABLE,
         "Таблица (Table: строки на общих направляющих)",
@@ -1906,12 +1901,8 @@ const EN: &[(&str, &str)] = &[
         keys::KIT_SECTION_FOCUS,
         "Focus (F-17: FocusRing, Tab/Shift+Tab)",
     ),
-    // FR-061: kit-Row section (stage E, D-15)
-    (
-        keys::KIT_SECTION_ROW,
-        "Table row (Row: column guides + leader)",
-    ),
-    // FR-068 W3 (M3): Table section — same rows via the Table component
+    // FR-068 W3 (M3): Table section — rows via the Table component
+    // (W3.3: the only table section of the showroom)
     (
         keys::KIT_SECTION_TABLE,
         "Table (rows on shared guides)",
