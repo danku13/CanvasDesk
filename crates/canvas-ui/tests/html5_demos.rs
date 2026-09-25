@@ -684,9 +684,16 @@ fn check_or_write(path: &std::path::Path, dump: &str, demo_id: &str) {
             path.display()
         )
     });
+    // FR-068 W2: Windows CI — git autocrlf конвертирует .txt-эталоны в
+    // CRLF при checkout; тест-дамп всегда пишется через '\n'. Без
+    // нормализации Windows-сборка паникует на каждом эталоне (15 тестов
+    // CI #301..). Нормализуем оба к '\n' — контракт «содержимое строк
+    // совпадает», а не «побайтовое совпадение включая переводы строк».
+    let dump_norm = dump.replace("\r\n", "\n");
+    let expected_norm = expected.replace("\r\n", "\n");
     assert_eq!(
-        dump,
-        expected,
+        dump_norm,
+        expected_norm,
         "golden-снапшот изменился — обнови эталон осознанно (FR-068 W2): {}",
         path.display()
     );
