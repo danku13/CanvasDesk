@@ -245,6 +245,29 @@ fn dump_items(items: &[PaintItem]) -> String {
                     push_item_lines(child, out);
                 }
             }
+            PaintItem::Transform { deg, origin, items } => {
+                // FR-074: transform — строка маркера + рекурсивно дети
+                // (не клип — геометрию детей не трогает).
+                let (x, y) = (px(origin.x), px(origin.y));
+                out.push(Line {
+                    key: (x, y, 0, 0, "rotate"),
+                    body: format!("rotate deg={deg} ox={x} oy={y}"),
+                });
+                for child in items {
+                    push_item_lines(child, out);
+                }
+            }
+            PaintItem::ZGroup { z, items } => {
+                // FR-074: z-группа — маркер + рекурсивно дети (порядок
+                // внутри — уже z-отсортированный take_items'ом).
+                out.push(Line {
+                    key: (0, 0, 0, 0, "zgroup"),
+                    body: format!("zgroup z={z}"),
+                });
+                for child in items {
+                    push_item_lines(child, out);
+                }
+            }
         }
     }
     let mut lines: Vec<Line> = Vec::new();

@@ -1334,6 +1334,14 @@ impl KitDraw {
                 // дети конвертируются как обычные items (draw-порядок
                 // сохранён); отсечение — scissor FR-056 на стороне рендера.
                 canvas_ui::paint::PaintItem::ClipRect { items, .. } => self.paint_items(items),
+                // FR-074: Transform (rotate) и ZGroup — прозрачный проход
+                // (как ClipRect в W1 до scissor): ZGroup-дети уже в
+                // z-отсортированном порядке (Painter::take_items); поворот
+                // пока не применяется рендером — формат инстансов без
+                // rotation, конвертация в rotate-инстансы — отдельная
+                // задача (данные Transform сохраняются на уровне canvas-ui).
+                canvas_ui::paint::PaintItem::Transform { items, .. } => self.paint_items(items),
+                canvas_ui::paint::PaintItem::ZGroup { items, .. } => self.paint_items(items),
             }
         }
     }
