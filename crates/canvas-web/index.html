@@ -235,8 +235,15 @@
   </head>
   <body>
     <!-- M8/W6: панель хранилища — листенеры вешает canvas_web::toolbar;
-         подпись «Недавние» обновляется из Rust (set_recent_label). -->
+         подпись «Недавние» обновляется из Rust (set_recent_label).
+         FR-028 v2 (inline tour, sdk/web-onboarding/): четвёртая кнопка
+         «Тур» открывает интерактивный онбординг (Intro.js-style overlay
+         поверх канваса). Кнопка — часть DOM-слоя (как и соседние),
+         теневого влияния на GPU-канвас не оказывает. -->
     <div id="w6-toolbar">
+      <button id="btn-tour" title="Пройти интерактивный тур по инструментам CanvasDesk">
+        Тур
+      </button>
       <button id="btn-open" title="Открыть .canvas с диска (автосейв в файл)">
         Открыть с диска…
       </button>
@@ -247,5 +254,78 @@
         Экспорт .canvas
       </button>
     </div>
+
+    <!-- FR-028 v2: inline-тур (sdk/web-onboarding/). Бандл — vanilla JS
+         (iife, ES2018, zero runtime deps), не требует сборщика. Источник
+         в sdk/web-onboarding/src/*.ts; пересобрать через
+         `npm run build` в sdk/web-onboarding/. Подключается в конце body,
+         после w6-toolbar (кнопка «Тур» уже в DOM). URL к bundle: путь
+         относительно index.html = ../../sdk/web-onboarding/canvasdesk-tour.js.
+         Trunk copy-to-dist учитывает относительный путь — пока что
+         симлинк/копирование не настроено; интегратор может заменить на
+         абсолютный CDN или встроенный inline-script. -->
+    <script src="../../sdk/web-onboarding/canvasdesk-tour.js"></script>
+    <script>
+      /* FR-028 v2: инициализация inline-тура. Движок поднимается один раз;
+         на «Тур» открывается small picker выбора сценария (для демо). URL
+         hash #tour=<id> запускает сценарий автоматически — точка входа для
+         deeplink-онбординга. Сигналы от WASM-bridge (canvas:note-created,
+         canvas:palette-opened) должны прокидываться через
+         window.__canvasdeskTour.signal(name) — точку расширения см. в
+         sdk/web-onboarding/README.md. */
+      (function () {
+        function ready(fn) {
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", fn);
+          } else { fn(); }
+        }
+        ready(function () {
+          if (!window.CanvasDeskTour) {
+            console.warn("[onboarding-v2] CanvasDeskTour bundle missing — " +
+              "ensure sdk/web-onboarding/canvasdesk-tour.js is served");
+            return;
+          }
+          var tour = new CanvasDeskTour.Tour();
+          window.__canvasdeskTour = tour;  // host hook: signal("canvas:note-created")
+          var scenarios = CanvasDeskTour.scenarios;
+
+          // Авто-запуск по URL hash: #tour=cd-toolbar-tour
+          if (location.hash && location.hash.indexOf("#tour=") === 0) {
+            var id = location.hash.slice("#tour=".length);
+            for (var k in scenarios) {
+              if (scenarios[k].id === id) {
+                tour.run(scenarios[k]);
+                return;
+              }
+            }
+          }
+
+          // Кнопка «Тур» — picker сценария (для демо без хостов).
+          var btn = document.getElementById("btn-tour");
+          if (btn) {
+            btn.addEventListener("click", function () {
+              var choice = prompt(
+                "Выберите сценарий:\n" +
+                "1 — Панель хранилища\n" +
+                "2 — Первый запуск (интерактив)\n" +
+                "3 — Палитра шаблонов\n" +
+                "4 — Расчёты в CanvasDesk",
+                "1"
+              );
+              if (!choice) return;
+              var map = {
+                "1": scenarios.toolbarTourScenario,
+                "2": scenarios.firstRunInlineScenario,
+                "3": scenarios.paletteTourScenario,
+                "4": scenarios.calculationsTourScenario,
+              };
+              var s = map[choice.trim()];
+              if (!s) { alert("Неизвестный сценарий: " + choice); return; }
+              tour.run(s);
+            });
+          }
+        });
+      })();
+    </script>
   </body>
 </html>

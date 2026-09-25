@@ -1,0 +1,35 @@
+{
+  "name": "@canvasdesk/web-onboarding",
+  "version": "0.1.0",
+  "description": "Inline onboarding tour engine for CanvasDesk (Intro.js-style overlays + Guida.js scenarios + flows.sh actions)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "canvasdesk-tour.js",
+    "canvasdesk-tour.min.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.ts --format=iife --global-name=CanvasDeskTour --target=es2018 --outfile=canvasdesk-tour.js --banner:js='// CanvasDesk inline onboarding engine — see sdk/web-onboarding/README.md'",
+    "minify": "esbuild src/index.ts --format=iife --global-name=CanvasDeskTour --target=es2018 --minify --outfile=canvasdesk-tour.min.js",
+    "typecheck": "tsc --noEmit",
+    "demo": "vite"
+  },
+  "keywords": [
+    "canvasdesk",
+    "onboarding",
+    "tour",
+    "introjs",
+    "guidajs",
+    "tooltip",
+    "coach-mark"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0"
+  }
+}
