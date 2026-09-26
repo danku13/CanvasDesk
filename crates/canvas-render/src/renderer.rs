@@ -554,7 +554,12 @@ pub struct Renderer {
 /// `None` — не работает ни один бэкенд (canvas-web покажет DOM-заглушку).
 #[cfg(target_arch = "wasm32")]
 async fn create_gpu_web(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Surface<'static>)> {
+    // FR-WEBGPU-DIAG: логирование каждой ступени. Браузерное `No available
+    // adapters.` в console — нативное сообщение Chrome (не наше); наш warn
+    // идёт следом с конкретной ступенью. Retry в GpuContext::new решает
+    // timing-race на старте (Intel Arc + Chrome).
     // Ступень 1 — WebGPU: адаптер без surface, канвас не трогаем.
+    tracing::info!("create_gpu_web: ступень 1 — WebGPU (BROWSER_WEBGPU)");
     let webgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::BROWSER_WEBGPU,
         ..Default::default()
@@ -573,11 +578,12 @@ async fn create_gpu_web(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Surfa
     } else {
         tracing::warn!(
             backend = ?wgpu::Backends::BROWSER_WEBGPU,
-            "web WebGPU-адаптер недоступен — фолбэк на GL (WebGL2)"
+            "web WebGPU-адаптер недоступен (3 retry попытки исчерпаны) — фолбэк на GL (WebGL2)"
         );
     }
     // Ступень 2 — GL (WebGL2): surface до адаптера; канвас к этому моменту
     // не занят ни одним контекстом. Лимиты устройства — downlevel (gpu.rs).
+    tracing::info!("create_gpu_web: ступень 2 — GL (WebGL2)");
     let gl_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::GL,
         ..Default::default()
