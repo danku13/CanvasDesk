@@ -3574,6 +3574,11 @@ impl App {
                         self.templates = canvas_core::templates::TemplateRegistry::all_with_custom(
                             &self.templates_root,
                         );
+                        // FR-PERF-A: реестр шаблонов не входит в сигнатуру
+                        // кэша UI-кадра (дорогой хэш) — явная инвалидация
+                        // кэша (WHEEL/TEMPLATE_STRIP/TEMPLATE_PANEL hit-rect'ы
+                        // зависят от categories/count шаблонов).
+                        self.cached_ui_frame = None;
                         // FR-061 этап D (D-8): описания обновились — снять
                         // новый снимок в сцену и рендер.
                         self.sync_template_descs();

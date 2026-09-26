@@ -680,8 +680,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // кадра (UiLayer::Debug, L8): рамки hit-rect'ов по слоям,
                 // имя под курсором, подсветка пересечений (G6). Модель
                 // чистая — по кадру реестра (тот же build_frame, что у ввода)
+                // FR-PERF-A: кадр — из кэша (`App::ui_frame`), не прямой
+                // вызов `build_frame` (он же идёт в `on_cursor_moved` для
+                // hover hit-test и в `on_mouse_press` для pick'а).
                 if self.debug_overlay {
-                    let ui_frame = ui_registry::build_frame(self);
+                    let ui_frame = self.ui_frame();
                     let (dbg_instances, dbg_texts) = crate::debug_overlay::build(
                         self.viewport_logical(),
                         self.cursor,
@@ -1207,14 +1210,26 @@ impl ApplicationHandler<AppEvent> for App {
         if self.scene.flow_worker_tick() {
             self.request_redraw();
         }
-        // M8/W6 (wasm-port §4.2): пока сцена грязная, цикл не засыпает —
-        // запланированный кадр держит rAF-цепочку web-цикла живой, иначе
-        // about_to_wait не вызывается после последнего события ввода и
-        // debounce автосейва (2 с) никогда не срабатывает (правка → коммит
-        // → тишина → сохранения нет). На нативе цена — пара лишних кадров
-        // в течение 2 с после правки; поведение автосейва идентичное.
-        if self.scene.dirty_since.is_some() {
+        // FR-PERF-C: rAF-петля автосейва. Прежняя логика (M8/W6) звала
+        // `request_redraw` КАЖДЫЙ кадр пока `scene.dirty_since.is_some()`
+        // (2 с после правки) — на web это 2 с непрерывного 98мс-рендера
+        // (~20 тяжёлых кадров на одну правку; прошлый комментарий
+        // «На нативе цена — пара лишних кадров» ошибочно приравнивал
+        // платформы). Теперь: на первой правке dirty-окна выставляется
+        // `dirty_redraw_scheduled` и званится ровно один `request_redraw`,
+        // который будит `about_to_wait` для debounce-проверки автосейва
+        // (2 с). Между правками кадры пропускаются дёшево — Task A дал
+        // кэшированный `ui_frame`, Task B переключил `update_minimap` на
+        // `revision`, так что `RedrawRequested` без визуальных изменений
+        // выполняет минимум работы. Сброс флага — при `dirty_since == None`
+        // (т.е. `save_now` отработал), следующая правка снова пройдёт
+        // один redraw.
+        let dirty_now = self.scene.dirty_since.is_some();
+        if dirty_now && !self.dirty_redraw_scheduled {
             self.request_redraw();
+            self.dirty_redraw_scheduled = true;
+        } else if !dirty_now {
+            self.dirty_redraw_scheduled = false;
         }
         // Debounce запроса поиска (T14): 200 мс покоя после правки — отправка.
         // Панель/анимации держат цикл красным через request_redraw ниже,
