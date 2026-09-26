@@ -354,21 +354,27 @@ impl EdgeBundleIndex {
     /// пользователя → value-ребро (`FlowKind::Value`) → прочие. Порядок
     /// внутри класса — стабильный по `edge.id` (порядок `bundle.edges`).
     pub fn dominant_edge(&self, canvas: &Canvas, bundle: &EdgeBundle) -> Option<usize> {
-        let rank = |index: usize| -> u8 {
-            let edge = &canvas.edges[index];
+        // Страховка от рассинхрона кэша (багфикс паники «index out of
+        // bounds: len 19, index 19»): индексы пучка валидны для канваса
+        // НА МОМЕНТ ПОСТРОЕНИЯ. Все пути мутаций перестраивают индекс в
+        // recompute_flow (включая воркер-ветку), но любой непредвиденный
+        // путь не должен ронять рендер — устаревший индекс вне диапазона
+        // пропускается, как ребро без ранга.
+        let rank = |index: usize| -> Option<u8> {
+            let edge = canvas.edges.get(index)?;
             if edge.color.as_deref().is_some_and(|c| !c.is_empty()) {
-                2
+                Some(2)
             } else if edge.flow_kind() == FlowKind::Value {
-                1
+                Some(1)
             } else {
-                0
+                Some(0)
             }
         };
         // Первый максимум: порядок обхода — `edge.id`, равный ранг НЕ
         // вытесняет предыдущего кандидата (инвариант 2 — стабильность).
         let mut best: Option<(u8, usize)> = None;
         for &index in &bundle.edges {
-            let r = rank(index);
+            let Some(r) = rank(index) else { continue };
             if best.map_or(true, |(br, _)| r > br) {
                 best = Some((r, index));
             }
@@ -1069,6 +1075,45 @@ mod fr042_tests {
         let bundle3 = index3.bundle_of_pair("a", "b").unwrap();
         let dominant3 = index3.dominant_edge(&canvas, bundle3).unwrap();
         assert_eq!(canvas.edges[dominant3].id, "e1");
+    }
+
+    /// Багфикс паники «index out of bounds: len 19, index 19»: устаревший
+    /// индекс пучка (канвас укоротился после построения индекса) НЕ роняет
+    /// dominant_edge — индекс вне диапазона пропускается, доминанта
+    /// выбирается среди оставшихся валидных, пустой валидный набор — None.
+    #[test]
+    fn dominant_edge_stale_index_does_not_panic() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("a", "A", 0.0, 0.0));
+        canvas.nodes.push(Node::text("b", "B", 400.0, 0.0));
+        let e = |id: &str| Edge::new(id, "a", None, "b", None);
+        canvas.add_edge(e("e1"));
+        canvas.add_edge(e("e2"));
+        canvas.add_edge(e("e3"));
+        let index = EdgeBundleIndex::build(&canvas);
+        let bundle = index.bundle_of_pair("a", "b").expect("пучок");
+        assert_eq!(index.dominant_edge(&canvas, bundle), Some(0));
+        // Рассинхрон: пучок помнит индекс 3, канвас уже укоротили до 3 рёбер
+        // (после удаления; len = 3 — индекс 3 вне диапазона). Именно этот
+        // путь паниковал: `canvas.edges[index]` в воркер-окне FR-064.
+        let stale = EdgeBundle {
+            edges: vec![0, 3],
+            weight: 2,
+        };
+        assert_eq!(
+            index.dominant_edge(&canvas, &stale),
+            Some(0),
+            "устаревший индекс пропущен, доминанта — среди валидных"
+        );
+        let all_stale = EdgeBundle {
+            edges: vec![7, 9],
+            weight: 2,
+        };
+        assert_eq!(
+            index.dominant_edge(&canvas, &all_stale),
+            None,
+            "нет валидных индексов — честный None, не паника"
+        );
     }
 
     /// Инвариант 3: толщина — d(1)=1.8, d(2)=2.7, d(4)=4.5, d(8)=8.0 (кап),

@@ -4288,3 +4288,54 @@ fn mcp_nodes_search_by_title() {
         "поиск по заголовку (регистр не важен): {found}"
     );
 }
+
+/// Багфикс паники bundles.rs «index out of bounds: len 19, index 19»:
+/// воркер-ветка recompute_flow (FR-064) обязана перестраивать индекс
+/// пучков СИНХРОННО (инвариант FR-042: «хвост recompute_flow»), а не
+/// откладывать до прихода FlowReady. Раньше после удаления ребра кадр
+/// рендерился с пучками прежнего канваса — `dominant_edge` читал
+/// `canvas.edges[19]` при len 19 и ронял приложение (desktop release).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn worker_path_rebuilds_bundles_synchronously() {
+    use std::sync::Arc;
+
+    use crate::worker::FlowWorkerHandle;
+    use canvas_core::flow::{FlowSolutions, WhatIfOverrides};
+
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("a", "A", 0.0, 0.0));
+    canvas.nodes.push(Node::text("b", "B", 400.0, 0.0));
+    for i in 0..20 {
+        canvas.add_edge(Edge::new(format!("e{i:02}").as_str(), "a", None, "b", None));
+    }
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/bundles-worker.canvas"));
+    scene.attach_flow_worker(FlowWorkerHandle::spawn_with_compute(
+        Arc::new(|_: &Canvas, _: &WhatIfOverrides| Ok(FlowSolutions::default())),
+        Arc::new(|_, _| {}),
+    ));
+    // Первый пересчёт — воркер-ветка (ранний выход); пучки обязаны быть
+    // построены синхронно: пучок пары содержит все 20 индексов.
+    scene.recompute_flow();
+    assert_eq!(
+        scene.bundles.bundle_of_pair("a", "b").map(|b| b.weight),
+        Some(20),
+        "воркер-ветка построила индекс пучков до FlowReady"
+    );
+    // Мутация: удаляем ребро (20 → 19) и пересчитываем — воркер снова
+    // забирает прогоны. До фикса `bundles` держал индекс 19 при len 19:
+    // dominant_edge паниковал на первом же кадре рендера.
+    assert!(scene.canvas.remove_edge("e00"));
+    scene.recompute_flow();
+    let bundle = scene
+        .bundles
+        .bundle_of_pair("a", "b")
+        .expect("пучок перестроен после удаления");
+    assert_eq!(bundle.weight, 19, "индекс пучков синхронно перестроен");
+    assert!(
+        bundle.edges.iter().all(|&i| i < scene.canvas.edges.len()),
+        "нет индексов вне диапазона нового канваса"
+    );
+    // Ровно тот вызов, что падал: dominant_edge над канвасом len 19.
+    let _ = scene.bundles.dominant_edge(&scene.canvas, bundle);
+}

@@ -423,6 +423,7 @@ stage — AC-3.2 PRD); **правка модели при открытом stage
 
 ## История изменений (Changelog)
 
+- `2026-09-26` — агент (сессия web-77d836dd): **багфикс — паника «index out of bounds: the len is 19 but the index is 19»** (bundles.rs:358, репорт владельца). Корень: воркер-ветка FR-064 в `recompute_flow` (desktop) делает ранний return ДО хвостовой перестройки `EdgeBundleIndex` — до прихода `FlowReady` кадр рендерится с индексами пучков от ПРЕЖНЕГО канваса; после удаления ребра (20→19) `dominant_edge` читал `canvas.edges[19]` вне диапазона — паника release-сборки. Фикс 1 (инвариант §«хвост recompute_flow»): перестройка `self.bundles` синхронно в воркер-ветке (O(edges), тяжёлый propagate по-прежнему уходит воркеру). Фикс 2 (страховка): `dominant_edge` читает рёбра через `edges.get(index)` — устаревший индекс вне диапазона пропускается (ранг None), паника невозможна ни на одном пути. Тесты: `worker_path_rebuilds_bundles_synchronously` (canvas-scene; воркер с тривиальным вычислителем: 20 параллельных рёбер → удаление → пучок без индексов вне диапазона; на баге — падает) и `dominant_edge_stale_index_does_not_panic` (canvas-core).
 - `2026-09-21` — агент: **E1–E4 реализованы** (приоритет владельца — «LOD
   политика и связи»; загрузка внешних данных — на будущее). E1
   (`canvas-core/src/bundles.rs`): `EdgeBundleIndex` (упорядоченная пара,
