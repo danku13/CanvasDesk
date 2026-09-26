@@ -1713,10 +1713,20 @@ fn with_body_stack(
                                // («⋯ целиком ▾» / «▴ свернуть») — hit-зона BodyHit::DescExpander.
     let desc_items: Vec<BodyItem> = match desc {
         Some(d) if !d.is_empty() => {
+            // Зум-инвариантный кламп (багфикс «строки обрезаются при
+            // отдалении»): метрики клампа фиксированы (BODY_FONT_SIZE/
+            // BODY_LINE_HEIGHT без × zoom), поэтому и ширина переноса
+            // обязана быть world-широй БЕЗ × zoom_px. Раньше ширина
+            // умножалась на zoom_px → бюджет «≤ 2 строки» держал разный
+            // контент на разных зумах (на максимальном зуме — весь текст,
+            // при отдалении — всё меньше) и высота зоны в world-px плыла
+            // относительно measure_body_height (всегда zoom 1) → клип тела
+            // резал строки. World-ширина даёт тот же перенос, что и рендер
+            // блока (пропорциональный скейл), I-2 выполняется на любом зуме.
             let (clamped, truncated) = clamp_desc_text(
                 font_system,
                 d,
-                body_width * zoom_px,
+                body_width,
                 canvas_core::tokens::TABLE_DESC_CLAMP_LINES,
             );
             if clamped.is_empty() {
@@ -6976,5 +6986,81 @@ load = connections_per_sec / (servers * server_rate)\n";
             "буллит в колонке-gutter: {:?}",
             bullet.rect
         );
+    }
+
+    /// Багфикс «строки обрезаются при отдалении» (зум-инвариантность клампа
+    /// описания): бюджет клампа (TABLE_DESC_CLAMP_LINES) обязан отбирать
+    /// ОДИН и тот же контент на любом зуме — метрики клампа фиксированы,
+    /// ширина переноса world. Раньше ширина умножалась на zoom_px → на
+    /// максимальном зуме в кламп проходил весь текст (зона раздувалась,
+    /// высота стека расходилась с measure_body_height (всегда zoom 1) →
+    /// клип тела резал строки), при отдалении — всё меньше. Приёмка:
+    /// высота стека и блока описания в world-px одинаковы при
+    /// zoom 0.5 / 1 / 4.
+    #[test]
+    fn desc_zone_zoom_invariant() {
+        let desc = "Месячная стоимость инфраструктуры: compute (инстансы × цена) + \
+                    хранение (ГБ × цена ГБ) + egress (ТБ × цена ТБ) в одной формуле. \
+                    Быстрая прикидка бюджета до счёта облака и what-if при смене \
+                    тарифов или региона. Добавьте слагаемые под свою архитектуру.";
+        let body = "servers = 4";
+        let stack = |zoom: f32| {
+            let mut fs = FontSystem::new();
+            shape_body(
+                &mut fs,
+                &ThemeColors::dark(),
+                body,
+                260.0,
+                zoom,
+                &[0],
+                &[],
+                Vec::new(),
+                &[],
+                canvas_core::Language::Ru,
+                Some(desc),
+                true,
+                false,
+                None,
+                &[],
+            )
+        };
+        let z1 = stack(1.0);
+        let z1_height = z1
+            .blocks
+            .iter()
+            .map(|block| block.offset[1] + block.height)
+            .fold(0.0f32, f32::max);
+        // Зона описания: ровно кламп (2 строки) + аффорданс экспандера.
+        let z1_desc = z1
+            .blocks
+            .first()
+            .map(|block| block.height)
+            .unwrap_or_default();
+        assert_eq!(
+            z1_desc,
+            canvas_core::tokens::TABLE_DESC_CLAMP_LINES as f32 * BODY_LINE_HEIGHT,
+            "зона описания в клампе: 2 строки world-px"
+        );
+        for zoom in [0.5, 2.5, 4.0] {
+            let layout = stack(zoom);
+            let height = layout
+                .blocks
+                .iter()
+                .map(|block| block.offset[1] + block.height)
+                .fold(0.0f32, f32::max);
+            assert_eq!(
+                height, z1_height,
+                "высота стека в world-px зум-инвариантна (zoom {zoom})"
+            );
+            let desc_h = layout
+                .blocks
+                .first()
+                .map(|block| block.height)
+                .unwrap_or_default();
+            assert_eq!(
+                desc_h, z1_desc,
+                "высота зоны описания зум-инвариантна (zoom {zoom})"
+            );
+        }
     }
 }
