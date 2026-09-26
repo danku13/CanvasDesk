@@ -138,9 +138,10 @@ pub use lineage::{
     LineageTree, LineageVia, LINEAGE_MAX_NODES,
 };
 pub use model::{
-    enclosing_group_indices, group_add_children, group_children, group_expand_to_children,
-    group_materialize_children, group_remove_child, parent_index, plan_push_out, subtree_ids,
-    Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node, NodeKind, PreviewState, Side,
+    enclosing_group_indices, group_add_children, group_children, group_depths, group_descendants,
+    group_expand_to_children, group_materialize_children, group_remove_child, parent_index,
+    plan_push_out, subtree_ids, Canvas, CanvasdeskExt, Edge, EdgeLineStyle, EdgeThickness, Node,
+    NodeKind, PreviewState, Side,
 };
 pub use providers::{
     ClipboardBackend, MemWidgetState, NoopClipboard, NoopThumbs, NoopWatch, PreviewProvider,

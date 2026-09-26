@@ -3415,10 +3415,12 @@ impl App {
             world[1] + tolerance,
         ];
         let hidden = self.hidden_subtree_nodes();
+        // query_rect_nodes: группы не имеют построчных портов — без ручного
+        // фильтра коллизий рамок с детьми (FR-012 v2)
         let mut candidates: Vec<usize> = self
             .scene
             .spatial
-            .query_rect(expanded)
+            .query_rect_nodes(expanded)
             .into_iter()
             .filter(|index| hidden.binary_search(index).is_err())
             .collect();
@@ -3431,9 +3433,6 @@ impl App {
             let Some(node) = self.scene.canvas.nodes.get(index) else {
                 continue;
             };
-            if node.kind() == NodeKind::Group {
-                continue;
-            }
             let ports = renderer.line_ports(index, node);
             if let Some(port) =
                 canvas_core::line_port_at(&ports, world, zoom, self.settings.port_zone_px)
@@ -3459,10 +3458,12 @@ impl App {
             world[1] + tolerance,
         ];
         let hidden = self.hidden_subtree_nodes();
+        // query_rect_nodes: якоря — только у шаблонных нод, рамки групп —
+        // мимо без ручного фильтра (FR-012 v2)
         let mut candidates: Vec<usize> = self
             .scene
             .spatial
-            .query_rect(expanded)
+            .query_rect_nodes(expanded)
             .into_iter()
             .filter(|index| hidden.binary_search(index).is_err())
             .collect();
@@ -6020,7 +6021,8 @@ impl App {
             return;
         }
         let visible = self.camera.visible_world_rect(viewport);
-        for index in self.scene.spatial.query_rect(visible) {
+        // query_rect_nodes: у групп нет file — тамбнейлы им не заказываются
+        for index in self.scene.spatial.query_rect_nodes(visible) {
             let node = &self.scene.canvas.nodes[index];
             let Some(file) = node.file.as_deref() else {
                 continue;
@@ -7405,9 +7407,14 @@ impl App {
 
     // --- FR-012: жест «втягивания» в группу ---
 
-    /// Цель втягивания при активном drag: верхняя группа (макс. индекс),
-    /// чей rect содержит центр перетаскиваемой первичной ноды, при условии,
-    /// что нода ещё НЕ ребёнок этой группы (иначе жест бессмысленен).
+    /// Цель втягивания при активном drag (FR-012 v2): самая ВНУТРЕННЯЯ
+    /// группа (макс. глубина вложенности; при равной — верхняя по z),
+    /// чей rect содержит центр перетаскиваемой первичной ноды, при
+    /// условии, что нода ещё НЕ ребёнок этой группы (иначе жест
+    /// бессмысленен). Раньше целью была просто верхняя по индексу группа:
+    /// внешняя группа, созданная позже вложенной, перехватывала жест у
+    /// внутренней. Предки первичной ноды (транзитивно) исключены —
+    /// втягивание в собственного предка создавало двойное членство.
     fn group_drop_target(&self, dragging: &DragState) -> Option<usize> {
         let node = self.scene.canvas.nodes.get(dragging.primary)?;
         let center = [node.x + node.width / 2.0, node.y + node.height / 2.0];
@@ -7417,29 +7424,18 @@ impl App {
         let candidates = self
             .scene
             .spatial
-            .query_rect([center[0], center[1], center[0], center[1]]);
-        candidates
-            .into_iter()
-            .rev() // верхняя по z — последняя
-            .find(|&index| {
-                self.scene.canvas.nodes.get(index).is_some_and(|group| {
-                    group.kind() == NodeKind::Group
-                        && !dragged.contains(&index)
-                        && center[0] >= group.x
-                        && center[0] <= group.x + group.width
-                        && center[1] >= group.y
-                        && center[1] <= group.y + group.height
-                        // уже ребёнок (явный список) — не «втягиваем» повторно
-                        && !group
-                            .children
-                            .as_ref()
-                            .is_some_and(|list| {
-                                self.scene.canvas.nodes.get(dragging.primary).is_some_and(|n| {
-                                    list.contains(&n.id)
-                                })
-                            })
-                })
-            })
+            // query_rect_groups: цель втягивания — только группы; коллизии
+            // обычных нод под центром не участвуют (FR-012 v2)
+            .query_rect_groups([center[0], center[1], center[0], center[1]]);
+        let ancestors = canvas_core::enclosing_group_indices(&self.scene.canvas, dragging.primary);
+        crate::ui::group_drop_target_pick(
+            &self.scene.canvas,
+            &candidates,
+            &dragged,
+            &ancestors,
+            dragging.primary,
+            center,
+        )
     }
 
     /// Вставить перетаскиваемые ноды в группу (FR-012, отпускание над
