@@ -962,6 +962,50 @@ mod tests {
         }
     }
 
+    /// Oracle v3 (FR-071): раскладка по взвешенным пересечениям не хуже
+    /// авторской (seed) раскладки из пакета: `4·(ребро × нода) + (ребро ×
+    /// ребро)`. Seed-раскладки свободны от сетки и слоёв, поэтому по чистым
+    /// пересечениям рёбер они могут выигрывать (support-staffing: K3,3 в
+    /// слоистой сетке даёт вынужденные 9), но с учётом их пересечений с
+    /// нодами план выигрывает на всех built-in схемах.
+    #[test]
+    fn smart_layout_not_worse_than_seed_on_weighted_crossings() {
+        fn weighted(canvas: &canvas_core::Canvas) -> u64 {
+            let nc = canvas_core::scheme_layout::count_edge_node_crossings(canvas) as u64;
+            let ec = canvas_core::scheme_layout::count_edge_edge_crossings(canvas) as u64;
+            nc * canvas_core::scheme_layout::NODE_CROSS_WEIGHT as u64 + ec
+        }
+        for scheme in SchemeRegistry::embedded().list() {
+            // seed: координаты автора пакета, размеры из манифеста
+            let mut seed = canvas_core::Canvas::default();
+            for node in &scheme.content.nodes {
+                if node.node_type == "group" {
+                    continue; // рамки не препятствия (FR-071), в built-in их нет
+                }
+                let mut n = Node::text(&node.id, &node.id, node.x, node.y);
+                n.width = node.width;
+                n.height = node.height;
+                seed.nodes.push(n);
+            }
+            for (i, edge) in scheme.content.edges.iter().enumerate() {
+                seed.edges.push(Edge::new(
+                    &format!("seed-edge-{i}"),
+                    edge.from_node.clone(),
+                    None,
+                    edge.to_node.clone(),
+                    None,
+                ));
+            }
+            let (laid, _) = laid_canvas(&scheme.id);
+            let (plan_w, seed_w) = (weighted(&laid), weighted(&seed));
+            assert!(
+                plan_w <= seed_w,
+                "{}: план ({plan_w}) хуже авторской раскладки ({seed_w})",
+                scheme.id
+            );
+        }
+    }
+
     /// Oracle G-раскладка: bbox не-групповых нод не пересекаются.
     #[test]
     fn smart_layout_no_bbox_overlaps() {

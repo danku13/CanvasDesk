@@ -26,10 +26,15 @@
 //!    между всеми колонками и кластерами (сцена читается как таблица), а
 //!    зазоры гарантированы конструктивно: по вертикали `≥ CELL_H − max_h ≥
 //!    ROW_GAP`, по горизонтали `≥ LAYER_GAP` — «прилипание» невозможно.
-//! 5. Минимизация пересечений «ребро × нода» — в единицах сетки: swap
-//!    соседних рядов колонки, перенос на другой ряд, сдвиг колонки целыми
-//!    рядами (±[`SHIFT_STEPS`]); ход — строгое падение стоимости
-//!    (пересечения, тай-брейк — суммарная длина отрезков порт→порт).
+//! 5. Минимизация пересечений — в единицах сетки, взвешенная стоимость
+//!    `NODE_CROSS_WEIGHT·(ребро × нода) + (ребро × ребро)` (v3: пересечения
+//!    самих рёбер — proper-crossing порт→порт — больше не невидимы; запрос
+//!    владельца: вертикальный свап нод обязан уметь развязывать рёбра).
+//!    Ходы: swap соседних рядов, перенос в колонке, сдвиг колонок целыми
+//!    рядами, barycenter по фактическим рядам, межколоночный перенос ноды
+//!    (строгие неравенства колонок — направления рёбер сохраняются),
+//!    совместные сдвиги пар; ход — строгое падение стоимости; внешние
+//!    раунды до фикспойнта. Кратность параллельных рёбер учитывается.
 //! 6. Рамки групп — bbox детей + [`GROUP_PAD`] (изнутри наружу); standalone
 //!    — аннотационные колонки слева/справа от потока (через одну колонку
 //!    сетки; сторона — по исходному x против исходного центра потока).
@@ -70,6 +75,12 @@ pub const CROSSING_MARGIN: f32 = 12.0;
 pub const MAX_REFINE_PASSES: usize = 8;
 /// Максимум проходов оптимизации сдвигами колонок.
 pub const MAX_SHIFT_PASSES: usize = 2;
+/// Вес одного пересечения «ребро × нода» в стоимости хода: пересечение
+/// с нодой заметно хуже пересечения рёбер, но не абсолютный приоритет —
+/// v3: обмен «1 пересечение с нодой против нескольких пересечений рёбер»
+/// оценивается честно (лексикографика v2/v3-раннего дизайна выкупала
+/// устранение 1–2 пересечений с нодами ростом пересечений рёбер 4→7).
+pub const NODE_CROSS_WEIGHT: u32 = 4;
 /// Диапазон сдвига колонки в шагах СЕТКИ (рядах, ±4 ряда).
 pub const SHIFT_STEPS: i32 = 4;
 /// Внешних раундов совместной оптимизации до фикспойнта (стадии строго
@@ -422,16 +433,29 @@ fn layout_cluster(
         return (HashMap::new(), 0);
     }
 
-    // Рёбра кластера (дедуп через BTreeSet-смежность, порядок детерминирован)
+    // Рёбра кластера — С КРАТНОСТЬЮ (v3): параллельные рёбра одного pair
+    // адресуют разные строки таблицы (from_line/to_param) и рисуются разными
+    // кривыми — их пересечения видны пользователю и весят соответственно
+    // (согласовано с oracle-метрикой count_edge_edge_crossings). Порядок —
+    // по canvas.edges, детерминизм.
+    let local_index: HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
     let mut edges: Vec<(usize, usize)> = Vec::new();
-    for &u in verts {
-        if let Some(targets) = outgoing.get(&u) {
-            for &v in targets {
-                if verts.contains(&v) {
-                    edges.push((u, v));
-                }
-            }
+    for edge in &canvas.edges {
+        let (Some(&u), Some(&v)) = (
+            local_index.get(edge.from_node.as_str()),
+            local_index.get(edge.to_node.as_str()),
+        ) else {
+            continue;
+        };
+        if u == v || !verts.contains(&u) || !verts.contains(&v) {
+            continue;
         }
+        edges.push((u, v));
     }
 
     // --- Слои: longest-path от истоков (Kahn); циклы — фолбэк ниже
@@ -558,13 +582,46 @@ fn layout_cluster(
     // (свапы рядов → сдвиги колонок → переносы → совместные сдвиги пар);
     // каждая стадия строго улучшает общую стоимость кластера, порядок
     // фиксирован — детерминизм
-    for _round in 0..MAX_JOINT_ROUNDS {
+    let trace = std::env::var("CANVASDESK_LAYOUT_TRACE").is_ok();
+    for round in 0..MAX_JOINT_ROUNDS {
         let before = cluster_cost(verts, &edges, &state.rects());
+        if trace {
+            let bands: Vec<String> = state
+                .columns
+                .iter()
+                .map(|(c, col)| {
+                    format!(
+                        "c{}:[{} @{}]",
+                        c,
+                        col.iter()
+                            .map(|v| canvas.nodes[*v].id.split('-').next_back().unwrap_or(""))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        state.bases.get(c).copied().unwrap_or(0)
+                    )
+                })
+                .collect();
+            eprintln!(
+                "[layout] cluster@{} round {} before {:?} | {}",
+                base_col,
+                round,
+                before,
+                bands.join(" ")
+            );
+        }
         refine_by_swaps(&edges, &mut state);
         refine_by_column_shifts(verts, &edges, &mut state);
         refine_by_insertions(&edges, &mut state);
+        refine_by_barycenter_rows(verts, outgoing, incoming, &edges, &mut state);
+        refine_by_column_transfers(verts, &edges, &mut state);
         refine_joint_column_shifts(verts, &edges, &mut state);
         let after = cluster_cost(verts, &edges, &state.rects());
+        if trace {
+            eprintln!(
+                "[layout] cluster@{} round {} after  {:?}",
+                base_col, round, after
+            );
+        }
         if after == before {
             break;
         }
@@ -693,62 +750,181 @@ fn barycenter_pass(
     }
 }
 
-/// Стоимость двух состояний колонки: пересечения всех рёбер с
-/// прямоугольниками колонки (старое состояние — `rects`, гипотетическое —
-/// `new_rects`; концы рёбер и чужие колонки — из `rects`) + суммарная длина
-/// инцидентных колонке отрезков в обоих состояниях.
-fn column_state_cost(
-    edges: &[(usize, usize)],
-    col: &[usize],
-    rects: &HashMap<usize, Rect>,
-    new_rects: &HashMap<usize, Rect>,
-) -> (u32, u32, f32, f32) {
-    let rect_of = |node: usize, new: bool| -> Rect {
-        if new {
-            new_rects
-                .get(&node)
-                .copied()
-                .unwrap_or_else(|| rects.get(&node).copied().unwrap_or([0.0; 4]))
-        } else {
-            rects.get(&node).copied().unwrap_or([0.0; 4])
-        }
-    };
-    let (mut cross_old, mut cross_new) = (0u32, 0u32);
-    let (mut len_old, mut len_new) = (0.0f32, 0.0f32);
-    for &(u, v) in edges {
-        let seg_old = (
-            right_center(rect_of(u, false)),
-            left_center(rect_of(v, false)),
-        );
-        let seg_new = (
-            right_center(rect_of(u, true)),
-            left_center(rect_of(v, true)),
-        );
-        for &idx in col {
-            if idx != u && idx != v {
-                if seg_intersects_rect(seg_old.0, seg_old.1, rect_of(idx, false), CROSSING_MARGIN) {
-                    cross_old += 1;
+/// Стоимость хода в единицах сетки: число пересечений «ребро × нода»,
+/// число пересечений «ребро × ребро» (proper-crossing, v3), суммарная длина
+/// отрезков. Сравнение — по взвешенной сумме пересечений ([`NODE_CROSS_WEIGHT`]),
+/// тай-брейк — длина. Old/new считаются по ОДНОМУ набору затронутых пар —
+/// неизменная часть стоимости сокращается, сравнение корректно.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct CostTriple {
+    node_cross: u32,
+    edge_cross: u32,
+    len: f32,
+}
+
+impl CostTriple {
+    fn weighted(&self) -> u64 {
+        self.node_cross as u64 * NODE_CROSS_WEIGHT as u64 + self.edge_cross as u64
+    }
+
+    fn better_than(&self, other: &CostTriple) -> bool {
+        self.weighted().cmp(&other.weighted()).then(
+            self.len
+                .partial_cmp(&other.len)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        ) == std::cmp::Ordering::Less
+    }
+}
+
+/// Скоуп хода: индексы рёбер, чья геометрия меняется (инцидентные мутируемым
+/// колонкам). Полная дельта стоимости хода (старое/new состояние) собирается
+/// из двух ОБЯЗАТЕЛЬНЫХ частей — пропуск любой из них делает оптимизатор
+/// слепым (регресс, найденный при v3):
+/// 1. ВСЕ рёбра × прямоугольники передвигаемых нод — длинное ребро,
+///    проходящее сквозь передвинутую ноду чужой колонки, тоже меняет
+///    пересечения (v2 учитывал только это);
+/// 2. затронутые рёбра × все статичные вершины — сегмент ребра с сдвинутым
+///    концом пересекает другие ноды по-новому (v2 это упускал).
+///
+/// Пары без передвигаемых нод и без затронутых рёбер неизменны — их можно
+/// сократить; сравнение old/new на одном скоупе корректно.
+struct MoveScope<'a> {
+    edges: &'a [(usize, usize)],
+    affected: Vec<usize>,
+}
+
+impl<'a> MoveScope<'a> {
+    /// Рёбра, инцидентные любой ноде колонки `col`.
+    fn incident_to(edges: &'a [(usize, usize)], col: &[usize]) -> Self {
+        let affected = (0..edges.len())
+            .filter(|&e| col.contains(&edges[e].0) || col.contains(&edges[e].1))
+            .collect();
+        MoveScope { edges, affected }
+    }
+
+    /// Рёбра, инцидентные любой ноде любой колонки из `cols`.
+    fn incident_to_any(edges: &'a [(usize, usize)], cols: &[&[usize]]) -> Self {
+        let affected = (0..edges.len())
+            .filter(|&e| {
+                cols.iter()
+                    .any(|c| c.contains(&edges[e].0) || c.contains(&edges[e].1))
+            })
+            .collect();
+        MoveScope { edges, affected }
+    }
+
+    /// Стоимость скоупа в двух состояниях: `moved` — ноды, чьи прямоугольники
+    /// меняются ходом (колонка/пара колонок); их старые/новые rect — из
+    /// `rects`/`new_rects`, статичные — из `rects` (одинаковы в обоих
+    /// состояниях). Возвращает `(old, new)` тройки стоимости.
+    fn cost(
+        &self,
+        verts: &BTreeSet<usize>,
+        moved: &[usize],
+        rects: &HashMap<usize, Rect>,
+        new_rects: &HashMap<usize, Rect>,
+    ) -> (CostTriple, CostTriple) {
+        let rect_of = |node: usize, new: bool| -> Rect {
+            if new {
+                new_rects
+                    .get(&node)
+                    .copied()
+                    .unwrap_or_else(|| rects.get(&node).copied().unwrap_or([0.0; 4]))
+            } else {
+                rects.get(&node).copied().unwrap_or([0.0; 4])
+            }
+        };
+        let seg = |e: usize, new: bool| -> ([f32; 2], [f32; 2]) {
+            let (u, v) = self.edges[e];
+            (right_center(rect_of(u, new)), left_center(rect_of(v, new)))
+        };
+        let is_affected = |e: usize| -> bool { self.affected.binary_search(&e).is_ok() };
+        let is_moved = |w: usize| -> bool { moved.contains(&w) };
+        let mut old_c = CostTriple::default();
+        let mut new_c = CostTriple::default();
+        // Часть 1: все рёбра × передвигаемые ноды
+        for e in 0..self.edges.len() {
+            let (u, v) = self.edges[e];
+            let (s_old, s_new) = (seg(e, false), seg(e, true));
+            for &w in moved {
+                if w == u || w == v {
+                    continue;
                 }
-                if seg_intersects_rect(seg_new.0, seg_new.1, rect_of(idx, true), CROSSING_MARGIN) {
-                    cross_new += 1;
+                if seg_intersects_rect(s_old.0, s_old.1, rect_of(w, false), CROSSING_MARGIN) {
+                    old_c.node_cross += 1;
+                }
+                if seg_intersects_rect(s_new.0, s_new.1, rect_of(w, true), CROSSING_MARGIN) {
+                    new_c.node_cross += 1;
                 }
             }
         }
-        if col.contains(&u) || col.contains(&v) {
-            len_old += seg_len(seg_old.0, seg_old.1);
-            len_new += seg_len(seg_new.0, seg_new.1);
+        // Часть 2 + длина: затронутые рёбра × статичные вершины
+        for &e in &self.affected {
+            let (u, v) = self.edges[e];
+            let (s_old, s_new) = (seg(e, false), seg(e, true));
+            for &w in verts {
+                if w == u || w == v || is_moved(w) {
+                    continue;
+                }
+                if seg_intersects_rect(s_old.0, s_old.1, rect_of(w, false), CROSSING_MARGIN) {
+                    old_c.node_cross += 1;
+                }
+                if seg_intersects_rect(s_new.0, s_new.1, rect_of(w, false), CROSSING_MARGIN) {
+                    new_c.node_cross += 1;
+                }
+            }
+            old_c.len += seg_len(s_old.0, s_old.1);
+            new_c.len += seg_len(s_new.0, s_new.1);
         }
+        // edge×edge: пары с хотя бы одним затронутым ребром (пара двух
+        // затронутых — один раз, по меньшему индексу); proper-crossing —
+        // касания в общем порте не считаются
+        for &e in &self.affected {
+            let (s_old, s_new) = (seg(e, false), seg(e, true));
+            for f in 0..self.edges.len() {
+                if f == e {
+                    continue;
+                }
+                if f < e && is_affected(f) {
+                    continue; // пара (e, f) уже посчитана со стороны f
+                }
+                let t_old = seg(f, false);
+                let t_new = seg(f, true);
+                if seg_seg_cross(s_old.0, s_old.1, t_old.0, t_old.1) {
+                    old_c.edge_cross += 1;
+                }
+                if seg_seg_cross(s_new.0, s_new.1, t_new.0, t_new.1) {
+                    new_c.edge_cross += 1;
+                }
+            }
+        }
+        (old_c, new_c)
     }
-    (cross_old, cross_new, len_old, len_new)
+}
+
+/// Proper-crossing двух отрезков: строгие знаки ориентации (пересечение
+/// во внутренних точках обоих). Касания/наложения/общие концы (два ребра
+/// из одного порта) — не пересечение.
+fn seg_seg_cross(a0: [f32; 2], a1: [f32; 2], b0: [f32; 2], b1: [f32; 2]) -> bool {
+    fn cross(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    }
+    let d1 = cross(b0, b1, a0);
+    let d2 = cross(b0, b1, a1);
+    let d3 = cross(a0, a1, b0);
+    let d4 = cross(a0, a1, b1);
+    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
 }
 
 /// Оптимизация пересечений перестановками соседних нод внутри колонки.
 /// В единицах сетки обмен соседей = обмен их рядов (base колонки не меняется,
-/// остальные ряды не двигаются). Стоимость — та же модель
-/// [`column_state_cost`]; ход принимается при строгом падении (пересечения,
-/// тай-брейк — суммарная длина инцидентных отрезков). Ограничено
+/// остальные ряды не двигаются). Стоимость — [`MoveScope::cost`] (v3: полная
+/// тройка с пересечениями рёбер — свап, развязывающий пересекающиеся рёбра,
+/// теперь принимается); ход — строгое улучшение. Ограничено
 /// [`MAX_REFINE_PASSES`].
 fn refine_by_swaps(edges: &[(usize, usize)], state: &mut GridState) {
+    let verts: BTreeSet<usize> = state.columns.values().flatten().copied().collect();
     for _pass in 0..MAX_REFINE_PASSES {
         let mut changed = false;
         let cols: Vec<usize> = state.columns.keys().copied().collect();
@@ -775,10 +951,11 @@ fn refine_by_swaps(edges: &[(usize, usize)], state: &mut GridState) {
                     bases: state.bases.clone(),
                 };
                 let new_rects = trial.rects();
-                let (cross_old, cross_new, len_old, len_new) =
-                    column_state_cost(edges, &col, &old_rects, &new_rects);
-                let improves =
-                    cross_new < cross_old || (cross_new == cross_old && len_new < len_old);
+                // v3: свап оценивается полной тройкой стоимости — свап,
+                // развязывающий пересекающиеся рёбра, принимается
+                let scope = MoveScope::incident_to(edges, &col);
+                let (cost_old, cost_new) = scope.cost(&verts, &col, &old_rects, &new_rects);
+                let improves = cost_new.better_than(&cost_old);
                 if improves {
                     if let Some(c) = state.columns.get_mut(&gcol) {
                         if let (Some(pa), Some(pb)) = (
@@ -798,21 +975,20 @@ fn refine_by_swaps(edges: &[(usize, usize)], state: &mut GridState) {
     }
 }
 
-/// Лучший ход переноса: стоимость (пересечения, длина) + порядок колонки
-/// и гипотетические прямоугольники.
+/// Лучший ход переноса: тройка стоимости + порядок колонки.
 struct InsertionMove {
-    cost: u32,
-    len: f32,
+    cost: CostTriple,
     order: Vec<usize>,
 }
 
 /// Оптимизация пересечений переносом ноды на другую позицию её колонки
 /// (обобщение swap: тянущаяся через колонку диагональ находит междурядный
 /// канал, которого нет у соседних обменов). В единицах сетки перенос
-/// пере-стекает ряды колонки от её base. Стоимость — та же модель
-/// [`column_state_cost`]; ход — строгое улучшение. Ограничено
+/// пере-стекает ряды колонки от её base. Стоимость — [`MoveScope::cost`]
+/// (v3: с учётом пересечений рёбер); ход — строгое улучшение. Ограничено
 /// [`MAX_REFINE_PASSES`].
 fn refine_by_insertions(edges: &[(usize, usize)], state: &mut GridState) {
+    let verts: BTreeSet<usize> = state.columns.values().flatten().copied().collect();
     for _pass in 0..MAX_REFINE_PASSES {
         let mut changed = false;
         let cols: Vec<usize> = state.columns.keys().copied().collect();
@@ -821,13 +997,14 @@ fn refine_by_insertions(edges: &[(usize, usize)], state: &mut GridState) {
             if col.len() < 2 {
                 continue;
             }
+            let scope = MoveScope::incident_to(edges, &col);
             'node: for &v in &col {
                 let from = match col.iter().position(|&x| x == v) {
                     Some(p) => p,
                     None => continue,
                 };
                 let old_rects = state.rects();
-                let (cross_old, _, _, _) = column_state_cost(edges, &col, &old_rects, &old_rects);
+                let (cur, _) = scope.cost(&verts, &col, &old_rects, &old_rects);
                 let mut best: Option<InsertionMove> = None;
                 for to in 0..col.len() {
                     if to == from {
@@ -845,24 +1022,17 @@ fn refine_by_insertions(edges: &[(usize, usize)], state: &mut GridState) {
                         bases: state.bases.clone(),
                     };
                     let new_rects = trial.rects();
-                    let (_, cross_new, _, len_new) =
-                        column_state_cost(edges, &col, &old_rects, &new_rects);
+                    let (_, cand) = scope.cost(&verts, &col, &old_rects, &new_rects);
                     // строгое улучшение против текущего состояния
-                    let cur = (cross_old, total_len(edges, &col, &old_rects));
-                    let cand = (cross_new, len_new);
-                    if cand >= cur {
+                    if !cand.better_than(&cur) {
                         continue;
                     }
                     let better = match &best {
                         None => true,
-                        Some(InsertionMove { cost, len, .. }) => cand < (*cost, *len),
+                        Some(InsertionMove { cost, .. }) => cand.better_than(cost),
                     };
                     if better {
-                        best = Some(InsertionMove {
-                            cost: cross_new,
-                            len: len_new,
-                            order,
-                        });
+                        best = Some(InsertionMove { cost: cand, order });
                     }
                 }
                 if let Some(InsertionMove { order, .. }) = best {
@@ -880,37 +1050,234 @@ fn refine_by_insertions(edges: &[(usize, usize)], state: &mut GridState) {
     }
 }
 
-/// Суммарная длина инцидентных колонке отрезков (тай-брейк стоимости).
-fn total_len(edges: &[(usize, usize)], col: &[usize], rects: &HashMap<usize, Rect>) -> f32 {
-    let mut length = 0.0f32;
-    for &(u, v) in edges {
-        if !col.contains(&u) && !col.contains(&v) {
-            continue;
+/// Barycenter-реупорядочивание колонки по ФАКТИЧЕСКИМ рядам соседей (v3
+/// стадия): классический шаг Sugiyama против пересечений рёбер, но ход
+/// оценивается полной тройкой стоимости (пересечения с нодами, с рёбрами,
+/// длина) — принимается только строгое улучшение. Ноды без соседей
+/// сохраняют текущий ряд (bary = собственный ряд, stable sort). Двусторонние
+/// соседи (предки + потомки) — усреднение по обоим.
+fn refine_by_barycenter_rows(
+    verts: &BTreeSet<usize>,
+    outgoing: &BTreeMap<usize, BTreeSet<usize>>,
+    incoming: &BTreeMap<usize, BTreeSet<usize>>,
+    edges: &[(usize, usize)],
+    state: &mut GridState,
+) {
+    for _pass in 0..MAX_REFINE_PASSES {
+        let mut changed = false;
+        let cols: Vec<usize> = state.columns.keys().copied().collect();
+        for gcol in cols {
+            let col = match state.columns.get(&gcol) {
+                Some(c) if c.len() >= 2 => c.clone(),
+                _ => continue,
+            };
+            let mut row_of: HashMap<usize, i32> = HashMap::new();
+            for (&c, nodes) in &state.columns {
+                let base = state.bases.get(&c).copied().unwrap_or(0);
+                for (k, &v) in nodes.iter().enumerate() {
+                    row_of.insert(v, base + k as i32);
+                }
+            }
+            let bary = |v: usize| -> f32 {
+                let mut sum = 0.0f32;
+                let mut cnt = 0usize;
+                for ns in [outgoing.get(&v), incoming.get(&v)] {
+                    for &n in ns.into_iter().flatten() {
+                        if !verts.contains(&n) {
+                            continue;
+                        }
+                        if let Some(r) = row_of.get(&n) {
+                            sum += *r as f32;
+                            cnt += 1;
+                        }
+                    }
+                }
+                if cnt == 0 {
+                    row_of.get(&v).copied().unwrap_or(0) as f32
+                } else {
+                    sum / cnt as f32
+                }
+            };
+            let mut keyed: Vec<(f32, usize, usize)> = col
+                .iter()
+                .enumerate()
+                .map(|(k, &v)| (bary(v), k, v))
+                .collect();
+            keyed.sort_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.1.cmp(&b.1))
+            });
+            let order: Vec<usize> = keyed.into_iter().map(|(_, _, v)| v).collect();
+            if order == col {
+                continue;
+            }
+            let old_rects = state.rects();
+            let scope = MoveScope::incident_to(edges, &col);
+            let (cost_old, cost_new) = {
+                let mut trial_columns = state.columns.clone();
+                trial_columns.insert(gcol, order.clone());
+                let trial = GridState {
+                    canvas: state.canvas,
+                    cell: state.cell,
+                    columns: trial_columns,
+                    bases: state.bases.clone(),
+                };
+                scope.cost(verts, &col, &old_rects, &trial.rects())
+            };
+            if std::env::var("CANVASDESK_LAYOUT_TRACE").is_ok() {
+                eprintln!(
+                    "[bary] c{}: {:?} -> {:?} old {:?} new {:?} accept {}",
+                    gcol,
+                    col,
+                    order,
+                    cost_old,
+                    cost_new,
+                    cost_new.better_than(&cost_old)
+                );
+            }
+            if cost_new.better_than(&cost_old) {
+                if let Some(c) = state.columns.get_mut(&gcol) {
+                    *c = order;
+                }
+                changed = true;
+            }
         }
-        let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
-            continue;
-        };
-        length += seg_len(right_center(ru), left_center(rv));
+        if !changed {
+            break;
+        }
     }
-    length
+}
+
+/// Межколоночный перенос ноды в соседнюю колонку (v3 стадия): лечит
+/// «висячки» в собственной колонке далеко от родителей/детей (длинные
+/// диагонали через полсхемы). Ход сохраняет направление рёбер (строгие
+/// неравенства колонок: все предки левее цели, все потомки правее) и сетку
+/// (обе колонки пере-стекаются рядами). Позиция вставки — лучшая по полной
+/// тройке стоимости; ход — строгое улучшение.
+fn refine_by_column_transfers(
+    verts: &BTreeSet<usize>,
+    edges: &[(usize, usize)],
+    state: &mut GridState,
+) {
+    for _pass in 0..MAX_SHIFT_PASSES {
+        let mut changed = false;
+        let cols: Vec<usize> = state.columns.keys().copied().collect();
+        for gcol in cols {
+            let col = state.columns.get(&gcol).cloned().unwrap_or_default();
+            'node: for &v in &col {
+                // колонка ноды могла измениться после принятого хода
+                let Some(cur_col) = state
+                    .columns
+                    .iter()
+                    .find(|(_, nodes)| nodes.contains(&v))
+                    .map(|(c, _)| *c)
+                else {
+                    continue;
+                };
+                let targets: [Option<usize>; 2] = [cur_col.checked_sub(1), Some(cur_col + 1)];
+                for target in targets.into_iter().flatten() {
+                    if target == cur_col || !state.columns.contains_key(&target) {
+                        continue;
+                    }
+                    // валидность: предки строго левее цели, потомки строго правее
+                    let col_of = |n: usize| -> Option<usize> {
+                        state
+                            .columns
+                            .iter()
+                            .find(|(_, nodes)| nodes.contains(&n))
+                            .map(|(c, _)| *c)
+                    };
+                    let valid = edges.iter().all(|&(u, w)| {
+                        if u == v {
+                            col_of(w).map_or(true, |cw| cw > target)
+                        } else if w == v {
+                            col_of(u).map_or(true, |cu| cu < target)
+                        } else {
+                            true
+                        }
+                    });
+                    if !valid {
+                        continue;
+                    }
+                    let src = state.columns.get(&cur_col).cloned().unwrap_or_default();
+                    let dst = state.columns.get(&target).cloned().unwrap_or_default();
+                    let old_rects = state.rects();
+                    let mut moved = src.clone();
+                    moved.extend_from_slice(&dst);
+                    let scope = MoveScope::incident_to_any(edges, &[&src, &dst]);
+                    let (base, _) = scope.cost(verts, &moved, &old_rects, &old_rects);
+                    let mut best: Option<(usize, CostTriple)> = None;
+                    for p in 0..=dst.len() {
+                        let mut trial_columns = state.columns.clone();
+                        let mut from = src.clone();
+                        from.retain(|&x| x != v);
+                        let mut to = dst.clone();
+                        to.insert(p, v);
+                        if from.is_empty() {
+                            trial_columns.remove(&cur_col);
+                        } else {
+                            trial_columns.insert(cur_col, from);
+                        }
+                        trial_columns.insert(target, to);
+                        let trial = GridState {
+                            canvas: state.canvas,
+                            cell: state.cell,
+                            columns: trial_columns,
+                            bases: state.bases.clone(),
+                        };
+                        let (_, cand) = scope.cost(verts, &moved, &old_rects, &trial.rects());
+                        let better = match &best {
+                            None => cand.better_than(&base),
+                            Some((_, bc)) => cand.better_than(bc),
+                        };
+                        if better {
+                            best = Some((p, cand));
+                        }
+                    }
+                    if let Some((p, _)) = best {
+                        let mut from = src.clone();
+                        from.retain(|&x| x != v);
+                        let mut to = dst.clone();
+                        to.insert(p, v);
+                        if from.is_empty() {
+                            state.columns.remove(&cur_col);
+                            state.bases.remove(&cur_col);
+                        } else {
+                            state.columns.insert(cur_col, from);
+                        }
+                        state.columns.insert(target, to);
+                        changed = true;
+                        continue 'node;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 /// Общая стоимость раскладки кластера: пересечения всех рёбер с всеми
-/// вершинами (тай-брейк — суммарная длина отрезков порт→порт).
+/// вершинами, пересечения всех пар рёбер (v3), тай-брейк — суммарная длина
+/// отрезков порт→порт. Метрика фикспойнта раундов и оракулов.
 fn cluster_cost(
     verts: &BTreeSet<usize>,
     edges: &[(usize, usize)],
     rects: &HashMap<usize, Rect>,
-) -> (u32, f32) {
-    let mut crossings = 0u32;
-    let mut length = 0.0f32;
+) -> CostTriple {
+    let mut cost = CostTriple::default();
+    let mut segs: Vec<([f32; 2], [f32; 2])> = Vec::with_capacity(edges.len());
     for &(u, v) in edges {
         let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
+            segs.push(([f32::NAN; 2], [f32::NAN; 2]));
             continue;
         };
         let p0 = right_center(ru);
         let p1 = left_center(rv);
-        length += seg_len(p0, p1);
+        cost.len += seg_len(p0, p1);
+        segs.push((p0, p1));
         for &w in verts {
             if w == u || w == v {
                 continue;
@@ -919,18 +1286,31 @@ fn cluster_cost(
                 continue;
             };
             if seg_intersects_rect(p0, p1, rw, CROSSING_MARGIN) {
-                crossings += 1;
+                cost.node_cross += 1;
             }
         }
     }
-    (crossings, length)
+    for (i, (a0, a1)) in segs.iter().enumerate() {
+        if a0[0].is_nan() {
+            continue;
+        }
+        for (b0, b1) in segs.iter().skip(i + 1) {
+            if b0[0].is_nan() {
+                continue;
+            }
+            if seg_seg_cross(*a0, *a1, *b0, *b1) {
+                cost.edge_cross += 1;
+            }
+        }
+    }
+    cost
 }
 
 /// Оптимизация пересечений вертикальными сдвигами колонок ЦЕЛЫМИ РЯДАМИ
 /// сетки (шаг CELL_H, диапазон ±[`SHIFT_STEPS`] рядов): длинные диагональные
-/// рёбра проходят через свободные ячейки/междурядные каналы. Полная
-/// стоимость всех рёбер против всех вершин кластера; принимается строгое
-/// улучшение (тай-брейк — длина).
+/// рёбра проходят через свободные ячейки/междурядные каналы. Стоимость —
+/// скоуп рёбер, инцидентных сдвигаемой колонке (v3: с пересечениями рёбер);
+/// принимается строгое улучшение тройки.
 fn refine_by_column_shifts(
     verts: &BTreeSet<usize>,
     edges: &[(usize, usize)],
@@ -945,8 +1325,10 @@ fn refine_by_column_shifts(
                 continue;
             }
             let old_rects = state.rects();
+            let scope = MoveScope::incident_to(edges, &col);
+            let (base, _) = scope.cost(verts, &col, &old_rects, &old_rects);
             let mut best_step = 0i32;
-            let mut best_cost = cluster_cost(verts, edges, &old_rects);
+            let mut best_cost = base;
             for step in -SHIFT_STEPS..=SHIFT_STEPS {
                 if step == 0 {
                     continue;
@@ -960,9 +1342,9 @@ fn refine_by_column_shifts(
                     columns: state.columns.clone(),
                     bases: trial_bases,
                 };
-                let cost = cluster_cost(verts, edges, &trial.rects());
-                if cost.0 < best_cost.0 || (cost.0 == best_cost.0 && cost.1 < best_cost.1) {
-                    best_cost = cost;
+                let (_, cand) = scope.cost(verts, &col, &old_rects, &trial.rects());
+                if cand.better_than(&best_cost) {
+                    best_cost = cand;
                     best_step = step;
                 }
             }
@@ -980,8 +1362,9 @@ fn refine_by_column_shifts(
 
 /// Совместные сдвиги ПАР колонок целыми рядами (±[`JOINT_STEPS`] каждый):
 /// ходы, требующие одновременного перемещения двух колонок (встречные
-/// коридоры, разведение пучка на два канала). Стоимость — та же модель
-/// [`cluster_cost`]; ход — строгое улучшение; перебор детерминирован.
+/// коридоры, разведение пучка на два канала). Стоимость — скоуп рёбер,
+/// инцидентных любой из пары (v3: с пересечениями рёбер); ход — строгое
+/// улучшение тройки; перебор детерминирован.
 fn refine_joint_column_shifts(
     verts: &BTreeSet<usize>,
     edges: &[(usize, usize)],
@@ -993,9 +1376,15 @@ fn refine_joint_column_shifts(
         for i in 0..cols.len() {
             for j in (i + 1)..cols.len() {
                 let (ci, cj) = (cols[i], cols[j]);
+                let col_i = state.columns.get(&ci).cloned().unwrap_or_default();
+                let col_j = state.columns.get(&cj).cloned().unwrap_or_default();
                 let old_rects = state.rects();
+                let scope = MoveScope::incident_to_any(edges, &[&col_i, &col_j]);
+                let mut moved = col_i.clone();
+                moved.extend_from_slice(&col_j);
+                let (base, _) = scope.cost(verts, &moved, &old_rects, &old_rects);
                 let mut best = (0i32, 0i32);
-                let mut best_cost = cluster_cost(verts, edges, &old_rects);
+                let mut best_cost = base;
                 for si in -JOINT_STEPS..=JOINT_STEPS {
                     for sj in -JOINT_STEPS..=JOINT_STEPS {
                         if si == 0 && sj == 0 {
@@ -1010,9 +1399,9 @@ fn refine_joint_column_shifts(
                             columns: state.columns.clone(),
                             bases: trial_bases,
                         };
-                        let cost = cluster_cost(verts, edges, &trial.rects());
-                        if cost.0 < best_cost.0 || (cost.0 == best_cost.0 && cost.1 < best_cost.1) {
-                            best_cost = cost;
+                        let (_, cand) = scope.cost(verts, &moved, &old_rects, &trial.rects());
+                        if cand.better_than(&best_cost) {
+                            best_cost = cand;
                             best = (si, sj);
                         }
                     }
@@ -1170,6 +1559,12 @@ pub fn debug_seg_intersects(p0: [f32; 2], p1: [f32; 2], rect: Rect, margin: f32)
     seg_intersects_rect(p0, p1, rect, margin)
 }
 
+/// Отладка (примеры/диагностика): публичная обёртка proper-crossing теста
+/// двух отрезков — тем же правилом, что и внутренняя метрика edge×edge.
+pub fn debug_seg_seg_cross(a0: [f32; 2], a1: [f32; 2], b0: [f32; 2], b1: [f32; 2]) -> bool {
+    seg_seg_cross(a0, a1, b0, b1)
+}
+
 /// Диагностика и oracle-метрика тестов: число пересечений «ребро × нода»
 /// по прямым отрезкам порт→порт (right-центр → left-центр — конвенция
 /// инстансера схем). bbox нод инфлируется на [`CROSSING_MARGIN`]; группы
@@ -1209,6 +1604,50 @@ pub fn count_edge_node_crossings(canvas: &Canvas) -> usize {
             .filter(|&(i, _)| *i != u && *i != v)
             .filter(|&(_, r)| seg_intersects_rect(p0, p1, *r, CROSSING_MARGIN))
             .count();
+    }
+    total
+}
+
+/// Диагностика и oracle-метрика тестов (v3): число пересечений «ребро ×
+/// ребро» — proper-crossing прямых отрезков порт→порт (правый-центр истока →
+/// левый-центр приёмника). Касания в общем порте (два ребра из одной ноды,
+/// в одну ноду) пересечением не считаются — совпадает с тем, что видит
+/// оптимизатор. Рёбра-дубликаты (a→b дважды) дают ложные «пересечения» по
+/// совпадающим отрезкам — proper-crossing отрезков на одной прямой равен
+/// false, так что дубликаты безопасны.
+pub fn count_edge_edge_crossings(canvas: &Canvas) -> usize {
+    let index_of: HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let mut segs: Vec<([f32; 2], [f32; 2])> = Vec::new();
+    for edge in &canvas.edges {
+        let (Some(&u), Some(&v)) = (
+            index_of.get(edge.from_node.as_str()),
+            index_of.get(edge.to_node.as_str()),
+        ) else {
+            continue;
+        };
+        if u == v {
+            continue;
+        }
+        let (Some(a), Some(b)) = (canvas.nodes.get(u), canvas.nodes.get(v)) else {
+            continue;
+        };
+        segs.push((
+            [a.x + a.width, a.y + a.height / 2.0],
+            [b.x, b.y + b.height / 2.0],
+        ));
+    }
+    let mut total = 0usize;
+    for i in 0..segs.len() {
+        for j in (i + 1)..segs.len() {
+            if seg_seg_cross(segs[i].0, segs[i].1, segs[j].0, segs[j].1) {
+                total += 1;
+            }
+        }
     }
     total
 }
@@ -1782,5 +2221,130 @@ mod tests {
             );
         }
         assert!(!node_rects_overlap(&out));
+    }
+
+    // --- v3: минимизация пересечений рёбер (запрос владельца: свап нод по
+    // вертикали обязан развязывать пересекающиеся рёбра) ----------------
+
+    #[test]
+    fn weighted_cost_trades_node_crossing_for_many_edge_crossings() {
+        // Взвешенная стоимость v3: 1 пересечение с нодой (вес 4) дешевле
+        // 5 пересечений рёбер; лексикографика прежних версий выбирала
+        // «нода важнее всего» и накапливала пересечения рёбер.
+        let fewer_nodes = CostTriple {
+            node_cross: 1,
+            edge_cross: 0,
+            len: 200.0,
+        };
+        let more_edges = CostTriple {
+            node_cross: 0,
+            edge_cross: 5,
+            len: 100.0,
+        };
+        assert!(fewer_nodes.better_than(&more_edges));
+        // но одно пересечение с нодой не откупается одним пересечением рёбер
+        let one_node = CostTriple {
+            node_cross: 1,
+            edge_cross: 0,
+            len: 100.0,
+        };
+        let one_edge = CostTriple {
+            node_cross: 0,
+            edge_cross: 1,
+            len: 500.0,
+        };
+        assert!(one_edge.better_than(&one_node));
+    }
+
+    #[test]
+    fn swap_untangles_crossing_edges() {
+        // a→d и b→c перекрещиваются между колонками 0 и 1; вертикальный
+        // свап приёмников (c↔d) развязывает рёбра. v2 с ценой «ребро ×
+        // нода» не видела такого пересечения вовсе (регресс-тест v3).
+        let mut canvas = Canvas::default();
+        let a = sized(&mut canvas, "a", 0.0, 0.0, 240.0, 140.0);
+        let b = sized(&mut canvas, "b", 0.0, 300.0, 240.0, 140.0);
+        let c = sized(&mut canvas, "c", 500.0, 0.0, 240.0, 140.0);
+        let d = sized(&mut canvas, "d", 500.0, 300.0, 240.0, 140.0);
+        let edges = vec![(a, d), (b, c)];
+        let verts: BTreeSet<usize> = [a, b, c, d].into_iter().collect();
+        let mut state = GridState {
+            canvas: &canvas,
+            cell: GridSpec {
+                cell_w: 470.0,
+                cell_h: 280.0,
+            },
+            columns: BTreeMap::from([(0, vec![a, b]), (1, vec![c, d])]),
+            bases: BTreeMap::from([(0, 0), (1, 0)]),
+        };
+        let before = cluster_cost(&verts, &edges, &state.rects());
+        assert_eq!(before.edge_cross, 1, "диагонали перекрещены");
+
+        refine_by_swaps(&edges, &mut state);
+
+        // Свап принят в колонке 0 (обход колонок детерминирован, свап
+        // источников a↔b тоже развязывает диагонали); v2 этот ход не видела
+        let after = cluster_cost(&verts, &edges, &state.rects());
+        assert_eq!(after.edge_cross, 0, "рёбра развязаны свапом");
+        assert_eq!(after.node_cross, 0);
+        assert_eq!(state.columns[&0], vec![b, a], "свап источников принят");
+    }
+
+    #[test]
+    fn edge_crossings_count_parallel_edges() {
+        // Параллельные рёбра (разные строки таблицы, разные порты) рисуются
+        // разными кривыми: пара перекрещенных пучков ×2 — 4 видимых
+        // пересечения. Кратность учитывается и оптимизатором, и метрикой.
+        let mut canvas = Canvas::default();
+        let a = sized(&mut canvas, "a", 0.0, 0.0, 240.0, 140.0);
+        let b = sized(&mut canvas, "b", 0.0, 300.0, 240.0, 140.0);
+        let c = sized(&mut canvas, "c", 500.0, 0.0, 240.0, 140.0);
+        let d = sized(&mut canvas, "d", 500.0, 300.0, 240.0, 140.0);
+        link(&mut canvas, "e1", a, d);
+        link(&mut canvas, "e2", a, d);
+        link(&mut canvas, "e3", b, c);
+        link(&mut canvas, "e4", b, c);
+        assert_eq!(count_edge_edge_crossings(&canvas), 4);
+        // копии одного пучка между собой не пересекаются (совпадающие
+        // отрезки — не proper-crossing)
+        link(&mut canvas, "e5", a, d);
+        assert_eq!(count_edge_edge_crossings(&canvas), 6);
+    }
+
+    #[test]
+    fn transfer_resolves_long_diagonal_through_foreigner_column() {
+        // Родитель p в колонке 0, висячка h в колонке 2, между ними q:
+        // длинная диагональ p→h проходит сквозь q. Стадия переносов v3
+        // ставит p в колонку q (валидно: потомок h остаётся правее) —
+        // пересечение с нодой исчезает; h в колонку 1 не едет (предок p
+        // уже там — строгие неравенства колонок).
+        let mut canvas = Canvas::default();
+        let p = sized(&mut canvas, "p", 0.0, 0.0, 240.0, 140.0);
+        let q = sized(&mut canvas, "q", 500.0, 0.0, 240.0, 140.0);
+        let h = sized(&mut canvas, "h", 1000.0, 0.0, 240.0, 140.0);
+        let edges = vec![(p, h)];
+        let verts: BTreeSet<usize> = [p, q, h].into_iter().collect();
+        let mut state = GridState {
+            canvas: &canvas,
+            cell: GridSpec {
+                cell_w: 470.0,
+                cell_h: 280.0,
+            },
+            columns: BTreeMap::from([(0, vec![p]), (1, vec![q]), (2, vec![h])]),
+            bases: BTreeMap::from([(0, 0), (1, 0), (2, 0)]),
+        };
+        let before = cluster_cost(&verts, &edges, &state.rects());
+        assert_eq!(before.node_cross, 1, "p→h проходит сквозь q");
+
+        refine_by_column_transfers(&verts, &edges, &mut state);
+
+        let after = cluster_cost(&verts, &edges, &state.rects());
+        assert_eq!(after.node_cross, 0, "диагональ устранена переносом");
+        assert_eq!(after.edge_cross, 0);
+        // p переехал в колонку 1 (перед q); колонка 0 опустела и удалена;
+        // h осталась в колонке 2 (перенос туда ломал бы направление p→h)
+        assert_eq!(state.columns.get(&0), None, "пустая колонка удалена");
+        assert_eq!(state.columns.get(&1), Some(&vec![p, q]));
+        assert_eq!(state.columns.get(&2), Some(&vec![h]));
     }
 }
