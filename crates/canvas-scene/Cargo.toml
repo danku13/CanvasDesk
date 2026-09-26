@@ -18,3 +18,8 @@ tracing.workspace = true
 # без фичи (контракт §5.8 FR-066: qmc не собирается на wasm32); нативный
 # default — тоже (zero-dep; включается явно: --features canvas-scene/qmc).
 qmc = ["canvas-core/qmc"]
+
+# Пример shell_showcase (витрина FR-075) считает высоты карточек ТОЧНЫМ
+# шейпером рендера (measure_body_height) — только dev-dep,.lib-цикла нет.
+[dev-dependencies]
+canvas-render = { workspace = true }

@@ -837,7 +837,11 @@ pub fn measured_result_reserve_height(
         0.0
     };
     let footer = if footer_reserve {
-        RESULT_LINE_HEIGHT + 2.0
+        // FR-075 (дефект найден верификацией витрины 2026-09-26): резерв футера
+        // = высоте полосы «ИТОГ» (32, prototype-unified M.STRIP). Прежние
+        // RESULT_LINE_HEIGHT + 2 = 18 — модель до FR-075 (футер 16 px):
+        // дефицит 14 px — последний ряд тела заходил под полосу.
+        canvas_core::tokens::CARD_RESULT_STRIP_H
     } else {
         0.0
     };

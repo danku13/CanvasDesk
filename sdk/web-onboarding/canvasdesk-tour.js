@@ -175,7 +175,7 @@
     var overlay = document.createElement("div");
     overlay.className = "cd-tour-dim";
     overlay.style.cssText = "position:fixed;inset:0;z-index:" + (baseZIndex) +
-      ";pointer-events:auto;background:transparent;transition:opacity 180ms ease;opacity:0;";
+      ";pointer-events:none;background:transparent;transition:opacity 180ms ease;opacity:0;";
     container.appendChild(overlay);
     var current = null;
     var raf = null;

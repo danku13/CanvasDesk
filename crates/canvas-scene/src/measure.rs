@@ -204,7 +204,12 @@ pub fn estimated_result_reserve_height(
         0.0
     };
     let footer = if footer_reserve {
-        RESULT_LINE_HEIGHT + 2.0
+        // FR-075 (дефект найден верификацией витрины 2026-09-26): резерв футера
+        // = высоте полосы «ИТОГ» (prototype-unified M.STRIP). Прежние 16+2 —
+        // модель до FR-075 (футер 16 px у нижнего края): полоса выросла до 32,
+        // резерв остался 18 — дефицит 14 px, последний ряд тела заходил ПОД
+        // полосу (у карточек без запаса по высоте — шаблон ab-test).
+        canvas_core::tokens::CARD_RESULT_STRIP_H
     } else {
         0.0
     };
@@ -542,8 +547,8 @@ mod tests {
             estimated_result_reserve_height(text, 300.0, &lines, "", false, false, "", 0);
         assert_eq!(
             with_footer - without_footer,
-            RESULT_LINE_HEIGHT + 2.0,
-            "футер-флаг убирает «пустой хвост» у нод без футера"
+            canvas_core::tokens::CARD_RESULT_STRIP_H,
+            "футер-флаг убирает «пустой хвост» у нод без футера (резерв = полоса ИТОГ 32, FR-075)"
         );
         let long_desc = "очень длинное описание ноды, которое точно не укладывается в кламп двух строк и раскрывается целиком по клику";
         let clamped =

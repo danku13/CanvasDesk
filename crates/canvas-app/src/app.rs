@@ -1248,7 +1248,7 @@ impl App {
         // запуске открывает should_show_onboarding (прецедент
         // hud_on_start, FR-028) — флаг считается ДО переноса settings в Self
         let show_onboarding = onboarding_ui::should_show_onboarding(&settings);
-        Self {
+        let mut app = Self {
             widgets,
             window: None,
             renderer: None,
@@ -1425,7 +1425,17 @@ impl App {
             explorer_tracker: Default::default(),
             #[cfg(windows)]
             mcp_server: None,
-        }
+        };
+        // FR-075 (дефект найден верификацией витрины 2026-09-26): загрузочный
+        // пересчёт (`SceneState::with_storage`) исполняется ДО построения App —
+        // с пустым `template_descs`: подгон высоты шла без зоны описания, а
+        // рендер описание манифеста показывал (расхождение I-2: мера ≠ рендер)
+        // — ряды таблицы и футер «ИТОГ» выезжали за силуэт карточки. Снимок
+        // описаний в сцену + догоняющий refit (хеш-гейт: реальный замер —
+        // только у нод, у которых мера изменилась с появлением описания).
+        app.sync_template_descs();
+        app.scene.refit_after_template_descs();
+        app
     }
 
     /// FR-061 этап D (D-8): снимок описаний манифестов шаблонов

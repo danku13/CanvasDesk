@@ -356,8 +356,12 @@
             var id = location.hash.slice("#tour=".length);
             for (var k in scenarios) {
               if (scenarios[k].id === id) {
-                tour.run(scena          // Карточки сценария для dropdown-меню.
-          var items = [
+                tour.run(scenarios[k]);
+              }
+            }
+          }
+
+          var items = [  // Карточки сценария для dropdown-меню.
             { s: scenarios.toolbarTourScenario, title: "Панель хранилища",
               desc: "Кнопки #w6-toolbar: открыть / недавние / экспорт" },
             { s: scenarios.firstRunInlineScenario, title: "Первый запуск (интерактив)",
@@ -428,11 +432,6 @@
               e.preventDefault(); e.stopPropagation();
               if (menu.dataset.open === "true") closeMenu();
               else openMenu();
-            });
-          }
-        });
-      })();eturn; }
-              tour.run(s);
             });
           }
         });
